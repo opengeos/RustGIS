@@ -134,7 +134,7 @@ pub fn semibold(size: f32) -> FontId {
 
 /// Installs the interface fonts: an installed system sans-serif when available, then `extra`
 /// faces (name, bytes, collection index) as fallbacks for scripts it lacks, such as CJK.
-pub fn install_fonts(ctx: &egui::Context, extra: &[(String, Vec<u8>, u32)]) {
+pub fn install_fonts(ctx: &egui::Context, extra: &[(String, FontData, bool)]) {
     let f = rustgis_engine::render::fonts::ui_fonts();
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert("ui".into(), Arc::new(FontData::from_owned(f.regular.clone())));
@@ -147,14 +147,16 @@ pub fn install_fonts(ctx: &egui::Context, extra: &[(String, Vec<u8>, u32)]) {
         semi.extend(prop.iter().skip(1).cloned());
     }
     fonts.families.insert(FontFamily::Name("semibold".into()), semi);
-    for (name, bytes, index) in extra {
-        let mut data = FontData::from_owned(bytes.clone());
-        data.index = *index;
-        fonts.font_data.insert(name.clone(), Arc::new(data));
+    for (name, data, primary) in extra {
+        fonts.font_data.insert(name.clone(), Arc::new(data.clone()));
         for fam in [FontFamily::Proportional, FontFamily::Name("semibold".into())] {
             if let Some(v) = fonts.families.get_mut(&fam) {
-                // After the interface face, before egui's emoji fallbacks.
-                v.insert(1.min(v.len()), name.clone());
+                if *primary {
+                    // Right after the interface face, so its regional glyph shapes win.
+                    v.insert(1.min(v.len()), name.clone());
+                } else {
+                    v.push(name.clone());
+                }
             }
         }
     }

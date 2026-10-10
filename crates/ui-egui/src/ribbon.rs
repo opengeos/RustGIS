@@ -900,11 +900,17 @@ fn data_tab(app: &mut RustGisApp, ui: &mut Ui) {
     });
 }
 
+/// A language's own name, or its English name when no installed font can draw it (CJK names on the
+/// web before a CJK font has been downloaded).
+fn shown_name(ui: &Ui, l: crate::i18n::Lang) -> &'static str {
+    if ui.ctx().fonts_mut(|f| f.has_glyphs(&regular(12.5), l.name())) { l.name() } else { l.english() }
+}
+
 /// The interface language picker (View › Language).
 fn language_menu(app: &mut RustGisApp, ui: &mut Ui) {
     let current = app.lang();
     let auto = app.ui.language == crate::i18n::AUTO;
-    let label = if auto { format!("{} ({})", tl!("Automatic"), current.name()) } else { current.name().to_string() };
+    let label = if auto { format!("{} ({})", tl!("Automatic"), shown_name(ui, current)) } else { shown_name(ui, current).to_string() };
     big_menu(ui, app, "globe_lang", &label, "Choose the interface language.", move |ui, app| {
         if ui.selectable_label(auto, tl!("Automatic (system language)")).clicked() {
             let _ = app.run("ui.language", json!({"code": crate::i18n::AUTO}));
@@ -913,7 +919,7 @@ fn language_menu(app: &mut RustGisApp, ui: &mut Ui) {
         ui.separator();
         for l in crate::i18n::Lang::all() {
             let sel = !auto && l == current;
-            if ui.selectable_label(sel, l.name()).on_hover_text(l.english()).clicked() {
+            if ui.selectable_label(sel, shown_name(ui, l)).on_hover_text(l.english()).clicked() {
                 let _ = app.run("ui.language", json!({"code": l.code()}));
                 ui.close();
             }
