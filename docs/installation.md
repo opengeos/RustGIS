@@ -26,7 +26,28 @@ RUSTGIS_DATA_DIR=/path/to/data cargo build --release
 | Linux (X11 and Wayland) | Supported |
 | macOS | Supported |
 | Windows | Supported |
-| Web browser | Planned (WebAssembly) |
+| Web browser | Supported: [rustgis.app/app](https://rustgis.app/app/) (WebGPU or WebGL2) |
+
+## Web app
+
+RustGIS also runs in the browser, compiled to WebAssembly: open
+**[rustgis.app/app](https://rustgis.app/app/)**. It is the same app with three differences:
+
+- **Open** and **Add Data** use the browser's file picker, and you can drop files on the page.
+  GeoJSON, CSV and `.rgisx` projects work; Shapefiles need the desktop app.
+- **Save** and **Export** download the file.
+- The interface uses the built-in font, because a web page can't read installed fonts.
+
+Add `?blank` to the URL to start with an empty project, or `?webgl` to force WebGL2.
+
+To build it yourself, install [Trunk](https://trunkrs.dev) and the `wasm32-unknown-unknown`
+target, then:
+
+```sh
+cd apps/rustgis-web
+trunk serve          # http://127.0.0.1:8772
+trunk build --release   # output in dist/web
+```
 
 ## Fonts
 

@@ -52,6 +52,12 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 
 The honest picture is in [ROADMAP.md](ROADMAP.md) and the generated [coverage report](docs/parity.md).
 
+## Try it in the browser
+
+RustGIS also runs as a WebAssembly app at **[rustgis.app/app](https://rustgis.app/app/)**: the
+same ribbon and tools, with the browser's file picker for GeoJSON, CSV and projects, and
+downloads for Save and Export.
+
 ## Quick start
 
 ```sh
@@ -83,7 +89,7 @@ Inspired by [WordCraft](https://github.com/storytold/wordcraft)'s layering:
 | L3 | `rustgis-render` | tiny-skia renderer, label placement, PNG export |
 | L4 | `rustgis-engine` | session, undo, command registry, parity catalog, sample project |
 | L6 | `rustgis-ui-egui` | the ribbon front end (swappable) |
-| apps | `rustgis`, `rustgis-cli` | desktop and command line |
+| apps | `rustgis`, `rustgis-cli`, `rustgis-web` | desktop, command line, browser (WebAssembly) |
 
 `cargo xtask ci` runs formatting,
 clippy, the tests and the layering check. Contributor and agent notes: [AGENTS.md](AGENTS.md).

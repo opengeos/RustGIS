@@ -11,7 +11,7 @@ engine scriptable and the front end swappable.
 | L3 | `rustgis-render` | tiny-skia renderer, label placement, PNG export |
 | L4 | `rustgis-engine` | Session, undo, command registry, feature catalog, sample project |
 | L6 | `rustgis-ui-egui` | The ribbon front end |
-| apps | `rustgis`, `rustgis-cli` | Desktop app and command line |
+| apps | `rustgis`, `rustgis-cli`, `rustgis-web` | Desktop app, command line, browser (WebAssembly) |
 
 ## Everything is a command
 

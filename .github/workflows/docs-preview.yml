@@ -39,6 +39,17 @@ jobs:
           .venv/bin/zensical build
           # The preview is not the production site.
           rm -f site/CNAME
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the web app
+        run: |
+          curl -sSfL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xz -C /usr/local/bin trunk
+          cd apps/rustgis-web
+          trunk build --release --public-url ./
+          mkdir -p ../../site/app
+          cp -r ../../dist/web/. ../../site/app/
 
       - name: Create a scratch directory for wrangler
         run: mkdir -p .wrangler-deploy
@@ -110,7 +121,7 @@ jobs:
           script: |
             const marker = '<!-- docs-preview -->';
             const alias = process.env.ALIAS_URL || process.env.DEPLOY_URL;
-            const body = `${marker}\n### 📖 Docs preview\n\n| Item | Value |\n| --- | --- |\n| Preview | ${alias} |\n| This commit | ${process.env.DEPLOY_URL} |\n| Commit | \`${process.env.HEAD_SHA.slice(0, 7)}\` |`;
+            const body = `${marker}\n### 📖 Docs preview\n\n| Item | Value |\n| --- | --- |\n| Preview | ${alias} |\n| Web app | ${alias}/app/ |\n| This commit | ${process.env.DEPLOY_URL} |\n| Commit | \`${process.env.HEAD_SHA.slice(0, 7)}\` |`;
             const { owner, repo } = context.repo;
             const issue_number = context.payload.pull_request.number;
             const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });

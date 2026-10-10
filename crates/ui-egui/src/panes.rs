@@ -372,9 +372,12 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     }
                 }
             });
-            egui::CollapsingHeader::new(egui::RichText::new("Folders").font(semibold(12.5))).default_open(true).show(ui, |ui| {
-                folder_browser(app, ui, t);
-            });
+            // A web page can't list local folders.
+            if !cfg!(target_arch = "wasm32") {
+                egui::CollapsingHeader::new(egui::RichText::new("Folders").font(semibold(12.5))).default_open(true).show(ui, |ui| {
+                    folder_browser(app, ui, t);
+                });
+            }
         });
     });
 }

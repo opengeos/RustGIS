@@ -27,6 +27,17 @@ jobs:
           uv venv --python 3.12
           uv pip install -r requirements_docs.txt
           .venv/bin/zensical build
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the web app
+        run: |
+          curl -sSfL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xz -C /usr/local/bin trunk
+          cd apps/rustgis-web
+          trunk build --release --public-url ./
+          mkdir -p ../../site/app
+          cp -r ../../dist/web/. ../../site/app/
       - uses: actions/upload-pages-artifact@v4
         with:
           path: ./site

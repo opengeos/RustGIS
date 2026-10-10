@@ -1,0 +1,161 @@
+//! The browser shell: file picker, downloads, drag-and-drop, the unsaved-changes guard and the
+//! eframe web runner.
+
+use std::cell::Cell;
+use std::rc::Rc;
+
+use rustgis_ui_egui::rustgis_engine::{Project, Session};
+use rustgis_ui_egui::{Inbox, RustGisApp, Services};
+use wasm_bindgen::JsCast as _;
+
+const DATA_EXTS: &[&str] = &["geojson", "json", "csv", "txt"];
+const CANVAS_ID: &str = "rustgis_canvas";
+const LOADING_ID: &str = "rustgis_loading";
+
+pub fn start() {
+    eframe::WebLogger::init(log::LevelFilter::Info).ok();
+    wasm_bindgen_futures::spawn_local(async {
+        let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+            log::error!("no document");
+            return;
+        };
+        let Some(canvas) = document.get_element_by_id(CANVAS_ID).and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok()) else {
+            log::error!("missing <canvas id=\"{CANVAS_ID}\">");
+            return;
+        };
+        let dirty = Rc::new(Cell::new(false));
+        if let Err(e) = guard_unload(dirty.clone()) {
+            log::error!("no unsaved-changes guard: {e}");
+        }
+        let mut options = eframe::WebOptions::default();
+        if query().contains("webgl")
+            && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
+        {
+            create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
+        }
+        let result = eframe::WebRunner::new()
+            .start(
+                canvas,
+                options,
+                Box::new(move |cc| {
+                    let inbox: Inbox = Inbox::default();
+                    let app = if query().contains("blank") {
+                        RustGisApp::new(Session::new(Project::default()))
+                    } else {
+                        RustGisApp::with_sample()
+                    };
+                    let app = app.with_services(services(inbox.clone(), cc.egui_ctx.clone()));
+                    Ok(Box::new(WebShell { app, inbox, dirty }))
+                }),
+            )
+            .await;
+        if let Some(el) = document.get_element_by_id(LOADING_ID) {
+            match result {
+                Ok(()) => el.remove(),
+                Err(e) => {
+                    el.set_inner_html(&format!("<p>RustGIS failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>"))
+                }
+            }
+        }
+    });
+}
+
+fn query() -> String {
+    web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
+}
+
+/// Reads dropped files asynchronously (browsers can't read them synchronously) into the inbox,
+/// and mirrors the unsaved-changes flag for the `beforeunload` guard.
+struct WebShell {
+    app: RustGisApp,
+    inbox: Inbox,
+    dirty: Rc<Cell<bool>>,
+}
+
+impl eframe::App for WebShell {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+        for f in dropped {
+            let inbox = self.inbox.clone();
+            let ctx = ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let name = f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped.geojson".into());
+                match f.bytes_async().await {
+                    Ok(bytes) => {
+                        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                        ctx.request_repaint();
+                    }
+                    Err(e) => log::error!("couldn't read dropped file {name}: {e}"),
+                }
+            });
+        }
+        self.app.logic(ctx);
+        self.dirty.set(self.app.session.dirty);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.app.ui(ui);
+    }
+}
+
+fn services(inbox: Inbox, ctx: egui::Context) -> Services {
+    let open_inbox = inbox.clone();
+    Services {
+        open_async: Some(Box::new(move |purpose: &str| {
+            let inbox = open_inbox.clone();
+            let ctx = ctx.clone();
+            let dialog = if purpose == "project" {
+                rfd::AsyncFileDialog::new().add_filter("RustGIS project", &["rgisx"])
+            } else {
+                rfd::AsyncFileDialog::new().add_filter("Vector data", DATA_EXTS)
+            };
+            wasm_bindgen_futures::spawn_local(async move {
+                let Some(file) = dialog.pick_file().await else {
+                    return;
+                };
+                let bytes = file.read().await;
+                inbox.lock().unwrap_or_else(|e| e.into_inner()).push((file.file_name(), bytes));
+                ctx.request_repaint();
+            });
+        })),
+        download: Some(Box::new(|name: &str, bytes: Vec<u8>| {
+            if let Err(e) = download(name, &bytes) {
+                log::error!("download of {name} failed: {e}");
+            }
+        })),
+        inbox: Some(inbox),
+    }
+}
+
+/// Saves bytes through a temporary `<a download>` link.
+fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+    let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
+    let array = js_sys::Uint8Array::from(bytes);
+    let parts = js_sys::Array::new();
+    parts.push(&array);
+    let props = web_sys::BlobPropertyBag::new();
+    props.set_type("application/octet-stream");
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &props).map_err(err)?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(err)?;
+    let a: web_sys::HtmlAnchorElement = document.create_element("a").map_err(err)?.dyn_into().map_err(|_| "not an anchor".to_string())?;
+    a.set_href(&url);
+    a.set_download(name);
+    a.click();
+    web_sys::Url::revoke_object_url(&url).map_err(err)?;
+    Ok(())
+}
+
+/// Closing, reloading or leaving the tab with unsaved changes asks first.
+fn guard_unload(dirty: Rc<Cell<bool>>) -> Result<(), String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let on_unload = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(move |e: web_sys::BeforeUnloadEvent| {
+        if dirty.get() {
+            e.prevent_default();
+            e.set_return_value("unsaved");
+        }
+    });
+    window.add_event_listener_with_callback("beforeunload", on_unload.as_ref().unchecked_ref()).map_err(|e| format!("{e:?}"))?;
+    on_unload.forget();
+    Ok(())
+}

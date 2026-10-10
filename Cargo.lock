@@ -3197,6 +3197,7 @@ dependencies = [
  "rustgis-render",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -3240,6 +3241,22 @@ dependencies = [
  "rfd",
  "rustgis-engine",
  "serde_json",
+ "web-time",
+]
+
+[[package]]
+name = "rustgis-web"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "js-sys",
+ "log",
+ "rfd",
+ "rustgis-ui-egui",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

@@ -21,11 +21,14 @@ egui front end, headless screenshots for UI work.
 | L3 | `render` | tiny-skia map renderer, label placement, PNG export, font discovery |
 | L4 | `engine` | `Session`, undo, command registry, ribbon feature catalog, sample project |
 | L6 | `ui-egui` | ribbon, panes, map view, attribute table, dialogs (swappable) |
-| apps | `rustgis`, `rustgis-cli` | desktop app, command line |
+| apps | `rustgis`, `rustgis-cli`, `rustgis-web` | desktop app, command line, browser (WebAssembly) |
 
 - **Everything is a command**: a `CommandSpec` in `crates/engine/src/cmd/*.rs`. UI-only
   commands (`ui.*`) live in `crates/ui-egui/src/lib.rs`. The ribbon, shortcuts, command search
   and CLI dispatch by id. Commands never open dialogs.
+- **Never break wasm**: everything below `apps/` must build for `wasm32-unknown-unknown`
+  (CI runs `cargo build --target wasm32-unknown-unknown -p rustgis-web`). Use `web_time`, not
+  `std::time`; file access goes through `Services` on the web.
 - **Layering** is enforced by `cargo xtask layers`: nothing below L6 depends on egui/eframe/rfd.
 - **Coverage** is measured against a ribbon feature checklist (`crates/engine/src/catalog.rs`,
   `cargo xtask parity` → `docs/parity.md`). A test enforces a floor that only rises.

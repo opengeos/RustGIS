@@ -115,7 +115,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let interacting = app.map.drag.is_some() || time - app.map.last_interaction < 0.18;
     let stale = app.map.key != Some(key);
     if stale && (!interacting || app.map.texture.is_none() || app.map.key.is_some_and(|k| k.rev != key.rev || k.size != key.size)) {
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: cam };
         if let Some(r) = rustgis_engine::render::render(app.session.map_mut(), &view) {
             let size = [r.pixmap.width() as usize, r.pixmap.height() as usize];

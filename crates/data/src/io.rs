@@ -12,6 +12,26 @@ const MAX_BYTES: u64 = 256 << 20;
 /// File types the readers understand, for open dialogs.
 pub const READ_EXTENSIONS: &[&str] = &["geojson", "json", "csv", "txt", "shp"];
 
+/// Reads vector data held in memory (a browser upload or a drop), choosing the reader by the
+/// file name's extension. Shapefiles need their sidecar files, so they're read from disk only.
+pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)> {
+    let path = Path::new(file_name);
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("layer").to_string();
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err(DataError::Format(format!("file is too large ({} bytes)", bytes.len())));
+    }
+    let text = || std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")));
+    let mut out = match ext.as_str() {
+        "geojson" | "json" => read_geojson(text()?, &name)?,
+        "csv" | "txt" => read_csv(text()?, &name)?,
+        "shp" => return Err(DataError::Unsupported("shp here: open Shapefiles from disk in the desktop app".into())),
+        other => return Err(DataError::Unsupported(other.to_string())),
+    };
+    out.0.source = Some(file_name.to_string());
+    Ok(out)
+}
+
 /// Reads a vector file by extension.
 pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -583,6 +603,14 @@ mod tests {
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temp files left behind");
         assert!(write_atomic(Path::new("/"), b"x").is_err());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_bytes_dispatches_by_extension() {
+        let (ds, _) = read_bytes("pts.CSV", b"lon,lat\n1,2\n").unwrap();
+        assert_eq!(ds.geometry_type, GeometryType::Point);
+        assert!(read_bytes("x.shp", b"").is_err());
+        assert!(read_bytes("x.geojson", &[0xff, 0xfe]).is_err());
     }
 
     #[test]

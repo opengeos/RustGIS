@@ -35,5 +35,6 @@ the command line.
 
 </div>
 
-[Get started](getting-started.md){ .md-button .md-button--primary }
+[Try it in your browser](https://rustgis.app/app/){ .md-button .md-button--primary }
+[Get started](getting-started.md){ .md-button }
 [Install](installation.md){ .md-button }

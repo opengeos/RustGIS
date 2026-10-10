@@ -22,6 +22,20 @@ use serde_json::{Value, json};
 
 pub use rustgis_engine;
 
+/// Files read asynchronously (browser uploads, drops) waiting to be opened: (file name, bytes).
+pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+
+/// Platform hooks. The desktop app leaves them empty and uses native file dialogs; the web app
+/// supplies an asynchronous file picker (results arrive in `inbox`) and browser downloads.
+#[derive(Default)]
+pub struct Services {
+    /// Opens a file picker for `"data"` or `"project"`; the chosen file lands in `inbox`.
+    pub open_async: Option<Box<dyn Fn(&str)>>,
+    /// Hands bytes to the user as a download named `file_name`.
+    pub download: Option<Box<dyn Fn(&str, Vec<u8>)>>,
+    pub inbox: Option<Inbox>,
+}
+
 /// Panes on the left of the map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeftPane {
@@ -81,6 +95,7 @@ pub struct RustGisApp {
     sent_title: String,
     pub quit_requested: bool,
     logo: Option<egui::TextureHandle>,
+    pub services: Services,
 }
 
 impl RustGisApp {
@@ -101,6 +116,36 @@ impl RustGisApp {
             sent_title: String::new(),
             quit_requested: false,
             logo: None,
+            services: Services::default(),
+        }
+    }
+
+    pub fn with_services(mut self, services: Services) -> Self {
+        self.services = services;
+        self
+    }
+
+    /// Opens a file by name and contents: a `.rgisx` project, or vector data.
+    pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
+        let text = std::str::from_utf8(bytes).map_err(|_| format!("{name} is not a text file"))?;
+        if name.to_ascii_lowercase().ends_with(".rgisx") {
+            let r = self.run("project.openText", json!({"text": text, "name": name}));
+            self.map.invalidate();
+            r
+        } else {
+            self.run("layer.addDataText", json!({"fileName": name, "text": text}))
+        }
+    }
+
+    /// Offers bytes as a download (web) and reports whether a download hook exists.
+    fn download(&mut self, name: &str, bytes: Vec<u8>) -> bool {
+        match &self.services.download {
+            Some(d) => {
+                d(name, bytes);
+                self.session.notify(format!("Downloaded {name}"), false);
+                true
+            }
+            None => false,
         }
     }
 
@@ -169,17 +214,28 @@ impl RustGisApp {
                 }
             }
             "ui.addData" => {
-                if let Some(path) = dialogs::pick_open(&["geojson", "json", "csv", "shp"], "Vector data") {
+                if let Some(open) = &self.services.open_async {
+                    open("data");
+                } else if let Some(path) = dialogs::pick_open(&["geojson", "json", "csv", "shp"], "Vector data") {
                     return self.run("layer.addData", json!({"path": path}));
                 }
             }
             "ui.open" => {
-                if let Some(path) = dialogs::pick_open(&["rgisx"], "RustGIS project") {
+                if let Some(open) = &self.services.open_async {
+                    open("project");
+                    self.ui.backstage = false;
+                } else if let Some(path) = dialogs::pick_open(&["rgisx"], "RustGIS project") {
                     let r = self.run("project.open", json!({"path": path}));
                     self.ui.backstage = false;
                     self.map.invalidate();
                     return r;
                 }
+            }
+            "ui.save" | "ui.saveAs" if self.services.download.is_some() => {
+                let text = serde_json::to_string(&self.session.project).map_err(|e| e.to_string())?;
+                let name = format!("{}.rgisx", self.session.project.name);
+                self.download(&name, text.into_bytes());
+                self.session.dirty = false;
             }
             "ui.save" => {
                 if self.session.path.is_some() {
@@ -192,6 +248,21 @@ impl RustGisApp {
                 if let Some(path) = dialogs::pick_save(&name, &["rgisx"], "RustGIS project") {
                     return self.run("project.saveAs", json!({"path": path}));
                 }
+            }
+            "ui.exportMap" if self.services.download.is_some() => {
+                let png = rustgis_engine::cmd::share::map_png(&mut self.session, None, None, Some(192.0))?;
+                let name = format!("{}.png", self.session.map().name);
+                self.download(&name, png);
+            }
+            "ui.exportLayer" if self.services.download.is_some() => {
+                let l = self
+                    .session
+                    .active_layer
+                    .and_then(|id| self.session.map().layer(id))
+                    .ok_or("select a layer in the Contents pane first")?;
+                let text = rustgis_engine::data::io::to_geojson(&l.dataset).to_string();
+                let name = format!("{}.geojson", l.name);
+                self.download(&name, text.into_bytes());
             }
             "ui.exportMap" => {
                 let name = format!("{}.png", self.session.map().name);
@@ -220,8 +291,30 @@ impl RustGisApp {
         Ok(Value::Null)
     }
 
-    /// Per-frame work that doesn't draw (theme, fonts).
+    /// Per-frame work that doesn't draw (theme, fonts, files that arrived).
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // Files from the async picker or browser drops.
+        let arrived: Vec<(String, Vec<u8>)> = match &self.services.inbox {
+            Some(inbox) => std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner())),
+            None => Vec::new(),
+        };
+        for (name, bytes) in arrived {
+            let _ = self.open_bytes(&name, &bytes);
+        }
+        // Files dropped on the desktop window arrive as paths. (The web shell reads browser drops
+        // asynchronously and passes them through the inbox instead.)
+        if !cfg!(target_arch = "wasm32") {
+            let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+            for f in dropped {
+                let p = f.path().display().to_string();
+                if p.is_empty() {
+                    continue;
+                }
+                let cmd = if p.to_ascii_lowercase().ends_with(".rgisx") { "project.open" } else { "layer.addData" };
+                let _ = self.run(cmd, json!({"path": p}));
+                self.map.invalidate();
+            }
+        }
         if self.fonts_frames == 0 {
             theme::install_fonts(ctx);
         }

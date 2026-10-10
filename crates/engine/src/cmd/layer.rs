@@ -12,6 +12,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Map › Layer", add_data).params(r#"{"path": string, "name"?: string}"#),
+        C::new("layer.addDataText", "Add Data (from text)", "Map › Layer", add_data_text).params(r#"{"fileName": "name.geojson|.csv", "text": string}"#),
         C::new("layer.addSample", "Add Sample Data", "Map › Layer › Add Data", add_sample).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
         C::new("layer.remove", "Remove", "Contents", remove).key("Delete").when(need_layer).params(r#"{"layer"?: name|id}"#),
         C::new("layer.select", "Select Layer", "Contents", |s, p| {
@@ -240,7 +241,19 @@ pub fn add_dataset(s: &mut Session, mut ds: rustgis_data::Dataset) -> u32 {
 
 fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     let path = s_req(p, "path")?;
-    let (mut ds, report) = rustgis_data::io::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+    let read = rustgis_data::io::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+    add_read(s, p, read)
+}
+
+fn add_data_text(s: &mut Session, p: &Value) -> CmdResult {
+    let name = s_req(p, "fileName")?;
+    let text = s_req(p, "text")?;
+    let read = rustgis_data::io::read_bytes(name, text.as_bytes()).map_err(|e| format!("{name}: {e}"))?;
+    add_read(s, p, read)
+}
+
+fn add_read(s: &mut Session, p: &Value, read: (rustgis_data::Dataset, rustgis_data::ReadReport)) -> CmdResult {
+    let (mut ds, report) = read;
     if let Some(n) = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         ds.name = n.to_string();
     }

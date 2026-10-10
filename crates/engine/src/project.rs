@@ -90,18 +90,26 @@ impl Project {
         rustgis_data::io::write_atomic(path, text.as_bytes()).map_err(|e| format!("could not save {}: {e}", path.display()))
     }
 
+    /// Reads a project from its JSON text (a browser upload).
+    pub fn from_json(text: &str) -> Result<Project, String> {
+        if text.len() as u64 > MAX_BYTES {
+            return Err("the project file is too large".into());
+        }
+        let mut p: Project = serde_json::from_str(text).map_err(|e| format!("not a RustGIS project: {e}"))?;
+        if p.format > FORMAT {
+            return Err(format!("this project was saved by a newer RustGIS (format {})", p.format));
+        }
+        p.normalize();
+        Ok(p)
+    }
+
     pub fn load(path: &Path) -> Result<Project, String> {
         let len = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
         if len > MAX_BYTES {
             return Err("the project file is too large".into());
         }
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut p: Project = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS project: {e}"))?;
-        if p.format > FORMAT {
-            return Err(format!("this project was saved by a newer RustGIS (format {})", p.format));
-        }
-        p.normalize();
-        Ok(p)
+        Project::from_json(&text)
     }
 }
 
