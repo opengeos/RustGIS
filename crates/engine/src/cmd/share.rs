@@ -31,6 +31,9 @@ pub fn commands() -> Vec<C> {
 /// Renders the active map at the current view (or a requested size) to PNG bytes.
 pub fn map_png(s: &mut Session, width: Option<f64>, height: Option<f64>, dpi: Option<f64>) -> Result<Vec<u8>, String> {
     let (vw, vh) = s.view_size;
+    // NaN would pass through `clamp`; non-finite values fall back to the defaults.
+    let fin = |v: Option<f64>| v.filter(|x| x.is_finite());
+    let (width, height, dpi) = (fin(width), fin(height), fin(dpi));
     let w = width.unwrap_or(vw).clamp(16.0, 8000.0);
     let h = height.unwrap_or(vh).clamp(16.0, 8000.0);
     let ppp = (dpi.unwrap_or(96.0) / 96.0).clamp(0.5, 6.0);
@@ -47,7 +50,7 @@ pub fn map_png(s: &mut Session, width: Option<f64>, height: Option<f64>, dpi: Op
 fn export_map(s: &mut Session, p: &Value) -> CmdResult {
     let path = ps(p, "path").ok_or("path is required")?.to_string();
     let png = map_png(s, f(p, "width"), f(p, "height"), f(p, "dpi"))?;
-    std::fs::write(&path, &png).map_err(|e| format!("{path}: {e}"))?;
+    rustgis_data::io::write_atomic(std::path::Path::new(&path), &png).map_err(|e| format!("{path}: {e}"))?;
     s.notify(format!("Exported {path}"), false);
     Ok(json!({"path": path, "bytes": png.len()}))
 }

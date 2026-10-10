@@ -36,11 +36,7 @@ fn add_feature(s: &mut Session, p: &Json) -> CmdResult {
     if !ok {
         return Err(format!("{} can't go in a {} layer", g.kind().label(), want.label()));
     }
-    if let Geometry::Polygon(polys) = &g
-        && polys.iter().any(|r| r.first().is_none_or(|r| r.len() < 4))
-    {
-        return Err("a polygon needs at least three points".into());
-    }
+    validate(&g)?;
     let attrs: Vec<Value> = l
         .dataset
         .fields
@@ -52,6 +48,21 @@ fn add_feature(s: &mut Session, p: &Json) -> CmdResult {
     let row = l.dataset.features.len() - 1;
     l.selection = vec![row];
     Ok(json!({"row": row}))
+}
+
+/// Rejects empty or degenerate geometry, which would break extents, labels and rendering.
+fn validate(g: &Geometry) -> Result<(), String> {
+    match g {
+        Geometry::Point(_) => Ok(()),
+        Geometry::MultiPoint(v) if v.is_empty() => Err("a multipoint needs at least one point".into()),
+        Geometry::MultiPoint(_) => Ok(()),
+        Geometry::Line(parts) if parts.is_empty() || parts.iter().any(|p| p.len() < 2) => Err("a line needs at least two points".into()),
+        Geometry::Line(_) => Ok(()),
+        Geometry::Polygon(polys) if polys.is_empty() || polys.iter().any(|rings| rings.is_empty() || rings.iter().any(|r| r.len() < 4)) => {
+            Err("a polygon needs at least three points".into())
+        }
+        Geometry::Polygon(_) => Ok(()),
+    }
 }
 
 fn coerce(v: Value, ty: FieldType) -> Value {
@@ -128,11 +139,23 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
     let id = s.layer_id(p)?;
     let fi = field_index(s, id, ps(p, "field").ok_or("field is required")?)?;
     let l = s.map_mut().layer_mut(id).ok_or("no layer")?;
-    l.dataset.fields.remove(fi);
+    let removed = l.dataset.fields.remove(fi).name;
     for f in &mut l.dataset.features {
         if fi < f.attrs.len() {
             f.attrs.remove(fi);
         }
+    }
+    // Nothing may keep referring to the deleted field.
+    if l.renderer.field().is_some_and(|f| f.eq_ignore_ascii_case(&removed)) {
+        l.renderer = rustgis_map::Renderer::Single(l.renderer.base_symbol());
+    }
+    if l.labels.field.eq_ignore_ascii_case(&removed) {
+        l.labels = rustgis_map::Labeling { enabled: false, ..rustgis_map::Labeling::default_for(&l.dataset) };
+    }
+    if let Some(q) = &l.definition_query
+        && rustgis_data::query::parse(q, &l.dataset).is_err()
+    {
+        l.definition_query = None;
     }
     Ok(Json::Null)
 }

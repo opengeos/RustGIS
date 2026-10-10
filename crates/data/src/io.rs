@@ -25,7 +25,14 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
             check_size(path)?;
             read_csv(&std::fs::read_to_string(path)?, &name)?
         }
-        "shp" => read_shapefile(path, &name)?,
+        "shp" => {
+            check_size(path)?;
+            let dbf = path.with_extension("dbf");
+            if dbf.exists() {
+                check_size(&dbf)?;
+            }
+            read_shapefile(path, &name)?
+        }
         other => return Err(DataError::Unsupported(other.to_string())),
     };
     out.0.source = Some(path.display().to_string());
@@ -48,8 +55,27 @@ pub fn write_path(ds: &Dataset, path: &Path) -> Result<()> {
         "csv" => to_csv(ds)?,
         other => return Err(DataError::Unsupported(other.to_string())),
     };
-    std::fs::write(path, text)?;
+    write_atomic(path, text.as_bytes())?;
     Ok(())
+}
+
+/// Writes through a temporary file that is synced and renamed into place, so an interrupted
+/// write never truncates an existing file. The temporary file is removed on failure.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut tmp_name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    tmp_name.push(".tmp");
+    let tmp = path.with_file_name(tmp_name);
+    let res = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -229,6 +255,8 @@ const LAT_NAMES: &[&str] = &["lat", "latitude", "y", "lat_dd", "latitude_dd"];
 
 /// Reads CSV; columns named like longitude/latitude become point geometry.
 pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
+    // Spreadsheet exports often start with a byte-order mark, which would hide the first header.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut rdr = csv::ReaderBuilder::new().flexible(true).from_reader(text.as_bytes());
     let headers: Vec<String> = rdr.headers().map_err(|e| DataError::Format(format!("CSV: {e}")))?.iter().map(|s| s.to_string()).collect();
     let find = |names: &[&str]| headers.iter().position(|h| names.contains(&h.trim().to_ascii_lowercase().as_str()));
@@ -254,7 +282,7 @@ pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
             for v in vals {
                 let t = if v.parse::<i64>().is_ok() {
                     FieldType::Integer
-                } else if v.parse::<f64>().is_ok() {
+                } else if v.parse::<f64>().is_ok_and(f64::is_finite) {
                     FieldType::Double
                 } else {
                     FieldType::Text
@@ -296,17 +324,34 @@ pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
     Ok((ds, report))
 }
 
+/// A cell's text; text that a spreadsheet would run as a formula is prefixed with `'`.
+fn csv_cell(v: &Value) -> String {
+    match v {
+        Value::Null => String::new(),
+        Value::Text(t) if t.starts_with(['=', '+', '-', '@', '\t', '\r']) => format!("'{t}"),
+        other => other.to_string(),
+    }
+}
+
 pub fn to_csv(ds: &Dataset) -> Result<String> {
     let mut w = csv::Writer::from_writer(Vec::new());
     let point = ds.geometry_type == GeometryType::Point;
     let mut head: Vec<String> = ds.fields.iter().map(|f| f.name.clone()).collect();
     if point {
-        head.push("longitude".into());
-        head.push("latitude".into());
+        // Coordinate columns get names that don't collide with existing fields.
+        for base in ["longitude", "latitude"] {
+            let mut name = base.to_string();
+            let mut i = 1;
+            while head.iter().any(|h| h.eq_ignore_ascii_case(&name)) {
+                name = format!("{base}_{i}");
+                i += 1;
+            }
+            head.push(name);
+        }
     }
     w.write_record(&head).map_err(|e| DataError::Format(e.to_string()))?;
     for f in &ds.features {
-        let mut row: Vec<String> = f.attrs.iter().map(|v| if v.is_null() { String::new() } else { v.to_string() }).collect();
+        let mut row: Vec<String> = f.attrs.iter().map(csv_cell).collect();
         if point {
             let c = f.geometry.as_ref().and_then(|g| g.label_point());
             row.push(c.map(|c| c.x.to_string()).unwrap_or_default());
@@ -385,13 +430,7 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
             .iter()
             .map(|f| match record.get(&f.name) {
                 Some(FieldValue::Character(Some(s))) => Value::Text(s.trim().to_string()),
-                Some(FieldValue::Numeric(Some(n))) => {
-                    if f.ty == FieldType::Integer {
-                        Value::Int(*n as i64)
-                    } else {
-                        Value::Float(*n)
-                    }
-                }
+                Some(FieldValue::Numeric(Some(n))) if n.is_finite() => Value::Float(*n),
                 Some(FieldValue::Float(Some(n))) => Value::Float(f64::from(*n)),
                 Some(FieldValue::Integer(i)) => Value::Int(i64::from(*i)),
                 Some(FieldValue::Double(d)) => Value::Float(*d),
@@ -405,6 +444,7 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
         ds.push(geom, attrs);
     }
     ds.geometry_type = dominant_type(&ds);
+    integral_numeric_to_integer(&mut ds);
     let e = ds.extent();
     if !e.is_empty() && (e.min_x < -180.5 || e.max_x > 180.5 || e.min_y < -90.5 || e.max_y > 90.5) {
         report.messages.push("coordinates are not longitude/latitude; RustGIS reads them as WGS 84 and they may draw out of place".into());
@@ -413,6 +453,35 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
         report.messages.push(format!("{} shapes were unreadable or unsupported", report.skipped));
     }
     Ok((ds, report))
+}
+
+/// The .dbf header doesn't say whether a Numeric column has decimals, so a Double column whose
+/// values are all whole numbers within i64 range is read as Integer.
+fn integral_numeric_to_integer(ds: &mut Dataset) {
+    const LIMIT: f64 = 9.0e15;
+    for fi in 0..ds.fields.len() {
+        if ds.fields.get(fi).map(|f| f.ty) != Some(FieldType::Double) {
+            continue;
+        }
+        let whole = ds.features.iter().all(|f| match f.attrs.get(fi) {
+            Some(Value::Float(v)) => v.fract() == 0.0 && v.abs() < LIMIT,
+            _ => true,
+        });
+        let any = ds.features.iter().any(|f| matches!(f.attrs.get(fi), Some(Value::Float(_))));
+        if !whole || !any {
+            continue;
+        }
+        if let Some(f) = ds.fields.get_mut(fi) {
+            f.ty = FieldType::Integer;
+        }
+        for f in &mut ds.features {
+            if let Some(v) = f.attrs.get_mut(fi)
+                && let Value::Float(x) = *v
+            {
+                *v = Value::Int(x as i64);
+            }
+        }
+    }
 }
 
 fn is_outer<P>(r: &shapefile::PolygonRing<P>) -> bool {
@@ -461,6 +530,17 @@ mod tests {
     }
 
     #[test]
+    fn csv_bom_injection_and_column_names() {
+        let (ds, _) = read_csv("\u{feff}lon,lat,longitude,note\n1,2,9,=SUM(A1)\n", "t").unwrap();
+        assert_eq!(ds.geometry_type, GeometryType::Point, "BOM must not hide the lon header");
+        let out = to_csv(&ds).unwrap();
+        assert!(out.contains("'=SUM(A1)"), "{out}");
+        assert!(out.lines().next().unwrap().contains("longitude_1"), "{out}");
+        let (ds, _) = read_csv("a\nNaN\nx\n", "t").unwrap();
+        assert_eq!(ds.fields[0].ty, FieldType::Text);
+    }
+
+    #[test]
     fn hostile_geojson_is_an_error_not_a_panic() {
         for t in ["", "{", "[]", "{\"type\":5}", "{\"type\":\"FeatureCollection\",\"features\":7}"] {
             let _ = read_geojson(t, "x");
@@ -468,10 +548,14 @@ mod tests {
     }
 
     #[test]
-    fn sample_data_reads() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/data");
-        let (ds, _) = read_path(&dir.join("countries.geojson")).unwrap();
-        assert!(ds.features.len() > 150);
+    fn read_path_dispatches_by_extension() {
+        let dir = std::env::temp_dir().join(format!("rustgis-io-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("square.GeoJSON");
+        std::fs::write(&p, r#"{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}"#).unwrap();
+        let (ds, _) = read_path(&p).unwrap();
         assert_eq!(ds.geometry_type, GeometryType::Polygon);
+        assert!(read_path(&dir.join("x.kml")).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

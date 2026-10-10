@@ -95,6 +95,32 @@ fn save_clears_dirty_and_open_clears_history() {
 }
 
 #[test]
+fn degenerate_geometry_and_deleted_fields() {
+    let mut s = world();
+    for g in [
+        json!({"type": "LineString", "coordinates": [[0, 0]]}),
+        json!({"type": "MultiPoint", "coordinates": []}),
+        json!({"type": "MultiPolygon", "coordinates": []}),
+    ] {
+        let layer = if g["type"] == "LineString" {
+            "Rivers"
+        } else if g["type"] == "MultiPoint" {
+            "Cities"
+        } else {
+            "Countries"
+        };
+        assert!(s.run("edit.addFeature", &json!({"layer": layer, "geometry": g})).is_err(), "{g}");
+    }
+    s.run("layer.definitionQuery", &json!({"layer": "Countries", "where": "pop_est > 1000"})).unwrap();
+    s.run("edit.deleteField", &json!({"layer": "Countries", "field": "pop_est"})).unwrap();
+    let l = s.map().layer_by_name("Countries").unwrap();
+    assert_eq!(l.renderer.kind_label(), "Single Symbol");
+    assert!(l.definition_query.is_none());
+    s.run("edit.deleteField", &json!({"layer": "Countries", "field": "name"})).unwrap();
+    assert!(!s.map().layer_by_name("Countries").unwrap().labels.enabled);
+}
+
+#[test]
 fn catalog_ids_exist() {
     let s = Session::new(Project::default());
     for f in crate::catalog::FEATURES {

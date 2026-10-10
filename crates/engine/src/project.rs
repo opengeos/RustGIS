@@ -87,9 +87,7 @@ impl Project {
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let text = serde_json::to_string(self).map_err(|e| e.to_string())?;
-        let tmp = path.with_extension("rgisx.tmp");
-        std::fs::write(&tmp, text).map_err(|e| format!("could not write {}: {e}", tmp.display()))?;
-        std::fs::rename(&tmp, path).map_err(|e| format!("could not save {}: {e}", path.display()))
+        rustgis_data::io::write_atomic(path, text.as_bytes()).map_err(|e| format!("could not save {}: {e}", path.display()))
     }
 
     pub fn load(path: &Path) -> Result<Project, String> {

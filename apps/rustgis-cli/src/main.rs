@@ -44,8 +44,16 @@ fn run(s: &mut Session, id: &str, p: Value) -> Result<Value, String> {
     s.run(id, &p).map_err(|e| format!("{id}: {e}"))
 }
 
+fn is_project(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".rgisx")
+}
+
+fn num(args: &[String], name: &str) -> Option<f64> {
+    opt(args, name).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite())
+}
+
 fn load(s: &mut Session, path: &str) -> Result<(), String> {
-    if path.to_ascii_lowercase().ends_with(".rgisx") {
+    if is_project(path) {
         run(s, "project.open", json!({"path": path}))?;
     } else {
         run(s, "layer.addData", json!({"path": path}))?;
@@ -96,13 +104,13 @@ fn main() -> ExitCode {
             if let Some(b) = opt(&args, "--basemap") {
                 run(&mut s, "map.basemap", json!({"name": b}))?;
             }
-            let w = opt(&args, "--width").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1600.0);
-            let h = opt(&args, "--height").and_then(|v| v.parse::<f64>().ok()).unwrap_or(900.0);
+            let w = num(&args, "--width").unwrap_or(1600.0).clamp(16.0, 8000.0);
+            let h = num(&args, "--height").unwrap_or(900.0).clamp(16.0, 8000.0);
             s.view_size = (w, h);
-            if !input.ends_with(".rgisx") {
+            if !is_project(input) {
                 run(&mut s, "map.zoomFull", Value::Null)?;
             }
-            let dpi = opt(&args, "--dpi").and_then(|v| v.parse::<f64>().ok()).unwrap_or(96.0);
+            let dpi = num(&args, "--dpi").unwrap_or(96.0);
             print(&run(&mut s, "share.exportMap", json!({"path": out, "dpi": dpi}))?);
             Ok(())
         }

@@ -31,6 +31,8 @@ pub enum Op {
 #[derive(Clone, Debug, PartialEq)]
 enum Tok {
     Ident(String),
+    /// A double-quoted field name: never a keyword or literal.
+    QuotedIdent(String),
     Str(String),
     Num(f64),
     Op(String),
@@ -43,6 +45,8 @@ enum Tok {
 const MAX_LEN: usize = 10_000;
 /// Deepest nesting accepted.
 const MAX_DEPTH: usize = 64;
+/// Most terms in one AND/OR chain (chains nest left, so this also bounds recursion).
+const MAX_TERMS: usize = 256;
 
 fn lex(s: &str) -> Result<Vec<Tok>, String> {
     if s.chars().count() > MAX_LEN {
@@ -88,7 +92,7 @@ fn lex(s: &str) -> Result<Vec<Tok>, String> {
                         }
                     }
                 }
-                out.push(if q == '"' { Tok::Ident(v) } else { Tok::Str(v) });
+                out.push(if q == '"' { Tok::QuotedIdent(v) } else { Tok::Str(v) });
             }
             '=' | '<' | '>' | '!' => {
                 let mut op = c.to_string();
@@ -155,7 +159,12 @@ impl Parser<'_> {
             return Err("the expression is nested too deeply".into());
         }
         let mut l = self.and()?;
+        let mut terms = 1;
         while self.eat_kw("OR") {
+            terms += 1;
+            if terms > MAX_TERMS {
+                return Err("the expression has too many terms".into());
+            }
             l = Expr::Or(Box::new(l), Box::new(self.and()?));
         }
         self.depth -= 1;
@@ -163,7 +172,12 @@ impl Parser<'_> {
     }
     fn and(&mut self) -> Result<Expr, String> {
         let mut l = self.not()?;
+        let mut terms = 1;
         while self.eat_kw("AND") {
+            terms += 1;
+            if terms > MAX_TERMS {
+                return Err("the expression has too many terms".into());
+            }
             l = Expr::And(Box::new(l), Box::new(self.not()?));
         }
         Ok(l)
@@ -200,7 +214,7 @@ impl Parser<'_> {
             return Ok(e);
         }
         let name = match self.next() {
-            Some(Tok::Ident(s)) => s,
+            Some(Tok::Ident(s)) | Some(Tok::QuotedIdent(s)) => s,
             other => return Err(format!("expected a field name, found {}", show(other.as_ref()))),
         };
         let field = self.ds.field_index(&name).ok_or_else(|| format!("no field named '{name}'"))?;
@@ -255,6 +269,7 @@ fn show(t: Option<&Tok>) -> String {
     match t {
         None => "the end".into(),
         Some(Tok::Ident(s)) => format!("'{s}'"),
+        Some(Tok::QuotedIdent(s)) => format!("\"{s}\""),
         Some(Tok::Str(s)) => format!("'{s}'"),
         Some(Tok::Num(n)) => n.to_string(),
         Some(Tok::Op(o)) => format!("'{o}'"),
@@ -388,11 +403,20 @@ mod tests {
     }
 
     #[test]
+    fn quoted_field_names_are_never_keywords() {
+        let mut d = Dataset::new("t", GeometryType::None, vec![Field::new("OR", FieldType::Integer), Field::new("null", FieldType::Text)]);
+        d.push(None, vec![Value::Int(1), Value::Text("x".into())]);
+        assert_eq!(select("\"OR\" = 1 AND \"null\" = 'x'", &d).unwrap(), vec![0]);
+    }
+
+    #[test]
     fn hostile_input() {
         let d = ds();
-        for t in ["", "(", "((((", "'", "name = 'x' AND", &"(".repeat(5000), &"NOT ".repeat(5000), "!", "pop = 1e999999"] {
+        let long_chain = vec!["pop = 1"; 2000].join(" AND ");
+        for t in ["", "(", "((((", "'", "name = 'x' AND", &"(".repeat(5000), &"NOT ".repeat(5000), "!", "pop = 1e999999", &long_chain] {
             let _ = select(t, &d);
         }
+        assert!(select(&long_chain, &d).is_err());
         assert!(like("abc", "a%c") && like("abc", "_b_") && !like("abc", "a_") && like("", "%"));
     }
 }
