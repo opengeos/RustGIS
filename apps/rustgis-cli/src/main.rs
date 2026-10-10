@@ -100,8 +100,12 @@ fn main() -> ExitCode {
         }
         "logo" => {
             // The app icon as a PNG, for installers and desktop entries.
-            let out = args.get(1).ok_or("logo needs <out.png>")?;
-            let size = num(&args, "--size").unwrap_or(512.0).clamp(16.0, 1024.0) as u32;
+            let out = args.get(1).filter(|a| !a.starts_with("--")).ok_or("logo needs <out.png> first")?;
+            let size = match opt(&args, "--size") {
+                Some(v) => v.parse::<u32>().map_err(|_| format!("--size {v}: expected a whole number"))?,
+                None => 512,
+            }
+            .clamp(16, 1024);
             let png =
                 rustgis_engine::render::logo::pixmap(size).ok_or("could not draw the logo")?.encode_png().map_err(|e| e.to_string())?;
             std::fs::write(out, png).map_err(|e| format!("{out}: {e}"))?;

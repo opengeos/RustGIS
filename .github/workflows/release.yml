@@ -12,8 +12,9 @@ on:
       - packaging/**
       - .github/workflows/release.yml
 
+# Read-only by default; only the release-only publish job can write.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.event_name }}-${{ github.event.release.tag_name || github.ref }}
@@ -69,7 +70,16 @@ jobs:
 
       - name: Package
         shell: bash
-        run: packaging/package.sh "${{ steps.version.outputs.version }}"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: packaging/package.sh "$VERSION"
+
+      - name: Check the .deb installs
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y ./dist/rustgis_*.deb
+          dpkg-deb -f dist/rustgis_*.deb Depends
+          rustgis-cli logo "$RUNNER_TEMP/logo.png" --size 64
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
@@ -77,14 +87,6 @@ jobs:
           name: rustgis-${{ matrix.os }}
           path: dist/*
           if-no-files-found: error
-
-      - name: Attach to GitHub Release
-        if: github.event_name == 'release'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" dist/* --clobber
 
   checksums:
     name: Checksums
@@ -105,9 +107,21 @@ jobs:
           name: rustgis-sha256sums
           path: dist/SHA256SUMS
 
-      - name: Attach to GitHub Release
-        if: github.event_name == 'release'
+  publish:
+    name: Attach to GitHub Release
+    if: github.event_name == 'release'
+    needs: checksums
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" dist/SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"

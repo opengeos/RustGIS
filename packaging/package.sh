@@ -60,17 +60,27 @@ case "$os" in
     done
     install -Dm644 "$root/LICENSE" "$p/usr/share/doc/rustgis/copyright"
     mkdir -p "$p/DEBIAN"
+    # Libraries the binaries link against, worked out by dpkg-shlibdeps (it wants a
+    # debian/control in the working directory). The windowing and GPU libraries are loaded at
+    # run time, so they are listed by hand below.
+    mkdir -p "$work/shlibs/debian"
+    touch "$work/shlibs/debian/control"
+    if ! shlibs="$(cd "$work/shlibs" && dpkg-shlibdeps -O "$p/usr/bin/rustgis" "$p/usr/bin/rustgis-cli" | sed -n 's/^shlibs:Depends=//p')"; then
+      # Off Debian/Ubuntu there is no dpkg database to consult; fall back to the core libraries.
+      echo "dpkg-shlibdeps failed; using a minimal Depends list" >&2
+      shlibs=""
+    fi
     cat > "$p/DEBIAN/control" <<CONTROL
 Package: rustgis
 Version: $version
 Section: science
 Priority: optional
 Architecture: $debarch
-Maintainer: RustGIS contributors <https://github.com/opengeos/RustGIS>
+Maintainer: Qiusheng Wu <giswqs@gmail.com>
 Homepage: https://rustgis.app
 Installed-Size: $(du -sk "$p/usr" | cut -f1)
-Depends: libc6, libgcc-s1, libx11-6, libxkbcommon0, libwayland-client0
-Recommends: libvulkan1 | libgl1
+Depends: ${shlibs:-libc6, libgcc-s1}, libxkbcommon0, libwayland-client0 | libx11-6
+Recommends: libxkbcommon-x11-0, libxcursor1, libxi6, libxrandr2, libvulkan1 | libegl1
 Description: Desktop GIS with a ribbon workflow, written in Rust
  Maps and layers, symbology, labeling, selection, editing, geoprocessing and
  export. Includes rustgis-cli for scripting every command.
