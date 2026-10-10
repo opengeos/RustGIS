@@ -38,7 +38,9 @@ fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
     };
     let pixel_is_point = key(1025) == Some(2);
     let geographic_model = key(1024) == Some(2);
-    let code = key(3072).or(key(2048)).filter(|c| *c != 32767 && *c != 0).map(u32::from);
+    // A user-defined (32767) projected code mustn't hide a usable geographic one.
+    let usable = |c: &u16| *c != 32767 && *c != 0;
+    let code = key(3072).filter(usable).or(key(2048).filter(usable)).map(u32::from);
     let crs = code.and_then(Crs::from_epsg);
 
     let transform = if let Some(m) = doubles(dec, 34264).filter(|m| m.len() >= 8) {
@@ -145,8 +147,12 @@ pub fn read<R: Read + Seek>(r: R, name: &str) -> Result<Raster> {
     let ct = dec.colortype().map_err(err)?;
     let (nbands, color) = match ct {
         ColorType::Gray(_) => (1, ColorHint::Gray),
-        ColorType::GrayA(_) => (2, ColorHint::Gray),
-        ColorType::RGB(_) | ColorType::YCbCr(_) => (3, ColorHint::Rgb { alpha: false }),
+        ColorType::GrayA(_) => (2, ColorHint::GrayAlpha),
+        ColorType::RGB(_) => (3, ColorHint::Rgb { alpha: false }),
+        // The decoder turns JPEG-compressed YCbCr into RGB; other YCbCr data would stay YCbCr.
+        ColorType::YCbCr(_) if dec.find_tag_unsigned::<u16>(Tag::Compression).ok().flatten() == Some(7) => {
+            (3, ColorHint::Rgb { alpha: false })
+        }
         ColorType::RGBA(_) => (4, ColorHint::Rgb { alpha: true }),
         ColorType::Palette(bits) => {
             let map: Vec<u16> = dec.find_tag(Tag::ColorMap).ok().flatten().and_then(|v| v.into_u16_vec().ok()).unwrap_or_default();
@@ -212,6 +218,9 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
     let mut out = std::io::Cursor::new(Vec::new());
     let mut enc = TiffEncoder::new(&mut out).map_err(err)?.with_compression(Compression::Deflate(DeflateLevel::Balanced));
     let gt = r.transform;
+    if gt.pixel_height > 0.0 || gt.pixel_width < 0.0 {
+        return Err(err("only north-up rasters can be exported for now"));
+    }
     let scale = [gt.pixel_width.abs(), gt.pixel_height.abs(), 0.0];
     let tie = [0.0, 0.0, 0.0, gt.origin_x, gt.origin_y, 0.0];
     let geographic = r.crs.is_geographic();
@@ -319,6 +328,13 @@ mod tests {
         // One that doesn't fit a byte keeps the file honest by writing floats (band 1 only).
         let back = read(std::io::Cursor::new(write(&mk(-9999.0), 0).unwrap()), "f").unwrap();
         assert_eq!((back.band_count(), back.value(0, 1, 0), back.nodata), (1, None, Some(-9999.0)));
+    }
+
+    #[test]
+    fn south_up_export_is_refused() {
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 0.0, pixel_width: 1.0, pixel_height: 1.0 };
+        let r = Raster::new("s", 1, 1, vec![vec![1.0]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        assert!(write(&r, 0).is_err());
     }
 
     #[test]

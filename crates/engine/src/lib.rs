@@ -219,7 +219,9 @@ impl Session {
         if named.is_some() {
             self.active_layer = named;
         }
-        let blocked = (spec.enabled)(self);
+        // Restored on every path, even if a condition were to panic.
+        let enabled = spec.enabled;
+        let blocked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| enabled(self))).unwrap_or(Some("unavailable"));
         self.active_layer = active;
         if let Some(why) = blocked {
             return Err(format!("{}: {why}", spec.label));

@@ -177,6 +177,8 @@ pub struct Band {
 pub enum ColorHint {
     #[default]
     Gray,
+    /// Band 1 is grey and band 2 its transparency.
+    GrayAlpha,
     /// Bands 1–3 are red, green, blue (and 4 is alpha, if present).
     Rgb { alpha: bool },
     /// Band 1 indexes this colour table (RGBA).
@@ -274,12 +276,23 @@ impl Raster {
         let mut e = Extent::EMPTY;
         let (w, h) = (self.width as f64, self.height as f64);
         let steps = 32;
+        let mut add = |col: f64, row: f64| {
+            if let Some(c) = self.transformer.to_lonlat(self.transform.to_world(col, row)) {
+                e.expand(Coord::new(c.x.clamp(-180.0, 180.0), c.y.clamp(-90.0, 90.0)));
+            }
+        };
         for i in 0..=steps {
             let t = i as f64 / steps as f64;
             for (col, row) in [(t * w, 0.0), (t * w, h), (0.0, t * h), (w, t * h)] {
-                if let Some(c) = self.transformer.to_lonlat(self.transform.to_world(col, row)) {
-                    e.expand(Coord::new(c.x.clamp(-180.0, 180.0), c.y.clamp(-90.0, 90.0)));
-                }
+                add(col, row);
+            }
+        }
+        // Interior points too: in polar and other projections the grid can reach further than its
+        // edges do. (A raster crossing the antimeridian still gets a world-wide extent.)
+        let n = 16;
+        for i in 1..n {
+            for j in 1..n {
+                add(w * i as f64 / n as f64, h * j as f64 / n as f64);
             }
         }
         e

@@ -12,6 +12,12 @@ use serde_json::{Value, json};
 use super::{b, f, ps};
 use crate::{CmdResult, CommandSpec as C, Session};
 
+/// Largest file opened from its contents (a browser upload): 512 MiB, or 256 MiB in the browser.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_UPLOAD_BYTES: usize = 512 << 20;
+#[cfg(target_arch = "wasm32")]
+const MAX_UPLOAD_BYTES: usize = 256 << 20;
+
 pub(crate) fn need_raster(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
         Some(l) if l.raster.as_ref().is_some_and(|r| r.data.is_some()) => None,
@@ -143,8 +149,8 @@ fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
     use base64::Engine;
     let name = ps(p, "fileName").ok_or("fileName is required")?.to_string();
     let data = ps(p, "data").ok_or("data is required")?;
-    // Base64 is 4 characters per 3 bytes; refuse uploads past 2 GiB before decoding.
-    if data.len() / 4 * 3 > 2 << 30 {
+    // Base64 is 4 characters per 3 bytes; refuse files past the upload limit before decoding.
+    if data.len() / 4 * 3 > MAX_UPLOAD_BYTES {
         return Err(format!("{name} is too large to open"));
     }
     let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(|e| format!("data: {e}"))?;

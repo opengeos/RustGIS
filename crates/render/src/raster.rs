@@ -99,11 +99,17 @@ pub(crate) fn draw(pm: &mut Pixmap, r: &Raster, style: &RasterStyle, view: &View
         _ => None,
     };
     let (cell_x, cell_y) = r.cell_size_m();
+    // Blending neighbours would invent values that aren't classes or palette entries.
+    let resampling = match style.renderer {
+        RasterRenderer::UniqueValues { .. } | RasterRenderer::Colormap => Resampling::Nearest,
+        _ => style.resampling,
+    };
     let mut vals = vec![f32::NAN; bw * bh * nb];
     let mut shade = if relief.is_some() { vec![0u8; bw * bh] } else { Vec::new() };
     // RGBA images carry their transparency in band 4.
     let alpha_band = match (&style.renderer, &r.color) {
         (RasterRenderer::Rgb { .. }, ColorHint::Rgb { alpha: true }) if r.band_count() >= 4 => Some(3),
+        (RasterRenderer::Stretch { band: 0, .. } | RasterRenderer::ShadedRelief { band: 0, .. }, ColorHint::GrayAlpha) => Some(1),
         _ => None,
     };
     let mut alpha = if alpha_band.is_some() { vec![0u8; bw * bh] } else { Vec::new() };
@@ -122,7 +128,7 @@ pub(crate) fn draw(pm: &mut Pixmap, r: &Raster, style: &RasterStyle, view: &View
             }
             for (k, b) in bands.iter().enumerate() {
                 if let Some(slot) = vals.get_mut(i * nb + k) {
-                    *slot = sample(r, *b, c, row, style.resampling);
+                    *slot = sample(r, *b, c, row, resampling);
                 }
             }
             if let (Some((az, alt, zf)), Some(b)) = (relief, bands.first()) {
