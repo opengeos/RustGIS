@@ -1,0 +1,63 @@
+[project]
+site_name = "RustGIS"
+site_description = "A fast, open-source desktop GIS in pure Rust with a familiar ribbon workflow"
+site_author = "opengeos"
+site_url = "https://rustgis.app"
+repo_url = "https://github.com/opengeos/RustGIS"
+repo_name = "opengeos/RustGIS"
+copyright = "Copyright &copy; 2026 Qiusheng Wu"
+
+nav = [
+  { "Home" = "index.md" },
+  { "Installation" = "installation.md" },
+  { "Getting Started" = "getting-started.md" },
+  { "User Guide" = "user-guide.md" },
+  { "Command Line" = "cli.md" },
+  { "Architecture" = "architecture.md" },
+  { "Feature Coverage" = "parity.md" },
+  { "Contributing" = "contributing.md" },
+  { "Report Issues" = "https://github.com/opengeos/RustGIS/issues" },
+]
+
+[project.theme]
+features = [
+  "content.code.copy",
+  "navigation.footer",
+  "navigation.instant",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "search.share",
+]
+
+[project.theme.icon]
+logo = "material/earth"
+repo = "fontawesome/brands/github"
+
+[[project.theme.palette]]
+scheme = "default"
+primary = "deep orange"
+accent = "indigo"
+toggle.icon = "material/toggle-switch-off-outline"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+primary = "deep orange"
+accent = "indigo"
+toggle.icon = "material/toggle-switch"
+toggle.name = "Switch to light mode"
+
+[project.markdown_extensions.admonition]
+[project.markdown_extensions.attr_list]
+[project.markdown_extensions.md_in_html]
+[project.markdown_extensions.tables]
+[project.markdown_extensions.pymdownx.details]
+[project.markdown_extensions.pymdownx.superfences]
+[project.markdown_extensions.pymdownx.highlight]
+[project.markdown_extensions.pymdownx.inlinehilite]
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true
+[project.markdown_extensions.toc]
+permalink = true
+[project.markdown_extensions.pymdownx.keys]

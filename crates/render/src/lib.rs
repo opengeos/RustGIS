@@ -9,6 +9,14 @@
 pub mod fonts;
 mod text;
 
+/// Natural Earth 1:110m sample data (public domain), fetched by `build.rs` from rustgis-assets.
+pub mod sample_data {
+    pub const COUNTRIES: &str = include_str!(concat!(env!("OUT_DIR"), "/countries.geojson"));
+    pub const CITIES: &str = include_str!(concat!(env!("OUT_DIR"), "/cities.geojson"));
+    pub const RIVERS: &str = include_str!(concat!(env!("OUT_DIR"), "/rivers.geojson"));
+    pub const LAKES: &str = include_str!(concat!(env!("OUT_DIR"), "/lakes.geojson"));
+}
+
 use std::sync::OnceLock;
 
 use rustgis_data::{Dataset, Geometry, GeometryType};
@@ -65,14 +73,11 @@ pub struct Rendered {
 /// The built-in world outline used by every basemap (Natural Earth 1:110m, public domain).
 fn world() -> &'static Vec<Geometry> {
     static W: OnceLock<Vec<Geometry>> = OnceLock::new();
-    W.get_or_init(|| {
-        let text = include_str!("../../../assets/data/countries.geojson");
-        match rustgis_data::io::read_geojson(text, "world") {
-            Ok((ds, _)) => ds.features.into_iter().filter_map(|f| f.geometry).map(|g| g.map_coords(&lonlat_to_merc)).collect(),
-            Err(e) => {
-                log::warn!("built-in world outline unreadable: {e}");
-                Vec::new()
-            }
+    W.get_or_init(|| match rustgis_data::io::read_geojson(sample_data::COUNTRIES, "world") {
+        Ok((ds, _)) => ds.features.into_iter().filter_map(|f| f.geometry).map(|g| g.map_coords(&lonlat_to_merc)).collect(),
+        Err(e) => {
+            log::warn!("built-in world outline unreadable: {e}");
+            Vec::new()
         }
     })
 }

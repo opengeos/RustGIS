@@ -6,10 +6,7 @@ use rustgis_map::{Bookmark, Camera, ClassMethod, Marker, Ramp, Renderer, Rgba, S
 
 use crate::Project;
 
-pub const COUNTRIES: &str = include_str!("../../../assets/data/countries.geojson");
-pub const CITIES: &str = include_str!("../../../assets/data/cities.geojson");
-pub const RIVERS: &str = include_str!("../../../assets/data/rivers.geojson");
-pub const LAKES: &str = include_str!("../../../assets/data/lakes.geojson");
+pub use rustgis_render::sample_data::{CITIES, COUNTRIES, LAKES, RIVERS};
 
 fn cam(lon: f64, lat: f64, res: f64) -> Camera {
     Camera { center: lonlat_to_merc(Coord::new(lon, lat)), res }

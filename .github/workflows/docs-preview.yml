@@ -1,0 +1,84 @@
+# Builds the docs on every pull request and publishes a preview to Cloudflare Pages
+# (project `rustgis-preview`, one branch per PR: https://pr-<N>.rustgis-preview.pages.dev).
+#
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN  - needs the "Cloudflare Pages: Edit" permission
+#   CLOUDFLARE_ACCOUNT_ID
+#
+# Fork and Dependabot pull requests get no secrets, so they build but don't deploy.
+name: docs-preview
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: docs-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    env:
+      HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+      - name: Build docs with Zensical
+        run: |
+          uv venv --python 3.12
+          uv pip install -r requirements_docs.txt
+          .venv/bin/zensical build
+          # The preview is not the production site.
+          rm -f site/CNAME
+
+      - name: Create a scratch directory for wrangler
+        run: mkdir -p .wrangler-deploy
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        if: >-
+          env.HAS_TOKEN == 'true' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: .wrangler-deploy
+          command: >-
+            pages deploy ${{ github.workspace }}/site
+            --project-name=rustgis-preview
+            --branch="pr-${{ github.event.pull_request.number }}"
+            --commit-hash="${{ github.event.pull_request.head.sha }}"
+            --commit-dirty=true
+
+      - name: Comment preview URL on PR
+        if: steps.deploy.outputs.deployment-url != ''
+        uses: actions/github-script@v9
+        env:
+          DEPLOY_URL: ${{ steps.deploy.outputs.deployment-url }}
+          ALIAS_URL: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const marker = '<!-- docs-preview -->';
+            const alias = process.env.ALIAS_URL || process.env.DEPLOY_URL;
+            const body = `${marker}\n### 📖 Docs preview\n\n| Item | Value |\n| --- | --- |\n| Preview | ${alias} |\n| This commit | ${process.env.DEPLOY_URL} |\n| Commit | \`${process.env.HEAD_SHA.slice(0, 7)}\` |`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

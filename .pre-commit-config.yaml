@@ -7,11 +7,9 @@ repos:
       - id: check-json
         exclude: \.geojson$
       - id: end-of-file-fixer
-        exclude: ^assets/data/
       - id: trailing-whitespace
-        exclude: ^assets/data/
       - id: check-added-large-files
-        args: ["--maxkb=2048"]
+        args: ["--maxkb=1024"]
   - repo: local
     hooks:
       - id: cargo-fmt
