@@ -53,6 +53,7 @@ jobs:
           github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           RAW_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           token=$(printf '%s' "$RAW_TOKEN" | tr -d '[:space:]"')
@@ -62,11 +63,16 @@ jobs:
             echo "::error::CLOUDFLARE_API_TOKEN is ${#token} characters and not an API Token. Create one under My Profile > API Tokens with Account > Cloudflare Pages > Edit (the Global API Key will not work)."
             exit 1
           fi
-          status=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" https://api.cloudflare.com/client/v4/user/tokens/verify)
-          if [ "$status" != 200 ]; then
-            echo "::error::Cloudflare rejected CLOUDFLARE_API_TOKEN (HTTP $status). Check it is active and not expired."
+          # User tokens verify at /user/tokens/verify, account-owned tokens at
+          # /accounts/<id>/tokens/verify.
+          api=https://api.cloudflare.com/client/v4
+          user=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$api/user/tokens/verify")
+          acct=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$api/accounts/$ACCOUNT_ID/tokens/verify")
+          if [ "$user" != 200 ] && [ "$acct" != 200 ]; then
+            echo "::error::Cloudflare rejected CLOUDFLARE_API_TOKEN (user verify HTTP $user, account verify HTTP $acct). Check it is active, not expired, and for account ${ACCOUNT_ID:0:6}…"
             exit 1
           fi
+          echo "Token verified (user: $user, account: $acct)"
           echo "CF_TOKEN=$token" >> "$GITHUB_ENV"
 
       - name: Deploy to Cloudflare Pages
