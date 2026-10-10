@@ -124,6 +124,8 @@ pub struct RustGisApp {
     installed_region: Option<rustgis_engine::render::fonts::CjkRegion>,
     fonts_dirty: bool,
     fonts_requested: Vec<String>,
+    /// Downloads that failed; cleared when a language is picked, which retries them.
+    fonts_failed: Vec<String>,
 }
 
 impl RustGisApp {
@@ -149,6 +151,7 @@ impl RustGisApp {
             installed_region: None,
             fonts_dirty: false,
             fonts_requested: Vec::new(),
+            fonts_failed: Vec::new(),
         }
     }
 
@@ -184,8 +187,6 @@ impl RustGisApp {
         }
     }
 
-    /// Makes sure the current language's script has a font: an installed CJK face on the desktop,
-    /// a download on the web.
     /// The CJK region of the current language, if any.
     fn current_region(&self) -> Option<rustgis_engine::render::fonts::CjkRegion> {
         use rustgis_engine::render::fonts::CjkRegion;
@@ -197,6 +198,8 @@ impl RustGisApp {
         }
     }
 
+    /// Makes sure the current language's script has a font: an installed CJK face on the desktop,
+    /// a download on the web.
     fn ensure_script_font(&mut self) {
         use rustgis_engine::render::fonts::{cjk_font, cjk_font_url};
         // Switching between CJK languages reorders the faces already loaded.
@@ -205,7 +208,8 @@ impl RustGisApp {
         }
         let Some(region) = self.current_region() else { return };
         let name = format!("cjk-{region:?}");
-        if self.extra_fonts.iter().any(|(n, _, _)| *n == name) || self.fonts_requested.contains(&name) {
+        if self.extra_fonts.iter().any(|(n, _, _)| *n == name) || self.fonts_requested.contains(&name) || self.fonts_failed.contains(&name)
+        {
             return;
         }
         self.fonts_requested.push(name.clone());
@@ -313,6 +317,7 @@ impl RustGisApp {
                     return Err(format!("unknown language '{code}'"));
                 }
                 self.ui.language = code.to_ascii_lowercase();
+                self.fonts_failed.clear();
                 if let Some(save) = &self.services.save_pref {
                     save("language", &self.ui.language);
                 }
@@ -438,8 +443,19 @@ impl RustGisApp {
             use rustgis_engine::render::fonts::{CjkRegion, cjk_font_url, valid_font};
             let region =
                 [CjkRegion::SimplifiedChinese, CjkRegion::Japanese, CjkRegion::Korean].into_iter().find(|r| cjk_font_url(*r) == url);
-            if !valid_font(&bytes, 0) {
-                log::error!("{url} is not a usable font");
+            if bytes.is_empty() || !valid_font(&bytes, 0) {
+                // A failed download: say so; picking the language again retries.
+                log::error!("{url}: no usable font downloaded");
+                let msg = i18n::fmt(
+                    "Couldn't download the font for {language}; pick the language again to retry.",
+                    &[("language", self.lang().name())],
+                );
+                self.session.notify(msg, true);
+                if let Some(r) = region {
+                    let name = format!("cjk-{r:?}");
+                    self.fonts_requested.retain(|n| *n != name);
+                    self.fonts_failed.push(name);
+                }
                 continue;
             }
             let name = format!("web-{}", url.rsplit('/').next().unwrap_or("font"));

@@ -105,6 +105,7 @@ Contents	Konten
 Conversion	Konversi
 Copies the (selected) features of a layer to a new layer.	Menyalin fitur (terpilih) dari suatu layer ke layer baru.
 Copy Coordinates	Salin Koordinat
+Couldn't download the font for {language}; pick the language again to retry.	Tidak dapat mengunduh font untuk {language}; pilih bahasa lagi untuk mencoba ulang.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Jumlah, total, rata-rata, min, maks, dan simpangan baku suatu kolom, opsional per kolom kasus.
 Countries, cities, rivers and lakes	Negara, kota, sungai, dan danau
 Counts the points that fall inside each polygon.	Menghitung titik yang berada di dalam setiap poligon.

@@ -105,6 +105,7 @@ Contents	Содержание
 Conversion	Преобразование
 Copies the (selected) features of a layer to a new layer.	Копирует (выбранные) объекты слоя в новый слой.
 Copy Coordinates	Копировать координаты
+Couldn't download the font for {language}; pick the language again to retry.	Не удалось загрузить шрифт для {language}; выберите язык ещё раз, чтобы повторить попытку.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Количество, сумма, среднее, минимум, максимум и стандартное отклонение поля, при необходимости по полю группировки.
 Countries, cities, rivers and lakes	Страны, города, реки и озёра
 Counts the points that fall inside each polygon.	Подсчитывает точки, попадающие в каждый полигон.

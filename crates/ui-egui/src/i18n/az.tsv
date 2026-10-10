@@ -105,6 +105,7 @@ Contents	Məzmun
 Conversion	Çevirmə
 Copies the (selected) features of a layer to a new layer.	Layın (seçilmiş) obyektlərini yeni laya kopyalayır.
 Copy Coordinates	Koordinatları kopyala
+Couldn't download the font for {language}; pick the language again to retry.	{language} üçün şrift endirilə bilmədi; yenidən cəhd etmək üçün dili yenidən seçin.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Sahənin say, cəm, orta, min, maks və standart sapması, istəyə görə qrup sahəsi üzrə.
 Countries, cities, rivers and lakes	Ölkələr, şəhərlər, çaylar və göllər
 Counts the points that fall inside each polygon.	Hər poliqonun daxilinə düşən nöqtələri sayır.

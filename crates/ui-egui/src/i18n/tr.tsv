@@ -105,6 +105,7 @@ Contents	İçindekiler
 Conversion	Dönüştürme
 Copies the (selected) features of a layer to a new layer.	Bir katmanın (seçili) detaylarını yeni bir katmana kopyalar.
 Copy Coordinates	Koordinatları Kopyala
+Couldn't download the font for {language}; pick the language again to retry.	{language} için yazı tipi indirilemedi; yeniden denemek için dili tekrar seçin.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Bir alanın sayısı, toplamı, ortalaması, minimumu, maksimumu ve standart sapması; isteğe bağlı olarak gruplama alanına göre.
 Countries, cities, rivers and lakes	Ülkeler, şehirler, nehirler ve göller
 Counts the points that fall inside each polygon.	Her poligonun içine düşen noktaları sayar.

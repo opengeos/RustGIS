@@ -105,6 +105,7 @@ Contents	Inhoud
 Conversion	Conversie
 Copies the (selected) features of a layer to a new layer.	Kopieert de (geselecteerde) objecten van een laag naar een nieuwe laag.
 Copy Coordinates	Coördinaten kopiëren
+Couldn't download the font for {language}; pick the language again to retry.	Kan het lettertype voor {language} niet downloaden; kies de taal opnieuw om het nog eens te proberen.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Aantal, som, gemiddelde, min, max en standaardafwijking van een veld, optioneel per groeperingsveld.
 Countries, cities, rivers and lakes	Landen, steden, rivieren en meren
 Counts the points that fall inside each polygon.	Telt de punten die binnen elke polygoon vallen.

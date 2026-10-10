@@ -105,6 +105,7 @@ Contents	Nội dung
 Conversion	Chuyển đổi
 Copies the (selected) features of a layer to a new layer.	Sao chép các đối tượng (được chọn) của một lớp sang một lớp mới.
 Copy Coordinates	Sao chép tọa độ
+Couldn't download the font for {language}; pick the language again to retry.	Không thể tải phông chữ cho {language}; hãy chọn lại ngôn ngữ để thử lại.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Số lượng, tổng, trung bình, nhỏ nhất, lớn nhất và độ lệch chuẩn của một trường, có thể theo từng trường phân nhóm.
 Countries, cities, rivers and lakes	Quốc gia, thành phố, sông và hồ
 Counts the points that fall inside each polygon.	Đếm số điểm nằm trong mỗi vùng.

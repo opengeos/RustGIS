@@ -105,6 +105,7 @@ Contents	Contenu
 Conversion	Conversion
 Copies the (selected) features of a layer to a new layer.	Copie les entités (sélectionnées) d'une couche dans une nouvelle couche.
 Copy Coordinates	Copier les coordonnées
+Couldn't download the font for {language}; pick the language again to retry.	Impossible de télécharger la police pour {language} ; sélectionnez à nouveau la langue pour réessayer.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Nombre, somme, moyenne, min, max et écart type d'un champ, éventuellement par champ de regroupement.
 Countries, cities, rivers and lakes	Pays, villes, rivières et lacs
 Counts the points that fall inside each polygon.	Compte les points situés dans chaque polygone.

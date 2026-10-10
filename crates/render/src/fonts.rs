@@ -83,7 +83,6 @@ fn cjk_candidates(region: CjkRegion) -> &'static [(&'static str, u32)] {
             ("C:\\Windows\\Fonts\\YuGothR.ttc", 0),
             ("C:\\Windows\\Fonts\\meiryo.ttc", 0),
             ("/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", 0),
-            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
             ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 0),
             ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
             ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 0),

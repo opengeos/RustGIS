@@ -105,6 +105,7 @@ Contents	内容
 Conversion	转换
 Copies the (selected) features of a layer to a new layer.	将图层的（所选）要素复制到新图层。
 Copy Coordinates	复制坐标
+Couldn't download the font for {language}; pick the language again to retry.	无法下载 {language} 的字体；请重新选择该语言以重试。
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	字段的计数、总和、平均值、最小值、最大值和标准差，可按分组字段分别统计。
 Countries, cities, rivers and lakes	国家、城市、河流和湖泊
 Counts the points that fall inside each polygon.	统计落在每个多边形内的点数。

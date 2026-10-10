@@ -105,6 +105,7 @@ Contents	コンテンツ
 Conversion	変換
 Copies the (selected) features of a layer to a new layer.	レイヤーの（選択された）フィーチャを新しいレイヤーにコピーします。
 Copy Coordinates	座標のコピー
+Couldn't download the font for {language}; pick the language again to retry.	{language} のフォントをダウンロードできませんでした。もう一度言語を選択して再試行してください。
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	フィールドの個数、合計、平均、最小、最大、標準偏差。必要に応じてケース フィールドごとに集計します。
 Countries, cities, rivers and lakes	国、都市、河川、湖沼
 Counts the points that fall inside each polygon.	各ポリゴン内に含まれるポイントの数をカウントします。

@@ -105,6 +105,7 @@ Contents	목차
 Conversion	변환
 Copies the (selected) features of a layer to a new layer.	레이어의 (선택한) 피처를 새 레이어로 복사합니다.
 Copy Coordinates	좌표 복사
+Couldn't download the font for {language}; pick the language again to retry.	{language} 글꼴을 다운로드할 수 없습니다. 다시 시도하려면 언어를 다시 선택하세요.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	필드의 개수, 합계, 평균, 최소값, 최대값 및 표준 편차를 계산하며, 선택적으로 케이스 필드별로 계산합니다.
 Countries, cities, rivers and lakes	국가, 도시, 하천 및 호수
 Counts the points that fall inside each polygon.	각 폴리곤 안에 있는 포인트 수를 셉니다.

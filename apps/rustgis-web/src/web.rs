@@ -120,14 +120,19 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    // Fonts are at most a few tens of MB; refuse anything larger.
+    // Fonts are at most about 10 MB; refuse anything over 64 MB, by header when there is one and
+    // by the downloaded size otherwise.
     if let Ok(Some(len)) = resp.headers().get("content-length").map(|v| v.and_then(|s| s.parse::<u64>().ok()))
         && len > 64 << 20
     {
         return Err(format!("{len} bytes is too large"));
     }
     let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(err)?).await.map_err(err)?;
-    Ok(js_sys::Uint8Array::new(&buf).to_vec())
+    let bytes = js_sys::Uint8Array::new(&buf);
+    if bytes.length() > 64 << 20 {
+        return Err(format!("{} bytes is too large", bytes.length()));
+    }
+    Ok(bytes.to_vec())
 }
 
 fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
@@ -149,7 +154,12 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
                         inbox.lock().unwrap_or_else(|e| e.into_inner()).push((url, bytes));
                         ctx.request_repaint();
                     }
-                    Err(e) => log::error!("couldn't load font {url}: {e}"),
+                    Err(e) => {
+                        log::error!("couldn't load font {url}: {e}");
+                        // Empty bytes tell the app the download failed.
+                        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((url, Vec::new()));
+                        ctx.request_repaint();
+                    }
                 }
             });
         })),
