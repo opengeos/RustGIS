@@ -299,18 +299,32 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut keep = true;
     let mut chosen: Option<String> = None;
-    egui::Modal::new(egui::Id::new("command_search")).show(ctx, |ui| {
-        ui.set_width(520.0);
+    // Fits small screens: never wider or taller than the window allows.
+    let screen = ctx.content_rect();
+    let width = (screen.width() - 48.0).clamp(220.0, 520.0);
+    let list_h = (screen.height() - 190.0).clamp(120.0, 360.0);
+    let modal = egui::Modal::new(egui::Id::new("command_search")).show(ctx, |ui| {
+        ui.set_width(width);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
             icons::paint(ui.painter(), r, "search", t.text_dim, t.accent);
             let te = ui.add(
                 egui::TextEdit::singleline(&mut q)
                     .hint_text(tl!("Search commands — e.g. buffer, basemap, labels"))
-                    .desired_width(480.0)
+                    .desired_width(width - 56.0)
                     .frame(egui::Frame::NONE),
             );
             te.request_focus();
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+                if resp.hovered() {
+                    ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+                }
+                icons::paint(ui.painter(), r.shrink(5.0), "close", t.text_dim, t.accent);
+                if resp.on_hover_text(tl!("Close (Esc)")).clicked() {
+                    keep = false;
+                }
+            });
         });
         ui.separator();
         let ql = q.to_lowercase();
@@ -352,14 +366,15 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                 hits.push((id.into(), tl!(label).into(), crate::i18n::location(loc)));
             }
         }
-        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+        // The ribbon location is dropped when the palette is too narrow to show it.
+        let show_loc = width >= 400.0;
+        egui::ScrollArea::vertical().max_height(list_h).show(ui, |ui| {
             for (i, (id, label, loc)) in hits.iter().take(40).enumerate() {
-                let resp = ui.add(
-                    egui::Button::new(egui::RichText::new(label).size(13.0))
-                        .frame(false)
-                        .min_size(vec2(500.0, 26.0))
-                        .right_text(egui::RichText::new(loc).size(11.0).weak()),
-                );
+                let mut b = egui::Button::new(egui::RichText::new(label).size(13.0)).frame(false).min_size(vec2(width - 20.0, 26.0));
+                if show_loc {
+                    b = b.right_text(egui::RichText::new(loc).size(11.0).weak());
+                }
+                let resp = ui.add(b);
                 if resp.clicked() || (i == 0 && ui.input(|i| i.key_pressed(Key::Enter))) {
                     chosen = Some(id.clone());
                 }
@@ -369,6 +384,10 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             keep = false;
         }
     });
+    // A click outside the palette closes it too.
+    if modal.backdrop_response.clicked() {
+        keep = false;
+    }
     if let Some(id) = chosen {
         keep = false;
         if let Some(tool) = id.strip_prefix("gp:") {
