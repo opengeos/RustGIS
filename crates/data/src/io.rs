@@ -299,7 +299,10 @@ pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
             let vals = rows.iter().filter_map(|r| r.get(i)).map(|s| s.trim()).filter(|s| !s.is_empty());
             let mut ty: Option<FieldType> = None;
             for v in vals {
-                let t = if v.parse::<i64>().is_ok() {
+                let t = if has_leading_zero(v) {
+                    // Identifiers such as ZIP codes keep their leading zeros.
+                    FieldType::Text
+                } else if v.parse::<i64>().is_ok() {
                     FieldType::Integer
                 } else if v.parse::<f64>().is_ok_and(f64::is_finite) {
                     FieldType::Double
@@ -334,7 +337,8 @@ pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
             }
             _ => None,
         };
-        let attrs = ds.fields.iter().enumerate().map(|(i, f)| Value::parse(r.get(i).map(|s| s.as_str()).unwrap_or(""), f.ty)).collect();
+        let attrs =
+            ds.fields.iter().enumerate().map(|(i, f)| Value::parse(&unguard(r.get(i).map(|s| s.as_str()).unwrap_or("")), f.ty)).collect();
         ds.push(geom, attrs);
     }
     if report.skipped > malformed {
@@ -343,11 +347,27 @@ pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
     Ok((ds, report))
 }
 
+/// `0123` or `-007` (but not `0`, `0.5` or `-0.5`): a code, not a number.
+fn has_leading_zero(v: &str) -> bool {
+    let d = v.strip_prefix(['-', '+']).unwrap_or(v);
+    d.len() > 1 && d.starts_with('0') && d.as_bytes().get(1).is_some_and(|b| b.is_ascii_digit())
+}
+
+/// Undoes the export formula guard: `'=x` reads back as `=x`.
+fn unguard(cell: &str) -> std::borrow::Cow<'_, str> {
+    match cell.strip_prefix('\'') {
+        Some(rest) if rest.starts_with(FORMULA_START) => std::borrow::Cow::Owned(rest.to_string()),
+        _ => std::borrow::Cow::Borrowed(cell),
+    }
+}
+
+const FORMULA_START: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
+
 /// A cell's text; text that a spreadsheet would run as a formula is prefixed with `'`.
 fn csv_cell(v: &Value) -> String {
     match v {
         Value::Null => String::new(),
-        Value::Text(t) if t.starts_with(['=', '+', '-', '@', '\t', '\r']) => format!("'{t}"),
+        Value::Text(t) if t.starts_with(FORMULA_START) => format!("'{t}"),
         other => other.to_string(),
     }
 }
@@ -572,6 +592,19 @@ mod tests {
         assert_eq!(rep.skipped, 1);
         assert_eq!(ds.features[0].geometry, Some(Geometry::Point(Coord::new(20.0, 10.0))));
         assert!(to_csv(&ds).unwrap().contains("longitude"));
+    }
+
+    #[test]
+    fn csv_leading_zeros_and_guard_roundtrip() {
+        let (ds, _) = read_csv("zip,n,note\n02134,0,-abc\n10001,0.5,=x\n", "t").unwrap();
+        assert_eq!(ds.fields[0].ty, FieldType::Text);
+        assert_eq!(ds.value(0, 0), &Value::Text("02134".into()));
+        assert_eq!(ds.fields[1].ty, FieldType::Double);
+        let once = to_csv(&ds).unwrap();
+        let (back, _) = read_csv(&once, "t").unwrap();
+        assert_eq!(back.value(0, 2), &Value::Text("-abc".into()));
+        assert_eq!(back.value(1, 2), &Value::Text("=x".into()));
+        assert_eq!(to_csv(&back).unwrap(), once, "export/import is stable");
     }
 
     #[test]
