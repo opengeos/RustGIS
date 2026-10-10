@@ -76,9 +76,10 @@ case "$os" in
       fi
       echo "dpkg-shlibdeps failed; using a minimal Depends list" >&2
     fi
+    # Debian sorts a pre-release before its release only with ~ (0.2.0~rc.1).
     cat > "$p/DEBIAN/control" <<CONTROL
 Package: rustgis
-Version: $version
+Version: ${version/-/\~}
 Section: science
 Priority: optional
 Architecture: $debarch
@@ -98,7 +99,8 @@ CONTROL
     app="$work/RustGIS.app"
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
     cp "$bin/rustgis" "$app/Contents/MacOS/rustgis"
-    sed "s/@VERSION@/$version/g" "$root/packaging/macos/Info.plist" > "$app/Contents/Info.plist"
+    # Bundle versions must be dot-separated numbers: drop a pre-release suffix (0.2.0-rc.1).
+    sed "s/@VERSION@/${version%%-*}/g" "$root/packaging/macos/Info.plist" > "$app/Contents/Info.plist"
     iconset="$work/rustgis.iconset"
     mkdir -p "$iconset"
     for s in 16 32 128 256 512; do
