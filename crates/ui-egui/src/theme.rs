@@ -136,7 +136,7 @@ pub fn semibold(size: f32) -> FontId {
 /// faces (name, bytes, collection index) as fallbacks for scripts it lacks, such as CJK.
 pub fn install_fonts(
     ctx: &egui::Context,
-    extra: &[(String, FontData, Option<rustgis_engine::render::fonts::CjkRegion>)],
+    extra: &[(String, Arc<FontData>, Option<rustgis_engine::render::fonts::CjkRegion>)],
     current: Option<rustgis_engine::render::fonts::CjkRegion>,
 ) {
     let f = rustgis_engine::render::fonts::ui_fonts();
@@ -152,7 +152,7 @@ pub fn install_fonts(
     }
     fonts.families.insert(FontFamily::Name("semibold".into()), semi);
     for (name, data, region) in extra {
-        fonts.font_data.insert(name.clone(), Arc::new(data.clone()));
+        fonts.font_data.insert(name.clone(), Arc::clone(data));
         let primary = region.is_some() && *region == current;
         for fam in [FontFamily::Proportional, FontFamily::Name("semibold".into())] {
             if let Some(v) = fonts.families.get_mut(&fam) {

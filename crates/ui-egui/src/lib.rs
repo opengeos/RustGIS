@@ -118,8 +118,8 @@ pub struct RustGisApp {
     pub services: Services,
     /// Extra font faces installed with the interface fonts: (name, face, region). The current
     /// language's region comes right after the interface font, so its glyph shapes win; the others
-    /// are last-resort fallbacks. Faces borrow 'static bytes, so reinstalling copies nothing.
-    extra_fonts: Vec<(String, egui::FontData, Option<rustgis_engine::render::fonts::CjkRegion>)>,
+    /// are last-resort fallbacks. Faces are shared, so reinstalling copies nothing.
+    extra_fonts: Vec<(String, std::sync::Arc<egui::FontData>, Option<rustgis_engine::render::fonts::CjkRegion>)>,
     /// The CJK region whose face was put first at the last font install.
     installed_region: Option<rustgis_engine::render::fonts::CjkRegion>,
     fonts_dirty: bool,
@@ -183,7 +183,7 @@ impl RustGisApp {
         if let Some((bytes, index)) = found {
             let mut face = egui::FontData::from_static(bytes);
             face.index = *index;
-            self.extra_fonts.push(("cjk-fallback".into(), face, None));
+            self.extra_fonts.push(("cjk-fallback".into(), std::sync::Arc::new(face), None));
         }
     }
 
@@ -221,7 +221,7 @@ impl RustGisApp {
         if let Some((bytes, index)) = cjk_font(region) {
             let mut face = egui::FontData::from_static(bytes);
             face.index = *index;
-            self.extra_fonts.push((name, face, Some(region)));
+            self.extra_fonts.push((name, std::sync::Arc::new(face), Some(region)));
             self.fonts_dirty = true;
         } else if let Some(fetch) = &self.services.fetch_font {
             fetch(cjk_font_url(region));
@@ -469,7 +469,7 @@ impl RustGisApp {
             }
             let name = format!("web-{}", url.rsplit('/').next().unwrap_or("font"));
             self.extra_fonts.retain(|(n, _, _)| *n != name);
-            self.extra_fonts.push((name, egui::FontData::from_owned(bytes), region));
+            self.extra_fonts.push((name, std::sync::Arc::new(egui::FontData::from_owned(bytes)), region));
             self.fonts_dirty = true;
         }
         if self.fonts_dirty {
