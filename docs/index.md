@@ -6,6 +6,8 @@ Maps and layers, symbology, labeling, selection, editing, geoprocessing and expo
 GPU-rendered app for Windows, macOS and Linux. Every action is a command you can also run from
 the command line.
 
+[![Launch the RustGIS web app](https://img.shields.io/badge/Launch-web%20app-b84a2c?style=for-the-badge&logo=webassembly&logoColor=white)](https://web.rustgis.app)
+
 ![RustGIS with the Map tab of the ribbon open over a world map of countries shaded by population](https://assets.rustgis.app/images/hero.webp)
 
 ## Highlights
