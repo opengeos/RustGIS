@@ -8,6 +8,7 @@
 
 pub mod fonts;
 pub mod logo;
+mod raster;
 mod text;
 
 /// Natural Earth 1:110m sample data (public domain), fetched by `build.rs` from rustgis-assets.
@@ -232,8 +233,13 @@ impl Ctx<'_> {
     }
 }
 
-/// Draws the map. Layers are drawn bottom-up (the last layer in the list first).
+/// Draws the map for the screen. Layers are drawn bottom-up (the last layer in the list first).
+/// On high-density screens rasters are computed at logical-pixel resolution, for speed.
 pub fn render(map: &mut Map, view: &View) -> Option<Rendered> {
+    render_with(map, view, false)
+}
+
+fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Rendered> {
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
     let ctx = Ctx { view, ppp: view.pixels_per_point as f32, cull: view.camera.extent(view.width, view.height).padded(0.05, 0.0) };
@@ -285,8 +291,14 @@ pub fn render(map: &mut Map, view: &View) -> Option<Rendered> {
         if !layer.visible || !layer.in_scale_range(scale) {
             continue;
         }
-        let rows = layer.visible_rows();
         let opacity = layer.opacity();
+        if let Some(rl) = &layer.raster {
+            if let Some(data) = &rl.data {
+                raster::draw(&mut pm, data, &rl.style, view, opacity, full_res_rasters);
+            }
+            continue;
+        }
+        let rows = layer.visible_rows();
         let renderer = layer.renderer.clone();
         let labels = layer.labels.clone();
         let selection: Vec<usize> = layer.selection.clone();
@@ -392,7 +404,7 @@ fn place_labels(mut cands: Vec<(PlacedLabel, f32)>, w: f32, h: f32) -> Vec<Place
 
 /// Renders a map with its labels, a scale bar and a north arrow to PNG bytes.
 pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
-    let mut r = render(map, view).ok_or("could not allocate the image")?;
+    let mut r = render_with(map, view, true).ok_or("could not allocate the image")?;
     for l in &r.labels {
         text::draw(&mut r.pixmap, l, view.pixels_per_point as f32);
     }

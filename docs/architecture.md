@@ -6,7 +6,7 @@ engine scriptable and the front end swappable.
 | Layer | Crate | Job |
 | --- | --- | --- |
 | L0 | `rustgis-geom` | Coordinates, extents, Web Mercator, geodesic distance/area, scale |
-| L1 | `rustgis-data` | Features and typed attributes; GeoJSON, CSV, Shapefile; SQL where clauses |
+| L1 | `rustgis-data` | Features and typed attributes; GeoJSON, CSV, Shapefile; SQL where clauses; rasters (GeoTIFF, ASCII grid) and their coordinate systems |
 | L2 | `rustgis-map`, `rustgis-analysis` | Layers, symbology, labeling, camera, basemaps; geoprocessing tools |
 | L3 | `rustgis-render` | tiny-skia renderer, label placement, PNG export |
 | L4 | `rustgis-engine` | Session, undo, command registry, feature catalog, sample project |

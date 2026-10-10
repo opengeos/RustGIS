@@ -1,10 +1,10 @@
-//! The ribbon: the tab strip (with the Project button and the contextual Feature Layer tab group)
-//! and every tab's groups. Each control runs a command by id.
+//! The ribbon: the tab strip (with the Project button and the contextual Feature Layer or Raster
+//! Layer tab group) and every tab's groups. Each control runs a command by id.
 
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::Tool;
 use rustgis_engine::data::GeometryType;
-use rustgis_engine::map::{Basemap, Renderer};
+use rustgis_engine::map::{Basemap, RasterRenderer, Renderer, Resampling, Stretch};
 use serde_json::{Value, json};
 
 use crate::theme::{Tokens, regular, semibold};
@@ -12,19 +12,35 @@ use crate::widgets::{CONTENT_H, LABEL_H, big, big_menu, col, group, menu_item, s
 use crate::{RightPane, RustGisApp, icons};
 
 pub const TABS: [&str; 7] = ["Map", "Insert", "Analysis", "View", "Edit", "Share", "Help"];
-pub const CONTEXT_TABS: [&str; 3] = ["Feature Layer", "Labeling", "Data"];
-/// The contextual tab group's caption (shown above its tabs).
-pub const CONTEXT_GROUP: &str = "Feature Layer";
+/// The contextual tabs for feature layers: (tab id, caption).
+pub const FEATURE_TABS: &[(&str, &str)] = &[("Feature Layer", "Feature Layer"), ("Labeling", "Labeling"), ("Data", "Data")];
+/// The contextual tabs for raster layers.
+pub const RASTER_TABS: &[(&str, &str)] = &[("Raster Layer", "Raster Layer"), ("Raster Data", "Data")];
 
-/// Contextual tabs available now: a layer is selected in Contents.
-pub fn contextual(app: &RustGisApp) -> bool {
-    app.session.active_layer.and_then(|id| app.session.map().layer(id)).is_some_and(|l| l.geometry_type() != GeometryType::None)
+/// The contextual tab group for the layer selected in Contents: its caption (shown above its
+/// tabs) and tabs.
+pub fn context(app: &RustGisApp) -> Option<(&'static str, &'static [(&'static str, &'static str)])> {
+    let l = app.session.active_layer.and_then(|id| app.session.map().layer(id))?;
+    if l.is_raster() {
+        Some(("Raster Layer", RASTER_TABS))
+    } else if l.geometry_type() != GeometryType::None {
+        Some(("Feature Layer", FEATURE_TABS))
+    } else {
+        None
+    }
+}
+
+/// Whether a tab id belongs to a contextual group.
+pub fn is_context_tab(tab: &str) -> bool {
+    FEATURE_TABS.iter().chain(RASTER_TABS).any(|(id, _)| *id == tab)
 }
 
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    if !contextual(app) && CONTEXT_TABS.contains(&app.ui.tab.as_str()) {
-        app.ui.tab = "Map".into();
+    let tabs = context(app).map(|(_, tabs)| tabs).unwrap_or(&[]);
+    if is_context_tab(&app.ui.tab) && !tabs.iter().any(|(id, _)| *id == app.ui.tab) {
+        // Switching between a feature and a raster layer keeps a contextual tab open.
+        app.ui.tab = tabs.first().map(|(id, _)| id.to_string()).unwrap_or_else(|| "Map".into());
     }
     egui::Panel::top("tabs")
         .exact_size(32.0)
@@ -59,6 +75,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                         "Feature Layer" => feature_layer_tab(app, ui),
                         "Labeling" => labeling_tab(app, ui),
                         "Data" => data_tab(app, ui),
+                        "Raster Layer" => raster_layer_tab(app, ui),
+                        "Raster Data" => raster_data_tab(app, ui),
                         _ => map_tab(app, ui),
                     }
                 });
@@ -86,18 +104,22 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.ui.backstage = true;
         }
         ui.add_space(6.0);
-        let mut tabs: Vec<&str> = TABS.to_vec();
-        let ctx_on = contextual(app);
-        if ctx_on {
-            tabs.extend(CONTEXT_TABS);
+        let mut tabs: Vec<(&str, &str)> = TABS.iter().map(|t| (*t, *t)).collect();
+        if let Some((_, ctx)) = context(app) {
+            tabs.extend(ctx.iter().copied());
         }
+        // Tighter tabs when the window is too narrow for the usual padding (keeping room for the
+        // collapse button on the right).
+        let room = ui.available_width() - 40.0;
+        let text: f32 = tabs.iter().map(|(_, c)| text_w(ui, tl!(*c), semibold(12.5))).sum();
+        let pad = ((room - text) / tabs.len().max(1) as f32).clamp(8.0, 22.0);
         let mut rects = Vec::new();
-        for tab in tabs {
-            let is_ctx = CONTEXT_TABS.contains(&tab);
+        for (tab, caption) in tabs {
+            let is_ctx = is_context_tab(tab);
             let active = app.ui.tab == tab;
             let font = if active { semibold(12.5) } else { regular(12.5) };
-            let shown = tl!(tab);
-            let w = text_w(ui, shown, font.clone()) + 22.0;
+            let shown = tl!(caption);
+            let w = text_w(ui, shown, font.clone()) + pad;
             let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
             let body = Rect::from_min_max(pos2(r.min.x, r.min.y + 3.0), r.max);
             if is_ctx {
@@ -665,12 +687,19 @@ pub fn fmt_thousands(v: f64) -> String {
 
 fn feature_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
     let Some(layer) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned() else { return };
+    visibility_and_effects(app, ui, &layer);
+    drawing_group(app, ui, &layer);
+    layer_group(app, ui, &layer);
+}
+
+/// The Visibility Range and Effects groups shared by feature and raster layers.
+fn visibility_and_effects(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map::Layer) {
     group(ui, "Visibility Range", |ui| {
         ui.vertical(|ui| {
             ui.add_space(6.0);
             for (label, cur, key) in [("Out Beyond", layer.min_scale, "min"), ("In Beyond", layer.max_scale, "max")] {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(label).size(11.5));
+                    ui.label(egui::RichText::new(tl!(label)).size(11.5));
                     egui::ComboBox::from_id_salt(format!("scale_{key}")).selected_text(scale_label(cur)).width(118.0).show_ui(ui, |ui| {
                         let mut choices: Vec<Option<f64>> = vec![None];
                         choices.extend(SCALES.iter().map(|s| Some(*s)));
@@ -714,6 +743,9 @@ fn feature_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
             }
         });
     });
+}
+
+fn drawing_group(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map::Layer) {
     group(ui, "Drawing", |ui| {
         big(
             ui,
@@ -787,13 +819,210 @@ fn feature_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
             }
         });
     });
+}
+
+fn layer_group(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map::Layer) {
     group(ui, "Layer", |ui| {
         big(ui, app, "zoom_full", "Zoom To\nLayer", "Zoom to the layer's extent.", "layer.zoomTo", Value::Null, false, false);
         col(ui, |ui| {
-            small(ui, app, "table", "Attribute Table", "Open the layer's table.", "table.open", Value::Null, false);
+            if layer.is_raster() {
+                small(
+                    ui,
+                    app,
+                    "symbology",
+                    "Symbology",
+                    "Open the Symbology pane.",
+                    "ui.pane.symbology",
+                    Value::Null,
+                    app.ui.right == Some(RightPane::Symbology),
+                );
+            } else {
+                small(ui, app, "table", "Attribute Table", "Open the layer's table.", "table.open", Value::Null, false);
+            }
             small(ui, app, "eye", "Visible", "Show or hide the layer.", "layer.visibility", Value::Null, layer.visible);
             small(ui, app, "delete", "Remove", "Remove the layer from the map.", "layer.remove", Value::Null, false);
         });
+    });
+}
+
+fn raster_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    let Some(layer) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned() else { return };
+    let Some(rl) = layer.raster.clone() else { return };
+    visibility_and_effects(app, ui, &layer);
+    let Some(data) = rl.data.clone() else {
+        group(ui, "Rendering", |ui| {
+            ui.label(egui::RichText::new(tl!("The raster's data couldn't be read.")).size(11.5));
+        });
+        return;
+    };
+    let style = rl.style.clone();
+    group(ui, "Rendering", |ui| {
+        let n = data.band_count();
+        let has_categories = data.bands.first().is_some_and(|b| b.stats.categories.is_some());
+        let palette = matches!(data.color, rustgis_engine::data::raster::ColorHint::Palette(_));
+        let kind = style.renderer.code();
+        big_menu(ui, app, raster_renderer_icon(&style.renderer), "Symbology", "Choose how the raster is drawn.", move |ui, app| {
+            for (code, label) in RasterRenderer::KINDS {
+                let ok = match code {
+                    "rgb" => n >= 3,
+                    "unique" => has_categories,
+                    "colormap" => palette,
+                    _ => true,
+                };
+                let checked = kind == code;
+                if ui.add_enabled(ok, egui::Button::selectable(checked, tl!(label))).clicked() {
+                    let _ = app.run("raster.symbology", json!({"type": code}));
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui.button(tl!("Symbology Pane…")).clicked() {
+                app.ui.right = Some(RightPane::Symbology);
+                ui.close();
+            }
+        });
+        let current = style.stretch;
+        big_menu(ui, app, "stretch", "Stretch\nType", "Choose a contrast stretch for the raster layer.", move |ui, app| {
+            for (code, label) in Stretch::KINDS {
+                if ui.add(egui::Button::selectable(current.code() == code, tl!(label))).clicked() {
+                    let _ = app.run("raster.stretch", json!({"type": code}));
+                    ui.close();
+                }
+            }
+        });
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "dra",
+                "DRA",
+                "Dynamic range adjustment: stretch using the pixels in view.",
+                "raster.dra",
+                Value::Null,
+                style.dra,
+            );
+            let res = style.resampling;
+            small_menu(ui, app, "resample", "Resampling", "Choose a resampling type for the raster layer.", move |ui, app| {
+                for r in Resampling::ALL {
+                    if ui.add(egui::Button::selectable(r == res, tl!(r.label()))).clicked() {
+                        let _ = app.run("raster.resampling", json!({"type": format!("{r:?}")}));
+                        ui.close();
+                    }
+                }
+            });
+            let bands: Vec<String> = data.bands.iter().map(|b| b.name.clone()).collect();
+            let cur = match style.renderer {
+                RasterRenderer::Rgb { red, green, blue } => Some([red, green, blue]),
+                _ => None,
+            };
+            small_menu(ui, app, "bands", "Band Combination", "Choose a band combination to display the raster layer.", move |ui, app| {
+                if bands.len() < 3 {
+                    ui.label(tl!("Needs three or more bands."));
+                    return;
+                }
+                if ui.add(egui::Button::selectable(cur == Some([0, 1, 2]), tl!("Natural Color (1, 2, 3)"))).clicked() {
+                    let _ = app.run("raster.bands", json!({"preset": "natural"}));
+                    ui.close();
+                }
+                if bands.len() >= 4 && ui.add(egui::Button::selectable(cur == Some([3, 0, 1]), tl!("Color Infrared (4, 1, 2)"))).clicked() {
+                    let _ = app.run("raster.bands", json!({"preset": "colorInfrared"}));
+                    ui.close();
+                }
+                ui.separator();
+                for (key, label, slot) in [("red", "Red", 0usize), ("green", "Green", 1), ("blue", "Blue", 2)] {
+                    ui.menu_button(tl!(label), |ui| {
+                        for (i, b) in bands.iter().enumerate() {
+                            if ui
+                                .add(egui::Button::selectable(
+                                    cur.and_then(|c| c.get(slot).copied()) == Some(i),
+                                    crate::panes::band_name(b),
+                                ))
+                                .clicked()
+                            {
+                                let _ = app.run("raster.bands", json!({ key: i + 1 }));
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+            });
+        });
+    });
+    group(ui, "Enhancement", |ui| {
+        ui.vertical(|ui| {
+            ui.add_space(2.0);
+            for (key, label, icon, value, range, speed) in [
+                ("brightness", "Brightness", "brightness", style.brightness, -100.0..=100.0, 0.5),
+                ("contrast", "Contrast", "contrast", style.contrast, -100.0..=100.0, 0.5),
+                ("gamma", "Gamma", "gamma", style.gamma, 0.1..=10.0, 0.01),
+            ] {
+                ui.horizontal(|ui| {
+                    let t = Tokens::get(ui.ctx());
+                    let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                    icons::paint(ui.painter(), r, icon, t.icon, t.accent);
+                    ui.label(egui::RichText::new(tl!(label)).size(11.5));
+                    ui.add_space((70.0 - text_w(ui, tl!(label), regular(11.5))).max(0.0));
+                    let mut v = value;
+                    let resp = ui.add(egui::DragValue::new(&mut v).range(range).speed(speed).max_decimals(2));
+                    if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
+                        let _ = app.run("raster.enhance", json!({ key: v }));
+                    } else if resp.dragged()
+                        && let Some(rl) =
+                            app.session.active_layer.and_then(|id| app.session.map_mut().layer_mut(id)).and_then(|l| l.raster.as_mut())
+                    {
+                        // Live preview while dragging; the command records it on release.
+                        match key {
+                            "brightness" => rl.style.brightness = v,
+                            "contrast" => rl.style.contrast = v,
+                            _ => rl.style.gamma = v,
+                        }
+                        app.session.revision = app.session.revision.wrapping_add(1);
+                    }
+                });
+            }
+        });
+        big(
+            ui,
+            app,
+            "undo",
+            "Reset",
+            "Reset brightness, contrast and gamma.",
+            "raster.enhance",
+            json!({"brightness": 0, "contrast": 0, "gamma": 1}),
+            false,
+            false,
+        );
+    });
+    layer_group(app, ui, &layer);
+}
+
+fn raster_renderer_icon(r: &RasterRenderer) -> &'static str {
+    match r {
+        RasterRenderer::Stretch { .. } => "stretch",
+        RasterRenderer::Rgb { .. } => "rgb",
+        RasterRenderer::Classify { .. } => "classify",
+        RasterRenderer::UniqueValues { .. } => "unique",
+        RasterRenderer::Colormap => "raster_layer",
+        RasterRenderer::ShadedRelief { .. } => "relief",
+    }
+}
+
+fn raster_data_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Information", |ui| {
+        big(
+            ui,
+            app,
+            "identify",
+            "Raster\nInformation",
+            "Size, bands, statistics and coordinate system.",
+            "ui.pane.details",
+            Value::Null,
+            app.ui.right == Some(RightPane::Details),
+            false,
+        );
+    });
+    group(ui, "Export", |ui| {
+        big(ui, app, "export_layer", "Export\nRaster", "Save the raster as a GeoTIFF.", "ui.exportRaster", Value::Null, false, false);
     });
 }
 

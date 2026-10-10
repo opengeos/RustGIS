@@ -172,7 +172,11 @@ fn at_point(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn identify(s: &mut Session, p: &Value) -> CmdResult {
-    let Some((id, row)) = hit(s, p)? else { return Ok(Value::Null) };
+    let Some((id, row)) = hit(s, p)? else {
+        // No feature: report the pixel of the topmost raster instead.
+        let (lon, lat) = (f(p, "lon").unwrap_or(f64::NAN), f(p, "lat").unwrap_or(f64::NAN));
+        return Ok(super::raster::identify(s, lon, lat).unwrap_or(Value::Null));
+    };
     let l = s.map().layer(id).ok_or("no layer")?;
     let mut attrs = serde_json::Map::new();
     for (i, fd) in l.dataset.fields.iter().enumerate() {

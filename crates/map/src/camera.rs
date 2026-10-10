@@ -75,9 +75,11 @@ impl Camera {
         if e.is_empty() || w <= 1.0 || h <= 1.0 {
             return;
         }
-        let m = extent_to_merc(&e.padded(0.06, 0.02));
+        // A lone point gets a neighbourhood; real extents (a small raster) just a margin.
+        let min_pad = if e.width() > 0.0 || e.height() > 0.0 { 1e-6 } else { 0.02 };
+        let m = extent_to_merc(&e.padded(0.06, min_pad));
         self.center = m.center();
-        self.res = (m.width() / w).max(m.height() / h).max(MIN_RES * 20.0);
+        self.res = (m.width() / w).max(m.height() / h).max(MIN_RES * 2.0);
         self.clamp();
     }
 

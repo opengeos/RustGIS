@@ -7,7 +7,8 @@ use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::Session;
 use rustgis_engine::analysis::{ParamKind, TOOLS};
 use rustgis_engine::data::GeometryType;
-use rustgis_engine::map::{ClassMethod, Layer, Marker, Ramp, Renderer, Symbol};
+use rustgis_engine::map::raster::RasterLegend;
+use rustgis_engine::map::{ClassMethod, Layer, Marker, Ramp, RasterRenderer, Renderer, Resampling, Stretch, Symbol};
 use serde_json::{Value, json};
 
 use crate::theme::{Tokens, c32, regular, rgba, semibold};
@@ -199,7 +200,11 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
     }
     let mut x = r.min.x + 10.0;
     // Expand arrow.
-    let has_legend = !l.renderer.legend().is_empty();
+    let raster_legend = l.raster.as_ref().map(|r| r.legend());
+    let has_legend = match &raster_legend {
+        Some(rl) => !rl.is_empty(),
+        None => !l.renderer.legend().is_empty(),
+    };
     let ar = Rect::from_center_size(pos2(x + 6.0, r.center().y), vec2(14.0, 14.0));
     if has_legend {
         icons::paint(ui.painter(), ar, if l.expanded { "chevron_down" } else { "chevron_right" }, t.text_dim, t.accent);
@@ -225,7 +230,9 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
     x += 22.0;
     // Symbol patch (single symbol) or layer-type icon.
     let pr = Rect::from_center_size(pos2(x + 9.0, r.center().y), vec2(18.0, 16.0));
-    if has_legend {
+    if l.is_raster() {
+        icons::paint(ui.painter(), pr, "raster_layer", t.icon, t.accent);
+    } else if has_legend {
         let icon = match l.geometry_type() {
             GeometryType::Point => "point_layer",
             GeometryType::Polyline => "line_layer",
@@ -237,7 +244,14 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
     }
     x += 24.0;
     let out_of_range = !l.in_scale_range(scale);
-    let color = if !l.visible || out_of_range { t.text_disabled } else { t.text };
+    let missing = l.raster.as_ref().is_some_and(|r| r.data.is_none());
+    let color = if missing {
+        t.red
+    } else if !l.visible || out_of_range {
+        t.text_disabled
+    } else {
+        t.text
+    };
     let name = if l.definition_query.is_some() { format!("{}  (filtered)", l.name) } else { l.name.clone() };
     ui.painter().text(pos2(x, r.center().y), Align2::LEFT_CENTER, &name, if active { semibold(12.5) } else { regular(12.5) }, color);
     if !l.selection.is_empty() {
@@ -258,19 +272,38 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
         let _ = app.run("layer.select", json!({"layer": l.id}));
         app.ui.right = Some(RightPane::Symbology);
     }
-    let tip = crate::i18n::fmt(
-        "{type} · {n} features · {renderer}",
-        &[
-            ("type", tl!(l.geometry_type().label())),
-            ("n", &l.dataset.features.len().to_string()),
-            ("renderer", tl!(l.renderer.kind_label())),
-        ],
-    );
+    let tip = match &l.raster {
+        Some(rl) => match &rl.data {
+            Some(d) => crate::i18n::fmt(
+                "Raster · {w} × {h} · {n} bands · {renderer}",
+                &[
+                    ("w", &d.width.to_string()),
+                    ("h", &d.height.to_string()),
+                    ("n", &d.band_count().to_string()),
+                    ("renderer", tl!(rl.style.renderer.label())),
+                ],
+            ),
+            None => crate::i18n::fmt("The raster's data couldn't be read: {path}", &[("path", rl.path.as_deref().unwrap_or(""))]),
+        },
+        None => crate::i18n::fmt(
+            "{type} · {n} features · {renderer}",
+            &[
+                ("type", tl!(l.geometry_type().label())),
+                ("n", &l.dataset.features.len().to_string()),
+                ("renderer", tl!(l.renderer.kind_label())),
+            ],
+        ),
+    };
     let resp = resp.on_hover_text(tip);
     resp.context_menu(|ui| {
         let _ = app.session.run("layer.select", &json!({"layer": l.id}));
-        for (label, id) in [("Zoom To Layer", "layer.zoomTo"), ("Attribute Table", "table.open"), ("Symbology", "ui.pane.symbology")] {
-            if ui.button(label).clicked() {
+        let items: &[(&str, &str)] = if l.is_raster() {
+            &[("Zoom To Layer", "layer.zoomTo"), ("Symbology", "ui.pane.symbology")]
+        } else {
+            &[("Zoom To Layer", "layer.zoomTo"), ("Attribute Table", "table.open"), ("Symbology", "ui.pane.symbology")]
+        };
+        for &(label, id) in items {
+            if ui.button(tl!(label)).clicked() {
                 let p = if id.starts_with("ui.") { Value::Null } else { json!({"layer": l.id}) };
                 if id == "ui.pane.symbology" {
                     app.ui.right = Some(RightPane::Symbology);
@@ -280,7 +313,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
                 ui.close();
             }
         }
-        if ui.button(tl!(if l.labels.enabled { "Turn Labels Off" } else { "Label" })).clicked() {
+        if !l.is_raster() && ui.button(tl!(if l.labels.enabled { "Turn Labels Off" } else { "Label" })).clicked() {
             let _ = app.run("labels.enable", json!({"layer": l.id}));
             ui.close();
         }
@@ -297,13 +330,20 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
             let _ = app.run("ui.dialog", json!({"name": "renameLayer"}));
             ui.close();
         }
-        if ui.button(tl!("Definition Query…")).clicked() {
-            let _ = app.run("ui.dialog", json!({"name": "definitionQuery"}));
-            ui.close();
-        }
-        if ui.button(tl!("Export Features…")).clicked() {
-            let _ = app.run("ui.exportLayer", Value::Null);
-            ui.close();
+        if l.is_raster() {
+            if ui.button(tl!("Export Raster…")).clicked() {
+                let _ = app.run("ui.exportRaster", Value::Null);
+                ui.close();
+            }
+        } else {
+            if ui.button(tl!("Definition Query…")).clicked() {
+                let _ = app.run("ui.dialog", json!({"name": "definitionQuery"}));
+                ui.close();
+            }
+            if ui.button(tl!("Export Features…")).clicked() {
+                let _ = app.run("ui.exportLayer", Value::Null);
+                ui.close();
+            }
         }
         ui.separator();
         if ui.button(tl!("Remove")).clicked() {
@@ -312,7 +352,11 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
         }
     });
     // Legend classes.
-    if l.expanded && has_legend {
+    if l.expanded
+        && let Some(entries) = &raster_legend
+    {
+        raster_legend_rows(ui, entries, 74.0, t);
+    } else if l.expanded && has_legend {
         let field = l.renderer.field().unwrap_or("").to_string();
         ui.horizontal(|ui| {
             ui.add_space(74.0);
@@ -703,6 +747,10 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.label(egui::RichText::new(tl!("Select a layer in the Contents pane.")).color(t.text_dim));
         return;
     };
+    if l.is_raster() {
+        raster_symbology(app, ui, &l, t);
+        return;
+    }
     let g = l.geometry_type();
     ui.label(egui::RichText::new(&l.name).font(semibold(14.0)));
     ui.add_space(6.0);
@@ -957,6 +1005,10 @@ fn details(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     };
     let e = l.extent();
     ui.label(egui::RichText::new(&l.name).font(semibold(14.0)));
+    if let Some(rl) = &l.raster {
+        raster_details(ui, rl, t);
+        return;
+    }
     egui::Grid::new("details").num_columns(2).striped(true).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
         let rows = [
             ("Geometry", tl!(l.geometry_type().label()).to_string()),
@@ -985,4 +1037,369 @@ fn details(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ui.label(egui::RichText::new(tl!(f.ty.label())).size(11.0).color(t.text_dim));
         });
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rasters
+
+/// A band's display name: "Band 3" in the interface language.
+pub fn band_name(name: &str) -> String {
+    let n = name.trim_start_matches(|c: char| !c.is_ascii_digit());
+    if !n.is_empty() && name == format!("Band {n}") { crate::i18n::fmt("Band {n}", &[("n", n)]) } else { name.to_string() }
+}
+
+/// Legend rows for a raster layer, indented by `indent`.
+fn raster_legend_rows(ui: &mut Ui, entries: &[RasterLegend], indent: f32, t: &Tokens) {
+    for e in entries.iter().take(40) {
+        match e {
+            RasterLegend::Ramp { ramp, invert, high, low } => {
+                let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::hover());
+                let bar = Rect::from_min_size(pos2(r.min.x + indent + 3.0, r.min.y + 4.0), vec2(14.0, 44.0));
+                let n = 22;
+                for i in 0..n {
+                    let tt = 1.0 - i as f64 / (n - 1) as f64;
+                    let c = ramp.at(if *invert { 1.0 - tt } else { tt });
+                    let y0 = bar.min.y + bar.height() * i as f32 / n as f32;
+                    let y1 = bar.min.y + bar.height() * (i + 1) as f32 / n as f32 + 0.5;
+                    ui.painter().rect_filled(Rect::from_min_max(pos2(bar.min.x, y0), pos2(bar.max.x, y1)), 0.0, c32(c));
+                }
+                ui.painter().rect_stroke(bar, CornerRadius::same(2), Stroke::new(1.0, t.border_strong), egui::StrokeKind::Outside);
+                let shown = |v: &str| match v {
+                    "Lit" => tl!("Lit").to_string(),
+                    "Shaded" => tl!("Shaded").to_string(),
+                    other => other.to_string(),
+                };
+                ui.painter().text(pos2(bar.max.x + 8.0, bar.min.y + 4.0), Align2::LEFT_CENTER, shown(high), regular(11.5), t.text);
+                ui.painter().text(pos2(bar.max.x + 8.0, bar.max.y - 4.0), Align2::LEFT_CENTER, shown(low), regular(11.5), t.text);
+            }
+            RasterLegend::Class { color, label } | RasterLegend::Channel { color, label } => {
+                let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+                let sw = Rect::from_center_size(pos2(r.min.x + indent + 10.0, r.center().y), vec2(16.0, 12.0));
+                ui.painter().rect_filled(sw, CornerRadius::same(2), c32(*color));
+                ui.painter().rect_stroke(sw, CornerRadius::same(2), Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+                let shown = match e {
+                    RasterLegend::Channel { color, label } => {
+                        let ch = if color.r() > color.g() && color.r() > color.b() {
+                            tl!("Red")
+                        } else if color.g() > color.b() {
+                            tl!("Green")
+                        } else {
+                            tl!("Blue")
+                        };
+                        format!("{ch}: {}", band_name(label))
+                    }
+                    _ => label.clone(),
+                };
+                ui.painter().text(pos2(sw.max.x + 8.0, r.center().y), Align2::LEFT_CENTER, shown, regular(11.5), t.text);
+            }
+        }
+    }
+}
+
+fn raster_details(ui: &mut Ui, rl: &rustgis_engine::map::RasterLayer, t: &Tokens) {
+    let Some(d) = &rl.data else {
+        ui.label(egui::RichText::new(tl!("The raster's data couldn't be read.")).color(t.red));
+        if let Some(p) = &rl.path {
+            ui.label(egui::RichText::new(p).monospace().size(11.0));
+        }
+        return;
+    };
+    let e = d.extent();
+    let (cx, cy) = d.cell_size();
+    let unit = if d.crs.is_geographic() { "°" } else { " m" };
+    let mut rows = vec![
+        ("Size", format!("{} × {}", d.width, d.height)),
+        ("Bands", d.band_count().to_string()),
+        ("Pixel type", d.data_type.clone()),
+        ("Cell size", format!("{} × {}{unit}", rustgis_engine::map::symbology::fmt_num(cx), rustgis_engine::map::symbology::fmt_num(cy))),
+        ("Coordinate system", d.crs.label()),
+        ("NoData", d.nodata.map(|v| v.to_string()).unwrap_or_else(|| "—".into())),
+        ("Symbology", tl!(rl.style.renderer.label()).to_string()),
+        ("Stretch", tl!(rl.style.stretch.label()).to_string()),
+        ("Source", rl.path.clone().or(rl.file_name.clone()).unwrap_or_else(|| tl!("In project").into())),
+        ("West", format!("{:.4}°", e.min_x)),
+        ("East", format!("{:.4}°", e.max_x)),
+        ("South", format!("{:.4}°", e.min_y)),
+        ("North", format!("{:.4}°", e.max_y)),
+    ];
+    if let Some((w, h)) = d.overview {
+        rows.insert(1, ("Full size", format!("{w} × {h}")));
+    }
+    let value_w = (ui.available_width() - 140.0).max(80.0);
+    egui::Grid::new("raster_details").num_columns(2).striped(true).max_col_width(value_w).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
+        for (k, v) in rows {
+            ui.label(egui::RichText::new(tl!(k)).color(t.text_dim));
+            // Long paths are cut short instead of widening the pane; hover shows them whole.
+            ui.add(egui::Label::new(&v).truncate()).on_hover_text(&v);
+            ui.end_row();
+        }
+    });
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new(tl!("Statistics")).font(semibold(12.5)));
+    let f = rustgis_engine::map::symbology::fmt_num;
+    egui::Grid::new("raster_stats").num_columns(5).striped(true).spacing(vec2(10.0, 4.0)).show(ui, |ui| {
+        for h in ["Band", "Min", "Max", "Mean", "Std. Dev."] {
+            ui.label(egui::RichText::new(tl!(h)).size(11.0).color(t.text_dim));
+        }
+        ui.end_row();
+        for b in d.bands.iter().take(64) {
+            ui.label(egui::RichText::new(band_name(&b.name)).size(11.5));
+            for v in [b.stats.min, b.stats.max, b.stats.mean, b.stats.std_dev] {
+                ui.label(egui::RichText::new(f(v)).size(11.5).monospace());
+            }
+            ui.end_row();
+        }
+    });
+}
+
+fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
+    ui.label(egui::RichText::new(&l.name).font(semibold(14.0)));
+    let Some(rl) = l.raster.clone() else { return };
+    let Some(d) = rl.data.clone() else {
+        ui.label(egui::RichText::new(tl!("The raster's data couldn't be read.")).color(t.red));
+        return;
+    };
+    let style = rl.style.clone();
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(tl!("Primary symbology")).size(11.5).color(t.text_dim));
+    let has_categories = d.bands.first().is_some_and(|b| b.stats.categories.is_some());
+    let palette = matches!(d.color, rustgis_engine::data::raster::ColorHint::Palette(_));
+    ui.horizontal_wrapped(|ui| {
+        for (code, label) in RasterRenderer::KINDS {
+            let ok = match code {
+                "rgb" => d.band_count() >= 3,
+                "unique" => has_categories,
+                "colormap" => palette,
+                _ => true,
+            };
+            let icon = match code {
+                "stretch" => "stretch",
+                "rgb" => "rgb",
+                "classify" => "classify",
+                "unique" => "unique",
+                "colormap" => "raster_layer",
+                _ => "relief",
+            };
+            let sel = style.renderer.code() == code;
+            let (r, resp) = ui.allocate_exact_size(vec2(68.0, 56.0), if ok { Sense::click() } else { Sense::hover() });
+            let fill = if sel {
+                t.checked
+            } else if resp.hovered() && ok {
+                t.hover
+            } else {
+                t.pane
+            };
+            ui.painter().rect_filled(r, CornerRadius::same(6), fill);
+            ui.painter().rect_stroke(
+                r,
+                CornerRadius::same(6),
+                Stroke::new(1.0, if sel { t.accent } else { t.border }),
+                egui::StrokeKind::Inside,
+            );
+            let ink = if ok { t.icon } else { t.text_disabled };
+            icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + 19.0), vec2(24.0, 24.0)), icon, ink, t.accent);
+            let shown = tl!(label);
+            let short = if shown.chars().count() > 10 { shown.split(' ').next().unwrap_or(shown) } else { shown };
+            ui.painter().text(
+                pos2(r.center().x, r.max.y - 11.0),
+                Align2::CENTER_CENTER,
+                short,
+                regular(11.0),
+                if ok { t.text } else { t.text_disabled },
+            );
+            if resp.on_hover_text(shown).clicked() && ok && !sel {
+                let _ = app.run("raster.symbology", json!({"type": code}));
+            }
+        }
+    });
+    ui.add_space(8.0);
+    let bands: Vec<String> = d.bands.iter().map(|b| b.name.clone()).collect();
+    let band_combo = |app: &mut RustGisApp, ui: &mut Ui, label: &str, cur: usize, run: &dyn Fn(usize) -> (String, Value)| {
+        ui.horizontal(|ui| {
+            ui.label(tl!(label));
+            egui::ComboBox::from_id_salt(("raster_band", label))
+                .selected_text(band_name(bands.get(cur).map(String::as_str).unwrap_or("")))
+                .width(170.0)
+                .show_ui(ui, |ui| {
+                    for (i, b) in bands.iter().enumerate() {
+                        if ui.selectable_label(i == cur, band_name(b)).clicked() {
+                            let (id, p) = run(i);
+                            let _ = app.run(&id, p);
+                        }
+                    }
+                });
+        });
+    };
+    match &style.renderer {
+        RasterRenderer::Stretch { band, ramp, invert } => {
+            let code = style.renderer.code();
+            band_combo(app, ui, "Band", *band, &|i| ("raster.symbology".into(), json!({"type": code, "band": i + 1})));
+            ramp_picker(app, ui, *ramp, t);
+            let mut inv = *invert;
+            if ui.checkbox(&mut inv, tl!("Invert color scheme")).changed() {
+                let _ = app.run("raster.symbology", json!({"type": "stretch", "invert": inv, "ramp": format!("{ramp:?}")}));
+            }
+        }
+        RasterRenderer::Rgb { red, green, blue } => {
+            for (label, key, cur) in [("Red", "red", *red), ("Green", "green", *green), ("Blue", "blue", *blue)] {
+                band_combo(app, ui, label, cur, &|i| ("raster.bands".into(), json!({ key: i + 1 })));
+            }
+        }
+        RasterRenderer::Classify { band, method, ramp, breaks } => {
+            let (m, k, r) = (*method, breaks.len(), *ramp);
+            band_combo(app, ui, "Band", *band, &|i| {
+                ("raster.symbology".into(), json!({"type": "classify", "band": i + 1, "classes": k, "method": format!("{m:?}")}))
+            });
+            ui.horizontal(|ui| {
+                ui.label(tl!("Method"));
+                egui::ComboBox::from_id_salt("raster_method").selected_text(tl!(method.label())).width(180.0).show_ui(ui, |ui| {
+                    for mm in ClassMethod::ALL {
+                        if ui.selectable_label(mm == m, tl!(mm.label())).clicked() {
+                            let _ = app.run(
+                                "raster.symbology",
+                                json!({"type": "classify", "method": format!("{mm:?}"), "classes": k, "ramp": format!("{r:?}")}),
+                            );
+                        }
+                    }
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.label(tl!("Classes"));
+                let mut kk = k;
+                if ui.add(egui::DragValue::new(&mut kk).range(1..=32)).changed() {
+                    let _ = app.run(
+                        "raster.symbology",
+                        json!({"type": "classify", "method": format!("{m:?}"), "classes": kk, "ramp": format!("{r:?}")}),
+                    );
+                }
+            });
+            ramp_picker(app, ui, *ramp, t);
+        }
+        RasterRenderer::UniqueValues { band, ramp, values } => {
+            band_combo(app, ui, "Band", *band, &|i| ("raster.symbology".into(), json!({"type": "unique", "band": i + 1})));
+            ramp_picker(app, ui, *ramp, t);
+            ui.label(
+                egui::RichText::new(crate::i18n::fmt("{n} classes", &[("n", &values.len().to_string())])).size(11.5).color(t.text_dim),
+            );
+        }
+        RasterRenderer::Colormap => {
+            ui.label(egui::RichText::new(tl!("Colors from the raster's own color table.")).size(11.5).color(t.text_dim));
+        }
+        RasterRenderer::ShadedRelief { band, ramp, azimuth, altitude, z_factor } => {
+            let (az, alt, zf, rp) = (*azimuth, *altitude, *z_factor, *ramp);
+            let relief = move |band: usize, az: f64, alt: f64, zf: f64| {
+                let mut p = json!({"type": "shadedRelief", "band": band + 1, "azimuth": az, "altitude": alt, "zFactor": zf});
+                match rp {
+                    Some(r) => p["ramp"] = json!(format!("{r:?}")),
+                    None => p["grey"] = json!(true),
+                }
+                p
+            };
+            band_combo(app, ui, "Band", *band, &|i| ("raster.symbology".into(), relief(i, az, alt, zf)));
+            egui::Grid::new("relief").num_columns(2).spacing(vec2(10.0, 4.0)).show(ui, |ui| {
+                for (label, v, range, speed, which) in
+                    [("Azimuth", az, 0.0..=360.0, 1.0, 0), ("Altitude", alt, 0.0..=90.0, 0.5, 1), ("Z factor", zf, 0.001..=1000.0, 0.01, 2)]
+                {
+                    ui.label(tl!(label));
+                    let mut x = v;
+                    let r = ui.add(egui::DragValue::new(&mut x).range(range).speed(speed).max_decimals(3));
+                    if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                        let (a, b, c) = match which {
+                            0 => (x, alt, zf),
+                            1 => (az, x, zf),
+                            _ => (az, alt, x),
+                        };
+                        let _ = app.run("raster.symbology", relief(*band, a, b, c));
+                    }
+                    ui.end_row();
+                }
+            });
+            let mut tint = rp.is_some();
+            if ui.checkbox(&mut tint, tl!("Tint by elevation")).changed() {
+                let mut p = relief(*band, az, alt, zf);
+                if tint {
+                    p["ramp"] = json!("Terrain");
+                    p["grey"] = json!(false);
+                } else {
+                    p["grey"] = json!(true);
+                }
+                let _ = app.run("raster.symbology", p);
+            }
+            if let Some(r) = rp {
+                ramp_picker(app, ui, r, t);
+            }
+        }
+    }
+    if !matches!(style.renderer, RasterRenderer::Colormap | RasterRenderer::UniqueValues { .. } | RasterRenderer::Classify { .. }) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(tl!("Stretch type"));
+            egui::ComboBox::from_id_salt("raster_stretch").selected_text(tl!(style.stretch.label())).width(170.0).show_ui(ui, |ui| {
+                for (code, label) in Stretch::KINDS {
+                    if ui.selectable_label(style.stretch.code() == code, tl!(label)).clicked() {
+                        let _ = app.run("raster.stretch", json!({"type": code}));
+                    }
+                }
+            });
+        });
+        match style.stretch {
+            Stretch::PercentClip { low, high } => {
+                ui.horizontal(|ui| {
+                    let (mut lo, mut hi) = (low, high);
+                    ui.label(tl!("Min %"));
+                    let a = ui.add(egui::DragValue::new(&mut lo).range(0.0..=49.0).speed(0.1).max_decimals(2));
+                    ui.label(tl!("Max %"));
+                    let b = ui.add(egui::DragValue::new(&mut hi).range(0.0..=49.0).speed(0.1).max_decimals(2));
+                    if a.drag_stopped() || b.drag_stopped() || ((a.changed() || b.changed()) && !a.dragged() && !b.dragged()) {
+                        let _ = app.run("raster.stretch", json!({"type": "percentClip", "low": lo, "high": hi}));
+                    }
+                });
+            }
+            Stretch::StandardDeviation { n } => {
+                ui.horizontal(|ui| {
+                    let mut nn = n;
+                    ui.label(tl!("Deviations"));
+                    let a = ui.add(egui::DragValue::new(&mut nn).range(0.1..=10.0).speed(0.05).max_decimals(2));
+                    if a.drag_stopped() || (a.changed() && !a.dragged()) {
+                        let _ = app.run("raster.stretch", json!({"type": "standardDeviation", "n": nn}));
+                    }
+                });
+            }
+            _ => {}
+        }
+        let mut dra = style.dra;
+        if ui.checkbox(&mut dra, tl!("Dynamic range adjustment (stretch the pixels in view)")).changed() {
+            let _ = app.run("raster.dra", json!({"on": dra}));
+        }
+    }
+    ui.horizontal(|ui| {
+        ui.label(tl!("Resampling"));
+        egui::ComboBox::from_id_salt("raster_resampling").selected_text(tl!(style.resampling.label())).width(170.0).show_ui(ui, |ui| {
+            for r in Resampling::ALL {
+                if ui.selectable_label(r == style.resampling, tl!(r.label())).clicked() {
+                    let _ = app.run("raster.resampling", json!({"type": format!("{r:?}")}));
+                }
+            }
+        });
+    });
+    ui.add_space(6.0);
+    egui::Frame::NONE.stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(6)).show(
+        ui,
+        |ui| {
+            ui.set_width(ui.available_width());
+            raster_legend_rows(ui, &rl.legend(), 2.0, t);
+        },
+    );
+    ui.add_space(10.0);
+    ui.separator();
+    ui.label(egui::RichText::new(tl!("Layer")).size(11.5).color(t.text_dim));
+    let mut tr = l.transparency;
+    ui.horizontal(|ui| {
+        ui.label(tl!("Transparency"));
+        ui.spacing_mut().slider_width = 150.0;
+        let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer());
+        if r.drag_stopped() || (r.changed() && !r.dragged()) {
+            let _ = app.run("layer.transparency", json!({"value": tr}));
+        }
+    });
 }

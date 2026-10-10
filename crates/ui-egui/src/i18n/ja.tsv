@@ -14,6 +14,7 @@ Add a field to the selected layer.	選択したレイヤーにフィールドを
 Add a field.	フィールドを追加します。
 Add a new map to the project.	プロジェクトに新しいマップを追加します。
 Add Data	データの追加
+Add Data (from file contents)	データの追加（ファイル内容から）
 Add Data (from text)	データの追加（テキストから）
 Add Data…	データの追加…
 Add Field	フィールドの追加
@@ -26,6 +27,7 @@ Add vector data.	ベクター データを追加します。
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	測地線面積（km²）、長さ（km）、または重心座標をフィールドとして追加します。
 All	すべて
 All files	すべてのファイル
+Altitude	高度
 Analysis	解析
 AND	AND
 Apply	適用
@@ -35,19 +37,28 @@ Attribute\nTable	属性\nテーブル
 Attribute Table	属性テーブル
 Attribute table	属性テーブル
 Attributes	属性
+Aurora	オーロラ
 Automatic	自動
 Automatic (system language)	自動（システムの言語）
+Azimuth	方位角
 Back to Explore; cancel a sketch	マップ操作に戻る；スケッチをキャンセル
 Back to the map	マップに戻る
 Back to tools	ツールに戻る
+Band	バンド
+Band Combination	バンドの組み合わせ
+Band {n}	バンド {n}
+Bands	バンド
 Basemap	ベースマップ
 Basemaps	ベースマップ
+Bilinear	共一次内挿
 Blank	空白
+Blue	青
 Bold	太字
 Bold label text.	ラベル テキストを太字にします。
 Bookmarks	ブックマーク
 Boolean	ブール型
 Bounding\nGeometry	境界\nジオメトリ
+Brightness	明るさ
 Browse the geoprocessing toolbox.	ジオプロセシング ツールボックスを参照します。
 Browse the project's maps, tables and folders.	プロジェクトのマップ、テーブル、フォルダーを参照します。
 Buffer	バッファー
@@ -67,11 +78,17 @@ Cartography	カートグラフィ
 Case Field	ケース フィールド
 Catalog	カタログ
 Catalog\nPane	カタログ\nウィンドウ
+Cell size	セル サイズ
 Change the map's backdrop.	マップの背景を変更します。
+Choose a band combination to display the raster layer.	ラスター レイヤーを表示するバンドの組み合わせを選択します。
+Choose a contrast stretch for the raster layer.	ラスター レイヤーのコントラスト ストレッチを選択します。
+Choose a resampling type for the raster layer.	ラスター レイヤーのリサンプリング タイプを選択します。
 Choose how the layer is drawn.	レイヤーの描画方法を選択します。
+Choose how the raster is drawn.	ラスターの描画方法を選択します。
 Choose the interface language.	インターフェイスの言語を選択します。
 Circle	円
 Classes	クラス
+Classify	分類
 Clear	クリア
 Clear\nLimits	制限の\nクリア
 Clear History	履歴のクリア
@@ -95,14 +112,19 @@ Close table	テーブルを閉じる
 Collapse or expand the ribbon	リボンの折りたたみ/展開
 Collapse the ribbon (Ctrl+F1)	リボンを折りたたむ (Ctrl+F1)
 Color	色
+Color Infrared (4, 1, 2)	カラー赤外 (4, 1, 2)
 Color Scheme	配色
 Color scheme	配色
+Colormap	カラーマップ
+Colors from the raster's own color table.	ラスター自身のカラー テーブルの色。
 Command\nSearch	コマンド\n検索
 Command Search	コマンド検索
 Completed	完了
 Compute a field's values.	フィールドの値を計算します。
 Contents	コンテンツ
+Contrast	コントラスト
 Conversion	変換
+Coordinate system	座標系
 Copies the (selected) features of a layer to a new layer.	レイヤーの（選択された）フィーチャを新しいレイヤーにコピーします。
 Copy Coordinates	座標のコピー
 Couldn't download the font for {language}; pick the language again to retry.	{language} のフォントをダウンロードできませんでした。もう一度言語を選択して再試行してください。
@@ -143,6 +165,7 @@ Delete selected rows	選択した行を削除
 Delete the selected features.	選択したフィーチャを削除します。
 Details	詳細
 Details of the selected layer.	選択したレイヤーの詳細。
+Deviations	標準偏差数
 Diamond	ひし形
 Display	表示
 Dissolve	ディゾルブ
@@ -152,6 +175,7 @@ Double	倍精度
 Double-click	ダブルクリック
 Double-click to add	ダブルクリックで追加
 Downloaded {name}	{name} をダウンロードしました
+DRA	DRA
 Drag / middle-drag	ドラッグ / 中ボタン ドラッグ
 Drag a box or click to zoom in	ボックスをドラッグまたはクリックして拡大
 Drag a box to zoom into.	ボックスをドラッグして拡大します。
@@ -161,6 +185,8 @@ Draw the layer at every scale.	すべての縮尺でレイヤーを描画しま�
 Drawing	描画
 Drawing Order	描画順序
 Dusk	夕暮れ
+Dynamic range adjustment (stretch the pixels in view)	動的範囲調整（表示中のピクセルでストレッチ）
+Dynamic range adjustment: stretch using the pixels in view.	動的範囲調整: 表示中のピクセルを使用してストレッチします。
 e.g.  pop_est / 1000000   or   'Africa'   or   name	例:  pop_est / 1000000   または   'Africa'   または   name
 e.g. continent = 'Europe'	例: continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	例: pop_est > 100000000 AND continent = 'Asia'
@@ -171,6 +197,7 @@ Edit attributes in the table.	テーブルで属性を編集します。
 Effects	エフェクト
 Ember	残り火
 Encloses each feature, or all features, in its convex hull.	各フィーチャ、またはすべてのフィーチャを凸包で囲みます。
+Enhancement	強調
 Equal Interval	等間隔
 Erase	消去
 Erase Features	フィーチャの消去
@@ -181,12 +208,15 @@ Explore	マップ操作
 Export	エクスポート
 Export\nFeatures	フィーチャの\nエクスポート
 Export\nMap	マップの\nエクスポート
+Export\nRaster	ラスターの\nエクスポート
 Export Features	フィーチャのエクスポート
 Export Features (tool)	フィーチャのエクスポート（ツール）
 Export Features…	フィーチャのエクスポート…
 Export Map	マップのエクスポート
 Export Map failed unexpectedly	マップのエクスポートが予期せず失敗しました
 Export Map…	マップのエクスポート…
+Export Raster	ラスターのエクスポート
+Export Raster…	ラスターのエクスポート…
 Export Table	テーブルのエクスポート
 Export the layer.	レイヤーをエクスポートします。
 Export the map view as a PNG image (with labels and a scale bar).	マップ ビューを PNG 画像としてエクスポートします（ラベルと縮尺記号付き）。
@@ -216,6 +246,8 @@ Folders	フォルダー
 Forest	森林
 Full Extent	全体表示
 Full extent	全体表示
+Full size	フル サイズ
+Gamma	ガンマ
 Generalization	ジェネラライズ
 Geo-\nprocessing	ジオプロ\nセシング
 GeoJSON or CSV	GeoJSON または CSV
@@ -223,6 +255,7 @@ Geometry	ジオメトリ
 Geoprocessing	ジオプロセシング
 Geoprocessing history.	ジオプロセシングの履歴。
 Geoprocessing Pane	ジオプロセシング ウィンドウ
+GeoTIFF	GeoTIFF
 Go	移動
 Go back to the previous extent.	前の範囲に戻ります。
 Go forward to the next extent.	次の範囲に進みます。
@@ -231,17 +264,20 @@ Go To Bookmark	ブックマークに移動
 Go To XY	XY に移動
 Graduated Colors	等級色
 Graticule	経緯線
+Green	緑
 Greys	グレー
 Group Option	グループ オプション
 Halo	ハロー
 Harbour (qualitative)	港（定性）
 Help	ヘルプ
+Histogram Equalize	ヒストグラム均等化
 History	履歴
 Home	ホーム
 Identify	個別属性
 Import\nProject	プロジェクトの\nインポート
 In Beyond	拡大の限界
 In project	プロジェクト内
+Information	情報
 Input Features	入力フィーチャ
 Input Polygons	入力ポリゴン
 Input Rows	入力行
@@ -252,6 +288,7 @@ Insert	挿入
 Interface font: {font}	インターフェイスのフォント：{font}
 Invalid: {error}	無効：{error}
 Invert	反転
+Invert color scheme	配色を反転
 Invert the selection.	選択を反転します。
 IS NULL	IS NULL
 keep current	現在のまま
@@ -276,6 +313,7 @@ Line color	ラインの色
 Line width	ラインの幅
 LineString	ライン ストリング
 List Commands	コマンド一覧
+Lit	明部
 Locate	位置
 Location	場所
 Long	長整数
@@ -289,6 +327,9 @@ Map	マップ
 Map › Layer	マップ › レイヤー
 Maps	マップ
 Marker	マーカー
+Max	最大
+Max %	最大 %
+Mean	平均
 Measure	計測
 Measure Area	面積の計測
 Measure Distance	距離の計測
@@ -298,16 +339,22 @@ Meters	メートル
 Method	手法
 Midnight	真夜中
 Miles	マイル
+Min	最小
+Min %	最小 %
 Minimum Bounding Geometry	最小境界ジオメトリ
+Minimum Maximum	最小-最大
 Mod+	Mod+
 Mouse wheel	マウス ホイール
 Move Down	下へ移動
 Move Up	上へ移動
 Name	名前
 Natural Breaks (Jenks)	自然分類（Jenks）
+Natural Color (1, 2, 3)	ナチュラル カラー (1, 2, 3)
 Natural Earth	Natural Earth
 Navigate	ナビゲート
 Navigation	ナビゲーション
+Nearest Neighbor	最近隣内挿
+Needs three or more bands.	3 つ以上のバンドが必要です。
 New	新規
 New\nBookmark	新しい\nブックマーク
 New\nMap	新しい\nマップ
@@ -323,6 +370,7 @@ Next Extent	次の範囲
 No	いいえ
 No bookmarks yet	ブックマークはまだありません
 No standalone tables	スタンドアロン テーブルはありません
+NoData	NoData
 None	なし
 North	北
 Not saved yet	未保存
@@ -356,6 +404,9 @@ Pan to a longitude/latitude.	経度/緯度に画面移動します。
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	マウスで画面移動、ホイールでズームし、フィーチャをクリックすると属性が表示されます。
 Paper	紙
 Parent folder	親フォルダー
+Percent Clip	パーセント クリップ
+Pixel	ピクセル
+Pixel type	ピクセル タイプ
 PNG image	PNG 画像
 Point	ポイント
 Polygon	ポリゴン
@@ -371,6 +422,12 @@ Proportional Symbols	比例シンボル
 Proximity	近接
 Quantile	等量
 Quick Access Toolbar	クイック アクセス ツールバー
+Raster\nInformation	ラスター\n情報
+Raster Data	ラスター データ
+Raster Information	ラスター情報
+Raster Layer	ラスター レイヤー
+Raster · {w} × {h} · {n} bands · {renderer}	ラスター · {w} × {h} · {n} バンド · {renderer}
+Red	赤
 Redo	やり直し
 Redo the change you undid.	元に戻した変更をやり直します。
 Redo {action}	{action} をやり直す
@@ -386,6 +443,12 @@ Rename Layer	レイヤー名の変更
 Rename Map	マップ名の変更
 Rename Project	プロジェクト名の変更
 Rename…	名前の変更…
+Rendering	レンダリング
+Resampling	リサンプリング
+Resampling Type	リサンプリング タイプ
+Reset	リセット
+Reset brightness, contrast and gamma.	明るさ、コントラスト、ガンマをリセットします。
+RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	リボン機能のカバー率：{total} 件中 {done} 件の機能（{pct}%）。
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	リボンの対応状況：{total} 件のリボン機能のうち {done} 件に RustGIS コマンドがあります。
 Run	実行
@@ -404,6 +467,7 @@ Save Project As	名前を付けてプロジェクトを保存
 Save the current extent as a bookmark.	現在の範囲をブックマークとして保存します。
 Save the project under a new name.	プロジェクトを新しい名前で保存します。
 Save the project with your edits.	編集内容を含めてプロジェクトを保存します。
+Save the raster as a GeoTIFF.	ラスターを GeoTIFF として保存します。
 Scale 1:	縮尺 1:
 Search commands — e.g. buffer, basemap, labels	コマンドを検索（例: バッファー、ベースマップ、ラベル）
 Search Distance (km)	検索距離（km）
@@ -439,6 +503,8 @@ Selects features that intersect features in another layer.	別のレイヤーの
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	SQL の WHERE 句でフィーチャを選択します。例: pop_est > 1000000。
 Set Map Tool	マップ ツールの設定
 Set Scale	縮尺の設定
+Shaded	陰影
+Shaded Relief	陰影起伏
 Shape	形状
 Share	共有
 Share › Output	共有 › 出力
@@ -454,15 +520,22 @@ Show the Symbology pane for the selected layer.	選択したレイヤーのシ�
 Simplify	単純化
 Single Symbol	単一シンボル
 Size	サイズ
+Size, bands, statistics and coordinate system.	サイズ、バンド、統計、座標系。
 Source	ソース
 South	南
 Square	正方形
 Standalone Tables	スタンドアロン テーブル
+Standard Deviation	標準偏差
 Star	星
 Start	開始
 Statistics	統計
 Statistics Field	統計フィールド
 Status Bar	ステータス バー
+Std. Dev.	標準偏差
+Stretch	ストレッチ
+Stretch\nType	ストレッチ\nタイプ
+Stretch Type	ストレッチ タイプ
+Stretch type	ストレッチ タイプ
 Summarize	集計
 Summarize\nWithin	範囲内で\n集計
 Summarize Within	範囲内で集計
@@ -476,13 +549,18 @@ Symbol	シンボル
 Symbol Color	シンボルの色
 Symbology	シンボル
 Symbology Pane	シンボル ウィンドウ
+Symbology Pane…	シンボル ウィンドウ…
 Table	テーブル
 Tables	テーブル
+Terrain	地形
 Text	テキスト
 Text Symbol	テキスト シンボル
 the map has no layers	マップにレイヤーがありません
+The raster's data couldn't be read.	ラスターのデータを読み込めませんでした。
+The raster's data couldn't be read: {path}	ラスターのデータを読み込めませんでした: {path}
 Thermal	サーマル
 This map has no layers yet.	このマップにはまだレイヤーがありません。
+Tint by elevation	標高で色付け
 Toggle Dark Mode	ダーク モードの切り替え
 Tolerance (km)	許容値（km）
 Toolbox	ツールボックス
@@ -503,7 +581,7 @@ Undo {action}	{action} を元に戻す
 Unique Values	個別値
 Units	単位
 Valid expression · {n} matching rows	有効な式 · 一致する行 {n} 件
-Vector data	ベクター データ
+Vector and raster data	ベクター データとラスター データ
 Version {version}	バージョン {version}
 View	表示
 View › Windows	表示 › ウィンドウ
@@ -521,6 +599,7 @@ World Atlas	World Atlas
 World Atlas Sample	World Atlas サンプル
 World Countries	世界の国々
 Yes	はい
+Z factor	Z 係数
 Zoom about the pointer	ポインターを中心にズーム
 Zoom In	ズームイン
 Zoom in	ズームイン

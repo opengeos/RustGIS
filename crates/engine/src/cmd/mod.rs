@@ -5,6 +5,7 @@ pub mod gp;
 pub mod layer;
 pub mod navigate;
 pub mod project;
+pub mod raster;
 pub mod select;
 pub mod share;
 
@@ -17,6 +18,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(project::commands());
     v.extend(navigate::commands());
     v.extend(layer::commands());
+    v.extend(raster::commands());
     v.extend(select::commands());
     v.extend(edit::commands());
     v.extend(gp::commands());
@@ -39,6 +41,15 @@ pub(crate) fn b(p: &Value, k: &str) -> Option<bool> {
 pub(crate) fn need_layer(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
         Some(_) => None,
+        None => Some("select a layer in the Contents pane first"),
+    }
+}
+
+/// A feature (vector) layer is active.
+pub(crate) fn need_feature_layer(s: &Session) -> Option<&'static str> {
+    match s.active_layer.and_then(|id| s.map().layer(id)) {
+        Some(l) if !l.is_raster() => None,
+        Some(_) => Some("this works on feature layers, not rasters"),
         None => Some("select a layer in the Contents pane first"),
     }
 }

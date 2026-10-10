@@ -14,6 +14,7 @@ Add a field to the selected layer.	선택한 레이어에 필드를 추가합니
 Add a field.	필드를 추가합니다.
 Add a new map to the project.	프로젝트에 새 지도를 추가합니다.
 Add Data	데이터 추가
+Add Data (from file contents)	데이터 추가(파일 내용에서)
 Add Data (from text)	데이터 추가(텍스트에서)
 Add Data…	데이터 추가…
 Add Field	필드 추가
@@ -26,6 +27,7 @@ Add vector data.	벡터 데이터를 추가합니다.
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	측지 면적(km²), 길이(km) 또는 중심점 좌표를 필드로 추가합니다.
 All	모두
 All files	모든 파일
+Altitude	고도
 Analysis	분석
 AND	AND
 Apply	적용
@@ -35,19 +37,28 @@ Attribute\nTable	속성\n테이블
 Attribute Table	속성 테이블
 Attribute table	속성 테이블
 Attributes	속성
+Aurora	오로라
 Automatic	자동
 Automatic (system language)	자동(시스템 언어)
+Azimuth	방위각
 Back to Explore; cancel a sketch	탐색으로 돌아가기; 스케치 취소
 Back to the map	지도로 돌아가기
 Back to tools	도구로 돌아가기
+Band	밴드
+Band Combination	밴드 조합
+Band {n}	밴드 {n}
+Bands	밴드
 Basemap	배경지도
 Basemaps	배경지도
+Bilinear	쌍선형
 Blank	빈 지도
+Blue	파랑
 Bold	굵게
 Bold label text.	라벨 텍스트를 굵게 표시합니다.
 Bookmarks	북마크
 Boolean	불리언
 Bounding\nGeometry	경계\n지오메트리
+Brightness	밝기
 Browse the geoprocessing toolbox.	지오프로세싱 도구 상자를 탐색합니다.
 Browse the project's maps, tables and folders.	프로젝트의 지도, 테이블 및 폴더를 탐색합니다.
 Buffer	버퍼
@@ -67,11 +78,17 @@ Cartography	지도 제작
 Case Field	케이스 필드
 Catalog	카탈로그
 Catalog\nPane	카탈로그\n창
+Cell size	셀 크기
 Change the map's backdrop.	지도의 배경을 변경합니다.
+Choose a band combination to display the raster layer.	래스터 레이어를 표시할 밴드 조합을 선택합니다.
+Choose a contrast stretch for the raster layer.	래스터 레이어의 대비 스트레치를 선택합니다.
+Choose a resampling type for the raster layer.	래스터 레이어의 리샘플링 유형을 선택합니다.
 Choose how the layer is drawn.	레이어를 그리는 방식을 선택합니다.
+Choose how the raster is drawn.	래스터를 그리는 방법을 선택합니다.
 Choose the interface language.	인터페이스 언어를 선택합니다.
 Circle	원
 Classes	클래스
+Classify	분류
 Clear	지우기
 Clear\nLimits	제한\n지우기
 Clear History	기록 지우기
@@ -95,14 +112,19 @@ Close table	테이블 닫기
 Collapse or expand the ribbon	리본 축소 또는 확장
 Collapse the ribbon (Ctrl+F1)	리본 축소 (Ctrl+F1)
 Color	색상
+Color Infrared (4, 1, 2)	컬러 적외선 (4, 1, 2)
 Color Scheme	색상표
 Color scheme	색상표
+Colormap	컬러맵
+Colors from the raster's own color table.	래스터 자체 색상표의 색상입니다.
 Command\nSearch	명령\n검색
 Command Search	명령 검색
 Completed	완료됨
 Compute a field's values.	필드 값을 계산합니다.
 Contents	목차
+Contrast	대비
 Conversion	변환
+Coordinate system	좌표계
 Copies the (selected) features of a layer to a new layer.	레이어의 (선택한) 피처를 새 레이어로 복사합니다.
 Copy Coordinates	좌표 복사
 Couldn't download the font for {language}; pick the language again to retry.	{language} 글꼴을 다운로드할 수 없습니다. 다시 시도하려면 언어를 다시 선택하세요.
@@ -143,6 +165,7 @@ Delete selected rows	선택한 행 삭제
 Delete the selected features.	선택한 피처를 삭제합니다.
 Details	세부 정보
 Details of the selected layer.	선택한 레이어의 세부 정보입니다.
+Deviations	표준편차 수
 Diamond	마름모
 Display	표시
 Dissolve	디졸브
@@ -152,6 +175,7 @@ Double	실수
 Double-click	더블클릭
 Double-click to add	더블클릭하여 추가
 Downloaded {name}	{name} 다운로드됨
+DRA	DRA
 Drag / middle-drag	드래그 / 가운데 버튼 드래그
 Drag a box or click to zoom in	상자를 드래그하거나 클릭하여 확대
 Drag a box to zoom into.	확대할 상자를 드래그합니다.
@@ -161,6 +185,8 @@ Draw the layer at every scale.	모든 축척에서 레이어를 그립니다.
 Drawing	그리기
 Drawing Order	그리기 순서
 Dusk	황혼
+Dynamic range adjustment (stretch the pixels in view)	동적 범위 조정(보기의 픽셀로 스트레치)
+Dynamic range adjustment: stretch using the pixels in view.	동적 범위 조정: 보기의 픽셀을 사용해 스트레치합니다.
 e.g.  pop_est / 1000000   or   'Africa'   or   name	예:  pop_est / 1000000   또는   'Africa'   또는   name
 e.g. continent = 'Europe'	예: continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	예: pop_est > 100000000 AND continent = 'Asia'
@@ -171,6 +197,7 @@ Edit attributes in the table.	테이블에서 속성을 편집합니다.
 Effects	효과
 Ember	엠버
 Encloses each feature, or all features, in its convex hull.	각 피처 또는 모든 피처를 볼록 껍질로 둘러쌉니다.
+Enhancement	향상
 Equal Interval	등간격
 Erase	지우기(Erase)
 Erase Features	피처 지우기
@@ -181,12 +208,15 @@ Explore	탐색
 Export	내보내기
 Export\nFeatures	피처\n내보내기
 Export\nMap	지도\n내보내기
+Export\nRaster	래스터\n내보내기
 Export Features	피처 내보내기
 Export Features (tool)	피처 내보내기(도구)
 Export Features…	피처 내보내기…
 Export Map	지도 내보내기
 Export Map failed unexpectedly	지도 내보내기가 예기치 않게 실패했습니다
 Export Map…	지도 내보내기…
+Export Raster	래스터 내보내기
+Export Raster…	래스터 내보내기…
 Export Table	테이블 내보내기
 Export the layer.	레이어를 내보냅니다.
 Export the map view as a PNG image (with labels and a scale bar).	지도 뷰를 PNG 이미지로 내보냅니다(라벨 및 축척 막대 포함).
@@ -216,6 +246,8 @@ Folders	폴더
 Forest	숲
 Full Extent	전체 범위
 Full extent	전체 범위
+Full size	전체 크기
+Gamma	감마
 Generalization	일반화
 Geo-\nprocessing	지오프로\n세싱
 GeoJSON or CSV	GeoJSON 또는 CSV
@@ -223,6 +255,7 @@ Geometry	지오메트리
 Geoprocessing	지오프로세싱
 Geoprocessing history.	지오프로세싱 기록.
 Geoprocessing Pane	지오프로세싱 창
+GeoTIFF	GeoTIFF
 Go	이동
 Go back to the previous extent.	이전 범위로 돌아갑니다.
 Go forward to the next extent.	다음 범위로 이동합니다.
@@ -231,17 +264,20 @@ Go To Bookmark	북마크로 이동
 Go To XY	XY로 이동
 Graduated Colors	단계 색상
 Graticule	경위선망
+Green	초록
 Greys	회색
 Group Option	그룹 옵션
 Halo	후광
 Harbour (qualitative)	하버(정성적)
 Help	도움말
+Histogram Equalize	히스토그램 평활화
 History	기록
 Home	Home
 Identify	식별
 Import\nProject	프로젝트\n가져오기
 In Beyond	다음보다 확대 시
 In project	프로젝트 내
+Information	정보
 Input Features	입력 피처
 Input Polygons	입력 폴리곤
 Input Rows	입력 행
@@ -252,6 +288,7 @@ Insert	삽입
 Interface font: {font}	인터페이스 글꼴: {font}
 Invalid: {error}	유효하지 않음: {error}
 Invert	반전
+Invert color scheme	색상표 반전
 Invert the selection.	선택을 반전합니다.
 IS NULL	IS NULL
 keep current	현재 값 유지
@@ -276,6 +313,7 @@ Line color	선 색상
 Line width	선 두께
 LineString	LineString
 List Commands	명령 목록
+Lit	밝은 면
 Locate	위치 찾기
 Location	위치
 Long	정수
@@ -289,6 +327,9 @@ Map	지도
 Map › Layer	지도 › 레이어
 Maps	지도
 Marker	마커
+Max	최대
+Max %	최대 %
+Mean	평균
 Measure	측정
 Measure Area	면적 측정
 Measure Distance	거리 측정
@@ -298,16 +339,22 @@ Meters	미터
 Method	방법
 Midnight	자정
 Miles	마일
+Min	최소
+Min %	최소 %
 Minimum Bounding Geometry	최소 경계 지오메트리
+Minimum Maximum	최소-최대
 Mod+	Mod+
 Mouse wheel	마우스 휠
 Move Down	아래로 이동
 Move Up	위로 이동
 Name	이름
 Natural Breaks (Jenks)	자연 구분(Jenks)
+Natural Color (1, 2, 3)	자연색 (1, 2, 3)
 Natural Earth	Natural Earth
 Navigate	탐색
 Navigation	탐색
+Nearest Neighbor	최근접 이웃
+Needs three or more bands.	밴드가 3개 이상 필요합니다.
 New	새로 만들기
 New\nBookmark	새\n북마크
 New\nMap	새\n지도
@@ -323,6 +370,7 @@ Next Extent	다음 범위
 No	아니요
 No bookmarks yet	아직 북마크가 없습니다
 No standalone tables	독립 테이블 없음
+NoData	NoData
 None	없음
 North	북
 Not saved yet	아직 저장되지 않음
@@ -356,6 +404,9 @@ Pan to a longitude/latitude.	경도/위도로 이동합니다.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	마우스로 이동하고, 휠로 확대/축소하며, 피처를 클릭하여 속성을 확인합니다.
 Paper	종이
 Parent folder	상위 폴더
+Percent Clip	백분율 클립
+Pixel	픽셀
+Pixel type	픽셀 유형
 PNG image	PNG 이미지
 Point	포인트
 Polygon	폴리곤
@@ -371,6 +422,12 @@ Proportional Symbols	비례 심볼
 Proximity	근접
 Quantile	분위수
 Quick Access Toolbar	빠른 실행 도구 모음
+Raster\nInformation	래스터\n정보
+Raster Data	래스터 데이터
+Raster Information	래스터 정보
+Raster Layer	래스터 레이어
+Raster · {w} × {h} · {n} bands · {renderer}	래스터 · {w} × {h} · 밴드 {n}개 · {renderer}
+Red	빨강
 Redo	다시 실행
 Redo the change you undid.	실행 취소한 변경을 다시 실행합니다.
 Redo {action}	{action} 다시 실행
@@ -386,6 +443,12 @@ Rename Layer	레이어 이름 바꾸기
 Rename Map	지도 이름 바꾸기
 Rename Project	프로젝트 이름 바꾸기
 Rename…	이름 바꾸기…
+Rendering	렌더링
+Resampling	리샘플링
+Resampling Type	리샘플링 유형
+Reset	재설정
+Reset brightness, contrast and gamma.	밝기, 대비 및 감마를 재설정합니다.
+RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	리본 기능 지원 범위: {total}개 중 {done}개 기능({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	리본 대응: 리본 기능 {total}개 중 {done}개에 RustGIS 명령이 있습니다.
 Run	실행
@@ -404,6 +467,7 @@ Save Project As	프로젝트를 다른 이름으로 저장
 Save the current extent as a bookmark.	현재 범위를 북마크로 저장합니다.
 Save the project under a new name.	프로젝트를 새 이름으로 저장합니다.
 Save the project with your edits.	편집 내용과 함께 프로젝트를 저장합니다.
+Save the raster as a GeoTIFF.	래스터를 GeoTIFF로 저장합니다.
 Scale 1:	축척 1:
 Search commands — e.g. buffer, basemap, labels	명령 검색 — 예: buffer, basemap, labels
 Search Distance (km)	검색 거리(km)
@@ -439,6 +503,8 @@ Selects features that intersect features in another layer.	다른 레이어의 �
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	SQL WHERE 절로 피처를 선택합니다. 예: pop_est > 1000000.
 Set Map Tool	지도 도구 설정
 Set Scale	축척 설정
+Shaded	음영
+Shaded Relief	음영 기복
 Shape	모양
 Share	공유
 Share › Output	공유 › 출력
@@ -454,15 +520,22 @@ Show the Symbology pane for the selected layer.	선택한 레이어의 심볼 �
 Simplify	단순화
 Single Symbol	단일 심볼
 Size	크기
+Size, bands, statistics and coordinate system.	크기, 밴드, 통계 및 좌표계입니다.
 Source	소스
 South	남
 Square	정사각형
 Standalone Tables	독립 테이블
+Standard Deviation	표준편차
 Star	별
 Start	시작
 Statistics	통계
 Statistics Field	통계 필드
 Status Bar	상태 표시줄
+Std. Dev.	표준편차
+Stretch	스트레치
+Stretch\nType	스트레치\n유형
+Stretch Type	스트레치 유형
+Stretch type	스트레치 유형
 Summarize	요약
 Summarize\nWithin	범위 내\n요약
 Summarize Within	범위 내 요약
@@ -476,13 +549,18 @@ Symbol	심볼
 Symbol Color	심볼 색상
 Symbology	심볼
 Symbology Pane	심볼 창
+Symbology Pane…	심볼 창…
 Table	테이블
 Tables	테이블
+Terrain	지형
 Text	텍스트
 Text Symbol	텍스트 심볼
 the map has no layers	지도에 레이어가 없습니다
+The raster's data couldn't be read.	래스터 데이터를 읽을 수 없습니다.
+The raster's data couldn't be read: {path}	래스터 데이터를 읽을 수 없습니다: {path}
 Thermal	열화상
 This map has no layers yet.	이 지도에는 아직 레이어가 없습니다.
+Tint by elevation	고도별 색조
 Toggle Dark Mode	다크 모드 전환
 Tolerance (km)	허용 오차(km)
 Toolbox	도구 상자
@@ -503,7 +581,7 @@ Undo {action}	{action} 실행 취소
 Unique Values	고유 값
 Units	단위
 Valid expression · {n} matching rows	유효한 표현식 · 일치하는 행 {n}개
-Vector data	벡터 데이터
+Vector and raster data	벡터 및 래스터 데이터
 Version {version}	버전 {version}
 View	보기
 View › Windows	보기 › 창
@@ -521,6 +599,7 @@ World Atlas	World Atlas
 World Atlas Sample	World Atlas 샘플
 World Countries	세계 국가
 Yes	예
+Z factor	Z 계수
 Zoom about the pointer	포인터 기준 확대/축소
 Zoom In	확대
 Zoom in	확대

@@ -8,7 +8,7 @@ use rustgis_ui_egui::rustgis_engine::{Project, Session};
 use rustgis_ui_egui::{Inbox, RustGisApp, Services};
 use wasm_bindgen::JsCast as _;
 
-const DATA_EXTS: &[&str] = &["geojson", "json", "csv", "txt"];
+const DATA_EXTS: &[&str] = &["geojson", "json", "csv", "txt", "tif", "tiff", "asc"];
 const CANVAS_ID: &str = "rustgis_canvas";
 const LOADING_ID: &str = "rustgis_loading";
 
@@ -170,7 +170,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
             let dialog = if purpose == "project" {
                 rfd::AsyncFileDialog::new().add_filter("RustGIS project", &["rgisx"])
             } else {
-                rfd::AsyncFileDialog::new().add_filter("Vector data", DATA_EXTS)
+                rfd::AsyncFileDialog::new().add_filter("Vector and raster data", DATA_EXTS)
             };
             wasm_bindgen_futures::spawn_local(async move {
                 let Some(file) = dialog.pick_file().await else {

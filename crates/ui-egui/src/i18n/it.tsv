@@ -14,6 +14,7 @@ Add a field to the selected layer.	Aggiungi un campo al layer selezionato.
 Add a field.	Aggiungi un campo.
 Add a new map to the project.	Aggiungi una nuova mappa al progetto.
 Add Data	Aggiungi dati
+Add Data (from file contents)	Aggiungi dati (dal contenuto del file)
 Add Data (from text)	Aggiungi dati (da testo)
 Add Data…	Aggiungi dati…
 Add Field	Aggiungi campo
@@ -26,6 +27,7 @@ Add vector data.	Aggiungi dati vettoriali.
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Aggiunge come campi l'area geodetica (km²), la lunghezza (km) o le coordinate del centroide.
 All	Tutti
 All files	Tutti i file
+Altitude	Altitudine
 Analysis	Analisi
 AND	AND
 Apply	Applica
@@ -35,19 +37,28 @@ Attribute\nTable	Tabella\nattributi
 Attribute Table	Tabella degli attributi
 Attribute table	Tabella degli attributi
 Attributes	Attributi
+Aurora	Aurora
 Automatic	Automatico
 Automatic (system language)	Automatica (lingua di sistema)
+Azimuth	Azimut
 Back to Explore; cancel a sketch	Torna a Esplora; annulla uno schizzo
 Back to the map	Torna alla mappa
 Back to tools	Torna agli strumenti
+Band	Banda
+Band Combination	Combinazione di bande
+Band {n}	Banda {n}
+Bands	Bande
 Basemap	Mappa di base
 Basemaps	Mappe di base
+Bilinear	Bilineare
 Blank	Vuota
+Blue	Blu
 Bold	Grassetto
 Bold label text.	Testo dell'etichetta in grassetto.
 Bookmarks	Segnalibri
 Boolean	Booleano
 Bounding\nGeometry	Geometria di\ndelimitazione
+Brightness	Luminosità
 Browse the geoprocessing toolbox.	Sfoglia gli strumenti di geoprocessing.
 Browse the project's maps, tables and folders.	Sfoglia mappe, tabelle e cartelle del progetto.
 Buffer	Buffer
@@ -67,11 +78,17 @@ Cartography	Cartografia
 Case Field	Campo di raggruppamento
 Catalog	Catalogo
 Catalog\nPane	Pannello\nCatalogo
+Cell size	Dimensione cella
 Change the map's backdrop.	Cambia lo sfondo della mappa.
+Choose a band combination to display the raster layer.	Scegli una combinazione di bande per visualizzare il layer raster.
+Choose a contrast stretch for the raster layer.	Scegli uno stretch del contrasto per il layer raster.
+Choose a resampling type for the raster layer.	Scegli un tipo di ricampionamento per il layer raster.
 Choose how the layer is drawn.	Scegli come viene disegnato il layer.
+Choose how the raster is drawn.	Scegli come viene disegnato il raster.
 Choose the interface language.	Scegli la lingua dell'interfaccia.
 Circle	Cerchio
 Classes	Classi
+Classify	Classifica
 Clear	Cancella
 Clear\nLimits	Cancella\nlimiti
 Clear History	Cancella cronologia
@@ -95,14 +112,19 @@ Close table	Chiudi tabella
 Collapse or expand the ribbon	Comprimi o espandi la barra multifunzione
 Collapse the ribbon (Ctrl+F1)	Comprimi la barra multifunzione (Ctrl+F1)
 Color	Colore
+Color Infrared (4, 1, 2)	Infrarosso a colori (4, 1, 2)
 Color Scheme	Schema di colori
 Color scheme	Schema di colori
+Colormap	Mappa colori
+Colors from the raster's own color table.	Colori dalla tabella colori del raster.
 Command\nSearch	Cerca\ncomandi
 Command Search	Cerca comandi
 Completed	Completato
 Compute a field's values.	Calcola i valori di un campo.
 Contents	Contenuti
+Contrast	Contrasto
 Conversion	Conversione
+Coordinate system	Sistema di coordinate
 Copies the (selected) features of a layer to a new layer.	Copia gli elementi (selezionati) di un layer in un nuovo layer.
 Copy Coordinates	Copia coordinate
 Couldn't download the font for {language}; pick the language again to retry.	Impossibile scaricare il carattere per {language}; seleziona di nuovo la lingua per riprovare.
@@ -143,6 +165,7 @@ Delete selected rows	Elimina righe selezionate
 Delete the selected features.	Elimina gli elementi selezionati.
 Details	Dettagli
 Details of the selected layer.	Dettagli del layer selezionato.
+Deviations	Deviazioni
 Diamond	Rombo
 Display	Visualizzazione
 Dissolve	Dissolvi
@@ -152,6 +175,7 @@ Double	Decimale
 Double-click	Doppio clic
 Double-click to add	Doppio clic per aggiungere
 Downloaded {name}	Scaricato {name}
+DRA	DRA
 Drag / middle-drag	Trascina / trascina col tasto centrale
 Drag a box or click to zoom in	Trascina un riquadro o fai clic per ingrandire
 Drag a box to zoom into.	Trascina un riquadro da ingrandire.
@@ -161,6 +185,8 @@ Draw the layer at every scale.	Disegna il layer a ogni scala.
 Drawing	Disegno
 Drawing Order	Ordine di disegno
 Dusk	Crepuscolo
+Dynamic range adjustment (stretch the pixels in view)	Regolazione dinamica dell'intervallo (stretch dei pixel visibili)
+Dynamic range adjustment: stretch using the pixels in view.	Regolazione dinamica dell'intervallo: stretch in base ai pixel visibili.
 e.g.  pop_est / 1000000   or   'Africa'   or   name	Ad es.  pop_est / 1000000   oppure   'Africa'   oppure   name
 e.g. continent = 'Europe'	ad es. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	ad es. pop_est > 100000000 AND continent = 'Asia'
@@ -171,6 +197,7 @@ Edit attributes in the table.	Modifica gli attributi nella tabella.
 Effects	Effetti
 Ember	Brace
 Encloses each feature, or all features, in its convex hull.	Racchiude ogni elemento, o tutti gli elementi, nel suo inviluppo convesso.
+Enhancement	Miglioramento
 Equal Interval	Intervallo uguale
 Erase	Cancella area
 Erase Features	Cancella area da elementi
@@ -181,12 +208,15 @@ Explore	Esplora
 Export	Esporta
 Export\nFeatures	Esporta\nelementi
 Export\nMap	Esporta\nmappa
+Export\nRaster	Esporta\nraster
 Export Features	Esporta elementi
 Export Features (tool)	Esporta elementi (strumento)
 Export Features…	Esporta elementi…
 Export Map	Esporta mappa
 Export Map failed unexpectedly	Esportazione mappa non riuscita inaspettatamente
 Export Map…	Esporta mappa…
+Export Raster	Esporta raster
+Export Raster…	Esporta raster…
 Export Table	Esporta tabella
 Export the layer.	Esporta il layer.
 Export the map view as a PNG image (with labels and a scale bar).	Esporta la vista della mappa come immagine PNG (con etichette e barra di scala).
@@ -216,6 +246,8 @@ Folders	Cartelle
 Forest	Foresta
 Full Extent	Estensione totale
 Full extent	Estensione totale
+Full size	Dimensione intera
+Gamma	Gamma
 Generalization	Generalizzazione
 Geo-\nprocessing	Geo-\nprocessing
 GeoJSON or CSV	GeoJSON o CSV
@@ -223,6 +255,7 @@ Geometry	Geometria
 Geoprocessing	Geoprocessing
 Geoprocessing history.	Cronologia del geoprocessing.
 Geoprocessing Pane	Pannello Geoprocessing
+GeoTIFF	GeoTIFF
 Go	Vai
 Go back to the previous extent.	Torna all'estensione precedente.
 Go forward to the next extent.	Vai all'estensione successiva.
@@ -231,17 +264,20 @@ Go To Bookmark	Vai al segnalibro
 Go To XY	Vai a XY
 Graduated Colors	Colori graduati
 Graticule	Reticolo
+Green	Verde
 Greys	Grigi
 Group Option	Opzione di raggruppamento
 Halo	Alone
 Harbour (qualitative)	Porto (qualitativa)
 Help	Aiuto
+Histogram Equalize	Equalizzazione istogramma
 History	Cronologia
 Home	Home
 Identify	Identifica
 Import\nProject	Importa\nprogetto
 In Beyond	Oltre (ingrandimento)
 In project	Nel progetto
+Information	Informazioni
 Input Features	Elementi di input
 Input Polygons	Poligoni di input
 Input Rows	Righe di input
@@ -252,6 +288,7 @@ Insert	Inserisci
 Interface font: {font}	Font dell'interfaccia: {font}
 Invalid: {error}	Non valida: {error}
 Invert	Inverti
+Invert color scheme	Inverti schema di colori
 Invert the selection.	Inverti la selezione.
 IS NULL	IS NULL
 keep current	mantieni attuale
@@ -276,6 +313,7 @@ Line color	Colore linea
 Line width	Spessore linea
 LineString	LineString
 List Commands	Elenca comandi
+Lit	Illuminato
 Locate	Localizza
 Location	Posizione
 Long	Intero lungo
@@ -289,6 +327,9 @@ Map	Mappa
 Map › Layer	Mappa › Layer
 Maps	Mappe
 Marker	Marcatore
+Max	Max
+Max %	Max %
+Mean	Media
 Measure	Misura
 Measure Area	Misura area
 Measure Distance	Misura distanza
@@ -298,16 +339,22 @@ Meters	Metri
 Method	Metodo
 Midnight	Mezzanotte
 Miles	Miglia
+Min	Min
+Min %	Min %
 Minimum Bounding Geometry	Geometria di delimitazione minima
+Minimum Maximum	Minimo Massimo
 Mod+	Mod+
 Mouse wheel	Rotellina del mouse
 Move Down	Sposta giù
 Move Up	Sposta su
 Name	Nome
 Natural Breaks (Jenks)	Interruzioni naturali (Jenks)
+Natural Color (1, 2, 3)	Colori naturali (1, 2, 3)
 Natural Earth	Natural Earth
 Navigate	Naviga
 Navigation	Navigazione
+Nearest Neighbor	Vicino più prossimo
+Needs three or more bands.	Richiede almeno tre bande.
 New	Nuovo
 New\nBookmark	Nuovo\nsegnalibro
 New\nMap	Nuova\nmappa
@@ -323,6 +370,7 @@ Next Extent	Estensione successiva
 No	No
 No bookmarks yet	Ancora nessun segnalibro
 No standalone tables	Nessuna tabella autonoma
+NoData	NoData
 None	Nessuno
 North	Nord
 Not saved yet	Non ancora salvato
@@ -356,6 +404,9 @@ Pan to a longitude/latitude.	Sposta la vista su una longitudine/latitudine.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Sposta la vista con il mouse, ingrandisci con la rotellina e fai clic sugli elementi per vederne gli attributi.
 Paper	Carta
 Parent folder	Cartella superiore
+Percent Clip	Ritaglio percentuale
+Pixel	Pixel
+Pixel type	Tipo di pixel
 PNG image	Immagine PNG
 Point	Punto
 Polygon	Poligono
@@ -371,6 +422,12 @@ Proportional Symbols	Simboli proporzionali
 Proximity	Prossimità
 Quantile	Quantile
 Quick Access Toolbar	Barra di accesso rapido
+Raster\nInformation	Informazioni\nraster
+Raster Data	Dati raster
+Raster Information	Informazioni raster
+Raster Layer	Layer raster
+Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} bande · {renderer}
+Red	Rosso
 Redo	Ripeti
 Redo the change you undid.	Ripeti la modifica annullata.
 Redo {action}	Ripeti {action}
@@ -386,6 +443,12 @@ Rename Layer	Rinomina layer
 Rename Map	Rinomina mappa
 Rename Project	Rinomina progetto
 Rename…	Rinomina…
+Rendering	Rendering
+Resampling	Ricampionamento
+Resampling Type	Tipo di ricampionamento
+Reset	Reimposta
+Reset brightness, contrast and gamma.	Reimposta luminosità, contrasto e gamma.
+RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Copertura funzioni della barra multifunzione: {done} di {total} funzioni ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Parità della barra multifunzione: {done} di {total} funzioni hanno un comando RustGIS.
 Run	Esegui
@@ -404,6 +467,7 @@ Save Project As	Salva progetto con nome
 Save the current extent as a bookmark.	Salva l'estensione corrente come segnalibro.
 Save the project under a new name.	Salva il progetto con un nuovo nome.
 Save the project with your edits.	Salva il progetto con le tue modifiche.
+Save the raster as a GeoTIFF.	Salva il raster come GeoTIFF.
 Scale 1:	Scala 1:
 Search commands — e.g. buffer, basemap, labels	Cerca comandi — ad es. buffer, mappa di base, etichette
 Search Distance (km)	Distanza di ricerca (km)
@@ -439,6 +503,8 @@ Selects features that intersect features in another layer.	Seleziona gli element
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Seleziona elementi con una clausola SQL where, ad es. pop_est > 1000000.
 Set Map Tool	Imposta strumento mappa
 Set Scale	Imposta scala
+Shaded	Ombreggiato
+Shaded Relief	Rilievo ombreggiato
 Shape	Forma
 Share	Condividi
 Share › Output	Condividi › Output
@@ -454,15 +520,22 @@ Show the Symbology pane for the selected layer.	Mostra il pannello Simbologia pe
 Simplify	Semplifica
 Single Symbol	Simbolo singolo
 Size	Dimensione
+Size, bands, statistics and coordinate system.	Dimensione, bande, statistiche e sistema di coordinate.
 Source	Origine
 South	Sud
 Square	Quadrato
 Standalone Tables	Tabelle autonome
+Standard Deviation	Deviazione standard
 Star	Stella
 Start	Inizio
 Statistics	Statistiche
 Statistics Field	Campo statistico
 Status Bar	Barra di stato
+Std. Dev.	Dev. std.
+Stretch	Stretch
+Stretch\nType	Tipo di\nstretch
+Stretch Type	Tipo di stretch
+Stretch type	Tipo di stretch
 Summarize	Riepiloga
 Summarize\nWithin	Riepiloga\nall'interno
 Summarize Within	Riepiloga all'interno
@@ -476,13 +549,18 @@ Symbol	Simbolo
 Symbol Color	Colore simbolo
 Symbology	Simbologia
 Symbology Pane	Pannello Simbologia
+Symbology Pane…	Pannello Simbologia…
 Table	Tabella
 Tables	Tabelle
+Terrain	Terreno
 Text	Testo
 Text Symbol	Simbolo di testo
 the map has no layers	la mappa non ha layer
+The raster's data couldn't be read.	Impossibile leggere i dati del raster.
+The raster's data couldn't be read: {path}	Impossibile leggere i dati del raster: {path}
 Thermal	Termico
 This map has no layers yet.	Questa mappa non ha ancora layer.
+Tint by elevation	Colora in base alla quota
 Toggle Dark Mode	Attiva/disattiva modalità scura
 Tolerance (km)	Tolleranza (km)
 Toolbox	Casella degli strumenti
@@ -503,7 +581,7 @@ Undo {action}	Annulla {action}
 Unique Values	Valori univoci
 Units	Unità
 Valid expression · {n} matching rows	Espressione valida · {n} righe corrispondenti
-Vector data	Dati vettoriali
+Vector and raster data	Dati vettoriali e raster
 Version {version}	Versione {version}
 View	Visualizza
 View › Windows	Visualizza › Finestre
@@ -521,6 +599,7 @@ World Atlas	Atlante mondiale
 World Atlas Sample	Esempio World Atlas
 World Countries	Paesi del mondo
 Yes	Sì
+Z factor	Fattore Z
 Zoom about the pointer	Zoom attorno al puntatore
 Zoom In	Ingrandisci
 Zoom in	Ingrandisci

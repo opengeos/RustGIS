@@ -138,11 +138,18 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
         "basemap": m.basemap.code(),
         "scale": m.camera.scale().round(),
         "center": {"lon": m.camera.center_lonlat().x, "lat": m.camera.center_lonlat().y},
-        "layers": m.layers.iter().map(|l| json!({
-            "id": l.id, "name": l.name, "type": l.geometry_type().label(), "features": l.dataset.features.len(),
-            "visible": l.visible, "renderer": l.renderer.kind_label(), "selected": l.selection.len(),
-            "fields": l.dataset.fields.iter().map(|f| format!("{} ({})", f.name, f.ty.label())).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
+        "layers": m.layers.iter().map(|l| match &l.raster {
+            Some(rl) => json!({
+                "id": l.id, "name": l.name, "type": "Raster", "visible": l.visible, "renderer": rl.style.renderer.label(),
+                "size": rl.data.as_ref().map(|d| json!([d.width, d.height, d.band_count()])),
+                "missing": rl.data.is_none(),
+            }),
+            None => json!({
+                "id": l.id, "name": l.name, "type": l.geometry_type().label(), "features": l.dataset.features.len(),
+                "visible": l.visible, "renderer": l.renderer.kind_label(), "selected": l.selection.len(),
+                "fields": l.dataset.fields.iter().map(|f| format!("{} ({})", f.name, f.ty.label())).collect::<Vec<_>>(),
+            }),
+        }).collect::<Vec<_>>(),
         "tables": s.project.tables.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
     }))
 }

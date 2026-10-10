@@ -14,6 +14,7 @@ Add a field to the selected layer.	向所选图层添加字段。
 Add a field.	添加字段。
 Add a new map to the project.	向工程添加新地图。
 Add Data	添加数据
+Add Data (from file contents)	添加数据（从文件内容）
 Add Data (from text)	添加数据（从文本）
 Add Data…	添加数据…
 Add Field	添加字段
@@ -26,6 +27,7 @@ Add vector data.	添加矢量数据。
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	将测地面积（km²）、长度（km）或质心坐标添加为字段。
 All	全部
 All files	所有文件
+Altitude	高度角
 Analysis	分析
 AND	AND
 Apply	应用
@@ -35,19 +37,28 @@ Attribute\nTable	属性\n表
 Attribute Table	属性表
 Attribute table	属性表
 Attributes	属性
+Aurora	极光
 Automatic	自动
 Automatic (system language)	自动（系统语言）
+Azimuth	方位角
 Back to Explore; cancel a sketch	返回浏览；取消草图
 Back to the map	返回地图
 Back to tools	返回工具
+Band	波段
+Band Combination	波段组合
+Band {n}	波段 {n}
+Bands	波段
 Basemap	底图
 Basemaps	底图
+Bilinear	双线性
 Blank	空白
+Blue	蓝
 Bold	粗体
 Bold label text.	标注文本加粗。
 Bookmarks	书签
 Boolean	布尔型
 Bounding\nGeometry	边界\n几何
+Brightness	亮度
 Browse the geoprocessing toolbox.	浏览地理处理工具箱。
 Browse the project's maps, tables and folders.	浏览工程中的地图、表和文件夹。
 Buffer	缓冲区
@@ -67,11 +78,17 @@ Cartography	制图
 Case Field	分组字段
 Catalog	目录
 Catalog\nPane	目录\n窗格
+Cell size	像元大小
 Change the map's backdrop.	更改地图的背景。
+Choose a band combination to display the raster layer.	选择用于显示栅格图层的波段组合。
+Choose a contrast stretch for the raster layer.	为栅格图层选择对比度拉伸。
+Choose a resampling type for the raster layer.	为栅格图层选择重采样类型。
 Choose how the layer is drawn.	选择图层的绘制方式。
+Choose how the raster is drawn.	选择栅格的绘制方式。
 Choose the interface language.	选择界面语言。
 Circle	圆形
 Classes	分类
+Classify	分类
 Clear	清除
 Clear\nLimits	清除\n限制
 Clear History	清除历史记录
@@ -95,14 +112,19 @@ Close table	关闭表
 Collapse or expand the ribbon	折叠或展开功能区
 Collapse the ribbon (Ctrl+F1)	折叠功能区 (Ctrl+F1)
 Color	颜色
+Color Infrared (4, 1, 2)	彩色红外 (4, 1, 2)
 Color Scheme	配色方案
 Color scheme	配色方案
+Colormap	色彩映射表
+Colors from the raster's own color table.	使用栅格自带颜色表中的颜色。
 Command\nSearch	命令\n搜索
 Command Search	命令搜索
 Completed	已完成
 Compute a field's values.	计算字段的值。
 Contents	内容
+Contrast	对比度
 Conversion	转换
+Coordinate system	坐标系
 Copies the (selected) features of a layer to a new layer.	将图层的（所选）要素复制到新图层。
 Copy Coordinates	复制坐标
 Couldn't download the font for {language}; pick the language again to retry.	无法下载 {language} 的字体；请重新选择该语言以重试。
@@ -143,6 +165,7 @@ Delete selected rows	删除所选行
 Delete the selected features.	删除所选要素。
 Details	详细信息
 Details of the selected layer.	所选图层的详细信息。
+Deviations	标准差倍数
 Diamond	菱形
 Display	显示
 Dissolve	融合
@@ -152,6 +175,7 @@ Double	双精度
 Double-click	双击
 Double-click to add	双击添加
 Downloaded {name}	已下载 {name}
+DRA	DRA
 Drag / middle-drag	拖动 / 中键拖动
 Drag a box or click to zoom in	拖动矩形框或单击以放大
 Drag a box to zoom into.	拖动矩形框进行放大。
@@ -161,6 +185,8 @@ Draw the layer at every scale.	在所有比例尺下绘制图层。
 Drawing	绘制
 Drawing Order	绘制顺序
 Dusk	黄昏
+Dynamic range adjustment (stretch the pixels in view)	动态范围调整（拉伸视图中的像素）
+Dynamic range adjustment: stretch using the pixels in view.	动态范围调整：使用视图中的像素进行拉伸。
 e.g.  pop_est / 1000000   or   'Africa'   or   name	例如  pop_est / 1000000   或   'Africa'   或   name
 e.g. continent = 'Europe'	例如 continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	例如 pop_est > 100000000 AND continent = 'Asia'
@@ -171,6 +197,7 @@ Edit attributes in the table.	在表中编辑属性。
 Effects	效果
 Ember	余烬
 Encloses each feature, or all features, in its convex hull.	用凸包包围每个要素或所有要素。
+Enhancement	增强
 Equal Interval	相等间隔
 Erase	擦除
 Erase Features	擦除要素
@@ -181,12 +208,15 @@ Explore	浏览
 Export	导出
 Export\nFeatures	导出\n要素
 Export\nMap	导出\n地图
+Export\nRaster	导出\n栅格
 Export Features	导出要素
 Export Features (tool)	导出要素（工具）
 Export Features…	导出要素…
 Export Map	导出地图
 Export Map failed unexpectedly	导出地图意外失败
 Export Map…	导出地图…
+Export Raster	导出栅格
+Export Raster…	导出栅格…
 Export Table	导出表
 Export the layer.	导出图层。
 Export the map view as a PNG image (with labels and a scale bar).	将地图视图导出为 PNG 图像（含标注和比例尺）。
@@ -216,6 +246,8 @@ Folders	文件夹
 Forest	森林
 Full Extent	全图
 Full extent	全图
+Full size	原始大小
+Gamma	伽马
 Generalization	综合
 Geo-\nprocessing	地理\n处理
 GeoJSON or CSV	GeoJSON 或 CSV
@@ -223,6 +255,7 @@ Geometry	几何
 Geoprocessing	地理处理
 Geoprocessing history.	地理处理历史记录。
 Geoprocessing Pane	地理处理窗格
+GeoTIFF	GeoTIFF
 Go	转到
 Go back to the previous extent.	返回上一个范围。
 Go forward to the next extent.	前进到下一个范围。
@@ -231,17 +264,20 @@ Go To Bookmark	转到书签
 Go To XY	转到 XY
 Graduated Colors	分级色彩
 Graticule	经纬网
+Green	绿
 Greys	灰度
 Group Option	分组选项
 Halo	晕圈
 Harbour (qualitative)	港湾（定性）
 Help	帮助
+Histogram Equalize	直方图均衡化
 History	历史记录
 Home	主页
 Identify	识别
 Import\nProject	导入\n工程
 In Beyond	放大超过
 In project	在工程中
+Information	信息
 Input Features	输入要素
 Input Polygons	输入多边形
 Input Rows	输入行
@@ -252,6 +288,7 @@ Insert	插入
 Interface font: {font}	界面字体：{font}
 Invalid: {error}	无效：{error}
 Invert	反转
+Invert color scheme	反转配色方案
 Invert the selection.	反转选择。
 IS NULL	IS NULL
 keep current	保持当前
@@ -276,6 +313,7 @@ Line color	线颜色
 Line width	线宽
 LineString	线串
 List Commands	列出命令
+Lit	亮面
 Locate	定位
 Location	位置
 Long	长整型
@@ -289,6 +327,9 @@ Map	地图
 Map › Layer	地图 › 图层
 Maps	地图
 Marker	标记
+Max	最大值
+Max %	最大 %
+Mean	平均值
 Measure	测量
 Measure Area	测量面积
 Measure Distance	测量距离
@@ -298,16 +339,22 @@ Meters	米
 Method	方法
 Midnight	午夜
 Miles	英里
+Min	最小值
+Min %	最小 %
 Minimum Bounding Geometry	最小边界几何
+Minimum Maximum	最小值-最大值
 Mod+	Mod+
 Mouse wheel	鼠标滚轮
 Move Down	下移
 Move Up	上移
 Name	名称
 Natural Breaks (Jenks)	自然间断点分级法（Jenks）
+Natural Color (1, 2, 3)	自然色 (1, 2, 3)
 Natural Earth	Natural Earth
 Navigate	导航
 Navigation	导航
+Nearest Neighbor	最邻近
+Needs three or more bands.	需要三个或更多波段。
 New	新建
 New\nBookmark	新建\n书签
 New\nMap	新建\n地图
@@ -323,6 +370,7 @@ Next Extent	下一个范围
 No	否
 No bookmarks yet	暂无书签
 No standalone tables	无独立表
+NoData	NoData
 None	无
 North	北
 Not saved yet	尚未保存
@@ -356,6 +404,9 @@ Pan to a longitude/latitude.	平移到某个经度/纬度。
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	用鼠标平移，用滚轮缩放，单击要素查看其属性。
 Paper	纸张
 Parent folder	上级文件夹
+Percent Clip	百分比截断
+Pixel	像素
+Pixel type	像素类型
 PNG image	PNG 图像
 Point	点
 Polygon	多边形
@@ -371,6 +422,12 @@ Proportional Symbols	比例符号
 Proximity	邻域
 Quantile	分位数
 Quick Access Toolbar	快速访问工具栏
+Raster\nInformation	栅格\n信息
+Raster Data	栅格数据
+Raster Information	栅格信息
+Raster Layer	栅格图层
+Raster · {w} × {h} · {n} bands · {renderer}	栅格 · {w} × {h} · {n} 个波段 · {renderer}
+Red	红
 Redo	重做
 Redo the change you undid.	重做已撤销的更改。
 Redo {action}	重做 {action}
@@ -386,6 +443,12 @@ Rename Layer	重命名图层
 Rename Map	重命名地图
 Rename Project	重命名工程
 Rename…	重命名…
+Rendering	渲染
+Resampling	重采样
+Resampling Type	重采样类型
+Reset	重置
+Reset brightness, contrast and gamma.	重置亮度、对比度和伽马。
+RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	功能区要素覆盖率：{total} 个要素中已完成 {done} 个（{pct}%）。
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	功能区对等：{total} 个功能区功能中有 {done} 个具有 RustGIS 命令。
 Run	运行
@@ -404,6 +467,7 @@ Save Project As	工程另存为
 Save the current extent as a bookmark.	将当前范围保存为书签。
 Save the project under a new name.	以新名称保存工程。
 Save the project with your edits.	保存包含编辑内容的工程。
+Save the raster as a GeoTIFF.	将栅格另存为 GeoTIFF。
 Scale 1:	比例尺 1:
 Search commands — e.g. buffer, basemap, labels	搜索命令，例如：缓冲区、底图、标注
 Search Distance (km)	搜索距离（km）
@@ -439,6 +503,8 @@ Selects features that intersect features in another layer.	选择与另一图层
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	使用 SQL where 子句选择要素，例如 pop_est > 1000000。
 Set Map Tool	设置地图工具
 Set Scale	设置比例尺
+Shaded	阴影
+Shaded Relief	晕渲地貌
 Shape	形状
 Share	共享
 Share › Output	共享 › 输出
@@ -454,15 +520,22 @@ Show the Symbology pane for the selected layer.	显示所选图层的符号系�
 Simplify	简化
 Single Symbol	单一符号
 Size	大小
+Size, bands, statistics and coordinate system.	大小、波段、统计和坐标系。
 Source	源
 South	南
 Square	正方形
 Standalone Tables	独立表
+Standard Deviation	标准差
 Star	星形
 Start	开始
 Statistics	统计
 Statistics Field	统计字段
 Status Bar	状态栏
+Std. Dev.	标准差
+Stretch	拉伸
+Stretch\nType	拉伸\n类型
+Stretch Type	拉伸类型
+Stretch type	拉伸类型
 Summarize	汇总
 Summarize\nWithin	范围内\n汇总
 Summarize Within	范围内汇总
@@ -476,13 +549,18 @@ Symbol	符号
 Symbol Color	符号颜色
 Symbology	符号系统
 Symbology Pane	符号系统窗格
+Symbology Pane…	符号系统窗格…
 Table	表
 Tables	表
+Terrain	地形
 Text	文本
 Text Symbol	文本符号
 the map has no layers	地图中没有图层
+The raster's data couldn't be read.	无法读取栅格数据。
+The raster's data couldn't be read: {path}	无法读取栅格数据：{path}
 Thermal	热力
 This map has no layers yet.	此地图中还没有图层。
+Tint by elevation	按高程着色
 Toggle Dark Mode	切换深色模式
 Tolerance (km)	容差（km）
 Toolbox	工具箱
@@ -503,7 +581,7 @@ Undo {action}	撤销 {action}
 Unique Values	唯一值
 Units	单位
 Valid expression · {n} matching rows	有效表达式 · {n} 个匹配行
-Vector data	矢量数据
+Vector and raster data	矢量和栅格数据
 Version {version}	版本 {version}
 View	视图
 View › Windows	视图 › 窗口
@@ -521,6 +599,7 @@ World Atlas	世界地图集
 World Atlas Sample	世界地图集示例
 World Countries	世界国家
 Yes	是
+Z factor	Z 因子
 Zoom about the pointer	围绕指针缩放
 Zoom In	放大
 Zoom in	放大

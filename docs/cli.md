@@ -8,6 +8,7 @@ rustgis-cli tools                     # geoprocessing tools
 rustgis-cli info data.geojson         # layer summary as JSON
 rustgis-cli render data.geojson map.png --basemap ocean --width 1600 --height 900
 rustgis-cli parity                    # ribbon feature coverage
+rustgis-cli logo icon.png --size 256  # the app icon as a PNG
 ```
 
 ## Chaining commands
@@ -22,6 +23,16 @@ rustgis-cli run --sample \
   --cmd 'bookmark.go={"name":"Europe"}' \
   --cmd 'share.exportMap={"path":"europe.png","dpi":192}' \
   --save atlas.rgisx
+```
+
+Rasters work the same way:
+
+```sh
+rustgis-cli render dem.tif relief.png
+rustgis-cli run --data dem.tif \
+  --cmd 'raster.symbology={"type":"shadedRelief","ramp":"Terrain","zFactor":1.5}' \
+  --cmd 'raster.info={}' \
+  --cmd 'share.exportMap={"path":"relief.png","dpi":192}'
 ```
 
 ![A map of Europe exported by rustgis-cli](https://assets.rustgis.app/images/cli-export.webp)

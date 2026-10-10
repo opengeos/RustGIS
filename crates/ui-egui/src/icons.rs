@@ -659,6 +659,92 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
         "point_layer" => p.circle(12.0, 12.0, 5.0, Some(accent), Some((1.2, ink))),
         "line_layer" => p.line(&[(3.0, 17.0), (9.0, 8.0), (15.0, 15.0), (21.0, 6.0)], 2.2, accent),
         "polygon_layer" => p.polygon_shape(&[(3.0, 8.0), (11.0, 3.0), (21.0, 7.0), (19.0, 20.0), (5.0, 19.0)], 180),
+        // A grid of cells shaded low to high.
+        "raster_layer" => {
+            for (i, a) in [40u8, 90, 150, 70, 130, 200, 110, 180, 240].into_iter().enumerate() {
+                let (x, y) = (4.0 + (i % 3) as f32 * 5.4, 4.0 + (i / 3) as f32 * 5.4);
+                p.rect(x, y, 5.4, 5.4, Some(teal.gamma_multiply(a as f32 / 255.0)), None, 0.0);
+            }
+            p.rect(4.0, 4.0, 16.2, 16.2, None, Some((1.2, ink)), 1.0);
+        }
+        // A smooth ramp.
+        "stretch" => {
+            for i in 0..8 {
+                p.rect(3.0 + i as f32 * 2.25, 6.0, 2.4, 12.0, Some(Color32::from_gray((20 + i * 32) as u8)), None, 0.0);
+            }
+            p.rect(3.0, 6.0, 18.0, 12.0, None, Some((1.2, ink)), 1.0);
+        }
+        "rgb" => {
+            p.circle(9.0, 9.5, 5.0, Some(red.gamma_multiply(0.75)), None);
+            p.circle(15.0, 9.5, 5.0, Some(green.gamma_multiply(0.75)), None);
+            p.circle(12.0, 14.5, 5.0, Some(Color32::from_rgb(0x2E, 0x6F, 0xD8).gamma_multiply(0.75)), None);
+        }
+        "classify" => {
+            for (i, a) in [0.25f32, 0.5, 0.75, 1.0].into_iter().enumerate() {
+                p.rect(3.0 + i as f32 * 4.6, 6.0, 4.6, 12.0, Some(amber.gamma_multiply(a)), None, 0.0);
+            }
+            p.rect(3.0, 6.0, 18.4, 12.0, None, Some((1.2, ink)), 1.0);
+        }
+        // A lit and a shaded mountain face.
+        "relief" => {
+            p.fill(&[(2.0, 20.0), (10.0, 6.0), (10.0, 20.0)], Color32::from_gray(225));
+            p.fill(&[(10.0, 6.0), (18.0, 20.0), (10.0, 20.0)], Color32::from_gray(110));
+            p.fill(&[(12.0, 20.0), (17.0, 11.0), (22.0, 20.0)], Color32::from_gray(160));
+            p.line(&[(2.0, 20.0), (10.0, 6.0), (14.0, 13.0), (17.0, 11.0), (22.0, 20.0)], 1.3, ink);
+            p.circle(19.0, 5.0, 2.2, Some(amber), None);
+        }
+        // A histogram with a view window.
+        "dra" => {
+            for (i, hgt) in [3.0f32, 7.0, 12.0, 9.0, 5.0, 2.0].into_iter().enumerate() {
+                p.rect(3.0 + i as f32 * 3.0, 19.0 - hgt, 2.4, hgt, Some(p.tint(150)), None, 0.0);
+            }
+            p.rect(6.0, 4.0, 9.0, 16.0, None, Some((1.4, ink)), 1.5);
+        }
+        "bands" => {
+            for (i, c) in [red, green, Color32::from_rgb(0x2E, 0x6F, 0xD8)].into_iter().enumerate() {
+                let o = i as f32 * 3.5;
+                p.rect(3.0 + o, 3.0 + o, 11.0, 11.0, Some(c.gamma_multiply(0.85)), Some((1.0, ink)), 1.5);
+            }
+        }
+        "resample" => {
+            for i in 0..4 {
+                p.line(&[(4.0 + i as f32 * 5.3, 4.0), (4.0 + i as f32 * 5.3, 20.0)], 1.0, ink.gamma_multiply(0.5));
+                p.line(&[(4.0, 4.0 + i as f32 * 5.3), (20.0, 4.0 + i as f32 * 5.3)], 1.0, ink.gamma_multiply(0.5));
+            }
+            p.circle(12.0, 12.0, 3.5, Some(accent), Some((1.2, ink)));
+        }
+        "brightness" => {
+            p.circle(12.0, 12.0, 4.0, Some(amber), Some((1.2, ink)));
+            for i in 0..8 {
+                let a = (i as f32 * 45.0).to_radians();
+                p.line(&[(12.0 + 6.5 * a.cos(), 12.0 + 6.5 * a.sin()), (12.0 + 9.0 * a.cos(), 12.0 + 9.0 * a.sin())], 1.5, ink);
+            }
+        }
+        "contrast" => {
+            p.circle(12.0, 12.0, 8.5, Some(Color32::WHITE), Some((1.3, ink)));
+            p.fill(
+                &(0..=12)
+                    .map(|i| {
+                        let a = (-90.0 + i as f32 * 15.0).to_radians();
+                        (12.0 + 8.5 * a.cos(), 12.0 + 8.5 * a.sin())
+                    })
+                    .collect::<Vec<_>>(),
+                ink,
+            );
+        }
+        "gamma" => {
+            p.line(
+                &(0..=12)
+                    .map(|i| {
+                        let t = i as f32 / 12.0;
+                        (4.0 + 16.0 * t, 20.0 - 16.0 * t.powf(0.5))
+                    })
+                    .collect::<Vec<_>>(),
+                2.0,
+                accent,
+            );
+            p.line(&[(4.0, 4.0), (4.0, 20.0), (20.0, 20.0)], 1.2, ink);
+        }
         _ => {
             p.rect(4.0, 4.0, 16.0, 16.0, Some(p.tint(60)), Some((1.2, ink)), 3.0);
         }
@@ -768,4 +854,15 @@ pub const ALL: &[&str] = &[
     "point_layer",
     "line_layer",
     "polygon_layer",
+    "raster_layer",
+    "stretch",
+    "rgb",
+    "classify",
+    "relief",
+    "dra",
+    "bands",
+    "resample",
+    "brightness",
+    "contrast",
+    "gamma",
 ];

@@ -14,6 +14,7 @@ Add a field to the selected layer.	Een veld toevoegen aan de geselecteerde laag.
 Add a field.	Een veld toevoegen.
 Add a new map to the project.	Een nieuwe kaart aan het project toevoegen.
 Add Data	Gegevens toevoegen
+Add Data (from file contents)	Gegevens toevoegen (uit bestandsinhoud)
 Add Data (from text)	Gegevens toevoegen (uit tekst)
 Add Data…	Gegevens toevoegen…
 Add Field	Veld toevoegen
@@ -26,6 +27,7 @@ Add vector data.	Vectorgegevens toevoegen.
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Voegt geodetische oppervlakte (km²), lengte (km) of zwaartepuntcoördinaten toe als velden.
 All	Alle
 All files	Alle bestanden
+Altitude	Hoogte
 Analysis	Analyse
 AND	AND
 Apply	Toepassen
@@ -35,19 +37,28 @@ Attribute\nTable	Attributen-\ntabel
 Attribute Table	Attributentabel
 Attribute table	Attributentabel
 Attributes	Attributen
+Aurora	Aurora
 Automatic	Automatisch
 Automatic (system language)	Automatisch (systeemtaal)
+Azimuth	Azimut
 Back to Explore; cancel a sketch	Terug naar Verkennen; schets annuleren
 Back to the map	Terug naar de kaart
 Back to tools	Terug naar gereedschappen
+Band	Band
+Band Combination	Bandcombinatie
+Band {n}	Band {n}
+Bands	Banden
 Basemap	Basiskaart
 Basemaps	Basiskaarten
+Bilinear	Bilineair
 Blank	Leeg
+Blue	Blauw
 Bold	Vet
 Bold label text.	Labeltekst vet.
 Bookmarks	Bladwijzers
 Boolean	Booleaans
 Bounding\nGeometry	Begrenzende\ngeometrie
+Brightness	Helderheid
 Browse the geoprocessing toolbox.	Door de geoverwerkingsgereedschappen bladeren.
 Browse the project's maps, tables and folders.	Door de kaarten, tabellen en mappen van het project bladeren.
 Buffer	Buffer
@@ -67,11 +78,17 @@ Cartography	Cartografie
 Case Field	Groeperingsveld
 Catalog	Catalogus
 Catalog\nPane	Catalogus-\nvenster
+Cell size	Celgrootte
 Change the map's backdrop.	De achtergrond van de kaart wijzigen.
+Choose a band combination to display the raster layer.	Kies een bandcombinatie om de rasterlaag weer te geven.
+Choose a contrast stretch for the raster layer.	Kies een contraststretch voor de rasterlaag.
+Choose a resampling type for the raster layer.	Kies een resamplingtype voor de rasterlaag.
 Choose how the layer is drawn.	Kiezen hoe de laag wordt getekend.
+Choose how the raster is drawn.	Kies hoe het raster wordt getekend.
 Choose the interface language.	De interfacetaal kiezen.
 Circle	Cirkel
 Classes	Klassen
+Classify	Classificeren
 Clear	Wissen
 Clear\nLimits	Limieten\nwissen
 Clear History	Geschiedenis wissen
@@ -95,14 +112,19 @@ Close table	Tabel sluiten
 Collapse or expand the ribbon	Lint samenvouwen of uitvouwen
 Collapse the ribbon (Ctrl+F1)	Lint samenvouwen (Ctrl+F1)
 Color	Kleur
+Color Infrared (4, 1, 2)	Kleur-infrarood (4, 1, 2)
 Color Scheme	Kleurenschema
 Color scheme	Kleurenschema
+Colormap	Kleurenkaart
+Colors from the raster's own color table.	Kleuren uit de eigen kleurentabel van het raster.
 Command\nSearch	Opdracht\nzoeken
 Command Search	Opdracht zoeken
 Completed	Voltooid
 Compute a field's values.	De waarden van een veld berekenen.
 Contents	Inhoud
+Contrast	Contrast
 Conversion	Conversie
+Coordinate system	Coördinatensysteem
 Copies the (selected) features of a layer to a new layer.	Kopieert de (geselecteerde) objecten van een laag naar een nieuwe laag.
 Copy Coordinates	Coördinaten kopiëren
 Couldn't download the font for {language}; pick the language again to retry.	Kan het lettertype voor {language} niet downloaden; kies de taal opnieuw om het nog eens te proberen.
@@ -143,6 +165,7 @@ Delete selected rows	Geselecteerde rijen verwijderen
 Delete the selected features.	De geselecteerde objecten verwijderen.
 Details	Details
 Details of the selected layer.	Details van de geselecteerde laag.
+Deviations	Afwijkingen
 Diamond	Ruit
 Display	Weergave
 Dissolve	Samenvoegen
@@ -152,6 +175,7 @@ Double	Decimaal getal
 Double-click	Dubbelklik
 Double-click to add	Dubbelklik om toe te voegen
 Downloaded {name}	{name} gedownload
+DRA	DRA
 Drag / middle-drag	Slepen / slepen met middelste knop
 Drag a box or click to zoom in	Sleep een kader of klik om in te zoomen
 Drag a box to zoom into.	Sleep een kader om op in te zoomen.
@@ -161,6 +185,8 @@ Draw the layer at every scale.	De laag op elke schaal tekenen.
 Drawing	Tekenen
 Drawing Order	Tekenvolgorde
 Dusk	Schemering
+Dynamic range adjustment (stretch the pixels in view)	Dynamische bereikaanpassing (pixels in beeld stretchen)
+Dynamic range adjustment: stretch using the pixels in view.	Dynamische bereikaanpassing: stretchen met de pixels in beeld.
 e.g.  pop_est / 1000000   or   'Africa'   or   name	Bijv.  pop_est / 1000000   of   'Africa'   of   name
 e.g. continent = 'Europe'	bijv. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	bijv. pop_est > 100000000 AND continent = 'Asia'
@@ -171,6 +197,7 @@ Edit attributes in the table.	Attributen in de tabel bewerken.
 Effects	Effecten
 Ember	Gloed
 Encloses each feature, or all features, in its convex hull.	Omsluit elk object, of alle objecten, met de convexe omhulling.
+Enhancement	Verbetering
 Equal Interval	Gelijke interval
 Erase	Uitwissen
 Erase Features	Objecten uitwissen
@@ -181,12 +208,15 @@ Explore	Verkennen
 Export	Exporteren
 Export\nFeatures	Objecten\nexporteren
 Export\nMap	Kaart\nexporteren
+Export\nRaster	Raster\nexporteren
 Export Features	Objecten exporteren
 Export Features (tool)	Objecten exporteren (gereedschap)
 Export Features…	Objecten exporteren…
 Export Map	Kaart exporteren
 Export Map failed unexpectedly	Kaart exporteren onverwacht mislukt
 Export Map…	Kaart exporteren…
+Export Raster	Raster exporteren
+Export Raster…	Raster exporteren…
 Export Table	Tabel exporteren
 Export the layer.	De laag exporteren.
 Export the map view as a PNG image (with labels and a scale bar).	De kaartweergave exporteren als PNG-afbeelding (met labels en schaalbalk).
@@ -216,6 +246,8 @@ Folders	Mappen
 Forest	Bos
 Full Extent	Volledig bereik
 Full extent	Volledig bereik
+Full size	Volledige grootte
+Gamma	Gamma
 Generalization	Generalisatie
 Geo-\nprocessing	Geo-\nverwerking
 GeoJSON or CSV	GeoJSON of CSV
@@ -223,6 +255,7 @@ Geometry	Geometrie
 Geoprocessing	Geoverwerking
 Geoprocessing history.	Geschiedenis van geoverwerking.
 Geoprocessing Pane	Geoverwerkingsvenster
+GeoTIFF	GeoTIFF
 Go	Ga
 Go back to the previous extent.	Terug naar het vorige bereik.
 Go forward to the next extent.	Verder naar het volgende bereik.
@@ -231,17 +264,20 @@ Go To Bookmark	Naar bladwijzer gaan
 Go To XY	Ga naar XY
 Graduated Colors	Gegradueerde kleuren
 Graticule	Graticule
+Green	Groen
 Greys	Grijzen
 Group Option	Groeperingsoptie
 Halo	Halo
 Harbour (qualitative)	Haven (kwalitatief)
 Help	Help
+Histogram Equalize	Histogram egaliseren
 History	Geschiedenis
 Home	Home
 Identify	Identificeren
 Import\nProject	Project\nimporteren
 In Beyond	Ingezoomd voorbij
 In project	In project
+Information	Informatie
 Input Features	Invoerobjecten
 Input Polygons	Invoerpolygonen
 Input Rows	Invoerrijen
@@ -252,6 +288,7 @@ Insert	Invoegen
 Interface font: {font}	Interfacelettertype: {font}
 Invalid: {error}	Ongeldig: {error}
 Invert	Omkeren
+Invert color scheme	Kleurenschema omkeren
 Invert the selection.	De selectie omkeren.
 IS NULL	IS NULL
 keep current	huidige behouden
@@ -276,6 +313,7 @@ Line color	Lijnkleur
 Line width	Lijndikte
 LineString	LineString
 List Commands	Opdrachten weergeven
+Lit	Belicht
 Locate	Lokaliseren
 Location	Locatie
 Long	Lang geheel getal
@@ -289,6 +327,9 @@ Map	Kaart
 Map › Layer	Kaart › Laag
 Maps	Kaarten
 Marker	Markering
+Max	Max
+Max %	Max %
+Mean	Gemiddelde
 Measure	Meten
 Measure Area	Oppervlakte meten
 Measure Distance	Afstand meten
@@ -298,16 +339,22 @@ Meters	Meter
 Method	Methode
 Midnight	Middernacht
 Miles	Mijl
+Min	Min
+Min %	Min %
 Minimum Bounding Geometry	Minimale begrenzende geometrie
+Minimum Maximum	Minimum maximum
 Mod+	Mod+
 Mouse wheel	Muiswiel
 Move Down	Omlaag
 Move Up	Omhoog
 Name	Naam
 Natural Breaks (Jenks)	Natuurlijke grenzen (Jenks)
+Natural Color (1, 2, 3)	Natuurlijke kleuren (1, 2, 3)
 Natural Earth	Natural Earth
 Navigate	Navigeren
 Navigation	Navigatie
+Nearest Neighbor	Dichtstbijzijnde buur
+Needs three or more bands.	Vereist drie of meer banden.
 New	Nieuw
 New\nBookmark	Nieuwe\nbladwijzer
 New\nMap	Nieuwe\nkaart
@@ -323,6 +370,7 @@ Next Extent	Volgend bereik
 No	Nee
 No bookmarks yet	Nog geen bladwijzers
 No standalone tables	Geen zelfstandige tabellen
+NoData	NoData
 None	Geen
 North	Noord
 Not saved yet	Nog niet opgeslagen
@@ -356,6 +404,9 @@ Pan to a longitude/latitude.	Pannen naar een lengte-/breedtegraad.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Pan met de muis, zoom met het wiel en klik op objecten om hun attributen te zien.
 Paper	Papier
 Parent folder	Bovenliggende map
+Percent Clip	Percentage afkappen
+Pixel	Pixel
+Pixel type	Pixeltype
 PNG image	PNG-afbeelding
 Point	Punt
 Polygon	Polygoon
@@ -371,6 +422,12 @@ Proportional Symbols	Proportionele symbolen
 Proximity	Nabijheid
 Quantile	Kwantiel
 Quick Access Toolbar	Werkbalk Snelle toegang
+Raster\nInformation	Raster-\ninformatie
+Raster Data	Rastergegevens
+Raster Information	Rasterinformatie
+Raster Layer	Rasterlaag
+Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} banden · {renderer}
+Red	Rood
 Redo	Opnieuw
 Redo the change you undid.	De ongedaan gemaakte wijziging opnieuw uitvoeren.
 Redo {action}	{action} opnieuw
@@ -386,6 +443,12 @@ Rename Layer	Laag hernoemen
 Rename Map	Kaart hernoemen
 Rename Project	Project hernoemen
 Rename…	Hernoemen…
+Rendering	Weergave
+Resampling	Resampling
+Resampling Type	Resamplingtype
+Reset	Herstellen
+Reset brightness, contrast and gamma.	Helderheid, contrast en gamma herstellen.
+RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Dekking lintfuncties: {done} van {total} functies ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Lintpariteit: {done} van {total} lintfuncties hebben een RustGIS-opdracht.
 Run	Uitvoeren
@@ -404,6 +467,7 @@ Save Project As	Project opslaan als
 Save the current extent as a bookmark.	Het huidige bereik opslaan als bladwijzer.
 Save the project under a new name.	Het project onder een nieuwe naam opslaan.
 Save the project with your edits.	Het project met je bewerkingen opslaan.
+Save the raster as a GeoTIFF.	Het raster opslaan als GeoTIFF.
 Scale 1:	Schaal 1:
 Search commands — e.g. buffer, basemap, labels	Opdrachten zoeken — bijv. buffer, basiskaart, labels
 Search Distance (km)	Zoekafstand (km)
@@ -439,6 +503,8 @@ Selects features that intersect features in another layer.	Selecteert objecten d
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Selecteert objecten met een SQL-where-clausule, bijv. pop_est > 1000000.
 Set Map Tool	Kaartgereedschap instellen
 Set Scale	Schaal instellen
+Shaded	Schaduw
+Shaded Relief	Schaduwreliëf
 Shape	Vorm
 Share	Delen
 Share › Output	Delen › Uitvoer
@@ -454,15 +520,22 @@ Show the Symbology pane for the selected layer.	Het symbologievenster voor de ge
 Simplify	Vereenvoudigen
 Single Symbol	Enkel symbool
 Size	Grootte
+Size, bands, statistics and coordinate system.	Grootte, banden, statistieken en coördinatensysteem.
 Source	Bron
 South	Zuid
 Square	Vierkant
 Standalone Tables	Zelfstandige tabellen
+Standard Deviation	Standaardafwijking
 Star	Ster
 Start	Start
 Statistics	Statistieken
 Statistics Field	Statistiekveld
 Status Bar	Statusbalk
+Std. Dev.	Std.afw.
+Stretch	Stretch
+Stretch\nType	Stretch-\ntype
+Stretch Type	Stretchtype
+Stretch type	Stretchtype
 Summarize	Samenvatten
 Summarize\nWithin	Samenvatten\nbinnen
 Summarize Within	Samenvatten binnen
@@ -476,13 +549,18 @@ Symbol	Symbool
 Symbol Color	Symboolkleur
 Symbology	Symbologie
 Symbology Pane	Symbologievenster
+Symbology Pane…	Symbologievenster…
 Table	Tabel
 Tables	Tabellen
+Terrain	Terrein
 Text	Tekst
 Text Symbol	Tekstsymbool
 the map has no layers	de kaart heeft geen lagen
+The raster's data couldn't be read.	De rastergegevens konden niet worden gelezen.
+The raster's data couldn't be read: {path}	De rastergegevens konden niet worden gelezen: {path}
 Thermal	Thermisch
 This map has no layers yet.	Deze kaart heeft nog geen lagen.
+Tint by elevation	Kleuren op hoogte
 Toggle Dark Mode	Donkere modus aan/uit
 Tolerance (km)	Tolerantie (km)
 Toolbox	Gereedschapskist
@@ -503,7 +581,7 @@ Undo {action}	{action} ongedaan maken
 Unique Values	Unieke waarden
 Units	Eenheden
 Valid expression · {n} matching rows	Geldige expressie · {n} overeenkomende rijen
-Vector data	Vectorgegevens
+Vector and raster data	Vector- en rastergegevens
 Version {version}	Versie {version}
 View	Beeld
 View › Windows	Beeld › Vensters
@@ -521,6 +599,7 @@ World Atlas	Wereldatlas
 World Atlas Sample	Voorbeeld Wereldatlas
 World Countries	Landen van de wereld
 Yes	Ja
+Z factor	Z-factor
 Zoom about the pointer	Zoomen rond de aanwijzer
 Zoom In	Inzoomen
 Zoom in	Inzoomen

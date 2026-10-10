@@ -230,11 +230,16 @@ impl RustGisApp {
         }
     }
 
-    /// Opens a file by name and contents: a `.rgisx` project, or vector data.
+    /// Opens a file by name and contents: a `.rgisx` project, a raster, or vector data.
     /// Failures are reported to the user (command errors through `Session::run`, others here).
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
+        if rustgis_engine::data::raster::is_raster_name(name) {
+            use base64::Engine;
+            let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+            return self.run("layer.addDataBytes", json!({"fileName": name, "data": data}));
+        }
         let Ok(text) = std::str::from_utf8(bytes) else {
-            let e = crate::i18n::fmt("{name} is not a text file: RustGIS opens GeoJSON, CSV and .rgisx here", &[("name", name)]);
+            let e = crate::i18n::fmt("{name} is not a text file: RustGIS opens GeoJSON, CSV, GeoTIFF and .rgisx here", &[("name", name)]);
             self.session.notify(e.clone(), true);
             return Err(e);
         };
@@ -348,7 +353,9 @@ impl RustGisApp {
             "ui.addData" => {
                 if let Some(open) = &self.services.open_async {
                     open("data");
-                } else if let Some(path) = dialogs::pick_open(&["geojson", "json", "csv", "shp"], tl!("Vector data")) {
+                } else if let Some(path) =
+                    dialogs::pick_open(&["geojson", "json", "csv", "shp", "tif", "tiff", "asc"], tl!("Vector and raster data"))
+                {
                     return self.run("layer.addData", json!({"path": path}));
                 }
             }
@@ -407,6 +414,15 @@ impl RustGisApp {
                 let text = rustgis_engine::data::io::to_geojson(&l.dataset).to_string();
                 let name = format!("{}.geojson", l.name);
                 self.download(&name, text.into_bytes());
+            }
+            "ui.exportRaster" => {
+                let (name, bytes) = rustgis_engine::cmd::raster::geotiff_bytes(&self.session, &Value::Null)?;
+                let file = format!("{name}.tif");
+                if !self.download(&file, bytes)
+                    && let Some(path) = dialogs::pick_save(&file, &["tif", "tiff"], tl!("GeoTIFF"))
+                {
+                    return self.run("share.exportRaster", json!({"path": path}));
+                }
             }
             "ui.exportMap" => {
                 let name = format!("{}.png", self.session.map().name);

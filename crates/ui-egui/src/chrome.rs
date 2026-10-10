@@ -56,16 +56,15 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                     Value::Null,
                     false,
                 );
+                // Everything right of the Quick Access Toolbar is laid out by measuring, so on a
+                // narrow window the search box shrinks to an icon and the title shortens or hides
+                // instead of overlapping other controls.
+                let qat_end = ui.cursor().min.x + 8.0;
                 // Contextual tab group caption, centred over its tabs.
                 let mut band_x: Option<(f32, f32)> = None;
-                if crate::ribbon::contextual(app) {
-                    let rects: Vec<Rect> = app
-                        .ui
-                        .tab_rects
-                        .iter()
-                        .filter(|(n, _)| crate::ribbon::CONTEXT_TABS.contains(&n.as_str()))
-                        .map(|(_, r)| *r)
-                        .collect();
+                if let Some((caption, _)) = crate::ribbon::context(app) {
+                    let rects: Vec<Rect> =
+                        app.ui.tab_rects.iter().filter(|(n, _)| crate::ribbon::is_context_tab(n)).map(|(_, r)| *r).collect();
                     if let (Some(a), Some(b)) = (rects.first(), rects.last()) {
                         let band = Rect::from_min_max(pos2(a.min.x, full.max.y - 20.0), pos2(b.max.x, full.max.y));
                         ui.painter().rect_filled(band, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.context_tint);
@@ -77,53 +76,83 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                         ui.painter().text(
                             pos2(band.center().x, band.center().y + 1.5),
                             Align2::CENTER_CENTER,
-                            tl!(crate::ribbon::CONTEXT_GROUP),
+                            tl!(caption),
                             semibold(11.0),
                             t.context,
                         );
                         band_x = Some((band.min.x, band.max.x));
                     }
                 }
-                // Title in the middle.
+                // Command search on the right: full width when there is room, a round icon button
+                // otherwise. It never reaches into the contextual caption or the toolbar.
+                let label = tl!("Command Search");
+                let hint = if cfg!(target_os = "macos") { "⌘K" } else { "Ctrl+K" };
+                let right = full.max.x;
+                let blocked = band_x.map(|(_, b)| b + 12.0).unwrap_or(qat_end).max(qat_end);
+                let room = right - blocked;
+                let full_w = (text_w(ui, label, regular(12.0)) + text_w(ui, hint, regular(11.0)) + 70.0).clamp(200.0, 260.0);
+                // Room kept for the title next to the search box, unless it fits left of the
+                // contextual caption.
+                let title_guess = text_w(ui, &app.session.project.name, semibold(12.5)) + 16.0;
+                let reserve = match band_x {
+                    Some((a, _)) if a - 16.0 - (qat_end + 8.0) >= title_guess => 0.0,
+                    _ => title_guess.min(160.0),
+                };
+                let sw = if room >= full_w + reserve + 24.0 {
+                    full_w
+                } else if room >= 150.0 + reserve {
+                    (room - reserve).clamp(150.0, full_w)
+                } else {
+                    26.0
+                };
+                let sr = Rect::from_min_max(pos2(right - sw, full.center().y - 12.0), pos2(right, full.center().y + 12.0));
+                let resp = ui.interact(sr, egui::Id::new("command_search_box"), Sense::click());
+                ui.painter().rect_filled(sr, CornerRadius::same(12), if resp.hovered() { t.hover } else { t.input });
+                ui.painter().rect_stroke(sr, CornerRadius::same(12), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                let compact = sw < 100.0;
+                let icon_x = if compact { sr.center().x } else { sr.min.x + 16.0 };
+                icons::paint(
+                    ui.painter(),
+                    Rect::from_center_size(pos2(icon_x, sr.center().y), vec2(14.0, 14.0)),
+                    "search",
+                    t.text_dim,
+                    t.accent,
+                );
+                if !compact {
+                    let show_hint = sw >= full_w - 1.0;
+                    let text_room = sr.width() - 40.0 - if show_hint { text_w(ui, hint, regular(11.0)) + 12.0 } else { 0.0 };
+                    if text_w(ui, label, regular(12.0)) <= text_room {
+                        ui.painter().text(pos2(sr.min.x + 30.0, sr.center().y), Align2::LEFT_CENTER, label, regular(12.0), t.text_dim);
+                    }
+                    if show_hint {
+                        ui.painter().text(pos2(sr.max.x - 12.0, sr.center().y), Align2::RIGHT_CENTER, hint, regular(11.0), t.text_disabled);
+                    }
+                }
+                let resp = if compact { resp.on_hover_text(format!("{label} ({hint})")) } else { resp };
+                if resp.clicked() {
+                    app.ui.command_search = Some(String::new());
+                }
+                // Title: centred when it fits, otherwise in the widest free gap; the map name and
+                // then the project name drop out when there is no room.
                 let title = format!("{}{}", app.session.project.name, if app.session.dirty { " •" } else { "" });
                 let sub = format!("  —  {}", app.session.map().name);
-                let tw = text_w(ui, &title, semibold(12.5)) + text_w(ui, &sub, regular(12.0));
-                let mut cx = full.center().x - tw / 2.0;
-                // Keep clear of the contextual caption.
-                if let Some((a, b)) = band_x
-                    && cx < b + 16.0
-                    && cx + tw > a - 16.0
-                {
-                    cx = b + 24.0;
+                let (title_w, sub_w) = (text_w(ui, &title, semibold(12.5)), text_w(ui, &sub, regular(12.0)));
+                let mut gaps = vec![(qat_end + 8.0, sr.min.x - 16.0)];
+                if let Some((a, b)) = band_x {
+                    gaps = vec![(qat_end + 8.0, a - 16.0), (b + 16.0, sr.min.x - 16.0)];
                 }
-                ui.painter().text(pos2(cx, full.center().y), Align2::LEFT_CENTER, &title, semibold(12.5), t.text);
-                ui.painter().text(
-                    pos2(cx + text_w(ui, &title, semibold(12.5)), full.center().y),
-                    Align2::LEFT_CENTER,
-                    &sub,
-                    regular(12.0),
-                    t.text_dim,
-                );
-                // Command search box on the right.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = tl!("Command Search");
-                    let hint = if cfg!(target_os = "macos") { "⌘K" } else { "Ctrl+K" };
-                    let (r, resp) = ui.allocate_exact_size(vec2(260.0, 24.0), Sense::click());
-                    ui.painter().rect_filled(r, CornerRadius::same(12), if resp.hovered() { t.hover } else { t.input });
-                    ui.painter().rect_stroke(r, CornerRadius::same(12), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-                    icons::paint(
-                        ui.painter(),
-                        Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(14.0, 14.0)),
-                        "search",
-                        t.text_dim,
-                        t.accent,
-                    );
-                    ui.painter().text(pos2(r.min.x + 30.0, r.center().y), Align2::LEFT_CENTER, label, regular(12.0), t.text_dim);
-                    ui.painter().text(pos2(r.max.x - 12.0, r.center().y), Align2::RIGHT_CENTER, hint, regular(11.0), t.text_disabled);
-                    if resp.clicked() {
-                        app.ui.command_search = Some(String::new());
+                let best = gaps.iter().copied().filter(|(a, b)| b > a).max_by(|x, y| (x.1 - x.0).total_cmp(&(y.1 - y.0)));
+                if let Some((a, b)) = best {
+                    let with_sub = title_w + sub_w <= b - a;
+                    let tw = if with_sub { title_w + sub_w } else { title_w };
+                    if tw <= b - a {
+                        let cx = (full.center().x - tw / 2.0).clamp(a, b - tw);
+                        ui.painter().text(pos2(cx, full.center().y), Align2::LEFT_CENTER, &title, semibold(12.5), t.text);
+                        if with_sub {
+                            ui.painter().text(pos2(cx + title_w, full.center().y), Align2::LEFT_CENTER, &sub, regular(12.0), t.text_dim);
+                        }
                     }
-                });
+                }
             });
         });
 }

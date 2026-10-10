@@ -553,8 +553,11 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     let info = pp.info.clone();
     let layer = info["layer"].as_str().unwrap_or("").to_string();
     let attrs = info["attributes"].as_object().cloned().unwrap_or_default();
-    let title =
-        attrs.iter().find(|(k, _)| k.to_lowercase().contains("name")).and_then(|(_, v)| v.as_str()).unwrap_or(tl!("Feature")).to_string();
+    let title = if info["raster"].as_bool() == Some(true) {
+        tl!("Pixel").to_string()
+    } else {
+        attrs.iter().find(|(k, _)| k.to_lowercase().contains("name")).and_then(|(_, v)| v.as_str()).unwrap_or(tl!("Feature")).to_string()
+    };
     let p = ui.painter();
     p.circle_filled(anchor, 6.0, Color32::from_rgb(0x00, 0xE5, 0xFF).gamma_multiply(0.5));
     p.circle_stroke(anchor, 6.0, Stroke::new(2.0, Color32::from_rgb(0x00, 0xA8, 0xC0)));

@@ -60,6 +60,12 @@ impl Project {
         for m in &mut self.maps {
             m.camera.clamp();
             for l in &mut m.layers {
+                if let Some(rl) = &mut l.raster
+                    && rl.data.is_none()
+                    && let Err(e) = rl.reload()
+                {
+                    log::warn!("{}: {e}", l.name);
+                }
                 let n = l.dataset.features.len();
                 l.selection.retain(|r| *r < n);
                 let fields = l.dataset.fields.len();

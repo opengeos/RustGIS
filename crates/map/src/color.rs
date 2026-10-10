@@ -72,11 +72,25 @@ pub enum Ramp {
     Diverging,
     Greys,
     Harbour,
+    /// Lowland green through tan to snow, for elevation.
+    Terrain,
+    /// Deep indigo through teal to bright yellow, perceptually even.
+    Aurora,
 }
 
 impl Ramp {
-    pub const ALL: [Ramp; 8] =
-        [Ramp::Ember, Ramp::Lagoon, Ramp::Forest, Ramp::Dusk, Ramp::Thermal, Ramp::Diverging, Ramp::Greys, Ramp::Harbour];
+    pub const ALL: [Ramp; 10] = [
+        Ramp::Ember,
+        Ramp::Lagoon,
+        Ramp::Forest,
+        Ramp::Dusk,
+        Ramp::Thermal,
+        Ramp::Diverging,
+        Ramp::Greys,
+        Ramp::Terrain,
+        Ramp::Aurora,
+        Ramp::Harbour,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -88,6 +102,8 @@ impl Ramp {
             Ramp::Diverging => "Red–Blue",
             Ramp::Greys => "Greys",
             Ramp::Harbour => "Harbour (qualitative)",
+            Ramp::Terrain => "Terrain",
+            Ramp::Aurora => "Aurora",
         }
     }
 
@@ -104,6 +120,12 @@ impl Ramp {
             Ramp::Thermal => &[[0x2C, 0x3E, 0x8C], [0x2E, 0x9F, 0xC0], [0xA8, 0xDA, 0x6A], [0xF9, 0xC7, 0x3A], [0xD8, 0x3A, 0x2A]],
             Ramp::Diverging => &[[0xB2, 0x2B, 0x35], [0xEE, 0x9A, 0x80], [0xF5, 0xF2, 0xEF], [0x8A, 0xB8, 0xDB], [0x2A, 0x5C, 0x9C]],
             Ramp::Greys => &[[0xF4, 0xF4, 0xF4], [0xC4, 0xC4, 0xC4], [0x8E, 0x8E, 0x8E], [0x55, 0x55, 0x55], [0x22, 0x22, 0x22]],
+            Ramp::Terrain => {
+                &[[0x2E, 0x7D, 0x4F], [0x8F, 0xBF, 0x6A], [0xE8, 0xD9, 0x8C], [0xB0, 0x82, 0x55], [0x8A, 0x6E, 0x5C], [0xF7, 0xF5, 0xF2]]
+            }
+            Ramp::Aurora => {
+                &[[0x2B, 0x16, 0x5E], [0x3A, 0x4E, 0x9A], [0x23, 0x8A, 0x96], [0x3C, 0xB6, 0x7C], [0xA6, 0xD8, 0x4A], [0xF7, 0xE6, 0x3B]]
+            }
             Ramp::Harbour => &[
                 [0x3B, 0x7D, 0xD8],
                 [0xE8, 0x7A, 0x41],

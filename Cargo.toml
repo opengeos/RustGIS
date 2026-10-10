@@ -35,6 +35,12 @@ csv = "1"
 tiny-skia = "0.11"
 image = { version = "0.25", default-features = false, features = ["png"] }
 ab_glyph = "0.2"
+# Rasters: GeoTIFF decoding/encoding, and coordinate systems by EPSG code (all pure Rust, so the
+# browser build keeps working).
+tiff = "0.11"
+proj4rs = { version = "0.2", default-features = false }
+crs-definitions = { version = "0.6", default-features = false, features = ["proj4"] }
+base64 = "0.22"
 epaint_default_fonts = "0.36"
 
 # ui

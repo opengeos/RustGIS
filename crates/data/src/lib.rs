@@ -7,6 +7,7 @@
 pub mod geometry;
 pub mod io;
 pub mod query;
+pub mod raster;
 pub mod value;
 
 pub use geometry::{Geometry, GeometryType};

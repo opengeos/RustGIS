@@ -3,7 +3,7 @@ name = "rustgis-data"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "RustGIS L1: feature model, attribute values, and vector I/O (GeoJSON, CSV, Shapefile)"
+description = "RustGIS L1: feature model, attribute values, vector I/O (GeoJSON, CSV, Shapefile) and rasters (GeoTIFF, ASCII grid)"
 
 [lints]
 workspace = true
@@ -15,3 +15,6 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 csv = { workspace = true }
 shapefile = { workspace = true }
+tiff = { workspace = true }
+proj4rs = { workspace = true }
+crs-definitions = { workspace = true }

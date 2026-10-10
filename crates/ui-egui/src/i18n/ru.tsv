@@ -14,6 +14,7 @@ Add a field to the selected layer.	Добавить поле в выбранны
 Add a field.	Добавить поле.
 Add a new map to the project.	Добавить новую карту в проект.
 Add Data	Добавить данные
+Add Data (from file contents)	Добавить данные (из содержимого файла)
 Add Data (from text)	Добавить данные (из текста)
 Add Data…	Добавить данные…
 Add Field	Добавить поле
@@ -26,6 +27,7 @@ Add vector data.	Добавить векторные данные.
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Добавляет в виде полей геодезическую площадь (км²), длину (км) или координаты центроида.
 All	Все
 All files	Все файлы
+Altitude	Высота
 Analysis	Анализ
 AND	AND
 Apply	Применить
@@ -35,19 +37,28 @@ Attribute\nTable	Таблица\nатрибутов
 Attribute Table	Таблица атрибутов
 Attribute table	Таблица атрибутов
 Attributes	Атрибуты
+Aurora	Аврора
 Automatic	Автоматически
 Automatic (system language)	Автоматически (язык системы)
+Azimuth	Азимут
 Back to Explore; cancel a sketch	Назад к обзору; отменить эскиз
 Back to the map	Назад к карте
 Back to tools	Назад к инструментам
+Band	Канал
+Band Combination	Комбинация каналов
+Band {n}	Канал {n}
+Bands	Каналы
 Basemap	Базовая карта
 Basemaps	Базовые карты
+Bilinear	Билинейная
 Blank	Пустая
+Blue	Синий
 Bold	Жирный
 Bold label text.	Жирный текст подписей.
 Bookmarks	Закладки
 Boolean	Логическое
 Bounding\nGeometry	Ограничивающая\nгеометрия
+Brightness	Яркость
 Browse the geoprocessing toolbox.	Просмотр набора инструментов геообработки.
 Browse the project's maps, tables and folders.	Просмотр карт, таблиц и папок проекта.
 Buffer	Буфер
@@ -67,11 +78,17 @@ Cartography	Картография
 Case Field	Поле группировки
 Catalog	Каталог
 Catalog\nPane	Панель\nкаталога
+Cell size	Размер ячейки
 Change the map's backdrop.	Изменить фон карты.
+Choose a band combination to display the raster layer.	Выберите комбинацию каналов для отображения растрового слоя.
+Choose a contrast stretch for the raster layer.	Выберите растяжку контраста для растрового слоя.
+Choose a resampling type for the raster layer.	Выберите тип передискретизации для растрового слоя.
 Choose how the layer is drawn.	Выбрать способ отображения слоя.
+Choose how the raster is drawn.	Выберите способ отрисовки растра.
 Choose the interface language.	Выбрать язык интерфейса.
 Circle	Круг
 Classes	Классы
+Classify	Классифицировать
 Clear	Очистить
 Clear\nLimits	Сбросить\nограничения
 Clear History	Очистить историю
@@ -95,14 +112,19 @@ Close table	Закрыть таблицу
 Collapse or expand the ribbon	Свернуть или развернуть ленту
 Collapse the ribbon (Ctrl+F1)	Свернуть ленту (Ctrl+F1)
 Color	Цвет
+Color Infrared (4, 1, 2)	Цветной инфракрасный (4, 1, 2)
 Color Scheme	Цветовая схема
 Color scheme	Цветовая схема
+Colormap	Цветовая карта
+Colors from the raster's own color table.	Цвета из собственной цветовой таблицы растра.
 Command\nSearch	Поиск\nкоманд
 Command Search	Поиск команд
 Completed	Выполнено
 Compute a field's values.	Вычислить значения поля.
 Contents	Содержание
+Contrast	Контраст
 Conversion	Преобразование
+Coordinate system	Система координат
 Copies the (selected) features of a layer to a new layer.	Копирует (выбранные) объекты слоя в новый слой.
 Copy Coordinates	Копировать координаты
 Couldn't download the font for {language}; pick the language again to retry.	Не удалось загрузить шрифт для {language}; выберите язык ещё раз, чтобы повторить попытку.
@@ -143,6 +165,7 @@ Delete selected rows	Удалить выбранные строки
 Delete the selected features.	Удалить выбранные объекты.
 Details	Сведения
 Details of the selected layer.	Сведения о выбранном слое.
+Deviations	Отклонения
 Diamond	Ромб
 Display	Отображение
 Dissolve	Объединить
@@ -152,6 +175,7 @@ Double	Вещественное
 Double-click	Двойной щелчок
 Double-click to add	Двойной щелчок — добавить
 Downloaded {name}	Загружено: {name}
+DRA	DRA
 Drag / middle-drag	Перетаскивание / средней кнопкой
 Drag a box or click to zoom in	Растяните рамку или щёлкните для приближения
 Drag a box to zoom into.	Растяните рамку для приближения.
@@ -161,6 +185,8 @@ Draw the layer at every scale.	Отображать слой в любом ма�
 Drawing	Отображение
 Drawing Order	Порядок отображения
 Dusk	Сумерки
+Dynamic range adjustment (stretch the pixels in view)	Динамическая настройка диапазона (растяжка по видимым пикселям)
+Dynamic range adjustment: stretch using the pixels in view.	Динамическая настройка диапазона: растяжка по видимым пикселям.
 e.g.  pop_est / 1000000   or   'Africa'   or   name	напр.  pop_est / 1000000   или   'Africa'   или   name
 e.g. continent = 'Europe'	напр. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	напр. pop_est > 100000000 AND continent = 'Asia'
@@ -171,6 +197,7 @@ Edit attributes in the table.	Редактировать атрибуты в т�
 Effects	Эффекты
 Ember	Угли
 Encloses each feature, or all features, in its convex hull.	Заключает каждый объект или все объекты в выпуклую оболочку.
+Enhancement	Улучшение
 Equal Interval	Равные интервалы
 Erase	Стереть
 Erase Features	Стереть объекты
@@ -181,12 +208,15 @@ Explore	Обзор
 Export	Экспорт
 Export\nFeatures	Экспорт\nобъектов
 Export\nMap	Экспорт\nкарты
+Export\nRaster	Экспорт\nрастра
 Export Features	Экспорт объектов
 Export Features (tool)	Экспорт объектов (инструмент)
 Export Features…	Экспорт объектов…
 Export Map	Экспорт карты
 Export Map failed unexpectedly	Экспорт карты неожиданно завершился ошибкой
 Export Map…	Экспорт карты…
+Export Raster	Экспорт растра
+Export Raster…	Экспорт растра…
 Export Table	Экспорт таблицы
 Export the layer.	Экспортировать слой.
 Export the map view as a PNG image (with labels and a scale bar).	Экспортировать вид карты как изображение PNG (с подписями и масштабной линейкой).
@@ -216,6 +246,8 @@ Folders	Папки
 Forest	Лес
 Full Extent	Полный экстент
 Full extent	Полный экстент
+Full size	Полный размер
+Gamma	Гамма
 Generalization	Генерализация
 Geo-\nprocessing	Гео-\nобработка
 GeoJSON or CSV	GeoJSON или CSV
@@ -223,6 +255,7 @@ Geometry	Геометрия
 Geoprocessing	Геообработка
 Geoprocessing history.	История геообработки.
 Geoprocessing Pane	Панель геообработки
+GeoTIFF	GeoTIFF
 Go	Перейти
 Go back to the previous extent.	Вернуться к предыдущему экстенту.
 Go forward to the next extent.	Перейти к следующему экстенту.
@@ -231,17 +264,20 @@ Go To Bookmark	Перейти к закладке
 Go To XY	Перейти к XY
 Graduated Colors	Градуированные цвета
 Graticule	Сетка координат
+Green	Зелёный
 Greys	Оттенки серого
 Group Option	Способ группировки
 Halo	Ореол
 Harbour (qualitative)	Гавань (качественная)
 Help	Справка
+Histogram Equalize	Выравнивание гистограммы
 History	История
 Home	Home
 Identify	Идентифицировать
 Import\nProject	Импорт\nпроекта
 In Beyond	Вкл. за пределами
 In project	В проекте
+Information	Информация
 Input Features	Входные объекты
 Input Polygons	Входные полигоны
 Input Rows	Входные строки
@@ -252,6 +288,7 @@ Insert	Вставка
 Interface font: {font}	Шрифт интерфейса: {font}
 Invalid: {error}	Недопустимо: {error}
 Invert	Инвертировать
+Invert color scheme	Инвертировать цветовую схему
 Invert the selection.	Инвертировать выборку.
 IS NULL	IS NULL
 keep current	оставить текущее
@@ -276,6 +313,7 @@ Line color	Цвет линии
 Line width	Толщина линии
 LineString	LineString
 List Commands	Список команд
+Lit	Освещено
 Locate	Найти место
 Location	Расположение
 Long	Длинное целое
@@ -289,6 +327,9 @@ Map	Карта
 Map › Layer	Карта › Слой
 Maps	Карты
 Marker	Маркер
+Max	Макс.
+Max %	Макс. %
+Mean	Среднее
 Measure	Измерить
 Measure Area	Измерить площадь
 Measure Distance	Измерить расстояние
@@ -298,16 +339,22 @@ Meters	Метры
 Method	Метод
 Midnight	Полночь
 Miles	Мили
+Min	Мин.
+Min %	Мин. %
 Minimum Bounding Geometry	Минимальная ограничивающая геометрия
+Minimum Maximum	Минимум-максимум
 Mod+	Mod+
 Mouse wheel	Колесо мыши
 Move Down	Переместить вниз
 Move Up	Переместить вверх
 Name	Имя
 Natural Breaks (Jenks)	Естественные границы (Дженкс)
+Natural Color (1, 2, 3)	Естественные цвета (1, 2, 3)
 Natural Earth	Natural Earth
 Navigate	Навигация
 Navigation	Навигация
+Nearest Neighbor	Ближайший сосед
+Needs three or more bands.	Нужно три или более канала.
 New	Создать
 New\nBookmark	Новая\nзакладка
 New\nMap	Новая\nкарта
@@ -323,6 +370,7 @@ Next Extent	Следующий экстент
 No	Нет
 No bookmarks yet	Закладок пока нет
 No standalone tables	Нет отдельных таблиц
+NoData	NoData
 None	Нет
 North	Север
 Not saved yet	Ещё не сохранено
@@ -356,6 +404,9 @@ Pan to a longitude/latitude.	Переместиться к долготе/шир
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Панорамируйте мышью, масштабируйте колесом и щёлкайте по объектам, чтобы увидеть их атрибуты.
 Paper	Бумага
 Parent folder	Родительская папка
+Percent Clip	Процентное отсечение
+Pixel	Пиксель
+Pixel type	Тип пикселя
 PNG image	Изображение PNG
 Point	Точка
 Polygon	Полигон
@@ -371,6 +422,12 @@ Proportional Symbols	Пропорциональные символы
 Proximity	Близость
 Quantile	Квантили
 Quick Access Toolbar	Панель быстрого доступа
+Raster\nInformation	Сведения\nо растре
+Raster Data	Данные растра
+Raster Information	Сведения о растре
+Raster Layer	Растровый слой
+Raster · {w} × {h} · {n} bands · {renderer}	Растр · {w} × {h} · каналов: {n} · {renderer}
+Red	Красный
 Redo	Повторить
 Redo the change you undid.	Повторить отменённое изменение.
 Redo {action}	Повторить: {action}
@@ -386,6 +443,12 @@ Rename Layer	Переименовать слой
 Rename Map	Переименовать карту
 Rename Project	Переименовать проект
 Rename…	Переименовать…
+Rendering	Отрисовка
+Resampling	Передискретизация
+Resampling Type	Тип передискретизации
+Reset	Сбросить
+Reset brightness, contrast and gamma.	Сбросить яркость, контраст и гамму.
+RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Охват функций ленты: {done} из {total} ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Соответствие ленты: команд RustGIS для функций ленты — {done} из {total}.
 Run	Запустить
@@ -404,6 +467,7 @@ Save Project As	Сохранить проект как
 Save the current extent as a bookmark.	Сохранить текущий экстент как закладку.
 Save the project under a new name.	Сохранить проект под новым именем.
 Save the project with your edits.	Сохранить проект с вашими правками.
+Save the raster as a GeoTIFF.	Сохранить растр как GeoTIFF.
 Scale 1:	Масштаб 1:
 Search commands — e.g. buffer, basemap, labels	Поиск команд — напр. буфер, базовая карта, подписи
 Search Distance (km)	Расстояние поиска (км)
@@ -439,6 +503,8 @@ Selects features that intersect features in another layer.	Выбирает об
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Выбирает объекты с помощью SQL-условия WHERE, напр. pop_est > 1000000.
 Set Map Tool	Выбрать инструмент карты
 Set Scale	Задать масштаб
+Shaded	Затенено
+Shaded Relief	Теневой рельеф
 Shape	Форма
 Share	Поделиться
 Share › Output	Поделиться › Вывод
@@ -454,15 +520,22 @@ Show the Symbology pane for the selected layer.	Показать панель «
 Simplify	Упростить
 Single Symbol	Единый символ
 Size	Размер
+Size, bands, statistics and coordinate system.	Размер, каналы, статистика и система координат.
 Source	Источник
 South	Юг
 Square	Квадрат
 Standalone Tables	Отдельные таблицы
+Standard Deviation	Стандартное отклонение
 Star	Звезда
 Start	Начало
 Statistics	Статистика
 Statistics Field	Поле статистики
 Status Bar	Строка состояния
+Std. Dev.	Ст. откл.
+Stretch	Растяжка
+Stretch\nType	Тип\nрастяжки
+Stretch Type	Тип растяжки
+Stretch type	Тип растяжки
 Summarize	Сводка
 Summarize\nWithin	Сводка\nвнутри
 Summarize Within	Сводка внутри
@@ -476,13 +549,18 @@ Symbol	Символ
 Symbol Color	Цвет символа
 Symbology	Символы
 Symbology Pane	Панель символов
+Symbology Pane…	Панель символов…
 Table	Таблица
 Tables	Таблицы
+Terrain	Рельеф
 Text	Текст
 Text Symbol	Текстовый символ
 the map has no layers	на карте нет слоёв
+The raster's data couldn't be read.	Не удалось прочитать данные растра.
+The raster's data couldn't be read: {path}	Не удалось прочитать данные растра: {path}
 Thermal	Тепловая
 This map has no layers yet.	На этой карте пока нет слоёв.
+Tint by elevation	Окраска по высоте
 Toggle Dark Mode	Переключить тёмную тему
 Tolerance (km)	Допуск (км)
 Toolbox	Набор инструментов
@@ -503,7 +581,7 @@ Undo {action}	Отменить: {action}
 Unique Values	Уникальные значения
 Units	Единицы
 Valid expression · {n} matching rows	Выражение допустимо · Подходящих строк: {n}
-Vector data	Векторные данные
+Vector and raster data	Векторные и растровые данные
 Version {version}	Версия {version}
 View	Вид
 View › Windows	Вид › Окна
@@ -521,6 +599,7 @@ World Atlas	Атлас мира
 World Atlas Sample	Пример «Атлас мира»
 World Countries	Страны мира
 Yes	Да
+Z factor	Z-фактор
 Zoom about the pointer	Масштабирование относительно указателя
 Zoom In	Приблизить
 Zoom in	Приблизить

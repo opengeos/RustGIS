@@ -14,6 +14,7 @@ Add a field to the selected layer.	Seçili katmana bir alan ekle.
 Add a field.	Bir alan ekle.
 Add a new map to the project.	Projeye yeni bir harita ekle.
 Add Data	Veri Ekle
+Add Data (from file contents)	Veri Ekle (dosya içeriğinden)
 Add Data (from text)	Veri Ekle (metinden)
 Add Data…	Veri Ekle…
 Add Field	Alan Ekle
@@ -26,6 +27,7 @@ Add vector data.	Vektör veri ekle.
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Jeodezik alan (km²), uzunluk (km) veya merkez noktası koordinatlarını alan olarak ekler.
 All	Tümü
 All files	Tüm dosyalar
+Altitude	Yükseklik
 Analysis	Analiz
 AND	AND
 Apply	Uygula
@@ -35,19 +37,28 @@ Attribute\nTable	Öznitelik\nTablosu
 Attribute Table	Öznitelik Tablosu
 Attribute table	Öznitelik tablosu
 Attributes	Öznitelikler
+Aurora	Aurora
 Automatic	Otomatik
 Automatic (system language)	Otomatik (sistem dili)
+Azimuth	Azimut
 Back to Explore; cancel a sketch	Keşfet'e dön; çizimi iptal et
 Back to the map	Haritaya dön
 Back to tools	Araçlara dön
+Band	Bant
+Band Combination	Bant Kombinasyonu
+Band {n}	Bant {n}
+Bands	Bantlar
 Basemap	Altlık Harita
 Basemaps	Altlık Haritalar
+Bilinear	Çift Doğrusal
 Blank	Boş
+Blue	Mavi
 Bold	Kalın
 Bold label text.	Kalın etiket metni.
 Bookmarks	Yer İmleri
 Boolean	Mantıksal
 Bounding\nGeometry	Sınırlayıcı\nGeometri
+Brightness	Parlaklık
 Browse the geoprocessing toolbox.	Coğrafi işleme araç kutusuna göz at.
 Browse the project's maps, tables and folders.	Projenin haritalarına, tablolarına ve klasörlerine göz at.
 Buffer	Tampon
@@ -67,11 +78,17 @@ Cartography	Kartografya
 Case Field	Gruplama Alanı
 Catalog	Katalog
 Catalog\nPane	Katalog\nPaneli
+Cell size	Hücre boyutu
 Change the map's backdrop.	Haritanın arka planını değiştir.
+Choose a band combination to display the raster layer.	Raster katmanını görüntülemek için bir bant kombinasyonu seçin.
+Choose a contrast stretch for the raster layer.	Raster katmanı için bir kontrast germe seçin.
+Choose a resampling type for the raster layer.	Raster katmanı için bir yeniden örnekleme türü seçin.
 Choose how the layer is drawn.	Katmanın nasıl çizileceğini seç.
+Choose how the raster is drawn.	Rasterın nasıl çizileceğini seçin.
 Choose the interface language.	Arayüz dilini seç.
 Circle	Daire
 Classes	Sınıflar
+Classify	Sınıflandır
 Clear	Temizle
 Clear\nLimits	Sınırları\nTemizle
 Clear History	Geçmişi Temizle
@@ -95,14 +112,19 @@ Close table	Tabloyu kapat
 Collapse or expand the ribbon	Şeridi daralt veya genişlet
 Collapse the ribbon (Ctrl+F1)	Şeridi daralt (Ctrl+F1)
 Color	Renk
+Color Infrared (4, 1, 2)	Renkli Kızılötesi (4, 1, 2)
 Color Scheme	Renk Şeması
 Color scheme	Renk şeması
+Colormap	Renk haritası
+Colors from the raster's own color table.	Rasterın kendi renk tablosundaki renkler.
 Command\nSearch	Komut\nAra
 Command Search	Komut Ara
 Completed	Tamamlandı
 Compute a field's values.	Bir alanın değerlerini hesapla.
 Contents	İçindekiler
+Contrast	Kontrast
 Conversion	Dönüştürme
+Coordinate system	Koordinat sistemi
 Copies the (selected) features of a layer to a new layer.	Bir katmanın (seçili) detaylarını yeni bir katmana kopyalar.
 Copy Coordinates	Koordinatları Kopyala
 Couldn't download the font for {language}; pick the language again to retry.	{language} için yazı tipi indirilemedi; yeniden denemek için dili tekrar seçin.
@@ -143,6 +165,7 @@ Delete selected rows	Seçili satırları sil
 Delete the selected features.	Seçili detayları sil.
 Details	Ayrıntılar
 Details of the selected layer.	Seçili katmanın ayrıntıları.
+Deviations	Sapma
 Diamond	Elmas
 Display	Görüntüleme
 Dissolve	Çöz
@@ -152,6 +175,7 @@ Double	Ondalık (Double)
 Double-click	Çift tıklama
 Double-click to add	Eklemek için çift tıklayın
 Downloaded {name}	{name} indirildi
+DRA	DRA
 Drag / middle-drag	Sürükleme / orta tuşla sürükleme
 Drag a box or click to zoom in	Yakınlaştırmak için kutu sürükleyin veya tıklayın
 Drag a box to zoom into.	Yakınlaştırılacak kutuyu sürükleyin.
@@ -161,6 +185,8 @@ Draw the layer at every scale.	Katmanı her ölçekte çiz.
 Drawing	Çizim
 Drawing Order	Çizim Sırası
 Dusk	Alacakaranlık
+Dynamic range adjustment (stretch the pixels in view)	Dinamik aralık ayarı (görünümdeki pikselleri ger)
+Dynamic range adjustment: stretch using the pixels in view.	Dinamik aralık ayarı: görünümdeki pikselleri kullanarak ger.
 e.g.  pop_est / 1000000   or   'Africa'   or   name	örn.  pop_est / 1000000   veya   'Africa'   veya   name
 e.g. continent = 'Europe'	örn. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	örn. pop_est > 100000000 AND continent = 'Asia'
@@ -171,6 +197,7 @@ Edit attributes in the table.	Öznitelikleri tabloda düzenle.
 Effects	Efektler
 Ember	Kor
 Encloses each feature, or all features, in its convex hull.	Her detayı veya tüm detayları dışbükey zarfı içine alır.
+Enhancement	İyileştirme
 Equal Interval	Eşit Aralık
 Erase	Sil
 Erase Features	Detayları Sil
@@ -181,12 +208,15 @@ Explore	Keşfet
 Export	Dışa Aktar
 Export\nFeatures	Detayları\nDışa Aktar
 Export\nMap	Haritayı\nDışa Aktar
+Export\nRaster	Rasterı\nDışa Aktar
 Export Features	Detayları Dışa Aktar
 Export Features (tool)	Detayları Dışa Aktar (araç)
 Export Features…	Detayları Dışa Aktar…
 Export Map	Haritayı Dışa Aktar
 Export Map failed unexpectedly	Haritayı Dışa Aktarma beklenmedik şekilde başarısız oldu
 Export Map…	Haritayı Dışa Aktar…
+Export Raster	Rasterı Dışa Aktar
+Export Raster…	Rasterı Dışa Aktar…
 Export Table	Tabloyu Dışa Aktar
 Export the layer.	Katmanı dışa aktar.
 Export the map view as a PNG image (with labels and a scale bar).	Harita görünümünü PNG görüntüsü olarak dışa aktar (etiketler ve ölçek çubuğuyla).
@@ -216,6 +246,8 @@ Folders	Klasörler
 Forest	Orman
 Full Extent	Tam Kapsam
 Full extent	Tam kapsam
+Full size	Tam boyut
+Gamma	Gama
 Generalization	Genelleştirme
 Geo-\nprocessing	Coğrafi\nİşleme
 GeoJSON or CSV	GeoJSON veya CSV
@@ -223,6 +255,7 @@ Geometry	Geometri
 Geoprocessing	Coğrafi İşleme
 Geoprocessing history.	Coğrafi işleme geçmişi.
 Geoprocessing Pane	Coğrafi İşleme Paneli
+GeoTIFF	GeoTIFF
 Go	Git
 Go back to the previous extent.	Önceki kapsama geri dön.
 Go forward to the next extent.	Sonraki kapsama ilerle.
@@ -231,17 +264,20 @@ Go To Bookmark	Yer İmine Git
 Go To XY	XY'ye Git
 Graduated Colors	Dereceli Renkler
 Graticule	Koordinat Ağı
+Green	Yeşil
 Greys	Griler
 Group Option	Gruplama Seçeneği
 Halo	Hale
 Harbour (qualitative)	Liman (nitel)
 Help	Yardım
+Histogram Equalize	Histogram Eşitleme
 History	Geçmiş
 Home	Home
 Identify	Tanımla
 Import\nProject	Proje\nİçe Aktar
 In Beyond	Ötesinde Açık
 In project	Projede
+Information	Bilgi
 Input Features	Girdi Detayları
 Input Polygons	Girdi Poligonları
 Input Rows	Girdi Satırları
@@ -252,6 +288,7 @@ Insert	Ekle
 Interface font: {font}	Arayüz yazı tipi: {font}
 Invalid: {error}	Geçersiz: {error}
 Invert	Ters Çevir
+Invert color scheme	Renk şemasını ters çevir
 Invert the selection.	Seçimi ters çevir.
 IS NULL	IS NULL
 keep current	geçerli olanı koru
@@ -276,6 +313,7 @@ Line color	Çizgi rengi
 Line width	Çizgi kalınlığı
 LineString	LineString
 List Commands	Komutları Listele
+Lit	Aydınlık
 Locate	Konum Bul
 Location	Konum
 Long	Tamsayı (Long)
@@ -289,6 +327,9 @@ Map	Harita
 Map › Layer	Harita › Katman
 Maps	Haritalar
 Marker	İşaretçi
+Max	Maks
+Max %	Maks %
+Mean	Ortalama
 Measure	Ölç
 Measure Area	Alan Ölç
 Measure Distance	Mesafe Ölç
@@ -298,16 +339,22 @@ Meters	Metre
 Method	Yöntem
 Midnight	Gece Yarısı
 Miles	Mil
+Min	Min
+Min %	Min %
 Minimum Bounding Geometry	En Küçük Sınırlayıcı Geometri
+Minimum Maximum	Minimum Maksimum
 Mod+	Mod+
 Mouse wheel	Fare tekerleği
 Move Down	Aşağı Taşı
 Move Up	Yukarı Taşı
 Name	Ad
 Natural Breaks (Jenks)	Doğal Kırılmalar (Jenks)
+Natural Color (1, 2, 3)	Doğal Renk (1, 2, 3)
 Natural Earth	Natural Earth
 Navigate	Gezin
 Navigation	Gezinme
+Nearest Neighbor	En Yakın Komşu
+Needs three or more bands.	Üç veya daha fazla bant gerekir.
 New	Yeni
 New\nBookmark	Yeni\nYer İmi
 New\nMap	Yeni\nHarita
@@ -323,6 +370,7 @@ Next Extent	Sonraki Kapsam
 No	Hayır
 No bookmarks yet	Henüz yer imi yok
 No standalone tables	Bağımsız tablo yok
+NoData	NoData
 None	Yok
 North	Kuzey
 Not saved yet	Henüz kaydedilmedi
@@ -356,6 +404,9 @@ Pan to a longitude/latitude.	Bir boylam/enleme kaydır.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Fareyle kaydırın, tekerlekle yakınlaştırın ve özniteliklerini görmek için detaylara tıklayın.
 Paper	Kâğıt
 Parent folder	Üst klasör
+Percent Clip	Yüzde Kırpma
+Pixel	Piksel
+Pixel type	Piksel türü
 PNG image	PNG görüntüsü
 Point	Nokta
 Polygon	Poligon
@@ -371,6 +422,12 @@ Proportional Symbols	Orantılı Semboller
 Proximity	Yakınlık
 Quantile	Kantil
 Quick Access Toolbar	Hızlı Erişim Araç Çubuğu
+Raster\nInformation	Raster\nBilgisi
+Raster Data	Raster Verisi
+Raster Information	Raster Bilgisi
+Raster Layer	Raster Katmanı
+Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} bant · {renderer}
+Red	Kırmızı
 Redo	Yinele
 Redo the change you undid.	Geri aldığınız değişikliği yinele.
 Redo {action}	Yinele: {action}
@@ -386,6 +443,12 @@ Rename Layer	Katmanı Yeniden Adlandır
 Rename Map	Haritayı Yeniden Adlandır
 Rename Project	Projeyi Yeniden Adlandır
 Rename…	Yeniden Adlandır…
+Rendering	Görüntüleme
+Resampling	Yeniden Örnekleme
+Resampling Type	Yeniden Örnekleme Türü
+Reset	Sıfırla
+Reset brightness, contrast and gamma.	Parlaklık, kontrast ve gamayı sıfırla.
+RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Şerit özellik kapsamı: {total} özellikten {done} tanesi (%{pct}).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Şerit eşliği: {total} şerit özelliğinden {done} tanesinin RustGIS komutu var.
 Run	Çalıştır
@@ -404,6 +467,7 @@ Save Project As	Projeyi Farklı Kaydet
 Save the current extent as a bookmark.	Geçerli kapsamı yer imi olarak kaydet.
 Save the project under a new name.	Projeyi yeni bir adla kaydet.
 Save the project with your edits.	Projeyi düzenlemelerinizle birlikte kaydet.
+Save the raster as a GeoTIFF.	Rasterı GeoTIFF olarak kaydet.
 Scale 1:	Ölçek 1:
 Search commands — e.g. buffer, basemap, labels	Komut ara — örn. tampon, altlık harita, etiketler
 Search Distance (km)	Arama Mesafesi (km)
@@ -439,6 +503,8 @@ Selects features that intersect features in another layer.	Başka bir katmandaki
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Detayları bir SQL where yan tümcesiyle seçer, örn. pop_est > 1000000.
 Set Map Tool	Harita Aracını Ayarla
 Set Scale	Ölçeği Ayarla
+Shaded	Gölgeli
+Shaded Relief	Gölgeli Rölyef
 Shape	Şekil
 Share	Paylaş
 Share › Output	Paylaş › Çıktı
@@ -454,15 +520,22 @@ Show the Symbology pane for the selected layer.	Seçili katman için Semboloji p
 Simplify	Basitleştir
 Single Symbol	Tek Sembol
 Size	Boyut
+Size, bands, statistics and coordinate system.	Boyut, bantlar, istatistikler ve koordinat sistemi.
 Source	Kaynak
 South	Güney
 Square	Kare
 Standalone Tables	Bağımsız Tablolar
+Standard Deviation	Standart Sapma
 Star	Yıldız
 Start	Başlangıç
 Statistics	İstatistikler
 Statistics Field	İstatistik Alanı
 Status Bar	Durum Çubuğu
+Std. Dev.	Std. Sapma
+Stretch	Germe
+Stretch\nType	Germe\nTürü
+Stretch Type	Germe Türü
+Stretch type	Germe türü
 Summarize	Özetle
 Summarize\nWithin	İçinde\nÖzetle
 Summarize Within	İçinde Özetle
@@ -476,13 +549,18 @@ Symbol	Sembol
 Symbol Color	Sembol Rengi
 Symbology	Semboloji
 Symbology Pane	Semboloji Paneli
+Symbology Pane…	Semboloji Paneli…
 Table	Tablo
 Tables	Tablolar
+Terrain	Arazi
 Text	Metin
 Text Symbol	Metin Sembolü
 the map has no layers	haritada katman yok
+The raster's data couldn't be read.	Rasterın verisi okunamadı.
+The raster's data couldn't be read: {path}	Rasterın verisi okunamadı: {path}
 Thermal	Termal
 This map has no layers yet.	Bu haritada henüz katman yok.
+Tint by elevation	Yüksekliğe göre renklendir
 Toggle Dark Mode	Koyu Modu Aç/Kapat
 Tolerance (km)	Tolerans (km)
 Toolbox	Araç Kutusu
@@ -503,7 +581,7 @@ Undo {action}	Geri al: {action}
 Unique Values	Benzersiz Değerler
 Units	Birimler
 Valid expression · {n} matching rows	Geçerli ifade · {n} eşleşen satır
-Vector data	Vektör veri
+Vector and raster data	Vektör ve raster verisi
 Version {version}	Sürüm {version}
 View	Görünüm
 View › Windows	Görünüm › Pencereler
@@ -521,6 +599,7 @@ World Atlas	Dünya Atlası
 World Atlas Sample	Dünya Atlası Örneği
 World Countries	Dünya Ülkeleri
 Yes	Evet
+Z factor	Z faktörü
 Zoom about the pointer	İşaretçi etrafında yakınlaştır
 Zoom In	Yakınlaştır
 Zoom in	Yakınlaştır

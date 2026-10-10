@@ -3,10 +3,12 @@
 
 pub mod camera;
 pub mod color;
+pub mod raster;
 pub mod symbology;
 
 pub use camera::Camera;
 pub use color::{Ramp, Rgba};
+pub use raster::{RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
 pub use symbology::{ClassMethod, Labeling, Marker, Renderer, Symbol};
 
 use rustgis_data::{Dataset, Geometry, GeometryType};
@@ -95,6 +97,9 @@ pub struct Layer {
     pub expanded: bool,
     #[serde(default = "yes")]
     pub selectable: bool,
+    /// Set for raster layers (whose `dataset` is empty).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raster: Option<RasterLayer>,
     #[serde(skip)]
     projected: Vec<Option<Geometry>>,
     #[serde(skip)]
@@ -125,10 +130,25 @@ impl Layer {
             selection: Vec::new(),
             expanded: true,
             selectable: true,
+            raster: None,
             projected: Vec::new(),
             projected_rev: u64::MAX,
             geometry_rev: 0,
         }
+    }
+
+    /// A raster layer.
+    pub fn new_raster(id: u32, name: impl Into<String>, raster: RasterLayer) -> Self {
+        let name = name.into();
+        let mut l = Layer::new(id, Dataset::new(name.clone(), GeometryType::None, Vec::new()));
+        l.selectable = false;
+        l.labels.enabled = false;
+        l.raster = Some(raster);
+        l
+    }
+
+    pub fn is_raster(&self) -> bool {
+        self.raster.is_some()
     }
 
     pub fn geometry_type(&self) -> GeometryType {
@@ -168,7 +188,10 @@ impl Layer {
 
     /// Extent in longitude/latitude.
     pub fn extent(&self) -> Extent {
-        self.dataset.extent()
+        match &self.raster {
+            Some(r) => r.data.as_ref().map(|d| d.extent()).unwrap_or(Extent::EMPTY),
+            None => self.dataset.extent(),
+        }
     }
 
     pub fn selection_extent(&self) -> Extent {
@@ -218,20 +241,38 @@ impl Map {
         }
     }
 
-    /// Adds a dataset as a new top layer; returns its id.
-    pub fn add_dataset(&mut self, ds: Dataset) -> u32 {
+    fn next_id(&mut self) -> u32 {
         let id = self.next_layer_id.max(self.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1);
         self.next_layer_id = id + 1;
-        // Points above lines above polygons, as GIS apps insert them.
-        let rank = |g: GeometryType| match g {
-            GeometryType::Point => 0,
-            GeometryType::Polyline => 1,
-            GeometryType::Polygon => 2,
-            GeometryType::None => 3,
+        id
+    }
+
+    /// Inserts a layer on top of the layers of its kind: points above lines above polygons above
+    /// rasters, as GIS apps insert them.
+    fn insert_ranked(&mut self, layer: Layer) {
+        let rank = |l: &Layer| match (l.is_raster(), l.geometry_type()) {
+            (true, _) => 4,
+            (_, GeometryType::Point) => 0,
+            (_, GeometryType::Polyline) => 1,
+            (_, GeometryType::Polygon) => 2,
+            (_, GeometryType::None) => 3,
         };
-        let r = rank(ds.geometry_type);
-        let pos = self.layers.iter().position(|l| rank(l.geometry_type()) >= r).unwrap_or(self.layers.len());
-        self.layers.insert(pos, Layer::new(id, ds));
+        let r = rank(&layer);
+        let pos = self.layers.iter().position(|l| rank(l) >= r).unwrap_or(self.layers.len());
+        self.layers.insert(pos, layer);
+    }
+
+    /// Adds a dataset as a new layer; returns its id.
+    pub fn add_dataset(&mut self, ds: Dataset) -> u32 {
+        let id = self.next_id();
+        self.insert_ranked(Layer::new(id, ds));
+        id
+    }
+
+    /// Adds a raster layer; returns its id.
+    pub fn add_raster(&mut self, name: impl Into<String>, raster: RasterLayer) -> u32 {
+        let id = self.next_id();
+        self.insert_ranked(Layer::new_raster(id, name, raster));
         id
     }
 

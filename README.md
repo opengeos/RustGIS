@@ -13,7 +13,7 @@
 <p align="center">
   <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-b84a2c?style=flat-square&logo=rust&logoColor=white">
   <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2563eb?style=flat-square">
-  <img alt="Ribbon coverage" src="https://img.shields.io/badge/ribbon%20coverage-18%25-0e9384?style=flat-square">
+  <img alt="Ribbon coverage" src="https://img.shields.io/badge/ribbon%20coverage-21%25-0e9384?style=flat-square">
 </p>
 
 <p align="center">
@@ -44,6 +44,7 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 | Area | Highlights |
 |---|---|
 | **Data** | GeoJSON, CSV with longitude/latitude, Shapefile in; GeoJSON and CSV out; standalone tables |
+| **Rasters** | GeoTIFF and cloud-optimised GeoTIFF (any pixel type, tiled or striped, compressed), ASCII grids; on-the-fly reprojection from any EPSG code; Stretch, RGB, Classify, Unique Values, Colormap and Shaded Relief symbology; five stretch types, DRA, band combinations, resampling, brightness/contrast/gamma; pixel identify, statistics, GeoTIFF export |
 | **Map** | Smooth pan/zoom, five basemaps, graticule, bookmarks, previous/next extent, Go To XY, scale box, multiple maps per project |
 | **Symbology** | Single symbol, unique values, graduated colours (natural breaks, equal interval, quantile), proportional symbols, eight colour schemes, marker shapes, outlines, transparency, visibility ranges |
 | **Labeling** | Per-layer labels with field, size, colour, bold and halo; collision-free placement |

@@ -16,7 +16,7 @@ egui front end, headless screenshots for UI work.
 | Layer | Crate | Job |
 |---|---|---|
 | L0 | `geom` | coordinates, extents, Web Mercator, geodesic measurement, scale |
-| L1 | `data` | features, typed attributes, GeoJSON/CSV/Shapefile I/O, SQL where clauses |
+| L1 | `data` | features, typed attributes, GeoJSON/CSV/Shapefile I/O, SQL where clauses, rasters (GeoTIFF/ASCII grid, EPSG reprojection) |
 | L2 | `map`, `analysis` | layers, symbology, labels, camera, basemaps; geoprocessing tools |
 | L3 | `render` | tiny-skia map renderer, label placement, PNG export, font discovery |
 | L4 | `engine` | `Session`, undo, command registry, ribbon feature catalog, sample project |
