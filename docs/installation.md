@@ -26,12 +26,12 @@ RUSTGIS_DATA_DIR=/path/to/data cargo build --release
 | Linux (X11 and Wayland) | Supported |
 | macOS | Supported |
 | Windows | Supported |
-| Web browser | Supported: [rustgis.app/app](https://rustgis.app/app/) (WebGPU or WebGL2) |
+| Web browser | Supported: [web.rustgis.app](https://web.rustgis.app) (WebGPU or WebGL2) |
 
 ## Web app
 
 RustGIS also runs in the browser, compiled to WebAssembly: open
-**[rustgis.app/app](https://rustgis.app/app/)**. It is the same app with three differences:
+**[web.rustgis.app](https://web.rustgis.app)**. It is the same app with three differences:
 
 - **Open** and **Add Data** use the browser's file picker, and you can drop files on the page.
   GeoJSON, CSV and `.rgisx` projects work; Shapefiles need the desktop app.

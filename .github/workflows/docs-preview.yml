@@ -39,6 +39,8 @@ jobs:
           .venv/bin/zensical build
           # The preview is not the production site.
           rm -f site/CNAME
+      # Production serves the app from web.rustgis.app (web-deploy.yml); previews include it
+      # at /app/ so a pull request's web build can be tried before merging.
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown

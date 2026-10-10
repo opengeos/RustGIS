@@ -54,7 +54,7 @@ The honest picture is in [ROADMAP.md](ROADMAP.md) and the generated [coverage re
 
 ## Try it in the browser
 
-RustGIS also runs as a WebAssembly app at **[rustgis.app/app](https://rustgis.app/app/)**: the
+RustGIS also runs as a WebAssembly app at **[web.rustgis.app](https://web.rustgis.app)**: the
 same ribbon and tools, with the browser's file picker for GeoJSON, CSV and projects, and
 downloads for Save and Export.
 
