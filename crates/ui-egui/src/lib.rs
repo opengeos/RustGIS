@@ -189,8 +189,13 @@ impl RustGisApp {
 
     /// The CJK region of the current language, if any.
     fn current_region(&self) -> Option<rustgis_engine::render::fonts::CjkRegion> {
+        Self::script_region(self.lang().script())
+    }
+
+    /// The CJK font region a script needs, if any.
+    fn script_region(script: i18n::Script) -> Option<rustgis_engine::render::fonts::CjkRegion> {
         use rustgis_engine::render::fonts::CjkRegion;
-        match self.lang().script() {
+        match script {
             i18n::Script::Cjk(i18n::CjkFont::SimplifiedChinese) => Some(CjkRegion::SimplifiedChinese),
             i18n::Script::Cjk(i18n::CjkFont::Japanese) => Some(CjkRegion::Japanese),
             i18n::Script::Cjk(i18n::CjkFont::Korean) => Some(CjkRegion::Korean),
@@ -446,9 +451,13 @@ impl RustGisApp {
             if bytes.is_empty() || !valid_font(&bytes, 0) {
                 // A failed download: say so; picking the language again retries.
                 log::error!("{url}: no usable font downloaded");
+                // Name the language whose font failed (not the current one), in English: its own
+                // script has no font yet.
+                let language =
+                    i18n::Lang::all().find(|l| region.is_some_and(|r| Self::script_region(l.script()) == Some(r))).unwrap_or(self.lang());
                 let msg = i18n::fmt(
                     "Couldn't download the font for {language}; pick the language again to retry.",
-                    &[("language", self.lang().name())],
+                    &[("language", language.english())],
                 );
                 self.session.notify(msg, true);
                 if let Some(r) = region {

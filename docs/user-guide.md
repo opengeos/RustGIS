@@ -18,6 +18,10 @@
 The last three form the contextual *Feature Layer* group, shown while a layer is selected in
 the Contents pane.
 
+To give the map more room, collapse the ribbon to its tab row with the chevron at its right
+end, by double-clicking a tab, or with Ctrl+F1 (⌘F1 on macOS, where F1 may need the Fn key).
+Click a tab to peek at its commands while collapsed.
+
 ## Data
 
 | Format | Read | Write |
