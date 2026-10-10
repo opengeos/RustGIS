@@ -126,8 +126,13 @@ impl RustGisApp {
     }
 
     /// Opens a file by name and contents: a `.rgisx` project, or vector data.
+    /// Failures are reported to the user (command errors through `Session::run`, others here).
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
-        let text = std::str::from_utf8(bytes).map_err(|_| format!("{name} is not a text file"))?;
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            let e = format!("{name} is not a text file: RustGIS opens GeoJSON, CSV and .rgisx here");
+            self.session.notify(e.clone(), true);
+            return Err(e);
+        };
         if name.to_ascii_lowercase().ends_with(".rgisx") {
             let r = self.run("project.openText", json!({"text": text, "name": name}));
             self.map.invalidate();
@@ -250,7 +255,19 @@ impl RustGisApp {
                 }
             }
             "ui.exportMap" if self.services.download.is_some() => {
-                let png = rustgis_engine::cmd::share::map_png(&mut self.session, None, None, Some(192.0))?;
+                // The same last-resort panic guard `Session::run` gives commands.
+                let session = &mut self.session;
+                let png = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    rustgis_engine::cmd::share::map_png(session, None, None, Some(192.0))
+                }))
+                .unwrap_or_else(|_| Err("Export Map failed unexpectedly".into()));
+                let png = match png {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.session.notify(e.clone(), true);
+                        return Err(e);
+                    }
+                };
                 let name = format!("{}.png", self.session.map().name);
                 self.download(&name, png);
             }

@@ -121,6 +121,19 @@ fn degenerate_geometry_and_deleted_fields() {
 }
 
 #[test]
+fn open_from_text() {
+    let mut s = world();
+    let text = serde_json::to_string(&s.project).unwrap();
+    s.run("layer.addDataText", &json!({"fileName": "pts.csv", "text": "name,lon,lat\nA,1,2\n"})).unwrap();
+    assert!(s.map().layer_by_name("pts").is_some());
+    assert!(s.run("layer.addDataText", &json!({"fileName": "x.shp", "text": ""})).is_err());
+    assert!(s.run("layer.addDataText", &json!({"fileName": "x.geojson", "text": "{"})).is_err());
+    assert!(s.run("project.openText", &json!({"text": "not json"})).is_err());
+    s.run("project.openText", &json!({"text": text})).unwrap();
+    assert!(s.map().layer_by_name("pts").is_none() && !s.dirty && !s.can_undo());
+}
+
+#[test]
 fn catalog_ids_exist() {
     let s = Session::new(Project::default());
     for f in crate::catalog::FEATURES {

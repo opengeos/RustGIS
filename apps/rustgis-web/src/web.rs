@@ -141,8 +141,17 @@ fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     let a: web_sys::HtmlAnchorElement = document.create_element("a").map_err(err)?.dyn_into().map_err(|_| "not an anchor".to_string())?;
     a.set_href(&url);
     a.set_download(name);
+    // Some browsers only follow links that are in the document.
+    let body = document.body().ok_or("no body")?;
+    body.append_child(&a).map_err(err)?;
     a.click();
-    web_sys::Url::revoke_object_url(&url).map_err(err)?;
+    a.remove();
+    // Browsers may start the download after `click` returns, so free the URL a little later.
+    let revoke = wasm_bindgen::closure::Closure::once_into_js(move || {
+        let _ = web_sys::Url::revoke_object_url(&url);
+    });
+    let window = web_sys::window().ok_or("no window")?;
+    window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 10_000).map_err(err)?;
     Ok(())
 }
 

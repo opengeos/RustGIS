@@ -14,9 +14,7 @@ pub fn commands() -> Vec<C> {
         C::new("project.new", "New Project", "Project", new).key("Mod+N").view().params(r#"{"name"?: string}"#),
         C::new("project.sample", "World Atlas Sample", "Project", sample).view(),
         C::new("project.open", "Open Project", "Project", open).key("Mod+O").view().params(r#"{"path": string}"#),
-        C::new("project.openText", "Open Project (from text)", "Project", open_text)
-            .view()
-            .params(r#"{"text": project JSON, "name"?: file name}"#),
+        C::new("project.openText", "Open Project (from text)", "Project", open_text).view().params(r#"{"text": project JSON}"#),
         C::new("project.save", "Save Project", "Project", save).key("Mod+S").view().params(r#"{"path"?: string}"#),
         C::new("project.saveAs", "Save Project As", "Project", save_as).key("Mod+Shift+S").view().params(r#"{"path": string}"#),
         C::new("project.rename", "Rename Project", "Project", rename).params(r#"{"name": string}"#),
