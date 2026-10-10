@@ -106,14 +106,15 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
 
     interact(app, ui, &resp, rect);
 
-    // Render when the map changed and we're not in the middle of a pan/zoom. The flat map shifts
-    // its last frame while panning; the globe turns, so it redraws, at logical resolution while
-    // moving and in full once it settles.
+    // Render when the map changed and we're not in the middle of a pan/zoom: meanwhile the last
+    // frame is shifted and scaled. Dragging the globe turns it, which no shift can show, so it
+    // redraws then, at reduced resolution, and in full once it settles.
     let cam = app.session.map().camera;
     let globe_view = app.session.map().projection == Projection::Globe;
-    let moving = app.map.drag.is_some() || time - app.map.last_interaction < 0.18;
-    let draft = globe_view && moving && ppp > 1.0;
-    let render_ppp = if draft { 1.0 } else { ppp };
+    let dragging = app.map.drag.is_some_and(|(_, k)| k == DragKind::Pan);
+    let moving = dragging || time - app.map.last_interaction < 0.18;
+    let draft = globe_view && dragging;
+    let render_ppp = if draft { (ppp * 0.6).max(0.5) } else { ppp };
     let key = Key {
         rev: app.session.revision,
         cam: ((cam.center.x * 100.0) as i64, (cam.center.y * 100.0) as i64, (cam.res * 1000.0) as i64),
@@ -121,14 +122,14 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         dark: t.dark,
         draft,
     };
-    let interacting = !globe_view && moving;
+    let interacting = if globe_view { moving && !dragging } else { moving };
     if globe_view && !moving && app.map.key.is_some_and(|k| k.draft) {
         ui.ctx().request_repaint();
     }
     let stale = app.map.key != Some(key);
     if stale && (!interacting || app.map.texture.is_none() || app.map.key.is_some_and(|k| k.rev != key.rev || k.size != key.size)) {
         let t0 = web_time::Instant::now();
-        let view = View { width: w, height: h, pixels_per_point: render_ppp as f64, camera: cam };
+        let view = View { width: w, height: h, pixels_per_point: render_ppp as f64, camera: cam, dark: t.dark };
         if let Some(r) = rustgis_engine::render::render(app.session.map_mut(), &view) {
             let size = [r.pixmap.width() as usize, r.pixmap.height() as usize];
             let img = egui::ColorImage::from_rgba_premultiplied(size, r.pixmap.data());
@@ -158,7 +159,17 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         let (sx, sy) = c.to_screen(Coord::new(x, y), w, h);
         pos2(rect.min.x + sx as f32, rect.min.y + sy as f32)
     };
-    let tex_rect = Rect::from_min_max(to_screen(&cam, e0.min_x, e0.max_y), to_screen(&cam, e0.max_x, e0.min_y));
+    let tex_rect = if globe_view {
+        // Where the old frame's centre now is, at the new zoom.
+        let (old_g, new_g) = (Globe::new(&old, w, h), Globe::new(&cam, w, h));
+        let s = (new_g.radius() / old_g.radius()) as f32;
+        match new_g.forward(old.center_lonlat()) {
+            Some((x, y)) if s.is_finite() => Rect::from_center_size(pos2(rect.min.x + x as f32, rect.min.y + y as f32), rect.size() * s),
+            _ => rect,
+        }
+    } else {
+        Rect::from_min_max(to_screen(&cam, e0.min_x, e0.max_y), to_screen(&cam, e0.max_x, e0.min_y))
+    };
     if let Some(tex) = &app.map.texture {
         painter.image(tex.id(), tex_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
@@ -222,12 +233,11 @@ fn pan(app: &mut RustGisApp, dx: f64, dy: f64, w: f64, h: f64) {
     }
 }
 
-/// Zooms by `factor` about a screen point (the globe zooms about its centre).
+/// Zooms by `factor` about a screen point.
 fn zoom(app: &mut RustGisApp, factor: f64, x: f64, y: f64, w: f64, h: f64) {
     let m = app.session.map_mut();
     if m.projection == Projection::Globe {
-        m.camera.res /= factor;
-        m.camera.clamp();
+        Globe::zoom_at(&mut m.camera, factor, x, y, w, h);
     } else {
         m.camera.zoom_at(factor, x, y, w, h);
     }

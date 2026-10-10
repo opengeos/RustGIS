@@ -43,7 +43,7 @@ pub fn map_png(s: &mut Session, width: Option<f64>, height: Option<f64>, dpi: Op
         camera.res *= (vw / w).max(vh / h);
         camera.clamp();
     }
-    let view = View { width: w, height: h, pixels_per_point: ppp, camera };
+    let view = View { width: w, height: h, pixels_per_point: ppp, camera, dark: false };
     rustgis_render::render_png(s.map_mut(), &view)
 }
 

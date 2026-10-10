@@ -214,7 +214,7 @@ mod tests {
         let r = Raster::new("utm", 100, 100, vec![data], gt, Crs::from_epsg(32617).unwrap(), None, ColorHint::Gray, "Float32").unwrap();
         let style = RasterStyle::default_for(&r);
         let camera = Camera { center: lonlat_to_merc(Coord::new(-81.0, 42.0)), res: 2000.0 };
-        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, dark: false };
         let mut pm = Pixmap::new(200, 200).unwrap();
         draw(&mut pm, &r, &style, &view, 1.0, false, None);
         let alpha = |x: u32, y: u32| pm.pixel(x, y).map(|p| p.alpha()).unwrap_or(0);
@@ -242,7 +242,7 @@ mod tests {
         draw(&mut pm2, &r, &style, &hi, 1.0, false, None);
         assert_eq!(pm2.pixel(200, 200).map(|p| p.alpha()), Some(255));
         assert_eq!(pm2.pixel(4, 4).map(|p| p.alpha()), Some(0));
-        let far = View { width: 3.0, height: 1.0, pixels_per_point: 2.0, camera: Camera::world() };
+        let far = View { width: 3.0, height: 1.0, pixels_per_point: 2.0, camera: Camera::world(), dark: false };
         let mut tiny = Pixmap::new(6, 2).unwrap();
         draw(&mut tiny, &r, &style, &far, 1.0, true, None);
     }

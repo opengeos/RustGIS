@@ -166,6 +166,11 @@ impl Layer {
         &self.projected
     }
 
+    /// The Web Mercator copies from the last [`Layer::projected`] call (empty before one).
+    pub fn projected_cache(&self) -> &[Option<Geometry>] {
+        &self.projected
+    }
+
     /// Marks geometry as changed.
     pub fn touch_geometry(&mut self) {
         self.geometry_rev = self.geometry_rev.wrapping_add(1);

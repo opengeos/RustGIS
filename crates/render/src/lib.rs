@@ -45,6 +45,8 @@ pub struct View {
     /// Physical pixels per logical point.
     pub pixels_per_point: f64,
     pub camera: Camera,
+    /// The interface is dark: the space around the globe is dark too.
+    pub dark: bool,
 }
 
 impl View {
@@ -395,7 +397,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     // Basemap.
     let (water, land, outline, grat) = map.basemap.palette();
     match &globe {
-        Some(g) => globe_backdrop(&mut pm, g, map.basemap, water, view.pixels_per_point as f32),
+        Some(g) => globe_backdrop(&mut pm, g, map.basemap, water, view.dark, view.pixels_per_point as f32),
         None => pm.fill(tiny_skia::Color::from_rgba8(water.r(), water.g(), water.b(), 255)),
     }
     if land != water {
@@ -439,7 +441,8 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
 
     // Layers, bottom first.
     let mut label_candidates: Vec<(PlacedLabel, f32)> = Vec::new();
-    for li in (0..map.layers.len()).rev() {
+    let n_layers = map.layers.len();
+    for li in (0..n_layers).rev() {
         let Some(layer) = map.layers.get_mut(li) else { continue };
         if !layer.visible || !layer.in_scale_range(scale) {
             continue;
@@ -452,17 +455,17 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
             continue;
         }
         let rows = layer.visible_rows();
-        let renderer = layer.renderer.clone();
-        let labels = layer.labels.clone();
-        let selection: Vec<usize> = layer.selection.clone();
-        let ds_ptr = layer.dataset.clone();
-        // The globe draws the lon/lat geometry itself (borrowed, not copied); the flat map its
-        // cached Web Mercator copy.
-        let projected: Vec<Option<Geometry>> = if globe.is_some() { Vec::new() } else { layer.projected().to_vec() };
+        if globe.is_none() {
+            layer.projected(); // refresh the Web Mercator cache
+        }
+        // Everything below only reads the layer: borrow rather than copy its data each frame.
+        let layer: &rustgis_map::Layer = layer;
+        let (renderer, labels, selection, ds_ptr) = (&layer.renderer, &layer.labels, &layer.selection, &layer.dataset);
+        // The globe draws the lon/lat geometry itself; the flat map its Web Mercator copy.
         let geoms: Vec<Option<&Geometry>> = if globe.is_some() {
             ds_ptr.features.iter().map(|f| f.geometry.as_ref()).collect()
         } else {
-            projected.iter().map(Option::as_ref).collect()
+            layer.projected_cache().iter().map(Option::as_ref).collect()
         };
         let mut target = if opacity < 0.999 { Pixmap::new(w, h)? } else { Pixmap::new(1, 1)? };
         let direct = opacity >= 0.999;
@@ -473,17 +476,17 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                 if rows.get(row) != Some(&true) || !visible(&g.extent()) {
                     continue;
                 }
-                ctx.feature(dest, g, &renderer.symbol_for(&ds_ptr, row));
+                ctx.feature(dest, g, &renderer.symbol_for(ds_ptr, row));
             }
         }
         if !direct {
             pm.draw_pixmap(0, 0, target.as_ref(), &PixmapPaint { opacity, ..PixmapPaint::default() }, Transform::identity(), None);
         }
-        for row in &selection {
+        for row in selection {
             if let Some(Some(g)) = geoms.get(*row)
                 && rows.get(*row) == Some(&true)
             {
-                ctx.highlight(&mut pm, g, &renderer.symbol_for(&ds_ptr, *row));
+                ctx.highlight(&mut pm, g, &renderer.symbol_for(ds_ptr, *row));
             }
         }
         if labels.enabled
@@ -503,11 +506,8 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                     continue;
                 }
                 let Some((x, y)) = ctx.screen(c) else { continue };
-                let dy = if g.kind() == GeometryType::Point {
-                    -(renderer.symbol_for(&ds_ptr, row).size / 2.0 + labels.size * 0.75)
-                } else {
-                    0.0
-                };
+                let dy =
+                    if g.kind() == GeometryType::Point { -(renderer.symbol_for(ds_ptr, row).size / 2.0 + labels.size * 0.75) } else { 0.0 };
                 // Bigger polygons get priority.
                 let pri = match g {
                     Geometry::Polygon(_) => {
@@ -515,7 +515,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                         (e.width() * e.height()).sqrt() as f32
                     }
                     _ => 0.0,
-                } + (map.layers.len() - li) as f32 * 1e9;
+                } + (n_layers - li) as f32 * 1e9;
                 label_candidates.push((
                     PlacedLabel {
                         text: v.to_string(),
@@ -532,16 +532,76 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         }
     }
     if let Some(g) = &globe {
-        globe_shading(&mut pm, g, view.pixels_per_point as f32);
+        globe_shading(&mut pm, g, map.basemap, water, view.dark, view.pixels_per_point as f32);
     }
     let labels = place_labels(label_candidates, view.width as f32, view.height as f32);
     Some(Rendered { pixmap: pm, labels })
 }
 
+/// The globe's backdrop and lighting depend only on the view size, zoom and basemap, not on the
+/// rotation, so they are drawn once and reused while the globe turns.
+struct GlobeLayers {
+    key: (u32, u32, u32, u32, u32, u32, rustgis_map::Basemap, [u8; 4], bool),
+    backdrop: Pixmap,
+    shading: Pixmap,
+}
+
+thread_local! {
+    static GLOBE_LAYERS: std::cell::RefCell<Option<GlobeLayers>> = const { std::cell::RefCell::new(None) };
+}
+
+fn with_globe_layers(
+    pm: &mut Pixmap,
+    g: &Globe,
+    basemap: rustgis_map::Basemap,
+    water: Rgba,
+    dark: bool,
+    ppp: f32,
+    f: impl FnOnce(&mut Pixmap, &GlobeLayers),
+) {
+    let (cx, cy) = g.center();
+    let key = (
+        pm.width(),
+        pm.height(),
+        ppp.to_bits(),
+        (cx as f32).to_bits(),
+        (cy as f32).to_bits(),
+        (g.disc_radius() as f32).to_bits(),
+        basemap,
+        water.0,
+        dark,
+    );
+    GLOBE_LAYERS.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        if cache.as_ref().is_none_or(|c| c.key != key) {
+            let (Some(mut backdrop), Some(mut shading)) = (Pixmap::new(pm.width(), pm.height()), Pixmap::new(pm.width(), pm.height()))
+            else {
+                return;
+            };
+            draw_globe_backdrop(&mut backdrop, g, basemap, water, dark, ppp);
+            draw_globe_shading(&mut shading, g, ppp);
+            *cache = Some(GlobeLayers { key, backdrop, shading });
+        }
+        if let Some(c) = cache.as_ref() {
+            f(pm, c);
+        }
+    });
+}
+
+fn globe_backdrop(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, water: Rgba, dark: bool, ppp: f32) {
+    with_globe_layers(pm, g, basemap, water, dark, ppp, |pm, c| pm.data_mut().copy_from_slice(c.backdrop.data()));
+}
+
+fn globe_shading(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, water: Rgba, dark: bool, ppp: f32) {
+    with_globe_layers(pm, g, basemap, water, dark, ppp, |pm, c| {
+        pm.draw_pixmap(0, 0, c.shading.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+    });
+}
+
 /// The globe's surroundings and ocean: space (or a soft backdrop), an atmosphere glow, and the
 /// ocean disc.
-fn globe_backdrop(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, water: Rgba, ppp: f32) {
-    let dark = basemap == rustgis_map::Basemap::Midnight;
+fn draw_globe_backdrop(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, water: Rgba, dark_ui: bool, ppp: f32) {
+    let dark = dark_ui || basemap == rustgis_map::Basemap::Midnight;
     let bg = if dark { Rgba::rgb(0x08, 0x0B, 0x10) } else { Rgba::rgb(0xEC, 0xEF, 0xF3) };
     pm.fill(tiny_skia::Color::from_rgba8(bg.r(), bg.g(), bg.b(), 255));
     let (cx, cy) = g.center();
@@ -575,7 +635,7 @@ fn globe_backdrop(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, wat
 }
 
 /// Light from the upper left: a soft highlight and a darker limb, so the globe reads as a sphere.
-fn globe_shading(pm: &mut Pixmap, g: &Globe, ppp: f32) {
+fn draw_globe_shading(pm: &mut Pixmap, g: &Globe, ppp: f32) {
     let (cx, cy) = g.center();
     let (cx, cy, r) = (cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp);
     if !(r.is_finite() && r > 0.5 && cx.is_finite() && cy.is_finite()) {
@@ -655,7 +715,7 @@ mod tests {
             l.selection = vec![0];
         }
         let camera = Camera { center: lonlat_to_merc(Coord::new(2.35, 48.85)), res: 5000.0 };
-        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, dark: false };
         let r = render(&mut m, &view).unwrap();
         assert_eq!(r.labels.len(), 1);
         assert_eq!(r.labels[0].text, "Paris");
@@ -668,7 +728,7 @@ mod tests {
     fn degenerate_views_do_not_panic() {
         let mut m = Map::new("Map");
         for (w, h) in [(0.0, 0.0), (1e9, 1e9), (f64::NAN, 3.0)] {
-            let view = View { width: w, height: h, pixels_per_point: 1.0, camera: Camera::world() };
+            let view = View { width: w, height: h, pixels_per_point: 1.0, camera: Camera::world(), dark: false };
             let _ = render(&mut m, &view);
         }
     }

@@ -203,6 +203,26 @@ impl Globe {
 }
 
 impl Globe {
+    /// Zooms by `factor`, keeping the point under (`sx`, `sy`) where it is when it's on the globe.
+    pub fn zoom_at(camera: &mut Camera, factor: f64, sx: f64, sy: f64, w: f64, h: f64) {
+        if !factor.is_finite() || factor <= 0.0 {
+            return;
+        }
+        let target = Globe::new(camera, w, h).inverse(sx, sy);
+        camera.res /= factor;
+        camera.clamp();
+        if let Some(t) = target {
+            // Turn the globe until the point is back under the pointer (converges in a few steps).
+            for _ in 0..3 {
+                let Some((x, y)) = Globe::new(camera, w, h).forward(t) else { break };
+                if (sx - x).abs() + (sy - y).abs() < 0.25 {
+                    break;
+                }
+                Globe::drag(camera, sx - x, sy - y, w, h);
+            }
+        }
+    }
+
     /// Points the camera at a longitude/latitude extent: centred on it, with the whole globe in
     /// view when the extent spans most of a hemisphere, otherwise zoomed as the flat map would.
     pub fn fit(camera: &mut Camera, e: &rustgis_geom::Extent, w: f64, h: f64) {
@@ -274,6 +294,18 @@ mod tests {
         let (x1, _) = g.forward(Coord::new(0.01, 0.0)).unwrap();
         let metres = 0.01_f64.to_radians() * MERCATOR_R;
         assert!(((x1 - 400.0) - metres / 20_000.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn zoom_keeps_the_point_under_the_pointer() {
+        let mut cam = Camera { center: lonlat_to_merc(Coord::new(10.0, 40.0)), res: 20_000.0 };
+        let target = Globe::new(&cam, 800.0, 600.0).inverse(520.0, 240.0).unwrap();
+        Globe::zoom_at(&mut cam, 1.6, 520.0, 240.0, 800.0, 600.0);
+        let (x, y) = Globe::new(&cam, 800.0, 600.0).forward(target).unwrap();
+        assert!((x - 520.0).abs() < 1.0 && (y - 240.0).abs() < 1.0, "{x},{y}");
+        assert!((cam.res - 20_000.0 / 1.6).abs() < 1e-6);
+        Globe::zoom_at(&mut cam, f64::NAN, 1.0, 1.0, 800.0, 600.0);
+        Globe::zoom_at(&mut cam, 2.0, 1.0, 1.0, 800.0, 600.0); // off the globe: plain zoom
     }
 
     #[test]
