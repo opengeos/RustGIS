@@ -395,8 +395,14 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<Raster> {
 }
 
 /// The EPSG code in a `.prj` next to an ASCII grid, when it names one.
+/// Only `.prj` files that name an EPSG authority are understood (not bare `PROJCS` names).
 fn sidecar_crs(path: &Path) -> Option<Crs> {
-    let text = std::fs::read_to_string(path.with_extension("prj")).ok()?;
+    let prj = path.with_extension("prj");
+    let meta = std::fs::metadata(&prj).ok()?;
+    if !meta.is_file() || meta.len() > 1 << 20 {
+        return None;
+    }
+    let text = std::fs::read_to_string(prj).ok()?;
     let at = text.rfind("AUTHORITY[\"EPSG\",")?;
     let code: String = text.get(at + 17..)?.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
     Crs::from_epsg(code.parse().ok()?)

@@ -124,26 +124,33 @@ pub fn read<R: Read + Seek>(r: R, name: &str) -> Result<Raster> {
     let (mut w, mut h) = (full_w, full_h);
     let mut overview = None;
     if !fits(w, h, spp, bytes) {
-        let mut found = false;
+        // The largest overview that fits, whatever order the images are in; a damaged image
+        // ends the search rather than the open.
+        let mut best: Option<(usize, u32, u32)> = None;
+        let mut index = 0;
         while dec.more_images() {
-            dec.next_image().map_err(err)?;
+            if dec.next_image().is_err() {
+                break;
+            }
+            index += 1;
             let subfile = dec.find_tag_unsigned::<u32>(Tag::NewSubfileType).ok().flatten().unwrap_or(0);
             if subfile & 4 != 0 {
                 continue; // a transparency mask
             }
-            let (ow, oh) = dec.dimensions().map_err(err)?;
+            let Ok((ow, oh)) = dec.dimensions() else { continue };
             let (ospp, obytes) = (samples(&mut dec), sample_bytes(&mut dec));
-            if fits(ow, oh, ospp, obytes) {
-                (w, h) = (ow, oh);
-                overview = Some((full_w, full_h));
-                found = true;
-                break;
+            if fits(ow, oh, ospp, obytes) && best.is_none_or(|(_, bw, bh)| ow as u64 * oh as u64 > bw as u64 * bh as u64) {
+                best = Some((index, ow, oh));
             }
         }
-        if !found {
+        let Some((index, ow, oh)) = best else {
             return Err(err(format!("{full_w} × {full_h} pixels is too large to open; build overviews for it first")));
-        }
+        };
+        dec.seek_to_image(index).map_err(err)?;
+        (w, h) = (ow, oh);
+        overview = Some((full_w, full_h));
     }
+    // From here on, tags (colour type, planar layout) are those of the chosen image.
     let ct = dec.colortype().map_err(err)?;
     let (nbands, color) = match ct {
         ColorType::Gray(_) => (1, ColorHint::Gray),

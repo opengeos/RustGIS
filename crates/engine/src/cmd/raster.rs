@@ -290,7 +290,12 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
     let path = ps(p, "path").ok_or("path is required")?.to_string();
     let (_, bytes) = geotiff_bytes(s, p)?;
     rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
-    s.notify(format!("Exported {path}"), false);
+    let (_, r) = get(s, p)?;
+    let note = match r.overview {
+        Some((fw, fh)) => format!(" (the {} × {} overview of the {fw} × {fh} raster)", r.width, r.height),
+        None => String::new(),
+    };
+    s.notify(format!("Exported {path}{note}"), false);
     Ok(json!({"path": path}))
 }
 
