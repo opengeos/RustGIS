@@ -106,14 +106,15 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
 
     interact(app, ui, &resp, rect);
 
-    // Render when the map changed and we're not in the middle of a pan/zoom: meanwhile the last
-    // frame is shifted and scaled. Dragging the globe turns it, which no shift can show, so it
-    // redraws then, at reduced resolution, and in full once it settles.
+    // Render when the map changed and we're not in the middle of a pan/zoom: meanwhile the flat
+    // map's last frame is shifted and scaled. The globe can't be faked that way (turning and
+    // zooming in perspective aren't shifts and scales), so while it moves it redraws every frame
+    // at reduced resolution, then once in full when it settles.
     let cam = app.session.map().camera;
     let globe_view = app.session.map().projection == Projection::Globe;
     let dragging = app.map.drag.is_some_and(|(_, k)| k == DragKind::Pan);
     let moving = dragging || time - app.map.last_interaction < 0.18;
-    let draft = globe_view && dragging;
+    let draft = globe_view && moving;
     let render_ppp = if draft { (ppp * 0.6).max(0.5) } else { ppp };
     let key = Key {
         rev: app.session.revision,
@@ -122,7 +123,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         dark: t.dark,
         draft,
     };
-    let interacting = if globe_view { moving && !dragging } else { moving };
+    let interacting = !globe_view && moving;
     if globe_view && !moving && app.map.key.is_some_and(|k| k.draft) {
         ui.ctx().request_repaint();
     }
@@ -173,9 +174,10 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     if let Some(tex) = &app.map.texture {
         painter.image(tex.id(), tex_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
-    // Labels (moved with the texture; hidden while zooming).
+    // Labels (moved with the texture; hidden while zooming, and while the globe moves, where
+    // re-placing them every frame would make them flicker).
     let zooming = (old.res / cam.res - 1.0).abs() > 0.002;
-    if !zooming {
+    if !zooming && !(globe_view && moving) {
         let dx = tex_rect.min.x - rect.min.x;
         let dy = tex_rect.min.y - rect.min.y;
         for l in &app.map.labels {
