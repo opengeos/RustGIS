@@ -1,0 +1,67 @@
+# Dependabot keeps dependencies and their security advisories current. Updates
+# are grouped so the repo gets a few consolidated PRs per week rather than one
+# PR per dependency.
+version: 2
+updates:
+  # Rust — one workspace lockfile at the root covers every crate and app.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Security fixes land on their own, immediately actionable PRs.
+      cargo-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      # egui, eframe and egui_extras release in lockstep and must move together,
+      # majors included, or the workspace stops building.
+      egui:
+        applies-to: version-updates
+        patterns:
+          - "egui*"
+          - "eframe"
+          - "epaint*"
+          - "emath"
+          - "ecolor"
+      # Routine minor/patch bumps are batched into one PR to cut review noise.
+      cargo-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  # Python — the Zensical docs toolchain (requirements_docs.txt).
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      docs-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      docs-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions used by the workflows in .github/workflows/.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      actions-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
