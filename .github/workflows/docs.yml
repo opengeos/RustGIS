@@ -27,7 +27,7 @@ jobs:
           uv venv --python 3.12
           uv pip install -r requirements_docs.txt
           .venv/bin/zensical build
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: ./site
 
