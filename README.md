@@ -45,7 +45,7 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 |---|---|
 | **Data** | GeoJSON, CSV with longitude/latitude, Shapefile in; GeoJSON and CSV out; standalone tables |
 | **Rasters** | GeoTIFF and cloud-optimised GeoTIFF (any pixel type, tiled or striped, compressed), ASCII grids; on-the-fly reprojection from any EPSG code; Stretch, RGB, Classify, Unique Values, Colormap and Shaded Relief symbology; five stretch types, DRA, band combinations, resampling, brightness/contrast/gamma; pixel identify, statistics, GeoTIFF export |
-| **Map** | Smooth pan/zoom, five basemaps, graticule, bookmarks, previous/next extent, Go To XY, scale box, multiple maps per project |
+| **Map** | 3D globe view (drag to turn) or flat Web Mercator; smooth pan/zoom, five basemaps, graticule, bookmarks, previous/next extent, Go To XY, scale box, multiple maps per project |
 | **Symbology** | Single symbol, unique values, graduated colours (natural breaks, equal interval, quantile), proportional symbols, eight colour schemes, marker shapes, outlines, transparency, visibility ranges |
 | **Labeling** | Per-layer labels with field, size, colour, bold and halo; collision-free placement |
 | **Selection** | Click and box select (add/remove), Select By Attributes with live SQL validation, Select By Location, switch/clear/zoom to selection, layer from selection |

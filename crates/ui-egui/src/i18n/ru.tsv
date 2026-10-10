@@ -257,6 +257,7 @@ Geoprocessing	Геообработка
 Geoprocessing history.	История геообработки.
 Geoprocessing Pane	Панель геообработки
 GeoTIFF	GeoTIFF
+Globe	Глобус
 Go	Перейти
 Go back to the previous extent.	Вернуться к предыдущему экстенту.
 Go forward to the next extent.	Перейти к следующему экстенту.
@@ -517,6 +518,7 @@ Show or hide the Catalog pane.	Показать или скрыть панель
 Show or hide the Contents pane.	Показать или скрыть панель «Содержание».
 Show or hide the Geoprocessing pane.	Показать или скрыть панель «Геообработка».
 Show or hide the layer.	Показать или скрыть слой.
+Show the map as a 3D globe, or as a flat map again.	Показать карту в виде 3D-глобуса или снова в виде плоской карты.
 Show the Symbology pane for the selected layer.	Показать панель «Символы» для выбранного слоя.
 Simplify	Упростить
 Single Symbol	Единый символ
@@ -591,6 +593,7 @@ Visibility Range	Диапазон видимости
 Visible	Видимый
 Welcome to RustGIS	Добро пожаловать в RustGIS
 West	Запад
+WGS 84 / Globe	WGS 84 / Глобус
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Где
 Where Clause	Условие WHERE

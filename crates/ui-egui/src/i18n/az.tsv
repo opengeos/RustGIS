@@ -257,6 +257,7 @@ Geoprocessing	Geoemal
 Geoprocessing history.	Geoemal tarixçəsi.
 Geoprocessing Pane	Geoemal paneli
 GeoTIFF	GeoTIFF
+Globe	Qlobus
 Go	Keç
 Go back to the previous extent.	Əvvəlki hüduda qayıdın.
 Go forward to the next extent.	Növbəti hüduda keçin.
@@ -517,6 +518,7 @@ Show or hide the Catalog pane.	Kataloq panelini göstərin və ya gizlədin.
 Show or hide the Contents pane.	Məzmun panelini göstərin və ya gizlədin.
 Show or hide the Geoprocessing pane.	Geoemal panelini göstərin və ya gizlədin.
 Show or hide the layer.	Layı göstərin və ya gizlədin.
+Show the map as a 3D globe, or as a flat map again.	Xəritəni 3D qlobus kimi və ya yenidən düz xəritə kimi göstər.
 Show the Symbology pane for the selected layer.	Seçilmiş lay üçün Simvolika panelini göstərin.
 Simplify	Sadələşdir
 Single Symbol	Tək simvol
@@ -591,6 +593,7 @@ Visibility Range	Görünmə diapazonu
 Visible	Görünən
 Welcome to RustGIS	RustGIS-ə xoş gəlmisiniz
 West	Qərb
+WGS 84 / Globe	WGS 84 / Qlobus
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Where
 Where Clause	Where şərti

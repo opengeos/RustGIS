@@ -257,6 +257,7 @@ Geoprocessing	Xử lý không gian
 Geoprocessing history.	Lịch sử xử lý không gian.
 Geoprocessing Pane	Ngăn xử lý không gian
 GeoTIFF	GeoTIFF
+Globe	Quả địa cầu
 Go	Đi
 Go back to the previous extent.	Quay lại phạm vi trước.
 Go forward to the next extent.	Đi tới phạm vi tiếp theo.
@@ -517,6 +518,7 @@ Show or hide the Catalog pane.	Hiện hoặc ẩn ngăn Danh mục.
 Show or hide the Contents pane.	Hiện hoặc ẩn ngăn Nội dung.
 Show or hide the Geoprocessing pane.	Hiện hoặc ẩn ngăn Xử lý không gian.
 Show or hide the layer.	Hiện hoặc ẩn lớp.
+Show the map as a 3D globe, or as a flat map again.	Hiển thị bản đồ dưới dạng quả địa cầu 3D, hoặc trở lại bản đồ phẳng.
 Show the Symbology pane for the selected layer.	Hiện ngăn Ký hiệu cho lớp được chọn.
 Simplify	Đơn giản hóa
 Single Symbol	Ký hiệu đơn
@@ -591,6 +593,7 @@ Visibility Range	Phạm vi hiển thị
 Visible	Hiển thị
 Welcome to RustGIS	Chào mừng đến với RustGIS
 West	Tây
+WGS 84 / Globe	WGS 84 / Quả địa cầu
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Điều kiện
 Where Clause	Mệnh đề WHERE

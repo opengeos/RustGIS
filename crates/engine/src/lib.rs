@@ -391,7 +391,12 @@ impl Session {
     /// Fits the camera to a lon/lat extent in the current view size.
     pub fn zoom_to(&mut self, e: &rustgis_geom::Extent) {
         let (w, h) = self.view_size;
-        self.map_mut().camera.fit_lonlat(e, w, h);
+        let m = self.map_mut();
+        if m.projection == rustgis_map::Projection::Globe {
+            rustgis_map::Globe::fit(&mut m.camera, e, w, h);
+        } else {
+            m.camera.fit_lonlat(e, w, h);
+        }
         self.record_extent();
     }
 

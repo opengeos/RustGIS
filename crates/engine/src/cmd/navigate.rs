@@ -1,7 +1,7 @@
 //! Map tab › Navigate, Layer (basemap) and Insert › Project (new map), bookmarks.
 
 use rustgis_geom::{Coord, Extent, lonlat_to_merc};
-use rustgis_map::{Basemap, Bookmark, Map};
+use rustgis_map::{Basemap, Bookmark, Map, Projection};
 use serde_json::{Value, json};
 
 use super::{f, ps};
@@ -42,6 +42,16 @@ pub fn commands() -> Vec<C> {
             m.graticule = super::b(p, "on").unwrap_or(!m.graticule);
             Ok(Value::Null)
         }),
+        C::new("map.projection", "Globe", "View › View", |s, p| {
+            let m = s.map_mut();
+            m.projection = match ps(p, "type") {
+                Some(t) => Projection::from_code(t).ok_or_else(|| format!("unknown projection '{t}'"))?,
+                None if m.projection == Projection::Globe => Projection::WebMercator,
+                None => Projection::Globe,
+            };
+            Ok(json!({"projection": m.projection.code()}))
+        })
+        .params(r#"{"type"?: "mercator"|"globe" (toggles when omitted)}"#),
         C::new("bookmark.add", "New Bookmark", "Map › Navigate › Bookmarks", add_bookmark).params(r#"{"name"?: string}"#),
         C::new("bookmark.go", "Go To Bookmark", "Map › Navigate › Bookmarks", go_bookmark).view().params(r#"{"name": string}"#),
         C::new("bookmark.remove", "Remove Bookmark", "Map › Navigate › Bookmarks", |s, p| {

@@ -155,7 +155,7 @@ pub static FEATURES: &[Feature] = &[
     f("View", "View", "Global", None),
     f("View", "View", "Local", None),
     f("View", "View", "Map", Some("map.new")),
-    f("View", "View", "Convert", None),
+    f("View", "View", "Convert", Some("map.projection")),
     f("View", "Link", "Link Views", None),
     f("View", "Link", "Link Cursors", None),
     f("View", "Windows", "Pane Sets", None),

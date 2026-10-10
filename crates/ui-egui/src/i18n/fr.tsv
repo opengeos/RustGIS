@@ -257,6 +257,7 @@ Geoprocessing	Géotraitement
 Geoprocessing history.	Historique de géotraitement.
 Geoprocessing Pane	Volet Géotraitement
 GeoTIFF	GeoTIFF
+Globe	Globe
 Go	Aller
 Go back to the previous extent.	Revenir à l'emprise précédente.
 Go forward to the next extent.	Passer à l'emprise suivante.
@@ -517,6 +518,7 @@ Show or hide the Catalog pane.	Afficher ou masquer le volet Catalogue.
 Show or hide the Contents pane.	Afficher ou masquer le volet Contenu.
 Show or hide the Geoprocessing pane.	Afficher ou masquer le volet Géotraitement.
 Show or hide the layer.	Afficher ou masquer la couche.
+Show the map as a 3D globe, or as a flat map again.	Afficher la carte sous forme de globe 3D, ou de nouveau à plat.
 Show the Symbology pane for the selected layer.	Afficher le volet Symbologie de la couche sélectionnée.
 Simplify	Simplifier
 Single Symbol	Symbole unique
@@ -591,6 +593,7 @@ Visibility Range	Plage de visibilité
 Visible	Visible
 Welcome to RustGIS	Bienvenue dans RustGIS
 West	Ouest
+WGS 84 / Globe	WGS 84 / Globe
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Où
 Where Clause	Clause WHERE

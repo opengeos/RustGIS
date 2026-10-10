@@ -257,6 +257,7 @@ Geoprocessing	ジオプロセシング
 Geoprocessing history.	ジオプロセシングの履歴。
 Geoprocessing Pane	ジオプロセシング ウィンドウ
 GeoTIFF	GeoTIFF
+Globe	地球儀
 Go	移動
 Go back to the previous extent.	前の範囲に戻ります。
 Go forward to the next extent.	次の範囲に進みます。
@@ -517,6 +518,7 @@ Show or hide the Catalog pane.	カタログ ウィンドウの表示/非表示�
 Show or hide the Contents pane.	コンテンツ ウィンドウの表示/非表示を切り替えます。
 Show or hide the Geoprocessing pane.	ジオプロセシング ウィンドウの表示/非表示を切り替えます。
 Show or hide the layer.	レイヤーの表示/非表示を切り替えます。
+Show the map as a 3D globe, or as a flat map again.	マップを 3D の地球儀として表示するか、平面のマップに戻します。
 Show the Symbology pane for the selected layer.	選択したレイヤーのシンボル ウィンドウを表示します。
 Simplify	単純化
 Single Symbol	単一シンボル
@@ -591,6 +593,7 @@ Visibility Range	表示縮尺範囲
 Visible	表示
 Welcome to RustGIS	RustGIS へようこそ
 West	西
+WGS 84 / Globe	WGS 84 / 地球儀
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	条件
 Where Clause	WHERE 句

@@ -5,7 +5,7 @@
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::Tool;
 use rustgis_engine::geom::{Coord, Extent, geodesic_length_m, geodesic_ring_area_m2, lonlat_to_merc, merc_to_lonlat};
-use rustgis_engine::map::Camera;
+use rustgis_engine::map::{Camera, Globe, Projection};
 use rustgis_engine::render::{PlacedLabel, View};
 use serde_json::{Value, json};
 
@@ -18,6 +18,8 @@ struct Key {
     cam: (i64, i64, i64),
     size: [usize; 2],
     dark: bool,
+    /// Rendered at reduced resolution while the globe was moving.
+    draft: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -104,19 +106,29 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
 
     interact(app, ui, &resp, rect);
 
-    // Render when the map changed and we're not in the middle of a pan/zoom.
+    // Render when the map changed and we're not in the middle of a pan/zoom. The flat map shifts
+    // its last frame while panning; the globe turns, so it redraws, at logical resolution while
+    // moving and in full once it settles.
     let cam = app.session.map().camera;
+    let globe_view = app.session.map().projection == Projection::Globe;
+    let moving = app.map.drag.is_some() || time - app.map.last_interaction < 0.18;
+    let draft = globe_view && moving && ppp > 1.0;
+    let render_ppp = if draft { 1.0 } else { ppp };
     let key = Key {
         rev: app.session.revision,
         cam: ((cam.center.x * 100.0) as i64, (cam.center.y * 100.0) as i64, (cam.res * 1000.0) as i64),
         size: [(w as f32 * ppp).round() as usize, (h as f32 * ppp).round() as usize],
         dark: t.dark,
+        draft,
     };
-    let interacting = app.map.drag.is_some() || time - app.map.last_interaction < 0.18;
+    let interacting = !globe_view && moving;
+    if globe_view && !moving && app.map.key.is_some_and(|k| k.draft) {
+        ui.ctx().request_repaint();
+    }
     let stale = app.map.key != Some(key);
     if stale && (!interacting || app.map.texture.is_none() || app.map.key.is_some_and(|k| k.rev != key.rev || k.size != key.size)) {
         let t0 = web_time::Instant::now();
-        let view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: cam };
+        let view = View { width: w, height: h, pixels_per_point: render_ppp as f64, camera: cam };
         if let Some(r) = rustgis_engine::render::render(app.session.map_mut(), &view) {
             let size = [r.pixmap.width() as usize, r.pixmap.height() as usize];
             let img = egui::ColorImage::from_rgba_premultiplied(size, r.pixmap.data());
@@ -174,22 +186,58 @@ fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
     p.text(at, Align2::CENTER_CENTER, &l.text, font, c32(l.color));
 }
 
-fn screen_to_lonlat(app: &RustGisApp, rect: Rect, p: Pos2) -> Coord {
-    let (w, h) = (rect.width() as f64, rect.height() as f64);
-    merc_to_lonlat(app.session.map().camera.to_map((p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64, w, h))
+/// The globe as seen in this view, when the map is a globe.
+fn globe(app: &RustGisApp, rect: Rect) -> Option<Globe> {
+    let m = app.session.map();
+    (m.projection == Projection::Globe).then(|| Globe::new(&m.camera, rect.width() as f64, rect.height() as f64))
 }
 
-fn lonlat_to_screen(app: &RustGisApp, rect: Rect, c: Coord) -> Pos2 {
+/// The longitude/latitude under a screen point (`None` off the globe).
+fn screen_to_lonlat(app: &RustGisApp, rect: Rect, p: Pos2) -> Option<Coord> {
     let (w, h) = (rect.width() as f64, rect.height() as f64);
-    let (x, y) = app.session.map().camera.to_screen(lonlat_to_merc(c), w, h);
-    pos2(rect.min.x + x as f32, rect.min.y + y as f32)
+    let (x, y) = ((p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64);
+    match globe(app, rect) {
+        Some(g) => g.inverse(x, y),
+        None => Some(merc_to_lonlat(app.session.map().camera.to_map(x, y, w, h))),
+    }
+}
+
+/// The screen point of a longitude/latitude (`None` behind the globe).
+fn lonlat_to_screen(app: &RustGisApp, rect: Rect, c: Coord) -> Option<Pos2> {
+    let (w, h) = (rect.width() as f64, rect.height() as f64);
+    let (x, y) = match globe(app, rect) {
+        Some(g) => g.forward(c)?,
+        None => app.session.map().camera.to_screen(lonlat_to_merc(c), w, h),
+    };
+    Some(pos2(rect.min.x + x as f32, rect.min.y + y as f32))
+}
+
+/// Pans the flat map, or turns the globe, by a screen offset.
+fn pan(app: &mut RustGisApp, dx: f64, dy: f64, w: f64, h: f64) {
+    let m = app.session.map_mut();
+    if m.projection == Projection::Globe {
+        Globe::drag(&mut m.camera, dx, dy, w, h);
+    } else {
+        m.camera.pan_px(dx, dy);
+    }
+}
+
+/// Zooms by `factor` about a screen point (the globe zooms about its centre).
+fn zoom(app: &mut RustGisApp, factor: f64, x: f64, y: f64, w: f64, h: f64) {
+    let m = app.session.map_mut();
+    if m.projection == Projection::Globe {
+        m.camera.res /= factor;
+        m.camera.clamp();
+    } else {
+        m.camera.zoom_at(factor, x, y, w, h);
+    }
 }
 
 fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect) {
     let (w, h) = (rect.width() as f64, rect.height() as f64);
     let time = now(ui);
     let hover = resp.hover_pos();
-    app.map.pointer_lonlat = hover.map(|p| screen_to_lonlat(app, rect, p));
+    app.map.pointer_lonlat = hover.and_then(|p| screen_to_lonlat(app, rect, p));
     let tool = app.session.tool;
 
     // Wheel zoom about the pointer.
@@ -197,7 +245,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         let scroll = ui.input(|i| i.smooth_scroll_delta.y + i.zoom_delta().ln() * 300.0);
         if scroll.abs() > 0.1 {
             let f = (scroll as f64 * 0.0028).exp();
-            app.session.map_mut().camera.zoom_at(f, (p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64, w, h);
+            zoom(app, f, (p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64, w, h);
             app.map.last_interaction = time;
             app.map.camera_moved = true;
             app.map.popup = None;
@@ -221,7 +269,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             }
         });
         if dx != 0.0 || dy != 0.0 {
-            app.session.map_mut().camera.pan_px(dx, dy);
+            pan(app, dx, dy, w, h);
             app.map.last_interaction = time;
             app.map.camera_moved = true;
         }
@@ -249,7 +297,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     if let Some((_, DragKind::Pan)) = app.map.drag {
         let d = resp.drag_delta();
         if d != egui::Vec2::ZERO {
-            app.session.map_mut().camera.pan_px(d.x as f64, d.y as f64);
+            pan(app, d.x as f64, d.y as f64, w, h);
             app.map.camera_moved = true;
             app.map.last_interaction = time;
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -257,10 +305,15 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     }
     if resp.drag_stopped() {
         if let (Some((start, DragKind::Box)), Some(end)) = (app.map.drag, resp.interact_pointer_pos()) {
-            let a = screen_to_lonlat(app, rect, start);
-            let b = screen_to_lonlat(app, rect, end);
-            let e = Extent::from_points(a, b);
-            if tool == Tool::Select {
+            // A box reaching off the globe uses the corners that are on it.
+            let corners = [start, end, pos2(start.x, end.y), pos2(end.x, start.y)];
+            let mut e = Extent::EMPTY;
+            for c in corners.iter().filter_map(|c| screen_to_lonlat(app, rect, *c)) {
+                e.expand(c);
+            }
+            if e.is_empty() {
+                // Nothing on the globe.
+            } else if tool == Tool::Select {
                 let mode = ui.input(|i| {
                     if i.modifiers.shift {
                         "add"
@@ -288,7 +341,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         if matches!(tool, Tool::CreateLine | Tool::CreatePolygon | Tool::Measure | Tool::MeasureArea) {
             finish_sketch(app);
         } else if let Some(p) = resp.interact_pointer_pos() {
-            app.session.map_mut().camera.zoom_at(2.0, (p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64, w, h);
+            zoom(app, 2.0, (p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64, w, h);
             app.map.last_interaction = time;
             app.map.camera_moved = true;
             app.map.popup = None;
@@ -298,7 +351,11 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     if resp.clicked()
         && let Some(p) = resp.interact_pointer_pos()
     {
-        let c = screen_to_lonlat(app, rect, p);
+        let Some(c) = screen_to_lonlat(app, rect, p) else {
+            // A click off the globe.
+            app.map.popup = None;
+            return;
+        };
         match tool {
             Tool::Explore => {
                 let r = app.session.run("identify", &json!({"lon": c.x, "lat": c.y, "tolerancePx": 5}));
@@ -328,7 +385,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                 let _ = app.run("select.atPoint", json!({"lon": c.x, "lat": c.y, "tolerancePx": 5, "mode": mode}));
             }
             Tool::ZoomIn => {
-                app.session.map_mut().camera.zoom_at(2.0, (p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64, w, h);
+                zoom(app, 2.0, (p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64, w, h);
                 app.map.last_interaction = time;
                 app.map.camera_moved = true;
             }
@@ -340,7 +397,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                     app.map.cancel_sketch();
                 }
                 // A double-click arrives as two clicks first; ignore the duplicate vertex.
-                let dup = app.map.sketch.last().is_some_and(|l| (lonlat_to_screen(app, rect, *l) - p).length() < 3.0);
+                let dup = app.map.sketch.last().and_then(|l| lonlat_to_screen(app, rect, *l)).is_some_and(|s| (s - p).length() < 3.0);
                 if !dup {
                     app.map.sketch.push(c);
                 }
@@ -421,7 +478,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
             pts.push(c);
         }
         let closed = matches!(tool, Tool::MeasureArea | Tool::CreatePolygon);
-        let screen: Vec<Pos2> = pts.iter().map(|c| lonlat_to_screen(app, rect, *c)).collect();
+        let screen: Vec<Pos2> = pts.iter().filter_map(|c| lonlat_to_screen(app, rect, *c)).collect();
         let color = if tool.creates() { Color32::from_rgb(0x16, 0x9A, 0x5A) } else { Color32::from_rgb(0xE5, 0x6A, 0x1A) };
         if closed && screen.len() >= 3 {
             p.add(egui::Shape::closed_line(screen.clone(), Stroke::new(2.0, color)));
@@ -546,7 +603,7 @@ fn north_arrow(p: &egui::Painter, rect: Rect, t: &Tokens) {
 fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     let Some(pp) = &app.map.popup else { return };
     let t = Tokens::get(ui.ctx());
-    let anchor = lonlat_to_screen(app, rect, pp.at);
+    let Some(anchor) = lonlat_to_screen(app, rect, pp.at) else { return };
     if !rect.contains(anchor) {
         return;
     }

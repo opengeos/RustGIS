@@ -136,6 +136,7 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
         "maps": s.project.maps.iter().map(|m| m.name.clone()).collect::<Vec<_>>(),
         "activeMap": m.name,
         "basemap": m.basemap.code(),
+        "projection": m.projection.code(),
         "scale": m.camera.scale().round(),
         "center": {"lon": m.camera.center_lonlat().x, "lat": m.camera.center_lonlat().y},
         "layers": m.layers.iter().map(|l| match &l.raster {

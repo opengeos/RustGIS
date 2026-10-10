@@ -257,6 +257,7 @@ Geoprocessing	Coğrafi İşleme
 Geoprocessing history.	Coğrafi işleme geçmişi.
 Geoprocessing Pane	Coğrafi İşleme Paneli
 GeoTIFF	GeoTIFF
+Globe	Küre
 Go	Git
 Go back to the previous extent.	Önceki kapsama geri dön.
 Go forward to the next extent.	Sonraki kapsama ilerle.
@@ -517,6 +518,7 @@ Show or hide the Catalog pane.	Katalog panelini göster veya gizle.
 Show or hide the Contents pane.	İçindekiler panelini göster veya gizle.
 Show or hide the Geoprocessing pane.	Coğrafi İşleme panelini göster veya gizle.
 Show or hide the layer.	Katmanı göster veya gizle.
+Show the map as a 3D globe, or as a flat map again.	Haritayı 3B küre olarak veya yeniden düz harita olarak göster.
 Show the Symbology pane for the selected layer.	Seçili katman için Semboloji panelini göster.
 Simplify	Basitleştir
 Single Symbol	Tek Sembol
@@ -591,6 +593,7 @@ Visibility Range	Görünürlük Aralığı
 Visible	Görünür
 Welcome to RustGIS	RustGIS'e hoş geldiniz
 West	Batı
+WGS 84 / Globe	WGS 84 / Küre
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Koşul
 Where Clause	Where Yan Tümcesi

@@ -487,6 +487,20 @@ fn analysis_tab(app: &mut RustGisApp, ui: &mut Ui) {
 }
 
 fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "View", |ui| {
+        let on = app.session.map().projection == rustgis_engine::map::Projection::Globe;
+        big(
+            ui,
+            app,
+            "globe_view",
+            "Globe",
+            "Show the map as a 3D globe, or as a flat map again.",
+            "map.projection",
+            Value::Null,
+            on,
+            false,
+        );
+    });
     group(ui, "Windows", |ui| {
         big(
             ui,

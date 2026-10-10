@@ -204,7 +204,11 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                 if resp.on_hover_text(tl!("Click to switch between decimal degrees and DMS")).clicked() {
                     app.map.dms = !app.map.dms;
                 }
-                ui.label(egui::RichText::new(tl!("WGS 84 / Web Mercator")).size(11.0).color(t.text_disabled));
+                let projection = match app.session.map().projection {
+                    rustgis_engine::map::Projection::Globe => tl!("WGS 84 / Globe"),
+                    rustgis_engine::map::Projection::WebMercator => tl!("WGS 84 / Web Mercator"),
+                };
+                ui.label(egui::RichText::new(projection).size(11.0).color(t.text_disabled));
                 sep(ui, &t);
                 let n = app.session.map().selection_count();
                 ui.label(

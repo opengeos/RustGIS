@@ -257,6 +257,7 @@ Geoprocessing	Geoprocessing
 Geoprocessing history.	Cronologia del geoprocessing.
 Geoprocessing Pane	Pannello Geoprocessing
 GeoTIFF	GeoTIFF
+Globe	Globo
 Go	Vai
 Go back to the previous extent.	Torna all'estensione precedente.
 Go forward to the next extent.	Vai all'estensione successiva.
@@ -517,6 +518,7 @@ Show or hide the Catalog pane.	Mostra o nascondi il pannello Catalogo.
 Show or hide the Contents pane.	Mostra o nascondi il pannello Contenuti.
 Show or hide the Geoprocessing pane.	Mostra o nascondi il pannello Geoprocessing.
 Show or hide the layer.	Mostra o nascondi il layer.
+Show the map as a 3D globe, or as a flat map again.	Mostra la mappa come globo 3D, o di nuovo come mappa piana.
 Show the Symbology pane for the selected layer.	Mostra il pannello Simbologia per il layer selezionato.
 Simplify	Semplifica
 Single Symbol	Simbolo singolo
@@ -591,6 +593,7 @@ Visibility Range	Intervallo di visibilità
 Visible	Visibile
 Welcome to RustGIS	Benvenuto in RustGIS
 West	Ovest
+WGS 84 / Globe	WGS 84 / Globo
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Dove
 Where Clause	Clausola where

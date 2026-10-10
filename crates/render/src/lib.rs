@@ -23,8 +23,12 @@ use std::sync::OnceLock;
 
 use rustgis_data::{Dataset, Geometry, GeometryType};
 use rustgis_geom::{Coord, Extent, lonlat_to_merc};
-use rustgis_map::{Camera, Map, Marker, Rgba, Symbol};
-use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint, Stroke, Transform};
+use rustgis_map::globe::{V3, densify};
+use rustgis_map::{Camera, Globe, Map, Marker, Projection, Rgba, Symbol};
+use tiny_skia::{
+    FillRule, GradientStop, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint, Point, RadialGradient, SpreadMode, Stroke,
+    Transform,
+};
 
 /// Selection highlight (cyan, as desktop GIS users expect).
 pub const SELECTION: Rgba = Rgba::rgb(0x00, 0xE5, 0xFF);
@@ -84,6 +88,15 @@ fn world() -> &'static Vec<Geometry> {
     })
 }
 
+/// The built-in world outline in longitude/latitude, for the globe.
+fn world_lonlat() -> &'static Vec<Geometry> {
+    static W: OnceLock<Vec<Geometry>> = OnceLock::new();
+    W.get_or_init(|| world().iter().map(|g| g.map_coords(&rustgis_geom::merc_to_lonlat)).collect())
+}
+
+/// Largest angle between globe vertices before edges are bent along great circles (2°).
+const GLOBE_STEP: f64 = 0.035;
+
 /// The built-in world dataset (lon/lat), for the sample project.
 pub fn world_dataset(name: &str, text: &str) -> Option<Dataset> {
     rustgis_data::io::read_geojson(text, name).ok().map(|(d, _)| d)
@@ -102,15 +115,136 @@ struct Ctx<'a> {
     ppp: f32,
     /// Visible Mercator extent with a margin, for culling.
     cull: Extent,
+    /// Set when drawing the globe; coordinates are then longitude/latitude, not Web Mercator.
+    globe: Option<Globe>,
 }
 
 impl Ctx<'_> {
+    /// Logical screen position of a coordinate, `None` when it is behind the globe.
+    fn screen(&self, c: Coord) -> Option<(f64, f64)> {
+        match &self.globe {
+            Some(g) => g.forward(c),
+            None => Some(self.view.to_screen(c)),
+        }
+    }
+
     fn px(&self, c: Coord) -> (f32, f32) {
-        let (x, y) = self.view.to_screen(c);
+        match self.screen(c) {
+            Some((x, y)) => ((x * self.view.pixels_per_point) as f32, (y * self.view.pixels_per_point) as f32),
+            None => (f32::NAN, f32::NAN),
+        }
+    }
+
+    fn vpx(&self, g: &Globe, v: V3) -> (f32, f32) {
+        let (x, y) = g.project(v);
         ((x * self.view.pixels_per_point) as f32, (y * self.view.pixels_per_point) as f32)
     }
 
+    /// View vectors of a ring or line, with long edges bent along great circles.
+    fn globe_vectors(g: &Globe, pts: &[Coord]) -> Vec<V3> {
+        let mut out: Vec<V3> = Vec::with_capacity(pts.len());
+        for c in pts {
+            if !c.is_finite() {
+                continue;
+            }
+            let v = g.to_view(*c);
+            match out.last().copied() {
+                Some(prev) => out.extend(densify(prev, v, GLOBE_STEP)),
+                None => out.push(v),
+            }
+        }
+        out
+    }
+
+    /// A polygon ring on the globe. Hidden vertices are moved radially onto the horizon circle at
+    /// their own bearing, so the hidden part of the ring runs along the limb in its true order and
+    /// encloses no area; a ring that is wholly hidden is skipped.
+    fn globe_ring(&self, g: &Globe, pb: &mut PathBuilder, ring: &[Coord]) {
+        let vs = Self::globe_vectors(g, ring);
+        let h = g.horizon();
+        if vs.len() < 3 || vs.iter().all(|v| v[2] <= h) {
+            return;
+        }
+        let r = (1.0 - h * h).sqrt();
+        let limb = |v: V3| {
+            let a = v[1].atan2(v[0]);
+            [r * a.cos(), r * a.sin(), h]
+        };
+        let mut out: Vec<V3> = Vec::with_capacity(vs.len() + 8);
+        let push_limb = |out: &mut Vec<V3>, p: V3| {
+            // Follow the limb between hidden points that are far apart in bearing.
+            if let Some(last) = out.last().copied()
+                && last[2] <= h + 1e-9
+            {
+                out.extend(g.horizon_arc(last, p));
+            }
+            out.push(p);
+        };
+        let mut prev: Option<V3> = None;
+        for v in vs {
+            let vis = v[2] > h;
+            if let Some(p) = prev
+                && (p[2] > h) != vis
+            {
+                push_limb(&mut out, g.horizon_crossing(p, v));
+            }
+            if vis {
+                out.push(v)
+            } else {
+                push_limb(&mut out, limb(v))
+            }
+            prev = Some(v);
+        }
+        for (i, v) in out.iter().enumerate() {
+            let (x, y) = self.vpx(g, *v);
+            if i == 0 { pb.move_to(x, y) } else { pb.line_to(x, y) }
+        }
+        if !out.is_empty() {
+            pb.close();
+        }
+    }
+
+    /// A line on the globe, broken where it goes behind the horizon.
+    fn globe_line(&self, g: &Globe, pb: &mut PathBuilder, part: &[Coord]) {
+        let vs = Self::globe_vectors(g, part);
+        let h = g.horizon();
+        let mut prev: Option<V3> = None;
+        for v in vs {
+            let vis = v[2] > h;
+            match prev {
+                Some(p) if p[2] > h && vis => {
+                    let (x, y) = self.vpx(g, v);
+                    pb.line_to(x, y);
+                }
+                Some(p) if p[2] > h => {
+                    let (x, y) = self.vpx(g, g.horizon_crossing(p, v));
+                    pb.line_to(x, y);
+                }
+                Some(p) if vis => {
+                    let (x, y) = self.vpx(g, g.horizon_crossing(p, v));
+                    pb.move_to(x, y);
+                    let (x, y) = self.vpx(g, v);
+                    pb.line_to(x, y);
+                }
+                None if vis => {
+                    let (x, y) = self.vpx(g, v);
+                    pb.move_to(x, y);
+                }
+                _ => {}
+            }
+            prev = Some(v);
+        }
+    }
+
     fn ring_path(&self, pb: &mut PathBuilder, ring: &[Coord], close: bool) {
+        if let Some(g) = &self.globe {
+            if close {
+                self.globe_ring(g, pb, ring)
+            } else {
+                self.globe_line(g, pb, ring)
+            }
+            return;
+        }
         // Drop vertices closer than ~0.35 px to the previous one: big speed-up when zoomed out.
         let mut last: Option<(f32, f32)> = None;
         let n = ring.len();
@@ -166,6 +300,9 @@ impl Ctx<'_> {
 
     fn marker(&self, pm: &mut Pixmap, c: Coord, s: &Symbol, opacity: f32, halo: Option<Rgba>) {
         let (x, y) = self.px(c);
+        if !x.is_finite() || !y.is_finite() {
+            return; // behind the globe
+        }
         let r = (s.size.max(1.0) * self.ppp) / 2.0;
         let mut pb = PathBuilder::new();
         match s.marker {
@@ -242,18 +379,25 @@ pub fn render(map: &mut Map, view: &View) -> Option<Rendered> {
 fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Rendered> {
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
-    let ctx = Ctx { view, ppp: view.pixels_per_point as f32, cull: view.camera.extent(view.width, view.height).padded(0.05, 0.0) };
+    let globe = (map.projection == Projection::Globe).then(|| Globe::new(&view.camera, view.width, view.height));
+    let ctx = Ctx { view, ppp: view.pixels_per_point as f32, cull: view.camera.extent(view.width, view.height).padded(0.05, 0.0), globe };
     let scale = view.camera.scale();
+    // On the globe nothing is culled by the flat extent: the horizon clips instead.
+    let visible = |e: &Extent| globe.is_some() || e.intersects(&ctx.cull);
 
     // Basemap.
     let (water, land, outline, grat) = map.basemap.palette();
-    pm.fill(tiny_skia::Color::from_rgba8(water.r(), water.g(), water.b(), 255));
+    match &globe {
+        Some(g) => globe_backdrop(&mut pm, g, map.basemap, water, view.pixels_per_point as f32),
+        None => pm.fill(tiny_skia::Color::from_rgba8(water.r(), water.g(), water.b(), 255)),
+    }
     if land != water {
         let fill = paint(land, 1.0);
         let stroke = (outline.a() > 0).then(|| (paint(outline, 1.0), 0.6));
-        for g in world() {
+        let outlines = if globe.is_some() { world_lonlat() } else { world() };
+        for g in outlines {
             if let Geometry::Polygon(polys) = g
-                && g.extent().intersects(&ctx.cull)
+                && visible(&g.extent())
             {
                 ctx.polygon(&mut pm, polys, Some(fill.clone()), stroke.clone());
             }
@@ -270,15 +414,17 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         } else {
             1.0
         };
+        let to = |c: Coord| if globe.is_some() { c } else { lonlat_to_merc(c) };
+        let (lat_max, lat_min) = if globe.is_some() { (90.0, -90.0) } else { (85.0, -85.0) };
         let mut lines = Vec::new();
         let mut lon = -180.0;
         while lon <= 180.0 {
-            lines.push((0..=34).map(|i| lonlat_to_merc(Coord::new(lon, -85.0 + i as f64 * 5.0))).collect::<Vec<_>>());
+            lines.push((0..=36).map(|i| to(Coord::new(lon, lat_min + (lat_max - lat_min) * i as f64 / 36.0))).collect::<Vec<_>>());
             lon += step;
         }
         let mut lat = -90.0 + step;
         while lat < 90.0 {
-            lines.push((0..=72).map(|i| lonlat_to_merc(Coord::new(-180.0 + i as f64 * 5.0, lat))).collect::<Vec<_>>());
+            lines.push((0..=72).map(|i| to(Coord::new(-180.0 + i as f64 * 5.0, lat))).collect::<Vec<_>>());
             lat += step;
         }
         ctx.line(&mut pm, &lines, &p, 0.6);
@@ -294,7 +440,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         let opacity = layer.opacity();
         if let Some(rl) = &layer.raster {
             if let Some(data) = &rl.data {
-                raster::draw(&mut pm, data, &rl.style, view, opacity, full_res_rasters);
+                raster::draw(&mut pm, data, &rl.style, view, opacity, full_res_rasters, globe.as_ref());
             }
             continue;
         }
@@ -303,14 +449,15 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         let labels = layer.labels.clone();
         let selection: Vec<usize> = layer.selection.clone();
         let ds_ptr = layer.dataset.clone();
-        let geoms = layer.projected().to_vec();
+        let geoms: Vec<Option<Geometry>> =
+            if globe.is_some() { ds_ptr.features.iter().map(|f| f.geometry.clone()).collect() } else { layer.projected().to_vec() };
         let mut target = if opacity < 0.999 { Pixmap::new(w, h)? } else { Pixmap::new(1, 1)? };
         let direct = opacity >= 0.999;
         {
             let dest = if direct { &mut pm } else { &mut target };
             for (row, g) in geoms.iter().enumerate() {
                 let Some(g) = g else { continue };
-                if rows.get(row) != Some(&true) || !g.extent().intersects(&ctx.cull) {
+                if rows.get(row) != Some(&true) || !visible(&g.extent()) {
                     continue;
                 }
                 ctx.feature(dest, g, &renderer.symbol_for(&ds_ptr, row));
@@ -339,10 +486,10 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                     continue;
                 }
                 let Some(c) = g.label_point() else { continue };
-                if !ctx.cull.contains(c) {
+                if globe.is_none() && !ctx.cull.contains(c) {
                     continue;
                 }
-                let (x, y) = view.to_screen(c);
+                let Some((x, y)) = ctx.screen(c) else { continue };
                 let dy = if g.kind() == GeometryType::Point {
                     -(renderer.symbol_for(&ds_ptr, row).size / 2.0 + labels.size * 0.75)
                 } else {
@@ -371,8 +518,75 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
             }
         }
     }
+    if let Some(g) = &globe {
+        globe_shading(&mut pm, g, view.pixels_per_point as f32);
+    }
     let labels = place_labels(label_candidates, view.width as f32, view.height as f32);
     Some(Rendered { pixmap: pm, labels })
+}
+
+/// The globe's surroundings and ocean: space (or a soft backdrop), an atmosphere glow, and the
+/// ocean disc.
+fn globe_backdrop(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, water: Rgba, ppp: f32) {
+    let dark = basemap == rustgis_map::Basemap::Midnight;
+    let bg = if dark { Rgba::rgb(0x08, 0x0B, 0x10) } else { Rgba::rgb(0xEC, 0xEF, 0xF3) };
+    pm.fill(tiny_skia::Color::from_rgba8(bg.r(), bg.g(), bg.b(), 255));
+    let (cx, cy) = g.center();
+    let (cx, cy, r) = (cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp);
+    if !(r.is_finite() && r > 0.5 && cx.is_finite() && cy.is_finite()) {
+        return;
+    }
+    // Atmosphere: a glow fading out just beyond the limb.
+    let glow_r = r * 1.07;
+    let glow = if dark { (0x5A, 0x9B, 0xF0, 150) } else { (0x7F, 0xB4, 0xE8, 120) };
+    if let Some(shader) = RadialGradient::new(
+        Point::from_xy(cx, cy),
+        0.0,
+        Point::from_xy(cx, cy),
+        glow_r,
+        vec![
+            GradientStop::new(0.0, tiny_skia::Color::from_rgba8(glow.0, glow.1, glow.2, glow.3)),
+            GradientStop::new(r / glow_r, tiny_skia::Color::from_rgba8(glow.0, glow.1, glow.2, glow.3)),
+            GradientStop::new(1.0, tiny_skia::Color::from_rgba8(glow.0, glow.1, glow.2, 0)),
+        ],
+        SpreadMode::Pad,
+        Transform::identity(),
+    ) && let Some(path) = PathBuilder::from_circle(cx, cy, glow_r)
+    {
+        let p = Paint { shader, anti_alias: true, ..Paint::default() };
+        pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+    }
+    if let Some(path) = PathBuilder::from_circle(cx, cy, r) {
+        pm.fill_path(&path, &paint(water, 1.0), FillRule::Winding, Transform::identity(), None);
+    }
+}
+
+/// Light from the upper left: a soft highlight and a darker limb, so the globe reads as a sphere.
+fn globe_shading(pm: &mut Pixmap, g: &Globe, ppp: f32) {
+    let (cx, cy) = g.center();
+    let (cx, cy, r) = (cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp);
+    if !(r.is_finite() && r > 0.5 && cx.is_finite() && cy.is_finite()) {
+        return;
+    }
+    let light = Point::from_xy(cx - r * 0.35, cy - r * 0.4);
+    if let Some(shader) = RadialGradient::new(
+        light,
+        0.0,
+        Point::from_xy(cx, cy),
+        r * 1.02,
+        vec![
+            GradientStop::new(0.0, tiny_skia::Color::from_rgba8(255, 255, 255, 46)),
+            GradientStop::new(0.45, tiny_skia::Color::from_rgba8(255, 255, 255, 0)),
+            GradientStop::new(0.8, tiny_skia::Color::from_rgba8(0, 0, 0, 18)),
+            GradientStop::new(1.0, tiny_skia::Color::from_rgba8(0, 0, 0, 70)),
+        ],
+        SpreadMode::Pad,
+        Transform::identity(),
+    ) && let Some(path) = PathBuilder::from_circle(cx, cy, r)
+    {
+        let p = Paint { shader, anti_alias: true, ..Paint::default() };
+        pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+    }
 }
 
 /// A halo that contrasts with the text colour.

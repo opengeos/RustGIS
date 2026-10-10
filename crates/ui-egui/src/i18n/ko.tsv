@@ -257,6 +257,7 @@ Geoprocessing	지오프로세싱
 Geoprocessing history.	지오프로세싱 기록.
 Geoprocessing Pane	지오프로세싱 창
 GeoTIFF	GeoTIFF
+Globe	지구본
 Go	이동
 Go back to the previous extent.	이전 범위로 돌아갑니다.
 Go forward to the next extent.	다음 범위로 이동합니다.
@@ -517,6 +518,7 @@ Show or hide the Catalog pane.	카탈로그 창을 표시하거나 숨깁니다.
 Show or hide the Contents pane.	목차 창을 표시하거나 숨깁니다.
 Show or hide the Geoprocessing pane.	지오프로세싱 창을 표시하거나 숨깁니다.
 Show or hide the layer.	레이어를 표시하거나 숨깁니다.
+Show the map as a 3D globe, or as a flat map again.	지도를 3D 지구본으로 표시하거나 다시 평면 지도로 표시합니다.
 Show the Symbology pane for the selected layer.	선택한 레이어의 심볼 창을 표시합니다.
 Simplify	단순화
 Single Symbol	단일 심볼
@@ -591,6 +593,7 @@ Visibility Range	가시 범위
 Visible	표시
 Welcome to RustGIS	RustGIS에 오신 것을 환영합니다
 West	서
+WGS 84 / Globe	WGS 84 / 지구본
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	조건
 Where Clause	WHERE 절

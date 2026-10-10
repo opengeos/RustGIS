@@ -257,6 +257,7 @@ Geoprocessing	Geoverwerking
 Geoprocessing history.	Geschiedenis van geoverwerking.
 Geoprocessing Pane	Geoverwerkingsvenster
 GeoTIFF	GeoTIFF
+Globe	Wereldbol
 Go	Ga
 Go back to the previous extent.	Terug naar het vorige bereik.
 Go forward to the next extent.	Verder naar het volgende bereik.
@@ -517,6 +518,7 @@ Show or hide the Catalog pane.	Het catalogusvenster tonen of verbergen.
 Show or hide the Contents pane.	Het venster Inhoud tonen of verbergen.
 Show or hide the Geoprocessing pane.	Het geoverwerkingsvenster tonen of verbergen.
 Show or hide the layer.	De laag tonen of verbergen.
+Show the map as a 3D globe, or as a flat map again.	De kaart als 3D-wereldbol tonen, of weer als platte kaart.
 Show the Symbology pane for the selected layer.	Het symbologievenster voor de geselecteerde laag tonen.
 Simplify	Vereenvoudigen
 Single Symbol	Enkel symbool
@@ -591,6 +593,7 @@ Visibility Range	Zichtbaarheidsbereik
 Visible	Zichtbaar
 Welcome to RustGIS	Welkom bij RustGIS
 West	West
+WGS 84 / Globe	WGS 84 / Wereldbol
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Waar
 Where Clause	Where-clausule

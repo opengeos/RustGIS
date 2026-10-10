@@ -257,6 +257,7 @@ Geoprocessing	Geoprosesing
 Geoprocessing history.	Riwayat geoprosesing.
 Geoprocessing Pane	Panel Geoprosesing
 GeoTIFF	GeoTIFF
+Globe	Globe
 Go	Pergi
 Go back to the previous extent.	Kembali ke cakupan sebelumnya.
 Go forward to the next extent.	Maju ke cakupan berikutnya.
@@ -517,6 +518,7 @@ Show or hide the Catalog pane.	Tampilkan atau sembunyikan panel Katalog.
 Show or hide the Contents pane.	Tampilkan atau sembunyikan panel Konten.
 Show or hide the Geoprocessing pane.	Tampilkan atau sembunyikan panel Geoprosesing.
 Show or hide the layer.	Tampilkan atau sembunyikan layer.
+Show the map as a 3D globe, or as a flat map again.	Tampilkan peta sebagai globe 3D, atau kembali sebagai peta datar.
 Show the Symbology pane for the selected layer.	Tampilkan panel Simbologi untuk layer terpilih.
 Simplify	Sederhanakan
 Single Symbol	Simbol Tunggal
@@ -591,6 +593,7 @@ Visibility Range	Rentang Visibilitas
 Visible	Terlihat
 Welcome to RustGIS	Selamat datang di RustGIS
 West	Barat
+WGS 84 / Globe	WGS 84 / Globe
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Where
 Where Clause	Klausa Where

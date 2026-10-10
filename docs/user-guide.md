@@ -37,6 +37,15 @@ Vector coordinates are WGS 84 longitude/latitude and are displayed in Web Mercat
 their own coordinate system (any EPSG code, such as UTM zones or national grids) and are
 reprojected on the fly as they draw.
 
+## Globe
+
+**View › Globe** shows the map as a 3D globe seen from space instead of the flat Web Mercator
+map, and back again. Drag to turn the globe, scroll to zoom, and use **Full Extent** to see the
+whole Earth. Every layer draws on the globe: vectors are clipped at the horizon and follow great
+circles, rasters are draped onto the sphere, and labels, selection, identify, measuring and
+editing work as on the flat map. The scale stays the same when you switch, and the choice is
+saved with each map in the project (`map.projection` from the command line).
+
 ## Rasters
 
 Add a GeoTIFF or an ASCII grid with **Add Data**, by dropping it on the window, or in the web app

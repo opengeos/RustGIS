@@ -144,7 +144,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 68, "coverage fell to {done}");
+    assert!(done >= 69, "coverage fell to {done}");
 }
 
 #[test]
@@ -171,6 +171,25 @@ fn with_raster() -> Session {
     let mut s = world();
     s.run("layer.addDataBytes", &json!({"fileName": "scene.tif", "data": utm_tiff_b64()})).unwrap();
     s
+}
+
+#[test]
+fn globe_projection_toggles_renders_and_saves() {
+    let mut s = with_raster();
+    assert_eq!(s.run("map.projection", &Value::Null).unwrap()["projection"], "globe");
+    assert_eq!(s.map().projection, rustgis_map::Projection::Globe);
+    // The globe draws vectors, rasters and labels, from any side.
+    for (lon, lat, res) in [(-81.0, 42.0, 30_000.0), (100.0, -60.0, 60_000.0), (-81.0, 42.0, 50.0), (0.0, 89.0, 160_000.0)] {
+        s.map_mut().camera = rustgis_map::Camera { center: rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(lon, lat)), res };
+        let png = crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap();
+        assert!(png.len() > 1000);
+    }
+    assert!(s.run("map.projection", &json!({"type": "nope"})).is_err());
+    s.run("map.projection", &json!({"type": "mercator"})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.map().projection, rustgis_map::Projection::Globe, "undo restores the globe");
+    let json = serde_json::to_string(&s.project).unwrap();
+    assert!(Project::from_json(&json).unwrap().map().projection == rustgis_map::Projection::Globe);
 }
 
 #[test]

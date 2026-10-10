@@ -659,6 +659,19 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
         "point_layer" => p.circle(12.0, 12.0, 5.0, Some(accent), Some((1.2, ink))),
         "line_layer" => p.line(&[(3.0, 17.0), (9.0, 8.0), (15.0, 15.0), (21.0, 6.0)], 2.2, accent),
         "polygon_layer" => p.polygon_shape(&[(3.0, 8.0), (11.0, 3.0), (21.0, 7.0), (19.0, 20.0), (5.0, 19.0)], 180),
+        // A lit globe with an orbit: the 3D view.
+        "globe_view" => {
+            p.circle(11.0, 12.0, 8.0, Some(teal.gamma_multiply(0.85)), None);
+            p.circle(9.0, 9.5, 4.0, Some(Color32::from_white_alpha(70)), None);
+            p.globe(11.0, 12.0, 8.0);
+            let orbit: Vec<(f32, f32)> = (0..=24)
+                .map(|i| {
+                    let a = (i as f32 * 15.0).to_radians();
+                    (11.0 + 11.5 * a.cos(), 12.0 + 3.6 * a.sin() - 2.0 * a.cos())
+                })
+                .collect();
+            p.line(&orbit, 1.3, amber);
+        }
         // A grid of cells shaded low to high.
         "raster_layer" => {
             for (i, a) in [40u8, 90, 150, 70, 130, 200, 110, 180, 240].into_iter().enumerate() {
@@ -854,6 +867,7 @@ pub const ALL: &[&str] = &[
     "point_layer",
     "line_layer",
     "polygon_layer",
+    "globe_view",
     "raster_layer",
     "stretch",
     "rgb",

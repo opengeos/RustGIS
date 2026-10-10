@@ -7,7 +7,8 @@
 //! optionally re-stretched from the pixels in view (DRA), and coloured.
 
 use rustgis_data::raster::{BandStats, ColorHint, Raster};
-use rustgis_geom::{Coord, extent_to_merc};
+use rustgis_geom::{Coord, Extent, extent_to_merc};
+use rustgis_map::Globe;
 use rustgis_map::raster::{Colorizer, RasterRenderer, RasterStyle, Resampling, hillshade};
 use tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
 
@@ -18,10 +19,13 @@ const STEP: usize = 8;
 
 /// The raster pixel position under a work pixel (`k` device pixels), or `None` off the
 /// projection.
-fn source(r: &Raster, view: &View, k: f64, dx: f64, dy: f64) -> Option<(f64, f64)> {
+fn source(r: &Raster, view: &View, globe: Option<&Globe>, k: f64, dx: f64, dy: f64) -> Option<(f64, f64)> {
     let ppp = view.pixels_per_point / k;
-    let m = view.camera.to_map(dx / ppp, dy / ppp, view.width, view.height);
-    let n = r.transformer().from_merc(m)?;
+    let (sx, sy) = (dx / ppp, dy / ppp);
+    let n = match globe {
+        Some(g) => r.transformer().from_lonlat(g.inverse(sx, sy)?)?,
+        None => r.transformer().from_merc(view.camera.to_map(sx, sy, view.width, view.height))?,
+    };
     let (c, row) = r.transform.to_pixel(n);
     (c.is_finite() && row.is_finite()).then_some((c, row))
 }
@@ -47,16 +51,38 @@ fn sample(r: &Raster, band: usize, c: f64, row: f64, resampling: Resampling) -> 
 }
 
 /// Draws a raster layer onto `pm` at `opacity`.
-pub(crate) fn draw(pm: &mut Pixmap, r: &Raster, style: &RasterStyle, view: &View, opacity: f32, full_res: bool) {
+pub(crate) fn draw(pm: &mut Pixmap, r: &Raster, style: &RasterStyle, view: &View, opacity: f32, full_res: bool, globe: Option<&Globe>) {
     // On high-density screens, compute at logical-pixel resolution and scale up (unless asked
     // for full resolution, as exports are): a quarter of the work at 2×.
     let k = if view.pixels_per_point >= 1.5 && !full_res { view.pixels_per_point } else { 1.0 };
     let (w, h) = ((pm.width() as f64 / k).ceil(), (pm.height() as f64 / k).ceil());
     let ppp = view.pixels_per_point / k;
     // The raster's bounds on screen, clipped to the view.
-    let e = extent_to_merc(&r.extent());
-    let (ax, ay) = view.to_screen(Coord::new(e.min_x, e.max_y));
-    let (bx, by) = view.to_screen(Coord::new(e.max_x, e.min_y));
+    let ((ax, ay), (bx, by)) = match globe {
+        // On the globe: the box around the visible part of a grid of points over the extent.
+        Some(g) => {
+            let e = r.extent();
+            let mut b = Extent::EMPTY;
+            for i in 0..=24 {
+                for j in 0..=24 {
+                    let c = Coord::new(e.min_x + e.width() * i as f64 / 24.0, e.min_y + e.height() * j as f64 / 24.0);
+                    if let Some((x, y)) = g.forward(c) {
+                        b.expand(Coord::new(x, y));
+                    }
+                }
+            }
+            if b.is_empty() {
+                return;
+            }
+            // A margin for the parts between the sample points.
+            let m = (b.width().max(b.height()) / 24.0).max(2.0);
+            ((b.min_x - m, b.min_y - m), (b.max_x + m, b.max_y + m))
+        }
+        None => {
+            let e = extent_to_merc(&r.extent());
+            (view.to_screen(Coord::new(e.min_x, e.max_y)), view.to_screen(Coord::new(e.max_x, e.min_y)))
+        }
+    };
     let clip = |v: f64, max: f64| if v.is_finite() { v.clamp(0.0, max) } else { 0.0 };
     let (x0, x1) = (clip((ax.min(bx) * ppp).floor(), w) as usize, clip((ax.max(bx) * ppp).ceil(), w) as usize);
     let (y0, y1) = (clip((ay.min(by) * ppp).floor(), h) as usize, clip((ay.max(by) * ppp).ceil(), h) as usize);
@@ -70,7 +96,7 @@ pub(crate) fn draw(pm: &mut Pixmap, r: &Raster, style: &RasterStyle, view: &View
     let mut grid = Vec::with_capacity(gw * gh);
     for gy in 0..gh {
         for gx in 0..gw {
-            grid.push(source(r, view, k, (x0 + gx * STEP) as f64, (y0 + gy * STEP) as f64));
+            grid.push(source(r, view, globe, k, (x0 + gx * STEP) as f64, (y0 + gy * STEP) as f64));
         }
     }
     let at = |px: usize, py: usize| -> Option<(f64, f64)> {
@@ -87,7 +113,7 @@ pub(crate) fn draw(pm: &mut Pixmap, r: &Raster, style: &RasterStyle, view: &View
                 Some((lerp(top.0, bottom.0, fy), lerp(top.1, bottom.1, fy)))
             }
             // Near the edge of the projection's valid area: transform this pixel exactly.
-            _ => source(r, view, k, px as f64 + 0.5, py as f64 + 0.5),
+            _ => source(r, view, globe, k, px as f64 + 0.5, py as f64 + 0.5),
         }
     };
 
@@ -190,7 +216,7 @@ mod tests {
         let camera = Camera { center: lonlat_to_merc(Coord::new(-81.0, 42.0)), res: 2000.0 };
         let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera };
         let mut pm = Pixmap::new(200, 200).unwrap();
-        draw(&mut pm, &r, &style, &view, 1.0, false);
+        draw(&mut pm, &r, &style, &view, 1.0, false, None);
         let alpha = |x: u32, y: u32| pm.pixel(x, y).map(|p| p.alpha()).unwrap_or(0);
         assert_eq!(alpha(100, 100), 255, "the centre is covered");
         assert_eq!(alpha(2, 2), 0, "the corner of the view is outside the raster");
@@ -208,16 +234,16 @@ mod tests {
             };
             s.dra = true;
             s.resampling = Resampling::Bilinear;
-            draw(&mut pm, &r, &s, &view, 0.5, false);
+            draw(&mut pm, &r, &s, &view, 0.5, false, None);
         }
         // High-density screens draw at logical resolution, scaled up.
         let hi = View { pixels_per_point: 2.0, ..view };
         let mut pm2 = Pixmap::new(400, 400).unwrap();
-        draw(&mut pm2, &r, &style, &hi, 1.0, false);
+        draw(&mut pm2, &r, &style, &hi, 1.0, false, None);
         assert_eq!(pm2.pixel(200, 200).map(|p| p.alpha()), Some(255));
         assert_eq!(pm2.pixel(4, 4).map(|p| p.alpha()), Some(0));
         let far = View { width: 3.0, height: 1.0, pixels_per_point: 2.0, camera: Camera::world() };
         let mut tiny = Pixmap::new(6, 2).unwrap();
-        draw(&mut tiny, &r, &style, &far, 1.0, true);
+        draw(&mut tiny, &r, &style, &far, 1.0, true, None);
     }
 }

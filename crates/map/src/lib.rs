@@ -3,11 +3,13 @@
 
 pub mod camera;
 pub mod color;
+pub mod globe;
 pub mod raster;
 pub mod symbology;
 
 pub use camera::Camera;
 pub use color::{Ramp, Rgba};
+pub use globe::{Globe, Projection};
 pub use raster::{RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
 pub use symbology::{ClassMethod, Labeling, Marker, Renderer, Symbol};
 
@@ -224,6 +226,9 @@ pub struct Map {
     pub bookmarks: Vec<Bookmark>,
     #[serde(default = "yes")]
     pub graticule: bool,
+    /// Flat map or 3D globe.
+    #[serde(default)]
+    pub projection: Projection,
     #[serde(default)]
     next_layer_id: u32,
 }
@@ -237,6 +242,7 @@ impl Map {
             camera: Camera::world(),
             bookmarks: Vec::new(),
             graticule: true,
+            projection: Projection::WebMercator,
             next_layer_id: 1,
         }
     }
