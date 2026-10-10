@@ -1,0 +1,19 @@
+[package]
+name = "rustgis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+default-run = "rustgis"
+description = "RustGIS desktop app"
+
+[lints]
+workspace = true
+
+[dependencies]
+rustgis-engine = { workspace = true }
+rustgis-ui-egui = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+egui = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }

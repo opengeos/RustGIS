@@ -1,0 +1,17 @@
+[package]
+name = "rustgis-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RustGIS L1: feature model, attribute values, and vector I/O (GeoJSON, CSV, Shapefile)"
+
+[lints]
+workspace = true
+
+[dependencies]
+rustgis-geom = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+csv = { workspace = true }
+shapefile = { workspace = true }

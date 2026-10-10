@@ -1,0 +1,466 @@
+//! Symbols, renderers (single symbol, unique values, graduated colours, graduated symbols) and
+//! labeling. A renderer maps each feature to a [`Symbol`] and describes its legend.
+
+use rustgis_data::{Dataset, FieldType, GeometryType};
+use serde::{Deserialize, Serialize};
+
+use crate::color::{Ramp, Rgba};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Marker {
+    #[default]
+    Circle,
+    Square,
+    Triangle,
+    Diamond,
+    Star,
+}
+
+impl Marker {
+    pub const ALL: [Marker; 5] = [Marker::Circle, Marker::Square, Marker::Triangle, Marker::Diamond, Marker::Star];
+    pub fn label(self) -> &'static str {
+        match self {
+            Marker::Circle => "Circle",
+            Marker::Square => "Square",
+            Marker::Triangle => "Triangle",
+            Marker::Diamond => "Diamond",
+            Marker::Star => "Star",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Symbol {
+    pub fill: Rgba,
+    pub stroke: Rgba,
+    /// Outline / line width in points.
+    pub stroke_width: f32,
+    /// Marker size in points.
+    pub size: f32,
+    pub marker: Marker,
+}
+
+/// Default palette for new layers (cycled by layer id).
+const LAYER_COLORS: [[u8; 3]; 8] = [
+    [0x4A, 0x90, 0xD9],
+    [0xE0, 0x7B, 0x39],
+    [0x5B, 0xB0, 0x6E],
+    [0xC2, 0x55, 0x9B],
+    [0xE6, 0xB8, 0x3A],
+    [0x7D, 0x6B, 0xD1],
+    [0x3C, 0xB1, 0xB8],
+    [0xB9, 0x5F, 0x4A],
+];
+
+impl Symbol {
+    pub fn default_for(g: GeometryType, seed: u32) -> Symbol {
+        let c = LAYER_COLORS.get(seed as usize % LAYER_COLORS.len()).copied().unwrap_or([0x4A, 0x90, 0xD9]);
+        let base = Rgba::rgb(c[0], c[1], c[2]);
+        match g {
+            GeometryType::Point => {
+                Symbol { fill: base, stroke: Rgba::rgb(255, 255, 255), stroke_width: 1.0, size: 7.0, marker: Marker::Circle }
+            }
+            GeometryType::Polyline => Symbol { fill: base, stroke: base, stroke_width: 1.6, size: 0.0, marker: Marker::Circle },
+            _ => Symbol { fill: base.with_alpha(170), stroke: base.shade(0.6), stroke_width: 0.7, size: 0.0, marker: Marker::Circle },
+        }
+    }
+
+    pub fn with_fill(mut self, c: Rgba, g: GeometryType) -> Symbol {
+        match g {
+            GeometryType::Polyline => {
+                self.fill = c;
+                self.stroke = c;
+            }
+            GeometryType::Polygon => {
+                self.fill = c.with_alpha(self.fill.a().max(150));
+                self.stroke = c.shade(0.6);
+            }
+            _ => self.fill = c,
+        }
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClassMethod {
+    #[default]
+    NaturalBreaks,
+    EqualInterval,
+    Quantile,
+}
+
+impl ClassMethod {
+    pub const ALL: [ClassMethod; 3] = [ClassMethod::NaturalBreaks, ClassMethod::EqualInterval, ClassMethod::Quantile];
+    pub fn label(self) -> &'static str {
+        match self {
+            ClassMethod::NaturalBreaks => "Natural Breaks (Jenks)",
+            ClassMethod::EqualInterval => "Equal Interval",
+            ClassMethod::Quantile => "Quantile",
+        }
+    }
+    pub fn from_name(s: &str) -> Option<ClassMethod> {
+        let s = s.trim().to_ascii_lowercase();
+        Some(match s.as_str() {
+            "naturalbreaks" | "natural_breaks" | "jenks" | "natural breaks" => ClassMethod::NaturalBreaks,
+            "equalinterval" | "equal_interval" | "equal interval" => ClassMethod::EqualInterval,
+            "quantile" => ClassMethod::Quantile,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Renderer {
+    Single(Symbol),
+    Unique {
+        field: String,
+        classes: Vec<(String, Symbol)>,
+        other: Symbol,
+        ramp: Ramp,
+    },
+    /// Upper bounds of each class (ascending) and one symbol per class.
+    Graduated {
+        field: String,
+        breaks: Vec<f64>,
+        symbols: Vec<Symbol>,
+        ramp: Ramp,
+        method: ClassMethod,
+        min: f64,
+    },
+    /// Marker size grows with the value.
+    Proportional {
+        field: String,
+        base: Symbol,
+        min_size: f32,
+        max_size: f32,
+        min: f64,
+        max: f64,
+    },
+}
+
+/// One legend row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LegendEntry {
+    pub label: String,
+    pub symbol: Symbol,
+}
+
+/// Most unique-value classes created automatically.
+pub const MAX_UNIQUE: usize = 64;
+
+impl Renderer {
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            Renderer::Single(_) => "Single Symbol",
+            Renderer::Unique { .. } => "Unique Values",
+            Renderer::Graduated { .. } => "Graduated Colors",
+            Renderer::Proportional { .. } => "Proportional Symbols",
+        }
+    }
+
+    pub fn field(&self) -> Option<&str> {
+        match self {
+            Renderer::Single(_) => None,
+            Renderer::Unique { field, .. } | Renderer::Graduated { field, .. } | Renderer::Proportional { field, .. } => Some(field),
+        }
+    }
+
+    /// The first symbol (the single symbol, or a representative).
+    pub fn base_symbol(&self) -> Symbol {
+        match self {
+            Renderer::Single(s) => *s,
+            Renderer::Unique { other, classes, .. } => classes.first().map(|c| c.1).unwrap_or(*other),
+            Renderer::Graduated { symbols, .. } => symbols.last().copied().unwrap_or(Symbol::default_for(GeometryType::Polygon, 0)),
+            Renderer::Proportional { base, .. } => *base,
+        }
+    }
+
+    /// Builds a unique-values renderer on `field`.
+    pub fn unique(ds: &Dataset, field: &str, ramp: Ramp, base: Symbol) -> Result<Renderer, String> {
+        let fi = ds.field_index(field).ok_or_else(|| format!("no field named '{field}'"))?;
+        let vals = ds.unique_values(fi, MAX_UNIQUE);
+        let n = vals.len();
+        let classes = vals.into_iter().enumerate().map(|(k, v)| (v, base.with_fill(ramp.pick(k, n), ds.geometry_type))).collect();
+        let other = base.with_fill(Rgba::rgb(0xB0, 0xB0, 0xB0), ds.geometry_type);
+        Ok(Renderer::Unique { field: ds.fields.get(fi).map(|f| f.name.clone()).unwrap_or_default(), classes, other, ramp })
+    }
+
+    /// Builds a graduated-colours renderer on a numeric `field`.
+    pub fn graduated(ds: &Dataset, field: &str, classes: usize, method: ClassMethod, ramp: Ramp, base: Symbol) -> Result<Renderer, String> {
+        let fi = ds.field_index(field).ok_or_else(|| format!("no field named '{field}'"))?;
+        if !ds.fields.get(fi).is_some_and(|f| f.ty.is_numeric()) {
+            return Err(format!("'{field}' is not a numeric field"));
+        }
+        let mut vals: Vec<f64> = ds.features.iter().filter_map(|f| f.attrs.get(fi).and_then(|v| v.as_f64())).collect();
+        if vals.is_empty() {
+            return Err(format!("'{field}' has no numeric values"));
+        }
+        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let k = classes.clamp(1, 12);
+        let breaks = class_breaks(&vals, k, method);
+        let n = breaks.len();
+        let symbols = (0..n).map(|i| base.with_fill(ramp.pick(i, n), ds.geometry_type)).collect();
+        let min = vals.first().copied().unwrap_or(0.0);
+        Ok(Renderer::Graduated { field: ds.fields.get(fi).map(|f| f.name.clone()).unwrap_or_default(), breaks, symbols, ramp, method, min })
+    }
+
+    /// Builds a proportional-symbols renderer on a numeric `field`.
+    pub fn proportional(ds: &Dataset, field: &str, base: Symbol) -> Result<Renderer, String> {
+        let fi = ds.field_index(field).ok_or_else(|| format!("no field named '{field}'"))?;
+        if !ds.fields.get(fi).is_some_and(|f| f.ty.is_numeric()) {
+            return Err(format!("'{field}' is not a numeric field"));
+        }
+        let (min, max) = ds.numeric_range(fi).ok_or_else(|| format!("'{field}' has no numeric values"))?;
+        let mut base = base;
+        if base.size == 0.0 {
+            base.size = 6.0;
+        }
+        Ok(Renderer::Proportional {
+            field: ds.fields.get(fi).map(|f| f.name.clone()).unwrap_or_default(),
+            base,
+            min_size: 4.0,
+            max_size: 28.0,
+            min,
+            max,
+        })
+    }
+
+    /// Symbol for a feature row.
+    pub fn symbol_for(&self, ds: &Dataset, row: usize) -> Symbol {
+        match self {
+            Renderer::Single(s) => *s,
+            Renderer::Unique { field, classes, other, .. } => {
+                let Some(fi) = ds.field_index(field) else { return *other };
+                let v = ds.value(row, fi).to_string();
+                classes.iter().find(|(k, _)| *k == v).map(|c| c.1).unwrap_or(*other)
+            }
+            Renderer::Graduated { field, breaks, symbols, .. } => {
+                let fallback = symbols.first().copied().unwrap_or(Symbol::default_for(ds.geometry_type, 0));
+                let Some(v) = ds.field_index(field).and_then(|fi| ds.value(row, fi).as_f64()) else {
+                    return Symbol { fill: Rgba::new(0xC8, 0xC8, 0xC8, 140), ..fallback };
+                };
+                let i = breaks.iter().position(|b| v <= *b).unwrap_or(breaks.len().saturating_sub(1));
+                symbols.get(i).copied().unwrap_or(fallback)
+            }
+            Renderer::Proportional { field, base, min_size, max_size, min, max } => {
+                let Some(v) = ds.field_index(field).and_then(|fi| ds.value(row, fi).as_f64()) else { return *base };
+                let t = if max > min { ((v - min) / (max - min)).clamp(0.0, 1.0) } else { 0.5 };
+                // Area-proportional (Flannery-free square root scaling).
+                Symbol { size: min_size + (max_size - min_size) * t.sqrt() as f32, ..*base }
+            }
+        }
+    }
+
+    pub fn legend(&self) -> Vec<LegendEntry> {
+        match self {
+            Renderer::Single(_) => Vec::new(),
+            Renderer::Unique { classes, other, .. } => {
+                let mut v: Vec<LegendEntry> = classes.iter().map(|(k, s)| LegendEntry { label: k.clone(), symbol: *s }).collect();
+                v.push(LegendEntry { label: "<all other values>".into(), symbol: *other });
+                v
+            }
+            Renderer::Graduated { breaks, symbols, min, .. } => {
+                let mut lo = *min;
+                breaks
+                    .iter()
+                    .zip(symbols)
+                    .map(|(b, s)| {
+                        let e = LegendEntry { label: format!("{} – {}", fmt_num(lo), fmt_num(*b)), symbol: *s };
+                        lo = *b;
+                        e
+                    })
+                    .collect()
+            }
+            Renderer::Proportional { base, min_size, max_size, min, max, .. } => vec![
+                LegendEntry { label: fmt_num(*min), symbol: Symbol { size: *min_size, ..*base } },
+                LegendEntry {
+                    label: fmt_num((min + max) / 2.0),
+                    symbol: Symbol { size: min_size + (max_size - min_size) * 0.707, ..*base },
+                },
+                LegendEntry { label: fmt_num(*max), symbol: Symbol { size: *max_size, ..*base } },
+            ],
+        }
+    }
+
+    /// Recolours every class from a ramp.
+    pub fn apply_ramp(&mut self, ramp: Ramp, g: GeometryType) {
+        match self {
+            Renderer::Unique { classes, ramp: r, .. } => {
+                let n = classes.len();
+                for (k, c) in classes.iter_mut().enumerate() {
+                    c.1 = c.1.with_fill(ramp.pick(k, n), g);
+                }
+                *r = ramp;
+            }
+            Renderer::Graduated { symbols, ramp: r, .. } => {
+                let n = symbols.len();
+                for (k, s) in symbols.iter_mut().enumerate() {
+                    *s = s.with_fill(ramp.pick(k, n), g);
+                }
+                *r = ramp;
+            }
+            _ => {}
+        }
+    }
+
+    /// Applies `f` to every symbol.
+    pub fn map_symbols(&mut self, f: impl Fn(&mut Symbol)) {
+        match self {
+            Renderer::Single(s) => f(s),
+            Renderer::Unique { classes, other, .. } => {
+                classes.iter_mut().for_each(|c| f(&mut c.1));
+                f(other);
+            }
+            Renderer::Graduated { symbols, .. } => symbols.iter_mut().for_each(f),
+            Renderer::Proportional { base, .. } => f(base),
+        }
+    }
+}
+
+/// Compact number formatting for legends: 1.2M, 35K, 0.42.
+pub fn fmt_num(v: f64) -> String {
+    let a = v.abs();
+    if a >= 1e9 {
+        format!("{:.1}B", v / 1e9)
+    } else if a >= 1e6 {
+        format!("{:.1}M", v / 1e6)
+    } else if a >= 1e4 {
+        format!("{:.0}K", v / 1e3)
+    } else if a >= 100.0 || v.fract() == 0.0 {
+        format!("{v:.0}")
+    } else {
+        format!("{v:.2}")
+    }
+}
+
+/// Upper class bounds for sorted values.
+pub fn class_breaks(sorted: &[f64], k: usize, method: ClassMethod) -> Vec<f64> {
+    let n = sorted.len();
+    let (Some(&lo), Some(&hi)) = (sorted.first(), sorted.last()) else { return Vec::new() };
+    if k <= 1 || hi <= lo {
+        return vec![hi];
+    }
+    let mut b = match method {
+        ClassMethod::EqualInterval => (1..=k).map(|i| lo + (hi - lo) * i as f64 / k as f64).collect::<Vec<_>>(),
+        ClassMethod::Quantile => (1..=k).map(|i| sorted.get(((n * i) / k).saturating_sub(1).min(n - 1)).copied().unwrap_or(hi)).collect(),
+        ClassMethod::NaturalBreaks => jenks(sorted, k),
+    };
+    b.dedup_by(|a, b| (*a - *b).abs() < f64::EPSILON);
+    if let Some(l) = b.last_mut() {
+        *l = hi;
+    }
+    b
+}
+
+/// Jenks natural breaks (Fisher's dynamic programming), on a sample of at most 1000 values.
+fn jenks(sorted: &[f64], k: usize) -> Vec<f64> {
+    let data: Vec<f64> = if sorted.len() > 1000 {
+        (0..1000).filter_map(|i| sorted.get(i * sorted.len() / 1000)).copied().collect()
+    } else {
+        sorted.to_vec()
+    };
+    let n = data.len();
+    let k = k.min(n);
+    if k < 2 {
+        return vec![data.last().copied().unwrap_or(0.0)];
+    }
+    // lower[i][j]: first index of class j for data[0..=i]; var[i][j]: within-class variance.
+    let mut lower = vec![vec![0usize; k + 1]; n + 1];
+    let mut var = vec![vec![f64::INFINITY; k + 1]; n + 1];
+    for j in 1..=k {
+        lower[1][j] = 1;
+        var[1][j] = 0.0;
+    }
+    for l in 2..=n {
+        let (mut s1, mut s2, mut w) = (0.0, 0.0, 0.0);
+        let mut v = 0.0;
+        for m in 1..=l {
+            let i3 = l - m + 1;
+            let val = data[i3 - 1];
+            s2 += val * val;
+            s1 += val;
+            w += 1.0;
+            v = s2 - (s1 * s1) / w;
+            let i4 = i3 - 1;
+            if i4 != 0 {
+                for j in 2..=k {
+                    if var[l][j] >= v + var[i4][j - 1] {
+                        lower[l][j] = i3;
+                        var[l][j] = v + var[i4][j - 1];
+                    }
+                }
+            }
+        }
+        lower[l][1] = 1;
+        var[l][1] = v;
+    }
+    let mut breaks = vec![0.0; k];
+    breaks[k - 1] = data[n - 1];
+    let mut kk = n;
+    for j in (2..=k).rev() {
+        let id = lower[kk][j].saturating_sub(2);
+        breaks[j - 2] = data[id];
+        kk = lower[kk][j].saturating_sub(1).max(1);
+    }
+    breaks
+}
+
+/// Label settings for a layer.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Labeling {
+    pub enabled: bool,
+    pub field: String,
+    pub size: f32,
+    pub color: Rgba,
+    pub halo: bool,
+    pub bold: bool,
+}
+
+impl Labeling {
+    /// Off, on the first text field that looks like a name.
+    pub fn default_for(ds: &Dataset) -> Labeling {
+        let field = ds
+            .fields
+            .iter()
+            .find(|f| f.ty == FieldType::Text && f.name.to_ascii_lowercase().contains("name"))
+            .or_else(|| ds.fields.iter().find(|f| f.ty == FieldType::Text))
+            .or_else(|| ds.fields.first())
+            .map(|f| f.name.clone())
+            .unwrap_or_default();
+        Labeling { enabled: false, field, size: 10.0, color: Rgba::rgb(0x2B, 0x2B, 0x2B), halo: true, bold: false }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustgis_data::{Field, Value};
+
+    #[test]
+    fn breaks() {
+        let v: Vec<f64> = vec![1.0, 2.0, 3.0, 10.0, 11.0, 12.0, 50.0, 51.0, 52.0];
+        let j = class_breaks(&v, 3, ClassMethod::NaturalBreaks);
+        assert_eq!(j, vec![3.0, 12.0, 52.0]);
+        assert_eq!(class_breaks(&v, 3, ClassMethod::EqualInterval).len(), 3);
+        assert_eq!(class_breaks(&[], 3, ClassMethod::Quantile), Vec::<f64>::new());
+        assert_eq!(class_breaks(&[5.0, 5.0], 4, ClassMethod::NaturalBreaks), vec![5.0]);
+    }
+
+    #[test]
+    fn graduated_symbols_by_value() {
+        let mut d = Dataset::new("t", GeometryType::Polygon, vec![Field::new("v", FieldType::Double)]);
+        for v in [1.0, 2.0, 50.0, 60.0] {
+            d.push(None, vec![Value::Float(v)]);
+        }
+        d.push(None, vec![Value::Null]);
+        let r = Renderer::graduated(&d, "v", 2, ClassMethod::NaturalBreaks, Ramp::Ember, Symbol::default_for(GeometryType::Polygon, 0))
+            .unwrap();
+        assert_ne!(r.symbol_for(&d, 0).fill, r.symbol_for(&d, 3).fill);
+        assert_eq!(r.legend().len(), 2);
+        let _ = r.symbol_for(&d, 4);
+        let _ = r.symbol_for(&d, 999);
+        assert!(
+            Renderer::graduated(&d, "nope", 2, ClassMethod::Quantile, Ramp::Ember, Symbol::default_for(GeometryType::Polygon, 0)).is_err()
+        );
+    }
+}

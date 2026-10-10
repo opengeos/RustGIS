@@ -1,0 +1,12 @@
+[package]
+name = "rustgis-geom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RustGIS L0: coordinates, extents, projections, geodesic measurement"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }

@@ -1,0 +1,742 @@
+//! Icons, all original and drawn in code on a 24-unit grid: neutral ink strokes with accent fills.
+
+use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2};
+
+struct P<'a> {
+    p: &'a Painter,
+    r: Rect,
+    ink: Color32,
+    acc: Color32,
+}
+
+impl P<'_> {
+    fn s(&self) -> f32 {
+        self.r.width() / 24.0
+    }
+    fn pt(&self, x: f32, y: f32) -> Pos2 {
+        pos2(self.r.min.x + x * self.s(), self.r.min.y + y * self.s())
+    }
+    fn w(&self, w: f32) -> f32 {
+        (w * self.s()).max(1.0)
+    }
+    fn line(&self, pts: &[(f32, f32)], w: f32, c: Color32) {
+        let v: Vec<Pos2> = pts.iter().map(|(x, y)| self.pt(*x, *y)).collect();
+        self.p.add(Shape::line(v, Stroke::new(self.w(w), c)));
+    }
+    fn closed(&self, pts: &[(f32, f32)], w: f32, c: Color32) {
+        let v: Vec<Pos2> = pts.iter().map(|(x, y)| self.pt(*x, *y)).collect();
+        self.p.add(Shape::closed_line(v, Stroke::new(self.w(w), c)));
+    }
+    /// Convex fill.
+    fn fill(&self, pts: &[(f32, f32)], c: Color32) {
+        let v: Vec<Pos2> = pts.iter().map(|(x, y)| self.pt(*x, *y)).collect();
+        self.p.add(Shape::convex_polygon(v, c, Stroke::NONE));
+    }
+    fn rect(&self, x: f32, y: f32, w: f32, h: f32, fill: Option<Color32>, stroke: Option<(f32, Color32)>, round: f32) {
+        let r = Rect::from_min_max(self.pt(x, y), self.pt(x + w, y + h));
+        if let Some(f) = fill {
+            self.p.rect_filled(r, round * self.s(), f);
+        }
+        if let Some((sw, c)) = stroke {
+            self.p.rect_stroke(r, round * self.s(), Stroke::new(self.w(sw), c), egui::StrokeKind::Middle);
+        }
+    }
+    fn circle(&self, x: f32, y: f32, rad: f32, fill: Option<Color32>, stroke: Option<(f32, Color32)>) {
+        let c = self.pt(x, y);
+        if let Some(f) = fill {
+            self.p.circle_filled(c, rad * self.s(), f);
+        }
+        if let Some((sw, col)) = stroke {
+            self.p.circle_stroke(c, rad * self.s(), Stroke::new(self.w(sw), col));
+        }
+    }
+    fn arc(&self, cx: f32, cy: f32, rad: f32, a0: f32, a1: f32, w: f32, c: Color32) {
+        let n = 24;
+        let pts: Vec<(f32, f32)> = (0..=n)
+            .map(|i| {
+                let a = (a0 + (a1 - a0) * i as f32 / n as f32).to_radians();
+                (cx + rad * a.cos(), cy + rad * a.sin())
+            })
+            .collect();
+        self.line(&pts, w, c);
+    }
+    fn dashed_rect(&self, x: f32, y: f32, w: f32, h: f32, c: Color32) {
+        let pts = [self.pt(x, y), self.pt(x + w, y), self.pt(x + w, y + h), self.pt(x, y + h), self.pt(x, y)];
+        self.p.extend(Shape::dashed_line(&pts, Stroke::new(self.w(1.3), c), 2.2 * self.s(), 1.6 * self.s()));
+    }
+    fn text(&self, x: f32, y: f32, s: &str, size: f32, c: Color32) {
+        self.p.text(self.pt(x, y), egui::Align2::CENTER_CENTER, s, crate::theme::semibold(size * self.s()), c);
+    }
+    fn tint(&self, a: u8) -> Color32 {
+        self.acc.gamma_multiply(a as f32 / 255.0)
+    }
+
+    // Composite pieces.
+    fn globe(&self, cx: f32, cy: f32, r: f32) {
+        self.circle(cx, cy, r, Some(self.tint(60)), Some((1.4, self.ink)));
+        self.line(&[(cx - r, cy), (cx + r, cy)], 1.1, self.ink);
+        let n = 16;
+        let mer: Vec<(f32, f32)> = (0..=n)
+            .map(|i| {
+                let a = (-90.0 + 180.0 * i as f32 / n as f32).to_radians();
+                (cx + r * 0.45 * a.cos(), cy + r * a.sin())
+            })
+            .collect();
+        self.line(&mer, 1.1, self.ink);
+        let mer2: Vec<(f32, f32)> = mer.iter().map(|(x, y)| (2.0 * cx - x, *y)).collect();
+        self.line(&mer2, 1.1, self.ink);
+    }
+    fn magnifier(&self, cx: f32, cy: f32, r: f32) {
+        self.circle(cx, cy, r, Some(self.tint(45)), Some((1.6, self.ink)));
+        let d = r * 0.72;
+        self.line(&[(cx + d, cy + d), (cx + d + 5.0, cy + d + 5.0)], 2.4, self.ink);
+    }
+    fn cursor(&self, x: f32, y: f32, k: f32) {
+        let pts = [
+            (x, y),
+            (x, y + 11.0 * k),
+            (x + 3.0 * k, y + 8.2 * k),
+            (x + 5.2 * k, y + 12.5 * k),
+            (x + 7.0 * k, y + 11.6 * k),
+            (x + 4.9 * k, y + 7.4 * k),
+            (x + 8.5 * k, y + 7.2 * k),
+        ];
+        let v: Vec<Pos2> = pts.iter().map(|(a, b)| self.pt(*a, *b)).collect();
+        self.p.add(Shape::Path(egui::epaint::PathShape {
+            points: v,
+            closed: true,
+            fill: Color32::WHITE,
+            stroke: Stroke::new(self.w(1.2), self.ink).into(),
+        }));
+    }
+    fn page(&self, x: f32, y: f32, w: f32, h: f32) {
+        let f = 4.0;
+        self.fill(
+            &[(x, y), (x + w - f, y), (x + w, y + f), (x + w, y + h), (x, y + h)],
+            if self.ink.r() > 128 { Color32::from_gray(40) } else { Color32::WHITE },
+        );
+        self.closed(&[(x, y), (x + w - f, y), (x + w, y + f), (x + w, y + h), (x, y + h)], 1.3, self.ink);
+        self.line(&[(x + w - f, y), (x + w - f, y + f), (x + w, y + f)], 1.1, self.ink);
+    }
+    fn table(&self, x: f32, y: f32, w: f32, h: f32) {
+        self.rect(x, y, w, h, Some(if self.ink.r() > 128 { Color32::from_gray(40) } else { Color32::WHITE }), None, 1.0);
+        self.rect(x, y, w, 3.5, Some(self.acc), None, 1.0);
+        self.rect(x, y, w, h, None, Some((1.3, self.ink)), 1.0);
+        let rows = 3;
+        for i in 1..rows {
+            let yy = y + 3.5 + (h - 3.5) * i as f32 / rows as f32;
+            self.line(&[(x, yy), (x + w, yy)], 0.9, self.ink);
+        }
+        self.line(&[(x + w * 0.4, y + 3.5), (x + w * 0.4, y + h)], 0.9, self.ink);
+    }
+    fn plus_badge(&self, x: f32, y: f32) {
+        self.circle(x, y, 4.2, Some(Color32::from_rgb(0x16, 0x9A, 0x5A)), None);
+        self.line(&[(x - 2.2, y), (x + 2.2, y)], 1.5, Color32::WHITE);
+        self.line(&[(x, y - 2.2), (x, y + 2.2)], 1.5, Color32::WHITE);
+    }
+    fn layers(&self, x: f32, y: f32, k: f32) {
+        for (i, a) in [(2.0, 90u8), (0.0, 170u8)] {
+            let yy = y + i * k * 2.0;
+            let pts = [(x + 10.0 * k, yy), (x + 20.0 * k, yy + 5.0 * k), (x + 10.0 * k, yy + 10.0 * k), (x, yy + 5.0 * k)];
+            self.fill(&pts, self.tint(a));
+            self.closed(&pts, 1.3, self.ink);
+        }
+    }
+    fn polygon_shape(&self, pts: &[(f32, f32)], a: u8) {
+        // Fan triangulation from the first vertex (fine for these small, near-convex shapes).
+        let Some(first) = pts.first() else { return };
+        for w in pts.windows(2).skip(1) {
+            if let [b, c] = w {
+                self.fill(&[*first, *b, *c], self.tint(a));
+            }
+        }
+        self.closed(pts, 1.4, self.ink);
+    }
+}
+
+/// Paints icon `name` into `r`. `ink` draws outlines, `accent` the colour parts.
+pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color32) {
+    let p = P { p: painter, r, ink, acc: accent };
+    let green = Color32::from_rgb(0x16, 0x9A, 0x5A);
+    let red = Color32::from_rgb(0xD1, 0x3C, 0x3C);
+    let amber = Color32::from_rgb(0xE5, 0x9E, 0x1A);
+    let teal = Color32::from_rgb(0x0E, 0x93, 0x84);
+    match name {
+        "explore" => {
+            p.globe(10.0, 10.0, 7.5);
+            p.cursor(12.5, 10.5, 0.85);
+        }
+        "zoom_full" => {
+            p.globe(12.0, 12.0, 6.0);
+            for (x, y, dx, dy) in [(3.0, 3.0, 1.0, 1.0), (21.0, 3.0, -1.0, 1.0), (3.0, 21.0, 1.0, -1.0), (21.0, 21.0, -1.0, -1.0)] {
+                p.line(&[(x, y + 4.0 * dy), (x, y), (x + 4.0 * dx, y)], 1.6, ink);
+            }
+        }
+        "zoom_world" => p.globe(12.0, 12.0, 9.0),
+        "zoom_in" | "zoom_out" => {
+            p.magnifier(10.0, 10.0, 6.5);
+            p.line(&[(7.0, 10.0), (13.0, 10.0)], 1.7, ink);
+            if name == "zoom_in" {
+                p.line(&[(10.0, 7.0), (10.0, 13.0)], 1.7, ink);
+            }
+        }
+        "zoom_box" => {
+            p.dashed_rect(3.0, 3.0, 13.0, 11.0, ink);
+            p.magnifier(15.0, 14.0, 4.5);
+        }
+        "prev_extent" | "next_extent" => {
+            p.circle(12.0, 12.0, 9.0, Some(p.tint(45)), Some((1.4, ink)));
+            let d = if name == "prev_extent" { -1.0 } else { 1.0 };
+            p.line(&[(12.0 - 4.5 * d, 12.0), (12.0 + 4.5 * d, 12.0)], 1.8, ink);
+            p.line(&[(12.0 + 1.0 * d, 8.5), (12.0 + 4.5 * d, 12.0), (12.0 + 1.0 * d, 15.5)], 1.8, ink);
+        }
+        "bookmark" => {
+            p.fill(&[(6.0, 3.0), (18.0, 3.0), (18.0, 21.0), (12.0, 16.0), (6.0, 21.0)], p.tint(60));
+            p.fill(&[(6.0, 3.0), (18.0, 3.0), (18.0, 8.0), (6.0, 8.0)], accent);
+            p.closed(&[(6.0, 3.0), (18.0, 3.0), (18.0, 21.0), (12.0, 16.0), (6.0, 21.0)], 1.5, ink);
+        }
+        "goto_xy" | "locate" => {
+            p.circle(12.0, 9.0, 6.0, Some(if name == "locate" { red } else { accent }), Some((1.4, ink)));
+            p.fill(&[(7.0, 11.5), (17.0, 11.5), (12.0, 21.0)], if name == "locate" { red } else { accent });
+            p.line(&[(7.0, 11.5), (12.0, 21.0), (17.0, 11.5)], 1.4, ink);
+            p.circle(12.0, 9.0, 2.3, Some(Color32::WHITE), None);
+            if name == "goto_xy" {
+                p.text(20.0, 19.5, "XY", 6.5, ink);
+            }
+        }
+        "basemap" => {
+            p.fill(&[(2.0, 6.0), (8.0, 3.5), (8.0, 18.0), (2.0, 20.5)], p.tint(80));
+            p.fill(&[(8.0, 3.5), (16.0, 6.0), (16.0, 20.5), (8.0, 18.0)], p.tint(150));
+            p.fill(&[(16.0, 6.0), (22.0, 3.5), (22.0, 18.0), (16.0, 20.5)], p.tint(80));
+            p.closed(&[(2.0, 6.0), (8.0, 3.5), (16.0, 6.0), (22.0, 3.5), (22.0, 18.0), (16.0, 20.5), (8.0, 18.0), (2.0, 20.5)], 1.4, ink);
+            p.line(&[(8.0, 3.5), (8.0, 18.0)], 1.1, ink);
+            p.line(&[(16.0, 6.0), (16.0, 20.5)], 1.1, ink);
+            p.line(&[(4.0, 13.0), (7.0, 11.0), (11.0, 13.5), (14.0, 10.0), (19.0, 12.0)], 1.3, green);
+        }
+        "add_data" => {
+            p.layers(2.0, 5.0, 0.9);
+            p.plus_badge(18.0, 17.5);
+        }
+        "add_folder" | "open" => {
+            p.fill(&[(2.0, 6.0), (9.0, 6.0), (11.0, 8.0), (22.0, 8.0), (22.0, 19.0), (2.0, 19.0)], amber);
+            p.closed(&[(2.0, 5.0), (9.0, 5.0), (11.0, 7.5), (22.0, 7.5), (22.0, 19.0), (2.0, 19.0)], 1.3, ink);
+            p.line(&[(2.0, 10.0), (22.0, 10.0)], 1.0, ink);
+        }
+        "select" => {
+            p.dashed_rect(3.0, 3.0, 14.0, 12.0, accent);
+            p.rect(3.0, 3.0, 14.0, 12.0, Some(p.tint(40)), None, 0.0);
+            p.cursor(12.0, 9.0, 1.0);
+        }
+        "select_attr" => {
+            p.table(2.0, 3.0, 15.0, 13.0);
+            p.fill(&[(12.0, 12.0), (22.0, 12.0), (18.5, 16.5), (15.5, 16.5)], accent);
+            p.rect(15.5, 16.0, 3.0, 5.0, Some(accent), None, 0.0);
+            p.closed(&[(12.0, 12.0), (22.0, 12.0), (18.5, 16.5), (18.5, 21.0), (15.5, 21.0), (15.5, 16.5)], 1.2, ink);
+        }
+        "select_loc" => {
+            p.polygon_shape(&[(2.0, 8.0), (9.0, 3.0), (15.0, 7.0), (13.0, 15.0), (4.0, 15.0)], 90);
+            p.circle(16.0, 15.0, 5.5, Some(p.tint(170)), Some((1.4, ink)));
+        }
+        "clear_sel" => {
+            p.dashed_rect(3.0, 3.0, 14.0, 12.0, ink);
+            p.circle(17.5, 17.5, 5.0, Some(red), None);
+            p.line(&[(15.5, 15.5), (19.5, 19.5)], 1.6, Color32::WHITE);
+            p.line(&[(19.5, 15.5), (15.5, 19.5)], 1.6, Color32::WHITE);
+        }
+        "zoom_sel" => {
+            p.rect(
+                3.0,
+                3.0,
+                11.0,
+                9.0,
+                Some(Color32::from_rgb(0x00, 0xC8, 0xE0).gamma_multiply(0.35)),
+                Some((1.4, Color32::from_rgb(0x00, 0xA8, 0xC0))),
+                0.0,
+            );
+            p.magnifier(12.5, 12.5, 5.0);
+        }
+        "measure" => {
+            p.fill(&[(2.0, 15.0), (15.0, 2.0), (22.0, 9.0), (9.0, 22.0)], amber);
+            p.closed(&[(2.0, 15.0), (15.0, 2.0), (22.0, 9.0), (9.0, 22.0)], 1.3, ink);
+            for i in 0..5 {
+                let t = 3.5 + i as f32 * 2.6;
+                let l = if i % 2 == 0 { 3.2 } else { 2.0 };
+                p.line(&[(2.0 + t, 15.0 - t), (2.0 + t + l * 0.7, 15.0 - t + l * 0.7)], 1.1, ink);
+            }
+        }
+        "measure_area" => {
+            p.polygon_shape(&[(3.0, 18.0), (6.0, 5.0), (17.0, 3.0), (21.0, 14.0), (13.0, 21.0)], 70);
+            for (x, y) in [(3.0, 18.0), (6.0, 5.0), (17.0, 3.0), (21.0, 14.0), (13.0, 21.0)] {
+                p.rect(x - 1.5, y - 1.5, 3.0, 3.0, Some(Color32::WHITE), Some((1.0, ink)), 0.0);
+            }
+        }
+        "identify" | "about" => {
+            p.circle(12.0, 12.0, 9.0, Some(accent), None);
+            p.circle(12.0, 7.5, 1.4, Some(Color32::WHITE), None);
+            p.line(&[(12.0, 10.5), (12.0, 17.0)], 2.2, Color32::WHITE);
+        }
+        "help" => {
+            p.circle(12.0, 12.0, 9.0, Some(accent), None);
+            p.text(12.0, 12.3, "?", 12.0, Color32::WHITE);
+        }
+        "label" => {
+            p.fill(&[(2.0, 7.0), (17.0, 7.0), (22.0, 12.0), (17.0, 17.0), (2.0, 17.0)], p.tint(70));
+            p.closed(&[(2.0, 7.0), (17.0, 7.0), (22.0, 12.0), (17.0, 17.0), (2.0, 17.0)], 1.3, ink);
+            p.text(10.0, 12.0, "Abc", 6.8, ink);
+        }
+        "label_off" => {
+            paint(painter, r, "label", ink, accent);
+            p.line(&[(3.0, 21.0), (21.0, 3.0)], 1.8, red);
+        }
+        "new_map" | "map" => {
+            p.fill(&[(2.0, 5.0), (8.0, 3.0), (16.0, 5.0), (22.0, 3.0), (22.0, 19.0), (16.0, 21.0), (8.0, 19.0), (2.0, 21.0)], p.tint(50));
+            p.closed(&[(2.0, 5.0), (8.0, 3.0), (16.0, 5.0), (22.0, 3.0), (22.0, 19.0), (16.0, 21.0), (8.0, 19.0), (2.0, 21.0)], 1.3, ink);
+            p.line(&[(8.0, 3.0), (8.0, 19.0)], 1.0, ink);
+            p.line(&[(16.0, 5.0), (16.0, 21.0)], 1.0, ink);
+            p.polygon_shape(&[(10.0, 8.0), (14.0, 9.0), (13.0, 14.0), (9.5, 13.0)], 200);
+            if name == "new_map" {
+                p.plus_badge(19.0, 18.5);
+            }
+        }
+        "new_layout" => {
+            p.page(4.0, 2.0, 15.0, 20.0);
+            p.rect(6.5, 5.0, 10.0, 8.0, Some(p.tint(90)), Some((1.0, ink)), 0.0);
+            p.line(&[(6.5, 16.0), (16.5, 16.0)], 1.0, ink);
+            p.line(&[(6.5, 18.5), (13.0, 18.5)], 1.0, ink);
+            p.plus_badge(19.0, 18.5);
+        }
+        "toolbox" => {
+            p.rect(2.0, 8.0, 20.0, 13.0, Some(red), Some((1.3, ink)), 1.5);
+            p.line(&[(8.0, 8.0), (8.0, 5.0), (16.0, 5.0), (16.0, 8.0)], 1.5, ink);
+            p.rect(2.0, 12.0, 20.0, 2.0, Some(Color32::from_rgb(0x9C, 0x2A, 0x2A)), None, 0.0);
+            p.rect(10.5, 11.0, 3.0, 4.0, Some(Color32::from_gray(230)), Some((1.0, ink)), 0.5);
+        }
+        "tools" | "geoprocessing" => {
+            p.line(&[(4.0, 20.0), (13.0, 11.0)], 3.0, ink);
+            p.circle(15.5, 8.5, 5.0, Some(accent), Some((1.3, ink)));
+            p.circle(15.5, 8.5, 1.8, Some(Color32::WHITE), None);
+            p.line(&[(15.0, 15.0), (20.0, 20.0)], 3.0, amber);
+        }
+        "modelbuilder" => {
+            p.circle(5.5, 6.0, 3.5, Some(accent), Some((1.2, ink)));
+            p.rect(9.5, 9.5, 6.0, 5.0, Some(amber), Some((1.2, ink)), 1.0);
+            p.circle(18.5, 18.0, 3.5, Some(green), Some((1.2, ink)));
+            p.line(&[(8.0, 8.0), (10.0, 10.0)], 1.3, ink);
+            p.line(&[(15.0, 14.5), (16.5, 16.0)], 1.3, ink);
+        }
+        "python" => {
+            p.rect(3.0, 4.0, 18.0, 16.0, Some(Color32::from_rgb(0x2B, 0x32, 0x3C)), Some((1.2, ink)), 2.0);
+            p.line(&[(6.0, 9.0), (9.0, 12.0), (6.0, 15.0)], 1.6, Color32::from_rgb(0x8F, 0xD1, 0x8F));
+            p.line(&[(11.0, 15.0), (17.0, 15.0)], 1.6, Color32::WHITE);
+        }
+        "history" => {
+            p.circle(12.5, 12.0, 8.5, Some(p.tint(40)), Some((1.4, ink)));
+            p.line(&[(12.5, 7.0), (12.5, 12.0), (16.0, 14.0)], 1.6, ink);
+            p.fill(&[(1.5, 9.5), (6.0, 9.5), (3.5, 13.5)], ink);
+        }
+        "environments" | "settings" => {
+            for i in 0..8 {
+                let a = (i as f32 * 45.0).to_radians();
+                p.line(&[(12.0 + 6.5 * a.cos(), 12.0 + 6.5 * a.sin()), (12.0 + 9.5 * a.cos(), 12.0 + 9.5 * a.sin())], 2.8, ink);
+            }
+            p.circle(12.0, 12.0, 7.0, Some(p.tint(110)), Some((1.4, ink)));
+            p.circle(12.0, 12.0, 2.6, Some(Color32::WHITE), Some((1.2, ink)));
+        }
+        "buffer" => {
+            p.circle(12.0, 12.0, 9.5, Some(p.tint(40)), Some((1.0, ink)));
+            p.circle(12.0, 12.0, 6.0, Some(p.tint(90)), Some((1.0, ink)));
+            p.circle(12.0, 12.0, 2.2, Some(ink), None);
+        }
+        "clip" => {
+            p.polygon_shape(&[(2.0, 4.0), (16.0, 3.0), (20.0, 14.0), (9.0, 20.0)], 60);
+            p.dashed_rect(8.0, 8.0, 13.0, 13.0, red);
+            p.rect(8.0, 8.0, 13.0, 13.0, Some(p.tint(110)), None, 0.0);
+        }
+        "erase" => {
+            p.polygon_shape(&[(2.0, 4.0), (16.0, 3.0), (20.0, 14.0), (9.0, 20.0)], 110);
+            p.circle(16.0, 16.0, 6.0, Some(Color32::WHITE), Some((1.3, red)));
+        }
+        "dissolve" => {
+            p.polygon_shape(&[(2.0, 6.0), (12.0, 3.0), (22.0, 6.0), (20.0, 19.0), (4.0, 19.0)], 110);
+            p.line(&[(12.0, 3.5), (12.0, 18.5)], 1.0, ink.gamma_multiply(0.35));
+            p.line(&[(3.0, 12.0), (21.0, 12.0)], 1.0, ink.gamma_multiply(0.35));
+        }
+        "hull" => {
+            p.polygon_shape(&[(3.0, 14.0), (8.0, 3.0), (19.0, 5.0), (22.0, 16.0), (12.0, 21.0)], 50);
+            for (x, y) in [(7.0, 9.0), (12.0, 7.0), (16.0, 12.0), (10.0, 15.0), (18.0, 8.0)] {
+                p.circle(x, y, 1.7, Some(accent), None);
+            }
+        }
+        "centroid" => {
+            p.polygon_shape(&[(3.0, 8.0), (11.0, 3.0), (21.0, 7.0), (19.0, 19.0), (6.0, 20.0)], 60);
+            p.circle(12.0, 12.0, 2.8, Some(red), Some((1.0, Color32::WHITE)));
+        }
+        "simplify" => {
+            p.line(
+                &[
+                    (2.0, 16.0),
+                    (4.0, 10.0),
+                    (6.0, 13.0),
+                    (8.0, 6.0),
+                    (10.0, 11.0),
+                    (12.0, 8.0),
+                    (14.0, 14.0),
+                    (16.0, 9.0),
+                    (18.0, 12.0),
+                    (22.0, 5.0),
+                ],
+                1.0,
+                ink.gamma_multiply(0.4),
+            );
+            p.line(&[(2.0, 16.0), (8.0, 6.0), (14.0, 14.0), (22.0, 5.0)], 2.0, accent);
+        }
+        "stats" | "chart" => {
+            p.line(&[(3.0, 3.0), (3.0, 21.0), (21.0, 21.0)], 1.4, ink);
+            for (i, h) in [8.0, 13.0, 6.0, 16.0].iter().enumerate() {
+                let x = 5.5 + i as f32 * 4.0;
+                p.rect(x, 20.0 - h, 3.0, *h, Some(if i == 3 { accent } else { p.tint(120) }), None, 0.5);
+            }
+        }
+        "count" => {
+            p.polygon_shape(&[(3.0, 6.0), (14.0, 3.0), (20.0, 12.0), (11.0, 20.0), (3.0, 16.0)], 50);
+            for (x, y) in [(7.0, 8.0), (11.0, 12.0), (8.0, 15.0), (14.0, 8.0)] {
+                p.circle(x, y, 1.6, Some(ink), None);
+            }
+            p.circle(19.0, 19.0, 4.5, Some(accent), None);
+            p.text(19.0, 19.2, "4", 6.5, Color32::WHITE);
+        }
+        "calc_geom" => {
+            p.polygon_shape(&[(3.0, 4.0), (16.0, 3.0), (17.0, 15.0), (4.0, 16.0)], 60);
+            p.rect(11.0, 13.0, 11.0, 8.0, Some(Color32::from_gray(250)), Some((1.2, ink)), 1.0);
+            p.text(16.5, 17.2, "km²", 4.6, ink);
+        }
+        "table" => p.table(2.0, 4.0, 20.0, 16.0),
+        "field" => {
+            p.table(2.0, 4.0, 15.0, 16.0);
+            p.plus_badge(19.0, 18.5);
+        }
+        "calculate" => {
+            p.rect(4.0, 2.0, 16.0, 20.0, Some(p.tint(60)), Some((1.3, ink)), 2.0);
+            p.rect(6.5, 4.5, 11.0, 5.0, Some(Color32::WHITE), Some((1.0, ink)), 0.5);
+            for (i, j) in [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)] {
+                p.rect(6.5 + i as f32 * 4.0, 12.0 + j as f32 * 4.5, 3.0, 3.0, Some(ink), None, 0.5);
+            }
+        }
+        "def_query" | "filter" => {
+            p.fill(&[(3.0, 4.0), (21.0, 4.0), (14.0, 12.0), (10.0, 12.0)], accent);
+            p.rect(10.0, 11.5, 4.0, 8.5, Some(accent), None, 0.0);
+            p.closed(&[(3.0, 4.0), (21.0, 4.0), (14.0, 12.0), (14.0, 20.0), (10.0, 20.0), (10.0, 12.0)], 1.3, ink);
+        }
+        "export_map" | "export" => {
+            p.rect(2.0, 4.0, 16.0, 14.0, Some(p.tint(60)), Some((1.3, ink)), 1.0);
+            p.polygon_shape(&[(4.0, 15.0), (8.0, 9.0), (11.0, 13.0), (13.0, 11.0), (16.0, 15.0)], 160);
+            p.line(&[(15.0, 20.0), (22.0, 13.0)], 1.8, green);
+            p.line(&[(17.5, 13.0), (22.0, 13.0), (22.0, 17.5)], 1.8, green);
+        }
+        "export_layer" => {
+            p.layers(1.0, 4.0, 0.85);
+            p.line(&[(14.0, 20.0), (21.5, 12.5)], 1.8, green);
+            p.line(&[(17.0, 12.5), (21.5, 12.5), (21.5, 17.0)], 1.8, green);
+        }
+        "web_map" | "share" => {
+            p.circle(8.0, 13.0, 5.0, Some(p.tint(120)), None);
+            p.circle(14.0, 9.5, 6.5, Some(p.tint(120)), None);
+            p.circle(18.0, 14.0, 4.5, Some(p.tint(120)), None);
+            p.rect(5.0, 13.0, 16.0, 5.5, Some(p.tint(120)), None, 2.0);
+            p.arc(14.0, 9.5, 6.5, 190.0, 340.0, 1.3, ink);
+            p.line(&[(4.5, 18.5), (20.5, 18.5)], 1.3, ink);
+        }
+        "print" => {
+            p.rect(6.0, 2.5, 12.0, 6.0, Some(Color32::WHITE), Some((1.2, ink)), 0.5);
+            p.rect(2.0, 8.0, 20.0, 9.0, Some(p.tint(110)), Some((1.3, ink)), 2.0);
+            p.rect(6.0, 14.0, 12.0, 7.5, Some(Color32::WHITE), Some((1.2, ink)), 0.5);
+        }
+        "package" => {
+            p.fill(&[(3.0, 7.0), (12.0, 3.0), (21.0, 7.0), (12.0, 11.0)], p.tint(150));
+            p.fill(&[(3.0, 7.0), (12.0, 11.0), (12.0, 21.0), (3.0, 17.0)], amber);
+            p.fill(&[(12.0, 11.0), (21.0, 7.0), (21.0, 17.0), (12.0, 21.0)], Color32::from_rgb(0xC9, 0x86, 0x10));
+            p.closed(&[(3.0, 7.0), (12.0, 3.0), (21.0, 7.0), (21.0, 17.0), (12.0, 21.0), (3.0, 17.0)], 1.3, ink);
+            p.line(&[(3.0, 7.0), (12.0, 11.0), (21.0, 7.0)], 1.1, ink);
+            p.line(&[(12.0, 11.0), (12.0, 21.0)], 1.1, ink);
+        }
+        "contents" => {
+            for (i, c) in [accent, green, amber].iter().enumerate() {
+                let y = 4.0 + i as f32 * 6.0;
+                p.rect(3.0, y, 4.0, 4.0, Some(*c), Some((1.0, ink)), 0.5);
+                p.line(&[(9.5, y + 2.0), (21.0, y + 2.0)], 1.5, ink);
+            }
+        }
+        "catalog" => {
+            p.rect(3.0, 3.0, 7.5, 7.5, Some(p.tint(150)), Some((1.2, ink)), 1.0);
+            p.rect(13.5, 3.0, 7.5, 7.5, Some(amber), Some((1.2, ink)), 1.0);
+            p.rect(3.0, 13.5, 7.5, 7.5, Some(green), Some((1.2, ink)), 1.0);
+            p.rect(13.5, 13.5, 7.5, 7.5, Some(red), Some((1.2, ink)), 1.0);
+        }
+        "symbology" => {
+            p.circle(12.0, 12.0, 9.5, Some(Color32::from_gray(245)), Some((1.3, ink)));
+            for (x, y, c) in [(8.0, 8.0, red), (13.0, 6.5, amber), (17.0, 10.0, green), (16.0, 15.5, accent)] {
+                p.circle(x, y, 2.2, Some(c), None);
+            }
+            p.circle(9.0, 15.0, 2.6, Some(Color32::WHITE), Some((1.0, ink)));
+        }
+        "transparency" => {
+            for i in 0..4 {
+                for j in 0..4 {
+                    if (i + j) % 2 == 0 {
+                        p.rect(3.0 + i as f32 * 4.5, 3.0 + j as f32 * 4.5, 4.5, 4.5, Some(ink.gamma_multiply(0.35)), None, 0.0);
+                    }
+                }
+            }
+            p.rect(3.0, 3.0, 18.0, 18.0, Some(p.tint(110)), Some((1.3, ink)), 1.0);
+        }
+        "scale_range" => {
+            p.globe(12.0, 9.0, 5.5);
+            p.line(&[(3.0, 19.0), (21.0, 19.0)], 1.6, ink);
+            p.rect(8.0, 17.0, 3.0, 4.0, Some(accent), None, 0.5);
+            p.rect(14.0, 17.0, 3.0, 4.0, Some(accent), None, 0.5);
+        }
+        "save" => {
+            p.rect(3.0, 3.0, 18.0, 18.0, Some(accent), Some((1.3, ink)), 2.0);
+            p.rect(7.0, 3.0, 10.0, 6.0, Some(Color32::WHITE), None, 0.0);
+            p.rect(6.0, 13.0, 12.0, 8.0, Some(Color32::WHITE), None, 0.5);
+        }
+        "save_as" => {
+            paint(painter, Rect::from_min_size(r.min, r.size() * 0.85), "save", ink, accent);
+            p.line(&[(13.0, 21.0), (21.0, 13.0)], 2.2, amber);
+        }
+        "new" => {
+            p.page(5.0, 2.0, 14.0, 20.0);
+            p.plus_badge(18.0, 18.0);
+        }
+        "undo" | "redo" => {
+            let d = if name == "undo" { 1.0 } else { -1.0 };
+            let cx = 12.0;
+            let pts: Vec<(f32, f32)> = (0..=16)
+                .map(|i| {
+                    let a = (-90.0 + 180.0 * i as f32 / 16.0f32).to_radians();
+                    (cx + d * 6.5 * a.cos(), 13.0 + 6.0 * a.sin())
+                })
+                .collect();
+            p.line(&pts, 1.8, ink);
+            p.line(&[(cx, 19.0), (cx - d * 6.0, 19.0)], 1.8, ink);
+            p.fill(&[(cx - d * 1.0, 3.5), (cx - d * 1.0, 10.5), (cx - d * 5.5, 7.0)], ink);
+        }
+        "delete" => {
+            p.rect(5.0, 6.0, 14.0, 16.0, Some(p.tint(50)), Some((1.3, ink)), 1.5);
+            p.line(&[(3.0, 6.0), (21.0, 6.0)], 1.6, ink);
+            p.line(&[(9.0, 6.0), (9.0, 3.0), (15.0, 3.0), (15.0, 6.0)], 1.3, ink);
+            for x in [9.5, 12.0, 14.5] {
+                p.line(&[(x, 9.5), (x, 18.5)], 1.1, ink);
+            }
+        }
+        "create" | "edit" => {
+            p.fill(&[(4.0, 16.5), (15.5, 5.0), (19.0, 8.5), (7.5, 20.0)], amber);
+            p.fill(&[(15.5, 5.0), (17.5, 3.0), (21.0, 6.5), (19.0, 8.5)], red);
+            p.closed(&[(4.0, 16.5), (17.5, 3.0), (21.0, 6.5), (7.5, 20.0), (3.0, 21.0)], 1.3, ink);
+            if name == "create" {
+                p.plus_badge(6.0, 6.0);
+            }
+        }
+        "point_tool" => {
+            p.circle(12.0, 12.0, 4.5, Some(accent), Some((1.5, Color32::WHITE)));
+            p.circle(12.0, 12.0, 6.0, None, Some((1.0, ink)));
+        }
+        "line_tool" => {
+            p.line(&[(3.0, 18.0), (9.0, 8.0), (15.0, 15.0), (21.0, 5.0)], 2.2, accent);
+            for (x, y) in [(3.0, 18.0), (9.0, 8.0), (15.0, 15.0), (21.0, 5.0)] {
+                p.rect(x - 1.6, y - 1.6, 3.2, 3.2, Some(Color32::WHITE), Some((1.0, ink)), 0.0);
+            }
+        }
+        "polygon_tool" => {
+            p.polygon_shape(&[(3.0, 17.0), (6.0, 5.0), (18.0, 3.0), (21.0, 15.0), (12.0, 21.0)], 120);
+            for (x, y) in [(3.0, 17.0), (6.0, 5.0), (18.0, 3.0), (21.0, 15.0), (12.0, 21.0)] {
+                p.rect(x - 1.6, y - 1.6, 3.2, 3.2, Some(Color32::WHITE), Some((1.0, ink)), 0.0);
+            }
+        }
+        "dark" => {
+            p.circle(12.0, 12.0, 8.0, Some(Color32::from_rgb(0x3B, 0x44, 0x60)), None);
+            p.circle(15.5, 9.0, 6.5, Some(if ink.r() > 128 { Color32::from_rgb(0x24, 0x29, 0x31) } else { Color32::WHITE }), None);
+        }
+        "graticule" => {
+            p.circle(12.0, 12.0, 9.0, Some(p.tint(40)), Some((1.3, ink)));
+            for y in [7.0, 12.0, 17.0] {
+                p.line(&[(4.0, y), (20.0, y)], 0.9, ink);
+            }
+            for x in [7.0, 12.0, 17.0] {
+                p.line(&[(x, 3.5), (x, 20.5)], 0.9, ink);
+            }
+        }
+        "search" => p.magnifier(10.0, 10.0, 6.0),
+        "command" => {
+            p.rect(2.0, 5.0, 20.0, 14.0, Some(p.tint(40)), Some((1.3, ink)), 3.0);
+            p.magnifier(9.0, 11.0, 3.3);
+            p.line(&[(15.0, 12.0), (19.0, 12.0)], 1.4, ink);
+        }
+        "pane" => {
+            p.rect(2.0, 4.0, 20.0, 16.0, None, Some((1.3, ink)), 1.5);
+            p.rect(2.0, 4.0, 7.0, 16.0, Some(p.tint(110)), Some((1.3, ink)), 1.5);
+        }
+        "pane_right" => {
+            p.rect(2.0, 4.0, 20.0, 16.0, None, Some((1.3, ink)), 1.5);
+            p.rect(15.0, 4.0, 7.0, 16.0, Some(p.tint(110)), Some((1.3, ink)), 1.5);
+        }
+        "unique" => {
+            for (i, c) in [accent, amber, green, red].iter().enumerate() {
+                let (x, y) = (3.0 + (i % 2) as f32 * 10.0, 3.0 + (i / 2) as f32 * 10.0);
+                p.rect(x, y, 8.0, 8.0, Some(*c), Some((1.0, ink)), 1.5);
+            }
+        }
+        "graduated" => {
+            for i in 0..5 {
+                p.rect(2.5 + i as f32 * 4.0, 5.0, 3.6, 14.0, Some(teal.gamma_multiply(0.2 + i as f32 * 0.2)), None, 0.5);
+            }
+            p.rect(2.5, 5.0, 19.6, 14.0, None, Some((1.2, ink)), 0.5);
+        }
+        "proportional" => {
+            for (x, y, rr) in [(5.0, 18.0, 2.5), (11.0, 15.0, 4.0), (17.5, 10.5, 5.5)] {
+                p.circle(x, y, rr, Some(accent.gamma_multiply(0.7)), Some((1.0, ink)));
+            }
+        }
+        "single" => {
+            p.rect(4.0, 4.0, 16.0, 16.0, Some(accent), Some((1.3, ink)), 2.0);
+        }
+        "eye" => {
+            p.arc(12.0, 18.0, 10.0, 210.0, 330.0, 1.5, ink);
+            p.arc(12.0, 6.0, 10.0, 30.0, 150.0, 1.5, ink);
+            p.circle(12.0, 12.0, 3.0, Some(accent), None);
+        }
+        "close" => {
+            p.line(&[(6.0, 6.0), (18.0, 18.0)], 1.8, ink);
+            p.line(&[(18.0, 6.0), (6.0, 18.0)], 1.8, ink);
+        }
+        "dropdown" => p.fill(&[(7.0, 9.5), (17.0, 9.5), (12.0, 15.0)], ink),
+        "chevron_right" => p.line(&[(9.0, 6.0), (15.0, 12.0), (9.0, 18.0)], 1.8, ink),
+        "chevron_down" => p.line(&[(6.0, 9.0), (12.0, 15.0), (18.0, 9.0)], 1.8, ink),
+        "back" => {
+            p.line(&[(20.0, 12.0), (4.5, 12.0)], 2.0, ink);
+            p.line(&[(10.5, 6.0), (4.5, 12.0), (10.5, 18.0)], 2.0, ink);
+        }
+        "run" => p.fill(&[(7.0, 4.0), (20.0, 12.0), (7.0, 20.0)], green),
+        "up" => p.line(&[(6.0, 15.0), (12.0, 9.0), (18.0, 15.0)], 1.8, ink),
+        "down" => p.line(&[(6.0, 9.0), (12.0, 15.0), (18.0, 9.0)], 1.8, ink),
+        "logo" => {
+            // The RustGIS mark: a contour-lined globe on a rust tile.
+            p.rect(1.0, 1.0, 22.0, 22.0, Some(crate::theme::BRAND), None, 5.5);
+            p.circle(12.0, 12.0, 7.5, None, Some((1.6, Color32::WHITE)));
+            p.arc(12.0, 22.0, 13.0, 232.0, 308.0, 1.3, Color32::WHITE);
+            p.arc(12.0, 2.0, 13.0, 52.0, 128.0, 1.3, Color32::WHITE);
+            p.line(&[(12.0, 4.5), (12.0, 19.5)], 1.3, Color32::WHITE);
+            p.circle(16.5, 8.0, 1.8, Some(Color32::from_rgb(0xFF, 0xD3, 0x6E)), None);
+        }
+        "point_layer" => p.circle(12.0, 12.0, 5.0, Some(accent), Some((1.2, ink))),
+        "line_layer" => p.line(&[(3.0, 17.0), (9.0, 8.0), (15.0, 15.0), (21.0, 6.0)], 2.2, accent),
+        "polygon_layer" => p.polygon_shape(&[(3.0, 8.0), (11.0, 3.0), (21.0, 7.0), (19.0, 20.0), (5.0, 19.0)], 180),
+        _ => {
+            p.rect(4.0, 4.0, 16.0, 16.0, Some(p.tint(60)), Some((1.2, ink)), 3.0);
+        }
+    }
+}
+
+/// Every icon name, for the gallery test.
+pub const ALL: &[&str] = &[
+    "explore",
+    "zoom_full",
+    "zoom_world",
+    "zoom_in",
+    "zoom_out",
+    "zoom_box",
+    "prev_extent",
+    "next_extent",
+    "bookmark",
+    "goto_xy",
+    "locate",
+    "basemap",
+    "add_data",
+    "add_folder",
+    "open",
+    "select",
+    "select_attr",
+    "select_loc",
+    "clear_sel",
+    "zoom_sel",
+    "measure",
+    "measure_area",
+    "identify",
+    "about",
+    "help",
+    "label",
+    "label_off",
+    "new_map",
+    "map",
+    "new_layout",
+    "toolbox",
+    "tools",
+    "geoprocessing",
+    "modelbuilder",
+    "python",
+    "history",
+    "environments",
+    "settings",
+    "buffer",
+    "clip",
+    "erase",
+    "dissolve",
+    "hull",
+    "centroid",
+    "simplify",
+    "stats",
+    "chart",
+    "count",
+    "calc_geom",
+    "table",
+    "field",
+    "calculate",
+    "def_query",
+    "filter",
+    "export_map",
+    "export",
+    "export_layer",
+    "web_map",
+    "share",
+    "print",
+    "package",
+    "contents",
+    "catalog",
+    "symbology",
+    "transparency",
+    "scale_range",
+    "save",
+    "save_as",
+    "new",
+    "undo",
+    "redo",
+    "delete",
+    "create",
+    "edit",
+    "point_tool",
+    "line_tool",
+    "polygon_tool",
+    "dark",
+    "graticule",
+    "search",
+    "command",
+    "pane",
+    "pane_right",
+    "unique",
+    "graduated",
+    "proportional",
+    "single",
+    "eye",
+    "close",
+    "back",
+    "dropdown",
+    "chevron_right",
+    "chevron_down",
+    "run",
+    "up",
+    "down",
+    "logo",
+    "point_layer",
+    "line_layer",
+    "polygon_layer",
+];

@@ -1,0 +1,28 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-toml
+      - id: check-yaml
+      - id: check-json
+        exclude: \.geojson$
+      - id: end-of-file-fixer
+        exclude: ^(assets/data/|docs/images/)
+      - id: trailing-whitespace
+        exclude: ^(assets/data/|docs/images/)
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all --
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false

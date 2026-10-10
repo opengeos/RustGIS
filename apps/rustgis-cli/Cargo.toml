@@ -1,0 +1,14 @@
+[package]
+name = "rustgis-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "RustGIS command line: run commands and geoprocessing, render maps, inspect data"
+
+[lints]
+workspace = true
+
+[dependencies]
+rustgis-engine = { workspace = true }
+serde_json = { workspace = true }

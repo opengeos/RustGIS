@@ -1,0 +1,18 @@
+[package]
+name = "rustgis-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RustGIS L3: CPU map renderer (tiny-skia), label placement, PNG export, font discovery"
+
+[lints]
+workspace = true
+
+[dependencies]
+rustgis-geom = { workspace = true }
+rustgis-data = { workspace = true }
+rustgis-map = { workspace = true }
+tiny-skia = { workspace = true }
+ab_glyph = { workspace = true }
+epaint_default_fonts = { workspace = true }
+log = { workspace = true }
