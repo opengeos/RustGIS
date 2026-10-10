@@ -260,6 +260,16 @@ impl Session {
         self.redo.last().map(|u| u.1)
     }
 
+    /// Forgets undo/redo and extent history and marks the project clean (after new/open).
+    pub(crate) fn clear_history(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+        self.back.clear();
+        self.forward.clear();
+        self.last_camera = None;
+        self.dirty = false;
+    }
+
     pub(crate) fn undo(&mut self) -> bool {
         let Some((p, label)) = self.undo.pop() else { return false };
         let cur = std::mem::replace(&mut self.project, p);

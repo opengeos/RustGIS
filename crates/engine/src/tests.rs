@@ -77,6 +77,24 @@ fn project_save_and_open_roundtrip() {
 }
 
 #[test]
+fn save_clears_dirty_and_open_clears_history() {
+    let mut s = world();
+    assert!(!s.dirty && !s.can_undo(), "a fresh sample is clean");
+    s.run("layer.color", &json!({"layer": "Countries", "color": "#336699"})).unwrap();
+    assert!(s.dirty && s.can_undo());
+    let dir = std::env::temp_dir().join(format!("rustgis-dirty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("a.rgisx");
+    s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
+    assert!(!s.dirty, "saving clears the dirty marker");
+    assert!(s.can_undo(), "saving keeps the edit history");
+    s.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
+    assert!(!s.dirty && !s.can_undo() && !s.can_redo(), "opening starts a fresh history");
+    assert!(s.run("edit.undo", &Value::Null).is_err());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn catalog_ids_exist() {
     let s = Session::new(Project::default());
     for f in crate::catalog::FEATURES {

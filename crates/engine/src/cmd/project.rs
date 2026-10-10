@@ -9,11 +9,13 @@ use crate::{CmdResult, CommandSpec as C, Project, Session, Tool};
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("project.new", "New Project", "Project", new).key("Mod+N").params(r#"{"name"?: string}"#),
-        C::new("project.sample", "World Atlas Sample", "Project", sample),
-        C::new("project.open", "Open Project", "Project", open).key("Mod+O").params(r#"{"path": string}"#),
-        C::new("project.save", "Save Project", "Project", save).key("Mod+S").params(r#"{"path"?: string}"#),
-        C::new("project.saveAs", "Save Project As", "Project", save_as).key("Mod+Shift+S").params(r#"{"path": string}"#),
+        // Replacing or saving the project isn't an undoable edit: these are `.view()` commands
+        // that manage `dirty` and the history themselves.
+        C::new("project.new", "New Project", "Project", new).key("Mod+N").view().params(r#"{"name"?: string}"#),
+        C::new("project.sample", "World Atlas Sample", "Project", sample).view(),
+        C::new("project.open", "Open Project", "Project", open).key("Mod+O").view().params(r#"{"path": string}"#),
+        C::new("project.save", "Save Project", "Project", save).key("Mod+S").view().params(r#"{"path"?: string}"#),
+        C::new("project.saveAs", "Save Project As", "Project", save_as).key("Mod+Shift+S").view().params(r#"{"path": string}"#),
         C::new("project.rename", "Rename Project", "Project", rename).params(r#"{"name": string}"#),
         C::new("edit.undo", "Undo", "Quick Access Toolbar", |s, _| if s.undo() { Ok(Value::Null) } else { Err("nothing to undo".into()) })
             .key("Mod+Z")
@@ -36,6 +38,7 @@ fn reset(s: &mut Session, p: Project) {
     s.active_layer = s.map().layers.first().map(|l| l.id);
     s.table_layer = None;
     s.tool = Tool::Explore;
+    s.clear_history();
 }
 
 fn new(s: &mut Session, p: &Value) -> CmdResult {
@@ -63,6 +66,7 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
 fn write(s: &mut Session, path: PathBuf) -> CmdResult {
     let path = if path.extension().is_none() { path.with_extension(crate::project::EXTENSION) } else { path };
     s.project.save(&path)?;
+    s.dirty = false;
     s.notify(format!("Saved {}", path.display()), false);
     s.path = Some(path.clone());
     Ok(json!({"path": path.display().to_string()}))
@@ -91,7 +95,7 @@ fn rename(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn set_tool(s: &mut Session, p: &Value) -> CmdResult {
-    let t = s_tool(p)?;
+    let t = parse_tool(p)?;
     if t.creates() {
         let id = s.layer_id(&Value::Null).map_err(|_| "select the layer to edit in the Contents pane first".to_string())?;
         let gt = s.map().layer(id).map(|l| l.geometry_type());
@@ -109,7 +113,7 @@ fn set_tool(s: &mut Session, p: &Value) -> CmdResult {
     Ok(Value::Null)
 }
 
-fn s_tool(p: &Value) -> Result<Tool, String> {
+fn parse_tool(p: &Value) -> Result<Tool, String> {
     let name = ps(p, "tool").ok_or("tool is required")?;
     Tool::from_code(name).ok_or_else(|| format!("unknown tool '{name}'"))
 }

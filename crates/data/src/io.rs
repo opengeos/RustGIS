@@ -10,7 +10,7 @@ use crate::{Coord, DataError, Dataset, Field, FieldType, Geometry, GeometryType,
 const MAX_BYTES: u64 = 1 << 30;
 
 /// File types the readers understand, for open dialogs.
-pub const READ_EXTENSIONS: &[&str] = &["geojson", "json", "csv", "shp"];
+pub const READ_EXTENSIONS: &[&str] = &["geojson", "json", "csv", "txt", "shp"];
 
 /// Reads a vector file by extension.
 pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
@@ -109,15 +109,20 @@ pub fn geometry_to_geojson(g: &Geometry) -> Json {
 /// Reads a GeoJSON FeatureCollection, Feature or bare geometry.
 pub fn read_geojson(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
     let root: Json = serde_json::from_str(text).map_err(|e| DataError::Format(format!("GeoJSON: {e}")))?;
-    let features: Vec<Json> = match root.get("type").and_then(Json::as_str) {
-        Some("FeatureCollection") => root.get("features").and_then(Json::as_array).cloned().unwrap_or_default(),
-        Some("Feature") => vec![root.clone()],
-        Some(_) => vec![json!({"type": "Feature", "geometry": root, "properties": {}})],
+    // Borrow the features rather than copying a document that may be very large.
+    let wrapped: Json;
+    let features: Vec<&Json> = match root.get("type").and_then(Json::as_str) {
+        Some("FeatureCollection") => root.get("features").and_then(Json::as_array).map(|a| a.iter().collect()).unwrap_or_default(),
+        Some("Feature") => vec![&root],
+        Some(_) => {
+            wrapped = json!({"type": "Feature", "geometry": &root, "properties": {}});
+            vec![&wrapped]
+        }
         None => return Err(DataError::Format("GeoJSON: missing \"type\"".into())),
     };
     // Schema: union of property keys in first-seen order; type widened as values are seen.
     let mut fields: Vec<Field> = Vec::new();
-    for f in &features {
+    for &f in &features {
         if let Some(props) = f.get("properties").and_then(Json::as_object) {
             for (k, v) in props {
                 let ty = json_type(v);
@@ -130,7 +135,7 @@ pub fn read_geojson(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
     }
     let mut report = ReadReport::default();
     let mut ds = Dataset::new(name, GeometryType::None, fields);
-    for f in &features {
+    for &f in &features {
         let geom = f.get("geometry").filter(|g| !g.is_null()).and_then(geometry_from_geojson);
         if geom.is_none() && f.get("geometry").is_some_and(|g| !g.is_null()) {
             report.skipped += 1;
@@ -228,7 +233,17 @@ pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
     let headers: Vec<String> = rdr.headers().map_err(|e| DataError::Format(format!("CSV: {e}")))?.iter().map(|s| s.to_string()).collect();
     let find = |names: &[&str]| headers.iter().position(|h| names.contains(&h.trim().to_ascii_lowercase().as_str()));
     let (lon, lat) = (find(LON_NAMES), find(LAT_NAMES));
-    let rows: Vec<Vec<String>> = rdr.records().filter_map(|r| r.ok()).map(|r| r.iter().map(|s| s.to_string()).collect()).collect();
+    let mut malformed = 0usize;
+    let rows: Vec<Vec<String>> = rdr
+        .records()
+        .filter_map(|r| match r {
+            Ok(r) => Some(r.iter().map(|s| s.to_string()).collect()),
+            Err(_) => {
+                malformed += 1;
+                None
+            }
+        })
+        .collect();
     // Infer each column's type from its values.
     let fields: Vec<Field> = headers
         .iter()
@@ -252,7 +267,10 @@ pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
             Field::new(h.trim(), ty.unwrap_or(FieldType::Text))
         })
         .collect();
-    let mut report = ReadReport::default();
+    let mut report = ReadReport { skipped: malformed, ..ReadReport::default() };
+    if malformed > 0 {
+        report.messages.push(format!("{malformed} rows were malformed and skipped"));
+    }
     let gt = if lon.is_some() && lat.is_some() { GeometryType::Point } else { GeometryType::None };
     let mut ds = Dataset::new(name, gt, fields);
     for r in &rows {
@@ -272,8 +290,8 @@ pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
         let attrs = ds.fields.iter().enumerate().map(|(i, f)| Value::parse(r.get(i).map(|s| s.as_str()).unwrap_or(""), f.ty)).collect();
         ds.push(geom, attrs);
     }
-    if report.skipped > 0 {
-        report.messages.push(format!("{} rows had no usable coordinates", report.skipped));
+    if report.skipped > malformed {
+        report.messages.push(format!("{} rows had no usable coordinates", report.skipped - malformed));
     }
     Ok((ds, report))
 }
