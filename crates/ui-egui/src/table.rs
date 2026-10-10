@@ -57,7 +57,12 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 icons::paint(ui.painter(), r, "table", t.icon, t.accent);
                 ui.label(egui::RichText::new(&title).font(semibold(13.0)));
                 ui.label(
-                    egui::RichText::new(format!("{} of {} selected", selection.len(), ds.features.len())).size(11.5).color(t.text_dim),
+                    egui::RichText::new(crate::i18n::fmt(
+                        "{n} of {total} selected",
+                        &[("n", &selection.len().to_string()), ("total", &ds.features.len().to_string())],
+                    ))
+                    .size(11.5)
+                    .color(t.text_dim),
                 );
                 ui.add_space(10.0);
                 if is_layer {
@@ -78,11 +83,11 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     small(ui, app, "field", "", "Add field", "ui.dialog", json!({"name": "addField"}), false);
                     small(ui, app, "calculate", "", "Calculate field", "ui.dialog", json!({"name": "calculateField"}), false);
                     ui.add_space(6.0);
-                    ui.checkbox(&mut app.table.selected_only, egui::RichText::new("Selected only").size(11.5));
+                    ui.checkbox(&mut app.table.selected_only, egui::RichText::new(tl!("Selected only")).size(11.5));
                 }
-                ui.add(egui::TextEdit::singleline(&mut app.table.filter).hint_text("Filter rows…").desired_width(160.0));
+                ui.add(egui::TextEdit::singleline(&mut app.table.filter).hint_text(tl!("Filter rows…")).desired_width(160.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Button::new("×").frame(false)).on_hover_text("Close table").clicked() {
+                    if ui.add(egui::Button::new(tl!("×")).frame(false)).on_hover_text(tl!("Close table")).clicked() {
                         app.session.table_layer = None;
                         app.table.standalone = None;
                         app.table.editing = None;
@@ -119,7 +124,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 tb.min_scrolled_height(0.0)
                     .header(24.0, |mut h| {
                         h.col(|ui| {
-                            ui.label(egui::RichText::new("OID").font(semibold(11.5)).color(t.text_dim));
+                            ui.label(egui::RichText::new(tl!("OID")).font(semibold(11.5)).color(t.text_dim));
                         });
                         for (i, fd) in ds.fields.iter().enumerate() {
                             h.col(|ui| {
@@ -132,7 +137,12 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                                     egui::Label::new(egui::RichText::new(format!("{}{arrow}", fd.display())).font(semibold(11.5)))
                                         .sense(Sense::click()),
                                 );
-                                if r.on_hover_text(format!("{} ({}) · click to sort", fd.name, fd.ty.label())).clicked() {
+                                if r.on_hover_text(crate::i18n::fmt(
+                                    "{field} ({type}) · click to sort",
+                                    &[("field", &fd.name), ("type", tl!(fd.ty.label()))],
+                                ))
+                                .clicked()
+                                {
                                     sort_click = Some(i);
                                 }
                             });

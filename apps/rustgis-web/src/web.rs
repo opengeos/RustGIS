@@ -39,12 +39,21 @@ pub fn start() {
                 options,
                 Box::new(move |cc| {
                     let inbox: Inbox = Inbox::default();
+                    let font_inbox: Inbox = Inbox::default();
                     let app = if query().contains("blank") {
                         RustGisApp::new(Session::new(Project::default()))
                     } else {
                         RustGisApp::with_sample()
                     };
-                    let app = app.with_services(services(inbox.clone(), cc.egui_ctx.clone()));
+                    let mut app = app.with_services(services(inbox.clone(), font_inbox, cc.egui_ctx.clone()));
+                    // `?lang=de` picks the interface language for this visit.
+                    let q = query();
+                    if let Some(code) = q.trim_start_matches('?').split('&').find_map(|kv| kv.strip_prefix("lang=")) {
+                        match rustgis_ui_egui::i18n::Lang::from_code(code) {
+                            Some(l) => app.ui.language = l.code().to_string(),
+                            None => log::warn!("?lang={code}: no such interface language; following the browser's"),
+                        }
+                    }
                     Ok(Box::new(WebShell { app, inbox, dirty }))
                 }),
             )
@@ -98,9 +107,63 @@ impl eframe::App for WebShell {
     }
 }
 
-fn services(inbox: Inbox, ctx: egui::Context) -> Services {
+fn storage() -> Option<web_sys::Storage> {
+    web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+}
+
+/// Downloads `url`.
+async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    let window = web_sys::window().ok_or("no window")?;
+    let resp: web_sys::Response =
+        wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url)).await.map_err(err)?.dyn_into().map_err(err)?;
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    // Fonts are at most about 10 MB; refuse anything over 64 MB, by header when there is one and
+    // by the downloaded size otherwise.
+    if let Ok(Some(len)) = resp.headers().get("content-length").map(|v| v.and_then(|s| s.parse::<u64>().ok()))
+        && len > 64 << 20
+    {
+        return Err(format!("{len} bytes is too large"));
+    }
+    let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(err)?).await.map_err(err)?;
+    let bytes = js_sys::Uint8Array::new(&buf);
+    if bytes.length() > 64 << 20 {
+        return Err(format!("{} bytes is too large", bytes.length()));
+    }
+    Ok(bytes.to_vec())
+}
+
+fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
+    let font_ctx = ctx.clone();
+    let font_sink = font_inbox.clone();
     Services {
+        load_pref: Some(Box::new(|key: &str| storage().and_then(|s| s.get_item(&format!("rustgis.{key}")).ok().flatten()))),
+        save_pref: Some(Box::new(|key: &str, value: &str| {
+            if let Some(s) = storage() {
+                let _ = s.set_item(&format!("rustgis.{key}"), value);
+            }
+        })),
+        fetch_font: Some(Box::new(move |url: &str| {
+            let (url, inbox, ctx) = (url.to_string(), font_sink.clone(), font_ctx.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                match fetch_bytes(&url).await {
+                    Ok(bytes) => {
+                        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((url, bytes));
+                        ctx.request_repaint();
+                    }
+                    Err(e) => {
+                        log::error!("couldn't load font {url}: {e}");
+                        // Empty bytes tell the app the download failed.
+                        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((url, Vec::new()));
+                        ctx.request_repaint();
+                    }
+                }
+            });
+        })),
+        font_inbox: Some(font_inbox),
         open_async: Some(Box::new(move |purpose: &str| {
             let inbox = open_inbox.clone();
             let ctx = ctx.clone();

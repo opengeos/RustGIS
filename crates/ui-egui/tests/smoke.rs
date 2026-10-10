@@ -47,6 +47,19 @@ fn every_tab_pane_and_dialog_renders() {
         h.step();
     }
     h.state_mut().ui.backstage = false;
+    // Every language, the collapsed and peeked ribbon.
+    for l in rustgis_ui_egui::i18n::Lang::all() {
+        h.state_mut().run("ui.language", json!({"code": l.code()})).unwrap();
+        h.step();
+        h.step();
+    }
+    h.state_mut().run("ui.language", json!({"code": "auto"})).unwrap();
+    assert!(h.state_mut().run("ui.language", json!({"code": "xx"})).is_err());
+    h.state_mut().run("ui.ribbon", json!({"minimized": true})).unwrap();
+    h.state_mut().ui.ribbon_peek = true;
+    h.step();
+    h.state_mut().run("ui.ribbon", json!({"minimized": false})).unwrap();
+    h.step();
     for kind in ["unique", "graduated", "single"] {
         h.state_mut().run("layer.symbology", json!({"layer": "Countries", "type": kind, "field": "continent"})).ok();
         h.step();

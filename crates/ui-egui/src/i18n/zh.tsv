@@ -1,0 +1,545 @@
+# zh interface catalog: English<TAB>translation
+<None>	<无>
+A blank map with a basemap	带底图的空白地图
+A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	一款用纯 Rust 编写的快速、开源桌面 GIS，采用桌面 GIS 的功能区工作流：地图与图层、符号系统、标注、选择、编辑、地理处理和导出。
+A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	一个值、一个字段，或用 + − × ÷ 连接的两者。应用于所选行；若未选择任何行，则应用于所有行。
+About	关于
+About RustGIS	关于 RustGIS
+About RustGIS.	关于 RustGIS。
+Activate Map	激活地图
+Add	添加
+Add\nData	添加\n数据
+Add\nField	添加\n字段
+Add a field to the selected layer.	向所选图层添加字段。
+Add a field.	添加字段。
+Add a new map to the project.	向工程添加新地图。
+Add Data	添加数据
+Add Data (from text)	添加数据（从文本）
+Add Data…	添加数据…
+Add Field	添加字段
+Add field	添加字段
+Add GeoJSON, CSV or Shapefile data to the map.	将 GeoJSON、CSV 或 Shapefile 数据添加到地图。
+Add sample countries	添加示例国家数据
+Add Sample Data	添加示例数据
+Add To Current Selection	添加到当前选择
+Add vector data.	添加矢量数据。
+Adds geodesic area (km²), length (km) or centroid coordinates as fields.	将测地面积（km²）、长度（km）或质心坐标添加为字段。
+All	全部
+All files	所有文件
+Analysis	分析
+AND	AND
+Apply	应用
+Area {area}   ·   Perimeter {perimeter}	面积 {area}   ·   周长 {perimeter}
+Atlas	地图集
+Attribute\nTable	属性\n表
+Attribute Table	属性表
+Attribute table	属性表
+Attributes	属性
+Automatic	自动
+Automatic (system language)	自动（系统语言）
+Back to Explore; cancel a sketch	返回浏览；取消草图
+Back to the map	返回地图
+Back to tools	返回工具
+Basemap	底图
+Basemaps	底图
+Blank	空白
+Bold	粗体
+Bold label text.	标注文本加粗。
+Bookmarks	书签
+Boolean	布尔型
+Bounding\nGeometry	边界\n几何
+Browse the geoprocessing toolbox.	浏览地理处理工具箱。
+Browse the project's maps, tables and folders.	浏览工程中的地图、表和文件夹。
+Buffer	缓冲区
+By\nAttributes	按\n属性
+By\nLocation	按\n位置
+Calculate	计算
+Calculate\nField	计算\n字段
+Calculate\nGeometry	计算\n几何
+Calculate Field	计算字段
+Calculate field	计算字段
+Calculate field values.	计算字段值。
+Calculate Geometry Attributes	计算几何属性
+Can't read this folder	无法读取此文件夹
+Cancel	取消
+CARGO_PKG_VERSION	CARGO_PKG_VERSION
+Cartography	制图
+Case Field	分组字段
+Catalog	目录
+Catalog\nPane	目录\n窗格
+Change the map's backdrop.	更改地图的背景。
+Choose how the layer is drawn.	选择图层的绘制方式。
+Choose the interface language.	选择界面语言。
+Circle	圆形
+Classes	分类
+Clear	清除
+Clear\nLimits	清除\n限制
+Clear History	清除历史记录
+Clear Selection	清除选择
+Clear selection	清除选择
+Clear the selection in every layer.	清除所有图层中的选择。
+Clear the selection.	清除选择。
+Click or drag a box to select features. Shift adds, Ctrl removes.	单击或拖动矩形框选择要素。按 Shift 添加，按 Ctrl 移除。
+Click or drag a box · Shift adds · Ctrl removes	单击或拖动矩形框 · Shift 添加 · Ctrl 移除
+Click the corners of the area · double-click to finish	单击区域的各个角点 · 双击完成
+Click the map to add a point	单击地图添加点
+Click to add points · double-click to finish · Esc to stop	单击添加点 · 双击完成 · Esc 停止
+Click to add vertices · double-click to close the polygon	单击添加折点 · 双击闭合多边形
+Click to add vertices · double-click to finish the line	单击添加折点 · 双击完成线
+Click to switch between decimal degrees and DMS	单击在十进制度和度分秒之间切换
+Clip	裁剪
+Clip Features	裁剪要素
+Close	关闭
+Close Table	关闭表
+Close table	关闭表
+Collapse or expand the ribbon	折叠或展开功能区
+Collapse the ribbon (Ctrl+F1)	折叠功能区 (Ctrl+F1)
+Color	颜色
+Color Scheme	配色方案
+Color scheme	配色方案
+Command\nSearch	命令\n搜索
+Command Search	命令搜索
+Completed	已完成
+Compute a field's values.	计算字段的值。
+Contents	内容
+Conversion	转换
+Copies the (selected) features of a layer to a new layer.	将图层的（所选）要素复制到新图层。
+Copy Coordinates	复制坐标
+Couldn't download the font for {language}; pick the language again to retry.	无法下载 {language} 的字体；请重新选择该语言以重试。
+Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	字段的计数、总和、平均值、最小值、最大值和标准差，可按分组字段分别统计。
+Countries, cities, rivers and lakes	国家、城市、河流和湖泊
+Counts the points that fall inside each polygon.	统计落在每个多边形内的点数。
+Create	创建
+Create a new project or start from the World Atlas sample.	新建工程或从世界地图集示例开始。
+Create Feature	创建要素
+Create Line	创建线
+Create Point	创建点
+Create Polygon	创建多边形
+Creates a point inside each input feature.	在每个输入要素内部创建一个点。
+Creates polygons around input features at a given distance.	在输入要素周围按给定距离创建多边形。
+Ctrl+	Ctrl+
+Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
+Ctrl+F1	Ctrl+F1
+Ctrl+K	Ctrl+K
+Ctrl+N / O / S	Ctrl+N / O / S
+Ctrl+T	Ctrl+T
+Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
+Current Project	当前工程
+Dark\nMode	深色\n模式
+Data	数据
+Data Design	数据设计
+Data Management	数据管理
+Data type	数据类型
+Data…	数据…
+Definition\nQuery	定义\n查询
+Definition Query	定义查询
+Definition query	定义查询
+Definition Query…	定义查询…
+Delete	删除
+Delete Field	删除字段
+Delete Map	删除地图
+Delete selected features	删除所选要素
+Delete selected rows	删除所选行
+Delete the selected features.	删除所选要素。
+Details	详细信息
+Details of the selected layer.	所选图层的详细信息。
+Diamond	菱形
+Display	显示
+Dissolve	融合
+Dissolve Field	融合字段
+Distance	距离
+Double	双精度
+Double-click	双击
+Double-click to add	双击添加
+Downloaded {name}	已下载 {name}
+Drag / middle-drag	拖动 / 中键拖动
+Drag a box or click to zoom in	拖动矩形框或单击以放大
+Drag a box to zoom into.	拖动矩形框进行放大。
+Draw a halo around label text.	在标注文本周围绘制晕圈。
+Draw new features in the selected layer. Double-click to finish lines and polygons.	在所选图层中绘制新要素。双击完成线和多边形。
+Draw the layer at every scale.	在所有比例尺下绘制图层。
+Drawing	绘制
+Drawing Order	绘制顺序
+Dusk	黄昏
+e.g.  pop_est / 1000000   or   'Africa'   or   name	例如  pop_est / 1000000   或   'Africa'   或   name
+e.g. continent = 'Europe'	例如 continent = 'Europe'
+e.g. pop_est > 100000000 AND continent = 'Asia'	例如 pop_est > 100000000 AND continent = 'Asia'
+East	东
+Edit	编辑
+Edit Attribute	编辑属性
+Edit attributes in the table.	在表中编辑属性。
+Effects	效果
+Ember	余烬
+Encloses each feature, or all features, in its convex hull.	用凸包包围每个要素或所有要素。
+Equal Interval	相等间隔
+Erase	擦除
+Erase Features	擦除要素
+Esc	Esc
+Expand Legend	展开图例
+Expand the ribbon (Ctrl+F1)	展开功能区 (Ctrl+F1)
+Explore	浏览
+Export	导出
+Export\nFeatures	导出\n要素
+Export\nMap	导出\n地图
+Export Features	导出要素
+Export Features (tool)	导出要素（工具）
+Export Features…	导出要素…
+Export Map	导出地图
+Export Map failed unexpectedly	导出地图意外失败
+Export Map…	导出地图…
+Export Table	导出表
+Export the layer.	导出图层。
+Export the map view as a PNG image (with labels and a scale bar).	将地图视图导出为 PNG 图像（含标注和比例尺）。
+Export the selected layer to GeoJSON or CSV.	将所选图层导出为 GeoJSON 或 CSV。
+Expression	表达式
+Extract	提取
+Extracts the parts of input features that fall inside clip polygons.	提取输入要素中落在裁剪多边形内的部分。
+Failed	失败
+Feature	要素
+Feature\nTo Point	要素\n转点
+Feature Layer	要素图层
+Feature Layer › Drawing	要素图层 › 绘制
+Feature To Point	要素转点
+Features	要素
+Field	字段
+Field name	字段名称
+Fields	字段
+Fields:	字段：
+Filter rows…	筛选行…
+Find a place by coordinates.	按坐标查找位置。
+Find and run geoprocessing tools.	查找并运行地理处理工具。
+Find any command by name (Ctrl+K).	按名称查找任意命令（Ctrl+K）。
+Find Tools	查找工具
+Fixed Zoom In	固定比例放大
+Fixed Zoom Out	固定比例缩小
+Folders	文件夹
+Forest	森林
+Full Extent	全图
+Full extent	全图
+Generalization	综合
+Geo-\nprocessing	地理\n处理
+GeoJSON or CSV	GeoJSON 或 CSV
+Geometry	几何
+Geoprocessing	地理处理
+Geoprocessing history.	地理处理历史记录。
+Geoprocessing Pane	地理处理窗格
+Go	转到
+Go back to the previous extent.	返回上一个范围。
+Go forward to the next extent.	前进到下一个范围。
+Go to a saved extent or save the current one.	转到已保存的范围或保存当前范围。
+Go To Bookmark	转到书签
+Go To XY	转到 XY
+Graduated Colors	分级色彩
+Graticule	经纬网
+Greys	灰度
+Group Option	分组选项
+Halo	晕圈
+Harbour (qualitative)	港湾（定性）
+Help	帮助
+History	历史记录
+Home	主页
+Identify	识别
+Import\nProject	导入\n工程
+In Beyond	放大超过
+In project	在工程中
+Input Features	输入要素
+Input Polygons	输入多边形
+Input Rows	输入行
+Input Summary Features	输入汇总要素
+Input Table	输入表
+Inquiry	查询
+Insert	插入
+Interface font: {font}	界面字体：{font}
+Invalid: {error}	无效：{error}
+Invert	反转
+Invert the selection.	反转选择。
+IS NULL	IS NULL
+keep current	保持当前
+Keyboard Shortcuts	键盘快捷键
+Keyboard shortcuts.	键盘快捷键。
+Kilometers	千米
+Label	标注
+Label Class	标注类
+Label Field	标注字段
+Labeling	标注
+Lagoon	泻湖
+Language	语言
+Last map render time	上次地图渲染时间
+Latitude (Y)	纬度（Y）
+Layer	图层
+Layer From\nSelection	从所选内容\n创建图层
+Layers	图层
+Layers and Table Views	图层和表视图
+LIKE	LIKE
+Limit which features draw with a SQL expression.	使用 SQL 表达式限制绘制哪些要素。
+Line color	线颜色
+Line width	线宽
+LineString	线串
+List Commands	列出命令
+Locate	定位
+Location	位置
+Long	长整型
+Longitude (X)	经度（X）
+Major Lakes	主要湖泊
+Major Rivers	主要河流
+Make a new layer of the selected features.	用所选要素创建新图层。
+Make Layer From Selected Features	根据所选要素创建图层
+Manage Edits	管理编辑
+Map	地图
+Map › Layer	地图 › 图层
+Maps	地图
+Marker	标记
+Measure	测量
+Measure Area	测量面积
+Measure Distance	测量距离
+Measure geodesic distances and areas on the map.	在地图上测量测地距离和面积。
+Merges polygons that share a field value into one feature per value.	将字段值相同的多边形合并为每个值一个要素。
+Meters	米
+Method	方法
+Midnight	午夜
+Miles	英里
+Minimum Bounding Geometry	最小边界几何
+Mod+	Mod+
+Mouse wheel	鼠标滚轮
+Move Down	下移
+Move Up	上移
+Name	名称
+Natural Breaks (Jenks)	自然间断点分级法（Jenks）
+Natural Earth	Natural Earth
+Navigate	导航
+Navigation	导航
+New	新建
+New\nBookmark	新建\n书签
+New\nMap	新建\n地图
+New / Open / Save project	新建 / 打开 / 保存工程
+New Bookmark	新建书签
+New Bookmark…	新建书签…
+New Map	新建地图
+New Project	新建工程
+New project	新建工程
+New Selection	创建新选择内容
+Next	下一个
+Next Extent	下一个范围
+No	否
+No bookmarks yet	暂无书签
+No standalone tables	无独立表
+None	无
+North	北
+Not saved yet	尚未保存
+Ocean	海洋
+OID	OID
+Only features matching this expression draw in {layer}.	只有与此表达式匹配的要素才会在 {layer} 中绘制。
+Open	打开
+Open a .rgisx project	打开 .rgisx 工程
+Open a RustGIS project.	打开 RustGIS 工程。
+Open folder	打开文件夹
+Open Project	打开工程
+Open project	打开工程
+Open Project (from text)	打开工程（从文本）
+Open the attribute table of the selected layer.	打开所选图层的属性表。
+Open the layer's attribute table.	打开图层的属性表。
+Open the layer's table.	打开图层的表。
+Open the selected layer's table.	打开所选图层的表。
+Open the Symbology pane.	打开符号系统窗格。
+Open, save and create projects	打开、保存和创建工程
+Open…	打开…
+OR	OR
+Out Beyond	缩小超过
+Outline	轮廓
+Outline color	轮廓颜色
+Outline width	轮廓宽度
+Output	输出
+Output Name	输出名称
+Overlay	叠加
+Pan (Explore) · any tool	平移（浏览）· 任意工具
+Pan to a longitude/latitude.	平移到某个经度/纬度。
+Pan with the mouse, zoom with the wheel and click features to see their attributes.	用鼠标平移，用滚轮缩放，单击要素查看其属性。
+Paper	纸张
+Parent folder	上级文件夹
+PNG image	PNG 图像
+Point	点
+Polygon	多边形
+Polyline	折线
+Populated Places	居民点
+Previous	上一个
+Previous Extent	上一个范围
+Primary\nSymbology	主要\n符号系统
+Primary symbology	主要符号系统
+Project	工程
+Project Info	工程信息
+Proportional Symbols	比例符号
+Proximity	邻域
+Quantile	分位数
+Quick Access Toolbar	快速访问工具栏
+Redo	重做
+Redo the change you undid.	重做已撤销的更改。
+Redo {action}	重做 {action}
+Red–Blue	红–蓝
+Remove	移除
+Remove Bookmark	移除书签
+Remove From Current Selection	从当前选择中移除
+Remove the layer from the map.	从地图中移除图层。
+Removes the parts of polygon features that overlap erase polygons.	移除面要素中与擦除多边形重叠的部分。
+Removes vertices that deviate less than a tolerance (Douglas–Peucker).	移除偏离小于容差的折点（Douglas–Peucker）。
+Rename	重命名
+Rename Layer	重命名图层
+Rename Map	重命名地图
+Rename Project	重命名工程
+Rename…	重命名…
+Ribbon feature coverage: {done} of {total} features ({pct}%).	功能区要素覆盖率：{total} 个要素中已完成 {done} 个（{pct}%）。
+Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	功能区对等：{total} 个功能区功能中有 {done} 个具有 RustGIS 命令。
+Run	运行
+Run Tool	运行工具
+RustGIS	RustGIS
+RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS 是一款用纯 Rust 编写的开源桌面 GIS。其功能区遵循熟悉的桌面 GIS 工作流；每个操作都是一条命令，也可以从命令行运行。
+RustGIS project	RustGIS 工程
+Sample data (Natural Earth)	示例数据（Natural Earth）
+Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	示例数据 © Natural Earth（公有领域）。RustGIS 采用 Apache-2.0 许可证。
+Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	示例数据：Natural Earth（公有领域）。采用 Apache-2.0 许可证。
+Save	保存
+Save As	另存为
+Save Project	保存工程
+Save project	保存工程
+Save Project As	工程另存为
+Save the current extent as a bookmark.	将当前范围保存为书签。
+Save the project under a new name.	以新名称保存工程。
+Save the project with your edits.	保存包含编辑内容的工程。
+Scale 1:	比例尺 1:
+Search commands — e.g. buffer, basemap, labels	搜索命令，例如：缓冲区、底图、标注
+Search Distance (km)	搜索距离（km）
+See the tools you've run.	查看已运行的工具。
+Select	选择
+Select (click)	选择（单击）
+Select (rectangle)	选择（矩形）
+select a layer in the Contents pane first	请先在内容窗格中选择一个图层
+Select a layer in the Contents pane.	在内容窗格中选择一个图层。
+Select All	全选
+Select By\nAttributes	按属性\n选择
+Select By\nLocation	按位置\n选择
+Select By Attributes	按属性选择
+Select every feature.	选择所有要素。
+Select features by their spatial relationship.	按空间关系选择要素。
+Select features on the map.	在地图上选择要素。
+Select features that intersect another layer.	选择与另一图层相交的要素。
+Select features with a SQL expression.	使用 SQL 表达式选择要素。
+Select Layer	选择图层
+Select Layer By Attribute	按属性选择图层
+Select Layer By Location	按位置选择图层
+Select Rows	选择行
+Select rows with a SQL expression.	使用 SQL 表达式选择行。
+Select Subset From Current Selection	从当前选择中选择子集
+Selectable	可选
+Selected	已选择
+Selected Features: {n}	所选要素：{n}
+Selected only	仅所选
+Selecting Features	选择要素
+Selection	选择
+Selection Type	选择类型
+Selects features that intersect features in another layer.	选择与另一图层中要素相交的要素。
+Selects features with a SQL where clause, e.g. pop_est > 1000000.	使用 SQL where 子句选择要素，例如 pop_est > 1000000。
+Set Map Tool	设置地图工具
+Set Scale	设置比例尺
+Shape	形状
+Share	共享
+Share › Output	共享 › 输出
+Shift+	Shift+
+Shift+drag	Shift+拖动
+Shortcuts	快捷键
+Show latitude/longitude lines on the basemap.	在底图上显示经纬线。
+Show or hide the Catalog pane.	显示或隐藏目录窗格。
+Show or hide the Contents pane.	显示或隐藏内容窗格。
+Show or hide the Geoprocessing pane.	显示或隐藏地理处理窗格。
+Show or hide the layer.	显示或隐藏图层。
+Show the Symbology pane for the selected layer.	显示所选图层的符号系统窗格。
+Simplify	简化
+Single Symbol	单一符号
+Size	大小
+Source	源
+South	南
+Square	正方形
+Standalone Tables	独立表
+Star	星形
+Start	开始
+Statistics	统计
+Statistics Field	统计字段
+Status Bar	状态栏
+Summarize	汇总
+Summarize\nWithin	范围内\n汇总
+Summarize Within	范围内汇总
+Summary\nStatistics	汇总\n统计
+Summary Statistics	汇总统计
+Switch	切换
+Switch between light and dark themes.	在浅色和深色主题之间切换。
+Switch Selection	切换选择
+Switch selection	切换选择
+Symbol	符号
+Symbol Color	符号颜色
+Symbology	符号系统
+Symbology Pane	符号系统窗格
+Table	表
+Tables	表
+Text	文本
+Text Symbol	文本符号
+the map has no layers	地图中没有图层
+Thermal	热力
+This map has no layers yet.	此地图中还没有图层。
+Toggle Dark Mode	切换深色模式
+Tolerance (km)	容差（km）
+Toolbox	工具箱
+Toolboxes	工具箱
+Tools	工具
+Tools you run appear here.	运行的工具会显示在这里。
+Total {total}   ·   Segment {segment}	总计 {total}   ·   线段 {segment}
+Transparency	透明度
+Triangle	三角形
+Turn Labels Off	关闭标注
+Turn labels on or off for the selected layer.	打开或关闭所选图层的标注。
+Turn labels on or off.	打开或关闭标注。
+Unavailable: {reason}	不可用：{reason}
+Undo	撤销
+Undo / Redo	撤销 / 重做
+Undo the last change.	撤销上一次更改。
+Undo {action}	撤销 {action}
+Unique Values	唯一值
+Units	单位
+Valid expression · {n} matching rows	有效表达式 · {n} 个匹配行
+Vector data	矢量数据
+Version {version}	版本 {version}
+View	视图
+View › Windows	视图 › 窗口
+Visibility	可见性
+Visibility Range	可见范围
+Visible	可见
+Welcome to RustGIS	欢迎使用 RustGIS
+West	西
+WGS 84 / Web Mercator	WGS 84 / Web Mercator
+Where	条件
+Where Clause	Where 子句
+Windows	窗口
+World	世界
+World Atlas	世界地图集
+World Atlas Sample	世界地图集示例
+World Countries	世界国家
+Yes	是
+Zoom about the pointer	围绕指针缩放
+Zoom In	放大
+Zoom in	放大
+Zoom in / out	放大 / 缩小
+Zoom in on the centre of the map.	以地图中心为基准放大。
+Zoom in · finish a sketch	放大 · 完成草图
+Zoom Out	缩小
+Zoom out	缩小
+Zoom out from the centre of the map.	以地图中心为基准缩小。
+Zoom To	缩放至
+Zoom To\nLayer	缩放至\n图层
+Zoom to a box (Explore)	缩放到矩形框（浏览）
+Zoom To Layer	缩放至图层
+Zoom To Selection	缩放至所选内容
+Zoom to selection	缩放至所选内容
+Zoom to the extent of all layers.	缩放至所有图层的范围。
+Zoom to the layer's extent.	缩放至图层范围。
+Zoom to the selected features.	缩放至所选要素。
+Zoom to the selection.	缩放至所选内容。
+Zoom to the whole world.	缩放至全世界。
+Zoom To World	缩放至世界
+⌘K	⌘K

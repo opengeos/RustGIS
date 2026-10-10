@@ -10,6 +10,57 @@ use serde_json::json;
 
 struct App(RustGisApp);
 
+/// Preferences in `prefs.json` beside the platform's other app settings.
+mod prefs {
+    use std::path::PathBuf;
+
+    use rustgis_ui_egui::Services;
+    use serde_json::{Map, Value};
+
+    fn dir() -> Option<PathBuf> {
+        if cfg!(target_os = "windows") {
+            std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("RustGIS"))
+        } else if cfg!(target_os = "macos") {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/RustGIS"))
+        } else {
+            std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+                .map(|d| d.join("rustgis"))
+        }
+    }
+
+    fn read() -> Map<String, Value> {
+        dir()
+            .and_then(|d| std::fs::read_to_string(d.join("prefs.json")).ok())
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default()
+    }
+
+    pub fn services() -> Services {
+        Services {
+            load_pref: Some(Box::new(|key: &str| read().get(key).and_then(Value::as_str).map(str::to_string))),
+            save_pref: Some(Box::new(|key: &str, value: &str| {
+                let Some(d) = dir() else { return };
+                let mut map = read();
+                map.insert(key.to_string(), Value::String(value.to_string()));
+                let text = Value::Object(map).to_string();
+                // Write a temporary file and rename it over the old one, so a crash mid-write
+                // never leaves a truncated prefs.json.
+                let tmp = d.join("prefs.json.tmp");
+                let saved = std::fs::create_dir_all(&d)
+                    .and_then(|_| std::fs::write(&tmp, text))
+                    .and_then(|_| std::fs::rename(&tmp, d.join("prefs.json")));
+                if let Err(e) = saved {
+                    log::warn!("could not save preferences: {e}");
+                }
+            })),
+            ..Services::default()
+        }
+    }
+}
+
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.0.logic(ctx);
@@ -29,11 +80,12 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
-    let mut app = if args.iter().any(|a| a == "--sample") || files.is_empty() {
+    let app = if args.iter().any(|a| a == "--sample") || files.is_empty() {
         RustGisApp::with_sample()
     } else {
         RustGisApp::new(Session::new(Project::default()))
     };
+    let mut app = app.with_services(prefs::services());
     for f in files {
         let cmd = if f.to_ascii_lowercase().ends_with(".rgisx") { "project.open" } else { "layer.addData" };
         if let Err(e) = app.run(cmd, json!({"path": f})) {

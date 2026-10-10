@@ -1,0 +1,545 @@
+# id interface catalog: English<TAB>translation
+<None>	<Tidak ada>
+A blank map with a basemap	Peta kosong dengan peta dasar
+A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	GIS desktop sumber terbuka yang cepat, ditulis dengan Rust murni, dengan alur kerja ribbon khas GIS desktop: peta dan layer, simbologi, pelabelan, seleksi, penyuntingan, geoprosesing, dan ekspor.
+A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Sebuah nilai, kolom, atau dua di antaranya yang digabung dengan + − × ÷. Berlaku untuk baris terpilih, atau semua baris jika tidak ada yang dipilih.
+About	Tentang
+About RustGIS	Tentang RustGIS
+About RustGIS.	Tentang RustGIS.
+Activate Map	Aktifkan Peta
+Add	Tambah
+Add\nData	Tambah\nData
+Add\nField	Tambah\nKolom
+Add a field to the selected layer.	Tambahkan kolom ke layer terpilih.
+Add a field.	Tambahkan kolom.
+Add a new map to the project.	Tambahkan peta baru ke proyek.
+Add Data	Tambah Data
+Add Data (from text)	Tambah Data (dari teks)
+Add Data…	Tambah Data…
+Add Field	Tambah Kolom
+Add field	Tambah kolom
+Add GeoJSON, CSV or Shapefile data to the map.	Tambahkan data GeoJSON, CSV, atau Shapefile ke peta.
+Add sample countries	Tambah contoh negara
+Add Sample Data	Tambah Data Contoh
+Add To Current Selection	Tambah ke Seleksi Saat Ini
+Add vector data.	Tambahkan data vektor.
+Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Menambahkan luas geodesik (km²), panjang (km), atau koordinat sentroid sebagai kolom.
+All	Semua
+All files	Semua berkas
+Analysis	Analisis
+AND	AND
+Apply	Terapkan
+Area {area}   ·   Perimeter {perimeter}	Luas {area}   ·   Keliling {perimeter}
+Atlas	Atlas
+Attribute\nTable	Tabel\nAtribut
+Attribute Table	Tabel Atribut
+Attribute table	Tabel atribut
+Attributes	Atribut
+Automatic	Otomatis
+Automatic (system language)	Otomatis (bahasa sistem)
+Back to Explore; cancel a sketch	Kembali ke Jelajah; batalkan sketsa
+Back to the map	Kembali ke peta
+Back to tools	Kembali ke alat
+Basemap	Peta dasar
+Basemaps	Peta dasar
+Blank	Kosong
+Bold	Tebal
+Bold label text.	Teks label tebal.
+Bookmarks	Penanda
+Boolean	Boolean
+Bounding\nGeometry	Geometri\nBatas
+Browse the geoprocessing toolbox.	Jelajahi kotak alat geoprosesing.
+Browse the project's maps, tables and folders.	Jelajahi peta, tabel, dan folder proyek.
+Buffer	Buffer
+By\nAttributes	Menurut\nAtribut
+By\nLocation	Menurut\nLokasi
+Calculate	Hitung
+Calculate\nField	Hitung\nKolom
+Calculate\nGeometry	Hitung\nGeometri
+Calculate Field	Hitung Kolom
+Calculate field	Hitung kolom
+Calculate field values.	Hitung nilai kolom.
+Calculate Geometry Attributes	Hitung Atribut Geometri
+Can't read this folder	Tidak dapat membaca folder ini
+Cancel	Batal
+CARGO_PKG_VERSION	CARGO_PKG_VERSION
+Cartography	Kartografi
+Case Field	Kolom Kasus
+Catalog	Katalog
+Catalog\nPane	Panel\nKatalog
+Change the map's backdrop.	Ubah latar belakang peta.
+Choose how the layer is drawn.	Pilih cara layer digambar.
+Choose the interface language.	Pilih bahasa antarmuka.
+Circle	Lingkaran
+Classes	Kelas
+Clear	Bersihkan
+Clear\nLimits	Hapus\nBatas
+Clear History	Bersihkan Riwayat
+Clear Selection	Bersihkan Seleksi
+Clear selection	Bersihkan seleksi
+Clear the selection in every layer.	Bersihkan seleksi di setiap layer.
+Clear the selection.	Bersihkan seleksi.
+Click or drag a box to select features. Shift adds, Ctrl removes.	Klik atau seret kotak untuk memilih fitur. Shift menambah, Ctrl mengurangi.
+Click or drag a box · Shift adds · Ctrl removes	Klik atau seret kotak · Shift menambah · Ctrl mengurangi
+Click the corners of the area · double-click to finish	Klik sudut-sudut area · klik ganda untuk selesai
+Click the map to add a point	Klik peta untuk menambah titik
+Click to add points · double-click to finish · Esc to stop	Klik untuk menambah titik · klik ganda untuk selesai · Esc untuk berhenti
+Click to add vertices · double-click to close the polygon	Klik untuk menambah verteks · klik ganda untuk menutup poligon
+Click to add vertices · double-click to finish the line	Klik untuk menambah verteks · klik ganda untuk menyelesaikan garis
+Click to switch between decimal degrees and DMS	Klik untuk beralih antara derajat desimal dan DMS
+Clip	Potong (Clip)
+Clip Features	Potong Fitur
+Close	Tutup
+Close Table	Tutup Tabel
+Close table	Tutup tabel
+Collapse or expand the ribbon	Ciutkan atau perluas ribbon
+Collapse the ribbon (Ctrl+F1)	Ciutkan ribbon (Ctrl+F1)
+Color	Warna
+Color Scheme	Skema Warna
+Color scheme	Skema warna
+Command\nSearch	Cari\nPerintah
+Command Search	Cari Perintah
+Completed	Selesai
+Compute a field's values.	Hitung nilai suatu kolom.
+Contents	Konten
+Conversion	Konversi
+Copies the (selected) features of a layer to a new layer.	Menyalin fitur (terpilih) dari suatu layer ke layer baru.
+Copy Coordinates	Salin Koordinat
+Couldn't download the font for {language}; pick the language again to retry.	Tidak dapat mengunduh font untuk {language}; pilih bahasa lagi untuk mencoba ulang.
+Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Jumlah, total, rata-rata, min, maks, dan simpangan baku suatu kolom, opsional per kolom kasus.
+Countries, cities, rivers and lakes	Negara, kota, sungai, dan danau
+Counts the points that fall inside each polygon.	Menghitung titik yang berada di dalam setiap poligon.
+Create	Buat
+Create a new project or start from the World Atlas sample.	Buat proyek baru atau mulai dari contoh World Atlas.
+Create Feature	Buat Fitur
+Create Line	Buat Garis
+Create Point	Buat Titik
+Create Polygon	Buat Poligon
+Creates a point inside each input feature.	Membuat titik di dalam setiap fitur masukan.
+Creates polygons around input features at a given distance.	Membuat poligon di sekitar fitur masukan pada jarak tertentu.
+Ctrl+	Ctrl+
+Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
+Ctrl+F1	Ctrl+F1
+Ctrl+K	Ctrl+K
+Ctrl+N / O / S	Ctrl+N / O / S
+Ctrl+T	Ctrl+T
+Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
+Current Project	Proyek Saat Ini
+Dark\nMode	Mode\nGelap
+Data	Data
+Data Design	Desain Data
+Data Management	Manajemen Data
+Data type	Tipe data
+Data…	Data…
+Definition\nQuery	Kueri\nDefinisi
+Definition Query	Kueri Definisi
+Definition query	Kueri definisi
+Definition Query…	Kueri Definisi…
+Delete	Hapus
+Delete Field	Hapus Kolom
+Delete Map	Hapus Peta
+Delete selected features	Hapus fitur terpilih
+Delete selected rows	Hapus baris terpilih
+Delete the selected features.	Hapus fitur terpilih.
+Details	Detail
+Details of the selected layer.	Detail layer terpilih.
+Diamond	Belah ketupat
+Display	Tampilan
+Dissolve	Dissolve (Gabungkan)
+Dissolve Field	Kolom Dissolve
+Distance	Jarak
+Double	Double
+Double-click	Klik ganda
+Double-click to add	Klik ganda untuk menambah
+Downloaded {name}	{name} telah diunduh
+Drag / middle-drag	Seret / seret tombol tengah
+Drag a box or click to zoom in	Seret kotak atau klik untuk memperbesar
+Drag a box to zoom into.	Seret kotak untuk diperbesar.
+Draw a halo around label text.	Gambar halo di sekitar teks label.
+Draw new features in the selected layer. Double-click to finish lines and polygons.	Gambar fitur baru di layer terpilih. Klik ganda untuk menyelesaikan garis dan poligon.
+Draw the layer at every scale.	Gambar layer pada semua skala.
+Drawing	Penggambaran
+Drawing Order	Urutan Gambar
+Dusk	Senja
+e.g.  pop_est / 1000000   or   'Africa'   or   name	mis.  pop_est / 1000000   atau   'Africa'   atau   name
+e.g. continent = 'Europe'	mis. continent = 'Europe'
+e.g. pop_est > 100000000 AND continent = 'Asia'	mis. pop_est > 100000000 AND continent = 'Asia'
+East	Timur
+Edit	Edit
+Edit Attribute	Edit Atribut
+Edit attributes in the table.	Edit atribut di tabel.
+Effects	Efek
+Ember	Bara
+Encloses each feature, or all features, in its convex hull.	Melingkupi setiap fitur, atau semua fitur, dengan convex hull-nya.
+Equal Interval	Interval Sama
+Erase	Hapus (Erase)
+Erase Features	Hapus Fitur (Erase)
+Esc	Esc
+Expand Legend	Perluas Legenda
+Expand the ribbon (Ctrl+F1)	Perluas ribbon (Ctrl+F1)
+Explore	Jelajah
+Export	Ekspor
+Export\nFeatures	Ekspor\nFitur
+Export\nMap	Ekspor\nPeta
+Export Features	Ekspor Fitur
+Export Features (tool)	Ekspor Fitur (alat)
+Export Features…	Ekspor Fitur…
+Export Map	Ekspor Peta
+Export Map failed unexpectedly	Ekspor Peta gagal secara tak terduga
+Export Map…	Ekspor Peta…
+Export Table	Ekspor Tabel
+Export the layer.	Ekspor layer.
+Export the map view as a PNG image (with labels and a scale bar).	Ekspor tampilan peta sebagai gambar PNG (dengan label dan bilah skala).
+Export the selected layer to GeoJSON or CSV.	Ekspor layer terpilih ke GeoJSON atau CSV.
+Expression	Ekspresi
+Extract	Ekstrak
+Extracts the parts of input features that fall inside clip polygons.	Mengekstrak bagian fitur masukan yang berada di dalam poligon pemotong.
+Failed	Gagal
+Feature	Fitur
+Feature\nTo Point	Fitur\nke Titik
+Feature Layer	Layer Fitur
+Feature Layer › Drawing	Layer Fitur › Penggambaran
+Feature To Point	Fitur ke Titik
+Features	Fitur
+Field	Kolom
+Field name	Nama kolom
+Fields	Kolom
+Fields:	Kolom:
+Filter rows…	Saring baris…
+Find a place by coordinates.	Temukan tempat berdasarkan koordinat.
+Find and run geoprocessing tools.	Temukan dan jalankan alat geoprosesing.
+Find any command by name (Ctrl+K).	Temukan perintah apa pun berdasarkan nama (Ctrl+K).
+Find Tools	Cari Alat
+Fixed Zoom In	Perbesar Tetap
+Fixed Zoom Out	Perkecil Tetap
+Folders	Folder
+Forest	Hutan
+Full Extent	Cakupan Penuh
+Full extent	Cakupan penuh
+Generalization	Generalisasi
+Geo-\nprocessing	Geo-\nprosesing
+GeoJSON or CSV	GeoJSON atau CSV
+Geometry	Geometri
+Geoprocessing	Geoprosesing
+Geoprocessing history.	Riwayat geoprosesing.
+Geoprocessing Pane	Panel Geoprosesing
+Go	Pergi
+Go back to the previous extent.	Kembali ke cakupan sebelumnya.
+Go forward to the next extent.	Maju ke cakupan berikutnya.
+Go to a saved extent or save the current one.	Buka cakupan tersimpan atau simpan cakupan saat ini.
+Go To Bookmark	Buka Penanda
+Go To XY	Pergi ke XY
+Graduated Colors	Warna Bergradasi
+Graticule	Gratikul
+Greys	Abu-abu
+Group Option	Opsi Grup
+Halo	Halo
+Harbour (qualitative)	Pelabuhan (kualitatif)
+Help	Bantuan
+History	Riwayat
+Home	Home
+Identify	Identifikasi
+Import\nProject	Impor\nProyek
+In Beyond	Perbesar Melewati
+In project	Dalam proyek
+Input Features	Fitur Masukan
+Input Polygons	Poligon Masukan
+Input Rows	Baris Masukan
+Input Summary Features	Fitur Ringkasan Masukan
+Input Table	Tabel Masukan
+Inquiry	Penyelidikan
+Insert	Sisipkan
+Interface font: {font}	Fon antarmuka: {font}
+Invalid: {error}	Tidak valid: {error}
+Invert	Balik
+Invert the selection.	Balik seleksi.
+IS NULL	IS NULL
+keep current	biarkan saat ini
+Keyboard Shortcuts	Pintasan Keyboard
+Keyboard shortcuts.	Pintasan keyboard.
+Kilometers	Kilometer
+Label	Label
+Label Class	Kelas Label
+Label Field	Kolom Label
+Labeling	Pelabelan
+Lagoon	Laguna
+Language	Bahasa
+Last map render time	Waktu render peta terakhir
+Latitude (Y)	Lintang (Y)
+Layer	Layer
+Layer From\nSelection	Layer dari\nSeleksi
+Layers	Layer
+Layers and Table Views	Layer dan Tampilan Tabel
+LIKE	LIKE
+Limit which features draw with a SQL expression.	Batasi fitur yang digambar dengan ekspresi SQL.
+Line color	Warna garis
+Line width	Lebar garis
+LineString	LineString
+List Commands	Daftar Perintah
+Locate	Temukan Lokasi
+Location	Lokasi
+Long	Long
+Longitude (X)	Bujur (X)
+Major Lakes	Danau Utama
+Major Rivers	Sungai Utama
+Make a new layer of the selected features.	Buat layer baru dari fitur terpilih.
+Make Layer From Selected Features	Buat Layer dari Fitur Terpilih
+Manage Edits	Kelola Edit
+Map	Peta
+Map › Layer	Peta › Layer
+Maps	Peta
+Marker	Marker
+Measure	Ukur
+Measure Area	Ukur Luas
+Measure Distance	Ukur Jarak
+Measure geodesic distances and areas on the map.	Ukur jarak dan luas geodesik di peta.
+Merges polygons that share a field value into one feature per value.	Menggabungkan poligon yang memiliki nilai kolom sama menjadi satu fitur per nilai.
+Meters	Meter
+Method	Metode
+Midnight	Tengah Malam
+Miles	Mil
+Minimum Bounding Geometry	Geometri Batas Minimum
+Mod+	Mod+
+Mouse wheel	Roda tetikus
+Move Down	Turunkan
+Move Up	Naikkan
+Name	Nama
+Natural Breaks (Jenks)	Natural Breaks (Jenks)
+Natural Earth	Natural Earth
+Navigate	Navigasi
+Navigation	Navigasi
+New	Baru
+New\nBookmark	Penanda\nBaru
+New\nMap	Peta\nBaru
+New / Open / Save project	Proyek Baru / Buka / Simpan
+New Bookmark	Penanda Baru
+New Bookmark…	Penanda Baru…
+New Map	Peta Baru
+New Project	Proyek Baru
+New project	Proyek baru
+New Selection	Seleksi Baru
+Next	Berikutnya
+Next Extent	Cakupan Berikutnya
+No	Tidak
+No bookmarks yet	Belum ada penanda
+No standalone tables	Tidak ada tabel mandiri
+None	Tidak ada
+North	Utara
+Not saved yet	Belum disimpan
+Ocean	Samudra
+OID	OID
+Only features matching this expression draw in {layer}.	Hanya fitur yang cocok dengan ekspresi ini yang digambar di {layer}.
+Open	Buka
+Open a .rgisx project	Buka proyek .rgisx
+Open a RustGIS project.	Buka proyek RustGIS.
+Open folder	Buka folder
+Open Project	Buka Proyek
+Open project	Buka proyek
+Open Project (from text)	Buka Proyek (dari teks)
+Open the attribute table of the selected layer.	Buka tabel atribut layer terpilih.
+Open the layer's attribute table.	Buka tabel atribut layer.
+Open the layer's table.	Buka tabel layer.
+Open the selected layer's table.	Buka tabel layer terpilih.
+Open the Symbology pane.	Buka panel Simbologi.
+Open, save and create projects	Buka, simpan, dan buat proyek
+Open…	Buka…
+OR	OR
+Out Beyond	Perkecil Melewati
+Outline	Garis tepi
+Outline color	Warna garis tepi
+Outline width	Lebar garis tepi
+Output	Keluaran
+Output Name	Nama Keluaran
+Overlay	Overlay
+Pan (Explore) · any tool	Geser (Jelajah) · alat apa pun
+Pan to a longitude/latitude.	Geser ke bujur/lintang.
+Pan with the mouse, zoom with the wheel and click features to see their attributes.	Geser dengan tetikus, zoom dengan roda, dan klik fitur untuk melihat atributnya.
+Paper	Kertas
+Parent folder	Folder induk
+PNG image	Gambar PNG
+Point	Titik
+Polygon	Poligon
+Polyline	Polyline
+Populated Places	Tempat Berpenduduk
+Previous	Sebelumnya
+Previous Extent	Cakupan Sebelumnya
+Primary\nSymbology	Simbologi\nUtama
+Primary symbology	Simbologi utama
+Project	Proyek
+Project Info	Info Proyek
+Proportional Symbols	Simbol Proporsional
+Proximity	Kedekatan
+Quantile	Kuantil
+Quick Access Toolbar	Bilah Akses Cepat
+Redo	Ulangi
+Redo the change you undid.	Ulangi perubahan yang dibatalkan.
+Redo {action}	Ulangi {action}
+Red–Blue	Merah–Biru
+Remove	Hapus
+Remove Bookmark	Hapus Penanda
+Remove From Current Selection	Hapus dari Seleksi Saat Ini
+Remove the layer from the map.	Hapus layer dari peta.
+Removes the parts of polygon features that overlap erase polygons.	Menghapus bagian fitur poligon yang tumpang tindih dengan poligon penghapus.
+Removes vertices that deviate less than a tolerance (Douglas–Peucker).	Menghapus verteks yang menyimpang kurang dari toleransi (Douglas–Peucker).
+Rename	Ganti Nama
+Rename Layer	Ganti Nama Layer
+Rename Map	Ganti Nama Peta
+Rename Project	Ganti Nama Proyek
+Rename…	Ganti nama…
+Ribbon feature coverage: {done} of {total} features ({pct}%).	Cakupan fitur ribbon: {done} dari {total} fitur ({pct}%).
+Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Paritas ribbon: {done} dari {total} fitur ribbon memiliki perintah RustGIS.
+Run	Jalankan
+Run Tool	Jalankan Alat
+RustGIS	RustGIS
+RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS adalah GIS desktop sumber terbuka yang ditulis dengan Rust murni. Ribbon-nya mengikuti alur kerja GIS desktop yang familiar; setiap aksi adalah perintah yang juga dapat dijalankan dari baris perintah.
+RustGIS project	Proyek RustGIS
+Sample data (Natural Earth)	Data contoh (Natural Earth)
+Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Data contoh © Natural Earth (domain publik). RustGIS dilisensikan di bawah Apache-2.0.
+Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	Data contoh: Natural Earth (domain publik). Dilisensikan di bawah Apache-2.0.
+Save	Simpan
+Save As	Simpan Sebagai
+Save Project	Simpan Proyek
+Save project	Simpan proyek
+Save Project As	Simpan Proyek Sebagai
+Save the current extent as a bookmark.	Simpan cakupan saat ini sebagai penanda.
+Save the project under a new name.	Simpan proyek dengan nama baru.
+Save the project with your edits.	Simpan proyek beserta suntingan Anda.
+Scale 1:	Skala 1:
+Search commands — e.g. buffer, basemap, labels	Cari perintah — mis. buffer, peta dasar, label
+Search Distance (km)	Jarak Pencarian (km)
+See the tools you've run.	Lihat alat yang telah Anda jalankan.
+Select	Pilih
+Select (click)	Pilih (klik)
+Select (rectangle)	Pilih (persegi)
+select a layer in the Contents pane first	pilih layer di panel Konten terlebih dahulu
+Select a layer in the Contents pane.	Pilih layer di panel Konten.
+Select All	Pilih Semua
+Select By\nAttributes	Pilih Menurut\nAtribut
+Select By\nLocation	Pilih Menurut\nLokasi
+Select By Attributes	Pilih Menurut Atribut
+Select every feature.	Pilih semua fitur.
+Select features by their spatial relationship.	Pilih fitur berdasarkan hubungan spasialnya.
+Select features on the map.	Pilih fitur di peta.
+Select features that intersect another layer.	Pilih fitur yang berpotongan dengan layer lain.
+Select features with a SQL expression.	Pilih fitur dengan ekspresi SQL.
+Select Layer	Pilih Layer
+Select Layer By Attribute	Pilih Layer Menurut Atribut
+Select Layer By Location	Pilih Layer Menurut Lokasi
+Select Rows	Pilih Baris
+Select rows with a SQL expression.	Pilih baris dengan ekspresi SQL.
+Select Subset From Current Selection	Pilih Subset dari Seleksi Saat Ini
+Selectable	Dapat dipilih
+Selected	Terpilih
+Selected Features: {n}	Fitur Terpilih: {n}
+Selected only	Hanya yang terpilih
+Selecting Features	Memilih Fitur
+Selection	Seleksi
+Selection Type	Tipe Seleksi
+Selects features that intersect features in another layer.	Memilih fitur yang berpotongan dengan fitur di layer lain.
+Selects features with a SQL where clause, e.g. pop_est > 1000000.	Memilih fitur dengan klausa SQL where, mis. pop_est > 1000000.
+Set Map Tool	Atur Alat Peta
+Set Scale	Atur Skala
+Shape	Bentuk
+Share	Bagikan
+Share › Output	Bagikan › Keluaran
+Shift+	Shift+
+Shift+drag	Shift+seret
+Shortcuts	Pintasan
+Show latitude/longitude lines on the basemap.	Tampilkan garis lintang/bujur pada peta dasar.
+Show or hide the Catalog pane.	Tampilkan atau sembunyikan panel Katalog.
+Show or hide the Contents pane.	Tampilkan atau sembunyikan panel Konten.
+Show or hide the Geoprocessing pane.	Tampilkan atau sembunyikan panel Geoprosesing.
+Show or hide the layer.	Tampilkan atau sembunyikan layer.
+Show the Symbology pane for the selected layer.	Tampilkan panel Simbologi untuk layer terpilih.
+Simplify	Sederhanakan
+Single Symbol	Simbol Tunggal
+Size	Ukuran
+Source	Sumber
+South	Selatan
+Square	Persegi
+Standalone Tables	Tabel Mandiri
+Star	Bintang
+Start	Mulai
+Statistics	Statistik
+Statistics Field	Kolom Statistik
+Status Bar	Bilah Status
+Summarize	Ringkas
+Summarize\nWithin	Ringkas\ndi Dalam
+Summarize Within	Ringkas di Dalam
+Summary\nStatistics	Statistik\nRingkasan
+Summary Statistics	Statistik Ringkasan
+Switch	Tukar
+Switch between light and dark themes.	Beralih antara tema terang dan gelap.
+Switch Selection	Tukar Seleksi
+Switch selection	Tukar seleksi
+Symbol	Simbol
+Symbol Color	Warna Simbol
+Symbology	Simbologi
+Symbology Pane	Panel Simbologi
+Table	Tabel
+Tables	Tabel
+Text	Teks
+Text Symbol	Simbol Teks
+the map has no layers	peta tidak memiliki layer
+Thermal	Termal
+This map has no layers yet.	Peta ini belum memiliki layer.
+Toggle Dark Mode	Alihkan Mode Gelap
+Tolerance (km)	Toleransi (km)
+Toolbox	Kotak Alat
+Toolboxes	Kotak Alat
+Tools	Alat
+Tools you run appear here.	Alat yang Anda jalankan muncul di sini.
+Total {total}   ·   Segment {segment}	Total {total}   ·   Segmen {segment}
+Transparency	Transparansi
+Triangle	Segitiga
+Turn Labels Off	Matikan Label
+Turn labels on or off for the selected layer.	Aktifkan atau nonaktifkan label untuk layer terpilih.
+Turn labels on or off.	Aktifkan atau nonaktifkan label.
+Unavailable: {reason}	Tidak tersedia: {reason}
+Undo	Urungkan
+Undo / Redo	Urungkan / Ulangi
+Undo the last change.	Urungkan perubahan terakhir.
+Undo {action}	Urungkan {action}
+Unique Values	Nilai Unik
+Units	Satuan
+Valid expression · {n} matching rows	Ekspresi valid · {n} baris cocok
+Vector data	Data vektor
+Version {version}	Versi {version}
+View	Tampilan
+View › Windows	Tampilan › Jendela
+Visibility	Visibilitas
+Visibility Range	Rentang Visibilitas
+Visible	Terlihat
+Welcome to RustGIS	Selamat datang di RustGIS
+West	Barat
+WGS 84 / Web Mercator	WGS 84 / Web Mercator
+Where	Where
+Where Clause	Klausa Where
+Windows	Jendela
+World	Dunia
+World Atlas	World Atlas
+World Atlas Sample	Contoh World Atlas
+World Countries	Negara-negara Dunia
+Yes	Ya
+Zoom about the pointer	Zoom di sekitar penunjuk
+Zoom In	Perbesar
+Zoom in	Perbesar
+Zoom in / out	Perbesar / perkecil
+Zoom in on the centre of the map.	Perbesar di tengah peta.
+Zoom in · finish a sketch	Perbesar · selesaikan sketsa
+Zoom Out	Perkecil
+Zoom out	Perkecil
+Zoom out from the centre of the map.	Perkecil dari tengah peta.
+Zoom To	Zoom Ke
+Zoom To\nLayer	Zoom ke\nLayer
+Zoom to a box (Explore)	Zoom ke kotak (Jelajah)
+Zoom To Layer	Zoom ke Layer
+Zoom To Selection	Zoom ke Seleksi
+Zoom to selection	Zoom ke seleksi
+Zoom to the extent of all layers.	Zoom ke cakupan semua layer.
+Zoom to the layer's extent.	Zoom ke cakupan layer.
+Zoom to the selected features.	Zoom ke fitur terpilih.
+Zoom to the selection.	Zoom ke seleksi.
+Zoom to the whole world.	Zoom ke seluruh dunia.
+Zoom To World	Zoom ke Dunia
+⌘K	⌘K

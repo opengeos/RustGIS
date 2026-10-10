@@ -1,0 +1,545 @@
+# de interface catalog: English<TAB>translation
+<None>	<Keine>
+A blank map with a basemap	Eine leere Karte mit Grundkarte
+A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Ein schnelles Open-Source-Desktop-GIS in reinem Rust, mit dem Menüband-Workflow eines Desktop-GIS: Karten und Layer, Symbologie, Beschriftung, Auswahl, Bearbeitung, Geoverarbeitung und Export.
+A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Ein Wert, ein Feld oder zwei davon, verknüpft mit + − × ÷. Gilt für die ausgewählten Zeilen oder alle Zeilen, wenn keine ausgewählt ist.
+About	Über
+About RustGIS	Über RustGIS
+About RustGIS.	Über RustGIS.
+Activate Map	Karte aktivieren
+Add	Hinzufügen
+Add\nData	Daten\nhinzufügen
+Add\nField	Feld\nhinzufügen
+Add a field to the selected layer.	Dem ausgewählten Layer ein Feld hinzufügen.
+Add a field.	Ein Feld hinzufügen.
+Add a new map to the project.	Dem Projekt eine neue Karte hinzufügen.
+Add Data	Daten hinzufügen
+Add Data (from text)	Daten hinzufügen (aus Text)
+Add Data…	Daten hinzufügen…
+Add Field	Feld hinzufügen
+Add field	Feld hinzufügen
+Add GeoJSON, CSV or Shapefile data to the map.	GeoJSON-, CSV- oder Shapefile-Daten zur Karte hinzufügen.
+Add sample countries	Beispielländer hinzufügen
+Add Sample Data	Beispieldaten hinzufügen
+Add To Current Selection	Zur aktuellen Auswahl hinzufügen
+Add vector data.	Vektordaten hinzufügen.
+Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Fügt geodätische Fläche (km²), Länge (km) oder Schwerpunktkoordinaten als Felder hinzu.
+All	Alle
+All files	Alle Dateien
+Analysis	Analyse
+AND	AND
+Apply	Anwenden
+Area {area}   ·   Perimeter {perimeter}	Fläche {area}   ·   Umfang {perimeter}
+Atlas	Atlas
+Attribute\nTable	Attribut-\ntabelle
+Attribute Table	Attributtabelle
+Attribute table	Attributtabelle
+Attributes	Attribute
+Automatic	Automatisch
+Automatic (system language)	Automatisch (Systemsprache)
+Back to Explore; cancel a sketch	Zurück zu „Erkunden“; Skizze abbrechen
+Back to the map	Zurück zur Karte
+Back to tools	Zurück zu den Werkzeugen
+Basemap	Grundkarte
+Basemaps	Grundkarten
+Blank	Leer
+Bold	Fett
+Bold label text.	Beschriftungstext fett.
+Bookmarks	Lesezeichen
+Boolean	Boolesch
+Bounding\nGeometry	Umgebende\nGeometrie
+Browse the geoprocessing toolbox.	Die Geoverarbeitungs-Toolbox durchsuchen.
+Browse the project's maps, tables and folders.	Karten, Tabellen und Ordner des Projekts durchsuchen.
+Buffer	Puffer
+By\nAttributes	Nach\nAttributen
+By\nLocation	Nach\nLage
+Calculate	Berechnen
+Calculate\nField	Feld\nberechnen
+Calculate\nGeometry	Geometrie\nberechnen
+Calculate Field	Feld berechnen
+Calculate field	Feld berechnen
+Calculate field values.	Feldwerte berechnen.
+Calculate Geometry Attributes	Geometrieattribute berechnen
+Can't read this folder	Dieser Ordner kann nicht gelesen werden
+Cancel	Abbrechen
+CARGO_PKG_VERSION	CARGO_PKG_VERSION
+Cartography	Kartografie
+Case Field	Gruppierungsfeld
+Catalog	Katalog
+Catalog\nPane	Katalog-\nbereich
+Change the map's backdrop.	Den Kartenhintergrund ändern.
+Choose how the layer is drawn.	Festlegen, wie der Layer gezeichnet wird.
+Choose the interface language.	Die Sprache der Oberfläche wählen.
+Circle	Kreis
+Classes	Klassen
+Clear	Leeren
+Clear\nLimits	Grenzen\naufheben
+Clear History	Verlauf leeren
+Clear Selection	Auswahl aufheben
+Clear selection	Auswahl aufheben
+Clear the selection in every layer.	Die Auswahl in allen Layern aufheben.
+Clear the selection.	Die Auswahl aufheben.
+Click or drag a box to select features. Shift adds, Ctrl removes.	Klicken oder ein Rechteck aufziehen, um Objekte auszuwählen. Shift fügt hinzu, Ctrl entfernt.
+Click or drag a box · Shift adds · Ctrl removes	Klicken oder Rechteck aufziehen · Shift fügt hinzu · Ctrl entfernt
+Click the corners of the area · double-click to finish	Die Ecken der Fläche anklicken · Doppelklick zum Beenden
+Click the map to add a point	In die Karte klicken, um einen Punkt hinzuzufügen
+Click to add points · double-click to finish · Esc to stop	Klicken, um Punkte hinzuzufügen · Doppelklick zum Beenden · Esc zum Abbrechen
+Click to add vertices · double-click to close the polygon	Klicken, um Stützpunkte hinzuzufügen · Doppelklick schließt das Polygon
+Click to add vertices · double-click to finish the line	Klicken, um Stützpunkte hinzuzufügen · Doppelklick beendet die Linie
+Click to switch between decimal degrees and DMS	Klicken, um zwischen Dezimalgrad und GMS zu wechseln
+Clip	Zuschneiden
+Clip Features	Objekte zuschneiden
+Close	Schließen
+Close Table	Tabelle schließen
+Close table	Tabelle schließen
+Collapse or expand the ribbon	Menüband ein- oder ausblenden
+Collapse the ribbon (Ctrl+F1)	Menüband minimieren (Strg+F1)
+Color	Farbe
+Color Scheme	Farbschema
+Color scheme	Farbschema
+Command\nSearch	Befehls-\nsuche
+Command Search	Befehlssuche
+Completed	Abgeschlossen
+Compute a field's values.	Die Werte eines Feldes berechnen.
+Contents	Inhalt
+Conversion	Konvertierung
+Copies the (selected) features of a layer to a new layer.	Kopiert die (ausgewählten) Objekte eines Layers in einen neuen Layer.
+Copy Coordinates	Koordinaten kopieren
+Couldn't download the font for {language}; pick the language again to retry.	Die Schriftart für {language} konnte nicht heruntergeladen werden; wählen Sie die Sprache erneut, um es noch einmal zu versuchen.
+Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Anzahl, Summe, Mittelwert, Minimum, Maximum und Standardabweichung eines Feldes, optional je Gruppierungsfeld.
+Countries, cities, rivers and lakes	Länder, Städte, Flüsse und Seen
+Counts the points that fall inside each polygon.	Zählt die Punkte, die in jedes Polygon fallen.
+Create	Erstellen
+Create a new project or start from the World Atlas sample.	Ein neues Projekt erstellen oder mit dem Weltatlas-Beispiel beginnen.
+Create Feature	Objekt erstellen
+Create Line	Linie erstellen
+Create Point	Punkt erstellen
+Create Polygon	Polygon erstellen
+Creates a point inside each input feature.	Erzeugt einen Punkt innerhalb jedes Eingabeobjekts.
+Creates polygons around input features at a given distance.	Erzeugt Polygone in einem bestimmten Abstand um die Eingabeobjekte.
+Ctrl+	Ctrl+
+Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
+Ctrl+F1	Strg+F1
+Ctrl+K	Ctrl+K
+Ctrl+N / O / S	Ctrl+N / O / S
+Ctrl+T	Ctrl+T
+Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
+Current Project	Aktuelles Projekt
+Dark\nMode	Dunkel-\nmodus
+Data	Daten
+Data Design	Datenentwurf
+Data Management	Datenverwaltung
+Data type	Datentyp
+Data…	Daten…
+Definition\nQuery	Definitions-\nabfrage
+Definition Query	Definitionsabfrage
+Definition query	Definitionsabfrage
+Definition Query…	Definitionsabfrage…
+Delete	Löschen
+Delete Field	Feld löschen
+Delete Map	Karte löschen
+Delete selected features	Ausgewählte Objekte löschen
+Delete selected rows	Ausgewählte Zeilen löschen
+Delete the selected features.	Die ausgewählten Objekte löschen.
+Details	Details
+Details of the selected layer.	Details zum ausgewählten Layer.
+Diamond	Raute
+Display	Anzeige
+Dissolve	Zusammenführen
+Dissolve Field	Zusammenführungsfeld
+Distance	Entfernung
+Double	Double (Dezimalzahl)
+Double-click	Doppelklick
+Double-click to add	Zum Hinzufügen doppelklicken
+Downloaded {name}	{name} heruntergeladen
+Drag / middle-drag	Ziehen / mittlere Maustaste ziehen
+Drag a box or click to zoom in	Rechteck aufziehen oder klicken zum Vergrößern
+Drag a box to zoom into.	Ein Rechteck aufziehen, um hineinzuzoomen.
+Draw a halo around label text.	Einen Halo um den Beschriftungstext zeichnen.
+Draw new features in the selected layer. Double-click to finish lines and polygons.	Neue Objekte im ausgewählten Layer zeichnen. Doppelklick beendet Linien und Polygone.
+Draw the layer at every scale.	Den Layer in jedem Maßstab zeichnen.
+Drawing	Zeichnen
+Drawing Order	Zeichenreihenfolge
+Dusk	Dämmerung
+e.g.  pop_est / 1000000   or   'Africa'   or   name	z. B.  pop_est / 1000000   oder   'Africa'   oder   name
+e.g. continent = 'Europe'	z. B. continent = 'Europe'
+e.g. pop_est > 100000000 AND continent = 'Asia'	z. B. pop_est > 100000000 AND continent = 'Asia'
+East	Ost
+Edit	Bearbeiten
+Edit Attribute	Attribut bearbeiten
+Edit attributes in the table.	Attribute in der Tabelle bearbeiten.
+Effects	Effekte
+Ember	Glut
+Encloses each feature, or all features, in its convex hull.	Umschließt jedes Objekt oder alle Objekte mit ihrer konvexen Hülle.
+Equal Interval	Gleiches Intervall
+Erase	Radieren
+Erase Features	Objekte radieren
+Esc	Esc
+Expand Legend	Legende erweitern
+Expand the ribbon (Ctrl+F1)	Menüband erweitern (Strg+F1)
+Explore	Erkunden
+Export	Exportieren
+Export\nFeatures	Objekte\nexportieren
+Export\nMap	Karte\nexportieren
+Export Features	Objekte exportieren
+Export Features (tool)	Objekte exportieren (Werkzeug)
+Export Features…	Objekte exportieren…
+Export Map	Karte exportieren
+Export Map failed unexpectedly	Karte exportieren ist unerwartet fehlgeschlagen
+Export Map…	Karte exportieren…
+Export Table	Tabelle exportieren
+Export the layer.	Den Layer exportieren.
+Export the map view as a PNG image (with labels and a scale bar).	Die Kartenansicht als PNG-Bild exportieren (mit Beschriftungen und Maßstabsleiste).
+Export the selected layer to GeoJSON or CSV.	Den ausgewählten Layer als GeoJSON oder CSV exportieren.
+Expression	Ausdruck
+Extract	Extrahieren
+Extracts the parts of input features that fall inside clip polygons.	Extrahiert die Teile der Eingabeobjekte, die innerhalb der Zuschneidepolygone liegen.
+Failed	Fehlgeschlagen
+Feature	Objekt
+Feature\nTo Point	Objekt\nzu Punkt
+Feature Layer	Objekt-Layer
+Feature Layer › Drawing	Objekt-Layer › Zeichnen
+Feature To Point	Objekt zu Punkt
+Features	Objekte
+Field	Feld
+Field name	Feldname
+Fields	Felder
+Fields:	Felder:
+Filter rows…	Zeilen filtern…
+Find a place by coordinates.	Einen Ort über Koordinaten finden.
+Find and run geoprocessing tools.	Geoverarbeitungswerkzeuge finden und ausführen.
+Find any command by name (Ctrl+K).	Einen beliebigen Befehl nach Namen finden (Ctrl+K).
+Find Tools	Werkzeuge finden
+Fixed Zoom In	Fester Zoom hinein
+Fixed Zoom Out	Fester Zoom heraus
+Folders	Ordner
+Forest	Wald
+Full Extent	Volle Ausdehnung
+Full extent	Volle Ausdehnung
+Generalization	Generalisierung
+Geo-\nprocessing	Geover-\narbeitung
+GeoJSON or CSV	GeoJSON oder CSV
+Geometry	Geometrie
+Geoprocessing	Geoverarbeitung
+Geoprocessing history.	Geoverarbeitungsverlauf.
+Geoprocessing Pane	Geoverarbeitungsbereich
+Go	Los
+Go back to the previous extent.	Zur vorherigen Ausdehnung zurückkehren.
+Go forward to the next extent.	Zur nächsten Ausdehnung wechseln.
+Go to a saved extent or save the current one.	Zu einer gespeicherten Ausdehnung wechseln oder die aktuelle speichern.
+Go To Bookmark	Zu Lesezeichen wechseln
+Go To XY	Zu XY wechseln
+Graduated Colors	Abgestufte Farben
+Graticule	Gradnetz
+Greys	Grautöne
+Group Option	Gruppierungsoption
+Halo	Halo
+Harbour (qualitative)	Hafen (qualitativ)
+Help	Hilfe
+History	Verlauf
+Home	Home
+Identify	Identifizieren
+Import\nProject	Projekt\nimportieren
+In Beyond	Ausblenden unter
+In project	Im Projekt
+Input Features	Eingabeobjekte
+Input Polygons	Eingabepolygone
+Input Rows	Eingabezeilen
+Input Summary Features	Eingabe-Zusammenfassungsobjekte
+Input Table	Eingabetabelle
+Inquiry	Abfrage
+Insert	Einfügen
+Interface font: {font}	Schriftart der Oberfläche: {font}
+Invalid: {error}	Ungültig: {error}
+Invert	Umkehren
+Invert the selection.	Die Auswahl umkehren.
+IS NULL	IS NULL
+keep current	aktuellen Wert beibehalten
+Keyboard Shortcuts	Tastenkürzel
+Keyboard shortcuts.	Tastenkürzel.
+Kilometers	Kilometer
+Label	Beschriftung
+Label Class	Beschriftungsklasse
+Label Field	Beschriftungsfeld
+Labeling	Beschriftung
+Lagoon	Lagune
+Language	Sprache
+Last map render time	Letzte Kartenrenderzeit
+Latitude (Y)	Breite (Y)
+Layer	Layer
+Layer From\nSelection	Layer aus\nAuswahl
+Layers	Layer
+Layers and Table Views	Layer und Tabellenansichten
+LIKE	LIKE
+Limit which features draw with a SQL expression.	Mit einem SQL-Ausdruck einschränken, welche Objekte gezeichnet werden.
+Line color	Linienfarbe
+Line width	Linienbreite
+LineString	LineString
+List Commands	Befehle auflisten
+Locate	Lokalisieren
+Location	Lage
+Long	Long (Ganzzahl)
+Longitude (X)	Länge (X)
+Major Lakes	Große Seen
+Major Rivers	Große Flüsse
+Make a new layer of the selected features.	Einen neuen Layer aus den ausgewählten Objekten erstellen.
+Make Layer From Selected Features	Layer aus ausgewählten Objekten erstellen
+Manage Edits	Bearbeitungen verwalten
+Map	Karte
+Map › Layer	Karte › Layer
+Maps	Karten
+Marker	Marker
+Measure	Messen
+Measure Area	Fläche messen
+Measure Distance	Entfernung messen
+Measure geodesic distances and areas on the map.	Geodätische Entfernungen und Flächen auf der Karte messen.
+Merges polygons that share a field value into one feature per value.	Führt Polygone mit gleichem Feldwert zu einem Objekt pro Wert zusammen.
+Meters	Meter
+Method	Methode
+Midnight	Mitternacht
+Miles	Meilen
+Minimum Bounding Geometry	Minimale umgebende Geometrie
+Mod+	Mod+
+Mouse wheel	Mausrad
+Move Down	Nach unten
+Move Up	Nach oben
+Name	Name
+Natural Breaks (Jenks)	Natürliche Unterbrechungen (Jenks)
+Natural Earth	Natural Earth
+Navigate	Navigieren
+Navigation	Navigation
+New	Neu
+New\nBookmark	Neues\nLesezeichen
+New\nMap	Neue\nKarte
+New / Open / Save project	Projekt neu / öffnen / speichern
+New Bookmark	Neues Lesezeichen
+New Bookmark…	Neues Lesezeichen…
+New Map	Neue Karte
+New Project	Neues Projekt
+New project	Neues Projekt
+New Selection	Neue Auswahl
+Next	Weiter
+Next Extent	Nächste Ausdehnung
+No	Nein
+No bookmarks yet	Noch keine Lesezeichen
+No standalone tables	Keine eigenständigen Tabellen
+None	Keine
+North	Nord
+Not saved yet	Noch nicht gespeichert
+Ocean	Ozean
+OID	OID
+Only features matching this expression draw in {layer}.	Nur Objekte, die diesem Ausdruck entsprechen, werden in {layer} gezeichnet.
+Open	Öffnen
+Open a .rgisx project	Ein .rgisx-Projekt öffnen
+Open a RustGIS project.	Ein RustGIS-Projekt öffnen.
+Open folder	Ordner öffnen
+Open Project	Projekt öffnen
+Open project	Projekt öffnen
+Open Project (from text)	Projekt öffnen (aus Text)
+Open the attribute table of the selected layer.	Die Attributtabelle des ausgewählten Layers öffnen.
+Open the layer's attribute table.	Die Attributtabelle des Layers öffnen.
+Open the layer's table.	Die Tabelle des Layers öffnen.
+Open the selected layer's table.	Die Tabelle des ausgewählten Layers öffnen.
+Open the Symbology pane.	Den Symbologie-Bereich öffnen.
+Open, save and create projects	Projekte öffnen, speichern und erstellen
+Open…	Öffnen…
+OR	OR
+Out Beyond	Ausblenden über
+Outline	Umriss
+Outline color	Umrissfarbe
+Outline width	Umrissbreite
+Output	Ausgabe
+Output Name	Ausgabename
+Overlay	Überlagerung
+Pan (Explore) · any tool	Verschieben (Erkunden) · jedes Werkzeug
+Pan to a longitude/latitude.	Zu einer Länge/Breite verschieben.
+Pan with the mouse, zoom with the wheel and click features to see their attributes.	Mit der Maus verschieben, mit dem Mausrad zoomen und Objekte anklicken, um ihre Attribute zu sehen.
+Paper	Papier
+Parent folder	Übergeordneter Ordner
+PNG image	PNG-Bild
+Point	Punkt
+Polygon	Polygon
+Polyline	Polylinie
+Populated Places	Besiedelte Orte
+Previous	Zurück
+Previous Extent	Vorherige Ausdehnung
+Primary\nSymbology	Primäre\nSymbologie
+Primary symbology	Primäre Symbologie
+Project	Projekt
+Project Info	Projektinfo
+Proportional Symbols	Proportionale Symbole
+Proximity	Nachbarschaft
+Quantile	Quantil
+Quick Access Toolbar	Schnellzugriffsleiste
+Redo	Wiederholen
+Redo the change you undid.	Die rückgängig gemachte Änderung wiederholen.
+Redo {action}	{action} wiederholen
+Red–Blue	Rot–Blau
+Remove	Entfernen
+Remove Bookmark	Lesezeichen entfernen
+Remove From Current Selection	Aus aktueller Auswahl entfernen
+Remove the layer from the map.	Den Layer aus der Karte entfernen.
+Removes the parts of polygon features that overlap erase polygons.	Entfernt die Teile von Polygonobjekten, die sich mit Radier-Polygonen überlagern.
+Removes vertices that deviate less than a tolerance (Douglas–Peucker).	Entfernt Stützpunkte, die weniger als eine Toleranz abweichen (Douglas–Peucker).
+Rename	Umbenennen
+Rename Layer	Layer umbenennen
+Rename Map	Karte umbenennen
+Rename Project	Projekt umbenennen
+Rename…	Umbenennen…
+Ribbon feature coverage: {done} of {total} features ({pct}%).	Abdeckung der Menüband-Funktionen: {done} von {total} Funktionen ({pct} %).
+Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Menüband-Parität: {done} von {total} Menüband-Funktionen haben einen RustGIS-Befehl.
+Run	Ausführen
+Run Tool	Werkzeug ausführen
+RustGIS	RustGIS
+RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS ist ein Open-Source-Desktop-GIS in reinem Rust. Sein Menüband folgt dem vertrauten Desktop-GIS-Workflow; jede Aktion ist ein Befehl, den Sie auch über die Kommandozeile ausführen können.
+RustGIS project	RustGIS-Projekt
+Sample data (Natural Earth)	Beispieldaten (Natural Earth)
+Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Beispieldaten © Natural Earth (gemeinfrei). RustGIS steht unter der Apache-2.0-Lizenz.
+Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	Beispieldaten: Natural Earth (gemeinfrei). Lizenziert unter Apache-2.0.
+Save	Speichern
+Save As	Speichern unter
+Save Project	Projekt speichern
+Save project	Projekt speichern
+Save Project As	Projekt speichern unter
+Save the current extent as a bookmark.	Die aktuelle Ausdehnung als Lesezeichen speichern.
+Save the project under a new name.	Das Projekt unter einem neuen Namen speichern.
+Save the project with your edits.	Das Projekt mit Ihren Bearbeitungen speichern.
+Scale 1:	Maßstab 1:
+Search commands — e.g. buffer, basemap, labels	Befehle suchen — z. B. Puffer, Grundkarte, Beschriftungen
+Search Distance (km)	Suchentfernung (km)
+See the tools you've run.	Die ausgeführten Werkzeuge anzeigen.
+Select	Auswählen
+Select (click)	Auswählen (Klick)
+Select (rectangle)	Auswählen (Rechteck)
+select a layer in the Contents pane first	zuerst einen Layer im Inhaltsbereich auswählen
+Select a layer in the Contents pane.	Einen Layer im Inhaltsbereich auswählen.
+Select All	Alle auswählen
+Select By\nAttributes	Nach Attributen\nauswählen
+Select By\nLocation	Nach Lage\nauswählen
+Select By Attributes	Nach Attributen auswählen
+Select every feature.	Alle Objekte auswählen.
+Select features by their spatial relationship.	Objekte nach ihrer räumlichen Beziehung auswählen.
+Select features on the map.	Objekte auf der Karte auswählen.
+Select features that intersect another layer.	Objekte auswählen, die einen anderen Layer schneiden.
+Select features with a SQL expression.	Objekte mit einem SQL-Ausdruck auswählen.
+Select Layer	Layer auswählen
+Select Layer By Attribute	Layer nach Attributen auswählen
+Select Layer By Location	Layer nach Lage auswählen
+Select Rows	Zeilen auswählen
+Select rows with a SQL expression.	Zeilen mit einem SQL-Ausdruck auswählen.
+Select Subset From Current Selection	Teilmenge aus aktueller Auswahl auswählen
+Selectable	Auswählbar
+Selected	Ausgewählt
+Selected Features: {n}	Ausgewählte Objekte: {n}
+Selected only	Nur ausgewählte
+Selecting Features	Objekte auswählen
+Selection	Auswahl
+Selection Type	Auswahltyp
+Selects features that intersect features in another layer.	Wählt Objekte aus, die Objekte in einem anderen Layer schneiden.
+Selects features with a SQL where clause, e.g. pop_est > 1000000.	Wählt Objekte mit einer SQL-WHERE-Klausel aus, z. B. pop_est > 1000000.
+Set Map Tool	Kartenwerkzeug festlegen
+Set Scale	Maßstab festlegen
+Shape	Form
+Share	Teilen
+Share › Output	Teilen › Ausgabe
+Shift+	Shift+
+Shift+drag	Shift+Ziehen
+Shortcuts	Tastenkürzel
+Show latitude/longitude lines on the basemap.	Längen- und Breitengrade auf der Grundkarte anzeigen.
+Show or hide the Catalog pane.	Katalogbereich ein- oder ausblenden.
+Show or hide the Contents pane.	Inhaltsbereich ein- oder ausblenden.
+Show or hide the Geoprocessing pane.	Geoverarbeitungsbereich ein- oder ausblenden.
+Show or hide the layer.	Den Layer ein- oder ausblenden.
+Show the Symbology pane for the selected layer.	Den Symbologie-Bereich für den ausgewählten Layer anzeigen.
+Simplify	Vereinfachen
+Single Symbol	Einzelsymbol
+Size	Größe
+Source	Quelle
+South	Süd
+Square	Quadrat
+Standalone Tables	Eigenständige Tabellen
+Star	Stern
+Start	Start
+Statistics	Statistik
+Statistics Field	Statistikfeld
+Status Bar	Statusleiste
+Summarize	Zusammenfassen
+Summarize\nWithin	Zusammenfassen\ninnerhalb
+Summarize Within	Innerhalb zusammenfassen
+Summary\nStatistics	Zusammenfassende\nStatistik
+Summary Statistics	Zusammenfassende Statistik
+Switch	Umkehren
+Switch between light and dark themes.	Zwischen hellem und dunklem Design wechseln.
+Switch Selection	Auswahl umkehren
+Switch selection	Auswahl umkehren
+Symbol	Symbol
+Symbol Color	Symbolfarbe
+Symbology	Symbologie
+Symbology Pane	Symbologie-Bereich
+Table	Tabelle
+Tables	Tabellen
+Text	Text
+Text Symbol	Textsymbol
+the map has no layers	die Karte hat keine Layer
+Thermal	Thermisch
+This map has no layers yet.	Diese Karte hat noch keine Layer.
+Toggle Dark Mode	Dunkelmodus umschalten
+Tolerance (km)	Toleranz (km)
+Toolbox	Toolbox
+Toolboxes	Toolboxen
+Tools	Werkzeuge
+Tools you run appear here.	Ausgeführte Werkzeuge erscheinen hier.
+Total {total}   ·   Segment {segment}	Gesamt {total}   ·   Segment {segment}
+Transparency	Transparenz
+Triangle	Dreieck
+Turn Labels Off	Beschriftungen ausschalten
+Turn labels on or off for the selected layer.	Beschriftungen für den ausgewählten Layer ein- oder ausschalten.
+Turn labels on or off.	Beschriftungen ein- oder ausschalten.
+Unavailable: {reason}	Nicht verfügbar: {reason}
+Undo	Rückgängig
+Undo / Redo	Rückgängig / Wiederholen
+Undo the last change.	Die letzte Änderung rückgängig machen.
+Undo {action}	{action} rückgängig machen
+Unique Values	Eindeutige Werte
+Units	Einheiten
+Valid expression · {n} matching rows	Gültiger Ausdruck · {n} passende Zeilen
+Vector data	Vektordaten
+Version {version}	Version {version}
+View	Ansicht
+View › Windows	Ansicht › Fenster
+Visibility	Sichtbarkeit
+Visibility Range	Sichtbarkeitsbereich
+Visible	Sichtbar
+Welcome to RustGIS	Willkommen bei RustGIS
+West	West
+WGS 84 / Web Mercator	WGS 84 / Web Mercator
+Where	Wo
+Where Clause	WHERE-Klausel
+Windows	Fenster
+World	Welt
+World Atlas	Weltatlas
+World Atlas Sample	Weltatlas-Beispiel
+World Countries	Länder der Welt
+Yes	Ja
+Zoom about the pointer	Um den Mauszeiger zoomen
+Zoom In	Vergrößern
+Zoom in	Vergrößern
+Zoom in / out	Vergrößern / Verkleinern
+Zoom in on the centre of the map.	Auf die Kartenmitte hineinzoomen.
+Zoom in · finish a sketch	Vergrößern · Skizze beenden
+Zoom Out	Verkleinern
+Zoom out	Verkleinern
+Zoom out from the centre of the map.	Von der Kartenmitte herauszoomen.
+Zoom To	Zoomen auf
+Zoom To\nLayer	Auf Layer\nzoomen
+Zoom to a box (Explore)	Auf Rechteck zoomen (Erkunden)
+Zoom To Layer	Auf Layer zoomen
+Zoom To Selection	Auf Auswahl zoomen
+Zoom to selection	Auf Auswahl zoomen
+Zoom to the extent of all layers.	Auf die Ausdehnung aller Layer zoomen.
+Zoom to the layer's extent.	Auf die Ausdehnung des Layers zoomen.
+Zoom to the selected features.	Auf die ausgewählten Objekte zoomen.
+Zoom to the selection.	Auf die Auswahl zoomen.
+Zoom to the whole world.	Auf die ganze Welt zoomen.
+Zoom To World	Auf Welt zoomen
+⌘K	⌘K

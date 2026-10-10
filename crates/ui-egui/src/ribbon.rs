@@ -31,7 +31,14 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         .show_separator_line(false)
         .frame(egui::Frame::NONE.fill(t.tab_strip).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 0 }))
         .show(ui, |ui| tab_strip(app, ui, &t));
-    egui::Panel::top("ribbon")
+    if app.ui.ribbon_minimized && !app.ui.ribbon_peek {
+        return;
+    }
+    // A peeked ribbon closes on the next click outside the tab strip and the ribbon itself.
+    // Popups opened from the ribbon (menus, combos, colour pickers) draw outside it, so a click in
+    // one must not close it.
+    let peek_started = app.ui.ribbon_peek && ui.input(|i| i.pointer.any_click()) && !egui::Popup::is_any_open(ui.ctx());
+    let ribbon = egui::Panel::top("ribbon")
         .exact_size(CONTENT_H + LABEL_H + 12.0)
         .show_separator_line(false)
         .frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 5, bottom: 3 }))
@@ -57,18 +64,25 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 });
             });
         });
+    if peek_started {
+        let pos = ui.input(|i| i.pointer.interact_pos());
+        let inside = pos.is_some_and(|p| ribbon.response.rect.contains(p) || app.ui.tab_strip_rect.is_some_and(|r| r.contains(p)));
+        if !inside {
+            app.ui.ribbon_peek = false;
+        }
+    }
 }
 
 fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
         // The Project button opens the backstage.
-        let pw = text_w(ui, "Project", semibold(12.5)) + 26.0;
+        let pw = text_w(ui, tl!("Project"), semibold(12.5)) + 26.0;
         let (pr, presp) = ui.allocate_exact_size(vec2(pw, 26.0), Sense::click());
         let fill = if presp.hovered() { crate::theme::BRAND_DARK } else { crate::theme::BRAND };
         ui.painter().rect_filled(pr, CornerRadius::same(6), fill);
-        ui.painter().text(pr.center(), Align2::CENTER_CENTER, "Project", semibold(12.5), egui::Color32::WHITE);
-        if presp.on_hover_text("Open, save and create projects").clicked() {
+        ui.painter().text(pr.center(), Align2::CENTER_CENTER, tl!("Project"), semibold(12.5), egui::Color32::WHITE);
+        if presp.on_hover_text(tl!("Open, save and create projects")).clicked() {
             app.ui.backstage = true;
         }
         ui.add_space(6.0);
@@ -82,7 +96,8 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let is_ctx = CONTEXT_TABS.contains(&tab);
             let active = app.ui.tab == tab;
             let font = if active { semibold(12.5) } else { regular(12.5) };
-            let w = text_w(ui, tab, font.clone()) + 22.0;
+            let shown = tl!(tab);
+            let w = text_w(ui, shown, font.clone()) + 22.0;
             let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
             let body = Rect::from_min_max(pos2(r.min.x, r.min.y + 3.0), r.max);
             if is_ctx {
@@ -117,18 +132,34 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             } else {
                 t.text_dim
             };
-            ui.painter().text(pos2(r.center().x, r.center().y + 1.5), Align2::CENTER_CENTER, tab, font, color);
-            if resp.clicked() {
+            ui.painter().text(pos2(r.center().x, r.center().y + 1.5), Align2::CENTER_CENTER, shown, font, color);
+            if resp.double_clicked() {
+                let _ = app.run("ui.ribbon", Value::Null);
+            } else if resp.clicked() {
+                if app.ui.ribbon_minimized {
+                    app.ui.ribbon_peek = !(app.ui.ribbon_peek && app.ui.tab == tab);
+                }
                 app.ui.tab = tab.to_string();
             }
             rects.push((tab.to_string(), r));
         }
         app.ui.tab_rects = rects;
-        // Right side: quick tool indicator.
+        app.ui.tab_strip_rect = Some(ui.max_rect());
+        // Right side: collapse/expand the ribbon, then the quick tool indicator.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let (cr, cresp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+            if cresp.hovered() {
+                ui.painter().rect_filled(cr, CornerRadius::same(5), t.hover);
+            }
+            let icon = if app.ui.ribbon_minimized { "chevron_down" } else { "up" };
+            icons::paint(ui.painter(), cr.shrink(5.0), icon, t.text_dim, t.accent);
+            let tip = if app.ui.ribbon_minimized { tl!("Expand the ribbon (Ctrl+F1)") } else { tl!("Collapse the ribbon (Ctrl+F1)") };
+            if cresp.on_hover_text(tip).clicked() {
+                let _ = app.run("ui.ribbon", Value::Null);
+            }
             let tool = app.session.tool;
             if tool != Tool::Explore {
-                let label = format!("{} tool active · Esc to stop", tool.label());
+                let label = crate::i18n::fmt("{tool} tool active · Esc to stop", &[("tool", tl!(tool.label()))]);
                 let w = text_w(ui, &label, regular(11.5)) + 18.0;
                 let (r, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
                 ui.painter().rect_filled(r, CornerRadius::same(11), t.checked);
@@ -163,7 +194,7 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
         big_menu(ui, app, "bookmark", "Bookmarks", "Go to a saved extent or save the current one.", |ui, app| {
             let names: Vec<String> = app.session.map().bookmarks.iter().map(|b| b.name.clone()).collect();
             if names.is_empty() {
-                ui.label(egui::RichText::new("No bookmarks yet").weak());
+                ui.label(egui::RichText::new(tl!("No bookmarks yet")).weak());
             }
             for n in names {
                 if ui.button(n.as_str()).clicked() {
@@ -172,7 +203,7 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 }
             }
             ui.separator();
-            if ui.button("New Bookmark…").clicked() {
+            if ui.button(tl!("New Bookmark…")).clicked() {
                 let _ = app.run("ui.dialog", json!({"name": "bookmark"}));
                 ui.close();
             }
@@ -193,7 +224,7 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
         big_menu(ui, app, "add_data", "Add\nData", "Add GeoJSON, CSV or Shapefile data to the map.", |ui, app| {
             menu_item(ui, app, "", "Data…", "ui.addData", Value::Null);
             ui.separator();
-            ui.label(egui::RichText::new("Sample data (Natural Earth)").small().weak());
+            ui.label(egui::RichText::new(tl!("Sample data (Natural Earth)")).small().weak());
             for (n, label) in
                 [("countries", "World Countries"), ("cities", "Populated Places"), ("rivers", "Major Rivers"), ("lakes", "Major Lakes")]
             {
@@ -233,12 +264,12 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
     });
     group(ui, "Inquiry", |ui| {
         big_menu(ui, app, "measure", "Measure", "Measure geodesic distances and areas on the map.", |ui, app| {
-            if ui.button("Measure Distance").clicked() {
+            if ui.button(tl!("Measure Distance")).clicked() {
                 let _ = app.run("tool.set", json!({"tool": "measure"}));
                 app.map.cancel_sketch();
                 ui.close();
             }
-            if ui.button("Measure Area").clicked() {
+            if ui.button(tl!("Measure Area")).clicked() {
                 let _ = app.run("tool.set", json!({"tool": "measureArea"}));
                 app.map.cancel_sketch();
                 ui.close();
@@ -276,7 +307,7 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
 
 fn basemap_gallery(ui: &mut Ui, app: &mut RustGisApp) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new("Basemaps").font(semibold(12.5)));
+    ui.label(egui::RichText::new(tl!("Basemaps")).font(semibold(12.5)));
     ui.add_space(4.0);
     egui::Grid::new("basemaps").spacing(vec2(8.0, 8.0)).show(ui, |ui| {
         for (i, b) in Basemap::ALL.into_iter().enumerate() {
@@ -303,7 +334,7 @@ fn basemap_gallery(ui: &mut Ui, app: &mut RustGisApp) {
                     egui::StrokeKind::Inside,
                 );
             }
-            ui.painter().text(pos2(r.center().x, r.max.y - 11.0), Align2::CENTER_CENTER, b.label(), regular(11.5), t.text);
+            ui.painter().text(pos2(r.center().x, r.max.y - 11.0), Align2::CENTER_CENTER, tl!(b.label()), regular(11.5), t.text);
             if resp.clicked() {
                 let _ = app.run("map.basemap", json!({"name": b.code()}));
                 ui.close();
@@ -520,6 +551,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Navigation", |ui| {
         big(ui, app, "zoom_world", "World", "Zoom to the whole world.", "map.zoomWorld", Value::Null, false, false);
     });
+    group(ui, "Language", |ui| language_menu(app, ui));
 }
 
 fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
@@ -614,7 +646,7 @@ const SCALES: [f64; 10] =
 
 fn scale_label(s: Option<f64>) -> String {
     match s {
-        None => "<None>".into(),
+        None => tl!("<None>").into(),
         Some(v) => format!("1:{}", fmt_thousands(v)),
     }
 }
@@ -666,7 +698,7 @@ fn feature_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 let t = Tokens::get(ui.ctx());
                 icons::paint(ui.painter(), Rect::from_min_size(ui.cursor().min, vec2(20.0, 20.0)), "transparency", t.icon, t.accent);
                 ui.add_space(24.0);
-                ui.label(egui::RichText::new("Transparency").size(11.5));
+                ui.label(egui::RichText::new(tl!("Transparency")).size(11.5));
             });
             let mut v = layer.transparency;
             ui.spacing_mut().slider_width = 130.0;
@@ -698,11 +730,11 @@ fn feature_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
         let text_f: Vec<String> = layer.dataset.fields.iter().map(|f| f.name.clone()).collect();
         let is_point = layer.geometry_type() == GeometryType::Point;
         big_menu(ui, app, renderer_icon(&layer.renderer), "Primary\nSymbology", "Choose how the layer is drawn.", move |ui, app| {
-            if ui.button("Single Symbol").clicked() {
+            if ui.button(tl!("Single Symbol")).clicked() {
                 let _ = app.run("layer.symbology", json!({"type": "single"}));
                 ui.close();
             }
-            ui.menu_button("Unique Values", |ui| {
+            ui.menu_button(tl!("Unique Values"), |ui| {
                 for f in &text_f {
                     if ui.button(f).clicked() {
                         let _ = app.run("layer.symbology", json!({"type": "unique", "field": f}));
@@ -710,7 +742,7 @@ fn feature_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
                     }
                 }
             });
-            ui.menu_button("Graduated Colors", |ui| {
+            ui.menu_button(tl!("Graduated Colors"), |ui| {
                 for f in &numeric {
                     if ui.button(f).clicked() {
                         let _ = app.run("layer.symbology", json!({"type": "graduated", "field": f}));
@@ -719,7 +751,7 @@ fn feature_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 }
             });
             if is_point {
-                ui.menu_button("Proportional Symbols", |ui| {
+                ui.menu_button(tl!("Proportional Symbols"), |ui| {
                     for f in &numeric {
                         if ui.button(f).clicked() {
                             let _ = app.run("layer.symbology", json!({"type": "proportional", "field": f}));
@@ -735,14 +767,14 @@ fn feature_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 if ui.color_edit_button_srgba(&mut c).changed() {
                     let _ = app.run("layer.color", json!({"color": crate::theme::rgba(c).hex()}));
                 }
-                ui.label(egui::RichText::new("Color").size(11.5));
+                ui.label(egui::RichText::new(tl!("Color")).size(11.5));
             });
             let mut w = layer.renderer.base_symbol().stroke_width;
             ui.horizontal(|ui| {
                 if ui.add(egui::DragValue::new(&mut w).range(0.0..=10.0).speed(0.05).suffix(" pt")).changed() {
                     let _ = app.run("layer.outline", json!({"width": w}));
                 }
-                ui.label(egui::RichText::new("Outline").size(11.5));
+                ui.label(egui::RichText::new(tl!("Outline")).size(11.5));
             });
             if layer.geometry_type() == GeometryType::Point {
                 let mut s = layer.renderer.base_symbol().size;
@@ -750,7 +782,7 @@ fn feature_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
                     if ui.add(egui::DragValue::new(&mut s).range(1.0..=60.0).speed(0.1).suffix(" pt")).changed() {
                         let _ = app.run("layer.marker", json!({"size": s}));
                     }
-                    ui.label(egui::RichText::new("Size").size(11.5));
+                    ui.label(egui::RichText::new(tl!("Size")).size(11.5));
                 });
             }
         });
@@ -793,14 +825,14 @@ fn labeling_tab(app: &mut RustGisApp, ui: &mut Ui) {
         col(ui, |ui| {
             let mut size = layer.labels.size;
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Size").size(11.5));
+                ui.label(egui::RichText::new(tl!("Size")).size(11.5));
                 if ui.add(egui::DragValue::new(&mut size).range(4.0..=48.0).speed(0.1).suffix(" pt")).changed() {
                     let _ = app.run("labels.style", json!({"size": size}));
                 }
             });
             let mut c = crate::theme::c32(layer.labels.color);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Color").size(11.5));
+                ui.label(egui::RichText::new(tl!("Color")).size(11.5));
                 if ui.color_edit_button_srgba(&mut c).changed() {
                     let _ = app.run("labels.style", json!({"color": crate::theme::rgba(c).hex()}));
                 }
@@ -867,5 +899,32 @@ fn data_tab(app: &mut RustGisApp, ui: &mut Ui) {
             menu_item(ui, app, "", "Export Features…", "ui.exportLayer", Value::Null);
             menu_item(ui, app, "", "Export Features (tool)", "ui.gp.open", json!({"tool": "exportFeatures"}));
         });
+    });
+}
+
+/// A language's own name, or its English name when no installed font can draw it (CJK names on the
+/// web before a CJK font has been downloaded).
+fn shown_name(ui: &Ui, l: crate::i18n::Lang) -> &'static str {
+    if ui.ctx().fonts_mut(|f| f.has_glyphs(&regular(12.5), l.name())) { l.name() } else { l.english() }
+}
+
+/// The interface language picker (View › Language).
+fn language_menu(app: &mut RustGisApp, ui: &mut Ui) {
+    let current = app.lang();
+    let auto = app.ui.language == crate::i18n::AUTO;
+    let label = if auto { format!("{} ({})", tl!("Automatic"), shown_name(ui, current)) } else { shown_name(ui, current).to_string() };
+    big_menu(ui, app, "globe_lang", &label, "Choose the interface language.", move |ui, app| {
+        if ui.selectable_label(auto, tl!("Automatic (system language)")).clicked() {
+            let _ = app.run("ui.language", json!({"code": crate::i18n::AUTO}));
+            ui.close();
+        }
+        ui.separator();
+        for l in crate::i18n::Lang::all() {
+            let sel = !auto && l == current;
+            if ui.selectable_label(sel, shown_name(ui, l)).on_hover_text(l.english()).clicked() {
+                let _ = app.run("ui.language", json!({"code": l.code()}));
+                ui.close();
+            }
+        }
     });
 }

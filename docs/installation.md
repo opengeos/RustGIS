@@ -58,7 +58,8 @@ RustGIS also runs in the browser, compiled to WebAssembly: open
 - **Save** and **Export** download the file.
 - The interface uses the built-in font, because a web page can't read installed fonts.
 
-Add `?blank` to the URL to start with an empty project, or `?webgl` to force WebGL2.
+Add `?blank` to the URL to start with an empty project, `?lang=de` (or any language code) to pick
+the interface language, or `?webgl` to force WebGL2.
 
 To build it yourself, install [Trunk](https://trunkrs.dev) and the `wasm32-unknown-unknown`
 target, then:

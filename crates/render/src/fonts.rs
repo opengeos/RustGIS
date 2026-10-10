@@ -56,3 +56,82 @@ pub fn ui_fonts() -> &'static UiFonts {
         UiFonts { regular: b.clone(), semibold: b, source: "built-in".into() }
     })
 }
+
+/// Regional CJK glyph styles (the same code point is drawn differently by region).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CjkRegion {
+    SimplifiedChinese,
+    Japanese,
+    Korean,
+}
+
+/// Installed CJK font candidates: (path, face index in a collection).
+fn cjk_candidates(region: CjkRegion) -> &'static [(&'static str, u32)] {
+    // Noto Sans CJK collections order their faces JP, KR, SC, TC, HK.
+    match region {
+        CjkRegion::SimplifiedChinese => &[
+            ("C:\\Windows\\Fonts\\msyh.ttc", 0),
+            ("/System/Library/Fonts/PingFang.ttc", 0),
+            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
+            ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 2),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 2),
+            ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 2),
+            ("/usr/share/fonts/noto-cjk/NotoSansSC-Regular.otf", 0),
+            ("/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc", 0),
+        ],
+        CjkRegion::Japanese => &[
+            ("C:\\Windows\\Fonts\\YuGothR.ttc", 0),
+            ("C:\\Windows\\Fonts\\meiryo.ttc", 0),
+            ("/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", 0),
+            ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 0),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
+            ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 0),
+            ("/usr/share/fonts/noto-cjk/NotoSansJP-Regular.otf", 0),
+        ],
+        CjkRegion::Korean => &[
+            ("C:\\Windows\\Fonts\\malgun.ttf", 0),
+            ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 0),
+            ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 1),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 1),
+            ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 1),
+            ("/usr/share/fonts/noto-cjk/NotoSansKR-Regular.otf", 0),
+        ],
+    }
+}
+
+/// An installed CJK font for `region` (bytes and face index), found once. `None` on the web or
+/// when nothing suitable is installed.
+pub fn cjk_font(region: CjkRegion) -> Option<&'static (Vec<u8>, u32)> {
+    static FOUND: [OnceLock<Option<(Vec<u8>, u32)>>; 3] = [OnceLock::new(), OnceLock::new(), OnceLock::new()];
+    let slot = match region {
+        CjkRegion::SimplifiedChinese => &FOUND[0],
+        CjkRegion::Japanese => &FOUND[1],
+        CjkRegion::Korean => &FOUND[2],
+    };
+    slot.get_or_init(|| {
+        cjk_candidates(region).iter().find_map(|(path, index)| {
+            let meta = std::fs::metadata(path).ok()?;
+            // CJK collections are large; accept up to 128 MiB.
+            if meta.len() > 128 << 20 {
+                return None;
+            }
+            std::fs::read(path).ok().filter(|b| valid_font(b, *index)).map(|b| (b, *index))
+        })
+    })
+    .as_ref()
+}
+
+/// Whether `bytes` hold a font with face `index` that the font parser accepts. Fonts handed to the
+/// UI are checked first: a corrupt file or an out-of-range face index must never reach it.
+pub fn valid_font(bytes: &[u8], index: u32) -> bool {
+    ab_glyph::FontRef::try_from_slice_and_index(bytes, index).is_ok()
+}
+
+/// Where the web app downloads a CJK face from (Noto Sans, SIL Open Font License).
+pub fn cjk_font_url(region: CjkRegion) -> &'static str {
+    match region {
+        CjkRegion::SimplifiedChinese => "https://assets.rustgis.app/fonts/NotoSansSC-Regular.otf",
+        CjkRegion::Japanese => "https://assets.rustgis.app/fonts/NotoSansJP-Regular.otf",
+        CjkRegion::Korean => "https://assets.rustgis.app/fonts/NotoSansKR-Regular.otf",
+    }
+}

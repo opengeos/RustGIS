@@ -17,6 +17,10 @@
 </p>
 
 <p align="center">
+  <a href="https://web.rustgis.app"><img alt="Launch the RustGIS web app" src="https://img.shields.io/badge/Launch-web%20app-b84a2c?style=for-the-badge&logo=webassembly&logoColor=white" height="36"></a>
+</p>
+
+<p align="center">
   <img src="https://assets.rustgis.app/images/hero.webp" alt="RustGIS with the Map tab of the ribbon open. The Contents pane lists Cities, Rivers, Lakes and Countries with their legends; the map shows countries shaded by population, sized city dots and country labels." width="100%">
 </p>
 
@@ -49,6 +53,7 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 | **Inquiry** | Identify pop-ups, geodesic distance and area measurement, live coordinates (DD or DMS) |
 | **Share** | PNG export with labels and a scale bar at any DPI; export layers to GeoJSON/CSV |
 | **Productivity** | Command search (Ctrl+K), keyboard shortcuts, dark mode, Catalog pane with folder browsing |
+| **Languages** | The interface in 15 languages (English, German, Spanish, French, Italian, Dutch, Portuguese, Russian, Turkish, Azerbaijani, Indonesian, Vietnamese, Chinese, Japanese, Korean), following the system language or chosen under View › Language |
 
 The honest picture is in [ROADMAP.md](ROADMAP.md) and the generated [coverage report](docs/parity.md).
 

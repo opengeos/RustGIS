@@ -1,0 +1,545 @@
+# vi interface catalog: English<TAB>translation
+<None>	<Không có>
+A blank map with a basemap	Bản đồ trống có bản đồ nền
+A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Một GIS máy tính để bàn mã nguồn mở, nhanh, viết hoàn toàn bằng Rust, với quy trình làm việc dạng ribbon của GIS máy tính để bàn: bản đồ và lớp, ký hiệu, nhãn, chọn, chỉnh sửa, xử lý không gian và xuất.
+A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Một giá trị, một trường, hoặc hai trong số đó nối bằng + − × ÷. Áp dụng cho các hàng được chọn, hoặc mọi hàng nếu không có hàng nào được chọn.
+About	Giới thiệu
+About RustGIS	Giới thiệu RustGIS
+About RustGIS.	Giới thiệu RustGIS.
+Activate Map	Kích hoạt bản đồ
+Add	Thêm
+Add\nData	Thêm\ndữ liệu
+Add\nField	Thêm\ntrường
+Add a field to the selected layer.	Thêm một trường vào lớp được chọn.
+Add a field.	Thêm một trường.
+Add a new map to the project.	Thêm bản đồ mới vào dự án.
+Add Data	Thêm dữ liệu
+Add Data (from text)	Thêm dữ liệu (từ văn bản)
+Add Data…	Thêm dữ liệu…
+Add Field	Thêm trường
+Add field	Thêm trường
+Add GeoJSON, CSV or Shapefile data to the map.	Thêm dữ liệu GeoJSON, CSV hoặc Shapefile vào bản đồ.
+Add sample countries	Thêm các quốc gia mẫu
+Add Sample Data	Thêm dữ liệu mẫu
+Add To Current Selection	Thêm vào vùng chọn hiện tại
+Add vector data.	Thêm dữ liệu vector.
+Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Thêm diện tích trắc địa (km²), chiều dài (km) hoặc tọa độ tâm làm trường.
+All	Tất cả
+All files	Tất cả tệp
+Analysis	Phân tích
+AND	AND
+Apply	Áp dụng
+Area {area}   ·   Perimeter {perimeter}	Diện tích {area}   ·   Chu vi {perimeter}
+Atlas	Atlas
+Attribute\nTable	Bảng\nthuộc tính
+Attribute Table	Bảng thuộc tính
+Attribute table	Bảng thuộc tính
+Attributes	Thuộc tính
+Automatic	Tự động
+Automatic (system language)	Tự động (ngôn ngữ hệ thống)
+Back to Explore; cancel a sketch	Quay lại Khám phá; hủy bản phác thảo
+Back to the map	Quay lại bản đồ
+Back to tools	Quay lại công cụ
+Basemap	Bản đồ nền
+Basemaps	Bản đồ nền
+Blank	Trống
+Bold	Đậm
+Bold label text.	In đậm văn bản nhãn.
+Bookmarks	Dấu trang
+Boolean	Boolean
+Bounding\nGeometry	Hình học\nbao
+Browse the geoprocessing toolbox.	Duyệt hộp công cụ xử lý không gian.
+Browse the project's maps, tables and folders.	Duyệt các bản đồ, bảng và thư mục của dự án.
+Buffer	Vùng đệm
+By\nAttributes	Theo\nthuộc tính
+By\nLocation	Theo\nvị trí
+Calculate	Tính toán
+Calculate\nField	Tính\ntrường
+Calculate\nGeometry	Tính\nhình học
+Calculate Field	Tính trường
+Calculate field	Tính trường
+Calculate field values.	Tính giá trị trường.
+Calculate Geometry Attributes	Tính thuộc tính hình học
+Can't read this folder	Không thể đọc thư mục này
+Cancel	Hủy
+CARGO_PKG_VERSION	CARGO_PKG_VERSION
+Cartography	Bản đồ học
+Case Field	Trường phân nhóm
+Catalog	Danh mục
+Catalog\nPane	Ngăn\ndanh mục
+Change the map's backdrop.	Thay đổi nền của bản đồ.
+Choose how the layer is drawn.	Chọn cách vẽ lớp.
+Choose the interface language.	Chọn ngôn ngữ giao diện.
+Circle	Hình tròn
+Classes	Lớp phân loại
+Clear	Xóa
+Clear\nLimits	Xóa\ngiới hạn
+Clear History	Xóa lịch sử
+Clear Selection	Xóa vùng chọn
+Clear selection	Xóa vùng chọn
+Clear the selection in every layer.	Xóa vùng chọn trong mọi lớp.
+Clear the selection.	Xóa vùng chọn.
+Click or drag a box to select features. Shift adds, Ctrl removes.	Nhấp hoặc kéo hộp để chọn đối tượng. Shift để thêm, Ctrl để bớt.
+Click or drag a box · Shift adds · Ctrl removes	Nhấp hoặc kéo hộp · Shift thêm · Ctrl bớt
+Click the corners of the area · double-click to finish	Nhấp vào các góc của vùng · nhấp đúp để hoàn tất
+Click the map to add a point	Nhấp vào bản đồ để thêm điểm
+Click to add points · double-click to finish · Esc to stop	Nhấp để thêm điểm · nhấp đúp để hoàn tất · Esc để dừng
+Click to add vertices · double-click to close the polygon	Nhấp để thêm đỉnh · nhấp đúp để đóng vùng
+Click to add vertices · double-click to finish the line	Nhấp để thêm đỉnh · nhấp đúp để hoàn tất đường
+Click to switch between decimal degrees and DMS	Nhấp để chuyển giữa độ thập phân và DMS
+Clip	Cắt
+Clip Features	Cắt đối tượng
+Close	Đóng
+Close Table	Đóng bảng
+Close table	Đóng bảng
+Collapse or expand the ribbon	Thu gọn hoặc mở rộng ribbon
+Collapse the ribbon (Ctrl+F1)	Thu gọn ribbon (Ctrl+F1)
+Color	Màu
+Color Scheme	Bảng màu
+Color scheme	Bảng màu
+Command\nSearch	Tìm\nlệnh
+Command Search	Tìm lệnh
+Completed	Hoàn tất
+Compute a field's values.	Tính giá trị của một trường.
+Contents	Nội dung
+Conversion	Chuyển đổi
+Copies the (selected) features of a layer to a new layer.	Sao chép các đối tượng (được chọn) của một lớp sang một lớp mới.
+Copy Coordinates	Sao chép tọa độ
+Couldn't download the font for {language}; pick the language again to retry.	Không thể tải phông chữ cho {language}; hãy chọn lại ngôn ngữ để thử lại.
+Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Số lượng, tổng, trung bình, nhỏ nhất, lớn nhất và độ lệch chuẩn của một trường, có thể theo từng trường phân nhóm.
+Countries, cities, rivers and lakes	Quốc gia, thành phố, sông và hồ
+Counts the points that fall inside each polygon.	Đếm số điểm nằm trong mỗi vùng.
+Create	Tạo
+Create a new project or start from the World Atlas sample.	Tạo dự án mới hoặc bắt đầu từ mẫu World Atlas.
+Create Feature	Tạo đối tượng
+Create Line	Tạo đường
+Create Point	Tạo điểm
+Create Polygon	Tạo vùng
+Creates a point inside each input feature.	Tạo một điểm bên trong mỗi đối tượng đầu vào.
+Creates polygons around input features at a given distance.	Tạo các vùng bao quanh đối tượng đầu vào theo khoảng cách cho trước.
+Ctrl+	Ctrl+
+Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
+Ctrl+F1	Ctrl+F1
+Ctrl+K	Ctrl+K
+Ctrl+N / O / S	Ctrl+N / O / S
+Ctrl+T	Ctrl+T
+Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
+Current Project	Dự án hiện tại
+Dark\nMode	Chế độ\ntối
+Data	Dữ liệu
+Data Design	Thiết kế dữ liệu
+Data Management	Quản lý dữ liệu
+Data type	Kiểu dữ liệu
+Data…	Dữ liệu…
+Definition\nQuery	Truy vấn\nđịnh nghĩa
+Definition Query	Truy vấn định nghĩa
+Definition query	Truy vấn định nghĩa
+Definition Query…	Truy vấn định nghĩa…
+Delete	Xóa
+Delete Field	Xóa trường
+Delete Map	Xóa bản đồ
+Delete selected features	Xóa các đối tượng được chọn
+Delete selected rows	Xóa các hàng được chọn
+Delete the selected features.	Xóa các đối tượng được chọn.
+Details	Chi tiết
+Details of the selected layer.	Chi tiết của lớp được chọn.
+Diamond	Hình thoi
+Display	Hiển thị
+Dissolve	Hợp nhất
+Dissolve Field	Trường hợp nhất
+Distance	Khoảng cách
+Double	Số thực
+Double-click	Nhấp đúp
+Double-click to add	Nhấp đúp để thêm
+Downloaded {name}	Đã tải xuống {name}
+Drag / middle-drag	Kéo / kéo chuột giữa
+Drag a box or click to zoom in	Kéo hộp hoặc nhấp để phóng to
+Drag a box to zoom into.	Kéo một hộp để phóng to vào.
+Draw a halo around label text.	Vẽ quầng sáng quanh văn bản nhãn.
+Draw new features in the selected layer. Double-click to finish lines and polygons.	Vẽ đối tượng mới trong lớp được chọn. Nhấp đúp để hoàn tất đường và vùng.
+Draw the layer at every scale.	Vẽ lớp ở mọi tỷ lệ.
+Drawing	Vẽ
+Drawing Order	Thứ tự vẽ
+Dusk	Hoàng hôn
+e.g.  pop_est / 1000000   or   'Africa'   or   name	vd.  pop_est / 1000000   hoặc   'Africa'   hoặc   name
+e.g. continent = 'Europe'	vd. continent = 'Europe'
+e.g. pop_est > 100000000 AND continent = 'Asia'	vd. pop_est > 100000000 AND continent = 'Asia'
+East	Đông
+Edit	Chỉnh sửa
+Edit Attribute	Sửa thuộc tính
+Edit attributes in the table.	Sửa thuộc tính trong bảng.
+Effects	Hiệu ứng
+Ember	Than hồng
+Encloses each feature, or all features, in its convex hull.	Bao mỗi đối tượng, hoặc tất cả đối tượng, trong bao lồi của nó.
+Equal Interval	Khoảng đều
+Erase	Xóa vùng
+Erase Features	Xóa vùng đối tượng
+Esc	Esc
+Expand Legend	Mở rộng chú giải
+Expand the ribbon (Ctrl+F1)	Mở rộng ribbon (Ctrl+F1)
+Explore	Khám phá
+Export	Xuất
+Export\nFeatures	Xuất\nđối tượng
+Export\nMap	Xuất\nbản đồ
+Export Features	Xuất đối tượng
+Export Features (tool)	Xuất đối tượng (công cụ)
+Export Features…	Xuất đối tượng…
+Export Map	Xuất bản đồ
+Export Map failed unexpectedly	Xuất bản đồ thất bại ngoài dự kiến
+Export Map…	Xuất bản đồ…
+Export Table	Xuất bảng
+Export the layer.	Xuất lớp.
+Export the map view as a PNG image (with labels and a scale bar).	Xuất khung nhìn bản đồ thành ảnh PNG (kèm nhãn và thước tỷ lệ).
+Export the selected layer to GeoJSON or CSV.	Xuất lớp được chọn sang GeoJSON hoặc CSV.
+Expression	Biểu thức
+Extract	Trích xuất
+Extracts the parts of input features that fall inside clip polygons.	Trích xuất các phần của đối tượng đầu vào nằm trong các vùng cắt.
+Failed	Thất bại
+Feature	Đối tượng
+Feature\nTo Point	Đối tượng\nthành điểm
+Feature Layer	Lớp đối tượng
+Feature Layer › Drawing	Lớp đối tượng › Vẽ
+Feature To Point	Đối tượng thành điểm
+Features	Đối tượng
+Field	Trường
+Field name	Tên trường
+Fields	Trường
+Fields:	Trường:
+Filter rows…	Lọc hàng…
+Find a place by coordinates.	Tìm một địa điểm theo tọa độ.
+Find and run geoprocessing tools.	Tìm và chạy công cụ xử lý không gian.
+Find any command by name (Ctrl+K).	Tìm bất kỳ lệnh nào theo tên (Ctrl+K).
+Find Tools	Tìm công cụ
+Fixed Zoom In	Phóng to cố định
+Fixed Zoom Out	Thu nhỏ cố định
+Folders	Thư mục
+Forest	Rừng
+Full Extent	Toàn bộ phạm vi
+Full extent	Toàn bộ phạm vi
+Generalization	Khái quát hóa
+Geo-\nprocessing	Xử lý\nkhông gian
+GeoJSON or CSV	GeoJSON hoặc CSV
+Geometry	Hình học
+Geoprocessing	Xử lý không gian
+Geoprocessing history.	Lịch sử xử lý không gian.
+Geoprocessing Pane	Ngăn xử lý không gian
+Go	Đi
+Go back to the previous extent.	Quay lại phạm vi trước.
+Go forward to the next extent.	Đi tới phạm vi tiếp theo.
+Go to a saved extent or save the current one.	Đi tới phạm vi đã lưu hoặc lưu phạm vi hiện tại.
+Go To Bookmark	Đi tới dấu trang
+Go To XY	Đi tới XY
+Graduated Colors	Màu phân cấp
+Graticule	Lưới kinh vĩ
+Greys	Xám
+Group Option	Tùy chọn nhóm
+Halo	Quầng sáng
+Harbour (qualitative)	Bến cảng (định tính)
+Help	Trợ giúp
+History	Lịch sử
+Home	Home
+Identify	Nhận dạng
+Import\nProject	Nhập\ndự án
+In Beyond	Khi phóng to hơn
+In project	Trong dự án
+Input Features	Đối tượng đầu vào
+Input Polygons	Vùng đầu vào
+Input Rows	Hàng đầu vào
+Input Summary Features	Đối tượng tổng hợp đầu vào
+Input Table	Bảng đầu vào
+Inquiry	Truy vấn
+Insert	Chèn
+Interface font: {font}	Phông giao diện: {font}
+Invalid: {error}	Không hợp lệ: {error}
+Invert	Đảo ngược
+Invert the selection.	Đảo ngược vùng chọn.
+IS NULL	IS NULL
+keep current	giữ nguyên
+Keyboard Shortcuts	Phím tắt
+Keyboard shortcuts.	Phím tắt.
+Kilometers	Kilômét
+Label	Nhãn
+Label Class	Lớp nhãn
+Label Field	Trường nhãn
+Labeling	Gán nhãn
+Lagoon	Đầm phá
+Language	Ngôn ngữ
+Last map render time	Thời gian kết xuất bản đồ gần nhất
+Latitude (Y)	Vĩ độ (Y)
+Layer	Lớp
+Layer From\nSelection	Lớp từ\nvùng chọn
+Layers	Các lớp
+Layers and Table Views	Lớp và khung nhìn bảng
+LIKE	LIKE
+Limit which features draw with a SQL expression.	Giới hạn các đối tượng được vẽ bằng biểu thức SQL.
+Line color	Màu đường
+Line width	Độ rộng đường
+LineString	LineString
+List Commands	Liệt kê lệnh
+Locate	Định vị
+Location	Vị trí
+Long	Số nguyên dài
+Longitude (X)	Kinh độ (X)
+Major Lakes	Hồ lớn
+Major Rivers	Sông lớn
+Make a new layer of the selected features.	Tạo lớp mới từ các đối tượng được chọn.
+Make Layer From Selected Features	Tạo lớp từ đối tượng được chọn
+Manage Edits	Quản lý chỉnh sửa
+Map	Bản đồ
+Map › Layer	Bản đồ › Lớp
+Maps	Bản đồ
+Marker	Điểm đánh dấu
+Measure	Đo
+Measure Area	Đo diện tích
+Measure Distance	Đo khoảng cách
+Measure geodesic distances and areas on the map.	Đo khoảng cách và diện tích trắc địa trên bản đồ.
+Merges polygons that share a field value into one feature per value.	Gộp các vùng có cùng giá trị trường thành một đối tượng cho mỗi giá trị.
+Meters	Mét
+Method	Phương pháp
+Midnight	Nửa đêm
+Miles	Dặm
+Minimum Bounding Geometry	Hình học bao nhỏ nhất
+Mod+	Mod+
+Mouse wheel	Con lăn chuột
+Move Down	Chuyển xuống
+Move Up	Chuyển lên
+Name	Tên
+Natural Breaks (Jenks)	Ngắt tự nhiên (Jenks)
+Natural Earth	Natural Earth
+Navigate	Điều hướng
+Navigation	Điều hướng
+New	Mới
+New\nBookmark	Dấu trang\nmới
+New\nMap	Bản đồ\nmới
+New / Open / Save project	Mới / Mở / Lưu dự án
+New Bookmark	Dấu trang mới
+New Bookmark…	Dấu trang mới…
+New Map	Bản đồ mới
+New Project	Dự án mới
+New project	Dự án mới
+New Selection	Vùng chọn mới
+Next	Tiếp
+Next Extent	Phạm vi tiếp theo
+No	Không
+No bookmarks yet	Chưa có dấu trang
+No standalone tables	Không có bảng độc lập
+None	Không có
+North	Bắc
+Not saved yet	Chưa lưu
+Ocean	Đại dương
+OID	OID
+Only features matching this expression draw in {layer}.	Chỉ các đối tượng khớp biểu thức này được vẽ trong {layer}.
+Open	Mở
+Open a .rgisx project	Mở dự án .rgisx
+Open a RustGIS project.	Mở một dự án RustGIS.
+Open folder	Mở thư mục
+Open Project	Mở dự án
+Open project	Mở dự án
+Open Project (from text)	Mở dự án (từ văn bản)
+Open the attribute table of the selected layer.	Mở bảng thuộc tính của lớp được chọn.
+Open the layer's attribute table.	Mở bảng thuộc tính của lớp.
+Open the layer's table.	Mở bảng của lớp.
+Open the selected layer's table.	Mở bảng của lớp được chọn.
+Open the Symbology pane.	Mở ngăn Ký hiệu.
+Open, save and create projects	Mở, lưu và tạo dự án
+Open…	Mở…
+OR	OR
+Out Beyond	Khi thu nhỏ hơn
+Outline	Viền
+Outline color	Màu viền
+Outline width	Độ rộng viền
+Output	Đầu ra
+Output Name	Tên đầu ra
+Overlay	Chồng lớp
+Pan (Explore) · any tool	Di chuyển (Khám phá) · mọi công cụ
+Pan to a longitude/latitude.	Di chuyển tới kinh độ/vĩ độ.
+Pan with the mouse, zoom with the wheel and click features to see their attributes.	Di chuyển bằng chuột, phóng to thu nhỏ bằng con lăn và nhấp vào đối tượng để xem thuộc tính.
+Paper	Giấy
+Parent folder	Thư mục cha
+PNG image	Ảnh PNG
+Point	Điểm
+Polygon	Vùng
+Polyline	Đường gấp khúc
+Populated Places	Khu dân cư
+Previous	Trước
+Previous Extent	Phạm vi trước
+Primary\nSymbology	Ký hiệu\nchính
+Primary symbology	Ký hiệu chính
+Project	Dự án
+Project Info	Thông tin dự án
+Proportional Symbols	Ký hiệu tỷ lệ
+Proximity	Lân cận
+Quantile	Phân vị
+Quick Access Toolbar	Thanh truy cập nhanh
+Redo	Làm lại
+Redo the change you undid.	Làm lại thay đổi bạn đã hoàn tác.
+Redo {action}	Làm lại {action}
+Red–Blue	Đỏ–Xanh lam
+Remove	Gỡ bỏ
+Remove Bookmark	Gỡ dấu trang
+Remove From Current Selection	Bớt khỏi vùng chọn hiện tại
+Remove the layer from the map.	Gỡ lớp khỏi bản đồ.
+Removes the parts of polygon features that overlap erase polygons.	Loại bỏ các phần của đối tượng vùng chồng lên vùng xóa.
+Removes vertices that deviate less than a tolerance (Douglas–Peucker).	Loại bỏ các đỉnh lệch ít hơn dung sai (Douglas–Peucker).
+Rename	Đổi tên
+Rename Layer	Đổi tên lớp
+Rename Map	Đổi tên bản đồ
+Rename Project	Đổi tên dự án
+Rename…	Đổi tên…
+Ribbon feature coverage: {done} of {total} features ({pct}%).	Độ phủ tính năng ribbon: {done} trên {total} tính năng ({pct}%).
+Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Tương đương ribbon: {done} trên {total} tính năng ribbon có lệnh RustGIS.
+Run	Chạy
+Run Tool	Chạy công cụ
+RustGIS	RustGIS
+RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS là GIS máy tính để bàn mã nguồn mở viết hoàn toàn bằng Rust. Ribbon của nó theo quy trình GIS máy tính để bàn quen thuộc; mọi thao tác đều là một lệnh mà bạn cũng có thể chạy từ dòng lệnh.
+RustGIS project	Dự án RustGIS
+Sample data (Natural Earth)	Dữ liệu mẫu (Natural Earth)
+Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Dữ liệu mẫu © Natural Earth (phạm vi công cộng). RustGIS được cấp phép theo Apache-2.0.
+Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	Dữ liệu mẫu: Natural Earth (phạm vi công cộng). Cấp phép theo Apache-2.0.
+Save	Lưu
+Save As	Lưu thành
+Save Project	Lưu dự án
+Save project	Lưu dự án
+Save Project As	Lưu dự án thành
+Save the current extent as a bookmark.	Lưu phạm vi hiện tại thành dấu trang.
+Save the project under a new name.	Lưu dự án với tên mới.
+Save the project with your edits.	Lưu dự án cùng các chỉnh sửa của bạn.
+Scale 1:	Tỷ lệ 1:
+Search commands — e.g. buffer, basemap, labels	Tìm lệnh — vd. buffer, basemap, labels
+Search Distance (km)	Khoảng cách tìm kiếm (km)
+See the tools you've run.	Xem các công cụ bạn đã chạy.
+Select	Chọn
+Select (click)	Chọn (nhấp)
+Select (rectangle)	Chọn (hình chữ nhật)
+select a layer in the Contents pane first	hãy chọn một lớp trong ngăn Nội dung trước
+Select a layer in the Contents pane.	Chọn một lớp trong ngăn Nội dung.
+Select All	Chọn tất cả
+Select By\nAttributes	Chọn theo\nthuộc tính
+Select By\nLocation	Chọn theo\nvị trí
+Select By Attributes	Chọn theo thuộc tính
+Select every feature.	Chọn mọi đối tượng.
+Select features by their spatial relationship.	Chọn đối tượng theo quan hệ không gian.
+Select features on the map.	Chọn đối tượng trên bản đồ.
+Select features that intersect another layer.	Chọn đối tượng giao với lớp khác.
+Select features with a SQL expression.	Chọn đối tượng bằng biểu thức SQL.
+Select Layer	Chọn lớp
+Select Layer By Attribute	Chọn lớp theo thuộc tính
+Select Layer By Location	Chọn lớp theo vị trí
+Select Rows	Chọn hàng
+Select rows with a SQL expression.	Chọn hàng bằng biểu thức SQL.
+Select Subset From Current Selection	Chọn tập con từ vùng chọn hiện tại
+Selectable	Có thể chọn
+Selected	Đã chọn
+Selected Features: {n}	Đối tượng được chọn: {n}
+Selected only	Chỉ mục đã chọn
+Selecting Features	Chọn đối tượng
+Selection	Vùng chọn
+Selection Type	Kiểu chọn
+Selects features that intersect features in another layer.	Chọn các đối tượng giao với đối tượng trong lớp khác.
+Selects features with a SQL where clause, e.g. pop_est > 1000000.	Chọn đối tượng bằng mệnh đề WHERE SQL, vd. pop_est > 1000000.
+Set Map Tool	Đặt công cụ bản đồ
+Set Scale	Đặt tỷ lệ
+Shape	Hình dạng
+Share	Chia sẻ
+Share › Output	Chia sẻ › Đầu ra
+Shift+	Shift+
+Shift+drag	Shift+kéo
+Shortcuts	Phím tắt
+Show latitude/longitude lines on the basemap.	Hiển thị các đường kinh độ/vĩ độ trên bản đồ nền.
+Show or hide the Catalog pane.	Hiện hoặc ẩn ngăn Danh mục.
+Show or hide the Contents pane.	Hiện hoặc ẩn ngăn Nội dung.
+Show or hide the Geoprocessing pane.	Hiện hoặc ẩn ngăn Xử lý không gian.
+Show or hide the layer.	Hiện hoặc ẩn lớp.
+Show the Symbology pane for the selected layer.	Hiện ngăn Ký hiệu cho lớp được chọn.
+Simplify	Đơn giản hóa
+Single Symbol	Ký hiệu đơn
+Size	Kích thước
+Source	Nguồn
+South	Nam
+Square	Hình vuông
+Standalone Tables	Bảng độc lập
+Star	Ngôi sao
+Start	Bắt đầu
+Statistics	Thống kê
+Statistics Field	Trường thống kê
+Status Bar	Thanh trạng thái
+Summarize	Tổng hợp
+Summarize\nWithin	Tổng hợp\ntrong vùng
+Summarize Within	Tổng hợp trong vùng
+Summary\nStatistics	Thống kê\ntổng hợp
+Summary Statistics	Thống kê tổng hợp
+Switch	Đảo
+Switch between light and dark themes.	Chuyển giữa giao diện sáng và tối.
+Switch Selection	Đảo vùng chọn
+Switch selection	Đảo vùng chọn
+Symbol	Ký hiệu
+Symbol Color	Màu ký hiệu
+Symbology	Ký hiệu
+Symbology Pane	Ngăn Ký hiệu
+Table	Bảng
+Tables	Bảng
+Text	Văn bản
+Text Symbol	Ký hiệu văn bản
+the map has no layers	bản đồ không có lớp nào
+Thermal	Nhiệt
+This map has no layers yet.	Bản đồ này chưa có lớp nào.
+Toggle Dark Mode	Bật/tắt chế độ tối
+Tolerance (km)	Dung sai (km)
+Toolbox	Hộp công cụ
+Toolboxes	Hộp công cụ
+Tools	Công cụ
+Tools you run appear here.	Các công cụ bạn chạy sẽ xuất hiện ở đây.
+Total {total}   ·   Segment {segment}	Tổng {total}   ·   Đoạn {segment}
+Transparency	Độ trong suốt
+Triangle	Tam giác
+Turn Labels Off	Tắt nhãn
+Turn labels on or off for the selected layer.	Bật hoặc tắt nhãn cho lớp được chọn.
+Turn labels on or off.	Bật hoặc tắt nhãn.
+Unavailable: {reason}	Không khả dụng: {reason}
+Undo	Hoàn tác
+Undo / Redo	Hoàn tác / Làm lại
+Undo the last change.	Hoàn tác thay đổi cuối cùng.
+Undo {action}	Hoàn tác {action}
+Unique Values	Giá trị duy nhất
+Units	Đơn vị
+Valid expression · {n} matching rows	Biểu thức hợp lệ · {n} hàng khớp
+Vector data	Dữ liệu vector
+Version {version}	Phiên bản {version}
+View	Xem
+View › Windows	Xem › Cửa sổ
+Visibility	Khả năng hiển thị
+Visibility Range	Phạm vi hiển thị
+Visible	Hiển thị
+Welcome to RustGIS	Chào mừng đến với RustGIS
+West	Tây
+WGS 84 / Web Mercator	WGS 84 / Web Mercator
+Where	Điều kiện
+Where Clause	Mệnh đề WHERE
+Windows	Cửa sổ
+World	Thế giới
+World Atlas	World Atlas
+World Atlas Sample	Mẫu World Atlas
+World Countries	Các quốc gia trên thế giới
+Yes	Có
+Zoom about the pointer	Thu phóng quanh con trỏ
+Zoom In	Phóng to
+Zoom in	Phóng to
+Zoom in / out	Phóng to / thu nhỏ
+Zoom in on the centre of the map.	Phóng to vào tâm bản đồ.
+Zoom in · finish a sketch	Phóng to · hoàn tất bản phác thảo
+Zoom Out	Thu nhỏ
+Zoom out	Thu nhỏ
+Zoom out from the centre of the map.	Thu nhỏ từ tâm bản đồ.
+Zoom To	Thu phóng tới
+Zoom To\nLayer	Thu phóng\ntới lớp
+Zoom to a box (Explore)	Thu phóng tới hộp (Khám phá)
+Zoom To Layer	Thu phóng tới lớp
+Zoom To Selection	Thu phóng tới vùng chọn
+Zoom to selection	Thu phóng tới vùng chọn
+Zoom to the extent of all layers.	Thu phóng tới phạm vi của mọi lớp.
+Zoom to the layer's extent.	Thu phóng tới phạm vi của lớp.
+Zoom to the selected features.	Thu phóng tới các đối tượng được chọn.
+Zoom to the selection.	Thu phóng tới vùng chọn.
+Zoom to the whole world.	Thu phóng tới toàn thế giới.
+Zoom To World	Thu phóng tới thế giới
+⌘K	⌘K

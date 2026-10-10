@@ -349,26 +349,26 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     }
     resp.context_menu(|ui| {
         let c = app.map.pointer_lonlat;
-        if ui.button("Zoom In").clicked() {
+        if ui.button(tl!("Zoom In")).clicked() {
             let _ = app.run("map.zoomIn", Value::Null);
             ui.close();
         }
-        if ui.button("Zoom Out").clicked() {
+        if ui.button(tl!("Zoom Out")).clicked() {
             let _ = app.run("map.zoomOut", Value::Null);
             ui.close();
         }
-        if ui.button("Full Extent").clicked() {
+        if ui.button(tl!("Full Extent")).clicked() {
             let _ = app.run("map.zoomFull", Value::Null);
             ui.close();
         }
         ui.separator();
         if let Some(c) = c
-            && ui.button("Copy Coordinates").clicked()
+            && ui.button(tl!("Copy Coordinates")).clicked()
         {
             ui.ctx().copy_text(format!("{:.6}, {:.6}", c.x, c.y));
             ui.close();
         }
-        if ui.add_enabled(app.session.map().selection_count() > 0, egui::Button::new("Clear Selection")).clicked() {
+        if ui.add_enabled(app.session.map().selection_count() > 0, egui::Button::new(tl!("Clear Selection"))).clicked() {
             let _ = app.run("select.clear", Value::Null);
             ui.close();
         }
@@ -435,20 +435,24 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         if matches!(tool, Tool::Measure | Tool::MeasureArea) && pts.len() >= 2 {
             let text = if tool == Tool::Measure {
                 let seg = pts.len().checked_sub(2).and_then(|i| pts.get(i..)).map(geodesic_length_m).unwrap_or(0.0);
-                format!(
-                    "Total {}   ·   Segment {}",
-                    rustgis_engine::geom::format_distance(geodesic_length_m(&pts)),
-                    rustgis_engine::geom::format_distance(seg)
+                crate::i18n::fmt(
+                    "Total {total}   ·   Segment {segment}",
+                    &[
+                        ("total", &rustgis_engine::geom::format_distance(geodesic_length_m(&pts))),
+                        ("segment", &rustgis_engine::geom::format_distance(seg)),
+                    ],
                 )
             } else {
                 let mut ring = pts.clone();
                 if let Some(f) = ring.first().copied() {
                     ring.push(f);
                 }
-                format!(
-                    "Area {}   ·   Perimeter {}",
-                    rustgis_engine::geom::format_area(geodesic_ring_area_m2(&ring)),
-                    rustgis_engine::geom::format_distance(geodesic_length_m(&ring))
+                crate::i18n::fmt(
+                    "Area {area}   ·   Perimeter {perimeter}",
+                    &[
+                        ("area", &rustgis_engine::geom::format_area(geodesic_ring_area_m2(&ring))),
+                        ("perimeter", &rustgis_engine::geom::format_distance(geodesic_length_m(&ring))),
+                    ],
                 )
             };
             let anchor = pos2(rect.center().x, rect.min.y + 22.0);
@@ -473,7 +477,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     if let Some(h) = hint
         && (app.map.sketch.is_empty() || !matches!(app.session.tool, Tool::Measure | Tool::MeasureArea))
     {
-        let g = p.layout_no_wrap(h.to_string(), regular(12.0), Color32::WHITE);
+        let g = p.layout_no_wrap(tl!(h).to_string(), regular(12.0), Color32::WHITE);
         let bg = Rect::from_center_size(pos2(rect.center().x, rect.max.y - 26.0), g.size() + vec2(22.0, 10.0));
         p.rect_filled(bg, CornerRadius::same(12), Color32::from_black_alpha(160));
         p.galley(bg.center() - g.size() / 2.0, g, Color32::WHITE);
@@ -496,7 +500,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         p.rect_filled(r, CornerRadius::same(8), if resp.hovered() { t.hover } else { t.ribbon });
         p.rect_stroke(r, CornerRadius::same(8), Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
         icons::paint(p, r.shrink(7.0), icon, t.icon, t.accent);
-        if resp.on_hover_text(tip).clicked() {
+        if resp.on_hover_text(tl!(tip)).clicked() {
             let _ = app.run(id, Value::Null);
             app.map.popup = None;
         }
@@ -550,7 +554,7 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     let layer = info["layer"].as_str().unwrap_or("").to_string();
     let attrs = info["attributes"].as_object().cloned().unwrap_or_default();
     let title =
-        attrs.iter().find(|(k, _)| k.to_lowercase().contains("name")).and_then(|(_, v)| v.as_str()).unwrap_or("Feature").to_string();
+        attrs.iter().find(|(k, _)| k.to_lowercase().contains("name")).and_then(|(_, v)| v.as_str()).unwrap_or(tl!("Feature")).to_string();
     let p = ui.painter();
     p.circle_filled(anchor, 6.0, Color32::from_rgb(0x00, 0xE5, 0xFF).gamma_multiply(0.5));
     p.circle_stroke(anchor, 6.0, Stroke::new(2.0, Color32::from_rgb(0x00, 0xA8, 0xC0)));
@@ -575,7 +579,7 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
                                 ui.label(egui::RichText::new(&layer).size(11.0).color(t.text_dim));
                             });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                if ui.add(egui::Button::new("×").frame(false)).clicked() {
+                                if ui.add(egui::Button::new(tl!("×")).frame(false)).clicked() {
                                     close = true;
                                 }
                             });
@@ -642,7 +646,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.painter().rect_filled(pr, CornerRadius::same(4), t.hover);
     }
     ui.painter().text(pr.center(), Align2::CENTER_CENTER, "+", regular(15.0), t.text_dim);
-    if resp.on_hover_text("New Map").clicked() {
+    if resp.on_hover_text(tl!("New Map")).clicked() {
         let _ = app.run("map.new", Value::Null);
     }
 }
