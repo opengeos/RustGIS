@@ -18,7 +18,8 @@ permissions:
 
 concurrency:
   group: release-${{ github.event_name }}-${{ github.event.release.tag_name || github.ref }}
-  cancel-in-progress: false
+  # A newer push supersedes a pull request trial run; releases always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -54,7 +55,9 @@ jobs:
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          crate="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          # The version in [workspace.package]. A pre-release tag (v0.2.0-rc.1) needs the same
+          # pre-release version in Cargo.toml.
+          crate="$(awk '/^\[/ { s = ($0 == "[workspace.package]") } s && /^version *=/ { gsub(/.*= *"|".*/, ""); print; exit }' Cargo.toml)"
           version="${TAG:-$crate}"
           version="${version#v}"
           # A tag must match the workspace version, so the app reports what was released.

@@ -44,7 +44,7 @@ case "$os" in
     d="$work/$name"
     mkdir -p "$d"
     cp "$bin/rustgis" "$bin/rustgis-cli" "$root/LICENSE" "$root/README.md" \
-      "$root/packaging/linux/rustgis.desktop" "$d/"
+      "$root/packaging/linux/rustgis.desktop" "$root/packaging/linux/rustgis-mime.xml" "$d/"
     logo "$d/rustgis.png" 512
     tar -C "$work" -czf "$dist/$name.tar.gz" "$name"
 
@@ -54,6 +54,7 @@ case "$os" in
     install -Dm755 "$bin/rustgis" "$p/usr/bin/rustgis"
     install -Dm755 "$bin/rustgis-cli" "$p/usr/bin/rustgis-cli"
     install -Dm644 "$root/packaging/linux/rustgis.desktop" "$p/usr/share/applications/rustgis.desktop"
+    install -Dm644 "$root/packaging/linux/rustgis-mime.xml" "$p/usr/share/mime/packages/rustgis.xml"
     for s in 32 64 128 256 512; do
       mkdir -p "$p/usr/share/icons/hicolor/${s}x${s}/apps"
       logo "$p/usr/share/icons/hicolor/${s}x${s}/apps/rustgis.png" "$s"
@@ -64,11 +65,16 @@ case "$os" in
     # debian/control in the working directory). The windowing and GPU libraries are loaded at
     # run time, so they are listed by hand below.
     mkdir -p "$work/shlibs/debian"
-    touch "$work/shlibs/debian/control"
-    if ! shlibs="$(cd "$work/shlibs" && dpkg-shlibdeps -O "$p/usr/bin/rustgis" "$p/usr/bin/rustgis-cli" | sed -n 's/^shlibs:Depends=//p')"; then
-      # Off Debian/Ubuntu there is no dpkg database to consult; fall back to the core libraries.
+    printf 'Source: rustgis\n\nPackage: rustgis\nArchitecture: any\n' > "$work/shlibs/debian/control"
+    shlibs="$(cd "$work/shlibs" && dpkg-shlibdeps -O "$p/usr/bin/rustgis" "$p/usr/bin/rustgis-cli" | sed -n 's/^shlibs:Depends=//p')" || shlibs=""
+    if [ -z "$shlibs" ]; then
+      # Off Debian/Ubuntu there is no dpkg database to consult. In CI that is an error: the
+      # published package must carry the real list.
+      if [ -n "${CI:-}" ]; then
+        echo "dpkg-shlibdeps found no dependencies" >&2
+        exit 1
+      fi
       echo "dpkg-shlibdeps failed; using a minimal Depends list" >&2
-      shlibs=""
     fi
     cat > "$p/DEBIAN/control" <<CONTROL
 Package: rustgis
@@ -101,7 +107,7 @@ CONTROL
     done
     iconutil -c icns "$iconset" -o "$app/Contents/Resources/rustgis.icns"
     # Ad-hoc signature: required to launch on Apple Silicon; not notarized.
-    codesign --force --deep --sign - "$app"
+    codesign --force --sign - "$app"
 
     stage="$work/dmg"
     mkdir -p "$stage"
