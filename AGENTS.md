@@ -31,8 +31,9 @@ egui front end, headless screenshots for UI work.
   `std::time`; file access goes through `Services` on the web.
 - **Interface text is translatable**: wrap user-visible literals in `tl!("…")`, use
   `i18n::fmt("… {name} …", &[("name", …)])` instead of `format!` for messages, and pass labels to
-  the ribbon widgets (they translate). Then fill the catalogs with the `rustgis-i18n` skill
-  (`.claude/skills/rustgis-i18n`). Command ids, data and the CLI are never translated.
+  the ribbon widgets (they translate). Then add the new strings to every catalog in
+  `crates/ui-egui/src/i18n/*.tsv` (format in `docs/i18n.md`). Command ids, data and the CLI are
+  never translated.
 - **Layering** is enforced by `cargo xtask layers`: nothing below L6 depends on egui/eframe/rfd.
 - **Coverage** is measured against a ribbon feature checklist (`crates/engine/src/catalog.rs`,
   `cargo xtask parity` → `docs/parity.md`). A test enforces a floor that only rises.
