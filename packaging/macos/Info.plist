@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>RustGIS</string>
+  <key>CFBundleDisplayName</key><string>RustGIS</string>
+  <key>CFBundleIdentifier</key><string>org.rustgis.RustGIS</string>
+  <key>CFBundleVersion</key><string>@VERSION@</string>
+  <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+  <key>CFBundleExecutable</key><string>rustgis</string>
+  <key>CFBundleIconFile</key><string>rustgis</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.education</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSHumanReadableCopyright</key><string>Copyright the RustGIS contributors. Apache-2.0.</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>RustGIS project</string>
+      <key>CFBundleTypeExtensions</key><array><string>rgisx</string></array>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Spatial data</string>
+      <key>CFBundleTypeExtensions</key><array><string>geojson</string><string>json</string><string>csv</string><string>shp</string></array>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+    </dict>
+  </array>
+</dict>
+</plist>

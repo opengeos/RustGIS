@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli info <data>\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--width N] [--height N] [--dpi N]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P]"
+        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png> [--size N]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--width N] [--height N] [--dpi N]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P]"
     );
     ExitCode::from(2)
 }
@@ -96,6 +96,15 @@ fn main() -> ExitCode {
             let path = args.get(1).ok_or("info needs a file")?;
             load(&mut s, path)?;
             print(&run(&mut s, "info.project", Value::Null)?);
+            Ok(())
+        }
+        "logo" => {
+            // The app icon as a PNG, for installers and desktop entries.
+            let out = args.get(1).ok_or("logo needs <out.png>")?;
+            let size = num(&args, "--size").unwrap_or(512.0).clamp(16.0, 1024.0) as u32;
+            let png =
+                rustgis_engine::render::logo::pixmap(size).ok_or("could not draw the logo")?.encode_png().map_err(|e| e.to_string())?;
+            std::fs::write(out, png).map_err(|e| format!("{out}: {e}"))?;
             Ok(())
         }
         "render" => {

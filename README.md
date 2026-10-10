@@ -58,6 +58,12 @@ RustGIS also runs as a WebAssembly app at **[web.rustgis.app](https://web.rustgi
 same ribbon and tools, with the browser's file picker for GeoJSON, CSV and projects, and
 downloads for Save and Export.
 
+## Download
+
+Download the desktop app for Windows, macOS or Linux from the
+[latest release](https://github.com/opengeos/RustGIS/releases/latest) (see
+[Installation](docs/installation.md) for the files and first-run notes).
+
 ## Quick start
 
 ```sh

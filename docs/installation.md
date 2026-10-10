@@ -1,8 +1,28 @@
 # Installation
 
-RustGIS builds from source with a recent stable Rust toolchain (1.90 or later).
+## Download
+
+Each [GitHub release](https://github.com/opengeos/RustGIS/releases/latest) carries ready-to-run
+builds of the desktop app and `rustgis-cli`:
+
+| Platform | File |
+| --- | --- |
+| Windows x64 | `RustGIS-<version>-windows-x86_64.zip` (portable: unzip and run `rustgis.exe`) |
+| macOS Apple Silicon | `RustGIS-<version>-macos-aarch64.dmg` |
+| macOS Intel | `RustGIS-<version>-macos-x86_64.dmg` |
+| Linux x64 / arm64 (Debian, Ubuntu) | `rustgis_<version>_amd64.deb` / `rustgis_<version>_arm64.deb` |
+| Linux x64 / arm64 (other) | `RustGIS-<version>-linux-x86_64.tar.gz` / `RustGIS-<version>-linux-aarch64.tar.gz` |
+
+On macOS the command line tool is a separate `rustgis-cli-<version>-macos-<arch>.tar.gz`;
+the other packages include it. `SHA256SUMS` lists the checksum of every file.
+
+The builds are not yet signed. On macOS, the first time, right-click RustGIS in Applications
+and choose **Open** (or run `xattr -dr com.apple.quarantine /Applications/RustGIS.app`). On
+Windows, choose **More info › Run anyway** if SmartScreen warns about an unknown publisher.
 
 ## From source
+
+RustGIS builds from source with a recent stable Rust toolchain (1.90 or later).
 
 ```sh
 git clone https://github.com/opengeos/RustGIS.git
