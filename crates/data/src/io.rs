@@ -146,19 +146,30 @@ pub fn read_geojson(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
         }
         None => return Err(DataError::Format("GeoJSON: missing \"type\"".into())),
     };
-    // Schema: union of property keys in first-seen order; type widened as values are seen.
-    let mut fields: Vec<Field> = Vec::new();
+    // Schema: union of property keys in first-seen order. A type stays unknown until a non-null
+    // value is seen (so `[null, 1, 2]` is Integer), then widens; all-null columns become Text.
+    let mut order: Vec<(String, Option<FieldType>)> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for &f in &features {
         if let Some(props) = f.get("properties").and_then(Json::as_object) {
             for (k, v) in props {
                 let ty = json_type(v);
-                match fields.iter_mut().find(|f| &f.name == k) {
-                    Some(field) => field.ty = widen(field.ty, ty),
-                    None => fields.push(Field::new(k.clone(), ty.unwrap_or(FieldType::Text))),
+                match index.get(k).and_then(|i| order.get_mut(*i)) {
+                    Some((_, cur)) => {
+                        *cur = match *cur {
+                            None => ty,
+                            Some(c) => Some(widen(c, ty)),
+                        }
+                    }
+                    None => {
+                        index.insert(k.clone(), order.len());
+                        order.push((k.clone(), ty));
+                    }
                 }
             }
         }
     }
+    let fields: Vec<Field> = order.into_iter().map(|(k, ty)| Field::new(k, ty.unwrap_or(FieldType::Text))).collect();
     let mut report = ReadReport::default();
     let mut ds = Dataset::new(name, GeometryType::None, fields);
     for &f in &features {
@@ -518,6 +529,19 @@ mod tests {
         let back = read_geojson(&to_geojson(&ds).to_string(), "t").unwrap().0;
         assert_eq!(back.features.len(), 2);
         assert_eq!(back.value(1, 0), &Value::Text("B".into()));
+    }
+
+    #[test]
+    fn geojson_null_first_keeps_numeric_type() {
+        let text = r#"{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{"v":null,"n":null},"geometry":null},
+            {"type":"Feature","properties":{"v":1,"n":null},"geometry":null},
+            {"type":"Feature","properties":{"v":2.5},"geometry":null}]}"#;
+        let (ds, _) = read_geojson(text, "t").unwrap();
+        let (v, n) = (ds.field_index("v").unwrap(), ds.field_index("n").unwrap());
+        assert_eq!(ds.fields[v].ty, FieldType::Double);
+        assert_eq!(ds.fields[n].ty, FieldType::Text, "all-null columns are Text");
+        assert_eq!(ds.value(1, v), &Value::Float(1.0));
     }
 
     #[test]
