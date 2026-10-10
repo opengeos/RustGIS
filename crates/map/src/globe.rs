@@ -159,7 +159,9 @@ impl Globe {
     /// The point where the segment from visible `a` to hidden `b` (or back) meets the horizon.
     pub fn horizon_crossing(&self, a: V3, b: V3) -> V3 {
         let h = self.horizon();
-        let t = ((h - a[2]) / (b[2] - a[2])).clamp(0.0, 1.0);
+        let dz = b[2] - a[2];
+        // Points level with each other never straddle the horizon; meet halfway if they do.
+        let t = if dz.abs() > 1e-15 { ((h - a[2]) / dz).clamp(0.0, 1.0) } else { 0.5 };
         let v = normalize([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
         // Pull the point exactly onto the horizon circle.
         let r = (1.0 - h * h).sqrt();

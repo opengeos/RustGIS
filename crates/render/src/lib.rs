@@ -195,6 +195,13 @@ impl Ctx<'_> {
             }
             prev = Some(v);
         }
+        // A ring that ends and starts behind the horizon closes along the limb, not across it.
+        if let (Some(first), Some(last)) = (out.first().copied(), out.last().copied())
+            && first[2] <= h + 1e-9
+            && last[2] <= h + 1e-9
+        {
+            out.extend(g.horizon_arc(last, first));
+        }
         for (i, v) in out.iter().enumerate() {
             let (x, y) = self.vpx(g, *v);
             if i == 0 { pb.move_to(x, y) } else { pb.line_to(x, y) }
@@ -449,8 +456,14 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         let labels = layer.labels.clone();
         let selection: Vec<usize> = layer.selection.clone();
         let ds_ptr = layer.dataset.clone();
-        let geoms: Vec<Option<Geometry>> =
-            if globe.is_some() { ds_ptr.features.iter().map(|f| f.geometry.clone()).collect() } else { layer.projected().to_vec() };
+        // The globe draws the lon/lat geometry itself (borrowed, not copied); the flat map its
+        // cached Web Mercator copy.
+        let projected: Vec<Option<Geometry>> = if globe.is_some() { Vec::new() } else { layer.projected().to_vec() };
+        let geoms: Vec<Option<&Geometry>> = if globe.is_some() {
+            ds_ptr.features.iter().map(|f| f.geometry.as_ref()).collect()
+        } else {
+            projected.iter().map(Option::as_ref).collect()
+        };
         let mut target = if opacity < 0.999 { Pixmap::new(w, h)? } else { Pixmap::new(1, 1)? };
         let direct = opacity >= 0.999;
         {
