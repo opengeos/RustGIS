@@ -1,0 +1,544 @@
+# nl interface catalog: English<TAB>translation
+<None>	<Geen>
+A blank map with a basemap	Een lege kaart met een basiskaart
+A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Een snelle, opensource desktop-GIS geschreven in puur Rust, met de lintwerkwijze van desktop-GIS: kaarten en lagen, symbologie, labels, selectie, bewerken, geoverwerking en exporteren.
+A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Een waarde, een veld of twee daarvan verbonden door + − × ÷. Geldt voor de geselecteerde rijen, of voor alle rijen als er geen geselecteerd zijn.
+About	Over
+About RustGIS	Over RustGIS
+About RustGIS.	Over RustGIS.
+Activate Map	Kaart activeren
+Add	Toevoegen
+Add\nData	Gegevens\ntoevoegen
+Add\nField	Veld\ntoevoegen
+Add a field to the selected layer.	Een veld toevoegen aan de geselecteerde laag.
+Add a field.	Een veld toevoegen.
+Add a new map to the project.	Een nieuwe kaart aan het project toevoegen.
+Add Data	Gegevens toevoegen
+Add Data (from text)	Gegevens toevoegen (uit tekst)
+Add Data…	Gegevens toevoegen…
+Add Field	Veld toevoegen
+Add field	Veld toevoegen
+Add GeoJSON, CSV or Shapefile data to the map.	GeoJSON-, CSV- of Shapefile-gegevens aan de kaart toevoegen.
+Add sample countries	Voorbeeldlanden toevoegen
+Add Sample Data	Voorbeeldgegevens toevoegen
+Add To Current Selection	Toevoegen aan huidige selectie
+Add vector data.	Vectorgegevens toevoegen.
+Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Voegt geodetische oppervlakte (km²), lengte (km) of zwaartepuntcoördinaten toe als velden.
+All	Alle
+All files	Alle bestanden
+Analysis	Analyse
+AND	AND
+Apply	Toepassen
+Area {area}   ·   Perimeter {perimeter}	Oppervlakte {area}   ·   Omtrek {perimeter}
+Atlas	Atlas
+Attribute\nTable	Attributen-\ntabel
+Attribute Table	Attributentabel
+Attribute table	Attributentabel
+Attributes	Attributen
+Automatic	Automatisch
+Automatic (system language)	Automatisch (systeemtaal)
+Back to Explore; cancel a sketch	Terug naar Verkennen; schets annuleren
+Back to the map	Terug naar de kaart
+Back to tools	Terug naar gereedschappen
+Basemap	Basiskaart
+Basemaps	Basiskaarten
+Blank	Leeg
+Bold	Vet
+Bold label text.	Labeltekst vet.
+Bookmarks	Bladwijzers
+Boolean	Booleaans
+Bounding\nGeometry	Begrenzende\ngeometrie
+Browse the geoprocessing toolbox.	Door de geoverwerkingsgereedschappen bladeren.
+Browse the project's maps, tables and folders.	Door de kaarten, tabellen en mappen van het project bladeren.
+Buffer	Buffer
+By\nAttributes	Op\nattributen
+By\nLocation	Op\nlocatie
+Calculate	Berekenen
+Calculate\nField	Veld\nberekenen
+Calculate\nGeometry	Geometrie\nberekenen
+Calculate Field	Veld berekenen
+Calculate field	Veld berekenen
+Calculate field values.	Veldwaarden berekenen.
+Calculate Geometry Attributes	Geometrie-attributen berekenen
+Can't read this folder	Kan deze map niet lezen
+Cancel	Annuleren
+CARGO_PKG_VERSION	CARGO_PKG_VERSION
+Cartography	Cartografie
+Case Field	Groeperingsveld
+Catalog	Catalogus
+Catalog\nPane	Catalogus-\nvenster
+Change the map's backdrop.	De achtergrond van de kaart wijzigen.
+Choose how the layer is drawn.	Kiezen hoe de laag wordt getekend.
+Choose the interface language.	De interfacetaal kiezen.
+Circle	Cirkel
+Classes	Klassen
+Clear	Wissen
+Clear\nLimits	Limieten\nwissen
+Clear History	Geschiedenis wissen
+Clear Selection	Selectie wissen
+Clear selection	Selectie wissen
+Clear the selection in every layer.	De selectie in alle lagen wissen.
+Clear the selection.	De selectie wissen.
+Click or drag a box to select features. Shift adds, Ctrl removes.	Klik of sleep een kader om objecten te selecteren. Shift voegt toe, Ctrl verwijdert.
+Click or drag a box · Shift adds · Ctrl removes	Klik of sleep een kader · Shift voegt toe · Ctrl verwijdert
+Click the corners of the area · double-click to finish	Klik op de hoeken van het gebied · dubbelklik om te voltooien
+Click the map to add a point	Klik op de kaart om een punt toe te voegen
+Click to add points · double-click to finish · Esc to stop	Klik om punten toe te voegen · dubbelklik om te voltooien · Esc om te stoppen
+Click to add vertices · double-click to close the polygon	Klik om hoekpunten toe te voegen · dubbelklik om de polygoon te sluiten
+Click to add vertices · double-click to finish the line	Klik om hoekpunten toe te voegen · dubbelklik om de lijn te voltooien
+Click to switch between decimal degrees and DMS	Klik om te wisselen tussen decimale graden en GMS
+Clip	Clippen
+Clip Features	Objecten clippen
+Close	Sluiten
+Close Table	Tabel sluiten
+Close table	Tabel sluiten
+Collapse or expand the ribbon	Lint samenvouwen of uitvouwen
+Collapse the ribbon (Ctrl+F1)	Lint samenvouwen (Ctrl+F1)
+Color	Kleur
+Color Scheme	Kleurenschema
+Color scheme	Kleurenschema
+Command\nSearch	Opdracht\nzoeken
+Command Search	Opdracht zoeken
+Completed	Voltooid
+Compute a field's values.	De waarden van een veld berekenen.
+Contents	Inhoud
+Conversion	Conversie
+Copies the (selected) features of a layer to a new layer.	Kopieert de (geselecteerde) objecten van een laag naar een nieuwe laag.
+Copy Coordinates	Coördinaten kopiëren
+Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Aantal, som, gemiddelde, min, max en standaardafwijking van een veld, optioneel per groeperingsveld.
+Countries, cities, rivers and lakes	Landen, steden, rivieren en meren
+Counts the points that fall inside each polygon.	Telt de punten die binnen elke polygoon vallen.
+Create	Maken
+Create a new project or start from the World Atlas sample.	Een nieuw project maken of beginnen met het voorbeeld World Atlas.
+Create Feature	Object maken
+Create Line	Lijn maken
+Create Point	Punt maken
+Create Polygon	Polygoon maken
+Creates a point inside each input feature.	Maakt een punt binnen elk invoerobject.
+Creates polygons around input features at a given distance.	Maakt polygonen rond invoerobjecten op een opgegeven afstand.
+Ctrl+	Ctrl+
+Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
+Ctrl+F1	Ctrl+F1
+Ctrl+K	Ctrl+K
+Ctrl+N / O / S	Ctrl+N / O / S
+Ctrl+T	Ctrl+T
+Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
+Current Project	Huidig project
+Dark\nMode	Donkere\nmodus
+Data	Gegevens
+Data Design	Gegevensontwerp
+Data Management	Gegevensbeheer
+Data type	Gegevenstype
+Data…	Gegevens…
+Definition\nQuery	Definitie-\nquery
+Definition Query	Definitiequery
+Definition query	Definitiequery
+Definition Query…	Definitiequery…
+Delete	Verwijderen
+Delete Field	Veld verwijderen
+Delete Map	Kaart verwijderen
+Delete selected features	Geselecteerde objecten verwijderen
+Delete selected rows	Geselecteerde rijen verwijderen
+Delete the selected features.	De geselecteerde objecten verwijderen.
+Details	Details
+Details of the selected layer.	Details van de geselecteerde laag.
+Diamond	Ruit
+Display	Weergave
+Dissolve	Samenvoegen
+Dissolve Field	Samenvoegveld
+Distance	Afstand
+Double	Decimaal getal
+Double-click	Dubbelklik
+Double-click to add	Dubbelklik om toe te voegen
+Downloaded {name}	{name} gedownload
+Drag / middle-drag	Slepen / slepen met middelste knop
+Drag a box or click to zoom in	Sleep een kader of klik om in te zoomen
+Drag a box to zoom into.	Sleep een kader om op in te zoomen.
+Draw a halo around label text.	Een halo rond de labeltekst tekenen.
+Draw new features in the selected layer. Double-click to finish lines and polygons.	Nieuwe objecten tekenen in de geselecteerde laag. Dubbelklik om lijnen en polygonen te voltooien.
+Draw the layer at every scale.	De laag op elke schaal tekenen.
+Drawing	Tekenen
+Drawing Order	Tekenvolgorde
+Dusk	Schemering
+e.g.  pop_est / 1000000   or   'Africa'   or   name	Bijv.  pop_est / 1000000   of   'Africa'   of   name
+e.g. continent = 'Europe'	bijv. continent = 'Europe'
+e.g. pop_est > 100000000 AND continent = 'Asia'	bijv. pop_est > 100000000 AND continent = 'Asia'
+East	Oost
+Edit	Bewerken
+Edit Attribute	Attribuut bewerken
+Edit attributes in the table.	Attributen in de tabel bewerken.
+Effects	Effecten
+Ember	Gloed
+Encloses each feature, or all features, in its convex hull.	Omsluit elk object, of alle objecten, met de convexe omhulling.
+Equal Interval	Gelijke interval
+Erase	Uitwissen
+Erase Features	Objecten uitwissen
+Esc	Esc
+Expand Legend	Legenda uitvouwen
+Expand the ribbon (Ctrl+F1)	Lint uitvouwen (Ctrl+F1)
+Explore	Verkennen
+Export	Exporteren
+Export\nFeatures	Objecten\nexporteren
+Export\nMap	Kaart\nexporteren
+Export Features	Objecten exporteren
+Export Features (tool)	Objecten exporteren (gereedschap)
+Export Features…	Objecten exporteren…
+Export Map	Kaart exporteren
+Export Map failed unexpectedly	Kaart exporteren onverwacht mislukt
+Export Map…	Kaart exporteren…
+Export Table	Tabel exporteren
+Export the layer.	De laag exporteren.
+Export the map view as a PNG image (with labels and a scale bar).	De kaartweergave exporteren als PNG-afbeelding (met labels en schaalbalk).
+Export the selected layer to GeoJSON or CSV.	De geselecteerde laag exporteren naar GeoJSON of CSV.
+Expression	Expressie
+Extract	Extraheren
+Extracts the parts of input features that fall inside clip polygons.	Extraheert de delen van invoerobjecten die binnen de clippolygonen vallen.
+Failed	Mislukt
+Feature	Object
+Feature\nTo Point	Object\nnaar punt
+Feature Layer	Objectlaag
+Feature Layer › Drawing	Objectlaag › Tekenen
+Feature To Point	Object naar punt
+Features	Objecten
+Field	Veld
+Field name	Veldnaam
+Fields	Velden
+Fields:	Velden:
+Filter rows…	Rijen filteren…
+Find a place by coordinates.	Een plaats zoeken op coördinaten.
+Find and run geoprocessing tools.	Geoverwerkingsgereedschappen zoeken en uitvoeren.
+Find any command by name (Ctrl+K).	Elke opdracht op naam zoeken (Ctrl+K).
+Find Tools	Gereedschappen zoeken
+Fixed Zoom In	Vast inzoomen
+Fixed Zoom Out	Vast uitzoomen
+Folders	Mappen
+Forest	Bos
+Full Extent	Volledig bereik
+Full extent	Volledig bereik
+Generalization	Generalisatie
+Geo-\nprocessing	Geo-\nverwerking
+GeoJSON or CSV	GeoJSON of CSV
+Geometry	Geometrie
+Geoprocessing	Geoverwerking
+Geoprocessing history.	Geschiedenis van geoverwerking.
+Geoprocessing Pane	Geoverwerkingsvenster
+Go	Ga
+Go back to the previous extent.	Terug naar het vorige bereik.
+Go forward to the next extent.	Verder naar het volgende bereik.
+Go to a saved extent or save the current one.	Naar een opgeslagen bereik gaan of het huidige opslaan.
+Go To Bookmark	Naar bladwijzer gaan
+Go To XY	Ga naar XY
+Graduated Colors	Gegradueerde kleuren
+Graticule	Graticule
+Greys	Grijzen
+Group Option	Groeperingsoptie
+Halo	Halo
+Harbour (qualitative)	Haven (kwalitatief)
+Help	Help
+History	Geschiedenis
+Home	Home
+Identify	Identificeren
+Import\nProject	Project\nimporteren
+In Beyond	Ingezoomd voorbij
+In project	In project
+Input Features	Invoerobjecten
+Input Polygons	Invoerpolygonen
+Input Rows	Invoerrijen
+Input Summary Features	Invoerobjecten voor samenvatting
+Input Table	Invoertabel
+Inquiry	Opvragen
+Insert	Invoegen
+Interface font: {font}	Interfacelettertype: {font}
+Invalid: {error}	Ongeldig: {error}
+Invert	Omkeren
+Invert the selection.	De selectie omkeren.
+IS NULL	IS NULL
+keep current	huidige behouden
+Keyboard Shortcuts	Sneltoetsen
+Keyboard shortcuts.	Sneltoetsen.
+Kilometers	Kilometer
+Label	Label
+Label Class	Labelklasse
+Label Field	Labelveld
+Labeling	Labels
+Lagoon	Lagune
+Language	Taal
+Last map render time	Laatste rendertijd van de kaart
+Latitude (Y)	Breedtegraad (Y)
+Layer	Laag
+Layer From\nSelection	Laag uit\nselectie
+Layers	Lagen
+Layers and Table Views	Lagen en tabelweergaven
+LIKE	LIKE
+Limit which features draw with a SQL expression.	Beperken welke objecten worden getekend met een SQL-expressie.
+Line color	Lijnkleur
+Line width	Lijndikte
+LineString	LineString
+List Commands	Opdrachten weergeven
+Locate	Lokaliseren
+Location	Locatie
+Long	Lang geheel getal
+Longitude (X)	Lengtegraad (X)
+Major Lakes	Grote meren
+Major Rivers	Grote rivieren
+Make a new layer of the selected features.	Een nieuwe laag maken van de geselecteerde objecten.
+Make Layer From Selected Features	Laag maken van geselecteerde objecten
+Manage Edits	Bewerkingen beheren
+Map	Kaart
+Map › Layer	Kaart › Laag
+Maps	Kaarten
+Marker	Markering
+Measure	Meten
+Measure Area	Oppervlakte meten
+Measure Distance	Afstand meten
+Measure geodesic distances and areas on the map.	Geodetische afstanden en oppervlakten op de kaart meten.
+Merges polygons that share a field value into one feature per value.	Voegt polygonen met dezelfde veldwaarde samen tot één object per waarde.
+Meters	Meter
+Method	Methode
+Midnight	Middernacht
+Miles	Mijl
+Minimum Bounding Geometry	Minimale begrenzende geometrie
+Mod+	Mod+
+Mouse wheel	Muiswiel
+Move Down	Omlaag
+Move Up	Omhoog
+Name	Naam
+Natural Breaks (Jenks)	Natuurlijke grenzen (Jenks)
+Natural Earth	Natural Earth
+Navigate	Navigeren
+Navigation	Navigatie
+New	Nieuw
+New\nBookmark	Nieuwe\nbladwijzer
+New\nMap	Nieuwe\nkaart
+New / Open / Save project	Project nieuw / openen / opslaan
+New Bookmark	Nieuwe bladwijzer
+New Bookmark…	Nieuwe bladwijzer…
+New Map	Nieuwe kaart
+New Project	Nieuw project
+New project	Nieuw project
+New Selection	Nieuwe selectie
+Next	Volgende
+Next Extent	Volgend bereik
+No	Nee
+No bookmarks yet	Nog geen bladwijzers
+No standalone tables	Geen zelfstandige tabellen
+None	Geen
+North	Noord
+Not saved yet	Nog niet opgeslagen
+Ocean	Oceaan
+OID	OID
+Only features matching this expression draw in {layer}.	Alleen objecten die aan deze expressie voldoen worden getekend in {layer}.
+Open	Openen
+Open a .rgisx project	Een .rgisx-project openen
+Open a RustGIS project.	Een RustGIS-project openen.
+Open folder	Map openen
+Open Project	Project openen
+Open project	Project openen
+Open Project (from text)	Project openen (uit tekst)
+Open the attribute table of the selected layer.	De attributentabel van de geselecteerde laag openen.
+Open the layer's attribute table.	De attributentabel van de laag openen.
+Open the layer's table.	De tabel van de laag openen.
+Open the selected layer's table.	De tabel van de geselecteerde laag openen.
+Open the Symbology pane.	Het symbologievenster openen.
+Open, save and create projects	Projecten openen, opslaan en maken
+Open…	Openen…
+OR	OR
+Out Beyond	Uitgezoomd voorbij
+Outline	Omtrek
+Outline color	Omtrekkleur
+Outline width	Omtrekdikte
+Output	Uitvoer
+Output Name	Uitvoernaam
+Overlay	Overlay
+Pan (Explore) · any tool	Pannen (Verkennen) · elk gereedschap
+Pan to a longitude/latitude.	Pannen naar een lengte-/breedtegraad.
+Pan with the mouse, zoom with the wheel and click features to see their attributes.	Pan met de muis, zoom met het wiel en klik op objecten om hun attributen te zien.
+Paper	Papier
+Parent folder	Bovenliggende map
+PNG image	PNG-afbeelding
+Point	Punt
+Polygon	Polygoon
+Polyline	Polylijn
+Populated Places	Bewoonde plaatsen
+Previous	Vorige
+Previous Extent	Vorig bereik
+Primary\nSymbology	Primaire\nsymbologie
+Primary symbology	Primaire symbologie
+Project	Project
+Project Info	Projectinfo
+Proportional Symbols	Proportionele symbolen
+Proximity	Nabijheid
+Quantile	Kwantiel
+Quick Access Toolbar	Werkbalk Snelle toegang
+Redo	Opnieuw
+Redo the change you undid.	De ongedaan gemaakte wijziging opnieuw uitvoeren.
+Redo {action}	{action} opnieuw
+Red–Blue	Rood–Blauw
+Remove	Verwijderen
+Remove Bookmark	Bladwijzer verwijderen
+Remove From Current Selection	Verwijderen uit huidige selectie
+Remove the layer from the map.	De laag van de kaart verwijderen.
+Removes the parts of polygon features that overlap erase polygons.	Verwijdert de delen van polygoonobjecten die overlappen met de wispolygonen.
+Removes vertices that deviate less than a tolerance (Douglas–Peucker).	Verwijdert hoekpunten die minder dan een tolerantie afwijken (Douglas–Peucker).
+Rename	Hernoemen
+Rename Layer	Laag hernoemen
+Rename Map	Kaart hernoemen
+Rename Project	Project hernoemen
+Rename…	Hernoemen…
+Ribbon feature coverage: {done} of {total} features ({pct}%).	Dekking lintfuncties: {done} van {total} functies ({pct}%).
+Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Lintpariteit: {done} van {total} lintfuncties hebben een RustGIS-opdracht.
+Run	Uitvoeren
+Run Tool	Gereedschap uitvoeren
+RustGIS	RustGIS
+RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS is een opensource desktop-GIS geschreven in puur Rust. Het lint volgt de vertrouwde werkwijze van desktop-GIS; elke actie is een opdracht die je ook vanaf de opdrachtregel kunt uitvoeren.
+RustGIS project	RustGIS-project
+Sample data (Natural Earth)	Voorbeeldgegevens (Natural Earth)
+Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Voorbeeldgegevens © Natural Earth (publiek domein). RustGIS valt onder de Apache-2.0-licentie.
+Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	Voorbeeldgegevens: Natural Earth (publiek domein). Licentie Apache-2.0.
+Save	Opslaan
+Save As	Opslaan als
+Save Project	Project opslaan
+Save project	Project opslaan
+Save Project As	Project opslaan als
+Save the current extent as a bookmark.	Het huidige bereik opslaan als bladwijzer.
+Save the project under a new name.	Het project onder een nieuwe naam opslaan.
+Save the project with your edits.	Het project met je bewerkingen opslaan.
+Scale 1:	Schaal 1:
+Search commands — e.g. buffer, basemap, labels	Opdrachten zoeken — bijv. buffer, basiskaart, labels
+Search Distance (km)	Zoekafstand (km)
+See the tools you've run.	De uitgevoerde gereedschappen bekijken.
+Select	Selecteren
+Select (click)	Selecteren (klik)
+Select (rectangle)	Selecteren (rechthoek)
+select a layer in the Contents pane first	selecteer eerst een laag in het venster Inhoud
+Select a layer in the Contents pane.	Selecteer een laag in het venster Inhoud.
+Select All	Alles selecteren
+Select By\nAttributes	Selecteren op\nattributen
+Select By\nLocation	Selecteren op\nlocatie
+Select By Attributes	Selecteren op attributen
+Select every feature.	Elk object selecteren.
+Select features by their spatial relationship.	Objecten selecteren op hun ruimtelijke relatie.
+Select features on the map.	Objecten op de kaart selecteren.
+Select features that intersect another layer.	Objecten selecteren die een andere laag snijden.
+Select features with a SQL expression.	Objecten selecteren met een SQL-expressie.
+Select Layer	Laag selecteren
+Select Layer By Attribute	Laag selecteren op attribuut
+Select Layer By Location	Laag selecteren op locatie
+Select Rows	Rijen selecteren
+Select rows with a SQL expression.	Rijen selecteren met een SQL-expressie.
+Select Subset From Current Selection	Subset selecteren uit huidige selectie
+Selectable	Selecteerbaar
+Selected	Geselecteerd
+Selected Features: {n}	Geselecteerde objecten: {n}
+Selected only	Alleen geselecteerde
+Selecting Features	Objecten selecteren
+Selection	Selectie
+Selection Type	Selectietype
+Selects features that intersect features in another layer.	Selecteert objecten die objecten in een andere laag snijden.
+Selects features with a SQL where clause, e.g. pop_est > 1000000.	Selecteert objecten met een SQL-where-clausule, bijv. pop_est > 1000000.
+Set Map Tool	Kaartgereedschap instellen
+Set Scale	Schaal instellen
+Shape	Vorm
+Share	Delen
+Share › Output	Delen › Uitvoer
+Shift+	Shift+
+Shift+drag	Shift+slepen
+Shortcuts	Sneltoetsen
+Show latitude/longitude lines on the basemap.	Lengte- en breedtelijnen op de basiskaart tonen.
+Show or hide the Catalog pane.	Het catalogusvenster tonen of verbergen.
+Show or hide the Contents pane.	Het venster Inhoud tonen of verbergen.
+Show or hide the Geoprocessing pane.	Het geoverwerkingsvenster tonen of verbergen.
+Show or hide the layer.	De laag tonen of verbergen.
+Show the Symbology pane for the selected layer.	Het symbologievenster voor de geselecteerde laag tonen.
+Simplify	Vereenvoudigen
+Single Symbol	Enkel symbool
+Size	Grootte
+Source	Bron
+South	Zuid
+Square	Vierkant
+Standalone Tables	Zelfstandige tabellen
+Star	Ster
+Start	Start
+Statistics	Statistieken
+Statistics Field	Statistiekveld
+Status Bar	Statusbalk
+Summarize	Samenvatten
+Summarize\nWithin	Samenvatten\nbinnen
+Summarize Within	Samenvatten binnen
+Summary\nStatistics	Samenvattende\nstatistieken
+Summary Statistics	Samenvattende statistieken
+Switch	Wisselen
+Switch between light and dark themes.	Wisselen tussen licht en donker thema.
+Switch Selection	Selectie wisselen
+Switch selection	Selectie wisselen
+Symbol	Symbool
+Symbol Color	Symboolkleur
+Symbology	Symbologie
+Symbology Pane	Symbologievenster
+Table	Tabel
+Tables	Tabellen
+Text	Tekst
+Text Symbol	Tekstsymbool
+the map has no layers	de kaart heeft geen lagen
+Thermal	Thermisch
+This map has no layers yet.	Deze kaart heeft nog geen lagen.
+Toggle Dark Mode	Donkere modus aan/uit
+Tolerance (km)	Tolerantie (km)
+Toolbox	Gereedschapskist
+Toolboxes	Gereedschapskisten
+Tools	Gereedschappen
+Tools you run appear here.	Uitgevoerde gereedschappen verschijnen hier.
+Total {total}   ·   Segment {segment}	Totaal {total}   ·   Segment {segment}
+Transparency	Transparantie
+Triangle	Driehoek
+Turn Labels Off	Labels uitschakelen
+Turn labels on or off for the selected layer.	Labels voor de geselecteerde laag in- of uitschakelen.
+Turn labels on or off.	Labels in- of uitschakelen.
+Unavailable: {reason}	Niet beschikbaar: {reason}
+Undo	Ongedaan maken
+Undo / Redo	Ongedaan maken / Opnieuw
+Undo the last change.	De laatste wijziging ongedaan maken.
+Undo {action}	{action} ongedaan maken
+Unique Values	Unieke waarden
+Units	Eenheden
+Valid expression · {n} matching rows	Geldige expressie · {n} overeenkomende rijen
+Vector data	Vectorgegevens
+Version {version}	Versie {version}
+View	Beeld
+View › Windows	Beeld › Vensters
+Visibility	Zichtbaarheid
+Visibility Range	Zichtbaarheidsbereik
+Visible	Zichtbaar
+Welcome to RustGIS	Welkom bij RustGIS
+West	West
+WGS 84 / Web Mercator	WGS 84 / Web Mercator
+Where	Waar
+Where Clause	Where-clausule
+Windows	Vensters
+World	Wereld
+World Atlas	Wereldatlas
+World Atlas Sample	Voorbeeld Wereldatlas
+World Countries	Landen van de wereld
+Yes	Ja
+Zoom about the pointer	Zoomen rond de aanwijzer
+Zoom In	Inzoomen
+Zoom in	Inzoomen
+Zoom in / out	In- / uitzoomen
+Zoom in on the centre of the map.	Inzoomen op het midden van de kaart.
+Zoom in · finish a sketch	Inzoomen · schets voltooien
+Zoom Out	Uitzoomen
+Zoom out	Uitzoomen
+Zoom out from the centre of the map.	Uitzoomen vanuit het midden van de kaart.
+Zoom To	Zoomen naar
+Zoom To\nLayer	Zoomen\nnaar laag
+Zoom to a box (Explore)	Zoomen naar een kader (Verkennen)
+Zoom To Layer	Zoomen naar laag
+Zoom To Selection	Zoomen naar selectie
+Zoom to selection	Zoomen naar selectie
+Zoom to the extent of all layers.	Zoomen naar het bereik van alle lagen.
+Zoom to the layer's extent.	Zoomen naar het bereik van de laag.
+Zoom to the selected features.	Zoomen naar de geselecteerde objecten.
+Zoom to the selection.	Zoomen naar de selectie.
+Zoom to the whole world.	Zoomen naar de hele wereld.
+Zoom To World	Zoomen naar wereld
+⌘K	⌘K

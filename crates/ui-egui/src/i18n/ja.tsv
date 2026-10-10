@@ -1,0 +1,544 @@
+# ja interface catalog: English<TAB>translation
+<None>	<なし>
+A blank map with a basemap	ベースマップ付きの空白マップ
+A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	純粋な Rust で書かれた高速なオープンソースのデスクトップ GIS。デスクトップ GIS のリボン ワークフローを備えています：マップとレイヤー、シンボル、ラベリング、選択、編集、ジオプロセシング、エクスポート。
+A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	値、フィールド、またはそれらを + − × ÷ で結合したもの。選択した行に適用され、何も選択されていない場合はすべての行に適用されます。
+About	バージョン情報
+About RustGIS	RustGIS について
+About RustGIS.	RustGIS について。
+Activate Map	マップをアクティブ化
+Add	追加
+Add\nData	データの\n追加
+Add\nField	フィールドの\n追加
+Add a field to the selected layer.	選択したレイヤーにフィールドを追加します。
+Add a field.	フィールドを追加します。
+Add a new map to the project.	プロジェクトに新しいマップを追加します。
+Add Data	データの追加
+Add Data (from text)	データの追加（テキストから）
+Add Data…	データの追加…
+Add Field	フィールドの追加
+Add field	フィールドの追加
+Add GeoJSON, CSV or Shapefile data to the map.	GeoJSON、CSV、Shapefile データをマップに追加します。
+Add sample countries	サンプルの国データを追加
+Add Sample Data	サンプル データの追加
+Add To Current Selection	現在の選択に追加
+Add vector data.	ベクター データを追加します。
+Adds geodesic area (km²), length (km) or centroid coordinates as fields.	測地線面積（km²）、長さ（km）、または重心座標をフィールドとして追加します。
+All	すべて
+All files	すべてのファイル
+Analysis	解析
+AND	AND
+Apply	適用
+Area {area}   ·   Perimeter {perimeter}	面積 {area}   ·   周長 {perimeter}
+Atlas	アトラス
+Attribute\nTable	属性\nテーブル
+Attribute Table	属性テーブル
+Attribute table	属性テーブル
+Attributes	属性
+Automatic	自動
+Automatic (system language)	自動（システムの言語）
+Back to Explore; cancel a sketch	マップ操作に戻る；スケッチをキャンセル
+Back to the map	マップに戻る
+Back to tools	ツールに戻る
+Basemap	ベースマップ
+Basemaps	ベースマップ
+Blank	空白
+Bold	太字
+Bold label text.	ラベル テキストを太字にします。
+Bookmarks	ブックマーク
+Boolean	ブール型
+Bounding\nGeometry	境界\nジオメトリ
+Browse the geoprocessing toolbox.	ジオプロセシング ツールボックスを参照します。
+Browse the project's maps, tables and folders.	プロジェクトのマップ、テーブル、フォルダーを参照します。
+Buffer	バッファー
+By\nAttributes	属性\n条件
+By\nLocation	空間\n条件
+Calculate	計算
+Calculate\nField	フィールド\n演算
+Calculate\nGeometry	ジオメトリ\n演算
+Calculate Field	フィールド演算
+Calculate field	フィールド演算
+Calculate field values.	フィールド値を計算します。
+Calculate Geometry Attributes	ジオメトリ属性の計算
+Can't read this folder	このフォルダーを読み取れません
+Cancel	キャンセル
+CARGO_PKG_VERSION	CARGO_PKG_VERSION
+Cartography	カートグラフィ
+Case Field	ケース フィールド
+Catalog	カタログ
+Catalog\nPane	カタログ\nウィンドウ
+Change the map's backdrop.	マップの背景を変更します。
+Choose how the layer is drawn.	レイヤーの描画方法を選択します。
+Choose the interface language.	インターフェイスの言語を選択します。
+Circle	円
+Classes	クラス
+Clear	クリア
+Clear\nLimits	制限の\nクリア
+Clear History	履歴のクリア
+Clear Selection	選択の解除
+Clear selection	選択の解除
+Clear the selection in every layer.	すべてのレイヤーの選択を解除します。
+Clear the selection.	選択を解除します。
+Click or drag a box to select features. Shift adds, Ctrl removes.	クリックまたはボックスをドラッグしてフィーチャを選択します。Shift で追加、Ctrl で削除します。
+Click or drag a box · Shift adds · Ctrl removes	クリックまたはボックスをドラッグ · Shift で追加 · Ctrl で削除
+Click the corners of the area · double-click to finish	領域の角をクリック · ダブルクリックで終了
+Click the map to add a point	マップをクリックしてポイントを追加
+Click to add points · double-click to finish · Esc to stop	クリックでポイントを追加 · ダブルクリックで終了 · Esc で停止
+Click to add vertices · double-click to close the polygon	クリックで頂点を追加 · ダブルクリックでポリゴンを閉じる
+Click to add vertices · double-click to finish the line	クリックで頂点を追加 · ダブルクリックでラインを終了
+Click to switch between decimal degrees and DMS	クリックで十進経緯度と度分秒を切り替え
+Clip	クリップ
+Clip Features	フィーチャのクリップ
+Close	閉じる
+Close Table	テーブルを閉じる
+Close table	テーブルを閉じる
+Collapse or expand the ribbon	リボンの折りたたみ/展開
+Collapse the ribbon (Ctrl+F1)	リボンを折りたたむ (Ctrl+F1)
+Color	色
+Color Scheme	配色
+Color scheme	配色
+Command\nSearch	コマンド\n検索
+Command Search	コマンド検索
+Completed	完了
+Compute a field's values.	フィールドの値を計算します。
+Contents	コンテンツ
+Conversion	変換
+Copies the (selected) features of a layer to a new layer.	レイヤーの（選択された）フィーチャを新しいレイヤーにコピーします。
+Copy Coordinates	座標のコピー
+Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	フィールドの個数、合計、平均、最小、最大、標準偏差。必要に応じてケース フィールドごとに集計します。
+Countries, cities, rivers and lakes	国、都市、河川、湖沼
+Counts the points that fall inside each polygon.	各ポリゴン内に含まれるポイントの数をカウントします。
+Create	作成
+Create a new project or start from the World Atlas sample.	新しいプロジェクトを作成するか、World Atlas サンプルから開始します。
+Create Feature	フィーチャの作成
+Create Line	ラインの作成
+Create Point	ポイントの作成
+Create Polygon	ポリゴンの作成
+Creates a point inside each input feature.	各入力フィーチャの内部にポイントを作成します。
+Creates polygons around input features at a given distance.	入力フィーチャの周囲に指定した距離でポリゴンを作成します。
+Ctrl+	Ctrl+
+Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
+Ctrl+F1	Ctrl+F1
+Ctrl+K	Ctrl+K
+Ctrl+N / O / S	Ctrl+N / O / S
+Ctrl+T	Ctrl+T
+Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
+Current Project	現在のプロジェクト
+Dark\nMode	ダーク\nモード
+Data	データ
+Data Design	データ設計
+Data Management	データ管理
+Data type	データ型
+Data…	データ…
+Definition\nQuery	定義\nクエリ
+Definition Query	定義クエリ
+Definition query	定義クエリ
+Definition Query…	定義クエリ…
+Delete	削除
+Delete Field	フィールドの削除
+Delete Map	マップの削除
+Delete selected features	選択したフィーチャを削除
+Delete selected rows	選択した行を削除
+Delete the selected features.	選択したフィーチャを削除します。
+Details	詳細
+Details of the selected layer.	選択したレイヤーの詳細。
+Diamond	ひし形
+Display	表示
+Dissolve	ディゾルブ
+Dissolve Field	ディゾルブ フィールド
+Distance	距離
+Double	倍精度
+Double-click	ダブルクリック
+Double-click to add	ダブルクリックで追加
+Downloaded {name}	{name} をダウンロードしました
+Drag / middle-drag	ドラッグ / 中ボタン ドラッグ
+Drag a box or click to zoom in	ボックスをドラッグまたはクリックして拡大
+Drag a box to zoom into.	ボックスをドラッグして拡大します。
+Draw a halo around label text.	ラベル テキストの周囲にハローを描画します。
+Draw new features in the selected layer. Double-click to finish lines and polygons.	選択したレイヤーに新しいフィーチャを描画します。ラインとポリゴンはダブルクリックで終了します。
+Draw the layer at every scale.	すべての縮尺でレイヤーを描画します。
+Drawing	描画
+Drawing Order	描画順序
+Dusk	夕暮れ
+e.g.  pop_est / 1000000   or   'Africa'   or   name	例:  pop_est / 1000000   または   'Africa'   または   name
+e.g. continent = 'Europe'	例: continent = 'Europe'
+e.g. pop_est > 100000000 AND continent = 'Asia'	例: pop_est > 100000000 AND continent = 'Asia'
+East	東
+Edit	編集
+Edit Attribute	属性の編集
+Edit attributes in the table.	テーブルで属性を編集します。
+Effects	エフェクト
+Ember	残り火
+Encloses each feature, or all features, in its convex hull.	各フィーチャ、またはすべてのフィーチャを凸包で囲みます。
+Equal Interval	等間隔
+Erase	消去
+Erase Features	フィーチャの消去
+Esc	Esc
+Expand Legend	凡例を展開
+Expand the ribbon (Ctrl+F1)	リボンを展開 (Ctrl+F1)
+Explore	マップ操作
+Export	エクスポート
+Export\nFeatures	フィーチャの\nエクスポート
+Export\nMap	マップの\nエクスポート
+Export Features	フィーチャのエクスポート
+Export Features (tool)	フィーチャのエクスポート（ツール）
+Export Features…	フィーチャのエクスポート…
+Export Map	マップのエクスポート
+Export Map failed unexpectedly	マップのエクスポートが予期せず失敗しました
+Export Map…	マップのエクスポート…
+Export Table	テーブルのエクスポート
+Export the layer.	レイヤーをエクスポートします。
+Export the map view as a PNG image (with labels and a scale bar).	マップ ビューを PNG 画像としてエクスポートします（ラベルと縮尺記号付き）。
+Export the selected layer to GeoJSON or CSV.	選択したレイヤーを GeoJSON または CSV にエクスポートします。
+Expression	式
+Extract	抽出
+Extracts the parts of input features that fall inside clip polygons.	入力フィーチャのうち、クリップ ポリゴン内に含まれる部分を抽出します。
+Failed	失敗
+Feature	フィーチャ
+Feature\nTo Point	フィーチャ\n→ポイント
+Feature Layer	フィーチャ レイヤー
+Feature Layer › Drawing	フィーチャ レイヤー › 描画
+Feature To Point	フィーチャ → ポイント
+Features	フィーチャ
+Field	フィールド
+Field name	フィールド名
+Fields	フィールド
+Fields:	フィールド：
+Filter rows…	行をフィルター…
+Find a place by coordinates.	座標で場所を検索します。
+Find and run geoprocessing tools.	ジオプロセシング ツールを検索して実行します。
+Find any command by name (Ctrl+K).	名前で任意のコマンドを検索します（Ctrl+K）。
+Find Tools	ツールの検索
+Fixed Zoom In	固定ズームイン
+Fixed Zoom Out	固定ズームアウト
+Folders	フォルダー
+Forest	森林
+Full Extent	全体表示
+Full extent	全体表示
+Generalization	ジェネラライズ
+Geo-\nprocessing	ジオプロ\nセシング
+GeoJSON or CSV	GeoJSON または CSV
+Geometry	ジオメトリ
+Geoprocessing	ジオプロセシング
+Geoprocessing history.	ジオプロセシングの履歴。
+Geoprocessing Pane	ジオプロセシング ウィンドウ
+Go	移動
+Go back to the previous extent.	前の範囲に戻ります。
+Go forward to the next extent.	次の範囲に進みます。
+Go to a saved extent or save the current one.	保存した範囲に移動するか、現在の範囲を保存します。
+Go To Bookmark	ブックマークに移動
+Go To XY	XY に移動
+Graduated Colors	等級色
+Graticule	経緯線
+Greys	グレー
+Group Option	グループ オプション
+Halo	ハロー
+Harbour (qualitative)	港（定性）
+Help	ヘルプ
+History	履歴
+Home	ホーム
+Identify	個別属性
+Import\nProject	プロジェクトの\nインポート
+In Beyond	拡大の限界
+In project	プロジェクト内
+Input Features	入力フィーチャ
+Input Polygons	入力ポリゴン
+Input Rows	入力行
+Input Summary Features	入力集計フィーチャ
+Input Table	入力テーブル
+Inquiry	照会
+Insert	挿入
+Interface font: {font}	インターフェイスのフォント：{font}
+Invalid: {error}	無効：{error}
+Invert	反転
+Invert the selection.	選択を反転します。
+IS NULL	IS NULL
+keep current	現在のまま
+Keyboard Shortcuts	キーボード ショートカット
+Keyboard shortcuts.	キーボード ショートカット。
+Kilometers	キロメートル
+Label	ラベル
+Label Class	ラベル クラス
+Label Field	ラベル フィールド
+Labeling	ラベリング
+Lagoon	ラグーン
+Language	言語
+Last map render time	前回のマップ描画時間
+Latitude (Y)	緯度（Y）
+Layer	レイヤー
+Layer From\nSelection	選択から\nレイヤー作成
+Layers	レイヤー
+Layers and Table Views	レイヤーとテーブル ビュー
+LIKE	LIKE
+Limit which features draw with a SQL expression.	SQL 式で描画するフィーチャを制限します。
+Line color	ラインの色
+Line width	ラインの幅
+LineString	ライン ストリング
+List Commands	コマンド一覧
+Locate	位置
+Location	場所
+Long	長整数
+Longitude (X)	経度（X）
+Major Lakes	主要な湖沼
+Major Rivers	主要な河川
+Make a new layer of the selected features.	選択したフィーチャから新しいレイヤーを作成します。
+Make Layer From Selected Features	選択したフィーチャからレイヤーを作成
+Manage Edits	編集の管理
+Map	マップ
+Map › Layer	マップ › レイヤー
+Maps	マップ
+Marker	マーカー
+Measure	計測
+Measure Area	面積の計測
+Measure Distance	距離の計測
+Measure geodesic distances and areas on the map.	マップ上で測地線距離と面積を計測します。
+Merges polygons that share a field value into one feature per value.	フィールド値が共通するポリゴンを、値ごとに 1 つのフィーチャに結合します。
+Meters	メートル
+Method	手法
+Midnight	真夜中
+Miles	マイル
+Minimum Bounding Geometry	最小境界ジオメトリ
+Mod+	Mod+
+Mouse wheel	マウス ホイール
+Move Down	下へ移動
+Move Up	上へ移動
+Name	名前
+Natural Breaks (Jenks)	自然分類（Jenks）
+Natural Earth	Natural Earth
+Navigate	ナビゲート
+Navigation	ナビゲーション
+New	新規
+New\nBookmark	新しい\nブックマーク
+New\nMap	新しい\nマップ
+New / Open / Save project	プロジェクトの新規作成 / 開く / 保存
+New Bookmark	新しいブックマーク
+New Bookmark…	新しいブックマーク…
+New Map	新しいマップ
+New Project	新しいプロジェクト
+New project	新しいプロジェクト
+New Selection	新規選択
+Next	次へ
+Next Extent	次の範囲
+No	いいえ
+No bookmarks yet	ブックマークはまだありません
+No standalone tables	スタンドアロン テーブルはありません
+None	なし
+North	北
+Not saved yet	未保存
+Ocean	海洋
+OID	OID
+Only features matching this expression draw in {layer}.	この式に一致するフィーチャのみが {layer} に描画されます。
+Open	開く
+Open a .rgisx project	.rgisx プロジェクトを開く
+Open a RustGIS project.	RustGIS プロジェクトを開きます。
+Open folder	フォルダーを開く
+Open Project	プロジェクトを開く
+Open project	プロジェクトを開く
+Open Project (from text)	プロジェクトを開く（テキストから）
+Open the attribute table of the selected layer.	選択したレイヤーの属性テーブルを開きます。
+Open the layer's attribute table.	レイヤーの属性テーブルを開きます。
+Open the layer's table.	レイヤーのテーブルを開きます。
+Open the selected layer's table.	選択したレイヤーのテーブルを開きます。
+Open the Symbology pane.	シンボル ウィンドウを開きます。
+Open, save and create projects	プロジェクトを開く、保存する、作成する
+Open…	開く…
+OR	OR
+Out Beyond	縮小の限界
+Outline	アウトライン
+Outline color	アウトラインの色
+Outline width	アウトラインの幅
+Output	出力
+Output Name	出力名
+Overlay	オーバーレイ
+Pan (Explore) · any tool	画面移動（マップ操作）· 任意のツール
+Pan to a longitude/latitude.	経度/緯度に画面移動します。
+Pan with the mouse, zoom with the wheel and click features to see their attributes.	マウスで画面移動、ホイールでズームし、フィーチャをクリックすると属性が表示されます。
+Paper	紙
+Parent folder	親フォルダー
+PNG image	PNG 画像
+Point	ポイント
+Polygon	ポリゴン
+Polyline	ポリライン
+Populated Places	人口集中地
+Previous	前へ
+Previous Extent	前の範囲
+Primary\nSymbology	プライマリ\nシンボル
+Primary symbology	プライマリ シンボル
+Project	プロジェクト
+Project Info	プロジェクト情報
+Proportional Symbols	比例シンボル
+Proximity	近接
+Quantile	等量
+Quick Access Toolbar	クイック アクセス ツールバー
+Redo	やり直し
+Redo the change you undid.	元に戻した変更をやり直します。
+Redo {action}	{action} をやり直す
+Red–Blue	赤–青
+Remove	削除
+Remove Bookmark	ブックマークの削除
+Remove From Current Selection	現在の選択から除外
+Remove the layer from the map.	マップからレイヤーを削除します。
+Removes the parts of polygon features that overlap erase polygons.	ポリゴン フィーチャのうち、消去ポリゴンと重なる部分を削除します。
+Removes vertices that deviate less than a tolerance (Douglas–Peucker).	許容値未満しか外れない頂点を削除します（Douglas–Peucker）。
+Rename	名前の変更
+Rename Layer	レイヤー名の変更
+Rename Map	マップ名の変更
+Rename Project	プロジェクト名の変更
+Rename…	名前の変更…
+Ribbon feature coverage: {done} of {total} features ({pct}%).	リボン機能のカバー率：{total} 件中 {done} 件の機能（{pct}%）。
+Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	リボンの対応状況：{total} 件のリボン機能のうち {done} 件に RustGIS コマンドがあります。
+Run	実行
+Run Tool	ツールの実行
+RustGIS	RustGIS
+RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS は純粋な Rust で書かれたオープンソースのデスクトップ GIS です。リボンはおなじみのデスクトップ GIS のワークフローに従っており、すべての操作はコマンドとしてコマンド ラインからも実行できます。
+RustGIS project	RustGIS プロジェクト
+Sample data (Natural Earth)	サンプル データ（Natural Earth）
+Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	サンプル データ © Natural Earth（パブリック ドメイン）。RustGIS は Apache-2.0 ライセンスで提供されています。
+Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	サンプル データ：Natural Earth（パブリック ドメイン）。Apache-2.0 ライセンス。
+Save	保存
+Save As	名前を付けて保存
+Save Project	プロジェクトの保存
+Save project	プロジェクトの保存
+Save Project As	名前を付けてプロジェクトを保存
+Save the current extent as a bookmark.	現在の範囲をブックマークとして保存します。
+Save the project under a new name.	プロジェクトを新しい名前で保存します。
+Save the project with your edits.	編集内容を含めてプロジェクトを保存します。
+Scale 1:	縮尺 1:
+Search commands — e.g. buffer, basemap, labels	コマンドを検索（例: バッファー、ベースマップ、ラベル）
+Search Distance (km)	検索距離（km）
+See the tools you've run.	実行したツールを表示します。
+Select	選択
+Select (click)	選択（クリック）
+Select (rectangle)	選択（四角形）
+select a layer in the Contents pane first	先にコンテンツ ウィンドウでレイヤーを選択してください
+Select a layer in the Contents pane.	コンテンツ ウィンドウでレイヤーを選択してください。
+Select All	すべて選択
+Select By\nAttributes	属性検索\nで選択
+Select By\nLocation	空間検索\nで選択
+Select By Attributes	属性検索で選択
+Select every feature.	すべてのフィーチャを選択します。
+Select features by their spatial relationship.	空間的な関係でフィーチャを選択します。
+Select features on the map.	マップ上でフィーチャを選択します。
+Select features that intersect another layer.	別のレイヤーと交差するフィーチャを選択します。
+Select features with a SQL expression.	SQL 式でフィーチャを選択します。
+Select Layer	レイヤーの選択
+Select Layer By Attribute	属性検索によるレイヤーの選択
+Select Layer By Location	空間検索によるレイヤーの選択
+Select Rows	行の選択
+Select rows with a SQL expression.	SQL 式で行を選択します。
+Select Subset From Current Selection	現在の選択から絞り込み
+Selectable	選択可能
+Selected	選択済み
+Selected Features: {n}	選択フィーチャ：{n}
+Selected only	選択のみ
+Selecting Features	フィーチャの選択
+Selection	選択
+Selection Type	選択タイプ
+Selects features that intersect features in another layer.	別のレイヤーのフィーチャと交差するフィーチャを選択します。
+Selects features with a SQL where clause, e.g. pop_est > 1000000.	SQL の WHERE 句でフィーチャを選択します。例: pop_est > 1000000。
+Set Map Tool	マップ ツールの設定
+Set Scale	縮尺の設定
+Shape	形状
+Share	共有
+Share › Output	共有 › 出力
+Shift+	Shift+
+Shift+drag	Shift+ドラッグ
+Shortcuts	ショートカット
+Show latitude/longitude lines on the basemap.	ベースマップに経緯線を表示します。
+Show or hide the Catalog pane.	カタログ ウィンドウの表示/非表示を切り替えます。
+Show or hide the Contents pane.	コンテンツ ウィンドウの表示/非表示を切り替えます。
+Show or hide the Geoprocessing pane.	ジオプロセシング ウィンドウの表示/非表示を切り替えます。
+Show or hide the layer.	レイヤーの表示/非表示を切り替えます。
+Show the Symbology pane for the selected layer.	選択したレイヤーのシンボル ウィンドウを表示します。
+Simplify	単純化
+Single Symbol	単一シンボル
+Size	サイズ
+Source	ソース
+South	南
+Square	正方形
+Standalone Tables	スタンドアロン テーブル
+Star	星
+Start	開始
+Statistics	統計
+Statistics Field	統計フィールド
+Status Bar	ステータス バー
+Summarize	集計
+Summarize\nWithin	範囲内で\n集計
+Summarize Within	範囲内で集計
+Summary\nStatistics	要約\n統計量
+Summary Statistics	要約統計量
+Switch	切り替え
+Switch between light and dark themes.	ライト テーマとダーク テーマを切り替えます。
+Switch Selection	選択の切り替え
+Switch selection	選択の切り替え
+Symbol	シンボル
+Symbol Color	シンボルの色
+Symbology	シンボル
+Symbology Pane	シンボル ウィンドウ
+Table	テーブル
+Tables	テーブル
+Text	テキスト
+Text Symbol	テキスト シンボル
+the map has no layers	マップにレイヤーがありません
+Thermal	サーマル
+This map has no layers yet.	このマップにはまだレイヤーがありません。
+Toggle Dark Mode	ダーク モードの切り替え
+Tolerance (km)	許容値（km）
+Toolbox	ツールボックス
+Toolboxes	ツールボックス
+Tools	ツール
+Tools you run appear here.	実行したツールがここに表示されます。
+Total {total}   ·   Segment {segment}	合計 {total}   ·   区間 {segment}
+Transparency	透過表示
+Triangle	三角形
+Turn Labels Off	ラベルをオフ
+Turn labels on or off for the selected layer.	選択したレイヤーのラベルのオン/オフを切り替えます。
+Turn labels on or off.	ラベルのオン/オフを切り替えます。
+Unavailable: {reason}	利用不可：{reason}
+Undo	元に戻す
+Undo / Redo	元に戻す / やり直し
+Undo the last change.	最後の変更を元に戻します。
+Undo {action}	{action} を元に戻す
+Unique Values	個別値
+Units	単位
+Valid expression · {n} matching rows	有効な式 · 一致する行 {n} 件
+Vector data	ベクター データ
+Version {version}	バージョン {version}
+View	表示
+View › Windows	表示 › ウィンドウ
+Visibility	表示設定
+Visibility Range	表示縮尺範囲
+Visible	表示
+Welcome to RustGIS	RustGIS へようこそ
+West	西
+WGS 84 / Web Mercator	WGS 84 / Web Mercator
+Where	条件
+Where Clause	WHERE 句
+Windows	ウィンドウ
+World	世界
+World Atlas	World Atlas
+World Atlas Sample	World Atlas サンプル
+World Countries	世界の国々
+Yes	はい
+Zoom about the pointer	ポインターを中心にズーム
+Zoom In	ズームイン
+Zoom in	ズームイン
+Zoom in / out	ズームイン / ズームアウト
+Zoom in on the centre of the map.	マップの中心でズームインします。
+Zoom in · finish a sketch	ズームイン · スケッチを終了
+Zoom Out	ズームアウト
+Zoom out	ズームアウト
+Zoom out from the centre of the map.	マップの中心からズームアウトします。
+Zoom To	ズーム
+Zoom To\nLayer	レイヤーに\nズーム
+Zoom to a box (Explore)	ボックスにズーム（マップ操作）
+Zoom To Layer	レイヤーにズーム
+Zoom To Selection	選択範囲にズーム
+Zoom to selection	選択範囲にズーム
+Zoom to the extent of all layers.	すべてのレイヤーの範囲にズームします。
+Zoom to the layer's extent.	レイヤーの範囲にズームします。
+Zoom to the selected features.	選択したフィーチャにズームします。
+Zoom to the selection.	選択範囲にズームします。
+Zoom to the whole world.	世界全体にズームします。
+Zoom To World	世界にズーム
+⌘K	⌘K

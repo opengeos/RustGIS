@@ -73,21 +73,21 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut open = true;
     let mut close = false;
-    egui::Window::new(title).id(egui::Id::new("dialog")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
+    egui::Window::new(tl!(title)).id(egui::Id::new("dialog")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
         ui.set_width(440.0);
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         match which {
             "selectByAttributes" => close = select_by_attributes(app, ui, &t),
             "goToXY" => {
                 egui::Grid::new("xy").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-                    ui.label("Longitude (X)");
+                    ui.label(tl!("Longitude (X)"));
                     ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).desired_width(200.0));
                     ui.end_row();
-                    ui.label("Latitude (Y)");
+                    ui.label(tl!("Latitude (Y)"));
                     ui.add(egui::TextEdit::singleline(&mut app.dialogs.b).desired_width(200.0));
                     ui.end_row();
-                    ui.label("Scale 1:");
-                    ui.add(egui::TextEdit::singleline(&mut app.dialogs.c).hint_text("keep current").desired_width(200.0));
+                    ui.label(tl!("Scale 1:"));
+                    ui.add(egui::TextEdit::singleline(&mut app.dialogs.c).hint_text(tl!("keep current")).desired_width(200.0));
                     ui.end_row();
                 });
                 close = buttons(app, ui, "Go", |app| {
@@ -99,16 +99,16 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 });
             }
             "bookmark" => {
-                ui.label("Name");
+                ui.label(tl!("Name"));
                 ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).desired_width(f32::INFINITY));
                 close = buttons(app, ui, "Create", |app| app.run("bookmark.add", json!({"name": app.dialogs.text})).map(|_| ()));
             }
             "addField" => {
                 egui::Grid::new("af").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-                    ui.label("Field name");
+                    ui.label(tl!("Field name"));
                     ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).desired_width(220.0));
                     ui.end_row();
-                    ui.label("Data type");
+                    ui.label(tl!("Data type"));
                     egui::ComboBox::from_id_salt("af_type").selected_text(app.dialogs.b.clone()).show_ui(ui, |ui| {
                         for ty in ["Long", "Double", "Text", "Boolean"] {
                             ui.selectable_value(&mut app.dialogs.b, ty.to_string(), ty);
@@ -121,7 +121,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             "calculateField" => {
                 let fields: Vec<String> = app.session.active_layer.and_then(|id| app.session.map().layer(id)).map(|l| l.dataset.fields.iter().map(|f| f.name.clone()).collect()).unwrap_or_default();
                 ui.horizontal(|ui| {
-                    ui.label("Field");
+                    ui.label(tl!("Field"));
                     egui::ComboBox::from_id_salt("cf_field").selected_text(app.dialogs.a.clone()).width(220.0).show_ui(ui, |ui| {
                         for f in &fields {
                             ui.selectable_value(&mut app.dialogs.a, f.clone(), f);
@@ -129,18 +129,18 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     });
                 });
                 ui.label(format!("{} =", app.dialogs.a));
-                ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).hint_text("e.g.  pop_est / 1000000   or   'Africa'   or   name").desired_width(f32::INFINITY));
-                ui.label(egui::RichText::new("A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.").small().weak());
+                ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).hint_text(tl!("e.g.  pop_est / 1000000   or   'Africa'   or   name")).desired_width(f32::INFINITY));
+                ui.label(egui::RichText::new(tl!("A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.")).small().weak());
                 close = buttons(app, ui, "Calculate", |app| app.run("edit.calculateField", json!({"field": app.dialogs.a, "expression": app.dialogs.text})).map(|_| ()));
             }
             "definitionQuery" => {
-                ui.label(egui::RichText::new(format!("Only features matching this expression draw in {}.", app.dialogs.layer)).weak());
-                ui.add(egui::TextEdit::multiline(&mut app.dialogs.text).hint_text("e.g. continent = 'Europe'").desired_rows(3).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+                ui.label(egui::RichText::new(crate::i18n::fmt("Only features matching this expression draw in {layer}.", &[("layer", &app.dialogs.layer)])).weak());
+                ui.add(egui::TextEdit::multiline(&mut app.dialogs.text).hint_text(tl!("e.g. continent = 'Europe'")).desired_rows(3).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
                 field_chips(app, ui);
                 close = buttons(app, ui, "Apply", |app| app.run("layer.definitionQuery", json!({"where": app.dialogs.text})).map(|_| ()));
             }
             _ => {
-                ui.label("Name");
+                ui.label(tl!("Name"));
                 ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).desired_width(f32::INFINITY));
                 close = buttons(app, ui, "Rename", |app| app.run("layer.rename", json!({"name": app.dialogs.text})).map(|_| ()));
             }
@@ -173,7 +173,7 @@ fn buttons(app: &mut RustGisApp, ui: &mut egui::Ui, ok: &str, f: impl FnOnce(&mu
                 Err(e) => app.dialogs.error = Some(e),
             }
         }
-        if ui.add(egui::Button::new("Cancel").min_size(vec2(84.0, 28.0))).clicked() {
+        if ui.add(egui::Button::new(tl!("Cancel")).min_size(vec2(84.0, 28.0))).clicked() {
             close = true;
         }
     });
@@ -188,7 +188,7 @@ fn field_chips(app: &mut RustGisApp, ui: &mut egui::Ui) {
         .map(|l| l.dataset.fields.iter().map(|f| f.name.clone()).collect())
         .unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new("Fields:").small().weak());
+        ui.label(egui::RichText::new(tl!("Fields:")).small().weak());
         for f in fields.iter().take(24) {
             if ui.small_button(f).clicked() {
                 if !app.dialogs.text.is_empty() && !app.dialogs.text.ends_with(' ') {
@@ -211,38 +211,38 @@ fn field_chips(app: &mut RustGisApp, ui: &mut egui::Ui) {
 fn select_by_attributes(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> bool {
     let layers: Vec<String> = app.session.map().layers.iter().map(|l| l.name.clone()).collect();
     egui::Grid::new("sba").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-        ui.label("Input Rows");
+        ui.label(tl!("Input Rows"));
         egui::ComboBox::from_id_salt("sba_layer").selected_text(app.dialogs.layer.clone()).width(260.0).show_ui(ui, |ui| {
             for l in &layers {
                 ui.selectable_value(&mut app.dialogs.layer, l.clone(), l);
             }
         });
         ui.end_row();
-        ui.label("Selection Type");
+        ui.label(tl!("Selection Type"));
         egui::ComboBox::from_id_salt("sba_mode")
             .selected_text(match app.dialogs.mode {
-                "add" => "Add To Current Selection",
-                "remove" => "Remove From Current Selection",
-                "subset" => "Select Subset From Current Selection",
-                _ => "New Selection",
+                "add" => tl!("Add To Current Selection"),
+                "remove" => tl!("Remove From Current Selection"),
+                "subset" => tl!("Select Subset From Current Selection"),
+                _ => tl!("New Selection"),
             })
             .width(260.0)
             .show_ui(ui, |ui| {
                 for (m, l) in [
-                    ("new", "New Selection"),
-                    ("add", "Add To Current Selection"),
-                    ("remove", "Remove From Current Selection"),
-                    ("subset", "Select Subset From Current Selection"),
+                    ("new", tl!("New Selection")),
+                    ("add", tl!("Add To Current Selection")),
+                    ("remove", tl!("Remove From Current Selection")),
+                    ("subset", tl!("Select Subset From Current Selection")),
                 ] {
                     ui.selectable_value(&mut app.dialogs.mode, m, l);
                 }
             });
         ui.end_row();
     });
-    ui.label(egui::RichText::new("Where").font(semibold(12.5)));
+    ui.label(egui::RichText::new(tl!("Where")).font(semibold(12.5)));
     ui.add(
         egui::TextEdit::multiline(&mut app.dialogs.text)
-            .hint_text("e.g. pop_est > 100000000 AND continent = 'Asia'")
+            .hint_text(tl!("e.g. pop_est > 100000000 AND continent = 'Asia'"))
             .desired_rows(3)
             .desired_width(f32::INFINITY)
             .font(egui::TextStyle::Monospace),
@@ -254,10 +254,14 @@ fn select_by_attributes(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> 
     match (&check, app.dialogs.text.trim().is_empty()) {
         (_, true) => {}
         (Some(Ok(rows)), _) => {
-            ui.label(egui::RichText::new(format!("Valid expression · {} matching rows", rows.len())).small().color(t.green));
+            ui.label(
+                egui::RichText::new(crate::i18n::fmt("Valid expression · {n} matching rows", &[("n", &rows.len().to_string())]))
+                    .small()
+                    .color(t.green),
+            );
         }
         (Some(Err(e)), _) => {
-            ui.label(egui::RichText::new(format!("Invalid: {e}")).small().color(t.red));
+            ui.label(egui::RichText::new(crate::i18n::fmt("Invalid: {error}", &[("error", e)])).small().color(t.red));
         }
         _ => {}
     }

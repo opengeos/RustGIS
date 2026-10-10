@@ -29,7 +29,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 egui::Color32::WHITE,
                 egui::Color32::WHITE,
             );
-            if resp.on_hover_text("Back to the map").clicked() {
+            if resp.on_hover_text(tl!("Back to the map")).clicked() {
                 app.ui.backstage = false;
             }
             ui.add_space(12.0);
@@ -90,11 +90,11 @@ fn start(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let (r, _) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::hover());
         app.paint_logo(ui, r);
         ui.add_space(6.0);
-        ui.label(egui::RichText::new("Welcome to RustGIS").font(semibold(26.0)));
+        ui.label(egui::RichText::new(tl!("Welcome to RustGIS")).font(semibold(26.0)));
     });
-    ui.label(egui::RichText::new("Create a new project or start from the World Atlas sample.").color(t.text_dim));
+    ui.label(egui::RichText::new(tl!("Create a new project or start from the World Atlas sample.")).color(t.text_dim));
     ui.add_space(24.0);
-    ui.label(egui::RichText::new("New Project").font(semibold(15.0)));
+    ui.label(egui::RichText::new(tl!("New Project")).font(semibold(15.0)));
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(18.0, 0.0);
@@ -113,19 +113,19 @@ fn start(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
     });
     ui.add_space(28.0);
-    ui.label(egui::RichText::new("Current Project").font(semibold(15.0)));
+    ui.label(egui::RichText::new(tl!("Current Project")).font(semibold(15.0)));
     ui.add_space(6.0);
     egui::Grid::new("proj_info").num_columns(2).spacing(vec2(16.0, 6.0)).show(ui, |ui| {
-        ui.label(egui::RichText::new("Name").color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Name")).color(t.text_dim));
         ui.label(&app.session.project.name);
         ui.end_row();
-        ui.label(egui::RichText::new("Location").color(t.text_dim));
-        ui.label(app.session.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Not saved yet".into()));
+        ui.label(egui::RichText::new(tl!("Location")).color(t.text_dim));
+        ui.label(app.session.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| tl!("Not saved yet").into()));
         ui.end_row();
-        ui.label(egui::RichText::new("Maps").color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Maps")).color(t.text_dim));
         ui.label(app.session.project.maps.len().to_string());
         ui.end_row();
-        ui.label(egui::RichText::new("Layers").color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Layers")).color(t.text_dim));
         ui.label(app.session.project.maps.iter().map(|m| m.layers.len()).sum::<usize>().to_string());
         ui.end_row();
     });
@@ -143,19 +143,27 @@ fn card(ui: &mut Ui, t: &Tokens, title: &str, sub: &str, icon: &str) -> bool {
     let thumb = Rect::from_min_size(r.min + vec2(12.0, 12.0), vec2(176.0, 86.0));
     ui.painter().rect_filled(thumb, CornerRadius::same(6), t.canvas);
     icons::paint(ui.painter(), Rect::from_center_size(thumb.center(), vec2(48.0, 48.0)), icon, t.icon, t.accent);
-    ui.painter().text(pos2(r.min.x + 14.0, r.min.y + 116.0), Align2::LEFT_CENTER, title, semibold(13.5), t.text);
-    ui.painter().text(pos2(r.min.x + 14.0, r.min.y + 136.0), Align2::LEFT_CENTER, sub, regular(11.5), t.text_dim);
+    ui.painter().text(pos2(r.min.x + 14.0, r.min.y + 116.0), Align2::LEFT_CENTER, tl!(title), semibold(13.5), t.text);
+    ui.painter().text(pos2(r.min.x + 14.0, r.min.y + 136.0), Align2::LEFT_CENTER, tl!(sub), regular(11.5), t.text_dim);
     resp.clicked()
 }
 
 fn about(ui: &mut Ui, t: &Tokens) {
-    ui.label(egui::RichText::new("About RustGIS").font(semibold(24.0)));
+    ui.label(egui::RichText::new(tl!("About RustGIS")).font(semibold(24.0)));
     ui.add_space(8.0);
-    ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+    ui.label(crate::i18n::fmt("Version {version}", &[("version", env!("CARGO_PKG_VERSION"))]));
     ui.add_space(8.0);
-    ui.label("RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.");
+    ui.label(tl!("RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line."));
     ui.add_space(8.0);
     let (done, total) = rustgis_engine::catalog::coverage();
-    ui.label(egui::RichText::new(format!("Ribbon parity: {done} of {total} ribbon features have a RustGIS command.")).color(t.text_dim));
-    ui.label(egui::RichText::new("Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.").color(t.text_dim));
+    ui.label(
+        egui::RichText::new(crate::i18n::fmt(
+            "Ribbon parity: {done} of {total} ribbon features have a RustGIS command.",
+            &[("done", &done.to_string()), ("total", &total.to_string())],
+        ))
+        .color(t.text_dim),
+    );
+    ui.label(
+        egui::RichText::new(tl!("Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.")).color(t.text_dim),
+    );
 }

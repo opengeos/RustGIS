@@ -15,6 +15,8 @@ egui_extras = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 web-time = { workspace = true }
+# The system's preferred interface languages (the browser's on the web).
+sys-locale = { version = "0.3", features = ["js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = { workspace = true }

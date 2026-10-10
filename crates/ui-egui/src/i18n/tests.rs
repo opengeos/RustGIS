@@ -1,0 +1,38 @@
+use super::*;
+
+#[test]
+fn parse_and_escape() {
+    let (m, e) = parse("# c\nOpen\tÖffnen\nA\\nB\tX\\nY\nbad line\n");
+    assert_eq!(m.get("Open").map(String::as_str), Some("Öffnen"));
+    assert_eq!(m.get("A\nB").map(String::as_str), Some("X\nY"));
+    assert_eq!(e.len(), 1);
+}
+
+#[test]
+fn every_catalog_parses_cleanly_and_keeps_placeholders() {
+    for l in &LANGUAGES[1..] {
+        let (m, errors) = parse(l.source);
+        assert!(errors.is_empty(), "{}: {errors:?}", l.code);
+        for (en, tr) in &m {
+            let names = |s: &str| -> Vec<String> {
+                let mut v: Vec<String> = s.split('{').skip(1).filter_map(|p| p.split_once('}').map(|x| x.0.to_string())).collect();
+                v.sort();
+                v
+            };
+            assert_eq!(names(en), names(tr), "{}: placeholders differ in {en:?}", l.code);
+        }
+    }
+}
+
+#[test]
+fn lookup_fallback_and_tags() {
+    assert_eq!(tr(Lang::EN, "Explore"), "Explore");
+    assert_eq!(tr(Lang::EN, "no such string"), "no such string");
+    assert_eq!(lang_from_tag("de_DE.UTF-8").map(Lang::code), Some("de"));
+    assert_eq!(lang_from_tag("pt-BR").map(Lang::code), Some("pt"));
+    assert_eq!(lang_from_tag("zh-Hans-CN").map(Lang::code), Some("zh"));
+    assert_eq!(lang_from_tag("C").map(Lang::code), Some("en"));
+    assert_eq!(lang_from_tag("xx-YY"), None);
+    assert_eq!(first_supported(["xx", "fr-CA", "de"]).map(Lang::code), Some("fr"));
+    assert_eq!(fmt("{n} of {total} selected", &[("n", "3"), ("total", "{n}")]), "3 of {n} selected");
+}

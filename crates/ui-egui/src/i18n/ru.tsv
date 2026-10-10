@@ -1,0 +1,544 @@
+# ru interface catalog: English<TAB>translation
+<None>	<Нет>
+A blank map with a basemap	Пустая карта с базовой картой
+A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Быстрая ГИС с открытым исходным кодом для настольных компьютеров, написанная на чистом Rust, с ленточным интерфейсом настольной ГИС: карты и слои, символы, подписи, выборка, редактирование, геообработка и экспорт.
+A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Значение, поле или два из них, соединённые знаком + − × ÷. Применяется к выбранным строкам или ко всем строкам, если ничего не выбрано.
+About	О программе
+About RustGIS	О RustGIS
+About RustGIS.	О RustGIS.
+Activate Map	Активировать карту
+Add	Добавить
+Add\nData	Добавить\nданные
+Add\nField	Добавить\nполе
+Add a field to the selected layer.	Добавить поле в выбранный слой.
+Add a field.	Добавить поле.
+Add a new map to the project.	Добавить новую карту в проект.
+Add Data	Добавить данные
+Add Data (from text)	Добавить данные (из текста)
+Add Data…	Добавить данные…
+Add Field	Добавить поле
+Add field	Добавить поле
+Add GeoJSON, CSV or Shapefile data to the map.	Добавить на карту данные GeoJSON, CSV или Shapefile.
+Add sample countries	Добавить пример стран
+Add Sample Data	Добавить пример данных
+Add To Current Selection	Добавить к текущей выборке
+Add vector data.	Добавить векторные данные.
+Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Добавляет в виде полей геодезическую площадь (км²), длину (км) или координаты центроида.
+All	Все
+All files	Все файлы
+Analysis	Анализ
+AND	AND
+Apply	Применить
+Area {area}   ·   Perimeter {perimeter}	Площадь {area}   ·   Периметр {perimeter}
+Atlas	Атлас
+Attribute\nTable	Таблица\nатрибутов
+Attribute Table	Таблица атрибутов
+Attribute table	Таблица атрибутов
+Attributes	Атрибуты
+Automatic	Автоматически
+Automatic (system language)	Автоматически (язык системы)
+Back to Explore; cancel a sketch	Назад к обзору; отменить эскиз
+Back to the map	Назад к карте
+Back to tools	Назад к инструментам
+Basemap	Базовая карта
+Basemaps	Базовые карты
+Blank	Пустая
+Bold	Жирный
+Bold label text.	Жирный текст подписей.
+Bookmarks	Закладки
+Boolean	Логическое
+Bounding\nGeometry	Ограничивающая\nгеометрия
+Browse the geoprocessing toolbox.	Просмотр набора инструментов геообработки.
+Browse the project's maps, tables and folders.	Просмотр карт, таблиц и папок проекта.
+Buffer	Буфер
+By\nAttributes	По\nатрибутам
+By\nLocation	По\nрасположению
+Calculate	Вычислить
+Calculate\nField	Вычислить\nполе
+Calculate\nGeometry	Вычислить\nгеометрию
+Calculate Field	Вычислить поле
+Calculate field	Вычислить поле
+Calculate field values.	Вычислить значения поля.
+Calculate Geometry Attributes	Вычислить геометрические атрибуты
+Can't read this folder	Не удаётся прочитать эту папку
+Cancel	Отмена
+CARGO_PKG_VERSION	CARGO_PKG_VERSION
+Cartography	Картография
+Case Field	Поле группировки
+Catalog	Каталог
+Catalog\nPane	Панель\nкаталога
+Change the map's backdrop.	Изменить фон карты.
+Choose how the layer is drawn.	Выбрать способ отображения слоя.
+Choose the interface language.	Выбрать язык интерфейса.
+Circle	Круг
+Classes	Классы
+Clear	Очистить
+Clear\nLimits	Сбросить\nограничения
+Clear History	Очистить историю
+Clear Selection	Очистить выборку
+Clear selection	Очистить выборку
+Clear the selection in every layer.	Очистить выборку во всех слоях.
+Clear the selection.	Очистить выборку.
+Click or drag a box to select features. Shift adds, Ctrl removes.	Щёлкните или растяните рамку, чтобы выбрать объекты. Shift добавляет, Ctrl удаляет.
+Click or drag a box · Shift adds · Ctrl removes	Щёлкните или растяните рамку · Shift добавляет · Ctrl удаляет
+Click the corners of the area · double-click to finish	Щёлкайте по углам области · двойной щелчок для завершения
+Click the map to add a point	Щёлкните по карте, чтобы добавить точку
+Click to add points · double-click to finish · Esc to stop	Щёлкайте, чтобы добавить точки · двойной щелчок для завершения · Esc для остановки
+Click to add vertices · double-click to close the polygon	Щёлкайте, чтобы добавить вершины · двойной щелчок замыкает полигон
+Click to add vertices · double-click to finish the line	Щёлкайте, чтобы добавить вершины · двойной щелчок завершает линию
+Click to switch between decimal degrees and DMS	Щёлкните для переключения между десятичными градусами и ГМС
+Clip	Обрезать
+Clip Features	Обрезать объекты
+Close	Закрыть
+Close Table	Закрыть таблицу
+Close table	Закрыть таблицу
+Collapse or expand the ribbon	Свернуть или развернуть ленту
+Collapse the ribbon (Ctrl+F1)	Свернуть ленту (Ctrl+F1)
+Color	Цвет
+Color Scheme	Цветовая схема
+Color scheme	Цветовая схема
+Command\nSearch	Поиск\nкоманд
+Command Search	Поиск команд
+Completed	Выполнено
+Compute a field's values.	Вычислить значения поля.
+Contents	Содержание
+Conversion	Преобразование
+Copies the (selected) features of a layer to a new layer.	Копирует (выбранные) объекты слоя в новый слой.
+Copy Coordinates	Копировать координаты
+Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Количество, сумма, среднее, минимум, максимум и стандартное отклонение поля, при необходимости по полю группировки.
+Countries, cities, rivers and lakes	Страны, города, реки и озёра
+Counts the points that fall inside each polygon.	Подсчитывает точки, попадающие в каждый полигон.
+Create	Создать
+Create a new project or start from the World Atlas sample.	Создайте новый проект или начните с примера «Атлас мира».
+Create Feature	Создать объект
+Create Line	Создать линию
+Create Point	Создать точку
+Create Polygon	Создать полигон
+Creates a point inside each input feature.	Создаёт точку внутри каждого входного объекта.
+Creates polygons around input features at a given distance.	Создаёт полигоны вокруг входных объектов на заданном расстоянии.
+Ctrl+	Ctrl+
+Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
+Ctrl+F1	Ctrl+F1
+Ctrl+K	Ctrl+K
+Ctrl+N / O / S	Ctrl+N / O / S
+Ctrl+T	Ctrl+T
+Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
+Current Project	Текущий проект
+Dark\nMode	Тёмная\nтема
+Data	Данные
+Data Design	Структура данных
+Data Management	Управление данными
+Data type	Тип данных
+Data…	Данные…
+Definition\nQuery	Запрос\nопределения
+Definition Query	Запрос определения
+Definition query	Запрос определения
+Definition Query…	Запрос определения…
+Delete	Удалить
+Delete Field	Удалить поле
+Delete Map	Удалить карту
+Delete selected features	Удалить выбранные объекты
+Delete selected rows	Удалить выбранные строки
+Delete the selected features.	Удалить выбранные объекты.
+Details	Сведения
+Details of the selected layer.	Сведения о выбранном слое.
+Diamond	Ромб
+Display	Отображение
+Dissolve	Объединить
+Dissolve Field	Поле объединения
+Distance	Расстояние
+Double	Вещественное
+Double-click	Двойной щелчок
+Double-click to add	Двойной щелчок — добавить
+Downloaded {name}	Загружено: {name}
+Drag / middle-drag	Перетаскивание / средней кнопкой
+Drag a box or click to zoom in	Растяните рамку или щёлкните для приближения
+Drag a box to zoom into.	Растяните рамку для приближения.
+Draw a halo around label text.	Рисовать ореол вокруг текста подписей.
+Draw new features in the selected layer. Double-click to finish lines and polygons.	Рисуйте новые объекты в выбранном слое. Двойной щелчок завершает линии и полигоны.
+Draw the layer at every scale.	Отображать слой в любом масштабе.
+Drawing	Отображение
+Drawing Order	Порядок отображения
+Dusk	Сумерки
+e.g.  pop_est / 1000000   or   'Africa'   or   name	напр.  pop_est / 1000000   или   'Africa'   или   name
+e.g. continent = 'Europe'	напр. continent = 'Europe'
+e.g. pop_est > 100000000 AND continent = 'Asia'	напр. pop_est > 100000000 AND continent = 'Asia'
+East	Восток
+Edit	Правка
+Edit Attribute	Изменить атрибут
+Edit attributes in the table.	Редактировать атрибуты в таблице.
+Effects	Эффекты
+Ember	Угли
+Encloses each feature, or all features, in its convex hull.	Заключает каждый объект или все объекты в выпуклую оболочку.
+Equal Interval	Равные интервалы
+Erase	Стереть
+Erase Features	Стереть объекты
+Esc	Esc
+Expand Legend	Развернуть легенду
+Expand the ribbon (Ctrl+F1)	Развернуть ленту (Ctrl+F1)
+Explore	Обзор
+Export	Экспорт
+Export\nFeatures	Экспорт\nобъектов
+Export\nMap	Экспорт\nкарты
+Export Features	Экспорт объектов
+Export Features (tool)	Экспорт объектов (инструмент)
+Export Features…	Экспорт объектов…
+Export Map	Экспорт карты
+Export Map failed unexpectedly	Экспорт карты неожиданно завершился ошибкой
+Export Map…	Экспорт карты…
+Export Table	Экспорт таблицы
+Export the layer.	Экспортировать слой.
+Export the map view as a PNG image (with labels and a scale bar).	Экспортировать вид карты как изображение PNG (с подписями и масштабной линейкой).
+Export the selected layer to GeoJSON or CSV.	Экспортировать выбранный слой в GeoJSON или CSV.
+Expression	Выражение
+Extract	Извлечение
+Extracts the parts of input features that fall inside clip polygons.	Извлекает части входных объектов, попадающие внутрь обрезающих полигонов.
+Failed	Ошибка
+Feature	Объект
+Feature\nTo Point	Объект\nв точку
+Feature Layer	Векторный слой
+Feature Layer › Drawing	Векторный слой › Отображение
+Feature To Point	Объект в точку
+Features	Объекты
+Field	Поле
+Field name	Имя поля
+Fields	Поля
+Fields:	Поля:
+Filter rows…	Фильтр строк…
+Find a place by coordinates.	Найти место по координатам.
+Find and run geoprocessing tools.	Найти и запустить инструменты геообработки.
+Find any command by name (Ctrl+K).	Найти любую команду по названию (Ctrl+K).
+Find Tools	Найти инструменты
+Fixed Zoom In	Фиксированное приближение
+Fixed Zoom Out	Фиксированное отдаление
+Folders	Папки
+Forest	Лес
+Full Extent	Полный экстент
+Full extent	Полный экстент
+Generalization	Генерализация
+Geo-\nprocessing	Гео-\nобработка
+GeoJSON or CSV	GeoJSON или CSV
+Geometry	Геометрия
+Geoprocessing	Геообработка
+Geoprocessing history.	История геообработки.
+Geoprocessing Pane	Панель геообработки
+Go	Перейти
+Go back to the previous extent.	Вернуться к предыдущему экстенту.
+Go forward to the next extent.	Перейти к следующему экстенту.
+Go to a saved extent or save the current one.	Перейти к сохранённому экстенту или сохранить текущий.
+Go To Bookmark	Перейти к закладке
+Go To XY	Перейти к XY
+Graduated Colors	Градуированные цвета
+Graticule	Сетка координат
+Greys	Оттенки серого
+Group Option	Способ группировки
+Halo	Ореол
+Harbour (qualitative)	Гавань (качественная)
+Help	Справка
+History	История
+Home	Home
+Identify	Идентифицировать
+Import\nProject	Импорт\nпроекта
+In Beyond	Вкл. за пределами
+In project	В проекте
+Input Features	Входные объекты
+Input Polygons	Входные полигоны
+Input Rows	Входные строки
+Input Summary Features	Входные объекты сводки
+Input Table	Входная таблица
+Inquiry	Запрос
+Insert	Вставка
+Interface font: {font}	Шрифт интерфейса: {font}
+Invalid: {error}	Недопустимо: {error}
+Invert	Инвертировать
+Invert the selection.	Инвертировать выборку.
+IS NULL	IS NULL
+keep current	оставить текущее
+Keyboard Shortcuts	Сочетания клавиш
+Keyboard shortcuts.	Сочетания клавиш.
+Kilometers	Километры
+Label	Подпись
+Label Class	Класс подписей
+Label Field	Поле подписей
+Labeling	Подписи
+Lagoon	Лагуна
+Language	Язык
+Last map render time	Время последней отрисовки карты
+Latitude (Y)	Широта (Y)
+Layer	Слой
+Layer From\nSelection	Слой из\nвыборки
+Layers	Слои
+Layers and Table Views	Слои и табличные представления
+LIKE	LIKE
+Limit which features draw with a SQL expression.	Ограничить отображаемые объекты выражением SQL.
+Line color	Цвет линии
+Line width	Толщина линии
+LineString	LineString
+List Commands	Список команд
+Locate	Найти место
+Location	Расположение
+Long	Длинное целое
+Longitude (X)	Долгота (X)
+Major Lakes	Крупные озёра
+Major Rivers	Крупные реки
+Make a new layer of the selected features.	Создать новый слой из выбранных объектов.
+Make Layer From Selected Features	Создать слой из выбранных объектов
+Manage Edits	Управление правками
+Map	Карта
+Map › Layer	Карта › Слой
+Maps	Карты
+Marker	Маркер
+Measure	Измерить
+Measure Area	Измерить площадь
+Measure Distance	Измерить расстояние
+Measure geodesic distances and areas on the map.	Измерять геодезические расстояния и площади на карте.
+Merges polygons that share a field value into one feature per value.	Объединяет полигоны с одинаковым значением поля в один объект для каждого значения.
+Meters	Метры
+Method	Метод
+Midnight	Полночь
+Miles	Мили
+Minimum Bounding Geometry	Минимальная ограничивающая геометрия
+Mod+	Mod+
+Mouse wheel	Колесо мыши
+Move Down	Переместить вниз
+Move Up	Переместить вверх
+Name	Имя
+Natural Breaks (Jenks)	Естественные границы (Дженкс)
+Natural Earth	Natural Earth
+Navigate	Навигация
+Navigation	Навигация
+New	Создать
+New\nBookmark	Новая\nзакладка
+New\nMap	Новая\nкарта
+New / Open / Save project	Создать / открыть / сохранить проект
+New Bookmark	Новая закладка
+New Bookmark…	Новая закладка…
+New Map	Новая карта
+New Project	Новый проект
+New project	Новый проект
+New Selection	Новая выборка
+Next	Далее
+Next Extent	Следующий экстент
+No	Нет
+No bookmarks yet	Закладок пока нет
+No standalone tables	Нет отдельных таблиц
+None	Нет
+North	Север
+Not saved yet	Ещё не сохранено
+Ocean	Океан
+OID	OID
+Only features matching this expression draw in {layer}.	В слое {layer} отображаются только объекты, соответствующие этому выражению.
+Open	Открыть
+Open a .rgisx project	Открыть проект .rgisx
+Open a RustGIS project.	Открыть проект RustGIS.
+Open folder	Открыть папку
+Open Project	Открыть проект
+Open project	Открыть проект
+Open Project (from text)	Открыть проект (из текста)
+Open the attribute table of the selected layer.	Открыть таблицу атрибутов выбранного слоя.
+Open the layer's attribute table.	Открыть таблицу атрибутов слоя.
+Open the layer's table.	Открыть таблицу слоя.
+Open the selected layer's table.	Открыть таблицу выбранного слоя.
+Open the Symbology pane.	Открыть панель «Символы».
+Open, save and create projects	Открытие, сохранение и создание проектов
+Open…	Открыть…
+OR	OR
+Out Beyond	Выкл. за пределами
+Outline	Контур
+Outline color	Цвет контура
+Outline width	Толщина контура
+Output	Вывод
+Output Name	Имя результата
+Overlay	Наложение
+Pan (Explore) · any tool	Панорамирование (обзор) · любой инструмент
+Pan to a longitude/latitude.	Переместиться к долготе/широте.
+Pan with the mouse, zoom with the wheel and click features to see their attributes.	Панорамируйте мышью, масштабируйте колесом и щёлкайте по объектам, чтобы увидеть их атрибуты.
+Paper	Бумага
+Parent folder	Родительская папка
+PNG image	Изображение PNG
+Point	Точка
+Polygon	Полигон
+Polyline	Полилиния
+Populated Places	Населённые пункты
+Previous	Назад
+Previous Extent	Предыдущий экстент
+Primary\nSymbology	Основные\nсимволы
+Primary symbology	Основные символы
+Project	Проект
+Project Info	Сведения о проекте
+Proportional Symbols	Пропорциональные символы
+Proximity	Близость
+Quantile	Квантили
+Quick Access Toolbar	Панель быстрого доступа
+Redo	Повторить
+Redo the change you undid.	Повторить отменённое изменение.
+Redo {action}	Повторить: {action}
+Red–Blue	Красный–синий
+Remove	Удалить
+Remove Bookmark	Удалить закладку
+Remove From Current Selection	Удалить из текущей выборки
+Remove the layer from the map.	Удалить слой с карты.
+Removes the parts of polygon features that overlap erase polygons.	Удаляет части полигональных объектов, перекрывающиеся со стирающими полигонами.
+Removes vertices that deviate less than a tolerance (Douglas–Peucker).	Удаляет вершины, отклоняющиеся меньше чем на допуск (Дуглас–Пекер).
+Rename	Переименовать
+Rename Layer	Переименовать слой
+Rename Map	Переименовать карту
+Rename Project	Переименовать проект
+Rename…	Переименовать…
+Ribbon feature coverage: {done} of {total} features ({pct}%).	Охват функций ленты: {done} из {total} ({pct}%).
+Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Соответствие ленты: команд RustGIS для функций ленты — {done} из {total}.
+Run	Запустить
+Run Tool	Запустить инструмент
+RustGIS	RustGIS
+RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS — настольная ГИС с открытым исходным кодом, написанная на чистом Rust. Её лента повторяет привычный порядок работы настольной ГИС; каждое действие — это команда, которую также можно выполнить из командной строки.
+RustGIS project	Проект RustGIS
+Sample data (Natural Earth)	Пример данных (Natural Earth)
+Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Пример данных © Natural Earth (общественное достояние). RustGIS распространяется по лицензии Apache-2.0.
+Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	Пример данных: Natural Earth (общественное достояние). Лицензия Apache-2.0.
+Save	Сохранить
+Save As	Сохранить как
+Save Project	Сохранить проект
+Save project	Сохранить проект
+Save Project As	Сохранить проект как
+Save the current extent as a bookmark.	Сохранить текущий экстент как закладку.
+Save the project under a new name.	Сохранить проект под новым именем.
+Save the project with your edits.	Сохранить проект с вашими правками.
+Scale 1:	Масштаб 1:
+Search commands — e.g. buffer, basemap, labels	Поиск команд — напр. буфер, базовая карта, подписи
+Search Distance (km)	Расстояние поиска (км)
+See the tools you've run.	Просмотр запущенных инструментов.
+Select	Выбрать
+Select (click)	Выбрать (щелчком)
+Select (rectangle)	Выбрать (прямоугольником)
+select a layer in the Contents pane first	сначала выберите слой на панели «Содержание»
+Select a layer in the Contents pane.	Выберите слой на панели «Содержание».
+Select All	Выбрать все
+Select By\nAttributes	Выбрать по\nатрибутам
+Select By\nLocation	Выбрать по\nрасположению
+Select By Attributes	Выбрать по атрибутам
+Select every feature.	Выбрать все объекты.
+Select features by their spatial relationship.	Выбрать объекты по их пространственному отношению.
+Select features on the map.	Выбрать объекты на карте.
+Select features that intersect another layer.	Выбрать объекты, пересекающие другой слой.
+Select features with a SQL expression.	Выбрать объекты с помощью выражения SQL.
+Select Layer	Выбрать слой
+Select Layer By Attribute	Выбрать в слое по атрибуту
+Select Layer By Location	Выбрать в слое по расположению
+Select Rows	Выбрать строки
+Select rows with a SQL expression.	Выбрать строки с помощью выражения SQL.
+Select Subset From Current Selection	Выбрать подмножество из текущей выборки
+Selectable	Доступен для выбора
+Selected	Выбрано
+Selected Features: {n}	Выбрано объектов: {n}
+Selected only	Только выбранные
+Selecting Features	Выбор объектов
+Selection	Выборка
+Selection Type	Тип выборки
+Selects features that intersect features in another layer.	Выбирает объекты, пересекающие объекты другого слоя.
+Selects features with a SQL where clause, e.g. pop_est > 1000000.	Выбирает объекты с помощью SQL-условия WHERE, напр. pop_est > 1000000.
+Set Map Tool	Выбрать инструмент карты
+Set Scale	Задать масштаб
+Shape	Форма
+Share	Поделиться
+Share › Output	Поделиться › Вывод
+Shift+	Shift+
+Shift+drag	Shift+перетаскивание
+Shortcuts	Сочетания клавиш
+Show latitude/longitude lines on the basemap.	Показывать линии широты и долготы на базовой карте.
+Show or hide the Catalog pane.	Показать или скрыть панель «Каталог».
+Show or hide the Contents pane.	Показать или скрыть панель «Содержание».
+Show or hide the Geoprocessing pane.	Показать или скрыть панель «Геообработка».
+Show or hide the layer.	Показать или скрыть слой.
+Show the Symbology pane for the selected layer.	Показать панель «Символы» для выбранного слоя.
+Simplify	Упростить
+Single Symbol	Единый символ
+Size	Размер
+Source	Источник
+South	Юг
+Square	Квадрат
+Standalone Tables	Отдельные таблицы
+Star	Звезда
+Start	Начало
+Statistics	Статистика
+Statistics Field	Поле статистики
+Status Bar	Строка состояния
+Summarize	Сводка
+Summarize\nWithin	Сводка\nвнутри
+Summarize Within	Сводка внутри
+Summary\nStatistics	Сводная\nстатистика
+Summary Statistics	Сводная статистика
+Switch	Инвертировать
+Switch between light and dark themes.	Переключение между светлой и тёмной темами.
+Switch Selection	Инвертировать выборку
+Switch selection	Инвертировать выборку
+Symbol	Символ
+Symbol Color	Цвет символа
+Symbology	Символы
+Symbology Pane	Панель символов
+Table	Таблица
+Tables	Таблицы
+Text	Текст
+Text Symbol	Текстовый символ
+the map has no layers	на карте нет слоёв
+Thermal	Тепловая
+This map has no layers yet.	На этой карте пока нет слоёв.
+Toggle Dark Mode	Переключить тёмную тему
+Tolerance (km)	Допуск (км)
+Toolbox	Набор инструментов
+Toolboxes	Наборы инструментов
+Tools	Инструменты
+Tools you run appear here.	Здесь появятся запущенные инструменты.
+Total {total}   ·   Segment {segment}	Всего {total}   ·   Сегмент {segment}
+Transparency	Прозрачность
+Triangle	Треугольник
+Turn Labels Off	Выключить подписи
+Turn labels on or off for the selected layer.	Включить или выключить подписи для выбранного слоя.
+Turn labels on or off.	Включить или выключить подписи.
+Unavailable: {reason}	Недоступно: {reason}
+Undo	Отменить
+Undo / Redo	Отменить / Повторить
+Undo the last change.	Отменить последнее изменение.
+Undo {action}	Отменить: {action}
+Unique Values	Уникальные значения
+Units	Единицы
+Valid expression · {n} matching rows	Выражение допустимо · Подходящих строк: {n}
+Vector data	Векторные данные
+Version {version}	Версия {version}
+View	Вид
+View › Windows	Вид › Окна
+Visibility	Видимость
+Visibility Range	Диапазон видимости
+Visible	Видимый
+Welcome to RustGIS	Добро пожаловать в RustGIS
+West	Запад
+WGS 84 / Web Mercator	WGS 84 / Web Mercator
+Where	Где
+Where Clause	Условие WHERE
+Windows	Окна
+World	Мир
+World Atlas	Атлас мира
+World Atlas Sample	Пример «Атлас мира»
+World Countries	Страны мира
+Yes	Да
+Zoom about the pointer	Масштабирование относительно указателя
+Zoom In	Приблизить
+Zoom in	Приблизить
+Zoom in / out	Приблизить / отдалить
+Zoom in on the centre of the map.	Приблизить к центру карты.
+Zoom in · finish a sketch	Приблизить · завершить эскиз
+Zoom Out	Отдалить
+Zoom out	Отдалить
+Zoom out from the centre of the map.	Отдалить от центра карты.
+Zoom To	Приблизить к
+Zoom To\nLayer	Приблизить\nк слою
+Zoom to a box (Explore)	Приблизить к рамке (обзор)
+Zoom To Layer	Приблизить к слою
+Zoom To Selection	Приблизить к выборке
+Zoom to selection	Приблизить к выборке
+Zoom to the extent of all layers.	Приблизить к экстенту всех слоёв.
+Zoom to the layer's extent.	Приблизить к экстенту слоя.
+Zoom to the selected features.	Приблизить к выбранным объектам.
+Zoom to the selection.	Приблизить к выборке.
+Zoom to the whole world.	Показать весь мир.
+Zoom To World	Приблизить к миру
+⌘K	⌘K

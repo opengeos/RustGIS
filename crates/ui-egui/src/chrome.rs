@@ -22,7 +22,7 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                 let (r, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
                 app.paint_logo(ui, r);
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new("RustGIS").font(semibold(13.0)).color(t.text));
+                ui.label(egui::RichText::new(tl!("RustGIS")).font(semibold(13.0)).color(t.text));
                 ui.add_space(10.0);
                 // Quick Access Toolbar.
                 small(ui, app, "new", "", "New project", "project.new", Value::Null, false);
@@ -33,7 +33,11 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                     app,
                     "undo",
                     "",
-                    app.session.undo_label().map(|l| format!("Undo {l}")).unwrap_or("Undo".into()).as_str(),
+                    app.session
+                        .undo_label()
+                        .map(|l| crate::i18n::fmt("Undo {action}", &[("action", tl!(l))]))
+                        .unwrap_or(tl!("Undo").into())
+                        .as_str(),
                     "edit.undo",
                     Value::Null,
                     false,
@@ -43,7 +47,11 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                     app,
                     "redo",
                     "",
-                    app.session.redo_label().map(|l| format!("Redo {l}")).unwrap_or("Redo".into()).as_str(),
+                    app.session
+                        .redo_label()
+                        .map(|l| crate::i18n::fmt("Redo {action}", &[("action", tl!(l))]))
+                        .unwrap_or(tl!("Redo").into())
+                        .as_str(),
                     "edit.redo",
                     Value::Null,
                     false,
@@ -69,7 +77,7 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                         ui.painter().text(
                             pos2(band.center().x, band.center().y + 1.5),
                             Align2::CENTER_CENTER,
-                            crate::ribbon::CONTEXT_GROUP,
+                            tl!(crate::ribbon::CONTEXT_GROUP),
                             semibold(11.0),
                             t.context,
                         );
@@ -98,7 +106,7 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                 );
                 // Command search box on the right.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = "Command Search";
+                    let label = tl!("Command Search");
                     let hint = if cfg!(target_os = "macos") { "⌘K" } else { "Ctrl+K" };
                     let (r, resp) = ui.allocate_exact_size(vec2(260.0, 24.0), Sense::click());
                     ui.painter().rect_filled(r, CornerRadius::same(12), if resp.hovered() { t.hover } else { t.input });
@@ -164,27 +172,29 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                     egui::Label::new(egui::RichText::new(coord.unwrap_or_else(|| "—".into())).monospace().size(11.5).color(t.text_dim))
                         .sense(Sense::click()),
                 );
-                if resp.on_hover_text("Click to switch between decimal degrees and DMS").clicked() {
+                if resp.on_hover_text(tl!("Click to switch between decimal degrees and DMS")).clicked() {
                     app.map.dms = !app.map.dms;
                 }
-                ui.label(egui::RichText::new("WGS 84 / Web Mercator").size(11.0).color(t.text_disabled));
+                ui.label(egui::RichText::new(tl!("WGS 84 / Web Mercator")).size(11.0).color(t.text_disabled));
                 sep(ui, &t);
                 let n = app.session.map().selection_count();
-                ui.label(egui::RichText::new(format!("Selected Features: {n}")).size(11.5).color(if n > 0 {
-                    t.accent_text
-                } else {
-                    t.text_dim
-                }));
+                ui.label(
+                    egui::RichText::new(crate::i18n::fmt("Selected Features: {n}", &[("n", &n.to_string())])).size(11.5).color(if n > 0 {
+                        t.accent_text
+                    } else {
+                        t.text_dim
+                    }),
+                );
                 if n > 0 {
                     let (r, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
                     icons::paint(ui.painter(), r, "clear_sel", t.icon, t.accent);
-                    if resp.on_hover_text("Clear selection").clicked() {
+                    if resp.on_hover_text(tl!("Clear selection")).clicked() {
                         let _ = app.run("select.clear", Value::Null);
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(egui::RichText::new(format!("{} ms", app.map.render_ms)).size(11.0).color(t.text_disabled))
-                        .on_hover_text("Last map render time");
+                        .on_hover_text(tl!("Last map render time"));
                     sep(ui, &t);
                     if let Some(n) = app.session.notices.last() {
                         ui.label(egui::RichText::new(&n.text).size(11.5).color(if n.error { t.red } else { t.text_dim }));
@@ -214,6 +224,7 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
             (cmd, Key::O, "ui.open"),
             (cmd, Key::N, "project.new"),
             (cmd, Key::K, "ui.commandSearch"),
+            (cmd, Key::F1, "ui.ribbon"),
             (cmd, Key::T, "table.open"),
             (cmd, Key::Equals, "map.zoomIn"),
             (cmd, Key::Plus, "map.zoomIn"),
@@ -266,7 +277,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             icons::paint(ui.painter(), r, "search", t.text_dim, t.accent);
             let te = ui.add(
                 egui::TextEdit::singleline(&mut q)
-                    .hint_text("Search commands — e.g. buffer, basemap, labels")
+                    .hint_text(tl!("Search commands — e.g. buffer, basemap, labels"))
                     .desired_width(480.0)
                     .frame(egui::Frame::NONE),
             );
@@ -277,8 +288,16 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
         let mut hits: Vec<(String, String, String)> = Vec::new();
         // Geoprocessing tools first when the query names one.
         for tool in rustgis_engine::analysis::TOOLS {
-            if !ql.is_empty() && (tool.name.to_lowercase().contains(&ql) || tool.id.to_lowercase().contains(&ql)) {
-                hits.push((format!("gp:{}", tool.id), format!("{} (tool)", tool.name), tool.toolbox.to_string()));
+            if !ql.is_empty()
+                && (tool.name.to_lowercase().contains(&ql)
+                    || tool.id.to_lowercase().contains(&ql)
+                    || tl!(tool.name).to_lowercase().contains(&ql))
+            {
+                hits.push((
+                    format!("gp:{}", tool.id),
+                    crate::i18n::fmt("{name} (tool)", &[("name", tl!(tool.name))]),
+                    crate::i18n::location(tool.toolbox),
+                ));
             }
         }
         for c in &app.session.registry.commands {
@@ -290,7 +309,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                 if c.params.contains(':') && !c.params.contains("?") && c.params != "{}" {
                     continue; // needs parameters: not runnable from the palette
                 }
-                hits.push((c.id.to_string(), c.label.to_string(), c.location.to_string()));
+                hits.push((c.id.to_string(), tl!(c.label).to_string(), crate::i18n::location(c.location)));
             }
         }
         for (id, label, loc) in [
@@ -300,8 +319,8 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             ("ui.theme", "Toggle Dark Mode", "View"),
             ("ui.exportMap", "Export Map…", "Share › Output"),
         ] {
-            if ql.is_empty() || label.to_lowercase().contains(&ql) {
-                hits.push((id.into(), label.into(), loc.into()));
+            if ql.is_empty() || label.to_lowercase().contains(&ql) || tl!(label).to_lowercase().contains(&ql) {
+                hits.push((id.into(), tl!(label).into(), crate::i18n::location(loc)));
             }
         }
         egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
@@ -338,7 +357,7 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
     if app.ui.about {
         let logo_tex = app.logo(ctx);
         let mut open = true;
-        egui::Window::new("About RustGIS").open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
+        egui::Window::new(tl!("About RustGIS")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
             ui.set_width(420.0);
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(56.0, 56.0), Sense::hover());
@@ -346,24 +365,24 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
                     ui.painter().image(*id, r, egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
                 });
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("RustGIS").font(semibold(20.0)));
-                    ui.label(egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).weak());
+                    ui.label(egui::RichText::new(tl!("RustGIS")).font(semibold(20.0)));
+                    ui.label(egui::RichText::new(crate::i18n::fmt("Version {version}", &[("version", env!("CARGO_PKG_VERSION"))])).weak());
                 });
             });
             ui.add_space(8.0);
-            ui.label("A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.");
+            ui.label(tl!("A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export."));
             ui.add_space(6.0);
             let (done, total) = rustgis_engine::catalog::coverage();
-            ui.label(egui::RichText::new(format!("Ribbon feature coverage: {done} of {total} features ({}%).", done * 100 / total.max(1))).small());
-            ui.label(egui::RichText::new("Sample data: Natural Earth (public domain). Licensed under Apache-2.0.").small().weak());
+            ui.label(egui::RichText::new(crate::i18n::fmt("Ribbon feature coverage: {done} of {total} features ({pct}%).", &[("done", &done.to_string()), ("total", &total.to_string()), ("pct", &(done * 100 / total.max(1)).to_string())])).small());
+            ui.label(egui::RichText::new(tl!("Sample data: Natural Earth (public domain). Licensed under Apache-2.0.")).small().weak());
             let (fonts_from, _) = (rustgis_engine::render::fonts::ui_fonts().source.clone(), ());
-            ui.label(egui::RichText::new(format!("Interface font: {fonts_from}")).small().weak());
+            ui.label(egui::RichText::new(crate::i18n::fmt("Interface font: {font}", &[("font", &fonts_from)])).small().weak());
         });
         app.ui.about = open;
     }
     if app.ui.shortcuts {
         let mut open = true;
-        egui::Window::new("Keyboard Shortcuts")
+        egui::Window::new(tl!("Keyboard Shortcuts"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -375,6 +394,7 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
                         ("Ctrl+N / O / S", "New / Open / Save project"),
                         ("Ctrl+Z / Ctrl+Y", "Undo / Redo"),
                         ("Ctrl+T", "Attribute table"),
+                        ("Ctrl+F1", "Collapse or expand the ribbon"),
                         ("Ctrl+= / Ctrl+-", "Zoom in / out"),
                         ("Home", "Full extent"),
                         ("Esc", "Back to Explore; cancel a sketch"),

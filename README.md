@@ -49,6 +49,7 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 | **Inquiry** | Identify pop-ups, geodesic distance and area measurement, live coordinates (DD or DMS) |
 | **Share** | PNG export with labels and a scale bar at any DPI; export layers to GeoJSON/CSV |
 | **Productivity** | Command search (Ctrl+K), keyboard shortcuts, dark mode, Catalog pane with folder browsing |
+| **Languages** | The interface in 15 languages (English, German, Spanish, French, Italian, Dutch, Portuguese, Russian, Turkish, Azerbaijani, Indonesian, Vietnamese, Chinese, Japanese, Korean), following the system language or chosen under View › Language |
 
 The honest picture is in [ROADMAP.md](ROADMAP.md) and the generated [coverage report](docs/parity.md).
 

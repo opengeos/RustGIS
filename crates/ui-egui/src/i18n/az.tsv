@@ -1,0 +1,544 @@
+# az interface catalog: English<TAB>translation
+<None>	<Heç biri>
+A blank map with a basemap	Əsas xəritəli boş xəritə
+A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Təmiz Rust dilində yazılmış sürətli, açıq mənbəli masaüstü CİS; masaüstü CİS-in lent iş axını ilə: xəritələr və laylar, simvolika, etiketləmə, seçim, redaktə, geoemal və ixrac.
+A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Qiymət, sahə və ya + − × ÷ ilə birləşdirilmiş ikisi. Seçilmiş sətirlərə, heç nə seçilməyibsə bütün sətirlərə tətbiq olunur.
+About	Haqqında
+About RustGIS	RustGIS haqqında
+About RustGIS.	RustGIS haqqında.
+Activate Map	Xəritəni aktivləşdir
+Add	Əlavə et
+Add\nData	Məlumat\nəlavə et
+Add\nField	Sahə\nəlavə et
+Add a field to the selected layer.	Seçilmiş laya sahə əlavə edin.
+Add a field.	Sahə əlavə edin.
+Add a new map to the project.	Layihəyə yeni xəritə əlavə edin.
+Add Data	Məlumat əlavə et
+Add Data (from text)	Məlumat əlavə et (mətndən)
+Add Data…	Məlumat əlavə et…
+Add Field	Sahə əlavə et
+Add field	Sahə əlavə et
+Add GeoJSON, CSV or Shapefile data to the map.	Xəritəyə GeoJSON, CSV və ya Shapefile məlumatı əlavə edin.
+Add sample countries	Nümunə ölkələri əlavə et
+Add Sample Data	Nümunə məlumat əlavə et
+Add To Current Selection	Cari seçimə əlavə et
+Add vector data.	Vektor məlumatı əlavə edin.
+Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Geodeziya sahəsini (km²), uzunluğu (km) və ya mərkəz koordinatlarını sahə kimi əlavə edir.
+All	Hamısı
+All files	Bütün fayllar
+Analysis	Analiz
+AND	AND
+Apply	Tətbiq et
+Area {area}   ·   Perimeter {perimeter}	Sahə {area}   ·   Perimetr {perimeter}
+Atlas	Atlas
+Attribute\nTable	Atribut\ncədvəli
+Attribute Table	Atribut cədvəli
+Attribute table	Atribut cədvəli
+Attributes	Atributlar
+Automatic	Avtomatik
+Automatic (system language)	Avtomatik (sistem dili)
+Back to Explore; cancel a sketch	Kəşfə qayıt; eskizi ləğv et
+Back to the map	Xəritəyə qayıt
+Back to tools	Alətlərə qayıt
+Basemap	Əsas xəritə
+Basemaps	Əsas xəritələr
+Blank	Boş
+Bold	Qalın
+Bold label text.	Qalın etiket mətni.
+Bookmarks	Əlfəcinlər
+Boolean	Məntiqi
+Bounding\nGeometry	Sərhəd\nhəndəsəsi
+Browse the geoprocessing toolbox.	Geoemal alətlər qutusuna baxın.
+Browse the project's maps, tables and folders.	Layihənin xəritələrinə, cədvəllərinə və qovluqlarına baxın.
+Buffer	Bufer
+By\nAttributes	Atributlara\ngörə
+By\nLocation	Məkana\ngörə
+Calculate	Hesabla
+Calculate\nField	Sahəni\nhesabla
+Calculate\nGeometry	Həndəsəni\nhesabla
+Calculate Field	Sahəni hesabla
+Calculate field	Sahəni hesabla
+Calculate field values.	Sahə qiymətlərini hesablayın.
+Calculate Geometry Attributes	Həndəsə atributlarını hesabla
+Can't read this folder	Bu qovluğu oxumaq mümkün deyil
+Cancel	Ləğv et
+CARGO_PKG_VERSION	CARGO_PKG_VERSION
+Cartography	Kartoqrafiya
+Case Field	Qrup sahəsi
+Catalog	Kataloq
+Catalog\nPane	Kataloq\npaneli
+Change the map's backdrop.	Xəritənin fonunu dəyişin.
+Choose how the layer is drawn.	Layın necə çəkiləcəyini seçin.
+Choose the interface language.	İnterfeys dilini seçin.
+Circle	Dairə
+Classes	Siniflər
+Clear	Təmizlə
+Clear\nLimits	Hədləri\ntəmizlə
+Clear History	Tarixçəni təmizlə
+Clear Selection	Seçimi təmizlə
+Clear selection	Seçimi təmizlə
+Clear the selection in every layer.	Bütün laylarda seçimi təmizləyin.
+Clear the selection.	Seçimi təmizləyin.
+Click or drag a box to select features. Shift adds, Ctrl removes.	Obyektləri seçmək üçün klikləyin və ya çərçivə çəkin. Shift əlavə edir, Ctrl çıxarır.
+Click or drag a box · Shift adds · Ctrl removes	Klikləyin və ya çərçivə çəkin · Shift əlavə edir · Ctrl çıxarır
+Click the corners of the area · double-click to finish	Ərazinin künclərinə klikləyin · bitirmək üçün iki dəfə klikləyin
+Click the map to add a point	Nöqtə əlavə etmək üçün xəritəyə klikləyin
+Click to add points · double-click to finish · Esc to stop	Nöqtə əlavə etmək üçün klikləyin · bitirmək üçün iki dəfə klikləyin · dayandırmaq üçün Esc
+Click to add vertices · double-click to close the polygon	Təpə əlavə etmək üçün klikləyin · poliqonu qapamaq üçün iki dəfə klikləyin
+Click to add vertices · double-click to finish the line	Təpə əlavə etmək üçün klikləyin · xətti bitirmək üçün iki dəfə klikləyin
+Click to switch between decimal degrees and DMS	Onluq dərəcə ilə DMS arasında keçid üçün klikləyin
+Clip	Kəs
+Clip Features	Obyektləri kəs
+Close	Bağla
+Close Table	Cədvəli bağla
+Close table	Cədvəli bağla
+Collapse or expand the ribbon	Lenti yığ və ya aç
+Collapse the ribbon (Ctrl+F1)	Lenti yığ (Ctrl+F1)
+Color	Rəng
+Color Scheme	Rəng sxemi
+Color scheme	Rəng sxemi
+Command\nSearch	Əmr\naxtarışı
+Command Search	Əmr axtarışı
+Completed	Tamamlandı
+Compute a field's values.	Sahənin qiymətlərini hesablayın.
+Contents	Məzmun
+Conversion	Çevirmə
+Copies the (selected) features of a layer to a new layer.	Layın (seçilmiş) obyektlərini yeni laya kopyalayır.
+Copy Coordinates	Koordinatları kopyala
+Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Sahənin say, cəm, orta, min, maks və standart sapması, istəyə görə qrup sahəsi üzrə.
+Countries, cities, rivers and lakes	Ölkələr, şəhərlər, çaylar və göllər
+Counts the points that fall inside each polygon.	Hər poliqonun daxilinə düşən nöqtələri sayır.
+Create	Yarat
+Create a new project or start from the World Atlas sample.	Yeni layihə yaradın və ya Dünya Atlası nümunəsindən başlayın.
+Create Feature	Obyekt yarat
+Create Line	Xətt yarat
+Create Point	Nöqtə yarat
+Create Polygon	Poliqon yarat
+Creates a point inside each input feature.	Hər giriş obyektinin daxilində nöqtə yaradır.
+Creates polygons around input features at a given distance.	Giriş obyektləri ətrafında verilmiş məsafədə poliqonlar yaradır.
+Ctrl+	Ctrl+
+Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
+Ctrl+F1	Ctrl+F1
+Ctrl+K	Ctrl+K
+Ctrl+N / O / S	Ctrl+N / O / S
+Ctrl+T	Ctrl+T
+Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
+Current Project	Cari layihə
+Dark\nMode	Qaranlıq\nrejim
+Data	Məlumat
+Data Design	Məlumat dizaynı
+Data Management	Məlumat idarəetməsi
+Data type	Məlumat tipi
+Data…	Məlumat…
+Definition\nQuery	Təyinat\nsorğusu
+Definition Query	Təyinat sorğusu
+Definition query	Təyinat sorğusu
+Definition Query…	Təyinat sorğusu…
+Delete	Sil
+Delete Field	Sahəni sil
+Delete Map	Xəritəni sil
+Delete selected features	Seçilmiş obyektləri sil
+Delete selected rows	Seçilmiş sətirləri sil
+Delete the selected features.	Seçilmiş obyektləri silin.
+Details	Təfərrüatlar
+Details of the selected layer.	Seçilmiş layın təfərrüatları.
+Diamond	Romb
+Display	Göstərmə
+Dissolve	Birləşdir
+Dissolve Field	Birləşdirmə sahəsi
+Distance	Məsafə
+Double	Double
+Double-click	İki dəfə klik
+Double-click to add	Əlavə etmək üçün iki dəfə klikləyin
+Downloaded {name}	{name} endirildi
+Drag / middle-drag	Sürüklə / orta düymə ilə sürüklə
+Drag a box or click to zoom in	Yaxınlaşdırmaq üçün çərçivə çəkin və ya klikləyin
+Drag a box to zoom into.	Yaxınlaşdırmaq üçün çərçivə çəkin.
+Draw a halo around label text.	Etiket mətni ətrafında halo çəkin.
+Draw new features in the selected layer. Double-click to finish lines and polygons.	Seçilmiş layda yeni obyektlər çəkin. Xətləri və poliqonları bitirmək üçün iki dəfə klikləyin.
+Draw the layer at every scale.	Layı bütün miqyaslarda çəkin.
+Drawing	Çəkmə
+Drawing Order	Çəkmə sırası
+Dusk	Toran
+e.g.  pop_est / 1000000   or   'Africa'   or   name	məs.  pop_est / 1000000   və ya   'Africa'   və ya   name
+e.g. continent = 'Europe'	məs. continent = 'Europe'
+e.g. pop_est > 100000000 AND continent = 'Asia'	məs. pop_est > 100000000 AND continent = 'Asia'
+East	Şərq
+Edit	Redaktə
+Edit Attribute	Atributu redaktə et
+Edit attributes in the table.	Cədvəldə atributları redaktə edin.
+Effects	Effektlər
+Ember	Köz
+Encloses each feature, or all features, in its convex hull.	Hər obyekti və ya bütün obyektləri qabarıq örtüyə alır.
+Equal Interval	Bərabər interval
+Erase	Pozma
+Erase Features	Obyektləri poz
+Esc	Esc
+Expand Legend	Legendanı genişləndir
+Expand the ribbon (Ctrl+F1)	Lenti aç (Ctrl+F1)
+Explore	Kəşf et
+Export	İxrac
+Export\nFeatures	Obyektləri\nixrac et
+Export\nMap	Xəritəni\nixrac et
+Export Features	Obyektləri ixrac et
+Export Features (tool)	Obyektləri ixrac et (alət)
+Export Features…	Obyektləri ixrac et…
+Export Map	Xəritəni ixrac et
+Export Map failed unexpectedly	Xəritənin ixracı gözlənilmədən uğursuz oldu
+Export Map…	Xəritəni ixrac et…
+Export Table	Cədvəli ixrac et
+Export the layer.	Layı ixrac edin.
+Export the map view as a PNG image (with labels and a scale bar).	Xəritə görünüşünü PNG təsviri kimi ixrac edin (etiketlər və miqyas xətkeşi ilə).
+Export the selected layer to GeoJSON or CSV.	Seçilmiş layı GeoJSON və ya CSV formatına ixrac edin.
+Expression	İfadə
+Extract	Çıxarma
+Extracts the parts of input features that fall inside clip polygons.	Giriş obyektlərinin kəsmə poliqonları daxilinə düşən hissələrini çıxarır.
+Failed	Uğursuz oldu
+Feature	Obyekt
+Feature\nTo Point	Obyektdən\nnöqtəyə
+Feature Layer	Obyekt layı
+Feature Layer › Drawing	Obyekt layı › Çəkmə
+Feature To Point	Obyektdən nöqtəyə
+Features	Obyektlər
+Field	Sahə
+Field name	Sahə adı
+Fields	Sahələr
+Fields:	Sahələr:
+Filter rows…	Sətirləri süz…
+Find a place by coordinates.	Koordinatlara görə yer tapın.
+Find and run geoprocessing tools.	Geoemal alətlərini tapın və işə salın.
+Find any command by name (Ctrl+K).	İstənilən əmri adına görə tapın (Ctrl+K).
+Find Tools	Alət axtar
+Fixed Zoom In	Sabit yaxınlaşdırma
+Fixed Zoom Out	Sabit uzaqlaşdırma
+Folders	Qovluqlar
+Forest	Meşə
+Full Extent	Tam hüdud
+Full extent	Tam hüdud
+Generalization	Ümumiləşdirmə
+Geo-\nprocessing	Geo-\nemal
+GeoJSON or CSV	GeoJSON və ya CSV
+Geometry	Həndəsə
+Geoprocessing	Geoemal
+Geoprocessing history.	Geoemal tarixçəsi.
+Geoprocessing Pane	Geoemal paneli
+Go	Keç
+Go back to the previous extent.	Əvvəlki hüduda qayıdın.
+Go forward to the next extent.	Növbəti hüduda keçin.
+Go to a saved extent or save the current one.	Saxlanmış hüduda keçin və ya cari hüdudu saxlayın.
+Go To Bookmark	Əlfəcinə keç
+Go To XY	XY-ə keç
+Graduated Colors	Pilləli rənglər
+Graticule	Koordinat şəbəkəsi
+Greys	Boz tonlar
+Group Option	Qrup seçimi
+Halo	Halo
+Harbour (qualitative)	Liman (keyfiyyət)
+Help	Kömək
+History	Tarixçə
+Home	Home
+Identify	Müəyyən et
+Import\nProject	Layihəni\nidxal et
+In Beyond	Yaxınlaşma həddi
+In project	Layihədə
+Input Features	Giriş obyektləri
+Input Polygons	Giriş poliqonları
+Input Rows	Giriş sətirləri
+Input Summary Features	Giriş yekun obyektləri
+Input Table	Giriş cədvəli
+Inquiry	Sorğu
+Insert	Əlavə et
+Interface font: {font}	İnterfeys şrifti: {font}
+Invalid: {error}	Yanlışdır: {error}
+Invert	Tərsinə çevir
+Invert the selection.	Seçimi tərsinə çevirin.
+IS NULL	IS NULL
+keep current	cari saxla
+Keyboard Shortcuts	Klaviatura qısayolları
+Keyboard shortcuts.	Klaviatura qısayolları.
+Kilometers	Kilometr
+Label	Etiket
+Label Class	Etiket sinfi
+Label Field	Etiket sahəsi
+Labeling	Etiketləmə
+Lagoon	Laquna
+Language	Dil
+Last map render time	Xəritənin son göstərilmə vaxtı
+Latitude (Y)	En dairəsi (Y)
+Layer	Lay
+Layer From\nSelection	Seçimdən\nlay
+Layers	Laylar
+Layers and Table Views	Laylar və cədvəl görünüşləri
+LIKE	LIKE
+Limit which features draw with a SQL expression.	SQL ifadəsi ilə hansı obyektlərin çəkildiyini məhdudlaşdırın.
+Line color	Xətt rəngi
+Line width	Xətt qalınlığı
+LineString	LineString
+List Commands	Əmrlərin siyahısı
+Locate	Yer tap
+Location	Məkan
+Long	Long
+Longitude (X)	Uzunluq dairəsi (X)
+Major Lakes	Əsas göllər
+Major Rivers	Əsas çaylar
+Make a new layer of the selected features.	Seçilmiş obyektlərdən yeni lay yaradın.
+Make Layer From Selected Features	Seçilmiş obyektlərdən lay yarat
+Manage Edits	Redaktələri idarə et
+Map	Xəritə
+Map › Layer	Xəritə › Lay
+Maps	Xəritələr
+Marker	Marker
+Measure	Ölç
+Measure Area	Sahəni ölç
+Measure Distance	Məsafəni ölç
+Measure geodesic distances and areas on the map.	Xəritədə geodeziya məsafələrini və sahələrini ölçün.
+Merges polygons that share a field value into one feature per value.	Eyni sahə qiymətinə malik poliqonları hər qiymət üçün bir obyektdə birləşdirir.
+Meters	Metr
+Method	Üsul
+Midnight	Gecəyarısı
+Miles	Mil
+Minimum Bounding Geometry	Minimal sərhəd həndəsəsi
+Mod+	Mod+
+Mouse wheel	Siçan çarxı
+Move Down	Aşağı köçür
+Move Up	Yuxarı köçür
+Name	Ad
+Natural Breaks (Jenks)	Təbii fasilələr (Jenks)
+Natural Earth	Natural Earth
+Navigate	Naviqasiya
+Navigation	Naviqasiya
+New	Yeni
+New\nBookmark	Yeni\nəlfəcin
+New\nMap	Yeni\nxəritə
+New / Open / Save project	Yeni / Aç / Layihəni saxla
+New Bookmark	Yeni əlfəcin
+New Bookmark…	Yeni əlfəcin…
+New Map	Yeni xəritə
+New Project	Yeni layihə
+New project	Yeni layihə
+New Selection	Yeni seçim
+Next	Növbəti
+Next Extent	Növbəti hüdud
+No	Xeyr
+No bookmarks yet	Hələ əlfəcin yoxdur
+No standalone tables	Müstəqil cədvəl yoxdur
+None	Heç biri
+North	Şimal
+Not saved yet	Hələ saxlanmayıb
+Ocean	Okean
+OID	OID
+Only features matching this expression draw in {layer}.	{layer} layında yalnız bu ifadəyə uyğun obyektlər çəkilir.
+Open	Aç
+Open a .rgisx project	.rgisx layihəsini aç
+Open a RustGIS project.	RustGIS layihəsini açın.
+Open folder	Qovluğu aç
+Open Project	Layihəni aç
+Open project	Layihəni aç
+Open Project (from text)	Layihəni aç (mətndən)
+Open the attribute table of the selected layer.	Seçilmiş layın atribut cədvəlini açın.
+Open the layer's attribute table.	Layın atribut cədvəlini açın.
+Open the layer's table.	Layın cədvəlini açın.
+Open the selected layer's table.	Seçilmiş layın cədvəlini açın.
+Open the Symbology pane.	Simvolika panelini açın.
+Open, save and create projects	Layihələri açın, saxlayın və yaradın
+Open…	Aç…
+OR	OR
+Out Beyond	Uzaqlaşma həddi
+Outline	Kontur
+Outline color	Kontur rəngi
+Outline width	Kontur qalınlığı
+Output	Çıxış
+Output Name	Çıxış adı
+Overlay	Üst-üstə qoyma
+Pan (Explore) · any tool	Sürüşdür (Kəşf) · istənilən alət
+Pan to a longitude/latitude.	Uzunluq/en dairəsinə sürüşdürün.
+Pan with the mouse, zoom with the wheel and click features to see their attributes.	Siçanla sürüşdürün, çarxla miqyası dəyişin və atributlarını görmək üçün obyektlərə klikləyin.
+Paper	Kağız
+Parent folder	Ana qovluq
+PNG image	PNG təsviri
+Point	Nöqtə
+Polygon	Poliqon
+Polyline	Polixətt
+Populated Places	Yaşayış məntəqələri
+Previous	Əvvəlki
+Previous Extent	Əvvəlki hüdud
+Primary\nSymbology	Əsas\nsimvolika
+Primary symbology	Əsas simvolika
+Project	Layihə
+Project Info	Layihə məlumatı
+Proportional Symbols	Mütənasib simvollar
+Proximity	Yaxınlıq
+Quantile	Kvantil
+Quick Access Toolbar	Sürətli giriş paneli
+Redo	Təkrarla
+Redo the change you undid.	Geri aldığınız dəyişikliyi təkrarlayın.
+Redo {action}	{action} təkrarla
+Red–Blue	Qırmızı–Mavi
+Remove	Sil
+Remove Bookmark	Əlfəcini sil
+Remove From Current Selection	Cari seçimdən çıxar
+Remove the layer from the map.	Layı xəritədən silin.
+Removes the parts of polygon features that overlap erase polygons.	Poliqon obyektlərin pozma poliqonları ilə üst-üstə düşən hissələrini silir.
+Removes vertices that deviate less than a tolerance (Douglas–Peucker).	Tolerantlıqdan az kənara çıxan təpələri silir (Douglas–Peucker).
+Rename	Adını dəyiş
+Rename Layer	Layın adını dəyiş
+Rename Map	Xəritənin adını dəyiş
+Rename Project	Layihənin adını dəyiş
+Rename…	Adını dəyiş…
+Ribbon feature coverage: {done} of {total} features ({pct}%).	Lent funksiyalarının əhatəsi: {total} funksiyadan {done} ({pct}%).
+Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Lent uyğunluğu: {total} lent funksiyasından {done} RustGIS əmrinə malikdir.
+Run	İşə sal
+Run Tool	Aləti işə sal
+RustGIS	RustGIS
+RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS təmiz Rust dilində yazılmış açıq mənbəli masaüstü CİS-dir. Onun lenti tanış masaüstü CİS iş axınını izləyir; hər əməliyyat komanda sətrindən də işə sala biləcəyiniz bir əmrdir.
+RustGIS project	RustGIS layihəsi
+Sample data (Natural Earth)	Nümunə məlumat (Natural Earth)
+Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Nümunə məlumat © Natural Earth (ictimai mülkiyyət). RustGIS Apache-2.0 lisenziyası altındadır.
+Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	Nümunə məlumat: Natural Earth (ictimai mülkiyyət). Apache-2.0 lisenziyası altındadır.
+Save	Saxla
+Save As	Fərqli saxla
+Save Project	Layihəni saxla
+Save project	Layihəni saxla
+Save Project As	Layihəni fərqli saxla
+Save the current extent as a bookmark.	Cari hüdudu əlfəcin kimi saxlayın.
+Save the project under a new name.	Layihəni yeni adla saxlayın.
+Save the project with your edits.	Layihəni redaktələrinizlə birlikdə saxlayın.
+Scale 1:	Miqyas 1:
+Search commands — e.g. buffer, basemap, labels	Əmr axtarın — məs. bufer, əsas xəritə, etiketlər
+Search Distance (km)	Axtarış məsafəsi (km)
+See the tools you've run.	İşə saldığınız alətlərə baxın.
+Select	Seç
+Select (click)	Seç (klik)
+Select (rectangle)	Seç (düzbucaqlı)
+select a layer in the Contents pane first	əvvəlcə Məzmun panelində lay seçin
+Select a layer in the Contents pane.	Məzmun panelində lay seçin.
+Select All	Hamısını seç
+Select By\nAttributes	Atributlara\ngörə seç
+Select By\nLocation	Məkana\ngörə seç
+Select By Attributes	Atributlara görə seç
+Select every feature.	Bütün obyektləri seçin.
+Select features by their spatial relationship.	Obyektləri məkan əlaqələrinə görə seçin.
+Select features on the map.	Xəritədə obyektləri seçin.
+Select features that intersect another layer.	Başqa layla kəsişən obyektləri seçin.
+Select features with a SQL expression.	Obyektləri SQL ifadəsi ilə seçin.
+Select Layer	Lay seç
+Select Layer By Attribute	Layı atributlara görə seç
+Select Layer By Location	Layı məkana görə seç
+Select Rows	Sətirləri seç
+Select rows with a SQL expression.	Sətirləri SQL ifadəsi ilə seçin.
+Select Subset From Current Selection	Cari seçimdən alt çoxluq seç
+Selectable	Seçilə bilən
+Selected	Seçilmiş
+Selected Features: {n}	Seçilmiş obyektlər: {n}
+Selected only	Yalnız seçilmişlər
+Selecting Features	Obyektlərin seçilməsi
+Selection	Seçim
+Selection Type	Seçim növü
+Selects features that intersect features in another layer.	Başqa laydakı obyektlərlə kəsişən obyektləri seçir.
+Selects features with a SQL where clause, e.g. pop_est > 1000000.	Obyektləri SQL where şərti ilə seçir, məs. pop_est > 1000000.
+Set Map Tool	Xəritə alətini təyin et
+Set Scale	Miqyası təyin et
+Shape	Forma
+Share	Paylaş
+Share › Output	Paylaş › Çıxış
+Shift+	Shift+
+Shift+drag	Shift+sürüklə
+Shortcuts	Qısayollar
+Show latitude/longitude lines on the basemap.	Əsas xəritədə en/uzunluq xətlərini göstərin.
+Show or hide the Catalog pane.	Kataloq panelini göstərin və ya gizlədin.
+Show or hide the Contents pane.	Məzmun panelini göstərin və ya gizlədin.
+Show or hide the Geoprocessing pane.	Geoemal panelini göstərin və ya gizlədin.
+Show or hide the layer.	Layı göstərin və ya gizlədin.
+Show the Symbology pane for the selected layer.	Seçilmiş lay üçün Simvolika panelini göstərin.
+Simplify	Sadələşdir
+Single Symbol	Tək simvol
+Size	Ölçü
+Source	Mənbə
+South	Cənub
+Square	Kvadrat
+Standalone Tables	Müstəqil cədvəllər
+Star	Ulduz
+Start	Başla
+Statistics	Statistika
+Statistics Field	Statistika sahəsi
+Status Bar	Status paneli
+Summarize	Yekunlaşdır
+Summarize\nWithin	Daxilində\nyekunlaşdır
+Summarize Within	Daxilində yekunlaşdır
+Summary\nStatistics	Yekun\nstatistika
+Summary Statistics	Yekun statistika
+Switch	Dəyiş
+Switch between light and dark themes.	Açıq və qaranlıq mövzular arasında keçid edin.
+Switch Selection	Seçimi dəyiş
+Switch selection	Seçimi dəyiş
+Symbol	Simvol
+Symbol Color	Simvol rəngi
+Symbology	Simvolika
+Symbology Pane	Simvolika paneli
+Table	Cədvəl
+Tables	Cədvəllər
+Text	Mətn
+Text Symbol	Mətn simvolu
+the map has no layers	xəritədə lay yoxdur
+Thermal	Termal
+This map has no layers yet.	Bu xəritədə hələ lay yoxdur.
+Toggle Dark Mode	Qaranlıq rejimi dəyiş
+Tolerance (km)	Tolerantlıq (km)
+Toolbox	Alətlər qutusu
+Toolboxes	Alətlər qutuları
+Tools	Alətlər
+Tools you run appear here.	İşə saldığınız alətlər burada görünür.
+Total {total}   ·   Segment {segment}	Cəmi {total}   ·   Seqment {segment}
+Transparency	Şəffaflıq
+Triangle	Üçbucaq
+Turn Labels Off	Etiketləri söndür
+Turn labels on or off for the selected layer.	Seçilmiş lay üçün etiketləri yandırın və ya söndürün.
+Turn labels on or off.	Etiketləri yandırın və ya söndürün.
+Unavailable: {reason}	Əlçatan deyil: {reason}
+Undo	Geri al
+Undo / Redo	Geri al / Təkrarla
+Undo the last change.	Son dəyişikliyi geri alın.
+Undo {action}	{action} geri al
+Unique Values	Unikal qiymətlər
+Units	Vahidlər
+Valid expression · {n} matching rows	İfadə düzgündür · {n} uyğun sətir
+Vector data	Vektor məlumatı
+Version {version}	Versiya {version}
+View	Görünüş
+View › Windows	Görünüş › Pəncərələr
+Visibility	Görünmə
+Visibility Range	Görünmə diapazonu
+Visible	Görünən
+Welcome to RustGIS	RustGIS-ə xoş gəlmisiniz
+West	Qərb
+WGS 84 / Web Mercator	WGS 84 / Web Mercator
+Where	Where
+Where Clause	Where şərti
+Windows	Pəncərələr
+World	Dünya
+World Atlas	Dünya Atlası
+World Atlas Sample	Dünya Atlası nümunəsi
+World Countries	Dünya ölkələri
+Yes	Bəli
+Zoom about the pointer	Göstərici ətrafında miqyası dəyiş
+Zoom In	Yaxınlaşdır
+Zoom in	Yaxınlaşdır
+Zoom in / out	Yaxınlaşdır / uzaqlaşdır
+Zoom in on the centre of the map.	Xəritənin mərkəzində yaxınlaşdırın.
+Zoom in · finish a sketch	Yaxınlaşdır · eskizi bitir
+Zoom Out	Uzaqlaşdır
+Zoom out	Uzaqlaşdır
+Zoom out from the centre of the map.	Xəritənin mərkəzindən uzaqlaşdırın.
+Zoom To	Yaxınlaşdır
+Zoom To\nLayer	Laya\nyaxınlaşdır
+Zoom to a box (Explore)	Çərçivəyə yaxınlaşdır (Kəşf)
+Zoom To Layer	Laya yaxınlaşdır
+Zoom To Selection	Seçimə yaxınlaşdır
+Zoom to selection	Seçimə yaxınlaşdır
+Zoom to the extent of all layers.	Bütün layların hüduduna yaxınlaşdırın.
+Zoom to the layer's extent.	Layın hüduduna yaxınlaşdırın.
+Zoom to the selected features.	Seçilmiş obyektlərə yaxınlaşdırın.
+Zoom to the selection.	Seçimə yaxınlaşdırın.
+Zoom to the whole world.	Bütün dünyaya yaxınlaşdırın.
+Zoom To World	Dünyaya yaxınlaşdır
+⌘K	⌘K

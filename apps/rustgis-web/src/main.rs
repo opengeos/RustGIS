@@ -6,7 +6,8 @@
 //!
 //! Differences from the desktop app: Open and Add Data use the browser's file picker (GeoJSON,
 //! CSV and `.rgisx`; Shapefiles need the desktop app), files can be dropped on the page, and
-//! Save and Export download. URL flags: `?webgl` forces WebGL2; `?blank` starts an empty project.
+//! Save and Export download. URL flags: `?webgl` forces WebGL2; `?blank` starts an empty project;
+//! `?lang=de` sets the interface language.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_arch = "wasm32")]

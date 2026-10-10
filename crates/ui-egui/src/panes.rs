@@ -22,7 +22,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 LeftPane::Contents => ("Contents", "ui.pane.contents"),
                 LeftPane::Catalog => ("Catalog", "ui.pane.catalog"),
             };
-            pane_header(app, ui, title, close, &t);
+            pane_header(app, ui, tl!(title), close, &t);
             match left {
                 LeftPane::Contents => contents(app, ui, &t),
                 LeftPane::Catalog => catalog(app, ui, &t),
@@ -37,7 +37,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 RightPane::History => ("History", "ui.pane.history"),
                 RightPane::Details => ("Details", "ui.pane.details"),
             };
-            pane_header(app, ui, title, close, &t);
+            pane_header(app, ui, tl!(title), close, &t);
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| match right {
                     RightPane::Geoprocessing => geoprocessing(app, ui, &t),
@@ -61,7 +61,7 @@ fn pane_header(app: &mut RustGisApp, ui: &mut Ui, title: &str, close: &str, t: &
         ui.painter().rect_filled(cr, CornerRadius::same(4), t.hover);
     }
     icons::paint(ui.painter(), cr.shrink(5.0), "close", t.text_dim, t.accent);
-    if resp.on_hover_text("Close").clicked() {
+    if resp.on_hover_text(tl!("Close")).clicked() {
         let _ = app.run(close, Value::Null);
     }
 }
@@ -124,7 +124,7 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(12.0);
-        ui.label(egui::RichText::new("Drawing Order").size(11.5).color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Drawing Order")).size(11.5).color(t.text_dim));
     });
     ui.add_space(2.0);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -146,16 +146,20 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ui.add_space(30.0);
             let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
             icons::paint(ui.painter(), r, "basemap", t.icon, t.accent);
-            ui.label(egui::RichText::new(format!("Basemap · {}", app.session.map().basemap.label())).size(12.0).color(t.text_dim));
+            ui.label(
+                egui::RichText::new(format!("{} · {}", tl!("Basemap"), tl!(app.session.map().basemap.label())))
+                    .size(12.0)
+                    .color(t.text_dim),
+            );
         });
         if layers.is_empty() {
             ui.add_space(20.0);
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new("This map has no layers yet.").color(t.text_dim));
-                if ui.button("Add Data…").clicked() {
+                ui.label(egui::RichText::new(tl!("This map has no layers yet.")).color(t.text_dim));
+                if ui.button(tl!("Add Data…")).clicked() {
                     let _ = app.run("ui.addData", Value::Null);
                 }
-                if ui.button("Add sample countries").clicked() {
+                if ui.button(tl!("Add sample countries")).clicked() {
                     let _ = app.run("layer.addSample", json!({"name": "countries"}));
                 }
             });
@@ -166,7 +170,7 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.add_space(12.0);
-                ui.label(egui::RichText::new("Standalone Tables").size(11.5).color(t.text_dim));
+                ui.label(egui::RichText::new(tl!("Standalone Tables")).size(11.5).color(t.text_dim));
             });
             for name in tables {
                 ui.horizontal(|ui| {
@@ -254,7 +258,14 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
         let _ = app.run("layer.select", json!({"layer": l.id}));
         app.ui.right = Some(RightPane::Symbology);
     }
-    let tip = format!("{} · {} features · {}", l.geometry_type().label(), l.dataset.features.len(), l.renderer.kind_label());
+    let tip = crate::i18n::fmt(
+        "{type} · {n} features · {renderer}",
+        &[
+            ("type", tl!(l.geometry_type().label())),
+            ("n", &l.dataset.features.len().to_string()),
+            ("renderer", tl!(l.renderer.kind_label())),
+        ],
+    );
     let resp = resp.on_hover_text(tip);
     resp.context_menu(|ui| {
         let _ = app.session.run("layer.select", &json!({"layer": l.id}));
@@ -269,33 +280,33 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
                 ui.close();
             }
         }
-        if ui.button(if l.labels.enabled { "Turn Labels Off" } else { "Label" }).clicked() {
+        if ui.button(tl!(if l.labels.enabled { "Turn Labels Off" } else { "Label" })).clicked() {
             let _ = app.run("labels.enable", json!({"layer": l.id}));
             ui.close();
         }
         ui.separator();
-        if ui.button("Move Up").clicked() {
+        if ui.button(tl!("Move Up")).clicked() {
             let _ = app.run("layer.moveUp", json!({"layer": l.id}));
             ui.close();
         }
-        if ui.button("Move Down").clicked() {
+        if ui.button(tl!("Move Down")).clicked() {
             let _ = app.run("layer.moveDown", json!({"layer": l.id}));
             ui.close();
         }
-        if ui.button("Rename…").clicked() {
+        if ui.button(tl!("Rename…")).clicked() {
             let _ = app.run("ui.dialog", json!({"name": "renameLayer"}));
             ui.close();
         }
-        if ui.button("Definition Query…").clicked() {
+        if ui.button(tl!("Definition Query…")).clicked() {
             let _ = app.run("ui.dialog", json!({"name": "definitionQuery"}));
             ui.close();
         }
-        if ui.button("Export Features…").clicked() {
+        if ui.button(tl!("Export Features…")).clicked() {
             let _ = app.run("ui.exportLayer", Value::Null);
             ui.close();
         }
         ui.separator();
-        if ui.button("Remove").clicked() {
+        if ui.button(tl!("Remove")).clicked() {
             let _ = app.run("layer.remove", json!({"layer": l.id}));
             ui.close();
         }
@@ -322,7 +333,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
 fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
-            egui::CollapsingHeader::new(egui::RichText::new("Maps").font(semibold(12.5))).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(egui::RichText::new(tl!("Maps")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
                 let maps: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
                 for (i, m) in maps.iter().enumerate() {
                     ui.horizontal(|ui| {
@@ -334,7 +345,7 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                             let _ = app.run("map.activate", json!({"name": m}));
                         }
                         resp.context_menu(|ui| {
-                            if ui.button("Delete").clicked() {
+                            if ui.button(tl!("Delete")).clicked() {
                                 let _ = app.run("map.remove", json!({"name": m}));
                                 ui.close();
                             }
@@ -342,17 +353,17 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     });
                 }
             });
-            egui::CollapsingHeader::new(egui::RichText::new("Toolboxes").font(semibold(12.5))).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(egui::RichText::new(tl!("Toolboxes")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
                 let mut boxes: Vec<&str> = TOOLS.iter().map(|t| t.toolbox.split(" › ").next().unwrap_or(t.toolbox)).collect();
                 boxes.sort();
                 boxes.dedup();
                 for b in boxes {
-                    egui::CollapsingHeader::new(b).default_open(false).show(ui, |ui| {
+                    egui::CollapsingHeader::new(crate::i18n::location(b)).default_open(false).show(ui, |ui| {
                         for tool in TOOLS.iter().filter(|x| x.toolbox.starts_with(b)) {
                             ui.horizontal(|ui| {
                                 let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                                 icons::paint(ui.painter(), r, "tools", t.icon, t.accent);
-                                if ui.link(tool.name).on_hover_text(tool.summary).clicked() {
+                                if ui.link(tl!(tool.name)).on_hover_text(tl!(tool.summary)).clicked() {
                                     let _ = app.run("ui.gp.open", json!({"tool": tool.id}));
                                 }
                             });
@@ -360,10 +371,10 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     });
                 }
             });
-            egui::CollapsingHeader::new(egui::RichText::new("Tables").font(semibold(12.5))).default_open(true).show(ui, |ui| {
+            egui::CollapsingHeader::new(egui::RichText::new(tl!("Tables")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
                 let tables: Vec<String> = app.session.project.tables.iter().map(|t| t.name.clone()).collect();
                 if tables.is_empty() {
-                    ui.label(egui::RichText::new("No standalone tables").small().weak());
+                    ui.label(egui::RichText::new(tl!("No standalone tables")).small().weak());
                 }
                 for n in tables {
                     if ui.link(&n).clicked() {
@@ -374,7 +385,7 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             });
             // A web page can't list local folders.
             if !cfg!(target_arch = "wasm32") {
-                egui::CollapsingHeader::new(egui::RichText::new("Folders").font(semibold(12.5))).default_open(true).show(ui, |ui| {
+                egui::CollapsingHeader::new(egui::RichText::new(tl!("Folders")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
                     folder_browser(app, ui, t);
                 });
             }
@@ -391,7 +402,7 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         .or_else(|| std::env::current_dir().ok());
     let Some(dir) = dir else { return };
     ui.horizontal(|ui| {
-        if ui.small_button("↑").on_hover_text("Parent folder").clicked()
+        if ui.small_button("↑").on_hover_text(tl!("Parent folder")).clicked()
             && let Some(p) = dir.parent()
         {
             app.table.folder = Some(p.to_path_buf());
@@ -399,7 +410,7 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.label(egui::RichText::new(dir.display().to_string()).small().weak());
     });
     let Ok(rd) = std::fs::read_dir(&dir) else {
-        ui.label(egui::RichText::new("Can't read this folder").small().weak());
+        ui.label(egui::RichText::new(tl!("Can't read this folder")).small().weak());
         return;
     };
     let mut entries: Vec<(bool, String, std::path::PathBuf)> = rd
@@ -423,7 +434,7 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             };
             icons::paint(ui.painter(), r, icon, t.icon, t.accent);
             let resp = ui.add(egui::Label::new(egui::RichText::new(&name).size(12.0)).sense(Sense::click()));
-            let resp = resp.on_hover_text(if is_dir { "Open folder" } else { "Double-click to add" });
+            let resp = resp.on_hover_text(tl!(if is_dir { "Open folder" } else { "Double-click to add" }));
             if resp.double_clicked() || (is_dir && resp.clicked()) {
                 if is_dir {
                     app.table.folder = Some(path.clone());
@@ -483,7 +494,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
             icons::paint(ui.painter(), r, "search", t.text_dim, t.accent);
-            ui.add(egui::TextEdit::singleline(&mut app.gp.search).hint_text("Find Tools").desired_width(f32::INFINITY));
+            ui.add(egui::TextEdit::singleline(&mut app.gp.search).hint_text(tl!("Find Tools")).desired_width(f32::INFINITY));
         });
         ui.add_space(8.0);
         let q = app.gp.search.to_lowercase();
@@ -498,7 +509,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             if tools.is_empty() {
                 continue;
             }
-            ui.label(egui::RichText::new(b).size(11.0).color(t.text_dim));
+            ui.label(egui::RichText::new(crate::i18n::location(b)).size(11.0).color(t.text_dim));
             for tool in tools {
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 42.0), Sense::click());
                 if resp.hovered() {
@@ -511,10 +522,10 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     t.icon,
                     t.accent,
                 );
-                ui.painter().text(pos2(r.min.x + 34.0, r.min.y + 13.0), Align2::LEFT_CENTER, tool.name, semibold(12.5), t.accent_text);
-                let summary: String = tool.summary.chars().take(52).collect();
+                ui.painter().text(pos2(r.min.x + 34.0, r.min.y + 13.0), Align2::LEFT_CENTER, tl!(tool.name), semibold(12.5), t.accent_text);
+                let summary: String = tl!(tool.summary).chars().take(52).collect();
                 ui.painter().text(pos2(r.min.x + 34.0, r.min.y + 29.0), Align2::LEFT_CENTER, summary, regular(11.0), t.text_dim);
-                if resp.on_hover_text(tool.summary).clicked() {
+                if resp.on_hover_text(tl!(tool.summary)).clicked() {
                     app.gp.open(Some(tool.id), &app.session);
                 }
             }
@@ -524,14 +535,14 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     };
     // Tool form.
     ui.horizontal(|ui| {
-        if ui.button("←").on_hover_text("Back to tools").clicked() {
+        if ui.button(tl!("←")).on_hover_text(tl!("Back to tools")).clicked() {
             app.gp.tool = None;
         }
         let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
         icons::paint(ui.painter(), r, tool_icon(spec.id), t.icon, t.accent);
-        ui.label(egui::RichText::new(spec.name).font(semibold(15.0)));
+        ui.label(egui::RichText::new(tl!(spec.name)).font(semibold(15.0)));
     });
-    ui.label(egui::RichText::new(spec.summary).size(11.5).color(t.text_dim));
+    ui.label(egui::RichText::new(tl!(spec.summary)).size(11.5).color(t.text_dim));
     ui.add_space(4.0);
     ui.separator();
     ui.add_space(4.0);
@@ -546,7 +557,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let first_layer =
         spec.params.iter().find(|p| matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer)).map(|p| p.name);
     for p in spec.params {
-        ui.label(egui::RichText::new(format!("{}{}", p.label, if p.required { " *" } else { "" })).size(12.0));
+        ui.label(egui::RichText::new(format!("{}{}", tl!(p.label), if p.required { " *" } else { "" })).size(12.0));
         let cur = app.gp.values.get(p.name).cloned().unwrap_or_default();
         let options: Option<Vec<String>> = match p.kind {
             ParamKind::Layer => Some(layer_names(None)),
@@ -574,16 +585,26 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         };
         match options {
             Some(opts) => {
-                egui::ComboBox::from_id_salt(("gp", p.name))
-                    .selected_text(if cur.is_empty() { "—".to_string() } else { cur.clone() })
-                    .width(ui.available_width() - 4.0)
-                    .show_ui(ui, |ui| {
+                let choice = matches!(p.kind, ParamKind::Choice(_));
+                let shown = |v: &str| {
+                    if v.is_empty() {
+                        "—".to_string()
+                    } else if choice {
+                        tl!(v).to_string()
+                    } else {
+                        v.to_string()
+                    }
+                };
+                egui::ComboBox::from_id_salt(("gp", p.name)).selected_text(shown(&cur)).width(ui.available_width() - 4.0).show_ui(
+                    ui,
+                    |ui| {
                         for o in opts {
-                            if ui.selectable_label(o == cur, if o.is_empty() { "—" } else { &o }).clicked() {
+                            if ui.selectable_label(o == cur, shown(&o)).clicked() {
                                 app.gp.values.insert(p.name, o);
                             }
                         }
-                    });
+                    },
+                );
             }
             None => {
                 let mut v = cur;
@@ -597,7 +618,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        let run = egui::Button::new(egui::RichText::new("Run").font(semibold(13.0)).color(egui::Color32::WHITE))
+        let run = egui::Button::new(egui::RichText::new(tl!("Run")).font(semibold(13.0)).color(egui::Color32::WHITE))
             .fill(t.green)
             .min_size(vec2(96.0, 30.0))
             .corner_radius(CornerRadius::same(6));
@@ -629,7 +650,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             .inner_margin(egui::Margin::same(8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(egui::RichText::new(head).font(semibold(12.5)).color(stroke));
+                ui.label(egui::RichText::new(tl!(head)).font(semibold(12.5)).color(stroke));
                 for m in msgs {
                     ui.label(egui::RichText::new(m).size(11.5));
                 }
@@ -679,13 +700,13 @@ fn ramp_swatch(ui: &mut Ui, ramp: Ramp, w: f32, selected: bool, t: &Tokens) -> e
 
 fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let Some(l) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned() else {
-        ui.label(egui::RichText::new("Select a layer in the Contents pane.").color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Select a layer in the Contents pane.")).color(t.text_dim));
         return;
     };
     let g = l.geometry_type();
     ui.label(egui::RichText::new(&l.name).font(semibold(14.0)));
     ui.add_space(6.0);
-    ui.label(egui::RichText::new("Primary symbology").size(11.5).color(t.text_dim));
+    ui.label(egui::RichText::new(tl!("Primary symbology")).size(11.5).color(t.text_dim));
     let kinds: Vec<(&str, &str)> = if g == GeometryType::Point {
         vec![
             ("single", "Single Symbol"),
@@ -731,9 +752,9 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 t.icon,
                 t.accent,
             );
-            let short = label.split(' ').next().unwrap_or(label);
+            let short = tl!(label).split(' ').next().unwrap_or(label);
             ui.painter().text(pos2(r.center().x, r.max.y - 11.0), Align2::CENTER_CENTER, short, regular(11.0), t.text);
-            if resp.on_hover_text(*label).clicked() && !sel {
+            if resp.on_hover_text(tl!(*label)).clicked() && !sel {
                 let _ = app.run("layer.symbology", json!({"type": code}));
             }
         }
@@ -747,23 +768,25 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             field_combo(app, ui, "Field", field, &all, "unique");
             ramp_picker(app, ui, *ramp, t);
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(format!("{} classes", classes.len())).size(11.5).color(t.text_dim));
+            ui.label(
+                egui::RichText::new(crate::i18n::fmt("{n} classes", &[("n", &classes.len().to_string())])).size(11.5).color(t.text_dim),
+            );
             legend_list(ui, &l, t);
         }
         Renderer::Graduated { field, breaks, ramp, method, .. } => {
             field_combo(app, ui, "Field", field, &numeric, "graduated");
             ui.horizontal(|ui| {
-                ui.label("Method");
-                egui::ComboBox::from_id_salt("sym_method").selected_text(method.label()).width(180.0).show_ui(ui, |ui| {
+                ui.label(tl!("Method"));
+                egui::ComboBox::from_id_salt("sym_method").selected_text(tl!(method.label())).width(180.0).show_ui(ui, |ui| {
                     for m in ClassMethod::ALL {
-                        if ui.selectable_label(m == *method, m.label()).clicked() {
+                        if ui.selectable_label(m == *method, tl!(m.label())).clicked() {
                             let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{m:?}"), "classes": breaks.len(), "ramp": format!("{ramp:?}")}));
                         }
                     }
                 });
             });
             ui.horizontal(|ui| {
-                ui.label("Classes");
+                ui.label(tl!("Classes"));
                 let mut k = breaks.len();
                 if ui.add(egui::DragValue::new(&mut k).range(1..=12)).changed() {
                     let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{method:?}"), "classes": k, "ramp": format!("{ramp:?}")}));
@@ -781,10 +804,10 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     ui.add_space(10.0);
     ui.separator();
-    ui.label(egui::RichText::new("Layer").size(11.5).color(t.text_dim));
+    ui.label(egui::RichText::new(tl!("Layer")).size(11.5).color(t.text_dim));
     let mut tr = l.transparency;
     ui.horizontal(|ui| {
-        ui.label("Transparency");
+        ui.label(tl!("Transparency"));
         ui.spacing_mut().slider_width = 150.0;
         let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer());
         if r.drag_stopped() || (r.changed() && !r.dragged()) {
@@ -795,7 +818,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 
 fn field_combo(app: &mut RustGisApp, ui: &mut Ui, label: &str, cur: &str, fields: &[String], kind: &str) {
     ui.horizontal(|ui| {
-        ui.label(label);
+        ui.label(tl!(label));
         egui::ComboBox::from_id_salt(("sym_field", kind)).selected_text(cur).width(200.0).show_ui(ui, |ui| {
             for f in fields {
                 if ui.selectable_label(f == cur, f).clicked() {
@@ -808,11 +831,11 @@ fn field_combo(app: &mut RustGisApp, ui: &mut Ui, label: &str, cur: &str, fields
 
 fn ramp_picker(app: &mut RustGisApp, ui: &mut Ui, cur: Ramp, t: &Tokens) {
     ui.add_space(4.0);
-    ui.label(egui::RichText::new("Color scheme").size(11.5).color(t.text_dim));
+    ui.label(egui::RichText::new(tl!("Color scheme")).size(11.5).color(t.text_dim));
     let w = (ui.available_width() - 8.0) / 2.0;
     egui::Grid::new("ramps").spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         for (i, r) in Ramp::ALL.into_iter().enumerate() {
-            if ramp_swatch(ui, r, w, r == cur, t).on_hover_text(r.label()).clicked() {
+            if ramp_swatch(ui, r, w, r == cur, t).on_hover_text(tl!(r.label())).clicked() {
                 let _ = app.run("layer.ramp", json!({"ramp": format!("{r:?}")}));
             }
             if i % 2 == 1 {
@@ -848,41 +871,41 @@ fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, g: GeometryType, 
             let (r, _) = ui.allocate_exact_size(vec2(44.0, 36.0), Sense::hover());
             ui.painter().rect_filled(r, CornerRadius::same(4), t.ribbon);
             patch(ui.painter(), r.shrink(6.0), &s, g);
-            ui.label(egui::RichText::new("Symbol").font(semibold(12.5)));
+            ui.label(egui::RichText::new(tl!("Symbol")).font(semibold(12.5)));
         });
         egui::Grid::new("symbol_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
             if g != GeometryType::Polyline {
-                ui.label("Color");
+                ui.label(tl!("Color"));
                 let mut c = c32(s.fill);
                 if ui.color_edit_button_srgba(&mut c).changed() {
                     let _ = app.run("layer.color", json!({"color": rgba(c).hex()}));
                 }
                 ui.end_row();
             }
-            ui.label(if g == GeometryType::Polyline { "Line color" } else { "Outline color" });
+            ui.label(tl!(if g == GeometryType::Polyline { "Line color" } else { "Outline color" }));
             let mut c = c32(s.stroke);
             if ui.color_edit_button_srgba(&mut c).changed() {
                 let key = if g == GeometryType::Polyline { "layer.color" } else { "layer.outline" };
                 let _ = app.run(key, json!({"color": rgba(c).hex()}));
             }
             ui.end_row();
-            ui.label(if g == GeometryType::Polyline { "Line width" } else { "Outline width" });
+            ui.label(tl!(if g == GeometryType::Polyline { "Line width" } else { "Outline width" }));
             let mut w = s.stroke_width;
             if ui.add(egui::DragValue::new(&mut w).range(0.0..=12.0).speed(0.05).suffix(" pt")).changed() {
                 let _ = app.run("layer.outline", json!({"width": w}));
             }
             ui.end_row();
             if g == GeometryType::Point {
-                ui.label("Size");
+                ui.label(tl!("Size"));
                 let mut sz = s.size;
                 if ui.add(egui::DragValue::new(&mut sz).range(1.0..=60.0).speed(0.1).suffix(" pt")).changed() {
                     let _ = app.run("layer.marker", json!({"size": sz}));
                 }
                 ui.end_row();
-                ui.label("Shape");
-                egui::ComboBox::from_id_salt("marker_shape").selected_text(s.marker.label()).show_ui(ui, |ui| {
+                ui.label(tl!("Shape"));
+                egui::ComboBox::from_id_salt("marker_shape").selected_text(tl!(s.marker.label())).show_ui(ui, |ui| {
                     for m in Marker::ALL {
-                        if ui.selectable_label(m == s.marker, m.label()).clicked() {
+                        if ui.selectable_label(m == s.marker, tl!(m.label())).clicked() {
                             let _ = app.run("layer.marker", json!({"shape": m.label()}));
                         }
                     }
@@ -899,7 +922,7 @@ fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, g: GeometryType, 
 fn history(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let hist = app.session.project.gp_history.clone();
     if hist.is_empty() {
-        ui.label(egui::RichText::new("Tools you run appear here.").color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Tools you run appear here.")).color(t.text_dim));
         return;
     }
     for h in hist.iter().rev() {
@@ -910,7 +933,7 @@ fn history(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                     ui.painter().circle_filled(r.center(), 4.5, if h.ok { t.green } else { t.red });
-                    ui.label(egui::RichText::new(&h.tool).font(semibold(12.5)));
+                    ui.label(egui::RichText::new(tl!(&h.tool)).font(semibold(12.5)));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(egui::RichText::new(format!("{} ms", h.millis)).size(11.0).color(t.text_dim));
                     });
@@ -922,26 +945,26 @@ fn history(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         );
         ui.add_space(4.0);
     }
-    if ui.button("Clear History").clicked() {
+    if ui.button(tl!("Clear History")).clicked() {
         let _ = app.run("gp.clearHistory", Value::Null);
     }
 }
 
 fn details(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let Some(l) = app.session.active_layer.and_then(|id| app.session.map().layer(id)) else {
-        ui.label(egui::RichText::new("Select a layer in the Contents pane.").color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Select a layer in the Contents pane.")).color(t.text_dim));
         return;
     };
     let e = l.extent();
     ui.label(egui::RichText::new(&l.name).font(semibold(14.0)));
     egui::Grid::new("details").num_columns(2).striped(true).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
         let rows = [
-            ("Geometry", l.geometry_type().label().to_string()),
+            ("Geometry", tl!(l.geometry_type().label()).to_string()),
             ("Features", l.dataset.features.len().to_string()),
             ("Fields", l.dataset.fields.len().to_string()),
             ("Selected", l.selection.len().to_string()),
-            ("Symbology", l.renderer.kind_label().to_string()),
-            ("Source", l.dataset.source.clone().unwrap_or_else(|| "In project".into())),
+            ("Symbology", tl!(l.renderer.kind_label()).to_string()),
+            ("Source", l.dataset.source.clone().unwrap_or_else(|| tl!("In project").into())),
             ("West", format!("{:.4}°", e.min_x)),
             ("East", format!("{:.4}°", e.max_x)),
             ("South", format!("{:.4}°", e.min_y)),
@@ -949,17 +972,17 @@ fn details(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ("Definition query", l.definition_query.clone().unwrap_or_else(|| "—".into())),
         ];
         for (k, v) in rows {
-            ui.label(egui::RichText::new(k).color(t.text_dim));
+            ui.label(egui::RichText::new(tl!(k)).color(t.text_dim));
             ui.label(v);
             ui.end_row();
         }
     });
     ui.add_space(8.0);
-    ui.label(egui::RichText::new("Fields").font(semibold(12.5)));
+    ui.label(egui::RichText::new(tl!("Fields")).font(semibold(12.5)));
     for f in &l.dataset.fields {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&f.name).monospace().size(11.5));
-            ui.label(egui::RichText::new(f.ty.label()).size(11.0).color(t.text_dim));
+            ui.label(egui::RichText::new(tl!(f.ty.label())).size(11.0).color(t.text_dim));
         });
     }
 }

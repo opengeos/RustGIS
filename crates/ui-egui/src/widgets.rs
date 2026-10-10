@@ -46,13 +46,14 @@ pub fn tooltip(app: &RustGisApp, resp: Response, title: &str, desc: &str, id: &s
     let why = why_disabled(app, id);
     resp.on_hover_ui(|ui| {
         ui.set_max_width(280.0);
+        let title = tl!(title);
         let head = if sc.is_empty() { title.to_string() } else { format!("{title}  ({sc})") };
         ui.label(egui::RichText::new(head).font(semibold(12.5)));
         if !desc.is_empty() {
-            ui.label(egui::RichText::new(desc).size(11.5).weak());
+            ui.label(egui::RichText::new(tl!(desc)).size(11.5).weak());
         }
         if let Some(w) = why {
-            ui.label(egui::RichText::new(format!("Unavailable: {w}")).size(11.0).italics().weak());
+            ui.label(egui::RichText::new(crate::i18n::fmt("Unavailable: {reason}", &[("reason", tl!(w))])).size(11.0).italics().weak());
         }
     })
 }
@@ -90,6 +91,7 @@ pub fn big(
     checked: bool,
     menu: bool,
 ) -> Response {
+    let (label, desc) = (tl!(label), tl!(desc));
     let t = Tokens::get(ui.ctx());
     let lw = label.split('\n').map(|l| text_w(ui, l, regular(11.5)) + if menu { 9.0 } else { 0.0 }).fold(0.0, f32::max);
     let w = (lw + 14.0).max(50.0);
@@ -122,6 +124,7 @@ pub fn big(
 
 /// A small button: 18 px icon with an optional label.
 pub fn small(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, desc: &str, id: &str, params: Value, checked: bool) -> Response {
+    let (label, desc) = (tl!(label), tl!(desc));
     let t = Tokens::get(ui.ctx());
     let tw = if label.is_empty() { 0.0 } else { text_w(ui, label, regular(11.5)) + 8.0 };
     let (r, resp) = ui.allocate_exact_size(vec2(26.0 + tw, 22.0), Sense::click());
@@ -158,6 +161,7 @@ pub fn big_menu(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, desc
 
 /// A small button that opens a menu.
 pub fn small_menu(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, desc: &str, menu: impl FnOnce(&mut Ui, &mut RustGisApp)) {
+    let (label, desc) = (tl!(label), tl!(desc));
     let t = Tokens::get(ui.ctx());
     let tw = text_w(ui, label, regular(11.5)) + 20.0;
     let (r, resp) = ui.allocate_exact_size(vec2(26.0 + tw, 22.0), Sense::click());
@@ -174,6 +178,7 @@ pub fn small_menu(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, de
 
 /// A menu row that runs a command (disabled when the command is).
 pub fn menu_item(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, id: &str, params: Value) {
+    let label = tl!(label);
     let on = enabled(app, id);
     let resp = ui.add_enabled(
         on,
@@ -197,6 +202,7 @@ pub fn menu_item(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, id:
 
 /// A ribbon group: controls laid out left to right over a centred label, with a separator.
 pub fn group(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
+    let title = tl!(title);
     let t = Tokens::get(ui.ctx());
     let start = ui.cursor().min;
     let inner = ui.vertical(|ui| {
@@ -239,7 +245,7 @@ pub fn ribbon_combo(ui: &mut Ui, id: &str, label: &str, current: &str, options: 
     let mut out = None;
     ui.horizontal(|ui| {
         if !label.is_empty() {
-            ui.label(egui::RichText::new(label).size(11.5));
+            ui.label(egui::RichText::new(tl!(label)).size(11.5));
         }
         egui::ComboBox::from_id_salt(id).selected_text(current).width(width).show_ui(ui, |ui| {
             for o in options {
