@@ -56,8 +56,8 @@ jobs:
           ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          token=$(printf '%s' "$RAW_TOKEN" | tr -d '[:space:]"')
-          token=${token#Bearer}
+          # Drop a leading "Bearer " first, then quotes and whitespace.
+          token=$(printf '%s' "$RAW_TOKEN" | sed -E '1s/^[[:space:]]*Bearer[[:space:]]+//' | tr -d '[:space:]"')
           echo "::add-mask::$token"
           if ! printf '%s' "$token" | grep -Eq '^[A-Za-z0-9_-]{30,}$'; then
             echo "::error::CLOUDFLARE_API_TOKEN is ${#token} characters and not an API Token. Create one under My Profile > API Tokens with Account > Cloudflare Pages > Edit (the Global API Key will not work)."
@@ -66,8 +66,12 @@ jobs:
           # User tokens verify at /user/tokens/verify, account-owned tokens at
           # /accounts/<id>/tokens/verify.
           api=https://api.cloudflare.com/client/v4
-          user=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$api/user/tokens/verify")
-          acct=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$api/accounts/$ACCOUNT_ID/tokens/verify")
+          user=$(curl -s --max-time 20 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$api/user/tokens/verify")
+          acct=$(curl -s --max-time 20 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$api/accounts/$ACCOUNT_ID/tokens/verify")
+          if [ "$user" = 000 ] && [ "$acct" = 000 ]; then
+            echo "::error::Could not reach the Cloudflare API to verify the token (network error or timeout)."
+            exit 1
+          fi
           if [ "$user" != 200 ] && [ "$acct" != 200 ]; then
             echo "::error::Cloudflare rejected CLOUDFLARE_API_TOKEN (user verify HTTP $user, account verify HTTP $acct). Check it is active, not expired, and for account ${ACCOUNT_ID:0:6}…"
             exit 1
@@ -89,6 +93,11 @@ jobs:
             --branch="pr-${{ github.event.pull_request.number }}"
             --commit-hash="${{ github.event.pull_request.head.sha }}"
             --commit-dirty=true
+
+      # Later steps (including the third-party github-script) don't need the token.
+      - name: Drop the token from the environment
+        if: always() && steps.token.outcome == 'success'
+        run: echo "CF_TOKEN=" >> "$GITHUB_ENV"
 
       - name: Comment preview URL on PR
         if: steps.deploy.outputs.deployment-url != ''

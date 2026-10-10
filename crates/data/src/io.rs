@@ -6,8 +6,8 @@ use serde_json::{Map, Value as Json, json};
 
 use crate::{Coord, DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
 
-/// Largest file read into memory (1 GiB).
-const MAX_BYTES: u64 = 1 << 30;
+/// Largest file read into memory (256 MiB). Parsing JSON can take several times the file size.
+const MAX_BYTES: u64 = 256 << 20;
 
 /// File types the readers understand, for open dialogs.
 pub const READ_EXTENSIONS: &[&str] = &["geojson", "json", "csv", "txt", "shp"];
@@ -63,11 +63,19 @@ pub fn write_path(ds: &Dataset, path: &Path) -> Result<()> {
 /// write never truncates an existing file. The temporary file is removed on failure.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    let mut tmp_name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    tmp_name.push(".tmp");
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let Some(name) = path.file_name() else {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{} is not a file path", path.display())));
+    };
+    // A unique temp name per write, so concurrent writes to the same target never share one,
+    // and `create_new` so an existing file or symlink at that name is never followed.
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(name);
+    tmp_name.push(format!(".{}.{}.tmp", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)));
     let tmp = path.with_file_name(tmp_name);
     let res = (|| {
-        let mut f = std::fs::File::create(&tmp)?;
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
         std::fs::rename(&tmp, path)
@@ -120,10 +128,10 @@ pub fn geometry_to_geojson(g: &Geometry) -> Json {
     match g {
         Geometry::Point(p) => json!({"type": "Point", "coordinates": c(p)}),
         Geometry::MultiPoint(v) => json!({"type": "MultiPoint", "coordinates": l(v)}),
-        Geometry::Line(parts) if parts.len() == 1 => json!({"type": "LineString", "coordinates": l(&parts[0])}),
+        Geometry::Line(parts) if let [only] = parts.as_slice() => json!({"type": "LineString", "coordinates": l(only)}),
         Geometry::Line(parts) => json!({"type": "MultiLineString", "coordinates": parts.iter().map(|p| l(p)).collect::<Vec<_>>()}),
-        Geometry::Polygon(polys) if polys.len() == 1 => {
-            json!({"type": "Polygon", "coordinates": polys[0].iter().map(|r| l(r)).collect::<Vec<_>>()})
+        Geometry::Polygon(polys) if let [only] = polys.as_slice() => {
+            json!({"type": "Polygon", "coordinates": only.iter().map(|r| l(r)).collect::<Vec<_>>()})
         }
         Geometry::Polygon(polys) => json!({"type": "MultiPolygon", "coordinates": polys
             .iter()
@@ -542,6 +550,19 @@ mod tests {
         assert_eq!(ds.fields[v].ty, FieldType::Double);
         assert_eq!(ds.fields[n].ty, FieldType::Text, "all-null columns are Text");
         assert_eq!(ds.value(1, v), &Value::Float(1.0));
+    }
+
+    #[test]
+    fn write_atomic_replaces_and_cleans_up() {
+        let dir = std::env::temp_dir().join(format!("rustgis-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("out.txt");
+        write_atomic(&p, b"one").unwrap();
+        write_atomic(&p, b"two").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"two");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temp files left behind");
+        assert!(write_atomic(Path::new("/"), b"x").is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
