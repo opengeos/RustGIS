@@ -41,13 +41,14 @@ fn main() -> eframe::Result {
         }
     }
     app.session.dirty = false;
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("RustGIS")
-            .with_app_id("org.rustgis.RustGIS")
-            .with_inner_size([1480.0, 920.0])
-            .with_min_inner_size([900.0, 560.0]),
-        ..Default::default()
-    };
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("RustGIS")
+        .with_app_id("org.rustgis.RustGIS")
+        .with_inner_size([1480.0, 920.0])
+        .with_min_inner_size([900.0, 560.0]);
+    if let Some((size, rgba)) = rustgis_engine::render::logo::rgba(256) {
+        viewport = viewport.with_icon(egui::IconData { rgba, width: size, height: size });
+    }
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
     eframe::run_native("RustGIS", options, Box::new(move |_cc| Ok(Box::new(App(app)))))
 }

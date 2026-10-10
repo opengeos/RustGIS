@@ -86,7 +86,12 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
 }
 
 fn start(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
-    ui.label(egui::RichText::new("Welcome to RustGIS").font(semibold(26.0)));
+    ui.horizontal(|ui| {
+        let (r, _) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::hover());
+        app.paint_logo(ui, r);
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Welcome to RustGIS").font(semibold(26.0)));
+    });
     ui.label(egui::RichText::new("Create a new project or start from the World Atlas sample.").color(t.text_dim));
     ui.add_space(24.0);
     ui.label(egui::RichText::new("New Project").font(semibold(15.0)));

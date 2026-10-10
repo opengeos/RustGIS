@@ -20,6 +20,8 @@ nav = [
 ]
 
 [project.theme]
+logo = "https://assets.rustgis.app/images/logo.svg"
+favicon = "https://assets.rustgis.app/images/favicon.png"
 features = [
   "content.code.copy",
   "navigation.footer",
@@ -31,7 +33,6 @@ features = [
 ]
 
 [project.theme.icon]
-logo = "material/earth"
 repo = "fontawesome/brands/github"
 
 [[project.theme.palette]]

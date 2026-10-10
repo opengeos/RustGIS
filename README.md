@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://assets.rustgis.app/images/logo.svg" alt="RustGIS logo: a rust-coloured cog framing a segmented globe with an orbit" width="160">
+</p>
+
 <h1 align="center">RustGIS</h1>
 
 <p align="center">

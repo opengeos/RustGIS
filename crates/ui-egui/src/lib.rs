@@ -80,6 +80,7 @@ pub struct RustGisApp {
     applied_dark: Option<bool>,
     sent_title: String,
     pub quit_requested: bool,
+    logo: Option<egui::TextureHandle>,
 }
 
 impl RustGisApp {
@@ -99,6 +100,25 @@ impl RustGisApp {
             applied_dark: None,
             sent_title: String::new(),
             quit_requested: false,
+            logo: None,
+        }
+    }
+
+    /// The RustGIS logo as a texture (rasterised once from `rustgis_render::logo`).
+    pub fn logo(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
+        if self.logo.is_none()
+            && let Some(pm) = rustgis_engine::render::logo::pixmap(256)
+        {
+            let img = egui::ColorImage::from_rgba_premultiplied([pm.width() as usize, pm.height() as usize], pm.data());
+            self.logo = Some(ctx.load_texture("rustgis-logo", img, egui::TextureOptions::LINEAR));
+        }
+        self.logo.as_ref().map(|t| t.id())
+    }
+
+    /// Paints the logo into `rect`.
+    pub fn paint_logo(&mut self, ui: &egui::Ui, rect: egui::Rect) {
+        if let Some(id) = self.logo(ui.ctx()) {
+            ui.painter().image(id, rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
         }
     }
 

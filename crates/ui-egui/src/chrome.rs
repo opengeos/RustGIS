@@ -19,8 +19,8 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
             let full = ui.max_rect();
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
-                let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
-                icons::paint(ui.painter(), r, "logo", t.icon, t.accent);
+                let (r, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
+                app.paint_logo(ui, r);
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new("RustGIS").font(semibold(13.0)).color(t.text));
                 ui.add_space(10.0);
@@ -335,14 +335,16 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
 }
 
 pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
-    let t = Tokens::get(ctx);
     if app.ui.about {
+        let logo_tex = app.logo(ctx);
         let mut open = true;
         egui::Window::new("About RustGIS").open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
             ui.set_width(420.0);
             ui.horizontal(|ui| {
-                let (r, _) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::hover());
-                icons::paint(ui.painter(), r, "logo", t.icon, t.accent);
+                let (r, _) = ui.allocate_exact_size(vec2(56.0, 56.0), Sense::hover());
+                logo_tex.inspect(|id| {
+                    ui.painter().image(*id, r, egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+                });
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("RustGIS").font(semibold(20.0)));
                     ui.label(egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).weak());
