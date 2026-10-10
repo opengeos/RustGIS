@@ -43,15 +43,38 @@ jobs:
       - name: Create a scratch directory for wrangler
         run: mkdir -p .wrangler-deploy
 
-      - name: Deploy to Cloudflare Pages
-        id: deploy
+      # Tolerate a token pasted with surrounding whitespace or a "Bearer " prefix, and explain
+      # a malformed one (without printing it) instead of failing with Cloudflare's code 6111.
+      - name: Check the Cloudflare token
+        id: token
         if: >-
           env.HAS_TOKEN == 'true' &&
           github.event.pull_request.head.repo.full_name == github.repository &&
           github.event.pull_request.user.login != 'dependabot[bot]'
+        env:
+          RAW_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          token=$(printf '%s' "$RAW_TOKEN" | tr -d '[:space:]"')
+          token=${token#Bearer}
+          echo "::add-mask::$token"
+          if ! printf '%s' "$token" | grep -Eq '^[A-Za-z0-9_-]{30,}$'; then
+            echo "::error::CLOUDFLARE_API_TOKEN is ${#token} characters and not an API Token. Create one under My Profile > API Tokens with Account > Cloudflare Pages > Edit (the Global API Key will not work)."
+            exit 1
+          fi
+          status=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" https://api.cloudflare.com/client/v4/user/tokens/verify)
+          if [ "$status" != 200 ]; then
+            echo "::error::Cloudflare rejected CLOUDFLARE_API_TOKEN (HTTP $status). Check it is active and not expired."
+            exit 1
+          fi
+          echo "CF_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        if: steps.token.outcome == 'success'
         uses: cloudflare/wrangler-action@v4
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          apiToken: ${{ env.CF_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: .wrangler-deploy
           command: >-
