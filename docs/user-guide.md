@@ -39,7 +39,9 @@ reprojected on the fly as they draw.
 
 ## Rasters
 
-Add a GeoTIFF with **Add Data**, by dropping it on the window, or in the web app by picking it.
+Add a GeoTIFF or an ASCII grid with **Add Data**, by dropping it on the window, or in the web app
+by picking it. An ASCII grid takes its coordinate system from a `.prj` file next to it; in the web
+app, which only sees the one file, it must be in longitude/latitude degrees.
 GeoTIFFs may be grey, RGB(A), palette or multiband, of any pixel type, tiled or striped, and
 compressed with Deflate, LZW, PackBits or JPEG. A raster too large to hold in memory (more than
 120 million samples) opens from its largest overview that fits.

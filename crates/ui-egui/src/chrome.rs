@@ -146,7 +146,7 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                     let with_sub = title_w + sub_w <= b - a;
                     let tw = if with_sub { title_w + sub_w } else { title_w };
                     if tw <= b - a {
-                        let cx = (full.center().x - tw / 2.0).clamp(a, b - tw);
+                        let cx = (full.center().x - tw / 2.0).min(b - tw).max(a);
                         ui.painter().text(pos2(cx, full.center().y), Align2::LEFT_CENTER, &title, semibold(12.5), t.text);
                         if with_sub {
                             ui.painter().text(pos2(cx + title_w, full.center().y), Align2::LEFT_CENTER, &sub, regular(12.0), t.text_dim);

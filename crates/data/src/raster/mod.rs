@@ -16,8 +16,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{DataError, Result};
 
-/// Most samples (pixels × bands) held in memory: 120 million (480 MB).
+/// Most samples (pixels × bands) held in memory: 120 million (480 MB), or 32 million in the
+/// browser, whose memory is much tighter. Reading briefly needs about twice this.
+#[cfg(not(target_arch = "wasm32"))]
 pub const MAX_SAMPLES: usize = 120_000_000;
+#[cfg(target_arch = "wasm32")]
+pub const MAX_SAMPLES: usize = 32_000_000;
+/// Largest ASCII grid file read (1 GiB).
+pub const MAX_ASCII_BYTES: u64 = 1 << 30;
 /// File extensions read as rasters.
 pub const READ_EXTENSIONS: &[&str] = &["tif", "tiff", "asc"];
 
@@ -294,7 +300,9 @@ impl Raster {
 
     /// Whether a value is a real measurement (not no-data or NaN).
     pub fn is_valid(&self, v: f32) -> bool {
-        v.is_finite() && self.nodata.is_none_or(|d| v as f64 != d)
+        // Compared in f32, as the pixels (and the statistics) are: a no-data value such as
+        // -3.4e38 or -9999.1 isn't exactly representable in f32.
+        v.is_finite() && self.nodata.is_none_or(|d| v != d as f32)
     }
 
     /// The value of `band` at pixel (`col`, `row`), unless it is no-data or outside the grid.
@@ -332,6 +340,12 @@ impl Raster {
 
 /// Reads a raster file by path.
 pub fn read_path(path: &Path) -> Result<Raster> {
+    // Only regular files (not FIFOs or devices), and ASCII grids within a size limit, as they
+    // are read whole.
+    let meta = std::fs::metadata(path)?;
+    if !meta.is_file() {
+        return Err(DataError::Format(format!("{} is not a regular file", path.display())));
+    }
     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("raster").to_string();
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let mut r = match ext.as_str() {
@@ -340,6 +354,9 @@ pub fn read_path(path: &Path) -> Result<Raster> {
             geotiff::read(std::io::BufReader::new(f), &name)?
         }
         "asc" => {
+            if meta.len() > MAX_ASCII_BYTES {
+                return Err(DataError::Format("the ASCII grid is too large to open".into()));
+            }
             let text = std::fs::read_to_string(path)?;
             ascii::read(&text, &name, sidecar_crs(path))?
         }

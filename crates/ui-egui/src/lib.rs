@@ -415,12 +415,26 @@ impl RustGisApp {
                 let name = format!("{}.geojson", l.name);
                 self.download(&name, text.into_bytes());
             }
+            "ui.exportRaster" if self.services.download.is_some() => {
+                // The web app: encode once and download.
+                match rustgis_engine::cmd::raster::geotiff_bytes(&self.session, &Value::Null) {
+                    Ok((name, bytes)) => {
+                        self.download(&format!("{name}.tif"), bytes);
+                    }
+                    Err(e) => {
+                        self.session.notify(e.clone(), true);
+                        return Err(e);
+                    }
+                }
+            }
             "ui.exportRaster" => {
-                let (name, bytes) = rustgis_engine::cmd::raster::geotiff_bytes(&self.session, &Value::Null)?;
-                let file = format!("{name}.tif");
-                if !self.download(&file, bytes)
-                    && let Some(path) = dialogs::pick_save(&file, &["tif", "tiff"], tl!("GeoTIFF"))
-                {
+                let name = self
+                    .session
+                    .active_layer
+                    .and_then(|id| self.session.map().layer(id))
+                    .map(|l| format!("{}.tif", l.name))
+                    .unwrap_or_default();
+                if let Some(path) = dialogs::pick_save(&name, &["tif", "tiff"], tl!("GeoTIFF")) {
                     return self.run("share.exportRaster", json!({"path": path}));
                 }
             }

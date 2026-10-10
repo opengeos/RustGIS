@@ -157,7 +157,6 @@ fn command_ids_are_unique() {
     assert_eq!(n, ids.len());
 }
 
-/// Every command with junk parameters returns Ok or Err, never panics, and leaves a usable session.
 /// A 3-band 8×6 UTM 17N GeoTIFF near 81°W, 42°N, as base64.
 fn utm_tiff_b64() -> String {
     use base64::Engine;
@@ -205,8 +204,13 @@ fn raster_layers_open_style_identify_and_round_trip() {
     let st = s.map().layers.last().unwrap().raster.as_ref().unwrap().style.clone();
     assert_eq!(st.renderer, rustgis_map::RasterRenderer::Rgb { red: 2, green: 1, blue: 0 });
     assert!(st.dra && st.gamma == 1.4);
-    // Feature-only commands are off for rasters.
+    // Feature-only commands are off for rasters, and layer conditions follow a named layer.
     assert!(s.run("table.open", &Value::Null).is_err());
+    assert!(s.run("labels.enable", &json!({"layer": "scene"})).is_err());
+    s.run("layer.symbology", &json!({"layer": "Countries", "type": "single"})).unwrap();
+    s.active_layer = s.map().layer_by_name("Countries").map(|l| l.id);
+    s.run("raster.info", &json!({"layer": "scene"})).unwrap();
+    s.active_layer = s.map().layer_by_name("scene").map(|l| l.id);
     // Identify reports features first (Lake Erie is here), then pixel values.
     let v = s.run("identify", &json!({"lon": -81.0, "lat": 42.0})).unwrap();
     assert_eq!(v["layer"], "Lakes", "{v}");
@@ -245,6 +249,7 @@ fn raster_layers_open_style_identify_and_round_trip() {
     assert!(crate::cmd::share::map_png(&mut s, Some(320.0), Some(200.0), None).is_ok());
 }
 
+/// Every command with junk parameters returns Ok or Err, never panics, and leaves a usable session.
 #[test]
 fn hostile_params_never_panic() {
     let junk = [

@@ -88,6 +88,12 @@ fn to_f32(buf: DecodingResult) -> (Vec<f32>, &'static str) {
     }
 }
 
+/// Bytes per sample of the current image (from its bits per sample).
+fn sample_bytes<R: Read + Seek>(dec: &mut Decoder<R>) -> usize {
+    let bits = dec.find_tag_unsigned_vec::<u16>(Tag::BitsPerSample).ok().flatten().and_then(|v| v.into_iter().max()).unwrap_or(8);
+    (bits as usize).div_ceil(8).max(1)
+}
+
 fn samples<R: Read + Seek>(dec: &mut Decoder<R>) -> usize {
     dec.find_tag_unsigned::<u16>(Tag::SamplesPerPixel).ok().flatten().unwrap_or(1).max(1) as usize
 }
@@ -97,7 +103,7 @@ fn samples<R: Read + Seek>(dec: &mut Decoder<R>) -> usize {
 pub fn read<R: Read + Seek>(r: R, name: &str) -> Result<Raster> {
     let limits = {
         let mut l = Limits::default();
-        l.decoding_buffer_size = MAX_SAMPLES.saturating_mul(8);
+        l.decoding_buffer_size = MAX_SAMPLES.saturating_mul(4);
         l.intermediate_buffer_size = 256 << 20;
         l.ifd_value_size = 64 << 20;
         l
@@ -106,10 +112,16 @@ pub fn read<R: Read + Seek>(r: R, name: &str) -> Result<Raster> {
     let (full_w, full_h) = dec.dimensions().map_err(err)?;
     let geo = geo_tags(&mut dec)?;
     let spp = samples(&mut dec);
-    let fits = |w: u32, h: u32, spp: usize| (w as usize).saturating_mul(h as usize).saturating_mul(spp) <= MAX_SAMPLES;
+    let bytes = sample_bytes(&mut dec);
+    // The decoded image is held at its own pixel size before conversion to f32, so bound bytes
+    // as well as samples.
+    let fits = |w: u32, h: u32, spp: usize, bytes: usize| {
+        let n = (w as usize).saturating_mul(h as usize).saturating_mul(spp);
+        n <= MAX_SAMPLES && n.saturating_mul(bytes) <= MAX_SAMPLES.saturating_mul(4)
+    };
     let (mut w, mut h) = (full_w, full_h);
     let mut overview = None;
-    if !fits(w, h, spp) {
+    if !fits(w, h, spp, bytes) {
         let mut found = false;
         while dec.more_images() {
             dec.next_image().map_err(err)?;
@@ -118,7 +130,8 @@ pub fn read<R: Read + Seek>(r: R, name: &str) -> Result<Raster> {
                 continue; // a transparency mask
             }
             let (ow, oh) = dec.dimensions().map_err(err)?;
-            if fits(ow, oh, samples(&mut dec)) {
+            let (ospp, obytes) = (samples(&mut dec), sample_bytes(&mut dec));
+            if fits(ow, oh, ospp, obytes) {
                 (w, h) = (ow, oh);
                 overview = Some((full_w, full_h));
                 found = true;
@@ -160,7 +173,9 @@ pub fn read<R: Read + Seek>(r: R, name: &str) -> Result<Raster> {
     } else if planar {
         (0..nbands).map(|b| values.get(b * n..(b + 1) * n).map(<[f32]>::to_vec).unwrap_or_default()).collect()
     } else {
-        (0..nbands).map(|b| values.iter().skip(b).step_by(nbands).take(n).copied().collect()).collect()
+        let bands = (0..nbands).map(|b| values.iter().skip(b).step_by(nbands).take(n).copied().collect()).collect();
+        drop(values);
+        bands
     };
 
     let mut transform = geo.transform;
@@ -206,8 +221,9 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
     let bytes = |b: usize| -> Option<Vec<u8>> {
         let band = r.bands.get(b)?;
         let s = &band.stats;
-        (s.min >= 0.0 && s.max <= 255.0 && s.categories.is_some() || s.count == 0)
-            .then(|| band.data.iter().map(|v| if v.is_finite() { v.clamp(0.0, 255.0) as u8 } else { 0 }).collect())
+        // Whole numbers within 0–255 (or no valid pixels at all) fit in a byte.
+        let whole_bytes = s.min >= 0.0 && s.max <= 255.0 && (s.categories.is_some() || r.data_type == "UInt8");
+        (whole_bytes || s.count == 0).then(|| band.data.iter().map(|v| if v.is_finite() { v.clamp(0.0, 255.0) as u8 } else { 0 }).collect())
     };
     let rgb = matches!(r.color, ColorHint::Rgb { .. }) && r.bands.len() >= 3;
     macro_rules! tags {
@@ -216,6 +232,9 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
             e.write_tag(Tag::ModelPixelScaleTag, &scale[..]).map_err(err)?;
             e.write_tag(Tag::ModelTiepointTag, &tie[..]).map_err(err)?;
             e.write_tag(Tag::GeoKeyDirectoryTag, &keys[..]).map_err(err)?;
+            if let Some(nd) = r.nodata {
+                e.write_tag(Tag::GdalNodata, nd.to_string().as_str()).map_err(err)?;
+            }
         }};
     }
     if rgb && let (Some(red), Some(green), Some(blue)) = (bytes(0), bytes(1), bytes(2)) {
@@ -242,9 +261,6 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
         let b = r.bands.get(band).ok_or_else(|| err(format!("the raster has no band {}", band + 1)))?;
         let mut img = enc.new_image::<colortype::Gray32Float>(w, h).map_err(err)?;
         tags!(img);
-        if let Some(nd) = r.nodata {
-            img.encoder().write_tag(Tag::GdalNodata, nd.to_string().as_str()).map_err(err)?;
-        }
         img.write_data(&b.data).map_err(err)?;
     }
     Ok(out.into_inner())

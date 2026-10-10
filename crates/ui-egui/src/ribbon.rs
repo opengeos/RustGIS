@@ -732,17 +732,50 @@ fn visibility_and_effects(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_eng
             let mut v = layer.transparency;
             ui.spacing_mut().slider_width = 130.0;
             let r = ui.add(egui::Slider::new(&mut v, 0.0..=100.0).suffix(" %").integer());
-            if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                let _ = app.run("layer.transparency", json!({"value": v}));
-            } else if r.dragged()
-                && let Some(l) = app.session.active_layer.and_then(|id| app.session.map_mut().layer_mut(id))
-            {
-                // Live preview while dragging; the command records it on release.
-                l.transparency = v;
-                app.session.revision = app.session.revision.wrapping_add(1);
-            }
+            live_drag(
+                app,
+                ui,
+                &r,
+                layer.transparency as f64,
+                v as f64,
+                |app, x| {
+                    if let Some(l) = app.session.active_layer.and_then(|id| app.session.map_mut().layer_mut(id)) {
+                        l.transparency = x as f32;
+                    }
+                },
+                |app, x| {
+                    let _ = app.run("layer.transparency", json!({"value": x}));
+                },
+            );
         });
     });
+}
+
+/// A dragged control with a live preview: `set` writes the value straight into the project while
+/// dragging, and on release the pre-drag value is put back before `commit` runs the command, so
+/// the command's undo snapshot holds the old value.
+fn live_drag(
+    app: &mut RustGisApp,
+    ui: &Ui,
+    resp: &egui::Response,
+    before: f64,
+    value: f64,
+    set: impl Fn(&mut RustGisApp, f64),
+    commit: impl FnOnce(&mut RustGisApp, f64),
+) {
+    let key = resp.id.with("live_drag_original");
+    if resp.drag_started() {
+        ui.data_mut(|d| d.insert_temp(key, before));
+    }
+    if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
+        if let Some(original) = ui.data_mut(|d| d.remove_temp::<f64>(key)) {
+            set(app, original);
+        }
+        commit(app, value);
+    } else if resp.dragged() {
+        set(app, value);
+        app.session.revision = app.session.revision.wrapping_add(1);
+    }
 }
 
 fn drawing_group(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map::Layer) {
@@ -964,20 +997,27 @@ fn raster_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
                     ui.add_space((70.0 - text_w(ui, tl!(label), regular(11.5))).max(0.0));
                     let mut v = value;
                     let resp = ui.add(egui::DragValue::new(&mut v).range(range).speed(speed).max_decimals(2));
-                    if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
-                        let _ = app.run("raster.enhance", json!({ key: v }));
-                    } else if resp.dragged()
-                        && let Some(rl) =
-                            app.session.active_layer.and_then(|id| app.session.map_mut().layer_mut(id)).and_then(|l| l.raster.as_mut())
-                    {
-                        // Live preview while dragging; the command records it on release.
-                        match key {
-                            "brightness" => rl.style.brightness = v,
-                            "contrast" => rl.style.contrast = v,
-                            _ => rl.style.gamma = v,
-                        }
-                        app.session.revision = app.session.revision.wrapping_add(1);
-                    }
+                    live_drag(
+                        app,
+                        ui,
+                        &resp,
+                        value,
+                        v,
+                        |app, x| {
+                            let rl =
+                                app.session.active_layer.and_then(|id| app.session.map_mut().layer_mut(id)).and_then(|l| l.raster.as_mut());
+                            if let Some(rl) = rl {
+                                match key {
+                                    "brightness" => rl.style.brightness = x,
+                                    "contrast" => rl.style.contrast = x,
+                                    _ => rl.style.gamma = x,
+                                }
+                            }
+                        },
+                        |app, x| {
+                            let _ = app.run("raster.enhance", json!({ key: x }));
+                        },
+                    );
                 });
             }
         });

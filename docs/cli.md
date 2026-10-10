@@ -28,7 +28,7 @@ rustgis-cli run --sample \
 Rasters work the same way:
 
 ```sh
-rustgis-cli render dem.tif relief.png
+rustgis-cli render dem.tif dem.png
 rustgis-cli run --data dem.tif \
   --cmd 'raster.symbology={"type":"shadedRelief","ramp":"Terrain","zFactor":1.5}' \
   --cmd 'raster.info={}' \

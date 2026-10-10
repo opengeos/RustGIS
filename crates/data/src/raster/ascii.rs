@@ -9,7 +9,7 @@ pub fn read(text: &str, name: &str, crs: Option<Crs>) -> Result<Raster> {
     let bad = |m: &str| DataError::Format(format!("ASCII grid: {m}"));
     let mut tokens = text.split_ascii_whitespace().peekable();
     let (mut ncols, mut nrows, mut x, mut y, mut cell, mut nodata) = (None, None, None, None, None, None);
-    let mut centre = false;
+    let (mut centre_x, mut centre_y) = (false, false);
     while let Some(key) = tokens.peek().map(|k| k.to_ascii_lowercase()) {
         if key.parse::<f64>().is_ok() {
             break;
@@ -23,11 +23,11 @@ pub fn read(text: &str, name: &str, crs: Option<Crs>) -> Result<Raster> {
             "yllcorner" => y = Some(value),
             "xllcenter" => {
                 x = Some(value);
-                centre = true;
+                centre_x = true;
             }
             "yllcenter" => {
                 y = Some(value);
-                centre = true;
+                centre_y = true;
             }
             "cellsize" | "dx" | "dy" => cell = Some(value),
             "nodata_value" => nodata = Some(value),
@@ -42,13 +42,18 @@ pub fn read(text: &str, name: &str, crs: Option<Crs>) -> Result<Raster> {
     let n = (w as usize).checked_mul(h as usize).filter(|n| *n <= MAX_SAMPLES).ok_or_else(|| bad("too large"))?;
     let cell = cell.filter(|c| c.is_finite() && *c > 0.0).ok_or_else(|| bad("missing cellsize"))?;
     let (mut x, mut y) = (x.ok_or_else(|| bad("missing xllcorner"))?, y.ok_or_else(|| bad("missing yllcorner"))?);
-    if centre {
+    if centre_x {
         x -= cell / 2.0;
+    }
+    if centre_y {
         y -= cell / 2.0;
     }
-    let mut data = Vec::with_capacity(n);
-    for t in tokens.take(n) {
-        data.push(t.parse::<f32>().unwrap_or(f32::NAN));
+    // Each value takes at least two characters, so the text bounds what to reserve.
+    let mut data = Vec::with_capacity(n.min(text.len() / 2 + 1));
+    for (i, t) in tokens.take(n).enumerate() {
+        data.push(
+            t.parse::<f32>().map_err(|_| bad(&format!("value {} ('{}') isn't a number", i + 1, t.chars().take(20).collect::<String>())))?,
+        );
     }
     if data.len() != n {
         return Err(bad("fewer values than ncols × nrows"));
@@ -78,5 +83,9 @@ mod tests {
         assert!(read("ncols 3\nnrows 2\n", "g", None).is_err());
         assert!(read("ncols 1e12\nnrows 1e12\nxllcorner 0\nyllcorner 0\ncellsize 1\n", "g", None).is_err());
         assert!(read("ncols 1\nnrows 1\nxllcorner 5e5\nyllcorner 5e6\ncellsize 10\n1", "g", None).is_err());
+        assert!(read("ncols 2\nnrows 1\nxllcorner 0\nyllcorner 0\ncellsize 1\n1 x", "g", None).is_err(), "non-numbers");
+        // Centre and corner coordinates per axis.
+        let r = read("ncols 1\nnrows 1\nxllcenter 10.5\nyllcorner 40\ncellsize 1\n7", "g", None).unwrap();
+        assert_eq!((r.transform.origin_x, r.transform.origin_y), (10.0, 41.0));
     }
 }

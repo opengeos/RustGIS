@@ -213,7 +213,15 @@ impl Session {
     /// panic restores it.
     pub fn run(&mut self, id: &str, params: &Value) -> CmdResult {
         let Some(spec) = self.registry.get(id) else { return Err(format!("unknown command '{id}'")) };
-        if let Some(why) = (spec.enabled)(self) {
+        // Layer conditions apply to the layer the parameters name, falling back to the active one.
+        let named = params.get("layer").and_then(|_| self.layer_id(params).ok());
+        let active = self.active_layer;
+        if named.is_some() {
+            self.active_layer = named;
+        }
+        let blocked = (spec.enabled)(self);
+        self.active_layer = active;
+        if let Some(why) = blocked {
             return Err(format!("{}: {why}", spec.label));
         }
         let (run, mutates, label) = (spec.run, spec.mutates, spec.label);
