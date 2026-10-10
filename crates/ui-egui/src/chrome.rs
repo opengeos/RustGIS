@@ -368,9 +368,12 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
         }
         // The ribbon location is dropped when the palette is too narrow to show it.
         let show_loc = width >= 400.0;
+        // A solid scroll bar takes its own gutter instead of floating over the locations.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         egui::ScrollArea::vertical().max_height(list_h).show(ui, |ui| {
+            let row_w = ui.available_width();
             for (i, (id, label, loc)) in hits.iter().take(40).enumerate() {
-                let mut b = egui::Button::new(egui::RichText::new(label).size(13.0)).frame(false).min_size(vec2(width - 20.0, 26.0));
+                let mut b = egui::Button::new(egui::RichText::new(label).size(13.0)).frame(false).min_size(vec2(row_w, 26.0));
                 if show_loc {
                     b = b.right_text(egui::RichText::new(loc).size(11.0).weak());
                 }
