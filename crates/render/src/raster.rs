@@ -126,8 +126,8 @@ pub(crate) fn draw(pm: &mut Pixmap, r: &Raster, style: &RasterStyle, view: &View
                     continue;
                 }
             }
-            for (k, b) in bands.iter().enumerate() {
-                if let Some(slot) = vals.get_mut(i * nb + k) {
+            for (bi, b) in bands.iter().enumerate() {
+                if let Some(slot) = vals.get_mut(i * nb + bi) {
                     *slot = sample(r, *b, c, row, resampling);
                 }
             }

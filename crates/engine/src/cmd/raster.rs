@@ -140,8 +140,9 @@ pub fn add_raster(s: &mut Session, name: &str, layer: RasterLayer) -> CmdResult 
 pub fn add_path(s: &mut Session, path: &str, name: Option<&str>) -> CmdResult {
     let r = raster::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
     let name = name.map(str::to_string).unwrap_or_else(|| r.name.clone());
-    // Absolute, so the project finds it again from anywhere.
-    let full = std::fs::canonicalize(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
+    // Absolute, so the project finds it again from anywhere (`absolute`, unlike `canonicalize`,
+    // gives plain paths on Windows rather than `\\?\` ones).
+    let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
     add_raster(s, &name, RasterLayer::from_path(r, full))
 }
 

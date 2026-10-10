@@ -10,9 +10,15 @@ pub fn read(text: &str, name: &str, crs: Option<Crs>) -> Result<Raster> {
     let mut tokens = text.split_ascii_whitespace().peekable();
     let (mut ncols, mut nrows, mut x, mut y, mut cell, mut nodata) = (None, None, None, None, None, None);
     let (mut centre_x, mut centre_y) = (false, false);
+    let mut entries = 0;
     while let Some(key) = tokens.peek().map(|k| k.to_ascii_lowercase()) {
         if key.parse::<f64>().is_ok() {
             break;
+        }
+        // A real header has about six entries; give up quickly on text that isn't a grid.
+        entries += 1;
+        if entries > 16 {
+            return Err(bad("not an ASCII grid header"));
         }
         tokens.next();
         let value: f64 = tokens.next().and_then(|v| v.parse().ok()).ok_or_else(|| bad(&format!("bad value for {key}")))?;

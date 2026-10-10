@@ -177,9 +177,15 @@ pub fn read<R: Read + Seek>(r: R, name: &str) -> Result<Raster> {
         v.truncate(n);
         vec![v]
     } else if planar {
-        (0..nbands).map(|b| values.get(b * n..(b + 1) * n).map(<[f32]>::to_vec).unwrap_or_default()).collect()
+        values.chunks(n).take(nbands).map(<[f32]>::to_vec).collect()
     } else {
-        let bands = (0..nbands).map(|b| values.iter().skip(b).step_by(nbands).take(n).copied().collect()).collect();
+        // One pass over the interleaved pixels.
+        let mut bands: Vec<Vec<f32>> = (0..nbands).map(|_| Vec::with_capacity(n)).collect();
+        for px in values.chunks(nbands).take(n) {
+            for (band, v) in bands.iter_mut().zip(px) {
+                band.push(*v);
+            }
+        }
         drop(values);
         bands
     };
