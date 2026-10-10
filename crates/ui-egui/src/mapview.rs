@@ -153,7 +153,11 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
 
     // Draw the (possibly shifted) map texture.
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, t.canvas);
+    // Behind the (possibly shifted or shrunk) last frame: the map's own background, so zooming
+    // out never shows a band of window colour around it.
+    let basemap = app.session.map().basemap;
+    let backdrop = c32(if globe_view { rustgis_engine::render::globe_space(t.dark, basemap) } else { basemap.palette().0 });
+    painter.rect_filled(rect, 0.0, backdrop);
     let old = app.map.tex_camera;
     let e0 = old.extent(w, h);
     let to_screen = |c: &Camera, x: f64, y: f64| {
@@ -177,7 +181,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     // Labels (moved with the texture; hidden while zooming, and while the globe moves, where
     // re-placing them every frame would make them flicker).
     let zooming = (old.res / cam.res - 1.0).abs() > 0.002;
-    if !zooming && !(globe_view && moving) {
+    let hide_labels = zooming || (globe_view && moving);
+    if !hide_labels {
         let dx = tex_rect.min.x - rect.min.x;
         let dy = tex_rect.min.y - rect.min.y;
         for l in &app.map.labels {

@@ -538,6 +538,11 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     Some(Rendered { pixmap: pm, labels })
 }
 
+/// The colour of the space around the globe.
+pub fn globe_space(dark_ui: bool, basemap: rustgis_map::Basemap) -> Rgba {
+    if dark_ui || basemap == rustgis_map::Basemap::Midnight { Rgba::rgb(0x08, 0x0B, 0x10) } else { Rgba::rgb(0xEC, 0xEF, 0xF3) }
+}
+
 /// The globe's backdrop and lighting depend only on the view size, zoom and basemap, not on the
 /// rotation, so they are drawn once and reused while the globe turns.
 struct GlobeLayers {
@@ -602,7 +607,7 @@ fn globe_shading(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, wate
 /// ocean disc.
 fn draw_globe_backdrop(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, water: Rgba, dark_ui: bool, ppp: f32) {
     let dark = dark_ui || basemap == rustgis_map::Basemap::Midnight;
-    let bg = if dark { Rgba::rgb(0x08, 0x0B, 0x10) } else { Rgba::rgb(0xEC, 0xEF, 0xF3) };
+    let bg = globe_space(dark_ui, basemap);
     pm.fill(tiny_skia::Color::from_rgba8(bg.r(), bg.g(), bg.b(), 255));
     let (cx, cy) = g.center();
     let (cx, cy, r) = (cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp);
