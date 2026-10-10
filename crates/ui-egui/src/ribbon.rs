@@ -35,7 +35,9 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         return;
     }
     // A peeked ribbon closes on the next click outside the tab strip and the ribbon itself.
-    let peek_started = app.ui.ribbon_peek && ui.input(|i| i.pointer.any_click());
+    // Popups opened from the ribbon (menus, combos, colour pickers) draw outside it, so a click in
+    // one must not close it.
+    let peek_started = app.ui.ribbon_peek && ui.input(|i| i.pointer.any_click()) && !egui::Popup::is_any_open(ui.ctx());
     let ribbon = egui::Panel::top("ribbon")
         .exact_size(CONTENT_H + LABEL_H + 12.0)
         .show_separator_line(false)

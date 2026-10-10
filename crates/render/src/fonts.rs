@@ -116,10 +116,16 @@ pub fn cjk_font(region: CjkRegion) -> Option<&'static (Vec<u8>, u32)> {
             if meta.len() > 128 << 20 {
                 return None;
             }
-            std::fs::read(path).ok().map(|b| (b, *index))
+            std::fs::read(path).ok().filter(|b| valid_font(b, *index)).map(|b| (b, *index))
         })
     })
     .as_ref()
+}
+
+/// Whether `bytes` hold a font with face `index` that the font parser accepts. Fonts handed to the
+/// UI are checked first: a corrupt file or an out-of-range face index must never reach it.
+pub fn valid_font(bytes: &[u8], index: u32) -> bool {
+    ab_glyph::FontRef::try_from_slice_and_index(bytes, index).is_ok()
 }
 
 /// Where the web app downloads a CJK face from (Noto Sans, SIL Open Font License).

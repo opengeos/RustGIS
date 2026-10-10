@@ -49,7 +49,10 @@ pub fn start() {
                     // `?lang=de` picks the interface language for this visit.
                     let q = query();
                     if let Some(code) = q.trim_start_matches('?').split('&').find_map(|kv| kv.strip_prefix("lang=")) {
-                        app.ui.language = code.to_ascii_lowercase();
+                        match rustgis_ui_egui::i18n::Lang::from_code(code) {
+                            Some(l) => app.ui.language = l.code().to_string(),
+                            None => log::warn!("?lang={code}: no such interface language; following the browser's"),
+                        }
                     }
                     Ok(Box::new(WebShell { app, inbox, dirty }))
                 }),
@@ -116,6 +119,12 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url)).await.map_err(err)?.dyn_into().map_err(err)?;
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
+    }
+    // Fonts are at most a few tens of MB; refuse anything larger.
+    if let Ok(Some(len)) = resp.headers().get("content-length").map(|v| v.and_then(|s| s.parse::<u64>().ok()))
+        && len > 64 << 20
+    {
+        return Err(format!("{len} bytes is too large"));
     }
     let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(err)?).await.map_err(err)?;
     Ok(js_sys::Uint8Array::new(&buf).to_vec())

@@ -46,11 +46,11 @@ pub fn tooltip(app: &RustGisApp, resp: Response, title: &str, desc: &str, id: &s
     let why = why_disabled(app, id);
     resp.on_hover_ui(|ui| {
         ui.set_max_width(280.0);
-        let title = tl!(title);
+        // Callers pass text that is already translated.
         let head = if sc.is_empty() { title.to_string() } else { format!("{title}  ({sc})") };
         ui.label(egui::RichText::new(head).font(semibold(12.5)));
         if !desc.is_empty() {
-            ui.label(egui::RichText::new(tl!(desc)).size(11.5).weak());
+            ui.label(egui::RichText::new(desc).size(11.5).weak());
         }
         if let Some(w) = why {
             ui.label(egui::RichText::new(crate::i18n::fmt("Unavailable: {reason}", &[("reason", tl!(w))])).size(11.0).italics().weak());

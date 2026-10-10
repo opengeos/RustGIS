@@ -187,7 +187,13 @@ pub fn lang_from_tag(tag: &str) -> Option<Lang> {
     if matches!(base.as_str(), "c" | "posix") {
         return Some(Lang::EN);
     }
-    let primary = base.split('-').next().unwrap_or("");
+    let mut parts = base.split('-');
+    let primary = parts.next().unwrap_or("");
+    // Only Simplified Chinese has a catalog: Traditional-script locales fall back to English
+    // rather than get Simplified text.
+    if primary == "zh" && parts.any(|p| matches!(p, "hant" | "tw" | "hk" | "mo")) {
+        return None;
+    }
     Lang::from_code(primary)
 }
 

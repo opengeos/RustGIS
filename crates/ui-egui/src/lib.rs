@@ -116,10 +116,12 @@ pub struct RustGisApp {
     pub quit_requested: bool,
     logo: Option<egui::TextureHandle>,
     pub services: Services,
-    /// Extra font faces installed with the interface fonts: (name, face, primary). A primary face
-    /// (the current language's CJK face) comes right after the interface font; others are
-    /// last-resort fallbacks for glyphs nothing else has.
-    extra_fonts: Vec<(String, egui::FontData, bool)>,
+    /// Extra font faces installed with the interface fonts: (name, face, region). The current
+    /// language's region comes right after the interface font, so its glyph shapes win; the others
+    /// are last-resort fallbacks. Faces borrow 'static bytes, so reinstalling copies nothing.
+    extra_fonts: Vec<(String, egui::FontData, Option<rustgis_engine::render::fonts::CjkRegion>)>,
+    /// The CJK region whose face was put first at the last font install.
+    installed_region: Option<rustgis_engine::render::fonts::CjkRegion>,
     fonts_dirty: bool,
     fonts_requested: Vec<String>,
 }
@@ -144,6 +146,7 @@ impl RustGisApp {
             logo: None,
             services: Services::default(),
             extra_fonts: Vec::new(),
+            installed_region: None,
             fonts_dirty: false,
             fonts_requested: Vec::new(),
         }
@@ -177,20 +180,30 @@ impl RustGisApp {
         if let Some((bytes, index)) = found {
             let mut face = egui::FontData::from_static(bytes);
             face.index = *index;
-            self.extra_fonts.push(("cjk-fallback".into(), face, false));
+            self.extra_fonts.push(("cjk-fallback".into(), face, None));
         }
     }
 
     /// Makes sure the current language's script has a font: an installed CJK face on the desktop,
     /// a download on the web.
+    /// The CJK region of the current language, if any.
+    fn current_region(&self) -> Option<rustgis_engine::render::fonts::CjkRegion> {
+        use rustgis_engine::render::fonts::CjkRegion;
+        match self.lang().script() {
+            i18n::Script::Cjk(i18n::CjkFont::SimplifiedChinese) => Some(CjkRegion::SimplifiedChinese),
+            i18n::Script::Cjk(i18n::CjkFont::Japanese) => Some(CjkRegion::Japanese),
+            i18n::Script::Cjk(i18n::CjkFont::Korean) => Some(CjkRegion::Korean),
+            i18n::Script::Alphabetic => None,
+        }
+    }
+
     fn ensure_script_font(&mut self) {
-        use rustgis_engine::render::fonts::{CjkRegion, cjk_font, cjk_font_url};
-        let i18n::Script::Cjk(kind) = self.lang().script() else { return };
-        let region = match kind {
-            i18n::CjkFont::SimplifiedChinese => CjkRegion::SimplifiedChinese,
-            i18n::CjkFont::Japanese => CjkRegion::Japanese,
-            i18n::CjkFont::Korean => CjkRegion::Korean,
-        };
+        use rustgis_engine::render::fonts::{cjk_font, cjk_font_url};
+        // Switching between CJK languages reorders the faces already loaded.
+        if self.current_region() != self.installed_region {
+            self.fonts_dirty = true;
+        }
+        let Some(region) = self.current_region() else { return };
         let name = format!("cjk-{region:?}");
         if self.extra_fonts.iter().any(|(n, _, _)| *n == name) || self.fonts_requested.contains(&name) {
             return;
@@ -199,7 +212,7 @@ impl RustGisApp {
         if let Some((bytes, index)) = cjk_font(region) {
             let mut face = egui::FontData::from_static(bytes);
             face.index = *index;
-            self.extra_fonts.push((name, face, true));
+            self.extra_fonts.push((name, face, Some(region)));
             self.fonts_dirty = true;
         } else if let Some(fetch) = &self.services.fetch_font {
             fetch(cjk_font_url(region));
@@ -422,14 +435,24 @@ impl RustGisApp {
             None => Vec::new(),
         };
         for (url, bytes) in fonts {
+            use rustgis_engine::render::fonts::{CjkRegion, cjk_font_url, valid_font};
+            let region =
+                [CjkRegion::SimplifiedChinese, CjkRegion::Japanese, CjkRegion::Korean].into_iter().find(|r| cjk_font_url(*r) == url);
+            if !valid_font(&bytes, 0) {
+                log::error!("{url} is not a usable font");
+                continue;
+            }
             let name = format!("web-{}", url.rsplit('/').next().unwrap_or("font"));
             self.extra_fonts.retain(|(n, _, _)| *n != name);
-            self.extra_fonts.push((name, egui::FontData::from_owned(bytes), true));
+            // Downloaded once per session and kept for its lifetime, so borrow it as 'static.
+            let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+            self.extra_fonts.push((name, egui::FontData::from_static(bytes), region));
             self.fonts_dirty = true;
         }
         if self.fonts_dirty {
             self.fonts_dirty = false;
-            theme::install_fonts(ctx, &self.extra_fonts);
+            self.installed_region = self.current_region();
+            theme::install_fonts(ctx, &self.extra_fonts, self.installed_region);
             self.map.invalidate();
         }
         // Files from the async picker or browser drops.
@@ -456,7 +479,8 @@ impl RustGisApp {
         }
         if self.fonts_frames == 0 {
             self.add_cjk_fallback();
-            theme::install_fonts(ctx, &self.extra_fonts);
+            self.installed_region = self.current_region();
+            theme::install_fonts(ctx, &self.extra_fonts, self.installed_region);
         }
         if self.applied_dark != Some(self.ui.dark) {
             let t = if self.ui.dark { theme::Tokens::dark() } else { theme::Tokens::light() };

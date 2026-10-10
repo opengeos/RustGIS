@@ -134,7 +134,11 @@ pub fn semibold(size: f32) -> FontId {
 
 /// Installs the interface fonts: an installed system sans-serif when available, then `extra`
 /// faces (name, bytes, collection index) as fallbacks for scripts it lacks, such as CJK.
-pub fn install_fonts(ctx: &egui::Context, extra: &[(String, FontData, bool)]) {
+pub fn install_fonts(
+    ctx: &egui::Context,
+    extra: &[(String, FontData, Option<rustgis_engine::render::fonts::CjkRegion>)],
+    current: Option<rustgis_engine::render::fonts::CjkRegion>,
+) {
     let f = rustgis_engine::render::fonts::ui_fonts();
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert("ui".into(), Arc::new(FontData::from_owned(f.regular.clone())));
@@ -147,11 +151,12 @@ pub fn install_fonts(ctx: &egui::Context, extra: &[(String, FontData, bool)]) {
         semi.extend(prop.iter().skip(1).cloned());
     }
     fonts.families.insert(FontFamily::Name("semibold".into()), semi);
-    for (name, data, primary) in extra {
+    for (name, data, region) in extra {
         fonts.font_data.insert(name.clone(), Arc::new(data.clone()));
+        let primary = region.is_some() && *region == current;
         for fam in [FontFamily::Proportional, FontFamily::Name("semibold".into())] {
             if let Some(v) = fonts.families.get_mut(&fam) {
-                if *primary {
+                if primary {
                     // Right after the interface face, so its regional glyph shapes win.
                     v.insert(1.min(v.len()), name.clone());
                 } else {

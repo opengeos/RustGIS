@@ -31,6 +31,9 @@ fn lookup_fallback_and_tags() {
     assert_eq!(lang_from_tag("de_DE.UTF-8").map(Lang::code), Some("de"));
     assert_eq!(lang_from_tag("pt-BR").map(Lang::code), Some("pt"));
     assert_eq!(lang_from_tag("zh-Hans-CN").map(Lang::code), Some("zh"));
+    assert_eq!(lang_from_tag("zh_CN.UTF-8").map(Lang::code), Some("zh"));
+    assert_eq!(lang_from_tag("zh-TW"), None);
+    assert_eq!(lang_from_tag("zh-Hant-HK"), None);
     assert_eq!(lang_from_tag("C").map(Lang::code), Some("en"));
     assert_eq!(lang_from_tag("xx-YY"), None);
     assert_eq!(first_supported(["xx", "fr-CA", "de"]).map(Lang::code), Some("fr"));
