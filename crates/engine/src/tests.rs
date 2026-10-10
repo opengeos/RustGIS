@@ -195,6 +195,7 @@ fn raster_layers_open_style_identify_and_round_trip() {
     assert!(s.run("raster.symbology", &json!({"type": "colormap"})).is_err());
     assert!(s.run("raster.symbology", &json!({"band": 9})).is_err());
     s.run("raster.bands", &json!({"red": 3, "green": 2, "blue": 1})).unwrap();
+    s.run("raster.symbology", &json!({"type": "rgb"})).unwrap(); // keeps the combination
     assert!(s.run("raster.bands", &json!({"preset": "colorInfrared"})).is_err(), "no band 4");
     s.run("raster.stretch", &json!({"type": "standardDeviation", "n": 2.5})).unwrap();
     s.run("raster.dra", &json!({"on": true})).unwrap();

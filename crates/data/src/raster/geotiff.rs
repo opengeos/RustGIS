@@ -221,9 +221,16 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
     let bytes = |b: usize| -> Option<Vec<u8>> {
         let band = r.bands.get(b)?;
         let s = &band.stats;
-        // Whole numbers within 0–255 (or no valid pixels at all) fit in a byte.
+        // Whole numbers within 0–255 (or no valid pixels at all) fit in a byte, and so must the
+        // no-data value, which no-data pixels keep so the written GDAL_NODATA tag still matches.
         let whole_bytes = s.min >= 0.0 && s.max <= 255.0 && (s.categories.is_some() || r.data_type == "UInt8");
-        (whole_bytes || s.count == 0).then(|| band.data.iter().map(|v| if v.is_finite() { v.clamp(0.0, 255.0) as u8 } else { 0 }).collect())
+        let nodata = match r.nodata {
+            Some(d) if (0.0..=255.0).contains(&d) && d.fract() == 0.0 => Some(d as u8),
+            Some(_) => return None,
+            None => None,
+        };
+        (whole_bytes || s.count == 0)
+            .then(|| band.data.iter().map(|v| if r.is_valid(*v) { v.clamp(0.0, 255.0) as u8 } else { nodata.unwrap_or(0) }).collect())
     };
     let rgb = matches!(r.color, ColorHint::Rgb { .. }) && r.bands.len() >= 3;
     macro_rules! tags {
@@ -297,6 +304,21 @@ mod tests {
         assert_eq!(back.color, ColorHint::Rgb { alpha: false });
         assert_eq!(back.value(2, 1, 0), Some(60.0));
         assert_eq!(back.data_type, "UInt8");
+    }
+
+    #[test]
+    fn rgb_export_keeps_no_data() {
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 2.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let mk = |nodata: f64| {
+            let bands = vec![vec![10.0, nodata as f32], vec![20.0, nodata as f32], vec![30.0, nodata as f32]];
+            Raster::new("rgb", 2, 1, bands, gt, Crs::LonLat, Some(nodata), ColorHint::Rgb { alpha: false }, "UInt8").unwrap()
+        };
+        // A byte no-data value survives on the byte path.
+        let back = read(std::io::Cursor::new(write(&mk(255.0), 0).unwrap()), "b").unwrap();
+        assert_eq!((back.band_count(), back.value(0, 1, 0), back.value(0, 0, 0)), (3, None, Some(10.0)));
+        // One that doesn't fit a byte keeps the file honest by writing floats (band 1 only).
+        let back = read(std::io::Cursor::new(write(&mk(-9999.0), 0).unwrap()), "f").unwrap();
+        assert_eq!((back.band_count(), back.value(0, 1, 0), back.nodata), (1, None, Some(-9999.0)));
     }
 
     #[test]

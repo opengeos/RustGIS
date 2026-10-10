@@ -119,10 +119,10 @@ pub fn add_raster(s: &mut Session, name: &str, layer: RasterLayer) -> CmdResult 
     }
     let (w, h, n, overview) = layer.data.as_ref().map(|d| (d.width, d.height, d.band_count(), d.overview)).unwrap_or_default();
     let empty_before = s.map().layers.is_empty();
-    let id = s.map_mut().add_raster(unique, layer);
+    let id = s.map_mut().add_raster(unique.clone(), layer);
     s.active_layer = Some(id);
     if let Some((fw, fh)) = overview {
-        s.notify(format!("{name}: showing a {w} × {h} overview of the {fw} × {fh} raster"), false);
+        s.notify(format!("{unique}: showing a {w} × {h} overview of the {fw} × {fh} raster"), false);
     }
     if empty_before && let Some(e) = s.map().layer(id).map(|l| l.extent()) {
         s.zoom_to(&e);
@@ -143,6 +143,10 @@ fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
     use base64::Engine;
     let name = ps(p, "fileName").ok_or("fileName is required")?.to_string();
     let data = ps(p, "data").ok_or("data is required")?;
+    // Base64 is 4 characters per 3 bytes; refuse uploads past 2 GiB before decoding.
+    if data.len() / 4 * 3 > 2 << 30 {
+        return Err(format!("{name} is too large to open"));
+    }
     let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(|e| format!("data: {e}"))?;
     if raster::is_raster_name(&name) {
         let r = raster::read_bytes(&name, &bytes).map_err(|e| format!("{name}: {e}"))?;
@@ -172,7 +176,11 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
                 if r.band_count() < 3 {
                     return Err("RGB needs a raster with at least three bands".into());
                 }
-                RasterRenderer::Rgb { red: 0, green: 1, blue: 2 }
+                // Keep a band combination already chosen.
+                match rl.style.renderer {
+                    RasterRenderer::Rgb { red, green, blue } => RasterRenderer::Rgb { red, green, blue },
+                    _ => RasterRenderer::Rgb { red: 0, green: 1, blue: 2 },
+                }
             }
             "classify" => {
                 let classes = f(p, "classes").map(|c| c.clamp(1.0, 32.0) as usize).unwrap_or(5);
