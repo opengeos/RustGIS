@@ -469,9 +469,7 @@ impl RustGisApp {
             }
             let name = format!("web-{}", url.rsplit('/').next().unwrap_or("font"));
             self.extra_fonts.retain(|(n, _, _)| *n != name);
-            // Downloaded once per session and kept for its lifetime, so borrow it as 'static.
-            let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-            self.extra_fonts.push((name, egui::FontData::from_static(bytes), region));
+            self.extra_fonts.push((name, egui::FontData::from_owned(bytes), region));
             self.fonts_dirty = true;
         }
         if self.fonts_dirty {

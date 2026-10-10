@@ -46,7 +46,13 @@ mod prefs {
                 let mut map = read();
                 map.insert(key.to_string(), Value::String(value.to_string()));
                 let text = Value::Object(map).to_string();
-                if let Err(e) = std::fs::create_dir_all(&d).and_then(|_| std::fs::write(d.join("prefs.json"), text)) {
+                // Write a temporary file and rename it over the old one, so a crash mid-write
+                // never leaves a truncated prefs.json.
+                let tmp = d.join("prefs.json.tmp");
+                let saved = std::fs::create_dir_all(&d)
+                    .and_then(|_| std::fs::write(&tmp, text))
+                    .and_then(|_| std::fs::rename(&tmp, d.join("prefs.json")));
+                if let Err(e) = saved {
                     log::warn!("could not save preferences: {e}");
                 }
             })),
