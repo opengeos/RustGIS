@@ -34,7 +34,7 @@ fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
     // GeoKey directory: a header of four shorts, then (key, location, count, value) entries.
     let keys: Vec<u16> = dec.find_tag(Tag::GeoKeyDirectoryTag).ok().flatten().and_then(|v| v.into_u16_vec().ok()).unwrap_or_default();
     let key = |k: u16| -> Option<u16> {
-        keys.get(4..)?.chunks_exact(4).find(|e| e.first() == Some(&k) && e.get(1) == Some(&0)).and_then(|e| e.get(3).copied())
+        keys.get(4..)?.as_chunks::<4>().0.iter().find(|[key, location, _, _]| *key == k && *location == 0).map(|[_, _, _, value]| *value)
     };
     let pixel_is_point = key(1025) == Some(2);
     let geographic_model = key(1024) == Some(2);
