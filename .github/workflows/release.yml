@@ -3,14 +3,11 @@ name: Release
 on:
   release:
     types: [published]
-  # Build-only trial runs, to catch a break before a tag is cut. Uploads to the
-  # GitHub Release are gated on the `release` event, so these build the same
-  # packages and keep them as workflow artifacts only.
+  # Build-only trial run, started by the Release dry run workflow (or by hand)
+  # before a tag is cut. Uploads to the GitHub Release are gated on the
+  # `release` event, so it builds the same packages and keeps them as workflow
+  # artifacts only.
   workflow_dispatch:
-  pull_request:
-    paths:
-      - packaging/**
-      - .github/workflows/release.yml
 
 # Read-only by default; only the release-only publish job can write.
 permissions:
@@ -18,8 +15,7 @@ permissions:
 
 concurrency:
   group: release-${{ github.event_name }}-${{ github.event.release.tag_name || github.ref }}
-  # A newer push supersedes a pull request trial run; releases always finish.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
