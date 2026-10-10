@@ -13,19 +13,19 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/hero.png" alt="RustGIS with the Map tab of the ribbon open. The Contents pane lists Cities, Rivers, Lakes and Countries with their legends; the map shows countries shaded by population, sized city dots and country labels." width="100%">
+  <img src="https://assets.rustgis.app/images/hero.webp" alt="RustGIS with the Map tab of the ribbon open. The Contents pane lists Cities, Rivers, Lakes and Countries with their legends; the map shows countries shaded by population, sized city dots and country labels." width="100%">
 </p>
 
 ## A tour
 
 <table>
 <tr>
-<td width="50%" valign="top"><img src="docs/images/symbology-table.png" alt="The Feature Layer contextual tab with the Symbology pane showing graduated colours and colour schemes; African countries are selected in cyan on the map and highlighted in the attribute table below" width="100%"><p align="center"><sub><b>Feature Layer tabs.</b> A contextual tab group appears when a layer is selected: symbology, visibility range, transparency, labeling and data. Selection is synced between the map and the attribute table.</sub></p></td>
-<td width="50%" valign="top"><img src="docs/images/buffer-history.png" alt="The Analysis tab with a gallery of geoprocessing tools; 300 km dissolved buffers around African cities drawn semi-transparent, and the History pane listing the Buffer run" width="100%"><p align="center"><sub><b>Analysis.</b> A tool gallery and Geoprocessing pane: buffer, clip, erase, dissolve, summarize within, statistics and more, with a run history.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/symbology-table.webp" alt="The Feature Layer contextual tab with the Symbology pane showing graduated colours and colour schemes; African countries are selected in cyan on the map and highlighted in the attribute table below" width="100%"><p align="center"><sub><b>Feature Layer tabs.</b> A contextual tab group appears when a layer is selected: symbology, visibility range, transparency, labeling and data. Selection is synced between the map and the attribute table.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/buffer-history.webp" alt="The Analysis tab with a gallery of geoprocessing tools; 300 km dissolved buffers around African cities drawn semi-transparent, and the History pane listing the Buffer run" width="100%"><p align="center"><sub><b>Analysis.</b> A tool gallery and Geoprocessing pane: buffer, clip, erase, dissolve, summarize within, statistics and more, with a run history.</sub></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><img src="docs/images/dark.png" alt="RustGIS in dark mode with the View tab open over a map of Europe on the Midnight basemap, cities labelled with halos" width="100%"><p align="center"><sub><b>Dark mode</b> and the View tab: panes, graticule, basemaps.</sub></p></td>
-<td width="50%" valign="top"><img src="docs/images/backstage.png" alt="The Project backstage with cards to start a blank map, the World Atlas sample, or open a project" width="100%"><p align="center"><sub><b>Project.</b> Start blank, from the World Atlas sample, or open a <code>.rgisx</code> project.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/dark.webp" alt="RustGIS in dark mode with the View tab open over a map of Europe on the Midnight basemap, cities labelled with halos" width="100%"><p align="center"><sub><b>Dark mode</b> and the View tab: panes, graticule, basemaps.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/backstage.webp" alt="The Project backstage with cards to start a blank map, the World Atlas sample, or open a project" width="100%"><p align="center"><sub><b>Project.</b> Start blank, from the World Atlas sample, or open a <code>.rgisx</code> project.</sub></p></td>
 </tr>
 </table>
 

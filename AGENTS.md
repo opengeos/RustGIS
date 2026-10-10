@@ -33,6 +33,9 @@ egui front end, headless screenshots for UI work.
 ## Assets
 - No third-party vendor icons, images, styles, fonts, help text or code. Icons are drawn in
   code (`icons.rs`). Every asset file has a row in `ATTRIBUTION.md`.
+- Screenshots and other images are not committed here: they live in
+  [opengeos/rustgis-assets](https://github.com/opengeos/rustgis-assets) (WebP, served at
+  `https://assets.rustgis.app/images/…`) and docs link to them by URL.
 
 ## Quality gates
 `cargo xtask ci` (fmt, clippy -D warnings, tests, layers) before every commit.
