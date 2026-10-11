@@ -6,6 +6,9 @@
 //! the local network unless the document itself came from there, so a style found on the web
 //! can't make the app probe local services. Link-local addresses, where cloud metadata services
 //! answer, are never fetched.
+//!
+//! Hosts are judged by name or literal address; names are not resolved, so a public name that
+//! resolves to a local address is not caught here.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
