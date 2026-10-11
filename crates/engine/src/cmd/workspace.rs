@@ -542,8 +542,11 @@ fn offline_download(s: &mut Session, p: &Value) -> CmdResult {
     if e.is_empty() {
         return Err("the extent is empty".into());
     }
-    let base =
-        ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(String::from).unwrap_or_else(|| format!("{} offline", s.map().name));
+    let base = ps(p, "name")
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(|n| n.chars().take(200).collect())
+        .unwrap_or_else(|| format!("{} offline", s.map().name));
     let mut name = base.clone();
     let mut i = 1;
     // Unique among areas, and its offline map's name ("<area> (offline)") unused by other maps.

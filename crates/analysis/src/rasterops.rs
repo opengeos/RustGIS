@@ -207,21 +207,21 @@ pub fn profile(r: &Raster, b: usize, path: &[Coord], samples: usize) -> Vec<(f64
     if total <= 0.0 {
         return path.first().map(|p| vec![(0.0, *p, elevation_at(r, b, *p))]).unwrap_or_default();
     }
+    // Samples are in order along the path, so the legs are walked once.
     let mut out = Vec::with_capacity(samples);
+    let (mut li, mut acc) = (0usize, 0.0);
     for i in 0..samples {
         let d = total * i as f64 / (samples - 1) as f64;
-        let mut acc = 0.0;
-        let mut at = path.last().copied().unwrap_or_default();
-        for (li, len) in legs.iter().enumerate() {
-            if d <= acc + len || li + 1 == legs.len() {
-                let t = if *len > 0.0 { ((d - acc) / len).clamp(0.0, 1.0) } else { 0.0 };
-                if let (Some(a), Some(c)) = (path.get(li), path.get(li + 1)) {
-                    at = Coord::new(a.x + (c.x - a.x) * t, a.y + (c.y - a.y) * t);
-                }
-                break;
-            }
-            acc += len;
+        while li + 1 < legs.len() && d > acc + legs.get(li).copied().unwrap_or(0.0) {
+            acc += legs.get(li).copied().unwrap_or(0.0);
+            li += 1;
         }
+        let len = legs.get(li).copied().unwrap_or(0.0);
+        let t = if len > 0.0 { ((d - acc) / len).clamp(0.0, 1.0) } else { 0.0 };
+        let at = match (path.get(li), path.get(li + 1)) {
+            (Some(a), Some(c)) => Coord::new(a.x + (c.x - a.x) * t, a.y + (c.y - a.y) * t),
+            _ => path.last().copied().unwrap_or_default(),
+        };
         out.push((d, at, elevation_at(r, b, at)));
     }
     out
