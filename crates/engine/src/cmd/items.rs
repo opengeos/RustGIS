@@ -264,11 +264,16 @@ pub fn package_text(bytes: &[u8]) -> Result<String, String> {
     String::from_utf8(data).map_err(|_| "the package's project is damaged".to_string())
 }
 
-/// A raster layer with its file embedded (so the copy stands alone).
+/// Largest raster file embedded in a map, layer or package (it's base64'd into the JSON).
+const MAX_EMBED: u64 = if cfg!(target_arch = "wasm32") { 64 << 20 } else { 512 << 20 };
+
+/// A raster layer with its file embedded (so the copy stands alone). A file too large to embed
+/// stays linked by its path.
 fn embed_layer(mut l: Layer) -> Layer {
     if let Some(rl) = &mut l.raster
         && rl.embedded.is_none()
         && let Some(path) = rl.path.clone()
+        && std::fs::metadata(&path).is_ok_and(|m| m.len() <= MAX_EMBED)
         && let Ok(bytes) = std::fs::read(&path)
     {
         rl.file_name = Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string());

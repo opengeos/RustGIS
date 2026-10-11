@@ -7,18 +7,27 @@ const MAX_ENTRY: usize = 1 << 30;
 /// Most bytes inflated from one archive, all entries together (less in the browser).
 pub const MAX_TOTAL: usize = if cfg!(target_arch = "wasm32") { 256 << 20 } else { 1 << 30 };
 
-fn crc32(data: &[u8]) -> u32 {
+/// The CRC-32 lookup table, built at compile time.
+const CRC_TABLE: [u32; 256] = {
     let mut table = [0u32; 256];
-    for (i, t) in table.iter_mut().enumerate() {
+    let mut i = 0;
+    while i < 256 {
         let mut c = i as u32;
-        for _ in 0..8 {
+        let mut k = 0;
+        while k < 8 {
             c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            k += 1;
         }
-        *t = c;
+        table[i] = c;
+        i += 1;
     }
+    table
+};
+
+fn crc32(data: &[u8]) -> u32 {
     let mut c = 0xFFFF_FFFFu32;
     for b in data {
-        c = table.get(((c ^ *b as u32) & 0xFF) as usize).copied().unwrap_or(0) ^ (c >> 8);
+        c = CRC_TABLE.get(((c ^ *b as u32) & 0xFF) as usize).copied().unwrap_or(0) ^ (c >> 8);
     }
     c ^ 0xFFFF_FFFF
 }
