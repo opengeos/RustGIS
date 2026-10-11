@@ -9,8 +9,10 @@ use crate::manifest::{Permission, valid_id, version_parts};
 /// The hosted registry.
 pub const DEFAULT_URL: &str = "https://plugins.rustgis.app/registry.json";
 
-/// The most entries read from a registry.
-const MAX_ENTRIES: usize = 5_000;
+/// The most entries read from a registry (or a blocklist), and the largest registry downloaded:
+/// room for a registry of tens of thousands of plugins.
+const MAX_ENTRIES: usize = 100_000;
+pub const MAX_REGISTRY_BYTES: usize = 64 * 1024 * 1024;
 
 /// One plugin in the registry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -111,13 +113,14 @@ pub fn parse(text: &str, url: &str) -> Result<Vec<Entry>, String> {
         _ => return Err("the plugin registry isn't a list of plugins".into()),
     };
     let mut out: Vec<Entry> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for v in list.iter().take(MAX_ENTRIES) {
         let Ok(mut e) = serde_json::from_value::<Entry>(v.clone()) else { continue };
         if !valid_id(&e.id, false) || version_parts(&e.version).is_none() || !is_sha256(&e.sha256) || e.name.trim().is_empty() {
             continue;
         }
         e.package = resolve(url, &e.package);
-        if !allowed_url(&e.package) || out.iter().any(|o| o.id == e.id) {
+        if !allowed_url(&e.package) || !seen.insert(e.id.clone()) {
             continue;
         }
         if !e.homepage.starts_with("https://") && !e.homepage.starts_with("http://") {

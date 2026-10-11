@@ -252,3 +252,16 @@ fn plugin_tabs_are_checked() {
         assert!(e.contains(why), "{bad}: {e}");
     }
 }
+
+#[test]
+fn large_registries_are_read_quickly() {
+    // 20,000 plugins (and a duplicate of each, which is dropped) parse in well under a second.
+    let sha = "a".repeat(64);
+    let one = |i: usize| json!({"id": format!("p{i}"), "name": format!("Plugin {i}"), "version": "1.0.0", "package": format!("https://packages.example.com/p{i}.rgplugin"), "sha256": sha});
+    let list: Vec<Value> = (0..20_000).chain(0..20_000).map(one).collect();
+    let text = json!({"plugins": list}).to_string();
+    let t0 = std::time::Instant::now();
+    let v = registry::parse(&text, "https://plugins.rustgis.app/registry.json").unwrap();
+    assert_eq!(v.len(), 20_000);
+    assert!(t0.elapsed() < std::time::Duration::from_secs(5), "{:?}", t0.elapsed());
+}

@@ -103,7 +103,7 @@ fn enable(_: &mut Session, p: &Value) -> CmdResult {
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_registry(url: &str) -> Result<Vec<rustgis_plugins::registry::Entry>, String> {
     use rustgis_plugins::registry;
-    let text = registry::fetch(url, 16 * 1024 * 1024)?;
+    let text = registry::fetch(url, registry::MAX_REGISTRY_BYTES)?;
     let entries = registry::parse(&String::from_utf8_lossy(&text), url)?;
     // A registry without a blocklist blocks nothing; one that can't be fetched leaves the
     // cached list in place.

@@ -296,7 +296,7 @@ fn refresh(app: &mut RustGisApp, ctx: &egui::Context) {
     if app.plugins.jobs.iter().any(|j| matches!(j, Job::Registry { .. })) {
         return;
     }
-    let slot = fetch(app, &url, 16 << 20, Some(ctx.clone()));
+    let slot = fetch(app, &url, rp::registry::MAX_REGISTRY_BYTES, Some(ctx.clone()));
     app.plugins.jobs.push(Job::Registry { url, slot });
 }
 
