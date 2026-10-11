@@ -4,6 +4,8 @@
 const MAX_ENTRIES: usize = 10_000;
 /// Largest entry inflated (1 GiB).
 const MAX_ENTRY: usize = 1 << 30;
+/// Most bytes inflated from one archive, all entries together (less in the browser).
+pub const MAX_TOTAL: usize = if cfg!(target_arch = "wasm32") { 256 << 20 } else { 1 << 30 };
 
 fn crc32(data: &[u8]) -> u32 {
     let mut table = [0u32; 256];
@@ -96,8 +98,15 @@ fn add(parts: &[usize]) -> Option<usize> {
     parts.iter().try_fold(0usize, |acc, x| acc.checked_add(*x))
 }
 
-/// Reads every entry of a zip archive (stored or Deflate).
+/// Reads every entry of a zip archive (stored or Deflate), within [`MAX_TOTAL`] inflated bytes.
 pub fn read(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    read_matching(bytes, |_| true)
+}
+
+/// Reads the entries whose names pass `want` (others aren't inflated), within [`MAX_TOTAL`]
+/// inflated bytes in all.
+pub fn read_matching(bytes: &[u8], want: impl Fn(&str) -> bool) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut budget = MAX_TOTAL;
     let bad = || "not a zip archive (or a damaged one)".to_string();
     // The end-of-central-directory record is in the last 64 KiB + 22 bytes.
     let start = bytes.len().saturating_sub(65_557);
@@ -122,21 +131,26 @@ pub fn read(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         let local = u32_at(bytes, at(42)?).ok_or_else(bad)?;
         let name = String::from_utf8_lossy(bytes.get(at(46)?..add(&[p, 46, nl]).ok_or_else(bad)?).ok_or_else(bad)?).to_string();
         p = add(&[p, 46, nl, xl, cl]).ok_or_else(bad)?;
-        if name.ends_with('/') {
+        if name.ends_with('/') || !want(&name) {
             continue;
         }
         let lnl = u16_at(bytes, add(&[local, 26]).ok_or_else(bad)?).ok_or_else(bad)?;
         let lxl = u16_at(bytes, add(&[local, 28]).ok_or_else(bad)?).ok_or_else(bad)?;
         let data_at = add(&[local, 30, lnl, lxl]).ok_or_else(bad)?;
         let body = bytes.get(data_at..add(&[data_at, csize]).ok_or_else(bad)?).ok_or_else(bad)?;
-        if usize_ > MAX_ENTRY {
+        if usize_ > MAX_ENTRY || usize_ > budget {
             return Err(format!("{name} is too large"));
         }
+        // Inflate no more than the entry says it holds (and the archive's budget allows).
         let data = match method {
             0 => body.to_vec(),
-            8 => miniz_oxide::inflate::decompress_to_vec_with_limit(body, MAX_ENTRY).map_err(|_| format!("{name} is damaged"))?,
+            8 => miniz_oxide::inflate::decompress_to_vec_with_limit(body, usize_).map_err(|_| format!("{name} is damaged"))?,
             m => return Err(format!("{name} uses an unsupported compression ({m})")),
         };
+        if data.len() != usize_ {
+            return Err(format!("{name} is damaged (wrong size)"));
+        }
+        budget -= data.len();
         if crc32(&data) as usize != crc {
             return Err(format!("{name} is damaged (checksum mismatch)"));
         }
@@ -166,6 +180,9 @@ mod tests {
             *b ^= 0xFF;
         }
         assert!(read(&stored).is_err());
+        // Only the wanted entries are read.
+        let only = read_matching(&z, |n| n.starts_with("data/")).unwrap();
+        assert_eq!(only.len(), 1);
         // Offsets pointing past the end are refused, not followed.
         let mut far = z.clone();
         let eocd = far.len() - 22;

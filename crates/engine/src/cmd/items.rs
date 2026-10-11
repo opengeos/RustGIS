@@ -258,7 +258,7 @@ fn read_text(p: &Value) -> Result<String, String> {
 
 /// The project JSON inside a package.
 pub fn package_text(bytes: &[u8]) -> Result<String, String> {
-    let entries = rustgis_data::zip::read(bytes)?;
+    let entries = rustgis_data::zip::read_matching(bytes, |n| n.ends_with(".rgisx") || n.ends_with(".rgismap"))?;
     let (_, data) =
         entries.into_iter().find(|(n, _)| n.ends_with(".rgisx") || n.ends_with(".rgismap")).ok_or("the package holds no project or map")?;
     String::from_utf8(data).map_err(|_| "the package's project is damaged".to_string())

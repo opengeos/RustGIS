@@ -2,8 +2,10 @@
 //! caps of extruded polygons, which viewers would otherwise fan from one corner (wrong for concave
 //! shapes and holes).
 
-/// Most vertices triangulated (ear clipping is quadratic); larger polygons get `None`.
-pub const MAX_VERTICES: usize = 20_000;
+/// Most vertices triangulated; larger polygons get `None`.
+pub const MAX_VERTICES: usize = 5000;
+/// Most point tests spent on one polygon (bridging and ear checks), so no input can stall.
+const MAX_WORK: usize = 60_000_000;
 
 fn area2(p: &[(f64, f64)]) -> f64 {
     let n = p.len();
@@ -62,6 +64,7 @@ pub fn triangulate(outer: &[(f64, f64)], holes: &[Vec<(f64, f64)>]) -> Option<Ve
         let mx = |r: &Vec<usize>| r.iter().map(|&i| pts[i].0).fold(f64::MIN, f64::max);
         mx(b).partial_cmp(&mx(a)).unwrap_or(std::cmp::Ordering::Equal)
     });
+    let mut work = 0usize;
     for (hi, h) in hole_rings.iter().enumerate() {
         let (mpos, &m) = h.iter().enumerate().max_by(|a, b| pts[*a.1].0.partial_cmp(&pts[*b.1].0).unwrap_or(std::cmp::Ordering::Equal))?;
         let pm = pts[m];
@@ -72,6 +75,10 @@ pub fn triangulate(outer: &[(f64, f64)], holes: &[Vec<(f64, f64)>]) -> Option<Ve
         };
         let mut best: Option<(usize, f64)> = None;
         for (k, &vi) in ring.iter().enumerate() {
+            work += ring.len() + h.len();
+            if work > MAX_WORK {
+                return None;
+            }
             let v = pts[vi];
             let d = (v.0 - pm.0).powi(2) + (v.1 - pm.1).powi(2);
             if best.is_none_or(|b| d < b.1) && edges_clear(v) {
@@ -86,29 +93,34 @@ pub fn triangulate(outer: &[(f64, f64)], holes: &[Vec<(f64, f64)>]) -> Option<Ve
         joined.extend_from_slice(&ring[k..]);
         ring = joined;
     }
-    // Ear clipping.
+    // Ear clipping: only reflex vertices can block an ear, and the search resumes where the
+    // last ear was cut.
     let mut tris = Vec::with_capacity(ring.len());
-    let mut guard = 0usize;
+    let mut start = 0usize;
     while ring.len() > 3 {
-        guard += 1;
-        if guard > 4 * total * total + 16 {
-            break;
-        }
         let n = ring.len();
+        let reflex: Vec<usize> =
+            (0..n).filter(|&i| cross(pts[ring[(i + n - 1) % n]], pts[ring[i]], pts[ring[(i + 1) % n]]) <= 0.0).map(|i| ring[i]).collect();
         let mut clipped = false;
-        for i in 0..n {
+        for step in 0..n {
+            let i = (start + step) % n;
             let (ia, ib, ic) = (ring[(i + n - 1) % n], ring[i], ring[(i + 1) % n]);
             let (a, b, c) = (pts[ia], pts[ib], pts[ic]);
             if cross(a, b, c) <= 0.0 {
                 continue;
             }
-            let blocked = ring.iter().any(|&j| {
+            work += reflex.len() + 1;
+            if work > MAX_WORK {
+                return None;
+            }
+            let blocked = reflex.iter().any(|&j| {
                 let p = pts[j];
                 p != a && p != b && p != c && in_triangle(p, a, b, c)
             });
             if !blocked {
                 tris.push([ia, ib, ic]);
                 ring.remove(i);
+                start = i.saturating_sub(1);
                 clipped = true;
                 break;
             }
@@ -157,6 +169,18 @@ mod tests {
         let t = triangulate(&sq, &holes).unwrap();
         assert!((area(&all, &t) - 14.0).abs() < 1e-9, "{}", area(&all, &t));
         assert!(t.iter().flatten().all(|i| *i < all.len()));
+        // A large spiky polygon (every other vertex reflex) finishes, with its area covered.
+        let star: Vec<(f64, f64)> = (0..4000)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / 4000.0;
+                let r = if i % 2 == 0 { 100.0 } else { 60.0 };
+                (r * a.cos(), r * a.sin())
+            })
+            .collect();
+        let t = triangulate(&star, &[]).unwrap();
+        assert_eq!(t.len(), star.len() - 2);
+        assert!((area(&star, &t) - area2(&star) / 2.0).abs() < 1e-6 * area2(&star));
+        assert!(triangulate(&vec![(0.0, 0.0); MAX_VERTICES + 1], &[]).is_none());
         // Degenerate input.
         assert!(triangulate(&[(0.0, 0.0), (1.0, 1.0)], &[]).is_none());
         assert!(triangulate(&[(0.0, 0.0), (f64::NAN, 1.0), (1.0, 0.0)], &[]).is_none());
