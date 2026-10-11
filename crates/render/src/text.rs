@@ -166,10 +166,11 @@ pub fn text_at(pm: &mut Pixmap, text: &str, x: f32, y: f32, px_size: f32, color:
 #[cfg(test)]
 mod coverage_tests {
     #[test]
-    fn knows_which_scripts_it_can_draw() {
+    fn knows_which_characters_it_can_draw() {
+        // Which scripts are covered depends on the fonts this computer has (a system font may
+        // cover Arabic); Latin always is, and a private-use character never is.
         assert!(super::covers("Syria"));
         assert!(super::covers("Türkiye Ελλάδα Беларусь"));
-        assert!(!super::covers("سوريا"));
-        assert!(!super::covers("भारत"));
+        assert!(!super::covers("Syria \u{10FFFD}"));
     }
 }
