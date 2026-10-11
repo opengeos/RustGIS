@@ -54,6 +54,13 @@ pub fn start() {
                             None => log::warn!("?lang={code}: no such interface language; following the browser's"),
                         }
                     }
+                    // `?registry=<url>` opens the Plugin Manager on another plugin registry for this
+                    // visit (a pull request's preview, say); installing still asks as usual.
+                    if let Some(url) = param(&q, "registry").filter(|u| !u.is_empty())
+                        && let Err(e) = app.run("ui.plugins", serde_json::json!({"open": true, "registry": url, "tab": "browse"}))
+                    {
+                        log::warn!("?registry={url}: {e}");
+                    }
                     Ok(Box::new(WebShell { app, inbox, dirty }))
                 }),
             )
@@ -67,6 +74,12 @@ pub fn start() {
             }
         }
     });
+}
+
+/// A query parameter's value, percent-decoded.
+fn param(q: &str, key: &str) -> Option<String> {
+    let raw = q.trim_start_matches('?').split('&').find_map(|kv| kv.strip_prefix(key)?.strip_prefix('='))?;
+    js_sys::decode_uri_component(&raw.replace('+', " ")).ok().and_then(|s| s.as_string())
 }
 
 fn query() -> String {

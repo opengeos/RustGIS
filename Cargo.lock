@@ -3389,6 +3389,7 @@ dependencies = [
  "rfd",
  "rustgis-engine",
  "rustgis-ui-egui",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
