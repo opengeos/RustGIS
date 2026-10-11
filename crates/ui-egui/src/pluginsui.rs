@@ -66,7 +66,10 @@ pub struct PluginsState {
     pub tab: Tab,
     /// The registry address (empty: the hosted one).
     pub url: String,
-    pub registry: Option<Result<Vec<Entry>, String>>,
+    /// The registry as last fetched (set through [`PluginsState::set_registry`]).
+    registry: Option<Result<Vec<Entry>, String>>,
+    /// Counts registry changes, so the Browse tab's cache knows when to rebuild.
+    registry_rev: u64,
     pub filter: String,
     /// The Browse tab's category filter (empty: all).
     pub category: String,
@@ -81,8 +84,8 @@ pub struct PluginsState {
 /// a registry can hold thousands of plugins.
 #[derive(Default)]
 struct BrowseCache {
-    /// The registry it was made for (its address and length) and the filter.
-    key: (usize, usize, String, String),
+    /// The registry revision it was made for, and the filter.
+    key: Option<(u64, String, String)>,
     /// Each entry's searchable text, lower-cased (by registry index).
     text: Vec<String>,
     /// The categories in the registry.
@@ -92,12 +95,12 @@ struct BrowseCache {
 }
 
 impl BrowseCache {
-    fn update(&mut self, list: &[Entry], query: &str, category: &str) {
-        let key = (list.as_ptr() as usize, list.len(), query.to_string(), category.to_string());
-        if key == self.key {
+    fn update(&mut self, rev: u64, list: &[Entry], query: &str, category: &str) {
+        let key = (rev, query.to_string(), category.to_string());
+        if self.key.as_ref() == Some(&key) {
             return;
         }
-        if (key.0, key.1) != (self.key.0, self.key.1) {
+        if self.key.as_ref().is_none_or(|k| k.0 != rev) {
             self.text = list
                 .iter()
                 .map(|e| format!("{} {} {} {} {}", e.name, e.id, e.description, e.author, e.categories.join(" ")).to_lowercase())
@@ -115,11 +118,17 @@ impl BrowseCache {
                     && (category.is_empty() || list.get(i).is_some_and(|e| e.categories.iter().any(|c| c == category)))
             })
             .collect();
-        self.key = key;
+        self.key = Some(key);
     }
 }
 
 impl PluginsState {
+    /// Replaces the registry (`None`: fetch it again when Browse is shown).
+    pub fn set_registry(&mut self, r: Option<Result<Vec<Entry>, String>>) {
+        self.registry = r;
+        self.registry_rev = self.registry_rev.wrapping_add(1);
+    }
+
     fn registry_url(&self) -> String {
         let u = self.url.trim();
         if u.is_empty() { rp::registry::DEFAULT_URL.to_string() } else { u.to_string() }
@@ -391,7 +400,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             Job::Registry { url, slot } => match take(&slot) {
                 None => waiting.push(Job::Registry { url, slot }),
                 Some(r) => {
-                    app.plugins.registry = Some(r.and_then(|b| rp::registry::parse(&String::from_utf8_lossy(&b), &url)));
+                    app.plugins.set_registry(Some(r.and_then(|b| rp::registry::parse(&String::from_utf8_lossy(&b), &url))));
                     let slot = fetch(app, &rp::registry::blocklist_url(&url), 4 << 20, Some(ctx.clone()));
                     waiting.push(Job::Blocklist { registry: url, slot });
                 }
@@ -444,16 +453,19 @@ fn chip(ui: &mut egui::Ui, t: &Tokens, text: &str, color: egui::Color32) {
 }
 
 fn permissions(ui: &mut egui::Ui, t: &Tokens, perms: &[rp::Permission]) {
-    ui.horizontal_wrapped(|ui| {
-        chip(ui, t, tl!("Reads the map"), t.accent);
-        for p in perms {
-            let label = match p {
-                rp::Permission::Edit => tl!("Edits the project"),
-                rp::Permission::Files => tl!("Reads and writes files"),
-            };
-            chip(ui, t, label, if *p == rp::Permission::Files { t.red } else { t.green });
-        }
-    });
+    ui.horizontal_wrapped(|ui| permission_chips(ui, t, perms));
+}
+
+/// The permission chips, in the current layout (one line in a Browse row).
+fn permission_chips(ui: &mut egui::Ui, t: &Tokens, perms: &[rp::Permission]) {
+    chip(ui, t, tl!("Reads the map"), t.accent);
+    for p in perms {
+        let label = match p {
+            rp::Permission::Edit => tl!("Edits the project"),
+            rp::Permission::Files => tl!("Reads and writes files"),
+        };
+        chip(ui, t, label, if *p == rp::Permission::Files { t.red } else { t.green });
+    }
 }
 
 fn card(ui: &mut egui::Ui, t: &Tokens, add: impl FnOnce(&mut egui::Ui)) {
@@ -536,25 +548,26 @@ fn browse_tab(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
     if app.plugins.registry.is_none() && !app.plugins.busy() {
         refresh(app, ui.ctx());
     }
-    let categories = app.plugins.browse.categories.clone();
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut app.plugins.filter).hint_text(tl!("Search plugins")).desired_width(220.0));
+        let PluginsState { filter, category, browse, .. } = &mut app.plugins;
+        ui.add(egui::TextEdit::singleline(filter).hint_text(tl!("Search plugins")).desired_width(220.0));
         let all = tl!("All categories");
-        let shown = if app.plugins.category.is_empty() { all } else { app.plugins.category.as_str() };
+        let shown = if category.is_empty() { all.to_string() } else { category.clone() };
         egui::ComboBox::from_id_salt("plugin-category").selected_text(shown).width(150.0).show_ui(ui, |ui| {
-            ui.selectable_value(&mut app.plugins.category, String::new(), all);
-            for c in &categories {
-                ui.selectable_value(&mut app.plugins.category, c.clone(), c.as_str());
+            ui.selectable_value(category, String::new(), all);
+            for c in &browse.categories {
+                ui.selectable_value(category, c.clone(), c.as_str());
             }
         });
         if ui.button(tl!("Refresh")).clicked() {
-            app.plugins.registry = None;
+            app.plugins.set_registry(None);
             refresh(app, ui.ctx());
         }
         if app.plugins.jobs.iter().any(|j| matches!(j, Job::Registry { .. } | Job::Download { .. })) {
             ui.spinner();
         }
     });
+    let rev = app.plugins.registry_rev;
     let list = match &app.plugins.registry {
         None => return,
         Some(Err(e)) => {
@@ -565,7 +578,7 @@ fn browse_tab(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
         Some(Ok(list)) => list,
     };
     let query = app.plugins.filter.trim().to_lowercase();
-    app.plugins.browse.update(list, &query, &app.plugins.category);
+    app.plugins.browse.update(rev, list, &query, &app.plugins.category);
     let total = list.len();
     let n = app.plugins.browse.shown.len();
     let count = if n == total {
@@ -605,19 +618,26 @@ fn browse_row(ui: &mut egui::Ui, t: &Tokens, e: &Entry) -> bool {
         ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(10.0, 6.0))).layout(egui::Layout::top_down(egui::Align::Min)));
     let ui = &mut child;
     ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, t.border));
+    let reason = blocked.as_ref().map(|b| b.reason.clone()).filter(|r| !r.trim().is_empty());
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(&e.name).font(semibold(13.5)));
-        ui.label(egui::RichText::new(&e.version).size(11.5).color(t.text_dim));
+        // The status first (right-aligned), then the name in what's left, truncated.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let newer = installed.as_deref().is_some_and(|v| rp::manifest::version_cmp(&e.version, v).is_gt());
             if blocked.is_some() {
-                ui.label(egui::RichText::new(tl!("Withdrawn")).color(t.red));
+                let w = ui.label(egui::RichText::new(tl!("Withdrawn")).color(t.red));
+                if let Some(r) = &reason {
+                    w.on_hover_text(r);
+                }
             } else if installed.is_some() && !newer {
                 ui.label(egui::RichText::new(tl!("Installed")).color(t.green));
             } else {
                 let label = if newer { tl!("Update") } else { tl!("Install") };
                 clicked = crate::widgets::primary_button(ui, label, true, vec2(84.0, 24.0)).clicked();
             }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(&e.name).font(semibold(13.5))).truncate());
+                ui.label(egui::RichText::new(&e.version).size(11.5).color(t.text_dim));
+            });
         });
     });
     let mut by = Vec::new();
@@ -633,19 +653,18 @@ fn browse_row(ui: &mut egui::Ui, t: &Tokens, e: &Entry) -> bool {
         by.push(format!("{} KB", e.size.div_ceil(1024)));
     }
     ui.add(egui::Label::new(egui::RichText::new(by.join(" · ")).size(11.0).color(t.text_dim)).truncate());
-    // One line of the description; all of it (and why it was withdrawn) on hover.
+    // One line of the description; all of it (and why it was withdrawn) on hover. The reason is
+    // also on the Withdrawn label, for a plugin without a description.
     let mut tip = e.description.clone();
-    if let Some(b) = &blocked
-        && !b.reason.is_empty()
-    {
-        tip = format!("{tip}\n\n{}", b.reason);
+    if let Some(r) = &reason {
+        tip = format!("{tip}\n\n{r}");
     }
     let desc = ui.add(egui::Label::new(egui::RichText::new(&e.description).size(12.0)).truncate());
     if !tip.trim().is_empty() {
         desc.on_hover_text(tip);
     }
     ui.horizontal(|ui| {
-        permissions(ui, t, &e.permissions);
+        permission_chips(ui, t, &e.permissions);
         if !e.homepage.is_empty() {
             ui.add(egui::Hyperlink::from_label_and_url(egui::RichText::new(tl!("Homepage")).size(11.0), &e.homepage).open_in_new_tab(true));
         }
@@ -697,7 +716,7 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
             if let Some(s) = &app.services.save_pref {
                 s("plugin_registry", app.plugins.url.trim());
             }
-            app.plugins.registry = None;
+            app.plugins.set_registry(None);
         }
     });
     let folder = app.session.run("plugin.list", &Value::Null).ok().and_then(|v| v["folder"].as_str().map(str::to_string));

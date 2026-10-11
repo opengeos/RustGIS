@@ -203,7 +203,7 @@ fn browse_lists_thousands_of_plugins_quickly() {
     for _ in 0..4 {
         h.step();
     }
-    h.state_mut().plugins.registry = Some(Ok(entries));
+    h.state_mut().plugins.set_registry(Some(Ok(entries)));
     h.state_mut().run("ui.plugins", json!({"open": true, "tab": "browse"})).unwrap();
     h.step();
     let _ = h.get_by_label("5000 plugins");
@@ -226,6 +226,25 @@ fn browse_lists_thousands_of_plugins_quickly() {
     h.step();
     h.step();
     let _ = h.get_by_label("1666 of 5000 plugins");
-    h.state_mut().plugins.registry = None;
+    // A new registry of the same size replaces what is listed (the cache follows the registry,
+    // not its allocation).
+    h.state_mut().plugins.category = String::new();
+    let two = |a: &str, b: &str| {
+        let list: Vec<serde_json::Value> = [a, b]
+            .iter()
+            .map(|n| json!({"id": n.to_lowercase(), "name": n, "version": "1.0.0", "package": "https://packages.example.com/x.rgplugin", "sha256": sha}))
+            .collect();
+        registry::parse(&json!({"plugins": list}).to_string(), "https://plugins.rustgis.app/registry.json").unwrap()
+    };
+    h.state_mut().plugins.set_registry(Some(Ok(two("Alpha", "Beta"))));
+    h.step();
+    h.step();
+    let _ = h.get_by_label("Alpha");
+    h.state_mut().plugins.set_registry(Some(Ok(two("Gamma", "Delta"))));
+    h.step();
+    h.step();
+    let _ = h.get_by_label("Gamma");
+    assert!(h.query_by_label("Alpha").is_none());
+    h.state_mut().plugins.set_registry(None);
     h.state_mut().plugins.open = false;
 }

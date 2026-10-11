@@ -581,7 +581,7 @@ impl RustGisApp {
                 self.plugins.open = p.get("open").and_then(Value::as_bool).unwrap_or(!self.plugins.open);
                 if let Some(url) = p.get("registry").and_then(Value::as_str) {
                     self.plugins.url = url.to_string();
-                    self.plugins.registry = None;
+                    self.plugins.set_registry(None);
                 }
                 if let Some(tab) = p.get("tab").and_then(Value::as_str) {
                     self.plugins.tab = match tab {
