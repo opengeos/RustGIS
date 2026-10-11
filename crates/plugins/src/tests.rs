@@ -200,6 +200,15 @@ fn blocked_plugins_are_unloaded_and_refused() {
     let pkg = Package::from_zip(&testing::package("unit-blocked", &[])).unwrap();
     assert!(crate::load(pkg, "t").unwrap_err().contains("malware"));
     crate::set_blocklist(Vec::new());
+    // Another registry's blocklist only adds: it can't bring back what the hosted one withdrew.
+    load("unit-blocked", &[]);
+    let pulled = crate::apply_blocklist(
+        "https://example.com/registry.json",
+        vec![registry::Blocked { id: "unit-blocked".into(), sha256: None, reason: "x".into() }],
+    );
+    assert_eq!(pulled, vec!["Test unit-blocked"]);
+    crate::apply_blocklist("https://example.com/registry.json", Vec::new());
+    assert!(crate::blocked("unit-blocked", "any").is_some(), "an empty list from another registry unblocks nothing");
 }
 
 #[test]

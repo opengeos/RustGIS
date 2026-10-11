@@ -109,10 +109,11 @@ pub fn install_bytes(bytes: &[u8]) -> Result<Arc<Plugin>, String> {
     let dir = dir().ok_or("there is no folder for plugins")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join(format!("{}.rgplugin", pkg.manifest.id));
-    // Load first: a package that doesn't load isn't installed.
-    let plugin = crate::load(pkg, &path.display().to_string())?;
+    // Check and compile it, keep it, then load it: a package that doesn't load isn't kept, and
+    // one that can't be kept isn't loaded.
+    let plugin = crate::prepare(pkg, &path.display().to_string())?;
     rustgis_data::io::write_atomic(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(plugin)
+    Ok(crate::register(plugin))
 }
 
 /// Installs from a path: a `.rgplugin` file is copied in; a plugin folder (for development) is
@@ -164,12 +165,15 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
     write_state(&st)
 }
 
-/// Keeps the blocklist for offline starts, and applies it.
-pub fn save_blocklist(text: &str) -> Result<Vec<String>, String> {
+/// Applies the blocklist fetched beside the registry at `registry_url`, and keeps the hosted
+/// registry's for offline starts (see [`crate::apply_blocklist`]).
+pub fn save_blocklist(registry_url: &str, text: &str) -> Result<Vec<String>, String> {
     let list = registry::parse_blocklist(text)?;
-    if let Some(d) = dir() {
+    if registry::is_default(registry_url)
+        && let Some(d) = dir()
+    {
         let _ = std::fs::create_dir_all(&d);
         let _ = rustgis_data::io::write_atomic(&d.join("blocklist.json"), text.as_bytes());
     }
-    Ok(crate::set_blocklist(list))
+    Ok(crate::apply_blocklist(registry_url, list))
 }

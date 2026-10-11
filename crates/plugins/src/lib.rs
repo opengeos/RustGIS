@@ -72,7 +72,10 @@ impl Plugin {
 }
 
 static PLUGINS: RwLock<Vec<Arc<Plugin>>> = RwLock::new(Vec::new());
+/// The hosted registry's blocklist (replaced when it is fetched), and what other registries
+/// have added this session (they can withdraw plugins, never bring one back).
 static BLOCKED: RwLock<Vec<registry::Blocked>> = RwLock::new(Vec::new());
+static BLOCKED_EXTRA: RwLock<Vec<registry::Blocked>> = RwLock::new(Vec::new());
 
 /// The loaded plugins, by name.
 pub fn list() -> Vec<Arc<Plugin>> {
@@ -98,6 +101,11 @@ pub fn split_id(id: &str) -> Option<(&str, &str)> {
 /// Loads a package (replacing a loaded plugin with the same id, keeping whether it was
 /// enabled). `source` says where it came from.
 pub fn load(pkg: Package, source: &str) -> Result<Arc<Plugin>, String> {
+    Ok(register(prepare(pkg, source)?))
+}
+
+/// Checks a package and compiles its module, without loading it yet ([`register`] does).
+pub fn prepare(pkg: Package, source: &str) -> Result<Plugin, String> {
     if let Some(b) = blocked(&pkg.manifest.id, &pkg.sha256) {
         let why = if b.reason.is_empty() { String::new() } else { format!(": {}", b.reason) };
         return Err(format!("{} was withdrawn from the plugin registry{why}", pkg.manifest.name));
@@ -106,14 +114,20 @@ pub fn load(pkg: Package, source: &str) -> Result<Arc<Plugin>, String> {
     let module = std::panic::catch_unwind(|| runtime::compile(&pkg.wasm))
         .unwrap_or_else(|_| Err("the module couldn't be read".into()))
         .map_err(|e| format!("{}: {e}", pkg.manifest.name))?;
-    let enabled = get(&pkg.manifest.id).is_none_or(|p| p.enabled);
-    let plugin = Arc::new(Plugin { manifest: pkg.manifest, sha256: pkg.sha256, source: source.to_string(), enabled, module });
+    Ok(Plugin { manifest: pkg.manifest, sha256: pkg.sha256, source: source.to_string(), enabled: true, module })
+}
+
+/// Loads a prepared plugin, replacing a loaded one with the same id (and keeping whether it
+/// was enabled).
+pub fn register(mut plugin: Plugin) -> Arc<Plugin> {
+    plugin.enabled = get(&plugin.manifest.id).is_none_or(|p| p.enabled);
+    let plugin = Arc::new(plugin);
     if let Ok(mut v) = PLUGINS.write() {
         v.retain(|p| p.manifest.id != plugin.manifest.id);
         v.push(plugin.clone());
     }
     tools::reload();
-    Ok(plugin)
+    plugin
 }
 
 /// Removes a loaded plugin; returns whether there was one.
@@ -149,6 +163,27 @@ pub fn set_blocklist(list: Vec<registry::Blocked>) -> Vec<String> {
     if let Ok(mut b) = BLOCKED.write() {
         *b = list;
     }
+    unload_blocked()
+}
+
+/// Applies a blocklist fetched beside the registry at `registry_url`: the hosted registry's
+/// replaces the blocklist; another registry's only adds to it for this session, so a custom
+/// registry can't bring back a plugin the hosted one withdrew. Returns the plugins unloaded.
+pub fn apply_blocklist(registry_url: &str, list: Vec<registry::Blocked>) -> Vec<String> {
+    if registry::is_default(registry_url) {
+        return set_blocklist(list);
+    }
+    if let Ok(mut b) = BLOCKED_EXTRA.write() {
+        for e in list {
+            if !b.contains(&e) {
+                b.push(e);
+            }
+        }
+    }
+    unload_blocked()
+}
+
+fn unload_blocked() -> Vec<String> {
     let pulled: Vec<Arc<Plugin>> = list_blocked();
     for p in &pulled {
         unload(&p.manifest.id);
@@ -162,7 +197,7 @@ fn list_blocked() -> Vec<Arc<Plugin>> {
 
 /// The blocklist entry for a package, if it's blocked.
 pub fn blocked(id: &str, sha256: &str) -> Option<registry::Blocked> {
-    BLOCKED.read().ok().and_then(|b| registry::blocked(&b, id, sha256).cloned())
+    [&BLOCKED, &BLOCKED_EXTRA].iter().find_map(|l| l.read().ok().and_then(|b| registry::blocked(&b, id, sha256).cloned()))
 }
 
 /// A command an enabled plugin adds.

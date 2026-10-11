@@ -59,30 +59,48 @@ fn kind(decl: &crate::manifest::ParamDecl) -> ParamKind {
     }
 }
 
+/// A tool's parameters, made once per package (the list is rebuilt whenever a plugin is loaded
+/// or toggled, and the slices are leaked like the rest of a tool spec).
+fn params_of(sha256: &str, t: &crate::manifest::ToolDecl) -> &'static [ParamSpec] {
+    static MADE: Mutex<Option<std::collections::HashMap<String, &'static [ParamSpec]>>> = Mutex::new(None);
+    let key = format!("{sha256}/{}", t.id);
+    if let Ok(m) = MADE.lock()
+        && let Some(have) = m.as_ref().and_then(|m| m.get(&key))
+    {
+        return have;
+    }
+    let params: Vec<ParamSpec> = t
+        .params
+        .iter()
+        .map(|d| ParamSpec {
+            name: leak(d.name.as_str()),
+            label: leak(d.label.as_str()),
+            kind: kind(d),
+            required: d.required,
+            default: d.default.as_ref().map(|v| leak(v.to_string())).unwrap_or(""),
+            help: leak(d.help.as_str()),
+        })
+        .collect();
+    let made: &'static [ParamSpec] = Box::leak(params.into_boxed_slice());
+    if let Ok(mut m) = MADE.lock() {
+        m.get_or_insert_with(Default::default).insert(key, made);
+    }
+    made
+}
+
 fn specs() -> Vec<ToolSpec> {
     let mut out = Vec::new();
     for p in crate::list().into_iter().filter(|p| p.enabled) {
         let m = &p.manifest;
         for t in &m.tools {
-            let params: Vec<ParamSpec> = t
-                .params
-                .iter()
-                .map(|d| ParamSpec {
-                    name: leak(d.name.as_str()),
-                    label: leak(d.label.as_str()),
-                    kind: kind(d),
-                    required: d.required,
-                    default: d.default.as_ref().map(|v| leak(v.to_string())).unwrap_or(""),
-                    help: leak(d.help.as_str()),
-                })
-                .collect();
+            let params = params_of(&p.sha256, t);
             let toolbox = if t.toolbox.trim().is_empty() { &m.name } else { &t.toolbox };
             out.push(ToolSpec {
                 id: leak(crate::command_id(&m.id, &t.id)),
                 name: leak(t.name.as_str()),
                 toolbox: leak(format!("Plugins › {toolbox}")),
                 summary: leak(t.summary.as_str()),
-                params: Box::leak(params.into_boxed_slice()),
+                params,
                 run: rustgis_analysis::external_placeholder,
             });
         }

@@ -48,7 +48,7 @@ type Download = Slot<Result<Vec<u8>, String>>;
 
 enum Job {
     Registry { url: String, slot: Download },
-    Blocklist { slot: Download },
+    Blocklist { registry: String, slot: Download },
     Download { entry: Box<Entry>, slot: Download },
     Restore { saved: Saved, slot: Download },
 }
@@ -169,9 +169,9 @@ pub fn restore(app: &mut RustGisApp) {
         }
     }
     // The blocklist, so a pulled plugin isn't loaded again.
-    let url = rp::registry::blocklist_url(&app.plugins.registry_url());
-    let slot = fetch(app, &url, 4 << 20, None);
-    app.plugins.jobs.push(Job::Blocklist { slot });
+    let registry = app.plugins.registry_url();
+    let slot = fetch(app, &rp::registry::blocklist_url(&registry), 4 << 20, None);
+    app.plugins.jobs.push(Job::Blocklist { registry, slot });
 }
 
 fn finish_restore(app: &mut RustGisApp, s: &Saved, got: Result<Vec<u8>, String>) {
@@ -348,17 +348,17 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 Some(r) => {
                     app.plugins.registry = Some(r.and_then(|b| rp::registry::parse(&String::from_utf8_lossy(&b), &url)));
                     let slot = fetch(app, &rp::registry::blocklist_url(&url), 4 << 20, Some(ctx.clone()));
-                    waiting.push(Job::Blocklist { slot });
+                    waiting.push(Job::Blocklist { registry: url, slot });
                 }
             },
-            Job::Blocklist { slot } => match take(&slot) {
-                None => waiting.push(Job::Blocklist { slot }),
+            Job::Blocklist { registry, slot } => match take(&slot) {
+                None => waiting.push(Job::Blocklist { registry, slot }),
                 Some(Ok(b)) => {
                     let text = String::from_utf8_lossy(&b).to_string();
                     #[cfg(not(target_arch = "wasm32"))]
-                    let pulled = rp::store::save_blocklist(&text).unwrap_or_default();
+                    let pulled = rp::store::save_blocklist(&registry, &text).unwrap_or_default();
                     #[cfg(target_arch = "wasm32")]
-                    let pulled = rp::registry::parse_blocklist(&text).map(rp::set_blocklist).unwrap_or_default();
+                    let pulled = rp::registry::parse_blocklist(&text).map(|l| rp::apply_blocklist(&registry, l)).unwrap_or_default();
                     for name in pulled {
                         app.session.notify(
                             crate::i18n::fmt("{name} was withdrawn from the plugin registry and has been turned off.", &[("name", &name)]),

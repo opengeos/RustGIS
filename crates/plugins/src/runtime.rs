@@ -159,7 +159,7 @@ pub fn call(module: &Module, host: &mut dyn Host, request: &Value, fuel: u64) ->
         host,
         reply: None,
         calls: 0,
-        limits: StoreLimitsBuilder::new().memory_size(MAX_MEMORY).table_elements(MAX_TABLE).instances(1).build(),
+        limits: StoreLimitsBuilder::new().memory_size(MAX_MEMORY).table_elements(MAX_TABLE).instances(1).memories(1).tables(16).build(),
     };
     let mut store = Store::new(engine(), state);
     store.limiter(|s| &mut s.limits);

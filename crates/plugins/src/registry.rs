@@ -76,6 +76,12 @@ pub fn resolve(base: &str, rel: &str) -> String {
     format!("{dir}{}", rel.trim_start_matches("./"))
 }
 
+/// Whether `url` is the hosted registry.
+pub fn is_default(url: &str) -> bool {
+    let u = url.trim();
+    u.is_empty() || u == DEFAULT_URL
+}
+
 /// Whether a package URL may be downloaded: HTTPS, or plain HTTP to this computer (for testing
 /// a local registry).
 pub fn allowed_url(url: &str) -> bool {
