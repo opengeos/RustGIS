@@ -46,6 +46,7 @@ fn reset(s: &mut Session, p: Project) {
     s.active_layout = None;
     s.tool = Tool::Explore;
     s.clear_history();
+    s.history_from_file = s.project.gp_history.len();
 }
 
 fn new(s: &mut Session, p: &Value) -> CmdResult {

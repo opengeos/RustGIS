@@ -822,6 +822,12 @@ fn project_items_files_styles_packages_tasks_and_3d() {
     s.run("task.run", &json!({"task": "Explore", "step": 2})).unwrap();
     assert_eq!(s.map().selection_count(), 0);
     s.run("task.new", &json!({"name": "Replay", "fromHistory": true})).unwrap();
+    assert!(s.trusted_tasks.contains("replay"), "history run in this session");
+    // History that came with an opened project is someone else's.
+    s.history_from_file = 1;
+    s.run("task.new", &json!({"name": "Replay file", "fromHistory": true})).unwrap();
+    assert!(!s.trusted_tasks.contains("replay file"));
+    s.history_from_file = 0;
     assert_eq!(s.project.tasks.last().unwrap().steps.len(), 1);
     s.run("task.save", &json!({"task": "Explore", "path": path("explore.rgistask")})).unwrap();
     s.run("task.import", &json!({"path": path("explore.rgistask")})).unwrap();

@@ -173,7 +173,9 @@ pub fn commands() -> Vec<C> {
                 i += 1;
                 name = format!("{base} {i}");
             }
-            if !b(p, "imported").unwrap_or(false) {
+            // History that came with an opened project is from a file too.
+            let from_file_history = b(p, "fromHistory").unwrap_or(false) && p.get("steps").is_none() && s.history_from_file > 0;
+            if !b(p, "imported").unwrap_or(false) && !from_file_history {
                 s.trusted_tasks.insert(name.to_lowercase());
             }
             s.project.tasks.push(Task { name: name.clone(), description: ps(p, "description").unwrap_or("").chars().take(2000).collect(), steps: steps.into_iter().take(200).collect() });
@@ -607,7 +609,8 @@ fn obj_text(s: &Session, p: &Value) -> Result<String, String> {
         let m = rustgis_geom::lonlat_to_merc(c);
         ((m.x - origin.x) * k, (m.y - origin.y) * k)
     };
-    let mut obj = format!("# {} exported by RustGIS\no {}\n", l.name, l.name.replace(char::is_whitespace, "_"));
+    let name = l.name.replace(char::is_whitespace, "_");
+    let mut obj = format!("# {name} exported by RustGIS\no {name}\n");
     let mut v = 0usize; // vertices written
     let rows = l.visible_rows();
     for (row, ft) in l.dataset.features.iter().enumerate() {
@@ -619,15 +622,24 @@ fn obj_text(s: &Session, p: &Value) -> Result<String, String> {
             Some(Geometry::Polygon(polys)) => {
                 for rings in polys {
                     // Each ring open (no closing vertex), outer first then holes.
-                    let open: Vec<Vec<(f64, f64)>> = rings
+                    let mut open: Vec<Vec<(f64, f64)>> = rings
                         .iter()
                         // Drop a ring's closing vertex only when it repeats the first.
                         .map(|r| {
                             let n = if r.len() > 1 && r.first() == r.last() { r.len() - 1 } else { r.len() };
                             r.iter().take(n).map(|c| xy(*c)).collect::<Vec<_>>()
                         })
-                        .filter(|r: &Vec<(f64, f64)>| r.len() >= 3)
                         .collect();
+                    // A degenerate outer ring drops the polygon (a hole mustn't become solid);
+                    // degenerate holes are left out.
+                    if open.first().is_none_or(|r| r.len() < 3) {
+                        continue;
+                    }
+                    let mut k = 0;
+                    open.retain(|r| {
+                        k += 1;
+                        k == 1 || r.len() >= 3
+                    });
                     let Some(outer) = open.first() else { continue };
                     let n: usize = open.iter().map(Vec::len).sum();
                     for (x, y) in open.iter().flatten() {
