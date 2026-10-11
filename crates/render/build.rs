@@ -31,15 +31,27 @@ fn main() {
             continue;
         }
         let url = format!("{BASE}/{f}");
-        let ok = Command::new("curl")
-            .args(["-fsSL", "--retry", "3", "--connect-timeout", "20", "-o"])
-            .arg(&dest)
-            .arg(&url)
-            .status()
-            .is_ok_and(|s| s.success());
-        if !ok || !valid(&dest) {
+        // curl's own --retry skips some transient failures (a connection reset, error 35), so
+        // retry here too, with a growing pause.
+        let mut ok = false;
+        for attempt in 1..=5u64 {
+            ok = Command::new("curl")
+                .args(["-fsSL", "--retry", "3", "--connect-timeout", "20", "--max-time", "120", "-o"])
+                .arg(&dest)
+                .arg(&url)
+                .status()
+                .is_ok_and(|s| s.success())
+                && valid(&dest);
+            if ok {
+                break;
+            }
             let _ = std::fs::remove_file(&dest);
-            panic!("could not download {url}; check the network or set RUSTGIS_DATA_DIR to a folder with {}", FILES.join(", "));
+            println!("cargo:warning=downloading {url} failed (attempt {attempt} of 5)");
+            std::thread::sleep(std::time::Duration::from_secs(3 * attempt));
+        }
+        if !ok {
+            let _ = std::fs::remove_file(&dest);
+            panic!("could not download {url}\n(check the network, or set RUSTGIS_DATA_DIR to a folder holding {})", FILES.join(", "));
         }
     }
 }
