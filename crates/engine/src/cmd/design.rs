@@ -65,7 +65,7 @@ pub(crate) fn apply(s: &mut Session, id: u32, changes: Vec<Change>) -> Result<()
             Elevation::Constant(z) => Some(*z),
             Elevation::Surface(name) => {
                 let c = g.label_point()?;
-                let r = s.map().layer_by_name(name)?.raster.as_ref()?.data.as_ref()?.clone();
+                let r = s.map().layer_by_name(name)?.raster.as_ref()?.data.as_ref()?;
                 let (col, row) = r.pixel_at(c)?;
                 r.value(0, col, row).map(f64::from)
             }
@@ -120,10 +120,29 @@ pub(crate) fn apply(s: &mut Session, id: u32, changes: Vec<Change>) -> Result<()
             }
         }
     }
-    // Validation.
+    // Validation. Domains and contingent values are checked on the fields an edit changed (all
+    // of a new feature's), so a value set before the domain doesn't block unrelated edits.
+    let constraints: Vec<(String, String, rustgis_data::query::Expr)> = l
+        .design
+        .rules
+        .iter()
+        .filter(|r| r.kind == RuleKind::Constraint)
+        .map(|rule| {
+            rustgis_data::query::parse(&rule.expression, &l.dataset)
+                .map(|e| (rule.name.clone(), rule.expression.clone(), e))
+                .map_err(|e| format!("attribute rule {}: {e}", rule.name))
+        })
+        .collect::<Result<_, _>>()?;
+    let changed_fields = |r: usize| -> Option<Vec<bool>> {
+        let before = changes.iter().find(|c| c.row == Some(r))?.before.as_ref()?;
+        let now = l.dataset.features.get(r)?;
+        Some((0..l.dataset.fields.len()).map(|i| before.attrs.get(i) != now.attrs.get(i)).collect())
+    };
     for r in &rows {
+        let changed = changed_fields(*r);
+        let touched = |fi: usize| changed.as_ref().is_none_or(|c| c.get(fi).copied().unwrap_or(true));
         for d in &l.design.domains {
-            if let Some(fi) = l.dataset.field_index(&d.field) {
+            if let Some(fi) = l.dataset.field_index(&d.field).filter(|fi| touched(*fi)) {
                 let v = l.dataset.value(*r, fi);
                 if !d.allows(v) {
                     return Err(format!("{} isn't allowed in {} (its domain)", v, d.field));
@@ -133,7 +152,8 @@ pub(crate) fn apply(s: &mut Session, id: u32, changes: Vec<Change>) -> Result<()
         for c in &l.design.contingent {
             let vals: Vec<&Value> =
                 c.fields.iter().map(|f| l.dataset.field_index(f).map(|fi| l.dataset.value(*r, fi)).unwrap_or(&Value::Null)).collect();
-            if vals.iter().all(|v| v.is_null()) {
+            let any_touched = c.fields.iter().any(|f| l.dataset.field_index(f).is_some_and(touched));
+            if !any_touched || vals.iter().all(|v| v.is_null()) {
                 continue;
             }
             let ok = c.combos.iter().any(|combo| {
@@ -144,10 +164,9 @@ pub(crate) fn apply(s: &mut Session, id: u32, changes: Vec<Change>) -> Result<()
                 return Err(format!("{} isn't a valid combination of {} ({})", shown.join(", "), c.fields.join(", "), c.name));
             }
         }
-        for rule in l.design.rules.iter().filter(|r| r.kind == RuleKind::Constraint) {
-            let e = rustgis_data::query::parse(&rule.expression, &l.dataset).map_err(|e| format!("attribute rule {}: {e}", rule.name))?;
-            if !rustgis_data::query::eval(&e, &l.dataset, *r) {
-                return Err(format!("the edit breaks the rule {} ({})", rule.name, rule.expression));
+        for (name, expr, e) in &constraints {
+            if !rustgis_data::query::eval(e, &l.dataset, *r) {
+                return Err(format!("the edit breaks the rule {name} ({expr})"));
             }
         }
     }
@@ -184,7 +203,7 @@ pub fn commands() -> Vec<C> {
     vec![
         // Data design.
         C::new("data.domain", "Domains", "Data › Data Design", domain).when(need_feature_layer).params(
-            r#"{"layer"?, "field": string, "coded"?: [[code, description], …], "min"?: number, "max"?: number, "clear"?: bool}"#,
+            r#"{"layer"?, "field": string, "coded"?: [[code, description], …], "min"?: number, "max"?: number, "clear"?: bool, "force"?: bool (set it even though existing values fall outside)}"#,
         ),
         C::new("data.subtypes", "Subtypes", "Data › Data Design", subtypes).when(need_feature_layer).params(
             r#"{"layer"?, "field": integer field, "subtypes": [{"code": n, "name": string, "defaults"?: {field: value}}], "symbolize"?: bool, "clear"?: bool}"#,
@@ -219,7 +238,7 @@ pub fn commands() -> Vec<C> {
         .view()
         .when(need_feature_layer),
         C::new("data.archiveRestore", "Restore From Archive", "Data › Archiving", archive_restore)
-            .when(need_feature_layer)
+            .when(need_editable)
             .params(r#"{"layer"?, "time": seconds since 1970 (the layer as it was then)}"#),
         C::new("data.relate", "Related Data", "Data › Relationship", relate).params(
             r#"{"name": string, "origin": layer, "originKey": field, "destination": layer, "destinationKey": field, "remove"?: bool}"#,
@@ -235,15 +254,12 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"on"?: bool}"#),
         C::new("edit.settings", "Editing Settings", "Edit › Manage Edits", |s, p| {
             let set = &mut s.map_mut().editing.settings;
-            if let Some(v) = b(p, "confirmDelete") {
-                set.confirm_delete = v;
-            }
             if let Some(v) = b(p, "showVertices") {
                 set.show_vertices = v;
             }
-            Ok(json!({"enabled": set.enabled, "confirmDelete": set.confirm_delete, "showVertices": set.show_vertices}))
+            Ok(json!({"enabled": set.enabled, "showVertices": set.show_vertices}))
         })
-        .params(r#"{"confirmDelete"?: bool, "showVertices"?: bool}"#),
+        .params(r#"{"showVertices"?: bool}"#),
         C::new("edit.status", "Edit Status", "Edit › Manage Edits", |s, _| {
             let rows: Vec<Json> = s
                 .edit_counts
@@ -287,7 +303,6 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"dx": metres east, "dy": metres north}"#),
         C::new("edit.rotate", "Rotate", "Edit › Features › Modify", |s, p| {
             let deg = f(p, "angle").ok_or("angle is required")?;
-            let deg = deg + s.map().editing.settings.ground_to_grid.map_or(0.0, |(_, r)| r);
             modify(s, |g| {
                 let c = lonlat_to_merc(g.extent().center());
                 let (sin, cos) = (-deg.to_radians()).sin_cos();
@@ -772,27 +787,57 @@ fn archive_restore(s: &mut Session, p: &Json) -> CmdResult {
     let t = f(p, "time").ok_or("time is required")?;
     let id = s.layer_id(p)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
-    let archive = l.design.archive.clone().ok_or("archiving is off for this layer")?;
-    let mut undone = 0;
-    for e in archive.iter().rev().take_while(|e| e.time > t) {
-        let pos = l.dataset.features.iter().position(|f| f.id == e.id);
-        match (&e.before, pos) {
+    // The edits after `t`, newest first (only their earlier states are copied).
+    let undo: Vec<(u64, Option<Feature>)> = {
+        let archive = l.design.archive.as_ref().ok_or("archiving is off for this layer")?;
+        archive.iter().rev().take_while(|e| e.time > t).map(|e| (e.id, e.before.clone())).collect()
+    };
+    let mut touched: Vec<(u64, Option<Feature>)> = Vec::new();
+    for (fid, before) in &undo {
+        let pos = l.dataset.features.iter().position(|f| f.id == *fid);
+        let now = pos.and_then(|i| l.dataset.features.get(i)).cloned();
+        if !touched.iter().any(|(t, _)| t == fid) {
+            touched.push((*fid, now));
+        }
+        match (before, pos) {
             (Some(b), Some(i)) => {
                 if let Some(slot) = l.dataset.features.get_mut(i) {
                     *slot = b.clone();
                 }
             }
+            // A deleted feature comes back at the end of the table (its old row isn't kept).
             (Some(b), None) => l.dataset.features.push(b.clone()),
             (None, Some(i)) => {
                 l.dataset.features.remove(i);
             }
             (None, None) => {}
         }
-        undone += 1;
+    }
+    // The restore is itself archived and counted, so it can be restored past too.
+    let time = now();
+    let mut counts = EditCounts::default();
+    let mut entries = Vec::new();
+    for (fid, before) in touched {
+        let after = l.dataset.features.iter().find(|f| f.id == fid).cloned();
+        match (&before, &after) {
+            (None, Some(_)) => counts.added += 1,
+            (Some(_), None) => counts.deleted += 1,
+            (Some(a), Some(b)) if a == b => continue,
+            _ => counts.modified += 1,
+        }
+        entries.push(rustgis_map::design::ArchiveEntry { time, id: fid, before, after });
+    }
+    if let Some(archive) = &mut l.design.archive {
+        archive.extend(entries);
     }
     l.selection.clear();
     l.touch_geometry();
-    Ok(json!({"undone": undone}))
+    let e = s.edit_counts.entry(id).or_default();
+    e.added += counts.added;
+    e.modified += counts.modified;
+    e.deleted += counts.deleted;
+    s.topology_errors.clear();
+    Ok(json!({"undone": undo.len()}))
 }
 
 fn relate(s: &mut Session, p: &Json) -> CmdResult {
@@ -1011,6 +1056,8 @@ fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
     use rustgis_analysis::topology as t;
     let tol = f(p, "toleranceM").unwrap_or(1.0).clamp(0.0, 10_000.0);
     let mut errors = Vec::new();
+    // Rules whose check stopped early (an error or work limit): their counts are partial.
+    let mut incomplete = Vec::new();
     for rule in s.map().editing.topology.clone() {
         let Some(l) = s.map().layer_by_name(rule.layer()) else { continue };
         let rows: Vec<usize> = l.visible_rows().iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i).collect();
@@ -1024,7 +1071,10 @@ fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
                 None => continue,
             },
         };
-        errors.extend(found.into_iter().map(|e| crate::TopologyIssue {
+        if !found.complete {
+            incomplete.push(rule.label().to_string());
+        }
+        errors.extend(found.errors.into_iter().map(|e| crate::TopologyIssue {
             rule: rule.label().to_string(),
             layer: l.name.clone(),
             rows: e.rows,
@@ -1036,5 +1086,5 @@ fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
     let out: Vec<Json> =
         errors.iter().take(1000).map(|e| json!({"rule": e.rule, "layer": e.layer, "rows": e.rows, "lon": e.lon, "lat": e.lat})).collect();
     s.topology_errors = errors;
-    Ok(json!({"errors": n, "first": out}))
+    Ok(json!({"errors": n, "first": out, "incomplete": incomplete}))
 }

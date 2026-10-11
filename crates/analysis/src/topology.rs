@@ -14,6 +14,22 @@ pub struct TopologyError {
     pub at: Coord,
 }
 
+/// A check's errors, and whether it finished (a check stops at an error or work limit).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Checked {
+    pub errors: Vec<TopologyError>,
+    pub complete: bool,
+}
+
+impl Checked {
+    fn done(errors: Vec<TopologyError>) -> Checked {
+        Checked { errors, complete: true }
+    }
+    fn partial(errors: Vec<TopologyError>) -> Checked {
+        Checked { errors, complete: false }
+    }
+}
+
 /// Most errors reported per check.
 const MAX_ERRORS: usize = 10_000;
 /// Most pair tests one check spends, so a huge layer can't stall the app.
@@ -77,7 +93,7 @@ fn rects_touch(a: &geo::Rect<f64>, b: &geo::Rect<f64>) -> bool {
 }
 
 /// Pairs of polygons that overlap (share area, not just an edge).
-pub fn overlaps(ds: &Dataset, rows: &[usize]) -> Vec<TopologyError> {
+pub fn overlaps(ds: &Dataset, rows: &[usize]) -> Checked {
     let mut p = polygons(ds, rows);
     // Sweep from west to east: only polygons whose boxes overlap in x are compared.
     p.sort_by(|a, b| a.2.min().x.partial_cmp(&b.2.min().x).unwrap_or(std::cmp::Ordering::Equal));
@@ -90,7 +106,7 @@ pub fn overlaps(ds: &Dataset, rows: &[usize]) -> Vec<TopologyError> {
             }
             work += 1;
             if work > MAX_WORK {
-                return out;
+                return Checked::partial(out);
             }
             if !rects_touch(ba, bb) || !a.intersects(b) {
                 continue;
@@ -100,17 +116,17 @@ pub fn overlaps(ds: &Dataset, rows: &[usize]) -> Vec<TopologyError> {
             if inter.unsigned_area() > 1.0 {
                 out.push(TopologyError { rows: vec![*ra, *rb], at: centre(&inter) });
                 if out.len() >= MAX_ERRORS {
-                    return out;
+                    return Checked::partial(out);
                 }
             }
         }
     }
-    out
+    Checked::done(out)
 }
 
 /// Holes in the union of a layer's polygons that no polygon covers (the outer boundary isn't a
 /// gap).
-pub fn gaps(ds: &Dataset, rows: &[usize]) -> Vec<TopologyError> {
+pub fn gaps(ds: &Dataset, rows: &[usize]) -> Checked {
     let all: Vec<geo::Polygon<f64>> = polygons(ds, rows).into_iter().flat_map(|(_, m, _)| m.0).collect();
     let u = geo::unary_union(all.iter());
     let mut out = Vec::new();
@@ -122,7 +138,7 @@ pub fn gaps(ds: &Dataset, rows: &[usize]) -> Vec<TopologyError> {
             }
         }
     }
-    out
+    Checked::done(out)
 }
 
 fn segments_cross(a: (Coord, Coord), b: (Coord, Coord)) -> Option<Coord> {
@@ -176,7 +192,7 @@ fn self_crossing(path: &[Coord], closed: bool) -> Option<Coord> {
 }
 
 /// Lines and polygon rings that cross themselves.
-pub fn self_intersections(ds: &Dataset, rows: &[usize]) -> Vec<TopologyError> {
+pub fn self_intersections(ds: &Dataset, rows: &[usize]) -> Checked {
     let mut out = Vec::new();
     for r in rows {
         let Some(g) = ds.features.get(*r).and_then(|f| f.geometry.as_ref()) else { continue };
@@ -193,14 +209,15 @@ pub fn self_intersections(ds: &Dataset, rows: &[usize]) -> Vec<TopologyError> {
             }
         }
         if out.len() >= MAX_ERRORS {
-            break;
+            return Checked::partial(out);
         }
     }
-    out
+    Checked::done(out)
 }
 
-/// Line ends that touch no other line (within `tol_m` metres).
-pub fn dangles(ds: &Dataset, rows: &[usize], tol_m: f64) -> Vec<TopologyError> {
+/// Line ends that touch no other line (within `tol_m` metres). Line parts are indexed on a grid,
+/// so each end is measured only against parts near it.
+pub fn dangles(ds: &Dataset, rows: &[usize], tol_m: f64) -> Checked {
     let lines: Vec<(usize, Vec<Vec<Coord>>)> = rows
         .iter()
         .filter_map(|r| match ds.features.get(*r)?.geometry.as_ref()? {
@@ -208,21 +225,41 @@ pub fn dangles(ds: &Dataset, rows: &[usize], tol_m: f64) -> Vec<TopologyError> {
             _ => None,
         })
         .collect();
-    // Each part's bounding box, to skip parts far from an end before measuring.
-    let boxes: Vec<Vec<(f64, f64, f64, f64)>> = lines
-        .iter()
-        .map(|(_, parts)| {
-            parts
-                .iter()
-                .map(|p| {
-                    p.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |b, c| (b.0.min(c.x), b.1.min(c.y), b.2.max(c.x), b.3.max(c.y)))
-                })
-                .collect()
-        })
-        .collect();
-    let mut out = Vec::new();
+    // Tolerance in Mercator metres grows with latitude; index with the largest it can be here.
+    let max_tol = tol_m / 85f64.to_radians().cos();
+    let mut ext = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for c in lines.iter().flat_map(|(_, ps)| ps.iter().flatten()) {
+        ext = (ext.0.min(c.x), ext.1.min(c.y), ext.2.max(c.x), ext.3.max(c.y));
+    }
+    let span = (ext.2 - ext.0).max(ext.3 - ext.1).max(1.0);
+    let cell = (span / 512.0).max(max_tol.min(span)).max(1e-6);
+    let key = |x: f64, y: f64| (((x - ext.0) / cell).floor() as i64, ((y - ext.1) / cell).floor() as i64);
+    // Each part's segments go into the cells their (widened) boxes cover.
+    let mut grid: std::collections::HashMap<(i64, i64), Vec<(usize, usize)>> = std::collections::HashMap::new();
     let mut work = 0usize;
-    for (r, parts) in &lines {
+    for (li, (_, parts)) in lines.iter().enumerate() {
+        for (pi, part) in parts.iter().enumerate() {
+            for w in part.windows(2) {
+                let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
+                let (x0, y0) = key(a.x.min(b.x) - max_tol, a.y.min(b.y) - max_tol);
+                let (x1, y1) = key(a.x.max(b.x) + max_tol, a.y.max(b.y) + max_tol);
+                for gx in x0..=x1 {
+                    for gy in y0..=y1 {
+                        work += 1;
+                        if work > MAX_WORK {
+                            return Checked::partial(Vec::new());
+                        }
+                        let v = grid.entry((gx, gy)).or_default();
+                        if v.last() != Some(&(li, pi)) {
+                            v.push((li, pi));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (li, (r, parts)) in lines.iter().enumerate() {
         for (pi, part) in parts.iter().enumerate() {
             // A closed part has no ends.
             if part.len() < 2 || part.first() == part.last() {
@@ -230,21 +267,17 @@ pub fn dangles(ds: &Dataset, rows: &[usize], tol_m: f64) -> Vec<TopologyError> {
             }
             for end in [part.first(), part.last()].into_iter().flatten() {
                 let tol = tol_m / merc_to_lonlat(*end).y.to_radians().cos().max(0.01);
-                // Any other part (of this line or another) within the tolerance.
-                let touches = lines.iter().zip(&boxes).any(|((o, oparts), oboxes)| {
-                    oparts.iter().zip(oboxes).enumerate().any(|(opi, (op, b))| {
-                        work += 1;
-                        (o != r || opi != pi)
-                            && op.len() >= 2
-                            && end.x >= b.0 - tol
-                            && end.x <= b.2 + tol
-                            && end.y >= b.1 - tol
-                            && end.y <= b.3 + tol
-                            && rustgis_data::geometry::seg_dist2(op, *end) <= tol * tol
-                    })
+                let near = grid.get(&key(end.x, end.y)).map(Vec::as_slice).unwrap_or(&[]);
+                let touches = near.iter().any(|&(oli, opi)| {
+                    work += 1;
+                    (oli != li || opi != pi)
+                        && lines
+                            .get(oli)
+                            .and_then(|(_, ps)| ps.get(opi))
+                            .is_some_and(|op| op.len() >= 2 && rustgis_data::geometry::seg_dist2(op, *end) <= tol * tol)
                 });
                 if work > MAX_WORK {
-                    return out;
+                    return Checked::partial(out);
                 }
                 if !touches {
                     out.push(TopologyError { rows: vec![*r], at: merc_to_lonlat(*end) });
@@ -252,14 +285,14 @@ pub fn dangles(ds: &Dataset, rows: &[usize], tol_m: f64) -> Vec<TopologyError> {
             }
         }
         if out.len() >= MAX_ERRORS {
-            break;
+            return Checked::partial(out);
         }
     }
-    out
+    Checked::done(out)
 }
 
 /// Points of `ds` that fall in no polygon of `by`.
-pub fn not_covered(ds: &Dataset, rows: &[usize], by: &Dataset) -> Vec<TopologyError> {
+pub fn not_covered(ds: &Dataset, rows: &[usize], by: &Dataset) -> Checked {
     let all: Vec<usize> = (0..by.features.len()).collect();
     let polys = polygons(by, &all);
     let mut out = Vec::new();
@@ -277,10 +310,10 @@ pub fn not_covered(ds: &Dataset, rows: &[usize], by: &Dataset) -> Vec<TopologyEr
             }
         }
         if out.len() >= MAX_ERRORS {
-            break;
+            return Checked::partial(out);
         }
     }
-    out
+    Checked::done(out)
 }
 
 #[cfg(test)]
@@ -305,14 +338,14 @@ mod tests {
         ds.push(Some(square(0.5, 0.5, 1.0)), vec![]); // overlaps the first
         ds.push(Some(square(1.0, 0.0, 1.0)), vec![]); // shares an edge with the first
         let rows: Vec<usize> = (0..3).collect();
-        let o = overlaps(&ds, &rows);
+        let o = overlaps(&ds, &rows).errors;
         assert!(o.iter().any(|e| e.rows == vec![0, 1]) && !o.iter().any(|e| e.rows == vec![0, 2]), "{o:?}");
         // A ring of four squares around a hole.
         let mut ring = Dataset::new("r", GeometryType::Polygon, vec![]);
         for (x, y) in [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (0.0, 1.0), (2.0, 1.0), (0.0, 2.0), (1.0, 2.0), (2.0, 2.0)] {
             ring.push(Some(square(x, y, 1.0)), vec![]);
         }
-        let g = gaps(&ring, &(0..8).collect::<Vec<_>>());
+        let g = gaps(&ring, &(0..8).collect::<Vec<_>>()).errors;
         assert_eq!(g.len(), 1);
         assert!((g[0].at.x - 1.5).abs() < 0.1 && (g[0].at.y - 1.5).abs() < 0.1, "{:?}", g[0].at);
         // A bow tie crosses itself.
@@ -323,13 +356,13 @@ mod tests {
         );
         lines.push(Some(Geometry::Line(vec![vec![Coord::new(5.0, 5.0), Coord::new(6.0, 5.0)]])), vec![]);
         lines.push(Some(Geometry::Line(vec![vec![Coord::new(6.0, 5.0), Coord::new(6.0, 6.0)]])), vec![]);
-        assert_eq!(self_intersections(&lines, &[0, 1, 2]).len(), 1);
+        assert_eq!(self_intersections(&lines, &[0, 1, 2]).errors.len(), 1);
         // Line 1 starts and line 2 ends in the open: two dangles (they meet at 6,5).
-        assert_eq!(dangles(&lines, &[1, 2], 1.0).len(), 2);
+        assert_eq!(dangles(&lines, &[1, 2], 1.0).errors.len(), 2);
         let mut pts = Dataset::new("pt", GeometryType::Point, vec![]);
         pts.push(Some(Geometry::Point(Coord::new(0.5, 0.5))), vec![]);
         pts.push(Some(Geometry::Point(Coord::new(9.0, 9.0))), vec![]);
-        assert_eq!(not_covered(&pts, &[0, 1], &ds).iter().map(|e| e.rows.clone()).collect::<Vec<_>>(), vec![vec![1]]);
+        assert_eq!(not_covered(&pts, &[0, 1], &ds).errors.iter().map(|e| e.rows.clone()).collect::<Vec<_>>(), vec![vec![1]]);
         // Merging two overlapping squares makes one polygon.
         let m = merge(&[square(0.0, 0.0, 1.0), square(0.5, 0.0, 1.0)]).unwrap_or(Geometry::Point(Coord::default()));
         assert!(matches!(&m, Geometry::Polygon(p) if p.len() == 1));
@@ -342,13 +375,13 @@ mod tests {
         let mut path: Vec<Coord> = (0..10_001).map(|i| Coord::new(i as f64 * 0.0001, (i % 2) as f64 * 0.0001)).collect();
         let mut ds = Dataset::new("l", GeometryType::Polyline, vec![]);
         ds.push(Some(Geometry::Line(vec![path.clone()])), vec![]);
-        assert!(self_intersections(&ds, &[0]).is_empty());
+        assert!(self_intersections(&ds, &[0]).errors.is_empty());
         // ...then back across the start.
         path.push(Coord::new(0.00015, -0.0001));
         path.push(Coord::new(0.00015, 0.0002));
         let mut ds = Dataset::new("l", GeometryType::Polyline, vec![]);
         ds.push(Some(Geometry::Line(vec![path])), vec![]);
-        let e = self_intersections(&ds, &[0]);
+        let e = self_intersections(&ds, &[0]).errors;
         assert_eq!(e.len(), 1);
         assert!((e[0].at.x - 0.00015).abs() < 1e-6);
     }

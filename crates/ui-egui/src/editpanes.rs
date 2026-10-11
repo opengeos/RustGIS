@@ -27,18 +27,35 @@ pub struct Forms {
     pub coded: String,
     pub min: String,
     pub max: String,
-    pub name: String,
+    /// Each form keeps its own text.
+    pub template_name: String,
+    pub rule_name: String,
+    pub calc_field: String,
+    pub subtype_field: String,
+    pub subtype_list: String,
+    pub contingent_name: String,
+    pub contingent_combos: String,
+    pub rel_name: String,
     pub expression: String,
-    pub rule_field: String,
     pub calc: bool,
     pub fields: String,
-    pub combos: String,
     pub rel_origin: String,
     pub rel_origin_key: String,
     pub rel_dest: String,
     pub rel_dest_key: String,
     pub restore_minutes: String,
     pub message: Option<(String, bool)>,
+}
+
+/// A number typed in a form, or an error shown in the pane (so a typo isn't taken as 0).
+fn number(app: &mut RustGisApp, text: &str, what: &str) -> Option<f64> {
+    match text.trim().parse::<f64>() {
+        Ok(v) if v.is_finite() => Some(v),
+        _ => {
+            app.forms.message = Some((crate::i18n::fmt("{what} must be a number", &[("what", tl!(what))]), true));
+            None
+        }
+    }
 }
 
 fn heading(ui: &mut Ui, text: &str) {
@@ -93,10 +110,6 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             run(app, "edit.settings", json!({"showVertices": v}));
         }
     });
-    let mut cd = settings.confirm_delete;
-    if ui.checkbox(&mut cd, tl!("Ask before deleting")).changed() {
-        run(app, "edit.settings", json!({"confirmDelete": cd}));
-    }
 
     heading(ui, "Modify Selected Features");
     egui::Grid::new("modify").num_columns(3).spacing(vec2(6.0, 6.0)).show(ui, |ui| {
@@ -106,22 +119,28 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ui.add(egui::TextEdit::singleline(&mut app.forms.dy).hint_text("north").desired_width(52.0));
         });
         if ui.button(tl!("Move")).clicked() {
-            let (dx, dy) = (app.forms.dx.trim().parse::<f64>().unwrap_or(0.0), app.forms.dy.trim().parse::<f64>().unwrap_or(0.0));
-            run(app, "edit.move", json!({"dx": dx, "dy": dy}));
+            let (tx, ty) = (app.forms.dx.clone(), app.forms.dy.clone());
+            if let (Some(dx), Some(dy)) = (number(app, &tx, "East"), number(app, &ty, "North")) {
+                run(app, "edit.move", json!({"dx": dx, "dy": dy}));
+            }
         }
         ui.end_row();
         ui.label(tl!("Rotate (°)"));
         ui.add(egui::TextEdit::singleline(&mut app.forms.angle).hint_text("90").desired_width(124.0));
         if ui.button(tl!("Rotate")).clicked() {
-            let a = app.forms.angle.trim().parse::<f64>().unwrap_or(0.0);
-            run(app, "edit.rotate", json!({"angle": a}));
+            let t = app.forms.angle.clone();
+            if let Some(a) = number(app, &t, "Angle") {
+                run(app, "edit.rotate", json!({"angle": a}));
+            }
         }
         ui.end_row();
         ui.label(tl!("Scale (×)"));
         ui.add(egui::TextEdit::singleline(&mut app.forms.factor).hint_text("2").desired_width(124.0));
         if ui.button(tl!("Scale")).clicked() {
-            let k = app.forms.factor.trim().parse::<f64>().unwrap_or(1.0);
-            run(app, "edit.scale", json!({"factor": k}));
+            let t = app.forms.factor.clone();
+            if let Some(k) = number(app, &t, "Scale") {
+                run(app, "edit.scale", json!({"factor": k}));
+            }
         }
         ui.end_row();
     });
@@ -152,7 +171,7 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             });
         }
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut app.forms.name).hint_text(tl!("Template name")).desired_width(150.0));
+            ui.add(egui::TextEdit::singleline(&mut app.forms.template_name).hint_text(tl!("Template name")).desired_width(150.0));
             if ui.button(tl!("From Selection")).on_hover_text(tl!("A template with the first selected feature's values")).clicked() {
                 let defaults: serde_json::Map<String, Value> = l
                     .selection
@@ -168,7 +187,7 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                             .collect()
                     })
                     .unwrap_or_default();
-                let name = app.forms.name.trim().to_string();
+                let name = app.forms.template_name.trim().to_string();
                 run(app, "edit.template", json!({"name": name, "defaults": defaults}));
             }
         });
@@ -207,8 +226,10 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             run(app, "edit.elevation", json!({"mode": "none"}));
         }
         if ui.radio(mode == "constant", tl!("Constant")).clicked() {
-            let z = app.forms.z.trim().parse::<f64>().unwrap_or(0.0);
-            run(app, "edit.elevation", json!({"mode": "constant", "z": z}));
+            let t = app.forms.z.clone();
+            if let Some(z) = number(app, &t, "Elevation") {
+                run(app, "edit.elevation", json!({"mode": "constant", "z": z}));
+            }
         }
         ui.add(egui::TextEdit::singleline(&mut app.forms.z).hint_text("z (m)").desired_width(60.0));
         for r in &rasters {
@@ -226,9 +247,13 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.add(egui::TextEdit::singleline(&mut app.forms.g2g_rotation).hint_text(tl!("rotation °")).desired_width(70.0));
         let mut x = on;
         if ui.checkbox(&mut x, tl!("On")).changed() {
-            let k = app.forms.g2g_scale.trim().parse::<f64>().unwrap_or(1.0);
-            let r = app.forms.g2g_rotation.trim().parse::<f64>().unwrap_or(0.0);
-            run(app, "edit.groundToGrid", json!({"on": x, "scale": k, "rotation": r}));
+            // Turning it off needs no numbers; blank fields mean no correction.
+            let (ts, tr) = (app.forms.g2g_scale.clone(), app.forms.g2g_rotation.clone());
+            let k = if ts.trim().is_empty() || !x { Some(1.0) } else { number(app, &ts, "Scale") };
+            let r = if tr.trim().is_empty() || !x { Some(0.0) } else { number(app, &tr, "Rotation") };
+            if let (Some(k), Some(r)) = (k, r) {
+                run(app, "edit.groundToGrid", json!({"on": x, "scale": k, "rotation": r}));
+            }
         }
     });
 
@@ -375,23 +400,23 @@ pub fn design(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let ints: Vec<String> =
         l.dataset.fields.iter().filter(|f| f.ty == rustgis_engine::data::FieldType::Integer).map(|f| f.name.clone()).collect();
     ui.horizontal(|ui| {
-        combo(ui, "sub_field", &mut app.forms.rule_field, &ints);
+        combo(ui, "sub_field", &mut app.forms.subtype_field, &ints);
         if ui.button(tl!("Set Subtypes")).on_hover_text(tl!("One per line: code=name")).clicked() {
             let subs: Vec<Value> = app
                 .forms
-                .combos
+                .subtype_list
                 .lines()
                 .filter_map(|x| {
                     let (c, n) = x.split_once('=')?;
                     Some(json!({"code": c.trim().parse::<i64>().ok()?, "name": n.trim()}))
                 })
                 .collect();
-            run(app, "data.subtypes", json!({"field": app.forms.rule_field, "subtypes": subs}));
+            run(app, "data.subtypes", json!({"field": app.forms.subtype_field, "subtypes": subs}));
         }
     });
     ui.add(
-        egui::TextEdit::multiline(&mut app.forms.combos)
-            .hint_text(tl!("Subtypes (code=name) or contingent combinations (a, b), one per line"))
+        egui::TextEdit::multiline(&mut app.forms.subtype_list)
+            .hint_text(tl!("Subtypes, one per line: code=name"))
             .desired_rows(2)
             .desired_width(f32::INFINITY),
     );
@@ -408,10 +433,10 @@ pub fn design(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         });
     }
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut app.forms.name).hint_text(tl!("Rule name")).desired_width(110.0));
+        ui.add(egui::TextEdit::singleline(&mut app.forms.rule_name).hint_text(tl!("Rule name")).desired_width(110.0));
         ui.checkbox(&mut app.forms.calc, tl!("Calculation"));
         if app.forms.calc {
-            combo(ui, "rule_field", &mut app.forms.field, &fields);
+            combo(ui, "rule_field", &mut app.forms.calc_field, &fields);
         }
     });
     ui.horizontal(|ui| {
@@ -422,7 +447,7 @@ pub fn design(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             run(
                 app,
                 "data.attributeRule",
-                json!({"name": app.forms.name, "kind": kind, "field": app.forms.field, "expression": app.forms.expression}),
+                json!({"name": app.forms.rule_name, "kind": kind, "field": app.forms.calc_field, "expression": app.forms.expression}),
             );
         }
     });
@@ -436,13 +461,26 @@ pub fn design(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         });
     }
+    ui.add(
+        egui::TextEdit::multiline(&mut app.forms.contingent_combos)
+            .hint_text(tl!("Valid combinations, one per line: a, b"))
+            .desired_rows(2)
+            .desired_width(f32::INFINITY),
+    );
     ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut app.forms.contingent_name).hint_text(tl!("Name")).desired_width(80.0));
         ui.add(egui::TextEdit::singleline(&mut app.forms.fields).hint_text(tl!("fields, comma separated")).desired_width(150.0));
         if ui.button(tl!("Set")).on_hover_text(tl!("Combinations from the box above, one per line")).clicked() {
             let fs: Vec<&str> = app.forms.fields.split(',').map(str::trim).filter(|x| !x.is_empty()).collect();
-            let combos: Vec<Vec<&str>> =
-                app.forms.combos.lines().filter(|x| !x.trim().is_empty()).map(|x| x.split(',').map(str::trim).collect()).collect();
-            let name = if app.forms.name.trim().is_empty() { fs.join(" by ") } else { app.forms.name.trim().to_string() };
+            let combos: Vec<Vec<&str>> = app
+                .forms
+                .contingent_combos
+                .lines()
+                .filter(|x| !x.trim().is_empty())
+                .map(|x| x.split(',').map(str::trim).collect())
+                .collect();
+            let name =
+                if app.forms.contingent_name.trim().is_empty() { fs.join(" by ") } else { app.forms.contingent_name.trim().to_string() };
             run(app, "data.contingentValues", json!({"name": name, "fields": fs, "combos": combos}));
         }
     });
@@ -462,9 +500,11 @@ pub fn design(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut app.forms.restore_minutes).hint_text(tl!("minutes ago")).desired_width(80.0));
             if ui.button(tl!("Restore")).on_hover_text(tl!("Put the layer back as it was then")).clicked() {
-                let mins = app.forms.restore_minutes.trim().parse::<f64>().unwrap_or(0.0).max(0.0);
-                let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
-                run(app, "data.archiveRestore", json!({"time": now - mins * 60.0}));
+                let t = app.forms.restore_minutes.clone();
+                if let Some(mins) = number(app, &t, "Minutes") {
+                    let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                    run(app, "data.archiveRestore", json!({"time": now - mins.max(0.0) * 60.0}));
+                }
             }
         });
     }
@@ -497,11 +537,12 @@ pub fn design(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         combo(ui, "rel_dk", &mut app.forms.rel_dest_key, &df);
         ui.end_row();
     });
+    ui.add(egui::TextEdit::singleline(&mut app.forms.rel_name).hint_text(tl!("Relationship name")).desired_width(180.0));
     if ui.button(tl!("Relate")).clicked() {
-        let name = if app.forms.name.trim().is_empty() {
+        let name = if app.forms.rel_name.trim().is_empty() {
             format!("{} to {}", app.forms.rel_origin, app.forms.rel_dest)
         } else {
-            app.forms.name.trim().to_string()
+            app.forms.rel_name.trim().to_string()
         };
         run(
             app,

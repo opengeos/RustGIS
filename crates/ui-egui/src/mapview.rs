@@ -69,6 +69,9 @@ pub struct MapView {
     pub notices_seen: usize,
     pub toasts: Vec<(String, bool, f64)>,
     camera_moved: bool,
+    /// The last snap: its inputs (pointer, camera, undo depth) and where it snapped, if anywhere,
+    /// so snapping runs only when one of them changes rather than every frame.
+    snap: Option<([f64; 5], Option<Coord>)>,
 }
 
 impl Default for MapView {
@@ -90,6 +93,7 @@ impl Default for MapView {
             notices_seen: 0,
             toasts: Vec::new(),
             camera_moved: false,
+            snap: None,
         }
     }
 }
@@ -653,9 +657,24 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     if app.session.map().editing.snapping.enabled
         && (app.session.tool.creates() || matches!(app.session.tool, Tool::Graphic(_) | Tool::Measure | Tool::MeasureArea))
         && let Some(c) = app.map.pointer_lonlat
-        && let Ok(v) = app.session.run("edit.snap", &json!({"lon": c.x, "lat": c.y}))
-        && v["snapped"].as_bool() == Some(true)
-        && let Some(sp) = lonlat_to_screen(app, rect, Coord::new(v["lon"].as_f64().unwrap_or(c.x), v["lat"].as_f64().unwrap_or(c.y)))
+        && let Some(at) = {
+            let cam = app.session.map().camera;
+            let key = [c.x, c.y, cam.center.x + cam.center.y * 1e-3, cam.res, app.session.undo_depth() as f64];
+            match &app.map.snap {
+                Some((k, at)) if *k == key => *at,
+                _ => {
+                    let at = app
+                        .session
+                        .run("edit.snap", &json!({"lon": c.x, "lat": c.y}))
+                        .ok()
+                        .filter(|v| v["snapped"].as_bool() == Some(true))
+                        .map(|v| Coord::new(v["lon"].as_f64().unwrap_or(c.x), v["lat"].as_f64().unwrap_or(c.y)));
+                    app.map.snap = Some((key, at));
+                    at
+                }
+            }
+        }
+        && let Some(sp) = lonlat_to_screen(app, rect, at)
     {
         let magenta = Color32::from_rgb(0xD0, 0x2A, 0xB0);
         p.circle_stroke(sp, 7.0, Stroke::new(2.0, magenta));

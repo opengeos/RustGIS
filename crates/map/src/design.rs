@@ -207,8 +207,6 @@ pub enum Elevation {
 pub struct EditSettings {
     /// Editing is on (off makes the map read-only).
     pub enabled: bool,
-    /// Ask before deleting features (the app's confirmation).
-    pub confirm_delete: bool,
     /// Show the vertices of selected features.
     pub show_vertices: bool,
     pub elevation: Elevation,
@@ -218,7 +216,7 @@ pub struct EditSettings {
 
 impl Default for EditSettings {
     fn default() -> Self {
-        EditSettings { enabled: true, confirm_delete: false, show_vertices: true, elevation: Elevation::None, ground_to_grid: None }
+        EditSettings { enabled: true, show_vertices: true, elevation: Elevation::None, ground_to_grid: None }
     }
 }
 

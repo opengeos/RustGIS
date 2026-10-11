@@ -208,7 +208,8 @@ pub struct Session {
     pub notices: Vec<Notice>,
     /// Layer whose attribute table is open.
     pub table_layer: Option<u32>,
-    /// Edits per layer id since the project was last saved (Edit › Status).
+    /// Edits per layer id since the project was last saved (Edit › Status). A failed command's
+    /// are rolled back; undo doesn't subtract them, since they count edits made, not the net change.
     pub edit_counts: std::collections::HashMap<u32, cmd::design::EditCounts>,
     /// The last topology check's errors (Edit › Error Inspector).
     pub topology_errors: Vec<TopologyIssue>,
@@ -311,6 +312,8 @@ impl Session {
         }
         let (run, mutates, label) = (spec.run, spec.mutates, spec.label);
         let snapshot = mutates.then(|| self.project.clone());
+        // Edit counts roll back with the project when a command fails part way.
+        let counts = mutates.then(|| self.edit_counts.clone());
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self, params)))
             .unwrap_or_else(|_| Err(format!("{label} failed unexpectedly; the project was restored")));
         match (&res, snapshot) {
@@ -322,7 +325,12 @@ impl Session {
                 self.redo.clear();
                 self.dirty = true;
             }
-            (Err(_), Some(snap)) => self.project = snap,
+            (Err(_), Some(snap)) => {
+                self.project = snap;
+                if let Some(c) = counts {
+                    self.edit_counts = c;
+                }
+            }
             _ => {}
         }
         if let Err(e) = &res {
@@ -405,6 +413,11 @@ impl Session {
             self.last_camera = None;
             self.history_projection = code;
         }
+    }
+
+    /// How many changes can be undone.
+    pub fn undo_depth(&self) -> usize {
+        self.undo.len()
     }
 
     /// Records the camera in the previous/next extent history when it settles somewhere new.
