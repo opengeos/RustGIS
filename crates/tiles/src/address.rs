@@ -68,6 +68,11 @@ pub fn reach(url: &str) -> Reach {
     if let Ok(ip) = h.parse::<IpAddr>() {
         return ip_reach(ip);
     }
+    // Resolvers read a host whose last label is a number as an IPv4 address in the old
+    // `inet_aton` forms (`127.1`, `2852039166`, `0x7f.0.0.1`): judge the address it means.
+    if h.rsplit('.').next().is_some_and(|l| !l.is_empty() && (l.bytes().all(|b| b.is_ascii_digit()) || l.starts_with("0x"))) {
+        return inet_aton(&h).map_or(Reach::Forbidden, v4_reach);
+    }
     if ["metadata.google.internal", "metadata", "instance-data"].contains(&h.as_str()) {
         Reach::Forbidden
     } else if h == "localhost" || h.ends_with(".localhost") || h.ends_with(".local") || h.ends_with(".internal") {
@@ -75,6 +80,33 @@ pub fn reach(url: &str) -> Reach {
     } else {
         Reach::Public
     }
+}
+
+/// An IPv4 address in any form `inet_aton` reads: one to four parts, each decimal, octal
+/// (leading `0`) or hexadecimal (`0x`), the last filling the remaining bytes.
+fn inet_aton(h: &str) -> Option<Ipv4Addr> {
+    let parts: Vec<u64> = h
+        .split('.')
+        .map(|p| {
+            if let Some(x) = p.strip_prefix("0x").or_else(|| p.strip_prefix("0X")) {
+                if x.is_empty() { Some(0) } else { u64::from_str_radix(x, 16).ok() }
+            } else if p.len() > 1 && p.starts_with('0') {
+                u64::from_str_radix(&p[1..], 8).ok()
+            } else {
+                p.parse().ok()
+            }
+        })
+        .collect::<Option<_>>()?;
+    let (last, head) = parts.split_last()?;
+    if head.len() > 3 || head.iter().any(|&p| p > 255) {
+        return None;
+    }
+    let room = 8 * (4 - head.len() as u32);
+    if room < 64 && *last >= 1u64 << room {
+        return None;
+    }
+    let value = head.iter().enumerate().fold(*last, |acc, (i, &p)| acc | (p << (24 - 8 * i as u32)));
+    u32::try_from(value).ok().map(Ipv4Addr::from)
 }
 
 /// Whether `url` may be fetched. `from` is where it was found (a document, or the address that
@@ -114,6 +146,16 @@ mod tests {
         assert_eq!(reach("http://0.0.0.0/"), Reach::Forbidden);
         assert_eq!(reach("http://user@localhost:80@example.com/"), Reach::Public);
         assert_eq!(reach("garbage"), Reach::Forbidden);
+        // Old IPv4 forms mean the address they spell.
+        assert_eq!(reach("http://127.1:8080/"), Reach::Local);
+        assert_eq!(reach("http://2852039166/latest/meta-data/"), Reach::Forbidden);
+        assert_eq!(reach("http://0x7f.0.0.1/"), Reach::Local);
+        assert_eq!(reach("http://0177.0.0.1/"), Reach::Local);
+        assert_eq!(reach("http://0/"), Reach::Forbidden);
+        assert_eq!(reach("http://134744072/"), Reach::Public);
+        assert_eq!(reach("http://1.2.3.4.5/"), Reach::Forbidden);
+        assert_eq!(reach("http://999.1/"), Reach::Forbidden);
+        assert_eq!(reach("http://tiles.example.com/"), Reach::Public);
     }
 
     #[test]
@@ -124,6 +166,7 @@ mod tests {
         assert!(check("http://10.0.0.5/{z}/{x}/{y}.pbf", Some("https://example.com/style.json")).is_err());
         assert!(check("https://tiles.example.com/{z}", Some("https://example.com/style.json")).is_ok());
         assert!(check("http://169.254.169.254/", None).is_err());
+        assert!(check("http://127.1:8080/{z}/{x}/{y}.pbf", Some("https://example.com/style.json")).is_err());
         assert!(check("file:///etc/passwd", None).is_err());
     }
 }

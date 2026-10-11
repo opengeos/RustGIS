@@ -335,8 +335,10 @@ impl Bridge<'_> {
             return Err(format!("{label}: {why}"));
         }
         // Without `network`, no command may bring in a tile address (a map file read from text
-        // carries its tile layers): any new one is taken out again.
-        // What decides where a layer fetches from: its address, kind, subdomains and row order.
+        // carries its tile layers), or change where an existing layer fetches from: any such
+        // layer is taken out again. Where a layer fetches from is decided by its address, kind,
+        // subdomains and row order. Its name, attribution and opacity never reach a server, and
+        // its tile size reaches one only as `{width}`/`{height}` (256 or 512).
         let fetched = |t: &rustgis_map::TileLayer| (t.url.clone(), t.kind, t.subdomains.clone(), t.tms);
         let tile_sources =
             |s: &Session| -> std::collections::HashSet<_> { s.project.maps.iter().flat_map(|m| &m.tiles).map(fetched).collect() };

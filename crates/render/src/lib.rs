@@ -1061,9 +1061,12 @@ fn place_labels(mut cands: Vec<(PlacedLabel, f32, (u32, usize))>, fixed: Vec<Pla
 pub(crate) fn render_complete(map: &mut Map, view: &View) -> Option<Rendered> {
     let mut r = render_with(map, view, true)?;
     let start = web_time::Instant::now();
+    let budget = web_time::Duration::from_secs(60);
     let mut passes = 0;
-    while r.tiles_pending && passes < 6 && start.elapsed() < web_time::Duration::from_secs(60) && cfg!(not(target_arch = "wasm32")) {
-        rustgis_tiles::cache::wait(web_time::Duration::from_secs(30));
+    while r.tiles_pending && passes < 6 && start.elapsed() < budget && cfg!(not(target_arch = "wasm32")) {
+        // Each wait within what is left of the minute.
+        let left = budget.saturating_sub(start.elapsed());
+        rustgis_tiles::cache::wait(left.min(web_time::Duration::from_secs(30)));
         r = render_with(map, view, true)?;
         passes += 1;
     }

@@ -351,14 +351,18 @@ mod native {
         }
     }
 
-    fn work() {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
+    pub(super) fn agent() -> ureq::Agent {
+        ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(30)))
             .user_agent(concat!("RustGIS/", env!("CARGO_PKG_VERSION"), " (+https://rustgis.app)"))
             // Redirects are followed by `get`, which checks where each one leads.
             .max_redirects(0)
             .build()
-            .into();
+            .into()
+    }
+
+    fn work() {
+        let agent = agent();
         let q = queue();
         loop {
             let job = {
@@ -375,7 +379,10 @@ mod native {
         }
     }
 
-    fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
+    /// Fetches `url`, following up to 5 redirects. `url` itself passed `address::check` when
+    /// it was made (the layer's address, or one its style or TileJSON chose, checked in
+    /// `source::resolve`); each redirect is checked here.
+    pub(super) fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
         use std::io::Read;
         let mut at = url.to_string();
         let mut redirects = 0;
@@ -403,6 +410,9 @@ mod native {
         }
         let mut buf = Vec::new();
         resp.body_mut().with_config().limit(MAX_BYTES as u64 + 1).reader().read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        if buf.len() > MAX_BYTES {
+            return Err(format!("larger than {} MB", MAX_BYTES >> 20));
+        }
         Ok(buf)
     }
 }
@@ -431,6 +441,40 @@ mod tests {
         assert!(matches!(decode(b"", Want::Image), Ok(Payload::Empty)));
         assert!(decode(b"not a picture", Want::Image).is_err());
         assert!(decode(b"{", Want::Json).is_err());
+    }
+
+    /// A server on this computer answering each request with the next of `answers`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn serve(answers: Vec<String>) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for answer in answers {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(answer.as_bytes());
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn follows_only_allowed_redirects() {
+        let redirect = |to: &str| format!("HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let ok = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntile".to_string();
+        let agent = native::agent();
+        // Within the same server: followed.
+        let base = serve(vec![redirect("/tile.png"), ok]);
+        assert_eq!(native::get(&agent, &format!("{base}/old.png")).unwrap(), b"tile");
+        // To a metadata address, or from HTTPS down to HTTP: refused.
+        let base = serve(vec![redirect("http://169.254.169.254/latest/meta-data/")]);
+        assert!(native::get(&agent, &format!("{base}/x")).unwrap_err().contains("never fetched"));
+        // Too many.
+        let base = serve((0..7).map(|_| redirect("/again")).collect());
+        assert!(native::get(&agent, &format!("{base}/x")).unwrap_err().contains("too many"));
     }
 
     #[test]
