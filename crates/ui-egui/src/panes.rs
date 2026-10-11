@@ -41,6 +41,11 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 RightPane::Design => ("Data Design", "ui.pane.design"),
                 RightPane::Workflows => ("Workflows", "ui.pane.workflows"),
                 RightPane::Script => ("Script", "ui.pane.script"),
+                RightPane::Tasks => ("Tasks", "ui.pane.tasks"),
+                RightPane::Jobs => ("Workflow Manager", "ui.pane.jobs"),
+                RightPane::Profile => ("Profile", "ui.pane.profile"),
+                RightPane::Diagnostics => ("Diagnostic Monitor", "ui.pane.diagnostics"),
+                RightPane::Infographics => ("Infographics", "ui.pane.infographics"),
             };
             pane_header(app, ui, tl!(title), close, &t);
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -53,6 +58,11 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     RightPane::Design => crate::editpanes::design(app, ui, &t),
                     RightPane::Workflows => crate::analysispane::workflows(app, ui, &t),
                     RightPane::Script => crate::analysispane::script(app, ui, &t),
+                    RightPane::Tasks => crate::workspacepanes::tasks(app, ui, &t),
+                    RightPane::Jobs => crate::workspacepanes::jobs(app, ui, &t),
+                    RightPane::Profile => crate::workspacepanes::profile(app, ui, &t),
+                    RightPane::Diagnostics => crate::workspacepanes::diagnostics(app, ui, &t),
+                    RightPane::Infographics => crate::workspacepanes::infographics(app, ui, &t),
                 });
             });
         });

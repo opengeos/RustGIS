@@ -18,6 +18,7 @@ pub mod select;
 pub mod share;
 pub mod view;
 pub mod workflows;
+pub mod workspace;
 
 use serde_json::Value;
 
@@ -41,6 +42,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(effects::commands());
     v.extend(imagery::commands());
     v.extend(view::commands());
+    v.extend(workspace::commands());
     v.extend(gp::commands());
     v.extend(share::commands());
     v

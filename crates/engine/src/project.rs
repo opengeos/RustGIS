@@ -45,6 +45,52 @@ pub struct Project {
     /// Ortho and reality mapping workspaces.
     #[serde(default)]
     pub workspaces: Vec<crate::cmd::imagery::Workspace>,
+    /// Maps move together (View › Link Views).
+    #[serde(default)]
+    pub link_views: bool,
+    /// The project's thumbnail (base64 PNG).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+    /// Workflow Manager jobs.
+    #[serde(default)]
+    pub jobs: Vec<Job>,
+    /// Offline areas: snapshots of a map's data around an extent, synced back by feature id.
+    #[serde(default)]
+    pub offline_areas: Vec<OfflineArea>,
+}
+
+/// A unit of work tracked in the Workflow Manager.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Job {
+    pub id: u32,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// "new", "in progress", "on hold" or "done".
+    pub status: String,
+    #[serde(default)]
+    pub assigned: String,
+    /// The area the job covers (longitude/latitude), if any.
+    #[serde(default)]
+    pub extent: Option<rustgis_geom::Extent>,
+    /// Seconds since 1970.
+    pub created: f64,
+    #[serde(default)]
+    pub updated: f64,
+}
+
+/// A map's data clipped to an extent, to take into the field.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OfflineArea {
+    pub name: String,
+    /// The map it came from (by name).
+    pub map: String,
+    pub extent: rustgis_geom::Extent,
+    pub created: f64,
+    #[serde(default)]
+    pub synced: f64,
+    /// The snapshot: the map's feature layers holding the features meeting the extent.
+    pub data: Map,
 }
 
 /// Settings every geoprocessing run honours.
@@ -129,6 +175,10 @@ impl Project {
             gp_env: GpEnvironment::default(),
             models: Vec::new(),
             workspaces: Vec::new(),
+            link_views: false,
+            thumbnail: None,
+            jobs: Vec::new(),
+            offline_areas: Vec::new(),
         }
     }
 

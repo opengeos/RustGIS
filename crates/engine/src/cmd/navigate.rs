@@ -50,7 +50,11 @@ pub fn commands() -> Vec<C> {
                 None => Projection::Globe,
             };
             m.set_projection(next);
-            Ok(json!({"projection": m.projection.code(), "label": m.projection.label()}))
+            let out = json!({"projection": m.projection.code(), "label": m.projection.label()});
+            if s.auto_cache {
+                super::workspace::fill_cache(s);
+            }
+            Ok(out)
         })
         .params(r#"{"type"?: "mercator"|"globe"|preset id|"EPSG:<code>" (toggles the globe when omitted)}"#),
         C::new("map.projections", "Projections", "View › View", |_, _| {

@@ -21,6 +21,7 @@ mod ribbon;
 mod table;
 pub mod theme;
 mod widgets;
+mod workspacepanes;
 
 use rustgis_engine::{Project, Session};
 use serde_json::{Value, json};
@@ -121,6 +122,11 @@ pub enum RightPane {
     Design,
     Workflows,
     Script,
+    Tasks,
+    Jobs,
+    Profile,
+    Diagnostics,
+    Infographics,
 }
 
 pub struct UiState {
@@ -142,6 +148,12 @@ pub struct UiState {
     /// Tab rectangles from the last frame (for the contextual group header).
     pub tab_rects: Vec<(String, egui::Rect)>,
     pub tab_strip_rect: Option<egui::Rect>,
+    /// Tabs hidden from the ribbon (Help › Customize › Ribbon).
+    pub hidden_tabs: Vec<String>,
+    /// Extra Quick Access Toolbar commands.
+    pub quick_access: Vec<String>,
+    /// Saved pane arrangements: (name, left pane, right pane, tab).
+    pub pane_sets: Vec<(String, Option<LeftPane>, Option<RightPane>, String)>,
     /// The command an item picked in the browser opens with (web).
     pub pending_open: Option<&'static str>,
     /// A layout picture waiting for its image file (web).
@@ -150,6 +162,8 @@ pub struct UiState {
     pub pending_picture: Option<Vec<rustgis_engine::geom::Coord>>,
     /// Text to put on the system clipboard at the end of the frame.
     pub copy_out: Option<String>,
+    /// A web page to open at the end of the frame.
+    pub open_url: Option<String>,
     /// An image to put on the system clipboard at the end of the frame.
     pub copy_image: Option<egui::ColorImage>,
 }
@@ -172,10 +186,14 @@ impl Default for UiState {
             tab_rects: Vec::new(),
             tab_strip_rect: None,
             copy_out: None,
+            open_url: None,
             copy_image: None,
             pending_picture: None,
             pending_layout_picture: false,
             pending_open: None,
+            hidden_tabs: Vec::new(),
+            quick_access: Vec::new(),
+            pane_sets: Vec::new(),
         }
     }
 }
@@ -190,6 +208,7 @@ pub struct RustGisApp {
     pub layout: layoutview::LayoutView,
     pub forms: editpanes::Forms,
     pub workflow: analysispane::Workflow,
+    pub ws: workspacepanes::WorkspaceState,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     sent_title: String,
@@ -224,6 +243,7 @@ impl RustGisApp {
             layout: layoutview::LayoutView::default(),
             forms: editpanes::Forms::default(),
             workflow: analysispane::Workflow::default(),
+            ws: workspacepanes::WorkspaceState::default(),
             fonts_frames: 0,
             applied_dark: None,
             sent_title: String::new(),
@@ -246,6 +266,11 @@ impl RustGisApp {
         if let Some(m) = self.services.load_pref.as_ref().and_then(|load| load("ribbon_minimized")) {
             self.ui.ribbon_minimized = m == "true";
         }
+        let list = |s: Option<String>| -> Vec<String> {
+            s.map(|v| v.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect()).unwrap_or_default()
+        };
+        self.ui.hidden_tabs = list(self.services.load_pref.as_ref().and_then(|load| load("hidden_tabs")));
+        self.ui.quick_access = list(self.services.load_pref.as_ref().and_then(|load| load("quick_access")));
         // The browser's GeoLibre tools, loaded in an earlier visit: load them again (the runner
         // comes from the browser's cache).
         if self.services.load_pref.as_ref().and_then(|load| load("geolibre_web")).as_deref() == Some("on") {
@@ -365,6 +390,11 @@ impl RustGisApp {
         .iter()
         .find(|(e, _)| lower.ends_with(e))
         .map(|(_, c)| *c);
+        if let Some(cmd) = self.ui.pending_open.filter(|c| c.ends_with(".thumbnail")) {
+            use base64::Engine;
+            self.ui.pending_open = None;
+            return self.run(cmd, json!({"image": base64::engine::general_purpose::STANDARD.encode(bytes)}));
+        }
         if let Some(cmd) = self.ui.pending_open.take().or(item) {
             use base64::Engine;
             let r = self.run(cmd, json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)}));
@@ -747,6 +777,96 @@ impl RustGisApp {
                     self.session.notify(i18n::fmt("Opened {name} for printing", &[("name", &path.display().to_string())]), false);
                 }
             }
+            "ui.pane.tasks" => toggle_right(&mut self.ui, RightPane::Tasks),
+            "ui.pane.jobs" => toggle_right(&mut self.ui, RightPane::Jobs),
+            "ui.pane.profile" => toggle_right(&mut self.ui, RightPane::Profile),
+            "ui.pane.diagnostics" => toggle_right(&mut self.ui, RightPane::Diagnostics),
+            "ui.pane.infographics" => toggle_right(&mut self.ui, RightPane::Infographics),
+            "ui.catalogView" => self.ws.catalog_view = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.catalog_view),
+            "ui.itemPopups" => self.ws.item_popups = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.item_popups),
+            "ui.linkCursors" => self.ws.link_cursors = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.link_cursors),
+            // A second map beside the active one (for linked views and cursors).
+            "ui.splitView" => {
+                let others: Vec<usize> = (0..self.session.project.maps.len()).filter(|i| *i != self.session.project.active_map).collect();
+                self.ws.split = match (self.ws.split, p.get("map").and_then(Value::as_str)) {
+                    (_, Some(n)) => Some(
+                        self.session
+                            .project
+                            .maps
+                            .iter()
+                            .position(|m| m.name.eq_ignore_ascii_case(n))
+                            .ok_or_else(|| format!("no map '{n}'"))?,
+                    ),
+                    (Some(_), None) => None,
+                    (None, None) => Some(*others.first().ok_or("add a second map first (Insert › New Map)")?),
+                };
+            }
+            "ui.paneSet" => {
+                if let Some(n) = p.get("save").and_then(Value::as_str) {
+                    self.ui.pane_sets.retain(|x| x.0 != n);
+                    self.ui.pane_sets.push((n.to_string(), self.ui.left, self.ui.right, self.ui.tab.clone()));
+                } else if let Some(n) = p.get("load").and_then(Value::as_str) {
+                    let set = self.ui.pane_sets.iter().find(|x| x.0 == n).cloned().ok_or_else(|| format!("no pane set '{n}'"))?;
+                    (self.ui.left, self.ui.right, self.ui.tab) = (set.1, set.2, set.3);
+                } else {
+                    return Err("save or load a pane set by name".into());
+                }
+            }
+            "ui.learn" => {
+                let url = p.get("url").and_then(Value::as_str).unwrap_or("https://rustgis.app/user-guide/").to_string();
+                self.ui.open_url = Some(url);
+            }
+            "ui.customizeRibbon" => {
+                let tab = p.get("tab").and_then(Value::as_str).ok_or("tab is required")?.to_string();
+                if tab == "Help" {
+                    return Err("the Help tab always shows".into());
+                }
+                if self.ui.hidden_tabs.contains(&tab) {
+                    self.ui.hidden_tabs.retain(|t| *t != tab);
+                } else {
+                    self.ui.hidden_tabs.push(tab);
+                }
+                if let Some(save) = &self.services.save_pref {
+                    save("hidden_tabs", &self.ui.hidden_tabs.join(","));
+                }
+            }
+            "ui.quickAccess" => {
+                let id = p.get("command").and_then(Value::as_str).ok_or("command is required")?.to_string();
+                if self.ui.quick_access.contains(&id) {
+                    self.ui.quick_access.retain(|c| *c != id);
+                } else if self.session.registry.get(&id).is_some() || id.starts_with("ui.") {
+                    self.ui.quick_access.push(id);
+                } else {
+                    return Err(format!("unknown command '{id}'"));
+                }
+                if let Some(save) = &self.services.save_pref {
+                    save("quick_access", &self.ui.quick_access.join(","));
+                }
+            }
+            "ui.importThumbnail" => {
+                let cmd = if p.get("map").and_then(Value::as_bool) == Some(true) { "map.thumbnail" } else { "project.thumbnail" };
+                if let Some(open) = &self.services.open_async {
+                    self.ui.pending_open = Some(cmd);
+                    open("picture");
+                } else if let Some(path) = dialogs::pick_open(&["png", "jpg", "jpeg"], tl!("Pictures")) {
+                    return self.run(cmd, json!({"path": path}));
+                }
+            }
+            "ui.animationPlay" => {
+                if self.session.map().animation.len() < 2 {
+                    return Err("add at least two keyframes".into());
+                }
+                self.ws.playing = if self.ws.playing.is_some() { None } else { Some((0.0, 0)) };
+            }
+            "ui.exportAnimation" => {
+                if self.services.download.is_some() {
+                    return Err("exporting animations needs the desktop app".into());
+                }
+                let name = format!("{} animation.zip", self.session.map().name);
+                if let Some(path) = dialogs::pick_save(&name, &["zip"], tl!("PNG frames (zip)")) {
+                    return self.run("animation.export", json!({"path": path}));
+                }
+            }
             "ui.magnifier" => self.map.magnifier = p.get("on").and_then(Value::as_bool).unwrap_or(!self.map.magnifier),
             "ui.layoutSelect" => self.layout.selected = p.get("element").and_then(Value::as_u64).map(|v| v as u32),
             "ui.layoutTool" => {
@@ -966,6 +1086,9 @@ impl RustGisApp {
         }
         if let Some(img) = self.ui.copy_image.take() {
             ctx.copy_image(img);
+        }
+        if let Some(url) = self.ui.open_url.take() {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         let title = format!("{}{} - RustGIS", self.session.project.name, if self.session.dirty { " •" } else { "" });
         if title != self.sent_title {
