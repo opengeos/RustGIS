@@ -120,6 +120,11 @@ pub fn install_bytes(bytes: &[u8]) -> Result<Arc<Plugin>, String> {
 /// remembered and loaded from where it is.
 pub fn install_path(path: &Path) -> Result<Arc<Plugin>, String> {
     if !path.is_dir() {
+        // Size-checked before reading: a huge file isn't read into memory.
+        let len = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
+        if len > crate::package::MAX_PACKAGE as u64 {
+            return Err(format!("{} is larger than {} MB", path.display(), crate::package::MAX_PACKAGE / (1024 * 1024)));
+        }
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         return install_bytes(&bytes);
     }

@@ -18,7 +18,8 @@ const MAX_ENTRIES: usize = 4_096;
 pub struct Package {
     pub manifest: Manifest,
     pub wasm: Vec<u8>,
-    /// Lower-case hex SHA-256 of the package bytes (of the module, for a folder).
+    /// Lower-case hex SHA-256 of the package bytes (for a folder, of its manifest's and module's
+    /// hashes).
     pub sha256: String,
 }
 
@@ -85,7 +86,8 @@ impl Package {
         let text = open("plugin.json", MAX_MANIFEST)?;
         let manifest = Manifest::parse(std::str::from_utf8(&text).map_err(|_| "plugin.json is not UTF-8 text")?)?;
         let wasm = open(&manifest.entry, MAX_MODULE)?;
-        let sha256 = sha256_hex(&wasm);
+        // The manifest and the module: changing either (permissions, commands, code) changes it.
+        let sha256 = sha256_hex(&[sha256_hex(&text).as_bytes(), sha256_hex(&wasm).as_bytes()].concat());
         Ok(Package { manifest, wasm, sha256 })
     }
 
