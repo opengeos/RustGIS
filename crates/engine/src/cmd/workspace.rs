@@ -146,7 +146,8 @@ pub fn commands() -> Vec<C> {
         C::new("profile.crossSection", "Cross Section", "View › Profile Viewing", |s, p| {
             // Across a line at a point: perpendicular, `width` metres long.
             let pts = points(p)?;
-            let (a, b2) = (pts.first().copied().ok_or("give the line's two points")?, pts.get(1).copied().ok_or("give the line's two points")?);
+            let (a, b2) =
+                (pts.first().copied().ok_or("give the line's two points")?, pts.get(1).copied().ok_or("give the line's two points")?);
             let t = f(p, "at").unwrap_or(0.5).clamp(0.0, 1.0);
             let mid = Coord::new(a.x + (b2.x - a.x) * t, a.y + (b2.y - a.y) * t);
             let k = mid.y.to_radians().cos().max(0.01);
@@ -157,7 +158,9 @@ pub fn commands() -> Vec<C> {
             profile(s, p, &[Coord::new(mid.x - nx, mid.y - ny), Coord::new(mid.x + nx, mid.y + ny)])
         })
         .view()
-        .params(r#"{"layer": elevation raster, "points": [[lon, lat], [lon, lat]] (the line crossed), "at"?: 0..1 along it, "width"?: metres}"#),
+        .params(
+            r#"{"layer": elevation raster, "points": [[lon, lat], [lon, lat]] (the line crossed), "at"?: 0..1 along it, "width"?: metres}"#,
+        ),
         C::new("profile.alongLine", "Profile Along a Line", "View › Profile Viewing", |s, p| {
             let lines = selected_lines(s, p, false)?;
             let first = lines.into_iter().next().ok_or("no line")?;
@@ -173,33 +176,13 @@ pub fn commands() -> Vec<C> {
         .view()
         .params(r#"{"layer": elevation raster, "lines": line layer}"#),
         // Infographics and diagnostics.
-        C::new("info.infographic", "Infographics", "Map › Inquiry", infographic).view().params(r#"{"layer"? (every visible feature layer when omitted)}"#),
-        C::new("info.diagnostics", "Diagnostic Monitor", "Help › Performance", |s, _| {
-            let mut features = 0usize;
-            let mut vertices = 0usize;
-            let mut pixels = 0usize;
-            let mut cached = 0usize;
-            let mut layers = 0usize;
-            for m in &s.project.maps {
-                let key = m.projection.code();
-                for l in &m.layers {
-                    layers += 1;
-                    features += l.dataset.features.len();
-                    vertices += l.dataset.features.iter().filter_map(|f| f.geometry.as_ref()).map(|g| g.coord_count()).sum::<usize>();
-                    pixels += l.raster.as_ref().and_then(|r| r.data.as_ref()).map_or(0, |d| d.width as usize * d.height as usize * d.band_count());
-                    cached += usize::from(l.is_cached(&key));
-                }
-            }
-            Ok(json!({
-                "maps": s.project.maps.len(), "layers": layers, "features": features, "vertices": vertices, "rasterPixels": pixels,
-                "cachedLayers": cached, "estimatedMemoryMB": ((vertices * 16 + features * 64 + pixels * 4) as f64 / 1_048_576.0 * 10.0).round() / 10.0,
-                "commands": s.registry.commands.len(), "revision": s.revision, "undo": s.undo_depth(), "notices": s.notices.len(),
-                "layouts": s.project.layouts.len(), "geoprocessingRuns": s.project.gp_history.len(),
-            }))
-        })
-        .view(),
+        C::new("info.infographic", "Infographics", "Map › Inquiry", infographic)
+            .view()
+            .params(r#"{"layer"? (every visible feature layer when omitted)}"#),
+        C::new("info.diagnostics", "Diagnostic Monitor", "Help › Performance", |s, _| Ok(diagnostics(s))).view(),
         // Offline areas.
-        C::new("offline.download", "Download Map", "Map › Offline", offline_download).params(r#"{"name"?: string, "extent"?: [minLon, minLat, maxLon, maxLat] (the map view when omitted)}"#),
+        C::new("offline.download", "Download Map", "Map › Offline", offline_download)
+            .params(r#"{"name"?: string, "extent"?: [minLon, minLat, maxLon, maxLat] (the map view when omitted)}"#),
         C::new("offline.sync", "Sync", "Map › Offline", offline_sync).params(r#"{"name": offline area}"#),
         C::new("offline.remove", "Remove", "Map › Offline", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
@@ -218,7 +201,8 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"name": offline area}"#),
         C::new("offline.open", "Open Offline Map", "Map › Offline", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
-            let a = s.project.offline_areas.iter().find(|a| a.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no offline area '{n}'"))?;
+            let a =
+                s.project.offline_areas.iter().find(|a| a.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no offline area '{n}'"))?;
             let map_name = format!("{} (offline)", a.name);
             if let Some(i) = s.project.maps.iter().position(|m| m.name == map_name) {
                 s.project.active_map = i;
@@ -432,9 +416,40 @@ fn animation_zip(s: &mut Session, p: &Value) -> Result<Vec<u8>, String> {
 }
 
 /// Counts, sums and the most common categories of the features in view.
+/// The project's size and the session's state (Diagnostic Monitor). Read-only, so the monitor can
+/// show it without running a command.
+pub fn diagnostics(s: &Session) -> Value {
+    let mut features = 0usize;
+    let mut vertices = 0usize;
+    let mut pixels = 0usize;
+    let mut cached = 0usize;
+    let mut layers = 0usize;
+    for m in &s.project.maps {
+        let key = m.projection.code();
+        for l in &m.layers {
+            layers += 1;
+            features += l.dataset.features.len();
+            vertices += l.dataset.features.iter().filter_map(|f| f.geometry.as_ref()).map(|g| g.coord_count()).sum::<usize>();
+            pixels += l.raster.as_ref().and_then(|r| r.data.as_ref()).map_or(0, |d| d.width as usize * d.height as usize * d.band_count());
+            cached += usize::from(l.is_cached(&key));
+        }
+    }
+    json!({
+        "maps": s.project.maps.len(), "layers": layers, "features": features, "vertices": vertices, "rasterPixels": pixels,
+        "cachedLayers": cached, "estimatedMemoryMB": ((vertices * 16 + features * 64 + pixels * 4) as f64 / 1_048_576.0 * 10.0).round() / 10.0,
+        "commands": s.registry.commands.len(), "revision": s.revision, "undo": s.undo_depth(), "notices": s.notices.len(),
+        "layouts": s.project.layouts.len(), "geoprocessingRuns": s.project.gp_history.len(),
+    })
+}
+
 fn infographic(s: &mut Session, p: &Value) -> CmdResult {
+    Ok(infographic_of(s, ps(p, "layer")))
+}
+
+/// Cards summarising the features in view, for every visible feature layer or just `only`.
+pub fn infographic_of(s: &Session, only: Option<&str>) -> Value {
     let e = view_extent(s);
-    let only = ps(p, "layer").map(str::to_ascii_lowercase);
+    let only = only.map(str::to_ascii_lowercase);
     let mut cards = Vec::new();
     for l in s.map().layers.iter().filter(|l| l.visible && !l.is_raster() && !l.graphics) {
         if only.as_ref().is_some_and(|o| *o != l.name.to_ascii_lowercase()) {
@@ -474,7 +489,7 @@ fn infographic(s: &mut Session, p: &Value) -> CmdResult {
             .unwrap_or_default();
         cards.push(json!({"layer": l.name, "count": rows.len(), "numbers": numbers, "category": category.map(|(_, f)| f.name.clone()), "top": top}));
     }
-    Ok(json!({"extent": [e.min_x, e.min_y, e.max_x, e.max_y], "layers": cards}))
+    json!({"extent": [e.min_x, e.min_y, e.max_x, e.max_y], "layers": cards})
 }
 
 /// The map's feature layers clipped to an extent (rasters stay behind: they're files already).

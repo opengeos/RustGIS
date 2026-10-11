@@ -23,6 +23,10 @@ pub struct WorkspaceState {
     /// A second map shown beside the active one, by index.
     pub split: Option<usize>,
     pub playing: Option<(f64, usize)>,
+    /// Diagnostics (refreshed every second) and infographics (when the view or data change),
+    /// with what they were worked out for.
+    pub diagnostics: Option<(f64, Value)>,
+    pub infographic: Option<([f64; 4], Value)>,
 }
 
 fn heading(ui: &mut Ui, text: &str) {
@@ -291,6 +295,7 @@ pub fn profile(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 pub fn diagnostics(app: &mut RustGisApp, ui: &mut Ui, _t: &Tokens) {
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
     let dt = ui.input(|i| i.unstable_dt).max(1e-4);
+    let now = ui.input(|i| i.time);
     egui::Grid::new("diag").num_columns(2).striped(true).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
         let mut row = |k: &str, v: String| {
             ui.label(egui::RichText::new(tl!(k)).small());
@@ -299,7 +304,10 @@ pub fn diagnostics(app: &mut RustGisApp, ui: &mut Ui, _t: &Tokens) {
         };
         row("Frame rate", format!("{:.0} fps", 1.0 / dt));
         row("Map draw", format!("{} ms", app.map.render_ms()));
-        if let Ok(v) = app.session.run("info.diagnostics", &Value::Null)
+        if app.ws.diagnostics.as_ref().is_none_or(|(t, _)| now - t > 1.0) {
+            app.ws.diagnostics = Some((now, rustgis_engine::cmd::workspace::diagnostics(&app.session)));
+        }
+        if let Some((_, v)) = &app.ws.diagnostics
             && let Some(o) = v.as_object()
         {
             for (k, v) in o {
@@ -312,7 +320,13 @@ pub fn diagnostics(app: &mut RustGisApp, ui: &mut Ui, _t: &Tokens) {
 /// Infographics: cards summarising what's in view.
 pub fn infographics(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("Live summary of the features in view.")).small().color(t.text_dim));
-    let Ok(v) = app.session.run("info.infographic", &Value::Null) else { return };
+    // Worked out again only when the view or the data change.
+    let cam = app.session.map().camera;
+    let key = [cam.center.x, cam.center.y, cam.res, app.session.undo_depth() as f64];
+    if app.ws.infographic.as_ref().is_none_or(|(k, _)| *k != key) {
+        app.ws.infographic = Some((key, rustgis_engine::cmd::workspace::infographic_of(&app.session, None)));
+    }
+    let Some((_, v)) = app.ws.infographic.clone() else { return };
     for card in v["layers"].as_array().cloned().unwrap_or_default() {
         egui::Frame::NONE.fill(t.canvas).corner_radius(8).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
             ui.set_width(ui.available_width());
