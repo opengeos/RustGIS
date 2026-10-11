@@ -38,12 +38,18 @@ pub fn lookup(code: &str) -> Result<(String, String), String> {
     if let Some((_, label, def)) = PRESETS.iter().find(|(id, label, _)| id.eq_ignore_ascii_case(code) || label.eq_ignore_ascii_case(code)) {
         return Ok((def.to_string(), label.to_string()));
     }
-    let digits = code.trim_start_matches(|c: char| !c.is_ascii_digit());
-    let n: u16 = digits.parse().map_err(|_| format!("unknown projection '{code}'"))?;
-    if !code.to_ascii_lowercase().starts_with("epsg") && digits.len() != code.len() {
+    // `3035`, `EPSG:3035` or `epsg 3035`: an optional prefix, then only digits.
+    let lower = code.to_ascii_lowercase();
+    let digits = lower.strip_prefix("epsg").map(|r| r.trim_start_matches([':', ' '])).unwrap_or(&lower);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return Err(format!("unknown projection '{code}'"));
     }
-    let def = crs_definitions::from_code(n).ok_or_else(|| format!("unknown coordinate system EPSG:{n}"))?;
+    let def = digits
+        .parse::<u16>()
+        .ok()
+        .and_then(crs_definitions::from_code)
+        .ok_or_else(|| format!("unknown coordinate system EPSG:{}", digits.trim_start_matches('0')))?;
+    let n = def.code;
     if def.proj4.contains("+proj=longlat") {
         return Err(format!("EPSG:{n} is in degrees: pick a projected coordinate system"));
     }
@@ -336,6 +342,9 @@ mod tests {
         assert!(Projector::new("EPSG:1").is_err());
         assert!(Projector::new("bogus").is_err());
         assert!(Projector::new("12x").is_err());
+        assert!(Projector::new("epsgfoo32617").is_err());
+        assert!(Projector::new("EPSG 32617").is_ok());
+        assert!(lookup("EPSG:99999").unwrap_err().contains("coordinate system"), "out of range is an unknown code");
         // Equal Earth by its EPSG code goes to the built-in engine too.
         let ee = Projector::new("EPSG:8857").unwrap();
         assert!(format!("{ee:?}").contains("eqearth"));
