@@ -23,22 +23,47 @@ impl Page {
     }
 
     pub fn new(image: &Pixmap, width_mm: f64, height_mm: f64) -> Page {
-        // RGB without the alpha (pages are drawn on white, so they're opaque).
-        let rgb: Vec<u8> = image
-            .pixels()
-            .iter()
-            .flat_map(|px| {
+        use miniz_oxide::deflate::core::{CompressorOxide, TDEFLFlush, TDEFLStatus, compress_to_output, create_comp_flags_from_zip_params};
+        // RGB without the alpha (pages are drawn on white, so they're opaque), compressed a row
+        // at a time so a large page never holds a second full-size copy of its pixels.
+        let mut z = CompressorOxide::new(create_comp_flags_from_zip_params(6, 15, 0));
+        let mut rgb_z = Vec::new();
+        let mut row = Vec::with_capacity(image.width() as usize * 3);
+        let mut ok = true;
+        for line in image.pixels().chunks(image.width().max(1) as usize) {
+            row.clear();
+            row.extend(line.iter().flat_map(|px| {
                 let c = px.demultiply();
                 [c.red(), c.green(), c.blue()]
-            })
-            .collect();
-        Page {
-            width: image.width(),
-            height: image.height(),
-            rgb_z: miniz_oxide::deflate::compress_to_vec_zlib(&rgb, 6),
-            width_mm,
-            height_mm,
+            }));
+            let (status, used) = compress_to_output(&mut z, &row, TDEFLFlush::None, |b| {
+                rgb_z.extend_from_slice(b);
+                true
+            });
+            if used != row.len() || matches!(status, TDEFLStatus::BadParam | TDEFLStatus::PutBufFailed) {
+                ok = false;
+                break;
+            }
         }
+        let (status, _) = compress_to_output(&mut z, &[], TDEFLFlush::Finish, |b| {
+            rgb_z.extend_from_slice(b);
+            true
+        });
+        if !ok || status != TDEFLStatus::Done {
+            // Shouldn't happen; compress the page in one go instead.
+            let rgb: Vec<u8> = image
+                .pixels()
+                .iter()
+                .flat_map(|px| {
+                    let c = px.demultiply();
+                    [c.red(), c.green(), c.blue()]
+                })
+                .collect();
+            rgb_z = miniz_oxide::deflate::compress_to_vec_zlib(&rgb, 6);
+        }
+        // A page size that isn't a positive number would make the page box invalid.
+        let mm = |v: f64| if v.is_finite() && v > 0.0 { v.min(5000.0) } else { 210.0 };
+        Page { width: image.width(), height: image.height(), rgb_z, width_mm: mm(width_mm), height_mm: mm(height_mm) }
     }
 }
 
@@ -127,5 +152,16 @@ mod tests {
         assert!(pdf[off..].starts_with(b"1 0 obj"));
         let off: usize = tail.lines().nth(6).unwrap()[..10].parse().unwrap();
         assert!(pdf[off..].starts_with(b"4 0 obj"));
+    }
+
+    #[test]
+    fn pages_compress_row_by_row_and_sanitise_their_size() {
+        let mut a = Pixmap::new(7, 5).unwrap();
+        a.fill(tiny_skia::Color::from_rgba8(10, 200, 30, 255));
+        let p = Page::new(&a, f64::NAN, 0.0);
+        let rgb = miniz_oxide::inflate::decompress_to_vec_zlib(&p.rgb_z).unwrap();
+        assert_eq!(rgb.len(), 7 * 5 * 3);
+        assert!(rgb.chunks(3).all(|c| c == [10, 200, 30]));
+        assert_eq!((p.width_mm, p.height_mm), (210.0, 210.0));
     }
 }

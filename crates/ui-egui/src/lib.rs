@@ -54,6 +54,33 @@ pub struct Services {
     pub geolibre_run: Option<Box<dyn Fn(rustgis_engine::cmd::gp::ExternalRun, Slot<rustgis_engine::cmd::gp::ExternalOutput>)>>,
 }
 
+/// A new private folder for one print job: unique, created fresh (never an existing path) and,
+/// on Unix, readable only by this user. Earlier jobs' folders from this run are removed first.
+#[cfg(not(target_arch = "wasm32"))]
+fn print_dir() -> Result<std::path::PathBuf, String> {
+    let tmp = std::env::temp_dir();
+    let prefix = format!("rustgis-print-{}-", std::process::id());
+    if let Ok(rd) = std::fs::read_dir(&tmp) {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with(&prefix) && e.file_type().is_ok_and(|t| t.is_dir()) {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let dir = tmp.join(format!("{prefix}{nanos}"));
+    let mut b = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+    b.create(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn print_dir() -> Result<std::path::PathBuf, String> {
+    Err("printing needs the desktop app".into())
+}
+
 /// Opens a file with the system's default application (native only).
 #[cfg(not(target_arch = "wasm32"))]
 fn open_with_system(path: &std::path::Path) -> Result<(), String> {
@@ -519,7 +546,7 @@ impl RustGisApp {
                     let bytes = self.layout_bytes(li, true, 300.0)?;
                     let safe: String =
                         name.chars().map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_') { c } else { '_' }).collect();
-                    let path = std::env::temp_dir().join(format!("{safe}.pdf"));
+                    let path = print_dir()?.join(format!("{safe}.pdf"));
                     rustgis_engine::data::io::write_atomic(&path, &bytes).map_err(|e| e.to_string())?;
                     open_with_system(&path)?;
                     self.session.notify(i18n::fmt("Opened {name} for printing", &[("name", &path.display().to_string())]), false);

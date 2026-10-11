@@ -746,13 +746,13 @@ pub fn layout_bytes(s: &mut Session, li: usize, pdf: bool, dpi: f64, all: bool) 
             if stepping {
                 series_page(s, &json!({"layout": li, "page": page}))?;
             }
-            let layout = s.project.layouts.get(li).ok_or("no layout")?.clone();
+            let layout = s.project.layouts.get(li).ok_or("no layout")?;
             let info = rustgis_render::layout::PageInfo {
                 page: page + 1,
                 pages: total,
                 page_name: names.as_ref().and_then(|n| n.get(*page).cloned()).unwrap_or_default(),
             };
-            let img = rustgis_render::layout::render(&layout, &mut s.project.maps, dpi, &info).ok_or("the page is too large to draw")?;
+            let img = rustgis_render::layout::render(layout, &mut s.project.maps, dpi, &info).ok_or("the page is too large to draw")?;
             // Each page is compressed as soon as it's drawn, within a memory budget.
             if pdf {
                 out.push(rustgis_render::pdf::Page::new(&img, layout.width, layout.height));
