@@ -422,6 +422,39 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
 
 fn update(s: &mut Session, p: &Value) -> CmdResult {
     let id = element_id(p)?;
+    // A new layer (tables and charts) or field (charts) must exist in the frame's map.
+    let li = index(s, p)?;
+    let checked = {
+        let l = s.project.layouts.get(li).ok_or("no layout")?;
+        let e = l.element(id).ok_or_else(|| format!("no element {id}"))?;
+        match (&e.kind, ps(p, "layer"), ps(p, "field")) {
+            (ElementKind::Table { frame, layer, .. } | ElementKind::Chart { frame, layer, .. }, nl, nf) if nl.is_some() || nf.is_some() => {
+                let map = match l.element(*frame).map(|f| &f.kind) {
+                    Some(ElementKind::MapFrame { map, .. }) => map.clone(),
+                    _ => return Err("the element's map frame is gone".into()),
+                };
+                let m = s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(&map)).ok_or_else(|| format!("no map '{map}'"))?;
+                let target = m
+                    .layer_by_name(nl.unwrap_or(layer))
+                    .filter(|l| !l.is_raster())
+                    .ok_or_else(|| format!("no feature layer '{}' in {map}", nl.unwrap_or(layer)))?;
+                let field = match nf {
+                    Some(fl) => Some(
+                        target
+                            .dataset
+                            .field_index(fl)
+                            .and_then(|i| target.dataset.fields.get(i))
+                            .filter(|f| f.ty.is_numeric())
+                            .map(|f| f.name.clone())
+                            .ok_or_else(|| format!("no numeric field '{fl}' in {}", target.name))?,
+                    ),
+                    None => None,
+                };
+                Some((target.name.clone(), field))
+            }
+            _ => None,
+        }
+    };
     let map_name = match ps(p, "map") {
         Some(n) => Some(
             s.project
@@ -495,14 +528,20 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
                 }
             }
         }
-        ElementKind::Table { rows, .. } => {
+        ElementKind::Table { rows, layer, .. } => {
             if let Some(v) = p.get("rows").and_then(Value::as_u64) {
                 *rows = v.clamp(1, 500) as usize;
             }
+            if let Some((l, _)) = &checked {
+                *layer = l.clone();
+            }
         }
-        ElementKind::Chart { field, .. } => {
-            if let Some(v) = ps(p, "field") {
-                *field = v.to_string();
+        ElementKind::Chart { field, layer, .. } => {
+            if let Some((l, f)) = &checked {
+                *layer = l.clone();
+                if let Some(f) = f {
+                    *field = f.clone();
+                }
             }
         }
         _ => {}

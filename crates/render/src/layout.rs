@@ -28,6 +28,8 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
     let k = PT_PER_MM * ppp; // pixels per millimetre
     let (w, h) = ((layout.width * k).clamp(1.0, MAX_SIDE), (layout.height * k).clamp(1.0, MAX_SIDE));
     let k = k.min(w / layout.width).min(h / layout.height);
+    // A page too large for the cap draws at a lower resolution throughout.
+    let ppp = k / PT_PER_MM;
     let mut pm = Pixmap::new(w as u32, h as u32)?;
     pm.fill(tiny_skia::Color::WHITE);
     // Frame cameras first: surrounds and extent indicators read them.
@@ -72,12 +74,15 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
                     }
                 }
                 let path = shape_path(shape, r);
-                let mask = path.as_ref().and_then(|p| {
-                    let mut m = Mask::new(pm.width(), pm.height())?;
-                    m.fill_path(p, FillRule::Winding, true, Transform::identity());
-                    Some(m)
-                });
-                pm.draw_pixmap(x as i32, y as i32, frame_pm.as_ref(), &PixmapPaint::default(), Transform::identity(), mask.as_ref());
+                // Shaped frames are clipped by a mask of the frame's own size.
+                if !matches!(shape, FrameShape::Rectangle)
+                    && let Some(p) = path.as_ref().and_then(|p| p.clone().transform(Transform::from_translate(-x, -y)))
+                    && let Some(mut m) = Mask::new(frame_pm.width(), frame_pm.height())
+                {
+                    m.fill_path(&p, FillRule::Winding, true, Transform::identity());
+                    frame_pm.apply_mask(&m);
+                }
+                pm.draw_pixmap(x as i32, y as i32, frame_pm.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
                 if let Some(p) = &path {
                     pm.stroke_path(
                         p,

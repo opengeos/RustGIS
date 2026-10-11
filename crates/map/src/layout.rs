@@ -278,22 +278,71 @@ impl Layout {
         self.elements.len() != before
     }
 
-    /// Keeps the page and elements sane after loading or editing.
+    /// Keeps the page and elements sane after loading or editing (layout files are untrusted):
+    /// sizes in range, unique element ids, and no references to missing frames.
     pub fn clamp(&mut self) {
         self.width = finite_or(self.width, 210.0).clamp(20.0, 5000.0);
         self.height = finite_or(self.height, 297.0).clamp(20.0, 5000.0);
         self.elements.truncate(500);
+        let mut seen = std::collections::HashSet::new();
+        let mut next = self.elements.iter().map(|e| e.id).max().unwrap_or(0).saturating_add(1);
         for e in &mut self.elements {
+            if e.id == 0 || !seen.insert(e.id) {
+                e.id = next;
+                seen.insert(next);
+                next = next.saturating_add(1);
+            }
             e.w = finite_or(e.w, 20.0).clamp(1.0, 5000.0);
             e.h = finite_or(e.h, 20.0).clamp(1.0, 5000.0);
             e.x = finite_or(e.x, 0.0).clamp(-5000.0, 5000.0);
             e.y = finite_or(e.y, 0.0).clamp(-5000.0, 5000.0);
-            if let ElementKind::MapFrame { center, scale, .. } = &mut e.kind {
-                *scale = finite_or(*scale, 50_000_000.0).clamp(100.0, 1e10);
-                if !center.is_finite() {
-                    *center = Coord::new(0.0, 0.0);
+            e.name = e.name.chars().take(200).collect();
+            match &mut e.kind {
+                ElementKind::MapFrame { center, scale, shape, grid, .. } => {
+                    *scale = finite_or(*scale, 50_000_000.0).clamp(100.0, 1e10);
+                    if !center.is_finite() {
+                        *center = Coord::new(0.0, 0.0);
+                    }
+                    center.x = center.x.clamp(-540.0, 540.0);
+                    center.y = center.y.clamp(-85.0, 85.0);
+                    if let FrameShape::Polygon(p) = shape {
+                        p.retain(|(u, v)| u.is_finite() && v.is_finite());
+                        p.truncate(10_000);
+                        p.iter_mut().for_each(|(u, v)| (*u, *v) = (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0)));
+                        if p.len() < 3 {
+                            *shape = FrameShape::Rectangle;
+                        }
+                    }
+                    if let Some(g) = grid {
+                        g.step = finite_or(g.step, 0.0).clamp(0.0, 90.0);
+                    }
                 }
-                center.y = center.y.clamp(-85.0, 85.0);
+                ElementKind::Text { text, size, .. } => {
+                    *size = finite_or(*size, 12.0).clamp(2.0, 400.0);
+                    text.truncate(text.char_indices().nth(5000).map_or(text.len(), |(i, _)| i));
+                }
+                ElementKind::Table { rows, .. } => *rows = (*rows).clamp(1, 500),
+                ElementKind::Rectangle { width, .. } => *width = finite_or(*width, 1.0).clamp(0.0, 50.0),
+                _ => {}
+            }
+        }
+        self.next_id = next;
+        // References must point at map frames that exist.
+        let frames: std::collections::HashSet<u32> =
+            self.elements.iter().filter(|e| matches!(e.kind, ElementKind::MapFrame { .. })).map(|e| e.id).collect();
+        self.elements.retain(|e| e.kind.frame().is_none_or(|f| frames.contains(&f)));
+        for e in &mut self.elements {
+            if let ElementKind::MapFrame { extent_of, .. } = &mut e.kind
+                && extent_of.is_some_and(|o| !frames.contains(&o) || o == e.id)
+            {
+                *extent_of = None;
+            }
+        }
+        if let Some(s) = &mut self.series {
+            if !frames.contains(&s.frame) {
+                self.series = None;
+            } else {
+                s.margin = finite_or(s.margin, 0.1).clamp(0.0, 5.0);
             }
         }
     }
@@ -374,6 +423,30 @@ mod tests {
         assert!(l.remove(f));
         assert!(l.element(n).is_none(), "the frame's north arrow goes with it");
         assert!(l.element(t).is_some());
+    }
+
+    #[test]
+    fn hostile_layouts_are_repaired() {
+        let text = r#"{"name":"x","width":1e300,"height":-5,"elements":[
+            {"id":3,"name":"a","x":0,"y":0,"w":1e9,"h":10,"kind":{"MapFrame":{"map":"M","center":{"x":1e300,"y":200},"scale":-1,"shape":{"Polygon":[[0,0],[1,1]]},"extent_of":3}}},
+            {"id":3,"name":"b","x":0,"y":0,"w":10,"h":10,"kind":{"Text":{"text":"t","size":1e9,"color":[0,0,0,255]}}},
+            {"id":9,"name":"c","x":0,"y":0,"w":10,"h":10,"kind":{"Legend":{"frame":42,"title":"L"}}}],
+            "series":{"frame":77,"layer":"x"}}"#;
+        let mut l: Layout = serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}"));
+        l.clamp();
+        let ids: Vec<u32> = l.elements.iter().map(|e| e.id).collect();
+        assert_eq!(ids.len(), 2, "the legend of a missing frame goes");
+        assert_ne!(ids[0], ids[1], "duplicate ids are renumbered");
+        assert!(l.width <= 5000.0 && l.height >= 20.0 && l.series.is_none());
+        match &l.elements[0].kind {
+            ElementKind::MapFrame { scale, shape, extent_of, center, .. } => {
+                assert!(*scale >= 100.0 && *shape == FrameShape::Rectangle && extent_of.is_none() && center.is_finite());
+            }
+            _ => panic!("frame expected"),
+        }
+        assert!(matches!(&l.elements[1].kind, ElementKind::Text { size, .. } if *size <= 400.0));
+        let id = l.add("n", (0.0, 0.0, 1.0, 1.0), ElementKind::NorthArrow { frame: ids[0] });
+        assert!(!ids.contains(&id));
     }
 
     #[test]
