@@ -70,12 +70,8 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
     });
     let Some(r) = app.session.project.reports.get(i).cloned() else { return };
-    let fields: Vec<String> = app
-        .session
-        .project
-        .maps
-        .iter()
-        .find_map(|m| m.layer_by_name(&r.layer))
+    // The same layer the engine reports on.
+    let fields: Vec<String> = rustgis_engine::cmd::report::layer_of(&app.session, i)
         .map(|l| l.dataset.fields.iter().map(|f| f.name.clone()).collect())
         .unwrap_or_default();
     preview(app, ui, i, t);
@@ -259,8 +255,9 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 /// A small preview of the current page, with page buttons. It's redrawn when the report or the
 /// page changes.
 fn preview(app: &mut RustGisApp, ui: &mut Ui, i: usize, t: &Tokens) {
-    let Some(r) = app.session.project.reports.get(i) else { return };
-    let key = format!("{}#{}#{}", serde_json::to_string(r).unwrap_or_default(), app.reports.page, app.session.undo_depth());
+    // Any change to the report, its data or the selection runs a command, which moves the
+    // revision on.
+    let key = format!("{i}#{}#{}", app.reports.page, app.session.revision);
     if app.reports.preview.as_ref().is_none_or(|p| p.0 != key) {
         app.reports.preview = None;
         let (s, page) = (&mut app.session, app.reports.page);
@@ -277,8 +274,7 @@ fn preview(app: &mut RustGisApp, ui: &mut Ui, i: usize, t: &Tokens) {
                 app.reports.page = page;
                 let img = egui::ColorImage::from_rgba_premultiplied([pm.width() as usize, pm.height() as usize], pm.data());
                 let tex = ui.ctx().load_texture("report_preview", img, egui::TextureOptions::LINEAR);
-                let s = &app.session;
-                let key = format!("{}#{}#{}", serde_json::to_string(&s.project.reports.get(i)).unwrap_or_default(), page, s.undo_depth());
+                let key = format!("{i}#{page}#{}", app.session.revision);
                 app.reports.preview = Some((key, tex, total));
             }
             Err(e) => {

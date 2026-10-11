@@ -1713,6 +1713,26 @@ fn reports_group_summarise_relate_export_and_reopen() {
     let doc = crate::cmd::report::build(&s, 1).unwrap();
     assert!(doc.blocks.iter().any(|b| matches!(b, Block::SubRow(_))), "France's cities are listed under it");
     assert!(doc.blocks.iter().filter(|b| matches!(b, Block::Row(_))).count() > n, "the cities report follows");
+    // Picture paths are read relative to the saved project's folder only.
+    let png = {
+        let mut pm = tiny_skia::Pixmap::new(4, 4).unwrap();
+        pm.fill(tiny_skia::Color::from_rgba8(200, 0, 0, 255));
+        pm.encode_png().unwrap()
+    };
+    std::fs::write(dir.join("pic.png"), &png).unwrap();
+    let pics = json!({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"photo": "pic.png"}, "geometry": {"type": "Point", "coordinates": [0, 0]}},
+        {"type": "Feature", "properties": {"photo": dir.join("pic.png").to_str().unwrap()}, "geometry": {"type": "Point", "coordinates": [1, 0]}},
+        {"type": "Feature", "properties": {"photo": "../pic.png"}, "geometry": {"type": "Point", "coordinates": [2, 0]}}]});
+    s.run("layer.addDataText", &json!({"fileName": "pics.geojson", "text": pics.to_string()})).unwrap();
+    s.run("report.new", &json!({"layer": "pics", "name": "Pics"})).unwrap();
+    s.run("report.dynamicPicture", &json!({"field": "photo"})).unwrap();
+    let pi = s.project.reports.iter().position(|r| r.name == "Pics").unwrap();
+    let count =
+        |s: &Session| crate::cmd::report::build(s, pi).unwrap().blocks.iter().filter(|b| matches!(b, Block::Picture { .. })).count();
+    assert_eq!(count(&s), 0, "an unsaved project reads no picture files");
+    s.run("project.saveAs", &json!({"path": dir.join("p.rgisx").to_str().unwrap()})).unwrap();
+    assert_eq!(count(&s), 1, "only the relative path inside the project folder");
     // Sorting a column that mixes numbers and text (9, 10, "1a"…) is a total order, never a panic.
     let mixed = json!({"type": "FeatureCollection", "features": (0..200).map(|i| json!({"type": "Feature",
         "properties": {"v": if i % 3 == 0 { json!(format!("{}a", i % 7)) } else { json!(i % 11) }},

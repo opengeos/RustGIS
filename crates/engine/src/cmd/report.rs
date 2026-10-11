@@ -253,7 +253,8 @@ fn find_layer<'a>(s: &'a Session, name: &str) -> Option<&'a Layer> {
     s.map().layer_by_name(name).or_else(|| s.project.maps.iter().find_map(|m| m.layer_by_name(name)))
 }
 
-fn layer_of(s: &Session, i: usize) -> Result<&Layer, String> {
+/// The layer report `i` lists (the active map's first, else any map's).
+pub fn layer_of(s: &Session, i: usize) -> Result<&Layer, String> {
     let r = s.project.reports.get(i).ok_or("no report")?;
     find_layer(s, &r.layer).ok_or_else(|| format!("the report's layer '{}' isn't in the project", r.layer))
 }
@@ -520,15 +521,24 @@ fn stat_lines(r: &Report, ds: &rustgis_data::Dataset, rows: &[usize]) -> Vec<Str
 }
 
 /// A picture field's value as base64 and pixel size: a file path (read, size capped) or base64.
-fn picture_of(text: &str) -> Option<(String, u32, u32)> {
+/// A picture field's value as base64 and pixel size: base64 image data, or the path of a PNG or
+/// JPEG relative to the project's folder. Attribute values come from data files, so paths may
+/// not be absolute or climb out of that folder (with `..`), and an unsaved project reads none.
+fn picture_of(text: &str, folder: Option<&Path>) -> Option<(String, u32, u32)> {
     let t = text.trim();
     if t.is_empty() {
         return None;
     }
     let lower = t.to_ascii_lowercase();
     let is_path = [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e));
-    let b64 =
-        if is_path { super::graphics::picture(&json!({"path": t})).ok()? } else { super::graphics::picture(&json!({"image": t})).ok()? };
+    let b64 = if is_path {
+        let rel = Path::new(t);
+        let safe = rel.components().all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir));
+        let full = folder.filter(|_| safe)?.join(rel);
+        super::graphics::picture(&json!({"path": full.to_str()?})).ok()?
+    } else {
+        super::graphics::picture(&json!({"image": t})).ok()?
+    };
     let (w, h) = rustgis_render::picture_size(&b64)?;
     Some((b64, w, h))
 }
@@ -551,6 +561,8 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
     let r = s.project.reports.get(i).ok_or("no report")?;
     let layer = layer_of(s, i)?;
     let ds = &layer.dataset;
+    // Picture paths are read relative to the project's folder (none for an unsaved project).
+    let folder = s.path.as_deref().and_then(Path::parent);
     let layout_index = |name: &str| s.project.layouts.iter().position(|l| l.name.eq_ignore_ascii_case(name));
     // Pages before the records.
     for sec in &r.sections {
@@ -570,33 +582,47 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
     if r.selected_only {
         rows.retain(|row| layer.selection.contains(row));
     }
-    let truncated = rows.len() > MAX_RECORDS;
-    rows.truncate(MAX_RECORDS);
     let gi: Vec<Option<usize>> = r.groups.iter().map(|g| ds.field_index(g)).collect();
     let si = r.sort.as_deref().and_then(|n| ds.field_index(n));
-    // A total order, even for columns mixing numbers and text: numbers first (by value), then
-    // everything else as text.
-    let cmp = |a: &rustgis_data::Value, b: &rustgis_data::Value| match (a.as_f64(), b.as_f64()) {
-        (Some(x), Some(y)) => x.total_cmp(&y),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => a.to_string().cmp(&b.to_string()),
+    // Sort keys worked out once per record: a total order even for columns mixing numbers and
+    // text (numbers first, by value; then everything else as text).
+    enum Key {
+        Num(f64),
+        Text(String),
+    }
+    let key = |row: usize, fi: Option<usize>| -> Key {
+        let v = fi.map(|fi| ds.value(row, fi));
+        match v.and_then(rustgis_data::Value::as_f64) {
+            Some(x) => Key::Num(x),
+            None => Key::Text(v.map(ToString::to_string).unwrap_or_default()),
+        }
     };
-    rows.sort_by(|&a, &b| {
-        for g in gi.iter().flatten() {
-            let o = cmp(ds.value(a, *g), ds.value(b, *g));
+    let cmp = |a: &Key, b: &Key| match (a, b) {
+        (Key::Num(x), Key::Num(y)) => x.total_cmp(y),
+        (Key::Num(_), Key::Text(_)) => std::cmp::Ordering::Less,
+        (Key::Text(_), Key::Num(_)) => std::cmp::Ordering::Greater,
+        (Key::Text(x), Key::Text(y)) => x.cmp(y),
+    };
+    let mut keyed: Vec<(Vec<Key>, Option<Key>, usize)> =
+        rows.iter().map(|&row| (gi.iter().map(|g| key(row, *g)).collect(), si.map(|s| key(row, Some(s))), row)).collect();
+    keyed.sort_by(|a, b| {
+        for (x, y) in a.0.iter().zip(&b.0) {
+            let o = cmp(x, y);
             if o != std::cmp::Ordering::Equal {
                 return o;
             }
         }
-        match si {
-            Some(si) => {
-                let o = cmp(ds.value(a, si), ds.value(b, si));
+        match (&a.1, &b.1) {
+            (Some(x), Some(y)) => {
+                let o = cmp(x, y);
                 if r.descending { o.reverse() } else { o }
             }
-            None => std::cmp::Ordering::Equal,
+            _ => std::cmp::Ordering::Equal,
         }
     });
+    // Sorted first, so a capped report lists the first records in its order.
+    let truncated = keyed.len() > MAX_RECORDS;
+    let rows: Vec<usize> = keyed.into_iter().take(MAX_RECORDS).map(|k| k.2).collect();
     let title = if r.title.is_empty() { r.name.clone() } else { r.title.clone() };
     out.push(Block::Title(title));
     let mut about = format!("{} records from {}", rows.len(), layer.name);
@@ -678,7 +704,7 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
         out.push(Block::Row(fi.iter().map(|f| cell(ds, row, *f)).collect()));
         if let Some(pf) = pic
             && pictures < MAX_PICTURES
-            && let Some((image, width, height)) = picture_of(&cell(ds, row, Some(pf)))
+            && let Some((image, width, height)) = picture_of(&cell(ds, row, Some(pf)), folder)
         {
             pictures += 1;
             out.push(Block::Picture { image, width, height });
@@ -696,7 +722,7 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
                     if pictures >= MAX_PICTURES {
                         break;
                     }
-                    if let Some((image, width, height)) = picture_of(x) {
+                    if let Some((image, width, height)) = picture_of(x, folder) {
                         pictures += 1;
                         out.push(Block::Picture { image, width, height });
                     }
@@ -732,7 +758,7 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
             *sums.entry(if k.is_empty() { "(blank)".into() } else { k }).or_default() += v;
         }
         let mut bars: Vec<(String, f64)> = sums.into_iter().collect();
-        bars.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        bars.sort_by(|a, b| b.1.total_cmp(&a.1));
         bars.truncate(25);
         let title = match &c.value {
             Some(v) => format!("{v} by {}", c.category),

@@ -331,8 +331,9 @@ previews it and sets it up.
 
 - **Data**: pick the detail **Fields** (or **Autofill Fields**), **Group** records by up to four
   fields (each group gets a heading and its own statistics), add **Statistics** (count, sum,
-  mean, minimum, maximum), a **Dynamic Picture** per record (a field holding a PNG/JPEG path),
-  **Attachments** (a field listing each record's files, separated by `;`), and a **Chart Frame**
+  mean, minimum, maximum), a **Dynamic Picture** per record (a field holding a PNG/JPEG path relative to the saved
+  project's folder, or base64 image data), **Attachments** (a field listing each record's files,
+  separated by `;`; image files show when they're inside the project's folder), and a **Chart Frame**
   (records, or a field's sum, per category).
 - **Report Section**: **Supplemental Pages** of text before or after the records, **New
   Template** and **Existing Template** (a page layout drawn as a report page), a **Related

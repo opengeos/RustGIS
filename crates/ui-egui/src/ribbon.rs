@@ -656,8 +656,7 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 |ui, app| {
                     let fields: Vec<String> = rustgis_engine::cmd::report::index(&app.session, &Value::Null)
                         .ok()
-                        .and_then(|i| app.session.project.reports.get(i))
-                        .and_then(|r| app.session.project.maps.iter().find_map(|m| m.layer_by_name(&r.layer)))
+                        .and_then(|i| rustgis_engine::cmd::report::layer_of(&app.session, i).ok())
                         .map(|l| l.dataset.fields.iter().map(|f| f.name.clone()).collect())
                         .unwrap_or_default();
                     let field_menu = |ui: &mut Ui, app: &mut RustGisApp, label: &str, id: &str, key: &str| {
