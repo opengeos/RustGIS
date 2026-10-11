@@ -667,81 +667,99 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     let p = ui.painter();
     p.circle_filled(anchor, 6.0, Color32::from_rgb(0x00, 0xE5, 0xFF).gamma_multiply(0.5));
     p.circle_stroke(anchor, 6.0, Stroke::new(2.0, Color32::from_rgb(0x00, 0xA8, 0xC0)));
-    // The popup's size: resizable from its corner, and remembered for the next one.
-    let resize_id = egui::Id::new("identify_popup_size");
-    let size = ui.ctx().data(|d| d.get_temp::<egui::Vec2>(resize_id)).unwrap_or(vec2(310.0, 300.0));
+    // The popup is as tall as its rows, up to a limit; the corner grip sets the width and that
+    // limit, and both are remembered for the next popup.
+    let limit_id = egui::Id::new("identify_popup_limit");
+    let shown_id = egui::Id::new("identify_popup_shown");
+    let space = vec2((rect.width() - 24.0).max(240.0), (rect.height() - 24.0).max(140.0));
+    let limit = ui.ctx().data(|d| d.get_temp::<egui::Vec2>(limit_id)).unwrap_or(vec2(310.0, 360.0)).min(space);
+    let last_h = ui.ctx().data(|d| d.get_temp::<f32>(shown_id)).unwrap_or(limit.y);
     let pos = pos2(
-        (anchor.x + 14.0).min(rect.max.x - size.x - 20.0).max(rect.min.x + 8.0),
-        (anchor.y - 40.0).clamp(rect.min.y + 8.0, (rect.max.y - size.y - 20.0).max(rect.min.y + 8.0)),
+        (anchor.x + 14.0).min(rect.max.x - limit.x - 12.0).max(rect.min.x + 8.0),
+        (anchor.y - 40.0).clamp(rect.min.y + 8.0, (rect.max.y - last_h - 12.0).max(rect.min.y + 8.0)),
     );
-    let max_size = vec2((rect.max.x - pos.x - 12.0).max(240.0), (rect.max.y - pos.y - 12.0).max(120.0));
     let mut close = false;
-    let shown = egui::Area::new(egui::Id::new("identify_popup")).fixed_pos(pos).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-        egui::Frame::NONE
+    let mut new_limit = None;
+    // Keyed by the feature: egui remembers an area's (and a scroll area's and grid's) size, and
+    // the next popup mustn't start from the last one's.
+    let key = (&layer, &title, attrs.len());
+    egui::Area::new(egui::Id::new(("identify_popup", key))).fixed_pos(pos).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        let frame = egui::Frame::NONE
             .fill(t.menu)
             .stroke(Stroke::new(1.0, t.border_strong))
             .corner_radius(CornerRadius::same(10))
             .shadow(egui::Shadow { offset: [0, 6], blur: 20, spread: 0, color: t.shadow })
             .show(ui, |ui| {
-                egui::Resize::default()
-                    .id_salt(resize_id)
-                    .default_size(vec2(310.0, 300.0))
-                    .min_size(vec2(240.0, 120.0))
-                    .max_size(max_size)
+                ui.set_width(limit.x);
+                let header = egui::Frame::NONE
+                    .fill(t.pane_header)
+                    .corner_radius(CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 })
+                    .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
-                        egui::Frame::NONE
-                            .fill(t.pane_header)
-                            .corner_radius(CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 })
-                            .inner_margin(egui::Margin::symmetric(12, 8))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.label(egui::RichText::new(&title).font(semibold(14.0)));
-                                        ui.label(egui::RichText::new(&layer).size(11.0).color(t.text_dim));
-                                    });
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                        if ui.add(egui::Button::new(tl!("×")).frame(false)).clicked() {
-                                            close = true;
-                                        }
-                                    });
-                                });
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new(&title).font(semibold(14.0)));
+                                ui.label(egui::RichText::new(&layer).size(11.0).color(t.text_dim));
                             });
-                        // A solid scroll bar in its own gutter, shown whenever the list is longer than
-                        // the popup (a floating one is invisible until hovered).
-                        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
-                        // Fills the popup, so the scrollbar sits on its right edge whatever the values' width.
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            // The room left under the header, so long lists scroll instead of being clipped.
-                            .max_height(ui.available_height())
-                            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
-                            .show(ui, |ui| {
-                                egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 14, top: 6, bottom: 10 }).show(ui, |ui| {
-                                    // The values take the width the names leave, so the stripes reach the scrollbar.
-                                    let name_w = attrs
-                                        .keys()
-                                        .map(|k| crate::widgets::text_w(ui, k, regular(11.5)))
-                                        .fold(0.0_f32, f32::max)
-                                        .min(ui.available_width() * 0.5);
-                                    let value_w = (ui.available_width() - name_w - 12.0).max(80.0);
-                                    egui::Grid::new("popup_grid").num_columns(2).striped(true).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
-                                        for (k, v) in &attrs {
-                                            ui.label(egui::RichText::new(k).size(11.5).color(t.text_dim));
-                                            ui.scope(|ui| {
-                                                // A fixed column: long values wrap, and the stripes span it.
-                                                ui.set_min_width(value_w);
-                                                ui.set_max_width(value_w);
-                                                ui.add(egui::Label::new(egui::RichText::new(v.as_str().unwrap_or("")).size(11.5)).wrap());
-                                            });
-                                            ui.end_row();
-                                        }
-                                    });
-                                });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                if ui.add(egui::Button::new(tl!("×")).frame(false)).clicked() {
+                                    close = true;
+                                }
                             });
+                        });
+                    });
+                // A solid scroll bar in its own gutter, shown when the rows are taller than the
+                // limit (a floating one is invisible until hovered).
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+                // Full width, so the scrollbar sits on the right edge; as tall as the rows, up to
+                // the limit.
+                egui::ScrollArea::vertical()
+                    .id_salt(("popup_rows", key))
+                    .auto_shrink([false, true])
+                    .max_height((limit.y - header.response.rect.height()).max(40.0))
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+                    .show(ui, |ui| {
+                        egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 14, top: 6, bottom: 12 }).show(ui, |ui| {
+                            // The values take the width the names leave, so the stripes reach the scrollbar.
+                            let name_w = attrs
+                                .keys()
+                                .map(|k| crate::widgets::text_w(ui, k, regular(11.5)))
+                                .fold(0.0_f32, f32::max)
+                                .min(ui.available_width() * 0.5);
+                            let value_w = (ui.available_width() - name_w - 12.0).max(80.0);
+                            egui::Grid::new(("popup_grid", key)).num_columns(2).striped(true).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
+                                for (k, v) in &attrs {
+                                    ui.label(egui::RichText::new(k).size(11.5).color(t.text_dim));
+                                    ui.scope(|ui| {
+                                        // A fixed column: long values wrap, and the stripes span it.
+                                        ui.set_min_width(value_w);
+                                        ui.set_max_width(value_w);
+                                        ui.add(egui::Label::new(egui::RichText::new(v.as_str().unwrap_or("")).size(11.5)).wrap());
+                                    });
+                                    ui.end_row();
+                                }
+                            });
+                        });
                     });
             });
+        // The corner grip: dragging it sets the width and the height limit.
+        let r = frame.response.rect;
+        let grip = Rect::from_min_max(r.max - vec2(16.0, 16.0), r.max);
+        let resp = ui.interact(grip, egui::Id::new("identify_popup_grip"), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeNwSe);
+        let color = if resp.hovered() || resp.dragged() { t.text } else { t.text_dim };
+        for k in [4.0, 8.0, 12.0] {
+            ui.painter()
+                .line_segment([pos2(r.max.x - 3.0, r.max.y - 3.0 - k), pos2(r.max.x - 3.0 - k, r.max.y - 3.0)], Stroke::new(1.0, color));
+        }
+        if resp.dragged() {
+            let d = resp.drag_delta();
+            new_limit = Some(vec2(limit.x + d.x, r.height() + d.y).clamp(vec2(240.0, 120.0), space));
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(shown_id, r.height()));
     });
-    ui.ctx().data_mut(|d| d.insert_temp(resize_id, shown.response.rect.size()));
+    if let Some(l) = new_limit {
+        ui.ctx().data_mut(|d| d.insert_temp(limit_id, l));
+    }
     if close {
         app.map.popup = None;
     }
