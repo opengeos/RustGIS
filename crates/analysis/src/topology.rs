@@ -275,7 +275,7 @@ pub fn dangles(ds: &Dataset, rows: &[usize], tol_m: f64) -> Checked {
                 // back onto itself, like a 6, doesn't dangle there).
                 let at_start = part.first() == Some(end);
                 let own_rest = rest_of_part(part, at_start, 2.0 * tol);
-                let touches = own_rest.len() >= 2 && rustgis_data::geometry::seg_dist2(&own_rest, *end) <= tol * tol
+                let touches = !own_rest.is_empty() && rustgis_data::geometry::seg_dist2(&own_rest, *end) <= tol * tol
                     || near.iter().any(|&(oli, opi)| {
                         work += 1;
                         (oli != li || opi != pi)
@@ -420,5 +420,14 @@ mod tests {
         assert!(d.complete);
         assert_eq!(d.errors.len(), 1, "only the free top end dangles");
         assert!((d.errors[0].at.y - 0.003).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_hairpin_ending_at_its_start_does_not_dangle() {
+        // Three vertices: out, across and back to within a metre of the start.
+        let hairpin = vec![Coord::new(0.0, 0.0), Coord::new(0.001, 0.0), Coord::new(0.000_005, 0.000_001)];
+        let mut ds = Dataset::new("l", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![hairpin])), vec![]);
+        assert!(dangles(&ds, &[0], 1.0).errors.is_empty());
     }
 }

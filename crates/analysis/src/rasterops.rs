@@ -282,6 +282,10 @@ pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f6
     if !(cx > 0.0 && cy > 0.0 && radius_m.is_finite() && radius_m > 0.0) {
         return Err("the raster's cells or the radius have no size".into());
     }
+    // A tiny declared cell size would make the window overflow: bound it before converting.
+    if radius_m / cx > 100_000.0 || radius_m / cy > 100_000.0 {
+        return Err("the radius covers too many cells; use a smaller radius".into());
+    }
     let rad_c = (radius_m / cx).ceil() as i64;
     let rad_r = (radius_m / cy).ceil() as i64;
     // Each cell walks a ray back to the observer: bound cells × ray length, not just cells.

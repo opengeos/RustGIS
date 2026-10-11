@@ -19,13 +19,14 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("gp.gallery", "Tool Gallery", "Analysis › Portal", gallery).view().params(r#"{"kind": "ready"|"feature"|"raster"}"#),
         C::new("model.new", "ModelBuilder", "Analysis › Geoprocessing", new_model).params(
-            r#"{"name"?: string, "steps"?: [{"tool": id, "params": {…, "%1" for step 1's output}}], "fromHistory"?: bool}"#,
+            r#"{"name"?: string, "steps"?: [{"tool": id, "params": {…, "%1" for step 1's output}}], "fromHistory"?: bool, "imported"?: bool (from a file: its steps may not touch files)}"#,
         ),
         C::new("model.run", "Run Model", "Analysis › Geoprocessing", run_model).params(r#"{"name"?: model}"#),
         C::new("model.remove", "Delete Model", "Catalog", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
             let before = s.project.models.len();
             s.project.models.retain(|m| !m.name.eq_ignore_ascii_case(n));
+            s.trusted_models.remove(&n.to_lowercase());
             if s.project.models.len() == before { Err(format!("no model '{n}'")) } else { Ok(Value::Null) }
         })
         .params(r#"{"name": model}"#),
@@ -230,7 +231,8 @@ fn new_model(s: &mut Session, p: &Value) -> CmdResult {
                 if let Value::Object(o) = &mut params {
                     for (key, v) in o.iter_mut() {
                         if let Some(t) = v.as_str().filter(|_| is_layer(key))
-                            && let Some(k) = outputs.iter().position(|outs| outs.iter().any(|x| x == t))
+                            // The latest run that made that name (names can be reused).
+                            && let Some(k) = outputs.iter().rposition(|outs| outs.iter().any(|x| x == t))
                         {
                             *v = json!(format!("%{}", k + 1));
                         }
@@ -255,6 +257,11 @@ fn new_model(s: &mut Session, p: &Value) -> CmdResult {
         i += 1;
         name = format!("{base} {i}");
     }
+    // History that came with an opened project is from a file too.
+    let file_history = b(p, "fromHistory").unwrap_or(false) && p.get("steps").is_none() && s.history_from_file > 0;
+    if !b(p, "imported").unwrap_or(false) && !file_history {
+        s.trusted_models.insert(name.to_lowercase());
+    }
     let n = steps.len();
     s.project.models.push(Model { name: name.clone(), steps });
     Ok(json!({"model": name, "steps": n}))
@@ -268,6 +275,16 @@ fn run_model(s: &mut Session, p: &Value) -> CmdResult {
     };
     if model.steps.is_empty() {
         return Err(format!("{} has no steps", model.name));
+    }
+    // A model that came in a file (an opened project, or an imported tool) may not touch files.
+    if !s.trusted_models.contains(&model.name.to_lowercase())
+        && let Some((i, st)) = model.steps.iter().enumerate().find(|(_, st)| super::items::touches_files("gp.run", &st.params))
+    {
+        return Err(format!(
+            "step {} ({}) reads or writes files, which a model from a file can't do; make a new model with that step to run it",
+            i + 1,
+            st.tool
+        ));
     }
     let mut outputs: Vec<String> = Vec::new();
     let mut ran = Vec::new();
@@ -324,6 +341,12 @@ fn run_script(s: &mut Session, p: &Value) -> CmdResult {
         }
         let spec = s.registry.get(id).ok_or_else(|| format!("line {}: unknown command '{id}'", n + 1))?;
         let (run, enabled) = (spec.run, spec.enabled);
+        // As when typed directly, a line naming a layer is checked against that layer.
+        if params.get("layer").is_some()
+            && let Ok(lid) = s.layer_id(&params)
+        {
+            s.active_layer = Some(lid);
+        }
         if let Some(why) = enabled(s) {
             return Err(format!("line {}: {id}: {why}", n + 1));
         }
@@ -452,7 +475,8 @@ fn viewshed(s: &mut Session, p: &Value) -> CmdResult {
     let at = Coord::new(f(p, "lon").ok_or("lon is required")?, f(p, "lat").ok_or("lat is required")?);
     let band = band_of(p, &dem)?;
     let (cx, cy) = dem.cell_size_m();
-    let radius = f(p, "radius").unwrap_or((cx * dem.width as f64).max(cy * dem.height as f64)).clamp(1.0, 500_000.0);
+    // The whole raster by default: its diagonal reaches every cell from any observer.
+    let radius = f(p, "radius").unwrap_or((cx * dem.width as f64).hypot(cy * dem.height as f64)).clamp(1.0, 500_000.0);
     let vs = rasterops::viewshed(&dem, band, at, f(p, "height").unwrap_or(1.7).clamp(0.0, 10_000.0), radius)?;
     let seen = vs.iter().filter(|v| **v == 1.0).count();
     let r = rasterops::derive(&dem, &out_name(p, format!("{}_viewshed", dem.name)), vec![vs])?;

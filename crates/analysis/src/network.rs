@@ -35,7 +35,8 @@ fn key(c: Coord) -> (i64, i64) {
 }
 
 /// The shortest route between two points over the lines of `rows`, joining where vertices
-/// coincide. Each edge costs its length times the row's `cost_field` value (1 when unset). Each
+/// coincide. Each edge costs its length times the row's `cost_field` value (1 when empty; lines
+/// costing zero or less are closed). Each
 /// end snaps to the nearest point on a line (within `snap_m`), where the route starts or stops.
 pub fn shortest_route(
     ds: &Dataset,
@@ -58,7 +59,13 @@ pub fn shortest_route(
     };
     for r in rows {
         let Some(Geometry::Line(parts)) = ds.features.get(*r).and_then(|f| f.geometry.as_ref()) else { continue };
-        let weight = cost_field.and_then(|fi| ds.value(*r, fi).as_f64()).filter(|w| w.is_finite() && *w > 0.0).unwrap_or(1.0);
+        // A cost multiplies each edge's length; no value means 1, and zero or less closes the
+        // line (impassable).
+        let weight = match cost_field.map(|fi| ds.value(*r, fi).as_f64()) {
+            Some(Some(w)) if w.is_finite() && w > 0.0 => w,
+            Some(Some(_)) => continue,
+            _ => 1.0,
+        };
         for part in parts {
             for w in part.windows(2) {
                 let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
@@ -310,6 +317,13 @@ pub fn within(ds: &Dataset, rows: &[usize], at: Coord, radius_m: f64) -> Vec<(us
         .iter()
         .filter_map(|r| {
             let g = ds.features.get(*r)?.geometry.as_ref()?;
+            // Skip shapes whose box is farther than the radius before projecting them.
+            let e = g.extent();
+            let dlat = radius_m / 111_320.0;
+            let dlon = dlat * k;
+            if at.x < e.min_x - dlon || at.x > e.max_x + dlon || at.y < e.min_y - dlat || at.y > e.max_y + dlat {
+                return None;
+            }
             let pg = g.map_coords(&rustgis_geom::lonlat_to_merc);
             let d = if pg.hit(m, 0.0) { 0.0 } else { pg_dist(&pg, m) / k };
             (d <= radius_m).then_some((*r, d))

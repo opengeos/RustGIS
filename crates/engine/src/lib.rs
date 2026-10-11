@@ -218,6 +218,8 @@ pub struct Session {
     /// Tasks made in this session (lower-cased names). Others came from files, and their steps
     /// may not touch files when run.
     pub trusted_tasks: std::collections::HashSet<String>,
+    /// Models made in this session (lower-cased names); the steps of others may not touch files.
+    pub trusted_models: std::collections::HashSet<String>,
     /// How many geoprocessing history records came with the opened project (from its file).
     pub history_from_file: usize,
     /// Drawing tools stay active after a graphic is drawn (Insert › Graphics).
@@ -270,6 +272,7 @@ impl Session {
             keep_tool: false,
             active_layout: None,
             trusted_tasks: Default::default(),
+            trusted_models: Default::default(),
             history_from_file: 0,
             edit_counts: std::collections::HashMap::new(),
             topology_errors: Vec::new(),
@@ -370,6 +373,7 @@ impl Session {
         self.last_camera = None;
         self.dirty = false;
         self.trusted_tasks.clear();
+        self.trusted_models.clear();
         self.edit_counts.clear();
         self.topology_errors.clear();
         // Runs of the previous project mustn't land in this one.

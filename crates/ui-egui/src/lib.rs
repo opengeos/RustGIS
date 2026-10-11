@@ -489,6 +489,8 @@ impl RustGisApp {
             // Opens the Workflows pane at a section (staying open when switching sections).
             "ui.pane.workflows" => {
                 let section = p.get("section").and_then(Value::as_str);
+                // A map pick started in another section (or before the pane closes) ends here.
+                self.workflow.pick = None;
                 match section.and_then(|s| analysispane::SECTIONS.iter().find(|x| x.0 == s)) {
                     Some((id, _)) => {
                         self.workflow.section = id;

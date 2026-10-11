@@ -550,7 +550,7 @@ fn run_task(s: &mut Session, p: &Value) -> CmdResult {
 /// Whether a step may reach outside the session: a command that reads or writes files, opens
 /// items or runs other steps, or a parameter that names a file, folder or address (by its key or
 /// by looking like a path or URL).
-fn touches_files(command: &str, params: &Value) -> bool {
+pub(crate) fn touches_files(command: &str, params: &Value) -> bool {
     const KEYS: &[&str] = &["path", "folder", "dir", "file", "url", "uri", "source", "output", "connection", "database", "data", "text"];
     fn looks_like_path(t: &str) -> bool {
         let t = t.trim();

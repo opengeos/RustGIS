@@ -1190,6 +1190,16 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     let r = s.run("model.run", &json!({"name": "Buffer then dissolve"})).unwrap();
     assert_eq!(r["ran"].as_array().unwrap().len(), 2);
     assert!(s.run("model.new", &json!({"steps": [{"tool": "nope", "params": {}}]})).is_err());
+    // A model carried in a file can't touch files.
+    s.project.models.push(crate::project::Model {
+        name: "From a file".into(),
+        steps: vec![crate::project::ModelStep {
+            tool: "buffer".into(),
+            params: json!({"input": "Cities", "distance": 5, "output": "/tmp/x.shp"}),
+        }],
+    });
+    let e = s.run("model.run", &json!({"name": "From a file"})).unwrap_err();
+    assert!(e.contains("from a file"), "{e}");
     let m = s.run("model.new", &json!({"name": "Replay", "fromHistory": true})).unwrap();
     assert!(m["steps"].as_u64().unwrap() >= 2);
     let dissolve = s.project.models.last().unwrap().steps.iter().find(|st| st.tool == "dissolve").unwrap();
