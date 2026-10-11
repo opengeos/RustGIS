@@ -145,8 +145,10 @@ pub fn commands() -> Vec<C> {
                 "html"
             } else if lower.ends_with(".png") {
                 "png"
-            } else {
+            } else if lower.ends_with(".pdf") {
                 "pdf"
+            } else {
+                return Err("export to a .pdf, .html or .png file".into());
             };
             let (bytes, pages) = export_bytes(s, i, format, dpi)?;
             rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;

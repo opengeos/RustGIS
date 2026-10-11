@@ -1823,6 +1823,7 @@ fn presentations_and_notebooks() {
         assert_eq!(r["pages"], if file.ends_with(".png") { 1 } else { 6 });
         assert!(std::fs::read(&path).unwrap().starts_with(magic), "{file}");
     }
+    assert!(s.run("presentation.export", &json!({"path": dir.join("deck.pptx").to_str().unwrap()})).is_err());
     let html = std::fs::read_to_string(dir.join("tour.html")).unwrap();
     use crate::cmd::presentation::playable;
     for (source, kept) in [
@@ -1889,6 +1890,15 @@ fn presentations_and_notebooks() {
     s.run("notebook.open", &json!({"text": text})).unwrap();
     let r = s.run("notebook.run", &json!({"notebook": "Notebook"})).unwrap();
     assert_eq!(r["error"], 0, "{r}");
+    // Nor can it make a trusted notebook to run its lines later.
+    let text = json!({"nbformat": 4, "cells": [{"cell_type": "code", "source": "notebook.new {\"name\": \"Laundered\"}"}]}).to_string();
+    s.run("notebook.open", &json!({"text": text})).unwrap();
+    let opened = s.project.notebooks.last().unwrap().name.clone();
+    let r = s.run("notebook.run", &json!({"notebook": opened})).unwrap();
+    assert_eq!(r["error"], 0, "{r}");
+    assert!(!s.project.notebooks.iter().any(|nb| nb.name == "Laundered"));
+    let last = s.project.notebooks.len() - 1;
+    s.run("notebook.remove", &json!({"notebook": last})).unwrap();
     // A cell that removes an earlier notebook still writes its output to its own notebook.
     s.run("notebook.new", &json!({"name": "Runner"})).unwrap();
     s.run("notebook.addCell", &json!({"notebook": "Runner", "source": "notebook.remove {\"notebook\": 0}"})).unwrap();
