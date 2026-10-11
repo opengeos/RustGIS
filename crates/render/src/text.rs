@@ -19,6 +19,12 @@ fn font(bold: bool) -> Option<&'static FontRef<'static>> {
     }
 }
 
+/// Whether the label font has a glyph for every character of `text` (spaces aside).
+pub fn covers(text: &str) -> bool {
+    let Some(f) = font(false) else { return true };
+    text.chars().all(|c| c.is_whitespace() || f.glyph_id(c).0 != 0)
+}
+
 /// Text width in points at `size` (font px ≈ size × 1.33 for point sizes).
 pub fn measure(text: &str, size: f32, bold: bool) -> f32 {
     let Some(f) = font(bold) else { return text.chars().count() as f32 * size * 0.6 };
@@ -155,4 +161,15 @@ pub fn text_at(pm: &mut Pixmap, text: &str, x: f32, y: f32, px_size: f32, color:
         }
     }
     draw_text(pm, text, cx, y, px_size, color, bold, (0.0, 0.0));
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    #[test]
+    fn knows_which_scripts_it_can_draw() {
+        assert!(super::covers("Syria"));
+        assert!(super::covers("Türkiye Ελλάδα Беларусь"));
+        assert!(!super::covers("سوريا"));
+        assert!(!super::covers("भारत"));
+    }
 }

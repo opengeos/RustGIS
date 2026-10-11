@@ -49,8 +49,9 @@ Ocean, Atlas, Blank), which need no network, and web tile layers over them:
   a built-in style that knows the OpenMapTiles, Protomaps and Shortbread schemas.
 - **Map styles**: a MapLibre style document (`style.json`), with its vector and raster sources.
   RustGIS draws background, fill, line, circle and raster layers and point labels; it evaluates
-  the style's expressions and zoom functions. Line labels, icons, hillshade and 3D extrusion are
-  not drawn (extrusions draw flat).
+  the style's expressions and zoom functions. Line labels, icons, sprite patterns, hillshade and
+  3D extrusion are not drawn (extrusions draw flat). A label shows the lines of its text that
+  the map's font can draw: a style's "Syria / سوريا" shows as "Syria".
 
 Add one with **Add Tile Layer…** at the bottom of the Basemap gallery, or install the
 [Basemaps plugin](https://plugins.rustgis.app/catalog/basemaps/) for a tab of public basemaps.

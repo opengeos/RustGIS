@@ -125,6 +125,9 @@ pub fn draw(pm: &mut Pixmap, spec: &Spec, opacity: f32, frame: &Frame, labels: b
                 }
             }
             LayerKind::Fill | LayerKind::FillExtrusion | LayerKind::Line | LayerKind::Circle => {
+                if !drawable(layer) {
+                    continue;
+                }
                 for it in list {
                     draw_vector(target, it, layer, frame, zoom);
                 }
@@ -199,6 +202,13 @@ fn ancestor(p: &Placed, min_z: u8, url: &dyn Fn(TileId) -> Option<String>) -> Op
         }
     }
     None
+}
+
+/// Whether a fill, line or circle layer can be drawn: one painted with a sprite pattern can't
+/// (sprites aren't loaded), and drawing it in the colour the spec falls back to (black) would
+/// cover the map.
+fn drawable(layer: &StyleLayer) -> bool {
+    !["fill-pattern", "line-pattern", "fill-extrusion-pattern"].iter().any(|p| layer.has_paint(p))
 }
 
 fn color(c: Rgba, opacity: f32) -> tiny_skia::Color {
@@ -384,7 +394,8 @@ fn collect_labels(out: &mut Vec<Label>, it: &Item, layer: &StyleLayer, frame: &F
         if !layer.matches(&ctx) {
             continue;
         }
-        let Some(text) = layer.text_field(&ctx).map(|t| t.trim().replace('\n', " ")).filter(|t| !t.is_empty()) else { continue };
+        // Lines are kept: the renderer drops those its font can't draw (a name in another script).
+        let Some(text) = layer.text_field(&ctx).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) else { continue };
         let Some(pt) = f.geometry.first().and_then(|g| g.first()) else { continue };
         let (x, y) = to(pt);
         if !inside(x, y, bounds) {
@@ -556,6 +567,15 @@ fn area(r: &[(f32, f32)]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skips_sprite_patterns() {
+        let layer = |paint: serde_json::Value| {
+            StyleLayer::parse(&serde_json::json!({"id": "a", "type": "fill", "source": "s", "source-layer": "l", "paint": paint})).unwrap()
+        };
+        assert!(!drawable(&layer(serde_json::json!({"fill-pattern": "pedestrian_polygon"}))));
+        assert!(drawable(&layer(serde_json::json!({"fill-color": "#ccc"}))));
+    }
 
     #[test]
     fn clips_polygons_and_lines() {
