@@ -12,8 +12,9 @@ app.
 
 The GeoLibre tool suite ([geolibre-rust](https://github.com/opengeos/geolibre-rust), MIT, built
 on [whitebox-wasm](https://github.com/opengeos/whitebox-wasm), MIT) is not part of RustGIS: the
-desktop app and command line run its separately downloaded `geolibre` runner, and its tool
-names and descriptions come from the runner's manifests.
+desktop app and command line run its separately downloaded `geolibre` runner, and the web app
+loads its WebAssembly runner (the `geolibre-wasm` npm package, from jsDelivr) when asked. Its
+tool names and descriptions come from the runner's manifests.
 
 Icons are original vector drawings in code (`crates/ui-egui/src/icons.rs`). Fonts are not
 bundled: the interface uses an installed system sans-serif when one is found, otherwise the

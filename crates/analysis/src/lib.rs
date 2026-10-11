@@ -199,9 +199,10 @@ pub fn external_placeholder(_: &dyn Inputs, _: &Value) -> Result<ToolResult, Str
     Err("this tool runs through the external suite".into())
 }
 
-/// Runs a tool with JSON parameters, filling defaults and checking required ones.
-pub fn run(id: &str, inputs: &dyn Inputs, params: &Value) -> Result<ToolResult, String> {
-    let spec = tool(id).ok_or_else(|| format!("no tool '{id}'"))?;
+/// A tool's parameters with defaults filled in, or an error naming a missing required one.
+/// [`run`] does this first; a host that runs an external tool another way (the browser's
+/// asynchronous runner) does it too, so both check parameters the same way.
+pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> {
     let mut p = params.as_object().cloned().unwrap_or_default();
     for ps in spec.params {
         if !p.contains_key(ps.name)
@@ -214,7 +215,13 @@ pub fn run(id: &str, inputs: &dyn Inputs, params: &Value) -> Result<ToolResult, 
             return Err(format!("{}: '{}' is required", spec.name, ps.label));
         }
     }
-    let p = Value::Object(p);
+    Ok(Value::Object(p))
+}
+
+/// Runs a tool with JSON parameters, filling defaults and checking required ones.
+pub fn run(id: &str, inputs: &dyn Inputs, params: &Value) -> Result<ToolResult, String> {
+    let spec = tool(id).ok_or_else(|| format!("no tool '{id}'"))?;
+    let p = resolve_params(spec, params)?;
     // A bug in a tool must not take the app down.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match PROVIDER.get() {
         Some((_, runner)) if is_external(spec) => runner(spec, inputs, &p),

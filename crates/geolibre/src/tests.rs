@@ -54,27 +54,19 @@ fn setup() -> Option<Fixture> {
 
 #[test]
 fn runner_values_and_choices() {
-    assert_eq!(runner::arg_text(&json!("a b")), "a b");
-    assert_eq!(runner::arg_text(&json!(true)), "true");
-    assert_eq!(runner::arg_text(&json!(2.5)), "2.5");
+    assert_eq!(arg_text(&json!("a b")), "a b");
+    assert_eq!(arg_text(&json!(true)), "true");
+    assert_eq!(arg_text(&json!(2.5)), "2.5");
     // Not a runner: refused, and the choice stays as it was.
     let before = runner::find();
     let me = std::env::current_exe().unwrap();
     assert!(runner::version_of(&me).is_none());
     assert!(set_runner(Some(me)).is_err());
-    assert!(set_runner(Some(PathBuf::from("/no/such/geolibre"))).is_err());
+    assert!(set_runner(Some(std::path::PathBuf::from("/no/such/geolibre"))).is_err());
     assert_eq!(runner::find(), before);
     assert_eq!(label_of("z_factor"), "Z factor");
     // Reloading the tools reuses the strings it made rather than leaking new copies.
     assert!(std::ptr::eq(leak("Slope"), leak(String::from("Slope"))));
-    // Two layer names with the same safe name still get two files.
-    let scratch = Scratch::new().unwrap();
-    let (a, b) = (scratch.input("Roads 2020", "geojson"), scratch.input("Roads_2020", "geojson"));
-    assert_ne!(a, b);
-    assert_ne!(scratch.input("城市", "tif"), scratch.input("道路", "tif"));
-    let dir = scratch.dir.clone();
-    drop(scratch);
-    assert!(!dir.exists(), "removed after the run");
     // A point that can't be converted drops the geometry instead of writing nulls.
     let line = Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)]]);
     assert!(convert(&line, |c| Some(Coord::new(c.x * 2.0, c.y))).is_some());
@@ -162,4 +154,62 @@ fn bad_inputs_are_errors_not_crashes() {
         let junk: serde_json::Map<String, Value> = t.params.iter().map(|p| (p.name.to_string(), json!("nope;(("))).collect();
         assert!(rustgis_analysis::run(t.id, &f, &Value::Object(junk)).is_err(), "{}", t.id);
     }
+}
+
+/// The browser's path, with no runner: prepare a run, then finish it from files a runner
+/// would have written.
+#[test]
+fn prepare_and_finish_without_a_runner() {
+    let f = Fixture::new();
+    let manifest = json!({
+        "id": "test_buffer", "display_name": "Test Buffer", "category": "Vector", "summary": "",
+        "params": [
+            {"name": "input", "io_role": "input", "data_kind": "vector", "required": true, "schema": {"kind": "input", "cardinality": "single"}},
+            {"name": "others", "io_role": "input", "data_kind": "raster", "required": false, "schema": {"kind": "input", "cardinality": "multiple"}},
+            {"name": "distance", "data_kind": "number", "required": true, "schema": {"kind": "scalar"}},
+            {"name": "output", "io_role": "output", "data_kind": "vector", "required": false, "schema": {"kind": "output"}}
+        ]
+    });
+    let (spec, meta) = spec_of(&manifest).unwrap();
+    let params = rustgis_analysis::resolve_params(&spec, &json!({"input": "pts", "others": "dem;dem", "distance": "250"})).unwrap();
+    let job = prepare_with(&spec, &meta, &f, &params).unwrap();
+    // Inputs are staged as numbered files, even the same layer twice.
+    let names: Vec<&str> = job.files.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["in0-pts.geojson", "in1-dem.tif", "in2-dem.tif"]);
+    // The working CRS is the raster's (UTM 17N): the GeoJSON says so.
+    assert!(String::from_utf8_lossy(&job.files[0].1).contains("EPSG::32617"));
+    assert_eq!(
+        job.argv("/work"),
+        [
+            "--input=/work/in0-pts.geojson",
+            "--others=/work/in1-dem.tif;/work/in2-dem.tif",
+            "--distance=250",
+            "--output=/work/output.geojson"
+        ]
+    );
+    // Whole numbers go as integers (the form sends numbers as floats).
+    assert_eq!(option_value(&json!(3.0), Data::Number), json!(3));
+    assert_eq!(option_value(&json!("2.5"), Data::Number), json!(2.5));
+    assert!(job.argv("C:\\scratch").iter().any(|a| a == "--output=C:\\scratch\\output.geojson"), "Windows folders");
+
+    // Finish from what a runner returns: the output in UTM, and a JSON results line.
+    let utm = Crs::from_epsg(32617).unwrap().transformer().unwrap();
+    let c = utm.from_lonlat(f.points.extent().center()).unwrap();
+    let out = format!(
+        r#"{{"type":"FeatureCollection","features":[{{"type":"Feature","properties":{{"id":1}},"geometry":{{"type":"Point","coordinates":[{},{}]}}}}]}}"#,
+        c.x, c.y
+    );
+    let lines = vec!["working…".to_string(), r#"{"output":"/work/output.geojson","count":1}"#.to_string()];
+    let r = finish(&job, &[("output.geojson".into(), out.into_bytes())], &lines, None);
+    let Output::Layers(layers) = r.output else { panic!("layers") };
+    let Some(OutputLayer::Vector(ds)) = layers.first() else { panic!("a vector: {layers:?}") };
+    assert_eq!(ds.name, "Test Buffer");
+    let p = ds.extent().center();
+    let want = f.points.extent().center();
+    assert!((p.x - want.x).abs() < 1e-6 && (p.y - want.y).abs() < 1e-6, "back in lon/lat: {p:?}");
+    assert!(r.messages.contains(&"working…".to_string()));
+    assert!(r.messages.iter().any(|m| m == "Count: 1"), "results, without the output path: {:?}", r.messages);
+    // No files back: a message, not a crash.
+    let empty = finish(&job, &[], &[], None);
+    assert!(matches!(empty.output, Output::Layers(ref l) if l.is_empty()) && !empty.messages.is_empty());
 }

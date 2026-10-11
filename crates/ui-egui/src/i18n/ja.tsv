@@ -259,6 +259,7 @@ Find a place by coordinates.	座標で場所を検索します。
 Find and run geoprocessing tools.	ジオプロセシング ツールを検索して実行します。
 Find any command by name (Ctrl+K).	名前で任意のコマンドを検索します（Ctrl+K）。
 Find Tools	ツールの検索
+Finish Tool Run	ツールの実行を完了
 Fixed Zoom In	固定ズームイン
 Fixed Zoom Out	固定ズームアウト
 Folders	フォルダー
@@ -342,6 +343,8 @@ Line width	ラインの幅
 LineString	ライン ストリング
 List Commands	コマンド一覧
 Lit	明部
+Load GeoLibre tools	GeoLibre ツールを読み込む
+Loading the GeoLibre tools…	GeoLibre ツールを読み込んでいます…
 Locate	位置
 Locate GeoLibre Runner	GeoLibre ランナーの場所を指定
 Locate the GeoLibre runner	GeoLibre ランナーの場所を指定
@@ -434,6 +437,7 @@ Outline color	アウトラインの色
 Outline width	アウトラインの幅
 Output	出力
 Output Name	出力名
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	ブラウザーで動く、ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツール (初回のみ約 25 MB をダウンロード)。
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツール (約 20 MB のオプションのダウンロード)。
 Overlay	オーバーレイ
 Pan (Explore) · any tool	画面移動（マップ操作）· 任意のツール
@@ -499,6 +503,7 @@ Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	リボ�
 Robinson	ロビンソン図法
 Run	実行
 Run Tool	ツールの実行
+Running…	実行中…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS は純粋な Rust で書かれたオープンソースのデスクトップ GIS です。リボンはおなじみのデスクトップ GIS のワークフローに従っており、すべての操作はコマンドとしてコマンド ラインからも実行できます。
 RustGIS project	RustGIS プロジェクト

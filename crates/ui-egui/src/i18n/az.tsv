@@ -259,6 +259,7 @@ Find a place by coordinates.	Koordinatlara görə yer tapın.
 Find and run geoprocessing tools.	Geoemal alətlərini tapın və işə salın.
 Find any command by name (Ctrl+K).	İstənilən əmri adına görə tapın (Ctrl+K).
 Find Tools	Alət axtar
+Finish Tool Run	Alətin işini tamamla
 Fixed Zoom In	Sabit yaxınlaşdırma
 Fixed Zoom Out	Sabit uzaqlaşdırma
 Folders	Qovluqlar
@@ -342,6 +343,8 @@ Line width	Xətt qalınlığı
 LineString	LineString
 List Commands	Əmrlərin siyahısı
 Lit	İşıqlı
+Load GeoLibre tools	GeoLibre alətlərini yüklə
+Loading the GeoLibre tools…	GeoLibre alətləri yüklənir…
 Locate	Yer tap
 Locate GeoLibre Runner	GeoLibre işlədicisini tap
 Locate the GeoLibre runner	GeoLibre işlədicisini tap
@@ -434,6 +437,7 @@ Outline color	Kontur rəngi
 Outline width	Kontur qalınlığı
 Output	Çıxış
 Output Name	Çıxış adı
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Təxminən 25 MB-lıq birdəfəlik endirmə ilə brauzerdə işləyən 1000-dən çox raster, vektor, LiDAR, hidrologiya və relyef aləti.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Təxminən 20 MB-lıq istəyə bağlı endirmə ilə 1000-dən çox raster, vektor, LiDAR, hidrologiya və relyef aləti.
 Overlay	Üst-üstə qoyma
 Pan (Explore) · any tool	Sürüşdür (Kəşf) · istənilən alət
@@ -499,6 +503,7 @@ Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Lent uy
 Robinson	Robinson
 Run	İşə sal
 Run Tool	Aləti işə sal
+Running…	İşləyir…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS təmiz Rust dilində yazılmış açıq mənbəli masaüstü CİS-dir. Onun lenti tanış masaüstü CİS iş axınını izləyir; hər əməliyyat komanda sətrindən də işə sala biləcəyiniz bir əmrdir.
 RustGIS project	RustGIS layihəsi

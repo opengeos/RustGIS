@@ -407,3 +407,38 @@ fn geolibre_tools_run_on_layers_and_add_their_outputs() {
     let err = s.run("gp.run", &json!({"tool": "geolibre:slope", "params": {"input": "Cities"}})).unwrap_err();
     assert!(err.starts_with("Slope:"), "{err}");
 }
+
+/// The browser's way: prepare a run, let a runner (here, pretend) produce the files, then
+/// apply it with `gp.finish`, which keeps undo and history.
+#[cfg(feature = "geolibre")]
+#[test]
+fn geolibre_runs_can_finish_asynchronously() {
+    use crate::cmd::gp::{external_complete, external_start};
+    let mut s = with_raster();
+    assert!(s.run("gp.finish", &json!({"id": 99})).is_err(), "nothing pending");
+    assert!(external_complete(&mut s, 99, Ok((vec![], vec![]))).is_err(), "nothing started");
+    if s.run("gp.geolibre", &Value::Null).unwrap()["available"] != true {
+        eprintln!("skipped: no GeoLibre runner (set RUSTGIS_GEOLIBRE)");
+        return;
+    }
+    assert!(external_start(&mut s, "geolibre:slope", &json!({})).unwrap_err().contains("required"));
+    assert!(external_start(&mut s, "buffer", &json!({})).is_err(), "only GeoLibre tools");
+    let run = external_start(&mut s, "geolibre:slope", &json!({"input": "scene"})).unwrap();
+    assert_eq!((run.tool.as_str(), run.files.len()), ("slope", 1), "the embedded raster is staged");
+    assert!(run.argv.iter().any(|a| a.starts_with("--output=/work/")));
+    // The "runner" writes the input back as the output.
+    let out = run.files[0].1.clone();
+    external_complete(&mut s, run.id, Ok((vec![("output.tif".into(), out)], vec![]))).unwrap();
+    let before = s.map().layers.len();
+    let r = s.run("gp.finish", &json!({"id": run.id})).unwrap();
+    assert_eq!(r["layers"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(s.map().layers.len(), before + 1);
+    assert!(s.project.gp_history.last().is_some_and(|h| h.ok && h.tool == "Slope"));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.map().layers.len(), before, "undo removes it");
+    assert!(s.run("gp.finish", &json!({"id": run.id})).is_err(), "applied once");
+    // A runner error is reported like a failed gp.run.
+    let run = external_start(&mut s, "geolibre:slope", &json!({"input": "scene"})).unwrap();
+    external_complete(&mut s, run.id, Err("trap".into())).unwrap();
+    assert_eq!(s.run("gp.finish", &json!({"id": run.id})).unwrap_err(), "Slope: trap");
+}

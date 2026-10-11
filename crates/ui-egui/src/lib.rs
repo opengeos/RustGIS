@@ -27,6 +27,9 @@ pub use rustgis_engine;
 /// Files read asynchronously (browser uploads, drops) waiting to be opened: (file name, bytes).
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 
+/// A result an asynchronous service fills in when it's done (the app polls it each frame).
+pub type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
+
 /// Platform hooks. The desktop app leaves them empty and uses native file dialogs; the web app
 /// supplies an asynchronous file picker (results arrive in `inbox`) and browser downloads.
 #[derive(Default)]
@@ -43,6 +46,11 @@ pub struct Services {
     /// Downloads a font by URL (web); the bytes land in `font_inbox`.
     pub fetch_font: Option<Box<dyn Fn(&str)>>,
     pub font_inbox: Option<Inbox>,
+    /// The browser's GeoLibre runner: lists the tools' manifests (a JSON array) into the slot.
+    pub geolibre_manifests: Option<Box<dyn Fn(Slot<Result<String, String>>)>>,
+    /// …and runs one tool in its in-memory `/work` folder, putting the new files and printed
+    /// lines in the slot. The desktop app runs tools through the `geolibre` program instead.
+    pub geolibre_run: Option<Box<dyn Fn(rustgis_engine::cmd::gp::ExternalRun, Slot<rustgis_engine::cmd::gp::ExternalOutput>)>>,
 }
 
 /// Panes on the left of the map.
@@ -162,6 +170,11 @@ impl RustGisApp {
         }
         if let Some(m) = self.services.load_pref.as_ref().and_then(|load| load("ribbon_minimized")) {
             self.ui.ribbon_minimized = m == "true";
+        }
+        // The browser's GeoLibre tools, loaded in an earlier visit: load them again (the runner
+        // comes from the browser's cache).
+        if self.services.load_pref.as_ref().and_then(|load| load("geolibre_web")).as_deref() == Some("on") {
+            panes::start_geolibre_load(&mut self);
         }
         // A GeoLibre runner located earlier (Locate… in the Geoprocessing pane).
         if let Some(path) = self.services.load_pref.as_ref().and_then(|load| load("geolibre_runner")).filter(|p| !p.is_empty())
@@ -485,6 +498,7 @@ impl RustGisApp {
     /// Per-frame work that doesn't draw (theme, fonts, files that arrived).
     pub fn logic(&mut self, ctx: &egui::Context) {
         i18n::set_current(self.lang());
+        panes::poll_geolibre(self, ctx);
         self.ensure_script_font();
         // Fonts downloaded by the web app.
         let fonts: Vec<(String, Vec<u8>)> = match &self.services.font_inbox {

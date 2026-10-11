@@ -138,6 +138,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
     let font_ctx = ctx.clone();
+    let (gl_list_ctx, gl_run_ctx) = (ctx.clone(), ctx.clone());
     let font_sink = font_inbox.clone();
     Services {
         load_pref: Some(Box::new(|key: &str| storage().and_then(|s| s.get_item(&format!("rustgis.{key}")).ok().flatten()))),
@@ -187,6 +188,8 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
             }
         })),
         inbox: Some(inbox),
+        geolibre_manifests: Some(Box::new(move |slot| crate::geolibre::manifests(slot, gl_list_ctx.clone()))),
+        geolibre_run: Some(Box::new(move |job, slot| crate::geolibre::run(job, slot, gl_run_ctx.clone()))),
     }
 }
 

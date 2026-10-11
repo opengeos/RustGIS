@@ -11,6 +11,8 @@ workspace = true
 
 [dependencies]
 rustgis-ui-egui = { workspace = true }
+# The GeoLibre tools, run in the browser by geolibre-rust's WASI runner.
+rustgis-engine = { workspace = true, features = ["geolibre"] }
 egui = { workspace = true }
 log = { workspace = true }
 

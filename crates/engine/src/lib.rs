@@ -181,6 +181,22 @@ pub struct Session {
     last_camera: Option<Camera>,
     /// The projection the extent history's cameras are in (their units change with it).
     history_projection: String,
+    /// Finished asynchronous tool runs waiting for `gp.finish` (the browser's GeoLibre tools).
+    pub(crate) pending: Vec<PendingRun>,
+    #[cfg_attr(not(feature = "geolibre"), allow(dead_code))]
+    pub(crate) next_pending: u64,
+    /// Asynchronous runs started and not yet complete: (id, job, resolved params, start time).
+    #[cfg(feature = "geolibre")]
+    pub(crate) started: Vec<(u64, rustgis_geolibre::Job, serde_json::Value, u64)>,
+}
+
+/// A finished tool run, held until `gp.finish` applies it.
+pub(crate) struct PendingRun {
+    pub id: u64,
+    pub tool: String,
+    pub params: serde_json::Value,
+    pub result: Result<rustgis_analysis::ToolResult, String>,
+    pub millis: u64,
 }
 
 impl Session {
@@ -205,6 +221,10 @@ impl Session {
             forward: Vec::new(),
             last_camera: None,
             history_projection: String::new(),
+            pending: Vec::new(),
+            next_pending: 0,
+            #[cfg(feature = "geolibre")]
+            started: Vec::new(),
         }
     }
 

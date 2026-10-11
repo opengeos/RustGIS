@@ -259,6 +259,7 @@ Find a place by coordinates.	Einen Ort über Koordinaten finden.
 Find and run geoprocessing tools.	Geoverarbeitungswerkzeuge finden und ausführen.
 Find any command by name (Ctrl+K).	Einen beliebigen Befehl nach Namen finden (Ctrl+K).
 Find Tools	Werkzeuge finden
+Finish Tool Run	Werkzeuglauf abschließen
 Fixed Zoom In	Fester Zoom hinein
 Fixed Zoom Out	Fester Zoom heraus
 Folders	Ordner
@@ -342,6 +343,8 @@ Line width	Linienbreite
 LineString	LineString
 List Commands	Befehle auflisten
 Lit	Beleuchtet
+Load GeoLibre tools	GeoLibre-Werkzeuge laden
+Loading the GeoLibre tools…	GeoLibre-Werkzeuge werden geladen…
 Locate	Lokalisieren
 Locate GeoLibre Runner	GeoLibre-Runner suchen
 Locate the GeoLibre runner	GeoLibre-Runner suchen
@@ -434,6 +437,7 @@ Outline color	Umrissfarbe
 Outline width	Umrissbreite
 Output	Ausgabe
 Output Name	Ausgabename
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Über 1.000 Raster-, Vektor-, LiDAR-, Hydrologie- und Geländewerkzeuge, die im Browser laufen, nach einem einmaligen Download von etwa 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Über 1.000 Raster-, Vektor-, LiDAR-, Hydrologie- und Geländewerkzeuge als optionaler Download von etwa 20 MB.
 Overlay	Überlagerung
 Pan (Explore) · any tool	Verschieben (Erkunden) · jedes Werkzeug
@@ -499,6 +503,7 @@ Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Menüba
 Robinson	Robinson
 Run	Ausführen
 Run Tool	Werkzeug ausführen
+Running…	Läuft…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS ist ein Open-Source-Desktop-GIS in reinem Rust. Sein Menüband folgt dem vertrauten Desktop-GIS-Workflow; jede Aktion ist ein Befehl, den Sie auch über die Kommandozeile ausführen können.
 RustGIS project	RustGIS-Projekt

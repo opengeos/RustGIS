@@ -259,6 +259,7 @@ Find a place by coordinates.	Trova un luogo tramite coordinate.
 Find and run geoprocessing tools.	Trova ed esegui strumenti di geoprocessing.
 Find any command by name (Ctrl+K).	Trova qualsiasi comando per nome (Ctrl+K).
 Find Tools	Trova strumenti
+Finish Tool Run	Completa l'esecuzione dello strumento
 Fixed Zoom In	Ingrandimento fisso
 Fixed Zoom Out	Riduzione fissa
 Folders	Cartelle
@@ -342,6 +343,8 @@ Line width	Spessore linea
 LineString	LineString
 List Commands	Elenca comandi
 Lit	Illuminato
+Load GeoLibre tools	Carica gli strumenti GeoLibre
+Loading the GeoLibre tools…	Caricamento degli strumenti GeoLibre…
 Locate	Localizza
 Locate GeoLibre Runner	Individua l'esecutore GeoLibre
 Locate the GeoLibre runner	Individua l'esecutore GeoLibre
@@ -434,6 +437,7 @@ Outline color	Colore contorno
 Outline width	Spessore contorno
 Output	Output
 Output Name	Nome output
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Oltre 1.000 strumenti raster, vettoriali, LiDAR, idrologici e del terreno che funzionano nel browser, con un unico download di circa 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Oltre 1.000 strumenti raster, vettoriali, LiDAR, idrologici e del terreno, in un download facoltativo di circa 20 MB.
 Overlay	Sovrapposizione
 Pan (Explore) · any tool	Pan (Esplora) · qualsiasi strumento
@@ -499,6 +503,7 @@ Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Parità
 Robinson	Robinson
 Run	Esegui
 Run Tool	Esegui strumento
+Running…	In esecuzione…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS è un GIS desktop open source scritto in puro Rust. La sua barra multifunzione segue il consueto flusso di lavoro dei GIS desktop; ogni azione è un comando che puoi eseguire anche dalla riga di comando.
 RustGIS project	Progetto RustGIS

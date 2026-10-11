@@ -259,6 +259,7 @@ Find a place by coordinates.	Tìm một địa điểm theo tọa độ.
 Find and run geoprocessing tools.	Tìm và chạy công cụ xử lý không gian.
 Find any command by name (Ctrl+K).	Tìm bất kỳ lệnh nào theo tên (Ctrl+K).
 Find Tools	Tìm công cụ
+Finish Tool Run	Hoàn tất chạy công cụ
 Fixed Zoom In	Phóng to cố định
 Fixed Zoom Out	Thu nhỏ cố định
 Folders	Thư mục
@@ -342,6 +343,8 @@ Line width	Độ rộng đường
 LineString	LineString
 List Commands	Liệt kê lệnh
 Lit	Sáng
+Load GeoLibre tools	Tải công cụ GeoLibre
+Loading the GeoLibre tools…	Đang tải công cụ GeoLibre…
 Locate	Định vị
 Locate GeoLibre Runner	Tìm trình chạy GeoLibre
 Locate the GeoLibre runner	Tìm trình chạy GeoLibre
@@ -434,6 +437,7 @@ Outline color	Màu viền
 Outline width	Độ rộng viền
 Output	Đầu ra
 Output Name	Tên đầu ra
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Hơn 1.000 công cụ raster, vector, LiDAR, thủy văn và địa hình chạy trong trình duyệt, chỉ cần tải một lần khoảng 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Hơn 1.000 công cụ raster, vector, LiDAR, thủy văn và địa hình, qua một bản tải tùy chọn khoảng 20 MB.
 Overlay	Chồng lớp
 Pan (Explore) · any tool	Di chuyển (Khám phá) · mọi công cụ
@@ -499,6 +503,7 @@ Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Tương
 Robinson	Robinson
 Run	Chạy
 Run Tool	Chạy công cụ
+Running…	Đang chạy…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS là GIS máy tính để bàn mã nguồn mở viết hoàn toàn bằng Rust. Ribbon của nó theo quy trình GIS máy tính để bàn quen thuộc; mọi thao tác đều là một lệnh mà bạn cũng có thể chạy từ dòng lệnh.
 RustGIS project	Dự án RustGIS

@@ -167,43 +167,18 @@ pub fn manifests() -> Result<Vec<Value>, String> {
     }
 }
 
-/// A parameter value as the runner's `--key=value` text.
-pub fn arg_text(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
-
-/// What a run printed: its messages, and the structured outputs (the last line, JSON).
-pub struct Ran {
-    pub messages: Vec<String>,
-    pub outputs: serde_json::Map<String, Value>,
-}
-
-/// Runs one tool in `dir`. The error carries what the tool wrote to stderr.
-pub fn run(id: &str, args: &[(String, Value)], dir: &Path) -> Result<Ran, String> {
+/// Runs one tool in `dir` with `argv` (`--name=value` strings); returns the lines it printed.
+/// The error carries what the tool wrote to stderr.
+pub fn run(id: &str, argv: &[String], dir: &Path) -> Result<Vec<String>, String> {
     let (exe, _) = find().ok_or("the GeoLibre runner isn't installed")?;
     let mut c = command(&exe);
-    c.current_dir(dir).stdin(Stdio::null()).arg(id);
-    for (k, v) in args {
-        c.arg(format!("--{k}={}", arg_text(v)));
-    }
+    c.current_dir(dir).stdin(Stdio::null()).arg(id).args(argv);
     let out = c.output().map_err(|e| format!("{}: {e}", exe.display()))?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         let err = err.trim();
         let err = if err.is_empty() { "the tool stopped unexpectedly" } else { err };
         return Err(err.lines().take(20).collect::<Vec<_>>().join("\n"));
     }
-    let mut lines: Vec<&str> = stdout.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-    let outputs = match lines.last().map(|l| serde_json::from_str::<Value>(l)) {
-        Some(Ok(Value::Object(m))) => {
-            lines.pop();
-            m
-        }
-        _ => serde_json::Map::new(),
-    };
-    Ok(Ran { messages: lines.into_iter().take(40).map(str::to_string).collect(), outputs })
+    Ok(String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect())
 }

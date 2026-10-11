@@ -259,6 +259,7 @@ Find a place by coordinates.	좌표로 장소를 찾습니다.
 Find and run geoprocessing tools.	지오프로세싱 도구를 찾아 실행합니다.
 Find any command by name (Ctrl+K).	이름으로 명령을 찾습니다(Ctrl+K).
 Find Tools	도구 찾기
+Finish Tool Run	도구 실행 완료
 Fixed Zoom In	고정 확대
 Fixed Zoom Out	고정 축소
 Folders	폴더
@@ -342,6 +343,8 @@ Line width	선 두께
 LineString	LineString
 List Commands	명령 목록
 Lit	밝은 면
+Load GeoLibre tools	GeoLibre 도구 불러오기
+Loading the GeoLibre tools…	GeoLibre 도구를 불러오는 중…
 Locate	위치 찾기
 Locate GeoLibre Runner	GeoLibre 실행기 찾기
 Locate the GeoLibre runner	GeoLibre 실행기 찾기
@@ -434,6 +437,7 @@ Outline color	외곽선 색상
 Outline width	외곽선 두께
 Output	출력
 Output Name	출력 이름
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	브라우저에서 실행되는 래스터, 벡터, LiDAR, 수문, 지형 도구 1,000개 이상 (최초 1회 약 25MB 다운로드).
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	래스터, 벡터, LiDAR, 수문, 지형 도구 1,000개 이상 (약 20MB의 선택적 다운로드).
 Overlay	중첩
 Pan (Explore) · any tool	이동(탐색) · 모든 도구
@@ -499,6 +503,7 @@ Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	리본 
 Robinson	로빈슨 도법
 Run	실행
 Run Tool	도구 실행
+Running…	실행 중…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS는 순수 Rust로 작성된 오픈 소스 데스크톱 GIS입니다. 리본은 익숙한 데스크톱 GIS 워크플로를 따르며, 모든 작업은 명령줄에서도 실행할 수 있는 명령입니다.
 RustGIS project	RustGIS 프로젝트

@@ -167,8 +167,12 @@ toolboxes, and Find Tools searches them.
   `gp.tools` lists every tool's parameters, `gp.geolibre` shows the runner in use and
   `gp.setGeolibre={"path":"…"}` picks one.
 
-The web app doesn't include them: RustGIS turns this integration on only in the desktop app
-and the command line.
+In the web app, click **Load GeoLibre tools** in the Geoprocessing pane instead. RustGIS
+loads geolibre-rust's WebAssembly runner (the `geolibre-wasm` package, from jsDelivr, about
+25 MB the first time, then from the browser's cache) and the tools run in the page, in an
+in-memory folder: nothing is uploaded. The web app remembers this and loads them again on your
+next visit. Tools that read files by path (LiDAR files, for instance) need the desktop app,
+since a web page has no file system.
 
 RustGIS waits while a tool runs, so a long run on a large raster or point cloud keeps the
 window busy until it finishes.

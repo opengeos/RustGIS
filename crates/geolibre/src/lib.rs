@@ -19,11 +19,15 @@
 //! like any program the user installs, so a tool could write elsewhere if asked to.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod install;
+#[cfg(not(target_arch = "wasm32"))]
+mod native;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod runner;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use rustgis_analysis::{Inputs, Output, OutputLayer, ParamKind, ParamSpec, ToolResult, ToolSpec};
@@ -42,10 +46,27 @@ pub fn register() {
 
 /// Uses `exe` as the runner (`None`: look in the usual places), and reloads the tool list.
 /// Returns the runner in use and its version.
-pub fn set_runner(exe: Option<PathBuf>) -> Result<Option<(PathBuf, String)>, String> {
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_runner(exe: Option<std::path::PathBuf>) -> Result<Option<(std::path::PathBuf, String)>, String> {
     let found = runner::choose(exe)?;
     rustgis_analysis::reload_external();
     Ok(found)
+}
+
+/// Manifests given directly (the browser's runner lists them asynchronously), used instead of
+/// asking the native runner.
+static MANIFESTS: Mutex<Option<Vec<Value>>> = Mutex::new(None);
+
+/// Uses `manifests` (the JSON array `geolibre manifests` prints) for the tool list, and reloads
+/// it. This is how the browser build gets its tools.
+pub fn set_manifests(json: &str) -> Result<usize, String> {
+    let v: Vec<Value> = serde_json::from_str(json).map_err(|e| format!("unexpected manifests: {e}"))?;
+    let n = v.len();
+    if let Ok(mut m) = MANIFESTS.lock() {
+        *m = Some(v);
+    }
+    rustgis_analysis::reload_external();
+    Ok(n)
 }
 
 /// What a parameter is for.
@@ -127,12 +148,25 @@ fn label_of(name: &str) -> String {
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
-/// Builds every tool's spec from the runner's manifests (none without a runner).
+/// The manifests: given directly, else the native runner's (none without one).
+fn manifests() -> Vec<Value> {
+    if let Some(m) = MANIFESTS.lock().ok().and_then(|m| m.clone()) {
+        return m;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        runner::manifests().unwrap_or_else(|e| {
+            log::info!("GeoLibre tools: {e}");
+            Vec::new()
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    Vec::new()
+}
+
+/// Builds every tool's spec from the manifests (none without them).
 fn specs() -> Vec<ToolSpec> {
-    let manifests = runner::manifests().unwrap_or_else(|e| {
-        log::info!("GeoLibre tools: {e}");
-        Vec::new()
-    });
+    let manifests = manifests();
     let mut meta = HashMap::new();
     let mut out: Vec<ToolSpec> = manifests
         .iter()
@@ -228,50 +262,6 @@ fn spec_of(m: &Value) -> Option<(ToolSpec, Meta)> {
     Some((spec, Meta { category, params: meta }))
 }
 
-/// A scratch folder for one run, removed afterwards.
-struct Scratch {
-    dir: PathBuf,
-    /// Staged inputs so far, so each gets its own file name.
-    staged: std::cell::Cell<usize>,
-}
-
-impl Scratch {
-    /// A new, empty folder: never one that already exists (left over, or made by someone else
-    /// on a shared machine), so no old file can pass for a tool's output.
-    fn new() -> Result<Scratch, String> {
-        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
-        let mut last = None;
-        for _ in 0..16 {
-            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let dir = std::env::temp_dir().join(format!("rustgis-gp-{}-{nanos:x}-{n}", std::process::id()));
-            match std::fs::create_dir(&dir) {
-                Ok(()) => return Ok(Scratch { dir, staged: std::cell::Cell::new(0) }),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
-                Err(e) => return Err(format!("can't create a scratch folder: {e}")),
-            }
-        }
-        Err(format!("can't create a scratch folder: {}", last.map(|e| e.to_string()).unwrap_or_default()))
-    }
-}
-
-impl Scratch {
-    /// A new file name for a staged input. Numbered, because two layer names can map to the
-    /// same safe name (`Roads 2020` and `Roads_2020`, or any two non-ASCII names), and one
-    /// file must never replace another.
-    fn input(&self, name: &str, ext: &str) -> PathBuf {
-        let n = self.staged.get();
-        self.staged.set(n + 1);
-        self.dir.join(format!("in{n}-{}.{ext}", safe(name)))
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
 /// `g` with every point converted by `f`, or `None` when a point can't be (rather than
 /// geometry with null coordinates).
 fn convert(g: &Geometry, f: impl Fn(Coord) -> Option<Coord>) -> Option<Geometry> {
@@ -318,9 +308,9 @@ fn working_crs(rasters: &[Crs], vectors: &[Extent]) -> Crs {
     Crs::from_epsg(if c.y >= 0.0 { 32600 + zone } else { 32700 + zone }).unwrap_or(Crs::LonLat)
 }
 
-/// A vector layer (its selection, if any) as GeoJSON in `crs`; returns how many features'
-/// geometry couldn't be converted (they're written without geometry).
-fn write_vector(ds: &Dataset, rows: &[usize], crs: Crs, tf: &Transformer, path: &Path) -> Result<usize, String> {
+/// A vector layer (its selection, if any) as GeoJSON in `crs`, and how many features' geometry
+/// couldn't be converted (they're written without geometry).
+fn vector_bytes(ds: &Dataset, rows: &[usize], crs: Crs, tf: &Transformer) -> Result<(Vec<u8>, usize), String> {
     let mut out = ds.clone();
     if !rows.is_empty() {
         out.features = rows.iter().filter_map(|&r| ds.features.get(r).cloned()).collect();
@@ -333,56 +323,128 @@ fn write_vector(ds: &Dataset, rows: &[usize], crs: Crs, tf: &Transformer, path: 
         // The legacy GeoJSON 2008 `crs` member, which the suite's reader honours.
         o.insert("crs".into(), json!({"type": "name", "properties": {"name": format!("urn:ogc:def:crs:EPSG::{}", crs.epsg())}}));
     }
-    let text = serde_json::to_string(&json).map_err(|e| e.to_string())?;
-    std::fs::write(path, text).map_err(|e| format!("can't write {}: {e}", path.display()))?;
-    Ok(lost)
+    Ok((serde_json::to_vec(&json).map_err(|e| e.to_string())?, lost))
 }
 
-/// Writes one input (a layer by name, or a file path) to the scratch folder; returns its path.
-/// Problems that don't stop the run go to `notes`.
-fn stage(
-    inputs: &dyn Inputs,
-    value: &str,
-    data: Data,
+/// A file a tool argument refers to.
+#[derive(Clone, Debug)]
+enum FileRef {
+    /// A staged input or an output, by file name in the run's working folder.
+    Work(String),
+    /// A file the user named, used where it is (native only).
+    Path(String),
+}
+
+/// A tool argument.
+#[derive(Clone, Debug)]
+enum Arg {
+    Files(Vec<FileRef>),
+    Value(Value),
+}
+
+/// A run, prepared: the input files to stage, the arguments, and what to do with the outputs.
+/// [`prepare`] makes it from the map's layers; a runner (the native `geolibre` program, or the
+/// browser's WASI runner) stages the files in a working folder, runs the tool there, and hands
+/// the new files and its printed lines to [`finish`].
+#[derive(Clone, Debug)]
+pub struct Job {
+    /// The runner's tool id (without [`PREFIX`]).
+    pub tool: String,
+    /// The tool's display name.
+    pub name: String,
+    /// Input files to place in the working folder, by file name.
+    pub files: Vec<(String, Vec<u8>)>,
+    args: Vec<(String, Arg)>,
+    /// (file name, layer name) for each declared output.
+    outputs: Vec<(String, String)>,
     crs: Crs,
-    tf: &Transformer,
-    scratch: &Scratch,
-    notes: &mut Vec<String>,
-) -> Result<String, String> {
+    /// Problems found while staging that don't stop the run.
+    notes: Vec<String>,
+}
+
+impl Job {
+    /// The arguments, with working-folder files under `dir` (a scratch folder natively, `/work`
+    /// in the browser), as `(name, value)` pairs for `--name=value`.
+    pub fn args(&self, dir: &str) -> Vec<(String, Value)> {
+        let dir = dir.trim_end_matches(['/', '\\']);
+        let sep = if dir.contains('\\') && !dir.contains('/') { '\\' } else { '/' };
+        self.args
+            .iter()
+            .map(|(k, a)| {
+                let v = match a {
+                    Arg::Value(v) => v.clone(),
+                    Arg::Files(files) => Value::String(
+                        files
+                            .iter()
+                            .map(|f| match f {
+                                FileRef::Work(n) => format!("{dir}{sep}{n}"),
+                                FileRef::Path(p) => p.clone(),
+                            })
+                            .collect::<Vec<_>>()
+                            .join(";"),
+                    ),
+                };
+                (k.clone(), v)
+            })
+            .collect()
+    }
+
+    /// The arguments as `--name=value` strings (see [`Job::args`]).
+    pub fn argv(&self, dir: &str) -> Vec<String> {
+        self.args(dir).into_iter().map(|(k, v)| format!("--{k}={}", arg_text(&v))).collect()
+    }
+
+    fn stage(&mut self, name: &str, ext: &str, bytes: Vec<u8>) -> FileRef {
+        // Numbered, because two layer names can map to the same safe name (`Roads 2020` and
+        // `Roads_2020`, or any two non-ASCII names), and one file must never replace another.
+        let file = format!("in{}-{}.{ext}", self.files.len(), safe(name));
+        self.files.push((file.clone(), bytes));
+        FileRef::Work(file)
+    }
+}
+
+/// A parameter value as the runner's `--key=value` text.
+pub fn arg_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Stages one input (a layer by name, or a file path) for `job`.
+fn stage(inputs: &dyn Inputs, value: &str, data: Data, tf: &Transformer, job: &mut Job) -> Result<FileRef, String> {
     if let Some(r) = inputs.raster(value) {
-        if let Some(p) = r.path.filter(|p| Path::new(p).is_file()) {
-            return Ok(p.to_string());
+        if let Some(p) = r.path.filter(|p| on_disk(p)) {
+            return Ok(FileRef::Path(p.to_string()));
         }
         if let Some((file_name, bytes)) = r.embedded {
             // The tools tell formats apart by extension.
             let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).map(safe).unwrap_or_else(|| "tif".into());
-            let path = scratch.input(value, &ext);
-            std::fs::write(&path, bytes).map_err(|e| format!("can't write {}: {e}", path.display()))?;
-            return Ok(path.display().to_string());
+            return Ok(job.stage(value, &ext, bytes.to_vec()));
         }
         let bytes = rustgis_data::raster::geotiff::write(r.raster, 0).map_err(|e| format!("{value}: {e}"))?;
-        let path = scratch.input(value, "tif");
-        std::fs::write(&path, bytes).map_err(|e| format!("can't write {}: {e}", path.display()))?;
-        return Ok(path.display().to_string());
+        return Ok(job.stage(value, "tif", bytes));
     }
     if let Some(ds) = inputs.dataset(value) {
         if data == Data::Table || (ds.features.iter().all(|f| f.geometry.is_none()) && data != Data::Vector) {
-            let path = scratch.input(value, "csv");
             let text = rustgis_data::io::to_csv(ds).map_err(|e| format!("{value}: {e}"))?;
-            std::fs::write(&path, text).map_err(|e| format!("can't write {}: {e}", path.display()))?;
-            return Ok(path.display().to_string());
+            return Ok(job.stage(value, "csv", text.into_bytes()));
         }
-        let path = scratch.input(value, "geojson");
-        let lost = write_vector(ds, inputs.selection(value), crs, tf, &path)?;
+        let (bytes, lost) = vector_bytes(ds, inputs.selection(value), job.crs, tf)?;
         if lost > 0 {
-            notes.push(format!("{value}: {lost} features lie outside the working coordinate system and were passed without geometry"));
+            job.notes.push(format!("{value}: {lost} features lie outside the working coordinate system and were passed without geometry"));
         }
-        return Ok(path.display().to_string());
+        return Ok(job.stage(value, "geojson", bytes));
     }
-    if Path::new(value).exists() {
-        return Ok(value.to_string());
+    if on_disk(value) {
+        return Ok(FileRef::Path(value.to_string()));
     }
     Err(format!("there is no layer or file named '{value}'"))
+}
+
+/// Whether `p` names something on disk (never in the browser, which has no file system).
+fn on_disk(p: &str) -> bool {
+    !cfg!(target_arch = "wasm32") && Path::new(p).exists()
 }
 
 /// The extension an output is written with.
@@ -403,96 +465,34 @@ fn output_ext(p: &MetaParam, meta: &Meta) -> &'static str {
     }
 }
 
+/// A number as JSON, whole numbers as integers: the runner reads `--n=3.0` as a float, which a
+/// tool expecting an integer (a filter size, a count) rejects.
+fn number(n: f64) -> Value {
+    if n.fract() == 0.0 && n.abs() < 9.0e15 { json!(n as i64) } else { json!(n) }
+}
+
 /// A form value as the JSON the tool expects (the form sends text).
 fn option_value(v: &Value, data: Data) -> Value {
     match (v.as_str().map(str::trim), data) {
         (Some("true"), Data::Bool) => Value::Bool(true),
         (Some("false"), Data::Bool) => Value::Bool(false),
-        (Some(s), Data::Number) => s.parse::<f64>().ok().filter(|n| n.is_finite()).map(|n| json!(n)).unwrap_or_else(|| v.clone()),
+        (Some(s), Data::Number) => s.parse::<f64>().ok().filter(|n| n.is_finite()).map(number).unwrap_or_else(|| v.clone()),
+        (None, Data::Number) => v.as_f64().filter(|n| n.is_finite()).map(number).unwrap_or_else(|| v.clone()),
         _ => v.clone(),
     }
 }
 
-/// Coordinates that can't be longitude/latitude (a tool kept the working coordinate system).
-fn looks_projected(ds: &Dataset) -> bool {
-    let e = ds.extent();
-    !e.is_empty() && (e.min_x < -180.5 || e.max_x > 180.5 || e.min_y < -90.5 || e.max_y > 90.5)
-}
-
-/// Reads one output file back as a layer, table or message.
-fn load(path: &Path, layer_name: &str, crs: Crs, tf: &Transformer, messages: &mut Vec<String>) -> Option<OutputLayer> {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    let file_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("output").to_string();
-    match ext.as_str() {
-        "tif" | "tiff" | "asc" => {
-            let bytes = std::fs::read(path).ok()?;
-            match rustgis_data::raster::read_bytes(&file_name, &bytes) {
-                Ok(_) => Some(OutputLayer::Raster { name: layer_name.to_string(), file_name, bytes }),
-                Err(e) => {
-                    messages.push(format!("{layer_name}: {e}"));
-                    None
-                }
-            }
-        }
-        "geojson" | "json" | "shp" | "csv" => match rustgis_data::io::read_path(path) {
-            Ok((mut ds, _)) => {
-                ds.name = layer_name.to_string();
-                if crs != Crs::LonLat && looks_projected(&ds) {
-                    let lost = convert_features(&mut ds, |c| tf.to_lonlat(c));
-                    if lost > 0 {
-                        messages.push(format!(
-                            "{layer_name}: {lost} features couldn't be converted to longitude/latitude and have no geometry"
-                        ));
-                    }
-                }
-                Some(if ds.features.iter().all(|f| f.geometry.is_none()) { OutputLayer::Table(ds) } else { OutputLayer::Vector(ds) })
-            }
-            // A JSON report rather than GeoJSON: show it.
-            Err(_) if ext == "json" => {
-                text_message(path, layer_name, messages);
-                None
-            }
-            Err(e) => {
-                messages.push(format!("{layer_name}: {e}"));
-                None
-            }
-        },
-        "txt" | "html" | "htm" => {
-            text_message(path, layer_name, messages);
-            None
-        }
-        _ => {
-            messages.push(format!("{layer_name}: wrote a .{ext} file, which RustGIS can't open as a layer"));
-            None
-        }
-    }
-}
-
-/// The start of a text or HTML report as a message.
-fn text_message(path: &Path, layer_name: &str, messages: &mut Vec<String>) {
-    let Ok(text) = std::fs::read_to_string(path) else { return };
-    let mut plain = String::new();
-    let mut in_tag = false;
-    for c in text.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => plain.push(c),
-            _ => {}
-        }
-    }
-    let lines: Vec<&str> = plain.lines().map(str::trim).filter(|l| !l.is_empty()).take(30).collect();
-    if !lines.is_empty() {
-        messages.push(format!("{layer_name}:\n{}", lines.join("\n")));
-    }
-}
-
-fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResult, String> {
+/// Prepares a run of `spec` (a GeoLibre tool) on the map's layers, with `params` already
+/// resolved (defaults filled, required ones present: see `rustgis_analysis::resolve_params`).
+pub fn prepare(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<Job, String> {
     let id = spec.id.strip_prefix(PREFIX).ok_or("not a GeoLibre tool")?;
     let meta =
         META.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(id)).cloned()).ok_or_else(|| format!("{}: unknown tool", spec.name))?;
-    let meta = &meta;
-    let scratch = Scratch::new()?;
+    prepare_with(spec, &meta, inputs, params)
+}
+
+fn prepare_with(spec: &ToolSpec, meta: &Meta, inputs: &dyn Inputs, params: &Value) -> Result<Job, String> {
+    let id = spec.id.strip_prefix(PREFIX).ok_or("not a GeoLibre tool")?;
     let value_of = |name: &str| params.get(name).filter(|v| !v.is_null() && v.as_str() != Some(""));
     let names = |v: &Value| -> Vec<String> {
         v.as_str().map(|s| s.split(';').map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).collect()).unwrap_or_default()
@@ -512,62 +512,159 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
     }
     let crs = working_crs(&raster_crs, &vector_extents);
     let tf = crs.transformer()?;
+    let mut job = Job {
+        tool: id.to_string(),
+        name: spec.name.to_string(),
+        files: Vec::new(),
+        args: Vec::new(),
+        outputs: Vec::new(),
+        crs,
+        notes: Vec::new(),
+    };
 
-    let mut args: Vec<(String, Value)> = Vec::new();
-    let mut notes = Vec::new();
-    let mut outputs = Vec::new();
     let n_outputs = meta.params.iter().filter(|p| p.role == Role::Output).count();
     for p in &meta.params {
         match p.role {
             Role::Input => {
                 let Some(v) = value_of(&p.name) else { continue };
-                let paths =
-                    names(v).iter().map(|n| stage(inputs, n, p.data, crs, &tf, &scratch, &mut notes)).collect::<Result<Vec<_>, _>>()?;
-                if !paths.is_empty() {
-                    args.push((p.name.clone(), Value::String(paths.join(";"))));
+                let files = names(v).iter().map(|n| stage(inputs, n, p.data, &tf, &mut job)).collect::<Result<Vec<_>, _>>()?;
+                if !files.is_empty() {
+                    job.args.push((p.name.clone(), Arg::Files(files)));
                 }
             }
             Role::Output => {
-                let path = scratch.dir.join(format!("{}.{}", safe(&p.name), output_ext(p, meta)));
-                args.push((p.name.clone(), Value::String(path.display().to_string())));
+                let file = format!("{}.{}", safe(&p.name), output_ext(p, meta));
+                job.args.push((p.name.clone(), Arg::Files(vec![FileRef::Work(file.clone())])));
                 let name =
                     if n_outputs > 1 { format!("{} {}", spec.name, label_of(&p.name).to_lowercase()) } else { spec.name.to_string() };
-                outputs.push((path, name));
+                job.outputs.push((file, name));
             }
             Role::Option => {
                 if let Some(v) = value_of(&p.name) {
-                    args.push((p.name.clone(), option_value(v, p.data)));
+                    job.args.push((p.name.clone(), Arg::Value(option_value(v, p.data))));
                 }
             }
         }
     }
+    Ok(job)
+}
 
-    let ran = runner::run(id, &args, &scratch.dir).map_err(|e| format!("{}: {e}", spec.name))?;
-    let mut messages = notes;
-    messages.extend(ran.messages);
+/// Coordinates that can't be longitude/latitude (a tool kept the working coordinate system).
+fn looks_projected(ds: &Dataset) -> bool {
+    let e = ds.extent();
+    !e.is_empty() && (e.min_x < -180.5 || e.max_x > 180.5 || e.min_y < -90.5 || e.max_y > 90.5)
+}
+
+/// Reads one output file back as a layer, table or message. `dir` is the native working folder,
+/// for formats read with their sidecar files (shapefiles).
+fn load(file_name: &str, bytes: &[u8], layer_name: &str, job: &Job, dir: Option<&Path>, messages: &mut Vec<String>) -> Option<OutputLayer> {
+    let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "tif" | "tiff" | "asc" => match rustgis_data::raster::read_bytes(file_name, bytes) {
+            Ok(_) => Some(OutputLayer::Raster { name: layer_name.to_string(), file_name: file_name.to_string(), bytes: bytes.to_vec() }),
+            Err(e) => {
+                messages.push(format!("{layer_name}: {e}"));
+                None
+            }
+        },
+        "geojson" | "json" | "shp" | "csv" => {
+            let read = match (ext.as_str(), dir) {
+                ("shp", Some(d)) => rustgis_data::io::read_path(&d.join(file_name)),
+                _ => rustgis_data::io::read_bytes(file_name, bytes),
+            };
+            match read {
+                Ok((mut ds, _)) => {
+                    ds.name = layer_name.to_string();
+                    if job.crs != Crs::LonLat
+                        && looks_projected(&ds)
+                        && let Ok(tf) = job.crs.transformer()
+                    {
+                        let lost = convert_features(&mut ds, |c| tf.to_lonlat(c));
+                        if lost > 0 {
+                            messages.push(format!(
+                                "{layer_name}: {lost} features couldn't be converted to longitude/latitude and have no geometry"
+                            ));
+                        }
+                    }
+                    Some(if ds.features.iter().all(|f| f.geometry.is_none()) { OutputLayer::Table(ds) } else { OutputLayer::Vector(ds) })
+                }
+                // A JSON report rather than GeoJSON: show it.
+                Err(_) if ext == "json" => {
+                    text_message(bytes, layer_name, messages);
+                    None
+                }
+                Err(e) => {
+                    messages.push(format!("{layer_name}: {e}"));
+                    None
+                }
+            }
+        }
+        "txt" | "html" | "htm" => {
+            text_message(bytes, layer_name, messages);
+            None
+        }
+        _ => {
+            messages.push(format!("{layer_name}: wrote a .{ext} file, which RustGIS can't open as a layer"));
+            None
+        }
+    }
+}
+
+/// The start of a text or HTML report as a message.
+fn text_message(bytes: &[u8], layer_name: &str, messages: &mut Vec<String>) {
+    let text = String::from_utf8_lossy(bytes);
+    let mut plain = String::new();
+    let mut in_tag = false;
+    for c in text.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => plain.push(c),
+            _ => {}
+        }
+    }
+    let lines: Vec<&str> = plain.lines().map(str::trim).filter(|l| !l.is_empty()).take(30).collect();
+    if !lines.is_empty() {
+        messages.push(format!("{layer_name}:\n{}", lines.join("\n")));
+    }
+}
+
+/// Turns a finished run into layers and messages. `files` are the new files in the working
+/// folder (by file name), `lines` what the runner printed (its last line, if JSON, holds the
+/// tool's structured results), `dir` the native working folder if there is one.
+pub fn finish(job: &Job, files: &[(String, Vec<u8>)], lines: &[String], dir: Option<&Path>) -> ToolResult {
+    let mut lines: Vec<&str> = lines.iter().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    let outputs = match lines.last().map(|l| serde_json::from_str::<Value>(l)) {
+        Some(Ok(Value::Object(m))) => {
+            lines.pop();
+            m
+        }
+        _ => serde_json::Map::new(),
+    };
+    let mut messages = job.notes.clone();
+    messages.extend(lines.into_iter().take(40).map(str::to_string));
 
     let mut layers = Vec::new();
-    for (path, name) in &outputs {
+    for (file, name) in &job.outputs {
         // A tool may pick its own extension (a shapefile for a vector output).
-        let found = if path.is_file() {
-            Some(path.clone())
-        } else {
-            let stem = path.file_stem().map(|s| s.to_os_string());
-            std::fs::read_dir(&scratch.dir).ok().into_iter().flatten().filter_map(|e| e.ok().map(|e| e.path())).find(|f| {
-                f.file_stem().map(|s| s.to_os_string()) == stem && f.extension().is_some_and(|e| e != "dbf" && e != "shx" && e != "prj")
+        let stem = Path::new(file).file_stem();
+        let found = files.iter().find(|(f, _)| f == file).or_else(|| {
+            files.iter().find(|(f, _)| {
+                let p = Path::new(f);
+                p.file_stem() == stem && p.extension().is_some_and(|e| e != "dbf" && e != "shx" && e != "prj")
             })
-        };
-        if let Some(f) = found
-            && let Some(l) = load(&f, name, crs, &tf, &mut messages)
+        });
+        if let Some((f, bytes)) = found
+            && let Some(l) = load(f, bytes, name, job, dir, &mut messages)
         {
             layers.push(l);
         }
     }
-    // Statistics and other results the tool returns rather than writes.
-    let scratch_dir = scratch.dir.display().to_string();
-    for (k, v) in &ran.outputs {
+    // Statistics and other results the tool returns rather than writes (paths of the outputs,
+    // which came back as layers, are left out).
+    for (k, v) in &outputs {
         let text = match v {
-            Value::String(s) if s.starts_with(&scratch_dir) => continue,
+            Value::String(s) if job.outputs.iter().any(|(f, _)| s.ends_with(f.as_str())) => continue,
             Value::String(s) => s.clone(),
             other => other.to_string(),
         };
@@ -575,9 +672,24 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
         messages.push(format!("{}: {text}", label_of(k)));
     }
     if layers.is_empty() && messages.is_empty() {
-        messages.push(format!("{} finished without output", spec.name));
+        messages.push(format!("{} finished without output", job.name));
     }
-    Ok(ToolResult { output: Output::Layers(layers), messages })
+    ToolResult { output: Output::Layers(layers), messages }
+}
+
+/// Runs a tool to completion: natively through the `geolibre` program; in the browser the
+/// runner is asynchronous, so the app uses [`prepare`] and [`finish`] around it instead.
+fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResult, String> {
+    let job = prepare(spec, inputs, params)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        native::run(&job).map_err(|e| format!("{}: {e}", spec.name))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = job;
+        Err(format!("{}: in the browser, run GeoLibre tools from the Geoprocessing pane", spec.name))
+    }
 }
 
 #[cfg(test)]

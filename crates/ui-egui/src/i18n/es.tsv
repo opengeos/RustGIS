@@ -259,6 +259,7 @@ Find a place by coordinates.	Buscar un lugar por coordenadas.
 Find and run geoprocessing tools.	Buscar y ejecutar herramientas de geoprocesamiento.
 Find any command by name (Ctrl+K).	Buscar cualquier comando por su nombre (Ctrl+K).
 Find Tools	Buscar herramientas
+Finish Tool Run	Finalizar ejecución de herramienta
 Fixed Zoom In	Acercar fijo
 Fixed Zoom Out	Alejar fijo
 Folders	Carpetas
@@ -342,6 +343,8 @@ Line width	Ancho de línea
 LineString	LineString
 List Commands	Listar comandos
 Lit	Iluminado
+Load GeoLibre tools	Cargar herramientas de GeoLibre
+Loading the GeoLibre tools…	Cargando las herramientas de GeoLibre…
 Locate	Localizar
 Locate GeoLibre Runner	Localizar el ejecutor de GeoLibre
 Locate the GeoLibre runner	Localizar el ejecutor de GeoLibre
@@ -434,6 +437,7 @@ Outline color	Color del contorno
 Outline width	Ancho del contorno
 Output	Salida
 Output Name	Nombre de salida
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Más de 1.000 herramientas ráster, vectoriales, LiDAR, hidrológicas y de terreno que se ejecutan en el navegador, tras una única descarga de unos 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Más de 1.000 herramientas ráster, vectoriales, LiDAR, hidrológicas y de terreno, en una descarga opcional de unos 20 MB.
 Overlay	Superposición
 Pan (Explore) · any tool	Desplazar (Explorar) · cualquier herramienta
@@ -499,6 +503,7 @@ Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Paridad
 Robinson	Robinson
 Run	Ejecutar
 Run Tool	Ejecutar herramienta
+Running…	Ejecutando…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS es un SIG de escritorio de código abierto escrito en Rust puro. Su cinta sigue el flujo de trabajo habitual de los SIG de escritorio; cada acción es un comando que también puede ejecutar desde la línea de comandos.
 RustGIS project	Proyecto de RustGIS
