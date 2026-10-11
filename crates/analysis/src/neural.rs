@@ -334,6 +334,11 @@ pub fn train(
 /// pixel's probability of that class.
 pub fn classify(r: &Raster, model: &Mlp, nodata: f32) -> Result<(Vec<f32>, Vec<f32>), String> {
     model.validate()?;
+    // A large model on a large raster is refused rather than run for minutes.
+    let weights: usize = model.layers.iter().map(|l| l.w.len() + l.b.len()).sum();
+    if f64::from(r.width) * f64::from(r.height) * weights as f64 > 4.0 * MAX_WORK {
+        return Err("that model is too large for this raster; use a smaller model or clip the raster first".into());
+    }
     if let Some(b) = model.bands.iter().find(|b| **b >= r.bands.len()) {
         return Err(format!("{} has no band {}", r.name, b + 1));
     }

@@ -33,6 +33,8 @@ pub const KINDS: &[(&str, &str, &str)] = &[
 
 /// Most features a shared web map, scene or link chart carries.
 const MAX_FEATURES: usize = 200_000;
+/// Largest glTF geometry buffer of a web scene.
+const MAX_SCENE_BYTES: usize = 512 << 20;
 /// Most nodes in a link chart.
 const MAX_NODES: usize = 3000;
 /// Most shared items and data stores kept.
@@ -320,14 +322,14 @@ fn upload(s: &mut Session, p: &Value) -> CmdResult {
     }
     .clone();
     let dest = PathBuf::from(&store.path).join(&file);
-    if Path::new(src).canonicalize().ok() == dest.canonicalize().ok() && dest.exists() {
-        return Err("the file is already in that data store".into());
+    // A file of that name in the store (another upload, or a share) is never overwritten.
+    if dest.exists() {
+        return Err(format!("{} already has a file named {file}", store.name));
     }
     let bytes = std::fs::copy(src, &dest).map_err(|e| format!("{src}: {e}"))?;
     let t = now();
     let id = s.project.shared.iter().map(|i| i.id).max().unwrap_or(0).saturating_add(1);
     let path = dest.display().to_string();
-    s.project.shared.retain(|i| i.path != path);
     s.project.shared.push(SharedItem {
         id,
         kind: "file".into(),
@@ -722,6 +724,13 @@ fn gltf(m: &Map) -> Result<Vec<u8>, String> {
             }
             let Some(g) = &ft.geometry else { continue };
             budget -= 1;
+            // The geometry built so far, with the buffer already written, stays under the cap
+            // (checked as it grows, so a few huge polygons can't run away first).
+            let built =
+                tri.values().map(|(p, i)| p.len() * 12 + i.len() * 4).sum::<usize>() + lines.values().map(|v| v.len() * 12).sum::<usize>();
+            if buffer.len() + built > MAX_SCENE_BYTES {
+                return Err("the scene would be too large; share fewer features".into());
+            }
             let sym = l.symbol(row);
             let h = (hf.and_then(|fi| l.dataset.value(row, fi).as_f64()).filter(|v| v.is_finite()).unwrap_or(base_h) * factor)
                 .clamp(0.0, 1e6) as f32;
@@ -850,7 +859,7 @@ fn gltf(m: &Map) -> Result<Vec<u8>, String> {
             meshes.push(json!({"name": l.name, "primitives": primitives}));
             nodes.push(json!({"name": l.name, "mesh": meshes.len() - 1}));
         }
-        if buffer.len() > 512 << 20 {
+        if buffer.len() > MAX_SCENE_BYTES {
             return Err("the scene would be too large; share fewer features".into());
         }
     }
@@ -891,7 +900,8 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<String, String> {
     }
     let find = |n: &str| s.map().layer_by_name(n).or_else(|| s.project.maps.iter().find_map(|m| m.layer_by_name(n)));
     let mut nodes: Vec<Value> = Vec::new();
-    let mut index: HashMap<(String, usize), usize> = HashMap::new();
+    // Nodes by layer (its address: same-named layers in different maps stay apart) and row.
+    let mut index: HashMap<(usize, usize), usize> = HashMap::new();
     let mut links: Vec<Value> = Vec::new();
     let label = |l: &Layer, row: usize| -> String {
         let ds = &l.dataset;
@@ -902,7 +912,10 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<String, String> {
             .or_else(|| ds.fields.iter().position(|f| !f.ty.is_numeric()));
         fi.map(|i| ds.value(row, i).to_string()).unwrap_or_else(|| format!("{} {}", l.name, row + 1))
     };
-    for (gi, r) in rels.iter().enumerate() {
+    'rels: for (gi, r) in rels.iter().enumerate() {
+        if nodes.len() >= MAX_NODES {
+            break;
+        }
         let (Some(o), Some(d)) = (find(&r.origin), find(&r.destination)) else { continue };
         let (Some(ok), Some(dk)) = (o.dataset.field_index(&r.origin_key), d.dataset.field_index(&r.destination_key)) else { continue };
         let mut by_key: HashMap<String, Vec<usize>> = HashMap::new();
@@ -914,10 +927,10 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<String, String> {
             let key = o.dataset.value(orow, ok).to_string();
             let Some(drows) = by_key.get(&key) else { continue };
             if nodes.len() >= MAX_NODES {
-                break;
+                break 'rels;
             }
             let mut node = |l: &Layer, row: usize, nodes: &mut Vec<Value>| -> usize {
-                *index.entry((l.name.clone(), row)).or_insert_with(|| {
+                *index.entry((std::ptr::from_ref(l) as usize, row)).or_insert_with(|| {
                     nodes.push(json!({"name": label(l, row), "layer": l.name, "group": gi}));
                     nodes.len() - 1
                 })
@@ -956,14 +969,16 @@ N.forEach((n,i)=>{{const r=30+Math.sqrt(i)*12;n.x=innerWidth/2+Math.cos(i*2.4)*r
 const ln=E.map(e=>{{const l=document.createElementNS(ns,'line');s.appendChild(l);return l}});
 const deg=N.map(()=>0);E.forEach(e=>{{deg[e.source]++;deg[e.target]++}});
 const cs=N.map((n,i)=>{{const c=document.createElementNS(ns,'circle');c.setAttribute('r',4+Math.min(10,Math.sqrt(deg[i])*2));c.setAttribute('fill','hsl('+(LY.indexOf(n.layer)*137%360)+',60%,50%)');
-const t=document.createElementNS(ns,'title');t.textContent=n.name+' ('+n.layer+')';c.appendChild(t);s.appendChild(c);c.onmousedown=()=>drag=i;return c}});
-let drag=null;onmouseup=()=>drag=null;onmousemove=e=>{{if(drag!==null){{N[drag].x=e.clientX;N[drag].y=e.clientY;N[drag].vx=N[drag].vy=0}}}};
+const t=document.createElementNS(ns,'title');t.textContent=n.name+' ('+n.layer+')';c.appendChild(t);s.appendChild(c);c.onmousedown=()=>{{drag=i;wake()}};return c}});
+let drag=null,running=false;function wake(){{if(!running){{running=true;requestAnimationFrame(tick)}}}}onmouseup=()=>drag=null;onmousemove=e=>{{if(drag!==null){{N[drag].x=e.clientX;N[drag].y=e.clientY;N[drag].vx=N[drag].vy=0}}}};
 function tick(){{const n=N.length,cx=innerWidth/2,cy=innerHeight/2;const k=Math.min(1,600/n);
 for(let i=0;i<n;i++)for(let j=i+1;j<Math.min(n,i+200);j++){{const a=N[i],b=N[j];let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy+.01;const f=400*k/d2;a.vx+=dx*f;a.vy+=dy*f;b.vx-=dx*f;b.vy-=dy*f}}
 E.forEach(e=>{{const a=N[e.source],b=N[e.target];const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)+.01,f=(d-50)*.03;a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f}});
 N.forEach((a,i)=>{{if(i===drag)return;a.vx+=(cx-a.x)*.002;a.vy+=(cy-a.y)*.002;a.vx=Math.max(-15,Math.min(15,a.vx*.8));a.vy=Math.max(-15,Math.min(15,a.vy*.8));a.x+=a.vx;a.y+=a.vy}});
 E.forEach((e,i)=>{{const l=ln[i];l.setAttribute('x1',N[e.source].x);l.setAttribute('y1',N[e.source].y);l.setAttribute('x2',N[e.target].x);l.setAttribute('y2',N[e.target].y)}});
-cs.forEach((c,i)=>{{c.setAttribute('cx',N[i].x);c.setAttribute('cy',N[i].y)}});requestAnimationFrame(tick)}}tick();
+cs.forEach((c,i)=>{{c.setAttribute('cx',N[i].x);c.setAttribute('cy',N[i].y)}});
+// Settled (and not dragged): stop until a node is dragged again.
+const moving=N.reduce((m,a)=>Math.max(m,Math.abs(a.vx),Math.abs(a.vy)),0);if(moving>0.05||drag!==null)requestAnimationFrame(tick);else running=false}}wake();
 </script></body></html>
 "#,
         title = html_escape(title),

@@ -323,7 +323,7 @@ pub fn hosted_bytes(s: &mut Session, p: &Value) -> Result<(Vec<u8>, Value), Stri
             let (col, row) = ((k as u32 % TILE) as f64 + 0.5, (k as u32 / TILE) as f64 + 0.5);
             let m = Coord::new(min_x + col * (max_x - min_x) / f64::from(TILE), max_y - row * (max_y - min_y) / f64::from(TILE));
             let ll = rustgis_geom::merc_to_lonlat(m);
-            let covered = r.pixel_at(ll).is_some_and(|(c, rw)| r.value(0, c, rw).is_some());
+            let covered = r.pixel_at(ll).is_some_and(|(c, rw)| (0..r.band_count()).any(|b| r.value(b, c, rw).is_some()));
             if covered {
                 any = true;
             } else {

@@ -2119,6 +2119,8 @@ fn deep_learning_hosted_imagery_and_sharing() {
     assert!(dir.join("notes.txt").exists());
     let jobs = s.run("share.jobs", &Value::Null).unwrap();
     assert_eq!(jobs["items"].as_array().unwrap().len(), before + 1);
+    // A second file of that name isn't written over the first.
+    assert!(s.run("share.upload", &json!({"path": up.join("notes.txt").to_str().unwrap()})).is_err());
     s.run("share.dataStore", &json!({"remove": "out"})).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }

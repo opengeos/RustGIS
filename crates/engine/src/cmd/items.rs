@@ -552,7 +552,7 @@ fn run_task(s: &mut Session, p: &Value) -> CmdResult {
 /// by looking like a path or URL).
 pub(crate) fn touches_files(command: &str, params: &Value) -> bool {
     const KEYS: &[&str] =
-        &["path", "folder", "dir", "file", "url", "uri", "source", "output", "connection", "database", "data", "text", "poster"];
+        &["path", "folder", "dir", "file", "url", "uri", "source", "output", "connection", "database", "data", "text", "poster", "locator"];
     let reaches = |v: &Value| names_place(v, KEYS, 0);
     let id = command.to_ascii_lowercase();
     let verb = id.split('.').nth(1).unwrap_or("");
