@@ -41,6 +41,8 @@ const MAX_NODES: usize = 3000;
 const MAX_LINKS: usize = 20_000;
 /// Most shared items and data stores kept.
 const MAX_ITEMS: usize = 1000;
+/// Largest file an upload copies.
+const MAX_UPLOAD: u64 = 256 << 20;
 
 /// A finished share: what it was, from what, where it went.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -54,6 +56,10 @@ pub struct SharedItem {
     pub created: f64,
     pub updated: f64,
     pub bytes: usize,
+    /// Written in this session. Items listed by an opened project carry paths from its file,
+    /// so the Manage commands don't write to them until they're shared again.
+    #[serde(skip)]
+    pub this_session: bool,
 }
 
 /// A folder shares are written to when no path is given.
@@ -248,7 +254,7 @@ fn share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
     let shared = &mut s.project.shared;
     let id = match shared.iter_mut().find(|i| i.path == path) {
         Some(i) => {
-            (i.kind, i.name, i.source, i.updated, i.bytes) = (kind.to_string(), name.clone(), source, t, bytes.len());
+            (i.kind, i.name, i.source, i.updated, i.bytes, i.this_session) = (kind.to_string(), name.clone(), source, t, bytes.len(), true);
             i.id
         }
         None => {
@@ -265,6 +271,7 @@ fn share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
                 created: t,
                 updated: t,
                 bytes: bytes.len(),
+                this_session: true,
             });
             id
         }
@@ -282,6 +289,12 @@ fn update_item(s: &mut Session, p: &Value, kind: &str, new_source: Option<&str>)
     }
     .cloned()
     .ok_or_else(|| format!("no shared {} to update", KINDS.iter().find(|k| k.0 == kind).map_or(kind, |k| k.2).to_ascii_lowercase()))?;
+    if !item.this_session {
+        return Err(format!(
+            "'{}' came with the opened project; share it again with Share As (choosing where it goes) before updating it",
+            item.name
+        ));
+    }
     let source = new_source.unwrap_or(&item.source).to_string();
     let q = match kind {
         "webLayer" => json!({"layer": source, "path": item.path}),
@@ -334,7 +347,11 @@ fn upload(s: &mut Session, p: &Value) -> CmdResult {
     }
     // Created new (never through an existing file or link), in the same step as the check; a
     // copy that fails part way is removed, so a retry can write it.
-    let mut from = std::fs::File::open(src).map_err(|e| format!("{src}: {e}"))?;
+    let from = std::fs::File::open(src).map_err(|e| format!("{src}: {e}"))?;
+    if !from.metadata().is_ok_and(|m| m.len() <= MAX_UPLOAD) {
+        return Err(format!("{src}: uploads are at most {} MB", MAX_UPLOAD >> 20));
+    }
+    let mut from = std::io::Read::take(from, MAX_UPLOAD);
     let mut to = std::fs::OpenOptions::new().write(true).create_new(true).open(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     let bytes = match std::io::copy(&mut from, &mut to) {
         Ok(n) => n,
@@ -359,6 +376,7 @@ fn upload(s: &mut Session, p: &Value) -> CmdResult {
         created: t,
         updated: t,
         bytes: bytes as usize,
+        this_session: true,
     });
     Ok(json!({"item": id, "path": path, "bytes": bytes}))
 }

@@ -226,6 +226,9 @@ impl Project {
         self.presentations.truncate(MAX_ITEMS);
         self.notebooks.truncate(MAX_ITEMS);
         self.dl_models.truncate(MAX_ITEMS);
+        self.dl_models.retain(|m| m.model.validate().is_ok());
+        self.shared.truncate(MAX_ITEMS);
+        self.data_stores.truncate(MAX_ITEMS);
         for p in &mut self.presentations {
             p.clamp();
         }

@@ -2123,5 +2123,9 @@ fn deep_learning_hosted_imagery_and_sharing() {
     // A second file of that name isn't written over the first.
     assert!(s.run("share.upload", &json!({"path": up.join("notes.txt").to_str().unwrap()})).is_err());
     s.run("share.dataStore", &json!({"remove": "out"})).unwrap();
+    // Shares listed by an opened project aren't rewritten (their paths come from the file).
+    s.project = Project::from_json(&serde_json::to_string(&s.project).unwrap()).unwrap();
+    let err = s.run("share.saveWebMap", &Value::Null).unwrap_err();
+    assert!(err.contains("came with the opened project"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
