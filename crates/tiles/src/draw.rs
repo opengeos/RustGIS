@@ -176,9 +176,7 @@ pub fn draw(pm: &mut Pixmap, spec: &Spec, opacity: f32, frame: &Frame, labels: b
             LayerKind::Symbol if labels => {
                 let sheet = if layer.has_layout("icon-image") { sprite(&mut out.pending) } else { None };
                 for it in list {
-                    // Later layers place first, as in MapLibre (styles list the most important
-                    // labels last).
-                    collect_labels(&mut out.labels, it, layer, frame, zoom, li as f32, sheet.as_deref(), (w as f32, h as f32));
+                    collect_labels(&mut out.labels, it, layer, frame, zoom, placement_rank(li), sheet.as_deref(), (w as f32, h as f32));
                 }
             }
             _ => {}
@@ -505,6 +503,12 @@ fn collect_labels(
     }
 }
 
+/// How early a symbol layer's labels are placed: later layers first, as in MapLibre (styles
+/// list their most important labels last, like Liberty's POIs by rank and then its cities).
+fn placement_rank(layer_index: usize) -> f32 {
+    layer_index as f32
+}
+
 /// A label's icon (`icon-image`), when the sprite has it, sized by `icon-size` and moved by
 /// `icon-offset`; an SDF icon takes `icon-color`.
 fn icon(sheet: &Sprite, layer: &StyleLayer, ctx: &FeatureCtx) -> Option<LabelIcon> {
@@ -778,6 +782,27 @@ mod tests {
         let px = icon.image.pixel(1, 1).unwrap();
         assert_eq!((px.red(), px.blue()), (0, 255));
         assert!(out[1].text.is_empty() && out[1].icon.is_some());
+    }
+
+    #[test]
+    fn later_layers_place_first() {
+        let point = crate::mvt::Feature {
+            id: None,
+            kind: GeomKind::Point,
+            geometry: vec![vec![[2048.0, 2048.0]]],
+            props: vec![("name".into(), crate::mvt::Value::String("Here".into()))],
+        };
+        let layer = |sort: f64| {
+            StyleLayer::parse(&serde_json::json!({"id": "a", "type": "symbol", "source": "s", "source-layer": "l",
+                "layout": {"text-field": "{name}", "symbol-sort-key": sort}}))
+            .unwrap()
+        };
+        // The same point labelled by style layers 3 and 7: layer 7's label wins, even with a
+        // worse sort key (which only orders labels within a layer).
+        let (mut early, mut late) = (Vec::new(), Vec::new());
+        collect_labels(&mut early, &item(vec![point.clone()]), &layer(0.0), &world_frame(), 0.0, placement_rank(3), None, (64.0, 64.0));
+        collect_labels(&mut late, &item(vec![point]), &layer(50.0), &world_frame(), 0.0, placement_rank(7), None, (64.0, 64.0));
+        assert!(late[0].priority > early[0].priority);
     }
 
     #[test]

@@ -28,8 +28,9 @@ struct Entry {
 pub struct Sprite {
     sheet: Pixmap,
     index: HashMap<String, Entry>,
-    /// Images cut out so far, by name (and, for SDF icons, colour).
-    cut: Mutex<HashMap<(String, Option<Rgba>), Arc<Pixmap>>>,
+    /// Images cut out so far, by name and (for SDF icons) colour: looked up by `&str`, so a
+    /// hit allocates nothing.
+    cut: Mutex<HashMap<String, HashMap<Option<Rgba>, Arc<Pixmap>>>>,
 }
 
 /// An image from a sprite.
@@ -80,11 +81,8 @@ impl Sprite {
         let (key, e) = self.entry(name)?;
         let color = e.sdf.then(|| color.unwrap_or([0, 0, 0, 255]));
         let mut cut = self.cut.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(p) = cut.get(&(key.to_string(), color)) {
+        if let Some(p) = cut.get(key).and_then(|by_color| by_color.get(&color)) {
             return Some(Image { pixmap: p.clone(), ratio: e.ratio });
-        }
-        if cut.len() > 4096 {
-            cut.clear();
         }
         // Wholly inside the picture (cutting would otherwise clip a bad entry to a part).
         if e.x.checked_add(e.w)? > self.sheet.width() || e.y.checked_add(e.h)? > self.sheet.height() {
@@ -95,7 +93,11 @@ impl Sprite {
             sdf_fill(&mut p, c);
         }
         let p = Arc::new(p);
-        cut.insert((key.to_string(), color), p.clone());
+        // Kept bounded: an SDF icon cut in many colours, or a style naming thousands of images.
+        if cut.values().map(HashMap::len).sum::<usize>() >= 4096 {
+            cut.clear();
+        }
+        cut.entry(key.to_string()).or_default().insert(color, p.clone());
         Some(Image { pixmap: p, ratio: e.ratio })
     }
 }
