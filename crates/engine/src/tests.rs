@@ -1888,5 +1888,13 @@ fn presentations_and_notebooks() {
     assert!(nb.cells[2].output.as_deref().is_some_and(|o| o.starts_with("notebook.remove")), "{:?}", nb.cells[2].output);
     assert!(nb.cells[3].output.is_some());
     assert_eq!(s.project.notebooks.len(), 3);
+    // Notebooks and presentations from a project file get unique names, since they're found
+    // (and notebooks trusted) by name.
+    let mut v = serde_json::to_value(&s.project).unwrap();
+    v["notebooks"][1]["name"] = json!("ANALYSIS 2");
+    v["presentations"][1]["name"] = json!("tour");
+    let p = Project::from_json(&v.to_string()).unwrap();
+    assert_eq!(p.notebooks[1].name, "ANALYSIS 2 2");
+    assert_eq!(p.presentations[1].name, "tour 2");
     let _ = std::fs::remove_dir_all(&dir);
 }

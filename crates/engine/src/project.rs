@@ -206,6 +206,19 @@ impl Project {
         for l in &mut self.layouts {
             l.clamp();
         }
+        // Files skip the commands' limits, and notebooks and presentations are found (and
+        // notebooks trusted) by name, so names are made unique.
+        for r in &mut self.reports {
+            r.clamp();
+        }
+        for p in &mut self.presentations {
+            p.clamp();
+        }
+        for nb in &mut self.notebooks {
+            nb.clamp();
+        }
+        unique_names(self.presentations.iter_mut().map(|p| &mut p.name));
+        unique_names(self.notebooks.iter_mut().map(|nb| &mut nb.name));
         for m in &mut self.maps {
             // A projection this version can't use (a hand edit, or a newer file) falls back to
             // Web Mercator rather than being named while another is drawn.
@@ -281,4 +294,17 @@ impl Project {
 fn empty_map() -> &'static Map {
     static M: std::sync::OnceLock<Map> = std::sync::OnceLock::new();
     M.get_or_init(|| Map::new("Map"))
+}
+
+/// Renames names repeated (ignoring case) after their first use: "Tour", "Tour 2", ….
+fn unique_names<'a>(names: impl Iterator<Item = &'a mut String>) {
+    let mut seen = std::collections::HashSet::new();
+    for name in names {
+        let base = name.clone();
+        let mut k = 1;
+        while !seen.insert(name.to_lowercase()) {
+            k += 1;
+            *name = format!("{base} {k}");
+        }
+    }
 }

@@ -50,7 +50,7 @@ impl Cell {
 }
 
 impl Notebook {
-    fn clamp(&mut self) {
+    pub(crate) fn clamp(&mut self) {
         self.name = self.name.chars().take(200).collect();
         self.cells.truncate(MAX_CELLS);
         for c in &mut self.cells {

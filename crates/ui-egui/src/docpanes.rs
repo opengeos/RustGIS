@@ -15,7 +15,8 @@ use rustgis_engine::cmd::notebook::CellKind;
 pub struct DocState {
     pub page: usize,
     /// The page preview: what it shows, and its texture.
-    pub preview: Option<(String, egui::TextureHandle)>,
+    /// The drawn page (or why it couldn't be drawn), by presentation, page and revision.
+    pub preview: Option<(String, Result<egui::TextureHandle, String>)>,
     pub video_source: String,
     /// Playing: when the current page started (seconds), shown in the pane.
     pub playing: Option<f64>,
@@ -85,13 +86,13 @@ pub fn presentation(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.docs.page = 0;
         }
     });
-    let Some(pres) = app.session.project.presentations.get(i).cloned() else { return };
-    let n = pres.pages.len();
+    // Borrowed, not cloned: pages can hold pictures of many megabytes.
+    let Some(n) = app.session.project.presentations.get(i).map(|p| p.pages.len()) else { return };
     app.docs.page = app.docs.page.min(n.saturating_sub(1));
     // Playback: each page shows for its duration.
     if let Some(start) = app.docs.playing {
         let now = ui.input(|i| i.time);
-        let secs = pres.pages.get(app.docs.page).map_or(5.0, |p| p.seconds);
+        let secs = app.session.project.presentations.get(i).and_then(|p| p.pages.get(app.docs.page)).map_or(5.0, |p| p.seconds);
         if now - start >= secs {
             if app.docs.page + 1 < n {
                 app.docs.page += 1;
@@ -118,16 +119,21 @@ pub fn presentation(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         });
     }
-    if let Some(page) = pres.pages.get(app.docs.page).cloned() {
+    // The current page's text only, without its picture.
+    let current = app.session.project.presentations.get(i).and_then(|p| p.pages.get(app.docs.page)).map(|p| {
+        let body = match &p.kind {
+            rustgis_engine::map::presentation::PageKind::Blank { text, .. } => Some(text.clone()),
+            _ => None,
+        };
+        (p.title.clone(), p.notes.clone(), p.seconds, body)
+    });
+    if let Some((title, notes, seconds, body_now)) = current {
+        let page = PageText { title, notes, seconds };
         let k = app.docs.page;
         heading(ui, "Page");
         // The text being typed lives in the pane's state (rebuilt each frame it would lose
         // keystrokes): it follows the page while a field isn't focused and is saved when it loses
         // focus.
-        let body_now = match &page.kind {
-            rustgis_engine::map::presentation::PageKind::Blank { text, .. } => Some(text.clone()),
-            _ => None,
-        };
         if app.docs.editing != Some((i, k)) {
             app.docs.editing = Some((i, k));
             (app.docs.title, app.docs.notes, app.docs.seconds) = (page.title.clone(), page.notes.clone(), page.seconds);
@@ -237,6 +243,13 @@ pub fn presentation(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     });
 }
 
+/// The current page's fields shown in the pane.
+struct PageText {
+    title: String,
+    notes: String,
+    seconds: f64,
+}
+
 fn preview(app: &mut RustGisApp, ui: &mut Ui, i: usize, t: &Tokens) {
     let key = format!("{i}#{}#{}", app.docs.page, app.session.revision);
     if app.docs.preview.as_ref().is_none_or(|p| p.0 != key) {
@@ -244,19 +257,20 @@ fn preview(app: &mut RustGisApp, ui: &mut Ui, i: usize, t: &Tokens) {
         let drawn =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::presentation::draw_page(s, i, page, 30.0)))
                 .unwrap_or_else(|_| Err("the preview failed unexpectedly".into()));
-        match drawn {
-            Ok(pm) => {
-                let img = egui::ColorImage::from_rgba_premultiplied([pm.width() as usize, pm.height() as usize], pm.data());
-                let tex = ui.ctx().load_texture("presentation_preview", img, egui::TextureOptions::LINEAR);
-                app.docs.preview = Some((key, tex));
-            }
-            Err(e) => {
-                ui.label(egui::RichText::new(e).small().color(Color32::from_rgb(0xC0, 0x30, 0x30)));
-                return;
-            }
-        }
+        let tex = drawn.map(|pm| {
+            let img = egui::ColorImage::from_rgba_premultiplied([pm.width() as usize, pm.height() as usize], pm.data());
+            ui.ctx().load_texture("presentation_preview", img, egui::TextureOptions::LINEAR)
+        });
+        app.docs.preview = Some((key, tex));
     }
-    let Some((_, tex)) = &app.docs.preview else { return };
+    let tex = match &app.docs.preview {
+        Some((_, Ok(tex))) => tex,
+        Some((_, Err(e))) => {
+            ui.label(egui::RichText::new(e.as_str()).small().color(Color32::from_rgb(0xC0, 0x30, 0x30)));
+            return;
+        }
+        None => return,
+    };
     let size = tex.size_vec2();
     let w = ui.available_width().min(320.0);
     let h = w * size.y / size.x.max(1.0);
