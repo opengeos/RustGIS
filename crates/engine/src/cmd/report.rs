@@ -391,6 +391,9 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     let mut renamed = None;
     if let Some(n) = ps(p, "layer") {
         let l = find_layer(s, n).ok_or_else(|| format!("no layer named '{n}'"))?;
+        if l.is_raster() {
+            return Err("reports list a feature layer's records, not a raster's".into());
+        }
         r.layer = l.name.clone();
         // What the new layer lacks is dropped, so the report doesn't show blank columns.
         let ds = &l.dataset;
@@ -404,6 +407,9 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         r.chart = r.chart.take().filter(|c| has(&c.category) && c.value.as_deref().is_none_or(has));
         if r.fields.is_empty() {
             r.fields = ds.fields.iter().take(MAX_ITEMS).map(|f| f.name.clone()).collect();
+        }
+        if !r.where_clause.is_empty() && rustgis_data::query::parse(&r.where_clause, ds).is_err() {
+            r.where_clause.clear();
         }
     }
     // Everything is checked against the (possibly new) layer before the report changes.
@@ -621,7 +627,8 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
     let mut rows: Vec<usize> =
         if r.where_clause.trim().is_empty() { (0..ds.features.len()).collect() } else { rustgis_data::query::select(&r.where_clause, ds)? };
     if r.selected_only {
-        rows.retain(|row| layer.selection.contains(row));
+        let sel: std::collections::HashSet<usize> = layer.selection.iter().copied().collect();
+        rows.retain(|row| sel.contains(row));
     }
     let gi: Vec<Option<usize>> = r.groups.iter().map(|g| ds.field_index(g)).collect();
     let si = r.sort.as_deref().and_then(|n| ds.field_index(n));

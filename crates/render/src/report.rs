@@ -72,6 +72,23 @@ fn wrap(s: &str, w: f64, pt: f32) -> Vec<String> {
     for para in s.lines().take(2000) {
         let mut line = String::new();
         for word in para.split_whitespace().take(5000) {
+            // A word wider than the line (a long URL…) is broken across lines.
+            let mut word = word.to_string();
+            while width_mm(&word, pt, false) > w && word.chars().count() > 1 {
+                let mut head = String::new();
+                for ch in word.chars() {
+                    if !head.is_empty() && width_mm(&format!("{head}{ch}"), pt, false) > w {
+                        break;
+                    }
+                    head.push(ch);
+                }
+                if !line.is_empty() {
+                    out.push(std::mem::take(&mut line));
+                }
+                word = word.chars().skip(head.chars().count()).collect();
+                out.push(head);
+            }
+            let word = word.as_str();
             let next = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
             if !line.is_empty() && width_mm(&next, pt, false) > w {
                 out.push(std::mem::take(&mut line));
@@ -85,22 +102,27 @@ fn wrap(s: &str, w: f64, pt: f32) -> Vec<String> {
     out
 }
 
-/// The size a picture is drawn at, in millimetres, within the content width.
-fn picture_box(w: u32, h: u32, content_w: f64) -> (f64, f64) {
+/// The size a picture is drawn at, in millimetres, within the content width and height.
+fn picture_box(w: u32, h: u32, content_w: f64, content_h: f64) -> (f64, f64) {
     let (w, h) = (w.max(1) as f64, h.max(1) as f64);
     let bw = (content_w * 0.6).max(10.0);
-    let s = (bw / w).min(PICTURE_H / h);
+    let s = (bw / w).min(PICTURE_H.min(content_h - 4.0).max(5.0) / h);
     (w * s, h * s)
 }
 
+/// How many bars of a chart fit on a page (the rest are left off).
+fn chart_bars(n: usize, content_h: f64) -> usize {
+    n.clamp(1, MAX_BARS).min((((content_h - 11.0) / 5.0).floor().max(1.0)) as usize)
+}
+
 /// Heights in millimetres of a block (text blocks are measured line by line when placed).
-fn height(b: &Block, content_w: f64) -> f64 {
+fn height(b: &Block, content_w: f64, content_h: f64) -> f64 {
     let (_, _, lh) = style(b);
     match b {
         Block::Stats(v) => lh * v.len().max(1) as f64 + 1.5,
         Block::Attachments(v) => lh * (v.len().max(1) + 1) as f64,
-        Block::Picture { width, height, .. } => picture_box(*width, *height, content_w).1 + 3.0,
-        Block::Chart { bars, .. } => 8.0 + 5.0 * bars.len().clamp(1, MAX_BARS) as f64 + 3.0,
+        Block::Picture { width, height, .. } => picture_box(*width, *height, content_w, content_h).1 + 3.0,
+        Block::Chart { bars, .. } => 8.0 + 5.0 * chart_bars(bars.len(), content_h) as f64 + 3.0,
         Block::PageBreak | Block::Layout(_) => 0.0,
         _ => lh,
     }
@@ -110,6 +132,7 @@ fn height(b: &Block, content_w: f64) -> f64 {
 pub fn paginate(doc: &Doc) -> Vec<Page> {
     let content_w = (doc.width - 2.0 * MARGIN).max(10.0);
     let bottom = (doc.height - MARGIN - FOOTER).max(MARGIN + 20.0);
+    let content_h = bottom - MARGIN;
     let mut pages: Vec<Page> = Vec::new();
     let mut cur: Vec<Placed> = Vec::new();
     let mut y = MARGIN;
@@ -174,9 +197,21 @@ pub fn paginate(doc: &Doc) -> Vec<Page> {
             }
             continue;
         }
-        let h = height(b, content_w);
-        // Headings and column headings stay with at least one line of what follows.
-        let keep = if matches!(b, Block::Heading { .. } | Block::Columns(_) | Block::SubColumns(_) | Block::Title(_)) { 5.0 } else { 0.0 };
+        let h = height(b, content_w, content_h);
+        // Headings and column headings stay with what follows them, down to the first record
+        // (a heading, its column headings and one row move to a new page together).
+        let keep = if matches!(b, Block::Heading { .. } | Block::Columns(_) | Block::SubColumns(_) | Block::Title(_)) {
+            let mut k = 0.0;
+            for next in doc.blocks.iter().skip(i + 1).take(6) {
+                k += height(next, content_w, content_h).min(content_h / 2.0);
+                if !matches!(next, Block::Heading { .. } | Block::Columns(_) | Block::SubColumns(_)) {
+                    break;
+                }
+            }
+            k.max(5.0)
+        } else {
+            0.0
+        };
         if y + h + keep > bottom && !cur.is_empty() {
             flush(&mut pages, &mut cur, &mut y);
             // Rows carried onto a new page get their column headings again.
@@ -184,7 +219,7 @@ pub fn paginate(doc: &Doc) -> Vec<Page> {
                 && let Some(c) = columns
                 && let Some(cb) = doc.blocks.get(c)
             {
-                let ch = height(cb, content_w);
+                let ch = height(cb, content_w, content_h);
                 cur.push(Placed { block: c, y, h: ch, lines: Vec::new() });
                 y += ch;
             }
@@ -192,7 +227,7 @@ pub fn paginate(doc: &Doc) -> Vec<Page> {
                 && let Some(c) = sub_columns
                 && let Some(cb) = doc.blocks.get(c)
             {
-                let ch = height(cb, content_w);
+                let ch = height(cb, content_w, content_h);
                 cur.push(Placed { block: c, y, h: ch, lines: Vec::new() });
                 y += ch;
             }
@@ -232,6 +267,7 @@ pub fn draw_page(doc: &Doc, pages: &[Page], n: usize, dpi: f64, layouts: &[Layou
     let mut pm = Pixmap::new((wmm * k).round().max(1.0) as u32, (hmm * k).round().max(1.0) as u32)?;
     pm.fill(tiny_skia::Color::WHITE);
     let content_w = (wmm - 2.0 * MARGIN).max(10.0);
+    let content_h = ((hmm - MARGIN - FOOTER).max(MARGIN + 20.0)) - MARGIN;
     let kf = k as f32;
     let at = |mm: f64| (mm * k) as f32;
     let pt_px = |pt: f32| pt * (k * 25.4 / 72.0) as f32;
@@ -319,7 +355,7 @@ pub fn draw_page(doc: &Doc, pages: &[Page], n: usize, dpi: f64, layouts: &[Layou
                 }
             }
             Block::Picture { image, width, height } => {
-                let (w, h) = picture_box(*width, *height, content_w);
+                let (w, h) = picture_box(*width, *height, content_w, content_h);
                 if let Some(img) = crate::picture::decode(image) {
                     let (bw, bh) = (at(w), at(h));
                     let t = Transform::from_row(
@@ -349,7 +385,7 @@ pub fn draw_page(doc: &Doc, pages: &[Page], n: usize, dpi: f64, layouts: &[Layou
                 let max = bars.iter().map(|b| b.1).fold(0.0_f64, f64::max);
                 let label_w = content_w * 0.3;
                 let bar_w = content_w - label_w - 22.0;
-                for (row, (name, v)) in bars.iter().take(MAX_BARS).enumerate() {
+                for (row, (name, v)) in bars.iter().take(chart_bars(bars.len(), content_h)).enumerate() {
                     let y = it.y + 8.0 + 5.0 * row as f64;
                     text::text_at(
                         &mut pm,
@@ -469,5 +505,35 @@ mod tests {
             lines += items.iter().map(|i| i.lines.len()).sum::<usize>();
         }
         assert_eq!(lines, 120 + 91, "every statistic, the heading and every attachment");
+    }
+
+    #[test]
+    fn headings_stay_with_their_rows_and_tall_blocks_fit() {
+        // Rows fill the page until a heading would land at its bottom.
+        let mut blocks: Vec<Block> = (0..39).map(|i| Block::Row(vec![format!("r{i}")])).collect();
+        blocks.push(Block::Heading { level: 0, text: "Group".into() });
+        blocks.push(Block::Columns(vec!["name".into()]));
+        blocks.push(Block::Row(vec!["first".into()]));
+        blocks.push(Block::Chart { title: "Big".into(), bars: (0..25).map(|i| (format!("b{i}"), i as f64)).collect() });
+        blocks.push(Block::Text("x".repeat(400)));
+        let d = Doc { title: "T".into(), width: 150.0, height: 220.0, blocks };
+        let pages = paginate(&d);
+        for p in &pages {
+            let Page::Flow(items) = p else { panic!() };
+            // A heading is never the last thing on a page.
+            if let Some(last) = items.last() {
+                assert!(!matches!(d.blocks[last.block], Block::Heading { .. } | Block::Columns(_)));
+            }
+            assert!(items.iter().all(|i| i.y + i.h <= d.height - MARGIN - FOOTER + 1e-6), "nothing runs into the footer");
+        }
+        // The long word was broken into lines no wider than the page.
+        let text_lines: Vec<String> = pages
+            .iter()
+            .flat_map(|p| if let Page::Flow(items) = p { items.clone() } else { Vec::new() })
+            .filter(|i| matches!(d.blocks[i.block], Block::Text(_)))
+            .flat_map(|i| i.lines)
+            .collect();
+        assert!(text_lines.len() > 1 && text_lines.iter().all(|l| width_mm(l, 9.0, false) <= 150.0 - 2.0 * MARGIN + 1e-6));
+        assert_eq!(text_lines.concat().len(), 400);
     }
 }

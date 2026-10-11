@@ -14,6 +14,9 @@ pub struct ReportState {
     pub page: usize,
     /// The preview: what it shows (report JSON and page), its texture and the page count.
     pub preview: Option<(String, egui::TextureHandle, usize)>,
+    /// The built report and its pages, for the report and project revision they were built from:
+    /// turning pages only redraws a page, it doesn't rebuild the report.
+    pub built: Option<((usize, u64), rustgis_engine::map::report::Doc, Vec<rustgis_engine::render::report::Page>)>,
     pub stat_field: String,
     pub stat_kind: String,
     pub page_title: String,
@@ -279,11 +282,25 @@ fn preview(app: &mut RustGisApp, ui: &mut Ui, i: usize, t: &Tokens) {
     let key = format!("{i}#{}#{}", app.reports.page, app.session.revision);
     if app.reports.preview.as_ref().is_none_or(|p| p.0 != key) {
         app.reports.preview = None;
+        let built_for = (i, app.session.revision);
+        if app.reports.built.as_ref().is_none_or(|b| b.0 != built_for) {
+            let s = &app.session;
+            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::report::pages(s, i)))
+                .unwrap_or_else(|_| Err("the preview failed unexpectedly".into()));
+            match built {
+                Ok((doc, pages)) => app.reports.built = Some((built_for, doc, pages)),
+                Err(e) => {
+                    app.reports.built = None;
+                    ui.label(egui::RichText::new(e).small().color(Color32::from_rgb(0xC0, 0x30, 0x30)));
+                    return;
+                }
+            }
+        }
+        let Some((_, doc, pages)) = &app.reports.built else { return };
         let (s, page) = (&mut app.session, app.reports.page);
         let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<_, String> {
-            let (doc, pages) = rustgis_engine::cmd::report::pages(s, i)?;
             let page = page.min(pages.len().saturating_sub(1));
-            let (pm, _, _) = rustgis_engine::render::report::draw_page(&doc, &pages, page, 60.0, &s.project.layouts, &mut s.project.maps)
+            let (pm, _, _) = rustgis_engine::render::report::draw_page(doc, pages, page, 60.0, &s.project.layouts, &mut s.project.maps)
                 .ok_or("the page is too large to draw")?;
             Ok((pm, page, pages.len()))
         }))
