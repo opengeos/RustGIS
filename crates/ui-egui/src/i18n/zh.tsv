@@ -1,7 +1,9 @@
 # zh interface catalog: English<TAB>translation
 <None>	<无>
+A 3D globe seen from space.	从太空看到的三维地球。
 A blank map with a basemap	带底图的空白地图
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	一款用纯 Rust 编写的快速、开源桌面 GIS，采用桌面 GIS 的功能区工作流：地图与图层、符号系统、标注、选择、编辑、地理处理和导出。
+A projected coordinate system.	投影坐标系。
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	一个值、一个字段，或用 + − × ÷ 连接的两者。应用于所选行；若未选择任何行，则应用于所有行。
 About	关于
 About RustGIS	关于 RustGIS
@@ -31,6 +33,10 @@ Altitude	高度角
 Analysis	分析
 AND	AND
 Apply	应用
+Area of use: longitude {w}° to {e}°, latitude {s}° to {n}°	使用范围: 经度 {w}° 至 {e}°，纬度 {s}° 至 {n}°
+Area of use: the whole world	使用范围: 全世界
+Area of use: within {r}° of the {lon}° meridian	使用范围: 距 {lon}° 经线 {r}° 以内
+Area of use: within {r}° of {lon}°, {lat}°	使用范围: 距 {lon}°, {lat}° {r}° 以内
 Area {area}   ·   Perimeter {perimeter}	面积 {area}   ·   周长 {perimeter}
 Atlas	地图集
 Attribute\nTable	属性\n表
@@ -196,6 +202,7 @@ e.g.  pop_est / 1000000   or   'Africa'   or   name	例如  pop_est / 1000000   
 e.g. continent = 'Europe'	例如 continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	例如 pop_est > 100000000 AND continent = 'Asia'
 East	东
+Eckert IV (equal-area world)	埃克特 IV (等积世界)
 Edit	编辑
 Edit Attribute	编辑属性
 Edit attributes in the table.	在表中编辑属性。
@@ -204,6 +211,7 @@ Ember	余烬
 Encloses each feature, or all features, in its convex hull.	用凸包包围每个要素或所有要素。
 Enhancement	增强
 EPSG code	EPSG 代码
+Equal Earth	Equal Earth 等积投影
 Equal Interval	相等间隔
 Equirectangular (Plate Carrée)	等距圆柱投影（Plate Carrée）
 Erase	擦除
@@ -286,6 +294,7 @@ Identify	识别
 Import\nProject	导入\n工程
 In Beyond	放大超过
 In project	在工程中
+In use	正在使用
 Information	信息
 Input Features	输入要素
 Input Polygons	输入多边形
@@ -402,6 +411,7 @@ Open the layer's attribute table.	打开图层的属性表。
 Open the layer's table.	打开图层的表。
 Open the selected layer's table.	打开所选图层的表。
 Open the Symbology pane.	打开符号系统窗格。
+Open {code} on epsg.io	在 epsg.io 上打开 {code}
 Open, save and create projects	打开、保存和创建工程
 Open…	打开…
 OR	OR
@@ -422,6 +432,8 @@ Pixel	像素
 Pixel type	像素类型
 PNG image	PNG 图像
 Point	点
+Polar, conformal: Antarctica and the Southern Ocean.	极地，等角: 南极洲和南大洋。
+Polar, conformal: the Arctic and the northern lands.	极地，等角: 北极和北方陆地。
 Polygon	多边形
 Polyline	折线
 Populated Places	居民点
@@ -429,6 +441,7 @@ Previous	上一个
 Previous Extent	上一个范围
 Primary\nSymbology	主要\n符号系统
 Primary symbology	主要符号系统
+PROJ definition	PROJ 定义
 Project	工程
 Project Info	工程信息
 Projection	投影
@@ -447,6 +460,8 @@ Redo	重做
 Redo the change you undid.	重做已撤销的更改。
 Redo {action}	重做 {action}
 Red–Blue	红–蓝
+Regional, equal-area: the contiguous United States.	区域，等积: 美国本土。
+Regional, equal-area: the European standard for statistics.	区域，等积: 欧洲统计标准。
 Remove	移除
 Remove Bookmark	移除书签
 Remove From Current Selection	从当前选择中移除
@@ -466,6 +481,7 @@ Reset brightness, contrast and gamma.	重置亮度、对比度和伽马。
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	功能区要素覆盖率：{total} 个要素中已完成 {done} 个（{pct}%）。
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	功能区对等：{total} 个功能区功能中有 {done} 个具有 RustGIS 命令。
+Robinson	罗宾森投影
 Run	运行
 Run Tool	运行工具
 RustGIS	RustGIS
@@ -615,10 +631,21 @@ WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	条件
 Where Clause	Where 子句
 Windows	窗口
+Winkel Tripel	温克尔三重投影
 World	世界
 World Atlas	世界地图集
 World Atlas Sample	世界地图集示例
 World Countries	世界国家
+World, compromise: low overall distortion, used for world atlases.	世界，折衷: 整体变形小，用于世界地图集。
+World, compromise: neither equal-area nor conformal, balanced for wall maps.	世界，折衷: 既不等积也不等角，适合挂图的平衡投影。
+World, compromise: rounded corners, gentle shapes near the poles.	世界，折衷: 圆角轮廓，极地附近形状平缓。
+World, conformal: the usual web map; areas grow towards the poles.	世界，等角: 常见的网络地图；面积向两极增大。
+World, cylindrical: a compromise between Mercator and equal steps.	世界，圆柱: 墨卡托与等间距之间的折衷。
+World, cylindrical: equal steps of longitude and latitude.	世界，圆柱: 经度和纬度等间距。
+World, equal-area, cylindrical: true sizes, flattened near the poles.	世界，等积，圆柱: 面积真实，两极附近被压扁。
+World, equal-area: true sizes with a Robinson-like look.	世界，等积: 面积真实，外观类似罗宾森投影。
+World, equal-area: true sizes with rounded poles.	世界，等积: 面积真实，两极呈圆形。
+World, equal-area: true sizes, shapes bend towards the edges.	世界，等积: 面积真实，形状向边缘弯曲。
 Yes	是
 Z factor	Z 因子
 Zoom about the pointer	围绕指针缩放

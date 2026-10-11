@@ -1,7 +1,9 @@
 # ko interface catalog: English<TAB>translation
 <None>	<없음>
+A 3D globe seen from space.	우주에서 본 3D 지구본.
 A blank map with a basemap	배경지도가 있는 빈 지도
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	순수 Rust로 작성된 빠른 오픈 소스 데스크톱 GIS로, 데스크톱 GIS의 리본 워크플로를 제공합니다: 지도와 레이어, 심볼, 라벨, 선택, 편집, 지오프로세싱 및 내보내기.
+A projected coordinate system.	투영 좌표계.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	값, 필드 또는 이 둘을 + − × ÷ 로 결합한 식입니다. 선택한 행에 적용되며, 선택한 행이 없으면 모든 행에 적용됩니다.
 About	정보
 About RustGIS	RustGIS 정보
@@ -31,6 +33,10 @@ Altitude	고도
 Analysis	분석
 AND	AND
 Apply	적용
+Area of use: longitude {w}° to {e}°, latitude {s}° to {n}°	사용 범위: 경도 {w}°~{e}°, 위도 {s}°~{n}°
+Area of use: the whole world	사용 범위: 전 세계
+Area of use: within {r}° of the {lon}° meridian	사용 범위: {lon}° 경선에서 {r}° 이내
+Area of use: within {r}° of {lon}°, {lat}°	사용 범위: {lon}°, {lat}°에서 {r}° 이내
 Area {area}   ·   Perimeter {perimeter}	면적 {area}   ·   둘레 {perimeter}
 Atlas	아틀라스
 Attribute\nTable	속성\n테이블
@@ -196,6 +202,7 @@ e.g.  pop_est / 1000000   or   'Africa'   or   name	예:  pop_est / 1000000   �
 e.g. continent = 'Europe'	예: continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	예: pop_est > 100000000 AND continent = 'Asia'
 East	동
+Eckert IV (equal-area world)	에케르트 IV (정적 세계)
 Edit	편집
 Edit Attribute	속성 편집
 Edit attributes in the table.	테이블에서 속성을 편집합니다.
@@ -204,6 +211,7 @@ Ember	엠버
 Encloses each feature, or all features, in its convex hull.	각 피처 또는 모든 피처를 볼록 껍질로 둘러쌉니다.
 Enhancement	향상
 EPSG code	EPSG 코드
+Equal Earth	이퀄 어스 도법
 Equal Interval	등간격
 Equirectangular (Plate Carrée)	정거원통도법 (Plate Carrée)
 Erase	지우기(Erase)
@@ -286,6 +294,7 @@ Identify	식별
 Import\nProject	프로젝트\n가져오기
 In Beyond	다음보다 확대 시
 In project	프로젝트 내
+In use	사용 중
 Information	정보
 Input Features	입력 피처
 Input Polygons	입력 폴리곤
@@ -402,6 +411,7 @@ Open the layer's attribute table.	레이어의 속성 테이블을 엽니다.
 Open the layer's table.	레이어의 테이블을 엽니다.
 Open the selected layer's table.	선택한 레이어의 테이블을 엽니다.
 Open the Symbology pane.	심볼 창을 엽니다.
+Open {code} on epsg.io	epsg.io에서 {code} 열기
 Open, save and create projects	프로젝트 열기, 저장 및 만들기
 Open…	열기…
 OR	OR
@@ -422,6 +432,8 @@ Pixel	픽셀
 Pixel type	픽셀 유형
 PNG image	PNG 이미지
 Point	포인트
+Polar, conformal: Antarctica and the Southern Ocean.	극지, 정각: 남극 대륙과 남극해.
+Polar, conformal: the Arctic and the northern lands.	극지, 정각: 북극과 북쪽 육지.
 Polygon	폴리곤
 Polyline	폴리라인
 Populated Places	인구 밀집 지역
@@ -429,6 +441,7 @@ Previous	이전
 Previous Extent	이전 범위
 Primary\nSymbology	기본\n심볼
 Primary symbology	기본 심볼
+PROJ definition	PROJ 정의
 Project	프로젝트
 Project Info	프로젝트 정보
 Projection	투영
@@ -447,6 +460,8 @@ Redo	다시 실행
 Redo the change you undid.	실행 취소한 변경을 다시 실행합니다.
 Redo {action}	{action} 다시 실행
 Red–Blue	빨강–파랑
+Regional, equal-area: the contiguous United States.	지역, 정적: 미국 본토.
+Regional, equal-area: the European standard for statistics.	지역, 정적: 통계용 유럽 표준.
 Remove	제거
 Remove Bookmark	북마크 제거
 Remove From Current Selection	현재 선택에서 제거
@@ -466,6 +481,7 @@ Reset brightness, contrast and gamma.	밝기, 대비 및 감마를 재설정합�
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	리본 기능 지원 범위: {total}개 중 {done}개 기능({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	리본 대응: 리본 기능 {total}개 중 {done}개에 RustGIS 명령이 있습니다.
+Robinson	로빈슨 도법
 Run	실행
 Run Tool	도구 실행
 RustGIS	RustGIS
@@ -615,10 +631,21 @@ WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	조건
 Where Clause	WHERE 절
 Windows	창
+Winkel Tripel	빙켈 트리펠 도법
 World	세계
 World Atlas	World Atlas
 World Atlas Sample	World Atlas 샘플
 World Countries	세계 국가
+World, compromise: low overall distortion, used for world atlases.	세계, 절충: 전체 왜곡이 적어 세계 지도책에 쓰입니다.
+World, compromise: neither equal-area nor conformal, balanced for wall maps.	세계, 절충: 정적도 정각도 아닌, 벽걸이 지도용으로 균형 잡힌 도법.
+World, compromise: rounded corners, gentle shapes near the poles.	세계, 절충: 둥근 모서리, 극 근처의 완만한 형태.
+World, conformal: the usual web map; areas grow towards the poles.	세계, 정각: 일반적인 웹 지도; 면적이 극으로 갈수록 커집니다.
+World, cylindrical: a compromise between Mercator and equal steps.	세계, 원통: 메르카토르와 등간격의 절충.
+World, cylindrical: equal steps of longitude and latitude.	세계, 원통: 경도와 위도가 등간격.
+World, equal-area, cylindrical: true sizes, flattened near the poles.	세계, 정적, 원통: 실제 면적, 극 근처에서 납작해집니다.
+World, equal-area: true sizes with a Robinson-like look.	세계, 정적: 실제 면적, 로빈슨과 비슷한 모양.
+World, equal-area: true sizes with rounded poles.	세계, 정적: 실제 면적, 둥근 극.
+World, equal-area: true sizes, shapes bend towards the edges.	세계, 정적: 실제 면적, 가장자리로 갈수록 형태가 휩니다.
 Yes	예
 Z factor	Z 계수
 Zoom about the pointer	포인터 기준 확대/축소

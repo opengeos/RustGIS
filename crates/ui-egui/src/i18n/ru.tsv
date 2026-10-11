@@ -1,7 +1,9 @@
 # ru interface catalog: English<TAB>translation
 <None>	<Нет>
+A 3D globe seen from space.	Трёхмерный глобус, вид из космоса.
 A blank map with a basemap	Пустая карта с базовой картой
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Быстрая ГИС с открытым исходным кодом для настольных компьютеров, написанная на чистом Rust, с ленточным интерфейсом настольной ГИС: карты и слои, символы, подписи, выборка, редактирование, геообработка и экспорт.
+A projected coordinate system.	Система координат проекции.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Значение, поле или два из них, соединённые знаком + − × ÷. Применяется к выбранным строкам или ко всем строкам, если ничего не выбрано.
 About	О программе
 About RustGIS	О RustGIS
@@ -31,6 +33,10 @@ Altitude	Высота
 Analysis	Анализ
 AND	AND
 Apply	Применить
+Area of use: longitude {w}° to {e}°, latitude {s}° to {n}°	Область применения: долгота от {w}° до {e}°, широта от {s}° до {n}°
+Area of use: the whole world	Область применения: весь мир
+Area of use: within {r}° of the {lon}° meridian	Область применения: в пределах {r}° от меридиана {lon}°
+Area of use: within {r}° of {lon}°, {lat}°	Область применения: в пределах {r}° от {lon}°, {lat}°
 Area {area}   ·   Perimeter {perimeter}	Площадь {area}   ·   Периметр {perimeter}
 Atlas	Атлас
 Attribute\nTable	Таблица\nатрибутов
@@ -196,6 +202,7 @@ e.g.  pop_est / 1000000   or   'Africa'   or   name	напр.  pop_est / 1000000
 e.g. continent = 'Europe'	напр. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	напр. pop_est > 100000000 AND continent = 'Asia'
 East	Восток
+Eckert IV (equal-area world)	Эккерт IV (равновеликая карта мира)
 Edit	Правка
 Edit Attribute	Изменить атрибут
 Edit attributes in the table.	Редактировать атрибуты в таблице.
@@ -204,6 +211,7 @@ Ember	Угли
 Encloses each feature, or all features, in its convex hull.	Заключает каждый объект или все объекты в выпуклую оболочку.
 Enhancement	Улучшение
 EPSG code	Код EPSG
+Equal Earth	Equal Earth
 Equal Interval	Равные интервалы
 Equirectangular (Plate Carrée)	Равнопромежуточная (Plate Carrée)
 Erase	Стереть
@@ -286,6 +294,7 @@ Identify	Идентифицировать
 Import\nProject	Импорт\nпроекта
 In Beyond	Вкл. за пределами
 In project	В проекте
+In use	Используется
 Information	Информация
 Input Features	Входные объекты
 Input Polygons	Входные полигоны
@@ -402,6 +411,7 @@ Open the layer's attribute table.	Открыть таблицу атрибуто
 Open the layer's table.	Открыть таблицу слоя.
 Open the selected layer's table.	Открыть таблицу выбранного слоя.
 Open the Symbology pane.	Открыть панель «Символы».
+Open {code} on epsg.io	Открыть {code} на epsg.io
 Open, save and create projects	Открытие, сохранение и создание проектов
 Open…	Открыть…
 OR	OR
@@ -422,6 +432,8 @@ Pixel	Пиксель
 Pixel type	Тип пикселя
 PNG image	Изображение PNG
 Point	Точка
+Polar, conformal: Antarctica and the Southern Ocean.	Полярная, равноугольная: Антарктида и Южный океан.
+Polar, conformal: the Arctic and the northern lands.	Полярная, равноугольная: Арктика и северные земли.
 Polygon	Полигон
 Polyline	Полилиния
 Populated Places	Населённые пункты
@@ -429,6 +441,7 @@ Previous	Назад
 Previous Extent	Предыдущий экстент
 Primary\nSymbology	Основные\nсимволы
 Primary symbology	Основные символы
+PROJ definition	Определение PROJ
 Project	Проект
 Project Info	Сведения о проекте
 Projection	Проекция
@@ -447,6 +460,8 @@ Redo	Повторить
 Redo the change you undid.	Повторить отменённое изменение.
 Redo {action}	Повторить: {action}
 Red–Blue	Красный–синий
+Regional, equal-area: the contiguous United States.	Региональная, равновеликая: смежные штаты США.
+Regional, equal-area: the European standard for statistics.	Региональная, равновеликая: европейский стандарт для статистики.
 Remove	Удалить
 Remove Bookmark	Удалить закладку
 Remove From Current Selection	Удалить из текущей выборки
@@ -466,6 +481,7 @@ Reset brightness, contrast and gamma.	Сбросить яркость, конт�
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Охват функций ленты: {done} из {total} ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Соответствие ленты: команд RustGIS для функций ленты — {done} из {total}.
+Robinson	Робинсон
 Run	Запустить
 Run Tool	Запустить инструмент
 RustGIS	RustGIS
@@ -615,10 +631,21 @@ WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Где
 Where Clause	Условие WHERE
 Windows	Окна
+Winkel Tripel	Винкель-Трипель
 World	Мир
 World Atlas	Атлас мира
 World Atlas Sample	Пример «Атлас мира»
 World Countries	Страны мира
+World, compromise: low overall distortion, used for world atlases.	Мир, произвольная: малые общие искажения, используется в атласах мира.
+World, compromise: neither equal-area nor conformal, balanced for wall maps.	Мир, произвольная: ни равновеликая, ни равноугольная, сбалансирована для настенных карт.
+World, compromise: rounded corners, gentle shapes near the poles.	Мир, произвольная: скруглённые углы, мягкие формы у полюсов.
+World, conformal: the usual web map; areas grow towards the poles.	Мир, равноугольная: обычная веб-карта; площади растут к полюсам.
+World, cylindrical: a compromise between Mercator and equal steps.	Мир, цилиндрическая: компромисс между Меркатором и равными шагами.
+World, cylindrical: equal steps of longitude and latitude.	Мир, цилиндрическая: равные шаги по долготе и широте.
+World, equal-area, cylindrical: true sizes, flattened near the poles.	Мир, равновеликая, цилиндрическая: истинные площади, сжата у полюсов.
+World, equal-area: true sizes with a Robinson-like look.	Мир, равновеликая: истинные площади, внешне похожа на проекцию Робинсона.
+World, equal-area: true sizes with rounded poles.	Мир, равновеликая: истинные площади со скруглёнными полюсами.
+World, equal-area: true sizes, shapes bend towards the edges.	Мир, равновеликая: истинные площади, формы изгибаются к краям.
 Yes	Да
 Z factor	Z-фактор
 Zoom about the pointer	Масштабирование относительно указателя

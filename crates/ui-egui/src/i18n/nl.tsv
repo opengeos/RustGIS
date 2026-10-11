@@ -1,7 +1,9 @@
 # nl interface catalog: English<TAB>translation
 <None>	<Geen>
+A 3D globe seen from space.	Een 3D-globe, gezien vanuit de ruimte.
 A blank map with a basemap	Een lege kaart met een basiskaart
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Een snelle, opensource desktop-GIS geschreven in puur Rust, met de lintwerkwijze van desktop-GIS: kaarten en lagen, symbologie, labels, selectie, bewerken, geoverwerking en exporteren.
+A projected coordinate system.	Een geprojecteerd coördinatensysteem.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Een waarde, een veld of twee daarvan verbonden door + − × ÷. Geldt voor de geselecteerde rijen, of voor alle rijen als er geen geselecteerd zijn.
 About	Over
 About RustGIS	Over RustGIS
@@ -31,6 +33,10 @@ Altitude	Hoogte
 Analysis	Analyse
 AND	AND
 Apply	Toepassen
+Area of use: longitude {w}° to {e}°, latitude {s}° to {n}°	Toepassingsgebied: lengte {w}° tot {e}°, breedte {s}° tot {n}°
+Area of use: the whole world	Toepassingsgebied: de hele wereld
+Area of use: within {r}° of the {lon}° meridian	Toepassingsgebied: binnen {r}° van de meridiaan {lon}°
+Area of use: within {r}° of {lon}°, {lat}°	Toepassingsgebied: binnen {r}° van {lon}°, {lat}°
 Area {area}   ·   Perimeter {perimeter}	Oppervlakte {area}   ·   Omtrek {perimeter}
 Atlas	Atlas
 Attribute\nTable	Attributen-\ntabel
@@ -196,6 +202,7 @@ e.g.  pop_est / 1000000   or   'Africa'   or   name	Bijv.  pop_est / 1000000   o
 e.g. continent = 'Europe'	bijv. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	bijv. pop_est > 100000000 AND continent = 'Asia'
 East	Oost
+Eckert IV (equal-area world)	Eckert IV (oppervlaktegetrouwe wereld)
 Edit	Bewerken
 Edit Attribute	Attribuut bewerken
 Edit attributes in the table.	Attributen in de tabel bewerken.
@@ -204,6 +211,7 @@ Ember	Gloed
 Encloses each feature, or all features, in its convex hull.	Omsluit elk object, of alle objecten, met de convexe omhulling.
 Enhancement	Verbetering
 EPSG code	EPSG-code
+Equal Earth	Equal Earth
 Equal Interval	Gelijke interval
 Equirectangular (Plate Carrée)	Equirectangulair (Plate Carrée)
 Erase	Uitwissen
@@ -286,6 +294,7 @@ Identify	Identificeren
 Import\nProject	Project\nimporteren
 In Beyond	Ingezoomd voorbij
 In project	In project
+In use	In gebruik
 Information	Informatie
 Input Features	Invoerobjecten
 Input Polygons	Invoerpolygonen
@@ -402,6 +411,7 @@ Open the layer's attribute table.	De attributentabel van de laag openen.
 Open the layer's table.	De tabel van de laag openen.
 Open the selected layer's table.	De tabel van de geselecteerde laag openen.
 Open the Symbology pane.	Het symbologievenster openen.
+Open {code} on epsg.io	{code} openen op epsg.io
 Open, save and create projects	Projecten openen, opslaan en maken
 Open…	Openen…
 OR	OR
@@ -422,6 +432,8 @@ Pixel	Pixel
 Pixel type	Pixeltype
 PNG image	PNG-afbeelding
 Point	Punt
+Polar, conformal: Antarctica and the Southern Ocean.	Polair, hoekgetrouw: Antarctica en de Zuidelijke Oceaan.
+Polar, conformal: the Arctic and the northern lands.	Polair, hoekgetrouw: het Noordpoolgebied en de noordelijke landen.
 Polygon	Polygoon
 Polyline	Polylijn
 Populated Places	Bewoonde plaatsen
@@ -429,6 +441,7 @@ Previous	Vorige
 Previous Extent	Vorig bereik
 Primary\nSymbology	Primaire\nsymbologie
 Primary symbology	Primaire symbologie
+PROJ definition	PROJ-definitie
 Project	Project
 Project Info	Projectinfo
 Projection	Projectie
@@ -447,6 +460,8 @@ Redo	Opnieuw
 Redo the change you undid.	De ongedaan gemaakte wijziging opnieuw uitvoeren.
 Redo {action}	{action} opnieuw
 Red–Blue	Rood–Blauw
+Regional, equal-area: the contiguous United States.	Regionaal, oppervlaktegetrouw: de aaneengesloten Verenigde Staten.
+Regional, equal-area: the European standard for statistics.	Regionaal, oppervlaktegetrouw: de Europese standaard voor statistiek.
 Remove	Verwijderen
 Remove Bookmark	Bladwijzer verwijderen
 Remove From Current Selection	Verwijderen uit huidige selectie
@@ -466,6 +481,7 @@ Reset brightness, contrast and gamma.	Helderheid, contrast en gamma herstellen.
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Dekking lintfuncties: {done} van {total} functies ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Lintpariteit: {done} van {total} lintfuncties hebben een RustGIS-opdracht.
+Robinson	Robinson
 Run	Uitvoeren
 Run Tool	Gereedschap uitvoeren
 RustGIS	RustGIS
@@ -615,10 +631,21 @@ WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Waar
 Where Clause	Where-clausule
 Windows	Vensters
+Winkel Tripel	Winkel Tripel
 World	Wereld
 World Atlas	Wereldatlas
 World Atlas Sample	Voorbeeld Wereldatlas
 World Countries	Landen van de wereld
+World, compromise: low overall distortion, used for world atlases.	Wereld, compromis: weinig totale vervorming, gebruikt in wereldatlassen.
+World, compromise: neither equal-area nor conformal, balanced for wall maps.	Wereld, compromis: niet oppervlakte- of hoekgetrouw, evenwichtig voor wandkaarten.
+World, compromise: rounded corners, gentle shapes near the poles.	Wereld, compromis: afgeronde hoeken, zachte vormen bij de polen.
+World, conformal: the usual web map; areas grow towards the poles.	Wereld, hoekgetrouw: de gebruikelijke webkaart; oppervlakken groeien naar de polen.
+World, cylindrical: a compromise between Mercator and equal steps.	Wereld, cilindrisch: een compromis tussen Mercator en gelijke stappen.
+World, cylindrical: equal steps of longitude and latitude.	Wereld, cilindrisch: gelijke stappen in lengte en breedte.
+World, equal-area, cylindrical: true sizes, flattened near the poles.	Wereld, oppervlaktegetrouw, cilindrisch: ware grootten, afgeplat bij de polen.
+World, equal-area: true sizes with a Robinson-like look.	Wereld, oppervlaktegetrouw: ware grootten met een Robinson-achtig uiterlijk.
+World, equal-area: true sizes with rounded poles.	Wereld, oppervlaktegetrouw: ware grootten met afgeronde polen.
+World, equal-area: true sizes, shapes bend towards the edges.	Wereld, oppervlaktegetrouw: ware grootten, vormen buigen naar de randen.
 Yes	Ja
 Z factor	Z-factor
 Zoom about the pointer	Zoomen rond de aanwijzer

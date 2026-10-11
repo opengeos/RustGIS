@@ -1,7 +1,9 @@
 # tr interface catalog: English<TAB>translation
 <None>	<Yok>
+A 3D globe seen from space.	Uzaydan görülen 3B küre.
 A blank map with a basemap	Altlık haritalı boş bir harita
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Saf Rust ile yazılmış, hızlı ve açık kaynaklı bir masaüstü CBS; masaüstü CBS'nin şerit iş akışıyla: haritalar ve katmanlar, semboloji, etiketleme, seçim, düzenleme, coğrafi işleme ve dışa aktarma.
+A projected coordinate system.	Projeksiyonlu bir koordinat sistemi.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Bir değer, bir alan veya + − × ÷ ile birleştirilmiş iki tanesi. Seçili satırlara, hiçbiri seçili değilse tüm satırlara uygulanır.
 About	Hakkında
 About RustGIS	RustGIS Hakkında
@@ -31,6 +33,10 @@ Altitude	Yükseklik
 Analysis	Analiz
 AND	AND
 Apply	Uygula
+Area of use: longitude {w}° to {e}°, latitude {s}° to {n}°	Kullanım alanı: boylam {w}° ile {e}°, enlem {s}° ile {n}° arası
+Area of use: the whole world	Kullanım alanı: tüm dünya
+Area of use: within {r}° of the {lon}° meridian	Kullanım alanı: {lon}° meridyeninin {r}° yakını
+Area of use: within {r}° of {lon}°, {lat}°	Kullanım alanı: {lon}°, {lat}° noktasının {r}° yakını
 Area {area}   ·   Perimeter {perimeter}	Alan {area}   ·   Çevre {perimeter}
 Atlas	Atlas
 Attribute\nTable	Öznitelik\nTablosu
@@ -196,6 +202,7 @@ e.g.  pop_est / 1000000   or   'Africa'   or   name	örn.  pop_est / 1000000   v
 e.g. continent = 'Europe'	örn. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	örn. pop_est > 100000000 AND continent = 'Asia'
 East	Doğu
+Eckert IV (equal-area world)	Eckert IV (eşalan dünya)
 Edit	Düzenle
 Edit Attribute	Özniteliği Düzenle
 Edit attributes in the table.	Öznitelikleri tabloda düzenle.
@@ -204,6 +211,7 @@ Ember	Kor
 Encloses each feature, or all features, in its convex hull.	Her detayı veya tüm detayları dışbükey zarfı içine alır.
 Enhancement	İyileştirme
 EPSG code	EPSG kodu
+Equal Earth	Equal Earth
 Equal Interval	Eşit Aralık
 Equirectangular (Plate Carrée)	Eşdikdörtgen (Plate Carrée)
 Erase	Sil
@@ -286,6 +294,7 @@ Identify	Tanımla
 Import\nProject	Proje\nİçe Aktar
 In Beyond	Ötesinde Açık
 In project	Projede
+In use	Kullanımda
 Information	Bilgi
 Input Features	Girdi Detayları
 Input Polygons	Girdi Poligonları
@@ -402,6 +411,7 @@ Open the layer's attribute table.	Katmanın öznitelik tablosunu aç.
 Open the layer's table.	Katmanın tablosunu aç.
 Open the selected layer's table.	Seçili katmanın tablosunu aç.
 Open the Symbology pane.	Semboloji panelini aç.
+Open {code} on epsg.io	{code} kodunu epsg.io'da aç
 Open, save and create projects	Projeleri aç, kaydet ve oluştur
 Open…	Aç…
 OR	OR
@@ -422,6 +432,8 @@ Pixel	Piksel
 Pixel type	Piksel türü
 PNG image	PNG görüntüsü
 Point	Nokta
+Polar, conformal: Antarctica and the Southern Ocean.	Kutupsal, konform: Antarktika ve Güney Okyanusu.
+Polar, conformal: the Arctic and the northern lands.	Kutupsal, konform: Arktik ve kuzey toprakları.
 Polygon	Poligon
 Polyline	Çoklu Çizgi
 Populated Places	Yerleşim Yerleri
@@ -429,6 +441,7 @@ Previous	Önceki
 Previous Extent	Önceki Kapsam
 Primary\nSymbology	Birincil\nSemboloji
 Primary symbology	Birincil semboloji
+PROJ definition	PROJ tanımı
 Project	Proje
 Project Info	Proje Bilgisi
 Projection	Projeksiyon
@@ -447,6 +460,8 @@ Redo	Yinele
 Redo the change you undid.	Geri aldığınız değişikliği yinele.
 Redo {action}	Yinele: {action}
 Red–Blue	Kırmızı–Mavi
+Regional, equal-area: the contiguous United States.	Bölgesel, eşalan: bitişik Amerika Birleşik Devletleri.
+Regional, equal-area: the European standard for statistics.	Bölgesel, eşalan: istatistikler için Avrupa standardı.
 Remove	Kaldır
 Remove Bookmark	Yer İmini Kaldır
 Remove From Current Selection	Geçerli Seçimden Kaldır
@@ -466,6 +481,7 @@ Reset brightness, contrast and gamma.	Parlaklık, kontrast ve gamayı sıfırla.
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Şerit özellik kapsamı: {total} özellikten {done} tanesi (%{pct}).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Şerit eşliği: {total} şerit özelliğinden {done} tanesinin RustGIS komutu var.
+Robinson	Robinson
 Run	Çalıştır
 Run Tool	Aracı Çalıştır
 RustGIS	RustGIS
@@ -615,10 +631,21 @@ WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Koşul
 Where Clause	Where Yan Tümcesi
 Windows	Pencereler
+Winkel Tripel	Winkel Tripel
 World	Dünya
 World Atlas	Dünya Atlası
 World Atlas Sample	Dünya Atlası Örneği
 World Countries	Dünya Ülkeleri
+World, compromise: low overall distortion, used for world atlases.	Dünya, uzlaşmacı: genel bozulma düşük, dünya atlaslarında kullanılır.
+World, compromise: neither equal-area nor conformal, balanced for wall maps.	Dünya, uzlaşmacı: ne eşalan ne konform, duvar haritaları için dengeli.
+World, compromise: rounded corners, gentle shapes near the poles.	Dünya, uzlaşmacı: yuvarlak köşeler, kutuplara yakın yumuşak şekiller.
+World, conformal: the usual web map; areas grow towards the poles.	Dünya, konform: alışılmış web haritası; alanlar kutuplara doğru büyür.
+World, cylindrical: a compromise between Mercator and equal steps.	Dünya, silindirik: Mercator ile eşit adımlar arasında bir uzlaşma.
+World, cylindrical: equal steps of longitude and latitude.	Dünya, silindirik: boylam ve enlemde eşit adımlar.
+World, equal-area, cylindrical: true sizes, flattened near the poles.	Dünya, eşalan, silindirik: gerçek boyutlar, kutuplara yakın basık.
+World, equal-area: true sizes with a Robinson-like look.	Dünya, eşalan: gerçek boyutlar, Robinson'a benzer görünüm.
+World, equal-area: true sizes with rounded poles.	Dünya, eşalan: gerçek boyutlar, yuvarlak kutuplar.
+World, equal-area: true sizes, shapes bend towards the edges.	Dünya, eşalan: gerçek boyutlar, şekiller kenarlara doğru bükülür.
 Yes	Evet
 Z factor	Z faktörü
 Zoom about the pointer	İşaretçi etrafında yakınlaştır

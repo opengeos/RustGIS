@@ -1,7 +1,9 @@
 # it interface catalog: English<TAB>translation
 <None>	<Nessuno>
+A 3D globe seen from space.	Un globo 3D visto dallo spazio.
 A blank map with a basemap	Una mappa vuota con una mappa di base
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Un GIS desktop veloce e open source scritto in puro Rust, con il flusso di lavoro a barra multifunzione dei GIS desktop: mappe e layer, simbologia, etichettatura, selezione, modifica, geoprocessing ed esportazione.
+A projected coordinate system.	Un sistema di coordinate proiettate.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Un valore, un campo o due di essi uniti da + − × ÷. Si applica alle righe selezionate, o a tutte le righe se nessuna è selezionata.
 About	Informazioni
 About RustGIS	Informazioni su RustGIS
@@ -31,6 +33,10 @@ Altitude	Altitudine
 Analysis	Analisi
 AND	AND
 Apply	Applica
+Area of use: longitude {w}° to {e}°, latitude {s}° to {n}°	Area di utilizzo: longitudine da {w}° a {e}°, latitudine da {s}° a {n}°
+Area of use: the whole world	Area di utilizzo: il mondo intero
+Area of use: within {r}° of the {lon}° meridian	Area di utilizzo: entro {r}° dal meridiano {lon}°
+Area of use: within {r}° of {lon}°, {lat}°	Area di utilizzo: entro {r}° da {lon}°, {lat}°
 Area {area}   ·   Perimeter {perimeter}	Area {area}   ·   Perimetro {perimeter}
 Atlas	Atlante
 Attribute\nTable	Tabella\nattributi
@@ -196,6 +202,7 @@ e.g.  pop_est / 1000000   or   'Africa'   or   name	Ad es.  pop_est / 1000000   
 e.g. continent = 'Europe'	ad es. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	ad es. pop_est > 100000000 AND continent = 'Asia'
 East	Est
+Eckert IV (equal-area world)	Eckert IV (mondo equivalente)
 Edit	Modifica
 Edit Attribute	Modifica attributo
 Edit attributes in the table.	Modifica gli attributi nella tabella.
@@ -204,6 +211,7 @@ Ember	Brace
 Encloses each feature, or all features, in its convex hull.	Racchiude ogni elemento, o tutti gli elementi, nel suo inviluppo convesso.
 Enhancement	Miglioramento
 EPSG code	Codice EPSG
+Equal Earth	Equal Earth
 Equal Interval	Intervallo uguale
 Equirectangular (Plate Carrée)	Equirettangolare (Plate Carrée)
 Erase	Cancella area
@@ -286,6 +294,7 @@ Identify	Identifica
 Import\nProject	Importa\nprogetto
 In Beyond	Oltre (ingrandimento)
 In project	Nel progetto
+In use	In uso
 Information	Informazioni
 Input Features	Elementi di input
 Input Polygons	Poligoni di input
@@ -402,6 +411,7 @@ Open the layer's attribute table.	Apri la tabella degli attributi del layer.
 Open the layer's table.	Apri la tabella del layer.
 Open the selected layer's table.	Apri la tabella del layer selezionato.
 Open the Symbology pane.	Apri il pannello Simbologia.
+Open {code} on epsg.io	Apri {code} su epsg.io
 Open, save and create projects	Apri, salva e crea progetti
 Open…	Apri…
 OR	OR
@@ -422,6 +432,8 @@ Pixel	Pixel
 Pixel type	Tipo di pixel
 PNG image	Immagine PNG
 Point	Punto
+Polar, conformal: Antarctica and the Southern Ocean.	Polare, conforme: l'Antartide e l'Oceano Australe.
+Polar, conformal: the Arctic and the northern lands.	Polare, conforme: l'Artico e le terre settentrionali.
 Polygon	Poligono
 Polyline	Polilinea
 Populated Places	Località abitate
@@ -429,6 +441,7 @@ Previous	Precedente
 Previous Extent	Estensione precedente
 Primary\nSymbology	Simbologia\nprimaria
 Primary symbology	Simbologia primaria
+PROJ definition	Definizione PROJ
 Project	Progetto
 Project Info	Info progetto
 Projection	Proiezione
@@ -447,6 +460,8 @@ Redo	Ripeti
 Redo the change you undid.	Ripeti la modifica annullata.
 Redo {action}	Ripeti {action}
 Red–Blue	Rosso–Blu
+Regional, equal-area: the contiguous United States.	Regionale, equivalente: gli Stati Uniti contigui.
+Regional, equal-area: the European standard for statistics.	Regionale, equivalente: lo standard europeo per le statistiche.
 Remove	Rimuovi
 Remove Bookmark	Rimuovi segnalibro
 Remove From Current Selection	Rimuovi dalla selezione corrente
@@ -466,6 +481,7 @@ Reset brightness, contrast and gamma.	Reimposta luminosità, contrasto e gamma.
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Copertura funzioni della barra multifunzione: {done} di {total} funzioni ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Parità della barra multifunzione: {done} di {total} funzioni hanno un comando RustGIS.
+Robinson	Robinson
 Run	Esegui
 Run Tool	Esegui strumento
 RustGIS	RustGIS
@@ -615,10 +631,21 @@ WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Dove
 Where Clause	Clausola where
 Windows	Finestre
+Winkel Tripel	Winkel Tripel
 World	Mondo
 World Atlas	Atlante mondiale
 World Atlas Sample	Esempio World Atlas
 World Countries	Paesi del mondo
+World, compromise: low overall distortion, used for world atlases.	Mondo, di compromesso: bassa distorsione complessiva, usata negli atlanti.
+World, compromise: neither equal-area nor conformal, balanced for wall maps.	Mondo, di compromesso: né equivalente né conforme, bilanciata per carte murali.
+World, compromise: rounded corners, gentle shapes near the poles.	Mondo, di compromesso: angoli arrotondati, forme morbide vicino ai poli.
+World, conformal: the usual web map; areas grow towards the poles.	Mondo, conforme: la solita mappa web; le aree crescono verso i poli.
+World, cylindrical: a compromise between Mercator and equal steps.	Mondo, cilindrica: un compromesso tra Mercatore e passi uguali.
+World, cylindrical: equal steps of longitude and latitude.	Mondo, cilindrica: passi uguali di longitudine e latitudine.
+World, equal-area, cylindrical: true sizes, flattened near the poles.	Mondo, equivalente, cilindrica: dimensioni reali, appiattita vicino ai poli.
+World, equal-area: true sizes with a Robinson-like look.	Mondo, equivalente: dimensioni reali con un aspetto simile a Robinson.
+World, equal-area: true sizes with rounded poles.	Mondo, equivalente: dimensioni reali con poli arrotondati.
+World, equal-area: true sizes, shapes bend towards the edges.	Mondo, equivalente: dimensioni reali, le forme si piegano verso i bordi.
 Yes	Sì
 Z factor	Fattore Z
 Zoom about the pointer	Zoom attorno al puntatore

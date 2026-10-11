@@ -1,7 +1,9 @@
 # id interface catalog: English<TAB>translation
 <None>	<Tidak ada>
+A 3D globe seen from space.	Globe 3D yang terlihat dari luar angkasa.
 A blank map with a basemap	Peta kosong dengan peta dasar
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	GIS desktop sumber terbuka yang cepat, ditulis dengan Rust murni, dengan alur kerja ribbon khas GIS desktop: peta dan layer, simbologi, pelabelan, seleksi, penyuntingan, geoprosesing, dan ekspor.
+A projected coordinate system.	Sistem koordinat terproyeksi.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Sebuah nilai, kolom, atau dua di antaranya yang digabung dengan + − × ÷. Berlaku untuk baris terpilih, atau semua baris jika tidak ada yang dipilih.
 About	Tentang
 About RustGIS	Tentang RustGIS
@@ -31,6 +33,10 @@ Altitude	Ketinggian
 Analysis	Analisis
 AND	AND
 Apply	Terapkan
+Area of use: longitude {w}° to {e}°, latitude {s}° to {n}°	Area penggunaan: bujur {w}° hingga {e}°, lintang {s}° hingga {n}°
+Area of use: the whole world	Area penggunaan: seluruh dunia
+Area of use: within {r}° of the {lon}° meridian	Area penggunaan: dalam {r}° dari meridian {lon}°
+Area of use: within {r}° of {lon}°, {lat}°	Area penggunaan: dalam {r}° dari {lon}°, {lat}°
 Area {area}   ·   Perimeter {perimeter}	Luas {area}   ·   Keliling {perimeter}
 Atlas	Atlas
 Attribute\nTable	Tabel\nAtribut
@@ -196,6 +202,7 @@ e.g.  pop_est / 1000000   or   'Africa'   or   name	mis.  pop_est / 1000000   at
 e.g. continent = 'Europe'	mis. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	mis. pop_est > 100000000 AND continent = 'Asia'
 East	Timur
+Eckert IV (equal-area world)	Eckert IV (dunia luas sama)
 Edit	Edit
 Edit Attribute	Edit Atribut
 Edit attributes in the table.	Edit atribut di tabel.
@@ -204,6 +211,7 @@ Ember	Bara
 Encloses each feature, or all features, in its convex hull.	Melingkupi setiap fitur, atau semua fitur, dengan convex hull-nya.
 Enhancement	Peningkatan
 EPSG code	Kode EPSG
+Equal Earth	Equal Earth
 Equal Interval	Interval Sama
 Equirectangular (Plate Carrée)	Ekuirektangular (Plate Carrée)
 Erase	Hapus (Erase)
@@ -286,6 +294,7 @@ Identify	Identifikasi
 Import\nProject	Impor\nProyek
 In Beyond	Perbesar Melewati
 In project	Dalam proyek
+In use	Digunakan
 Information	Informasi
 Input Features	Fitur Masukan
 Input Polygons	Poligon Masukan
@@ -402,6 +411,7 @@ Open the layer's attribute table.	Buka tabel atribut layer.
 Open the layer's table.	Buka tabel layer.
 Open the selected layer's table.	Buka tabel layer terpilih.
 Open the Symbology pane.	Buka panel Simbologi.
+Open {code} on epsg.io	Buka {code} di epsg.io
 Open, save and create projects	Buka, simpan, dan buat proyek
 Open…	Buka…
 OR	OR
@@ -422,6 +432,8 @@ Pixel	Piksel
 Pixel type	Tipe piksel
 PNG image	Gambar PNG
 Point	Titik
+Polar, conformal: Antarctica and the Southern Ocean.	Kutub, konformal: Antarktika dan Samudra Selatan.
+Polar, conformal: the Arctic and the northern lands.	Kutub, konformal: Arktik dan daratan utara.
 Polygon	Poligon
 Polyline	Polyline
 Populated Places	Tempat Berpenduduk
@@ -429,6 +441,7 @@ Previous	Sebelumnya
 Previous Extent	Cakupan Sebelumnya
 Primary\nSymbology	Simbologi\nUtama
 Primary symbology	Simbologi utama
+PROJ definition	Definisi PROJ
 Project	Proyek
 Project Info	Info Proyek
 Projection	Proyeksi
@@ -447,6 +460,8 @@ Redo	Ulangi
 Redo the change you undid.	Ulangi perubahan yang dibatalkan.
 Redo {action}	Ulangi {action}
 Red–Blue	Merah–Biru
+Regional, equal-area: the contiguous United States.	Regional, luas sama: Amerika Serikat daratan.
+Regional, equal-area: the European standard for statistics.	Regional, luas sama: standar Eropa untuk statistik.
 Remove	Hapus
 Remove Bookmark	Hapus Penanda
 Remove From Current Selection	Hapus dari Seleksi Saat Ini
@@ -466,6 +481,7 @@ Reset brightness, contrast and gamma.	Atur ulang kecerahan, kontras, dan gamma.
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Cakupan fitur ribbon: {done} dari {total} fitur ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Paritas ribbon: {done} dari {total} fitur ribbon memiliki perintah RustGIS.
+Robinson	Robinson
 Run	Jalankan
 Run Tool	Jalankan Alat
 RustGIS	RustGIS
@@ -615,10 +631,21 @@ WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Where
 Where Clause	Klausa Where
 Windows	Jendela
+Winkel Tripel	Winkel Tripel
 World	Dunia
 World Atlas	World Atlas
 World Atlas Sample	Contoh World Atlas
 World Countries	Negara-negara Dunia
+World, compromise: low overall distortion, used for world atlases.	Dunia, kompromi: distorsi keseluruhan rendah, dipakai di atlas dunia.
+World, compromise: neither equal-area nor conformal, balanced for wall maps.	Dunia, kompromi: bukan luas sama atau konformal, seimbang untuk peta dinding.
+World, compromise: rounded corners, gentle shapes near the poles.	Dunia, kompromi: sudut membulat, bentuk lembut di dekat kutub.
+World, conformal: the usual web map; areas grow towards the poles.	Dunia, konformal: peta web yang umum; luas membesar ke arah kutub.
+World, cylindrical: a compromise between Mercator and equal steps.	Dunia, silinder: kompromi antara Mercator dan langkah sama.
+World, cylindrical: equal steps of longitude and latitude.	Dunia, silinder: langkah bujur dan lintang yang sama.
+World, equal-area, cylindrical: true sizes, flattened near the poles.	Dunia, luas sama, silinder: ukuran sebenarnya, memipih di dekat kutub.
+World, equal-area: true sizes with a Robinson-like look.	Dunia, luas sama: ukuran sebenarnya dengan tampilan mirip Robinson.
+World, equal-area: true sizes with rounded poles.	Dunia, luas sama: ukuran sebenarnya dengan kutub membulat.
+World, equal-area: true sizes, shapes bend towards the edges.	Dunia, luas sama: ukuran sebenarnya, bentuk melengkung ke arah tepi.
 Yes	Ya
 Z factor	Faktor Z
 Zoom about the pointer	Zoom di sekitar penunjuk

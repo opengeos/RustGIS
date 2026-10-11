@@ -47,7 +47,8 @@ System** dialog, which also takes any projected EPSG code (such as `3035`, `3263
 | Preset | Kind |
 | --- | --- |
 | Equirectangular, Miller | World, cylindrical |
-| Mollweide, Lambert Cylindrical Equal Area | World, equal-area |
+| Mollweide, Lambert Cylindrical Equal Area, Equal Earth, Eckert IV | World, equal-area |
+| Robinson, Natural Earth, Winkel Tripel | World, compromise |
 | North / South Polar Stereographic | Polar |
 | Europe Equal Area (ETRS89 LAEA), USA Contiguous Albers Equal Area | Regional, equal-area |
 
@@ -55,7 +56,9 @@ Layers are projected on the fly. Each projection has an area of use: polar proje
 their hemisphere poleward of 30°, regional ones their region, transverse Mercator (UTM) zones
 30° either side of their meridian, and data outside it isn't drawn. Switching keeps the centre
 and scale, and the choice is saved with the map (`map.projection` from the command line). A
-raster already in the map's coordinate system draws without being reprojected.
+raster already in the map's coordinate system draws without being reprojected. Robinson, Equal
+Earth, Natural Earth, Winkel Tripel and Eckert IV are computed by RustGIS itself on a sphere,
+so EPSG:8857 (Equal Earth) works too.
 
 ## Globe
 

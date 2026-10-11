@@ -7,6 +7,7 @@ pub mod globe;
 pub mod projection;
 pub mod raster;
 pub mod symbology;
+pub mod world;
 
 pub use camera::Camera;
 pub use color::{Ramp, Rgba};

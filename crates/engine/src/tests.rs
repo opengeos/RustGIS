@@ -226,6 +226,16 @@ fn custom_projections_switch_keep_scale_query_and_render() {
     // A project naming a projection this version can't use opens in Web Mercator.
     let broken = json.replace("EPSG:32617", "EPSG:9");
     assert_eq!(Project::from_json(&broken).unwrap().map().projection, rustgis_map::Projection::WebMercator);
+    // The built-in world projections (and Equal Earth by its EPSG code) draw the whole world.
+    for p in ["robinson", "equalEarth", "naturalEarth", "winkelTripel", "eckertIV", "EPSG:8857"] {
+        s.run("map.projection", &json!({"type": p})).unwrap_or_else(|e| panic!("{p}: {e}"));
+        s.run("map.zoomFull", &Value::Null).unwrap();
+        let c = s.map().center_lonlat();
+        assert!(c.x.abs() < 1.0 && c.y.abs() < 30.0, "{p}: {c:?}");
+        let v = s.run("identify", &json!({"lon": 2.35, "lat": 48.85, "tolerancePx": 5})).unwrap();
+        assert!(!v.is_null(), "{p}: something is under Paris");
+        assert!(crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap().len() > 1000, "{p}");
+    }
 }
 
 #[test]

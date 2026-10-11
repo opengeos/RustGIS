@@ -82,7 +82,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut open = true;
     let mut close = false;
     egui::Window::new(tl!(title)).id(egui::Id::new("dialog")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
-        ui.set_width(440.0);
+        ui.set_width(if which == "coordinateSystem" { 660.0 } else { 440.0 });
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         match which {
             "selectByAttributes" => close = select_by_attributes(app, ui, &t),
@@ -303,44 +303,55 @@ pub fn pick_save(_: &str, _: &[&str], _: &str) -> Option<String> {
 #[allow(dead_code)]
 fn unused(_: Value) {}
 
-/// The map's coordinate system: Web Mercator, the globe, a preset, or any projected EPSG code.
+/// The map's coordinate system: Web Mercator, the globe, a preset, or any projected EPSG code. The
+/// list is on the left; the right shows what the selection is, where it can be used, its PROJ
+/// definition, and a link to its page on epsg.io.
 fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> bool {
     let current = app.session.map().projection.code();
     ui.label(egui::RichText::new(tl!("The map is drawn in this coordinate system; layers are projected on the fly.")).weak());
     let mut choices: Vec<(String, String)> = vec![("mercator".into(), "Web Mercator".into()), ("globe".into(), "Globe".into())];
     choices.extend(rustgis_engine::map::projection::PRESETS.iter().map(|(id, label, _)| (id.to_string(), label.to_string())));
-    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-        for (id, label) in &choices {
-            if ui.selectable_label(app.dialogs.text == *id, tl!(label.as_str())).clicked() {
-                app.dialogs.text = id.clone();
-                app.dialogs.a.clear();
-            }
-        }
+    // Two panes of a fixed height, so the dialog doesn't stretch to the window.
+    let pane_h = 340.0;
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), pane_h), egui::Layout::left_to_right(egui::Align::Min), |ui| {
+        ui.set_height(pane_h);
+        ui.vertical(|ui| {
+            ui.set_width(270.0);
+            egui::ScrollArea::vertical().id_salt("crs_list").max_height(pane_h - 44.0).auto_shrink([false, false]).show(ui, |ui| {
+                ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                    for (id, label) in &choices {
+                        let selected = app.dialogs.text.eq_ignore_ascii_case(id);
+                        if ui.selectable_label(selected, tl!(label.as_str())).clicked() {
+                            app.dialogs.text = id.clone();
+                            app.dialogs.a.clear();
+                        }
+                    }
+                });
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(tl!("EPSG code"));
+                let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("3035").desired_width(110.0));
+                if r.changed() && !app.dialogs.a.trim().is_empty() {
+                    app.dialogs.text = format!("epsg:{}", app.dialogs.a.trim());
+                }
+            });
+        });
+        ui.separator();
+        ui.vertical(|ui| {
+            ui.set_width(340.0);
+            egui::ScrollArea::vertical().id_salt("crs_details").max_height(pane_h).show(ui, |ui| {
+                crs_details(ui, &app.dialogs.text, &current, t);
+            });
+        });
     });
     ui.separator();
-    ui.horizontal(|ui| {
-        ui.label(tl!("EPSG code"));
-        let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("3035").desired_width(120.0));
-        if r.changed() && !app.dialogs.a.trim().is_empty() {
-            app.dialogs.text = format!("epsg:{}", app.dialogs.a.trim());
-        }
-    });
-    // What the choice means, or why it can't be used.
     let chosen = app.dialogs.text.clone();
     let check = rustgis_engine::map::Projection::from_code(&chosen);
-    match (&check, rustgis_engine::map::projection::lookup(&chosen)) {
-        (Ok(_), Ok((def, _))) => {
-            ui.label(egui::RichText::new(def).monospace().size(10.5).color(t.text_dim));
-        }
-        (Ok(_), Err(_)) => {}
-        (Err(e), _) => {
-            ui.label(egui::RichText::new(e.as_str()).color(t.red));
-        }
-    }
-    let ok = check.is_ok() && chosen != current;
+    let same = check.as_ref().is_ok_and(|p| p.code() == current);
     let mut close = false;
     ui.horizontal(|ui| {
-        if ui.add_enabled(ok, egui::Button::new(tl!("Apply"))).clicked() {
+        if ui.add_enabled(check.is_ok() && !same, egui::Button::new(tl!("Apply"))).clicked() {
             match app.run("map.projection", json!({"type": chosen})) {
                 Ok(_) => {
                     let _ = app.run("map.zoomFull", Value::Null);
@@ -354,4 +365,75 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
         }
     });
     close
+}
+
+/// What a coordinate system is: its kind, area of use, definition and epsg.io page.
+fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
+    use rustgis_engine::map::projection::{Domain, Projector, lookup};
+    let projection = match rustgis_engine::map::Projection::from_code(chosen) {
+        Ok(p) => p,
+        Err(e) => {
+            ui.label(egui::RichText::new(e).color(t.red));
+            return;
+        }
+    };
+    let code = projection.code();
+    ui.label(egui::RichText::new(tl!(projection.label().as_str())).font(crate::theme::semibold(14.0)));
+    if code == current {
+        ui.label(egui::RichText::new(tl!("In use")).size(11.0).color(t.accent_text));
+    }
+    let epsg = code.to_ascii_lowercase().strip_prefix("epsg:").map(str::to_string);
+    let (kind, page): (&str, Option<String>) = match code.as_str() {
+        "mercator" => ("World, conformal: the usual web map; areas grow towards the poles.", Some("3857".into())),
+        "globe" => ("A 3D globe seen from space.", None),
+        "equirectangular" => ("World, cylindrical: equal steps of longitude and latitude.", Some("4087".into())),
+        "miller" => ("World, cylindrical: a compromise between Mercator and equal steps.", Some("54003".into())),
+        "mollweide" => ("World, equal-area: true sizes, shapes bend towards the edges.", Some("54009".into())),
+        "cylindricalEqualArea" => ("World, equal-area, cylindrical: true sizes, flattened near the poles.", Some("54034".into())),
+        "robinson" => ("World, compromise: neither equal-area nor conformal, balanced for wall maps.", Some("54030".into())),
+        "equalEarth" => ("World, equal-area: true sizes with a Robinson-like look.", Some("8857".into())),
+        "naturalEarth" => ("World, compromise: rounded corners, gentle shapes near the poles.", None),
+        "winkelTripel" => ("World, compromise: low overall distortion, used for world atlases.", Some("54042".into())),
+        "eckertIV" => ("World, equal-area: true sizes with rounded poles.", Some("54012".into())),
+        "northPolar" => ("Polar, conformal: the Arctic and the northern lands.", None),
+        "southPolar" => ("Polar, conformal: Antarctica and the Southern Ocean.", Some("3031".into())),
+        "europeEqualArea" => ("Regional, equal-area: the European standard for statistics.", Some("3035".into())),
+        "usaAlbers" => ("Regional, equal-area: the contiguous United States.", Some("5070".into())),
+        _ => ("A projected coordinate system.", epsg.clone()),
+    };
+    ui.label(tl!(kind));
+    if let Ok(p) = Projector::new(&code) {
+        let area = match p.domain() {
+            Domain::World => tl!("Area of use: the whole world").to_string(),
+            Domain::Box(e) => crate::i18n::fmt(
+                "Area of use: longitude {w}° to {e}°, latitude {s}° to {n}°",
+                &[
+                    ("w", &format!("{:.0}", e.min_x)),
+                    ("e", &format!("{:.0}", e.max_x)),
+                    ("s", &format!("{:.0}", e.min_y)),
+                    ("n", &format!("{:.0}", e.max_y)),
+                ],
+            ),
+            Domain::Cap { center, radius } => crate::i18n::fmt(
+                "Area of use: within {r}° of {lon}°, {lat}°",
+                &[("r", &format!("{radius:.0}")), ("lon", &format!("{:.0}", center.x)), ("lat", &format!("{:.0}", center.y))],
+            ),
+            Domain::Band { lon0, half } => crate::i18n::fmt(
+                "Area of use: within {r}° of the {lon}° meridian",
+                &[("r", &format!("{half:.0}")), ("lon", &format!("{lon0:.0}"))],
+            ),
+        };
+        ui.label(egui::RichText::new(area).size(11.5).color(t.text_dim));
+    }
+    if let Ok((def, _)) = lookup(&code) {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(tl!("PROJ definition")).size(11.0).color(t.text_dim));
+        ui.add(egui::Label::new(egui::RichText::new(def).monospace().size(10.5)).wrap());
+    }
+    if let Some(n) = page {
+        ui.add_space(4.0);
+        // Five-digit codes from 53000 up are ESRI's world projections.
+        let prefix = if n.len() == 5 && n.starts_with('5') { "esri" } else { "epsg" }.to_ascii_uppercase();
+        ui.hyperlink_to(crate::i18n::fmt("Open {code} on epsg.io", &[("code", &format!("{prefix}:{n}"))]), format!("https://epsg.io/{n}"));
+    }
 }

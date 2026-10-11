@@ -1,7 +1,9 @@
 # pt interface catalog: English<TAB>translation
 <None>	<Nenhum>
+A 3D globe seen from space.	Um globo 3D visto do espaço.
 A blank map with a basemap	Um mapa em branco com um mapa base
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Um SIG desktop rápido e de código aberto escrito em Rust puro, com o fluxo de trabalho em faixa de opções dos SIG desktop: mapas e camadas, simbologia, rotulagem, seleção, edição, geoprocessamento e exportação.
+A projected coordinate system.	Um sistema de coordenadas projetadas.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Um valor, um campo ou dois deles unidos por + − × ÷. Aplica-se às linhas selecionadas, ou a todas as linhas quando nenhuma estiver selecionada.
 About	Sobre
 About RustGIS	Sobre o RustGIS
@@ -31,6 +33,10 @@ Altitude	Altitude
 Analysis	Análise
 AND	AND
 Apply	Aplicar
+Area of use: longitude {w}° to {e}°, latitude {s}° to {n}°	Área de uso: longitude {w}° a {e}°, latitude {s}° a {n}°
+Area of use: the whole world	Área de uso: o mundo inteiro
+Area of use: within {r}° of the {lon}° meridian	Área de uso: até {r}° do meridiano {lon}°
+Area of use: within {r}° of {lon}°, {lat}°	Área de uso: até {r}° de {lon}°, {lat}°
 Area {area}   ·   Perimeter {perimeter}	Área {area}   ·   Perímetro {perimeter}
 Atlas	Atlas
 Attribute\nTable	Tabela de\natributos
@@ -196,6 +202,7 @@ e.g.  pop_est / 1000000   or   'Africa'   or   name	ex.:  pop_est / 1000000   ou
 e.g. continent = 'Europe'	ex.: continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	ex.: pop_est > 100000000 AND continent = 'Asia'
 East	Leste
+Eckert IV (equal-area world)	Eckert IV (mundo equivalente)
 Edit	Editar
 Edit Attribute	Editar atributo
 Edit attributes in the table.	Editar atributos na tabela.
@@ -204,6 +211,7 @@ Ember	Brasa
 Encloses each feature, or all features, in its convex hull.	Envolve cada feição, ou todas as feições, em seu fecho convexo.
 Enhancement	Realce
 EPSG code	Código EPSG
+Equal Earth	Equal Earth
 Equal Interval	Intervalo igual
 Equirectangular (Plate Carrée)	Equirretangular (Plate Carrée)
 Erase	Apagar
@@ -286,6 +294,7 @@ Identify	Identificar
 Import\nProject	Importar\nprojeto
 In Beyond	Limite ao aproximar
 In project	No projeto
+In use	Em uso
 Information	Informações
 Input Features	Feições de entrada
 Input Polygons	Polígonos de entrada
@@ -402,6 +411,7 @@ Open the layer's attribute table.	Abrir a tabela de atributos da camada.
 Open the layer's table.	Abrir a tabela da camada.
 Open the selected layer's table.	Abrir a tabela da camada selecionada.
 Open the Symbology pane.	Abrir o painel Simbologia.
+Open {code} on epsg.io	Abrir {code} no epsg.io
 Open, save and create projects	Abrir, salvar e criar projetos
 Open…	Abrir…
 OR	OR
@@ -422,6 +432,8 @@ Pixel	Pixel
 Pixel type	Tipo de pixel
 PNG image	Imagem PNG
 Point	Ponto
+Polar, conformal: Antarctica and the Southern Ocean.	Polar, conforme: a Antártida e o Oceano Antártico.
+Polar, conformal: the Arctic and the northern lands.	Polar, conforme: o Ártico e as terras do norte.
 Polygon	Polígono
 Polyline	Polilinha
 Populated Places	Locais povoados
@@ -429,6 +441,7 @@ Previous	Anterior
 Previous Extent	Extensão anterior
 Primary\nSymbology	Simbologia\nprincipal
 Primary symbology	Simbologia principal
+PROJ definition	Definição PROJ
 Project	Projeto
 Project Info	Informações do projeto
 Projection	Projeção
@@ -447,6 +460,8 @@ Redo	Refazer
 Redo the change you undid.	Refazer a alteração desfeita.
 Redo {action}	Refazer {action}
 Red–Blue	Vermelho–Azul
+Regional, equal-area: the contiguous United States.	Regional, equivalente: os Estados Unidos contíguos.
+Regional, equal-area: the European standard for statistics.	Regional, equivalente: o padrão europeu para estatísticas.
 Remove	Remover
 Remove Bookmark	Remover marcador
 Remove From Current Selection	Remover da seleção atual
@@ -466,6 +481,7 @@ Reset brightness, contrast and gamma.	Redefinir brilho, contraste e gama.
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Cobertura de recursos da faixa de opções: {done} de {total} recursos ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Paridade da faixa de opções: {done} de {total} recursos da faixa têm um comando do RustGIS.
+Robinson	Robinson
 Run	Executar
 Run Tool	Executar ferramenta
 RustGIS	RustGIS
@@ -615,10 +631,21 @@ WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Onde
 Where Clause	Cláusula WHERE
 Windows	Janelas
+Winkel Tripel	Winkel Tripel
 World	Mundo
 World Atlas	World Atlas
 World Atlas Sample	Exemplo World Atlas
 World Countries	Países do mundo
+World, compromise: low overall distortion, used for world atlases.	Mundo, de compromisso: pouca distorção geral, usada em atlas mundiais.
+World, compromise: neither equal-area nor conformal, balanced for wall maps.	Mundo, de compromisso: nem equivalente nem conforme, equilibrada para mapas murais.
+World, compromise: rounded corners, gentle shapes near the poles.	Mundo, de compromisso: cantos arredondados, formas suaves perto dos polos.
+World, conformal: the usual web map; areas grow towards the poles.	Mundo, conforme: o mapa web habitual; as áreas crescem em direção aos polos.
+World, cylindrical: a compromise between Mercator and equal steps.	Mundo, cilíndrica: um compromisso entre Mercator e passos iguais.
+World, cylindrical: equal steps of longitude and latitude.	Mundo, cilíndrica: passos iguais de longitude e latitude.
+World, equal-area, cylindrical: true sizes, flattened near the poles.	Mundo, equivalente, cilíndrica: tamanhos reais, achatada perto dos polos.
+World, equal-area: true sizes with a Robinson-like look.	Mundo, equivalente: tamanhos reais com aparência semelhante à de Robinson.
+World, equal-area: true sizes with rounded poles.	Mundo, equivalente: tamanhos reais com polos arredondados.
+World, equal-area: true sizes, shapes bend towards the edges.	Mundo, equivalente: tamanhos reais, as formas se curvam para as bordas.
 Yes	Sim
 Z factor	Fator Z
 Zoom about the pointer	Zoom em torno do ponteiro

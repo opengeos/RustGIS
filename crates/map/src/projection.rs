@@ -13,6 +13,11 @@ pub const PRESETS: &[(&str, &str, &str)] = &[
     ("miller", "Miller Cylindrical", "+proj=mill +lon_0=0 +R_A +datum=WGS84 +units=m +no_defs"),
     ("mollweide", "Mollweide (equal-area world)", "+proj=moll +lon_0=0 +datum=WGS84 +units=m +no_defs"),
     ("cylindricalEqualArea", "Lambert Cylindrical Equal Area", "+proj=cea +lon_0=0 +lat_ts=0 +datum=WGS84 +units=m +no_defs"),
+    ("robinson", "Robinson", "+proj=robin +lon_0=0 +datum=WGS84 +units=m +no_defs"),
+    ("equalEarth", "Equal Earth", "+proj=eqearth +lon_0=0 +datum=WGS84 +units=m +no_defs"),
+    ("naturalEarth", "Natural Earth", "+proj=natearth +lon_0=0 +datum=WGS84 +units=m +no_defs"),
+    ("winkelTripel", "Winkel Tripel", "+proj=wintri +lon_0=0 +datum=WGS84 +units=m +no_defs"),
+    ("eckertIV", "Eckert IV (equal-area world)", "+proj=eck4 +lon_0=0 +datum=WGS84 +units=m +no_defs"),
     ("northPolar", "North Polar Stereographic", "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=0 +datum=WGS84 +units=m +no_defs"),
     ("southPolar", "South Polar Stereographic", "+proj=stere +lat_0=-90 +lat_ts=-71 +lon_0=0 +datum=WGS84 +units=m +no_defs"),
     (
@@ -102,11 +107,17 @@ impl Domain {
     }
 }
 
+/// How a projection is computed: by the PROJ port, or here (world projections it lacks).
+#[derive(Clone)]
+enum Engine {
+    Proj { native: Box<proj4rs::Proj>, wgs84: Box<proj4rs::Proj> },
+    World(crate::world::World),
+}
+
 /// Converts between longitude/latitude and the coordinates of a custom projection.
 #[derive(Clone)]
 pub struct Projector {
-    native: Box<proj4rs::Proj>,
-    wgs84: Box<proj4rs::Proj>,
+    engine: Engine,
     /// Metres per map unit.
     to_meter: f64,
     domain: Domain,
@@ -114,7 +125,11 @@ pub struct Projector {
 
 impl std::fmt::Debug for Projector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Projector({})", self.native.projname())
+        let name = match &self.engine {
+            Engine::Proj { native, .. } => native.projname(),
+            Engine::World(w) => w.kind.proj_name(),
+        };
+        write!(f, "Projector({name})")
     }
 }
 
@@ -124,12 +139,19 @@ const LIMIT: f64 = 4.0e7;
 impl Projector {
     pub fn new(code: &str) -> Result<Projector, String> {
         let (def, _) = lookup(code)?;
+        let preset = PRESETS.iter().find(|(id, _, _)| id.eq_ignore_ascii_case(code.trim())).map(|(id, _, _)| *id);
+        let domain = Domain::of(preset, &def);
+        let proj = def.split_whitespace().find_map(|t| t.strip_prefix("+proj=")).unwrap_or("");
+        if let Some(kind) = crate::world::Kind::from_proj_name(proj) {
+            let lon0 = def.split_whitespace().find_map(|t| t.strip_prefix("+lon_0=")).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+            let lon0 = if f64::is_finite(lon0) { lon0 } else { 0.0 };
+            return Ok(Projector { engine: Engine::World(crate::world::World { kind, lon0 }), to_meter: 1.0, domain });
+        }
         let native = proj4rs::Proj::from_proj_string(&def).map_err(|e| format!("{code}: {e}"))?;
         let wgs84 = proj4rs::Proj::from_proj_string("+proj=longlat +datum=WGS84 +no_defs").map_err(|e| e.to_string())?;
         let to_meter = native.to_meter();
-        let preset = PRESETS.iter().find(|(id, _, _)| id.eq_ignore_ascii_case(code.trim())).map(|(id, _, _)| *id);
-        let domain = Domain::of(preset, &def);
-        Ok(Projector { native: Box::new(native), wgs84: Box::new(wgs84), to_meter: if to_meter > 0.0 { to_meter } else { 1.0 }, domain })
+        let engine = Engine::Proj { native: Box::new(native), wgs84: Box::new(wgs84) };
+        Ok(Projector { engine, to_meter: if to_meter > 0.0 { to_meter } else { 1.0 }, domain })
     }
 
     /// Longitude/latitude to map coordinates, `None` outside the projection.
@@ -137,8 +159,12 @@ impl Projector {
         if !c.is_finite() {
             return None;
         }
+        let (native, wgs84) = match &self.engine {
+            Engine::Proj { native, wgs84 } => (native, wgs84),
+            Engine::World(w) => return w.forward(c),
+        };
         let mut p = (c.x.to_radians(), c.y.clamp(-90.0, 90.0).to_radians(), 0.0);
-        proj4rs::transform::transform(&self.wgs84, &self.native, &mut p).ok()?;
+        proj4rs::transform::transform(wgs84, native, &mut p).ok()?;
         (p.0.is_finite() && p.1.is_finite() && p.0.abs() < LIMIT && p.1.abs() < LIMIT).then(|| Coord::new(p.0, p.1))
     }
 
@@ -166,8 +192,12 @@ impl Projector {
         if !m.is_finite() {
             return None;
         }
+        let (native, wgs84) = match &self.engine {
+            Engine::Proj { native, wgs84 } => (native, wgs84),
+            Engine::World(w) => return w.inverse(m),
+        };
         let mut p = (m.x, m.y, 0.0);
-        proj4rs::transform::transform(&self.native, &self.wgs84, &mut p).ok()?;
+        proj4rs::transform::transform(native, wgs84, &mut p).ok()?;
         let c = Coord::new(p.0.to_degrees(), p.1.to_degrees());
         (c.is_finite() && c.y.abs() <= 90.0 + 1e-9).then_some(c)
     }
@@ -280,6 +310,9 @@ mod tests {
         assert!(Projector::new("EPSG:1").is_err());
         assert!(Projector::new("bogus").is_err());
         assert!(Projector::new("12x").is_err());
+        // Equal Earth by its EPSG code goes to the built-in engine too.
+        let ee = Projector::new("EPSG:8857").unwrap();
+        assert!(format!("{ee:?}").contains("eqearth"));
     }
 
     #[test]
