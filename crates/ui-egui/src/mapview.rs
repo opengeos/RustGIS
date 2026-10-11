@@ -656,51 +656,92 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     let title = if info["raster"].as_bool() == Some(true) {
         tl!("Pixel").to_string()
     } else {
-        attrs.iter().find(|(k, _)| k.to_lowercase().contains("name")).and_then(|(_, v)| v.as_str()).unwrap_or(tl!("Feature")).to_string()
+        {
+            // A field called "name" first, then any name-like one (adm0name, NAME_EN…).
+            let named = |exact: bool| {
+                attrs.iter().find(|(k, _)| if exact { k.eq_ignore_ascii_case("name") } else { k.to_lowercase().contains("name") })
+            };
+            named(true).or_else(|| named(false)).and_then(|(_, v)| v.as_str()).unwrap_or(tl!("Feature")).to_string()
+        }
     };
     let p = ui.painter();
     p.circle_filled(anchor, 6.0, Color32::from_rgb(0x00, 0xE5, 0xFF).gamma_multiply(0.5));
     p.circle_stroke(anchor, 6.0, Stroke::new(2.0, Color32::from_rgb(0x00, 0xA8, 0xC0)));
-    let pos = pos2((anchor.x + 14.0).min(rect.max.x - 330.0), (anchor.y - 40.0).clamp(rect.min.y + 8.0, rect.max.y - 300.0));
+    // The popup's size: resizable from its corner, and remembered for the next one.
+    let resize_id = egui::Id::new("identify_popup_size");
+    let size = ui.ctx().data(|d| d.get_temp::<egui::Vec2>(resize_id)).unwrap_or(vec2(310.0, 300.0));
+    let pos = pos2(
+        (anchor.x + 14.0).min(rect.max.x - size.x - 20.0).max(rect.min.x + 8.0),
+        (anchor.y - 40.0).clamp(rect.min.y + 8.0, (rect.max.y - size.y - 20.0).max(rect.min.y + 8.0)),
+    );
+    let max_size = vec2((rect.max.x - pos.x - 12.0).max(240.0), (rect.max.y - pos.y - 12.0).max(120.0));
     let mut close = false;
-    egui::Area::new(egui::Id::new("identify_popup")).fixed_pos(pos).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+    let shown = egui::Area::new(egui::Id::new("identify_popup")).fixed_pos(pos).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::NONE
             .fill(t.menu)
             .stroke(Stroke::new(1.0, t.border_strong))
             .corner_radius(CornerRadius::same(10))
             .shadow(egui::Shadow { offset: [0, 6], blur: 20, spread: 0, color: t.shadow })
             .show(ui, |ui| {
-                ui.set_width(310.0);
-                egui::Frame::NONE
-                    .fill(t.pane_header)
-                    .corner_radius(CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 })
-                    .inner_margin(egui::Margin::symmetric(12, 8))
+                egui::Resize::default()
+                    .id_salt(resize_id)
+                    .default_size(vec2(310.0, 300.0))
+                    .min_size(vec2(240.0, 120.0))
+                    .max_size(max_size)
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(egui::RichText::new(&title).font(semibold(14.0)));
-                                ui.label(egui::RichText::new(&layer).size(11.0).color(t.text_dim));
+                        egui::Frame::NONE
+                            .fill(t.pane_header)
+                            .corner_radius(CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 })
+                            .inner_margin(egui::Margin::symmetric(12, 8))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.label(egui::RichText::new(&title).font(semibold(14.0)));
+                                        ui.label(egui::RichText::new(&layer).size(11.0).color(t.text_dim));
+                                    });
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                        if ui.add(egui::Button::new(tl!("×")).frame(false)).clicked() {
+                                            close = true;
+                                        }
+                                    });
+                                });
                             });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                if ui.add(egui::Button::new(tl!("×")).frame(false)).clicked() {
-                                    close = true;
-                                }
+                        // A solid scroll bar in its own gutter, shown whenever the list is longer than
+                        // the popup (a floating one is invisible until hovered).
+                        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+                        // Fills the popup, so the scrollbar sits on its right edge whatever the values' width.
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            // The room left under the header, so long lists scroll instead of being clipped.
+                            .max_height(ui.available_height())
+                            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+                            .show(ui, |ui| {
+                                egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 14, top: 6, bottom: 10 }).show(ui, |ui| {
+                                    // The values take the width the names leave, so the stripes reach the scrollbar.
+                                    let name_w = attrs
+                                        .keys()
+                                        .map(|k| crate::widgets::text_w(ui, k, regular(11.5)))
+                                        .fold(0.0_f32, f32::max)
+                                        .min(ui.available_width() * 0.5);
+                                    let value_w = (ui.available_width() - name_w - 12.0).max(80.0);
+                                    egui::Grid::new("popup_grid").num_columns(2).striped(true).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
+                                        for (k, v) in &attrs {
+                                            ui.label(egui::RichText::new(k).size(11.5).color(t.text_dim));
+                                            ui.scope(|ui| {
+                                                // A fixed column: long values wrap, and the stripes span it.
+                                                ui.set_min_width(value_w);
+                                                ui.set_max_width(value_w);
+                                                ui.add(egui::Label::new(egui::RichText::new(v.as_str().unwrap_or("")).size(11.5)).wrap());
+                                            });
+                                            ui.end_row();
+                                        }
+                                    });
+                                });
                             });
-                        });
                     });
-                egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
-                        egui::Grid::new("popup_grid").num_columns(2).striped(true).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
-                            for (k, v) in &attrs {
-                                ui.label(egui::RichText::new(k).size(11.5).color(t.text_dim));
-                                ui.label(egui::RichText::new(v.as_str().unwrap_or("")).size(11.5));
-                                ui.end_row();
-                            }
-                        });
-                    });
-                });
             });
     });
+    ui.ctx().data_mut(|d| d.insert_temp(resize_id, shown.response.rect.size()));
     if close {
         app.map.popup = None;
     }

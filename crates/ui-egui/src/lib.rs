@@ -343,6 +343,17 @@ impl RustGisApp {
             "ui.theme" => self.ui.dark = p.get("dark").and_then(Value::as_bool).unwrap_or(!self.ui.dark),
             "ui.commandSearch" => self.ui.command_search = Some(String::new()),
             "ui.about" => self.ui.about = true,
+            // What a click with Explore does: identify there and show the popup.
+            "ui.identify" => {
+                // The engine checks the coordinates; the popup reuses them.
+                let (lon, lat) = (p.get("lon").cloned().unwrap_or(Value::Null), p.get("lat").cloned().unwrap_or(Value::Null));
+                let v = self.session.run("identify", &json!({"lon": lon, "lat": lat, "tolerancePx": 5}))?;
+                if let (false, Some(lon), Some(lat)) = (v.is_null(), lon.as_f64(), lat.as_f64()) {
+                    self.map.popup = Some(mapview::Popup { info: v, at: rustgis_engine::geom::Coord::new(lon, lat) });
+                } else {
+                    self.map.popup = None;
+                }
+            }
             "ui.shortcuts" => self.ui.shortcuts = true,
             "ui.backstage" => self.ui.backstage = p.get("open").and_then(Value::as_bool).unwrap_or(!self.ui.backstage),
             "ui.tab" => {
