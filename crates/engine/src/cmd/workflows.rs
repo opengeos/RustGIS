@@ -229,6 +229,7 @@ fn new_model(s: &mut Session, p: &Value) -> CmdResult {
         }
         None => Vec::new(),
     };
+    let steps: Vec<ModelStep> = steps.into_iter().take(200).collect();
     for st in &steps {
         if super::gp::tool_id(&st.tool).is_none() {
             return Err(format!("unknown tool '{}'", st.tool));
@@ -241,7 +242,7 @@ fn new_model(s: &mut Session, p: &Value) -> CmdResult {
         name = format!("{base} {i}");
     }
     let n = steps.len();
-    s.project.models.push(Model { name: name.clone(), steps: steps.into_iter().take(200).collect() });
+    s.project.models.push(Model { name: name.clone(), steps });
     Ok(json!({"model": name, "steps": n}))
 }
 
@@ -370,9 +371,13 @@ fn function_chain(s: &mut Session, p: &Value) -> CmdResult {
     for (i, st) in steps.iter().enumerate() {
         let func = st.get("function").and_then(Value::as_str).unwrap_or("?").to_string();
         let pixels = apply_function(s, &cur, st).map_err(|e| format!("step {} ({func}): {e}", i + 1))?;
-        let grid =
-            if func == "resample" { (*raster_of(s, st.get("target").and_then(Value::as_str).unwrap_or(""))?).clone() } else { cur.clone() };
-        cur = rasterops::derive(&grid, &cur.name, vec![pixels])?;
+        // Only a resample takes another raster's grid; otherwise the grid is the current one.
+        cur = if func == "resample" {
+            let target = raster_of(s, st.get("target").and_then(Value::as_str).unwrap_or(""))?;
+            rasterops::derive(&target, &cur.name, vec![pixels])?
+        } else {
+            rasterops::derive(&cur, &cur.name, vec![pixels])?
+        };
         names.push(func);
     }
     cur.name = out_name(p, format!("{}_{}", cur.name, names.join("_")));
@@ -563,7 +568,7 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
     } else {
         l.selection.clone()
     };
-    let seed = p.get("seed").and_then(Value::as_u64).unwrap_or(42);
+    let seed = f(p, "seed").map_or(42, |v| v.max(0.0) as u64);
     let pts: Vec<(usize, Coord)> = match ps(p, "field") {
         Some(fname) => {
             // A count per polygon from a field (e.g. population × rate).
@@ -579,12 +584,7 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
             }
             out
         }
-        None => network::random_points(
-            &l.dataset,
-            &rows,
-            p.get("count").and_then(Value::as_u64).unwrap_or(100).clamp(1, 100_000) as usize,
-            seed,
-        ),
+        None => network::random_points(&l.dataset, &rows, f(p, "count").unwrap_or(100.0).clamp(1.0, 100_000.0) as usize, seed),
     };
     let mut ds =
         Dataset::new(out_name(p, format!("{}_simulated", l.name)), GeometryType::Point, vec![Field::new("polygon", FieldType::Integer)]);

@@ -137,7 +137,11 @@ pub fn external_start(s: &mut Session, tool: &str, params: &Value) -> Result<Ext
             .filter(|t| rustgis_analysis::is_external(t))
             .ok_or_else(|| format!("no GeoLibre tool '{tool}'"))?;
         let params = rustgis_analysis::resolve_params(spec, params)?;
-        let job = rustgis_geolibre::prepare(spec, &MapInputs(s.map(), &s.project.tables, env_rows(s.map(), &s.project.gp_env)), &params)?;
+        let job = rustgis_geolibre::prepare(
+            spec,
+            &MapInputs(s.map(), &s.project.tables, env_rows(s.map(), &s.project.gp_env, &params)),
+            &params,
+        )?;
         s.next_pending = s.next_pending.wrapping_add(1);
         let id = s.next_pending;
         let run = ExternalRun { id, tool: job.tool.clone(), argv: job.argv("/work"), files: job.files.clone() };
@@ -198,11 +202,14 @@ static NONE: [usize; 1] = [usize::MAX];
 
 struct MapInputs<'a>(&'a rustgis_map::Map, &'a [Dataset], std::collections::HashMap<String, Vec<usize>>);
 
-/// The rows of unselected feature layers inside the environment's extent, by layer name.
-fn env_rows(map: &rustgis_map::Map, env: &crate::project::GpEnvironment) -> std::collections::HashMap<String, Vec<usize>> {
+/// The rows of the tool's main input (its `input` layer) inside the environment's extent, when
+/// that layer has no selection. Overlay layers (clip, erase, join targets…) stay whole.
+fn env_rows(map: &rustgis_map::Map, env: &crate::project::GpEnvironment, params: &Value) -> std::collections::HashMap<String, Vec<usize>> {
     let Some(e) = env.extent else { return std::collections::HashMap::new() };
-    map.layers
-        .iter()
+    let Some(input) = params.get("input").and_then(Value::as_str) else { return std::collections::HashMap::new() };
+    // The layer the name finds (the first of that name), as the tool will.
+    map.layer_by_name(input)
+        .into_iter()
         .filter(|l| !l.is_raster() && l.selection.is_empty())
         .map(|l| {
             let rows: Vec<usize> = l
@@ -261,7 +268,7 @@ pub fn run_tool(s: &mut Session, tool: &str, params: &Value) -> CmdResult {
     let tool = tool_id(tool).unwrap_or(tool).to_string();
     let params = params.clone();
     let t0 = now_ms();
-    let res = rustgis_analysis::run(&tool, &MapInputs(s.map(), &s.project.tables, env_rows(s.map(), &s.project.gp_env)), &params);
+    let res = rustgis_analysis::run(&tool, &MapInputs(s.map(), &s.project.tables, env_rows(s.map(), &s.project.gp_env, &params)), &params);
     let millis = now_ms().saturating_sub(t0);
     let name = rustgis_analysis::tool(&tool).map(|t| t.name).unwrap_or("Tool").to_string();
     apply(s, name, params, res, millis)

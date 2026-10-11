@@ -240,7 +240,6 @@ pub fn line_of_sight(
     let prof = profile(r, band, &[a, b], samples);
     let (_, _, za) = *prof.first()?;
     let eye = za? + ha;
-    let total = prof.last().map(|p| p.0).unwrap_or(0.0).max(1e-9);
     const R: f64 = 6_371_000.0 * 4.0 / 3.0; // refraction-adjusted Earth radius
     let drop = |d: f64| d * d / (2.0 * R);
     let mut max_angle = f64::NEG_INFINITY;
@@ -266,18 +265,24 @@ pub fn line_of_sight(
         }
         out.push((*d, *p, *zz, visible));
     }
-    let _ = total;
     Some((target_visible, out))
 }
 
 /// Cells visible from an observer (1) or not (0) within `radius_m`; outside the radius no-data.
+/// Most ray steps a viewshed takes, and cell-point pairs an interpolation weighs (each about a
+/// second or two).
+const MAX_VIEWSHED_WORK: i64 = 400_000_000;
+const MAX_IDW_WORK: usize = 400_000_000;
+
 pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f64) -> Result<Vec<f32>, String> {
     let (oc, or) = r.pixel_at(observer).ok_or("the observer is outside the raster")?;
     let z0 = r.value(b, oc, or).ok_or("the observer stands on no-data")? as f64 + height;
     let (cx, cy) = r.cell_size_m();
     let rad_c = (radius_m / cx).ceil() as i64;
     let rad_r = (radius_m / cy).ceil() as i64;
-    if (2 * rad_c + 1) * (2 * rad_r + 1) > 25_000_000 {
+    // Each cell walks a ray back to the observer: bound cells × ray length, not just cells.
+    let cells = (2 * rad_c + 1).saturating_mul(2 * rad_r + 1);
+    if cells > 25_000_000 || cells.saturating_mul(rad_c.max(rad_r) / 2 + 1) > MAX_VIEWSHED_WORK {
         return Err("the radius covers too many cells; use a smaller radius".into());
     }
     let w = r.width as usize;
@@ -331,6 +336,10 @@ pub fn idw(points: &[(Coord, f64)], extent: &Extent, cell_deg: f64, power: f64, 
     let (w, h) = ((extent.width() / cell_deg).ceil().max(1.0) as usize, (extent.height() / cell_deg).ceil().max(1.0) as usize);
     if w.saturating_mul(h) > MAX_PIXELS / 4 {
         return Err(format!("{w} × {h} cells is too many; use a larger cell size"));
+    }
+    // Every cell weighs every point.
+    if w.saturating_mul(h).saturating_mul(points.len()) > MAX_IDW_WORK {
+        return Err(format!("{w} × {h} cells from {} points is too much work; use a larger cell size", points.len()));
     }
     let k = neighbours.clamp(1, points.len());
     let mut data = Vec::with_capacity(w * h);
