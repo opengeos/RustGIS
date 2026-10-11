@@ -422,8 +422,17 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
             return Err("reports list a feature layer's records, not a raster's".into());
         }
         r.layer = l.name.clone();
-        // What the new layer lacks is dropped, so the report doesn't show blank columns.
+        // What the new layer lacks is dropped, so the report doesn't show blank columns, and so
+        // are subreports through relationships that don't involve it.
         fit_to_layer(&mut r, &l.dataset);
+        let name = l.name.clone();
+        r.sections.retain(|x| match x {
+            Section::Subreport { relationship, .. } => relationships(s).any(|rel| {
+                rel.name.eq_ignore_ascii_case(relationship)
+                    && (rel.origin.eq_ignore_ascii_case(&name) || rel.destination.eq_ignore_ascii_case(&name))
+            }),
+            _ => true,
+        });
     }
     // Everything is checked against the (possibly new) layer before the report changes.
     let l = find_layer(s, &r.layer);
@@ -703,10 +712,13 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
         .filter_map(|sec| {
             let Section::Subreport { relationship, fields } = sec else { return None };
             let rel = relationships(s).find(|x| x.name.eq_ignore_ascii_case(relationship))?;
+            // A relationship that doesn't involve this layer is skipped.
             let (here_key, other, other_key) = if rel.origin.eq_ignore_ascii_case(&layer.name) {
                 (&rel.origin_key, &rel.destination, &rel.destination_key)
-            } else {
+            } else if rel.destination.eq_ignore_ascii_case(&layer.name) {
                 (&rel.destination_key, &rel.origin, &rel.origin_key)
+            } else {
+                return None;
             };
             let ods = &find_layer(s, other)?.dataset;
             let ok = ods.field_index(other_key)?;
@@ -762,8 +774,10 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
             g.push(row);
         }
         out.push(Block::Row(fi.iter().map(|f| cell(ds, row, *f)).collect()));
+        // Once the picture budget is spent, no more picture files are read.
         if let Some(pf) = pic
             && pictures < MAX_PICTURES
+            && picture_bytes < PICTURE_BUDGET
             && let Some((image, width, height)) = picture_of(&cell(ds, row, Some(pf)), folder)
             && picture_bytes.saturating_add(image.len()) <= PICTURE_BUDGET
         {
