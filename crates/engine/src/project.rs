@@ -60,6 +60,12 @@ pub struct Project {
     /// Reports on layers' records.
     #[serde(default)]
     pub reports: Vec<rustgis_map::report::Report>,
+    /// Presentations: pages of maps, text, images and videos.
+    #[serde(default)]
+    pub presentations: Vec<rustgis_map::presentation::Presentation>,
+    /// Notebooks of text and command cells.
+    #[serde(default)]
+    pub notebooks: Vec<crate::cmd::notebook::Notebook>,
 }
 
 /// A unit of work tracked in the Workflow Manager.
@@ -183,6 +189,8 @@ impl Project {
             jobs: Vec::new(),
             offline_areas: Vec::new(),
             reports: Vec::new(),
+            presentations: Vec::new(),
+            notebooks: Vec::new(),
         }
     }
 

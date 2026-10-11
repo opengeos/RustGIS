@@ -13,6 +13,8 @@ pub mod layer;
 pub mod layout;
 pub mod navigate;
 pub mod plugins;
+pub mod notebook;
+pub mod presentation;
 pub mod project;
 pub mod raster;
 pub mod report;
@@ -39,6 +41,8 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(graphics::commands());
     v.extend(layout::commands());
     v.extend(report::commands());
+    v.extend(presentation::commands());
+    v.extend(notebook::commands());
     v.extend(items::commands());
     v.extend(design::commands());
     v.extend(workflows::commands());

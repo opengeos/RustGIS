@@ -31,9 +31,10 @@ use rustgis_data::{Dataset, Geometry, GeometryType};
 use rustgis_geom::{Coord, Extent, lonlat_to_merc};
 use rustgis_map::globe::{V3, densify};
 use rustgis_map::{Camera, Globe, Map, Marker, Rgba, Symbol};
+/// The image type pages and maps are drawn into.
+pub use tiny_skia::Pixmap;
 use tiny_skia::{
-    FillRule, GradientStop, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint, Point, RadialGradient, SpreadMode, Stroke,
-    Transform,
+    FillRule, GradientStop, LineCap, LineJoin, Paint, PathBuilder, PixmapPaint, Point, RadialGradient, SpreadMode, Stroke, Transform,
 };
 
 /// Selection highlight (cyan, as desktop GIS users expect).

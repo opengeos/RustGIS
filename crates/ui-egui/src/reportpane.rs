@@ -159,7 +159,7 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     for g in &r.groups {
         ui.horizontal(|ui| {
             ui.label(g.as_str());
-            if ui.small_button("✕").on_hover_text(tl!("Remove")).clicked() {
+            if ui.small_button(tl!("Remove")).clicked() {
                 run(app, "report.group", json!({"report": i, "field": g, "remove": true}));
             }
         });
@@ -176,7 +176,7 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     for st in &r.stats {
         ui.horizontal(|ui| {
             ui.label(format!("{} — {}", tl!(st.kind.label()), st.field));
-            if ui.small_button("✕").on_hover_text(tl!("Remove")).clicked() {
+            if ui.small_button(tl!("Remove")).clicked() {
                 let kind = format!("{:?}", st.kind).to_ascii_lowercase();
                 run(app, "report.statistics", json!({"report": i, "field": st.field, "kind": kind, "remove": true}));
             }
@@ -238,7 +238,7 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         };
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(text).small());
-            if ui.small_button("✕").on_hover_text(tl!("Remove")).clicked() {
+            if ui.small_button(tl!("Remove")).clicked() {
                 run(app, "report.removeSection", json!({"report": i, "index": k}));
             }
         });

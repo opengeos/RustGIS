@@ -154,7 +154,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 288, "coverage fell to {done}");
+    assert!(done >= 298, "coverage fell to {done}");
 }
 
 #[test]
@@ -1778,5 +1778,79 @@ fn reports_group_summarise_relate_export_and_reopen() {
     assert_eq!(s.project.reports.len(), before - 1);
     s.undo();
     assert_eq!(s.project.reports.len(), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn presentations_and_notebooks() {
+    let dir = std::env::temp_dir().join(format!("rustgis-pres-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = world();
+    assert!(s.run("presentation.mapPage", &Value::Null).is_err(), "no presentation yet");
+    s.run("presentation.new", &json!({"name": "Tour", "title": "World tour"})).unwrap();
+    s.run("map.goToXY", &json!({"lon": 12.5, "lat": 41.9, "scale": 5_000_000})).unwrap();
+    s.run("presentation.mapPage", &json!({"title": "Rome"})).unwrap();
+    s.run("presentation.blankPage", &json!({"title": "Facts", "text": "Rome is the capital of Italy.", "background": "#FFF8E0"})).unwrap();
+    assert!(s.run("presentation.blankPage", &json!({"background": "beige"})).is_err());
+    let png = s.run("project.thumbnail", &json!({"create": true})).map(|_| s.project.thumbnail.clone().unwrap()).unwrap();
+    s.run("presentation.imagePage", &json!({"image": png, "caption": "The map", "at": 1})).unwrap();
+    assert!(s.run("presentation.imagePage", &json!({"image": "bm90"})).is_err());
+    s.run("presentation.videoPage", &json!({"source": "https://example.org/rome.mp4", "posterImage": png})).unwrap();
+    s.run("presentation.videoPage", &json!({"source": "C:\\videos\\walk.webm"})).unwrap();
+    let pres = &s.project.presentations[0];
+    let kinds: Vec<&str> = pres.pages.iter().map(|p| p.kind.code()).collect();
+    assert_eq!(kinds, ["blank", "image", "map", "blank", "video", "video"]);
+    assert_eq!(pres.pages[5].title, "walk.webm");
+    s.run("presentation.updatePage", &json!({"page": 2, "notes": "Zoom in", "seconds": 9, "moveTo": 0})).unwrap();
+    assert_eq!(s.project.presentations[0].pages[0].title, "Rome");
+    assert!(s.run("presentation.updatePage", &json!({"page": 99})).is_err());
+    // The map page draws the map: not one flat colour.
+    let img = crate::cmd::presentation::draw_page(&mut s, 0, 0, 40.0).unwrap();
+    let first = img.pixels()[img.pixels().len() / 2];
+    assert!(img.pixels().iter().any(|p| *p != first));
+    // Exports.
+    for (file, magic) in [("tour.pdf", &b"%PDF"[..]), ("tour.html", &b"<!doctype html>"[..]), ("tour.png", &b"\x89PNG"[..])] {
+        let path = dir.join(file);
+        let r = s.run("presentation.export", &json!({"path": path.to_str().unwrap(), "dpi": 48})).unwrap();
+        assert_eq!(r["pages"], 6);
+        assert!(std::fs::read(&path).unwrap().starts_with(magic), "{file}");
+    }
+    let html = std::fs::read_to_string(dir.join("tour.html")).unwrap();
+    assert!(html.contains("<video") && html.contains("https://example.org/rome.mp4") && html.matches("<section").count() == 6);
+    // Save and import.
+    let file = dir.join("tour.rgispres");
+    s.run("presentation.save", &json!({"path": file.to_str().unwrap()})).unwrap();
+    let r = s.run("presentation.import", &json!({"path": file.to_str().unwrap()})).unwrap();
+    assert_eq!(r["name"], "Tour 2");
+    assert_eq!(s.project.presentations[1].pages.len(), 6);
+    s.run("presentation.removePage", &json!({"page": 0})).unwrap();
+    assert_eq!(s.project.presentations[1].pages.len(), 5);
+
+    // Notebooks: command cells run and keep their output; Jupyter round trip.
+    s.run("notebook.new", &json!({"name": "Analysis"})).unwrap();
+    s.run("notebook.addCell", &json!({"source": "map.goToXY {\"lon\": 2.35, \"lat\": 48.85, \"scale\": 1000000}\nselect.byAttributes {\"layer\": \"Cities\", \"where\": \"name = 'Paris'\"}"}))
+        .unwrap();
+    s.run("notebook.addCell", &json!({"source": "no.such.command"})).unwrap();
+    let r = s.run("notebook.run", &Value::Null).unwrap();
+    assert_eq!(r["error"], 3);
+    let nb = &s.project.notebooks[0];
+    assert!(nb.cells[2].output.as_deref().is_some_and(|o| o.contains("\"selected\":1")), "{:?}", nb.cells[2].output);
+    assert!(nb.cells[3].error);
+    assert!((s.map().center_lonlat().x - 2.35).abs() < 1e-6);
+    // A cell can't run notebooks (no recursion).
+    s.run("notebook.editCell", &json!({"cell": 3, "source": "notebook.run {}"})).unwrap();
+    s.run("notebook.run", &json!({"cell": 3})).unwrap();
+    assert!(s.project.notebooks[0].cells[3].error);
+    let ipynb = dir.join("analysis.ipynb");
+    s.run("notebook.save", &json!({"path": ipynb.to_str().unwrap()})).unwrap();
+    let v: Value = serde_json::from_slice(&std::fs::read(&ipynb).unwrap()).unwrap();
+    assert_eq!(v["nbformat"], 4);
+    assert_eq!(v["cells"].as_array().unwrap().len(), 4);
+    s.run("notebook.open", &json!({"path": ipynb.to_str().unwrap()})).unwrap();
+    let nb = s.project.notebooks.last().unwrap();
+    assert_eq!(nb.name, "Analysis 2");
+    assert_eq!(nb.cells.len(), 4);
+    assert!(nb.cells[2].output.is_some());
+    assert!(s.run("notebook.open", &json!({"text": "{\"cells\": 5}"})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }

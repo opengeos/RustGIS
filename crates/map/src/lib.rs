@@ -8,6 +8,7 @@ pub mod effects;
 pub mod globe;
 pub mod graphics;
 pub mod layout;
+pub mod presentation;
 pub mod projection;
 pub mod raster;
 pub mod report;

@@ -752,6 +752,9 @@ pub const ITEMS: &[(&str, &str, &str)] = &[
     ("obj", "obj", "Wavefront OBJ"),
     ("report", "rgisreport", "RustGIS report"),
     ("reportTemplate", "rgisrpttemplate", "RustGIS report template"),
+    ("presentation", "rgispres", "RustGIS presentation"),
+    ("notebook", "rgisnb", "RustGIS notebook"),
+    ("jupyter", "ipynb", "Jupyter notebook"),
 ];
 
 /// An item as file bytes, with a suggested file name.
@@ -801,6 +804,16 @@ pub fn item_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec
             let i = super::report::index(s, p)?;
             let name = s.project.reports.get(i).map(|r| r.name.clone()).unwrap_or_default();
             (name, super::report::report_file(s, i, kind == "reportTemplate")?)
+        }
+        "presentation" => {
+            let i = super::presentation::index(s, p)?;
+            let name = s.project.presentations.get(i).map(|r| r.name.clone()).unwrap_or_default();
+            (name, super::presentation::presentation_file(s, i)?)
+        }
+        "notebook" | "jupyter" => {
+            let i = super::notebook::index(s, p)?;
+            let name = s.project.notebooks.get(i).map(|r| r.name.clone()).unwrap_or_default();
+            (name, super::notebook::notebook_file(s, i, kind == "jupyter")?)
         }
         k => return Err(format!("unknown item '{k}'")),
     };

@@ -320,7 +320,7 @@ fn frame_of(l: &Layout, p: &Value) -> Result<u32, String> {
     }
 }
 
-fn color(p: &Value, k: &str, d: Rgba) -> Result<Rgba, String> {
+pub(crate) fn color(p: &Value, k: &str, d: Rgba) -> Result<Rgba, String> {
     match ps(p, k) {
         Some(c) => Rgba::from_hex(c).ok_or_else(|| format!("{k} must be #RRGGBB or #RRGGBBAA")),
         None => Ok(d),

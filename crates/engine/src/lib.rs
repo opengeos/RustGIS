@@ -229,6 +229,9 @@ pub struct Session {
     pub history_from_file: usize,
     /// The report open in the Report pane, if any.
     pub active_report: Option<usize>,
+    /// The presentation and notebook open in their panes, if any.
+    pub active_presentation: Option<usize>,
+    pub active_notebook: Option<usize>,
     /// Drawing tools stay active after a graphic is drawn (Insert › Graphics).
     pub keep_tool: bool,
     /// Copied features (Edit › Clipboard).
@@ -283,6 +286,8 @@ impl Session {
             trusted_models: Default::default(),
             history_from_file: 0,
             active_report: None,
+            active_presentation: None,
+            active_notebook: None,
             edit_counts: std::collections::HashMap::new(),
             topology_errors: Vec::new(),
             measurements: Vec::new(),
@@ -514,6 +519,12 @@ impl Session {
         }
         if self.active_report.is_some_and(|i| i >= self.project.reports.len()) {
             self.active_report = None;
+        }
+        if self.active_presentation.is_some_and(|i| i >= self.project.presentations.len()) {
+            self.active_presentation = None;
+        }
+        if self.active_notebook.is_some_and(|i| i >= self.project.notebooks.len()) {
+            self.active_notebook = None;
         }
         let map = self.project.map();
         if let Some(id) = self.active_layer

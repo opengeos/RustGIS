@@ -731,6 +731,72 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
         );
     });
+    group(ui, "Presentation", |ui| {
+        big(
+            ui,
+            app,
+            "web_map",
+            "New\nPresentation",
+            "Pages of maps, text, images and videos, shown one after another.",
+            "ui.newPresentation",
+            Value::Null,
+            false,
+            false,
+        );
+        col(ui, |ui| {
+            small_menu(ui, app, "new_layout", "Page", "Add a page to the presentation.", |ui, app| {
+                menu_item(ui, app, "web_map", "Map (the current view)", "presentation.mapPage", Value::Null);
+                menu_item(ui, app, "new_layout", "Blank", "presentation.blankPage", json!({"title": "Title"}));
+                menu_item(ui, app, "picture", "Image…", "ui.presentationPicture", Value::Null);
+                menu_item(ui, app, "export_map", "Video…", "ui.pane.presentation", Value::Null);
+            });
+            small(
+                ui,
+                app,
+                "open",
+                "Import Presentation",
+                "Add a presentation file.",
+                "ui.openItem",
+                json!({"kind": "presentation"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "pane",
+                "Presentation Pane",
+                "Preview, edit and play the presentation.",
+                "ui.pane.presentation",
+                Value::Null,
+                app.ui.right == Some(RightPane::Presentation),
+            );
+        });
+    });
+    group(ui, "Notebook", |ui| {
+        big(ui, app, "python", "New\nNotebook", "A notebook of text and command cells.", "ui.newNotebook", Value::Null, false, false);
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "open",
+                "Add and Open",
+                "Open a RustGIS or Jupyter notebook.",
+                "ui.openItem",
+                json!({"kind": "notebook"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "pane",
+                "Notebook Pane",
+                "Edit and run the notebook.",
+                "ui.pane.notebook",
+                Value::Null,
+                app.ui.right == Some(RightPane::Notebook),
+            );
+        });
+    });
     group(ui, "Layer Templates", |ui| {
         big_menu(ui, app, "graphics_layer", "Layer\nTemplates", "Add an empty layer with a ready-made schema, to draw into.", |ui, app| {
             for (id, label) in [
@@ -1710,6 +1776,17 @@ fn share_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 menu_item(ui, app, "save_as", "Save As Report File…", "ui.saveItem", json!({"kind": "report"}));
                 menu_item(ui, app, "save_as", "Save As Report Template…", "ui.saveItem", json!({"kind": "reportTemplate"}));
             });
+            small_menu(
+                ui,
+                app,
+                "web_map",
+                "Presentation",
+                "Export the presentation as a slideshow or PDF, or save it as a file.",
+                |ui, app| {
+                    menu_item(ui, app, "web_map", "Export Presentation…", "ui.exportPresentation", Value::Null);
+                    menu_item(ui, app, "save_as", "Save As Presentation File…", "ui.saveItem", json!({"kind": "presentation"}));
+                },
+            );
             small(
                 ui,
                 app,

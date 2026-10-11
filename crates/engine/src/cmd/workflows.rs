@@ -319,9 +319,10 @@ fn wire(v: &mut Value, outputs: &[String], step: usize, depth: usize) -> Result<
 }
 
 /// Runs a script of commands, one per line (`id {json}`), stopping at the first error. Scripts
-/// are the user's own (typed in the Script pane or passed on the command line; projects don't
-/// carry them), so they may use any command, files included. The whole script is one undo step.
-fn run_script(s: &mut Session, p: &Value) -> CmdResult {
+/// typed in the Script pane or passed on the command line are the user's own, so they may use
+/// any command, files included; notebooks vet cells that came from files before running them.
+/// The whole script is one undo step.
+pub(crate) fn run_script(s: &mut Session, p: &Value) -> CmdResult {
     let script = ps(p, "script").ok_or("script is required")?;
     let mut out = Vec::new();
     for (n, line) in script.lines().enumerate().take(10_000) {
@@ -336,7 +337,7 @@ fn run_script(s: &mut Session, p: &Value) -> CmdResult {
         } else {
             serde_json::from_str(rest.trim()).map_err(|e| format!("line {}: {e}", n + 1))?
         };
-        if id.starts_with("script.") || id.starts_with("ui.") {
+        if id.starts_with("script.") || id.starts_with("ui.") || id == "notebook.run" {
             return Err(format!("line {}: '{id}' can't run in a script", n + 1));
         }
         let spec = s.registry.get(id).ok_or_else(|| format!("line {}: unknown command '{id}'", n + 1))?;

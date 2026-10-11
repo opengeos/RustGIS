@@ -12,6 +12,7 @@ mod analysispane;
 mod backstage;
 mod chrome;
 mod dialogs;
+mod docpanes;
 mod editpanes;
 pub mod icons;
 mod layoutview;
@@ -132,6 +133,8 @@ pub enum RightPane {
     Diagnostics,
     Infographics,
     Report,
+    Presentation,
+    Notebook,
 }
 
 pub struct UiState {
@@ -217,6 +220,7 @@ pub struct RustGisApp {
     /// The Plugin Manager and plugin downloads.
     pub plugins: pluginsui::PluginsState,
     pub reports: reportpane::ReportState,
+    pub docs: docpanes::DocState,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     sent_title: String,
@@ -254,6 +258,7 @@ impl RustGisApp {
             ws: workspacepanes::WorkspaceState::default(),
             plugins: pluginsui::PluginsState::default(),
             reports: reportpane::ReportState::default(),
+            docs: docpanes::DocState::default(),
             fonts_frames: 0,
             applied_dark: None,
             sent_title: String::new(),
@@ -405,6 +410,9 @@ impl RustGisApp {
             (".rgistask", "task.import"),
             (".rgisreport", "report.open"),
             (".rgisrpttemplate", "report.open"),
+            (".rgispres", "presentation.import"),
+            (".rgisnb", "notebook.open"),
+            (".ipynb", "notebook.open"),
         ]
         .iter()
         .find(|(e, _)| lower.ends_with(e))
@@ -792,6 +800,8 @@ impl RustGisApp {
                     "template" => ("project.fromTemplate", &["rgistemplate"], "RustGIS project template"),
                     "task" => ("task.import", &["rgistask"], "RustGIS task"),
                     "report" => ("report.open", &["rgisreport", "rgisrpttemplate"], "RustGIS report or report template"),
+                    "presentation" => ("presentation.import", &["rgispres"], "RustGIS presentation"),
+                    "notebook" => ("notebook.open", &["rgisnb", "ipynb"], "RustGIS or Jupyter notebook"),
                     k => return Err(format!("unknown item '{k}'")),
                 };
                 if let Some(open) = &self.services.open_async {
@@ -850,6 +860,48 @@ impl RustGisApp {
             "ui.pane.diagnostics" => toggle_right(&mut self.ui, RightPane::Diagnostics),
             "ui.pane.infographics" => toggle_right(&mut self.ui, RightPane::Infographics),
             "ui.pane.report" => toggle_right(&mut self.ui, RightPane::Report),
+            "ui.pane.presentation" => toggle_right(&mut self.ui, RightPane::Presentation),
+            "ui.pane.notebook" => toggle_right(&mut self.ui, RightPane::Notebook),
+            "ui.newPresentation" | "ui.newNotebook" => {
+                let (cmd, pane) = if id == "ui.newPresentation" {
+                    ("presentation.new", RightPane::Presentation)
+                } else {
+                    ("notebook.new", RightPane::Notebook)
+                };
+                let r = self.run(cmd, Value::Null);
+                if r.is_ok() {
+                    self.ui.right = Some(pane);
+                }
+                return r;
+            }
+            "ui.presentationPicture" => {
+                if let Some(open) = &self.services.open_async {
+                    self.ui.pending_layout_picture = false;
+                    self.ui.pending_picture = None;
+                    self.ui.pending_open = Some("presentation.imagePage");
+                    open("picture");
+                } else if let Some(path) = dialogs::pick_open(&["png", "jpg", "jpeg"], tl!("Pictures")) {
+                    return self.run("presentation.imagePage", json!({"path": path}));
+                }
+            }
+            "ui.exportPresentation" => {
+                let i = rustgis_engine::cmd::presentation::index(&self.session, p)?;
+                let name = self.session.project.presentations.get(i).map(|r| r.name.clone()).unwrap_or_default();
+                if self.services.download.is_some() {
+                    let session = &mut self.session;
+                    let bytes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        rustgis_engine::cmd::presentation::export_bytes(session, i, "html", 110.0)
+                    }))
+                    .unwrap_or_else(|_| Err("the presentation export failed unexpectedly".into()))
+                    .inspect_err(|e| self.session.notify(e.clone(), true))?
+                    .0;
+                    self.download(&format!("{name}.html"), bytes);
+                } else if let Some(path) =
+                    dialogs::pick_save(&format!("{name}.html"), &["html", "pdf", "png"], tl!("Slideshow, PDF or PNG"))
+                {
+                    return self.run("presentation.export", json!({"presentation": i, "path": path}));
+                }
+            }
             "ui.catalogView" => self.ws.catalog_view = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.catalog_view),
             "ui.itemPopups" => self.ws.item_popups = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.item_popups),
             "ui.linkCursors" => self.ws.link_cursors = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.link_cursors),
