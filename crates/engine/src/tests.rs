@@ -1460,8 +1460,21 @@ fn workspace_links_thumbnails_animation_profiles_offline_and_cache() {
         &json!({"layer": "Cities", "geometry": {"type": "Point", "coordinates": [2.0, 49.0]}, "attributes": {"name": "Field camp"}}),
     )
     .unwrap();
+    // Meanwhile France is edited in the source map; the area's untouched copy mustn't undo that.
+    let set_france = |s: &mut Session, v: i64| {
+        let world = s.project.maps.iter_mut().find(|m| m.name == "World").unwrap();
+        let countries = world.layers.iter_mut().find(|l| l.name == "Countries").unwrap();
+        let (ni, pi) = (countries.dataset.field_index("name").unwrap(), countries.dataset.field_index("pop_est").unwrap());
+        let f = countries.dataset.features.iter_mut().find(|f| f.attrs[ni].to_string() == "France").unwrap();
+        if v >= 0 {
+            f.attrs[pi] = rustgis_data::Value::Int(v);
+        }
+        f.attrs[pi].clone()
+    };
+    set_france(&mut s, 12_345);
     let sync = s.run("offline.sync", &json!({"name": "Paris"})).unwrap();
     assert_eq!((sync["updated"].as_u64(), sync["added"].as_u64()), (Some(1), Some(1)), "{sync}");
+    assert_eq!(set_france(&mut s, -1), rustgis_data::Value::Int(12_345), "the source edit survives the sync");
     let world_map = s.project.maps.iter().find(|m| m.name == "World").unwrap();
     let cities = world_map.layer_by_name("Cities").unwrap();
     assert!(cities.dataset.features.iter().any(|f| f.attrs.iter().any(|v| v.to_string() == "Field camp")));

@@ -192,9 +192,16 @@ pub fn commands() -> Vec<C> {
                 return Err(format!("no offline area '{n}'"));
             }
             let map_name = format!("{n} (offline)");
-            if s.project.maps.len() > 1 {
-                s.project.maps.retain(|m| !m.name.eq_ignore_ascii_case(&map_name));
-                s.project.active_map = s.project.active_map.min(s.project.maps.len().saturating_sub(1));
+            if s.project.maps.len() > 1
+                && let Some(i) = s.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(&map_name))
+            {
+                s.project.maps.remove(i);
+                // The active map stays the same map; if it was the removed one, a neighbour.
+                let a = s.project.active_map;
+                s.project.active_map = if a > i { a - 1 } else { a.min(s.project.maps.len().saturating_sub(1)) };
+                if a == i {
+                    s.active_layer = s.map().layers.first().map(|l| l.id);
+                }
             }
             Ok(Value::Null)
         })
@@ -220,7 +227,6 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"name": offline area}"#),
         // Feature cache.
         C::new("cache.fill", "Fill Cache", "Map › Feature Cache", |s, _| {
-            s.cache_cancelled = false;
             let n = fill_cache(s);
             Ok(json!({"cached": n}))
         })
@@ -236,8 +242,9 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"emptied": n}))
         })
         .view(),
+        // A fill runs to the end in one go (it's quick); cancelling stops the automatic fills
+        // that follow projection changes.
         C::new("cache.cancel", "Cancel Caching", "Map › Feature Cache", |s, _| {
-            s.cache_cancelled = true;
             s.auto_cache = false;
             Ok(Value::Null)
         })
@@ -245,7 +252,6 @@ pub fn commands() -> Vec<C> {
         C::new("cache.auto", "Auto Cache", "Map › Feature Cache", |s, p| {
             s.auto_cache = b(p, "on").unwrap_or(!s.auto_cache);
             if s.auto_cache {
-                s.cache_cancelled = false;
                 fill_cache(s);
             }
             Ok(json!({"autoCache": s.auto_cache}))
@@ -255,15 +261,12 @@ pub fn commands() -> Vec<C> {
     ]
 }
 
-/// Fills every layer's projected geometry cache, stopping early when cancelled.
+/// Fills every layer's projected geometry cache.
 pub(crate) fn fill_cache(s: &mut Session) -> usize {
     let mut n = 0;
     for m in &mut s.project.maps {
         let (flat, key) = (m.flat(), m.projection.code());
         for l in &mut m.layers {
-            if s.cache_cancelled {
-                return n;
-            }
             if !l.is_raster() && !l.is_cached(&key) {
                 l.projected_in(&flat, &key);
             }
@@ -415,7 +418,6 @@ fn animation_zip(s: &mut Session, p: &Value) -> Result<Vec<u8>, String> {
     rustgis_data::zip::write(&frames)
 }
 
-/// Counts, sums and the most common categories of the features in view.
 /// The project's size and the session's state (Diagnostic Monitor). Read-only, so the monitor can
 /// show it without running a command.
 pub fn diagnostics(s: &Session) -> Value {
@@ -429,8 +431,14 @@ pub fn diagnostics(s: &Session) -> Value {
         for l in &m.layers {
             layers += 1;
             features += l.dataset.features.len();
-            vertices += l.dataset.features.iter().filter_map(|f| f.geometry.as_ref()).map(|g| g.coord_count()).sum::<usize>();
-            pixels += l.raster.as_ref().and_then(|r| r.data.as_ref()).map_or(0, |d| d.width as usize * d.height as usize * d.band_count());
+            vertices = vertices
+                .saturating_add(l.dataset.features.iter().filter_map(|f| f.geometry.as_ref()).map(|g| g.coord_count()).sum::<usize>());
+            pixels = pixels.saturating_add(
+                l.raster
+                    .as_ref()
+                    .and_then(|r| r.data.as_ref())
+                    .map_or(0, |d| (d.width as usize).saturating_mul(d.height as usize).saturating_mul(d.band_count())),
+            );
             cached += usize::from(l.is_cached(&key));
         }
     }
@@ -483,7 +491,7 @@ pub fn infographic_of(s: &Session, only: Option<&str>) -> Value {
                     *counts.entry(l.dataset.value(*r, fi).to_string()).or_insert(0) += 1;
                 }
                 let mut v: Vec<(String, usize)> = counts.into_iter().collect();
-                v.sort_by(|a, b2| b2.1.cmp(&a.1).then(a.0.cmp(&b2.1.to_string())));
+                v.sort_by(|a, b2| b2.1.cmp(&a.1).then_with(|| a.0.cmp(&b2.0)));
                 v.into_iter().take(5).map(|(k, n)| json!({"value": k, "count": n})).collect()
             })
             .unwrap_or_default();
@@ -548,7 +556,7 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
         .iter()
         .position(|m| m.name.eq_ignore_ascii_case(&area.map))
         .ok_or_else(|| format!("the source map '{}' is gone", area.map))?;
-    let (mut updated, mut added, mut deleted) = (0, 0, 0);
+    let (mut updated, mut added, mut deleted, mut skipped) = (0, 0, 0, 0);
     if let Some(src) = s.project.maps.get_mut(si) {
         for ol in &edited.layers {
             let Some(sl) = src.layers.iter_mut().find(|l| l.name == ol.name && !l.is_raster()) else { continue };
@@ -561,13 +569,27 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
                 .map(|l| l.dataset.features.iter().map(|f| f.id).collect())
                 .unwrap_or_default();
             let now_ids: std::collections::HashSet<u64> = ol.dataset.features.iter().map(|f| f.id).collect();
+            // The area's copies as last synced: only features changed offline since then go back,
+            // so edits made to the source meanwhile aren't overwritten by stale copies.
+            let base: std::collections::HashMap<u64, &rustgis_data::Feature> = area
+                .data
+                .layers
+                .iter()
+                .find(|l| l.name == ol.name)
+                .map(|l| l.dataset.features.iter().map(|f| (f.id, f)).collect())
+                .unwrap_or_default();
             for f in &ol.dataset.features {
                 if had.contains(&f.id) {
-                    if let Some(x) = sl.dataset.features.iter_mut().find(|x| x.id == f.id)
-                        && x != f
-                    {
-                        *x = f.clone();
-                        updated += 1;
+                    let changed_offline = base.get(&f.id).is_none_or(|b| *b != f);
+                    match sl.dataset.features.iter_mut().find(|x| x.id == f.id) {
+                        Some(x) if changed_offline && x != f => {
+                            *x = f.clone();
+                            updated += 1;
+                        }
+                        // Changed offline but deleted from the source meanwhile: left deleted, and
+                        // reported.
+                        None if changed_offline => skipped += 1,
+                        _ => {}
                     }
                 } else {
                     // Added offline (its id may clash with one outside the area): a fresh id.
@@ -593,5 +615,5 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
         a.data = fresh;
         a.synced = now();
     }
-    Ok(json!({"updated": updated, "added": added, "deleted": deleted}))
+    Ok(json!({"updated": updated, "added": added, "deleted": deleted, "skipped": skipped}))
 }

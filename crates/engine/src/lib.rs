@@ -213,8 +213,6 @@ pub struct Session {
     pub edit_counts: std::collections::HashMap<u32, cmd::design::EditCounts>,
     /// The feature cache fills itself after projection changes (Map › Feature Cache).
     pub auto_cache: bool,
-    /// A cache fill was cancelled.
-    pub cache_cancelled: bool,
     /// Mensuration results (Imagery › Mensuration › Results).
     pub measurements: Vec<serde_json::Value>,
     /// The last topology check's errors (Edit › Error Inspector).
@@ -284,7 +282,6 @@ impl Session {
             topology_errors: Vec::new(),
             measurements: Vec::new(),
             auto_cache: false,
-            cache_cancelled: false,
             undo: Vec::new(),
             redo: Vec::new(),
             back: Vec::new(),
