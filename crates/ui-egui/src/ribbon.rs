@@ -198,9 +198,12 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         // Tighter tabs when the window is too narrow for the usual padding.
         let text: f32 = tabs.iter().map(|(_, c)| text_w(ui, c, semibold(12.5))).sum();
         let pad = ((room - text) / tabs.len().max(1) as f32).clamp(8.0, 22.0);
+        // The active tab and how many frames it has asked to be scrolled into view: a few, as a
+        // pass that egui discards drops its scroll request.
         let active_id = egui::Id::new("tab_strip_active");
-        let shown_active: Option<String> = ui.data(|d| d.get_temp(active_id));
-        ui.data_mut(|d| d.insert_temp(active_id, app.ui.tab.clone()));
+        let (shown_active, scrolls): (String, u8) = ui.data(|d| d.get_temp(active_id)).unwrap_or_default();
+        let scrolls = if shown_active == app.ui.tab { scrolls } else { 0 };
+        ui.data_mut(|d| d.insert_temp(active_id, (app.ui.tab.clone(), scrolls.saturating_add(1))));
         let scroll = egui::ScrollArea::horizontal()
             .id_salt("tab_strip")
             .max_width(room)
@@ -262,8 +265,8 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         }
                         // A tab that became active (clicked, or opened by a command) scrolls
                         // into view, clear of the arrow buttons.
-                        if active && shown_active.as_deref() != Some(tab) {
-                            ui.scroll_to_rect(r.expand2(vec2(SCROLL_BUTTON_W, 0.0)), None);
+                        if active && scrolls < 3 {
+                            ui.scroll_to_rect_animation(r.expand2(vec2(SCROLL_BUTTON_W, 0.0)), None, egui::style::ScrollAnimation::none());
                         }
                         rects.push((tab.to_string(), r));
                     }
