@@ -141,7 +141,8 @@ run on the map's layers, and their outputs are added as new layers.
   and areas are in metres. Data spanning more than 40° of longitude stays in degrees.
 - Raster outputs are kept inside the project, so they save and reopen with it. Text and table
   reports appear in the tool's messages.
-- LiDAR and other inputs RustGIS doesn't open as layers take a file path.
+- LiDAR and other inputs RustGIS doesn't open as layers take a file path, read like Add Data
+  reads one. Outputs are written to a fresh scratch folder and loaded from there.
 - From the command line: `gp.run={"tool":"geolibre:slope","params":{"input":"dem"}}`;
   `gp.tools` lists every tool's parameters.
 

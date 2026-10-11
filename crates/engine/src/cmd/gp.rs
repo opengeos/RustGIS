@@ -58,7 +58,7 @@ fn run(s: &mut Session, p: &Value) -> CmdResult {
     let res = rustgis_analysis::run(&tool, &MapInputs(s.map(), &s.project.tables), &params);
     let millis = now_ms().saturating_sub(t0);
     let name = rustgis_analysis::tool(&tool).map(|t| t.name).unwrap_or("Tool").to_string();
-    let result = match res {
+    let mut result = match res {
         Err(e) => {
             s.project.gp_history.push(GpRecord { tool: name, params, ok: false, messages: vec![e.clone()], millis });
             return Err(e);
@@ -95,10 +95,17 @@ fn run(s: &mut Session, p: &Value) -> CmdResult {
                 match o {
                     OutputLayer::Vector(ds) => layers.push(super::layer::add_dataset(s, ds)),
                     OutputLayer::Raster { name, file_name, bytes } => {
-                        let r = rustgis_data::raster::read_bytes(&file_name, &bytes).map_err(|e| format!("{name}: {e}"))?;
-                        let added = super::raster::add_raster(s, &name, rustgis_map::RasterLayer::from_bytes(r, file_name, bytes))?;
-                        if let Some(id) = added.get("layer").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()) {
-                            layers.push(id);
+                        // One unreadable output doesn't undo the others: it's reported instead.
+                        let added = rustgis_data::raster::read_bytes(&file_name, &bytes)
+                            .map_err(|e| format!("{name}: {e}"))
+                            .and_then(|r| super::raster::add_raster(s, &name, rustgis_map::RasterLayer::from_bytes(r, file_name, bytes)));
+                        match added {
+                            Ok(v) => {
+                                if let Some(id) = v.get("layer").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()) {
+                                    layers.push(id);
+                                }
+                            }
+                            Err(e) => result.messages.push(e),
                         }
                     }
                     OutputLayer::Table(t) => {

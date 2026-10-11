@@ -10,6 +10,10 @@
 //! in a metric coordinate system (the first raster input's, or the UTM zone of the data), so
 //! distances and areas are in metres; outputs come back as new layers in longitude/latitude.
 //! Native only: the browser build has no file system for the tools to use.
+//!
+//! Like Add Data, a tool reads any file named in its parameters (a layer name that isn't a
+//! layer is taken as a path, and LiDAR inputs are paths), with the user's permissions. Outputs
+//! are always written to the run's own scratch folder.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::collections::HashMap;
@@ -201,12 +205,22 @@ fn spec_of(m: &Value) -> Option<(ToolSpec, Meta)> {
 struct Scratch(PathBuf);
 
 impl Scratch {
+    /// A new, empty folder: never one that already exists (left over, or made by someone else
+    /// on a shared machine), so no old file can pass for a tool's output.
     fn new() -> Result<Scratch, String> {
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("rustgis-gp-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).map_err(|e| format!("can't create a scratch folder: {e}"))?;
-        Ok(Scratch(dir))
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+        let mut last = None;
+        for _ in 0..16 {
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("rustgis-gp-{}-{nanos:x}-{n}", std::process::id()));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Ok(Scratch(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+                Err(e) => return Err(format!("can't create a scratch folder: {e}")),
+            }
+        }
+        Err(format!("can't create a scratch folder: {}", last.map(|e| e.to_string()).unwrap_or_default()))
     }
 }
 
