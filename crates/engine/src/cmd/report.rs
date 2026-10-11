@@ -17,8 +17,10 @@ pub const REPORT_EXTENSION: &str = "rgisreport";
 pub const TEMPLATE_EXTENSION: &str = "rgisrpttemplate";
 /// Most records a report lists.
 pub const MAX_RECORDS: usize = 50_000;
-/// Most pictures (dynamic pictures and image attachments) a report embeds.
+/// Most pictures (dynamic pictures and image attachments) a report embeds, and most base64 bytes
+/// they hold together.
 const MAX_PICTURES: usize = 500;
+const PICTURE_BUDGET: usize = if cfg!(target_arch = "wasm32") { 64 << 20 } else { 256 << 20 };
 /// Most related reports followed, one inside another.
 const MAX_DEPTH: usize = 3;
 /// Most related records listed under one record.
@@ -48,7 +50,11 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"report": name|index}"#),
         C::new("report.remove", "Delete Report", "Catalog", |s, p| {
             let i = index(s, p)?;
-            s.project.reports.remove(i);
+            let gone = s.project.reports.remove(i).name;
+            // Other reports' links to it go too.
+            for r in &mut s.project.reports {
+                r.sections.retain(|x| !matches!(x, Section::Related { report } if report.eq_ignore_ascii_case(&gone)));
+            }
             s.active_report = None;
             Ok(Value::Null)
         })
@@ -206,7 +212,11 @@ pub fn commands() -> Vec<C> {
             let path = ps(p, "path").ok_or("path is required")?.to_string();
             let i = index(s, p)?;
             let dpi = f(p, "dpi").unwrap_or(150.0).clamp(72.0, 600.0);
-            let pdf = !path.to_ascii_lowercase().ends_with(".png");
+            let lower = path.to_ascii_lowercase();
+            let pdf = lower.ends_with(".pdf");
+            if !pdf && !lower.ends_with(".png") {
+                return Err("export to a .pdf or .png file".into());
+            }
             let (bytes, pages) = report_bytes(s, i, dpi, pdf)?;
             rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
             Ok(json!({"path": path, "pages": pages, "bytes": bytes.len()}))
@@ -366,6 +376,7 @@ fn new_report(s: &mut Session, p: &Value) -> CmdResult {
     if let Some((w, h)) = page(p, None)? {
         (r.width, r.height) = (w, h);
     }
+    r.clamp();
     let name = r.name.clone();
     s.project.reports.push(r);
     let i = s.project.reports.len() - 1;
@@ -376,9 +387,24 @@ fn new_report(s: &mut Session, p: &Value) -> CmdResult {
 fn update(s: &mut Session, p: &Value) -> CmdResult {
     let i = index(s, p)?;
     let mut r = s.project.reports.get(i).cloned().ok_or("no report")?;
+    let old_name = r.name.clone();
+    let mut renamed = None;
     if let Some(n) = ps(p, "layer") {
         let l = find_layer(s, n).ok_or_else(|| format!("no layer named '{n}'"))?;
         r.layer = l.name.clone();
+        // What the new layer lacks is dropped, so the report doesn't show blank columns.
+        let ds = &l.dataset;
+        let has = |n: &str| ds.field_index(n).is_some();
+        r.fields.retain(|f| has(f));
+        r.groups.retain(|f| has(f));
+        r.stats.retain(|x| has(&x.field));
+        r.sort = r.sort.take().filter(|f| has(f));
+        r.picture_field = r.picture_field.take().filter(|f| has(f));
+        r.attachments_field = r.attachments_field.take().filter(|f| has(f));
+        r.chart = r.chart.take().filter(|c| has(&c.category) && c.value.as_deref().is_none_or(has));
+        if r.fields.is_empty() {
+            r.fields = ds.fields.iter().take(MAX_ITEMS).map(|f| f.name.clone()).collect();
+        }
     }
     // Everything is checked against the (possibly new) layer before the report changes.
     let l = find_layer(s, &r.layer);
@@ -388,6 +414,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     };
     if let Some(n) = ps(p, "name") {
         r.name = unique_name(s, n, Some(i));
+        renamed = Some(r.name.clone());
     }
     if let Some(t) = ps(p, "title") {
         r.title = t.chars().take(500).collect();
@@ -417,6 +444,16 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     let name = r.name.clone();
     if let Some(slot) = s.project.reports.get_mut(i) {
         *slot = r;
+    }
+    // Related-report links follow a rename.
+    if let Some(new) = renamed {
+        for x in s.project.reports.iter_mut().flat_map(|r| r.sections.iter_mut()) {
+            if let Section::Related { report } = x
+                && report.eq_ignore_ascii_case(&old_name)
+            {
+                *report = new.clone();
+            }
+        }
     }
     Ok(json!({"report": i, "name": name}))
 }
@@ -520,7 +557,6 @@ fn stat_lines(r: &Report, ds: &rustgis_data::Dataset, rows: &[usize]) -> Vec<Str
     out
 }
 
-/// A picture field's value as base64 and pixel size: a file path (read, size capped) or base64.
 /// A picture field's value as base64 and pixel size: base64 image data, or the path of a PNG or
 /// JPEG relative to the project's folder. Attribute values come from data files, so paths may
 /// not be absolute or climb out of that folder (with `..`), and an unsaved project reads none.
@@ -534,7 +570,12 @@ fn picture_of(text: &str, folder: Option<&Path>) -> Option<(String, u32, u32)> {
     let b64 = if is_path {
         let rel = Path::new(t);
         let safe = rel.components().all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir));
-        let full = folder.filter(|_| safe)?.join(rel);
+        let folder = folder.filter(|_| safe)?;
+        // Resolved through links too, so a link inside the folder can't point outside it.
+        let full = folder.join(rel).canonicalize().ok()?;
+        if !full.starts_with(folder.canonicalize().ok()?) {
+            return None;
+        }
         super::graphics::picture(&json!({"path": full.to_str()?})).ok()?
     } else {
         super::graphics::picture(&json!({"image": t})).ok()?
@@ -641,6 +682,7 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
     let pic = r.picture_field.as_deref().and_then(|n| ds.field_index(n));
     let att = r.attachments_field.as_deref().and_then(|n| ds.field_index(n));
     let mut pictures = 0usize;
+    let mut picture_bytes = 0usize;
     // Subreports: related records per key value.
     let subs: Vec<(String, Vec<String>, Vec<Option<usize>>, &rustgis_data::Dataset, HashMap<String, Vec<usize>>, Option<usize>)> = r
         .sections
@@ -685,7 +727,12 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
         out.push(columns.clone());
     }
     for &row in &rows {
-        let vals: Vec<String> = gi.iter().map(|g| cell(ds, row, *g)).collect();
+        // Group values compare as the sort does: numbers by value (1 and 1.0 are one group).
+        let norm = |g: Option<usize>| match g.and_then(|g| ds.value(row, g).as_f64()) {
+            Some(x) => format!("{x}"),
+            None => cell(ds, row, g),
+        };
+        let vals: Vec<String> = gi.iter().map(|g| norm(*g)).collect();
         if let Some(changed) = (0..vals.len()).find(|&l| open.get(l) != vals.get(l)) {
             close(out, changed, &mut open, &mut group_rows);
             for (l, v) in vals.iter().enumerate().skip(changed) {
@@ -705,8 +752,10 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
         if let Some(pf) = pic
             && pictures < MAX_PICTURES
             && let Some((image, width, height)) = picture_of(&cell(ds, row, Some(pf)), folder)
+            && picture_bytes.saturating_add(image.len()) <= PICTURE_BUDGET
         {
             pictures += 1;
+            picture_bytes += image.len();
             out.push(Block::Picture { image, width, height });
         }
         if let Some(af) = att {
@@ -719,11 +768,14 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
                     .collect();
                 out.push(Block::Attachments(names));
                 for x in &items {
-                    if pictures >= MAX_PICTURES {
+                    if pictures >= MAX_PICTURES || picture_bytes >= PICTURE_BUDGET {
                         break;
                     }
-                    if let Some((image, width, height)) = picture_of(x, folder) {
+                    if let Some((image, width, height)) = picture_of(x, folder)
+                        && picture_bytes.saturating_add(image.len()) <= PICTURE_BUDGET
+                    {
                         pictures += 1;
+                        picture_bytes += image.len();
                         out.push(Block::Picture { image, width, height });
                     }
                 }

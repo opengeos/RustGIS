@@ -1733,6 +1733,12 @@ fn reports_group_summarise_relate_export_and_reopen() {
     assert_eq!(count(&s), 0, "an unsaved project reads no picture files");
     s.run("project.saveAs", &json!({"path": dir.join("p.rgisx").to_str().unwrap()})).unwrap();
     assert_eq!(count(&s), 1, "only the relative path inside the project folder");
+    // Renaming a report keeps links to it; exports are .pdf or .png only.
+    s.run("report.update", &json!({"report": "Cities", "name": "World cities"})).unwrap();
+    let countries = s.project.reports.iter().find(|r| r.name == "Countries").unwrap();
+    assert!(countries.sections.iter().any(|x| matches!(x, rustgis_map::report::Section::Related { report } if report == "World cities")));
+    assert!(s.run("report.export", &json!({"report": "Countries", "path": dir.join("c.jpg").to_str().unwrap()})).is_err());
+    s.run("report.update", &json!({"report": "World cities", "name": "Cities"})).unwrap();
     // Sorting a column that mixes numbers and text (9, 10, "1a"…) is a total order, never a panic.
     let mixed = json!({"type": "FeatureCollection", "features": (0..200).map(|i| json!({"type": "Feature",
         "properties": {"v": if i % 3 == 0 { json!(format!("{}a", i % 7)) } else { json!(i % 11) }},

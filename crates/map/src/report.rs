@@ -10,7 +10,7 @@ pub const MAX_ITEMS: usize = 64;
 /// Most group levels.
 pub const MAX_GROUPS: usize = 4;
 /// Page sizes are clamped to this range, in millimetres.
-pub const MIN_PAGE: f64 = 50.0;
+pub const MIN_PAGE: f64 = 100.0;
 pub const MAX_PAGE: f64 = 2000.0;
 
 /// A report on one layer.

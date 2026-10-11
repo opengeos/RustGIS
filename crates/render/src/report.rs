@@ -18,6 +18,8 @@ pub const MAX_PAGES: usize = 5000;
 const INDENT: f64 = 8.0;
 /// Largest picture box, in millimetres.
 const PICTURE_H: f64 = 70.0;
+/// The heading of a record's attachment list.
+const ATTACHMENTS: &str = "Attachments";
 /// Most bars a chart draws.
 const MAX_BARS: usize = 25;
 
@@ -146,9 +148,19 @@ pub fn paginate(doc: &Doc) -> Vec<Page> {
             Block::Row(_) => sub_columns = None,
             _ => {}
         }
-        if let Block::Text(t) = b {
-            let (pt, _, lh) = style(b);
-            let mut lines = wrap(t, content_w, pt).into_iter().peekable();
+        // Blocks made of lines (text, statistics, attachments) split between pages when they
+        // don't fit, however long they are.
+        let line_block: Option<Vec<String>> = match b {
+            Block::Text(t) => Some(wrap(t, content_w, style(b).0)),
+            Block::Stats(v) => Some(v.clone()),
+            Block::Attachments(names) => {
+                Some(std::iter::once(ATTACHMENTS.to_string()).chain(names.iter().map(|a| format!("• {a}"))).collect())
+            }
+            _ => None,
+        };
+        if let Some(all) = line_block {
+            let (_, _, lh) = style(b);
+            let mut lines = all.into_iter().peekable();
             while lines.peek().is_some() && pages.len() < MAX_PAGES {
                 let room = ((bottom - y) / lh).floor().max(0.0) as usize;
                 if room == 0 {
@@ -270,7 +282,8 @@ pub fn draw_page(doc: &Doc, pages: &[Page], n: usize, dpi: f64, layouts: &[Layou
                     pm.fill_rect(r, &paint(BAND, 1.0), Transform::identity(), None);
                 }
             }
-            Block::Stats(lines) => {
+            Block::Stats(_) => {
+                let lines = &it.lines;
                 for (row, l) in lines.iter().enumerate() {
                     text::text_at(
                         &mut pm,
@@ -288,18 +301,18 @@ pub fn draw_page(doc: &Doc, pages: &[Page], n: usize, dpi: f64, layouts: &[Layou
                     pm.fill_rect(r, &paint(ACCENT, 1.0), Transform::identity(), None);
                 }
             }
-            Block::Attachments(names) => {
-                text::text_at(&mut pm, "Attachments", at(MARGIN + INDENT), mid(0.0), pt_px(pt), DIM, true, text::Align::Left, false);
-                for (row, a) in names.iter().enumerate() {
-                    let s = format!("• {a}");
+            Block::Attachments(_) => {
+                for (row, l) in it.lines.iter().enumerate() {
+                    // The heading line in grey and bold, then the names.
+                    let head = l == ATTACHMENTS;
                     text::text_at(
                         &mut pm,
-                        &fit(&s, content_w - INDENT, pt, false),
+                        &fit(l, content_w - INDENT, pt, head),
                         at(MARGIN + INDENT),
-                        mid(row as f64 + 1.0),
+                        mid(row as f64),
                         pt_px(pt),
-                        DARK,
-                        false,
+                        if head { DIM } else { DARK },
+                        head,
                         text::Align::Left,
                         false,
                     );
@@ -419,6 +432,7 @@ mod tests {
         let words: usize = pages
             .iter()
             .flat_map(|p| if let Page::Flow(items) = p { items.clone() } else { Vec::new() })
+            .filter(|i| matches!(d.blocks[i.block], Block::Text(_)))
             .flat_map(|i| i.lines)
             .map(|l| l.split_whitespace().count())
             .sum();
@@ -437,5 +451,23 @@ mod tests {
         let d = Doc { title: "Empty".into(), width: 100.0, height: 100.0, blocks: Vec::new() };
         assert_eq!(paginate(&d).len(), 1);
         assert!(draw_page(&d, &paginate(&d), 0, 1e9, &[], &mut []).is_some());
+    }
+
+    #[test]
+    fn long_statistics_and_attachments_split_between_pages() {
+        let blocks = vec![
+            Block::Stats((0..120).map(|i| format!("Sum of f{i}: {i}")).collect()),
+            Block::Attachments((0..90).map(|i| format!("file{i}.pdf")).collect()),
+        ];
+        let d = Doc { title: "Long".into(), width: 150.0, height: 120.0, blocks };
+        let pages = paginate(&d);
+        assert!(pages.len() > 3);
+        let mut lines = 0;
+        for p in &pages {
+            let Page::Flow(items) = p else { panic!() };
+            assert!(items.iter().all(|i| i.y + i.h <= d.height - MARGIN - FOOTER + 1e-6), "nothing runs into the footer");
+            lines += items.iter().map(|i| i.lines.len()).sum::<usize>();
+        }
+        assert_eq!(lines, 120 + 91, "every statistic, the heading and every attachment");
     }
 }

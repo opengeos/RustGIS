@@ -19,6 +19,10 @@ pub struct ReportState {
     pub page_title: String,
     pub page_text: String,
     pub message: Option<(String, bool)>,
+    /// The report whose Title and Where are being edited, and the text typed into them.
+    pub editing: Option<usize>,
+    pub title: String,
+    pub where_clause: String,
 }
 
 fn heading(ui: &mut Ui, text: &str) {
@@ -77,22 +81,37 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     preview(app, ui, i, t);
 
     heading(ui, "Report");
-    let mut title = r.title.clone();
+    // Text being typed lives in the pane's state (rebuilt each frame it would lose keystrokes);
+    // it's saved when the field loses focus and follows the report otherwise.
+    if app.reports.editing != Some(i) {
+        app.reports.editing = Some(i);
+        app.reports.title = r.title.clone();
+        app.reports.where_clause = r.where_clause.clone();
+    }
     ui.horizontal(|ui| {
         ui.label(tl!("Title"));
-        if ui.add(egui::TextEdit::singleline(&mut title).desired_width(ui.available_width())).lost_focus() && title != r.title {
-            run(app, "report.update", json!({"report": i, "title": title}));
+        let resp = ui.add(egui::TextEdit::singleline(&mut app.reports.title).desired_width(ui.available_width()));
+        if resp.lost_focus() {
+            if app.reports.title != r.title {
+                let title = app.reports.title.clone();
+                run(app, "report.update", json!({"report": i, "title": title}));
+            }
+        } else if !resp.has_focus() {
+            app.reports.title = r.title.clone();
         }
     });
-    let mut where_clause = r.where_clause.clone();
     ui.horizontal(|ui| {
         ui.label(tl!("Where"));
-        if ui
-            .add(egui::TextEdit::singleline(&mut where_clause).hint_text("pop_max > 1000000").desired_width(ui.available_width()))
-            .lost_focus()
-            && where_clause != r.where_clause
-        {
-            run(app, "report.update", json!({"report": i, "where": where_clause}));
+        let resp = ui.add(
+            egui::TextEdit::singleline(&mut app.reports.where_clause).hint_text("pop_max > 1000000").desired_width(ui.available_width()),
+        );
+        if resp.lost_focus() {
+            if app.reports.where_clause != r.where_clause {
+                let w = app.reports.where_clause.clone();
+                run(app, "report.update", json!({"report": i, "where": w}));
+            }
+        } else if !resp.has_focus() {
+            app.reports.where_clause = r.where_clause.clone();
         }
     });
     let mut sel = r.selected_only;
