@@ -22,6 +22,12 @@ pub struct DocState {
     /// Cell text being edited, by (notebook, cell), saved when the field loses focus.
     pub edits: HashMap<(usize, usize), String>,
     pub message: Option<(String, bool)>,
+    /// The page whose fields are being edited, and their text and duration.
+    pub editing: Option<(usize, usize)>,
+    pub title: String,
+    pub body: String,
+    pub notes: String,
+    pub seconds: f64,
 }
 
 fn heading(ui: &mut Ui, text: &str) {
@@ -114,34 +120,64 @@ pub fn presentation(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if let Some(page) = pres.pages.get(app.docs.page).cloned() {
         let k = app.docs.page;
         heading(ui, "Page");
-        let mut title = page.title.clone();
+        // The text being typed lives in the pane's state (rebuilt each frame it would lose
+        // keystrokes): it follows the page while a field isn't focused and is saved when it loses
+        // focus.
+        let body_now = match &page.kind {
+            rustgis_engine::map::presentation::PageKind::Blank { text, .. } => Some(text.clone()),
+            _ => None,
+        };
+        if app.docs.editing != Some((i, k)) {
+            app.docs.editing = Some((i, k));
+            (app.docs.title, app.docs.notes, app.docs.seconds) = (page.title.clone(), page.notes.clone(), page.seconds);
+            app.docs.body = body_now.clone().unwrap_or_default();
+        }
+        // One text field: saved under `key` when it loses focus, refreshed from `now` otherwise.
+        let field = |app: &mut RustGisApp, resp: egui::Response, key: &str, value: String, now: &str| -> Option<String> {
+            if resp.lost_focus() {
+                if value != now {
+                    run(app, "presentation.updatePage", json!({"presentation": i, "page": k, key: value}));
+                }
+                None
+            } else if !resp.has_focus() {
+                Some(now.to_string())
+            } else {
+                None
+            }
+        };
         ui.horizontal(|ui| {
             ui.label(tl!("Title"));
-            if ui.add(egui::TextEdit::singleline(&mut title).desired_width(ui.available_width())).lost_focus() && title != page.title {
-                run(app, "presentation.updatePage", json!({"presentation": i, "page": k, "title": title}));
+            let resp = ui.add(egui::TextEdit::singleline(&mut app.docs.title).desired_width(ui.available_width()));
+            let v = app.docs.title.clone();
+            if let Some(fresh) = field(app, resp, "title", v, &page.title) {
+                app.docs.title = fresh;
             }
         });
-        if let rustgis_engine::map::presentation::PageKind::Blank { text, .. } = &page.kind {
-            let mut body = text.clone();
-            if ui.add(egui::TextEdit::multiline(&mut body).desired_rows(3).desired_width(ui.available_width())).lost_focus()
-                && &body != text
-            {
-                run(app, "presentation.updatePage", json!({"presentation": i, "page": k, "text": body}));
+        if let Some(text) = &body_now {
+            let resp = ui.add(egui::TextEdit::multiline(&mut app.docs.body).desired_rows(3).desired_width(ui.available_width()));
+            let v = app.docs.body.clone();
+            if let Some(fresh) = field(app, resp, "text", v, text) {
+                app.docs.body = fresh;
             }
         }
-        let mut notes = page.notes.clone();
-        if ui
-            .add(egui::TextEdit::multiline(&mut notes).hint_text(tl!("Speaker notes")).desired_rows(2).desired_width(ui.available_width()))
-            .lost_focus()
-            && notes != page.notes
-        {
-            run(app, "presentation.updatePage", json!({"presentation": i, "page": k, "notes": notes}));
+        let resp = ui.add(
+            egui::TextEdit::multiline(&mut app.docs.notes)
+                .hint_text(tl!("Speaker notes"))
+                .desired_rows(2)
+                .desired_width(ui.available_width()),
+        );
+        let v = app.docs.notes.clone();
+        if let Some(fresh) = field(app, resp, "notes", v, &page.notes) {
+            app.docs.notes = fresh;
         }
         ui.horizontal(|ui| {
-            let mut secs = page.seconds;
             ui.label(tl!("Seconds"));
-            if ui.add(egui::DragValue::new(&mut secs).range(0.5..=3600.0).speed(0.5)).drag_stopped() {
+            let resp = ui.add(egui::DragValue::new(&mut app.docs.seconds).range(0.5..=3600.0).speed(0.5));
+            if (resp.drag_stopped() || resp.lost_focus()) && app.docs.seconds != page.seconds {
+                let secs = app.docs.seconds;
                 run(app, "presentation.updatePage", json!({"presentation": i, "page": k, "seconds": secs}));
+            } else if !resp.dragged() && !resp.has_focus() {
+                app.docs.seconds = page.seconds;
             }
             if ui.add_enabled(k > 0, egui::Button::new(tl!("Move Up")).small()).clicked()
                 && run(app, "presentation.updatePage", json!({"presentation": i, "page": k, "moveTo": k - 1})).is_some()
