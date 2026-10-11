@@ -1601,6 +1601,19 @@ fn plugin_tile_layers_need_network() {
     let e = forward(&mut s, "eng-tiles-edit", "map.import", json!({"text": text})).unwrap_err();
     assert!(e.contains("'network' permission"), "{e}");
     assert!(s.project.maps.iter().all(|m| m.tiles.is_empty()));
+    // Nor by changing how a layer it can see fetches (here, an imported map with the same
+    // address as an existing layer but another subdomain list).
+    s.run("map.addTiles", &json!({"url": "https://{s}.tiles.example.com/{z}/{x}/{y}.png"})).unwrap();
+    let mut m = s.map().clone();
+    m.name = "Copy".into();
+    m.tiles[0].subdomains = vec!["evil".into()];
+    let e = forward(&mut s, "eng-tiles-edit", "map.import", json!({"text": serde_json::to_string(&m).unwrap()})).unwrap_err();
+    assert!(e.contains("'network' permission"), "{e}");
+    assert!(s.project.maps.iter().flat_map(|m| &m.tiles).all(|t| t.subdomains.is_empty()));
+    // Changing a layer's opacity is only an edit.
+    forward(&mut s, "eng-tiles-edit", "map.setTiles", json!({"index": 0, "opacity": 0.5})).unwrap();
+    assert_eq!(s.map().tiles[0].opacity, 0.5);
+    s.run("map.removeTiles", &json!({})).unwrap();
     rustgis_plugins::unload("eng-tiles-edit");
     // With it (and `edit`), it can; it needs no `files` for an address.
     plugin("eng-tiles-net", &["edit", "network"]);

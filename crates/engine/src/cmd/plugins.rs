@@ -336,10 +336,11 @@ impl Bridge<'_> {
         }
         // Without `network`, no command may bring in a tile address (a map file read from text
         // carries its tile layers): any new one is taken out again.
-        let tile_urls = |s: &Session| -> std::collections::HashSet<String> {
-            s.project.maps.iter().flat_map(|m| &m.tiles).map(|t| t.url.clone()).collect()
-        };
-        let before = (!self.plugin.manifest.has(Permission::Network)).then(|| tile_urls(self.s));
+        // What decides where a layer fetches from: its address, kind, subdomains and row order.
+        let fetched = |t: &rustgis_map::TileLayer| (t.url.clone(), t.kind, t.subdomains.clone(), t.tms);
+        let tile_sources =
+            |s: &Session| -> std::collections::HashSet<_> { s.project.maps.iter().flat_map(|m| &m.tiles).map(fetched).collect() };
+        let before = (!self.plugin.manifest.has(Permission::Network)).then(|| tile_sources(self.s));
         // The plugin command took the undo snapshot: the commands it runs are part of it.
         let mut res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self.s, params)))
             .unwrap_or_else(|_| Err(format!("{label} failed unexpectedly")));
@@ -347,7 +348,7 @@ impl Bridge<'_> {
             let mut dropped = false;
             for m in &mut self.s.project.maps {
                 let n = m.tiles.len();
-                m.tiles.retain(|t| before.contains(&t.url));
+                m.tiles.retain(|t| before.contains(&fetched(t)));
                 dropped |= m.tiles.len() != n;
             }
             if dropped {

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_TILE_LAYERS: usize = 32;
 
 /// What a tile layer's address points at.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TileKind {
     /// Raster tiles from a URL template (`{z}/{x}/{y}`, `{-y}`, `{s}`, `{q}`, `{bbox-epsg-3857}`).

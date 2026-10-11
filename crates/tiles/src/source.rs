@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::cache::{self, Payload, State, Want};
 use crate::style::{Source, Style};
-use crate::template;
+use crate::{address, template};
 
 /// The kind of address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -86,6 +86,9 @@ pub const DEFAULT_STYLE: &str = include_str!("default_style.json");
 /// The style to draw `spec` with, once the documents it needs have been fetched.
 pub fn resolve(spec: &Spec) -> Resolve {
     let key = spec.key();
+    if let Err(e) = address::check(&spec.url, None) {
+        return Resolve::Failed(e);
+    }
     if let Some(r) = resolved().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return Resolve::Ready(r.clone());
     }
@@ -120,13 +123,20 @@ pub fn resolve(spec: &Spec) -> Resolve {
                 return Resolve::Failed(format!("{u}: mapbox:// addresses need Mapbox's own library"));
             }
             let u = template::join(&base, &u);
+            // A style's TileJSON is the style's choice; a vector layer's is the user's.
+            if let Err(e) = address::check(&u, (spec.kind == Kind::Style).then_some(base.as_str())) {
+                return Resolve::Failed(e);
+            }
             match fetch_json(&u) {
                 Ok(Some(tj)) => {
                     src.apply_tilejson(&tj);
-                    // Tile addresses relative to the TileJSON document.
+                    // Tile addresses relative to the TileJSON document, which chose them.
                     if let Source::Vector { tiles, .. } | Source::Raster { tiles, .. } = src {
                         for t in tiles.iter_mut() {
                             *t = template::join(&u, t);
+                            if let Err(e) = address::check(t, Some(&u)) {
+                                return Resolve::Failed(e);
+                            }
                         }
                     }
                 }
@@ -136,6 +146,11 @@ pub fn resolve(spec: &Spec) -> Resolve {
         } else if let Source::Vector { tiles, .. } | Source::Raster { tiles, .. } = src {
             for t in tiles.iter_mut() {
                 *t = template::join(&base, t);
+                // A style's tile addresses are the style's choice; a raster or vector layer's
+                // template is the user's.
+                if let Err(e) = address::check(t, (spec.kind == Kind::Style).then_some(base.as_str())) {
+                    return Resolve::Failed(e);
+                }
             }
         }
     }
@@ -261,6 +276,13 @@ mod tests {
         }
         let Resolve::Ready(v) = resolve(&spec(Kind::Vector, "https://tiles.example.com/{z}/{x}/{y}.pbf")) else { panic!("not ready") };
         assert!(v.style.layers.len() > 10);
+    }
+
+    #[test]
+    fn refuses_forbidden_addresses() {
+        assert!(matches!(resolve(&spec(Kind::Raster, "http://169.254.169.254/{z}/{x}/{y}.png")), Resolve::Failed(_)));
+        // A self-hosted server the user names is fine.
+        assert!(matches!(resolve(&spec(Kind::Raster, "http://localhost:8080/{z}/{x}/{y}.png")), Resolve::Ready(_)));
     }
 
     #[test]

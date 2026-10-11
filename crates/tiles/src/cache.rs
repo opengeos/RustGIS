@@ -355,7 +355,8 @@ mod native {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(30)))
             .user_agent(concat!("RustGIS/", env!("CARGO_PKG_VERSION"), " (+https://rustgis.app)"))
-            .max_redirects(5)
+            // Redirects are followed by `get`, which checks where each one leads.
+            .max_redirects(0)
             .build()
             .into();
         let q = queue();
@@ -376,7 +377,27 @@ mod native {
 
     fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
         use std::io::Read;
-        let mut resp = agent.get(url).call().map_err(|e| e.to_string())?;
+        let mut at = url.to_string();
+        let mut redirects = 0;
+        let mut resp = loop {
+            let resp = agent.get(&at).call().map_err(|e| e.to_string())?;
+            if !resp.status().is_redirection() {
+                break resp;
+            }
+            let location = resp.headers().get("location").and_then(|v| v.to_str().ok()).ok_or("a redirect with no Location")?;
+            let next = crate::template::join(&at, location);
+            // Where a redirect leads is the server's choice, not the user's.
+            crate::address::check(&next, Some(&at))?;
+            // Never from HTTPS down to plain HTTP.
+            if at.starts_with("https://") && !next.starts_with("https://") {
+                return Err(format!("{next}: a redirect from https to http"));
+            }
+            redirects += 1;
+            if redirects > 5 {
+                return Err("too many redirects".into());
+            }
+            at = next;
+        };
         if resp.status().as_u16() == 204 {
             return Ok(Vec::new());
         }
