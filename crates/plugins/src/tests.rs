@@ -255,7 +255,9 @@ fn plugin_tabs_are_checked() {
 
 #[test]
 fn large_registries_are_read_quickly() {
-    // 20,000 plugins (and a duplicate of each, which is dropped) parse in well under a second.
+    // 20,000 plugins (and a duplicate of each, which is dropped) parse in a fraction of a second;
+    // the bound is generous so a busy CI machine doesn't fail it, while a quadratic scan
+    // (minutes at this size) still would.
     let sha = "a".repeat(64);
     let one = |i: usize| json!({"id": format!("p{i}"), "name": format!("Plugin {i}"), "version": "1.0.0", "package": format!("https://packages.example.com/p{i}.rgplugin"), "sha256": sha});
     let list: Vec<Value> = (0..20_000).chain(0..20_000).map(one).collect();

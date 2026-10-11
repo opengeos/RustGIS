@@ -9,9 +9,10 @@ use crate::manifest::{Permission, valid_id, version_parts};
 /// The hosted registry.
 pub const DEFAULT_URL: &str = "https://plugins.rustgis.app/registry.json";
 
-/// The most entries read from a registry (or a blocklist), and the largest registry downloaded:
-/// room for a registry of tens of thousands of plugins.
+/// The most entries read from a registry (or a blocklist): room for tens of thousands of plugins.
 const MAX_ENTRIES: usize = 100_000;
+
+/// The largest registry downloaded (a registry entry is about 1 KB, so this is ample).
 pub const MAX_REGISTRY_BYTES: usize = 64 * 1024 * 1024;
 
 /// One plugin in the registry.
@@ -107,15 +108,20 @@ fn is_local(url: &str) -> bool {
 /// mustn't hide the rest.
 pub fn parse(text: &str, url: &str) -> Result<Vec<Entry>, String> {
     let root: Value = serde_json::from_str(text).map_err(|e| format!("the plugin registry isn't valid JSON: {e}"))?;
-    let list = match &root {
+    // Taken by value, so each entry is converted without a copy (a large registry would
+    // otherwise briefly need several times its size).
+    let list = match root {
         Value::Array(a) => a,
-        Value::Object(o) => o.get("plugins").and_then(Value::as_array).ok_or("the plugin registry has no 'plugins' list")?,
+        Value::Object(mut o) => match o.remove("plugins") {
+            Some(Value::Array(a)) => a,
+            _ => return Err("the plugin registry has no 'plugins' list".into()),
+        },
         _ => return Err("the plugin registry isn't a list of plugins".into()),
     };
     let mut out: Vec<Entry> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for v in list.iter().take(MAX_ENTRIES) {
-        let Ok(mut e) = serde_json::from_value::<Entry>(v.clone()) else { continue };
+    for v in list.into_iter().take(MAX_ENTRIES) {
+        let Ok(mut e) = serde_json::from_value::<Entry>(v) else { continue };
         if !valid_id(&e.id, false) || version_parts(&e.version).is_none() || !is_sha256(&e.sha256) || e.name.trim().is_empty() {
             continue;
         }
