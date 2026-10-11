@@ -25,7 +25,7 @@ fn need_presentation(s: &Session) -> Option<&'static str> {
 pub fn commands() -> Vec<C> {
     vec![
         C::new("presentation.new", "New Presentation", "Insert › Project", |s, p| {
-            let name = unique_name(s, ps(p, "name").unwrap_or("Presentation"), None);
+            let name = unique_name(s, ps(p, "name").unwrap_or("Presentation"));
             let mut pres = Presentation { name: name.clone(), ..Presentation::default() };
             // A title page to start from.
             let title: String = ps(p, "title").unwrap_or(&s.project.name).chars().take(MAX_TITLE).collect();
@@ -45,7 +45,7 @@ pub fn commands() -> Vec<C> {
             let text = super::items::read_text(p)?;
             let mut pres: Presentation = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS presentation: {e}"))?;
             pres.clamp();
-            pres.name = unique_name(s, &pres.name, None);
+            pres.name = unique_name(s, &pres.name);
             let name = pres.name.clone();
             s.project.presentations.push(pres);
             let i = s.project.presentations.len() - 1;
@@ -192,10 +192,10 @@ fn page_of(s: &Session, p: &Value) -> Result<(usize, usize), String> {
     Ok((i, k))
 }
 
-fn unique_name(s: &Session, base: &str, skip: Option<usize>) -> String {
+fn unique_name(s: &Session, base: &str) -> String {
     let base: String = base.trim().chars().take(200).collect();
     let base = if base.is_empty() { "Presentation".to_string() } else { base };
-    let taken = |n: &str| s.project.presentations.iter().enumerate().any(|(j, r)| Some(j) != skip && r.name.eq_ignore_ascii_case(n));
+    let taken = |n: &str| s.project.presentations.iter().any(|r| r.name.eq_ignore_ascii_case(n));
     let mut name = base.clone();
     let mut k = 1;
     while taken(&name) {
@@ -318,7 +318,7 @@ pub fn page_layout(s: &Session, pres: &Presentation, page: &Page) -> Layout {
             if let PageKind::Video { source, .. } = &page.kind {
                 l.add(
                     "Play",
-                    (m + bw / 2.0 - 30.0, top + bh / 2.0 - 6.0, 60.0, 12.0),
+                    (m + bw * 0.3, top + bh / 2.0 - 6.0, bw * 0.4, 12.0),
                     text(&format!("Video: {}", file_name(source)), 18.0, dark, true),
                 );
             }
@@ -360,6 +360,18 @@ fn html_escape(t: &str) -> String {
     t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
+/// A video source the slideshow may play: a web address (http or https) or a file path. Any
+/// other scheme (an imported file's author's choice) plays nothing.
+pub(crate) fn playable(source: &str) -> &str {
+    let lower = source.trim().to_ascii_lowercase();
+    let scheme = lower.split_once(':').map(|(s, _)| s).filter(|s| !s.contains(['/', '\\']));
+    match scheme {
+        // A Windows drive letter is a path.
+        Some(s) if s.len() > 1 && s != "http" && s != "https" => "",
+        _ => source,
+    }
+}
+
 /// The presentation as a PDF, a self-contained HTML slideshow or a PNG of its first page, and
 /// the number of pages written.
 pub fn export_bytes(s: &mut Session, i: usize, format: &str, dpi: f64) -> Result<(Vec<u8>, usize), String> {
@@ -390,7 +402,7 @@ pub fn export_bytes(s: &mut Session, i: usize, format: &str, dpi: f64) -> Result
                 PageKind::Video { source, .. } => format!(
                     "<video controls preload=\"metadata\" title=\"{}\" poster=\"data:image/png;base64,{png}\" src=\"{}\"></video>",
                     html_escape(&page.title),
-                    html_escape(source)
+                    html_escape(playable(source))
                 ),
                 _ => format!("<img alt=\"{}\" src=\"data:image/png;base64,{png}\">", html_escape(&page.title)),
             };

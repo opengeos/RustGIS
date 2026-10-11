@@ -1824,6 +1824,17 @@ fn presentations_and_notebooks() {
         assert!(std::fs::read(&path).unwrap().starts_with(magic), "{file}");
     }
     let html = std::fs::read_to_string(dir.join("tour.html")).unwrap();
+    use crate::cmd::presentation::playable;
+    for (source, kept) in [
+        ("https://a.org/v.mp4", true),
+        ("clip.mp4", true),
+        ("C:\\v.mp4", true),
+        ("/v/a.mp4", true),
+        ("file:///etc/v", false),
+        ("data:x", false),
+    ] {
+        assert_eq!(playable(source).is_empty(), !kept, "{source}");
+    }
     assert!(html.contains("<video") && html.contains("https://example.org/rome.mp4") && html.matches("<section").count() == 6);
     // Save and import.
     let file = dir.join("tour.rgispres");
