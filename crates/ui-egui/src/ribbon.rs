@@ -14,12 +14,17 @@ use crate::{RightPane, RustGisApp, icons};
 pub const TABS: [&str; 7] = ["Map", "Insert", "Analysis", "View", "Edit", "Share", "Help"];
 /// The contextual tabs for feature layers: (tab id, caption).
 pub const FEATURE_TABS: &[(&str, &str)] = &[("Feature Layer", "Feature Layer"), ("Labeling", "Labeling"), ("Data", "Data")];
+/// The contextual tab of an open layout.
+pub const LAYOUT_TABS: &[(&str, &str)] = &[("Layout", "Layout")];
 /// The contextual tabs for raster layers.
 pub const RASTER_TABS: &[(&str, &str)] = &[("Raster Layer", "Raster Layer"), ("Raster Data", "Data")];
 
 /// The contextual tab group for the layer selected in Contents: its caption (shown above its
 /// tabs) and tabs.
 pub fn context(app: &RustGisApp) -> Option<(&'static str, &'static [(&'static str, &'static str)])> {
+    if app.session.active_layout.is_some() {
+        return Some(("Layout", LAYOUT_TABS));
+    }
     let l = app.session.active_layer.and_then(|id| app.session.map().layer(id))?;
     if l.is_raster() {
         Some(("Raster Layer", RASTER_TABS))
@@ -32,7 +37,7 @@ pub fn context(app: &RustGisApp) -> Option<(&'static str, &'static [(&'static st
 
 /// Whether a tab id belongs to a contextual group.
 pub fn is_context_tab(tab: &str) -> bool {
-    FEATURE_TABS.iter().chain(RASTER_TABS).any(|(id, _)| *id == tab)
+    FEATURE_TABS.iter().chain(RASTER_TABS).chain(LAYOUT_TABS).any(|(id, _)| *id == tab)
 }
 
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
@@ -77,6 +82,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                         "Data" => data_tab(app, ui),
                         "Raster Layer" => raster_layer_tab(app, ui),
                         "Raster Data" => raster_data_tab(app, ui),
+                        "Layout" => layout_tab(app, ui),
                         _ => map_tab(app, ui),
                     }
                 });
@@ -436,6 +442,23 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
         big(ui, app, "new_map", "New\nMap", "Add a new map to the project.", "map.new", Value::Null, false, false);
         big(ui, app, "toolbox", "Toolbox", "Browse the geoprocessing toolbox.", "ui.pane.geoprocessing", Value::Null, false, false);
         big(ui, app, "open", "Import\nProject", "Open a RustGIS project.", "ui.open", Value::Null, false, false);
+        big_menu(ui, app, "new_layout", "New\nLayout", "Add a page layout for printing and exporting the map.", |ui, app| {
+            for (id, label, w, h) in rustgis_engine::map::layout::PAGES {
+                let text = format!("{} ({w:.0} × {h:.0} mm)", tl!(*label));
+                if ui.button(text).clicked() {
+                    let _ = app.run("layout.new", json!({"page": id}));
+                    app.ui.tab = "Layout".into();
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui.button(tl!("Blank Letter page")).clicked() {
+                let _ = app.run("layout.new", json!({"template": "blank"}));
+                app.ui.tab = "Layout".into();
+                ui.close();
+            }
+            menu_item(ui, app, "open", "Import Layout…", "ui.importLayout", Value::Null);
+        });
         col(ui, |ui| {
             small(ui, app, "catalog", "Catalog", "Browse the project's maps, tables and folders.", "ui.pane.catalog", Value::Null, false);
             small(ui, app, "add_data", "Add Data", "Add vector data.", "ui.addData", Value::Null, false);
@@ -790,8 +813,243 @@ fn share_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
         );
     });
+    group(ui, "Layout", |ui| {
+        big(ui, app, "export", "Export\nLayout", "Export the open layout as PDF or PNG.", "ui.exportLayout", Value::Null, false, false);
+        big(
+            ui,
+            app,
+            "print",
+            "Print\nLayout",
+            "Print the open layout (through the system's PDF viewer).",
+            "ui.printLayout",
+            Value::Null,
+            false,
+            false,
+        );
+    });
     group(ui, "Save As", |ui| {
         big(ui, app, "save_as", "Project", "Save the project under a new name.", "ui.saveAs", Value::Null, false, false);
+        big(ui, app, "new_layout", "Layout\nFile", "Save the open layout as a layout file.", "ui.saveLayout", Value::Null, false, false);
+    });
+}
+
+/// The selected layout element if it's a map frame, else the layout's first frame.
+fn layout_frame(app: &RustGisApp) -> Option<u32> {
+    let l = app.session.active_layout.and_then(|i| app.session.project.layouts.get(i))?;
+    app.layout
+        .selected
+        .filter(|id| matches!(l.element(*id).map(|e| &e.kind), Some(rustgis_engine::map::layout::ElementKind::MapFrame { .. })))
+        .or_else(|| l.first_frame())
+}
+
+fn layout_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    use rustgis_engine::map::layout::ElementKind;
+    let Some(li) = app.session.active_layout else { return };
+    let Some(layout) = app.session.project.layouts.get(li).cloned() else { return };
+    let frame = layout_frame(app);
+    let add = |app: &mut RustGisApp, mut p: Value| {
+        p["layout"] = json!(li);
+        if let Some(f) = frame {
+            p["frame"] = json!(f);
+        }
+        if let Ok(v) = app.run("layout.addElement", p) {
+            app.layout.selected = v["element"].as_u64().map(|v| v as u32);
+        }
+    };
+    group(ui, "Page", |ui| {
+        big_menu(ui, app, "new_layout", "Page\nSize", "Change the page size and orientation.", |ui, app| {
+            for (id, label, w, h) in rustgis_engine::map::layout::PAGES {
+                let landscape = layout.width > layout.height;
+                let (pw, ph) = if landscape { (h.max(*w), h.min(*w)) } else { (*w, *h) };
+                let on = (layout.width - pw).abs() < 0.5 && (layout.height - ph).abs() < 0.5;
+                if ui.radio(on, format!("{} ({w:.0} × {h:.0} mm)", tl!(*label))).clicked() {
+                    let _ = app.run(
+                        "layout.page",
+                        json!({"layout": li, "page": id, "orientation": if landscape { "landscape" } else { "portrait" }}),
+                    );
+                    ui.close();
+                }
+            }
+            ui.separator();
+            for o in ["Portrait", "Landscape"] {
+                if ui.button(tl!(o)).clicked() {
+                    let _ = app.run("layout.page", json!({"layout": li, "orientation": o.to_lowercase()}));
+                    ui.close();
+                }
+            }
+        });
+    });
+    group(ui, "Map Frames", |ui| {
+        big_menu(ui, app, "map", "Map\nFrame", "Add a map frame showing a map of the project.", |ui, app| {
+            for (shape, label) in [("rectangle", "Rectangle"), ("circle", "Circle"), ("ellipse", "Ellipse")] {
+                if ui.button(tl!(label)).clicked() {
+                    if let Ok(v) = app.run("layout.addFrame", json!({"layout": li, "shape": shape})) {
+                        app.layout.selected = v["element"].as_u64().map(|v| v as u32);
+                    }
+                    ui.close();
+                }
+            }
+            for (shape, label) in [("polygon", "Polygon (draw)"), ("lasso", "Lasso (draw)")] {
+                if ui.button(tl!(label)).clicked() {
+                    let _ = app.run("ui.layoutTool", json!({"shape": shape}));
+                    ui.close();
+                }
+            }
+        });
+        col(ui, |ui| {
+            let has_grid =
+                frame.and_then(|f| layout.element(f)).is_some_and(|e| matches!(&e.kind, ElementKind::MapFrame { grid: Some(_), .. }));
+            if small(
+                ui,
+                app,
+                "graticule",
+                "Grid",
+                "Draw a labelled latitude/longitude grid over the map frame.",
+                "ui.menu",
+                Value::Null,
+                has_grid,
+            )
+            .clicked()
+            {
+                add(app, json!({"kind": "grid", "off": has_grid}));
+            }
+            let others: Vec<(u32, String)> = layout
+                .elements
+                .iter()
+                .filter(|e| Some(e.id) != frame && matches!(e.kind, ElementKind::MapFrame { .. }))
+                .map(|e| (e.id, e.name.clone()))
+                .collect();
+            small_menu(ui, app, "g_rect", "Extent Indicator", "Outline another frame's extent in this map frame.", |ui, app| {
+                if others.is_empty() {
+                    ui.label(egui::RichText::new(tl!("Add a second map frame first")).weak());
+                }
+                for (id, name) in &others {
+                    if ui.button(format!("{name} ({id})")).clicked() {
+                        add(app, json!({"kind": "extentIndicator", "of": id}));
+                        ui.close();
+                    }
+                }
+            });
+            let names: Vec<String> = frame
+                .and_then(|f| match layout.element(f).map(|e| &e.kind) {
+                    Some(ElementKind::MapFrame { map, .. }) => app.session.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map)),
+                    _ => None,
+                })
+                .map(|m| m.layers.iter().filter(|l| !l.is_raster() && !l.graphics).map(|l| l.name.clone()).collect())
+                .unwrap_or_default();
+            small_menu(ui, app, "bookmark", "Map Series", "One page per feature of an index layer.", |ui, app| {
+                for n in &names {
+                    if ui.radio(layout.series.as_ref().is_some_and(|s| s.layer == *n), n.as_str()).clicked() {
+                        let _ = app.run("layout.series", json!({"layout": li, "layer": n, "frame": frame}));
+                        ui.close();
+                    }
+                }
+                if layout.series.is_some() && ui.button(tl!("Turn Off")).clicked() {
+                    let _ = app.run("layout.series", json!({"layout": li, "off": true}));
+                    ui.close();
+                }
+            });
+        });
+        if layout.series.is_some() {
+            col(ui, |ui| {
+                small(
+                    ui,
+                    app,
+                    "prev_extent",
+                    "Previous Page",
+                    "Show the previous map series page.",
+                    "layout.seriesPage",
+                    json!({"layout": li, "page": "previous"}),
+                    false,
+                );
+                small(
+                    ui,
+                    app,
+                    "next_extent",
+                    "Next Page",
+                    "Show the next map series page.",
+                    "layout.seriesPage",
+                    json!({"layout": li, "page": "next"}),
+                    false,
+                );
+                small(
+                    ui,
+                    app,
+                    "redo",
+                    "Refresh",
+                    "Refresh the map series from its index layer.",
+                    "layout.seriesRefresh",
+                    json!({"layout": li}),
+                    false,
+                );
+            });
+        }
+    });
+    group(ui, "Map Surrounds", |ui| {
+        for (icon, label, kind, desc) in [
+            ("north_arrow", "North\nArrow", "northArrow", "Add a north arrow for the map frame."),
+            ("scale_bar", "Scale\nBar", "scaleBar", "Add a scale bar for the map frame."),
+            ("legend", "Legend", "legend", "Add a legend of the map frame's layers."),
+        ] {
+            if big(ui, app, icon, label, desc, "ui.menu", Value::Null, false, false).clicked() {
+                add(app, json!({"kind": kind}));
+            }
+        }
+        col(ui, |ui| {
+            if small(ui, app, "table", "Table Frame", "Add the attribute table of a layer in the map frame.", "ui.menu", Value::Null, false)
+                .clicked()
+            {
+                add(app, json!({"kind": "table"}));
+            }
+            if small(ui, app, "chart", "Chart Frame", "Add a bar chart of a layer's numeric field.", "ui.menu", Value::Null, false)
+                .clicked()
+            {
+                add(app, json!({"kind": "chart"}));
+            }
+            small_menu(ui, app, "add_data", "More", "Additional surrounds.", |ui, app| {
+                if ui.button(tl!("Neatline")).clicked() {
+                    add(app, json!({"kind": "rectangle"}));
+                    ui.close();
+                }
+                if ui.button(tl!("Backdrop")).clicked() {
+                    add(app, json!({"kind": "rectangle", "fill": "#F1F4F8", "width": 0}));
+                    ui.close();
+                }
+            });
+        });
+    });
+    group(ui, "Text", |ui| {
+        if big(ui, app, "g_text", "Text", "Add a text element.", "ui.menu", Value::Null, false, false).clicked() {
+            add(app, json!({"kind": "text"}));
+        }
+        big_menu(ui, app, "dynamic_text", "Dynamic\nText", "Add text that updates: page, date, scale, map and more.", |ui, app| {
+            for (token, what) in [
+                ("{date}", "Current date"),
+                ("{time}", "Current time"),
+                ("{scale}", "Map scale"),
+                ("{map}", "Map name"),
+                ("{crs}", "Coordinate system"),
+                ("{page} / {pages}", "Page number"),
+                ("{pageName}", "Map series page name"),
+                ("{layout}", "Layout name"),
+            ] {
+                if ui.button(format!("{}  {token}", tl!(what))).clicked() {
+                    add(app, json!({"kind": "dynamicText", "text": token}));
+                    ui.close();
+                }
+            }
+        });
+        if big(ui, app, "picture", "Picture", "Add a PNG or JPEG picture to the page.", "ui.layoutPicture", Value::Null, false, false)
+            .clicked()
+        {}
+    });
+    group(ui, "Export", |ui| {
+        big(ui, app, "export", "Export", "Export the layout as PDF or PNG.", "ui.exportLayout", Value::Null, false, false);
+        big(ui, app, "print", "Print", "Print the layout.", "ui.printLayout", Value::Null, false, false);
+        col(ui, |ui| {
+            small(ui, app, "save_as", "Save Layout File", "Save the layout as a layout file.", "ui.saveLayout", Value::Null, false);
+            small(ui, app, "map", "Show Map", "Close the layout and show the map.", "layout.close", Value::Null, false);
+        });
     });
 }
 

@@ -12,6 +12,7 @@ mod backstage;
 mod chrome;
 mod dialogs;
 pub mod icons;
+mod layoutview;
 mod mapview;
 mod panes;
 mod ribbon;
@@ -53,6 +54,24 @@ pub struct Services {
     pub geolibre_run: Option<Box<dyn Fn(rustgis_engine::cmd::gp::ExternalRun, Slot<rustgis_engine::cmd::gp::ExternalOutput>)>>,
 }
 
+/// Opens a file with the system's default application (native only).
+#[cfg(not(target_arch = "wasm32"))]
+fn open_with_system(path: &std::path::Path) -> Result<(), String> {
+    let program = if cfg!(target_os = "windows") {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program).arg(path).spawn().map(|_| ()).map_err(|e| format!("could not open {}: {e}", path.display()))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn open_with_system(_: &std::path::Path) -> Result<(), String> {
+    Err("printing needs the desktop app".into())
+}
+
 /// Panes on the left of the map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeftPane {
@@ -88,6 +107,8 @@ pub struct UiState {
     /// Tab rectangles from the last frame (for the contextual group header).
     pub tab_rects: Vec<(String, egui::Rect)>,
     pub tab_strip_rect: Option<egui::Rect>,
+    /// A layout picture waiting for its image file (web).
+    pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
     pub pending_picture: Option<Vec<rustgis_engine::geom::Coord>>,
     /// Text to put on the system clipboard at the end of the frame.
@@ -113,6 +134,7 @@ impl Default for UiState {
             tab_strip_rect: None,
             copy_out: None,
             pending_picture: None,
+            pending_layout_picture: false,
         }
     }
 }
@@ -124,6 +146,7 @@ pub struct RustGisApp {
     pub dialogs: dialogs::Dialogs,
     pub gp: panes::GpForm,
     pub table: table::TableState,
+    pub layout: layoutview::LayoutView,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     sent_title: String,
@@ -155,6 +178,7 @@ impl RustGisApp {
             dialogs: dialogs::Dialogs::default(),
             gp: panes::GpForm::default(),
             table: table::TableState::default(),
+            layout: layoutview::LayoutView::default(),
             fonts_frames: 0,
             applied_dark: None,
             sent_title: String::new(),
@@ -267,10 +291,33 @@ impl RustGisApp {
         r
     }
 
+    /// A layout as PDF or PNG bytes, guarded like `Session::run`.
+    fn layout_bytes(&mut self, li: usize, pdf: bool, dpi: f64) -> Result<Vec<u8>, String> {
+        let session = &mut self.session;
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            rustgis_engine::cmd::layout::layout_bytes(session, li, pdf, dpi, true)
+        }))
+        .unwrap_or_else(|_| Err("the layout export failed unexpectedly".into()));
+        if let Err(e) = &r {
+            self.session.notify(e.clone(), true);
+        }
+        r
+    }
+
     /// Opens a file by name and contents: a `.rgisx` project, a raster, or vector data.
     /// Failures are reported to the user (command errors through `Session::run`, others here).
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
         let lower = name.to_ascii_lowercase();
+        if lower.ends_with(".rgislayout") {
+            let text = std::str::from_utf8(bytes).map_err(|_| "not a RustGIS layout".to_string())?;
+            return self.run("layout.import", json!({"text": text}));
+        }
+        if self.ui.pending_layout_picture && [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e)) {
+            use base64::Engine;
+            self.ui.pending_layout_picture = false;
+            let image = base64::engine::general_purpose::STANDARD.encode(bytes);
+            return self.run("layout.addElement", json!({"kind": "picture", "image": image}));
+        }
         if self.ui.pending_picture.is_some() && [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e)) {
             use base64::Engine;
             return self.add_picture(json!({"image": base64::engine::general_purpose::STANDARD.encode(bytes)}));
@@ -458,6 +505,64 @@ impl RustGisApp {
                     return self.run("project.saveAs", json!({"path": path}));
                 }
             }
+            // Layouts: export (PNG/PDF), print, save and import layout files, draw frames.
+            "ui.exportLayout" | "ui.printLayout" => {
+                let li = self.session.active_layout.ok_or("open a layout first")?;
+                let name = self.session.project.layouts.get(li).map(|l| l.name.clone()).unwrap_or_default();
+                let print = id == "ui.printLayout";
+                let pdf_only = print || p.get("format").and_then(Value::as_str) == Some("pdf");
+                if self.services.download.is_some() {
+                    let bytes = self.layout_bytes(li, true, if print { 300.0 } else { 150.0 })?;
+                    self.download(&format!("{name}.pdf"), bytes);
+                } else if print {
+                    // Printing goes through the system's PDF viewer, which owns the printers.
+                    let bytes = self.layout_bytes(li, true, 300.0)?;
+                    let path = std::env::temp_dir().join(format!("{}.pdf", name.replace(['/', '\\'], "_")));
+                    rustgis_engine::data::io::write_atomic(&path, &bytes).map_err(|e| e.to_string())?;
+                    open_with_system(&path)?;
+                    self.session.notify(i18n::fmt("Opened {name} for printing", &[("name", &path.display().to_string())]), false);
+                } else {
+                    let exts: &[&str] = if pdf_only { &["pdf"] } else { &["pdf", "png"] };
+                    if let Some(path) = dialogs::pick_save(&format!("{name}.pdf"), exts, tl!("PDF or PNG")) {
+                        return self.run("layout.export", json!({"layout": li, "path": path, "dpi": 200}));
+                    }
+                }
+            }
+            "ui.saveLayout" => {
+                let li = self.session.active_layout.ok_or("open a layout first")?;
+                let l = self.session.project.layouts.get(li).cloned().ok_or("open a layout first")?;
+                if self.services.download.is_some() {
+                    let text = serde_json::to_string_pretty(&l).map_err(|e| e.to_string())?;
+                    self.download(&format!("{}.rgislayout", l.name), text.into_bytes());
+                } else if let Some(path) = dialogs::pick_save(&format!("{}.rgislayout", l.name), &["rgislayout"], tl!("RustGIS layout")) {
+                    return self.run("layout.save", json!({"layout": li, "path": path}));
+                }
+            }
+            "ui.importLayout" => {
+                if let Some(open) = &self.services.open_async {
+                    open("layout");
+                } else if let Some(path) = dialogs::pick_open(&["rgislayout"], tl!("RustGIS layout")) {
+                    return self.run("layout.import", json!({"path": path}));
+                }
+            }
+            "ui.layoutPicture" => {
+                let li = self.session.active_layout.ok_or("open a layout first")?;
+                if let Some(open) = &self.services.open_async {
+                    self.ui.pending_layout_picture = true;
+                    open("picture");
+                } else if let Some(path) = dialogs::pick_open(&["png", "jpg", "jpeg"], tl!("Pictures")) {
+                    let v = self.run("layout.addElement", json!({"layout": li, "kind": "picture", "path": path}))?;
+                    self.layout.selected = v["element"].as_u64().map(|v| v as u32);
+                }
+            }
+            "ui.layoutSelect" => self.layout.selected = p.get("element").and_then(Value::as_u64).map(|v| v as u32),
+            "ui.layoutTool" => {
+                self.layout.tool = match p.get("shape").and_then(Value::as_str) {
+                    Some("polygon") => Some("polygon"),
+                    Some("lasso") => Some("lasso"),
+                    _ => None,
+                };
+            }
             "ui.exportMap" if self.services.download.is_some() => {
                 // The same last-resort panic guard `Session::run` gives commands.
                 let session = &mut self.session;
@@ -548,6 +653,8 @@ impl RustGisApp {
                 }
             }
             "ui.quit" => self.quit_requested = true,
+            // Buttons that act through their own click handler (menus, layout inserts).
+            "ui.menu" => {}
             other => return Err(format!("unknown command '{other}'")),
         }
         Ok(Value::Null)

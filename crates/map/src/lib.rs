@@ -5,6 +5,7 @@ pub mod camera;
 pub mod color;
 pub mod globe;
 pub mod graphics;
+pub mod layout;
 pub mod projection;
 pub mod raster;
 pub mod symbology;

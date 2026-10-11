@@ -300,6 +300,14 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
                 continue;
             }
         }
+        // In a layout, Delete removes the selected element.
+        if id == "edit.delete"
+            && let (Some(li), Some(el)) = (app.session.active_layout, app.layout.selected)
+        {
+            let _ = app.run("layout.removeElement", json!({"layout": li, "element": el}));
+            app.layout.selected = None;
+            continue;
+        }
         if matches!(id, "edit.delete" | "ui.copy" | "ui.cut") && app.session.map().selection_count() == 0 {
             continue;
         }

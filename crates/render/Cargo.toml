@@ -19,3 +19,4 @@ log = { workspace = true }
 image = { workspace = true, features = ["jpeg"] }
 base64 = { workspace = true }
 web-time = { workspace = true }
+miniz_oxide = { workspace = true }

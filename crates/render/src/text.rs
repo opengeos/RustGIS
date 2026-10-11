@@ -130,3 +130,29 @@ pub fn scale_bar(pm: &mut Pixmap, view: &View, ground_per_pt: f64) {
     };
     draw(pm, &label, ppp);
 }
+
+/// Horizontal alignment for [`text_at`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Center,
+}
+
+/// Draws one line of text at pixel position (`x`, `y`) (`y` is the line's middle), `px_size`
+/// pixels tall, optionally with a white halo.
+pub fn text_at(pm: &mut Pixmap, text: &str, x: f32, y: f32, px_size: f32, color: Rgba, bold: bool, align: Align, halo: bool) {
+    if !(x.is_finite() && y.is_finite() && px_size.is_finite()) || px_size <= 0.0 {
+        return;
+    }
+    let cx = match align {
+        Align::Center => x,
+        Align::Left => x + measure(text, px_size / 1.33, bold) / 2.0,
+    };
+    if halo {
+        let r = (px_size * 0.09).max(1.0);
+        for (dx, dy) in [(-r, 0.0), (r, 0.0), (0.0, -r), (0.0, r)] {
+            draw_text(pm, text, cx, y, px_size, Rgba::new(255, 255, 255, 230), bold, (dx, dy));
+        }
+    }
+    draw_text(pm, text, cx, y, px_size, color, bold, (0.0, 0.0));
+}

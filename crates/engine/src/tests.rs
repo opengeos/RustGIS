@@ -144,7 +144,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 108, "coverage fell to {done}");
+    assert!(done >= 133, "coverage fell to {done}");
 }
 
 #[test]
@@ -616,4 +616,90 @@ fn graphics_draw_shapes_text_and_pictures() {
     assert!(p.map().layer(id).unwrap().graphics);
     s.run("graphics.newLayer", &json!({"name": "Notes"})).unwrap();
     assert!(s.map().layer_by_name("Notes").unwrap().graphics);
+}
+
+#[test]
+fn layouts_compose_export_and_round_trip() {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("rustgis-layout-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = world();
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 20_000_000})).unwrap();
+    let r = s.run("layout.new", &json!({"name": "Europe", "page": "a4", "orientation": "landscape"})).unwrap();
+    assert_eq!(r["layout"], 0);
+    assert_eq!(s.active_layout, Some(0));
+    let l = &s.project.layouts[0];
+    assert!((l.width - 297.0).abs() < 1e-9 && l.elements.len() == 6, "the map template adds a frame and five surrounds");
+    let frame = l.first_frame().unwrap();
+    // Frames, surrounds and the rest.
+    for shape in ["circle", "ellipse", "polygon", "lasso"] {
+        s.run("layout.addFrame", &json!({"shape": shape, "points": [[0, 0], [1, 0], [0.5, 1]]})).unwrap();
+    }
+    assert!(s.run("layout.addFrame", &json!({"shape": "polygon", "points": [[0, 0], [1, 0]]})).is_err());
+    let mut png = tiny_skia::Pixmap::new(4, 4).unwrap();
+    png.fill(tiny_skia::Color::from_rgba8(0, 128, 255, 255));
+    let b64 = base64::engine::general_purpose::STANDARD.encode(png.encode_png().unwrap());
+    for p in [
+        json!({"kind": "table", "layer": "Countries", "rows": 5}),
+        json!({"kind": "chart", "layer": "Countries", "field": "pop_est", "label": "name"}),
+        json!({"kind": "rectangle"}),
+        json!({"kind": "dynamicText", "text": "Page {page} of {pages} · {scale}"}),
+        json!({"kind": "picture", "image": b64}),
+        json!({"kind": "grid", "step": 10}),
+    ] {
+        s.run("layout.addElement", &p).unwrap_or_else(|e| panic!("{p}: {e}"));
+    }
+    let inset = s.run("layout.addFrame", &json!({"shape": "rectangle", "x": 200, "y": 150, "w": 60, "h": 40})).unwrap()["element"]
+        .as_u64()
+        .unwrap();
+    s.run("layout.update", &json!({"element": inset, "scale": 200_000_000})).unwrap();
+    s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": frame})).unwrap();
+    assert!(s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": inset})).is_err());
+    assert!(s.run("layout.addElement", &json!({"kind": "sparkles"})).is_err());
+    // Frame zooms and edits.
+    s.run("layout.frameZoom", &json!({"element": frame, "to": "layer", "layer": "Lakes"})).unwrap();
+    s.run("layout.update", &json!({"element": frame, "x": 12, "w": 180, "center": [10, 50]})).unwrap();
+    assert!(s.run("layout.update", &json!({"element": 9999, "x": 1})).is_err());
+    // A map series over the lakes: one page each.
+    let r = s.run("layout.series", &json!({"layer": "Lakes", "nameField": "name"})).unwrap();
+    let pages = r["pages"].as_u64().unwrap();
+    assert!(pages > 5);
+    let next = s.run("layout.seriesPage", &json!({"page": "next"})).unwrap();
+    assert_eq!(next["page"], 1);
+    s.run("layout.seriesRefresh", &Value::Null).unwrap();
+    // Export PNG and a PDF of every page.
+    let png_path = dir.join("europe.png");
+    s.run("layout.export", &json!({"path": png_path.display().to_string(), "dpi": 72})).unwrap();
+    let bytes = std::fs::read(&png_path).unwrap();
+    assert!(bytes.starts_with(b"\x89PNG"));
+    let pdf_path = dir.join("europe.pdf");
+    s.run("layout.export", &json!({"path": pdf_path.display().to_string(), "dpi": 36})).unwrap();
+    let pdf = std::fs::read(&pdf_path).unwrap();
+    let count = format!("/Count {pages}");
+    assert!(pdf.windows(count.len()).any(|w| w == count.as_bytes()), "one PDF page per series page");
+    assert_eq!(s.project.layouts[0].series.as_ref().unwrap().page, 1, "the shown page is restored");
+    assert!(s.run("layout.export", &json!({"path": dir.join("x.svg").display().to_string()})).is_err());
+    // Layout files.
+    let file = dir.join("europe.rgislayout");
+    s.run("layout.save", &json!({"path": file.display().to_string()})).unwrap();
+    s.run("layout.import", &json!({"path": file.display().to_string()})).unwrap();
+    assert_eq!(s.project.layouts.len(), 2);
+    assert_eq!(s.project.layouts[1].name, "Europe 2");
+    assert!(s.run("layout.import", &json!({"text": "{}"})).is_err());
+    // Removing the frame removes its surrounds; undo brings them back.
+    let before = s.project.layouts[1].elements.len();
+    let first = s.project.layouts[1].first_frame().unwrap();
+    s.run("layout.removeElement", &json!({"layout": 1, "element": first})).unwrap();
+    assert!(s.project.layouts[1].elements.len() < before - 3);
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.project.layouts[1].elements.len(), before);
+    // Layouts are saved with the project.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let p = crate::Project::from_json(&text).unwrap();
+    assert_eq!(p.layouts.len(), 2);
+    s.run("layout.close", &Value::Null).unwrap();
+    assert_eq!(s.active_layout, None);
+    s.run("layout.remove", &json!({"name": "Europe 2"})).unwrap();
+    assert_eq!(s.project.layouts.len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
 }

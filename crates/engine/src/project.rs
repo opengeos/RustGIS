@@ -25,6 +25,8 @@ pub struct Project {
     pub tables: Vec<Dataset>,
     #[serde(default)]
     pub gp_history: Vec<GpRecord>,
+    #[serde(default)]
+    pub layouts: Vec<rustgis_map::layout::Layout>,
 }
 
 fn format() -> u32 {
@@ -46,6 +48,7 @@ impl Project {
             active_map: 0,
             tables: Vec::new(),
             gp_history: Vec::new(),
+            layouts: Vec::new(),
         }
     }
 
@@ -56,6 +59,10 @@ impl Project {
         }
         if self.active_map >= self.maps.len() {
             self.active_map = 0;
+        }
+        self.layouts.truncate(200);
+        for l in &mut self.layouts {
+            l.clamp();
         }
         for m in &mut self.maps {
             // A projection this version can't use (a hand edit, or a newer file) falls back to

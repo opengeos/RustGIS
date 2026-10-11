@@ -880,6 +880,27 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
             p.circle(17.0, 16.0, 4.0, Some(accent), Some((1.2, ink)));
             p.rect(4.0, 15.0, 6.0, 5.0, Some(amber), Some((1.0, ink)), 0.5);
         }
+        "north_arrow" => {
+            p.fill(&[(12.0, 4.0), (6.5, 21.0), (12.0, 17.0)], ink);
+            p.closed(&[(12.0, 4.0), (17.5, 21.0), (12.0, 17.0)], 1.2, ink);
+            p.text(19.5, 6.0, "N", 6.5, accent);
+        }
+        "scale_bar" => {
+            p.rect(2.0, 11.0, 5.0, 4.0, Some(ink), None, 0.0);
+            p.rect(7.0, 11.0, 5.0, 4.0, None, Some((1.0, ink)), 0.0);
+            p.rect(12.0, 11.0, 5.0, 4.0, Some(ink), None, 0.0);
+            p.rect(17.0, 11.0, 5.0, 4.0, None, Some((1.0, ink)), 0.0);
+            p.text(12.0, 7.0, "km", 6.0, accent);
+        }
+        "legend" => {
+            p.rect(3.0, 3.0, 18.0, 18.0, Some(p.tint(30)), Some((1.2, ink)), 2.0);
+            p.rect(6.0, 6.5, 4.0, 3.0, Some(accent), None, 0.5);
+            p.circle(8.0, 12.0, 1.8, Some(green), None);
+            p.line(&[(6.0, 17.0), (10.0, 15.5)], 1.4, amber);
+            for y in [8.0, 12.0, 16.0] {
+                p.line(&[(12.0, y), (18.0, y)], 1.1, ink);
+            }
+        }
         _ => {
             p.rect(4.0, 4.0, 16.0, 16.0, Some(p.tint(60)), Some((1.2, ink)), 3.0);
         }

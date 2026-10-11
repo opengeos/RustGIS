@@ -3312,6 +3312,7 @@ dependencies = [
  "epaint_default_fonts",
  "image",
  "log",
+ "miniz_oxide 0.8.9",
  "rustgis-data",
  "rustgis-geom",
  "rustgis-map",

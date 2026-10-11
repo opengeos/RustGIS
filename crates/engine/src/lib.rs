@@ -195,6 +195,8 @@ pub struct Session {
     pub notices: Vec<Notice>,
     /// Layer whose attribute table is open.
     pub table_layer: Option<u32>,
+    /// The layout shown instead of the map view, if any (an index into `project.layouts`).
+    pub active_layout: Option<usize>,
     /// Drawing tools stay active after a graphic is drawn (Insert › Graphics).
     pub keep_tool: bool,
     /// Copied features (Edit › Clipboard).
@@ -243,6 +245,7 @@ impl Session {
             table_layer: None,
             clipboard: None,
             keep_tool: false,
+            active_layout: None,
             undo: Vec::new(),
             redo: Vec::new(),
             back: Vec::new(),
@@ -422,6 +425,9 @@ impl Session {
 
     /// Keeps `active_layer` pointing at a layer of the active map.
     fn fix_active_layer(&mut self) {
+        if self.active_layout.is_some_and(|i| i >= self.project.layouts.len()) {
+            self.active_layout = None;
+        }
         let map = self.project.map();
         if let Some(id) = self.active_layer
             && map.layer(id).is_none()

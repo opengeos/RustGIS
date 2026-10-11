@@ -204,7 +204,7 @@ fn color(p: &Value, k: &str) -> Result<Option<String>, String> {
 }
 
 /// The picture's bytes as base64, from `image` or a file `path`.
-fn picture(p: &Value) -> Result<String, String> {
+pub(crate) fn picture(p: &Value) -> Result<String, String> {
     let b64 = match (ps(p, "image"), ps(p, "path")) {
         (Some(b), _) => b.trim().to_string(),
         (None, Some(path)) => {

@@ -123,6 +123,30 @@ then pick a PNG or JPEG image to stretch over it. Tools return to Explore after 
 unless Keep Tool is on. Each graphic keeps its own fill, outline, width and text size in the
 layer's attributes, so you can edit them in the attribute table or with `graphics.style`.
 
+## Layouts
+
+Insert › New Layout adds a page layout (Letter to A0, landscape or portrait) with a map frame,
+title, legend, north arrow, scale bar and a dynamic credits line. Layouts open as tabs next to
+the maps, with a Layout tab on the ribbon:
+
+- **Map frames**: rectangle, circle and ellipse frames, or polygon and lasso frames drawn on the
+  page. Each frame shows a map of the project at its own centre and scale; Shift-drag a frame to
+  pan its map, double-click it to match the map view, or set the scale in its properties.
+  **Grid** draws a labelled graticule over a frame; **Extent Indicator** outlines another frame's
+  extent (an overview map).
+- **Map surrounds**: north arrow, scale bar, legend, table frame (a layer's attribute table) and
+  chart frame (a bar chart of a numeric field), plus a neatline or backdrop.
+- **Text** and **Dynamic Text**: `{date}`, `{time}`, `{scale}`, `{map}`, `{crs}`, `{page}`,
+  `{pages}`, `{pageName}` and `{layout}` fill in when the page is drawn. **Picture** places a PNG
+  or JPEG.
+- **Map Series**: one page per feature of an index layer, with the frame zoomed to each feature;
+  step through pages, refresh, and export every page into one PDF.
+- Click an element to select it, drag to move, drag its handles to resize, and edit it in the
+  properties panel. The wheel zooms the page.
+- **Export** writes PDF (every map series page) or PNG; **Print** opens the PDF in the system
+  viewer; **Save Layout File** and **Import Layout** move layouts between projects
+  (`.rgislayout`).
+
 ## Clipboard and pop-ups
 
 Copy (++ctrl+c++) and Cut (++ctrl+x++) take the selected features. Paste (++ctrl+v++) adds them to
