@@ -251,6 +251,7 @@ Field	Veld
 Field name	Veldnaam
 Fields	Velden
 Fields:	Velden:
+file path	bestandspad
 Filter rows…	Rijen filteren…
 Find a place by coordinates.	Een plaats zoeken op coördinaten.
 Find and run geoprocessing tools.	Geoverwerkingsgereedschappen zoeken en uitvoeren.
@@ -267,6 +268,7 @@ Gamma	Gamma
 Generalization	Generalisatie
 Geo-\nprocessing	Geo-\nverwerking
 GeoJSON or CSV	GeoJSON of CSV
+GeoLibre	GeoLibre
 Geometry	Geometrie
 Geoprocessing	Geoverwerking
 Geoprocessing history.	Geschiedenis van geoverwerking.
@@ -461,6 +463,7 @@ Redo	Opnieuw
 Redo the change you undid.	De ongedaan gemaakte wijziging opnieuw uitvoeren.
 Redo {action}	{action} opnieuw
 Red–Blue	Rood–Blauw
+Refine the search to see {n} more	Verfijn de zoekopdracht om {n} meer te zien
 Regional, equal-area: the contiguous United States.	Regionaal, oppervlaktegetrouw: de aaneengesloten Verenigde Staten.
 Regional, equal-area: the European standard for statistics.	Regionaal, oppervlaktegetrouw: de Europese standaard voor statistiek.
 Remove	Verwijderen

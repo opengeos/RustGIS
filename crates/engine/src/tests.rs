@@ -362,3 +362,31 @@ fn hostile_params_never_panic() {
         }
     }
 }
+
+#[cfg(feature = "geolibre")]
+#[test]
+fn geolibre_tools_run_on_layers_and_add_their_outputs() {
+    let mut s = with_raster();
+    let tools = s.run("gp.tools", &Value::Null).unwrap();
+    assert!(tools.as_array().unwrap().iter().any(|t| t["id"] == "geolibre:slope"));
+    let before = s.map().layers.len();
+    let r = s.run("gp.run", &json!({"tool": "geolibre:slope", "params": {"input": "scene"}})).unwrap();
+    assert_eq!(r["layers"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(s.map().layers.len(), before + 1);
+    let slope = s.map().layer_by_name("Slope").unwrap();
+    assert!(slope.is_raster() && slope.raster.as_ref().is_some_and(|r| r.embedded.is_some()), "kept in the project");
+    // It saves with the project, and undo takes it away.
+    let json = serde_json::to_string(&s.project).unwrap();
+    assert!(
+        Project::from_json(&json)
+            .unwrap()
+            .map()
+            .layer_by_name("Slope")
+            .is_some_and(|l| l.raster.as_ref().is_some_and(|r| r.data.is_some()))
+    );
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(s.map().layer_by_name("Slope").is_none());
+    // A vector where a raster belongs is an error, not a crash.
+    let err = s.run("gp.run", &json!({"tool": "geolibre:slope", "params": {"input": "Cities"}})).unwrap_err();
+    assert!(err.starts_with("Slope:"), "{err}");
+}

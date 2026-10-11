@@ -251,6 +251,7 @@ Field	Kolom
 Field name	Nama kolom
 Fields	Kolom
 Fields:	Kolom:
+file path	jalur berkas
 Filter rows…	Saring baris…
 Find a place by coordinates.	Temukan tempat berdasarkan koordinat.
 Find and run geoprocessing tools.	Temukan dan jalankan alat geoprosesing.
@@ -267,6 +268,7 @@ Gamma	Gamma
 Generalization	Generalisasi
 Geo-\nprocessing	Geo-\nprosesing
 GeoJSON or CSV	GeoJSON atau CSV
+GeoLibre	GeoLibre
 Geometry	Geometri
 Geoprocessing	Geoprosesing
 Geoprocessing history.	Riwayat geoprosesing.
@@ -461,6 +463,7 @@ Redo	Ulangi
 Redo the change you undid.	Ulangi perubahan yang dibatalkan.
 Redo {action}	Ulangi {action}
 Red–Blue	Merah–Biru
+Refine the search to see {n} more	Persempit pencarian untuk melihat {n} lagi
 Regional, equal-area: the contiguous United States.	Regional, luas sama: Amerika Serikat daratan.
 Regional, equal-area: the European standard for statistics.	Regional, luas sama: standar Eropa untuk statistik.
 Remove	Hapus

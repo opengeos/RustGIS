@@ -251,6 +251,7 @@ Field	Sahə
 Field name	Sahə adı
 Fields	Sahələr
 Fields:	Sahələr:
+file path	fayl yolu
 Filter rows…	Sətirləri süz…
 Find a place by coordinates.	Koordinatlara görə yer tapın.
 Find and run geoprocessing tools.	Geoemal alətlərini tapın və işə salın.
@@ -267,6 +268,7 @@ Gamma	Qamma
 Generalization	Ümumiləşdirmə
 Geo-\nprocessing	Geo-\nemal
 GeoJSON or CSV	GeoJSON və ya CSV
+GeoLibre	GeoLibre
 Geometry	Həndəsə
 Geoprocessing	Geoemal
 Geoprocessing history.	Geoemal tarixçəsi.
@@ -461,6 +463,7 @@ Redo	Təkrarla
 Redo the change you undid.	Geri aldığınız dəyişikliyi təkrarlayın.
 Redo {action}	{action} təkrarla
 Red–Blue	Qırmızı–Mavi
+Refine the search to see {n} more	Daha {n} ədəd görmək üçün axtarışı dəqiqləşdirin
 Regional, equal-area: the contiguous United States.	Regional, bərabərsahəli: bitişik Amerika Birləşmiş Ştatları.
 Regional, equal-area: the European standard for statistics.	Regional, bərabərsahəli: statistika üçün Avropa standartı.
 Remove	Sil

@@ -251,6 +251,7 @@ Field	Поле
 Field name	Имя поля
 Fields	Поля
 Fields:	Поля:
+file path	путь к файлу
 Filter rows…	Фильтр строк…
 Find a place by coordinates.	Найти место по координатам.
 Find and run geoprocessing tools.	Найти и запустить инструменты геообработки.
@@ -267,6 +268,7 @@ Gamma	Гамма
 Generalization	Генерализация
 Geo-\nprocessing	Гео-\nобработка
 GeoJSON or CSV	GeoJSON или CSV
+GeoLibre	GeoLibre
 Geometry	Геометрия
 Geoprocessing	Геообработка
 Geoprocessing history.	История геообработки.
@@ -461,6 +463,7 @@ Redo	Повторить
 Redo the change you undid.	Повторить отменённое изменение.
 Redo {action}	Повторить: {action}
 Red–Blue	Красный–синий
+Refine the search to see {n} more	Уточните поиск, чтобы увидеть ещё {n}
 Regional, equal-area: the contiguous United States.	Региональная, равновеликая: смежные штаты США.
 Regional, equal-area: the European standard for statistics.	Региональная, равновеликая: европейский стандарт для статистики.
 Remove	Удалить

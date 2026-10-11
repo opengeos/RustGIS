@@ -1,6 +1,6 @@
 //! Analysis tab: run geoprocessing tools and keep their history.
 
-use rustgis_analysis::{Inputs, Output};
+use rustgis_analysis::{Inputs, Output, OutputLayer, RasterInput};
 use rustgis_data::Dataset;
 use serde_json::{Value, json};
 
@@ -12,8 +12,7 @@ pub fn commands() -> Vec<C> {
         C::new("gp.run", "Run Tool", "Analysis › Geoprocessing", run).when(need_layers).params(r#"{"tool": tool id, "params": {...}}"#),
         C::new("gp.tools", "Tools", "Analysis › Geoprocessing", |_, _| {
             Ok(Value::Array(
-                rustgis_analysis::TOOLS
-                    .iter()
+                rustgis_analysis::tools()
                     .map(|t| {
                         json!({"id": t.id, "name": t.name, "toolbox": t.toolbox, "summary": t.summary,
                             "params": t.params.iter().map(|p| json!({"name": p.name, "label": p.label, "required": p.required, "kind": format!("{:?}", p.kind)})).collect::<Vec<_>>()})
@@ -37,6 +36,14 @@ impl Inputs for MapInputs<'_> {
     }
     fn selection(&self, layer: &str) -> &[usize] {
         self.0.layer_by_name(layer).map(|l| l.selection.as_slice()).unwrap_or(&[])
+    }
+    fn raster(&self, layer: &str) -> Option<RasterInput<'_>> {
+        let rl = self.0.layer_by_name(layer)?.raster.as_ref()?;
+        Some(RasterInput {
+            raster: rl.data.as_deref()?,
+            path: rl.path.as_deref(),
+            embedded: rl.embedded.as_deref().map(|b| (rl.file_name.as_deref().unwrap_or("raster.tif"), b.as_slice())),
+        })
     }
 }
 
@@ -80,6 +87,29 @@ fn run(s: &mut Session, p: &Value) -> CmdResult {
             s.project.tables.retain(|x| x.name != n);
             s.project.tables.push(t);
             json!({"table": n})
+        }
+        Output::Layers(outputs) => {
+            let mut layers = Vec::new();
+            let mut tables = Vec::new();
+            for o in outputs {
+                match o {
+                    OutputLayer::Vector(ds) => layers.push(super::layer::add_dataset(s, ds)),
+                    OutputLayer::Raster { name, file_name, bytes } => {
+                        let r = rustgis_data::raster::read_bytes(&file_name, &bytes).map_err(|e| format!("{name}: {e}"))?;
+                        let added = super::raster::add_raster(s, &name, rustgis_map::RasterLayer::from_bytes(r, file_name, bytes))?;
+                        if let Some(id) = added.get("layer").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()) {
+                            layers.push(id);
+                        }
+                    }
+                    OutputLayer::Table(t) => {
+                        let n = t.name.clone();
+                        s.project.tables.retain(|x| x.name != n);
+                        s.project.tables.push(t);
+                        tables.push(n);
+                    }
+                }
+            }
+            json!({"layers": layers, "tables": tables})
         }
     };
     for m in &result.messages {

@@ -251,6 +251,7 @@ Field	Trường
 Field name	Tên trường
 Fields	Trường
 Fields:	Trường:
+file path	đường dẫn tệp
 Filter rows…	Lọc hàng…
 Find a place by coordinates.	Tìm một địa điểm theo tọa độ.
 Find and run geoprocessing tools.	Tìm và chạy công cụ xử lý không gian.
@@ -267,6 +268,7 @@ Gamma	Gamma
 Generalization	Khái quát hóa
 Geo-\nprocessing	Xử lý\nkhông gian
 GeoJSON or CSV	GeoJSON hoặc CSV
+GeoLibre	GeoLibre
 Geometry	Hình học
 Geoprocessing	Xử lý không gian
 Geoprocessing history.	Lịch sử xử lý không gian.
@@ -461,6 +463,7 @@ Redo	Làm lại
 Redo the change you undid.	Làm lại thay đổi bạn đã hoàn tác.
 Redo {action}	Làm lại {action}
 Red–Blue	Đỏ–Xanh lam
+Refine the search to see {n} more	Thu hẹp tìm kiếm để xem thêm {n}
 Regional, equal-area: the contiguous United States.	Khu vực, đồng diện tích: lãnh thổ liền kề của Hoa Kỳ.
 Regional, equal-area: the European standard for statistics.	Khu vực, đồng diện tích: chuẩn châu Âu cho thống kê.
 Remove	Gỡ bỏ

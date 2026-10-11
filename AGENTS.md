@@ -19,6 +19,7 @@ egui front end, headless screenshots for UI work.
 | L1 | `data` | features, typed attributes, GeoJSON/CSV/Shapefile I/O, SQL where clauses, rasters (GeoTIFF/ASCII grid, EPSG reprojection) |
 | L2 | `map`, `analysis` | layers, symbology, labels, camera, basemaps; geoprocessing tools |
 | L3 | `render` | tiny-skia map renderer, label placement, PNG export, font discovery |
+| L3 | `geolibre` | the GeoLibre/Whitebox tool suite as geoprocessing tools (native only, behind the engine's `geolibre` feature) |
 | L4 | `engine` | `Session`, undo, command registry, ribbon feature catalog, sample project |
 | L6 | `ui-egui` | ribbon, panes, map view, attribute table, dialogs (swappable) |
 | apps | `rustgis`, `rustgis-cli`, `rustgis-web` | desktop app, command line, browser (WebAssembly) |
@@ -28,7 +29,8 @@ egui front end, headless screenshots for UI work.
   and CLI dispatch by id. Commands never open dialogs.
 - **Never break wasm**: everything below `apps/` must build for `wasm32-unknown-unknown`
   (CI runs `cargo build --target wasm32-unknown-unknown -p rustgis-web`). Use `web_time`, not
-  `std::time`; file access goes through `Services` on the web.
+  `std::time`; file access goes through `Services` on the web. The one exception is
+  `rustgis-geolibre`, which only the desktop app and CLI enable (engine feature `geolibre`).
 - **Interface text is translatable**: wrap user-visible literals in `tl!("…")`, use
   `i18n::fmt("… {name} …", &[("name", …)])` instead of `format!` for messages, and pass labels to
   the ribbon widgets (they translate). Then add the new strings to every catalog in

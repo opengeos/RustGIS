@@ -19,6 +19,7 @@ rustgis-analysis = { path = "crates/analysis" }
 rustgis-render = { path = "crates/render" }
 rustgis-engine = { path = "crates/engine" }
 rustgis-ui-egui = { path = "crates/ui-egui" }
+rustgis-geolibre = { path = "crates/geolibre" }
 
 # foundation
 thiserror = "2"

@@ -126,6 +126,28 @@ gdp_md IS NULL
 
 Tools honour the current selection: with features selected, only those are processed.
 
+### GeoLibre tools
+
+The desktop app and the command line also include the
+[GeoLibre](https://github.com/opengeos/geolibre-rust) tool suite: over 1,000 tools from
+Whitebox and GeoLibre, under **GeoLibre › Raster, Vector, Lidar, Hydrology, Terrain,
+Conversion** in the Geoprocessing pane and the Catalog's toolboxes (Find Tools searches them).
+Terrain analysis (slope, aspect, hillshade, curvature), hydrology (fill depressions, flow
+direction and accumulation, watersheds), image processing, interpolation and many vector tools
+run on the map's layers, and their outputs are added as new layers.
+
+- Raster inputs are passed as their own files; vector layers (or their selection) are written
+  in the first raster input's coordinate system, or the UTM zone around the data, so distances
+  and areas are in metres. Data spanning more than 40° of longitude stays in degrees.
+- Raster outputs are kept inside the project, so they save and reopen with it. Text and table
+  reports appear in the tool's messages.
+- LiDAR and other inputs RustGIS doesn't open as layers take a file path.
+- From the command line: `gp.run={"tool":"geolibre:slope","params":{"input":"dem"}}`;
+  `gp.tools` lists every tool's parameters.
+
+The web app doesn't include them yet: the tools read and write files, which a browser page
+can't.
+
 ## Keyboard shortcuts
 
 | Keys | Action |

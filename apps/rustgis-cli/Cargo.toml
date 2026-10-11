@@ -10,5 +10,5 @@ description = "RustGIS command line: run commands and geoprocessing, render maps
 workspace = true
 
 [dependencies]
-rustgis-engine = { workspace = true }
+rustgis-engine = { workspace = true, features = ["geolibre"] }
 serde_json = { workspace = true }

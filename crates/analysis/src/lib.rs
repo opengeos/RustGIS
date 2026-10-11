@@ -4,6 +4,10 @@
 //! pure `run` function over datasets. Inputs refer to layers by name through [`Inputs`]. Work is
 //! done in Web Mercator metres; distances are corrected for scale distortion at each feature's
 //! latitude so a 100 km buffer is about 100 km on the ground.
+//!
+//! Tools from an external suite (the GeoLibre/Whitebox tools, in `rustgis-geolibre`) join
+//! the built-in ones through [`register_external`]: they're listed by [`tools`], found by
+//! [`tool`] and run by [`run`] like the rest.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod convert;
@@ -31,6 +35,14 @@ pub enum ParamKind {
     Text,
     /// One of a fixed list of choices.
     Choice(&'static [&'static str]),
+    /// A raster layer.
+    RasterLayer,
+    /// Any vector layer (no standalone tables).
+    VectorLayer,
+    /// On or off.
+    Bool,
+    /// A file path typed by the user (for data RustGIS doesn't open as a layer, such as LiDAR).
+    Path,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -41,6 +53,8 @@ pub struct ParamSpec {
     pub required: bool,
     /// Default value as JSON text (`"10"`, `"\"km\""`), or empty.
     pub default: &'static str,
+    /// A longer description, shown on hover (may be empty).
+    pub help: &'static str,
 }
 
 /// What a tool produced.
@@ -54,6 +68,30 @@ pub enum Output {
     Update { layer: String, dataset: Dataset },
     /// A standalone table.
     Table(Dataset),
+    /// Several new layers and tables (external tools can write more than one output).
+    Layers(Vec<OutputLayer>),
+}
+
+/// One output of [`Output::Layers`].
+#[derive(Clone, Debug)]
+pub enum OutputLayer {
+    Vector(Dataset),
+    /// A raster file, kept as its bytes so the project can embed it.
+    Raster {
+        name: String,
+        file_name: String,
+        bytes: Vec<u8>,
+    },
+    Table(Dataset),
+}
+
+/// A raster layer handed to a tool: its file (on disk or embedded), or failing that the pixels.
+pub struct RasterInput<'a> {
+    pub raster: &'a rustgis_data::raster::Raster,
+    /// The file it was read from, when it is on disk.
+    pub path: Option<&'a str>,
+    /// The file's name and bytes, when it is embedded in the project.
+    pub embedded: Option<(&'a str, &'a [u8])>,
 }
 
 #[derive(Clone, Debug)]
@@ -67,6 +105,10 @@ pub trait Inputs {
     fn dataset(&self, layer: &str) -> Option<&Dataset>;
     /// Selected rows of a layer; tools honour a selection like desktop GIS does.
     fn selection(&self, layer: &str) -> &[usize];
+    /// A raster layer by name.
+    fn raster(&self, _layer: &str) -> Option<RasterInput<'_>> {
+        None
+    }
 }
 
 pub struct ToolSpec {
@@ -78,8 +120,54 @@ pub struct ToolSpec {
     pub run: fn(&dyn Inputs, &Value) -> Result<ToolResult, String>,
 }
 
+/// Runs an external tool (the spec says which).
+pub type ExternalRunner = fn(&ToolSpec, &dyn Inputs, &Value) -> Result<ToolResult, String>;
+
+/// Where external tools come from: called once, the first time the tools are listed.
+pub type ExternalProvider = fn() -> Vec<ToolSpec>;
+
+static PROVIDER: std::sync::OnceLock<(ExternalProvider, ExternalRunner)> = std::sync::OnceLock::new();
+static EXTERNAL: std::sync::OnceLock<Vec<ToolSpec>> = std::sync::OnceLock::new();
+
+/// Adds an external tool suite. Only the first registration counts; the provider runs lazily,
+/// so registering costs nothing until a tool list is needed.
+pub fn register_external(provider: ExternalProvider, runner: ExternalRunner) {
+    let _ = PROVIDER.set((provider, runner));
+}
+
+/// The external tools (empty when none are registered).
+pub fn external_tools() -> &'static [ToolSpec] {
+    match PROVIDER.get() {
+        Some((provider, _)) => EXTERNAL.get_or_init(|| {
+            std::panic::catch_unwind(provider).unwrap_or_else(|_| {
+                log::error!("the external tool suite failed to load");
+                Vec::new()
+            })
+        }),
+        None => &[],
+    }
+}
+
+/// Every tool: the built-in ones, then the external ones.
+pub fn tools() -> impl Iterator<Item = &'static ToolSpec> {
+    TOOLS.iter().chain(external_tools())
+}
+
+/// Whether a tool comes from the external suite.
+pub fn is_external(spec: &ToolSpec) -> bool {
+    external_tools().iter().any(|t| std::ptr::eq(t, spec))
+}
+
 pub fn tool(id: &str) -> Option<&'static ToolSpec> {
-    TOOLS.iter().find(|t| t.id.eq_ignore_ascii_case(id) || t.name.eq_ignore_ascii_case(id))
+    let by_id = |t: &&ToolSpec| t.id.eq_ignore_ascii_case(id);
+    let by_name = |t: &&ToolSpec| t.name.eq_ignore_ascii_case(id);
+    // A built-in tool wins over an external one with the same name.
+    tools().find(by_id).or_else(|| TOOLS.iter().find(by_name)).or_else(|| external_tools().iter().find(by_name))
+}
+
+/// The runner for external tools; never called (external specs carry the runner's id).
+pub fn external_placeholder(_: &dyn Inputs, _: &Value) -> Result<ToolResult, String> {
+    Err("this tool runs through the external suite".into())
 }
 
 /// Runs a tool with JSON parameters, filling defaults and checking required ones.
@@ -98,7 +186,10 @@ pub fn run(id: &str, inputs: &dyn Inputs, params: &Value) -> Result<ToolResult, 
         }
     }
     let p = Value::Object(p);
-    // Tools are pure functions over in-memory data; a bug in one must not take the app down.
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(inputs, &p)))
-        .unwrap_or_else(|_| Err(format!("{} failed unexpectedly", spec.name)))
+    // A bug in a tool must not take the app down.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match PROVIDER.get() {
+        Some((_, runner)) if is_external(spec) => runner(spec, inputs, &p),
+        _ => (spec.run)(inputs, &p),
+    }))
+    .unwrap_or_else(|_| Err(format!("{} failed unexpectedly", spec.name)))
 }

@@ -185,6 +185,9 @@ pub struct Session {
 
 impl Session {
     pub fn new(project: Project) -> Self {
+        // Cheap: the suite's tools load the first time a tool list is needed.
+        #[cfg(feature = "geolibre")]
+        rustgis_geolibre::register();
         Session {
             project,
             path: None,

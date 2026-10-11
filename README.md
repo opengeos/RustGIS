@@ -50,7 +50,7 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 | **Labeling** | Per-layer labels with field, size, colour, bold and halo; collision-free placement |
 | **Selection** | Click and box select (add/remove), Select By Attributes with live SQL validation, Select By Location, switch/clear/zoom to selection, layer from selection |
 | **Editing** | Create points, lines and polygons; delete; edit cells in the attribute table; add, delete and calculate fields; undo/redo for everything |
-| **Analysis** | Buffer, Clip, Erase, Dissolve, Minimum Bounding Geometry, Feature To Point, Simplify, Summarize Within, Calculate Geometry, Summary Statistics, Export Features |
+| **Analysis** | Buffer, Clip, Erase, Dissolve, Minimum Bounding Geometry, Feature To Point, Simplify, Summarize Within, Calculate Geometry, Summary Statistics, Export Features; plus 1,000+ raster, vector, LiDAR, hydrology and terrain tools from the [GeoLibre](https://github.com/opengeos/geolibre-rust) suite (desktop and command line) |
 | **Inquiry** | Identify pop-ups, geodesic distance and area measurement, live coordinates (DD or DMS) |
 | **Share** | PNG export with labels and a scale bar at any DPI; export layers to GeoJSON/CSV |
 | **Productivity** | Command search (Ctrl+K), keyboard shortcuts, dark mode, Catalog pane with folder browsing |

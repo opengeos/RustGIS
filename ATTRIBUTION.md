@@ -10,6 +10,10 @@ Raster coordinate systems are looked up by EPSG code in the PROJ definitions of 
 [crs-definitions](https://crates.io/crates/crs-definitions) crate (CC0-1.0), compiled into the
 app.
 
+The GeoLibre tool suite ([geolibre-rust](https://github.com/opengeos/geolibre-rust), MIT, built
+on [whitebox-wasm](https://github.com/opengeos/whitebox-wasm), MIT) is linked into the desktop
+app and command line as a library; its tool names and descriptions come from its manifests.
+
 Icons are original vector drawings in code (`crates/ui-egui/src/icons.rs`). Fonts are not
 bundled: the interface uses an installed system sans-serif when one is found, otherwise the
 Ubuntu Light face that ships inside `epaint_default_fonts` (Ubuntu Font Licence 1.0).

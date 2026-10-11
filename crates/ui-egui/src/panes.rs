@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::Session;
-use rustgis_engine::analysis::{ParamKind, TOOLS};
+use rustgis_engine::analysis::{ParamKind, tools};
 use rustgis_engine::data::GeometryType;
 use rustgis_engine::map::raster::RasterLegend;
 use rustgis_engine::map::{ClassMethod, Layer, Marker, Ramp, RasterRenderer, Renderer, Resampling, Stretch, Symbol};
@@ -398,19 +398,38 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
             });
             egui::CollapsingHeader::new(egui::RichText::new(tl!("Toolboxes")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
-                let mut boxes: Vec<&str> = TOOLS.iter().map(|t| t.toolbox.split(" › ").next().unwrap_or(t.toolbox)).collect();
+                let mut boxes: Vec<&str> = tools().map(|t| t.toolbox.split(" › ").next().unwrap_or(t.toolbox)).collect();
                 boxes.sort();
                 boxes.dedup();
+                let link = |app: &mut RustGisApp, ui: &mut Ui, tool: &rustgis_engine::analysis::ToolSpec| {
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                        icons::paint(ui.painter(), r, "tools", t.icon, t.accent);
+                        if ui.link(tl!(tool.name)).on_hover_text(tl!(tool.summary)).clicked() {
+                            let _ = app.run("ui.gp.open", json!({"tool": tool.id}));
+                        }
+                    });
+                };
                 for b in boxes {
                     egui::CollapsingHeader::new(crate::i18n::location(b)).default_open(false).show(ui, |ui| {
-                        for tool in TOOLS.iter().filter(|x| x.toolbox.starts_with(b)) {
-                            ui.horizontal(|ui| {
-                                let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-                                icons::paint(ui.painter(), r, "tools", t.icon, t.accent);
-                                if ui.link(tl!(tool.name)).on_hover_text(tl!(tool.summary)).clicked() {
-                                    let _ = app.run("ui.gp.open", json!({"tool": tool.id}));
-                                }
-                            });
+                        let mut subs: Vec<&str> = tools().filter(|x| x.toolbox.split(" › ").next() == Some(b)).map(|x| x.toolbox).collect();
+                        subs.dedup();
+                        // A large toolbox (the GeoLibre suite) opens one sub-toolbox at a time.
+                        if subs.len() > 1 && tools().filter(|x| x.toolbox.starts_with(b)).count() > 40 {
+                            for sub in subs {
+                                egui::CollapsingHeader::new(crate::i18n::location(sub.trim_start_matches(b).trim_start_matches(" › ")))
+                                    .id_salt(("toolbox", sub))
+                                    .default_open(false)
+                                    .show(ui, |ui| {
+                                        for tool in tools().filter(|x| x.toolbox == sub) {
+                                            link(app, ui, tool);
+                                        }
+                                    });
+                            }
+                        } else {
+                            for tool in tools().filter(|x| x.toolbox.split(" › ").next() == Some(b)) {
+                                link(app, ui, tool);
+                            }
                         }
                     });
                 }
@@ -523,6 +542,12 @@ impl GpForm {
                     .filter(|l| l.geometry_type() == GeometryType::Point)
                     .or_else(|| s.map().layers.iter().find(|l| l.geometry_type() == GeometryType::Point))
                     .map(|l| l.name.clone()),
+                ParamKind::RasterLayer => {
+                    active.filter(|l| l.is_raster()).or_else(|| s.map().layers.iter().find(|l| l.is_raster())).map(|l| l.name.clone())
+                }
+                ParamKind::VectorLayer => {
+                    active.filter(|l| !l.is_raster()).or_else(|| s.map().layers.iter().find(|l| !l.is_raster())).map(|l| l.name.clone())
+                }
                 _ => serde_json::from_str::<Value>(p.default).ok().map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())),
             };
             if let Some(v) = v {
@@ -542,38 +567,75 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         });
         ui.add_space(8.0);
         let q = app.gp.search.to_lowercase();
-        let mut boxes: Vec<&str> = TOOLS.iter().map(|t| t.toolbox).collect();
+        let matches = |x: &rustgis_engine::analysis::ToolSpec| {
+            q.is_empty() || x.name.to_lowercase().contains(&q) || x.summary.to_lowercase().contains(&q) || x.id.to_lowercase().contains(&q)
+        };
+        let row = |app: &mut RustGisApp, ui: &mut Ui, tool: &'static rustgis_engine::analysis::ToolSpec| {
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 42.0), Sense::click());
+            if resp.hovered() {
+                ui.painter().rect_filled(r, CornerRadius::same(6), t.hover);
+            }
+            icons::paint(
+                ui.painter(),
+                Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(20.0, 20.0)),
+                tool_icon(tool.id),
+                t.icon,
+                t.accent,
+            );
+            ui.painter().text(pos2(r.min.x + 34.0, r.min.y + 13.0), Align2::LEFT_CENTER, tl!(tool.name), semibold(12.5), t.accent_text);
+            let summary: String = tl!(tool.summary).chars().take(52).collect();
+            ui.painter().text(pos2(r.min.x + 34.0, r.min.y + 29.0), Align2::LEFT_CENTER, summary, regular(11.0), t.text_dim);
+            if resp.on_hover_text(tl!(tool.summary)).clicked() {
+                app.gp.open(Some(tool.id), &app.session);
+            }
+        };
+        let mut boxes: Vec<&str> = rustgis_engine::analysis::TOOLS.iter().map(|t| t.toolbox).collect();
         boxes.sort();
         boxes.dedup();
         for b in boxes {
-            let tools: Vec<_> = TOOLS
-                .iter()
-                .filter(|x| x.toolbox == b && (q.is_empty() || x.name.to_lowercase().contains(&q) || x.summary.to_lowercase().contains(&q)))
-                .collect();
-            if tools.is_empty() {
+            let found: Vec<_> = rustgis_engine::analysis::TOOLS.iter().filter(|x| x.toolbox == b && matches(x)).collect();
+            if found.is_empty() {
                 continue;
             }
             ui.label(egui::RichText::new(crate::i18n::location(b)).size(11.0).color(t.text_dim));
-            for tool in tools {
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 42.0), Sense::click());
-                if resp.hovered() {
-                    ui.painter().rect_filled(r, CornerRadius::same(6), t.hover);
-                }
-                icons::paint(
-                    ui.painter(),
-                    Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(20.0, 20.0)),
-                    tool_icon(tool.id),
-                    t.icon,
-                    t.accent,
-                );
-                ui.painter().text(pos2(r.min.x + 34.0, r.min.y + 13.0), Align2::LEFT_CENTER, tl!(tool.name), semibold(12.5), t.accent_text);
-                let summary: String = tl!(tool.summary).chars().take(52).collect();
-                ui.painter().text(pos2(r.min.x + 34.0, r.min.y + 29.0), Align2::LEFT_CENTER, summary, regular(11.0), t.text_dim);
-                if resp.on_hover_text(tl!(tool.summary)).clicked() {
-                    app.gp.open(Some(tool.id), &app.session);
-                }
+            for tool in found {
+                row(app, ui, tool);
             }
             ui.add_space(6.0);
+        }
+        // The GeoLibre suite: a thousand tools, so toolboxes stay closed until opened, and a
+        // search lists the first matches.
+        let external = rustgis_engine::analysis::external_tools();
+        if external.is_empty() {
+            return;
+        }
+        if q.is_empty() {
+            let mut boxes: Vec<&str> = external.iter().map(|t| t.toolbox).collect();
+            boxes.dedup();
+            for b in boxes {
+                let n = external.iter().filter(|x| x.toolbox == b).count();
+                egui::CollapsingHeader::new(format!("{} ({n})", crate::i18n::location(b))).id_salt(("gp-box", b)).default_open(false).show(
+                    ui,
+                    |ui| {
+                        for tool in external.iter().filter(|x| x.toolbox == b) {
+                            row(app, ui, tool);
+                        }
+                    },
+                );
+            }
+        } else {
+            const MAX: usize = 60;
+            let found: Vec<_> = external.iter().filter(|x| matches(x)).collect();
+            if !found.is_empty() {
+                ui.label(egui::RichText::new(tl!("GeoLibre")).size(11.0).color(t.text_dim));
+            }
+            for tool in found.iter().take(MAX) {
+                row(app, ui, tool);
+            }
+            if found.len() > MAX {
+                let more = crate::i18n::fmt("Refine the search to see {n} more", &[("n", &(found.len() - MAX).to_string())]);
+                ui.label(egui::RichText::new(more).size(11.0).color(t.text_dim));
+            }
         }
         return;
     };
@@ -598,10 +660,19 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         v
     };
-    let first_layer =
-        spec.params.iter().find(|p| matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer)).map(|p| p.name);
+    let kind_names = |raster: bool| -> Vec<String> {
+        app.session.map().layers.iter().filter(|l| l.is_raster() == raster).map(|l| l.name.clone()).collect()
+    };
+    let first_layer = spec
+        .params
+        .iter()
+        .find(|p| matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer | ParamKind::VectorLayer))
+        .map(|p| p.name);
     for p in spec.params {
-        ui.label(egui::RichText::new(format!("{}{}", tl!(p.label), if p.required { " *" } else { "" })).size(12.0));
+        let label = ui.label(egui::RichText::new(format!("{}{}", tl!(p.label), if p.required { " *" } else { "" })).size(12.0));
+        if !p.help.is_empty() {
+            label.on_hover_text(p.help);
+        }
         let cur = app.gp.values.get(p.name).cloned().unwrap_or_default();
         let options: Option<Vec<String>> = match p.kind {
             ParamKind::Layer => Some(layer_names(None)),
@@ -625,6 +696,21 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 Some(v)
             }
             ParamKind::Choice(c) => Some(c.iter().map(|s| s.to_string()).collect()),
+            ParamKind::RasterLayer | ParamKind::VectorLayer => {
+                let mut v = kind_names(p.kind == ParamKind::RasterLayer);
+                if !p.required {
+                    v.insert(0, String::new());
+                }
+                Some(v)
+            }
+            ParamKind::Bool => {
+                let mut on = cur == "true";
+                if ui.checkbox(&mut on, "").changed() {
+                    app.gp.values.insert(p.name, on.to_string());
+                }
+                ui.add_space(4.0);
+                continue;
+            }
             _ => None,
         };
         match options {
@@ -652,7 +738,11 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
             None => {
                 let mut v = cur;
-                let hint = if p.kind == ParamKind::Number { "number" } else { "" };
+                let hint = match p.kind {
+                    ParamKind::Number => tl!("number"),
+                    ParamKind::Path => tl!("file path"),
+                    _ => "",
+                };
                 if ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(f32::INFINITY)).changed() {
                     app.gp.values.insert(p.name, v);
                 }
@@ -670,8 +760,11 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let mut params = serde_json::Map::new();
             for p in spec.params {
                 if let Some(v) = app.gp.values.get(p.name).filter(|v| !v.trim().is_empty()) {
-                    let val =
-                        if p.kind == ParamKind::Number { v.trim().parse::<f64>().map(|n| json!(n)).unwrap_or(json!(v)) } else { json!(v) };
+                    let val = match p.kind {
+                        ParamKind::Number => v.trim().parse::<f64>().map(|n| json!(n)).unwrap_or(json!(v)),
+                        ParamKind::Bool => json!(v == "true"),
+                        _ => json!(v),
+                    };
                     params.insert(p.name.to_string(), val);
                 }
             }

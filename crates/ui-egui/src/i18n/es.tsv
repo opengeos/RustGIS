@@ -251,6 +251,7 @@ Field	Campo
 Field name	Nombre del campo
 Fields	Campos
 Fields:	Campos:
+file path	ruta de archivo
 Filter rows…	Filtrar filas…
 Find a place by coordinates.	Buscar un lugar por coordenadas.
 Find and run geoprocessing tools.	Buscar y ejecutar herramientas de geoprocesamiento.
@@ -267,6 +268,7 @@ Gamma	Gamma
 Generalization	Generalización
 Geo-\nprocessing	Geoproce-\nsamiento
 GeoJSON or CSV	GeoJSON o CSV
+GeoLibre	GeoLibre
 Geometry	Geometría
 Geoprocessing	Geoprocesamiento
 Geoprocessing history.	Historial de geoprocesamiento.
@@ -461,6 +463,7 @@ Redo	Rehacer
 Redo the change you undid.	Rehacer el cambio que deshizo.
 Redo {action}	Rehacer {action}
 Red–Blue	Rojo–Azul
+Refine the search to see {n} more	Refina la búsqueda para ver {n} más
 Regional, equal-area: the contiguous United States.	Regional, de áreas iguales: los Estados Unidos contiguos.
 Regional, equal-area: the European standard for statistics.	Regional, de áreas iguales: el estándar europeo para estadísticas.
 Remove	Quitar

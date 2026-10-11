@@ -337,8 +337,12 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
         ui.separator();
         let ql = q.to_lowercase();
         let mut hits: Vec<(String, String, String)> = Vec::new();
-        // Geoprocessing tools first when the query names one.
-        for tool in rustgis_engine::analysis::TOOLS {
+        // Geoprocessing tools first when the query names one (a few dozen at most: the GeoLibre
+        // suite has a thousand).
+        for tool in rustgis_engine::analysis::tools() {
+            if hits.len() >= 40 {
+                break;
+            }
             if !ql.is_empty()
                 && (tool.name.to_lowercase().contains(&ql)
                     || tool.id.to_lowercase().contains(&ql)

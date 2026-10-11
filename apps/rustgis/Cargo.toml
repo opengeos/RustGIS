@@ -11,7 +11,7 @@ description = "RustGIS desktop app"
 workspace = true
 
 [dependencies]
-rustgis-engine = { workspace = true }
+rustgis-engine = { workspace = true, features = ["geolibre"] }
 rustgis-ui-egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }
