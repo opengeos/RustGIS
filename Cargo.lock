@@ -3255,6 +3255,7 @@ dependencies = [
  "log",
  "rustgis-data",
  "rustgis-geom",
+ "serde",
  "serde_json",
 ]
 

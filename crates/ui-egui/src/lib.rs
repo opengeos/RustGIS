@@ -135,6 +135,7 @@ pub enum RightPane {
     Report,
     Presentation,
     Notebook,
+    Shares,
 }
 
 pub struct UiState {
@@ -413,6 +414,7 @@ impl RustGisApp {
             (".rgispres", "presentation.import"),
             (".rgisnb", "notebook.open"),
             (".ipynb", "notebook.open"),
+            (".rgisdlpk", "dl.import"),
         ]
         .iter()
         .find(|(e, _)| lower.ends_with(e))
@@ -802,6 +804,7 @@ impl RustGisApp {
                     "report" => ("report.open", &["rgisreport", "rgisrpttemplate"], "RustGIS report or report template"),
                     "presentation" => ("presentation.import", &["rgispres"], "RustGIS presentation"),
                     "notebook" => ("notebook.open", &["rgisnb", "ipynb"], "RustGIS or Jupyter notebook"),
+                    "dlPackage" => ("dl.import", &["rgisdlpk"], "RustGIS deep learning package"),
                     k => return Err(format!("unknown item '{k}'")),
                 };
                 if let Some(open) = &self.services.open_async {
@@ -862,6 +865,36 @@ impl RustGisApp {
             "ui.pane.report" => toggle_right(&mut self.ui, RightPane::Report),
             "ui.pane.presentation" => toggle_right(&mut self.ui, RightPane::Presentation),
             "ui.pane.notebook" => toggle_right(&mut self.ui, RightPane::Notebook),
+            "ui.pane.shares" => toggle_right(&mut self.ui, RightPane::Shares),
+            // Share As: to a file (recorded under Status › Jobs), or a download in the browser.
+            "ui.share" => {
+                let kind = p.get("kind").and_then(Value::as_str).ok_or("kind is required")?;
+                let cmd = match kind {
+                    "webMap" => "share.webMap",
+                    "webLayer" => "share.webLayer",
+                    "webStyle" => "share.webStyle",
+                    "locator" => "share.locator",
+                    "geodataService" => "share.geodataService",
+                    "webTool" => "share.webTool",
+                    "webScene" => "share.webScene",
+                    "linkChart" => "share.linkChart",
+                    k => return Err(format!("unknown share '{k}'")),
+                };
+                if self.services.download.is_some() {
+                    return self.run("ui.saveItem", json!({"kind": kind}));
+                }
+                let (ext, label) = rustgis_engine::cmd::sharing::KINDS.iter().find(|k| k.0 == kind).map_or(("bin", "File"), |k| (k.1, k.2));
+                let name = match kind {
+                    "webLayer" | "webStyle" | "locator" => {
+                        self.session.active_layer.and_then(|id| self.session.map().layer(id)).map(|l| l.name.clone())
+                    }
+                    _ => Some(self.session.map().name.clone()),
+                }
+                .unwrap_or_else(|| "shared".into());
+                if let Some(path) = dialogs::pick_save(&format!("{name}.{ext}"), &[ext], tl!(label)) {
+                    return self.run(cmd, json!({"path": path}));
+                }
+            }
             "ui.newPresentation" | "ui.newNotebook" => {
                 let (cmd, pane) = if id == "ui.newPresentation" {
                     ("presentation.new", RightPane::Presentation)

@@ -14,6 +14,7 @@ rustgis-data = { workspace = true }
 rustgis-map = { workspace = true }
 rustgis-analysis = { workspace = true }
 rustgis-render = { workspace = true }
+tiny-skia = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }

@@ -390,6 +390,36 @@ RustGIS (`.rgisnb`) or Jupyter (`.ipynb`) notebook. A command cell runs one comm
 (`id {json}`, as in scripts) and shows each command's result beneath it. Notebooks save in
 either format.
 
+## Sharing
+
+**Share › Share As** writes open-format files that work without a server, to a chosen file or the
+first **data store** (a folder registered under **Share › Manage › Data Stores**):
+
+- **Web Map**: a self-contained HTML page with the map's layers (rasters as images), pan and zoom,
+  a layer list and pop-ups.
+- **Web Layer**: the selected layer as a static OGC API – Features collection, with its style and
+  a viewer page, in a zip. **Geodata Service** does the same for every layer and table.
+- **Web Style**: the selected layer's symbology as a MapLibre style (unique values and classes as
+  expressions).
+- **Locator**: the selected layer's names as a place-search file; `locator.find` searches it and
+  can zoom to the best match.
+- **Web Tool**: the last model as a tool file, which `model.import` adds to another project.
+- **Web Scene**: the map in 3D as glTF, polygons extruded by their layer's extrusion setting.
+- **Web Link Chart**: the features joined by the map's relationships, as a node-link page.
+
+**Status › Jobs** (the Shared Items pane) lists every share; **Save Web Map**, **Replace Web
+Layer**, **Save Web Scene** and **Save Web Link Chart** update a share in place, and **Upload File**
+copies a file into a data store.
+
+## Deep learning and hosted imagery
+
+**Imagery › Deep Learning Tools** trains a neural network (a multilayer perceptron) on the pixels
+under training polygons and classifies every pixel, adding a class raster with a confidence band
+and reporting the accuracy on held-back pixels. Trained models stay in the project; **Share ›
+Package › Deep Learning** saves one as a package to apply in other projects. **Imagery › Create
+Hosted Imagery** cuts a raster into XYZ web map tiles (PNG, transparent outside the raster) with
+a TileJSON file and a viewer page.
+
 ## Workspace tools
 
 - **Side by Side** shows a second map beside the active one; **Link Views** keeps maps at the same

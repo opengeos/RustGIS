@@ -1,6 +1,6 @@
 # Roadmap
 
-Ribbon feature coverage: **298 of 316 features (94%)** have a command
+Ribbon feature coverage: **316 of 316 features (100%)** have a command
 today ([docs/parity.md](docs/parity.md)). Counting depth (no full 3D scenes or enterprise sharing
 yet), real parity is lower.
 
@@ -24,6 +24,9 @@ yet), real parity is lower.
   supplemental and layout pages, related reports; PDF export, report files and templates.
 - Presentations (map, text, image and video pages; HTML slideshow and PDF export) and notebooks
   of text and command cells (Jupyter files in and out).
+- Sharing as open formats (web map and link chart pages, OGC API Features collections, MapLibre
+  styles, glTF scenes, locators, web tools) with data stores and in-place updates; deep learning
+  pixel classification with model packages; hosted imagery tiles.
 
 ## Next
 - M3 Data: GeoPackage and FlatGeobuf, coordinate systems (PROJ-free transforms for common

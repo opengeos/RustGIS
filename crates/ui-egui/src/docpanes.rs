@@ -370,3 +370,64 @@ pub fn notebook(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
     });
 }
+
+/// Shared items (Share › Status › Jobs) with their Manage tools, and the data stores.
+pub fn shares(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+    message(app, ui, t);
+    let items = app.session.project.shared.clone();
+    if items.is_empty() {
+        ui.label(egui::RichText::new(tl!("Nothing shared yet. Share › Share As makes web maps, layers, styles, scenes and more.")).weak());
+    }
+    for it in items.iter().rev() {
+        egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t.border)).corner_radius(4).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let label = rustgis_engine::cmd::sharing::KINDS.iter().find(|k| k.0 == it.kind).map_or("File", |k| k.2);
+            ui.label(egui::RichText::new(format!("{} · {}", it.name, tl!(label))).font(semibold(12.0)));
+            ui.label(egui::RichText::new(&it.path).small().color(t.text_dim));
+            let manage = match it.kind.as_str() {
+                "webMap" => Some(("Save Web Map", "share.saveWebMap")),
+                "webLayer" => Some(("Replace Web Layer", "share.replaceWebLayer")),
+                "webScene" => Some(("Save Web Scene", "share.saveWebScene")),
+                "linkChart" => Some(("Save Web Link Chart", "share.saveWebLinkChart")),
+                _ => None,
+            };
+            if let Some((text, cmd)) = manage {
+                let mut p = json!({"item": it.id});
+                // A web layer is replaced from the selected layer.
+                if cmd == "share.replaceWebLayer"
+                    && let Some(l) = app.session.active_layer.and_then(|id| app.session.map().layer(id))
+                {
+                    p["layer"] = json!(l.name);
+                }
+                if ui.small_button(tl!(text)).clicked() {
+                    run(app, cmd, p);
+                }
+            }
+        });
+        ui.add_space(4.0);
+    }
+    heading(ui, "Data Stores");
+    let stores = app.session.project.data_stores.clone();
+    for d in &stores {
+        ui.horizontal(|ui| {
+            ui.label(format!("{} — {}", d.name, d.path));
+            if ui.small_button(tl!("Remove")).clicked() {
+                run(app, "share.dataStore", json!({"remove": d.name}));
+            }
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.horizontal(|ui| {
+        if ui.button(tl!("Add Data Store…")).clicked()
+            && let Some(dir) = rfd::FileDialog::new().pick_folder()
+        {
+            run(app, "share.dataStore", json!({"path": dir.display().to_string()}));
+        }
+        if !stores.is_empty()
+            && ui.button(tl!("Upload File…")).clicked()
+            && let Some(f) = rfd::FileDialog::new().pick_file()
+        {
+            run(app, "share.upload", json!({"path": f.display().to_string()}));
+        }
+    });
+}

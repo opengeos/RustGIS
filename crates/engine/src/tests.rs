@@ -154,7 +154,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 298, "coverage fell to {done}");
+    assert!(done >= 316, "coverage fell to {done}");
 }
 
 #[test]
@@ -1993,5 +1993,121 @@ fn presentations_and_notebooks() {
     assert_eq!(p.notebooks.len(), crate::project::MAX_ITEMS);
     assert_eq!(p.notebooks.last().unwrap().name, format!("A {}", crate::project::MAX_ITEMS));
     assert!(t0.elapsed().as_secs() < 5);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A three-band raster: water-like pixels on the left half, field-like on the right.
+fn two_class_b64() -> String {
+    use base64::Engine;
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let gt = GeoTransform { origin_x: 10.0, origin_y: 45.04, pixel_width: 0.001, pixel_height: -0.001 };
+    let band = |water: f32, field: f32| -> Vec<f32> {
+        (0..1600).map(|i| if i % 40 < 20 { water + (i % 7) as f32 } else { field + (i % 5) as f32 }).collect()
+    };
+    let r = Raster::new(
+        "scene",
+        40,
+        40,
+        vec![band(20.0, 120.0), band(80.0, 30.0), band(140.0, 60.0)],
+        gt,
+        Crs::LonLat,
+        None,
+        ColorHint::Rgb { alpha: false },
+        "UInt8",
+    )
+    .unwrap();
+    base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap())
+}
+
+#[test]
+fn deep_learning_hosted_imagery_and_sharing() {
+    let dir = std::env::temp_dir().join(format!("rustgis-share-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |f: &str| dir.join(f).to_str().unwrap().to_string();
+    let mut s = world();
+    s.run("layer.addDataBytes", &json!({"fileName": "scene.tif", "data": two_class_b64()})).unwrap();
+    let training = json!({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"class": "water"}, "geometry": {"type": "Polygon", "coordinates": [[[10.002, 45.002], [10.015, 45.002], [10.015, 45.035], [10.002, 45.035], [10.002, 45.002]]]}},
+        {"type": "Feature", "properties": {"class": "field"}, "geometry": {"type": "Polygon", "coordinates": [[[10.025, 45.002], [10.038, 45.002], [10.038, 45.035], [10.025, 45.035], [10.025, 45.002]]]}}]});
+    s.run("layer.addDataText", &json!({"fileName": "training.geojson", "text": training.to_string()})).unwrap();
+    assert!(s.run("dl.package", &json!({"path": path("x.rgisdlpk")})).is_err(), "no model yet");
+    let r = s
+        .run(
+            "dl.classify",
+            &json!({"layer": "scene", "training": "training", "classField": "class", "bands": [1, 2], "epochs": 30, "model": "landcover"}),
+        )
+        .unwrap();
+    assert!(r["accuracy"].as_f64().unwrap() > 0.95, "{r}");
+    let classes = r["classes"].as_array().unwrap();
+    assert!(classes.iter().all(|c| c["pixels"].as_u64().unwrap() > 700), "both halves classified: {r}");
+    // Package, remove, import, apply again.
+    s.run("dl.package", &json!({"path": path("landcover.rgisdlpk")})).unwrap();
+    s.run("dl.remove", &json!({"model": "landcover"})).unwrap();
+    assert!(s.project.dl_models.is_empty());
+    s.run("dl.import", &json!({"path": path("landcover.rgisdlpk")})).unwrap();
+    s.run("dl.classify", &json!({"layer": "scene", "model": "landcover", "name": "again"})).unwrap();
+    assert!(s.run("dl.import", &json!({"data": "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA=="})).is_err(), "an empty zip");
+    // Hosted imagery: tiles in a zip, transparent outside the raster.
+    let r = s.run("imagery.hostedImagery", &json!({"layer": "scene", "path": path("tiles.zip"), "minZoom": 10, "maxZoom": 12})).unwrap();
+    assert!(r["tiles"].as_u64().unwrap() >= 3);
+    let entries = rustgis_data::zip::read(&std::fs::read(path("tiles.zip")).unwrap()).unwrap();
+    assert!(entries.iter().any(|e| e.0 == "tiles.json") && entries.iter().any(|e| e.0.starts_with("tiles/12/")));
+
+    // Sharing to a data store.
+    assert!(s.run("share.webMap", &Value::Null).is_err(), "no path and no data store");
+    s.run("share.dataStore", &json!({"name": "out", "path": dir.to_str().unwrap()})).unwrap();
+    assert!(s.run("share.dataStore", &json!({"path": path("missing")})).is_err());
+    s.run("layer.symbology", &json!({"layer": "Countries", "type": "graduated", "field": "pop_est"})).unwrap();
+    s.run("share.webMap", &Value::Null).unwrap();
+    let html = std::fs::read_to_string(path("World.html")).unwrap();
+    assert!(
+        html.contains("<canvas") && html.contains("\"Countries\"") && html.contains("data:image/png;base64,"),
+        "vector and raster layers"
+    );
+    s.run("share.webLayer", &json!({"layer": "Countries"})).unwrap();
+    let z = rustgis_data::zip::read(&std::fs::read(path("Countries.zip")).unwrap()).unwrap();
+    for f in ["collections.json", "conformance.json", "style.json", "index.html", "collections/countries/items.json"] {
+        assert!(z.iter().any(|e| e.0 == f), "{f}");
+    }
+    s.run("share.webStyle", &json!({"layer": "Countries"})).unwrap();
+    let style: Value = serde_json::from_slice(&std::fs::read(path("Countries.json")).unwrap()).unwrap();
+    assert_eq!(style["version"], 8);
+    assert_eq!(style["layers"][0]["paint"]["fill-color"][0], "step", "graduated colours as a step expression");
+    s.run("share.locator", &json!({"layer": "Cities", "fields": ["name"]})).unwrap();
+    let r = s.run("locator.find", &json!({"text": "paris", "zoom": true})).unwrap();
+    assert_eq!(r["matches"][0]["text"], "Paris");
+    assert!((s.map().center_lonlat().x - 2.35).abs() < 0.1);
+    s.run("share.geodataService", &Value::Null).unwrap();
+    s.run("model.new", &json!({"name": "Buffer", "steps": [{"tool": "buffer", "params": {"input": "Cities", "distance": 10}}]})).unwrap();
+    s.run("share.webTool", &Value::Null).unwrap();
+    s.run("model.import", &json!({"path": path("Buffer.rgistool")})).unwrap();
+    assert_eq!(s.project.models.len(), 2);
+    s.run("layer.extrusion", &json!({"layer": "Countries", "type": "height", "height": 100000})).unwrap();
+    s.run("share.webScene", &Value::Null).unwrap();
+    let g: Value = serde_json::from_slice(&std::fs::read(path("World.gltf")).unwrap()).unwrap();
+    assert_eq!(g["asset"]["version"], "2.0");
+    assert!(g["meshes"].as_array().unwrap().len() >= 2);
+    assert!(s.run("share.linkChart", &Value::Null).is_err(), "no relationships yet");
+    s.run("data.relate", &json!({"name": "Country of city", "origin": "Countries", "originKey": "name", "destination": "Cities", "destinationKey": "adm0name"})).unwrap();
+    s.run("share.linkChart", &Value::Null).unwrap();
+    assert!(std::fs::read_to_string(path("Relationships.html")).unwrap().contains("<svg"));
+    // Manage: update in place; jobs list them.
+    let before = s.project.shared.len();
+    s.run("share.saveWebMap", &Value::Null).unwrap();
+    s.run("share.replaceWebLayer", &json!({"layer": "Lakes"})).unwrap();
+    s.run("share.saveWebScene", &Value::Null).unwrap();
+    s.run("share.saveWebLinkChart", &Value::Null).unwrap();
+    assert_eq!(s.project.shared.len(), before, "updated, not added");
+    let z = rustgis_data::zip::read(&std::fs::read(path("Countries.zip")).unwrap()).unwrap();
+    assert!(z.iter().any(|e| e.0 == "collections/lakes/items.json"), "the web layer now holds the lakes");
+    s.run("share.upload", &json!({"path": path("landcover.rgisdlpk"), "store": "out"})).unwrap_err();
+    let up = dir.join("upload_src");
+    std::fs::create_dir_all(&up).unwrap();
+    std::fs::write(up.join("notes.txt"), "hello").unwrap();
+    s.run("share.upload", &json!({"path": up.join("notes.txt").to_str().unwrap()})).unwrap();
+    assert!(dir.join("notes.txt").exists());
+    let jobs = s.run("share.jobs", &Value::Null).unwrap();
+    assert_eq!(jobs["items"].as_array().unwrap().len(), before + 1);
+    s.run("share.dataStore", &json!({"remove": "out"})).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }

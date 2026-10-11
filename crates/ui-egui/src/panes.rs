@@ -49,6 +49,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 RightPane::Report => ("Report", "ui.pane.report"),
                 RightPane::Presentation => ("Presentation", "ui.pane.presentation"),
                 RightPane::Notebook => ("Notebook", "ui.pane.notebook"),
+                RightPane::Shares => ("Shared Items", "ui.pane.shares"),
             };
             pane_header(app, ui, tl!(title), close, &t);
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -69,6 +70,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     RightPane::Report => crate::reportpane::report(app, ui, &t),
                     RightPane::Presentation => crate::docpanes::presentation(app, ui, &t),
                     RightPane::Notebook => crate::docpanes::notebook(app, ui, &t),
+                    RightPane::Shares => crate::docpanes::shares(app, ui, &t),
                 });
             });
         });

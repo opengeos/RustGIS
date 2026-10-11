@@ -104,15 +104,15 @@ fn raster_named(s: &Session, n: &str) -> Result<Arc<Raster>, String> {
     s.map().layer_by_name(n).and_then(|l| l.raster.as_ref()).and_then(|r| r.data.clone()).ok_or_else(|| format!("no raster layer '{n}'"))
 }
 
-fn raster(s: &Session, p: &Value) -> Result<Arc<Raster>, String> {
+pub(crate) fn raster(s: &Session, p: &Value) -> Result<Arc<Raster>, String> {
     raster_named(s, ps(p, "layer").ok_or("layer is required")?)
 }
 
-fn name(p: &Value, d: String) -> String {
+pub(crate) fn name(p: &Value, d: String) -> String {
     ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(|n| n.chars().take(200).collect()).unwrap_or(d)
 }
 
-fn bands_param(p: &Value, r: &Raster) -> Result<Vec<usize>, String> {
+pub(crate) fn bands_param(p: &Value, r: &Raster) -> Result<Vec<usize>, String> {
     match p.get("bands").and_then(Value::as_array) {
         Some(a) => a
             .iter()
@@ -136,7 +136,7 @@ fn layer_of(r: Raster) -> Result<rustgis_map::RasterLayer, String> {
 }
 
 /// Adds a raster layer; classes get unique-value colours.
-fn add(s: &mut Session, r: Raster, classes: bool) -> CmdResult {
+pub(crate) fn add(s: &mut Session, r: Raster, classes: bool) -> CmdResult {
     let n = r.name.clone();
     let mut layer = layer_of(r)?;
     if classes && let Some(d) = layer.data.clone() {

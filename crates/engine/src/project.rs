@@ -66,6 +66,14 @@ pub struct Project {
     /// Notebooks of text and command cells.
     #[serde(default)]
     pub notebooks: Vec<crate::cmd::notebook::Notebook>,
+    /// Trained deep learning models.
+    #[serde(default)]
+    pub dl_models: Vec<crate::cmd::deeplearning::DlModel>,
+    /// Shares made (Share › Status › Jobs) and the folders they go to.
+    #[serde(default)]
+    pub shared: Vec<crate::cmd::sharing::SharedItem>,
+    #[serde(default)]
+    pub data_stores: Vec<crate::cmd::sharing::DataStore>,
 }
 
 /// A unit of work tracked in the Workflow Manager.
@@ -191,6 +199,9 @@ impl Project {
             reports: Vec::new(),
             presentations: Vec::new(),
             notebooks: Vec::new(),
+            dl_models: Vec::new(),
+            shared: Vec::new(),
+            data_stores: Vec::new(),
         }
     }
 

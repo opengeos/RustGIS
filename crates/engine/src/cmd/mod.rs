@@ -1,6 +1,7 @@
 //! Every command, grouped by ribbon tab.
 
 pub mod clipboard;
+pub mod deeplearning;
 pub mod design;
 pub mod edit;
 pub mod effects;
@@ -20,6 +21,7 @@ pub mod raster;
 pub mod report;
 pub mod select;
 pub mod share;
+pub mod sharing;
 pub mod tiles;
 pub mod view;
 pub mod workflows;
@@ -50,11 +52,13 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(workflows::commands());
     v.extend(effects::commands());
     v.extend(imagery::commands());
+    v.extend(deeplearning::commands());
     v.extend(view::commands());
     v.extend(workspace::commands());
     v.extend(gp::commands());
     v.extend(share::commands());
     v.extend(plugins::commands());
+    v.extend(sharing::commands());
     v
 }
 

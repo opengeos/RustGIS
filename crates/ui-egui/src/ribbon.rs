@@ -1888,6 +1888,115 @@ fn share_tab(app: &mut RustGisApp, ui: &mut Ui) {
             );
         });
     });
+    group(ui, "Share As", |ui| {
+        big(
+            ui,
+            app,
+            "web_map",
+            "Web\nMap",
+            "Share the map as a web page that needs no server.",
+            "ui.share",
+            json!({"kind": "webMap"}),
+            false,
+            false,
+        );
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "export_layer",
+                "Web Layer",
+                "Share the selected layer as an OGC API Features collection with its style.",
+                "ui.share",
+                json!({"kind": "webLayer"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "symbology",
+                "Web Style",
+                "Share the selected layer's symbology as a MapLibre style.",
+                "ui.share",
+                json!({"kind": "webStyle"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "search",
+                "Locator",
+                "Share the selected layer's names as a place-search locator.",
+                "ui.share",
+                json!({"kind": "locator"}),
+                false,
+            );
+        });
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "package",
+                "Geodata Service",
+                "Share every layer and table as OGC API Features collections.",
+                "ui.share",
+                json!({"kind": "geodataService"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "modelbuilder",
+                "Web Tool",
+                "Share the last model as a tool file.",
+                "ui.share",
+                json!({"kind": "webTool"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "globe_view",
+                "Web Scene",
+                "Share the map in 3D (glTF), polygons extruded.",
+                "ui.share",
+                json!({"kind": "webScene"}),
+                false,
+            );
+        });
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "graphics_layer",
+                "Web Link Chart",
+                "Share the map's relationships as a link chart page.",
+                "ui.share",
+                json!({"kind": "linkChart"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "history",
+                "Jobs",
+                "Shares made, with Manage tools to update them.",
+                "ui.pane.shares",
+                Value::Null,
+                app.ui.right == Some(RightPane::Shares),
+            );
+            small(
+                ui,
+                app,
+                "modelbuilder",
+                "Deep Learning",
+                "Package a trained deep learning model.",
+                "ui.saveItem",
+                json!({"kind": "dlPackage"}),
+                false,
+            );
+        });
+    });
     group(ui, "Layout", |ui| {
         big(ui, app, "export", "Export\nLayout", "Export the open layout as PDF or PNG.", "ui.exportLayout", Value::Null, false, false);
         big(
@@ -2622,6 +2731,30 @@ fn imagery_tab(app: &mut RustGisApp, ui: &mut Ui) {
             "Classes from training polygons.",
             "ui.pane.workflows",
             wf("supervised"),
+            false,
+            false,
+        );
+        big(
+            ui,
+            app,
+            "modelbuilder",
+            "Deep Learning\nTools",
+            "Train a neural network on training polygons and classify every pixel.",
+            "ui.pane.workflows",
+            wf("deepLearning"),
+            false,
+            false,
+        );
+    });
+    group(ui, "Share", |ui| {
+        big(
+            ui,
+            app,
+            "raster_layer",
+            "Create Hosted\nImagery",
+            "Cut a raster into web map tiles (XYZ PNG) with a viewer page.",
+            "ui.pane.workflows",
+            wf("hosted"),
             false,
             false,
         );
