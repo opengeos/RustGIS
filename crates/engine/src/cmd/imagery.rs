@@ -720,10 +720,17 @@ fn mosaic(s: &mut Session, p: &Value) -> CmdResult {
             }
         }
     }
-    // Colour only when every image is colour; means aren't whole numbers, so they stay Float32.
+    // Colour only when every image is colour. A mosaic of 8-bit images stays 8-bit (means
+    // rounded), so it displays as they do; anything else is Float32.
     let all_rgb = imgs.iter().all(|r| matches!(r.color, ColorHint::Rgb { .. }));
     let color = if matches!(nb, 3 | 4) && all_rgb { ColorHint::Rgb { alpha: nb == 4 } } else { ColorHint::Gray };
-    let dt = if matches!(color, ColorHint::Rgb { .. }) && w.method != "mean" { "UInt8" } else { "Float32" };
+    let all_u8 = imgs.iter().all(|r| r.data_type == "UInt8");
+    let dt = if matches!(color, ColorHint::Rgb { .. }) && all_u8 { "UInt8" } else { "Float32" };
+    if dt == "UInt8" {
+        for v in bands.iter_mut().flatten().filter(|v| **v != NODATA) {
+            *v = v.round().clamp(0.0, 255.0);
+        }
+    }
     let gt = GeoTransform { origin_x: e.min_x, origin_y: e.max_y, pixel_width: cell, pixel_height: -cell };
     let suffix = if w.kind == "reality" { "DSM" } else { "Orthomosaic" };
     let out = Raster::new(format!("{} {suffix}", w.name), cols as u32, rows as u32, bands, gt, Crs::LonLat, Some(NODATA as f64), color, dt)

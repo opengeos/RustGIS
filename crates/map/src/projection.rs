@@ -37,8 +37,9 @@ pub fn lookup(code: &str) -> Result<(String, String), String> {
     let code = code.trim();
     // `local:lon,lat`: an azimuthal equidistant projection centred on a point (a local scene).
     if let Some(rest) = code.strip_prefix("local:") {
-        let n: Vec<f64> = rest.split(',').filter_map(|x| x.trim().parse().ok()).filter(|x: &f64| x.is_finite()).collect();
-        let [lon, lat] = n.as_slice() else { return Err("a local view is local:lon,lat".into()) };
+        // Exactly two finite numbers; anything else is refused rather than half-read.
+        let n: Option<Vec<f64>> = rest.split(',').map(|x| x.trim().parse::<f64>().ok().filter(|v| v.is_finite())).collect();
+        let Some(&[lon, lat]) = n.as_deref() else { return Err("a local view is local:lon,lat".into()) };
         let (lon, lat) = ((lon + 180.0).rem_euclid(360.0) - 180.0, lat.clamp(-89.0, 89.0));
         return Ok((
             format!("+proj=aeqd +lat_0={lat} +lon_0={lon} +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"),
@@ -336,6 +337,14 @@ impl Flat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_codes_are_read_strictly() {
+        assert!(lookup("local:12.5,41.9").is_ok());
+        for bad in ["local:a,10,20", "local:10", "local:10,20,30", "local:10,inf", "local:"] {
+            assert!(lookup(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn presets_and_epsg_codes() {

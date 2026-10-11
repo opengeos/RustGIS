@@ -133,8 +133,16 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     ui.end_row();
                 });
                 close = buttons(app, ui, "Apply", |app| {
-                    let n = |s: &str| s.trim().parse::<f64>().ok();
-                    app.run("map.camera", json!({"lon": n(&app.dialogs.a), "lat": n(&app.dialogs.b), "scale": n(&app.dialogs.c)})).map(|_| ())
+                    // Empty keeps the current value; anything else must be a number.
+                    let n = |s: &str, what: &str| -> Result<Option<f64>, String> {
+                        let s = s.trim();
+                        if s.is_empty() {
+                            return Ok(None);
+                        }
+                        s.parse::<f64>().ok().filter(|v| v.is_finite()).map(Some).ok_or_else(|| crate::i18n::fmt("{what} must be a number", &[("what", tl!(what))]))
+                    };
+                    let (lon, lat, scale) = (n(&app.dialogs.a, "Longitude")?, n(&app.dialogs.b, "Latitude")?, n(&app.dialogs.c, "Scale")?);
+                    app.run("map.camera", json!({"lon": lon, "lat": lat, "scale": scale})).map(|_| ())
                 });
             }
             "graphicText" => {
