@@ -164,6 +164,21 @@ fn scroll_buttons<R>(ui: &mut Ui, t: &Tokens, scroll: &egui::scroll_area::Scroll
     }
 }
 
+/// The collapse button at the right of the tab strip.
+const COLLAPSE_W: f32 = 24.0;
+
+/// The active tool indicator at the right of the tab strip, unless the Explore tool is on: its
+/// label and width.
+fn tool_indicator(app: &RustGisApp, ui: &Ui) -> Option<(String, f32)> {
+    let tool = app.session.tool;
+    if tool == Tool::Explore {
+        return None;
+    }
+    let label = crate::i18n::fmt("{tool} tool active · Esc to stop", &[("tool", tl!(tool.label()))]);
+    let w = text_w(ui, &label, regular(11.5)) + 18.0;
+    Some((label, w))
+}
+
 fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
@@ -187,23 +202,21 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         // The tabs scroll between the Project button and the right-side controls (the collapse
         // button and the active tool indicator) when the window is too narrow for them.
-        let tool = app.session.tool;
-        let tool_w = if tool == Tool::Explore {
-            0.0
-        } else {
-            let label = crate::i18n::fmt("{tool} tool active · Esc to stop", &[("tool", tl!(tool.label()))]);
-            text_w(ui, &label, regular(11.5)) + 20.0
-        };
-        let room = (ui.available_width() - 32.0 - tool_w).max(60.0);
+        let tool = tool_indicator(app, ui);
+        let tool_w = tool.as_ref().map_or(0.0, |(_, w)| w + ui.spacing().item_spacing.x);
+        let room = (ui.available_width() - COLLAPSE_W - 8.0 - tool_w).max(60.0);
         // Tighter tabs when the window is too narrow for the usual padding.
         let text: f32 = tabs.iter().map(|(_, c)| text_w(ui, c, semibold(12.5))).sum();
         let pad = ((room - text) / tabs.len().max(1) as f32).clamp(8.0, 22.0);
-        // The active tab and how many frames it has asked to be scrolled into view: a few, as a
-        // pass that egui discards drops its scroll request.
+        // The active tab scrolls into view for a few frames (a pass that egui discards drops its
+        // scroll request) after it changes, or the strip's room or tab widths do.
         let active_id = egui::Id::new("tab_strip_active");
-        let (shown_active, scrolls): (String, u8) = ui.data(|d| d.get_temp(active_id)).unwrap_or_default();
-        let scrolls = if shown_active == app.ui.tab { scrolls } else { 0 };
-        ui.data_mut(|d| d.insert_temp(active_id, (app.ui.tab.clone(), scrolls.saturating_add(1))));
+        let key = (app.ui.tab.clone(), room.round() as i32, text.round() as i32);
+        let (shown, scrolls): ((String, i32, i32), u8) = ui.data(|d| d.get_temp(active_id)).unwrap_or_default();
+        let scrolls = if shown == key { scrolls } else { 0 };
+        if scrolls < 3 {
+            ui.data_mut(|d| d.insert_temp(active_id, (key, scrolls + 1)));
+        }
         let scroll = egui::ScrollArea::horizontal()
             .id_salt("tab_strip")
             .max_width(room)
@@ -289,7 +302,7 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         app.ui.tab_strip_rect = Some(ui.max_rect());
         // Right side: collapse/expand the ribbon, then the quick tool indicator.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (cr, cresp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+            let (cr, cresp) = ui.allocate_exact_size(vec2(COLLAPSE_W, COLLAPSE_W), Sense::click());
             if cresp.hovered() {
                 ui.painter().rect_filled(cr, CornerRadius::same(5), t.hover);
             }
@@ -299,10 +312,7 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             if cresp.on_hover_text(tip).clicked() {
                 let _ = app.run("ui.ribbon", Value::Null);
             }
-            let tool = app.session.tool;
-            if tool != Tool::Explore {
-                let label = crate::i18n::fmt("{tool} tool active · Esc to stop", &[("tool", tl!(tool.label()))]);
-                let w = text_w(ui, &label, regular(11.5)) + 18.0;
+            if let Some((label, w)) = tool {
                 let (r, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
                 ui.painter().rect_filled(r, CornerRadius::same(11), t.checked);
                 ui.painter().text(r.center(), Align2::CENTER_CENTER, label, regular(11.5), t.accent_text);
