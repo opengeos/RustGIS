@@ -517,7 +517,9 @@ impl RustGisApp {
                 } else if print {
                     // Printing goes through the system's PDF viewer, which owns the printers.
                     let bytes = self.layout_bytes(li, true, 300.0)?;
-                    let path = std::env::temp_dir().join(format!("{}.pdf", name.replace(['/', '\\'], "_")));
+                    let safe: String =
+                        name.chars().map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_') { c } else { '_' }).collect();
+                    let path = std::env::temp_dir().join(format!("{safe}.pdf"));
                     rustgis_engine::data::io::write_atomic(&path, &bytes).map_err(|e| e.to_string())?;
                     open_with_system(&path)?;
                     self.session.notify(i18n::fmt("Opened {name} for printing", &[("name", &path.display().to_string())]), false);
@@ -549,6 +551,7 @@ impl RustGisApp {
                 let li = self.session.active_layout.ok_or("open a layout first")?;
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = true;
+                    self.ui.pending_picture = None;
                     open("picture");
                 } else if let Some(path) = dialogs::pick_open(&["png", "jpg", "jpeg"], tl!("Pictures")) {
                     let v = self.run("layout.addElement", json!({"layout": li, "kind": "picture", "path": path}))?;
@@ -645,6 +648,7 @@ impl RustGisApp {
                     return Err("drag the picture's rectangle on the map first".into());
                 }
                 if let Some(open) = &self.services.open_async {
+                    self.ui.pending_layout_picture = false;
                     open("picture");
                 } else if let Some(path) = dialogs::pick_open(&["png", "jpg", "jpeg"], tl!("Pictures")) {
                     return self.add_picture(json!({"path": path}));

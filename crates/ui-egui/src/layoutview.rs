@@ -37,6 +37,17 @@ pub struct LayoutView {
     sketch: Vec<(f64, f64)>,
 }
 
+impl LayoutView {
+    /// Stops drawing a polygon or lasso frame (Esc).
+    pub fn cancel_tool(&mut self) {
+        self.tool = None;
+        self.sketch.clear();
+        if self.drag == Some(Drag::Lasso) {
+            self.drag = None;
+        }
+    }
+}
+
 /// Page geometry on screen: the page rectangle and points per millimetre.
 fn page_rect(lv: &LayoutView, area: Rect, l: &Layout) -> (Rect, f32) {
     let fit = ((area.width() - 48.0) / l.width as f32).min((area.height() - 48.0) / l.height as f32).max(0.05);
@@ -108,7 +119,9 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     // Render the page at screen resolution when it changes.
     let ppp = ui.ctx().pixels_per_point();
     let px_per_mm = s * ppp;
-    let dpi = (px_per_mm as f64 * 25.4).clamp(20.0, 300.0);
+    // The texture can't be larger than the GPU allows: zoomed far in, the page draws coarser.
+    let max_side = ui.ctx().input(|i| i.max_texture_side) as f64;
+    let dpi = (px_per_mm as f64 * 25.4).min(max_side / layout.width.max(layout.height) * 25.4).clamp(20.0, 300.0);
     let size = [(page.width() * ppp) as usize, (page.height() * ppp) as usize];
     let key = (app.session.revision, li, size, (dpi * 10.0) as i64, layout.width as i64, layout.height as i64);
     if app.layout.key != Some(key) && size[0] > 2 && size[1] > 2 {
@@ -226,10 +239,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
             app.layout.zoom = new;
         }
     }
-    if !typing && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        app.layout.tool = None;
-        app.layout.sketch.clear();
-    }
+    let _ = typing;
     let pointer_mm = resp.interact_pointer_pos().map(|p| to_mm(page, s, p));
     // Drawing a polygon or lasso frame.
     if let Some(tool) = app.layout.tool {

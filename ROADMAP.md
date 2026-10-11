@@ -1,8 +1,8 @@
 # Roadmap
 
 Ribbon feature coverage: **133 of 316 features (42%)** have a command
-today ([docs/parity.md](docs/parity.md)). Counting depth (no layouts, 3D, raster or enterprise
-sharing yet), real parity is lower.
+today ([docs/parity.md](docs/parity.md)). Counting depth (no full 3D scenes or enterprise sharing
+yet), real parity is lower.
 
 ## Done (M0–M1)
 - Layered workspace, command registry with undo, project files (`.rgisx`), CLI.
@@ -17,9 +17,11 @@ sharing yet), real parity is lower.
   Simplify, Select By Location/Attribute, Summarize Within, Calculate Geometry, Summary
   Statistics, Export Features; history.
 - Measure distance and area (geodesic); identify pop-ups; PNG export with scale bar.
+- Layouts: page layout view, map frames (with grids and extent indicators), legend, north arrow,
+  scale bar, text and dynamic text, pictures, table and chart frames, map series, PDF and PNG
+  export (a built-in PDF writer), layout files.
 
 ## Next
-- M2 Layouts: page layout view, map frames, legend, north arrow, scale bar, PDF export (krilla).
 - M3 Data: GeoPackage and FlatGeobuf, coordinate systems (PROJ-free transforms for common
   CRSs), raster layers (GeoTIFF), XYZ tile basemaps behind an opt-in network setting.
 - M4 Editing: vertex editing, move/rotate, snapping, attribute rules.

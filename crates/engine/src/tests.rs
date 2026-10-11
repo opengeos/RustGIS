@@ -661,6 +661,8 @@ fn layouts_compose_export_and_round_trip() {
     s.run("layout.update", &json!({"element": frame, "x": 12, "w": 180, "center": [10, 50]})).unwrap();
     assert!(s.run("layout.update", &json!({"element": 9999, "x": 1})).is_err());
     s.run("layout.update", &json!({"element": frame, "name": "Main map"})).unwrap();
+    assert!(s.run("layout.update", &json!({"element": frame, "x": 99, "center": "Paris"})).is_err());
+    assert!((s.project.layouts[0].element(frame).unwrap().x - 12.0).abs() < 1e-9, "a bad update changes nothing");
     let chart = s.project.layouts[0].elements.iter().find(|e| matches!(e.kind, rustgis_map::layout::ElementKind::Chart { .. })).unwrap().id;
     assert!(s.run("layout.update", &json!({"element": chart, "field": "no_such_field"})).is_err());
     assert!(s.run("layout.update", &json!({"element": chart, "layer": "Atlantis"})).is_err());

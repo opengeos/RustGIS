@@ -59,10 +59,12 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
                     continue;
                 };
                 let Some(map) = maps.get_mut(mi) else { continue };
-                let view = View { width: fw, height: fh, pixels_per_point: ppp, camera: cam, dark: false };
+                // A frame larger than the page budget is drawn at a lower resolution and scaled up.
+                let fppp = ppp.min((MAX_PIXELS / (fw * fh).max(1.0)).sqrt()).max(0.01);
+                let view = View { width: fw, height: fh, pixels_per_point: fppp, camera: cam, dark: false };
                 let Some(mut img) = crate::render_with(map, &view, true) else { continue };
                 for l in img.unplaced.iter().chain(&img.labels) {
-                    text::draw(&mut img.pixmap, l, ppp as f32);
+                    text::draw(&mut img.pixmap, l, fppp as f32);
                 }
                 let mut frame_pm = img.pixmap;
                 if let Some(g) = grid {
@@ -76,16 +78,29 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
                         outline_lonlat(&mut frame_pm, map, &view, &ring, Rgba::rgb(0xD0, 0x1C, 0x1C), 2.0);
                     }
                 }
+                // Whole pixels, so the clipped image and its outline line up.
+                let (x0, y0) = (x.round(), y.round());
+                let r = Rect::from_xywh(x0, y0, ew.max(1.0), eh.max(1.0)).unwrap_or(r);
                 let path = shape_path(shape, r);
+                let up = (ppp / fppp) as f32;
                 // Shaped frames are clipped by a mask of the frame's own size.
                 if !matches!(shape, FrameShape::Rectangle)
-                    && let Some(p) = path.as_ref().and_then(|p| p.clone().transform(Transform::from_translate(-x, -y)))
+                    && let Some(p) =
+                        path.as_ref().and_then(|p| p.clone().transform(Transform::from_translate(-x0, -y0).post_scale(1.0 / up, 1.0 / up)))
                     && let Some(mut m) = Mask::new(frame_pm.width(), frame_pm.height())
                 {
                     m.fill_path(&p, FillRule::Winding, true, Transform::identity());
                     frame_pm.apply_mask(&m);
                 }
-                pm.draw_pixmap(x as i32, y as i32, frame_pm.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+                let place = Transform::from_row(up, 0.0, 0.0, up, x0, y0);
+                pm.draw_pixmap(
+                    0,
+                    0,
+                    frame_pm.as_ref(),
+                    &PixmapPaint { quality: tiny_skia::FilterQuality::Bilinear, ..PixmapPaint::default() },
+                    place,
+                    None,
+                );
                 if let Some(p) = &path {
                     pm.stroke_path(
                         p,

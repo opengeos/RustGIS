@@ -295,17 +295,19 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
     for (id, p) in run {
         if id == "tool.set" {
             app.map.cancel_sketch();
+            app.layout.cancel_tool();
             if app.ui.command_search.is_some() {
                 app.ui.command_search = None;
                 continue;
             }
         }
-        // In a layout, Delete removes the selected element.
+        // In a layout, Delete removes the selected element (and never the map's hidden features).
         if id == "edit.delete"
-            && let (Some(li), Some(el)) = (app.session.active_layout, app.layout.selected)
+            && let Some(li) = app.session.active_layout
         {
-            let _ = app.run("layout.removeElement", json!({"layout": li, "element": el}));
-            app.layout.selected = None;
+            if let Some(el) = app.layout.selected.take() {
+                let _ = app.run("layout.removeElement", json!({"layout": li, "element": el}));
+            }
             continue;
         }
         if matches!(id, "edit.delete" | "ui.copy" | "ui.cut") && app.session.map().selection_count() == 0 {

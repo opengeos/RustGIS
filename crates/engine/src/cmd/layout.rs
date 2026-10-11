@@ -431,6 +431,17 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
 
 fn update(s: &mut Session, p: &Value) -> CmdResult {
     let id = element_id(p)?;
+    // Checked before anything changes, so a bad value leaves the element as it was.
+    let new_center = match p.get("center") {
+        Some(c) => {
+            let a = c.as_array().ok_or("center is [lon, lat]")?;
+            match (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64)) {
+                (Some(x), Some(y)) if x.is_finite() && y.is_finite() => Some(Coord::new(x.clamp(-540.0, 540.0), y.clamp(-85.0, 85.0))),
+                _ => return Err("center is [lon, lat]".into()),
+            }
+        }
+        None => None,
+    };
     // A new layer (tables and charts) or field (charts) must exist in the frame's map.
     let li = index(s, p)?;
     let checked = {
@@ -527,14 +538,8 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
             if let Some(v) = num("scale", 100.0, 1e10) {
                 *scale = v;
             }
-            if let Some(c) = p.get("center").and_then(Value::as_array) {
-                let (x, y) = (c.first().and_then(Value::as_f64), c.get(1).and_then(Value::as_f64));
-                match (x, y) {
-                    (Some(x), Some(y)) if x.is_finite() && y.is_finite() => {
-                        *center = Coord::new(x.clamp(-540.0, 540.0), y.clamp(-85.0, 85.0))
-                    }
-                    _ => return Err("center is [lon, lat]".into()),
-                }
+            if let Some(c) = new_center {
+                *center = c;
             }
         }
         ElementKind::Table { rows, layer, .. } => {
@@ -696,15 +701,11 @@ fn series_page(s: &mut Session, p: &Value) -> CmdResult {
         .find(|m| m.name.eq_ignore_ascii_case(&map))
         .and_then(|m| m.layer_by_name(&sr.layer))
         .ok_or("the index layer is gone")?;
-    let e = layer
-        .dataset
-        .features
-        .get(page)
-        .and_then(|f| f.geometry.as_ref())
-        .map(|g| g.extent())
-        .ok_or("the page's feature has no geometry")?;
-    let e = e.padded(sr.margin, 0.01);
-    set_frame(s, li, sr.frame, &e)?;
+    // A feature without geometry (common in CSV and GeoJSON) leaves the frame where it was.
+    let e = layer.dataset.features.get(page).and_then(|f| f.geometry.as_ref()).map(|g| g.extent()).filter(|e| !e.is_empty());
+    if let Some(e) = e {
+        set_frame(s, li, sr.frame, &e.padded(sr.margin, 0.01))?;
+    }
     if let Some(sr) = s.project.layouts.get_mut(li).and_then(|l| l.series.as_mut()) {
         sr.page = page;
     }
