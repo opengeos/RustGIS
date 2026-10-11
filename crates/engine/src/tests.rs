@@ -154,7 +154,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 241, "coverage fell to {done}");
+    assert!(done >= 272, "coverage fell to {done}");
 }
 
 #[test]
@@ -1397,6 +1397,113 @@ fn view_effects_scene_and_navigation() {
     let cam = s.run("map.camera", &json!({"lon": 2.35, "lat": 48.85, "scale": 1_000_000})).unwrap();
     assert!((cam["lon"].as_f64().unwrap() - 2.35).abs() < 1e-6);
     assert!(s.run("map.navigator", &Value::Null).unwrap()["navigator"].as_bool().unwrap());
+}
+
+#[test]
+fn workspace_links_thumbnails_animation_profiles_offline_and_cache() {
+    let dir = std::env::temp_dir().join(format!("rustgis-ws-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = world();
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
+    // Linked views.
+    s.run("map.new", &json!({"name": "Second"})).unwrap();
+    s.run("map.activate", &json!({"name": "World"})).unwrap();
+    s.run("view.linkViews", &json!({"on": true})).unwrap();
+    s.run("map.goToXY", &json!({"lon": 12.5, "lat": 41.9, "scale": 2_000_000})).unwrap();
+    let second = s.project.maps.iter().find(|m| m.name == "Second").unwrap();
+    let c = second.center_lonlat();
+    assert!((c.x - 12.5).abs() < 1e-6 && (second.scale() / 2_000_000.0 - 1.0).abs() < 0.01, "{c:?}");
+    // Thumbnails.
+    s.run("project.thumbnail", &json!({"create": true})).unwrap();
+    assert!(s.project.thumbnail.as_ref().is_some_and(|t| t.len() > 100));
+    s.run("map.thumbnail", &json!({"image": s.project.thumbnail.clone().unwrap()})).unwrap();
+    assert!(s.run("map.thumbnail", &json!({"image": "bm90"})).is_err());
+    s.run("project.thumbnail", &json!({"clear": true})).unwrap();
+    assert!(s.project.thumbnail.is_none());
+    // Jobs.
+    let j = s.run("job.new", &json!({"name": "Check roads", "viewExtent": true})).unwrap()["job"].as_u64().unwrap();
+    s.run("job.update", &json!({"job": j, "status": "in progress", "assigned": "field team"})).unwrap();
+    assert!(s.run("job.update", &json!({"job": j, "status": "abandoned"})).is_err());
+    assert_eq!(s.project.jobs[0].status, "in progress");
+    // Animation: two keyframes, exported as frames.
+    s.run("animation.add", &Value::Null).unwrap();
+    s.run("map.goToXY", &json!({"lon": 2.35, "lat": 48.85, "scale": 4_000_000})).unwrap();
+    s.run("animation.add", &json!({"seconds": 1})).unwrap();
+    let path = dir.join("anim.zip");
+    s.run("animation.export", &json!({"path": path.display().to_string(), "fps": 5, "width": 160, "height": 100})).unwrap();
+    let frames = rustgis_data::zip::read(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(frames.len(), 6, "five frames for the second, then the last view");
+    assert!(frames.iter().all(|(n, b)| n.ends_with(".png") && b.starts_with(b"\x89PNG")));
+    s.run("animation.remove", &json!({"all": true})).unwrap();
+    // Profiles over the hill.
+    let p = s.run("profile.create", &json!({"layer": dem, "points": [[10.0015, 45.0195], [10.0385, 45.0195]]})).unwrap();
+    assert!(p["max"].as_f64().unwrap() > 380.0 && p["gain"].as_f64().unwrap() > 150.0, "{}", p["max"]);
+    let auto = s.run("profile.autoComplete", &json!({"layer": dem, "points": [[10.0015, 45.0195], [10.005, 45.0195]]})).unwrap();
+    assert!(auto["length"].as_f64().unwrap() > 2500.0, "continues to the edge");
+    let cross =
+        s.run("profile.crossSection", &json!({"layer": dem, "points": [[10.0015, 45.0195], [10.0385, 45.0195]], "width": 2000})).unwrap();
+    assert!((cross["length"].as_f64().unwrap() - 2000.0).abs() < 50.0);
+    s.run("layer.template", &json!({"template": "lines", "name": "Trails"})).unwrap();
+    s.run(
+        "edit.addFeature",
+        &json!({"layer": "Trails", "geometry": {"type": "LineString", "coordinates": [[10.002, 45.002], [10.038, 45.038]]}}),
+    )
+    .unwrap();
+    let along = s.run("profile.alongLine", &json!({"layer": dem, "lines": "Trails"})).unwrap();
+    assert!(along["samples"].as_array().unwrap().len() > 10);
+    assert_eq!(s.run("profile.alongSelected", &json!({"layer": dem, "lines": "Trails"})).unwrap().as_array().unwrap().len(), 1);
+    // Infographics and diagnostics.
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 48.0, "scale": 20_000_000})).unwrap();
+    let info = s.run("info.infographic", &Value::Null).unwrap();
+    assert!(info["layers"].as_array().unwrap().iter().any(|c| c["layer"] == "Cities" && c["count"].as_u64().unwrap() > 10));
+    let d = s.run("info.diagnostics", &Value::Null).unwrap();
+    assert!(d["features"].as_u64().unwrap() > 100 && d["rasterPixels"].as_u64().unwrap() == 1600);
+    // Offline: download, edit offline, sync back.
+    let r = s.run("offline.download", &json!({"name": "Paris", "extent": [1.0, 48.0, 4.0, 50.0]})).unwrap();
+    assert!(r["features"].as_u64().unwrap() >= 2);
+    s.run("offline.open", &json!({"name": "Paris"})).unwrap();
+    assert_eq!(s.map().name, "Paris (offline)");
+    s.run("select.byAttributes", &json!({"layer": "Cities", "where": "name = 'Paris'"})).unwrap();
+    let row = s.map().layer_by_name("Cities").unwrap().selection[0];
+    s.run("edit.setValue", &json!({"layer": "Cities", "row": row, "field": "pop_max", "value": 1})).unwrap();
+    s.run(
+        "edit.addFeature",
+        &json!({"layer": "Cities", "geometry": {"type": "Point", "coordinates": [2.0, 49.0]}, "attributes": {"name": "Field camp"}}),
+    )
+    .unwrap();
+    // Meanwhile France is edited in the source map; the area's untouched copy mustn't undo that.
+    let set_france = |s: &mut Session, v: i64| {
+        let world = s.project.maps.iter_mut().find(|m| m.name == "World").unwrap();
+        let countries = world.layers.iter_mut().find(|l| l.name == "Countries").unwrap();
+        let (ni, pi) = (countries.dataset.field_index("name").unwrap(), countries.dataset.field_index("pop_est").unwrap());
+        let f = countries.dataset.features.iter_mut().find(|f| f.attrs[ni].to_string() == "France").unwrap();
+        if v >= 0 {
+            f.attrs[pi] = rustgis_data::Value::Int(v);
+        }
+        f.attrs[pi].clone()
+    };
+    set_france(&mut s, 12_345);
+    let sync = s.run("offline.sync", &json!({"name": "Paris"})).unwrap();
+    assert_eq!((sync["updated"].as_u64(), sync["added"].as_u64()), (Some(1), Some(1)), "{sync}");
+    assert_eq!(set_france(&mut s, -1), rustgis_data::Value::Int(12_345), "the source edit survives the sync");
+    let world_map = s.project.maps.iter().find(|m| m.name == "World").unwrap();
+    let cities = world_map.layer_by_name("Cities").unwrap();
+    assert!(cities.dataset.features.iter().any(|f| f.attrs.iter().any(|v| v.to_string() == "Field camp")));
+    s.run("offline.remove", &json!({"name": "Paris"})).unwrap();
+    assert!(s.project.maps.iter().all(|m| m.name != "Paris (offline)"));
+    // Feature cache.
+    s.run("map.activate", &json!({"name": "World"})).unwrap();
+    s.run("cache.empty", &Value::Null).unwrap();
+    assert_eq!(s.run("info.diagnostics", &Value::Null).unwrap()["cachedLayers"], 0);
+    s.run("cache.fill", &Value::Null).unwrap();
+    assert!(s.run("info.diagnostics", &Value::Null).unwrap()["cachedLayers"].as_u64().unwrap() >= 4);
+    s.run("cache.auto", &json!({"on": true})).unwrap();
+    s.run("map.projection", &json!({"type": "mollweide"})).unwrap();
+    assert!(s.map().layers.iter().filter(|l| !l.is_raster()).all(|l| l.is_cached("mollweide")));
+    s.run("cache.cancel", &Value::Null).unwrap();
+    assert!(!s.auto_cache);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -212,6 +212,8 @@ pub struct Session {
     /// Edits per layer id since the project was last saved (Edit › Status). A failed command's
     /// are rolled back; undo doesn't subtract them, since they count edits made, not the net change.
     pub edit_counts: std::collections::HashMap<u32, cmd::design::EditCounts>,
+    /// The feature cache fills itself after projection changes (Map › Feature Cache).
+    pub auto_cache: bool,
     /// Mensuration results (Imagery › Mensuration › Results).
     pub measurements: Vec<serde_json::Value>,
     /// The last topology check's errors (Edit › Error Inspector).
@@ -281,6 +283,7 @@ impl Session {
             edit_counts: std::collections::HashMap::new(),
             topology_errors: Vec::new(),
             measurements: Vec::new(),
+            auto_cache: false,
             undo: Vec::new(),
             redo: Vec::new(),
             back: Vec::new(),
@@ -439,8 +442,25 @@ impl Session {
         self.undo.len()
     }
 
+    /// Moves every other map to the active map's centre and scale (View › Link Views).
+    pub fn sync_linked_views(&mut self) {
+        let (c, scale, active) = (self.map().center_lonlat(), self.scale(), self.project.active_map);
+        for (i, m) in self.project.maps.iter_mut().enumerate() {
+            if i == active || m.projection.is_globe() {
+                continue;
+            }
+            if let Some(mc) = m.to_map(c) {
+                m.camera.center = mc;
+                m.set_scale(scale);
+            }
+        }
+    }
+
     /// Records the camera in the previous/next extent history when it settles somewhere new.
     pub fn record_extent(&mut self) {
+        if self.project.link_views {
+            self.sync_linked_views();
+        }
         self.check_history_projection();
         let cam = self.map().camera;
         if let Some(last) = self.last_camera {

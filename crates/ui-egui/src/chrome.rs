@@ -56,6 +56,10 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                     Value::Null,
                     false,
                 );
+                for id in app.ui.quick_access.clone() {
+                    let label = crate::ribbon::QUICK.iter().find(|q| q.0 == id).map_or(id.as_str(), |q| q.1).to_string();
+                    small(ui, app, crate::ribbon::quick_icon(&id), "", &label, &id, Value::Null, false);
+                }
                 // Everything right of the Quick Access Toolbar is laid out by measuring, so on a
                 // narrow window the search box shrinks to an icon and the title shortens or hides
                 // instead of overlapping other controls.

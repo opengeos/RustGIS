@@ -113,7 +113,7 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.ui.backstage = true;
         }
         ui.add_space(6.0);
-        let mut tabs: Vec<(&str, &str)> = TABS.iter().map(|t| (*t, *t)).collect();
+        let mut tabs: Vec<(&str, &str)> = TABS.iter().filter(|t| !app.ui.hidden_tabs.iter().any(|h| h == *t)).map(|t| (*t, *t)).collect();
         if let Some((_, ctx)) = context(app) {
             tabs.extend(ctx.iter().copied());
         }
@@ -363,6 +363,70 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 "tool.set",
                 json!({"tool": "zoomIn"}),
                 app.session.tool == Tool::ZoomIn,
+            );
+            small(
+                ui,
+                app,
+                "chart",
+                "Infographics",
+                "Counts, totals and top categories of what's in view.",
+                "ui.pane.infographics",
+                Value::Null,
+                app.ui.right == Some(RightPane::Infographics),
+            );
+        });
+    });
+    group(ui, "Offline", |ui| {
+        let areas: Vec<String> = app.session.project.offline_areas.iter().map(|a| a.name.clone()).collect();
+        big(
+            ui,
+            app,
+            "export",
+            "Download\nMap",
+            "Take the data in view offline, to edit and sync back later.",
+            "offline.download",
+            Value::Null,
+            false,
+            false,
+        );
+        col(ui, |ui| {
+            for (icon, label, cmd, desc) in [
+                ("redo", "Sync", "offline.sync", "Send offline edits back and refresh."),
+                ("map", "Open", "offline.open", "Open an offline area to edit."),
+                ("delete", "Remove", "offline.remove", "Remove an offline area."),
+            ] {
+                let a = areas.clone();
+                small_menu(ui, app, icon, label, desc, move |ui, app| {
+                    if a.is_empty() {
+                        ui.label(egui::RichText::new(tl!("No offline areas")).weak());
+                    }
+                    for n in &a {
+                        if ui.button(n.as_str()).clicked() {
+                            let _ = app.run(cmd, json!({"name": n}));
+                            app.map.invalidate();
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        });
+    });
+    group(ui, "Feature Cache", |ui| {
+        col(ui, |ui| {
+            small(ui, app, "add_data", "Fill", "Prepare every layer's geometry for this projection.", "cache.fill", Value::Null, false);
+            small(ui, app, "clear_sel", "Empty", "Free the prepared geometry.", "cache.empty", Value::Null, false);
+        });
+        col(ui, |ui| {
+            small(ui, app, "close", "Cancel", "Stop filling the cache.", "cache.cancel", Value::Null, false);
+            small(
+                ui,
+                app,
+                "redo",
+                "Auto Cache",
+                "Fill the cache whenever the projection changes.",
+                "cache.auto",
+                Value::Null,
+                app.session.auto_cache,
             );
         });
     });
@@ -621,6 +685,32 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
         );
     });
+}
+
+/// Commands the Quick Access Toolbar can show: (id, label). Their icons are in [`quick_icon`].
+pub const QUICK: &[(&str, &str)] = &[
+    ("ui.saveAs", "Save As"),
+    ("ui.exportMap", "Export Map"),
+    ("ui.printMap", "Print Map"),
+    ("table.open", "Attribute Table"),
+    ("map.zoomFull", "Full Extent"),
+    ("select.clear", "Clear Selection"),
+    ("ui.pane.geoprocessing", "Geoprocessing"),
+    ("ui.commandSearch", "Command Search"),
+];
+
+/// The icon of a Quick Access command.
+pub fn quick_icon(id: &str) -> &'static str {
+    match id {
+        "ui.saveAs" => "save_as",
+        "ui.exportMap" => "export_map",
+        "ui.printMap" => "print",
+        "table.open" => "table",
+        "map.zoomFull" => "zoom_full",
+        "select.clear" => "clear_sel",
+        "ui.pane.geoprocessing" => "toolbox",
+        _ => "search",
+    }
 }
 
 /// Analysis gallery entries: (tool id, icon, caption).
@@ -1134,6 +1224,137 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 app.map.magnifier,
             );
         });
+    });
+    group(ui, "Link", |ui| {
+        col(ui, |ui| {
+            let split = app.ws.split.is_some();
+            small(ui, app, "pane_right", "Side by Side", "Show a second map beside this one.", "ui.splitView", Value::Null, split);
+            small(ui, app, "zoom_full", "Link Views", "Maps move together.", "view.linkViews", Value::Null, app.session.project.link_views);
+            small(
+                ui,
+                app,
+                "goto_xy",
+                "Link Cursors",
+                "Show the pointer's place on the other map.",
+                "ui.linkCursors",
+                Value::Null,
+                app.ws.link_cursors,
+            );
+        });
+    });
+    group(ui, "Workspace", |ui| {
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "catalog",
+                "Catalog View",
+                "The project's items in place of the map.",
+                "ui.catalogView",
+                Value::Null,
+                app.ws.catalog_view,
+            );
+            small(ui, app, "run", "Tasks", "Step through a task.", "ui.pane.tasks", Value::Null, app.ui.right == Some(RightPane::Tasks));
+            small(
+                ui,
+                app,
+                "history",
+                "Workflow Manager",
+                "Track jobs and their status.",
+                "ui.pane.jobs",
+                Value::Null,
+                app.ui.right == Some(RightPane::Jobs),
+            );
+        });
+        col(ui, |ui| {
+            let sets: Vec<String> = app.ui.pane_sets.iter().map(|x| x.0.clone()).collect();
+            small_menu(ui, app, "pane", "Pane Sets", "Save the panes you have open, and switch back to them.", move |ui, app| {
+                for n in &sets {
+                    if ui.button(n.as_str()).clicked() {
+                        let _ = app.run("ui.paneSet", json!({"load": n}));
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                for n in ["Mapping", "Editing", "Analysis"] {
+                    if ui.button(crate::i18n::fmt("Save as {name}", &[("name", tl!(n))])).clicked() {
+                        let _ = app.run("ui.paneSet", json!({"save": tl!(n)}));
+                        ui.close();
+                    }
+                }
+            });
+            small(
+                ui,
+                app,
+                "identify",
+                "Item Pop-ups",
+                "Show details when hovering items in the Catalog view.",
+                "ui.itemPopups",
+                Value::Null,
+                app.ws.item_popups,
+            );
+        });
+    });
+    group(ui, "Thumbnail", |ui| {
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "export_map",
+                "Create Thumbnail",
+                "The project's thumbnail, from the map view.",
+                "project.thumbnail",
+                json!({"create": true}),
+                app.session.project.thumbnail.is_some(),
+            );
+            small(ui, app, "open", "Import Thumbnail", "The project's thumbnail, from an image.", "ui.importThumbnail", Value::Null, false);
+        });
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "map",
+                "Map Thumbnail",
+                "This map's thumbnail, from the view.",
+                "map.thumbnail",
+                json!({"create": true}),
+                app.session.map().thumbnail.is_some(),
+            );
+            small(ui, app, "open", "Import", "This map's thumbnail, from an image.", "ui.importThumbnail", json!({"map": true}), false);
+        });
+    });
+    group(ui, "Animation", |ui| {
+        let n = app.session.map().animation.len();
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "bookmark",
+                &crate::i18n::fmt("Add ({n})", &[("n", &n.to_string())]),
+                "Add the current view as a keyframe.",
+                "animation.add",
+                Value::Null,
+                false,
+            );
+            small(ui, app, "delete", "Remove", "Remove the last keyframe.", "animation.remove", Value::Null, false);
+        });
+        col(ui, |ui| {
+            small(ui, app, "run", "Play", "Play the animation.", "ui.animationPlay", Value::Null, app.ws.playing.is_some());
+            small(ui, app, "export", "Export", "Export the animation as PNG frames (zip).", "ui.exportAnimation", Value::Null, false);
+        });
+    });
+    group(ui, "Profile", |ui| {
+        big(
+            ui,
+            app,
+            "measure",
+            "Profile",
+            "Elevation profiles along lines, cross sections and more.",
+            "ui.pane.profile",
+            Value::Null,
+            app.ui.right == Some(RightPane::Profile),
+            false,
+        );
     });
     group(ui, "Language", |ui| language_menu(app, ui));
 }
@@ -1726,6 +1947,42 @@ fn plugins_tab(app: &mut RustGisApp, ui: &mut Ui) {
 }
 
 fn help_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Customize", |ui| {
+        let hidden = app.ui.hidden_tabs.clone();
+        big_menu(ui, app, "settings", "Ribbon", "Choose which tabs the ribbon shows.", move |ui, app| {
+            for tab in TABS.iter().filter(|t| **t != "Help") {
+                let mut on = !hidden.iter().any(|h| h == tab);
+                if ui.checkbox(&mut on, tl!(*tab)).clicked() {
+                    let _ = app.run("ui.customizeRibbon", json!({"tab": tab}));
+                }
+            }
+        });
+        let qa = app.ui.quick_access.clone();
+        big_menu(ui, app, "command", "Quick\nAccess", "Choose extra buttons for the Quick Access Toolbar.", move |ui, app| {
+            for (id, label) in QUICK {
+                let mut on = qa.iter().any(|c| c == id);
+                if ui.checkbox(&mut on, tl!(*label)).clicked() {
+                    let _ = app.run("ui.quickAccess", json!({"command": id}));
+                }
+            }
+        });
+    });
+    group(ui, "Performance", |ui| {
+        big(
+            ui,
+            app,
+            "dra",
+            "Diagnostic\nMonitor",
+            "Frame rate, draw time, data size and memory.",
+            "ui.pane.diagnostics",
+            Value::Null,
+            app.ui.right == Some(RightPane::Diagnostics),
+            false,
+        );
+    });
+    group(ui, "Learn", |ui| {
+        big(ui, app, "help", "Learning\nResources", "Open the RustGIS user guide.", "ui.learn", Value::Null, false, false);
+    });
     group(ui, "Help", |ui| {
         big(ui, app, "help", "About", "About RustGIS.", "ui.about", Value::Null, false, false);
         big(ui, app, "command", "Command\nSearch", "Find any command by name (Ctrl+K).", "ui.commandSearch", Value::Null, false, false);

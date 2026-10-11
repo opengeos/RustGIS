@@ -132,3 +132,16 @@ pub struct ViewSettings {
     #[serde(skip)]
     pub first_person: bool,
 }
+
+/// An animation keyframe: a view, and the seconds taken to reach it from the previous one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Keyframe {
+    pub center: rustgis_geom::Coord,
+    pub scale: f64,
+    #[serde(default = "two")]
+    pub seconds: f64,
+}
+
+fn two() -> f64 {
+    2.0
+}

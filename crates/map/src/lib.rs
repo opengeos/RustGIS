@@ -238,6 +238,18 @@ impl Layer {
         &self.projected
     }
 
+    /// Drops the projected geometry cache (the feature cache).
+    pub fn clear_cache(&mut self) {
+        self.projected = Vec::new();
+        self.projected_rev = u64::MAX;
+        self.projected_for.clear();
+    }
+
+    /// Whether the projected geometry cache is filled for a projection.
+    pub fn is_cached(&self, key: &str) -> bool {
+        self.projected_for == key && self.projected_rev == self.geometry_rev && self.projected.len() == self.dataset.features.len()
+    }
+
     /// Marks geometry as changed.
     pub fn touch_geometry(&mut self) {
         self.geometry_rev = self.geometry_rev.wrapping_add(1);
@@ -320,6 +332,12 @@ pub struct Map {
     /// Effects, colour vision, drawing mode, clipping and navigation aids.
     #[serde(default)]
     pub view: view::ViewSettings,
+    /// The map's thumbnail (base64 PNG).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+    /// Animation keyframes: views the animation moves through.
+    #[serde(default)]
+    pub animation: Vec<view::Keyframe>,
     #[serde(default)]
     next_layer_id: u32,
 }
@@ -396,6 +414,8 @@ impl Map {
             editing: design::MapEditing::default(),
             swipe: None,
             view: view::ViewSettings::default(),
+            thumbnail: None,
+            animation: Vec::new(),
             next_layer_id: 1,
         }
     }

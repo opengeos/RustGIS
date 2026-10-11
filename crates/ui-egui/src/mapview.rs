@@ -74,6 +74,9 @@ pub struct MapView {
     /// The last snap: its inputs (pointer, camera, undo depth) and where it snapped, if anywhere,
     /// so snapping runs only when one of them changes rather than every frame.
     snap: Option<([f64; 5], Option<Coord>)>,
+    /// The side-by-side map's last render (texture and labels) and what it was drawn for, so it
+    /// redraws only when that map, the project or the view changes.
+    split: Option<([f64; 8], egui::TextureHandle, Vec<PlacedLabel>)>,
 }
 
 impl Default for MapView {
@@ -97,6 +100,7 @@ impl Default for MapView {
             toasts: Vec::new(),
             camera_moved: false,
             snap: None,
+            split: None,
         }
     }
 }
@@ -105,6 +109,11 @@ impl MapView {
     pub fn invalidate(&mut self) {
         self.key = None;
     }
+    /// How long the last map draw took, in milliseconds.
+    pub fn render_ms(&self) -> u64 {
+        self.render_ms
+    }
+
     pub fn cancel_sketch(&mut self) {
         self.sketch.clear();
         self.sketch_done = false;
@@ -125,6 +134,108 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         crate::layoutview::show(app, ui);
         return;
     }
+    if app.ws.catalog_view {
+        egui::Frame::NONE.inner_margin(egui::Margin::same(16)).show(ui, |ui| crate::workspacepanes::catalog_view(app, ui, &t));
+        return;
+    }
+    animate(app, ui);
+    // Side by side: the other map on the right, following this one when views are linked.
+    if let Some(other) = app.ws.split.filter(|i| *i != app.session.project.active_map && *i < app.session.project.maps.len()) {
+        let full = ui.available_rect_before_wrap();
+        let right = Rect::from_min_max(pos2(full.center().x + 1.0, full.min.y), full.max);
+        split_view(app, ui, other, right, &t);
+        let mut left = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_max(full.min, pos2(full.center().x - 1.0, full.max.y))));
+        main_view(app, &mut left, &t);
+        ui.allocate_rect(full, Sense::hover());
+        return;
+    }
+    main_view(app, ui, &t);
+}
+
+/// Plays the map's animation: the camera moves through the keyframes in real time.
+fn animate(app: &mut RustGisApp, ui: &mut Ui) {
+    let Some((t, k)) = app.ws.playing else { return };
+    let keys = app.session.map().animation.clone();
+    let (Some(a), Some(b)) = (keys.get(k), keys.get(k + 1)) else {
+        app.ws.playing = None;
+        return;
+    };
+    let dt = ui.input(|i| i.stable_dt).min(0.1) as f64;
+    let t = t + dt / b.seconds.max(0.1);
+    let e = t.min(1.0);
+    let s = e * e * (3.0 - 2.0 * e);
+    let c = Coord::new(a.center.x + (b.center.x - a.center.x) * s, a.center.y + (b.center.y - a.center.y) * s);
+    let sc = (a.scale.max(1.0).ln() + (b.scale.max(1.0).ln() - a.scale.max(1.0).ln()) * s).exp();
+    let m = app.session.map_mut();
+    if let Some(mc) = m.to_map(c) {
+        m.camera.center = mc;
+    }
+    m.set_scale(sc);
+    app.ws.playing = if t >= 1.0 { Some((0.0, k + 1)) } else { Some((t, k)) };
+    ui.ctx().request_repaint();
+}
+
+/// The second map of a side-by-side view: drawn read-only at its own (or the linked) camera.
+fn split_view(app: &mut RustGisApp, ui: &mut Ui, other: usize, rect: Rect, t: &Tokens) {
+    let (w, h) = (rect.width() as f64, rect.height() as f64);
+    if w < 4.0 || h < 4.0 {
+        return;
+    }
+    let ppp = ui.ctx().pixels_per_point();
+    let revision = app.session.revision;
+    let Some(m) = app.session.project.maps.get_mut(other) else { return };
+    let view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: m.camera, dark: t.dark };
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, c32(m.basemap.palette().0));
+    let key = [
+        other as f64,
+        revision as f64,
+        m.camera.center.x,
+        m.camera.center.y,
+        m.camera.res,
+        w,
+        h,
+        f64::from(ppp) + if t.dark { 100.0 } else { 0.0 },
+    ];
+    if app.map.split.as_ref().is_none_or(|(k, _, _)| *k != key)
+        && let Some(r) = rustgis_engine::render::render(m, &view)
+    {
+        let img = egui::ColorImage::from_rgba_premultiplied([r.pixmap.width() as usize, r.pixmap.height() as usize], r.pixmap.data());
+        match app.map.split.take() {
+            Some((_, mut tex, _)) => {
+                tex.set(img, egui::TextureOptions::LINEAR);
+                app.map.split = Some((key, tex, r.labels));
+            }
+            None => app.map.split = Some((key, ui.ctx().load_texture("split_map", img, egui::TextureOptions::LINEAR), r.labels)),
+        }
+    }
+    if let Some((_, tex, labels)) = &app.map.split {
+        painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        for l in labels {
+            draw_label(&painter, l, pos2(rect.min.x + l.x, rect.min.y + l.y));
+        }
+    }
+    painter.line_segment([rect.left_top(), rect.left_bottom()], Stroke::new(2.0, t.border_strong));
+    let name = app.session.project.maps.get(other).map(|m| m.name.clone()).unwrap_or_default();
+    painter.text(rect.left_top() + vec2(10.0, 10.0), Align2::LEFT_TOP, name, semibold(12.0), t.text);
+    // Linked cursors: the pointer's place on the main map, shown on this one.
+    if app.ws.link_cursors
+        && let Some(c) = app.map.pointer_lonlat
+        && let Some(m) = app.session.project.maps.get(other)
+        && let Some(mc) = m.to_map(c)
+    {
+        let (x, y) = m.camera.to_screen(mc, w, h);
+        let p = pos2(rect.min.x + x as f32, rect.min.y + y as f32);
+        if rect.contains(p) {
+            let red = Color32::from_rgb(0xE0, 0x30, 0x30);
+            painter.line_segment([p - vec2(10.0, 0.0), p + vec2(10.0, 0.0)], Stroke::new(1.5, red));
+            painter.line_segment([p - vec2(0.0, 10.0), p + vec2(0.0, 10.0)], Stroke::new(1.5, red));
+        }
+    }
+}
+
+fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+    let t = *t;
     let rect = ui.available_rect_before_wrap();
     let resp = ui.allocate_rect(rect, Sense::click_and_drag());
     let (w, h) = (rect.width() as f64, rect.height() as f64);
@@ -760,7 +871,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         && let Some(c) = app.map.pointer_lonlat
         && let Some(at) = {
             let cam = app.session.map().camera;
-            let key = [c.x, c.y, cam.center.x + cam.center.y * 1e-3, cam.res, app.session.undo_depth() as f64];
+            let key = [c.x, c.y, cam.center.x + cam.center.y * 1e-3, cam.res, app.session.revision as f64];
             match &app.map.snap {
                 Some((k, at)) if *k == key => *at,
                 _ => {

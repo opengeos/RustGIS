@@ -30,8 +30,20 @@ pub fn apply(pm: &mut Pixmap, fx: &ViewEffects, vision: ColorVision, lonlat: &dy
         (1.0 + fx.saturation / 100.0) as f32,
         (fx.sepia / 100.0).clamp(0.0, 1.0) as f32,
     );
-    let lin = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
-    let srgb = |v: f32| if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    // sRGB to linear and back, from lookup tables (4096 steps) instead of powf per pixel.
+    const STEPS: usize = 4096;
+    let table = |f: fn(f32) -> f32| -> Vec<f32> { (0..STEPS).map(|i| f(i as f32 / (STEPS - 1) as f32)).collect() };
+    let (lin_t, srgb_t) = if matrix.is_some() {
+        (
+            table(|v| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }),
+            table(|v| if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }),
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let look = |t: &[f32], v: f32| t.get((v.clamp(0.0, 1.0) * (STEPS - 1) as f32).round() as usize).copied().unwrap_or(v);
+    let lin = |v: f32| look(&lin_t, v);
+    let srgb = |v: f32| look(&srgb_t, v);
     let width = pm.width() as usize;
     for (i, px) in pm.pixels_mut().iter_mut().enumerate() {
         let a = px.alpha();
