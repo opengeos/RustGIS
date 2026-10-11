@@ -338,8 +338,11 @@ pub fn idw(points: &[(Coord, f64)], extent: &Extent, cell_deg: f64, power: f64, 
     if points.len() < 2 {
         return Err("interpolation needs at least two points with values".into());
     }
-    if !(cell_deg.is_finite() && cell_deg > 0.0) || extent.is_empty() {
+    if !(cell_deg.is_finite() && cell_deg > 0.0) {
         return Err("the cell size must be positive".into());
+    }
+    if extent.is_empty() {
+        return Err("the area to interpolate over is empty".into());
     }
     let (w, h) = ((extent.width() / cell_deg).ceil().max(1.0) as usize, (extent.height() / cell_deg).ceil().max(1.0) as usize);
     if w.saturating_mul(h) > MAX_PIXELS / 4 {
@@ -393,6 +396,17 @@ pub fn kmeans(r: &Raster, bands: &[usize], k: usize, iterations: usize) -> Resul
     let n = r.width as usize * r.height as usize;
     let pixel =
         |i: usize| -> Option<Vec<f64>> { data.iter().map(|d| d.get(i).copied().filter(|v| r.is_valid(*v)).map(f64::from)).collect() };
+    // The same, into a buffer reused across pixels (the full passes touch every pixel).
+    let pixel_into = |i: usize, buf: &mut Vec<f64>| -> bool {
+        buf.clear();
+        for d in &data {
+            match d.get(i).copied().filter(|v| r.is_valid(*v)) {
+                Some(v) => buf.push(f64::from(v)),
+                None => return false,
+            }
+        }
+        true
+    };
     // Seeds spread across the value range of the first band.
     let valid: Vec<usize> = (0..n).step_by((n / 20_000).max(1)).filter(|i| pixel(*i).is_some()).collect();
     if valid.len() < k {
@@ -416,8 +430,9 @@ pub fn kmeans(r: &Raster, bands: &[usize], k: usize, iterations: usize) -> Resul
     for _ in 0..iterations.clamp(1, 50) {
         let mut sums = vec![vec![0.0; data.len()]; centres.len()];
         let mut counts = vec![0usize; centres.len()];
+        let mut p = Vec::with_capacity(data.len());
         for i in &valid {
-            if let Some(p) = pixel(*i) {
+            if pixel_into(*i, &mut p) {
                 let c = nearest(&p, &centres);
                 if let (Some(s), Some(n)) = (sums.get_mut(c), counts.get_mut(c)) {
                     s.iter_mut().zip(&p).for_each(|(a, b)| *a += b);
@@ -437,7 +452,10 @@ pub fn kmeans(r: &Raster, bands: &[usize], k: usize, iterations: usize) -> Resul
         centres.get(*a).and_then(|c| c.first()).partial_cmp(&centres.get(*b).and_then(|c| c.first())).unwrap_or(std::cmp::Ordering::Equal)
     });
     let rank: Vec<usize> = (0..centres.len()).map(|c| order.iter().position(|o| *o == c).unwrap_or(0)).collect();
-    Ok((0..n).map(|i| pixel(i).map(|p| (rank.get(nearest(&p, &centres)).copied().unwrap_or(0) + 1) as f32).unwrap_or(NODATA)).collect())
+    let mut p = Vec::with_capacity(data.len());
+    Ok((0..n)
+        .map(|i| if pixel_into(i, &mut p) { (rank.get(nearest(&p, &centres)).copied().unwrap_or(0) + 1) as f32 } else { NODATA })
+        .collect())
 }
 
 /// Minimum-distance classification: each pixel takes the class whose training mean is closest.
@@ -447,17 +465,21 @@ pub fn classify_min_distance(r: &Raster, bands: &[usize], means: &[(f32, Vec<f64
         return Err("no training classes".into());
     }
     let n = r.width as usize * r.height as usize;
+    let mut p: Vec<f64> = Vec::with_capacity(data.len());
     Ok((0..n)
         .map(|i| {
-            let p: Option<Vec<f64>> = data.iter().map(|d| d.get(i).copied().filter(|v| r.is_valid(*v)).map(f64::from)).collect();
-            p.and_then(|p| {
-                means
-                    .iter()
-                    .map(|(c, m)| (*c, m.iter().zip(&p).map(|(a, b)| (a - b).powi(2)).sum::<f64>()))
-                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|x| x.0)
-            })
-            .unwrap_or(NODATA)
+            p.clear();
+            for d in &data {
+                match d.get(i).copied().filter(|v| r.is_valid(*v)) {
+                    Some(v) => p.push(f64::from(v)),
+                    None => return NODATA,
+                }
+            }
+            means
+                .iter()
+                .map(|(c, m)| (*c, m.iter().zip(&p).map(|(a, b)| (a - b).powi(2)).sum::<f64>()))
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map_or(NODATA, |x| x.0)
         })
         .collect())
 }

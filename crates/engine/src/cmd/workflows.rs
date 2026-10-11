@@ -61,7 +61,7 @@ pub fn commands() -> Vec<C> {
             let ds = feature_ds(s, p)?;
             let rows: Vec<Value> = network::profile_fields(ds)
                 .into_iter()
-                .map(|f| json!({"field": f.name, "type": f.ty, "count": f.count, "nulls": f.nulls, "distinct": f.distinct, "min": f.min, "max": f.max, "mean": f.mean, "top": f.top}))
+                .map(|f| json!({"field": f.name, "type": f.ty, "count": f.count, "nulls": f.nulls, "distinct": f.distinct, "truncated": f.truncated, "min": f.min, "max": f.max, "mean": f.mean, "top": f.top}))
                 .collect();
             Ok(json!({"layer": ds.name, "features": ds.features.len(), "fields": rows}))
         })
