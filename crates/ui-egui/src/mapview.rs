@@ -4,7 +4,7 @@
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::Tool;
-use rustgis_engine::geom::{Coord, Extent, geodesic_length_m, geodesic_ring_area_m2, lonlat_to_merc, merc_to_lonlat};
+use rustgis_engine::geom::{Coord, Extent, geodesic_length_m, geodesic_ring_area_m2};
 use rustgis_engine::map::{Camera, Globe, Projection};
 use rustgis_engine::render::{PlacedLabel, View};
 use serde_json::{Value, json};
@@ -220,7 +220,7 @@ fn screen_to_lonlat(app: &RustGisApp, rect: Rect, p: Pos2) -> Option<Coord> {
     let (x, y) = ((p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64);
     match globe(app, rect) {
         Some(g) => g.inverse(x, y),
-        None => Some(merc_to_lonlat(app.session.map().camera.to_map(x, y, w, h))),
+        None => app.session.map().to_lonlat(app.session.map().camera.to_map(x, y, w, h)),
     }
 }
 
@@ -229,7 +229,7 @@ fn lonlat_to_screen(app: &RustGisApp, rect: Rect, c: Coord) -> Option<Pos2> {
     let (w, h) = (rect.width() as f64, rect.height() as f64);
     let (x, y) = match globe(app, rect) {
         Some(g) => g.forward(c)?,
-        None => app.session.map().camera.to_screen(lonlat_to_merc(c), w, h),
+        None => app.session.map().camera.to_screen(app.session.map().to_map(c)?, w, h),
     };
     Some(pos2(rect.min.x + x as f32, rect.min.y + y as f32))
 }
@@ -611,9 +611,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
 }
 
 fn scale_bar(app: &RustGisApp, p: &egui::Painter, rect: Rect, t: &Tokens) {
-    let cam = app.session.map().camera;
-    let lat = cam.center_lonlat().y.to_radians().cos().abs().max(0.01);
-    let m_per_pt = cam.res * lat;
+    let m_per_pt = app.session.map().ground_res();
     let d = rustgis_engine::geom::nice_distance(m_per_pt * 130.0);
     if d <= 0.0 {
         return;

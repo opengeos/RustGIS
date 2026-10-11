@@ -80,9 +80,11 @@ Catalog	カタログ
 Catalog\nPane	カタログ\nウィンドウ
 Cell size	セル サイズ
 Change the map's backdrop.	マップの背景を変更します。
+Change the map's coordinate system	マップの座標系を変更
 Choose a band combination to display the raster layer.	ラスター レイヤーを表示するバンドの組み合わせを選択します。
 Choose a contrast stretch for the raster layer.	ラスター レイヤーのコントラスト ストレッチを選択します。
 Choose a resampling type for the raster layer.	ラスター レイヤーのリサンプリング タイプを選択します。
+Choose how the flat map lays out the Earth.	平面マップで地球をどのように表すかを選択します。
 Choose how the layer is drawn.	レイヤーの描画方法を選択します。
 Choose how the raster is drawn.	ラスターの描画方法を選択します。
 Choose the interface language.	インターフェイスの言語を選択します。
@@ -125,7 +127,9 @@ Compute a field's values.	フィールドの値を計算します。
 Contents	コンテンツ
 Contrast	コントラスト
 Conversion	変換
+Coordinate System	座標系
 Coordinate system	座標系
+Coordinate System…	座標系…
 Copies the (selected) features of a layer to a new layer.	レイヤーの（選択された）フィーチャを新しいレイヤーにコピーします。
 Copy Coordinates	座標のコピー
 Couldn't download the font for {language}; pick the language again to retry.	{language} のフォントをダウンロードできませんでした。もう一度言語を選択して再試行してください。
@@ -199,10 +203,13 @@ Effects	エフェクト
 Ember	残り火
 Encloses each feature, or all features, in its convex hull.	各フィーチャ、またはすべてのフィーチャを凸包で囲みます。
 Enhancement	強調
+EPSG code	EPSG コード
 Equal Interval	等間隔
+Equirectangular (Plate Carrée)	正距円筒図法 (Plate Carrée)
 Erase	消去
 Erase Features	フィーチャの消去
 Esc	Esc
+Europe Equal Area (ETRS89 LAEA)	ヨーロッパ正積 (ETRS89 LAEA)
 Expand Legend	凡例を展開
 Expand the ribbon (Ctrl+F1)	リボンを展開 (Ctrl+F1)
 Explore	マップ操作
@@ -302,6 +309,7 @@ Label Class	ラベル クラス
 Label Field	ラベル フィールド
 Labeling	ラベリング
 Lagoon	ラグーン
+Lambert Cylindrical Equal Area	ランベルト正積円筒図法
 Language	言語
 Last map render time	前回のマップ描画時間
 Latitude (Y)	緯度（Y）
@@ -341,11 +349,13 @@ Meters	メートル
 Method	手法
 Midnight	真夜中
 Miles	マイル
+Miller Cylindrical	ミラー図法
 Min	最小
 Min %	最小 %
 Minimum Bounding Geometry	最小境界ジオメトリ
 Minimum Maximum	最小-最大
 Mod+	Mod+
+Mollweide (equal-area world)	モルワイデ図法 (正積世界)
 Mouse wheel	マウス ホイール
 Move Down	下へ移動
 Move Up	上へ移動
@@ -375,6 +385,7 @@ No standalone tables	スタンドアロン テーブルはありません
 NoData	NoData
 None	なし
 North	北
+North Polar Stereographic	北極ステレオ図法
 Not saved yet	未保存
 Ocean	海洋
 OID	OID
@@ -420,6 +431,8 @@ Primary\nSymbology	プライマリ\nシンボル
 Primary symbology	プライマリ シンボル
 Project	プロジェクト
 Project Info	プロジェクト情報
+Projection	投影法
+Projections	投影法
 Proportional Symbols	比例シンボル
 Proximity	近接
 Quantile	等量
@@ -526,6 +539,7 @@ Size	サイズ
 Size, bands, statistics and coordinate system.	サイズ、バンド、統計、座標系。
 Source	ソース
 South	南
+South Polar Stereographic	南極ステレオ図法
 Square	正方形
 Standalone Tables	スタンドアロン テーブル
 Standard Deviation	標準偏差
@@ -559,6 +573,7 @@ Terrain	地形
 Text	テキスト
 Text Symbol	テキスト シンボル
 the map has no layers	マップにレイヤーがありません
+The map is drawn in this coordinate system; layers are projected on the fly.	マップはこの座標系で描画され、レイヤーはその場で投影されます。
 The raster's data couldn't be read.	ラスターのデータを読み込めませんでした。
 The raster's data couldn't be read: {path}	ラスターのデータを読み込めませんでした: {path}
 Thermal	サーマル
@@ -583,6 +598,7 @@ Undo the last change.	最後の変更を元に戻します。
 Undo {action}	{action} を元に戻す
 Unique Values	個別値
 Units	単位
+USA Contiguous Albers Equal Area	米国本土アルベルス正積図法
 Valid expression · {n} matching rows	有効な式 · 一致する行 {n} 件
 Vector and raster data	ベクター データとラスター データ
 Version {version}	バージョン {version}
@@ -591,6 +607,7 @@ View › Windows	表示 › ウィンドウ
 Visibility	表示設定
 Visibility Range	表示縮尺範囲
 Visible	表示
+Web Mercator	Web メルカトル
 Welcome to RustGIS	RustGIS へようこそ
 West	西
 WGS 84 / Globe	WGS 84 / 地球儀

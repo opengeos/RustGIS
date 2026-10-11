@@ -488,7 +488,7 @@ fn analysis_tab(app: &mut RustGisApp, ui: &mut Ui) {
 
 fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "View", |ui| {
-        let on = app.session.map().projection == rustgis_engine::map::Projection::Globe;
+        let on = app.session.map().projection.is_globe();
         big(
             ui,
             app,
@@ -500,6 +500,24 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             on,
             false,
         );
+        let current = app.session.map().projection.code();
+        big_menu(ui, app, "basemap", "Projection", "Choose how the flat map lays out the Earth.", move |ui, app| {
+            let mut items: Vec<(String, String)> = vec![("mercator".into(), "Web Mercator".into())];
+            items.extend(rustgis_engine::map::projection::PRESETS.iter().map(|(id, label, _)| (id.to_string(), label.to_string())));
+            for (id, label) in items {
+                if ui.add(egui::Button::selectable(current == id, tl!(label.as_str()))).clicked() {
+                    if app.run("map.projection", json!({"type": id})).is_ok() {
+                        let _ = app.run("map.zoomFull", Value::Null);
+                    }
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui.button(tl!("Coordinate System…")).clicked() {
+                let _ = app.run("ui.dialog", json!({"name": "coordinateSystem"}));
+                ui.close();
+            }
+        });
     });
     group(ui, "Windows", |ui| {
         big(

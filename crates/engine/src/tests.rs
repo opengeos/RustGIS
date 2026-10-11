@@ -193,6 +193,39 @@ fn globe_projection_toggles_renders_and_saves() {
 }
 
 #[test]
+fn custom_projections_switch_keep_scale_query_and_render() {
+    let mut s = with_raster();
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 5_000_000})).unwrap();
+    let before = s.scale();
+    let r = s.run("map.projection", &json!({"type": "europeEqualArea"})).unwrap();
+    assert_eq!(r["projection"], "europeEqualArea");
+    assert!((s.scale() / before - 1.0).abs() < 0.02, "scale kept: {before} vs {}", s.scale());
+    let c = s.map().center_lonlat();
+    assert!((c.x - 10.0).abs() < 1e-6 && (c.y - 50.0).abs() < 1e-6, "{c:?}");
+    // Identify and box select work in the projection's coordinates.
+    let v = s.run("identify", &json!({"lon": 2.35, "lat": 48.85, "tolerancePx": 5})).unwrap();
+    assert!(!v.is_null(), "something is under Paris");
+    let sel = s.run("select.byRect", &json!({"minLon": 5.0, "minLat": 45.0, "maxLon": 15.0, "maxLat": 55.0})).unwrap();
+    assert!(sel["selected"].as_u64().unwrap() > 0);
+    s.run("map.goToXY", &json!({"lon": -81.0, "lat": 42.0})).unwrap();
+    assert!(crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap().len() > 1000);
+    // An EPSG code; the raster (UTM 17N) in the map's own system draws without reprojection.
+    s.run("map.projection", &json!({"type": "EPSG:32617"})).unwrap();
+    s.run("layer.zoomTo", &json!({"layer": "scene"})).unwrap();
+    assert!(crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap().len() > 1000);
+    assert!(s.run("map.projection", &json!({"type": "EPSG:4326"})).is_err(), "degrees are refused");
+    assert!(s.run("map.projection", &json!({"type": "nope"})).is_err());
+    assert!(s.run("map.goToXY", &json!({"lon": 100.0, "lat": 0.0})).is_ok());
+    // Undo and save/reload keep the projection.
+    s.run("map.projection", &json!({"type": "mollweide"})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.map().projection.code(), "EPSG:32617");
+    let json = serde_json::to_string(&s.project).unwrap();
+    assert_eq!(Project::from_json(&json).unwrap().map().projection.code(), "EPSG:32617");
+    assert!(s.run("map.projections", &Value::Null).unwrap().as_array().unwrap().len() >= 10);
+}
+
+#[test]
 fn raster_layers_open_style_identify_and_round_trip() {
     let mut s = with_raster();
     let l = s.map().layers.last().unwrap();

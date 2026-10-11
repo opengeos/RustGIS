@@ -80,9 +80,11 @@ Catalog	Katalog
 Catalog\nPane	Katalog\nPaneli
 Cell size	Hücre boyutu
 Change the map's backdrop.	Haritanın arka planını değiştir.
+Change the map's coordinate system	Haritanın koordinat sistemini değiştir
 Choose a band combination to display the raster layer.	Raster katmanını görüntülemek için bir bant kombinasyonu seçin.
 Choose a contrast stretch for the raster layer.	Raster katmanı için bir kontrast germe seçin.
 Choose a resampling type for the raster layer.	Raster katmanı için bir yeniden örnekleme türü seçin.
+Choose how the flat map lays out the Earth.	Düz haritanın Dünya'yı nasıl gösterdiğini seçin.
 Choose how the layer is drawn.	Katmanın nasıl çizileceğini seç.
 Choose how the raster is drawn.	Rasterın nasıl çizileceğini seçin.
 Choose the interface language.	Arayüz dilini seç.
@@ -125,7 +127,9 @@ Compute a field's values.	Bir alanın değerlerini hesapla.
 Contents	İçindekiler
 Contrast	Kontrast
 Conversion	Dönüştürme
+Coordinate System	Koordinat Sistemi
 Coordinate system	Koordinat sistemi
+Coordinate System…	Koordinat Sistemi…
 Copies the (selected) features of a layer to a new layer.	Bir katmanın (seçili) detaylarını yeni bir katmana kopyalar.
 Copy Coordinates	Koordinatları Kopyala
 Couldn't download the font for {language}; pick the language again to retry.	{language} için yazı tipi indirilemedi; yeniden denemek için dili tekrar seçin.
@@ -199,10 +203,13 @@ Effects	Efektler
 Ember	Kor
 Encloses each feature, or all features, in its convex hull.	Her detayı veya tüm detayları dışbükey zarfı içine alır.
 Enhancement	İyileştirme
+EPSG code	EPSG kodu
 Equal Interval	Eşit Aralık
+Equirectangular (Plate Carrée)	Eşdikdörtgen (Plate Carrée)
 Erase	Sil
 Erase Features	Detayları Sil
 Esc	Esc
+Europe Equal Area (ETRS89 LAEA)	Avrupa Eşalan (ETRS89 LAEA)
 Expand Legend	Lejantı Genişlet
 Expand the ribbon (Ctrl+F1)	Şeridi genişlet (Ctrl+F1)
 Explore	Keşfet
@@ -302,6 +309,7 @@ Label Class	Etiket Sınıfı
 Label Field	Etiket Alanı
 Labeling	Etiketleme
 Lagoon	Lagün
+Lambert Cylindrical Equal Area	Lambert Silindirik Eşalan
 Language	Dil
 Last map render time	Son harita çizim süresi
 Latitude (Y)	Enlem (Y)
@@ -341,11 +349,13 @@ Meters	Metre
 Method	Yöntem
 Midnight	Gece Yarısı
 Miles	Mil
+Miller Cylindrical	Miller Silindirik
 Min	Min
 Min %	Min %
 Minimum Bounding Geometry	En Küçük Sınırlayıcı Geometri
 Minimum Maximum	Minimum Maksimum
 Mod+	Mod+
+Mollweide (equal-area world)	Mollweide (eşalan dünya)
 Mouse wheel	Fare tekerleği
 Move Down	Aşağı Taşı
 Move Up	Yukarı Taşı
@@ -375,6 +385,7 @@ No standalone tables	Bağımsız tablo yok
 NoData	NoData
 None	Yok
 North	Kuzey
+North Polar Stereographic	Kuzey Kutup Stereografik
 Not saved yet	Henüz kaydedilmedi
 Ocean	Okyanus
 OID	OID
@@ -420,6 +431,8 @@ Primary\nSymbology	Birincil\nSemboloji
 Primary symbology	Birincil semboloji
 Project	Proje
 Project Info	Proje Bilgisi
+Projection	Projeksiyon
+Projections	Projeksiyonlar
 Proportional Symbols	Orantılı Semboller
 Proximity	Yakınlık
 Quantile	Kantil
@@ -526,6 +539,7 @@ Size	Boyut
 Size, bands, statistics and coordinate system.	Boyut, bantlar, istatistikler ve koordinat sistemi.
 Source	Kaynak
 South	Güney
+South Polar Stereographic	Güney Kutup Stereografik
 Square	Kare
 Standalone Tables	Bağımsız Tablolar
 Standard Deviation	Standart Sapma
@@ -559,6 +573,7 @@ Terrain	Arazi
 Text	Metin
 Text Symbol	Metin Sembolü
 the map has no layers	haritada katman yok
+The map is drawn in this coordinate system; layers are projected on the fly.	Harita bu koordinat sisteminde çizilir; katmanlar anında projekte edilir.
 The raster's data couldn't be read.	Rasterın verisi okunamadı.
 The raster's data couldn't be read: {path}	Rasterın verisi okunamadı: {path}
 Thermal	Termal
@@ -583,6 +598,7 @@ Undo the last change.	Son değişikliği geri al.
 Undo {action}	Geri al: {action}
 Unique Values	Benzersiz Değerler
 Units	Birimler
+USA Contiguous Albers Equal Area	ABD Bitişik Albers Eşalan
 Valid expression · {n} matching rows	Geçerli ifade · {n} eşleşen satır
 Vector and raster data	Vektör ve raster verisi
 Version {version}	Sürüm {version}
@@ -591,6 +607,7 @@ View › Windows	Görünüm › Pencereler
 Visibility	Görünürlük
 Visibility Range	Görünürlük Aralığı
 Visible	Görünür
+Web Mercator	Web Mercator
 Welcome to RustGIS	RustGIS'e hoş geldiniz
 West	Batı
 WGS 84 / Globe	WGS 84 / Küre

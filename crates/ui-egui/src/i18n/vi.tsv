@@ -80,9 +80,11 @@ Catalog	Danh mục
 Catalog\nPane	Ngăn\ndanh mục
 Cell size	Kích thước ô
 Change the map's backdrop.	Thay đổi nền của bản đồ.
+Change the map's coordinate system	Đổi hệ tọa độ của bản đồ
 Choose a band combination to display the raster layer.	Chọn tổ hợp kênh để hiển thị lớp raster.
 Choose a contrast stretch for the raster layer.	Chọn kiểu kéo giãn độ tương phản cho lớp raster.
 Choose a resampling type for the raster layer.	Chọn kiểu lấy mẫu lại cho lớp raster.
+Choose how the flat map lays out the Earth.	Chọn cách bản đồ phẳng thể hiện Trái Đất.
 Choose how the layer is drawn.	Chọn cách vẽ lớp.
 Choose how the raster is drawn.	Chọn cách vẽ raster.
 Choose the interface language.	Chọn ngôn ngữ giao diện.
@@ -125,7 +127,9 @@ Compute a field's values.	Tính giá trị của một trường.
 Contents	Nội dung
 Contrast	Độ tương phản
 Conversion	Chuyển đổi
+Coordinate System	Hệ tọa độ
 Coordinate system	Hệ tọa độ
+Coordinate System…	Hệ tọa độ…
 Copies the (selected) features of a layer to a new layer.	Sao chép các đối tượng (được chọn) của một lớp sang một lớp mới.
 Copy Coordinates	Sao chép tọa độ
 Couldn't download the font for {language}; pick the language again to retry.	Không thể tải phông chữ cho {language}; hãy chọn lại ngôn ngữ để thử lại.
@@ -199,10 +203,13 @@ Effects	Hiệu ứng
 Ember	Than hồng
 Encloses each feature, or all features, in its convex hull.	Bao mỗi đối tượng, hoặc tất cả đối tượng, trong bao lồi của nó.
 Enhancement	Tăng cường
+EPSG code	Mã EPSG
 Equal Interval	Khoảng đều
+Equirectangular (Plate Carrée)	Phép chiếu trụ đẳng cự (Plate Carrée)
 Erase	Xóa vùng
 Erase Features	Xóa vùng đối tượng
 Esc	Esc
+Europe Equal Area (ETRS89 LAEA)	Châu Âu đồng diện tích (ETRS89 LAEA)
 Expand Legend	Mở rộng chú giải
 Expand the ribbon (Ctrl+F1)	Mở rộng ribbon (Ctrl+F1)
 Explore	Khám phá
@@ -302,6 +309,7 @@ Label Class	Lớp nhãn
 Label Field	Trường nhãn
 Labeling	Gán nhãn
 Lagoon	Đầm phá
+Lambert Cylindrical Equal Area	Phép chiếu trụ đồng diện tích Lambert
 Language	Ngôn ngữ
 Last map render time	Thời gian kết xuất bản đồ gần nhất
 Latitude (Y)	Vĩ độ (Y)
@@ -341,11 +349,13 @@ Meters	Mét
 Method	Phương pháp
 Midnight	Nửa đêm
 Miles	Dặm
+Miller Cylindrical	Phép chiếu trụ Miller
 Min	Nhỏ nhất
 Min %	% nhỏ nhất
 Minimum Bounding Geometry	Hình học bao nhỏ nhất
 Minimum Maximum	Nhỏ nhất lớn nhất
 Mod+	Mod+
+Mollweide (equal-area world)	Mollweide (thế giới đồng diện tích)
 Mouse wheel	Con lăn chuột
 Move Down	Chuyển xuống
 Move Up	Chuyển lên
@@ -375,6 +385,7 @@ No standalone tables	Không có bảng độc lập
 NoData	NoData
 None	Không có
 North	Bắc
+North Polar Stereographic	Phép chiếu nổi cực Bắc
 Not saved yet	Chưa lưu
 Ocean	Đại dương
 OID	OID
@@ -420,6 +431,8 @@ Primary\nSymbology	Ký hiệu\nchính
 Primary symbology	Ký hiệu chính
 Project	Dự án
 Project Info	Thông tin dự án
+Projection	Phép chiếu
+Projections	Các phép chiếu
 Proportional Symbols	Ký hiệu tỷ lệ
 Proximity	Lân cận
 Quantile	Phân vị
@@ -526,6 +539,7 @@ Size	Kích thước
 Size, bands, statistics and coordinate system.	Kích thước, kênh, thống kê và hệ tọa độ.
 Source	Nguồn
 South	Nam
+South Polar Stereographic	Phép chiếu nổi cực Nam
 Square	Hình vuông
 Standalone Tables	Bảng độc lập
 Standard Deviation	Độ lệch chuẩn
@@ -559,6 +573,7 @@ Terrain	Địa hình
 Text	Văn bản
 Text Symbol	Ký hiệu văn bản
 the map has no layers	bản đồ không có lớp nào
+The map is drawn in this coordinate system; layers are projected on the fly.	Bản đồ được vẽ trong hệ tọa độ này; các lớp được chiếu tức thời.
 The raster's data couldn't be read.	Không thể đọc dữ liệu của raster.
 The raster's data couldn't be read: {path}	Không thể đọc dữ liệu của raster: {path}
 Thermal	Nhiệt
@@ -583,6 +598,7 @@ Undo the last change.	Hoàn tác thay đổi cuối cùng.
 Undo {action}	Hoàn tác {action}
 Unique Values	Giá trị duy nhất
 Units	Đơn vị
+USA Contiguous Albers Equal Area	Albers đồng diện tích Hoa Kỳ lục địa
 Valid expression · {n} matching rows	Biểu thức hợp lệ · {n} hàng khớp
 Vector and raster data	Dữ liệu vector và raster
 Version {version}	Phiên bản {version}
@@ -591,6 +607,7 @@ View › Windows	Xem › Cửa sổ
 Visibility	Khả năng hiển thị
 Visibility Range	Phạm vi hiển thị
 Visible	Hiển thị
+Web Mercator	Web Mercator
 Welcome to RustGIS	Chào mừng đến với RustGIS
 West	Tây
 WGS 84 / Globe	WGS 84 / Quả địa cầu

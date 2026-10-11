@@ -32,6 +32,7 @@ impl Dialogs {
             "calculateField" => "calculateField",
             "definitionQuery" => "definitionQuery",
             "renameLayer" => "renameLayer",
+            "coordinateSystem" => "coordinateSystem",
             other => return Err(format!("unknown dialog '{other}'")),
         };
         if matches!(name, "addField" | "calculateField" | "definitionQuery" | "renameLayer") && active.is_none() {
@@ -43,8 +44,14 @@ impl Dialogs {
         *self = Dialogs { open: Some(name), mode: "new", ..Dialogs::default() };
         self.layer = active.or_else(|| s.map().layers.first()).map(|l| l.name.clone()).unwrap_or_default();
         match name {
+            "coordinateSystem" => {
+                self.text = s.map().projection.code();
+                // An EPSG code goes in the code box; presets are picked from the list.
+                let is_code = self.text.to_ascii_lowercase().starts_with("epsg");
+                self.a = if is_code { self.text.trim_start_matches(|c: char| !c.is_ascii_digit()).to_string() } else { String::new() };
+            }
             "goToXY" => {
-                let c = s.map().camera.center_lonlat();
+                let c = s.map().center_lonlat();
                 self.a = format!("{:.4}", c.x);
                 self.b = format!("{:.4}", c.y);
             }
@@ -68,6 +75,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "addField" => "Add Field",
         "calculateField" => "Calculate Field",
         "definitionQuery" => "Definition Query",
+        "coordinateSystem" => "Coordinate System",
         _ => "Rename Layer",
     };
     let t = Tokens::get(ctx);
@@ -98,6 +106,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     app.run("map.goToXY", p).map(|_| ())
                 });
             }
+            "coordinateSystem" => close = coordinate_system(app, ui, &t),
             "bookmark" => {
                 ui.label(tl!("Name"));
                 ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).desired_width(f32::INFINITY));
@@ -293,3 +302,56 @@ pub fn pick_save(_: &str, _: &[&str], _: &str) -> Option<String> {
 
 #[allow(dead_code)]
 fn unused(_: Value) {}
+
+/// The map's coordinate system: Web Mercator, the globe, a preset, or any projected EPSG code.
+fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> bool {
+    let current = app.session.map().projection.code();
+    ui.label(egui::RichText::new(tl!("The map is drawn in this coordinate system; layers are projected on the fly.")).weak());
+    let mut choices: Vec<(String, String)> = vec![("mercator".into(), "Web Mercator".into()), ("globe".into(), "Globe".into())];
+    choices.extend(rustgis_engine::map::projection::PRESETS.iter().map(|(id, label, _)| (id.to_string(), label.to_string())));
+    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+        for (id, label) in &choices {
+            if ui.selectable_label(app.dialogs.text == *id, tl!(label.as_str())).clicked() {
+                app.dialogs.text = id.clone();
+                app.dialogs.a.clear();
+            }
+        }
+    });
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.label(tl!("EPSG code"));
+        let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("3035").desired_width(120.0));
+        if r.changed() && !app.dialogs.a.trim().is_empty() {
+            app.dialogs.text = format!("epsg:{}", app.dialogs.a.trim());
+        }
+    });
+    // What the choice means, or why it can't be used.
+    let chosen = app.dialogs.text.clone();
+    let check = rustgis_engine::map::Projection::from_code(&chosen);
+    match (&check, rustgis_engine::map::projection::lookup(&chosen)) {
+        (Ok(_), Ok((def, _))) => {
+            ui.label(egui::RichText::new(def).monospace().size(10.5).color(t.text_dim));
+        }
+        (Ok(_), Err(_)) => {}
+        (Err(e), _) => {
+            ui.label(egui::RichText::new(e.as_str()).color(t.red));
+        }
+    }
+    let ok = check.is_ok() && chosen != current;
+    let mut close = false;
+    ui.horizontal(|ui| {
+        if ui.add_enabled(ok, egui::Button::new(tl!("Apply"))).clicked() {
+            match app.run("map.projection", json!({"type": chosen})) {
+                Ok(_) => {
+                    let _ = app.run("map.zoomFull", Value::Null);
+                    close = true;
+                }
+                Err(e) => app.session.notify(e, true),
+            }
+        }
+        if ui.button(tl!("Cancel")).clicked() {
+            close = true;
+        }
+    });
+    close
+}

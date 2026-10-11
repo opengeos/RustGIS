@@ -204,11 +204,15 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                 if resp.on_hover_text(tl!("Click to switch between decimal degrees and DMS")).clicked() {
                     app.map.dms = !app.map.dms;
                 }
-                let projection = match app.session.map().projection {
-                    rustgis_engine::map::Projection::Globe => tl!("WGS 84 / Globe"),
-                    rustgis_engine::map::Projection::WebMercator => tl!("WGS 84 / Web Mercator"),
+                let projection = match &app.session.map().projection {
+                    rustgis_engine::map::Projection::Globe => tl!("WGS 84 / Globe").to_string(),
+                    rustgis_engine::map::Projection::WebMercator => tl!("WGS 84 / Web Mercator").to_string(),
+                    p => tl!(p.label().as_str()).to_string(),
                 };
-                ui.label(egui::RichText::new(projection).size(11.0).color(t.text_disabled));
+                let resp = ui.add(egui::Label::new(egui::RichText::new(projection).size(11.0).color(t.text_dim)).sense(Sense::click()));
+                if resp.on_hover_text(tl!("Change the map's coordinate system")).clicked() {
+                    let _ = app.run("ui.dialog", json!({"name": "coordinateSystem"}));
+                }
                 sep(ui, &t);
                 let n = app.session.map().selection_count();
                 ui.label(

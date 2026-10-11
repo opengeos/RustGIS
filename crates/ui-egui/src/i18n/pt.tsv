@@ -80,9 +80,11 @@ Catalog	Catálogo
 Catalog\nPane	Painel\nCatálogo
 Cell size	Tamanho da célula
 Change the map's backdrop.	Alterar o fundo do mapa.
+Change the map's coordinate system	Alterar o sistema de coordenadas do mapa
 Choose a band combination to display the raster layer.	Escolha uma combinação de bandas para exibir a camada raster.
 Choose a contrast stretch for the raster layer.	Escolha um realce de contraste para a camada raster.
 Choose a resampling type for the raster layer.	Escolha um tipo de reamostragem para a camada raster.
+Choose how the flat map lays out the Earth.	Escolher como o mapa plano representa a Terra.
 Choose how the layer is drawn.	Escolher como a camada é desenhada.
 Choose how the raster is drawn.	Escolha como o raster é desenhado.
 Choose the interface language.	Escolher o idioma da interface.
@@ -125,7 +127,9 @@ Compute a field's values.	Calcular os valores de um campo.
 Contents	Conteúdo
 Contrast	Contraste
 Conversion	Conversão
+Coordinate System	Sistema de coordenadas
 Coordinate system	Sistema de coordenadas
+Coordinate System…	Sistema de coordenadas…
 Copies the (selected) features of a layer to a new layer.	Copia as feições (selecionadas) de uma camada para uma nova camada.
 Copy Coordinates	Copiar coordenadas
 Couldn't download the font for {language}; pick the language again to retry.	Não foi possível baixar a fonte para {language}; escolha o idioma novamente para tentar de novo.
@@ -199,10 +203,13 @@ Effects	Efeitos
 Ember	Brasa
 Encloses each feature, or all features, in its convex hull.	Envolve cada feição, ou todas as feições, em seu fecho convexo.
 Enhancement	Realce
+EPSG code	Código EPSG
 Equal Interval	Intervalo igual
+Equirectangular (Plate Carrée)	Equirretangular (Plate Carrée)
 Erase	Apagar
 Erase Features	Apagar feições
 Esc	Esc
+Europe Equal Area (ETRS89 LAEA)	Europa de áreas iguais (ETRS89 LAEA)
 Expand Legend	Expandir legenda
 Expand the ribbon (Ctrl+F1)	Expandir a faixa de opções (Ctrl+F1)
 Explore	Explorar
@@ -302,6 +309,7 @@ Label Class	Classe de rótulo
 Label Field	Campo de rótulo
 Labeling	Rotulagem
 Lagoon	Lagoa
+Lambert Cylindrical Equal Area	Cilíndrica de áreas iguais de Lambert
 Language	Idioma
 Last map render time	Último tempo de renderização do mapa
 Latitude (Y)	Latitude (Y)
@@ -341,11 +349,13 @@ Meters	Metros
 Method	Método
 Midnight	Meia-noite
 Miles	Milhas
+Miller Cylindrical	Cilíndrica de Miller
 Min	Mín
 Min %	Mín %
 Minimum Bounding Geometry	Geometria delimitadora mínima
 Minimum Maximum	Mínimo máximo
 Mod+	Mod+
+Mollweide (equal-area world)	Mollweide (mundo de áreas iguais)
 Mouse wheel	Roda do mouse
 Move Down	Mover para baixo
 Move Up	Mover para cima
@@ -375,6 +385,7 @@ No standalone tables	Nenhuma tabela independente
 NoData	NoData
 None	Nenhum
 North	Norte
+North Polar Stereographic	Estereográfica polar norte
 Not saved yet	Ainda não salvo
 Ocean	Oceano
 OID	OID
@@ -420,6 +431,8 @@ Primary\nSymbology	Simbologia\nprincipal
 Primary symbology	Simbologia principal
 Project	Projeto
 Project Info	Informações do projeto
+Projection	Projeção
+Projections	Projeções
 Proportional Symbols	Símbolos proporcionais
 Proximity	Proximidade
 Quantile	Quantil
@@ -526,6 +539,7 @@ Size	Tamanho
 Size, bands, statistics and coordinate system.	Tamanho, bandas, estatísticas e sistema de coordenadas.
 Source	Fonte
 South	Sul
+South Polar Stereographic	Estereográfica polar sul
 Square	Quadrado
 Standalone Tables	Tabelas independentes
 Standard Deviation	Desvio padrão
@@ -559,6 +573,7 @@ Terrain	Terreno
 Text	Texto
 Text Symbol	Símbolo de texto
 the map has no layers	o mapa não tem camadas
+The map is drawn in this coordinate system; layers are projected on the fly.	O mapa é desenhado neste sistema de coordenadas; as camadas são projetadas em tempo real.
 The raster's data couldn't be read.	Não foi possível ler os dados do raster.
 The raster's data couldn't be read: {path}	Não foi possível ler os dados do raster: {path}
 Thermal	Térmica
@@ -583,6 +598,7 @@ Undo the last change.	Desfazer a última alteração.
 Undo {action}	Desfazer {action}
 Unique Values	Valores únicos
 Units	Unidades
+USA Contiguous Albers Equal Area	Albers de áreas iguais dos EUA contíguos
 Valid expression · {n} matching rows	Expressão válida · {n} linhas correspondentes
 Vector and raster data	Dados vetoriais e raster
 Version {version}	Versão {version}
@@ -591,6 +607,7 @@ View › Windows	Exibir › Janelas
 Visibility	Visibilidade
 Visibility Range	Intervalo de visibilidade
 Visible	Visível
+Web Mercator	Web Mercator
 Welcome to RustGIS	Bem-vindo ao RustGIS
 West	Oeste
 WGS 84 / Globe	WGS 84 / Globo

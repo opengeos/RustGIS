@@ -80,9 +80,11 @@ Catalog	目录
 Catalog\nPane	目录\n窗格
 Cell size	像元大小
 Change the map's backdrop.	更改地图的背景。
+Change the map's coordinate system	更改地图的坐标系
 Choose a band combination to display the raster layer.	选择用于显示栅格图层的波段组合。
 Choose a contrast stretch for the raster layer.	为栅格图层选择对比度拉伸。
 Choose a resampling type for the raster layer.	为栅格图层选择重采样类型。
+Choose how the flat map lays out the Earth.	选择平面地图如何展示地球。
 Choose how the layer is drawn.	选择图层的绘制方式。
 Choose how the raster is drawn.	选择栅格的绘制方式。
 Choose the interface language.	选择界面语言。
@@ -125,7 +127,9 @@ Compute a field's values.	计算字段的值。
 Contents	内容
 Contrast	对比度
 Conversion	转换
+Coordinate System	坐标系
 Coordinate system	坐标系
+Coordinate System…	坐标系…
 Copies the (selected) features of a layer to a new layer.	将图层的（所选）要素复制到新图层。
 Copy Coordinates	复制坐标
 Couldn't download the font for {language}; pick the language again to retry.	无法下载 {language} 的字体；请重新选择该语言以重试。
@@ -199,10 +203,13 @@ Effects	效果
 Ember	余烬
 Encloses each feature, or all features, in its convex hull.	用凸包包围每个要素或所有要素。
 Enhancement	增强
+EPSG code	EPSG 代码
 Equal Interval	相等间隔
+Equirectangular (Plate Carrée)	等距圆柱投影（Plate Carrée）
 Erase	擦除
 Erase Features	擦除要素
 Esc	Esc
+Europe Equal Area (ETRS89 LAEA)	欧洲等积投影（ETRS89 LAEA）
 Expand Legend	展开图例
 Expand the ribbon (Ctrl+F1)	展开功能区 (Ctrl+F1)
 Explore	浏览
@@ -302,6 +309,7 @@ Label Class	标注类
 Label Field	标注字段
 Labeling	标注
 Lagoon	泻湖
+Lambert Cylindrical Equal Area	兰伯特等积圆柱投影
 Language	语言
 Last map render time	上次地图渲染时间
 Latitude (Y)	纬度（Y）
@@ -341,11 +349,13 @@ Meters	米
 Method	方法
 Midnight	午夜
 Miles	英里
+Miller Cylindrical	米勒圆柱投影
 Min	最小值
 Min %	最小 %
 Minimum Bounding Geometry	最小边界几何
 Minimum Maximum	最小值-最大值
 Mod+	Mod+
+Mollweide (equal-area world)	摩尔威德投影（等积世界）
 Mouse wheel	鼠标滚轮
 Move Down	下移
 Move Up	上移
@@ -375,6 +385,7 @@ No standalone tables	无独立表
 NoData	NoData
 None	无
 North	北
+North Polar Stereographic	北极球面投影
 Not saved yet	尚未保存
 Ocean	海洋
 OID	OID
@@ -420,6 +431,8 @@ Primary\nSymbology	主要\n符号系统
 Primary symbology	主要符号系统
 Project	工程
 Project Info	工程信息
+Projection	投影
+Projections	投影
 Proportional Symbols	比例符号
 Proximity	邻域
 Quantile	分位数
@@ -526,6 +539,7 @@ Size	大小
 Size, bands, statistics and coordinate system.	大小、波段、统计和坐标系。
 Source	源
 South	南
+South Polar Stereographic	南极球面投影
 Square	正方形
 Standalone Tables	独立表
 Standard Deviation	标准差
@@ -559,6 +573,7 @@ Terrain	地形
 Text	文本
 Text Symbol	文本符号
 the map has no layers	地图中没有图层
+The map is drawn in this coordinate system; layers are projected on the fly.	地图以此坐标系绘制；图层将实时投影。
 The raster's data couldn't be read.	无法读取栅格数据。
 The raster's data couldn't be read: {path}	无法读取栅格数据：{path}
 Thermal	热力
@@ -583,6 +598,7 @@ Undo the last change.	撤销上一次更改。
 Undo {action}	撤销 {action}
 Unique Values	唯一值
 Units	单位
+USA Contiguous Albers Equal Area	美国本土阿尔伯斯等积投影
 Valid expression · {n} matching rows	有效表达式 · {n} 个匹配行
 Vector and raster data	矢量和栅格数据
 Version {version}	版本 {version}
@@ -591,6 +607,7 @@ View › Windows	视图 › 窗口
 Visibility	可见性
 Visibility Range	可见范围
 Visible	可见
+Web Mercator	Web 墨卡托
 Welcome to RustGIS	欢迎使用 RustGIS
 West	西
 WGS 84 / Globe	WGS 84 / 地球仪

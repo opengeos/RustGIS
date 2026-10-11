@@ -80,9 +80,11 @@ Catalog	Catalogus
 Catalog\nPane	Catalogus-\nvenster
 Cell size	Celgrootte
 Change the map's backdrop.	De achtergrond van de kaart wijzigen.
+Change the map's coordinate system	Het coördinatenstelsel van de kaart wijzigen
 Choose a band combination to display the raster layer.	Kies een bandcombinatie om de rasterlaag weer te geven.
 Choose a contrast stretch for the raster layer.	Kies een contraststretch voor de rasterlaag.
 Choose a resampling type for the raster layer.	Kies een resamplingtype voor de rasterlaag.
+Choose how the flat map lays out the Earth.	Kiezen hoe de platte kaart de aarde weergeeft.
 Choose how the layer is drawn.	Kiezen hoe de laag wordt getekend.
 Choose how the raster is drawn.	Kies hoe het raster wordt getekend.
 Choose the interface language.	De interfacetaal kiezen.
@@ -125,7 +127,9 @@ Compute a field's values.	De waarden van een veld berekenen.
 Contents	Inhoud
 Contrast	Contrast
 Conversion	Conversie
+Coordinate System	Coördinatenstelsel
 Coordinate system	Coördinatensysteem
+Coordinate System…	Coördinatenstelsel…
 Copies the (selected) features of a layer to a new layer.	Kopieert de (geselecteerde) objecten van een laag naar een nieuwe laag.
 Copy Coordinates	Coördinaten kopiëren
 Couldn't download the font for {language}; pick the language again to retry.	Kan het lettertype voor {language} niet downloaden; kies de taal opnieuw om het nog eens te proberen.
@@ -199,10 +203,13 @@ Effects	Effecten
 Ember	Gloed
 Encloses each feature, or all features, in its convex hull.	Omsluit elk object, of alle objecten, met de convexe omhulling.
 Enhancement	Verbetering
+EPSG code	EPSG-code
 Equal Interval	Gelijke interval
+Equirectangular (Plate Carrée)	Equirectangulair (Plate Carrée)
 Erase	Uitwissen
 Erase Features	Objecten uitwissen
 Esc	Esc
+Europe Equal Area (ETRS89 LAEA)	Europa oppervlaktegetrouw (ETRS89 LAEA)
 Expand Legend	Legenda uitvouwen
 Expand the ribbon (Ctrl+F1)	Lint uitvouwen (Ctrl+F1)
 Explore	Verkennen
@@ -302,6 +309,7 @@ Label Class	Labelklasse
 Label Field	Labelveld
 Labeling	Labels
 Lagoon	Lagune
+Lambert Cylindrical Equal Area	Lambert cilindrisch oppervlaktegetrouw
 Language	Taal
 Last map render time	Laatste rendertijd van de kaart
 Latitude (Y)	Breedtegraad (Y)
@@ -341,11 +349,13 @@ Meters	Meter
 Method	Methode
 Midnight	Middernacht
 Miles	Mijl
+Miller Cylindrical	Miller cilindrisch
 Min	Min
 Min %	Min %
 Minimum Bounding Geometry	Minimale begrenzende geometrie
 Minimum Maximum	Minimum maximum
 Mod+	Mod+
+Mollweide (equal-area world)	Mollweide (oppervlaktegetrouwe wereld)
 Mouse wheel	Muiswiel
 Move Down	Omlaag
 Move Up	Omhoog
@@ -375,6 +385,7 @@ No standalone tables	Geen zelfstandige tabellen
 NoData	NoData
 None	Geen
 North	Noord
+North Polar Stereographic	Polair stereografisch noord
 Not saved yet	Nog niet opgeslagen
 Ocean	Oceaan
 OID	OID
@@ -420,6 +431,8 @@ Primary\nSymbology	Primaire\nsymbologie
 Primary symbology	Primaire symbologie
 Project	Project
 Project Info	Projectinfo
+Projection	Projectie
+Projections	Projecties
 Proportional Symbols	Proportionele symbolen
 Proximity	Nabijheid
 Quantile	Kwantiel
@@ -526,6 +539,7 @@ Size	Grootte
 Size, bands, statistics and coordinate system.	Grootte, banden, statistieken en coördinatensysteem.
 Source	Bron
 South	Zuid
+South Polar Stereographic	Polair stereografisch zuid
 Square	Vierkant
 Standalone Tables	Zelfstandige tabellen
 Standard Deviation	Standaardafwijking
@@ -559,6 +573,7 @@ Terrain	Terrein
 Text	Tekst
 Text Symbol	Tekstsymbool
 the map has no layers	de kaart heeft geen lagen
+The map is drawn in this coordinate system; layers are projected on the fly.	De kaart wordt in dit coördinatenstelsel getekend; lagen worden direct geprojecteerd.
 The raster's data couldn't be read.	De rastergegevens konden niet worden gelezen.
 The raster's data couldn't be read: {path}	De rastergegevens konden niet worden gelezen: {path}
 Thermal	Thermisch
@@ -583,6 +598,7 @@ Undo the last change.	De laatste wijziging ongedaan maken.
 Undo {action}	{action} ongedaan maken
 Unique Values	Unieke waarden
 Units	Eenheden
+USA Contiguous Albers Equal Area	VS (aaneengesloten) Albers oppervlaktegetrouw
 Valid expression · {n} matching rows	Geldige expressie · {n} overeenkomende rijen
 Vector and raster data	Vector- en rastergegevens
 Version {version}	Versie {version}
@@ -591,6 +607,7 @@ View › Windows	Beeld › Vensters
 Visibility	Zichtbaarheid
 Visibility Range	Zichtbaarheidsbereik
 Visible	Zichtbaar
+Web Mercator	Web Mercator
 Welcome to RustGIS	Welkom bij RustGIS
 West	West
 WGS 84 / Globe	WGS 84 / Wereldbol

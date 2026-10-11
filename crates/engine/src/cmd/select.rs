@@ -1,6 +1,6 @@
 //! Map › Selection.
 
-use rustgis_geom::{Coord, Extent, lonlat_to_merc};
+use rustgis_geom::{Coord, Extent};
 use serde_json::{Value, json};
 
 use super::{f, need_layer, need_layers, need_selection, ps};
@@ -129,7 +129,7 @@ fn by_attributes(s: &mut Session, p: &Value) -> CmdResult {
 fn by_rect(s: &mut Session, p: &Value) -> CmdResult {
     let (a, b, c, d) = (f(p, "minLon"), f(p, "minLat"), f(p, "maxLon"), f(p, "maxLat"));
     let (Some(a), Some(b), Some(c), Some(d)) = (a, b, c, d) else { return Err("minLon, minLat, maxLon and maxLat are required".into()) };
-    let e = Extent::from_points(lonlat_to_merc(Coord::new(a, b)), lonlat_to_merc(Coord::new(c, d)));
+    let e = s.map().flat().extent(&Extent::from_points(Coord::new(a, b), Coord::new(c, d)));
     let scale = s.scale();
     let m = mode(p);
     let hits = s.map_mut().hits_in(&e, scale);
@@ -149,7 +149,8 @@ fn hit(s: &mut Session, p: &Value) -> Result<Option<(u32, usize)>, String> {
     let lat = f(p, "lat").ok_or("lat is required")?;
     let tol = f(p, "tolerancePx").unwrap_or(4.0).clamp(0.0, 50.0) * s.map().camera.res;
     let scale = s.scale();
-    Ok(s.map_mut().hit(lonlat_to_merc(Coord::new(lon, lat)), tol, scale))
+    let Some(p) = s.map().to_map(Coord::new(lon, lat)) else { return Ok(None) };
+    Ok(s.map_mut().hit(p, tol, scale))
 }
 
 fn at_point(s: &mut Session, p: &Value) -> CmdResult {

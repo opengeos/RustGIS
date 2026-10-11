@@ -24,7 +24,7 @@ use std::sync::OnceLock;
 use rustgis_data::{Dataset, Geometry, GeometryType};
 use rustgis_geom::{Coord, Extent, lonlat_to_merc};
 use rustgis_map::globe::{V3, densify};
-use rustgis_map::{Camera, Globe, Map, Marker, Projection, Rgba, Symbol};
+use rustgis_map::{Camera, Globe, Map, Marker, Rgba, Symbol};
 use tiny_skia::{
     FillRule, GradientStop, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint, Point, RadialGradient, SpreadMode, Stroke,
     Transform,
@@ -94,6 +94,25 @@ fn world() -> &'static Vec<Geometry> {
 fn world_lonlat() -> &'static Vec<Geometry> {
     static W: OnceLock<Vec<Geometry>> = OnceLock::new();
     W.get_or_init(|| world().iter().map(|g| g.map_coords(&rustgis_geom::merc_to_lonlat)).collect())
+}
+
+thread_local! {
+    /// The world outline in each custom projection used so far.
+    static WORLD_IN: std::cell::RefCell<std::collections::HashMap<String, std::rc::Rc<Vec<Geometry>>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The built-in world outline in a custom projection's coordinates (kept per projection).
+fn world_in(flat: &rustgis_map::projection::Flat, key: &str) -> std::rc::Rc<Vec<Geometry>> {
+    WORLD_IN.with(|cell| {
+        cell.borrow_mut()
+            .entry(key.to_string())
+            .or_insert_with(|| {
+                let f = |c: Coord| flat.forward_checked(c).unwrap_or(Coord::new(f64::NAN, f64::NAN));
+                std::rc::Rc::new(world_lonlat().iter().map(|g| g.map_coords(&f)).collect())
+            })
+            .clone()
+    })
 }
 
 /// Largest angle between globe vertices before edges are bent along great circles (2°).
@@ -260,6 +279,11 @@ impl Ctx<'_> {
         for (i, c) in ring.iter().enumerate() {
             let (x, y) = self.px(*c);
             if !x.is_finite() || !y.is_finite() {
+                // A point the projection can't show breaks the line rather than being bridged.
+                if close && last.is_some() {
+                    pb.close();
+                }
+                last = None;
                 continue;
             }
             match last {
@@ -388,9 +412,11 @@ pub fn render(map: &mut Map, view: &View) -> Option<Rendered> {
 fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Rendered> {
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
-    let globe = (map.projection == Projection::Globe).then(|| Globe::new(&view.camera, view.width, view.height));
+    let globe = map.projection.is_globe().then(|| Globe::new(&view.camera, view.width, view.height));
+    let (flat, key) = (map.flat(), map.projection.code());
+    let custom = matches!(flat, rustgis_map::projection::Flat::Custom(_)) && globe.is_none();
     let ctx = Ctx { view, ppp: view.pixels_per_point as f32, cull: view.camera.extent(view.width, view.height).padded(0.05, 0.0), globe };
-    let scale = view.camera.scale();
+    let scale = map.scale();
     // On the globe nothing is culled by the flat extent: the horizon clips instead.
     let visible = |e: &Extent| match &globe {
         Some(g) => g.may_see(e),
@@ -406,7 +432,12 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     if land != water {
         let fill = paint(land, 1.0);
         let stroke = (outline.a() > 0).then(|| (paint(outline, 1.0), 0.6));
-        let outlines = if globe.is_some() { world_lonlat() } else { world() };
+        let custom_world = custom.then(|| world_in(&flat, &key));
+        let outlines: &Vec<Geometry> = match (&globe, &custom_world) {
+            (Some(_), _) => world_lonlat(),
+            (None, Some(w)) => w,
+            (None, None) => world(),
+        };
         for g in outlines {
             if let Geometry::Polygon(polys) = g
                 && visible(&g.extent())
@@ -426,7 +457,15 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         } else {
             1.0
         };
-        let to = |c: Coord| if globe.is_some() { c } else { lonlat_to_merc(c) };
+        let to = |c: Coord| {
+            if globe.is_some() {
+                c
+            } else if custom {
+                flat.forward_checked(c).unwrap_or(Coord::new(f64::NAN, f64::NAN))
+            } else {
+                lonlat_to_merc(c)
+            }
+        };
         let (lat_max, lat_min) = if globe.is_some() { (90.0, -90.0) } else { (85.0, -85.0) };
         let mut lines = Vec::new();
         let mut lon = -180.0;
@@ -453,13 +492,17 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         let opacity = layer.opacity();
         if let Some(rl) = &layer.raster {
             if let Some(data) = &rl.data {
-                raster::draw(&mut pm, data, &rl.style, view, opacity, full_res_rasters, globe.as_ref());
+                let place = match &globe {
+                    Some(g) => raster::Place::Globe(g),
+                    None => raster::Place::Flat(&flat, &key),
+                };
+                raster::draw(&mut pm, data, &rl.style, view, opacity, full_res_rasters, place);
             }
             continue;
         }
         let rows = layer.visible_rows();
         if globe.is_none() {
-            layer.projected(); // refresh the Web Mercator cache
+            layer.projected_in(&flat, &key); // refresh the projected cache
         }
         // Everything below only reads the layer: borrow rather than copy its data each frame.
         let layer: &rustgis_map::Layer = layer;
@@ -703,7 +746,7 @@ pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
     for l in &r.labels {
         text::draw(&mut r.pixmap, l, view.pixels_per_point as f32);
     }
-    text::scale_bar(&mut r.pixmap, view);
+    text::scale_bar(&mut r.pixmap, view, map.ground_res());
     r.pixmap.encode_png().map_err(|e| e.to_string())
 }
 

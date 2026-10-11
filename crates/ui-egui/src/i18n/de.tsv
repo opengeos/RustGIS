@@ -80,9 +80,11 @@ Catalog	Katalog
 Catalog\nPane	Katalog-\nbereich
 Cell size	Zellengröße
 Change the map's backdrop.	Den Kartenhintergrund ändern.
+Change the map's coordinate system	Koordinatensystem der Karte ändern
 Choose a band combination to display the raster layer.	Eine Kanalkombination zur Anzeige des Raster-Layers wählen.
 Choose a contrast stretch for the raster layer.	Eine Kontraststreckung für den Raster-Layer wählen.
 Choose a resampling type for the raster layer.	Ein Resampling-Verfahren für den Raster-Layer wählen.
+Choose how the flat map lays out the Earth.	Wählen, wie die flache Karte die Erde abbildet.
 Choose how the layer is drawn.	Festlegen, wie der Layer gezeichnet wird.
 Choose how the raster is drawn.	Festlegen, wie das Raster dargestellt wird.
 Choose the interface language.	Die Sprache der Oberfläche wählen.
@@ -125,7 +127,9 @@ Compute a field's values.	Die Werte eines Feldes berechnen.
 Contents	Inhalt
 Contrast	Kontrast
 Conversion	Konvertierung
+Coordinate System	Koordinatensystem
 Coordinate system	Koordinatensystem
+Coordinate System…	Koordinatensystem…
 Copies the (selected) features of a layer to a new layer.	Kopiert die (ausgewählten) Objekte eines Layers in einen neuen Layer.
 Copy Coordinates	Koordinaten kopieren
 Couldn't download the font for {language}; pick the language again to retry.	Die Schriftart für {language} konnte nicht heruntergeladen werden; wählen Sie die Sprache erneut, um es noch einmal zu versuchen.
@@ -199,10 +203,13 @@ Effects	Effekte
 Ember	Glut
 Encloses each feature, or all features, in its convex hull.	Umschließt jedes Objekt oder alle Objekte mit ihrer konvexen Hülle.
 Enhancement	Verbesserung
+EPSG code	EPSG-Code
 Equal Interval	Gleiches Intervall
+Equirectangular (Plate Carrée)	Plattkarte (abstandstreu zylindrisch)
 Erase	Radieren
 Erase Features	Objekte radieren
 Esc	Esc
+Europe Equal Area (ETRS89 LAEA)	Europa flächentreu (ETRS89 LAEA)
 Expand Legend	Legende erweitern
 Expand the ribbon (Ctrl+F1)	Menüband erweitern (Strg+F1)
 Explore	Erkunden
@@ -302,6 +309,7 @@ Label Class	Beschriftungsklasse
 Label Field	Beschriftungsfeld
 Labeling	Beschriftung
 Lagoon	Lagune
+Lambert Cylindrical Equal Area	Lambert flächentreue Zylinderprojektion
 Language	Sprache
 Last map render time	Letzte Kartenrenderzeit
 Latitude (Y)	Breite (Y)
@@ -341,11 +349,13 @@ Meters	Meter
 Method	Methode
 Midnight	Mitternacht
 Miles	Meilen
+Miller Cylindrical	Miller-Zylinderprojektion
 Min	Min
 Min %	Min %
 Minimum Bounding Geometry	Minimale umgebende Geometrie
 Minimum Maximum	Minimum Maximum
 Mod+	Mod+
+Mollweide (equal-area world)	Mollweide (flächentreue Weltkarte)
 Mouse wheel	Mausrad
 Move Down	Nach unten
 Move Up	Nach oben
@@ -375,6 +385,7 @@ No standalone tables	Keine eigenständigen Tabellen
 NoData	NoData
 None	Keine
 North	Nord
+North Polar Stereographic	Polare stereografische Projektion (Nord)
 Not saved yet	Noch nicht gespeichert
 Ocean	Ozean
 OID	OID
@@ -420,6 +431,8 @@ Primary\nSymbology	Primäre\nSymbologie
 Primary symbology	Primäre Symbologie
 Project	Projekt
 Project Info	Projektinfo
+Projection	Projektion
+Projections	Projektionen
 Proportional Symbols	Proportionale Symbole
 Proximity	Nachbarschaft
 Quantile	Quantil
@@ -526,6 +539,7 @@ Size	Größe
 Size, bands, statistics and coordinate system.	Größe, Kanäle, Statistik und Koordinatensystem.
 Source	Quelle
 South	Süd
+South Polar Stereographic	Polare stereografische Projektion (Süd)
 Square	Quadrat
 Standalone Tables	Eigenständige Tabellen
 Standard Deviation	Standardabweichung
@@ -559,6 +573,7 @@ Terrain	Gelände
 Text	Text
 Text Symbol	Textsymbol
 the map has no layers	die Karte hat keine Layer
+The map is drawn in this coordinate system; layers are projected on the fly.	Die Karte wird in diesem Koordinatensystem gezeichnet; Layer werden spontan projiziert.
 The raster's data couldn't be read.	Die Daten des Rasters konnten nicht gelesen werden.
 The raster's data couldn't be read: {path}	Die Daten des Rasters konnten nicht gelesen werden: {path}
 Thermal	Thermisch
@@ -583,6 +598,7 @@ Undo the last change.	Die letzte Änderung rückgängig machen.
 Undo {action}	{action} rückgängig machen
 Unique Values	Eindeutige Werte
 Units	Einheiten
+USA Contiguous Albers Equal Area	USA flächentreue Albers-Projektion
 Valid expression · {n} matching rows	Gültiger Ausdruck · {n} passende Zeilen
 Vector and raster data	Vektor- und Rasterdaten
 Version {version}	Version {version}
@@ -591,6 +607,7 @@ View › Windows	Ansicht › Fenster
 Visibility	Sichtbarkeit
 Visibility Range	Sichtbarkeitsbereich
 Visible	Sichtbar
+Web Mercator	Web Mercator
 Welcome to RustGIS	Willkommen bei RustGIS
 West	West
 WGS 84 / Globe	WGS 84 / Globus

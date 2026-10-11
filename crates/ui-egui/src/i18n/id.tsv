@@ -80,9 +80,11 @@ Catalog	Katalog
 Catalog\nPane	Panel\nKatalog
 Cell size	Ukuran sel
 Change the map's backdrop.	Ubah latar belakang peta.
+Change the map's coordinate system	Ubah sistem koordinat peta
 Choose a band combination to display the raster layer.	Pilih kombinasi band untuk menampilkan layer raster.
 Choose a contrast stretch for the raster layer.	Pilih peregangan kontras untuk layer raster.
 Choose a resampling type for the raster layer.	Pilih tipe resampling untuk layer raster.
+Choose how the flat map lays out the Earth.	Pilih cara peta datar menampilkan Bumi.
 Choose how the layer is drawn.	Pilih cara layer digambar.
 Choose how the raster is drawn.	Pilih cara raster digambar.
 Choose the interface language.	Pilih bahasa antarmuka.
@@ -125,7 +127,9 @@ Compute a field's values.	Hitung nilai suatu kolom.
 Contents	Konten
 Contrast	Kontras
 Conversion	Konversi
+Coordinate System	Sistem Koordinat
 Coordinate system	Sistem koordinat
+Coordinate System…	Sistem Koordinat…
 Copies the (selected) features of a layer to a new layer.	Menyalin fitur (terpilih) dari suatu layer ke layer baru.
 Copy Coordinates	Salin Koordinat
 Couldn't download the font for {language}; pick the language again to retry.	Tidak dapat mengunduh font untuk {language}; pilih bahasa lagi untuk mencoba ulang.
@@ -199,10 +203,13 @@ Effects	Efek
 Ember	Bara
 Encloses each feature, or all features, in its convex hull.	Melingkupi setiap fitur, atau semua fitur, dengan convex hull-nya.
 Enhancement	Peningkatan
+EPSG code	Kode EPSG
 Equal Interval	Interval Sama
+Equirectangular (Plate Carrée)	Ekuirektangular (Plate Carrée)
 Erase	Hapus (Erase)
 Erase Features	Hapus Fitur (Erase)
 Esc	Esc
+Europe Equal Area (ETRS89 LAEA)	Eropa Luas Sama (ETRS89 LAEA)
 Expand Legend	Perluas Legenda
 Expand the ribbon (Ctrl+F1)	Perluas ribbon (Ctrl+F1)
 Explore	Jelajah
@@ -302,6 +309,7 @@ Label Class	Kelas Label
 Label Field	Kolom Label
 Labeling	Pelabelan
 Lagoon	Laguna
+Lambert Cylindrical Equal Area	Silinder Luas Sama Lambert
 Language	Bahasa
 Last map render time	Waktu render peta terakhir
 Latitude (Y)	Lintang (Y)
@@ -341,11 +349,13 @@ Meters	Meter
 Method	Metode
 Midnight	Tengah Malam
 Miles	Mil
+Miller Cylindrical	Silinder Miller
 Min	Min
 Min %	Min %
 Minimum Bounding Geometry	Geometri Batas Minimum
 Minimum Maximum	Minimum Maksimum
 Mod+	Mod+
+Mollweide (equal-area world)	Mollweide (dunia luas sama)
 Mouse wheel	Roda tetikus
 Move Down	Turunkan
 Move Up	Naikkan
@@ -375,6 +385,7 @@ No standalone tables	Tidak ada tabel mandiri
 NoData	NoData
 None	Tidak ada
 North	Utara
+North Polar Stereographic	Stereografis Kutub Utara
 Not saved yet	Belum disimpan
 Ocean	Samudra
 OID	OID
@@ -420,6 +431,8 @@ Primary\nSymbology	Simbologi\nUtama
 Primary symbology	Simbologi utama
 Project	Proyek
 Project Info	Info Proyek
+Projection	Proyeksi
+Projections	Proyeksi
 Proportional Symbols	Simbol Proporsional
 Proximity	Kedekatan
 Quantile	Kuantil
@@ -526,6 +539,7 @@ Size	Ukuran
 Size, bands, statistics and coordinate system.	Ukuran, band, statistik, dan sistem koordinat.
 Source	Sumber
 South	Selatan
+South Polar Stereographic	Stereografis Kutub Selatan
 Square	Persegi
 Standalone Tables	Tabel Mandiri
 Standard Deviation	Simpangan Baku
@@ -559,6 +573,7 @@ Terrain	Medan
 Text	Teks
 Text Symbol	Simbol Teks
 the map has no layers	peta tidak memiliki layer
+The map is drawn in this coordinate system; layers are projected on the fly.	Peta digambar dalam sistem koordinat ini; lapisan diproyeksikan secara langsung.
 The raster's data couldn't be read.	Data raster tidak dapat dibaca.
 The raster's data couldn't be read: {path}	Data raster tidak dapat dibaca: {path}
 Thermal	Termal
@@ -583,6 +598,7 @@ Undo the last change.	Urungkan perubahan terakhir.
 Undo {action}	Urungkan {action}
 Unique Values	Nilai Unik
 Units	Satuan
+USA Contiguous Albers Equal Area	Albers Luas Sama AS Kontinental
 Valid expression · {n} matching rows	Ekspresi valid · {n} baris cocok
 Vector and raster data	Data vektor dan raster
 Version {version}	Versi {version}
@@ -591,6 +607,7 @@ View › Windows	Tampilan › Jendela
 Visibility	Visibilitas
 Visibility Range	Rentang Visibilitas
 Visible	Terlihat
+Web Mercator	Web Mercator
 Welcome to RustGIS	Selamat datang di RustGIS
 West	Barat
 WGS 84 / Globe	WGS 84 / Globe

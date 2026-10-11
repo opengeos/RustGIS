@@ -3009,6 +3009,8 @@ name = "rustgis-map"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "crs-definitions",
+ "proj4rs",
  "rustgis-data",
  "rustgis-geom",
  "serde",

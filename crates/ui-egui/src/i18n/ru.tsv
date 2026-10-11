@@ -80,9 +80,11 @@ Catalog	Каталог
 Catalog\nPane	Панель\nкаталога
 Cell size	Размер ячейки
 Change the map's backdrop.	Изменить фон карты.
+Change the map's coordinate system	Изменить систему координат карты
 Choose a band combination to display the raster layer.	Выберите комбинацию каналов для отображения растрового слоя.
 Choose a contrast stretch for the raster layer.	Выберите растяжку контраста для растрового слоя.
 Choose a resampling type for the raster layer.	Выберите тип передискретизации для растрового слоя.
+Choose how the flat map lays out the Earth.	Выбрать, как плоская карта отображает Землю.
 Choose how the layer is drawn.	Выбрать способ отображения слоя.
 Choose how the raster is drawn.	Выберите способ отрисовки растра.
 Choose the interface language.	Выбрать язык интерфейса.
@@ -125,7 +127,9 @@ Compute a field's values.	Вычислить значения поля.
 Contents	Содержание
 Contrast	Контраст
 Conversion	Преобразование
+Coordinate System	Система координат
 Coordinate system	Система координат
+Coordinate System…	Система координат…
 Copies the (selected) features of a layer to a new layer.	Копирует (выбранные) объекты слоя в новый слой.
 Copy Coordinates	Копировать координаты
 Couldn't download the font for {language}; pick the language again to retry.	Не удалось загрузить шрифт для {language}; выберите язык ещё раз, чтобы повторить попытку.
@@ -199,10 +203,13 @@ Effects	Эффекты
 Ember	Угли
 Encloses each feature, or all features, in its convex hull.	Заключает каждый объект или все объекты в выпуклую оболочку.
 Enhancement	Улучшение
+EPSG code	Код EPSG
 Equal Interval	Равные интервалы
+Equirectangular (Plate Carrée)	Равнопромежуточная (Plate Carrée)
 Erase	Стереть
 Erase Features	Стереть объекты
 Esc	Esc
+Europe Equal Area (ETRS89 LAEA)	Европа, равновеликая (ETRS89 LAEA)
 Expand Legend	Развернуть легенду
 Expand the ribbon (Ctrl+F1)	Развернуть ленту (Ctrl+F1)
 Explore	Обзор
@@ -302,6 +309,7 @@ Label Class	Класс подписей
 Label Field	Поле подписей
 Labeling	Подписи
 Lagoon	Лагуна
+Lambert Cylindrical Equal Area	Равновеликая цилиндрическая Ламберта
 Language	Язык
 Last map render time	Время последней отрисовки карты
 Latitude (Y)	Широта (Y)
@@ -341,11 +349,13 @@ Meters	Метры
 Method	Метод
 Midnight	Полночь
 Miles	Мили
+Miller Cylindrical	Цилиндрическая Миллера
 Min	Мин.
 Min %	Мин. %
 Minimum Bounding Geometry	Минимальная ограничивающая геометрия
 Minimum Maximum	Минимум-максимум
 Mod+	Mod+
+Mollweide (equal-area world)	Мольвейде (равновеликая карта мира)
 Mouse wheel	Колесо мыши
 Move Down	Переместить вниз
 Move Up	Переместить вверх
@@ -375,6 +385,7 @@ No standalone tables	Нет отдельных таблиц
 NoData	NoData
 None	Нет
 North	Север
+North Polar Stereographic	Северная полярная стереографическая
 Not saved yet	Ещё не сохранено
 Ocean	Океан
 OID	OID
@@ -420,6 +431,8 @@ Primary\nSymbology	Основные\nсимволы
 Primary symbology	Основные символы
 Project	Проект
 Project Info	Сведения о проекте
+Projection	Проекция
+Projections	Проекции
 Proportional Symbols	Пропорциональные символы
 Proximity	Близость
 Quantile	Квантили
@@ -526,6 +539,7 @@ Size	Размер
 Size, bands, statistics and coordinate system.	Размер, каналы, статистика и система координат.
 Source	Источник
 South	Юг
+South Polar Stereographic	Южная полярная стереографическая
 Square	Квадрат
 Standalone Tables	Отдельные таблицы
 Standard Deviation	Стандартное отклонение
@@ -559,6 +573,7 @@ Terrain	Рельеф
 Text	Текст
 Text Symbol	Текстовый символ
 the map has no layers	на карте нет слоёв
+The map is drawn in this coordinate system; layers are projected on the fly.	Карта рисуется в этой системе координат; слои проецируются на лету.
 The raster's data couldn't be read.	Не удалось прочитать данные растра.
 The raster's data couldn't be read: {path}	Не удалось прочитать данные растра: {path}
 Thermal	Тепловая
@@ -583,6 +598,7 @@ Undo the last change.	Отменить последнее изменение.
 Undo {action}	Отменить: {action}
 Unique Values	Уникальные значения
 Units	Единицы
+USA Contiguous Albers Equal Area	Равновеликая Альберса для смежных штатов США
 Valid expression · {n} matching rows	Выражение допустимо · Подходящих строк: {n}
 Vector and raster data	Векторные и растровые данные
 Version {version}	Версия {version}
@@ -591,6 +607,7 @@ View › Windows	Вид › Окна
 Visibility	Видимость
 Visibility Range	Диапазон видимости
 Visible	Видимый
+Web Mercator	Web Mercator
 Welcome to RustGIS	Добро пожаловать в RustGIS
 West	Запад
 WGS 84 / Globe	WGS 84 / Глобус

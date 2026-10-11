@@ -37,6 +37,26 @@ Vector coordinates are WGS 84 longitude/latitude and are displayed in Web Mercat
 their own coordinate system (any EPSG code, such as UTM zones or national grids) and are
 reprojected on the fly as they draw.
 
+## Projections
+
+The flat map is drawn in Web Mercator by default. **View › Projection** switches it to another
+projection, and clicking the coordinate system in the status bar opens the **Coordinate
+System** dialog, which also takes any projected EPSG code (such as `3035`, `32633` for UTM zone
+33N or `2056` for Switzerland):
+
+| Preset | Kind |
+| --- | --- |
+| Equirectangular, Miller | World, cylindrical |
+| Mollweide, Lambert Cylindrical Equal Area | World, equal-area |
+| North / South Polar Stereographic | Polar |
+| Europe Equal Area (ETRS89 LAEA), USA Contiguous Albers Equal Area | Regional, equal-area |
+
+Layers are projected on the fly. Each projection has an area of use: polar projections show
+their hemisphere poleward of 30°, regional ones their region, transverse Mercator (UTM) zones
+30° either side of their meridian, and data outside it isn't drawn. Switching keeps the centre
+and scale, and the choice is saved with the map (`map.projection` from the command line). A
+raster already in the map's coordinate system draws without being reprojected.
+
 ## Globe
 
 **View › Globe** shows the map as a 3D globe seen from space instead of the flat Web Mercator

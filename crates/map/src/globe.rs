@@ -17,34 +17,56 @@ use crate::Camera;
 pub const GLOBE_DISTANCE: f64 = 6.0;
 
 /// How a map is drawn.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Projection {
     /// The flat Web Mercator map.
     #[default]
     WebMercator,
     /// A 3D globe.
     Globe,
+    /// Another flat projection: a preset id (see [`crate::projection::PRESETS`]) or `EPSG:<code>`.
+    Custom(String),
 }
 
 impl Projection {
-    pub fn code(self) -> &'static str {
+    pub fn code(&self) -> String {
         match self {
-            Projection::WebMercator => "mercator",
-            Projection::Globe => "globe",
+            Projection::WebMercator => "mercator".into(),
+            Projection::Globe => "globe".into(),
+            Projection::Custom(c) => c.clone(),
         }
     }
-    pub fn label(self) -> &'static str {
+
+    /// A display name: `Web Mercator`, `Globe`, a preset's name or `EPSG:3035`.
+    pub fn label(&self) -> String {
         match self {
-            Projection::WebMercator => "Web Mercator",
-            Projection::Globe => "Globe",
+            Projection::WebMercator => "Web Mercator".into(),
+            Projection::Globe => "Globe".into(),
+            Projection::Custom(c) => crate::projection::lookup(c).map(|(_, l)| l).unwrap_or_else(|_| c.clone()),
         }
     }
-    pub fn from_code(s: &str) -> Option<Projection> {
+
+    pub fn is_globe(&self) -> bool {
+        matches!(self, Projection::Globe)
+    }
+
+    /// A projection by code: `mercator`, `globe`, a preset id or name, or an EPSG code (which
+    /// must name a projected coordinate system).
+    pub fn from_code(s: &str) -> Result<Projection, String> {
         match s.trim().to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
-            "mercator" | "webmercator" | "2d" | "map" => Some(Projection::WebMercator),
-            "globe" | "3d" | "scene" | "globalscene" => Some(Projection::Globe),
-            _ => None,
+            "mercator" | "webmercator" | "2d" | "map" | "epsg:3857" | "3857" | "epsg:900913" => return Ok(Projection::WebMercator),
+            "globe" | "3d" | "scene" | "globalscene" => return Ok(Projection::Globe),
+            _ => {}
         }
+        let s = s.trim();
+        crate::projection::lookup(s)?;
+        // Canonical form: the preset id, or EPSG:<n>.
+        let canonical = crate::projection::PRESETS
+            .iter()
+            .find(|(id, label, _)| id.eq_ignore_ascii_case(s) || label.eq_ignore_ascii_case(s))
+            .map(|(id, _, _)| id.to_string())
+            .unwrap_or_else(|| format!("EPSG:{}", s.trim_start_matches(|c: char| !c.is_ascii_digit())));
+        Ok(Projection::Custom(canonical))
     }
 }
 

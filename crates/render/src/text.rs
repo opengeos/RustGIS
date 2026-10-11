@@ -94,10 +94,9 @@ pub fn draw(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
 }
 
 /// A two-tone scale bar in the lower-left corner.
-pub fn scale_bar(pm: &mut Pixmap, view: &View) {
+/// `ground_per_pt` is ground metres per logical pixel at the centre of view.
+pub fn scale_bar(pm: &mut Pixmap, view: &View, ground_per_pt: f64) {
     let ppp = view.pixels_per_point as f32;
-    let lat = view.camera.center_lonlat().y.to_radians().cos().abs().max(0.01);
-    let ground_per_pt = view.camera.res * lat;
     let target = rustgis_geom::nice_distance(ground_per_pt * 120.0);
     if target <= 0.0 {
         return;

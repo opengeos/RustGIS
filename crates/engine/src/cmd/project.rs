@@ -137,8 +137,8 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
         "activeMap": m.name,
         "basemap": m.basemap.code(),
         "projection": m.projection.code(),
-        "scale": m.camera.scale().round(),
-        "center": {"lon": m.camera.center_lonlat().x, "lat": m.camera.center_lonlat().y},
+        "scale": m.scale().round(),
+        "center": {"lon": m.center_lonlat().x, "lat": m.center_lonlat().y},
         "layers": m.layers.iter().map(|l| match &l.raster {
             Some(rl) => json!({
                 "id": l.id, "name": l.name, "type": "Raster", "visible": l.visible, "renderer": rl.style.renderer.label(),

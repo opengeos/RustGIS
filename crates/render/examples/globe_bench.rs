@@ -29,7 +29,7 @@ fn main() {
     for (name, f) in variants {
         f(&mut m);
         for (proj, ppp) in [(Projection::WebMercator, 1.0), (Projection::Globe, 1.0), (Projection::Globe, 0.6)] {
-            m.projection = proj;
+            m.projection = proj.clone();
             let t = std::time::Instant::now();
             let n = 20;
             for i in 0..n {

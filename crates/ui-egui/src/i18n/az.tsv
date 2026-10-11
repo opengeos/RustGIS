@@ -80,9 +80,11 @@ Catalog	Kataloq
 Catalog\nPane	Kataloq\npaneli
 Cell size	Xana ölçüsü
 Change the map's backdrop.	Xəritənin fonunu dəyişin.
+Change the map's coordinate system	Xəritənin koordinat sistemini dəyiş
 Choose a band combination to display the raster layer.	Rastr layını göstərmək üçün kanal kombinasiyası seçin.
 Choose a contrast stretch for the raster layer.	Rastr layı üçün kontrast genişləndirməsi seçin.
 Choose a resampling type for the raster layer.	Rastr layı üçün yenidən nümunələmə tipini seçin.
+Choose how the flat map lays out the Earth.	Düz xəritənin Yeri necə göstərdiyini seçin.
 Choose how the layer is drawn.	Layın necə çəkiləcəyini seçin.
 Choose how the raster is drawn.	Rastrın necə çəkiləcəyini seçin.
 Choose the interface language.	İnterfeys dilini seçin.
@@ -125,7 +127,9 @@ Compute a field's values.	Sahənin qiymətlərini hesablayın.
 Contents	Məzmun
 Contrast	Kontrast
 Conversion	Çevirmə
+Coordinate System	Koordinat sistemi
 Coordinate system	Koordinat sistemi
+Coordinate System…	Koordinat sistemi…
 Copies the (selected) features of a layer to a new layer.	Layın (seçilmiş) obyektlərini yeni laya kopyalayır.
 Copy Coordinates	Koordinatları kopyala
 Couldn't download the font for {language}; pick the language again to retry.	{language} üçün şrift endirilə bilmədi; yenidən cəhd etmək üçün dili yenidən seçin.
@@ -199,10 +203,13 @@ Effects	Effektlər
 Ember	Köz
 Encloses each feature, or all features, in its convex hull.	Hər obyekti və ya bütün obyektləri qabarıq örtüyə alır.
 Enhancement	Gücləndirmə
+EPSG code	EPSG kodu
 Equal Interval	Bərabər interval
+Equirectangular (Plate Carrée)	Bərabər məsafəli silindrik (Plate Carrée)
 Erase	Pozma
 Erase Features	Obyektləri poz
 Esc	Esc
+Europe Equal Area (ETRS89 LAEA)	Avropa bərabər sahəli (ETRS89 LAEA)
 Expand Legend	Legendanı genişləndir
 Expand the ribbon (Ctrl+F1)	Lenti aç (Ctrl+F1)
 Explore	Kəşf et
@@ -302,6 +309,7 @@ Label Class	Etiket sinfi
 Label Field	Etiket sahəsi
 Labeling	Etiketləmə
 Lagoon	Laquna
+Lambert Cylindrical Equal Area	Lambert bərabər sahəli silindrik
 Language	Dil
 Last map render time	Xəritənin son göstərilmə vaxtı
 Latitude (Y)	En dairəsi (Y)
@@ -341,11 +349,13 @@ Meters	Metr
 Method	Üsul
 Midnight	Gecəyarısı
 Miles	Mil
+Miller Cylindrical	Miller silindrik
 Min	Min
 Min %	Min %
 Minimum Bounding Geometry	Minimal sərhəd həndəsəsi
 Minimum Maximum	Minimum maksimum
 Mod+	Mod+
+Mollweide (equal-area world)	Mollveyde (bərabər sahəli dünya)
 Mouse wheel	Siçan çarxı
 Move Down	Aşağı köçür
 Move Up	Yuxarı köçür
@@ -375,6 +385,7 @@ No standalone tables	Müstəqil cədvəl yoxdur
 NoData	NoData
 None	Heç biri
 North	Şimal
+North Polar Stereographic	Şimal qütb stereoqrafik
 Not saved yet	Hələ saxlanmayıb
 Ocean	Okean
 OID	OID
@@ -420,6 +431,8 @@ Primary\nSymbology	Əsas\nsimvolika
 Primary symbology	Əsas simvolika
 Project	Layihə
 Project Info	Layihə məlumatı
+Projection	Proyeksiya
+Projections	Proyeksiyalar
 Proportional Symbols	Mütənasib simvollar
 Proximity	Yaxınlıq
 Quantile	Kvantil
@@ -526,6 +539,7 @@ Size	Ölçü
 Size, bands, statistics and coordinate system.	Ölçü, kanallar, statistika və koordinat sistemi.
 Source	Mənbə
 South	Cənub
+South Polar Stereographic	Cənub qütb stereoqrafik
 Square	Kvadrat
 Standalone Tables	Müstəqil cədvəllər
 Standard Deviation	Standart sapma
@@ -559,6 +573,7 @@ Terrain	Relyef
 Text	Mətn
 Text Symbol	Mətn simvolu
 the map has no layers	xəritədə lay yoxdur
+The map is drawn in this coordinate system; layers are projected on the fly.	Xəritə bu koordinat sistemində çəkilir; laylar dərhal proyeksiya olunur.
 The raster's data couldn't be read.	Rastrın məlumatı oxuna bilmədi.
 The raster's data couldn't be read: {path}	Rastrın məlumatı oxuna bilmədi: {path}
 Thermal	Termal
@@ -583,6 +598,7 @@ Undo the last change.	Son dəyişikliyi geri alın.
 Undo {action}	{action} geri al
 Unique Values	Unikal qiymətlər
 Units	Vahidlər
+USA Contiguous Albers Equal Area	ABŞ bitişik ştatlar Albers bərabər sahəli
 Valid expression · {n} matching rows	İfadə düzgündür · {n} uyğun sətir
 Vector and raster data	Vektor və rastr məlumatı
 Version {version}	Versiya {version}
@@ -591,6 +607,7 @@ View › Windows	Görünüş › Pəncərələr
 Visibility	Görünmə
 Visibility Range	Görünmə diapazonu
 Visible	Görünən
+Web Mercator	Web Mercator
 Welcome to RustGIS	RustGIS-ə xoş gəlmisiniz
 West	Qərb
 WGS 84 / Globe	WGS 84 / Qlobus

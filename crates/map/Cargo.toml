@@ -13,6 +13,8 @@ rustgis-geom = { workspace = true }
 rustgis-data = { workspace = true }
 serde = { workspace = true }
 base64 = { workspace = true }
+proj4rs = { workspace = true }
+crs-definitions = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

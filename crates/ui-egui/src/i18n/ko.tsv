@@ -80,9 +80,11 @@ Catalog	카탈로그
 Catalog\nPane	카탈로그\n창
 Cell size	셀 크기
 Change the map's backdrop.	지도의 배경을 변경합니다.
+Change the map's coordinate system	지도 좌표계 변경
 Choose a band combination to display the raster layer.	래스터 레이어를 표시할 밴드 조합을 선택합니다.
 Choose a contrast stretch for the raster layer.	래스터 레이어의 대비 스트레치를 선택합니다.
 Choose a resampling type for the raster layer.	래스터 레이어의 리샘플링 유형을 선택합니다.
+Choose how the flat map lays out the Earth.	평면 지도가 지구를 표현하는 방식을 선택합니다.
 Choose how the layer is drawn.	레이어를 그리는 방식을 선택합니다.
 Choose how the raster is drawn.	래스터를 그리는 방법을 선택합니다.
 Choose the interface language.	인터페이스 언어를 선택합니다.
@@ -125,7 +127,9 @@ Compute a field's values.	필드 값을 계산합니다.
 Contents	목차
 Contrast	대비
 Conversion	변환
+Coordinate System	좌표계
 Coordinate system	좌표계
+Coordinate System…	좌표계…
 Copies the (selected) features of a layer to a new layer.	레이어의 (선택한) 피처를 새 레이어로 복사합니다.
 Copy Coordinates	좌표 복사
 Couldn't download the font for {language}; pick the language again to retry.	{language} 글꼴을 다운로드할 수 없습니다. 다시 시도하려면 언어를 다시 선택하세요.
@@ -199,10 +203,13 @@ Effects	효과
 Ember	엠버
 Encloses each feature, or all features, in its convex hull.	각 피처 또는 모든 피처를 볼록 껍질로 둘러쌉니다.
 Enhancement	향상
+EPSG code	EPSG 코드
 Equal Interval	등간격
+Equirectangular (Plate Carrée)	정거원통도법 (Plate Carrée)
 Erase	지우기(Erase)
 Erase Features	피처 지우기
 Esc	Esc
+Europe Equal Area (ETRS89 LAEA)	유럽 정적도법 (ETRS89 LAEA)
 Expand Legend	범례 펼치기
 Expand the ribbon (Ctrl+F1)	리본 확장 (Ctrl+F1)
 Explore	탐색
@@ -302,6 +309,7 @@ Label Class	라벨 클래스
 Label Field	라벨 필드
 Labeling	라벨링
 Lagoon	라군
+Lambert Cylindrical Equal Area	램버트 원통 정적도법
 Language	언어
 Last map render time	마지막 지도 렌더링 시간
 Latitude (Y)	위도(Y)
@@ -341,11 +349,13 @@ Meters	미터
 Method	방법
 Midnight	자정
 Miles	마일
+Miller Cylindrical	밀러 원통도법
 Min	최소
 Min %	최소 %
 Minimum Bounding Geometry	최소 경계 지오메트리
 Minimum Maximum	최소-최대
 Mod+	Mod+
+Mollweide (equal-area world)	몰바이데 도법 (정적 세계)
 Mouse wheel	마우스 휠
 Move Down	아래로 이동
 Move Up	위로 이동
@@ -375,6 +385,7 @@ No standalone tables	독립 테이블 없음
 NoData	NoData
 None	없음
 North	북
+North Polar Stereographic	북극 평사도법
 Not saved yet	아직 저장되지 않음
 Ocean	바다
 OID	OID
@@ -420,6 +431,8 @@ Primary\nSymbology	기본\n심볼
 Primary symbology	기본 심볼
 Project	프로젝트
 Project Info	프로젝트 정보
+Projection	투영
+Projections	투영
 Proportional Symbols	비례 심볼
 Proximity	근접
 Quantile	분위수
@@ -526,6 +539,7 @@ Size	크기
 Size, bands, statistics and coordinate system.	크기, 밴드, 통계 및 좌표계입니다.
 Source	소스
 South	남
+South Polar Stereographic	남극 평사도법
 Square	정사각형
 Standalone Tables	독립 테이블
 Standard Deviation	표준편차
@@ -559,6 +573,7 @@ Terrain	지형
 Text	텍스트
 Text Symbol	텍스트 심볼
 the map has no layers	지도에 레이어가 없습니다
+The map is drawn in this coordinate system; layers are projected on the fly.	지도는 이 좌표계로 그려지며 레이어는 즉석에서 투영됩니다.
 The raster's data couldn't be read.	래스터 데이터를 읽을 수 없습니다.
 The raster's data couldn't be read: {path}	래스터 데이터를 읽을 수 없습니다: {path}
 Thermal	열화상
@@ -583,6 +598,7 @@ Undo the last change.	마지막 변경을 실행 취소합니다.
 Undo {action}	{action} 실행 취소
 Unique Values	고유 값
 Units	단위
+USA Contiguous Albers Equal Area	미국 본토 앨버스 정적도법
 Valid expression · {n} matching rows	유효한 표현식 · 일치하는 행 {n}개
 Vector and raster data	벡터 및 래스터 데이터
 Version {version}	버전 {version}
@@ -591,6 +607,7 @@ View › Windows	보기 › 창
 Visibility	가시성
 Visibility Range	가시 범위
 Visible	표시
+Web Mercator	웹 메르카토르
 Welcome to RustGIS	RustGIS에 오신 것을 환영합니다
 West	서
 WGS 84 / Globe	WGS 84 / 지구본

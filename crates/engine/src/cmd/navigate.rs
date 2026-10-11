@@ -1,6 +1,6 @@
 //! Map tab › Navigate, Layer (basemap) and Insert › Project (new map), bookmarks.
 
-use rustgis_geom::{Coord, Extent, lonlat_to_merc};
+use rustgis_geom::{Coord, Extent};
 use rustgis_map::{Basemap, Bookmark, Map, Projection};
 use serde_json::{Value, json};
 
@@ -30,7 +30,7 @@ pub fn commands() -> Vec<C> {
         C::new("map.goToXY", "Go To XY", "Map › Navigate", go_to).view().params(r#"{"lon": number, "lat": number, "scale"?: number}"#),
         C::new("map.setScale", "Set Scale", "Status Bar", |s, p| {
             let sc = f(p, "scale").ok_or("scale is required")?;
-            s.map_mut().camera.set_scale(sc);
+            s.map_mut().set_scale(sc);
             s.record_extent();
             Ok(Value::Null)
         })
@@ -44,14 +44,21 @@ pub fn commands() -> Vec<C> {
         }),
         C::new("map.projection", "Globe", "View › View", |s, p| {
             let m = s.map_mut();
-            m.projection = match ps(p, "type") {
-                Some(t) => Projection::from_code(t).ok_or_else(|| format!("unknown projection '{t}'"))?,
-                None if m.projection == Projection::Globe => Projection::WebMercator,
+            let next = match ps(p, "type") {
+                Some(t) => Projection::from_code(t)?,
+                None if m.projection.is_globe() => Projection::WebMercator,
                 None => Projection::Globe,
             };
-            Ok(json!({"projection": m.projection.code()}))
+            m.set_projection(next);
+            Ok(json!({"projection": m.projection.code(), "label": m.projection.label()}))
         })
-        .params(r#"{"type"?: "mercator"|"globe" (toggles when omitted)}"#),
+        .params(r#"{"type"?: "mercator"|"globe"|preset id|"EPSG:<code>" (toggles the globe when omitted)}"#),
+        C::new("map.projections", "Projections", "View › View", |_, _| {
+            let mut v = vec![json!({"id": "mercator", "label": "Web Mercator"}), json!({"id": "globe", "label": "Globe"})];
+            v.extend(rustgis_map::projection::PRESETS.iter().map(|(id, label, _)| json!({"id": id, "label": label})));
+            Ok(Value::Array(v))
+        })
+        .view(),
         C::new("bookmark.add", "New Bookmark", "Map › Navigate › Bookmarks", add_bookmark).params(r#"{"name"?: string}"#),
         C::new("bookmark.go", "Go To Bookmark", "Map › Navigate › Bookmarks", go_bookmark).view().params(r#"{"name": string}"#),
         C::new("bookmark.remove", "Remove Bookmark", "Map › Navigate › Bookmarks", |s, p| {
@@ -117,12 +124,12 @@ fn go_to(s: &mut Session, p: &Value) -> CmdResult {
     if !(-180.0..=180.0).contains(&lon) || !(-90.0..=90.0).contains(&lat) {
         return Err("longitude must be within ±180 and latitude within ±90".into());
     }
-    let cam = &mut s.map_mut().camera;
-    cam.center = lonlat_to_merc(Coord::new(lon, lat));
+    let m = s.map_mut();
+    m.camera.center = m.to_map(Coord::new(lon, lat)).ok_or("that point is outside the map's projection")?;
     if let Some(sc) = f(p, "scale") {
-        cam.set_scale(sc);
+        m.set_scale(sc);
     }
-    cam.clamp();
+    m.camera.clamp();
     s.record_extent();
     Ok(Value::Null)
 }
