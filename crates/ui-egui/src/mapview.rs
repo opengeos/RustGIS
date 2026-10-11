@@ -286,16 +286,7 @@ fn zoom(app: &mut RustGisApp, factor: f64, x: f64, y: f64, w: f64, h: f64) {
     }
 }
 
-/// Where the navigator sits (its compass and zoom buttons), so map clicks there are left to it.
-fn navigator_area(rect: Rect) -> Rect {
-    Rect::from_min_max(pos2(rect.min.x + 14.0, rect.min.y + 74.0), pos2(rect.min.x + 90.0, rect.min.y + 202.0))
-}
-
 fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect) {
-    // Clicks on the navigator are its own, not the map's (identify, select, sketch).
-    if app.session.map().view.navigator && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| navigator_area(rect).contains(p)) {
-        return;
-    }
     let (w, h) = (rect.width() as f64, rect.height() as f64);
     let time = now(ui);
     let hover = resp.hover_pos();
@@ -1113,17 +1104,17 @@ fn navigator(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t
     let c = pos2(rect.min.x + 52.0, rect.min.y + 112.0);
     p.circle_filled(c, 34.0, t.ribbon.gamma_multiply(0.92));
     p.circle_stroke(c, 34.0, Stroke::new(1.0, t.border_strong));
-    let click = ui.input(|i| i.pointer.primary_clicked().then(|| i.pointer.interact_pos()).flatten());
     let (w, h) = (rect.width() as f64, rect.height() as f64);
+    // Each button is an egui widget above the map, so its clicks are its own (not the map's
+    // identify, select or sketch) and popups over it get theirs first.
+    let button = |ui: &mut Ui, r: Rect, id: &str| ui.interact(r, ui.id().with(("navigator", id)), Sense::click()).clicked();
     for (dir, (dx, dy)) in [("n", (0.0, -1.0)), ("s", (0.0, 1.0)), ("e", (1.0, 0.0)), ("w", (-1.0, 0.0))] {
         let tip = c + vec2(dx, dy) * 28.0;
         let base = c + vec2(dx, dy) * 18.0;
         let side = vec2(-dy, dx) * 6.0;
         let col = if dir == "n" { Color32::from_rgb(0xD1, 0x3C, 0x3C) } else { t.text_dim };
         p.add(egui::Shape::convex_polygon(vec![tip, base + side, base - side], col, Stroke::NONE));
-        if let Some(cp) = click
-            && (cp - (c + vec2(dx, dy) * 23.0)).length() < 9.0
-        {
+        if button(ui, Rect::from_center_size(c + vec2(dx, dy) * 23.0, vec2(18.0, 18.0)), dir) {
             pan(app, -dx as f64 * w * 0.25, -dy as f64 * h * 0.25, w, h);
             app.session.record_extent();
         }
@@ -1134,7 +1125,7 @@ fn navigator(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t
         p.rect_filled(r, CornerRadius::same(5), t.ribbon.gamma_multiply(0.92));
         p.rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
         p.text(r.center(), Align2::CENTER_CENTER, label, semibold(14.0), t.text);
-        if click.is_some_and(|cp| r.contains(cp)) {
+        if button(ui, r, label) {
             zoom(app, f, w / 2.0, h / 2.0, w, h);
             app.session.record_extent();
         }

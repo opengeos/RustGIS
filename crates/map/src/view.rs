@@ -112,7 +112,8 @@ impl ViewEffects {
 pub struct ViewSettings {
     #[serde(default)]
     pub effects: ViewEffects,
-    #[serde(default)]
+    /// Session-only (like the next few): how the screen shows the map, not part of the project.
+    #[serde(skip)]
     pub color_vision: ColorVision,
     /// Polygons as outlines only (the scene's wireframe drawing mode).
     #[serde(default)]
@@ -121,10 +122,10 @@ pub struct ViewSettings {
     #[serde(default)]
     pub clip_distance: Option<f64>,
     /// Speed over quality: no antialiasing.
-    #[serde(default)]
+    #[serde(skip)]
     pub fast: bool,
     /// The on-screen navigator (compass, zoom slider and pan pad).
-    #[serde(default)]
+    #[serde(skip)]
     pub navigator: bool,
     /// Keyboard (WASD) walking navigation instead of mouse panning. Session-only: a reopened
     /// project starts with ordinary navigation, so the keys aren't captured unexpectedly.

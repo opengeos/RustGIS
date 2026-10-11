@@ -733,6 +733,9 @@ fn mosaic(s: &mut Session, p: &Value) -> CmdResult {
 
 /// A surface model as a triangle mesh (Wavefront OBJ), in metres from its south-west corner.
 fn mesh(s: &mut Session, p: &Value) -> CmdResult {
+    if ps(p, "path").is_some_and(|path| !path.to_ascii_lowercase().ends_with(".obj")) {
+        return Err("the mesh is written to an .obj file".into());
+    }
     let r = raster(s, p)?;
     let step = uint(p, "step").unwrap_or(((r.width.max(r.height) / 300).max(1)) as u64).clamp(1, 1000) as i64;
     let (cx, cy) = r.cell_size_m();
@@ -773,7 +776,6 @@ fn mesh(s: &mut Session, p: &Value) -> CmdResult {
         return Err("the raster has no surface to mesh".into());
     }
     match ps(p, "path") {
-        Some(path) if !path.to_ascii_lowercase().ends_with(".obj") => Err("the mesh is written to an .obj file".into()),
         Some(path) => {
             rustgis_data::io::write_atomic(std::path::Path::new(path), obj.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
             Ok(json!({"path": path, "vertices": v, "faces": faces}))
