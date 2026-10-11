@@ -16,6 +16,8 @@ pub struct TopologyError {
 
 /// Most errors reported per check.
 const MAX_ERRORS: usize = 10_000;
+/// Most pair tests one check spends, so a huge layer can't stall the app.
+const MAX_WORK: usize = 50_000_000;
 
 /// One geometry from several: polygons are unioned, lines and points gathered.
 pub fn merge(geoms: &[Geometry]) -> Option<Geometry> {
@@ -76,10 +78,20 @@ fn rects_touch(a: &geo::Rect<f64>, b: &geo::Rect<f64>) -> bool {
 
 /// Pairs of polygons that overlap (share area, not just an edge).
 pub fn overlaps(ds: &Dataset, rows: &[usize]) -> Vec<TopologyError> {
-    let p = polygons(ds, rows);
+    let mut p = polygons(ds, rows);
+    // Sweep from west to east: only polygons whose boxes overlap in x are compared.
+    p.sort_by(|a, b| a.2.min().x.partial_cmp(&b.2.min().x).unwrap_or(std::cmp::Ordering::Equal));
     let mut out = Vec::new();
+    let mut work = 0usize;
     for (i, (ra, a, ba)) in p.iter().enumerate() {
         for (rb, b, bb) in p.iter().skip(i + 1) {
+            if bb.min().x > ba.max().x {
+                break;
+            }
+            work += 1;
+            if work > MAX_WORK {
+                return out;
+            }
             if !rects_touch(ba, bb) || !a.intersects(b) {
                 continue;
             }
@@ -125,21 +137,37 @@ fn segments_cross(a: (Coord, Coord), b: (Coord, Coord)) -> Option<Coord> {
     (t > e && t < 1.0 - e && u > e && u < 1.0 - e).then(|| Coord::new(a.0.x + t * (a.1.x - a.0.x), a.0.y + t * (a.1.y - a.0.y)))
 }
 
-/// Where a path crosses itself (rings and lines; ring closures are allowed).
+/// Where a path crosses itself (rings and lines; ring closures are allowed). Segments are swept
+/// west to east, so only those overlapping in x are compared. A path too complex to finish
+/// within the work budget is reported at its start, to be looked at, rather than passed.
 fn self_crossing(path: &[Coord], closed: bool) -> Option<Coord> {
     let segs: Vec<(Coord, Coord)> = path.windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))).collect();
     let n = segs.len();
-    if n > 5000 {
-        return None;
-    }
-    for i in 0..n {
-        for j in i + 2..n {
-            if closed && i == 0 && j == n - 1 {
+    let minx = |s: &(Coord, Coord)| s.0.x.min(s.1.x);
+    let maxx = |s: &(Coord, Coord)| s.0.x.max(s.1.x);
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|a, b| {
+        let (sa, sb) = (segs.get(*a).map_or(0.0, minx), segs.get(*b).map_or(0.0, minx));
+        sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut work = 0usize;
+    for (k, &i) in order.iter().enumerate() {
+        let Some(a) = segs.get(i) else { continue };
+        for &j in order.iter().skip(k + 1) {
+            let Some(b) = segs.get(j) else { continue };
+            if minx(b) > maxx(a) {
+                break;
+            }
+            work += 1;
+            if work > MAX_WORK {
+                return path.first().copied();
+            }
+            let (lo, hi) = (i.min(j), i.max(j));
+            // Neighbouring segments share a vertex, as do a ring's first and last.
+            if hi == lo + 1 || (closed && lo == 0 && hi == n - 1) {
                 continue;
             }
-            if let (Some(a), Some(b)) = (segs.get(i), segs.get(j))
-                && let Some(c) = segments_cross(*a, *b)
-            {
+            if let Some(c) = segments_cross(*a, *b) {
                 return Some(c);
             }
         }
@@ -180,7 +208,20 @@ pub fn dangles(ds: &Dataset, rows: &[usize], tol_m: f64) -> Vec<TopologyError> {
             _ => None,
         })
         .collect();
+    // Each part's bounding box, to skip parts far from an end before measuring.
+    let boxes: Vec<Vec<(f64, f64, f64, f64)>> = lines
+        .iter()
+        .map(|(_, parts)| {
+            parts
+                .iter()
+                .map(|p| {
+                    p.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |b, c| (b.0.min(c.x), b.1.min(c.y), b.2.max(c.x), b.3.max(c.y)))
+                })
+                .collect()
+        })
+        .collect();
     let mut out = Vec::new();
+    let mut work = 0usize;
     for (r, parts) in &lines {
         for (pi, part) in parts.iter().enumerate() {
             // A closed part has no ends.
@@ -190,12 +231,21 @@ pub fn dangles(ds: &Dataset, rows: &[usize], tol_m: f64) -> Vec<TopologyError> {
             for end in [part.first(), part.last()].into_iter().flatten() {
                 let tol = tol_m / merc_to_lonlat(*end).y.to_radians().cos().max(0.01);
                 // Any other part (of this line or another) within the tolerance.
-                let touches = lines.iter().any(|(o, oparts)| {
-                    oparts
-                        .iter()
-                        .enumerate()
-                        .any(|(opi, op)| (o != r || opi != pi) && op.len() >= 2 && rustgis_data::geometry::seg_dist2(op, *end) <= tol * tol)
+                let touches = lines.iter().zip(&boxes).any(|((o, oparts), oboxes)| {
+                    oparts.iter().zip(oboxes).enumerate().any(|(opi, (op, b))| {
+                        work += 1;
+                        (o != r || opi != pi)
+                            && op.len() >= 2
+                            && end.x >= b.0 - tol
+                            && end.x <= b.2 + tol
+                            && end.y >= b.1 - tol
+                            && end.y <= b.3 + tol
+                            && rustgis_data::geometry::seg_dist2(op, *end) <= tol * tol
+                    })
                 });
+                if work > MAX_WORK {
+                    return out;
+                }
                 if !touches {
                     out.push(TopologyError { rows: vec![*r], at: merc_to_lonlat(*end) });
                 }
@@ -284,5 +334,22 @@ mod tests {
         let m = merge(&[square(0.0, 0.0, 1.0), square(0.5, 0.0, 1.0)]).unwrap_or(Geometry::Point(Coord::default()));
         assert!(matches!(&m, Geometry::Polygon(p) if p.len() == 1));
         assert_eq!(explode(&Geometry::MultiPoint(vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)])).len(), 2);
+    }
+
+    #[test]
+    fn long_paths_are_checked_not_skipped() {
+        // 10,000 segments zigzagging east without crossing...
+        let mut path: Vec<Coord> = (0..10_001).map(|i| Coord::new(i as f64 * 0.0001, (i % 2) as f64 * 0.0001)).collect();
+        let mut ds = Dataset::new("l", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![path.clone()])), vec![]);
+        assert!(self_intersections(&ds, &[0]).is_empty());
+        // ...then back across the start.
+        path.push(Coord::new(0.00015, -0.0001));
+        path.push(Coord::new(0.00015, 0.0002));
+        let mut ds = Dataset::new("l", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![path])), vec![]);
+        let e = self_intersections(&ds, &[0]);
+        assert_eq!(e.len(), 1);
+        assert!((e[0].at.x - 0.00015).abs() < 1e-6);
     }
 }

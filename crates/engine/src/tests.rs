@@ -974,6 +974,13 @@ fn modify_tools_snapping_topology_relationships_and_elevation() {
     s.run("edit.split", &json!({"lon": 11, "lat": 10.2})).unwrap();
     let n = s.map().layer_by_name("Paths").unwrap().dataset.features.len();
     s.run("select.rows", &json!({"layer": "Paths", "rows": [b, n - 1]})).unwrap();
+    // A merge the rules reject leaves the layer as it was.
+    s.run("data.attributeRule", &json!({"layer": "Paths", "name": "Never", "kind": "constraint", "expression": "name = 'never'"})).unwrap();
+    let before = s.map().layer_by_name("Paths").unwrap().dataset.features.clone();
+    assert!(s.run("edit.merge", &Value::Null).is_err());
+    assert_eq!(s.map().layer_by_name("Paths").unwrap().dataset.features, before);
+    s.run("data.attributeRule", &json!({"layer": "Paths", "name": "Never", "remove": true})).unwrap();
+    s.run("select.rows", &json!({"layer": "Paths", "rows": [b, n - 1]})).unwrap();
     s.run("edit.merge", &Value::Null).unwrap();
     assert_eq!(s.map().layer_by_name("Paths").unwrap().dataset.features.len(), n - 1);
     s.run("edit.explode", &Value::Null).unwrap();
