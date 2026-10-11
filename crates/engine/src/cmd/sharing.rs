@@ -33,6 +33,8 @@ pub const KINDS: &[(&str, &str, &str)] = &[
 
 /// Most features a shared web map, scene or link chart carries.
 const MAX_FEATURES: usize = 200_000;
+/// Largest total size of the raster pictures embedded in a web map page.
+const MAX_PAGE_PICTURES: usize = 64 << 20;
 /// Largest glTF geometry buffer of a web scene.
 const MAX_SCENE_BYTES: usize = 128 << 20;
 /// Most nodes in a link chart.
@@ -345,8 +347,9 @@ fn upload(s: &mut Session, p: &Value) -> CmdResult {
     if dest.exists() {
         return Err(format!("{} already has a file named {file}", store.name));
     }
-    // Created new (never through an existing file or link), in the same step as the check; a
-    // copy that fails part way is removed, so a retry can write it.
+    // create_new is the real guard (the check above only gives a clearer message): the file is
+    // created new, never through an existing file or link. A copy that fails part way is removed,
+    // so a retry can write it.
     let from = std::fs::File::open(src).map_err(|e| format!("{src}: {e}"))?;
     if !from.metadata().is_ok_and(|m| m.len() <= MAX_UPLOAD) {
         return Err(format!("{src}: uploads are at most {} MB", MAX_UPLOAD >> 20));
@@ -425,6 +428,7 @@ fn styled_features(l: &Layer, budget: &mut usize) -> Vec<Value> {
 /// Mercator, with pan, zoom, a layer list and pop-ups. No libraries or server.
 fn web_map_html(m: &Map, title: &str) -> Result<String, String> {
     let mut budget = MAX_FEATURES;
+    let mut pictures = 0usize;
     let mut layers = Vec::new();
     // Bottom-most first, as drawn.
     for l in m.layers.iter().rev().filter(|l| l.visible) {
@@ -447,6 +451,10 @@ fn web_map_html(m: &Map, title: &str) -> Result<String, String> {
             let camera = rustgis_map::Camera { center: Coord::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0), res: w / vw };
             let view = rustgis_render::View { width: vw, height: vh, pixels_per_point: 1.0, camera, dark: false };
             let png = rustgis_render::render_png(&mut only, &view)?;
+            pictures += png.len();
+            if pictures > MAX_PAGE_PICTURES {
+                return Err("the map's rasters would make the page too large; hide some of them".into());
+            }
             layers.push(
                 json!({"name": l.name, "image": base64::engine::general_purpose::STANDARD.encode(png), "bounds": [a.x, a.y, b.x, b.y]}),
             );
@@ -762,7 +770,18 @@ fn gltf(m: &Map) -> Result<Vec<u8>, String> {
         let hf = ex.and_then(|e| e.field.as_deref()).and_then(|f| l.dataset.field_index(f));
         let (base_h, factor) = ex.map_or((0.0, 0.0), |e| (e.height, e.factor));
         let rows = l.visible_rows();
+        // The bytes built so far: a feature only adds to its own colour, so each step adds what
+        // the last feature's colour grew by.
+        let size = |tri: &std::collections::BTreeMap<[u8; 4], (Vec<[f32; 3]>, Vec<u32>)>,
+                    lines: &std::collections::BTreeMap<[u8; 4], Vec<[f32; 3]>>,
+                    k: &[u8; 4]| {
+            tri.get(k).map_or(0, |(p, i)| p.len() * 12 + i.len() * 4) + lines.get(k).map_or(0, |v| v.len() * 12)
+        };
+        let (mut built, mut last): (usize, Option<([u8; 4], usize)>) = (0, None);
         for (row, ft) in l.dataset.features.iter().enumerate() {
+            if let Some((k, before)) = last.take() {
+                built += size(&tri, &lines, &k).saturating_sub(before);
+            }
             if budget == 0 || rows.get(row) != Some(&true) {
                 continue;
             }
@@ -770,8 +789,6 @@ fn gltf(m: &Map) -> Result<Vec<u8>, String> {
             budget -= 1;
             // The geometry built so far, with the buffer already written, stays under the cap
             // (checked as it grows, so a few huge polygons can't run away first).
-            let built =
-                tri.values().map(|(p, i)| p.len() * 12 + i.len() * 4).sum::<usize>() + lines.values().map(|v| v.len() * 12).sum::<usize>();
             if buffer.len() + built > MAX_SCENE_BYTES {
                 return Err("the scene would be too large; share fewer features".into());
             }
@@ -779,6 +796,7 @@ fn gltf(m: &Map) -> Result<Vec<u8>, String> {
             let h = (hf.and_then(|fi| l.dataset.value(row, fi).as_f64()).filter(|v| v.is_finite()).unwrap_or(base_h) * factor)
                 .clamp(0.0, 1e6) as f32;
             let key = [sym.fill.r(), sym.fill.g(), sym.fill.b(), sym.fill.a()];
+            last = Some((key, size(&tri, &lines, &key)));
             match g {
                 Geometry::Polygon(polys) => {
                     for rings in polys {
