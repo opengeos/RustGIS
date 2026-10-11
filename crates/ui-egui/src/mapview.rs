@@ -308,23 +308,25 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     if app.session.map().view.first_person && !ui.ctx().egui_wants_keyboard_input() {
         let (mut fw, mut rt, mut up) = (0.0, 0.0, 0.0);
         ui.input(|i| {
+            // Nine steps a second, whatever the frame rate.
+            let step = (f64::from(i.stable_dt) * 9.0).clamp(0.0, 1.0);
             if i.key_down(egui::Key::W) {
-                fw += 0.15;
+                fw += step;
             }
             if i.key_down(egui::Key::S) {
-                fw -= 0.15;
+                fw -= step;
             }
             if i.key_down(egui::Key::D) {
-                rt += 0.15;
+                rt += step;
             }
             if i.key_down(egui::Key::A) {
-                rt -= 0.15;
+                rt -= step;
             }
             if i.key_down(egui::Key::E) {
-                up += 0.15;
+                up += step;
             }
             if i.key_down(egui::Key::Q) {
-                up -= 0.15;
+                up -= step;
             }
         });
         if fw != 0.0 || rt != 0.0 || up != 0.0 {

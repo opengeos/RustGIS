@@ -122,8 +122,11 @@ fn day_of_year(days: f64) -> f64 {
 /// The sun's elevation (degrees) at a place and time: an approximation good to about a degree
 /// (declination from the day of the year, no equation of time), enough for shading.
 pub fn sun_elevation(c: Coord, t: f64) -> f64 {
-    let days = (t / 86_400.0).clamp(-1e7, 1e7);
-    let doy = day_of_year(days);
+    sun_elevation_on(c, t, day_of_year((t / 86_400.0).clamp(-1e7, 1e7)))
+}
+
+/// [`sun_elevation`] with the day of the year already worked out.
+fn sun_elevation_on(c: Coord, t: f64, doy: f64) -> f64 {
     let decl = (-23.44f64).to_radians() * ((360.0 / 365.0) * (doy + 10.0)).to_radians().cos();
     let utc_hours = (t / 3600.0).rem_euclid(24.0);
     let hour_angle = ((utc_hours - 12.0) * 15.0 + c.x).to_radians();
@@ -134,12 +137,15 @@ pub fn sun_elevation(c: Coord, t: f64) -> f64 {
 /// Darkens the night side; twilight fades over the six degrees below the horizon.
 fn night(pm: &mut Pixmap, t: f64, lonlat: &dyn Fn(f64, f64) -> Option<Coord>) {
     let (w, h) = (pm.width() as usize, pm.height() as usize);
+    // The day of the year is the same everywhere on the map.
+    let doy = day_of_year((t / 86_400.0).clamp(-1e7, 1e7));
     let step = 4usize;
     let (gw, gh) = (w / step + 2, h / step + 2);
     let grid: Vec<f32> = (0..gh)
         .flat_map(|gy| (0..gw).map(move |gx| (gx, gy)))
         .map(|(gx, gy)| {
-            lonlat((gx * step) as f64, (gy * step) as f64).map_or(0.0, |c| (((-sun_elevation(c, t)) / 6.0).clamp(0.0, 1.0) * 0.6) as f32)
+            lonlat((gx * step) as f64, (gy * step) as f64)
+                .map_or(0.0, |c| (((-sun_elevation_on(c, t, doy)) / 6.0).clamp(0.0, 1.0) * 0.6) as f32)
         })
         .collect();
     let at = |x: usize, y: usize| -> f32 {
@@ -156,7 +162,6 @@ fn night(pm: &mut Pixmap, t: f64, lonlat: &dyn Fn(f64, f64) -> Option<Coord>) {
             mix(px, [8, 14, 40], t);
         }
     }
-    let _ = h;
 }
 
 fn weather(pm: &mut Pixmap, wx: Weather) {

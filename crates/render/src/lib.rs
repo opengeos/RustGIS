@@ -602,12 +602,16 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
             continue;
         }
         let mut rows = layer.visible_rows();
-        // View clipping: nothing beyond the distance from the view's centre.
+        // View clipping: features entirely beyond the distance from the view's centre are left
+        // out; one reaching into it (its box's nearest point within the distance) still draws.
         if let Some((centre, d)) = clip {
             for (r, keep) in rows.iter_mut().enumerate() {
                 if *keep {
-                    let c = layer.dataset.features.get(r).and_then(|f| f.geometry.as_ref()).and_then(|g| g.label_point());
-                    *keep = c.is_some_and(|c| rustgis_geom::haversine_m(centre, c) <= d);
+                    let e = layer.dataset.features.get(r).and_then(|f| f.geometry.as_ref()).map(|g| g.extent()).filter(|e| !e.is_empty());
+                    *keep = e.is_some_and(|e| {
+                        let near = Coord::new(centre.x.clamp(e.min_x, e.max_x), centre.y.clamp(e.min_y, e.max_y));
+                        rustgis_geom::haversine_m(centre, near) <= d
+                    });
                 }
             }
         }
