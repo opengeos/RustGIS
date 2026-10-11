@@ -584,7 +584,13 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
             }
             out
         }
-        None => network::random_points(&l.dataset, &rows, f(p, "count").unwrap_or(100.0).clamp(1.0, 100_000.0) as usize, seed),
+        None => {
+            let per = f(p, "count").unwrap_or(100.0).clamp(1.0, 100_000.0) as usize;
+            if rows.len().saturating_mul(per) > 1_000_000 {
+                return Err("that would make more than a million points; lower the count".into());
+            }
+            network::random_points(&l.dataset, &rows, per, seed)
+        }
     };
     let mut ds =
         Dataset::new(out_name(p, format!("{}_simulated", l.name)), GeometryType::Point, vec![Field::new("polygon", FieldType::Integer)]);
