@@ -321,9 +321,10 @@ impl Map {
         projection::Flat::of(&self.projection)
     }
 
-    /// Longitude/latitude to the camera's coordinates.
+    /// Longitude/latitude to the camera's coordinates; `None` outside the projection's area of
+    /// use or where it folds.
     pub fn to_map(&self, c: Coord) -> Option<Coord> {
-        self.flat().forward(c)
+        self.flat().forward_checked(c)
     }
 
     /// The camera's coordinates to longitude/latitude.
@@ -338,7 +339,12 @@ impl Map {
 
     /// Ground metres per logical pixel at the centre of view.
     pub fn ground_res(&self) -> f64 {
-        self.camera.res * self.flat().ground_per_unit(self.camera.center)
+        self.ground_res_at(&self.camera)
+    }
+
+    /// Ground metres per logical pixel for another camera on this map (an export's view).
+    pub fn ground_res_at(&self, camera: &Camera) -> f64 {
+        camera.res * self.flat().ground_per_unit(camera.center)
     }
 
     /// Map scale denominator at the centre of view.
@@ -377,14 +383,24 @@ impl Map {
     }
 
     /// Switches projection, keeping the centre and the ground scale.
+    /// Bookmarks move with it, so they still show the same place.
     pub fn set_projection(&mut self, p: Projection) {
-        let (center, ground) = (self.center_lonlat(), self.ground_res());
+        let old = self.flat();
+        let ground_of = |c: &Camera| (old.inverse(c.center).unwrap_or(Coord::new(0.0, 0.0)), c.res * old.ground_per_unit(c.center));
+        let camera = ground_of(&self.camera);
+        let marks: Vec<_> = self.bookmarks.iter().map(|b| ground_of(&b.camera)).collect();
         self.projection = p;
         let flat = self.flat();
-        // A centre the new projection can't show moves to its origin.
-        self.camera.center = flat.forward_checked(center).or_else(|| flat.forward(Coord::new(0.0, 0.0))).unwrap_or(Coord::new(0.0, 0.0));
-        self.camera.res = ground / flat.ground_per_unit(self.camera.center).max(1e-9);
-        self.camera.clamp();
+        let place = |cam: &mut Camera, (center, ground): (Coord, f64)| {
+            // A centre the new projection can't show moves to its origin.
+            cam.center = flat.forward_checked(center).or_else(|| flat.forward(Coord::new(0.0, 0.0))).unwrap_or(Coord::new(0.0, 0.0));
+            cam.res = ground / flat.ground_per_unit(cam.center).max(1e-9);
+            cam.clamp();
+        };
+        place(&mut self.camera, camera);
+        for (b, m) in self.bookmarks.iter_mut().zip(marks) {
+            place(&mut b.camera, m);
+        }
     }
 
     /// Union of all layers' extents (lon/lat).

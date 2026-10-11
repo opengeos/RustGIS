@@ -179,6 +179,8 @@ pub struct Session {
     forward: Vec<Camera>,
     /// Last camera recorded in the extent history.
     last_camera: Option<Camera>,
+    /// The projection the extent history's cameras are in (their units change with it).
+    history_projection: String,
 }
 
 impl Session {
@@ -199,6 +201,7 @@ impl Session {
             back: Vec::new(),
             forward: Vec::new(),
             last_camera: None,
+            history_projection: String::new(),
         }
     }
 
@@ -305,8 +308,21 @@ impl Session {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// Drops the extent history when the map has switched projection since it was recorded (by a
+    /// command, undo or opening a project): its cameras are in the old projection's units.
+    fn check_history_projection(&mut self) {
+        let code = self.map().projection.code();
+        if code != self.history_projection {
+            self.back.clear();
+            self.forward.clear();
+            self.last_camera = None;
+            self.history_projection = code;
+        }
+    }
+
     /// Records the camera in the previous/next extent history when it settles somewhere new.
     pub fn record_extent(&mut self) {
+        self.check_history_projection();
         let cam = self.map().camera;
         if let Some(last) = self.last_camera {
             let moved = (last.center.x - cam.center.x).abs() > last.res * 2.0 || (last.res / cam.res - 1.0).abs() > 0.01;
@@ -323,6 +339,7 @@ impl Session {
     }
 
     pub(crate) fn extent_back(&mut self) -> bool {
+        self.check_history_projection();
         let Some(c) = self.back.pop() else { return false };
         let cur = self.map().camera;
         self.forward.push(cur);
@@ -332,6 +349,7 @@ impl Session {
     }
 
     pub(crate) fn extent_forward(&mut self) -> bool {
+        self.check_history_projection();
         let Some(c) = self.forward.pop() else { return false };
         let cur = self.map().camera;
         self.back.push(cur);
@@ -341,10 +359,10 @@ impl Session {
     }
 
     pub fn can_extent_back(&self) -> bool {
-        !self.back.is_empty()
+        !self.back.is_empty() && self.map().projection.code() == self.history_projection
     }
     pub fn can_extent_forward(&self) -> bool {
-        !self.forward.is_empty()
+        !self.forward.is_empty() && self.map().projection.code() == self.history_projection
     }
 
     /// Keeps `active_layer` pointing at a layer of the active map.

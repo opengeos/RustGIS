@@ -207,7 +207,6 @@ fn custom_projections_switch_keep_scale_query_and_render() {
     assert!(!v.is_null(), "something is under Paris");
     let sel = s.run("select.byRect", &json!({"minLon": 5.0, "minLat": 45.0, "maxLon": 15.0, "maxLat": 55.0})).unwrap();
     assert!(sel["selected"].as_u64().unwrap() > 0);
-    s.run("map.goToXY", &json!({"lon": -81.0, "lat": 42.0})).unwrap();
     assert!(crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap().len() > 1000);
     // An EPSG code; the raster (UTM 17N) in the map's own system draws without reprojection.
     s.run("map.projection", &json!({"type": "EPSG:32617"})).unwrap();
@@ -215,7 +214,7 @@ fn custom_projections_switch_keep_scale_query_and_render() {
     assert!(crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap().len() > 1000);
     assert!(s.run("map.projection", &json!({"type": "EPSG:4326"})).is_err(), "degrees are refused");
     assert!(s.run("map.projection", &json!({"type": "nope"})).is_err());
-    assert!(s.run("map.goToXY", &json!({"lon": 100.0, "lat": 0.0})).is_ok());
+    assert!(s.run("map.goToXY", &json!({"lon": 100.0, "lat": 0.0})).is_err(), "folded far side of the UTM zone");
     // Undo and save/reload keep the projection.
     s.run("map.projection", &json!({"type": "mollweide"})).unwrap();
     s.run("edit.undo", &Value::Null).unwrap();
@@ -226,6 +225,21 @@ fn custom_projections_switch_keep_scale_query_and_render() {
     // A project naming a projection this version can't use opens in Web Mercator.
     let broken = json.replace("EPSG:32617", "EPSG:9");
     assert_eq!(Project::from_json(&broken).unwrap().map().projection, rustgis_map::Projection::WebMercator);
+    // Bookmarks follow a projection switch, and the extent history doesn't replay old cameras.
+    s.run("map.projection", &json!({"type": "mercator"})).unwrap();
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 5_000_000})).unwrap();
+    s.run("bookmark.add", &json!({"name": "Europe"})).unwrap();
+    s.run("map.goToXY", &json!({"lon": -100.0, "lat": 40.0})).unwrap();
+    assert!(s.can_extent_back());
+    s.run("map.projection", &json!({"type": "europeEqualArea"})).unwrap();
+    assert!(!s.can_extent_back(), "history from Web Mercator is dropped");
+    s.run("bookmark.go", &json!({"name": "Europe"})).unwrap();
+    let c = s.map().center_lonlat();
+    assert!((c.x - 10.0).abs() < 1e-6 && (c.y - 50.0).abs() < 1e-6, "{c:?}");
+    assert!((s.scale() / 5_000_000.0 - 1.0).abs() < 0.02, "{}", s.scale());
+    // An export at another size measures its scale bar with its own camera.
+    let wide = s.map().ground_res_at(&rustgis_map::Camera { res: s.map().camera.res * 3.0, ..s.map().camera });
+    assert!((wide / s.map().ground_res() - 3.0).abs() < 1e-9);
     // The built-in world projections (and Equal Earth by its EPSG code) draw the whole world.
     for p in ["robinson", "equalEarth", "naturalEarth", "winkelTripel", "eckertIV", "EPSG:8857"] {
         s.run("map.projection", &json!({"type": p})).unwrap_or_else(|e| panic!("{p}: {e}"));

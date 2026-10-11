@@ -416,7 +416,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     let (flat, key) = (map.flat(), map.projection.code());
     let custom = matches!(flat, rustgis_map::projection::Flat::Custom(_)) && globe.is_none();
     let ctx = Ctx { view, ppp: view.pixels_per_point as f32, cull: view.camera.extent(view.width, view.height).padded(0.05, 0.0), globe };
-    let scale = map.scale();
+    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     // On the globe nothing is culled by the flat extent: the horizon clips instead.
     let visible = |e: &Extent| match &globe {
         Some(g) => g.may_see(e),
@@ -746,7 +746,7 @@ pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
     for l in &r.labels {
         text::draw(&mut r.pixmap, l, view.pixels_per_point as f32);
     }
-    text::scale_bar(&mut r.pixmap, view, map.ground_res());
+    text::scale_bar(&mut r.pixmap, view, map.ground_res_at(&view.camera));
     r.pixmap.encode_png().map_err(|e| e.to_string())
 }
 

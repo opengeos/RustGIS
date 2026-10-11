@@ -303,9 +303,14 @@ impl Flat {
     /// unusable custom code falls back to it). Parsed projections are kept per thread.
     pub fn of(p: &crate::Projection) -> Flat {
         let crate::Projection::Custom(code) = p else { return Flat::Mercator };
+        let key = code.trim().to_ascii_lowercase();
         PROJECTORS.with(|cell| {
             let mut map = cell.borrow_mut();
-            let entry = map.entry(code.clone()).or_insert_with(|| Projector::new(code).ok().map(std::sync::Arc::new));
+            // Codes come from project files and scripts: keep the cache bounded.
+            if map.len() >= 32 && !map.contains_key(&key) {
+                map.clear();
+            }
+            let entry = map.entry(key).or_insert_with(|| Projector::new(code).ok().map(std::sync::Arc::new));
             entry.clone().map(Flat::Custom).unwrap_or(Flat::Mercator)
         })
     }
