@@ -15,4 +15,5 @@ rustgis-analysis = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 # The tool registry and its manifests; native only (the tools read and write files).
-geolibre-cli = { git = "https://github.com/opengeos/geolibre-rust", branch = "feat/library-api" }
+# Pinned to a commit on main so the suite can't change under a build.
+geolibre-cli = { git = "https://github.com/opengeos/geolibre-rust", rev = "3cb8ac3771f0a055510ab5e0a86bd00315058c57" }
