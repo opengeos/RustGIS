@@ -260,6 +260,7 @@ Find and run geoprocessing tools.	Tìm và chạy công cụ xử lý không gia
 Find any command by name (Ctrl+K).	Tìm bất kỳ lệnh nào theo tên (Ctrl+K).
 Find Tools	Tìm công cụ
 Finish Tool Run	Hoàn tất chạy công cụ
+Finished: {tool}	Đã xong: {tool}
 Fixed Zoom In	Phóng to cố định
 Fixed Zoom Out	Thu nhỏ cố định
 Folders	Thư mục

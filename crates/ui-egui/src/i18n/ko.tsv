@@ -260,6 +260,7 @@ Find and run geoprocessing tools.	지오프로세싱 도구를 찾아 실행합�
 Find any command by name (Ctrl+K).	이름으로 명령을 찾습니다(Ctrl+K).
 Find Tools	도구 찾기
 Finish Tool Run	도구 실행 완료
+Finished: {tool}	완료: {tool}
 Fixed Zoom In	고정 확대
 Fixed Zoom Out	고정 축소
 Folders	폴더

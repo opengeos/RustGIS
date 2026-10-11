@@ -664,7 +664,11 @@ pub fn finish(job: &Job, files: &[(String, Vec<u8>)], lines: &[String], dir: Opt
     // which came back as layers, are left out).
     for (k, v) in &outputs {
         let text = match v {
-            Value::String(s) if job.outputs.iter().any(|(f, _)| s.ends_with(f.as_str())) => continue,
+            Value::String(s)
+                if job.outputs.iter().any(|(f, _)| s == f || s.ends_with(&format!("/{f}")) || s.ends_with(&format!("\\{f}"))) =>
+            {
+                continue;
+            }
             Value::String(s) => s.clone(),
             other => other.to_string(),
         };

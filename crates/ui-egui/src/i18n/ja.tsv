@@ -260,6 +260,7 @@ Find and run geoprocessing tools.	ジオプロセシング ツールを検索し
 Find any command by name (Ctrl+K).	名前で任意のコマンドを検索します（Ctrl+K）。
 Find Tools	ツールの検索
 Finish Tool Run	ツールの実行を完了
+Finished: {tool}	完了: {tool}
 Fixed Zoom In	固定ズームイン
 Fixed Zoom Out	固定ズームアウト
 Folders	フォルダー

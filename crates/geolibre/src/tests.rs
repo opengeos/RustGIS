@@ -199,7 +199,7 @@ fn prepare_and_finish_without_a_runner() {
         r#"{{"type":"FeatureCollection","features":[{{"type":"Feature","properties":{{"id":1}},"geometry":{{"type":"Point","coordinates":[{},{}]}}}}]}}"#,
         c.x, c.y
     );
-    let lines = vec!["working…".to_string(), r#"{"output":"/work/output.geojson","count":1}"#.to_string()];
+    let lines = vec!["working…".to_string(), r#"{"output":"/work/output.geojson","log":"/work/my_output.geojson","count":1}"#.to_string()];
     let r = finish(&job, &[("output.geojson".into(), out.into_bytes())], &lines, None);
     let Output::Layers(layers) = r.output else { panic!("layers") };
     let Some(OutputLayer::Vector(ds)) = layers.first() else { panic!("a vector: {layers:?}") };
@@ -209,6 +209,8 @@ fn prepare_and_finish_without_a_runner() {
     assert!((p.x - want.x).abs() < 1e-6 && (p.y - want.y).abs() < 1e-6, "back in lon/lat: {p:?}");
     assert!(r.messages.contains(&"working…".to_string()));
     assert!(r.messages.iter().any(|m| m == "Count: 1"), "results, without the output path: {:?}", r.messages);
+    assert!(!r.messages.iter().any(|m| m.contains("/work/output.geojson")), "the output came back as a layer");
+    assert!(r.messages.iter().any(|m| m.contains("my_output.geojson")), "another file isn't mistaken for it");
     // No files back: a message, not a crash.
     let empty = finish(&job, &[], &[], None);
     assert!(matches!(empty.output, Output::Layers(ref l) if l.is_empty()) && !empty.messages.is_empty());

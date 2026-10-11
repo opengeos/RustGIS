@@ -260,6 +260,7 @@ Find and run geoprocessing tools.	Temukan dan jalankan alat geoprosesing.
 Find any command by name (Ctrl+K).	Temukan perintah apa pun berdasarkan nama (Ctrl+K).
 Find Tools	Cari Alat
 Finish Tool Run	Selesaikan proses alat
+Finished: {tool}	Selesai: {tool}
 Fixed Zoom In	Perbesar Tetap
 Fixed Zoom Out	Perkecil Tetap
 Folders	Folder

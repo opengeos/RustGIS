@@ -260,6 +260,7 @@ Find and run geoprocessing tools.	Encontrar e executar ferramentas de geoprocess
 Find any command by name (Ctrl+K).	Encontrar qualquer comando pelo nome (Ctrl+K).
 Find Tools	Encontrar ferramentas
 Finish Tool Run	Concluir execução da ferramenta
+Finished: {tool}	Concluído: {tool}
 Fixed Zoom In	Aproximação fixa
 Fixed Zoom Out	Afastamento fixo
 Folders	Pastas

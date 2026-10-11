@@ -526,7 +526,7 @@ pub struct GpForm {
     /// The browser's GeoLibre tools loading.
     pub web_load: Option<crate::Slot<Result<String, String>>>,
     /// A tool running in the browser's GeoLibre runner: its run id, and where the result lands.
-    pub web_run: Option<(u64, crate::Slot<rustgis_engine::cmd::gp::ExternalOutput>)>,
+    pub web_run: Option<(u64, &'static str, crate::Slot<rustgis_engine::cmd::gp::ExternalOutput>)>,
 }
 
 /// Starts loading the browser's GeoLibre tools (the runner downloads once, then the browser
@@ -558,13 +558,22 @@ pub fn poll_geolibre(app: &mut RustGisApp, ctx: &egui::Context) {
             Err(e) => app.gp.last = Some((false, vec![e])),
         }
     }
-    if let Some((id, out)) = app.gp.web_run.as_ref().and_then(|(id, slot)| take(slot).map(|o| (*id, o))) {
+    if let Some((id, tool, out)) = app.gp.web_run.as_ref().and_then(|(id, tool, slot)| take(slot).map(|o| (*id, *tool, o))) {
         app.gp.web_run = None;
         let r = rustgis_engine::cmd::gp::external_complete(&mut app.session, id, out).and_then(|_| app.run("gp.finish", json!({"id": id})));
-        app.gp.last = Some(match r {
+        let last = match r {
             Ok(_) => (true, app.session.project.gp_history.last().map(|h| h.messages.clone()).unwrap_or_default()),
             Err(e) => (false, vec![e]),
-        });
+        };
+        // Under its own form only; with another tool open, a notification says how it went.
+        if app.gp.tool == Some(tool) {
+            app.gp.last = Some(last);
+        } else if !last.0 {
+            app.session.notify(last.1.join("\n"), true);
+        } else {
+            let name = rustgis_engine::analysis::tool(tool).map(|t| t.name).unwrap_or(tool);
+            app.session.notify(crate::i18n::fmt("Finished: {tool}", &[("tool", tl!(name))]), false);
+        }
         app.map.invalidate();
     }
     if app.gp.web_load.is_some() || app.gp.web_run.is_some() {
@@ -1008,7 +1017,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         if let Some(start) = &app.services.geolibre_run {
                             start(run, slot.clone());
                         }
-                        app.gp.web_run = Some((id, slot));
+                        app.gp.web_run = Some((id, spec.id, slot));
                         app.gp.last = None;
                     }
                     Err(e) => app.gp.last = Some((false, vec![e])),

@@ -260,6 +260,7 @@ Find and run geoprocessing tools.	Найти и запустить инстру�
 Find any command by name (Ctrl+K).	Найти любую команду по названию (Ctrl+K).
 Find Tools	Найти инструменты
 Finish Tool Run	Завершить запуск инструмента
+Finished: {tool}	Готово: {tool}
 Fixed Zoom In	Фиксированное приближение
 Fixed Zoom Out	Фиксированное отдаление
 Folders	Папки

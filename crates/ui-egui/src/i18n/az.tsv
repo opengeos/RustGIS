@@ -260,6 +260,7 @@ Find and run geoprocessing tools.	Geoemal alətlərini tapın və işə salın.
 Find any command by name (Ctrl+K).	İstənilən əmri adına görə tapın (Ctrl+K).
 Find Tools	Alət axtar
 Finish Tool Run	Alətin işini tamamla
+Finished: {tool}	Tamamlandı: {tool}
 Fixed Zoom In	Sabit yaxınlaşdırma
 Fixed Zoom Out	Sabit uzaqlaşdırma
 Folders	Qovluqlar

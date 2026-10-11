@@ -260,6 +260,7 @@ Find and run geoprocessing tools.	查找并运行地理处理工具。
 Find any command by name (Ctrl+K).	按名称查找任意命令（Ctrl+K）。
 Find Tools	查找工具
 Finish Tool Run	完成工具运行
+Finished: {tool}	已完成：{tool}
 Fixed Zoom In	固定比例放大
 Fixed Zoom Out	固定比例缩小
 Folders	文件夹

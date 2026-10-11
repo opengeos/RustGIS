@@ -260,6 +260,7 @@ Find and run geoprocessing tools.	Geoverwerkingsgereedschappen zoeken en uitvoer
 Find any command by name (Ctrl+K).	Elke opdracht op naam zoeken (Ctrl+K).
 Find Tools	Gereedschappen zoeken
 Finish Tool Run	Gereedschapsrun afronden
+Finished: {tool}	Klaar: {tool}
 Fixed Zoom In	Vast inzoomen
 Fixed Zoom Out	Vast uitzoomen
 Folders	Mappen

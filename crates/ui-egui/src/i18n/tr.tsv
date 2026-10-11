@@ -260,6 +260,7 @@ Find and run geoprocessing tools.	Coğrafi işleme araçlarını bul ve çalış
 Find any command by name (Ctrl+K).	Herhangi bir komutu adıyla bul (Ctrl+K).
 Find Tools	Araç Bul
 Finish Tool Run	Araç çalıştırmasını tamamla
+Finished: {tool}	Tamamlandı: {tool}
 Fixed Zoom In	Sabit Yakınlaştır
 Fixed Zoom Out	Sabit Uzaklaştır
 Folders	Klasörler

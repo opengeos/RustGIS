@@ -171,11 +171,14 @@ In the web app, click **Load GeoLibre tools** in the Geoprocessing pane instead.
 loads geolibre-rust's WebAssembly runner (the `geolibre-wasm` package, from jsDelivr, about
 25 MB the first time, then from the browser's cache) and the tools run in the page, in an
 in-memory folder: nothing is uploaded. The web app remembers this and loads them again on your
-next visit. Tools that read files by path (LiDAR files, for instance) need the desktop app,
+next visit. The runner's code comes from jsDelivr, pinned to one geolibre-wasm release, the
+same trust as installing that package. Tools that read files by path (LiDAR files, for instance) need the desktop app,
 since a web page has no file system.
 
-RustGIS waits while a tool runs, so a long run on a large raster or point cloud keeps the
-window busy until it finishes.
+In the desktop app and on the command line, RustGIS waits while a tool runs, so a long run on
+a large raster or point cloud keeps the window busy until it finishes. In the web app the run
+is started in the background and the result is added when it ends, but the tool itself runs
+in the page, so the page is busy while it computes.
 
 ## Keyboard shortcuts
 

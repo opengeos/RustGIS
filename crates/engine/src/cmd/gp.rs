@@ -110,6 +110,10 @@ pub fn external_load_manifests(json: &str) -> Result<usize, String> {
     }
 }
 
+/// How many asynchronous runs (started, or finished and not yet applied) the session keeps.
+#[cfg(feature = "geolibre")]
+const MAX_ASYNC_RUNS: usize = 8;
+
 /// A GeoLibre run to carry out asynchronously (the browser's WASI runner): run `tool` with
 /// `argv` in a working folder `/work` holding `files`, then pass the new files and the printed
 /// lines to [`external_complete`] with `id`.
@@ -138,6 +142,10 @@ pub fn external_start(s: &mut Session, tool: &str, params: &Value) -> Result<Ext
         let id = s.next_pending;
         let run = ExternalRun { id, tool: job.tool.clone(), argv: job.argv("/work"), files: job.files.clone() };
         s.started.push((id, job, params, now_ms()));
+        // A run whose runner never answers is dropped eventually (it holds its input files).
+        if s.started.len() > MAX_ASYNC_RUNS {
+            s.started.remove(0);
+        }
         Ok(run)
     }
     #[cfg(not(feature = "geolibre"))]
@@ -152,11 +160,14 @@ pub fn external_start(s: &mut Session, tool: &str, params: &Value) -> Result<Ext
 pub fn external_complete(s: &mut Session, id: u64, ran: ExternalOutput) -> Result<(), String> {
     #[cfg(feature = "geolibre")]
     {
-        let i = s.started.iter().position(|(n, ..)| *n == id).ok_or("no run with that id")?;
+        let i = s.started.iter().position(|(n, ..)| *n == id).ok_or("the tool finished after its project was closed")?;
         let (_, job, params, t0) = s.started.remove(i);
         let result =
             ran.map(|(files, lines)| rustgis_geolibre::finish(&job, &files, &lines, None)).map_err(|e| format!("{}: {e}", job.name));
         s.pending.push(crate::PendingRun { id, tool: job.name.clone(), params, result, millis: now_ms().saturating_sub(t0) });
+        if s.pending.len() > MAX_ASYNC_RUNS {
+            s.pending.remove(0);
+        }
         Ok(())
     }
     #[cfg(not(feature = "geolibre"))]

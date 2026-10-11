@@ -304,6 +304,10 @@ impl Session {
         self.forward.clear();
         self.last_camera = None;
         self.dirty = false;
+        // Runs of the previous project mustn't land in this one.
+        self.pending.clear();
+        #[cfg(feature = "geolibre")]
+        self.started.clear();
     }
 
     pub(crate) fn undo(&mut self) -> bool {

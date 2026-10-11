@@ -9,6 +9,11 @@ use wasm_bindgen::prelude::*;
 // The runner's version is pinned: the tool forms and the runner must come from the same
 // release. The JS module is jsDelivr's ES-module build of the package; the WASI binary is
 // passed explicitly, since that build can't find it beside itself.
+//
+// Trust: this runs code from jsDelivr in the app's origin, only after the user asks for the
+// tools (Load GeoLibre tools). A dynamic import can't carry Subresource Integrity, and the
+// runner (~25 MB) is too large to ship with the app, so the pinned version and HTTPS are the
+// safeguards: the same trust as installing the npm package.
 #[wasm_bindgen(inline_js = r#"
 const BASE = "https://cdn.jsdelivr.net/npm/geolibre-wasm@1.6.0";
 let ready = null;
