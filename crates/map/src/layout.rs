@@ -292,7 +292,9 @@ impl Layout {
         let mut seen = std::collections::HashSet::new();
         let mut next = self.elements.iter().map(|e| e.id).filter(|id| *id <= MAX_ID).max().unwrap_or(0).saturating_add(1);
         for e in &mut self.elements {
-            // Ids stay well below u32::MAX so new elements never run out of numbers.
+            // Ids stay well below u32::MAX so new elements never run out of numbers. A repeated id
+            // (only a hand-edited file has one) is renumbered; references to it keep meaning the
+            // first element with that id, as they did when the file was written.
             if e.id == 0 || e.id > MAX_ID || !seen.insert(e.id) {
                 e.id = next;
                 seen.insert(next);
@@ -473,5 +475,19 @@ mod tests {
         assert!((cam.res - 264.583).abs() < 0.5, "{}", cam.res);
         let (c, s) = fit_scale(&map, &rustgis_geom::Extent::new(-10.0, -10.0, 10.0, 10.0), 200.0, 200.0).unwrap_or_default();
         assert!(c.x.abs() < 1e-6 && s > 1e7 && s < 2e7, "{c:?} {s}");
+    }
+
+    #[test]
+    fn repeated_ids_keep_references_on_the_first_element() {
+        let text = r#"{"name":"x","width":200,"height":100,"elements":[
+            {"id":1,"name":"frame","x":0,"y":0,"w":100,"h":80,"kind":{"MapFrame":{"map":"M","center":{"x":0,"y":0},"scale":1e7}}},
+            {"id":1,"name":"box","x":0,"y":0,"w":10,"h":10,"kind":{"Rectangle":{"fill":[0,0,0,255],"outline":[0,0,0,255],"width":1}}},
+            {"id":2,"name":"arrow","x":110,"y":0,"w":10,"h":10,"kind":{"NorthArrow":{"frame":1}}}]}"#;
+        let mut l: Layout = serde_json::from_str(text).unwrap();
+        l.clamp();
+        assert_eq!(l.element(1).map(|e| e.name.as_str()), Some("frame"));
+        let ids: std::collections::HashSet<u32> = l.elements.iter().map(|e| e.id).collect();
+        assert_eq!(ids.len(), 3, "the box got a fresh id");
+        assert!(matches!(l.element(2).map(|e| &e.kind), Some(ElementKind::NorthArrow { frame: 1 })));
     }
 }

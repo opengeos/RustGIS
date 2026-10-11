@@ -477,7 +477,19 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
                             .map(|f| f.name.clone())
                             .ok_or_else(|| format!("no numeric field '{fl}' in {}", target.name))?,
                     ),
-                    None => None,
+                    // A chart moved to another layer keeps its field only if that layer has it as a
+                    // number; otherwise it charts the layer's first numeric field.
+                    None => match &e.kind {
+                        ElementKind::Chart { field, .. } if nl.is_some() => {
+                            let numeric = |f: &&rustgis_data::Field| f.ty.is_numeric();
+                            let keep = target.dataset.field_index(field).and_then(|i| target.dataset.fields.get(i)).filter(numeric);
+                            let f = keep
+                                .or_else(|| target.dataset.fields.iter().find(numeric))
+                                .ok_or_else(|| format!("{} has no numeric field to chart", target.name))?;
+                            Some(f.name.clone())
+                        }
+                        _ => None,
+                    },
                 };
                 Some((target.name.clone(), field))
             }
@@ -741,9 +753,11 @@ fn series_page(s: &mut Session, p: &Value) -> CmdResult {
 pub fn layout_bytes(s: &mut Session, li: usize, pdf: bool, dpi: f64, all: bool) -> Result<Vec<u8>, String> {
     let saved = s.project.layouts.get(li).ok_or("no layout")?.clone();
     let dpi = if dpi.is_finite() { dpi.clamp(36.0, 600.0) } else { 150.0 };
-    let names = series_pages(s, li);
-    let total = names.as_ref().map_or(1, Vec::len);
     let current = saved.series.as_ref().map_or(0, |sr| sr.page);
+    // Only a whole-series PDF names every page.
+    let info = series_info(s, li, current);
+    let names = if all && pdf { series_pages(s, li) } else { None };
+    let total = info.as_ref().map_or(1, |i| i.0);
     // Every page of a map series (PDF), or just the layout as it is now.
     let pages: Vec<usize> = match (&names, all && pdf) {
         (Some(n), true) => {
@@ -767,7 +781,10 @@ pub fn layout_bytes(s: &mut Session, li: usize, pdf: bool, dpi: f64, all: bool) 
             let info = rustgis_render::layout::PageInfo {
                 page: page + 1,
                 pages: total,
-                page_name: names.as_ref().and_then(|n| n.get(*page).cloned()).unwrap_or_default(),
+                page_name: match &names {
+                    Some(n) => n.get(*page).cloned().unwrap_or_default(),
+                    None => info.as_ref().map(|i| i.1.clone()).unwrap_or_default(),
+                },
             };
             let img = rustgis_render::layout::render(layout, &mut s.project.maps, dpi, &info).ok_or("the page is too large to draw")?;
             // Each page is compressed as soon as it's drawn, within a memory budget.

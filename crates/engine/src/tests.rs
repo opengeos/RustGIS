@@ -649,6 +649,16 @@ fn layouts_compose_export_and_round_trip() {
     ] {
         s.run("layout.addElement", &p).unwrap_or_else(|e| panic!("{p}: {e}"));
     }
+    // A chart moved to a layer without its field charts that layer's first numeric field.
+    let chart = s.project.layouts[0].elements.iter().find(|e| e.kind.code() == "chart").unwrap().id;
+    s.run("layout.update", &json!({"element": chart, "layer": "Cities"})).unwrap();
+    let Some(rustgis_map::layout::ElementKind::Chart { layer, field, .. }) = s.project.layouts[0].element(chart).map(|e| &e.kind) else {
+        panic!()
+    };
+    let cities = &s.map().layer_by_name("Cities").unwrap().dataset;
+    assert_eq!(layer, "Cities");
+    assert!(cities.field_index(field).is_some_and(|i| cities.fields[i].ty.is_numeric()), "{field}");
+    s.run("layout.update", &json!({"element": chart, "layer": "Countries", "field": "pop_est"})).unwrap();
     let inset = s.run("layout.addFrame", &json!({"shape": "rectangle", "x": 200, "y": 150, "w": 60, "h": 40})).unwrap()["element"]
         .as_u64()
         .unwrap();
