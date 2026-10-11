@@ -186,7 +186,13 @@ fn extrusion(s: &mut Session, p: &Value) -> CmdResult {
         }
         t => return Err(format!("unknown extrusion type '{t}'")),
     };
-    with(s, p, |l| l.extrusion = x)
+    let globe = s.map().projection.is_globe();
+    let mut r = with(s, p, |l| l.extrusion = x)?;
+    // The globe draws polygons flat; extrusion shows on flat maps.
+    if globe && let Some(o) = r.as_object_mut() {
+        o.insert("note".into(), json!("extrusion shows on flat maps; the globe draws the polygons flat"));
+    }
+    Ok(r)
 }
 
 fn change_extrusion(s: &mut Session, p: &Value, f: impl FnOnce(&mut Extrusion)) -> CmdResult {

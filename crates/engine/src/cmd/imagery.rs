@@ -394,7 +394,9 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
             add(s, out, false)
         }
         "resample" => {
-            let k = p.get("factor").and_then(Value::as_u64).unwrap_or(2).clamp(2, 64) as u32;
+            // Never coarser than the raster itself; trailing columns and rows short of a full
+            // block are left out.
+            let k = (p.get("factor").and_then(Value::as_u64).unwrap_or(2).clamp(2, 64) as u32).min(r.width.min(r.height)).max(1);
             let (w, h) = ((r.width / k).max(1), (r.height / k).max(1));
             // Each output pixel is the mean of the valid pixels it covers.
             let bands: Vec<Vec<f32>> = r
@@ -407,9 +409,11 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
                             let (mut sum, mut n) = (0.0f64, 0u32);
                             for dy in 0..k {
                                 for dx in 0..k {
-                                    if let Some(v) =
-                                        b.data.get(((row * k + dy) * r.width + col * k + dx) as usize).copied().filter(|v| r.is_valid(*v))
-                                    {
+                                    let (x, y) = (col * k + dx, row * k + dy);
+                                    if x >= r.width || y >= r.height {
+                                        continue;
+                                    }
+                                    if let Some(v) = b.data.get((y * r.width + x) as usize).copied().filter(|v| r.is_valid(*v)) {
                                         sum += v as f64;
                                         n += 1;
                                     }
@@ -470,7 +474,7 @@ fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
         .and_then(Value::as_array)
         .ok_or("polygon is required")?
         .iter()
-        .take(100_000)
+        .take(10_000)
         .map(point)
         .collect::<Result<_, _>>()?;
     if ring.len() < 3 {
@@ -483,7 +487,15 @@ fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
         Some(v) => v as f32,
         None => r.nodata.map(|v| v as f32).unwrap_or(NODATA),
     };
-    let only = p.get("band").and_then(Value::as_u64).map(|b| b.saturating_sub(1) as usize);
+    let only = match p.get("band") {
+        None => None,
+        Some(v) => Some(
+            v.as_u64()
+                .filter(|b| *b >= 1 && *b <= r.band_count() as u64)
+                .ok_or_else(|| format!("{} has bands 1 to {}", r.name, r.band_count()))? as usize
+                - 1,
+        ),
+    };
     let mut bands: Vec<Vec<f32>> = r.bands.iter().map(|b| b.data.clone()).collect();
     let mut n = 0usize;
     // Only the pixels under the polygon's box are visited.
