@@ -657,43 +657,47 @@ fn series_page(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Renders a layout to PNG or PDF bytes. `all` renders every map series page (PDF only).
 pub fn layout_bytes(s: &mut Session, li: usize, pdf: bool, dpi: f64, all: bool) -> Result<Vec<u8>, String> {
-    let l = s.project.layouts.get(li).ok_or("no layout")?.clone();
+    let saved = s.project.layouts.get(li).ok_or("no layout")?.clone();
     let dpi = if dpi.is_finite() { dpi.clamp(36.0, 600.0) } else { 150.0 };
     let names = series_pages(s, li);
+    let total = names.as_ref().map_or(1, Vec::len);
+    let current = saved.series.as_ref().map_or(0, |sr| sr.page);
+    // Every page of a map series (PDF), or just the layout as it is now.
     let pages: Vec<usize> = match (&names, all && pdf) {
         (Some(n), true) => (0..n.len().min(500)).collect(),
-        (Some(_), false) => vec![l.series.as_ref().map_or(0, |sr| sr.page)],
-        (None, _) => vec![0],
+        _ => vec![current],
     };
-    let total = names.as_ref().map_or(1, Vec::len);
-    let mut images = Vec::new();
-    for page in &pages {
-        if names.is_some() {
-            series_page(s, &json!({"layout": li, "page": page}))?;
+    let stepping = names.is_some() && pages.len() > 1;
+    let mut render_pages = || -> Result<(Vec<rustgis_render::pdf::Page>, Option<Vec<u8>>), String> {
+        let mut out = Vec::new();
+        let mut png = None;
+        for page in &pages {
+            if stepping {
+                series_page(s, &json!({"layout": li, "page": page}))?;
+            }
+            let layout = s.project.layouts.get(li).ok_or("no layout")?.clone();
+            let info = rustgis_render::layout::PageInfo {
+                page: page + 1,
+                pages: total,
+                page_name: names.as_ref().and_then(|n| n.get(*page).cloned()).unwrap_or_default(),
+            };
+            let img = rustgis_render::layout::render(&layout, &mut s.project.maps, dpi, &info).ok_or("the page is too large to draw")?;
+            // Each page is compressed as soon as it's drawn.
+            if pdf {
+                out.push(rustgis_render::pdf::Page::new(&img, layout.width, layout.height));
+            } else {
+                png = Some(img.encode_png().map_err(|e| e.to_string())?);
+            }
         }
-        let layout = s.project.layouts.get(li).ok_or("no layout")?.clone();
-        let info = rustgis_render::layout::PageInfo {
-            page: page + 1,
-            pages: total,
-            page_name: names.as_ref().and_then(|n| n.get(*page).cloned()).unwrap_or_default(),
-        };
-        let img = rustgis_render::layout::render(&layout, &mut s.project.maps, dpi, &info).ok_or("the page is too large to draw")?;
-        images.push(img);
+        Ok((out, png))
+    };
+    let result = render_pages();
+    // Stepping through the series moved the frame; put the layout back however that went.
+    if stepping && let Some(cur) = s.project.layouts.get_mut(li) {
+        *cur = saved.clone();
     }
-    // Back to the page that was showing.
-    if all && names.is_some() {
-        if let Some(cur) = s.project.layouts.get_mut(li) {
-            cur.series = l.series.clone();
-        }
-        let _ = series_page(s, &json!({"layout": li, "page": "current"}));
-    }
-    if pdf {
-        let ps: Vec<rustgis_render::pdf::Page> =
-            images.iter().map(|i| rustgis_render::pdf::Page { image: i, width_mm: l.width, height_mm: l.height }).collect();
-        Ok(rustgis_render::pdf::write(&ps, &l.name))
-    } else {
-        images.first().ok_or("nothing to draw")?.encode_png().map_err(|e| e.to_string())
-    }
+    let (pages, png) = result?;
+    if pdf { Ok(rustgis_render::pdf::write(&pages, &saved.name)) } else { png.ok_or_else(|| "nothing to draw".to_string()) }
 }
 
 fn export(s: &mut Session, p: &Value) -> CmdResult {

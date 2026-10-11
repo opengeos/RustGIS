@@ -667,6 +667,12 @@ fn layouts_compose_export_and_round_trip() {
     let next = s.run("layout.seriesPage", &json!({"page": "next"})).unwrap();
     assert_eq!(next["page"], 1);
     s.run("layout.seriesRefresh", &Value::Null).unwrap();
+    // A manual zoom of the series frame survives exports.
+    s.run("layout.update", &json!({"element": frame, "scale": 3_000_000})).unwrap();
+    let scale_of = |s: &Session| match &s.project.layouts[0].element(frame).unwrap().kind {
+        rustgis_map::layout::ElementKind::MapFrame { scale, .. } => *scale,
+        _ => 0.0,
+    };
     // Export PNG and a PDF of every page.
     let png_path = dir.join("europe.png");
     s.run("layout.export", &json!({"path": png_path.display().to_string(), "dpi": 72})).unwrap();
@@ -678,6 +684,7 @@ fn layouts_compose_export_and_round_trip() {
     let count = format!("/Count {pages}");
     assert!(pdf.windows(count.len()).any(|w| w == count.as_bytes()), "one PDF page per series page");
     assert_eq!(s.project.layouts[0].series.as_ref().unwrap().page, 1, "the shown page is restored");
+    assert_eq!(scale_of(&s), 3_000_000.0, "and so is the frame's zoom");
     assert!(s.run("layout.export", &json!({"path": dir.join("x.svg").display().to_string()})).is_err());
     // Layout files.
     let file = dir.join("europe.rgislayout");

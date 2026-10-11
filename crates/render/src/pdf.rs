@@ -2,11 +2,29 @@
 
 use tiny_skia::Pixmap;
 
-/// One PDF page: the image and the page size in millimetres.
-pub struct Page<'a> {
-    pub image: &'a Pixmap,
+/// One PDF page: its image, already compressed, and the page size in millimetres. Pages are
+/// compressed as they are made, so a long document never holds its uncompressed images at once.
+pub struct Page {
+    width: u32,
+    height: u32,
+    /// Zlib-compressed RGB pixels.
+    rgb_z: Vec<u8>,
     pub width_mm: f64,
     pub height_mm: f64,
+}
+
+impl Page {
+    pub fn new(image: &Pixmap, width_mm: f64, height_mm: f64) -> Page {
+        // Opaque RGB: the page is white, so premultiplied pixels are already composited on it.
+        let rgb: Vec<u8> = image.pixels().iter().flat_map(|px| [px.red(), px.green(), px.blue()]).collect();
+        Page {
+            width: image.width(),
+            height: image.height(),
+            rgb_z: miniz_oxide::deflate::compress_to_vec_zlib(&rgb, 6),
+            width_mm,
+            height_mm,
+        }
+    }
 }
 
 /// Writes the pages as a PDF document.
@@ -39,17 +57,14 @@ pub fn write(pages: &[Page], title: &str) -> Vec<u8> {
         debug_assert_eq!(offsets.len(), page);
         let draw = format!("q {pw:.2} 0 0 {ph:.2} 0 0 cm /Im{i} Do Q");
         obj(&mut out, &mut offsets, format!("<< /Length {} >>\nstream\n{draw}\nendstream", draw.len()).as_bytes());
-        // Opaque RGB: the page is white, so premultiplied pixels are already composited on it.
-        let rgb: Vec<u8> = p.image.pixels().iter().flat_map(|px| [px.red(), px.green(), px.blue()]).collect();
-        let z = miniz_oxide::deflate::compress_to_vec_zlib(&rgb, 6);
         let mut body = format!(
             "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
-            p.image.width(),
-            p.image.height(),
-            z.len()
+            p.width,
+            p.height,
+            p.rgb_z.len()
         )
         .into_bytes();
-        body.extend_from_slice(&z);
+        body.extend_from_slice(&p.rgb_z);
         body.extend_from_slice(b"\nendstream");
         obj(&mut out, &mut offsets, &body);
     }
@@ -83,10 +98,7 @@ mod tests {
     fn writes_a_two_page_pdf() {
         let mut a = Pixmap::new(20, 30).unwrap();
         a.fill(tiny_skia::Color::WHITE);
-        let pdf = write(
-            &[Page { image: &a, width_mm: 210.0, height_mm: 297.0 }, Page { image: &a, width_mm: 297.0, height_mm: 210.0 }],
-            "Atlas (draft)",
-        );
+        let pdf = write(&[Page::new(&a, 210.0, 297.0), Page::new(&a, 297.0, 210.0)], "Atlas (draft)");
         let text = String::from_utf8_lossy(&pdf);
         assert!(text.starts_with("%PDF-1.4") && text.trim_end().ends_with("%%EOF"));
         assert!(text.contains("/Count 2") && text.contains("/MediaBox [0 0 595.28 841.89]") && text.contains("Atlas \\(draft\\)"));
