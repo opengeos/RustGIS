@@ -3,10 +3,11 @@
 //! `cargo run -p rustgis-ui-egui --example ui_shot -- script.jsonl`
 //!
 //! The script is JSON lines: `{"cmd": id, "params": {...}}` runs a command (ui.* included),
-//! `{"shot": "/abs/out.png"}` saves the window, `{"steps": n}` runs frames, `{"dark": true}`
+//! `{"shot": "/abs/out.png"}` saves the window, `{"steps": n}` runs frames, `{"click": label}` clicks the first widget whose label contains it, `{"dark": true}`
 //! switches theme, and `{"width": w, "height": h}` on the first line sets the size (default
 //! 1480×900 at 2×). The window opens the World Atlas sample.
 
+use egui_kittest::kittest::Queryable;
 use rustgis_ui_egui::RustGisApp;
 
 fn main() {
@@ -59,6 +60,14 @@ fn main() {
             }
         } else if let Some(d) = l.get("dark").and_then(|v| v.as_bool()) {
             harness.state_mut().ui.dark = d;
+            for _ in 0..3 {
+                harness.step();
+            }
+        } else if let Some(label) = l.get("click").and_then(|v| v.as_str()) {
+            match harness.query_all_by_label_contains(label).next() {
+                Some(node) => node.click(),
+                None => eprintln!("nothing labelled '{label}'"),
+            }
             for _ in 0..3 {
                 harness.step();
             }

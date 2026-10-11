@@ -178,11 +178,23 @@ pub fn small_menu(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, de
     });
 }
 
+/// Room for a menu row's icon before its label.
+const MENU_ICON_W: f32 = 22.0;
+
 /// A menu row that runs a command (disabled when the command is).
 pub fn menu_item(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, id: &str, params: Value) {
     let label = tl!(label);
     let on = enabled(app, id);
-    let mut button = egui::Button::new(label).frame(false).min_size(vec2(ui.available_width(), 24.0));
+    // With an icon, the label starts after it, so the icon is drawn inside the row (and the menu).
+    let text: egui::WidgetText = if icon.is_empty() {
+        label.into()
+    } else {
+        let mut job = egui::text::LayoutJob::default();
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        job.append(label, MENU_ICON_W, egui::TextFormat::simple(font, egui::Color32::PLACEHOLDER));
+        job.into()
+    };
+    let mut button = egui::Button::new(text).frame(false).min_size(vec2(0.0, 24.0));
     // Only with a shortcut: an empty right text would end the button's accessible label in a space.
     let shortcut = shortcut_text(app, id);
     if !shortcut.is_empty() {
@@ -193,7 +205,10 @@ pub fn menu_item(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, id:
         let t = Tokens::get(ui.ctx());
         icons::paint(
             ui.painter(),
-            Rect::from_center_size(resp.rect.left_center() + vec2(-12.0, 0.0), vec2(16.0, 16.0)),
+            Rect::from_center_size(
+                resp.rect.left_center() + vec2(ui.spacing().button_padding.x + MENU_ICON_W / 2.0 - 2.0, 0.0),
+                vec2(16.0, 16.0),
+            ),
             icon,
             t.icon,
             t.accent,
