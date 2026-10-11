@@ -190,15 +190,48 @@ impl Globe {
     }
 
     /// Rotates the camera as if the globe were dragged by (`dx`, `dy`) pixels.
+    /// The globe keeps its size: the camera resolution is Web Mercator metres per pixel, whose
+    /// ground scale shrinks with cos(latitude), so it is rescaled as the centre moves north or
+    /// south. The centre stays within ±85° (the flat map's limit); longitude turns are capped near
+    /// the poles, where the exact rate grows without bound.
     pub fn drag(camera: &mut Camera, dx: f64, dy: f64, w: f64, h: f64) {
+        if !(dx.is_finite() && dy.is_finite()) {
+            return;
+        }
         let g = Globe::new(camera, w, h);
         let c = camera.center_lonlat();
-        let lat = c.y.to_radians().cos().max(0.05);
-        let lon = c.x - (dx / g.radius).to_degrees() / lat;
+        let cos0 = c.y.clamp(-89.0, 89.0).to_radians().cos();
+        let lon = c.x - (dx / g.radius).to_degrees() / cos0.max(0.2);
         let lat = (c.y + (dy / g.radius).to_degrees()).clamp(-85.0, 85.0);
         let lon = (lon + 540.0).rem_euclid(360.0) - 180.0;
         camera.center = rustgis_geom::lonlat_to_merc(Coord::new(lon, lat));
+        let cos1 = lat.to_radians().cos();
+        if cos1 > 0.0 && cos0 > 0.0 {
+            camera.res *= cos0 / cos1;
+        }
         camera.clamp();
+    }
+
+    /// Whether any of a longitude/latitude extent can be on the visible side: a cap test on its
+    /// centre, widened by its angular radius.
+    pub fn may_see(&self, e: &rustgis_geom::Extent) -> bool {
+        if e.is_empty() || e.width() > 180.0 || e.height() > 90.0 {
+            return !e.is_empty();
+        }
+        let c = self.to_view(e.center());
+        let reach = [
+            Coord::new(e.min_x, e.min_y),
+            Coord::new(e.min_x, e.max_y),
+            Coord::new(e.max_x, e.min_y),
+            Coord::new(e.max_x, e.max_y),
+            Coord::new(e.min_x, e.center().y),
+            Coord::new(e.max_x, e.center().y),
+        ]
+        .iter()
+        .map(|p| dot(self.to_view(*p), c).clamp(-1.0, 1.0).acos())
+        .fold(0.0_f64, f64::max);
+        let limit = self.horizon().acos() + reach + 0.02;
+        limit >= std::f64::consts::PI || c[2].clamp(-1.0, 1.0).acos() <= limit
     }
 }
 
@@ -299,13 +332,33 @@ mod tests {
     #[test]
     fn zoom_keeps_the_point_under_the_pointer() {
         let mut cam = Camera { center: lonlat_to_merc(Coord::new(10.0, 40.0)), res: 20_000.0 };
-        let target = Globe::new(&cam, 800.0, 600.0).inverse(520.0, 240.0).unwrap();
+        let before = Globe::new(&cam, 800.0, 600.0);
+        let target = before.inverse(520.0, 240.0).unwrap();
         Globe::zoom_at(&mut cam, 1.6, 520.0, 240.0, 800.0, 600.0);
-        let (x, y) = Globe::new(&cam, 800.0, 600.0).forward(target).unwrap();
+        let after = Globe::new(&cam, 800.0, 600.0);
+        let (x, y) = after.forward(target).unwrap();
         assert!((x - 520.0).abs() < 1.0 && (y - 240.0).abs() < 1.0, "{x},{y}");
-        assert!((cam.res - 20_000.0 / 1.6).abs() < 1e-6);
+        // The globe grows by exactly the zoom factor, however it turned to keep the point.
+        assert!((after.radius() / before.radius() - 1.6).abs() < 1e-6, "{}", after.radius() / before.radius());
         Globe::zoom_at(&mut cam, f64::NAN, 1.0, 1.0, 800.0, 600.0);
         Globe::zoom_at(&mut cam, 2.0, 1.0, 1.0, 800.0, 600.0); // off the globe: plain zoom
+    }
+
+    #[test]
+    fn dragging_keeps_the_globe_size_and_far_features_are_culled() {
+        let mut cam = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 20_000.0 };
+        let r0 = Globe::new(&cam, 800.0, 600.0).disc_radius();
+        Globe::drag(&mut cam, 0.0, 200.0, 800.0, 600.0);
+        assert!(cam.center_lonlat().y > 20.0);
+        let r1 = Globe::new(&cam, 800.0, 600.0).disc_radius();
+        assert!((r1 - r0).abs() < 1e-6 * r0, "{r0} vs {r1}");
+        let g = Globe::new(&Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 20_000.0 }, 800.0, 600.0);
+        let near = rustgis_geom::Extent::new(-5.0, -5.0, 5.0, 5.0);
+        let far = rustgis_geom::Extent::new(170.0, -5.0, 179.0, 5.0);
+        let limb = rustgis_geom::Extent::new(75.0, -5.0, 85.0, 5.0);
+        assert!(g.may_see(&near) && !g.may_see(&far) && g.may_see(&limb));
+        assert!(g.may_see(&rustgis_geom::Extent::new(-180.0, -90.0, 180.0, 90.0)));
+        assert!(!g.may_see(&rustgis_geom::Extent::EMPTY));
     }
 
     #[test]

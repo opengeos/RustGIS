@@ -124,6 +124,10 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         draft,
     };
     let interacting = !globe_view && moving;
+    if globe_view && moving {
+        // Wake up once the motion has settled, for the full-resolution frame.
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+    }
     if globe_view && !moving && app.map.key.is_some_and(|k| k.draft) {
         ui.ctx().request_repaint();
     }
@@ -322,11 +326,18 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     }
     if resp.drag_stopped() {
         if let (Some((start, DragKind::Box)), Some(end)) = (app.map.drag, resp.interact_pointer_pos()) {
-            // A box reaching off the globe uses the corners that are on it.
-            let corners = [start, end, pos2(start.x, end.y), pos2(end.x, start.y)];
+            // The box's extent from a grid of points inside it, so a box reaching off the globe (even
+            // one whose corners all miss it) uses the part that is on it.
+            let r = Rect::from_two_pos(start, end);
             let mut e = Extent::EMPTY;
-            for c in corners.iter().filter_map(|c| screen_to_lonlat(app, rect, *c)) {
-                e.expand(c);
+            let n = 12;
+            for i in 0..=n {
+                for j in 0..=n {
+                    let q = pos2(r.min.x + r.width() * i as f32 / n as f32, r.min.y + r.height() * j as f32 / n as f32);
+                    if let Some(c) = screen_to_lonlat(app, rect, q) {
+                        e.expand(c);
+                    }
+                }
             }
             if e.is_empty() {
                 // Nothing on the globe.
@@ -495,12 +506,21 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
             pts.push(c);
         }
         let closed = matches!(tool, Tool::MeasureArea | Tool::CreatePolygon);
-        let screen: Vec<Pos2> = pts.iter().filter_map(|c| lonlat_to_screen(app, rect, *c)).collect();
+        let placed: Vec<Option<Pos2>> = pts.iter().map(|c| lonlat_to_screen(app, rect, *c)).collect();
+        let screen: Vec<Pos2> = placed.iter().flatten().copied().collect();
         let color = if tool.creates() { Color32::from_rgb(0x16, 0x9A, 0x5A) } else { Color32::from_rgb(0xE5, 0x6A, 0x1A) };
-        if closed && screen.len() >= 3 {
+        let all_visible = screen.len() == placed.len();
+        if closed && all_visible && screen.len() >= 3 {
             p.add(egui::Shape::closed_line(screen.clone(), Stroke::new(2.0, color)));
         } else {
-            p.add(egui::Shape::line(screen.clone(), Stroke::new(2.0, color)));
+            // On the globe a vertex behind the horizon breaks the outline rather than joining its
+            // neighbours across the disc.
+            for run in placed.split(|s| s.is_none()) {
+                let run: Vec<Pos2> = run.iter().flatten().copied().collect();
+                if run.len() >= 2 {
+                    p.add(egui::Shape::line(run, Stroke::new(2.0, color)));
+                }
+            }
         }
         for s in &screen {
             p.circle_filled(*s, 3.5, Color32::WHITE);

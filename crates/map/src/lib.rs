@@ -166,7 +166,8 @@ impl Layer {
         &self.projected
     }
 
-    /// The Web Mercator copies from the last [`Layer::projected`] call (empty before one).
+    /// The Web Mercator copies from the last [`Layer::projected`] call, without refreshing them:
+    /// call `projected` first (it needs `&mut self`) whenever the geometry may have changed.
     pub fn projected_cache(&self) -> &[Option<Geometry>] {
         &self.projected
     }

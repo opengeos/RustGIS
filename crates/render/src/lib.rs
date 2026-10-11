@@ -392,7 +392,10 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     let ctx = Ctx { view, ppp: view.pixels_per_point as f32, cull: view.camera.extent(view.width, view.height).padded(0.05, 0.0), globe };
     let scale = view.camera.scale();
     // On the globe nothing is culled by the flat extent: the horizon clips instead.
-    let visible = |e: &Extent| globe.is_some() || e.intersects(&ctx.cull);
+    let visible = |e: &Extent| match &globe {
+        Some(g) => g.may_see(e),
+        None => e.intersects(&ctx.cull),
+    };
 
     // Basemap.
     let (water, land, outline, grat) = map.basemap.palette();
