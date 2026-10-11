@@ -173,10 +173,13 @@ pub fn commands() -> Vec<C> {
                 i += 1;
                 name = format!("{base} {i}");
             }
+            if !b(p, "imported").unwrap_or(false) {
+                s.trusted_tasks.insert(name.to_lowercase());
+            }
             s.project.tasks.push(Task { name: name.clone(), description: ps(p, "description").unwrap_or("").chars().take(2000).collect(), steps: steps.into_iter().take(200).collect() });
             Ok(json!({"task": name}))
         })
-        .params(r#"{"name"?: string, "description"?: string, "steps"?: [{"title", "instructions"?, "command": id, "params"?: {}}], "fromHistory"?: bool (one step per geoprocessing run)}"#),
+        .params(r#"{"name"?: string, "description"?: string, "steps"?: [{"title", "instructions"?, "command": id, "params"?: {}}], "fromHistory"?: bool (one step per geoprocessing run), "imported"?: bool (from a file: its steps may not touch files)}"#),
         C::new("task.addStep", "Add Task Step", "Tasks", |s, p| {
             let step: TaskStep = serde_json::from_value(p.clone()).map_err(|e| format!("a step needs a title and a command: {e}"))?;
             if s.registry.get(&step.command).is_none() || step.command.starts_with("task.") {
@@ -209,7 +212,7 @@ pub fn commands() -> Vec<C> {
                 return Err(format!("step {} ({}) reads or writes files or runs a script, which imported tasks can't do", i + 1, st.command));
             }
             let steps = serde_json::to_value(&t.steps).map_err(|e| e.to_string())?;
-            s.run("task.new", &json!({"name": t.name, "description": t.description, "steps": steps}))
+            s.run("task.new", &json!({"name": t.name, "description": t.description, "steps": steps, "imported": true}))
         })
         .params(r#"{"path"?: "*.rgistask", "text"?: task JSON}"#),
         // 3D export.
@@ -504,8 +507,22 @@ fn run_task(s: &mut Session, p: &Value) -> CmdResult {
         if st.command.starts_with("task.") {
             return Err(format!("step {} would run another task", i + 1));
         }
+        // Tasks that came in a file (imported, or inside an opened project) can't touch files.
+        if !s.trusted_tasks.contains(&t.name.to_lowercase()) && touches_files(&st.command, &st.params) {
+            return Err(format!(
+                "step {} ({}) reads or writes files or runs a script; tasks from files can't, so re-add the step to run it",
+                i + 1,
+                st.command
+            ));
+        }
         let spec = s.registry.get(&st.command).ok_or_else(|| format!("step {} runs an unknown command '{}'", i + 1, st.command))?;
         let (run, enabled) = (spec.run, spec.enabled);
+        // As when run directly, a step naming a layer is checked against that layer.
+        if st.params.get("layer").is_some()
+            && let Ok(id) = s.layer_id(&st.params)
+        {
+            s.active_layer = Some(id);
+        }
         if let Some(why) = enabled(s) {
             return Err(format!("step {} ({}): {why}", i + 1, st.title));
         }
@@ -647,6 +664,9 @@ fn obj_text(s: &Session, p: &Value) -> Result<String, String> {
                     }
                     obj.push_str(&format!("l {}\n", (0..n).map(|i| (v + i + 1).to_string()).collect::<Vec<_>>().join(" ")));
                     v += n;
+                    if obj.len() > MAX_OBJ {
+                        return Err("the 3D file would be too large; export fewer features".into());
+                    }
                 }
             }
             Some(g @ (Geometry::Point(_) | Geometry::MultiPoint(_))) => {

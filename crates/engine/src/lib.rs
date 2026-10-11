@@ -200,6 +200,9 @@ pub struct Session {
     pub table_layer: Option<u32>,
     /// The layout shown instead of the map view, if any (an index into `project.layouts`).
     pub active_layout: Option<usize>,
+    /// Tasks made in this session (lower-cased names). Others came from files, and their steps
+    /// may not touch files when run.
+    pub trusted_tasks: std::collections::HashSet<String>,
     /// Drawing tools stay active after a graphic is drawn (Insert › Graphics).
     pub keep_tool: bool,
     /// Copied features (Edit › Clipboard).
@@ -249,6 +252,7 @@ impl Session {
             clipboard: None,
             keep_tool: false,
             active_layout: None,
+            trusted_tasks: Default::default(),
             undo: Vec::new(),
             redo: Vec::new(),
             back: Vec::new(),
@@ -338,6 +342,7 @@ impl Session {
         self.forward.clear();
         self.last_camera = None;
         self.dirty = false;
+        self.trusted_tasks.clear();
         // Runs of the previous project mustn't land in this one.
         self.pending.clear();
         #[cfg(feature = "geolibre")]

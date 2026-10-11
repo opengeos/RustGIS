@@ -832,6 +832,23 @@ fn project_items_files_styles_packages_tasks_and_3d() {
     assert!(s.run("task.import", &json!({"text": sneaky.to_string()})).is_err());
     let nested = json!({"name": "Nested", "steps": [{"title": "Run", "command": "script.run", "params": {"script": "map.zoomFull"}}]});
     assert!(s.run("task.import", &json!({"text": nested.to_string()})).is_err());
+    // A task arriving inside a project file is vetted when it runs.
+    s.project.tasks.push(crate::project::Task {
+        name: "From a file".into(),
+        description: String::new(),
+        steps: vec![crate::project::TaskStep {
+            title: "Export".into(),
+            instructions: String::new(),
+            command: "share.exportMap".into(),
+            params: json!({"path": path("y.png")}),
+        }],
+    });
+    assert!(s.run("task.run", &json!({"task": "From a file"})).is_err());
+    assert!(!std::path::Path::new(&path("y.png")).exists());
+    // A step naming a feature layer runs even when a raster is selected.
+    s.run("task.new", &json!({"name": "Layered", "steps": [{"title": "Zoom", "command": "layer.zoomTo", "params": {"layer": "Lakes"}}]}))
+        .unwrap();
+    s.run("task.run", &json!({"task": "Layered"})).unwrap();
     // 3D export: polygons extruded by a field.
     s.run("share.export3d", &json!({"layer": "Countries", "path": path("countries.obj"), "heightField": "pop_est", "zScale": 0.00001}))
         .unwrap();

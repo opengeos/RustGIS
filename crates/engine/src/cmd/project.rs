@@ -61,11 +61,22 @@ fn sample(s: &mut Session, _: &Value) -> CmdResult {
     Ok(Value::Null)
 }
 
+/// Largest project package opened (1 GiB).
+const MAX_PACKAGE: u64 = 1 << 30;
+
 fn open(s: &mut Session, p: &Value) -> CmdResult {
     let path = PathBuf::from(super::ps(p, "path").ok_or("path is required")?);
     let is_package = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("rgispkg"));
     let proj = if is_package {
-        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        // Read at most a byte past the limit, so a huge file is refused rather than loaded.
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(&path)
+            .and_then(|f| f.take(MAX_PACKAGE + 1).read_to_end(&mut bytes))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        if bytes.len() as u64 > MAX_PACKAGE {
+            return Err("the package is too large".into());
+        }
         Project::from_json(&super::items::package_text(&bytes)?)?
     } else {
         Project::load(&path)?

@@ -532,9 +532,10 @@ impl RustGisApp {
             }
             "ui.addData" => {
                 if let Some(open) = &self.services.open_async {
-                    // A picture picker cancelled earlier mustn't claim this file.
+                    // A picker cancelled earlier mustn't claim this file.
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
+                    self.ui.pending_open = None;
                     open("data");
                 } else if let Some(path) =
                     dialogs::pick_open(&["geojson", "json", "csv", "shp", "tif", "tiff", "asc"], tl!("Vector and raster data"))
@@ -544,9 +545,10 @@ impl RustGisApp {
             }
             "ui.open" => {
                 if let Some(open) = &self.services.open_async {
-                    // A picture picker cancelled earlier mustn't claim this file.
+                    // A picker cancelled earlier mustn't claim this file.
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
+                    self.ui.pending_open = None;
                     open("project");
                     self.ui.backstage = false;
                 } else if let Some(path) = dialogs::pick_open(&["rgisx"], tl!("RustGIS project")) {
@@ -611,9 +613,10 @@ impl RustGisApp {
             }
             "ui.importLayout" => {
                 if let Some(open) = &self.services.open_async {
-                    // A picture picker cancelled earlier mustn't claim this file.
+                    // A picker cancelled earlier mustn't claim this file.
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
+                    self.ui.pending_open = None;
                     open("layout");
                 } else if let Some(path) = dialogs::pick_open(&["rgislayout"], tl!("RustGIS layout")) {
                     return self.run("layout.import", json!({"path": path}));
@@ -624,6 +627,7 @@ impl RustGisApp {
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = true;
                     self.ui.pending_picture = None;
+                    self.ui.pending_open = None;
                     open("picture");
                 } else if let Some(path) = dialogs::pick_open(&["png", "jpg", "jpeg"], tl!("Pictures")) {
                     let v = self.run("layout.addElement", json!({"layout": li, "kind": "picture", "path": path}))?;
@@ -697,7 +701,14 @@ impl RustGisApp {
                 if self.services.download.is_some() {
                     self.download(&name, pdf);
                 } else {
-                    let path = std::env::temp_dir().join(name.replace(['/', '\\'], "_"));
+                    let safe: String = self
+                        .session
+                        .map()
+                        .name
+                        .chars()
+                        .map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_') { c } else { '_' })
+                        .collect();
+                    let path = print_dir()?.join(format!("{safe}.pdf"));
                     rustgis_engine::data::io::write_atomic(&path, &pdf).map_err(|e| e.to_string())?;
                     open_with_system(&path)?;
                     self.session.notify(i18n::fmt("Opened {name} for printing", &[("name", &path.display().to_string())]), false);
@@ -794,6 +805,7 @@ impl RustGisApp {
                 }
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = false;
+                    self.ui.pending_open = None;
                     open("picture");
                 } else if let Some(path) = dialogs::pick_open(&["png", "jpg", "jpeg"], tl!("Pictures")) {
                     return self.add_picture(json!({"path": path}));
