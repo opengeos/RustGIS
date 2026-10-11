@@ -196,6 +196,9 @@ fn spec_of(m: &Value) -> Option<(ToolSpec, Meta)> {
             },
         };
         // Example file names in the defaults ("dem.tif") are not defaults for a layer.
+        // `ParamSpec::default` is JSON *text* (a string default is stored quoted, `"\"mean\""`,
+        // as for the built-in tools): `analysis::run` and the form parse it back, so the tool and
+        // the form both get `mean`. Hence `to_string`, not the bare string.
         let default = match role {
             Role::Input => String::new(),
             _ => defaults.and_then(|d| d.get(pname)).filter(|v| !v.is_null()).map(Value::to_string).unwrap_or_default(),

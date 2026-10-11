@@ -54,8 +54,13 @@ fn output_within(mut c: Command, limit: Duration) -> Option<Output> {
             buf
         })
     }
-    let out_reader = drain(child.stdout.take()?);
-    let err_reader = drain(child.stderr.take()?);
+    let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) else {
+        // Not expected with piped output, but never leave the process running.
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    let (out_reader, err_reader) = (drain(out), drain(err));
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
