@@ -559,7 +559,9 @@ impl GpForm {
 
 /// Where to get the GeoLibre tools when the runner isn't installed (desktop and CLI builds only).
 fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
-    let status = app.session.run("gp.geolibre", &Value::Null).unwrap_or(Value::Null);
+    // Read directly, not through Session::run: a command each frame would bump the session's
+    // revision and make the views redraw. The status itself is cached in the runner module.
+    let status = rustgis_engine::cmd::gp::geolibre_status();
     if status["supported"] != true {
         return;
     }

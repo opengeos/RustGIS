@@ -45,13 +45,17 @@ fn command(exe: &Path) -> Command {
 /// runs have no limit, since a large raster can legitimately take a long time.
 fn output_within(mut c: Command, limit: Duration) -> Option<Output> {
     let mut child = c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
-    // Drain stdout on a thread, so a large output (the manifests) can't fill the pipe and stall.
-    let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut stdout, &mut buf);
-        buf
-    });
+    // Drain both pipes on threads while the process runs: a full pipe (large manifests, or
+    // many warnings) would otherwise block it until the time limit.
+    fn drain(mut pipe: impl std::io::Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            buf
+        })
+    }
+    let out_reader = drain(child.stdout.take()?);
+    let err_reader = drain(child.stderr.take()?);
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -64,11 +68,8 @@ fn output_within(mut c: Command, limit: Duration) -> Option<Output> {
             }
         }
     };
-    let stdout = reader.join().ok()?;
-    let mut stderr = Vec::new();
-    if let Some(mut e) = child.stderr.take() {
-        let _ = std::io::Read::read_to_end(&mut e, &mut stderr);
-    }
+    let stdout = out_reader.join().ok()?;
+    let stderr = err_reader.join().unwrap_or_default();
     Some(Output { status, stdout, stderr })
 }
 
@@ -107,12 +108,21 @@ fn candidates() -> Vec<PathBuf> {
 }
 
 /// The runner to use and its version, or `None` when there isn't one.
+///
+/// The answer is kept until the choice changes (Locate…). Probing runs without holding the
+/// cache's lock, so a slow candidate never blocks another caller.
 pub fn find() -> Option<(PathBuf, String)> {
-    let Ok(mut found) = FOUND.lock() else { return None };
-    if found.is_none() {
-        *found = Some(candidates().into_iter().find_map(|p| version_of(&p).map(|v| (p, v))));
+    if let Ok(found) = FOUND.lock()
+        && let Some(f) = found.as_ref()
+    {
+        return f.clone();
     }
-    found.clone().flatten()
+    let probed = candidates().into_iter().find_map(|p| version_of(&p).map(|v| (p, v)));
+    if let Ok(mut found) = FOUND.lock() {
+        // Another caller may have stored an answer meanwhile: the first one stays.
+        return found.get_or_insert(probed).clone();
+    }
+    probed
 }
 
 /// Uses `exe` as the runner (`None`: look in the usual places again). Fails, keeping the

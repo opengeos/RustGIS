@@ -65,6 +65,8 @@ fn runner_values_and_choices() {
     assert!(set_runner(Some(PathBuf::from("/no/such/geolibre"))).is_err());
     assert_eq!(runner::find(), before);
     assert_eq!(label_of("z_factor"), "Z factor");
+    // Reloading the tools reuses the strings it made rather than leaking new copies.
+    assert!(std::ptr::eq(leak("Slope"), leak(String::from("Slope"))));
     // Two layer names with the same safe name still get two files.
     let scratch = Scratch::new().unwrap();
     let (a, b) = (scratch.input("Roads 2020", "geojson"), scratch.input("Roads_2020", "geojson"));

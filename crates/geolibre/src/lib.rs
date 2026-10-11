@@ -104,8 +104,19 @@ struct Meta {
 
 static META: Mutex<Option<HashMap<String, Meta>>> = Mutex::new(None);
 
+/// A `'static` copy of `s`, shared: reloading the tools (Locate…) reuses the strings it
+/// already made instead of leaking another copy of every name and description.
 fn leak(s: impl Into<String>) -> &'static str {
-    Box::leak(s.into().into_boxed_str())
+    static STRINGS: Mutex<Option<std::collections::HashSet<&'static str>>> = Mutex::new(None);
+    let s = s.into();
+    let Ok(mut set) = STRINGS.lock() else { return Box::leak(s.into_boxed_str()) };
+    let set = set.get_or_insert_with(Default::default);
+    if let Some(&have) = set.get(s.as_str()) {
+        return have;
+    }
+    let new: &'static str = Box::leak(s.into_boxed_str());
+    set.insert(new);
+    new
 }
 
 /// `z_factor` → `Z factor`.
