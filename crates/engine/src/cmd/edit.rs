@@ -181,7 +181,28 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
     {
         l.definition_query = None;
     }
-    Ok(Json::Null)
+    // Nor its data design: domains, subtypes, contingent values, and rules that used it.
+    let d = &mut l.design;
+    d.domains.retain(|x| !x.field.eq_ignore_ascii_case(&removed));
+    if d.subtypes.as_ref().is_some_and(|st| st.field.eq_ignore_ascii_case(&removed)) {
+        d.subtypes = None;
+    }
+    if let Some(st) = &mut d.subtypes {
+        for sub in &mut st.subtypes {
+            sub.defaults.retain(|(f, _)| !f.eq_ignore_ascii_case(&removed));
+        }
+    }
+    d.contingent.retain(|c| !c.fields.iter().any(|f| f.eq_ignore_ascii_case(&removed)));
+    let ds = &l.dataset;
+    let before = d.rules.len();
+    d.rules.retain(|r| {
+        !r.field.eq_ignore_ascii_case(&removed)
+            && match r.kind {
+                rustgis_map::design::RuleKind::Calculation => Calc::parse(&r.expression, ds).is_ok(),
+                rustgis_map::design::RuleKind::Constraint => rustgis_data::query::parse(&r.expression, ds).is_ok(),
+            }
+    });
+    Ok(json!({"rulesRemoved": before - d.rules.len()}))
 }
 
 /// A tiny calculator: `a`, `a op b` where a/b are numbers, 'text' or field names.

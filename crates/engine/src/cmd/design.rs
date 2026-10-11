@@ -43,6 +43,9 @@ pub(crate) fn need_editable_selection(s: &Session) -> Option<&'static str> {
     super::need_selection(s)
 }
 
+/// Most edits an archive keeps.
+const MAX_ARCHIVE: usize = 100_000;
+
 fn now() -> f64 {
     web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
@@ -112,7 +115,9 @@ pub(crate) fn apply(s: &mut Session, id: u32, changes: Vec<Change>) -> Result<()
     for rule in l.design.rules.iter().filter(|r| r.kind == RuleKind::Calculation) {
         let Some(fi) = l.dataset.field_index(&rule.field) else { continue };
         let ty = l.dataset.fields.get(fi).map(|f| f.ty).unwrap_or(FieldType::Text);
-        let calc = super::edit::Calc::parse(&rule.expression, &l.dataset).map_err(|e| format!("attribute rule {}: {e}", rule.name))?;
+        // A rule that no longer reads (its field was removed, or a hand-edited file) is skipped
+        // rather than blocking every edit.
+        let Ok(calc) = super::edit::Calc::parse(&rule.expression, &l.dataset) else { continue };
         for r in &rows {
             let v = super::edit::coerce(calc.eval(&l.dataset, *r), ty);
             if let Some(cell) = l.dataset.features.get_mut(*r).and_then(|f| f.attrs.get_mut(fi)) {
@@ -127,12 +132,10 @@ pub(crate) fn apply(s: &mut Session, id: u32, changes: Vec<Change>) -> Result<()
         .rules
         .iter()
         .filter(|r| r.kind == RuleKind::Constraint)
-        .map(|rule| {
-            rustgis_data::query::parse(&rule.expression, &l.dataset)
-                .map(|e| (rule.name.clone(), rule.expression.clone(), e))
-                .map_err(|e| format!("attribute rule {}: {e}", rule.name))
+        .filter_map(|rule| {
+            rustgis_data::query::parse(&rule.expression, &l.dataset).ok().map(|e| (rule.name.clone(), rule.expression.clone(), e))
         })
-        .collect::<Result<_, _>>()?;
+        .collect();
     let changed_fields = |r: usize| -> Option<Vec<bool>> {
         let before = changes.iter().find(|c| c.row == Some(r))?.before.as_ref()?;
         let now = l.dataset.features.get(r)?;
@@ -173,22 +176,26 @@ pub(crate) fn apply(s: &mut Session, id: u32, changes: Vec<Change>) -> Result<()
     // Archive and counts.
     let t = now();
     let mut counts = EditCounts::default();
+    let archiving = l.design.archive.is_some();
     let mut entries = Vec::new();
     for c in &changes {
-        let after = c.row.and_then(|r| l.dataset.features.get(r)).cloned();
-        match (&c.before, &after) {
+        let after = c.row.and_then(|r| l.dataset.features.get(r));
+        match (&c.before, after) {
             (None, Some(_)) => counts.added += 1,
             (Some(_), None) => counts.deleted += 1,
             _ => counts.modified += 1,
         }
-        let fid = c.before.as_ref().or(after.as_ref()).map(|f| f.id).unwrap_or(0);
-        entries.push(rustgis_map::design::ArchiveEntry { time: t, id: fid, before: c.before.clone(), after });
+        // Features are copied into the archive only when the layer keeps one.
+        if archiving {
+            let fid = c.before.as_ref().or(after).map(|f| f.id).unwrap_or(0);
+            entries.push(rustgis_map::design::ArchiveEntry { time: t, id: fid, before: c.before.clone(), after: after.cloned() });
+        }
     }
     if let Some(archive) = &mut l.design.archive {
         archive.extend(entries);
-        // A long-running archive keeps its most recent 100,000 edits.
-        if archive.len() > 100_000 {
-            let drop = archive.len() - 100_000;
+        // A long-running archive keeps its most recent edits.
+        if archive.len() > MAX_ARCHIVE {
+            let drop = archive.len() - MAX_ARCHIVE;
             archive.drain(..drop);
         }
     }
@@ -341,7 +348,7 @@ pub fn commands() -> Vec<C> {
         C::new("edit.explode", "Explode", "Edit › Features › Modify", explode).when(need_editable_selection),
         C::new("edit.split", "Split", "Edit › Features › Modify", split).when(need_editable_selection).params(r#"{"lon", "lat"}"#),
         C::new("edit.traverse", "Traverse", "Edit › Features › Modify", traverse).when(need_editable).params(
-            r#"{"layer"?, "start": [lon, lat], "legs": [{"distance": metres, "bearing": degrees from north}], "close"?: bool}"#,
+            r#"{"layer"?, "start": [lon, lat], "legs": [{"distance": metres, "bearing": degrees from north}]} (closed in a polygon layer, open in a line layer)"#,
         ),
         C::new("edit.tools", "Editor Tools", "Edit › Tools", |s, _| {
             let tools: Vec<Json> = s.registry.commands.iter().filter(|c| c.location.starts_with("Edit › Features")).map(|c| json!({"id": c.id, "label": c.label, "params": c.params})).collect();
@@ -459,6 +466,14 @@ fn merge(s: &mut Session, _: &Json) -> CmdResult {
         return Err("select two or more features to merge".into());
     }
     let geoms: Vec<Geometry> = sel.iter().filter_map(|r| l.dataset.features.get(*r)?.geometry.clone()).collect();
+    let kind = |g: &Geometry| match g {
+        Geometry::Point(_) | Geometry::MultiPoint(_) => 0,
+        Geometry::Line(_) => 1,
+        Geometry::Polygon(_) => 2,
+    };
+    if geoms.len() != sel.len() || geoms.windows(2).any(|w| w.first().map(kind) != w.get(1).map(kind)) {
+        return Err("merge features of one kind (all points, all lines or all polygons), each with a shape".into());
+    }
     let merged = rustgis_analysis::topology::merge(&geoms).ok_or("these features can't be merged")?;
     let keep = sel.first().copied().ok_or("nothing selected")?;
     let mut changes = Vec::new();
@@ -545,7 +560,9 @@ fn split(s: &mut Session, p: &Json) -> CmdResult {
         first.push(q);
         let mut second = vec![q];
         second.extend(part.iter().skip(si + 1).copied());
-        if first.len() < 2 || second.len() < 2 || first.first() == Some(&q) || second.last() == Some(&q) {
+        // At (or within a centimetre of) the line's ends isn't a split.
+        let near = |a: Option<&Coord>| a.is_some_and(|a| rustgis_geom::haversine_m(*a, q) < 0.01);
+        if first.len() < 2 || second.len() < 2 || near(first.first()) || near(second.last()) {
             continue;
         }
         let mut a_parts: Vec<Vec<Coord>> = parts.iter().take(pi).cloned().collect();
@@ -600,12 +617,14 @@ fn traverse(s: &mut Session, p: &Json) -> CmdResult {
     }
     let id = s.layer_id(p)?;
     let gt = s.map().layer(id).map(|l| l.geometry_type()).ok_or("no such layer")?;
-    let close = b(p, "close").unwrap_or(gt == GeometryType::Polygon);
-    let g = if close && gt != GeometryType::Polyline {
-        pts.push(start);
-        json!({"type": "Polygon", "coordinates": [pts.iter().map(|c| [c.x, c.y]).collect::<Vec<_>>()]})
-    } else {
-        json!({"type": "LineString", "coordinates": pts.iter().map(|c| [c.x, c.y]).collect::<Vec<_>>()})
+    // The layer decides: a polygon layer gets a closed traverse, a line layer an open one.
+    let g = match gt {
+        GeometryType::Polygon => {
+            pts.push(start);
+            json!({"type": "Polygon", "coordinates": [pts.iter().map(|c| [c.x, c.y]).collect::<Vec<_>>()]})
+        }
+        GeometryType::Polyline => json!({"type": "LineString", "coordinates": pts.iter().map(|c| [c.x, c.y]).collect::<Vec<_>>()}),
+        _ => return Err("traverses go into a line or polygon layer".into()),
     };
     super::edit::add_feature(s, &json!({"layer": id, "geometry": g}))
 }
@@ -790,13 +809,23 @@ fn archive_restore(s: &mut Session, p: &Json) -> CmdResult {
     // The edits after `t`, newest first (only their earlier states are copied).
     let undo: Vec<(u64, Option<Feature>)> = {
         let archive = l.design.archive.as_ref().ok_or("archiving is off for this layer")?;
+        // A full archive has dropped its oldest edits: it can't go back past them.
+        if archive.len() >= MAX_ARCHIVE
+            && let Some(first) = archive.first()
+            && t < first.time
+        {
+            return Err("the archive keeps the most recent edits only, and doesn't reach back that far".into());
+        }
         archive.iter().rev().take_while(|e| e.time > t).map(|e| (e.id, e.before.clone())).collect()
     };
     let mut touched: Vec<(u64, Option<Feature>)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    // Rows by feature id, kept up to date as features come back or go.
+    let mut index: std::collections::HashMap<u64, usize> = l.dataset.features.iter().enumerate().map(|(i, f)| (f.id, i)).collect();
     for (fid, before) in &undo {
-        let pos = l.dataset.features.iter().position(|f| f.id == *fid);
+        let pos = index.get(fid).copied();
         let now = pos.and_then(|i| l.dataset.features.get(i)).cloned();
-        if !touched.iter().any(|(t, _)| t == fid) {
+        if seen.insert(*fid) {
             touched.push((*fid, now));
         }
         match (before, pos) {
@@ -806,9 +835,19 @@ fn archive_restore(s: &mut Session, p: &Json) -> CmdResult {
                 }
             }
             // A deleted feature comes back at the end of the table (its old row isn't kept).
-            (Some(b), None) => l.dataset.features.push(b.clone()),
+            (Some(b), None) => {
+                index.insert(*fid, l.dataset.features.len());
+                l.dataset.features.push(b.clone());
+            }
             (None, Some(i)) => {
                 l.dataset.features.remove(i);
+                index.remove(fid);
+                // Rows after it move up one.
+                for v in index.values_mut() {
+                    if *v > i {
+                        *v -= 1;
+                    }
+                }
             }
             (None, None) => {}
         }
@@ -818,7 +857,7 @@ fn archive_restore(s: &mut Session, p: &Json) -> CmdResult {
     let mut counts = EditCounts::default();
     let mut entries = Vec::new();
     for (fid, before) in touched {
-        let after = l.dataset.features.iter().find(|f| f.id == fid).cloned();
+        let after = index.get(&fid).and_then(|i| l.dataset.features.get(*i)).cloned();
         match (&before, &after) {
             (None, Some(_)) => counts.added += 1,
             (Some(_), None) => counts.deleted += 1,
@@ -937,12 +976,20 @@ fn template(s: &mut Session, p: &Json) -> CmdResult {
 /// The nearest vertex, line end or edge of a visible feature layer within the snapping tolerance.
 fn snap(s: &mut Session, p: &Json) -> CmdResult {
     let c = Coord::new(f(p, "lon").ok_or("lon is required")?, f(p, "lat").ok_or("lat is required")?);
+    Ok(match snap_at(s, c) {
+        Some((ll, kind)) => json!({"lon": ll.x, "lat": ll.y, "snapped": true, "kind": kind}),
+        None => json!({"lon": c.x, "lat": c.y, "snapped": false}),
+    })
+}
+
+/// Where a point at `c` (longitude/latitude) snaps to, and to what, if anywhere. Read-only, for
+/// drawing the snap marker without running a command (projected shapes are cached on the way).
+pub fn snap_at(s: &mut Session, c: Coord) -> Option<(Coord, &'static str)> {
     let sn = s.map().editing.snapping;
-    let none = json!({"lon": c.x, "lat": c.y, "snapped": false});
     if !sn.enabled {
-        return Ok(none);
+        return None;
     }
-    let Some(m) = s.map().to_map(c) else { return Ok(none) };
+    let m = s.map().to_map(c)?;
     let tol = sn.tolerance_px * s.map().camera.res;
     let scale = s.scale();
     let (flat, key) = (s.map().flat(), s.map().projection.code());
@@ -994,10 +1041,7 @@ fn snap(s: &mut Session, p: &Json) -> CmdResult {
             }
         }
     }
-    match best_point.or(best_edge).and_then(|(_, at, kind)| s.map().to_lonlat(at).map(|ll| (ll, kind))) {
-        Some((ll, kind)) => Ok(json!({"lon": ll.x, "lat": ll.y, "snapped": true, "kind": kind})),
-        None => Ok(none),
-    }
+    best_point.or(best_edge).and_then(|(_, at, kind)| s.map().to_lonlat(at).map(|ll| (ll, kind)))
 }
 
 fn topology_rules(s: &mut Session, p: &Json) -> CmdResult {

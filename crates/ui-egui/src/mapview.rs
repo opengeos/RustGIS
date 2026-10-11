@@ -663,12 +663,8 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
             match &app.map.snap {
                 Some((k, at)) if *k == key => *at,
                 _ => {
-                    let at = app
-                        .session
-                        .run("edit.snap", &json!({"lon": c.x, "lat": c.y}))
-                        .ok()
-                        .filter(|v| v["snapped"].as_bool() == Some(true))
-                        .map(|v| Coord::new(v["lon"].as_f64().unwrap_or(c.x), v["lat"].as_f64().unwrap_or(c.y)));
+                    // Asked directly, not as a command: commands mark the map changed.
+                    let at = rustgis_engine::cmd::design::snap_at(&mut app.session, c).map(|(at, _)| at);
                     app.map.snap = Some((key, at));
                     at
                 }

@@ -917,6 +917,13 @@ fn data_design_rules_hold_on_every_edit() {
     assert_eq!(l.dataset.value(row, l.dataset.field_index("length_km").unwrap()).as_f64(), Some(40.0));
     assert!(s.run("data.attributeRule", &json!({"layer": "Roads", "name": "Bad", "kind": "constraint", "expression": "(("})).is_err());
     s.run("data.attributeRule", &json!({"layer": "Roads", "name": "Named highways", "remove": true})).unwrap();
+    // Deleting a field a rule uses drops the rule, so editing isn't blocked.
+    s.run("edit.addField", &json!({"layer": "Roads", "name": "temp", "type": "double"})).unwrap();
+    s.run("data.attributeRule", &json!({"layer": "Roads", "name": "Temp", "kind": "constraint", "expression": "temp IS NULL OR temp > 0"}))
+        .unwrap();
+    let r = s.run("edit.deleteField", &json!({"layer": "Roads", "field": "temp"})).unwrap();
+    assert_eq!(r["rulesRemoved"], 1);
+    s.run("edit.addFeature", &json!({"layer": "Roads", "geometry": line, "attributes": {"kind": 2}})).unwrap();
     // Contingent values.
     s.run("data.contingentValues", &json!({"layer": "Roads", "name": "Surface by kind", "fields": ["kind", "surface"], "combos": [[1, "paved"], [2, "paved"], [2, "gravel"]]})).unwrap();
     assert!(

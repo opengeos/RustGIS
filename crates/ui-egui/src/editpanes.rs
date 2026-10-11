@@ -314,23 +314,23 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
 
     heading(ui, "Edit Status");
-    if let Ok(v) = app.session.run("edit.status", &Value::Null) {
-        let layers = v["layers"].as_array().cloned().unwrap_or_default();
-        if layers.is_empty() {
-            ui.label(egui::RichText::new(tl!("No edits since the project was saved")).weak().small());
-        }
-        for l in layers {
-            let text = crate::i18n::fmt(
-                "{layer}: {added} added, {modified} changed, {deleted} deleted",
-                &[
-                    ("layer", l["layer"].as_str().unwrap_or("")),
-                    ("added", &l["added"].to_string()),
-                    ("modified", &l["modified"].to_string()),
-                    ("deleted", &l["deleted"].to_string()),
-                ],
-            );
-            ui.label(egui::RichText::new(text).small());
-        }
+    // Read directly: running a command every frame would mark the map changed each time.
+    let counts: Vec<(String, rustgis_engine::cmd::design::EditCounts)> =
+        app.session.edit_counts.iter().filter_map(|(id, c)| app.session.map().layer(*id).map(|l| (l.name.clone(), *c))).collect();
+    if counts.is_empty() {
+        ui.label(egui::RichText::new(tl!("No edits since the project was saved")).weak().small());
+    }
+    for (layer, c) in counts {
+        let text = crate::i18n::fmt(
+            "{layer}: {added} added, {modified} changed, {deleted} deleted",
+            &[
+                ("layer", &layer),
+                ("added", &c.added.to_string()),
+                ("modified", &c.modified.to_string()),
+                ("deleted", &c.deleted.to_string()),
+            ],
+        );
+        ui.label(egui::RichText::new(text).small());
     }
 }
 
