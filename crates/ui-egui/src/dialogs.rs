@@ -434,6 +434,8 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
         ui.add_space(4.0);
         // Five-digit codes from 53000 up are ESRI's world projections.
         let prefix = if n.len() == 5 && n.starts_with('5') { "esri" } else { "epsg" }.to_ascii_uppercase();
-        ui.hyperlink_to(crate::i18n::fmt("Open {code} on epsg.io", &[("code", &format!("{prefix}:{n}"))]), format!("https://epsg.io/{n}"));
+        let text = crate::i18n::fmt("Open {code} on epsg.io", &[("code", &format!("{prefix}:{n}"))]);
+        // In the browser build the link must not replace the app (and the map) in its tab.
+        ui.add(egui::Hyperlink::from_label_and_url(text, format!("https://epsg.io/{n}")).open_in_new_tab(true));
     }
 }
