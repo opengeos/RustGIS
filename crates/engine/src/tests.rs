@@ -1313,6 +1313,15 @@ fn layer_effects_and_imagery_tools() {
     let dsm = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().name.clone();
     let mesh = s.run("imagery.mesh", &json!({"layer": dsm})).unwrap();
     assert!(mesh["faces"].as_u64().unwrap() > 100);
+    // Meshes go to .obj files; workspace methods are first or mean, checked on creation too.
+    assert!(s.run("imagery.mesh", &json!({"layer": dsm, "path": "/tmp/dsm.png"})).is_err());
+    assert!(s.run("imagery.workspace", &json!({"kind": "ortho", "images": [dem], "method": "median"})).is_err());
+    assert!(s.run("imagery.workspace", &json!({"kind": "ortho", "images": [dem], "cellSize": 20})).is_err());
+    // A mean mosaic keeps fractional values.
+    s.run("imagery.workspaceOptions", &json!({"name": "Valley", "method": "mean"})).unwrap();
+    let r = s.run("imagery.mosaic", &json!({"name": "Valley"})).unwrap();
+    let mo = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    assert_eq!(mo.data_type, "Float32");
     assert!(s.run("imagery.workspace", &json!({"kind": "lidar", "images": [dem]})).is_err());
     // Effects and workspaces save with the project.
     let p = crate::Project::from_json(&serde_json::to_string(&s.project).unwrap()).unwrap();

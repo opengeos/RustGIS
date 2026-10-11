@@ -120,13 +120,14 @@ pub struct ViewSettings {
     /// Features farther than this many metres from the view's centre aren't drawn, when set.
     #[serde(default)]
     pub clip_distance: Option<f64>,
-    /// Speed over quality: no antialiasing, rasters at half resolution.
+    /// Speed over quality: no antialiasing.
     #[serde(default)]
     pub fast: bool,
     /// The on-screen navigator (compass, zoom slider and pan pad).
     #[serde(default)]
     pub navigator: bool,
-    /// Keyboard (WASD) walking navigation instead of mouse panning.
-    #[serde(default)]
+    /// Keyboard (WASD) walking navigation instead of mouse panning. Session-only: a reopened
+    /// project starts with ordinary navigation, so the keys aren't captured unexpectedly.
+    #[serde(skip)]
     pub first_person: bool,
 }

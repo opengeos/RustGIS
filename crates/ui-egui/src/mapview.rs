@@ -286,7 +286,16 @@ fn zoom(app: &mut RustGisApp, factor: f64, x: f64, y: f64, w: f64, h: f64) {
     }
 }
 
+/// Where the navigator sits (its compass and zoom buttons), so map clicks there are left to it.
+fn navigator_area(rect: Rect) -> Rect {
+    Rect::from_min_max(pos2(rect.min.x + 14.0, rect.min.y + 74.0), pos2(rect.min.x + 90.0, rect.min.y + 202.0))
+}
+
 fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect) {
+    // Clicks on the navigator are its own, not the map's (identify, select, sketch).
+    if app.session.map().view.navigator && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| navigator_area(rect).contains(p)) {
+        return;
+    }
     let (w, h) = (rect.width() as f64, rect.height() as f64);
     let time = now(ui);
     let hover = resp.hover_pos();
@@ -308,6 +317,10 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     if app.session.map().view.first_person && !ui.ctx().egui_wants_keyboard_input() {
         let (mut fw, mut rt, mut up) = (0.0, 0.0, 0.0);
         ui.input(|i| {
+            // Shortcuts (Ctrl+S, Ctrl+E…) aren't steps.
+            if !i.modifiers.is_none() {
+                return;
+            }
             // Nine steps a second, whatever the frame rate.
             let step = (f64::from(i.stable_dt) * 9.0).clamp(0.0, 1.0);
             if i.key_down(egui::Key::W) {
@@ -719,7 +732,6 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         let centre = pos2((ptr.x + r + 24.0).min(rect.max.x - r - 4.0), (ptr.y - r - 24.0).max(rect.min.y + r + 4.0));
         let uv_c = vec2((ptr.x - rect.min.x) / rect.width(), (ptr.y - rect.min.y) / rect.height());
         let half = vec2(r / 2.0 / rect.width(), r / 2.0 / rect.height());
-        let lens = Rect::from_center_size(centre, vec2(r * 2.0, r * 2.0));
         let mut mesh = egui::Mesh::with_texture(tex.id());
         let n = 48;
         let centre_uv = pos2(uv_c.x, uv_c.y);
@@ -739,7 +751,6 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         p.add(egui::Shape::mesh(mesh));
         p.circle_stroke(centre, r, Stroke::new(2.5, t.accent));
         p.circle_stroke(ptr, 6.0, Stroke::new(1.5, t.accent));
-        let _ = lens;
     }
     // Points picked for a workflow.
     if let Some(pick) = &app.workflow.pick {
