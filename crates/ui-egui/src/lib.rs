@@ -255,8 +255,6 @@ impl RustGisApp {
         }
     }
 
-    /// Opens a file by name and contents: a `.rgisx` project, a raster, or vector data.
-    /// Failures are reported to the user (command errors through `Session::run`, others here).
     /// Adds the waiting picture graphic with its image (`path` or base64 `image`).
     fn add_picture(&mut self, mut p: Value) -> Result<Value, String> {
         let pts = self.ui.pending_picture.take().ok_or("drag the picture's rectangle on the map first")?;
@@ -269,6 +267,8 @@ impl RustGisApp {
         r
     }
 
+    /// Opens a file by name and contents: a `.rgisx` project, a raster, or vector data.
+    /// Failures are reported to the user (command errors through `Session::run`, others here).
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
         let lower = name.to_ascii_lowercase();
         if self.ui.pending_picture.is_some() && [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e)) {

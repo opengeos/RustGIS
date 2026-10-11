@@ -15,8 +15,9 @@ const MAX_SIDE: u32 = 4096;
 const MAX_DECLARED: u32 = 20_000;
 /// Most memory a picture's decoder may allocate.
 const MAX_ALLOC: u64 = 512 << 20;
-/// Decoded pictures kept between frames.
+/// Decoded pictures kept between frames, and the most pixel memory they may hold together.
 const CACHE: usize = 32;
+const CACHE_BYTES: usize = 256 << 20;
 
 /// Decoded pictures (with the base64 they came from, compared on every hit so pictures whose
 /// cheap keys collide never swap), and their keys oldest first (for eviction).
@@ -84,8 +85,9 @@ pub fn draw(pm: &mut Pixmap, ds: &Dataset, row: usize, (x0, y0, x1, y1): (f32, f
     DECODED.with(|cache| {
         let mut cache = cache.borrow_mut();
         if cache.images.get(&key).is_none_or(|(src, _)| src.as_str() != b64.as_str()) {
-            // Evict the oldest picture rather than all of them.
-            while cache.images.len() >= CACHE {
+            // Evict the oldest pictures (not all of them) to stay within the count and memory budget.
+            let held = |c: &Cache| c.images.values().filter_map(|(_, p)| p.as_ref()).map(|p| p.data().len()).sum::<usize>();
+            while cache.images.len() >= CACHE || (!cache.images.is_empty() && held(&cache) > CACHE_BYTES) {
                 let Some(old) = cache.order.pop_front() else { break };
                 cache.images.remove(&old);
             }
