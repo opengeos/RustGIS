@@ -318,7 +318,15 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     if let Some((_, DragKind::Pan)) = app.map.drag {
         let d = resp.drag_delta();
         if d != egui::Vec2::ZERO {
-            pan(app, d.x as f64, d.y as f64, w, h);
+            match (globe(app, rect), resp.interact_pointer_pos()) {
+                // The globe turns so the grabbed point stays under the pointer.
+                (Some(_), Some(p)) => {
+                    let (x, y) = ((p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64);
+                    let m = app.session.map_mut();
+                    Globe::drag_point(&mut m.camera, (x - d.x as f64, y - d.y as f64), (x, y), w, h);
+                }
+                _ => pan(app, d.x as f64, d.y as f64, w, h),
+            }
             app.map.camera_moved = true;
             app.map.last_interaction = time;
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);

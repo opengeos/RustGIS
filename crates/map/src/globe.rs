@@ -212,6 +212,24 @@ impl Globe {
         camera.clamp();
     }
 
+    /// Turns the globe so the point that was under `from` is under `to` (screen positions), as
+    /// if grabbed; falls back to a plain drag when `from` is off the globe.
+    pub fn drag_point(camera: &mut Camera, from: (f64, f64), to: (f64, f64), w: f64, h: f64) {
+        let Some(target) = Globe::new(camera, w, h).inverse(from.0, from.1) else {
+            Globe::drag(camera, to.0 - from.0, to.1 - from.1, w, h);
+            return;
+        };
+        let (mut dx, mut dy) = (to.0 - from.0, to.1 - from.1);
+        for _ in 0..4 {
+            Globe::drag(camera, dx, dy, w, h);
+            let Some((x, y)) = Globe::new(camera, w, h).forward(target) else { break };
+            (dx, dy) = (to.0 - x, to.1 - y);
+            if dx.abs() + dy.abs() < 0.25 {
+                break;
+            }
+        }
+    }
+
     /// Whether any of a longitude/latitude extent can be on the visible side: a cap test on its
     /// centre, widened by its angular radius.
     pub fn may_see(&self, e: &rustgis_geom::Extent) -> bool {
@@ -359,6 +377,15 @@ mod tests {
         assert!(g.may_see(&near) && !g.may_see(&far) && g.may_see(&limb));
         assert!(g.may_see(&rustgis_geom::Extent::new(-180.0, -90.0, 180.0, 90.0)));
         assert!(!g.may_see(&rustgis_geom::Extent::EMPTY));
+    }
+
+    #[test]
+    fn a_grabbed_point_follows_the_pointer() {
+        let mut cam = Camera { center: lonlat_to_merc(Coord::new(20.0, 60.0)), res: 20_000.0 };
+        let target = Globe::new(&cam, 800.0, 600.0).inverse(600.0, 200.0).unwrap();
+        Globe::drag_point(&mut cam, (600.0, 200.0), (520.0, 260.0), 800.0, 600.0);
+        let (x, y) = Globe::new(&cam, 800.0, 600.0).forward(target).unwrap();
+        assert!((x - 520.0).abs() < 1.0 && (y - 260.0).abs() < 1.0, "{x},{y}");
     }
 
     #[test]

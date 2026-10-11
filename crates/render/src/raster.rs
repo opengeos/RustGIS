@@ -71,12 +71,18 @@ pub(crate) fn draw(pm: &mut Pixmap, r: &Raster, style: &RasterStyle, view: &View
                     }
                 }
             }
-            if b.is_empty() {
+            // A raster under the centre of view may reach past every sample point: take the disc.
+            if e.contains(view.camera.center_lonlat()) {
+                let (cx, cy) = g.center();
+                let r = g.disc_radius();
+                ((cx - r, cy - r), (cx + r, cy + r))
+            } else if b.is_empty() {
                 return;
+            } else {
+                // A margin for the parts between the sample points.
+                let m = (b.width().max(b.height()) / 24.0).max(2.0);
+                ((b.min_x - m, b.min_y - m), (b.max_x + m, b.max_y + m))
             }
-            // A margin for the parts between the sample points.
-            let m = (b.width().max(b.height()) / 24.0).max(2.0);
-            ((b.min_x - m, b.min_y - m), (b.max_x + m, b.max_y + m))
         }
         None => {
             let e = extent_to_merc(&r.extent());
