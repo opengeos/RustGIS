@@ -46,7 +46,8 @@ impl Blend {
     }
 }
 
-/// A scale-dependent filter: between two scales only features matching `where_` draw.
+/// A scale-dependent filter: between two scales only features matching `where_` draw. When
+/// several apply at a scale, a feature must match all of them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DisplayFilter {
     pub name: String,

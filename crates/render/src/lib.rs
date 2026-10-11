@@ -564,7 +564,9 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
             continue;
         }
         let mut rows = layer.visible_rows();
-        // Display filters: at scales where one applies, only its features draw.
+        // Display filters: at a scale where several apply, a feature draws only if it matches all
+        // of them. Expressions are checked when a filter is added; one that stops reading (a
+        // field removed since) is skipped. Parsing is cheap next to evaluating every row.
         for f in layer.display_filters.iter().filter(|f| f.applies(scale)) {
             if let Ok(e) = rustgis_data::query::parse(&f.where_, &layer.dataset) {
                 for (r, keep) in rows.iter_mut().enumerate() {

@@ -59,12 +59,14 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"layer"?, "mask": polygon layer|null}"#),
         C::new("layer.swipe", "Swipe", "Raster Layer › Compare", |s, p| {
             let id = s.layer_id(p)?;
-            let pos = p.get("position").and_then(Value::as_f64);
+            let pos = match p.get("position") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(v.as_f64().filter(|x| x.is_finite()).ok_or("position is 0 to 1 across the view")?),
+            };
             s.map_mut().swipe = match (pos, b(p, "off")) {
                 (_, Some(true)) => None,
-                (Some(x), _) if x.is_finite() => Some((id, x.clamp(0.0, 1.0))),
+                (Some(x), _) => Some((id, x.clamp(0.0, 1.0))),
                 (None, _) => Some((id, 0.5)),
-                _ => return Err("position is 0 to 1 across the view".into()),
             };
             Ok(json!({"swipe": s.map().swipe.map(|(l, x)| json!({"layer": l, "position": x}))}))
         })

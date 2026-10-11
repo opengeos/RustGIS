@@ -46,7 +46,14 @@ pub fn commands() -> Vec<C> {
         C::new("raster.classify", "Classification Wizard", "Imagery › Image Classification", |s, p| {
             let r = raster(s, p)?;
             let bands = bands_param(p, &r)?;
-            let classes = rasterops::kmeans(&r, &bands, p.get("classes").and_then(Value::as_u64).unwrap_or(5) as usize, 20)?;
+            if bands.is_empty() {
+                return Err("give at least one band".into());
+            }
+            let k = match p.get("classes") {
+                None => 5,
+                Some(v) => v.as_u64().filter(|k| (2..=50).contains(k)).ok_or("classes is 2 to 50")? as usize,
+            };
+            let classes = rasterops::kmeans(&r, &bands, k, 20)?;
             add(s, rasterops::derive(&r, &name(p, format!("{}_classes", r.name)), vec![classes])?, true)
         })
         .params(r#"{"layer": raster, "classes"?: 2..50, "bands"?: [1-based]}"#),
@@ -87,7 +94,6 @@ pub fn commands() -> Vec<C> {
             }
             serde_json::to_value(&*w).map_err(|e| e.to_string())
         })
-        .view()
         .params(r#"{"name": workspace, "cellSize"?: degrees|null, "method"?: "first"|"mean"}"#),
         C::new("imagery.mosaic", "Build Mosaic", "Imagery › Ortho Mapping", mosaic).params(r#"{"name": workspace}"#),
         C::new("imagery.mesh", "Export Mesh", "Imagery › Reality Mapping", mesh)
@@ -181,11 +187,16 @@ fn georeference(s: &mut Session, p: &Value) -> CmdResult {
             .ok_or("give control points or an extent")?
             .iter()
             .take(1000)
-            .filter_map(|v| {
-                let a: Vec<f64> = v.as_array()?.iter().filter_map(Value::as_f64).collect();
-                if let [c, rr, x, y] = a.as_slice() { Some([*c, *rr, *x, *y]) } else { None }
+            .map(|v| {
+                let a: Vec<f64> =
+                    v.as_array().map(|a| a.iter().filter_map(Value::as_f64).filter(|x| x.is_finite()).collect()).unwrap_or_default();
+                if let [c, rr, x, y] = a.as_slice() {
+                    Ok([*c, *rr, *x, *y])
+                } else {
+                    Err("each control point is [column, row, lon, lat]".to_string())
+                }
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
         if pts.len() < 2 {
             return Err("give at least two control points [column, row, lon, lat]".into());
         }
@@ -424,6 +435,33 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
     }
 }
 
+/// A point given as [lon, lat]; anything else is an error (a dropped point would give a wrong
+/// answer that looks right).
+fn point(v: &Value) -> Result<Coord, String> {
+    match (v.get(0).and_then(Value::as_f64), v.get(1).and_then(Value::as_f64)) {
+        (Some(x), Some(y)) if x.is_finite() && y.is_finite() => Ok(Coord::new(x, y)),
+        _ => Err(format!("each point is [lon, lat], not {v}")),
+    }
+}
+
+/// The columns and rows of a raster under a longitude/latitude box, or `None` when it misses.
+fn pixel_window(r: &Raster, e: &Extent) -> Option<(std::ops::Range<u32>, std::ops::Range<u32>)> {
+    let tr = r.transformer();
+    let (mut c0, mut r0, mut c1, mut r1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for corner in [Coord::new(e.min_x, e.min_y), Coord::new(e.max_x, e.min_y), Coord::new(e.max_x, e.max_y), Coord::new(e.min_x, e.max_y)] {
+        if let Some(w) = tr.from_lonlat(corner) {
+            let (c, rr) = r.transform.to_pixel(w);
+            (c0, r0, c1, r1) = (c0.min(c), r0.min(rr), c1.max(c), r1.max(rr));
+        }
+    }
+    if c0 > c1 || c1 < 0.0 || r1 < 0.0 || c0 > f64::from(r.width) || r0 > f64::from(r.height) {
+        return None;
+    }
+    let cols = (c0.floor().max(0.0) as u32).min(r.width)..(c1.ceil().max(0.0) as u32 + 1).min(r.width);
+    let rows = (r0.floor().max(0.0) as u32).min(r.height)..(r1.ceil().max(0.0) as u32 + 1).min(r.height);
+    Some((cols, rows))
+}
+
 fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
     let layer = ps(p, "layer").ok_or("layer is required")?.to_string();
     let r = raster(s, p)?;
@@ -433,8 +471,8 @@ fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
         .ok_or("polygon is required")?
         .iter()
         .take(100_000)
-        .filter_map(|v| Some(Coord::new(v.get(0)?.as_f64()?, v.get(1)?.as_f64()?)))
-        .collect();
+        .map(point)
+        .collect::<Result<_, _>>()?;
     if ring.len() < 3 {
         return Err("the polygon needs at least three points".into());
     }
@@ -449,19 +487,7 @@ fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
     let mut bands: Vec<Vec<f32>> = r.bands.iter().map(|b| b.data.clone()).collect();
     let mut n = 0usize;
     // Only the pixels under the polygon's box are visited.
-    let tr = r.transformer();
-    let (mut c0, mut r0, mut c1, mut r1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    for corner in [Coord::new(e.min_x, e.min_y), Coord::new(e.max_x, e.min_y), Coord::new(e.max_x, e.max_y), Coord::new(e.min_x, e.max_y)] {
-        if let Some(w) = tr.from_lonlat(corner) {
-            let (c, rr) = r.transform.to_pixel(w);
-            (c0, r0, c1, r1) = (c0.min(c), r0.min(rr), c1.max(c), r1.max(rr));
-        }
-    }
-    if c0 > c1 {
-        return Err("the polygon is outside the raster".into());
-    }
-    let cols = (c0.floor().max(0.0) as u32).min(r.width)..(c1.ceil().max(0.0) as u32 + 1).min(r.width);
-    let rows = (r0.floor().max(0.0) as u32).min(r.height)..(r1.ceil().max(0.0) as u32 + 1).min(r.height);
+    let (cols, rows) = pixel_window(&r, &e).ok_or("the polygon is outside the raster")?;
     for row in rows {
         for col in cols.clone() {
             let w = r.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
@@ -491,14 +517,8 @@ fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn measure(s: &mut Session, p: &Value) -> CmdResult {
-    let pts: Vec<Coord> = p
-        .get("points")
-        .and_then(Value::as_array)
-        .ok_or("points is required")?
-        .iter()
-        .take(10_000)
-        .filter_map(|v| Some(Coord::new(v.get(0)?.as_f64()?, v.get(1)?.as_f64()?)))
-        .collect();
+    let pts: Vec<Coord> =
+        p.get("points").and_then(Value::as_array).ok_or("points is required")?.iter().take(10_000).map(point).collect::<Result<_, _>>()?;
     let kind = ps(p, "kind").ok_or("kind is required")?;
     let dem = ps(p, "layer").map(|n| raster_named(s, n)).transpose()?;
     let z = |c: Coord| dem.as_ref().and_then(|d| rasterops::elevation_at(d, 0, c));
@@ -551,11 +571,15 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
             let (cx, cy) = d.cell_size_m();
             let (mut above, mut below, mut n, mut lowest) = (0.0, 0.0, 0usize, f64::INFINITY);
             let mut cells = Vec::new();
-            for row in 0..d.height as i64 {
-                for col in 0..d.width as i64 {
+            let mut e = Extent::EMPTY;
+            pts.iter().for_each(|c| e.expand(*c));
+            let (cols, rows) = pixel_window(d, &e).ok_or("the polygon is outside the raster")?;
+            let tr = d.transformer();
+            for row in rows.map(i64::from) {
+                for col in cols.clone().map(i64::from) {
                     let w = d.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
-                    let Some(ll) = d.transformer().to_lonlat(w) else { continue };
-                    if !rustgis_data::geometry::polygon_contains(&rings, ll) {
+                    let Some(ll) = tr.to_lonlat(w) else { continue };
+                    if !e.contains(ll) || !rustgis_data::geometry::polygon_contains(&rings, ll) {
                         continue;
                     }
                     if let Some(v) = d.value(0, col, row) {
@@ -654,8 +678,10 @@ fn mosaic(s: &mut Session, p: &Value) -> CmdResult {
     for row in 0..rows {
         for col in 0..cols {
             let c = Coord::new(e.min_x + (col as f64 + 0.5) * cell, e.max_y - (row as f64 + 0.5) * cell);
+            // Where the cell falls in each image, once for all bands.
+            let at: Vec<Option<(i64, i64)>> = imgs.iter().map(|r| r.pixel_at(c)).collect();
             for (bi, band) in bands.iter_mut().enumerate() {
-                let vals = imgs.iter().filter_map(|r| r.pixel_at(c).and_then(|(cc, rr)| r.value(bi, cc, rr)));
+                let vals = imgs.iter().zip(&at).filter_map(|(r, a)| a.and_then(|(cc, rr)| r.value(bi, cc, rr)));
                 let v = if w.method == "mean" {
                     let (sum, k) = vals.fold((0.0f64, 0usize), |(s, k), v| (s + v as f64, k + 1));
                     (k > 0).then(|| (sum / k as f64) as f32)
