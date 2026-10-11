@@ -139,14 +139,17 @@ pub fn uninstall(id: &str) -> Result<(), String> {
     let mut st = read_state();
     st.folders.retain(|f| *f != plugin.source);
     st.disabled.retain(|d| d != id);
+    // Forget it first, so a failure leaves nothing half-done; then delete the package only when
+    // the loaded plugin is that package (uninstalling a development folder that shadows an
+    // installed copy leaves the copy).
+    write_state(&st)?;
+    crate::unload(id);
     if let Some(d) = dir() {
         let path = d.join(format!("{id}.rgplugin"));
-        if path.is_file() {
+        if path.is_file() && path.display().to_string() == plugin.source {
             std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         }
     }
-    write_state(&st)?;
-    crate::unload(id);
     Ok(())
 }
 

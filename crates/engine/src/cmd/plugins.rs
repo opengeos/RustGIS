@@ -213,6 +213,14 @@ fn refused(plugin: &Plugin, spec: &C, params: &Value) -> Option<String> {
     if spec.id.starts_with("plugin.") || NEVER.contains(&spec.id) {
         return Some(format!("plugins can't run '{}'", spec.id));
     }
+    // External tools (the GeoLibre suite) run a native program that reads files a parameter
+    // names, including bare file names: they need `files`.
+    if spec.id == "gp.run"
+        && !m.has(Permission::Files)
+        && ps(params, "tool").and_then(rustgis_analysis::tool).is_some_and(super::gp::is_geolibre_tool)
+    {
+        return Some(format!("{} needs the 'files' permission to run GeoLibre tools", m.name));
+    }
     // By what the parameters name, what the command's parameters can name, and what it is.
     let reaches = super::items::names_place(params, PLACE_KEYS, 0)
         || PLACE_KEYS.iter().any(|k| spec.params.contains(&format!("\"{k}\"")))

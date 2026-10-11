@@ -175,6 +175,9 @@ fn registries_and_blocklists_are_read_defensively() {
         ("http://localhost", true),
         ("http://localhost.evil.com/x", false),
         ("http://127.0.0.1.evil.com/x", false),
+        ("http://localhost:80@evil.example/pkg.rgplugin", false),
+        ("http://127.0.0.1:x@evil.example/", false),
+        ("http://localhost:8000/a@b.rgplugin", true),
         ("http://example.com/x", false),
         ("file:///etc/passwd", false),
     ] {

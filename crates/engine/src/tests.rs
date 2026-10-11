@@ -1625,6 +1625,19 @@ fn plugins_install_and_uninstall_from_files() {
     s.run("plugin.uninstall", &json!({"id": "eng-install"})).unwrap();
     assert!(!installed.exists());
     assert!(rustgis_plugins::get("eng-install").is_none());
+    // Uninstalling a development folder that shadows an installed package keeps the package.
+    s.run("plugin.install", &json!({"path": file.display().to_string()})).unwrap();
+    let folder = dir.join("eng-install-dev");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("plugin.json"), rustgis_plugins::testing::manifest("eng-install", &[])).unwrap();
+    std::fs::write(folder.join("plugin.wasm"), rustgis_plugins::testing::wasm()).unwrap();
+    s.run("plugin.install", &json!({"path": folder.display().to_string()})).unwrap();
+    s.run("plugin.uninstall", &json!({"id": "eng-install"})).unwrap();
+    assert!(installed.is_file(), "the installed package stays");
+    assert!(crate::cmd::plugins::load_installed().iter().all(|e| !e.contains("eng-install")));
+    assert_eq!(rustgis_plugins::get("eng-install").map(|p| p.source.clone()), Some(installed.display().to_string()));
+    s.run("plugin.uninstall", &json!({"id": "eng-install"})).unwrap();
+    assert!(!installed.exists());
     // A file that isn't a package isn't installed.
     std::fs::write(dir.join("bad.rgplugin"), b"nope").unwrap();
     assert!(s.run("plugin.install", &json!({"path": dir.join("bad.rgplugin").display().to_string()})).is_err());

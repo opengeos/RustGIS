@@ -83,11 +83,15 @@ pub fn allowed_url(url: &str) -> bool {
 }
 
 /// Whether `url` is plain HTTP to this computer (`http://localhost`, `http://127.0.0.1`, with a
-/// port or path), and not a host that merely starts like one (`localhost.example.com`).
+/// port or path), and not a host that merely starts like one (`localhost.example.com`) or hides
+/// another host after user info (`localhost:80@example.com`).
 fn is_local(url: &str) -> bool {
-    ["http://localhost", "http://127.0.0.1"]
-        .iter()
-        .any(|p| url.strip_prefix(p).is_some_and(|r| r.is_empty() || r.starts_with([':', '/', '?', '#'])))
+    ["http://localhost", "http://127.0.0.1"].iter().any(|p| {
+        url.strip_prefix(p).is_some_and(|r| {
+            let authority_rest = r.split(['/', '?', '#']).next().unwrap_or_default();
+            (r.is_empty() || r.starts_with([':', '/', '?', '#'])) && !authority_rest.contains('@')
+        })
+    })
 }
 
 /// Reads a registry (an object with a `plugins` array, or a bare array) fetched from `url`,

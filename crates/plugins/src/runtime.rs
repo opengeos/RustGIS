@@ -17,14 +17,20 @@ use serde_json::{Value, json};
 use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
 
 /// Fuel (roughly, WebAssembly instructions) for one command, and for one tool run.
-pub const COMMAND_FUEL: u64 = 2_000_000_000;
-pub const TOOL_FUEL: u64 = 40_000_000_000;
+/// Both run on the thread that runs commands (the UI's). A command does little work of its
+/// own, so a runaway one is stopped in a fraction of a second. A tool may do real work (a
+/// 45,000-cell grid takes about two thirds of this budget), so a runaway one runs for about 15
+/// seconds in a release build before it is stopped.
+pub const COMMAND_FUEL: u64 = 500_000_000;
+pub const TOOL_FUEL: u64 = 30_000_000_000;
 /// The most memory one instance may use.
 pub const MAX_MEMORY: usize = 512 * 1024 * 1024;
 /// The most host requests one call may make, and the largest request or reply.
 const MAX_HOST_CALLS: u32 = 100_000;
 const MAX_MESSAGE: usize = 128 * 1024 * 1024;
 const MAX_LOG: usize = 4_096;
+/// The most entries a module's function tables may hold.
+const MAX_TABLE: usize = 100_000;
 
 /// What a plugin can ask of RustGIS while it runs.
 pub trait Host {
@@ -149,7 +155,12 @@ fn link<'a>(linker: &mut Linker<State<'a>>) -> Result<(), String> {
 
 /// Calls the module with `request`, giving it `fuel`; returns its `ok` value or its error.
 pub fn call(module: &Module, host: &mut dyn Host, request: &Value, fuel: u64) -> Result<Value, String> {
-    let state = State { host, reply: None, calls: 0, limits: StoreLimitsBuilder::new().memory_size(MAX_MEMORY).instances(1).build() };
+    let state = State {
+        host,
+        reply: None,
+        calls: 0,
+        limits: StoreLimitsBuilder::new().memory_size(MAX_MEMORY).table_elements(MAX_TABLE).instances(1).build(),
+    };
     let mut store = Store::new(engine(), state);
     store.limiter(|s| &mut s.limits);
     store.set_fuel(fuel).map_err(|e| e.to_string())?;
