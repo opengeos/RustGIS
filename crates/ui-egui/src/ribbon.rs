@@ -748,7 +748,7 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 menu_item(ui, app, "web_map", "Map (the current view)", "presentation.mapPage", Value::Null);
                 menu_item(ui, app, "new_layout", "Blank", "presentation.blankPage", json!({"title": "Title"}));
                 menu_item(ui, app, "picture", "Image…", "ui.presentationPicture", Value::Null);
-                menu_item(ui, app, "export_map", "Video…", "ui.pane.presentation", Value::Null);
+                menu_item(ui, app, "export_map", "Video…", "ui.presentationVideo", Value::Null);
             });
             small(
                 ui,

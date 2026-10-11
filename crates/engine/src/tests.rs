@@ -1820,7 +1820,7 @@ fn presentations_and_notebooks() {
     for (file, magic) in [("tour.pdf", &b"%PDF"[..]), ("tour.html", &b"<!doctype html>"[..]), ("tour.png", &b"\x89PNG"[..])] {
         let path = dir.join(file);
         let r = s.run("presentation.export", &json!({"path": path.to_str().unwrap(), "dpi": 48})).unwrap();
-        assert_eq!(r["pages"], 6);
+        assert_eq!(r["pages"], if file.ends_with(".png") { 1 } else { 6 });
         assert!(std::fs::read(&path).unwrap().starts_with(magic), "{file}");
     }
     let html = std::fs::read_to_string(dir.join("tour.html")).unwrap();

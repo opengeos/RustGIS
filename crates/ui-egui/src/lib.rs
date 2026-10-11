@@ -884,6 +884,14 @@ impl RustGisApp {
                     return self.run("presentation.imagePage", json!({"path": path}));
                 }
             }
+            "ui.presentationVideo" => {
+                // In the browser a video is a web address, typed in the pane.
+                if self.services.open_async.is_some() {
+                    self.ui.right = Some(RightPane::Presentation);
+                } else if let Some(path) = dialogs::pick_open(&["mp4", "webm", "ogv", "mov"], tl!("Videos")) {
+                    return self.run("presentation.videoPage", json!({"source": path}));
+                }
+            }
             "ui.exportPresentation" => {
                 let i = rustgis_engine::cmd::presentation::index(&self.session, p)?;
                 let name = self.session.project.presentations.get(i).map(|r| r.name.clone()).unwrap_or_default();

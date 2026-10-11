@@ -8,6 +8,13 @@ use crate::Rgba;
 
 /// Most pages a presentation keeps (files are hostile).
 pub const MAX_PAGES: usize = 500;
+/// Longest page title, page text and speaker notes, caption and video source, in characters.
+pub const MAX_TITLE: usize = 500;
+pub const MAX_TEXT: usize = 20_000;
+pub const MAX_CAPTION: usize = 2000;
+pub const MAX_SOURCE: usize = 4000;
+/// Largest base64 picture: a 16 MB file.
+pub const MAX_IMAGE: usize = 22 << 20;
 /// The default page: 16:9, 254 × 142.875 mm (10 × 5.625 in).
 pub const WIDTH: f64 = 254.0;
 pub const HEIGHT: f64 = 142.875;
@@ -37,16 +44,39 @@ impl Presentation {
         self.name = self.name.chars().take(200).collect();
         self.pages.truncate(MAX_PAGES);
         for p in &mut self.pages {
-            p.title = p.title.chars().take(500).collect();
-            p.notes = p.notes.chars().take(20_000).collect();
-            p.seconds = if p.seconds.is_finite() { p.seconds.clamp(0.5, 3600.0) } else { 5.0 };
-            if let PageKind::Map { center, width_m, .. } = &mut p.kind {
-                if !(center.x.is_finite() && center.y.is_finite()) {
-                    *center = Coord::new(0.0, 0.0);
+            let cut = |s: &mut String, n: usize| {
+                if s.chars().nth(n).is_some() {
+                    *s = s.chars().take(n).collect();
                 }
-                center.x = center.x.clamp(-180.0, 180.0);
-                center.y = center.y.clamp(-85.0, 85.0);
-                *width_m = if width_m.is_finite() { width_m.clamp(10.0, 4e7) } else { 4e7 };
+            };
+            cut(&mut p.title, MAX_TITLE);
+            cut(&mut p.notes, MAX_TEXT);
+            p.seconds = if p.seconds.is_finite() { p.seconds.clamp(0.5, 3600.0) } else { 5.0 };
+            match &mut p.kind {
+                PageKind::Map { map, center, width_m } => {
+                    cut(map, MAX_TITLE);
+                    if !(center.x.is_finite() && center.y.is_finite()) {
+                        *center = Coord::new(0.0, 0.0);
+                    }
+                    center.x = center.x.clamp(-180.0, 180.0);
+                    center.y = center.y.clamp(-85.0, 85.0);
+                    *width_m = if width_m.is_finite() { width_m.clamp(10.0, 4e7) } else { 4e7 };
+                }
+                PageKind::Blank { text, .. } => cut(text, MAX_TEXT),
+                // A picture too large to be one the commands accept is dropped.
+                PageKind::Image { image, caption } => {
+                    if image.len() > MAX_IMAGE {
+                        image.clear();
+                    }
+                    cut(caption, MAX_CAPTION);
+                }
+                PageKind::Video { source, poster, caption } => {
+                    cut(source, MAX_SOURCE);
+                    if poster.as_ref().is_some_and(|x| x.len() > MAX_IMAGE) {
+                        *poster = None;
+                    }
+                    cut(caption, MAX_CAPTION);
+                }
             }
         }
     }
@@ -126,7 +156,17 @@ mod tests {
             }],
             ..Presentation::default()
         };
+        p.pages.push(Page {
+            title: String::new(),
+            kind: PageKind::Video { source: "v".repeat(MAX_SOURCE + 9), poster: Some("x".repeat(MAX_IMAGE + 1)), caption: String::new() },
+            notes: String::new(),
+            seconds: 5.0,
+        });
         p.clamp();
+        assert!(
+            matches!(&p.pages[1].kind, PageKind::Video { source, poster: None, .. } if source.len() == MAX_SOURCE),
+            "long sources are cut and oversized posters dropped"
+        );
         assert_eq!(p.width, WIDTH);
         assert_eq!(p.pages[0].seconds, 5.0);
         assert!(matches!(p.pages[0].kind, PageKind::Map { center, width_m, .. } if center.y == 0.0 && width_m == 10.0));

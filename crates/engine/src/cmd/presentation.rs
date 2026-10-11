@@ -7,7 +7,7 @@ use base64::Engine;
 use rustgis_geom::Coord;
 use rustgis_map::Rgba;
 use rustgis_map::layout::{ElementKind, FrameShape, Layout};
-use rustgis_map::presentation::{MAX_PAGES, Page, PageKind, Presentation};
+use rustgis_map::presentation::{MAX_CAPTION, MAX_PAGES, MAX_SOURCE, MAX_TEXT, MAX_TITLE, Page, PageKind, Presentation};
 use serde_json::{Value, json};
 
 use super::{f, ps};
@@ -28,7 +28,7 @@ pub fn commands() -> Vec<C> {
             let name = unique_name(s, ps(p, "name").unwrap_or("Presentation"), None);
             let mut pres = Presentation { name: name.clone(), ..Presentation::default() };
             // A title page to start from.
-            let title: String = ps(p, "title").unwrap_or(&s.project.name).chars().take(500).collect();
+            let title: String = ps(p, "title").unwrap_or(&s.project.name).chars().take(MAX_TITLE).collect();
             pres.pages.push(Page {
                 title,
                 kind: PageKind::Blank { text: String::new(), background: Rgba::rgb(0x1F, 0x3A, 0x5F) },
@@ -86,7 +86,7 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"presentation"?, "map"?: name (default: the active map, at its current view), "lon"?, "lat"?, "widthM"?: ground width shown (m), "title"?, "at"?: page index}"#),
         C::new("presentation.blankPage", "Blank Page", "Insert › Page", |s, p| {
             let background = super::layout::color(p, "background", Rgba::rgb(0xFF, 0xFF, 0xFF))?;
-            let text: String = ps(p, "text").unwrap_or("").chars().take(20_000).collect();
+            let text: String = ps(p, "text").unwrap_or("").chars().take(MAX_TEXT).collect();
             add_page(s, p, ps(p, "title").unwrap_or("").to_string(), PageKind::Blank { text, background })
         })
         .when(need_presentation)
@@ -97,19 +97,19 @@ pub fn commands() -> Vec<C> {
                 Some(d) => super::graphics::picture(&json!({"image": d}))?,
                 None => super::graphics::picture(p)?,
             };
-            let caption: String = ps(p, "caption").unwrap_or("").chars().take(2000).collect();
+            let caption: String = ps(p, "caption").unwrap_or("").chars().take(MAX_CAPTION).collect();
             add_page(s, p, ps(p, "title").unwrap_or("").to_string(), PageKind::Image { image, caption })
         })
         .when(need_presentation)
         .params(r#"{"presentation"?, "path"?: PNG/JPEG file, "image"?: base64, "data"?: base64, "title"?, "caption"?, "at"?}"#),
         C::new("presentation.videoPage", "Video Page", "Insert › Page", |s, p| {
-            let source: String = ps(p, "source").map(str::trim).filter(|v| !v.is_empty()).ok_or("source is required (a video file or URL)")?.chars().take(4000).collect();
+            let source: String = ps(p, "source").map(str::trim).filter(|v| !v.is_empty()).ok_or("source is required (a video file or URL)")?.chars().take(MAX_SOURCE).collect();
             let poster = match (ps(p, "poster"), ps(p, "posterImage")) {
                 (Some(path), _) => Some(super::graphics::picture(&json!({"path": path}))?),
                 (None, Some(b64)) => Some(super::graphics::picture(&json!({"image": b64}))?),
                 (None, None) => None,
             };
-            let caption: String = ps(p, "caption").unwrap_or("").chars().take(2000).collect();
+            let caption: String = ps(p, "caption").unwrap_or("").chars().take(MAX_CAPTION).collect();
             let title = ps(p, "title").map(str::to_string).unwrap_or_else(|| file_name(&source));
             add_page(s, p, title, PageKind::Video { source, poster, caption })
         })
@@ -212,7 +212,7 @@ fn add_page(s: &mut Session, p: &Value, title: String, kind: PageKind) -> CmdRes
         return Err(format!("presentations hold at most {MAX_PAGES} pages"));
     }
     let at = p.get("at").and_then(Value::as_u64).and_then(|k| usize::try_from(k).ok()).unwrap_or(pres.pages.len()).min(pres.pages.len());
-    pres.pages.insert(at, Page { title: title.chars().take(500).collect(), kind, notes: String::new(), seconds: 5.0 });
+    pres.pages.insert(at, Page { title: title.chars().take(MAX_TITLE).collect(), kind, notes: String::new(), seconds: 5.0 });
     Ok(json!({"presentation": i, "page": at, "pages": pres.pages.len()}))
 }
 
@@ -226,10 +226,10 @@ fn update_page(s: &mut Session, p: &Value) -> CmdResult {
     let n = pres.pages.len();
     let page = pres.pages.get_mut(k).ok_or("no page")?;
     if let Some(t) = ps(p, "title") {
-        page.title = t.chars().take(500).collect();
+        page.title = t.chars().take(MAX_TITLE).collect();
     }
     if let Some(t) = ps(p, "notes") {
-        page.notes = t.chars().take(20_000).collect();
+        page.notes = t.chars().take(MAX_TEXT).collect();
     }
     if let Some(v) = f(p, "seconds") {
         page.seconds = v.clamp(0.5, 3600.0);
@@ -237,7 +237,7 @@ fn update_page(s: &mut Session, p: &Value) -> CmdResult {
     match &mut page.kind {
         PageKind::Blank { text, background: bg } => {
             if let Some(t) = ps(p, "text") {
-                *text = t.chars().take(20_000).collect();
+                *text = t.chars().take(MAX_TEXT).collect();
             }
             if let Some(c) = background {
                 *bg = c;
@@ -245,7 +245,7 @@ fn update_page(s: &mut Session, p: &Value) -> CmdResult {
         }
         PageKind::Image { caption, .. } | PageKind::Video { caption, .. } => {
             if let Some(t) = ps(p, "caption") {
-                *caption = t.chars().take(2000).collect();
+                *caption = t.chars().take(MAX_CAPTION).collect();
             }
         }
         PageKind::Map { .. } => {}
@@ -360,7 +360,8 @@ fn html_escape(t: &str) -> String {
     t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-/// The presentation as a PDF, a self-contained HTML slideshow or a PNG of its first page.
+/// The presentation as a PDF, a self-contained HTML slideshow or a PNG of its first page, and
+/// the number of pages written.
 pub fn export_bytes(s: &mut Session, i: usize, format: &str, dpi: f64) -> Result<(Vec<u8>, usize), String> {
     let pres = s.project.presentations.get(i).ok_or("no presentation")?.clone();
     let n = pres.pages.len();
@@ -369,7 +370,7 @@ pub fn export_bytes(s: &mut Session, i: usize, format: &str, dpi: f64) -> Result
     }
     if format == "png" {
         let img = draw_page(s, i, 0, dpi)?;
-        return Ok((img.encode_png().map_err(|e| e.to_string())?, n));
+        return Ok((img.encode_png().map_err(|e| e.to_string())?, 1));
     }
     let mut pdf_pages = Vec::new();
     let mut slides = String::new();

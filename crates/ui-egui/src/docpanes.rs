@@ -19,8 +19,9 @@ pub struct DocState {
     pub video_source: String,
     /// Playing: when the current page started (seconds), shown in the pane.
     pub playing: Option<f64>,
-    /// Cell text being edited, by (notebook, cell), saved when the field loses focus.
-    pub edits: HashMap<(usize, usize), String>,
+    /// Cell text being edited, by (notebook, cell), with the cell text it started from: saved
+    /// when the field loses focus, and dropped if the cell changed underneath (undo, a command).
+    pub edits: HashMap<(usize, usize), (String, String)>,
     pub message: Option<(String, bool)>,
     /// The page whose fields are being edited, and their text and duration.
     pub editing: Option<(usize, usize)>,
@@ -306,26 +307,34 @@ pub fn notebook(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 ui.label(egui::RichText::new(kind).small().color(t.text_dim));
                 if cell.kind == CellKind::Code && ui.small_button(tl!("Run")).clicked() {
                     // Save an edit in progress first.
-                    if let Some(text) = app.docs.edits.remove(&(i, k)) {
+                    if let Some((text, _)) = app.docs.edits.remove(&(i, k)) {
                         run(app, "notebook.editCell", json!({"notebook": i, "cell": k, "source": text}));
                     }
                     run(app, "notebook.run", json!({"notebook": i, "cell": k}));
                     app.map.invalidate();
                 }
                 if ui.small_button(tl!("Delete")).clicked() {
-                    app.docs.edits.clear();
+                    // Other cells' typing is saved before the cells after this one move up.
+                    app.docs.edits.remove(&(i, k));
+                    let pending: Vec<_> = app.docs.edits.drain().collect();
+                    for ((n, c), (text, _)) in pending {
+                        run(app, "notebook.editCell", json!({"notebook": n, "cell": c, "source": text}));
+                    }
                     run(app, "notebook.removeCell", json!({"notebook": i, "cell": k}));
                 }
             });
-            let mut text = app.docs.edits.get(&(i, k)).cloned().unwrap_or_else(|| cell.source.clone());
+            if app.docs.edits.get(&(i, k)).is_some_and(|(_, from)| *from != cell.source) {
+                app.docs.edits.remove(&(i, k));
+            }
+            let mut text = app.docs.edits.get(&(i, k)).map_or_else(|| cell.source.clone(), |(t, _)| t.clone());
             let edit = egui::TextEdit::multiline(&mut text).desired_rows(2).desired_width(ui.available_width());
             let edit = if cell.kind == CellKind::Code { edit.code_editor() } else { edit };
             let resp = ui.add(edit);
             if resp.changed() {
-                app.docs.edits.insert((i, k), text.clone());
+                app.docs.edits.insert((i, k), (text.clone(), cell.source.clone()));
             }
             if resp.lost_focus()
-                && let Some(text) = app.docs.edits.remove(&(i, k))
+                && let Some((text, _)) = app.docs.edits.remove(&(i, k))
                 && text != cell.source
             {
                 run(app, "notebook.editCell", json!({"notebook": i, "cell": k, "source": text}));
