@@ -660,6 +660,8 @@ fn layouts_compose_export_and_round_trip() {
     s.run("layout.frameZoom", &json!({"element": frame, "to": "layer", "layer": "Lakes"})).unwrap();
     s.run("layout.update", &json!({"element": frame, "x": 12, "w": 180, "center": [10, 50]})).unwrap();
     assert!(s.run("layout.update", &json!({"element": 9999, "x": 1})).is_err());
+    s.run("layout.update", &json!({"element": frame, "name": "Main map"})).unwrap();
+    assert_eq!(s.project.layouts[0].element(frame).unwrap().name, "Main map");
     // A map series over the lakes: one page each.
     let r = s.run("layout.series", &json!({"layer": "Lakes", "nameField": "name"})).unwrap();
     let pages = r["pages"].as_u64().unwrap();

@@ -22,7 +22,7 @@ pub fn commands() -> Vec<C> {
             r#"{"name"?: string, "page"?: "letter"|"legal"|"tabloid"|"a5"|"a4"|"a3"|"a2"|"a1"|"a0", "orientation"?: "landscape"|"portrait", "width"?: mm, "height"?: mm, "template"?: "map" (frame, title, legend, north arrow, scale bar; the default)|"blank"}"#,
         ),
         C::new("layout.activate", "Open Layout", "Catalog", |s, p| {
-            let i = index(s, p)?;
+            let i = index(s, &by_name(p))?;
             s.active_layout = Some(i);
             Ok(json!({"layout": i}))
         })
@@ -34,7 +34,7 @@ pub fn commands() -> Vec<C> {
         })
         .view(),
         C::new("layout.remove", "Delete Layout", "Catalog", |s, p| {
-            let i = index(s, p)?;
+            let i = index(s, &by_name(p))?;
             s.project.layouts.remove(i);
             s.active_layout = None;
             Ok(Value::Null)
@@ -42,7 +42,7 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"name"?: string}"#),
         C::new("layout.rename", "Rename Layout", "Catalog", |s, p| {
             let name = ps(p, "newName").map(str::trim).filter(|n| !n.is_empty()).ok_or("newName is required")?.chars().take(200).collect();
-            let i = index(s, p)?;
+            let i = index(s, &by_name(p))?;
             if let Some(l) = s.project.layouts.get_mut(i) {
                 l.name = name;
             }
@@ -106,10 +106,10 @@ pub fn commands() -> Vec<C> {
     ]
 }
 
-/// The layout named by `name`/`layout`, else the active one, else the only one.
+/// The layout named or numbered by `layout`, else the active one, else the only one.
 fn index(s: &Session, p: &Value) -> Result<usize, String> {
     let ls = &s.project.layouts;
-    if let Some(n) = ps(p, "name").or_else(|| ps(p, "layout")) {
+    if let Some(n) = ps(p, "layout") {
         return ls.iter().position(|l| l.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no layout '{n}'"));
     }
     if let Some(i) = p.get("layout").and_then(Value::as_u64) {
@@ -119,6 +119,14 @@ fn index(s: &Session, p: &Value) -> Result<usize, String> {
         .filter(|i| *i < ls.len())
         .or(if ls.len() == 1 { Some(0) } else { None })
         .ok_or_else(|| "open a layout first".to_string())
+}
+
+/// Parameters where `name` names the layout (Open, Delete and Rename Layout) as `layout`.
+fn by_name(p: &Value) -> Value {
+    match (ps(p, "name"), p.get("layout")) {
+        (Some(n), None) => json!({"layout": n}),
+        _ => p.clone(),
+    }
 }
 
 fn active<'a>(s: &'a mut Session, p: &Value) -> Result<&'a mut Layout, String> {
