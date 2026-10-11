@@ -49,21 +49,17 @@ impl Page {
             rgb_z.extend_from_slice(b);
             true
         });
-        if !ok || status != TDEFLStatus::Done {
-            // Shouldn't happen; compress the page in one go instead.
-            let rgb: Vec<u8> = image
-                .pixels()
-                .iter()
-                .flat_map(|px| {
-                    let c = px.demultiply();
-                    [c.red(), c.green(), c.blue()]
-                })
-                .collect();
-            rgb_z = miniz_oxide::deflate::compress_to_vec_zlib(&rgb, 6);
-        }
+        // Compressing into memory doesn't fail; if it ever did, the page is left blank (one
+        // white pixel stretched over it) rather than holding a second full-size copy.
+        let (width, height) = if ok && status == TDEFLStatus::Done {
+            (image.width(), image.height())
+        } else {
+            rgb_z = miniz_oxide::deflate::compress_to_vec_zlib(&[255, 255, 255], 6);
+            (1, 1)
+        };
         // A page size that isn't a positive number would make the page box invalid.
         let mm = |v: f64| if v.is_finite() && v > 0.0 { v.min(5000.0) } else { 210.0 };
-        Page { width: image.width(), height: image.height(), rgb_z, width_mm: mm(width_mm), height_mm: mm(height_mm) }
+        Page { width, height, rgb_z, width_mm: mm(width_mm), height_mm: mm(height_mm) }
     }
 }
 

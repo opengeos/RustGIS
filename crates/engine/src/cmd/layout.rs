@@ -90,7 +90,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layout"?}"#),
         C::new("layout.export", "Export Layout", "Share › Output", export)
             .view()
-            .params(r#"{"layout"?, "path": "*.png|*.pdf", "dpi"?: 72..600, "allPages"?: bool (every map series page; PDF)}"#),
+            .params(r#"{"layout"?, "path": "*.png|*.pdf", "dpi"?: 72..600, "allPages"?: bool (default true: every map series page, up to 500; false: the current page; PDF)}"#),
         C::new("layout.save", "Save Layout File", "Share › Save As", |s, p| {
             let path = ps(p, "path").ok_or("path is required")?;
             let l = active(s, p)?.clone();
@@ -104,11 +104,16 @@ pub fn commands() -> Vec<C> {
             let text = match (ps(p, "text"), ps(p, "path")) {
                 (Some(t), _) => t.to_string(),
                 (None, Some(path)) => {
-                    let len = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?.len();
-                    if len > MAX_LAYOUT {
+                    use std::io::Read;
+                    // Read at most one byte past the limit, so a file growing meanwhile is still refused.
+                    let mut text = String::new();
+                    std::fs::File::open(path)
+                        .and_then(|f| f.take(MAX_LAYOUT + 1).read_to_string(&mut text))
+                        .map_err(|e| format!("{path}: {e}"))?;
+                    if text.len() as u64 > MAX_LAYOUT {
                         return Err("the layout file is too large".into());
                     }
-                    std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?
+                    text
                 }
                 (None, None) => return Err("path or text is required".into()),
             };
