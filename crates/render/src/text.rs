@@ -93,7 +93,7 @@ fn draw_text(pm: &mut Pixmap, text: &str, cx: f32, cy: f32, px_size: f32, color:
 /// Draws a placed label (logical coordinates) with its halo.
 pub fn draw(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
     let px = l.size * 1.33 * ppp;
-    let (cx, cy) = (l.x * ppp, l.y * ppp);
+    let (cx, cy) = (l.center_x() * ppp, l.y * ppp);
     if let Some(h) = l.halo {
         let r = 1.2 * ppp;
         for (dx, dy) in
@@ -139,6 +139,8 @@ pub fn scale_bar(pm: &mut Pixmap, view: &View, ground_per_pt: f64) {
         color: Rgba::rgb(30, 30, 30),
         halo: None,
         bold: false,
+        icon: None,
+        align: 0.0,
     };
     draw(pm, &label, ppp);
 }

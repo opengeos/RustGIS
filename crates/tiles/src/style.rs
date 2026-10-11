@@ -1312,7 +1312,7 @@ impl StyleLayer {
                 .take(MAX_PROPS)
                 .map(|(k, v)| {
                     let n = compile_property(v);
-                    let n = if k == "text-field" && !v.is_array() { Node::Tokens(Box::new(n)) } else { n };
+                    let n = if (k == "text-field" || k == "icon-image") && !v.is_array() { Node::Tokens(Box::new(n)) } else { n };
                     (k.clone(), Expr(n))
                 })
                 .collect()
@@ -1350,6 +1350,11 @@ impl StyleLayer {
     /// Raw layout value; `None` when the property is absent.
     pub fn layout_value(&self, name: &str, f: &FeatureCtx) -> Option<Val> {
         self.layout.get(name).map(|e| e.eval(f))
+    }
+
+    /// Whether a layout property is set (e.g. `icon-image`).
+    pub fn has_layout(&self, name: &str) -> bool {
+        self.layout.contains_key(name)
     }
 
     /// Whether a paint property is set (e.g. `fill-pattern`).

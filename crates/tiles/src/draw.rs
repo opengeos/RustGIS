@@ -16,7 +16,8 @@ use tiny_skia::{
 use crate::cache::{self, Payload, State, Want};
 use crate::mvt::GeomKind;
 use crate::source::{Resolve, Spec, resolve};
-use crate::style::{FeatureCtx, LayerKind, Rgba, Source, StyleLayer};
+use crate::sprite::{self, Load, Sprite};
+use crate::style::{FeatureCtx, LayerKind, Rgba, Source, StyleLayer, Val};
 use crate::template::{self, Placed, TileId};
 
 /// Where the pixmap is: the Web Mercator point at its top-left corner and the metres per
@@ -50,6 +51,24 @@ pub struct Label {
     pub bold: bool,
     /// Higher places first.
     pub priority: f32,
+    /// Where the text sits against the point, in text-box sizes (`text-anchor`): `[0.5, 0]`
+    /// puts its left edge on the point, `[0, 0.5]` its top edge.
+    pub anchor: [f32; 2],
+    /// How far the text is moved, in ems (`text-offset`).
+    pub offset: [f32; 2],
+    /// The icon drawn at the point (`icon-image`). A label may have an icon and no text.
+    pub icon: Option<LabelIcon>,
+}
+
+/// An icon from the style's sprite, in logical points.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LabelIcon {
+    pub image: Arc<Pixmap>,
+    pub width: f32,
+    pub height: f32,
+    /// The icon's centre, from the point (`icon-offset`).
+    pub dx: f32,
+    pub dy: f32,
 }
 
 /// What drawing a layer found.
@@ -97,7 +116,20 @@ pub fn draw(pm: &mut Pixmap, spec: &Spec, opacity: f32, frame: &Frame, labels: b
         None => pm,
     };
     let mut items: HashMap<String, Vec<Item>> = HashMap::new();
-    let n_layers = r.style.layers.len();
+    // The sprite, fetched the first time a layer needs it.
+    let mut sprite_state: Option<Option<Arc<Sprite>>> = None;
+    let mut sprite = |pending: &mut bool| -> Option<Arc<Sprite>> {
+        sprite_state
+            .get_or_insert_with(|| match r.sprite.as_deref().map(|b| sprite::load(b, frame.ppp >= 1.5)) {
+                Some(Load::Ready(s)) => Some(s),
+                Some(Load::Pending) => {
+                    *pending = true;
+                    None
+                }
+                Some(Load::Failed) | None => None,
+            })
+            .clone()
+    };
     for (li, layer) in r.style.layers.iter().enumerate() {
         if !layer.visible_at(zoom) {
             continue;
@@ -128,13 +160,25 @@ pub fn draw(pm: &mut Pixmap, spec: &Spec, opacity: f32, frame: &Frame, labels: b
                 if !drawable(layer) {
                     continue;
                 }
+                // A pattern fill without its sprite isn't drawn: its fallback colour is black.
+                let sheet = if pattern(layer).is_some() {
+                    match sprite(&mut out.pending) {
+                        Some(s) => Some(s),
+                        None => continue,
+                    }
+                } else {
+                    None
+                };
                 for it in list {
-                    draw_vector(target, it, layer, frame, zoom);
+                    draw_vector(target, it, layer, frame, zoom, sheet.as_deref());
                 }
             }
             LayerKind::Symbol if labels => {
+                let sheet = if layer.has_layout("icon-image") { sprite(&mut out.pending) } else { None };
                 for it in list {
-                    collect_labels(&mut out.labels, it, layer, frame, zoom, (n_layers - li) as f32);
+                    // Later layers place first, as in MapLibre (styles list the most important
+                    // labels last).
+                    collect_labels(&mut out.labels, it, layer, frame, zoom, li as f32, sheet.as_deref(), (w as f32, h as f32));
                 }
             }
             _ => {}
@@ -204,11 +248,16 @@ fn ancestor(p: &Placed, min_z: u8, url: &dyn Fn(TileId) -> Option<String>) -> Op
     None
 }
 
-/// Whether a fill, line or circle layer can be drawn: one painted with a sprite pattern can't
-/// (sprites aren't loaded), and drawing it in the colour the spec falls back to (black) would
-/// cover the map.
+/// Whether a fill, line or circle layer can be drawn. Lines painted with a pattern can't (the
+/// pattern would have to turn along the line), and the colour the spec falls back to, black,
+/// would cover the map.
 fn drawable(layer: &StyleLayer) -> bool {
-    !["fill-pattern", "line-pattern", "fill-extrusion-pattern"].iter().any(|p| layer.has_paint(p))
+    !layer.has_paint("line-pattern")
+}
+
+/// The paint property a fill layer takes its pattern from, if it has one.
+fn pattern(layer: &StyleLayer) -> Option<&'static str> {
+    ["fill-pattern", "fill-extrusion-pattern"].into_iter().find(|p| layer.has_paint(p))
 }
 
 fn color(c: Rgba, opacity: f32) -> tiny_skia::Color {
@@ -251,7 +300,7 @@ fn to_px(it: &Item, layer_extent: u32, frame: &Frame) -> impl Fn(&[f32; 2]) -> (
     move |p: &[f32; 2]| (x0 + p[0] * k, y0 + p[1] * k)
 }
 
-fn draw_vector(pm: &mut Pixmap, it: &Item, layer: &StyleLayer, frame: &Frame, zoom: f32) {
+fn draw_vector(pm: &mut Pixmap, it: &Item, layer: &StyleLayer, frame: &Frame, zoom: f32, sheet: Option<&Sprite>) {
     let Payload::Vector(tile) = &*it.payload else { return };
     let Some(src_layer) = layer.source_layer.as_deref() else { return };
     let Some(l) = tile.layers.iter().find(|l| l.name == src_layer) else { return };
@@ -278,6 +327,23 @@ fn draw_vector(pm: &mut Pixmap, it: &Item, layer: &StyleLayer, frame: &Frame, zo
                 let mut paint = Paint::default();
                 paint.set_color(color(c, opacity));
                 paint.anti_alias = true;
+                // A pattern from the sprite, repeated from a fixed point of the world so it
+                // lines up across tiles and stays put as the map moves.
+                let image = pattern(layer).and_then(|p| {
+                    let name = layer.paint_value(p, &ctx)?;
+                    sheet?.image(name.as_str()?, None)
+                });
+                if pattern(layer).is_some() && image.is_none() {
+                    continue;
+                }
+                if let Some(img) = &image {
+                    let s = frame.ppp / img.ratio;
+                    let (iw, ih) = (img.pixmap.width() as f32 * s, img.pixmap.height() as f32 * s);
+                    let (ox, oy) = frame.px(0.0, 0.0);
+                    let at = Transform::from_row(s, 0.0, 0.0, s, ox.rem_euclid(iw.max(1.0)), oy.rem_euclid(ih.max(1.0)));
+                    paint.shader =
+                        Pattern::new(Pixmap::as_ref(&img.pixmap), SpreadMode::Repeat, FilterQuality::Bilinear, opacity.clamp(0.0, 1.0), at);
+                }
                 pm.fill_path(&path, &paint, FillRule::EvenOdd, Transform::identity(), None);
                 // The outline follows the rings themselves, not where the tile cut them.
                 if let Some(oc) = layer.fill_outline_color(&ctx) {
@@ -378,7 +444,16 @@ fn draw_vector(pm: &mut Pixmap, it: &Item, layer: &StyleLayer, frame: &Frame, zo
     }
 }
 
-fn collect_labels(out: &mut Vec<Label>, it: &Item, layer: &StyleLayer, frame: &Frame, zoom: f32, layer_rank: f32) {
+fn collect_labels(
+    out: &mut Vec<Label>,
+    it: &Item,
+    layer: &StyleLayer,
+    frame: &Frame,
+    zoom: f32,
+    layer_rank: f32,
+    sheet: Option<&Sprite>,
+    view: (f32, f32),
+) {
     if out.len() >= 4000 || !matches!(layer.symbol_placement(&FeatureCtx::zoom_only(zoom)), crate::style::SymbolPlacement::Point) {
         return;
     }
@@ -386,7 +461,9 @@ fn collect_labels(out: &mut Vec<Label>, it: &Item, layer: &StyleLayer, frame: &F
     let Some(src_layer) = layer.source_layer.as_deref() else { return };
     let Some(l) = tile.layers.iter().find(|l| l.name == src_layer) else { return };
     let Some(clip) = clip_rect(it, frame) else { return };
-    let bounds = [clip.left(), clip.top(), clip.right(), clip.bottom()];
+    // Within the tile's square and on screen: a tile reaches far past the view when zoomed in,
+    // and labels collected there would only use up the allowance.
+    let bounds = [clip.left().max(0.0), clip.top().max(0.0), clip.right().min(view.0), clip.bottom().min(view.1)];
     let to = to_px(it, l.extent, frame);
     let ppp = frame.ppp.max(0.1);
     for f in l.features.iter().filter(|f| f.kind == GeomKind::Point) {
@@ -395,7 +472,11 @@ fn collect_labels(out: &mut Vec<Label>, it: &Item, layer: &StyleLayer, frame: &F
             continue;
         }
         // Lines are kept: the renderer drops those its font can't draw (a name in another script).
-        let Some(text) = layer.text_field(&ctx).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) else { continue };
+        let text = layer.text_field(&ctx).map(|t| t.trim().to_string()).unwrap_or_default();
+        let icon = sheet.and_then(|s| icon(s, layer, &ctx));
+        if text.is_empty() && icon.is_none() {
+            continue;
+        }
         let Some(pt) = f.geometry.first().and_then(|g| g.first()) else { continue };
         let (x, y) = to(pt);
         if !inside(x, y, bounds) {
@@ -414,11 +495,53 @@ fn collect_labels(out: &mut Vec<Label>, it: &Item, layer: &StyleLayer, frame: &F
             halo,
             bold,
             priority: layer_rank * 1e5 - sort,
+            anchor: text_anchor(layer, &ctx),
+            offset: pair(layer.layout_value("text-offset", &ctx)).unwrap_or([0.0, 0.0]),
+            icon,
         });
         if out.len() >= 4000 {
             return;
         }
     }
+}
+
+/// A label's icon (`icon-image`), when the sprite has it, sized by `icon-size` and moved by
+/// `icon-offset`; an SDF icon takes `icon-color`.
+fn icon(sheet: &Sprite, layer: &StyleLayer, ctx: &FeatureCtx) -> Option<LabelIcon> {
+    let name = layer.layout_value("icon-image", ctx)?;
+    let name = name.as_str().filter(|n| !n.is_empty())?;
+    let img = sheet.image(name, layer.paint_value("icon-color", ctx).and_then(|c| c.as_color()))?;
+    let k = layer.layout_value("icon-size", ctx).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(1.0).clamp(0.0, 8.0) as f32;
+    let (w, h) = (img.pixmap.width() as f32 / img.ratio * k, img.pixmap.height() as f32 / img.ratio * k);
+    if w < 0.5 || h < 0.5 {
+        return None;
+    }
+    let [dx, dy] = pair(layer.layout_value("icon-offset", ctx)).unwrap_or([0.0, 0.0]);
+    Some(LabelIcon { image: img.pixmap, width: w, height: h, dx: dx * k, dy: dy * k })
+}
+
+/// Two finite numbers (`[x, y]`), clamped to a sane range.
+fn pair(v: Option<Val>) -> Option<[f32; 2]> {
+    let Val::Arr(a) = v? else { return None };
+    let n = |i: usize| a.get(i).and_then(Val::as_f64).filter(|v| v.is_finite()).map(|v| v.clamp(-1000.0, 1000.0) as f32);
+    Some([n(0)?, n(1)?])
+}
+
+/// `text-anchor` as the text box's shift from the point, in box sizes.
+fn text_anchor(layer: &StyleLayer, ctx: &FeatureCtx) -> [f32; 2] {
+    let v = layer.layout_value("text-anchor", ctx);
+    let (x, y) = match v.as_ref().and_then(Val::as_str).unwrap_or("center") {
+        "left" => (0.5, 0.0),
+        "right" => (-0.5, 0.0),
+        "top" => (0.0, 0.5),
+        "bottom" => (0.0, -0.5),
+        "top-left" => (0.5, 0.5),
+        "top-right" => (-0.5, 0.5),
+        "bottom-left" => (0.5, -0.5),
+        "bottom-right" => (-0.5, -0.5),
+        _ => (0.0, 0.0),
+    };
+    [x, y]
 }
 
 fn inside(x: f32, y: f32, b: [f32; 4]) -> bool {
@@ -573,8 +696,88 @@ mod tests {
         let layer = |paint: serde_json::Value| {
             StyleLayer::parse(&serde_json::json!({"id": "a", "type": "fill", "source": "s", "source-layer": "l", "paint": paint})).unwrap()
         };
-        assert!(!drawable(&layer(serde_json::json!({"fill-pattern": "pedestrian_polygon"}))));
-        assert!(drawable(&layer(serde_json::json!({"fill-color": "#ccc"}))));
+        let line =
+            StyleLayer::parse(&serde_json::json!({"id": "l", "type": "line", "source": "s", "paint": {"line-pattern": "rail"}})).unwrap();
+        assert!(!drawable(&line));
+        let fill = layer(serde_json::json!({"fill-pattern": "pedestrian_polygon"}));
+        assert!(drawable(&fill) && pattern(&fill) == Some("fill-pattern"));
+        assert!(pattern(&layer(serde_json::json!({"fill-color": "#ccc"}))).is_none());
+    }
+
+    /// A one-layer tile ("l") holding `features`, as the item for tile 0/0/0.
+    fn item(features: Vec<crate::mvt::Feature>) -> Item {
+        let tile = crate::mvt::Tile { layers: vec![crate::mvt::Layer { name: "l".into(), extent: 4096, features }] };
+        let at = TileId { z: 0, x: 0, y: 0 }.extent();
+        Item { payload: Arc::new(Payload::Vector(tile)), at, z: 0, clip: at }
+    }
+
+    /// A sprite of two 4×4 images: red "red" and an SDF "dot".
+    fn sheet() -> Sprite {
+        let mut p = Pixmap::new(8, 4).unwrap();
+        p.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+        let index = serde_json::json!({
+            "red": {"x": 0, "y": 0, "width": 4, "height": 4, "pixelRatio": 1},
+            "dot": {"x": 4, "y": 0, "width": 4, "height": 4, "pixelRatio": 1, "sdf": true}
+        });
+        Sprite::new(&index, p)
+    }
+
+    /// The whole world in a 64×64 pixmap.
+    fn world_frame() -> Frame {
+        let half = crate::template::HALF_WORLD;
+        Frame { left: -half, top: half, m_per_px: 2.0 * half / 64.0, ppp: 1.0 }
+    }
+
+    #[test]
+    fn fills_with_sprite_patterns() {
+        let square = crate::mvt::Feature {
+            id: None,
+            kind: GeomKind::Polygon,
+            geometry: vec![vec![[0.0, 0.0], [4096.0, 0.0], [4096.0, 4096.0], [0.0, 4096.0], [0.0, 0.0]]],
+            props: Vec::new(),
+        };
+        let layer = StyleLayer::parse(
+            &serde_json::json!({"id": "a", "type": "fill", "source": "s", "source-layer": "l", "paint": {"fill-pattern": "red"}}),
+        )
+        .unwrap();
+        let mut pm = Pixmap::new(64, 64).unwrap();
+        draw_vector(&mut pm, &item(vec![square.clone()]), &layer, &world_frame(), 0.0, Some(&sheet()));
+        let px = pm.pixel(32, 32).unwrap();
+        assert_eq!((px.red(), px.green(), px.alpha()), (255, 0, 255));
+        // Without the sprite, or with an image it lacks, nothing is drawn (not black).
+        let mut pm = Pixmap::new(64, 64).unwrap();
+        draw_vector(&mut pm, &item(vec![square.clone()]), &layer, &world_frame(), 0.0, None);
+        let missing = StyleLayer::parse(
+            &serde_json::json!({"id": "a", "type": "fill", "source": "s", "source-layer": "l", "paint": {"fill-pattern": "nope"}}),
+        )
+        .unwrap();
+        draw_vector(&mut pm, &item(vec![square]), &missing, &world_frame(), 0.0, Some(&sheet()));
+        assert_eq!(pm.pixel(32, 32).unwrap().alpha(), 0);
+    }
+
+    #[test]
+    fn labels_points_with_icons() {
+        let point = |name: &str| crate::mvt::Feature {
+            id: None,
+            kind: GeomKind::Point,
+            geometry: vec![vec![[2048.0, 2048.0]]],
+            props: vec![("name".into(), crate::mvt::Value::String(name.into())), ("class".into(), crate::mvt::Value::String("dot".into()))],
+        };
+        let layer = StyleLayer::parse(&serde_json::json!({"id": "a", "type": "symbol", "source": "s", "source-layer": "l",
+            "layout": {"text-field": "{name}", "icon-image": "{class}", "icon-size": 2, "text-anchor": "left", "text-offset": [1, 0]},
+            "paint": {"icon-color": "#0000ff"}}))
+        .unwrap();
+        let mut out = Vec::new();
+        collect_labels(&mut out, &item(vec![point("A"), point("")]), &layer, &world_frame(), 0.0, 1.0, Some(&sheet()), (64.0, 64.0));
+        assert_eq!(out.len(), 2, "an icon without text is a label too");
+        let a = &out[0];
+        assert_eq!((a.text.as_str(), a.anchor, a.offset), ("A", [0.5, 0.0], [1.0, 0.0]));
+        let icon = a.icon.as_ref().unwrap();
+        // `{class}` names the image; icon-size doubles it; the SDF icon takes icon-color.
+        assert_eq!((icon.width, icon.height), (8.0, 8.0));
+        let px = icon.image.pixel(1, 1).unwrap();
+        assert_eq!((px.red(), px.blue()), (0, 255));
+        assert!(out[1].text.is_empty() && out[1].icon.is_some());
     }
 
     #[test]

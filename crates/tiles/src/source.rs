@@ -55,6 +55,9 @@ impl Spec {
 /// A style whose sources all have tile addresses.
 pub struct Resolved {
     pub style: Style,
+    /// The style's sprite (an address without `.json`/`.png`), when it has one RustGIS can
+    /// fetch.
+    pub sprite: Option<String>,
     /// Credits from the layer and its sources, without duplicates.
     pub attribution: Vec<String>,
 }
@@ -170,7 +173,14 @@ pub fn resolve(spec: &Spec) -> Resolve {
             credit(attribution);
         }
     }
-    let r = Arc::new(Resolved { style, attribution });
+    // The sprite is the style's choice; one that can't be fetched only loses the icons.
+    let sprite = style
+        .sprite
+        .as_deref()
+        .filter(|s| !s.starts_with("mapbox://"))
+        .map(|s| template::join(&base, s))
+        .filter(|s| address::check(s, Some(&base)).is_ok());
+    let r = Arc::new(Resolved { style, attribution, sprite });
     let mut all = resolved().lock().unwrap_or_else(|e| e.into_inner());
     // A few layers are in use at a time: past that many, start again rather than grow.
     if all.len() >= MAX_RESOLVED {

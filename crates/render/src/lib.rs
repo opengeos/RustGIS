@@ -82,6 +82,29 @@ pub struct PlacedLabel {
     pub color: Rgba,
     pub halo: Option<Rgba>,
     pub bold: bool,
+    /// An icon placed with the label (a tile style's `icon-image`), drawn into the map.
+    pub icon: Option<PlacedIcon>,
+    /// Which part of the text is at `x`: 0 its centre, -0.5 its left edge, 0.5 its right edge.
+    /// Each renderer lines the text up with its own measure of the width, so text set beside an
+    /// icon keeps clear of it whatever the font.
+    pub align: f32,
+}
+
+impl PlacedLabel {
+    /// The centre of the text, by this crate's measure of its width.
+    pub fn center_x(&self) -> f32 {
+        self.x - self.align * text::measure(&self.text, self.size, self.bold)
+    }
+}
+
+/// An icon in logical points: its picture and centre.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedIcon {
+    pub image: std::sync::Arc<Pixmap>,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
 }
 
 pub struct Rendered {
@@ -719,6 +742,8 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                         color,
                         halo: Some(halo_for(color)),
                         bold: false,
+                        icon: None,
+                        align: 0.0,
                     });
                 }
             }
@@ -765,6 +790,8 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                         color: labels.color,
                         halo: labels.halo.then_some(halo_for(labels.color)),
                         bold: labels.bold,
+                        icon: None,
+                        align: 0.0,
                     },
                     pri,
                     (lid, row),
@@ -786,6 +813,12 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         map.label_lock = Some(placed.keys);
     }
     let unplaced = if display.show_unplaced { placed.unplaced } else { Vec::new() };
+    // The placed labels' icons go into the map itself; their text is drawn over it later.
+    for l in &placed.labels {
+        if let Some(icon) = &l.icon {
+            draw_icon(&mut pm, icon, view.pixels_per_point as f32);
+        }
+    }
     // Effects, and (on screen only) the colour vision simulation.
     let vision = if full_res_rasters { rustgis_map::view::ColorVision::Normal } else { map.view.color_vision };
     if !map.view.effects.is_none() || vision != rustgis_map::view::ColorVision::Normal {
@@ -807,6 +840,18 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         tiles_pending: tile_out.pending,
         tile_errors: tile_out.errors,
     })
+}
+
+/// Draws an icon, scaled to its size in logical points.
+fn draw_icon(pm: &mut Pixmap, icon: &PlacedIcon, ppp: f32) {
+    let (iw, ih) = (icon.image.width().max(1) as f32, icon.image.height().max(1) as f32);
+    let (sx, sy) = (icon.w * ppp / iw, icon.h * ppp / ih);
+    let (tx, ty) = ((icon.x - icon.w / 2.0) * ppp, (icon.y - icon.h / 2.0) * ppp);
+    if !(sx.is_finite() && sy.is_finite() && tx.is_finite() && ty.is_finite()) {
+        return;
+    }
+    let paint = PixmapPaint { quality: tiny_skia::FilterQuality::Bilinear, ..PixmapPaint::default() };
+    pm.draw_pixmap(0, 0, Pixmap::as_ref(&icon.image), &paint, Transform::from_row(sx, 0.0, 0.0, sy, tx, ty), None);
 }
 
 /// Metres on the ground per logical point at the view's centre.
@@ -1029,10 +1074,18 @@ struct Placement {
 /// were placed without collisions when the lock was taken).
 fn place_labels(mut cands: Vec<(PlacedLabel, f32, (u32, usize))>, fixed: Vec<PlacedLabel>, w: f32, h: f32, locked: bool) -> Placement {
     cands.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // The text's box and its icon's, together.
     let bbox = |l: &PlacedLabel| {
         let tw = text::measure(&l.text, l.size, l.bold);
         let th = l.size * 1.25;
-        [l.x - tw / 2.0 - 2.0, l.y - th / 2.0, l.x + tw / 2.0 + 2.0, l.y + th / 2.0]
+        let cx = l.center_x();
+        let text = (!l.text.is_empty()).then(|| [cx - tw / 2.0 - 2.0, l.y - th / 2.0, cx + tw / 2.0 + 2.0, l.y + th / 2.0]);
+        let icon = l.icon.as_ref().map(|i| [i.x - i.w / 2.0, i.y - i.h / 2.0, i.x + i.w / 2.0, i.y + i.h / 2.0]);
+        match (text, icon) {
+            (Some(t), Some(i)) => [t[0].min(i[0]), t[1].min(i[1]), t[2].max(i[2]), t[3].max(i[3])],
+            (Some(b), None) | (None, Some(b)) => b,
+            (None, None) => [l.x, l.y, l.x, l.y],
+        }
     };
     let mut boxes: Vec<[f32; 4]> = fixed.iter().map(bbox).collect();
     let mut out = Placement { labels: fixed, unplaced: Vec::new(), keys: Vec::new() };
@@ -1045,7 +1098,7 @@ fn place_labels(mut cands: Vec<(PlacedLabel, f32, (u32, usize))>, fixed: Vec<Pla
         }
         if !locked && boxes.iter().any(|o| b[0] < o[2] && o[0] < b[2] && b[1] < o[3] && o[1] < b[3]) {
             if out.unplaced.len() < 2000 {
-                out.unplaced.push(PlacedLabel { color: UNPLACED, halo: Some(halo_for(UNPLACED)), ..l });
+                out.unplaced.push(PlacedLabel { color: UNPLACED, halo: Some(halo_for(UNPLACED)), icon: None, ..l });
             }
             continue;
         }
@@ -1102,12 +1155,45 @@ pub(crate) fn draw_attribution(pm: &mut Pixmap, attribution: &[String], ppp: f32
         color: Rgba::rgb(0x33, 0x33, 0x33),
         halo: Some(Rgba::rgb(0xFF, 0xFF, 0xFF)),
         bold: false,
+        icon: None,
+        align: 0.0,
     };
     text::draw(pm, &label, ppp);
 }
 
 #[cfg(test)]
 mod tests {
+
+    fn label(text: &str, x: f32, icon: Option<PlacedIcon>, align: f32) -> PlacedLabel {
+        PlacedLabel { text: text.into(), x, y: 20.0, size: 10.0, color: Rgba::rgb(0, 0, 0), halo: None, bold: false, icon, align }
+    }
+
+    #[test]
+    fn places_icons_with_their_labels() {
+        let icon = |x: f32| {
+            let mut p = Pixmap::new(4, 4).unwrap();
+            p.fill(tiny_skia::Color::from_rgba8(0, 0, 255, 255));
+            PlacedIcon { image: std::sync::Arc::new(p), x, y: 20.0, w: 10.0, h: 10.0 }
+        };
+        // Two icons on the same spot collide even with no text; one far away doesn't.
+        let cands = vec![
+            (label("", 50.0, Some(icon(50.0)), 0.0), 2.0, (u32::MAX, 0)),
+            (label("", 52.0, Some(icon(52.0)), 0.0), 1.0, (u32::MAX, 1)),
+            (label("", 150.0, Some(icon(150.0)), 0.0), 0.0, (u32::MAX, 2)),
+        ];
+        let placed = place_labels(cands, Vec::new(), 200.0, 40.0, false);
+        assert_eq!(placed.labels.iter().map(|l| l.x).collect::<Vec<_>>(), vec![50.0, 150.0]);
+        // Left-aligned text starts at x.
+        let l = label("Station", 100.0, None, -0.5);
+        assert!((l.center_x() - (100.0 + text::measure("Station", 10.0, false) / 2.0)).abs() < 1e-3);
+        // An icon is drawn into the map at its size.
+        let mut pm = Pixmap::new(200, 40).unwrap();
+        draw_icon(&mut pm, &icon(50.0), 1.0);
+        let px = pm.pixel(50, 20).unwrap();
+        assert_eq!((px.blue(), px.alpha()), (255, 255));
+        assert_eq!(pm.pixel(60, 20).unwrap().alpha(), 0);
+    }
+
     use super::*;
     use rustgis_data::{Field, FieldType, Value};
 

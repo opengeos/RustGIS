@@ -12,6 +12,7 @@ pub mod cache;
 pub mod draw;
 pub mod mvt;
 pub mod source;
+pub mod sprite;
 pub mod style;
 pub mod template;
 

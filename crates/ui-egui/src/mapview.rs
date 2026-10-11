@@ -379,13 +379,21 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 
 fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
     let font = if l.bold { semibold(l.size * 1.33) } else { regular(l.size * 1.33) };
+    // Text set beside an icon is lined up by its edge, with egui's own measure of its width.
+    let align = if l.align < -0.25 {
+        Align2::LEFT_CENTER
+    } else if l.align > 0.25 {
+        Align2::RIGHT_CENTER
+    } else {
+        Align2::CENTER_CENTER
+    };
     if let Some(h) = l.halo {
         let hc = c32(h);
         for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
-            p.text(at + vec2(dx, dy), Align2::CENTER_CENTER, &l.text, font.clone(), hc);
+            p.text(at + vec2(dx, dy), align, &l.text, font.clone(), hc);
         }
     }
-    p.text(at, Align2::CENTER_CENTER, &l.text, font, c32(l.color));
+    p.text(at, align, &l.text, font, c32(l.color));
 }
 
 /// The globe as seen in this view, when the map is a globe.

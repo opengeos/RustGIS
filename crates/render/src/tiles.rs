@@ -11,7 +11,7 @@ use rustgis_tiles::{Frame, Kind, Spec};
 use tiny_skia::Pixmap;
 
 use crate::raster::Place;
-use crate::{PlacedLabel, View};
+use crate::{PlacedIcon, PlacedLabel, View};
 
 /// The largest side of the mosaic warped onto the globe or another projection.
 const MOSAIC: f64 = 2048.0;
@@ -63,20 +63,32 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
         }
         for l in d.labels {
             // Styles often label in two scripts ("Syria\nسوريا"): only the lines the font can
-            // draw are kept, so a name never shows as boxes, and a label with none is left out.
+            // draw are kept, so a name never shows as boxes, and a label left with neither text
+            // nor an icon is left out.
             let lines: Vec<&str> = l.text.lines().map(str::trim).filter(|s| !s.is_empty() && crate::text::covers(s, l.bold)).collect();
-            if lines.is_empty() {
+            if lines.is_empty() && l.icon.is_none() {
                 continue;
             }
+            let text = lines.join(" ");
+            // The text sits against the point as the style anchors and offsets it (beside its
+            // icon, for instance); without either it is centred on the point. Across, it is
+            // placed by the edge it is anchored at, so each renderer lines it up with its own
+            // measure of the width.
+            let (th, em) = (l.size * 1.25, l.size * 1.33);
+            let x = l.x + l.offset[0] * em;
+            let y = l.y + l.anchor[1] * th + l.offset[1] * em;
+            let icon = l.icon.map(|i| PlacedIcon { image: i.image, x: l.x + i.dx, y: l.y + i.dy, w: i.width, h: i.height });
             out.labels.push((
                 PlacedLabel {
-                    text: lines.join(" "),
-                    x: l.x,
-                    y: l.y,
+                    text,
+                    x,
+                    y,
                     size: l.size,
                     color: Rgba(l.color),
                     halo: l.halo.map(Rgba),
                     bold: l.bold,
+                    icon,
+                    align: -l.anchor[0],
                 },
                 l.priority,
             ));
