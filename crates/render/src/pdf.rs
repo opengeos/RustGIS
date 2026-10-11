@@ -14,6 +14,14 @@ pub struct Page {
 }
 
 impl Page {
+    /// Its compressed size in bytes.
+    pub fn len(&self) -> usize {
+        self.rgb_z.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.rgb_z.is_empty()
+    }
+
     pub fn new(image: &Pixmap, width_mm: f64, height_mm: f64) -> Page {
         // RGB without the alpha (pages are drawn on white, so they're opaque).
         let rgb: Vec<u8> = image

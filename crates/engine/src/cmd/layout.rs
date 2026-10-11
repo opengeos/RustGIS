@@ -11,6 +11,9 @@ use serde_json::{Value, json};
 use super::{b, f, ps};
 use crate::{CmdResult, CommandSpec as C, Session};
 
+/// Most compressed page data a PDF export holds (less in the browser).
+const PDF_BUDGET: usize = if cfg!(target_arch = "wasm32") { 256 << 20 } else { 1 << 30 };
+
 /// Layout files: JSON with this extension.
 pub const LAYOUT_EXTENSION: &str = "rgislayout";
 /// Largest layout file read (64 MiB, pictures included).
@@ -122,7 +125,7 @@ fn index(s: &Session, p: &Value) -> Result<usize, String> {
         return ls.iter().position(|l| l.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no layout '{n}'"));
     }
     if let Some(i) = p.get("layout").and_then(Value::as_u64) {
-        return if (i as usize) < ls.len() { Ok(i as usize) } else { Err(format!("no layout {i}")) };
+        return usize::try_from(i).ok().filter(|i| *i < ls.len()).ok_or_else(|| format!("no layout {i}"));
     }
     s.active_layout
         .filter(|i| *i < ls.len())
@@ -687,7 +690,11 @@ fn series_page(s: &mut Session, p: &Value) -> CmdResult {
         Some(Value::String(t)) if t == "next" => (sr.page + 1).min(n.saturating_sub(1)),
         Some(Value::String(t)) if t == "previous" => sr.page.saturating_sub(1),
         Some(Value::String(t)) if t == "current" => sr.page.min(n.saturating_sub(1)),
-        Some(v) => v.as_u64().map(|v| v as usize).filter(|v| *v < n).ok_or_else(|| format!("page must be 0 to {}", n.saturating_sub(1)))?,
+        Some(v) => v
+            .as_u64()
+            .and_then(|v| usize::try_from(v).ok())
+            .filter(|v| *v < n)
+            .ok_or_else(|| format!("page must be 0 to {}", n.saturating_sub(1)))?,
         None => return Err("page is required".into()),
     };
     // The page's feature extent, with the series margin.
@@ -734,6 +741,7 @@ pub fn layout_bytes(s: &mut Session, li: usize, pdf: bool, dpi: f64, all: bool) 
     let mut render_pages = || -> Result<(Vec<rustgis_render::pdf::Page>, Option<Vec<u8>>), String> {
         let mut out = Vec::new();
         let mut png = None;
+        let mut held = 0usize;
         for page in &pages {
             if stepping {
                 series_page(s, &json!({"layout": li, "page": page}))?;
@@ -745,9 +753,17 @@ pub fn layout_bytes(s: &mut Session, li: usize, pdf: bool, dpi: f64, all: bool) 
                 page_name: names.as_ref().and_then(|n| n.get(*page).cloned()).unwrap_or_default(),
             };
             let img = rustgis_render::layout::render(&layout, &mut s.project.maps, dpi, &info).ok_or("the page is too large to draw")?;
-            // Each page is compressed as soon as it's drawn.
+            // Each page is compressed as soon as it's drawn, within a memory budget.
             if pdf {
                 out.push(rustgis_render::pdf::Page::new(&img, layout.width, layout.height));
+                held += out.last().map_or(0, rustgis_render::pdf::Page::len);
+                if held > PDF_BUDGET {
+                    return Err(format!(
+                        "the PDF passed {} MB at page {}; export at a lower dpi, or fewer pages",
+                        PDF_BUDGET >> 20,
+                        page + 1
+                    ));
+                }
             } else {
                 png = Some(img.encode_png().map_err(|e| e.to_string())?);
             }
