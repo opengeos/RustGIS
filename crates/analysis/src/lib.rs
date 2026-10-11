@@ -12,6 +12,7 @@
 
 pub mod convert;
 mod tools;
+pub mod topology;
 
 pub use tools::{TOOLS, simplify_geometry};
 

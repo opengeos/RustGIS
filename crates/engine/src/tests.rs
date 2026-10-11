@@ -144,7 +144,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 155, "coverage fell to {done}");
+    assert!(done >= 174, "coverage fell to {done}");
 }
 
 #[test]
@@ -863,4 +863,169 @@ fn project_items_files_styles_packages_tasks_and_3d() {
     let (name, bytes) = crate::cmd::items::item_bytes(&mut s, "obj", &json!({"layer": "Cities"})).unwrap();
     assert!(name.ends_with(".obj") && !bytes.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn data_design_rules_hold_on_every_edit() {
+    let mut s = world();
+    s.run("layer.template", &json!({"template": "routes", "name": "Roads"})).unwrap();
+    s.run("edit.addField", &json!({"layer": "Roads", "name": "kind", "type": "long"})).unwrap();
+    s.run("edit.addField", &json!({"layer": "Roads", "name": "lanes", "type": "long"})).unwrap();
+    // Domains.
+    s.run("data.domain", &json!({"layer": "Roads", "field": "surface", "coded": [["paved", "Paved"], ["gravel", "Gravel"]]})).unwrap();
+    s.run("data.domain", &json!({"layer": "Roads", "field": "lanes", "min": 1, "max": 8})).unwrap();
+    assert!(s.run("data.domain", &json!({"layer": "Roads", "field": "name", "min": 1, "max": 2})).is_err(), "text takes coded values");
+    let line = json!({"type": "LineString", "coordinates": [[0, 0], [1, 1]]});
+    s.run("edit.addFeature", &json!({"layer": "Roads", "geometry": line, "attributes": {"surface": "paved", "lanes": 2}})).unwrap();
+    assert!(s.run("edit.addFeature", &json!({"layer": "Roads", "geometry": line, "attributes": {"surface": "ice"}})).is_err());
+    assert!(s.run("edit.setValue", &json!({"layer": "Roads", "row": 0, "field": "lanes", "value": 12})).is_err());
+    assert_eq!(s.map().layer_by_name("Roads").unwrap().dataset.features.len(), 1, "the failed edits were undone");
+    // Subtypes fill defaults on new features.
+    s.run("data.subtypes", &json!({"layer": "Roads", "field": "kind", "subtypes": [{"code": 1, "name": "Highway", "defaults": {"lanes": 4}}, {"code": 2, "name": "Street", "defaults": {"lanes": 1}}]})).unwrap();
+    assert!(s.run("data.subtypes", &json!({"layer": "Roads", "field": "name", "subtypes": [{"code": 1, "name": "x"}]})).is_err());
+    let r = s.run("edit.addFeature", &json!({"layer": "Roads", "geometry": line, "attributes": {"kind": 1}})).unwrap();
+    let row = r["row"].as_u64().unwrap() as usize;
+    let lanes = |s: &Session, row: usize| {
+        let l = s.map().layer_by_name("Roads").unwrap();
+        l.dataset.value(row, l.dataset.field_index("lanes").unwrap()).clone()
+    };
+    assert_eq!(lanes(&s, row).as_f64(), Some(4.0));
+    // Attribute rules: a calculation and a constraint.
+    s.run(
+        "data.attributeRule",
+        &json!({"layer": "Roads", "name": "Length", "kind": "calculation", "field": "length_km", "expression": "lanes * 10"}),
+    )
+    .unwrap();
+    s.run(
+        "data.attributeRule",
+        &json!({"layer": "Roads", "name": "Named highways", "kind": "constraint", "expression": "kind <> 1 OR name IS NOT NULL"}),
+    )
+    .unwrap();
+    assert!(
+        s.run("edit.addFeature", &json!({"layer": "Roads", "geometry": line, "attributes": {"kind": 1}})).is_err(),
+        "highways need names"
+    );
+    let r = s.run("edit.addFeature", &json!({"layer": "Roads", "geometry": line, "attributes": {"kind": 1, "name": "A1"}})).unwrap();
+    let row = r["row"].as_u64().unwrap() as usize;
+    let l = s.map().layer_by_name("Roads").unwrap();
+    assert_eq!(l.dataset.value(row, l.dataset.field_index("length_km").unwrap()).as_f64(), Some(40.0));
+    assert!(s.run("data.attributeRule", &json!({"layer": "Roads", "name": "Bad", "kind": "constraint", "expression": "(("})).is_err());
+    s.run("data.attributeRule", &json!({"layer": "Roads", "name": "Named highways", "remove": true})).unwrap();
+    // Contingent values.
+    s.run("data.contingentValues", &json!({"layer": "Roads", "name": "Surface by kind", "fields": ["kind", "surface"], "combos": [[1, "paved"], [2, "paved"], [2, "gravel"]]})).unwrap();
+    assert!(
+        s.run("edit.addFeature", &json!({"layer": "Roads", "geometry": line, "attributes": {"kind": 1, "surface": "gravel"}})).is_err()
+    );
+    s.run("edit.addFeature", &json!({"layer": "Roads", "geometry": line, "attributes": {"kind": 2, "surface": "gravel"}})).unwrap();
+    // Templates.
+    s.run("edit.template", &json!({"layer": "Roads", "name": "Gravel street", "defaults": {"kind": 2, "surface": "gravel"}})).unwrap();
+    let r = s.run("edit.addFeature", &json!({"layer": "Roads", "geometry": line, "template": "Gravel street"})).unwrap();
+    assert_eq!(lanes(&s, r["row"].as_u64().unwrap() as usize).as_f64(), Some(1.0), "template, then subtype defaults");
+    // Archive and restore.
+    s.run("data.archive", &json!({"layer": "Roads"})).unwrap();
+    let t0 = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap().as_secs_f64() - 0.001;
+    let n = s.map().layer_by_name("Roads").unwrap().dataset.features.len();
+    s.run("edit.addFeature", &json!({"layer": "Roads", "geometry": line, "template": "Gravel street"})).unwrap();
+    s.run("edit.setValue", &json!({"layer": "Roads", "row": 0, "field": "name", "value": "Main"})).unwrap();
+    let h = s.run("data.archiveHistory", &json!({"layer": "Roads"})).unwrap();
+    assert_eq!(h["edits"], 2);
+    s.run("data.archiveRestore", &json!({"layer": "Roads", "time": t0})).unwrap();
+    let l = s.map().layer_by_name("Roads").unwrap();
+    assert_eq!(l.dataset.features.len(), n);
+    assert!(l.dataset.value(0, l.dataset.field_index("name").unwrap()).is_null());
+    // Edit status, and turning editing off.
+    let st = s.run("edit.status", &Value::Null).unwrap();
+    assert!(st["layers"].as_array().unwrap().iter().any(|l| l["layer"] == "Roads" && l["added"].as_u64().unwrap() >= 5));
+    s.run("edit.enable", &json!({"on": false})).unwrap();
+    assert!(s.run("edit.addFeature", &json!({"layer": "Roads", "geometry": line})).is_err());
+    s.run("edit.enable", &json!({"on": true})).unwrap();
+}
+
+#[test]
+fn modify_tools_snapping_topology_relationships_and_elevation() {
+    let mut s = with_raster();
+    s.run("layer.template", &json!({"template": "lines", "name": "Paths"})).unwrap();
+    let add = |s: &mut Session, coords: Value| {
+        s.run("edit.addFeature", &json!({"layer": "Paths", "geometry": {"type": "LineString", "coordinates": coords}})).unwrap()["row"]
+            .as_u64()
+            .unwrap() as usize
+    };
+    let a = add(&mut s, json!([[0, 0], [1, 0]]));
+    // Move one degree east (about 111 km at the equator), then rotate and scale.
+    s.run("select.rows", &json!({"layer": "Paths", "rows": [a]})).unwrap();
+    s.run("edit.move", &json!({"dx": 111_319.5, "dy": 0})).unwrap();
+    let first = |s: &Session, row: usize| match s.map().layer_by_name("Paths").unwrap().dataset.features[row].geometry.as_ref().unwrap() {
+        rustgis_data::Geometry::Line(p) => p[0][0],
+        _ => panic!("not a line"),
+    };
+    assert!((first(&s, a).x - 1.0).abs() < 1e-3, "{:?}", first(&s, a));
+    s.run("edit.rotate", &json!({"angle": 90})).unwrap();
+    s.run("edit.scale", &json!({"factor": 2})).unwrap();
+    s.run("edit.flip", &Value::Null).unwrap();
+    // Split, then merge back, then explode.
+    let b = add(&mut s, json!([[10, 10], [12, 10]]));
+    s.run("select.rows", &json!({"layer": "Paths", "rows": [b]})).unwrap();
+    s.run("edit.split", &json!({"lon": 11, "lat": 10.2})).unwrap();
+    let n = s.map().layer_by_name("Paths").unwrap().dataset.features.len();
+    s.run("select.rows", &json!({"layer": "Paths", "rows": [b, n - 1]})).unwrap();
+    s.run("edit.merge", &Value::Null).unwrap();
+    assert_eq!(s.map().layer_by_name("Paths").unwrap().dataset.features.len(), n - 1);
+    s.run("edit.explode", &Value::Null).unwrap();
+    assert_eq!(s.map().layer_by_name("Paths").unwrap().dataset.features.len(), n);
+    assert!(s.run("edit.setGeometry", &json!({"layer": "Paths", "row": 0, "geometry": {"type": "Point", "coordinates": [0, 0]}})).is_err());
+    s.run("edit.setGeometry", &json!({"layer": "Paths", "row": 0, "geometry": {"type": "LineString", "coordinates": [[0, 0], [0, 1]]}}))
+        .unwrap();
+    // Traverse: two legs from a start, ground to grid off and on.
+    s.run("layer.select", &json!({"layer": "Paths"})).unwrap();
+    let r = s
+        .run("edit.traverse", &json!({"start": [20, 0], "legs": [{"distance": 1000, "bearing": 90}, {"distance": 1000, "bearing": 0}]}))
+        .unwrap();
+    let row = r["row"].as_u64().unwrap() as usize;
+    let end = |s: &Session, row: usize| match s.map().layer_by_name("Paths").unwrap().dataset.features[row].geometry.as_ref().unwrap() {
+        rustgis_data::Geometry::Line(p) => *p[0].last().unwrap(),
+        _ => panic!("not a line"),
+    };
+    let e = end(&s, row);
+    assert!((e.x - 20.008983).abs() < 1e-5 && (e.y - 0.009043).abs() < 1e-4, "{e:?}");
+    s.run("edit.groundToGrid", &json!({"scale": 1.5, "rotation": 0})).unwrap();
+    let r = s.run("edit.traverse", &json!({"start": [20, 0], "legs": [{"distance": 1000, "bearing": 90}]})).unwrap();
+    assert!((end(&s, r["row"].as_u64().unwrap() as usize).x - 20.013475).abs() < 1e-5);
+    assert!(s.run("edit.groundToGrid", &json!({"scale": 9})).is_err());
+    s.run("edit.groundToGrid", &json!({"on": false})).unwrap();
+    // Snapping to a vertex near the pointer.
+    s.run("map.goToXY", &json!({"lon": 20, "lat": 0, "scale": 50_000})).unwrap();
+    let off = s.run("edit.snap", &json!({"lon": 20.0001, "lat": 0.0001})).unwrap();
+    assert_eq!(off["snapped"], false, "snapping is off");
+    s.run("edit.snapping", &json!({"on": true, "tolerancePx": 20})).unwrap();
+    let on = s.run("edit.snap", &json!({"lon": 20.0001, "lat": 0.0001})).unwrap();
+    assert_eq!(on["snapped"], true);
+    assert!((on["lon"].as_f64().unwrap() - 20.0).abs() < 1e-9 && on["lat"].as_f64().unwrap().abs() < 1e-9, "{on}");
+    // Topology: overlapping countries? Lakes inside countries? Dangling paths.
+    s.run("topology.rules", &json!({"add": {"rule": "mustNotHaveDangles", "layer": "Paths"}})).unwrap();
+    s.run("topology.rules", &json!({"add": {"rule": "mustBeCoveredBy", "layer": "Cities", "by": "Countries"}})).unwrap();
+    assert!(s.run("topology.rules", &json!({"add": {"rule": "mustNotOverlap", "layer": "Paths"}})).is_err(), "overlap is for polygons");
+    let v = s.run("topology.validate", &Value::Null).unwrap();
+    assert!(v["errors"].as_u64().unwrap() > 0);
+    assert_eq!(s.topology_errors.len() as u64, v["errors"].as_u64().unwrap());
+    // Relationships: cities to their country by ISO code.
+    s.run("data.relate", &json!({"name": "Country of city", "origin": "Countries", "originKey": "name", "destination": "Cities", "destinationKey": "adm0name"})).unwrap();
+    assert!(
+        s.run(
+            "data.relate",
+            &json!({"name": "x", "origin": "Countries", "originKey": "nope", "destination": "Cities", "destinationKey": "adm0name"})
+        )
+        .is_err()
+    );
+    s.run("select.byAttributes", &json!({"layer": "Countries", "where": "name = 'France'"})).unwrap();
+    let rel = s.run("data.related", &Value::Null).unwrap();
+    assert!(rel["related"].as_u64().unwrap() >= 1, "{rel}");
+    // Elevation from the raster surface goes in z.
+    s.run("edit.elevation", &json!({"mode": "constant", "z": 125})).unwrap();
+    s.run("layer.template", &json!({"template": "points", "name": "Spots"})).unwrap();
+    s.run("edit.addFeature", &json!({"layer": "Spots", "geometry": {"type": "Point", "coordinates": [0, 0]}})).unwrap();
+    let l = s.map().layer_by_name("Spots").unwrap();
+    assert_eq!(l.dataset.value(0, l.dataset.field_index("z").unwrap()).as_f64(), Some(125.0));
+    assert!(s.run("edit.elevation", &json!({"mode": "surface", "surface": "Cities"})).is_err(), "not a raster");
+    let tools = s.run("edit.tools", &Value::Null).unwrap();
+    assert!(tools.as_array().unwrap().len() >= 9);
 }

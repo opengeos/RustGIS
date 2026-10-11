@@ -1,6 +1,7 @@
 //! Every command, grouped by ribbon tab.
 
 pub mod clipboard;
+pub mod design;
 pub mod edit;
 pub mod gp;
 pub mod graphics;
@@ -31,6 +32,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(graphics::commands());
     v.extend(layout::commands());
     v.extend(items::commands());
+    v.extend(design::commands());
     v.extend(gp::commands());
     v.extend(share::commands());
     v

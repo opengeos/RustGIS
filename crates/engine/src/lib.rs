@@ -174,6 +174,16 @@ pub struct GpRecord {
     pub outputs: Vec<String>,
 }
 
+/// A topology problem found by `topology.validate` (shown in the Error Inspector).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TopologyIssue {
+    pub rule: String,
+    pub layer: String,
+    pub rows: Vec<usize>,
+    pub lon: f64,
+    pub lat: f64,
+}
+
 /// Something worth telling the user (status bar / notifications).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Notice {
@@ -198,6 +208,10 @@ pub struct Session {
     pub notices: Vec<Notice>,
     /// Layer whose attribute table is open.
     pub table_layer: Option<u32>,
+    /// Edits per layer id since the project was last saved (Edit › Status).
+    pub edit_counts: std::collections::HashMap<u32, cmd::design::EditCounts>,
+    /// The last topology check's errors (Edit › Error Inspector).
+    pub topology_errors: Vec<TopologyIssue>,
     /// The layout shown instead of the map view, if any (an index into `project.layouts`).
     pub active_layout: Option<usize>,
     /// Tasks made in this session (lower-cased names). Others came from files, and their steps
@@ -253,6 +267,8 @@ impl Session {
             keep_tool: false,
             active_layout: None,
             trusted_tasks: Default::default(),
+            edit_counts: std::collections::HashMap::new(),
+            topology_errors: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
             back: Vec::new(),
@@ -343,6 +359,8 @@ impl Session {
         self.last_camera = None;
         self.dirty = false;
         self.trusted_tasks.clear();
+        self.edit_counts.clear();
+        self.topology_errors.clear();
         // Runs of the previous project mustn't land in this one.
         self.pending.clear();
         #[cfg(feature = "geolibre")]

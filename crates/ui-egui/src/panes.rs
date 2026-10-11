@@ -37,6 +37,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 RightPane::Symbology => ("Symbology", "ui.pane.symbology"),
                 RightPane::History => ("History", "ui.pane.history"),
                 RightPane::Details => ("Details", "ui.pane.details"),
+                RightPane::Editing => ("Editing", "ui.pane.editing"),
+                RightPane::Design => ("Data Design", "ui.pane.design"),
             };
             pane_header(app, ui, tl!(title), close, &t);
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -45,6 +47,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     RightPane::Symbology => symbology(app, ui, &t),
                     RightPane::History => history(app, ui, &t),
                     RightPane::Details => details(app, ui, &t),
+                    RightPane::Editing => crate::editpanes::editing(app, ui, &t),
+                    RightPane::Design => crate::editpanes::design(app, ui, &t),
                 });
             });
         });

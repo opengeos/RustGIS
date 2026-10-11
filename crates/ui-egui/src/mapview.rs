@@ -60,6 +60,8 @@ pub struct MapView {
     sketch: Vec<Coord>,
     /// A finished measurement stays on screen until the next click.
     sketch_done: bool,
+    /// The next click splits the selected lines there (Editing pane › Split).
+    pub split_mode: bool,
     pub popup: Option<Popup>,
     pub pointer_lonlat: Option<Coord>,
     pub dms: bool,
@@ -80,6 +82,7 @@ impl Default for MapView {
             drag: None,
             sketch: Vec::new(),
             sketch_done: false,
+            split_mode: false,
             popup: None,
             pointer_lonlat: None,
             dms: false,
@@ -453,6 +456,13 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             app.map.popup = None;
             return;
         };
+        if app.map.split_mode {
+            app.map.split_mode = false;
+            let _ = app.run("edit.split", json!({"lon": c.x, "lat": c.y}));
+            return;
+        }
+        // Sketch vertices snap to features when snapping is on.
+        let c = if tool.creates() || matches!(tool, Tool::Graphic(_) | Tool::Measure | Tool::MeasureArea) { snapped(app, c) } else { c };
         match tool {
             Tool::Explore => {
                 let r = app.session.run("identify", &json!({"lon": c.x, "lat": c.y, "tolerancePx": 5}));
@@ -487,7 +497,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                 app.map.camera_moved = true;
             }
             Tool::CreatePoint => {
-                let _ = app.run("edit.addFeature", json!({"geometry": {"type": "Point", "coordinates": [c.x, c.y]}}));
+                let _ = app.run("edit.addFeature", with_template(app, json!({"geometry": {"type": "Point", "coordinates": [c.x, c.y]}})));
             }
             Tool::Graphic("point") => finish_graphic(app, "point", vec![c]),
             Tool::Graphic("text") => {
@@ -548,7 +558,7 @@ fn finish_sketch(app: &mut RustGisApp) {
         Tool::Measure | Tool::MeasureArea => app.map.sketch_done = true,
         Tool::CreateLine if pts.len() >= 2 => {
             let coords: Vec<[f64; 2]> = pts.iter().map(|c| [c.x, c.y]).collect();
-            let _ = app.run("edit.addFeature", json!({"geometry": {"type": "LineString", "coordinates": coords}}));
+            let _ = app.run("edit.addFeature", with_template(app, json!({"geometry": {"type": "LineString", "coordinates": coords}})));
             app.map.cancel_sketch();
         }
         Tool::CreatePolygon if pts.len() >= 3 => {
@@ -556,7 +566,7 @@ fn finish_sketch(app: &mut RustGisApp) {
             if let Some(f) = coords.first().copied() {
                 coords.push(f);
             }
-            let _ = app.run("edit.addFeature", json!({"geometry": {"type": "Polygon", "coordinates": [coords]}}));
+            let _ = app.run("edit.addFeature", with_template(app, json!({"geometry": {"type": "Polygon", "coordinates": [coords]}})));
             app.map.cancel_sketch();
         }
         Tool::Graphic(shape) => {
@@ -567,6 +577,31 @@ fn finish_sketch(app: &mut RustGisApp) {
         }
         _ => {}
     }
+}
+
+/// A point snapped to nearby features (when snapping is on).
+fn snapped(app: &mut RustGisApp, c: Coord) -> Coord {
+    if !app.session.map().editing.snapping.enabled {
+        return c;
+    }
+    match app.session.run("edit.snap", &json!({"lon": c.x, "lat": c.y})) {
+        Ok(v) => Coord::new(v["lon"].as_f64().unwrap_or(c.x), v["lat"].as_f64().unwrap_or(c.y)),
+        Err(_) => c,
+    }
+}
+
+/// Feature creation parameters with the Editing pane's chosen template, if it belongs to the layer.
+fn with_template(app: &RustGisApp, mut p: Value) -> Value {
+    let t = &app.forms.template;
+    let has = app
+        .session
+        .active_layer
+        .and_then(|id| app.session.map().layer(id))
+        .is_some_and(|l| l.design.templates.iter().any(|x| x.name == *t));
+    if has {
+        p["template"] = json!(t);
+    }
+    p
 }
 
 /// Adds a graphic drawn with a tool, then returns to Explore unless the tool is kept.
@@ -587,6 +622,44 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         let r = Rect::from_two_pos(start, cur);
         p.rect_filled(r, 0.0, accent.gamma_multiply(0.12));
         p.rect_stroke(r, 0.0, Stroke::new(1.5, accent), egui::StrokeKind::Middle);
+    }
+    // Vertices of the selected features while editing.
+    let editing = &app.session.map().editing;
+    if editing.settings.enabled
+        && editing.settings.show_vertices
+        && (app.session.tool.creates() || app.ui.right == Some(crate::RightPane::Editing))
+    {
+        let mut verts: Vec<Coord> = Vec::new();
+        for l in app.session.map().layers.iter().filter(|l| !l.selection.is_empty() && !l.is_raster() && !l.graphics) {
+            for r in &l.selection {
+                if let Some(g) = l.dataset.features.get(*r).and_then(|f| f.geometry.as_ref()) {
+                    g.for_each_coord(|c| {
+                        if verts.len() < 4000 {
+                            verts.push(c);
+                        }
+                    });
+                }
+            }
+        }
+        for v in verts {
+            if let Some(sp) = lonlat_to_screen(app, rect, v) {
+                let r = Rect::from_center_size(sp, vec2(6.0, 6.0));
+                p.rect_filled(r, 0.0, Color32::WHITE);
+                p.rect_stroke(r, 0.0, Stroke::new(1.2, Color32::from_rgb(0x16, 0x9A, 0x5A)), egui::StrokeKind::Middle);
+            }
+        }
+    }
+    // Where a click would snap to.
+    if app.session.map().editing.snapping.enabled
+        && (app.session.tool.creates() || matches!(app.session.tool, Tool::Graphic(_) | Tool::Measure | Tool::MeasureArea))
+        && let Some(c) = app.map.pointer_lonlat
+        && let Ok(v) = app.session.run("edit.snap", &json!({"lon": c.x, "lat": c.y}))
+        && v["snapped"].as_bool() == Some(true)
+        && let Some(sp) = lonlat_to_screen(app, rect, Coord::new(v["lon"].as_f64().unwrap_or(c.x), v["lat"].as_f64().unwrap_or(c.y)))
+    {
+        let magenta = Color32::from_rgb(0xD0, 0x2A, 0xB0);
+        p.circle_stroke(sp, 7.0, Stroke::new(2.0, magenta));
+        p.circle_filled(sp, 2.5, magenta);
     }
     // A dragged rectangle, circle or ellipse previews as its outline.
     let tool = app.session.tool;

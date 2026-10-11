@@ -3,6 +3,7 @@
 
 pub mod camera;
 pub mod color;
+pub mod design;
 pub mod globe;
 pub mod graphics;
 pub mod layout;
@@ -106,6 +107,9 @@ pub struct Layer {
     /// A graphics layer: each feature carries its own style (see [`graphics`]).
     #[serde(default)]
     pub graphics: bool,
+    /// Domains, subtypes, attribute rules, contingent values, archive and templates.
+    #[serde(default, skip_serializing_if = "design::Design::is_empty")]
+    pub design: design::Design,
     /// Set for raster layers (whose `dataset` is empty).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raster: Option<RasterLayer>,
@@ -143,6 +147,7 @@ impl Layer {
             expanded: true,
             selectable: true,
             graphics: false,
+            design: design::Design::default(),
             raster: None,
             projected: Vec::new(),
             projected_rev: u64::MAX,
@@ -279,6 +284,9 @@ pub struct Map {
     /// while the lock holds, wherever the map moves. Filled by the renderer.
     #[serde(skip)]
     pub label_lock: Option<Vec<(u32, usize)>>,
+    /// Relationships, snapping, topology rules and edit settings.
+    #[serde(default)]
+    pub editing: design::MapEditing,
     #[serde(default)]
     next_layer_id: u32,
 }
@@ -352,6 +360,7 @@ impl Map {
             popup_mode: PopupMode::Topmost,
             label_display: LabelDisplay::default(),
             label_lock: None,
+            editing: design::MapEditing::default(),
             next_layer_id: 1,
         }
     }

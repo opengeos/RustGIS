@@ -3,17 +3,17 @@
 use rustgis_data::{FieldType, Geometry, GeometryType, Value};
 use serde_json::{Value as Json, json};
 
-use super::{need_layer, need_selection, ps};
+use super::{need_layer, ps};
 use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
     vec![
         C::new("edit.addFeature", "Create Feature", "Edit › Features", add_feature)
-            .when(need_layer)
-            .params(r#"{"layer"?, "geometry": GeoJSON geometry (lon/lat), "attributes"?: {field: value}}"#),
-        C::new("edit.delete", "Delete", "Edit › Features", delete).key("Delete").when(need_selection),
+            .when(super::design::need_editable)
+            .params(r#"{"layer"?, "geometry": GeoJSON geometry (lon/lat), "attributes"?: {field: value}, "template"?: feature template}"#),
+        C::new("edit.delete", "Delete", "Edit › Features", delete).key("Delete").when(super::design::need_editable_selection),
         C::new("edit.setValue", "Edit Attribute", "Attribute Table", set_value)
-            .when(need_layer)
+            .when(super::design::need_editable)
             .params(r#"{"layer"?, "row": number, "field": string, "value": any}"#),
         C::new("edit.addField", "Add Field", "Data › Data Design › Fields", add_field)
             .when(need_layer)
@@ -22,12 +22,12 @@ pub fn commands() -> Vec<C> {
             .when(need_layer)
             .params(r#"{"layer"?, "field": string}"#),
         C::new("edit.calculateField", "Calculate Field", "Attribute Table", calculate_field)
-            .when(need_layer)
+            .when(super::design::need_editable)
             .params(r#"{"layer"?, "field": string, "expression": "number, 'text', or field op field/number (+ - * /)"}"#),
     ]
 }
 
-fn add_feature(s: &mut Session, p: &Json) -> CmdResult {
+pub(crate) fn add_feature(s: &mut Session, p: &Json) -> CmdResult {
     let id = s.layer_id(p)?;
     let g = p.get("geometry").and_then(rustgis_data::io::geometry_from_geojson).ok_or("geometry must be a GeoJSON geometry")?;
     let l = s.map_mut().layer_mut(id).ok_or("no layer")?;
@@ -37,21 +37,36 @@ fn add_feature(s: &mut Session, p: &Json) -> CmdResult {
         return Err(format!("{} can't go in a {} layer", g.kind().label(), want.label()));
     }
     validate(&g)?;
+    // A feature template's defaults, then the given attributes.
+    let template = match ps(p, "template") {
+        Some(t) => {
+            Some(l.design.templates.iter().find(|x| x.name.eq_ignore_ascii_case(t)).cloned().ok_or_else(|| format!("no template '{t}'"))?)
+        }
+        None => None,
+    };
     let attrs: Vec<Value> = l
         .dataset
         .fields
         .iter()
-        .map(|f| p.get("attributes").and_then(|a| a.get(&f.name)).map(|v| coerce(Value::from_json(v), f.ty)).unwrap_or(Value::Null))
+        .map(|f| {
+            let given = p.get("attributes").and_then(|a| a.get(&f.name)).map(|v| coerce(Value::from_json(v), f.ty));
+            let default = template
+                .as_ref()
+                .and_then(|t| t.defaults.iter().find(|(k, _)| k.eq_ignore_ascii_case(&f.name)))
+                .map(|(_, v)| coerce(v.clone(), f.ty));
+            given.or(default).unwrap_or(Value::Null)
+        })
         .collect();
     l.dataset.push(Some(g), attrs);
     l.touch_geometry();
     let row = l.dataset.features.len() - 1;
     l.selection = vec![row];
+    super::design::apply(s, id, vec![super::design::Change { before: None, row: Some(row) }])?;
     Ok(json!({"row": row}))
 }
 
 /// Rejects empty or degenerate geometry, which would break extents, labels and rendering.
-fn validate(g: &Geometry) -> Result<(), String> {
+pub(crate) fn validate(g: &Geometry) -> Result<(), String> {
     match g {
         Geometry::Point(_) => Ok(()),
         Geometry::MultiPoint(v) if v.is_empty() => Err("a multipoint needs at least one point".into()),
@@ -65,7 +80,7 @@ fn validate(g: &Geometry) -> Result<(), String> {
     }
 }
 
-fn coerce(v: Value, ty: FieldType) -> Value {
+pub(crate) fn coerce(v: Value, ty: FieldType) -> Value {
     match v {
         Value::Null => Value::Null,
         Value::Text(t) => Value::parse(&t, ty),
@@ -75,6 +90,7 @@ fn coerce(v: Value, ty: FieldType) -> Value {
 
 fn delete(s: &mut Session, _: &Json) -> CmdResult {
     let mut n = 0;
+    let mut removed: Vec<(u32, Vec<super::design::Change>)> = Vec::new();
     for l in &mut s.map_mut().layers {
         if l.selection.is_empty() {
             continue;
@@ -82,13 +98,18 @@ fn delete(s: &mut Session, _: &Json) -> CmdResult {
         let mut sel = std::mem::take(&mut l.selection);
         sel.sort_unstable();
         sel.dedup();
+        let mut changes = Vec::new();
         for r in sel.into_iter().rev() {
             if r < l.dataset.features.len() {
-                l.dataset.features.remove(r);
+                changes.push(super::design::Change { before: Some(l.dataset.features.remove(r)), row: None });
                 n += 1;
             }
         }
         l.touch_geometry();
+        removed.push((l.id, changes));
+    }
+    for (id, changes) in removed {
+        super::design::apply(s, id, changes)?;
     }
     s.notify(format!("Deleted {n} features"), false);
     Ok(json!({"deleted": n}))
@@ -109,8 +130,11 @@ fn set_value(s: &mut Session, p: &Json) -> CmdResult {
         Json::String(t) => Value::parse(&t, ty),
         other => coerce(Value::from_json(&other), ty),
     };
-    let cell = l.dataset.features.get_mut(row).and_then(|f| f.attrs.get_mut(fi)).ok_or("no such row")?;
+    let f = l.dataset.features.get_mut(row).ok_or("no such row")?;
+    let before = f.clone();
+    let cell = f.attrs.get_mut(fi).ok_or("no such row")?;
     *cell = v;
+    super::design::apply(s, id, vec![super::design::Change { before: Some(before), row: Some(row) }])?;
     Ok(Json::Null)
 }
 
@@ -167,39 +191,68 @@ fn calculate_field(s: &mut Session, p: &Json) -> CmdResult {
     let expr = ps(p, "expression").map(str::trim).filter(|e| !e.is_empty()).ok_or("expression is required")?.to_string();
     let l = s.map_mut().layer_mut(id).ok_or("no layer")?;
     let ty = l.dataset.fields.get(fi).map(|f| f.ty).ok_or("no field")?;
-    let (lhs, op, rhs) = split_op(&expr);
-    enum Term {
-        Num(f64),
-        Text(String),
-        Field(usize),
-    }
-    let term = |t: &str| -> Result<Term, String> {
-        let t = t.trim();
-        if let Some(q) = t.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')) {
-            return Ok(Term::Text(q.to_string()));
-        }
-        if let Ok(n) = t.parse::<f64>() {
-            return Ok(Term::Num(n));
-        }
-        let name = t.trim_matches('!').trim_matches('"');
-        l.dataset.field_index(name).map(Term::Field).ok_or_else(|| format!("no field named '{name}'"))
-    };
-    let a = term(lhs)?;
-    let b = rhs.map(term).transpose()?;
+    let calc = Calc::parse(&expr, &l.dataset)?;
     let rows: Vec<usize> = if l.selection.is_empty() { (0..l.dataset.features.len()).collect() } else { l.selection.clone() };
-    let get = |t: &Term, ds: &rustgis_data::Dataset, r: usize| -> Value {
-        match t {
-            Term::Num(n) => Value::Float(*n),
-            Term::Text(s) => Value::Text(s.clone()),
-            Term::Field(i) => ds.value(r, *i).clone(),
-        }
-    };
     let mut out = Vec::new();
     for r in &rows {
-        let va = get(&a, &l.dataset, *r);
-        let v = match (&b, op) {
+        out.push((*r, coerce(calc.eval(&l.dataset, *r), ty)));
+    }
+    let mut changes = Vec::new();
+    for (r, v) in out {
+        if let Some(f) = l.dataset.features.get_mut(r) {
+            let before = f.clone();
+            if let Some(c) = f.attrs.get_mut(fi) {
+                *c = v;
+            }
+            changes.push(super::design::Change { before: Some(before), row: Some(r) });
+        }
+    }
+    super::design::apply(s, id, changes)?;
+    Ok(json!({"rows": rows.len()}))
+}
+
+enum Term {
+    Num(f64),
+    Text(String),
+    Field(usize),
+}
+
+/// A parsed calculator expression: `a` or `a op b`.
+pub(crate) struct Calc {
+    a: Term,
+    op: Option<char>,
+    b: Option<Term>,
+}
+
+impl Calc {
+    pub(crate) fn parse(expr: &str, ds: &rustgis_data::Dataset) -> Result<Calc, String> {
+        let (lhs, op, rhs) = split_op(expr.trim());
+        let term = |t: &str| -> Result<Term, String> {
+            let t = t.trim();
+            if let Some(q) = t.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')) {
+                return Ok(Term::Text(q.to_string()));
+            }
+            if let Ok(n) = t.parse::<f64>() {
+                return Ok(Term::Num(n));
+            }
+            let name = t.trim_matches('!').trim_matches('"');
+            ds.field_index(name).map(Term::Field).ok_or_else(|| format!("no field named '{name}'"))
+        };
+        Ok(Calc { a: term(lhs)?, op, b: rhs.map(term).transpose()? })
+    }
+
+    pub(crate) fn eval(&self, ds: &rustgis_data::Dataset, r: usize) -> Value {
+        let get = |t: &Term| -> Value {
+            match t {
+                Term::Num(n) => Value::Float(*n),
+                Term::Text(s) => Value::Text(s.clone()),
+                Term::Field(i) => ds.value(r, *i).clone(),
+            }
+        };
+        let va = get(&self.a);
+        match (&self.b, self.op) {
             (Some(b), Some(op)) => {
-                let vb = get(b, &l.dataset, *r);
+                let vb = get(b);
                 match (va.as_f64(), vb.as_f64(), op) {
                     (Some(x), Some(y), '+') => Value::Float(x + y),
                     (Some(x), Some(y), '-') => Value::Float(x - y),
@@ -210,15 +263,8 @@ fn calculate_field(s: &mut Session, p: &Json) -> CmdResult {
                 }
             }
             _ => va,
-        };
-        out.push((*r, coerce(v, ty)));
-    }
-    for (r, v) in out {
-        if let Some(c) = l.dataset.features.get_mut(r).and_then(|f| f.attrs.get_mut(fi)) {
-            *c = v;
         }
     }
-    Ok(json!({"rows": rows.len()}))
 }
 
 /// Splits on the first top-level arithmetic operator outside quotes (not a leading minus).

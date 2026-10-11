@@ -805,12 +805,50 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
 
 fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
     clipboard_group(app, ui);
+    let editing = app.session.map().editing.clone();
+    let pane = app.ui.right == Some(RightPane::Editing);
     group(ui, "Manage Edits", |ui| {
+        big(ui, app, "edit", "Edit", "Turn editing on or off for the map.", "edit.enable", Value::Null, editing.settings.enabled, false);
         big(ui, app, "save", "Save", "Save the project with your edits.", "ui.save", Value::Null, false, false);
         col(ui, |ui| {
             small(ui, app, "undo", "Undo", "Undo the last change.", "edit.undo", Value::Null, false);
             small(ui, app, "redo", "Redo", "Redo the change you undid.", "edit.redo", Value::Null, false);
+            small(ui, app, "history", "Status", "Edits since the project was saved.", "ui.pane.editing", Value::Null, pane);
         });
+        col(ui, |ui| {
+            small(ui, app, "settings", "Settings", "Editing settings.", "ui.pane.editing", Value::Null, pane);
+            small(
+                ui,
+                app,
+                "point_tool",
+                "Templates",
+                "Feature templates: default values for new features.",
+                "ui.pane.editing",
+                Value::Null,
+                pane,
+            );
+            small_menu(ui, app, "polygon_tool", "Topology", "Topology rules and the errors they find.", |ui, app| {
+                menu_item(ui, app, "settings", "Topology Options…", "ui.pane.editing", Value::Null);
+                if ui.button(tl!("Error Inspector (validate)")).clicked() {
+                    let _ = app.run("topology.validate", Value::Null);
+                    app.ui.right = Some(RightPane::Editing);
+                    ui.close();
+                }
+            });
+        });
+    });
+    group(ui, "Snapping", |ui| {
+        big(
+            ui,
+            app,
+            "goto_xy",
+            "Snapping",
+            "Snap new vertices to nearby vertices, edges and line ends.",
+            "edit.snapping",
+            Value::Null,
+            editing.snapping.enabled,
+            false,
+        );
     });
     group(ui, "Features", |ui| {
         let gt = app.session.active_layer.and_then(|id| app.session.map().layer(id)).map(|l| l.geometry_type());
@@ -835,6 +873,71 @@ fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
             app.map.cancel_sketch();
         }
         big(ui, app, "delete", "Delete", "Delete the selected features.", "edit.delete", Value::Null, false, false);
+        big(
+            ui,
+            app,
+            "calc_geom",
+            "Modify",
+            "Move, rotate, scale, merge, explode, split or flip the selected features.",
+            "ui.pane.editing",
+            Value::Null,
+            pane,
+            false,
+        );
+    });
+    group(ui, "Tools", |ui| {
+        big_menu(ui, app, "tools", "Editor\nTools", "Every editing tool.", |ui, app| {
+            for (label, id, p) in [
+                ("Merge", "edit.merge", Value::Null),
+                ("Explode", "edit.explode", Value::Null),
+                ("Flip Line", "edit.flip", Value::Null),
+                ("Rotate 90°", "edit.rotate", json!({"angle": 90})),
+                ("Scale ×2", "edit.scale", json!({"factor": 2})),
+                ("Scale ×½", "edit.scale", json!({"factor": 0.5})),
+            ] {
+                menu_item(ui, app, "calc_geom", label, id, p);
+            }
+            if ui.button(tl!("Split (click the line)")).clicked() {
+                app.map.split_mode = true;
+                ui.close();
+            }
+            menu_item(ui, app, "calc_geom", "Move, Rotate, Scale…", "ui.pane.editing", Value::Null);
+        });
+    });
+    group(ui, "Elevation", |ui| {
+        let mode = match &editing.settings.elevation {
+            rustgis_engine::map::design::Elevation::None => "None",
+            rustgis_engine::map::design::Elevation::Constant(_) => "Constant",
+            rustgis_engine::map::design::Elevation::Surface(_) => "Surface",
+        };
+        small_menu(ui, app, "relief", mode, "Where new features get their elevation (the z field).", |ui, app| {
+            if ui.button(tl!("None")).clicked() {
+                let _ = app.run("edit.elevation", json!({"mode": "none"}));
+                ui.close();
+            }
+            menu_item(ui, app, "relief", "Constant…", "ui.pane.editing", Value::Null);
+            let rasters: Vec<String> = app.session.map().layers.iter().filter(|l| l.is_raster()).map(|l| l.name.clone()).collect();
+            for r in rasters {
+                if ui.button(crate::i18n::fmt("Surface: {layer}", &[("layer", &r)])).clicked() {
+                    let _ = app.run("edit.elevation", json!({"mode": "surface", "surface": r}));
+                    ui.close();
+                }
+            }
+        });
+    });
+    group(ui, "Corrections", |ui| {
+        let on = editing.settings.ground_to_grid.is_some();
+        big(
+            ui,
+            app,
+            "scale_range",
+            "Ground\nTo Grid",
+            "Scale and rotate entered distances and directions to the grid.",
+            "ui.pane.editing",
+            Value::Null,
+            on,
+            false,
+        );
     });
     group(ui, "Selection", |ui| {
         tool_btn(ui, app, "select", "Select", "Select features on the map.", Tool::Select);
@@ -1797,6 +1900,70 @@ fn data_tab(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Data Design", |ui| {
         big(ui, app, "field", "Fields", "Add a field.", "ui.dialog", json!({"name": "addField"}), false, false);
         big(ui, app, "calculate", "Calculate", "Calculate field values.", "ui.dialog", json!({"name": "calculateField"}), false, false);
+        let open = app.ui.right == Some(RightPane::Design);
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "unique",
+                "Subtypes",
+                "Group features by an integer code, each with default values.",
+                "ui.pane.design",
+                Value::Null,
+                open,
+            );
+            small(ui, app, "filter", "Domains", "Limit a field to coded values or a range.", "ui.pane.design", Value::Null, open);
+        });
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "calculate",
+                "Attribute Rules",
+                "Calculate fields and enforce conditions on every edit.",
+                "ui.pane.design",
+                Value::Null,
+                open,
+            );
+            small(
+                ui,
+                app,
+                "table",
+                "Contingent Values",
+                "Allow only certain combinations of values across fields.",
+                "ui.pane.design",
+                Value::Null,
+                open,
+            );
+        });
+    });
+    let layer = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned();
+    group(ui, "Archiving", |ui| {
+        let on = layer.as_ref().is_some_and(|l| l.design.archive.is_some());
+        big(
+            ui,
+            app,
+            "history",
+            "Archive",
+            "Keep a history of every edit to the layer, to look back or restore.",
+            "data.archive",
+            json!({"on": !on}),
+            on,
+            false,
+        );
+    });
+    group(ui, "Relationship", |ui| {
+        big_menu(ui, app, "select_loc", "Related\nData", "Select the rows related to the selection.", |ui, app| {
+            let rels: Vec<String> = app.session.map().editing.relationships.iter().map(|r| r.name.clone()).collect();
+            if rels.is_empty() {
+                ui.label(egui::RichText::new(tl!("No relationships yet")).weak());
+            }
+            for r in rels {
+                menu_item(ui, app, "select_loc", &r, "data.related", json!({"name": r}));
+            }
+            ui.separator();
+            menu_item(ui, app, "add_data", "New Relationship…", "ui.pane.design", Value::Null);
+        });
     });
     group(ui, "Export", |ui| {
         small_menu(ui, app, "export_layer", "Export", "Export the layer.", |ui, app| {

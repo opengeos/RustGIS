@@ -21,10 +21,10 @@ pub struct Clipboard {
 pub fn commands() -> Vec<C> {
     vec![
         C::new("edit.copy", "Copy", "Edit › Clipboard", |s, _| copy(s)).view().key("Mod+C").when(need_selection),
-        C::new("edit.cut", "Cut", "Edit › Clipboard", cut).key("Mod+X").when(need_selection),
+        C::new("edit.cut", "Cut", "Edit › Clipboard", cut).key("Mod+X").when(super::design::need_editable_selection),
         C::new("edit.paste", "Paste", "Edit › Clipboard", paste)
             .key("Mod+V")
-            .when(need_layer)
+            .when(super::design::need_editable)
             .params(r#"{"layer"?, "text"?: GeoJSON text (the copied features when omitted)}"#),
         C::new("edit.pasteSpecial", "Paste Special", "Edit › Clipboard", paste_special)
             .params(r#"{"name"?: string, "text"?: GeoJSON text (the copied features when omitted)}"#),
@@ -69,6 +69,13 @@ fn cut(s: &mut Session, _: &Value) -> CmdResult {
         }
     }
     l.touch_geometry();
+    // `copy` left the removed features on the clipboard; the archive gets them too.
+    let removed: Vec<super::design::Change> = s
+        .clipboard
+        .as_ref()
+        .map(|c| c.data.features.iter().map(|f| super::design::Change { before: Some(f.clone()), row: None }).collect())
+        .unwrap_or_default();
+    super::design::apply(s, id, removed)?;
     Ok(out)
 }
 
@@ -130,6 +137,7 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
     l.touch_geometry();
     l.selection = (first..first + n).collect();
     let name = l.name.clone();
+    super::design::apply(s, id, (first..first + n).map(|r| super::design::Change { before: None, row: Some(r) }).collect())?;
     s.map_mut().layers.iter_mut().filter(|o| o.id != id).for_each(|o| o.selection.clear());
     s.notify(format!("Pasted {n} features into {name}"), false);
     Ok(json!({"pasted": n, "layer": id}))

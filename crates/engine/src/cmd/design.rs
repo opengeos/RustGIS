@@ -1,0 +1,1040 @@
+//! Data › Data Design (domains, subtypes, attribute rules, contingent values), Archiving and
+//! Relationships, and Edit › Manage Edits, Snapping, Features (modify tools), Elevation and
+//! Corrections. Every feature edit goes through [`apply`], which enforces the layer's design.
+
+use rustgis_data::{Feature, FieldType, Geometry, GeometryType, Value};
+use rustgis_geom::{Coord, lonlat_to_merc, merc_to_lonlat};
+use rustgis_map::design::{
+    AttributeRule, ContingentSet, Domain, DomainKind, Elevation, FeatureTemplate, Relationship, RuleKind, Subtype, Subtypes, TopologyRule,
+};
+use serde_json::{Value as Json, json};
+
+use super::{b, f, need_feature_layer, ps};
+use crate::{CmdResult, CommandSpec as C, Session};
+
+/// One edited feature: its state before (none for an insert) and its row after (none for a
+/// delete).
+pub(crate) struct Change {
+    pub before: Option<Feature>,
+    pub row: Option<usize>,
+}
+
+/// Edits since the last save, per layer: (added, modified, deleted).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EditCounts {
+    pub added: usize,
+    pub modified: usize,
+    pub deleted: usize,
+}
+
+/// Editing is on and a feature layer is active.
+pub(crate) fn need_editable(s: &Session) -> Option<&'static str> {
+    if !s.map().editing.settings.enabled {
+        return Some("editing is turned off (Edit › Edit)");
+    }
+    need_feature_layer(s)
+}
+
+/// Editing is on and features are selected.
+pub(crate) fn need_editable_selection(s: &Session) -> Option<&'static str> {
+    if !s.map().editing.settings.enabled {
+        return Some("editing is turned off (Edit › Edit)");
+    }
+    super::need_selection(s)
+}
+
+fn now() -> f64 {
+    web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
+/// Enforces a layer's design on edited rows: subtype defaults and elevation for new features,
+/// calculation rules, then domains, contingent values and constraint rules (an error undoes the
+/// whole command). Records the archive and the edit counts.
+pub(crate) fn apply(s: &mut Session, id: u32, changes: Vec<Change>) -> Result<(), String> {
+    if changes.is_empty() {
+        return Ok(());
+    }
+    if !s.map().editing.settings.enabled {
+        return Err("editing is turned off (Edit › Edit)".into());
+    }
+    let elevation = s.map().editing.settings.elevation.clone();
+    // Elevation from a surface: sampled before the layer is borrowed mutably.
+    let z_of = |s: &Session, g: &Geometry| -> Option<f64> {
+        match &elevation {
+            Elevation::None => None,
+            Elevation::Constant(z) => Some(*z),
+            Elevation::Surface(name) => {
+                let c = g.label_point()?;
+                let r = s.map().layer_by_name(name)?.raster.as_ref()?.data.as_ref()?.clone();
+                let (col, row) = r.pixel_at(c)?;
+                r.value(0, col, row).map(f64::from)
+            }
+        }
+    };
+    let new_rows: Vec<usize> = changes.iter().filter(|c| c.before.is_none()).filter_map(|c| c.row).collect();
+    let zs: Vec<(usize, Option<f64>)> = new_rows
+        .iter()
+        .map(|r| {
+            (*r, s.map().layer(id).and_then(|l| l.dataset.features.get(*r)).and_then(|f| f.geometry.as_ref()).and_then(|g| z_of(s, g)))
+        })
+        .collect();
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    // New features: subtype defaults fill empty fields; elevation goes in `z`.
+    if let Some(st) = l.design.subtypes.clone()
+        && let Some(sfi) = l.dataset.field_index(&st.field)
+    {
+        for r in &new_rows {
+            let code = l.dataset.value(*r, sfi).as_f64().map(|v| v as i64);
+            let Some(sub) = code.and_then(|c| st.subtypes.iter().find(|x| x.code == c)) else { continue };
+            for (field, v) in &sub.defaults {
+                if let Some(fi) = l.dataset.field_index(field)
+                    && let Some(ty) = l.dataset.fields.get(fi).map(|f| f.ty)
+                    && let Some(cell) = l.dataset.features.get_mut(*r).and_then(|f| f.attrs.get_mut(fi))
+                    && cell.is_null()
+                {
+                    *cell = super::edit::coerce(v.clone(), ty);
+                }
+            }
+        }
+    }
+    if elevation != Elevation::None && !zs.is_empty() {
+        l.dataset.ensure_field("z", FieldType::Double);
+        if let Some(zi) = l.dataset.field_index("z") {
+            for (r, z) in &zs {
+                if let Some(cell) = l.dataset.features.get_mut(*r).and_then(|f| f.attrs.get_mut(zi)) {
+                    *cell = z.map(Value::Float).unwrap_or(Value::Null);
+                }
+            }
+        }
+    }
+    let rows: Vec<usize> = changes.iter().filter_map(|c| c.row).collect();
+    // Calculation rules, in order.
+    for rule in l.design.rules.iter().filter(|r| r.kind == RuleKind::Calculation) {
+        let Some(fi) = l.dataset.field_index(&rule.field) else { continue };
+        let ty = l.dataset.fields.get(fi).map(|f| f.ty).unwrap_or(FieldType::Text);
+        let calc = super::edit::Calc::parse(&rule.expression, &l.dataset).map_err(|e| format!("attribute rule {}: {e}", rule.name))?;
+        for r in &rows {
+            let v = super::edit::coerce(calc.eval(&l.dataset, *r), ty);
+            if let Some(cell) = l.dataset.features.get_mut(*r).and_then(|f| f.attrs.get_mut(fi)) {
+                *cell = v;
+            }
+        }
+    }
+    // Validation.
+    for r in &rows {
+        for d in &l.design.domains {
+            if let Some(fi) = l.dataset.field_index(&d.field) {
+                let v = l.dataset.value(*r, fi);
+                if !d.allows(v) {
+                    return Err(format!("{} isn't allowed in {} (its domain)", v, d.field));
+                }
+            }
+        }
+        for c in &l.design.contingent {
+            let vals: Vec<&Value> =
+                c.fields.iter().map(|f| l.dataset.field_index(f).map(|fi| l.dataset.value(*r, fi)).unwrap_or(&Value::Null)).collect();
+            if vals.iter().all(|v| v.is_null()) {
+                continue;
+            }
+            let ok = c.combos.iter().any(|combo| {
+                combo.iter().zip(&vals).all(|(want, got)| want.is_null() || got.is_null() || want.to_string() == got.to_string())
+            });
+            if !ok {
+                let shown: Vec<String> = vals.iter().map(|v| v.to_string()).collect();
+                return Err(format!("{} isn't a valid combination of {} ({})", shown.join(", "), c.fields.join(", "), c.name));
+            }
+        }
+        for rule in l.design.rules.iter().filter(|r| r.kind == RuleKind::Constraint) {
+            let e = rustgis_data::query::parse(&rule.expression, &l.dataset).map_err(|e| format!("attribute rule {}: {e}", rule.name))?;
+            if !rustgis_data::query::eval(&e, &l.dataset, *r) {
+                return Err(format!("the edit breaks the rule {} ({})", rule.name, rule.expression));
+            }
+        }
+    }
+    // Archive and counts.
+    let t = now();
+    let mut counts = EditCounts::default();
+    let mut entries = Vec::new();
+    for c in &changes {
+        let after = c.row.and_then(|r| l.dataset.features.get(r)).cloned();
+        match (&c.before, &after) {
+            (None, Some(_)) => counts.added += 1,
+            (Some(_), None) => counts.deleted += 1,
+            _ => counts.modified += 1,
+        }
+        let fid = c.before.as_ref().or(after.as_ref()).map(|f| f.id).unwrap_or(0);
+        entries.push(rustgis_map::design::ArchiveEntry { time: t, id: fid, before: c.before.clone(), after });
+    }
+    if let Some(archive) = &mut l.design.archive {
+        archive.extend(entries);
+        // A long-running archive keeps its most recent 100,000 edits.
+        if archive.len() > 100_000 {
+            let drop = archive.len() - 100_000;
+            archive.drain(..drop);
+        }
+    }
+    let e = s.edit_counts.entry(id).or_default();
+    e.added += counts.added;
+    e.modified += counts.modified;
+    e.deleted += counts.deleted;
+    Ok(())
+}
+
+pub fn commands() -> Vec<C> {
+    vec![
+        // Data design.
+        C::new("data.domain", "Domains", "Data › Data Design", domain).when(need_feature_layer).params(
+            r#"{"layer"?, "field": string, "coded"?: [[code, description], …], "min"?: number, "max"?: number, "clear"?: bool}"#,
+        ),
+        C::new("data.subtypes", "Subtypes", "Data › Data Design", subtypes).when(need_feature_layer).params(
+            r#"{"layer"?, "field": integer field, "subtypes": [{"code": n, "name": string, "defaults"?: {field: value}}], "symbolize"?: bool, "clear"?: bool}"#,
+        ),
+        C::new("data.attributeRule", "Attribute Rules", "Data › Data Design", attribute_rule).when(need_feature_layer).params(
+            r#"{"layer"?, "name": string, "kind": "calculation"|"constraint", "field"?: field set by a calculation, "expression": calculator expression or SQL where clause, "remove"?: bool}"#,
+        ),
+        C::new("data.contingentValues", "Contingent Values", "Data › Data Design", contingent).when(need_feature_layer).params(
+            r#"{"layer"?, "name": string, "fields": [field, …], "combos": [[value, …], …], "remove"?: bool}"#,
+        ),
+        C::new("data.archive", "Add Archive", "Data › Archiving", |s, p| {
+            let on = b(p, "on").unwrap_or(true);
+            let id = s.layer_id(p)?;
+            let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+            l.design.archive = if on { Some(l.design.archive.take().unwrap_or_default()) } else { None };
+            Ok(json!({"archiving": on}))
+        })
+        .when(need_feature_layer)
+        .params(r#"{"layer"?, "on"?: bool}"#),
+        C::new("data.archiveHistory", "Archive History", "Data › Archiving", |s, p| {
+            let id = s.layer_id(p)?;
+            let l = s.map().layer(id).ok_or("no such layer")?;
+            let a = l.design.archive.as_ref().ok_or("archiving is off for this layer")?;
+            let rows: Vec<Json> = a
+                .iter()
+                .rev()
+                .take(500)
+                .map(|e| json!({"time": e.time, "feature": e.id, "action": match (&e.before, &e.after) { (None, _) => "insert", (_, None) => "delete", _ => "update" }}))
+                .collect();
+            Ok(json!({"edits": a.len(), "recent": rows}))
+        })
+        .view()
+        .when(need_feature_layer),
+        C::new("data.archiveRestore", "Restore From Archive", "Data › Archiving", archive_restore)
+            .when(need_feature_layer)
+            .params(r#"{"layer"?, "time": seconds since 1970 (the layer as it was then)}"#),
+        C::new("data.relate", "Related Data", "Data › Relationship", relate).params(
+            r#"{"name": string, "origin": layer, "originKey": field, "destination": layer, "destinationKey": field, "remove"?: bool}"#,
+        ),
+        C::new("data.related", "Select Related", "Data › Relationship", related)
+            .params(r#"{"name"?: relationship (all when omitted), "select"?: bool (select the related rows; default true)}"#),
+        // Manage edits.
+        C::new("edit.enable", "Edit", "Edit › Manage Edits", |s, p| {
+            let set = &mut s.map_mut().editing.settings;
+            set.enabled = b(p, "on").unwrap_or(!set.enabled);
+            Ok(json!({"enabled": set.enabled}))
+        })
+        .params(r#"{"on"?: bool}"#),
+        C::new("edit.settings", "Editing Settings", "Edit › Manage Edits", |s, p| {
+            let set = &mut s.map_mut().editing.settings;
+            if let Some(v) = b(p, "confirmDelete") {
+                set.confirm_delete = v;
+            }
+            if let Some(v) = b(p, "showVertices") {
+                set.show_vertices = v;
+            }
+            Ok(json!({"enabled": set.enabled, "confirmDelete": set.confirm_delete, "showVertices": set.show_vertices}))
+        })
+        .params(r#"{"confirmDelete"?: bool, "showVertices"?: bool}"#),
+        C::new("edit.status", "Edit Status", "Edit › Manage Edits", |s, _| {
+            let rows: Vec<Json> = s
+                .edit_counts
+                .iter()
+                .filter_map(|(id, c)| s.map().layer(*id).map(|l| json!({"layer": l.name, "added": c.added, "modified": c.modified, "deleted": c.deleted})))
+                .collect();
+            Ok(json!({"unsaved": s.dirty, "layers": rows}))
+        })
+        .view(),
+        C::new("edit.template", "Manage Templates", "Edit › Manage Edits", template).when(need_feature_layer).params(
+            r#"{"layer"?, "name": string, "defaults"?: {field: value}, "description"?: string, "remove"?: bool}"#,
+        ),
+        // Snapping.
+        C::new("edit.snapping", "Snapping", "Edit › Snapping", |s, p| {
+            let sn = &mut s.map_mut().editing.snapping;
+            sn.enabled = b(p, "on").unwrap_or(!sn.enabled);
+            if let Some(t) = f(p, "tolerancePx") {
+                sn.tolerance_px = t.clamp(1.0, 100.0);
+            }
+            for (k, slot) in [("vertex", &mut sn.vertex), ("edge", &mut sn.edge), ("end", &mut sn.end)] {
+                if let Some(v) = b(p, k) {
+                    *slot = v;
+                }
+            }
+            Ok(json!({"enabled": sn.enabled, "tolerancePx": sn.tolerance_px, "vertex": sn.vertex, "edge": sn.edge, "end": sn.end}))
+        })
+        .params(r#"{"on"?: bool, "tolerancePx"?: number, "vertex"?: bool, "edge"?: bool, "end"?: bool}"#),
+        C::new("edit.snap", "Snap Point", "Edit › Snapping", snap).view().params(r#"{"lon", "lat"}"#),
+        // Modify features.
+        C::new("edit.move", "Move", "Edit › Features › Modify", |s, p| {
+            let (mut dx, mut dy) = (f(p, "dx").unwrap_or(0.0), f(p, "dy").unwrap_or(0.0));
+            if let Some((k, rot)) = s.map().editing.settings.ground_to_grid {
+                (dx, dy) = ground_to_grid(dx, dy, k, rot);
+            }
+            if !(dx.is_finite() && dy.is_finite()) || dx.abs() > 4e7 || dy.abs() > 4e7 {
+                return Err("dx and dy are metres east and north".into());
+            }
+            modify(s, |g| Some(g.map_coords(&|c: Coord| shift(c, dx, dy))))
+        })
+        .when(need_editable_selection)
+        .params(r#"{"dx": metres east, "dy": metres north}"#),
+        C::new("edit.rotate", "Rotate", "Edit › Features › Modify", |s, p| {
+            let deg = f(p, "angle").ok_or("angle is required")?;
+            let deg = deg + s.map().editing.settings.ground_to_grid.map_or(0.0, |(_, r)| r);
+            modify(s, |g| {
+                let c = lonlat_to_merc(g.extent().center());
+                let (sin, cos) = (-deg.to_radians()).sin_cos();
+                Some(g.map_coords(&|p: Coord| {
+                    let m = lonlat_to_merc(p);
+                    let (x, y) = (m.x - c.x, m.y - c.y);
+                    merc_to_lonlat(Coord::new(c.x + x * cos - y * sin, c.y + x * sin + y * cos))
+                }))
+            })
+        })
+        .when(need_editable_selection)
+        .params(r#"{"angle": degrees clockwise}"#),
+        C::new("edit.scale", "Scale", "Edit › Features › Modify", |s, p| {
+            let k = f(p, "factor").filter(|k| *k > 0.0 && *k < 1e6).ok_or("factor must be a positive number")?;
+            modify(s, |g| {
+                let c = lonlat_to_merc(g.extent().center());
+                Some(g.map_coords(&|p: Coord| {
+                    let m = lonlat_to_merc(p);
+                    merc_to_lonlat(Coord::new(c.x + (m.x - c.x) * k, c.y + (m.y - c.y) * k))
+                }))
+            })
+        })
+        .when(need_editable_selection)
+        .params(r#"{"factor": number}"#),
+        C::new("edit.flip", "Flip Line", "Edit › Features › Modify", |s, _| {
+            modify(s, |g| match g {
+                Geometry::Line(parts) => Some(Geometry::Line(parts.iter().rev().map(|p| p.iter().rev().copied().collect()).collect())),
+                _ => None,
+            })
+        })
+        .when(need_editable_selection),
+        C::new("edit.setGeometry", "Edit Vertices", "Edit › Features › Modify", set_geometry)
+            .when(need_editable)
+            .params(r#"{"layer"?, "row": number, "geometry": GeoJSON geometry}"#),
+        C::new("edit.merge", "Merge", "Edit › Features › Modify", merge).when(need_editable_selection),
+        C::new("edit.explode", "Explode", "Edit › Features › Modify", explode).when(need_editable_selection),
+        C::new("edit.split", "Split", "Edit › Features › Modify", split).when(need_editable_selection).params(r#"{"lon", "lat"}"#),
+        C::new("edit.traverse", "Traverse", "Edit › Features › Modify", traverse).when(need_editable).params(
+            r#"{"layer"?, "start": [lon, lat], "legs": [{"distance": metres, "bearing": degrees from north}], "close"?: bool}"#,
+        ),
+        C::new("edit.tools", "Editor Tools", "Edit › Tools", |s, _| {
+            let tools: Vec<Json> = s.registry.commands.iter().filter(|c| c.location.starts_with("Edit › Features")).map(|c| json!({"id": c.id, "label": c.label, "params": c.params})).collect();
+            Ok(Json::Array(tools))
+        })
+        .view(),
+        // Elevation and corrections.
+        C::new("edit.elevation", "Elevation", "Edit › Elevation", |s, p| {
+            let mode = ps(p, "mode").ok_or("mode is required")?;
+            let e = match mode {
+                "none" => Elevation::None,
+                "constant" => Elevation::Constant(f(p, "z").ok_or("z is required for a constant elevation")?.clamp(-12_000.0, 100_000.0)),
+                "surface" => {
+                    let n = ps(p, "surface").ok_or("surface (a raster layer) is required")?;
+                    let l = s.map().layer_by_name(n).filter(|l| l.is_raster()).ok_or_else(|| format!("no raster layer '{n}'"))?;
+                    Elevation::Surface(l.name.clone())
+                }
+                m => return Err(format!("unknown elevation mode '{m}'")),
+            };
+            s.map_mut().editing.settings.elevation = e;
+            Ok(Json::Null)
+        })
+        .params(r#"{"mode": "none"|"constant"|"surface", "z"?: metres, "surface"?: raster layer}"#),
+        C::new("edit.groundToGrid", "Ground To Grid", "Edit › Corrections", |s, p| {
+            let on = b(p, "on").unwrap_or(true);
+            let k = f(p, "scale").unwrap_or(1.0);
+            let r = f(p, "rotation").unwrap_or(0.0);
+            if on && !(k > 0.5 && k < 2.0) {
+                return Err("the scale factor is a number near 1 (0.5 to 2)".into());
+            }
+            s.map_mut().editing.settings.ground_to_grid = on.then_some((k, r.clamp(-360.0, 360.0)));
+            Ok(json!({"on": on}))
+        })
+        .params(r#"{"on"?: bool, "scale"?: factor, "rotation"?: degrees}"#),
+        // Topology.
+        C::new("topology.rules", "Topology Options", "Edit › Manage Edits", topology_rules).params(
+            r#"{"add"?: {"rule": "mustNotOverlap"|"mustNotHaveGaps"|"mustNotSelfIntersect"|"mustNotHaveDangles"|"mustBeCoveredBy", "layer": layer, "by"?: polygon layer}, "remove"?: index, "clear"?: bool}"#,
+        ),
+        C::new("topology.validate", "Error Inspector", "Edit › Manage Edits", topology_validate).view().params(r#"{"toleranceM"?: metres (dangles)}"#),
+    ]
+}
+
+/// A point moved by metres east and north (Web Mercator stretched to the point's latitude).
+fn shift(c: Coord, dx: f64, dy: f64) -> Coord {
+    let k = 1.0 / c.y.to_radians().cos().max(0.01);
+    let m = lonlat_to_merc(c);
+    merc_to_lonlat(Coord::new(m.x + dx * k, m.y + dy * k))
+}
+
+/// A ground distance and direction corrected to the grid: scaled and rotated.
+fn ground_to_grid(dx: f64, dy: f64, k: f64, rot_deg: f64) -> (f64, f64) {
+    let (sin, cos) = (-rot_deg.to_radians()).sin_cos();
+    ((dx * cos - dy * sin) * k, (dx * sin + dy * cos) * k)
+}
+
+/// Applies a geometry change to every selected feature of every layer (in the selection's layers).
+fn modify(s: &mut Session, change: impl Fn(&Geometry) -> Option<Geometry>) -> CmdResult {
+    let mut n = 0;
+    let ids: Vec<u32> = s.map().layers.iter().filter(|l| !l.selection.is_empty() && !l.is_raster()).map(|l| l.id).collect();
+    for id in ids {
+        let mut changes = Vec::new();
+        let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+        for r in l.selection.clone() {
+            let Some(f) = l.dataset.features.get_mut(r) else { continue };
+            let Some(g) = f.geometry.as_ref().and_then(&change) else { continue };
+            super::edit::validate(&g)?;
+            let before = f.clone();
+            f.geometry = Some(g);
+            changes.push(Change { before: Some(before), row: Some(r) });
+            n += 1;
+        }
+        l.touch_geometry();
+        apply(s, id, changes)?;
+    }
+    if n == 0 {
+        return Err("nothing selected can be changed this way".into());
+    }
+    Ok(json!({"modified": n}))
+}
+
+fn set_geometry(s: &mut Session, p: &Json) -> CmdResult {
+    let id = s.layer_id(p)?;
+    let row = p.get("row").and_then(Json::as_u64).ok_or("row is required")? as usize;
+    let g = p.get("geometry").and_then(rustgis_data::io::geometry_from_geojson).ok_or("geometry must be a GeoJSON geometry")?;
+    super::edit::validate(&g)?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    if l.geometry_type() != GeometryType::None && l.geometry_type() != g.kind() {
+        return Err(format!("a {} can't replace a {}", g.kind().label(), l.geometry_type().label()));
+    }
+    let f = l.dataset.features.get_mut(row).ok_or("no such row")?;
+    let before = f.clone();
+    f.geometry = Some(g);
+    l.touch_geometry();
+    apply(s, id, vec![Change { before: Some(before), row: Some(row) }])?;
+    Ok(Json::Null)
+}
+
+/// The one layer holding the selection.
+fn selection_layer(s: &Session) -> Result<u32, String> {
+    let ls: Vec<u32> = s.map().layers.iter().filter(|l| !l.selection.is_empty()).map(|l| l.id).collect();
+    match ls.as_slice() {
+        [id] => Ok(*id),
+        [] => Err("nothing is selected".into()),
+        _ => Err("select features in one layer only".into()),
+    }
+}
+
+fn merge(s: &mut Session, _: &Json) -> CmdResult {
+    let id = selection_layer(s)?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    let mut sel = l.selection.clone();
+    sel.sort_unstable();
+    sel.dedup();
+    if sel.len() < 2 {
+        return Err("select two or more features to merge".into());
+    }
+    let geoms: Vec<Geometry> = sel.iter().filter_map(|r| l.dataset.features.get(*r)?.geometry.clone()).collect();
+    let merged = rustgis_analysis::topology::merge(&geoms).ok_or("these features can't be merged")?;
+    let keep = sel.first().copied().ok_or("nothing selected")?;
+    let mut changes = Vec::new();
+    for r in sel.iter().skip(1).rev() {
+        if *r < l.dataset.features.len() {
+            changes.push(Change { before: Some(l.dataset.features.remove(*r)), row: None });
+        }
+    }
+    let f = l.dataset.features.get_mut(keep).ok_or("no such row")?;
+    let before = f.clone();
+    f.geometry = Some(merged);
+    changes.push(Change { before: Some(before), row: Some(keep) });
+    l.selection = vec![keep];
+    l.touch_geometry();
+    apply(s, id, changes)?;
+    Ok(json!({"merged": sel.len()}))
+}
+
+fn explode(s: &mut Session, _: &Json) -> CmdResult {
+    let id = selection_layer(s)?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    let mut changes = Vec::new();
+    let mut new_rows = Vec::new();
+    let mut sel = l.selection.clone();
+    sel.sort_unstable();
+    sel.dedup();
+    for r in sel {
+        let Some(f) = l.dataset.features.get(r).cloned() else { continue };
+        let parts = f.geometry.as_ref().map(rustgis_analysis::topology::explode).unwrap_or_default();
+        if parts.len() < 2 {
+            continue;
+        }
+        let mut it = parts.into_iter();
+        if let (Some(first), Some(feat)) = (it.next(), l.dataset.features.get_mut(r)) {
+            feat.geometry = Some(first);
+            changes.push(Change { before: Some(f.clone()), row: Some(r) });
+        }
+        for g in it {
+            l.dataset.push(Some(g), f.attrs.clone());
+            let nr = l.dataset.features.len() - 1;
+            new_rows.push(nr);
+            changes.push(Change { before: None, row: Some(nr) });
+        }
+    }
+    if changes.is_empty() {
+        return Err("no selected feature has several parts".into());
+    }
+    l.selection.extend(new_rows);
+    l.touch_geometry();
+    let n = changes.len();
+    apply(s, id, changes)?;
+    Ok(json!({"features": n}))
+}
+
+/// Splits the selected lines at the point on them nearest to (lon, lat).
+fn split(s: &mut Session, p: &Json) -> CmdResult {
+    let at = Coord::new(f(p, "lon").ok_or("lon is required")?, f(p, "lat").ok_or("lat is required")?);
+    let id = selection_layer(s)?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    let mut changes = Vec::new();
+    for r in l.selection.clone() {
+        let Some(f) = l.dataset.features.get(r).cloned() else { continue };
+        let Some(Geometry::Line(parts)) = &f.geometry else { continue };
+        // The nearest segment of the nearest part.
+        let m = lonlat_to_merc(at);
+        let mut best: Option<(f64, usize, usize, Coord)> = None;
+        for (pi, part) in parts.iter().enumerate() {
+            for (si, w) in part.windows(2).enumerate() {
+                let (Some(a), Some(b2)) = (w.first(), w.get(1)) else { continue };
+                let (a, b2) = (lonlat_to_merc(*a), lonlat_to_merc(*b2));
+                let (dx, dy) = (b2.x - a.x, b2.y - a.y);
+                let len2 = dx * dx + dy * dy;
+                let t = if len2 > 0.0 { (((m.x - a.x) * dx + (m.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                let q = Coord::new(a.x + t * dx, a.y + t * dy);
+                let d = (q.x - m.x).powi(2) + (q.y - m.y).powi(2);
+                if best.is_none_or(|b| d < b.0) {
+                    best = Some((d, pi, si, merc_to_lonlat(q)));
+                }
+            }
+        }
+        let Some((_, pi, si, q)) = best else { continue };
+        let Some(part) = parts.get(pi) else { continue };
+        let mut first: Vec<Coord> = part.iter().take(si + 1).copied().collect();
+        first.push(q);
+        let mut second = vec![q];
+        second.extend(part.iter().skip(si + 1).copied());
+        if first.len() < 2 || second.len() < 2 || first.first() == Some(&q) || second.last() == Some(&q) {
+            continue;
+        }
+        let mut a_parts: Vec<Vec<Coord>> = parts.iter().take(pi).cloned().collect();
+        a_parts.push(first);
+        let mut b_parts = vec![second];
+        b_parts.extend(parts.iter().skip(pi + 1).cloned());
+        if let Some(feat) = l.dataset.features.get_mut(r) {
+            feat.geometry = Some(Geometry::Line(a_parts));
+            changes.push(Change { before: Some(f.clone()), row: Some(r) });
+        }
+        l.dataset.push(Some(Geometry::Line(b_parts)), f.attrs.clone());
+        changes.push(Change { before: None, row: Some(l.dataset.features.len() - 1) });
+    }
+    if changes.is_empty() {
+        return Err("select a line to split (away from its ends)".into());
+    }
+    l.touch_geometry();
+    apply(s, id, changes)?;
+    Ok(json!({"split": true}))
+}
+
+/// Draws a line (or a closed polygon) from a start point by distances and bearings, corrected by
+/// ground to grid when it's on.
+fn traverse(s: &mut Session, p: &Json) -> CmdResult {
+    let start = p
+        .get("start")
+        .and_then(Json::as_array)
+        .and_then(|a| Some(Coord::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?)))
+        .ok_or("start is [lon, lat]")?;
+    if !start.is_finite() || start.y.abs() > 85.0 {
+        return Err("start is [lon, lat]".into());
+    }
+    let legs = p.get("legs").and_then(Json::as_array).ok_or("legs is required")?;
+    if legs.is_empty() || legs.len() > 10_000 {
+        return Err("give 1 to 10,000 legs".into());
+    }
+    let g2g = s.map().editing.settings.ground_to_grid;
+    let mut pts = vec![start];
+    for leg in legs {
+        let d = leg
+            .get("distance")
+            .and_then(Json::as_f64)
+            .filter(|d| d.is_finite() && *d >= 0.0 && *d < 2e7)
+            .ok_or("each leg has a distance in metres")?;
+        let brg = leg.get("bearing").and_then(Json::as_f64).filter(|b| b.is_finite()).ok_or("each leg has a bearing in degrees")?;
+        let (mut dx, mut dy) = (d * brg.to_radians().sin(), d * brg.to_radians().cos());
+        if let Some((k, rot)) = g2g {
+            (dx, dy) = ground_to_grid(dx, dy, k, rot);
+        }
+        let last = pts.last().copied().unwrap_or(start);
+        pts.push(shift(last, dx, dy));
+    }
+    let id = s.layer_id(p)?;
+    let gt = s.map().layer(id).map(|l| l.geometry_type()).ok_or("no such layer")?;
+    let close = b(p, "close").unwrap_or(gt == GeometryType::Polygon);
+    let g = if close && gt != GeometryType::Polyline {
+        pts.push(start);
+        json!({"type": "Polygon", "coordinates": [pts.iter().map(|c| [c.x, c.y]).collect::<Vec<_>>()]})
+    } else {
+        json!({"type": "LineString", "coordinates": pts.iter().map(|c| [c.x, c.y]).collect::<Vec<_>>()})
+    };
+    super::edit::add_feature(s, &json!({"layer": id, "geometry": g}))
+}
+
+fn domain(s: &mut Session, p: &Json) -> CmdResult {
+    let id = s.layer_id(p)?;
+    let field = ps(p, "field").ok_or("field is required")?;
+    let l = s.map().layer(id).ok_or("no such layer")?;
+    let fi = l.dataset.field_index(field).ok_or_else(|| format!("no field named '{field}'"))?;
+    let (fname, ty) = l.dataset.fields.get(fi).map(|f| (f.name.clone(), f.ty)).ok_or("no field")?;
+    if b(p, "clear").unwrap_or(false) {
+        let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+        l.design.domains.retain(|d| !d.field.eq_ignore_ascii_case(&fname));
+        return Ok(Json::Null);
+    }
+    let kind = if let Some(codes) = p.get("coded").and_then(Json::as_array) {
+        let pairs: Vec<(Value, String)> = codes
+            .iter()
+            .take(10_000)
+            .filter_map(|c| {
+                let code = super::edit::coerce(Value::from_json(c.get(0)?), ty);
+                let desc = c.get(1).and_then(Json::as_str).map(String::from).unwrap_or_else(|| code.to_string());
+                (!code.is_null()).then_some((code, desc))
+            })
+            .collect();
+        if pairs.is_empty() {
+            return Err("coded is a list of [code, description] pairs".into());
+        }
+        DomainKind::Coded(pairs)
+    } else {
+        let (min, max) = (f(p, "min").ok_or("give coded values, or min and max")?, f(p, "max").ok_or("max is required")?);
+        if !ty.is_numeric() {
+            return Err(format!("{fname} isn't numeric, so it takes coded values"));
+        }
+        if min > max {
+            return Err("min is above max".into());
+        }
+        DomainKind::Range { min, max }
+    };
+    let d = Domain { field: fname.clone(), kind };
+    // Existing values must already fit.
+    let bad = (0..l.dataset.features.len()).filter(|r| !d.allows(l.dataset.value(*r, fi))).count();
+    if bad > 0 && !b(p, "force").unwrap_or(false) {
+        return Err(format!("{bad} existing values don't fit the domain (pass force to set it anyway)"));
+    }
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    l.design.domains.retain(|x| !x.field.eq_ignore_ascii_case(&fname));
+    l.design.domains.push(d);
+    Ok(json!({"field": fname, "outside": bad}))
+}
+
+fn subtypes(s: &mut Session, p: &Json) -> CmdResult {
+    let id = s.layer_id(p)?;
+    if b(p, "clear").unwrap_or(false) {
+        let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+        l.design.subtypes = None;
+        return Ok(Json::Null);
+    }
+    let field = ps(p, "field").ok_or("field is required")?;
+    let l = s.map().layer(id).ok_or("no such layer")?;
+    let fi = l.dataset.field_index(field).ok_or_else(|| format!("no field named '{field}'"))?;
+    let f = l.dataset.fields.get(fi).ok_or("no field")?;
+    if f.ty != FieldType::Integer {
+        return Err(format!("{} must be an integer field to hold subtype codes", f.name));
+    }
+    let fname = f.name.clone();
+    let list = p.get("subtypes").and_then(Json::as_array).ok_or("subtypes is required")?;
+    let mut subs = Vec::new();
+    for v in list.iter().take(1000) {
+        let code = v.get("code").and_then(Json::as_i64).ok_or("each subtype has an integer code")?;
+        let name = v.get("name").and_then(Json::as_str).ok_or("each subtype has a name")?.chars().take(200).collect();
+        let defaults = v
+            .get("defaults")
+            .and_then(Json::as_object)
+            .map(|o| o.iter().map(|(k, v)| (k.clone(), Value::from_json(v))).collect())
+            .unwrap_or_default();
+        if subs.iter().any(|x: &Subtype| x.code == code) {
+            return Err(format!("subtype code {code} is used twice"));
+        }
+        subs.push(Subtype { code, name, defaults });
+    }
+    if subs.is_empty() {
+        return Err("give at least one subtype".into());
+    }
+    let symbolize = b(p, "symbolize").unwrap_or(true);
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    // Unique values by subtype code.
+    if symbolize {
+        let base = l.renderer.base_symbol();
+        l.renderer = rustgis_map::Renderer::unique(&l.dataset, &fname, rustgis_map::Ramp::default(), base)?;
+    }
+    let n = subs.len();
+    l.design.subtypes = Some(Subtypes { field: fname, subtypes: subs });
+    Ok(json!({"subtypes": n}))
+}
+
+fn attribute_rule(s: &mut Session, p: &Json) -> CmdResult {
+    let id = s.layer_id(p)?;
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or("name is required")?.to_string();
+    if b(p, "remove").unwrap_or(false) {
+        let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+        let before = l.design.rules.len();
+        l.design.rules.retain(|r| !r.name.eq_ignore_ascii_case(&name));
+        return if l.design.rules.len() == before { Err(format!("no rule '{name}'")) } else { Ok(Json::Null) };
+    }
+    let kind = match ps(p, "kind").ok_or("kind is required")? {
+        "calculation" => RuleKind::Calculation,
+        "constraint" => RuleKind::Constraint,
+        k => return Err(format!("unknown rule kind '{k}'")),
+    };
+    let expression = ps(p, "expression").map(str::trim).filter(|e| !e.is_empty()).ok_or("expression is required")?.to_string();
+    let l = s.map().layer(id).ok_or("no such layer")?;
+    let field = match kind {
+        RuleKind::Calculation => {
+            let fl = ps(p, "field").ok_or("a calculation rule sets a field")?;
+            super::edit::Calc::parse(&expression, &l.dataset)?;
+            l.dataset
+                .field_index(fl)
+                .and_then(|i| l.dataset.fields.get(i))
+                .map(|f| f.name.clone())
+                .ok_or_else(|| format!("no field named '{fl}'"))?
+        }
+        RuleKind::Constraint => {
+            rustgis_data::query::parse(&expression, &l.dataset)?;
+            String::new()
+        }
+    };
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    l.design.rules.retain(|r| !r.name.eq_ignore_ascii_case(&name));
+    l.design.rules.push(AttributeRule { name: name.clone(), kind, field, expression });
+    Ok(json!({"rule": name}))
+}
+
+fn contingent(s: &mut Session, p: &Json) -> CmdResult {
+    let id = s.layer_id(p)?;
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or("name is required")?.to_string();
+    if b(p, "remove").unwrap_or(false) {
+        let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+        l.design.contingent.retain(|c| !c.name.eq_ignore_ascii_case(&name));
+        return Ok(Json::Null);
+    }
+    let l = s.map().layer(id).ok_or("no such layer")?;
+    let fields: Vec<(String, FieldType)> = p
+        .get("fields")
+        .and_then(Json::as_array)
+        .ok_or("fields is required")?
+        .iter()
+        .map(|v| {
+            let n = v.as_str().ok_or("fields are names")?;
+            l.dataset
+                .field_index(n)
+                .and_then(|i| l.dataset.fields.get(i))
+                .map(|f| (f.name.clone(), f.ty))
+                .ok_or_else(|| format!("no field named '{n}'"))
+        })
+        .collect::<Result<_, String>>()?;
+    if fields.len() < 2 {
+        return Err("contingent values relate two or more fields".into());
+    }
+    let combos: Vec<Vec<Value>> = p
+        .get("combos")
+        .and_then(Json::as_array)
+        .ok_or("combos is required")?
+        .iter()
+        .take(100_000)
+        .map(|c| {
+            let vals = c.as_array().filter(|a| a.len() == fields.len()).ok_or("each combination has one value per field")?;
+            Ok(vals.iter().zip(&fields).map(|(v, (_, ty))| super::edit::coerce(Value::from_json(v), *ty)).collect())
+        })
+        .collect::<Result<_, String>>()?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    l.design.contingent.retain(|c| !c.name.eq_ignore_ascii_case(&name));
+    l.design.contingent.push(ContingentSet { name: name.clone(), fields: fields.into_iter().map(|f| f.0).collect(), combos });
+    Ok(json!({"name": name}))
+}
+
+/// Puts a layer back as it was at a time, by undoing later archived edits (newest first).
+fn archive_restore(s: &mut Session, p: &Json) -> CmdResult {
+    let t = f(p, "time").ok_or("time is required")?;
+    let id = s.layer_id(p)?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    let archive = l.design.archive.clone().ok_or("archiving is off for this layer")?;
+    let mut undone = 0;
+    for e in archive.iter().rev().take_while(|e| e.time > t) {
+        let pos = l.dataset.features.iter().position(|f| f.id == e.id);
+        match (&e.before, pos) {
+            (Some(b), Some(i)) => {
+                if let Some(slot) = l.dataset.features.get_mut(i) {
+                    *slot = b.clone();
+                }
+            }
+            (Some(b), None) => l.dataset.features.push(b.clone()),
+            (None, Some(i)) => {
+                l.dataset.features.remove(i);
+            }
+            (None, None) => {}
+        }
+        undone += 1;
+    }
+    l.selection.clear();
+    l.touch_geometry();
+    Ok(json!({"undone": undone}))
+}
+
+fn relate(s: &mut Session, p: &Json) -> CmdResult {
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or("name is required")?.to_string();
+    if b(p, "remove").unwrap_or(false) {
+        let rels = &mut s.map_mut().editing.relationships;
+        let before = rels.len();
+        rels.retain(|r| !r.name.eq_ignore_ascii_case(&name));
+        return if rels.len() == before { Err(format!("no relationship '{name}'")) } else { Ok(Json::Null) };
+    }
+    let field_of = |layer: &str, key: &str| -> Result<(String, String), String> {
+        let l = s.map().layer_by_name(layer).filter(|l| !l.is_raster()).ok_or_else(|| format!("no layer '{layer}'"))?;
+        let f = l.dataset.field_index(key).and_then(|i| l.dataset.fields.get(i)).ok_or_else(|| format!("{layer} has no field '{key}'"))?;
+        Ok((l.name.clone(), f.name.clone()))
+    };
+    let (origin, origin_key) = field_of(ps(p, "origin").ok_or("origin is required")?, ps(p, "originKey").ok_or("originKey is required")?)?;
+    let (destination, destination_key) =
+        field_of(ps(p, "destination").ok_or("destination is required")?, ps(p, "destinationKey").ok_or("destinationKey is required")?)?;
+    let rels = &mut s.map_mut().editing.relationships;
+    rels.retain(|r| !r.name.eq_ignore_ascii_case(&name));
+    rels.push(Relationship { name: name.clone(), origin, origin_key, destination, destination_key });
+    Ok(json!({"relationship": name}))
+}
+
+/// The rows related to the selection through relationships (both ways), selecting them.
+fn related(s: &mut Session, p: &Json) -> CmdResult {
+    let rels: Vec<Relationship> = match ps(p, "name") {
+        Some(n) => vec![
+            s.map()
+                .editing
+                .relationships
+                .iter()
+                .find(|r| r.name.eq_ignore_ascii_case(n))
+                .cloned()
+                .ok_or_else(|| format!("no relationship '{n}'"))?,
+        ],
+        None => s.map().editing.relationships.clone(),
+    };
+    if rels.is_empty() {
+        return Err("the map has no relationships".into());
+    }
+    let map = s.map();
+    let mut found: Vec<(u32, Vec<usize>)> = Vec::new();
+    for r in &rels {
+        for (from, fk, to, tk) in
+            [(&r.origin, &r.origin_key, &r.destination, &r.destination_key), (&r.destination, &r.destination_key, &r.origin, &r.origin_key)]
+        {
+            let (Some(a), Some(bl)) = (map.layer_by_name(from), map.layer_by_name(to)) else { continue };
+            let (Some(ai), Some(bi)) = (a.dataset.field_index(fk), bl.dataset.field_index(tk)) else { continue };
+            let keys: std::collections::HashSet<String> =
+                a.selection.iter().map(|r| a.dataset.value(*r, ai)).filter(|v| !v.is_null()).map(|v| v.to_string()).collect();
+            if keys.is_empty() {
+                continue;
+            }
+            let rows: Vec<usize> =
+                (0..bl.dataset.features.len()).filter(|r| keys.contains(&bl.dataset.value(*r, bi).to_string())).collect();
+            found.push((bl.id, rows));
+        }
+    }
+    let total: usize = found.iter().map(|(_, r)| r.len()).sum();
+    let names: Vec<Json> = found.iter().filter_map(|(id, rows)| map.layer(*id).map(|l| json!({"layer": l.name, "rows": rows}))).collect();
+    if b(p, "select").unwrap_or(true) && !found.is_empty() {
+        for (id, rows) in found {
+            super::select::set(s, id, rows, super::select::Mode::Add);
+        }
+    }
+    Ok(json!({"related": total, "layers": names}))
+}
+
+fn template(s: &mut Session, p: &Json) -> CmdResult {
+    let id = s.layer_id(p)?;
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or("name is required")?.to_string();
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    if b(p, "remove").unwrap_or(false) {
+        let before = l.design.templates.len();
+        l.design.templates.retain(|t| !t.name.eq_ignore_ascii_case(&name));
+        return if l.design.templates.len() == before { Err(format!("no template '{name}'")) } else { Ok(Json::Null) };
+    }
+    let mut defaults = Vec::new();
+    if let Some(o) = p.get("defaults").and_then(Json::as_object) {
+        for (k, v) in o {
+            let fi = l.dataset.field_index(k).ok_or_else(|| format!("no field named '{k}'"))?;
+            let ty = l.dataset.fields.get(fi).map(|f| f.ty).unwrap_or(FieldType::Text);
+            defaults
+                .push((l.dataset.fields.get(fi).map(|f| f.name.clone()).unwrap_or_default(), super::edit::coerce(Value::from_json(v), ty)));
+        }
+    }
+    l.design.templates.retain(|t| !t.name.eq_ignore_ascii_case(&name));
+    l.design.templates.push(FeatureTemplate {
+        name: name.clone(),
+        description: ps(p, "description").unwrap_or("").chars().take(500).collect(),
+        defaults,
+    });
+    Ok(json!({"template": name, "templates": l.design.templates.len()}))
+}
+
+/// The nearest vertex, line end or edge of a visible feature layer within the snapping tolerance.
+fn snap(s: &mut Session, p: &Json) -> CmdResult {
+    let c = Coord::new(f(p, "lon").ok_or("lon is required")?, f(p, "lat").ok_or("lat is required")?);
+    let sn = s.map().editing.snapping;
+    let none = json!({"lon": c.x, "lat": c.y, "snapped": false});
+    if !sn.enabled {
+        return Ok(none);
+    }
+    let Some(m) = s.map().to_map(c) else { return Ok(none) };
+    let tol = sn.tolerance_px * s.map().camera.res;
+    let scale = s.scale();
+    let (flat, key) = (s.map().flat(), s.map().projection.code());
+    // Vertices and ends win over edges whenever one is within the tolerance.
+    let (mut best_point, mut best_edge): (Option<(f64, Coord, &'static str)>, Option<(f64, Coord, &'static str)>) = (None, None);
+    let mut consider = |d2: f64, at: Coord, kind: &'static str| {
+        let slot = if kind == "edge" { &mut best_edge } else { &mut best_point };
+        if d2 <= tol * tol && slot.is_none_or(|b| d2 < b.0) {
+            *slot = Some((d2, at, kind));
+        }
+    };
+    for l in s.map_mut().layers.iter_mut().filter(|l| l.visible && !l.is_raster() && !l.graphics) {
+        if !l.in_scale_range(scale) {
+            continue;
+        }
+        for g in l.projected_in(&flat, &key).iter().flatten() {
+            if !g.extent().padded(0.0, tol).contains(m) {
+                continue;
+            }
+            let paths: Vec<&Vec<Coord>> = match g {
+                Geometry::Line(parts) => parts.iter().collect(),
+                Geometry::Polygon(polys) => polys.iter().flatten().collect(),
+                _ => Vec::new(),
+            };
+            if let Geometry::Point(pt) = g {
+                consider((pt.x - m.x).powi(2) + (pt.y - m.y).powi(2), *pt, "vertex");
+            }
+            for path in paths {
+                if sn.end && matches!(g, Geometry::Line(_)) {
+                    for e in [path.first(), path.last()].into_iter().flatten() {
+                        consider((e.x - m.x).powi(2) + (e.y - m.y).powi(2), *e, "end");
+                    }
+                }
+                if sn.vertex {
+                    for v in path {
+                        consider((v.x - m.x).powi(2) + (v.y - m.y).powi(2), *v, "vertex");
+                    }
+                }
+                if sn.edge {
+                    for w in path.windows(2) {
+                        let (Some(a), Some(b2)) = (w.first(), w.get(1)) else { continue };
+                        let (dx, dy) = (b2.x - a.x, b2.y - a.y);
+                        let len2 = dx * dx + dy * dy;
+                        let t = if len2 > 0.0 { (((m.x - a.x) * dx + (m.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                        let q = Coord::new(a.x + t * dx, a.y + t * dy);
+                        consider((q.x - m.x).powi(2) + (q.y - m.y).powi(2), q, "edge");
+                    }
+                }
+            }
+        }
+    }
+    match best_point.or(best_edge).and_then(|(_, at, kind)| s.map().to_lonlat(at).map(|ll| (ll, kind))) {
+        Some((ll, kind)) => Ok(json!({"lon": ll.x, "lat": ll.y, "snapped": true, "kind": kind})),
+        None => Ok(none),
+    }
+}
+
+fn topology_rules(s: &mut Session, p: &Json) -> CmdResult {
+    if b(p, "clear").unwrap_or(false) {
+        s.map_mut().editing.topology.clear();
+    }
+    if let Some(i) = p.get("remove").and_then(Json::as_u64) {
+        let rules = &mut s.map_mut().editing.topology;
+        if (i as usize) >= rules.len() {
+            return Err(format!("no rule {i}"));
+        }
+        rules.remove(i as usize);
+    }
+    if let Some(a) = p.get("add") {
+        let layer_of = |k: &str| -> Result<String, String> {
+            let n = a.get(k).and_then(Json::as_str).ok_or_else(|| format!("{k} is required"))?;
+            s.map().layer_by_name(n).filter(|l| !l.is_raster()).map(|l| l.name.clone()).ok_or_else(|| format!("no feature layer '{n}'"))
+        };
+        let layer = layer_of("layer")?;
+        let gt = s.map().layer_by_name(&layer).map(|l| l.geometry_type()).unwrap_or(GeometryType::None);
+        let need =
+            |want: GeometryType| if gt == want { Ok(()) } else { Err(format!("this rule needs a {} layer", want.label().to_lowercase())) };
+        let rule = match a.get("rule").and_then(Json::as_str).ok_or("rule is required")? {
+            "mustNotOverlap" => {
+                need(GeometryType::Polygon)?;
+                TopologyRule::MustNotOverlap { layer }
+            }
+            "mustNotHaveGaps" => {
+                need(GeometryType::Polygon)?;
+                TopologyRule::MustNotHaveGaps { layer }
+            }
+            "mustNotSelfIntersect" => TopologyRule::MustNotSelfIntersect { layer },
+            "mustNotHaveDangles" => {
+                need(GeometryType::Polyline)?;
+                TopologyRule::MustNotHaveDangles { layer }
+            }
+            "mustBeCoveredBy" => {
+                need(GeometryType::Point)?;
+                let by = layer_of("by")?;
+                TopologyRule::MustBeCoveredBy { layer, by }
+            }
+            r => return Err(format!("unknown topology rule '{r}'")),
+        };
+        let rules = &mut s.map_mut().editing.topology;
+        if !rules.contains(&rule) {
+            rules.push(rule);
+        }
+    }
+    let rules: Vec<Json> =
+        s.map().editing.topology.iter().enumerate().map(|(i, r)| json!({"index": i, "rule": r.label(), "layer": r.layer()})).collect();
+    Ok(Json::Array(rules))
+}
+
+/// Checks every topology rule; the errors are kept for the Error Inspector.
+fn topology_validate(s: &mut Session, p: &Json) -> CmdResult {
+    use rustgis_analysis::topology as t;
+    let tol = f(p, "toleranceM").unwrap_or(1.0).clamp(0.0, 10_000.0);
+    let mut errors = Vec::new();
+    for rule in s.map().editing.topology.clone() {
+        let Some(l) = s.map().layer_by_name(rule.layer()) else { continue };
+        let rows: Vec<usize> = l.visible_rows().iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i).collect();
+        let found = match &rule {
+            TopologyRule::MustNotOverlap { .. } => t::overlaps(&l.dataset, &rows),
+            TopologyRule::MustNotHaveGaps { .. } => t::gaps(&l.dataset, &rows),
+            TopologyRule::MustNotSelfIntersect { .. } => t::self_intersections(&l.dataset, &rows),
+            TopologyRule::MustNotHaveDangles { .. } => t::dangles(&l.dataset, &rows, tol),
+            TopologyRule::MustBeCoveredBy { by, .. } => match s.map().layer_by_name(by) {
+                Some(b) => t::not_covered(&l.dataset, &rows, &b.dataset),
+                None => continue,
+            },
+        };
+        errors.extend(found.into_iter().map(|e| crate::TopologyIssue {
+            rule: rule.label().to_string(),
+            layer: l.name.clone(),
+            rows: e.rows,
+            lon: e.at.x,
+            lat: e.at.y,
+        }));
+    }
+    let n = errors.len();
+    let out: Vec<Json> =
+        errors.iter().take(1000).map(|e| json!({"rule": e.rule, "layer": e.layer, "rows": e.rows, "lon": e.lon, "lat": e.lat})).collect();
+    s.topology_errors = errors;
+    Ok(json!({"errors": n, "first": out}))
+}

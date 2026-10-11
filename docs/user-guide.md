@@ -173,6 +173,37 @@ From History turns the geoprocessing history into a task you can replay.
 Share › Output also prints the map (through the system's PDF viewer), captures it to the
 clipboard, and exports a layer to a 3D model (Wavefront OBJ, polygons extruded by a field).
 
+## Editing and data design
+
+The Edit tab's **Edit** button turns editing on or off for the map; with it off, the map is
+read-only. The Editing pane (Settings, Templates, Status, Modify) holds the rest:
+
+- **Modify**: move the selected features by metres east and north, rotate them, scale them,
+  merge them (polygons are unioned), explode multipart features, split a line where you click,
+  and flip line direction. Edit › Tools lists every editing tool.
+- **Feature templates**: named default values for new features, made from a selected feature;
+  the Create tool uses the chosen template.
+- **Snapping**: new vertices snap to nearby vertices, edges and line ends (magenta marker).
+- **Elevation**: new features get a `z` value, constant or sampled from a raster surface.
+- **Ground to grid**: a scale factor and rotation applied to entered distances and directions
+  (Move, and `edit.traverse`, which draws a line or polygon from distances and bearings).
+- **Topology**: rules (must not overlap, must not have gaps, must not self-intersect, must not
+  have dangles, must be covered by); Validate lists the errors, and clicking one zooms to it.
+- **Status**: features added, changed and deleted per layer since the last save.
+
+The Data tab's Data Design pane keeps attributes valid, on every edit (creating, pasting,
+attribute edits, Calculate Field):
+
+- **Domains**: coded values (`code=description`) or a numeric range for a field.
+- **Subtypes**: an integer field's codes, each with a name and default values for new features;
+  the layer is symbolized by subtype.
+- **Attribute rules**: calculations (a field set from an expression on every insert and update)
+  and constraints (a SQL condition every feature must meet).
+- **Contingent values**: the combinations of values allowed across fields.
+- **Archiving**: keeps every edit with its time; restore the layer as it was minutes ago.
+- **Relationships**: link two layers by key fields; **Related Data** selects the rows related to
+  the selection.
+
 ## Clipboard and pop-ups
 
 Copy (++ctrl+c++) and Cut (++ctrl+x++) take the selected features. Paste (++ctrl+v++) adds them to

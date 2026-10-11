@@ -11,6 +11,7 @@ pub mod i18n;
 mod backstage;
 mod chrome;
 mod dialogs;
+mod editpanes;
 pub mod icons;
 mod layoutview;
 mod mapview;
@@ -115,6 +116,8 @@ pub enum RightPane {
     Symbology,
     History,
     Details,
+    Editing,
+    Design,
 }
 
 pub struct UiState {
@@ -182,6 +185,7 @@ pub struct RustGisApp {
     pub gp: panes::GpForm,
     pub table: table::TableState,
     pub layout: layoutview::LayoutView,
+    pub forms: editpanes::Forms,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     sent_title: String,
@@ -214,6 +218,7 @@ impl RustGisApp {
             gp: panes::GpForm::default(),
             table: table::TableState::default(),
             layout: layoutview::LayoutView::default(),
+            forms: editpanes::Forms::default(),
             fonts_frames: 0,
             applied_dark: None,
             sent_title: String::new(),
@@ -468,6 +473,8 @@ impl RustGisApp {
             }
             "ui.pane.history" => toggle_right(&mut self.ui, RightPane::History),
             "ui.pane.details" => toggle_right(&mut self.ui, RightPane::Details),
+            "ui.pane.editing" => toggle_right(&mut self.ui, RightPane::Editing),
+            "ui.pane.design" => toggle_right(&mut self.ui, RightPane::Design),
             "ui.gp.open" => {
                 let tool = p.get("tool").and_then(Value::as_str).and_then(rustgis_engine::analysis::tool);
                 self.gp.open(tool.map(|t| t.id), &self.session);

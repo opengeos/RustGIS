@@ -101,6 +101,7 @@ fn write(s: &mut Session, path: PathBuf) -> CmdResult {
     let path = if path.extension().is_none() { path.with_extension(crate::project::EXTENSION) } else { path };
     s.project.save(&path)?;
     s.dirty = false;
+    s.edit_counts.clear();
     s.notify(format!("Saved {}", path.display()), false);
     s.path = Some(path.clone());
     Ok(json!({"path": path.display().to_string()}))
