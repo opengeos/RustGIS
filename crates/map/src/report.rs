@@ -77,15 +77,48 @@ impl Report {
         let page = |v: f64, d: f64| if v.is_finite() { v.clamp(MIN_PAGE, MAX_PAGE) } else { d };
         self.width = page(self.width, 215.9);
         self.height = page(self.height, 279.4);
-        self.name = self.name.chars().take(200).collect();
-        self.title = self.title.chars().take(500).collect();
+        // Text from a file is held to what the commands accept.
+        let cut = |s: &mut String, n: usize| {
+            if s.chars().count() > n {
+                *s = s.chars().take(n).collect();
+            }
+        };
+        cut(&mut self.name, 200);
+        cut(&mut self.title, 500);
+        cut(&mut self.layer, 200);
+        cut(&mut self.where_clause, 2000);
+        for f in self.fields.iter_mut().chain(self.groups.iter_mut()) {
+            cut(f, 200);
+        }
+        for st in &mut self.stats {
+            cut(&mut st.field, 200);
+        }
+        for f in [&mut self.sort, &mut self.picture_field, &mut self.attachments_field].into_iter().flatten() {
+            cut(f, 200);
+        }
+        if let Some(c) = &mut self.chart {
+            cut(&mut c.category, 200);
+            if let Some(v) = &mut c.value {
+                cut(v, 200);
+            }
+        }
         self.fields.truncate(MAX_ITEMS);
         self.groups.truncate(MAX_GROUPS);
         self.stats.truncate(MAX_ITEMS);
         self.sections.truncate(MAX_ITEMS);
         for s in &mut self.sections {
-            if let Section::Subreport { fields, .. } = s {
-                fields.truncate(MAX_ITEMS);
+            match s {
+                Section::Subreport { fields, relationship } => {
+                    fields.truncate(MAX_ITEMS);
+                    fields.iter_mut().for_each(|f| cut(f, 200));
+                    cut(relationship, 200);
+                }
+                Section::Page { title, text, .. } => {
+                    cut(title, 500);
+                    cut(text, 100_000);
+                }
+                Section::Layout { layout, .. } => cut(layout, 200),
+                Section::Related { report } => cut(report, 200),
             }
         }
     }

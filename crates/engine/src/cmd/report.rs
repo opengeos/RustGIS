@@ -308,6 +308,33 @@ fn add_section(s: &mut Session, p: &Value, sec: Section) -> CmdResult {
     Ok(json!({"report": i, "sections": r.sections.len()}))
 }
 
+/// Drops what a layer lacks from a report (fields, groups, statistics, sort, picture,
+/// attachments, chart, and a where clause it can't read), so the report draws on that layer.
+fn fit_to_layer(r: &mut Report, ds: &rustgis_data::Dataset) {
+    let has = |n: &str| ds.field_index(n).is_some();
+    r.fields.retain(|f| has(f));
+    r.groups.retain(|f| has(f));
+    r.stats.retain(|x| has(&x.field));
+    r.sort = r.sort.take().filter(|f| has(f));
+    r.picture_field = r.picture_field.take().filter(|f| has(f));
+    r.attachments_field = r.attachments_field.take().filter(|f| has(f));
+    r.chart = r.chart.take().filter(|c| has(&c.category) && c.value.as_deref().is_none_or(has));
+    if r.fields.is_empty() {
+        r.fields = ds.fields.iter().take(MAX_ITEMS).map(|f| f.name.clone()).collect();
+    }
+    if !r.where_clause.is_empty() && rustgis_data::query::parse(&r.where_clause, ds).is_err() {
+        r.where_clause.clear();
+    }
+}
+
+/// A join key: numbers by value (so 1 and 1.0 match), anything else as text; empty for none.
+fn join_key(ds: &rustgis_data::Dataset, row: usize, fi: Option<usize>) -> String {
+    match fi.and_then(|fi| ds.value(row, fi).as_f64()) {
+        Some(x) => format!("{x}"),
+        None => cell(ds, row, fi),
+    }
+}
+
 fn unique_name(s: &Session, base: &str, skip: Option<usize>) -> String {
     let base: String = base.trim().chars().take(200).collect();
     let base = if base.is_empty() { "Report".to_string() } else { base };
@@ -396,21 +423,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         }
         r.layer = l.name.clone();
         // What the new layer lacks is dropped, so the report doesn't show blank columns.
-        let ds = &l.dataset;
-        let has = |n: &str| ds.field_index(n).is_some();
-        r.fields.retain(|f| has(f));
-        r.groups.retain(|f| has(f));
-        r.stats.retain(|x| has(&x.field));
-        r.sort = r.sort.take().filter(|f| has(f));
-        r.picture_field = r.picture_field.take().filter(|f| has(f));
-        r.attachments_field = r.attachments_field.take().filter(|f| has(f));
-        r.chart = r.chart.take().filter(|c| has(&c.category) && c.value.as_deref().is_none_or(has));
-        if r.fields.is_empty() {
-            r.fields = ds.fields.iter().take(MAX_ITEMS).map(|f| f.name.clone()).collect();
-        }
-        if !r.where_clause.is_empty() && rustgis_data::query::parse(&r.where_clause, ds).is_err() {
-            r.where_clause.clear();
-        }
+        fit_to_layer(&mut r, &l.dataset);
     }
     // Everything is checked against the (possibly new) layer before the report changes.
     let l = find_layer(s, &r.layer);
@@ -521,19 +534,9 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
             .map(|l| l.name.clone())
             .ok_or("select the layer to report on, or pass layer")?;
     }
-    // Drop fields the layer lacks, so the report still draws.
+    // Drop what the layer lacks, so the report still draws.
     if let Some(l) = find_layer(s, &r.layer) {
-        let ds = &l.dataset;
-        let keep = |v: &mut Vec<String>| v.retain(|n| ds.field_index(n).is_some());
-        keep(&mut r.fields);
-        keep(&mut r.groups);
-        r.stats.retain(|x| ds.field_index(&x.field).is_some());
-        if r.fields.is_empty() {
-            r.fields = ds.fields.iter().take(MAX_ITEMS).map(|f| f.name.clone()).collect();
-        }
-        if !r.where_clause.is_empty() && rustgis_data::query::parse(&r.where_clause, ds).is_err() {
-            r.where_clause.clear();
-        }
+        fit_to_layer(&mut r, &l.dataset);
     }
     r.name = unique_name(s, &r.name, None);
     let name = r.name.clone();
@@ -706,7 +709,7 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
             let ok = ods.field_index(other_key)?;
             let mut by_key: HashMap<String, Vec<usize>> = HashMap::new();
             for row in 0..ods.features.len() {
-                let k = cell(ods, row, Some(ok));
+                let k = join_key(ods, row, Some(ok));
                 if !k.is_empty() {
                     by_key.entry(k).or_default().push(row);
                 }
@@ -789,7 +792,7 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
             }
         }
         for (name, names, idx, ods, by_key, key) in &subs {
-            let k = cell(ds, row, *key);
+            let k = join_key(ds, row, *key);
             let Some(related) = by_key.get(&k).filter(|_| !k.is_empty()) else { continue };
             out.push(Block::SubColumns(
                 names.iter().map(|n| format!("{name}: {n}")).take(1).chain(names.iter().skip(1).cloned()).collect(),

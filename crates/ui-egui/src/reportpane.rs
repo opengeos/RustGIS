@@ -16,7 +16,7 @@ pub struct ReportState {
     pub preview: Option<(String, egui::TextureHandle, usize)>,
     /// The built report and its pages, for the report and project revision they were built from:
     /// turning pages only redraws a page, it doesn't rebuild the report.
-    pub built: Option<((usize, u64), rustgis_engine::map::report::Doc, Vec<rustgis_engine::render::report::Page>)>,
+    pub built: Option<((usize, u64), Result<(rustgis_engine::map::report::Doc, Vec<rustgis_engine::render::report::Page>), String>)>,
     pub stat_field: String,
     pub stat_kind: String,
     pub page_title: String,
@@ -287,16 +287,17 @@ fn preview(app: &mut RustGisApp, ui: &mut Ui, i: usize, t: &Tokens) {
             let s = &app.session;
             let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::report::pages(s, i)))
                 .unwrap_or_else(|_| Err("the preview failed unexpectedly".into()));
-            match built {
-                Ok((doc, pages)) => app.reports.built = Some((built_for, doc, pages)),
-                Err(e) => {
-                    app.reports.built = None;
-                    ui.label(egui::RichText::new(e).small().color(Color32::from_rgb(0xC0, 0x30, 0x30)));
-                    return;
-                }
-            }
+            // A failure is kept too, so it isn't retried every frame until something changes.
+            app.reports.built = Some((built_for, built));
         }
-        let Some((_, doc, pages)) = &app.reports.built else { return };
+        let (doc, pages) = match &app.reports.built {
+            Some((_, Ok((doc, pages)))) => (doc, pages),
+            Some((_, Err(e))) => {
+                ui.label(egui::RichText::new(e.as_str()).small().color(Color32::from_rgb(0xC0, 0x30, 0x30)));
+                return;
+            }
+            None => return,
+        };
         let (s, page) = (&mut app.session, app.reports.page);
         let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<_, String> {
             let page = page.min(pages.len().saturating_sub(1));
