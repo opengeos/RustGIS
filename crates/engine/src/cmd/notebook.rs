@@ -75,8 +75,10 @@ pub fn commands() -> Vec<C> {
                     Cell::new(CellKind::Code, "# For example:\n# map.goToXY {\"lon\": 12.5, \"lat\": 41.9, \"scale\": 2000000}"),
                 ],
             };
+            let r = push(s, nb)?;
+            // Trusted only once it exists.
             s.trusted_notebooks.insert(name.to_lowercase());
-            push(s, nb)
+            Ok(r)
         })
         .params(r#"{"name"?}"#),
         C::new("notebook.open", "Add and Open Notebook", "Insert › Project", |s, p| {
@@ -311,9 +313,11 @@ fn parse(text: &str, fallback_name: &str) -> Result<Notebook, String> {
         for c in v["cells"].as_array().into_iter().flatten().take(MAX_CELLS) {
             let kind = if c["cell_type"].as_str() == Some("code") { CellKind::Code } else { CellKind::Markdown };
             let mut cell = Cell::new(kind, &jupyter_text(&c["source"]));
-            let out: String = c["outputs"].as_array().into_iter().flatten().map(|o| jupyter_text(&o["text"])).collect();
+            let outputs = c["outputs"].as_array().into_iter().flatten();
+            let out: String = outputs.clone().map(|o| jupyter_text(&o["text"])).collect();
             if !out.is_empty() {
                 cell.output = Some(out.chars().take(MAX_OUTPUT).collect());
+                cell.error = outputs.clone().any(|o| o["name"] == "stderr" || o["output_type"] == "error");
             }
             nb.cells.push(cell);
         }

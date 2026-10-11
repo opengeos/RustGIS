@@ -1883,6 +1883,7 @@ fn presentations_and_notebooks() {
     assert_eq!(nb.name, "Analysis 2");
     assert_eq!(nb.cells.len(), 4);
     assert!(nb.cells[2].output.is_some());
+    assert!(nb.cells[3].error, "a failed cell stays failed through Jupyter");
     // A notebook from a file can't touch files; one made here can.
     let png = dir.join("nb.png");
     let cell = format!("share.exportMap {{\"path\": {:?}}}", png.to_str().unwrap());
