@@ -216,8 +216,12 @@ fn run(s: &mut Session, p: &Value) -> CmdResult {
         Some(_) => vec![cell_of(s, p)?.1],
         None => s.project.notebooks.get(i).map(|nb| (0..nb.cells.len()).collect()).unwrap_or_default(),
     };
+    // Commands in a cell may add or remove notebooks, so this one is found by name each time.
+    let name = s.project.notebooks.get(i).map(|nb| nb.name.clone()).unwrap_or_default();
+    let find = |s: &Session| s.project.notebooks.iter().position(|nb| nb.name.eq_ignore_ascii_case(&name));
     let mut ran = 0;
     for k in cells {
+        let Some(i) = find(s) else { break };
         let Some(c) = s.project.notebooks.get(i).and_then(|nb| nb.cells.get(k)) else { break };
         if c.kind != CellKind::Code {
             continue;
@@ -232,7 +236,6 @@ fn run(s: &mut Session, p: &Value) -> CmdResult {
             )),
             _ => super::workflows::run_script(s, &json!({"script": script})),
         };
-        // Commands in the cell may have removed notebooks; find this one again.
         let failed = r.is_err();
         let text = match r {
             Ok(v) => {
@@ -250,7 +253,7 @@ fn run(s: &mut Session, p: &Value) -> CmdResult {
             }
             Err(e) => e,
         };
-        if let Some(c) = s.project.notebooks.get_mut(i).and_then(|nb| nb.cells.get_mut(k)) {
+        if let Some(c) = find(s).and_then(|i| s.project.notebooks.get_mut(i)).and_then(|nb| nb.cells.get_mut(k)) {
             c.output = Some(text.chars().take(MAX_OUTPUT).collect());
             c.error = failed;
         }

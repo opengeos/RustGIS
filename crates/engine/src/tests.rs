@@ -1878,5 +1878,15 @@ fn presentations_and_notebooks() {
     s.run("notebook.open", &json!({"text": text})).unwrap();
     let r = s.run("notebook.run", &json!({"notebook": "Notebook"})).unwrap();
     assert_eq!(r["error"], 0, "{r}");
+    // A cell that removes an earlier notebook still writes its output to its own notebook.
+    s.run("notebook.new", &json!({"name": "Runner"})).unwrap();
+    s.run("notebook.addCell", &json!({"notebook": "Runner", "source": "notebook.remove {\"notebook\": 0}"})).unwrap();
+    s.run("notebook.addCell", &json!({"notebook": "Runner", "source": "map.goToXY {\"lon\": 0, \"lat\": 0}"})).unwrap();
+    let r = s.run("notebook.run", &json!({"notebook": "Runner"})).unwrap();
+    assert!(r.get("error").is_none(), "{r}");
+    let nb = s.project.notebooks.iter().find(|nb| nb.name == "Runner").unwrap();
+    assert!(nb.cells[2].output.as_deref().is_some_and(|o| o.starts_with("notebook.remove")), "{:?}", nb.cells[2].output);
+    assert!(nb.cells[3].output.is_some());
+    assert_eq!(s.project.notebooks.len(), 3);
     let _ = std::fs::remove_dir_all(&dir);
 }

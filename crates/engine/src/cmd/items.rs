@@ -551,7 +551,8 @@ fn run_task(s: &mut Session, p: &Value) -> CmdResult {
 /// items or runs other steps, or a parameter that names a file, folder or address (by its key or
 /// by looking like a path or URL).
 pub(crate) fn touches_files(command: &str, params: &Value) -> bool {
-    const KEYS: &[&str] = &["path", "folder", "dir", "file", "url", "uri", "source", "output", "connection", "database", "data", "text"];
+    const KEYS: &[&str] =
+        &["path", "folder", "dir", "file", "url", "uri", "source", "output", "connection", "database", "data", "text", "poster"];
     let reaches = |v: &Value| names_place(v, KEYS, 0);
     let id = command.to_ascii_lowercase();
     let verb = id.split('.').nth(1).unwrap_or("");
