@@ -2,6 +2,7 @@
 //! Imagery › Share (Create Hosted Imagery): neural-network pixel classification with models kept
 //! in the project and shared as packages, and rasters cut into web map tiles.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use rustgis_analysis::neural::{self, MAX_SAMPLES_PER_CLASS, Mlp};
@@ -156,9 +157,17 @@ fn train(s: &Session, p: &Value) -> Result<DlModel, String> {
     let mut classes: Vec<String> = Vec::new();
     let mut samples: Vec<(Vec<f32>, usize)> = Vec::new();
     let mut per_class: Vec<usize> = Vec::new();
+    // Polygons per class, so each polygon of a class gets a fair share of its samples.
+    let mut polygons: HashMap<String, usize> = HashMap::new();
+    for (row, ft) in l.dataset.features.iter().enumerate() {
+        if let Some(Geometry::Polygon(polys)) = &ft.geometry {
+            *polygons.entry(l.dataset.value(row, fi).to_string()).or_default() += polys.len();
+        }
+    }
     for (row, ft) in l.dataset.features.iter().enumerate() {
         let Some(Geometry::Polygon(polys)) = &ft.geometry else { continue };
         let key = l.dataset.value(row, fi).to_string();
+        let share = (MAX_SAMPLES_PER_CLASS / polygons.get(&key).copied().unwrap_or(1).max(1)).max(1);
         let ci = match classes.iter().position(|c| *c == key) {
             Some(i) => i,
             None if classes.len() < neural::MAX_CLASSES => {
@@ -169,7 +178,7 @@ fn train(s: &Session, p: &Value) -> Result<DlModel, String> {
             None => return Err(format!("training holds at most {} classes", neural::MAX_CLASSES)),
         };
         for rings in polys {
-            let room = MAX_SAMPLES_PER_CLASS.saturating_sub(per_class.get(ci).copied().unwrap_or(0));
+            let room = MAX_SAMPLES_PER_CLASS.saturating_sub(per_class.get(ci).copied().unwrap_or(0)).min(share);
             let got = neural::polygon_samples(&r, &bands, rings, room);
             if let Some(n) = per_class.get_mut(ci) {
                 *n += got.len();

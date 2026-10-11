@@ -37,6 +37,8 @@ const MAX_FEATURES: usize = 200_000;
 const MAX_SCENE_BYTES: usize = 128 << 20;
 /// Most nodes in a link chart.
 const MAX_NODES: usize = 3000;
+/// Most links in a link chart (its page lays them all out every frame).
+const MAX_LINKS: usize = 20_000;
 /// Most shared items and data stores kept.
 const MAX_ITEMS: usize = 1000;
 
@@ -330,16 +332,24 @@ fn upload(s: &mut Session, p: &Value) -> CmdResult {
     if dest.exists() {
         return Err(format!("{} already has a file named {file}", store.name));
     }
-    // Created new (never through an existing file or link), in the same step as the check.
-    let bytes = std::fs::File::open(src)
-        .and_then(|mut from| {
-            let mut to = std::fs::OpenOptions::new().write(true).create_new(true).open(&dest)?;
-            std::io::copy(&mut from, &mut to)
-        })
-        .map_err(|e| format!("{src}: {e}"))?;
+    // Created new (never through an existing file or link), in the same step as the check; a
+    // copy that fails part way is removed, so a retry can write it.
+    let mut from = std::fs::File::open(src).map_err(|e| format!("{src}: {e}"))?;
+    let mut to = std::fs::OpenOptions::new().write(true).create_new(true).open(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    let bytes = match std::io::copy(&mut from, &mut to) {
+        Ok(n) => n,
+        Err(e) => {
+            drop(to);
+            let _ = std::fs::remove_file(&dest);
+            return Err(format!("{src}: {e}"));
+        }
+    };
     let t = now();
     let id = s.project.shared.iter().map(|i| i.id).max().unwrap_or(0).saturating_add(1);
     let path = dest.display().to_string();
+    if s.project.shared.len() >= MAX_ITEMS {
+        s.project.shared.remove(0);
+    }
     s.project.shared.push(SharedItem {
         id,
         kind: "file".into(),
@@ -550,11 +560,17 @@ fn ogc_zip(title: &str, layers: &[&Dataset], extra: &[(String, Vec<u8>)]) -> Res
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     let mut cols = Vec::new();
     let mut used: HashMap<String, usize> = HashMap::new();
+    let mut taken = std::collections::HashSet::new();
     for ds in layers {
         let base = safe(&ds.name).to_ascii_lowercase();
+        // The first free id: "a", then "a_2", "a_3", … skipping ids another layer already took.
         let n = used.entry(base.clone()).or_insert(0);
-        *n += 1;
-        let id = if *n > 1 { format!("{base}_{n}") } else { base };
+        let mut id = base.clone();
+        while taken.contains(&id) {
+            *n += 1;
+            id = format!("{base}_{}", *n + 1);
+        }
+        taken.insert(id.clone());
         let e = ds.extent();
         let mut col = json!({
             "id": id, "title": ds.name, "itemType": "feature",
@@ -956,8 +972,8 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<String, String> {
             };
             let a = node(o, orow, &mut nodes);
             for &drow in drows.iter().take(200) {
-                if nodes.len() >= MAX_NODES {
-                    break;
+                if nodes.len() >= MAX_NODES || links.len() >= MAX_LINKS {
+                    break 'rels;
                 }
                 let b = node(d, drow, &mut nodes);
                 links.push(json!({"source": a, "target": b, "relationship": r.name}));

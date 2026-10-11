@@ -556,7 +556,7 @@ pub(crate) fn touches_files(command: &str, params: &Value) -> bool {
     let reaches = |v: &Value| names_place(v, KEYS, 0);
     let id = command.to_ascii_lowercase();
     let verb = id.split('.').nth(1).unwrap_or("");
-    ["script.", "notebook.", "model.", "project.", "task.", "share.", "offline.", "cache."].iter().any(|p| id.starts_with(p))
+    ["script.", "notebook.", "model.", "project.", "task.", "share.", "offline.", "cache.", "locator."].iter().any(|p| id.starts_with(p))
         || ["import", "export", "open", "save", "add", "package", "upload", "download"].iter().any(|w| verb.starts_with(w))
         || reaches(params)
 }

@@ -2022,6 +2022,7 @@ fn two_class_b64() -> String {
 #[test]
 fn deep_learning_hosted_imagery_and_sharing() {
     let dir = std::env::temp_dir().join(format!("rustgis-share-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = |f: &str| dir.join(f).to_str().unwrap().to_string();
     let mut s = world();

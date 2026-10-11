@@ -225,6 +225,7 @@ impl Project {
         self.reports.truncate(MAX_ITEMS);
         self.presentations.truncate(MAX_ITEMS);
         self.notebooks.truncate(MAX_ITEMS);
+        self.dl_models.truncate(MAX_ITEMS);
         for p in &mut self.presentations {
             p.clamp();
         }
@@ -233,6 +234,7 @@ impl Project {
         }
         unique_names(self.presentations.iter_mut().map(|p| &mut p.name));
         unique_names(self.notebooks.iter_mut().map(|nb| &mut nb.name));
+        unique_names(self.dl_models.iter_mut().map(|m| &mut m.name));
         for m in &mut self.maps {
             // A projection this version can't use (a hand edit, or a newer file) falls back to
             // Web Mercator rather than being named while another is drawn.

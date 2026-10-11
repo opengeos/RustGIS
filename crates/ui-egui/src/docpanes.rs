@@ -395,7 +395,7 @@ pub fn shares(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 let mut p = json!({"item": it.id});
                 // A web layer is replaced from the selected layer.
                 if cmd == "share.replaceWebLayer"
-                    && let Some(l) = app.session.active_layer.and_then(|id| app.session.map().layer(id))
+                    && let Some(l) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).filter(|l| !l.is_raster())
                 {
                     p["layer"] = json!(l.name);
                 }
