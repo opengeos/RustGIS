@@ -135,6 +135,9 @@ pub fn gaps(ds: &Dataset, rows: &[usize]) -> Checked {
             let mp = geo::MultiPolygon::new(vec![geo::Polygon::new(hole.clone(), vec![])]);
             if mp.unsigned_area() > 1.0 {
                 out.push(TopologyError { rows: Vec::new(), at: centre(&mp) });
+                if out.len() >= MAX_ERRORS {
+                    return Checked::partial(out);
+                }
             }
         }
     }
@@ -268,14 +271,19 @@ pub fn dangles(ds: &Dataset, rows: &[usize], tol_m: f64) -> Checked {
             for end in [part.first(), part.last()].into_iter().flatten() {
                 let tol = tol_m / merc_to_lonlat(*end).y.to_radians().cos().max(0.01);
                 let near = grid.get(&key(end.x, end.y)).map(Vec::as_slice).unwrap_or(&[]);
-                let touches = near.iter().any(|&(oli, opi)| {
-                    work += 1;
-                    (oli != li || opi != pi)
-                        && lines
-                            .get(oli)
-                            .and_then(|(_, ps)| ps.get(opi))
-                            .is_some_and(|op| op.len() >= 2 && rustgis_data::geometry::seg_dist2(op, *end) <= tol * tol)
-                });
+                // The end's own part counts too, past the stretch next to the end (a line curling
+                // back onto itself, like a 6, doesn't dangle there).
+                let at_start = part.first() == Some(end);
+                let own_rest = rest_of_part(part, at_start, 2.0 * tol);
+                let touches = own_rest.len() >= 2 && rustgis_data::geometry::seg_dist2(&own_rest, *end) <= tol * tol
+                    || near.iter().any(|&(oli, opi)| {
+                        work += 1;
+                        (oli != li || opi != pi)
+                            && lines
+                                .get(oli)
+                                .and_then(|(_, ps)| ps.get(opi))
+                                .is_some_and(|op| op.len() >= 2 && rustgis_data::geometry::seg_dist2(op, *end) <= tol * tol)
+                    });
                 if work > MAX_WORK {
                     return Checked::partial(out);
                 }
@@ -289,6 +297,21 @@ pub fn dangles(ds: &Dataset, rows: &[usize], tol_m: f64) -> Checked {
         }
     }
     Checked::done(out)
+}
+
+/// A part without the stretch within `skip` metres (along the line) of one end: from the first
+/// vertex further than that, to the other end.
+fn rest_of_part(part: &[Coord], from_start: bool, skip: f64) -> Vec<Coord> {
+    let pts: Vec<Coord> = if from_start { part.to_vec() } else { part.iter().rev().copied().collect() };
+    let mut walked = 0.0;
+    for (i, w) in pts.windows(2).enumerate() {
+        let (Some(a), Some(b)) = (w.first(), w.get(1)) else { break };
+        walked += ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
+        if walked > skip {
+            return pts.get(i + 1..).map(<[Coord]>::to_vec).unwrap_or_default();
+        }
+    }
+    Vec::new()
 }
 
 /// Points of `ds` that fall in no polygon of `by`.
@@ -384,5 +407,18 @@ mod tests {
         let e = self_intersections(&ds, &[0]).errors;
         assert_eq!(e.len(), 1);
         assert!((e[0].at.x - 0.00015).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_line_curling_onto_itself_does_not_dangle_there() {
+        // A "6": the end comes back onto the line's own earlier part.
+        let six =
+            vec![Coord::new(0.0, 0.003), Coord::new(0.0, 0.0), Coord::new(0.001, 0.0), Coord::new(0.001, 0.001), Coord::new(0.0, 0.001)];
+        let mut ds = Dataset::new("l", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![six])), vec![]);
+        let d = dangles(&ds, &[0], 1.0);
+        assert!(d.complete);
+        assert_eq!(d.errors.len(), 1, "only the free top end dangles");
+        assert!((d.errors[0].at.y - 0.003).abs() < 1e-9);
     }
 }
