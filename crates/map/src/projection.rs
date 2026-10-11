@@ -139,7 +139,11 @@ const LIMIT: f64 = 4.0e7;
 impl Projector {
     pub fn new(code: &str) -> Result<Projector, String> {
         let (def, _) = lookup(code)?;
-        let preset = PRESETS.iter().find(|(id, _, _)| id.eq_ignore_ascii_case(code.trim())).map(|(id, _, _)| *id);
+        let code_t = code.trim();
+        let preset = PRESETS
+            .iter()
+            .find(|(id, label, _)| id.eq_ignore_ascii_case(code_t) || label.eq_ignore_ascii_case(code_t))
+            .map(|(id, _, _)| *id);
         let domain = Domain::of(preset, &def);
         let proj = def.split_whitespace().find_map(|t| t.strip_prefix("+proj=")).unwrap_or("");
         if let Some(kind) = crate::world::Kind::from_proj_name(proj) {
@@ -206,6 +210,23 @@ impl Projector {
         self.to_meter
     }
 
+    /// Ground metres per map unit at a map point, measured: a 1 km step east-west (the scale
+    /// bar's direction; north-south on the projection's edge) compared with the great-circle
+    /// distance it covers, on the sphere Web Mercator's scale uses so both agree. Falls back to
+    /// the unit size where no step stays in the projection.
+    pub fn ground_per_unit(&self, at: Coord) -> f64 {
+        let Some(c) = self.inverse(at) else { return self.to_meter };
+        let step = 1000.0 / self.to_meter;
+        let radius_ratio = rustgis_geom::MERCATOR_R / rustgis_geom::EARTH_RADIUS_M;
+        let steps = [Coord::new(step, 0.0), Coord::new(-step, 0.0), Coord::new(0.0, step), Coord::new(0.0, -step)];
+        steps
+            .iter()
+            .filter_map(|s| self.inverse(Coord::new(at.x + s.x, at.y + s.y)))
+            .map(|d| rustgis_geom::haversine_m(c, d) * radius_ratio / step)
+            .find(|k| k.is_finite() && *k > 0.0)
+            .unwrap_or(self.to_meter)
+    }
+
     pub fn domain(&self) -> Domain {
         self.domain
     }
@@ -248,7 +269,7 @@ impl Flat {
     pub fn ground_per_unit(&self, at: Coord) -> f64 {
         match self {
             Flat::Mercator => merc_to_lonlat(at).y.to_radians().cos().abs().max(0.01),
-            Flat::Custom(p) => p.to_meter(),
+            Flat::Custom(p) => p.ground_per_unit(at),
         }
     }
 
@@ -329,7 +350,13 @@ mod tests {
         let moll = Flat::Custom(std::sync::Arc::new(Projector::new("mollweide").unwrap()));
         let e = moll.extent(&Extent::new(-180.0, -90.0, 180.0, 90.0));
         assert!(e.width() > 3.55e7 && e.height() > 1.75e7, "the whole world, edges included: {e:?}");
-        assert!((moll.ground_per_unit(Coord::new(0.0, 0.0)) - 1.0).abs() < 1e-12);
+        // Mollweide's parallels are true at about ±40.7° and squeezed (0.9003) at the equator:
+        // a map unit there covers 1/0.9003 m of ground.
+        assert!((moll.ground_per_unit(Coord::new(0.0, 0.0)) - 1.0 / 0.9003).abs() < 2e-3);
+        let at = moll.forward(Coord::new(10.0, 40.73)).unwrap();
+        assert!((moll.ground_per_unit(at) - 1.0).abs() < 5e-3);
+        // A preset by label gets the same area of use as by id.
+        assert_eq!(Projector::new("USA Contiguous Albers Equal Area").unwrap().domain(), Projector::new("usaAlbers").unwrap().domain());
         assert!(Flat::Mercator.inverse(Coord::new(f64::NAN, 0.0)).is_none());
     }
 }
