@@ -370,6 +370,25 @@ fn hostile_params_never_panic() {
     }
 }
 
+#[test]
+fn every_tool_survives_an_environment_extent() {
+    // An extent holding some features, and one holding none, with every tool and junk params.
+    for extent in [json!([0, 40, 20, 55]), json!([-179.9, -89, -179.8, -88.9])] {
+        for t in rustgis_analysis::tools().filter(|t| !rustgis_analysis::is_external(t)) {
+            let mut s = world();
+            s.run("gp.env", &json!({"extent": extent})).unwrap();
+            for params in [json!({"input": "Countries"}), json!({"input": "Cities", "distance": 1e9, "clip": "Countries"})] {
+                let _ = s.run("gp.run", &json!({"tool": t.id, "params": params}));
+            }
+            let _ = s.run("info.project", &Value::Null);
+        }
+    }
+    let mut s = world();
+    s.run("gp.env", &json!({"extent": [-179.9, -89, -179.8, -88.9]})).unwrap();
+    let e = s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Cities", "distance": 10}})).unwrap_err();
+    assert!(e.contains("inside the environment"), "{e}");
+}
+
 #[cfg(feature = "geolibre")]
 #[test]
 fn geolibre_tools_run_on_layers_and_add_their_outputs() {

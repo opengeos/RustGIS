@@ -213,9 +213,23 @@ fn new_model(s: &mut Session, p: &Value) -> CmdResult {
             for r in s.project.gp_history.iter().filter(|r| r.ok) {
                 let Some(tool) = super::gp::tool_id(&r.tool) else { continue };
                 let mut params = r.params.clone();
+                // Only layer parameters can name an earlier output.
+                let spec = rustgis_analysis::tool(tool);
+                let is_layer = |k: &str| {
+                    spec.and_then(|t| t.params.iter().find(|p| p.name == k)).is_some_and(|p| {
+                        matches!(
+                            p.kind,
+                            rustgis_analysis::ParamKind::Layer
+                                | rustgis_analysis::ParamKind::PolygonLayer
+                                | rustgis_analysis::ParamKind::PointLayer
+                                | rustgis_analysis::ParamKind::RasterLayer
+                                | rustgis_analysis::ParamKind::VectorLayer
+                        )
+                    })
+                };
                 if let Value::Object(o) = &mut params {
-                    for v in o.values_mut() {
-                        if let Some(t) = v.as_str()
+                    for (key, v) in o.iter_mut() {
+                        if let Some(t) = v.as_str().filter(|_| is_layer(key))
                             && let Some(k) = outputs.iter().position(|outs| outs.iter().any(|x| x == t))
                         {
                             *v = json!(format!("%{}", k + 1));
@@ -259,19 +273,32 @@ fn run_model(s: &mut Session, p: &Value) -> CmdResult {
     let mut ran = Vec::new();
     for (i, st) in model.steps.iter().enumerate() {
         let mut params = st.params.clone();
-        if let Value::Object(o) = &mut params {
-            for v in o.values_mut() {
-                if let Some(t) = v.as_str().and_then(|t| t.strip_prefix('%')).and_then(|n| n.parse::<usize>().ok()) {
-                    let out = outputs.get(t.wrapping_sub(1)).ok_or_else(|| format!("step {} uses %{t}, which has no output", i + 1))?;
-                    *v = json!(out);
-                }
-            }
-        }
+        wire(&mut params, &outputs, i, 0)?;
+        let before = s.project.gp_history.len();
         let r = super::gp::run_tool(s, &st.tool, &params).map_err(|e| format!("step {} ({}): {e}", i + 1, st.tool))?;
-        outputs.push(s.project.gp_history.last().and_then(|h| h.outputs.first().cloned()).unwrap_or_default());
+        // A step that made no layer leaves nothing for a later %n to use.
+        let out =
+            (s.project.gp_history.len() > before).then(|| s.project.gp_history.last().and_then(|h| h.outputs.first().cloned())).flatten();
+        outputs.push(out.unwrap_or_default());
         ran.push(json!({"step": i + 1, "tool": st.tool, "result": r}));
     }
     Ok(json!({"model": model.name, "ran": ran}))
+}
+
+/// Replaces `%n` (step n's output layer) anywhere in a step's parameters, nested values too.
+fn wire(v: &mut Value, outputs: &[String], step: usize, depth: usize) -> Result<(), String> {
+    match v {
+        Value::String(t) => {
+            if let Some(n) = t.strip_prefix('%').and_then(|n| n.parse::<usize>().ok()) {
+                let out = outputs.get(n.wrapping_sub(1)).filter(|o| !o.is_empty());
+                *v = json!(out.ok_or_else(|| format!("step {} uses %{n}, but step {n} made no output layer", step + 1))?);
+            }
+        }
+        Value::Array(a) if depth < 8 => a.iter_mut().try_for_each(|x| wire(x, outputs, step, depth + 1))?,
+        Value::Object(o) if depth < 8 => o.values_mut().try_for_each(|x| wire(x, outputs, step, depth + 1))?,
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Runs a script of commands, one per line (`id {json}`), stopping at the first error.

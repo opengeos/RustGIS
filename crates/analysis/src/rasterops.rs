@@ -278,6 +278,9 @@ pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f6
     let (oc, or) = r.pixel_at(observer).ok_or("the observer is outside the raster")?;
     let z0 = r.value(b, oc, or).ok_or("the observer stands on no-data")? as f64 + height;
     let (cx, cy) = r.cell_size_m();
+    if !(cx > 0.0 && cy > 0.0 && radius_m.is_finite() && radius_m > 0.0) {
+        return Err("the raster's cells or the radius have no size".into());
+    }
     let rad_c = (radius_m / cx).ceil() as i64;
     let rad_r = (radius_m / cy).ceil() as i64;
     // Each cell walks a ray back to the observer: bound cells × ray length, not just cells.
@@ -345,11 +348,13 @@ pub fn idw(points: &[(Coord, f64)], extent: &Extent, cell_deg: f64, power: f64, 
     let mut data = Vec::with_capacity(w * h);
     let mut near: Vec<(f64, f64)> = Vec::with_capacity(points.len());
     for row in 0..h {
+        // East-west degrees shrink with latitude, which only changes by row.
+        let kx = (extent.max_y - (row as f64 + 0.5) * cell_deg).to_radians().cos();
         for col in 0..w {
             let c = Coord::new(extent.min_x + (col as f64 + 0.5) * cell_deg, extent.max_y - (row as f64 + 0.5) * cell_deg);
             near.clear();
             near.extend(points.iter().map(|(p, v)| {
-                let dx = (p.x - c.x) * c.y.to_radians().cos();
+                let dx = (p.x - c.x) * kx;
                 ((dx * dx + (p.y - c.y).powi(2)).sqrt(), *v)
             }));
             if k < near.len() {

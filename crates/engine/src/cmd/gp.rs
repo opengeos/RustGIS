@@ -139,7 +139,7 @@ pub fn external_start(s: &mut Session, tool: &str, params: &Value) -> Result<Ext
         let params = rustgis_analysis::resolve_params(spec, params)?;
         let job = rustgis_geolibre::prepare(
             spec,
-            &MapInputs(s.map(), &s.project.tables, env_rows(s.map(), &s.project.gp_env, &params)),
+            &MapInputs(s.map(), &s.project.tables, env_inputs(s.map(), &s.project.gp_env, &params)?),
             &params,
         )?;
         s.next_pending = s.next_pending.wrapping_add(1);
@@ -197,10 +197,23 @@ fn finish(s: &mut Session, p: &Value) -> CmdResult {
     apply(s, r.tool, r.params, r.result, r.millis)
 }
 
-/// A selection no row can match (a row index past any layer's end).
-static NONE: [usize; 1] = [usize::MAX];
-
 struct MapInputs<'a>(&'a rustgis_map::Map, &'a [Dataset], std::collections::HashMap<String, Vec<usize>>);
+
+/// The environment's rows for a run, refusing a run whose main input has no features inside the
+/// extent (which would otherwise process everything, or nothing).
+fn env_inputs(
+    map: &rustgis_map::Map,
+    env: &crate::project::GpEnvironment,
+    params: &Value,
+) -> Result<std::collections::HashMap<String, Vec<usize>>, String> {
+    let rows = env_rows(map, env, params);
+    if let Some((name, v)) = rows.iter().next()
+        && v.is_empty()
+    {
+        return Err(format!("no features of {name} are inside the environment's extent"));
+    }
+    Ok(rows)
+}
 
 /// The rows of the tool's main input (its `input` layer) inside the environment's extent, when
 /// that layer has no selection. Overlay layers (clip, erase, join targets…) stay whole.
@@ -232,9 +245,9 @@ impl Inputs for MapInputs<'_> {
     fn selection(&self, layer: &str) -> &[usize] {
         match self.0.layer_by_name(layer) {
             Some(l) if !l.selection.is_empty() => &l.selection,
-            // No selection: the environment's extent picks the rows. An extent holding none
-            // processes nothing rather than everything.
-            Some(l) => self.2.get(&l.name.to_ascii_lowercase()).map(|v| if v.is_empty() { &NONE[..] } else { v.as_slice() }).unwrap_or(&[]),
+            // No selection: the environment's extent picks the rows (an extent holding none is
+            // refused before the tool runs, by `env_inputs`).
+            Some(l) => self.2.get(&l.name.to_ascii_lowercase()).map(Vec::as_slice).unwrap_or(&[]),
             None => &[],
         }
     }
@@ -268,7 +281,8 @@ pub fn run_tool(s: &mut Session, tool: &str, params: &Value) -> CmdResult {
     let tool = tool_id(tool).unwrap_or(tool).to_string();
     let params = params.clone();
     let t0 = now_ms();
-    let res = rustgis_analysis::run(&tool, &MapInputs(s.map(), &s.project.tables, env_rows(s.map(), &s.project.gp_env, &params)), &params);
+    let res =
+        rustgis_analysis::run(&tool, &MapInputs(s.map(), &s.project.tables, env_inputs(s.map(), &s.project.gp_env, &params)?), &params);
     let millis = now_ms().saturating_sub(t0);
     let name = rustgis_analysis::tool(&tool).map(|t| t.name).unwrap_or("Tool").to_string();
     apply(s, name, params, res, millis)

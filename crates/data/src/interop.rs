@@ -4,8 +4,15 @@ use rustgis_geom::Coord;
 
 use crate::{Dataset, Geometry};
 
+/// Text for XML: special characters escaped, control characters (invalid in XML 1.0) dropped.
 fn xml(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.chars()
+        .filter(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r'))
+        .collect::<String>()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn coords(pts: &[Coord]) -> String {
@@ -132,7 +139,11 @@ pub fn wkt(g: &Geometry) -> String {
 
 /// CSV with a `wkt` geometry column and every attribute.
 pub fn to_wkt_csv(ds: &Dataset) -> String {
-    let q = |s: &str| if s.contains([',', '"', '\n']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() };
+    // Text starting like a formula is prefixed with ' so spreadsheets show it rather than run it.
+    let q = |s: &str| {
+        let s = if s.starts_with(['=', '+', '-', '@']) && s.parse::<f64>().is_err() { format!("'{s}") } else { s.to_string() };
+        if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
+    };
     let mut out = String::from("wkt");
     for f in &ds.fields {
         out.push(',');

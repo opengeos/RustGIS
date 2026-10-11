@@ -35,8 +35,8 @@ fn key(c: Coord) -> (i64, i64) {
 }
 
 /// The shortest route between two points over the lines of `rows`, joining where vertices
-/// coincide. Each edge costs its length times the row's `cost_field` value (1 when unset);
-/// `snap_m` is how far from the network the ends may be.
+/// coincide. Each edge costs its length times the row's `cost_field` value (1 when unset). Each
+/// end snaps to the nearest point on a line (within `snap_m`), where the route starts or stops.
 pub fn shortest_route(
     ds: &Dataset,
     rows: &[usize],
@@ -48,6 +48,7 @@ pub fn shortest_route(
     let mut ids: HashMap<(i64, i64), usize> = HashMap::new();
     let mut nodes: Vec<Coord> = Vec::new();
     let mut adj: Vec<Vec<(usize, f64, f64, usize)>> = Vec::new(); // (to, cost, length, row)
+    let mut segs: Vec<(usize, usize, f64, usize)> = Vec::new(); // (from, to, weight, row)
     let node = |c: Coord, ids: &mut HashMap<(i64, i64), usize>, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<(usize, f64, f64, usize)>>| {
         *ids.entry(key(c)).or_insert_with(|| {
             nodes.push(c);
@@ -69,23 +70,69 @@ pub fn shortest_route(
                 if let Some(v) = adj.get_mut(ib) {
                     v.push((ia, len * weight, len, *r));
                 }
+                segs.push((ia, ib, weight, *r));
             }
         }
         if nodes.len() > 5_000_000 {
             return Err("the network is too large".into());
         }
     }
-    let nearest = |p: Coord| {
-        nodes
-            .iter()
+    // The closest point on any segment: (segment, fraction along it, the point, metres away).
+    let nearest = |p: Coord, nodes: &[Coord]| -> Option<(usize, f64, Coord, f64)> {
+        let k = p.y.to_radians().cos().max(0.01);
+        segs.iter()
             .enumerate()
-            .map(|(i, n)| (i, haversine_m(*n, p)))
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .filter_map(|(i, (a, b, _, _))| {
+                let (a, b) = (*nodes.get(*a)?, *nodes.get(*b)?);
+                let (dx, dy) = ((b.x - a.x) * k, b.y - a.y);
+                let len2 = dx * dx + dy * dy;
+                let t = if len2 > 0.0 { (((p.x - a.x) * k * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                let q = Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y));
+                Some((i, t, q, haversine_m(q, p)))
+            })
+            .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal))
     };
-    let (s, ds_) = nearest(from).ok_or("the layer has no lines")?;
-    let (t, dt) = nearest(to).ok_or("the layer has no lines")?;
-    if ds_ > snap_m || dt > snap_m {
-        return Err(format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)));
+    // Each end becomes a node on its segment, joined to the segment's two ends.
+    let attach = |p: Coord, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<(usize, f64, f64, usize)>>| -> Result<(usize, usize, f64), String> {
+        let (si, t, q, d) = nearest(p, nodes).ok_or("the layer has no lines")?;
+        if d > snap_m {
+            return Err(format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)));
+        }
+        let &(a, b, weight, row) = segs.get(si).ok_or("the layer has no lines")?;
+        if t <= 0.0 {
+            return Ok((a, si, t));
+        }
+        if t >= 1.0 {
+            return Ok((b, si, t));
+        }
+        nodes.push(q);
+        adj.push(Vec::new());
+        let n = nodes.len() - 1;
+        for end in [a, b] {
+            let len = haversine_m(q, nodes.get(end).copied().unwrap_or(q));
+            if let Some(v) = adj.get_mut(n) {
+                v.push((end, len * weight, len, row));
+            }
+            if let Some(v) = adj.get_mut(end) {
+                v.push((n, len * weight, len, row));
+            }
+        }
+        Ok((n, si, t))
+    };
+    let (s, s_seg, s_t) = attach(from, &mut nodes, &mut adj)?;
+    let (t, t_seg, t_t) = attach(to, &mut nodes, &mut adj)?;
+    // Both ends on one segment: they're joined directly along it.
+    if s_seg == t_seg && s != t && (0.0..=1.0).contains(&s_t) && (0.0..=1.0).contains(&t_t) {
+        let (Some(&(_, _, weight, row)), Some(a), Some(b)) = (segs.get(s_seg), nodes.get(s).copied(), nodes.get(t).copied()) else {
+            return Err("the layer has no lines".into());
+        };
+        let len = haversine_m(a, b);
+        if let Some(v) = adj.get_mut(s) {
+            v.push((t, len * weight, len, row));
+        }
+        if let Some(v) = adj.get_mut(t) {
+            v.push((s, len * weight, len, row));
+        }
     }
     let n = nodes.len();
     let mut dist = vec![f64::INFINITY; n];
@@ -138,8 +185,14 @@ pub fn shortest_route(
     Ok(Route { path, length_m: length, cost, rows: used })
 }
 
-/// Points spread at random (but reproducibly, from `seed`) inside polygons: `per` in each.
+/// Most random points made in one call, and point-in-polygon tries spent making them.
+pub const MAX_POINTS: usize = 1_000_000;
+const MAX_TRIES: usize = 50_000_000;
+
+/// Points spread at random (but reproducibly, from `seed`) inside polygons: `per` in each, up to
+/// [`MAX_POINTS`] in all; thin polygons may get fewer (tries are bounded too).
 pub fn random_points(ds: &Dataset, rows: &[usize], per: usize, seed: u64) -> Vec<(usize, Coord)> {
+    let mut budget = MAX_TRIES;
     let mut state = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407) | 1;
     let mut rnd = move || {
         state ^= state << 13;
@@ -152,9 +205,10 @@ pub fn random_points(ds: &Dataset, rows: &[usize], per: usize, seed: u64) -> Vec
         let Some(Geometry::Polygon(polys)) = ds.features.get(*r).and_then(|f| f.geometry.as_ref()) else { continue };
         let e = ds.features.get(*r).and_then(|f| f.geometry.as_ref()).map(|g| g.extent()).unwrap_or_default();
         let mut placed = 0;
-        let mut tries = 0;
-        while placed < per && tries < per * 200 {
+        let mut tries = 0usize;
+        while placed < per && tries < per.saturating_mul(200) && budget > 0 && out.len() < MAX_POINTS {
             tries += 1;
+            budget -= 1;
             let c = Coord::new(e.min_x + rnd() * e.width(), e.min_y + rnd() * e.height());
             if polys.iter().any(|rings| rustgis_data::geometry::polygon_contains(rings, c)) {
                 out.push((*r, c));
@@ -315,5 +369,17 @@ mod tests {
         assert_eq!(sim[0].0, 1);
         let near = within(&ds, &rows, Coord::new(0.5, 0.001), 500.0);
         assert_eq!(near.first().map(|x| x.0), Some(0));
+    }
+
+    #[test]
+    fn route_ends_snap_onto_long_segments() {
+        // One straight road 10 km long, with vertices only at its ends.
+        let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.09, 0.0)]])), vec![]);
+        // Clicks beside its middle, far from both vertices but close to the road.
+        let r = shortest_route(&ds, &[0], Coord::new(0.03, 0.0001), Coord::new(0.06, -0.0001), None, 50.0).unwrap();
+        assert!((r.length_m - 3336.0).abs() < 20.0, "{}", r.length_m);
+        assert!((r.path[0].x - 0.03).abs() < 1e-9 && (r.path.last().unwrap().x - 0.06).abs() < 1e-9);
+        assert!(shortest_route(&ds, &[0], Coord::new(0.03, 0.01), Coord::new(0.06, 0.0), None, 50.0).is_err(), "1 km away");
     }
 }
