@@ -179,7 +179,7 @@ pub fn commands() -> Vec<C> {
             // History that came with an opened project is from a file too.
             let from_file_history = b(p, "fromHistory").unwrap_or(false) && p.get("steps").is_none() && s.history_from_file > 0;
             if !b(p, "imported").unwrap_or(false) && !from_file_history {
-                s.trusted_tasks.insert(name.to_lowercase());
+                s.trusted_tasks.insert(name.to_ascii_lowercase());
             }
             s.project.tasks.push(Task { name: name.clone(), description: ps(p, "description").unwrap_or("").chars().take(2000).collect(), steps: steps.into_iter().take(200).collect() });
             Ok(json!({"task": name}))
@@ -204,7 +204,7 @@ pub fn commands() -> Vec<C> {
             let before = s.project.tasks.len();
             s.project.tasks.retain(|t| !t.name.eq_ignore_ascii_case(name));
             // A later task by this name isn't the user's just because of its name.
-            s.trusted_tasks.remove(&name.to_lowercase());
+            s.trusted_tasks.remove(&name.to_ascii_lowercase());
             if s.project.tasks.len() == before { Err(format!("no task '{name}'")) } else { Ok(Value::Null) }
         })
         .params(r#"{"task": name}"#),
@@ -520,7 +520,7 @@ fn run_task(s: &mut Session, p: &Value) -> CmdResult {
             return Err(format!("step {} would run another task", i + 1));
         }
         // Tasks that came in a file (imported, or inside an opened project) can't touch files.
-        if !s.trusted_tasks.contains(&t.name.to_lowercase()) && touches_files(&st.command, &st.params) {
+        if !s.trusted_tasks.contains(&t.name.to_ascii_lowercase()) && touches_files(&st.command, &st.params) {
             return Err(format!(
                 "step {} ({}) reads or writes files or runs a script, which a task from a file can't do; make a new task with that step to run it",
                 i + 1,

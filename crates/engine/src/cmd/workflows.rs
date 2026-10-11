@@ -26,7 +26,7 @@ pub fn commands() -> Vec<C> {
             let n = ps(p, "name").ok_or("name is required")?;
             let before = s.project.models.len();
             s.project.models.retain(|m| !m.name.eq_ignore_ascii_case(n));
-            s.trusted_models.remove(&n.to_lowercase());
+            s.trusted_models.remove(&n.to_ascii_lowercase());
             if s.project.models.len() == before { Err(format!("no model '{n}'")) } else { Ok(Value::Null) }
         })
         .params(r#"{"name": model}"#),
@@ -260,7 +260,7 @@ fn new_model(s: &mut Session, p: &Value) -> CmdResult {
     // History that came with an opened project is from a file too.
     let file_history = b(p, "fromHistory").unwrap_or(false) && p.get("steps").is_none() && s.history_from_file > 0;
     if !b(p, "imported").unwrap_or(false) && !file_history {
-        s.trusted_models.insert(name.to_lowercase());
+        s.trusted_models.insert(name.to_ascii_lowercase());
     }
     let n = steps.len();
     s.project.models.push(Model { name: name.clone(), steps });
@@ -277,7 +277,7 @@ fn run_model(s: &mut Session, p: &Value) -> CmdResult {
         return Err(format!("{} has no steps", model.name));
     }
     // A model that came in a file (an opened project, or an imported tool) may not touch files.
-    if !s.trusted_models.contains(&model.name.to_lowercase())
+    if !s.trusted_models.contains(&model.name.to_ascii_lowercase())
         && let Some((i, st)) = model.steps.iter().enumerate().find(|(_, st)| super::items::touches_files("gp.run", &st.params))
     {
         return Err(format!(

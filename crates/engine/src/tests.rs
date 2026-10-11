@@ -1910,6 +1910,16 @@ fn presentations_and_notebooks() {
     let r = s.run("notebook.run", &json!({"notebook": opened})).unwrap();
     assert_eq!(r["error"], 0, "{r}");
     assert!(!s.project.notebooks.iter().any(|nb| nb.name == "Laundered"));
+    // Nor borrow trust from a notebook whose name differs only by non-ASCII case.
+    let text = json!({"nbformat": 4, "metadata": {"title": "éa"}, "cells": [{"cell_type": "code", "source": cell}]}).to_string();
+    s.run("notebook.open", &json!({"text": text})).unwrap();
+    s.run("notebook.new", &json!({"name": "Éa"})).unwrap();
+    let r = s.run("notebook.run", &json!({"notebook": "éa"})).unwrap();
+    assert_eq!(r["error"], 0, "{r}");
+    for name in ["Éa", "éa"] {
+        let at = s.project.notebooks.iter().position(|nb| nb.name == name).unwrap();
+        s.run("notebook.remove", &json!({"notebook": at})).unwrap();
+    }
     // Or plant a cell in a trusted notebook.
     let plant = format!("notebook.addCell {{\"notebook\": \"Analysis\", \"source\": {:?}}}", "share.exportMap {}");
     s.run("notebook.editCell", &json!({"notebook": opened.as_str(), "cell": 0, "source": plant})).unwrap();

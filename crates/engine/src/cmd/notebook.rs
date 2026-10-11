@@ -77,7 +77,7 @@ pub fn commands() -> Vec<C> {
             };
             let r = push(s, nb)?;
             // Trusted only once it exists.
-            s.trusted_notebooks.insert(name.to_lowercase());
+            s.trusted_notebooks.insert(name.to_ascii_lowercase());
             Ok(r)
         })
         .params(r#"{"name"?}"#),
@@ -89,7 +89,7 @@ pub fn commands() -> Vec<C> {
             nb.clamp();
             nb.name = unique_name(s, &nb.name);
             // Trust left over from a removed or undone notebook of this name doesn't carry over.
-            s.trusted_notebooks.remove(&nb.name.to_lowercase());
+            s.trusted_notebooks.remove(&nb.name.to_ascii_lowercase());
             push(s, nb)
         })
         .params(r#"{"path"?: "*.rgisnb|*.ipynb", "text"?: notebook JSON}"#),
@@ -104,7 +104,7 @@ pub fn commands() -> Vec<C> {
         C::new("notebook.remove", "Delete Notebook", "Catalog", |s, p| {
             let i = index(s, p)?;
             let nb = s.project.notebooks.remove(i);
-            s.trusted_notebooks.remove(&nb.name.to_lowercase());
+            s.trusted_notebooks.remove(&nb.name.to_ascii_lowercase());
             s.active_notebook = None;
             Ok(Value::Null)
         })
@@ -246,7 +246,7 @@ fn run_cells(s: &mut Session, p: &Value) -> CmdResult {
         let script = c.source.clone();
         // A notebook from a file (opened, or in an opened project) is someone else's: its
         // cells may not read or write files or run other scripts.
-        let trusted = s.project.notebooks.get(i).is_some_and(|nb| s.trusted_notebooks.contains(&nb.name.to_lowercase()));
+        let trusted = s.project.notebooks.get(i).is_some_and(|nb| s.trusted_notebooks.contains(&nb.name.to_ascii_lowercase()));
         let r = match (trusted, untrusted_line(&script)) {
             (false, Some(n)) => Err(format!(
                 "line {n} reads or writes files or runs a script, which a notebook from a file can't do; copy it into a new notebook to run it"

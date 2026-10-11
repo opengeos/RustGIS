@@ -308,15 +308,15 @@ fn unique_names<'a>(names: impl Iterator<Item = &'a mut String>) {
     let mut seen = std::collections::HashSet::new();
     let mut next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for name in names {
-        if seen.insert(name.to_lowercase()) {
+        if seen.insert(name.to_ascii_lowercase()) {
             continue;
         }
         let base = name.clone();
-        let k = next.entry(base.to_lowercase()).or_insert(1);
+        let k = next.entry(base.to_ascii_lowercase()).or_insert(1);
         loop {
             *k += 1;
             *name = format!("{base} {k}");
-            if seen.insert(name.to_lowercase()) {
+            if seen.insert(name.to_ascii_lowercase()) {
                 break;
             }
         }

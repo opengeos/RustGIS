@@ -14,7 +14,6 @@ use rustgis_engine::cmd::notebook::CellKind;
 #[derive(Default)]
 pub struct DocState {
     pub page: usize,
-    /// The page preview: what it shows, and its texture.
     /// The drawn page (or why it couldn't be drawn), by presentation, page and revision.
     pub preview: Option<(String, Result<egui::TextureHandle, String>)>,
     pub video_source: String,
@@ -312,8 +311,10 @@ pub fn notebook(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let _ = app.run("ui.saveItem", json!({"kind": "notebook"}));
         }
     });
-    let Some(nb) = app.session.project.notebooks.get(i).cloned() else { return };
-    for (k, cell) in nb.cells.iter().enumerate() {
+    // One cell is copied at a time (the commands below need the app), not the whole notebook.
+    let n = app.session.project.notebooks.get(i).map_or(0, |nb| nb.cells.len());
+    for k in 0..n {
+        let Some(cell) = app.session.project.notebooks.get(i).and_then(|nb| nb.cells.get(k)).cloned() else { break };
         egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t.border)).corner_radius(4).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
