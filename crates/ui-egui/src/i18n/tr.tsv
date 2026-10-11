@@ -8,6 +8,9 @@ A value, a field, or two of them joined by + − × ÷. Applies to the selected 
 About	Hakkında
 About RustGIS	RustGIS Hakkında
 About RustGIS.	RustGIS hakkında.
+Above	Üst
+Above Left	Sol Üst
+Above Right	Sağ Üst
 Activate Map	Haritayı Etkinleştir
 Add	Ekle
 Add\nData	Veri\nEkle
@@ -56,6 +59,9 @@ Band {n}	Bant {n}
 Bands	Bantlar
 Basemap	Altlık Harita
 Basemaps	Altlık Haritalar
+Below	Alt
+Below Left	Sol Alt
+Below Right	Sağ Alt
 Bilinear	Çift Doğrusal
 Blank	Boş
 Blue	Mavi
@@ -85,6 +91,7 @@ Case Field	Gruplama Alanı
 Catalog	Katalog
 Catalog\nPane	Katalog\nPaneli
 Cell size	Hücre boyutu
+Centered	Ortalanmış
 Change the map's backdrop.	Haritanın arka planını değiştir.
 Change the map's coordinate system	Haritanın koordinat sistemini değiştir
 Choose a band combination to display the raster layer.	Raster katmanını görüntülemek için bir bant kombinasyonu seçin.
@@ -94,12 +101,14 @@ Choose how the flat map lays out the Earth.	Düz haritanın Dünya'yı nasıl g�
 Choose how the layer is drawn.	Katmanın nasıl çizileceğini seç.
 Choose how the raster is drawn.	Rasterın nasıl çizileceğini seçin.
 Choose the interface language.	Arayüz dilini seç.
+Choose which layers a click identifies.	Bir tıklamanın hangi katmanları tanımlayacağını seç.
 Circle	Daire
 Classes	Sınıflar
 Classify	Sınıflandır
 Clear	Temizle
 Clear\nLimits	Sınırları\nTemizle
 Clear History	Geçmişi Temizle
+Clear Limits	Sınırları Temizle
 Clear Selection	Seçimi Temizle
 Clear selection	Seçimi temizle
 Clear the selection in every layer.	Tüm katmanlardaki seçimi temizle.
@@ -114,10 +123,12 @@ Click to add vertices · double-click to finish the line	Köşe eklemek için t�
 Click to switch between decimal degrees and DMS	Ondalık derece ile DMS arasında geçiş için tıklayın
 Clip	Kırp
 Clip Features	Detayları Kırp
+Clipboard	Pano
 Close	Kapat
 Close (Esc)	Kapat (Esc)
 Close Table	Tabloyu Kapat
 Close table	Tabloyu kapat
+Closest	En Yakın
 Collapse or expand the ribbon	Şeridi daralt veya genişlet
 Collapse the ribbon (Ctrl+F1)	Şeridi daralt (Ctrl+F1)
 Color	Renk
@@ -133,11 +144,20 @@ Compute a field's values.	Bir alanın değerlerini hesapla.
 Contents	İçindekiler
 Contrast	Kontrast
 Conversion	Dönüştürme
+Convert	Dönüştür
+Convert the selected layer's labels into an annotation layer.	Seçili katmanın etiketlerini bir not katmanına dönüştür.
+Convert To Annotation	Nota Dönüştür
 Coordinate System	Koordinat Sistemi
 Coordinate system	Koordinat sistemi
 Coordinate System…	Koordinat Sistemi…
+Copied {path}	{path} kopyalandı
 Copies the (selected) features of a layer to a new layer.	Bir katmanın (seçili) detaylarını yeni bir katmana kopyalar.
+Copy	Kopyala
 Copy Coordinates	Koordinatları Kopyala
+Copy Path	Yolu Kopyala
+Copy the selected features (also as GeoJSON text).	Seçili detayları kopyala (GeoJSON metni olarak da).
+Copy the selected features and delete them.	Seçili detayları kopyala ve sil.
+Copy the selected layer's data source path.	Seçili katmanın veri kaynağı yolunu kopyala.
 Couldn't download the font for {language}; pick the language again to retry.	{language} için yazı tipi indirilemedi; yeniden denemek için dili tekrar seçin.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Bir alanın sayısı, toplamı, ortalaması, minimumu, maksimumu ve standart sapması; isteğe bağlı olarak gruplama alanına göre.
 Countries, cities, rivers and lakes	Ülkeler, şehirler, nehirler ve göller
@@ -158,6 +178,7 @@ Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
 Current Project	Geçerli Proje
+Cut	Kes
 Dark\nMode	Koyu\nMod
 Data	Veri
 Data Design	Veri Tasarımı
@@ -193,6 +214,7 @@ Drag / middle-drag	Sürükleme / orta tuşla sürükleme
 Drag a box or click to zoom in	Yakınlaştırmak için kutu sürükleyin veya tıklayın
 Drag a box to zoom into.	Yakınlaştırılacak kutuyu sürükleyin.
 Draw a halo around label text.	Etiket metninin çevresine hale çiz.
+Draw labels at every scale and distance.	Etiketleri her ölçekte ve mesafede çiz.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	Seçili katmanda yeni detaylar çizin. Çizgileri ve poligonları bitirmek için çift tıklayın.
 Draw the layer at every scale.	Katmanı her ölçekte çiz.
 Drawing	Çizim
@@ -243,6 +265,7 @@ Expression	İfade
 Extract	Çıkar
 Extracts the parts of input features that fall inside clip polygons.	Girdi detaylarının kırpma poligonları içine düşen kısımlarını çıkarır.
 Failed	Başarısız
+Farthest	En Uzak
 Feature	Detay
 Feature\nTo Point	Detaydan\nNoktaya
 Feature Layer	Detay Katmanı
@@ -296,6 +319,8 @@ Group Option	Gruplama Seçeneği
 Halo	Hale
 Harbour (qualitative)	Liman (nitel)
 Help	Yardım
+Hide labels when the viewer is closer than this.	Görüntüleyen bundan daha yakındayken etiketleri gizle.
+Hide labels when the viewer is farther than this.	Görüntüleyen bundan daha uzaktayken etiketleri gizle.
 Histogram Equalize	Histogram Eşitleme
 History	Geçmiş
 Home	Home
@@ -321,12 +346,16 @@ Invert color scheme	Renk şemasını ters çevir
 Invert the selection.	Seçimi ters çevir.
 IS NULL	IS NULL
 keep current	geçerli olanı koru
+Keep the labelled features fixed as the map moves.	Harita hareket ederken etiketlenen detayları sabit tut.
 Keyboard Shortcuts	Klavye Kısayolları
 Keyboard shortcuts.	Klavye kısayolları.
 Kilometers	Kilometre
 Label	Etiket
 Label Class	Etiket Sınıfı
+Label Distance Range	Etiket Mesafe Aralığı
 Label Field	Etiket Alanı
+Label Placement	Etiket Yerleşimi
+Label Visibility Range	Etiket Görünürlük Aralığı
 Labeling	Etiketleme
 Lagoon	Lagün
 Lambert Cylindrical Equal Area	Lambert Silindirik Eşalan
@@ -337,6 +366,7 @@ Layer	Katman
 Layer From\nSelection	Seçimden\nKatman
 Layers	Katmanlar
 Layers and Table Views	Katmanlar ve Tablo Görünümleri
+Left	Sol
 LIKE	LIKE
 Limit which features draw with a SQL expression.	Hangi detayların çizileceğini bir SQL ifadesiyle sınırla.
 Line color	Çizgi rengi
@@ -351,6 +381,7 @@ Locate GeoLibre Runner	GeoLibre çalıştırıcısını bul
 Locate the GeoLibre runner	GeoLibre çalıştırıcısını bul
 Locate…	Bul…
 Location	Konum
+Lock	Kilitle
 Long	Tamsayı (Long)
 Longitude (X)	Boylam (X)
 Major Lakes	Büyük Göller
@@ -406,6 +437,7 @@ Next	Sonraki
 Next Extent	Sonraki Kapsam
 No	Hayır
 No bookmarks yet	Henüz yer imi yok
+No Pop-ups	Açılır Pencere Yok
 No standalone tables	Bağımsız tablo yok
 NoData	NoData
 None	Yok
@@ -446,15 +478,23 @@ Pan to a longitude/latitude.	Bir boylam/enleme kaydır.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Fareyle kaydırın, tekerlekle yakınlaştırın ve özniteliklerini görmek için detaylara tıklayın.
 Paper	Kâğıt
 Parent folder	Üst klasör
+Paste	Yapıştır
+Paste copied features into the selected layer, or as a new layer.	Kopyalanan detayları seçili katmana veya yeni bir katman olarak yapıştır.
+Paste Special	Özel Yapıştır
+Paste Special (as a new layer)	Özel Yapıştır (yeni katman olarak)
+Pause	Duraklat
 Percent Clip	Yüzde Kırpma
 Pixel	Piksel
 Pixel type	Piksel türü
+Placement	Yerleşim
 PNG image	PNG görüntüsü
 Point	Nokta
 Polar, conformal: Antarctica and the Southern Ocean.	Kutupsal, konform: Antarktika ve Güney Okyanusu.
 Polar, conformal: the Arctic and the northern lands.	Kutupsal, konform: Arktik ve kuzey toprakları.
 Polygon	Poligon
 Polyline	Çoklu Çizgi
+Pop-up Mode	Açılır Pencere Modu
+Pop-ups	Açılır Pencereler
 Populated Places	Yerleşim Yerleri
 Previous	Önceki
 Previous Extent	Önceki Kapsam
@@ -501,6 +541,7 @@ Reset brightness, contrast and gamma.	Parlaklık, kontrast ve gamayı sıfırla.
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Şerit özellik kapsamı: {total} özellikten {done} tanesi (%{pct}).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Şerit eşliği: {total} şerit özelliğinden {done} tanesinin RustGIS komutu var.
+Right	Sağ
 Robinson	Robinson
 Run	Çalıştır
 Run Tool	Aracı Çalıştır
@@ -545,8 +586,10 @@ Select Rows	Satır Seç
 Select rows with a SQL expression.	Satırları bir SQL ifadesiyle seç.
 Select Subset From Current Selection	Geçerli Seçimden Alt Küme Seç
 Selectable	Seçilebilir
+Selectable Layers	Seçilebilir Katmanlar
 Selected	Seçili
 Selected Features: {n}	Seçili Detaylar: {n}
+Selected in Contents	İçindekiler'de Seçili
 Selected only	Yalnızca seçililer
 Selecting Features	Detay Seçimi
 Selection	Seçim
@@ -568,6 +611,7 @@ Show or hide the Catalog pane.	Katalog panelini göster veya gizle.
 Show or hide the Contents pane.	İçindekiler panelini göster veya gizle.
 Show or hide the Geoprocessing pane.	Coğrafi İşleme panelini göster veya gizle.
 Show or hide the layer.	Katmanı göster veya gizle.
+Show the labels that don't fit, in red.	Sığmayan etiketleri kırmızıyla göster.
 Show the map as a 3D globe, or as a flat map again.	Haritayı 3B küre olarak veya yeniden düz harita olarak göster.
 Show the Symbology pane for the selected layer.	Seçili katman için Semboloji panelini göster.
 Simplify	Basitleştir
@@ -586,6 +630,7 @@ Statistics	İstatistikler
 Statistics Field	İstatistik Alanı
 Status Bar	Durum Çubuğu
 Std. Dev.	Std. Sapma
+Stop drawing labels, for faster navigation.	Daha hızlı gezinme için etiket çizmeyi durdur.
 Stretch	Germe
 Stretch\nType	Germe\nTürü
 Stretch Type	Germe Türü
@@ -622,6 +667,7 @@ Toolbox	Araç Kutusu
 Toolboxes	Araç Kutuları
 Tools	Araçlar
 Tools you run appear here.	Çalıştırdığınız araçlar burada görünür.
+Topmost Layer	En Üstteki Katman
 Total {total}   ·   Segment {segment}	Toplam {total}   ·   Bölüm {segment}
 Transparency	Saydamlık
 Triangle	Üçgen
@@ -640,10 +686,12 @@ Valid expression · {n} matching rows	Geçerli ifade · {n} eşleşen satır
 Vector and raster data	Vektör ve raster verisi
 Version {version}	Sürüm {version}
 View	Görünüm
+View Unplaced	Yerleşmeyenleri Göster
 View › Windows	Görünüm › Pencereler
 Visibility	Görünürlük
 Visibility Range	Görünürlük Aralığı
 Visible	Görünür
+Visible Layers	Görünür Katmanlar
 Web Mercator	Web Mercator
 Website	Web sitesi
 Welcome to RustGIS	RustGIS'e hoş geldiniz
@@ -652,6 +700,7 @@ WGS 84 / Globe	WGS 84 / Küre
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Koşul
 Where Clause	Where Yan Tümcesi
+Where labels sit relative to their features.	Etiketlerin detaylarına göre nerede durduğu.
 Windows	Pencereler
 Winkel Tripel	Winkel Tripel
 World	Dünya

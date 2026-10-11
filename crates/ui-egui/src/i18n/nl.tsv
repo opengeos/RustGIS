@@ -8,6 +8,9 @@ A value, a field, or two of them joined by + − × ÷. Applies to the selected 
 About	Over
 About RustGIS	Over RustGIS
 About RustGIS.	Over RustGIS.
+Above	Boven
+Above Left	Linksboven
+Above Right	Rechtsboven
 Activate Map	Kaart activeren
 Add	Toevoegen
 Add\nData	Gegevens\ntoevoegen
@@ -56,6 +59,9 @@ Band {n}	Band {n}
 Bands	Banden
 Basemap	Basiskaart
 Basemaps	Basiskaarten
+Below	Onder
+Below Left	Linksonder
+Below Right	Rechtsonder
 Bilinear	Bilineair
 Blank	Leeg
 Blue	Blauw
@@ -85,6 +91,7 @@ Case Field	Groeperingsveld
 Catalog	Catalogus
 Catalog\nPane	Catalogus-\nvenster
 Cell size	Celgrootte
+Centered	Gecentreerd
 Change the map's backdrop.	De achtergrond van de kaart wijzigen.
 Change the map's coordinate system	Het coördinatenstelsel van de kaart wijzigen
 Choose a band combination to display the raster layer.	Kies een bandcombinatie om de rasterlaag weer te geven.
@@ -94,12 +101,14 @@ Choose how the flat map lays out the Earth.	Kiezen hoe de platte kaart de aarde 
 Choose how the layer is drawn.	Kiezen hoe de laag wordt getekend.
 Choose how the raster is drawn.	Kies hoe het raster wordt getekend.
 Choose the interface language.	De interfacetaal kiezen.
+Choose which layers a click identifies.	Kiezen welke lagen een klik identificeert.
 Circle	Cirkel
 Classes	Klassen
 Classify	Classificeren
 Clear	Wissen
 Clear\nLimits	Limieten\nwissen
 Clear History	Geschiedenis wissen
+Clear Limits	Limieten wissen
 Clear Selection	Selectie wissen
 Clear selection	Selectie wissen
 Clear the selection in every layer.	De selectie in alle lagen wissen.
@@ -114,10 +123,12 @@ Click to add vertices · double-click to finish the line	Klik om hoekpunten toe 
 Click to switch between decimal degrees and DMS	Klik om te wisselen tussen decimale graden en GMS
 Clip	Clippen
 Clip Features	Objecten clippen
+Clipboard	Klembord
 Close	Sluiten
 Close (Esc)	Sluiten (Esc)
 Close Table	Tabel sluiten
 Close table	Tabel sluiten
+Closest	Dichtstbij
 Collapse or expand the ribbon	Lint samenvouwen of uitvouwen
 Collapse the ribbon (Ctrl+F1)	Lint samenvouwen (Ctrl+F1)
 Color	Kleur
@@ -133,11 +144,20 @@ Compute a field's values.	De waarden van een veld berekenen.
 Contents	Inhoud
 Contrast	Contrast
 Conversion	Conversie
+Convert	Converteren
+Convert the selected layer's labels into an annotation layer.	De labels van de geselecteerde laag converteren naar een annotatielaag.
+Convert To Annotation	Converteren naar annotatie
 Coordinate System	Coördinatenstelsel
 Coordinate system	Coördinatensysteem
 Coordinate System…	Coördinatenstelsel…
+Copied {path}	{path} gekopieerd
 Copies the (selected) features of a layer to a new layer.	Kopieert de (geselecteerde) objecten van een laag naar een nieuwe laag.
+Copy	Kopiëren
 Copy Coordinates	Coördinaten kopiëren
+Copy Path	Pad kopiëren
+Copy the selected features (also as GeoJSON text).	De geselecteerde objecten kopiëren (ook als GeoJSON-tekst).
+Copy the selected features and delete them.	De geselecteerde objecten kopiëren en verwijderen.
+Copy the selected layer's data source path.	Het gegevensbronpad van de geselecteerde laag kopiëren.
 Couldn't download the font for {language}; pick the language again to retry.	Kan het lettertype voor {language} niet downloaden; kies de taal opnieuw om het nog eens te proberen.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Aantal, som, gemiddelde, min, max en standaardafwijking van een veld, optioneel per groeperingsveld.
 Countries, cities, rivers and lakes	Landen, steden, rivieren en meren
@@ -158,6 +178,7 @@ Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
 Current Project	Huidig project
+Cut	Knippen
 Dark\nMode	Donkere\nmodus
 Data	Gegevens
 Data Design	Gegevensontwerp
@@ -193,6 +214,7 @@ Drag / middle-drag	Slepen / slepen met middelste knop
 Drag a box or click to zoom in	Sleep een kader of klik om in te zoomen
 Drag a box to zoom into.	Sleep een kader om op in te zoomen.
 Draw a halo around label text.	Een halo rond de labeltekst tekenen.
+Draw labels at every scale and distance.	Labels op elke schaal en afstand tekenen.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	Nieuwe objecten tekenen in de geselecteerde laag. Dubbelklik om lijnen en polygonen te voltooien.
 Draw the layer at every scale.	De laag op elke schaal tekenen.
 Drawing	Tekenen
@@ -243,6 +265,7 @@ Expression	Expressie
 Extract	Extraheren
 Extracts the parts of input features that fall inside clip polygons.	Extraheert de delen van invoerobjecten die binnen de clippolygonen vallen.
 Failed	Mislukt
+Farthest	Verst
 Feature	Object
 Feature\nTo Point	Object\nnaar punt
 Feature Layer	Objectlaag
@@ -296,6 +319,8 @@ Group Option	Groeperingsoptie
 Halo	Halo
 Harbour (qualitative)	Haven (kwalitatief)
 Help	Help
+Hide labels when the viewer is closer than this.	Labels verbergen wanneer de kijker dichterbij is.
+Hide labels when the viewer is farther than this.	Labels verbergen wanneer de kijker verder weg is.
 Histogram Equalize	Histogram egaliseren
 History	Geschiedenis
 Home	Home
@@ -321,12 +346,16 @@ Invert color scheme	Kleurenschema omkeren
 Invert the selection.	De selectie omkeren.
 IS NULL	IS NULL
 keep current	huidige behouden
+Keep the labelled features fixed as the map moves.	De gelabelde objecten vasthouden terwijl de kaart beweegt.
 Keyboard Shortcuts	Sneltoetsen
 Keyboard shortcuts.	Sneltoetsen.
 Kilometers	Kilometer
 Label	Label
 Label Class	Labelklasse
+Label Distance Range	Labelafstandsbereik
 Label Field	Labelveld
+Label Placement	Labelplaatsing
+Label Visibility Range	Labelzichtbaarheidsbereik
 Labeling	Labels
 Lagoon	Lagune
 Lambert Cylindrical Equal Area	Lambert cilindrisch oppervlaktegetrouw
@@ -337,6 +366,7 @@ Layer	Laag
 Layer From\nSelection	Laag uit\nselectie
 Layers	Lagen
 Layers and Table Views	Lagen en tabelweergaven
+Left	Links
 LIKE	LIKE
 Limit which features draw with a SQL expression.	Beperken welke objecten worden getekend met een SQL-expressie.
 Line color	Lijnkleur
@@ -351,6 +381,7 @@ Locate GeoLibre Runner	GeoLibre-runner zoeken
 Locate the GeoLibre runner	GeoLibre-runner zoeken
 Locate…	Zoeken…
 Location	Locatie
+Lock	Vergrendelen
 Long	Lang geheel getal
 Longitude (X)	Lengtegraad (X)
 Major Lakes	Grote meren
@@ -406,6 +437,7 @@ Next	Volgende
 Next Extent	Volgend bereik
 No	Nee
 No bookmarks yet	Nog geen bladwijzers
+No Pop-ups	Geen pop-ups
 No standalone tables	Geen zelfstandige tabellen
 NoData	NoData
 None	Geen
@@ -446,15 +478,23 @@ Pan to a longitude/latitude.	Pannen naar een lengte-/breedtegraad.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Pan met de muis, zoom met het wiel en klik op objecten om hun attributen te zien.
 Paper	Papier
 Parent folder	Bovenliggende map
+Paste	Plakken
+Paste copied features into the selected layer, or as a new layer.	Gekopieerde objecten in de geselecteerde laag plakken, of als nieuwe laag.
+Paste Special	Plakken speciaal
+Paste Special (as a new layer)	Plakken speciaal (als nieuwe laag)
+Pause	Pauzeren
 Percent Clip	Percentage afkappen
 Pixel	Pixel
 Pixel type	Pixeltype
+Placement	Plaatsing
 PNG image	PNG-afbeelding
 Point	Punt
 Polar, conformal: Antarctica and the Southern Ocean.	Polair, hoekgetrouw: Antarctica en de Zuidelijke Oceaan.
 Polar, conformal: the Arctic and the northern lands.	Polair, hoekgetrouw: het Noordpoolgebied en de noordelijke landen.
 Polygon	Polygoon
 Polyline	Polylijn
+Pop-up Mode	Pop-upmodus
+Pop-ups	Pop-ups
 Populated Places	Bewoonde plaatsen
 Previous	Vorige
 Previous Extent	Vorig bereik
@@ -501,6 +541,7 @@ Reset brightness, contrast and gamma.	Helderheid, contrast en gamma herstellen.
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Dekking lintfuncties: {done} van {total} functies ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Lintpariteit: {done} van {total} lintfuncties hebben een RustGIS-opdracht.
+Right	Rechts
 Robinson	Robinson
 Run	Uitvoeren
 Run Tool	Gereedschap uitvoeren
@@ -545,8 +586,10 @@ Select Rows	Rijen selecteren
 Select rows with a SQL expression.	Rijen selecteren met een SQL-expressie.
 Select Subset From Current Selection	Subset selecteren uit huidige selectie
 Selectable	Selecteerbaar
+Selectable Layers	Selecteerbare lagen
 Selected	Geselecteerd
 Selected Features: {n}	Geselecteerde objecten: {n}
+Selected in Contents	Geselecteerd in Inhoud
 Selected only	Alleen geselecteerde
 Selecting Features	Objecten selecteren
 Selection	Selectie
@@ -568,6 +611,7 @@ Show or hide the Catalog pane.	Het catalogusvenster tonen of verbergen.
 Show or hide the Contents pane.	Het venster Inhoud tonen of verbergen.
 Show or hide the Geoprocessing pane.	Het geoverwerkingsvenster tonen of verbergen.
 Show or hide the layer.	De laag tonen of verbergen.
+Show the labels that don't fit, in red.	De labels die niet passen in rood tonen.
 Show the map as a 3D globe, or as a flat map again.	De kaart als 3D-wereldbol tonen, of weer als platte kaart.
 Show the Symbology pane for the selected layer.	Het symbologievenster voor de geselecteerde laag tonen.
 Simplify	Vereenvoudigen
@@ -586,6 +630,7 @@ Statistics	Statistieken
 Statistics Field	Statistiekveld
 Status Bar	Statusbalk
 Std. Dev.	Std.afw.
+Stop drawing labels, for faster navigation.	Stoppen met labels tekenen, voor sneller navigeren.
 Stretch	Stretch
 Stretch\nType	Stretch-\ntype
 Stretch Type	Stretchtype
@@ -622,6 +667,7 @@ Toolbox	Gereedschapskist
 Toolboxes	Gereedschapskisten
 Tools	Gereedschappen
 Tools you run appear here.	Uitgevoerde gereedschappen verschijnen hier.
+Topmost Layer	Bovenste laag
 Total {total}   ·   Segment {segment}	Totaal {total}   ·   Segment {segment}
 Transparency	Transparantie
 Triangle	Driehoek
@@ -640,10 +686,12 @@ Valid expression · {n} matching rows	Geldige expressie · {n} overeenkomende ri
 Vector and raster data	Vector- en rastergegevens
 Version {version}	Versie {version}
 View	Beeld
+View Unplaced	Niet-geplaatste tonen
 View › Windows	Beeld › Vensters
 Visibility	Zichtbaarheid
 Visibility Range	Zichtbaarheidsbereik
 Visible	Zichtbaar
+Visible Layers	Zichtbare lagen
 Web Mercator	Web Mercator
 Website	Website
 Welcome to RustGIS	Welkom bij RustGIS
@@ -652,6 +700,7 @@ WGS 84 / Globe	WGS 84 / Wereldbol
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Waar
 Where Clause	Where-clausule
+Where labels sit relative to their features.	Waar labels staan ten opzichte van hun objecten.
 Windows	Vensters
 Winkel Tripel	Winkel Tripel
 World	Wereld

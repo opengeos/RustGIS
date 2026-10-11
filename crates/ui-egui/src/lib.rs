@@ -88,6 +88,8 @@ pub struct UiState {
     /// Tab rectangles from the last frame (for the contextual group header).
     pub tab_rects: Vec<(String, egui::Rect)>,
     pub tab_strip_rect: Option<egui::Rect>,
+    /// Text to put on the system clipboard at the end of the frame.
+    pub copy_out: Option<String>,
 }
 
 impl Default for UiState {
@@ -107,6 +109,7 @@ impl Default for UiState {
             shortcuts: false,
             tab_rects: Vec::new(),
             tab_strip_rect: None,
+            copy_out: None,
         }
     }
 }
@@ -368,12 +371,29 @@ impl RustGisApp {
                 let (lon, lat) = (p.get("lon").cloned().unwrap_or(Value::Null), p.get("lat").cloned().unwrap_or(Value::Null));
                 let v = self.session.run("identify", &json!({"lon": lon, "lat": lat, "tolerancePx": 5}))?;
                 if let (false, Some(lon), Some(lat)) = (v.is_null(), lon.as_f64(), lat.as_f64()) {
-                    self.map.popup = Some(mapview::Popup { info: v, at: rustgis_engine::geom::Coord::new(lon, lat) });
+                    self.map.popup = Some(mapview::Popup { info: v, at: rustgis_engine::geom::Coord::new(lon, lat), index: 0 });
                 } else {
                     self.map.popup = None;
                 }
             }
             "ui.shortcuts" => self.ui.shortcuts = true,
+            // Copy, cut and copy path also put their text on the system clipboard.
+            "ui.copy" | "ui.cut" | "ui.copyPath" => {
+                let cmd = match id {
+                    "ui.copy" => "edit.copy",
+                    "ui.cut" => "edit.cut",
+                    _ => "layer.copyPath",
+                };
+                let v = self.run(cmd, p.clone())?;
+                if let Some(t) = v.get("text").and_then(Value::as_str) {
+                    self.ui.copy_out = Some(t.to_string());
+                }
+                if id == "ui.copyPath" {
+                    self.session
+                        .notify(i18n::fmt("Copied {path}", &[("path", v.get("text").and_then(Value::as_str).unwrap_or(""))]), false);
+                }
+                return Ok(v);
+            }
             "ui.backstage" => self.ui.backstage = p.get("open").and_then(Value::as_bool).unwrap_or(!self.ui.backstage),
             "ui.tab" => {
                 if let Some(t) = p.get("tab").and_then(Value::as_str) {
@@ -601,6 +621,9 @@ impl RustGisApp {
         chrome::command_search(self, &ctx);
         chrome::about(self, &ctx);
         chrome::notices(self, &ctx);
+        if let Some(text) = self.ui.copy_out.take() {
+            ctx.copy_text(text);
+        }
         let title = format!("{}{} - RustGIS", self.session.project.name, if self.session.dirty { " •" } else { "" });
         if title != self.sent_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));

@@ -8,6 +8,9 @@ A value, a field, or two of them joined by + − × ÷. Applies to the selected 
 About	Haqqında
 About RustGIS	RustGIS haqqında
 About RustGIS.	RustGIS haqqında.
+Above	Yuxarı
+Above Left	Yuxarı sol
+Above Right	Yuxarı sağ
 Activate Map	Xəritəni aktivləşdir
 Add	Əlavə et
 Add\nData	Məlumat\nəlavə et
@@ -56,6 +59,9 @@ Band {n}	Kanal {n}
 Bands	Kanallar
 Basemap	Əsas xəritə
 Basemaps	Əsas xəritələr
+Below	Aşağı
+Below Left	Aşağı sol
+Below Right	Aşağı sağ
 Bilinear	Bilinear
 Blank	Boş
 Blue	Mavi
@@ -85,6 +91,7 @@ Case Field	Qrup sahəsi
 Catalog	Kataloq
 Catalog\nPane	Kataloq\npaneli
 Cell size	Xana ölçüsü
+Centered	Mərkəzdə
 Change the map's backdrop.	Xəritənin fonunu dəyişin.
 Change the map's coordinate system	Xəritənin koordinat sistemini dəyiş
 Choose a band combination to display the raster layer.	Rastr layını göstərmək üçün kanal kombinasiyası seçin.
@@ -94,12 +101,14 @@ Choose how the flat map lays out the Earth.	Düz xəritənin Yeri necə göstər
 Choose how the layer is drawn.	Layın necə çəkiləcəyini seçin.
 Choose how the raster is drawn.	Rastrın necə çəkiləcəyini seçin.
 Choose the interface language.	İnterfeys dilini seçin.
+Choose which layers a click identifies.	Klikin hansı layları müəyyən etdiyini seçin.
 Circle	Dairə
 Classes	Siniflər
 Classify	Təsnif et
 Clear	Təmizlə
 Clear\nLimits	Hədləri\ntəmizlə
 Clear History	Tarixçəni təmizlə
+Clear Limits	Hədləri təmizlə
 Clear Selection	Seçimi təmizlə
 Clear selection	Seçimi təmizlə
 Clear the selection in every layer.	Bütün laylarda seçimi təmizləyin.
@@ -114,10 +123,12 @@ Click to add vertices · double-click to finish the line	Təpə əlavə etmək �
 Click to switch between decimal degrees and DMS	Onluq dərəcə ilə DMS arasında keçid üçün klikləyin
 Clip	Kəs
 Clip Features	Obyektləri kəs
+Clipboard	Mübadilə buferi
 Close	Bağla
 Close (Esc)	Bağla (Esc)
 Close Table	Cədvəli bağla
 Close table	Cədvəli bağla
+Closest	Ən yaxın
 Collapse or expand the ribbon	Lenti yığ və ya aç
 Collapse the ribbon (Ctrl+F1)	Lenti yığ (Ctrl+F1)
 Color	Rəng
@@ -133,11 +144,20 @@ Compute a field's values.	Sahənin qiymətlərini hesablayın.
 Contents	Məzmun
 Contrast	Kontrast
 Conversion	Çevirmə
+Convert	Çevir
+Convert the selected layer's labels into an annotation layer.	Seçilmiş layın etiketlərini annotasiya layına çevirin.
+Convert To Annotation	Annotasiyaya çevir
 Coordinate System	Koordinat sistemi
 Coordinate system	Koordinat sistemi
 Coordinate System…	Koordinat sistemi…
+Copied {path}	{path} kopyalandı
 Copies the (selected) features of a layer to a new layer.	Layın (seçilmiş) obyektlərini yeni laya kopyalayır.
+Copy	Kopyala
 Copy Coordinates	Koordinatları kopyala
+Copy Path	Yolu kopyala
+Copy the selected features (also as GeoJSON text).	Seçilmiş obyektləri kopyalayın (həm də GeoJSON mətni kimi).
+Copy the selected features and delete them.	Seçilmiş obyektləri kopyalayın və silin.
+Copy the selected layer's data source path.	Seçilmiş layın məlumat mənbəyi yolunu kopyalayın.
 Couldn't download the font for {language}; pick the language again to retry.	{language} üçün şrift endirilə bilmədi; yenidən cəhd etmək üçün dili yenidən seçin.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Sahənin say, cəm, orta, min, maks və standart sapması, istəyə görə qrup sahəsi üzrə.
 Countries, cities, rivers and lakes	Ölkələr, şəhərlər, çaylar və göllər
@@ -158,6 +178,7 @@ Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
 Current Project	Cari layihə
+Cut	Kəs
 Dark\nMode	Qaranlıq\nrejim
 Data	Məlumat
 Data Design	Məlumat dizaynı
@@ -193,6 +214,7 @@ Drag / middle-drag	Sürüklə / orta düymə ilə sürüklə
 Drag a box or click to zoom in	Yaxınlaşdırmaq üçün çərçivə çəkin və ya klikləyin
 Drag a box to zoom into.	Yaxınlaşdırmaq üçün çərçivə çəkin.
 Draw a halo around label text.	Etiket mətni ətrafında halo çəkin.
+Draw labels at every scale and distance.	Etiketləri hər miqyasda və məsafədə çəkin.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	Seçilmiş layda yeni obyektlər çəkin. Xətləri və poliqonları bitirmək üçün iki dəfə klikləyin.
 Draw the layer at every scale.	Layı bütün miqyaslarda çəkin.
 Drawing	Çəkmə
@@ -243,6 +265,7 @@ Expression	İfadə
 Extract	Çıxarma
 Extracts the parts of input features that fall inside clip polygons.	Giriş obyektlərinin kəsmə poliqonları daxilinə düşən hissələrini çıxarır.
 Failed	Uğursuz oldu
+Farthest	Ən uzaq
 Feature	Obyekt
 Feature\nTo Point	Obyektdən\nnöqtəyə
 Feature Layer	Obyekt layı
@@ -296,6 +319,8 @@ Group Option	Qrup seçimi
 Halo	Halo
 Harbour (qualitative)	Liman (keyfiyyət)
 Help	Kömək
+Hide labels when the viewer is closer than this.	Baxan bundan yaxın olduqda etiketləri gizlədin.
+Hide labels when the viewer is farther than this.	Baxan bundan uzaq olduqda etiketləri gizlədin.
 Histogram Equalize	Histoqram bərabərləşdirmə
 History	Tarixçə
 Home	Home
@@ -321,12 +346,16 @@ Invert color scheme	Rəng sxemini tərsinə çevir
 Invert the selection.	Seçimi tərsinə çevirin.
 IS NULL	IS NULL
 keep current	cari saxla
+Keep the labelled features fixed as the map moves.	Xəritə hərəkət etdikcə etiketlənmiş obyektləri sabit saxlayın.
 Keyboard Shortcuts	Klaviatura qısayolları
 Keyboard shortcuts.	Klaviatura qısayolları.
 Kilometers	Kilometr
 Label	Etiket
 Label Class	Etiket sinfi
+Label Distance Range	Etiket məsafə diapazonu
 Label Field	Etiket sahəsi
+Label Placement	Etiket yerləşdirilməsi
+Label Visibility Range	Etiket görünmə diapazonu
 Labeling	Etiketləmə
 Lagoon	Laquna
 Lambert Cylindrical Equal Area	Lambert bərabər sahəli silindrik
@@ -337,6 +366,7 @@ Layer	Lay
 Layer From\nSelection	Seçimdən\nlay
 Layers	Laylar
 Layers and Table Views	Laylar və cədvəl görünüşləri
+Left	Sol
 LIKE	LIKE
 Limit which features draw with a SQL expression.	SQL ifadəsi ilə hansı obyektlərin çəkildiyini məhdudlaşdırın.
 Line color	Xətt rəngi
@@ -351,6 +381,7 @@ Locate GeoLibre Runner	GeoLibre işlədicisini tap
 Locate the GeoLibre runner	GeoLibre işlədicisini tap
 Locate…	Tap…
 Location	Məkan
+Lock	Kilidlə
 Long	Long
 Longitude (X)	Uzunluq dairəsi (X)
 Major Lakes	Əsas göllər
@@ -406,6 +437,7 @@ Next	Növbəti
 Next Extent	Növbəti hüdud
 No	Xeyr
 No bookmarks yet	Hələ əlfəcin yoxdur
+No Pop-ups	Açılan pəncərə yoxdur
 No standalone tables	Müstəqil cədvəl yoxdur
 NoData	NoData
 None	Heç biri
@@ -446,15 +478,23 @@ Pan to a longitude/latitude.	Uzunluq/en dairəsinə sürüşdürün.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Siçanla sürüşdürün, çarxla miqyası dəyişin və atributlarını görmək üçün obyektlərə klikləyin.
 Paper	Kağız
 Parent folder	Ana qovluq
+Paste	Yapışdır
+Paste copied features into the selected layer, or as a new layer.	Kopyalanmış obyektləri seçilmiş laya və ya yeni lay kimi yapışdırın.
+Paste Special	Xüsusi yapışdır
+Paste Special (as a new layer)	Xüsusi yapışdır (yeni lay kimi)
+Pause	Dayandır
 Percent Clip	Faiz kəsimi
 Pixel	Piksel
 Pixel type	Piksel tipi
+Placement	Yerləşdirmə
 PNG image	PNG təsviri
 Point	Nöqtə
 Polar, conformal: Antarctica and the Southern Ocean.	Qütb, konform: Antarktida və Cənub okeanı.
 Polar, conformal: the Arctic and the northern lands.	Qütb, konform: Arktika və şimal torpaqları.
 Polygon	Poliqon
 Polyline	Polixətt
+Pop-up Mode	Açılan pəncərə rejimi
+Pop-ups	Açılan pəncərələr
 Populated Places	Yaşayış məntəqələri
 Previous	Əvvəlki
 Previous Extent	Əvvəlki hüdud
@@ -501,6 +541,7 @@ Reset brightness, contrast and gamma.	Parlaqlığı, kontrastı və qammanı sı
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Lent funksiyalarının əhatəsi: {total} funksiyadan {done} ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Lent uyğunluğu: {total} lent funksiyasından {done} RustGIS əmrinə malikdir.
+Right	Sağ
 Robinson	Robinson
 Run	İşə sal
 Run Tool	Aləti işə sal
@@ -545,8 +586,10 @@ Select Rows	Sətirləri seç
 Select rows with a SQL expression.	Sətirləri SQL ifadəsi ilə seçin.
 Select Subset From Current Selection	Cari seçimdən alt çoxluq seç
 Selectable	Seçilə bilən
+Selectable Layers	Seçilə bilən laylar
 Selected	Seçilmiş
 Selected Features: {n}	Seçilmiş obyektlər: {n}
+Selected in Contents	Məzmunda seçilmiş
 Selected only	Yalnız seçilmişlər
 Selecting Features	Obyektlərin seçilməsi
 Selection	Seçim
@@ -568,6 +611,7 @@ Show or hide the Catalog pane.	Kataloq panelini göstərin və ya gizlədin.
 Show or hide the Contents pane.	Məzmun panelini göstərin və ya gizlədin.
 Show or hide the Geoprocessing pane.	Geoemal panelini göstərin və ya gizlədin.
 Show or hide the layer.	Layı göstərin və ya gizlədin.
+Show the labels that don't fit, in red.	Sığmayan etiketləri qırmızı rəngdə göstərin.
 Show the map as a 3D globe, or as a flat map again.	Xəritəni 3D qlobus kimi və ya yenidən düz xəritə kimi göstər.
 Show the Symbology pane for the selected layer.	Seçilmiş lay üçün Simvolika panelini göstərin.
 Simplify	Sadələşdir
@@ -586,6 +630,7 @@ Statistics	Statistika
 Statistics Field	Statistika sahəsi
 Status Bar	Status paneli
 Std. Dev.	Std. sapma
+Stop drawing labels, for faster navigation.	Daha sürətli naviqasiya üçün etiketlərin çəkilməsini dayandırın.
 Stretch	Genişləndirmə
 Stretch\nType	Genişləndirmə\ntipi
 Stretch Type	Genişləndirmə tipi
@@ -622,6 +667,7 @@ Toolbox	Alətlər qutusu
 Toolboxes	Alətlər qutuları
 Tools	Alətlər
 Tools you run appear here.	İşə saldığınız alətlər burada görünür.
+Topmost Layer	Ən üstdəki lay
 Total {total}   ·   Segment {segment}	Cəmi {total}   ·   Seqment {segment}
 Transparency	Şəffaflıq
 Triangle	Üçbucaq
@@ -640,10 +686,12 @@ Valid expression · {n} matching rows	İfadə düzgündür · {n} uyğun sətir
 Vector and raster data	Vektor və rastr məlumatı
 Version {version}	Versiya {version}
 View	Görünüş
+View Unplaced	Yerləşməyənləri göstər
 View › Windows	Görünüş › Pəncərələr
 Visibility	Görünmə
 Visibility Range	Görünmə diapazonu
 Visible	Görünən
+Visible Layers	Görünən laylar
 Web Mercator	Web Mercator
 Website	Veb sayt
 Welcome to RustGIS	RustGIS-ə xoş gəlmisiniz
@@ -652,6 +700,7 @@ WGS 84 / Globe	WGS 84 / Qlobus
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Where
 Where Clause	Where şərti
+Where labels sit relative to their features.	Etiketlərin obyektlərinə nisbətən harada yerləşdiyi.
 Windows	Pəncərələr
 Winkel Tripel	Winkel Tripel
 World	Dünya

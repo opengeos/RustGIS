@@ -281,6 +281,15 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
             if i.consume_key(Modifiers::NONE, Key::Home) {
                 run.push(("map.zoomFull", Value::Null));
             }
+            // Clipboard keys arrive as events, not key presses.
+            for e in &i.events {
+                match e {
+                    egui::Event::Copy => run.push(("ui.copy", Value::Null)),
+                    egui::Event::Cut => run.push(("ui.cut", Value::Null)),
+                    egui::Event::Paste(text) => run.push(("edit.paste", json!({"text": text}))),
+                    _ => {}
+                }
+            }
         }
     });
     for (id, p) in run {
@@ -291,7 +300,11 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
                 continue;
             }
         }
-        if id == "edit.delete" && app.session.map().selection_count() == 0 {
+        if matches!(id, "edit.delete" | "ui.copy" | "ui.cut") && app.session.map().selection_count() == 0 {
+            continue;
+        }
+        // Pasting text that isn't features (a stray copy from elsewhere) does nothing.
+        if id == "edit.paste" && !p.get("text").and_then(Value::as_str).is_some_and(|t| t.trim_start().starts_with('{')) {
             continue;
         }
         let _ = app.run(id, p);

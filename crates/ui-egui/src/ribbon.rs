@@ -203,7 +203,23 @@ fn tool_btn(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, desc: &s
     }
 }
 
+/// The Clipboard group shared by the Map and Edit tabs.
+fn clipboard_group(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Clipboard", |ui| {
+        big_menu(ui, app, "paste", "Paste", "Paste copied features into the selected layer, or as a new layer.", |ui, app| {
+            menu_item(ui, app, "paste", "Paste", "edit.paste", Value::Null);
+            menu_item(ui, app, "paste", "Paste Special (as a new layer)", "edit.pasteSpecial", Value::Null);
+        });
+        col(ui, |ui| {
+            small(ui, app, "cut", "Cut", "Copy the selected features and delete them.", "ui.cut", Value::Null, false);
+            small(ui, app, "copy", "Copy", "Copy the selected features (also as GeoJSON text).", "ui.copy", Value::Null, false);
+            small(ui, app, "copy_path", "Copy Path", "Copy the selected layer's data source path.", "ui.copyPath", Value::Null, false);
+        });
+    });
+}
+
 fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    clipboard_group(app, ui);
     group(ui, "Navigate", |ui| {
         tool_btn(
             ui,
@@ -239,6 +255,17 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
             small(ui, app, "prev_extent", "Previous", "Go back to the previous extent.", "map.prevExtent", Value::Null, false);
             small(ui, app, "next_extent", "Next", "Go forward to the next extent.", "map.nextExtent", Value::Null, false);
             small(ui, app, "goto_xy", "Go To XY", "Pan to a longitude/latitude.", "ui.dialog", json!({"name": "goToXY"}), false);
+        });
+        col(ui, |ui| {
+            let mode = app.session.map().popup_mode;
+            small_menu(ui, app, "popup", "Pop-ups", "Choose which layers a click identifies.", |ui, app| {
+                for m in rustgis_engine::map::PopupMode::ALL {
+                    if ui.radio(mode == m, tl!(m.label())).clicked() {
+                        let _ = app.run("map.popupMode", json!({"mode": m.code()}));
+                        ui.close();
+                    }
+                }
+            });
         });
     });
     group(ui, "Layer", |ui| {
@@ -322,6 +349,41 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
             "labels.enable",
             Value::Null,
             on,
+            false,
+        );
+        let d = app.session.map().label_display;
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "label_lock",
+                "Lock",
+                "Keep the labelled features fixed as the map moves.",
+                "labels.lock",
+                Value::Null,
+                d.locked,
+            );
+            small(ui, app, "label_pause", "Pause", "Stop drawing labels, for faster navigation.", "labels.pause", Value::Null, d.paused);
+            small(
+                ui,
+                app,
+                "label_unplaced",
+                "View Unplaced",
+                "Show the labels that don't fit, in red.",
+                "labels.viewUnplaced",
+                Value::Null,
+                d.show_unplaced,
+            );
+        });
+        big(
+            ui,
+            app,
+            "label_convert",
+            "Convert",
+            "Convert the selected layer's labels into an annotation layer.",
+            "labels.convert",
+            Value::Null,
+            false,
             false,
         );
     });
@@ -609,6 +671,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
 }
 
 fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    clipboard_group(app, ui);
     group(ui, "Manage Edits", |ui| {
         big(ui, app, "save", "Save", "Save the project with your edits.", "ui.save", Value::Null, false, false);
         col(ui, |ui| {
@@ -1112,6 +1175,65 @@ fn labeling_tab(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Layer", |ui| {
         let on = layer.labels.enabled;
         big(ui, app, if on { "label" } else { "label_off" }, "Label", "Turn labels on or off.", "labels.enable", Value::Null, on, false);
+    });
+    group(ui, "Visibility Range", |ui| {
+        ui.vertical(|ui| {
+            ui.add_space(6.0);
+            for (label, cur, key) in [("Out Beyond", layer.labels.min_scale, "min"), ("In Beyond", layer.labels.max_scale, "max")] {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tl!(label)).size(11.5));
+                    egui::ComboBox::from_id_salt(format!("label_scale_{key}")).selected_text(scale_label(cur)).width(118.0).show_ui(
+                        ui,
+                        |ui| {
+                            let mut choices: Vec<Option<f64>> = vec![None];
+                            choices.extend(SCALES.iter().map(|s| Some(*s)));
+                            for c in choices {
+                                if ui.selectable_label(c == cur, scale_label(c)).clicked() {
+                                    let _ = app.run("labels.scaleRange", json!({key: c}));
+                                }
+                            }
+                        },
+                    );
+                });
+            }
+        });
+        col(ui, |ui| {
+            for (label, cur, key, desc) in [
+                ("Closest", layer.labels.closest, "closest", "Hide labels when the viewer is closer than this."),
+                ("Farthest", layer.labels.farthest, "farthest", "Hide labels when the viewer is farther than this."),
+            ] {
+                small_menu(ui, app, "eye", label, desc, |ui, app| {
+                    for d in [None, Some(1_000.0), Some(10_000.0), Some(100_000.0), Some(1_000_000.0), Some(10_000_000.0)] {
+                        let text = d.map(rustgis_engine::geom::format_distance).unwrap_or_else(|| tl!("<None>").to_string());
+                        if ui.radio(cur == d, text).clicked() {
+                            let _ = app.run("labels.distanceRange", json!({key: d}));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            small(
+                ui,
+                app,
+                "scale_label",
+                "Clear Limits",
+                "Draw labels at every scale and distance.",
+                "labels.scaleRange",
+                json!({"clear": true}),
+                false,
+            );
+        });
+    });
+    group(ui, "Label Placement", |ui| {
+        let cur = layer.labels.placement;
+        big_menu(ui, app, "placement", "Placement", "Where labels sit relative to their features.", |ui, app| {
+            for pl in rustgis_engine::map::LabelPlacement::ALL {
+                if ui.radio(cur == pl, tl!(pl.label())).clicked() {
+                    let _ = app.run("labels.placement", json!({"position": pl.code()}));
+                    ui.close();
+                }
+            }
+        });
     });
     group(ui, "Label Class", |ui| {
         ui.vertical(|ui| {

@@ -144,7 +144,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 69, "coverage fell to {done}");
+    assert!(done >= 94, "coverage fell to {done}");
 }
 
 #[test]
@@ -445,4 +445,109 @@ fn geolibre_runs_can_finish_asynchronously() {
     let run = external_start(&mut s, "geolibre:slope", &json!({"input": "scene"})).unwrap();
     s.run("project.new", &Value::Null).unwrap();
     assert!(external_complete(&mut s, run.id, Ok((vec![], vec![]))).unwrap_err().contains("project was closed"));
+}
+
+#[test]
+fn clipboard_copies_cuts_and_pastes_features() {
+    let mut s = world();
+    assert!(s.run("edit.copy", &Value::Null).is_err(), "nothing selected");
+    s.run("select.byAttributes", &json!({"layer": "Cities", "where": "name = 'Paris'"})).unwrap();
+    let r = s.run("edit.copy", &Value::Null).unwrap();
+    assert_eq!(r["copied"], 1);
+    let text = r["text"].as_str().unwrap().to_string();
+    assert!(text.contains("Paris"));
+    // Into the same layer, then as a new layer, then from GeoJSON text.
+    let n = s.map().layer_by_name("Cities").unwrap().dataset.features.len();
+    s.run("edit.paste", &json!({"layer": "Cities"})).unwrap();
+    assert_eq!(s.map().layer_by_name("Cities").unwrap().dataset.features.len(), n + 1);
+    assert!(s.run("edit.paste", &json!({"layer": "Countries"})).is_err(), "points don't go in polygons");
+    let r = s.run("edit.pasteSpecial", &json!({"name": "Copied"})).unwrap();
+    assert_eq!(r["pasted"], 1);
+    assert_eq!(s.map().layer_by_name("Copied").unwrap().dataset.features.len(), 1);
+    s.run("edit.pasteSpecial", &json!({"text": text, "name": "FromText"})).unwrap();
+    assert!(s.map().layer_by_name("FromText").is_some());
+    assert!(s.run("edit.paste", &json!({"layer": "Cities", "text": "not json"})).is_err());
+    // Cut removes the features.
+    s.run("select.byAttributes", &json!({"layer": "Cities", "where": "name = 'Paris'"})).unwrap();
+    let cut = s.run("edit.cut", &Value::Null).unwrap();
+    assert_eq!(cut["copied"], 2);
+    assert_eq!(s.map().layer_by_name("Cities").unwrap().dataset.features.len(), n - 1);
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.map().layer_by_name("Cities").unwrap().dataset.features.len(), n + 1);
+    // The sample layers live in the project, not in files.
+    assert!(s.run("layer.copyPath", &json!({"layer": "Cities"})).is_err());
+}
+
+#[test]
+fn popup_modes_choose_what_identify_reports() {
+    let mut s = world();
+    let at = json!({"lon": 2.35, "lat": 48.85, "tolerancePx": 5});
+    let top = s.run("identify", &at).unwrap();
+    assert_eq!(top["layer"], "Cities");
+    s.run("map.popupMode", &json!({"mode": "visible"})).unwrap();
+    let all = s.run("identify", &at).unwrap();
+    let layers: Vec<&str> = all["results"].as_array().unwrap().iter().map(|r| r["layer"].as_str().unwrap()).collect();
+    assert_eq!(layers, ["Cities", "Countries"]);
+    s.run("map.popupMode", &json!({"mode": "selectedInContents"})).unwrap();
+    s.run("layer.select", &json!({"layer": "Countries"})).unwrap();
+    assert_eq!(s.run("identify", &at).unwrap()["layer"], "Countries");
+    s.run("map.popupMode", &json!({"mode": "none"})).unwrap();
+    assert!(s.run("identify", &at).unwrap().is_null());
+    assert!(s.run("map.popupMode", &json!({"mode": "bogus"})).is_err());
+    // The mode is saved with the project.
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(text.contains("\"popup_mode\":\"None\""));
+}
+
+#[test]
+fn label_range_placement_lock_and_convert() {
+    use crate::render::View;
+    let mut s = world();
+    s.run("labels.enable", &json!({"layer": "Countries", "on": true})).unwrap();
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 20_000_000})).unwrap();
+    let view = |s: &Session| View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false };
+    let count = |s: &mut Session| {
+        let v = view(s);
+        crate::render::render(s.map_mut(), &v).unwrap().labels.len()
+    };
+    let placed = count(&mut s);
+    assert!(placed > 5);
+    // Out beyond 1:5,000,000: no labels at 1:20,000,000.
+    s.run("labels.scaleRange", &json!({"layer": "Countries", "min": 5_000_000})).unwrap();
+    let n = count(&mut s);
+    assert!(n < placed, "{n} < {placed}");
+    s.run("labels.scaleRange", &json!({"layer": "Countries", "clear": true})).unwrap();
+    assert_eq!(count(&mut s), placed);
+    s.run("labels.distanceRange", &json!({"layer": "Countries", "farthest": 1000})).unwrap();
+    assert!(count(&mut s) < placed);
+    s.run("labels.distanceRange", &json!({"layer": "Countries", "farthest": null})).unwrap();
+    assert!(s.run("labels.scaleRange", &json!({"layer": "Countries", "min": -4})).is_err());
+    // Pause hides every label; unplaced labels are reported when asked for.
+    s.run("labels.pause", &json!({"on": true})).unwrap();
+    assert_eq!(count(&mut s), 0);
+    s.run("labels.pause", &json!({"on": false})).unwrap();
+    s.run("labels.viewUnplaced", &json!({"on": true})).unwrap();
+    let v = view(&s);
+    let r = crate::render::render(s.map_mut(), &v).unwrap();
+    assert!(!r.unplaced.is_empty() && r.unplaced.iter().all(|l| l.color == crate::render::UNPLACED));
+    s.run("labels.viewUnplaced", &json!({"on": false})).unwrap();
+    // Placement moves labels.
+    s.run("labels.placement", &json!({"layer": "Cities", "position": "right"})).unwrap();
+    assert_eq!(s.map().layer_by_name("Cities").unwrap().labels.placement, crate::map::LabelPlacement::Right);
+    assert!(s.run("labels.placement", &json!({"position": "sideways"})).is_err());
+    // Lock keeps the labelled set as the map moves.
+    s.run("labels.lock", &json!({"on": true})).unwrap();
+    let locked = count(&mut s);
+    assert!(s.map().label_lock.is_some());
+    s.run("map.zoomOut", &Value::Null).unwrap();
+    assert!(count(&mut s) <= locked);
+    s.run("labels.lock", &json!({"on": false})).unwrap();
+    count(&mut s);
+    assert!(s.map().label_lock.is_none());
+    // Convert makes an annotation layer and turns the source's labels off.
+    let r = s.run("labels.convert", &json!({"layer": "Countries"})).unwrap();
+    assert!(r["annotations"].as_u64().unwrap() > 100);
+    let a = s.map().layer_by_name("Countries Annotation").unwrap();
+    assert!(a.labels.enabled && a.labels.field == "TEXT");
+    assert!(!s.map().layer_by_name("Countries").unwrap().labels.enabled);
 }

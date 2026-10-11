@@ -8,6 +8,9 @@ A value, a field, or two of them joined by + − × ÷. Applies to the selected 
 About	Giới thiệu
 About RustGIS	Giới thiệu RustGIS
 About RustGIS.	Giới thiệu RustGIS.
+Above	Trên
+Above Left	Trên trái
+Above Right	Trên phải
 Activate Map	Kích hoạt bản đồ
 Add	Thêm
 Add\nData	Thêm\ndữ liệu
@@ -56,6 +59,9 @@ Band {n}	Kênh {n}
 Bands	Kênh
 Basemap	Bản đồ nền
 Basemaps	Bản đồ nền
+Below	Dưới
+Below Left	Dưới trái
+Below Right	Dưới phải
 Bilinear	Song tuyến
 Blank	Trống
 Blue	Xanh lam
@@ -85,6 +91,7 @@ Case Field	Trường phân nhóm
 Catalog	Danh mục
 Catalog\nPane	Ngăn\ndanh mục
 Cell size	Kích thước ô
+Centered	Căn giữa
 Change the map's backdrop.	Thay đổi nền của bản đồ.
 Change the map's coordinate system	Đổi hệ tọa độ của bản đồ
 Choose a band combination to display the raster layer.	Chọn tổ hợp kênh để hiển thị lớp raster.
@@ -94,12 +101,14 @@ Choose how the flat map lays out the Earth.	Chọn cách bản đồ phẳng th�
 Choose how the layer is drawn.	Chọn cách vẽ lớp.
 Choose how the raster is drawn.	Chọn cách vẽ raster.
 Choose the interface language.	Chọn ngôn ngữ giao diện.
+Choose which layers a click identifies.	Chọn các lớp mà một cú nhấp sẽ nhận dạng.
 Circle	Hình tròn
 Classes	Lớp phân loại
 Classify	Phân loại
 Clear	Xóa
 Clear\nLimits	Xóa\ngiới hạn
 Clear History	Xóa lịch sử
+Clear Limits	Xóa giới hạn
 Clear Selection	Xóa vùng chọn
 Clear selection	Xóa vùng chọn
 Clear the selection in every layer.	Xóa vùng chọn trong mọi lớp.
@@ -114,10 +123,12 @@ Click to add vertices · double-click to finish the line	Nhấp để thêm đ�
 Click to switch between decimal degrees and DMS	Nhấp để chuyển giữa độ thập phân và DMS
 Clip	Cắt
 Clip Features	Cắt đối tượng
+Clipboard	Bảng nhớ tạm
 Close	Đóng
 Close (Esc)	Đóng (Esc)
 Close Table	Đóng bảng
 Close table	Đóng bảng
+Closest	Gần nhất
 Collapse or expand the ribbon	Thu gọn hoặc mở rộng ribbon
 Collapse the ribbon (Ctrl+F1)	Thu gọn ribbon (Ctrl+F1)
 Color	Màu
@@ -133,11 +144,20 @@ Compute a field's values.	Tính giá trị của một trường.
 Contents	Nội dung
 Contrast	Độ tương phản
 Conversion	Chuyển đổi
+Convert	Chuyển đổi
+Convert the selected layer's labels into an annotation layer.	Chuyển nhãn của lớp được chọn thành lớp chú thích.
+Convert To Annotation	Chuyển thành chú thích
 Coordinate System	Hệ tọa độ
 Coordinate system	Hệ tọa độ
 Coordinate System…	Hệ tọa độ…
+Copied {path}	Đã sao chép {path}
 Copies the (selected) features of a layer to a new layer.	Sao chép các đối tượng (được chọn) của một lớp sang một lớp mới.
+Copy	Sao chép
 Copy Coordinates	Sao chép tọa độ
+Copy Path	Sao chép đường dẫn
+Copy the selected features (also as GeoJSON text).	Sao chép các đối tượng được chọn (cả dưới dạng văn bản GeoJSON).
+Copy the selected features and delete them.	Sao chép các đối tượng được chọn rồi xóa chúng.
+Copy the selected layer's data source path.	Sao chép đường dẫn nguồn dữ liệu của lớp được chọn.
 Couldn't download the font for {language}; pick the language again to retry.	Không thể tải phông chữ cho {language}; hãy chọn lại ngôn ngữ để thử lại.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Số lượng, tổng, trung bình, nhỏ nhất, lớn nhất và độ lệch chuẩn của một trường, có thể theo từng trường phân nhóm.
 Countries, cities, rivers and lakes	Quốc gia, thành phố, sông và hồ
@@ -158,6 +178,7 @@ Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
 Current Project	Dự án hiện tại
+Cut	Cắt
 Dark\nMode	Chế độ\ntối
 Data	Dữ liệu
 Data Design	Thiết kế dữ liệu
@@ -193,6 +214,7 @@ Drag / middle-drag	Kéo / kéo chuột giữa
 Drag a box or click to zoom in	Kéo hộp hoặc nhấp để phóng to
 Drag a box to zoom into.	Kéo một hộp để phóng to vào.
 Draw a halo around label text.	Vẽ quầng sáng quanh văn bản nhãn.
+Draw labels at every scale and distance.	Vẽ nhãn ở mọi tỷ lệ và khoảng cách.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	Vẽ đối tượng mới trong lớp được chọn. Nhấp đúp để hoàn tất đường và vùng.
 Draw the layer at every scale.	Vẽ lớp ở mọi tỷ lệ.
 Drawing	Vẽ
@@ -243,6 +265,7 @@ Expression	Biểu thức
 Extract	Trích xuất
 Extracts the parts of input features that fall inside clip polygons.	Trích xuất các phần của đối tượng đầu vào nằm trong các vùng cắt.
 Failed	Thất bại
+Farthest	Xa nhất
 Feature	Đối tượng
 Feature\nTo Point	Đối tượng\nthành điểm
 Feature Layer	Lớp đối tượng
@@ -296,6 +319,8 @@ Group Option	Tùy chọn nhóm
 Halo	Quầng sáng
 Harbour (qualitative)	Bến cảng (định tính)
 Help	Trợ giúp
+Hide labels when the viewer is closer than this.	Ẩn nhãn khi người xem ở gần hơn giá trị này.
+Hide labels when the viewer is farther than this.	Ẩn nhãn khi người xem ở xa hơn giá trị này.
 Histogram Equalize	Cân bằng histogram
 History	Lịch sử
 Home	Home
@@ -321,12 +346,16 @@ Invert color scheme	Đảo ngược bảng màu
 Invert the selection.	Đảo ngược vùng chọn.
 IS NULL	IS NULL
 keep current	giữ nguyên
+Keep the labelled features fixed as the map moves.	Giữ cố định các đối tượng đã gán nhãn khi bản đồ di chuyển.
 Keyboard Shortcuts	Phím tắt
 Keyboard shortcuts.	Phím tắt.
 Kilometers	Kilômét
 Label	Nhãn
 Label Class	Lớp nhãn
+Label Distance Range	Phạm vi khoảng cách nhãn
 Label Field	Trường nhãn
+Label Placement	Vị trí đặt nhãn
+Label Visibility Range	Phạm vi hiển thị nhãn
 Labeling	Gán nhãn
 Lagoon	Đầm phá
 Lambert Cylindrical Equal Area	Phép chiếu trụ đồng diện tích Lambert
@@ -337,6 +366,7 @@ Layer	Lớp
 Layer From\nSelection	Lớp từ\nvùng chọn
 Layers	Các lớp
 Layers and Table Views	Lớp và khung nhìn bảng
+Left	Trái
 LIKE	LIKE
 Limit which features draw with a SQL expression.	Giới hạn các đối tượng được vẽ bằng biểu thức SQL.
 Line color	Màu đường
@@ -351,6 +381,7 @@ Locate GeoLibre Runner	Tìm trình chạy GeoLibre
 Locate the GeoLibre runner	Tìm trình chạy GeoLibre
 Locate…	Tìm…
 Location	Vị trí
+Lock	Khóa
 Long	Số nguyên dài
 Longitude (X)	Kinh độ (X)
 Major Lakes	Hồ lớn
@@ -406,6 +437,7 @@ Next	Tiếp
 Next Extent	Phạm vi tiếp theo
 No	Không
 No bookmarks yet	Chưa có dấu trang
+No Pop-ups	Không có cửa sổ bật lên
 No standalone tables	Không có bảng độc lập
 NoData	NoData
 None	Không có
@@ -446,15 +478,23 @@ Pan to a longitude/latitude.	Di chuyển tới kinh độ/vĩ độ.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Di chuyển bằng chuột, phóng to thu nhỏ bằng con lăn và nhấp vào đối tượng để xem thuộc tính.
 Paper	Giấy
 Parent folder	Thư mục cha
+Paste	Dán
+Paste copied features into the selected layer, or as a new layer.	Dán các đối tượng đã sao chép vào lớp được chọn hoặc thành lớp mới.
+Paste Special	Dán đặc biệt
+Paste Special (as a new layer)	Dán đặc biệt (thành lớp mới)
+Pause	Tạm dừng
 Percent Clip	Cắt theo phần trăm
 Pixel	Pixel
 Pixel type	Kiểu pixel
+Placement	Vị trí đặt
 PNG image	Ảnh PNG
 Point	Điểm
 Polar, conformal: Antarctica and the Southern Ocean.	Vùng cực, đồng góc: châu Nam Cực và Nam Đại Dương.
 Polar, conformal: the Arctic and the northern lands.	Vùng cực, đồng góc: Bắc Cực và các vùng đất phía bắc.
 Polygon	Vùng
 Polyline	Đường gấp khúc
+Pop-up Mode	Chế độ cửa sổ bật lên
+Pop-ups	Cửa sổ bật lên
 Populated Places	Khu dân cư
 Previous	Trước
 Previous Extent	Phạm vi trước
@@ -501,6 +541,7 @@ Reset brightness, contrast and gamma.	Đặt lại độ sáng, độ tương ph
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Độ phủ tính năng ribbon: {done} trên {total} tính năng ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Tương đương ribbon: {done} trên {total} tính năng ribbon có lệnh RustGIS.
+Right	Phải
 Robinson	Robinson
 Run	Chạy
 Run Tool	Chạy công cụ
@@ -545,8 +586,10 @@ Select Rows	Chọn hàng
 Select rows with a SQL expression.	Chọn hàng bằng biểu thức SQL.
 Select Subset From Current Selection	Chọn tập con từ vùng chọn hiện tại
 Selectable	Có thể chọn
+Selectable Layers	Các lớp có thể chọn
 Selected	Đã chọn
 Selected Features: {n}	Đối tượng được chọn: {n}
+Selected in Contents	Được chọn trong Nội dung
 Selected only	Chỉ mục đã chọn
 Selecting Features	Chọn đối tượng
 Selection	Vùng chọn
@@ -568,6 +611,7 @@ Show or hide the Catalog pane.	Hiện hoặc ẩn ngăn Danh mục.
 Show or hide the Contents pane.	Hiện hoặc ẩn ngăn Nội dung.
 Show or hide the Geoprocessing pane.	Hiện hoặc ẩn ngăn Xử lý không gian.
 Show or hide the layer.	Hiện hoặc ẩn lớp.
+Show the labels that don't fit, in red.	Hiển thị các nhãn không vừa bằng màu đỏ.
 Show the map as a 3D globe, or as a flat map again.	Hiển thị bản đồ dưới dạng quả địa cầu 3D, hoặc trở lại bản đồ phẳng.
 Show the Symbology pane for the selected layer.	Hiện ngăn Ký hiệu cho lớp được chọn.
 Simplify	Đơn giản hóa
@@ -586,6 +630,7 @@ Statistics	Thống kê
 Statistics Field	Trường thống kê
 Status Bar	Thanh trạng thái
 Std. Dev.	Độ lệch chuẩn
+Stop drawing labels, for faster navigation.	Ngừng vẽ nhãn để điều hướng nhanh hơn.
 Stretch	Kéo giãn
 Stretch\nType	Kiểu\nkéo giãn
 Stretch Type	Kiểu kéo giãn
@@ -622,6 +667,7 @@ Toolbox	Hộp công cụ
 Toolboxes	Hộp công cụ
 Tools	Công cụ
 Tools you run appear here.	Các công cụ bạn chạy sẽ xuất hiện ở đây.
+Topmost Layer	Lớp trên cùng
 Total {total}   ·   Segment {segment}	Tổng {total}   ·   Đoạn {segment}
 Transparency	Độ trong suốt
 Triangle	Tam giác
@@ -640,10 +686,12 @@ Valid expression · {n} matching rows	Biểu thức hợp lệ · {n} hàng kh�
 Vector and raster data	Dữ liệu vector và raster
 Version {version}	Phiên bản {version}
 View	Xem
+View Unplaced	Xem nhãn chưa đặt
 View › Windows	Xem › Cửa sổ
 Visibility	Khả năng hiển thị
 Visibility Range	Phạm vi hiển thị
 Visible	Hiển thị
+Visible Layers	Các lớp hiển thị
 Web Mercator	Web Mercator
 Website	Trang web
 Welcome to RustGIS	Chào mừng đến với RustGIS
@@ -652,6 +700,7 @@ WGS 84 / Globe	WGS 84 / Quả địa cầu
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Điều kiện
 Where Clause	Mệnh đề WHERE
+Where labels sit relative to their features.	Vị trí của nhãn so với đối tượng của chúng.
 Windows	Cửa sổ
 Winkel Tripel	Winkel Tripel
 World	Thế giới

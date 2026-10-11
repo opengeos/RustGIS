@@ -758,6 +758,66 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
             );
             p.line(&[(4.0, 4.0), (4.0, 20.0), (20.0, 20.0)], 1.2, ink);
         }
+        "paste" => {
+            p.rect(4.0, 4.0, 13.0, 17.0, Some(p.tint(60)), Some((1.3, ink)), 1.5);
+            p.rect(7.5, 2.5, 6.0, 3.5, Some(accent), Some((1.1, ink)), 1.0);
+            p.page(11.0, 9.0, 10.0, 13.0);
+        }
+        "copy" => {
+            p.page(3.0, 3.0, 11.0, 14.0);
+            p.page(9.0, 7.0, 11.0, 14.0);
+            p.rect(11.5, 12.0, 6.0, 1.2, Some(accent), None, 0.5);
+            p.rect(11.5, 15.0, 6.0, 1.2, Some(accent), None, 0.5);
+        }
+        "cut" => {
+            p.circle(7.0, 17.0, 3.2, Some(p.tint(60)), Some((1.4, ink)));
+            p.circle(17.0, 17.0, 3.2, Some(p.tint(60)), Some((1.4, ink)));
+            p.line(&[(9.0, 14.5), (16.0, 3.0)], 1.6, ink);
+            p.line(&[(15.0, 14.5), (8.0, 3.0)], 1.6, ink);
+        }
+        "copy_path" => {
+            p.page(3.0, 3.0, 12.0, 15.0);
+            p.line(&[(6.0, 9.0), (12.0, 9.0)], 1.1, ink);
+            p.line(&[(6.0, 12.0), (10.0, 12.0)], 1.1, ink);
+            p.rect(10.0, 14.0, 12.0, 7.0, Some(accent), None, 2.0);
+            p.text(16.0, 17.5, "C:\\", 5.0, Color32::WHITE);
+        }
+        "popup" => {
+            p.rect(3.0, 3.0, 18.0, 12.0, Some(p.tint(50)), Some((1.3, ink)), 2.0);
+            p.fill(&[(8.0, 15.0), (13.0, 15.0), (9.0, 20.0)], ink);
+            p.line(&[(6.0, 7.0), (17.0, 7.0)], 1.1, ink);
+            p.line(&[(6.0, 10.5), (13.0, 10.5)], 1.1, ink);
+        }
+        "label_lock" => {
+            paint(painter, r, "label", ink, accent);
+            p.rect(14.0, 14.5, 8.0, 7.0, Some(amber), Some((1.0, ink)), 1.0);
+            p.arc(18.0, 14.5, 2.6, 180.0, 360.0, 1.3, ink);
+        }
+        "label_pause" => {
+            paint(painter, r, "label", ink, accent);
+            p.circle(18.0, 18.0, 4.5, Some(amber), None);
+            p.line(&[(16.8, 16.0), (16.8, 20.0)], 1.4, Color32::WHITE);
+            p.line(&[(19.2, 16.0), (19.2, 20.0)], 1.4, Color32::WHITE);
+        }
+        "label_unplaced" => {
+            p.fill(&[(2.0, 7.0), (17.0, 7.0), (22.0, 12.0), (17.0, 17.0), (2.0, 17.0)], red.gamma_multiply(0.25));
+            p.closed(&[(2.0, 7.0), (17.0, 7.0), (22.0, 12.0), (17.0, 17.0), (2.0, 17.0)], 1.3, red);
+            p.text(10.0, 12.0, "Abc", 6.8, red);
+        }
+        "label_convert" => {
+            paint(painter, r, "label", ink, accent);
+            p.line(&[(13.0, 21.0), (21.0, 21.0)], 1.5, green);
+            p.fill(&[(19.0, 18.5), (23.0, 21.0), (19.0, 23.5)], green);
+        }
+        "placement" => {
+            p.circle(8.0, 15.0, 3.0, Some(accent), Some((1.2, ink)));
+            p.rect(11.0, 4.0, 11.0, 7.0, Some(p.tint(60)), Some((1.2, ink)), 1.5);
+            p.line(&[(10.0, 12.5), (12.0, 10.5)], 1.2, ink);
+        }
+        "scale_label" => {
+            paint(painter, r, "scale_range", ink, accent);
+            p.text(17.0, 6.0, "A", 7.0, ink);
+        }
         _ => {
             p.rect(4.0, 4.0, 16.0, 16.0, Some(p.tint(60)), Some((1.2, ink)), 3.0);
         }

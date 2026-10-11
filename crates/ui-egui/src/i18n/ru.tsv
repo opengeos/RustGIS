@@ -8,6 +8,9 @@ A value, a field, or two of them joined by + − × ÷. Applies to the selected 
 About	О программе
 About RustGIS	О RustGIS
 About RustGIS.	О RustGIS.
+Above	Сверху
+Above Left	Сверху слева
+Above Right	Сверху справа
 Activate Map	Активировать карту
 Add	Добавить
 Add\nData	Добавить\nданные
@@ -56,6 +59,9 @@ Band {n}	Канал {n}
 Bands	Каналы
 Basemap	Базовая карта
 Basemaps	Базовые карты
+Below	Снизу
+Below Left	Снизу слева
+Below Right	Снизу справа
 Bilinear	Билинейная
 Blank	Пустая
 Blue	Синий
@@ -85,6 +91,7 @@ Case Field	Поле группировки
 Catalog	Каталог
 Catalog\nPane	Панель\nкаталога
 Cell size	Размер ячейки
+Centered	По центру
 Change the map's backdrop.	Изменить фон карты.
 Change the map's coordinate system	Изменить систему координат карты
 Choose a band combination to display the raster layer.	Выберите комбинацию каналов для отображения растрового слоя.
@@ -94,12 +101,14 @@ Choose how the flat map lays out the Earth.	Выбрать, как плоска�
 Choose how the layer is drawn.	Выбрать способ отображения слоя.
 Choose how the raster is drawn.	Выберите способ отрисовки растра.
 Choose the interface language.	Выбрать язык интерфейса.
+Choose which layers a click identifies.	Выбрать, какие слои идентифицируются по щелчку.
 Circle	Круг
 Classes	Классы
 Classify	Классифицировать
 Clear	Очистить
 Clear\nLimits	Сбросить\nограничения
 Clear History	Очистить историю
+Clear Limits	Сбросить ограничения
 Clear Selection	Очистить выборку
 Clear selection	Очистить выборку
 Clear the selection in every layer.	Очистить выборку во всех слоях.
@@ -114,10 +123,12 @@ Click to add vertices · double-click to finish the line	Щёлкайте, чт�
 Click to switch between decimal degrees and DMS	Щёлкните для переключения между десятичными градусами и ГМС
 Clip	Обрезать
 Clip Features	Обрезать объекты
+Clipboard	Буфер обмена
 Close	Закрыть
 Close (Esc)	Закрыть (Esc)
 Close Table	Закрыть таблицу
 Close table	Закрыть таблицу
+Closest	Ближайшее
 Collapse or expand the ribbon	Свернуть или развернуть ленту
 Collapse the ribbon (Ctrl+F1)	Свернуть ленту (Ctrl+F1)
 Color	Цвет
@@ -133,11 +144,20 @@ Compute a field's values.	Вычислить значения поля.
 Contents	Содержание
 Contrast	Контраст
 Conversion	Преобразование
+Convert	Преобразовать
+Convert the selected layer's labels into an annotation layer.	Преобразовать подписи выбранного слоя в слой аннотаций.
+Convert To Annotation	Преобразовать в аннотации
 Coordinate System	Система координат
 Coordinate system	Система координат
 Coordinate System…	Система координат…
+Copied {path}	Скопировано: {path}
 Copies the (selected) features of a layer to a new layer.	Копирует (выбранные) объекты слоя в новый слой.
+Copy	Копировать
 Copy Coordinates	Копировать координаты
+Copy Path	Копировать путь
+Copy the selected features (also as GeoJSON text).	Копировать выбранные объекты (также как текст GeoJSON).
+Copy the selected features and delete them.	Копировать выбранные объекты и удалить их.
+Copy the selected layer's data source path.	Копировать путь к источнику данных выбранного слоя.
 Couldn't download the font for {language}; pick the language again to retry.	Не удалось загрузить шрифт для {language}; выберите язык ещё раз, чтобы повторить попытку.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Количество, сумма, среднее, минимум, максимум и стандартное отклонение поля, при необходимости по полю группировки.
 Countries, cities, rivers and lakes	Страны, города, реки и озёра
@@ -158,6 +178,7 @@ Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
 Current Project	Текущий проект
+Cut	Вырезать
 Dark\nMode	Тёмная\nтема
 Data	Данные
 Data Design	Структура данных
@@ -193,6 +214,7 @@ Drag / middle-drag	Перетаскивание / средней кнопкой
 Drag a box or click to zoom in	Растяните рамку или щёлкните для приближения
 Drag a box to zoom into.	Растяните рамку для приближения.
 Draw a halo around label text.	Рисовать ореол вокруг текста подписей.
+Draw labels at every scale and distance.	Отображать подписи при любом масштабе и расстоянии.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	Рисуйте новые объекты в выбранном слое. Двойной щелчок завершает линии и полигоны.
 Draw the layer at every scale.	Отображать слой в любом масштабе.
 Drawing	Отображение
@@ -243,6 +265,7 @@ Expression	Выражение
 Extract	Извлечение
 Extracts the parts of input features that fall inside clip polygons.	Извлекает части входных объектов, попадающие внутрь обрезающих полигонов.
 Failed	Ошибка
+Farthest	Самое дальнее
 Feature	Объект
 Feature\nTo Point	Объект\nв точку
 Feature Layer	Векторный слой
@@ -296,6 +319,8 @@ Group Option	Способ группировки
 Halo	Ореол
 Harbour (qualitative)	Гавань (качественная)
 Help	Справка
+Hide labels when the viewer is closer than this.	Скрывать подписи, когда наблюдатель ближе этого расстояния.
+Hide labels when the viewer is farther than this.	Скрывать подписи, когда наблюдатель дальше этого расстояния.
 Histogram Equalize	Выравнивание гистограммы
 History	История
 Home	Home
@@ -321,12 +346,16 @@ Invert color scheme	Инвертировать цветовую схему
 Invert the selection.	Инвертировать выборку.
 IS NULL	IS NULL
 keep current	оставить текущее
+Keep the labelled features fixed as the map moves.	Сохранять подписанные объекты неизменными при перемещении карты.
 Keyboard Shortcuts	Сочетания клавиш
 Keyboard shortcuts.	Сочетания клавиш.
 Kilometers	Километры
 Label	Подпись
 Label Class	Класс подписей
+Label Distance Range	Диапазон расстояний подписей
 Label Field	Поле подписей
+Label Placement	Размещение подписей
+Label Visibility Range	Диапазон видимости подписей
 Labeling	Подписи
 Lagoon	Лагуна
 Lambert Cylindrical Equal Area	Равновеликая цилиндрическая Ламберта
@@ -337,6 +366,7 @@ Layer	Слой
 Layer From\nSelection	Слой из\nвыборки
 Layers	Слои
 Layers and Table Views	Слои и табличные представления
+Left	Слева
 LIKE	LIKE
 Limit which features draw with a SQL expression.	Ограничить отображаемые объекты выражением SQL.
 Line color	Цвет линии
@@ -351,6 +381,7 @@ Locate GeoLibre Runner	Указать модуль запуска GeoLibre
 Locate the GeoLibre runner	Указать модуль запуска GeoLibre
 Locate…	Указать…
 Location	Расположение
+Lock	Закрепить
 Long	Длинное целое
 Longitude (X)	Долгота (X)
 Major Lakes	Крупные озёра
@@ -406,6 +437,7 @@ Next	Далее
 Next Extent	Следующий экстент
 No	Нет
 No bookmarks yet	Закладок пока нет
+No Pop-ups	Без всплывающих окон
 No standalone tables	Нет отдельных таблиц
 NoData	NoData
 None	Нет
@@ -446,15 +478,23 @@ Pan to a longitude/latitude.	Переместиться к долготе/шир
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Панорамируйте мышью, масштабируйте колесом и щёлкайте по объектам, чтобы увидеть их атрибуты.
 Paper	Бумага
 Parent folder	Родительская папка
+Paste	Вставить
+Paste copied features into the selected layer, or as a new layer.	Вставить скопированные объекты в выбранный слой или как новый слой.
+Paste Special	Специальная вставка
+Paste Special (as a new layer)	Специальная вставка (как новый слой)
+Pause	Приостановить
 Percent Clip	Процентное отсечение
 Pixel	Пиксель
 Pixel type	Тип пикселя
+Placement	Размещение
 PNG image	Изображение PNG
 Point	Точка
 Polar, conformal: Antarctica and the Southern Ocean.	Полярная, равноугольная: Антарктида и Южный океан.
 Polar, conformal: the Arctic and the northern lands.	Полярная, равноугольная: Арктика и северные земли.
 Polygon	Полигон
 Polyline	Полилиния
+Pop-up Mode	Режим всплывающих окон
+Pop-ups	Всплывающие окна
 Populated Places	Населённые пункты
 Previous	Назад
 Previous Extent	Предыдущий экстент
@@ -501,6 +541,7 @@ Reset brightness, contrast and gamma.	Сбросить яркость, конт�
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Охват функций ленты: {done} из {total} ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Соответствие ленты: команд RustGIS для функций ленты — {done} из {total}.
+Right	Справа
 Robinson	Робинсон
 Run	Запустить
 Run Tool	Запустить инструмент
@@ -545,8 +586,10 @@ Select Rows	Выбрать строки
 Select rows with a SQL expression.	Выбрать строки с помощью выражения SQL.
 Select Subset From Current Selection	Выбрать подмножество из текущей выборки
 Selectable	Доступен для выбора
+Selectable Layers	Слои, доступные для выбора
 Selected	Выбрано
 Selected Features: {n}	Выбрано объектов: {n}
+Selected in Contents	Выбранные в содержании
 Selected only	Только выбранные
 Selecting Features	Выбор объектов
 Selection	Выборка
@@ -568,6 +611,7 @@ Show or hide the Catalog pane.	Показать или скрыть панель
 Show or hide the Contents pane.	Показать или скрыть панель «Содержание».
 Show or hide the Geoprocessing pane.	Показать или скрыть панель «Геообработка».
 Show or hide the layer.	Показать или скрыть слой.
+Show the labels that don't fit, in red.	Показывать неразмещённые подписи красным.
 Show the map as a 3D globe, or as a flat map again.	Показать карту в виде 3D-глобуса или снова в виде плоской карты.
 Show the Symbology pane for the selected layer.	Показать панель «Символы» для выбранного слоя.
 Simplify	Упростить
@@ -586,6 +630,7 @@ Statistics	Статистика
 Statistics Field	Поле статистики
 Status Bar	Строка состояния
 Std. Dev.	Ст. откл.
+Stop drawing labels, for faster navigation.	Не отображать подписи для ускорения навигации.
 Stretch	Растяжка
 Stretch\nType	Тип\nрастяжки
 Stretch Type	Тип растяжки
@@ -622,6 +667,7 @@ Toolbox	Набор инструментов
 Toolboxes	Наборы инструментов
 Tools	Инструменты
 Tools you run appear here.	Здесь появятся запущенные инструменты.
+Topmost Layer	Верхний слой
 Total {total}   ·   Segment {segment}	Всего {total}   ·   Сегмент {segment}
 Transparency	Прозрачность
 Triangle	Треугольник
@@ -640,10 +686,12 @@ Valid expression · {n} matching rows	Выражение допустимо · �
 Vector and raster data	Векторные и растровые данные
 Version {version}	Версия {version}
 View	Вид
+View Unplaced	Показать неразмещённые
 View › Windows	Вид › Окна
 Visibility	Видимость
 Visibility Range	Диапазон видимости
 Visible	Видимый
+Visible Layers	Видимые слои
 Web Mercator	Web Mercator
 Website	Веб-сайт
 Welcome to RustGIS	Добро пожаловать в RustGIS
@@ -652,6 +700,7 @@ WGS 84 / Globe	WGS 84 / Глобус
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Где
 Where Clause	Условие WHERE
+Where labels sit relative to their features.	Положение подписей относительно их объектов.
 Windows	Окна
 Winkel Tripel	Винкель-Трипель
 World	Мир

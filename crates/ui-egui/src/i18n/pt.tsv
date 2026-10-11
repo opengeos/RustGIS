@@ -8,6 +8,9 @@ A value, a field, or two of them joined by + − × ÷. Applies to the selected 
 About	Sobre
 About RustGIS	Sobre o RustGIS
 About RustGIS.	Sobre o RustGIS.
+Above	Acima
+Above Left	Acima à esquerda
+Above Right	Acima à direita
 Activate Map	Ativar mapa
 Add	Adicionar
 Add\nData	Adicionar\ndados
@@ -56,6 +59,9 @@ Band {n}	Banda {n}
 Bands	Bandas
 Basemap	Mapa base
 Basemaps	Mapas base
+Below	Abaixo
+Below Left	Abaixo à esquerda
+Below Right	Abaixo à direita
 Bilinear	Bilinear
 Blank	Em branco
 Blue	Azul
@@ -85,6 +91,7 @@ Case Field	Campo de caso
 Catalog	Catálogo
 Catalog\nPane	Painel\nCatálogo
 Cell size	Tamanho da célula
+Centered	Centralizado
 Change the map's backdrop.	Alterar o fundo do mapa.
 Change the map's coordinate system	Alterar o sistema de coordenadas do mapa
 Choose a band combination to display the raster layer.	Escolha uma combinação de bandas para exibir a camada raster.
@@ -94,12 +101,14 @@ Choose how the flat map lays out the Earth.	Escolher como o mapa plano represent
 Choose how the layer is drawn.	Escolher como a camada é desenhada.
 Choose how the raster is drawn.	Escolha como o raster é desenhado.
 Choose the interface language.	Escolher o idioma da interface.
+Choose which layers a click identifies.	Escolher quais camadas um clique identifica.
 Circle	Círculo
 Classes	Classes
 Classify	Classificar
 Clear	Limpar
 Clear\nLimits	Limpar\nlimites
 Clear History	Limpar histórico
+Clear Limits	Limpar limites
 Clear Selection	Limpar seleção
 Clear selection	Limpar seleção
 Clear the selection in every layer.	Limpar a seleção em todas as camadas.
@@ -114,10 +123,12 @@ Click to add vertices · double-click to finish the line	Clique para adicionar v
 Click to switch between decimal degrees and DMS	Clique para alternar entre graus decimais e GMS
 Clip	Recortar
 Clip Features	Recortar feições
+Clipboard	Área de transferência
 Close	Fechar
 Close (Esc)	Fechar (Esc)
 Close Table	Fechar tabela
 Close table	Fechar tabela
+Closest	Mais próxima
 Collapse or expand the ribbon	Recolher ou expandir a faixa de opções
 Collapse the ribbon (Ctrl+F1)	Recolher a faixa de opções (Ctrl+F1)
 Color	Cor
@@ -133,11 +144,20 @@ Compute a field's values.	Calcular os valores de um campo.
 Contents	Conteúdo
 Contrast	Contraste
 Conversion	Conversão
+Convert	Converter
+Convert the selected layer's labels into an annotation layer.	Converter os rótulos da camada selecionada em uma camada de anotação.
+Convert To Annotation	Converter em anotação
 Coordinate System	Sistema de coordenadas
 Coordinate system	Sistema de coordenadas
 Coordinate System…	Sistema de coordenadas…
+Copied {path}	Copiado {path}
 Copies the (selected) features of a layer to a new layer.	Copia as feições (selecionadas) de uma camada para uma nova camada.
+Copy	Copiar
 Copy Coordinates	Copiar coordenadas
+Copy Path	Copiar caminho
+Copy the selected features (also as GeoJSON text).	Copiar as feições selecionadas (também como texto GeoJSON).
+Copy the selected features and delete them.	Copiar as feições selecionadas e excluí-las.
+Copy the selected layer's data source path.	Copiar o caminho da fonte de dados da camada selecionada.
 Couldn't download the font for {language}; pick the language again to retry.	Não foi possível baixar a fonte para {language}; escolha o idioma novamente para tentar de novo.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Contagem, soma, média, mínimo, máximo e desvio padrão de um campo, opcionalmente por campo de caso.
 Countries, cities, rivers and lakes	Países, cidades, rios e lagos
@@ -158,6 +178,7 @@ Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
 Current Project	Projeto atual
+Cut	Recortar
 Dark\nMode	Modo\nescuro
 Data	Dados
 Data Design	Design de dados
@@ -193,6 +214,7 @@ Drag / middle-drag	Arrastar / arrastar com botão do meio
 Drag a box or click to zoom in	Arraste um retângulo ou clique para aproximar
 Drag a box to zoom into.	Arraste um retângulo para aproximar.
 Draw a halo around label text.	Desenhar um halo ao redor do texto do rótulo.
+Draw labels at every scale and distance.	Desenhar rótulos em qualquer escala e distância.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	Desenhar novas feições na camada selecionada. Clique duplo para concluir linhas e polígonos.
 Draw the layer at every scale.	Desenhar a camada em todas as escalas.
 Drawing	Desenho
@@ -243,6 +265,7 @@ Expression	Expressão
 Extract	Extrair
 Extracts the parts of input features that fall inside clip polygons.	Extrai as partes das feições de entrada que ficam dentro dos polígonos de recorte.
 Failed	Falhou
+Farthest	Mais distante
 Feature	Feição
 Feature\nTo Point	Feição\npara ponto
 Feature Layer	Camada de feições
@@ -296,6 +319,8 @@ Group Option	Opção de agrupamento
 Halo	Halo
 Harbour (qualitative)	Porto (qualitativa)
 Help	Ajuda
+Hide labels when the viewer is closer than this.	Ocultar os rótulos quando o observador estiver mais perto que isto.
+Hide labels when the viewer is farther than this.	Ocultar os rótulos quando o observador estiver mais longe que isto.
 Histogram Equalize	Equalização de histograma
 History	Histórico
 Home	Home
@@ -321,12 +346,16 @@ Invert color scheme	Inverter esquema de cores
 Invert the selection.	Inverter a seleção.
 IS NULL	IS NULL
 keep current	manter atual
+Keep the labelled features fixed as the map moves.	Manter fixas as feições rotuladas quando o mapa se move.
 Keyboard Shortcuts	Atalhos de teclado
 Keyboard shortcuts.	Atalhos de teclado.
 Kilometers	Quilômetros
 Label	Rótulo
 Label Class	Classe de rótulo
+Label Distance Range	Intervalo de distância dos rótulos
 Label Field	Campo de rótulo
+Label Placement	Posicionamento dos rótulos
+Label Visibility Range	Intervalo de visibilidade dos rótulos
 Labeling	Rotulagem
 Lagoon	Lagoa
 Lambert Cylindrical Equal Area	Cilíndrica de áreas iguais de Lambert
@@ -337,6 +366,7 @@ Layer	Camada
 Layer From\nSelection	Camada da\nseleção
 Layers	Camadas
 Layers and Table Views	Camadas e visualizações de tabela
+Left	Esquerda
 LIKE	LIKE
 Limit which features draw with a SQL expression.	Limitar quais feições são desenhadas com uma expressão SQL.
 Line color	Cor da linha
@@ -351,6 +381,7 @@ Locate GeoLibre Runner	Localizar o executor do GeoLibre
 Locate the GeoLibre runner	Localizar o executor do GeoLibre
 Locate…	Localizar…
 Location	Localização
+Lock	Bloquear
 Long	Inteiro longo
 Longitude (X)	Longitude (X)
 Major Lakes	Lagos principais
@@ -406,6 +437,7 @@ Next	Próximo
 Next Extent	Próxima extensão
 No	Não
 No bookmarks yet	Ainda não há marcadores
+No Pop-ups	Sem pop-ups
 No standalone tables	Nenhuma tabela independente
 NoData	NoData
 None	Nenhum
@@ -446,15 +478,23 @@ Pan to a longitude/latitude.	Deslocar para uma longitude/latitude.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Desloque o mapa com o mouse, aplique zoom com a roda e clique nas feições para ver seus atributos.
 Paper	Papel
 Parent folder	Pasta superior
+Paste	Colar
+Paste copied features into the selected layer, or as a new layer.	Colar as feições copiadas na camada selecionada ou como uma nova camada.
+Paste Special	Colar especial
+Paste Special (as a new layer)	Colar especial (como nova camada)
+Pause	Pausar
 Percent Clip	Recorte percentual
 Pixel	Pixel
 Pixel type	Tipo de pixel
+Placement	Posicionamento
 PNG image	Imagem PNG
 Point	Ponto
 Polar, conformal: Antarctica and the Southern Ocean.	Polar, conforme: a Antártida e o Oceano Antártico.
 Polar, conformal: the Arctic and the northern lands.	Polar, conforme: o Ártico e as terras do norte.
 Polygon	Polígono
 Polyline	Polilinha
+Pop-up Mode	Modo de pop-up
+Pop-ups	Pop-ups
 Populated Places	Locais povoados
 Previous	Anterior
 Previous Extent	Extensão anterior
@@ -501,6 +541,7 @@ Reset brightness, contrast and gamma.	Redefinir brilho, contraste e gama.
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Cobertura de recursos da faixa de opções: {done} de {total} recursos ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Paridade da faixa de opções: {done} de {total} recursos da faixa têm um comando do RustGIS.
+Right	Direita
 Robinson	Robinson
 Run	Executar
 Run Tool	Executar ferramenta
@@ -545,8 +586,10 @@ Select Rows	Selecionar linhas
 Select rows with a SQL expression.	Selecionar linhas com uma expressão SQL.
 Select Subset From Current Selection	Selecionar subconjunto da seleção atual
 Selectable	Selecionável
+Selectable Layers	Camadas selecionáveis
 Selected	Selecionado
 Selected Features: {n}	Feições selecionadas: {n}
+Selected in Contents	Selecionadas em Conteúdo
 Selected only	Somente selecionadas
 Selecting Features	Seleção de feições
 Selection	Seleção
@@ -568,6 +611,7 @@ Show or hide the Catalog pane.	Mostrar ou ocultar o painel Catálogo.
 Show or hide the Contents pane.	Mostrar ou ocultar o painel Conteúdo.
 Show or hide the Geoprocessing pane.	Mostrar ou ocultar o painel Geoprocessamento.
 Show or hide the layer.	Mostrar ou ocultar a camada.
+Show the labels that don't fit, in red.	Mostrar em vermelho os rótulos que não cabem.
 Show the map as a 3D globe, or as a flat map again.	Mostrar o mapa como um globo 3D ou novamente como um mapa plano.
 Show the Symbology pane for the selected layer.	Mostrar o painel Simbologia da camada selecionada.
 Simplify	Simplificar
@@ -586,6 +630,7 @@ Statistics	Estatísticas
 Statistics Field	Campo de estatísticas
 Status Bar	Barra de status
 Std. Dev.	Desv. pad.
+Stop drawing labels, for faster navigation.	Parar de desenhar rótulos para navegar mais rápido.
 Stretch	Realce
 Stretch\nType	Tipo de\nrealce
 Stretch Type	Tipo de realce
@@ -622,6 +667,7 @@ Toolbox	Caixa de ferramentas
 Toolboxes	Caixas de ferramentas
 Tools	Ferramentas
 Tools you run appear here.	As ferramentas que você executar aparecem aqui.
+Topmost Layer	Camada superior
 Total {total}   ·   Segment {segment}	Total {total}   ·   Segmento {segment}
 Transparency	Transparência
 Triangle	Triângulo
@@ -640,10 +686,12 @@ Valid expression · {n} matching rows	Expressão válida · {n} linhas correspon
 Vector and raster data	Dados vetoriais e raster
 Version {version}	Versão {version}
 View	Exibir
+View Unplaced	Ver não posicionados
 View › Windows	Exibir › Janelas
 Visibility	Visibilidade
 Visibility Range	Intervalo de visibilidade
 Visible	Visível
+Visible Layers	Camadas visíveis
 Web Mercator	Web Mercator
 Website	Site
 Welcome to RustGIS	Bem-vindo ao RustGIS
@@ -652,6 +700,7 @@ WGS 84 / Globe	WGS 84 / Globo
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Onde
 Where Clause	Cláusula WHERE
+Where labels sit relative to their features.	Onde os rótulos ficam em relação às suas feições.
 Windows	Janelas
 Winkel Tripel	Winkel Tripel
 World	Mundo

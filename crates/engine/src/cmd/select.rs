@@ -1,6 +1,7 @@
 //! Map › Selection.
 
 use rustgis_geom::{Coord, Extent};
+use rustgis_map::PopupMode;
 use serde_json::{Value, json};
 
 use super::{f, need_layer, need_layers, need_selection, ps};
@@ -71,7 +72,11 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"layer": nid}))
         })
         .when(need_selection),
-        C::new("identify", "Identify", "Map › Inquiry", identify).view().params(r#"{"lon", "lat", "tolerancePx"?}"#),
+        C::new("identify", "Identify", "Map › Inquiry", identify).view().params(
+            r#"{"lon", "lat", "tolerancePx"?, "mode"?: "topmost"|"visible"|"selectable"|"selectedInContents"|"none" (the map's pop-up mode when omitted)}"#,
+        ),
+        C::new("map.popupMode", "Pop-up Mode", "Map › Navigate", popup_mode)
+            .params(r#"{"mode": "topmost"|"visible"|"selectable"|"selectedInContents"|"none"}"#),
     ]
 }
 
@@ -184,15 +189,57 @@ fn at_point(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn identify(s: &mut Session, p: &Value) -> CmdResult {
-    let Some((id, row)) = hit(s, p)? else {
+    let mode = match ps(p, "mode") {
+        Some(m) => PopupMode::from_code(m).ok_or_else(|| format!("unknown pop-up mode '{m}'"))?,
+        None => s.map().popup_mode,
+    };
+    if mode == PopupMode::None {
+        return Ok(Value::Null);
+    }
+    let lon = f(p, "lon").ok_or("lon is required")?;
+    let lat = f(p, "lat").ok_or("lat is required")?;
+    let tol = f(p, "tolerancePx").unwrap_or(4.0).clamp(0.0, 50.0) * s.map().camera.res;
+    let scale = s.scale();
+    let hits = match s.map().to_map(Coord::new(lon, lat)) {
+        Some(pt) => s.map_mut().hits_at(pt, tol, scale),
+        None => Vec::new(),
+    };
+    let active = s.active_layer;
+    let map = s.map();
+    let keep = |id: u32| match mode {
+        PopupMode::Selectable => map.layer(id).is_some_and(|l| l.selectable),
+        PopupMode::SelectedInContents => Some(id) == active,
+        _ => true,
+    };
+    let hits: Vec<(u32, usize)> = hits.into_iter().filter(|(id, _)| keep(*id)).collect();
+    let take = if mode == PopupMode::Visible { hits.len() } else { 1 };
+    let results: Vec<Value> = hits.iter().take(take).filter_map(|(id, row)| feature_json(map, *id, *row)).collect();
+    let Some(first) = results.first().cloned() else {
         // No feature: report the pixel of the topmost raster instead.
-        let (lon, lat) = (f(p, "lon").unwrap_or(f64::NAN), f(p, "lat").unwrap_or(f64::NAN));
+        if mode == PopupMode::SelectedInContents && active.and_then(|id| map.layer(id)).is_some_and(|l| !l.is_raster()) {
+            return Ok(Value::Null);
+        }
         return Ok(super::raster::identify(s, lon, lat).unwrap_or(Value::Null));
     };
-    let l = s.map().layer(id).ok_or("no layer")?;
+    let mut out = first;
+    if let Value::Object(o) = &mut out {
+        o.insert("results".into(), Value::Array(results));
+    }
+    Ok(out)
+}
+
+fn popup_mode(s: &mut Session, p: &Value) -> CmdResult {
+    let m = ps(p, "mode").ok_or("mode is required")?;
+    let mode = PopupMode::from_code(m).ok_or_else(|| format!("unknown pop-up mode '{m}'"))?;
+    s.map_mut().popup_mode = mode;
+    Ok(json!({"mode": mode.code()}))
+}
+
+fn feature_json(map: &rustgis_map::Map, id: u32, row: usize) -> Option<Value> {
+    let l = map.layer(id)?;
     let mut attrs = serde_json::Map::new();
     for (i, fd) in l.dataset.fields.iter().enumerate() {
         attrs.insert(fd.name.clone(), json!(l.dataset.value(row, i).to_string()));
     }
-    Ok(json!({"layer": l.name, "layerId": id, "row": row, "attributes": attrs}))
+    Some(json!({"layer": l.name, "layerId": id, "row": row, "attributes": attrs}))
 }

@@ -414,9 +414,113 @@ pub struct Labeling {
     pub color: Rgba,
     pub halo: bool,
     pub bold: bool,
+    /// Labels draw only when zoomed in beyond 1:`min_scale`, if set.
+    #[serde(default)]
+    pub min_scale: Option<f64>,
+    /// Labels draw only when zoomed out beyond 1:`max_scale`, if set.
+    #[serde(default)]
+    pub max_scale: Option<f64>,
+    /// Labels draw only when the viewer is at least this far away (metres), if set.
+    #[serde(default)]
+    pub closest: Option<f64>,
+    /// Labels draw only when the viewer is at most this far away (metres), if set.
+    #[serde(default)]
+    pub farthest: Option<f64>,
+    /// Where a label sits relative to its feature.
+    #[serde(default)]
+    pub placement: LabelPlacement,
+}
+
+/// Where labels sit relative to their feature's label point.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LabelPlacement {
+    /// Above points, centred on lines and polygons.
+    #[default]
+    Auto,
+    Center,
+    Above,
+    Below,
+    Left,
+    Right,
+    AboveRight,
+    AboveLeft,
+    BelowRight,
+    BelowLeft,
+}
+
+impl LabelPlacement {
+    pub const ALL: [LabelPlacement; 10] = [
+        LabelPlacement::Auto,
+        LabelPlacement::Center,
+        LabelPlacement::Above,
+        LabelPlacement::Below,
+        LabelPlacement::Left,
+        LabelPlacement::Right,
+        LabelPlacement::AboveRight,
+        LabelPlacement::AboveLeft,
+        LabelPlacement::BelowRight,
+        LabelPlacement::BelowLeft,
+    ];
+    pub fn code(self) -> &'static str {
+        match self {
+            LabelPlacement::Auto => "auto",
+            LabelPlacement::Center => "center",
+            LabelPlacement::Above => "above",
+            LabelPlacement::Below => "below",
+            LabelPlacement::Left => "left",
+            LabelPlacement::Right => "right",
+            LabelPlacement::AboveRight => "aboveRight",
+            LabelPlacement::AboveLeft => "aboveLeft",
+            LabelPlacement::BelowRight => "belowRight",
+            LabelPlacement::BelowLeft => "belowLeft",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            LabelPlacement::Auto => "Automatic",
+            LabelPlacement::Center => "Centered",
+            LabelPlacement::Above => "Above",
+            LabelPlacement::Below => "Below",
+            LabelPlacement::Left => "Left",
+            LabelPlacement::Right => "Right",
+            LabelPlacement::AboveRight => "Above Right",
+            LabelPlacement::AboveLeft => "Above Left",
+            LabelPlacement::BelowRight => "Below Right",
+            LabelPlacement::BelowLeft => "Below Left",
+        }
+    }
+    pub fn from_code(s: &str) -> Option<LabelPlacement> {
+        LabelPlacement::ALL.into_iter().find(|p| p.code().eq_ignore_ascii_case(s.trim()))
+    }
+    /// The label centre's offset from the label point, in points, for a label `w` wide and `h`
+    /// tall next to a marker of size `marker` (0 for lines and polygons).
+    pub fn offset(self, w: f32, h: f32, marker: f32, is_point: bool) -> (f32, f32) {
+        let gap = marker / 2.0 + 2.0;
+        let (dx, dy) = (w / 2.0 + gap, h / 2.0 + gap);
+        match self {
+            LabelPlacement::Auto if is_point => (0.0, -(marker / 2.0 + h * 0.6)),
+            LabelPlacement::Auto | LabelPlacement::Center => (0.0, 0.0),
+            LabelPlacement::Above => (0.0, -dy),
+            LabelPlacement::Below => (0.0, dy),
+            LabelPlacement::Left => (-dx, 0.0),
+            LabelPlacement::Right => (dx, 0.0),
+            LabelPlacement::AboveRight => (dx, -dy),
+            LabelPlacement::AboveLeft => (-dx, -dy),
+            LabelPlacement::BelowRight => (dx, dy),
+            LabelPlacement::BelowLeft => (-dx, dy),
+        }
+    }
 }
 
 impl Labeling {
+    /// Whether labels draw at a scale denominator and viewing distance (metres).
+    pub fn in_range(&self, scale: f64, distance: f64) -> bool {
+        self.min_scale.is_none_or(|m| scale <= m)
+            && self.max_scale.is_none_or(|m| scale >= m)
+            && self.closest.is_none_or(|d| distance >= d)
+            && self.farthest.is_none_or(|d| distance <= d)
+    }
+
     /// Off, on the first text field that looks like a name.
     pub fn default_for(ds: &Dataset) -> Labeling {
         let field = ds
@@ -427,7 +531,19 @@ impl Labeling {
             .or_else(|| ds.fields.first())
             .map(|f| f.name.clone())
             .unwrap_or_default();
-        Labeling { enabled: false, field, size: 10.0, color: Rgba::rgb(0x2B, 0x2B, 0x2B), halo: true, bold: false }
+        Labeling {
+            enabled: false,
+            field,
+            size: 10.0,
+            color: Rgba::rgb(0x2B, 0x2B, 0x2B),
+            halo: true,
+            bold: false,
+            min_scale: None,
+            max_scale: None,
+            closest: None,
+            farthest: None,
+            placement: LabelPlacement::Auto,
+        }
     }
 }
 

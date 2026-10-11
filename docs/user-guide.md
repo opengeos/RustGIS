@@ -99,6 +99,31 @@ path and reopen it; rasters added in the browser are stored inside the project.
   or quantile.
 - **Proportional Symbols**: point size grows with a numeric field.
 
+## Labeling
+
+Turn labels on per layer (Map › Labeling › Label, or the Labeling tab), then:
+
+- **Visibility Range**: draw labels only between two scales (Out Beyond / In Beyond), or between
+  two viewing distances (Closest / Farthest). Clear Limits removes all four.
+- **Placement**: automatic (above points, centred on lines and polygons), centred, or one of
+  eight positions around the feature.
+- **Lock** keeps the labelled features fixed while you pan and zoom; **Pause** stops drawing
+  labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red.
+- **Convert** turns a layer's labels into an annotation layer: one point per label, carrying its
+  text in a `TEXT` field, which you can then edit, move or delete like any other features.
+
+## Clipboard and pop-ups
+
+Copy (++ctrl+c++) and Cut (++ctrl+x++) take the selected features. Paste (++ctrl+v++) adds them to
+the layer selected in Contents, matching fields by name; Paste Special adds them as a new layer.
+Copied features also go on the system clipboard as GeoJSON, so they can be pasted into another
+RustGIS window or a text editor, and GeoJSON copied elsewhere pastes into RustGIS. Copy Path copies
+the selected layer's data source path.
+
+Pop-ups (Map › Navigate) choose what a click with Explore identifies: the topmost feature, every
+visible layer's feature (step through them with ‹ ›), only selectable layers, only the layer
+selected in Contents, or nothing.
+
 ## Selection and queries
 
 Select By Attributes and definition queries use SQL `WHERE` clauses:
@@ -191,3 +216,4 @@ in the page, so the page is busy while it computes.
 | ++home++ | Full extent |
 | ++esc++ | Back to Explore; cancel a sketch |
 | ++delete++ | Delete selected features |
+| ++ctrl+c++ / ++ctrl+x++ / ++ctrl+v++ | Copy / Cut / Paste features |

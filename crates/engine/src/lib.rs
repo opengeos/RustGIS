@@ -173,6 +173,8 @@ pub struct Session {
     pub notices: Vec<Notice>,
     /// Layer whose attribute table is open.
     pub table_layer: Option<u32>,
+    /// Copied features (Edit › Clipboard).
+    pub clipboard: Option<cmd::clipboard::Clipboard>,
     undo: Vec<(Project, &'static str)>,
     redo: Vec<(Project, &'static str)>,
     back: Vec<Camera>,
@@ -215,6 +217,7 @@ impl Session {
             view_size: (1200.0, 720.0),
             notices: Vec::new(),
             table_layer: None,
+            clipboard: None,
             undo: Vec::new(),
             redo: Vec::new(),
             back: Vec::new(),

@@ -31,6 +31,8 @@ enum DragKind {
 pub struct Popup {
     pub info: Value,
     pub at: Coord,
+    /// Which of the identified features is shown (Visible Layers identifies several).
+    pub index: usize,
 }
 
 pub struct MapView {
@@ -143,6 +145,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 None => app.map.texture = Some(ui.ctx().load_texture("map", img, egui::TextureOptions::LINEAR)),
             }
             app.map.labels = r.labels;
+            app.map.labels.splice(0..0, r.unplaced);
             app.map.tex_camera = cam;
             app.map.key = Some(key);
         }
@@ -400,7 +403,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                         if let (Some(id), Some(row)) = (v["layerId"].as_u64(), v["row"].as_u64()) {
                             let _ = app.session.run("select.rows", &json!({"layer": id, "rows": [row]}));
                         }
-                        Some(Popup { info: v, at: c })
+                        Some(Popup { info: v, at: c, index: 0 })
                     }
                     _ => {
                         let _ = app.session.run("select.clear", &Value::Null);
@@ -650,7 +653,10 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     if !rect.contains(anchor) {
         return;
     }
-    let info = pp.info.clone();
+    let results = pp.info["results"].as_array().map_or(0, Vec::len);
+    let index = pp.index.min(results.saturating_sub(1));
+    let info = if results > 1 { pp.info["results"][index].clone() } else { pp.info.clone() };
+    let mut step: Option<usize> = None;
     let layer = info["layer"].as_str().unwrap_or("").to_string();
     let attrs = info["attributes"].as_object().cloned().unwrap_or_default();
     let title = if info["raster"].as_bool() == Some(true) {
@@ -704,6 +710,22 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                                 if ui.add(egui::Button::new(tl!("×")).frame(false)).clicked() {
                                     close = true;
+                                }
+                                // Several features identified: step through them.
+                                if results > 1 {
+                                    if ui.add_enabled(index + 1 < results, egui::Button::new("›").frame(false)).clicked() {
+                                        step = Some(index + 1);
+                                    }
+                                    let n = (index + 1).to_string();
+                                    let total = results.to_string();
+                                    ui.label(
+                                        egui::RichText::new(crate::i18n::fmt("{n} of {total}", &[("n", &n), ("total", &total)]))
+                                            .size(11.0)
+                                            .color(t.text_dim),
+                                    );
+                                    if ui.add_enabled(index > 0, egui::Button::new("‹").frame(false)).clicked() {
+                                        step = Some(index.saturating_sub(1));
+                                    }
                                 }
                             });
                         });
@@ -762,6 +784,8 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     }
     if close {
         app.map.popup = None;
+    } else if let (Some(i), Some(pp)) = (step, &mut app.map.popup) {
+        pp.index = i;
     }
 }
 

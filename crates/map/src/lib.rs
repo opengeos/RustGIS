@@ -13,7 +13,7 @@ pub use camera::Camera;
 pub use color::{Ramp, Rgba};
 pub use globe::{Globe, Projection};
 pub use raster::{RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
-pub use symbology::{ClassMethod, Labeling, Marker, Renderer, Symbol};
+pub use symbology::{ClassMethod, LabelPlacement, Labeling, Marker, Renderer, Symbol};
 
 use rustgis_data::{Dataset, Geometry, GeometryType};
 use rustgis_geom::{Coord, Extent};
@@ -250,8 +250,74 @@ pub struct Map {
     /// Flat map or 3D globe.
     #[serde(default)]
     pub projection: Projection,
+    /// Which layers a click identifies.
+    #[serde(default)]
+    pub popup_mode: PopupMode,
+    /// Map-wide label display switches.
+    #[serde(default)]
+    pub label_display: LabelDisplay,
+    /// The features labelled when labels were locked, as (layer id, row): only they are labelled
+    /// while the lock holds, wherever the map moves. Filled by the renderer.
+    #[serde(skip)]
+    pub label_lock: Option<Vec<(u32, usize)>>,
     #[serde(default)]
     next_layer_id: u32,
+}
+
+/// Which layers a click in the map identifies.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PopupMode {
+    /// The topmost feature under the pointer.
+    #[default]
+    Topmost,
+    /// Every visible layer's feature under the pointer.
+    Visible,
+    /// The topmost feature of a selectable layer.
+    Selectable,
+    /// Only the layer selected in the Contents pane.
+    SelectedInContents,
+    /// No pop-ups.
+    None,
+}
+
+impl PopupMode {
+    pub const ALL: [PopupMode; 5] =
+        [PopupMode::Topmost, PopupMode::Visible, PopupMode::Selectable, PopupMode::SelectedInContents, PopupMode::None];
+    pub fn code(self) -> &'static str {
+        match self {
+            PopupMode::Topmost => "topmost",
+            PopupMode::Visible => "visible",
+            PopupMode::Selectable => "selectable",
+            PopupMode::SelectedInContents => "selectedInContents",
+            PopupMode::None => "none",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            PopupMode::Topmost => "Topmost Layer",
+            PopupMode::Visible => "Visible Layers",
+            PopupMode::Selectable => "Selectable Layers",
+            PopupMode::SelectedInContents => "Selected in Contents",
+            PopupMode::None => "No Pop-ups",
+        }
+    }
+    pub fn from_code(s: &str) -> Option<PopupMode> {
+        PopupMode::ALL.into_iter().find(|m| m.code().eq_ignore_ascii_case(s.trim()))
+    }
+}
+
+/// Map-wide label switches.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LabelDisplay {
+    /// No labels are drawn (faster navigation).
+    #[serde(default)]
+    pub paused: bool,
+    /// The labelled features stay fixed as the map moves.
+    #[serde(default)]
+    pub locked: bool,
+    /// Labels that didn't fit are drawn too, in red.
+    #[serde(default)]
+    pub show_unplaced: bool,
 }
 
 impl Map {
@@ -264,6 +330,9 @@ impl Map {
             bookmarks: Vec::new(),
             graticule: true,
             projection: Projection::WebMercator,
+            popup_mode: PopupMode::Topmost,
+            label_display: LabelDisplay::default(),
+            label_lock: None,
             next_layer_id: 1,
         }
     }
@@ -443,6 +512,29 @@ impl Map {
             }
         }
         None
+    }
+
+    /// The topmost feature under a point in every visible layer, top layer first.
+    pub fn hits_at(&mut self, p: Coord, tol: f64, scale: f64) -> Vec<(u32, usize)> {
+        let (flat, key) = (self.flat(), self.projection.code());
+        let mut out = Vec::new();
+        for l in &mut self.layers {
+            if !l.visible || !l.in_scale_range(scale) {
+                continue;
+            }
+            let rows = l.visible_rows();
+            let id = l.id;
+            let proj = l.projected_in(&flat, &key);
+            if let Some(row) = proj
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(row, g)| (rows.get(row) == Some(&true) && g.as_ref().is_some_and(|g| g.hit(p, tol))).then_some(row))
+            {
+                out.push((id, row));
+            }
+        }
+        out
     }
 
     /// Rows of each selectable, visible layer inside a rectangle in the camera's coordinates.

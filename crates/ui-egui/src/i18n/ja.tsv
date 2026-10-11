@@ -8,6 +8,9 @@ A value, a field, or two of them joined by + − × ÷. Applies to the selected 
 About	バージョン情報
 About RustGIS	RustGIS について
 About RustGIS.	RustGIS について。
+Above	上
+Above Left	左上
+Above Right	右上
 Activate Map	マップをアクティブ化
 Add	追加
 Add\nData	データの\n追加
@@ -56,6 +59,9 @@ Band {n}	バンド {n}
 Bands	バンド
 Basemap	ベースマップ
 Basemaps	ベースマップ
+Below	下
+Below Left	左下
+Below Right	右下
 Bilinear	共一次内挿
 Blank	空白
 Blue	青
@@ -85,6 +91,7 @@ Case Field	ケース フィールド
 Catalog	カタログ
 Catalog\nPane	カタログ\nウィンドウ
 Cell size	セル サイズ
+Centered	中央
 Change the map's backdrop.	マップの背景を変更します。
 Change the map's coordinate system	マップの座標系を変更
 Choose a band combination to display the raster layer.	ラスター レイヤーを表示するバンドの組み合わせを選択します。
@@ -94,12 +101,14 @@ Choose how the flat map lays out the Earth.	平面マップで地球をどのよ
 Choose how the layer is drawn.	レイヤーの描画方法を選択します。
 Choose how the raster is drawn.	ラスターの描画方法を選択します。
 Choose the interface language.	インターフェイスの言語を選択します。
+Choose which layers a click identifies.	クリックで個別属性を表示するレイヤーを選択します。
 Circle	円
 Classes	クラス
 Classify	分類
 Clear	クリア
 Clear\nLimits	制限の\nクリア
 Clear History	履歴のクリア
+Clear Limits	制限のクリア
 Clear Selection	選択の解除
 Clear selection	選択の解除
 Clear the selection in every layer.	すべてのレイヤーの選択を解除します。
@@ -114,10 +123,12 @@ Click to add vertices · double-click to finish the line	クリックで頂点�
 Click to switch between decimal degrees and DMS	クリックで十進経緯度と度分秒を切り替え
 Clip	クリップ
 Clip Features	フィーチャのクリップ
+Clipboard	クリップボード
 Close	閉じる
 Close (Esc)	閉じる (Esc)
 Close Table	テーブルを閉じる
 Close table	テーブルを閉じる
+Closest	最近距離
 Collapse or expand the ribbon	リボンの折りたたみ/展開
 Collapse the ribbon (Ctrl+F1)	リボンを折りたたむ (Ctrl+F1)
 Color	色
@@ -133,11 +144,20 @@ Compute a field's values.	フィールドの値を計算します。
 Contents	コンテンツ
 Contrast	コントラスト
 Conversion	変換
+Convert	変換
+Convert the selected layer's labels into an annotation layer.	選択したレイヤーのラベルをアノテーション レイヤーに変換します。
+Convert To Annotation	アノテーションに変換
 Coordinate System	座標系
 Coordinate system	座標系
 Coordinate System…	座標系…
+Copied {path}	{path} をコピーしました
 Copies the (selected) features of a layer to a new layer.	レイヤーの（選択された）フィーチャを新しいレイヤーにコピーします。
+Copy	コピー
 Copy Coordinates	座標のコピー
+Copy Path	パスのコピー
+Copy the selected features (also as GeoJSON text).	選択したフィーチャをコピーします（GeoJSON テキストとしても）。
+Copy the selected features and delete them.	選択したフィーチャをコピーして削除します。
+Copy the selected layer's data source path.	選択したレイヤーのデータ ソース パスをコピーします。
 Couldn't download the font for {language}; pick the language again to retry.	{language} のフォントをダウンロードできませんでした。もう一度言語を選択して再試行してください。
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	フィールドの個数、合計、平均、最小、最大、標準偏差。必要に応じてケース フィールドごとに集計します。
 Countries, cities, rivers and lakes	国、都市、河川、湖沼
@@ -158,6 +178,7 @@ Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
 Current Project	現在のプロジェクト
+Cut	切り取り
 Dark\nMode	ダーク\nモード
 Data	データ
 Data Design	データ設計
@@ -193,6 +214,7 @@ Drag / middle-drag	ドラッグ / 中ボタン ドラッグ
 Drag a box or click to zoom in	ボックスをドラッグまたはクリックして拡大
 Drag a box to zoom into.	ボックスをドラッグして拡大します。
 Draw a halo around label text.	ラベル テキストの周囲にハローを描画します。
+Draw labels at every scale and distance.	すべての縮尺と距離でラベルを描画します。
 Draw new features in the selected layer. Double-click to finish lines and polygons.	選択したレイヤーに新しいフィーチャを描画します。ラインとポリゴンはダブルクリックで終了します。
 Draw the layer at every scale.	すべての縮尺でレイヤーを描画します。
 Drawing	描画
@@ -243,6 +265,7 @@ Expression	式
 Extract	抽出
 Extracts the parts of input features that fall inside clip polygons.	入力フィーチャのうち、クリップ ポリゴン内に含まれる部分を抽出します。
 Failed	失敗
+Farthest	最遠距離
 Feature	フィーチャ
 Feature\nTo Point	フィーチャ\n→ポイント
 Feature Layer	フィーチャ レイヤー
@@ -296,6 +319,8 @@ Group Option	グループ オプション
 Halo	ハロー
 Harbour (qualitative)	港（定性）
 Help	ヘルプ
+Hide labels when the viewer is closer than this.	視点がこれより近いときにラベルを非表示にします。
+Hide labels when the viewer is farther than this.	視点がこれより遠いときにラベルを非表示にします。
 Histogram Equalize	ヒストグラム均等化
 History	履歴
 Home	ホーム
@@ -321,12 +346,16 @@ Invert color scheme	配色を反転
 Invert the selection.	選択を反転します。
 IS NULL	IS NULL
 keep current	現在のまま
+Keep the labelled features fixed as the map moves.	マップの移動中もラベル付きフィーチャを固定します。
 Keyboard Shortcuts	キーボード ショートカット
 Keyboard shortcuts.	キーボード ショートカット。
 Kilometers	キロメートル
 Label	ラベル
 Label Class	ラベル クラス
+Label Distance Range	ラベル距離範囲
 Label Field	ラベル フィールド
+Label Placement	ラベルの配置
+Label Visibility Range	ラベル表示範囲
 Labeling	ラベリング
 Lagoon	ラグーン
 Lambert Cylindrical Equal Area	ランベルト正積円筒図法
@@ -337,6 +366,7 @@ Layer	レイヤー
 Layer From\nSelection	選択から\nレイヤー作成
 Layers	レイヤー
 Layers and Table Views	レイヤーとテーブル ビュー
+Left	左
 LIKE	LIKE
 Limit which features draw with a SQL expression.	SQL 式で描画するフィーチャを制限します。
 Line color	ラインの色
@@ -351,6 +381,7 @@ Locate GeoLibre Runner	GeoLibre ランナーの場所を指定
 Locate the GeoLibre runner	GeoLibre ランナーの場所を指定
 Locate…	場所を指定…
 Location	場所
+Lock	ロック
 Long	長整数
 Longitude (X)	経度（X）
 Major Lakes	主要な湖沼
@@ -406,6 +437,7 @@ Next	次へ
 Next Extent	次の範囲
 No	いいえ
 No bookmarks yet	ブックマークはまだありません
+No Pop-ups	ポップアップなし
 No standalone tables	スタンドアロン テーブルはありません
 NoData	NoData
 None	なし
@@ -446,15 +478,23 @@ Pan to a longitude/latitude.	経度/緯度に画面移動します。
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	マウスで画面移動、ホイールでズームし、フィーチャをクリックすると属性が表示されます。
 Paper	紙
 Parent folder	親フォルダー
+Paste	貼り付け
+Paste copied features into the selected layer, or as a new layer.	コピーしたフィーチャを選択したレイヤーまたは新しいレイヤーとして貼り付けます。
+Paste Special	形式を選択して貼り付け
+Paste Special (as a new layer)	形式を選択して貼り付け（新しいレイヤーとして）
+Pause	一時停止
 Percent Clip	パーセント クリップ
 Pixel	ピクセル
 Pixel type	ピクセル タイプ
+Placement	配置
 PNG image	PNG 画像
 Point	ポイント
 Polar, conformal: Antarctica and the Southern Ocean.	極域、正角: 南極大陸と南極海。
 Polar, conformal: the Arctic and the northern lands.	極域、正角: 北極圏と北方の陸地。
 Polygon	ポリゴン
 Polyline	ポリライン
+Pop-up Mode	ポップアップ モード
+Pop-ups	ポップアップ
 Populated Places	人口集中地
 Previous	前へ
 Previous Extent	前の範囲
@@ -501,6 +541,7 @@ Reset brightness, contrast and gamma.	明るさ、コントラスト、ガンマ
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	リボン機能のカバー率：{total} 件中 {done} 件の機能（{pct}%）。
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	リボンの対応状況：{total} 件のリボン機能のうち {done} 件に RustGIS コマンドがあります。
+Right	右
 Robinson	ロビンソン図法
 Run	実行
 Run Tool	ツールの実行
@@ -545,8 +586,10 @@ Select Rows	行の選択
 Select rows with a SQL expression.	SQL 式で行を選択します。
 Select Subset From Current Selection	現在の選択から絞り込み
 Selectable	選択可能
+Selectable Layers	選択可能レイヤー
 Selected	選択済み
 Selected Features: {n}	選択フィーチャ：{n}
+Selected in Contents	コンテンツで選択中
 Selected only	選択のみ
 Selecting Features	フィーチャの選択
 Selection	選択
@@ -568,6 +611,7 @@ Show or hide the Catalog pane.	カタログ ウィンドウの表示/非表示�
 Show or hide the Contents pane.	コンテンツ ウィンドウの表示/非表示を切り替えます。
 Show or hide the Geoprocessing pane.	ジオプロセシング ウィンドウの表示/非表示を切り替えます。
 Show or hide the layer.	レイヤーの表示/非表示を切り替えます。
+Show the labels that don't fit, in red.	配置できないラベルを赤で表示します。
 Show the map as a 3D globe, or as a flat map again.	マップを 3D の地球儀として表示するか、平面のマップに戻します。
 Show the Symbology pane for the selected layer.	選択したレイヤーのシンボル ウィンドウを表示します。
 Simplify	単純化
@@ -586,6 +630,7 @@ Statistics	統計
 Statistics Field	統計フィールド
 Status Bar	ステータス バー
 Std. Dev.	標準偏差
+Stop drawing labels, for faster navigation.	ナビゲーションを速くするためにラベルの描画を停止します。
 Stretch	ストレッチ
 Stretch\nType	ストレッチ\nタイプ
 Stretch Type	ストレッチ タイプ
@@ -622,6 +667,7 @@ Toolbox	ツールボックス
 Toolboxes	ツールボックス
 Tools	ツール
 Tools you run appear here.	実行したツールがここに表示されます。
+Topmost Layer	最上位レイヤー
 Total {total}   ·   Segment {segment}	合計 {total}   ·   区間 {segment}
 Transparency	透過表示
 Triangle	三角形
@@ -640,10 +686,12 @@ Valid expression · {n} matching rows	有効な式 · 一致する行 {n} 件
 Vector and raster data	ベクター データとラスター データ
 Version {version}	バージョン {version}
 View	表示
+View Unplaced	未配置の表示
 View › Windows	表示 › ウィンドウ
 Visibility	表示設定
 Visibility Range	表示縮尺範囲
 Visible	表示
+Visible Layers	表示レイヤー
 Web Mercator	Web メルカトル
 Website	ウェブサイト
 Welcome to RustGIS	RustGIS へようこそ
@@ -652,6 +700,7 @@ WGS 84 / Globe	WGS 84 / 地球儀
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	条件
 Where Clause	WHERE 句
+Where labels sit relative to their features.	フィーチャに対するラベルの位置。
 Windows	ウィンドウ
 Winkel Tripel	ヴィンケル図法
 World	世界

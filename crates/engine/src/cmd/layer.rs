@@ -221,7 +221,7 @@ fn s_req<'a>(p: &'a Value, k: &str) -> Result<&'a str, String> {
 }
 
 /// Applies `f` to the layer named by `p` (default: active layer).
-fn with(s: &mut Session, p: &Value, f: impl FnOnce(&mut rustgis_map::Layer)) -> CmdResult {
+pub(crate) fn with(s: &mut Session, p: &Value, f: impl FnOnce(&mut rustgis_map::Layer)) -> CmdResult {
     let id = s.layer_id(p)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     f(l);

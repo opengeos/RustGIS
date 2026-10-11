@@ -76,6 +76,17 @@ pub struct PlacedLabel {
 pub struct Rendered {
     pub pixmap: Pixmap,
     pub labels: Vec<PlacedLabel>,
+    /// Labels that didn't fit, when the map shows unplaced labels (drawn in red).
+    pub unplaced: Vec<PlacedLabel>,
+}
+
+/// The colour unplaced labels are drawn in.
+pub const UNPLACED: Rgba = Rgba::rgb(0xD0, 0x1C, 0x1C);
+
+/// The distance (metres) a viewer of a flat map at a ground resolution would see it from: the
+/// view's height seen through a 60° field of view.
+pub fn viewing_distance(ground_res: f64, view_height: f64) -> f64 {
+    ground_res * view_height * 0.866
 }
 
 /// The built-in world outline used by every basemap (Natural Earth 1:110m, public domain).
@@ -482,7 +493,13 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     }
 
     // Layers, bottom first.
-    let mut label_candidates: Vec<(PlacedLabel, f32)> = Vec::new();
+    let mut label_candidates: Vec<(PlacedLabel, f32, (u32, usize))> = Vec::new();
+    let display = map.label_display;
+    if !display.locked {
+        map.label_lock = None;
+    }
+    let lock: Option<std::collections::HashSet<(u32, usize)>> = map.label_lock.as_ref().map(|v| v.iter().copied().collect());
+    let distance = viewing_distance(map.ground_res_at(&view.camera), view.height);
     let n_layers = map.layers.len();
     for li in (0..n_layers).rev() {
         let Some(layer) = map.layers.get_mut(li) else { continue };
@@ -536,11 +553,14 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
             }
         }
         if labels.enabled
+            && !display.paused
+            && labels.in_range(scale, distance)
             && let Some(fi) = ds_ptr.field_index(&labels.field)
         {
+            let lid = layer.id;
             for (row, g) in geoms.iter().enumerate() {
                 let Some(g) = g else { continue };
-                if rows.get(row) != Some(&true) {
+                if rows.get(row) != Some(&true) || lock.as_ref().is_some_and(|k| !k.contains(&(lid, row))) {
                     continue;
                 }
                 let v = ds_ptr.value(row, fi);
@@ -552,8 +572,11 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                     continue;
                 }
                 let Some((x, y)) = ctx.screen(c) else { continue };
-                let dy =
-                    if g.kind() == GeometryType::Point { -(renderer.symbol_for(ds_ptr, row).size / 2.0 + labels.size * 0.75) } else { 0.0 };
+                let text = v.to_string();
+                let is_point = g.kind() == GeometryType::Point;
+                let marker = if is_point { renderer.symbol_for(ds_ptr, row).size } else { 0.0 };
+                let (dx, dy) =
+                    labels.placement.offset(text::measure(&text, labels.size, labels.bold), labels.size * 1.25, marker, is_point);
                 // Bigger polygons get priority.
                 let pri = match g {
                     Geometry::Polygon(_) => {
@@ -564,8 +587,8 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                 } + (n_layers - li) as f32 * 1e9;
                 label_candidates.push((
                     PlacedLabel {
-                        text: v.to_string(),
-                        x: x as f32,
+                        text,
+                        x: x as f32 + dx,
                         y: y as f32 + dy,
                         size: labels.size,
                         color: labels.color,
@@ -573,6 +596,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                         bold: labels.bold,
                     },
                     pri,
+                    (lid, row),
                 ));
             }
         }
@@ -580,8 +604,12 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     if let Some(g) = &globe {
         globe_shading(&mut pm, g, map.basemap, water, view.dark, view.pixels_per_point as f32);
     }
-    let labels = place_labels(label_candidates, view.width as f32, view.height as f32);
-    Some(Rendered { pixmap: pm, labels })
+    let placed = place_labels(label_candidates, view.width as f32, view.height as f32, lock.is_some());
+    if display.locked && map.label_lock.is_none() {
+        map.label_lock = Some(placed.keys);
+    }
+    let unplaced = if display.show_unplaced { placed.unplaced } else { Vec::new() };
+    Some(Rendered { pixmap: pm, labels: placed.labels, unplaced })
 }
 
 /// The colour of the space around the globe.
@@ -719,23 +747,37 @@ fn halo_for(text: Rgba) -> Rgba {
     if lum < 140.0 { Rgba::new(255, 255, 255, 225) } else { Rgba::new(20, 22, 26, 210) }
 }
 
-/// Greedy collision-free placement, highest priority first.
-fn place_labels(mut cands: Vec<(PlacedLabel, f32)>, w: f32, h: f32) -> Vec<PlacedLabel> {
+struct Placement {
+    labels: Vec<PlacedLabel>,
+    unplaced: Vec<PlacedLabel>,
+    /// (layer id, row) of each placed label.
+    keys: Vec<(u32, usize)>,
+}
+
+/// Greedy collision-free placement, highest priority first. Locked labels are all placed (they
+/// were placed without collisions when the lock was taken).
+fn place_labels(mut cands: Vec<(PlacedLabel, f32, (u32, usize))>, w: f32, h: f32, locked: bool) -> Placement {
     cands.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let mut boxes: Vec<[f32; 4]> = Vec::new();
-    let mut out = Vec::new();
-    for (l, _) in cands.into_iter().take(5000) {
+    let mut out = Placement { labels: Vec::new(), unplaced: Vec::new(), keys: Vec::new() };
+    for (l, _, key) in cands.into_iter().take(5000) {
         let tw = text::measure(&l.text, l.size, l.bold);
         let th = l.size * 1.25;
         let b = [l.x - tw / 2.0 - 2.0, l.y - th / 2.0, l.x + tw / 2.0 + 2.0, l.y + th / 2.0];
-        if b[0] < 0.0 || b[1] < 0.0 || b[2] > w || b[3] > h {
+        let off_screen = b[2] < 0.0 || b[3] < 0.0 || b[0] > w || b[1] > h;
+        let clipped = b[0] < 0.0 || b[1] < 0.0 || b[2] > w || b[3] > h;
+        if off_screen || (!locked && clipped) {
             continue;
         }
-        if boxes.iter().any(|o| b[0] < o[2] && o[0] < b[2] && b[1] < o[3] && o[1] < b[3]) {
+        if !locked && boxes.iter().any(|o| b[0] < o[2] && o[0] < b[2] && b[1] < o[3] && o[1] < b[3]) {
+            if out.unplaced.len() < 2000 {
+                out.unplaced.push(PlacedLabel { color: UNPLACED, halo: Some(halo_for(UNPLACED)), ..l });
+            }
             continue;
         }
         boxes.push(b);
-        out.push(l);
+        out.labels.push(l);
+        out.keys.push(key);
     }
     out
 }
@@ -743,7 +785,7 @@ fn place_labels(mut cands: Vec<(PlacedLabel, f32)>, w: f32, h: f32) -> Vec<Place
 /// Renders a map with its labels, a scale bar and a north arrow to PNG bytes.
 pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
     let mut r = render_with(map, view, true).ok_or("could not allocate the image")?;
-    for l in &r.labels {
+    for l in r.unplaced.iter().chain(&r.labels) {
         text::draw(&mut r.pixmap, l, view.pixels_per_point as f32);
     }
     text::scale_bar(&mut r.pixmap, view, map.ground_res_at(&view.camera));

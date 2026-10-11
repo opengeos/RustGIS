@@ -8,6 +8,9 @@ A value, a field, or two of them joined by + − × ÷. Applies to the selected 
 About	Tentang
 About RustGIS	Tentang RustGIS
 About RustGIS.	Tentang RustGIS.
+Above	Atas
+Above Left	Kiri Atas
+Above Right	Kanan Atas
 Activate Map	Aktifkan Peta
 Add	Tambah
 Add\nData	Tambah\nData
@@ -56,6 +59,9 @@ Band {n}	Band {n}
 Bands	Band
 Basemap	Peta dasar
 Basemaps	Peta dasar
+Below	Bawah
+Below Left	Kiri Bawah
+Below Right	Kanan Bawah
 Bilinear	Bilinear
 Blank	Kosong
 Blue	Biru
@@ -85,6 +91,7 @@ Case Field	Kolom Kasus
 Catalog	Katalog
 Catalog\nPane	Panel\nKatalog
 Cell size	Ukuran sel
+Centered	Tengah
 Change the map's backdrop.	Ubah latar belakang peta.
 Change the map's coordinate system	Ubah sistem koordinat peta
 Choose a band combination to display the raster layer.	Pilih kombinasi band untuk menampilkan layer raster.
@@ -94,12 +101,14 @@ Choose how the flat map lays out the Earth.	Pilih cara peta datar menampilkan Bu
 Choose how the layer is drawn.	Pilih cara layer digambar.
 Choose how the raster is drawn.	Pilih cara raster digambar.
 Choose the interface language.	Pilih bahasa antarmuka.
+Choose which layers a click identifies.	Pilih layer mana yang diidentifikasi oleh klik.
 Circle	Lingkaran
 Classes	Kelas
 Classify	Klasifikasi
 Clear	Bersihkan
 Clear\nLimits	Hapus\nBatas
 Clear History	Bersihkan Riwayat
+Clear Limits	Hapus Batas
 Clear Selection	Bersihkan Seleksi
 Clear selection	Bersihkan seleksi
 Clear the selection in every layer.	Bersihkan seleksi di setiap layer.
@@ -114,10 +123,12 @@ Click to add vertices · double-click to finish the line	Klik untuk menambah ver
 Click to switch between decimal degrees and DMS	Klik untuk beralih antara derajat desimal dan DMS
 Clip	Potong (Clip)
 Clip Features	Potong Fitur
+Clipboard	Papan Klip
 Close	Tutup
 Close (Esc)	Tutup (Esc)
 Close Table	Tutup Tabel
 Close table	Tutup tabel
+Closest	Terdekat
 Collapse or expand the ribbon	Ciutkan atau perluas ribbon
 Collapse the ribbon (Ctrl+F1)	Ciutkan ribbon (Ctrl+F1)
 Color	Warna
@@ -133,11 +144,20 @@ Compute a field's values.	Hitung nilai suatu kolom.
 Contents	Konten
 Contrast	Kontras
 Conversion	Konversi
+Convert	Konversi
+Convert the selected layer's labels into an annotation layer.	Konversi label layer terpilih menjadi layer anotasi.
+Convert To Annotation	Konversi ke Anotasi
 Coordinate System	Sistem Koordinat
 Coordinate system	Sistem koordinat
 Coordinate System…	Sistem Koordinat…
+Copied {path}	{path} disalin
 Copies the (selected) features of a layer to a new layer.	Menyalin fitur (terpilih) dari suatu layer ke layer baru.
+Copy	Salin
 Copy Coordinates	Salin Koordinat
+Copy Path	Salin Path
+Copy the selected features (also as GeoJSON text).	Salin fitur terpilih (juga sebagai teks GeoJSON).
+Copy the selected features and delete them.	Salin fitur terpilih lalu hapus.
+Copy the selected layer's data source path.	Salin path sumber data layer terpilih.
 Couldn't download the font for {language}; pick the language again to retry.	Tidak dapat mengunduh font untuk {language}; pilih bahasa lagi untuk mencoba ulang.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Jumlah, total, rata-rata, min, maks, dan simpangan baku suatu kolom, opsional per kolom kasus.
 Countries, cities, rivers and lakes	Negara, kota, sungai, dan danau
@@ -158,6 +178,7 @@ Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
 Current Project	Proyek Saat Ini
+Cut	Potong
 Dark\nMode	Mode\nGelap
 Data	Data
 Data Design	Desain Data
@@ -193,6 +214,7 @@ Drag / middle-drag	Seret / seret tombol tengah
 Drag a box or click to zoom in	Seret kotak atau klik untuk memperbesar
 Drag a box to zoom into.	Seret kotak untuk diperbesar.
 Draw a halo around label text.	Gambar halo di sekitar teks label.
+Draw labels at every scale and distance.	Gambar label di setiap skala dan jarak.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	Gambar fitur baru di layer terpilih. Klik ganda untuk menyelesaikan garis dan poligon.
 Draw the layer at every scale.	Gambar layer pada semua skala.
 Drawing	Penggambaran
@@ -243,6 +265,7 @@ Expression	Ekspresi
 Extract	Ekstrak
 Extracts the parts of input features that fall inside clip polygons.	Mengekstrak bagian fitur masukan yang berada di dalam poligon pemotong.
 Failed	Gagal
+Farthest	Terjauh
 Feature	Fitur
 Feature\nTo Point	Fitur\nke Titik
 Feature Layer	Layer Fitur
@@ -296,6 +319,8 @@ Group Option	Opsi Grup
 Halo	Halo
 Harbour (qualitative)	Pelabuhan (kualitatif)
 Help	Bantuan
+Hide labels when the viewer is closer than this.	Sembunyikan label saat penampil lebih dekat dari nilai ini.
+Hide labels when the viewer is farther than this.	Sembunyikan label saat penampil lebih jauh dari nilai ini.
 Histogram Equalize	Ekualisasi Histogram
 History	Riwayat
 Home	Home
@@ -321,12 +346,16 @@ Invert color scheme	Balik skema warna
 Invert the selection.	Balik seleksi.
 IS NULL	IS NULL
 keep current	biarkan saat ini
+Keep the labelled features fixed as the map moves.	Pertahankan fitur berlabel tetap saat peta bergerak.
 Keyboard Shortcuts	Pintasan Keyboard
 Keyboard shortcuts.	Pintasan keyboard.
 Kilometers	Kilometer
 Label	Label
 Label Class	Kelas Label
+Label Distance Range	Rentang Jarak Label
 Label Field	Kolom Label
+Label Placement	Penempatan Label
+Label Visibility Range	Rentang Visibilitas Label
 Labeling	Pelabelan
 Lagoon	Laguna
 Lambert Cylindrical Equal Area	Silinder Luas Sama Lambert
@@ -337,6 +366,7 @@ Layer	Layer
 Layer From\nSelection	Layer dari\nSeleksi
 Layers	Layer
 Layers and Table Views	Layer dan Tampilan Tabel
+Left	Kiri
 LIKE	LIKE
 Limit which features draw with a SQL expression.	Batasi fitur yang digambar dengan ekspresi SQL.
 Line color	Warna garis
@@ -351,6 +381,7 @@ Locate GeoLibre Runner	Temukan runner GeoLibre
 Locate the GeoLibre runner	Temukan runner GeoLibre
 Locate…	Temukan…
 Location	Lokasi
+Lock	Kunci
 Long	Long
 Longitude (X)	Bujur (X)
 Major Lakes	Danau Utama
@@ -406,6 +437,7 @@ Next	Berikutnya
 Next Extent	Cakupan Berikutnya
 No	Tidak
 No bookmarks yet	Belum ada penanda
+No Pop-ups	Tanpa Pop-up
 No standalone tables	Tidak ada tabel mandiri
 NoData	NoData
 None	Tidak ada
@@ -446,15 +478,23 @@ Pan to a longitude/latitude.	Geser ke bujur/lintang.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Geser dengan tetikus, zoom dengan roda, dan klik fitur untuk melihat atributnya.
 Paper	Kertas
 Parent folder	Folder induk
+Paste	Tempel
+Paste copied features into the selected layer, or as a new layer.	Tempel fitur yang disalin ke layer terpilih, atau sebagai layer baru.
+Paste Special	Tempel Khusus
+Paste Special (as a new layer)	Tempel Khusus (sebagai layer baru)
+Pause	Jeda
 Percent Clip	Potong Persen
 Pixel	Piksel
 Pixel type	Tipe piksel
+Placement	Penempatan
 PNG image	Gambar PNG
 Point	Titik
 Polar, conformal: Antarctica and the Southern Ocean.	Kutub, konformal: Antarktika dan Samudra Selatan.
 Polar, conformal: the Arctic and the northern lands.	Kutub, konformal: Arktik dan daratan utara.
 Polygon	Poligon
 Polyline	Polyline
+Pop-up Mode	Mode Pop-up
+Pop-ups	Pop-up
 Populated Places	Tempat Berpenduduk
 Previous	Sebelumnya
 Previous Extent	Cakupan Sebelumnya
@@ -501,6 +541,7 @@ Reset brightness, contrast and gamma.	Atur ulang kecerahan, kontras, dan gamma.
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Cakupan fitur ribbon: {done} dari {total} fitur ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Paritas ribbon: {done} dari {total} fitur ribbon memiliki perintah RustGIS.
+Right	Kanan
 Robinson	Robinson
 Run	Jalankan
 Run Tool	Jalankan Alat
@@ -545,8 +586,10 @@ Select Rows	Pilih Baris
 Select rows with a SQL expression.	Pilih baris dengan ekspresi SQL.
 Select Subset From Current Selection	Pilih Subset dari Seleksi Saat Ini
 Selectable	Dapat dipilih
+Selectable Layers	Layer yang Dapat Dipilih
 Selected	Terpilih
 Selected Features: {n}	Fitur Terpilih: {n}
+Selected in Contents	Terpilih di Konten
 Selected only	Hanya yang terpilih
 Selecting Features	Memilih Fitur
 Selection	Seleksi
@@ -568,6 +611,7 @@ Show or hide the Catalog pane.	Tampilkan atau sembunyikan panel Katalog.
 Show or hide the Contents pane.	Tampilkan atau sembunyikan panel Konten.
 Show or hide the Geoprocessing pane.	Tampilkan atau sembunyikan panel Geoprosesing.
 Show or hide the layer.	Tampilkan atau sembunyikan layer.
+Show the labels that don't fit, in red.	Tampilkan label yang tidak muat dengan warna merah.
 Show the map as a 3D globe, or as a flat map again.	Tampilkan peta sebagai globe 3D, atau kembali sebagai peta datar.
 Show the Symbology pane for the selected layer.	Tampilkan panel Simbologi untuk layer terpilih.
 Simplify	Sederhanakan
@@ -586,6 +630,7 @@ Statistics	Statistik
 Statistics Field	Kolom Statistik
 Status Bar	Bilah Status
 Std. Dev.	Simp. Baku
+Stop drawing labels, for faster navigation.	Berhenti menggambar label agar navigasi lebih cepat.
 Stretch	Peregangan
 Stretch\nType	Tipe\nPeregangan
 Stretch Type	Tipe Peregangan
@@ -622,6 +667,7 @@ Toolbox	Kotak Alat
 Toolboxes	Kotak Alat
 Tools	Alat
 Tools you run appear here.	Alat yang Anda jalankan muncul di sini.
+Topmost Layer	Layer Teratas
 Total {total}   ·   Segment {segment}	Total {total}   ·   Segmen {segment}
 Transparency	Transparansi
 Triangle	Segitiga
@@ -640,10 +686,12 @@ Valid expression · {n} matching rows	Ekspresi valid · {n} baris cocok
 Vector and raster data	Data vektor dan raster
 Version {version}	Versi {version}
 View	Tampilan
+View Unplaced	Lihat Tidak Terpasang
 View › Windows	Tampilan › Jendela
 Visibility	Visibilitas
 Visibility Range	Rentang Visibilitas
 Visible	Terlihat
+Visible Layers	Layer Terlihat
 Web Mercator	Web Mercator
 Website	Situs web
 Welcome to RustGIS	Selamat datang di RustGIS
@@ -652,6 +700,7 @@ WGS 84 / Globe	WGS 84 / Globe
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	Where
 Where Clause	Klausa Where
+Where labels sit relative to their features.	Posisi label relatif terhadap fiturnya.
 Windows	Jendela
 Winkel Tripel	Winkel Tripel
 World	Dunia

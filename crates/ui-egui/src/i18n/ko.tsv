@@ -8,6 +8,9 @@ A value, a field, or two of them joined by + − × ÷. Applies to the selected 
 About	정보
 About RustGIS	RustGIS 정보
 About RustGIS.	RustGIS 정보.
+Above	위
+Above Left	왼쪽 위
+Above Right	오른쪽 위
 Activate Map	지도 활성화
 Add	추가
 Add\nData	데이터\n추가
@@ -56,6 +59,9 @@ Band {n}	밴드 {n}
 Bands	밴드
 Basemap	배경지도
 Basemaps	배경지도
+Below	아래
+Below Left	왼쪽 아래
+Below Right	오른쪽 아래
 Bilinear	쌍선형
 Blank	빈 지도
 Blue	파랑
@@ -85,6 +91,7 @@ Case Field	케이스 필드
 Catalog	카탈로그
 Catalog\nPane	카탈로그\n창
 Cell size	셀 크기
+Centered	가운데
 Change the map's backdrop.	지도의 배경을 변경합니다.
 Change the map's coordinate system	지도 좌표계 변경
 Choose a band combination to display the raster layer.	래스터 레이어를 표시할 밴드 조합을 선택합니다.
@@ -94,12 +101,14 @@ Choose how the flat map lays out the Earth.	평면 지도가 지구를 표현하
 Choose how the layer is drawn.	레이어를 그리는 방식을 선택합니다.
 Choose how the raster is drawn.	래스터를 그리는 방법을 선택합니다.
 Choose the interface language.	인터페이스 언어를 선택합니다.
+Choose which layers a click identifies.	클릭으로 식별할 레이어를 선택합니다.
 Circle	원
 Classes	클래스
 Classify	분류
 Clear	지우기
 Clear\nLimits	제한\n지우기
 Clear History	기록 지우기
+Clear Limits	제한 지우기
 Clear Selection	선택 해제
 Clear selection	선택 해제
 Clear the selection in every layer.	모든 레이어의 선택을 해제합니다.
@@ -114,10 +123,12 @@ Click to add vertices · double-click to finish the line	클릭하여 버텍스 
 Click to switch between decimal degrees and DMS	클릭하여 십진수 도와 도분초(DMS) 간 전환
 Clip	자르기
 Clip Features	피처 자르기
+Clipboard	클립보드
 Close	닫기
 Close (Esc)	닫기 (Esc)
 Close Table	테이블 닫기
 Close table	테이블 닫기
+Closest	가장 가까움
 Collapse or expand the ribbon	리본 축소 또는 확장
 Collapse the ribbon (Ctrl+F1)	리본 축소 (Ctrl+F1)
 Color	색상
@@ -133,11 +144,20 @@ Compute a field's values.	필드 값을 계산합니다.
 Contents	목차
 Contrast	대비
 Conversion	변환
+Convert	변환
+Convert the selected layer's labels into an annotation layer.	선택한 레이어의 라벨을 주석 레이어로 변환합니다.
+Convert To Annotation	주석으로 변환
 Coordinate System	좌표계
 Coordinate system	좌표계
 Coordinate System…	좌표계…
+Copied {path}	{path} 복사됨
 Copies the (selected) features of a layer to a new layer.	레이어의 (선택한) 피처를 새 레이어로 복사합니다.
+Copy	복사
 Copy Coordinates	좌표 복사
+Copy Path	경로 복사
+Copy the selected features (also as GeoJSON text).	선택한 피처를 복사합니다(GeoJSON 텍스트로도).
+Copy the selected features and delete them.	선택한 피처를 복사하고 삭제합니다.
+Copy the selected layer's data source path.	선택한 레이어의 데이터 원본 경로를 복사합니다.
 Couldn't download the font for {language}; pick the language again to retry.	{language} 글꼴을 다운로드할 수 없습니다. 다시 시도하려면 언어를 다시 선택하세요.
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	필드의 개수, 합계, 평균, 최소값, 최대값 및 표준 편차를 계산하며, 선택적으로 케이스 필드별로 계산합니다.
 Countries, cities, rivers and lakes	국가, 도시, 하천 및 호수
@@ -158,6 +178,7 @@ Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
 Current Project	현재 프로젝트
+Cut	잘라내기
 Dark\nMode	다크\n모드
 Data	데이터
 Data Design	데이터 디자인
@@ -193,6 +214,7 @@ Drag / middle-drag	드래그 / 가운데 버튼 드래그
 Drag a box or click to zoom in	상자를 드래그하거나 클릭하여 확대
 Drag a box to zoom into.	확대할 상자를 드래그합니다.
 Draw a halo around label text.	라벨 텍스트 주위에 후광을 그립니다.
+Draw labels at every scale and distance.	모든 축척과 거리에서 라벨을 그립니다.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	선택한 레이어에 새 피처를 그립니다. 라인과 폴리곤은 더블클릭하여 완료합니다.
 Draw the layer at every scale.	모든 축척에서 레이어를 그립니다.
 Drawing	그리기
@@ -243,6 +265,7 @@ Expression	표현식
 Extract	추출
 Extracts the parts of input features that fall inside clip polygons.	입력 피처 중 자르기 폴리곤 안에 있는 부분을 추출합니다.
 Failed	실패
+Farthest	가장 멂
 Feature	피처
 Feature\nTo Point	피처를\n포인트로
 Feature Layer	피처 레이어
@@ -296,6 +319,8 @@ Group Option	그룹 옵션
 Halo	후광
 Harbour (qualitative)	하버(정성적)
 Help	도움말
+Hide labels when the viewer is closer than this.	보는 위치가 이보다 가까우면 라벨을 숨깁니다.
+Hide labels when the viewer is farther than this.	보는 위치가 이보다 멀면 라벨을 숨깁니다.
 Histogram Equalize	히스토그램 평활화
 History	기록
 Home	Home
@@ -321,12 +346,16 @@ Invert color scheme	색상표 반전
 Invert the selection.	선택을 반전합니다.
 IS NULL	IS NULL
 keep current	현재 값 유지
+Keep the labelled features fixed as the map moves.	지도가 움직여도 라벨이 표시된 피처를 고정합니다.
 Keyboard Shortcuts	키보드 단축키
 Keyboard shortcuts.	키보드 단축키.
 Kilometers	킬로미터
 Label	라벨
 Label Class	라벨 클래스
+Label Distance Range	라벨 거리 범위
 Label Field	라벨 필드
+Label Placement	라벨 배치
+Label Visibility Range	라벨 가시 범위
 Labeling	라벨링
 Lagoon	라군
 Lambert Cylindrical Equal Area	램버트 원통 정적도법
@@ -337,6 +366,7 @@ Layer	레이어
 Layer From\nSelection	선택에서\n레이어
 Layers	레이어
 Layers and Table Views	레이어 및 테이블 뷰
+Left	왼쪽
 LIKE	LIKE
 Limit which features draw with a SQL expression.	SQL 표현식으로 그려질 피처를 제한합니다.
 Line color	선 색상
@@ -351,6 +381,7 @@ Locate GeoLibre Runner	GeoLibre 실행기 찾기
 Locate the GeoLibre runner	GeoLibre 실행기 찾기
 Locate…	찾기…
 Location	위치
+Lock	잠금
 Long	정수
 Longitude (X)	경도(X)
 Major Lakes	주요 호수
@@ -406,6 +437,7 @@ Next	다음
 Next Extent	다음 범위
 No	아니요
 No bookmarks yet	아직 북마크가 없습니다
+No Pop-ups	팝업 없음
 No standalone tables	독립 테이블 없음
 NoData	NoData
 None	없음
@@ -446,15 +478,23 @@ Pan to a longitude/latitude.	경도/위도로 이동합니다.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	마우스로 이동하고, 휠로 확대/축소하며, 피처를 클릭하여 속성을 확인합니다.
 Paper	종이
 Parent folder	상위 폴더
+Paste	붙여넣기
+Paste copied features into the selected layer, or as a new layer.	복사한 피처를 선택한 레이어에 붙여넣거나 새 레이어로 붙여넣습니다.
+Paste Special	선택하여 붙여넣기
+Paste Special (as a new layer)	선택하여 붙여넣기(새 레이어로)
+Pause	일시 중지
 Percent Clip	백분율 클립
 Pixel	픽셀
 Pixel type	픽셀 유형
+Placement	배치
 PNG image	PNG 이미지
 Point	포인트
 Polar, conformal: Antarctica and the Southern Ocean.	극지, 정각: 남극 대륙과 남극해.
 Polar, conformal: the Arctic and the northern lands.	극지, 정각: 북극과 북쪽 육지.
 Polygon	폴리곤
 Polyline	폴리라인
+Pop-up Mode	팝업 모드
+Pop-ups	팝업
 Populated Places	인구 밀집 지역
 Previous	이전
 Previous Extent	이전 범위
@@ -501,6 +541,7 @@ Reset brightness, contrast and gamma.	밝기, 대비 및 감마를 재설정합�
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	리본 기능 지원 범위: {total}개 중 {done}개 기능({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	리본 대응: 리본 기능 {total}개 중 {done}개에 RustGIS 명령이 있습니다.
+Right	오른쪽
 Robinson	로빈슨 도법
 Run	실행
 Run Tool	도구 실행
@@ -545,8 +586,10 @@ Select Rows	행 선택
 Select rows with a SQL expression.	SQL 표현식으로 행을 선택합니다.
 Select Subset From Current Selection	현재 선택에서 하위 집합 선택
 Selectable	선택 가능
+Selectable Layers	선택 가능한 레이어
 Selected	선택됨
 Selected Features: {n}	선택한 피처: {n}
+Selected in Contents	목차에서 선택됨
 Selected only	선택한 항목만
 Selecting Features	피처 선택
 Selection	선택
@@ -568,6 +611,7 @@ Show or hide the Catalog pane.	카탈로그 창을 표시하거나 숨깁니다.
 Show or hide the Contents pane.	목차 창을 표시하거나 숨깁니다.
 Show or hide the Geoprocessing pane.	지오프로세싱 창을 표시하거나 숨깁니다.
 Show or hide the layer.	레이어를 표시하거나 숨깁니다.
+Show the labels that don't fit, in red.	맞지 않는 라벨을 빨간색으로 표시합니다.
 Show the map as a 3D globe, or as a flat map again.	지도를 3D 지구본으로 표시하거나 다시 평면 지도로 표시합니다.
 Show the Symbology pane for the selected layer.	선택한 레이어의 심볼 창을 표시합니다.
 Simplify	단순화
@@ -586,6 +630,7 @@ Statistics	통계
 Statistics Field	통계 필드
 Status Bar	상태 표시줄
 Std. Dev.	표준편차
+Stop drawing labels, for faster navigation.	더 빠른 탐색을 위해 라벨 그리기를 중지합니다.
 Stretch	스트레치
 Stretch\nType	스트레치\n유형
 Stretch Type	스트레치 유형
@@ -622,6 +667,7 @@ Toolbox	도구 상자
 Toolboxes	도구 상자
 Tools	도구
 Tools you run appear here.	실행한 도구가 여기에 표시됩니다.
+Topmost Layer	최상위 레이어
 Total {total}   ·   Segment {segment}	전체 {total}   ·   구간 {segment}
 Transparency	투명도
 Triangle	삼각형
@@ -640,10 +686,12 @@ Valid expression · {n} matching rows	유효한 표현식 · 일치하는 행 {n
 Vector and raster data	벡터 및 래스터 데이터
 Version {version}	버전 {version}
 View	보기
+View Unplaced	배치 안 된 라벨 보기
 View › Windows	보기 › 창
 Visibility	가시성
 Visibility Range	가시 범위
 Visible	표시
+Visible Layers	표시 레이어
 Web Mercator	웹 메르카토르
 Website	웹사이트
 Welcome to RustGIS	RustGIS에 오신 것을 환영합니다
@@ -652,6 +700,7 @@ WGS 84 / Globe	WGS 84 / 지구본
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	조건
 Where Clause	WHERE 절
+Where labels sit relative to their features.	피처를 기준으로 라벨이 놓이는 위치입니다.
 Windows	창
 Winkel Tripel	빙켈 트리펠 도법
 World	세계

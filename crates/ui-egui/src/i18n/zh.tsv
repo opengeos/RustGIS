@@ -8,6 +8,9 @@ A value, a field, or two of them joined by + − × ÷. Applies to the selected 
 About	关于
 About RustGIS	关于 RustGIS
 About RustGIS.	关于 RustGIS。
+Above	上方
+Above Left	左上方
+Above Right	右上方
 Activate Map	激活地图
 Add	添加
 Add\nData	添加\n数据
@@ -56,6 +59,9 @@ Band {n}	波段 {n}
 Bands	波段
 Basemap	底图
 Basemaps	底图
+Below	下方
+Below Left	左下方
+Below Right	右下方
 Bilinear	双线性
 Blank	空白
 Blue	蓝
@@ -85,6 +91,7 @@ Case Field	分组字段
 Catalog	目录
 Catalog\nPane	目录\n窗格
 Cell size	像元大小
+Centered	居中
 Change the map's backdrop.	更改地图的背景。
 Change the map's coordinate system	更改地图的坐标系
 Choose a band combination to display the raster layer.	选择用于显示栅格图层的波段组合。
@@ -94,12 +101,14 @@ Choose how the flat map lays out the Earth.	选择平面地图如何展示地球
 Choose how the layer is drawn.	选择图层的绘制方式。
 Choose how the raster is drawn.	选择栅格的绘制方式。
 Choose the interface language.	选择界面语言。
+Choose which layers a click identifies.	选择单击时识别哪些图层。
 Circle	圆形
 Classes	分类
 Classify	分类
 Clear	清除
 Clear\nLimits	清除\n限制
 Clear History	清除历史记录
+Clear Limits	清除限制
 Clear Selection	清除选择
 Clear selection	清除选择
 Clear the selection in every layer.	清除所有图层中的选择。
@@ -114,10 +123,12 @@ Click to add vertices · double-click to finish the line	单击添加折点 · �
 Click to switch between decimal degrees and DMS	单击在十进制度和度分秒之间切换
 Clip	裁剪
 Clip Features	裁剪要素
+Clipboard	剪贴板
 Close	关闭
 Close (Esc)	关闭 (Esc)
 Close Table	关闭表
 Close table	关闭表
+Closest	最近距离
 Collapse or expand the ribbon	折叠或展开功能区
 Collapse the ribbon (Ctrl+F1)	折叠功能区 (Ctrl+F1)
 Color	颜色
@@ -133,11 +144,20 @@ Compute a field's values.	计算字段的值。
 Contents	内容
 Contrast	对比度
 Conversion	转换
+Convert	转换
+Convert the selected layer's labels into an annotation layer.	将所选图层的标注转换为注记图层。
+Convert To Annotation	转换为注记
 Coordinate System	坐标系
 Coordinate system	坐标系
 Coordinate System…	坐标系…
+Copied {path}	已复制 {path}
 Copies the (selected) features of a layer to a new layer.	将图层的（所选）要素复制到新图层。
+Copy	复制
 Copy Coordinates	复制坐标
+Copy Path	复制路径
+Copy the selected features (also as GeoJSON text).	复制所选要素（同时作为 GeoJSON 文本）。
+Copy the selected features and delete them.	复制所选要素并将其删除。
+Copy the selected layer's data source path.	复制所选图层的数据源路径。
 Couldn't download the font for {language}; pick the language again to retry.	无法下载 {language} 的字体；请重新选择该语言以重试。
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	字段的计数、总和、平均值、最小值、最大值和标准差，可按分组字段分别统计。
 Countries, cities, rivers and lakes	国家、城市、河流和湖泊
@@ -158,6 +178,7 @@ Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
 Current Project	当前工程
+Cut	剪切
 Dark\nMode	深色\n模式
 Data	数据
 Data Design	数据设计
@@ -193,6 +214,7 @@ Drag / middle-drag	拖动 / 中键拖动
 Drag a box or click to zoom in	拖动矩形框或单击以放大
 Drag a box to zoom into.	拖动矩形框进行放大。
 Draw a halo around label text.	在标注文本周围绘制晕圈。
+Draw labels at every scale and distance.	在所有比例尺和距离下绘制标注。
 Draw new features in the selected layer. Double-click to finish lines and polygons.	在所选图层中绘制新要素。双击完成线和多边形。
 Draw the layer at every scale.	在所有比例尺下绘制图层。
 Drawing	绘制
@@ -243,6 +265,7 @@ Expression	表达式
 Extract	提取
 Extracts the parts of input features that fall inside clip polygons.	提取输入要素中落在裁剪多边形内的部分。
 Failed	失败
+Farthest	最远距离
 Feature	要素
 Feature\nTo Point	要素\n转点
 Feature Layer	要素图层
@@ -296,6 +319,8 @@ Group Option	分组选项
 Halo	晕圈
 Harbour (qualitative)	港湾（定性）
 Help	帮助
+Hide labels when the viewer is closer than this.	当观察者比此距离更近时隐藏标注。
+Hide labels when the viewer is farther than this.	当观察者比此距离更远时隐藏标注。
 Histogram Equalize	直方图均衡化
 History	历史记录
 Home	主页
@@ -321,12 +346,16 @@ Invert color scheme	反转配色方案
 Invert the selection.	反转选择。
 IS NULL	IS NULL
 keep current	保持当前
+Keep the labelled features fixed as the map moves.	地图移动时保持已标注要素不变。
 Keyboard Shortcuts	键盘快捷键
 Keyboard shortcuts.	键盘快捷键。
 Kilometers	千米
 Label	标注
 Label Class	标注类
+Label Distance Range	标注距离范围
 Label Field	标注字段
+Label Placement	标注放置
+Label Visibility Range	标注可见范围
 Labeling	标注
 Lagoon	泻湖
 Lambert Cylindrical Equal Area	兰伯特等积圆柱投影
@@ -337,6 +366,7 @@ Layer	图层
 Layer From\nSelection	从所选内容\n创建图层
 Layers	图层
 Layers and Table Views	图层和表视图
+Left	左侧
 LIKE	LIKE
 Limit which features draw with a SQL expression.	使用 SQL 表达式限制绘制哪些要素。
 Line color	线颜色
@@ -351,6 +381,7 @@ Locate GeoLibre Runner	定位 GeoLibre 运行器
 Locate the GeoLibre runner	定位 GeoLibre 运行器
 Locate…	定位…
 Location	位置
+Lock	锁定
 Long	长整型
 Longitude (X)	经度（X）
 Major Lakes	主要湖泊
@@ -406,6 +437,7 @@ Next	下一个
 Next Extent	下一个范围
 No	否
 No bookmarks yet	暂无书签
+No Pop-ups	无弹出窗口
 No standalone tables	无独立表
 NoData	NoData
 None	无
@@ -446,15 +478,23 @@ Pan to a longitude/latitude.	平移到某个经度/纬度。
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	用鼠标平移，用滚轮缩放，单击要素查看其属性。
 Paper	纸张
 Parent folder	上级文件夹
+Paste	粘贴
+Paste copied features into the selected layer, or as a new layer.	将复制的要素粘贴到所选图层，或粘贴为新图层。
+Paste Special	选择性粘贴
+Paste Special (as a new layer)	选择性粘贴（作为新图层）
+Pause	暂停
 Percent Clip	百分比截断
 Pixel	像素
 Pixel type	像素类型
+Placement	放置
 PNG image	PNG 图像
 Point	点
 Polar, conformal: Antarctica and the Southern Ocean.	极地，等角: 南极洲和南大洋。
 Polar, conformal: the Arctic and the northern lands.	极地，等角: 北极和北方陆地。
 Polygon	多边形
 Polyline	折线
+Pop-up Mode	弹出窗口模式
+Pop-ups	弹出窗口
 Populated Places	居民点
 Previous	上一个
 Previous Extent	上一个范围
@@ -501,6 +541,7 @@ Reset brightness, contrast and gamma.	重置亮度、对比度和伽马。
 RGB	RGB
 Ribbon feature coverage: {done} of {total} features ({pct}%).	功能区要素覆盖率：{total} 个要素中已完成 {done} 个（{pct}%）。
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	功能区对等：{total} 个功能区功能中有 {done} 个具有 RustGIS 命令。
+Right	右侧
 Robinson	罗宾森投影
 Run	运行
 Run Tool	运行工具
@@ -545,8 +586,10 @@ Select Rows	选择行
 Select rows with a SQL expression.	使用 SQL 表达式选择行。
 Select Subset From Current Selection	从当前选择中选择子集
 Selectable	可选
+Selectable Layers	可选图层
 Selected	已选择
 Selected Features: {n}	所选要素：{n}
+Selected in Contents	在内容中选择的图层
 Selected only	仅所选
 Selecting Features	选择要素
 Selection	选择
@@ -568,6 +611,7 @@ Show or hide the Catalog pane.	显示或隐藏目录窗格。
 Show or hide the Contents pane.	显示或隐藏内容窗格。
 Show or hide the Geoprocessing pane.	显示或隐藏地理处理窗格。
 Show or hide the layer.	显示或隐藏图层。
+Show the labels that don't fit, in red.	以红色显示无法放置的标注。
 Show the map as a 3D globe, or as a flat map again.	将地图显示为三维地球仪，或恢复为平面地图。
 Show the Symbology pane for the selected layer.	显示所选图层的符号系统窗格。
 Simplify	简化
@@ -586,6 +630,7 @@ Statistics	统计
 Statistics Field	统计字段
 Status Bar	状态栏
 Std. Dev.	标准差
+Stop drawing labels, for faster navigation.	停止绘制标注，以加快导航。
 Stretch	拉伸
 Stretch\nType	拉伸\n类型
 Stretch Type	拉伸类型
@@ -622,6 +667,7 @@ Toolbox	工具箱
 Toolboxes	工具箱
 Tools	工具
 Tools you run appear here.	运行的工具会显示在这里。
+Topmost Layer	最顶层图层
 Total {total}   ·   Segment {segment}	总计 {total}   ·   线段 {segment}
 Transparency	透明度
 Triangle	三角形
@@ -640,10 +686,12 @@ Valid expression · {n} matching rows	有效表达式 · {n} 个匹配行
 Vector and raster data	矢量和栅格数据
 Version {version}	版本 {version}
 View	视图
+View Unplaced	查看未放置
 View › Windows	视图 › 窗口
 Visibility	可见性
 Visibility Range	可见范围
 Visible	可见
+Visible Layers	可见图层
 Web Mercator	Web 墨卡托
 Website	网站
 Welcome to RustGIS	欢迎使用 RustGIS
@@ -652,6 +700,7 @@ WGS 84 / Globe	WGS 84 / 地球仪
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 Where	条件
 Where Clause	Where 子句
+Where labels sit relative to their features.	标注相对于其要素的位置。
 Windows	窗口
 Winkel Tripel	温克尔三重投影
 World	世界
