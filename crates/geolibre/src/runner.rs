@@ -5,8 +5,9 @@
 //! run. A tool that crashes or panics takes only the subprocess down.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -39,12 +40,46 @@ fn command(exe: &Path) -> Command {
     c
 }
 
+/// Runs `c` to completion, or kills it after `limit`. For the quick queries (version,
+/// manifests): a program that only happens to be called `geolibre` mustn't hang the app. Tool
+/// runs have no limit, since a large raster can legitimately take a long time.
+fn output_within(mut c: Command, limit: Duration) -> Option<Output> {
+    let mut child = c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
+    // Drain stdout on a thread, so a large output (the manifests) can't fill the pipe and stall.
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut stdout, &mut buf);
+        buf
+    });
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let stdout = reader.join().ok()?;
+    let mut stderr = Vec::new();
+    if let Some(mut e) = child.stderr.take() {
+        let _ = std::io::Read::read_to_end(&mut e, &mut stderr);
+    }
+    Some(Output { status, stdout, stderr })
+}
+
 /// The runner's version, if `exe` is a GeoLibre runner (not some other program called geolibre).
 pub fn version_of(exe: &Path) -> Option<String> {
     if !exe.is_file() {
         return None;
     }
-    let out = command(exe).arg("version").output().ok()?;
+    let mut c = command(exe);
+    c.arg("version");
+    let out = output_within(c, Duration::from_secs(10))?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && text.starts_with("geolibre-cli")).then_some(text)
 }
@@ -100,7 +135,9 @@ pub fn choose(exe: Option<PathBuf>) -> Result<Option<(PathBuf, String)>, String>
 /// Every tool's manifest, from `geolibre manifests`.
 pub fn manifests() -> Result<Vec<Value>, String> {
     let (exe, _) = find().ok_or("the GeoLibre runner isn't installed")?;
-    let out = command(&exe).arg("manifests").output().map_err(|e| format!("{}: {e}", exe.display()))?;
+    let mut c = command(&exe);
+    c.arg("manifests");
+    let out = output_within(c, Duration::from_secs(60)).ok_or_else(|| format!("{}: no answer to `manifests`", exe.display()))?;
     if !out.status.success() {
         return Err(format!("{}: {}", exe.display(), String::from_utf8_lossy(&out.stderr).trim()));
     }

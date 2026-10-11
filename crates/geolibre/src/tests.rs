@@ -65,6 +65,19 @@ fn runner_values_and_choices() {
     assert!(set_runner(Some(PathBuf::from("/no/such/geolibre"))).is_err());
     assert_eq!(runner::find(), before);
     assert_eq!(label_of("z_factor"), "Z factor");
+    // Two layer names with the same safe name still get two files.
+    let scratch = Scratch::new().unwrap();
+    let (a, b) = (scratch.input("Roads 2020", "geojson"), scratch.input("Roads_2020", "geojson"));
+    assert_ne!(a, b);
+    assert_ne!(scratch.input("城市", "tif"), scratch.input("道路", "tif"));
+    let dir = scratch.dir.clone();
+    drop(scratch);
+    assert!(!dir.exists(), "removed after the run");
+    // A point that can't be converted drops the geometry instead of writing nulls.
+    let line = Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)]]);
+    assert!(convert(&line, |c| Some(Coord::new(c.x * 2.0, c.y))).is_some());
+    assert!(convert(&line, |c| (c.x < 0.5).then_some(c)).is_none());
+    assert!(convert(&line, |_| Some(Coord::new(f64::NAN, 0.0))).is_none());
     assert_eq!(safe("a b/c.tif"), "a_b_c_tif");
 }
 
@@ -80,7 +93,9 @@ fn manifests_become_tool_forms() {
     assert!(slope.params.iter().all(|p| p.name != "output"), "outputs are not form fields");
     let units = slope.params.iter().find(|p| p.name == "units").unwrap();
     assert!(matches!(units.kind, ParamKind::Choice(c) if c.contains(&"percent")));
+    // Defaults are JSON text (as for the built-in tools): the form and the runner parse it.
     assert_eq!(units.default, "\"degrees\"");
+    assert_eq!(serde_json::from_str::<Value>(units.default).unwrap(), json!("degrees"));
     // The built-in Buffer still wins by name.
     assert_eq!(rustgis_analysis::tool("Buffer").map(|t| t.id), Some("buffer"));
 }

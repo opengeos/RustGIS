@@ -162,8 +162,11 @@ toolboxes, and Find Tools searches them.
   `gp.tools` lists every tool's parameters, `gp.geolibre` shows the runner in use and
   `gp.setGeolibre={"path":"…"}` picks one.
 
-The web app doesn't include them yet: the tools read and write files, which a browser page
-can't.
+The web app doesn't include them: RustGIS turns this integration on only in the desktop app
+and the command line.
+
+RustGIS waits while a tool runs, so a long run on a large raster or point cloud keeps the
+window busy until it finishes.
 
 ## Keyboard shortcuts
 

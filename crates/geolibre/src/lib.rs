@@ -1,4 +1,4 @@
-//! L2: the GeoLibre tool suite (Whitebox's tools plus GeoLibre's own: 1,000+ raster, vector,
+//! L3: the GeoLibre tool suite (Whitebox's tools plus GeoLibre's own: 1,000+ raster, vector,
 //! LiDAR, hydrology and terrain tools) as geoprocessing tools.
 //!
 //! The suite is an optional download: the `geolibre` runner, a separate executable (see
@@ -14,8 +14,9 @@
 //! Native only: the browser build has no file system for the tools to use.
 //!
 //! Like Add Data, a tool reads any file named in its parameters (a layer name that isn't a
-//! layer is taken as a path, and LiDAR inputs are paths), with the user's permissions. Outputs
-//! are always written to the run's own scratch folder.
+//! layer is taken as a path, and LiDAR inputs are paths), with the user's permissions. The
+//! outputs a tool declares are written to the run's own scratch folder; the runner is trusted
+//! like any program the user installs, so a tool could write elsewhere if asked to.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod runner;
@@ -26,7 +27,7 @@ use std::sync::Mutex;
 
 use rustgis_analysis::{Inputs, Output, OutputLayer, ParamKind, ParamSpec, ToolResult, ToolSpec};
 use rustgis_data::raster::{Crs, Transformer};
-use rustgis_data::{Coord, Dataset, Extent};
+use rustgis_data::{Coord, Dataset, Extent, Geometry};
 use serde_json::{Value, json};
 
 /// Tool ids get this prefix, so they never clash with the built-in tools.
@@ -213,7 +214,11 @@ fn spec_of(m: &Value) -> Option<(ToolSpec, Meta)> {
 }
 
 /// A scratch folder for one run, removed afterwards.
-struct Scratch(PathBuf);
+struct Scratch {
+    dir: PathBuf,
+    /// Staged inputs so far, so each gets its own file name.
+    staged: std::cell::Cell<usize>,
+}
 
 impl Scratch {
     /// A new, empty folder: never one that already exists (left over, or made by someone else
@@ -226,7 +231,7 @@ impl Scratch {
             let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let dir = std::env::temp_dir().join(format!("rustgis-gp-{}-{nanos:x}-{n}", std::process::id()));
             match std::fs::create_dir(&dir) {
-                Ok(()) => return Ok(Scratch(dir)),
+                Ok(()) => return Ok(Scratch { dir, staged: std::cell::Cell::new(0) }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
                 Err(e) => return Err(format!("can't create a scratch folder: {e}")),
             }
@@ -235,10 +240,46 @@ impl Scratch {
     }
 }
 
+impl Scratch {
+    /// A new file name for a staged input. Numbered, because two layer names can map to the
+    /// same safe name (`Roads 2020` and `Roads_2020`, or any two non-ASCII names), and one
+    /// file must never replace another.
+    fn input(&self, name: &str, ext: &str) -> PathBuf {
+        let n = self.staged.get();
+        self.staged.set(n + 1);
+        self.dir.join(format!("in{n}-{}.{ext}", safe(name)))
+    }
+}
+
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+/// `g` with every point converted by `f`, or `None` when a point can't be (rather than
+/// geometry with null coordinates).
+fn convert(g: &Geometry, f: impl Fn(Coord) -> Option<Coord>) -> Option<Geometry> {
+    let ok = std::cell::Cell::new(true);
+    let out = g.map_coords(&|c| {
+        f(c).filter(|m| m.is_finite()).unwrap_or_else(|| {
+            ok.set(false);
+            c
+        })
+    });
+    ok.get().then_some(out)
+}
+
+/// Converts every feature's geometry, clearing those that can't be converted; returns how many.
+fn convert_features(ds: &mut Dataset, f: impl Fn(Coord) -> Option<Coord>) -> usize {
+    let mut lost = 0;
+    for ft in &mut ds.features {
+        if let Some(g) = &ft.geometry {
+            ft.geometry = convert(g, &f);
+            lost += usize::from(ft.geometry.is_none());
+        }
+    }
+    lost
 }
 
 /// A file-name-safe version of a layer name.
@@ -262,18 +303,14 @@ fn working_crs(rasters: &[Crs], vectors: &[Extent]) -> Crs {
     Crs::from_epsg(if c.y >= 0.0 { 32600 + zone } else { 32700 + zone }).unwrap_or(Crs::LonLat)
 }
 
-/// A vector layer (its selection, if any) as GeoJSON in `crs`.
-fn write_vector(ds: &Dataset, rows: &[usize], crs: Crs, tf: &Transformer, path: &Path) -> Result<(), String> {
+/// A vector layer (its selection, if any) as GeoJSON in `crs`; returns how many features'
+/// geometry couldn't be converted (they're written without geometry).
+fn write_vector(ds: &Dataset, rows: &[usize], crs: Crs, tf: &Transformer, path: &Path) -> Result<usize, String> {
     let mut out = ds.clone();
     if !rows.is_empty() {
         out.features = rows.iter().filter_map(|&r| ds.features.get(r).cloned()).collect();
     }
-    if crs != Crs::LonLat {
-        let f = |c: Coord| tf.from_lonlat(c).unwrap_or(Coord::new(f64::NAN, f64::NAN));
-        for ft in &mut out.features {
-            ft.geometry = ft.geometry.as_ref().map(|g| g.map_coords(&f));
-        }
-    }
+    let lost = if crs != Crs::LonLat { convert_features(&mut out, |c| tf.from_lonlat(c)) } else { 0 };
     let mut json = rustgis_data::io::to_geojson(&out);
     if crs != Crs::LonLat
         && let Some(o) = json.as_object_mut()
@@ -282,11 +319,21 @@ fn write_vector(ds: &Dataset, rows: &[usize], crs: Crs, tf: &Transformer, path: 
         o.insert("crs".into(), json!({"type": "name", "properties": {"name": format!("urn:ogc:def:crs:EPSG::{}", crs.epsg())}}));
     }
     let text = serde_json::to_string(&json).map_err(|e| e.to_string())?;
-    std::fs::write(path, text).map_err(|e| format!("can't write {}: {e}", path.display()))
+    std::fs::write(path, text).map_err(|e| format!("can't write {}: {e}", path.display()))?;
+    Ok(lost)
 }
 
 /// Writes one input (a layer by name, or a file path) to the scratch folder; returns its path.
-fn stage(inputs: &dyn Inputs, value: &str, data: Data, crs: Crs, tf: &Transformer, dir: &Path) -> Result<String, String> {
+/// Problems that don't stop the run go to `notes`.
+fn stage(
+    inputs: &dyn Inputs,
+    value: &str,
+    data: Data,
+    crs: Crs,
+    tf: &Transformer,
+    scratch: &Scratch,
+    notes: &mut Vec<String>,
+) -> Result<String, String> {
     if let Some(r) = inputs.raster(value) {
         if let Some(p) = r.path.filter(|p| Path::new(p).is_file()) {
             return Ok(p.to_string());
@@ -294,24 +341,27 @@ fn stage(inputs: &dyn Inputs, value: &str, data: Data, crs: Crs, tf: &Transforme
         if let Some((file_name, bytes)) = r.embedded {
             // The tools tell formats apart by extension.
             let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).map(safe).unwrap_or_else(|| "tif".into());
-            let path = dir.join(format!("{}.{ext}", safe(value)));
+            let path = scratch.input(value, &ext);
             std::fs::write(&path, bytes).map_err(|e| format!("can't write {}: {e}", path.display()))?;
             return Ok(path.display().to_string());
         }
         let bytes = rustgis_data::raster::geotiff::write(r.raster, 0).map_err(|e| format!("{value}: {e}"))?;
-        let path = dir.join(format!("{}.tif", safe(value)));
+        let path = scratch.input(value, "tif");
         std::fs::write(&path, bytes).map_err(|e| format!("can't write {}: {e}", path.display()))?;
         return Ok(path.display().to_string());
     }
     if let Some(ds) = inputs.dataset(value) {
         if data == Data::Table || (ds.features.iter().all(|f| f.geometry.is_none()) && data != Data::Vector) {
-            let path = dir.join(format!("{}.csv", safe(value)));
+            let path = scratch.input(value, "csv");
             let text = rustgis_data::io::to_csv(ds).map_err(|e| format!("{value}: {e}"))?;
             std::fs::write(&path, text).map_err(|e| format!("can't write {}: {e}", path.display()))?;
             return Ok(path.display().to_string());
         }
-        let path = dir.join(format!("{}.geojson", safe(value)));
-        write_vector(ds, inputs.selection(value), crs, tf, &path)?;
+        let path = scratch.input(value, "geojson");
+        let lost = write_vector(ds, inputs.selection(value), crs, tf, &path)?;
+        if lost > 0 {
+            notes.push(format!("{value}: {lost} features lie outside the working coordinate system and were passed without geometry"));
+        }
         return Ok(path.display().to_string());
     }
     if Path::new(value).exists() {
@@ -373,9 +423,11 @@ fn load(path: &Path, layer_name: &str, crs: Crs, tf: &Transformer, messages: &mu
             Ok((mut ds, _)) => {
                 ds.name = layer_name.to_string();
                 if crs != Crs::LonLat && looks_projected(&ds) {
-                    let f = |c: Coord| tf.to_lonlat(c).unwrap_or(Coord::new(f64::NAN, f64::NAN));
-                    for ft in &mut ds.features {
-                        ft.geometry = ft.geometry.as_ref().map(|g| g.map_coords(&f));
+                    let lost = convert_features(&mut ds, |c| tf.to_lonlat(c));
+                    if lost > 0 {
+                        messages.push(format!(
+                            "{layer_name}: {lost} features couldn't be converted to longitude/latitude and have no geometry"
+                        ));
                     }
                 }
                 Some(if ds.features.iter().all(|f| f.geometry.is_none()) { OutputLayer::Table(ds) } else { OutputLayer::Vector(ds) })
@@ -447,19 +499,21 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
     let tf = crs.transformer()?;
 
     let mut args: Vec<(String, Value)> = Vec::new();
+    let mut notes = Vec::new();
     let mut outputs = Vec::new();
     let n_outputs = meta.params.iter().filter(|p| p.role == Role::Output).count();
     for p in &meta.params {
         match p.role {
             Role::Input => {
                 let Some(v) = value_of(&p.name) else { continue };
-                let paths = names(v).iter().map(|n| stage(inputs, n, p.data, crs, &tf, &scratch.0)).collect::<Result<Vec<_>, _>>()?;
+                let paths =
+                    names(v).iter().map(|n| stage(inputs, n, p.data, crs, &tf, &scratch, &mut notes)).collect::<Result<Vec<_>, _>>()?;
                 if !paths.is_empty() {
                     args.push((p.name.clone(), Value::String(paths.join(";"))));
                 }
             }
             Role::Output => {
-                let path = scratch.0.join(format!("{}.{}", safe(&p.name), output_ext(p, meta)));
+                let path = scratch.dir.join(format!("{}.{}", safe(&p.name), output_ext(p, meta)));
                 args.push((p.name.clone(), Value::String(path.display().to_string())));
                 let name =
                     if n_outputs > 1 { format!("{} {}", spec.name, label_of(&p.name).to_lowercase()) } else { spec.name.to_string() };
@@ -473,8 +527,9 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
         }
     }
 
-    let ran = runner::run(id, &args, &scratch.0).map_err(|e| format!("{}: {e}", spec.name))?;
-    let mut messages = ran.messages;
+    let ran = runner::run(id, &args, &scratch.dir).map_err(|e| format!("{}: {e}", spec.name))?;
+    let mut messages = notes;
+    messages.extend(ran.messages);
 
     let mut layers = Vec::new();
     for (path, name) in &outputs {
@@ -483,7 +538,7 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
             Some(path.clone())
         } else {
             let stem = path.file_stem().map(|s| s.to_os_string());
-            std::fs::read_dir(&scratch.0).ok().into_iter().flatten().filter_map(|e| e.ok().map(|e| e.path())).find(|f| {
+            std::fs::read_dir(&scratch.dir).ok().into_iter().flatten().filter_map(|e| e.ok().map(|e| e.path())).find(|f| {
                 f.file_stem().map(|s| s.to_os_string()) == stem && f.extension().is_some_and(|e| e != "dbf" && e != "shx" && e != "prj")
             })
         };
@@ -494,7 +549,7 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
         }
     }
     // Statistics and other results the tool returns rather than writes.
-    let scratch_dir = scratch.0.display().to_string();
+    let scratch_dir = scratch.dir.display().to_string();
     for (k, v) in &ran.outputs {
         let text = match v {
             Value::String(s) if s.starts_with(&scratch_dir) => continue,
