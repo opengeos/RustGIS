@@ -19,6 +19,7 @@ serde_json = { workspace = true }
 log = { workspace = true }
 web-time = { workspace = true }
 base64 = { workspace = true }
+rustgis-plugins = { workspace = true }
 # The GeoLibre tool suite (native only: its tools read and write files).
 rustgis-geolibre = { workspace = true, optional = true }
 
@@ -26,4 +27,5 @@ rustgis-geolibre = { workspace = true, optional = true }
 geolibre = ["dep:rustgis-geolibre"]
 
 [dev-dependencies]
+rustgis-plugins = { workspace = true, features = ["testing"] }
 tiny-skia = { workspace = true }

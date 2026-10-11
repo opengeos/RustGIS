@@ -18,6 +18,7 @@ pub use rustgis_analysis as analysis;
 pub use rustgis_data as data;
 pub use rustgis_geom as geom;
 pub use rustgis_map as map;
+pub use rustgis_plugins as plugins;
 pub use rustgis_render as render;
 
 use std::path::PathBuf;
@@ -259,6 +260,7 @@ impl Session {
         // Cheap: the suite's tools load the first time a tool list is needed.
         #[cfg(feature = "geolibre")]
         rustgis_geolibre::register();
+        rustgis_plugins::tools::register();
         Session {
             project,
             path: None,
@@ -302,6 +304,9 @@ impl Session {
     /// Runs a command by id. Mutating commands snapshot the project for undo; an error or a
     /// panic restores it.
     pub fn run(&mut self, id: &str, params: &Value) -> CmdResult {
+        if id.starts_with(rustgis_plugins::PREFIX) {
+            return self.run_plugin(id, params);
+        }
         let Some(spec) = self.registry.get(id) else { return Err(format!("unknown command '{id}'")) };
         // Layer conditions apply to the layer the parameters name, falling back to the active one.
         let named = params.get("layer").and_then(|_| self.layer_id(params).ok());
@@ -317,10 +322,16 @@ impl Session {
             return Err(format!("{}: {why}", spec.label));
         }
         let (run, mutates, label) = (spec.run, spec.mutates, spec.label);
+        self.guarded(label, mutates, |s| run(s, params))
+    }
+
+    /// Runs `f` as the command `label`: when it `mutates`, the project is snapshotted for undo
+    /// and restored if `f` fails or panics.
+    pub(crate) fn guarded(&mut self, label: &'static str, mutates: bool, f: impl FnOnce(&mut Session) -> CmdResult) -> CmdResult {
         let snapshot = mutates.then(|| self.project.clone());
         // Edit counts roll back with the project when a command fails part way.
         let counts = mutates.then(|| self.edit_counts.clone());
-        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self, params)))
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)))
             .unwrap_or_else(|_| Err(format!("{label} failed unexpectedly; the project was restored")));
         match (&res, snapshot) {
             (Ok(_), Some(snap)) => {
@@ -474,7 +485,7 @@ impl Session {
     }
 
     /// Keeps `active_layer` pointing at a layer of the active map.
-    fn fix_active_layer(&mut self) {
+    pub(crate) fn fix_active_layer(&mut self) {
         if self.active_layout.is_some_and(|i| i >= self.project.layouts.len()) {
             self.active_layout = None;
         }

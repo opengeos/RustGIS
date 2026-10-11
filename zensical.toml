@@ -14,6 +14,7 @@ nav = [
   { "Web App" = "https://web.rustgis.app" },
   { "User Guide" = "user-guide.md" },
   { "Command Line" = "cli.md" },
+  { "Plugins" = "plugins.md" },
   { "Languages" = "i18n.md" },
   { "Architecture" = "architecture.md" },
   { "Feature Coverage" = "parity.md" },

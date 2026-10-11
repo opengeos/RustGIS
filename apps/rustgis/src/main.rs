@@ -80,12 +80,18 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    // Installed plugins, before the first session lists commands and tools.
+    let plugin_errors = rustgis_engine::cmd::plugins::load_installed();
     let app = if args.iter().any(|a| a == "--sample") || files.is_empty() {
         RustGisApp::with_sample()
     } else {
         RustGisApp::new(Session::new(Project::default()))
     };
     let mut app = app.with_services(prefs::services());
+    for e in plugin_errors {
+        log::warn!("{e}");
+        app.session.notify(e, true);
+    }
     for f in files {
         let cmd = if f.to_ascii_lowercase().ends_with(".rgisx") { "project.open" } else { "layer.addData" };
         if let Err(e) = app.run(cmd, json!({"path": f})) {

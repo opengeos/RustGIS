@@ -6,6 +6,7 @@ A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow o
 A projected coordinate system.	投影座標系。
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	値、フィールド、またはそれらを + − × ÷ で結合したもの。選択した行に適用され、何も選択されていない場合はすべての行に適用されます。
 About	バージョン情報
+About plugins	プラグインについて
 About RustGIS	RustGIS について
 About RustGIS.	RustGIS について。
 Above	上
@@ -25,6 +26,7 @@ Add Data…	データの追加…
 Add Field	フィールドの追加
 Add field	フィールドの追加
 Add GeoJSON, CSV or Shapefile data to the map.	GeoJSON、CSV、Shapefile データをマップに追加します。
+Add Plugin Folder…	プラグイン フォルダーの追加…
 Add sample countries	サンプルの国データを追加
 Add Sample Data	サンプル データの追加
 Add To Current Selection	現在の選択に追加
@@ -71,11 +73,15 @@ Bookmarks	ブックマーク
 Boolean	ブール型
 Bounding\nGeometry	境界\nジオメトリ
 Brightness	明るさ
+Browse	参照
+Browse Plugins	プラグインの参照
 Browse the geoprocessing toolbox.	ジオプロセシング ツールボックスを参照します。
 Browse the project's maps, tables and folders.	プロジェクトのマップ、テーブル、フォルダーを参照します。
+Browse, install, update and remove plugins.	プラグインの参照、インストール、更新、削除を行います。
 Buffer	バッファー
 By\nAttributes	属性\n条件
 By\nLocation	空間\n条件
+by {author}	作成者: {author}
 Calculate	計算
 Calculate\nField	フィールド\n演算
 Calculate\nGeometry	ジオメトリ\n演算
@@ -94,6 +100,7 @@ Cell size	セル サイズ
 Centered	中央
 Change the map's backdrop.	マップの背景を変更します。
 Change the map's coordinate system	マップの座標系を変更
+Change the project (add layers, edit features, change symbology)	プロジェクトの変更 (レイヤーの追加、フィーチャの編集、シンボルの変更)
 Choose a band combination to display the raster layer.	ラスター レイヤーを表示するバンドの組み合わせを選択します。
 Choose a contrast stretch for the raster layer.	ラスター レイヤーのコントラスト ストレッチを選択します。
 Choose a resampling type for the raster layer.	ラスター レイヤーのリサンプリング タイプを選択します。
@@ -139,6 +146,7 @@ Colormap	カラーマップ
 Colors from the raster's own color table.	ラスター自身のカラー テーブルの色。
 Command\nSearch	コマンド\n検索
 Command Search	コマンド検索
+Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	[プラグイン] タブのコマンド: {commands} · ジオプロセシング ウィンドウのツール: {tools}
 Completed	完了
 Compute a field's values.	フィールドの値を計算します。
 Contents	コンテンツ
@@ -159,6 +167,7 @@ Copy the selected features (also as GeoJSON text).	選択したフィーチャ�
 Copy the selected features and delete them.	選択したフィーチャをコピーして削除します。
 Copy the selected layer's data source path.	選択したレイヤーのデータ ソース パスをコピーします。
 Couldn't download the font for {language}; pick the language again to retry.	{language} のフォントをダウンロードできませんでした。もう一度言語を選択して再試行してください。
+Couldn't load the plugin registry: {error}	プラグイン レジストリを読み込めませんでした: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	フィールドの個数、合計、平均、最小、最大、標準偏差。必要に応じてケース フィールドごとに集計します。
 Countries, cities, rivers and lakes	国、都市、河川、湖沼
 Counts the points that fall inside each polygon.	各ポリゴン内に含まれるポイントの数をカウントします。
@@ -230,8 +239,11 @@ Eckert IV (equal-area world)	エケルト第4図法 (正積世界)
 Edit	編集
 Edit Attribute	属性の編集
 Edit attributes in the table.	テーブルで属性を編集します。
+Edits the project	プロジェクトの編集
 Effects	エフェクト
 Ember	残り火
+Enable Plugin	プラグインの有効化
+Enabled	有効
 Encloses each feature, or all features, in its convex hull.	各フィーチャ、またはすべてのフィーチャを凸包で囲みます。
 Enhancement	強調
 EPSG code	EPSG コード
@@ -281,6 +293,7 @@ Filter rows…	行をフィルター…
 Find a place by coordinates.	座標で場所を検索します。
 Find and run geoprocessing tools.	ジオプロセシング ツールを検索して実行します。
 Find any command by name (Ctrl+K).	名前で任意のコマンドを検索します（Ctrl+K）。
+Find plugins in the RustGIS plugin registry.	RustGIS プラグイン レジストリでプラグインを探します。
 Find Tools	ツールの検索
 Finish Tool Run	ツールの実行を完了
 Finished: {tool}	完了: {tool}
@@ -324,6 +337,7 @@ Hide labels when the viewer is farther than this.	視点がこれより遠いと
 Histogram Equalize	ヒストグラム均等化
 History	履歴
 Home	ホーム
+Homepage	ホームページ
 Identify	個別属性
 Import\nProject	プロジェクトの\nインポート
 In Beyond	拡大の限界
@@ -337,14 +351,28 @@ Input Summary Features	入力集計フィーチャ
 Input Table	入力テーブル
 Inquiry	照会
 Insert	挿入
+Install	インストール
+Install a plugin	プラグインのインストール
+Install a plugin from a .rgplugin file.	.rgplugin ファイルからプラグインをインストールします。
+Install from a file	ファイルからインストール
+Install From File	ファイルからインストール
+Install From File…	ファイルからインストール…
 Install GeoLibre Tools	GeoLibre ツールをインストール
 Install GeoLibre tools	GeoLibre ツールをインストール
+Install Plugin	プラグインのインストール
+Install Plugin From Registry	レジストリからプラグインをインストール
+Install {name} {version}?	{name} {version} をインストールしますか？
+Installed	インストール済み
+Installed plugins are kept in {folder}	インストールしたプラグインの保存先: {folder}
+Installed {name} {version}.	{name} {version} をインストールしました。
 Interface font: {font}	インターフェイスのフォント：{font}
 Invalid: {error}	無効：{error}
 Invert	反転
 Invert color scheme	配色を反転
 Invert the selection.	選択を反転します。
 IS NULL	IS NULL
+It runs in a sandbox with no other access to your computer or the network.	サンドボックス内で実行され、コンピューターやネットワークへのその他のアクセスはできません。
+It's too large to keep in the browser: install it again on your next visit.	ブラウザーに保存するには大きすぎます。次回のアクセス時に再インストールしてください。
 keep current	現在のまま
 Keep the labelled features fixed as the map moves.	マップの移動中もラベル付きフィーチャを固定します。
 Keyboard Shortcuts	キーボード ショートカット
@@ -374,7 +402,9 @@ Line width	ラインの幅
 LineString	ライン ストリング
 List Commands	コマンド一覧
 Lit	明部
+Load an unpacked plugin from its folder while you develop it.	開発中のプラグインを、パッケージ化せずにフォルダーから読み込みます。
 Load GeoLibre tools	GeoLibre ツールを読み込む
+Loaded {name} from its folder.	{name} をフォルダーから読み込みました。
 Loading the GeoLibre tools…	GeoLibre ツールを読み込んでいます…
 Locate	位置
 Locate GeoLibre Runner	GeoLibre ランナーの場所を指定
@@ -388,6 +418,7 @@ Major Lakes	主要な湖沼
 Major Rivers	主要な河川
 Make a new layer of the selected features.	選択したフィーチャから新しいレイヤーを作成します。
 Make Layer From Selected Features	選択したフィーチャからレイヤーを作成
+Manage	管理
 Manage Edits	編集の管理
 Map	マップ
 Map › Layer	マップ › レイヤー
@@ -437,6 +468,8 @@ Next	次へ
 Next Extent	次の範囲
 No	いいえ
 No bookmarks yet	ブックマークはまだありません
+No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	プラグインがインストールされていません。プラグイン レジストリを参照するか、.rgplugin ファイルをインストールしてください。
+No plugins match.	一致するプラグインはありません。
 No Pop-ups	ポップアップなし
 No standalone tables	スタンドアロン テーブルはありません
 NoData	NoData
@@ -487,6 +520,13 @@ Percent Clip	パーセント クリップ
 Pixel	ピクセル
 Pixel type	ピクセル タイプ
 Placement	配置
+Plugin\nManager	プラグイン\nマネージャー
+Plugin folder	プラグイン フォルダー
+Plugin Manager	プラグイン マネージャー
+Plugin Manager…	プラグイン マネージャー…
+Plugin registry	プラグイン レジストリ
+Plugins	プラグイン
+Plugins are .rgplugin files. Install only plugins from people you trust.	プラグインは .rgplugin ファイルです。信頼できる相手のプラグインのみインストールしてください。
 PNG image	PNG 画像
 Point	ポイント
 Polar, conformal: Antarctica and the Southern Ocean.	極域、正角: 南極大陸と南極海。
@@ -514,12 +554,17 @@ Raster Data	ラスター データ
 Raster Information	ラスター情報
 Raster Layer	ラスター レイヤー
 Raster · {w} × {h} · {n} bands · {renderer}	ラスター · {w} × {h} · {n} バンド · {renderer}
+Read and write files on this computer	このコンピューター上のファイルの読み書き
+Read the map's layers and features	マップのレイヤーとフィーチャの読み取り
+Reads and writes files	ファイルの読み書き
+Reads the map	マップの読み取り
 Red	赤
 Redo	やり直し
 Redo the change you undid.	元に戻した変更をやり直します。
 Redo {action}	{action} をやり直す
 Red–Blue	赤–青
 Refine the search to see {n} more	検索を絞り込むと、さらに {n} 件表示されます
+Refresh	更新
 Regional, equal-area: the contiguous United States.	地域、正積: アメリカ本土 48 州。
 Regional, equal-area: the European standard for statistics.	地域、正積: 統計用のヨーロッパ標準。
 Remove	削除
@@ -548,6 +593,7 @@ Run Tool	ツールの実行
 Running…	実行中…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS は純粋な Rust で書かれたオープンソースのデスクトップ GIS です。リボンはおなじみのデスクトップ GIS のワークフローに従っており、すべての操作はコマンドとしてコマンド ラインからも実行できます。
+RustGIS plugin	RustGIS プラグイン
 RustGIS project	RustGIS プロジェクト
 Sample data (Natural Earth)	サンプル データ（Natural Earth）
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	サンプル データ © Natural Earth（パブリック ドメイン）。RustGIS は Apache-2.0 ライセンスで提供されています。
@@ -564,6 +610,7 @@ Save the raster as a GeoTIFF.	ラスターを GeoTIFF として保存します�
 Scale 1:	縮尺 1:
 Search commands — e.g. buffer, basemap, labels	コマンドを検索（例: バッファー、ベースマップ、ラベル）
 Search Distance (km)	検索距離（km）
+Search plugins	プラグインを検索
 See the tools you've run.	実行したツールを表示します。
 Select	選択
 Select (click)	選択（クリック）
@@ -598,6 +645,7 @@ Selects features that intersect features in another layer.	別のレイヤーの
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	SQL の WHERE 句でフィーチャを選択します。例: pop_est > 1000000。
 Set Map Tool	マップ ツールの設定
 Set Scale	縮尺の設定
+Settings	設定
 Shaded	陰影
 Shaded Relief	陰影起伏
 Shape	形状
@@ -654,12 +702,14 @@ Tables	テーブル
 Terrain	地形
 Text	テキスト
 Text Symbol	テキスト シンボル
+The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	参照するプラグインの一覧です。空欄にすると RustGIS プラグイン レジストリを使用します。
 the map has no layers	マップにレイヤーがありません
 The map is drawn in this coordinate system; layers are projected on the fly.	マップはこの座標系で描画され、レイヤーはその場で投影されます。
 The raster's data couldn't be read.	ラスターのデータを読み込めませんでした。
 The raster's data couldn't be read: {path}	ラスターのデータを読み込めませんでした: {path}
 Thermal	サーマル
 This map has no layers yet.	このマップにはまだレイヤーがありません。
+This plugin can:	このプラグインでできること:
 Tint by elevation	標高で色付け
 Toggle Dark Mode	ダーク モードの切り替え
 Tolerance (km)	許容値（km）
@@ -679,8 +729,13 @@ Undo	元に戻す
 Undo / Redo	元に戻す / やり直し
 Undo the last change.	最後の変更を元に戻します。
 Undo {action}	{action} を元に戻す
+Uninstall	アンインストール
+Uninstall Plugin	プラグインのアンインストール
+Uninstalled {id}.	{id} をアンインストールしました。
 Unique Values	個別値
 Units	単位
+Update	更新
+Update to {version}	{version} に更新
 USA Contiguous Albers Equal Area	米国本土アルベルス正積図法
 Valid expression · {n} matching rows	有効な式 · 一致する行 {n} 件
 Vector and raster data	ベクター データとラスター データ
@@ -703,6 +758,7 @@ Where Clause	WHERE 句
 Where labels sit relative to their features.	フィーチャに対するラベルの位置。
 Windows	ウィンドウ
 Winkel Tripel	ヴィンケル図法
+Withdrawn	取り下げ済み
 World	世界
 World Atlas	World Atlas
 World Atlas Sample	World Atlas サンプル
@@ -717,6 +773,7 @@ World, equal-area, cylindrical: true sizes, flattened near the poles.	世界、�
 World, equal-area: true sizes with a Robinson-like look.	世界、正積: 面積が正しく、ロビンソン図法に似た見た目。
 World, equal-area: true sizes with rounded poles.	世界、正積: 面積が正しく、極が丸い。
 World, equal-area: true sizes, shapes bend towards the edges.	世界、正積: 面積が正しく、縁に向かって形が曲がります。
+Write a plugin	プラグインを作成
 Yes	はい
 Z factor	Z 係数
 Zoom about the pointer	ポインターを中心にズーム
@@ -740,4 +797,9 @@ Zoom to the selected features.	選択したフィーチャにズームします�
 Zoom to the selection.	選択範囲にズームします。
 Zoom to the whole world.	世界全体にズームします。
 Zoom To World	世界にズーム
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} はインストール後に変更されています。プラグイン マネージャーから再インストールしてください。
+{name} was withdrawn from the plugin registry and has been turned off.	{name} はプラグイン レジストリから取り下げられたため、無効にしました。
+{name} was withdrawn from the plugin registry: {reason}	{name} はプラグイン レジストリから取り下げられました: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: ダウンロードした内容がレジストリと一致しないため、インストールしませんでした。
+{name}: the download is a different plugin; it wasn't installed.	{name}: ダウンロードしたのは別のプラグインのため、インストールしませんでした。
 ⌘K	⌘K

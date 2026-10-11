@@ -9,7 +9,13 @@
 //!     --cmd 'gp.run={"tool":"buffer","params":{"input":"Cities","distance":100}}' \
 //!     --cmd 'share.exportMap={"path":"out.png"}' [--save out.rgisx]
 //! rustgis-cli parity                                    # ribbon feature coverage report
+//! rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id>
+//!                      | browse | get <id>] [--registry URL]
 //! ```
+//!
+//! Installed plugins are loaded first (`--no-plugins` skips them); `--plugin <file|folder>`
+//! loads one more for this run only, so its commands (`plugin:<id>/<command>`) and tools can
+//! be run with `--cmd`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::io::Write;
@@ -27,7 +33,7 @@ use serde_json::{Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png> [--size N]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--width N] [--height N] [--dpi N]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P]"
+        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png> [--size N]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--width N] [--height N] [--dpi N]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P]"
     );
     ExitCode::from(2)
 }
@@ -65,8 +71,41 @@ fn load(s: &mut Session, path: &str) -> Result<(), String> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = args.first().map(|s| s.as_str()) else { return usage() };
+    if !args.iter().any(|a| a == "--no-plugins") {
+        for e in rustgis_engine::cmd::plugins::load_installed() {
+            eprintln!("rustgis-cli: warning: {e}");
+        }
+    }
+    for (i, a) in args.iter().enumerate() {
+        if a == "--plugin"
+            && let Some(p) = args.get(i + 1)
+        {
+            let loaded =
+                rustgis_engine::plugins::Package::from_path(std::path::Path::new(p)).and_then(|pkg| rustgis_engine::plugins::load(pkg, p));
+            if let Err(e) = loaded {
+                eprintln!("rustgis-cli: {p}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     let mut s = Session::new(Project::default());
     let res: Result<(), String> = (|| match cmd {
+        "plugins" => {
+            let registry = opt(&args, "--registry").map(|u| json!(u)).unwrap_or(Value::Null);
+            let arg = |what: &str| args.get(2).filter(|a| !a.starts_with("--")).cloned().ok_or(format!("plugins {what} needs an argument"));
+            let out = match args.get(1).map(String::as_str) {
+                None | Some("list") => run(&mut s, "plugin.list", Value::Null)?,
+                Some("install") => run(&mut s, "plugin.install", json!({"path": arg("install")?}))?,
+                Some("uninstall") => run(&mut s, "plugin.uninstall", json!({"id": arg("uninstall")?}))?,
+                Some("enable") => run(&mut s, "plugin.enable", json!({"id": arg("enable")?, "enabled": true}))?,
+                Some("disable") => run(&mut s, "plugin.enable", json!({"id": arg("disable")?, "enabled": false}))?,
+                Some("browse") => run(&mut s, "plugin.registry", json!({"url": registry}))?,
+                Some("get") => run(&mut s, "plugin.installFromRegistry", json!({"id": arg("get")?, "url": registry}))?,
+                Some(other) => return Err(format!("unknown plugins subcommand '{other}'")),
+            };
+            print(&out);
+            Ok(())
+        }
         "commands" => {
             print(&run(&mut s, "info.commands", Value::Null)?);
             Ok(())

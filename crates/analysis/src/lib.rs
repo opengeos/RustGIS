@@ -5,8 +5,8 @@
 //! done in Web Mercator metres; distances are corrected for scale distortion at each feature's
 //! latitude so a 100 km buffer is about 100 km on the ground.
 //!
-//! Tools from an external suite (the GeoLibre/Whitebox tools, in `rustgis-geolibre`) join
-//! the built-in ones through [`register_external`]: they're listed by [`tools`], found by
+//! Tools from external suites (the GeoLibre/Whitebox tools in `rustgis-geolibre`, and plugins
+//! in `rustgis-plugins`) join the built-in ones through [`register_external`]: they're listed by [`tools`], found by
 //! [`tool`] and run by [`run`] like the rest.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -126,55 +126,91 @@ pub struct ToolSpec {
 /// Runs an external tool (the spec says which).
 pub type ExternalRunner = fn(&ToolSpec, &dyn Inputs, &Value) -> Result<ToolResult, String>;
 
-/// Where external tools come from: called once, the first time the tools are listed.
+/// Where external tools come from: called the first time the tools are listed, and again after
+/// [`reload_external`].
 pub type ExternalProvider = fn() -> Vec<ToolSpec>;
 
-static PROVIDER: std::sync::OnceLock<(ExternalProvider, ExternalRunner)> = std::sync::OnceLock::new();
-/// The loaded external tools. Each load is leaked (it lives as long as the app, and reloads are
-/// rare: the user installs or locates the suite), so specs can be handed out as `&'static`.
-static EXTERNAL: std::sync::RwLock<Option<&'static [ToolSpec]>> = std::sync::RwLock::new(None);
-
-/// Adds an external tool suite. Only the first registration counts; the provider runs lazily,
-/// so registering costs nothing until a tool list is needed.
-pub fn register_external(provider: ExternalProvider, runner: ExternalRunner) {
-    let _ = PROVIDER.set((provider, runner));
+/// One external tool suite: its tools are loaded lazily and leaked (each load lives as long as
+/// the app, and reloads are rare: the user installs a suite or a plugin), so specs can be handed
+/// out as `&'static`.
+struct Source {
+    key: &'static str,
+    provider: ExternalProvider,
+    runner: ExternalRunner,
+    tools: Option<&'static [ToolSpec]>,
 }
 
-/// The external tools (empty when none are registered).
-pub fn external_tools() -> &'static [ToolSpec] {
-    let Some((provider, _)) = PROVIDER.get() else { return &[] };
-    if let Ok(cur) = EXTERNAL.read()
-        && let Some(tools) = *cur
+static SOURCES: std::sync::RwLock<Vec<Source>> = std::sync::RwLock::new(Vec::new());
+
+/// Adds an external tool suite under `key` (the GeoLibre tools, plugins). Only the first
+/// registration of a key counts; the provider runs lazily, so registering costs nothing until a
+/// tool list is needed.
+pub fn register_external(key: &'static str, provider: ExternalProvider, runner: ExternalRunner) {
+    if let Ok(mut v) = SOURCES.write()
+        && !v.iter().any(|s| s.key == key)
     {
-        return tools;
+        v.push(Source { key, provider, runner, tools: None });
     }
-    // One load at a time: a second caller waits for the first instead of loading again.
+}
+
+/// The tools of the suite registered as `key` (empty when there is none).
+pub fn external_tools_of(key: &str) -> &'static [ToolSpec] {
+    let provider = match SOURCES.read() {
+        Ok(v) => match v.iter().find(|s| s.key == key) {
+            Some(Source { tools: Some(t), .. }) => return t,
+            Some(s) => s.provider,
+            None => return &[],
+        },
+        Err(_) => return &[],
+    };
+    // One load at a time: a second caller waits for the first instead of loading again. The
+    // provider runs without the sources' lock held, so a slow one never blocks the others.
     static LOADING: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _loading = LOADING.lock();
-    if let Ok(cur) = EXTERNAL.read()
-        && let Some(tools) = *cur
+    if let Ok(v) = SOURCES.read()
+        && let Some(Source { tools: Some(t), .. }) = v.iter().find(|s| s.key == key)
     {
-        return tools;
+        return t;
     }
     let tools: &'static [ToolSpec] = Box::leak(
         std::panic::catch_unwind(provider)
             .unwrap_or_else(|_| {
-                log::error!("the external tool suite failed to load");
+                log::error!("the external tools '{key}' failed to load");
                 Vec::new()
             })
             .into_boxed_slice(),
     );
-    match EXTERNAL.write() {
-        Ok(mut cur) => cur.get_or_insert(tools),
+    match SOURCES.write() {
+        Ok(mut v) => match v.iter_mut().find(|s| s.key == key) {
+            Some(s) => s.tools.get_or_insert(tools),
+            None => tools,
+        },
         Err(_) => tools,
     }
 }
 
-/// Loads the external tools again the next time they're needed (the suite was installed,
-/// located or removed).
+/// The external tools of every suite, in registration order (empty when none are registered).
+pub fn external_tools() -> Vec<&'static ToolSpec> {
+    let keys: Vec<&'static str> = SOURCES.read().map(|v| v.iter().map(|s| s.key).collect()).unwrap_or_default();
+    keys.into_iter().flat_map(external_tools_of).collect()
+}
+
+/// Loads every suite's tools again the next time they're needed.
 pub fn reload_external() {
-    if let Ok(mut cur) = EXTERNAL.write() {
-        *cur = None;
+    if let Ok(mut v) = SOURCES.write() {
+        for s in v.iter_mut() {
+            s.tools = None;
+        }
+    }
+}
+
+/// Loads the tools of the suite `key` again the next time they're needed (it was installed,
+/// located or removed, or a plugin was).
+pub fn reload_external_of(key: &str) {
+    if let Ok(mut v) = SOURCES.write()
+        && let Some(s) = v.iter_mut().find(|s| s.key == key)
+    {
+        s.tools = None;
     }
 }
 
@@ -183,18 +219,33 @@ pub fn tools() -> impl Iterator<Item = &'static ToolSpec> {
     TOOLS.iter().chain(external_tools())
 }
 
-/// Whether a tool comes from the external suite.
-pub fn is_external(spec: &ToolSpec) -> bool {
+/// The suite an external tool comes from, with its runner (`None` for a built-in tool).
+fn source_of(spec: &ToolSpec) -> Option<(&'static str, ExternalRunner)> {
     // By id, not by address: a spec handed out before a reload (an open tool form) is still
     // the same tool.
-    !TOOLS.iter().any(|t| std::ptr::eq(t, spec)) && external_tools().iter().any(|t| t.id == spec.id)
+    if TOOLS.iter().any(|t| std::ptr::eq(t, spec)) {
+        return None;
+    }
+    let keys: Vec<(&'static str, ExternalRunner)> =
+        SOURCES.read().map(|v| v.iter().map(|s| (s.key, s.runner)).collect()).unwrap_or_default();
+    keys.into_iter().find(|(key, _)| external_tools_of(key).iter().any(|t| t.id == spec.id))
+}
+
+/// Whether a tool comes from an external suite.
+pub fn is_external(spec: &ToolSpec) -> bool {
+    source_of(spec).is_some()
+}
+
+/// The key of the suite a tool comes from (`None` for a built-in tool).
+pub fn external_source(spec: &ToolSpec) -> Option<&'static str> {
+    source_of(spec).map(|(k, _)| k)
 }
 
 pub fn tool(id: &str) -> Option<&'static ToolSpec> {
     let by_id = |t: &&ToolSpec| t.id.eq_ignore_ascii_case(id);
     let by_name = |t: &&ToolSpec| t.name.eq_ignore_ascii_case(id);
     // A built-in tool wins over an external one with the same name.
-    tools().find(by_id).or_else(|| TOOLS.iter().find(by_name)).or_else(|| external_tools().iter().find(by_name))
+    tools().find(by_id).or_else(|| TOOLS.iter().find(by_name)).or_else(|| external_tools().into_iter().find(by_name))
 }
 
 /// The runner for external tools; never called (external specs carry the runner's id).
@@ -226,9 +277,9 @@ pub fn run(id: &str, inputs: &dyn Inputs, params: &Value) -> Result<ToolResult, 
     let spec = tool(id).ok_or_else(|| format!("no tool '{id}'"))?;
     let p = resolve_params(spec, params)?;
     // A bug in a tool must not take the app down.
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match PROVIDER.get() {
-        Some((_, runner)) if is_external(spec) => runner(spec, inputs, &p),
-        _ => (spec.run)(inputs, &p),
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match source_of(spec) {
+        Some((_, runner)) => runner(spec, inputs, &p),
+        None => (spec.run)(inputs, &p),
     }))
     .unwrap_or_else(|_| Err(format!("{} failed unexpectedly", spec.name)))
 }

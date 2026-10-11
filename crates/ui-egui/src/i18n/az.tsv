@@ -6,6 +6,7 @@ A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow o
 A projected coordinate system.	Proyeksiyalı koordinat sistemi.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Qiymət, sahə və ya + − × ÷ ilə birləşdirilmiş ikisi. Seçilmiş sətirlərə, heç nə seçilməyibsə bütün sətirlərə tətbiq olunur.
 About	Haqqında
+About plugins	Plaginlər haqqında
 About RustGIS	RustGIS haqqında
 About RustGIS.	RustGIS haqqında.
 Above	Yuxarı
@@ -25,6 +26,7 @@ Add Data…	Məlumat əlavə et…
 Add Field	Sahə əlavə et
 Add field	Sahə əlavə et
 Add GeoJSON, CSV or Shapefile data to the map.	Xəritəyə GeoJSON, CSV və ya Shapefile məlumatı əlavə edin.
+Add Plugin Folder…	Plagin qovluğu əlavə et…
 Add sample countries	Nümunə ölkələri əlavə et
 Add Sample Data	Nümunə məlumat əlavə et
 Add To Current Selection	Cari seçimə əlavə et
@@ -71,11 +73,15 @@ Bookmarks	Əlfəcinlər
 Boolean	Məntiqi
 Bounding\nGeometry	Sərhəd\nhəndəsəsi
 Brightness	Parlaqlıq
+Browse	Bax
+Browse Plugins	Plaginlərə bax
 Browse the geoprocessing toolbox.	Geoemal alətlər qutusuna baxın.
 Browse the project's maps, tables and folders.	Layihənin xəritələrinə, cədvəllərinə və qovluqlarına baxın.
+Browse, install, update and remove plugins.	Plaginlərə baxın, onları quraşdırın, yeniləyin və silin.
 Buffer	Bufer
 By\nAttributes	Atributlara\ngörə
 By\nLocation	Məkana\ngörə
+by {author}	müəllif: {author}
 Calculate	Hesabla
 Calculate\nField	Sahəni\nhesabla
 Calculate\nGeometry	Həndəsəni\nhesabla
@@ -94,6 +100,7 @@ Cell size	Xana ölçüsü
 Centered	Mərkəzdə
 Change the map's backdrop.	Xəritənin fonunu dəyişin.
 Change the map's coordinate system	Xəritənin koordinat sistemini dəyiş
+Change the project (add layers, edit features, change symbology)	Layihəni dəyişmək (lay əlavə etmək, obyektləri redaktə etmək, simvolikanı dəyişmək)
 Choose a band combination to display the raster layer.	Rastr layını göstərmək üçün kanal kombinasiyası seçin.
 Choose a contrast stretch for the raster layer.	Rastr layı üçün kontrast genişləndirməsi seçin.
 Choose a resampling type for the raster layer.	Rastr layı üçün yenidən nümunələmə tipini seçin.
@@ -139,6 +146,7 @@ Colormap	Rəng xəritəsi
 Colors from the raster's own color table.	Rastrın öz rəng cədvəlindən rənglər.
 Command\nSearch	Əmr\naxtarışı
 Command Search	Əmr axtarışı
+Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	Plaginlər tabındakı əmrlər: {commands} · Geoemal panelindəki alətlər: {tools}
 Completed	Tamamlandı
 Compute a field's values.	Sahənin qiymətlərini hesablayın.
 Contents	Məzmun
@@ -159,6 +167,7 @@ Copy the selected features (also as GeoJSON text).	Seçilmiş obyektləri kopyal
 Copy the selected features and delete them.	Seçilmiş obyektləri kopyalayın və silin.
 Copy the selected layer's data source path.	Seçilmiş layın məlumat mənbəyi yolunu kopyalayın.
 Couldn't download the font for {language}; pick the language again to retry.	{language} üçün şrift endirilə bilmədi; yenidən cəhd etmək üçün dili yenidən seçin.
+Couldn't load the plugin registry: {error}	Plagin reyestrini yükləmək mümkün olmadı: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Sahənin say, cəm, orta, min, maks və standart sapması, istəyə görə qrup sahəsi üzrə.
 Countries, cities, rivers and lakes	Ölkələr, şəhərlər, çaylar və göllər
 Counts the points that fall inside each polygon.	Hər poliqonun daxilinə düşən nöqtələri sayır.
@@ -230,8 +239,11 @@ Eckert IV (equal-area world)	Eckert IV (bərabərsahəli dünya)
 Edit	Redaktə
 Edit Attribute	Atributu redaktə et
 Edit attributes in the table.	Cədvəldə atributları redaktə edin.
+Edits the project	Layihəni redaktə edir
 Effects	Effektlər
 Ember	Köz
+Enable Plugin	Plagini aktivləşdir
+Enabled	Aktiv
 Encloses each feature, or all features, in its convex hull.	Hər obyekti və ya bütün obyektləri qabarıq örtüyə alır.
 Enhancement	Gücləndirmə
 EPSG code	EPSG kodu
@@ -281,6 +293,7 @@ Filter rows…	Sətirləri süz…
 Find a place by coordinates.	Koordinatlara görə yer tapın.
 Find and run geoprocessing tools.	Geoemal alətlərini tapın və işə salın.
 Find any command by name (Ctrl+K).	İstənilən əmri adına görə tapın (Ctrl+K).
+Find plugins in the RustGIS plugin registry.	RustGIS plagin reyestrində plagin tapın.
 Find Tools	Alət axtar
 Finish Tool Run	Alətin işini tamamla
 Finished: {tool}	Tamamlandı: {tool}
@@ -324,6 +337,7 @@ Hide labels when the viewer is farther than this.	Baxan bundan uzaq olduqda etik
 Histogram Equalize	Histoqram bərabərləşdirmə
 History	Tarixçə
 Home	Home
+Homepage	Ana səhifə
 Identify	Müəyyən et
 Import\nProject	Layihəni\nidxal et
 In Beyond	Yaxınlaşma həddi
@@ -337,14 +351,28 @@ Input Summary Features	Giriş yekun obyektləri
 Input Table	Giriş cədvəli
 Inquiry	Sorğu
 Insert	Əlavə et
+Install	Quraşdır
+Install a plugin	Plagin quraşdır
+Install a plugin from a .rgplugin file.	.rgplugin faylından plagin quraşdırın.
+Install from a file	Fayldan quraşdır
+Install From File	Fayldan quraşdır
+Install From File…	Fayldan quraşdır…
 Install GeoLibre Tools	GeoLibre alətlərini quraşdır
 Install GeoLibre tools	GeoLibre alətlərini quraşdır
+Install Plugin	Plagin quraşdır
+Install Plugin From Registry	Reyestrdən plagin quraşdır
+Install {name} {version}?	{name} {version} quraşdırılsın?
+Installed	Quraşdırılıb
+Installed plugins are kept in {folder}	Quraşdırılmış plaginlər burada saxlanılır: {folder}
+Installed {name} {version}.	{name} {version} quraşdırıldı.
 Interface font: {font}	İnterfeys şrifti: {font}
 Invalid: {error}	Yanlışdır: {error}
 Invert	Tərsinə çevir
 Invert color scheme	Rəng sxemini tərsinə çevir
 Invert the selection.	Seçimi tərsinə çevirin.
 IS NULL	IS NULL
+It runs in a sandbox with no other access to your computer or the network.	O, kompüterinizə və ya şəbəkəyə başqa heç bir girişi olmayan qum qutusunda işləyir.
+It's too large to keep in the browser: install it again on your next visit.	Brauzerdə saxlanmaq üçün çox böyükdür: növbəti girişinizdə onu yenidən quraşdırın.
 keep current	cari saxla
 Keep the labelled features fixed as the map moves.	Xəritə hərəkət etdikcə etiketlənmiş obyektləri sabit saxlayın.
 Keyboard Shortcuts	Klaviatura qısayolları
@@ -374,7 +402,9 @@ Line width	Xətt qalınlığı
 LineString	LineString
 List Commands	Əmrlərin siyahısı
 Lit	İşıqlı
+Load an unpacked plugin from its folder while you develop it.	Hazırlayarkən paketlənməmiş plagini öz qovluğundan yükləyin.
 Load GeoLibre tools	GeoLibre alətlərini yüklə
+Loaded {name} from its folder.	{name} öz qovluğundan yükləndi.
 Loading the GeoLibre tools…	GeoLibre alətləri yüklənir…
 Locate	Yer tap
 Locate GeoLibre Runner	GeoLibre işlədicisini tap
@@ -388,6 +418,7 @@ Major Lakes	Əsas göllər
 Major Rivers	Əsas çaylar
 Make a new layer of the selected features.	Seçilmiş obyektlərdən yeni lay yaradın.
 Make Layer From Selected Features	Seçilmiş obyektlərdən lay yarat
+Manage	İdarə et
 Manage Edits	Redaktələri idarə et
 Map	Xəritə
 Map › Layer	Xəritə › Lay
@@ -437,6 +468,8 @@ Next	Növbəti
 Next Extent	Növbəti hüdud
 No	Xeyr
 No bookmarks yet	Hələ əlfəcin yoxdur
+No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Heç bir plagin quraşdırılmayıb. Plagin reyestrinə baxın və ya .rgplugin faylı quraşdırın.
+No plugins match.	Uyğun plagin yoxdur.
 No Pop-ups	Açılan pəncərə yoxdur
 No standalone tables	Müstəqil cədvəl yoxdur
 NoData	NoData
@@ -487,6 +520,13 @@ Percent Clip	Faiz kəsimi
 Pixel	Piksel
 Pixel type	Piksel tipi
 Placement	Yerləşdirmə
+Plugin\nManager	Plagin\nmeneceri
+Plugin folder	Plagin qovluğu
+Plugin Manager	Plagin meneceri
+Plugin Manager…	Plagin meneceri…
+Plugin registry	Plagin reyestri
+Plugins	Plaginlər
+Plugins are .rgplugin files. Install only plugins from people you trust.	Plaginlər .rgplugin fayllarıdır. Yalnız etibar etdiyiniz şəxslərin plaginlərini quraşdırın.
 PNG image	PNG təsviri
 Point	Nöqtə
 Polar, conformal: Antarctica and the Southern Ocean.	Qütb, konform: Antarktida və Cənub okeanı.
@@ -514,12 +554,17 @@ Raster Data	Rastr məlumatı
 Raster Information	Rastr məlumatı
 Raster Layer	Rastr layı
 Raster · {w} × {h} · {n} bands · {renderer}	Rastr · {w} × {h} · {n} kanal · {renderer}
+Read and write files on this computer	Bu kompüterdəki faylları oxumaq və yazmaq
+Read the map's layers and features	Xəritənin laylarını və obyektlərini oxumaq
+Reads and writes files	Faylları oxuyur və yazır
+Reads the map	Xəritəni oxuyur
 Red	Qırmızı
 Redo	Təkrarla
 Redo the change you undid.	Geri aldığınız dəyişikliyi təkrarlayın.
 Redo {action}	{action} təkrarla
 Red–Blue	Qırmızı–Mavi
 Refine the search to see {n} more	Daha {n} ədəd görmək üçün axtarışı dəqiqləşdirin
+Refresh	Yenilə
 Regional, equal-area: the contiguous United States.	Regional, bərabərsahəli: bitişik Amerika Birləşmiş Ştatları.
 Regional, equal-area: the European standard for statistics.	Regional, bərabərsahəli: statistika üçün Avropa standartı.
 Remove	Sil
@@ -548,6 +593,7 @@ Run Tool	Aləti işə sal
 Running…	İşləyir…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS təmiz Rust dilində yazılmış açıq mənbəli masaüstü CİS-dir. Onun lenti tanış masaüstü CİS iş axınını izləyir; hər əməliyyat komanda sətrindən də işə sala biləcəyiniz bir əmrdir.
+RustGIS plugin	RustGIS plagini
 RustGIS project	RustGIS layihəsi
 Sample data (Natural Earth)	Nümunə məlumat (Natural Earth)
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Nümunə məlumat © Natural Earth (ictimai mülkiyyət). RustGIS Apache-2.0 lisenziyası altındadır.
@@ -564,6 +610,7 @@ Save the raster as a GeoTIFF.	Rastrı GeoTIFF kimi saxlayın.
 Scale 1:	Miqyas 1:
 Search commands — e.g. buffer, basemap, labels	Əmr axtarın — məs. bufer, əsas xəritə, etiketlər
 Search Distance (km)	Axtarış məsafəsi (km)
+Search plugins	Plagin axtar
 See the tools you've run.	İşə saldığınız alətlərə baxın.
 Select	Seç
 Select (click)	Seç (klik)
@@ -598,6 +645,7 @@ Selects features that intersect features in another layer.	Başqa laydakı obyek
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Obyektləri SQL where şərti ilə seçir, məs. pop_est > 1000000.
 Set Map Tool	Xəritə alətini təyin et
 Set Scale	Miqyası təyin et
+Settings	Parametrlər
 Shaded	Kölgəli
 Shaded Relief	Kölgəli relyef
 Shape	Forma
@@ -654,12 +702,14 @@ Tables	Cədvəllər
 Terrain	Relyef
 Text	Mətn
 Text Symbol	Mətn simvolu
+The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	Baxmaq üçün plaginlərin siyahısı. RustGIS plagin reyestri üçün boş saxlayın.
 the map has no layers	xəritədə lay yoxdur
 The map is drawn in this coordinate system; layers are projected on the fly.	Xəritə bu koordinat sistemində çəkilir; laylar dərhal proyeksiya olunur.
 The raster's data couldn't be read.	Rastrın məlumatı oxuna bilmədi.
 The raster's data couldn't be read: {path}	Rastrın məlumatı oxuna bilmədi: {path}
 Thermal	Termal
 This map has no layers yet.	Bu xəritədə hələ lay yoxdur.
+This plugin can:	Bu plagin bunları edə bilər:
 Tint by elevation	Hündürlüyə görə rənglə
 Toggle Dark Mode	Qaranlıq rejimi dəyiş
 Tolerance (km)	Tolerantlıq (km)
@@ -679,8 +729,13 @@ Undo	Geri al
 Undo / Redo	Geri al / Təkrarla
 Undo the last change.	Son dəyişikliyi geri alın.
 Undo {action}	{action} geri al
+Uninstall	Sil
+Uninstall Plugin	Plagini sil
+Uninstalled {id}.	{id} silindi.
 Unique Values	Unikal qiymətlər
 Units	Vahidlər
+Update	Yenilə
+Update to {version}	{version} versiyasına yenilə
 USA Contiguous Albers Equal Area	ABŞ bitişik ştatlar Albers bərabər sahəli
 Valid expression · {n} matching rows	İfadə düzgündür · {n} uyğun sətir
 Vector and raster data	Vektor və rastr məlumatı
@@ -703,6 +758,7 @@ Where Clause	Where şərti
 Where labels sit relative to their features.	Etiketlərin obyektlərinə nisbətən harada yerləşdiyi.
 Windows	Pəncərələr
 Winkel Tripel	Winkel Tripel
+Withdrawn	Geri çəkilib
 World	Dünya
 World Atlas	Dünya Atlası
 World Atlas Sample	Dünya Atlası nümunəsi
@@ -717,6 +773,7 @@ World, equal-area, cylindrical: true sizes, flattened near the poles.	Dünya, b�
 World, equal-area: true sizes with a Robinson-like look.	Dünya, bərabərsahəli: həqiqi ölçülər, Robinsona bənzər görünüş.
 World, equal-area: true sizes with rounded poles.	Dünya, bərabərsahəli: həqiqi ölçülər, yuvarlaq qütblər.
 World, equal-area: true sizes, shapes bend towards the edges.	Dünya, bərabərsahəli: həqiqi ölçülər, formalar kənarlara doğru əyilir.
+Write a plugin	Plagin yaz
 Yes	Bəli
 Z factor	Z əmsalı
 Zoom about the pointer	Göstərici ətrafında miqyası dəyiş
@@ -740,4 +797,9 @@ Zoom to the selected features.	Seçilmiş obyektlərə yaxınlaşdırın.
 Zoom to the selection.	Seçimə yaxınlaşdırın.
 Zoom to the whole world.	Bütün dünyaya yaxınlaşdırın.
 Zoom To World	Dünyaya yaxınlaşdır
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} quraşdırıldıqdan sonra dəyişib; onu Plagin menecerindən yenidən quraşdırın.
+{name} was withdrawn from the plugin registry and has been turned off.	{name} plagin reyestrindən geri çəkilib və söndürülüb.
+{name} was withdrawn from the plugin registry: {reason}	{name} plagin reyestrindən geri çəkilib: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: endirilən fayl reyestrə uyğun gəlmir; quraşdırılmadı.
+{name}: the download is a different plugin; it wasn't installed.	{name}: endirilən fayl başqa plagindir; quraşdırılmadı.
 ⌘K	⌘K

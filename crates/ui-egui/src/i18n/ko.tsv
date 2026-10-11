@@ -6,6 +6,7 @@ A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow o
 A projected coordinate system.	투영 좌표계.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	값, 필드 또는 이 둘을 + − × ÷ 로 결합한 식입니다. 선택한 행에 적용되며, 선택한 행이 없으면 모든 행에 적용됩니다.
 About	정보
+About plugins	플러그인 정보
 About RustGIS	RustGIS 정보
 About RustGIS.	RustGIS 정보.
 Above	위
@@ -25,6 +26,7 @@ Add Data…	데이터 추가…
 Add Field	필드 추가
 Add field	필드 추가
 Add GeoJSON, CSV or Shapefile data to the map.	지도에 GeoJSON, CSV 또는 Shapefile 데이터를 추가합니다.
+Add Plugin Folder…	플러그인 폴더 추가…
 Add sample countries	샘플 국가 추가
 Add Sample Data	샘플 데이터 추가
 Add To Current Selection	현재 선택에 추가
@@ -71,11 +73,15 @@ Bookmarks	북마크
 Boolean	불리언
 Bounding\nGeometry	경계\n지오메트리
 Brightness	밝기
+Browse	둘러보기
+Browse Plugins	플러그인 둘러보기
 Browse the geoprocessing toolbox.	지오프로세싱 도구 상자를 탐색합니다.
 Browse the project's maps, tables and folders.	프로젝트의 지도, 테이블 및 폴더를 탐색합니다.
+Browse, install, update and remove plugins.	플러그인을 둘러보고, 설치, 업데이트, 제거합니다.
 Buffer	버퍼
 By\nAttributes	속성\n기준
 By\nLocation	위치\n기준
+by {author}	작성자: {author}
 Calculate	계산
 Calculate\nField	필드\n계산
 Calculate\nGeometry	지오메트리\n계산
@@ -94,6 +100,7 @@ Cell size	셀 크기
 Centered	가운데
 Change the map's backdrop.	지도의 배경을 변경합니다.
 Change the map's coordinate system	지도 좌표계 변경
+Change the project (add layers, edit features, change symbology)	프로젝트 변경 (레이어 추가, 피처 편집, 심볼 변경)
 Choose a band combination to display the raster layer.	래스터 레이어를 표시할 밴드 조합을 선택합니다.
 Choose a contrast stretch for the raster layer.	래스터 레이어의 대비 스트레치를 선택합니다.
 Choose a resampling type for the raster layer.	래스터 레이어의 리샘플링 유형을 선택합니다.
@@ -139,6 +146,7 @@ Colormap	컬러맵
 Colors from the raster's own color table.	래스터 자체 색상표의 색상입니다.
 Command\nSearch	명령\n검색
 Command Search	명령 검색
+Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	플러그인 탭의 명령: {commands} · 지오프로세싱 창의 도구: {tools}
 Completed	완료됨
 Compute a field's values.	필드 값을 계산합니다.
 Contents	목차
@@ -159,6 +167,7 @@ Copy the selected features (also as GeoJSON text).	선택한 피처를 복사합
 Copy the selected features and delete them.	선택한 피처를 복사하고 삭제합니다.
 Copy the selected layer's data source path.	선택한 레이어의 데이터 원본 경로를 복사합니다.
 Couldn't download the font for {language}; pick the language again to retry.	{language} 글꼴을 다운로드할 수 없습니다. 다시 시도하려면 언어를 다시 선택하세요.
+Couldn't load the plugin registry: {error}	플러그인 레지스트리를 불러올 수 없습니다: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	필드의 개수, 합계, 평균, 최소값, 최대값 및 표준 편차를 계산하며, 선택적으로 케이스 필드별로 계산합니다.
 Countries, cities, rivers and lakes	국가, 도시, 하천 및 호수
 Counts the points that fall inside each polygon.	각 폴리곤 안에 있는 포인트 수를 셉니다.
@@ -230,8 +239,11 @@ Eckert IV (equal-area world)	에케르트 IV (정적 세계)
 Edit	편집
 Edit Attribute	속성 편집
 Edit attributes in the table.	테이블에서 속성을 편집합니다.
+Edits the project	프로젝트 편집
 Effects	효과
 Ember	엠버
+Enable Plugin	플러그인 사용
+Enabled	사용
 Encloses each feature, or all features, in its convex hull.	각 피처 또는 모든 피처를 볼록 껍질로 둘러쌉니다.
 Enhancement	향상
 EPSG code	EPSG 코드
@@ -281,6 +293,7 @@ Filter rows…	행 필터…
 Find a place by coordinates.	좌표로 장소를 찾습니다.
 Find and run geoprocessing tools.	지오프로세싱 도구를 찾아 실행합니다.
 Find any command by name (Ctrl+K).	이름으로 명령을 찾습니다(Ctrl+K).
+Find plugins in the RustGIS plugin registry.	RustGIS 플러그인 레지스트리에서 플러그인을 찾습니다.
 Find Tools	도구 찾기
 Finish Tool Run	도구 실행 완료
 Finished: {tool}	완료: {tool}
@@ -324,6 +337,7 @@ Hide labels when the viewer is farther than this.	보는 위치가 이보다 멀
 Histogram Equalize	히스토그램 평활화
 History	기록
 Home	Home
+Homepage	홈페이지
 Identify	식별
 Import\nProject	프로젝트\n가져오기
 In Beyond	다음보다 확대 시
@@ -337,14 +351,28 @@ Input Summary Features	입력 요약 피처
 Input Table	입력 테이블
 Inquiry	조회
 Insert	삽입
+Install	설치
+Install a plugin	플러그인 설치
+Install a plugin from a .rgplugin file.	.rgplugin 파일에서 플러그인을 설치합니다.
+Install from a file	파일에서 설치
+Install From File	파일에서 설치
+Install From File…	파일에서 설치…
 Install GeoLibre Tools	GeoLibre 도구 설치
 Install GeoLibre tools	GeoLibre 도구 설치
+Install Plugin	플러그인 설치
+Install Plugin From Registry	레지스트리에서 플러그인 설치
+Install {name} {version}?	{name} {version}을(를) 설치할까요?
+Installed	설치됨
+Installed plugins are kept in {folder}	설치된 플러그인 위치: {folder}
+Installed {name} {version}.	{name} {version}을(를) 설치했습니다.
 Interface font: {font}	인터페이스 글꼴: {font}
 Invalid: {error}	유효하지 않음: {error}
 Invert	반전
 Invert color scheme	색상표 반전
 Invert the selection.	선택을 반전합니다.
 IS NULL	IS NULL
+It runs in a sandbox with no other access to your computer or the network.	샌드박스에서 실행되며 컴퓨터나 네트워크에 대한 다른 접근 권한은 없습니다.
+It's too large to keep in the browser: install it again on your next visit.	브라우저에 보관하기에는 너무 큽니다. 다음 방문 시 다시 설치하세요.
 keep current	현재 값 유지
 Keep the labelled features fixed as the map moves.	지도가 움직여도 라벨이 표시된 피처를 고정합니다.
 Keyboard Shortcuts	키보드 단축키
@@ -374,7 +402,9 @@ Line width	선 두께
 LineString	LineString
 List Commands	명령 목록
 Lit	밝은 면
+Load an unpacked plugin from its folder while you develop it.	개발 중인 플러그인을 패키징하지 않고 폴더에서 불러옵니다.
 Load GeoLibre tools	GeoLibre 도구 불러오기
+Loaded {name} from its folder.	{name}을(를) 폴더에서 불러왔습니다.
 Loading the GeoLibre tools…	GeoLibre 도구를 불러오는 중…
 Locate	위치 찾기
 Locate GeoLibre Runner	GeoLibre 실행기 찾기
@@ -388,6 +418,7 @@ Major Lakes	주요 호수
 Major Rivers	주요 하천
 Make a new layer of the selected features.	선택한 피처로 새 레이어를 만듭니다.
 Make Layer From Selected Features	선택한 피처로 레이어 만들기
+Manage	관리
 Manage Edits	편집 관리
 Map	지도
 Map › Layer	지도 › 레이어
@@ -437,6 +468,8 @@ Next	다음
 Next Extent	다음 범위
 No	아니요
 No bookmarks yet	아직 북마크가 없습니다
+No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	설치된 플러그인이 없습니다. 플러그인 레지스트리를 둘러보거나 .rgplugin 파일을 설치하세요.
+No plugins match.	일치하는 플러그인이 없습니다.
 No Pop-ups	팝업 없음
 No standalone tables	독립 테이블 없음
 NoData	NoData
@@ -487,6 +520,13 @@ Percent Clip	백분율 클립
 Pixel	픽셀
 Pixel type	픽셀 유형
 Placement	배치
+Plugin\nManager	플러그인\n관리자
+Plugin folder	플러그인 폴더
+Plugin Manager	플러그인 관리자
+Plugin Manager…	플러그인 관리자…
+Plugin registry	플러그인 레지스트리
+Plugins	플러그인
+Plugins are .rgplugin files. Install only plugins from people you trust.	플러그인은 .rgplugin 파일입니다. 신뢰할 수 있는 사람의 플러그인만 설치하세요.
 PNG image	PNG 이미지
 Point	포인트
 Polar, conformal: Antarctica and the Southern Ocean.	극지, 정각: 남극 대륙과 남극해.
@@ -514,12 +554,17 @@ Raster Data	래스터 데이터
 Raster Information	래스터 정보
 Raster Layer	래스터 레이어
 Raster · {w} × {h} · {n} bands · {renderer}	래스터 · {w} × {h} · 밴드 {n}개 · {renderer}
+Read and write files on this computer	이 컴퓨터의 파일 읽기 및 쓰기
+Read the map's layers and features	지도의 레이어 및 피처 읽기
+Reads and writes files	파일 읽기 및 쓰기
+Reads the map	지도 읽기
 Red	빨강
 Redo	다시 실행
 Redo the change you undid.	실행 취소한 변경을 다시 실행합니다.
 Redo {action}	{action} 다시 실행
 Red–Blue	빨강–파랑
 Refine the search to see {n} more	검색을 좁히면 {n}개를 더 볼 수 있습니다
+Refresh	새로 고침
 Regional, equal-area: the contiguous United States.	지역, 정적: 미국 본토.
 Regional, equal-area: the European standard for statistics.	지역, 정적: 통계용 유럽 표준.
 Remove	제거
@@ -548,6 +593,7 @@ Run Tool	도구 실행
 Running…	실행 중…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS는 순수 Rust로 작성된 오픈 소스 데스크톱 GIS입니다. 리본은 익숙한 데스크톱 GIS 워크플로를 따르며, 모든 작업은 명령줄에서도 실행할 수 있는 명령입니다.
+RustGIS plugin	RustGIS 플러그인
 RustGIS project	RustGIS 프로젝트
 Sample data (Natural Earth)	샘플 데이터(Natural Earth)
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	샘플 데이터 © Natural Earth(퍼블릭 도메인). RustGIS는 Apache-2.0 라이선스를 따릅니다.
@@ -564,6 +610,7 @@ Save the raster as a GeoTIFF.	래스터를 GeoTIFF로 저장합니다.
 Scale 1:	축척 1:
 Search commands — e.g. buffer, basemap, labels	명령 검색 — 예: buffer, basemap, labels
 Search Distance (km)	검색 거리(km)
+Search plugins	플러그인 검색
 See the tools you've run.	실행한 도구를 확인합니다.
 Select	선택
 Select (click)	선택(클릭)
@@ -598,6 +645,7 @@ Selects features that intersect features in another layer.	다른 레이어의 �
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	SQL WHERE 절로 피처를 선택합니다. 예: pop_est > 1000000.
 Set Map Tool	지도 도구 설정
 Set Scale	축척 설정
+Settings	설정
 Shaded	음영
 Shaded Relief	음영 기복
 Shape	모양
@@ -654,12 +702,14 @@ Tables	테이블
 Terrain	지형
 Text	텍스트
 Text Symbol	텍스트 심볼
+The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	둘러볼 플러그인 목록입니다. 비워 두면 RustGIS 플러그인 레지스트리를 사용합니다.
 the map has no layers	지도에 레이어가 없습니다
 The map is drawn in this coordinate system; layers are projected on the fly.	지도는 이 좌표계로 그려지며 레이어는 즉석에서 투영됩니다.
 The raster's data couldn't be read.	래스터 데이터를 읽을 수 없습니다.
 The raster's data couldn't be read: {path}	래스터 데이터를 읽을 수 없습니다: {path}
 Thermal	열화상
 This map has no layers yet.	이 지도에는 아직 레이어가 없습니다.
+This plugin can:	이 플러그인이 할 수 있는 작업:
 Tint by elevation	고도별 색조
 Toggle Dark Mode	다크 모드 전환
 Tolerance (km)	허용 오차(km)
@@ -679,8 +729,13 @@ Undo	실행 취소
 Undo / Redo	실행 취소 / 다시 실행
 Undo the last change.	마지막 변경을 실행 취소합니다.
 Undo {action}	{action} 실행 취소
+Uninstall	제거
+Uninstall Plugin	플러그인 제거
+Uninstalled {id}.	{id}을(를) 제거했습니다.
 Unique Values	고유 값
 Units	단위
+Update	업데이트
+Update to {version}	{version}(으)로 업데이트
 USA Contiguous Albers Equal Area	미국 본토 앨버스 정적도법
 Valid expression · {n} matching rows	유효한 표현식 · 일치하는 행 {n}개
 Vector and raster data	벡터 및 래스터 데이터
@@ -703,6 +758,7 @@ Where Clause	WHERE 절
 Where labels sit relative to their features.	피처를 기준으로 라벨이 놓이는 위치입니다.
 Windows	창
 Winkel Tripel	빙켈 트리펠 도법
+Withdrawn	철회됨
 World	세계
 World Atlas	World Atlas
 World Atlas Sample	World Atlas 샘플
@@ -717,6 +773,7 @@ World, equal-area, cylindrical: true sizes, flattened near the poles.	세계, �
 World, equal-area: true sizes with a Robinson-like look.	세계, 정적: 실제 면적, 로빈슨과 비슷한 모양.
 World, equal-area: true sizes with rounded poles.	세계, 정적: 실제 면적, 둥근 극.
 World, equal-area: true sizes, shapes bend towards the edges.	세계, 정적: 실제 면적, 가장자리로 갈수록 형태가 휩니다.
+Write a plugin	플러그인 만들기
 Yes	예
 Z factor	Z 계수
 Zoom about the pointer	포인터 기준 확대/축소
@@ -740,4 +797,9 @@ Zoom to the selected features.	선택한 피처로 확대합니다.
 Zoom to the selection.	선택 항목으로 확대합니다.
 Zoom to the whole world.	전 세계로 확대/축소합니다.
 Zoom To World	세계로 확대/축소
+{id} changed since it was installed; install it again from the Plugin Manager.	{id}이(가) 설치 후 변경되었습니다. 플러그인 관리자에서 다시 설치하세요.
+{name} was withdrawn from the plugin registry and has been turned off.	{name}이(가) 플러그인 레지스트리에서 철회되어 비활성화되었습니다.
+{name} was withdrawn from the plugin registry: {reason}	{name}이(가) 플러그인 레지스트리에서 철회되었습니다: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: 다운로드한 파일이 레지스트리와 일치하지 않아 설치하지 않았습니다.
+{name}: the download is a different plugin; it wasn't installed.	{name}: 다운로드한 파일이 다른 플러그인이어서 설치하지 않았습니다.
 ⌘K	⌘K

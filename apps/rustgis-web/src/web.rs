@@ -120,7 +120,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    // Fonts are at most about 10 MB; refuse anything over 64 MB, by header when there is one and
+    // Fonts are at most about 10 MB and plugins 64 MB; refuse anything over 64 MB, by header when there is one and
     // by the downloaded size otherwise.
     if let Ok(Some(len)) = resp.headers().get("content-length").map(|v| v.and_then(|s| s.parse::<u64>().ok()))
         && len > 64 << 20
@@ -140,6 +140,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
     let font_ctx = ctx.clone();
     let (gl_list_ctx, gl_run_ctx) = (ctx.clone(), ctx.clone());
     let font_sink = font_inbox.clone();
+    let fetch_ctx = ctx.clone();
     Services {
         load_pref: Some(Box::new(|key: &str| storage().and_then(|s| s.get_item(&format!("rustgis.{key}")).ok().flatten()))),
         save_pref: Some(Box::new(|key: &str, value: &str| {
@@ -177,6 +178,8 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
                 )
             } else if purpose == "layout" {
                 rfd::AsyncFileDialog::new().add_filter("RustGIS layout", &["rgislayout"])
+            } else if purpose == "plugin" {
+                rfd::AsyncFileDialog::new().add_filter("RustGIS plugin", &["rgplugin"])
             } else if purpose == "picture" {
                 rfd::AsyncFileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg"])
             } else {
@@ -199,6 +202,14 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
         inbox: Some(inbox),
         geolibre_manifests: Some(Box::new(move |slot| crate::geolibre::manifests(slot, gl_list_ctx.clone()))),
         geolibre_run: Some(Box::new(move |job, slot| crate::geolibre::run(job, slot, gl_run_ctx.clone()))),
+        fetch: Some(Box::new(move |url: &str, slot| {
+            let (url, ctx) = (url.to_string(), fetch_ctx.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                let r = fetch_bytes(&url).await.map_err(|e| format!("{url}: {e}"));
+                *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+                ctx.request_repaint();
+            });
+        })),
     }
 }
 

@@ -12,6 +12,7 @@ workspace = true
 rustgis-engine = { workspace = true }
 egui = { workspace = true }
 egui_extras = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }
 log = { workspace = true }
@@ -23,5 +24,6 @@ sys-locale = { version = "0.3", features = ["js"] }
 rfd = { workspace = true }
 
 [dev-dependencies]
+rustgis-plugins = { workspace = true, features = ["testing"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 image = { workspace = true }

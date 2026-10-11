@@ -17,6 +17,7 @@ pub mod icons;
 mod layoutview;
 mod mapview;
 mod panes;
+mod pluginsui;
 mod ribbon;
 mod table;
 pub mod theme;
@@ -54,6 +55,8 @@ pub struct Services {
     /// …and runs one tool in its in-memory `/work` folder, putting the new files and printed
     /// lines in the slot. The desktop app runs tools through the `geolibre` program instead.
     pub geolibre_run: Option<Box<dyn Fn(rustgis_engine::cmd::gp::ExternalRun, Slot<rustgis_engine::cmd::gp::ExternalOutput>)>>,
+    /// Downloads a URL into the slot (the browser's fetch; the desktop downloads on a thread).
+    pub fetch: Option<Box<dyn Fn(&str, Slot<Result<Vec<u8>, String>>)>>,
 }
 
 /// A new private folder for one print job: unique, created fresh (never an existing path) and,
@@ -190,6 +193,8 @@ pub struct RustGisApp {
     pub layout: layoutview::LayoutView,
     pub forms: editpanes::Forms,
     pub workflow: analysispane::Workflow,
+    /// The Plugin Manager and plugin downloads.
+    pub plugins: pluginsui::PluginsState,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     sent_title: String,
@@ -224,6 +229,7 @@ impl RustGisApp {
             layout: layoutview::LayoutView::default(),
             forms: editpanes::Forms::default(),
             workflow: analysispane::Workflow::default(),
+            plugins: pluginsui::PluginsState::default(),
             fonts_frames: 0,
             applied_dark: None,
             sent_title: String::new(),
@@ -251,6 +257,8 @@ impl RustGisApp {
         if self.services.load_pref.as_ref().and_then(|load| load("geolibre_web")).as_deref() == Some("on") {
             panes::start_geolibre_load(&mut self);
         }
+        // Plugins the web app installed in earlier visits (the desktop loads its plugins folder).
+        pluginsui::restore(&mut self);
         // A GeoLibre runner located earlier (Locate… in the Geoprocessing pane).
         if let Some(path) = self.services.load_pref.as_ref().and_then(|load| load("geolibre_runner")).filter(|p| !p.is_empty())
             && let Err(e) = self.session.run("gp.setGeolibre", &json!({"path": path}))
@@ -353,6 +361,11 @@ impl RustGisApp {
     /// Failures are reported to the user (command errors through `Session::run`, others here).
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
         let lower = name.to_ascii_lowercase();
+        // A plugin package: ask before installing it.
+        if lower.ends_with(".rgplugin") {
+            pluginsui::received(self, bytes.to_vec(), None);
+            return Ok(Value::Null);
+        }
         // Project items picked or dropped in the browser.
         let item = [
             (".rgismap", "map.import"),
@@ -528,6 +541,21 @@ impl RustGisApp {
             "ui.theme" => self.ui.dark = p.get("dark").and_then(Value::as_bool).unwrap_or(!self.ui.dark),
             "ui.commandSearch" => self.ui.command_search = Some(String::new()),
             "ui.about" => self.ui.about = true,
+            "ui.plugins" => {
+                self.plugins.open = p.get("open").and_then(Value::as_bool).unwrap_or(!self.plugins.open);
+                if let Some(url) = p.get("registry").and_then(Value::as_str) {
+                    self.plugins.url = url.to_string();
+                    self.plugins.registry = None;
+                }
+                if let Some(tab) = p.get("tab").and_then(Value::as_str) {
+                    self.plugins.tab = match tab {
+                        "browse" => pluginsui::Tab::Browse,
+                        "settings" => pluginsui::Tab::Settings,
+                        _ => pluginsui::Tab::Installed,
+                    };
+                }
+            }
+            "ui.installPlugin" => pluginsui::install_from_file(self, p.get("path").and_then(Value::as_str)),
             // What a click with Explore does: identify there and show the popup.
             "ui.identify" => {
                 // The engine checks the coordinates; the popup reuses them.
@@ -859,6 +887,7 @@ impl RustGisApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         i18n::set_current(self.lang());
         panes::poll_geolibre(self, ctx);
+        pluginsui::poll(self, ctx);
         self.ensure_script_font();
         // Fonts downloaded by the web app.
         let fonts: Vec<(String, Vec<u8>)> = match &self.services.font_inbox {
@@ -916,6 +945,13 @@ impl RustGisApp {
                 if p.is_empty() {
                     continue;
                 }
+                if p.to_ascii_lowercase().ends_with(".rgplugin") {
+                    match std::fs::read(f.path()) {
+                        Ok(bytes) => pluginsui::received(self, bytes, None),
+                        Err(e) => self.session.notify(format!("{p}: {e}"), true),
+                    }
+                    continue;
+                }
                 let cmd = if p.to_ascii_lowercase().ends_with(".rgisx") { "project.open" } else { "layer.addData" };
                 let _ = self.run(cmd, json!({"path": p}));
                 self.map.invalidate();
@@ -958,6 +994,7 @@ impl RustGisApp {
             });
         }
         dialogs::show(self, &ctx);
+        pluginsui::show(self, &ctx);
         chrome::command_search(self, &ctx);
         chrome::about(self, &ctx);
         chrome::notices(self, &ctx);

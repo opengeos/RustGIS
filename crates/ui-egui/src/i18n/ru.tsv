@@ -6,6 +6,7 @@ A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow o
 A projected coordinate system.	Система координат проекции.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Значение, поле или два из них, соединённые знаком + − × ÷. Применяется к выбранным строкам или ко всем строкам, если ничего не выбрано.
 About	О программе
+About plugins	О модулях
 About RustGIS	О RustGIS
 About RustGIS.	О RustGIS.
 Above	Сверху
@@ -25,6 +26,7 @@ Add Data…	Добавить данные…
 Add Field	Добавить поле
 Add field	Добавить поле
 Add GeoJSON, CSV or Shapefile data to the map.	Добавить на карту данные GeoJSON, CSV или Shapefile.
+Add Plugin Folder…	Добавить папку модуля…
 Add sample countries	Добавить пример стран
 Add Sample Data	Добавить пример данных
 Add To Current Selection	Добавить к текущей выборке
@@ -71,11 +73,15 @@ Bookmarks	Закладки
 Boolean	Логическое
 Bounding\nGeometry	Ограничивающая\nгеометрия
 Brightness	Яркость
+Browse	Обзор
+Browse Plugins	Обзор модулей
 Browse the geoprocessing toolbox.	Просмотр набора инструментов геообработки.
 Browse the project's maps, tables and folders.	Просмотр карт, таблиц и папок проекта.
+Browse, install, update and remove plugins.	Просмотр, установка, обновление и удаление модулей.
 Buffer	Буфер
 By\nAttributes	По\nатрибутам
 By\nLocation	По\nрасположению
+by {author}	автор: {author}
 Calculate	Вычислить
 Calculate\nField	Вычислить\nполе
 Calculate\nGeometry	Вычислить\nгеометрию
@@ -94,6 +100,7 @@ Cell size	Размер ячейки
 Centered	По центру
 Change the map's backdrop.	Изменить фон карты.
 Change the map's coordinate system	Изменить систему координат карты
+Change the project (add layers, edit features, change symbology)	Изменять проект (добавлять слои, редактировать объекты, менять символы)
 Choose a band combination to display the raster layer.	Выберите комбинацию каналов для отображения растрового слоя.
 Choose a contrast stretch for the raster layer.	Выберите растяжку контраста для растрового слоя.
 Choose a resampling type for the raster layer.	Выберите тип передискретизации для растрового слоя.
@@ -139,6 +146,7 @@ Colormap	Цветовая карта
 Colors from the raster's own color table.	Цвета из собственной цветовой таблицы растра.
 Command\nSearch	Поиск\nкоманд
 Command Search	Поиск команд
+Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	Команды на вкладке «Модули»: {commands} · Инструменты на панели геообработки: {tools}
 Completed	Выполнено
 Compute a field's values.	Вычислить значения поля.
 Contents	Содержание
@@ -159,6 +167,7 @@ Copy the selected features (also as GeoJSON text).	Копировать выбр
 Copy the selected features and delete them.	Копировать выбранные объекты и удалить их.
 Copy the selected layer's data source path.	Копировать путь к источнику данных выбранного слоя.
 Couldn't download the font for {language}; pick the language again to retry.	Не удалось загрузить шрифт для {language}; выберите язык ещё раз, чтобы повторить попытку.
+Couldn't load the plugin registry: {error}	Не удалось загрузить каталог модулей: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Количество, сумма, среднее, минимум, максимум и стандартное отклонение поля, при необходимости по полю группировки.
 Countries, cities, rivers and lakes	Страны, города, реки и озёра
 Counts the points that fall inside each polygon.	Подсчитывает точки, попадающие в каждый полигон.
@@ -230,8 +239,11 @@ Eckert IV (equal-area world)	Эккерт IV (равновеликая карт�
 Edit	Правка
 Edit Attribute	Изменить атрибут
 Edit attributes in the table.	Редактировать атрибуты в таблице.
+Edits the project	Изменяет проект
 Effects	Эффекты
 Ember	Угли
+Enable Plugin	Включить модуль
+Enabled	Включён
 Encloses each feature, or all features, in its convex hull.	Заключает каждый объект или все объекты в выпуклую оболочку.
 Enhancement	Улучшение
 EPSG code	Код EPSG
@@ -281,6 +293,7 @@ Filter rows…	Фильтр строк…
 Find a place by coordinates.	Найти место по координатам.
 Find and run geoprocessing tools.	Найти и запустить инструменты геообработки.
 Find any command by name (Ctrl+K).	Найти любую команду по названию (Ctrl+K).
+Find plugins in the RustGIS plugin registry.	Найти модули в каталоге модулей RustGIS.
 Find Tools	Найти инструменты
 Finish Tool Run	Завершить запуск инструмента
 Finished: {tool}	Готово: {tool}
@@ -324,6 +337,7 @@ Hide labels when the viewer is farther than this.	Скрывать подпис�
 Histogram Equalize	Выравнивание гистограммы
 History	История
 Home	Home
+Homepage	Домашняя страница
 Identify	Идентифицировать
 Import\nProject	Импорт\nпроекта
 In Beyond	Вкл. за пределами
@@ -337,14 +351,28 @@ Input Summary Features	Входные объекты сводки
 Input Table	Входная таблица
 Inquiry	Запрос
 Insert	Вставка
+Install	Установить
+Install a plugin	Установка модуля
+Install a plugin from a .rgplugin file.	Установить модуль из файла .rgplugin.
+Install from a file	Установка из файла
+Install From File	Установить из файла
+Install From File…	Установить из файла…
 Install GeoLibre Tools	Установить инструменты GeoLibre
 Install GeoLibre tools	Установить инструменты GeoLibre
+Install Plugin	Установить модуль
+Install Plugin From Registry	Установить модуль из каталога
+Install {name} {version}?	Установить {name} {version}?
+Installed	Установлен
+Installed plugins are kept in {folder}	Установленные модули хранятся в {folder}
+Installed {name} {version}.	Установлен модуль {name} {version}.
 Interface font: {font}	Шрифт интерфейса: {font}
 Invalid: {error}	Недопустимо: {error}
 Invert	Инвертировать
 Invert color scheme	Инвертировать цветовую схему
 Invert the selection.	Инвертировать выборку.
 IS NULL	IS NULL
+It runs in a sandbox with no other access to your computer or the network.	Он работает в песочнице без какого-либо другого доступа к вашему компьютеру или сети.
+It's too large to keep in the browser: install it again on your next visit.	Модуль слишком велик для хранения в браузере: установите его заново при следующем посещении.
 keep current	оставить текущее
 Keep the labelled features fixed as the map moves.	Сохранять подписанные объекты неизменными при перемещении карты.
 Keyboard Shortcuts	Сочетания клавиш
@@ -374,7 +402,9 @@ Line width	Толщина линии
 LineString	LineString
 List Commands	Список команд
 Lit	Освещено
+Load an unpacked plugin from its folder while you develop it.	Загрузить нераспакованный модуль из его папки во время разработки.
 Load GeoLibre tools	Загрузить инструменты GeoLibre
+Loaded {name} from its folder.	Модуль {name} загружен из своей папки.
 Loading the GeoLibre tools…	Загрузка инструментов GeoLibre…
 Locate	Найти место
 Locate GeoLibre Runner	Указать модуль запуска GeoLibre
@@ -388,6 +418,7 @@ Major Lakes	Крупные озёра
 Major Rivers	Крупные реки
 Make a new layer of the selected features.	Создать новый слой из выбранных объектов.
 Make Layer From Selected Features	Создать слой из выбранных объектов
+Manage	Управление
 Manage Edits	Управление правками
 Map	Карта
 Map › Layer	Карта › Слой
@@ -437,6 +468,8 @@ Next	Далее
 Next Extent	Следующий экстент
 No	Нет
 No bookmarks yet	Закладок пока нет
+No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Модули не установлены. Просмотрите каталог модулей или установите файл .rgplugin.
+No plugins match.	Подходящих модулей нет.
 No Pop-ups	Без всплывающих окон
 No standalone tables	Нет отдельных таблиц
 NoData	NoData
@@ -487,6 +520,13 @@ Percent Clip	Процентное отсечение
 Pixel	Пиксель
 Pixel type	Тип пикселя
 Placement	Размещение
+Plugin\nManager	Менеджер\nмодулей
+Plugin folder	Папка модуля
+Plugin Manager	Менеджер модулей
+Plugin Manager…	Менеджер модулей…
+Plugin registry	Каталог модулей
+Plugins	Модули
+Plugins are .rgplugin files. Install only plugins from people you trust.	Модули — это файлы .rgplugin. Устанавливайте модули только от тех, кому доверяете.
 PNG image	Изображение PNG
 Point	Точка
 Polar, conformal: Antarctica and the Southern Ocean.	Полярная, равноугольная: Антарктида и Южный океан.
@@ -514,12 +554,17 @@ Raster Data	Данные растра
 Raster Information	Сведения о растре
 Raster Layer	Растровый слой
 Raster · {w} × {h} · {n} bands · {renderer}	Растр · {w} × {h} · каналов: {n} · {renderer}
+Read and write files on this computer	Читать и записывать файлы на этом компьютере
+Read the map's layers and features	Читать слои и объекты карты
+Reads and writes files	Читает и записывает файлы
+Reads the map	Читает карту
 Red	Красный
 Redo	Повторить
 Redo the change you undid.	Повторить отменённое изменение.
 Redo {action}	Повторить: {action}
 Red–Blue	Красный–синий
 Refine the search to see {n} more	Уточните поиск, чтобы увидеть ещё {n}
+Refresh	Обновить
 Regional, equal-area: the contiguous United States.	Региональная, равновеликая: смежные штаты США.
 Regional, equal-area: the European standard for statistics.	Региональная, равновеликая: европейский стандарт для статистики.
 Remove	Удалить
@@ -548,6 +593,7 @@ Run Tool	Запустить инструмент
 Running…	Выполняется…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS — настольная ГИС с открытым исходным кодом, написанная на чистом Rust. Её лента повторяет привычный порядок работы настольной ГИС; каждое действие — это команда, которую также можно выполнить из командной строки.
+RustGIS plugin	Модуль RustGIS
 RustGIS project	Проект RustGIS
 Sample data (Natural Earth)	Пример данных (Natural Earth)
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Пример данных © Natural Earth (общественное достояние). RustGIS распространяется по лицензии Apache-2.0.
@@ -564,6 +610,7 @@ Save the raster as a GeoTIFF.	Сохранить растр как GeoTIFF.
 Scale 1:	Масштаб 1:
 Search commands — e.g. buffer, basemap, labels	Поиск команд — напр. буфер, базовая карта, подписи
 Search Distance (km)	Расстояние поиска (км)
+Search plugins	Поиск модулей
 See the tools you've run.	Просмотр запущенных инструментов.
 Select	Выбрать
 Select (click)	Выбрать (щелчком)
@@ -598,6 +645,7 @@ Selects features that intersect features in another layer.	Выбирает об
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Выбирает объекты с помощью SQL-условия WHERE, напр. pop_est > 1000000.
 Set Map Tool	Выбрать инструмент карты
 Set Scale	Задать масштаб
+Settings	Настройки
 Shaded	Затенено
 Shaded Relief	Теневой рельеф
 Shape	Форма
@@ -654,12 +702,14 @@ Tables	Таблицы
 Terrain	Рельеф
 Text	Текст
 Text Symbol	Текстовый символ
+The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	Список модулей для просмотра. Оставьте пустым, чтобы использовать каталог модулей RustGIS.
 the map has no layers	на карте нет слоёв
 The map is drawn in this coordinate system; layers are projected on the fly.	Карта рисуется в этой системе координат; слои проецируются на лету.
 The raster's data couldn't be read.	Не удалось прочитать данные растра.
 The raster's data couldn't be read: {path}	Не удалось прочитать данные растра: {path}
 Thermal	Тепловая
 This map has no layers yet.	На этой карте пока нет слоёв.
+This plugin can:	Этот модуль может:
 Tint by elevation	Окраска по высоте
 Toggle Dark Mode	Переключить тёмную тему
 Tolerance (km)	Допуск (км)
@@ -679,8 +729,13 @@ Undo	Отменить
 Undo / Redo	Отменить / Повторить
 Undo the last change.	Отменить последнее изменение.
 Undo {action}	Отменить: {action}
+Uninstall	Удалить
+Uninstall Plugin	Удалить модуль
+Uninstalled {id}.	Модуль {id} удалён.
 Unique Values	Уникальные значения
 Units	Единицы
+Update	Обновить
+Update to {version}	Обновить до {version}
 USA Contiguous Albers Equal Area	Равновеликая Альберса для смежных штатов США
 Valid expression · {n} matching rows	Выражение допустимо · Подходящих строк: {n}
 Vector and raster data	Векторные и растровые данные
@@ -703,6 +758,7 @@ Where Clause	Условие WHERE
 Where labels sit relative to their features.	Положение подписей относительно их объектов.
 Windows	Окна
 Winkel Tripel	Винкель-Трипель
+Withdrawn	Отозван
 World	Мир
 World Atlas	Атлас мира
 World Atlas Sample	Пример «Атлас мира»
@@ -717,6 +773,7 @@ World, equal-area, cylindrical: true sizes, flattened near the poles.	Мир, р
 World, equal-area: true sizes with a Robinson-like look.	Мир, равновеликая: истинные площади, внешне похожа на проекцию Робинсона.
 World, equal-area: true sizes with rounded poles.	Мир, равновеликая: истинные площади со скруглёнными полюсами.
 World, equal-area: true sizes, shapes bend towards the edges.	Мир, равновеликая: истинные площади, формы изгибаются к краям.
+Write a plugin	Написать модуль
 Yes	Да
 Z factor	Z-фактор
 Zoom about the pointer	Масштабирование относительно указателя
@@ -740,4 +797,9 @@ Zoom to the selected features.	Приблизить к выбранным объ
 Zoom to the selection.	Приблизить к выборке.
 Zoom to the whole world.	Показать весь мир.
 Zoom To World	Приблизить к миру
+{id} changed since it was installed; install it again from the Plugin Manager.	Модуль {id} изменился после установки; установите его заново через Менеджер модулей.
+{name} was withdrawn from the plugin registry and has been turned off.	Модуль {name} отозван из каталога модулей и отключён.
+{name} was withdrawn from the plugin registry: {reason}	Модуль {name} отозван из каталога модулей: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: загруженный файл не совпадает с данными каталога; модуль не установлен.
+{name}: the download is a different plugin; it wasn't installed.	{name}: загружен другой модуль; модуль не установлен.
 ⌘K	⌘K

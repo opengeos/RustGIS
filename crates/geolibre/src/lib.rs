@@ -38,10 +38,13 @@ use serde_json::{Value, json};
 /// Tool ids get this prefix, so they never clash with the built-in tools.
 pub const PREFIX: &str = "geolibre:";
 
+/// The key the suite registers its tools under ([`rustgis_analysis::register_external`]).
+pub const SOURCE: &str = "geolibre";
+
 /// Adds the suite to the geoprocessing tools. The runner is found and its manifests read the
 /// first time the tools are listed.
 pub fn register() {
-    rustgis_analysis::register_external(specs, run);
+    rustgis_analysis::register_external(SOURCE, specs, run);
 }
 
 /// Uses `exe` as the runner (`None`: look in the usual places), and reloads the tool list.
@@ -49,7 +52,7 @@ pub fn register() {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn set_runner(exe: Option<std::path::PathBuf>) -> Result<Option<(std::path::PathBuf, String)>, String> {
     let found = runner::choose(exe)?;
-    rustgis_analysis::reload_external();
+    rustgis_analysis::reload_external_of(SOURCE);
     Ok(found)
 }
 
@@ -65,7 +68,7 @@ pub fn set_manifests(json: &str) -> Result<usize, String> {
     if let Ok(mut m) = MANIFESTS.lock() {
         *m = Some(v);
     }
-    rustgis_analysis::reload_external();
+    rustgis_analysis::reload_external_of(SOURCE);
     Ok(n)
 }
 

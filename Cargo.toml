@@ -20,6 +20,7 @@ rustgis-render = { path = "crates/render" }
 rustgis-engine = { path = "crates/engine" }
 rustgis-ui-egui = { path = "crates/ui-egui" }
 rustgis-geolibre = { path = "crates/geolibre" }
+rustgis-plugins = { path = "crates/plugins" }
 
 # foundation
 thiserror = "2"

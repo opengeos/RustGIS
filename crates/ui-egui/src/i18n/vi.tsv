@@ -6,6 +6,7 @@ A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow o
 A projected coordinate system.	Một hệ tọa độ phép chiếu.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Một giá trị, một trường, hoặc hai trong số đó nối bằng + − × ÷. Áp dụng cho các hàng được chọn, hoặc mọi hàng nếu không có hàng nào được chọn.
 About	Giới thiệu
+About plugins	Giới thiệu về plugin
 About RustGIS	Giới thiệu RustGIS
 About RustGIS.	Giới thiệu RustGIS.
 Above	Trên
@@ -25,6 +26,7 @@ Add Data…	Thêm dữ liệu…
 Add Field	Thêm trường
 Add field	Thêm trường
 Add GeoJSON, CSV or Shapefile data to the map.	Thêm dữ liệu GeoJSON, CSV hoặc Shapefile vào bản đồ.
+Add Plugin Folder…	Thêm thư mục plugin…
 Add sample countries	Thêm các quốc gia mẫu
 Add Sample Data	Thêm dữ liệu mẫu
 Add To Current Selection	Thêm vào vùng chọn hiện tại
@@ -71,11 +73,15 @@ Bookmarks	Dấu trang
 Boolean	Boolean
 Bounding\nGeometry	Hình học\nbao
 Brightness	Độ sáng
+Browse	Duyệt
+Browse Plugins	Duyệt plugin
 Browse the geoprocessing toolbox.	Duyệt hộp công cụ xử lý không gian.
 Browse the project's maps, tables and folders.	Duyệt các bản đồ, bảng và thư mục của dự án.
+Browse, install, update and remove plugins.	Duyệt, cài đặt, cập nhật và gỡ bỏ plugin.
 Buffer	Vùng đệm
 By\nAttributes	Theo\nthuộc tính
 By\nLocation	Theo\nvị trí
+by {author}	bởi {author}
 Calculate	Tính toán
 Calculate\nField	Tính\ntrường
 Calculate\nGeometry	Tính\nhình học
@@ -94,6 +100,7 @@ Cell size	Kích thước ô
 Centered	Căn giữa
 Change the map's backdrop.	Thay đổi nền của bản đồ.
 Change the map's coordinate system	Đổi hệ tọa độ của bản đồ
+Change the project (add layers, edit features, change symbology)	Thay đổi dự án (thêm lớp, chỉnh sửa đối tượng, thay đổi ký hiệu)
 Choose a band combination to display the raster layer.	Chọn tổ hợp kênh để hiển thị lớp raster.
 Choose a contrast stretch for the raster layer.	Chọn kiểu kéo giãn độ tương phản cho lớp raster.
 Choose a resampling type for the raster layer.	Chọn kiểu lấy mẫu lại cho lớp raster.
@@ -139,6 +146,7 @@ Colormap	Bản đồ màu
 Colors from the raster's own color table.	Màu lấy từ bảng màu riêng của raster.
 Command\nSearch	Tìm\nlệnh
 Command Search	Tìm lệnh
+Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	Lệnh trên thẻ Plugin: {commands} · Công cụ trong ngăn Xử lý không gian: {tools}
 Completed	Hoàn tất
 Compute a field's values.	Tính giá trị của một trường.
 Contents	Nội dung
@@ -159,6 +167,7 @@ Copy the selected features (also as GeoJSON text).	Sao chép các đối tượn
 Copy the selected features and delete them.	Sao chép các đối tượng được chọn rồi xóa chúng.
 Copy the selected layer's data source path.	Sao chép đường dẫn nguồn dữ liệu của lớp được chọn.
 Couldn't download the font for {language}; pick the language again to retry.	Không thể tải phông chữ cho {language}; hãy chọn lại ngôn ngữ để thử lại.
+Couldn't load the plugin registry: {error}	Không thể tải kho plugin: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Số lượng, tổng, trung bình, nhỏ nhất, lớn nhất và độ lệch chuẩn của một trường, có thể theo từng trường phân nhóm.
 Countries, cities, rivers and lakes	Quốc gia, thành phố, sông và hồ
 Counts the points that fall inside each polygon.	Đếm số điểm nằm trong mỗi vùng.
@@ -230,8 +239,11 @@ Eckert IV (equal-area world)	Eckert IV (thế giới đồng diện tích)
 Edit	Chỉnh sửa
 Edit Attribute	Sửa thuộc tính
 Edit attributes in the table.	Sửa thuộc tính trong bảng.
+Edits the project	Chỉnh sửa dự án
 Effects	Hiệu ứng
 Ember	Than hồng
+Enable Plugin	Bật plugin
+Enabled	Đã bật
 Encloses each feature, or all features, in its convex hull.	Bao mỗi đối tượng, hoặc tất cả đối tượng, trong bao lồi của nó.
 Enhancement	Tăng cường
 EPSG code	Mã EPSG
@@ -281,6 +293,7 @@ Filter rows…	Lọc hàng…
 Find a place by coordinates.	Tìm một địa điểm theo tọa độ.
 Find and run geoprocessing tools.	Tìm và chạy công cụ xử lý không gian.
 Find any command by name (Ctrl+K).	Tìm bất kỳ lệnh nào theo tên (Ctrl+K).
+Find plugins in the RustGIS plugin registry.	Tìm plugin trong kho plugin RustGIS.
 Find Tools	Tìm công cụ
 Finish Tool Run	Hoàn tất chạy công cụ
 Finished: {tool}	Đã xong: {tool}
@@ -324,6 +337,7 @@ Hide labels when the viewer is farther than this.	Ẩn nhãn khi người xem �
 Histogram Equalize	Cân bằng histogram
 History	Lịch sử
 Home	Home
+Homepage	Trang chủ
 Identify	Nhận dạng
 Import\nProject	Nhập\ndự án
 In Beyond	Khi phóng to hơn
@@ -337,14 +351,28 @@ Input Summary Features	Đối tượng tổng hợp đầu vào
 Input Table	Bảng đầu vào
 Inquiry	Truy vấn
 Insert	Chèn
+Install	Cài đặt
+Install a plugin	Cài đặt plugin
+Install a plugin from a .rgplugin file.	Cài đặt plugin từ tệp .rgplugin.
+Install from a file	Cài đặt từ tệp
+Install From File	Cài đặt từ tệp
+Install From File…	Cài đặt từ tệp…
 Install GeoLibre Tools	Cài đặt công cụ GeoLibre
 Install GeoLibre tools	Cài đặt công cụ GeoLibre
+Install Plugin	Cài đặt plugin
+Install Plugin From Registry	Cài đặt plugin từ kho
+Install {name} {version}?	Cài đặt {name} {version}?
+Installed	Đã cài đặt
+Installed plugins are kept in {folder}	Plugin đã cài đặt được lưu trong {folder}
+Installed {name} {version}.	Đã cài đặt {name} {version}.
 Interface font: {font}	Phông giao diện: {font}
 Invalid: {error}	Không hợp lệ: {error}
 Invert	Đảo ngược
 Invert color scheme	Đảo ngược bảng màu
 Invert the selection.	Đảo ngược vùng chọn.
 IS NULL	IS NULL
+It runs in a sandbox with no other access to your computer or the network.	Plugin chạy trong một hộp cát, không có quyền truy cập nào khác vào máy tính của bạn hay mạng.
+It's too large to keep in the browser: install it again on your next visit.	Plugin quá lớn để lưu trong trình duyệt: hãy cài đặt lại vào lần truy cập tiếp theo.
 keep current	giữ nguyên
 Keep the labelled features fixed as the map moves.	Giữ cố định các đối tượng đã gán nhãn khi bản đồ di chuyển.
 Keyboard Shortcuts	Phím tắt
@@ -374,7 +402,9 @@ Line width	Độ rộng đường
 LineString	LineString
 List Commands	Liệt kê lệnh
 Lit	Sáng
+Load an unpacked plugin from its folder while you develop it.	Tải một plugin chưa đóng gói từ thư mục của nó trong khi bạn phát triển.
 Load GeoLibre tools	Tải công cụ GeoLibre
+Loaded {name} from its folder.	Đã tải {name} từ thư mục của nó.
 Loading the GeoLibre tools…	Đang tải công cụ GeoLibre…
 Locate	Định vị
 Locate GeoLibre Runner	Tìm trình chạy GeoLibre
@@ -388,6 +418,7 @@ Major Lakes	Hồ lớn
 Major Rivers	Sông lớn
 Make a new layer of the selected features.	Tạo lớp mới từ các đối tượng được chọn.
 Make Layer From Selected Features	Tạo lớp từ đối tượng được chọn
+Manage	Quản lý
 Manage Edits	Quản lý chỉnh sửa
 Map	Bản đồ
 Map › Layer	Bản đồ › Lớp
@@ -437,6 +468,8 @@ Next	Tiếp
 Next Extent	Phạm vi tiếp theo
 No	Không
 No bookmarks yet	Chưa có dấu trang
+No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Chưa cài đặt plugin nào. Hãy duyệt kho plugin hoặc cài đặt một tệp .rgplugin.
+No plugins match.	Không có plugin nào phù hợp.
 No Pop-ups	Không có cửa sổ bật lên
 No standalone tables	Không có bảng độc lập
 NoData	NoData
@@ -487,6 +520,13 @@ Percent Clip	Cắt theo phần trăm
 Pixel	Pixel
 Pixel type	Kiểu pixel
 Placement	Vị trí đặt
+Plugin\nManager	Trình quản lý\nplugin
+Plugin folder	Thư mục plugin
+Plugin Manager	Trình quản lý plugin
+Plugin Manager…	Trình quản lý plugin…
+Plugin registry	Kho plugin
+Plugins	Plugin
+Plugins are .rgplugin files. Install only plugins from people you trust.	Plugin là các tệp .rgplugin. Chỉ cài đặt plugin từ những người bạn tin tưởng.
 PNG image	Ảnh PNG
 Point	Điểm
 Polar, conformal: Antarctica and the Southern Ocean.	Vùng cực, đồng góc: châu Nam Cực và Nam Đại Dương.
@@ -514,12 +554,17 @@ Raster Data	Dữ liệu raster
 Raster Information	Thông tin raster
 Raster Layer	Lớp raster
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} kênh · {renderer}
+Read and write files on this computer	Đọc và ghi tệp trên máy tính này
+Read the map's layers and features	Đọc các lớp và đối tượng của bản đồ
+Reads and writes files	Đọc và ghi tệp
+Reads the map	Đọc bản đồ
 Red	Đỏ
 Redo	Làm lại
 Redo the change you undid.	Làm lại thay đổi bạn đã hoàn tác.
 Redo {action}	Làm lại {action}
 Red–Blue	Đỏ–Xanh lam
 Refine the search to see {n} more	Thu hẹp tìm kiếm để xem thêm {n}
+Refresh	Làm mới
 Regional, equal-area: the contiguous United States.	Khu vực, đồng diện tích: lãnh thổ liền kề của Hoa Kỳ.
 Regional, equal-area: the European standard for statistics.	Khu vực, đồng diện tích: chuẩn châu Âu cho thống kê.
 Remove	Gỡ bỏ
@@ -548,6 +593,7 @@ Run Tool	Chạy công cụ
 Running…	Đang chạy…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS là GIS máy tính để bàn mã nguồn mở viết hoàn toàn bằng Rust. Ribbon của nó theo quy trình GIS máy tính để bàn quen thuộc; mọi thao tác đều là một lệnh mà bạn cũng có thể chạy từ dòng lệnh.
+RustGIS plugin	Plugin RustGIS
 RustGIS project	Dự án RustGIS
 Sample data (Natural Earth)	Dữ liệu mẫu (Natural Earth)
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Dữ liệu mẫu © Natural Earth (phạm vi công cộng). RustGIS được cấp phép theo Apache-2.0.
@@ -564,6 +610,7 @@ Save the raster as a GeoTIFF.	Lưu raster dưới dạng GeoTIFF.
 Scale 1:	Tỷ lệ 1:
 Search commands — e.g. buffer, basemap, labels	Tìm lệnh — vd. buffer, basemap, labels
 Search Distance (km)	Khoảng cách tìm kiếm (km)
+Search plugins	Tìm plugin
 See the tools you've run.	Xem các công cụ bạn đã chạy.
 Select	Chọn
 Select (click)	Chọn (nhấp)
@@ -598,6 +645,7 @@ Selects features that intersect features in another layer.	Chọn các đối t�
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Chọn đối tượng bằng mệnh đề WHERE SQL, vd. pop_est > 1000000.
 Set Map Tool	Đặt công cụ bản đồ
 Set Scale	Đặt tỷ lệ
+Settings	Thiết lập
 Shaded	Tối
 Shaded Relief	Địa hình bóng đổ
 Shape	Hình dạng
@@ -654,12 +702,14 @@ Tables	Bảng
 Terrain	Địa hình
 Text	Văn bản
 Text Symbol	Ký hiệu văn bản
+The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	Danh sách plugin để duyệt. Để trống để dùng kho plugin RustGIS.
 the map has no layers	bản đồ không có lớp nào
 The map is drawn in this coordinate system; layers are projected on the fly.	Bản đồ được vẽ trong hệ tọa độ này; các lớp được chiếu tức thời.
 The raster's data couldn't be read.	Không thể đọc dữ liệu của raster.
 The raster's data couldn't be read: {path}	Không thể đọc dữ liệu của raster: {path}
 Thermal	Nhiệt
 This map has no layers yet.	Bản đồ này chưa có lớp nào.
+This plugin can:	Plugin này có thể:
 Tint by elevation	Tô màu theo độ cao
 Toggle Dark Mode	Bật/tắt chế độ tối
 Tolerance (km)	Dung sai (km)
@@ -679,8 +729,13 @@ Undo	Hoàn tác
 Undo / Redo	Hoàn tác / Làm lại
 Undo the last change.	Hoàn tác thay đổi cuối cùng.
 Undo {action}	Hoàn tác {action}
+Uninstall	Gỡ cài đặt
+Uninstall Plugin	Gỡ cài đặt plugin
+Uninstalled {id}.	Đã gỡ cài đặt {id}.
 Unique Values	Giá trị duy nhất
 Units	Đơn vị
+Update	Cập nhật
+Update to {version}	Cập nhật lên {version}
 USA Contiguous Albers Equal Area	Albers đồng diện tích Hoa Kỳ lục địa
 Valid expression · {n} matching rows	Biểu thức hợp lệ · {n} hàng khớp
 Vector and raster data	Dữ liệu vector và raster
@@ -703,6 +758,7 @@ Where Clause	Mệnh đề WHERE
 Where labels sit relative to their features.	Vị trí của nhãn so với đối tượng của chúng.
 Windows	Cửa sổ
 Winkel Tripel	Winkel Tripel
+Withdrawn	Đã bị gỡ
 World	Thế giới
 World Atlas	World Atlas
 World Atlas Sample	Mẫu World Atlas
@@ -717,6 +773,7 @@ World, equal-area, cylindrical: true sizes, flattened near the poles.	Thế gi�
 World, equal-area: true sizes with a Robinson-like look.	Thế giới, đồng diện tích: đúng kích thước, dáng giống Robinson.
 World, equal-area: true sizes with rounded poles.	Thế giới, đồng diện tích: đúng kích thước, các cực bo tròn.
 World, equal-area: true sizes, shapes bend towards the edges.	Thế giới, đồng diện tích: đúng kích thước, hình dạng cong dần về các mép.
+Write a plugin	Viết plugin
 Yes	Có
 Z factor	Hệ số Z
 Zoom about the pointer	Thu phóng quanh con trỏ
@@ -740,4 +797,9 @@ Zoom to the selected features.	Thu phóng tới các đối tượng được ch
 Zoom to the selection.	Thu phóng tới vùng chọn.
 Zoom to the whole world.	Thu phóng tới toàn thế giới.
 Zoom To World	Thu phóng tới thế giới
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} đã thay đổi kể từ khi được cài đặt; hãy cài đặt lại từ Trình quản lý plugin.
+{name} was withdrawn from the plugin registry and has been turned off.	{name} đã bị gỡ khỏi kho plugin và đã bị tắt.
+{name} was withdrawn from the plugin registry: {reason}	{name} đã bị gỡ khỏi kho plugin: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: bản tải xuống không khớp với kho plugin; chưa được cài đặt.
+{name}: the download is a different plugin; it wasn't installed.	{name}: bản tải xuống là một plugin khác; chưa được cài đặt.
 ⌘K	⌘K

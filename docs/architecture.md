@@ -9,6 +9,7 @@ engine scriptable and the front end swappable.
 | L1 | `rustgis-data` | Features and typed attributes; GeoJSON, CSV, Shapefile; SQL where clauses; rasters (GeoTIFF, ASCII grid) and their coordinate systems |
 | L2 | `rustgis-map`, `rustgis-analysis` | Layers, symbology, labeling, camera, basemaps; geoprocessing tools |
 | L3 | `rustgis-render` | tiny-skia renderer, label placement, PNG export |
+| L3 | `rustgis-plugins` | [Plugins](plugins.md): sandboxed WebAssembly modules that add commands and geoprocessing tools; `.rgplugin` packages and the plugin registry |
 | L4 | `rustgis-engine` | Session, undo, command registry, feature catalog, sample project |
 | L6 | `rustgis-ui-egui` | The ribbon front end |
 | apps | `rustgis`, `rustgis-cli`, `rustgis-web` | Desktop app, command line, browser (WebAssembly) |
@@ -19,6 +20,10 @@ Each user-visible action is a `CommandSpec` with an id, label, ribbon location, 
 parameter description, an `enabled` check and a `run` function. The ribbon, keyboard shortcuts,
 command search and CLI all dispatch through `Session::run`, which also snapshots the project
 for undo and restores it if a command fails.
+
+Plugin commands (`plugin:<plugin>/<command>`) dispatch through `Session::run` too, as one undo
+step. While they run, they reach the session only through permission-checked requests (see
+[Plugins](plugins.md)).
 
 ## Never crash
 

@@ -2,7 +2,17 @@ use serde_json::{Value, json};
 
 use crate::{Project, Session, sample};
 
+/// Keeps tests away from the user's installed plugins.
+fn isolate_plugins() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("rustgis-test-plugins-{}", std::process::id()));
+        rustgis_plugins::store::set_dir(Some(dir));
+    });
+}
+
 fn world() -> Session {
+    isolate_plugins();
     let mut s = Session::new(Project::default());
     s.run("project.sample", &Value::Null).unwrap();
     s
@@ -353,8 +363,10 @@ fn hostile_params_never_panic() {
                 | "share.exportLayer"
                 | "share.exportTable"
                 | "share.exportRaster"
-                // Downloads the runner from the network.
+                // Download from the network.
                 | "gp.installGeolibre"
+                | "plugin.registry"
+                | "plugin.installFromRegistry"
         ) {
             continue;
         }
@@ -1385,4 +1397,148 @@ fn view_effects_scene_and_navigation() {
     let cam = s.run("map.camera", &json!({"lon": 2.35, "lat": 48.85, "scale": 1_000_000})).unwrap();
     assert!((cam["lon"].as_f64().unwrap() - 2.35).abs() < 1e-6);
     assert!(s.run("map.navigator", &Value::Null).unwrap()["navigator"].as_bool().unwrap());
+}
+
+// ---------------------------------------------------------------------------------------------
+// plugins
+
+/// Loads the test plugin as `id` with `perms`.
+fn plugin(id: &str, perms: &[&str]) {
+    let pkg = rustgis_plugins::Package::from_zip(&rustgis_plugins::testing::package(id, perms)).unwrap();
+    rustgis_plugins::load(pkg, "test").unwrap();
+}
+
+/// Runs the test plugin's forwarding command: it sends `op` with `params` to the host.
+fn forward(s: &mut Session, id: &str, op: &str, params: Value) -> crate::CmdResult {
+    s.run(&format!("plugin:{id}/f"), &json!({"op": op, "params": params}))
+}
+
+#[test]
+fn plugin_commands_run_like_commands() {
+    let mut s = world();
+    plugin("eng-view", &[]);
+    assert_eq!(s.run("plugin:eng-view/h", &Value::Null).unwrap(), json!({"hello": "world"}));
+    assert!(!s.can_undo(), "a plugin without 'edit' doesn't take undo snapshots");
+    // Reading the map needs no permission.
+    let layers = forward(&mut s, "eng-view", "host.layers", json!({})).unwrap();
+    assert!(layers.as_array().unwrap().iter().any(|l| l["name"] == "Cities"));
+    let fc = forward(&mut s, "eng-view", "host.features", json!({"layer": "Cities", "limit": 2})).unwrap();
+    assert_eq!(fc["features"].as_array().unwrap().len(), 2);
+    assert_eq!(fc["features"][1]["row"], 1);
+    assert!(forward(&mut s, "eng-view", "map.zoomIn", json!({})).is_ok(), "view commands are fine");
+    // Changing the project isn't.
+    let e = forward(&mut s, "eng-view", "layer.remove", json!({"layer": "Cities"})).unwrap_err();
+    assert!(e.contains("'edit' permission"), "{e}");
+    let e = forward(&mut s, "eng-view", "host.addLayer", json!({"geojson": {"type": "Point", "coordinates": [1, 2]}})).unwrap_err();
+    assert!(e.contains("'edit' permission"), "{e}");
+    assert!(s.map().layer_by_name("Cities").is_some());
+    // Listed with the built-in commands; unknown and disabled ones are errors.
+    let all = s.run("info.commands", &Value::Null).unwrap();
+    assert!(all.as_array().unwrap().iter().any(|c| c["id"] == "plugin:eng-view/h"));
+    assert!(s.run("plugin:eng-view/nope", &Value::Null).unwrap_err().contains("unknown command"));
+    s.run("plugin.enable", &json!({"id": "eng-view", "enabled": false})).unwrap();
+    assert!(s.run("plugin:eng-view/h", &Value::Null).unwrap_err().contains("disabled"));
+    rustgis_plugins::unload("eng-view");
+}
+
+#[test]
+fn plugin_edits_are_one_undo_step() {
+    let mut s = world();
+    plugin("eng-edit", &["edit"]);
+    let r =
+        forward(&mut s, "eng-edit", "host.addLayer", json!({"name": "Pins", "geojson": {"type": "Point", "coordinates": [1, 2]}})).unwrap();
+    assert!(r["layer"].as_u64().is_some());
+    assert!(s.map().layer_by_name("Pins").is_some());
+    assert_eq!(s.undo_label(), Some("Forward"));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(s.map().layer_by_name("Pins").is_none());
+    forward(&mut s, "eng-edit", "layer.remove", json!({"layer": "Cities"})).unwrap();
+    assert!(s.map().layer_by_name("Cities").is_none());
+    // A failing command restores the project.
+    let n = s.map().layers.len();
+    assert!(forward(&mut s, "eng-edit", "layer.remove", json!({"layer": "Nope"})).is_err());
+    assert_eq!(s.map().layers.len(), n);
+    // Some things are off limits whatever the permissions.
+    for op in ["script.run", "project.new", "edit.undo", "plugin.uninstall", "plugin:eng-edit/h", "gp.setGeolibre"] {
+        assert!(forward(&mut s, "eng-edit", op, json!({})).is_err(), "{op}");
+    }
+    // Files need their own permission.
+    let e = forward(&mut s, "eng-edit", "layer.addData", json!({"path": "/etc/passwd"})).unwrap_err();
+    assert!(e.contains("'files' permission"), "{e}");
+    let e = forward(&mut s, "eng-edit", "share.exportMap", json!({})).unwrap_err();
+    assert!(e.contains("'files' permission"), "{e}");
+    rustgis_plugins::unload("eng-edit");
+}
+
+#[test]
+fn plugin_tools_run_in_the_geoprocessing_pane() {
+    let mut s = world();
+    plugin("eng-tools", &[]);
+    let tools = s.run("gp.tools", &Value::Null).unwrap();
+    assert!(tools.as_array().unwrap().iter().any(|t| t["id"] == "plugin:eng-tools/m" && t["toolbox"] == "Plugins › Test eng-tools"));
+    s.run("gp.run", &json!({"tool": "plugin:eng-tools/m", "params": {"input": "Cities"}})).unwrap();
+    assert_eq!(s.map().layer_by_name("Made").map(|l| l.dataset.features.len()), Some(1));
+    let h = s.project.gp_history.last().unwrap();
+    assert!(h.ok && h.messages == ["made"], "{h:?}");
+    s.run("gp.run", &json!({"tool": "plugin:eng-tools/x", "params": {"input": "Cities"}})).unwrap();
+    assert_eq!(s.map().layer_by_name("Cities").unwrap().selection, vec![0, 2]);
+    assert!(s.run("gp.run", &json!({"tool": "plugin:eng-tools/m", "params": {}})).unwrap_err().contains("required"));
+    rustgis_plugins::unload("eng-tools");
+}
+
+#[test]
+fn plugins_install_and_uninstall_from_files() {
+    isolate_plugins();
+    let mut s = Session::new(Project::default());
+    let dir = std::env::temp_dir().join(format!("rustgis-test-pkg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("eng-install.rgplugin");
+    std::fs::write(&file, rustgis_plugins::testing::package("eng-install", &[])).unwrap();
+    let info = s.run("plugin.install", &json!({"path": file.display().to_string()})).unwrap();
+    assert_eq!(info["id"], "eng-install");
+    let list = s.run("plugin.list", &Value::Null).unwrap();
+    assert!(list["plugins"].as_array().unwrap().iter().any(|p| p["id"] == "eng-install"));
+    let installed = rustgis_plugins::store::dir().unwrap().join("eng-install.rgplugin");
+    assert!(installed.is_file(), "copied into the plugins folder");
+    // Loaded again at startup, remembering that it was disabled.
+    s.run("plugin.enable", &json!({"id": "eng-install", "enabled": false})).unwrap();
+    rustgis_plugins::unload("eng-install");
+    assert!(crate::cmd::plugins::load_installed().iter().all(|e| !e.contains("eng-install")));
+    assert_eq!(rustgis_plugins::get("eng-install").map(|p| p.enabled), Some(false));
+    s.run("plugin.uninstall", &json!({"id": "eng-install"})).unwrap();
+    assert!(!installed.exists());
+    assert!(rustgis_plugins::get("eng-install").is_none());
+    // A file that isn't a package isn't installed.
+    std::fs::write(dir.join("bad.rgplugin"), b"nope").unwrap();
+    assert!(s.run("plugin.install", &json!({"path": dir.join("bad.rgplugin").display().to_string()})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn registry_downloads_are_checked() {
+    let bytes = rustgis_plugins::testing::package("eng-reg", &[]);
+    let mut e = rustgis_plugins::registry::Entry {
+        id: "eng-reg".into(),
+        name: "Reg".into(),
+        version: "1.0.0".into(),
+        description: String::new(),
+        author: String::new(),
+        homepage: String::new(),
+        license: String::new(),
+        categories: Vec::new(),
+        package: "https://example.com/x.rgplugin".into(),
+        sha256: "0".repeat(64),
+        size: 0,
+        min_rustgis_version: String::new(),
+        permissions: Vec::new(),
+    };
+    isolate_plugins();
+    assert!(crate::cmd::plugins::install_checked(&e, &bytes).unwrap_err().contains("doesn't match"));
+    e.sha256 = rustgis_plugins::package::sha256_hex(&bytes);
+    e.id = "other".into();
+    assert!(crate::cmd::plugins::install_checked(&e, &bytes).unwrap_err().contains("not 'other'"));
+    e.id = "eng-reg".into();
+    crate::cmd::plugins::install_checked(&e, &bytes).unwrap();
+    assert_eq!(crate::cmd::plugins::entry_status(&e)["installed"], "1.0.0");
+    let _ = rustgis_plugins::store::uninstall("eng-reg");
 }

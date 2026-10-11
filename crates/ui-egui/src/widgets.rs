@@ -32,7 +32,7 @@ pub fn shortcut_text(app: &RustGisApp, id: &str) -> String {
 pub fn enabled(app: &RustGisApp, id: &str) -> bool {
     match app.session.registry.get(id) {
         Some(s) => (s.enabled)(&app.session).is_none(),
-        None => id.starts_with("ui."),
+        None => id.starts_with("ui.") || rustgis_engine::plugins::command(id).is_some(),
     }
 }
 
@@ -97,6 +97,7 @@ pub fn big(
     let w = (lw + 14.0).max(50.0);
     let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H - 2.0), Sense::click());
     let on = enabled(app, id) || menu;
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, label.replace('\n', " ")));
     bg(ui, r, &resp, checked, &t);
     let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + 21.0), vec2(32.0, 32.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
@@ -129,6 +130,7 @@ pub fn small(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, desc: &
     let tw = if label.is_empty() { 0.0 } else { text_w(ui, label, regular(11.5)) + 8.0 };
     let (r, resp) = ui.allocate_exact_size(vec2(26.0 + tw, 22.0), Sense::click());
     let on = enabled(app, id);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, if label.is_empty() { desc } else { label }));
     bg(ui, r, &resp, checked, &t);
     let ic = Rect::from_center_size(pos2(r.min.x + 13.0, r.center().y), vec2(18.0, 18.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
@@ -265,6 +267,8 @@ pub fn primary_button(ui: &mut Ui, label: &str, enabled: bool, min_size: egui::V
     let font = semibold(13.0);
     let size = vec2(min_size.x.max(text_w(ui, label, font.clone()) + 28.0), min_size.y.max(28.0));
     let (r, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
+    // Screen readers (and UI tests) find it by its label.
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     let fill = if !enabled {
         t.green.gamma_multiply(0.45)
     } else if resp.is_pointer_button_down_on() {

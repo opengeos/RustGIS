@@ -901,6 +901,15 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
                 p.line(&[(12.0, y), (18.0, y)], 1.1, ink);
             }
         }
+        "plugin" | "plugin_add" => {
+            // A puzzle piece: a body with two knobs.
+            p.rect(3.5, 7.5, 13.0, 13.0, Some(p.tint(40)), Some((1.3, ink)), 2.0);
+            p.circle(10.0, 6.5, 2.6, Some(accent), Some((1.2, ink)));
+            p.circle(17.5, 14.0, 2.6, Some(accent), Some((1.2, ink)));
+            if name == "plugin_add" {
+                p.plus_badge(15.0, 2.0);
+            }
+        }
         _ => {
             p.rect(4.0, 4.0, 16.0, 16.0, Some(p.tint(60)), Some((1.2, ink)), 3.0);
         }
@@ -909,6 +918,8 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
 
 /// Every icon name, for the gallery test.
 pub const ALL: &[&str] = &[
+    "plugin",
+    "plugin_add",
     "explore",
     "zoom_full",
     "zoom_world",

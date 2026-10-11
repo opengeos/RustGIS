@@ -20,7 +20,7 @@ fn every_tab_pane_and_dialog_renders() {
     for _ in 0..4 {
         h.step();
     }
-    for tab in ["Map", "Insert", "Analysis", "View", "Edit", "Share", "Help", "Feature Layer", "Labeling", "Data"] {
+    for tab in ["Map", "Insert", "Analysis", "View", "Edit", "Share", "Plugins", "Help", "Feature Layer", "Labeling", "Data"] {
         h.state_mut().ui.tab = tab.into();
         h.step();
         h.step();
@@ -71,4 +71,45 @@ fn every_tab_pane_and_dialog_renders() {
         h.step();
     }
     assert!(h.state().session.map().layers.is_empty());
+}
+
+#[test]
+fn plugins_install_from_a_file_after_a_prompt() {
+    use egui_kittest::kittest::Queryable;
+    let dir = std::env::temp_dir().join(format!("rustgis-ui-plugins-{}", std::process::id()));
+    rustgis_ui_egui::rustgis_engine::plugins::store::set_dir(Some(dir.join("installed")));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("ui-test.rgplugin");
+    std::fs::write(&file, rustgis_ui_egui::rustgis_engine::plugins::testing::package("ui-test", &["edit"])).unwrap();
+    let mut h = harness();
+    for _ in 0..4 {
+        h.step();
+    }
+    h.state_mut().run("ui.installPlugin", json!({"path": file.display().to_string()})).unwrap();
+    h.step();
+    h.step();
+    assert!(h.state().plugins.confirm.is_some(), "asks first");
+    assert!(rustgis_ui_egui::rustgis_engine::plugins::get("ui-test").is_none());
+    h.get_by_label("Install").click();
+    h.step();
+    h.step();
+    assert!(rustgis_ui_egui::rustgis_engine::plugins::get("ui-test").is_some());
+    // Its commands are on the Plugins tab, and run from there.
+    h.state_mut().ui.tab = "Plugins".into();
+    h.step();
+    h.step();
+    h.get_by_label("Hello").click();
+    h.step();
+    for tab in ["installed", "browse", "settings"] {
+        // An unreachable registry is an error in the window, not a crash.
+        h.state_mut().run("ui.plugins", json!({"open": true, "tab": tab, "registry": "http://localhost:9/registry.json"})).unwrap();
+        h.step();
+        h.step();
+    }
+    h.state_mut().run("ui.plugins", json!({"open": true, "tab": "installed"})).unwrap();
+    h.step();
+    h.get_by_label("Uninstall").click();
+    h.step();
+    assert!(rustgis_ui_egui::rustgis_engine::plugins::get("ui-test").is_none());
+    let _ = std::fs::remove_dir_all(&dir);
 }

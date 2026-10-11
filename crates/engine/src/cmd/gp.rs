@@ -41,6 +41,31 @@ pub fn commands() -> Vec<C> {
     ]
 }
 
+/// The GeoLibre tools (empty when the suite isn't installed, or the build doesn't include it).
+pub fn geolibre_tools() -> &'static [rustgis_analysis::ToolSpec] {
+    #[cfg(feature = "geolibre")]
+    {
+        rustgis_analysis::external_tools_of(rustgis_geolibre::SOURCE)
+    }
+    #[cfg(not(feature = "geolibre"))]
+    {
+        &[]
+    }
+}
+
+/// Whether a tool is one of the GeoLibre tools (which the browser runs asynchronously).
+pub fn is_geolibre_tool(spec: &rustgis_analysis::ToolSpec) -> bool {
+    #[cfg(feature = "geolibre")]
+    {
+        rustgis_analysis::external_source(spec) == Some(rustgis_geolibre::SOURCE)
+    }
+    #[cfg(not(feature = "geolibre"))]
+    {
+        let _ = spec;
+        false
+    }
+}
+
 /// Whether the GeoLibre tools are available. Natively: the runner in use, its version and tool
 /// count. In the browser (`web`): whether the WASI runner's tools have been loaded.
 pub fn geolibre_status() -> Value {
@@ -53,13 +78,13 @@ pub fn geolibre_status() -> Value {
             "available": found.is_some(),
             "path": found.as_ref().map(|(p, _)| p.display().to_string()),
             "version": found.map(|(_, v)| v),
-            "tools": rustgis_analysis::external_tools().len(),
+            "tools": geolibre_tools().len(),
             "download": rustgis_geolibre::runner::DOWNLOAD_URL,
         })
     }
     #[cfg(all(feature = "geolibre", target_arch = "wasm32"))]
     {
-        let n = rustgis_analysis::external_tools().len();
+        let n = geolibre_tools().len();
         json!({"supported": true, "web": true, "available": n > 0, "tools": n})
     }
     #[cfg(not(feature = "geolibre"))]
@@ -134,7 +159,7 @@ pub fn external_start(s: &mut Session, tool: &str, params: &Value) -> Result<Ext
     #[cfg(feature = "geolibre")]
     {
         let spec = rustgis_analysis::tool(tool)
-            .filter(|t| rustgis_analysis::is_external(t))
+            .filter(|t| rustgis_analysis::external_source(t) == Some(rustgis_geolibre::SOURCE))
             .ok_or_else(|| format!("no GeoLibre tool '{tool}'"))?;
         let params = rustgis_analysis::resolve_params(spec, params)?;
         let job = rustgis_geolibre::prepare(

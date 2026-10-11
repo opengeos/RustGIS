@@ -1,0 +1,317 @@
+//! `plugin.json`: what a plugin is and what it adds (commands, geoprocessing tools), checked
+//! like any other hostile input.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+/// The plugin ABI this build speaks (see `docs/plugins.md`).
+pub const ABI: u32 = 1;
+
+/// Limits on what a manifest may declare.
+const MAX_COMMANDS: usize = 64;
+const MAX_TOOLS: usize = 64;
+const MAX_PARAMS: usize = 32;
+const MAX_CHOICES: usize = 64;
+const MAX_TEXT: usize = 2_000;
+const MAX_LANGS: usize = 64;
+const MAX_STRINGS: usize = 2_000;
+
+/// What a plugin may do beyond reading the map. Shown to the user before installing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Permission {
+    /// Change the project: run commands that edit it, add layers.
+    Edit,
+    /// Run commands that read or write files the user names.
+    Files,
+}
+
+impl Permission {
+    pub fn code(self) -> &'static str {
+        match self {
+            Permission::Edit => "edit",
+            Permission::Files => "files",
+        }
+    }
+    /// What it lets a plugin do, for the install prompt.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Permission::Edit => "Change the project (add layers, edit features, change symbology)",
+            Permission::Files => "Read and write files on this computer",
+        }
+    }
+}
+
+/// A command the plugin adds: a button on the Plugins tab, an entry in command search and a
+/// command id for scripts and the command line (`plugin:<plugin>/<command>`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandDecl {
+    pub id: String,
+    pub label: String,
+    /// A longer description, shown on hover.
+    #[serde(default)]
+    pub help: String,
+    /// The name of one of RustGIS's own icons (`plugin` when unset or unknown).
+    #[serde(default)]
+    pub icon: String,
+    /// Parameter description for scripts and agents, like a built-in command's.
+    #[serde(default = "no_params")]
+    pub params: String,
+}
+
+fn no_params() -> String {
+    "{}".into()
+}
+
+/// A tool parameter: the Geoprocessing pane turns its kind into a widget.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParamDecl {
+    pub name: String,
+    pub label: String,
+    /// `layer`, `vectorLayer`, `polygonLayer`, `pointLayer`, `field`, `numericField`, `number`,
+    /// `text`, `choice` or `bool`.
+    pub kind: String,
+    #[serde(default)]
+    pub required: bool,
+    /// The default value (any JSON).
+    #[serde(default)]
+    pub default: Option<serde_json::Value>,
+    /// For `choice`: the choices.
+    #[serde(default)]
+    pub choices: Vec<String>,
+    #[serde(default)]
+    pub help: String,
+}
+
+/// The parameter kinds a tool may use.
+pub const PARAM_KINDS: &[&str] =
+    &["layer", "vectorLayer", "polygonLayer", "pointLayer", "field", "numericField", "number", "text", "choice", "bool"];
+
+/// Whether a parameter kind names a layer (its features are passed to the tool).
+pub fn is_layer_kind(kind: &str) -> bool {
+    matches!(kind, "layer" | "vectorLayer" | "polygonLayer" | "pointLayer")
+}
+
+/// A geoprocessing tool the plugin adds (`plugin:<plugin>/<tool>`), listed in the
+/// Geoprocessing pane under "Plugins › <toolbox>".
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolDecl {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub summary: String,
+    /// The toolbox under "Plugins ›" (the plugin's name when unset).
+    #[serde(default)]
+    pub toolbox: String,
+    #[serde(default)]
+    pub params: Vec<ParamDecl>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Manifest {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub homepage: String,
+    #[serde(default)]
+    pub license: String,
+    /// The WebAssembly module, relative to `plugin.json`.
+    #[serde(default = "default_entry")]
+    pub entry: String,
+    /// The plugin ABI the module was built for.
+    #[serde(default = "default_abi")]
+    pub abi: u32,
+    /// The oldest RustGIS that can run it.
+    #[serde(default)]
+    pub min_rustgis_version: String,
+    #[serde(default)]
+    pub permissions: Vec<Permission>,
+    #[serde(default)]
+    pub commands: Vec<CommandDecl>,
+    #[serde(default)]
+    pub tools: Vec<ToolDecl>,
+    /// Translations of the plugin's own strings (labels, help, tool and parameter names), by
+    /// language code (`de`, `zh-CN`): `{"de": {"Say Hello": "Hallo sagen"}}`.
+    #[serde(default)]
+    pub i18n: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+fn default_entry() -> String {
+    "plugin.wasm".into()
+}
+
+fn default_abi() -> u32 {
+    ABI
+}
+
+/// A plugin, command, tool or parameter id: lower-case letters, digits and hyphens (and
+/// underscores, for parameter names), starting with a letter, at most 64 characters.
+pub fn valid_id(s: &str, underscore: bool) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
+        && s.len() <= 64
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || (underscore && (c == '_' || c.is_ascii_uppercase())))
+}
+
+/// A path inside a package: relative, forward slashes, no `..`.
+pub fn valid_path(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 256
+        && !s.starts_with('/')
+        && !s.contains('\\')
+        && !s.contains(':')
+        && s.split('/').all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+}
+
+/// A version's numbers (`1.2.3`, `1.2`, `1.2.3-beta.1`: the pre-release part is ignored).
+pub fn version_parts(v: &str) -> Option<[u64; 3]> {
+    let core = v.trim().trim_start_matches('v').split(['-', '+']).next()?;
+    let mut out = [0u64; 3];
+    let mut n = 0;
+    for (i, part) in core.split('.').enumerate() {
+        *out.get_mut(i)? = part.parse().ok()?;
+        n = i + 1;
+    }
+    (n > 0).then_some(out)
+}
+
+/// Compares two versions; an unreadable one sorts first.
+pub fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    version_parts(a).cmp(&version_parts(b))
+}
+
+/// RustGIS's own version.
+pub const RUSTGIS_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn check_text(what: &str, s: &str, required: bool) -> Result<(), String> {
+    if required && s.trim().is_empty() {
+        return Err(format!("{what} is required"));
+    }
+    if s.len() > MAX_TEXT {
+        return Err(format!("{what} is too long"));
+    }
+    Ok(())
+}
+
+impl Manifest {
+    /// Reads and checks `plugin.json`.
+    pub fn parse(text: &str) -> Result<Manifest, String> {
+        let m: Manifest = serde_json::from_str(text).map_err(|e| format!("plugin.json: {e}"))?;
+        m.validate()?;
+        Ok(m)
+    }
+
+    /// Checks everything a host relies on: ids, sizes, kinds, versions.
+    pub fn validate(&self) -> Result<(), String> {
+        if !valid_id(&self.id, false) {
+            return Err(format!(
+                "plugin.json: id '{}' must be lower-case letters, digits and hyphens, starting with a letter",
+                self.id.chars().take(80).collect::<String>()
+            ));
+        }
+        check_text("name", &self.name, true)?;
+        check_text("description", &self.description, false)?;
+        check_text("author", &self.author, false)?;
+        check_text("homepage", &self.homepage, false)?;
+        check_text("license", &self.license, false)?;
+        if version_parts(&self.version).is_none() {
+            return Err(format!("plugin.json: version '{}' is not a version number like 1.0.0", self.version));
+        }
+        if !valid_path(&self.entry) || !self.entry.ends_with(".wasm") {
+            return Err("plugin.json: entry must be a relative path to a .wasm file inside the package".into());
+        }
+        if self.abi != ABI {
+            return Err(format!("{} was built for plugin ABI {}; this RustGIS runs ABI {ABI}", self.name, self.abi));
+        }
+        if !self.min_rustgis_version.is_empty() {
+            if version_parts(&self.min_rustgis_version).is_none() {
+                return Err("plugin.json: minRustgisVersion is not a version number".into());
+            }
+            if version_cmp(RUSTGIS_VERSION, &self.min_rustgis_version).is_lt() {
+                return Err(format!("{} needs RustGIS {} or newer (this is {RUSTGIS_VERSION})", self.name, self.min_rustgis_version));
+            }
+        }
+        if self.commands.len() > MAX_COMMANDS || self.tools.len() > MAX_TOOLS {
+            return Err(format!("plugin.json: at most {MAX_COMMANDS} commands and {MAX_TOOLS} tools"));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for c in &self.commands {
+            if !valid_id(&c.id, false) || !seen.insert(("c", c.id.as_str())) {
+                return Err(format!("plugin.json: command id '{}' is invalid or repeated", c.id));
+            }
+            check_text("command label", &c.label, true)?;
+            check_text("command help", &c.help, false)?;
+            check_text("command params", &c.params, false)?;
+            check_text("command icon", &c.icon, false)?;
+        }
+        for t in &self.tools {
+            if !valid_id(&t.id, false) || !seen.insert(("t", t.id.as_str())) {
+                return Err(format!("plugin.json: tool id '{}' is invalid or repeated", t.id));
+            }
+            check_text("tool name", &t.name, true)?;
+            check_text("tool summary", &t.summary, false)?;
+            check_text("toolbox", &t.toolbox, false)?;
+            if t.params.len() > MAX_PARAMS {
+                return Err(format!("plugin.json: {} has more than {MAX_PARAMS} parameters", t.name));
+            }
+            let mut names = std::collections::HashSet::new();
+            for p in &t.params {
+                if !valid_id(&p.name, true) || !names.insert(p.name.as_str()) {
+                    return Err(format!("plugin.json: {}: parameter '{}' is invalid or repeated", t.name, p.name));
+                }
+                check_text("parameter label", &p.label, true)?;
+                check_text("parameter help", &p.help, false)?;
+                if !PARAM_KINDS.contains(&p.kind.as_str()) {
+                    return Err(format!("plugin.json: {}: unknown parameter kind '{}'", t.name, p.kind));
+                }
+                if p.kind == "choice" && (p.choices.is_empty() || p.choices.len() > MAX_CHOICES) {
+                    return Err(format!("plugin.json: {}: '{}' needs 1 to {MAX_CHOICES} choices", t.name, p.name));
+                }
+                for c in &p.choices {
+                    check_text("choice", c, true)?;
+                }
+                if let Some(d) = &p.default
+                    && d.to_string().len() > MAX_TEXT
+                {
+                    return Err(format!("plugin.json: {}: '{}' has too long a default", t.name, p.name));
+                }
+            }
+        }
+        if self.i18n.len() > MAX_LANGS || self.i18n.values().map(BTreeMap::len).sum::<usize>() > MAX_STRINGS {
+            return Err("plugin.json: too many translations".into());
+        }
+        for (lang, strings) in &self.i18n {
+            check_text("language", lang, true)?;
+            for (k, v) in strings {
+                check_text("translated string", k, true)?;
+                check_text("translation", v, false)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `s` in language `lang` (`de`, `zh-CN`; then the language without its region), or `s`.
+    pub fn translate<'a>(&'a self, lang: &str, s: &'a str) -> &'a str {
+        let base = lang.split(['-', '_']).next().unwrap_or(lang);
+        [lang, base]
+            .iter()
+            .find_map(|l| self.i18n.iter().find(|(k, _)| k.eq_ignore_ascii_case(l)).and_then(|(_, t)| t.get(s)))
+            .map(String::as_str)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(s)
+    }
+
+    pub fn has(&self, p: Permission) -> bool {
+        self.permissions.contains(&p)
+    }
+}

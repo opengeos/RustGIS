@@ -7,7 +7,7 @@
 use std::process::{Command, ExitCode};
 
 const LAYERS: &[(&str, u8)] =
-    &[("geom", 0), ("data", 1), ("map", 2), ("analysis", 2), ("render", 3), ("geolibre", 3), ("engine", 4), ("ui-egui", 6)];
+    &[("geom", 0), ("data", 1), ("map", 2), ("analysis", 2), ("render", 3), ("geolibre", 3), ("plugins", 3), ("engine", 4), ("ui-egui", 6)];
 const UI_ONLY: &[&str] = &["egui", "eframe", "egui_extras", "rfd", "winit", "egui_kittest"];
 
 fn root() -> std::path::PathBuf {

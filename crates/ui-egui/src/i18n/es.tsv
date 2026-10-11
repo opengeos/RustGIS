@@ -6,6 +6,7 @@ A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow o
 A projected coordinate system.	Un sistema de coordenadas proyectadas.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Un valor, un campo o dos de ellos unidos por + − × ÷. Se aplica a las filas seleccionadas, o a todas las filas si no hay ninguna seleccionada.
 About	Acerca de
+About plugins	Acerca de los complementos
 About RustGIS	Acerca de RustGIS
 About RustGIS.	Acerca de RustGIS.
 Above	Arriba
@@ -25,6 +26,7 @@ Add Data…	Añadir datos…
 Add Field	Añadir campo
 Add field	Añadir campo
 Add GeoJSON, CSV or Shapefile data to the map.	Añadir datos GeoJSON, CSV o Shapefile al mapa.
+Add Plugin Folder…	Añadir carpeta de complemento…
 Add sample countries	Añadir países de ejemplo
 Add Sample Data	Añadir datos de ejemplo
 Add To Current Selection	Añadir a la selección actual
@@ -71,11 +73,15 @@ Bookmarks	Marcadores
 Boolean	Booleano
 Bounding\nGeometry	Geometría\nenvolvente
 Brightness	Brillo
+Browse	Explorar
+Browse Plugins	Explorar complementos
 Browse the geoprocessing toolbox.	Explorar la caja de herramientas de geoprocesamiento.
 Browse the project's maps, tables and folders.	Explorar los mapas, tablas y carpetas del proyecto.
+Browse, install, update and remove plugins.	Explorar, instalar, actualizar y quitar complementos.
 Buffer	Área de influencia
 By\nAttributes	Por\natributos
 By\nLocation	Por\nubicación
+by {author}	por {author}
 Calculate	Calcular
 Calculate\nField	Calcular\ncampo
 Calculate\nGeometry	Calcular\ngeometría
@@ -94,6 +100,7 @@ Cell size	Tamaño de celda
 Centered	Centrado
 Change the map's backdrop.	Cambiar el fondo del mapa.
 Change the map's coordinate system	Cambiar el sistema de coordenadas del mapa
+Change the project (add layers, edit features, change symbology)	Cambiar el proyecto (añadir capas, editar entidades, cambiar la simbología)
 Choose a band combination to display the raster layer.	Elegir una combinación de bandas para mostrar la capa ráster.
 Choose a contrast stretch for the raster layer.	Elegir un estiramiento de contraste para la capa ráster.
 Choose a resampling type for the raster layer.	Elegir un tipo de remuestreo para la capa ráster.
@@ -139,6 +146,7 @@ Colormap	Mapa de colores
 Colors from the raster's own color table.	Colores de la propia tabla de colores del ráster.
 Command\nSearch	Buscar\ncomandos
 Command Search	Búsqueda de comandos
+Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	Comandos en la pestaña Complementos: {commands} · Herramientas en el panel Geoprocesamiento: {tools}
 Completed	Completado
 Compute a field's values.	Calcular los valores de un campo.
 Contents	Contenido
@@ -159,6 +167,7 @@ Copy the selected features (also as GeoJSON text).	Copiar las entidades seleccio
 Copy the selected features and delete them.	Copiar las entidades seleccionadas y eliminarlas.
 Copy the selected layer's data source path.	Copiar la ruta de la fuente de datos de la capa seleccionada.
 Couldn't download the font for {language}; pick the language again to retry.	No se pudo descargar la fuente para {language}; vuelva a elegir el idioma para reintentarlo.
+Couldn't load the plugin registry: {error}	No se pudo cargar el registro de complementos: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Recuento, suma, media, mínimo, máximo y desviación estándar de un campo, opcionalmente por campo de caso.
 Countries, cities, rivers and lakes	Países, ciudades, ríos y lagos
 Counts the points that fall inside each polygon.	Cuenta los puntos que caen dentro de cada polígono.
@@ -230,8 +239,11 @@ Eckert IV (equal-area world)	Eckert IV (mundo de áreas iguales)
 Edit	Editar
 Edit Attribute	Editar atributo
 Edit attributes in the table.	Editar atributos en la tabla.
+Edits the project	Edita el proyecto
 Effects	Efectos
 Ember	Brasa
+Enable Plugin	Activar complemento
+Enabled	Activado
 Encloses each feature, or all features, in its convex hull.	Encierra cada entidad, o todas las entidades, en su envolvente convexa.
 Enhancement	Mejora
 EPSG code	Código EPSG
@@ -281,6 +293,7 @@ Filter rows…	Filtrar filas…
 Find a place by coordinates.	Buscar un lugar por coordenadas.
 Find and run geoprocessing tools.	Buscar y ejecutar herramientas de geoprocesamiento.
 Find any command by name (Ctrl+K).	Buscar cualquier comando por su nombre (Ctrl+K).
+Find plugins in the RustGIS plugin registry.	Buscar complementos en el registro de complementos de RustGIS.
 Find Tools	Buscar herramientas
 Finish Tool Run	Finalizar ejecución de herramienta
 Finished: {tool}	Terminado: {tool}
@@ -324,6 +337,7 @@ Hide labels when the viewer is farther than this.	Ocultar las etiquetas cuando e
 Histogram Equalize	Ecualizar histograma
 History	Historial
 Home	Home
+Homepage	Página principal
 Identify	Identificar
 Import\nProject	Importar\nproyecto
 In Beyond	Límite al acercar
@@ -337,14 +351,28 @@ Input Summary Features	Entidades de resumen de entrada
 Input Table	Tabla de entrada
 Inquiry	Consulta
 Insert	Insertar
+Install	Instalar
+Install a plugin	Instalar un complemento
+Install a plugin from a .rgplugin file.	Instalar un complemento desde un archivo .rgplugin.
+Install from a file	Instalar desde un archivo
+Install From File	Instalar desde archivo
+Install From File…	Instalar desde archivo…
 Install GeoLibre Tools	Instalar herramientas de GeoLibre
 Install GeoLibre tools	Instalar herramientas de GeoLibre
+Install Plugin	Instalar complemento
+Install Plugin From Registry	Instalar complemento desde el registro
+Install {name} {version}?	¿Instalar {name} {version}?
+Installed	Instalado
+Installed plugins are kept in {folder}	Los complementos instalados se guardan en {folder}
+Installed {name} {version}.	Se ha instalado {name} {version}.
 Interface font: {font}	Fuente de la interfaz: {font}
 Invalid: {error}	No válida: {error}
 Invert	Invertir
 Invert color scheme	Invertir esquema de color
 Invert the selection.	Invertir la selección.
 IS NULL	IS NULL
+It runs in a sandbox with no other access to your computer or the network.	Se ejecuta en un entorno aislado, sin ningún otro acceso a su equipo ni a la red.
+It's too large to keep in the browser: install it again on your next visit.	Es demasiado grande para guardarlo en el navegador: vuelva a instalarlo en su próxima visita.
 keep current	mantener actual
 Keep the labelled features fixed as the map moves.	Mantener fijas las entidades etiquetadas al mover el mapa.
 Keyboard Shortcuts	Atajos de teclado
@@ -374,7 +402,9 @@ Line width	Ancho de línea
 LineString	LineString
 List Commands	Listar comandos
 Lit	Iluminado
+Load an unpacked plugin from its folder while you develop it.	Cargar un complemento sin empaquetar desde su carpeta mientras lo desarrolla.
 Load GeoLibre tools	Cargar herramientas de GeoLibre
+Loaded {name} from its folder.	Se ha cargado {name} desde su carpeta.
 Loading the GeoLibre tools…	Cargando las herramientas de GeoLibre…
 Locate	Localizar
 Locate GeoLibre Runner	Localizar el ejecutor de GeoLibre
@@ -388,6 +418,7 @@ Major Lakes	Lagos principales
 Major Rivers	Ríos principales
 Make a new layer of the selected features.	Crear una capa nueva con las entidades seleccionadas.
 Make Layer From Selected Features	Crear capa a partir de las entidades seleccionadas
+Manage	Administrar
 Manage Edits	Administrar ediciones
 Map	Mapa
 Map › Layer	Mapa › Capa
@@ -437,6 +468,8 @@ Next	Siguiente
 Next Extent	Extensión siguiente
 No	No
 No bookmarks yet	Aún no hay marcadores
+No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	No hay complementos instalados. Explore el registro de complementos o instale un archivo .rgplugin.
+No plugins match.	Ningún complemento coincide.
 No Pop-ups	Sin ventanas emergentes
 No standalone tables	No hay tablas independientes
 NoData	NoData
@@ -487,6 +520,13 @@ Percent Clip	Recorte de porcentaje
 Pixel	Píxel
 Pixel type	Tipo de píxel
 Placement	Ubicación
+Plugin\nManager	Administrador de\ncomplementos
+Plugin folder	Carpeta del complemento
+Plugin Manager	Administrador de complementos
+Plugin Manager…	Administrador de complementos…
+Plugin registry	Registro de complementos
+Plugins	Complementos
+Plugins are .rgplugin files. Install only plugins from people you trust.	Los complementos son archivos .rgplugin. Instale solo complementos de personas de confianza.
 PNG image	Imagen PNG
 Point	Punto
 Polar, conformal: Antarctica and the Southern Ocean.	Polar, conforme: la Antártida y el océano Austral.
@@ -514,12 +554,17 @@ Raster Data	Datos ráster
 Raster Information	Información ráster
 Raster Layer	Capa ráster
 Raster · {w} × {h} · {n} bands · {renderer}	Ráster · {w} × {h} · {n} bandas · {renderer}
+Read and write files on this computer	Leer y escribir archivos en este equipo
+Read the map's layers and features	Leer las capas y entidades del mapa
+Reads and writes files	Lee y escribe archivos
+Reads the map	Lee el mapa
 Red	Rojo
 Redo	Rehacer
 Redo the change you undid.	Rehacer el cambio que deshizo.
 Redo {action}	Rehacer {action}
 Red–Blue	Rojo–Azul
 Refine the search to see {n} more	Refina la búsqueda para ver {n} más
+Refresh	Actualizar
 Regional, equal-area: the contiguous United States.	Regional, de áreas iguales: los Estados Unidos contiguos.
 Regional, equal-area: the European standard for statistics.	Regional, de áreas iguales: el estándar europeo para estadísticas.
 Remove	Quitar
@@ -548,6 +593,7 @@ Run Tool	Ejecutar herramienta
 Running…	Ejecutando…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS es un SIG de escritorio de código abierto escrito en Rust puro. Su cinta sigue el flujo de trabajo habitual de los SIG de escritorio; cada acción es un comando que también puede ejecutar desde la línea de comandos.
+RustGIS plugin	Complemento de RustGIS
 RustGIS project	Proyecto de RustGIS
 Sample data (Natural Earth)	Datos de ejemplo (Natural Earth)
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Datos de ejemplo © Natural Earth (dominio público). RustGIS se distribuye bajo la licencia Apache-2.0.
@@ -564,6 +610,7 @@ Save the raster as a GeoTIFF.	Guardar el ráster como GeoTIFF.
 Scale 1:	Escala 1:
 Search commands — e.g. buffer, basemap, labels	Buscar comandos — p. ej. área de influencia, mapa base, etiquetas
 Search Distance (km)	Distancia de búsqueda (km)
+Search plugins	Buscar complementos
 See the tools you've run.	Ver las herramientas que ha ejecutado.
 Select	Seleccionar
 Select (click)	Seleccionar (clic)
@@ -598,6 +645,7 @@ Selects features that intersect features in another layer.	Selecciona las entida
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Selecciona entidades con una cláusula WHERE de SQL, p. ej. pop_est > 1000000.
 Set Map Tool	Establecer herramienta de mapa
 Set Scale	Establecer escala
+Settings	Configuración
 Shaded	Sombreado
 Shaded Relief	Relieve sombreado
 Shape	Forma
@@ -654,12 +702,14 @@ Tables	Tablas
 Terrain	Terreno
 Text	Texto
 Text Symbol	Símbolo de texto
+The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	La lista de complementos que explorar. Déjela vacía para usar el registro de complementos de RustGIS.
 the map has no layers	el mapa no tiene capas
 The map is drawn in this coordinate system; layers are projected on the fly.	El mapa se dibuja en este sistema de coordenadas; las capas se proyectan al vuelo.
 The raster's data couldn't be read.	No se pudieron leer los datos del ráster.
 The raster's data couldn't be read: {path}	No se pudieron leer los datos del ráster: {path}
 Thermal	Térmica
 This map has no layers yet.	Este mapa aún no tiene capas.
+This plugin can:	Este complemento puede:
 Tint by elevation	Teñir según la elevación
 Toggle Dark Mode	Alternar modo oscuro
 Tolerance (km)	Tolerancia (km)
@@ -679,8 +729,13 @@ Undo	Deshacer
 Undo / Redo	Deshacer / Rehacer
 Undo the last change.	Deshacer el último cambio.
 Undo {action}	Deshacer {action}
+Uninstall	Desinstalar
+Uninstall Plugin	Desinstalar complemento
+Uninstalled {id}.	Se ha desinstalado {id}.
 Unique Values	Valores únicos
 Units	Unidades
+Update	Actualizar
+Update to {version}	Actualizar a {version}
 USA Contiguous Albers Equal Area	Albers de áreas iguales de EE. UU. contiguo
 Valid expression · {n} matching rows	Expresión válida · {n} filas coincidentes
 Vector and raster data	Datos vectoriales y ráster
@@ -703,6 +758,7 @@ Where Clause	Cláusula WHERE
 Where labels sit relative to their features.	Dónde se sitúan las etiquetas respecto a sus entidades.
 Windows	Ventanas
 Winkel Tripel	Winkel Tripel
+Withdrawn	Retirado
 World	Mundo
 World Atlas	World Atlas
 World Atlas Sample	Ejemplo World Atlas
@@ -717,6 +773,7 @@ World, equal-area, cylindrical: true sizes, flattened near the poles.	Mundo, de 
 World, equal-area: true sizes with a Robinson-like look.	Mundo, de áreas iguales: tamaños reales con un aspecto similar a Robinson.
 World, equal-area: true sizes with rounded poles.	Mundo, de áreas iguales: tamaños reales con polos redondeados.
 World, equal-area: true sizes, shapes bend towards the edges.	Mundo, de áreas iguales: tamaños reales, las formas se curvan hacia los bordes.
+Write a plugin	Escribir un complemento
 Yes	Sí
 Z factor	Factor Z
 Zoom about the pointer	Zoom alrededor del puntero
@@ -740,4 +797,9 @@ Zoom to the selected features.	Zoom a las entidades seleccionadas.
 Zoom to the selection.	Zoom a la selección.
 Zoom to the whole world.	Zoom a todo el mundo.
 Zoom To World	Zoom al mundo
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} ha cambiado desde que se instaló; vuelva a instalarlo desde el Administrador de complementos.
+{name} was withdrawn from the plugin registry and has been turned off.	{name} se ha retirado del registro de complementos y se ha desactivado.
+{name} was withdrawn from the plugin registry: {reason}	{name} se ha retirado del registro de complementos: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: la descarga no coincide con el registro; no se ha instalado.
+{name}: the download is a different plugin; it wasn't installed.	{name}: la descarga es un complemento distinto; no se ha instalado.
 ⌘K	⌘K

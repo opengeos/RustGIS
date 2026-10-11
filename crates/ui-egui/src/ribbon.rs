@@ -12,7 +12,7 @@ use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, big_menu, col, group, menu_item, small, small_menu, text_w};
 use crate::{RightPane, RustGisApp, icons};
 
-pub const TABS: [&str; 8] = ["Map", "Insert", "Analysis", "View", "Edit", "Imagery", "Share", "Help"];
+pub const TABS: [&str; 9] = ["Map", "Insert", "Analysis", "View", "Edit", "Imagery", "Share", "Plugins", "Help"];
 /// The contextual tabs for feature layers: (tab id, caption).
 pub const FEATURE_TABS: &[(&str, &str)] = &[("Feature Layer", "Feature Layer"), ("Labeling", "Labeling"), ("Data", "Data")];
 /// The contextual tab of an open layout.
@@ -78,6 +78,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                         "Edit" => edit_tab(app, ui),
                         "Imagery" => imagery_tab(app, ui),
                         "Share" => share_tab(app, ui),
+                        "Plugins" => plugins_tab(app, ui),
                         "Help" => help_tab(app, ui),
                         "Feature Layer" => feature_layer_tab(app, ui),
                         "Labeling" => labeling_tab(app, ui),
@@ -1663,6 +1664,56 @@ fn layout_tab(app: &mut RustGisApp, ui: &mut Ui) {
             small(ui, app, "map", "Show Map", "Close the layout and show the map.", "layout.close", Value::Null, false);
         });
     });
+}
+
+fn plugins_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Plugins", |ui| {
+        big(
+            ui,
+            app,
+            "plugin",
+            "Plugin\nManager",
+            "Browse, install, update and remove plugins.",
+            "ui.plugins",
+            json!({"open": true}),
+            false,
+            false,
+        );
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "plugin_add",
+                "Install From File",
+                "Install a plugin from a .rgplugin file.",
+                "ui.installPlugin",
+                Value::Null,
+                false,
+            );
+            small(
+                ui,
+                app,
+                "search",
+                "Browse Plugins",
+                "Find plugins in the RustGIS plugin registry.",
+                "ui.plugins",
+                json!({"open": true, "tab": "browse"}),
+                false,
+            );
+        });
+    });
+    // A group per enabled plugin with commands, in the interface language when it has one.
+    let lang = app.lang().code();
+    for p in rustgis_engine::plugins::list().into_iter().filter(|p| p.enabled && !p.manifest.commands.is_empty()) {
+        let m = &p.manifest;
+        group(ui, m.translate(lang, &m.name), |ui| {
+            for c in &m.commands {
+                let icon = if crate::icons::ALL.contains(&c.icon.as_str()) { c.icon.as_str() } else { "plugin" };
+                let id = rustgis_engine::plugins::command_id(&m.id, &c.id);
+                big(ui, app, icon, m.translate(lang, &c.label), m.translate(lang, &c.help), &id, Value::Null, false, false);
+            }
+        });
+    }
 }
 
 fn help_tab(app: &mut RustGisApp, ui: &mut Ui) {

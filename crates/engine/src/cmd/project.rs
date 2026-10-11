@@ -182,11 +182,13 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 fn list(s: &mut Session, _: &Value) -> CmdResult {
-    Ok(Value::Array(
-        s.registry
-            .commands
-            .iter()
-            .map(|c| json!({"id": c.id, "label": c.label, "location": c.location, "shortcut": c.shortcut, "params": c.params}))
-            .collect(),
-    ))
+    let builtin = s
+        .registry
+        .commands
+        .iter()
+        .map(|c| json!({"id": c.id, "label": c.label, "location": c.location, "shortcut": c.shortcut, "params": c.params}));
+    let plugins = rustgis_plugins::commands().into_iter().map(|c| {
+        json!({"id": c.id, "label": c.decl.label, "location": format!("Plugins › {}", c.plugin.manifest.name), "shortcut": "", "params": c.decl.params})
+    });
+    Ok(Value::Array(builtin.chain(plugins).collect()))
 }

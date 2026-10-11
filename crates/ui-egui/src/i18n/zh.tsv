@@ -6,6 +6,7 @@ A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow o
 A projected coordinate system.	投影坐标系。
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	一个值、一个字段，或用 + − × ÷ 连接的两者。应用于所选行；若未选择任何行，则应用于所有行。
 About	关于
+About plugins	关于插件
 About RustGIS	关于 RustGIS
 About RustGIS.	关于 RustGIS。
 Above	上方
@@ -25,6 +26,7 @@ Add Data…	添加数据…
 Add Field	添加字段
 Add field	添加字段
 Add GeoJSON, CSV or Shapefile data to the map.	将 GeoJSON、CSV 或 Shapefile 数据添加到地图。
+Add Plugin Folder…	添加插件文件夹…
 Add sample countries	添加示例国家数据
 Add Sample Data	添加示例数据
 Add To Current Selection	添加到当前选择
@@ -71,11 +73,15 @@ Bookmarks	书签
 Boolean	布尔型
 Bounding\nGeometry	边界\n几何
 Brightness	亮度
+Browse	浏览
+Browse Plugins	浏览插件
 Browse the geoprocessing toolbox.	浏览地理处理工具箱。
 Browse the project's maps, tables and folders.	浏览工程中的地图、表和文件夹。
+Browse, install, update and remove plugins.	浏览、安装、更新和移除插件。
 Buffer	缓冲区
 By\nAttributes	按\n属性
 By\nLocation	按\n位置
+by {author}	作者：{author}
 Calculate	计算
 Calculate\nField	计算\n字段
 Calculate\nGeometry	计算\n几何
@@ -94,6 +100,7 @@ Cell size	像元大小
 Centered	居中
 Change the map's backdrop.	更改地图的背景。
 Change the map's coordinate system	更改地图的坐标系
+Change the project (add layers, edit features, change symbology)	更改工程（添加图层、编辑要素、更改符号系统）
 Choose a band combination to display the raster layer.	选择用于显示栅格图层的波段组合。
 Choose a contrast stretch for the raster layer.	为栅格图层选择对比度拉伸。
 Choose a resampling type for the raster layer.	为栅格图层选择重采样类型。
@@ -139,6 +146,7 @@ Colormap	色彩映射表
 Colors from the raster's own color table.	使用栅格自带颜色表中的颜色。
 Command\nSearch	命令\n搜索
 Command Search	命令搜索
+Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	“插件”选项卡中的命令：{commands} · 地理处理窗格中的工具：{tools}
 Completed	已完成
 Compute a field's values.	计算字段的值。
 Contents	内容
@@ -159,6 +167,7 @@ Copy the selected features (also as GeoJSON text).	复制所选要素（同时�
 Copy the selected features and delete them.	复制所选要素并将其删除。
 Copy the selected layer's data source path.	复制所选图层的数据源路径。
 Couldn't download the font for {language}; pick the language again to retry.	无法下载 {language} 的字体；请重新选择该语言以重试。
+Couldn't load the plugin registry: {error}	无法加载插件库：{error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	字段的计数、总和、平均值、最小值、最大值和标准差，可按分组字段分别统计。
 Countries, cities, rivers and lakes	国家、城市、河流和湖泊
 Counts the points that fall inside each polygon.	统计落在每个多边形内的点数。
@@ -230,8 +239,11 @@ Eckert IV (equal-area world)	埃克特 IV (等积世界)
 Edit	编辑
 Edit Attribute	编辑属性
 Edit attributes in the table.	在表中编辑属性。
+Edits the project	编辑工程
 Effects	效果
 Ember	余烬
+Enable Plugin	启用插件
+Enabled	已启用
 Encloses each feature, or all features, in its convex hull.	用凸包包围每个要素或所有要素。
 Enhancement	增强
 EPSG code	EPSG 代码
@@ -281,6 +293,7 @@ Filter rows…	筛选行…
 Find a place by coordinates.	按坐标查找位置。
 Find and run geoprocessing tools.	查找并运行地理处理工具。
 Find any command by name (Ctrl+K).	按名称查找任意命令（Ctrl+K）。
+Find plugins in the RustGIS plugin registry.	在 RustGIS 插件库中查找插件。
 Find Tools	查找工具
 Finish Tool Run	完成工具运行
 Finished: {tool}	已完成：{tool}
@@ -324,6 +337,7 @@ Hide labels when the viewer is farther than this.	当观察者比此距离更远
 Histogram Equalize	直方图均衡化
 History	历史记录
 Home	主页
+Homepage	主页
 Identify	识别
 Import\nProject	导入\n工程
 In Beyond	放大超过
@@ -337,14 +351,28 @@ Input Summary Features	输入汇总要素
 Input Table	输入表
 Inquiry	查询
 Insert	插入
+Install	安装
+Install a plugin	安装插件
+Install a plugin from a .rgplugin file.	从 .rgplugin 文件安装插件。
+Install from a file	从文件安装
+Install From File	从文件安装
+Install From File…	从文件安装…
 Install GeoLibre Tools	安装 GeoLibre 工具
 Install GeoLibre tools	安装 GeoLibre 工具
+Install Plugin	安装插件
+Install Plugin From Registry	从插件库安装插件
+Install {name} {version}?	安装 {name} {version}？
+Installed	已安装
+Installed plugins are kept in {folder}	已安装的插件保存在 {folder}
+Installed {name} {version}.	已安装 {name} {version}。
 Interface font: {font}	界面字体：{font}
 Invalid: {error}	无效：{error}
 Invert	反转
 Invert color scheme	反转配色方案
 Invert the selection.	反转选择。
 IS NULL	IS NULL
+It runs in a sandbox with no other access to your computer or the network.	它在沙箱中运行，无法以其他方式访问您的计算机或网络。
+It's too large to keep in the browser: install it again on your next visit.	插件太大，无法保存在浏览器中：请在下次访问时重新安装。
 keep current	保持当前
 Keep the labelled features fixed as the map moves.	地图移动时保持已标注要素不变。
 Keyboard Shortcuts	键盘快捷键
@@ -374,7 +402,9 @@ Line width	线宽
 LineString	线串
 List Commands	列出命令
 Lit	亮面
+Load an unpacked plugin from its folder while you develop it.	在开发期间从文件夹加载未打包的插件。
 Load GeoLibre tools	加载 GeoLibre 工具
+Loaded {name} from its folder.	已从文件夹加载 {name}。
 Loading the GeoLibre tools…	正在加载 GeoLibre 工具…
 Locate	定位
 Locate GeoLibre Runner	定位 GeoLibre 运行器
@@ -388,6 +418,7 @@ Major Lakes	主要湖泊
 Major Rivers	主要河流
 Make a new layer of the selected features.	用所选要素创建新图层。
 Make Layer From Selected Features	根据所选要素创建图层
+Manage	管理
 Manage Edits	管理编辑
 Map	地图
 Map › Layer	地图 › 图层
@@ -437,6 +468,8 @@ Next	下一个
 Next Extent	下一个范围
 No	否
 No bookmarks yet	暂无书签
+No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	未安装任何插件。浏览插件库，或安装 .rgplugin 文件。
+No plugins match.	没有匹配的插件。
 No Pop-ups	无弹出窗口
 No standalone tables	无独立表
 NoData	NoData
@@ -487,6 +520,13 @@ Percent Clip	百分比截断
 Pixel	像素
 Pixel type	像素类型
 Placement	放置
+Plugin\nManager	插件\n管理器
+Plugin folder	插件文件夹
+Plugin Manager	插件管理器
+Plugin Manager…	插件管理器…
+Plugin registry	插件库
+Plugins	插件
+Plugins are .rgplugin files. Install only plugins from people you trust.	插件是 .rgplugin 文件。请只安装来自您信任的人的插件。
 PNG image	PNG 图像
 Point	点
 Polar, conformal: Antarctica and the Southern Ocean.	极地，等角: 南极洲和南大洋。
@@ -514,12 +554,17 @@ Raster Data	栅格数据
 Raster Information	栅格信息
 Raster Layer	栅格图层
 Raster · {w} × {h} · {n} bands · {renderer}	栅格 · {w} × {h} · {n} 个波段 · {renderer}
+Read and write files on this computer	读写此计算机上的文件
+Read the map's layers and features	读取地图的图层和要素
+Reads and writes files	读写文件
+Reads the map	读取地图
 Red	红
 Redo	重做
 Redo the change you undid.	重做已撤销的更改。
 Redo {action}	重做 {action}
 Red–Blue	红–蓝
 Refine the search to see {n} more	细化搜索以查看另外 {n} 个
+Refresh	刷新
 Regional, equal-area: the contiguous United States.	区域，等积: 美国本土。
 Regional, equal-area: the European standard for statistics.	区域，等积: 欧洲统计标准。
 Remove	移除
@@ -548,6 +593,7 @@ Run Tool	运行工具
 Running…	正在运行…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS 是一款用纯 Rust 编写的开源桌面 GIS。其功能区遵循熟悉的桌面 GIS 工作流；每个操作都是一条命令，也可以从命令行运行。
+RustGIS plugin	RustGIS 插件
 RustGIS project	RustGIS 工程
 Sample data (Natural Earth)	示例数据（Natural Earth）
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	示例数据 © Natural Earth（公有领域）。RustGIS 采用 Apache-2.0 许可证。
@@ -564,6 +610,7 @@ Save the raster as a GeoTIFF.	将栅格另存为 GeoTIFF。
 Scale 1:	比例尺 1:
 Search commands — e.g. buffer, basemap, labels	搜索命令，例如：缓冲区、底图、标注
 Search Distance (km)	搜索距离（km）
+Search plugins	搜索插件
 See the tools you've run.	查看已运行的工具。
 Select	选择
 Select (click)	选择（单击）
@@ -598,6 +645,7 @@ Selects features that intersect features in another layer.	选择与另一图层
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	使用 SQL where 子句选择要素，例如 pop_est > 1000000。
 Set Map Tool	设置地图工具
 Set Scale	设置比例尺
+Settings	设置
 Shaded	阴影
 Shaded Relief	晕渲地貌
 Shape	形状
@@ -654,12 +702,14 @@ Tables	表
 Terrain	地形
 Text	文本
 Text Symbol	文本符号
+The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	要浏览的插件列表。留空则使用 RustGIS 插件库。
 the map has no layers	地图中没有图层
 The map is drawn in this coordinate system; layers are projected on the fly.	地图以此坐标系绘制；图层将实时投影。
 The raster's data couldn't be read.	无法读取栅格数据。
 The raster's data couldn't be read: {path}	无法读取栅格数据：{path}
 Thermal	热力
 This map has no layers yet.	此地图中还没有图层。
+This plugin can:	此插件可以：
 Tint by elevation	按高程着色
 Toggle Dark Mode	切换深色模式
 Tolerance (km)	容差（km）
@@ -679,8 +729,13 @@ Undo	撤销
 Undo / Redo	撤销 / 重做
 Undo the last change.	撤销上一次更改。
 Undo {action}	撤销 {action}
+Uninstall	卸载
+Uninstall Plugin	卸载插件
+Uninstalled {id}.	已卸载 {id}。
 Unique Values	唯一值
 Units	单位
+Update	更新
+Update to {version}	更新到 {version}
 USA Contiguous Albers Equal Area	美国本土阿尔伯斯等积投影
 Valid expression · {n} matching rows	有效表达式 · {n} 个匹配行
 Vector and raster data	矢量和栅格数据
@@ -703,6 +758,7 @@ Where Clause	Where 子句
 Where labels sit relative to their features.	标注相对于其要素的位置。
 Windows	窗口
 Winkel Tripel	温克尔三重投影
+Withdrawn	已下架
 World	世界
 World Atlas	世界地图集
 World Atlas Sample	世界地图集示例
@@ -717,6 +773,7 @@ World, equal-area, cylindrical: true sizes, flattened near the poles.	世界，�
 World, equal-area: true sizes with a Robinson-like look.	世界，等积: 面积真实，外观类似罗宾森投影。
 World, equal-area: true sizes with rounded poles.	世界，等积: 面积真实，两极呈圆形。
 World, equal-area: true sizes, shapes bend towards the edges.	世界，等积: 面积真实，形状向边缘弯曲。
+Write a plugin	编写插件
 Yes	是
 Z factor	Z 因子
 Zoom about the pointer	围绕指针缩放
@@ -740,4 +797,9 @@ Zoom to the selected features.	缩放至所选要素。
 Zoom to the selection.	缩放至所选内容。
 Zoom to the whole world.	缩放至全世界。
 Zoom To World	缩放至世界
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} 在安装后已被更改；请从插件管理器重新安装。
+{name} was withdrawn from the plugin registry and has been turned off.	{name} 已从插件库下架，并已被停用。
+{name} was withdrawn from the plugin registry: {reason}	{name} 已从插件库下架：{reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}：下载的内容与插件库不符，未安装。
+{name}: the download is a different plugin; it wasn't installed.	{name}：下载的是另一个插件，未安装。
 ⌘K	⌘K

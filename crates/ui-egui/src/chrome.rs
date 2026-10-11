@@ -390,8 +390,21 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                 hits.push((c.id.to_string(), tl!(c.label).to_string(), crate::i18n::location(c.location)));
             }
         }
+        let lang = app.lang().code();
+        for c in rustgis_engine::plugins::commands() {
+            let m = &c.plugin.manifest;
+            let label = m.translate(lang, &c.decl.label);
+            if ql.is_empty()
+                || label.to_lowercase().contains(&ql)
+                || c.decl.label.to_lowercase().contains(&ql)
+                || m.name.to_lowercase().contains(&ql)
+            {
+                hits.push((c.id.clone(), label.to_string(), format!("{} › {}", tl!("Plugins"), m.translate(lang, &m.name))));
+            }
+        }
         for (id, label, loc) in [
             ("ui.addData", "Add Data…", "Map › Layer"),
+            ("ui.plugins", "Plugin Manager…", "Plugins"),
             ("ui.pane.geoprocessing", "Geoprocessing Pane", "View › Windows"),
             ("ui.pane.symbology", "Symbology Pane", "Feature Layer › Drawing"),
             ("ui.theme", "Toggle Dark Mode", "View"),

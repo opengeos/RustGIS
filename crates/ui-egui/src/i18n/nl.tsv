@@ -6,6 +6,7 @@ A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow o
 A projected coordinate system.	Een geprojecteerd coördinatensysteem.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Een waarde, een veld of twee daarvan verbonden door + − × ÷. Geldt voor de geselecteerde rijen, of voor alle rijen als er geen geselecteerd zijn.
 About	Over
+About plugins	Over plugins
 About RustGIS	Over RustGIS
 About RustGIS.	Over RustGIS.
 Above	Boven
@@ -25,6 +26,7 @@ Add Data…	Gegevens toevoegen…
 Add Field	Veld toevoegen
 Add field	Veld toevoegen
 Add GeoJSON, CSV or Shapefile data to the map.	GeoJSON-, CSV- of Shapefile-gegevens aan de kaart toevoegen.
+Add Plugin Folder…	Pluginmap toevoegen…
 Add sample countries	Voorbeeldlanden toevoegen
 Add Sample Data	Voorbeeldgegevens toevoegen
 Add To Current Selection	Toevoegen aan huidige selectie
@@ -71,11 +73,15 @@ Bookmarks	Bladwijzers
 Boolean	Booleaans
 Bounding\nGeometry	Begrenzende\ngeometrie
 Brightness	Helderheid
+Browse	Bladeren
+Browse Plugins	Plugins bekijken
 Browse the geoprocessing toolbox.	Door de geoverwerkingsgereedschappen bladeren.
 Browse the project's maps, tables and folders.	Door de kaarten, tabellen en mappen van het project bladeren.
+Browse, install, update and remove plugins.	Plugins bekijken, installeren, bijwerken en verwijderen.
 Buffer	Buffer
 By\nAttributes	Op\nattributen
 By\nLocation	Op\nlocatie
+by {author}	door {author}
 Calculate	Berekenen
 Calculate\nField	Veld\nberekenen
 Calculate\nGeometry	Geometrie\nberekenen
@@ -94,6 +100,7 @@ Cell size	Celgrootte
 Centered	Gecentreerd
 Change the map's backdrop.	De achtergrond van de kaart wijzigen.
 Change the map's coordinate system	Het coördinatenstelsel van de kaart wijzigen
+Change the project (add layers, edit features, change symbology)	Het project wijzigen (lagen toevoegen, objecten bewerken, symbologie wijzigen)
 Choose a band combination to display the raster layer.	Kies een bandcombinatie om de rasterlaag weer te geven.
 Choose a contrast stretch for the raster layer.	Kies een contraststretch voor de rasterlaag.
 Choose a resampling type for the raster layer.	Kies een resamplingtype voor de rasterlaag.
@@ -139,6 +146,7 @@ Colormap	Kleurenkaart
 Colors from the raster's own color table.	Kleuren uit de eigen kleurentabel van het raster.
 Command\nSearch	Opdracht\nzoeken
 Command Search	Opdracht zoeken
+Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	Opdrachten op het tabblad Plugins: {commands} · Gereedschappen in het geoverwerkingsvenster: {tools}
 Completed	Voltooid
 Compute a field's values.	De waarden van een veld berekenen.
 Contents	Inhoud
@@ -159,6 +167,7 @@ Copy the selected features (also as GeoJSON text).	De geselecteerde objecten kop
 Copy the selected features and delete them.	De geselecteerde objecten kopiëren en verwijderen.
 Copy the selected layer's data source path.	Het gegevensbronpad van de geselecteerde laag kopiëren.
 Couldn't download the font for {language}; pick the language again to retry.	Kan het lettertype voor {language} niet downloaden; kies de taal opnieuw om het nog eens te proberen.
+Couldn't load the plugin registry: {error}	Kan het pluginregister niet laden: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Aantal, som, gemiddelde, min, max en standaardafwijking van een veld, optioneel per groeperingsveld.
 Countries, cities, rivers and lakes	Landen, steden, rivieren en meren
 Counts the points that fall inside each polygon.	Telt de punten die binnen elke polygoon vallen.
@@ -230,8 +239,11 @@ Eckert IV (equal-area world)	Eckert IV (oppervlaktegetrouwe wereld)
 Edit	Bewerken
 Edit Attribute	Attribuut bewerken
 Edit attributes in the table.	Attributen in de tabel bewerken.
+Edits the project	Bewerkt het project
 Effects	Effecten
 Ember	Gloed
+Enable Plugin	Plugin inschakelen
+Enabled	Ingeschakeld
 Encloses each feature, or all features, in its convex hull.	Omsluit elk object, of alle objecten, met de convexe omhulling.
 Enhancement	Verbetering
 EPSG code	EPSG-code
@@ -281,6 +293,7 @@ Filter rows…	Rijen filteren…
 Find a place by coordinates.	Een plaats zoeken op coördinaten.
 Find and run geoprocessing tools.	Geoverwerkingsgereedschappen zoeken en uitvoeren.
 Find any command by name (Ctrl+K).	Elke opdracht op naam zoeken (Ctrl+K).
+Find plugins in the RustGIS plugin registry.	Plugins zoeken in het RustGIS-pluginregister.
 Find Tools	Gereedschappen zoeken
 Finish Tool Run	Gereedschapsrun afronden
 Finished: {tool}	Klaar: {tool}
@@ -324,6 +337,7 @@ Hide labels when the viewer is farther than this.	Labels verbergen wanneer de ki
 Histogram Equalize	Histogram egaliseren
 History	Geschiedenis
 Home	Home
+Homepage	Website
 Identify	Identificeren
 Import\nProject	Project\nimporteren
 In Beyond	Ingezoomd voorbij
@@ -337,14 +351,28 @@ Input Summary Features	Invoerobjecten voor samenvatting
 Input Table	Invoertabel
 Inquiry	Opvragen
 Insert	Invoegen
+Install	Installeren
+Install a plugin	Een plugin installeren
+Install a plugin from a .rgplugin file.	Een plugin installeren vanuit een .rgplugin-bestand.
+Install from a file	Installeren vanuit een bestand
+Install From File	Installeren vanuit bestand
+Install From File…	Installeren vanuit bestand…
 Install GeoLibre Tools	GeoLibre-gereedschappen installeren
 Install GeoLibre tools	GeoLibre-gereedschappen installeren
+Install Plugin	Plugin installeren
+Install Plugin From Registry	Plugin installeren vanuit register
+Install {name} {version}?	{name} {version} installeren?
+Installed	Geïnstalleerd
+Installed plugins are kept in {folder}	Geïnstalleerde plugins worden bewaard in {folder}
+Installed {name} {version}.	{name} {version} geïnstalleerd.
 Interface font: {font}	Interfacelettertype: {font}
 Invalid: {error}	Ongeldig: {error}
 Invert	Omkeren
 Invert color scheme	Kleurenschema omkeren
 Invert the selection.	De selectie omkeren.
 IS NULL	IS NULL
+It runs in a sandbox with no other access to your computer or the network.	De plugin draait in een sandbox zonder verdere toegang tot je computer of het netwerk.
+It's too large to keep in the browser: install it again on your next visit.	De plugin is te groot om in de browser te bewaren: installeer hem bij je volgende bezoek opnieuw.
 keep current	huidige behouden
 Keep the labelled features fixed as the map moves.	De gelabelde objecten vasthouden terwijl de kaart beweegt.
 Keyboard Shortcuts	Sneltoetsen
@@ -374,7 +402,9 @@ Line width	Lijndikte
 LineString	LineString
 List Commands	Opdrachten weergeven
 Lit	Belicht
+Load an unpacked plugin from its folder while you develop it.	Een uitgepakte plugin vanuit zijn map laden terwijl je hem ontwikkelt.
 Load GeoLibre tools	GeoLibre-gereedschappen laden
+Loaded {name} from its folder.	{name} geladen vanuit zijn map.
 Loading the GeoLibre tools…	GeoLibre-gereedschappen laden…
 Locate	Lokaliseren
 Locate GeoLibre Runner	GeoLibre-runner zoeken
@@ -388,6 +418,7 @@ Major Lakes	Grote meren
 Major Rivers	Grote rivieren
 Make a new layer of the selected features.	Een nieuwe laag maken van de geselecteerde objecten.
 Make Layer From Selected Features	Laag maken van geselecteerde objecten
+Manage	Beheren
 Manage Edits	Bewerkingen beheren
 Map	Kaart
 Map › Layer	Kaart › Laag
@@ -437,6 +468,8 @@ Next	Volgende
 Next Extent	Volgend bereik
 No	Nee
 No bookmarks yet	Nog geen bladwijzers
+No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Er zijn geen plugins geïnstalleerd. Blader door het pluginregister of installeer een .rgplugin-bestand.
+No plugins match.	Geen plugins gevonden.
 No Pop-ups	Geen pop-ups
 No standalone tables	Geen zelfstandige tabellen
 NoData	NoData
@@ -487,6 +520,13 @@ Percent Clip	Percentage afkappen
 Pixel	Pixel
 Pixel type	Pixeltype
 Placement	Plaatsing
+Plugin\nManager	Plugin-\nbeheer
+Plugin folder	Pluginmap
+Plugin Manager	Pluginbeheer
+Plugin Manager…	Pluginbeheer…
+Plugin registry	Pluginregister
+Plugins	Plugins
+Plugins are .rgplugin files. Install only plugins from people you trust.	Plugins zijn .rgplugin-bestanden. Installeer alleen plugins van mensen die je vertrouwt.
 PNG image	PNG-afbeelding
 Point	Punt
 Polar, conformal: Antarctica and the Southern Ocean.	Polair, hoekgetrouw: Antarctica en de Zuidelijke Oceaan.
@@ -514,12 +554,17 @@ Raster Data	Rastergegevens
 Raster Information	Rasterinformatie
 Raster Layer	Rasterlaag
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} banden · {renderer}
+Read and write files on this computer	Bestanden op deze computer lezen en schrijven
+Read the map's layers and features	De lagen en objecten van de kaart lezen
+Reads and writes files	Leest en schrijft bestanden
+Reads the map	Leest de kaart
 Red	Rood
 Redo	Opnieuw
 Redo the change you undid.	De ongedaan gemaakte wijziging opnieuw uitvoeren.
 Redo {action}	{action} opnieuw
 Red–Blue	Rood–Blauw
 Refine the search to see {n} more	Verfijn de zoekopdracht om {n} meer te zien
+Refresh	Vernieuwen
 Regional, equal-area: the contiguous United States.	Regionaal, oppervlaktegetrouw: de aaneengesloten Verenigde Staten.
 Regional, equal-area: the European standard for statistics.	Regionaal, oppervlaktegetrouw: de Europese standaard voor statistiek.
 Remove	Verwijderen
@@ -548,6 +593,7 @@ Run Tool	Gereedschap uitvoeren
 Running…	Bezig…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS is een opensource desktop-GIS geschreven in puur Rust. Het lint volgt de vertrouwde werkwijze van desktop-GIS; elke actie is een opdracht die je ook vanaf de opdrachtregel kunt uitvoeren.
+RustGIS plugin	RustGIS-plugin
 RustGIS project	RustGIS-project
 Sample data (Natural Earth)	Voorbeeldgegevens (Natural Earth)
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Voorbeeldgegevens © Natural Earth (publiek domein). RustGIS valt onder de Apache-2.0-licentie.
@@ -564,6 +610,7 @@ Save the raster as a GeoTIFF.	Het raster opslaan als GeoTIFF.
 Scale 1:	Schaal 1:
 Search commands — e.g. buffer, basemap, labels	Opdrachten zoeken — bijv. buffer, basiskaart, labels
 Search Distance (km)	Zoekafstand (km)
+Search plugins	Plugins zoeken
 See the tools you've run.	De uitgevoerde gereedschappen bekijken.
 Select	Selecteren
 Select (click)	Selecteren (klik)
@@ -598,6 +645,7 @@ Selects features that intersect features in another layer.	Selecteert objecten d
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Selecteert objecten met een SQL-where-clausule, bijv. pop_est > 1000000.
 Set Map Tool	Kaartgereedschap instellen
 Set Scale	Schaal instellen
+Settings	Instellingen
 Shaded	Schaduw
 Shaded Relief	Schaduwreliëf
 Shape	Vorm
@@ -654,12 +702,14 @@ Tables	Tabellen
 Terrain	Terrein
 Text	Tekst
 Text Symbol	Tekstsymbool
+The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	De lijst met plugins om door te bladeren. Laat leeg voor het RustGIS-pluginregister.
 the map has no layers	de kaart heeft geen lagen
 The map is drawn in this coordinate system; layers are projected on the fly.	De kaart wordt in dit coördinatenstelsel getekend; lagen worden direct geprojecteerd.
 The raster's data couldn't be read.	De rastergegevens konden niet worden gelezen.
 The raster's data couldn't be read: {path}	De rastergegevens konden niet worden gelezen: {path}
 Thermal	Thermisch
 This map has no layers yet.	Deze kaart heeft nog geen lagen.
+This plugin can:	Deze plugin kan:
 Tint by elevation	Kleuren op hoogte
 Toggle Dark Mode	Donkere modus aan/uit
 Tolerance (km)	Tolerantie (km)
@@ -679,8 +729,13 @@ Undo	Ongedaan maken
 Undo / Redo	Ongedaan maken / Opnieuw
 Undo the last change.	De laatste wijziging ongedaan maken.
 Undo {action}	{action} ongedaan maken
+Uninstall	Verwijderen
+Uninstall Plugin	Plugin verwijderen
+Uninstalled {id}.	{id} verwijderd.
 Unique Values	Unieke waarden
 Units	Eenheden
+Update	Bijwerken
+Update to {version}	Bijwerken naar {version}
 USA Contiguous Albers Equal Area	VS (aaneengesloten) Albers oppervlaktegetrouw
 Valid expression · {n} matching rows	Geldige expressie · {n} overeenkomende rijen
 Vector and raster data	Vector- en rastergegevens
@@ -703,6 +758,7 @@ Where Clause	Where-clausule
 Where labels sit relative to their features.	Waar labels staan ten opzichte van hun objecten.
 Windows	Vensters
 Winkel Tripel	Winkel Tripel
+Withdrawn	Teruggetrokken
 World	Wereld
 World Atlas	Wereldatlas
 World Atlas Sample	Voorbeeld Wereldatlas
@@ -717,6 +773,7 @@ World, equal-area, cylindrical: true sizes, flattened near the poles.	Wereld, op
 World, equal-area: true sizes with a Robinson-like look.	Wereld, oppervlaktegetrouw: ware grootten met een Robinson-achtig uiterlijk.
 World, equal-area: true sizes with rounded poles.	Wereld, oppervlaktegetrouw: ware grootten met afgeronde polen.
 World, equal-area: true sizes, shapes bend towards the edges.	Wereld, oppervlaktegetrouw: ware grootten, vormen buigen naar de randen.
+Write a plugin	Een plugin schrijven
 Yes	Ja
 Z factor	Z-factor
 Zoom about the pointer	Zoomen rond de aanwijzer
@@ -740,4 +797,9 @@ Zoom to the selected features.	Zoomen naar de geselecteerde objecten.
 Zoom to the selection.	Zoomen naar de selectie.
 Zoom to the whole world.	Zoomen naar de hele wereld.
 Zoom To World	Zoomen naar wereld
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} is gewijzigd sinds de installatie; installeer het opnieuw via Pluginbeheer.
+{name} was withdrawn from the plugin registry and has been turned off.	{name} is uit het pluginregister teruggetrokken en is uitgeschakeld.
+{name} was withdrawn from the plugin registry: {reason}	{name} is uit het pluginregister teruggetrokken: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: de download komt niet overeen met het register; de plugin is niet geïnstalleerd.
+{name}: the download is a different plugin; it wasn't installed.	{name}: de download is een andere plugin; de plugin is niet geïnstalleerd.
 ⌘K	⌘K

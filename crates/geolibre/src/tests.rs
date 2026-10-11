@@ -78,7 +78,7 @@ fn runner_values_and_choices() {
 #[test]
 fn manifests_become_tool_forms() {
     let Some(_) = setup() else { return };
-    let tools = rustgis_analysis::external_tools();
+    let tools = rustgis_analysis::external_tools_of(crate::SOURCE);
     assert!(tools.len() > 1000, "{}", tools.len());
     let slope = rustgis_analysis::tool("geolibre:slope").unwrap();
     assert!(rustgis_analysis::is_external(slope));
@@ -146,7 +146,7 @@ fn bad_inputs_are_errors_not_crashes() {
     assert!(rustgis_analysis::run("geolibre:slope", &f, &json!({"input": "pts"})).is_err(), "a vector where a raster belongs");
     // Every tool with junk in every field fails cleanly: inputs that don't exist stop it before
     // it runs.
-    for t in rustgis_analysis::external_tools() {
+    for t in rustgis_analysis::external_tools_of(crate::SOURCE) {
         if !t.params.iter().any(|p| matches!(p.kind, ParamKind::RasterLayer | ParamKind::VectorLayer | ParamKind::Layer | ParamKind::Path))
         {
             continue;

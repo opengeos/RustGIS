@@ -6,6 +6,7 @@ A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow o
 A projected coordinate system.	Sistem koordinat terproyeksi.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Sebuah nilai, kolom, atau dua di antaranya yang digabung dengan + − × ÷. Berlaku untuk baris terpilih, atau semua baris jika tidak ada yang dipilih.
 About	Tentang
+About plugins	Tentang plugin
 About RustGIS	Tentang RustGIS
 About RustGIS.	Tentang RustGIS.
 Above	Atas
@@ -25,6 +26,7 @@ Add Data…	Tambah Data…
 Add Field	Tambah Kolom
 Add field	Tambah kolom
 Add GeoJSON, CSV or Shapefile data to the map.	Tambahkan data GeoJSON, CSV, atau Shapefile ke peta.
+Add Plugin Folder…	Tambah Folder Plugin…
 Add sample countries	Tambah contoh negara
 Add Sample Data	Tambah Data Contoh
 Add To Current Selection	Tambah ke Seleksi Saat Ini
@@ -71,11 +73,15 @@ Bookmarks	Penanda
 Boolean	Boolean
 Bounding\nGeometry	Geometri\nBatas
 Brightness	Kecerahan
+Browse	Jelajahi
+Browse Plugins	Jelajahi Plugin
 Browse the geoprocessing toolbox.	Jelajahi kotak alat geoprosesing.
 Browse the project's maps, tables and folders.	Jelajahi peta, tabel, dan folder proyek.
+Browse, install, update and remove plugins.	Jelajahi, pasang, perbarui, dan hapus plugin.
 Buffer	Buffer
 By\nAttributes	Menurut\nAtribut
 By\nLocation	Menurut\nLokasi
+by {author}	oleh {author}
 Calculate	Hitung
 Calculate\nField	Hitung\nKolom
 Calculate\nGeometry	Hitung\nGeometri
@@ -94,6 +100,7 @@ Cell size	Ukuran sel
 Centered	Tengah
 Change the map's backdrop.	Ubah latar belakang peta.
 Change the map's coordinate system	Ubah sistem koordinat peta
+Change the project (add layers, edit features, change symbology)	Mengubah proyek (menambah layer, mengedit fitur, mengubah simbologi)
 Choose a band combination to display the raster layer.	Pilih kombinasi band untuk menampilkan layer raster.
 Choose a contrast stretch for the raster layer.	Pilih peregangan kontras untuk layer raster.
 Choose a resampling type for the raster layer.	Pilih tipe resampling untuk layer raster.
@@ -139,6 +146,7 @@ Colormap	Peta Warna
 Colors from the raster's own color table.	Warna dari tabel warna raster itu sendiri.
 Command\nSearch	Cari\nPerintah
 Command Search	Cari Perintah
+Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	Perintah di tab Plugin: {commands} · Alat di panel Geoprosesing: {tools}
 Completed	Selesai
 Compute a field's values.	Hitung nilai suatu kolom.
 Contents	Konten
@@ -159,6 +167,7 @@ Copy the selected features (also as GeoJSON text).	Salin fitur terpilih (juga se
 Copy the selected features and delete them.	Salin fitur terpilih lalu hapus.
 Copy the selected layer's data source path.	Salin path sumber data layer terpilih.
 Couldn't download the font for {language}; pick the language again to retry.	Tidak dapat mengunduh font untuk {language}; pilih bahasa lagi untuk mencoba ulang.
+Couldn't load the plugin registry: {error}	Tidak dapat memuat registri plugin: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Jumlah, total, rata-rata, min, maks, dan simpangan baku suatu kolom, opsional per kolom kasus.
 Countries, cities, rivers and lakes	Negara, kota, sungai, dan danau
 Counts the points that fall inside each polygon.	Menghitung titik yang berada di dalam setiap poligon.
@@ -230,8 +239,11 @@ Eckert IV (equal-area world)	Eckert IV (dunia luas sama)
 Edit	Edit
 Edit Attribute	Edit Atribut
 Edit attributes in the table.	Edit atribut di tabel.
+Edits the project	Mengedit proyek
 Effects	Efek
 Ember	Bara
+Enable Plugin	Aktifkan Plugin
+Enabled	Aktif
 Encloses each feature, or all features, in its convex hull.	Melingkupi setiap fitur, atau semua fitur, dengan convex hull-nya.
 Enhancement	Peningkatan
 EPSG code	Kode EPSG
@@ -281,6 +293,7 @@ Filter rows…	Saring baris…
 Find a place by coordinates.	Temukan tempat berdasarkan koordinat.
 Find and run geoprocessing tools.	Temukan dan jalankan alat geoprosesing.
 Find any command by name (Ctrl+K).	Temukan perintah apa pun berdasarkan nama (Ctrl+K).
+Find plugins in the RustGIS plugin registry.	Temukan plugin di registri plugin RustGIS.
 Find Tools	Cari Alat
 Finish Tool Run	Selesaikan proses alat
 Finished: {tool}	Selesai: {tool}
@@ -324,6 +337,7 @@ Hide labels when the viewer is farther than this.	Sembunyikan label saat penampi
 Histogram Equalize	Ekualisasi Histogram
 History	Riwayat
 Home	Home
+Homepage	Beranda
 Identify	Identifikasi
 Import\nProject	Impor\nProyek
 In Beyond	Perbesar Melewati
@@ -337,14 +351,28 @@ Input Summary Features	Fitur Ringkasan Masukan
 Input Table	Tabel Masukan
 Inquiry	Penyelidikan
 Insert	Sisipkan
+Install	Pasang
+Install a plugin	Pasang plugin
+Install a plugin from a .rgplugin file.	Pasang plugin dari file .rgplugin.
+Install from a file	Pasang dari file
+Install From File	Pasang dari File
+Install From File…	Pasang dari File…
 Install GeoLibre Tools	Pasang alat GeoLibre
 Install GeoLibre tools	Pasang alat GeoLibre
+Install Plugin	Pasang Plugin
+Install Plugin From Registry	Pasang Plugin dari Registri
+Install {name} {version}?	Pasang {name} {version}?
+Installed	Terpasang
+Installed plugins are kept in {folder}	Plugin yang terpasang disimpan di {folder}
+Installed {name} {version}.	{name} {version} telah dipasang.
 Interface font: {font}	Fon antarmuka: {font}
 Invalid: {error}	Tidak valid: {error}
 Invert	Balik
 Invert color scheme	Balik skema warna
 Invert the selection.	Balik seleksi.
 IS NULL	IS NULL
+It runs in a sandbox with no other access to your computer or the network.	Plugin berjalan di sandbox tanpa akses lain ke komputer Anda atau jaringan.
+It's too large to keep in the browser: install it again on your next visit.	Plugin terlalu besar untuk disimpan di peramban: pasang ulang saat kunjungan berikutnya.
 keep current	biarkan saat ini
 Keep the labelled features fixed as the map moves.	Pertahankan fitur berlabel tetap saat peta bergerak.
 Keyboard Shortcuts	Pintasan Keyboard
@@ -374,7 +402,9 @@ Line width	Lebar garis
 LineString	LineString
 List Commands	Daftar Perintah
 Lit	Terang
+Load an unpacked plugin from its folder while you develop it.	Muat plugin yang belum dikemas dari foldernya selama Anda mengembangkannya.
 Load GeoLibre tools	Muat alat GeoLibre
+Loaded {name} from its folder.	{name} dimuat dari foldernya.
 Loading the GeoLibre tools…	Memuat alat GeoLibre…
 Locate	Temukan Lokasi
 Locate GeoLibre Runner	Temukan runner GeoLibre
@@ -388,6 +418,7 @@ Major Lakes	Danau Utama
 Major Rivers	Sungai Utama
 Make a new layer of the selected features.	Buat layer baru dari fitur terpilih.
 Make Layer From Selected Features	Buat Layer dari Fitur Terpilih
+Manage	Kelola
 Manage Edits	Kelola Edit
 Map	Peta
 Map › Layer	Peta › Layer
@@ -437,6 +468,8 @@ Next	Berikutnya
 Next Extent	Cakupan Berikutnya
 No	Tidak
 No bookmarks yet	Belum ada penanda
+No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Belum ada plugin yang terpasang. Jelajahi registri plugin, atau pasang file .rgplugin.
+No plugins match.	Tidak ada plugin yang cocok.
 No Pop-ups	Tanpa Pop-up
 No standalone tables	Tidak ada tabel mandiri
 NoData	NoData
@@ -487,6 +520,13 @@ Percent Clip	Potong Persen
 Pixel	Piksel
 Pixel type	Tipe piksel
 Placement	Penempatan
+Plugin\nManager	Pengelola\nPlugin
+Plugin folder	Folder plugin
+Plugin Manager	Pengelola Plugin
+Plugin Manager…	Pengelola Plugin…
+Plugin registry	Registri plugin
+Plugins	Plugin
+Plugins are .rgplugin files. Install only plugins from people you trust.	Plugin adalah file .rgplugin. Pasang hanya plugin dari orang yang Anda percaya.
 PNG image	Gambar PNG
 Point	Titik
 Polar, conformal: Antarctica and the Southern Ocean.	Kutub, konformal: Antarktika dan Samudra Selatan.
@@ -514,12 +554,17 @@ Raster Data	Data Raster
 Raster Information	Informasi Raster
 Raster Layer	Layer Raster
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} band · {renderer}
+Read and write files on this computer	Membaca dan menulis file di komputer ini
+Read the map's layers and features	Membaca layer dan fitur peta
+Reads and writes files	Membaca dan menulis file
+Reads the map	Membaca peta
 Red	Merah
 Redo	Ulangi
 Redo the change you undid.	Ulangi perubahan yang dibatalkan.
 Redo {action}	Ulangi {action}
 Red–Blue	Merah–Biru
 Refine the search to see {n} more	Persempit pencarian untuk melihat {n} lagi
+Refresh	Segarkan
 Regional, equal-area: the contiguous United States.	Regional, luas sama: Amerika Serikat daratan.
 Regional, equal-area: the European standard for statistics.	Regional, luas sama: standar Eropa untuk statistik.
 Remove	Hapus
@@ -548,6 +593,7 @@ Run Tool	Jalankan Alat
 Running…	Berjalan…
 RustGIS	RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS adalah GIS desktop sumber terbuka yang ditulis dengan Rust murni. Ribbon-nya mengikuti alur kerja GIS desktop yang familiar; setiap aksi adalah perintah yang juga dapat dijalankan dari baris perintah.
+RustGIS plugin	Plugin RustGIS
 RustGIS project	Proyek RustGIS
 Sample data (Natural Earth)	Data contoh (Natural Earth)
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Data contoh © Natural Earth (domain publik). RustGIS dilisensikan di bawah Apache-2.0.
@@ -564,6 +610,7 @@ Save the raster as a GeoTIFF.	Simpan raster sebagai GeoTIFF.
 Scale 1:	Skala 1:
 Search commands — e.g. buffer, basemap, labels	Cari perintah — mis. buffer, peta dasar, label
 Search Distance (km)	Jarak Pencarian (km)
+Search plugins	Cari plugin
 See the tools you've run.	Lihat alat yang telah Anda jalankan.
 Select	Pilih
 Select (click)	Pilih (klik)
@@ -598,6 +645,7 @@ Selects features that intersect features in another layer.	Memilih fitur yang be
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Memilih fitur dengan klausa SQL where, mis. pop_est > 1000000.
 Set Map Tool	Atur Alat Peta
 Set Scale	Atur Skala
+Settings	Pengaturan
 Shaded	Gelap
 Shaded Relief	Relief Bayangan
 Shape	Bentuk
@@ -654,12 +702,14 @@ Tables	Tabel
 Terrain	Medan
 Text	Teks
 Text Symbol	Simbol Teks
+The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	Daftar plugin untuk dijelajahi. Biarkan kosong untuk registri plugin RustGIS.
 the map has no layers	peta tidak memiliki layer
 The map is drawn in this coordinate system; layers are projected on the fly.	Peta digambar dalam sistem koordinat ini; lapisan diproyeksikan secara langsung.
 The raster's data couldn't be read.	Data raster tidak dapat dibaca.
 The raster's data couldn't be read: {path}	Data raster tidak dapat dibaca: {path}
 Thermal	Termal
 This map has no layers yet.	Peta ini belum memiliki layer.
+This plugin can:	Plugin ini dapat:
 Tint by elevation	Warnai menurut elevasi
 Toggle Dark Mode	Alihkan Mode Gelap
 Tolerance (km)	Toleransi (km)
@@ -679,8 +729,13 @@ Undo	Urungkan
 Undo / Redo	Urungkan / Ulangi
 Undo the last change.	Urungkan perubahan terakhir.
 Undo {action}	Urungkan {action}
+Uninstall	Copot
+Uninstall Plugin	Copot Plugin
+Uninstalled {id}.	{id} telah dicopot.
 Unique Values	Nilai Unik
 Units	Satuan
+Update	Perbarui
+Update to {version}	Perbarui ke {version}
 USA Contiguous Albers Equal Area	Albers Luas Sama AS Kontinental
 Valid expression · {n} matching rows	Ekspresi valid · {n} baris cocok
 Vector and raster data	Data vektor dan raster
@@ -703,6 +758,7 @@ Where Clause	Klausa Where
 Where labels sit relative to their features.	Posisi label relatif terhadap fiturnya.
 Windows	Jendela
 Winkel Tripel	Winkel Tripel
+Withdrawn	Ditarik
 World	Dunia
 World Atlas	World Atlas
 World Atlas Sample	Contoh World Atlas
@@ -717,6 +773,7 @@ World, equal-area, cylindrical: true sizes, flattened near the poles.	Dunia, lua
 World, equal-area: true sizes with a Robinson-like look.	Dunia, luas sama: ukuran sebenarnya dengan tampilan mirip Robinson.
 World, equal-area: true sizes with rounded poles.	Dunia, luas sama: ukuran sebenarnya dengan kutub membulat.
 World, equal-area: true sizes, shapes bend towards the edges.	Dunia, luas sama: ukuran sebenarnya, bentuk melengkung ke arah tepi.
+Write a plugin	Tulis plugin
 Yes	Ya
 Z factor	Faktor Z
 Zoom about the pointer	Zoom di sekitar penunjuk
@@ -740,4 +797,9 @@ Zoom to the selected features.	Zoom ke fitur terpilih.
 Zoom to the selection.	Zoom ke seleksi.
 Zoom to the whole world.	Zoom ke seluruh dunia.
 Zoom To World	Zoom ke Dunia
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} telah berubah sejak dipasang; pasang ulang dari Pengelola Plugin.
+{name} was withdrawn from the plugin registry and has been turned off.	{name} ditarik dari registri plugin dan telah dinonaktifkan.
+{name} was withdrawn from the plugin registry: {reason}	{name} ditarik dari registri plugin: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: unduhan tidak cocok dengan registri; plugin tidak dipasang.
+{name}: the download is a different plugin; it wasn't installed.	{name}: unduhan adalah plugin yang berbeda; plugin tidak dipasang.
 ⌘K	⌘K

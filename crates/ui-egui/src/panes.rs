@@ -924,7 +924,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         // The GeoLibre suite: a thousand tools, so its toolboxes stay closed until opened (or,
         // without the runner, a card says where to get it). Above the built-in tools when
         // browsing, so it isn't lost below them; after them when searching.
-        let external = rustgis_engine::analysis::external_tools();
+        let external = rustgis_engine::cmd::gp::geolibre_tools();
         let geolibre_section = |app: &mut RustGisApp, ui: &mut Ui| {
             if external.is_empty() {
                 if q.is_empty() {
@@ -1136,7 +1136,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
             }
             let params = Value::Object(params);
-            if rustgis_engine::analysis::is_external(spec) && app.services.geolibre_run.is_some() {
+            if rustgis_engine::cmd::gp::is_geolibre_tool(spec) && app.services.geolibre_run.is_some() {
                 // The browser's runner is asynchronous: start it, and `poll_geolibre` finishes.
                 match rustgis_engine::cmd::gp::external_start(&mut app.session, spec.id, &params) {
                     Ok(run) => {
