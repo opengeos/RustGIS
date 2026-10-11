@@ -826,11 +826,23 @@ fn project_items_files_styles_packages_tasks_and_3d() {
     s.run("task.save", &json!({"task": "Explore", "path": path("explore.rgistask")})).unwrap();
     s.run("task.import", &json!({"path": path("explore.rgistask")})).unwrap();
     assert_eq!(s.project.tasks.last().unwrap().name, "Explore 2");
+    // A task file may not touch files or run scripts.
+    let sneaky =
+        json!({"name": "Sneaky", "steps": [{"title": "Overwrite", "command": "share.exportMap", "params": {"path": path("x.png")}}]});
+    assert!(s.run("task.import", &json!({"text": sneaky.to_string()})).is_err());
+    let nested = json!({"name": "Nested", "steps": [{"title": "Run", "command": "script.run", "params": {"script": "map.zoomFull"}}]});
+    assert!(s.run("task.import", &json!({"text": nested.to_string()})).is_err());
     // 3D export: polygons extruded by a field.
     s.run("share.export3d", &json!({"layer": "Countries", "path": path("countries.obj"), "heightField": "pop_est", "zScale": 0.00001}))
         .unwrap();
     let obj = std::fs::read_to_string(path("countries.obj")).unwrap();
     assert!(obj.lines().filter(|l| l.starts_with("v ")).count() > 1000 && obj.contains("\nf "));
+    // Caps are triangles, and every face refers to a written vertex.
+    let verts = obj.lines().filter(|l| l.starts_with("v ")).count();
+    assert!(obj.lines().filter(|l| l.starts_with("f ")).all(|l| {
+        let ids: Vec<usize> = l[2..].split_whitespace().map(|x| x.parse().unwrap()).collect();
+        (3..=4).contains(&ids.len()) && ids.iter().all(|i| (1..=verts).contains(i))
+    }));
     let (name, bytes) = crate::cmd::items::item_bytes(&mut s, "obj", &json!({"layer": "Cities"})).unwrap();
     assert!(name.ends_with(".obj") && !bytes.is_empty());
     let _ = std::fs::remove_dir_all(&dir);

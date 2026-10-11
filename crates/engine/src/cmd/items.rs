@@ -2,6 +2,7 @@
 //! layer templates, tasks, and 3D export (Insert › Project, Layer Templates and Styles; Share ›
 //! Package, Save As and Output).
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType};
@@ -76,9 +77,10 @@ pub fn commands() -> Vec<C> {
         C::new("style.add", "Add Style", "Insert › Styles", |s, p| {
             let text = read_text(p)?;
             let items: Vec<StyleItem> = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS style file: {e}"))?;
-            let n = items.len();
+            let mut n = 0;
             for it in items.into_iter().take(1000) {
                 add_style(s, it);
+                n += 1;
             }
             Ok(json!({"added": n}))
         })
@@ -202,6 +204,10 @@ pub fn commands() -> Vec<C> {
         C::new("task.import", "Import Task", "Insert › Project", |s, p| {
             let text = read_text(p)?;
             let t: Task = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS task: {e}"))?;
+            // A task from a file is someone else's: it may not read or write files, or run scripts.
+            if let Some((i, st)) = t.steps.iter().enumerate().find(|(_, st)| touches_files(&st.command, &st.params)) {
+                return Err(format!("step {} ({}) reads or writes files or runs a script, which imported tasks can't do", i + 1, st.command));
+            }
             let steps = serde_json::to_value(&t.steps).map_err(|e| e.to_string())?;
             s.run("task.new", &json!({"name": t.name, "description": t.description, "steps": steps}))
         })
@@ -380,7 +386,7 @@ fn package_project(s: &Session) -> Result<Vec<u8>, String> {
     let text = serde_json::to_string(&p).map_err(|e| e.to_string())?;
     let readme =
         format!("{} — a RustGIS project package.\nOpen it with RustGIS (Project › Open), or unzip it for {}.rgisx.\n", p.name, p.name);
-    Ok(rustgis_data::zip::write(&[(format!("{}.rgisx", safe(&p.name)), text.into_bytes()), ("README.txt".into(), readme.into_bytes())]))
+    rustgis_data::zip::write(&[(format!("{}.rgisx", safe(&p.name)), text.into_bytes()), ("README.txt".into(), readme.into_bytes())])
 }
 
 fn safe(name: &str) -> String {
@@ -408,7 +414,7 @@ fn package_map(s: &Session, mobile: bool, tol: f64) -> Result<Vec<u8>, String> {
     let text = serde_json::to_string(&m).map_err(|e| e.to_string())?;
     let kind = if mobile { "mobile map package" } else { "map package" };
     let readme = format!("{} — a RustGIS {kind}.\nAdd it to a project with Insert › Import.\n", m.name);
-    Ok(rustgis_data::zip::write(&[(format!("{}.rgismap", safe(&m.name)), text.into_bytes()), ("README.txt".into(), readme.into_bytes())]))
+    rustgis_data::zip::write(&[(format!("{}.rgismap", safe(&m.name)), text.into_bytes()), ("README.txt".into(), readme.into_bytes())])
 }
 
 /// The geoprocessing history with the layers its runs made, as GeoJSON.
@@ -430,7 +436,7 @@ fn package_gp(s: &Session) -> Result<Vec<u8>, String> {
             }
         }
     }
-    Ok(rustgis_data::zip::write(&entries))
+    rustgis_data::zip::write(&entries)
 }
 
 fn layer_template(s: &mut Session, p: &Value) -> CmdResult {
@@ -491,10 +497,29 @@ fn run_task(s: &mut Session, p: &Value) -> CmdResult {
         if let Some(why) = enabled(s) {
             return Err(format!("step {} ({}): {why}", i + 1, st.title));
         }
-        let r = run(s, &st.params).map_err(|e| format!("step {} ({}): {e}", i + 1, st.title))?;
+        // A step that panics fails the task instead of the app (the whole task is one undo step).
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(s, &st.params)))
+            .unwrap_or_else(|_| Err("failed unexpectedly".into()))
+            .map_err(|e| format!("step {} ({}): {e}", i + 1, st.title))?;
         done.push(json!({"step": i, "title": st.title, "result": r}));
     }
     Ok(json!({"task": t.name, "ran": done}))
+}
+
+/// Whether a step reads or writes files (a path-like parameter anywhere in its parameters) or runs
+/// a script or notebook.
+fn touches_files(command: &str, params: &Value) -> bool {
+    fn has_path(v: &Value, depth: usize) -> bool {
+        match v {
+            Value::Object(o) if depth < 16 => o
+                .iter()
+                .any(|(k, v)| matches!(k.to_ascii_lowercase().as_str(), "path" | "folder" | "dir" | "file") || has_path(v, depth + 1)),
+            Value::Array(a) if depth < 16 => a.iter().any(|v| has_path(v, depth + 1)),
+            Value::Object(_) | Value::Array(_) => true,
+            _ => false,
+        }
+    }
+    ["script.", "notebook.", "model.", "project."].iter().any(|p| command.starts_with(p)) || has_path(params, 0)
 }
 
 /// Writes a layer as a Wavefront OBJ: polygons extruded to a height, lines as polylines, points as
@@ -506,6 +531,9 @@ fn export_3d(s: &mut Session, p: &Value) -> CmdResult {
     s.notify(format!("Exported {path}"), false);
     Ok(json!({"path": path, "bytes": obj.len()}))
 }
+
+/// Largest OBJ text written (512 MiB).
+const MAX_OBJ: usize = 512 << 20;
 
 /// A feature layer as Wavefront OBJ text.
 fn obj_text(s: &Session, p: &Value) -> Result<String, String> {
@@ -536,26 +564,48 @@ fn obj_text(s: &Session, p: &Value) -> Result<String, String> {
         match &ft.geometry {
             Some(Geometry::Polygon(polys)) => {
                 for rings in polys {
-                    let Some(outer) = rings.first() else { continue };
-                    let ring: Vec<(f64, f64)> = outer.iter().take(outer.len().saturating_sub(1)).map(|c| xy(*c)).collect();
-                    let n = ring.len();
-                    if n < 3 {
-                        continue;
+                    // Each ring open (no closing vertex), outer first then holes.
+                    let open: Vec<Vec<(f64, f64)>> = rings
+                        .iter()
+                        .map(|r| r.iter().take(r.len().saturating_sub(1)).map(|c| xy(*c)).collect::<Vec<_>>())
+                        .filter(|r: &Vec<(f64, f64)>| r.len() >= 3)
+                        .collect();
+                    let Some(outer) = open.first() else { continue };
+                    let n: usize = open.iter().map(Vec::len).sum();
+                    for (x, y) in open.iter().flatten() {
+                        let _ = writeln!(obj, "v {x:.2} 0.00 {:.2}", -y);
                     }
-                    for (x, y) in &ring {
-                        obj.push_str(&format!("v {x:.2} {:.2} {:.2}\n", 0.0, -y));
+                    for (x, y) in open.iter().flatten() {
+                        let _ = writeln!(obj, "v {x:.2} {h:.2} {:.2}", -y);
                     }
-                    for (x, y) in &ring {
-                        obj.push_str(&format!("v {x:.2} {h:.2} {:.2}\n", -y));
+                    // Walls round every ring, holes included.
+                    let mut first = 0;
+                    for r in &open {
+                        let m = r.len();
+                        for i in 0..m {
+                            let (a, b) = (first + i, first + (i + 1) % m);
+                            let _ = writeln!(obj, "f {} {} {} {}", v + a + 1, v + b + 1, v + n + b + 1, v + n + a + 1);
+                        }
+                        first += m;
                     }
-                    // Walls, then the top and bottom caps as polygons (OBJ allows n-gons).
-                    for i in 0..n {
-                        let j = (i + 1) % n;
-                        obj.push_str(&format!("f {} {} {} {}\n", v + i + 1, v + j + 1, v + n + j + 1, v + n + i + 1));
+                    // Caps as triangles (concave shapes and holes would fan wrongly as n-gons).
+                    match rustgis_geom::triangulate::triangulate(outer, open.get(1..).unwrap_or(&[])) {
+                        Some(tris) => {
+                            for [a, b, c] in tris {
+                                let _ = writeln!(obj, "f {} {} {}", v + n + a + 1, v + n + b + 1, v + n + c + 1);
+                                let _ = writeln!(obj, "f {} {} {}", v + c + 1, v + b + 1, v + a + 1);
+                            }
+                        }
+                        None => {
+                            let m = outer.len();
+                            let _ = writeln!(obj, "f {}", (0..m).map(|i| (v + n + i + 1).to_string()).collect::<Vec<_>>().join(" "));
+                            let _ = writeln!(obj, "f {}", (0..m).rev().map(|i| (v + i + 1).to_string()).collect::<Vec<_>>().join(" "));
+                        }
                     }
-                    obj.push_str(&format!("f {}\n", (0..n).map(|i| (v + n + i + 1).to_string()).collect::<Vec<_>>().join(" ")));
-                    obj.push_str(&format!("f {}\n", (0..n).rev().map(|i| (v + i + 1).to_string()).collect::<Vec<_>>().join(" ")));
                     v += 2 * n;
+                    if obj.len() > MAX_OBJ {
+                        return Err("the 3D file would be too large; export fewer features".into());
+                    }
                 }
             }
             Some(Geometry::Line(parts)) => {
@@ -578,7 +628,8 @@ fn obj_text(s: &Session, p: &Value) -> Result<String, String> {
                     Geometry::MultiPoint(c) => c.clone(),
                     _ => Vec::new(),
                 };
-                let r = (base_h * 0.05).max(1.0);
+                // Each point's cube is a twentieth as wide as it is tall.
+                let r = (h * 0.05).max(1.0);
                 for c in pts {
                     let (x, y) = xy(c);
                     for (dx, dz) in [(-r, -r), (r, -r), (r, r), (-r, r)] {
@@ -591,6 +642,9 @@ fn obj_text(s: &Session, p: &Value) -> Result<String, String> {
                         obj.push_str(&format!("f {} {} {} {}\n", v + a, v + b2, v + c2, v + d));
                     }
                     v += 8;
+                }
+                if obj.len() > MAX_OBJ {
+                    return Err("the 3D file would be too large; export fewer features".into());
                 }
             }
             None => {}
