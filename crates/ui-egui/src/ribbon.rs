@@ -87,30 +87,32 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             let r = ui.max_rect();
             let full = Rect::from_min_max(pos2(r.min.x - 8.0, r.max.y + 3.0), pos2(r.max.x + 8.0, r.max.y + 4.0));
             ui.painter().rect_filled(full, 0.0, t.border);
-            egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
-                    let tab = app.ui.tab.clone();
-                    match tab.as_str() {
-                        t if t.starts_with("plugin:") => plugin_tab(app, ui, t.trim_start_matches("plugin:")),
-                        "Insert" => insert_tab(app, ui),
-                        "Analysis" => analysis_tab(app, ui),
-                        "View" => view_tab(app, ui),
-                        "Edit" => edit_tab(app, ui),
-                        "Imagery" => imagery_tab(app, ui),
-                        "Share" => share_tab(app, ui),
-                        "Plugins" => plugins_tab(app, ui),
-                        "Help" => help_tab(app, ui),
-                        "Feature Layer" => feature_layer_tab(app, ui),
-                        "Labeling" => labeling_tab(app, ui),
-                        "Data" => data_tab(app, ui),
-                        "Raster Layer" => raster_layer_tab(app, ui),
-                        "Raster Data" => raster_data_tab(app, ui),
-                        "Layout" => layout_tab(app, ui),
-                        _ => map_tab(app, ui),
-                    }
+            let scroll =
+                egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
+                        let tab = app.ui.tab.clone();
+                        match tab.as_str() {
+                            t if t.starts_with("plugin:") => plugin_tab(app, ui, t.trim_start_matches("plugin:")),
+                            "Insert" => insert_tab(app, ui),
+                            "Analysis" => analysis_tab(app, ui),
+                            "View" => view_tab(app, ui),
+                            "Edit" => edit_tab(app, ui),
+                            "Imagery" => imagery_tab(app, ui),
+                            "Share" => share_tab(app, ui),
+                            "Plugins" => plugins_tab(app, ui),
+                            "Help" => help_tab(app, ui),
+                            "Feature Layer" => feature_layer_tab(app, ui),
+                            "Labeling" => labeling_tab(app, ui),
+                            "Data" => data_tab(app, ui),
+                            "Raster Layer" => raster_layer_tab(app, ui),
+                            "Raster Data" => raster_data_tab(app, ui),
+                            "Layout" => layout_tab(app, ui),
+                            _ => map_tab(app, ui),
+                        }
+                    });
                 });
-            });
+            scroll_buttons(ui, &t, scroll);
         });
     if peek_started {
         let pos = ui.input(|i| i.pointer.interact_pos());
@@ -118,6 +120,44 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         if !inside {
             app.ui.ribbon_peek = false;
         }
+    }
+}
+
+/// Arrow buttons at the ribbon's edges when its groups are wider than the window: the scroll
+/// bar is hidden (it would cover the group labels) and the wheel alone is undiscoverable.
+fn scroll_buttons(ui: &mut Ui, t: &Tokens, scroll: egui::scroll_area::ScrollAreaOutput<()>) {
+    let view = scroll.inner_rect;
+    let max = (scroll.content_size.x - view.width()).max(0.0);
+    if max < 1.0 {
+        return;
+    }
+    let mut state = scroll.state;
+    let offset = state.offset.x;
+    let step = (view.width() * 0.6).max(120.0);
+    let mut moved = false;
+    for (left, show) in [(true, offset > 0.5), (false, offset < max - 0.5)] {
+        if !show {
+            continue;
+        }
+        let x = if left { view.min.x } else { view.max.x - 18.0 };
+        let r = Rect::from_min_size(pos2(x, view.min.y), vec2(18.0, view.height()));
+        let resp = ui.interact(r, scroll.id.with(left), Sense::click());
+        let fill = if resp.hovered() { t.hover } else { t.ribbon };
+        ui.painter().rect_filled(r, CornerRadius::same(4), fill);
+        ui.painter().rect_stroke(r, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+        let icon = if left { "chevron_left" } else { "chevron_right" };
+        let ir = Rect::from_center_size(r.center(), vec2(16.0, 16.0));
+        icons::paint(ui.painter(), ir, icon, t.text_dim, t.accent);
+        let tip = if left { tl!("Scroll the ribbon left") } else { tl!("Scroll the ribbon right") };
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
+        if resp.on_hover_text(tip).clicked() {
+            state.offset.x = if left { (offset - step).max(0.0) } else { (offset + step).min(max) };
+            moved = true;
+        }
+    }
+    if moved {
+        state.store(ui.ctx(), scroll.id);
+        ui.ctx().request_repaint();
     }
 }
 

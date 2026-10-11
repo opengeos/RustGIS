@@ -611,6 +611,7 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
         }
         "dropdown" => p.fill(&[(7.0, 9.5), (17.0, 9.5), (12.0, 15.0)], ink),
         "chevron_right" => p.line(&[(9.0, 6.0), (15.0, 12.0), (9.0, 18.0)], 1.8, ink),
+        "chevron_left" => p.line(&[(15.0, 6.0), (9.0, 12.0), (15.0, 18.0)], 1.8, ink),
         "chevron_down" => p.line(&[(6.0, 9.0), (12.0, 15.0), (18.0, 9.0)], 1.8, ink),
         "globe_lang" => {
             p.globe(9.5, 9.5, 7.0);
@@ -1013,6 +1014,7 @@ pub const ALL: &[&str] = &[
     "globe_lang",
     "dropdown",
     "chevron_right",
+    "chevron_left",
     "chevron_down",
     "run",
     "up",

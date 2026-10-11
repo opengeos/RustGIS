@@ -1,5 +1,6 @@
 //! Runs frames of the whole UI (no GPU) through every tab, pane, dialog and theme.
 
+use egui_kittest::kittest::Queryable;
 use rustgis_ui_egui::RustGisApp;
 use serde_json::json;
 
@@ -77,8 +78,30 @@ fn every_tab_pane_and_dialog_renders() {
 static PLUGINS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
+fn a_ribbon_wider_than_the_window_scrolls_with_arrow_buttons() {
+    let mut h = harness();
+    h.set_size(egui::vec2(900.0, 600.0));
+    h.state_mut().ui.tab = "View".into();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(h.query_by_label("Scroll the ribbon left").is_none());
+    h.get_by_label("Scroll the ribbon right").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    let _ = h.get_by_label("Scroll the ribbon left");
+    // A window wide enough for every group shows no arrows.
+    h.set_size(egui::vec2(3000.0, 600.0));
+    h.state_mut().ui.tab = "Help".into();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(h.query_by_label("Scroll the ribbon right").is_none());
+}
+
+#[test]
 fn plugins_install_from_a_file_after_a_prompt() {
-    use egui_kittest::kittest::Queryable;
     let _turn = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("rustgis-ui-plugins-{}", std::process::id()));
     rustgis_ui_egui::rustgis_engine::plugins::store::set_dir(Some(dir.join("installed")));
@@ -130,7 +153,6 @@ fn plugins_install_from_a_file_after_a_prompt() {
 
 #[test]
 fn plugins_can_have_a_tab_of_their_own() {
-    use egui_kittest::kittest::Queryable;
     let _turn = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
     use rustgis_ui_egui::rustgis_engine::plugins as rp;
     let mut m: serde_json::Value = serde_json::from_str(&rp::testing::manifest("ui-tab", &[])).unwrap();
@@ -184,7 +206,6 @@ fn plugins_can_have_a_tab_of_their_own() {
 
 #[test]
 fn browse_lists_thousands_of_plugins_quickly() {
-    use egui_kittest::kittest::Queryable;
     use rustgis_ui_egui::rustgis_engine::plugins::registry;
     let _turn = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
     let sha = "a".repeat(64);

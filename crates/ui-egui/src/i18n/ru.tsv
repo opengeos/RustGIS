@@ -830,3 +830,5 @@ Zoom To World	Приблизить к миру
 {shown} of {total} plugins	Модулей: {shown} из {total}
 {total} plugins	Модулей: {total}
 ⌘K	⌘K
+Scroll the ribbon left	Прокрутить ленту влево
+Scroll the ribbon right	Прокрутить ленту вправо
