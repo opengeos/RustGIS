@@ -43,6 +43,10 @@ pub struct Image {
 
 /// The most images a sprite index lists.
 const MAX_IMAGES: usize = 10_000;
+/// The largest side of one image (icons and patterns are tens of pixels).
+const MAX_SIDE: f64 = 1024.0;
+/// The most bytes of cut images kept.
+const MAX_CUT_BYTES: usize = 32 << 20;
 
 impl Sprite {
     /// Reads a sprite from its index and picture.
@@ -55,7 +59,9 @@ impl Sprite {
             .take(MAX_IMAGES)
             .filter_map(|(name, v)| {
                 let (x, y, w, h) = (num(v, "x")?, num(v, "y")?, num(v, "width")?, num(v, "height")?);
-                if [x, y, w, h].iter().any(|n| !(n.is_finite() && *n >= 0.0 && *n <= 16_384.0)) || w < 1.0 || h < 1.0 {
+                if [x, y].iter().any(|n| !(n.is_finite() && *n >= 0.0 && *n <= 16_384.0))
+                    || ![w, h].iter().all(|n| n.is_finite() && *n >= 1.0 && *n <= MAX_SIDE)
+                {
                     return None;
                 }
                 let ratio = num(v, "pixelRatio").filter(|r| r.is_finite() && *r > 0.0 && *r <= 8.0).unwrap_or(1.0) as f32;
@@ -80,11 +86,10 @@ impl Sprite {
     pub fn image(&self, name: &str, color: Option<Rgba>) -> Option<Image> {
         let (key, e) = self.entry(name)?;
         let color = e.sdf.then(|| color.unwrap_or([0, 0, 0, 255]));
-        let mut cut = self.cut.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(p) = cut.get(key).and_then(|by_color| by_color.get(&color)) {
+        if let Some(p) = self.cut.lock().unwrap_or_else(|p| p.into_inner()).get(key).and_then(|by_color| by_color.get(&color)) {
             return Some(Image { pixmap: p.clone(), ratio: e.ratio });
         }
-        // Wholly inside the picture (cutting would otherwise clip a bad entry to a part).
+        // Cut outside the lock. Wholly inside the picture (cutting would otherwise clip a bad entry to a part).
         if e.x.checked_add(e.w)? > self.sheet.width() || e.y.checked_add(e.h)? > self.sheet.height() {
             return None;
         }
@@ -93,8 +98,11 @@ impl Sprite {
             sdf_fill(&mut p, c);
         }
         let p = Arc::new(p);
-        // Kept bounded: an SDF icon cut in many colours, or a style naming thousands of images.
-        if cut.values().map(HashMap::len).sum::<usize>() >= 4096 {
+        let mut cut = self.cut.lock().unwrap_or_else(|p| p.into_inner());
+        // Kept within a byte budget: an SDF icon cut in many colours, or a style naming
+        // thousands of images, starts the cache again rather than growing it.
+        let bytes: usize = cut.values().flat_map(HashMap::values).map(|p| p.data().len()).sum();
+        if bytes + p.data().len() > MAX_CUT_BYTES {
             cut.clear();
         }
         cut.entry(key.to_string()).or_default().insert(color, p.clone());
@@ -190,6 +198,7 @@ mod tests {
             "dot": {"x": 0, "y": 0, "width": 4, "height": 4, "pixelRatio": 2},
             "sdf": {"x": 4, "y": 0, "width": 4, "height": 4, "pixelRatio": 1, "sdf": true},
             "bad": {"x": 6, "y": 0, "width": 40, "height": 4},
+            "huge": {"x": 0, "y": 0, "width": 4096, "height": 4},
             "junk": {"x": -1}
         });
         let s = Sprite::new(&index, sheet());
@@ -198,6 +207,7 @@ mod tests {
         // Several sprites: `<id>:<name>`.
         assert!(s.image("base:dot", None).is_some());
         assert!(s.image("bad", None).is_none() && s.image("junk", None).is_none() && s.image("nope", None).is_none());
+        assert!(s.image("huge", None).is_none(), "over the largest side");
         // An SDF icon takes the colour asked for (full alpha is well inside the edge).
         let blue = s.image("sdf", Some([0, 0, 255, 255])).unwrap();
         let px = blue.pixmap.pixel(1, 1).unwrap();
