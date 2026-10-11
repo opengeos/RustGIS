@@ -458,7 +458,8 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
                     .layer_by_name(nl.unwrap_or(layer))
                     .filter(|l| !l.is_raster())
                     .ok_or_else(|| format!("no feature layer '{}' in {map}", nl.unwrap_or(layer)))?;
-                let field = match nf {
+                // Only charts have a field.
+                let field = match nf.filter(|_| matches!(e.kind, ElementKind::Chart { .. })) {
                     Some(fl) => Some(
                         target
                             .dataset
@@ -721,7 +722,12 @@ pub fn layout_bytes(s: &mut Session, li: usize, pdf: bool, dpi: f64, all: bool) 
     let current = saved.series.as_ref().map_or(0, |sr| sr.page);
     // Every page of a map series (PDF), or just the layout as it is now.
     let pages: Vec<usize> = match (&names, all && pdf) {
-        (Some(n), true) => (0..n.len().min(500)).collect(),
+        (Some(n), true) => {
+            if n.len() > 500 {
+                s.notify(format!("The map series has {} pages; the PDF holds the first 500", n.len()), false);
+            }
+            (0..n.len().min(500)).collect()
+        }
         _ => vec![current],
     };
     let stepping = names.is_some() && pages.len() > 1;

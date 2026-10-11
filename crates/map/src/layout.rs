@@ -243,6 +243,8 @@ impl Layout {
     pub fn add(&mut self, name: impl Into<String>, (x, y, w, h): (f64, f64, f64, f64), kind: ElementKind) -> u32 {
         let id = self.next_id.max(self.elements.iter().map(|e| e.id).max().unwrap_or(0).saturating_add(1));
         self.next_id = id.saturating_add(1);
+        // Templates on tiny pages can compute sizes below a millimetre.
+        let (w, h) = (finite_or(w, 1.0).clamp(1.0, 5000.0), finite_or(h, 1.0).clamp(1.0, 5000.0));
         self.elements.push(Element { id, name: name.into(), x, y, w, h, visible: true, kind });
         id
     }
