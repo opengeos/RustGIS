@@ -14,6 +14,7 @@ pub mod project;
 pub mod raster;
 pub mod select;
 pub mod share;
+pub mod workflows;
 
 use serde_json::Value;
 
@@ -33,6 +34,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(layout::commands());
     v.extend(items::commands());
     v.extend(design::commands());
+    v.extend(workflows::commands());
     v.extend(gp::commands());
     v.extend(share::commands());
     v

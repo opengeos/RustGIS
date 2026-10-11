@@ -144,7 +144,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 174, "coverage fell to {done}");
+    assert!(done >= 196, "coverage fell to {done}");
 }
 
 #[test]
@@ -1048,4 +1048,136 @@ fn modify_tools_snapping_topology_relationships_and_elevation() {
     assert!(s.run("edit.elevation", &json!({"mode": "surface", "surface": "Cities"})).is_err(), "not a raster");
     let tools = s.run("edit.tools", &Value::Null).unwrap();
     assert!(tools.as_array().unwrap().len() >= 9);
+}
+
+/// A 40×40 lon/lat DEM near (10°E, 45°N): a hill in the middle, with a wall to its east.
+fn dem_b64() -> String {
+    use base64::Engine;
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let gt = GeoTransform { origin_x: 10.0, origin_y: 45.04, pixel_width: 0.001, pixel_height: -0.001 };
+    let z: Vec<f32> = (0..1600)
+        .map(|i| {
+            let (c, r) = ((i % 40) as f32 - 20.0, (i / 40) as f32 - 20.0);
+            let hill = 100.0 * (-(c * c + r * r) / 60.0).exp();
+            if i % 40 == 30 { 400.0 } else { 200.0 + hill }
+        })
+        .collect();
+    let r = Raster::new("dem", 40, 40, vec![z], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap())
+}
+
+#[test]
+fn analysis_workflows_models_scripts_and_raster_functions() {
+    let mut s = world();
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
+    // Raster functions and a chain.
+    for (func, extra) in [
+        ("slope", json!({})),
+        ("aspect", json!({})),
+        ("hillshade", json!({"azimuth": 300})),
+        ("threshold", json!({"value": 250})),
+        ("bandMath", json!({"expression": "b1 * 2 - 100"})),
+    ] {
+        let mut p = json!({"layer": dem, "function": func});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        s.run("raster.function", &p).unwrap_or_else(|e| panic!("{func}: {e}"));
+    }
+    assert!(s.run("raster.function", &json!({"layer": dem, "function": "warp"})).is_err());
+    assert!(s.run("raster.function", &json!({"layer": dem, "function": "bandMath", "expression": "b2"})).is_err());
+    let r = s
+        .run(
+            "raster.functionChain",
+            &json!({"layer": dem, "steps": [{"function": "slope"}, {"function": "threshold", "value": 10}], "name": "Steep"}),
+        )
+        .unwrap();
+    let steep = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+    assert_eq!(steep.name, "Steep");
+    let data = steep.raster.as_ref().unwrap().data.as_ref().unwrap();
+    assert!(data.bands[0].stats.max == 1.0 && data.bands[0].stats.min == 0.0);
+    // Rasters made by functions save with the project.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let back = crate::Project::from_json(&text).unwrap();
+    assert!(back.map().layer_by_name("Steep").unwrap().raster.as_ref().unwrap().data.is_some());
+    // Suitability: high and flat.
+    let slope_name = format!("{dem}_slope");
+    let r = s
+        .run(
+            "analysis.suitability",
+            &json!({"criteria": [
+        {"layer": dem, "ranges": [[0, 250, 1], [250, 1000, 10]], "weight": 2},
+        {"layer": slope_name, "ranges": [[0, 5, 10], [5, 90, 1]], "weight": 1}]}),
+        )
+        .unwrap();
+    assert!(r["layer"].as_u64().is_some());
+    // Viewshed and line of sight: the wall at column 30 hides what's beyond it.
+    // On the flat northern edge: everything west of the wall is in view.
+    let v = s.run("analysis.viewshed", &json!({"layer": dem, "lon": 10.0055, "lat": 45.0395, "height": 2})).unwrap();
+    assert!(v["visibleCells"].as_u64().unwrap() > 100, "{v}");
+    let los = s.run("analysis.lineOfSight", &json!({"layer": dem, "from": [10.0205, 45.0395], "to": [10.0355, 45.0395]})).unwrap();
+    assert_eq!(los["visible"], false);
+    let los = s.run("analysis.lineOfSight", &json!({"layer": dem, "from": [10.0205, 45.0395], "to": [10.0055, 45.0395]})).unwrap();
+    assert_eq!(los["visible"], true);
+    // IDW of city populations, with an environment extent and cell size.
+    s.run("gp.env", &json!({"extent": [-10, 35, 30, 60], "cellSize": 0.5})).unwrap();
+    let r = s.run("analysis.interpolate", &json!({"layer": "Cities", "field": "pop_max"})).unwrap();
+    let idw = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    assert_eq!((idw.width, idw.height), (80, 50));
+    // The environment extent limits tools to the features meeting it.
+    s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Cities", "distance": 10, "output": "Europe buffers"}})).unwrap();
+    let europe = s.map().layer_by_name("Europe buffers").unwrap().dataset.features.len();
+    let all = s.map().layer_by_name("Cities").unwrap().dataset.features.len();
+    assert!(europe > 10 && europe < all / 2, "{europe} of {all}");
+    s.run("gp.env", &json!({"extent": null, "cellSize": null})).unwrap();
+    // Network route along the rivers: two points on the same river.
+    let rivers = s.map().layer_by_name("Rivers").unwrap();
+    let (a, b2) = match rivers.dataset.features.iter().filter_map(|f| f.geometry.as_ref()).find_map(|g| match g {
+        rustgis_data::Geometry::Line(p) if p[0].len() > 10 => Some((p[0][0], p[0][p[0].len() - 1])),
+        _ => None,
+    }) {
+        Some(x) => x,
+        None => panic!("no river"),
+    };
+    let r = s.run("analysis.route", &json!({"layer": "Rivers", "from": [a.x, a.y], "to": [b2.x, b2.y]})).unwrap();
+    assert!(r["lengthKm"].as_f64().unwrap() > 10.0, "{r}");
+    // Neighbourhood, simulation, profile, exploration, similarity, conversion.
+    let n = s
+        .run("analysis.neighborhood", &json!({"lon": 2.35, "lat": 48.85, "radius": 300000, "layers": ["Cities"], "select": true}))
+        .unwrap();
+    assert!(n["layers"][0]["count"].as_u64().unwrap() >= 2);
+    s.run("select.byAttributes", &json!({"layer": "Countries", "where": "name = 'France'"})).unwrap();
+    let sim = s.run("analysis.simulate", &json!({"layer": "Countries", "count": 20, "seed": 3})).unwrap();
+    assert_eq!(sim["points"], 20);
+    s.run("select.clear", &Value::Null).unwrap();
+    let prof = s.run("data.profile", &json!({"layer": "Countries"})).unwrap();
+    assert!(prof["fields"].as_array().unwrap().iter().any(|f| f["field"] == "pop_est" && f["min"].as_f64().is_some()));
+    let ex = s.run("data.explore", &json!({"layer": "Countries", "fields": ["pop_est", "gdp_md"]})).unwrap();
+    assert!(ex["correlation"][0][1].as_f64().unwrap() > 0.3, "population and GDP correlate");
+    let fr = s.map().layer_by_name("Countries").unwrap().dataset.features.iter().position(|_| true).unwrap();
+    let sm = s.run("data.similar", &json!({"layer": "Countries", "row": fr, "fields": ["pop_est", "gdp_md"], "count": 3})).unwrap();
+    assert_eq!(sm["similar"].as_array().unwrap().len(), 3);
+    for fmt in ["kml", "gpx", "wkt", "geojson", "csv"] {
+        let t = s.run("data.convert", &json!({"layer": "Cities", "format": fmt})).unwrap();
+        assert!(t["text"].as_str().unwrap().len() > 1000, "{fmt}");
+    }
+    // Models chain tools; scripts run commands.
+    s.run(
+        "model.new",
+        &json!({"name": "Buffer then dissolve", "steps": [
+        {"tool": "buffer", "params": {"input": "Cities", "distance": 50}},
+        {"tool": "dissolve", "params": {"input": "%1"}}]}),
+    )
+    .unwrap();
+    let r = s.run("model.run", &json!({"name": "Buffer then dissolve"})).unwrap();
+    assert_eq!(r["ran"].as_array().unwrap().len(), 2);
+    assert!(s.run("model.new", &json!({"steps": [{"tool": "nope", "params": {}}]})).is_err());
+    let m = s.run("model.new", &json!({"name": "Replay", "fromHistory": true})).unwrap();
+    assert!(m["steps"].as_u64().unwrap() >= 2);
+    let dissolve = s.project.models.last().unwrap().steps.iter().find(|st| st.tool == "dissolve").unwrap();
+    assert!(dissolve.params["input"].as_str().unwrap().starts_with('%'), "history inputs wire to earlier steps");
+    let r = s.run("script.run", &json!({"script": "# zoom then select\nmap.goToXY {\"lon\": 2, \"lat\": 48, \"scale\": 5000000}\nselect.byAttributes {\"layer\": \"Cities\", \"where\": \"pop_max > 1000000\"}"})).unwrap();
+    assert_eq!(r["ran"].as_array().unwrap().len(), 2);
+    assert!(s.run("script.run", &json!({"script": "no.such {}"})).is_err());
+    let g = s.run("gp.gallery", &json!({"kind": "raster"})).unwrap();
+    assert!(g.as_array().unwrap().iter().any(|t| t["id"] == "raster.function"));
 }

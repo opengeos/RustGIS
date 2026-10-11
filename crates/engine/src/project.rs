@@ -36,6 +36,38 @@ pub struct Project {
     /// Step-by-step tasks: guided command sequences.
     #[serde(default)]
     pub tasks: Vec<Task>,
+    /// Geoprocessing environment settings.
+    #[serde(default)]
+    pub gp_env: GpEnvironment,
+    /// Models: chains of tools, each step able to use an earlier step's output.
+    #[serde(default)]
+    pub models: Vec<Model>,
+}
+
+/// Settings every geoprocessing run honours.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct GpEnvironment {
+    /// Tools only process features meeting this longitude/latitude extent (when no features are
+    /// selected).
+    #[serde(default)]
+    pub extent: Option<rustgis_geom::Extent>,
+    /// The cell size (degrees) of rasters tools create, when they don't say.
+    #[serde(default)]
+    pub cell_size: Option<f64>,
+}
+
+/// A model: geoprocessing steps run in order. A parameter value `%n` stands for the output layer
+/// of step n (1-based).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Model {
+    pub name: String,
+    pub steps: Vec<ModelStep>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModelStep {
+    pub tool: String,
+    pub params: serde_json::Value,
 }
 
 /// A saved style: a layer's symbology and labels.
@@ -91,6 +123,8 @@ impl Project {
             folders: Vec::new(),
             styles: Vec::new(),
             tasks: Vec::new(),
+            gp_env: GpEnvironment::default(),
+            models: Vec::new(),
         }
     }
 

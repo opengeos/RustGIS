@@ -641,6 +641,117 @@ fn analysis_tab(app: &mut RustGisApp, ui: &mut Ui) {
             app.ui.right == Some(RightPane::Geoprocessing),
             false,
         );
+        big(
+            ui,
+            app,
+            "modelbuilder",
+            "Model\nBuilder",
+            "Chain tools into a model; build one from your history.",
+            "ui.pane.workflows",
+            json!({"section": "models"}),
+            false,
+            false,
+        );
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "python",
+                "Script",
+                "Run commands from text, one per line.",
+                "ui.pane.script",
+                Value::Null,
+                app.ui.right == Some(RightPane::Script),
+            );
+            small(
+                ui,
+                app,
+                "environments",
+                "Environments",
+                "Limit where tools work, and the cell size of new rasters.",
+                "ui.pane.workflows",
+                json!({"section": "environments"}),
+                false,
+            );
+            small_menu(ui, app, "toolbox", "Ready To Use", "Everyday tools.", |ui, app| {
+                if let Ok(Value::Array(tools)) = app.session.run("gp.gallery", &json!({"kind": "ready"})) {
+                    for t in tools {
+                        let (id, name) = (t["id"].as_str().unwrap_or("").to_string(), t["name"].as_str().unwrap_or("").to_string());
+                        menu_item(ui, app, "tools", &name, "ui.gp.open", json!({"tool": id}));
+                    }
+                }
+            });
+        });
+    });
+    group(ui, "Portal", |ui| {
+        for (kind, icon, label, desc) in [
+            ("feature", "buffer", "Feature\nAnalysis", "Tools that analyse features."),
+            ("raster", "relief", "Raster\nAnalysis", "Tools that analyse rasters."),
+        ] {
+            big_menu(ui, app, icon, label, desc, |ui, app| {
+                if let Ok(Value::Array(tools)) = app.session.run("gp.gallery", &json!({"kind": kind})) {
+                    for t in tools {
+                        let (id, name, cmd) = (
+                            t["id"].as_str().unwrap_or("").to_string(),
+                            t["name"].as_str().unwrap_or("").to_string(),
+                            t["command"].as_str().unwrap_or(""),
+                        );
+                        if cmd == "gp.run" {
+                            menu_item(ui, app, "tools", &name, "ui.gp.open", json!({"tool": id}));
+                        } else {
+                            let section = match id.as_str() {
+                                "raster.function" => "rasterFunctions",
+                                "analysis.suitability" => "suitability",
+                                "analysis.viewshed" => "visibility",
+                                _ => "interpolate",
+                            };
+                            menu_item(ui, app, "relief", &name, "ui.pane.workflows", json!({"section": section}));
+                        }
+                    }
+                }
+            });
+        }
+    });
+    group(ui, "Workflows", |ui| {
+        big_menu(
+            ui,
+            app,
+            "geoprocessing",
+            "Workflows",
+            "Guided analysis: suitability, visibility, networks, interpolation and more.",
+            |ui, app| {
+                for (id, title) in crate::analysispane::SECTIONS
+                    .iter()
+                    .filter(|s| !matches!(s.0, "rasterFunctions" | "functionEditor" | "environments" | "models"))
+                {
+                    menu_item(ui, app, "geoprocessing", title, "ui.pane.workflows", json!({"section": id}));
+                }
+            },
+        );
+    });
+    group(ui, "Raster", |ui| {
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "relief",
+                "Raster Functions",
+                "Slope, aspect, hillshade, NDVI, band math, thresholds.",
+                "ui.pane.workflows",
+                json!({"section": "rasterFunctions"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "bands",
+                "Function Editor",
+                "Chain raster functions.",
+                "ui.pane.workflows",
+                json!({"section": "functionEditor"}),
+                false,
+            );
+        });
     });
     group(ui, "Tools", |ui| {
         let t = Tokens::get(ui.ctx());

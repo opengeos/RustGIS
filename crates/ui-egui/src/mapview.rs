@@ -460,6 +460,13 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             app.map.popup = None;
             return;
         };
+        // A workflow waiting for map points takes the click.
+        if let Some(pick) = &mut app.workflow.pick
+            && pick.points.len() < pick.needed
+        {
+            pick.points.push(c);
+            return;
+        }
         if app.map.split_mode {
             app.map.split_mode = false;
             let _ = app.run("edit.split", json!({"lon": c.x, "lat": c.y}));
@@ -650,6 +657,17 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
                 let r = Rect::from_center_size(sp, vec2(6.0, 6.0));
                 p.rect_filled(r, 0.0, Color32::WHITE);
                 p.rect_stroke(r, 0.0, Stroke::new(1.2, Color32::from_rgb(0x16, 0x9A, 0x5A)), egui::StrokeKind::Middle);
+            }
+        }
+    }
+    // Points picked for a workflow.
+    if let Some(pick) = &app.workflow.pick {
+        let pts = pick.points.clone();
+        for (i, c) in pts.iter().enumerate() {
+            if let Some(sp) = lonlat_to_screen(app, rect, *c) {
+                p.circle_filled(sp, 6.0, Color32::from_rgb(0xE5, 0x6A, 0x1A));
+                p.circle_stroke(sp, 6.0, Stroke::new(1.5, Color32::WHITE));
+                p.text(sp + vec2(9.0, -9.0), Align2::LEFT_BOTTOM, (i + 1).to_string(), semibold(11.0), Color32::from_rgb(0xE5, 0x6A, 0x1A));
             }
         }
     }

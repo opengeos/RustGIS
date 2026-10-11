@@ -157,7 +157,10 @@ pub fn commands() -> Vec<C> {
                     .gp_history
                     .iter()
                     .filter(|r| r.ok)
-                    .map(|r| TaskStep { title: r.tool.clone(), instructions: r.messages.first().cloned().unwrap_or_default(), command: "gp.run".into(), params: json!({"tool": r.tool, "params": r.params}) })
+                    .filter_map(|r| {
+                        let tool = super::gp::tool_id(&r.tool)?;
+                        Some(TaskStep { title: r.tool.clone(), instructions: r.messages.first().cloned().unwrap_or_default(), command: "gp.run".into(), params: json!({"tool": tool, "params": r.params}) })
+                    })
                     .collect(),
                 None => Vec::new(),
             };

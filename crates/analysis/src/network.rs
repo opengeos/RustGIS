@@ -1,0 +1,319 @@
+//! Vector workflows: shortest routes over a line network, random points, field profiles,
+//! attribute similarity and neighbourhood summaries.
+
+use std::collections::{BinaryHeap, HashMap};
+
+use rustgis_data::{Dataset, Geometry};
+use rustgis_geom::{Coord, haversine_m};
+
+/// A shortest route: its path, length in metres, cost, and the line rows it uses.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Route {
+    pub path: Vec<Coord>,
+    pub length_m: f64,
+    pub cost: f64,
+    pub rows: Vec<usize>,
+}
+
+#[derive(PartialEq)]
+struct State(f64, usize);
+impl Eq for State {}
+impl PartialOrd for State {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(o))
+    }
+}
+impl Ord for State {
+    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+        o.0.partial_cmp(&self.0).unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
+/// Nodes join where line vertices coincide (to about a centimetre).
+fn key(c: Coord) -> (i64, i64) {
+    ((c.x * 1e7).round() as i64, (c.y * 1e7).round() as i64)
+}
+
+/// The shortest route between two points over the lines of `rows`, joining where vertices
+/// coincide. Each edge costs its length times the row's `cost_field` value (1 when unset);
+/// `snap_m` is how far from the network the ends may be.
+pub fn shortest_route(
+    ds: &Dataset,
+    rows: &[usize],
+    from: Coord,
+    to: Coord,
+    cost_field: Option<usize>,
+    snap_m: f64,
+) -> Result<Route, String> {
+    let mut ids: HashMap<(i64, i64), usize> = HashMap::new();
+    let mut nodes: Vec<Coord> = Vec::new();
+    let mut adj: Vec<Vec<(usize, f64, f64, usize)>> = Vec::new(); // (to, cost, length, row)
+    let node = |c: Coord, ids: &mut HashMap<(i64, i64), usize>, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<(usize, f64, f64, usize)>>| {
+        *ids.entry(key(c)).or_insert_with(|| {
+            nodes.push(c);
+            adj.push(Vec::new());
+            nodes.len() - 1
+        })
+    };
+    for r in rows {
+        let Some(Geometry::Line(parts)) = ds.features.get(*r).and_then(|f| f.geometry.as_ref()) else { continue };
+        let weight = cost_field.and_then(|fi| ds.value(*r, fi).as_f64()).filter(|w| w.is_finite() && *w > 0.0).unwrap_or(1.0);
+        for part in parts {
+            for w in part.windows(2) {
+                let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
+                let (ia, ib) = (node(*a, &mut ids, &mut nodes, &mut adj), node(*b, &mut ids, &mut nodes, &mut adj));
+                let len = haversine_m(*a, *b);
+                if let Some(v) = adj.get_mut(ia) {
+                    v.push((ib, len * weight, len, *r));
+                }
+                if let Some(v) = adj.get_mut(ib) {
+                    v.push((ia, len * weight, len, *r));
+                }
+            }
+        }
+        if nodes.len() > 5_000_000 {
+            return Err("the network is too large".into());
+        }
+    }
+    let nearest = |p: Coord| {
+        nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (i, haversine_m(*n, p)))
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    };
+    let (s, ds_) = nearest(from).ok_or("the layer has no lines")?;
+    let (t, dt) = nearest(to).ok_or("the layer has no lines")?;
+    if ds_ > snap_m || dt > snap_m {
+        return Err(format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)));
+    }
+    let n = nodes.len();
+    let mut dist = vec![f64::INFINITY; n];
+    let mut prev: Vec<Option<(usize, f64, usize)>> = vec![None; n];
+    let mut heap = BinaryHeap::new();
+    if let Some(d) = dist.get_mut(s) {
+        *d = 0.0;
+    }
+    heap.push(State(0.0, s));
+    while let Some(State(d, u)) = heap.pop() {
+        if u == t {
+            break;
+        }
+        if d > dist.get(u).copied().unwrap_or(f64::INFINITY) {
+            continue;
+        }
+        for &(v, c, len, row) in adj.get(u).map(Vec::as_slice).unwrap_or(&[]) {
+            let nd = d + c;
+            if nd < dist.get(v).copied().unwrap_or(f64::INFINITY) {
+                if let Some(x) = dist.get_mut(v) {
+                    *x = nd;
+                }
+                if let Some(x) = prev.get_mut(v) {
+                    *x = Some((u, len, row));
+                }
+                heap.push(State(nd, v));
+            }
+        }
+    }
+    let cost = dist.get(t).copied().unwrap_or(f64::INFINITY);
+    if !cost.is_finite() {
+        return Err("the two points aren't connected by the network".into());
+    }
+    let mut path = Vec::new();
+    let mut length = 0.0;
+    let mut used = Vec::new();
+    let mut at = t;
+    path.push(nodes.get(t).copied().unwrap_or(to));
+    while let Some(Some((p, len, row))) = prev.get(at) {
+        path.push(nodes.get(*p).copied().unwrap_or(from));
+        length += len;
+        if used.last() != Some(row) {
+            used.push(*row);
+        }
+        at = *p;
+    }
+    path.reverse();
+    used.reverse();
+    used.dedup();
+    Ok(Route { path, length_m: length, cost, rows: used })
+}
+
+/// Points spread at random (but reproducibly, from `seed`) inside polygons: `per` in each.
+pub fn random_points(ds: &Dataset, rows: &[usize], per: usize, seed: u64) -> Vec<(usize, Coord)> {
+    let mut state = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407) | 1;
+    let mut rnd = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let mut out = Vec::new();
+    for r in rows {
+        let Some(Geometry::Polygon(polys)) = ds.features.get(*r).and_then(|f| f.geometry.as_ref()) else { continue };
+        let e = ds.features.get(*r).and_then(|f| f.geometry.as_ref()).map(|g| g.extent()).unwrap_or_default();
+        let mut placed = 0;
+        let mut tries = 0;
+        while placed < per && tries < per * 200 {
+            tries += 1;
+            let c = Coord::new(e.min_x + rnd() * e.width(), e.min_y + rnd() * e.height());
+            if polys.iter().any(|rings| rustgis_data::geometry::polygon_contains(rings, c)) {
+                out.push((*r, c));
+                placed += 1;
+            }
+        }
+    }
+    out
+}
+
+/// A summary of one field: (name, type, count, nulls, distinct, min, max, mean, top values).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldProfile {
+    pub name: String,
+    pub ty: String,
+    pub count: usize,
+    pub nulls: usize,
+    pub distinct: usize,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub mean: Option<f64>,
+    pub top: Vec<(String, usize)>,
+}
+
+/// Profiles every field of a dataset.
+pub fn profile_fields(ds: &Dataset) -> Vec<FieldProfile> {
+    ds.fields
+        .iter()
+        .enumerate()
+        .map(|(fi, f)| {
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            let (mut nulls, mut sum, mut n_num) = (0usize, 0.0, 0usize);
+            let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
+            for r in 0..ds.features.len() {
+                let v = ds.value(r, fi);
+                if v.is_null() {
+                    nulls += 1;
+                    continue;
+                }
+                if let Some(x) = v.as_f64().filter(|_| f.ty.is_numeric()) {
+                    sum += x;
+                    n_num += 1;
+                    min = min.min(x);
+                    max = max.max(x);
+                }
+                if counts.len() < 100_000 {
+                    *counts.entry(v.to_string()).or_insert(0) += 1;
+                }
+            }
+            let mut top: Vec<(String, usize)> = counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            top.truncate(5);
+            FieldProfile {
+                name: f.name.clone(),
+                ty: f.ty.label().to_string(),
+                count: ds.features.len(),
+                nulls,
+                distinct: counts.len(),
+                min: (n_num > 0).then_some(min),
+                max: (n_num > 0).then_some(max),
+                mean: (n_num > 0).then(|| sum / n_num as f64),
+                top,
+            }
+        })
+        .collect()
+}
+
+/// Rows ranked by how close their numeric attributes are to a row's (z-scored Euclidean
+/// distance over `fields`), nearest first, excluding the row itself.
+pub fn similar(ds: &Dataset, row: usize, fields: &[usize], n: usize) -> Vec<(usize, f64)> {
+    let stats: Vec<(f64, f64)> = fields
+        .iter()
+        .map(|fi| {
+            let vals: Vec<f64> = (0..ds.features.len()).filter_map(|r| ds.value(r, *fi).as_f64()).filter(|v| v.is_finite()).collect();
+            let m = vals.iter().sum::<f64>() / vals.len().max(1) as f64;
+            let sd = (vals.iter().map(|v| (v - m).powi(2)).sum::<f64>() / vals.len().max(1) as f64).sqrt();
+            (m, if sd > 0.0 { sd } else { 1.0 })
+        })
+        .collect();
+    let vec_of = |r: usize| -> Option<Vec<f64>> {
+        fields.iter().zip(&stats).map(|(fi, (m, sd))| ds.value(r, *fi).as_f64().filter(|v| v.is_finite()).map(|v| (v - m) / sd)).collect()
+    };
+    let Some(target) = vec_of(row) else { return Vec::new() };
+    let mut out: Vec<(usize, f64)> = (0..ds.features.len())
+        .filter(|r| *r != row)
+        .filter_map(|r| vec_of(r).map(|v| (r, v.iter().zip(&target).map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt())))
+        .collect();
+    out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(n);
+    out
+}
+
+/// Rows of `ds` whose geometry comes within `radius_m` of a point, with their distances.
+pub fn within(ds: &Dataset, rows: &[usize], at: Coord, radius_m: f64) -> Vec<(usize, f64)> {
+    let m = rustgis_geom::lonlat_to_merc(at);
+    let k = 1.0 / at.y.to_radians().cos().max(0.01);
+    let mut out: Vec<(usize, f64)> = rows
+        .iter()
+        .filter_map(|r| {
+            let g = ds.features.get(*r)?.geometry.as_ref()?;
+            let pg = g.map_coords(&rustgis_geom::lonlat_to_merc);
+            let d = if pg.hit(m, 0.0) { 0.0 } else { pg_dist(&pg, m) / k };
+            (d <= radius_m).then_some((*r, d))
+        })
+        .collect();
+    out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    out
+}
+
+fn pg_dist(g: &Geometry, p: Coord) -> f64 {
+    let d2 = match g {
+        Geometry::Point(c) => (c.x - p.x).powi(2) + (c.y - p.y).powi(2),
+        Geometry::MultiPoint(v) => v.iter().map(|c| (c.x - p.x).powi(2) + (c.y - p.y).powi(2)).fold(f64::INFINITY, f64::min),
+        Geometry::Line(parts) => parts.iter().map(|l| rustgis_data::geometry::seg_dist2(l, p)).fold(f64::INFINITY, f64::min),
+        Geometry::Polygon(polys) => polys.iter().flatten().map(|r| rustgis_data::geometry::seg_dist2(r, p)).fold(f64::INFINITY, f64::min),
+    };
+    d2.sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustgis_data::{Field, FieldType, GeometryType, Value};
+
+    #[test]
+    fn routes_points_profiles_and_similarity() {
+        // A square of roads with a slow diagonal.
+        let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![Field::new("cost", FieldType::Double)]);
+        let l = |a: (f64, f64), b: (f64, f64)| Some(Geometry::Line(vec![vec![Coord::new(a.0, a.1), Coord::new(b.0, b.1)]]));
+        ds.push(l((0.0, 0.0), (1.0, 0.0)), vec![Value::Float(1.0)]);
+        ds.push(l((1.0, 0.0), (1.0, 1.0)), vec![Value::Float(1.0)]);
+        ds.push(l((0.0, 0.0), (1.0, 1.0)), vec![Value::Float(5.0)]);
+        let rows = [0, 1, 2];
+        let short = shortest_route(&ds, &rows, Coord::new(0.0, 0.0), Coord::new(1.0, 1.0), None, 1000.0).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(short.rows, vec![2], "by length the diagonal wins");
+        let cheap =
+            shortest_route(&ds, &rows, Coord::new(0.0, 0.0), Coord::new(1.0, 1.0), Some(0), 1000.0).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(cheap.rows, vec![0, 1], "by cost the two sides win");
+        assert!(shortest_route(&ds, &rows, Coord::new(5.0, 5.0), Coord::new(1.0, 1.0), None, 1000.0).is_err());
+        let mut poly = Dataset::new("p", GeometryType::Polygon, vec![]);
+        poly.push(
+            Some(Geometry::Polygon(vec![vec![vec![
+                Coord::new(0.0, 0.0),
+                Coord::new(1.0, 0.0),
+                Coord::new(1.0, 1.0),
+                Coord::new(0.0, 1.0),
+                Coord::new(0.0, 0.0),
+            ]]])),
+            vec![],
+        );
+        let pts = random_points(&poly, &[0], 25, 7);
+        assert_eq!(pts.len(), 25);
+        assert!(pts.iter().all(|(_, c)| c.x > 0.0 && c.x < 1.0 && c.y > 0.0 && c.y < 1.0));
+        assert_eq!(random_points(&poly, &[0], 25, 7), pts, "reproducible");
+        let p = profile_fields(&ds);
+        assert_eq!((p[0].min, p[0].max, p[0].distinct), (Some(1.0), Some(5.0), 2));
+        let sim = similar(&ds, 0, &[0], 2);
+        assert_eq!(sim[0].0, 1);
+        let near = within(&ds, &rows, Coord::new(0.5, 0.001), 500.0);
+        assert_eq!(near.first().map(|x| x.0), Some(0));
+    }
+}

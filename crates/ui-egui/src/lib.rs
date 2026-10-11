@@ -8,6 +8,7 @@
 
 #[macro_use]
 pub mod i18n;
+mod analysispane;
 mod backstage;
 mod chrome;
 mod dialogs;
@@ -118,6 +119,8 @@ pub enum RightPane {
     Details,
     Editing,
     Design,
+    Workflows,
+    Script,
 }
 
 pub struct UiState {
@@ -186,6 +189,7 @@ pub struct RustGisApp {
     pub table: table::TableState,
     pub layout: layoutview::LayoutView,
     pub forms: editpanes::Forms,
+    pub workflow: analysispane::Workflow,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     sent_title: String,
@@ -219,6 +223,7 @@ impl RustGisApp {
             table: table::TableState::default(),
             layout: layoutview::LayoutView::default(),
             forms: editpanes::Forms::default(),
+            workflow: analysispane::Workflow::default(),
             fonts_frames: 0,
             applied_dark: None,
             sent_title: String::new(),
@@ -409,6 +414,11 @@ impl RustGisApp {
         }
     }
 
+    /// Offers bytes as a download (web).
+    pub(crate) fn download_bytes(&mut self, name: &str, bytes: Vec<u8>) {
+        self.download(name, bytes);
+    }
+
     /// Offers bytes as a download (web) and reports whether a download hook exists.
     fn download(&mut self, name: &str, bytes: Vec<u8>) -> bool {
         match &self.services.download {
@@ -475,6 +485,20 @@ impl RustGisApp {
             "ui.pane.details" => toggle_right(&mut self.ui, RightPane::Details),
             "ui.pane.editing" => toggle_right(&mut self.ui, RightPane::Editing),
             "ui.pane.design" => toggle_right(&mut self.ui, RightPane::Design),
+            "ui.pane.script" => toggle_right(&mut self.ui, RightPane::Script),
+            // Opens the Workflows pane at a section (staying open when switching sections).
+            "ui.pane.workflows" => {
+                let section = p.get("section").and_then(Value::as_str);
+                match section.and_then(|s| analysispane::SECTIONS.iter().find(|x| x.0 == s)) {
+                    Some((id, _)) => {
+                        self.workflow.section = id;
+                        self.workflow.result = None;
+                        self.workflow.error = None;
+                        self.ui.right = Some(RightPane::Workflows);
+                    }
+                    None => toggle_right(&mut self.ui, RightPane::Workflows),
+                }
+            }
             "ui.gp.open" => {
                 let tool = p.get("tool").and_then(Value::as_str).and_then(rustgis_engine::analysis::tool);
                 self.gp.open(tool.map(|t| t.id), &self.session);

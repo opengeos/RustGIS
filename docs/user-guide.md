@@ -297,6 +297,33 @@ a large raster or point cloud keeps the window busy until it finishes. In the we
 is started in the background and the result is added when it ends, but the tool itself runs
 in the page, so the page is busy while it computes.
 
+## Analysis workflows
+
+The Analysis tab's Workflows pane holds guided analyses. Where one needs points, it asks you to
+click them on the map:
+
+| Workflow | What it does |
+| --- | --- |
+| Raster Functions | Slope, aspect, hillshade, NDVI, band math (`(b4-b3)/(b4+b3)`), thresholds, resampling |
+| Function Editor | Chains raster functions, each on the previous output |
+| Suitability Modeler | Scores rasters 1–10 and adds them with weights |
+| Visibility Analysis | A viewshed from a point on an elevation raster |
+| Exploratory 3D Analysis | A line of sight between two points, split into seen and hidden parts |
+| Geostatistical Wizard | An IDW surface from point values |
+| Network Analysis | The shortest (or cheapest, by a cost field) route over a line layer |
+| Neighborhood Explorer | What lies within a distance of a point, with sums of numeric fields |
+| Simulation | Random points in polygons (a fixed number, or from a field × rate) |
+| Data Engineering | Counts, nulls, distinct values, min, max and mean of every field |
+| Exploratory Analysis | Histograms and correlations of numeric fields |
+| Embeddings | The features most like the selected one, by their numeric attributes |
+| Data Interop | KML, GPX, CSV with WKT, GeoJSON or CSV |
+
+Rasters these make are kept in the project. **Environments** limit tools to the map view, the full
+extent or everywhere, and set the cell size of new rasters. **ModelBuilder** chains tools into
+models (a parameter `%1` is step 1's output), and New Model From History turns the
+geoprocessing you've run into a model. The **Script** pane runs commands from text, one per line
+(`id {json}`).
+
 ## Keyboard shortcuts
 
 | Keys | Action |

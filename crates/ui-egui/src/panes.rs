@@ -39,6 +39,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 RightPane::Details => ("Details", "ui.pane.details"),
                 RightPane::Editing => ("Editing", "ui.pane.editing"),
                 RightPane::Design => ("Data Design", "ui.pane.design"),
+                RightPane::Workflows => ("Workflows", "ui.pane.workflows"),
+                RightPane::Script => ("Script", "ui.pane.script"),
             };
             pane_header(app, ui, tl!(title), close, &t);
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -49,6 +51,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     RightPane::Details => details(app, ui, &t),
                     RightPane::Editing => crate::editpanes::editing(app, ui, &t),
                     RightPane::Design => crate::editpanes::design(app, ui, &t),
+                    RightPane::Workflows => crate::analysispane::workflows(app, ui, &t),
+                    RightPane::Script => crate::analysispane::script(app, ui, &t),
                 });
             });
         });

@@ -1,0 +1,503 @@
+//! The Workflows pane (the Analysis tab's workflows, raster functions and models) and the Script
+//! pane (commands run from text). Map clicks fill in points where a workflow needs them.
+
+use egui::{Ui, vec2};
+use serde_json::{Value, json};
+
+use crate::RustGisApp;
+use crate::theme::{Tokens, semibold};
+
+/// What the next map clicks are for, and the points so far.
+#[derive(Clone, Debug, Default)]
+pub struct Pick {
+    pub purpose: &'static str,
+    pub needed: usize,
+    pub points: Vec<rustgis_engine::geom::Coord>,
+}
+
+/// The Workflows pane's inputs and results.
+#[derive(Default)]
+pub struct Workflow {
+    pub section: &'static str,
+    pub layer: String,
+    pub layer2: String,
+    pub field: String,
+    pub number: String,
+    pub number2: String,
+    pub text: String,
+    pub function: String,
+    pub chain: Vec<String>,
+    pub format: String,
+    pub pick: Option<Pick>,
+    pub result: Option<Value>,
+    pub error: Option<String>,
+    pub script: String,
+    pub script_out: Vec<(String, bool)>,
+}
+
+fn heading(ui: &mut Ui, text: &str) {
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(tl!(text)).font(semibold(12.5)));
+    ui.add_space(2.0);
+}
+
+fn combo(ui: &mut Ui, id: &str, value: &mut String, options: &[String]) {
+    egui::ComboBox::from_id_salt(id).selected_text(value.as_str()).width(180.0).show_ui(ui, |ui| {
+        for o in options {
+            ui.selectable_value(value, o.clone(), o.as_str());
+        }
+    });
+}
+
+fn run(app: &mut RustGisApp, id: &str, p: Value) {
+    match app.run(id, p) {
+        Ok(v) => {
+            app.workflow.result = Some(v);
+            app.workflow.error = None;
+        }
+        Err(e) => {
+            app.workflow.error = Some(e);
+            app.workflow.result = None;
+        }
+    }
+    app.map.invalidate();
+}
+
+fn num(s: &str, d: f64) -> f64 {
+    s.trim().parse().unwrap_or(d)
+}
+
+/// The sections of the Workflows pane: (id, title).
+pub const SECTIONS: &[(&str, &str)] = &[
+    ("rasterFunctions", "Raster Functions"),
+    ("functionEditor", "Function Editor"),
+    ("suitability", "Suitability Modeler"),
+    ("visibility", "Visibility Analysis"),
+    ("lineOfSight", "Exploratory 3D Analysis"),
+    ("interpolate", "Geostatistical Wizard"),
+    ("network", "Network Analysis"),
+    ("neighborhood", "Neighborhood Explorer"),
+    ("simulation", "Simulation"),
+    ("profile", "Data Engineering"),
+    ("explore", "Exploratory Analysis"),
+    ("similar", "Embeddings"),
+    ("interop", "Data Interop"),
+    ("environments", "Environments"),
+    ("models", "ModelBuilder"),
+];
+
+/// Starts picking `needed` map points for a workflow.
+fn pick_button(app: &mut RustGisApp, ui: &mut Ui, purpose: &'static str, needed: usize, label: &str) {
+    let active = app.workflow.pick.as_ref().is_some_and(|p| p.purpose == purpose);
+    if ui.selectable_label(active, tl!(label)).clicked() {
+        app.workflow.pick = if active { None } else { Some(Pick { purpose, needed, points: Vec::new() }) };
+    }
+}
+
+/// The picked points once a pick is complete (and clears it).
+fn picked(app: &mut RustGisApp, purpose: &str) -> Option<Vec<rustgis_engine::geom::Coord>> {
+    let done = app.workflow.pick.as_ref().is_some_and(|p| p.purpose == purpose && p.points.len() >= p.needed);
+    if done { app.workflow.pick.take().map(|p| p.points) } else { None }
+}
+
+pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+    if app.workflow.section.is_empty() {
+        app.workflow.section = "rasterFunctions";
+    }
+    egui::ComboBox::from_id_salt("wf_section")
+        .selected_text(tl!(SECTIONS.iter().find(|s| s.0 == app.workflow.section).map_or("", |s| s.1)))
+        .width(ui.available_width() - 8.0)
+        .show_ui(ui, |ui| {
+            for (id, title) in SECTIONS {
+                if ui.selectable_label(app.workflow.section == *id, tl!(*title)).clicked() {
+                    app.workflow.section = id;
+                    app.workflow.result = None;
+                    app.workflow.error = None;
+                    app.workflow.pick = None;
+                }
+            }
+        });
+    let map = app.session.map();
+    let rasters: Vec<String> = map.layers.iter().filter(|l| l.is_raster()).map(|l| l.name.clone()).collect();
+    let features: Vec<String> = map.layers.iter().filter(|l| !l.is_raster() && !l.graphics).map(|l| l.name.clone()).collect();
+    let by_type = |g: rustgis_engine::data::GeometryType| -> Vec<String> {
+        map.layers.iter().filter(|l| !l.is_raster() && l.geometry_type() == g).map(|l| l.name.clone()).collect()
+    };
+    let (points, lines, polygons) = (
+        by_type(rustgis_engine::data::GeometryType::Point),
+        by_type(rustgis_engine::data::GeometryType::Polyline),
+        by_type(rustgis_engine::data::GeometryType::Polygon),
+    );
+    let fields_of = |n: &str, numeric: bool| -> Vec<String> {
+        map.layer_by_name(n)
+            .map(|l| l.dataset.fields.iter().filter(|f| !numeric || f.ty.is_numeric()).map(|f| f.name.clone()).collect())
+            .unwrap_or_default()
+    };
+    let numeric = fields_of(&app.workflow.layer, true);
+    let w = &mut app.workflow;
+    if w.layer.is_empty() || !(rasters.contains(&w.layer) || features.contains(&w.layer)) {
+        w.layer = match w.section {
+            "rasterFunctions" | "functionEditor" | "suitability" | "visibility" | "lineOfSight" => {
+                rasters.first().cloned().unwrap_or_default()
+            }
+            "interpolate" => points.first().cloned().unwrap_or_default(),
+            "network" => lines.first().cloned().unwrap_or_default(),
+            "simulation" => polygons.first().cloned().unwrap_or_default(),
+            _ => features.first().cloned().unwrap_or_default(),
+        };
+    }
+    ui.add_space(6.0);
+    match app.workflow.section {
+        "rasterFunctions" | "functionEditor" => {
+            heading(ui, if app.workflow.section == "rasterFunctions" { "Apply a function to a raster" } else { "Chain functions" });
+            combo(ui, "wf_r", &mut app.workflow.layer, &rasters);
+            let funcs: Vec<String> =
+                ["slope", "aspect", "hillshade", "ndvi", "bandMath", "threshold"].iter().map(|s| s.to_string()).collect();
+            if app.workflow.function.is_empty() {
+                app.workflow.function = "hillshade".into();
+            }
+            ui.horizontal(|ui| {
+                combo(ui, "wf_f", &mut app.workflow.function, &funcs);
+                match app.workflow.function.as_str() {
+                    "bandMath" => {
+                        ui.add(egui::TextEdit::singleline(&mut app.workflow.text).hint_text("(b4-b3)/(b4+b3)").desired_width(120.0));
+                    }
+                    "threshold" => {
+                        ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("value")).desired_width(70.0));
+                    }
+                    _ => {}
+                }
+            });
+            let step = json!({"function": app.workflow.function, "expression": app.workflow.text, "value": num(&app.workflow.number, 0.0)});
+            if app.workflow.section == "rasterFunctions" {
+                if ui.button(tl!("Apply")).clicked() {
+                    let mut p = step;
+                    p["layer"] = json!(app.workflow.layer);
+                    run(app, "raster.function", p);
+                }
+            } else {
+                ui.horizontal(|ui| {
+                    if ui.button(tl!("Add Step")).clicked() {
+                        app.workflow.chain.push(step.to_string());
+                    }
+                    if ui.button(tl!("Clear")).clicked() {
+                        app.workflow.chain.clear();
+                    }
+                });
+                for (i, st) in app.workflow.chain.iter().enumerate() {
+                    let v: Value = serde_json::from_str(st).unwrap_or_default();
+                    ui.label(egui::RichText::new(format!("{}. {}", i + 1, v["function"].as_str().unwrap_or(""))).small());
+                }
+                if !app.workflow.chain.is_empty() && ui.button(tl!("Run Chain")).clicked() {
+                    let steps: Vec<Value> = app.workflow.chain.iter().filter_map(|s| serde_json::from_str(s).ok()).collect();
+                    run(app, "raster.functionChain", json!({"layer": app.workflow.layer, "steps": steps}));
+                }
+            }
+        }
+        "suitability" => {
+            heading(ui, "Score two rasters 1–10 and weight them");
+            ui.label(egui::RichText::new(tl!("High values of the first raster and low values of the second score best.")).small().weak());
+            combo(ui, "wf_s1", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_s2", &mut app.workflow.layer2, &rasters);
+            ui.horizontal(|ui| {
+                ui.label(tl!("Weights"));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text("1").desired_width(40.0));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text("1").desired_width(40.0));
+            });
+            if ui.button(tl!("Run")).clicked() {
+                let crit = |app: &RustGisApp, n: &str, high: bool, w: f64| -> Value {
+                    let st = app
+                        .session
+                        .map()
+                        .layer_by_name(n)
+                        .and_then(|l| l.raster.as_ref())
+                        .and_then(|r| r.data.as_ref())
+                        .and_then(|d| d.bands.first())
+                        .map(|b| (b.stats.min, b.stats.max))
+                        .unwrap_or((0.0, 1.0));
+                    let step = (st.1 - st.0) / 10.0;
+                    let ranges: Vec<Value> = (0..10)
+                        .map(|i| {
+                            let lo = st.0 + step * i as f64;
+                            let hi = if i == 9 { f64::MAX } else { lo + step };
+                            json!([if i == 0 { f64::MIN } else { lo }, hi, if high { i + 1 } else { 10 - i }])
+                        })
+                        .collect();
+                    json!({"layer": n, "ranges": ranges, "weight": w})
+                };
+                let c1 = crit(app, &app.workflow.layer, true, num(&app.workflow.number, 1.0));
+                let c2 = crit(app, &app.workflow.layer2, false, num(&app.workflow.number2, 1.0));
+                run(app, "analysis.suitability", json!({"criteria": [c1, c2]}));
+            }
+        }
+        "visibility" => {
+            heading(ui, "Viewshed from a point");
+            combo(ui, "wf_v", &mut app.workflow.layer, &rasters);
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("observer height m")).desired_width(110.0));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text(tl!("radius m")).desired_width(80.0));
+            });
+            pick_button(app, ui, "viewshed", 1, "Click the observer on the map");
+            if let Some(p) = picked(app, "viewshed").and_then(|v| v.first().copied()) {
+                let mut params = json!({"layer": app.workflow.layer, "lon": p.x, "lat": p.y, "height": num(&app.workflow.number, 1.7)});
+                if let Ok(r) = app.workflow.number2.trim().parse::<f64>() {
+                    params["radius"] = json!(r);
+                }
+                run(app, "analysis.viewshed", params);
+            }
+        }
+        "lineOfSight" => {
+            heading(ui, "Line of sight between two points");
+            combo(ui, "wf_l", &mut app.workflow.layer, &rasters);
+            pick_button(app, ui, "los", 2, "Click the observer, then the target");
+            if let Some(p) = picked(app, "los")
+                && let (Some(a), Some(b)) = (p.first(), p.get(1))
+            {
+                run(app, "analysis.lineOfSight", json!({"layer": app.workflow.layer, "from": [a.x, a.y], "to": [b.x, b.y]}));
+            }
+        }
+        "interpolate" => {
+            heading(ui, "Interpolate a surface from points (IDW)");
+            combo(ui, "wf_i", &mut app.workflow.layer, &points);
+            combo(ui, "wf_if", &mut app.workflow.field, &numeric);
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("cell size °")).desired_width(80.0));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text(tl!("power 2")).desired_width(60.0));
+            });
+            if ui.button(tl!("Run")).clicked() {
+                let mut p = json!({"layer": app.workflow.layer, "field": app.workflow.field, "power": num(&app.workflow.number2, 2.0)});
+                if let Ok(c) = app.workflow.number.trim().parse::<f64>() {
+                    p["cellSize"] = json!(c);
+                }
+                run(app, "analysis.interpolate", p);
+            }
+        }
+        "network" => {
+            heading(ui, "Shortest route over a line network");
+            combo(ui, "wf_n", &mut app.workflow.layer, &lines);
+            let cost_fields = fields_of(&app.workflow.layer, true);
+            ui.horizontal(|ui| {
+                ui.label(tl!("Cost"));
+                let mut options = vec![String::new()];
+                options.extend(cost_fields);
+                combo(ui, "wf_nc", &mut app.workflow.field, &options);
+            });
+            pick_button(app, ui, "route", 2, "Click the start, then the end");
+            if let Some(p) = picked(app, "route")
+                && let (Some(a), Some(b)) = (p.first(), p.get(1))
+            {
+                let mut params = json!({"layer": app.workflow.layer, "from": [a.x, a.y], "to": [b.x, b.y], "snapDistance": 50_000});
+                if !app.workflow.field.is_empty() {
+                    params["costField"] = json!(app.workflow.field);
+                }
+                run(app, "analysis.route", params);
+            }
+        }
+        "neighborhood" => {
+            heading(ui, "What's near a point");
+            ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("radius km")).desired_width(80.0));
+            pick_button(app, ui, "near", 1, "Click a point on the map");
+            if let Some(p) = picked(app, "near").and_then(|v| v.first().copied()) {
+                run(
+                    app,
+                    "analysis.neighborhood",
+                    json!({"lon": p.x, "lat": p.y, "radius": num(&app.workflow.number, 100.0) * 1000.0, "select": true}),
+                );
+            }
+        }
+        "simulation" => {
+            heading(ui, "Random points in polygons");
+            combo(ui, "wf_sim", &mut app.workflow.layer, &polygons);
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("points each")).desired_width(80.0));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text(tl!("seed")).desired_width(60.0));
+            });
+            if ui.button(tl!("Run")).clicked() {
+                run(
+                    app,
+                    "analysis.simulate",
+                    json!({"layer": app.workflow.layer, "count": num(&app.workflow.number, 100.0), "seed": num(&app.workflow.number2, 42.0)}),
+                );
+            }
+        }
+        "profile" | "explore" => {
+            heading(ui, if app.workflow.section == "profile" { "Profile every field" } else { "Histograms and correlations" });
+            combo(ui, "wf_p", &mut app.workflow.layer, &features);
+            let cmd = if app.workflow.section == "profile" { "data.profile" } else { "data.explore" };
+            if ui.button(tl!("Run")).clicked() {
+                run(app, cmd, json!({"layer": app.workflow.layer}));
+            }
+        }
+        "similar" => {
+            heading(ui, "Features most like the selected one");
+            combo(ui, "wf_e", &mut app.workflow.layer, &features);
+            if ui.button(tl!("Find Similar")).clicked() {
+                run(app, "data.similar", json!({"layer": app.workflow.layer, "count": 10}));
+            }
+        }
+        "interop" => {
+            heading(ui, "Convert a layer to another format");
+            combo(ui, "wf_x", &mut app.workflow.layer, &features);
+            let formats: Vec<String> = ["kml", "gpx", "wkt", "geojson", "csv"].iter().map(|s| s.to_string()).collect();
+            if app.workflow.format.is_empty() {
+                app.workflow.format = "kml".into();
+            }
+            combo(ui, "wf_xf", &mut app.workflow.format, &formats);
+            if ui.button(tl!("Convert…")).clicked() {
+                match app.session.run("data.convert", &json!({"layer": app.workflow.layer, "format": app.workflow.format})) {
+                    Ok(v) => {
+                        let ext = if app.workflow.format == "wkt" { "csv".to_string() } else { app.workflow.format.clone() };
+                        let name = format!("{}.{ext}", app.workflow.layer);
+                        let bytes = v["text"].as_str().unwrap_or("").as_bytes().to_vec();
+                        if app.services.download.is_some() {
+                            app.download_bytes(&name, bytes);
+                        } else if let Some(path) = crate::dialogs::pick_save(&name, &[ext.as_str()], tl!("Converted data")) {
+                            let r = rustgis_engine::data::io::write_atomic(std::path::Path::new(&path), &bytes).map_err(|e| e.to_string());
+                            app.workflow.error = r.err();
+                        }
+                    }
+                    Err(e) => app.workflow.error = Some(e),
+                }
+            }
+        }
+        "environments" => {
+            heading(ui, "Where tools work");
+            let env = app.session.project.gp_env.clone();
+            let shown = env
+                .extent
+                .map(|e| format!("{:.2}, {:.2} – {:.2}, {:.2}", e.min_x, e.min_y, e.max_x, e.max_y))
+                .unwrap_or_else(|| tl!("Everywhere").to_string());
+            ui.label(egui::RichText::new(crate::i18n::fmt("Extent: {extent}", &[("extent", &shown)])).small());
+            ui.horizontal_wrapped(|ui| {
+                for (label, v) in [("Map View", json!("view")), ("Full Extent", json!("full")), ("Everywhere", Value::Null)] {
+                    if ui.button(tl!(label)).clicked() {
+                        run(app, "gp.env", json!({"extent": v}));
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("cell size °")).desired_width(80.0));
+                if ui.button(tl!("Set Cell Size")).clicked() {
+                    let v = app.workflow.number.trim().parse::<f64>().ok();
+                    run(app, "gp.env", json!({"cellSize": v}));
+                }
+            });
+        }
+        _ => {
+            heading(ui, "Models");
+            let models: Vec<(String, usize)> = app.session.project.models.iter().map(|m| (m.name.clone(), m.steps.len())).collect();
+            for (n, steps) in models {
+                ui.horizontal(|ui| {
+                    ui.label(crate::i18n::fmt("{name} ({n} steps)", &[("name", &n), ("n", &steps.to_string())]));
+                    if ui.small_button(tl!("Run")).clicked() {
+                        run(app, "model.run", json!({"name": n}));
+                    }
+                    if ui.small_button("×").clicked() {
+                        run(app, "model.remove", json!({"name": n}));
+                    }
+                });
+            }
+            if ui
+                .button(tl!("New Model From History"))
+                .on_hover_text(tl!("Each geoprocessing run becomes a step, chained by its outputs"))
+                .clicked()
+            {
+                run(app, "model.new", json!({"name": "Model", "fromHistory": true}));
+            }
+        }
+    }
+    if let Some(p) = &app.workflow.pick {
+        ui.label(
+            egui::RichText::new(crate::i18n::fmt(
+                "Click the map: {n} of {total}",
+                &[("n", &p.points.len().to_string()), ("total", &p.needed.to_string())],
+            ))
+            .color(t.accent),
+        );
+    }
+    if let Some(e) = &app.workflow.error {
+        ui.label(egui::RichText::new(e.as_str()).color(egui::Color32::from_rgb(0xC0, 0x30, 0x30)).small());
+    }
+    if let Some(r) = app.workflow.result.clone() {
+        result_view(ui, &r, t);
+    }
+}
+
+/// Shows a workflow's result: profiles and histograms as tables and bars, the rest as JSON.
+fn result_view(ui: &mut Ui, r: &Value, t: &Tokens) {
+    ui.add_space(8.0);
+    if let Some(fields) = r["fields"].as_array().filter(|f| f.first().is_some_and(|x| x.get("nulls").is_some())) {
+        egui::Grid::new("wf_prof").striped(true).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
+            for h in ["Field", "Nulls", "Distinct", "Min", "Max", "Mean"] {
+                ui.label(egui::RichText::new(tl!(h)).small().strong());
+            }
+            ui.end_row();
+            let n = |v: &Value| v.as_f64().map(rustgis_engine::map::symbology::fmt_num).unwrap_or_default();
+            for f in fields {
+                ui.label(egui::RichText::new(f["field"].as_str().unwrap_or("")).small());
+                ui.label(egui::RichText::new(f["nulls"].to_string()).small());
+                ui.label(egui::RichText::new(f["distinct"].to_string()).small());
+                ui.label(egui::RichText::new(n(&f["min"])).small());
+                ui.label(egui::RichText::new(n(&f["max"])).small());
+                ui.label(egui::RichText::new(n(&f["mean"])).small());
+                ui.end_row();
+            }
+        });
+        return;
+    }
+    if let Some(hists) = r["histograms"].as_array() {
+        for h in hists {
+            ui.label(egui::RichText::new(h["field"].as_str().unwrap_or("")).small().strong());
+            let counts: Vec<f32> =
+                h["counts"].as_array().map(|a| a.iter().filter_map(Value::as_f64).map(|v| v as f32).collect()).unwrap_or_default();
+            let max = counts.iter().copied().fold(1.0_f32, f32::max);
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().min(260.0), 40.0), egui::Sense::hover());
+            let bw = rect.width() / counts.len().max(1) as f32;
+            for (i, c) in counts.iter().enumerate() {
+                let hgt = rect.height() * c / max;
+                let bar = egui::Rect::from_min_max(
+                    egui::pos2(rect.min.x + i as f32 * bw + 1.0, rect.max.y - hgt),
+                    egui::pos2(rect.min.x + (i + 1) as f32 * bw - 1.0, rect.max.y),
+                );
+                ui.painter().rect_filled(bar, 1.0, t.accent);
+            }
+        }
+        return;
+    }
+    let text = serde_json::to_string_pretty(r).unwrap_or_default();
+    let short: String = text.chars().take(3000).collect();
+    ui.label(egui::RichText::new(short).monospace().small());
+}
+
+/// The Script pane: commands typed one per line, run in order.
+pub fn script(app: &mut RustGisApp, ui: &mut Ui, _t: &Tokens) {
+    ui.label(egui::RichText::new(tl!("One command per line: id {json}. Lines starting with # are comments.")).small().weak());
+    ui.add(
+        egui::TextEdit::multiline(&mut app.workflow.script)
+            .code_editor()
+            .desired_rows(10)
+            .desired_width(f32::INFINITY)
+            .hint_text("map.goToXY {\"lon\": 2.35, \"lat\": 48.85, \"scale\": 5000000}\nselect.byAttributes {\"layer\": \"Cities\", \"where\": \"pop_max > 1000000\"}"),
+    );
+    ui.horizontal(|ui| {
+        if ui.button(tl!("Run")).clicked() {
+            let script = app.workflow.script.clone();
+            let out = app.run("script.run", json!({"script": script}));
+            app.workflow.script_out = match out {
+                Ok(v) => v["ran"]
+                    .as_array()
+                    .map(|a| a.iter().map(|r| (format!("{} → {}", r["command"].as_str().unwrap_or(""), r["result"]), false)).collect())
+                    .unwrap_or_default(),
+                Err(e) => vec![(e, true)],
+            };
+            app.map.invalidate();
+        }
+        if ui.button(tl!("Commands…")).on_hover_text(tl!("Search every command and its parameters")).clicked() {
+            let _ = app.run("ui.commandSearch", Value::Null);
+        }
+    });
+    for (line, err) in &app.workflow.script_out {
+        let c = if *err { egui::Color32::from_rgb(0xC0, 0x30, 0x30) } else { ui.visuals().text_color() };
+        ui.label(egui::RichText::new(line.chars().take(400).collect::<String>()).monospace().small().color(c));
+    }
+}
