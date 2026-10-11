@@ -1,6 +1,10 @@
 //! One-click install of the `geolibre` runner: the latest geolibre-rust release's archive for
 //! this platform, downloaded over HTTPS, checked against its published SHA-256 and unpacked into
 //! RustGIS's data folder (where [`crate::runner`] looks for it).
+//!
+//! The checksum comes from the same release, so it guards against a corrupted or truncated
+//! download, not against a compromised release: trust rests on HTTPS and on the opengeos
+//! GitHub releases, as when downloading the runner by hand.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -117,11 +121,19 @@ pub fn install(progress: &dyn Fn(u64, Option<u64>)) -> Result<PathBuf, String> {
     let found = unpacked.and_then(|_| find_file(&staging, exe_name, 3).ok_or_else(|| format!("{name} has no {exe_name}")));
     let result = found.and_then(|exe| {
         let dest = dir.join(exe_name);
-        // Replace an older install; on Windows a running copy can't be overwritten, but a
-        // runner only runs while a tool does.
-        let _ = std::fs::remove_file(&dest);
-        std::fs::rename(&exe, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-        make_executable(&dest)?;
+        // Replace an older install without ever losing it: set it aside, move the new one in,
+        // and put the old one back if that fails.
+        let old = dir.join(format!("{exe_name}.old"));
+        let _ = std::fs::remove_file(&old);
+        let had_old = dest.exists() && std::fs::rename(&dest, &old).is_ok();
+        if let Err(e) = std::fs::rename(&exe, &dest).map_err(|e| format!("{}: {e}", dest.display())).and_then(|_| make_executable(&dest)) {
+            if had_old {
+                let _ = std::fs::rename(&old, &dest);
+            }
+            return Err(e);
+        }
+        // A copy that's running (Windows) can't be deleted now; the next install clears it.
+        let _ = std::fs::remove_file(&old);
         Ok(dest)
     });
     let _ = std::fs::remove_dir_all(&staging);

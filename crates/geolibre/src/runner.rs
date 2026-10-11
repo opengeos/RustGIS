@@ -111,7 +111,8 @@ fn candidates() -> Vec<PathBuf> {
         v.push(dir.join("geolibre").join(exe_name()));
     }
     if let Some(path) = std::env::var_os("PATH") {
-        v.extend(std::env::split_paths(&path).map(|d| d.join(exe_name())));
+        // Absolute entries only: an empty or relative one would mean the current folder.
+        v.extend(std::env::split_paths(&path).filter(|d| d.is_absolute()).map(|d| d.join(exe_name())));
     }
     v
 }
@@ -184,7 +185,7 @@ pub struct Ran {
 pub fn run(id: &str, args: &[(String, Value)], dir: &Path) -> Result<Ran, String> {
     let (exe, _) = find().ok_or("the GeoLibre runner isn't installed")?;
     let mut c = command(&exe);
-    c.current_dir(dir).arg(id);
+    c.current_dir(dir).stdin(Stdio::null()).arg(id);
     for (k, v) in args {
         c.arg(format!("--{k}={}", arg_text(v)));
     }

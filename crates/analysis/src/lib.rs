@@ -145,6 +145,14 @@ pub fn external_tools() -> &'static [ToolSpec] {
     {
         return tools;
     }
+    // One load at a time: a second caller waits for the first instead of loading again.
+    static LOADING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _loading = LOADING.lock();
+    if let Ok(cur) = EXTERNAL.read()
+        && let Some(tools) = *cur
+    {
+        return tools;
+    }
     let tools: &'static [ToolSpec] = Box::leak(
         std::panic::catch_unwind(provider)
             .unwrap_or_else(|_| {
@@ -174,7 +182,9 @@ pub fn tools() -> impl Iterator<Item = &'static ToolSpec> {
 
 /// Whether a tool comes from the external suite.
 pub fn is_external(spec: &ToolSpec) -> bool {
-    external_tools().iter().any(|t| std::ptr::eq(t, spec))
+    // By id, not by address: a spec handed out before a reload (an open tool form) is still
+    // the same tool.
+    !TOOLS.iter().any(|t| std::ptr::eq(t, spec)) && external_tools().iter().any(|t| t.id == spec.id)
 }
 
 pub fn tool(id: &str) -> Option<&'static ToolSpec> {

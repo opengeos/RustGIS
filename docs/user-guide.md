@@ -139,7 +139,8 @@ The suite is an optional download, so RustGIS itself stays small: the **GeoLibre
 single `geolibre` program (about 20 MB to download). In the Geoprocessing pane, click
 **Install GeoLibre tools** under *GeoLibre tools*: RustGIS downloads the latest runner for your
 platform from the [geolibre-rust releases](https://github.com/opengeos/geolibre-rust/releases/latest),
-checks it against its published SHA-256 checksum and installs it in its data folder
+checks it against its published SHA-256 checksum (which catches a corrupted download; the
+release itself is trusted as when you download it by hand) and installs it in its data folder
 (`~/.local/share/rustgis/geolibre` on Linux, `~/Library/Application Support/RustGIS/geolibre`
 on macOS, `%LOCALAPPDATA%\RustGIS\geolibre` on Windows). From the command line,
 `gp.installGeolibre` does the same.
