@@ -20,7 +20,7 @@ pub const PACKAGE_EXTENSION: &str = "rgisdlpk";
 /// Most tiles a hosted imagery export writes.
 const MAX_TILES: usize = 20_000;
 /// Largest total size of a hosted imagery package's tiles.
-const MAX_TILE_BYTES: usize = 512 << 20;
+const MAX_TILE_BYTES: usize = 256 << 20;
 const TILE: u32 = 256;
 
 /// A trained model kept in the project.
@@ -31,6 +31,9 @@ pub struct DlModel {
     /// Accuracy on held-back training pixels (0–1).
     #[serde(default)]
     pub accuracy: f64,
+    /// Epochs the last training ran (not saved).
+    #[serde(skip)]
+    pub epochs: usize,
 }
 
 fn need_raster(s: &Session) -> Option<&'static str> {
@@ -45,7 +48,7 @@ pub fn commands() -> Vec<C> {
     vec![
         C::new("dl.train", "Train Deep Learning Model", "Imagery › Image Classification", |s, p| {
             let m = train(s, p)?;
-            let mut r = json!({"model": m.name, "accuracy": m.accuracy, "classes": m.model.classes});
+            let mut r = json!({"model": m.name, "accuracy": m.accuracy, "classes": m.model.classes, "epochs": m.epochs});
             r["replaced"] = json!(store(s, m));
             Ok(r)
         })
@@ -181,7 +184,7 @@ fn train(s: &Session, p: &Value) -> Result<DlModel, String> {
     let epochs = f(p, "epochs").unwrap_or(60.0).clamp(1.0, neural::MAX_EPOCHS as f64) as usize;
     let t = neural::train(&bands, classes, &samples, &hidden, epochs)?;
     let name = name(&json!({"name": p.get("model")}), format!("{}_model", r.name));
-    Ok(DlModel { name, model: t.model, accuracy: t.accuracy })
+    Ok(DlModel { name, model: t.model, accuracy: t.accuracy, epochs: t.epochs })
 }
 
 fn classify(s: &mut Session, p: &Value) -> CmdResult {
@@ -251,7 +254,9 @@ fn hosted(s: &mut Session, p: &Value) -> CmdResult {
 pub fn hosted_bytes(s: &mut Session, p: &Value) -> Result<(Vec<u8>, Value), String> {
     let r = raster(s, p)?;
     let lname = ps(p, "layer").unwrap_or_default().to_string();
-    let layer = s.map().layer_by_name(&lname).cloned().ok_or("no such layer")?;
+    let mut layer = s.map().layer_by_name(&lname).cloned().ok_or("no such layer")?;
+    // Tiled even when hidden on the map.
+    layer.visible = true;
     // The raster's extent in longitude/latitude, from its corners and edges.
     let mut e = rustgis_geom::Extent::EMPTY;
     let tr = r.transformer();

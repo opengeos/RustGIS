@@ -15,6 +15,8 @@ pub const MAX_EPOCHS: usize = 500;
 /// Most classes and input bands.
 pub const MAX_CLASSES: usize = 64;
 pub const MAX_INPUTS: usize = 64;
+/// Most multiply-adds one training may do (seconds, not minutes): epochs are reduced to fit.
+pub const MAX_WORK: f64 = 5e9;
 
 /// One dense layer: `out × inp` weights (row per output) and `out` biases.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -171,6 +173,8 @@ pub struct Trained {
     pub model: Mlp,
     pub accuracy: f64,
     pub samples: usize,
+    /// The epochs run (fewer than asked when the work would pass [`MAX_WORK`]).
+    pub epochs: usize,
 }
 
 /// Trains a classifier. `samples` are (band values, class index); `hidden` the units per hidden
@@ -236,10 +240,15 @@ pub fn train(
     let scaled = |x: &[f32]| -> Vec<f32> { x.iter().zip(mean.iter().zip(&std)).map(|(v, (m, s))| (v - m) / s).collect() };
     let inputs: Vec<Vec<f32>> = samples.iter().map(|(x, _)| scaled(x)).collect();
     // Mini-batch gradient descent with momentum.
-    let epochs = epochs.clamp(1, MAX_EPOCHS);
+    // Each sample costs about three passes over the weights (forward, backward, update).
+    // Too many samples for even one epoch: a random subset (they're shuffled) is fitted.
+    let per_sample = 3.0 * layers.iter().map(|l| l.w.len() + l.b.len()).sum::<usize>() as f64;
+    let mut fit = fit;
+    fit.truncate(((MAX_WORK / per_sample) as usize).max(1));
+    let per_epoch = per_sample * fit.len().max(1) as f64;
+    let epochs = epochs.clamp(1, MAX_EPOCHS).min(((MAX_WORK / per_epoch) as usize).max(1));
     let (lr, momentum, batch) = (0.05f32, 0.9f32, 32usize);
     let mut vel: Vec<(Vec<f32>, Vec<f32>)> = layers.iter().map(|l| (vec![0.0; l.w.len()], vec![0.0; l.b.len()])).collect();
-    let mut fit = fit;
     for _ in 0..epochs {
         for i in (1..fit.len()).rev() {
             let j = rng.below(i + 1);
@@ -318,7 +327,7 @@ pub fn train(
     let model = Mlp { bands: bands.to_vec(), mean, std, layers, classes };
     let correct = test.iter().filter(|&&i| samples.get(i).is_some_and(|(x, c)| model.predict(x).0 == *c)).count();
     let accuracy = if test.is_empty() { 1.0 } else { correct as f64 / test.len() as f64 };
-    Ok(Trained { model, accuracy, samples: samples.len() })
+    Ok(Trained { model, accuracy, samples: samples.len(), epochs })
 }
 
 /// Classifies every pixel: class numbers (1-based, `nodata` where a band has no data) and each
@@ -371,6 +380,7 @@ mod tests {
         }
         let t = train(&[0, 1], vec!["out".into(), "in".into()], &samples, &[16, 16], 150).unwrap();
         assert!(t.accuracy > 0.9, "accuracy {}", t.accuracy);
+        assert_eq!(t.epochs, 150, "small trainings run every epoch asked for");
         assert_eq!(t.model.predict(&[500.0, 0.0]).0, 1);
         assert_eq!(t.model.predict(&[690.0, 95.0]).0, 0);
         t.model.validate().unwrap();
@@ -381,6 +391,9 @@ mod tests {
         bad.std[0] = 0.0;
         assert!(bad.validate().is_err());
         assert!(train(&[0], vec!["a".into()], &samples, &[4], 1).is_err(), "one class");
+        // The largest network for every epoch would pass the work cap: fewer epochs run.
+        let big = train(&[0, 1], vec!["out".into(), "in".into()], &samples, &[MAX_UNITS; MAX_LAYERS], MAX_EPOCHS).unwrap();
+        assert!(big.epochs < MAX_EPOCHS, "{} epochs", big.epochs);
         assert!(train(&[0, 1], vec!["a".into(), "b".into()], &samples[..2], &[4], 1).is_err(), "too few");
     }
 }

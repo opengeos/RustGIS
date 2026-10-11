@@ -465,22 +465,31 @@ pub fn web_style(l: &Layer) -> Value {
         match &l.renderer {
             Renderer::Single(sym) => json!(pick(sym).hex()),
             Renderer::Unique { field, classes, other, .. } => {
+                // MapLibre rejects repeated labels: the first class of a value wins.
                 let mut e = vec![json!("match"), json!(["to-string", prop(field)])];
+                let mut seen = std::collections::HashSet::new();
                 for (v, sym) in classes {
-                    e.push(json!(v));
-                    e.push(json!(pick(sym).hex()));
+                    if seen.insert(v.as_str()) {
+                        e.push(json!(v));
+                        e.push(json!(pick(sym).hex()));
+                    }
                 }
                 e.push(json!(pick(other).hex()));
-                if classes.is_empty() { json!(pick(other).hex()) } else { Value::Array(e) }
+                if seen.is_empty() { json!(pick(other).hex()) } else { Value::Array(e) }
             }
             Renderer::Graduated { field, breaks, symbols, .. } => {
                 let first = symbols.first().map_or_else(|| "#888888".to_string(), |s| pick(s).hex());
                 let mut e = vec![json!("step"), json!(["to-number", prop(field)]), json!(first)];
+                // Stops must ascend strictly.
+                let mut last = f64::NEG_INFINITY;
                 for (b, sym) in breaks.iter().zip(symbols.iter().skip(1)) {
-                    e.push(json!(b));
-                    e.push(json!(pick(sym).hex()));
+                    if b.is_finite() && *b > last {
+                        last = *b;
+                        e.push(json!(b));
+                        e.push(json!(pick(sym).hex()));
+                    }
                 }
-                Value::Array(e)
+                if e.len() == 3 { json!(first) } else { Value::Array(e) }
             }
             Renderer::Proportional { base, .. } => json!(pick(base).hex()),
         }
@@ -502,9 +511,11 @@ pub fn web_style(l: &Layer) -> Value {
         }
         _ => {
             let radius = match &l.renderer {
-                Renderer::Proportional { field, min_size, max_size, min, max, .. } => json!([
-                    "interpolate", ["linear"], ["to-number", prop(field)], min, f64::from(*min_size) / 2.0, max, f64::from(*max_size) / 2.0
-                ]),
+                // A constant field (no range to interpolate over) gets one size.
+                Renderer::Proportional { field, min_size, max_size, min, max, .. } if min.is_finite() && max.is_finite() && min < max => {
+                    json!(["interpolate", ["linear"], ["to-number", prop(field)], min, f64::from(*min_size) / 2.0, max, f64::from(*max_size) / 2.0])
+                }
+                Renderer::Proportional { min_size, max_size, .. } => json!(f64::from(*min_size + *max_size) / 4.0),
                 Renderer::Single(s) => json!(f64::from(s.size) / 2.0),
                 Renderer::Unique { other, .. } => json!(f64::from(other.size) / 2.0),
                 Renderer::Graduated { symbols, .. } => json!(symbols.first().map_or(4.0, |s| f64::from(s.size) / 2.0)),
@@ -698,8 +709,9 @@ fn gltf(m: &Map) -> Result<Vec<u8>, String> {
     let mut budget = MAX_FEATURES;
     for l in m.layers.iter().rev().filter(|l| l.visible && !l.is_raster()) {
         // Per colour, its positions and (for triangles) indices.
-        let mut tri: HashMap<[u8; 4], (Vec<[f32; 3]>, Vec<u32>)> = HashMap::new();
-        let mut lines: HashMap<[u8; 4], Vec<[f32; 3]>> = HashMap::new();
+        // Ordered, so the same scene always writes the same file.
+        let mut tri: std::collections::BTreeMap<[u8; 4], (Vec<[f32; 3]>, Vec<u32>)> = Default::default();
+        let mut lines: std::collections::BTreeMap<[u8; 4], Vec<[f32; 3]>> = Default::default();
         let ex = l.extrusion.as_ref();
         let hf = ex.and_then(|e| e.field.as_deref()).and_then(|f| l.dataset.field_index(f));
         let (base_h, factor) = ex.map_or((0.0, 0.0), |e| (e.height, e.factor));
@@ -717,17 +729,23 @@ fn gltf(m: &Map) -> Result<Vec<u8>, String> {
             match g {
                 Geometry::Polygon(polys) => {
                     for rings in polys {
+                        // Rings without their closing point (when they have one).
                         let open: Vec<Vec<(f64, f64)>> = rings
                             .iter()
                             .map(|r| {
+                                let closed = r.len() > 1 && r.first() == r.last();
                                 r.iter()
-                                    .take(r.len().saturating_sub(1))
+                                    .take(if closed { r.len() - 1 } else { r.len() })
                                     .map(|c| xy(*c))
                                     .map(|(x, z)| (f64::from(x), f64::from(z)))
                                     .collect::<Vec<_>>()
                             })
-                            .filter(|r: &Vec<(f64, f64)>| r.len() >= 3)
                             .collect();
+                        // A polygon whose outer ring is degenerate is skipped (a hole never
+                        // stands in for it); degenerate holes are dropped.
+                        let Some(outer) = open.first().filter(|r| r.len() >= 3) else { continue };
+                        let open: Vec<Vec<(f64, f64)>> =
+                            std::iter::once(outer.clone()).chain(open.iter().skip(1).filter(|r| r.len() >= 3).cloned()).collect();
                         let Some(outer) = open.first() else { continue };
                         let Some(tris) = rustgis_geom::triangulate::triangulate(outer, open.get(1..).unwrap_or(&[])) else { continue };
                         let (pos, idx) = tri.entry(key).or_default();
@@ -921,7 +939,6 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<String, String> {
     let mut legend = String::new();
     let layers: Vec<String> = {
         let mut v: Vec<String> = nodes.iter().filter_map(|n| n["layer"].as_str().map(str::to_string)).collect();
-        v.dedup();
         v.sort();
         v.dedup();
         v
