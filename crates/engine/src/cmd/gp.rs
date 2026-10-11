@@ -160,10 +160,18 @@ pub fn external_start(s: &mut Session, tool: &str, params: &Value) -> Result<Ext
 pub fn external_complete(s: &mut Session, id: u64, ran: ExternalOutput) -> Result<(), String> {
     #[cfg(feature = "geolibre")]
     {
-        let i = s.started.iter().position(|(n, ..)| *n == id).ok_or("the tool finished after its project was closed")?;
+        let i = s
+            .started
+            .iter()
+            .position(|(n, ..)| *n == id)
+            .ok_or("the tool's run was dropped (its project was closed, or too many runs were waiting)")?;
         let (_, job, params, t0) = s.started.remove(i);
-        let result =
-            ran.map(|(files, lines)| rustgis_geolibre::finish(&job, &files, &lines, None)).map_err(|e| format!("{}: {e}", job.name));
+        // Reading the runner's files back parses outside `Session::run`'s guard: a bug in a
+        // reader must not take the app down.
+        let result = ran.map_err(|e| format!("{}: {e}", job.name)).and_then(|(files, lines)| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_geolibre::finish(&job, &files, &lines, None)))
+                .map_err(|_| format!("{}: its output couldn't be read", job.name))
+        });
         s.pending.push(crate::PendingRun { id, tool: job.name.clone(), params, result, millis: now_ms().saturating_sub(t0) });
         if s.pending.len() > MAX_ASYNC_RUNS {
             s.pending.remove(0);

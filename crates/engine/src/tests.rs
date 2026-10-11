@@ -444,5 +444,5 @@ fn geolibre_runs_can_finish_asynchronously() {
     // A run of a project that was closed meanwhile doesn't land in the new one.
     let run = external_start(&mut s, "geolibre:slope", &json!({"input": "scene"})).unwrap();
     s.run("project.new", &Value::Null).unwrap();
-    assert!(external_complete(&mut s, run.id, Ok((vec![], vec![]))).unwrap_err().contains("closed"));
+    assert!(external_complete(&mut s, run.id, Ok((vec![], vec![]))).unwrap_err().contains("project was closed"));
 }
