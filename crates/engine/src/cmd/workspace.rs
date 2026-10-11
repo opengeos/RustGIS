@@ -40,6 +40,9 @@ pub fn commands() -> Vec<C> {
         // Workflow Manager.
         C::new("job.new", "Workflow Manager", "View › Windows", |s, p| {
             let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or("name is required")?.chars().take(200).collect();
+            if s.project.jobs.len() >= 1000 {
+                return Err("a project keeps at most 1000 jobs; remove finished ones first".into());
+            }
             let id = s.project.jobs.iter().map(|j| j.id).max().unwrap_or(0).saturating_add(1);
             let extent = if b(p, "viewExtent").unwrap_or(false) { Some(view_extent(s)) } else { None };
             let t = now();
@@ -371,9 +374,11 @@ fn animation_zip(s: &mut Session, p: &Value) -> Result<Vec<u8>, String> {
     }
     let fps = f(p, "fps").unwrap_or(10.0).clamp(1.0, 30.0);
     let (w, h) = (f(p, "width").unwrap_or(640.0).clamp(64.0, 1920.0), f(p, "height").unwrap_or(400.0).clamp(64.0, 1080.0));
-    let total: f64 = keys.iter().skip(1).map(|k| k.seconds).sum();
-    if total * fps > 3000.0 {
-        return Err("the animation would have more than 3000 frames; lower the fps or the durations".into());
+    // The frames as they will be made (each move rounded, plus the last), within a count and a
+    // pixel budget (every PNG is held until the zip is written).
+    let count: usize = keys.windows(2).map(|w| w.get(1).map_or(1, |k| (k.seconds * fps).round().max(1.0) as usize)).sum::<usize>() + 1;
+    if count > 3000 || count as f64 * w * h > 1.5e9 {
+        return Err(format!("the animation would have {count} frames at {w:.0} × {h:.0}; lower the fps, the durations or the size"));
     }
     let saved = s.map().camera;
     let saved_size = s.view_size;
@@ -444,7 +449,7 @@ pub fn diagnostics(s: &Session) -> Value {
     }
     json!({
         "maps": s.project.maps.len(), "layers": layers, "features": features, "vertices": vertices, "rasterPixels": pixels,
-        "cachedLayers": cached, "estimatedMemoryMB": ((vertices * 16 + features * 64 + pixels * 4) as f64 / 1_048_576.0 * 10.0).round() / 10.0,
+        "cachedLayers": cached, "estimatedMemoryMB": ((vertices as f64 * 16.0 + features as f64 * 64.0 + pixels as f64 * 4.0) / 1_048_576.0 * 10.0).round() / 10.0,
         "commands": s.registry.commands.len(), "revision": s.revision, "undo": s.undo_depth(), "notices": s.notices.len(),
         "layouts": s.project.layouts.len(), "geoprocessingRuns": s.project.gp_history.len(),
     })
@@ -578,13 +583,15 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
     let (mut updated, mut added, mut deleted, mut skipped) = (0, 0, 0, 0);
     if let Some(src) = s.project.maps.get_mut(si) {
         for ol in &edited.layers {
-            let Some(sl) = src.layers.iter_mut().find(|l| l.name == ol.name && !l.is_raster()) else { continue };
+            // Layers are matched by id (the snapshot keeps them), so same-named layers don't mix.
+            // Layers removed from either side since the download are left alone.
+            let Some(sl) = src.layers.iter_mut().find(|l| l.id == ol.id && !l.is_raster()) else { continue };
             // The ids the area held when it was last synced.
             let had: std::collections::HashSet<u64> = area
                 .data
                 .layers
                 .iter()
-                .find(|l| l.name == ol.name)
+                .find(|l| l.id == ol.id)
                 .map(|l| l.dataset.features.iter().map(|f| f.id).collect())
                 .unwrap_or_default();
             let now_ids: std::collections::HashSet<u64> = ol.dataset.features.iter().map(|f| f.id).collect();
@@ -594,7 +601,7 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
                 .data
                 .layers
                 .iter()
-                .find(|l| l.name == ol.name)
+                .find(|l| l.id == ol.id)
                 .map(|l| l.dataset.features.iter().map(|f| (f.id, f)).collect())
                 .unwrap_or_default();
             // Deletions first, so a fresh id given to a new feature below can't be swept away.

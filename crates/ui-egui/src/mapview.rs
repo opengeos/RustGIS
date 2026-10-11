@@ -74,6 +74,9 @@ pub struct MapView {
     /// The last snap: its inputs (pointer, camera, undo depth) and where it snapped, if anywhere,
     /// so snapping runs only when one of them changes rather than every frame.
     snap: Option<([f64; 5], Option<Coord>)>,
+    /// The side-by-side map's last render (texture and labels) and what it was drawn for, so it
+    /// redraws only when that map, the project or the view changes.
+    split: Option<([f64; 8], egui::TextureHandle, Vec<PlacedLabel>)>,
 }
 
 impl Default for MapView {
@@ -97,6 +100,7 @@ impl Default for MapView {
             toasts: Vec::new(),
             camera_moved: false,
             snap: None,
+            split: None,
         }
     }
 }
@@ -178,15 +182,36 @@ fn split_view(app: &mut RustGisApp, ui: &mut Ui, other: usize, rect: Rect, t: &T
         return;
     }
     let ppp = ui.ctx().pixels_per_point();
+    let revision = app.session.revision;
     let Some(m) = app.session.project.maps.get_mut(other) else { return };
     let view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: m.camera, dark: t.dark };
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, c32(m.basemap.palette().0));
-    if let Some(r) = rustgis_engine::render::render(m, &view) {
+    let key = [
+        other as f64,
+        revision as f64,
+        m.camera.center.x,
+        m.camera.center.y,
+        m.camera.res,
+        w,
+        h,
+        f64::from(ppp) + if t.dark { 100.0 } else { 0.0 },
+    ];
+    if app.map.split.as_ref().is_none_or(|(k, _, _)| *k != key)
+        && let Some(r) = rustgis_engine::render::render(m, &view)
+    {
         let img = egui::ColorImage::from_rgba_premultiplied([r.pixmap.width() as usize, r.pixmap.height() as usize], r.pixmap.data());
-        let tex = ui.ctx().load_texture("split_map", img, egui::TextureOptions::LINEAR);
+        match app.map.split.take() {
+            Some((_, mut tex, _)) => {
+                tex.set(img, egui::TextureOptions::LINEAR);
+                app.map.split = Some((key, tex, r.labels));
+            }
+            None => app.map.split = Some((key, ui.ctx().load_texture("split_map", img, egui::TextureOptions::LINEAR), r.labels)),
+        }
+    }
+    if let Some((_, tex, labels)) = &app.map.split {
         painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-        for l in &r.labels {
+        for l in labels {
             draw_label(&painter, l, pos2(rect.min.x + l.x, rect.min.y + l.y));
         }
     }
@@ -846,7 +871,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         && let Some(c) = app.map.pointer_lonlat
         && let Some(at) = {
             let cam = app.session.map().camera;
-            let key = [c.x, c.y, cam.center.x + cam.center.y * 1e-3, cam.res, app.session.undo_depth() as f64];
+            let key = [c.x, c.y, cam.center.x + cam.center.y * 1e-3, cam.res, app.session.revision as f64];
             match &app.map.snap {
                 Some((k, at)) if *k == key => *at,
                 _ => {

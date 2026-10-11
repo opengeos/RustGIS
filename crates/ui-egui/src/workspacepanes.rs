@@ -322,7 +322,8 @@ pub fn infographics(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("Live summary of the features in view.")).small().color(t.text_dim));
     // Worked out again only when the view or the data change.
     let cam = app.session.map().camera;
-    let key = [cam.center.x, cam.center.y, cam.res, app.session.undo_depth() as f64];
+    // The revision changes with every edit, undo and redo (the undo depth stops at its limit).
+    let key = [cam.center.x, cam.center.y, cam.res, app.session.revision as f64];
     if app.ws.infographic.as_ref().is_none_or(|(k, _)| *k != key) {
         app.ws.infographic = Some((key, rustgis_engine::cmd::workspace::infographic_of(&app.session, None)));
     }
