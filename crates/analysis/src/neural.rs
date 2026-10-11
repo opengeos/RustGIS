@@ -146,26 +146,35 @@ pub fn polygon_samples(r: &Raster, bands: &[usize], rings: &[Vec<Coord>], max: u
     let (c0, c1) = (clamp(c0.floor() - 1.0, r.width), clamp(c1.ceil() + 1.0, r.width));
     let (r0, r1) = (clamp(r0.floor() - 1.0, r.height), clamp(r1.ceil() + 1.0, r.height));
     let window = ((c1 - c0).max(0) as f64) * ((r1 - r0).max(0) as f64);
-    let step = ((window / max as f64).sqrt().floor() as i64).max(1);
-    let mut row = r0;
-    while row < r1 {
-        let mut col = c0;
-        while col < c1 {
-            if out.len() >= max {
-                return out;
+    // A thin polygon in a large window can slip between the grid's points: the grid is made
+    // denser (while it stays under 16 million visits) until it finds enough pixels.
+    let mut step = ((window / max as f64).sqrt().floor() as i64).max(1);
+    loop {
+        out.clear();
+        let mut row = r0;
+        'scan: while row < r1 {
+            let mut col = c0;
+            while col < c1 {
+                if out.len() >= max {
+                    break 'scan;
+                }
+                let w = r.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
+                if let Some(ll) = tr.to_lonlat(w)
+                    && rustgis_data::geometry::polygon_contains(rings, ll)
+                    && let Some(v) = bands.iter().map(|b| r.value(*b, col, row)).collect::<Option<Vec<f32>>>()
+                {
+                    out.push(v);
+                }
+                col += step;
             }
-            let w = r.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
-            if let Some(ll) = tr.to_lonlat(w)
-                && rustgis_data::geometry::polygon_contains(rings, ll)
-                && let Some(v) = bands.iter().map(|b| r.value(*b, col, row)).collect::<Option<Vec<f32>>>()
-            {
-                out.push(v);
-            }
-            col += step;
+            row += step;
         }
-        row += step;
+        let denser = step / 2;
+        if out.len() * 2 >= max || denser < 1 || window / (denser * denser) as f64 > 16e6 {
+            return out;
+        }
+        step = denser;
     }
-    out
 }
 
 /// What training reached: the model and its accuracy on held-back samples (a fifth of them).

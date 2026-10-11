@@ -18,7 +18,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 /// Deep learning packages: zip files with this extension.
 pub const PACKAGE_EXTENSION: &str = "rgisdlpk";
 /// Most tiles a hosted imagery export writes.
-const MAX_TILES: usize = 20_000;
+const MAX_TILES: usize = 5_000;
 /// Largest total size of a hosted imagery package's tiles.
 const MAX_TILE_BYTES: usize = 256 << 20;
 const TILE: u32 = 256;

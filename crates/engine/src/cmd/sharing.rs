@@ -34,7 +34,7 @@ pub const KINDS: &[(&str, &str, &str)] = &[
 /// Most features a shared web map, scene or link chart carries.
 const MAX_FEATURES: usize = 200_000;
 /// Largest glTF geometry buffer of a web scene.
-const MAX_SCENE_BYTES: usize = 512 << 20;
+const MAX_SCENE_BYTES: usize = 128 << 20;
 /// Most nodes in a link chart.
 const MAX_NODES: usize = 3000;
 /// Most shared items and data stores kept.
@@ -237,6 +237,10 @@ fn share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
     let (name, bytes, source) = share_bytes(s, kind, p)?;
     let ext = KINDS.iter().find(|k| k.0 == kind).map_or("bin", |k| k.1);
     let path = target(s, p, &name, ext)?;
+    // A share of another kind (or an uploaded file) at that path isn't replaced.
+    if let Some(other) = s.project.shared.iter().find(|i| i.path == path && i.kind != kind) {
+        return Err(format!("{path} already holds the shared {} '{}'; choose another name or path", other.kind, other.name));
+    }
     rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
     let t = now();
     let shared = &mut s.project.shared;
@@ -326,7 +330,13 @@ fn upload(s: &mut Session, p: &Value) -> CmdResult {
     if dest.exists() {
         return Err(format!("{} already has a file named {file}", store.name));
     }
-    let bytes = std::fs::copy(src, &dest).map_err(|e| format!("{src}: {e}"))?;
+    // Created new (never through an existing file or link), in the same step as the check.
+    let bytes = std::fs::File::open(src)
+        .and_then(|mut from| {
+            let mut to = std::fs::OpenOptions::new().write(true).create_new(true).open(&dest)?;
+            std::io::copy(&mut from, &mut to)
+        })
+        .map_err(|e| format!("{src}: {e}"))?;
     let t = now();
     let id = s.project.shared.iter().map(|i| i.id).max().unwrap_or(0).saturating_add(1);
     let path = dest.display().to_string();
@@ -349,7 +359,7 @@ fn html_escape(t: &str) -> String {
 
 /// JSON for embedding in a `<script>`: `</` can't close the script.
 fn script_json(v: &Value) -> String {
-    serde_json::to_string(v).unwrap_or_default().replace("</", "<\\/")
+    serde_json::to_string(v).unwrap_or_default().replace("</", "<\\/").replace("<!--", "<\\!--")
 }
 
 fn css(c: Rgba) -> String {
@@ -919,12 +929,21 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<String, String> {
         let (Some(o), Some(d)) = (find(&r.origin), find(&r.destination)) else { continue };
         let (Some(ok), Some(dk)) = (o.dataset.field_index(&r.origin_key), d.dataset.field_index(&r.destination_key)) else { continue };
         let mut by_key: HashMap<String, Vec<usize>> = HashMap::new();
+        // Null or empty keys relate nothing.
+        let key_of = |ds: &rustgis_data::Dataset, row: usize, f: usize| -> Option<String> {
+            let v = ds.value(row, f);
+            if matches!(v, rustgis_data::Value::Null) {
+                return None;
+            }
+            Some(v.to_string()).filter(|k| !k.is_empty())
+        };
         for row in 0..d.dataset.features.len() {
-            let v = d.dataset.value(row, dk).to_string();
-            by_key.entry(v).or_default().push(row);
+            if let Some(v) = key_of(&d.dataset, row, dk) {
+                by_key.entry(v).or_default().push(row);
+            }
         }
         for orow in 0..o.dataset.features.len() {
-            let key = o.dataset.value(orow, ok).to_string();
+            let Some(key) = key_of(&o.dataset, orow, ok) else { continue };
             let Some(drows) = by_key.get(&key) else { continue };
             if nodes.len() >= MAX_NODES {
                 break 'rels;
