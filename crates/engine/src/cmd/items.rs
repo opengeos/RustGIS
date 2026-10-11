@@ -198,6 +198,8 @@ pub fn commands() -> Vec<C> {
             let name = ps(p, "task").ok_or("task is required")?;
             let before = s.project.tasks.len();
             s.project.tasks.retain(|t| !t.name.eq_ignore_ascii_case(name));
+            // A later task by this name isn't the user's just because of its name.
+            s.trusted_tasks.remove(&name.to_lowercase());
             if s.project.tasks.len() == before { Err(format!("no task '{name}'")) } else { Ok(Value::Null) }
         })
         .params(r#"{"task": name}"#),
@@ -267,18 +269,22 @@ pub fn package_text(bytes: &[u8]) -> Result<String, String> {
     String::from_utf8(data).map_err(|_| "the package's project is damaged".to_string())
 }
 
-/// Largest raster file embedded in a map, layer or package (it's base64'd into the JSON).
-const MAX_EMBED: u64 = if cfg!(target_arch = "wasm32") { 64 << 20 } else { 512 << 20 };
+/// Most raster bytes embedded in one map, layer or package file, all rasters together. They're
+/// base64'd into JSON (a third larger), which must stay within what packages can be read back
+/// with (`zip::MAX_TOTAL`).
+const MAX_EMBED: u64 = rustgis_data::zip::MAX_TOTAL as u64 / 2;
 
-/// A raster layer with its file embedded (so the copy stands alone). A file too large to embed
-/// stays linked by its path.
-fn embed_layer(mut l: Layer) -> Layer {
+/// A raster layer with its file embedded (so the copy stands alone), within what's left of
+/// `budget`. A file that doesn't fit stays linked by its path.
+fn embed_layer(mut l: Layer, budget: &mut u64) -> Layer {
     if let Some(rl) = &mut l.raster
         && rl.embedded.is_none()
         && let Some(path) = rl.path.clone()
-        && std::fs::metadata(&path).is_ok_and(|m| m.len() <= MAX_EMBED)
+        && std::fs::metadata(&path).is_ok_and(|m| m.len() <= *budget)
         && let Ok(bytes) = std::fs::read(&path)
+        && bytes.len() as u64 <= *budget
     {
+        *budget -= bytes.len() as u64;
         rl.file_name = Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string());
         rl.embedded = Some(std::sync::Arc::new(bytes));
         rl.path = None;
@@ -286,9 +292,9 @@ fn embed_layer(mut l: Layer) -> Layer {
     l
 }
 
-fn embedded_map(m: &Map) -> Map {
+fn embedded_map(m: &Map, budget: &mut u64) -> Map {
     let mut m = m.clone();
-    m.layers = m.layers.into_iter().map(embed_layer).collect();
+    m.layers = m.layers.into_iter().map(|l| embed_layer(l, budget)).collect();
     m
 }
 
@@ -388,8 +394,9 @@ fn template(p: &Project) -> Project {
 
 fn package_project(s: &Session) -> Result<Vec<u8>, String> {
     let mut p = s.project.clone();
+    let mut budget = MAX_EMBED;
     for m in &mut p.maps {
-        *m = embedded_map(m);
+        *m = embedded_map(m, &mut budget);
     }
     let text = serde_json::to_string(&p).map_err(|e| e.to_string())?;
     let readme =
@@ -404,7 +411,7 @@ fn safe(name: &str) -> String {
 
 /// A package of the active map; `mobile` drops hidden layers and simplifies geometry.
 fn package_map(s: &Session, mobile: bool, tol: f64) -> Result<Vec<u8>, String> {
-    let mut m = embedded_map(s.map());
+    let mut m = embedded_map(s.map(), &mut MAX_EMBED.clone());
     if mobile {
         m.layers.retain(|l| l.visible);
         for l in &mut m.layers {
@@ -544,8 +551,11 @@ fn touches_files(command: &str, params: &Value) -> bool {
         let t = t.trim();
         let b = t.as_bytes();
         t.contains("://")
-            || t.starts_with(['/', '\\', '~', '.'])
-            || t.contains("..")
+            || t.starts_with(['/', '\\', '~'])
+            || t.starts_with("./")
+            || t.starts_with(".\\")
+            || t.contains("../")
+            || t.contains("..\\")
             || (b.get(1) == Some(&b':') && b.first().is_some_and(u8::is_ascii_alphabetic))
     }
     fn reaches(v: &Value, depth: usize) -> bool {
@@ -725,12 +735,12 @@ pub fn item_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec
                 Some(n) => s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no map '{n}'"))?,
                 None => s.map(),
             };
-            (map.name.clone(), to_json(&embedded_map(map))?)
+            (map.name.clone(), to_json(&embedded_map(map, &mut MAX_EMBED.clone()))?)
         }
         "layer" => {
             let id = s.layer_id(p)?;
             let l = s.map().layer(id).ok_or("no such layer")?.clone();
-            (l.name.clone(), to_json(&embed_layer(l))?)
+            (l.name.clone(), to_json(&embed_layer(l, &mut MAX_EMBED.clone()))?)
         }
         "styles" => {
             if s.project.styles.is_empty() {
