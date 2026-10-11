@@ -348,7 +348,8 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         let freehand = matches!(tool, Tool::Graphic("freehand" | "lasso"));
         let far = app.map.sketch.last().and_then(|l| lonlat_to_screen(app, rect, *l)).is_none_or(|s| (s - p).length() > 3.0);
         if freehand {
-            if far {
+            // Capped well below what a graphic may hold, so a very long drag still draws.
+            if far && app.map.sketch.len() < 20_000 {
                 app.map.sketch.push(c);
             }
         } else {

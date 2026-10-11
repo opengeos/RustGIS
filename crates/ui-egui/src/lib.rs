@@ -263,7 +263,7 @@ impl RustGisApp {
         p["shape"] = json!("picture");
         p["points"] = json!(pts.iter().map(|c| [c.x, c.y]).collect::<Vec<_>>());
         let r = self.run("graphics.add", p);
-        if !self.session.keep_tool {
+        if r.is_ok() && !self.session.keep_tool {
             self.session.tool = rustgis_engine::Tool::Explore;
         }
         r

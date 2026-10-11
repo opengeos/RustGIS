@@ -105,13 +105,36 @@ pub fn expand(text: &str, v: &TokenValues) -> String {
         return text.to_string();
     }
     let (date, time) = civil(v.now);
-    text.replace("{map}", &v.map)
-        .replace("{scale}", &format!("1:{}", thousands(v.scale)))
-        .replace("{date}", &date)
-        .replace("{time}", &time)
-        .replace("{crs}", &v.crs)
-        .replace("{layers}", &v.layers.to_string())
-        .replace("{center}", &rustgis_geom::format_lonlat(v.center))
+    // One pass, so a value containing a token (a map named "{date}") is left as it is.
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut rest = text;
+    while let Some(i) = rest.find('{') {
+        out.push_str(rest.get(..i).unwrap_or(""));
+        let tail = rest.get(i..).unwrap_or("");
+        let token = tail.find('}').and_then(|j| tail.get(..=j)).unwrap_or("");
+        let value = match token {
+            "{map}" => Some(v.map.clone()),
+            "{scale}" => Some(format!("1:{}", thousands(v.scale))),
+            "{date}" => Some(date.clone()),
+            "{time}" => Some(time.clone()),
+            "{crs}" => Some(v.crs.clone()),
+            "{layers}" => Some(v.layers.to_string()),
+            "{center}" => Some(rustgis_geom::format_lonlat(v.center)),
+            _ => None,
+        };
+        match value {
+            Some(val) => {
+                out.push_str(&val);
+                rest = tail.get(token.len()..).unwrap_or("");
+            }
+            None => {
+                out.push('{');
+                rest = tail.get(1..).unwrap_or("");
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn thousands(v: f64) -> String {
@@ -160,5 +183,7 @@ mod tests {
         assert_eq!(expand("{map} at {scale}", &v), "World at 1:25,000,000");
         assert_eq!(expand("{date} {time} · {layers}", &v), "2025-10-11 00:00 · 4");
         assert_eq!(expand("plain", &v), "plain");
+        let named = TokenValues { map: "{date}".into(), ..v };
+        assert_eq!(expand("{map} {nope} {", &named), "{date} {nope} {");
     }
 }

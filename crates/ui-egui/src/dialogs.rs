@@ -81,6 +81,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "calculateField" => "Calculate Field",
         "definitionQuery" => "Definition Query",
         "coordinateSystem" => "Coordinate System",
+        "graphicText" => "Add Text",
         _ => "Rename Layer",
     };
     let t = Tokens::get(ctx);

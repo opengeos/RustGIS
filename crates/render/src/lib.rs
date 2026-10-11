@@ -555,28 +555,23 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                 if rows.get(row) != Some(&true) || !visible(&g.extent()) {
                     continue;
                 }
+                // A picture draws in its row's turn, so graphics keep their order. (On the globe
+                // the geometry and `px` are both longitude/latitude, so the corners land right.)
+                if layer.graphics && rustgis_map::graphics::kind(ds_ptr, row) == "picture" {
+                    let e = g.extent();
+                    let (x0, y0) = ctx.px(Coord::new(e.min_x, e.max_y));
+                    let (x1, y1) = ctx.px(Coord::new(e.max_x, e.min_y));
+                    let (pw, ph) = (dest.width() as f32, dest.height() as f32);
+                    if x0.max(x1) >= 0.0 && x0.min(x1) <= pw && y0.max(y1) >= 0.0 && y0.min(y1) <= ph {
+                        picture::draw(dest, ds_ptr, row, (x0, y0, x1, y1), if direct { opacity } else { 1.0 });
+                    }
+                    continue;
+                }
                 ctx.feature(dest, g, &layer.symbol(row));
             }
         }
         if !direct {
             pm.draw_pixmap(0, 0, target.as_ref(), &PixmapPaint { opacity, ..PixmapPaint::default() }, Transform::identity(), None);
-        }
-        if layer.graphics {
-            // Pictures, under the selection highlight. (On the globe the geometry and `px` are
-            // both longitude/latitude, so the corners land right there too.)
-            let (pw, ph) = (pm.width() as f32, pm.height() as f32);
-            for (row, g) in geoms.iter().enumerate() {
-                let Some(g) = g else { continue };
-                if rows.get(row) != Some(&true) || rustgis_map::graphics::kind(ds_ptr, row) != "picture" || !visible(&g.extent()) {
-                    continue;
-                }
-                let e = g.extent();
-                let (x0, y0) = ctx.px(Coord::new(e.min_x, e.max_y));
-                let (x1, y1) = ctx.px(Coord::new(e.max_x, e.min_y));
-                if x0.max(x1) >= 0.0 && x0.min(x1) <= pw && y0.max(y1) >= 0.0 && y0.min(y1) <= ph {
-                    picture::draw(&mut pm, ds_ptr, row, (x0, y0, x1, y1), opacity);
-                }
-            }
         }
         for row in selection {
             if let Some(Some(g)) = geoms.get(*row)
@@ -592,9 +587,11 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                     continue;
                 }
                 if let (Some(t), Some(c)) = (rustgis_map::graphics::label(ds_ptr, row), g.label_point())
+                    && opacity > 0.0
                     && let Some((x, y)) = ctx.screen(c)
                 {
-                    let color = rustgis_map::graphics::text_color(ds_ptr, row);
+                    let base = rustgis_map::graphics::text_color(ds_ptr, row);
+                    let color = base.with_alpha((base.a() as f32 * opacity).round() as u8);
                     fixed_labels.push(PlacedLabel {
                         text: rustgis_map::graphics::expand(t, &tokens),
                         x: x as f32,
