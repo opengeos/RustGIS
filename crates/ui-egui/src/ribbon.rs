@@ -674,7 +674,7 @@ fn analysis_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 false,
             );
             small_menu(ui, app, "toolbox", "Ready To Use", "Everyday tools.", |ui, app| {
-                if let Ok(Value::Array(tools)) = app.session.run("gp.gallery", &json!({"kind": "ready"})) {
+                if let Ok(Value::Array(tools)) = rustgis_engine::cmd::workflows::gallery_list("ready") {
                     for t in tools {
                         let (id, name) = (t["id"].as_str().unwrap_or("").to_string(), t["name"].as_str().unwrap_or("").to_string());
                         menu_item(ui, app, "tools", &name, "ui.gp.open", json!({"tool": id}));
@@ -689,7 +689,7 @@ fn analysis_tab(app: &mut RustGisApp, ui: &mut Ui) {
             ("raster", "relief", "Raster\nAnalysis", "Tools that analyse rasters."),
         ] {
             big_menu(ui, app, icon, label, desc, |ui, app| {
-                if let Ok(Value::Array(tools)) = app.session.run("gp.gallery", &json!({"kind": kind})) {
+                if let Ok(Value::Array(tools)) = rustgis_engine::cmd::workflows::gallery_list(kind) {
                     for t in tools {
                         let (id, name, cmd) = (
                             t["id"].as_str().unwrap_or("").to_string(),

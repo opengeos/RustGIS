@@ -164,7 +164,11 @@ fn environments(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Curated tool lists: everyday tools, feature analysis and raster analysis.
 fn gallery(_: &mut Session, p: &Value) -> CmdResult {
-    let kind = ps(p, "kind").unwrap_or("ready");
+    gallery_list(ps(p, "kind").unwrap_or("ready"))
+}
+
+/// A tool gallery's tools (no session needed, so menus can list them without running a command).
+pub fn gallery_list(kind: &str) -> CmdResult {
     let ids: &[&str] = match kind {
         "ready" => &["buffer", "dissolve", "countPoints", "clip", "summaryStatistics", "selectByLocation"],
         "feature" => {
