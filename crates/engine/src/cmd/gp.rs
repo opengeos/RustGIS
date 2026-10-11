@@ -21,11 +21,48 @@ pub fn commands() -> Vec<C> {
             ))
         })
         .view(),
+        C::new("gp.geolibre", "GeoLibre Tools", "Analysis › Geoprocessing", |_, _| Ok(geolibre_status())).view(),
+        C::new("gp.setGeolibre", "Locate GeoLibre Runner", "Analysis › Geoprocessing", set_geolibre)
+            .view()
+            .params(r#"{"path"?: "the geolibre executable (empty: look in the usual places)"}"#),
         C::new("gp.clearHistory", "Clear History", "Analysis › Geoprocessing › History", |s, _| {
             s.project.gp_history.clear();
             Ok(Value::Null)
         }),
     ]
+}
+
+/// Whether the GeoLibre tools are available: the runner in use, its version and tool count.
+pub fn geolibre_status() -> Value {
+    #[cfg(feature = "geolibre")]
+    {
+        let found = rustgis_geolibre::runner::find();
+        json!({
+            "supported": true,
+            "available": found.is_some(),
+            "path": found.as_ref().map(|(p, _)| p.display().to_string()),
+            "version": found.map(|(_, v)| v),
+            "tools": rustgis_analysis::external_tools().len(),
+            "download": rustgis_geolibre::runner::DOWNLOAD_URL,
+        })
+    }
+    #[cfg(not(feature = "geolibre"))]
+    json!({"supported": false, "available": false})
+}
+
+/// Chooses the GeoLibre runner (an optional download), or looks for it again.
+fn set_geolibre(_s: &mut Session, p: &Value) -> CmdResult {
+    #[cfg(feature = "geolibre")]
+    {
+        let path = ps(p, "path").map(str::trim).filter(|p| !p.is_empty()).map(std::path::PathBuf::from);
+        rustgis_geolibre::set_runner(path)?;
+        Ok(geolibre_status())
+    }
+    #[cfg(not(feature = "geolibre"))]
+    {
+        let _ = p;
+        Err("this build doesn't include the GeoLibre tools".into())
+    }
 }
 
 struct MapInputs<'a>(&'a rustgis_map::Map, &'a [Dataset]);

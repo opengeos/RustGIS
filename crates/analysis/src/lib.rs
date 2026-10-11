@@ -127,7 +127,9 @@ pub type ExternalRunner = fn(&ToolSpec, &dyn Inputs, &Value) -> Result<ToolResul
 pub type ExternalProvider = fn() -> Vec<ToolSpec>;
 
 static PROVIDER: std::sync::OnceLock<(ExternalProvider, ExternalRunner)> = std::sync::OnceLock::new();
-static EXTERNAL: std::sync::OnceLock<Vec<ToolSpec>> = std::sync::OnceLock::new();
+/// The loaded external tools. Each load is leaked (it lives as long as the app, and reloads are
+/// rare: the user installs or locates the suite), so specs can be handed out as `&'static`.
+static EXTERNAL: std::sync::RwLock<Option<&'static [ToolSpec]>> = std::sync::RwLock::new(None);
 
 /// Adds an external tool suite. Only the first registration counts; the provider runs lazily,
 /// so registering costs nothing until a tool list is needed.
@@ -137,14 +139,31 @@ pub fn register_external(provider: ExternalProvider, runner: ExternalRunner) {
 
 /// The external tools (empty when none are registered).
 pub fn external_tools() -> &'static [ToolSpec] {
-    match PROVIDER.get() {
-        Some((provider, _)) => EXTERNAL.get_or_init(|| {
-            std::panic::catch_unwind(provider).unwrap_or_else(|_| {
+    let Some((provider, _)) = PROVIDER.get() else { return &[] };
+    if let Ok(cur) = EXTERNAL.read()
+        && let Some(tools) = *cur
+    {
+        return tools;
+    }
+    let tools: &'static [ToolSpec] = Box::leak(
+        std::panic::catch_unwind(provider)
+            .unwrap_or_else(|_| {
                 log::error!("the external tool suite failed to load");
                 Vec::new()
             })
-        }),
-        None => &[],
+            .into_boxed_slice(),
+    );
+    match EXTERNAL.write() {
+        Ok(mut cur) => cur.get_or_insert(tools),
+        Err(_) => tools,
+    }
+}
+
+/// Loads the external tools again the next time they're needed (the suite was installed,
+/// located or removed).
+pub fn reload_external() {
+    if let Ok(mut cur) = EXTERNAL.write() {
+        *cur = None;
     }
 }
 

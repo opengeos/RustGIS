@@ -19,7 +19,7 @@ egui front end, headless screenshots for UI work.
 | L1 | `data` | features, typed attributes, GeoJSON/CSV/Shapefile I/O, SQL where clauses, rasters (GeoTIFF/ASCII grid, EPSG reprojection) |
 | L2 | `map`, `analysis` | layers, symbology, labels, camera, basemaps; geoprocessing tools |
 | L3 | `render` | tiny-skia map renderer, label placement, PNG export, font discovery |
-| L3 | `geolibre` | the GeoLibre/Whitebox tool suite as geoprocessing tools (native only, behind the engine's `geolibre` feature) |
+| L3 | `geolibre` | the GeoLibre/Whitebox tool suite as geoprocessing tools, run through the optional `geolibre` runner executable (native only, behind the engine's `geolibre` feature) |
 | L4 | `engine` | `Session`, undo, command registry, ribbon feature catalog, sample project |
 | L6 | `ui-egui` | ribbon, panes, map view, attribute table, dialogs (swappable) |
 | apps | `rustgis`, `rustgis-cli`, `rustgis-web` | desktop app, command line, browser (WebAssembly) |

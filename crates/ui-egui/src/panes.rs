@@ -557,6 +557,53 @@ impl GpForm {
     }
 }
 
+/// Where to get the GeoLibre tools when the runner isn't installed (desktop and CLI builds only).
+fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+    let status = app.session.run("gp.geolibre", &Value::Null).unwrap_or(Value::Null);
+    if status["supported"] != true {
+        return;
+    }
+    let download = status["download"].as_str().unwrap_or("https://github.com/opengeos/geolibre-rust/releases/latest").to_string();
+    ui.add_space(6.0);
+    egui::Frame::NONE
+        .stroke(Stroke::new(1.0, t.border))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new(tl!("GeoLibre tools")).font(semibold(13.0)));
+            ui.label(
+                egui::RichText::new(tl!(
+                    "Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program."
+                ))
+                .size(11.5)
+                .color(t.text_dim),
+            );
+            ui.add_space(4.0);
+            ui.add(egui::Hyperlink::from_label_and_url(tl!("Download the GeoLibre runner"), download).open_in_new_tab(true));
+            #[cfg(not(target_arch = "wasm32"))]
+            if ui.button(tl!("Locate…")).clicked()
+                && let Some(path) = rfd::FileDialog::new().set_title(tl!("Locate the GeoLibre runner")).pick_file()
+            {
+                let path = path.display().to_string();
+                match app.run("gp.setGeolibre", json!({"path": path})) {
+                    Ok(_) => {
+                        if let Some(save) = &app.services.save_pref {
+                            save("geolibre_runner", &path);
+                        }
+                        app.gp.last = None;
+                    }
+                    Err(e) => app.gp.last = Some((false, vec![e])),
+                }
+            }
+            if let Some((false, msgs)) = &app.gp.last {
+                for m in msgs {
+                    ui.label(egui::RichText::new(m).size(11.0).color(t.red));
+                }
+            }
+        });
+}
+
 fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let Some(spec) = app.gp.tool.and_then(rustgis_engine::analysis::tool) else {
         // Tool finder.
@@ -589,6 +636,52 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 app.gp.open(Some(tool.id), &app.session);
             }
         };
+        // The GeoLibre suite: a thousand tools, so its toolboxes stay closed until opened (or,
+        // without the runner, a card says where to get it). Above the built-in tools when
+        // browsing, so it isn't lost below them; after them when searching.
+        let external = rustgis_engine::analysis::external_tools();
+        let geolibre_section = |app: &mut RustGisApp, ui: &mut Ui| {
+            if external.is_empty() {
+                if q.is_empty() {
+                    geolibre_card(app, ui, t);
+                    ui.add_space(8.0);
+                }
+                return;
+            }
+            if q.is_empty() {
+                ui.label(egui::RichText::new(tl!("GeoLibre")).size(11.0).color(t.text_dim));
+                let mut boxes: Vec<&str> = external.iter().map(|t| t.toolbox).collect();
+                boxes.dedup();
+                for b in boxes {
+                    let n = external.iter().filter(|x| x.toolbox == b).count();
+                    egui::CollapsingHeader::new(format!("{} ({n})", crate::i18n::location(b.rsplit(" › ").next().unwrap_or(b))))
+                        .id_salt(("gp-box", b))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            for tool in external.iter().filter(|x| x.toolbox == b) {
+                                row(app, ui, tool);
+                            }
+                        });
+                }
+                ui.add_space(8.0);
+            } else {
+                const MAX: usize = 60;
+                let found: Vec<_> = external.iter().filter(|x| matches(x)).collect();
+                if !found.is_empty() {
+                    ui.label(egui::RichText::new(tl!("GeoLibre")).size(11.0).color(t.text_dim));
+                }
+                for tool in found.iter().take(MAX) {
+                    row(app, ui, tool);
+                }
+                if found.len() > MAX {
+                    let more = crate::i18n::fmt("Refine the search to see {n} more", &[("n", &(found.len() - MAX).to_string())]);
+                    ui.label(egui::RichText::new(more).size(11.0).color(t.text_dim));
+                }
+            }
+        };
+        if q.is_empty() {
+            geolibre_section(app, ui);
+        }
         let mut boxes: Vec<&str> = rustgis_engine::analysis::TOOLS.iter().map(|t| t.toolbox).collect();
         boxes.sort();
         boxes.dedup();
@@ -603,39 +696,8 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
             ui.add_space(6.0);
         }
-        // The GeoLibre suite: a thousand tools, so toolboxes stay closed until opened, and a
-        // search lists the first matches.
-        let external = rustgis_engine::analysis::external_tools();
-        if external.is_empty() {
-            return;
-        }
-        if q.is_empty() {
-            let mut boxes: Vec<&str> = external.iter().map(|t| t.toolbox).collect();
-            boxes.dedup();
-            for b in boxes {
-                let n = external.iter().filter(|x| x.toolbox == b).count();
-                egui::CollapsingHeader::new(format!("{} ({n})", crate::i18n::location(b))).id_salt(("gp-box", b)).default_open(false).show(
-                    ui,
-                    |ui| {
-                        for tool in external.iter().filter(|x| x.toolbox == b) {
-                            row(app, ui, tool);
-                        }
-                    },
-                );
-            }
-        } else {
-            const MAX: usize = 60;
-            let found: Vec<_> = external.iter().filter(|x| matches(x)).collect();
-            if !found.is_empty() {
-                ui.label(egui::RichText::new(tl!("GeoLibre")).size(11.0).color(t.text_dim));
-            }
-            for tool in found.iter().take(MAX) {
-                row(app, ui, tool);
-            }
-            if found.len() > MAX {
-                let more = crate::i18n::fmt("Refine the search to see {n} more", &[("n", &(found.len() - MAX).to_string())]);
-                ui.label(egui::RichText::new(more).size(11.0).color(t.text_dim));
-            }
+        if !q.is_empty() {
+            geolibre_section(app, ui);
         }
         return;
     };

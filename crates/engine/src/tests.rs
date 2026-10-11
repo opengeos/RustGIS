@@ -367,6 +367,16 @@ fn hostile_params_never_panic() {
 #[test]
 fn geolibre_tools_run_on_layers_and_add_their_outputs() {
     let mut s = with_raster();
+    let st = s.run("gp.geolibre", &Value::Null).unwrap();
+    assert_eq!(st["supported"], true);
+    assert!(s.run("gp.setGeolibre", &json!({"path": "/no/such/geolibre"})).is_err(), "not a runner");
+    let undo = s.undo_label();
+    s.run("gp.setGeolibre", &json!({"path": ""})).unwrap();
+    assert_eq!(s.undo_label(), undo, "choosing a runner isn't an edit");
+    if st["available"] != true {
+        eprintln!("skipped: no GeoLibre runner (set RUSTGIS_GEOLIBRE)");
+        return;
+    }
     let tools = s.run("gp.tools", &Value::Null).unwrap();
     assert!(tools.as_array().unwrap().iter().any(|t| t["id"] == "geolibre:slope"));
     let before = s.map().layers.len();

@@ -185,6 +185,7 @@ Distance	Jarak
 Double	Double
 Double-click	Klik ganda
 Double-click to add	Klik ganda untuk menambah
+Download the GeoLibre runner	Unduh runner GeoLibre
 Downloaded {name}	{name} telah diunduh
 DRA	DRA
 Drag / middle-drag	Seret / seret tombol tengah
@@ -269,6 +270,8 @@ Generalization	Generalisasi
 Geo-\nprocessing	Geo-\nprosesing
 GeoJSON or CSV	GeoJSON atau CSV
 GeoLibre	GeoLibre
+GeoLibre Tools	Alat GeoLibre
+GeoLibre tools	Alat GeoLibre
 Geometry	Geometri
 Geoprocessing	Geoprosesing
 Geoprocessing history.	Riwayat geoprosesing.
@@ -337,6 +340,9 @@ LineString	LineString
 List Commands	Daftar Perintah
 Lit	Terang
 Locate	Temukan Lokasi
+Locate GeoLibre Runner	Temukan runner GeoLibre
+Locate the GeoLibre runner	Temukan runner GeoLibre
+Locate…	Temukan…
 Location	Lokasi
 Long	Long
 Longitude (X)	Bujur (X)
@@ -424,6 +430,7 @@ Outline color	Warna garis tepi
 Outline width	Lebar garis tepi
 Output	Keluaran
 Output Name	Nama Keluaran
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	Lebih dari 1.000 alat raster, vektor, LiDAR, hidrologi, dan medan, dari unduhan opsional: runner GeoLibre. Ekstrak lalu tunjukkan program geolibre.
 Overlay	Overlay
 Pan (Explore) · any tool	Geser (Jelajah) · alat apa pun
 Pan to a longitude/latitude.	Geser ke bujur/lintang.

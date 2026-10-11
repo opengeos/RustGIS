@@ -185,6 +185,7 @@ Distance	Distanza
 Double	Decimale
 Double-click	Doppio clic
 Double-click to add	Doppio clic per aggiungere
+Download the GeoLibre runner	Scarica l'esecutore GeoLibre
 Downloaded {name}	Scaricato {name}
 DRA	DRA
 Drag / middle-drag	Trascina / trascina col tasto centrale
@@ -269,6 +270,8 @@ Generalization	Generalizzazione
 Geo-\nprocessing	Geo-\nprocessing
 GeoJSON or CSV	GeoJSON o CSV
 GeoLibre	GeoLibre
+GeoLibre Tools	Strumenti GeoLibre
+GeoLibre tools	Strumenti GeoLibre
 Geometry	Geometria
 Geoprocessing	Geoprocessing
 Geoprocessing history.	Cronologia del geoprocessing.
@@ -337,6 +340,9 @@ LineString	LineString
 List Commands	Elenca comandi
 Lit	Illuminato
 Locate	Localizza
+Locate GeoLibre Runner	Individua l'esecutore GeoLibre
+Locate the GeoLibre runner	Individua l'esecutore GeoLibre
+Locate…	Individua…
 Location	Posizione
 Long	Intero lungo
 Longitude (X)	Longitudine (X)
@@ -424,6 +430,7 @@ Outline color	Colore contorno
 Outline width	Spessore contorno
 Output	Output
 Output Name	Nome output
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	Oltre 1.000 strumenti raster, vettoriali, LiDAR, idrologici e del terreno, in un download facoltativo: l'esecutore GeoLibre. Decomprimilo e individua il programma geolibre.
 Overlay	Sovrapposizione
 Pan (Explore) · any tool	Pan (Esplora) · qualsiasi strumento
 Pan to a longitude/latitude.	Sposta la vista su una longitudine/latitudine.

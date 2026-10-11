@@ -163,6 +163,12 @@ impl RustGisApp {
         if let Some(m) = self.services.load_pref.as_ref().and_then(|load| load("ribbon_minimized")) {
             self.ui.ribbon_minimized = m == "true";
         }
+        // A GeoLibre runner located earlier (Locate… in the Geoprocessing pane).
+        if let Some(path) = self.services.load_pref.as_ref().and_then(|load| load("geolibre_runner")).filter(|p| !p.is_empty())
+            && let Err(e) = self.session.run("gp.setGeolibre", &json!({"path": path}))
+        {
+            log::warn!("{e}");
+        }
         self
     }
 

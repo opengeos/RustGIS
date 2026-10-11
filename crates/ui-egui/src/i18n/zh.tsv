@@ -185,6 +185,7 @@ Distance	距离
 Double	双精度
 Double-click	双击
 Double-click to add	双击添加
+Download the GeoLibre runner	下载 GeoLibre 运行器
 Downloaded {name}	已下载 {name}
 DRA	DRA
 Drag / middle-drag	拖动 / 中键拖动
@@ -269,6 +270,8 @@ Generalization	综合
 Geo-\nprocessing	地理\n处理
 GeoJSON or CSV	GeoJSON 或 CSV
 GeoLibre	GeoLibre
+GeoLibre Tools	GeoLibre 工具
+GeoLibre tools	GeoLibre 工具
 Geometry	几何
 Geoprocessing	地理处理
 Geoprocessing history.	地理处理历史记录。
@@ -337,6 +340,9 @@ LineString	线串
 List Commands	列出命令
 Lit	亮面
 Locate	定位
+Locate GeoLibre Runner	定位 GeoLibre 运行器
+Locate the GeoLibre runner	定位 GeoLibre 运行器
+Locate…	定位…
 Location	位置
 Long	长整型
 Longitude (X)	经度（X）
@@ -424,6 +430,7 @@ Outline color	轮廓颜色
 Outline width	轮廓宽度
 Output	输出
 Output Name	输出名称
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	1000 多个栅格、矢量、LiDAR、水文和地形工具，来自可选下载：GeoLibre 运行器。解压后定位 geolibre 程序。
 Overlay	叠加
 Pan (Explore) · any tool	平移（浏览）· 任意工具
 Pan to a longitude/latitude.	平移到某个经度/纬度。

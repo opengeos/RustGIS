@@ -185,6 +185,7 @@ Distance	거리
 Double	실수
 Double-click	더블클릭
 Double-click to add	더블클릭하여 추가
+Download the GeoLibre runner	GeoLibre 실행기 다운로드
 Downloaded {name}	{name} 다운로드됨
 DRA	DRA
 Drag / middle-drag	드래그 / 가운데 버튼 드래그
@@ -269,6 +270,8 @@ Generalization	일반화
 Geo-\nprocessing	지오프로\n세싱
 GeoJSON or CSV	GeoJSON 또는 CSV
 GeoLibre	GeoLibre
+GeoLibre Tools	GeoLibre 도구
+GeoLibre tools	GeoLibre 도구
 Geometry	지오메트리
 Geoprocessing	지오프로세싱
 Geoprocessing history.	지오프로세싱 기록.
@@ -337,6 +340,9 @@ LineString	LineString
 List Commands	명령 목록
 Lit	밝은 면
 Locate	위치 찾기
+Locate GeoLibre Runner	GeoLibre 실행기 찾기
+Locate the GeoLibre runner	GeoLibre 실행기 찾기
+Locate…	찾기…
 Location	위치
 Long	정수
 Longitude (X)	경도(X)
@@ -424,6 +430,7 @@ Outline color	외곽선 색상
 Outline width	외곽선 두께
 Output	출력
 Output Name	출력 이름
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	래스터, 벡터, LiDAR, 수문, 지형 도구 1,000개 이상을 선택적 다운로드인 GeoLibre 실행기로 제공합니다. 압축을 풀고 geolibre 프로그램을 지정하세요.
 Overlay	중첩
 Pan (Explore) · any tool	이동(탐색) · 모든 도구
 Pan to a longitude/latitude.	경도/위도로 이동합니다.

@@ -185,6 +185,7 @@ Distance	距離
 Double	倍精度
 Double-click	ダブルクリック
 Double-click to add	ダブルクリックで追加
+Download the GeoLibre runner	GeoLibre ランナーをダウンロード
 Downloaded {name}	{name} をダウンロードしました
 DRA	DRA
 Drag / middle-drag	ドラッグ / 中ボタン ドラッグ
@@ -269,6 +270,8 @@ Generalization	ジェネラライズ
 Geo-\nprocessing	ジオプロ\nセシング
 GeoJSON or CSV	GeoJSON または CSV
 GeoLibre	GeoLibre
+GeoLibre Tools	GeoLibre ツール
+GeoLibre tools	GeoLibre ツール
 Geometry	ジオメトリ
 Geoprocessing	ジオプロセシング
 Geoprocessing history.	ジオプロセシングの履歴。
@@ -337,6 +340,9 @@ LineString	ライン ストリング
 List Commands	コマンド一覧
 Lit	明部
 Locate	位置
+Locate GeoLibre Runner	GeoLibre ランナーの場所を指定
+Locate the GeoLibre runner	GeoLibre ランナーの場所を指定
+Locate…	場所を指定…
 Location	場所
 Long	長整数
 Longitude (X)	経度（X）
@@ -424,6 +430,7 @@ Outline color	アウトラインの色
 Outline width	アウトラインの幅
 Output	出力
 Output Name	出力名
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツールを、オプションのダウンロード (GeoLibre ランナー) で利用できます。展開して geolibre プログラムの場所を指定してください。
 Overlay	オーバーレイ
 Pan (Explore) · any tool	画面移動（マップ操作）· 任意のツール
 Pan to a longitude/latitude.	経度/緯度に画面移動します。

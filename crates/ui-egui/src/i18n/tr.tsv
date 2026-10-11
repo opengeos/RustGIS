@@ -185,6 +185,7 @@ Distance	Mesafe
 Double	Ondalık (Double)
 Double-click	Çift tıklama
 Double-click to add	Eklemek için çift tıklayın
+Download the GeoLibre runner	GeoLibre çalıştırıcısını indir
 Downloaded {name}	{name} indirildi
 DRA	DRA
 Drag / middle-drag	Sürükleme / orta tuşla sürükleme
@@ -269,6 +270,8 @@ Generalization	Genelleştirme
 Geo-\nprocessing	Coğrafi\nİşleme
 GeoJSON or CSV	GeoJSON veya CSV
 GeoLibre	GeoLibre
+GeoLibre Tools	GeoLibre araçları
+GeoLibre tools	GeoLibre araçları
 Geometry	Geometri
 Geoprocessing	Coğrafi İşleme
 Geoprocessing history.	Coğrafi işleme geçmişi.
@@ -337,6 +340,9 @@ LineString	LineString
 List Commands	Komutları Listele
 Lit	Aydınlık
 Locate	Konum Bul
+Locate GeoLibre Runner	GeoLibre çalıştırıcısını bul
+Locate the GeoLibre runner	GeoLibre çalıştırıcısını bul
+Locate…	Bul…
 Location	Konum
 Long	Tamsayı (Long)
 Longitude (X)	Boylam (X)
@@ -424,6 +430,7 @@ Outline color	Dış çizgi rengi
 Outline width	Dış çizgi kalınlığı
 Output	Çıktı
 Output Name	Çıktı Adı
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	İsteğe bağlı bir indirmeyle 1.000'den fazla raster, vektör, LiDAR, hidroloji ve arazi aracı: GeoLibre çalıştırıcısı. Arşivi açın ve geolibre programını gösterin.
 Overlay	Bindirme
 Pan (Explore) · any tool	Kaydır (Keşfet) · herhangi bir araç
 Pan to a longitude/latitude.	Bir boylam/enleme kaydır.

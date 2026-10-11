@@ -41,14 +41,36 @@ impl Inputs for Fixture {
     }
 }
 
-fn setup() -> Fixture {
+/// The fixture, or `None` (the test is skipped) when no runner is installed: set
+/// `RUSTGIS_GEOLIBRE` to a `geolibre` executable, or put one on PATH, to run these.
+fn setup() -> Option<Fixture> {
     register();
-    Fixture::new()
+    if runner::find().is_none() {
+        eprintln!("skipped: no GeoLibre runner (set {})", runner::ENV);
+        return None;
+    }
+    Some(Fixture::new())
+}
+
+#[test]
+fn runner_values_and_choices() {
+    assert_eq!(runner::arg_text(&json!("a b")), "a b");
+    assert_eq!(runner::arg_text(&json!(true)), "true");
+    assert_eq!(runner::arg_text(&json!(2.5)), "2.5");
+    // Not a runner: refused, and the choice stays as it was.
+    let before = runner::find();
+    let me = std::env::current_exe().unwrap();
+    assert!(runner::version_of(&me).is_none());
+    assert!(set_runner(Some(me)).is_err());
+    assert!(set_runner(Some(PathBuf::from("/no/such/geolibre"))).is_err());
+    assert_eq!(runner::find(), before);
+    assert_eq!(label_of("z_factor"), "Z factor");
+    assert_eq!(safe("a b/c.tif"), "a_b_c_tif");
 }
 
 #[test]
 fn manifests_become_tool_forms() {
-    setup();
+    let Some(_) = setup() else { return };
     let tools = rustgis_analysis::external_tools();
     assert!(tools.len() > 1000, "{}", tools.len());
     let slope = rustgis_analysis::tool("geolibre:slope").unwrap();
@@ -65,7 +87,7 @@ fn manifests_become_tool_forms() {
 
 #[test]
 fn slope_runs_on_a_raster_layer() {
-    let f = setup();
+    let Some(f) = setup() else { return };
     let r = rustgis_analysis::run("geolibre:slope", &f, &json!({"input": "dem", "units": "degrees"})).unwrap();
     // An embedded raster is staged as a file with its extension.
     assert!(rustgis_analysis::run("geolibre:slope", &f, &json!({"input": "embedded"})).is_ok());
@@ -82,7 +104,7 @@ fn slope_runs_on_a_raster_layer() {
 
 #[test]
 fn vector_tools_work_in_metres_and_return_lonlat() {
-    let f = setup();
+    let Some(f) = setup() else { return };
     let r = rustgis_analysis::run("geolibre:buffer_vector", &f, &json!({"input": "pts", "distance": "1000"})).unwrap();
     let Output::Layers(layers) = r.output else { panic!("layers") };
     let Some(OutputLayer::Vector(ds)) = layers.first() else { panic!("a vector layer: {layers:?}") };
@@ -94,7 +116,7 @@ fn vector_tools_work_in_metres_and_return_lonlat() {
 
 #[test]
 fn rasters_and_points_meet_in_one_coordinate_system() {
-    let f = setup();
+    let Some(f) = setup() else { return };
     let r = rustgis_analysis::run("geolibre:extract_raster_values_at_points", &f, &json!({"rasters": "dem", "points": "pts"})).unwrap();
     let Output::Layers(layers) = r.output else { panic!("layers") };
     let Some(OutputLayer::Vector(ds)) = layers.first() else { panic!("points: {layers:?}") };
@@ -109,7 +131,7 @@ fn rasters_and_points_meet_in_one_coordinate_system() {
 
 #[test]
 fn bad_inputs_are_errors_not_crashes() {
-    let f = setup();
+    let Some(f) = setup() else { return };
     assert!(rustgis_analysis::run("geolibre:slope", &f, &json!({})).unwrap_err().contains("required"));
     assert!(rustgis_analysis::run("geolibre:slope", &f, &json!({"input": "nope"})).unwrap_err().contains("no layer or file"));
     assert!(rustgis_analysis::run("geolibre:slope", &f, &json!({"input": "pts"})).is_err(), "a vector where a raster belongs");

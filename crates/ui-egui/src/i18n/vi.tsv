@@ -185,6 +185,7 @@ Distance	Khoảng cách
 Double	Số thực
 Double-click	Nhấp đúp
 Double-click to add	Nhấp đúp để thêm
+Download the GeoLibre runner	Tải trình chạy GeoLibre
 Downloaded {name}	Đã tải xuống {name}
 DRA	DRA
 Drag / middle-drag	Kéo / kéo chuột giữa
@@ -269,6 +270,8 @@ Generalization	Khái quát hóa
 Geo-\nprocessing	Xử lý\nkhông gian
 GeoJSON or CSV	GeoJSON hoặc CSV
 GeoLibre	GeoLibre
+GeoLibre Tools	Công cụ GeoLibre
+GeoLibre tools	Công cụ GeoLibre
 Geometry	Hình học
 Geoprocessing	Xử lý không gian
 Geoprocessing history.	Lịch sử xử lý không gian.
@@ -337,6 +340,9 @@ LineString	LineString
 List Commands	Liệt kê lệnh
 Lit	Sáng
 Locate	Định vị
+Locate GeoLibre Runner	Tìm trình chạy GeoLibre
+Locate the GeoLibre runner	Tìm trình chạy GeoLibre
+Locate…	Tìm…
 Location	Vị trí
 Long	Số nguyên dài
 Longitude (X)	Kinh độ (X)
@@ -424,6 +430,7 @@ Outline color	Màu viền
 Outline width	Độ rộng viền
 Output	Đầu ra
 Output Name	Tên đầu ra
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	Hơn 1.000 công cụ raster, vector, LiDAR, thủy văn và địa hình, qua một bản tải tùy chọn: trình chạy GeoLibre. Giải nén và chỉ đến chương trình geolibre.
 Overlay	Chồng lớp
 Pan (Explore) · any tool	Di chuyển (Khám phá) · mọi công cụ
 Pan to a longitude/latitude.	Di chuyển tới kinh độ/vĩ độ.

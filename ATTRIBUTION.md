@@ -11,8 +11,9 @@ Raster coordinate systems are looked up by EPSG code in the PROJ definitions of 
 app.
 
 The GeoLibre tool suite ([geolibre-rust](https://github.com/opengeos/geolibre-rust), MIT, built
-on [whitebox-wasm](https://github.com/opengeos/whitebox-wasm), MIT) is linked into the desktop
-app and command line as a library; its tool names and descriptions come from its manifests.
+on [whitebox-wasm](https://github.com/opengeos/whitebox-wasm), MIT) is not part of RustGIS: the
+desktop app and command line run its separately downloaded `geolibre` runner, and its tool
+names and descriptions come from the runner's manifests.
 
 Icons are original vector drawings in code (`crates/ui-egui/src/icons.rs`). Fonts are not
 bundled: the interface uses an installed system sans-serif when one is found, otherwise the

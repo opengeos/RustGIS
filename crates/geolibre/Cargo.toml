@@ -3,7 +3,7 @@ name = "rustgis-geolibre"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "RustGIS L2: the GeoLibre/Whitebox tool suite (1,000+ raster, vector, LiDAR and hydrology tools) as geoprocessing tools"
+description = "RustGIS L3: the GeoLibre/Whitebox tool suite (1,000+ raster, vector, LiDAR and hydrology tools) as geoprocessing tools, through the optional geolibre runner"
 
 [lints]
 workspace = true
@@ -14,6 +14,3 @@ rustgis-data = { workspace = true }
 rustgis-analysis = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
-# The tool registry and its manifests; native only (the tools read and write files).
-# Pinned to a commit on main so the suite can't change under a build.
-geolibre-cli = { git = "https://github.com/opengeos/geolibre-rust", rev = "3cb8ac3771f0a055510ab5e0a86bd00315058c57" }

@@ -1,9 +1,11 @@
 //! L2: the GeoLibre tool suite (Whitebox's tools plus GeoLibre's own: 1,000+ raster, vector,
 //! LiDAR, hydrology and terrain tools) as geoprocessing tools.
 //!
-//! [`register`] adds them to [`rustgis_analysis`], which lists them next to the built-in tools
-//! under "GeoLibre ›" toolboxes. Their forms come from the suite's manifests: each parameter
-//! says whether it is a raster or vector input, an output, a choice, a number or a switch.
+//! The suite is an optional download: the `geolibre` runner, a separate executable (see
+//! [`runner`]). [`register`] adds its tools to [`rustgis_analysis`], which lists them next to
+//! the built-in tools under "GeoLibre ›" toolboxes; without a runner there are none. Their
+//! forms come from the runner's manifests: each parameter says whether it is a raster or vector
+//! input, an output, a choice, a number or a switch.
 //!
 //! The tools read and write files, so a run stages its inputs in a temporary folder: raster
 //! layers as their own file (or the embedded copy), vector layers as GeoJSON. Vector data goes
@@ -16,12 +18,12 @@
 //! are always written to the run's own scratch folder.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod runner;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
-use geolibre_cli::ToolRegistry;
-use geolibre_cli::wbcore::{AllowAllCapabilities, ProgressSink, ToolArgs, ToolContext};
 use rustgis_analysis::{Inputs, Output, OutputLayer, ParamKind, ParamSpec, ToolResult, ToolSpec};
 use rustgis_data::raster::{Crs, Transformer};
 use rustgis_data::{Coord, Dataset, Extent};
@@ -30,15 +32,18 @@ use serde_json::{Value, json};
 /// Tool ids get this prefix, so they never clash with the built-in tools.
 pub const PREFIX: &str = "geolibre:";
 
-/// Adds the suite to the geoprocessing tools. The registry and manifests load the first time
-/// the tools are listed.
+/// Adds the suite to the geoprocessing tools. The runner is found and its manifests read the
+/// first time the tools are listed.
 pub fn register() {
     rustgis_analysis::register_external(specs, run);
 }
 
-fn registry() -> &'static ToolRegistry {
-    static REGISTRY: OnceLock<ToolRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(geolibre_cli::build_registry)
+/// Uses `exe` as the runner (`None`: look in the usual places), and reloads the tool list.
+/// Returns the runner in use and its version.
+pub fn set_runner(exe: Option<PathBuf>) -> Result<Option<(PathBuf, String)>, String> {
+    let found = runner::choose(exe)?;
+    rustgis_analysis::reload_external();
+    Ok(found)
 }
 
 /// What a parameter is for.
@@ -96,7 +101,7 @@ struct Meta {
     params: Vec<MetaParam>,
 }
 
-static META: OnceLock<HashMap<String, Meta>> = OnceLock::new();
+static META: Mutex<Option<HashMap<String, Meta>>> = Mutex::new(None);
 
 fn leak(s: impl Into<String>) -> &'static str {
     Box::leak(s.into().into_boxed_str())
@@ -109,10 +114,14 @@ fn label_of(name: &str) -> String {
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
-/// Builds every tool's spec from the suite's manifests (once).
+/// Builds every tool's spec from the runner's manifests (none without a runner).
 fn specs() -> Vec<ToolSpec> {
+    let manifests = runner::manifests().unwrap_or_else(|e| {
+        log::info!("GeoLibre tools: {e}");
+        Vec::new()
+    });
     let mut meta = HashMap::new();
-    let mut out: Vec<ToolSpec> = geolibre_cli::manifests_json(registry())
+    let mut out: Vec<ToolSpec> = manifests
         .iter()
         .filter_map(|m| {
             let (spec, info) = spec_of(m)?;
@@ -120,7 +129,9 @@ fn specs() -> Vec<ToolSpec> {
             Some(spec)
         })
         .collect();
-    let _ = META.set(meta);
+    if let Ok(mut m) = META.lock() {
+        *m = Some(meta);
+    }
     out.sort_by(|a, b| a.toolbox.cmp(b.toolbox).then(a.name.cmp(b.name)));
     out
 }
@@ -227,21 +238,6 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// Collects a tool's messages (bounded: some tools report every row).
-#[derive(Default)]
-struct Messages(Mutex<Vec<String>>);
-
-impl ProgressSink for Messages {
-    fn info(&self, msg: &str) {
-        if let Ok(mut v) = self.0.lock()
-            && v.len() < 40
-            && !msg.trim().is_empty()
-        {
-            v.push(msg.trim().to_string());
-        }
     }
 }
 
@@ -426,7 +422,9 @@ fn text_message(path: &Path, layer_name: &str, messages: &mut Vec<String>) {
 
 fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResult, String> {
     let id = spec.id.strip_prefix(PREFIX).ok_or("not a GeoLibre tool")?;
-    let meta = META.get().and_then(|m| m.get(id)).ok_or_else(|| format!("{}: unknown tool", spec.name))?;
+    let meta =
+        META.lock().ok().and_then(|m| m.as_ref().and_then(|m| m.get(id)).cloned()).ok_or_else(|| format!("{}: unknown tool", spec.name))?;
+    let meta = &meta;
     let scratch = Scratch::new()?;
     let value_of = |name: &str| params.get(name).filter(|v| !v.is_null() && v.as_str() != Some(""));
     let names = |v: &Value| -> Vec<String> {
@@ -448,7 +446,7 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
     let crs = working_crs(&raster_crs, &vector_extents);
     let tf = crs.transformer()?;
 
-    let mut args = ToolArgs::new();
+    let mut args: Vec<(String, Value)> = Vec::new();
     let mut outputs = Vec::new();
     let n_outputs = meta.params.iter().filter(|p| p.role == Role::Output).count();
     for p in &meta.params {
@@ -457,28 +455,26 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
                 let Some(v) = value_of(&p.name) else { continue };
                 let paths = names(v).iter().map(|n| stage(inputs, n, p.data, crs, &tf, &scratch.0)).collect::<Result<Vec<_>, _>>()?;
                 if !paths.is_empty() {
-                    args.insert(p.name.clone(), Value::String(paths.join(";")));
+                    args.push((p.name.clone(), Value::String(paths.join(";"))));
                 }
             }
             Role::Output => {
                 let path = scratch.0.join(format!("{}.{}", safe(&p.name), output_ext(p, meta)));
-                args.insert(p.name.clone(), Value::String(path.display().to_string()));
+                args.push((p.name.clone(), Value::String(path.display().to_string())));
                 let name =
                     if n_outputs > 1 { format!("{} {}", spec.name, label_of(&p.name).to_lowercase()) } else { spec.name.to_string() };
                 outputs.push((path, name));
             }
             Role::Option => {
                 if let Some(v) = value_of(&p.name) {
-                    args.insert(p.name.clone(), option_value(v, p.data));
+                    args.push((p.name.clone(), option_value(v, p.data)));
                 }
             }
         }
     }
 
-    let progress = Messages::default();
-    let ctx = ToolContext { progress: &progress, capabilities: &AllowAllCapabilities };
-    let result = registry().run(id, &args, &ctx).map_err(|e| format!("{}: {e}", spec.name))?;
-    let mut messages = progress.0.into_inner().unwrap_or_default();
+    let ran = runner::run(id, &args, &scratch.0).map_err(|e| format!("{}: {e}", spec.name))?;
+    let mut messages = ran.messages;
 
     let mut layers = Vec::new();
     for (path, name) in &outputs {
@@ -499,7 +495,7 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
     }
     // Statistics and other results the tool returns rather than writes.
     let scratch_dir = scratch.0.display().to_string();
-    for (k, v) in &result.outputs {
+    for (k, v) in &ran.outputs {
         let text = match v {
             Value::String(s) if s.starts_with(&scratch_dir) => continue,
             Value::String(s) => s.clone(),

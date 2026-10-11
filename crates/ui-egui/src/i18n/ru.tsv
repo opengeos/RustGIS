@@ -185,6 +185,7 @@ Distance	Расстояние
 Double	Вещественное
 Double-click	Двойной щелчок
 Double-click to add	Двойной щелчок — добавить
+Download the GeoLibre runner	Скачать модуль запуска GeoLibre
 Downloaded {name}	Загружено: {name}
 DRA	DRA
 Drag / middle-drag	Перетаскивание / средней кнопкой
@@ -269,6 +270,8 @@ Generalization	Генерализация
 Geo-\nprocessing	Гео-\nобработка
 GeoJSON or CSV	GeoJSON или CSV
 GeoLibre	GeoLibre
+GeoLibre Tools	Инструменты GeoLibre
+GeoLibre tools	Инструменты GeoLibre
 Geometry	Геометрия
 Geoprocessing	Геообработка
 Geoprocessing history.	История геообработки.
@@ -337,6 +340,9 @@ LineString	LineString
 List Commands	Список команд
 Lit	Освещено
 Locate	Найти место
+Locate GeoLibre Runner	Указать модуль запуска GeoLibre
+Locate the GeoLibre runner	Указать модуль запуска GeoLibre
+Locate…	Указать…
 Location	Расположение
 Long	Длинное целое
 Longitude (X)	Долгота (X)
@@ -424,6 +430,7 @@ Outline color	Цвет контура
 Outline width	Толщина контура
 Output	Вывод
 Output Name	Имя результата
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	Более 1000 инструментов для растров, векторов, LiDAR, гидрологии и рельефа в необязательной загрузке: модуль запуска GeoLibre. Распакуйте его и укажите программу geolibre.
 Overlay	Наложение
 Pan (Explore) · any tool	Панорамирование (обзор) · любой инструмент
 Pan to a longitude/latitude.	Переместиться к долготе/широте.

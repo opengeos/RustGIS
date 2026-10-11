@@ -185,6 +185,7 @@ Distance	Afstand
 Double	Decimaal getal
 Double-click	Dubbelklik
 Double-click to add	Dubbelklik om toe te voegen
+Download the GeoLibre runner	GeoLibre-runner downloaden
 Downloaded {name}	{name} gedownload
 DRA	DRA
 Drag / middle-drag	Slepen / slepen met middelste knop
@@ -269,6 +270,8 @@ Generalization	Generalisatie
 Geo-\nprocessing	Geo-\nverwerking
 GeoJSON or CSV	GeoJSON of CSV
 GeoLibre	GeoLibre
+GeoLibre Tools	GeoLibre-gereedschappen
+GeoLibre tools	GeoLibre-gereedschappen
 Geometry	Geometrie
 Geoprocessing	Geoverwerking
 Geoprocessing history.	Geschiedenis van geoverwerking.
@@ -337,6 +340,9 @@ LineString	LineString
 List Commands	Opdrachten weergeven
 Lit	Belicht
 Locate	Lokaliseren
+Locate GeoLibre Runner	GeoLibre-runner zoeken
+Locate the GeoLibre runner	GeoLibre-runner zoeken
+Locate…	Zoeken…
 Location	Locatie
 Long	Lang geheel getal
 Longitude (X)	Lengtegraad (X)
@@ -424,6 +430,7 @@ Outline color	Omtrekkleur
 Outline width	Omtrekdikte
 Output	Uitvoer
 Output Name	Uitvoernaam
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	Meer dan 1.000 raster-, vector-, LiDAR-, hydrologie- en terreingereedschappen als optionele download: de GeoLibre-runner. Pak hem uit en wijs het programma geolibre aan.
 Overlay	Overlay
 Pan (Explore) · any tool	Pannen (Verkennen) · elk gereedschap
 Pan to a longitude/latitude.	Pannen naar een lengte-/breedtegraad.
