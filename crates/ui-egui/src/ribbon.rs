@@ -515,7 +515,8 @@ fn basemap_gallery(ui: &mut Ui, app: &mut RustGisApp) {
         for (i, b) in Basemap::ALL.into_iter().enumerate() {
             let (water, land, outline, _) = b.palette();
             let (r, resp) = ui.allocate_exact_size(vec2(92.0, 74.0), Sense::click());
-            let sel = app.session.map().basemap == b;
+            // Web basemaps cover the built-in one.
+            let sel = app.session.map().basemap == b && app.session.map().tiles.iter().all(|t| t.overlay);
             let thumb = Rect::from_min_size(r.min + vec2(4.0, 4.0), vec2(84.0, 48.0));
             ui.painter().rect_filled(thumb, CornerRadius::same(4), crate::theme::c32(water));
             // A little continent.
@@ -544,6 +545,58 @@ fn basemap_gallery(ui: &mut Ui, app: &mut RustGisApp) {
             if i % 3 == 2 {
                 ui.end_row();
             }
+        }
+    });
+    tile_layers(ui, app, &t);
+}
+
+/// The map's web tile layers (top first): shown, opacity, order and removal, and adding one.
+fn tile_layers(ui: &mut Ui, app: &mut RustGisApp, t: &Tokens) {
+    ui.add_space(6.0);
+    ui.separator();
+    ui.label(egui::RichText::new(tl!("Web Tile Layers")).font(semibold(12.5)));
+    let tiles = app.session.map().tiles.clone();
+    if tiles.is_empty() {
+        ui.label(egui::RichText::new(tl!("None. Add one by address, or from a basemap plugin.")).weak().small());
+    }
+    let mut action: Option<(&str, Value)> = None;
+    for (i, layer) in tiles.iter().enumerate() {
+        ui.horizontal(|ui| {
+            let mut vis = layer.visible;
+            if ui.checkbox(&mut vis, "").on_hover_text(tl!("Show or hide")).changed() {
+                action = Some(("map.setTiles", json!({"index": i, "visible": vis})));
+            }
+            let name = if layer.overlay { format!("{} · {}", layer.name, tl!("overlay")) } else { layer.name.clone() };
+            ui.allocate_ui_with_layout(vec2(160.0, 18.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_width(160.0);
+                ui.add(egui::Label::new(egui::RichText::new(name).color(t.text)).truncate()).on_hover_text(&layer.url);
+            });
+            let mut o = layer.opacity * 100.0;
+            let slider = ui.add(egui::Slider::new(&mut o, 0.0..=100.0).suffix("%").show_value(false)).on_hover_text(tl!("Opacity"));
+            if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
+                action = Some(("map.setTiles", json!({"index": i, "opacity": o / 100.0})));
+            }
+            if ui.add_enabled(i > 0, egui::Button::new("▲").small()).on_hover_text(tl!("Move up")).clicked() {
+                action = Some(("map.setTiles", json!({"index": i, "move": "up"})));
+            }
+            if ui.add_enabled(i + 1 < tiles.len(), egui::Button::new("▼").small()).on_hover_text(tl!("Move down")).clicked() {
+                action = Some(("map.setTiles", json!({"index": i, "move": "down"})));
+            }
+            if crate::widgets::icon_button(ui, "close", tl!("Remove")).clicked() {
+                action = Some(("map.removeTiles", json!({"index": i})));
+            }
+        });
+    }
+    if let Some((cmd, p)) = action {
+        let _ = app.run(cmd, p);
+    }
+    ui.horizontal(|ui| {
+        if ui.button(tl!("Add Tile Layer…")).on_hover_text(tl!("Add raster tiles, vector tiles or a map style by address.")).clicked() {
+            let _ = app.run("ui.dialog", json!({"name": "addTiles"}));
+            ui.close();
+        }
+        if !tiles.is_empty() && ui.button(tl!("Remove All")).clicked() {
+            let _ = app.run("map.removeTiles", json!({}));
         }
     });
 }

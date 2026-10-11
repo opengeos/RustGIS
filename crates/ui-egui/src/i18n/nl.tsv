@@ -4,6 +4,7 @@ A 3D globe seen from space.	Een 3D-globe, gezien vanuit de ruimte.
 A blank map with a basemap	Een lege kaart met een basiskaart
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Een snelle, opensource desktop-GIS geschreven in puur Rust, met de lintwerkwijze van desktop-GIS: kaarten en lagen, symbologie, labels, selectie, bewerken, geoverwerking en exporteren.
 A projected coordinate system.	Een geprojecteerd coördinatensysteem.
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	Het adres van een tegeldienst: rastertegels met {z}/{x}/{y} (of {-y}, {q}, {bbox-epsg-3857} voor WMS), vectortegels (.pbf) of TileJSON, of een MapLibre-stijl.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Een waarde, een veld of twee daarvan verbonden door + − × ÷. Geldt voor de geselecteerde rijen, of voor alle rijen als er geen geselecteerd zijn.
 About	Over
 About plugins	Over plugins
@@ -27,10 +28,14 @@ Add Field	Veld toevoegen
 Add field	Veld toevoegen
 Add GeoJSON, CSV or Shapefile data to the map.	GeoJSON-, CSV- of Shapefile-gegevens aan de kaart toevoegen.
 Add Plugin Folder…	Pluginmap toevoegen…
+Add raster tiles, vector tiles or a map style by address.	Rastertegels, vectortegels of een kaartstijl toevoegen via een adres.
 Add sample countries	Voorbeeldlanden toevoegen
 Add Sample Data	Voorbeeldgegevens toevoegen
+Add Tile Layer	Tegellaag toevoegen
+Add Tile Layer…	Tegellaag toevoegen…
 Add To Current Selection	Toevoegen aan huidige selectie
 Add vector data.	Vectorgegevens toevoegen.
+Address	Adres
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Voegt geodetische oppervlakte (km²), lengte (km) of zwaartepuntcoördinaten toe als velden.
 All	Alle
 All categories	Alle categorieën
@@ -49,9 +54,11 @@ Attribute\nTable	Attributen-\ntabel
 Attribute Table	Attributentabel
 Attribute table	Attributentabel
 Attributes	Attributen
+Attribution	Bronvermelding
 Aurora	Aurora
 Automatic	Automatisch
 Automatic (system language)	Automatisch (systeemtaal)
+Automatic ({kind})	Automatisch ({kind})
 Azimuth	Azimut
 Back to Explore; cancel a sketch	Terug naar Verkennen; schets annuleren
 Back to the map	Terug naar de kaart
@@ -302,6 +309,8 @@ Fixed Zoom In	Vast inzoomen
 Fixed Zoom Out	Vast uitzoomen
 Folders	Mappen
 Forest	Bos
+from the address	uit het adres
+from the service	van de dienst
 Full Extent	Volledig bereik
 Full extent	Volledig bereik
 Full size	Volledige grootte
@@ -407,6 +416,7 @@ Load an unpacked plugin from its folder while you develop it.	Een uitgepakte plu
 Load GeoLibre tools	GeoLibre-gereedschappen laden
 Loaded {name} from its folder.	{name} geladen vanuit zijn map.
 Loading the GeoLibre tools…	GeoLibre-gereedschappen laden…
+Loads map tiles from the web	Laadt kaarttegels van het web
 Locate	Lokaliseren
 Locate GeoLibre Runner	GeoLibre-runner zoeken
 Locate the GeoLibre runner	GeoLibre-runner zoeken
@@ -422,11 +432,13 @@ Make Layer From Selected Features	Laag maken van geselecteerde objecten
 Manage	Beheren
 Manage Edits	Bewerkingen beheren
 Map	Kaart
+Map style (JSON)	Kaartstijl (JSON)
 Map › Layer	Kaart › Laag
 Maps	Kaarten
 Marker	Markering
 Max	Max
 Max %	Max %
+Maximum zoom	Maximaal zoomniveau
 Mean	Gemiddelde
 Measure	Meten
 Measure Area	Oppervlakte meten
@@ -446,7 +458,9 @@ Mod+	Mod+
 Mollweide (equal-area world)	Mollweide (oppervlaktegetrouwe wereld)
 Mouse wheel	Muiswiel
 Move Down	Omlaag
+Move down	Omlaag
 Move Up	Omhoog
+Move up	Omhoog
 Name	Naam
 Natural Breaks (Jenks)	Natuurlijke grenzen (Jenks)
 Natural Color (1, 2, 3)	Natuurlijke kleuren (1, 2, 3)
@@ -475,12 +489,14 @@ No Pop-ups	Geen pop-ups
 No standalone tables	Geen zelfstandige tabellen
 NoData	NoData
 None	Geen
+None. Add one by address, or from a basemap plugin.	Geen. Voeg er een toe via een adres of vanuit een basiskaartplugin.
 North	Noord
 North Polar Stereographic	Polair stereografisch noord
 Not saved yet	Nog niet opgeslagen
 Ocean	Oceaan
 OID	OID
 Only features matching this expression draw in {layer}.	Alleen objecten die aan deze expressie voldoen worden getekend in {layer}.
+Opacity	Dekking
 Open	Openen
 Open a .rgisx project	Een .rgisx-project openen
 Open a RustGIS project.	Een RustGIS-project openen.
@@ -507,6 +523,8 @@ Output Name	Uitvoernaam
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Meer dan 1.000 raster-, vector-, LiDAR-, hydrologie- en terreingereedschappen die in de browser draaien, na een eenmalige download van ongeveer 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Meer dan 1.000 raster-, vector-, LiDAR-, hydrologie- en terreingereedschappen als optionele download van ongeveer 20 MB.
 Overlay	Overlay
+overlay	overlay
+Overlay (a transparent layer kept on top, such as labels or roads)	Overlay (een transparante laag die bovenop blijft, zoals labels of wegen)
 Pan (Explore) · any tool	Pannen (Verkennen) · elk gereedschap
 Pan to a longitude/latitude.	Pannen naar een lengte-/breedtegraad.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Pan met de muis, zoom met het wiel en klik op objecten om hun attributen te zien.
@@ -554,6 +572,7 @@ Raster\nInformation	Raster-\ninformatie
 Raster Data	Rastergegevens
 Raster Information	Rasterinformatie
 Raster Layer	Rasterlaag
+Raster tiles (XYZ)	Rastertegels (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} banden · {renderer}
 Read and write files on this computer	Bestanden op deze computer lezen en schrijven
 Read the map's layers and features	De lagen en objecten van de kaart lezen
@@ -569,6 +588,7 @@ Refresh	Vernieuwen
 Regional, equal-area: the contiguous United States.	Regionaal, oppervlaktegetrouw: de aaneengesloten Verenigde Staten.
 Regional, equal-area: the European standard for statistics.	Regionaal, oppervlaktegetrouw: de Europese standaard voor statistiek.
 Remove	Verwijderen
+Remove All	Alles verwijderen
 Remove Bookmark	Bladwijzer verwijderen
 Remove From Current Selection	Verwijderen uit huidige selectie
 Remove the layer from the map.	De laag van de kaart verwijderen.
@@ -656,6 +676,7 @@ Shift+	Shift+
 Shift+drag	Shift+slepen
 Shortcuts	Sneltoetsen
 Show latitude/longitude lines on the basemap.	Lengte- en breedtelijnen op de basiskaart tonen.
+Show or hide	Tonen of verbergen
 Show or hide the Catalog pane.	Het catalogusvenster tonen of verbergen.
 Show or hide the Contents pane.	Het venster Inhoud tonen of verbergen.
 Show or hide the Geoprocessing pane.	Het geoverwerkingsvenster tonen of verbergen.
@@ -725,6 +746,7 @@ Triangle	Driehoek
 Turn Labels Off	Labels uitschakelen
 Turn labels on or off for the selected layer.	Labels voor de geselecteerde laag in- of uitschakelen.
 Turn labels on or off.	Labels in- of uitschakelen.
+Type	Type
 Unavailable: {reason}	Niet beschikbaar: {reason}
 Undo	Ongedaan maken
 Undo / Redo	Ongedaan maken / Opnieuw
@@ -740,6 +762,7 @@ Update to {version}	Bijwerken naar {version}
 USA Contiguous Albers Equal Area	VS (aaneengesloten) Albers oppervlaktegetrouw
 Valid expression · {n} matching rows	Geldige expressie · {n} overeenkomende rijen
 Vector and raster data	Vector- en rastergegevens
+Vector tiles (MVT)	Vectortegels (MVT)
 Version {version}	Versie {version}
 View	Beeld
 View Unplaced	Niet-geplaatste tonen
@@ -749,6 +772,7 @@ Visibility Range	Zichtbaarheidsbereik
 Visible	Zichtbaar
 Visible Layers	Zichtbare lagen
 Web Mercator	Web Mercator
+Web Tile Layers	Webtegellagen
 Website	Website
 Welcome to RustGIS	Welkom bij RustGIS
 West	West

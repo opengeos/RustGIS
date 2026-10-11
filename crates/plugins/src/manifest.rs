@@ -49,6 +49,8 @@ pub enum Permission {
     Edit,
     /// Run commands that read or write files the user names.
     Files,
+    /// Make the map fetch from addresses the plugin gives it (web tile layers).
+    Network,
 }
 
 impl Permission {
@@ -56,6 +58,7 @@ impl Permission {
         match self {
             Permission::Edit => "edit",
             Permission::Files => "files",
+            Permission::Network => "network",
         }
     }
     /// What it lets a plugin do, for the install prompt.
@@ -63,6 +66,7 @@ impl Permission {
         match self {
             Permission::Edit => "Change the project (add layers, edit features, change symbology)",
             Permission::Files => "Read and write files on this computer",
+            Permission::Network => "Load map tiles from addresses it chooses",
         }
     }
 }

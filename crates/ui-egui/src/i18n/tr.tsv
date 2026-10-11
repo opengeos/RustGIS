@@ -4,6 +4,7 @@ A 3D globe seen from space.	Uzaydan görülen 3B küre.
 A blank map with a basemap	Altlık haritalı boş bir harita
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Saf Rust ile yazılmış, hızlı ve açık kaynaklı bir masaüstü CBS; masaüstü CBS'nin şerit iş akışıyla: haritalar ve katmanlar, semboloji, etiketleme, seçim, düzenleme, coğrafi işleme ve dışa aktarma.
 A projected coordinate system.	Projeksiyonlu bir koordinat sistemi.
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	Bir karo servisinin adresi: {z}/{x}/{y} içeren raster karolar (veya WMS için {-y}, {q}, {bbox-epsg-3857}), vektör karolar (.pbf) veya TileJSON ya da bir MapLibre stili.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Bir değer, bir alan veya + − × ÷ ile birleştirilmiş iki tanesi. Seçili satırlara, hiçbiri seçili değilse tüm satırlara uygulanır.
 About	Hakkında
 About plugins	Eklentiler hakkında
@@ -27,10 +28,14 @@ Add Field	Alan Ekle
 Add field	Alan ekle
 Add GeoJSON, CSV or Shapefile data to the map.	Haritaya GeoJSON, CSV veya Shapefile verisi ekle.
 Add Plugin Folder…	Eklenti Klasörü Ekle…
+Add raster tiles, vector tiles or a map style by address.	Adresle raster karolar, vektör karolar veya bir harita stili ekle.
 Add sample countries	Örnek ülkeleri ekle
 Add Sample Data	Örnek Veri Ekle
+Add Tile Layer	Karo Katmanı Ekle
+Add Tile Layer…	Karo Katmanı Ekle…
 Add To Current Selection	Geçerli Seçime Ekle
 Add vector data.	Vektör veri ekle.
+Address	Adres
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Jeodezik alan (km²), uzunluk (km) veya merkez noktası koordinatlarını alan olarak ekler.
 All	Tümü
 All categories	Tüm kategoriler
@@ -49,9 +54,11 @@ Attribute\nTable	Öznitelik\nTablosu
 Attribute Table	Öznitelik Tablosu
 Attribute table	Öznitelik tablosu
 Attributes	Öznitelikler
+Attribution	Kaynak gösterimi
 Aurora	Aurora
 Automatic	Otomatik
 Automatic (system language)	Otomatik (sistem dili)
+Automatic ({kind})	Otomatik ({kind})
 Azimuth	Azimut
 Back to Explore; cancel a sketch	Keşfet'e dön; çizimi iptal et
 Back to the map	Haritaya dön
@@ -302,6 +309,8 @@ Fixed Zoom In	Sabit Yakınlaştır
 Fixed Zoom Out	Sabit Uzaklaştır
 Folders	Klasörler
 Forest	Orman
+from the address	adresten
+from the service	servisten
 Full Extent	Tam Kapsam
 Full extent	Tam kapsam
 Full size	Tam boyut
@@ -407,6 +416,7 @@ Load an unpacked plugin from its folder while you develop it.	Geliştirirken pak
 Load GeoLibre tools	GeoLibre araçlarını yükle
 Loaded {name} from its folder.	{name} klasöründen yüklendi.
 Loading the GeoLibre tools…	GeoLibre araçları yükleniyor…
+Loads map tiles from the web	Web'den harita karoları yükler
 Locate	Konum Bul
 Locate GeoLibre Runner	GeoLibre çalıştırıcısını bul
 Locate the GeoLibre runner	GeoLibre çalıştırıcısını bul
@@ -422,11 +432,13 @@ Make Layer From Selected Features	Seçili Detaylardan Katman Oluştur
 Manage	Yönet
 Manage Edits	Düzenlemeleri Yönet
 Map	Harita
+Map style (JSON)	Harita stili (JSON)
 Map › Layer	Harita › Katman
 Maps	Haritalar
 Marker	İşaretçi
 Max	Maks
 Max %	Maks %
+Maximum zoom	En büyük yakınlaştırma
 Mean	Ortalama
 Measure	Ölç
 Measure Area	Alan Ölç
@@ -446,7 +458,9 @@ Mod+	Mod+
 Mollweide (equal-area world)	Mollweide (eşalan dünya)
 Mouse wheel	Fare tekerleği
 Move Down	Aşağı Taşı
+Move down	Aşağı taşı
 Move Up	Yukarı Taşı
+Move up	Yukarı taşı
 Name	Ad
 Natural Breaks (Jenks)	Doğal Kırılmalar (Jenks)
 Natural Color (1, 2, 3)	Doğal Renk (1, 2, 3)
@@ -475,12 +489,14 @@ No Pop-ups	Açılır Pencere Yok
 No standalone tables	Bağımsız tablo yok
 NoData	NoData
 None	Yok
+None. Add one by address, or from a basemap plugin.	Yok. Adresle veya bir altlık harita eklentisinden ekleyin.
 North	Kuzey
 North Polar Stereographic	Kuzey Kutup Stereografik
 Not saved yet	Henüz kaydedilmedi
 Ocean	Okyanus
 OID	OID
 Only features matching this expression draw in {layer}.	{layer} katmanında yalnızca bu ifadeyle eşleşen detaylar çizilir.
+Opacity	Opaklık
 Open	Aç
 Open a .rgisx project	Bir .rgisx projesi aç
 Open a RustGIS project.	Bir RustGIS projesi aç.
@@ -507,6 +523,8 @@ Output Name	Çıktı Adı
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Yaklaşık 25 MB'lık tek seferlik bir indirmeyle tarayıcıda çalışan 1.000'den fazla raster, vektör, LiDAR, hidroloji ve arazi aracı.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Yaklaşık 20 MB'lık isteğe bağlı bir indirmeyle 1.000'den fazla raster, vektör, LiDAR, hidroloji ve arazi aracı.
 Overlay	Bindirme
+overlay	bindirme
+Overlay (a transparent layer kept on top, such as labels or roads)	Bindirme (etiketler veya yollar gibi üstte tutulan saydam bir katman)
 Pan (Explore) · any tool	Kaydır (Keşfet) · herhangi bir araç
 Pan to a longitude/latitude.	Bir boylam/enleme kaydır.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Fareyle kaydırın, tekerlekle yakınlaştırın ve özniteliklerini görmek için detaylara tıklayın.
@@ -554,6 +572,7 @@ Raster\nInformation	Raster\nBilgisi
 Raster Data	Raster Verisi
 Raster Information	Raster Bilgisi
 Raster Layer	Raster Katmanı
+Raster tiles (XYZ)	Raster karolar (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} bant · {renderer}
 Read and write files on this computer	Bu bilgisayardaki dosyaları okuma ve yazma
 Read the map's layers and features	Haritanın katmanlarını ve detaylarını okuma
@@ -569,6 +588,7 @@ Refresh	Yenile
 Regional, equal-area: the contiguous United States.	Bölgesel, eşalan: bitişik Amerika Birleşik Devletleri.
 Regional, equal-area: the European standard for statistics.	Bölgesel, eşalan: istatistikler için Avrupa standardı.
 Remove	Kaldır
+Remove All	Tümünü Kaldır
 Remove Bookmark	Yer İmini Kaldır
 Remove From Current Selection	Geçerli Seçimden Kaldır
 Remove the layer from the map.	Katmanı haritadan kaldır.
@@ -656,6 +676,7 @@ Shift+	Shift+
 Shift+drag	Shift+sürükleme
 Shortcuts	Kısayollar
 Show latitude/longitude lines on the basemap.	Altlık haritada enlem/boylam çizgilerini göster.
+Show or hide	Göster veya gizle
 Show or hide the Catalog pane.	Katalog panelini göster veya gizle.
 Show or hide the Contents pane.	İçindekiler panelini göster veya gizle.
 Show or hide the Geoprocessing pane.	Coğrafi İşleme panelini göster veya gizle.
@@ -725,6 +746,7 @@ Triangle	Üçgen
 Turn Labels Off	Etiketleri Kapat
 Turn labels on or off for the selected layer.	Seçili katman için etiketleri aç veya kapat.
 Turn labels on or off.	Etiketleri aç veya kapat.
+Type	Tür
 Unavailable: {reason}	Kullanılamıyor: {reason}
 Undo	Geri Al
 Undo / Redo	Geri Al / Yinele
@@ -740,6 +762,7 @@ Update to {version}	{version} sürümüne güncelle
 USA Contiguous Albers Equal Area	ABD Bitişik Albers Eşalan
 Valid expression · {n} matching rows	Geçerli ifade · {n} eşleşen satır
 Vector and raster data	Vektör ve raster verisi
+Vector tiles (MVT)	Vektör karolar (MVT)
 Version {version}	Sürüm {version}
 View	Görünüm
 View Unplaced	Yerleşmeyenleri Göster
@@ -749,6 +772,7 @@ Visibility Range	Görünürlük Aralığı
 Visible	Görünür
 Visible Layers	Görünür Katmanlar
 Web Mercator	Web Mercator
+Web Tile Layers	Web Karo Katmanları
 Website	Web sitesi
 Welcome to RustGIS	RustGIS'e hoş geldiniz
 West	Batı

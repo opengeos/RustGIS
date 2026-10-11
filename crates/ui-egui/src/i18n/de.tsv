@@ -4,6 +4,7 @@ A 3D globe seen from space.	Ein 3D-Globus, aus dem All gesehen.
 A blank map with a basemap	Eine leere Karte mit Grundkarte
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Ein schnelles Open-Source-Desktop-GIS in reinem Rust, mit dem Menüband-Workflow eines Desktop-GIS: Karten und Layer, Symbologie, Beschriftung, Auswahl, Bearbeitung, Geoverarbeitung und Export.
 A projected coordinate system.	Ein projiziertes Koordinatensystem.
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	Die Adresse eines Kacheldienstes: Rasterkacheln mit {z}/{x}/{y} (oder {-y}, {q}, {bbox-epsg-3857} für WMS), Vektorkacheln (.pbf) oder TileJSON, oder ein MapLibre-Stil.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Ein Wert, ein Feld oder zwei davon, verknüpft mit + − × ÷. Gilt für die ausgewählten Zeilen oder alle Zeilen, wenn keine ausgewählt ist.
 About	Über
 About plugins	Über Plugins
@@ -27,10 +28,14 @@ Add Field	Feld hinzufügen
 Add field	Feld hinzufügen
 Add GeoJSON, CSV or Shapefile data to the map.	GeoJSON-, CSV- oder Shapefile-Daten zur Karte hinzufügen.
 Add Plugin Folder…	Plugin-Ordner hinzufügen…
+Add raster tiles, vector tiles or a map style by address.	Rasterkacheln, Vektorkacheln oder einen Kartenstil über eine Adresse hinzufügen.
 Add sample countries	Beispielländer hinzufügen
 Add Sample Data	Beispieldaten hinzufügen
+Add Tile Layer	Kachel-Layer hinzufügen
+Add Tile Layer…	Kachel-Layer hinzufügen…
 Add To Current Selection	Zur aktuellen Auswahl hinzufügen
 Add vector data.	Vektordaten hinzufügen.
+Address	Adresse
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Fügt geodätische Fläche (km²), Länge (km) oder Schwerpunktkoordinaten als Felder hinzu.
 All	Alle
 All categories	Alle Kategorien
@@ -49,9 +54,11 @@ Attribute\nTable	Attribut-\ntabelle
 Attribute Table	Attributtabelle
 Attribute table	Attributtabelle
 Attributes	Attribute
+Attribution	Quellenangabe
 Aurora	Aurora
 Automatic	Automatisch
 Automatic (system language)	Automatisch (Systemsprache)
+Automatic ({kind})	Automatisch ({kind})
 Azimuth	Azimut
 Back to Explore; cancel a sketch	Zurück zu „Erkunden“; Skizze abbrechen
 Back to the map	Zurück zur Karte
@@ -302,6 +309,8 @@ Fixed Zoom In	Fester Zoom hinein
 Fixed Zoom Out	Fester Zoom heraus
 Folders	Ordner
 Forest	Wald
+from the address	aus der Adresse
+from the service	vom Dienst
 Full Extent	Volle Ausdehnung
 Full extent	Volle Ausdehnung
 Full size	Volle Größe
@@ -407,6 +416,7 @@ Load an unpacked plugin from its folder while you develop it.	Ein entpacktes Plu
 Load GeoLibre tools	GeoLibre-Werkzeuge laden
 Loaded {name} from its folder.	{name} aus seinem Ordner geladen.
 Loading the GeoLibre tools…	GeoLibre-Werkzeuge werden geladen…
+Loads map tiles from the web	Lädt Kartenkacheln aus dem Web
 Locate	Lokalisieren
 Locate GeoLibre Runner	GeoLibre-Runner suchen
 Locate the GeoLibre runner	GeoLibre-Runner suchen
@@ -422,11 +432,13 @@ Make Layer From Selected Features	Layer aus ausgewählten Objekten erstellen
 Manage	Verwalten
 Manage Edits	Bearbeitungen verwalten
 Map	Karte
+Map style (JSON)	Kartenstil (JSON)
 Map › Layer	Karte › Layer
 Maps	Karten
 Marker	Marker
 Max	Max
 Max %	Max %
+Maximum zoom	Maximale Zoomstufe
 Mean	Mittelwert
 Measure	Messen
 Measure Area	Fläche messen
@@ -446,7 +458,9 @@ Mod+	Mod+
 Mollweide (equal-area world)	Mollweide (flächentreue Weltkarte)
 Mouse wheel	Mausrad
 Move Down	Nach unten
+Move down	Nach unten
 Move Up	Nach oben
+Move up	Nach oben
 Name	Name
 Natural Breaks (Jenks)	Natürliche Unterbrechungen (Jenks)
 Natural Color (1, 2, 3)	Echtfarben (1, 2, 3)
@@ -475,12 +489,14 @@ No Pop-ups	Keine Pop-ups
 No standalone tables	Keine eigenständigen Tabellen
 NoData	NoData
 None	Keine
+None. Add one by address, or from a basemap plugin.	Keine. Fügen Sie einen über eine Adresse oder aus einem Grundkarten-Plugin hinzu.
 North	Nord
 North Polar Stereographic	Polare stereografische Projektion (Nord)
 Not saved yet	Noch nicht gespeichert
 Ocean	Ozean
 OID	OID
 Only features matching this expression draw in {layer}.	Nur Objekte, die diesem Ausdruck entsprechen, werden in {layer} gezeichnet.
+Opacity	Deckkraft
 Open	Öffnen
 Open a .rgisx project	Ein .rgisx-Projekt öffnen
 Open a RustGIS project.	Ein RustGIS-Projekt öffnen.
@@ -507,6 +523,8 @@ Output Name	Ausgabename
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Über 1.000 Raster-, Vektor-, LiDAR-, Hydrologie- und Geländewerkzeuge, die im Browser laufen, nach einem einmaligen Download von etwa 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Über 1.000 Raster-, Vektor-, LiDAR-, Hydrologie- und Geländewerkzeuge als optionaler Download von etwa 20 MB.
 Overlay	Überlagerung
+overlay	Überlagerung
+Overlay (a transparent layer kept on top, such as labels or roads)	Überlagerung (ein transparenter Layer, der oben bleibt, etwa Beschriftungen oder Straßen)
 Pan (Explore) · any tool	Verschieben (Erkunden) · jedes Werkzeug
 Pan to a longitude/latitude.	Zu einer Länge/Breite verschieben.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Mit der Maus verschieben, mit dem Mausrad zoomen und Objekte anklicken, um ihre Attribute zu sehen.
@@ -554,6 +572,7 @@ Raster\nInformation	Raster-\ninformationen
 Raster Data	Rasterdaten
 Raster Information	Rasterinformationen
 Raster Layer	Raster-Layer
+Raster tiles (XYZ)	Rasterkacheln (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} Kanäle · {renderer}
 Read and write files on this computer	Dateien auf diesem Computer lesen und schreiben
 Read the map's layers and features	Layer und Objekte der Karte lesen
@@ -569,6 +588,7 @@ Refresh	Aktualisieren
 Regional, equal-area: the contiguous United States.	Regional, flächentreu: die zusammenhängenden Vereinigten Staaten.
 Regional, equal-area: the European standard for statistics.	Regional, flächentreu: der europäische Standard für Statistiken.
 Remove	Entfernen
+Remove All	Alle entfernen
 Remove Bookmark	Lesezeichen entfernen
 Remove From Current Selection	Aus aktueller Auswahl entfernen
 Remove the layer from the map.	Den Layer aus der Karte entfernen.
@@ -656,6 +676,7 @@ Shift+	Shift+
 Shift+drag	Shift+Ziehen
 Shortcuts	Tastenkürzel
 Show latitude/longitude lines on the basemap.	Längen- und Breitengrade auf der Grundkarte anzeigen.
+Show or hide	Ein- oder ausblenden
 Show or hide the Catalog pane.	Katalogbereich ein- oder ausblenden.
 Show or hide the Contents pane.	Inhaltsbereich ein- oder ausblenden.
 Show or hide the Geoprocessing pane.	Geoverarbeitungsbereich ein- oder ausblenden.
@@ -725,6 +746,7 @@ Triangle	Dreieck
 Turn Labels Off	Beschriftungen ausschalten
 Turn labels on or off for the selected layer.	Beschriftungen für den ausgewählten Layer ein- oder ausschalten.
 Turn labels on or off.	Beschriftungen ein- oder ausschalten.
+Type	Typ
 Unavailable: {reason}	Nicht verfügbar: {reason}
 Undo	Rückgängig
 Undo / Redo	Rückgängig / Wiederholen
@@ -740,6 +762,7 @@ Update to {version}	Auf {version} aktualisieren
 USA Contiguous Albers Equal Area	USA flächentreue Albers-Projektion
 Valid expression · {n} matching rows	Gültiger Ausdruck · {n} passende Zeilen
 Vector and raster data	Vektor- und Rasterdaten
+Vector tiles (MVT)	Vektorkacheln (MVT)
 Version {version}	Version {version}
 View	Ansicht
 View Unplaced	Nicht platzierte anzeigen
@@ -749,6 +772,7 @@ Visibility Range	Sichtbarkeitsbereich
 Visible	Sichtbar
 Visible Layers	Sichtbare Layer
 Web Mercator	Web Mercator
+Web Tile Layers	Web-Kachel-Layer
 Website	Website
 Welcome to RustGIS	Willkommen bei RustGIS
 West	West

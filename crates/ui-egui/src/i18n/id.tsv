@@ -4,6 +4,7 @@ A 3D globe seen from space.	Globe 3D yang terlihat dari luar angkasa.
 A blank map with a basemap	Peta kosong dengan peta dasar
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	GIS desktop sumber terbuka yang cepat, ditulis dengan Rust murni, dengan alur kerja ribbon khas GIS desktop: peta dan layer, simbologi, pelabelan, seleksi, penyuntingan, geoprosesing, dan ekspor.
 A projected coordinate system.	Sistem koordinat terproyeksi.
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	Alamat layanan ubin: ubin raster dengan {z}/{x}/{y} (atau {-y}, {q}, {bbox-epsg-3857} untuk WMS), ubin vektor (.pbf) atau TileJSON, atau gaya MapLibre.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Sebuah nilai, kolom, atau dua di antaranya yang digabung dengan + − × ÷. Berlaku untuk baris terpilih, atau semua baris jika tidak ada yang dipilih.
 About	Tentang
 About plugins	Tentang plugin
@@ -27,10 +28,14 @@ Add Field	Tambah Kolom
 Add field	Tambah kolom
 Add GeoJSON, CSV or Shapefile data to the map.	Tambahkan data GeoJSON, CSV, atau Shapefile ke peta.
 Add Plugin Folder…	Tambah Folder Plugin…
+Add raster tiles, vector tiles or a map style by address.	Tambahkan ubin raster, ubin vektor, atau gaya peta melalui alamat.
 Add sample countries	Tambah contoh negara
 Add Sample Data	Tambah Data Contoh
+Add Tile Layer	Tambah Layer Ubin
+Add Tile Layer…	Tambah Layer Ubin…
 Add To Current Selection	Tambah ke Seleksi Saat Ini
 Add vector data.	Tambahkan data vektor.
+Address	Alamat
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Menambahkan luas geodesik (km²), panjang (km), atau koordinat sentroid sebagai kolom.
 All	Semua
 All categories	Semua kategori
@@ -49,9 +54,11 @@ Attribute\nTable	Tabel\nAtribut
 Attribute Table	Tabel Atribut
 Attribute table	Tabel atribut
 Attributes	Atribut
+Attribution	Atribusi
 Aurora	Aurora
 Automatic	Otomatis
 Automatic (system language)	Otomatis (bahasa sistem)
+Automatic ({kind})	Otomatis ({kind})
 Azimuth	Azimut
 Back to Explore; cancel a sketch	Kembali ke Jelajah; batalkan sketsa
 Back to the map	Kembali ke peta
@@ -302,6 +309,8 @@ Fixed Zoom In	Perbesar Tetap
 Fixed Zoom Out	Perkecil Tetap
 Folders	Folder
 Forest	Hutan
+from the address	dari alamat
+from the service	dari layanan
 Full Extent	Cakupan Penuh
 Full extent	Cakupan penuh
 Full size	Ukuran penuh
@@ -407,6 +416,7 @@ Load an unpacked plugin from its folder while you develop it.	Muat plugin yang b
 Load GeoLibre tools	Muat alat GeoLibre
 Loaded {name} from its folder.	{name} dimuat dari foldernya.
 Loading the GeoLibre tools…	Memuat alat GeoLibre…
+Loads map tiles from the web	Memuat ubin peta dari web
 Locate	Temukan Lokasi
 Locate GeoLibre Runner	Temukan runner GeoLibre
 Locate the GeoLibre runner	Temukan runner GeoLibre
@@ -422,11 +432,13 @@ Make Layer From Selected Features	Buat Layer dari Fitur Terpilih
 Manage	Kelola
 Manage Edits	Kelola Edit
 Map	Peta
+Map style (JSON)	Gaya peta (JSON)
 Map › Layer	Peta › Layer
 Maps	Peta
 Marker	Marker
 Max	Maks
 Max %	Maks %
+Maximum zoom	Zoom maksimum
 Mean	Rata-rata
 Measure	Ukur
 Measure Area	Ukur Luas
@@ -446,7 +458,9 @@ Mod+	Mod+
 Mollweide (equal-area world)	Mollweide (dunia luas sama)
 Mouse wheel	Roda tetikus
 Move Down	Turunkan
+Move down	Turunkan
 Move Up	Naikkan
+Move up	Naikkan
 Name	Nama
 Natural Breaks (Jenks)	Natural Breaks (Jenks)
 Natural Color (1, 2, 3)	Warna Alami (1, 2, 3)
@@ -475,12 +489,14 @@ No Pop-ups	Tanpa Pop-up
 No standalone tables	Tidak ada tabel mandiri
 NoData	NoData
 None	Tidak ada
+None. Add one by address, or from a basemap plugin.	Tidak ada. Tambahkan melalui alamat, atau dari plugin peta dasar.
 North	Utara
 North Polar Stereographic	Stereografis Kutub Utara
 Not saved yet	Belum disimpan
 Ocean	Samudra
 OID	OID
 Only features matching this expression draw in {layer}.	Hanya fitur yang cocok dengan ekspresi ini yang digambar di {layer}.
+Opacity	Opasitas
 Open	Buka
 Open a .rgisx project	Buka proyek .rgisx
 Open a RustGIS project.	Buka proyek RustGIS.
@@ -507,6 +523,8 @@ Output Name	Nama Keluaran
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Lebih dari 1.000 alat raster, vektor, LiDAR, hidrologi, dan medan yang berjalan di peramban, dengan unduhan sekali sekitar 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Lebih dari 1.000 alat raster, vektor, LiDAR, hidrologi, dan medan, dari unduhan opsional sekitar 20 MB.
 Overlay	Overlay
+overlay	overlay
+Overlay (a transparent layer kept on top, such as labels or roads)	Overlay (layer transparan yang tetap di atas, seperti label atau jalan)
 Pan (Explore) · any tool	Geser (Jelajah) · alat apa pun
 Pan to a longitude/latitude.	Geser ke bujur/lintang.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Geser dengan tetikus, zoom dengan roda, dan klik fitur untuk melihat atributnya.
@@ -554,6 +572,7 @@ Raster\nInformation	Informasi\nRaster
 Raster Data	Data Raster
 Raster Information	Informasi Raster
 Raster Layer	Layer Raster
+Raster tiles (XYZ)	Ubin raster (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} band · {renderer}
 Read and write files on this computer	Membaca dan menulis file di komputer ini
 Read the map's layers and features	Membaca layer dan fitur peta
@@ -569,6 +588,7 @@ Refresh	Segarkan
 Regional, equal-area: the contiguous United States.	Regional, luas sama: Amerika Serikat daratan.
 Regional, equal-area: the European standard for statistics.	Regional, luas sama: standar Eropa untuk statistik.
 Remove	Hapus
+Remove All	Hapus Semua
 Remove Bookmark	Hapus Penanda
 Remove From Current Selection	Hapus dari Seleksi Saat Ini
 Remove the layer from the map.	Hapus layer dari peta.
@@ -656,6 +676,7 @@ Shift+	Shift+
 Shift+drag	Shift+seret
 Shortcuts	Pintasan
 Show latitude/longitude lines on the basemap.	Tampilkan garis lintang/bujur pada peta dasar.
+Show or hide	Tampilkan atau sembunyikan
 Show or hide the Catalog pane.	Tampilkan atau sembunyikan panel Katalog.
 Show or hide the Contents pane.	Tampilkan atau sembunyikan panel Konten.
 Show or hide the Geoprocessing pane.	Tampilkan atau sembunyikan panel Geoprosesing.
@@ -725,6 +746,7 @@ Triangle	Segitiga
 Turn Labels Off	Matikan Label
 Turn labels on or off for the selected layer.	Aktifkan atau nonaktifkan label untuk layer terpilih.
 Turn labels on or off.	Aktifkan atau nonaktifkan label.
+Type	Jenis
 Unavailable: {reason}	Tidak tersedia: {reason}
 Undo	Urungkan
 Undo / Redo	Urungkan / Ulangi
@@ -740,6 +762,7 @@ Update to {version}	Perbarui ke {version}
 USA Contiguous Albers Equal Area	Albers Luas Sama AS Kontinental
 Valid expression · {n} matching rows	Ekspresi valid · {n} baris cocok
 Vector and raster data	Data vektor dan raster
+Vector tiles (MVT)	Ubin vektor (MVT)
 Version {version}	Versi {version}
 View	Tampilan
 View Unplaced	Lihat Tidak Terpasang
@@ -749,6 +772,7 @@ Visibility Range	Rentang Visibilitas
 Visible	Terlihat
 Visible Layers	Layer Terlihat
 Web Mercator	Web Mercator
+Web Tile Layers	Layer Ubin Web
 Website	Situs web
 Welcome to RustGIS	Selamat datang di RustGIS
 West	Barat

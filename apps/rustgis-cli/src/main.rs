@@ -4,7 +4,7 @@
 //! rustgis-cli commands                                  # list command ids and parameters
 //! rustgis-cli tools                                     # list geoprocessing tools
 //! rustgis-cli info data.geojson                         # layer summary as JSON
-//! rustgis-cli render data.geojson out.png [--basemap ocean] [--width 1600 --height 900]
+//! rustgis-cli render data.geojson out.png [--basemap ocean] [--tiles URL] [--width 1600 --height 900]
 //! rustgis-cli run [--sample | --project p.rgisx | --data f.geojson …] \
 //!     --cmd 'gp.run={"tool":"buffer","params":{"input":"Cities","distance":100}}' \
 //!     --cmd 'share.exportMap={"path":"out.png"}' [--save out.rgisx]
@@ -33,7 +33,7 @@ use serde_json::{Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png> [--size N]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--width N] [--height N] [--dpi N]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P]"
+        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png> [--size N]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P]"
     );
     ExitCode::from(2)
 }
@@ -156,6 +156,10 @@ fn main() -> ExitCode {
             load(&mut s, input)?;
             if let Some(b) = opt(&args, "--basemap") {
                 run(&mut s, "map.basemap", json!({"name": b}))?;
+            }
+            // A web tile basemap: raster tiles, vector tiles or a MapLibre style by address.
+            if let Some(u) = opt(&args, "--tiles") {
+                run(&mut s, "map.addTiles", json!({"url": u}))?;
             }
             let w = num(&args, "--width").unwrap_or(1600.0).clamp(16.0, 8000.0);
             let h = num(&args, "--height").unwrap_or(900.0).clamp(16.0, 8000.0);

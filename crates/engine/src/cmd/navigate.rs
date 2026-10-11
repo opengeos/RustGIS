@@ -36,7 +36,8 @@ pub fn commands() -> Vec<C> {
         })
         .view()
         .params(r#"{"scale": number}"#),
-        C::new("map.basemap", "Basemap", "Map › Layer", basemap).params(r#"{"name": "paper"|"midnight"|"ocean"|"atlas"|"blank"}"#),
+        C::new("map.basemap", "Basemap", "Map › Layer", basemap)
+            .params(r#"{"name": "paper"|"midnight"|"ocean"|"atlas"|"blank", "keepTiles"?: bool (keeps the web tile basemaps over it)}"#),
         C::new("map.graticule", "Graticule", "View › Display", |s, p| {
             let m = s.map_mut();
             m.graticule = super::b(p, "on").unwrap_or(!m.graticule);
@@ -140,7 +141,12 @@ pub(crate) fn go_to_xy(s: &mut Session, p: &Value) -> CmdResult {
 
 fn basemap(s: &mut Session, p: &Value) -> CmdResult {
     let n = s_name(p)?;
-    s.map_mut().basemap = Basemap::from_code(n).ok_or_else(|| format!("unknown basemap '{n}'"))?;
+    let m = s.map_mut();
+    m.basemap = Basemap::from_code(n).ok_or_else(|| format!("unknown basemap '{n}'"))?;
+    // A built-in basemap takes the place of the web basemaps (tile overlays stay).
+    if !super::b(p, "keepTiles").unwrap_or(false) {
+        m.tiles.retain(|t| t.overlay);
+    }
     Ok(Value::Null)
 }
 

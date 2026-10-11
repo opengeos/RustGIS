@@ -4,6 +4,7 @@ A 3D globe seen from space.	从太空看到的三维地球。
 A blank map with a basemap	带底图的空白地图
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	一款用纯 Rust 编写的快速、开源桌面 GIS，采用桌面 GIS 的功能区工作流：地图与图层、符号系统、标注、选择、编辑、地理处理和导出。
 A projected coordinate system.	投影坐标系。
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	瓦片服务的地址：带 {z}/{x}/{y} 的栅格瓦片（WMS 可用 {-y}, {q}, {bbox-epsg-3857}）、矢量瓦片（.pbf）或 TileJSON，或 MapLibre 样式。
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	一个值、一个字段，或用 + − × ÷ 连接的两者。应用于所选行；若未选择任何行，则应用于所有行。
 About	关于
 About plugins	关于插件
@@ -27,10 +28,14 @@ Add Field	添加字段
 Add field	添加字段
 Add GeoJSON, CSV or Shapefile data to the map.	将 GeoJSON、CSV 或 Shapefile 数据添加到地图。
 Add Plugin Folder…	添加插件文件夹…
+Add raster tiles, vector tiles or a map style by address.	通过地址添加栅格瓦片、矢量瓦片或地图样式。
 Add sample countries	添加示例国家数据
 Add Sample Data	添加示例数据
+Add Tile Layer	添加瓦片图层
+Add Tile Layer…	添加瓦片图层…
 Add To Current Selection	添加到当前选择
 Add vector data.	添加矢量数据。
+Address	地址
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	将测地面积（km²）、长度（km）或质心坐标添加为字段。
 All	全部
 All categories	所有类别
@@ -49,9 +54,11 @@ Attribute\nTable	属性\n表
 Attribute Table	属性表
 Attribute table	属性表
 Attributes	属性
+Attribution	署名
 Aurora	极光
 Automatic	自动
 Automatic (system language)	自动（系统语言）
+Automatic ({kind})	自动（{kind}）
 Azimuth	方位角
 Back to Explore; cancel a sketch	返回浏览；取消草图
 Back to the map	返回地图
@@ -302,6 +309,8 @@ Fixed Zoom In	固定比例放大
 Fixed Zoom Out	固定比例缩小
 Folders	文件夹
 Forest	森林
+from the address	取自地址
+from the service	取自服务
 Full Extent	全图
 Full extent	全图
 Full size	原始大小
@@ -407,6 +416,7 @@ Load an unpacked plugin from its folder while you develop it.	在开发期间从
 Load GeoLibre tools	加载 GeoLibre 工具
 Loaded {name} from its folder.	已从文件夹加载 {name}。
 Loading the GeoLibre tools…	正在加载 GeoLibre 工具…
+Loads map tiles from the web	从网络加载地图瓦片
 Locate	定位
 Locate GeoLibre Runner	定位 GeoLibre 运行器
 Locate the GeoLibre runner	定位 GeoLibre 运行器
@@ -422,11 +432,13 @@ Make Layer From Selected Features	根据所选要素创建图层
 Manage	管理
 Manage Edits	管理编辑
 Map	地图
+Map style (JSON)	地图样式 (JSON)
 Map › Layer	地图 › 图层
 Maps	地图
 Marker	标记
 Max	最大值
 Max %	最大 %
+Maximum zoom	最大缩放级别
 Mean	平均值
 Measure	测量
 Measure Area	测量面积
@@ -446,7 +458,9 @@ Mod+	Mod+
 Mollweide (equal-area world)	摩尔威德投影（等积世界）
 Mouse wheel	鼠标滚轮
 Move Down	下移
+Move down	下移
 Move Up	上移
+Move up	上移
 Name	名称
 Natural Breaks (Jenks)	自然间断点分级法（Jenks）
 Natural Color (1, 2, 3)	自然色 (1, 2, 3)
@@ -475,12 +489,14 @@ No Pop-ups	无弹出窗口
 No standalone tables	无独立表
 NoData	NoData
 None	无
+None. Add one by address, or from a basemap plugin.	无。可通过地址添加，或从底图插件添加。
 North	北
 North Polar Stereographic	北极球面投影
 Not saved yet	尚未保存
 Ocean	海洋
 OID	OID
 Only features matching this expression draw in {layer}.	只有与此表达式匹配的要素才会在 {layer} 中绘制。
+Opacity	不透明度
 Open	打开
 Open a .rgisx project	打开 .rgisx 工程
 Open a RustGIS project.	打开 RustGIS 工程。
@@ -507,6 +523,8 @@ Output Name	输出名称
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	1000 多个在浏览器中运行的栅格、矢量、LiDAR、水文和地形工具，只需一次约 25 MB 的下载。
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	1000 多个栅格、矢量、LiDAR、水文和地形工具，约 20 MB 的可选下载。
 Overlay	叠加
+overlay	叠加
+Overlay (a transparent layer kept on top, such as labels or roads)	叠加（保持在最上层的透明图层，如注记或道路）
 Pan (Explore) · any tool	平移（浏览）· 任意工具
 Pan to a longitude/latitude.	平移到某个经度/纬度。
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	用鼠标平移，用滚轮缩放，单击要素查看其属性。
@@ -554,6 +572,7 @@ Raster\nInformation	栅格\n信息
 Raster Data	栅格数据
 Raster Information	栅格信息
 Raster Layer	栅格图层
+Raster tiles (XYZ)	栅格瓦片 (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	栅格 · {w} × {h} · {n} 个波段 · {renderer}
 Read and write files on this computer	读写此计算机上的文件
 Read the map's layers and features	读取地图的图层和要素
@@ -569,6 +588,7 @@ Refresh	刷新
 Regional, equal-area: the contiguous United States.	区域，等积: 美国本土。
 Regional, equal-area: the European standard for statistics.	区域，等积: 欧洲统计标准。
 Remove	移除
+Remove All	全部移除
 Remove Bookmark	移除书签
 Remove From Current Selection	从当前选择中移除
 Remove the layer from the map.	从地图中移除图层。
@@ -656,6 +676,7 @@ Shift+	Shift+
 Shift+drag	Shift+拖动
 Shortcuts	快捷键
 Show latitude/longitude lines on the basemap.	在底图上显示经纬线。
+Show or hide	显示或隐藏
 Show or hide the Catalog pane.	显示或隐藏目录窗格。
 Show or hide the Contents pane.	显示或隐藏内容窗格。
 Show or hide the Geoprocessing pane.	显示或隐藏地理处理窗格。
@@ -725,6 +746,7 @@ Triangle	三角形
 Turn Labels Off	关闭标注
 Turn labels on or off for the selected layer.	打开或关闭所选图层的标注。
 Turn labels on or off.	打开或关闭标注。
+Type	类型
 Unavailable: {reason}	不可用：{reason}
 Undo	撤销
 Undo / Redo	撤销 / 重做
@@ -740,6 +762,7 @@ Update to {version}	更新到 {version}
 USA Contiguous Albers Equal Area	美国本土阿尔伯斯等积投影
 Valid expression · {n} matching rows	有效表达式 · {n} 个匹配行
 Vector and raster data	矢量和栅格数据
+Vector tiles (MVT)	矢量瓦片 (MVT)
 Version {version}	版本 {version}
 View	视图
 View Unplaced	查看未放置
@@ -749,6 +772,7 @@ Visibility Range	可见范围
 Visible	可见
 Visible Layers	可见图层
 Web Mercator	Web 墨卡托
+Web Tile Layers	Web 瓦片图层
 Website	网站
 Welcome to RustGIS	欢迎使用 RustGIS
 West	西

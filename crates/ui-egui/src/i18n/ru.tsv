@@ -4,6 +4,7 @@ A 3D globe seen from space.	Трёхмерный глобус, вид из ко�
 A blank map with a basemap	Пустая карта с базовой картой
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Быстрая ГИС с открытым исходным кодом для настольных компьютеров, написанная на чистом Rust, с ленточным интерфейсом настольной ГИС: карты и слои, символы, подписи, выборка, редактирование, геообработка и экспорт.
 A projected coordinate system.	Система координат проекции.
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	Адрес сервиса тайлов: растровые тайлы с {z}/{x}/{y} (или {-y}, {q}, {bbox-epsg-3857} для WMS), векторные тайлы (.pbf) или TileJSON, либо стиль MapLibre.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Значение, поле или два из них, соединённые знаком + − × ÷. Применяется к выбранным строкам или ко всем строкам, если ничего не выбрано.
 About	О программе
 About plugins	О модулях
@@ -27,10 +28,14 @@ Add Field	Добавить поле
 Add field	Добавить поле
 Add GeoJSON, CSV or Shapefile data to the map.	Добавить на карту данные GeoJSON, CSV или Shapefile.
 Add Plugin Folder…	Добавить папку модуля…
+Add raster tiles, vector tiles or a map style by address.	Добавить растровые тайлы, векторные тайлы или стиль карты по адресу.
 Add sample countries	Добавить пример стран
 Add Sample Data	Добавить пример данных
+Add Tile Layer	Добавить слой тайлов
+Add Tile Layer…	Добавить слой тайлов…
 Add To Current Selection	Добавить к текущей выборке
 Add vector data.	Добавить векторные данные.
+Address	Адрес
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Добавляет в виде полей геодезическую площадь (км²), длину (км) или координаты центроида.
 All	Все
 All categories	Все категории
@@ -49,9 +54,11 @@ Attribute\nTable	Таблица\nатрибутов
 Attribute Table	Таблица атрибутов
 Attribute table	Таблица атрибутов
 Attributes	Атрибуты
+Attribution	Атрибуция
 Aurora	Аврора
 Automatic	Автоматически
 Automatic (system language)	Автоматически (язык системы)
+Automatic ({kind})	Автоматически ({kind})
 Azimuth	Азимут
 Back to Explore; cancel a sketch	Назад к обзору; отменить эскиз
 Back to the map	Назад к карте
@@ -302,6 +309,8 @@ Fixed Zoom In	Фиксированное приближение
 Fixed Zoom Out	Фиксированное отдаление
 Folders	Папки
 Forest	Лес
+from the address	из адреса
+from the service	из сервиса
 Full Extent	Полный экстент
 Full extent	Полный экстент
 Full size	Полный размер
@@ -407,6 +416,7 @@ Load an unpacked plugin from its folder while you develop it.	Загрузить
 Load GeoLibre tools	Загрузить инструменты GeoLibre
 Loaded {name} from its folder.	Модуль {name} загружен из своей папки.
 Loading the GeoLibre tools…	Загрузка инструментов GeoLibre…
+Loads map tiles from the web	Загружает тайлы карты из интернета
 Locate	Найти место
 Locate GeoLibre Runner	Указать модуль запуска GeoLibre
 Locate the GeoLibre runner	Указать модуль запуска GeoLibre
@@ -422,11 +432,13 @@ Make Layer From Selected Features	Создать слой из выбранны�
 Manage	Управление
 Manage Edits	Управление правками
 Map	Карта
+Map style (JSON)	Стиль карты (JSON)
 Map › Layer	Карта › Слой
 Maps	Карты
 Marker	Маркер
 Max	Макс.
 Max %	Макс. %
+Maximum zoom	Максимальный масштаб
 Mean	Среднее
 Measure	Измерить
 Measure Area	Измерить площадь
@@ -446,7 +458,9 @@ Mod+	Mod+
 Mollweide (equal-area world)	Мольвейде (равновеликая карта мира)
 Mouse wheel	Колесо мыши
 Move Down	Переместить вниз
+Move down	Переместить вниз
 Move Up	Переместить вверх
+Move up	Переместить вверх
 Name	Имя
 Natural Breaks (Jenks)	Естественные границы (Дженкс)
 Natural Color (1, 2, 3)	Естественные цвета (1, 2, 3)
@@ -475,12 +489,14 @@ No Pop-ups	Без всплывающих окон
 No standalone tables	Нет отдельных таблиц
 NoData	NoData
 None	Нет
+None. Add one by address, or from a basemap plugin.	Нет. Добавьте слой по адресу или из плагина базовых карт.
 North	Север
 North Polar Stereographic	Северная полярная стереографическая
 Not saved yet	Ещё не сохранено
 Ocean	Океан
 OID	OID
 Only features matching this expression draw in {layer}.	В слое {layer} отображаются только объекты, соответствующие этому выражению.
+Opacity	Непрозрачность
 Open	Открыть
 Open a .rgisx project	Открыть проект .rgisx
 Open a RustGIS project.	Открыть проект RustGIS.
@@ -507,6 +523,8 @@ Output Name	Имя результата
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Более 1000 инструментов для растров, векторов, LiDAR, гидрологии и рельефа, работающих в браузере, после однократной загрузки около 25 МБ.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Более 1000 инструментов для растров, векторов, LiDAR, гидрологии и рельефа в необязательной загрузке размером около 20 МБ.
 Overlay	Наложение
+overlay	наложение
+Overlay (a transparent layer kept on top, such as labels or roads)	Наложение (прозрачный слой поверх остальных, например подписи или дороги)
 Pan (Explore) · any tool	Панорамирование (обзор) · любой инструмент
 Pan to a longitude/latitude.	Переместиться к долготе/широте.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Панорамируйте мышью, масштабируйте колесом и щёлкайте по объектам, чтобы увидеть их атрибуты.
@@ -554,6 +572,7 @@ Raster\nInformation	Сведения\nо растре
 Raster Data	Данные растра
 Raster Information	Сведения о растре
 Raster Layer	Растровый слой
+Raster tiles (XYZ)	Растровые тайлы (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Растр · {w} × {h} · каналов: {n} · {renderer}
 Read and write files on this computer	Читать и записывать файлы на этом компьютере
 Read the map's layers and features	Читать слои и объекты карты
@@ -569,6 +588,7 @@ Refresh	Обновить
 Regional, equal-area: the contiguous United States.	Региональная, равновеликая: смежные штаты США.
 Regional, equal-area: the European standard for statistics.	Региональная, равновеликая: европейский стандарт для статистики.
 Remove	Удалить
+Remove All	Удалить все
 Remove Bookmark	Удалить закладку
 Remove From Current Selection	Удалить из текущей выборки
 Remove the layer from the map.	Удалить слой с карты.
@@ -656,6 +676,7 @@ Shift+	Shift+
 Shift+drag	Shift+перетаскивание
 Shortcuts	Сочетания клавиш
 Show latitude/longitude lines on the basemap.	Показывать линии широты и долготы на базовой карте.
+Show or hide	Показать или скрыть
 Show or hide the Catalog pane.	Показать или скрыть панель «Каталог».
 Show or hide the Contents pane.	Показать или скрыть панель «Содержание».
 Show or hide the Geoprocessing pane.	Показать или скрыть панель «Геообработка».
@@ -725,6 +746,7 @@ Triangle	Треугольник
 Turn Labels Off	Выключить подписи
 Turn labels on or off for the selected layer.	Включить или выключить подписи для выбранного слоя.
 Turn labels on or off.	Включить или выключить подписи.
+Type	Тип
 Unavailable: {reason}	Недоступно: {reason}
 Undo	Отменить
 Undo / Redo	Отменить / Повторить
@@ -740,6 +762,7 @@ Update to {version}	Обновить до {version}
 USA Contiguous Albers Equal Area	Равновеликая Альберса для смежных штатов США
 Valid expression · {n} matching rows	Выражение допустимо · Подходящих строк: {n}
 Vector and raster data	Векторные и растровые данные
+Vector tiles (MVT)	Векторные тайлы (MVT)
 Version {version}	Версия {version}
 View	Вид
 View Unplaced	Показать неразмещённые
@@ -749,6 +772,7 @@ Visibility Range	Диапазон видимости
 Visible	Видимый
 Visible Layers	Видимые слои
 Web Mercator	Web Mercator
+Web Tile Layers	Слои веб-тайлов
 Website	Веб-сайт
 Welcome to RustGIS	Добро пожаловать в RustGIS
 West	Запад

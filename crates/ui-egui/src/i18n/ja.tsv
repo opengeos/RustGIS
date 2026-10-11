@@ -4,6 +4,7 @@ A 3D globe seen from space.	宇宙から見た 3D 地球儀。
 A blank map with a basemap	ベースマップ付きの空白マップ
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	純粋な Rust で書かれた高速なオープンソースのデスクトップ GIS。デスクトップ GIS のリボン ワークフローを備えています：マップとレイヤー、シンボル、ラベリング、選択、編集、ジオプロセシング、エクスポート。
 A projected coordinate system.	投影座標系。
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	タイル サービスのアドレス: {z}/{x}/{y} を含むラスター タイル (WMS の場合は {-y}, {q}, {bbox-epsg-3857})、ベクター タイル (.pbf) または TileJSON、あるいは MapLibre スタイル。
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	値、フィールド、またはそれらを + − × ÷ で結合したもの。選択した行に適用され、何も選択されていない場合はすべての行に適用されます。
 About	バージョン情報
 About plugins	プラグインについて
@@ -27,10 +28,14 @@ Add Field	フィールドの追加
 Add field	フィールドの追加
 Add GeoJSON, CSV or Shapefile data to the map.	GeoJSON、CSV、Shapefile データをマップに追加します。
 Add Plugin Folder…	プラグイン フォルダーの追加…
+Add raster tiles, vector tiles or a map style by address.	アドレスでラスター タイル、ベクター タイル、またはマップ スタイルを追加します。
 Add sample countries	サンプルの国データを追加
 Add Sample Data	サンプル データの追加
+Add Tile Layer	タイル レイヤーの追加
+Add Tile Layer…	タイル レイヤーの追加…
 Add To Current Selection	現在の選択に追加
 Add vector data.	ベクター データを追加します。
+Address	アドレス
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	測地線面積（km²）、長さ（km）、または重心座標をフィールドとして追加します。
 All	すべて
 All categories	すべてのカテゴリ
@@ -49,9 +54,11 @@ Attribute\nTable	属性\nテーブル
 Attribute Table	属性テーブル
 Attribute table	属性テーブル
 Attributes	属性
+Attribution	帰属
 Aurora	オーロラ
 Automatic	自動
 Automatic (system language)	自動（システムの言語）
+Automatic ({kind})	自動 ({kind})
 Azimuth	方位角
 Back to Explore; cancel a sketch	マップ操作に戻る；スケッチをキャンセル
 Back to the map	マップに戻る
@@ -302,6 +309,8 @@ Fixed Zoom In	固定ズームイン
 Fixed Zoom Out	固定ズームアウト
 Folders	フォルダー
 Forest	森林
+from the address	アドレスから
+from the service	サービスから
 Full Extent	全体表示
 Full extent	全体表示
 Full size	フル サイズ
@@ -407,6 +416,7 @@ Load an unpacked plugin from its folder while you develop it.	開発中のプラ
 Load GeoLibre tools	GeoLibre ツールを読み込む
 Loaded {name} from its folder.	{name} をフォルダーから読み込みました。
 Loading the GeoLibre tools…	GeoLibre ツールを読み込んでいます…
+Loads map tiles from the web	Web からマップ タイルを読み込みます
 Locate	位置
 Locate GeoLibre Runner	GeoLibre ランナーの場所を指定
 Locate the GeoLibre runner	GeoLibre ランナーの場所を指定
@@ -422,11 +432,13 @@ Make Layer From Selected Features	選択したフィーチャからレイヤー�
 Manage	管理
 Manage Edits	編集の管理
 Map	マップ
+Map style (JSON)	マップ スタイル (JSON)
 Map › Layer	マップ › レイヤー
 Maps	マップ
 Marker	マーカー
 Max	最大
 Max %	最大 %
+Maximum zoom	最大ズーム
 Mean	平均
 Measure	計測
 Measure Area	面積の計測
@@ -446,7 +458,9 @@ Mod+	Mod+
 Mollweide (equal-area world)	モルワイデ図法 (正積世界)
 Mouse wheel	マウス ホイール
 Move Down	下へ移動
+Move down	下へ移動
 Move Up	上へ移動
+Move up	上へ移動
 Name	名前
 Natural Breaks (Jenks)	自然分類（Jenks）
 Natural Color (1, 2, 3)	ナチュラル カラー (1, 2, 3)
@@ -475,12 +489,14 @@ No Pop-ups	ポップアップなし
 No standalone tables	スタンドアロン テーブルはありません
 NoData	NoData
 None	なし
+None. Add one by address, or from a basemap plugin.	なし。アドレスで、またはベースマップ プラグインから追加します。
 North	北
 North Polar Stereographic	北極ステレオ図法
 Not saved yet	未保存
 Ocean	海洋
 OID	OID
 Only features matching this expression draw in {layer}.	この式に一致するフィーチャのみが {layer} に描画されます。
+Opacity	不透明度
 Open	開く
 Open a .rgisx project	.rgisx プロジェクトを開く
 Open a RustGIS project.	RustGIS プロジェクトを開きます。
@@ -507,6 +523,8 @@ Output Name	出力名
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	ブラウザーで動く、ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツール (初回のみ約 25 MB をダウンロード)。
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツール (約 20 MB のオプションのダウンロード)。
 Overlay	オーバーレイ
+overlay	オーバーレイ
+Overlay (a transparent layer kept on top, such as labels or roads)	オーバーレイ (ラベルや道路など、最前面に保持される透明なレイヤー)
 Pan (Explore) · any tool	画面移動（マップ操作）· 任意のツール
 Pan to a longitude/latitude.	経度/緯度に画面移動します。
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	マウスで画面移動、ホイールでズームし、フィーチャをクリックすると属性が表示されます。
@@ -554,6 +572,7 @@ Raster\nInformation	ラスター\n情報
 Raster Data	ラスター データ
 Raster Information	ラスター情報
 Raster Layer	ラスター レイヤー
+Raster tiles (XYZ)	ラスター タイル (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	ラスター · {w} × {h} · {n} バンド · {renderer}
 Read and write files on this computer	このコンピューター上のファイルの読み書き
 Read the map's layers and features	マップのレイヤーとフィーチャの読み取り
@@ -569,6 +588,7 @@ Refresh	更新
 Regional, equal-area: the contiguous United States.	地域、正積: アメリカ本土 48 州。
 Regional, equal-area: the European standard for statistics.	地域、正積: 統計用のヨーロッパ標準。
 Remove	削除
+Remove All	すべて削除
 Remove Bookmark	ブックマークの削除
 Remove From Current Selection	現在の選択から除外
 Remove the layer from the map.	マップからレイヤーを削除します。
@@ -656,6 +676,7 @@ Shift+	Shift+
 Shift+drag	Shift+ドラッグ
 Shortcuts	ショートカット
 Show latitude/longitude lines on the basemap.	ベースマップに経緯線を表示します。
+Show or hide	表示/非表示
 Show or hide the Catalog pane.	カタログ ウィンドウの表示/非表示を切り替えます。
 Show or hide the Contents pane.	コンテンツ ウィンドウの表示/非表示を切り替えます。
 Show or hide the Geoprocessing pane.	ジオプロセシング ウィンドウの表示/非表示を切り替えます。
@@ -725,6 +746,7 @@ Triangle	三角形
 Turn Labels Off	ラベルをオフ
 Turn labels on or off for the selected layer.	選択したレイヤーのラベルのオン/オフを切り替えます。
 Turn labels on or off.	ラベルのオン/オフを切り替えます。
+Type	種類
 Unavailable: {reason}	利用不可：{reason}
 Undo	元に戻す
 Undo / Redo	元に戻す / やり直し
@@ -740,6 +762,7 @@ Update to {version}	{version} に更新
 USA Contiguous Albers Equal Area	米国本土アルベルス正積図法
 Valid expression · {n} matching rows	有効な式 · 一致する行 {n} 件
 Vector and raster data	ベクター データとラスター データ
+Vector tiles (MVT)	ベクター タイル (MVT)
 Version {version}	バージョン {version}
 View	表示
 View Unplaced	未配置の表示
@@ -749,6 +772,7 @@ Visibility Range	表示縮尺範囲
 Visible	表示
 Visible Layers	表示レイヤー
 Web Mercator	Web メルカトル
+Web Tile Layers	Web タイル レイヤー
 Website	ウェブサイト
 Welcome to RustGIS	RustGIS へようこそ
 West	西

@@ -17,6 +17,7 @@ pub struct Dialogs {
     pub b: String,
     pub c: String,
     pub mode: &'static str,
+    pub flag: bool,
     pub error: Option<String>,
     pub info: Option<String>,
 }
@@ -35,6 +36,7 @@ impl Dialogs {
             "coordinateSystem" => "coordinateSystem",
             "graphicText" => "graphicText",
             "camera" => "camera",
+            "addTiles" => "addTiles",
             other => return Err(format!("unknown dialog '{other}'")),
         };
         if matches!(name, "addField" | "calculateField" | "definitionQuery" | "renameLayer") && active.is_none() {
@@ -90,13 +92,18 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "coordinateSystem" => "Coordinate System",
         "graphicText" => "Add Text",
         "camera" => "Camera",
+        "addTiles" => "Add Tile Layer",
         _ => "Rename Layer",
     };
     let t = Tokens::get(ctx);
     let mut open = true;
     let mut close = false;
     egui::Window::new(tl!(title)).id(egui::Id::new("dialog")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
-        ui.set_width(if which == "coordinateSystem" { 660.0 } else { 440.0 });
+        ui.set_width(match which {
+            "coordinateSystem" => 660.0,
+            "addTiles" => 560.0,
+            _ => 440.0,
+        });
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         match which {
             "selectByAttributes" => close = select_by_attributes(app, ui, &t),
@@ -121,6 +128,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 });
             }
             "coordinateSystem" => close = coordinate_system(app, ui, &t),
+            "addTiles" => close = add_tiles(app, ui),
             "camera" => {
                 egui::Grid::new("cam").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
                     for (label, v) in [("Longitude", &mut app.dialogs.a), ("Latitude", &mut app.dialogs.b), ("Scale 1:", &mut app.dialogs.c)] {
@@ -227,6 +235,59 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     if !open || close {
         app.dialogs.open = None;
     }
+}
+
+/// Add Tile Layer: an XYZ/TMS/WMS template, vector tiles or a MapLibre style by address.
+fn add_tiles(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
+    use rustgis_engine::map::TileKind;
+    ui.label(egui::RichText::new(tl!("A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.")).weak());
+    egui::Grid::new("tiles").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+        ui.label(tl!("Address"));
+        ui.add(
+            egui::TextEdit::singleline(&mut app.dialogs.text)
+                .hint_text("https://tile.openstreetmap.org/{z}/{x}/{y}.png")
+                .desired_width(400.0),
+        );
+        ui.end_row();
+        ui.label(tl!("Type"));
+        let guessed = TileKind::guess(app.dialogs.text.trim());
+        let shown = match app.dialogs.mode {
+            "auto" | "new" => crate::i18n::fmt("Automatic ({kind})", &[("kind", tl!(guessed.label()))]),
+            code => TileKind::from_code(code).map(|k| tl!(k.label()).to_string()).unwrap_or_default(),
+        };
+        egui::ComboBox::from_id_salt("tiles_kind").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+            ui.selectable_value(&mut app.dialogs.mode, "auto", tl!("Automatic"));
+            for k in TileKind::ALL {
+                ui.selectable_value(&mut app.dialogs.mode, k.code(), tl!(k.label()));
+            }
+        });
+        ui.end_row();
+        ui.label(tl!("Name"));
+        ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text(tl!("from the address")).desired_width(400.0));
+        ui.end_row();
+        ui.label(tl!("Attribution"));
+        ui.add(egui::TextEdit::singleline(&mut app.dialogs.b).hint_text("© OpenStreetMap contributors").desired_width(400.0));
+        ui.end_row();
+        ui.label(tl!("Maximum zoom"));
+        ui.add(egui::TextEdit::singleline(&mut app.dialogs.c).hint_text(tl!("from the service")).desired_width(60.0));
+        ui.end_row();
+    });
+    ui.checkbox(&mut app.dialogs.flag, tl!("Overlay (a transparent layer kept on top, such as labels or roads)"));
+    buttons(app, ui, "Add", |app| {
+        let mut p = json!({"url": app.dialogs.text.trim(), "overlay": app.dialogs.flag});
+        if !matches!(app.dialogs.mode, "auto" | "new") {
+            p["kind"] = json!(app.dialogs.mode);
+        }
+        for (key, v) in [("name", &app.dialogs.a), ("attribution", &app.dialogs.b)] {
+            if !v.trim().is_empty() {
+                p[key] = json!(v.trim());
+            }
+        }
+        if let Ok(z) = app.dialogs.c.trim().parse::<f64>() {
+            p["maxZoom"] = json!(z);
+        }
+        app.run("map.addTiles", p).map(|_| ())
+    })
 }
 
 /// OK/Cancel row; returns true when the dialog should close.

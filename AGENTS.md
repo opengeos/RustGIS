@@ -17,7 +17,8 @@ work.
 |---|---|---|
 | L0 | `geom` | coordinates, extents, Web Mercator, geodesic measurement, scale |
 | L1 | `data` | features, typed attributes, GeoJSON/CSV/Shapefile I/O, SQL where clauses, rasters (GeoTIFF/ASCII grid, EPSG reprojection) |
-| L2 | `map`, `analysis` | layers, symbology, labels, camera, basemaps; geoprocessing tools |
+| L2 | `map`, `analysis` | layers, symbology, labels, camera, basemaps, web tile layers; geoprocessing tools |
+| L2 | `tiles` | web map tiles: XYZ/TMS/WMS rasters, Mapbox Vector Tiles, a MapLibre style subset; the tile cache and background fetching (see `docs/user-guide.md` › Basemaps) |
 | L3 | `render` | tiny-skia map renderer, label placement, PNG export, font discovery |
 | L3 | `plugins` | plugins: sandboxed WebAssembly modules (`wasmi`) adding commands and tools; `.rgplugin` packages, the plugin registry (see `docs/plugins.md`) |
 | L3 | `geolibre` | the GeoLibre/Whitebox tool suite as geoprocessing tools (engine feature `geolibre`): run by the optional `geolibre` program natively, by geolibre-rust's WASI runner in the browser |

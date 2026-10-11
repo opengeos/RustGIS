@@ -20,6 +20,8 @@ struct Key {
     dark: bool,
     /// Rendered at reduced resolution while the globe was moving.
     draft: bool,
+    /// The tile cache's generation (0 for a map without tile layers).
+    tiles: u64,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -77,6 +79,12 @@ pub struct MapView {
     /// The side-by-side map's last render (texture and labels) and what it was drawn for, so it
     /// redraws only when that map, the project or the view changes.
     split: Option<([f64; 8], egui::TextureHandle, Vec<PlacedLabel>)>,
+    /// The tile layers' credits, from the last render.
+    attribution: Vec<String>,
+    /// Tile layer errors already reported.
+    tile_errors: std::collections::HashSet<String>,
+    /// When the map last rendered (seconds).
+    last_render: f64,
 }
 
 impl Default for MapView {
@@ -101,6 +109,9 @@ impl Default for MapView {
             camera_moved: false,
             snap: None,
             split: None,
+            attribution: Vec::new(),
+            tile_errors: std::collections::HashSet::new(),
+            last_render: -10.0,
         }
     }
 }
@@ -264,7 +275,26 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         size: [(w as f32 * ppp).round() as usize, (h as f32 * ppp).round() as usize],
         dark: t.dark,
         draft,
+        tiles: 0,
     };
+    // Tiles arriving draw the map again, at most a few times a second.
+    static WAKER: std::sync::Once = std::sync::Once::new();
+    WAKER.call_once(|| {
+        let ctx = ui.ctx().clone();
+        rustgis_engine::render::rustgis_tiles::cache::set_waker(move || ctx.request_repaint());
+    });
+    let mut key = key;
+    if !app.session.map().tiles.is_empty() {
+        key.tiles = rustgis_engine::render::rustgis_tiles::cache::generation();
+        if let Some(old) = app.map.key
+            && old.tiles != key.tiles
+            && (Key { tiles: old.tiles, ..key }) == old
+            && time - app.map.last_render < 0.25
+        {
+            key.tiles = old.tiles;
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
+    }
     let interacting = !globe_view && moving;
     if globe_view && moving {
         // Wake up once the motion has settled, for the full-resolution frame.
@@ -286,6 +316,13 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
             app.map.labels = r.labels;
             app.map.labels.splice(0..0, r.unplaced);
+            app.map.attribution = r.attribution;
+            app.map.last_render = time;
+            for e in r.tile_errors {
+                if app.map.tile_errors.insert(e.clone()) {
+                    app.session.notify(e, true);
+                }
+            }
             app.map.tex_camera = cam;
             app.map.key = Some(key);
         }
@@ -1011,8 +1048,12 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     scale_bar(app, p, rect, t);
     north_arrow(p, rect, t);
     // Attribution.
-    let att = "Natural Earth";
-    let g = p.layout_no_wrap(att.to_string(), regular(10.5), t.text_dim);
+    let mut att = String::from("Natural Earth");
+    for a in &app.map.attribution {
+        att.push_str(" | ");
+        att.push_str(a);
+    }
+    let g = p.layout(att, regular(10.5), t.text_dim, (rect.width() - 240.0).max(120.0));
     let r = Rect::from_min_size(pos2(rect.max.x - g.size().x - 14.0, rect.max.y - g.size().y - 6.0), g.size() + vec2(10.0, 4.0));
     p.rect_filled(r, CornerRadius::same(3), t.ribbon.gamma_multiply(0.75));
     p.galley(r.min + vec2(5.0, 2.0), g, t.text_dim);

@@ -1588,6 +1588,32 @@ fn plugin_edits_are_one_undo_step() {
 }
 
 #[test]
+fn plugin_tile_layers_need_network() {
+    let mut s = world();
+    let osm = json!({"url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png", "attribution": "© OpenStreetMap contributors"});
+    // Without `network`, a plugin can't add a tile layer, directly or by importing a map file.
+    plugin("eng-tiles-edit", &["edit", "files"]);
+    let e = forward(&mut s, "eng-tiles-edit", "map.addTiles", osm.clone()).unwrap_err();
+    assert!(e.contains("'network' permission"), "{e}");
+    let mut m = rustgis_map::Map::new("Imported");
+    m.tiles.push(rustgis_map::TileLayer::new("Leak", rustgis_map::TileKind::Raster, "https://evil.example.com/{z}/{x}/{y}.png?d=secret"));
+    let text = serde_json::to_string(&m).unwrap();
+    let e = forward(&mut s, "eng-tiles-edit", "map.import", json!({"text": text})).unwrap_err();
+    assert!(e.contains("'network' permission"), "{e}");
+    assert!(s.project.maps.iter().all(|m| m.tiles.is_empty()));
+    rustgis_plugins::unload("eng-tiles-edit");
+    // With it (and `edit`), it can; it needs no `files` for an address.
+    plugin("eng-tiles-net", &["edit", "network"]);
+    forward(&mut s, "eng-tiles-net", "map.addTiles", osm).unwrap();
+    assert_eq!(s.map().tiles.len(), 1);
+    let listed = forward(&mut s, "eng-tiles-net", "map.tiles", json!({})).unwrap();
+    assert_eq!(listed[0]["attribution"], "© OpenStreetMap contributors");
+    forward(&mut s, "eng-tiles-net", "map.removeTiles", json!({})).unwrap();
+    assert!(s.map().tiles.is_empty());
+    rustgis_plugins::unload("eng-tiles-net");
+}
+
+#[test]
 fn plugin_tools_run_in_the_geoprocessing_pane() {
     let mut s = world();
     plugin("eng-tools", &[]);

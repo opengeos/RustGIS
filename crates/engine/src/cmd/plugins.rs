@@ -221,11 +221,19 @@ fn refused(plugin: &Plugin, spec: &C, params: &Value) -> Option<String> {
     {
         return Some(format!("{} needs the 'files' permission to run GeoLibre tools", m.name));
     }
+    // Commands that fetch from an address (web tiles) need `network`: the address could carry
+    // what the plugin read out of the project. They read and write no files, so `files` doesn't
+    // come into it (their addresses would look like paths to the check below).
+    let network = super::tiles::NETWORK.contains(&spec.id);
+    if network && !m.has(Permission::Network) {
+        return Some(format!("{} needs the 'network' permission to run '{}'", m.name, spec.id));
+    }
     // By what the parameters name, what the command's parameters can name, and what it is.
-    let reaches = super::items::names_place(params, PLACE_KEYS, 0)
-        || PLACE_KEYS.iter().any(|k| spec.params.contains(&format!("\"{k}\"")))
-        || WRITES_FILES.contains(&spec.id)
-        || ["share.", "offline.", "cache.", "notebook."].iter().any(|p| spec.id.starts_with(p));
+    let reaches = !network
+        && (super::items::names_place(params, PLACE_KEYS, 0)
+            || PLACE_KEYS.iter().any(|k| spec.params.contains(&format!("\"{k}\"")))
+            || WRITES_FILES.contains(&spec.id)
+            || ["share.", "offline.", "cache.", "notebook."].iter().any(|p| spec.id.starts_with(p)));
     if reaches && !m.has(Permission::Files) {
         return Some(format!("{} needs the 'files' permission to run '{}'", m.name, spec.id));
     }
@@ -326,9 +334,26 @@ impl Bridge<'_> {
         if let Some(why) = blocked {
             return Err(format!("{label}: {why}"));
         }
+        // Without `network`, no command may bring in a tile address (a map file read from text
+        // carries its tile layers): any new one is taken out again.
+        let tile_urls = |s: &Session| -> std::collections::HashSet<String> {
+            s.project.maps.iter().flat_map(|m| &m.tiles).map(|t| t.url.clone()).collect()
+        };
+        let before = (!self.plugin.manifest.has(Permission::Network)).then(|| tile_urls(self.s));
         // The plugin command took the undo snapshot: the commands it runs are part of it.
-        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self.s, params)))
+        let mut res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self.s, params)))
             .unwrap_or_else(|_| Err(format!("{label} failed unexpectedly")));
+        if let Some(before) = before {
+            let mut dropped = false;
+            for m in &mut self.s.project.maps {
+                let n = m.tiles.len();
+                m.tiles.retain(|t| before.contains(&t.url));
+                dropped |= m.tiles.len() != n;
+            }
+            if dropped {
+                res = Err(format!("{} needs the 'network' permission to add tile layers", self.plugin.manifest.name));
+            }
+        }
         self.s.fix_active_layer();
         res
     }

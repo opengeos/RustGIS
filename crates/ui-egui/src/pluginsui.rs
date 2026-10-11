@@ -463,8 +463,9 @@ fn permission_chips(ui: &mut egui::Ui, t: &Tokens, perms: &[rp::Permission]) {
         let label = match p {
             rp::Permission::Edit => tl!("Edits the project"),
             rp::Permission::Files => tl!("Reads and writes files"),
+            rp::Permission::Network => tl!("Loads map tiles from the web"),
         };
-        chip(ui, t, label, if *p == rp::Permission::Files { t.red } else { t.green });
+        chip(ui, t, label, if *p == rp::Permission::Edit { t.green } else { t.red });
     }
 }
 

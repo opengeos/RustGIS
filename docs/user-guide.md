@@ -37,6 +37,33 @@ Vector coordinates are WGS 84 longitude/latitude and are displayed in Web Mercat
 their own coordinate system (any EPSG code, such as UTM zones or national grids) and are
 reprojected on the fly as they draw.
 
+## Basemaps
+
+**Map › Basemap** offers five built-in basemaps drawn from a world outline (Paper, Midnight,
+Ocean, Atlas, Blank), which need no network, and web tile layers over them:
+
+- **Raster tiles** from an XYZ or TMS template (`https://…/{z}/{x}/{y}.png`; `{-y}` for rows
+  from the south, `{s}` for subdomains, `{q}` for Bing-style quadkeys) or a WMS through
+  `{bbox-epsg-3857}`. PNG, JPEG and WebP.
+- **Vector tiles** (Mapbox Vector Tiles, `.pbf`) from a template or a TileJSON address, drawn in
+  a built-in style that knows the OpenMapTiles, Protomaps and Shortbread schemas.
+- **Map styles**: a MapLibre style document (`style.json`), with its vector and raster sources.
+  RustGIS draws background, fill, line, circle and raster layers and point labels; it evaluates
+  the style's expressions and zoom functions. Line labels, icons, hillshade and 3D extrusion are
+  not drawn (extrusions draw flat).
+
+Add one with **Add Tile Layer…** at the bottom of the Basemap gallery, or install the
+[Basemaps plugin](https://plugins.rustgis.app/catalog/basemaps/) for a tab of public basemaps.
+The gallery lists the map's tile layers: show or hide them, change their opacity and order, or
+remove them. Overlays (labels, roads) stay on top of the basemaps; choosing a built-in basemap
+removes the web basemaps but keeps the overlays. Tile layers are saved with the project, and
+their credits are shown in the corner of the map and drawn on exports.
+
+Tiles load in the background and the map fills in as they arrive, with coarser tiles standing in
+meanwhile; exports and `rustgis-cli` wait for them. On the globe and in other projections the
+tiles are reprojected. From scripts: `map.addTiles`, `map.removeTiles`, `map.setTiles` and
+`map.tiles`.
+
 ## Projections
 
 The flat map is drawn in Web Mercator by default. **View › Projection** switches it to another

@@ -1,0 +1,252 @@
+//! Tile addresses and Web Mercator tile math.
+
+use rustgis_geom::{Extent, MERCATOR_R};
+
+/// Half the Web Mercator world's width, in metres.
+pub const HALF_WORLD: f64 = std::f64::consts::PI * MERCATOR_R;
+
+/// The most tiles one source draws in a view.
+pub const MAX_TILES: usize = 400;
+
+/// A tile: zoom, column (west to east) and row (north to south, as XYZ counts them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TileId {
+    pub z: u8,
+    pub x: u32,
+    pub y: u32,
+}
+
+impl TileId {
+    /// The side of a tile at zoom `z`, in metres.
+    pub fn span(z: u8) -> f64 {
+        2.0 * HALF_WORLD / f64::from(1u32 << z.min(30))
+    }
+    /// The tile's Web Mercator extent.
+    pub fn extent(self) -> Extent {
+        let s = TileId::span(self.z);
+        let (x0, y1) = (-HALF_WORLD + f64::from(self.x) * s, HALF_WORLD - f64::from(self.y) * s);
+        Extent::new(x0, y1 - s, x0 + s, y1)
+    }
+    /// The tile `levels` zooms up that contains this one.
+    pub fn ancestor(self, levels: u8) -> Option<TileId> {
+        (levels <= self.z).then(|| TileId { z: self.z - levels, x: self.x >> levels, y: self.y >> levels })
+    }
+    /// The four tiles one zoom down.
+    pub fn children(self) -> [TileId; 4] {
+        let (z, x, y) = (self.z.saturating_add(1), self.x.saturating_mul(2), self.y.saturating_mul(2));
+        [
+            TileId { z, x, y },
+            TileId { z, x: x.saturating_add(1), y },
+            TileId { z, x, y: y.saturating_add(1) },
+            TileId { z, x: x.saturating_add(1), y: y.saturating_add(1) },
+        ]
+    }
+    /// The Bing Maps quadkey.
+    pub fn quadkey(self) -> String {
+        (1..=self.z)
+            .rev()
+            .map(|i| {
+                let m = 1u32 << (i - 1);
+                let d = u8::from(self.x & m != 0) + 2 * u8::from(self.y & m != 0);
+                char::from(b'0' + d)
+            })
+            .collect()
+    }
+}
+
+/// A tile in a view: which tile to fetch, and where its copy of the world puts it (`wx`, which
+/// can run past the edges of the world when the view shows the world twice).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placed {
+    pub id: TileId,
+    /// The column in the unwrapped world (`id.x` plus a whole number of worlds).
+    pub wx: i64,
+}
+
+impl Placed {
+    /// The Web Mercator extent where this copy of the tile is drawn.
+    pub fn extent(&self) -> Extent {
+        let s = TileId::span(self.id.z);
+        let x0 = -HALF_WORLD + self.wx as f64 * s;
+        let y1 = HALF_WORLD - f64::from(self.id.y) * s;
+        Extent::new(x0, y1 - s, x0 + s, y1)
+    }
+}
+
+/// The tiles at zoom `z` covering a Web Mercator extent, nearest the centre first. At most
+/// [`MAX_TILES`].
+pub fn covering(e: &Extent, z: u8) -> Vec<Placed> {
+    let z = z.min(30);
+    let n = 1i64 << z;
+    let s = TileId::span(z);
+    if !(e.min_x.is_finite() && e.max_x.is_finite() && e.min_y.is_finite() && e.max_y.is_finite()) {
+        return Vec::new();
+    }
+    let col = |x: f64| ((x + HALF_WORLD) / s).floor().clamp(-4.0 * n as f64, 5.0 * n as f64) as i64;
+    let row = |y: f64| ((HALF_WORLD - y) / s).floor().clamp(-1.0, n as f64) as i64;
+    let (x0, x1) = (col(e.min_x), col(e.max_x));
+    let (y0, y1) = (row(e.max_y).max(0), row(e.min_y).min(n - 1));
+    let mut out = Vec::new();
+    if x1 < x0 || y1 < y0 || (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > MAX_TILES as i64 * 4 {
+        return out;
+    }
+    let (cx, cy) = ((x0 + x1) as f64 / 2.0, (y0 + y1) as f64 / 2.0);
+    for wx in x0..=x1 {
+        for y in y0..=y1 {
+            let id = TileId { z, x: wx.rem_euclid(n) as u32, y: y as u32 };
+            out.push(Placed { id, wx });
+        }
+    }
+    out.sort_by(|a, b| {
+        let d = |p: &Placed| (p.wx as f64 - cx).powi(2) + (f64::from(p.id.y) - cy).powi(2);
+        d(a).total_cmp(&d(b))
+    });
+    out.truncate(MAX_TILES);
+    out
+}
+
+/// The zoom level whose `tile_size`-pixel tiles best match `m_per_px` metres per pixel, rounded
+/// to the sharper level a little before halfway. Never below 0 or above `max`.
+pub fn zoom_for(m_per_px: f64, tile_size: u32, max: u8) -> u8 {
+    let z = (2.0 * HALF_WORLD / (f64::from(tile_size.max(1)) * m_per_px)).log2();
+    if !z.is_finite() {
+        return 0;
+    }
+    (z + 0.4).floor().clamp(0.0, f64::from(max)) as u8
+}
+
+/// The MapLibre zoom (512-pixel world at zoom 0) at `m_per_px` metres per logical pixel.
+pub fn style_zoom(m_per_px: f64) -> f32 {
+    let z = (2.0 * HALF_WORLD / (512.0 * m_per_px)).log2();
+    if z.is_finite() { z.clamp(0.0, 24.0) as f32 } else { 0.0 }
+}
+
+/// Fills in a tile address template: `{z}`, `{x}`, `{y}`, `{-y}` (rows from the south), `{s}`
+/// (one of `subdomains`, chosen by the tile), `{switch:a,b,c}`, `{q}`/`{quadkey}`,
+/// `{bbox-epsg-3857}` (a WMS box), `{width}`/`{height}`, `{r}` (dropped) and `{ratio}` (1).
+/// `tms` makes `{y}` count from the south too.
+pub fn expand(template: &str, t: TileId, tile_size: u32, tms: bool, subdomains: &[String]) -> String {
+    let n = 1u64 << t.z.min(30);
+    let flipped = n.saturating_sub(1).saturating_sub(u64::from(t.y));
+    let (y, neg_y) = if tms { (flipped, u64::from(t.y)) } else { (u64::from(t.y), flipped) };
+    let pick = |opts: &[&str]| -> String {
+        if opts.is_empty() {
+            return String::new();
+        }
+        let i = (u64::from(t.x) + u64::from(t.y)) as usize % opts.len();
+        opts.get(i).copied().unwrap_or_default().to_string()
+    };
+    let mut out = String::with_capacity(template.len() + 16);
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(rest.get(..open).unwrap_or_default());
+        let after = rest.get(open + 1..).unwrap_or_default();
+        let Some(close) = after.find('}') else {
+            out.push_str(rest.get(open..).unwrap_or_default());
+            rest = "";
+            break;
+        };
+        let token = after.get(..close).unwrap_or_default();
+        let value = match token {
+            "z" | "zoom" => Some(t.z.to_string()),
+            "x" => Some(t.x.to_string()),
+            "y" => Some(y.to_string()),
+            "-y" => Some(neg_y.to_string()),
+            "q" | "quadkey" => Some(t.quadkey()),
+            "s" => {
+                let subs: Vec<&str> =
+                    if subdomains.is_empty() { vec!["a", "b", "c"] } else { subdomains.iter().map(String::as_str).collect() };
+                Some(pick(&subs))
+            }
+            "bbox-epsg-3857" => {
+                let e = t.extent();
+                Some(format!("{:.3},{:.3},{:.3},{:.3}", e.min_x, e.min_y, e.max_x, e.max_y))
+            }
+            "width" | "height" => Some(tile_size.to_string()),
+            "r" => Some(String::new()),
+            "ratio" => Some("1".into()),
+            _ => token.strip_prefix("switch:").map(|opts| pick(&opts.split(',').map(str::trim).collect::<Vec<_>>())),
+        };
+        match value {
+            Some(v) => out.push_str(&v),
+            // Not a placeholder this knows: kept as it is.
+            None => out.push_str(rest.get(open..open + close + 2).unwrap_or_default()),
+        }
+        rest = after.get(close + 1..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Resolves `href` against the document at `base` (for addresses inside a style or TileJSON).
+pub fn join(base: &str, href: &str) -> String {
+    if href.contains("://") {
+        return href.to_string();
+    }
+    let Some((scheme, rest)) = base.split_once("://") else { return href.to_string() };
+    let host_end = rest.find('/').unwrap_or(rest.len());
+    let host = rest.get(..host_end).unwrap_or(rest);
+    if let Some(path) = href.strip_prefix("//") {
+        return format!("{scheme}://{path}");
+    }
+    if href.starts_with('/') {
+        return format!("{scheme}://{host}{href}");
+    }
+    let path = rest.get(host_end..).unwrap_or("").split(['?', '#']).next().unwrap_or("");
+    let dir = path.rfind('/').map_or("/", |i| path.get(..=i).unwrap_or("/"));
+    format!("{scheme}://{host}{dir}{href}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expands_templates() {
+        let t = TileId { z: 3, x: 5, y: 2 };
+        assert_eq!(expand("https://tile.example.com/{z}/{x}/{y}.png", t, 256, false, &[]), "https://tile.example.com/3/5/2.png");
+        assert_eq!(expand("https://x/{z}/{x}/{-y}.png", t, 256, false, &[]), "https://x/3/5/5.png");
+        assert_eq!(expand("https://x/{z}/{x}/{y}.png", t, 256, true, &[]), "https://x/3/5/5.png");
+        assert_eq!(expand("https://{s}.x/{z}", t, 256, false, &[]), "https://b.x/3");
+        assert_eq!(expand("https://{s}.x/{z}", t, 256, false, &["1".into(), "2".into(), "3".into(), "4".into()]), "https://4.x/3");
+        assert_eq!(expand("https://{switch:mt0,mt1}.x/{z}", t, 256, false, &[]), "https://mt1.x/3");
+        assert_eq!(expand("https://x/{q}?k={api_key}&{", t, 256, false, &[]), "https://x/121?k={api_key}&{");
+        assert_eq!(TileId { z: 3, x: 3, y: 5 }.quadkey(), "213");
+        let wms = expand("https://x/wms?BBOX={bbox-epsg-3857}&WIDTH={width}", TileId { z: 0, x: 0, y: 0 }, 256, false, &[]);
+        assert_eq!(wms, "https://x/wms?BBOX=-20037508.343,-20037508.343,20037508.343,20037508.343&WIDTH=256");
+        assert_eq!(expand("https://x/{z}/{x}/{y}{r}.png", t, 256, false, &[]), "https://x/3/5/2.png");
+    }
+
+    #[test]
+    fn covers_views() {
+        let all = covering(&Extent::new(-HALF_WORLD, -HALF_WORLD, HALF_WORLD - 1.0, HALF_WORLD), 1);
+        assert_eq!(all.len(), 4);
+        // Past the antimeridian, the tiles wrap.
+        let wrapped = covering(&Extent::new(HALF_WORLD + 1.0, 1.0, HALF_WORLD + 2.0, 2.0), 1);
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!((wrapped[0].id.x, wrapped[0].wx), (0, 2));
+        assert!(covering(&Extent::new(f64::NAN, 0.0, 1.0, 1.0), 3).is_empty());
+        assert!(covering(&Extent::new(-HALF_WORLD, -HALF_WORLD, HALF_WORLD, HALF_WORLD), 30).is_empty());
+        assert!(covering(&Extent::new(0.0, 0.0, 1e6, 1e6), 12).len() <= MAX_TILES);
+    }
+
+    #[test]
+    fn zooms() {
+        assert_eq!(zoom_for(156_543.03, 256, 22), 0);
+        assert_eq!(zoom_for(156_543.03 / 1024.0, 256, 22), 10);
+        assert_eq!(zoom_for(156_543.03 / 1024.0, 512, 22), 9);
+        assert_eq!(zoom_for(0.001, 256, 19), 19);
+        assert_eq!(zoom_for(f64::NAN, 256, 19), 0);
+        assert!((style_zoom(78_271.517) - 0.0).abs() < 1e-3);
+        let e = TileId { z: 1, x: 1, y: 0 }.extent();
+        assert!((e.min_x - 0.0).abs() < 1e-6 && (e.max_y - HALF_WORLD).abs() < 1e-6);
+    }
+
+    #[test]
+    fn joins() {
+        assert_eq!(join("https://a.com/styles/x/style.json?k=1", "tiles.json"), "https://a.com/styles/x/tiles.json");
+        assert_eq!(join("https://a.com/styles/x", "/planet"), "https://a.com/planet");
+        assert_eq!(join("https://a.com/x", "//b.com/y"), "https://b.com/y");
+        assert_eq!(join("https://a.com/x", "https://c.com/z"), "https://c.com/z");
+    }
+}

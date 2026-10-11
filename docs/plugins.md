@@ -54,6 +54,11 @@ described below, and RustGIS checks each one:
   add layers. A plugin command that changes the project is one undo step, and it is rolled back
   if the command fails.
 - With the **`files`** permission, it can run commands that read or write files the user names.
+- With the **`network`** permission (and `edit`), it can add web tile layers (`map.addTiles`).
+  The map then loads tiles from the addresses the plugin gave, and an address can carry what the
+  plugin read from the project, so this is a permission of its own. A command that would bring
+  in a tile layer some other way (importing a map file) has it taken out again without
+  `network`.
 - No plugin may run the user's scripts, tasks or models, install or locate other software,
   manage plugins, replace the project, or step through undo history.
 
@@ -133,7 +138,7 @@ cargo build --release --target wasm32-unknown-unknown
   `plugin:<id>/<command>`, which the ribbon, command search, scripts and `rustgis-cli` use.
 - `version` and `minRustgisVersion` look like `1.2.3`. RustGIS refuses a plugin that needs a
   newer RustGIS.
-- `permissions`: `edit` and `files` (see [Safety](#safety)). Ask only for what you use.
+- `permissions`: `edit`, `files` and `network` (see [Safety](#safety)). Ask only for what you use.
 - `commands[].icon`: the name of one of RustGIS's own icons (`stats`, `zoom_full`, `bookmark`,
   `buffer`…), or a puzzle piece when it isn't one.
 - Tool parameter `kind`s: `layer`, `vectorLayer`, `polygonLayer`, `pointLayer`, `field`,
@@ -188,6 +193,7 @@ Inside a request, `host::call(op, params)` sends one of these to RustGIS:
 | `host.view` | `{center: [lon, lat], scale, projection}` |
 | `host.notify` `{text, error?}` | shows a message in the status bar |
 | `host.addLayer` `{name, geojson}` | adds a layer (`edit`) |
+| `map.addTiles` `{url, kind?, name?, attribution?, maxZoom?, overlay?, replace?}` | adds a web tile layer (`edit` and `network`) |
 | any command id (`layer.zoomTo`, `select.byAttributes`, `layer.symbology`…) | what the command returns, within the plugin's permissions |
 
 `rustgis-cli commands` lists every command id and its parameters.

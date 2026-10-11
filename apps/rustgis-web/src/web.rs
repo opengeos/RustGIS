@@ -136,6 +136,10 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 }
 
 fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
+    // Map tiles come through the browser's fetch (the app repaints when they arrive).
+    rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::set_fetcher(|url, done| {
+        wasm_bindgen_futures::spawn_local(async move { done(fetch_bytes(&url).await) });
+    });
     let open_inbox = inbox.clone();
     let font_ctx = ctx.clone();
     let (gl_list_ctx, gl_run_ctx) = (ctx.clone(), ctx.clone());

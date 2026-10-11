@@ -4,6 +4,7 @@ A 3D globe seen from space.	우주에서 본 3D 지구본.
 A blank map with a basemap	배경지도가 있는 빈 지도
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	순수 Rust로 작성된 빠른 오픈 소스 데스크톱 GIS로, 데스크톱 GIS의 리본 워크플로를 제공합니다: 지도와 레이어, 심볼, 라벨, 선택, 편집, 지오프로세싱 및 내보내기.
 A projected coordinate system.	투영 좌표계.
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	타일 서비스 주소: {z}/{x}/{y}가 포함된 래스터 타일(WMS는 {-y}, {q}, {bbox-epsg-3857}), 벡터 타일(.pbf) 또는 TileJSON, 또는 MapLibre 스타일.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	값, 필드 또는 이 둘을 + − × ÷ 로 결합한 식입니다. 선택한 행에 적용되며, 선택한 행이 없으면 모든 행에 적용됩니다.
 About	정보
 About plugins	플러그인 정보
@@ -27,10 +28,14 @@ Add Field	필드 추가
 Add field	필드 추가
 Add GeoJSON, CSV or Shapefile data to the map.	지도에 GeoJSON, CSV 또는 Shapefile 데이터를 추가합니다.
 Add Plugin Folder…	플러그인 폴더 추가…
+Add raster tiles, vector tiles or a map style by address.	주소로 래스터 타일, 벡터 타일 또는 지도 스타일을 추가합니다.
 Add sample countries	샘플 국가 추가
 Add Sample Data	샘플 데이터 추가
+Add Tile Layer	타일 레이어 추가
+Add Tile Layer…	타일 레이어 추가…
 Add To Current Selection	현재 선택에 추가
 Add vector data.	벡터 데이터를 추가합니다.
+Address	주소
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	측지 면적(km²), 길이(km) 또는 중심점 좌표를 필드로 추가합니다.
 All	모두
 All categories	모든 범주
@@ -49,9 +54,11 @@ Attribute\nTable	속성\n테이블
 Attribute Table	속성 테이블
 Attribute table	속성 테이블
 Attributes	속성
+Attribution	저작자 표시
 Aurora	오로라
 Automatic	자동
 Automatic (system language)	자동(시스템 언어)
+Automatic ({kind})	자동({kind})
 Azimuth	방위각
 Back to Explore; cancel a sketch	탐색으로 돌아가기; 스케치 취소
 Back to the map	지도로 돌아가기
@@ -302,6 +309,8 @@ Fixed Zoom In	고정 확대
 Fixed Zoom Out	고정 축소
 Folders	폴더
 Forest	숲
+from the address	주소에서
+from the service	서비스에서
 Full Extent	전체 범위
 Full extent	전체 범위
 Full size	전체 크기
@@ -407,6 +416,7 @@ Load an unpacked plugin from its folder while you develop it.	개발 중인 플�
 Load GeoLibre tools	GeoLibre 도구 불러오기
 Loaded {name} from its folder.	{name}을(를) 폴더에서 불러왔습니다.
 Loading the GeoLibre tools…	GeoLibre 도구를 불러오는 중…
+Loads map tiles from the web	웹에서 지도 타일을 불러옵니다
 Locate	위치 찾기
 Locate GeoLibre Runner	GeoLibre 실행기 찾기
 Locate the GeoLibre runner	GeoLibre 실행기 찾기
@@ -422,11 +432,13 @@ Make Layer From Selected Features	선택한 피처로 레이어 만들기
 Manage	관리
 Manage Edits	편집 관리
 Map	지도
+Map style (JSON)	지도 스타일(JSON)
 Map › Layer	지도 › 레이어
 Maps	지도
 Marker	마커
 Max	최대
 Max %	최대 %
+Maximum zoom	최대 줌
 Mean	평균
 Measure	측정
 Measure Area	면적 측정
@@ -446,7 +458,9 @@ Mod+	Mod+
 Mollweide (equal-area world)	몰바이데 도법 (정적 세계)
 Mouse wheel	마우스 휠
 Move Down	아래로 이동
+Move down	아래로 이동
 Move Up	위로 이동
+Move up	위로 이동
 Name	이름
 Natural Breaks (Jenks)	자연 구분(Jenks)
 Natural Color (1, 2, 3)	자연색 (1, 2, 3)
@@ -475,12 +489,14 @@ No Pop-ups	팝업 없음
 No standalone tables	독립 테이블 없음
 NoData	NoData
 None	없음
+None. Add one by address, or from a basemap plugin.	없음. 주소로 추가하거나 배경지도 플러그인에서 추가하세요.
 North	북
 North Polar Stereographic	북극 평사도법
 Not saved yet	아직 저장되지 않음
 Ocean	바다
 OID	OID
 Only features matching this expression draw in {layer}.	이 표현식과 일치하는 피처만 {layer}에 그려집니다.
+Opacity	불투명도
 Open	열기
 Open a .rgisx project	.rgisx 프로젝트 열기
 Open a RustGIS project.	RustGIS 프로젝트를 엽니다.
@@ -507,6 +523,8 @@ Output Name	출력 이름
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	브라우저에서 실행되는 래스터, 벡터, LiDAR, 수문, 지형 도구 1,000개 이상 (최초 1회 약 25MB 다운로드).
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	래스터, 벡터, LiDAR, 수문, 지형 도구 1,000개 이상 (약 20MB의 선택적 다운로드).
 Overlay	중첩
+overlay	중첩
+Overlay (a transparent layer kept on top, such as labels or roads)	중첩(레이블이나 도로처럼 맨 위에 유지되는 투명 레이어)
 Pan (Explore) · any tool	이동(탐색) · 모든 도구
 Pan to a longitude/latitude.	경도/위도로 이동합니다.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	마우스로 이동하고, 휠로 확대/축소하며, 피처를 클릭하여 속성을 확인합니다.
@@ -554,6 +572,7 @@ Raster\nInformation	래스터\n정보
 Raster Data	래스터 데이터
 Raster Information	래스터 정보
 Raster Layer	래스터 레이어
+Raster tiles (XYZ)	래스터 타일(XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	래스터 · {w} × {h} · 밴드 {n}개 · {renderer}
 Read and write files on this computer	이 컴퓨터의 파일 읽기 및 쓰기
 Read the map's layers and features	지도의 레이어 및 피처 읽기
@@ -569,6 +588,7 @@ Refresh	새로 고침
 Regional, equal-area: the contiguous United States.	지역, 정적: 미국 본토.
 Regional, equal-area: the European standard for statistics.	지역, 정적: 통계용 유럽 표준.
 Remove	제거
+Remove All	모두 제거
 Remove Bookmark	북마크 제거
 Remove From Current Selection	현재 선택에서 제거
 Remove the layer from the map.	지도에서 레이어를 제거합니다.
@@ -656,6 +676,7 @@ Shift+	Shift+
 Shift+drag	Shift+드래그
 Shortcuts	단축키
 Show latitude/longitude lines on the basemap.	배경지도에 위도/경도 선을 표시합니다.
+Show or hide	표시 또는 숨기기
 Show or hide the Catalog pane.	카탈로그 창을 표시하거나 숨깁니다.
 Show or hide the Contents pane.	목차 창을 표시하거나 숨깁니다.
 Show or hide the Geoprocessing pane.	지오프로세싱 창을 표시하거나 숨깁니다.
@@ -725,6 +746,7 @@ Triangle	삼각형
 Turn Labels Off	라벨 끄기
 Turn labels on or off for the selected layer.	선택한 레이어의 라벨을 켜거나 끕니다.
 Turn labels on or off.	라벨을 켜거나 끕니다.
+Type	유형
 Unavailable: {reason}	사용할 수 없음: {reason}
 Undo	실행 취소
 Undo / Redo	실행 취소 / 다시 실행
@@ -740,6 +762,7 @@ Update to {version}	{version}(으)로 업데이트
 USA Contiguous Albers Equal Area	미국 본토 앨버스 정적도법
 Valid expression · {n} matching rows	유효한 표현식 · 일치하는 행 {n}개
 Vector and raster data	벡터 및 래스터 데이터
+Vector tiles (MVT)	벡터 타일(MVT)
 Version {version}	버전 {version}
 View	보기
 View Unplaced	배치 안 된 라벨 보기
@@ -749,6 +772,7 @@ Visibility Range	가시 범위
 Visible	표시
 Visible Layers	표시 레이어
 Web Mercator	웹 메르카토르
+Web Tile Layers	웹 타일 레이어
 Website	웹사이트
 Welcome to RustGIS	RustGIS에 오신 것을 환영합니다
 West	서

@@ -4,6 +4,7 @@ A 3D globe seen from space.	Quả địa cầu 3D nhìn từ không gian.
 A blank map with a basemap	Bản đồ trống có bản đồ nền
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Một GIS máy tính để bàn mã nguồn mở, nhanh, viết hoàn toàn bằng Rust, với quy trình làm việc dạng ribbon của GIS máy tính để bàn: bản đồ và lớp, ký hiệu, nhãn, chọn, chỉnh sửa, xử lý không gian và xuất.
 A projected coordinate system.	Một hệ tọa độ phép chiếu.
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	Địa chỉ của dịch vụ ô bản đồ: ô raster với {z}/{x}/{y} (hoặc {-y}, {q}, {bbox-epsg-3857} cho WMS), ô vector (.pbf) hoặc TileJSON, hoặc một kiểu MapLibre.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Một giá trị, một trường, hoặc hai trong số đó nối bằng + − × ÷. Áp dụng cho các hàng được chọn, hoặc mọi hàng nếu không có hàng nào được chọn.
 About	Giới thiệu
 About plugins	Giới thiệu về plugin
@@ -27,10 +28,14 @@ Add Field	Thêm trường
 Add field	Thêm trường
 Add GeoJSON, CSV or Shapefile data to the map.	Thêm dữ liệu GeoJSON, CSV hoặc Shapefile vào bản đồ.
 Add Plugin Folder…	Thêm thư mục plugin…
+Add raster tiles, vector tiles or a map style by address.	Thêm ô raster, ô vector hoặc kiểu bản đồ bằng địa chỉ.
 Add sample countries	Thêm các quốc gia mẫu
 Add Sample Data	Thêm dữ liệu mẫu
+Add Tile Layer	Thêm lớp ô bản đồ
+Add Tile Layer…	Thêm lớp ô bản đồ…
 Add To Current Selection	Thêm vào vùng chọn hiện tại
 Add vector data.	Thêm dữ liệu vector.
+Address	Địa chỉ
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Thêm diện tích trắc địa (km²), chiều dài (km) hoặc tọa độ tâm làm trường.
 All	Tất cả
 All categories	Tất cả danh mục
@@ -49,9 +54,11 @@ Attribute\nTable	Bảng\nthuộc tính
 Attribute Table	Bảng thuộc tính
 Attribute table	Bảng thuộc tính
 Attributes	Thuộc tính
+Attribution	Ghi công
 Aurora	Cực quang
 Automatic	Tự động
 Automatic (system language)	Tự động (ngôn ngữ hệ thống)
+Automatic ({kind})	Tự động ({kind})
 Azimuth	Góc phương vị
 Back to Explore; cancel a sketch	Quay lại Khám phá; hủy bản phác thảo
 Back to the map	Quay lại bản đồ
@@ -302,6 +309,8 @@ Fixed Zoom In	Phóng to cố định
 Fixed Zoom Out	Thu nhỏ cố định
 Folders	Thư mục
 Forest	Rừng
+from the address	từ địa chỉ
+from the service	từ dịch vụ
 Full Extent	Toàn bộ phạm vi
 Full extent	Toàn bộ phạm vi
 Full size	Kích thước đầy đủ
@@ -407,6 +416,7 @@ Load an unpacked plugin from its folder while you develop it.	Tải một plugin
 Load GeoLibre tools	Tải công cụ GeoLibre
 Loaded {name} from its folder.	Đã tải {name} từ thư mục của nó.
 Loading the GeoLibre tools…	Đang tải công cụ GeoLibre…
+Loads map tiles from the web	Tải ô bản đồ từ web
 Locate	Định vị
 Locate GeoLibre Runner	Tìm trình chạy GeoLibre
 Locate the GeoLibre runner	Tìm trình chạy GeoLibre
@@ -422,11 +432,13 @@ Make Layer From Selected Features	Tạo lớp từ đối tượng được ch�
 Manage	Quản lý
 Manage Edits	Quản lý chỉnh sửa
 Map	Bản đồ
+Map style (JSON)	Kiểu bản đồ (JSON)
 Map › Layer	Bản đồ › Lớp
 Maps	Bản đồ
 Marker	Điểm đánh dấu
 Max	Lớn nhất
 Max %	% lớn nhất
+Maximum zoom	Mức thu phóng tối đa
 Mean	Trung bình
 Measure	Đo
 Measure Area	Đo diện tích
@@ -446,7 +458,9 @@ Mod+	Mod+
 Mollweide (equal-area world)	Mollweide (thế giới đồng diện tích)
 Mouse wheel	Con lăn chuột
 Move Down	Chuyển xuống
+Move down	Chuyển xuống
 Move Up	Chuyển lên
+Move up	Chuyển lên
 Name	Tên
 Natural Breaks (Jenks)	Ngắt tự nhiên (Jenks)
 Natural Color (1, 2, 3)	Màu tự nhiên (1, 2, 3)
@@ -475,12 +489,14 @@ No Pop-ups	Không có cửa sổ bật lên
 No standalone tables	Không có bảng độc lập
 NoData	NoData
 None	Không có
+None. Add one by address, or from a basemap plugin.	Không có. Thêm bằng địa chỉ, hoặc từ một plugin bản đồ nền.
 North	Bắc
 North Polar Stereographic	Phép chiếu nổi cực Bắc
 Not saved yet	Chưa lưu
 Ocean	Đại dương
 OID	OID
 Only features matching this expression draw in {layer}.	Chỉ các đối tượng khớp biểu thức này được vẽ trong {layer}.
+Opacity	Độ mờ đục
 Open	Mở
 Open a .rgisx project	Mở dự án .rgisx
 Open a RustGIS project.	Mở một dự án RustGIS.
@@ -507,6 +523,8 @@ Output Name	Tên đầu ra
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Hơn 1.000 công cụ raster, vector, LiDAR, thủy văn và địa hình chạy trong trình duyệt, chỉ cần tải một lần khoảng 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Hơn 1.000 công cụ raster, vector, LiDAR, thủy văn và địa hình, qua một bản tải tùy chọn khoảng 20 MB.
 Overlay	Chồng lớp
+overlay	chồng lớp
+Overlay (a transparent layer kept on top, such as labels or roads)	Chồng lớp (một lớp trong suốt luôn ở trên cùng, như nhãn hoặc đường)
 Pan (Explore) · any tool	Di chuyển (Khám phá) · mọi công cụ
 Pan to a longitude/latitude.	Di chuyển tới kinh độ/vĩ độ.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Di chuyển bằng chuột, phóng to thu nhỏ bằng con lăn và nhấp vào đối tượng để xem thuộc tính.
@@ -554,6 +572,7 @@ Raster\nInformation	Thông tin\nraster
 Raster Data	Dữ liệu raster
 Raster Information	Thông tin raster
 Raster Layer	Lớp raster
+Raster tiles (XYZ)	Ô raster (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} kênh · {renderer}
 Read and write files on this computer	Đọc và ghi tệp trên máy tính này
 Read the map's layers and features	Đọc các lớp và đối tượng của bản đồ
@@ -569,6 +588,7 @@ Refresh	Làm mới
 Regional, equal-area: the contiguous United States.	Khu vực, đồng diện tích: lãnh thổ liền kề của Hoa Kỳ.
 Regional, equal-area: the European standard for statistics.	Khu vực, đồng diện tích: chuẩn châu Âu cho thống kê.
 Remove	Gỡ bỏ
+Remove All	Gỡ tất cả
 Remove Bookmark	Gỡ dấu trang
 Remove From Current Selection	Bớt khỏi vùng chọn hiện tại
 Remove the layer from the map.	Gỡ lớp khỏi bản đồ.
@@ -656,6 +676,7 @@ Shift+	Shift+
 Shift+drag	Shift+kéo
 Shortcuts	Phím tắt
 Show latitude/longitude lines on the basemap.	Hiển thị các đường kinh độ/vĩ độ trên bản đồ nền.
+Show or hide	Hiện hoặc ẩn
 Show or hide the Catalog pane.	Hiện hoặc ẩn ngăn Danh mục.
 Show or hide the Contents pane.	Hiện hoặc ẩn ngăn Nội dung.
 Show or hide the Geoprocessing pane.	Hiện hoặc ẩn ngăn Xử lý không gian.
@@ -725,6 +746,7 @@ Triangle	Tam giác
 Turn Labels Off	Tắt nhãn
 Turn labels on or off for the selected layer.	Bật hoặc tắt nhãn cho lớp được chọn.
 Turn labels on or off.	Bật hoặc tắt nhãn.
+Type	Loại
 Unavailable: {reason}	Không khả dụng: {reason}
 Undo	Hoàn tác
 Undo / Redo	Hoàn tác / Làm lại
@@ -740,6 +762,7 @@ Update to {version}	Cập nhật lên {version}
 USA Contiguous Albers Equal Area	Albers đồng diện tích Hoa Kỳ lục địa
 Valid expression · {n} matching rows	Biểu thức hợp lệ · {n} hàng khớp
 Vector and raster data	Dữ liệu vector và raster
+Vector tiles (MVT)	Ô vector (MVT)
 Version {version}	Phiên bản {version}
 View	Xem
 View Unplaced	Xem nhãn chưa đặt
@@ -749,6 +772,7 @@ Visibility Range	Phạm vi hiển thị
 Visible	Hiển thị
 Visible Layers	Các lớp hiển thị
 Web Mercator	Web Mercator
+Web Tile Layers	Lớp ô bản đồ web
 Website	Trang web
 Welcome to RustGIS	Chào mừng đến với RustGIS
 West	Tây

@@ -16,6 +16,10 @@ pub mod post;
 mod raster;
 pub mod report;
 mod text;
+mod tiles;
+
+pub use rustgis_tiles;
+pub use tiles::spec as tile_spec;
 
 /// Natural Earth 1:110m sample data (public domain), fetched by `build.rs` from rustgis-assets.
 pub mod sample_data {
@@ -84,6 +88,12 @@ pub struct Rendered {
     pub labels: Vec<PlacedLabel>,
     /// Labels that didn't fit, when the map shows unplaced labels (drawn in red).
     pub unplaced: Vec<PlacedLabel>,
+    /// The credits the map's tile layers ask for.
+    pub attribution: Vec<String>,
+    /// Tiles are still on their way: drawing again later shows more.
+    pub tiles_pending: bool,
+    /// Tile layers that couldn't be drawn, and why.
+    pub tile_errors: Vec<String>,
 }
 
 /// Decodes PNG bytes into a pixmap.
@@ -541,6 +551,13 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         ctx.line(&mut pm, &lines, &p, 0.6);
     }
 
+    // Web tile layers, over the built-in basemap and its graticule.
+    let tile_place = match &globe {
+        Some(g) => raster::Place::Globe(g),
+        None => raster::Place::Flat(&flat, &key),
+    };
+    let tile_out = tiles::draw(&mut pm, map, view, tile_place, !map.label_display.paused && map.label_lock.is_none());
+
     // Layers, bottom first.
     let mut label_candidates: Vec<(PlacedLabel, f32, (u32, usize))> = Vec::new();
     let display = map.label_display;
@@ -757,6 +774,12 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     if let Some(g) = &globe {
         globe_shading(&mut pm, g, map.basemap, water, view.dark, view.pixels_per_point as f32);
     }
+    // Tile labels, after every layer's own.
+    if lock.is_none() {
+        for (i, (l, pri)) in tile_out.labels.into_iter().enumerate() {
+            label_candidates.push((l, pri - 1e10, (u32::MAX, i)));
+        }
+    }
     let placed = place_labels(label_candidates, fixed_labels, view.width as f32, view.height as f32, lock.is_some());
     if display.locked && map.label_lock.is_none() {
         map.label_lock = Some(placed.keys);
@@ -775,7 +798,14 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         };
         post::apply(&mut pm, &map.view.effects, vision, &lonlat);
     }
-    Some(Rendered { pixmap: pm, labels: placed.labels, unplaced })
+    Some(Rendered {
+        pixmap: pm,
+        labels: placed.labels,
+        unplaced,
+        attribution: tile_out.attribution,
+        tiles_pending: tile_out.pending,
+        tile_errors: tile_out.errors,
+    })
 }
 
 /// Metres on the ground per logical point at the view's centre.
@@ -1025,14 +1055,51 @@ fn place_labels(mut cands: Vec<(PlacedLabel, f32, (u32, usize))>, fixed: Vec<Pla
     out
 }
 
+/// Renders at full resolution once the map's tiles have arrived: each pass fetches what it is
+/// missing (a style, then its sources, then their tiles) and waits for it, at most a minute in
+/// all. In the browser, which can't wait, it draws what has arrived.
+pub(crate) fn render_complete(map: &mut Map, view: &View) -> Option<Rendered> {
+    let mut r = render_with(map, view, true)?;
+    let start = web_time::Instant::now();
+    let mut passes = 0;
+    while r.tiles_pending && passes < 6 && start.elapsed() < web_time::Duration::from_secs(60) && cfg!(not(target_arch = "wasm32")) {
+        rustgis_tiles::cache::wait(web_time::Duration::from_secs(30));
+        r = render_with(map, view, true)?;
+        passes += 1;
+    }
+    Some(r)
+}
+
 /// Renders a map with its labels, a scale bar and a north arrow to PNG bytes.
 pub fn render_png(map: &mut Map, view: &View) -> Result<Vec<u8>, String> {
-    let mut r = render_with(map, view, true).ok_or("could not allocate the image")?;
+    let mut r = render_complete(map, view).ok_or("could not allocate the image")?;
     for l in r.unplaced.iter().chain(&r.labels) {
         text::draw(&mut r.pixmap, l, view.pixels_per_point as f32);
     }
     text::scale_bar(&mut r.pixmap, view, map.ground_res_at(&view.camera));
+    draw_attribution(&mut r.pixmap, &r.attribution, view.pixels_per_point as f32);
     r.pixmap.encode_png().map_err(|e| e.to_string())
+}
+
+/// The tile layers' credits, small, in the bottom-right corner.
+pub(crate) fn draw_attribution(pm: &mut Pixmap, attribution: &[String], ppp: f32) {
+    if attribution.is_empty() {
+        return;
+    }
+    let text = attribution.join(" | ");
+    let size = 9.0;
+    let (w, h) = (pm.width() as f32 / ppp, pm.height() as f32 / ppp);
+    let tw = text::measure(&text, size, false).min(w);
+    let label = PlacedLabel {
+        text,
+        x: w - tw / 2.0 - 4.0,
+        y: h - size * 0.9,
+        size,
+        color: Rgba::rgb(0x33, 0x33, 0x33),
+        halo: Some(Rgba::rgb(0xFF, 0xFF, 0xFF)),
+        bold: false,
+    };
+    text::draw(pm, &label, ppp);
 }
 
 #[cfg(test)]

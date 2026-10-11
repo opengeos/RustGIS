@@ -4,6 +4,7 @@ A 3D globe seen from space.	Kosmosdan görünən 3D qlobus.
 A blank map with a basemap	Əsas xəritəli boş xəritə
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Təmiz Rust dilində yazılmış sürətli, açıq mənbəli masaüstü CİS; masaüstü CİS-in lent iş axını ilə: xəritələr və laylar, simvolika, etiketləmə, seçim, redaktə, geoemal və ixrac.
 A projected coordinate system.	Proyeksiyalı koordinat sistemi.
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	Kafel xidmətinin ünvanı: {z}/{x}/{y} ilə rastr kafellər (və ya WMS üçün {-y}, {q}, {bbox-epsg-3857}), vektor kafellər (.pbf) və ya TileJSON, yaxud MapLibre üslubu.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Qiymət, sahə və ya + − × ÷ ilə birləşdirilmiş ikisi. Seçilmiş sətirlərə, heç nə seçilməyibsə bütün sətirlərə tətbiq olunur.
 About	Haqqında
 About plugins	Plaginlər haqqında
@@ -27,10 +28,14 @@ Add Field	Sahə əlavə et
 Add field	Sahə əlavə et
 Add GeoJSON, CSV or Shapefile data to the map.	Xəritəyə GeoJSON, CSV və ya Shapefile məlumatı əlavə edin.
 Add Plugin Folder…	Plagin qovluğu əlavə et…
+Add raster tiles, vector tiles or a map style by address.	Ünvanla rastr kafellər, vektor kafellər və ya xəritə üslubu əlavə edin.
 Add sample countries	Nümunə ölkələri əlavə et
 Add Sample Data	Nümunə məlumat əlavə et
+Add Tile Layer	Kafel layı əlavə et
+Add Tile Layer…	Kafel layı əlavə et…
 Add To Current Selection	Cari seçimə əlavə et
 Add vector data.	Vektor məlumatı əlavə edin.
+Address	Ünvan
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Geodeziya sahəsini (km²), uzunluğu (km) və ya mərkəz koordinatlarını sahə kimi əlavə edir.
 All	Hamısı
 All categories	Bütün kateqoriyalar
@@ -49,9 +54,11 @@ Attribute\nTable	Atribut\ncədvəli
 Attribute Table	Atribut cədvəli
 Attribute table	Atribut cədvəli
 Attributes	Atributlar
+Attribution	Müəlliflik qeydi
 Aurora	Aurora
 Automatic	Avtomatik
 Automatic (system language)	Avtomatik (sistem dili)
+Automatic ({kind})	Avtomatik ({kind})
 Azimuth	Azimut
 Back to Explore; cancel a sketch	Kəşfə qayıt; eskizi ləğv et
 Back to the map	Xəritəyə qayıt
@@ -302,6 +309,8 @@ Fixed Zoom In	Sabit yaxınlaşdırma
 Fixed Zoom Out	Sabit uzaqlaşdırma
 Folders	Qovluqlar
 Forest	Meşə
+from the address	ünvandan
+from the service	xidmətdən
 Full Extent	Tam hüdud
 Full extent	Tam hüdud
 Full size	Tam ölçü
@@ -407,6 +416,7 @@ Load an unpacked plugin from its folder while you develop it.	Hazırlayarkən pa
 Load GeoLibre tools	GeoLibre alətlərini yüklə
 Loaded {name} from its folder.	{name} öz qovluğundan yükləndi.
 Loading the GeoLibre tools…	GeoLibre alətləri yüklənir…
+Loads map tiles from the web	Xəritə kafellərini internetdən yükləyir
 Locate	Yer tap
 Locate GeoLibre Runner	GeoLibre işlədicisini tap
 Locate the GeoLibre runner	GeoLibre işlədicisini tap
@@ -422,11 +432,13 @@ Make Layer From Selected Features	Seçilmiş obyektlərdən lay yarat
 Manage	İdarə et
 Manage Edits	Redaktələri idarə et
 Map	Xəritə
+Map style (JSON)	Xəritə üslubu (JSON)
 Map › Layer	Xəritə › Lay
 Maps	Xəritələr
 Marker	Marker
 Max	Maks
 Max %	Maks %
+Maximum zoom	Maksimal miqyas səviyyəsi
 Mean	Orta
 Measure	Ölç
 Measure Area	Sahəni ölç
@@ -446,7 +458,9 @@ Mod+	Mod+
 Mollweide (equal-area world)	Mollveyde (bərabər sahəli dünya)
 Mouse wheel	Siçan çarxı
 Move Down	Aşağı köçür
+Move down	Aşağı köçür
 Move Up	Yuxarı köçür
+Move up	Yuxarı köçür
 Name	Ad
 Natural Breaks (Jenks)	Təbii fasilələr (Jenks)
 Natural Color (1, 2, 3)	Təbii rəng (1, 2, 3)
@@ -475,12 +489,14 @@ No Pop-ups	Açılan pəncərə yoxdur
 No standalone tables	Müstəqil cədvəl yoxdur
 NoData	NoData
 None	Heç biri
+None. Add one by address, or from a basemap plugin.	Heç biri. Ünvanla və ya əsas xəritə plaginindən əlavə edin.
 North	Şimal
 North Polar Stereographic	Şimal qütb stereoqrafik
 Not saved yet	Hələ saxlanmayıb
 Ocean	Okean
 OID	OID
 Only features matching this expression draw in {layer}.	{layer} layında yalnız bu ifadəyə uyğun obyektlər çəkilir.
+Opacity	Qeyri-şəffaflıq
 Open	Aç
 Open a .rgisx project	.rgisx layihəsini aç
 Open a RustGIS project.	RustGIS layihəsini açın.
@@ -507,6 +523,8 @@ Output Name	Çıxış adı
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Təxminən 25 MB-lıq birdəfəlik endirmə ilə brauzerdə işləyən 1000-dən çox raster, vektor, LiDAR, hidrologiya və relyef aləti.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Təxminən 20 MB-lıq istəyə bağlı endirmə ilə 1000-dən çox raster, vektor, LiDAR, hidrologiya və relyef aləti.
 Overlay	Üst-üstə qoyma
+overlay	üst-üstə qoyma
+Overlay (a transparent layer kept on top, such as labels or roads)	Üst-üstə qoyma (yazılar və ya yollar kimi yuxarıda saxlanan şəffaf lay)
 Pan (Explore) · any tool	Sürüşdür (Kəşf) · istənilən alət
 Pan to a longitude/latitude.	Uzunluq/en dairəsinə sürüşdürün.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Siçanla sürüşdürün, çarxla miqyası dəyişin və atributlarını görmək üçün obyektlərə klikləyin.
@@ -554,6 +572,7 @@ Raster\nInformation	Rastr\nməlumatı
 Raster Data	Rastr məlumatı
 Raster Information	Rastr məlumatı
 Raster Layer	Rastr layı
+Raster tiles (XYZ)	Rastr kafellər (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Rastr · {w} × {h} · {n} kanal · {renderer}
 Read and write files on this computer	Bu kompüterdəki faylları oxumaq və yazmaq
 Read the map's layers and features	Xəritənin laylarını və obyektlərini oxumaq
@@ -569,6 +588,7 @@ Refresh	Yenilə
 Regional, equal-area: the contiguous United States.	Regional, bərabərsahəli: bitişik Amerika Birləşmiş Ştatları.
 Regional, equal-area: the European standard for statistics.	Regional, bərabərsahəli: statistika üçün Avropa standartı.
 Remove	Sil
+Remove All	Hamısını sil
 Remove Bookmark	Əlfəcini sil
 Remove From Current Selection	Cari seçimdən çıxar
 Remove the layer from the map.	Layı xəritədən silin.
@@ -656,6 +676,7 @@ Shift+	Shift+
 Shift+drag	Shift+sürüklə
 Shortcuts	Qısayollar
 Show latitude/longitude lines on the basemap.	Əsas xəritədə en/uzunluq xətlərini göstərin.
+Show or hide	Göstər və ya gizlət
 Show or hide the Catalog pane.	Kataloq panelini göstərin və ya gizlədin.
 Show or hide the Contents pane.	Məzmun panelini göstərin və ya gizlədin.
 Show or hide the Geoprocessing pane.	Geoemal panelini göstərin və ya gizlədin.
@@ -725,6 +746,7 @@ Triangle	Üçbucaq
 Turn Labels Off	Etiketləri söndür
 Turn labels on or off for the selected layer.	Seçilmiş lay üçün etiketləri yandırın və ya söndürün.
 Turn labels on or off.	Etiketləri yandırın və ya söndürün.
+Type	Növ
 Unavailable: {reason}	Əlçatan deyil: {reason}
 Undo	Geri al
 Undo / Redo	Geri al / Təkrarla
@@ -740,6 +762,7 @@ Update to {version}	{version} versiyasına yenilə
 USA Contiguous Albers Equal Area	ABŞ bitişik ştatlar Albers bərabər sahəli
 Valid expression · {n} matching rows	İfadə düzgündür · {n} uyğun sətir
 Vector and raster data	Vektor və rastr məlumatı
+Vector tiles (MVT)	Vektor kafellər (MVT)
 Version {version}	Versiya {version}
 View	Görünüş
 View Unplaced	Yerləşməyənləri göstər
@@ -749,6 +772,7 @@ Visibility Range	Görünmə diapazonu
 Visible	Görünən
 Visible Layers	Görünən laylar
 Web Mercator	Web Mercator
+Web Tile Layers	Veb kafel layları
 Website	Veb sayt
 Welcome to RustGIS	RustGIS-ə xoş gəlmisiniz
 West	Qərb

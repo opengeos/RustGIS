@@ -7,6 +7,7 @@ rustgis-cli commands                  # every command id with its parameters
 rustgis-cli tools                     # geoprocessing tools
 rustgis-cli info data.geojson         # layer summary as JSON
 rustgis-cli render data.geojson map.png --basemap ocean --width 1600 --height 900
+rustgis-cli render data.geojson map.png --tiles 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
 rustgis-cli parity                    # ribbon feature coverage
 rustgis-cli logo icon.png --size 256  # the app icon as a PNG
 rustgis-cli plugins                   # installed plugins (also: browse, get, install, uninstall…)
