@@ -35,6 +35,9 @@ pub fn commands() -> Vec<C> {
                 notes: String::new(),
                 seconds: 5.0,
             });
+            if s.project.presentations.len() >= crate::project::MAX_ITEMS {
+                return Err(format!("a project holds at most {} presentations", crate::project::MAX_ITEMS));
+            }
             s.project.presentations.push(pres);
             let i = s.project.presentations.len() - 1;
             s.active_presentation = Some(i);
@@ -47,6 +50,9 @@ pub fn commands() -> Vec<C> {
             pres.clamp();
             pres.name = unique_name(s, &pres.name);
             let name = pres.name.clone();
+            if s.project.presentations.len() >= crate::project::MAX_ITEMS {
+                return Err(format!("a project holds at most {} presentations", crate::project::MAX_ITEMS));
+            }
             s.project.presentations.push(pres);
             let i = s.project.presentations.len() - 1;
             s.active_presentation = Some(i);
@@ -377,8 +383,10 @@ pub(crate) fn playable(source: &str) -> &str {
 /// The presentation as a PDF, a self-contained HTML slideshow or a PNG of its first page, and
 /// the number of pages written.
 pub fn export_bytes(s: &mut Session, i: usize, format: &str, dpi: f64) -> Result<(Vec<u8>, usize), String> {
-    let pres = s.project.presentations.get(i).ok_or("no presentation")?.clone();
-    let n = pres.pages.len();
+    // Only the size and name are copied: the pages can hold many megabytes of pictures, so each
+    // is read in place after it's drawn.
+    let (name, width, height, n) =
+        s.project.presentations.get(i).map(|p| (p.name.clone(), p.width, p.height, p.pages.len())).ok_or("no presentation")?;
     if n == 0 {
         return Err("the presentation has no pages".into());
     }
@@ -392,10 +400,10 @@ pub fn export_bytes(s: &mut Session, i: usize, format: &str, dpi: f64) -> Result
     for k in 0..n {
         let img = draw_page(s, i, k, dpi)?;
         if format == "pdf" {
-            pdf_pages.push(rustgis_render::pdf::Page::new(&img, pres.width, pres.height));
+            pdf_pages.push(rustgis_render::pdf::Page::new(&img, width, height));
             held += pdf_pages.last().map_or(0, rustgis_render::pdf::Page::len);
         } else {
-            let page = pres.pages.get(k).ok_or("no page")?;
+            let page = s.project.presentations.get(i).and_then(|p| p.pages.get(k)).ok_or("no page")?;
             let png = base64::engine::general_purpose::STANDARD.encode(img.encode_png().map_err(|e| e.to_string())?);
             held += png.len();
             let body = match &page.kind {
@@ -416,7 +424,7 @@ pub fn export_bytes(s: &mut Session, i: usize, format: &str, dpi: f64) -> Result
         }
     }
     if format == "pdf" {
-        return Ok((rustgis_render::pdf::write(&pdf_pages, &pres.name), n));
+        return Ok((rustgis_render::pdf::write(&pdf_pages, &name), n));
     }
     let html = format!(
         r#"<!doctype html>
@@ -438,7 +446,7 @@ document.addEventListener('keydown',e=>{{if(e.key==='ArrowRight'||e.key===' ')go
 document.addEventListener('click',e=>{{if(e.target.tagName!=='VIDEO')go(i+1)}});go(0);
 </script></body></html>
 "#,
-        title = html_escape(&pres.name)
+        title = html_escape(&name)
     );
     Ok((html.into_bytes(), n))
 }

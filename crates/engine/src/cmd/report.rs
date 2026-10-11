@@ -405,6 +405,9 @@ fn new_report(s: &mut Session, p: &Value) -> CmdResult {
     }
     r.clamp();
     let name = r.name.clone();
+    if s.project.reports.len() >= crate::project::MAX_ITEMS {
+        return Err(format!("a project holds at most {} reports", crate::project::MAX_ITEMS));
+    }
     s.project.reports.push(r);
     let i = s.project.reports.len() - 1;
     s.active_report = Some(i);
@@ -565,6 +568,9 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
     }
     r.name = unique_name(s, &r.name, None);
     let name = r.name.clone();
+    if s.project.reports.len() >= crate::project::MAX_ITEMS {
+        return Err(format!("a project holds at most {} reports", crate::project::MAX_ITEMS));
+    }
     s.project.reports.push(r);
     let i = s.project.reports.len() - 1;
     s.active_report = Some(i);

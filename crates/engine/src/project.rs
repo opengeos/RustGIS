@@ -211,6 +211,9 @@ impl Project {
         for r in &mut self.reports {
             r.clamp();
         }
+        self.reports.truncate(MAX_ITEMS);
+        self.presentations.truncate(MAX_ITEMS);
+        self.notebooks.truncate(MAX_ITEMS);
         for p in &mut self.presentations {
             p.clamp();
         }
@@ -296,15 +299,26 @@ fn empty_map() -> &'static Map {
     M.get_or_init(|| Map::new("Map"))
 }
 
-/// Renames names repeated (ignoring case) after their first use: "Tour", "Tour 2", ….
+/// Most reports, presentations and notebooks a project file may hold.
+pub const MAX_ITEMS: usize = 1000;
+
+/// Renames names repeated (ignoring case) after their first use: "Tour", "Tour 2", …. Each base
+/// name remembers the last number it gave, so many repeats cost no more than a few each.
 fn unique_names<'a>(names: impl Iterator<Item = &'a mut String>) {
     let mut seen = std::collections::HashSet::new();
+    let mut next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for name in names {
+        if seen.insert(name.to_lowercase()) {
+            continue;
+        }
         let base = name.clone();
-        let mut k = 1;
-        while !seen.insert(name.to_lowercase()) {
-            k += 1;
+        let k = next.entry(base.to_lowercase()).or_insert(1);
+        loop {
+            *k += 1;
             *name = format!("{base} {k}");
+            if seen.insert(name.to_lowercase()) {
+                break;
+            }
         }
     }
 }

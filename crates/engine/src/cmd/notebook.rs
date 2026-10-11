@@ -161,6 +161,9 @@ pub fn commands() -> Vec<C> {
 
 fn push(s: &mut Session, nb: Notebook) -> CmdResult {
     let name = nb.name.clone();
+    if s.project.notebooks.len() >= crate::project::MAX_ITEMS {
+        return Err(format!("a project holds at most {} notebooks", crate::project::MAX_ITEMS));
+    }
     s.project.notebooks.push(nb);
     let i = s.project.notebooks.len() - 1;
     s.active_notebook = Some(i);

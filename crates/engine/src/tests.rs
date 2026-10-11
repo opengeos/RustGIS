@@ -1936,5 +1936,12 @@ fn presentations_and_notebooks() {
     let p = Project::from_json(&v.to_string()).unwrap();
     assert_eq!(p.notebooks[1].name, "ANALYSIS 2 2");
     assert_eq!(p.presentations[1].name, "tour 2");
+    // Many notebooks of one name: capped, and renamed quickly.
+    v["notebooks"] = Value::Array((0..1500).map(|_| json!({"name": "A", "cells": []})).collect());
+    let t0 = std::time::Instant::now();
+    let p = Project::from_json(&v.to_string()).unwrap();
+    assert_eq!(p.notebooks.len(), crate::project::MAX_ITEMS);
+    assert_eq!(p.notebooks.last().unwrap().name, format!("A {}", crate::project::MAX_ITEMS));
+    assert!(t0.elapsed().as_secs() < 5);
     let _ = std::fs::remove_dir_all(&dir);
 }
