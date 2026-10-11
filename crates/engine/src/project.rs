@@ -65,6 +65,8 @@ impl Project {
             {
                 log::warn!("{}: {e}; using Web Mercator", m.name);
                 m.projection = rustgis_map::Projection::WebMercator;
+                // The camera is in the lost projection's units: start from the whole world.
+                m.camera = rustgis_map::Camera::world();
             }
             m.camera.clamp();
             for l in &mut m.layers {

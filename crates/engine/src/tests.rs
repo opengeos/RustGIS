@@ -224,7 +224,9 @@ fn custom_projections_switch_keep_scale_query_and_render() {
     assert!(s.run("map.projections", &Value::Null).unwrap().as_array().unwrap().len() >= 10);
     // A project naming a projection this version can't use opens in Web Mercator.
     let broken = json.replace("EPSG:32617", "EPSG:9");
-    assert_eq!(Project::from_json(&broken).unwrap().map().projection, rustgis_map::Projection::WebMercator);
+    let reopened = Project::from_json(&broken).unwrap();
+    assert_eq!(reopened.map().projection, rustgis_map::Projection::WebMercator);
+    assert_eq!(reopened.map().camera, rustgis_map::Camera::world(), "UTM metres aren't read as Mercator ones");
     // Bookmarks follow a projection switch, and the extent history doesn't replay old cameras.
     s.run("map.projection", &json!({"type": "mercator"})).unwrap();
     s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 5_000_000})).unwrap();

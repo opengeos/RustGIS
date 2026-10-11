@@ -106,7 +106,8 @@ impl Domain {
     pub fn contains(&self, c: Coord) -> bool {
         match *self {
             Domain::World => true,
-            Domain::Box(e) => e.contains(c),
+            // A box centred near the antimeridian (lon_0 = 150) runs past ±180°.
+            Domain::Box(e) => [0.0, 360.0, -360.0].iter().any(|d| e.contains(Coord::new(c.x + d, c.y))),
             Domain::Cap { center, radius } => rustgis_geom::haversine_m(center, c) <= radius.to_radians() * rustgis_geom::EARTH_RADIUS_M,
             Domain::Band { lon0, half } => ((c.x - lon0 + 540.0).rem_euclid(360.0) - 180.0).abs() <= half && c.y.abs() <= 84.0,
         }
@@ -343,6 +344,10 @@ mod tests {
         assert!(Projector::new("bogus").is_err());
         assert!(Projector::new("12x").is_err());
         assert!(Projector::new("epsgfoo32617").is_err());
+        // A conic centred on the Pacific keeps points across the antimeridian.
+        let pacific = Domain::of(None, "+proj=lcc +lat_1=30 +lat_2=60 +lon_0=150");
+        assert!(pacific.contains(Coord::new(-170.0, 45.0)) && pacific.contains(Coord::new(120.0, 45.0)));
+        assert!(!pacific.contains(Coord::new(0.0, 45.0)));
         assert!(Projector::new("EPSG 32617").is_ok());
         assert!(lookup("EPSG:99999").unwrap_err().contains("coordinate system"), "out of range is an unknown code");
         // Equal Earth by its EPSG code goes to the built-in engine too.
