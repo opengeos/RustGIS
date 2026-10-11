@@ -270,10 +270,11 @@ pub(crate) fn fill_cache(s: &mut Session) -> usize {
     for m in &mut s.project.maps {
         let (flat, key) = (m.flat(), m.projection.code());
         for l in &mut m.layers {
+            // Counts the layers this fill actually projected.
             if !l.is_raster() && !l.is_cached(&key) {
                 l.projected_in(&flat, &key);
+                n += 1;
             }
-            n += 1;
         }
     }
     n
