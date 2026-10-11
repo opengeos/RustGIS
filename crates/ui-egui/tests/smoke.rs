@@ -123,7 +123,14 @@ fn a_tab_strip_wider_than_the_window_scrolls_with_arrow_buttons() {
     assert!(h.query_by_label("Scroll the tabs right").is_none());
     h.get_by_label("Data").click();
     h.step();
+    h.step();
     assert_eq!(h.state().ui.tab, "Data");
+    // A tab opened off screen scrolls into view, so the left arrow goes away.
+    h.state_mut().ui.tab = "Map".into();
+    for _ in 0..40 {
+        h.step();
+    }
+    assert!(h.query_by_label("Scroll the tabs left").is_none());
 }
 
 #[test]

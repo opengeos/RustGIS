@@ -198,6 +198,9 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         // Tighter tabs when the window is too narrow for the usual padding.
         let text: f32 = tabs.iter().map(|(_, c)| text_w(ui, c, semibold(12.5))).sum();
         let pad = ((room - text) / tabs.len().max(1) as f32).clamp(8.0, 22.0);
+        let active_id = egui::Id::new("tab_strip_active");
+        let shown_active: Option<String> = ui.data(|d| d.get_temp(active_id));
+        ui.data_mut(|d| d.insert_temp(active_id, app.ui.tab.clone()));
         let scroll = egui::ScrollArea::horizontal()
             .id_salt("tab_strip")
             .max_width(room)
@@ -256,6 +259,11 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                                 app.ui.ribbon_peek = !(app.ui.ribbon_peek && app.ui.tab == tab);
                             }
                             app.ui.tab = tab.to_string();
+                        }
+                        // A tab that became active (clicked, or opened by a command) scrolls
+                        // into view, clear of the arrow buttons.
+                        if active && shown_active.as_deref() != Some(tab) {
+                            ui.scroll_to_rect(r.expand2(vec2(SCROLL_BUTTON_W, 0.0)), None);
                         }
                         rects.push((tab.to_string(), r));
                     }

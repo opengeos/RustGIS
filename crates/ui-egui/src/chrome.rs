@@ -78,11 +78,12 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                             t.context,
                         );
                         // On a narrow window the tab strip may show only part of the group.
-                        if text_w(ui, tl!(caption), semibold(11.0)) + 8.0 <= band.width() {
+                        let caption = tl!(caption);
+                        if text_w(ui, caption, semibold(11.0)) + 8.0 <= band.width() {
                             ui.painter().text(
                                 pos2(band.center().x, band.center().y + 1.5),
                                 Align2::CENTER_CENTER,
-                                tl!(caption),
+                                caption,
                                 semibold(11.0),
                                 t.context,
                             );
