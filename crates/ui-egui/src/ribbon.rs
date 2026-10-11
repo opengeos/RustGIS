@@ -37,6 +37,21 @@ pub fn context(app: &RustGisApp) -> Option<(&'static str, &'static [(&'static st
 }
 
 /// Whether a tab id belongs to a contextual group.
+/// The tab id of a plugin's own tab.
+pub fn plugin_tab_id(plugin: &str) -> String {
+    format!("plugin:{plugin}")
+}
+
+/// The enabled plugins with a tab of their own: (tab id, caption in the interface language).
+fn plugin_tabs(app: &RustGisApp) -> Vec<(String, String)> {
+    let lang = app.lang().code();
+    rustgis_engine::plugins::list()
+        .into_iter()
+        .filter(|p| p.enabled)
+        .filter_map(|p| p.manifest.tab.as_ref().map(|t| (plugin_tab_id(&p.manifest.id), p.manifest.translate(lang, &t.label).to_string())))
+        .collect()
+}
+
 pub fn is_context_tab(tab: &str) -> bool {
     FEATURE_TABS.iter().chain(RASTER_TABS).chain(LAYOUT_TABS).any(|(id, _)| *id == tab)
 }
@@ -47,6 +62,10 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     if is_context_tab(&app.ui.tab) && !tabs.iter().any(|(id, _)| *id == app.ui.tab) {
         // Switching between a feature and a raster layer keeps a contextual tab open.
         app.ui.tab = tabs.first().map(|(id, _)| id.to_string()).unwrap_or_else(|| "Map".into());
+    }
+    // A plugin's tab whose plugin was turned off or removed.
+    if app.ui.tab.starts_with("plugin:") && !plugin_tabs(app).iter().any(|(id, _)| *id == app.ui.tab) {
+        app.ui.tab = "Plugins".into();
     }
     egui::Panel::top("tabs")
         .exact_size(32.0)
@@ -71,7 +90,9 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
-                    match app.ui.tab.as_str() {
+                    let tab = app.ui.tab.clone();
+                    match tab.as_str() {
+                        t if t.starts_with("plugin:") => plugin_tab(app, ui, t.trim_start_matches("plugin:")),
                         "Insert" => insert_tab(app, ui),
                         "Analysis" => analysis_tab(app, ui),
                         "View" => view_tab(app, ui),
@@ -113,21 +134,26 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.ui.backstage = true;
         }
         ui.add_space(6.0);
-        let mut tabs: Vec<(&str, &str)> = TABS.iter().filter(|t| !app.ui.hidden_tabs.iter().any(|h| h == *t)).map(|t| (*t, *t)).collect();
+        // RustGIS's tabs, then plugins' own tabs, then the contextual tabs; the user can hide any
+        // of the first two.
+        let mut tabs: Vec<(String, String)> = TABS.iter().map(|t| (t.to_string(), tl!(*t).to_string())).collect();
+        tabs.extend(plugin_tabs(app));
+        tabs.retain(|(id, _)| !app.ui.hidden_tabs.iter().any(|h| h == id));
         if let Some((_, ctx)) = context(app) {
-            tabs.extend(ctx.iter().copied());
+            tabs.extend(ctx.iter().map(|(id, c)| (id.to_string(), tl!(*c).to_string())));
         }
         // Tighter tabs when the window is too narrow for the usual padding (keeping room for the
         // collapse button on the right).
         let room = ui.available_width() - 40.0;
-        let text: f32 = tabs.iter().map(|(_, c)| text_w(ui, tl!(*c), semibold(12.5))).sum();
+        let text: f32 = tabs.iter().map(|(_, c)| text_w(ui, c, semibold(12.5))).sum();
         let pad = ((room - text) / tabs.len().max(1) as f32).clamp(8.0, 22.0);
         let mut rects = Vec::new();
-        for (tab, caption) in tabs {
+        for (tab, caption) in &tabs {
+            let tab = tab.as_str();
             let is_ctx = is_context_tab(tab);
             let active = app.ui.tab == tab;
             let font = if active { semibold(12.5) } else { regular(12.5) };
-            let shown = tl!(caption);
+            let shown = caption.as_str();
             let w = text_w(ui, shown, font.clone()) + pad;
             let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
             let body = Rect::from_min_max(pos2(r.min.x, r.min.y + 3.0), r.max);
@@ -1923,12 +1949,13 @@ fn plugins_tab(app: &mut RustGisApp, ui: &mut Ui) {
             );
         });
     });
-    // A group per enabled plugin with commands, in the interface language when it has one.
+    // A group per enabled plugin with commands, in the interface language when it has one
+    // (plugins with a tab of their own are on that tab instead).
     let lang = app.lang().code();
     // Its tools too: each opens in the Geoprocessing pane.
     for p in rustgis_engine::plugins::list()
         .into_iter()
-        .filter(|p| p.enabled && !(p.manifest.commands.is_empty() && p.manifest.tools.is_empty()))
+        .filter(|p| p.enabled && p.manifest.tab.is_none() && !(p.manifest.commands.is_empty() && p.manifest.tools.is_empty()))
     {
         let m = &p.manifest;
         group(ui, m.translate(lang, &m.name), |ui| {
@@ -1946,13 +1973,70 @@ fn plugins_tab(app: &mut RustGisApp, ui: &mut Ui) {
     }
 }
 
+/// A plugin's own tab: its groups of commands, tools and menus.
+fn plugin_tab(app: &mut RustGisApp, ui: &mut Ui, plugin: &str) {
+    use rustgis_engine::plugins::{Entry, ItemDecl, command_id};
+    let Some(p) = rustgis_engine::plugins::get(plugin).filter(|p| p.enabled) else { return };
+    let Some(tab) = p.manifest.tab.as_ref() else { return };
+    let m = &p.manifest;
+    let lang = app.lang().code();
+    // What a button runs: a command, or the Geoprocessing pane open on a tool.
+    let target = |e: Entry<'_>| -> (String, String, String, String, Value) {
+        match e {
+            Entry::Command(c) => {
+                let icon = if crate::icons::ALL.contains(&c.icon.as_str()) { c.icon.clone() } else { "plugin".into() };
+                (
+                    icon,
+                    m.translate(lang, &c.label).to_string(),
+                    m.translate(lang, &c.help).to_string(),
+                    command_id(&m.id, &c.id),
+                    Value::Null,
+                )
+            }
+            Entry::Tool(t) => (
+                "toolbox".into(),
+                m.translate(lang, &t.name).replacen(' ', "\n", 1),
+                m.translate(lang, &t.summary).to_string(),
+                "ui.gp.open".into(),
+                json!({"tool": command_id(&m.id, &t.id)}),
+            ),
+        }
+    };
+    for g in &tab.groups {
+        group(ui, m.translate(lang, &g.label), |ui| {
+            for item in &g.items {
+                match item {
+                    ItemDecl::Entry(e) => {
+                        if let Some((icon, label, help, id, params)) = m.entry(e).map(target) {
+                            big(ui, app, &icon, &label, &help, &id, params, false, false);
+                        }
+                    }
+                    ItemDecl::Menu(menu) => {
+                        let icon = if crate::icons::ALL.contains(&menu.icon.as_str()) { menu.icon.as_str() } else { "plugin" };
+                        big_menu(ui, app, icon, m.translate(lang, &menu.menu), m.translate(lang, &menu.help), |ui, app| {
+                            for e in &menu.items {
+                                if let Some((icon, label, _, id, params)) = m.entry(e).map(target) {
+                                    menu_item(ui, app, &icon, &label.replace('\n', " "), &id, params);
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        });
+    }
+}
+
 fn help_tab(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Customize", |ui| {
         let hidden = app.ui.hidden_tabs.clone();
+        // RustGIS's tabs and plugins' tabs.
+        let mut all: Vec<(String, String)> = TABS.iter().filter(|t| **t != "Help").map(|t| (t.to_string(), tl!(*t).to_string())).collect();
+        all.extend(plugin_tabs(app));
         big_menu(ui, app, "settings", "Ribbon", "Choose which tabs the ribbon shows.", move |ui, app| {
-            for tab in TABS.iter().filter(|t| **t != "Help") {
+            for (tab, caption) in &all {
                 let mut on = !hidden.iter().any(|h| h == tab);
-                if ui.checkbox(&mut on, tl!(*tab)).clicked() {
+                if ui.checkbox(&mut on, caption.as_str()).clicked() {
                     let _ = app.run("ui.customizeRibbon", json!({"tab": tab}));
                 }
             }

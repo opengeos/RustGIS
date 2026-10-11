@@ -182,10 +182,13 @@ pub fn small_menu(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, de
 pub fn menu_item(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, id: &str, params: Value) {
     let label = tl!(label);
     let on = enabled(app, id);
-    let resp = ui.add_enabled(
-        on,
-        egui::Button::new(label).frame(false).min_size(vec2(ui.available_width(), 24.0)).right_text(shortcut_text(app, id)),
-    );
+    let mut button = egui::Button::new(label).frame(false).min_size(vec2(ui.available_width(), 24.0));
+    // Only with a shortcut: an empty right text would end the button's accessible label in a space.
+    let shortcut = shortcut_text(app, id);
+    if !shortcut.is_empty() {
+        button = button.right_text(shortcut);
+    }
+    let resp = ui.add_enabled(on, button);
     if !icon.is_empty() {
         let t = Tokens::get(ui.ctx());
         icons::paint(

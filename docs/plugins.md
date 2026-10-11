@@ -19,8 +19,9 @@ Open **Plugins › Plugin Manager**:
   sets the registry address (empty means the RustGIS registry). On the desktop, it can load a
   plugin from its folder while you develop it.
 
-A plugin's commands appear on the **Plugins** tab, in a group named after the plugin. They are
-also in command search. Its tools appear in the **Geoprocessing** pane under **Plugins ›**.
+A plugin's commands and tools appear on the **Plugins** tab, in a group named after the
+plugin, or on the plugin's own tab if it has one. Its commands are also in command search, and
+its tools are in the **Geoprocessing** pane under **Plugins ›**.
 
 The desktop app keeps installed packages in its data folder (`plugins/` beside the GeoLibre
 runner, or `$RUSTGIS_PLUGINS_DIR`) and loads them at startup. The web app remembers the
@@ -142,6 +143,38 @@ cargo build --release --target wasm32-unknown-unknown
 
 A package is a zip archive named `<id>-<version>.rgplugin`. It holds `plugin.json` and the module
 at its root, or inside one top-level folder. Packages are at most 64 MB, and modules at most 48 MB.
+
+### A tab of its own
+
+By default a plugin's commands and tools get a group on the **Plugins** tab. A plugin can have a
+ribbon tab of its own instead. The tab sits at the end of the tab strip, and **Help › Ribbon**
+can hide it like any other. Declare it in `plugin.json`:
+
+```json
+"tab": {
+  "label": "Explorer",
+  "groups": [
+    {
+      "label": "Go To",
+      "items": [
+        { "menu": "Continent", "icon": "zoom_world", "help": "Go to a continent.", "items": ["go-africa", "go-europe"] },
+        "random-place"
+      ]
+    },
+    { "label": "Inspect", "items": ["layer-report", "tool:field-summary"] }
+  ]
+}
+```
+
+- `items` lists the buttons. An item is a command id, `tool:<id>` (which opens that tool in the
+  Geoprocessing pane), or a dropdown `menu` whose `items` are command ids or `tool:<id>`.
+- A tab has 1 to 8 groups, a group has 1 to 16 items, and a menu has 1 to 32 entries. Every
+  entry must name one of the plugin's own commands or tools.
+- The label can't be the name of one of RustGIS's tabs (Map, Insert, Analysis, Plugins…). The
+  `i18n` translations apply to the tab, group and menu labels too.
+
+[Map Explorer](https://github.com/opengeos/rustgis-plugins/tree/main/plugins/map-explorer) is
+an example.
 
 ### What a plugin can ask for
 

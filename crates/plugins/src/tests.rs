@@ -220,3 +220,35 @@ fn versions_and_translations() {
     assert_eq!(m.translate("de-AT", "Hello"), "Hallo");
     assert_eq!(m.translate("fr", "Hello"), "Hello");
 }
+
+#[test]
+fn plugin_tabs_are_checked() {
+    let with_tab = |tab: Value| {
+        let mut m: Value = serde_json::from_str(&testing::manifest("tabbed", &[])).unwrap();
+        m["tab"] = tab;
+        Manifest::parse(&m.to_string())
+    };
+    let ok = with_tab(json!({"label": "Hello", "groups": [
+        {"label": "Run", "items": ["h", "tool:m", {"menu": "More", "icon": "stats", "items": ["f", "tool:x"]}]}
+    ]}))
+    .unwrap();
+    let tab = ok.tab.as_ref().unwrap();
+    assert!(matches!(tab.groups[0].items[2], crate::ItemDecl::Menu(ref m) if m.items.len() == 2));
+    assert!(matches!(ok.entry("tool:m"), Some(crate::Entry::Tool(t)) if t.id == "m"));
+    assert!(matches!(ok.entry("h"), Some(crate::Entry::Command(c)) if c.id == "h"));
+    for (bad, why) in [
+        (json!({"label": "Map", "groups": [{"label": "G", "items": ["h"]}]}), "RustGIS's tabs"),
+        (json!({"label": "help", "groups": [{"label": "G", "items": ["h"]}]}), "RustGIS's tabs"),
+        (json!({"label": "", "groups": [{"label": "G", "items": ["h"]}]}), "label"),
+        (json!({"label": "T", "groups": []}), "groups"),
+        (json!({"label": "T", "groups": [{"label": "G", "items": []}]}), "items"),
+        (json!({"label": "T", "groups": [{"label": "G", "items": ["nope"]}]}), "isn't one of"),
+        (json!({"label": "T", "groups": [{"label": "G", "items": ["tool:h"]}]}), "isn't one of"),
+        (json!({"label": "T", "groups": [{"label": "G", "items": [{"menu": "M", "items": []}]}]}), "needs 1 to"),
+        (json!({"label": "T", "groups": [{"label": "G", "items": [{"menu": "M", "items": ["zz"]}]}]}), "isn't one of"),
+        (json!({"label": "T", "groups": [{"label": "G", "items": [7]}]}), "plugin.json"),
+    ] {
+        let e = with_tab(bad.clone()).unwrap_err();
+        assert!(e.contains(why), "{bad}: {e}");
+    }
+}

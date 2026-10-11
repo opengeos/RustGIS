@@ -27,7 +27,7 @@ use std::sync::{Arc, RwLock};
 
 use serde_json::{Value, json};
 
-pub use manifest::{CommandDecl, Manifest, Permission, ToolDecl};
+pub use manifest::{CommandDecl, Entry, GroupDecl, ItemDecl, Manifest, MenuDecl, Permission, TabDecl, ToolDecl};
 pub use package::Package;
 pub use runtime::{Host, NoHost};
 
@@ -66,6 +66,7 @@ impl Plugin {
             "permissions": m.permissions.iter().map(|p| p.code()).collect::<Vec<_>>(),
             "commands": m.commands.iter().map(|c| json!({"id": command_id(&m.id, &c.id), "label": c.label, "params": c.params})).collect::<Vec<_>>(),
             "tools": m.tools.iter().map(|t| json!({"id": command_id(&m.id, &t.id), "name": t.name})).collect::<Vec<_>>(),
+            "tab": m.tab.as_ref().map(|t| t.label.clone()),
             "enabled": self.enabled, "source": self.source, "sha256": self.sha256,
         })
     }

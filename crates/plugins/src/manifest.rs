@@ -16,6 +16,30 @@ const MAX_CHOICES: usize = 64;
 const MAX_TEXT: usize = 2_000;
 const MAX_LANGS: usize = 64;
 const MAX_STRINGS: usize = 2_000;
+const MAX_GROUPS: usize = 8;
+const MAX_GROUP_ITEMS: usize = 16;
+const MAX_MENU_ITEMS: usize = 32;
+const MAX_TAB_LABEL: usize = 32;
+
+/// RustGIS's own ribbon tabs (and the Project button): a plugin's tab can't take their names.
+pub const RESERVED_TABS: &[&str] = &[
+    "Project",
+    "Map",
+    "Insert",
+    "Analysis",
+    "View",
+    "Edit",
+    "Imagery",
+    "Share",
+    "Plugins",
+    "Help",
+    "Feature Layer",
+    "Labeling",
+    "Data",
+    "Raster Layer",
+    "Raster Data",
+    "Layout",
+];
 
 /// What a plugin may do beyond reading the map. Shown to the user before installing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -86,6 +110,47 @@ pub struct ParamDecl {
     pub help: String,
 }
 
+/// A ribbon tab of the plugin's own, beside RustGIS's tabs.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TabDecl {
+    pub label: String,
+    pub groups: Vec<GroupDecl>,
+}
+
+/// A group of buttons on a plugin's tab.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GroupDecl {
+    pub label: String,
+    pub items: Vec<ItemDecl>,
+}
+
+/// A button: a command id or `tool:<id>` (opens the tool in the Geoprocessing pane), or a
+/// dropdown menu of them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ItemDecl {
+    Entry(String),
+    Menu(MenuDecl),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MenuDecl {
+    /// The menu button's label.
+    pub menu: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub help: String,
+    pub items: Vec<String>,
+}
+
+/// What a tab entry (`command-id` or `tool:tool-id`) refers to.
+#[derive(Clone, Copy, Debug)]
+pub enum Entry<'a> {
+    Command(&'a CommandDecl),
+    Tool(&'a ToolDecl),
+}
+
 /// The parameter kinds a tool may use.
 pub const PARAM_KINDS: &[&str] =
     &["layer", "vectorLayer", "polygonLayer", "pointLayer", "field", "numericField", "number", "text", "choice", "bool"];
@@ -140,6 +205,9 @@ pub struct Manifest {
     pub commands: Vec<CommandDecl>,
     #[serde(default)]
     pub tools: Vec<ToolDecl>,
+    /// A ribbon tab of its own (optional): its commands and tools in groups and menus.
+    #[serde(default)]
+    pub tab: Option<TabDecl>,
     /// Translations of the plugin's own strings (labels, help, tool and parameter names), by
     /// language code (`de`, `zh-CN`): `{"de": {"Say Hello": "Hallo sagen"}}`.
     #[serde(default)]
@@ -287,6 +355,9 @@ impl Manifest {
                 }
             }
         }
+        if let Some(tab) = &self.tab {
+            self.validate_tab(tab)?;
+        }
         if self.i18n.len() > MAX_LANGS || self.i18n.values().map(BTreeMap::len).sum::<usize>() > MAX_STRINGS {
             return Err("plugin.json: too many translations".into());
         }
@@ -309,6 +380,55 @@ impl Manifest {
             .map(String::as_str)
             .filter(|t| !t.is_empty())
             .unwrap_or(s)
+    }
+
+    /// The command or tool a tab entry names.
+    pub fn entry(&self, e: &str) -> Option<Entry<'_>> {
+        match e.strip_prefix("tool:") {
+            Some(t) => self.tools.iter().find(|x| x.id == t).map(Entry::Tool),
+            None => self.commands.iter().find(|x| x.id == e).map(Entry::Command),
+        }
+    }
+
+    fn validate_tab(&self, tab: &TabDecl) -> Result<(), String> {
+        let label = tab.label.trim();
+        if label.is_empty() || label.chars().count() > MAX_TAB_LABEL || label.contains('\n') {
+            return Err(format!("plugin.json: the tab's label must be one line of 1 to {MAX_TAB_LABEL} characters"));
+        }
+        if RESERVED_TABS.iter().any(|r| r.eq_ignore_ascii_case(label)) {
+            return Err(format!("plugin.json: the tab can't be called '{label}', the name of one of RustGIS's tabs"));
+        }
+        if tab.groups.is_empty() || tab.groups.len() > MAX_GROUPS {
+            return Err(format!("plugin.json: the tab needs 1 to {MAX_GROUPS} groups"));
+        }
+        let entry = |e: &str| -> Result<(), String> {
+            self.entry(e)
+                .map(|_| ())
+                .ok_or_else(|| format!("plugin.json: the tab names '{e}', which isn't one of the plugin's commands or tools (tool:<id>)"))
+        };
+        for g in &tab.groups {
+            check_text("group label", &g.label, true)?;
+            if g.items.is_empty() || g.items.len() > MAX_GROUP_ITEMS {
+                return Err(format!("plugin.json: tab group '{}' needs 1 to {MAX_GROUP_ITEMS} items", g.label));
+            }
+            for item in &g.items {
+                match item {
+                    ItemDecl::Entry(e) => entry(e)?,
+                    ItemDecl::Menu(m) => {
+                        check_text("menu label", &m.menu, true)?;
+                        check_text("menu help", &m.help, false)?;
+                        check_text("menu icon", &m.icon, false)?;
+                        if m.items.is_empty() || m.items.len() > MAX_MENU_ITEMS {
+                            return Err(format!("plugin.json: menu '{}' needs 1 to {MAX_MENU_ITEMS} items", m.menu));
+                        }
+                        for e in &m.items {
+                            entry(e)?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn has(&self, p: Permission) -> bool {

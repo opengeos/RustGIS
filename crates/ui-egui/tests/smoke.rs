@@ -73,9 +73,13 @@ fn every_tab_pane_and_dialog_renders() {
     assert!(h.state().session.map().layers.is_empty());
 }
 
+/// Plugins are loaded for the whole process, so the tests that look at them take turns.
+static PLUGINS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn plugins_install_from_a_file_after_a_prompt() {
     use egui_kittest::kittest::Queryable;
+    let _turn = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("rustgis-ui-plugins-{}", std::process::id()));
     rustgis_ui_egui::rustgis_engine::plugins::store::set_dir(Some(dir.join("installed")));
     std::fs::create_dir_all(&dir).unwrap();
@@ -122,4 +126,58 @@ fn plugins_install_from_a_file_after_a_prompt() {
     h.step();
     assert!(rustgis_ui_egui::rustgis_engine::plugins::get("ui-test").is_none());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn plugins_can_have_a_tab_of_their_own() {
+    use egui_kittest::kittest::Queryable;
+    let _turn = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    use rustgis_ui_egui::rustgis_engine::plugins as rp;
+    let mut m: serde_json::Value = serde_json::from_str(&rp::testing::manifest("ui-tab", &[])).unwrap();
+    // Its own names, so the other tests (which share the loaded plugins) don't see them.
+    m["commands"][0]["label"] = json!("Tab Hello");
+    m["tools"][0]["name"] = json!("Tab Points");
+    m["tools"][1]["name"] = json!("Tab Select");
+    m["tab"] = json!({"label": "Hello Tab", "groups": [
+        {"label": "Things", "items": ["h", "tool:m", {"menu": "More", "items": ["e", "tool:x"]}]}
+    ]});
+    let pkg = rp::testing::zip_of(&[("plugin.json", m.to_string().as_bytes()), ("plugin.wasm", &rp::testing::wasm())]);
+    rp::load(rp::Package::from_zip(&pkg).unwrap(), "test").unwrap();
+    let mut h = harness();
+    for _ in 0..4 {
+        h.step();
+    }
+    // Its tab is in the tab strip; its buttons are there, not on the Plugins tab.
+    h.state_mut().ui.tab = "Plugins".into();
+    h.step();
+    h.step();
+    assert_eq!(h.query_all_by_label("Tab Points").count(), 0);
+    h.state_mut().ui.tab = "plugin:ui-tab".into();
+    h.step();
+    h.step();
+    h.get_by_label("Tab Hello").click();
+    h.step();
+    h.get_by_label("Tab Points").click();
+    h.step();
+    h.step();
+    assert_eq!(h.state().gp.tool, Some("plugin:ui-tab/m"));
+    h.get_by_label("More").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    h.get_by_label("Tab Select").click();
+    h.step();
+    assert_eq!(h.state().gp.tool, Some("plugin:ui-tab/x"));
+    // Hidden, then shown again, from Help › Ribbon.
+    h.state_mut().run("ui.customizeRibbon", json!({"tab": "plugin:ui-tab"})).unwrap();
+    h.step();
+    assert!(h.state().ui.hidden_tabs.contains(&"plugin:ui-tab".to_string()));
+    h.state_mut().run("ui.customizeRibbon", json!({"tab": "plugin:ui-tab"})).unwrap();
+    // A disabled plugin's tab goes, and the ribbon falls back to the Plugins tab.
+    h.state_mut().ui.tab = "plugin:ui-tab".into();
+    rp::set_enabled("ui-tab", false).unwrap();
+    h.step();
+    h.step();
+    assert_eq!(h.state().ui.tab, "Plugins");
+    rp::unload("ui-tab");
 }
