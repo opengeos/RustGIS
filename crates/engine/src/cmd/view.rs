@@ -101,9 +101,10 @@ pub fn commands() -> Vec<C> {
 }
 
 fn effects(s: &mut Session, p: &Value) -> CmdResult {
-    let fx = &mut s.map_mut().view.effects;
+    // Built on a copy and applied only when every parameter is valid.
+    let mut fx = s.map().view.effects.clone();
     if b(p, "reset").unwrap_or(false) {
-        *fx = Default::default();
+        fx = Default::default();
     }
     if let Some(v) = p.get("sunTime") {
         fx.sun_time = match v {
@@ -140,7 +141,9 @@ fn effects(s: &mut Session, p: &Value) -> CmdResult {
             *slot = v.clamp(lo, 100.0);
         }
     }
-    serde_json::to_value(&*fx).map_err(|e| e.to_string())
+    let out = serde_json::to_value(&fx).map_err(|e| e.to_string())?;
+    s.map_mut().view.effects = fx;
+    Ok(out)
 }
 
 fn camera(s: &mut Session, p: &Value) -> CmdResult {

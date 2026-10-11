@@ -101,10 +101,29 @@ fn mix(px: &mut PremultipliedColorU8, c: [u8; 3], t: f32) {
     }
 }
 
-/// The sun's elevation (degrees) at a place and time.
+/// The day of the year (0-based, fractional) for days since 1970-01-01, from the civil calendar.
+fn day_of_year(days: f64) -> f64 {
+    // Days from 1970-01-01 to January 1 of a year (proleptic Gregorian).
+    let jan1 = |y: i64| -> i64 {
+        let y1 = y - 1;
+        365 * (y - 1970) + (y1.div_euclid(4) - 1969 / 4) - (y1.div_euclid(100) - 1969 / 100) + (y1.div_euclid(400) - 1969 / 400)
+    };
+    let d = days.floor() as i64;
+    let mut y = 1970 + d.div_euclid(365);
+    while jan1(y) > d {
+        y -= 1;
+    }
+    while jan1(y + 1) <= d {
+        y += 1;
+    }
+    days - jan1(y) as f64
+}
+
+/// The sun's elevation (degrees) at a place and time: an approximation good to about a degree
+/// (declination from the day of the year, no equation of time), enough for shading.
 pub fn sun_elevation(c: Coord, t: f64) -> f64 {
-    let days = t / 86_400.0;
-    let doy = days.rem_euclid(365.2422);
+    let days = (t / 86_400.0).clamp(-1e7, 1e7);
+    let doy = day_of_year(days);
     let decl = (-23.44f64).to_radians() * ((360.0 / 365.0) * (doy + 10.0)).to_radians().cos();
     let utc_hours = (t / 3600.0).rem_euclid(24.0);
     let hour_angle = ((utc_hours - 12.0) * 15.0 + c.x).to_radians();
@@ -252,8 +271,12 @@ fn tilt_shift(pm: &mut Pixmap) {
             }
             let n = (hi - lo + 1) as f32;
             let (Some(orig), Some(px)) = (src.get(y * w + x), data.get_mut(y * w + x)) else { continue };
-            let v: Vec<u8> = acc.iter().zip(orig).map(|(b, o)| (o * (1.0 - t) + b / n * t).round().clamp(0.0, 255.0) as u8).collect();
-            let a = v.get(3).copied().unwrap_or(255);
+            let mut v = [0u8; 4];
+            for ((slot, b), o) in v.iter_mut().zip(&acc).zip(orig) {
+                *slot = (o * (1.0 - t) + b / n * t).round().clamp(0.0, 255.0) as u8;
+            }
+            // Premultiplied: no colour channel may exceed alpha.
+            let a = v[3];
             let c = |i: usize| v.get(i).copied().unwrap_or(0).min(a);
             if let Some(p) = PremultipliedColorU8::from_rgba(c(0), c(1), c(2), a) {
                 *px = p;
@@ -280,5 +303,15 @@ mod tests {
         assert!(c.red().abs_diff(c.green()) < 3 && c.green().abs_diff(c.blue()) < 3, "no colour left: {c:?}");
         let corner = pm.pixel(0, 39).unwrap();
         assert!(corner.red() < c.red(), "vignette darkens corners");
+    }
+
+    #[test]
+    fn days_of_the_year_follow_the_calendar() {
+        assert_eq!(day_of_year(0.0), 0.0); // 1970-01-01
+        assert_eq!(day_of_year(365.0), 0.0); // 1971-01-01
+        assert_eq!(day_of_year(365.0 * 2.0 + 366.0), 0.0); // 1973-01-01 (1972 was a leap year)
+        assert_eq!(day_of_year(19_723.0), 0.0); // 2024-01-01
+        assert_eq!(day_of_year(19_723.0 + 365.0), 365.0); // 2024-12-31
+        assert_eq!(day_of_year(-1.0), 364.0); // 1969-12-31
     }
 }

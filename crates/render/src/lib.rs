@@ -154,6 +154,22 @@ thread_local! {
     static ANTIALIAS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
+/// Sets antialiasing for one render and puts it back on when dropped, however the render ends.
+struct Antialias;
+
+impl Antialias {
+    fn set(on: bool) -> Antialias {
+        ANTIALIAS.with(|a| a.set(on));
+        Antialias
+    }
+}
+
+impl Drop for Antialias {
+    fn drop(&mut self) {
+        ANTIALIAS.with(|a| a.set(true));
+    }
+}
+
 fn paint(c: Rgba, opacity: f32) -> Paint<'static> {
     let mut p = Paint::default();
     let a = (c.a() as f32 * opacity).round().clamp(0.0, 255.0) as u8;
@@ -451,7 +467,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     let globe = map.projection.is_globe().then(|| Globe::new(&view.camera, view.width, view.height));
     let (flat, key) = (map.flat(), map.projection.code());
     let custom = matches!(flat, rustgis_map::projection::Flat::Custom(_)) && globe.is_none();
-    ANTIALIAS.with(|a| a.set(!map.view.fast));
+    let _antialias = Antialias::set(!map.view.fast);
     let ctx = Ctx {
         view,
         ppp: view.pixels_per_point as f32,
@@ -754,7 +770,6 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         };
         post::apply(&mut pm, &map.view.effects, vision, &lonlat);
     }
-    ANTIALIAS.with(|a| a.set(true));
     Some(Rendered { pixmap: pm, labels: placed.labels, unplaced })
 }
 
