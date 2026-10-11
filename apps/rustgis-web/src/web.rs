@@ -170,6 +170,8 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
             let ctx = ctx.clone();
             let dialog = if purpose == "project" {
                 rfd::AsyncFileDialog::new().add_filter("RustGIS project", &["rgisx"])
+            } else if purpose == "picture" {
+                rfd::AsyncFileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg"])
             } else {
                 rfd::AsyncFileDialog::new().add_filter("Vector and raster data", DATA_EXTS)
             };

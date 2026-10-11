@@ -33,6 +33,7 @@ impl Dialogs {
             "definitionQuery" => "definitionQuery",
             "renameLayer" => "renameLayer",
             "coordinateSystem" => "coordinateSystem",
+            "graphicText" => "graphicText",
             other => return Err(format!("unknown dialog '{other}'")),
         };
         if matches!(name, "addField" | "calculateField" | "definitionQuery" | "renameLayer") && active.is_none() {
@@ -56,6 +57,10 @@ impl Dialogs {
                 self.b = format!("{:.4}", c.y);
             }
             "bookmark" => self.text = format!("Bookmark {}", s.map().bookmarks.len() + 1),
+            "graphicText" => {
+                self.text = "Text".into();
+                self.c = "14".into();
+            }
             "addField" => self.b = "Double".into(),
             "calculateField" => self.a = active.and_then(|l| l.dataset.fields.last()).map(|f| f.name.clone()).unwrap_or_default(),
             "definitionQuery" => self.text = active.and_then(|l| l.definition_query.clone()).unwrap_or_default(),
@@ -107,6 +112,31 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 });
             }
             "coordinateSystem" => close = coordinate_system(app, ui, &t),
+            "graphicText" => {
+                ui.label(tl!("Text"));
+                ui.add(egui::TextEdit::multiline(&mut app.dialogs.text).desired_rows(2).desired_width(f32::INFINITY));
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(tl!("Dynamic text:")).small().weak());
+                    for (token, what) in rustgis_engine::map::graphics::TOKENS {
+                        if ui.small_button(*token).on_hover_text(tl!(*what)).clicked() {
+                            app.dialogs.text.push_str(token);
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Size"));
+                    ui.add(egui::TextEdit::singleline(&mut app.dialogs.c).desired_width(50.0));
+                });
+                close = buttons(app, ui, "Add", |app| {
+                    let (lon, lat) = (app.dialogs.a.parse::<f64>().unwrap_or(f64::NAN), app.dialogs.b.parse::<f64>().unwrap_or(f64::NAN));
+                    let size = app.dialogs.c.trim().parse::<f64>().unwrap_or(14.0);
+                    let r = app.run("graphics.add", json!({"shape": "text", "points": [[lon, lat]], "text": app.dialogs.text, "fontSize": size}));
+                    if r.is_ok() && !app.session.keep_tool {
+                        app.session.tool = rustgis_engine::Tool::Explore;
+                    }
+                    r.map(|_| ())
+                });
+            }
             "bookmark" => {
                 ui.label(tl!("Name"));
                 ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).desired_width(f32::INFINITY));

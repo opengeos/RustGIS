@@ -24,3 +24,6 @@ rustgis-geolibre = { workspace = true, optional = true }
 
 [features]
 geolibre = ["dep:rustgis-geolibre"]
+
+[dev-dependencies]
+tiny-skia = { workspace = true }

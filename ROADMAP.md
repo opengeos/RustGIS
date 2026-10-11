@@ -1,6 +1,6 @@
 # Roadmap
 
-Ribbon feature coverage: **94 of 316 features (29%)** have a command
+Ribbon feature coverage: **108 of 316 features (34%)** have a command
 today ([docs/parity.md](docs/parity.md)). Counting depth (no layouts, 3D, raster or enterprise
 sharing yet), real parity is lower.
 

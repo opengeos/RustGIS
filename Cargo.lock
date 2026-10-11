@@ -1927,6 +1927,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -3261,6 +3263,7 @@ dependencies = [
  "rustgis-render",
  "serde",
  "serde_json",
+ "tiny-skia",
  "web-time",
 ]
 
@@ -3305,12 +3308,15 @@ name = "rustgis-render"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
+ "base64 0.22.1",
  "epaint_default_fonts",
+ "image",
  "log",
  "rustgis-data",
  "rustgis-geom",
  "rustgis-map",
  "tiny-skia",
+ "web-time",
 ]
 
 [[package]]

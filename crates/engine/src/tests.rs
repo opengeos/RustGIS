@@ -144,7 +144,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 94, "coverage fell to {done}");
+    assert!(done >= 108, "coverage fell to {done}");
 }
 
 #[test]
@@ -550,4 +550,66 @@ fn label_range_placement_lock_and_convert() {
     let a = s.map().layer_by_name("Countries Annotation").unwrap();
     assert!(a.labels.enabled && a.labels.field == "TEXT");
     assert!(!s.map().layer_by_name("Countries").unwrap().labels.enabled);
+}
+
+#[test]
+fn graphics_draw_shapes_text_and_pictures() {
+    use crate::render::View;
+    use base64::Engine;
+    let mut s = world();
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 20_000_000})).unwrap();
+    // The first graphic makes a graphics layer.
+    let r = s.run("graphics.add", &json!({"shape": "rectangle", "points": [[0, 45], [10, 55]], "fill": "#FF000040"})).unwrap();
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).unwrap().graphics);
+    for (shape, pts) in [
+        ("circle", json!([[5, 50], [8, 50]])),
+        ("ellipse", json!([[0, 40], [20, 48]])),
+        ("line", json!([[0, 40], [5, 45], [10, 40]])),
+        ("curve", json!([[0, 40], [5, 45], [10, 40]])),
+        ("freehand", json!([[0, 40], [1, 41], [2, 40]])),
+        ("polygon", json!([[0, 40], [5, 45], [10, 40]])),
+        ("lasso", json!([[0, 40], [5, 45], [10, 40], [5, 38]])),
+        ("point", json!([[2, 48]])),
+    ] {
+        s.run("graphics.add", &json!({"shape": shape, "points": pts})).unwrap_or_else(|e| panic!("{shape}: {e}"));
+    }
+    assert!(s.run("graphics.add", &json!({"shape": "polygon", "points": [[0, 0], [1, 1]]})).is_err());
+    assert!(s.run("graphics.add", &json!({"shape": "rectangle", "points": [[0, 0], [0, 1]]})).is_err());
+    assert!(s.run("graphics.add", &json!({"shape": "text", "points": [[0, 0]]})).is_err(), "text needs text");
+    assert!(s.run("graphics.add", &json!({"shape": "blob", "points": [[0, 0]]})).is_err());
+    assert!(s.run("graphics.add", &json!({"shape": "point", "points": [[0, 0]], "layer": "Cities"})).is_err(), "not a graphics layer");
+    // Dynamic text expands when drawn.
+    s.run("graphics.add", &json!({"shape": "text", "points": [[10, 50]], "text": "{map} {scale}", "fontSize": 20})).unwrap();
+    let view = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false };
+    let r = crate::render::render(s.map_mut(), &view).unwrap();
+    assert!(
+        r.labels.iter().any(|l| l.text.starts_with("World 1:") && l.size == 20.0),
+        "{:?}",
+        r.labels.iter().map(|l| &l.text).collect::<Vec<_>>()
+    );
+    // A picture: a 2×2 PNG.
+    let mut png = tiny_skia::Pixmap::new(2, 2).unwrap();
+    png.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+    let b64 = base64::engine::general_purpose::STANDARD.encode(png.encode_png().unwrap());
+    s.run("graphics.add", &json!({"shape": "picture", "points": [[0, 45], [10, 55]], "image": b64})).unwrap();
+    assert!(s.run("graphics.add", &json!({"shape": "picture", "points": [[0, 45], [10, 55]], "image": "bm90IGFuIGltYWdl"})).is_err());
+    let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false };
+    let r = crate::render::render(s.map_mut(), &v).unwrap();
+    let (x, y) = v.to_screen(rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(5.0, 50.0)));
+    let px = r.pixmap.pixel(x as u32, y as u32).unwrap();
+    assert!(px.red() > 200 && px.green() < 60, "the picture covers its rectangle: {px:?}");
+    // Restyle the selection; keep the tool.
+    s.run("select.rows", &json!({"layer": id, "rows": [0]})).unwrap();
+    s.run("graphics.style", &json!({"fill": "#00FF00", "width": 3})).unwrap();
+    assert_eq!(rustgis_map::graphics::symbol(&s.map().layer(id).unwrap().dataset, 0).fill, rustgis_map::Rgba::rgb(0, 255, 0));
+    assert!(s.run("graphics.keepTool", &Value::Null).unwrap()["keepTool"].as_bool().unwrap());
+    s.run("tool.set", &json!({"tool": "graphicRectangle"})).unwrap();
+    assert_eq!(s.tool.code(), "graphicRectangle");
+    // Graphics round-trip through a project file.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let p: crate::Project = serde_json::from_str(&text).unwrap();
+    assert!(p.map().layer(id).unwrap().graphics);
+    s.run("graphics.newLayer", &json!({"name": "Notes"})).unwrap();
+    assert!(s.map().layer_by_name("Notes").unwrap().graphics);
 }

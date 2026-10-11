@@ -4,6 +4,7 @@
 pub mod camera;
 pub mod color;
 pub mod globe;
+pub mod graphics;
 pub mod projection;
 pub mod raster;
 pub mod symbology;
@@ -101,6 +102,9 @@ pub struct Layer {
     pub expanded: bool,
     #[serde(default = "yes")]
     pub selectable: bool,
+    /// A graphics layer: each feature carries its own style (see [`graphics`]).
+    #[serde(default)]
+    pub graphics: bool,
     /// Set for raster layers (whose `dataset` is empty).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raster: Option<RasterLayer>,
@@ -137,6 +141,7 @@ impl Layer {
             selection: Vec::new(),
             expanded: true,
             selectable: true,
+            graphics: false,
             raster: None,
             projected: Vec::new(),
             projected_rev: u64::MAX,
@@ -153,6 +158,19 @@ impl Layer {
         l.labels.enabled = false;
         l.raster = Some(raster);
         l
+    }
+
+    /// A graphics layer.
+    pub fn new_graphics(id: u32, name: &str) -> Self {
+        let mut l = Layer::new(id, graphics::dataset(name));
+        l.graphics = true;
+        l.labels.enabled = false;
+        l
+    }
+
+    /// The symbol a row draws with.
+    pub fn symbol(&self, row: usize) -> Symbol {
+        if self.graphics { graphics::symbol(&self.dataset, row) } else { self.renderer.symbol_for(&self.dataset, row) }
     }
 
     pub fn is_raster(&self) -> bool {
@@ -362,6 +380,13 @@ impl Map {
     pub fn add_dataset(&mut self, ds: Dataset) -> u32 {
         let id = self.next_id();
         self.insert_ranked(Layer::new(id, ds));
+        id
+    }
+
+    /// Adds an empty graphics layer on top; returns its id.
+    pub fn add_graphics(&mut self, name: &str) -> u32 {
+        let id = self.next_id();
+        self.layers.insert(0, Layer::new_graphics(id, name));
         id
     }
 

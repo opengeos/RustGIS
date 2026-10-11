@@ -37,7 +37,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layer"?, "name"?: string}"#),
         C::new("labels.scaleRange", "Label Visibility Range", "Labeling › Visibility Range", scale_range)
             .when(need_feature_layer)
-            .params(r#"{"layer"?, "min"?: scale|null (out beyond), "max"?: scale|null (in beyond), "clear"?: bool}"#),
+            .params(r#"{"layer"?, "min"?: scale|null (out beyond), "max"?: scale|null (in beyond), "clear"?: bool (clears the scale and distance limits, as Clear Limits does)}"#),
         C::new("labels.distanceRange", "Label Distance Range", "Labeling › Visibility Range", distance_range)
             .when(need_feature_layer)
             .params(r#"{"layer"?, "closest"?: metres|null, "farthest"?: metres|null, "clear"?: bool}"#),

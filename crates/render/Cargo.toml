@@ -16,3 +16,6 @@ tiny-skia = { workspace = true }
 ab_glyph = { workspace = true }
 epaint_default_fonts = { workspace = true }
 log = { workspace = true }
+image = { workspace = true, features = ["jpeg"] }
+base64 = { workspace = true }
+web-time = { workspace = true }

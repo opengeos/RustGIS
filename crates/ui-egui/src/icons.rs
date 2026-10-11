@@ -818,6 +818,68 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
             paint(painter, r, "scale_range", ink, accent);
             p.text(17.0, 6.0, "A", 7.0, ink);
         }
+        "g_point" => {
+            p.circle(12.0, 12.0, 5.0, Some(accent), Some((1.4, ink)));
+        }
+        "g_line" => {
+            p.line(&[(3.0, 19.0), (10.0, 8.0), (15.0, 14.0), (21.0, 5.0)], 1.8, ink);
+        }
+        "g_curve" => {
+            let pts: Vec<(f32, f32)> = (0..=20)
+                .map(|i| {
+                    let t = i as f32 / 20.0;
+                    (3.0 + 18.0 * t, 12.0 - 7.0 * (t * std::f32::consts::TAU).sin())
+                })
+                .collect();
+            p.line(&pts, 1.8, ink);
+        }
+        "g_freehand" => {
+            p.line(&[(3.0, 15.0), (5.0, 10.0), (8.0, 12.0), (10.0, 7.0), (13.0, 13.0), (15.0, 9.0), (18.0, 14.0), (21.0, 8.0)], 1.6, ink);
+        }
+        "g_polygon" => p.polygon_shape(&[(3.0, 9.0), (11.0, 3.0), (21.0, 7.0), (18.0, 20.0), (6.0, 19.0)], 70),
+        "g_lasso" => {
+            p.polygon_shape(&[(4.0, 10.0), (7.0, 5.0), (13.0, 4.0), (19.0, 7.0), (20.0, 13.0), (15.0, 17.0), (8.0, 16.0)], 50);
+            p.line(&[(8.0, 16.0), (7.0, 20.0), (9.0, 22.0)], 1.3, ink);
+        }
+        "g_rect" => {
+            p.rect(3.0, 6.0, 18.0, 12.0, Some(p.tint(70)), Some((1.4, ink)), 0.5);
+        }
+        "g_circle" => {
+            p.circle(12.0, 12.0, 8.5, Some(p.tint(70)), Some((1.4, ink)));
+        }
+        "g_ellipse" => {
+            let pts: Vec<(f32, f32)> = (0..48)
+                .map(|i| {
+                    let t = i as f32 / 48.0 * std::f32::consts::TAU;
+                    (12.0 + 9.5 * t.cos(), 12.0 + 6.0 * t.sin())
+                })
+                .collect();
+            p.polygon_shape(&pts, 70);
+        }
+        "g_text" => {
+            p.text(12.0, 12.5, "A", 17.0, ink);
+            p.line(&[(5.0, 21.0), (19.0, 21.0)], 1.6, accent);
+        }
+        "dynamic_text" => {
+            p.text(9.0, 11.0, "A", 13.0, ink);
+            p.rect(13.0, 13.0, 9.0, 8.0, Some(amber), None, 1.5);
+            p.text(17.5, 17.0, "{}", 6.0, Color32::WHITE);
+        }
+        "picture" => {
+            p.rect(3.0, 4.0, 18.0, 16.0, Some(p.tint(40)), Some((1.4, ink)), 1.5);
+            p.fill(&[(4.0, 19.0), (10.0, 11.0), (14.0, 16.0), (16.0, 13.0), (20.0, 19.0)], green);
+            p.circle(16.0, 8.5, 2.0, Some(amber), None);
+        }
+        "keep_tool" => {
+            p.cursor(5.0, 4.0, 1.0);
+            p.arc(15.0, 15.0, 5.0, 200.0, 520.0, 1.5, accent);
+            p.fill(&[(19.5, 9.5), (21.5, 13.5), (17.0, 12.5)], accent);
+        }
+        "graphics_layer" => {
+            p.layers(2.0, 4.0, 0.9);
+            p.circle(17.0, 16.0, 4.0, Some(accent), Some((1.2, ink)));
+            p.rect(4.0, 15.0, 6.0, 5.0, Some(amber), Some((1.0, ink)), 0.5);
+        }
         _ => {
             p.rect(4.0, 4.0, 16.0, 16.0, Some(p.tint(60)), Some((1.2, ink)), 3.0);
         }

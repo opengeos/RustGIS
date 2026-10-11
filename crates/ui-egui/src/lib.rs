@@ -88,6 +88,8 @@ pub struct UiState {
     /// Tab rectangles from the last frame (for the contextual group header).
     pub tab_rects: Vec<(String, egui::Rect)>,
     pub tab_strip_rect: Option<egui::Rect>,
+    /// The corners of a picture graphic waiting for its image file.
+    pub pending_picture: Option<Vec<rustgis_engine::geom::Coord>>,
     /// Text to put on the system clipboard at the end of the frame.
     pub copy_out: Option<String>,
 }
@@ -110,6 +112,7 @@ impl Default for UiState {
             tab_rects: Vec::new(),
             tab_strip_rect: None,
             copy_out: None,
+            pending_picture: None,
         }
     }
 }
@@ -254,7 +257,24 @@ impl RustGisApp {
 
     /// Opens a file by name and contents: a `.rgisx` project, a raster, or vector data.
     /// Failures are reported to the user (command errors through `Session::run`, others here).
+    /// Adds the waiting picture graphic with its image (`path` or base64 `image`).
+    fn add_picture(&mut self, mut p: Value) -> Result<Value, String> {
+        let pts = self.ui.pending_picture.take().ok_or("drag the picture's rectangle on the map first")?;
+        p["shape"] = json!("picture");
+        p["points"] = json!(pts.iter().map(|c| [c.x, c.y]).collect::<Vec<_>>());
+        let r = self.run("graphics.add", p);
+        if !self.session.keep_tool {
+            self.session.tool = rustgis_engine::Tool::Explore;
+        }
+        r
+    }
+
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
+        let lower = name.to_ascii_lowercase();
+        if self.ui.pending_picture.is_some() && [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e)) {
+            use base64::Engine;
+            return self.add_picture(json!({"image": base64::engine::general_purpose::STANDARD.encode(bytes)}));
+        }
         if rustgis_engine::data::raster::is_raster_name(name) {
             use base64::Engine;
             let data = base64::engine::general_purpose::STANDARD.encode(bytes);
@@ -508,6 +528,24 @@ impl RustGisApp {
             "ui.dialog" => {
                 let which = p.get("name").and_then(Value::as_str).unwrap_or("");
                 self.dialogs.open(which, &self.session)?;
+                // The text graphic dialog remembers where the map was clicked.
+                if which == "graphicText" {
+                    self.dialogs.a = p.get("lon").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default();
+                    self.dialogs.b = p.get("lat").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default();
+                }
+            }
+            // Picks the image for a picture graphic whose corners were just dragged.
+            "ui.addPicture" => {
+                if self.ui.pending_picture.is_none() {
+                    return Err("drag the picture's rectangle on the map first".into());
+                }
+                if let Some(open) = &self.services.open_async {
+                    open("picture");
+                } else if let Some(path) = dialogs::pick_open(&["png", "jpg", "jpeg"], tl!("Pictures")) {
+                    return self.add_picture(json!({"path": path}));
+                } else {
+                    self.ui.pending_picture = None;
+                }
             }
             "ui.quit" => self.quit_requested = true,
             other => return Err(format!("unknown command '{other}'")),

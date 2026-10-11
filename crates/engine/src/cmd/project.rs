@@ -28,7 +28,7 @@ pub fn commands() -> Vec<C> {
             .when(|s| if s.can_redo() { None } else { Some("nothing to redo") }),
         C::new("tool.set", "Set Map Tool", "Map › Navigate", set_tool)
             .view()
-            .params(r#"{"tool": "explore"|"select"|"zoomIn"|"measure"|"measureArea"|"createPoint"|"createLine"|"createPolygon"}"#),
+            .params(r#"{"tool": "explore"|"select"|"zoomIn"|"measure"|"measureArea"|"createPoint"|"createLine"|"createPolygon"|"graphicPoint"|"graphicText"|"graphicLine"|"graphicCurve"|"graphicFreehand"|"graphicPolygon"|"graphicLasso"|"graphicRectangle"|"graphicCircle"|"graphicEllipse"|"graphicPicture"}"#),
         C::new("info.project", "Project Info", "Project", info).view(),
         C::new("info.commands", "List Commands", "Help", list).view(),
     ]

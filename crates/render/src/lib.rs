@@ -8,6 +8,7 @@
 
 pub mod fonts;
 pub mod logo;
+mod picture;
 mod raster;
 mod text;
 
@@ -78,6 +79,11 @@ pub struct Rendered {
     pub labels: Vec<PlacedLabel>,
     /// Labels that didn't fit, when the map shows unplaced labels (drawn in red).
     pub unplaced: Vec<PlacedLabel>,
+}
+
+/// The pixel size of a base64 PNG or JPEG picture, `None` when it can't be decoded.
+pub fn picture_size(b64: &str) -> Option<(u32, u32)> {
+    picture::decode(b64).map(|p| (p.width(), p.height()))
 }
 
 /// The colour unplaced labels are drawn in.
@@ -500,6 +506,16 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     }
     let lock: Option<std::collections::HashSet<(u32, usize)>> = map.label_lock.as_ref().map(|v| v.iter().copied().collect());
     let distance = viewing_distance(map.ground_res_at(&view.camera), view.height);
+    // Graphics text: always drawn, and other labels keep clear of it.
+    let mut fixed_labels: Vec<PlacedLabel> = Vec::new();
+    let tokens = rustgis_map::graphics::TokenValues {
+        map: map.name.clone(),
+        scale,
+        crs: map.projection.label(),
+        layers: map.layers.iter().filter(|l| !l.graphics).count(),
+        center: map.center_lonlat(),
+        now: web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+    };
     let n_layers = map.layers.len();
     for li in (0..n_layers).rev() {
         let Some(layer) = map.layers.get_mut(li) else { continue };
@@ -523,7 +539,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         }
         // Everything below only reads the layer: borrow rather than copy its data each frame.
         let layer: &rustgis_map::Layer = layer;
-        let (renderer, labels, selection, ds_ptr) = (&layer.renderer, &layer.labels, &layer.selection, &layer.dataset);
+        let (labels, selection, ds_ptr) = (&layer.labels, &layer.selection, &layer.dataset);
         // The globe draws the lon/lat geometry itself; the flat map its Web Mercator copy.
         let geoms: Vec<Option<&Geometry>> = if globe.is_some() {
             ds_ptr.features.iter().map(|f| f.geometry.as_ref()).collect()
@@ -539,7 +555,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                 if rows.get(row) != Some(&true) || !visible(&g.extent()) {
                     continue;
                 }
-                ctx.feature(dest, g, &renderer.symbol_for(ds_ptr, row));
+                ctx.feature(dest, g, &layer.symbol(row));
             }
         }
         if !direct {
@@ -549,7 +565,34 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
             if let Some(Some(g)) = geoms.get(*row)
                 && rows.get(*row) == Some(&true)
             {
-                ctx.highlight(&mut pm, g, &renderer.symbol_for(ds_ptr, *row));
+                ctx.highlight(&mut pm, g, &layer.symbol(*row));
+            }
+        }
+        if layer.graphics {
+            for (row, g) in geoms.iter().enumerate() {
+                let Some(g) = g else { continue };
+                if rows.get(row) != Some(&true) {
+                    continue;
+                }
+                if rustgis_map::graphics::kind(ds_ptr, row) == "picture" {
+                    let e = g.extent();
+                    let (x0, y0) = ctx.px(Coord::new(e.min_x, e.max_y));
+                    let (x1, y1) = ctx.px(Coord::new(e.max_x, e.min_y));
+                    picture::draw(&mut pm, ds_ptr, row, (x0, y0, x1, y1), opacity);
+                } else if let (Some(t), Some(c)) = (rustgis_map::graphics::label(ds_ptr, row), g.label_point())
+                    && let Some((x, y)) = ctx.screen(c)
+                {
+                    let color = rustgis_map::graphics::text_color(ds_ptr, row);
+                    fixed_labels.push(PlacedLabel {
+                        text: rustgis_map::graphics::expand(t, &tokens),
+                        x: x as f32,
+                        y: y as f32,
+                        size: rustgis_map::graphics::font_size(ds_ptr, row),
+                        color,
+                        halo: Some(halo_for(color)),
+                        bold: false,
+                    });
+                }
             }
         }
         if labels.enabled
@@ -574,7 +617,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                 let Some((x, y)) = ctx.screen(c) else { continue };
                 let text = v.to_string();
                 let is_point = g.kind() == GeometryType::Point;
-                let marker = if is_point { renderer.symbol_for(ds_ptr, row).size } else { 0.0 };
+                let marker = if is_point { layer.symbol(row).size } else { 0.0 };
                 let (dx, dy) =
                     labels.placement.offset(text::measure(&text, labels.size, labels.bold), labels.size * 1.25, marker, is_point);
                 // Bigger polygons get priority.
@@ -604,7 +647,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     if let Some(g) = &globe {
         globe_shading(&mut pm, g, map.basemap, water, view.dark, view.pixels_per_point as f32);
     }
-    let placed = place_labels(label_candidates, view.width as f32, view.height as f32, lock.is_some());
+    let placed = place_labels(label_candidates, fixed_labels, view.width as f32, view.height as f32, lock.is_some());
     if display.locked && map.label_lock.is_none() {
         map.label_lock = Some(placed.keys);
     }
@@ -756,14 +799,17 @@ struct Placement {
 
 /// Greedy collision-free placement, highest priority first. Locked labels are all placed (they
 /// were placed without collisions when the lock was taken).
-fn place_labels(mut cands: Vec<(PlacedLabel, f32, (u32, usize))>, w: f32, h: f32, locked: bool) -> Placement {
+fn place_labels(mut cands: Vec<(PlacedLabel, f32, (u32, usize))>, fixed: Vec<PlacedLabel>, w: f32, h: f32, locked: bool) -> Placement {
     cands.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    let mut boxes: Vec<[f32; 4]> = Vec::new();
-    let mut out = Placement { labels: Vec::new(), unplaced: Vec::new(), keys: Vec::new() };
-    for (l, _, key) in cands.into_iter().take(5000) {
+    let bbox = |l: &PlacedLabel| {
         let tw = text::measure(&l.text, l.size, l.bold);
         let th = l.size * 1.25;
-        let b = [l.x - tw / 2.0 - 2.0, l.y - th / 2.0, l.x + tw / 2.0 + 2.0, l.y + th / 2.0];
+        [l.x - tw / 2.0 - 2.0, l.y - th / 2.0, l.x + tw / 2.0 + 2.0, l.y + th / 2.0]
+    };
+    let mut boxes: Vec<[f32; 4]> = fixed.iter().map(bbox).collect();
+    let mut out = Placement { labels: fixed, unplaced: Vec::new(), keys: Vec::new() };
+    for (l, _, key) in cands.into_iter().take(5000) {
+        let b = bbox(&l);
         let off_screen = b[2] < 0.0 || b[3] < 0.0 || b[0] > w || b[1] > h;
         let clipped = b[0] < 0.0 || b[1] < 0.0 || b[2] > w || b[3] > h;
         if off_screen || (!locked && clipped) {

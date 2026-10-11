@@ -93,7 +93,24 @@ pub enum Tool {
     CreatePoint,
     CreateLine,
     CreatePolygon,
+    /// Draws a graphic: the shape is one of [`GRAPHIC_TOOLS`]' shapes.
+    Graphic(&'static str),
 }
+
+/// The graphic drawing tools: (shape, tool code, label).
+pub const GRAPHIC_TOOLS: &[(&str, &str, &str)] = &[
+    ("point", "graphicPoint", "Point"),
+    ("text", "graphicText", "Text"),
+    ("line", "graphicLine", "Line"),
+    ("curve", "graphicCurve", "Curve"),
+    ("freehand", "graphicFreehand", "Freehand"),
+    ("polygon", "graphicPolygon", "Polygon"),
+    ("lasso", "graphicLasso", "Lasso"),
+    ("rectangle", "graphicRectangle", "Rectangle"),
+    ("circle", "graphicCircle", "Circle"),
+    ("ellipse", "graphicEllipse", "Ellipse"),
+    ("picture", "graphicPicture", "Picture"),
+];
 
 impl Tool {
     pub fn code(self) -> &'static str {
@@ -106,9 +123,13 @@ impl Tool {
             Tool::CreatePoint => "createPoint",
             Tool::CreateLine => "createLine",
             Tool::CreatePolygon => "createPolygon",
+            Tool::Graphic(shape) => GRAPHIC_TOOLS.iter().find(|g| g.0 == shape).map_or("graphicPoint", |g| g.1),
         }
     }
     pub fn from_code(s: &str) -> Option<Tool> {
+        if let Some(g) = GRAPHIC_TOOLS.iter().find(|g| g.1.eq_ignore_ascii_case(s.trim())) {
+            return Some(Tool::Graphic(g.0));
+        }
         [
             Tool::Explore,
             Tool::Select,
@@ -132,6 +153,7 @@ impl Tool {
             Tool::CreatePoint => "Create Point",
             Tool::CreateLine => "Create Line",
             Tool::CreatePolygon => "Create Polygon",
+            Tool::Graphic(shape) => GRAPHIC_TOOLS.iter().find(|g| g.0 == shape).map_or("Point", |g| g.2),
         }
     }
     pub fn creates(self) -> bool {
@@ -173,6 +195,8 @@ pub struct Session {
     pub notices: Vec<Notice>,
     /// Layer whose attribute table is open.
     pub table_layer: Option<u32>,
+    /// Drawing tools stay active after a graphic is drawn (Insert › Graphics).
+    pub keep_tool: bool,
     /// Copied features (Edit › Clipboard).
     pub clipboard: Option<cmd::clipboard::Clipboard>,
     undo: Vec<(Project, &'static str)>,
@@ -218,6 +242,7 @@ impl Session {
             notices: Vec::new(),
             table_layer: None,
             clipboard: None,
+            keep_tool: false,
             undo: Vec::new(),
             redo: Vec::new(),
             back: Vec::new(),

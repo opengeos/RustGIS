@@ -272,6 +272,7 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
         big_menu(ui, app, "basemap", "Basemap", "Change the map's backdrop.", basemap_gallery);
         big_menu(ui, app, "add_data", "Add\nData", "Add GeoJSON, CSV or Shapefile data to the map.", |ui, app| {
             menu_item(ui, app, "", "Data…", "ui.addData", Value::Null);
+            menu_item(ui, app, "graphics_layer", "Graphics Layer", "graphics.newLayer", Value::Null);
             ui.separator();
             ui.label(egui::RichText::new(tl!("Sample data (Natural Earth)")).small().weak());
             for (n, label) in
@@ -452,6 +453,53 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
             false,
         );
+    });
+    group(ui, "Graphics", |ui| {
+        let tools: [&[(&str, &str, &str, &str)]; 4] = [
+            &[
+                ("g_point", "Point", "Click to place a point graphic.", "graphicPoint"),
+                ("g_line", "Line", "Click the vertices of a line; double-click to finish.", "graphicLine"),
+                ("g_curve", "Curve", "Click points a smooth curve passes through; double-click to finish.", "graphicCurve"),
+            ],
+            &[
+                ("g_freehand", "Freehand", "Drag to draw a freehand line.", "graphicFreehand"),
+                ("g_polygon", "Polygon", "Click the corners of a polygon; double-click to close it.", "graphicPolygon"),
+                ("g_lasso", "Lasso", "Drag to draw a freehand polygon.", "graphicLasso"),
+            ],
+            &[
+                ("g_rect", "Rectangle", "Drag to draw a rectangle.", "graphicRectangle"),
+                ("g_circle", "Circle", "Drag from the centre to draw a circle.", "graphicCircle"),
+                ("g_ellipse", "Ellipse", "Drag a box to draw an ellipse.", "graphicEllipse"),
+            ],
+            &[("keep_tool", "Keep Tool", "Keep the last drawing tool active after each graphic.", "")],
+        ];
+        for column in tools {
+            col(ui, |ui| {
+                for (icon, label, desc, code) in column {
+                    if code.is_empty() {
+                        let on = app.session.keep_tool;
+                        small(ui, app, icon, label, desc, "graphics.keepTool", Value::Null, on);
+                        continue;
+                    }
+                    let checked = app.session.tool.code() == *code;
+                    if small(ui, app, icon, label, desc, "tool.set", json!({"tool": code}), checked).clicked() {
+                        app.map.cancel_sketch();
+                    }
+                }
+            });
+        }
+    });
+    group(ui, "Graphics and Text", |ui| {
+        for (icon, label, desc, code) in [
+            ("g_text", "Text", "Click the map to place text.", "graphicText"),
+            ("dynamic_text", "Dynamic\nText", "Click the map to place text with live values, such as the scale or date.", "graphicText"),
+            ("picture", "Picture", "Drag a rectangle, then pick a PNG or JPEG image to place in it.", "graphicPicture"),
+        ] {
+            let checked = app.session.tool.code() == code && label != "Dynamic\nText";
+            if big(ui, app, icon, label, desc, "tool.set", json!({"tool": code}), checked, false).clicked() {
+                app.map.cancel_sketch();
+            }
+        }
     });
     group(ui, "Data", |ui| {
         big(ui, app, "field", "Add\nField", "Add a field to the selected layer.", "ui.dialog", json!({"name": "addField"}), false, false);

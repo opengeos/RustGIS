@@ -26,6 +26,21 @@ struct Key {
 enum DragKind {
     Pan,
     Box,
+    /// Drawing a graphic by dragging (rectangle, circle, ellipse, freehand, lasso, picture).
+    Sketch,
+}
+
+/// Graphic shapes drawn by dragging rather than clicking.
+fn drag_shape(tool: Tool) -> Option<&'static str> {
+    match tool {
+        Tool::Graphic(s) if matches!(s, "rectangle" | "circle" | "ellipse" | "freehand" | "lasso" | "picture") => Some(s),
+        _ => None,
+    }
+}
+
+/// Graphic shapes drawn vertex by vertex, finished with a double-click.
+fn vertex_shape(tool: Tool) -> bool {
+    matches!(tool, Tool::Graphic("line" | "curve" | "polygon"))
 }
 
 pub struct Popup {
@@ -312,11 +327,34 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                 Tool::Explore if shift => DragKind::Box,
                 Tool::Explore => DragKind::Pan,
                 Tool::Select | Tool::ZoomIn => DragKind::Box,
+                t if drag_shape(t).is_some() => DragKind::Sketch,
                 _ => DragKind::Pan,
             }
         };
         app.map.drag = Some((p, kind));
         app.map.popup = None;
+        if kind == DragKind::Sketch {
+            app.map.cancel_sketch();
+            if let Some(c) = screen_to_lonlat(app, rect, p) {
+                app.map.sketch.push(c);
+            }
+        }
+    }
+    // A dragged graphic follows the pointer: freehand shapes keep every point, the others their
+    // two ends.
+    if let (Some((_, DragKind::Sketch)), Some(p)) = (app.map.drag, resp.interact_pointer_pos())
+        && let Some(c) = screen_to_lonlat(app, rect, p)
+    {
+        let freehand = matches!(tool, Tool::Graphic("freehand" | "lasso"));
+        let far = app.map.sketch.last().and_then(|l| lonlat_to_screen(app, rect, *l)).is_none_or(|s| (s - p).length() > 3.0);
+        if freehand {
+            if far {
+                app.map.sketch.push(c);
+            }
+        } else {
+            app.map.sketch.truncate(1);
+            app.map.sketch.push(c);
+        }
     }
     if let Some((_, DragKind::Pan)) = app.map.drag {
         let d = resp.drag_delta();
@@ -334,6 +372,21 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             app.map.last_interaction = time;
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
+    }
+    if resp.drag_stopped()
+        && let Some((_, DragKind::Sketch)) = app.map.drag
+    {
+        app.map.drag = None;
+        if let Some(shape) = drag_shape(tool) {
+            let pts = std::mem::take(&mut app.map.sketch);
+            if shape == "picture" {
+                app.ui.pending_picture = Some(pts);
+                let _ = app.run("ui.addPicture", Value::Null);
+            } else {
+                finish_graphic(app, shape, pts);
+            }
+        }
+        return;
     }
     if resp.drag_stopped() {
         if let (Some((start, DragKind::Box)), Some(end)) = (app.map.drag, resp.interact_pointer_pos()) {
@@ -377,7 +430,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
 
     // Clicks.
     if resp.double_clicked() {
-        if matches!(tool, Tool::CreateLine | Tool::CreatePolygon | Tool::Measure | Tool::MeasureArea) {
+        if matches!(tool, Tool::CreateLine | Tool::CreatePolygon | Tool::Measure | Tool::MeasureArea) || vertex_shape(tool) {
             finish_sketch(app);
         } else if let Some(p) = resp.interact_pointer_pos() {
             zoom(app, 2.0, (p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64, w, h);
@@ -431,7 +484,13 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             Tool::CreatePoint => {
                 let _ = app.run("edit.addFeature", json!({"geometry": {"type": "Point", "coordinates": [c.x, c.y]}}));
             }
-            Tool::Measure | Tool::MeasureArea | Tool::CreateLine | Tool::CreatePolygon => {
+            Tool::Graphic("point") => finish_graphic(app, "point", vec![c]),
+            Tool::Graphic("text") => {
+                let _ = app.run("ui.dialog", json!({"name": "graphicText", "lon": c.x, "lat": c.y}));
+            }
+            // Dragged shapes ignore plain clicks.
+            Tool::Graphic(s) if !vertex_shape(Tool::Graphic(s)) => {}
+            Tool::Measure | Tool::MeasureArea | Tool::CreateLine | Tool::CreatePolygon | Tool::Graphic(_) => {
                 if app.map.sketch_done {
                     app.map.cancel_sketch();
                 }
@@ -495,7 +554,23 @@ fn finish_sketch(app: &mut RustGisApp) {
             let _ = app.run("edit.addFeature", json!({"geometry": {"type": "Polygon", "coordinates": [coords]}}));
             app.map.cancel_sketch();
         }
+        Tool::Graphic(shape) => {
+            let min = if shape == "polygon" { 3 } else { 2 };
+            if pts.len() >= min {
+                finish_graphic(app, shape, pts);
+            }
+        }
         _ => {}
+    }
+}
+
+/// Adds a graphic drawn with a tool, then returns to Explore unless the tool is kept.
+pub fn finish_graphic(app: &mut RustGisApp, shape: &str, pts: Vec<Coord>) {
+    let coords: Vec<[f64; 2]> = pts.iter().map(|c| [c.x, c.y]).collect();
+    let _ = app.run("graphics.add", json!({"shape": shape, "points": coords}));
+    app.map.cancel_sketch();
+    if !app.session.keep_tool {
+        app.session.tool = Tool::Explore;
     }
 }
 
@@ -507,16 +582,49 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         p.rect_filled(r, 0.0, accent.gamma_multiply(0.12));
         p.rect_stroke(r, 0.0, Stroke::new(1.5, accent), egui::StrokeKind::Middle);
     }
+    // A dragged rectangle, circle or ellipse previews as its outline.
+    let tool = app.session.tool;
+    let mut previewed = false;
+    if !app.map.sketch.is_empty()
+        && let Some(shape) = drag_shape(tool).filter(|s| !matches!(*s, "freehand" | "lasso"))
+    {
+        // Rectangles, circles and ellipses preview as their outline between the two points.
+        if let (Some(a), Some(b)) = (
+            app.map.sketch.first().and_then(|c| lonlat_to_screen(app, rect, *c)),
+            app.map.sketch.last().and_then(|c| lonlat_to_screen(app, rect, *c)),
+        ) {
+            let green = Color32::from_rgb(0x16, 0x9A, 0x5A);
+            let stroke = Stroke::new(2.0, green);
+            match shape {
+                "circle" => {
+                    p.circle_stroke(a, (b - a).length(), stroke);
+                }
+                "ellipse" => {
+                    let r = Rect::from_two_pos(a, b);
+                    let pts: Vec<Pos2> = (0..72)
+                        .map(|i| {
+                            let t = i as f32 / 72.0 * std::f32::consts::TAU;
+                            pos2(r.center().x + r.width() / 2.0 * t.cos(), r.center().y + r.height() / 2.0 * t.sin())
+                        })
+                        .collect();
+                    p.add(egui::Shape::closed_line(pts, stroke));
+                }
+                _ => {
+                    p.rect_stroke(Rect::from_two_pos(a, b), 0.0, stroke, egui::StrokeKind::Middle);
+                }
+            }
+        }
+        previewed = true;
+    }
     // Sketch.
-    if !app.map.sketch.is_empty() {
-        let tool = app.session.tool;
+    if !app.map.sketch.is_empty() && !previewed {
         let mut pts: Vec<Coord> = app.map.sketch.clone();
         if !app.map.sketch_done
             && let Some(c) = app.map.pointer_lonlat
         {
             pts.push(c);
         }
-        let closed = matches!(tool, Tool::MeasureArea | Tool::CreatePolygon);
+        let closed = matches!(tool, Tool::MeasureArea | Tool::CreatePolygon | Tool::Graphic("polygon" | "lasso"));
         let placed: Vec<Option<Pos2>> = pts.iter().map(|c| lonlat_to_screen(app, rect, *c)).collect();
         let screen: Vec<Pos2> = placed.iter().flatten().copied().collect();
         let color = if tool.creates() { Color32::from_rgb(0x16, 0x9A, 0x5A) } else { Color32::from_rgb(0xE5, 0x6A, 0x1A) };
@@ -577,6 +685,13 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         Tool::CreatePolygon => Some("Click to add vertices · double-click to close the polygon"),
         Tool::Select => Some("Click or drag a box · Shift adds · Ctrl removes"),
         Tool::ZoomIn => Some("Drag a box or click to zoom in"),
+        Tool::Graphic("point") => Some("Click the map to place a point"),
+        Tool::Graphic("text") => Some("Click the map to place text"),
+        Tool::Graphic("line" | "curve") => Some("Click to add vertices · double-click to finish"),
+        Tool::Graphic("polygon") => Some("Click to add vertices · double-click to close"),
+        Tool::Graphic("freehand" | "lasso") => Some("Drag to draw"),
+        Tool::Graphic("circle") => Some("Drag from the centre out"),
+        Tool::Graphic(_) => Some("Drag a box"),
         Tool::Explore => None,
     };
     if let Some(h) = hint
