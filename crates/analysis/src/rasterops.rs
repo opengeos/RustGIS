@@ -274,7 +274,6 @@ const MAX_VIEWSHED_WORK: i64 = 400_000_000;
 const MAX_IDW_WORK: usize = 400_000_000;
 
 /// Cells visible from an observer (1) or not (0) within `radius_m`; outside the radius no-data.
-
 pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f64) -> Result<Vec<f32>, String> {
     let (oc, or) = r.pixel_at(observer).ok_or("the observer is outside the raster")?;
     let z0 = r.value(b, oc, or).ok_or("the observer stands on no-data")? as f64 + height;
