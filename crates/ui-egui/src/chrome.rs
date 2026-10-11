@@ -412,6 +412,16 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
     }
 }
 
+/// The project's website and source code, opened in a new tab in the browser build so the app
+/// (and its map) stays open.
+pub(crate) fn project_links(ui: &mut egui::Ui) {
+    ui.horizontal(|ui| {
+        ui.add(egui::Hyperlink::from_label_and_url(tl!("Website"), "https://rustgis.app").open_in_new_tab(true));
+        ui.label("·");
+        ui.add(egui::Hyperlink::from_label_and_url(tl!("GitHub"), "https://github.com/opengeos/RustGIS").open_in_new_tab(true));
+    });
+}
+
 pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
     if app.ui.about {
         let logo_tex = app.logo(ctx);
@@ -430,6 +440,8 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
             });
             ui.add_space(8.0);
             ui.label(tl!("A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export."));
+            ui.add_space(4.0);
+            project_links(ui);
             ui.add_space(6.0);
             let (done, total) = rustgis_engine::catalog::coverage();
             ui.label(egui::RichText::new(crate::i18n::fmt("Ribbon feature coverage: {done} of {total} features ({pct}%).", &[("done", &done.to_string()), ("total", &total.to_string()), ("pct", &(done * 100 / total.max(1)).to_string())])).small());

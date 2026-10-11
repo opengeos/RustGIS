@@ -154,6 +154,8 @@ fn about(ui: &mut Ui, t: &Tokens) {
     ui.label(crate::i18n::fmt("Version {version}", &[("version", env!("CARGO_PKG_VERSION"))]));
     ui.add_space(8.0);
     ui.label(tl!("RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line."));
+    ui.add_space(4.0);
+    crate::chrome::project_links(ui);
     ui.add_space(8.0);
     let (done, total) = rustgis_engine::catalog::coverage();
     ui.label(
