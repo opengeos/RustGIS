@@ -69,10 +69,14 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"model"?: name (default: the last trained), "path": "*.rgisdlpk"}"#),
         C::new("dl.import", "Import Deep Learning Package", "Imagery › Image Classification", |s, p| {
             let bytes = read_bytes(p)?;
-            let entries = rustgis_data::zip::read(&bytes)?;
-            let json = entries.iter().find(|(n, _)| n == "model.json").map(|e| &e.1).ok_or("not a deep learning package (no model.json)")?;
+            // Only the model is inflated, whatever else the package holds.
+            let entries = rustgis_data::zip::read_matching(&bytes, |n| n == "model.json")?;
+            let json = entries.first().map(|e| &e.1).ok_or("not a deep learning package (no model.json)")?;
             let mut m: DlModel = serde_json::from_slice(json).map_err(|e| format!("not a deep learning package: {e}"))?;
             m.model.validate()?;
+            for c in &mut m.model.classes {
+                *c = c.chars().take(200).collect();
+            }
             // An imported model never replaces one already here: it gets a name of its own.
             let base: String = m.name.trim().chars().take(200).collect();
             let base = if base.is_empty() { "Imported model".to_string() } else { base };

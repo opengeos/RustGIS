@@ -488,9 +488,9 @@ onresize=draw;draw();
 "#,
         title = html_escape(title),
         layers = script_json(&Value::Array(layers)),
-        lon = c.x,
-        lat = c.y,
-        res = m.camera.res,
+        lon = if c.x.is_finite() { c.x } else { 0.0 },
+        lat = if c.y.is_finite() { c.y } else { 0.0 },
+        res = if m.camera.res.is_finite() && m.camera.res > 0.0 { m.camera.res } else { 40_000.0 },
         bg = bg
     ))
 }
@@ -942,10 +942,15 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<String, String> {
             None => "the project has no relationships (Data Design › Relationships)".into(),
         });
     }
-    let find = |n: &str| s.map().layer_by_name(n).or_else(|| s.project.maps.iter().find_map(|m| m.layer_by_name(n)));
+    // A layer by name (the active map first) and the map it's in.
+    let active = s.project.active_map;
+    let find = |n: &str| {
+        let in_map = |mi: usize| s.project.maps.get(mi).and_then(|m| m.layer_by_name(n)).map(|l| (mi, l));
+        in_map(active).or_else(|| (0..s.project.maps.len()).find_map(in_map))
+    };
     let mut nodes: Vec<Value> = Vec::new();
-    // Nodes by layer (its address: same-named layers in different maps stay apart) and row.
-    let mut index: HashMap<(usize, usize), usize> = HashMap::new();
+    // Nodes by map, layer id and row (same-named layers in different maps stay apart).
+    let mut index: HashMap<(usize, u32, usize), usize> = HashMap::new();
     let mut links: Vec<Value> = Vec::new();
     let label = |l: &Layer, row: usize| -> String {
         let ds = &l.dataset;
@@ -960,7 +965,7 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<String, String> {
         if nodes.len() >= MAX_NODES {
             break;
         }
-        let (Some(o), Some(d)) = (find(&r.origin), find(&r.destination)) else { continue };
+        let (Some((om, o)), Some((dm, d))) = (find(&r.origin), find(&r.destination)) else { continue };
         let (Some(ok), Some(dk)) = (o.dataset.field_index(&r.origin_key), d.dataset.field_index(&r.destination_key)) else { continue };
         let mut by_key: HashMap<String, Vec<usize>> = HashMap::new();
         // Null or empty keys relate nothing.
@@ -982,18 +987,18 @@ fn link_chart(s: &Session, rel: Option<&str>) -> Result<String, String> {
             if nodes.len() >= MAX_NODES {
                 break 'rels;
             }
-            let mut node = |l: &Layer, row: usize, nodes: &mut Vec<Value>| -> usize {
-                *index.entry((std::ptr::from_ref(l) as usize, row)).or_insert_with(|| {
+            let mut node = |mi: usize, l: &Layer, row: usize, nodes: &mut Vec<Value>| -> usize {
+                *index.entry((mi, l.id, row)).or_insert_with(|| {
                     nodes.push(json!({"name": label(l, row), "layer": l.name, "group": gi}));
                     nodes.len() - 1
                 })
             };
-            let a = node(o, orow, &mut nodes);
+            let a = node(om, o, orow, &mut nodes);
             for &drow in drows.iter().take(200) {
                 if nodes.len() >= MAX_NODES || links.len() >= MAX_LINKS {
                     break 'rels;
                 }
-                let b = node(d, drow, &mut nodes);
+                let b = node(dm, d, drow, &mut nodes);
                 links.push(json!({"source": a, "target": b, "relationship": r.name}));
             }
         }

@@ -360,7 +360,8 @@ pub fn classify(r: &Raster, model: &Mlp, nodata: f32) -> Result<(Vec<f32>, Vec<f
     let mut x = vec![0.0f32; model.bands.len()];
     for row in 0..h {
         for col in 0..w {
-            let ok = model.bands.iter().zip(x.iter_mut()).all(|(b, xv)| match r.value(*b, col, row) {
+            // A non-finite value is treated as no data.
+            let ok = model.bands.iter().zip(x.iter_mut()).all(|(b, xv)| match r.value(*b, col, row).filter(|v| v.is_finite()) {
                 Some(v) => {
                     *xv = v;
                     true
