@@ -35,6 +35,9 @@ pub struct LayoutView {
     /// A frame being drawn: "polygon" (clicked) or "lasso" (dragged), and its points (mm).
     pub tool: Option<&'static str>,
     sketch: Vec<(f64, f64)>,
+    /// Text being typed into the element properties, by (element, field): kept here so
+    /// keystrokes survive the frame, and saved when the field loses focus.
+    typing: std::collections::HashMap<(u32, &'static str), String>,
     /// The layout shown, shared between frames until the project changes (layouts can hold
     /// megabytes of pictures, too much to copy every frame), keyed by layout and revision.
     shown: Option<(usize, u64, std::rc::Rc<Layout>)>,
@@ -377,6 +380,25 @@ fn finish_frame(app: &mut RustGisApp, li: usize, shape: &str) {
 }
 
 /// The selected element's properties.
+/// A text field whose typing is kept in the view's state while it has focus. Returns the new text
+/// when the field loses focus with a change.
+fn text_field(app: &mut RustGisApp, ui: &mut Ui, key: (u32, &'static str), current: &str, multiline: bool) -> Option<String> {
+    let mut buf = app.layout.typing.remove(&key).unwrap_or_else(|| current.to_string());
+    let edit = if multiline {
+        egui::TextEdit::multiline(&mut buf).desired_rows(3).desired_width(240.0)
+    } else {
+        egui::TextEdit::singleline(&mut buf)
+    };
+    let r = ui.add(edit);
+    if r.lost_focus() {
+        return (buf != current).then_some(buf);
+    }
+    if r.has_focus() {
+        app.layout.typing.insert(key, buf);
+    }
+    None
+}
+
 fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
     let Some(e) = app.layout.selected.and_then(|id| layout.element(id)).cloned() else { return };
     let id = e.id;
@@ -398,8 +420,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
     };
     egui::Grid::new(("layout_props", id)).num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Name"));
-        let mut name = e.name.clone();
-        if ui.text_edit_singleline(&mut name).lost_focus() && name != e.name {
+        if let Some(name) = text_field(app, ui, (id, "name"), &e.name, false) {
             update(app, json!({"name": name}));
         }
         ui.end_row();
@@ -441,17 +462,14 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                 ui.end_row();
                 ui.label(tl!("Text"));
                 ui.end_row();
-                let mut tx = text.clone();
-                let r = ui.add(egui::TextEdit::multiline(&mut tx).desired_rows(3).desired_width(240.0));
-                if r.lost_focus() && tx != *text {
+                if let Some(tx) = text_field(app, ui, (id, "text"), text, true) {
                     update(app, json!({"text": tx}));
                 }
                 ui.end_row();
             }
             ElementKind::Legend { title, .. } => {
                 ui.label(tl!("Title"));
-                let mut tt = title.clone();
-                if ui.text_edit_singleline(&mut tt).lost_focus() && tt != *title {
+                if let Some(tt) = text_field(app, ui, (id, "title"), title, false) {
                     update(app, json!({"title": tt}));
                 }
                 ui.end_row();
