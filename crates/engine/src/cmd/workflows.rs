@@ -301,7 +301,9 @@ fn wire(v: &mut Value, outputs: &[String], step: usize, depth: usize) -> Result<
     Ok(())
 }
 
-/// Runs a script of commands, one per line (`id {json}`), stopping at the first error.
+/// Runs a script of commands, one per line (`id {json}`), stopping at the first error. Scripts
+/// are the user's own (typed in the Script pane or passed on the command line; projects don't
+/// carry them), so they may use any command, files included. The whole script is one undo step.
 fn run_script(s: &mut Session, p: &Value) -> CmdResult {
     let script = ps(p, "script").ok_or("script is required")?;
     let mut out = Vec::new();

@@ -145,7 +145,8 @@ pub fn resample_to(src: &Raster, b: usize, target: &Raster) -> Result<Vec<f32>, 
 }
 
 /// A weighted sum of criteria (each already scored, e.g. 1–10) on one grid; no-data anywhere
-/// gives no-data. Weights are normalised to sum to 1.
+/// gives no-data. Weights are normalised to sum to 1. Inputs mark no-data with [`NODATA`] (as
+/// `resample_to`, `remap` and the other functions here do).
 pub fn weighted_overlay(criteria: &[(Vec<f32>, f64)]) -> Result<Vec<f32>, String> {
     let n = criteria.first().map(|c| c.0.len()).ok_or("give at least one criterion")?;
     if criteria.iter().any(|c| c.0.len() != n) {

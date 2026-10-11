@@ -71,10 +71,11 @@ pub fn shortest_route(
                     v.push((ia, len * weight, len, *r));
                 }
                 segs.push((ia, ib, weight, *r));
+                // Checked per segment, so one huge feature can't grow the network unbounded.
+                if segs.len() > 10_000_000 || nodes.len() > 5_000_000 {
+                    return Err("the network is too large".into());
+                }
             }
-        }
-        if nodes.len() > 5_000_000 {
-            return Err("the network is too large".into());
         }
     }
     // The closest point on any segment: (segment, fraction along it, the point, metres away).
