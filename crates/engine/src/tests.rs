@@ -144,7 +144,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 196, "coverage fell to {done}");
+    assert!(done >= 223, "coverage fell to {done}");
 }
 
 #[test]
@@ -1209,4 +1209,109 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     assert!(s.run("script.run", &json!({"script": "no.such {}"})).is_err());
     let g = s.run("gp.gallery", &json!({"kind": "raster"})).unwrap();
     assert!(g.as_array().unwrap().iter().any(|t| t["id"] == "raster.function"));
+}
+
+#[test]
+fn layer_effects_and_imagery_tools() {
+    use crate::render::View;
+    let mut s = world();
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 48.0, "scale": 20_000_000})).unwrap();
+    let view = |s: &Session| View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false };
+    let png = |s: &mut Session| {
+        let v = view(s);
+        crate::render::render(s.map_mut(), &v).unwrap().pixmap
+    };
+    // Every effect renders.
+    s.run("layer.blend", &json!({"layer": "Countries", "mode": "multiply"})).unwrap();
+    assert!(s.run("layer.blend", &json!({"layer": "Countries", "mode": "dodge"})).is_err());
+    s.run("layer.mask", &json!({"layer": "Cities", "mask": "Countries"})).unwrap();
+    assert!(s.run("layer.mask", &json!({"layer": "Countries", "mask": "Countries"})).is_err());
+    assert!(s.run("layer.mask", &json!({"layer": "Countries", "mask": "Cities"})).is_err(), "masks are polygons");
+    s.run("layer.swipe", &json!({"layer": "Countries", "position": 0.5})).unwrap();
+    let swiped = png(&mut s);
+    // Right of the divider the countries are gone: only water and basemap land remain.
+    s.run("layer.swipe", &json!({"layer": "Countries", "off": true})).unwrap();
+    let full = png(&mut s);
+    assert_ne!(swiped.data(), full.data());
+    s.run("layer.displayFilters", &json!({"layer": "Cities", "filters": [{"name": "Big at small scales", "minScale": 1e12, "maxScale": 5_000_000, "where": "pop_max > 5000000"}]})).unwrap();
+    assert!(s.run("layer.displayFilters", &json!({"layer": "Cities", "filters": [{"where": "(("}]})).is_err());
+    s.run("layer.aggregation", &json!({"layer": "Cities", "shape": "hexagon", "size": 30})).unwrap();
+    assert!(s.run("layer.aggregation", &json!({"layer": "Countries", "shape": "hexagon"})).is_err());
+    png(&mut s);
+    s.run("layer.aggregation", &json!({"layer": "Cities", "shape": "square"})).unwrap();
+    png(&mut s);
+    s.run("layer.extrusion", &json!({"layer": "Countries", "type": "field", "field": "pop_est", "factor": 0.002})).unwrap();
+    s.run("layer.faces", &json!({"layer": "Countries", "culling": false, "lighting": true})).unwrap();
+    s.run("layer.lightShadow", &json!({"layer": "Countries", "shadows": true})).unwrap();
+    let extruded = png(&mut s);
+    assert_ne!(extruded.data(), full.data());
+    assert!(s.run("layer.faces", &json!({"layer": "Lakes", "culling": true})).is_err(), "no extrusion yet");
+    s.run("raster.rotation", &json!({"layer": dem, "angle": 30})).unwrap();
+    s.run("map.goToXY", &json!({"lon": 10.02, "lat": 45.02, "scale": 50_000})).unwrap();
+    png(&mut s);
+    assert!(s.run("raster.rotation", &json!({"layer": "Countries", "angle": 30})).is_err());
+    s.run("raster.rotation", &json!({"layer": dem, "angle": 0})).unwrap();
+    // Imagery.
+    let r = s.run("raster.georeference", &json!({"layer": dem, "points": [[0, 0, 20.0, 50.0], [40, 40, 20.4, 49.6]]})).unwrap();
+    let e = r["extent"].as_array().unwrap();
+    assert!((e[0].as_f64().unwrap() - 20.0).abs() < 1e-6 && (e[3].as_f64().unwrap() - 50.0).abs() < 1e-6, "{r}");
+    assert!(
+        s.run("raster.georeference", &json!({"layer": dem, "points": [[0, 0, 20.0, 50.0], [40, 40, 19.0, 51.0]]})).is_err(),
+        "north up only"
+    );
+    s.run("raster.georeference", &json!({"layer": dem, "extent": [10.0, 45.0, 10.04, 45.04]})).unwrap();
+    let sp = s.run("raster.spectral", &json!({"layer": dem, "lon": 10.0205, "lat": 45.0195})).unwrap();
+    assert!(sp["values"][0].as_f64().unwrap() > 290.0);
+    s.run("raster.index", &json!({"layer": dem, "index": "ndvi", "nir": 1, "red": 1})).unwrap();
+    let r = s.run("raster.classify", &json!({"layer": dem, "classes": 3})).unwrap();
+    assert!(r["layer"].as_u64().is_some());
+    s.run("raster.function", &json!({"layer": dem, "function": "bandMath", "expression": "b1 + 10", "name": "dem_later"})).unwrap();
+    let ch = s.run("raster.change", &json!({"before": dem, "after": "dem_later", "method": "difference"})).unwrap();
+    let ch_layer = s.map().layer(ch["layer"].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    assert!((ch_layer.bands[0].stats.mean - 10.0).abs() < 0.01);
+    s.run("raster.process", &json!({"layer": dem, "operation": "clip", "extent": [10.005, 45.005, 10.02, 45.02]})).unwrap();
+    let r = s.run("raster.process", &json!({"layer": dem, "operation": "resample", "factor": 4})).unwrap();
+    let small = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    assert_eq!((small.width, small.height), (10, 10));
+    let r = s
+        .run(
+            "raster.editPixels",
+            &json!({"layer": dem, "polygon": [[10.0, 45.0], [10.01, 45.0], [10.01, 45.01], [10.0, 45.01]], "value": 0}),
+        )
+        .unwrap();
+    assert_eq!(r["pixels"], 100);
+    // Supervised classification from two training squares.
+    s.run("layer.template", &json!({"template": "polygons", "name": "Training"})).unwrap();
+    for (name, x) in [("low", 10.002), ("high", 10.018)] {
+        s.run("edit.addFeature", &json!({"layer": "Training", "geometry": {"type": "Polygon", "coordinates": [[[x, 45.018], [x + 0.004, 45.018], [x + 0.004, 45.022], [x, 45.022], [x, 45.018]]]}, "attributes": {"name": name}})).unwrap();
+    }
+    let r = s.run("raster.classifySupervised", &json!({"layer": dem, "training": "Training", "classField": "name"})).unwrap();
+    assert_eq!(r["classes"].as_array().unwrap().len(), 2, "{r}");
+    // Mensuration.
+    let m = s.run("raster.measure", &json!({"layer": dem, "kind": "height", "points": [[10.0015, 45.0385], [10.0205, 45.0195]]})).unwrap();
+    assert!(m["metres"].as_f64().unwrap() > 50.0, "{m}");
+    s.run(
+        "raster.measure",
+        &json!({"layer": dem, "kind": "volume", "points": [[10.015, 45.015], [10.025, 45.015], [10.025, 45.025], [10.015, 45.025]]}),
+    )
+    .unwrap();
+    s.run("raster.measure", &json!({"kind": "area", "points": [[0, 0], [1, 0], [1, 1]]})).unwrap();
+    assert_eq!(s.run("raster.measurements", &Value::Null).unwrap().as_array().unwrap().len(), 3);
+    // Workspaces: an orthomosaic of two rasters, a DSM mosaic and its mesh.
+    s.run("imagery.workspace", &json!({"kind": "ortho", "name": "Valley", "images": [dem, "dem_later"]})).unwrap();
+    s.run("imagery.workspaceOptions", &json!({"name": "Valley", "cellSize": 0.002})).unwrap();
+    let r = s.run("imagery.mosaic", &json!({"name": "Valley"})).unwrap();
+    let mo = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    assert_eq!((mo.width, mo.height), (20, 20));
+    s.run("imagery.workspace", &json!({"kind": "reality", "images": ["dem_later"]})).unwrap();
+    let r = s.run("imagery.mosaic", &json!({"name": "Reality Mapping"})).unwrap();
+    let dsm = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().name.clone();
+    let mesh = s.run("imagery.mesh", &json!({"layer": dsm})).unwrap();
+    assert!(mesh["faces"].as_u64().unwrap() > 100);
+    assert!(s.run("imagery.workspace", &json!({"kind": "lidar", "images": [dem]})).is_err());
+    // Effects and workspaces save with the project.
+    let p = crate::Project::from_json(&serde_json::to_string(&s.project).unwrap()).unwrap();
+    assert!(p.map().layer_by_name("Countries").unwrap().extrusion.is_some() && p.workspaces.len() == 2);
 }

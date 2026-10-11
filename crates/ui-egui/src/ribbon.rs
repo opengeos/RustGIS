@@ -11,7 +11,7 @@ use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, big_menu, col, group, menu_item, small, small_menu, text_w};
 use crate::{RightPane, RustGisApp, icons};
 
-pub const TABS: [&str; 7] = ["Map", "Insert", "Analysis", "View", "Edit", "Share", "Help"];
+pub const TABS: [&str; 8] = ["Map", "Insert", "Analysis", "View", "Edit", "Imagery", "Share", "Help"];
 /// The contextual tabs for feature layers: (tab id, caption).
 pub const FEATURE_TABS: &[(&str, &str)] = &[("Feature Layer", "Feature Layer"), ("Labeling", "Labeling"), ("Data", "Data")];
 /// The contextual tab of an open layout.
@@ -75,6 +75,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                         "Analysis" => analysis_tab(app, ui),
                         "View" => view_tab(app, ui),
                         "Edit" => edit_tab(app, ui),
+                        "Imagery" => imagery_tab(app, ui),
                         "Share" => share_tab(app, ui),
                         "Help" => help_tab(app, ui),
                         "Feature Layer" => feature_layer_tab(app, ui),
@@ -1479,7 +1480,290 @@ fn feature_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
     let Some(layer) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned() else { return };
     visibility_and_effects(app, ui, &layer);
     drawing_group(app, ui, &layer);
+    effects_groups(app, ui, &layer);
     layer_group(app, ui, &layer);
+}
+
+/// The polygon layers that could mask `layer`.
+fn mask_menu(ui: &mut Ui, app: &mut RustGisApp, layer: &rustgis_engine::map::Layer) {
+    let polys: Vec<String> = app
+        .session
+        .map()
+        .layers
+        .iter()
+        .filter(|l| l.id != layer.id && l.geometry_type() == GeometryType::Polygon)
+        .map(|l| l.name.clone())
+        .collect();
+    let cur = layer.mask.clone();
+    small_menu(ui, app, "polygon_layer", "Masking", "Show the layer only inside another layer's polygons.", move |ui, app| {
+        if ui.radio(cur.is_none(), tl!("No mask")).clicked() {
+            let _ = app.run("layer.mask", json!({"mask": null}));
+            ui.close();
+        }
+        for n in &polys {
+            if ui.radio(cur.as_deref() == Some(n.as_str()), n.as_str()).clicked() {
+                let _ = app.run("layer.mask", json!({"mask": n}));
+                ui.close();
+            }
+        }
+    });
+}
+
+/// Masking, display filters, aggregation and extrusion for feature layers.
+fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map::Layer) {
+    let gt = layer.geometry_type();
+    group(ui, "Drawing Effects", |ui| {
+        col(ui, |ui| {
+            mask_menu(ui, app, layer);
+            let filters = layer.display_filters.len();
+            let label = if filters > 0 {
+                crate::i18n::fmt("Display Filters ({n})", &[("n", &filters.to_string())])
+            } else {
+                tl!("Display Filters").to_string()
+            };
+            small_menu(ui, app, "filter", &label, "Show different features at different scales.", |ui, app| {
+                ui.label(egui::RichText::new(tl!("Below 1:5,000,000 show everything; beyond it only what matches:")).small().weak());
+                ui.add(egui::TextEdit::singleline(&mut app.forms.expression).hint_text("pop_max > 1000000").desired_width(220.0));
+                if ui.button(tl!("Set Filter")).clicked() {
+                    let w = app.forms.expression.trim().to_string();
+                    let _ =
+                        app.run("layer.displayFilters", json!({"filters": [{"name": "Small scales", "maxScale": 5_000_000, "where": w}]}));
+                    ui.close();
+                }
+                if ui.button(tl!("Clear Filters")).clicked() {
+                    let _ = app.run("layer.displayFilters", json!({"filters": []}));
+                    ui.close();
+                }
+            });
+            if gt == GeometryType::Point {
+                let cur = layer.aggregation;
+                small_menu(ui, app, "count", "Aggregation", "Draw points as bins coloured by how many fall in each.", move |ui, app| {
+                    for (label, shape) in [("None", "none"), ("Hexagons", "hexagon"), ("Squares", "square")] {
+                        let on = match shape {
+                            "none" => cur.is_none(),
+                            "hexagon" => cur.is_some_and(|a| a.hexagons),
+                            _ => cur.is_some_and(|a| !a.hexagons),
+                        };
+                        if ui.radio(on, tl!(label)).clicked() {
+                            let _ = app.run("layer.aggregation", json!({"shape": shape, "size": cur.map_or(24.0, |a| a.size)}));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        });
+    });
+    if gt == GeometryType::Polygon {
+        let x = layer.extrusion.clone();
+        let numeric: Vec<String> = layer.dataset.fields.iter().filter(|f| f.ty.is_numeric()).map(|f| f.name.clone()).collect();
+        group(ui, "Extrusion", |ui| {
+            let cur = x.clone();
+            big_menu(ui, app, "polygon_layer", "Type", "Raise polygons by a height or a field.", move |ui, app| {
+                if ui.radio(cur.is_none(), tl!("None")).clicked() {
+                    let _ = app.run("layer.extrusion", json!({"type": "none"}));
+                    ui.close();
+                }
+                if ui.radio(cur.as_ref().is_some_and(|x| x.field.is_none()), tl!("Constant height")).clicked() {
+                    let _ = app.run("layer.extrusion", json!({"type": "height", "height": 50_000}));
+                    ui.close();
+                }
+                for f in &numeric {
+                    if ui
+                        .radio(
+                            cur.as_ref().and_then(|x| x.field.as_deref()) == Some(f.as_str()),
+                            crate::i18n::fmt("By {field}", &[("field", f)]),
+                        )
+                        .clicked()
+                    {
+                        let _ = app.run("layer.extrusion", json!({"type": "field", "field": f}));
+                        ui.close();
+                    }
+                }
+            });
+            if let Some(xx) = &x {
+                ui.vertical(|ui| {
+                    ui.add_space(8.0);
+                    let mut k = xx.factor;
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(tl!("Factor")).size(11.5));
+                        let r = ui.add(egui::DragValue::new(&mut k).range(0.0..=1e6).speed(xx.factor.max(0.0001) * 0.02));
+                        if r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged()) {
+                            let t = if xx.field.is_some() { "field" } else { "height" };
+                            let _ = app.run("layer.extrusion", json!({"type": t, "field": xx.field, "factor": k}));
+                        }
+                    });
+                });
+            }
+        });
+        if let Some(xx) = x {
+            group(ui, "Faces", |ui| {
+                col(ui, |ui| {
+                    small(
+                        ui,
+                        app,
+                        "single",
+                        "Face Culling",
+                        "Hide walls facing away from you.",
+                        "layer.faces",
+                        json!({"culling": !xx.face_culling}),
+                        xx.face_culling,
+                    );
+                    small(
+                        ui,
+                        app,
+                        "brightness",
+                        "Lighting",
+                        "Shade walls by the way they face the light.",
+                        "layer.faces",
+                        json!({"lighting": !xx.lighting}),
+                        xx.lighting,
+                    );
+                });
+            });
+            group(ui, "Light and Shadow", |ui| {
+                col(ui, |ui| {
+                    small(
+                        ui,
+                        app,
+                        "brightness",
+                        "Enable Lighting",
+                        "Light the extruded shapes from the north-west.",
+                        "layer.lightShadow",
+                        json!({"lighting": !xx.lighting}),
+                        xx.lighting,
+                    );
+                    small(
+                        ui,
+                        app,
+                        "contrast",
+                        "Cast Shadow",
+                        "Extruded shapes cast shadows on the map.",
+                        "layer.lightShadow",
+                        json!({"shadows": !xx.shadows}),
+                        xx.shadows,
+                    );
+                });
+            });
+        }
+    }
+}
+
+fn imagery_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    let wf = |section: &str| json!({"section": section});
+    group(ui, "Ortho Mapping", |ui| {
+        big(
+            ui,
+            app,
+            "raster_layer",
+            "New\nWorkspace",
+            "Mosaic the visible rasters into an orthomosaic.",
+            "ui.pane.workflows",
+            wf("ortho"),
+            false,
+            false,
+        );
+        small(ui, app, "settings", "Options", "Workspace cell size and blending.", "ui.pane.workflows", wf("ortho"), false);
+    });
+    group(ui, "Reality Mapping", |ui| {
+        big(
+            ui,
+            app,
+            "relief",
+            "New\nWorkspace",
+            "Merge elevation rasters into a surface model and export a 3D mesh.",
+            "ui.pane.workflows",
+            wf("reality"),
+            false,
+            false,
+        );
+        small(ui, app, "settings", "Options", "Workspace cell size and blending.", "ui.pane.workflows", wf("reality"), false);
+    });
+    group(ui, "Alignment", |ui| {
+        big(
+            ui,
+            app,
+            "goto_xy",
+            "Georeference",
+            "Place a raster on the map from control points or the view.",
+            "ui.pane.workflows",
+            wf("georeference"),
+            false,
+            false,
+        );
+    });
+    group(ui, "Analysis", |ui| {
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "relief",
+                "Raster Functions",
+                "Slope, hillshade, NDVI and more.",
+                "ui.pane.workflows",
+                wf("rasterFunctions"),
+                false,
+            );
+            small(ui, app, "bands", "Function Editor", "Chain raster functions.", "ui.pane.workflows", wf("functionEditor"), false);
+        });
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "contrast",
+                "Change Detection",
+                "Difference, ratio or percent change between two rasters.",
+                "ui.pane.workflows",
+                wf("change"),
+                false,
+            );
+            small(ui, app, "graduated", "Spectral Analysis", "Every band's value at a pixel.", "ui.pane.workflows", wf("spectral"), false);
+        });
+    });
+    group(ui, "Image Classification", |ui| {
+        big(
+            ui,
+            app,
+            "classify",
+            "Classification\nWizard",
+            "Unsupervised classes (k-means).",
+            "ui.pane.workflows",
+            wf("classify"),
+            false,
+            false,
+        );
+        big(
+            ui,
+            app,
+            "unique",
+            "Classification\nTools",
+            "Classes from training polygons.",
+            "ui.pane.workflows",
+            wf("supervised"),
+            false,
+            false,
+        );
+    });
+    group(ui, "Mensuration", |ui| {
+        big(
+            ui,
+            app,
+            "measure",
+            "Mensuration",
+            "Distances along the surface, heights, areas and volumes.",
+            "ui.pane.workflows",
+            wf("mensuration"),
+            false,
+            false,
+        );
+        small(ui, app, "history", "Results", "Measurements so far.", "ui.pane.workflows", wf("mensuration"), false);
+    });
+    group(ui, "Tools", |ui| {
+        col(ui, |ui| {
+            small(ui, app, "resample", "Process", "Clip a raster to the view, or resample it.", "ui.pane.workflows", wf("process"), false);
+            small(ui, app, "stretch", "Indices", "NDVI, NDWI, SAVI, NBR, NDBI, EVI.", "ui.pane.workflows", wf("indices"), false);
+            small(ui, app, "edit", "Pixel Editor", "Set the pixels inside a polygon.", "ui.pane.workflows", wf("pixels"), false);
+        });
+    });
 }
 
 /// The Visibility Range and Effects groups shared by feature and raster layers.
@@ -1679,6 +1963,51 @@ fn raster_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
         return;
     };
     let style = rl.style.clone();
+    group(ui, "Compare", |ui| {
+        let on = app.session.map().swipe.is_some_and(|(id, _)| id == layer.id);
+        big(
+            ui,
+            app,
+            "contrast",
+            "Swipe",
+            "Show the layer only left of a divider, to compare it with what's beneath.",
+            "layer.swipe",
+            if on { json!({"off": true}) } else { json!({"position": 0.5}) },
+            on,
+            false,
+        );
+        if on {
+            let mut x = app.session.map().swipe.map_or(0.5, |(_, x)| x);
+            ui.vertical(|ui| {
+                ui.add_space(14.0);
+                if ui.add(egui::Slider::new(&mut x, 0.0..=1.0).show_value(false)).changed() {
+                    let _ = app.run("layer.swipe", json!({"position": x}));
+                }
+            });
+        }
+    });
+    group(ui, "Raster Effects", |ui| {
+        col(ui, |ui| {
+            let cur = layer.blend;
+            small_menu(ui, app, "transparency", "Layer Blend", "How the layer's colours combine with what's beneath.", move |ui, app| {
+                for b in rustgis_engine::map::effects::Blend::ALL {
+                    if ui.radio(cur == b, tl!(b.label())).clicked() {
+                        let _ = app.run("layer.blend", json!({"mode": b.code()}));
+                        ui.close();
+                    }
+                }
+            });
+            mask_menu(ui, app, &layer);
+            let mut a = style.rotation;
+            ui.horizontal(|ui| {
+                let r = ui.add(egui::DragValue::new(&mut a).range(0.0..=359.0).speed(1.0).suffix("°"));
+                if r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged()) {
+                    let _ = app.run("raster.rotation", json!({"angle": a}));
+                }
+                ui.label(egui::RichText::new(tl!("Rotation")).size(11.5));
+            });
+        });
+    });
     group(ui, "Rendering", |ui| {
         let n = data.band_count();
         let has_categories = data.bands.first().is_some_and(|b| b.stats.categories.is_some());

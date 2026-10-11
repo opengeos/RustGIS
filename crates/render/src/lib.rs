@@ -6,6 +6,7 @@
 //! the labels too, for export and the command line.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod effects;
 pub mod fonts;
 pub mod layout;
 pub mod logo;
@@ -524,23 +525,53 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         now: web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
     };
     let n_layers = map.layers.len();
+    // Masks: layers shown only inside another layer's polygons, or left of the swipe divider.
+    let masks = layer_masks(map, &ctx, w, h, &flat, &key);
     for li in (0..n_layers).rev() {
         let Some(layer) = map.layers.get_mut(li) else { continue };
         if !layer.visible || !layer.in_scale_range(scale) {
             continue;
         }
         let opacity = layer.opacity();
+        let mask = masks.iter().find(|(id, _)| *id == layer.id).map(|(_, m)| m);
+        let blend = blend_mode(layer.blend);
+        // Drawn on its own and composited when it is see-through, masked or blended.
+        let offscreen = opacity < 0.999 || mask.is_some() || layer.blend != rustgis_map::effects::Blend::Normal;
+        let composite = |pm: &mut Pixmap, target: &Pixmap| {
+            pm.draw_pixmap(
+                0,
+                0,
+                target.as_ref(),
+                &PixmapPaint { opacity, blend_mode: blend, ..PixmapPaint::default() },
+                Transform::identity(),
+                mask,
+            );
+        };
         if let Some(rl) = &layer.raster {
             if let Some(data) = &rl.data {
                 let place = match &globe {
                     Some(g) => raster::Place::Globe(g),
                     None => raster::Place::Flat(&flat, &key),
                 };
-                raster::draw(&mut pm, data, &rl.style, view, opacity, full_res_rasters, place);
+                if offscreen {
+                    let mut target = Pixmap::new(w, h)?;
+                    raster::draw(&mut target, data, &rl.style, view, 1.0, full_res_rasters, place);
+                    composite(&mut pm, &target);
+                } else {
+                    raster::draw(&mut pm, data, &rl.style, view, opacity, full_res_rasters, place);
+                }
             }
             continue;
         }
-        let rows = layer.visible_rows();
+        let mut rows = layer.visible_rows();
+        // Display filters: at scales where one applies, only its features draw.
+        for f in layer.display_filters.iter().filter(|f| f.applies(scale)) {
+            if let Ok(e) = rustgis_data::query::parse(&f.where_, &layer.dataset) {
+                for (r, keep) in rows.iter_mut().enumerate() {
+                    *keep = *keep && rustgis_data::query::eval(&e, &layer.dataset, r);
+                }
+            }
+        }
         if globe.is_none() {
             layer.projected_in(&flat, &key); // refresh the projected cache
         }
@@ -553,32 +584,41 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         } else {
             layer.projected_cache().iter().map(Option::as_ref).collect()
         };
-        let mut target = if opacity < 0.999 { Pixmap::new(w, h)? } else { Pixmap::new(1, 1)? };
-        let direct = opacity >= 0.999;
+        let mut target = if offscreen { Pixmap::new(w, h)? } else { Pixmap::new(1, 1)? };
+        let direct = !offscreen;
         {
             let dest = if direct { &mut pm } else { &mut target };
-            for (row, g) in geoms.iter().enumerate() {
-                let Some(g) = g else { continue };
-                if rows.get(row) != Some(&true) || !visible(&g.extent()) {
-                    continue;
-                }
-                // A picture draws in its row's turn, so graphics keep their order. (On the globe
-                // the geometry and `px` are both longitude/latitude, so the corners land right.)
-                if layer.graphics && rustgis_map::graphics::kind(ds_ptr, row) == "picture" {
-                    let e = g.extent();
-                    let (x0, y0) = ctx.px(Coord::new(e.min_x, e.max_y));
-                    let (x1, y1) = ctx.px(Coord::new(e.max_x, e.min_y));
-                    let (pw, ph) = (dest.width() as f32, dest.height() as f32);
-                    if x0.max(x1) >= 0.0 && x0.min(x1) <= pw && y0.max(y1) >= 0.0 && y0.min(y1) <= ph {
-                        picture::draw(dest, ds_ptr, row, (x0, y0, x1, y1), if direct { opacity } else { 1.0 });
+            let aggregate = layer.aggregation.filter(|_| layer.geometry_type() == GeometryType::Point);
+            let extrude = layer.extrusion.as_ref().filter(|_| layer.geometry_type() == GeometryType::Polygon && globe.is_none());
+            if let Some(a) = aggregate {
+                effects::aggregate(dest, &ctx, &geoms, &rows, a, &layer.symbol(0));
+            } else if let Some(x) = extrude {
+                let px_per_m = view.pixels_per_point / map_ground_res(view, &flat);
+                effects::extrude(dest, &ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r));
+            } else {
+                for (row, g) in geoms.iter().enumerate() {
+                    let Some(g) = g else { continue };
+                    if rows.get(row) != Some(&true) || !visible(&g.extent()) {
+                        continue;
                     }
-                    continue;
+                    // A picture draws in its row's turn, so graphics keep their order. (On the globe
+                    // the geometry and `px` are both longitude/latitude, so the corners land right.)
+                    if layer.graphics && rustgis_map::graphics::kind(ds_ptr, row) == "picture" {
+                        let e = g.extent();
+                        let (x0, y0) = ctx.px(Coord::new(e.min_x, e.max_y));
+                        let (x1, y1) = ctx.px(Coord::new(e.max_x, e.min_y));
+                        let (pw, ph) = (dest.width() as f32, dest.height() as f32);
+                        if x0.max(x1) >= 0.0 && x0.min(x1) <= pw && y0.max(y1) >= 0.0 && y0.min(y1) <= ph {
+                            picture::draw(dest, ds_ptr, row, (x0, y0, x1, y1), if direct { opacity } else { 1.0 });
+                        }
+                        continue;
+                    }
+                    ctx.feature(dest, g, &layer.symbol(row));
                 }
-                ctx.feature(dest, g, &layer.symbol(row));
             }
         }
         if !direct {
-            pm.draw_pixmap(0, 0, target.as_ref(), &PixmapPaint { opacity, ..PixmapPaint::default() }, Transform::identity(), None);
+            composite(&mut pm, &target);
         }
         for row in selection {
             if let Some(Some(g)) = geoms.get(*row)
@@ -669,6 +709,79 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     }
     let unplaced = if display.show_unplaced { placed.unplaced } else { Vec::new() };
     Some(Rendered { pixmap: pm, labels: placed.labels, unplaced })
+}
+
+/// Metres on the ground per logical point at the view's centre.
+fn map_ground_res(view: &View, flat: &rustgis_map::projection::Flat) -> f64 {
+    (view.camera.res * flat.ground_per_unit(view.camera.center)).max(1e-9)
+}
+
+fn blend_mode(b: rustgis_map::effects::Blend) -> tiny_skia::BlendMode {
+    use rustgis_map::effects::Blend;
+    match b {
+        Blend::Normal => tiny_skia::BlendMode::SourceOver,
+        Blend::Multiply => tiny_skia::BlendMode::Multiply,
+        Blend::Screen => tiny_skia::BlendMode::Screen,
+        Blend::Overlay => tiny_skia::BlendMode::Overlay,
+        Blend::Darken => tiny_skia::BlendMode::Darken,
+        Blend::Lighten => tiny_skia::BlendMode::Lighten,
+        Blend::Difference => tiny_skia::BlendMode::Difference,
+    }
+}
+
+/// The mask of every masked or swiped layer: inside its mask layer's polygons and left of the
+/// swipe divider.
+fn layer_masks(map: &mut Map, ctx: &Ctx, w: u32, h: u32, flat: &rustgis_map::projection::Flat, key: &str) -> Vec<(u32, tiny_skia::Mask)> {
+    let wanted: Vec<(u32, Option<String>, Option<f64>)> = map
+        .layers
+        .iter()
+        .filter_map(|l| {
+            let swipe = map.swipe.filter(|(id, _)| *id == l.id).map(|(_, x)| x.clamp(0.0, 1.0));
+            (l.mask.is_some() || swipe.is_some()).then(|| (l.id, l.mask.clone(), swipe))
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (id, by, swipe) in wanted {
+        let Some(mut m) = tiny_skia::Mask::new(w, h) else { continue };
+        match by
+            .as_deref()
+            .and_then(|n| map.layers.iter().position(|l| l.name.eq_ignore_ascii_case(n) && l.geometry_type() == GeometryType::Polygon))
+        {
+            Some(mi) => {
+                let mut pb = PathBuilder::new();
+                if let Some(ml) = map.layers.get_mut(mi) {
+                    let geoms: Vec<Geometry> = if ctx.globe.is_some() {
+                        ml.dataset.features.iter().filter_map(|f| f.geometry.clone()).collect()
+                    } else {
+                        ml.projected_in(flat, key).iter().flatten().cloned().collect()
+                    };
+                    for g in &geoms {
+                        if let Geometry::Polygon(polys) = g {
+                            for r in polys.iter().flatten() {
+                                ctx.ring_path(&mut pb, r, true);
+                            }
+                        }
+                    }
+                }
+                if let Some(p) = pb.finish() {
+                    m.fill_path(&p, FillRule::EvenOdd, true, Transform::identity());
+                }
+            }
+            // No (or no usable) mask layer: everything shows.
+            None => {
+                if let Some(r) = tiny_skia::Rect::from_xywh(0.0, 0.0, w as f32, h as f32) {
+                    m.fill_path(&PathBuilder::from_rect(r), FillRule::Winding, false, Transform::identity());
+                }
+            }
+        }
+        if let Some(x) = swipe
+            && let Some(r) = tiny_skia::Rect::from_xywh(0.0, 0.0, (w as f64 * x) as f32, h as f32)
+        {
+            m.intersect_path(&PathBuilder::from_rect(r), FillRule::Winding, false, Transform::identity());
+        }
+        out.push((id, m));
+    }
+    out
 }
 
 /// The colour of the space around the globe.

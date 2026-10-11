@@ -42,6 +42,9 @@ pub struct Project {
     /// Models: chains of tools, each step able to use an earlier step's output.
     #[serde(default)]
     pub models: Vec<Model>,
+    /// Ortho and reality mapping workspaces.
+    #[serde(default)]
+    pub workspaces: Vec<crate::cmd::imagery::Workspace>,
 }
 
 /// Settings every geoprocessing run honours.
@@ -125,6 +128,7 @@ impl Project {
             tasks: Vec::new(),
             gp_env: GpEnvironment::default(),
             models: Vec::new(),
+            workspaces: Vec::new(),
         }
     }
 

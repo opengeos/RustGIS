@@ -4,6 +4,7 @@
 pub mod camera;
 pub mod color;
 pub mod design;
+pub mod effects;
 pub mod globe;
 pub mod graphics;
 pub mod layout;
@@ -107,6 +108,21 @@ pub struct Layer {
     /// A graphics layer: each feature carries its own style (see [`graphics`]).
     #[serde(default)]
     pub graphics: bool,
+    /// How the layer blends with what's beneath.
+    #[serde(default)]
+    pub blend: effects::Blend,
+    /// A polygon layer (by name) outside whose shapes this layer is hidden.
+    #[serde(default)]
+    pub mask: Option<String>,
+    /// Scale-dependent feature filters.
+    #[serde(default)]
+    pub display_filters: Vec<effects::DisplayFilter>,
+    /// Points drawn as counted bins.
+    #[serde(default)]
+    pub aggregation: Option<effects::Aggregation>,
+    /// Polygons drawn extruded.
+    #[serde(default)]
+    pub extrusion: Option<effects::Extrusion>,
     /// Domains, subtypes, attribute rules, contingent values, archive and templates.
     #[serde(default, skip_serializing_if = "design::Design::is_empty")]
     pub design: design::Design,
@@ -147,6 +163,11 @@ impl Layer {
             expanded: true,
             selectable: true,
             graphics: false,
+            blend: effects::Blend::Normal,
+            mask: None,
+            display_filters: Vec::new(),
+            aggregation: None,
+            extrusion: None,
             design: design::Design::default(),
             raster: None,
             projected: Vec::new(),
@@ -287,6 +308,9 @@ pub struct Map {
     /// Relationships, snapping, topology rules and edit settings.
     #[serde(default)]
     pub editing: design::MapEditing,
+    /// A layer shown only left of a divider (0–1 across the view): the swipe comparison.
+    #[serde(default)]
+    pub swipe: Option<(u32, f64)>,
     #[serde(default)]
     next_layer_id: u32,
 }
@@ -361,6 +385,7 @@ impl Map {
             label_display: LabelDisplay::default(),
             label_lock: None,
             editing: design::MapEditing::default(),
+            swipe: None,
             next_layer_id: 1,
         }
     }

@@ -68,6 +68,10 @@ fn sample(r: &Raster, band: usize, c: f64, row: f64, resampling: Resampling) -> 
 }
 
 /// Draws a raster layer onto `pm` at `opacity`.
+fn place_is_flat(p: &Place) -> bool {
+    matches!(p, Place::Flat(..))
+}
+
 pub(crate) fn draw(pm: &mut Pixmap, r: &Raster, style: &RasterStyle, view: &View, opacity: f32, full_res: bool, place: Place) {
     // On high-density screens, compute at logical-pixel resolution and scale up (unless asked
     // for full resolution, as exports are): a quarter of the work at 2×.
@@ -114,8 +118,21 @@ pub(crate) fn draw(pm: &mut Pixmap, r: &Raster, style: &RasterStyle, view: &View
         }
     };
     let clip = |v: f64, max: f64| if v.is_finite() { v.clamp(0.0, max) } else { 0.0 };
-    let (x0, x1) = (clip((ax.min(bx) * ppp).floor(), w) as usize, clip((ax.max(bx) * ppp).ceil(), w) as usize);
-    let (y0, y1) = (clip((ay.min(by) * ppp).floor(), h) as usize, clip((ay.max(by) * ppp).ceil(), h) as usize);
+    // A rotated raster turns about its centre: its pixels may land anywhere in view.
+    let rot = style.rotation.rem_euclid(360.0);
+    let rotated = rot.abs() > 1e-6 && place_is_flat(&place);
+    let centre = (((ax + bx) / 2.0) * ppp, ((ay + by) / 2.0) * ppp);
+    let (sin, cos) = (-rot.to_radians()).sin_cos();
+    let (x0, x1, y0, y1) = if rotated {
+        (0, w as usize, 0, h as usize)
+    } else {
+        (
+            clip((ax.min(bx) * ppp).floor(), w) as usize,
+            clip((ax.max(bx) * ppp).ceil(), w) as usize,
+            clip((ay.min(by) * ppp).floor(), h) as usize,
+            clip((ay.max(by) * ppp).ceil(), h) as usize,
+        )
+    };
     if x0 >= x1 || y0 >= y1 {
         return;
     }
@@ -130,6 +147,11 @@ pub(crate) fn draw(pm: &mut Pixmap, r: &Raster, style: &RasterStyle, view: &View
         }
     }
     let at = |px: usize, py: usize| -> Option<(f64, f64)> {
+        if rotated {
+            // Back-rotate the screen pixel about the centre, then find its source exactly.
+            let (dx, dy) = (px as f64 + 0.5 - centre.0, py as f64 + 0.5 - centre.1);
+            return source(r, view, place, k, centre.0 + dx * cos - dy * sin, centre.1 + dx * sin + dy * cos);
+        }
         let u = (px - x0) as f64 + 0.5;
         let v = (py - y0) as f64 + 0.5;
         let (gx, gy) = ((u / STEP as f64) as usize, (v / STEP as f64) as usize);

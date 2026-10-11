@@ -297,6 +297,33 @@ a large raster or point cloud keeps the window busy until it finishes. In the we
 is started in the background and the result is added when it ends, but the tool itself runs
 in the page, so the page is busy while it computes.
 
+## Layer effects
+
+On the Feature Layer tab: **Masking** shows a layer only inside another layer's polygons;
+**Display Filters** show different features at different scales (a SQL condition per scale
+range); **Aggregation** draws points as hexagon or square bins coloured by count; **Extrusion**
+raises polygons by a height or a numeric field in an oblique 2.5D view, with **Face Culling**,
+**Lighting** (walls shaded by the way they face the light) and **Cast Shadow**. On the Raster
+Layer tab: **Layer Blend** (multiply, screen, overlay, darken, lighten, difference), **Swipe**
+(the layer shows only left of a divider you slide, to compare it with what's beneath),
+**Masking** and **Rotation**.
+
+## Imagery
+
+The Imagery tab opens its tools in the Workflows pane:
+
+- **Ortho Mapping** and **Reality Mapping** workspaces mosaic georeferenced images into an
+  orthomosaic, or elevation rasters into a surface model that exports as a 3D mesh (OBJ).
+- **Georeference** places a raster from control points (column, row, longitude, latitude) or
+  stretches it over the map view.
+- **Change Detection** (difference, ratio, percent), **Spectral Analysis** (every band at a
+  pixel), **Indices** (NDVI, NDWI, SAVI, NBR, NDBI, EVI), **Process** (clip to the view,
+  resample) and the **Pixel Editor** (set the pixels inside a polygon).
+- **Classification Wizard** (unsupervised k-means) and **Classification Tools** (minimum distance
+  from training polygons).
+- **Mensuration**: distances along the surface, heights between two points, areas, and volumes
+  above or below a base height, with a list of results.
+
 ## Analysis workflows
 
 The Analysis tab's Workflows pane holds guided analyses. Where one needs points, it asks you to

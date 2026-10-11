@@ -211,6 +211,8 @@ pub struct Session {
     /// Edits per layer id since the project was last saved (Edit › Status). A failed command's
     /// are rolled back; undo doesn't subtract them, since they count edits made, not the net change.
     pub edit_counts: std::collections::HashMap<u32, cmd::design::EditCounts>,
+    /// Mensuration results (Imagery › Mensuration › Results).
+    pub measurements: Vec<serde_json::Value>,
     /// The last topology check's errors (Edit › Error Inspector).
     pub topology_errors: Vec<TopologyIssue>,
     /// The layout shown instead of the map view, if any (an index into `project.layouts`).
@@ -276,6 +278,7 @@ impl Session {
             history_from_file: 0,
             edit_counts: std::collections::HashMap::new(),
             topology_errors: Vec::new(),
+            measurements: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
             back: Vec::new(),

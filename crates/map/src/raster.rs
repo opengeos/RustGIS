@@ -275,6 +275,9 @@ pub struct RasterStyle {
     /// 0.1 to 10; 1 leaves values unchanged.
     #[serde(default = "one")]
     pub gamma: f64,
+    /// Display rotation in degrees clockwise, about the raster's centre.
+    #[serde(default)]
+    pub rotation: f64,
 }
 
 fn one() -> f64 {
@@ -297,7 +300,16 @@ impl RasterStyle {
                 None => (RasterRenderer::Stretch { band: 0, ramp: Ramp::Greys, invert: true }, Stretch::default()),
             },
         };
-        RasterStyle { renderer, stretch, dra: false, resampling: Resampling::Nearest, brightness: 0.0, contrast: 0.0, gamma: 1.0 }
+        RasterStyle {
+            renderer,
+            stretch,
+            dra: false,
+            resampling: Resampling::Nearest,
+            brightness: 0.0,
+            contrast: 0.0,
+            gamma: 1.0,
+            rotation: 0.0,
+        }
     }
 
     /// Recolours with a colour scheme.
