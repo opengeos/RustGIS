@@ -69,6 +69,22 @@ pub struct SharedItem {
 pub struct DataStore {
     pub name: String,
     pub path: String,
+    /// Registered in this session. A store listed by an opened project names a folder chosen by
+    /// its file, so nothing is written there until it's registered again.
+    #[serde(skip)]
+    pub this_session: bool,
+}
+
+/// A data store shares may be written to: one registered in this session.
+fn usable(store: &DataStore) -> Result<(), String> {
+    if store.this_session {
+        Ok(())
+    } else {
+        Err(format!(
+            "the data store '{}' came with the opened project; register it again (Share › Manage › Data Stores) to write to {}",
+            store.name, store.path
+        ))
+    }
 }
 
 fn now() -> f64 {
@@ -208,8 +224,10 @@ pub fn share_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
         "linkChart" => {
             let rel = ps(p, "relationship").map(str::to_string);
             let html = link_chart(s, rel.as_deref())?;
+            // Every relationship is recorded with an empty source (a relationship may be called
+            // "Relationships").
             let name = rel.clone().unwrap_or_else(|| "Relationships".into());
-            Ok((name.clone(), html.into_bytes(), name))
+            Ok((name, html.into_bytes(), rel.unwrap_or_default()))
         }
         k => Err(format!("unknown share '{k}'")),
     }
@@ -240,6 +258,7 @@ fn target(s: &Session, p: &Value, name: &str, ext: &str) -> Result<String, Strin
         Some(n) => s.project.data_stores.iter().find(|d| d.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no data store '{n}'"))?,
         None => s.project.data_stores.first().ok_or("pass a path, or register a data store (Share › Manage › Data Stores)")?,
     };
+    usable(store)?;
     Ok(PathBuf::from(&store.path).join(format!("{}.{ext}", safe(name))).display().to_string())
 }
 
@@ -300,7 +319,7 @@ fn update_item(s: &mut Session, p: &Value, kind: &str, new_source: Option<&str>)
     let source = new_source.unwrap_or(&item.source).to_string();
     let q = match kind {
         "webLayer" => json!({"layer": source, "path": item.path}),
-        "linkChart" => json!({"relationship": if source == "Relationships" { Value::Null } else { json!(source) }, "path": item.path}),
+        "linkChart" => json!({"relationship": if source.is_empty() { Value::Null } else { json!(source) }, "path": item.path}),
         _ => json!({"map": source, "path": item.path}),
     };
     share(s, &q, kind)
@@ -323,13 +342,15 @@ fn data_store(s: &mut Session, p: &Value) -> CmdResult {
             .chars()
             .take(200)
             .collect();
+        // Registering again a store that came with an opened project confirms it.
+        s.project.data_stores.retain(|d| d.this_session || !d.name.eq_ignore_ascii_case(&name));
         if s.project.data_stores.iter().any(|d| d.name.eq_ignore_ascii_case(&name)) {
             return Err(format!("a data store is already called '{name}'"));
         }
         if s.project.data_stores.len() >= MAX_ITEMS {
             return Err("too many data stores".into());
         }
-        s.project.data_stores.push(DataStore { name, path: path.to_string() });
+        s.project.data_stores.push(DataStore { name, path: path.to_string(), this_session: true });
     }
     Ok(json!({"stores": s.project.data_stores}))
 }
@@ -342,6 +363,7 @@ fn upload(s: &mut Session, p: &Value) -> CmdResult {
         None => s.project.data_stores.first().ok_or("register a data store first (Share › Manage › Data Stores)")?,
     }
     .clone();
+    usable(&store)?;
     let dest = PathBuf::from(&store.path).join(&file);
     // A file of that name in the store (another upload, or a share) is never overwritten.
     if dest.exists() {

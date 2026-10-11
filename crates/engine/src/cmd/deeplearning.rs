@@ -205,7 +205,21 @@ fn train(s: &Session, p: &Value) -> Result<DlModel, String> {
     };
     let epochs = f(p, "epochs").unwrap_or(60.0).clamp(1.0, neural::MAX_EPOCHS as f64) as usize;
     let t = neural::train(&bands, classes, &samples, &hidden, epochs)?;
-    let name = name(&json!({"name": p.get("model")}), format!("{}_model", r.name));
+    // Without a name given, a new model never replaces one: it gets a name of its own.
+    let name = match ps(p, "model") {
+        Some(_) => name(&json!({"name": p.get("model")}), format!("{}_model", r.name)),
+        None => {
+            let base = format!("{}_model", r.name);
+            let taken = |n: &str| s.project.dl_models.iter().any(|x| x.name.eq_ignore_ascii_case(n));
+            let mut n = base.clone();
+            let mut k = 1;
+            while taken(&n) {
+                k += 1;
+                n = format!("{base} {k}");
+            }
+            n
+        }
+    };
     Ok(DlModel { name, model: t.model, accuracy: t.accuracy, epochs: t.epochs })
 }
 
