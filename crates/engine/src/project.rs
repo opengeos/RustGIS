@@ -210,9 +210,6 @@ impl Project {
                 m.camera = rustgis_map::Camera::world();
             }
             m.camera.clamp();
-            // Tile layers with an address that can't be fetched (a hand edit) are dropped.
-            m.tiles.retain_mut(|t| t.repair().map_err(|e| log::warn!("{}: {e}", m.name)).is_ok());
-            m.tiles.truncate(rustgis_map::tiles::MAX_TILE_LAYERS);
             for l in &mut m.layers {
                 if let Some(rl) = &mut l.raster
                     && rl.data.is_none()
