@@ -230,7 +230,7 @@ fn run(s: &mut Session, p: &Value) -> CmdResult {
 fn apply(s: &mut Session, name: String, params: Value, res: Result<rustgis_analysis::ToolResult, String>, millis: u64) -> CmdResult {
     let mut result = match res {
         Err(e) => {
-            s.project.gp_history.push(GpRecord { tool: name, params, ok: false, messages: vec![e.clone()], millis });
+            s.project.gp_history.push(GpRecord { tool: name, params, ok: false, messages: vec![e.clone()], millis, outputs: Vec::new() });
             return Err(e);
         }
         Ok(r) => r,
@@ -292,7 +292,13 @@ fn apply(s: &mut Session, name: String, params: Value, res: Result<rustgis_analy
     for m in &result.messages {
         s.notify(m.clone(), false);
     }
-    s.project.gp_history.push(GpRecord { tool: name, params, ok: true, messages: result.messages, millis });
+    let ids: Vec<u32> = match (out.get("layer"), out.get("layers")) {
+        (Some(id), _) => id.as_u64().into_iter().filter_map(|v| u32::try_from(v).ok()).collect(),
+        (None, Some(Value::Array(v))) => v.iter().filter_map(Value::as_u64).filter_map(|v| u32::try_from(v).ok()).collect(),
+        _ => Vec::new(),
+    };
+    let outputs = ids.iter().filter_map(|id| s.map().layer(*id).map(|l| l.name.clone())).collect();
+    s.project.gp_history.push(GpRecord { tool: name, params, ok: true, messages: result.messages, millis, outputs });
     if s.project.gp_history.len() > 500 {
         s.project.gp_history.remove(0);
     }

@@ -434,6 +434,103 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     });
                 }
             });
+            let layouts: Vec<String> = app.session.project.layouts.iter().map(|l| l.name.clone()).collect();
+            if !layouts.is_empty() {
+                egui::CollapsingHeader::new(egui::RichText::new(tl!("Layouts")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
+                    for n in layouts {
+                        ui.horizontal(|ui| {
+                            let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                            icons::paint(ui.painter(), r, "new_layout", t.icon, t.accent);
+                            let resp = ui.selectable_label(
+                                app.session
+                                    .project
+                                    .layouts
+                                    .get(app.session.active_layout.unwrap_or(usize::MAX))
+                                    .is_some_and(|l| l.name == n),
+                                &n,
+                            );
+                            if resp.clicked() {
+                                let _ = app.run("layout.activate", json!({"name": n}));
+                                app.ui.tab = "Layout".into();
+                            }
+                            resp.context_menu(|ui| {
+                                if ui.button(tl!("Delete")).clicked() {
+                                    let _ = app.run("layout.remove", json!({"name": n}));
+                                    ui.close();
+                                }
+                            });
+                        });
+                    }
+                });
+            }
+            let styles: Vec<String> = app.session.project.styles.iter().map(|st| st.name.clone()).collect();
+            if !styles.is_empty() {
+                egui::CollapsingHeader::new(egui::RichText::new(tl!("Styles")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
+                    for n in styles {
+                        ui.horizontal(|ui| {
+                            let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                            icons::paint(ui.painter(), r, "symbology", t.icon, t.accent);
+                            let resp = ui.link(&n).on_hover_text(tl!("Apply to the selected layer"));
+                            if resp.clicked() {
+                                let _ = app.run("style.apply", json!({"name": n}));
+                            }
+                            resp.context_menu(|ui| {
+                                if ui.button(tl!("Delete")).clicked() {
+                                    let _ = app.run("style.remove", json!({"name": n}));
+                                    ui.close();
+                                }
+                            });
+                        });
+                    }
+                });
+            }
+            let tasks: Vec<(String, usize)> = app.session.project.tasks.iter().map(|tk| (tk.name.clone(), tk.steps.len())).collect();
+            if !tasks.is_empty() {
+                egui::CollapsingHeader::new(egui::RichText::new(tl!("Tasks")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
+                    for (n, steps) in tasks {
+                        ui.horizontal(|ui| {
+                            let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                            icons::paint(ui.painter(), r, "run", t.icon, t.accent);
+                            let resp = ui
+                                .link(crate::i18n::fmt("{name} ({n} steps)", &[("name", &n), ("n", &steps.to_string())]))
+                                .on_hover_text(tl!("Run the task"));
+                            if resp.clicked() {
+                                let _ = app.run("task.run", json!({"task": n}));
+                            }
+                            resp.context_menu(|ui| {
+                                if ui.button(tl!("Delete")).clicked() {
+                                    let _ = app.run("task.remove", json!({"task": n}));
+                                    ui.close();
+                                }
+                            });
+                        });
+                    }
+                });
+            }
+            let folders = app.session.project.folders.clone();
+            if !folders.is_empty() && !cfg!(target_arch = "wasm32") {
+                egui::CollapsingHeader::new(egui::RichText::new(tl!("Folder Connections")).font(semibold(12.5))).default_open(true).show(
+                    ui,
+                    |ui| {
+                        for f in folders {
+                            ui.horizontal(|ui| {
+                                let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                                icons::paint(ui.painter(), r, "add_folder", t.icon, t.accent);
+                                let resp = ui.link(&f).on_hover_text(tl!("Browse this folder below"));
+                                if resp.clicked() {
+                                    app.table.folder = Some(std::path::PathBuf::from(&f));
+                                }
+                                resp.context_menu(|ui| {
+                                    if ui.button(tl!("Remove")).clicked() {
+                                        let _ = app.run("project.removeFolder", json!({"path": f}));
+                                        ui.close();
+                                    }
+                                });
+                            });
+                        }
+                    },
+                );
+            }
             egui::CollapsingHeader::new(egui::RichText::new(tl!("Tables")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
                 let tables: Vec<String> = app.session.project.tables.iter().map(|t| t.name.clone()).collect();
                 if tables.is_empty() {
@@ -481,7 +578,24 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         .map(|e| (e.path().is_dir(), e.file_name().to_string_lossy().to_string(), e.path()))
         .filter(|(d, n, _)| {
             !n.starts_with('.')
-                && (*d || ["geojson", "json", "csv", "shp", "rgisx"].iter().any(|x| n.to_lowercase().ends_with(&format!(".{x}"))))
+                && (*d
+                    || [
+                        "geojson",
+                        "json",
+                        "csv",
+                        "shp",
+                        "tif",
+                        "tiff",
+                        "asc",
+                        "rgisx",
+                        "rgispkg",
+                        "rgismap",
+                        "rgismpk",
+                        "rgislyr",
+                        "rgislayout",
+                    ]
+                    .iter()
+                    .any(|x| n.to_lowercase().ends_with(&format!(".{x}"))))
         })
         .collect();
     entries.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.to_lowercase().cmp(&b.1.to_lowercase())));
@@ -501,9 +615,14 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             if resp.double_clicked() || (is_dir && resp.clicked()) {
                 if is_dir {
                     app.table.folder = Some(path.clone());
-                } else if name.ends_with(".rgisx") {
+                } else if name.ends_with(".rgisx") || name.ends_with(".rgispkg") {
                     let _ = app.run("project.open", json!({"path": path.display().to_string()}));
                     app.map.invalidate();
+                } else if name.ends_with(".rgismap") || name.ends_with(".rgismpk") {
+                    let _ = app.run("map.import", json!({"path": path.display().to_string()}));
+                    app.map.invalidate();
+                } else if name.ends_with(".rgislayout") {
+                    let _ = app.run("layout.import", json!({"path": path.display().to_string()}));
                 } else {
                     let _ = app.run("layer.addData", json!({"path": path.display().to_string()}));
                 }

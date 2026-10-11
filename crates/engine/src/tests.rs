@@ -144,7 +144,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 133, "coverage fell to {done}");
+    assert!(done >= 155, "coverage fell to {done}");
 }
 
 #[test]
@@ -719,5 +719,109 @@ fn layouts_compose_export_and_round_trip() {
     assert_eq!(s.active_layout, None);
     s.run("layout.remove", &json!({"name": "Europe 2"})).unwrap();
     assert_eq!(s.project.layouts.len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn project_items_files_styles_packages_tasks_and_3d() {
+    let dir = std::env::temp_dir().join(format!("rustgis-items-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |n: &str| dir.join(n).display().to_string();
+    let mut s = world();
+    // Folder connections.
+    s.run("project.addFolder", &json!({"path": dir.display().to_string()})).unwrap();
+    assert!(s.run("project.addFolder", &json!({"path": path("missing")})).is_err());
+    assert_eq!(s.run("project.connections", &Value::Null).unwrap()["folders"][0]["available"], true);
+    // Map and layer files.
+    s.run("map.save", &json!({"path": path("world.rgismap")})).unwrap();
+    s.run("map.import", &json!({"path": path("world.rgismap")})).unwrap();
+    assert_eq!(s.project.maps.len(), 2);
+    assert_eq!(s.project.maps[1].name, "World (2)");
+    s.run("layer.symbology", &json!({"layer": "Cities", "type": "single", "color": "#AA00FF"})).ok();
+    s.run("layer.save", &json!({"layer": "Cities", "path": path("cities.rgislyr")})).unwrap();
+    let n = s.map().layers.len();
+    s.run("layer.addData", &json!({"path": path("cities.rgislyr")})).unwrap();
+    assert_eq!(s.map().layers.len(), n + 1);
+    assert!(s.map().layer_by_name("Cities (2)").is_some());
+    // Styles.
+    s.run("style.new", &json!({"layer": "Countries", "name": "Choropleth"})).unwrap();
+    s.run("style.save", &json!({"path": path("styles.rgisstyle")})).unwrap();
+    s.run("style.remove", &json!({"name": "Choropleth"})).unwrap();
+    s.run("style.add", &json!({"path": path("styles.rgisstyle")})).unwrap();
+    assert!(s.run("style.apply", &json!({"name": "Choropleth", "layer": "Cities"})).is_err(), "polygon style on points");
+    s.run("layer.symbology", &json!({"layer": "Countries", "type": "single"})).unwrap();
+    s.run("style.apply", &json!({"name": "Choropleth", "layer": "Countries"})).unwrap();
+    assert_eq!(s.map().layer_by_name("Countries").unwrap().renderer.kind_label(), "Graduated Colors");
+    let r = s.run("style.import", &json!({"path": path("world.rgismap")})).unwrap();
+    assert!(r["imported"].as_u64().unwrap() >= 4);
+    // Templates keep the setup, not the features.
+    s.run("project.saveTemplate", &json!({"path": path("atlas.rgistemplate")})).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.fromTemplate", &json!({"path": path("atlas.rgistemplate"), "name": "From template"})).unwrap();
+    assert_eq!(t.project.name, "From template");
+    assert!(t.map().layer_by_name("Countries").unwrap().dataset.features.is_empty());
+    assert!(!t.project.styles.is_empty());
+    // Packages open again.
+    s.run("project.package", &json!({"path": path("atlas.rgispkg")})).unwrap();
+    let mut o = Session::new(Project::default());
+    o.run("project.open", &json!({"path": path("atlas.rgispkg")})).unwrap();
+    assert_eq!(o.project.maps.len(), 2);
+    assert!(o.path.is_none(), "a package opens unsaved");
+    s.run("map.package", &json!({"path": path("world.rgismpk"), "mobile": true, "tolerance": 0.05})).unwrap();
+    s.run("map.import", &json!({"path": path("world.rgismpk")})).unwrap();
+    let full: usize = s.project.maps[0]
+        .layer_by_name("Countries")
+        .unwrap()
+        .dataset
+        .features
+        .iter()
+        .filter_map(|f| f.geometry.as_ref())
+        .map(|g| g.coord_count())
+        .sum();
+    let mobile: usize = s
+        .project
+        .maps
+        .last()
+        .unwrap()
+        .layer_by_name("Countries")
+        .unwrap()
+        .dataset
+        .features
+        .iter()
+        .filter_map(|f| f.geometry.as_ref())
+        .map(|g| g.coord_count())
+        .sum();
+    assert!(mobile < full, "mobile packages simplify: {mobile} < {full}");
+    assert!(s.run("gp.package", &json!({"path": path("results.rgisgpk")})).is_err(), "no runs yet");
+    s.run("map.activate", &json!({"name": "World"})).unwrap();
+    s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Cities", "distance": 100}})).unwrap();
+    s.run("gp.package", &json!({"path": path("results.rgisgpk")})).unwrap();
+    let entries = rustgis_data::zip::read(&std::fs::read(path("results.rgisgpk")).unwrap()).unwrap();
+    assert!(entries.iter().any(|(n, _)| n == "history.json") && entries.iter().any(|(n, _)| n.starts_with("results/")));
+    // Layer templates.
+    let id = s.run("layer.template", &json!({"template": "places"})).unwrap()["layer"].as_u64().unwrap() as u32;
+    assert_eq!(s.map().layer(id).unwrap().dataset.fields.len(), 4);
+    assert!(s.run("layer.template", &json!({"template": "unicorns"})).is_err());
+    // Tasks.
+    s.run("task.new", &json!({"name": "Explore", "steps": [{"title": "Zoom to Europe", "command": "map.goToXY", "params": {"lon": 10, "lat": 50, "scale": 20000000}}, {"title": "Select big countries", "command": "select.byAttributes", "params": {"layer": "Countries", "where": "pop_est > 50000000"}}]})).unwrap();
+    assert!(s.run("task.new", &json!({"steps": [{"title": "x", "command": "no.such"}]})).is_err());
+    let r = s.run("task.run", &json!({"task": "Explore"})).unwrap();
+    assert_eq!(r["ran"].as_array().unwrap().len(), 2);
+    assert!(s.map().selection_count() > 5);
+    s.run("task.addStep", &json!({"task": "Explore", "title": "Clear", "command": "select.clear"})).unwrap();
+    s.run("task.run", &json!({"task": "Explore", "step": 2})).unwrap();
+    assert_eq!(s.map().selection_count(), 0);
+    s.run("task.new", &json!({"name": "Replay", "fromHistory": true})).unwrap();
+    assert_eq!(s.project.tasks.last().unwrap().steps.len(), 1);
+    s.run("task.save", &json!({"task": "Explore", "path": path("explore.rgistask")})).unwrap();
+    s.run("task.import", &json!({"path": path("explore.rgistask")})).unwrap();
+    assert_eq!(s.project.tasks.last().unwrap().name, "Explore 2");
+    // 3D export: polygons extruded by a field.
+    s.run("share.export3d", &json!({"layer": "Countries", "path": path("countries.obj"), "heightField": "pop_est", "zScale": 0.00001}))
+        .unwrap();
+    let obj = std::fs::read_to_string(path("countries.obj")).unwrap();
+    assert!(obj.lines().filter(|l| l.starts_with("v ")).count() > 1000 && obj.contains("\nf "));
+    let (name, bytes) = crate::cmd::items::item_bytes(&mut s, "obj", &json!({"layer": "Cities"})).unwrap();
+    assert!(name.ends_with(".obj") && !bytes.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }

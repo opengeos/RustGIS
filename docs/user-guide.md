@@ -147,6 +147,32 @@ the maps, with a Layout tab on the ribbon:
   viewer; **Save Layout File** and **Import Layout** move layouts between projects
   (`.rgislayout`).
 
+## Project items
+
+RustGIS saves pieces of a project as files you can share and reuse:
+
+| Item | Extension | Made with | Opened with |
+| --- | --- | --- | --- |
+| Map file (a map with its data) | `.rgismap` | Share › Save As › Map File | Insert › Import |
+| Layer file (a layer with its symbology) | `.rgislyr` | Share › Save As › Layer File | Add Data |
+| Styles (saved symbology) | `.rgisstyle` | Insert › Styles › New Style, then Share › Save As › Style Items | Insert › Styles › Add Style File |
+| Project template (the setup without features) | `.rgistemplate` | Insert › Templates, or Share › Save As | Insert › Templates › Open Custom Template |
+| Project package (everything, rasters included) | `.rgispkg` | Share › Package › Project | Project › Open |
+| Map package / mobile map package | `.rgismpk` | Share › Package › Map or Mobile Map | Insert › Import |
+| Results package (geoprocessing history and outputs) | `.rgisgpk` | Share › Package › Results | any zip tool |
+| Task (guided command steps) | `.rgistask` | Insert › Task, Share › Save As › Task Item | Insert › Task › Import Task |
+| Layout | `.rgislayout` | Layout › Save Layout File | Insert › New Layout › Import Layout |
+
+Packages are zip files. A mobile map package keeps only the visible layers and simplifies their
+geometry, for phones and tablets. Styles can also be imported from the layers of a layer file,
+map file or project. Insert › Layer Templates adds empty layers with ready-made schemas (places,
+routes, areas, observations…) to draw into. Add Folder connects a folder to the Catalog, which
+also lists the project's layouts, styles and tasks. A task's steps each run a command; New Task
+From History turns the geoprocessing history into a task you can replay.
+
+Share › Output also prints the map (through the system's PDF viewer), captures it to the
+clipboard, and exports a layer to a 3D model (Wavefront OBJ, polygons extruded by a field).
+
 ## Clipboard and pop-ups
 
 Copy (++ctrl+c++) and Cut (++ctrl+x++) take the selected features. Paste (++ctrl+v++) adds them to

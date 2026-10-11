@@ -136,12 +136,16 @@ pub struct UiState {
     /// Tab rectangles from the last frame (for the contextual group header).
     pub tab_rects: Vec<(String, egui::Rect)>,
     pub tab_strip_rect: Option<egui::Rect>,
+    /// The command an item picked in the browser opens with (web).
+    pub pending_open: Option<&'static str>,
     /// A layout picture waiting for its image file (web).
     pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
     pub pending_picture: Option<Vec<rustgis_engine::geom::Coord>>,
     /// Text to put on the system clipboard at the end of the frame.
     pub copy_out: Option<String>,
+    /// An image to put on the system clipboard at the end of the frame.
+    pub copy_image: Option<egui::ColorImage>,
 }
 
 impl Default for UiState {
@@ -162,8 +166,10 @@ impl Default for UiState {
             tab_rects: Vec::new(),
             tab_strip_rect: None,
             copy_out: None,
+            copy_image: None,
             pending_picture: None,
             pending_layout_picture: false,
+            pending_open: None,
         }
     }
 }
@@ -337,6 +343,30 @@ impl RustGisApp {
     /// Failures are reported to the user (command errors through `Session::run`, others here).
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
         let lower = name.to_ascii_lowercase();
+        // Project items picked or dropped in the browser.
+        let item = [
+            (".rgismap", "map.import"),
+            (".rgismpk", "map.import"),
+            (".rgislyr", "layer.addLayerFile"),
+            (".rgisstyle", "style.add"),
+            (".rgistemplate", "project.fromTemplate"),
+            (".rgistask", "task.import"),
+        ]
+        .iter()
+        .find(|(e, _)| lower.ends_with(e))
+        .map(|(_, c)| *c);
+        if let Some(cmd) = self.ui.pending_open.take().or(item) {
+            use base64::Engine;
+            let r = self.run(cmd, json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)}));
+            self.map.invalidate();
+            return r;
+        }
+        if lower.ends_with(".rgispkg") {
+            let text = rustgis_engine::cmd::items::package_text(bytes)?;
+            let r = self.run("project.openText", json!({"text": text, "name": name}));
+            self.map.invalidate();
+            return r;
+        }
         if lower.ends_with(".rgislayout") {
             let text = std::str::from_utf8(bytes).map_err(|_| "not a RustGIS layout".to_string())?;
             return self.run("layout.import", json!({"text": text}));
@@ -600,6 +630,79 @@ impl RustGisApp {
                     self.layout.selected = v["element"].as_u64().map(|v| v as u32);
                 }
             }
+            // Project items: save (a file dialog, or a download on the web) and open.
+            "ui.saveItem" => {
+                let kind = p.get("kind").and_then(Value::as_str).ok_or("kind is required")?;
+                let session = &mut self.session;
+                let (name, bytes) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::items::item_bytes(session, kind, p)))
+                        .unwrap_or_else(|_| Err("saving failed unexpectedly".into()))
+                        .inspect_err(|e| self.session.notify(e.clone(), true))?;
+                if self.services.download.is_some() {
+                    self.download(&name, bytes);
+                } else {
+                    let (ext, label) =
+                        rustgis_engine::cmd::items::ITEMS.iter().find(|i| i.0 == kind).map_or(("json", "File"), |i| (i.1, i.2));
+                    if let Some(path) = dialogs::pick_save(&name, &[ext], tl!(label)) {
+                        rustgis_engine::data::io::write_atomic(std::path::Path::new(&path), &bytes).map_err(|e| e.to_string())?;
+                        self.session.notify(i18n::fmt("Saved {name}", &[("name", &path)]), false);
+                    }
+                }
+            }
+            "ui.openItem" => {
+                let kind = p.get("kind").and_then(Value::as_str).ok_or("kind is required")?;
+                let (cmd, exts, label): (&str, &[&str], &str) = match kind {
+                    "map" => ("map.import", &["rgismap", "rgismpk", "rgisx", "rgispkg"], "RustGIS maps and projects"),
+                    "layer" => ("layer.addLayerFile", &["rgislyr"], "RustGIS layer file"),
+                    "styles" => ("style.add", &["rgisstyle"], "RustGIS styles"),
+                    "importStyles" => ("style.import", &["rgislyr", "rgismap", "rgisx"], "RustGIS layers, maps and projects"),
+                    "template" => ("project.fromTemplate", &["rgistemplate"], "RustGIS project template"),
+                    "task" => ("task.import", &["rgistask"], "RustGIS task"),
+                    k => return Err(format!("unknown item '{k}'")),
+                };
+                if let Some(open) = &self.services.open_async {
+                    self.ui.pending_open = Some(cmd);
+                    open("item");
+                } else if let Some(path) = dialogs::pick_open(exts, tl!(label)) {
+                    let r = self.run(cmd, json!({"path": path}));
+                    self.map.invalidate();
+                    return r;
+                }
+            }
+            "ui.addFolder" => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                    return self.run("project.addFolder", json!({"path": dir.display().to_string()}));
+                }
+                #[cfg(target_arch = "wasm32")]
+                return Err("folder connections need the desktop app".into());
+            }
+            "ui.captureMap" => {
+                let session = &mut self.session;
+                let png = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    rustgis_engine::cmd::share::map_png(session, None, None, Some(192.0))
+                }))
+                .unwrap_or_else(|_| Err("the capture failed unexpectedly".into()))?;
+                let pm = rustgis_engine::render::decode_png(&png).ok_or("could not draw the map")?;
+                let size = [pm.width() as usize, pm.height() as usize];
+                self.ui.copy_image = Some(egui::ColorImage::from_rgba_premultiplied(size, pm.data()));
+                self.session.notify(tl!("Copied the map to the clipboard"), false);
+            }
+            "ui.printMap" => {
+                let session = &mut self.session;
+                let pdf = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_engine::cmd::share::map_pdf(session, 300.0)))
+                    .unwrap_or_else(|_| Err("printing failed unexpectedly".into()))
+                    .inspect_err(|e| self.session.notify(e.clone(), true))?;
+                let name = format!("{}.pdf", self.session.map().name);
+                if self.services.download.is_some() {
+                    self.download(&name, pdf);
+                } else {
+                    let path = std::env::temp_dir().join(name.replace(['/', '\\'], "_"));
+                    rustgis_engine::data::io::write_atomic(&path, &pdf).map_err(|e| e.to_string())?;
+                    open_with_system(&path)?;
+                    self.session.notify(i18n::fmt("Opened {name} for printing", &[("name", &path.display().to_string())]), false);
+                }
+            }
             "ui.layoutSelect" => self.layout.selected = p.get("element").and_then(Value::as_u64).map(|v| v as u32),
             "ui.layoutTool" => {
                 self.layout.tool = match p.get("shape").and_then(Value::as_str) {
@@ -814,6 +917,9 @@ impl RustGisApp {
         chrome::notices(self, &ctx);
         if let Some(text) = self.ui.copy_out.take() {
             ctx.copy_text(text);
+        }
+        if let Some(img) = self.ui.copy_image.take() {
+            ctx.copy_image(img);
         }
         let title = format!("{}{} - RustGIS", self.session.project.name, if self.session.dirty { " •" } else { "" });
         if title != self.sent_title {

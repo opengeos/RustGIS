@@ -13,7 +13,7 @@
 pub mod convert;
 mod tools;
 
-pub use tools::TOOLS;
+pub use tools::{TOOLS, simplify_geometry};
 
 use rustgis_data::Dataset;
 use serde_json::Value;

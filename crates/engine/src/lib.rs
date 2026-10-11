@@ -169,6 +169,9 @@ pub struct GpRecord {
     pub ok: bool,
     pub messages: Vec<String>,
     pub millis: u64,
+    /// The layers the run added (by name at the time).
+    #[serde(default)]
+    pub outputs: Vec<String>,
 }
 
 /// Something worth telling the user (status bar / notifications).

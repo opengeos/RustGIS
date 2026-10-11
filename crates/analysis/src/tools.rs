@@ -409,6 +409,17 @@ fn feature_to_point(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     result(out, format!("Feature To Point: {n} points"))
 }
 
+/// A geometry simplified (Douglas–Peucker) to a tolerance in metres.
+pub fn simplify_geometry(g: &Geometry, tol_m: f64) -> Geometry {
+    let eps = tol_m * merc_scale(feature_lat(g));
+    let sg = match g {
+        Geometry::Polygon(_) => to_multipolygon(g).and_then(|m| from_multipolygon(&m.simplify(eps))),
+        Geometry::Line(_) => to_multiline(g).and_then(|m| from_line(&m.simplify(eps))),
+        _ => None,
+    };
+    sg.unwrap_or_else(|| g.clone())
+}
+
 fn simplify(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let tol = num(p, "tolerance").ok_or("Tolerance must be a number")?.abs() * 1000.0;

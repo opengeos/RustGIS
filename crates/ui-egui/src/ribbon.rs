@@ -462,6 +462,68 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
         col(ui, |ui| {
             small(ui, app, "catalog", "Catalog", "Browse the project's maps, tables and folders.", "ui.pane.catalog", Value::Null, false);
             small(ui, app, "add_data", "Add Data", "Add vector data.", "ui.addData", Value::Null, false);
+            small(ui, app, "add_folder", "Add Folder", "Connect a folder to the Catalog.", "ui.addFolder", Value::Null, false);
+        });
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "open",
+                "Import",
+                "Add the maps of a map file, map package, project or project package.",
+                "ui.openItem",
+                json!({"kind": "map"}),
+                false,
+            );
+            small_menu(ui, app, "save_as", "Templates", "Project templates: start projects from a saved setup.", |ui, app| {
+                menu_item(ui, app, "save_as", "New Custom Template…", "ui.saveItem", json!({"kind": "template"}));
+                menu_item(ui, app, "open", "Open Custom Template…", "ui.openItem", json!({"kind": "template"}));
+            });
+            small_menu(ui, app, "run", "Task", "Tasks: guided steps that each run a command.", |ui, app| {
+                menu_item(ui, app, "history", "New Task From History", "task.new", json!({"name": "Workflow", "fromHistory": true}));
+                menu_item(ui, app, "open", "Import Task…", "ui.openItem", json!({"kind": "task"}));
+                let tasks: Vec<String> = app.session.project.tasks.iter().map(|t| t.name.clone()).collect();
+                if !tasks.is_empty() {
+                    ui.separator();
+                }
+                for t in tasks {
+                    if ui.button(crate::i18n::fmt("Run {name}", &[("name", &t)])).clicked() {
+                        let _ = app.run("task.run", json!({"task": t}));
+                        ui.close();
+                    }
+                }
+            });
+        });
+    });
+    group(ui, "Layer Templates", |ui| {
+        big_menu(ui, app, "graphics_layer", "Layer\nTemplates", "Add an empty layer with a ready-made schema, to draw into.", |ui, app| {
+            for (id, label) in [
+                ("points", "Points"),
+                ("lines", "Lines"),
+                ("polygons", "Polygons"),
+                ("places", "Places (name, category, address, rating)"),
+                ("routes", "Routes (name, surface, length)"),
+                ("areas", "Areas (name, land use, area)"),
+                ("observations", "Observations (observer, date, species, count)"),
+            ] {
+                menu_item(ui, app, "add_data", label, "layer.template", json!({"template": id}));
+            }
+        });
+    });
+    group(ui, "Styles", |ui| {
+        big_menu(ui, app, "symbology", "Styles", "Saved symbology: apply it to the selected layer, or save the layer's.", |ui, app| {
+            let styles: Vec<(String, String)> =
+                app.session.project.styles.iter().map(|t| (t.name.clone(), t.geometry.label().to_string())).collect();
+            if styles.is_empty() {
+                ui.label(egui::RichText::new(tl!("No styles yet")).weak());
+            }
+            for (n, g) in styles {
+                menu_item(ui, app, "symbology", &format!("{n} ({})", tl!(&g)), "style.apply", json!({"name": n}));
+            }
+            ui.separator();
+            menu_item(ui, app, "symbology", "New Style From Layer", "style.new", Value::Null);
+            menu_item(ui, app, "open", "Add Style File…", "ui.openItem", json!({"kind": "styles"}));
+            menu_item(ui, app, "open", "Import Styles From…", "ui.openItem", json!({"kind": "importStyles"}));
         });
     });
     group(ui, "Bookmarks", |ui| {
@@ -812,6 +874,74 @@ fn share_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
             false,
         );
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "print",
+                "Print Map",
+                "Print the map view (through the system's PDF viewer).",
+                "ui.printMap",
+                Value::Null,
+                false,
+            );
+            small(
+                ui,
+                app,
+                "copy",
+                "Capture To Clipboard",
+                "Copy an image of the map to the clipboard.",
+                "ui.captureMap",
+                Value::Null,
+                false,
+            );
+            small(
+                ui,
+                app,
+                "export_layer",
+                "Export To 3D",
+                "Export the selected layer as a 3D model (OBJ), polygons extruded.",
+                "ui.saveItem",
+                json!({"kind": "obj"}),
+                false,
+            );
+        });
+    });
+    group(ui, "Package", |ui| {
+        big(
+            ui,
+            app,
+            "package",
+            "Project\nPackage",
+            "Bundle the project and its data into one file to share.",
+            "ui.saveItem",
+            json!({"kind": "projectPackage"}),
+            false,
+            false,
+        );
+        col(ui, |ui| {
+            small(ui, app, "map", "Map", "Bundle the active map and its data.", "ui.saveItem", json!({"kind": "mapPackage"}), false);
+            small(
+                ui,
+                app,
+                "map",
+                "Mobile Map",
+                "Bundle the visible layers, with simplified geometry for phones and tablets.",
+                "ui.saveItem",
+                json!({"kind": "mobilePackage"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "history",
+                "Results",
+                "Bundle the geoprocessing history with the layers it made.",
+                "ui.saveItem",
+                json!({"kind": "gpPackage"}),
+                false,
+            );
+        });
     });
     group(ui, "Layout", |ui| {
         big(ui, app, "export", "Export\nLayout", "Export the open layout as PDF or PNG.", "ui.exportLayout", Value::Null, false, false);
@@ -830,6 +960,51 @@ fn share_tab(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Save As", |ui| {
         big(ui, app, "save_as", "Project", "Save the project under a new name.", "ui.saveAs", Value::Null, false, false);
         big(ui, app, "new_layout", "Layout\nFile", "Save the open layout as a layout file.", "ui.saveLayout", Value::Null, false, false);
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "map",
+                "Map File",
+                "Save the active map (with its data) as a map file.",
+                "ui.saveItem",
+                json!({"kind": "map"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "add_data",
+                "Layer File",
+                "Save the selected layer with its symbology as a layer file.",
+                "ui.saveItem",
+                json!({"kind": "layer"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "symbology",
+                "Style Items",
+                "Save the project's styles to a style file.",
+                "ui.saveItem",
+                json!({"kind": "styles"}),
+                false,
+            );
+        });
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "save_as",
+                "Project Template",
+                "Save the project's setup, without its features, as a template.",
+                "ui.saveItem",
+                json!({"kind": "template"}),
+                false,
+            );
+            small(ui, app, "run", "Task Item", "Save the last task as a task file.", "ui.saveItem", json!({"kind": "task"}), false);
+        });
     });
 }
 

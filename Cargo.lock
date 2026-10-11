@@ -3240,6 +3240,7 @@ version = "0.1.0"
 dependencies = [
  "crs-definitions",
  "csv",
+ "miniz_oxide 0.8.9",
  "proj4rs",
  "rustgis-geom",
  "serde",

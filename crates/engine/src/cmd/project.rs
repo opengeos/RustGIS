@@ -34,6 +34,11 @@ pub fn commands() -> Vec<C> {
     ]
 }
 
+/// Replaces the project, clearing history and per-project state.
+pub(crate) fn reset_to(s: &mut Session, p: Project) {
+    reset(s, p);
+}
+
 fn reset(s: &mut Session, p: Project) {
     s.project = p;
     s.active_layer = s.map().layers.first().map(|l| l.id);
@@ -58,9 +63,16 @@ fn sample(s: &mut Session, _: &Value) -> CmdResult {
 
 fn open(s: &mut Session, p: &Value) -> CmdResult {
     let path = PathBuf::from(super::ps(p, "path").ok_or("path is required")?);
-    let proj = Project::load(&path)?;
+    let is_package = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("rgispkg"));
+    let proj = if is_package {
+        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Project::from_json(&super::items::package_text(&bytes)?)?
+    } else {
+        Project::load(&path)?
+    };
     reset(s, proj);
-    s.path = Some(path);
+    // A package opens as a new, unsaved project (saving writes a plain project file).
+    s.path = if is_package { None } else { Some(path) };
     s.notify(format!("Opened {}", s.project.name), false);
     Ok(Value::Null)
 }

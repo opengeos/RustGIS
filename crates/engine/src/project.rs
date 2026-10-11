@@ -27,6 +27,45 @@ pub struct Project {
     pub gp_history: Vec<GpRecord>,
     #[serde(default)]
     pub layouts: Vec<rustgis_map::layout::Layout>,
+    /// Folder connections shown in the Catalog.
+    #[serde(default)]
+    pub folders: Vec<String>,
+    /// Saved symbology, applied to layers by name.
+    #[serde(default)]
+    pub styles: Vec<StyleItem>,
+    /// Step-by-step tasks: guided command sequences.
+    #[serde(default)]
+    pub tasks: Vec<Task>,
+}
+
+/// A saved style: a layer's symbology and labels.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StyleItem {
+    pub name: String,
+    pub geometry: rustgis_data::GeometryType,
+    pub renderer: rustgis_map::Renderer,
+    pub labels: rustgis_map::Labeling,
+    #[serde(default)]
+    pub transparency: f32,
+}
+
+/// A task: steps that each run a command, in order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Task {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub steps: Vec<TaskStep>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TaskStep {
+    pub title: String,
+    #[serde(default)]
+    pub instructions: String,
+    pub command: String,
+    #[serde(default)]
+    pub params: serde_json::Value,
 }
 
 fn format() -> u32 {
@@ -49,6 +88,9 @@ impl Project {
             tables: Vec::new(),
             gp_history: Vec::new(),
             layouts: Vec::new(),
+            folders: Vec::new(),
+            styles: Vec::new(),
+            tasks: Vec::new(),
         }
     }
 

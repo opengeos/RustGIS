@@ -9,6 +9,7 @@ pub mod io;
 pub mod query;
 pub mod raster;
 pub mod value;
+pub mod zip;
 
 pub use geometry::{Geometry, GeometryType};
 pub use rustgis_geom::{Coord, Extent};

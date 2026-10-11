@@ -384,6 +384,16 @@ impl Map {
         id
     }
 
+    /// Adds a layer (from a layer file) with a fresh id among the layers of its kind; returns the id.
+    pub fn add_layer(&mut self, mut layer: Layer) -> u32 {
+        let id = self.next_id();
+        layer.id = id;
+        layer.selection.clear();
+        layer.touch_geometry();
+        self.insert_ranked(layer);
+        id
+    }
+
     /// Adds an empty graphics layer on top; returns its id.
     pub fn add_graphics(&mut self, name: &str) -> u32 {
         let id = self.next_id();

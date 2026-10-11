@@ -18,3 +18,4 @@ shapefile = { workspace = true }
 tiff = { workspace = true }
 proj4rs = { workspace = true }
 crs-definitions = { workspace = true }
+miniz_oxide = { workspace = true }

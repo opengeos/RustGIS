@@ -83,6 +83,11 @@ pub struct Rendered {
     pub unplaced: Vec<PlacedLabel>,
 }
 
+/// Decodes PNG bytes into a pixmap.
+pub fn decode_png(png: &[u8]) -> Option<Pixmap> {
+    Pixmap::decode_png(png).ok()
+}
+
 /// The pixel size of a base64 PNG or JPEG picture, `None` when it can't be decoded.
 pub fn picture_size(b64: &str) -> Option<(u32, u32)> {
     picture::size(b64)

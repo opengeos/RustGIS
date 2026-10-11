@@ -47,6 +47,19 @@ pub fn map_png(s: &mut Session, width: Option<f64>, height: Option<f64>, dpi: Op
     rustgis_render::render_png(s.map_mut(), &view)
 }
 
+/// The map view on one PDF page (for printing): the page is the view's shape at 96 points per
+/// inch of screen, rendered at `dpi`.
+pub fn map_pdf(s: &mut Session, dpi: f64) -> Result<Vec<u8>, String> {
+    let (vw, vh) = s.view_size;
+    let ppp = (dpi / 96.0).clamp(0.5, 6.0);
+    let view =
+        View { width: vw.clamp(16.0, 8000.0), height: vh.clamp(16.0, 8000.0), pixels_per_point: ppp, camera: s.map().camera, dark: false };
+    let png = rustgis_render::render_png(s.map_mut(), &view)?;
+    let pm = rustgis_render::decode_png(&png).ok_or("could not draw the map")?;
+    let mm = |pt: f64| pt * 25.4 / 96.0;
+    Ok(rustgis_render::pdf::write(&[rustgis_render::pdf::Page::new(&pm, mm(view.width), mm(view.height))], &s.map().name))
+}
+
 fn export_map(s: &mut Session, p: &Value) -> CmdResult {
     let path = ps(p, "path").ok_or("path is required")?.to_string();
     let png = map_png(s, f(p, "width"), f(p, "height"), f(p, "dpi"))?;

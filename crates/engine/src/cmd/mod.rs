@@ -4,6 +4,7 @@ pub mod clipboard;
 pub mod edit;
 pub mod gp;
 pub mod graphics;
+pub mod items;
 pub mod labels;
 pub mod layer;
 pub mod layout;
@@ -29,6 +30,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(labels::commands());
     v.extend(graphics::commands());
     v.extend(layout::commands());
+    v.extend(items::commands());
     v.extend(gp::commands());
     v.extend(share::commands());
     v

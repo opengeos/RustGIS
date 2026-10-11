@@ -45,7 +45,8 @@ fn run(s: &mut Session, id: &str, p: Value) -> Result<Value, String> {
 }
 
 fn is_project(path: &str) -> bool {
-    path.to_ascii_lowercase().ends_with(".rgisx")
+    let p = path.to_ascii_lowercase();
+    p.ends_with(".rgisx") || p.ends_with(".rgispkg")
 }
 
 fn num(args: &[String], name: &str) -> Option<f64> {

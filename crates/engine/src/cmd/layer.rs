@@ -247,8 +247,37 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::raster::is_raster_name(path) {
         return super::raster::add_path(s, path, ps(p, "name").map(str::trim).filter(|n| !n.is_empty()));
     }
+    if path.to_ascii_lowercase().ends_with(".rgislyr") {
+        return add_layer_file(s, path);
+    }
     let read = rustgis_data::io::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
     add_read(s, p, read)
+}
+
+/// Adds a layer file: a layer with its data, symbology and labels.
+fn add_layer_file(s: &mut Session, path: &str) -> CmdResult {
+    let len = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?.len();
+    if len > 512 << 20 {
+        return Err("the layer file is too large".into());
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    add_layer_text(s, &text)
+}
+
+/// Adds a layer from a layer file's JSON.
+pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
+    let mut layer: rustgis_map::Layer = serde_json::from_str(text).map_err(|e| format!("not a RustGIS layer file: {e}"))?;
+    // A fresh id and a unique name in this map; the rest goes through project repair.
+    let base = layer.name.clone();
+    let mut i = 1;
+    while s.map().layer_by_name(&layer.name).is_some() {
+        i += 1;
+        layer.name = format!("{base} ({i})");
+    }
+    let id = s.map_mut().add_layer(layer);
+    s.project.normalize();
+    s.active_layer = Some(id);
+    Ok(json!({"layer": id}))
 }
 
 pub(crate) fn add_data_text(s: &mut Session, p: &Value) -> CmdResult {

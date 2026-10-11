@@ -1,0 +1,674 @@
+//! Project items: folder connections, map and layer files, styles, project templates, packages,
+//! layer templates, tasks, and 3D export (Insert › Project, Layer Templates and Styles; Share ›
+//! Package, Save As and Output).
+
+use std::path::Path;
+
+use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType};
+use rustgis_map::{Layer, Map};
+use serde_json::{Value, json};
+
+use super::{b, f, need_feature_layer, need_layer, ps};
+use crate::project::{StyleItem, Task, TaskStep};
+use crate::{CmdResult, CommandSpec as C, Project, Session};
+
+/// Largest item file read (512 MiB, like projects).
+const MAX_FILE: u64 = 512 << 20;
+
+pub fn commands() -> Vec<C> {
+    vec![
+        // Folder connections.
+        C::new("project.addFolder", "Add Folder", "Insert › Project", |s, p| {
+            let path = ps(p, "path").map(str::trim).filter(|p| !p.is_empty()).ok_or("path is required")?;
+            if !cfg!(target_arch = "wasm32") && !Path::new(path).is_dir() {
+                return Err(format!("{path} isn't a folder"));
+            }
+            if !s.project.folders.iter().any(|f| f == path) {
+                s.project.folders.push(path.to_string());
+            }
+            Ok(json!({"folders": s.project.folders}))
+        })
+        .params(r#"{"path": folder}"#),
+        C::new("project.removeFolder", "Remove Folder", "Catalog", |s, p| {
+            let path = ps(p, "path").ok_or("path is required")?;
+            let before = s.project.folders.len();
+            s.project.folders.retain(|f| f != path);
+            if s.project.folders.len() == before { Err(format!("{path} isn't connected")) } else { Ok(Value::Null) }
+        })
+        .params(r#"{"path": folder}"#),
+        C::new("project.connections", "Connections", "Insert › Project", |s, _| {
+            let folders: Vec<Value> = s.project.folders.iter().map(|f| json!({"path": f, "available": Path::new(f).is_dir()})).collect();
+            Ok(json!({
+                "folders": folders,
+                "maps": s.project.maps.iter().map(|m| m.name.clone()).collect::<Vec<_>>(),
+                "layouts": s.project.layouts.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
+                "tables": s.project.tables.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+                "styles": s.project.styles.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+                "tasks": s.project.tasks.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+            }))
+        })
+        .view(),
+        // Map and layer files.
+        C::new("map.save", "Save Map File", "Share › Save As", |s, p| save_item(s, "map", p))
+        .view()
+        .params(r#"{"path": "*.rgismap", "map"?: name}"#),
+        C::new("map.import", "Import", "Insert › Project", import_maps).params(r#"{"path": "*.rgismap|*.rgisx|*.rgispkg", "text"?: map file JSON}"#),
+        C::new("layer.save", "Save Layer File", "Share › Save As", |s, p| save_item(s, "layer", p))
+        .view()
+        .when(need_layer)
+        .params(r#"{"layer"?, "path": "*.rgislyr"}"#),
+        C::new("layer.addLayerFile", "Add Layer File", "Map › Layer", |s, p| {
+            let text = read_text(p)?;
+            super::layer::add_layer_text(s, &text)
+        })
+        .params(r#"{"path"?: "*.rgislyr", "text"?: layer file JSON}"#),
+        // Styles.
+        C::new("style.new", "New Style", "Insert › Styles", |s, p| {
+            let id = s.layer_id(p)?;
+            let l = s.map().layer(id).ok_or("no such layer")?;
+            let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(String::from).unwrap_or_else(|| l.name.clone());
+            let item = StyleItem { name: name.clone(), geometry: l.geometry_type(), renderer: l.renderer.clone(), labels: l.labels.clone(), transparency: l.transparency };
+            add_style(s, item);
+            Ok(json!({"style": name}))
+        })
+        .when(need_feature_layer)
+        .params(r#"{"layer"?, "name"?: string}"#),
+        C::new("style.add", "Add Style", "Insert › Styles", |s, p| {
+            let text = read_text(p)?;
+            let items: Vec<StyleItem> = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS style file: {e}"))?;
+            let n = items.len();
+            for it in items.into_iter().take(1000) {
+                add_style(s, it);
+            }
+            Ok(json!({"added": n}))
+        })
+        .params(r#"{"path"?: "*.rgisstyle", "text"?: style file JSON}"#),
+        C::new("style.import", "Import Styles", "Insert › Styles", import_styles).params(r#"{"path"?: "*.rgislyr|*.rgismap|*.rgisx", "text"?: JSON}"#),
+        C::new("style.apply", "Apply Style", "Insert › Styles", |s, p| {
+            let name = ps(p, "name").ok_or("name is required")?;
+            let st = s.project.styles.iter().find(|t| t.name.eq_ignore_ascii_case(name)).cloned().ok_or_else(|| format!("no style '{name}'"))?;
+            let id = s.layer_id(p)?;
+            let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+            if st.geometry != l.geometry_type() {
+                return Err(format!("{name} is a {} style; {} is a {} layer", st.geometry.label(), l.name, l.geometry_type().label()));
+            }
+            l.renderer = st.renderer;
+            let field = l.labels.field.clone();
+            l.labels = st.labels;
+            // The label field stays if the style's isn't in this layer.
+            if l.dataset.field_index(&l.labels.field).is_none() {
+                l.labels.field = field;
+            }
+            l.transparency = st.transparency;
+            Ok(Value::Null)
+        })
+        .when(need_feature_layer)
+        .params(r#"{"layer"?, "name": style}"#),
+        C::new("style.remove", "Delete Style", "Catalog", |s, p| {
+            let name = ps(p, "name").ok_or("name is required")?;
+            let before = s.project.styles.len();
+            s.project.styles.retain(|t| !t.name.eq_ignore_ascii_case(name));
+            if s.project.styles.len() == before { Err(format!("no style '{name}'")) } else { Ok(Value::Null) }
+        })
+        .params(r#"{"name": style}"#),
+        C::new("style.save", "Save Style Items", "Share › Save As", |s, p| save_item(s, "styles", p))
+        .view()
+        .params(r#"{"path": "*.rgisstyle"}"#),
+        // Project templates.
+        C::new("project.saveTemplate", "Save Project Template", "Share › Save As", |s, p| save_item(s, "template", p))
+        .view()
+        .params(r#"{"path": "*.rgistemplate"}"#),
+        C::new("project.newTemplate", "New Custom Template", "Insert › Project", |s, p| save_item(s, "template", p))
+        .view()
+        .params(r#"{"path": "*.rgistemplate", "name"?: template name}"#),
+        C::new("project.fromTemplate", "Open Custom Template", "Insert › Project", |s, p| {
+            let text = read_text(p)?;
+            let mut proj = Project::from_json(&text).map_err(|e| e.replace("RustGIS project", "RustGIS template"))?;
+            proj.name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Untitled").chars().take(200).collect();
+            super::project::reset_to(s, proj);
+            s.path = None;
+            Ok(Value::Null)
+        })
+        .view()
+        .params(r#"{"path"?: "*.rgistemplate", "text"?: template JSON, "name"?: new project name}"#),
+        // Packages.
+        C::new("project.package", "Package Project", "Share › Package", |s, p| save_item(s, "projectPackage", p))
+        .view()
+        .params(r#"{"path": "*.rgispkg"}"#),
+        C::new("map.package", "Package Map", "Share › Package", |s, p| save_item(s, if b(p, "mobile").unwrap_or(false) { "mobilePackage" } else { "mapPackage" }, p))
+        .view()
+        .params(r#"{"path": "*.rgismpk", "mobile"?: bool (simplify geometry and drop hidden layers, for phones and tablets), "tolerance"?: degrees}"#),
+        C::new("gp.package", "Package Results", "Share › Package", |s, p| save_item(s, "gpPackage", p))
+        .view()
+        .params(r#"{"path": "*.rgisgpk"}"#),
+        // Layer templates.
+        C::new("layer.template", "Layer Template", "Insert › Layer Templates", layer_template)
+            .params(r#"{"template": "points"|"lines"|"polygons"|"places"|"routes"|"areas"|"observations", "name"?: string}"#),
+        // Tasks.
+        C::new("task.new", "New Task", "Insert › Project", |s, p| {
+            let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Task");
+            let steps: Vec<TaskStep> = match p.get("steps") {
+                Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("steps: {e}"))?,
+                // A task can replay the geoprocessing history, one step per successful run.
+                None if b(p, "fromHistory").unwrap_or(false) => s
+                    .project
+                    .gp_history
+                    .iter()
+                    .filter(|r| r.ok)
+                    .map(|r| TaskStep { title: r.tool.clone(), instructions: r.messages.first().cloned().unwrap_or_default(), command: "gp.run".into(), params: json!({"tool": r.tool, "params": r.params}) })
+                    .collect(),
+                None => Vec::new(),
+            };
+            for st in &steps {
+                if s.registry.get(&st.command).is_none() {
+                    return Err(format!("step '{}' runs an unknown command '{}'", st.title, st.command));
+                }
+            }
+            let mut name = name.chars().take(200).collect::<String>();
+            let base = name.clone();
+            let mut i = 1;
+            while s.project.tasks.iter().any(|t| t.name.eq_ignore_ascii_case(&name)) {
+                i += 1;
+                name = format!("{base} {i}");
+            }
+            s.project.tasks.push(Task { name: name.clone(), description: ps(p, "description").unwrap_or("").chars().take(2000).collect(), steps: steps.into_iter().take(200).collect() });
+            Ok(json!({"task": name}))
+        })
+        .params(r#"{"name"?: string, "description"?: string, "steps"?: [{"title", "instructions"?, "command": id, "params"?: {}}], "fromHistory"?: bool (one step per geoprocessing run)}"#),
+        C::new("task.addStep", "Add Task Step", "Tasks", |s, p| {
+            let step: TaskStep = serde_json::from_value(p.clone()).map_err(|e| format!("a step needs a title and a command: {e}"))?;
+            if s.registry.get(&step.command).is_none() || step.command.starts_with("task.") {
+                return Err(format!("'{}' can't be a task step", step.command));
+            }
+            let t = task_mut(s, p)?;
+            if t.steps.len() >= 200 {
+                return Err("a task has at most 200 steps".into());
+            }
+            t.steps.push(step);
+            Ok(json!({"steps": t.steps.len()}))
+        })
+        .params(r#"{"task"?: name, "title": string, "instructions"?: string, "command": id, "params"?: {}}"#),
+        C::new("task.run", "Run Task", "Tasks", run_task).params(r#"{"task"?: name, "step"?: number (one step; all when omitted)}"#),
+        C::new("task.remove", "Delete Task", "Tasks", |s, p| {
+            let name = ps(p, "task").ok_or("task is required")?;
+            let before = s.project.tasks.len();
+            s.project.tasks.retain(|t| !t.name.eq_ignore_ascii_case(name));
+            if s.project.tasks.len() == before { Err(format!("no task '{name}'")) } else { Ok(Value::Null) }
+        })
+        .params(r#"{"task": name}"#),
+        C::new("task.save", "Save Task Item", "Share › Save As", |s, p| save_item(s, "task", p))
+        .view()
+        .params(r#"{"task"?: name, "path": "*.rgistask"}"#),
+        C::new("task.import", "Import Task", "Insert › Project", |s, p| {
+            let text = read_text(p)?;
+            let t: Task = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS task: {e}"))?;
+            let steps = serde_json::to_value(&t.steps).map_err(|e| e.to_string())?;
+            s.run("task.new", &json!({"name": t.name, "description": t.description, "steps": steps}))
+        })
+        .params(r#"{"path"?: "*.rgistask", "text"?: task JSON}"#),
+        // 3D export.
+        C::new("share.export3d", "Export To 3D File", "Share › Output", export_3d)
+            .view()
+            .when(need_feature_layer)
+            .params(r#"{"layer"?, "path": "*.obj", "heightField"?: field (extrusion height in metres), "height"?: metres, "zScale"?: number}"#),
+    ]
+}
+
+fn to_json<T: serde::Serialize>(v: &T) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(v).map_err(|e| e.to_string())
+}
+
+/// The JSON of an item from `text`, or the file at `path`.
+fn read_text(p: &Value) -> Result<String, String> {
+    if let Some(d) = ps(p, "data") {
+        use base64::Engine;
+        if d.len() as u64 > MAX_FILE / 3 * 4 {
+            return Err("the file is too large".into());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(d.trim()).map_err(|_| "data must be base64".to_string())?;
+        if bytes.starts_with(b"PK") {
+            return package_text(&bytes);
+        }
+        return String::from_utf8(bytes).map_err(|_| "not a RustGIS file".to_string());
+    }
+    match (ps(p, "text"), ps(p, "path")) {
+        (Some(t), _) if t.len() as u64 <= MAX_FILE => Ok(t.to_string()),
+        (Some(_), _) => Err("the file is too large".into()),
+        (None, Some(path)) => {
+            let len = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?.len();
+            if len > MAX_FILE {
+                return Err("the file is too large".into());
+            }
+            let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+            // Packages are zip archives holding the project.
+            if bytes.starts_with(b"PK") {
+                return package_text(&bytes);
+            }
+            String::from_utf8(bytes).map_err(|_| format!("{path} isn't a RustGIS file"))
+        }
+        (None, None) => Err("path or text is required".into()),
+    }
+}
+
+/// The project JSON inside a package.
+pub fn package_text(bytes: &[u8]) -> Result<String, String> {
+    let entries = rustgis_data::zip::read(bytes)?;
+    let (_, data) =
+        entries.into_iter().find(|(n, _)| n.ends_with(".rgisx") || n.ends_with(".rgismap")).ok_or("the package holds no project or map")?;
+    String::from_utf8(data).map_err(|_| "the package's project is damaged".to_string())
+}
+
+/// A raster layer with its file embedded (so the copy stands alone).
+fn embed_layer(mut l: Layer) -> Layer {
+    if let Some(rl) = &mut l.raster
+        && rl.embedded.is_none()
+        && let Some(path) = rl.path.clone()
+        && let Ok(bytes) = std::fs::read(&path)
+    {
+        rl.file_name = Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string());
+        rl.embedded = Some(std::sync::Arc::new(bytes));
+        rl.path = None;
+    }
+    l
+}
+
+fn embedded_map(m: &Map) -> Map {
+    let mut m = m.clone();
+    m.layers = m.layers.into_iter().map(embed_layer).collect();
+    m
+}
+
+/// Adds maps from a map file, project or package.
+fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
+    let text = read_text(p)?;
+    let maps: Vec<Map> = match serde_json::from_str::<Map>(&text) {
+        Ok(m) => vec![m],
+        Err(_) => Project::from_json(&text).map_err(|_| "not a RustGIS map file, project or package".to_string())?.maps,
+    };
+    let mut names = Vec::new();
+    for mut m in maps.into_iter().take(100) {
+        let base = m.name.clone();
+        let mut i = 1;
+        while s.project.maps.iter().any(|o| o.name.eq_ignore_ascii_case(&m.name)) {
+            i += 1;
+            m.name = format!("{base} ({i})");
+        }
+        names.push(m.name.clone());
+        s.project.maps.push(m);
+    }
+    // Repair what was read (rasters reopen, cameras clamp).
+    s.project.normalize();
+    if let Some(n) = names.last()
+        && let Some(i) = s.project.maps.iter().position(|m| &m.name == n)
+    {
+        s.project.active_map = i;
+        s.active_layer = s.map().layers.first().map(|l| l.id);
+    }
+    Ok(json!({"maps": names}))
+}
+
+fn add_style(s: &mut Session, mut item: StyleItem) {
+    item.name = item.name.trim().chars().take(200).collect();
+    if item.name.is_empty() {
+        item.name = "Style".into();
+    }
+    s.project.styles.retain(|t| !t.name.eq_ignore_ascii_case(&item.name));
+    s.project.styles.push(item);
+}
+
+/// Styles from every feature layer of a layer file, map file or project.
+fn import_styles(s: &mut Session, p: &Value) -> CmdResult {
+    let text = read_text(p)?;
+    let layers: Vec<Layer> = if let Ok(l) = serde_json::from_str::<Layer>(&text) {
+        vec![l]
+    } else if let Ok(m) = serde_json::from_str::<Map>(&text) {
+        m.layers
+    } else {
+        Project::from_json(&text)
+            .map_err(|_| "not a RustGIS layer file, map file or project".to_string())?
+            .maps
+            .into_iter()
+            .flat_map(|m| m.layers)
+            .collect()
+    };
+    let mut n = 0;
+    for l in layers.into_iter().filter(|l| !l.is_raster() && l.geometry_type() != GeometryType::None).take(1000) {
+        add_style(
+            s,
+            StyleItem {
+                name: l.name.clone(),
+                geometry: l.geometry_type(),
+                renderer: l.renderer,
+                labels: l.labels,
+                transparency: l.transparency,
+            },
+        );
+        n += 1;
+    }
+    if n == 0 {
+        return Err("no feature layers to take styles from".into());
+    }
+    Ok(json!({"imported": n}))
+}
+
+/// The project without its features (layer schemas, symbology, layouts and styles stay).
+fn template(p: &Project) -> Project {
+    let mut t = p.clone();
+    t.gp_history.clear();
+    for m in &mut t.maps {
+        for l in &mut m.layers {
+            l.dataset.features.clear();
+            l.selection.clear();
+            l.dataset.source = None;
+            if let Some(rl) = &mut l.raster {
+                rl.embedded = None;
+            }
+        }
+        m.layers.retain(|l| !l.is_raster() || l.raster.as_ref().is_some_and(|r| r.path.is_some()));
+    }
+    for t in &mut t.tables {
+        t.features.clear();
+    }
+    t
+}
+
+fn package_project(s: &Session) -> Result<Vec<u8>, String> {
+    let mut p = s.project.clone();
+    for m in &mut p.maps {
+        *m = embedded_map(m);
+    }
+    let text = serde_json::to_string(&p).map_err(|e| e.to_string())?;
+    let readme =
+        format!("{} — a RustGIS project package.\nOpen it with RustGIS (Project › Open), or unzip it for {}.rgisx.\n", p.name, p.name);
+    Ok(rustgis_data::zip::write(&[(format!("{}.rgisx", safe(&p.name)), text.into_bytes()), ("README.txt".into(), readme.into_bytes())]))
+}
+
+fn safe(name: &str) -> String {
+    let s: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') { c } else { '_' }).collect();
+    if s.trim().is_empty() { "project".into() } else { s }
+}
+
+/// A package of the active map; `mobile` drops hidden layers and simplifies geometry.
+fn package_map(s: &Session, mobile: bool, tol: f64) -> Result<Vec<u8>, String> {
+    let mut m = embedded_map(s.map());
+    if mobile {
+        m.layers.retain(|l| l.visible);
+        for l in &mut m.layers {
+            if l.is_raster() || tol <= 0.0 {
+                continue;
+            }
+            for f in &mut l.dataset.features {
+                if let Some(g) = &f.geometry {
+                    f.geometry = Some(rustgis_analysis::simplify_geometry(g, tol * 111_320.0));
+                }
+            }
+            l.touch_geometry();
+        }
+    }
+    let text = serde_json::to_string(&m).map_err(|e| e.to_string())?;
+    let kind = if mobile { "mobile map package" } else { "map package" };
+    let readme = format!("{} — a RustGIS {kind}.\nAdd it to a project with Insert › Import.\n", m.name);
+    Ok(rustgis_data::zip::write(&[(format!("{}.rgismap", safe(&m.name)), text.into_bytes()), ("README.txt".into(), readme.into_bytes())]))
+}
+
+/// The geoprocessing history with the layers its runs made, as GeoJSON.
+fn package_gp(s: &Session) -> Result<Vec<u8>, String> {
+    if s.project.gp_history.is_empty() {
+        return Err("no geoprocessing has been run yet".into());
+    }
+    let mut entries = vec![("history.json".to_string(), serde_json::to_vec_pretty(&s.project.gp_history).map_err(|e| e.to_string())?)];
+    let mut seen = std::collections::HashSet::new();
+    for rec in s.project.gp_history.iter().filter(|r| r.ok) {
+        for name in &rec.outputs {
+            for l in s.project.maps.iter().flat_map(|m| &m.layers).filter(|l| !l.is_raster() && l.name == *name) {
+                if seen.insert(l.name.clone()) {
+                    entries.push((
+                        format!("results/{}.geojson", safe(&l.name)),
+                        rustgis_data::io::to_geojson(&l.dataset).to_string().into_bytes(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(rustgis_data::zip::write(&entries))
+}
+
+fn layer_template(s: &mut Session, p: &Value) -> CmdResult {
+    let t = ps(p, "template").ok_or("template is required")?;
+    let text = |n: &str| Field::new(n, FieldType::Text);
+    let (gt, title, fields) = match t {
+        "points" => (GeometryType::Point, "Points", vec![text("name"), text("notes")]),
+        "lines" => (GeometryType::Polyline, "Lines", vec![text("name"), text("notes")]),
+        "polygons" => (GeometryType::Polygon, "Polygons", vec![text("name"), text("notes")]),
+        "places" => {
+            (GeometryType::Point, "Places", vec![text("name"), text("category"), text("address"), Field::new("rating", FieldType::Double)])
+        }
+        "routes" => (GeometryType::Polyline, "Routes", vec![text("name"), text("surface"), Field::new("length_km", FieldType::Double)]),
+        "areas" => (GeometryType::Polygon, "Areas", vec![text("name"), text("land_use"), Field::new("area_km2", FieldType::Double)]),
+        "observations" => (
+            GeometryType::Point,
+            "Observations",
+            vec![text("observer"), text("date"), text("species"), Field::new("count", FieldType::Integer)],
+        ),
+        o => return Err(format!("unknown layer template '{o}'")),
+    };
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(title);
+    let id = super::layer::add_dataset(s, Dataset::new(name, gt, fields));
+    if let Some(l) = s.map_mut().layer_mut(id) {
+        l.labels.field = "name".into();
+    }
+    Ok(json!({"layer": id}))
+}
+
+fn task_ref<'a>(s: &'a Session, p: &Value) -> Result<&'a Task, String> {
+    match ps(p, "task") {
+        Some(n) => s.project.tasks.iter().find(|t| t.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no task '{n}'")),
+        None => s.project.tasks.last().ok_or_else(|| "the project has no tasks".to_string()),
+    }
+}
+
+fn task_mut<'a>(s: &'a mut Session, p: &Value) -> Result<&'a mut Task, String> {
+    match ps(p, "task") {
+        Some(n) => s.project.tasks.iter_mut().find(|t| t.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no task '{n}'")),
+        None => s.project.tasks.last_mut().ok_or_else(|| "the project has no tasks".to_string()),
+    }
+}
+
+/// Runs a task's steps (or one of them), stopping at the first that fails.
+fn run_task(s: &mut Session, p: &Value) -> CmdResult {
+    let t = task_ref(s, p)?.clone();
+    let steps: Vec<(usize, TaskStep)> = match p.get("step").and_then(Value::as_u64) {
+        Some(i) => vec![(i as usize, t.steps.get(i as usize).cloned().ok_or_else(|| format!("{} has {} steps", t.name, t.steps.len()))?)],
+        None => t.steps.iter().cloned().enumerate().collect(),
+    };
+    let mut done = Vec::new();
+    for (i, st) in steps {
+        if st.command.starts_with("task.") {
+            return Err(format!("step {} would run another task", i + 1));
+        }
+        let spec = s.registry.get(&st.command).ok_or_else(|| format!("step {} runs an unknown command '{}'", i + 1, st.command))?;
+        let (run, enabled) = (spec.run, spec.enabled);
+        if let Some(why) = enabled(s) {
+            return Err(format!("step {} ({}): {why}", i + 1, st.title));
+        }
+        let r = run(s, &st.params).map_err(|e| format!("step {} ({}): {e}", i + 1, st.title))?;
+        done.push(json!({"step": i, "title": st.title, "result": r}));
+    }
+    Ok(json!({"task": t.name, "ran": done}))
+}
+
+/// Writes a layer as a Wavefront OBJ: polygons extruded to a height, lines as polylines, points as
+/// small cubes. Coordinates are metres east and north of the layer's south-west corner.
+fn export_3d(s: &mut Session, p: &Value) -> CmdResult {
+    let path = ps(p, "path").ok_or("path is required")?.to_string();
+    let obj = obj_text(s, p)?;
+    rustgis_data::io::write_atomic(Path::new(&path), obj.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
+    s.notify(format!("Exported {path}"), false);
+    Ok(json!({"path": path, "bytes": obj.len()}))
+}
+
+/// A feature layer as Wavefront OBJ text.
+fn obj_text(s: &Session, p: &Value) -> Result<String, String> {
+    let id = s.layer_id(p)?;
+    let l = s.map().layer(id).ok_or("no such layer")?;
+    let hf = ps(p, "heightField").map(|n| l.dataset.field_index(n).ok_or_else(|| format!("no field '{n}'"))).transpose()?;
+    let base_h = f(p, "height").unwrap_or(1000.0).clamp(0.0, 1e7);
+    let zs = f(p, "zScale").unwrap_or(1.0).clamp(0.0, 1e6);
+    let e = l.extent();
+    if e.is_empty() {
+        return Err("the layer has no geometry".into());
+    }
+    let origin = rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(e.min_x, e.min_y));
+    // Web Mercator stretches distances by 1/cos(latitude); shrink back at the layer's centre.
+    let k = e.center().y.to_radians().cos().abs().max(0.01);
+    let xy = |c: rustgis_geom::Coord| {
+        let m = rustgis_geom::lonlat_to_merc(c);
+        ((m.x - origin.x) * k, (m.y - origin.y) * k)
+    };
+    let mut obj = format!("# {} exported by RustGIS\no {}\n", l.name, l.name.replace(char::is_whitespace, "_"));
+    let mut v = 0usize; // vertices written
+    let rows = l.visible_rows();
+    for (row, ft) in l.dataset.features.iter().enumerate() {
+        if rows.get(row) != Some(&true) {
+            continue;
+        }
+        let h = hf.and_then(|fi| l.dataset.value(row, fi).as_f64()).filter(|h| h.is_finite()).unwrap_or(base_h) * zs;
+        match &ft.geometry {
+            Some(Geometry::Polygon(polys)) => {
+                for rings in polys {
+                    let Some(outer) = rings.first() else { continue };
+                    let ring: Vec<(f64, f64)> = outer.iter().take(outer.len().saturating_sub(1)).map(|c| xy(*c)).collect();
+                    let n = ring.len();
+                    if n < 3 {
+                        continue;
+                    }
+                    for (x, y) in &ring {
+                        obj.push_str(&format!("v {x:.2} {:.2} {:.2}\n", 0.0, -y));
+                    }
+                    for (x, y) in &ring {
+                        obj.push_str(&format!("v {x:.2} {h:.2} {:.2}\n", -y));
+                    }
+                    // Walls, then the top and bottom caps as polygons (OBJ allows n-gons).
+                    for i in 0..n {
+                        let j = (i + 1) % n;
+                        obj.push_str(&format!("f {} {} {} {}\n", v + i + 1, v + j + 1, v + n + j + 1, v + n + i + 1));
+                    }
+                    obj.push_str(&format!("f {}\n", (0..n).map(|i| (v + n + i + 1).to_string()).collect::<Vec<_>>().join(" ")));
+                    obj.push_str(&format!("f {}\n", (0..n).rev().map(|i| (v + i + 1).to_string()).collect::<Vec<_>>().join(" ")));
+                    v += 2 * n;
+                }
+            }
+            Some(Geometry::Line(parts)) => {
+                for part in parts {
+                    let n = part.len();
+                    if n < 2 {
+                        continue;
+                    }
+                    for c in part {
+                        let (x, y) = xy(*c);
+                        obj.push_str(&format!("v {x:.2} {h:.2} {:.2}\n", -y));
+                    }
+                    obj.push_str(&format!("l {}\n", (0..n).map(|i| (v + i + 1).to_string()).collect::<Vec<_>>().join(" ")));
+                    v += n;
+                }
+            }
+            Some(g @ (Geometry::Point(_) | Geometry::MultiPoint(_))) => {
+                let pts: Vec<rustgis_geom::Coord> = match g {
+                    Geometry::Point(c) => vec![*c],
+                    Geometry::MultiPoint(c) => c.clone(),
+                    _ => Vec::new(),
+                };
+                let r = (base_h * 0.05).max(1.0);
+                for c in pts {
+                    let (x, y) = xy(c);
+                    for (dx, dz) in [(-r, -r), (r, -r), (r, r), (-r, r)] {
+                        obj.push_str(&format!("v {:.2} 0 {:.2}\n", x + dx, -y + dz));
+                    }
+                    for (dx, dz) in [(-r, -r), (r, -r), (r, r), (-r, r)] {
+                        obj.push_str(&format!("v {:.2} {h:.2} {:.2}\n", x + dx, -y + dz));
+                    }
+                    for (a, b2, c2, d) in [(1, 2, 6, 5), (2, 3, 7, 6), (3, 4, 8, 7), (4, 1, 5, 8), (5, 6, 7, 8), (4, 3, 2, 1)] {
+                        obj.push_str(&format!("f {} {} {} {}\n", v + a, v + b2, v + c2, v + d));
+                    }
+                    v += 8;
+                }
+            }
+            None => {}
+        }
+    }
+    if v == 0 {
+        return Err("nothing to export".into());
+    }
+    Ok(obj)
+}
+
+/// The kinds of item [`item_bytes`] writes: (kind, extension, label).
+pub const ITEMS: &[(&str, &str, &str)] = &[
+    ("map", "rgismap", "RustGIS map file"),
+    ("layer", "rgislyr", "RustGIS layer file"),
+    ("styles", "rgisstyle", "RustGIS styles"),
+    ("template", "rgistemplate", "RustGIS project template"),
+    ("projectPackage", "rgispkg", "RustGIS project package"),
+    ("mapPackage", "rgismpk", "RustGIS map package"),
+    ("mobilePackage", "rgismpk", "RustGIS mobile map package"),
+    ("gpPackage", "rgisgpk", "RustGIS results package"),
+    ("task", "rgistask", "RustGIS task"),
+    ("obj", "obj", "Wavefront OBJ"),
+];
+
+/// An item as file bytes, with a suggested file name.
+pub fn item_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec<u8>), String> {
+    let (name, bytes) = match kind {
+        "map" => {
+            let map = match ps(p, "map") {
+                Some(n) => s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no map '{n}'"))?,
+                None => s.map(),
+            };
+            (map.name.clone(), to_json(&embedded_map(map))?)
+        }
+        "layer" => {
+            let id = s.layer_id(p)?;
+            let l = s.map().layer(id).ok_or("no such layer")?.clone();
+            (l.name.clone(), to_json(&embed_layer(l))?)
+        }
+        "styles" => {
+            if s.project.styles.is_empty() {
+                return Err("the project has no styles; make one with New Style".into());
+            }
+            ("styles".to_string(), to_json(&s.project.styles)?)
+        }
+        "template" => {
+            let mut t = template(&s.project);
+            if let Some(n) = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
+                t.name = n.chars().take(200).collect();
+            }
+            (t.name.clone(), to_json(&t)?)
+        }
+        "projectPackage" => (s.project.name.clone(), package_project(s)?),
+        "mapPackage" | "mobilePackage" => {
+            let tol = f(p, "tolerance").unwrap_or(0.001).clamp(0.0, 1.0);
+            (s.map().name.clone(), package_map(s, kind == "mobilePackage", tol)?)
+        }
+        "gpPackage" => ("results".to_string(), package_gp(s)?),
+        "task" => {
+            let t = task_ref(s, p)?;
+            (t.name.clone(), to_json(t)?)
+        }
+        "obj" => {
+            let id = s.layer_id(p)?;
+            let name = s.map().layer(id).map(|l| l.name.clone()).unwrap_or_default();
+            (name, obj_text(s, p)?.into_bytes())
+        }
+        k => return Err(format!("unknown item '{k}'")),
+    };
+    let ext = ITEMS.iter().find(|i| i.0 == kind).map_or("json", |i| i.1);
+    Ok((format!("{}.{ext}", safe(&name)), bytes))
+}
+
+/// Writes an item to `path`.
+fn save_item(s: &mut Session, kind: &str, p: &Value) -> CmdResult {
+    let path = ps(p, "path").ok_or("path is required")?.to_string();
+    let (_, bytes) = item_bytes(s, kind, p)?;
+    rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
+    Ok(json!({"path": path, "bytes": bytes.len()}))
+}
