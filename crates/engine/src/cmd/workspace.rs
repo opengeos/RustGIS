@@ -211,7 +211,7 @@ pub fn commands() -> Vec<C> {
             let a =
                 s.project.offline_areas.iter().find(|a| a.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no offline area '{n}'"))?;
             let map_name = format!("{} (offline)", a.name);
-            if let Some(i) = s.project.maps.iter().position(|m| m.name == map_name) {
+            if let Some(i) = s.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(&map_name)) {
                 s.project.active_map = i;
             } else {
                 let mut m = a.data.clone();
@@ -392,7 +392,7 @@ fn animation_zip(s: &mut Session, p: &Value) -> Result<Vec<u8>, String> {
         Ok(())
     };
     let mut result = Ok(());
-    for pair in keys.windows(2) {
+    'frames: for pair in keys.windows(2) {
         let [a, b2] = pair else { continue };
         let steps = (b2.seconds * fps).round().max(1.0) as usize;
         for i in 0..steps {
@@ -403,7 +403,7 @@ fn animation_zip(s: &mut Session, p: &Value) -> Result<Vec<u8>, String> {
             let sc = (a.scale.max(1.0).ln() + (b2.scale.max(1.0).ln() - a.scale.max(1.0).ln()) * e).exp();
             if let Err(e) = render(s, c, sc) {
                 result = Err(e);
-                break;
+                break 'frames;
             }
         }
     }
@@ -530,7 +530,12 @@ fn offline_download(s: &mut Session, p: &Value) -> CmdResult {
         ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(String::from).unwrap_or_else(|| format!("{} offline", s.map().name));
     let mut name = base.clone();
     let mut i = 1;
-    while s.project.offline_areas.iter().any(|a| a.name.eq_ignore_ascii_case(&name)) {
+    // Unique among areas, and its offline map's name ("<area> (offline)") unused by other maps.
+    let taken = |s: &Session, n: &str| {
+        s.project.offline_areas.iter().any(|a| a.name.eq_ignore_ascii_case(n))
+            || s.project.maps.iter().any(|m| m.name.eq_ignore_ascii_case(&format!("{n} (offline)")))
+    };
+    while taken(s, &name) {
         i += 1;
         name = format!("{base} {i}");
     }
@@ -549,7 +554,7 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
     let ai = s.project.offline_areas.iter().position(|a| a.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no offline area '{n}'"))?;
     let area = s.project.offline_areas.get(ai).cloned().ok_or("no such area")?;
     let offline_map = format!("{} (offline)", area.name);
-    let edited = s.project.maps.iter().find(|m| m.name == offline_map).cloned().unwrap_or_else(|| area.data.clone());
+    let edited = s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(&offline_map)).cloned().unwrap_or_else(|| area.data.clone());
     let si = s
         .project
         .maps
@@ -606,7 +611,7 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
         }
     }
     let fresh = s.project.maps.get(si).map(|m| snapshot(m, &area.extent)).ok_or("the source map is gone")?;
-    if let Some(m) = s.project.maps.iter_mut().find(|m| m.name == offline_map) {
+    if let Some(m) = s.project.maps.iter_mut().find(|m| m.name.eq_ignore_ascii_case(&offline_map)) {
         let name = m.name.clone();
         *m = fresh.clone();
         m.name = name;
