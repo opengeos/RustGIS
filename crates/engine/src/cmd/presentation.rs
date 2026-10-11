@@ -384,11 +384,12 @@ pub fn export_bytes(s: &mut Session, i: usize, format: &str, dpi: f64) -> Result
             let png = base64::engine::general_purpose::STANDARD.encode(img.encode_png().map_err(|e| e.to_string())?);
             held += png.len();
             let body = match &page.kind {
-                PageKind::Video { source, caption, .. } => format!(
-                    "<h2>{}</h2><video controls preload=\"metadata\" poster=\"data:image/png;base64,{png}\" src=\"{}\"></video><p>{}</p>",
+                // The poster is the drawn page, which already shows the title and caption. The
+                // source is played as given (a file next to the slideshow or a web address).
+                PageKind::Video { source, .. } => format!(
+                    "<video controls preload=\"metadata\" title=\"{}\" poster=\"data:image/png;base64,{png}\" src=\"{}\"></video>",
                     html_escape(&page.title),
-                    html_escape(source),
-                    html_escape(caption)
+                    html_escape(source)
                 ),
                 _ => format!("<img alt=\"{}\" src=\"data:image/png;base64,{png}\">", html_escape(&page.title)),
             };

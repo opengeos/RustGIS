@@ -1713,6 +1713,14 @@ fn reports_group_summarise_relate_export_and_reopen() {
     let doc = crate::cmd::report::build(&s, 1).unwrap();
     assert!(doc.blocks.iter().any(|b| matches!(b, Block::SubRow(_))), "France's cities are listed under it");
     assert!(doc.blocks.iter().filter(|b| matches!(b, Block::Row(_))).count() > n, "the cities report follows");
+    // Moving a report to the other end of its subreport's relationship drops the related fields
+    // the new related layer lacks.
+    s.run("report.new", &json!({"layer": "Countries", "name": "Swap"})).unwrap();
+    s.run("report.subreport", &json!({"relationship": "Country of city", "fields": ["name", "adm0name"]})).unwrap();
+    s.run("report.update", &json!({"layer": "Cities"})).unwrap();
+    let swap = s.project.reports.iter().find(|r| r.name == "Swap").unwrap();
+    assert!(swap.sections.iter().any(|x| matches!(x, rustgis_map::report::Section::Subreport { fields, .. } if fields == &["name"])));
+    s.run("report.remove", &Value::Null).unwrap();
     // Picture paths are read relative to the saved project's folder only.
     let png = {
         let mut pm = tiny_skia::Pixmap::new(4, 4).unwrap();
@@ -1863,5 +1871,12 @@ fn presentations_and_notebooks() {
     s.run("notebook.run", &json!({"notebook": "Analysis", "cell": last})).unwrap();
     assert!(png.exists());
     assert!(s.run("notebook.open", &json!({"text": "{\"cells\": 5}"})).is_err());
+    // Trust left by an undone notebook doesn't pass to a file's notebook of the same name.
+    s.run("notebook.new", &json!({"name": "Notebook"})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    let text = json!({"nbformat": 4, "cells": [{"cell_type": "code", "source": cell}]}).to_string();
+    s.run("notebook.open", &json!({"text": text})).unwrap();
+    let r = s.run("notebook.run", &json!({"notebook": "Notebook"})).unwrap();
+    assert_eq!(r["error"], 0, "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }

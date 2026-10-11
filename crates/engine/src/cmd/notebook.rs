@@ -86,6 +86,8 @@ pub fn commands() -> Vec<C> {
             let mut nb = parse(&text, fallback.as_deref().unwrap_or("Notebook"))?;
             nb.clamp();
             nb.name = unique_name(s, &nb.name);
+            // Trust left over from a removed or undone notebook of this name doesn't carry over.
+            s.trusted_notebooks.remove(&nb.name.to_lowercase());
             push(s, nb)
         })
         .params(r#"{"path"?: "*.rgisnb|*.ipynb", "text"?: notebook JSON}"#),
@@ -268,6 +270,7 @@ fn untrusted_line(script: &str) -> Option<usize> {
             return None;
         }
         let (id, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+        // Malformed params read as none here; `run_script` rejects that line before it runs.
         let params: Value = serde_json::from_str(rest.trim()).unwrap_or(Value::Null);
         super::items::touches_files(id.trim_end_matches('='), &params).then_some(n + 1)
     })

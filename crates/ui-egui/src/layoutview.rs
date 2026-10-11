@@ -35,9 +35,9 @@ pub struct LayoutView {
     /// A frame being drawn: "polygon" (clicked) or "lasso" (dragged), and its points (mm).
     pub tool: Option<&'static str>,
     sketch: Vec<(f64, f64)>,
-    /// Text being typed into the element properties, by (element, field): kept here so
-    /// keystrokes survive the frame, and saved when the field loses focus.
-    typing: std::collections::HashMap<(u32, &'static str), String>,
+    /// Text being typed into the element properties, by (layout, element, field): kept here so
+    /// keystrokes survive the frame, and saved when the field loses focus or stops being shown.
+    typing: std::collections::HashMap<(usize, u32, &'static str), String>,
     /// The layout shown, shared between frames until the project changes (layouts can hold
     /// megabytes of pictures, too much to copy every frame), keyed by layout and revision.
     shown: Option<(usize, u64, std::rc::Rc<Layout>)>,
@@ -118,6 +118,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     if app.layout.selected.is_some_and(|id| layout.element(id).is_none()) {
         app.layout.selected = None;
     }
+    save_drafts(app, li);
     if app.layout.selected.is_some() {
         egui::Panel::right("layout_props")
             .resizable(false)
@@ -379,10 +380,29 @@ fn finish_frame(app: &mut RustGisApp, li: usize, shape: &str) {
     }
 }
 
-/// The selected element's properties.
+/// Saves the text typed into fields that are no longer shown: the selection or the layout changed
+/// before the field could notice it lost focus.
+fn save_drafts(app: &mut RustGisApp, li: usize) {
+    let shown = app.layout.selected.map(|id| (li, id));
+    let stale: Vec<_> = app.layout.typing.keys().filter(|(l, id, _)| Some((*l, *id)) != shown).copied().collect();
+    for key in stale {
+        let Some(text) = app.layout.typing.remove(&key) else { continue };
+        let (l, id, field) = key;
+        let current = app.session.project.layouts.get(l).and_then(|x| x.element(id)).and_then(|e| match (field, &e.kind) {
+            ("name", _) => Some(e.name.clone()),
+            ("text", ElementKind::Text { text, .. }) => Some(text.clone()),
+            ("title", ElementKind::Legend { title, .. }) => Some(title.clone()),
+            _ => None,
+        });
+        if current.is_some_and(|c| c != text) {
+            let _ = app.run("layout.update", json!({"layout": l, "element": id, field: text}));
+        }
+    }
+}
+
 /// A text field whose typing is kept in the view's state while it has focus. Returns the new text
 /// when the field loses focus with a change.
-fn text_field(app: &mut RustGisApp, ui: &mut Ui, key: (u32, &'static str), current: &str, multiline: bool) -> Option<String> {
+fn text_field(app: &mut RustGisApp, ui: &mut Ui, key: (usize, u32, &'static str), current: &str, multiline: bool) -> Option<String> {
     let mut buf = app.layout.typing.remove(&key).unwrap_or_else(|| current.to_string());
     let edit = if multiline {
         egui::TextEdit::multiline(&mut buf).desired_rows(3).desired_width(240.0)
@@ -399,6 +419,7 @@ fn text_field(app: &mut RustGisApp, ui: &mut Ui, key: (u32, &'static str), curre
     None
 }
 
+/// The selected element's properties.
 fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
     let Some(e) = app.layout.selected.and_then(|id| layout.element(id)).cloned() else { return };
     let id = e.id;
@@ -420,7 +441,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
     };
     egui::Grid::new(("layout_props", id)).num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Name"));
-        if let Some(name) = text_field(app, ui, (id, "name"), &e.name, false) {
+        if let Some(name) = text_field(app, ui, (li, id, "name"), &e.name, false) {
             update(app, json!({"name": name}));
         }
         ui.end_row();
@@ -462,14 +483,14 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                 ui.end_row();
                 ui.label(tl!("Text"));
                 ui.end_row();
-                if let Some(tx) = text_field(app, ui, (id, "text"), text, true) {
+                if let Some(tx) = text_field(app, ui, (li, id, "text"), text, true) {
                     update(app, json!({"text": tx}));
                 }
                 ui.end_row();
             }
             ElementKind::Legend { title, .. } => {
                 ui.label(tl!("Title"));
-                if let Some(tt) = text_field(app, ui, (id, "title"), title, false) {
+                if let Some(tt) = text_field(app, ui, (li, id, "title"), title, false) {
                     update(app, json!({"title": tt}));
                 }
                 ui.end_row();

@@ -423,14 +423,30 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         }
         r.layer = l.name.clone();
         // What the new layer lacks is dropped, so the report doesn't show blank columns, and so
-        // are subreports through relationships that don't involve it.
+        // are subreports through relationships that don't involve it. A kept subreport may now
+        // list the other end of its relationship, so its fields are fitted to that layer.
         fit_to_layer(&mut r, &l.dataset);
         let name = l.name.clone();
-        r.sections.retain(|x| match x {
-            Section::Subreport { relationship, .. } => relationships(s).any(|rel| {
-                rel.name.eq_ignore_ascii_case(relationship)
-                    && (rel.origin.eq_ignore_ascii_case(&name) || rel.destination.eq_ignore_ascii_case(&name))
-            }),
+        r.sections.retain_mut(|x| match x {
+            Section::Subreport { relationship, fields } => {
+                let other = relationships(s).find_map(|rel| {
+                    if !rel.name.eq_ignore_ascii_case(relationship) {
+                        None
+                    } else if rel.origin.eq_ignore_ascii_case(&name) {
+                        Some(rel.destination.clone())
+                    } else if rel.destination.eq_ignore_ascii_case(&name) {
+                        Some(rel.origin.clone())
+                    } else {
+                        None
+                    }
+                });
+                let Some(other) = other else { return false };
+                match find_layer(s, &other) {
+                    Some(o) => fields.retain(|f| o.dataset.field_index(f).is_some()),
+                    None => fields.clear(),
+                }
+                true
+            }
             _ => true,
         });
     }
