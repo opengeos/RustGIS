@@ -227,6 +227,8 @@ pub struct Session {
     pub trusted_models: std::collections::HashSet<String>,
     /// How many geoprocessing history records came with the opened project (from its file).
     pub history_from_file: usize,
+    /// The report open in the Report pane, if any.
+    pub active_report: Option<usize>,
     /// Drawing tools stay active after a graphic is drawn (Insert › Graphics).
     pub keep_tool: bool,
     /// Copied features (Edit › Clipboard).
@@ -280,6 +282,7 @@ impl Session {
             trusted_tasks: Default::default(),
             trusted_models: Default::default(),
             history_from_file: 0,
+            active_report: None,
             edit_counts: std::collections::HashMap::new(),
             topology_errors: Vec::new(),
             measurements: Vec::new(),
@@ -508,6 +511,9 @@ impl Session {
     pub(crate) fn fix_active_layer(&mut self) {
         if self.active_layout.is_some_and(|i| i >= self.project.layouts.len()) {
             self.active_layout = None;
+        }
+        if self.active_report.is_some_and(|i| i >= self.project.reports.len()) {
+            self.active_report = None;
         }
         let map = self.project.map();
         if let Some(id) = self.active_layer

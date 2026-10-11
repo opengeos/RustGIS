@@ -14,6 +14,7 @@ pub mod pdf;
 mod picture;
 pub mod post;
 mod raster;
+pub mod report;
 mod text;
 
 /// Natural Earth 1:110m sample data (public domain), fetched by `build.rs` from rustgis-assets.

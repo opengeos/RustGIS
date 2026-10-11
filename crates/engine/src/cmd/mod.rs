@@ -15,6 +15,7 @@ pub mod navigate;
 pub mod plugins;
 pub mod project;
 pub mod raster;
+pub mod report;
 pub mod select;
 pub mod share;
 pub mod view;
@@ -37,6 +38,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(labels::commands());
     v.extend(graphics::commands());
     v.extend(layout::commands());
+    v.extend(report::commands());
     v.extend(items::commands());
     v.extend(design::commands());
     v.extend(workflows::commands());

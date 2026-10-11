@@ -580,6 +580,132 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             });
         });
     });
+    group(ui, "Report", |ui| {
+        big(
+            ui,
+            app,
+            "table",
+            "New\nReport",
+            "A report listing the selected layer's records, page after page.",
+            "ui.newReport",
+            Value::Null,
+            false,
+            false,
+        );
+        col(ui, |ui| {
+            small_menu(
+                ui,
+                app,
+                "new_layout",
+                "Report Section",
+                "Add pages, layouts, related reports and related records to the report.",
+                |ui, app| {
+                    menu_item(ui, app, "new_layout", "Supplemental Page", "report.supplementalPage", Value::Null);
+                    menu_item(
+                        ui,
+                        app,
+                        "new_layout",
+                        "Supplemental Page After",
+                        "report.supplementalPage",
+                        json!({"title": "Notes", "end": true}),
+                    );
+                    menu_item(ui, app, "new_layout", "New Template (a layout page)", "report.newTemplate", Value::Null);
+                    let layouts: Vec<String> = app.session.project.layouts.iter().map(|l| l.name.clone()).collect();
+                    ui.menu_button(tl!("Existing Template"), |ui| {
+                        for l in layouts {
+                            menu_item(ui, app, "", &l, "report.existingTemplate", json!({"layout": l}));
+                        }
+                        menu_item(ui, app, "open", "Layout File…", "ui.reportLayoutFile", Value::Null);
+                    });
+                    let active = rustgis_engine::cmd::report::index(&app.session, &Value::Null).ok();
+                    let others: Vec<String> = app
+                        .session
+                        .project
+                        .reports
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| Some(*j) != active)
+                        .map(|(_, r)| r.name.clone())
+                        .collect();
+                    ui.menu_button(tl!("Related Report"), |ui| {
+                        if others.is_empty() {
+                            ui.label(egui::RichText::new(tl!("No other reports")).weak());
+                        }
+                        for o in others {
+                            menu_item(ui, app, "", &o, "report.relatedReport", json!({"related": o}));
+                        }
+                    });
+                    let rels: Vec<String> =
+                        app.session.project.maps.iter().flat_map(|m| m.editing.relationships.iter().map(|r| r.name.clone())).collect();
+                    ui.menu_button(tl!("Subreport"), |ui| {
+                        if rels.is_empty() {
+                            ui.label(egui::RichText::new(tl!("No relationships (Data Design › Relationships)")).weak());
+                        }
+                        for r in rels {
+                            menu_item(ui, app, "", &r, "report.subreport", json!({"relationship": r}));
+                        }
+                    });
+                },
+            );
+            small_menu(
+                ui,
+                app,
+                "field",
+                "Data",
+                "Fields, statistics, groups, pictures, attachments and charts in the report.",
+                |ui, app| {
+                    let fields: Vec<String> = rustgis_engine::cmd::report::index(&app.session, &Value::Null)
+                        .ok()
+                        .and_then(|i| app.session.project.reports.get(i))
+                        .and_then(|r| app.session.project.maps.iter().find_map(|m| m.layer_by_name(&r.layer)))
+                        .map(|l| l.dataset.fields.iter().map(|f| f.name.clone()).collect())
+                        .unwrap_or_default();
+                    let field_menu = |ui: &mut Ui, app: &mut RustGisApp, label: &str, id: &str, key: &str| {
+                        ui.menu_button(tl!(label), |ui| {
+                            for f in &fields {
+                                menu_item(ui, app, "", f, id, json!({key: f}));
+                            }
+                        });
+                    };
+                    field_menu(ui, app, "Field", "report.field", "field");
+                    menu_item(ui, app, "field", "Autofill Fields", "report.autofill", Value::Null);
+                    ui.menu_button(tl!("Statistics"), |ui| {
+                        for f in &fields {
+                            ui.menu_button(f.as_str(), |ui| {
+                                for k in ["count", "sum", "mean", "min", "max"] {
+                                    menu_item(ui, app, "", k, "report.statistics", json!({"field": f, "kind": k}));
+                                }
+                            });
+                        }
+                    });
+                    field_menu(ui, app, "Group", "report.group", "field");
+                    field_menu(ui, app, "Attachments", "report.attachments", "field");
+                    field_menu(ui, app, "Dynamic Picture", "report.dynamicPicture", "field");
+                    field_menu(ui, app, "Chart Frame", "report.chart", "category");
+                },
+            );
+            small(
+                ui,
+                app,
+                "pane",
+                "Report Pane",
+                "Preview and set up the report.",
+                "ui.pane.report",
+                Value::Null,
+                app.ui.right == Some(RightPane::Report),
+            );
+        });
+        small(
+            ui,
+            app,
+            "open",
+            "Import Report",
+            "Add a report file, or a report template for the selected layer.",
+            "ui.openItem",
+            json!({"kind": "report"}),
+            false,
+        );
+    });
     group(ui, "Layer Templates", |ui| {
         big_menu(ui, app, "graphics_layer", "Layer\nTemplates", "Add an empty layer with a ready-made schema, to draw into.", |ui, app| {
             for (id, label) in [
@@ -1554,6 +1680,11 @@ fn share_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 Value::Null,
                 false,
             );
+            small_menu(ui, app, "print", "Report", "Export the report, or save it as a report file or template.", |ui, app| {
+                menu_item(ui, app, "print", "Export Report…", "ui.exportReport", Value::Null);
+                menu_item(ui, app, "save_as", "Save As Report File…", "ui.saveItem", json!({"kind": "report"}));
+                menu_item(ui, app, "save_as", "Save As Report Template…", "ui.saveItem", json!({"kind": "reportTemplate"}));
+            });
             small(
                 ui,
                 app,

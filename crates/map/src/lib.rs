@@ -10,6 +10,7 @@ pub mod graphics;
 pub mod layout;
 pub mod projection;
 pub mod raster;
+pub mod report;
 pub mod symbology;
 pub mod view;
 pub mod world;

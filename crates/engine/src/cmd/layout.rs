@@ -168,7 +168,7 @@ fn unique_name(s: &Session, base: &str) -> String {
 }
 
 /// (width, height) in mm from page/orientation/width/height parameters.
-fn page_size(p: &Value, current: Option<(f64, f64)>) -> Result<(f64, f64), String> {
+pub(crate) fn page_size(p: &Value, current: Option<(f64, f64)>) -> Result<(f64, f64), String> {
     let (mut w, mut h) = match ps(p, "page") {
         Some(id) => PAGES
             .iter()
@@ -207,7 +207,7 @@ fn frame_kind(s: &Session, map: &str, w: f64, shape: FrameShape) -> ElementKind 
     ElementKind::MapFrame { map: map.to_string(), center, scale, shape, grid: None, extent_of: None }
 }
 
-fn new_layout(s: &mut Session, p: &Value) -> CmdResult {
+pub(crate) fn new_layout(s: &mut Session, p: &Value) -> CmdResult {
     let (w, h) = page_size(
         &json!({"page": ps(p, "page").unwrap_or("letter"), "orientation": ps(p, "orientation").unwrap_or("landscape"), "width": p.get("width"), "height": p.get("height")}),
         None,
@@ -827,7 +827,7 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }
 
-fn import(s: &mut Session, text: &str) -> CmdResult {
+pub(crate) fn import(s: &mut Session, text: &str) -> CmdResult {
     if text.len() as u64 > MAX_LAYOUT {
         return Err("the layout file is too large".into());
     }

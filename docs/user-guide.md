@@ -324,6 +324,26 @@ pad; **Camera** shows and sets the position and scale; the **Magnifier** shows t
 the pointer. On the Map tab, **First-Person** navigation walks with W A S D and flies up and down
 with Q and E.
 
+## Reports
+
+**Insert › New Report** lists the selected layer's records page after page; the **Report** pane
+previews it and sets it up.
+
+- **Data**: pick the detail **Fields** (or **Autofill Fields**), **Group** records by up to four
+  fields (each group gets a heading and its own statistics), add **Statistics** (count, sum,
+  mean, minimum, maximum), a **Dynamic Picture** per record (a field holding a PNG/JPEG path),
+  **Attachments** (a field listing each record's files, separated by `;`), and a **Chart Frame**
+  (records, or a field's sum, per category).
+- **Report Section**: **Supplemental Pages** of text before or after the records, **New
+  Template** and **Existing Template** (a page layout drawn as a report page), a **Related
+  Report** appended after this one, and **Subreports** (each record's related records through a
+  relationship, listed beneath it).
+- A where clause or the layer's selection limits the records; a sort field orders them within
+  their groups.
+- **Share › Report**: **Export Report** writes a PDF (or the first page as PNG); **Save As Report
+  File** keeps the report, and **Report Template** its design without the data source, to start
+  reports on other layers (**Insert › Import Report**).
+
 ## Workspace tools
 
 - **Side by Side** shows a second map beside the active one; **Link Views** keeps maps at the same

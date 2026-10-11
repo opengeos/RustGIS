@@ -1,6 +1,6 @@
 # Roadmap
 
-Ribbon feature coverage: **272 of 316 features (86%)** have a command
+Ribbon feature coverage: **288 of 316 features (91%)** have a command
 today ([docs/parity.md](docs/parity.md)). Counting depth (no full 3D scenes or enterprise sharing
 yet), real parity is lower.
 
@@ -20,6 +20,8 @@ yet), real parity is lower.
 - Layouts: page layout view, map frames (with grids and extent indicators), legend, north arrow,
   scale bar, text and dynamic text, pictures, table and chart frames, map series, PDF and PNG
   export (a built-in PDF writer), layout files.
+- Reports: grouped record listings with statistics, charts, pictures, attachments, subreports,
+  supplemental and layout pages, related reports; PDF export, report files and templates.
 
 ## Next
 - M3 Data: GeoPackage and FlatGeobuf, coordinate systems (PROJ-free transforms for common

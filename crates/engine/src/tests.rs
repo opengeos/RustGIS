@@ -154,7 +154,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 272, "coverage fell to {done}");
+    assert!(done >= 288, "coverage fell to {done}");
 }
 
 #[test]
@@ -1671,4 +1671,78 @@ fn registry_downloads_are_checked() {
     crate::cmd::plugins::install_checked(&e, &bytes).unwrap();
     assert_eq!(crate::cmd::plugins::entry_status(&e)["installed"], "1.0.0");
     let _ = rustgis_plugins::store::uninstall("eng-reg");
+}
+#[test]
+fn reports_group_summarise_relate_export_and_reopen() {
+    let dir = std::env::temp_dir().join(format!("rustgis-report-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = world();
+    assert!(s.run("report.autofill", &Value::Null).is_err(), "no report yet");
+    let cities = s.map().layer_by_name("Cities").unwrap();
+    let fields: Vec<String> = cities.dataset.fields.iter().map(|f| f.name.clone()).collect();
+    let numeric = cities.dataset.fields.iter().find(|f| f.name.to_ascii_lowercase().starts_with("pop")).unwrap().name.clone();
+    let n = cities.dataset.features.len();
+    s.run(
+        "report.new",
+        &json!({"layer": "Cities", "name": "Cities", "fields": ["name", numeric], "groups": ["adm0name"], "sort": numeric, "descending": true, "page": "a4"}),
+    )
+    .unwrap();
+    assert_eq!((s.project.reports[0].width, s.project.reports[0].height), (210.0, 297.0));
+    assert!(s.run("report.field", &json!({"field": "no_such_field"})).is_err());
+    s.run("report.statistics", &json!({"field": numeric, "kind": "sum"})).unwrap();
+    s.run("report.chart", &json!({"category": "adm0name"})).unwrap();
+    s.run("report.supplementalPage", &json!({"title": "About", "text": "Cities of the world."})).unwrap();
+    s.run("report.newTemplate", &json!({"end": true})).unwrap();
+    assert!(s.active_layout.is_none(), "adding a layout page leaves the map view showing");
+    // The blocks: a heading per country, the sum, every city once.
+    let doc = crate::cmd::report::build(&s, 0).unwrap();
+    use rustgis_map::report::Block;
+    let rows = doc.blocks.iter().filter(|b| matches!(b, Block::Row(_))).count();
+    assert_eq!(rows, n);
+    assert!(doc.blocks.iter().any(|b| matches!(b, Block::Heading { level: 0, .. })));
+    assert!(doc.blocks.iter().any(|b| matches!(b, Block::Stats(v) if v.iter().any(|l| l.starts_with("Sum of")))));
+    assert!(doc.blocks.iter().any(|b| matches!(b, Block::Chart { bars, .. } if !bars.is_empty())));
+    assert!(matches!(doc.blocks.last(), Some(Block::Layout(_))));
+    // A report on countries with each country's cities beneath it, followed by the cities report.
+    s.run("data.relate", &json!({"name": "Country of city", "origin": "Countries", "originKey": "name", "destination": "Cities", "destinationKey": "adm0name"}))
+        .unwrap();
+    s.run("report.new", &json!({"layer": "Countries", "name": "Countries", "fields": ["name"], "where": "name LIKE 'F%'"})).unwrap();
+    s.run("report.subreport", &json!({"relationship": "Country of city", "fields": ["name"]})).unwrap();
+    s.run("report.relatedReport", &json!({"related": "Cities"})).unwrap();
+    assert!(s.run("report.relatedReport", &json!({"related": "Countries"})).is_err(), "not itself");
+    let doc = crate::cmd::report::build(&s, 1).unwrap();
+    assert!(doc.blocks.iter().any(|b| matches!(b, Block::SubRow(_))), "France's cities are listed under it");
+    assert!(doc.blocks.iter().filter(|b| matches!(b, Block::Row(_))).count() > n, "the cities report follows");
+    // A related report that loops back stops.
+    s.run("report.relatedReport", &json!({"report": "Cities", "related": "Countries"})).unwrap();
+    assert!(crate::cmd::report::build(&s, 1).is_ok());
+    // Export: PDF pages and a PNG.
+    let pdf = dir.join("countries.pdf");
+    let r = s.run("report.export", &json!({"report": "Countries", "path": pdf.to_str().unwrap(), "dpi": 72})).unwrap();
+    assert!(r["pages"].as_u64().unwrap() >= 3);
+    assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
+    let png = dir.join("cities.png");
+    s.run("report.export", &json!({"report": "Cities", "path": png.to_str().unwrap(), "dpi": 72})).unwrap();
+    assert!(std::fs::read(&png).unwrap().starts_with(b"\x89PNG"));
+    // Report file and template, reopened.
+    let file = dir.join("cities.rgisreport");
+    let tmpl = dir.join("cities.rgisrpttemplate");
+    s.run("report.save", &json!({"report": "Cities", "path": file.to_str().unwrap()})).unwrap();
+    s.run("report.saveTemplate", &json!({"report": "Cities", "path": tmpl.to_str().unwrap()})).unwrap();
+    let r = s.run("report.open", &json!({"path": file.to_str().unwrap()})).unwrap();
+    assert_eq!(r["name"], "Cities 2");
+    s.run("report.open", &json!({"path": tmpl.to_str().unwrap(), "layer": "Cities"})).unwrap();
+    let t = s.project.reports.last().unwrap();
+    assert_eq!(t.layer, "Cities");
+    assert!(t.sections.iter().all(|x| matches!(x, rustgis_map::report::Section::Page { .. })));
+    // Items, undo and fields kept.
+    let (name, bytes) = crate::cmd::items::item_bytes(&mut s, "reportTemplate", &json!({"report": "Cities"})).unwrap();
+    assert!(name.ends_with(".rgisrpttemplate") && !bytes.is_empty());
+    assert!(fields.iter().any(|f| f == "adm0name"));
+    let before = s.project.reports.len();
+    s.run("report.remove", &json!({"report": "Cities 2"})).unwrap();
+    assert_eq!(s.project.reports.len(), before - 1);
+    s.undo();
+    assert_eq!(s.project.reports.len(), before);
+    let _ = std::fs::remove_dir_all(&dir);
 }

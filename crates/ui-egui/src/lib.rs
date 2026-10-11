@@ -18,6 +18,7 @@ mod layoutview;
 mod mapview;
 mod panes;
 mod pluginsui;
+mod reportpane;
 mod ribbon;
 mod table;
 pub mod theme;
@@ -130,6 +131,7 @@ pub enum RightPane {
     Profile,
     Diagnostics,
     Infographics,
+    Report,
 }
 
 pub struct UiState {
@@ -214,6 +216,7 @@ pub struct RustGisApp {
     pub ws: workspacepanes::WorkspaceState,
     /// The Plugin Manager and plugin downloads.
     pub plugins: pluginsui::PluginsState,
+    pub reports: reportpane::ReportState,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     sent_title: String,
@@ -250,6 +253,7 @@ impl RustGisApp {
             workflow: analysispane::Workflow::default(),
             ws: workspacepanes::WorkspaceState::default(),
             plugins: pluginsui::PluginsState::default(),
+            reports: reportpane::ReportState::default(),
             fonts_frames: 0,
             applied_dark: None,
             sent_title: String::new(),
@@ -399,6 +403,8 @@ impl RustGisApp {
             (".rgisstyle", "style.add"),
             (".rgistemplate", "project.fromTemplate"),
             (".rgistask", "task.import"),
+            (".rgisreport", "report.open"),
+            (".rgisrpttemplate", "report.open"),
         ]
         .iter()
         .find(|(e, _)| lower.ends_with(e))
@@ -692,6 +698,38 @@ impl RustGisApp {
                     }
                 }
             }
+            "ui.newReport" => {
+                let r = self.run("report.new", Value::Null);
+                if r.is_ok() {
+                    self.ui.right = Some(RightPane::Report);
+                }
+                return r;
+            }
+            "ui.reportLayoutFile" => {
+                if let Some(open) = &self.services.open_async {
+                    self.ui.pending_open = Some("report.existingTemplate");
+                    open("item");
+                } else if let Some(path) = dialogs::pick_open(&["rgislayout"], tl!("RustGIS layout")) {
+                    return self.run("report.existingTemplate", json!({"path": path}));
+                }
+            }
+            // Reports: export as PDF (or PNG, the first page).
+            "ui.exportReport" => {
+                let i = rustgis_engine::cmd::report::index(&self.session, p)?;
+                let name = self.session.project.reports.get(i).map(|r| r.name.clone()).unwrap_or_default();
+                if self.services.download.is_some() {
+                    let session = &mut self.session;
+                    let bytes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        rustgis_engine::cmd::report::report_bytes(session, i, 150.0, true)
+                    }))
+                    .unwrap_or_else(|_| Err("the report export failed unexpectedly".into()))
+                    .inspect_err(|e| self.session.notify(e.clone(), true))?
+                    .0;
+                    self.download(&format!("{name}.pdf"), bytes);
+                } else if let Some(path) = dialogs::pick_save(&format!("{name}.pdf"), &["pdf", "png"], tl!("PDF or PNG")) {
+                    return self.run("report.export", json!({"report": i, "path": path, "dpi": 200}));
+                }
+            }
             "ui.saveLayout" => {
                 let li = self.session.active_layout.ok_or("open a layout first")?;
                 let l = self.session.project.layouts.get(li).cloned().ok_or("open a layout first")?;
@@ -753,6 +791,7 @@ impl RustGisApp {
                     "importStyles" => ("style.import", &["rgislyr", "rgismap", "rgisx"], "RustGIS layers, maps and projects"),
                     "template" => ("project.fromTemplate", &["rgistemplate"], "RustGIS project template"),
                     "task" => ("task.import", &["rgistask"], "RustGIS task"),
+                    "report" => ("report.open", &["rgisreport", "rgisrpttemplate"], "RustGIS report or report template"),
                     k => return Err(format!("unknown item '{k}'")),
                 };
                 if let Some(open) = &self.services.open_async {
@@ -810,6 +849,7 @@ impl RustGisApp {
             "ui.pane.profile" => toggle_right(&mut self.ui, RightPane::Profile),
             "ui.pane.diagnostics" => toggle_right(&mut self.ui, RightPane::Diagnostics),
             "ui.pane.infographics" => toggle_right(&mut self.ui, RightPane::Infographics),
+            "ui.pane.report" => toggle_right(&mut self.ui, RightPane::Report),
             "ui.catalogView" => self.ws.catalog_view = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.catalog_view),
             "ui.itemPopups" => self.ws.item_popups = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.item_popups),
             "ui.linkCursors" => self.ws.link_cursors = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.link_cursors),

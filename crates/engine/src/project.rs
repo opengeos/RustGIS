@@ -57,6 +57,9 @@ pub struct Project {
     /// Offline areas: snapshots of a map's data around an extent, synced back by feature id.
     #[serde(default)]
     pub offline_areas: Vec<OfflineArea>,
+    /// Reports on layers' records.
+    #[serde(default)]
+    pub reports: Vec<rustgis_map::report::Report>,
 }
 
 /// A unit of work tracked in the Workflow Manager.
@@ -179,6 +182,7 @@ impl Project {
             thumbnail: None,
             jobs: Vec::new(),
             offline_areas: Vec::new(),
+            reports: Vec::new(),
         }
     }
 

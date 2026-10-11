@@ -235,7 +235,7 @@ fn to_json<T: serde::Serialize>(v: &T) -> Result<Vec<u8>, String> {
 }
 
 /// The JSON of an item from `text`, or the file at `path`.
-fn read_text(p: &Value) -> Result<String, String> {
+pub(crate) fn read_text(p: &Value) -> Result<String, String> {
     if let Some(d) = ps(p, "data") {
         use base64::Engine;
         if d.len() as u64 > MAX_FILE / 3 * 4 {
@@ -750,6 +750,8 @@ pub const ITEMS: &[(&str, &str, &str)] = &[
     ("gpPackage", "rgisgpk", "RustGIS results package"),
     ("task", "rgistask", "RustGIS task"),
     ("obj", "obj", "Wavefront OBJ"),
+    ("report", "rgisreport", "RustGIS report"),
+    ("reportTemplate", "rgisrpttemplate", "RustGIS report template"),
 ];
 
 /// An item as file bytes, with a suggested file name.
@@ -794,6 +796,11 @@ pub fn item_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec
             let id = s.layer_id(p)?;
             let name = s.map().layer(id).map(|l| l.name.clone()).unwrap_or_default();
             (name, obj_text(s, p)?.into_bytes())
+        }
+        "report" | "reportTemplate" => {
+            let i = super::report::index(s, p)?;
+            let name = s.project.reports.get(i).map(|r| r.name.clone()).unwrap_or_default();
+            (name, super::report::report_file(s, i, kind == "reportTemplate")?)
         }
         k => return Err(format!("unknown item '{k}'")),
     };

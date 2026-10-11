@@ -46,6 +46,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 RightPane::Profile => ("Profile", "ui.pane.profile"),
                 RightPane::Diagnostics => ("Diagnostic Monitor", "ui.pane.diagnostics"),
                 RightPane::Infographics => ("Infographics", "ui.pane.infographics"),
+                RightPane::Report => ("Report", "ui.pane.report"),
             };
             pane_header(app, ui, tl!(title), close, &t);
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -63,6 +64,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     RightPane::Profile => crate::workspacepanes::profile(app, ui, &t),
                     RightPane::Diagnostics => crate::workspacepanes::diagnostics(app, ui, &t),
                     RightPane::Infographics => crate::workspacepanes::infographics(app, ui, &t),
+                    RightPane::Report => crate::reportpane::report(app, ui, &t),
                 });
             });
         });
