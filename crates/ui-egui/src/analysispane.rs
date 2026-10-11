@@ -551,7 +551,9 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 let kind = if purpose == "m_area" { "area" } else { "volume" };
                 run(app, "raster.measure", json!({"layer": app.workflow.layer, "kind": kind, "points": pts}));
             }
-            if let Ok(Value::Array(results)) = app.session.run("raster.measurements", &Value::Null) {
+            // Read directly: a command each frame would mark the map changed.
+            let results = app.session.measurements.clone();
+            if !results.is_empty() {
                 heading(ui, "Results");
                 for r in results.iter().rev().take(10) {
                     ui.label(egui::RichText::new(r.to_string()).small().monospace());
