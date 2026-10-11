@@ -257,3 +257,41 @@ pub fn ribbon_combo(ui: &mut Ui, id: &str, label: &str, current: &str, options: 
     });
     out
 }
+
+/// A filled action button (Run, Install…). Painted here so the label sits in the middle of the
+/// button: egui places button text by the font's line metrics, which leaves some fonts low.
+pub fn primary_button(ui: &mut Ui, label: &str, enabled: bool, min_size: egui::Vec2) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let font = semibold(13.0);
+    let size = vec2(min_size.x.max(text_w(ui, label, font.clone()) + 28.0), min_size.y.max(28.0));
+    let (r, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
+    let fill = if !enabled {
+        t.green.gamma_multiply(0.45)
+    } else if resp.is_pointer_button_down_on() {
+        t.green.gamma_multiply(0.8)
+    } else if resp.hovered() {
+        t.green.gamma_multiply(0.9)
+    } else {
+        t.green
+    };
+    ui.painter().rect_filled(r, CornerRadius::same(6), fill);
+    // Centre on the glyphs' height, not the line's.
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font, egui::Color32::WHITE);
+    let rows = galley.rows.first().map(|row| row.rect()).unwrap_or(galley.rect);
+    let pos = r.center() - vec2(galley.size().x / 2.0, rows.center().y);
+    ui.painter().galley(pos, galley, egui::Color32::WHITE);
+    if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
+}
+
+/// A small icon button (back, close…), drawn with the app's own icons rather than a glyph the
+/// interface font may lack.
+pub fn icon_button(ui: &mut Ui, icon: &str, hover: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+    }
+    ui.painter().rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    icons::paint(ui.painter(), r.shrink(5.0), icon, t.text, t.accent);
+    resp.on_hover_text(hover)
+}

@@ -669,14 +669,7 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
                 None => {
                     #[cfg(not(target_arch = "wasm32"))]
-                    if ui
-                        .add(
-                            egui::Button::new(egui::RichText::new(tl!("Install GeoLibre tools")).color(egui::Color32::WHITE))
-                                .fill(t.green)
-                                .corner_radius(CornerRadius::same(6)),
-                        )
-                        .clicked()
-                    {
+                    if crate::widgets::primary_button(ui, tl!("Install GeoLibre tools"), true, vec2(0.0, 28.0)).clicked() {
                         let st = std::sync::Arc::new(std::sync::Mutex::new(Install::default()));
                         app.gp.install = Some(st.clone());
                         app.gp.last = None;
@@ -748,14 +741,7 @@ fn geolibre_web_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     ui.spinner();
                     ui.label(egui::RichText::new(tl!("Loading the GeoLibre tools…")).size(11.5));
                 });
-            } else if ui
-                .add(
-                    egui::Button::new(egui::RichText::new(tl!("Load GeoLibre tools")).color(egui::Color32::WHITE))
-                        .fill(t.green)
-                        .corner_radius(CornerRadius::same(6)),
-                )
-                .clicked()
-            {
+            } else if crate::widgets::primary_button(ui, tl!("Load GeoLibre tools"), true, vec2(0.0, 28.0)).clicked() {
                 app.gp.last = None;
                 start_geolibre_load(app);
             }
@@ -845,19 +831,42 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         if q.is_empty() {
             geolibre_section(app, ui);
         }
-        let mut boxes: Vec<&str> = rustgis_engine::analysis::TOOLS.iter().map(|t| t.toolbox).collect();
-        boxes.sort();
-        boxes.dedup();
-        for b in boxes {
-            let found: Vec<_> = rustgis_engine::analysis::TOOLS.iter().filter(|x| x.toolbox == b && matches(x)).collect();
-            if found.is_empty() {
-                continue;
-            }
-            ui.label(egui::RichText::new(crate::i18n::location(b)).size(11.0).color(t.text_dim));
-            for tool in found {
-                row(app, ui, tool);
+        let builtin = rustgis_engine::analysis::TOOLS;
+        if q.is_empty() {
+            // Browsing: one collapsible toolbox per top-level group, like the GeoLibre ones
+            // (open: there are only a few built-in tools).
+            ui.label(egui::RichText::new(tl!("RustGIS")).size(11.0).color(t.text_dim));
+            let mut tops: Vec<&str> = builtin.iter().map(|t| t.toolbox.split(" › ").next().unwrap_or(t.toolbox)).collect();
+            tops.sort();
+            tops.dedup();
+            for top in tops {
+                let in_top: Vec<_> = builtin.iter().filter(|x| x.toolbox.split(" › ").next() == Some(top)).collect();
+                egui::CollapsingHeader::new(format!("{} ({})", crate::i18n::location(top), in_top.len()))
+                    .id_salt(("gp-builtin", top))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        for tool in in_top {
+                            row(app, ui, tool);
+                        }
+                    });
             }
             ui.add_space(6.0);
+        } else {
+            // Searching: the matches under their toolbox.
+            let mut boxes: Vec<&str> = builtin.iter().map(|t| t.toolbox).collect();
+            boxes.sort();
+            boxes.dedup();
+            for b in boxes {
+                let found: Vec<_> = builtin.iter().filter(|x| x.toolbox == b && matches(x)).collect();
+                if found.is_empty() {
+                    continue;
+                }
+                ui.label(egui::RichText::new(crate::i18n::location(b)).size(11.0).color(t.text_dim));
+                for tool in found {
+                    row(app, ui, tool);
+                }
+                ui.add_space(6.0);
+            }
         }
         if !q.is_empty() {
             geolibre_section(app, ui);
@@ -866,7 +875,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     };
     // Tool form.
     ui.horizontal(|ui| {
-        if ui.button(tl!("←")).on_hover_text(tl!("Back to tools")).clicked() {
+        if crate::widgets::icon_button(ui, "back", tl!("Back to tools")).clicked() {
             app.gp.tool = None;
         }
         let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
@@ -977,12 +986,8 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        let run = egui::Button::new(egui::RichText::new(tl!("Run")).font(semibold(13.0)).color(egui::Color32::WHITE))
-            .fill(t.green)
-            .min_size(vec2(96.0, 30.0))
-            .corner_radius(CornerRadius::same(6));
         // One browser run at a time.
-        if ui.add_enabled(app.gp.web_run.is_none(), run).clicked() {
+        if crate::widgets::primary_button(ui, tl!("Run"), app.gp.web_run.is_none(), vec2(96.0, 30.0)).clicked() {
             let mut params = serde_json::Map::new();
             for p in spec.params {
                 if let Some(v) = app.gp.values.get(p.name).filter(|v| !v.trim().is_empty()) {
