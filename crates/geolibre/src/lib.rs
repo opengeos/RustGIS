@@ -19,6 +19,7 @@
 //! like any program the user installs, so a tool could write elsewhere if asked to.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod install;
 pub mod runner;
 
 use std::collections::HashMap;

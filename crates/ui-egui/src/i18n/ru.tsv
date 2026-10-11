@@ -187,6 +187,7 @@ Double-click	Двойной щелчок
 Double-click to add	Двойной щелчок — добавить
 Download the GeoLibre runner	Скачать модуль запуска GeoLibre
 Downloaded {name}	Загружено: {name}
+Downloading… {mb} MB	Загрузка… {mb} МБ
 DRA	DRA
 Drag / middle-drag	Перетаскивание / средней кнопкой
 Drag a box or click to zoom in	Растяните рамку или щёлкните для приближения
@@ -309,6 +310,8 @@ Input Summary Features	Входные объекты сводки
 Input Table	Входная таблица
 Inquiry	Запрос
 Insert	Вставка
+Install GeoLibre Tools	Установить инструменты GeoLibre
+Install GeoLibre tools	Установить инструменты GeoLibre
 Interface font: {font}	Шрифт интерфейса: {font}
 Invalid: {error}	Недопустимо: {error}
 Invert	Инвертировать
@@ -424,13 +427,14 @@ Open {code} on epsg.io	Открыть {code} на epsg.io
 Open, save and create projects	Открытие, сохранение и создание проектов
 Open…	Открыть…
 OR	OR
+Or	Или
 Out Beyond	Выкл. за пределами
 Outline	Контур
 Outline color	Цвет контура
 Outline width	Толщина контура
 Output	Вывод
 Output Name	Имя результата
-Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	Более 1000 инструментов для растров, векторов, LiDAR, гидрологии и рельефа в необязательной загрузке: модуль запуска GeoLibre. Распакуйте его и укажите программу geolibre.
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Более 1000 инструментов для растров, векторов, LiDAR, гидрологии и рельефа в необязательной загрузке размером около 20 МБ.
 Overlay	Наложение
 Pan (Explore) · any tool	Панорамирование (обзор) · любой инструмент
 Pan to a longitude/latitude.	Переместиться к долготе/широте.

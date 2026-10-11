@@ -22,6 +22,13 @@ pub fn commands() -> Vec<C> {
         })
         .view(),
         C::new("gp.geolibre", "GeoLibre Tools", "Analysis › Geoprocessing", |_, _| Ok(geolibre_status())).view(),
+        C::new("gp.installGeolibre", "Install GeoLibre Tools", "Analysis › Geoprocessing", |_, _| {
+            let path = install_geolibre(&|_, _| {})?;
+            #[cfg(feature = "geolibre")]
+            rustgis_geolibre::set_runner(Some(std::path::PathBuf::from(&path)))?;
+            Ok(json!({"path": path, "status": geolibre_status()}))
+        })
+        .view(),
         C::new("gp.setGeolibre", "Locate GeoLibre Runner", "Analysis › Geoprocessing", set_geolibre)
             .view()
             .params(r#"{"path"?: "the geolibre executable (empty: look in the usual places)"}"#),
@@ -48,6 +55,21 @@ pub fn geolibre_status() -> Value {
     }
     #[cfg(not(feature = "geolibre"))]
     json!({"supported": false, "available": false})
+}
+
+/// Downloads and installs the latest GeoLibre runner for this platform; returns the program's
+/// path. `progress` gets the bytes received and the expected total. Blocks: the app calls it
+/// from a background thread, then picks the runner with `gp.setGeolibre`.
+pub fn install_geolibre(progress: &dyn Fn(u64, Option<u64>)) -> Result<String, String> {
+    #[cfg(feature = "geolibre")]
+    {
+        rustgis_geolibre::install::install(progress).map(|p| p.display().to_string())
+    }
+    #[cfg(not(feature = "geolibre"))]
+    {
+        let _ = progress;
+        Err("this build doesn't include the GeoLibre tools".into())
+    }
 }
 
 /// Chooses the GeoLibre runner (an optional download), or looks for it again.

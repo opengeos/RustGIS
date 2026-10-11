@@ -187,6 +187,7 @@ Double-click	더블클릭
 Double-click to add	더블클릭하여 추가
 Download the GeoLibre runner	GeoLibre 실행기 다운로드
 Downloaded {name}	{name} 다운로드됨
+Downloading… {mb} MB	다운로드 중… {mb} MB
 DRA	DRA
 Drag / middle-drag	드래그 / 가운데 버튼 드래그
 Drag a box or click to zoom in	상자를 드래그하거나 클릭하여 확대
@@ -309,6 +310,8 @@ Input Summary Features	입력 요약 피처
 Input Table	입력 테이블
 Inquiry	조회
 Insert	삽입
+Install GeoLibre Tools	GeoLibre 도구 설치
+Install GeoLibre tools	GeoLibre 도구 설치
 Interface font: {font}	인터페이스 글꼴: {font}
 Invalid: {error}	유효하지 않음: {error}
 Invert	반전
@@ -424,13 +427,14 @@ Open {code} on epsg.io	epsg.io에서 {code} 열기
 Open, save and create projects	프로젝트 열기, 저장 및 만들기
 Open…	열기…
 OR	OR
+Or	또는
 Out Beyond	다음보다 축소 시
 Outline	외곽선
 Outline color	외곽선 색상
 Outline width	외곽선 두께
 Output	출력
 Output Name	출력 이름
-Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	래스터, 벡터, LiDAR, 수문, 지형 도구 1,000개 이상을 선택적 다운로드인 GeoLibre 실행기로 제공합니다. 압축을 풀고 geolibre 프로그램을 지정하세요.
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	래스터, 벡터, LiDAR, 수문, 지형 도구 1,000개 이상 (약 20MB의 선택적 다운로드).
 Overlay	중첩
 Pan (Explore) · any tool	이동(탐색) · 모든 도구
 Pan to a longitude/latitude.	경도/위도로 이동합니다.

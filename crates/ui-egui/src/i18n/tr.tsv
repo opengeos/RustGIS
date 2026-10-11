@@ -187,6 +187,7 @@ Double-click	Çift tıklama
 Double-click to add	Eklemek için çift tıklayın
 Download the GeoLibre runner	GeoLibre çalıştırıcısını indir
 Downloaded {name}	{name} indirildi
+Downloading… {mb} MB	İndiriliyor… {mb} MB
 DRA	DRA
 Drag / middle-drag	Sürükleme / orta tuşla sürükleme
 Drag a box or click to zoom in	Yakınlaştırmak için kutu sürükleyin veya tıklayın
@@ -309,6 +310,8 @@ Input Summary Features	Girdi Özet Detayları
 Input Table	Girdi Tablosu
 Inquiry	Sorgulama
 Insert	Ekle
+Install GeoLibre Tools	GeoLibre araçlarını yükle
+Install GeoLibre tools	GeoLibre araçlarını yükle
 Interface font: {font}	Arayüz yazı tipi: {font}
 Invalid: {error}	Geçersiz: {error}
 Invert	Ters Çevir
@@ -424,13 +427,14 @@ Open {code} on epsg.io	{code} kodunu epsg.io'da aç
 Open, save and create projects	Projeleri aç, kaydet ve oluştur
 Open…	Aç…
 OR	OR
+Or	Ya da
 Out Beyond	Ötesinde Kapalı
 Outline	Dış Çizgi
 Outline color	Dış çizgi rengi
 Outline width	Dış çizgi kalınlığı
 Output	Çıktı
 Output Name	Çıktı Adı
-Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	İsteğe bağlı bir indirmeyle 1.000'den fazla raster, vektör, LiDAR, hidroloji ve arazi aracı: GeoLibre çalıştırıcısı. Arşivi açın ve geolibre programını gösterin.
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Yaklaşık 20 MB'lık isteğe bağlı bir indirmeyle 1.000'den fazla raster, vektör, LiDAR, hidroloji ve arazi aracı.
 Overlay	Bindirme
 Pan (Explore) · any tool	Kaydır (Keşfet) · herhangi bir araç
 Pan to a longitude/latitude.	Bir boylam/enleme kaydır.

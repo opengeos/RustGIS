@@ -14,3 +14,10 @@ rustgis-data = { workspace = true }
 rustgis-analysis = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# One-click install of the runner: download the release archive over HTTPS (pure-Rust TLS),
+# check its SHA-256 and unpack it.
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }

@@ -136,13 +136,17 @@ interpolation and vector work. They run on the map's layers and add their output
 layers.
 
 The suite is an optional download, so RustGIS itself stays small: the **GeoLibre runner**, a
-single `geolibre` program (about 19 MB to download).
+single `geolibre` program (about 20 MB to download). In the Geoprocessing pane, click
+**Install GeoLibre tools** under *GeoLibre tools*: RustGIS downloads the latest runner for your
+platform from the [geolibre-rust releases](https://github.com/opengeos/geolibre-rust/releases/latest),
+checks it against its published SHA-256 checksum and installs it in its data folder
+(`~/.local/share/rustgis/geolibre` on Linux, `~/Library/Application Support/RustGIS/geolibre`
+on macOS, `%LOCALAPPDATA%\RustGIS\geolibre` on Windows). From the command line,
+`gp.installGeolibre` does the same.
 
-1. Download the archive for your platform (`geolibre-<version>-<platform>.tar.gz`, or `.zip`
-   on Windows) from the [geolibre-rust releases](https://github.com/opengeos/geolibre-rust/releases/latest)
-   and unpack it anywhere.
-2. In the Geoprocessing pane, click **Locate…** under *GeoLibre tools* and pick the
-   `geolibre` program. RustGIS remembers it.
+To install it yourself instead, download the archive for your platform
+(`geolibre-<version>-<platform>.tar.gz`, or `.zip` on Windows), unpack it anywhere, and click
+**Locate…** to pick the `geolibre` program; RustGIS remembers it.
 
 RustGIS also finds the runner without asking when it is next to the RustGIS program (or in a
 `geolibre` folder beside it), on your `PATH`, or named by the `RUSTGIS_GEOLIBRE` environment

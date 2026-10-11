@@ -187,6 +187,7 @@ Double-click	Doble clic
 Double-click to add	Doble clic para añadir
 Download the GeoLibre runner	Descargar el ejecutor de GeoLibre
 Downloaded {name}	{name} descargado
+Downloading… {mb} MB	Descargando… {mb} MB
 DRA	DRA
 Drag / middle-drag	Arrastrar / arrastrar con botón central
 Drag a box or click to zoom in	Arrastre un rectángulo o haga clic para acercar
@@ -309,6 +310,8 @@ Input Summary Features	Entidades de resumen de entrada
 Input Table	Tabla de entrada
 Inquiry	Consulta
 Insert	Insertar
+Install GeoLibre Tools	Instalar herramientas de GeoLibre
+Install GeoLibre tools	Instalar herramientas de GeoLibre
 Interface font: {font}	Fuente de la interfaz: {font}
 Invalid: {error}	No válida: {error}
 Invert	Invertir
@@ -424,13 +427,14 @@ Open {code} on epsg.io	Abrir {code} en epsg.io
 Open, save and create projects	Abrir, guardar y crear proyectos
 Open…	Abrir…
 OR	OR
+Or	O
 Out Beyond	Límite al alejar
 Outline	Contorno
 Outline color	Color del contorno
 Outline width	Ancho del contorno
 Output	Salida
 Output Name	Nombre de salida
-Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	Más de 1.000 herramientas ráster, vectoriales, LiDAR, hidrológicas y de terreno, en una descarga opcional: el ejecutor de GeoLibre. Descomprímalo y localice el programa geolibre.
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Más de 1.000 herramientas ráster, vectoriales, LiDAR, hidrológicas y de terreno, en una descarga opcional de unos 20 MB.
 Overlay	Superposición
 Pan (Explore) · any tool	Desplazar (Explorar) · cualquier herramienta
 Pan to a longitude/latitude.	Desplazarse a una longitud/latitud.

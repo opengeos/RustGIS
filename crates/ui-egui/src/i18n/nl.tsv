@@ -187,6 +187,7 @@ Double-click	Dubbelklik
 Double-click to add	Dubbelklik om toe te voegen
 Download the GeoLibre runner	GeoLibre-runner downloaden
 Downloaded {name}	{name} gedownload
+Downloading… {mb} MB	Downloaden… {mb} MB
 DRA	DRA
 Drag / middle-drag	Slepen / slepen met middelste knop
 Drag a box or click to zoom in	Sleep een kader of klik om in te zoomen
@@ -309,6 +310,8 @@ Input Summary Features	Invoerobjecten voor samenvatting
 Input Table	Invoertabel
 Inquiry	Opvragen
 Insert	Invoegen
+Install GeoLibre Tools	GeoLibre-gereedschappen installeren
+Install GeoLibre tools	GeoLibre-gereedschappen installeren
 Interface font: {font}	Interfacelettertype: {font}
 Invalid: {error}	Ongeldig: {error}
 Invert	Omkeren
@@ -424,13 +427,14 @@ Open {code} on epsg.io	{code} openen op epsg.io
 Open, save and create projects	Projecten openen, opslaan en maken
 Open…	Openen…
 OR	OR
+Or	Of
 Out Beyond	Uitgezoomd voorbij
 Outline	Omtrek
 Outline color	Omtrekkleur
 Outline width	Omtrekdikte
 Output	Uitvoer
 Output Name	Uitvoernaam
-Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	Meer dan 1.000 raster-, vector-, LiDAR-, hydrologie- en terreingereedschappen als optionele download: de GeoLibre-runner. Pak hem uit en wijs het programma geolibre aan.
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Meer dan 1.000 raster-, vector-, LiDAR-, hydrologie- en terreingereedschappen als optionele download van ongeveer 20 MB.
 Overlay	Overlay
 Pan (Explore) · any tool	Pannen (Verkennen) · elk gereedschap
 Pan to a longitude/latitude.	Pannen naar een lengte-/breedtegraad.

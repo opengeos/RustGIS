@@ -101,6 +101,10 @@ fn candidates() -> Vec<PathBuf> {
     if let Some(p) = std::env::var_os(ENV) {
         v.push(PathBuf::from(p));
     }
+    // Where one-click install puts it.
+    if let Some(dir) = crate::install::install_dir() {
+        v.push(dir.join(exe_name()));
+    }
     // Beside the app (a bundle that ships it), or in a `geolibre` folder there.
     if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
         v.push(dir.join(exe_name()));

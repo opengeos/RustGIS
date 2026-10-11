@@ -187,6 +187,7 @@ Double-click	Nhấp đúp
 Double-click to add	Nhấp đúp để thêm
 Download the GeoLibre runner	Tải trình chạy GeoLibre
 Downloaded {name}	Đã tải xuống {name}
+Downloading… {mb} MB	Đang tải… {mb} MB
 DRA	DRA
 Drag / middle-drag	Kéo / kéo chuột giữa
 Drag a box or click to zoom in	Kéo hộp hoặc nhấp để phóng to
@@ -309,6 +310,8 @@ Input Summary Features	Đối tượng tổng hợp đầu vào
 Input Table	Bảng đầu vào
 Inquiry	Truy vấn
 Insert	Chèn
+Install GeoLibre Tools	Cài đặt công cụ GeoLibre
+Install GeoLibre tools	Cài đặt công cụ GeoLibre
 Interface font: {font}	Phông giao diện: {font}
 Invalid: {error}	Không hợp lệ: {error}
 Invert	Đảo ngược
@@ -424,13 +427,14 @@ Open {code} on epsg.io	Mở {code} trên epsg.io
 Open, save and create projects	Mở, lưu và tạo dự án
 Open…	Mở…
 OR	OR
+Or	Hoặc
 Out Beyond	Khi thu nhỏ hơn
 Outline	Viền
 Outline color	Màu viền
 Outline width	Độ rộng viền
 Output	Đầu ra
 Output Name	Tên đầu ra
-Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	Hơn 1.000 công cụ raster, vector, LiDAR, thủy văn và địa hình, qua một bản tải tùy chọn: trình chạy GeoLibre. Giải nén và chỉ đến chương trình geolibre.
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Hơn 1.000 công cụ raster, vector, LiDAR, thủy văn và địa hình, qua một bản tải tùy chọn khoảng 20 MB.
 Overlay	Chồng lớp
 Pan (Explore) · any tool	Di chuyển (Khám phá) · mọi công cụ
 Pan to a longitude/latitude.	Di chuyển tới kinh độ/vĩ độ.

@@ -187,6 +187,7 @@ Double-click	ダブルクリック
 Double-click to add	ダブルクリックで追加
 Download the GeoLibre runner	GeoLibre ランナーをダウンロード
 Downloaded {name}	{name} をダウンロードしました
+Downloading… {mb} MB	ダウンロード中… {mb} MB
 DRA	DRA
 Drag / middle-drag	ドラッグ / 中ボタン ドラッグ
 Drag a box or click to zoom in	ボックスをドラッグまたはクリックして拡大
@@ -309,6 +310,8 @@ Input Summary Features	入力集計フィーチャ
 Input Table	入力テーブル
 Inquiry	照会
 Insert	挿入
+Install GeoLibre Tools	GeoLibre ツールをインストール
+Install GeoLibre tools	GeoLibre ツールをインストール
 Interface font: {font}	インターフェイスのフォント：{font}
 Invalid: {error}	無効：{error}
 Invert	反転
@@ -424,13 +427,14 @@ Open {code} on epsg.io	epsg.io で {code} を開く
 Open, save and create projects	プロジェクトを開く、保存する、作成する
 Open…	開く…
 OR	OR
+Or	または
 Out Beyond	縮小の限界
 Outline	アウトライン
 Outline color	アウトラインの色
 Outline width	アウトラインの幅
 Output	出力
 Output Name	出力名
-Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツールを、オプションのダウンロード (GeoLibre ランナー) で利用できます。展開して geolibre プログラムの場所を指定してください。
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツール (約 20 MB のオプションのダウンロード)。
 Overlay	オーバーレイ
 Pan (Explore) · any tool	画面移動（マップ操作）· 任意のツール
 Pan to a longitude/latitude.	経度/緯度に画面移動します。

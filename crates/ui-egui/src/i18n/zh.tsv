@@ -187,6 +187,7 @@ Double-click	双击
 Double-click to add	双击添加
 Download the GeoLibre runner	下载 GeoLibre 运行器
 Downloaded {name}	已下载 {name}
+Downloading… {mb} MB	正在下载… {mb} MB
 DRA	DRA
 Drag / middle-drag	拖动 / 中键拖动
 Drag a box or click to zoom in	拖动矩形框或单击以放大
@@ -309,6 +310,8 @@ Input Summary Features	输入汇总要素
 Input Table	输入表
 Inquiry	查询
 Insert	插入
+Install GeoLibre Tools	安装 GeoLibre 工具
+Install GeoLibre tools	安装 GeoLibre 工具
 Interface font: {font}	界面字体：{font}
 Invalid: {error}	无效：{error}
 Invert	反转
@@ -424,13 +427,14 @@ Open {code} on epsg.io	在 epsg.io 上打开 {code}
 Open, save and create projects	打开、保存和创建工程
 Open…	打开…
 OR	OR
+Or	或
 Out Beyond	缩小超过
 Outline	轮廓
 Outline color	轮廓颜色
 Outline width	轮廓宽度
 Output	输出
 Output Name	输出名称
-Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	1000 多个栅格、矢量、LiDAR、水文和地形工具，来自可选下载：GeoLibre 运行器。解压后定位 geolibre 程序。
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	1000 多个栅格、矢量、LiDAR、水文和地形工具，约 20 MB 的可选下载。
 Overlay	叠加
 Pan (Explore) · any tool	平移（浏览）· 任意工具
 Pan to a longitude/latitude.	平移到某个经度/纬度。

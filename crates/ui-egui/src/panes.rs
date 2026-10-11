@@ -521,6 +521,17 @@ pub struct GpForm {
     pub values: HashMap<&'static str, String>,
     pub search: String,
     pub last: Option<(bool, Vec<String>)>,
+    /// A GeoLibre runner install in progress (it runs on a background thread).
+    pub install: Option<std::sync::Arc<std::sync::Mutex<Install>>>,
+}
+
+/// Progress of a one-click GeoLibre runner install.
+#[derive(Default)]
+pub struct Install {
+    pub done: u64,
+    pub total: Option<u64>,
+    /// The installed program, or why it failed; set when the install ends.
+    pub result: Option<Result<String, String>>,
 }
 
 impl GpForm {
@@ -565,37 +576,93 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if status["supported"] != true {
         return;
     }
+    // An install that just finished: use the runner, and remember it.
+    let finished = app.gp.install.as_ref().and_then(|st| st.lock().ok().and_then(|mut s| s.result.take()));
+    if let Some(result) = finished {
+        app.gp.install = None;
+        match result.and_then(|path| app.run("gp.setGeolibre", json!({"path": path})).map(|_| path)) {
+            Ok(path) => {
+                if let Some(save) = &app.services.save_pref {
+                    save("geolibre_runner", &path);
+                }
+                app.gp.last = None;
+            }
+            Err(e) => app.gp.last = Some((false, vec![e])),
+        }
+        return;
+    }
     let download = status["download"].as_str().unwrap_or("https://github.com/opengeos/geolibre-rust/releases/latest").to_string();
     ui.add_space(6.0);
-    egui::Frame::NONE
-        .stroke(Stroke::new(1.0, t.border))
-        .corner_radius(CornerRadius::same(6))
-        .inner_margin(egui::Margin::same(10))
-        .show(ui, |ui| {
+    egui::Frame::NONE.stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(
+        ui,
+        |ui| {
             ui.set_width(ui.available_width());
             ui.label(egui::RichText::new(tl!("GeoLibre tools")).font(semibold(13.0)));
             ui.label(
                 egui::RichText::new(tl!(
-                    "Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program."
+                    "Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB."
                 ))
                 .size(11.5)
                 .color(t.text_dim),
             );
-            ui.add_space(4.0);
-            ui.add(egui::Hyperlink::from_label_and_url(tl!("Download the GeoLibre runner"), download).open_in_new_tab(true));
-            #[cfg(not(target_arch = "wasm32"))]
-            if ui.button(tl!("Locate…")).clicked()
-                && let Some(path) = rfd::FileDialog::new().set_title(tl!("Locate the GeoLibre runner")).pick_file()
-            {
-                let path = path.display().to_string();
-                match app.run("gp.setGeolibre", json!({"path": path})) {
-                    Ok(_) => {
-                        if let Some(save) = &app.services.save_pref {
-                            save("geolibre_runner", &path);
-                        }
+            ui.add_space(6.0);
+            let progress = app.gp.install.as_ref().and_then(|st| st.lock().ok().map(|s| (s.done, s.total)));
+            match progress {
+                Some((done, total)) => {
+                    let mb = |b: u64| format!("{:.1}", b as f64 / 1_048_576.0);
+                    let text = crate::i18n::fmt("Downloading… {mb} MB", &[("mb", &mb(done))]);
+                    let bar = egui::ProgressBar::new(total.map(|t| done as f32 / t.max(1) as f32).unwrap_or(0.0)).text(text);
+                    ui.add(if total.is_some() { bar } else { bar.animate(true) });
+                    // Keep drawing while the download runs on its thread.
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+                }
+                None => {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if ui
+                        .add(
+                            egui::Button::new(egui::RichText::new(tl!("Install GeoLibre tools")).color(egui::Color32::WHITE))
+                                .fill(t.green)
+                                .corner_radius(CornerRadius::same(6)),
+                        )
+                        .clicked()
+                    {
+                        let st = std::sync::Arc::new(std::sync::Mutex::new(Install::default()));
+                        app.gp.install = Some(st.clone());
                         app.gp.last = None;
+                        let ctx = ui.ctx().clone();
+                        std::thread::spawn(move || {
+                            let result = rustgis_engine::cmd::gp::install_geolibre(&|done, total| {
+                                if let Ok(mut s) = st.lock() {
+                                    s.done = done;
+                                    s.total = total;
+                                }
+                            });
+                            if let Ok(mut s) = st.lock() {
+                                s.result = Some(result);
+                            }
+                            ctx.request_repaint();
+                        });
                     }
-                    Err(e) => app.gp.last = Some((false, vec![e])),
+                    ui.add_space(2.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new(tl!("Or")).size(11.0).color(t.text_dim));
+                        ui.add(egui::Hyperlink::from_label_and_url(tl!("Download the GeoLibre runner"), download).open_in_new_tab(true));
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if ui.small_button(tl!("Locate…")).clicked()
+                            && let Some(path) = rfd::FileDialog::new().set_title(tl!("Locate the GeoLibre runner")).pick_file()
+                        {
+                            let path = path.display().to_string();
+                            match app.run("gp.setGeolibre", json!({"path": path})) {
+                                Ok(_) => {
+                                    if let Some(save) = &app.services.save_pref {
+                                        save("geolibre_runner", &path);
+                                    }
+                                    app.gp.last = None;
+                                }
+                                Err(e) => app.gp.last = Some((false, vec![e])),
+                            }
+                        }
+                    });
                 }
             }
             if let Some((false, msgs)) = &app.gp.last {
@@ -603,7 +670,8 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     ui.label(egui::RichText::new(m).size(11.0).color(t.red));
                 }
             }
-        });
+        },
+    );
 }
 
 fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {

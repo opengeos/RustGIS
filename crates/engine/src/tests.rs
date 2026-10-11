@@ -347,7 +347,14 @@ fn hostile_params_never_panic() {
     for id in ids {
         if matches!(
             id,
-            "project.save" | "project.saveAs" | "share.exportMap" | "share.exportLayer" | "share.exportTable" | "share.exportRaster"
+            "project.save"
+                | "project.saveAs"
+                | "share.exportMap"
+                | "share.exportLayer"
+                | "share.exportTable"
+                | "share.exportRaster"
+                // Downloads the runner from the network.
+                | "gp.installGeolibre"
         ) {
             continue;
         }

@@ -187,6 +187,7 @@ Double-click	Klik ganda
 Double-click to add	Klik ganda untuk menambah
 Download the GeoLibre runner	Unduh runner GeoLibre
 Downloaded {name}	{name} telah diunduh
+Downloading… {mb} MB	Mengunduh… {mb} MB
 DRA	DRA
 Drag / middle-drag	Seret / seret tombol tengah
 Drag a box or click to zoom in	Seret kotak atau klik untuk memperbesar
@@ -309,6 +310,8 @@ Input Summary Features	Fitur Ringkasan Masukan
 Input Table	Tabel Masukan
 Inquiry	Penyelidikan
 Insert	Sisipkan
+Install GeoLibre Tools	Pasang alat GeoLibre
+Install GeoLibre tools	Pasang alat GeoLibre
 Interface font: {font}	Fon antarmuka: {font}
 Invalid: {error}	Tidak valid: {error}
 Invert	Balik
@@ -424,13 +427,14 @@ Open {code} on epsg.io	Buka {code} di epsg.io
 Open, save and create projects	Buka, simpan, dan buat proyek
 Open…	Buka…
 OR	OR
+Or	Atau
 Out Beyond	Perkecil Melewati
 Outline	Garis tepi
 Outline color	Warna garis tepi
 Outline width	Lebar garis tepi
 Output	Keluaran
 Output Name	Nama Keluaran
-Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download: the GeoLibre runner. Unpack it and locate the geolibre program.	Lebih dari 1.000 alat raster, vektor, LiDAR, hidrologi, dan medan, dari unduhan opsional: runner GeoLibre. Ekstrak lalu tunjukkan program geolibre.
+Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Lebih dari 1.000 alat raster, vektor, LiDAR, hidrologi, dan medan, dari unduhan opsional sekitar 20 MB.
 Overlay	Overlay
 Pan (Explore) · any tool	Geser (Jelajah) · alat apa pun
 Pan to a longitude/latitude.	Geser ke bujur/lintang.
