@@ -2032,6 +2032,13 @@ fn deep_learning_hosted_imagery_and_sharing() {
         {"type": "Feature", "properties": {"class": "field"}, "geometry": {"type": "Polygon", "coordinates": [[[10.025, 45.002], [10.038, 45.002], [10.038, 45.035], [10.025, 45.035], [10.025, 45.002]]]}}]});
     s.run("layer.addDataText", &json!({"fileName": "training.geojson", "text": training.to_string()})).unwrap();
     assert!(s.run("dl.package", &json!({"path": path("x.rgisdlpk")})).is_err(), "no model yet");
+    // A class whose polygon misses the raster is named in the error.
+    let lost = json!({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"class": "water"}, "geometry": {"type": "Polygon", "coordinates": [[[10.002, 45.002], [10.015, 45.002], [10.015, 45.035], [10.002, 45.035], [10.002, 45.002]]]}},
+        {"type": "Feature", "properties": {"class": "lost"}, "geometry": {"type": "Polygon", "coordinates": [[[-60.0, -10.0], [-59.0, -10.0], [-59.0, -9.0], [-60.0, -9.0], [-60.0, -10.0]]]}}]});
+    s.run("layer.addDataText", &json!({"fileName": "lost.geojson", "text": lost.to_string()})).unwrap();
+    let err = s.run("dl.train", &json!({"layer": "scene", "training": "lost", "classField": "class"})).unwrap_err();
+    assert!(err.contains("'lost'"), "{err}");
     let r = s
         .run(
             "dl.classify",

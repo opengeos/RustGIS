@@ -170,7 +170,12 @@ fn train(s: &Session, p: &Value) -> Result<DlModel, String> {
     }
     for (row, ft) in l.dataset.features.iter().enumerate() {
         let Some(Geometry::Polygon(polys)) = &ft.geometry else { continue };
-        let key = l.dataset.value(row, fi).to_string();
+        // A polygon with no class value trains nothing.
+        let v = l.dataset.value(row, fi);
+        if matches!(v, rustgis_data::Value::Null) || v.to_string().trim().is_empty() {
+            continue;
+        }
+        let key = v.to_string();
         let share = (MAX_SAMPLES_PER_CLASS / polygons.get(&key).copied().unwrap_or(1).max(1)).max(1);
         let ci = match classes.iter().position(|c| *c == key) {
             Some(i) => i,
@@ -189,6 +194,10 @@ fn train(s: &Session, p: &Value) -> Result<DlModel, String> {
             }
             samples.extend(got.into_iter().map(|x| (x, ci)));
         }
+    }
+    // Every class needs pixels of its own (its polygons may miss the raster or cover no data).
+    if let Some((c, _)) = classes.iter().zip(&per_class).find(|(_, n)| **n < 5) {
+        return Err(format!("the class '{c}' has fewer than 5 pixels with data under its polygons"));
     }
     let hidden: Vec<usize> = match p.get("hidden").and_then(Value::as_array) {
         Some(a) => a.iter().filter_map(Value::as_u64).map(|u| u as usize).take(neural::MAX_LAYERS).collect(),
