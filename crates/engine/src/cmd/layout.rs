@@ -670,6 +670,19 @@ fn series(s: &mut Session, p: &Value) -> CmdResult {
 
 /// The pages of a layout's map series: (count, page name of each row).
 pub fn series_pages(s: &Session, li: usize) -> Option<Vec<String>> {
+    let (layer, fi) = series_layer(s, li)?;
+    Some((0..layer.dataset.features.len()).map(|r| page_name(layer, fi, r)).collect())
+}
+
+/// A map series' page count and the name of `page`, without naming every page.
+pub fn series_info(s: &Session, li: usize, page: usize) -> Option<(usize, String)> {
+    let (layer, fi) = series_layer(s, li)?;
+    let n = layer.dataset.features.len();
+    Some((n, if page < n { page_name(layer, fi, page) } else { String::new() }))
+}
+
+/// A map series' index layer and its name field.
+fn series_layer(s: &Session, li: usize) -> Option<(&rustgis_map::Layer, Option<usize>)> {
     let l = s.project.layouts.get(li)?;
     let sr = l.series.as_ref()?;
     let map = match l.element(sr.frame).map(|e| &e.kind) {
@@ -677,20 +690,18 @@ pub fn series_pages(s: &Session, li: usize) -> Option<Vec<String>> {
         _ => return None,
     };
     let layer = s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map))?.layer_by_name(&sr.layer)?;
-    let fi = layer.dataset.field_index(&sr.name_field);
-    Some(
-        (0..layer.dataset.features.len())
-            .map(|r| fi.map(|i| layer.dataset.value(r, i).to_string()).unwrap_or_else(|| (r + 1).to_string()))
-            .collect(),
-    )
+    Some((layer, layer.dataset.field_index(&sr.name_field)))
+}
+
+fn page_name(layer: &rustgis_map::Layer, fi: Option<usize>, row: usize) -> String {
+    fi.map(|i| layer.dataset.value(row, i).to_string()).unwrap_or_else(|| (row + 1).to_string())
 }
 
 fn series_page(s: &mut Session, p: &Value) -> CmdResult {
     let li = index(s, p)?;
-    let names = series_pages(s, li).ok_or("the layout has no map series")?;
+    let (n, _) = series_info(s, li, 0).ok_or("the layout has no map series")?;
     let l = s.project.layouts.get(li).ok_or("no layout")?;
     let sr = l.series.clone().ok_or("the layout has no map series")?;
-    let n = names.len();
     let page = match p.get("page") {
         Some(Value::String(t)) if t == "next" => (sr.page + 1).min(n.saturating_sub(1)),
         Some(Value::String(t)) if t == "previous" => sr.page.saturating_sub(1),
@@ -722,7 +733,8 @@ fn series_page(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(sr) = s.project.layouts.get_mut(li).and_then(|l| l.series.as_mut()) {
         sr.page = page;
     }
-    Ok(json!({"page": page, "pages": n, "name": names.get(page).cloned().unwrap_or_default()}))
+    let name = series_info(s, li, page).map(|x| x.1).unwrap_or_default();
+    Ok(json!({"page": page, "pages": n, "name": name}))
 }
 
 /// Renders a layout to PNG or PDF bytes. `all` renders every map series page (PDF only).

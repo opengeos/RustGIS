@@ -35,6 +35,11 @@ pub struct LayoutView {
     /// A frame being drawn: "polygon" (clicked) or "lasso" (dragged), and its points (mm).
     pub tool: Option<&'static str>,
     sketch: Vec<(f64, f64)>,
+    /// The layout shown, shared between frames until the project changes (layouts can hold
+    /// megabytes of pictures, too much to copy every frame), keyed by layout and revision.
+    shown: Option<(usize, u64, std::rc::Rc<Layout>)>,
+    /// The map series page count and the current page's name, by the same key.
+    series: Option<(usize, u64, usize, String)>,
 }
 
 impl LayoutView {
@@ -96,7 +101,16 @@ fn resized((x, y, w, h): (f64, f64, f64, f64), handle: usize, dx: f64, dy: f64) 
 
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let Some(li) = app.session.active_layout else { return };
-    let Some(layout) = app.session.project.layouts.get(li).cloned() else { return };
+    let rev = app.session.revision;
+    let layout = match &app.layout.shown {
+        Some((i, r, l)) if *i == li && *r == rev => l.clone(),
+        _ => {
+            let Some(l) = app.session.project.layouts.get(li).cloned() else { return };
+            let l = std::rc::Rc::new(l);
+            app.layout.shown = Some((li, rev, l.clone()));
+            l
+        }
+    };
     let t = Tokens::get(ui.ctx());
     if app.layout.selected.is_some_and(|id| layout.element(id).is_none()) {
         app.layout.selected = None;
@@ -196,16 +210,12 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     painter.rect_filled(bg, CornerRadius::same(10), t.ribbon.gamma_multiply(0.9));
     painter.galley(bg.min + vec2(7.0, 4.0), g, t.text_dim);
     if layout.series.is_some()
-        && let Some(names) = rustgis_engine::cmd::layout::series_pages(&app.session, li)
+        && let Some((total, name)) = series_label(app, li)
     {
         let page_no = layout.series.as_ref().map_or(0, |s| s.page);
         let label = crate::i18n::fmt(
             "Page {n} of {total}: {name}",
-            &[
-                ("n", &(page_no + 1).to_string()),
-                ("total", &names.len().to_string()),
-                ("name", names.get(page_no).map_or("", |s| s.as_str())),
-            ],
+            &[("n", &(page_no + 1).to_string()), ("total", &total.to_string()), ("name", &name)],
         );
         let g = painter.layout_no_wrap(label, semibold(12.0), t.text);
         let bg = Rect::from_min_size(pos2(area.min.x + 10.0, area.min.y + 10.0), g.size() + vec2(16.0, 10.0));
@@ -214,19 +224,29 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     }
 }
 
-/// Page values for dynamic text in the view.
-pub fn page_info(app: &RustGisApp, li: usize) -> rustgis_engine::render::layout::PageInfo {
-    let names = rustgis_engine::cmd::layout::series_pages(&app.session, li);
-    let page = app.session.project.layouts.get(li).and_then(|l| l.series.as_ref()).map_or(0, |s| s.page);
-    rustgis_engine::render::layout::PageInfo {
-        page: page + 1,
-        pages: names.as_ref().map_or(1, Vec::len),
-        page_name: names.and_then(|n| n.get(page).cloned()).unwrap_or_default(),
+/// The map series page count and the current page's name, worked out once per project change.
+fn series_label(app: &mut RustGisApp, li: usize) -> Option<(usize, String)> {
+    let rev = app.session.revision;
+    if let Some((i, r, n, name)) = &app.layout.series
+        && *i == li
+        && *r == rev
+    {
+        return Some((*n, name.clone()));
     }
+    let page = app.session.project.layouts.get(li).and_then(|l| l.series.as_ref()).map_or(0, |s| s.page);
+    let (n, name) = rustgis_engine::cmd::layout::series_info(&app.session, li, page)?;
+    app.layout.series = Some((li, rev, n, name.clone()));
+    Some((n, name))
+}
+
+/// Page values for dynamic text in the view.
+pub fn page_info(app: &mut RustGisApp, li: usize) -> rustgis_engine::render::layout::PageInfo {
+    let page = app.session.project.layouts.get(li).and_then(|l| l.series.as_ref()).map_or(0, |s| s.page);
+    let (pages, page_name) = series_label(app, li).unwrap_or((1, String::new()));
+    rustgis_engine::render::layout::PageInfo { page: page + 1, pages, page_name }
 }
 
 fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &Layout, li: usize, page: Rect, s: f32) {
-    let typing = ui.ctx().egui_wants_keyboard_input();
     // Wheel zooms the page about the pointer.
     if let Some(p) = resp.hover_pos() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y + i.zoom_delta().ln() * 300.0);
@@ -239,7 +259,6 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
             app.layout.zoom = new;
         }
     }
-    let _ = typing;
     let pointer_mm = resp.interact_pointer_pos().map(|p| to_mm(page, s, p));
     // Drawing a polygon or lasso frame.
     if let Some(tool) = app.layout.tool {

@@ -341,6 +341,10 @@ impl RustGisApp {
             let text = std::str::from_utf8(bytes).map_err(|_| "not a RustGIS layout".to_string())?;
             return self.run("layout.import", json!({"text": text}));
         }
+        // A layout picture needs the layout still open.
+        if self.session.active_layout.is_none() {
+            self.ui.pending_layout_picture = false;
+        }
         if self.ui.pending_layout_picture && [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e)) {
             use base64::Engine;
             self.ui.pending_layout_picture = false;
@@ -498,6 +502,9 @@ impl RustGisApp {
             }
             "ui.addData" => {
                 if let Some(open) = &self.services.open_async {
+                    // A picture picker cancelled earlier mustn't claim this file.
+                    self.ui.pending_layout_picture = false;
+                    self.ui.pending_picture = None;
                     open("data");
                 } else if let Some(path) =
                     dialogs::pick_open(&["geojson", "json", "csv", "shp", "tif", "tiff", "asc"], tl!("Vector and raster data"))
@@ -507,6 +514,9 @@ impl RustGisApp {
             }
             "ui.open" => {
                 if let Some(open) = &self.services.open_async {
+                    // A picture picker cancelled earlier mustn't claim this file.
+                    self.ui.pending_layout_picture = false;
+                    self.ui.pending_picture = None;
                     open("project");
                     self.ui.backstage = false;
                 } else if let Some(path) = dialogs::pick_open(&["rgisx"], tl!("RustGIS project")) {
@@ -571,6 +581,9 @@ impl RustGisApp {
             }
             "ui.importLayout" => {
                 if let Some(open) = &self.services.open_async {
+                    // A picture picker cancelled earlier mustn't claim this file.
+                    self.ui.pending_layout_picture = false;
+                    self.ui.pending_picture = None;
                     open("layout");
                 } else if let Some(path) = dialogs::pick_open(&["rgislayout"], tl!("RustGIS layout")) {
                     return self.run("layout.import", json!({"path": path}));
