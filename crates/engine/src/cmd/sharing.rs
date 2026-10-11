@@ -132,7 +132,7 @@ pub fn commands() -> Vec<C> {
             let v: Value = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS web tool: {e}"))?;
             let name = v["name"].as_str().unwrap_or("Tool").chars().take(200).collect::<String>();
             let steps = v.get("steps").cloned().ok_or("not a RustGIS web tool (no steps)")?;
-            s.run("model.new", &json!({"name": name, "steps": steps}))
+            s.run("model.new", &json!({"name": name, "steps": steps, "imported": true}))
         })
         .params(r#"{"path"?: "*.rgistool", "text"?: tool JSON}"#),
     ]
