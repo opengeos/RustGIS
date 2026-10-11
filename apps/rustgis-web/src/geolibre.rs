@@ -29,9 +29,30 @@ function tools() {
   }
   return ready;
 }
+// Listing the manifests runs the runner synchronously (seconds of a blocked page), so the list
+// is kept in the browser's cache under the runner's versioned URL and read from there on later
+// visits. The runner itself loads only when a tool runs.
+const MANIFESTS = `${BASE}/manifests.json`;
+async function manifestCache() {
+  try { return await caches.open("rustgis-geolibre"); } catch (_) { return null; }
+}
 export async function geolibre_manifests() {
+  const cache = await manifestCache();
+  try {
+    const hit = cache && await cache.match(MANIFESTS);
+    if (hit) {
+      const text = await hit.text();
+      // A damaged entry is dropped and listed again.
+      if (Array.isArray(JSON.parse(text))) return text;
+    }
+  } catch (_) {}
+  try { if (cache) await cache.delete(MANIFESTS); } catch (_) {}
   const t = await tools();
-  return JSON.stringify(await t.listManifests());
+  const text = JSON.stringify(await t.listManifests());
+  try {
+    if (cache) await cache.put(MANIFESTS, new Response(text, { headers: { "content-type": "application/json" } }));
+  } catch (_) {}
+  return text;
 }
 export async function geolibre_run(tool, argv, names, datas) {
   const t = await tools();
