@@ -1851,6 +1851,17 @@ fn presentations_and_notebooks() {
     assert_eq!(nb.name, "Analysis 2");
     assert_eq!(nb.cells.len(), 4);
     assert!(nb.cells[2].output.is_some());
+    // A notebook from a file can't touch files; one made here can.
+    let png = dir.join("nb.png");
+    let cell = format!("share.exportMap {{\"path\": {:?}}}", png.to_str().unwrap());
+    s.run("notebook.addCell", &json!({"notebook": "Analysis 2", "source": cell})).unwrap();
+    let r = s.run("notebook.run", &json!({"notebook": "Analysis 2", "cell": 4})).unwrap();
+    assert_eq!(r["error"], 4);
+    assert!(!png.exists());
+    s.run("notebook.addCell", &json!({"notebook": "Analysis", "source": cell})).unwrap();
+    let last = s.project.notebooks[0].cells.len() - 1;
+    s.run("notebook.run", &json!({"notebook": "Analysis", "cell": last})).unwrap();
+    assert!(png.exists());
     assert!(s.run("notebook.open", &json!({"text": "{\"cells\": 5}"})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }

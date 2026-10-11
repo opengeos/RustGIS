@@ -75,6 +75,7 @@ pub fn commands() -> Vec<C> {
                     Cell::new(CellKind::Code, "# For example:\n# map.goToXY {\"lon\": 12.5, \"lat\": 41.9, \"scale\": 2000000}"),
                 ],
             };
+            s.trusted_notebooks.insert(name.to_lowercase());
             push(s, nb)
         })
         .params(r#"{"name"?}"#),
@@ -98,7 +99,8 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"notebook": name|index}"#),
         C::new("notebook.remove", "Delete Notebook", "Catalog", |s, p| {
             let i = index(s, p)?;
-            s.project.notebooks.remove(i);
+            let nb = s.project.notebooks.remove(i);
+            s.trusted_notebooks.remove(&nb.name.to_lowercase());
             s.active_notebook = None;
             Ok(Value::Null)
         })
@@ -219,7 +221,15 @@ fn run(s: &mut Session, p: &Value) -> CmdResult {
             continue;
         }
         let script = c.source.clone();
-        let r = super::workflows::run_script(s, &json!({"script": script}));
+        // A notebook from a file (opened, or in an opened project) is someone else's: its
+        // cells may not read or write files or run other scripts.
+        let trusted = s.project.notebooks.get(i).is_some_and(|nb| s.trusted_notebooks.contains(&nb.name.to_lowercase()));
+        let r = match (trusted, untrusted_line(&script)) {
+            (false, Some(n)) => Err(format!(
+                "line {n} reads or writes files or runs a script, which a notebook from a file can't do; copy it into a new notebook to run it"
+            )),
+            _ => super::workflows::run_script(s, &json!({"script": script})),
+        };
         // Commands in the cell may have removed notebooks; find this one again.
         let failed = r.is_err();
         let text = match r {
@@ -248,6 +258,19 @@ fn run(s: &mut Session, p: &Value) -> CmdResult {
         }
     }
     Ok(json!({"ran": ran}))
+}
+
+/// The first line (1-based) of a cell whose command could reach outside the session.
+fn untrusted_line(script: &str) -> Option<usize> {
+    script.lines().enumerate().find_map(|(n, line)| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let (id, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+        let params: Value = serde_json::from_str(rest.trim()).unwrap_or(Value::Null);
+        super::items::touches_files(id.trim_end_matches('='), &params).then_some(n + 1)
+    })
 }
 
 /// Text of a Jupyter field: a string or a list of lines.

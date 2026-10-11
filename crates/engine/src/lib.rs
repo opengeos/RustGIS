@@ -225,6 +225,8 @@ pub struct Session {
     pub trusted_tasks: std::collections::HashSet<String>,
     /// Models made in this session (lower-cased names); the steps of others may not touch files.
     pub trusted_models: std::collections::HashSet<String>,
+    /// Notebooks made in this session (lower-cased names); the cells of others may not touch files.
+    pub trusted_notebooks: std::collections::HashSet<String>,
     /// How many geoprocessing history records came with the opened project (from its file).
     pub history_from_file: usize,
     /// The report open in the Report pane, if any.
@@ -284,6 +286,7 @@ impl Session {
             active_layout: None,
             trusted_tasks: Default::default(),
             trusted_models: Default::default(),
+            trusted_notebooks: Default::default(),
             history_from_file: 0,
             active_report: None,
             active_presentation: None,
@@ -399,6 +402,7 @@ impl Session {
         self.dirty = false;
         self.trusted_tasks.clear();
         self.trusted_models.clear();
+        self.trusted_notebooks.clear();
         self.edit_counts.clear();
         self.topology_errors.clear();
         self.measurements.clear();
