@@ -144,7 +144,7 @@ fn catalog_ids_exist() {
     let (done, total) = crate::catalog::coverage();
     assert!(total > 250);
     // The floor only rises.
-    assert!(done >= 223, "coverage fell to {done}");
+    assert!(done >= 241, "coverage fell to {done}");
 }
 
 #[test]
@@ -1317,4 +1317,63 @@ fn layer_effects_and_imagery_tools() {
     // Effects and workspaces save with the project.
     let p = crate::Project::from_json(&serde_json::to_string(&s.project).unwrap()).unwrap();
     assert!(p.map().layer_by_name("Countries").unwrap().extrusion.is_some() && p.workspaces.len() == 2);
+}
+
+#[test]
+fn view_effects_scene_and_navigation() {
+    use crate::render::View;
+    let mut s = world();
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 48.0, "scale": 20_000_000})).unwrap();
+    let png = |s: &mut Session| {
+        let v = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false };
+        crate::render::render(s.map_mut(), &v).unwrap().pixmap.data().to_vec()
+    };
+    let plain = png(&mut s);
+    for p in [
+        json!({"sunTime": 1_710_979_200.0}),
+        json!({"weather": "fog"}),
+        json!({"weather": "snow", "vignette": true, "edges": true}),
+        json!({"tiltShift": true, "grain": true}),
+        json!({"brightness": 20, "contrast": 10, "saturation": -50, "sepia": 30}),
+    ] {
+        s.run("map.effects", &p).unwrap_or_else(|e| panic!("{p}: {e}"));
+        assert!(png(&mut s) != plain, "{p}");
+    }
+    assert!(s.run("map.effects", &json!({"weather": "hail"})).is_err());
+    s.run("map.effects", &json!({"reset": true})).unwrap();
+    assert!(png(&mut s) == plain, "reset restores the map");
+    s.run("map.colorVision", &json!({"mode": "deuteranopia"})).unwrap();
+    assert!(png(&mut s) != plain);
+    // Exports aren't simulated.
+    let export = crate::cmd::share::map_png(&mut s, Some(300.0), Some(200.0), None).unwrap();
+    s.run("map.colorVision", &json!({"mode": "normal"})).unwrap();
+    assert!(export == crate::cmd::share::map_png(&mut s, Some(300.0), Some(200.0), None).unwrap());
+    s.run("map.drawingMode", &json!({"mode": "wireframe"})).unwrap();
+    assert!(png(&mut s) != plain);
+    s.run("map.drawingMode", &json!({"mode": "standard"})).unwrap();
+    s.run("layer.priority", &json!({"layer": "Countries", "value": 5})).unwrap();
+    assert!(png(&mut s) != plain, "countries now draw over the cities");
+    s.run("layer.priority", &json!({"layer": "Countries", "value": 0})).unwrap();
+    s.run("map.clipping", &json!({"mode": "distance", "distance": 500_000})).unwrap();
+    assert!(png(&mut s) != plain);
+    s.run("map.clipping", &json!({"mode": "none"})).unwrap();
+    s.run("map.displayType", &json!({"mode": "speed"})).unwrap();
+    assert!(png(&mut s) != plain, "no antialiasing");
+    s.run("map.displayType", &json!({"mode": "quality"})).unwrap();
+    assert!(png(&mut s) == plain);
+    // Views and navigation.
+    s.run("map.viewMode", &json!({"mode": "local"})).unwrap();
+    assert!(s.map().projection.code().starts_with("local:"));
+    png(&mut s);
+    s.run("map.viewMode", &json!({"mode": "global"})).unwrap();
+    assert!(s.map().projection.is_globe());
+    s.run("map.navigation", &json!({"mode": "planar"})).unwrap();
+    assert!(!s.map().projection.is_globe(), "planar navigation is flat");
+    s.run("map.navigation", &json!({"mode": "firstPerson"})).unwrap();
+    let before = s.map().center_lonlat();
+    s.run("map.walk", &json!({"forward": 1})).unwrap();
+    assert!(s.map().center_lonlat().y > before.y, "walking forward goes north");
+    let cam = s.run("map.camera", &json!({"lon": 2.35, "lat": 48.85, "scale": 1_000_000})).unwrap();
+    assert!((cam["lon"].as_f64().unwrap() - 2.35).abs() < 1e-6);
+    assert!(s.run("map.navigator", &Value::Null).unwrap()["navigator"].as_bool().unwrap());
 }

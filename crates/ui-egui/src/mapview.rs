@@ -62,6 +62,8 @@ pub struct MapView {
     sketch_done: bool,
     /// The next click splits the selected lines there (Editing pane › Split).
     pub split_mode: bool,
+    /// The magnifying lens follows the pointer.
+    pub magnifier: bool,
     pub popup: Option<Popup>,
     pub pointer_lonlat: Option<Coord>,
     pub dms: bool,
@@ -86,6 +88,7 @@ impl Default for MapView {
             sketch: Vec::new(),
             sketch_done: false,
             split_mode: false,
+            magnifier: false,
             popup: None,
             pointer_lonlat: None,
             dms: false,
@@ -299,6 +302,36 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             app.map.last_interaction = time;
             app.map.camera_moved = true;
             app.map.popup = None;
+        }
+    }
+    // First-person navigation: W A S D walk, Q and E fly up and down.
+    if app.session.map().view.first_person && !ui.ctx().egui_wants_keyboard_input() {
+        let (mut fw, mut rt, mut up) = (0.0, 0.0, 0.0);
+        ui.input(|i| {
+            if i.key_down(egui::Key::W) {
+                fw += 0.15;
+            }
+            if i.key_down(egui::Key::S) {
+                fw -= 0.15;
+            }
+            if i.key_down(egui::Key::D) {
+                rt += 0.15;
+            }
+            if i.key_down(egui::Key::A) {
+                rt -= 0.15;
+            }
+            if i.key_down(egui::Key::E) {
+                up += 0.15;
+            }
+            if i.key_down(egui::Key::Q) {
+                up -= 0.15;
+            }
+        });
+        if fw != 0.0 || rt != 0.0 || up != 0.0 {
+            let _ = app.session.run("map.walk", &json!({"forward": fw, "right": rt, "up": up}));
+            app.map.last_interaction = time;
+            app.map.camera_moved = true;
+            ui.ctx().request_repaint();
         }
     }
     // Arrow keys pan.
@@ -660,6 +693,52 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
             }
         }
     }
+    // The navigator: a compass, zoom buttons and a pan pad in the top-left corner.
+    if app.session.map().view.navigator {
+        navigator(app, ui, p, rect, t);
+    }
+    // First-person crosshair.
+    if app.session.map().view.first_person {
+        let c = rect.center();
+        for (a, b) in [
+            (vec2(-12.0, 0.0), vec2(-4.0, 0.0)),
+            (vec2(4.0, 0.0), vec2(12.0, 0.0)),
+            (vec2(0.0, -12.0), vec2(0.0, -4.0)),
+            (vec2(0.0, 4.0), vec2(0.0, 12.0)),
+        ] {
+            p.line_segment([c + a, c + b], Stroke::new(2.0, Color32::from_black_alpha(160)));
+        }
+    }
+    // The magnifier: twice the map under the pointer, in a lens beside it.
+    if app.map.magnifier
+        && let (Some(tex), Some(ptr)) = (&app.map.texture, ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p)))
+    {
+        let r = 70.0;
+        let centre = pos2((ptr.x + r + 24.0).min(rect.max.x - r - 4.0), (ptr.y - r - 24.0).max(rect.min.y + r + 4.0));
+        let uv_c = vec2((ptr.x - rect.min.x) / rect.width(), (ptr.y - rect.min.y) / rect.height());
+        let half = vec2(r / 2.0 / rect.width(), r / 2.0 / rect.height());
+        let lens = Rect::from_center_size(centre, vec2(r * 2.0, r * 2.0));
+        let mut mesh = egui::Mesh::with_texture(tex.id());
+        let n = 48;
+        let centre_uv = pos2(uv_c.x, uv_c.y);
+        mesh.vertices.push(egui::epaint::Vertex { pos: centre, uv: centre_uv, color: Color32::WHITE });
+        for k in 0..=n {
+            let a = k as f32 / n as f32 * std::f32::consts::TAU;
+            let (cs, sn) = (a.cos(), a.sin());
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: centre + vec2(cs, sn) * r,
+                uv: pos2(uv_c.x + cs * half.x, uv_c.y + sn * half.y),
+                color: Color32::WHITE,
+            });
+        }
+        for k in 1..=n as u32 {
+            mesh.indices.extend_from_slice(&[0, k, k + 1]);
+        }
+        p.add(egui::Shape::mesh(mesh));
+        p.circle_stroke(centre, r, Stroke::new(2.5, t.accent));
+        p.circle_stroke(ptr, 6.0, Stroke::new(1.5, t.accent));
+        let _ = lens;
+    }
     // Points picked for a workflow.
     if let Some(pick) = &app.workflow.pick {
         let pts = pick.points.clone();
@@ -1013,6 +1092,39 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
         app.map.popup = None;
     } else if let (Some(i), Some(pp)) = (step, &mut app.map.popup) {
         pp.index = i;
+    }
+}
+
+/// The on-screen navigator: a north compass, zoom in and out, and four pan arrows.
+fn navigator(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t: &Tokens) {
+    let c = pos2(rect.min.x + 52.0, rect.min.y + 112.0);
+    p.circle_filled(c, 34.0, t.ribbon.gamma_multiply(0.92));
+    p.circle_stroke(c, 34.0, Stroke::new(1.0, t.border_strong));
+    let click = ui.input(|i| i.pointer.primary_clicked().then(|| i.pointer.interact_pos()).flatten());
+    let (w, h) = (rect.width() as f64, rect.height() as f64);
+    for (dir, (dx, dy)) in [("n", (0.0, -1.0)), ("s", (0.0, 1.0)), ("e", (1.0, 0.0)), ("w", (-1.0, 0.0))] {
+        let tip = c + vec2(dx, dy) * 28.0;
+        let base = c + vec2(dx, dy) * 18.0;
+        let side = vec2(-dy, dx) * 6.0;
+        let col = if dir == "n" { Color32::from_rgb(0xD1, 0x3C, 0x3C) } else { t.text_dim };
+        p.add(egui::Shape::convex_polygon(vec![tip, base + side, base - side], col, Stroke::NONE));
+        if let Some(cp) = click
+            && (cp - (c + vec2(dx, dy) * 23.0)).length() < 9.0
+        {
+            pan(app, -dx as f64 * w * 0.25, -dy as f64 * h * 0.25, w, h);
+            app.session.record_extent();
+        }
+    }
+    p.text(c, Align2::CENTER_CENTER, "N", semibold(11.0), t.text);
+    for (k, (label, f)) in [("+", 2.0), ("−", 0.5)].into_iter().enumerate() {
+        let r = Rect::from_center_size(pos2(c.x, c.y + 52.0 + k as f32 * 26.0), vec2(24.0, 22.0));
+        p.rect_filled(r, CornerRadius::same(5), t.ribbon.gamma_multiply(0.92));
+        p.rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+        p.text(r.center(), Align2::CENTER_CENTER, label, semibold(14.0), t.text);
+        if click.is_some_and(|cp| r.contains(cp)) {
+            zoom(app, f, w / 2.0, h / 2.0, w, h);
+            app.session.record_extent();
+        }
     }
 }
 

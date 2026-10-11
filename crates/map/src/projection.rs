@@ -35,6 +35,16 @@ pub const PRESETS: &[(&str, &str, &str)] = &[
 /// The PROJ definition and label of a projection code: a preset id or `EPSG:<code>`.
 pub fn lookup(code: &str) -> Result<(String, String), String> {
     let code = code.trim();
+    // `local:lon,lat`: an azimuthal equidistant projection centred on a point (a local scene).
+    if let Some(rest) = code.strip_prefix("local:") {
+        let n: Vec<f64> = rest.split(',').filter_map(|x| x.trim().parse().ok()).filter(|x: &f64| x.is_finite()).collect();
+        let [lon, lat] = n.as_slice() else { return Err("a local view is local:lon,lat".into()) };
+        let (lon, lat) = ((lon + 180.0).rem_euclid(360.0) - 180.0, lat.clamp(-89.0, 89.0));
+        return Ok((
+            format!("+proj=aeqd +lat_0={lat} +lon_0={lon} +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"),
+            format!("Local ({lon:.2}°, {lat:.2}°)"),
+        ));
+    }
     if let Some((_, label, def)) = PRESETS.iter().find(|(id, label, _)| id.eq_ignore_ascii_case(code) || label.eq_ignore_ascii_case(code)) {
         return Ok((def.to_string(), label.to_string()));
     }

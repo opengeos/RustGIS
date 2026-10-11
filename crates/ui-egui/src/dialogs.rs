@@ -34,6 +34,7 @@ impl Dialogs {
             "renameLayer" => "renameLayer",
             "coordinateSystem" => "coordinateSystem",
             "graphicText" => "graphicText",
+            "camera" => "camera",
             other => return Err(format!("unknown dialog '{other}'")),
         };
         if matches!(name, "addField" | "calculateField" | "definitionQuery" | "renameLayer") && active.is_none() {
@@ -57,6 +58,12 @@ impl Dialogs {
                 self.b = format!("{:.4}", c.y);
             }
             "bookmark" => self.text = format!("Bookmark {}", s.map().bookmarks.len() + 1),
+            "camera" => {
+                let c = s.map().center_lonlat();
+                self.a = format!("{:.5}", c.x);
+                self.b = format!("{:.5}", c.y);
+                self.c = format!("{:.0}", s.scale());
+            }
             "graphicText" => {
                 self.text = "Text".into();
                 self.c = "14".into();
@@ -82,6 +89,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "definitionQuery" => "Definition Query",
         "coordinateSystem" => "Coordinate System",
         "graphicText" => "Add Text",
+        "camera" => "Camera",
         _ => "Rename Layer",
     };
     let t = Tokens::get(ctx);
@@ -113,6 +121,22 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 });
             }
             "coordinateSystem" => close = coordinate_system(app, ui, &t),
+            "camera" => {
+                egui::Grid::new("cam").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+                    for (label, v) in [("Longitude", &mut app.dialogs.a), ("Latitude", &mut app.dialogs.b), ("Scale 1:", &mut app.dialogs.c)] {
+                        ui.label(tl!(label));
+                        ui.add(egui::TextEdit::singleline(v).desired_width(160.0));
+                        ui.end_row();
+                    }
+                    ui.label(tl!("Projection"));
+                    ui.label(app.session.map().projection.label());
+                    ui.end_row();
+                });
+                close = buttons(app, ui, "Apply", |app| {
+                    let n = |s: &str| s.trim().parse::<f64>().ok();
+                    app.run("map.camera", json!({"lon": n(&app.dialogs.a), "lat": n(&app.dialogs.b), "scale": n(&app.dialogs.c)})).map(|_| ())
+                });
+            }
             "graphicText" => {
                 ui.label(tl!("Text"));
                 ui.add(egui::TextEdit::multiline(&mut app.dialogs.text).desired_rows(2).desired_width(f32::INFINITY));

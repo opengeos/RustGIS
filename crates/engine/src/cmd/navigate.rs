@@ -27,7 +27,7 @@ pub fn commands() -> Vec<C> {
             Ok(Value::Null)
         })
         .view(),
-        C::new("map.goToXY", "Go To XY", "Map › Navigate", go_to).view().params(r#"{"lon": number, "lat": number, "scale"?: number}"#),
+        C::new("map.goToXY", "Go To XY", "Map › Navigate", go_to_xy).view().params(r#"{"lon": number, "lat": number, "scale"?: number}"#),
         C::new("map.setScale", "Set Scale", "Status Bar", |s, p| {
             let sc = f(p, "scale").ok_or("scale is required")?;
             s.map_mut().set_scale(sc);
@@ -118,7 +118,7 @@ fn zoom(s: &mut Session, factor: f64) -> CmdResult {
     Ok(Value::Null)
 }
 
-fn go_to(s: &mut Session, p: &Value) -> CmdResult {
+pub(crate) fn go_to_xy(s: &mut Session, p: &Value) -> CmdResult {
     let lon = f(p, "lon").or_else(|| f(p, "x")).ok_or("lon is required")?;
     let lat = f(p, "lat").or_else(|| f(p, "y")).ok_or("lat is required")?;
     if !(-180.0..=180.0).contains(&lon) || !(-90.0..=90.0).contains(&lat) {

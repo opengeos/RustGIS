@@ -11,6 +11,7 @@ pub mod layout;
 pub mod projection;
 pub mod raster;
 pub mod symbology;
+pub mod view;
 pub mod world;
 
 pub use camera::Camera;
@@ -123,6 +124,10 @@ pub struct Layer {
     /// Polygons drawn extruded.
     #[serde(default)]
     pub extrusion: Option<effects::Extrusion>,
+    /// Layers with a higher priority draw above lower ones, whatever their order (the scene's
+    /// depth priority).
+    #[serde(default)]
+    pub priority: i32,
     /// Domains, subtypes, attribute rules, contingent values, archive and templates.
     #[serde(default, skip_serializing_if = "design::Design::is_empty")]
     pub design: design::Design,
@@ -168,6 +173,7 @@ impl Layer {
             display_filters: Vec::new(),
             aggregation: None,
             extrusion: None,
+            priority: 0,
             design: design::Design::default(),
             raster: None,
             projected: Vec::new(),
@@ -311,6 +317,9 @@ pub struct Map {
     /// A layer shown only left of a divider (0–1 across the view): the swipe comparison.
     #[serde(default)]
     pub swipe: Option<(u32, f64)>,
+    /// Effects, colour vision, drawing mode, clipping and navigation aids.
+    #[serde(default)]
+    pub view: view::ViewSettings,
     #[serde(default)]
     next_layer_id: u32,
 }
@@ -386,6 +395,7 @@ impl Map {
             label_lock: None,
             editing: design::MapEditing::default(),
             swipe: None,
+            view: view::ViewSettings::default(),
             next_layer_id: 1,
         }
     }

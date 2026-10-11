@@ -60,6 +60,10 @@ impl Projection {
         }
         let s = s.trim();
         crate::projection::lookup(s)?;
+        // A local view keeps its centre.
+        if s.starts_with("local:") {
+            return Ok(Projection::Custom(s.to_string()));
+        }
         // Canonical form: the preset id, or EPSG:<n>.
         let canonical = crate::projection::PRESETS
             .iter()

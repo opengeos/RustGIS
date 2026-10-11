@@ -4,6 +4,7 @@
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::Tool;
 use rustgis_engine::data::GeometryType;
+use rustgis_engine::map::view::Weather;
 use rustgis_engine::map::{Basemap, RasterRenderer, Renderer, Resampling, Stretch};
 use serde_json::{Value, json};
 
@@ -264,6 +265,24 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
             small(ui, app, "goto_xy", "Go To XY", "Pan to a longitude/latitude.", "ui.dialog", json!({"name": "goToXY"}), false);
         });
         col(ui, |ui| {
+            let fp = app.session.map().view.first_person;
+            small_menu(
+                ui,
+                app,
+                "explore",
+                if fp { "First-Person" } else { "Planar" },
+                "Navigate with the mouse (planar) or walk with W A S D, Q and E (first-person).",
+                move |ui, app| {
+                    if ui.radio(!fp, tl!("Planar Navigation")).clicked() {
+                        let _ = app.run("map.navigation", json!({"mode": "planar"}));
+                        ui.close();
+                    }
+                    if ui.radio(fp, tl!("First-Person Navigation")).clicked() {
+                        let _ = app.run("map.navigation", json!({"mode": "firstPerson"}));
+                        ui.close();
+                    }
+                },
+            );
             let mode = app.session.map().popup_mode;
             small_menu(ui, app, "popup", "Pop-ups", "Choose which layers a click identifies.", |ui, app| {
                 for m in rustgis_engine::map::PopupMode::ALL {
@@ -808,6 +827,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
         );
         let current = app.session.map().projection.code();
+        let local = current.starts_with("local:");
         big_menu(ui, app, "basemap", "Projection", "Choose how the flat map lays out the Earth.", move |ui, app| {
             let mut items: Vec<(String, String)> = vec![("mercator".into(), "Web Mercator".into())];
             items.extend(rustgis_engine::map::projection::PRESETS.iter().map(|(id, label, _)| (id.to_string(), label.to_string())));
@@ -824,6 +844,176 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 let _ = app.run("ui.dialog", json!({"name": "coordinateSystem"}));
                 ui.close();
             }
+        });
+        col(ui, |ui| {
+            small(ui, app, "globe_view", "Global", "A globe scene.", "map.viewMode", json!({"mode": "global"}), on);
+            small(
+                ui,
+                app,
+                "map",
+                "Local",
+                "A flat scene centred on the view (azimuthal equidistant).",
+                "map.viewMode",
+                json!({"mode": "local"}),
+                local,
+            );
+        });
+    });
+    let v = app.session.map().view.clone();
+    group(ui, "Effects", |ui| {
+        col(ui, |ui| {
+            let sun = v.effects.sun_time.is_some();
+            small_menu(ui, app, "brightness", "Illumination", "Day and night shading for a time.", move |ui, app| {
+                if ui.radio(!sun, tl!("Off")).clicked() {
+                    let _ = app.run("map.effects", json!({"sunTime": null}));
+                    ui.close();
+                }
+                if ui.button(tl!("Now")).clicked() {
+                    let _ = app.run("map.effects", json!({"sunTime": "now"}));
+                    ui.close();
+                }
+                let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                let day = (now / 86_400.0).floor() * 86_400.0;
+                for (label, h) in [("06:00 UTC", 6.0), ("12:00 UTC", 12.0), ("18:00 UTC", 18.0), ("00:00 UTC", 0.0)] {
+                    if ui.button(label).clicked() {
+                        let _ = app.run("map.effects", json!({"sunTime": day + h * 3600.0}));
+                        ui.close();
+                    }
+                }
+            });
+            let wx = v.effects.weather;
+            small_menu(ui, app, "graticule", "Weather", "Haze, fog, rain or snow over the map.", move |ui, app| {
+                for (label, code, w) in [
+                    ("None", "none", Weather::None),
+                    ("Haze", "haze", Weather::Haze),
+                    ("Fog", "fog", Weather::Fog),
+                    ("Rain", "rain", Weather::Rain),
+                    ("Snow", "snow", Weather::Snow),
+                ] {
+                    if ui.radio(wx == w, tl!(label)).clicked() {
+                        let _ = app.run("map.effects", json!({"weather": code}));
+                        ui.close();
+                    }
+                }
+            });
+        });
+        col(ui, |ui| {
+            let (vig, edges, tilt, grain) = (v.effects.vignette, v.effects.edges, v.effects.tilt_shift, v.effects.grain);
+            small_menu(ui, app, "eye", "Visual Effect", "Vignette and edge outlines.", move |ui, app| {
+                if ui.checkbox(&mut vig.clone(), tl!("Vignette")).clicked() {
+                    let _ = app.run("map.effects", json!({"vignette": !vig}));
+                }
+                if ui.checkbox(&mut edges.clone(), tl!("Edges")).clicked() {
+                    let _ = app.run("map.effects", json!({"edges": !edges}));
+                }
+            });
+            small_menu(ui, app, "zoom_box", "Camera Effect", "Tilt-shift blur and film grain.", move |ui, app| {
+                if ui.checkbox(&mut tilt.clone(), tl!("Tilt-shift")).clicked() {
+                    let _ = app.run("map.effects", json!({"tiltShift": !tilt}));
+                }
+                if ui.checkbox(&mut grain.clone(), tl!("Film grain")).clicked() {
+                    let _ = app.run("map.effects", json!({"grain": !grain}));
+                }
+            });
+        });
+        col(ui, |ui| {
+            let fx = v.effects.clone();
+            small_menu(
+                ui,
+                app,
+                "contrast",
+                "Postprocessing",
+                "Brightness, contrast, saturation and sepia for the whole map.",
+                move |ui, app| {
+                    for (label, key, mut val, lo) in [
+                        ("Brightness", "brightness", fx.brightness, -100.0),
+                        ("Contrast", "contrast", fx.contrast, -100.0),
+                        ("Saturation", "saturation", fx.saturation, -100.0),
+                        ("Sepia", "sepia", fx.sepia, 0.0),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.label(tl!(label));
+                            let r = ui.add(egui::Slider::new(&mut val, lo..=100.0));
+                            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                                let _ = app.run("map.effects", json!({key: val}));
+                            }
+                        });
+                    }
+                    if ui.button(tl!("Reset Effects")).clicked() {
+                        let _ = app.run("map.effects", json!({"reset": true}));
+                        ui.close();
+                    }
+                },
+            );
+            let cv = v.color_vision;
+            small_menu(ui, app, "eye", "Color Vision", "See the map as people with colour vision deficiencies do.", move |ui, app| {
+                for c in rustgis_engine::map::view::ColorVision::ALL {
+                    if ui.radio(cv == c, tl!(c.label())).clicked() {
+                        let _ = app.run("map.colorVision", json!({"mode": c.code()}));
+                        ui.close();
+                    }
+                }
+            });
+        });
+    });
+    group(ui, "Scene", |ui| {
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "polygon_tool",
+                "Wireframe",
+                "Draw polygons as outlines only.",
+                "map.drawingMode",
+                json!({"mode": if v.wireframe { "standard" } else { "wireframe" }}),
+                v.wireframe,
+            );
+            let pr = app.session.active_layer.and_then(|id| app.session.map().layer(id)).map_or(0, |l| l.priority);
+            small(
+                ui,
+                app,
+                "up",
+                "Raise Priority",
+                "Draw the selected layer above others.",
+                "layer.priority",
+                json!({"value": pr + 1}),
+                pr > 0,
+            );
+            small(
+                ui,
+                app,
+                "down",
+                "Lower Priority",
+                "Draw the selected layer below others.",
+                "layer.priority",
+                json!({"value": pr - 1}),
+                pr < 0,
+            );
+        });
+        col(ui, |ui| {
+            let clip = v.clip_distance;
+            small_menu(ui, app, "scale_range", "View Clipping", "Hide features far from the view's centre.", move |ui, app| {
+                if ui.radio(clip.is_none(), tl!("None")).clicked() {
+                    let _ = app.run("map.clipping", json!({"mode": "none"}));
+                    ui.close();
+                }
+                for km in [100.0, 500.0, 1000.0, 3000.0] {
+                    if ui.radio(clip == Some(km * 1000.0), rustgis_engine::geom::format_distance(km * 1000.0)).clicked() {
+                        let _ = app.run("map.clipping", json!({"mode": "distance", "distance": km * 1000.0}));
+                        ui.close();
+                    }
+                }
+            });
+            small(
+                ui,
+                app,
+                "dra",
+                "Speed Display",
+                "Faster drawing: no antialiasing.",
+                "map.displayType",
+                json!({"mode": if v.fast { "quality" } else { "speed" }}),
+                v.fast,
+            );
         });
     });
     group(ui, "Windows", |ui| {
@@ -911,6 +1101,38 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
     });
     group(ui, "Navigation", |ui| {
         big(ui, app, "zoom_world", "World", "Zoom to the whole world.", "map.zoomWorld", Value::Null, false, false);
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "explore",
+                "Navigator",
+                "On-screen compass, zoom slider and pan pad.",
+                "map.navigator",
+                Value::Null,
+                v.navigator,
+            );
+            small(
+                ui,
+                app,
+                "goto_xy",
+                "Camera",
+                "See and set the camera's position and scale.",
+                "ui.dialog",
+                json!({"name": "camera"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "search",
+                "Magnifier",
+                "A magnifying lens that follows the pointer.",
+                "ui.magnifier",
+                Value::Null,
+                app.map.magnifier,
+            );
+        });
     });
     group(ui, "Language", |ui| language_menu(app, ui));
 }

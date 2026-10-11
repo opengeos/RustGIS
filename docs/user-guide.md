@@ -308,6 +308,22 @@ Layer tab: **Layer Blend** (multiply, screen, overlay, darken, lighten, differen
 (the layer shows only left of a divider you slide, to compare it with what's beneath),
 **Masking** and **Rotation**.
 
+## View effects and navigation
+
+The View tab adds effects drawn over the map: **Illumination** (day and night shading for a time,
+with twilight), **Weather** (haze, fog, rain, snow), **Visual Effect** (vignette, edges), **Camera
+Effect** (tilt-shift blur, film grain) and **Postprocessing** (brightness, contrast, saturation,
+sepia). The **Color Vision** simulator shows the map as people with protanopia, deuteranopia,
+tritanopia or achromatopsia see it (on screen only; exports are untouched).
+
+**Global** shows a globe; **Local** a flat view centred where you are (azimuthal equidistant).
+**Wireframe** draws polygons as outlines, **Depth Priority** lifts a layer above others whatever
+its order, **View Clipping** hides features beyond a distance from the centre, and **Speed
+Display** draws without antialiasing. The **Navigator** adds a compass, zoom buttons and a pan
+pad; **Camera** shows and sets the position and scale; the **Magnifier** shows twice the map under
+the pointer. On the Map tab, **First-Person** navigation walks with W A S D and flies up and down
+with Q and E.
+
 ## Imagery
 
 The Imagery tab opens its tools in the Workflows pane:

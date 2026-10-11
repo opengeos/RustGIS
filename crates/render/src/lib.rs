@@ -12,6 +12,7 @@ pub mod layout;
 pub mod logo;
 pub mod pdf;
 mod picture;
+pub mod post;
 mod raster;
 mod text;
 
@@ -148,17 +149,24 @@ pub fn world_dataset(name: &str, text: &str) -> Option<Dataset> {
     rustgis_data::io::read_geojson(text, name).ok().map(|(d, _)| d)
 }
 
+thread_local! {
+    /// Antialiasing for the map being drawn (off in the fast display type).
+    static ANTIALIAS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
 fn paint(c: Rgba, opacity: f32) -> Paint<'static> {
     let mut p = Paint::default();
     let a = (c.a() as f32 * opacity).round().clamp(0.0, 255.0) as u8;
     p.set_color_rgba8(c.r(), c.g(), c.b(), a);
-    p.anti_alias = true;
+    p.anti_alias = ANTIALIAS.with(|a| a.get());
     p
 }
 
 struct Ctx<'a> {
     view: &'a View,
     ppp: f32,
+    /// Polygons drawn as outlines only.
+    wireframe: bool,
     /// Visible Mercator extent with a margin, for culling.
     cull: Extent,
     /// Set when drawing the globe; coordinates are then longitude/latitude, not Web Mercator.
@@ -410,6 +418,9 @@ impl Ctx<'_> {
             Geometry::Point(c) => self.marker(pm, *c, s, 1.0, None),
             Geometry::MultiPoint(v) => v.iter().for_each(|c| self.marker(pm, *c, s, 1.0, None)),
             Geometry::Line(parts) => self.line(pm, parts, &paint(s.stroke, 1.0), s.stroke_width),
+            Geometry::Polygon(polys) if self.wireframe => {
+                self.polygon(pm, polys, None, Some((paint(s.stroke.with_alpha(255), 1.0), s.stroke_width.max(1.0))))
+            }
             Geometry::Polygon(polys) => self.polygon(pm, polys, Some(paint(s.fill, 1.0)), Some((paint(s.stroke, 1.0), s.stroke_width))),
         }
     }
@@ -440,7 +451,14 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     let globe = map.projection.is_globe().then(|| Globe::new(&view.camera, view.width, view.height));
     let (flat, key) = (map.flat(), map.projection.code());
     let custom = matches!(flat, rustgis_map::projection::Flat::Custom(_)) && globe.is_none();
-    let ctx = Ctx { view, ppp: view.pixels_per_point as f32, cull: view.camera.extent(view.width, view.height).padded(0.05, 0.0), globe };
+    ANTIALIAS.with(|a| a.set(!map.view.fast));
+    let ctx = Ctx {
+        view,
+        ppp: view.pixels_per_point as f32,
+        wireframe: map.view.wireframe,
+        cull: view.camera.extent(view.width, view.height).padded(0.05, 0.0),
+        globe,
+    };
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     // On the globe nothing is culled by the flat extent: the horizon clips instead.
     let visible = |e: &Extent| match &globe {
@@ -527,7 +545,11 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     let n_layers = map.layers.len();
     // Masks: layers shown only inside another layer's polygons, or left of the swipe divider.
     let masks = layer_masks(map, &ctx, w, h, &flat, &key);
-    for li in (0..n_layers).rev() {
+    // Bottom first; a higher depth priority draws later (on top) whatever the order.
+    let mut order: Vec<usize> = (0..n_layers).rev().collect();
+    order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
+    let clip = map.view.clip_distance.map(|d| (view.camera.center_lonlat(), d));
+    for li in order {
         let Some(layer) = map.layers.get_mut(li) else { continue };
         if !layer.visible || !layer.in_scale_range(scale) {
             continue;
@@ -564,6 +586,15 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
             continue;
         }
         let mut rows = layer.visible_rows();
+        // View clipping: nothing beyond the distance from the view's centre.
+        if let Some((centre, d)) = clip {
+            for (r, keep) in rows.iter_mut().enumerate() {
+                if *keep {
+                    let c = layer.dataset.features.get(r).and_then(|f| f.geometry.as_ref()).and_then(|g| g.label_point());
+                    *keep = c.is_some_and(|c| rustgis_geom::haversine_m(centre, c) <= d);
+                }
+            }
+        }
         // Display filters: at a scale where several apply, a feature draws only if it matches all
         // of them. Expressions are checked when a filter is added; one that stops reading (a
         // field removed since) is skipped. Parsing is cheap next to evaluating every row.
@@ -710,6 +741,20 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         map.label_lock = Some(placed.keys);
     }
     let unplaced = if display.show_unplaced { placed.unplaced } else { Vec::new() };
+    // Effects, and (on screen only) the colour vision simulation.
+    let vision = if full_res_rasters { rustgis_map::view::ColorVision::Normal } else { map.view.color_vision };
+    if !map.view.effects.is_none() || vision != rustgis_map::view::ColorVision::Normal {
+        let ppp = view.pixels_per_point;
+        let lonlat = |x: f64, y: f64| -> Option<Coord> {
+            let (sx, sy) = (x / ppp, y / ppp);
+            match &globe {
+                Some(g) => g.inverse(sx, sy),
+                None => flat.inverse(view.camera.to_map(sx, sy, view.width, view.height)),
+            }
+        };
+        post::apply(&mut pm, &map.view.effects, vision, &lonlat);
+    }
+    ANTIALIAS.with(|a| a.set(true));
     Some(Rendered { pixmap: pm, labels: placed.labels, unplaced })
 }
 
