@@ -70,6 +70,14 @@ fn resolved() -> &'static Mutex<HashMap<String, Arc<Resolved>>> {
     R.get_or_init(Mutex::default)
 }
 
+/// The most resolved styles kept.
+const MAX_RESOLVED: usize = 64;
+
+/// Forgets the resolved styles, so their documents are read again (with [`crate::cache::clear`]).
+pub(crate) fn forget() {
+    resolved().lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
 /// The built-in style for vector tiles without one: it knows the OpenMapTiles, Protomaps and
 /// Shortbread layer names, and draws water, land use, parks, buildings, roads, boundaries and
 /// place names from whichever of them the tiles have.
@@ -148,7 +156,12 @@ pub fn resolve(spec: &Spec) -> Resolve {
         }
     }
     let r = Arc::new(Resolved { style, attribution });
-    resolved().lock().unwrap_or_else(|e| e.into_inner()).insert(key, r.clone());
+    let mut all = resolved().lock().unwrap_or_else(|e| e.into_inner());
+    // A few layers are in use at a time: past that many, start again rather than grow.
+    if all.len() >= MAX_RESOLVED {
+        all.clear();
+    }
+    all.insert(key, r.clone());
     Resolve::Ready(r)
 }
 

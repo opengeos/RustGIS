@@ -319,7 +319,7 @@ fn parse_feature(buf: &[u8], keys: &[String], values: &[Option<Value>], budget: 
         return None;
     }
     let mut props = Vec::new();
-    for pair in tags.chunks_exact(2) {
+    for pair in tags.as_chunks::<2>().0 {
         let (Some(&k), Some(&v)) = (pair.first(), pair.get(1)) else {
             continue;
         };

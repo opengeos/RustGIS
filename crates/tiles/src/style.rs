@@ -579,7 +579,9 @@ fn compile_op(name: &str, args: &[Json], depth: usize) -> Option<Node> {
     let stops = |from: usize| -> Vec<(f64, Node)> {
         args.get(from..)
             .unwrap_or(&[])
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .take(MAX_STOPS)
             .filter_map(|p| Some((p.first()?.as_f64()?, compile(p.get(1)?, d))))
             .collect()
@@ -593,7 +595,9 @@ fn compile_op(name: &str, args: &[Json], depth: usize) -> Option<Node> {
                 return Some(null());
             };
             let arms = pairs
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .take(MAX_STOPS)
                 .filter_map(|p| {
                     let labels = match p.first()? {
@@ -619,7 +623,9 @@ fn compile_op(name: &str, args: &[Json], depth: usize) -> Option<Node> {
                 return Some(null());
             };
             let binds = binds
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .take(MAX_STOPS)
                 .filter_map(|p| Some((p.first()?.as_str()?.to_owned(), compile(p.get(1)?, d))))
                 .collect();
@@ -911,7 +917,7 @@ fn call(op: Op, args: &[Node], f: &FeatureCtx, vars: &mut Vars) -> Val {
         Any => return Val::Bool(args.iter().any(|a| eval(a, f, vars) == Val::Bool(true))),
         NoneOf => return Val::Bool(!args.iter().any(|a| eval(a, f, vars) == Val::Bool(true))),
         Case => {
-            for p in args.chunks_exact(2) {
+            for p in args.as_chunks::<2>().0 {
                 if let [c, o] = p
                     && eval(c, f, vars) == Val::Bool(true)
                 {

@@ -56,6 +56,9 @@ const BUDGET: usize = if cfg!(target_arch = "wasm32") { 160 << 20 } else { 384 <
 const RETRY: Duration = Duration::from_secs(60);
 /// The largest tile or document fetched.
 pub const MAX_BYTES: usize = 16 << 20;
+/// The error a fetcher gives a request it dropped unfetched (the view moved on): the address is
+/// forgotten rather than failed, so it is fetched again when it is next wanted.
+pub const DROPPED: &str = "dropped: the view moved on";
 
 enum Entry {
     Ready(Arc<Payload>, usize),
@@ -158,6 +161,9 @@ pub fn clear() {
     let mut c = lock();
     c.slots.retain(|_, s| matches!(s.entry, Entry::Pending));
     c.bytes = 0;
+    drop(c);
+    // Styles and TileJSON documents are read again too.
+    crate::source::forget();
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -179,6 +185,11 @@ fn start(url: String, want: Want) {
     IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
     let key = url.clone();
     let done: Done = Box::new(move |bytes| {
+        if matches!(&bytes, Err(e) if e == DROPPED) {
+            lock().slots.remove(&key);
+            finished();
+            return;
+        }
         let entry = match bytes.and_then(|b| decode(&b, want)) {
             Ok(p) => {
                 let size = payload_bytes(&p);
@@ -190,17 +201,22 @@ fn start(url: String, want: Want) {
             }
         };
         store(&key, entry);
-        IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
-        GENERATION.fetch_add(1, Ordering::Relaxed);
-        let w = waker().lock().unwrap_or_else(|e| e.into_inner()).clone();
-        if let Some(w) = w {
-            w();
-        }
+        finished();
     });
     let f = fetcher().lock().unwrap_or_else(|e| e.into_inner()).clone();
     match f {
         Some(f) => f(url, done),
         None => native::fetch(url, done),
+    }
+}
+
+/// A fetch is over: the map can draw again.
+fn finished() {
+    IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+    let w = waker().lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(w) = w {
+        w();
     }
 }
 
@@ -280,7 +296,7 @@ pub fn decode_image(bytes: &[u8]) -> Result<Pixmap, String> {
     let img = reader.decode().map_err(|e| e.to_string())?.into_rgba8();
     let (w, h) = img.dimensions();
     let mut data = img.into_raw();
-    for px in data.chunks_exact_mut(4) {
+    for px in data.as_chunks_mut::<4>().0 {
         let a = u16::from(px[3]);
         if a < 255 {
             for c in &mut px[..3] {
@@ -297,7 +313,7 @@ mod native {
 
     use std::sync::{Condvar, Mutex, OnceLock};
 
-    use super::{Done, MAX_BYTES};
+    use super::{DROPPED, Done, MAX_BYTES};
 
     const WORKERS: usize = 8;
     /// Requests waiting beyond this many are dropped, oldest first: the view moved on.
@@ -323,13 +339,16 @@ mod native {
 
     pub(super) fn fetch(url: String, done: Done) {
         let q = queue();
-        let mut jobs = q.jobs.lock().unwrap_or_else(|e| e.into_inner());
-        jobs.push((url, done));
-        if jobs.len() > QUEUE {
-            let (old, done) = jobs.remove(0);
-            done(Err(format!("{old}: dropped (the view moved on)")));
-        }
+        let dropped = {
+            let mut jobs = q.jobs.lock().unwrap_or_else(|e| e.into_inner());
+            jobs.push((url, done));
+            (jobs.len() > QUEUE).then(|| jobs.remove(0))
+        };
         q.ready.notify_one();
+        // Answered once the queue is unlocked: `done` takes the cache's lock and wakes the app.
+        if let Some((_, done)) = dropped {
+            done(Err(DROPPED.into()));
+        }
     }
 
     fn work() {
@@ -408,6 +427,13 @@ mod tests {
         assert!(matches!(get("test://cache/missing.json", Want::Json), State::Pending));
         assert!(matches!(get("test://cache/missing.json", Want::Json), State::Failed(_)));
         assert!(peek("test://cache/never.json").is_none());
-        assert_eq!(CALLS.load(Ordering::Relaxed), 2);
+        // A request the fetcher dropped is forgotten, not failed: asked for again, it is fetched.
+        set_fetcher(|url, done| {
+            CALLS.fetch_add(1, Ordering::Relaxed);
+            if url.ends_with("first.json") { done(Err(DROPPED.into())) } else { done(Ok(b"1".to_vec())) }
+        });
+        assert!(matches!(get("test://cache/first.json", Want::Json), State::Pending));
+        assert!(matches!(get("test://cache/first.json", Want::Json), State::Pending), "fetched again");
+        assert_eq!(CALLS.load(Ordering::Relaxed), 4);
     }
 }
