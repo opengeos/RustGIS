@@ -498,10 +498,11 @@ fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
     let mut n = 0usize;
     // Only the pixels under the polygon's box are visited.
     let (cols, rows) = pixel_window(&r, &e).ok_or("the polygon is outside the raster")?;
+    let tr = r.transformer();
     for row in rows {
         for col in cols.clone() {
             let w = r.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
-            let Some(ll) = r.transformer().to_lonlat(w) else { continue };
+            let Some(ll) = tr.to_lonlat(w) else { continue };
             if !e.contains(ll) || !rustgis_data::geometry::polygon_contains(&rings, ll) {
                 continue;
             }
@@ -719,11 +720,10 @@ fn mosaic(s: &mut Session, p: &Value) -> CmdResult {
             }
         }
     }
-    let color = match (nb, imgs.first().map(|r| &r.color)) {
-        (3 | 4, Some(ColorHint::Rgb { .. })) => ColorHint::Rgb { alpha: nb == 4 },
-        _ => ColorHint::Gray,
-    };
-    let dt = if matches!(color, ColorHint::Rgb { .. }) { "UInt8" } else { "Float32" };
+    // Colour only when every image is colour; means aren't whole numbers, so they stay Float32.
+    let all_rgb = imgs.iter().all(|r| matches!(r.color, ColorHint::Rgb { .. }));
+    let color = if matches!(nb, 3 | 4) && all_rgb { ColorHint::Rgb { alpha: nb == 4 } } else { ColorHint::Gray };
+    let dt = if matches!(color, ColorHint::Rgb { .. }) && w.method != "mean" { "UInt8" } else { "Float32" };
     let gt = GeoTransform { origin_x: e.min_x, origin_y: e.max_y, pixel_width: cell, pixel_height: -cell };
     let suffix = if w.kind == "reality" { "DSM" } else { "Orthomosaic" };
     let out = Raster::new(format!("{} {suffix}", w.name), cols as u32, rows as u32, bands, gt, Crs::LonLat, Some(NODATA as f64), color, dt)
@@ -737,7 +737,7 @@ fn mesh(s: &mut Session, p: &Value) -> CmdResult {
     let step = uint(p, "step").unwrap_or(((r.width.max(r.height) / 300).max(1)) as u64).clamp(1, 1000) as i64;
     let (cx, cy) = r.cell_size_m();
     let (nc, nr) = ((r.width as i64 - 1) / step + 1, (r.height as i64 - 1) / step + 1);
-    if nc * nr > 4_000_000 {
+    if nc * nr > 1_000_000 {
         return Err("the mesh would be too large; use a larger step".into());
     }
     let mut obj = format!("# {} surface mesh exported by RustGIS\no {}\n", r.name, r.name.replace(char::is_whitespace, "_"));
@@ -773,6 +773,7 @@ fn mesh(s: &mut Session, p: &Value) -> CmdResult {
         return Err("the raster has no surface to mesh".into());
     }
     match ps(p, "path") {
+        Some(path) if !path.to_ascii_lowercase().ends_with(".obj") => Err("the mesh is written to an .obj file".into()),
         Some(path) => {
             rustgis_data::io::write_atomic(std::path::Path::new(path), obj.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
             Ok(json!({"path": path, "vertices": v, "faces": faces}))
