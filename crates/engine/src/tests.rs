@@ -1266,6 +1266,9 @@ fn layer_effects_and_imagery_tools() {
     assert!(sp["values"][0].as_f64().unwrap() > 290.0);
     s.run("raster.index", &json!({"layer": dem, "index": "ndvi", "nir": 1, "red": 1})).unwrap();
     let r = s.run("raster.classify", &json!({"layer": dem, "classes": 3})).unwrap();
+    // Forms send numbers as floats; whole ones are accepted.
+    s.run("raster.classify", &json!({"layer": dem, "classes": 3.0, "name": "float_classes"})).unwrap();
+    assert!(s.run("raster.classify", &json!({"layer": dem, "classes": 2.5})).is_err());
     assert!(r["layer"].as_u64().is_some());
     s.run("raster.function", &json!({"layer": dem, "function": "bandMath", "expression": "b1 + 10", "name": "dem_later"})).unwrap();
     let ch = s.run("raster.change", &json!({"before": dem, "after": "dem_later", "method": "difference"})).unwrap();

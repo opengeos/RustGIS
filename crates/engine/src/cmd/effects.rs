@@ -70,7 +70,6 @@ pub fn commands() -> Vec<C> {
             };
             Ok(json!({"swipe": s.map().swipe.map(|(l, x)| json!({"layer": l, "position": x}))}))
         })
-        .view()
         .when(need_layer)
         .params(r#"{"layer"?, "position"?: 0..1, "off"?: bool}"#),
         C::new("raster.rotation", "Rotation Type", "Raster Layer › Rotation", |s, p| {

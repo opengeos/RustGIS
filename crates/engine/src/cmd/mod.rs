@@ -52,6 +52,12 @@ pub(crate) fn f(p: &Value, k: &str) -> Option<f64> {
     p.get(k).and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))).filter(|x: &f64| x.is_finite())
 }
 
+/// A whole number from an integer, a float with no fraction, or a numeric string (forms send
+/// numbers as floats).
+pub(crate) fn uint(p: &Value, k: &str) -> Option<u64> {
+    f(p, k).filter(|x| *x >= 0.0 && x.fract() == 0.0 && *x <= u64::MAX as f64).map(|x| x as u64)
+}
+
 pub(crate) fn b(p: &Value, k: &str) -> Option<bool> {
     p.get(k).and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| matches!(s, "true" | "yes" | "1" | "on"))))
 }

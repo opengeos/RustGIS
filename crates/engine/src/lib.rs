@@ -379,6 +379,7 @@ impl Session {
         self.trusted_models.clear();
         self.edit_counts.clear();
         self.topology_errors.clear();
+        self.measurements.clear();
         // Runs of the previous project mustn't land in this one.
         self.pending.clear();
         #[cfg(feature = "geolibre")]

@@ -11,7 +11,7 @@ use rustgis_geom::{Coord, Extent};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{b, f, ps};
+use super::{b, f, ps, uint};
 use crate::{CmdResult, CommandSpec as C, Session};
 
 /// An imagery workspace: images mosaicked into one product.
@@ -51,7 +51,7 @@ pub fn commands() -> Vec<C> {
             }
             let k = match p.get("classes") {
                 None => 5,
-                Some(v) => v.as_u64().filter(|k| (2..=50).contains(k)).ok_or("classes is 2 to 50")? as usize,
+                Some(_) => uint(p, "classes").filter(|k| (2..=50).contains(k)).ok_or("classes is 2 to 50")? as usize,
             };
             let classes = rasterops::kmeans(&r, &bands, k, 20)?;
             add(s, rasterops::derive(&r, &name(p, format!("{}_classes", r.name)), vec![classes])?, true)
@@ -66,7 +66,8 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layer": raster, "operation": "clip"|"resample", "extent"?: [minLon, minLat, maxLon, maxLat] (clip; the view when omitted), "factor"?: n (resample: n×n pixels become one)}"#),
         C::new("raster.editPixels", "Pixel Editor", "Imagery › Tools", edit_pixels)
             .params(r#"{"layer": raster, "polygon": [[lon, lat], …], "value"?: number (no-data when omitted), "band"?: 1-based (all when omitted)}"#),
-        C::new("raster.measure", "Mensuration Tools", "Imagery › Mensuration", measure).params(
+        // Measurements are session results, not project changes: no undo step.
+        C::new("raster.measure", "Mensuration Tools", "Imagery › Mensuration", measure).view().params(
             r#"{"layer"?: elevation raster, "kind": "distance"|"area"|"height"|"volume", "points": [[lon, lat], …], "base"?: metres (volume)}"#,
         ),
         C::new("raster.measurements", "Results", "Imagery › Mensuration", |s, p| {
@@ -83,14 +84,11 @@ pub fn commands() -> Vec<C> {
         C::new("imagery.workspaceOptions", "Workspace Options", "Imagery › Ortho Mapping", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
             let w = s.project.workspaces.iter_mut().find(|w| w.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no workspace '{n}'"))?;
-            if let Some(c) = p.get("cellSize") {
-                w.cell_size = if c.is_null() { None } else { Some(f(p, "cellSize").filter(|c| *c > 0.0 && *c < 10.0).ok_or("cellSize is degrees, above 0")?) };
+            if p.get("cellSize").is_some() {
+                w.cell_size = cell_size(p)?;
             }
-            if let Some(m) = ps(p, "method") {
-                if !matches!(m, "first" | "mean") {
-                    return Err("method is first or mean".into());
-                }
-                w.method = m.into();
+            if ps(p, "method").is_some() {
+                w.method = method(p, "first")?;
             }
             serde_json::to_value(&*w).map_err(|e| e.to_string())
         })
@@ -234,7 +232,7 @@ fn change(s: &mut Session, p: &Value) -> CmdResult {
     if !matches!(method, "difference" | "ratio" | "percent") {
         return Err(format!("unknown method '{method}'"));
     }
-    let band = p.get("band").and_then(Value::as_u64).unwrap_or(1).saturating_sub(1) as usize;
+    let band = uint(p, "band").unwrap_or(1).saturating_sub(1) as usize;
     let av: Vec<f32> = a.bands.get(band).ok_or("no such band")?.data.clone();
     let bv = rasterops::resample_to(&bfr, band, &a)?;
     let out: Vec<f32> = av
@@ -320,7 +318,7 @@ fn supervised(s: &mut Session, p: &Value) -> CmdResult {
 
 fn index(s: &mut Session, p: &Value) -> CmdResult {
     let r = raster(s, p)?;
-    let bn = |k: &str, d: u64| p.get(k).and_then(Value::as_u64).unwrap_or(d);
+    let bn = |k: &str, d: u64| uint(p, k).unwrap_or(d);
     let (blue, green, red, nir, swir) = (bn("blue", 1), bn("green", 2), bn("red", 3), bn("nir", 4), bn("swir", 5));
     let idx = ps(p, "index").ok_or("index is required")?;
     let expr = match idx {
@@ -396,7 +394,7 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
         "resample" => {
             // Never coarser than the raster itself; trailing columns and rows short of a full
             // block are left out.
-            let k = (p.get("factor").and_then(Value::as_u64).unwrap_or(2).clamp(2, 64) as u32).min(r.width.min(r.height)).max(1);
+            let k = (uint(p, "factor").unwrap_or(2).clamp(2, 64) as u32).min(r.width.min(r.height)).max(1);
             let (w, h) = ((r.width / k).max(1), (r.height / k).max(1));
             // Each output pixel is the mean of the valid pixels it covers.
             let bands: Vec<Vec<f32>> = r
@@ -489,8 +487,8 @@ fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
     };
     let only = match p.get("band") {
         None => None,
-        Some(v) => Some(
-            v.as_u64()
+        Some(_) => Some(
+            uint(p, "band")
                 .filter(|b| *b >= 1 && *b <= r.band_count() as u64)
                 .ok_or_else(|| format!("{} has bands 1 to {}", r.name, r.band_count()))? as usize
                 - 1,
@@ -624,6 +622,26 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
     Ok(out)
 }
 
+/// A workspace's cell size (degrees, or null for the finest image's), checked the same way when
+/// a workspace is made and when its options change.
+fn cell_size(p: &Value) -> Result<Option<f64>, String> {
+    match p.get("cellSize") {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => f(p, "cellSize")
+            .filter(|c| *c > 0.0 && *c < 10.0)
+            .map(Some)
+            .ok_or_else(|| "cellSize is degrees, above 0 and below 10".to_string()),
+    }
+}
+
+/// A workspace's mosaic method: first or mean.
+fn method(p: &Value, default: &str) -> Result<String, String> {
+    match ps(p, "method").unwrap_or(default) {
+        m @ ("first" | "mean") => Ok(m.to_string()),
+        m => Err(format!("method is first or mean, not '{m}'")),
+    }
+}
+
 fn new_workspace(s: &mut Session, p: &Value) -> CmdResult {
     let kind = ps(p, "kind").ok_or("kind is required")?;
     if !matches!(kind, "ortho" | "reality") {
@@ -653,14 +671,9 @@ fn new_workspace(s: &mut Session, p: &Value) -> CmdResult {
         i += 1;
         nm = format!("{base} {i}");
     }
-    let method = ps(p, "method").unwrap_or(if kind == "reality" { "mean" } else { "first" }).to_string();
-    s.project.workspaces.push(Workspace {
-        name: nm.clone(),
-        kind: kind.into(),
-        images,
-        cell_size: f(p, "cellSize").filter(|c| *c > 0.0),
-        method,
-    });
+    let method = method(p, if kind == "reality" { "mean" } else { "first" })?;
+    let cell_size = cell_size(p)?;
+    s.project.workspaces.push(Workspace { name: nm.clone(), kind: kind.into(), images, cell_size, method });
     Ok(json!({"workspace": nm}))
 }
 
@@ -721,7 +734,7 @@ fn mosaic(s: &mut Session, p: &Value) -> CmdResult {
 /// A surface model as a triangle mesh (Wavefront OBJ), in metres from its south-west corner.
 fn mesh(s: &mut Session, p: &Value) -> CmdResult {
     let r = raster(s, p)?;
-    let step = p.get("step").and_then(Value::as_u64).unwrap_or(((r.width.max(r.height) / 300).max(1)) as u64).clamp(1, 1000) as i64;
+    let step = uint(p, "step").unwrap_or(((r.width.max(r.height) / 300).max(1)) as u64).clamp(1, 1000) as i64;
     let (cx, cy) = r.cell_size_m();
     let (nc, nr) = ((r.width as i64 - 1) / step + 1, (r.height as i64 - 1) / step + 1);
     if nc * nr > 4_000_000 {

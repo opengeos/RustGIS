@@ -421,14 +421,25 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     .hint_text("0 0 23.70 38.00\n512 512 23.80 37.90"),
             );
             if ui.button(tl!("Apply Control Points")).clicked() {
-                let pts: Vec<Vec<f64>> = app
-                    .workflow
-                    .text
-                    .lines()
-                    .map(|l| l.split_whitespace().filter_map(|x| x.parse().ok()).collect::<Vec<f64>>())
-                    .filter(|v| v.len() == 4)
-                    .collect();
-                run(app, "raster.georeference", json!({"layer": app.workflow.layer, "points": pts}));
+                // Every non-blank line must be four numbers; a typo is reported, not skipped.
+                let mut pts: Vec<Vec<f64>> = Vec::new();
+                let mut bad = None;
+                for (i, l) in app.workflow.text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
+                    let v: Vec<f64> = l.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+                    if v.len() == 4 && l.split_whitespace().count() == 4 {
+                        pts.push(v);
+                    } else {
+                        bad = Some(i + 1);
+                        break;
+                    }
+                }
+                match bad {
+                    Some(line) => {
+                        app.workflow.error =
+                            Some(crate::i18n::fmt("Line {n} isn't four numbers (column row lon lat)", &[("n", &line.to_string())]));
+                    }
+                    None => run(app, "raster.georeference", json!({"layer": app.workflow.layer, "points": pts})),
+                }
             }
         }
         "change" => {
@@ -461,7 +472,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             combo(ui, "wf_k", &mut app.workflow.layer, &rasters);
             ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("classes")).desired_width(60.0));
             if ui.button(tl!("Classify")).clicked() {
-                run(app, "raster.classify", json!({"layer": app.workflow.layer, "classes": num(&app.workflow.number, 5.0)}));
+                run(app, "raster.classify", json!({"layer": app.workflow.layer, "classes": num(&app.workflow.number, 5.0).round() as u64}));
             }
         }
         "supervised" => {
@@ -505,7 +516,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     run(
                         app,
                         "raster.process",
-                        json!({"layer": app.workflow.layer, "operation": "resample", "factor": num(&app.workflow.number, 2.0)}),
+                        json!({"layer": app.workflow.layer, "operation": "resample", "factor": num(&app.workflow.number, 2.0).round() as u64}),
                     );
                 }
             });
