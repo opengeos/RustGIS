@@ -1713,6 +1713,14 @@ fn reports_group_summarise_relate_export_and_reopen() {
     let doc = crate::cmd::report::build(&s, 1).unwrap();
     assert!(doc.blocks.iter().any(|b| matches!(b, Block::SubRow(_))), "France's cities are listed under it");
     assert!(doc.blocks.iter().filter(|b| matches!(b, Block::Row(_))).count() > n, "the cities report follows");
+    // Sorting a column that mixes numbers and text (9, 10, "1a"…) is a total order, never a panic.
+    let mixed = json!({"type": "FeatureCollection", "features": (0..200).map(|i| json!({"type": "Feature",
+        "properties": {"v": if i % 3 == 0 { json!(format!("{}a", i % 7)) } else { json!(i % 11) }},
+        "geometry": {"type": "Point", "coordinates": [i as f64 * 0.01, 0.0]}})).collect::<Vec<_>>()});
+    s.run("layer.addDataText", &json!({"fileName": "mixed.geojson", "text": mixed.to_string()})).unwrap();
+    s.run("report.new", &json!({"layer": "mixed", "name": "Mixed", "sort": "v", "groups": ["v"]})).unwrap();
+    let i = s.project.reports.iter().position(|r| r.name == "Mixed").unwrap();
+    assert!(crate::cmd::report::build(&s, i).is_ok());
     // A related report that loops back stops.
     s.run("report.relatedReport", &json!({"report": "Cities", "related": "Countries"})).unwrap();
     assert!(crate::cmd::report::build(&s, 1).is_ok());

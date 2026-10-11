@@ -574,9 +574,13 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
     rows.truncate(MAX_RECORDS);
     let gi: Vec<Option<usize>> = r.groups.iter().map(|g| ds.field_index(g)).collect();
     let si = r.sort.as_deref().and_then(|n| ds.field_index(n));
+    // A total order, even for columns mixing numbers and text: numbers first (by value), then
+    // everything else as text.
     let cmp = |a: &rustgis_data::Value, b: &rustgis_data::Value| match (a.as_f64(), b.as_f64()) {
-        (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
-        _ => a.to_string().cmp(&b.to_string()),
+        (Some(x), Some(y)) => x.total_cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.to_string().cmp(&b.to_string()),
     };
     rows.sort_by(|&a, &b| {
         for g in gi.iter().flatten() {
