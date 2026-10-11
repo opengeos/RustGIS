@@ -129,10 +129,21 @@ fn by_attributes(s: &mut Session, p: &Value) -> CmdResult {
 fn by_rect(s: &mut Session, p: &Value) -> CmdResult {
     let (a, b, c, d) = (f(p, "minLon"), f(p, "minLat"), f(p, "maxLon"), f(p, "maxLat"));
     let (Some(a), Some(b), Some(c), Some(d)) = (a, b, c, d) else { return Err("minLon, minLat, maxLon and maxLat are required".into()) };
-    let e = s.map().flat().extent(&Extent::from_points(Coord::new(a, b), Coord::new(c, d)));
+    let ll = Extent::from_points(Coord::new(a, b), Coord::new(c, d));
+    let e = s.map().flat().extent(&ll);
     let scale = s.scale();
     let m = mode(p);
-    let hits = s.map_mut().hits_in(&e, scale);
+    let mut hits = s.map_mut().hits_in(&e, scale);
+    // In curved projections the map-space box is larger than the lon/lat one: keep only features
+    // that reach into the requested rectangle.
+    if !matches!(s.map().flat(), rustgis_map::projection::Flat::Mercator) {
+        for (id, rows) in &mut hits {
+            if let Some(l) = s.map().layer(*id) {
+                rows.retain(|r| l.dataset.features.get(*r).and_then(|f| f.geometry.as_ref()).is_some_and(|g| g.extent().intersects(&ll)));
+            }
+        }
+        hits.retain(|(_, rows)| !rows.is_empty());
+    }
     if m == Mode::New {
         s.map_mut().clear_selection();
     }

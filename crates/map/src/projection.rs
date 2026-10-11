@@ -149,9 +149,16 @@ impl Projector {
             return None;
         }
         let m = self.forward(c)?;
+        // World projections don't fold, and on their edges (±180°) the inverse is too imprecise
+        // to compare: only projections limited to an area of use need the round trip.
+        if self.domain == Domain::World {
+            return Some(m);
+        }
         let back = self.inverse(m)?;
         let dlon = ((back.x - c.x + 540.0).rem_euclid(360.0) - 180.0).abs();
-        (dlon < 1e-3 && (back.y - c.y).abs() < 1e-3 || c.y.abs() > 89.99).then_some(m)
+        // At a pole every longitude is the same point.
+        let same = (dlon < 1e-3 && (back.y - c.y).abs() < 1e-3) || (c.y.abs() > 89.99 && (back.y - c.y).abs() < 1e-3);
+        same.then_some(m)
     }
 
     /// Map coordinates to longitude/latitude.
@@ -288,7 +295,7 @@ mod tests {
         assert!(usa.forward_checked(Coord::new(-95.0, 38.0)).is_some() && usa.forward_checked(Coord::new(100.0, 30.0)).is_none());
         let moll = Flat::Custom(std::sync::Arc::new(Projector::new("mollweide").unwrap()));
         let e = moll.extent(&Extent::new(-180.0, -90.0, 180.0, 90.0));
-        assert!(e.width() > 3.3e7 && e.height() > 1.7e7, "{e:?}");
+        assert!(e.width() > 3.55e7 && e.height() > 1.75e7, "the whole world, edges included: {e:?}");
         assert!((moll.ground_per_unit(Coord::new(0.0, 0.0)) - 1.0).abs() < 1e-12);
         assert!(Flat::Mercator.inverse(Coord::new(f64::NAN, 0.0)).is_none());
     }

@@ -223,6 +223,9 @@ fn custom_projections_switch_keep_scale_query_and_render() {
     let json = serde_json::to_string(&s.project).unwrap();
     assert_eq!(Project::from_json(&json).unwrap().map().projection.code(), "EPSG:32617");
     assert!(s.run("map.projections", &Value::Null).unwrap().as_array().unwrap().len() >= 10);
+    // A project naming a projection this version can't use opens in Web Mercator.
+    let broken = json.replace("EPSG:32617", "EPSG:9");
+    assert_eq!(Project::from_json(&broken).unwrap().map().projection, rustgis_map::Projection::WebMercator);
 }
 
 #[test]

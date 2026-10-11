@@ -58,6 +58,14 @@ impl Project {
             self.active_map = 0;
         }
         for m in &mut self.maps {
+            // A projection this version can't use (a hand edit, or a newer file) falls back to
+            // Web Mercator rather than being named while another is drawn.
+            if let rustgis_map::Projection::Custom(code) = &m.projection
+                && let Err(e) = rustgis_map::projection::Projector::new(code)
+            {
+                log::warn!("{}: {e}; using Web Mercator", m.name);
+                m.projection = rustgis_map::Projection::WebMercator;
+            }
             m.camera.clamp();
             for l in &mut m.layers {
                 if let Some(rl) = &mut l.raster
