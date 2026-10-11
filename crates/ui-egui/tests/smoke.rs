@@ -181,3 +181,51 @@ fn plugins_can_have_a_tab_of_their_own() {
     assert_eq!(h.state().ui.tab, "Plugins");
     rp::unload("ui-tab");
 }
+
+#[test]
+fn browse_lists_thousands_of_plugins_quickly() {
+    use egui_kittest::kittest::Queryable;
+    use rustgis_ui_egui::rustgis_engine::plugins::registry;
+    let _turn = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let sha = "a".repeat(64);
+    let list: Vec<serde_json::Value> = (0..5000)
+        .map(|i| {
+            let cat = ["Vector", "Raster", "Terrain"][i % 3];
+            json!({"id": format!("fake-{i:04}"), "name": format!("Plugin {i}"), "version": "1.0.0",
+                "description": format!("Does many things with data for plugin number {i}. ").repeat(3), "author": format!("Author {}", i % 97),
+                "categories": [cat, "Utilities"], "package": format!("https://packages.example.com/fake-{i}.rgplugin"),
+                "sha256": sha, "size": 123_456, "permissions": ["edit"]})
+        })
+        .collect();
+    let entries = registry::parse(&json!({"plugins": list}).to_string(), "https://plugins.rustgis.app/registry.json").unwrap();
+    assert_eq!(entries.len(), 5000);
+    let mut h = harness();
+    for _ in 0..4 {
+        h.step();
+    }
+    h.state_mut().plugins.registry = Some(Ok(entries));
+    h.state_mut().run("ui.plugins", json!({"open": true, "tab": "browse"})).unwrap();
+    h.step();
+    let _ = h.get_by_label("5000 plugins");
+    // Only the visible rows are laid out, so a frame stays cheap with thousands of plugins
+    // (about 1 ms in a release build; it was over 100 ms when every card was drawn). The bound
+    // is loose for debug builds on busy machines.
+    let t0 = std::time::Instant::now();
+    for _ in 0..10 {
+        h.step();
+    }
+    let per_frame = t0.elapsed() / 10;
+    assert!(per_frame < std::time::Duration::from_millis(100), "{per_frame:?} per frame");
+    // Search and the category filter narrow the list.
+    h.state_mut().plugins.filter = "plugin 4999".into();
+    h.step();
+    h.step();
+    let _ = h.get_by_label("1 of 5000 plugins");
+    h.state_mut().plugins.filter = String::new();
+    h.state_mut().plugins.category = "Terrain".into();
+    h.step();
+    h.step();
+    let _ = h.get_by_label("1666 of 5000 plugins");
+    h.state_mut().plugins.registry = None;
+    h.state_mut().plugins.open = false;
+}

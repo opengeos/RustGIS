@@ -33,6 +33,7 @@ Add To Current Selection	Geçerli Seçime Ekle
 Add vector data.	Vektör veri ekle.
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Jeodezik alan (km²), uzunluk (km) veya merkez noktası koordinatlarını alan olarak ekler.
 All	Tümü
+All categories	Tüm kategoriler
 All files	Tüm dosyalar
 Altitude	Yükseklik
 Analysis	Analiz
@@ -802,4 +803,6 @@ Zoom To World	Dünyaya Yakınlaştır
 {name} was withdrawn from the plugin registry: {reason}	{name}, eklenti kayıt defterinden geri çekildi: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: İndirilen dosya kayıt defteriyle eşleşmiyor; yüklenmedi.
 {name}: the download is a different plugin; it wasn't installed.	{name}: İndirilen dosya farklı bir eklenti; yüklenmedi.
+{shown} of {total} plugins	{total} eklentiden {shown} tanesi
+{total} plugins	{total} eklenti
 ⌘K	⌘K

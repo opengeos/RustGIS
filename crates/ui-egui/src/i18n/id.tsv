@@ -33,6 +33,7 @@ Add To Current Selection	Tambah ke Seleksi Saat Ini
 Add vector data.	Tambahkan data vektor.
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Menambahkan luas geodesik (km²), panjang (km), atau koordinat sentroid sebagai kolom.
 All	Semua
+All categories	Semua kategori
 All files	Semua berkas
 Altitude	Ketinggian
 Analysis	Analisis
@@ -802,4 +803,6 @@ Zoom To World	Zoom ke Dunia
 {name} was withdrawn from the plugin registry: {reason}	{name} ditarik dari registri plugin: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: unduhan tidak cocok dengan registri; plugin tidak dipasang.
 {name}: the download is a different plugin; it wasn't installed.	{name}: unduhan adalah plugin yang berbeda; plugin tidak dipasang.
+{shown} of {total} plugins	{shown} dari {total} plugin
+{total} plugins	{total} plugin
 ⌘K	⌘K

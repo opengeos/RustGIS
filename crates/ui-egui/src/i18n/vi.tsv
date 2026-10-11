@@ -33,6 +33,7 @@ Add To Current Selection	Thêm vào vùng chọn hiện tại
 Add vector data.	Thêm dữ liệu vector.
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Thêm diện tích trắc địa (km²), chiều dài (km) hoặc tọa độ tâm làm trường.
 All	Tất cả
+All categories	Tất cả danh mục
 All files	Tất cả tệp
 Altitude	Độ cao
 Analysis	Phân tích
@@ -802,4 +803,6 @@ Zoom To World	Thu phóng tới thế giới
 {name} was withdrawn from the plugin registry: {reason}	{name} đã bị gỡ khỏi kho plugin: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: bản tải xuống không khớp với kho plugin; chưa được cài đặt.
 {name}: the download is a different plugin; it wasn't installed.	{name}: bản tải xuống là một plugin khác; chưa được cài đặt.
+{shown} of {total} plugins	{shown} trên {total} plugin
+{total} plugins	{total} plugin
 ⌘K	⌘K

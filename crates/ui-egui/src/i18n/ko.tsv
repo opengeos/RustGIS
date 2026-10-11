@@ -33,6 +33,7 @@ Add To Current Selection	현재 선택에 추가
 Add vector data.	벡터 데이터를 추가합니다.
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	측지 면적(km²), 길이(km) 또는 중심점 좌표를 필드로 추가합니다.
 All	모두
+All categories	모든 범주
 All files	모든 파일
 Altitude	고도
 Analysis	분석
@@ -802,4 +803,6 @@ Zoom To World	세계로 확대/축소
 {name} was withdrawn from the plugin registry: {reason}	{name}이(가) 플러그인 레지스트리에서 철회되었습니다: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: 다운로드한 파일이 레지스트리와 일치하지 않아 설치하지 않았습니다.
 {name}: the download is a different plugin; it wasn't installed.	{name}: 다운로드한 파일이 다른 플러그인이어서 설치하지 않았습니다.
+{shown} of {total} plugins	플러그인 {total}개 중 {shown}개
+{total} plugins	플러그인 {total}개
 ⌘K	⌘K

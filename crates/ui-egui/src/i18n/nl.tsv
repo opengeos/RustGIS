@@ -33,6 +33,7 @@ Add To Current Selection	Toevoegen aan huidige selectie
 Add vector data.	Vectorgegevens toevoegen.
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Voegt geodetische oppervlakte (km²), lengte (km) of zwaartepuntcoördinaten toe als velden.
 All	Alle
+All categories	Alle categorieën
 All files	Alle bestanden
 Altitude	Hoogte
 Analysis	Analyse
@@ -802,4 +803,6 @@ Zoom To World	Zoomen naar wereld
 {name} was withdrawn from the plugin registry: {reason}	{name} is uit het pluginregister teruggetrokken: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: de download komt niet overeen met het register; de plugin is niet geïnstalleerd.
 {name}: the download is a different plugin; it wasn't installed.	{name}: de download is een andere plugin; de plugin is niet geïnstalleerd.
+{shown} of {total} plugins	{shown} van {total} plugins
+{total} plugins	{total} plugins
 ⌘K	⌘K

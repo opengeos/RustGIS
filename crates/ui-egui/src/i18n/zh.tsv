@@ -33,6 +33,7 @@ Add To Current Selection	添加到当前选择
 Add vector data.	添加矢量数据。
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	将测地面积（km²）、长度（km）或质心坐标添加为字段。
 All	全部
+All categories	所有类别
 All files	所有文件
 Altitude	高度角
 Analysis	分析
@@ -802,4 +803,6 @@ Zoom To World	缩放至世界
 {name} was withdrawn from the plugin registry: {reason}	{name} 已从插件库下架：{reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}：下载的内容与插件库不符，未安装。
 {name}: the download is a different plugin; it wasn't installed.	{name}：下载的是另一个插件，未安装。
+{shown} of {total} plugins	{total} 个插件中的 {shown} 个
+{total} plugins	{total} 个插件
 ⌘K	⌘K

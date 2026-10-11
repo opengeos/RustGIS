@@ -33,6 +33,7 @@ Add To Current Selection	Añadir a la selección actual
 Add vector data.	Añadir datos vectoriales.
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Añade como campos el área geodésica (km²), la longitud (km) o las coordenadas del centroide.
 All	Todo
+All categories	Todas las categorías
 All files	Todos los archivos
 Altitude	Altitud
 Analysis	Análisis
@@ -802,4 +803,6 @@ Zoom To World	Zoom al mundo
 {name} was withdrawn from the plugin registry: {reason}	{name} se ha retirado del registro de complementos: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: la descarga no coincide con el registro; no se ha instalado.
 {name}: the download is a different plugin; it wasn't installed.	{name}: la descarga es un complemento distinto; no se ha instalado.
+{shown} of {total} plugins	{shown} de {total} complementos
+{total} plugins	{total} complementos
 ⌘K	⌘K

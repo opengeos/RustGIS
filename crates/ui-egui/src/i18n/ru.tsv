@@ -33,6 +33,7 @@ Add To Current Selection	Добавить к текущей выборке
 Add vector data.	Добавить векторные данные.
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Добавляет в виде полей геодезическую площадь (км²), длину (км) или координаты центроида.
 All	Все
+All categories	Все категории
 All files	Все файлы
 Altitude	Высота
 Analysis	Анализ
@@ -802,4 +803,6 @@ Zoom To World	Приблизить к миру
 {name} was withdrawn from the plugin registry: {reason}	Модуль {name} отозван из каталога модулей: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: загруженный файл не совпадает с данными каталога; модуль не установлен.
 {name}: the download is a different plugin; it wasn't installed.	{name}: загружен другой модуль; модуль не установлен.
+{shown} of {total} plugins	Модулей: {shown} из {total}
+{total} plugins	Модулей: {total}
 ⌘K	⌘K

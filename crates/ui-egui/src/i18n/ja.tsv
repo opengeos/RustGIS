@@ -33,6 +33,7 @@ Add To Current Selection	現在の選択に追加
 Add vector data.	ベクター データを追加します。
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	測地線面積（km²）、長さ（km）、または重心座標をフィールドとして追加します。
 All	すべて
+All categories	すべてのカテゴリ
 All files	すべてのファイル
 Altitude	高度
 Analysis	解析
@@ -802,4 +803,6 @@ Zoom To World	世界にズーム
 {name} was withdrawn from the plugin registry: {reason}	{name} はプラグイン レジストリから取り下げられました: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: ダウンロードした内容がレジストリと一致しないため、インストールしませんでした。
 {name}: the download is a different plugin; it wasn't installed.	{name}: ダウンロードしたのは別のプラグインのため、インストールしませんでした。
+{shown} of {total} plugins	{total} 個中 {shown} 個のプラグイン
+{total} plugins	{total} 個のプラグイン
 ⌘K	⌘K
