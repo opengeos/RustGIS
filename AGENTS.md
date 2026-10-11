@@ -1,8 +1,8 @@
 # RustGIS — instructions for agents
 
-RustGIS is an open-source, pure-Rust desktop GIS with a ribbon workflow. Its
-architecture follows `../storytold/wordcraft`: layered crates, everything is a command, a thin
-egui front end, headless screenshots for UI work.
+RustGIS is an open-source, pure-Rust desktop GIS with a ribbon workflow. Its architecture:
+layered crates, everything is a command, a thin egui front end, headless screenshots for UI
+work.
 
 ## Never crash
 - No `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!` in non-test code; no `unsafe`

@@ -91,7 +91,7 @@ rustgis-cli parity                                   # ribbon feature coverage c
 
 ## Architecture
 
-Inspired by [WordCraft](https://github.com/storytold/wordcraft)'s layering:
+Layered crates, each depending only on the ones below it:
 
 | Layer | Crate | Job |
 |---|---|---|
