@@ -227,6 +227,9 @@ pub struct Session {
     pub trusted_models: std::collections::HashSet<String>,
     /// Notebooks made in this session (lower-cased names); the cells of others may not touch files.
     pub trusted_notebooks: std::collections::HashSet<String>,
+    /// A notebook is running: it may not start another, even through a task or model (no
+    /// unbounded recursion).
+    pub(crate) notebook_running: bool,
     /// How many geoprocessing history records came with the opened project (from its file).
     pub history_from_file: usize,
     /// The report open in the Report pane, if any.
@@ -287,6 +290,7 @@ impl Session {
             trusted_tasks: Default::default(),
             trusted_models: Default::default(),
             trusted_notebooks: Default::default(),
+            notebook_running: false,
             history_from_file: 0,
             active_report: None,
             active_presentation: None,

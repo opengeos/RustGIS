@@ -1861,6 +1861,18 @@ fn presentations_and_notebooks() {
     s.run("notebook.editCell", &json!({"cell": 3, "source": "notebook.run {}"})).unwrap();
     s.run("notebook.run", &json!({"cell": 3})).unwrap();
     assert!(s.project.notebooks[0].cells[3].error);
+    // Nor through a task that runs the notebook (no unbounded recursion).
+    s.run(
+        "task.new",
+        &json!({"name": "Loop", "steps": [{"title": "again", "command": "notebook.run", "params": {"notebook": "Analysis"}}]}),
+    )
+    .unwrap();
+    s.run("notebook.editCell", &json!({"cell": 3, "source": "task.run {\"task\": \"Loop\"}"})).unwrap();
+    s.run("notebook.run", &json!({"cell": 3})).unwrap();
+    let cell = &s.project.notebooks[0].cells[3];
+    assert!(cell.error && cell.output.as_deref().is_some_and(|o| o.contains("already running")), "{:?}", cell.output);
+    assert!(s.run("notebook.run", &json!({"cell": 2})).is_ok(), "the guard is cleared after a run");
+    s.run("task.remove", &json!({"task": "Loop"})).unwrap();
     let ipynb = dir.join("analysis.ipynb");
     s.run("notebook.save", &json!({"path": ipynb.to_str().unwrap()})).unwrap();
     let v: Value = serde_json::from_slice(&std::fs::read(&ipynb).unwrap()).unwrap();

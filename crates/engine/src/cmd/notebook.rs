@@ -211,6 +211,18 @@ fn unique_name(s: &Session, base: &str) -> String {
 }
 
 fn run(s: &mut Session, p: &Value) -> CmdResult {
+    if s.notebook_running {
+        return Err("a notebook is already running (a cell can't run notebooks, even through a task or model)".into());
+    }
+    s.notebook_running = true;
+    // The flag is cleared on every path, a panic included.
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_cells(s, p)))
+        .unwrap_or_else(|_| Err("the notebook failed unexpectedly".into()));
+    s.notebook_running = false;
+    r
+}
+
+fn run_cells(s: &mut Session, p: &Value) -> CmdResult {
     let i = index(s, p)?;
     let cells: Vec<usize> = match p.get("cell") {
         Some(_) => vec![cell_of(s, p)?.1],
