@@ -426,7 +426,7 @@ h1{{position:fixed;left:10px;top:4px;margin:0;font-size:16px;background:#fffc;pa
 const L={layers};const R=6378137,cv=document.getElementById('c'),g=cv.getContext('2d');
 const merc=(lon,lat)=>{{lat=Math.max(-85,Math.min(85,lat));return [R*lon*Math.PI/180,R*Math.log(Math.tan(Math.PI/4+lat*Math.PI/360))]}};
 let [cx,cy]=merc({lon},{lat}),res={res};const on=L.map(()=>true);const imgs=L.map(l=>{{if(!l.image)return null;const i=new Image();i.onload=draw;i.src='data:image/png;base64,'+l.image;return i}});
-const P=document.getElementById('panel');L.slice().reverse().forEach((l,ri)=>{{const k=L.length-1-ri;const d=document.createElement('label');d.style.display='block';d.innerHTML='<input type=checkbox checked> '+l.name.replace(/</g,'&lt;');d.firstChild.onchange=e=>{{on[k]=e.target.checked;draw()}};P.appendChild(d)}});
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');const P=document.getElementById('panel');L.slice().reverse().forEach((l,ri)=>{{const k=L.length-1-ri;const d=document.createElement('label');d.style.display='block';d.innerHTML='<input type=checkbox checked> '+esc(l.name);d.firstChild.onchange=e=>{{on[k]=e.target.checked;draw()}};P.appendChild(d)}});
 const sx=x=>(x-cx)/res+cv.width/2,sy=y=>(cy-y)/res+cv.height/2;
 function path(ring){{ring.forEach((p,i)=>{{const [x,y]=merc(p[0],p[1]);i?g.lineTo(sx(x),sy(y)):g.moveTo(sx(x),sy(y))}})}}
 function geom(G,st){{const t=G.type,c=G.coordinates;g.globalAlpha=st.opacity;g.fillStyle=st.fill;g.strokeStyle=st.stroke;g.lineWidth=st.width;
@@ -442,7 +442,7 @@ function inside(pt,r){{let c=false;for(let i=0,j=r.length-1;i<r.length;j=i++){{c
 function pick(e){{const pt=[(e.clientX-cv.width/2)*res+cx,cy-(e.clientY-cv.height/2)*res],pop=document.getElementById('pop');
 for(let k=L.length-1;k>=0;k--){{if(!on[k]||!L[k].features)continue;for(const f of L[k].features){{const G=f.geometry,t=G.type,c=G.coordinates;let hit=false;
 if(t==='Polygon')hit=inside(pt,c[0]);else if(t==='MultiPolygon')hit=c.some(p=>inside(pt,p[0]));else if(t==='Point'){{const q=merc(c[0],c[1]);hit=Math.hypot(q[0]-pt[0],q[1]-pt[1])<8*res}}
-if(hit){{pop.innerHTML='<b>'+L[k].name.replace(/</g,'&lt;')+'</b><br>'+Object.entries(f.properties).map(([a,b])=>a.replace(/</g,'&lt;')+': '+String(b).replace(/</g,'&lt;')).join('<br>');pop.style.left=e.clientX+8+'px';pop.style.top=e.clientY+8+'px';pop.style.display='block';return}}}}}}pop.style.display='none'}}
+if(hit){{pop.innerHTML='<b>'+esc(L[k].name)+'</b><br>'+Object.entries(f.properties).map(([a,b])=>esc(a)+': '+esc(b)).join('<br>');pop.style.left=e.clientX+8+'px';pop.style.top=e.clientY+8+'px';pop.style.display='block';return}}}}}}pop.style.display='none'}}
 onresize=draw;draw();
 </script></body></html>
 "#,
@@ -565,7 +565,12 @@ fn web_layer_zip(s: &Session, l: &Layer) -> Result<Vec<u8>, String> {
     m.layers = vec![l.clone()];
     let e = l.extent();
     if !e.is_empty() {
-        m.camera.center = rustgis_geom::lonlat_to_merc(e.center());
+        // Centred on the layer, at the scale that shows all of it in a typical window.
+        let (a, b) =
+            (rustgis_geom::lonlat_to_merc(Coord::new(e.min_x, e.min_y)), rustgis_geom::lonlat_to_merc(Coord::new(e.max_x, e.max_y)));
+        m.camera.center = Coord::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+        m.camera.res = ((b.x - a.x).abs() / 1000.0).max((b.y - a.y).abs() / 650.0).max(1.0) * 1.1;
+        m.camera.clamp();
     }
     let html = web_map_html(&m, &l.name)?;
     let src = safe(&l.name);

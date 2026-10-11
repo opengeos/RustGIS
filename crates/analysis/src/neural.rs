@@ -4,7 +4,7 @@
 //! and pure Rust.
 
 use rustgis_data::raster::Raster;
-use rustgis_geom::{Coord, Extent};
+use rustgis_geom::Coord;
 use serde::{Deserialize, Serialize};
 
 /// Most training samples kept per class, hidden layers, units per layer, and epochs.
@@ -122,32 +122,46 @@ fn softmax(a: &mut [f32]) {
     }
 }
 
-/// Band values of the pixels inside a polygon (`rings`, longitude/latitude), up to `max`.
+/// Band values of the pixels inside a polygon (`rings`, longitude/latitude), up to `max`. Only
+/// the pixels under the polygon's outline are visited, every `step`-th one in each direction when
+/// there are many more than `max`, so the samples spread across the polygon.
 pub fn polygon_samples(r: &Raster, bands: &[usize], rings: &[Vec<Coord>], max: usize) -> Vec<Vec<f32>> {
-    let mut e = Extent::EMPTY;
-    for c in rings.iter().flatten() {
-        e.expand(*c);
-    }
     let mut out = Vec::new();
-    if e.is_empty() {
+    let tr = r.transformer();
+    // The pixel window under the outline (its vertices, projected into the raster).
+    let (mut c0, mut r0, mut c1, mut r1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for v in rings.iter().flatten().take(1_000_000) {
+        let Some(w) = tr.from_lonlat(*v) else { continue };
+        let (c, rw) = r.transform.to_pixel(w);
+        if c.is_finite() && rw.is_finite() {
+            (c0, r0, c1, r1) = (c0.min(c), r0.min(rw), c1.max(c), r1.max(rw));
+        }
+    }
+    if c0 > c1 || max == 0 {
         return out;
     }
-    let tr = r.transformer();
-    for row in 0..r.height as i64 {
-        for col in 0..r.width as i64 {
+    let clamp = |v: f64, n: u32| v.clamp(0.0, n as f64) as i64;
+    let (c0, c1) = (clamp(c0.floor() - 1.0, r.width), clamp(c1.ceil() + 1.0, r.width));
+    let (r0, r1) = (clamp(r0.floor() - 1.0, r.height), clamp(r1.ceil() + 1.0, r.height));
+    let window = ((c1 - c0).max(0) as f64) * ((r1 - r0).max(0) as f64);
+    let step = ((window / max as f64).sqrt().floor() as i64).max(1);
+    let mut row = r0;
+    while row < r1 {
+        let mut col = c0;
+        while col < c1 {
             if out.len() >= max {
                 return out;
             }
             let w = r.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
-            let Some(ll) = tr.to_lonlat(w) else { continue };
-            if !e.contains(ll) || !rustgis_data::geometry::polygon_contains(rings, ll) {
-                continue;
-            }
-            let vals: Option<Vec<f32>> = bands.iter().map(|b| r.value(*b, col, row)).collect();
-            if let Some(v) = vals {
+            if let Some(ll) = tr.to_lonlat(w)
+                && rustgis_data::geometry::polygon_contains(rings, ll)
+                && let Some(v) = bands.iter().map(|b| r.value(*b, col, row)).collect::<Option<Vec<f32>>>()
+            {
                 out.push(v);
             }
+            col += step;
         }
+        row += step;
     }
     out
 }

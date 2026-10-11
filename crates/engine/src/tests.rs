@@ -2047,6 +2047,17 @@ fn deep_learning_hosted_imagery_and_sharing() {
     s.run("dl.import", &json!({"path": path("landcover.rgisdlpk")})).unwrap();
     s.run("dl.classify", &json!({"layer": "scene", "model": "landcover", "name": "again"})).unwrap();
     assert!(s.run("dl.import", &json!({"data": "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA=="})).is_err(), "an empty zip");
+    // Importing again doesn't replace the model; retraining it by name does, and says so.
+    let r = s.run("dl.import", &json!({"path": path("landcover.rgisdlpk")})).unwrap();
+    assert_eq!(r["model"], "landcover 2");
+    let r = s
+        .run(
+            "dl.train",
+            &json!({"layer": "scene", "training": "training", "classField": "class", "bands": [1, 2], "epochs": 5, "model": "landcover"}),
+        )
+        .unwrap();
+    assert_eq!(r["replaced"], true);
+    assert_eq!(s.project.dl_models.len(), 2);
     // Hosted imagery: tiles in a zip, transparent outside the raster.
     let r = s.run("imagery.hostedImagery", &json!({"layer": "scene", "path": path("tiles.zip"), "minZoom": 10, "maxZoom": 12})).unwrap();
     assert!(r["tiles"].as_u64().unwrap() >= 3);

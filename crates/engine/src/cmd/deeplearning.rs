@@ -19,6 +19,8 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub const PACKAGE_EXTENSION: &str = "rgisdlpk";
 /// Most tiles a hosted imagery export writes.
 const MAX_TILES: usize = 20_000;
+/// Largest total size of a hosted imagery package's tiles.
+const MAX_TILE_BYTES: usize = 512 << 20;
 const TILE: u32 = 256;
 
 /// A trained model kept in the project.
@@ -43,8 +45,8 @@ pub fn commands() -> Vec<C> {
     vec![
         C::new("dl.train", "Train Deep Learning Model", "Imagery › Image Classification", |s, p| {
             let m = train(s, p)?;
-            let r = json!({"model": m.name, "accuracy": m.accuracy, "classes": m.model.classes});
-            store(s, m);
+            let mut r = json!({"model": m.name, "accuracy": m.accuracy, "classes": m.model.classes});
+            r["replaced"] = json!(store(s, m));
             Ok(r)
         })
         .when(need_raster)
@@ -67,7 +69,16 @@ pub fn commands() -> Vec<C> {
             let json = entries.iter().find(|(n, _)| n == "model.json").map(|e| &e.1).ok_or("not a deep learning package (no model.json)")?;
             let mut m: DlModel = serde_json::from_slice(json).map_err(|e| format!("not a deep learning package: {e}"))?;
             m.model.validate()?;
-            m.name = m.name.chars().take(200).collect();
+            // An imported model never replaces one already here: it gets a name of its own.
+            let base: String = m.name.trim().chars().take(200).collect();
+            let base = if base.is_empty() { "Imported model".to_string() } else { base };
+            let taken = |s: &Session, n: &str| s.project.dl_models.iter().any(|x| x.name.eq_ignore_ascii_case(n));
+            m.name = base.clone();
+            let mut k = 1;
+            while taken(s, &m.name) {
+                k += 1;
+                m.name = format!("{base} {k}");
+            }
             m.accuracy = if m.accuracy.is_finite() { m.accuracy.clamp(0.0, 1.0) } else { 0.0 };
             let name = m.name.clone();
             store(s, m);
@@ -106,11 +117,17 @@ fn read_bytes(p: &Value) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// Adds or replaces a model by name.
-fn store(s: &mut Session, m: DlModel) {
+/// Adds a model, or replaces the one of the same name (retraining): true when it replaced one.
+fn store(s: &mut Session, m: DlModel) -> bool {
     match s.project.dl_models.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&m.name)) {
-        Some(slot) => *slot = m,
-        None => s.project.dl_models.push(m),
+        Some(slot) => {
+            *slot = m;
+            true
+        }
+        None => {
+            s.project.dl_models.push(m);
+            false
+        }
     }
 }
 
@@ -186,9 +203,9 @@ fn classify(s: &mut Session, p: &Value) -> CmdResult {
     let v = add(s, out, true)?;
     let legend: Vec<Value> =
         m.model.classes.iter().zip(&counts).enumerate().map(|(i, (c, n))| json!({"value": i + 1, "class": c, "pixels": n})).collect();
-    let r = json!({"layer": v["layer"], "model": m.name, "accuracy": m.accuracy, "classes": legend});
+    let mut r = json!({"layer": v["layer"], "model": m.name, "accuracy": m.accuracy, "classes": legend});
     if trained {
-        store(s, m);
+        r["replaced"] = json!(store(s, m));
     }
     Ok(r)
 }
@@ -286,6 +303,7 @@ pub fn hosted_bytes(s: &mut Session, p: &Value) -> Result<(Vec<u8>, Value), Stri
     map.graticule = false;
     map.layers = vec![layer];
     let mut entries = Vec::new();
+    let mut held = 0usize;
     for (z, x, y) in &jobs {
         let (min_x, min_y, max_x, max_y) = tile_bounds(*z, *x, *y);
         let camera = rustgis_map::Camera {
@@ -308,7 +326,12 @@ pub fn hosted_bytes(s: &mut Session, p: &Value) -> Result<(Vec<u8>, Value), Stri
             }
         }
         if any {
-            entries.push((format!("tiles/{z}/{x}/{y}.png"), img.encode_png().map_err(|e| e.to_string())?));
+            let png = img.encode_png().map_err(|e| e.to_string())?;
+            held += png.len();
+            if held > MAX_TILE_BYTES {
+                return Err(format!("the tiles passed {} MB at zoom {z}; lower maxZoom", MAX_TILE_BYTES >> 20));
+            }
+            entries.push((format!("tiles/{z}/{x}/{y}.png"), png));
         }
     }
     let c = e.center();
