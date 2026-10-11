@@ -218,10 +218,14 @@ fn georeference(s: &mut Session, p: &Value) -> CmdResult {
 fn change(s: &mut Session, p: &Value) -> CmdResult {
     let a = raster_named(s, ps(p, "before").ok_or("before is required")?)?;
     let bfr = raster_named(s, ps(p, "after").ok_or("after is required")?)?;
+    // The method is checked before any pixels are resampled.
+    let method = ps(p, "method").unwrap_or("difference");
+    if !matches!(method, "difference" | "ratio" | "percent") {
+        return Err(format!("unknown method '{method}'"));
+    }
     let band = p.get("band").and_then(Value::as_u64).unwrap_or(1).saturating_sub(1) as usize;
     let av: Vec<f32> = a.bands.get(band).ok_or("no such band")?.data.clone();
     let bv = rasterops::resample_to(&bfr, band, &a)?;
-    let method = ps(p, "method").unwrap_or("difference");
     let out: Vec<f32> = av
         .iter()
         .zip(&bv)
@@ -238,9 +242,6 @@ fn change(s: &mut Session, p: &Value) -> CmdResult {
             if v.is_finite() { v } else { NODATA }
         })
         .collect();
-    if !matches!(method, "difference" | "ratio" | "percent") {
-        return Err(format!("unknown method '{method}'"));
-    }
     add(s, rasterops::derive(&a, &name(p, format!("{}_change", a.name)), vec![out])?, false)
 }
 
@@ -447,8 +448,22 @@ fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
     let only = p.get("band").and_then(Value::as_u64).map(|b| b.saturating_sub(1) as usize);
     let mut bands: Vec<Vec<f32>> = r.bands.iter().map(|b| b.data.clone()).collect();
     let mut n = 0usize;
-    for row in 0..r.height {
-        for col in 0..r.width {
+    // Only the pixels under the polygon's box are visited.
+    let tr = r.transformer();
+    let (mut c0, mut r0, mut c1, mut r1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for corner in [Coord::new(e.min_x, e.min_y), Coord::new(e.max_x, e.min_y), Coord::new(e.max_x, e.max_y), Coord::new(e.min_x, e.max_y)] {
+        if let Some(w) = tr.from_lonlat(corner) {
+            let (c, rr) = r.transform.to_pixel(w);
+            (c0, r0, c1, r1) = (c0.min(c), r0.min(rr), c1.max(c), r1.max(rr));
+        }
+    }
+    if c0 > c1 {
+        return Err("the polygon is outside the raster".into());
+    }
+    let cols = (c0.floor().max(0.0) as u32).min(r.width)..(c1.ceil().max(0.0) as u32 + 1).min(r.width);
+    let rows = (r0.floor().max(0.0) as u32).min(r.height)..(r1.ceil().max(0.0) as u32 + 1).min(r.height);
+    for row in rows {
+        for col in cols.clone() {
             let w = r.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
             let Some(ll) = r.transformer().to_lonlat(w) else { continue };
             if !e.contains(ll) || !rustgis_data::geometry::polygon_contains(&rings, ll) {

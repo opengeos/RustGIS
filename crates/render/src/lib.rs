@@ -749,18 +749,19 @@ fn layer_masks(map: &mut Map, ctx: &Ctx, w: u32, h: u32, flat: &rustgis_map::pro
         {
             Some(mi) => {
                 let mut pb = PathBuilder::new();
-                if let Some(ml) = map.layers.get_mut(mi) {
-                    let geoms: Vec<Geometry> = if ctx.globe.is_some() {
-                        ml.dataset.features.iter().filter_map(|f| f.geometry.clone()).collect()
-                    } else {
-                        ml.projected_in(flat, key).iter().flatten().cloned().collect()
-                    };
-                    for g in &geoms {
-                        if let Geometry::Polygon(polys) = g {
-                            for r in polys.iter().flatten() {
-                                ctx.ring_path(&mut pb, r, true);
-                            }
+                // The mask's shapes go straight into the path, without copying them.
+                let mut add = |g: &Geometry| {
+                    if let Geometry::Polygon(polys) = g {
+                        for r in polys.iter().flatten() {
+                            ctx.ring_path(&mut pb, r, true);
                         }
+                    }
+                };
+                if let Some(ml) = map.layers.get_mut(mi) {
+                    if ctx.globe.is_some() {
+                        ml.dataset.features.iter().filter_map(|f| f.geometry.as_ref()).for_each(&mut add);
+                    } else {
+                        ml.projected_in(flat, key).iter().flatten().for_each(&mut add);
                     }
                 }
                 if let Some(p) = pb.finish() {

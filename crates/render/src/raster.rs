@@ -67,11 +67,11 @@ fn sample(r: &Raster, band: usize, c: f64, row: f64, resampling: Resampling) -> 
     }
 }
 
-/// Draws a raster layer onto `pm` at `opacity`.
 fn place_is_flat(p: &Place) -> bool {
     matches!(p, Place::Flat(..))
 }
 
+/// Draws a raster layer onto `pm` at `opacity`.
 pub(crate) fn draw(pm: &mut Pixmap, r: &Raster, style: &RasterStyle, view: &View, opacity: f32, full_res: bool, place: Place) {
     // On high-density screens, compute at logical-pixel resolution and scale up (unless asked
     // for full resolution, as exports are): a quarter of the work at 2×.

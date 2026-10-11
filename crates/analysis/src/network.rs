@@ -234,8 +234,8 @@ pub struct FieldProfile {
     pub ty: String,
     pub count: usize,
     pub nulls: usize,
-    /// Distinct values, counted up to 100,000 (`truncated` says more were left uncounted, so
-    /// `top` is approximate).
+    /// Distinct values, counted until 100,000 are seen (`truncated` says counting stopped there,
+    /// so `distinct` and `top` cover only the rows before).
     pub distinct: usize,
     pub truncated: bool,
     pub min: Option<f64>,
@@ -266,15 +266,15 @@ pub fn profile_fields(ds: &Dataset) -> Vec<FieldProfile> {
                     min = min.min(x);
                     max = max.max(x);
                 }
-                let key = v.to_string();
-                let full = counts.len() >= 100_000;
-                match counts.get_mut(&key) {
-                    Some(c) => *c += 1,
-                    None if !full => {
-                        counts.insert(key, 1);
-                    }
-                    None => truncated = true,
+                // Past the cap, counting stops (no text is made for the remaining rows).
+                if truncated {
+                    continue;
                 }
+                if counts.len() >= 100_000 {
+                    truncated = true;
+                    continue;
+                }
+                *counts.entry(v.to_string()).or_insert(0) += 1;
             }
             let mut top: Vec<(String, usize)> = counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
             top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));

@@ -25,10 +25,18 @@ pub fn commands() -> Vec<C> {
             if n.is_empty() {
                 return Err("name is required".into());
             }
-            with(s, p, |l| {
+            let old = s.map().layer(s.layer_id(p)?).map(|l| l.name.clone()).unwrap_or_default();
+            let r = with(s, p, |l| {
                 l.name = n.clone();
                 l.dataset.name = n.clone();
-            })
+            })?;
+            // Layers masked by this one follow the new name.
+            for l in &mut s.map_mut().layers {
+                if l.mask.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(&old)) {
+                    l.mask = Some(n.clone());
+                }
+            }
+            Ok(r)
         })
         .when(need_layer),
         C::new("layer.visibility", "Visibility", "Contents", |s, p| {
