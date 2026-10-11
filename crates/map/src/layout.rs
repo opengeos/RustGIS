@@ -14,6 +14,9 @@ pub const PT_PER_MM: f64 = 96.0 / 25.4;
 /// Metres of paper per logical point.
 pub const PAPER_M_PER_PT: f64 = 0.0254 / 96.0;
 
+/// The largest element id a layout keeps (imported ones above it are renumbered).
+const MAX_ID: u32 = 1_000_000;
+
 /// Page sizes: (id, label, width mm, height mm), portrait.
 pub const PAGES: &[(&str, &str, f64, f64)] = &[
     ("letter", "Letter", 215.9, 279.4),
@@ -238,8 +241,8 @@ impl Layout {
 
     /// Adds an element and returns its id.
     pub fn add(&mut self, name: impl Into<String>, (x, y, w, h): (f64, f64, f64, f64), kind: ElementKind) -> u32 {
-        let id = self.next_id.max(self.elements.iter().map(|e| e.id).max().unwrap_or(0) + 1);
-        self.next_id = id + 1;
+        let id = self.next_id.max(self.elements.iter().map(|e| e.id).max().unwrap_or(0).saturating_add(1));
+        self.next_id = id.saturating_add(1);
         self.elements.push(Element { id, name: name.into(), x, y, w, h, visible: true, kind });
         id
     }
@@ -285,9 +288,10 @@ impl Layout {
         self.height = finite_or(self.height, 297.0).clamp(20.0, 5000.0);
         self.elements.truncate(500);
         let mut seen = std::collections::HashSet::new();
-        let mut next = self.elements.iter().map(|e| e.id).max().unwrap_or(0).saturating_add(1);
+        let mut next = self.elements.iter().map(|e| e.id).filter(|id| *id <= MAX_ID).max().unwrap_or(0).saturating_add(1);
         for e in &mut self.elements {
-            if e.id == 0 || !seen.insert(e.id) {
+            // Ids stay well below u32::MAX so new elements never run out of numbers.
+            if e.id == 0 || e.id > MAX_ID || !seen.insert(e.id) {
                 e.id = next;
                 seen.insert(next);
                 next = next.saturating_add(1);
@@ -447,6 +451,16 @@ mod tests {
         assert!(matches!(&l.elements[1].kind, ElementKind::Text { size, .. } if *size <= 400.0));
         let id = l.add("n", (0.0, 0.0, 1.0, 1.0), ElementKind::NorthArrow { frame: ids[0] });
         assert!(!ids.contains(&id));
+        // An id at u32::MAX is renumbered, and adding after it doesn't overflow.
+        let mut big: Layout = serde_json::from_str(r#"{"name":"b","width":100,"height":100,"elements":[{"id":4294967295,"name":"t","x":0,"y":0,"w":5,"h":5,"kind":{"Text":{"text":"t","size":10,"color":[0,0,0,255]}}}]}"#).unwrap_or_else(|e| panic!("{e}"));
+        big.clamp();
+        assert!(big.elements[0].id <= MAX_ID);
+        let a = big.add(
+            "a",
+            (0.0, 0.0, 1.0, 1.0),
+            ElementKind::Rectangle { fill: Rgba::rgb(0, 0, 0), outline: Rgba::rgb(0, 0, 0), width: 1.0 },
+        );
+        assert!(a != big.elements[0].id && a <= MAX_ID + 1);
     }
 
     #[test]

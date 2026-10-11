@@ -15,8 +15,15 @@ pub struct Page {
 
 impl Page {
     pub fn new(image: &Pixmap, width_mm: f64, height_mm: f64) -> Page {
-        // Opaque RGB: the page is white, so premultiplied pixels are already composited on it.
-        let rgb: Vec<u8> = image.pixels().iter().flat_map(|px| [px.red(), px.green(), px.blue()]).collect();
+        // RGB without the alpha (pages are drawn on white, so they're opaque).
+        let rgb: Vec<u8> = image
+            .pixels()
+            .iter()
+            .flat_map(|px| {
+                let c = px.demultiply();
+                [c.red(), c.green(), c.blue()]
+            })
+            .collect();
         Page {
             width: image.width(),
             height: image.height(),
@@ -42,7 +49,7 @@ pub fn write(pages: &[Page], title: &str) -> Vec<u8> {
     obj(&mut out, &mut offsets, b"<< /Type /Catalog /Pages 2 0 R >>");
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + i * 3)).collect();
     obj(&mut out, &mut offsets, format!("<< /Type /Pages /Kids [{}] /Count {n} >>", kids.join(" ")).as_bytes());
-    obj(&mut out, &mut offsets, format!("<< /Title ({}) /Producer (RustGIS) >>", escape(title)).as_bytes());
+    obj(&mut out, &mut offsets, format!("<< /Title {} /Producer (RustGIS) >>", text_string(title)).as_bytes());
     for (i, p) in pages.iter().enumerate() {
         let (pw, ph) = (p.width_mm * 72.0 / 25.4, p.height_mm * 72.0 / 25.4);
         let (page, contents, image) = (4 + i * 3, 5 + i * 3, 6 + i * 3);
@@ -79,15 +86,16 @@ pub fn write(pages: &[Page], title: &str) -> Vec<u8> {
     out
 }
 
-fn escape(s: &str) -> String {
-    s.chars()
-        .filter(|c| c.is_ascii() && !c.is_ascii_control())
-        .take(200)
-        .flat_map(|c| match c {
-            '(' | ')' | '\\' => vec!['\\', c],
-            c => vec![c],
-        })
-        .collect()
+/// A PDF text string: plain ASCII in parentheses, anything else as UTF-16BE hex.
+fn text_string(s: &str) -> String {
+    let s: String = s.chars().filter(|c| !c.is_control()).take(200).collect();
+    if s.is_ascii() {
+        let escaped: String = s.chars().flat_map(|c| if matches!(c, '(' | ')' | '\\') { vec!['\\', c] } else { vec![c] }).collect();
+        format!("({escaped})")
+    } else {
+        let hex: String = s.encode_utf16().map(|u| format!("{u:04X}")).collect();
+        format!("<FEFF{hex}>")
+    }
 }
 
 #[cfg(test)]
@@ -102,6 +110,7 @@ mod tests {
         let text = String::from_utf8_lossy(&pdf);
         assert!(text.starts_with("%PDF-1.4") && text.trim_end().ends_with("%%EOF"));
         assert!(text.contains("/Count 2") && text.contains("/MediaBox [0 0 595.28 841.89]") && text.contains("Atlas \\(draft\\)"));
+        assert_eq!(text_string("España"), "<FEFF004500730070006100F10061>");
         // The xref offsets point at their objects.
         let find = |needle: &[u8]| pdf.windows(needle.len()).position(|w| w == needle).unwrap();
         let xref = find(b"\nxref\n") + 1;

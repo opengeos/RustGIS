@@ -710,6 +710,9 @@ fn layouts_compose_export_and_round_trip() {
     let text = serde_json::to_string(&s.project).unwrap();
     let p = crate::Project::from_json(&text).unwrap();
     assert_eq!(p.layouts.len(), 2);
+    let r = s.run("layout.rename", &json!({"name": "Europe 2", "newName": "europe"})).unwrap();
+    assert_eq!(r["name"], "europe 2", "renaming keeps names unique");
+    s.run("layout.rename", &json!({"name": "europe 2", "newName": "Europe 2"})).unwrap();
     s.run("layout.close", &Value::Null).unwrap();
     assert_eq!(s.active_layout, None);
     s.run("layout.remove", &json!({"name": "Europe 2"})).unwrap();

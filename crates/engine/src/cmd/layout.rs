@@ -41,12 +41,21 @@ pub fn commands() -> Vec<C> {
         })
         .params(r#"{"name"?: string}"#),
         C::new("layout.rename", "Rename Layout", "Catalog", |s, p| {
-            let name = ps(p, "newName").map(str::trim).filter(|n| !n.is_empty()).ok_or("newName is required")?.chars().take(200).collect();
+            let name: String = ps(p, "newName").map(str::trim).filter(|n| !n.is_empty()).ok_or("newName is required")?.chars().take(200).collect();
             let i = index(s, &by_name(p))?;
-            if let Some(l) = s.project.layouts.get_mut(i) {
-                l.name = name;
+            // Unique among the other layouts, so names keep finding one layout.
+            let taken = |n: &str| s.project.layouts.iter().enumerate().any(|(j, l)| j != i && l.name.eq_ignore_ascii_case(n));
+            let mut unique: String = name;
+            let base = unique.clone();
+            let mut k = 1;
+            while taken(&unique) {
+                k += 1;
+                unique = format!("{base} {k}");
             }
-            Ok(Value::Null)
+            if let Some(l) = s.project.layouts.get_mut(i) {
+                l.name = unique.clone();
+            }
+            Ok(json!({"name": unique}))
         })
         .params(r#"{"name"?: string, "newName": string}"#),
         C::new("layout.page", "Page Size", "Layout › Page Setup", page).params(

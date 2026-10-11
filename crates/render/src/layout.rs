@@ -19,13 +19,16 @@ pub struct PageInfo {
     pub page_name: String,
 }
 
-/// Largest page drawn, in pixels per side.
+/// Largest page drawn, in pixels per side and in all (less in the browser, where memory is
+/// tighter): a larger page is drawn at a lower resolution.
 const MAX_SIDE: f64 = 12_000.0;
+const MAX_PIXELS: f64 = if cfg!(target_arch = "wasm32") { 25_000_000.0 } else { 60_000_000.0 };
 
 /// Renders a layout at `dpi` (dots per inch). `maps` are the project's maps, found by name.
 pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> Option<Pixmap> {
     let ppp = (if dpi.is_finite() { dpi } else { 96.0 } / 96.0).clamp(0.25, 8.0);
     let k = PT_PER_MM * ppp; // pixels per millimetre
+    let k = k.min((MAX_PIXELS / (layout.width * layout.height).max(1.0)).sqrt());
     let (w, h) = ((layout.width * k).clamp(1.0, MAX_SIDE), (layout.height * k).clamp(1.0, MAX_SIDE));
     let k = k.min(w / layout.width).min(h / layout.height);
     // A page too large for the cap draws at a lower resolution throughout.
