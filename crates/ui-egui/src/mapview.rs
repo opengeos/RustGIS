@@ -567,9 +567,10 @@ fn finish_sketch(app: &mut RustGisApp) {
 /// Adds a graphic drawn with a tool, then returns to Explore unless the tool is kept.
 pub fn finish_graphic(app: &mut RustGisApp, shape: &str, pts: Vec<Coord>) {
     let coords: Vec<[f64; 2]> = pts.iter().map(|c| [c.x, c.y]).collect();
-    let _ = app.run("graphics.add", json!({"shape": shape, "points": coords}));
+    let ok = app.run("graphics.add", json!({"shape": shape, "points": coords})).is_ok();
     app.map.cancel_sketch();
-    if !app.session.keep_tool {
+    // A failed graphic (a click without a drag) keeps the tool; the error is in the notices.
+    if ok && !app.session.keep_tool {
         app.session.tool = Tool::Explore;
     }
 }

@@ -83,7 +83,7 @@ pub struct Rendered {
 
 /// The pixel size of a base64 PNG or JPEG picture, `None` when it can't be decoded.
 pub fn picture_size(b64: &str) -> Option<(u32, u32)> {
-    picture::decode(b64).map(|p| (p.width(), p.height()))
+    picture::size(b64)
 }
 
 /// The colour unplaced labels are drawn in.
@@ -561,6 +561,23 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         if !direct {
             pm.draw_pixmap(0, 0, target.as_ref(), &PixmapPaint { opacity, ..PixmapPaint::default() }, Transform::identity(), None);
         }
+        if layer.graphics {
+            // Pictures, under the selection highlight. (On the globe the geometry and `px` are
+            // both longitude/latitude, so the corners land right there too.)
+            let (pw, ph) = (pm.width() as f32, pm.height() as f32);
+            for (row, g) in geoms.iter().enumerate() {
+                let Some(g) = g else { continue };
+                if rows.get(row) != Some(&true) || rustgis_map::graphics::kind(ds_ptr, row) != "picture" || !visible(&g.extent()) {
+                    continue;
+                }
+                let e = g.extent();
+                let (x0, y0) = ctx.px(Coord::new(e.min_x, e.max_y));
+                let (x1, y1) = ctx.px(Coord::new(e.max_x, e.min_y));
+                if x0.max(x1) >= 0.0 && x0.min(x1) <= pw && y0.max(y1) >= 0.0 && y0.min(y1) <= ph {
+                    picture::draw(&mut pm, ds_ptr, row, (x0, y0, x1, y1), opacity);
+                }
+            }
+        }
         for row in selection {
             if let Some(Some(g)) = geoms.get(*row)
                 && rows.get(*row) == Some(&true)
@@ -574,12 +591,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                 if rows.get(row) != Some(&true) {
                     continue;
                 }
-                if rustgis_map::graphics::kind(ds_ptr, row) == "picture" {
-                    let e = g.extent();
-                    let (x0, y0) = ctx.px(Coord::new(e.min_x, e.max_y));
-                    let (x1, y1) = ctx.px(Coord::new(e.max_x, e.min_y));
-                    picture::draw(&mut pm, ds_ptr, row, (x0, y0, x1, y1), opacity);
-                } else if let (Some(t), Some(c)) = (rustgis_map::graphics::label(ds_ptr, row), g.label_point())
+                if let (Some(t), Some(c)) = (rustgis_map::graphics::label(ds_ptr, row), g.label_point())
                     && let Some((x, y)) = ctx.screen(c)
                 {
                     let color = rustgis_map::graphics::text_color(ds_ptr, row);

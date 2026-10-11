@@ -603,6 +603,10 @@ fn graphics_draw_shapes_text_and_pictures() {
     s.run("select.rows", &json!({"layer": id, "rows": [0]})).unwrap();
     s.run("graphics.style", &json!({"fill": "#00FF00", "width": 3})).unwrap();
     assert_eq!(rustgis_map::graphics::symbol(&s.map().layer(id).unwrap().dataset, 0).fill, rustgis_map::Rgba::rgb(0, 255, 0));
+    assert!(s.run("graphics.style", &json!({})).is_err(), "nothing to change");
+    s.run("graphics.style", &json!({"text": "not on a rectangle"})).unwrap();
+    assert!(rustgis_map::graphics::label(&s.map().layer(id).unwrap().dataset, 0).is_none(), "text only goes on text graphics");
+    assert_eq!(rustgis_render::picture_size(&b64), Some((2, 2)));
     assert!(s.run("graphics.keepTool", &Value::Null).unwrap()["keepTool"].as_bool().unwrap());
     s.run("tool.set", &json!({"tool": "graphicRectangle"})).unwrap();
     assert_eq!(s.tool.code(), "graphicRectangle");

@@ -208,11 +208,16 @@ fn picture(p: &Value) -> Result<String, String> {
     let b64 = match (ps(p, "image"), ps(p, "path")) {
         (Some(b), _) => b.trim().to_string(),
         (None, Some(path)) => {
-            let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-            if meta.len() > MAX_PICTURE as u64 {
+            use std::io::Read;
+            // Read at most one byte past the limit, so a huge or endless file is refused.
+            let mut bytes = Vec::new();
+            std::fs::File::open(path)
+                .and_then(|f| f.take(MAX_PICTURE as u64 + 1).read_to_end(&mut bytes))
+                .map_err(|e| format!("{path}: {e}"))?;
+            if bytes.len() > MAX_PICTURE {
                 return Err("the picture is too large".into());
             }
-            base64::engine::general_purpose::STANDARD.encode(std::fs::read(path).map_err(|e| format!("{path}: {e}"))?)
+            base64::engine::general_purpose::STANDARD.encode(bytes)
         }
         (None, None) => return Err("a picture needs an image or a path".into()),
     };
@@ -260,25 +265,39 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
 fn style(s: &mut Session, p: &Value) -> CmdResult {
     let (fill, outline) = (color(p, "fill")?, color(p, "outline")?);
     let text = ps(p, "text").map(|t| t.chars().take(2000).collect::<String>());
+    let nums = [("width", "width", 50.0), ("size", "size", 200.0), ("font_size", "fontSize", 200.0)];
+    if fill.is_none() && outline.is_none() && text.is_none() && nums.iter().all(|(_, k, _)| f(p, k).is_none()) {
+        return Err("give a fill, outline, width, size, fontSize or text".into());
+    }
     let mut n = 0;
     for l in s.map_mut().layers.iter_mut().filter(|l| l.graphics && !l.selection.is_empty()) {
-        let idx = |name: &str| l.dataset.field_index(name);
-        let sets: Vec<(Option<usize>, Attr)> = [
-            ("fill", fill.clone().map(Attr::Text)),
-            ("outline", outline.clone().map(Attr::Text)),
-            ("width", f(p, "width").map(|v| Attr::Float(v.clamp(0.0, 50.0)))),
-            ("size", f(p, "size").map(|v| Attr::Float(v.clamp(0.0, 200.0)))),
-            ("font_size", f(p, "fontSize").map(|v| Attr::Float(v.clamp(0.0, 200.0)))),
-            ("text", text.clone().map(Attr::Text)),
-        ]
-        .into_iter()
-        .filter_map(|(k, v)| v.map(|v| (idx(k), v)))
-        .collect();
+        let mut sets: Vec<(&str, Attr)> = Vec::new();
+        if let Some(c) = &fill {
+            sets.push(("fill", Attr::Text(c.clone())));
+        }
+        if let Some(c) = &outline {
+            sets.push(("outline", Attr::Text(c.clone())));
+        }
+        for (field, k, max) in nums {
+            if let Some(v) = f(p, k) {
+                sets.push((field, Attr::Float(v.clamp(0.0, max))));
+            }
+        }
+        let sets: Vec<(Option<usize>, Attr)> = sets.into_iter().map(|(k, v)| (l.dataset.field_index(k), v)).collect();
+        let text_field = l.dataset.field_index("text");
         for r in l.selection.clone() {
+            let is_text = graphics::kind(&l.dataset, r) == "text";
+            let Some(ft) = l.dataset.features.get_mut(r) else { continue };
             for (fi, v) in &sets {
-                if let Some(cell) = fi.and_then(|fi| l.dataset.features.get_mut(r).and_then(|ft| ft.attrs.get_mut(fi))) {
+                if let Some(cell) = fi.and_then(|fi| ft.attrs.get_mut(fi)) {
                     *cell = v.clone();
                 }
+            }
+            // Only text graphics show text.
+            if let (Some(t), Some(fi), true) = (&text, text_field, is_text)
+                && let Some(cell) = ft.attrs.get_mut(fi)
+            {
+                *cell = Attr::Text(t.clone());
             }
             n += 1;
         }
