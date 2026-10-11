@@ -1909,6 +1909,13 @@ fn presentations_and_notebooks() {
     let r = s.run("notebook.run", &json!({"notebook": opened})).unwrap();
     assert_eq!(r["error"], 0, "{r}");
     assert!(!s.project.notebooks.iter().any(|nb| nb.name == "Laundered"));
+    // Or plant a cell in a trusted notebook.
+    let plant = format!("notebook.addCell {{\"notebook\": \"Analysis\", \"source\": {:?}}}", "share.exportMap {}");
+    s.run("notebook.editCell", &json!({"notebook": opened.as_str(), "cell": 0, "source": plant})).unwrap();
+    let before = s.project.notebooks[0].cells.len();
+    let r = s.run("notebook.run", &json!({"notebook": opened.as_str()})).unwrap();
+    assert_eq!(r["error"], 0, "{r}");
+    assert_eq!(s.project.notebooks[0].cells.len(), before);
     let last = s.project.notebooks.len() - 1;
     s.run("notebook.remove", &json!({"notebook": last})).unwrap();
     // A cell that removes an earlier notebook still writes its output to its own notebook.
