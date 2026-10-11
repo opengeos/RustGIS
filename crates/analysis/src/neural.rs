@@ -148,7 +148,7 @@ pub fn polygon_samples(r: &Raster, bands: &[usize], rings: &[Vec<Coord>], max: u
     let window = ((c1 - c0).max(0) as f64) * ((r1 - r0).max(0) as f64);
     // A thin polygon in a large window can slip between the grid's points: the grid is made
     // denser until it finds enough pixels, within 4 million visits over all passes.
-    let mut step = ((window / max as f64).sqrt().floor() as i64).max(1);
+    let mut step = ((window / max as f64).sqrt().ceil() as i64).max(1);
     let mut visits = 0f64;
     loop {
         visits += window / (step * step) as f64;
