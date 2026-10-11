@@ -364,7 +364,7 @@ Install Plugin From Registry	Instalar complemento desde el registro
 Install {name} {version}?	¿Instalar {name} {version}?
 Installed	Instalado
 Installed plugins are kept in {folder}	Los complementos instalados se guardan en {folder}
-Installed {name} {version}.	Se ha instalado {name} {version}.
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	Se ha instalado {name} {version}. Lo encontrará en la pestaña Complementos; sus herramientas también están en el panel Geoprocesamiento.
 Interface font: {font}	Fuente de la interfaz: {font}
 Invalid: {error}	No válida: {error}
 Invert	Invertir

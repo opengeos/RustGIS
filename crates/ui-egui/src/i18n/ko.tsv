@@ -364,7 +364,7 @@ Install Plugin From Registry	레지스트리에서 플러그인 설치
 Install {name} {version}?	{name} {version}을(를) 설치할까요?
 Installed	설치됨
 Installed plugins are kept in {folder}	설치된 플러그인 위치: {folder}
-Installed {name} {version}.	{name} {version}을(를) 설치했습니다.
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	{name} {version}을(를) 설치했습니다. 플러그인 탭에서 찾을 수 있으며, 도구는 지오프로세싱 창에도 있습니다.
 Interface font: {font}	인터페이스 글꼴: {font}
 Invalid: {error}	유효하지 않음: {error}
 Invert	반전

@@ -1465,8 +1465,18 @@ fn plugin_edits_are_one_undo_step() {
     // Files need their own permission.
     let e = forward(&mut s, "eng-edit", "layer.addData", json!({"path": "/etc/passwd"})).unwrap_err();
     assert!(e.contains("'files' permission"), "{e}");
-    let e = forward(&mut s, "eng-edit", "share.exportMap", json!({})).unwrap_err();
-    assert!(e.contains("'files' permission"), "{e}");
+    for (op, params) in [
+        ("share.exportMap", json!({})),
+        ("project.save", json!({})),
+        ("layer.rename", json!({"layer": "Cities", "name": "x", "output": 1})),
+        ("layer.rename", json!({"layer": "Cities", "name": "https://example.com/x"})),
+        ("layer.rename", json!({"layer": "Cities", "name": "../../x"})),
+        ("layer.rename", json!({"layer": "Cities", "name": {"nested": {"url": "x"}}})),
+    ] {
+        let e = forward(&mut s, "eng-edit", op, params.clone()).unwrap_err();
+        assert!(e.contains("'files' permission"), "{op} {params}: {e}");
+    }
+    assert!(forward(&mut s, "eng-edit", "layer.rename", json!({"layer": "Rivers", "name": "Streams"})).is_ok());
     rustgis_plugins::unload("eng-edit");
 }
 

@@ -364,7 +364,7 @@ Install Plugin From Registry	Installer une extension depuis le registre
 Install {name} {version}?	Installer {name} {version} ?
 Installed	Installée
 Installed plugins are kept in {folder}	Les extensions installées sont conservées dans {folder}
-Installed {name} {version}.	{name} {version} installée.
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	{name} {version} installée. Retrouvez-la dans l'onglet Extensions ; ses outils sont aussi dans le volet Géotraitement.
 Interface font: {font}	Police de l'interface : {font}
 Invalid: {error}	Non valide : {error}
 Invert	Inverser

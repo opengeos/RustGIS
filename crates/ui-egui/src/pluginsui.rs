@@ -247,7 +247,10 @@ fn install_confirmed(app: &mut RustGisApp) {
                     list.push(entry);
                 }
             });
-            let mut text = crate::i18n::fmt("Installed {name} {version}.", &[("name", &p.manifest.name), ("version", &p.manifest.version)]);
+            let mut text = crate::i18n::fmt(
+                "Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.",
+                &[("name", &p.manifest.name), ("version", &p.manifest.version)],
+            );
             if keeps_prefs() && !kept {
                 text = format!("{text} {}", tl!("It's too large to keep in the browser: install it again on your next visit."));
             }

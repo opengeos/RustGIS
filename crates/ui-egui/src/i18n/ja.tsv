@@ -364,7 +364,7 @@ Install Plugin From Registry	レジストリからプラグインをインスト
 Install {name} {version}?	{name} {version} をインストールしますか？
 Installed	インストール済み
 Installed plugins are kept in {folder}	インストールしたプラグインの保存先: {folder}
-Installed {name} {version}.	{name} {version} をインストールしました。
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	{name} {version} をインストールしました。[プラグイン] タブにあります。ツールはジオプロセシング ウィンドウにもあります。
 Interface font: {font}	インターフェイスのフォント：{font}
 Invalid: {error}	無効：{error}
 Invert	反転

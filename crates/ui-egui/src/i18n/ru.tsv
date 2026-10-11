@@ -364,7 +364,7 @@ Install Plugin From Registry	Установить модуль из катало
 Install {name} {version}?	Установить {name} {version}?
 Installed	Установлен
 Installed plugins are kept in {folder}	Установленные модули хранятся в {folder}
-Installed {name} {version}.	Установлен модуль {name} {version}.
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	Установлен модуль {name} {version}. Он находится на вкладке «Модули»; его инструменты также есть на панели геообработки.
 Interface font: {font}	Шрифт интерфейса: {font}
 Invalid: {error}	Недопустимо: {error}
 Invert	Инвертировать

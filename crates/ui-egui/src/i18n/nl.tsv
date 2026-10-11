@@ -364,7 +364,7 @@ Install Plugin From Registry	Plugin installeren vanuit register
 Install {name} {version}?	{name} {version} installeren?
 Installed	Geïnstalleerd
 Installed plugins are kept in {folder}	Geïnstalleerde plugins worden bewaard in {folder}
-Installed {name} {version}.	{name} {version} geïnstalleerd.
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	{name} {version} geïnstalleerd. Je vindt de plugin op het tabblad Plugins; de gereedschappen staan ook in het geoverwerkingsvenster.
 Interface font: {font}	Interfacelettertype: {font}
 Invalid: {error}	Ongeldig: {error}
 Invert	Omkeren

@@ -100,6 +100,16 @@ fn plugins_install_from_a_file_after_a_prompt() {
     h.step();
     h.get_by_label("Hello").click();
     h.step();
+    // Its tools: a button on the Plugins tab, and listed in the Geoprocessing pane.
+    h.get_by_label("Make Points").click();
+    h.step();
+    h.step();
+    assert_eq!(h.state().gp.tool, Some("plugin:ui-test/m"));
+    h.state_mut().gp.tool = None;
+    h.step();
+    h.step();
+    // On the ribbon and in the pane's Plugins section.
+    assert_eq!(h.query_all_by_label("Select Two").count(), 2);
     for tab in ["installed", "browse", "settings"] {
         // An unreachable registry is an error in the window, not a crash.
         h.state_mut().run("ui.plugins", json!({"open": true, "tab": tab, "registry": "http://localhost:9/registry.json"})).unwrap();

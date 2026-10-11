@@ -364,7 +364,7 @@ Install Plugin From Registry	从插件库安装插件
 Install {name} {version}?	安装 {name} {version}？
 Installed	已安装
 Installed plugins are kept in {folder}	已安装的插件保存在 {folder}
-Installed {name} {version}.	已安装 {name} {version}。
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	已安装 {name} {version}。可在“插件”选项卡中找到它；其工具也位于地理处理窗格中。
 Interface font: {font}	界面字体：{font}
 Invalid: {error}	无效：{error}
 Invert	反转

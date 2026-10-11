@@ -364,7 +364,7 @@ Install Plugin From Registry	Cài đặt plugin từ kho
 Install {name} {version}?	Cài đặt {name} {version}?
 Installed	Đã cài đặt
 Installed plugins are kept in {folder}	Plugin đã cài đặt được lưu trong {folder}
-Installed {name} {version}.	Đã cài đặt {name} {version}.
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	Đã cài đặt {name} {version}. Bạn có thể tìm thấy plugin trên thẻ Plugin; các công cụ của nó cũng có trong ngăn Xử lý không gian.
 Interface font: {font}	Phông giao diện: {font}
 Invalid: {error}	Không hợp lệ: {error}
 Invert	Đảo ngược

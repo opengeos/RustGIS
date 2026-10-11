@@ -168,6 +168,18 @@ fn registries_and_blocklists_are_read_defensively() {
     assert!(registry::parse("[]", "x").unwrap().is_empty());
     assert!(registry::parse("{", "x").is_err());
     assert_eq!(registry::resolve("http://localhost:8000/r/registry.json", "/p.rgplugin"), "http://localhost:8000/p.rgplugin");
+    for (url, ok) in [
+        ("https://plugins.rustgis.app/x", true),
+        ("http://localhost:8000/registry.json", true),
+        ("http://127.0.0.1/registry.json", true),
+        ("http://localhost", true),
+        ("http://localhost.evil.com/x", false),
+        ("http://127.0.0.1.evil.com/x", false),
+        ("http://example.com/x", false),
+        ("file:///etc/passwd", false),
+    ] {
+        assert_eq!(registry::allowed_url(url), ok, "{url}");
+    }
     assert_eq!(registry::blocklist_url("https://plugins.rustgis.app/registry.json"), "https://plugins.rustgis.app/blocklist.json");
     let list =
         registry::parse_blocklist(&json!({"blocked": [{"id": "x", "reason": "bad"}, {"id": "y", "sha256": sha}]}).to_string()).unwrap();

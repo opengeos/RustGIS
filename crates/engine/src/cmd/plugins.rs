@@ -201,8 +201,11 @@ const NEVER: &[&str] = &[
 ];
 
 /// Commands that write files without naming one in their parameters.
-const WRITES_FILES: &[&str] =
-    &["project.save", "project.saveAs", "share.exportMap", "share.exportLayer", "share.exportTable", "share.exportRaster"];
+const WRITES_FILES: &[&str] = &["project.save", "project.saveAs"];
+
+/// Parameter keys that name a file, folder or address. (`data` and `text` carry content, which
+/// plugins may pass: `layer.addDataBytes`, `map.import` from text.)
+const PLACE_KEYS: &[&str] = &["path", "folder", "dir", "file", "url", "uri", "source", "output", "connection", "database"];
 
 /// Why a plugin may not run `id` with `params`, if it may not.
 fn refused(plugin: &Plugin, spec: &C, params: &Value) -> Option<String> {
@@ -210,10 +213,12 @@ fn refused(plugin: &Plugin, spec: &C, params: &Value) -> Option<String> {
     if spec.id.starts_with("plugin.") || NEVER.contains(&spec.id) {
         return Some(format!("plugins can't run '{}'", spec.id));
     }
-    let names_file = ["path", "folder", "dir", "file"].iter().any(|k| params.get(*k).is_some_and(|v| !v.is_null()))
-        || spec.params.contains("\"path\"")
-        || spec.params.contains("\"folder\"");
-    if (names_file || WRITES_FILES.contains(&spec.id)) && !m.has(Permission::Files) {
+    // By what the parameters name, what the command's parameters can name, and what it is.
+    let reaches = super::items::names_place(params, PLACE_KEYS, 0)
+        || PLACE_KEYS.iter().any(|k| spec.params.contains(&format!("\"{k}\"")))
+        || WRITES_FILES.contains(&spec.id)
+        || ["share.", "offline.", "cache.", "notebook."].iter().any(|p| spec.id.starts_with(p));
+    if reaches && !m.has(Permission::Files) {
         return Some(format!("{} needs the 'files' permission to run '{}'", m.name, spec.id));
     }
     if spec.mutates && !m.has(Permission::Edit) {

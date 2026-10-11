@@ -79,7 +79,15 @@ pub fn resolve(base: &str, rel: &str) -> String {
 /// Whether a package URL may be downloaded: HTTPS, or plain HTTP to this computer (for testing
 /// a local registry).
 pub fn allowed_url(url: &str) -> bool {
-    url.starts_with("https://") || url.starts_with("http://localhost") || url.starts_with("http://127.0.0.1")
+    url.starts_with("https://") || is_local(url)
+}
+
+/// Whether `url` is plain HTTP to this computer (`http://localhost`, `http://127.0.0.1`, with a
+/// port or path), and not a host that merely starts like one (`localhost.example.com`).
+fn is_local(url: &str) -> bool {
+    ["http://localhost", "http://127.0.0.1"]
+        .iter()
+        .any(|p| url.strip_prefix(p).is_some_and(|r| r.is_empty() || r.starts_with([':', '/', '?', '#'])))
 }
 
 /// Reads a registry (an object with a `plugins` array, or a bare array) fetched from `url`,
@@ -139,7 +147,13 @@ pub fn fetch(url: &str, limit: usize) -> Result<Vec<u8>, String> {
     if !allowed_url(url) {
         return Err(format!("{url}: only HTTPS addresses are allowed"));
     }
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(120))).build().into();
+    // Redirects stay on HTTPS (a local test registry may use plain HTTP, and only locally).
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(120)))
+        .https_only(!is_local(url))
+        .max_redirects(if is_local(url) { 0 } else { 5 })
+        .build()
+        .into();
     let mut resp =
         agent.get(url).header("User-Agent", concat!("RustGIS/", env!("CARGO_PKG_VERSION"))).call().map_err(|e| format!("{url}: {e}"))?;
     let mut buf = Vec::new();

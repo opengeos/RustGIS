@@ -364,7 +364,7 @@ Install Plugin From Registry	Reyestrdən plagin quraşdır
 Install {name} {version}?	{name} {version} quraşdırılsın?
 Installed	Quraşdırılıb
 Installed plugins are kept in {folder}	Quraşdırılmış plaginlər burada saxlanılır: {folder}
-Installed {name} {version}.	{name} {version} quraşdırıldı.
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	{name} {version} quraşdırıldı. Onu Plaginlər tabında tapa bilərsiniz; alətləri Geoemal panelində də var.
 Interface font: {font}	İnterfeys şrifti: {font}
 Invalid: {error}	Yanlışdır: {error}
 Invert	Tərsinə çevir

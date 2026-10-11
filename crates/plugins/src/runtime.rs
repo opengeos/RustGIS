@@ -23,7 +23,7 @@ pub const TOOL_FUEL: u64 = 40_000_000_000;
 pub const MAX_MEMORY: usize = 512 * 1024 * 1024;
 /// The most host requests one call may make, and the largest request or reply.
 const MAX_HOST_CALLS: u32 = 100_000;
-const MAX_MESSAGE: usize = 256 * 1024 * 1024;
+const MAX_MESSAGE: usize = 128 * 1024 * 1024;
 const MAX_LOG: usize = 4_096;
 
 /// What a plugin can ask of RustGIS while it runs.
@@ -79,14 +79,14 @@ struct State<'a> {
     limits: StoreLimits,
 }
 
+/// Copies `len` bytes at `ptr` out of the module's memory, checking the range before copying
+/// anything (a hostile length must not make the host allocate).
 fn read(mem: &Memory, store: impl wasmi::AsContext, ptr: i32, len: i32) -> Option<Vec<u8>> {
     let (ptr, len) = (usize::try_from(ptr).ok()?, usize::try_from(len).ok()?);
     if len > MAX_MESSAGE {
         return None;
     }
-    let mut buf = vec![0u8; len];
-    mem.read(store, ptr, &mut buf).ok()?;
-    Some(buf)
+    mem.data(&store).get(ptr..ptr.checked_add(len)?).map(<[u8]>::to_vec)
 }
 
 fn memory_of(caller: &Caller<'_, State<'_>>) -> Option<Memory> {

@@ -364,7 +364,7 @@ Install Plugin From Registry	Pasang Plugin dari Registri
 Install {name} {version}?	Pasang {name} {version}?
 Installed	Terpasang
 Installed plugins are kept in {folder}	Plugin yang terpasang disimpan di {folder}
-Installed {name} {version}.	{name} {version} telah dipasang.
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	{name} {version} telah dipasang. Temukan di tab Plugin; alat-alatnya juga ada di panel Geoprosesing.
 Interface font: {font}	Fon antarmuka: {font}
 Invalid: {error}	Tidak valid: {error}
 Invert	Balik

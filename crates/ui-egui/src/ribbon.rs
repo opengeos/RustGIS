@@ -1704,13 +1704,22 @@ fn plugins_tab(app: &mut RustGisApp, ui: &mut Ui) {
     });
     // A group per enabled plugin with commands, in the interface language when it has one.
     let lang = app.lang().code();
-    for p in rustgis_engine::plugins::list().into_iter().filter(|p| p.enabled && !p.manifest.commands.is_empty()) {
+    // Its tools too: each opens in the Geoprocessing pane.
+    for p in rustgis_engine::plugins::list()
+        .into_iter()
+        .filter(|p| p.enabled && !(p.manifest.commands.is_empty() && p.manifest.tools.is_empty()))
+    {
         let m = &p.manifest;
         group(ui, m.translate(lang, &m.name), |ui| {
             for c in &m.commands {
                 let icon = if crate::icons::ALL.contains(&c.icon.as_str()) { c.icon.as_str() } else { "plugin" };
                 let id = rustgis_engine::plugins::command_id(&m.id, &c.id);
                 big(ui, app, icon, m.translate(lang, &c.label), m.translate(lang, &c.help), &id, Value::Null, false, false);
+            }
+            for t in &m.tools {
+                let id = rustgis_engine::plugins::command_id(&m.id, &t.id);
+                let label = m.translate(lang, &t.name).replacen(' ', "\n", 1);
+                big(ui, app, "toolbox", &label, m.translate(lang, &t.summary), "ui.gp.open", json!({"tool": id}), false, false);
             }
         });
     }

@@ -364,7 +364,7 @@ Install Plugin From Registry	Kayıt Defterinden Eklenti Yükle
 Install {name} {version}?	{name} {version} yüklensin mi?
 Installed	Yüklü
 Installed plugins are kept in {folder}	Yüklü eklentiler şurada tutulur: {folder}
-Installed {name} {version}.	{name} {version} yüklendi.
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	{name} {version} yüklendi. Eklentiler sekmesinde bulabilirsiniz; araçları Coğrafi İşleme panelinde de yer alır.
 Interface font: {font}	Arayüz yazı tipi: {font}
 Invalid: {error}	Geçersiz: {error}
 Invert	Ters Çevir

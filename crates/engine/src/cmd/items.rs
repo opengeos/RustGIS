@@ -552,33 +552,39 @@ fn run_task(s: &mut Session, p: &Value) -> CmdResult {
 /// by looking like a path or URL).
 pub(crate) fn touches_files(command: &str, params: &Value) -> bool {
     const KEYS: &[&str] = &["path", "folder", "dir", "file", "url", "uri", "source", "output", "connection", "database", "data", "text"];
-    fn looks_like_path(t: &str) -> bool {
-        let t = t.trim();
-        let b = t.as_bytes();
-        t.contains("://")
-            || t.starts_with(['/', '\\', '~'])
-            || t.starts_with("./")
-            || t.starts_with(".\\")
-            || t.contains("../")
-            || t.contains("..\\")
-            || (b.get(1) == Some(&b':') && b.first().is_some_and(u8::is_ascii_alphabetic))
-    }
-    fn reaches(v: &Value, depth: usize) -> bool {
-        match v {
-            Value::Object(o) if depth < 16 => {
-                o.iter().any(|(k, v)| KEYS.contains(&k.to_ascii_lowercase().as_str()) || reaches(v, depth + 1))
-            }
-            Value::Array(a) if depth < 16 => a.iter().any(|v| reaches(v, depth + 1)),
-            Value::Object(_) | Value::Array(_) => true,
-            Value::String(t) => looks_like_path(t),
-            _ => false,
-        }
-    }
+    let reaches = |v: &Value| names_place(v, KEYS, 0);
     let id = command.to_ascii_lowercase();
     let verb = id.split('.').nth(1).unwrap_or("");
     ["script.", "notebook.", "model.", "project.", "task.", "share.", "offline.", "cache."].iter().any(|p| id.starts_with(p))
         || ["import", "export", "open", "save", "add", "package", "upload", "download"].iter().any(|w| verb.starts_with(w))
-        || reaches(params, 0)
+        || reaches(params)
+}
+
+/// Whether a string looks like a file path or an address.
+pub(crate) fn looks_like_path(t: &str) -> bool {
+    let t = t.trim();
+    let b = t.as_bytes();
+    t.contains("://")
+        || t.starts_with(['/', '\\', '~'])
+        || t.starts_with("./")
+        || t.starts_with(".\\")
+        || t.contains("../")
+        || t.contains("..\\")
+        || (b.get(1) == Some(&b':') && b.first().is_some_and(u8::is_ascii_alphabetic))
+}
+
+/// Whether parameters name a file, folder or address: a key in `keys` anywhere in them, or a
+/// string that looks like a path or URL. Too deep a nesting counts as yes.
+pub(crate) fn names_place(v: &Value, keys: &[&str], depth: usize) -> bool {
+    match v {
+        Value::Object(o) if depth < 16 => {
+            o.iter().any(|(k, v)| keys.contains(&k.to_ascii_lowercase().as_str()) || names_place(v, keys, depth + 1))
+        }
+        Value::Array(a) if depth < 16 => a.iter().any(|v| names_place(v, keys, depth + 1)),
+        Value::Object(_) | Value::Array(_) => true,
+        Value::String(t) => looks_like_path(t),
+        _ => false,
+    }
 }
 
 /// Writes a layer as a Wavefront OBJ: polygons extruded to a height, lines as polylines, points as
