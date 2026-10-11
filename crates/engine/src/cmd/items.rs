@@ -517,7 +517,7 @@ fn run_task(s: &mut Session, p: &Value) -> CmdResult {
         // Tasks that came in a file (imported, or inside an opened project) can't touch files.
         if !s.trusted_tasks.contains(&t.name.to_lowercase()) && touches_files(&st.command, &st.params) {
             return Err(format!(
-                "step {} ({}) reads or writes files or runs a script; tasks from files can't, so re-add the step to run it",
+                "step {} ({}) reads or writes files or runs a script, which a task from a file can't do; make a new task with that step to run it",
                 i + 1,
                 st.command
             ));
@@ -621,7 +621,11 @@ fn obj_text(s: &Session, p: &Value) -> Result<String, String> {
                     // Each ring open (no closing vertex), outer first then holes.
                     let open: Vec<Vec<(f64, f64)>> = rings
                         .iter()
-                        .map(|r| r.iter().take(r.len().saturating_sub(1)).map(|c| xy(*c)).collect::<Vec<_>>())
+                        // Drop a ring's closing vertex only when it repeats the first.
+                        .map(|r| {
+                            let n = if r.len() > 1 && r.first() == r.last() { r.len() - 1 } else { r.len() };
+                            r.iter().take(n).map(|c| xy(*c)).collect::<Vec<_>>()
+                        })
                         .filter(|r: &Vec<(f64, f64)>| r.len() >= 3)
                         .collect();
                     let Some(outer) = open.first() else { continue };
