@@ -12,6 +12,7 @@ pub mod projection;
 pub mod raster;
 pub mod report;
 pub mod symbology;
+pub mod tiles;
 pub mod view;
 pub mod world;
 
@@ -20,6 +21,7 @@ pub use color::{Ramp, Rgba};
 pub use globe::{Globe, Projection};
 pub use raster::{RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
 pub use symbology::{ClassMethod, LabelPlacement, Labeling, Marker, Renderer, Symbol};
+pub use tiles::{TileKind, TileLayer};
 
 use rustgis_data::{Dataset, Geometry, GeometryType};
 use rustgis_geom::{Coord, Extent};
@@ -306,6 +308,9 @@ pub struct Map {
     pub name: String,
     pub layers: Vec<Layer>,
     pub basemap: Basemap,
+    /// Web tile basemaps and overlays over the basemap and under the layers (index 0 on top).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tiles: Vec<TileLayer>,
     pub camera: Camera,
     #[serde(default)]
     pub bookmarks: Vec<Bookmark>,
@@ -405,6 +410,7 @@ impl Map {
             name: name.into(),
             layers: Vec::new(),
             basemap: Basemap::Paper,
+            tiles: Vec::new(),
             camera: Camera::world(),
             bookmarks: Vec::new(),
             graticule: true,
