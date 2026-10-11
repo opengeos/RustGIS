@@ -423,16 +423,23 @@ fn package_gp(s: &Session) -> Result<Vec<u8>, String> {
         return Err("no geoprocessing has been run yet".into());
     }
     let mut entries = vec![("history.json".to_string(), serde_json::to_vec_pretty(&s.project.gp_history).map_err(|e| e.to_string())?)];
-    let mut seen = std::collections::HashSet::new();
+    let mut layers = std::collections::HashSet::new();
+    let mut files = std::collections::HashSet::new();
     for rec in s.project.gp_history.iter().filter(|r| r.ok) {
         for name in &rec.outputs {
             for l in s.project.maps.iter().flat_map(|m| &m.layers).filter(|l| !l.is_raster() && l.name == *name) {
-                if seen.insert(l.name.clone()) {
-                    entries.push((
-                        format!("results/{}.geojson", safe(&l.name)),
-                        rustgis_data::io::to_geojson(&l.dataset).to_string().into_bytes(),
-                    ));
+                if !layers.insert(l.name.clone()) {
+                    continue;
                 }
+                // Names that clean up to the same file name get a number.
+                let base = safe(&l.name);
+                let mut file = format!("results/{base}.geojson");
+                let mut k = 1;
+                while !files.insert(file.to_ascii_lowercase()) {
+                    k += 1;
+                    file = format!("results/{base}_{k}.geojson");
+                }
+                entries.push((file, rustgis_data::io::to_geojson(&l.dataset).to_string().into_bytes()));
             }
         }
     }
@@ -506,20 +513,35 @@ fn run_task(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"task": t.name, "ran": done}))
 }
 
-/// Whether a step reads or writes files (a path-like parameter anywhere in its parameters) or runs
-/// a script or notebook.
+/// Whether a step may reach outside the session: a command that reads or writes files, opens
+/// items or runs other steps, or a parameter that names a file, folder or address (by its key or
+/// by looking like a path or URL).
 fn touches_files(command: &str, params: &Value) -> bool {
-    fn has_path(v: &Value, depth: usize) -> bool {
+    const KEYS: &[&str] = &["path", "folder", "dir", "file", "url", "uri", "source", "output", "connection", "database", "data", "text"];
+    fn looks_like_path(t: &str) -> bool {
+        let t = t.trim();
+        let b = t.as_bytes();
+        t.contains("://")
+            || t.starts_with(['/', '\\', '~', '.'])
+            || t.contains("..")
+            || (b.get(1) == Some(&b':') && b.first().is_some_and(u8::is_ascii_alphabetic))
+    }
+    fn reaches(v: &Value, depth: usize) -> bool {
         match v {
-            Value::Object(o) if depth < 16 => o
-                .iter()
-                .any(|(k, v)| matches!(k.to_ascii_lowercase().as_str(), "path" | "folder" | "dir" | "file") || has_path(v, depth + 1)),
-            Value::Array(a) if depth < 16 => a.iter().any(|v| has_path(v, depth + 1)),
+            Value::Object(o) if depth < 16 => {
+                o.iter().any(|(k, v)| KEYS.contains(&k.to_ascii_lowercase().as_str()) || reaches(v, depth + 1))
+            }
+            Value::Array(a) if depth < 16 => a.iter().any(|v| reaches(v, depth + 1)),
             Value::Object(_) | Value::Array(_) => true,
+            Value::String(t) => looks_like_path(t),
             _ => false,
         }
     }
-    ["script.", "notebook.", "model.", "project."].iter().any(|p| command.starts_with(p)) || has_path(params, 0)
+    let id = command.to_ascii_lowercase();
+    let verb = id.split('.').nth(1).unwrap_or("");
+    ["script.", "notebook.", "model.", "project.", "task.", "share.", "offline.", "cache."].iter().any(|p| id.starts_with(p))
+        || ["import", "export", "open", "save", "add", "package", "upload", "download"].iter().any(|w| verb.starts_with(w))
+        || reaches(params, 0)
 }
 
 /// Writes a layer as a Wavefront OBJ: polygons extruded to a height, lines as polylines, points as

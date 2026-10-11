@@ -114,7 +114,10 @@ pub fn read_matching(bytes: &[u8], want: impl Fn(&str) -> bool) -> Result<Vec<(S
         .rev()
         .find(|&i| bytes.get(i..i.saturating_add(4)) == Some(&[0x50, 0x4B, 0x05, 0x06]))
         .ok_or_else(bad)?;
-    let count = u16_at(bytes, add(&[eocd, 10]).ok_or_else(bad)?).ok_or_else(bad)?.min(MAX_ENTRIES);
+    let count = u16_at(bytes, add(&[eocd, 10]).ok_or_else(bad)?).ok_or_else(bad)?;
+    if count > MAX_ENTRIES {
+        return Err(format!("the archive holds {count} entries; at most {MAX_ENTRIES} can be read"));
+    }
     let mut p = u32_at(bytes, add(&[eocd, 16]).ok_or_else(bad)?).ok_or_else(bad)?;
     let mut out = Vec::new();
     for _ in 0..count {
@@ -143,6 +146,7 @@ pub fn read_matching(bytes: &[u8], want: impl Fn(&str) -> bool) -> Result<Vec<(S
         }
         // Inflate no more than the entry says it holds (and the archive's budget allows).
         let data = match method {
+            0 if csize != usize_ => return Err(format!("{name} is damaged (wrong size)")),
             0 => body.to_vec(),
             8 => miniz_oxide::inflate::decompress_to_vec_with_limit(body, usize_).map_err(|_| format!("{name} is damaged"))?,
             m => return Err(format!("{name} uses an unsupported compression ({m})")),
