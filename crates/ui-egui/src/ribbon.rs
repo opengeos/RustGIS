@@ -112,7 +112,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                         }
                     });
                 });
-            scroll_buttons(ui, &t, scroll);
+            scroll_buttons(ui, &t, &scroll, [tl!("Scroll the ribbon left"), tl!("Scroll the ribbon right")]);
         });
     if peek_started {
         let pos = ui.input(|i| i.pointer.interact_pos());
@@ -123,9 +123,12 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     }
 }
 
-/// Arrow buttons at the ribbon's edges when its groups are wider than the window: the scroll
-/// bar is hidden (it would cover the group labels) and the wheel alone is undiscoverable.
-fn scroll_buttons(ui: &mut Ui, t: &Tokens, scroll: egui::scroll_area::ScrollAreaOutput<()>) {
+const SCROLL_BUTTON_W: f32 = 18.0;
+
+/// Arrow buttons at the edges of a horizontal scroll area (the ribbon's groups, the tab strip)
+/// whose content is wider than the window: the scroll bar is hidden (it would cover the group
+/// labels and tabs) and the wheel alone is undiscoverable.
+fn scroll_buttons<R>(ui: &mut Ui, t: &Tokens, scroll: &egui::scroll_area::ScrollAreaOutput<R>, tips: [&str; 2]) {
     let view = scroll.inner_rect;
     let max = (scroll.content_size.x - view.width()).max(0.0);
     if max < 1.0 {
@@ -139,8 +142,8 @@ fn scroll_buttons(ui: &mut Ui, t: &Tokens, scroll: egui::scroll_area::ScrollArea
         if !show {
             continue;
         }
-        let x = if left { view.min.x } else { view.max.x - 18.0 };
-        let r = Rect::from_min_size(pos2(x, view.min.y), vec2(18.0, view.height()));
+        let x = if left { view.min.x } else { view.max.x - SCROLL_BUTTON_W };
+        let r = Rect::from_min_size(pos2(x, view.min.y), vec2(SCROLL_BUTTON_W, view.height()));
         let resp = ui.interact(r, scroll.id.with(left), Sense::click());
         let fill = if resp.hovered() { t.hover } else { t.ribbon };
         ui.painter().rect_filled(r, CornerRadius::same(4), fill);
@@ -148,7 +151,7 @@ fn scroll_buttons(ui: &mut Ui, t: &Tokens, scroll: egui::scroll_area::ScrollArea
         let icon = if left { "chevron_left" } else { "chevron_right" };
         let ir = Rect::from_center_size(r.center(), vec2(16.0, 16.0));
         icons::paint(ui.painter(), ir, icon, t.text_dim, t.accent);
-        let tip = if left { tl!("Scroll the ribbon left") } else { tl!("Scroll the ribbon right") };
+        let tip = if left { tips[0] } else { tips[1] };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
         if resp.on_hover_text(tip).clicked() {
             state.offset.x = if left { (offset - step).max(0.0) } else { (offset + step).min(max) };
@@ -182,65 +185,96 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         if let Some((_, ctx)) = context(app) {
             tabs.extend(ctx.iter().map(|(id, c)| (id.to_string(), tl!(*c).to_string())));
         }
-        // Tighter tabs when the window is too narrow for the usual padding (keeping room for the
-        // collapse button on the right).
-        let room = ui.available_width() - 40.0;
+        // The tabs scroll between the Project button and the right-side controls (the collapse
+        // button and the active tool indicator) when the window is too narrow for them.
+        let tool = app.session.tool;
+        let tool_w = if tool == Tool::Explore {
+            0.0
+        } else {
+            let label = crate::i18n::fmt("{tool} tool active · Esc to stop", &[("tool", tl!(tool.label()))]);
+            text_w(ui, &label, regular(11.5)) + 20.0
+        };
+        let room = (ui.available_width() - 32.0 - tool_w).max(60.0);
+        // Tighter tabs when the window is too narrow for the usual padding.
         let text: f32 = tabs.iter().map(|(_, c)| text_w(ui, c, semibold(12.5))).sum();
         let pad = ((room - text) / tabs.len().max(1) as f32).clamp(8.0, 22.0);
-        let mut rects = Vec::new();
-        for (tab, caption) in &tabs {
-            let tab = tab.as_str();
-            let is_ctx = is_context_tab(tab);
-            let active = app.ui.tab == tab;
-            let font = if active { semibold(12.5) } else { regular(12.5) };
-            let shown = caption.as_str();
-            let w = text_w(ui, shown, font.clone()) + pad;
-            let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
-            let body = Rect::from_min_max(pos2(r.min.x, r.min.y + 3.0), r.max);
-            if is_ctx {
-                ui.painter().rect_filled(body, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.context_tint);
-            }
-            if active {
-                ui.painter().rect_filled(body, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.ribbon);
-                ui.painter().rect_stroke(
-                    body,
-                    CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
-                    Stroke::new(1.0, t.border),
-                    egui::StrokeKind::Inside,
-                );
-                ui.painter().rect_filled(
-                    Rect::from_min_max(pos2(r.min.x + 1.0, r.max.y - 1.5), pos2(r.max.x - 1.0, r.max.y + 1.0)),
-                    0.0,
-                    t.ribbon,
-                );
-                let bar = if is_ctx { t.context } else { t.accent };
-                ui.painter().rect_filled(
-                    Rect::from_min_max(pos2(r.min.x + 8.0, r.max.y - 3.0), pos2(r.max.x - 8.0, r.max.y - 1.0)),
-                    CornerRadius::same(1),
-                    bar,
-                );
-            } else if resp.hovered() {
-                ui.painter().rect_filled(body.shrink2(vec2(1.0, 2.0)), CornerRadius::same(5), t.hover);
-            }
-            let color = if is_ctx {
-                t.context
-            } else if active {
-                t.text
-            } else {
-                t.text_dim
-            };
-            ui.painter().text(pos2(r.center().x, r.center().y + 1.5), Align2::CENTER_CENTER, shown, font, color);
-            if resp.double_clicked() {
-                let _ = app.run("ui.ribbon", Value::Null);
-            } else if resp.clicked() {
-                if app.ui.ribbon_minimized {
-                    app.ui.ribbon_peek = !(app.ui.ribbon_peek && app.ui.tab == tab);
-                }
-                app.ui.tab = tab.to_string();
-            }
-            rects.push((tab.to_string(), r));
+        let scroll = egui::ScrollArea::horizontal()
+            .id_salt("tab_strip")
+            .max_width(room)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
+                    let mut rects = Vec::new();
+                    for (tab, caption) in &tabs {
+                        let tab = tab.as_str();
+                        let is_ctx = is_context_tab(tab);
+                        let active = app.ui.tab == tab;
+                        let font = if active { semibold(12.5) } else { regular(12.5) };
+                        let shown = caption.as_str();
+                        let w = text_w(ui, shown, font.clone()) + pad;
+                        let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
+                        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, shown));
+                        let body = Rect::from_min_max(pos2(r.min.x, r.min.y + 3.0), r.max);
+                        if is_ctx {
+                            ui.painter().rect_filled(body, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.context_tint);
+                        }
+                        if active {
+                            ui.painter().rect_filled(body, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.ribbon);
+                            ui.painter().rect_stroke(
+                                body,
+                                CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
+                                Stroke::new(1.0, t.border),
+                                egui::StrokeKind::Inside,
+                            );
+                            ui.painter().rect_filled(
+                                Rect::from_min_max(pos2(r.min.x + 1.0, r.max.y - 1.5), pos2(r.max.x - 1.0, r.max.y + 1.0)),
+                                0.0,
+                                t.ribbon,
+                            );
+                            let bar = if is_ctx { t.context } else { t.accent };
+                            ui.painter().rect_filled(
+                                Rect::from_min_max(pos2(r.min.x + 8.0, r.max.y - 3.0), pos2(r.max.x - 8.0, r.max.y - 1.0)),
+                                CornerRadius::same(1),
+                                bar,
+                            );
+                        } else if resp.hovered() {
+                            ui.painter().rect_filled(body.shrink2(vec2(1.0, 2.0)), CornerRadius::same(5), t.hover);
+                        }
+                        let color = if is_ctx {
+                            t.context
+                        } else if active {
+                            t.text
+                        } else {
+                            t.text_dim
+                        };
+                        ui.painter().text(pos2(r.center().x, r.center().y + 1.5), Align2::CENTER_CENTER, shown, font, color);
+                        if resp.double_clicked() {
+                            let _ = app.run("ui.ribbon", Value::Null);
+                        } else if resp.clicked() {
+                            if app.ui.ribbon_minimized {
+                                app.ui.ribbon_peek = !(app.ui.ribbon_peek && app.ui.tab == tab);
+                            }
+                            app.ui.tab = tab.to_string();
+                        }
+                        rects.push((tab.to_string(), r));
+                    }
+                    rects
+                })
+                .inner
+            });
+        // Only the visible part of each tab, not under the arrow buttons: the contextual caption
+        // above them follows it.
+        let mut view = scroll.inner_rect;
+        let max = scroll.content_size.x - view.width();
+        if scroll.state.offset.x > 0.5 {
+            view.min.x += SCROLL_BUTTON_W;
         }
-        app.ui.tab_rects = rects;
+        if max >= 1.0 && scroll.state.offset.x < max - 0.5 {
+            view.max.x -= SCROLL_BUTTON_W;
+        }
+        app.ui.tab_rects = scroll.inner.iter().map(|(n, r)| (n.clone(), r.intersect(view))).filter(|(_, r)| r.width() >= 8.0).collect();
+        scroll_buttons(ui, t, &scroll, [tl!("Scroll the tabs left"), tl!("Scroll the tabs right")]);
         app.ui.tab_strip_rect = Some(ui.max_rect());
         // Right side: collapse/expand the ribbon, then the quick tool indicator.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

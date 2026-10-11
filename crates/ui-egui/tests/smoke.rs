@@ -98,6 +98,32 @@ fn a_ribbon_wider_than_the_window_scrolls_with_arrow_buttons() {
         h.step();
     }
     assert!(h.query_by_label("Scroll the ribbon right").is_none());
+    assert!(h.query_by_label("Scroll the tabs right").is_none());
+}
+
+#[test]
+fn a_tab_strip_wider_than_the_window_scrolls_with_arrow_buttons() {
+    let mut h = harness();
+    h.set_size(egui::vec2(560.0, 500.0));
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(h.query_by_label("Scroll the tabs left").is_none());
+    h.get_by_label("Scroll the tabs right").click();
+    h.step();
+    h.step();
+    let _ = h.get_by_label("Scroll the tabs left");
+    // Scrolling to the end reaches the last contextual tab.
+    for _ in 0..20 {
+        let Some(right) = h.query_by_label("Scroll the tabs right") else { break };
+        right.click();
+        h.step();
+        h.step();
+    }
+    assert!(h.query_by_label("Scroll the tabs right").is_none());
+    h.get_by_label("Data").click();
+    h.step();
+    assert_eq!(h.state().ui.tab, "Data");
 }
 
 #[test]

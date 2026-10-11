@@ -77,13 +77,16 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                             CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
                             t.context,
                         );
-                        ui.painter().text(
-                            pos2(band.center().x, band.center().y + 1.5),
-                            Align2::CENTER_CENTER,
-                            tl!(caption),
-                            semibold(11.0),
-                            t.context,
-                        );
+                        // On a narrow window the tab strip may show only part of the group.
+                        if text_w(ui, tl!(caption), semibold(11.0)) + 8.0 <= band.width() {
+                            ui.painter().text(
+                                pos2(band.center().x, band.center().y + 1.5),
+                                Align2::CENTER_CENTER,
+                                tl!(caption),
+                                semibold(11.0),
+                                t.context,
+                            );
+                        }
                         band_x = Some((band.min.x, band.max.x));
                     }
                 }
