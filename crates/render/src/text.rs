@@ -19,10 +19,16 @@ fn font(bold: bool) -> Option<&'static FontRef<'static>> {
     }
 }
 
-/// Whether the label font has a glyph for every character of `text` (spaces aside).
-pub fn covers(text: &str) -> bool {
-    let Some(f) = font(false) else { return true };
-    text.chars().all(|c| c.is_whitespace() || f.glyph_id(c).0 != 0)
+/// Whether the label font (`bold` or regular) has a glyph for every character of `text`, spaces
+/// and invisible characters (zero-width joiners, variation selectors, soft hyphens) aside.
+pub fn covers(text: &str, bold: bool) -> bool {
+    let Some(f) = font(bold) else { return true };
+    let invisible = |c: char| {
+        c.is_whitespace()
+            || c.is_control()
+            || matches!(c, '\u{AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}')
+    };
+    text.chars().all(|c| invisible(c) || f.glyph_id(c).0 != 0)
 }
 
 /// Text width in points at `size` (font px ≈ size × 1.33 for point sizes).
@@ -169,8 +175,12 @@ mod coverage_tests {
     fn knows_which_characters_it_can_draw() {
         // Which scripts are covered depends on the fonts this computer has (a system font may
         // cover Arabic); Latin always is, and a private-use character never is.
-        assert!(super::covers("Syria"));
-        assert!(super::covers("Türkiye Ελλάδα Беларусь"));
-        assert!(!super::covers("Syria \u{10FFFD}"));
+        for bold in [false, true] {
+            assert!(super::covers("Syria", bold));
+            assert!(super::covers("Türkiye Ελλάδα Беларусь", bold));
+            assert!(!super::covers("Syria \u{10FFFD}", bold));
+            // Invisible characters don't need a glyph.
+            assert!(super::covers("Syria\u{200B}\u{FE0F}", bold));
+        }
     }
 }

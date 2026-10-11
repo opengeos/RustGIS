@@ -64,7 +64,7 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
         for l in d.labels {
             // Styles often label in two scripts ("Syria\nسوريا"): only the lines the font can
             // draw are kept, so a name never shows as boxes, and a label with none is left out.
-            let lines: Vec<&str> = l.text.lines().map(str::trim).filter(|s| !s.is_empty() && crate::text::covers(s)).collect();
+            let lines: Vec<&str> = l.text.lines().map(str::trim).filter(|s| !s.is_empty() && crate::text::covers(s, l.bold)).collect();
             if lines.is_empty() {
                 continue;
             }
