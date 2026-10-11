@@ -579,10 +579,11 @@ fn picture_of(text: &str, folder: Option<&Path>) -> Option<(String, u32, u32)> {
     let b64 = if is_path {
         let rel = Path::new(t);
         let safe = rel.components().all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir));
+        // `folder` is canonical already; the picture is resolved through links too, so a link
+        // inside the folder can't point outside it.
         let folder = folder.filter(|_| safe)?;
-        // Resolved through links too, so a link inside the folder can't point outside it.
         let full = folder.join(rel).canonicalize().ok()?;
-        if !full.starts_with(folder.canonicalize().ok()?) {
+        if !full.starts_with(folder) {
             return None;
         }
         super::graphics::picture(&json!({"path": full.to_str()?})).ok()?
@@ -612,7 +613,9 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
     let layer = layer_of(s, i)?;
     let ds = &layer.dataset;
     // Picture paths are read relative to the project's folder (none for an unsaved project).
-    let folder = s.path.as_deref().and_then(Path::parent);
+    // Canonical once, for checking each picture's resolved path against it.
+    let folder_buf = s.path.as_deref().and_then(Path::parent).and_then(|f| f.canonicalize().ok());
+    let folder = folder_buf.as_deref();
     let layout_index = |name: &str| s.project.layouts.iter().position(|l| l.name.eq_ignore_ascii_case(name));
     // Pages before the records.
     for sec in &r.sections {
@@ -848,7 +851,13 @@ fn blocks(s: &Session, i: usize, out: &mut Vec<Block>, seen: &mut Vec<usize>, de
         {
             seen.push(j);
             out.push(Block::PageBreak);
-            blocks(s, j, out, seen, depth + 1)?;
+            // A related report that can't be built (its layer gone, its where clause stale) is
+            // noted in place rather than failing this one.
+            let mut sub = Vec::new();
+            match blocks(s, j, &mut sub, seen, depth + 1) {
+                Ok(()) => out.extend(sub),
+                Err(e) => out.push(Block::Text(format!("The related report {report} couldn't be included: {e}"))),
+            }
         }
     }
     Ok(())
