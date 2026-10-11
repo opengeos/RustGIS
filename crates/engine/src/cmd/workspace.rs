@@ -501,16 +501,27 @@ pub fn infographic_of(s: &Session, only: Option<&str>) -> Value {
 }
 
 /// The map's feature layers clipped to an extent (rasters stay behind: they're files already).
-fn snapshot(m: &rustgis_map::Map, e: &Extent) -> rustgis_map::Map {
+fn snapshot(m: &mut rustgis_map::Map, e: &Extent) -> rustgis_map::Map {
+    // The layers (the bulk) are set aside while the rest of the map is copied, then each
+    // feature layer is copied without its features, and only the features in the extent added.
+    let layers = std::mem::take(&mut m.layers);
     let mut out = m.clone();
-    out.layers.retain(|l| !l.is_raster());
-    for l in &mut out.layers {
-        l.dataset.features.retain(|f| f.geometry.as_ref().is_some_and(|g| g.extent().intersects(e)));
-        l.selection.clear();
-        l.touch_geometry();
+    m.layers = layers;
+    for l in m.layers.iter_mut().filter(|l| !l.is_raster()) {
+        let features = std::mem::take(&mut l.dataset.features);
+        let mut c = l.clone();
+        l.dataset.features = features;
+        c.dataset.features =
+            l.dataset.features.iter().filter(|f| f.geometry.as_ref().is_some_and(|g| g.extent().intersects(e))).cloned().collect();
+        c.selection.clear();
+        c.touch_geometry();
+        out.layers.push(c);
     }
     out
 }
+
+/// Most offline areas a project keeps (each holds a copy of its features).
+const MAX_AREAS: usize = 20;
 
 fn offline_download(s: &mut Session, p: &Value) -> CmdResult {
     let e = match p.get("extent").and_then(Value::as_array) {
@@ -539,7 +550,10 @@ fn offline_download(s: &mut Session, p: &Value) -> CmdResult {
         i += 1;
         name = format!("{base} {i}");
     }
-    let data = snapshot(s.map(), &e);
+    if s.project.offline_areas.len() >= MAX_AREAS {
+        return Err(format!("a project keeps at most {MAX_AREAS} offline areas; remove one first"));
+    }
+    let data = snapshot(s.map_mut(), &e);
     let features: usize = data.layers.iter().map(|l| l.dataset.features.len()).sum();
     let t = now();
     s.project.offline_areas.push(OfflineArea { name: name.clone(), map: s.map().name.clone(), extent: e, created: t, synced: t, data });
@@ -583,6 +597,10 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
                 .find(|l| l.name == ol.name)
                 .map(|l| l.dataset.features.iter().map(|f| (f.id, f)).collect())
                 .unwrap_or_default();
+            // Deletions first, so a fresh id given to a new feature below can't be swept away.
+            let before = sl.dataset.features.len();
+            sl.dataset.features.retain(|x| !had.contains(&x.id) || now_ids.contains(&x.id));
+            deleted += before - sl.dataset.features.len();
             for f in &ol.dataset.features {
                 if had.contains(&f.id) {
                     let changed_offline = base.get(&f.id).is_none_or(|b| *b != f);
@@ -597,20 +615,18 @@ fn offline_sync(s: &mut Session, p: &Value) -> CmdResult {
                         _ => {}
                     }
                 } else {
-                    // Added offline (its id may clash with one outside the area): a fresh id.
-                    let id = sl.dataset.features.iter().map(|x| x.id).max().unwrap_or(0).saturating_add(1);
+                    // Added offline (its id may clash with one outside the area): a fresh id, above
+                    // any the source or the area has used.
+                    let id = sl.dataset.features.iter().map(|x| x.id).chain(had.iter().copied()).max().unwrap_or(0).saturating_add(1);
                     sl.dataset.features.push(rustgis_data::Feature { id, ..f.clone() });
                     added += 1;
                 }
             }
-            let before = sl.dataset.features.len();
-            sl.dataset.features.retain(|x| !had.contains(&x.id) || now_ids.contains(&x.id));
-            deleted += before - sl.dataset.features.len();
             sl.selection.clear();
             sl.touch_geometry();
         }
     }
-    let fresh = s.project.maps.get(si).map(|m| snapshot(m, &area.extent)).ok_or("the source map is gone")?;
+    let fresh = s.project.maps.get_mut(si).map(|m| snapshot(m, &area.extent)).ok_or("the source map is gone")?;
     if let Some(m) = s.project.maps.iter_mut().find(|m| m.name.eq_ignore_ascii_case(&offline_map)) {
         let name = m.name.clone();
         *m = fresh.clone();
