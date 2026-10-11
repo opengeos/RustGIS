@@ -44,7 +44,7 @@ export async function geolibre_manifests() {
     if (hit) {
       const text = await hit.text();
       const list = JSON.parse(text);
-      if (Array.isArray(list) && list.length > 0) return text;
+      if (Array.isArray(list) && list.length > 0 && typeof list[0]?.id === "string") return text;
     }
   } catch (_) {
     // A damaged entry is listed again below, and the put replaces it.
@@ -61,7 +61,9 @@ export async function geolibre_manifests() {
         if (old.url !== MANIFESTS) await cache.delete(old);
       }
     }
-  } catch (_) {}
+  } catch (e) {
+    console.warn("RustGIS couldn't keep the GeoLibre tool list; it will be listed again next visit", e);
+  }
   return text;
 }
 export async function geolibre_run(tool, argv, names, datas) {
