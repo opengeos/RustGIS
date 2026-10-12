@@ -30,6 +30,7 @@ nav = [
   { "Languages" = "i18n.md" },
   { "Architecture" = "architecture.md" },
   { "Contributing" = "contributing.md" },
+  { "Sponsor" = "sponsor.md" },
   { "Report Issues" = "https://github.com/opengeos/RustGIS/issues" },
 ]
 
@@ -77,3 +78,18 @@ alternate_style = true
 [project.markdown_extensions.toc]
 permalink = true
 [project.markdown_extensions.pymdownx.keys]
+
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/opengeos/RustGIS"
+name = "RustGIS on GitHub"
+
+[[project.extra.social]]
+icon = "fontawesome/solid/heart"
+link = "https://github.com/sponsors/giswqs"
+name = "Sponsor RustGIS on GitHub"
+
+[[project.extra.social]]
+icon = "fontawesome/solid/mug-hot"
+link = "https://buymeacoffee.com/giswqs"
+name = "Buy the maintainer a coffee"

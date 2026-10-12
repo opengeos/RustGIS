@@ -144,6 +144,15 @@ Layered crates, each depending only on the ones below it:
 `cargo xtask ci` runs formatting, clippy, the tests and the layering check. Contributor and
 agent notes: [AGENTS.md](AGENTS.md).
 
+## Sponsor
+
+RustGIS is free and open source, and stays that way. If it is useful to you or your team, sponsorship is the most direct way to keep development, hosting and cross-platform distribution going.
+
+- [**GitHub Sponsors**](https://github.com/sponsors/giswqs): monthly or one-time, billed through your GitHub account.
+- [**Buy Me a Coffee**](https://buymeacoffee.com/giswqs): a quick one-off contribution, no account required.
+
+See the [Become a Sponsor](https://rustgis.app/sponsor/) page for what sponsorship supports and for other, free ways to help.
+
 ## License and credits
 
 Licensed under the [Apache License 2.0](LICENSE). Sample data from
