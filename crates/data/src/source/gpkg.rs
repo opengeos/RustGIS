@@ -17,7 +17,8 @@ const CHUNK: usize = 500;
 /// A feature table in a GeoPackage.
 pub struct GpkgSource {
     info: SourceInfo,
-    conn: Mutex<Connection>,
+    /// `None` only while the source is dropped.
+    conn: Mutex<Option<Connection>>,
     table: String,
     geom: String,
     pk: Option<String>,
@@ -29,6 +30,10 @@ pub struct GpkgSource {
 
 impl Drop for GpkgSource {
     fn drop(&mut self) {
+        // Closed first: Windows can't remove a file SQLite still holds open.
+        if let Ok(c) = self.conn.get_mut() {
+            drop(c.take());
+        }
         if let Some(p) = &self.temp {
             let _ = std::fs::remove_file(p);
         }
@@ -180,7 +185,7 @@ impl GpkgSource {
             crs: reproject.label(),
             indexed: rtree.is_some(),
         };
-        let mut src = GpkgSource { info, conn: Mutex::new(conn), table, geom, pk, rtree, reproject, temp };
+        let mut src = GpkgSource { info, conn: Mutex::new(Some(conn)), table, geom, pk, rtree, reproject, temp };
         if src.info.geometry_type == GeometryType::None {
             src.info.geometry_type = super::peek_kind(&src);
         }
@@ -232,7 +237,8 @@ impl FeatureSource for GpkgSource {
 
     fn read(&self, req: &Request) -> Result<Batch> {
         let limit = clamp_limit(req.limit);
-        let conn = self.conn.lock().map_err(|_| DataError::Format("GeoPackage connection poisoned".into()))?;
+        let guard = self.conn.lock().map_err(|_| DataError::Format("GeoPackage connection poisoned".into()))?;
+        let conn = guard.as_ref().ok_or_else(|| DataError::Format("GeoPackage connection closed".into()))?;
         let native = req.extent.map(|e| self.reproject.extent_from_lonlat(&e));
         let mut out = Batch::default();
         let push = |row: Row, out: &mut Batch| match row {
@@ -278,19 +284,25 @@ impl FeatureSource for GpkgSource {
                 let mut sample =
                     if native.is_none() { Sampler::with_total(limit, self.info.count.unwrap_or(0)) } else { Sampler::new(limit) };
                 while let Some(r) = rows.next().map_err(err)? {
-                    if let Some(q) = &native
-                        && let Ok(ValueRef::Blob(b)) = r.get_ref(1)
-                        && let Some((Some(e), _)) = split_blob(b)
+                    // With an extent, the envelope in the geometry's header says whether the row
+                    // matches before anything is decoded; without an envelope, only the decoded
+                    // geometry can, so the match is counted after it.
+                    let envelope = match (&native, r.get_ref(1)) {
+                        (Some(_), Ok(ValueRef::Blob(b))) => split_blob(b).and_then(|(e, _)| e),
+                        _ => None,
+                    };
+                    if let (Some(q), Some(e)) = (&native, envelope)
                         && !e.intersects(q)
                     {
                         continue;
                     }
-                    if !sample.wants() {
+                    let known = native.is_none() || envelope.is_some();
+                    if known && !sample.wants() {
                         continue;
                     }
                     match self.feature(r, native.as_ref(), req).map_err(err)? {
-                        Row::Feature(f) => sample.keep(f),
-                        Row::Skip => {}
+                        Row::Feature(f) if known || sample.wants() => sample.keep(f),
+                        Row::Feature(_) | Row::Skip => {}
                         Row::Bad => out.skipped += 1,
                     }
                 }

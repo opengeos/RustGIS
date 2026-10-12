@@ -193,8 +193,8 @@ impl FeatureSource for ParquetSource {
                 continue;
             }
             let rg = self.reader.get_row_group(g).map_err(err)?;
-            let geoms = read_bytes(rg.as_ref(), self.geom_col, n)?;
-            let attrs: Vec<Vec<Value>> = self.field_cols.iter().map(|&c| read_values(rg.as_ref(), c, n)).collect::<Result<_>>()?;
+            let geoms = read_bytes(rg.as_ref(), self.geom_col, &take)?;
+            let attrs: Vec<Vec<Value>> = self.field_cols.iter().map(|&c| read_values(rg.as_ref(), c, &take)).collect::<Result<_>>()?;
             let base = starts.get(g).copied().unwrap_or(0);
             for (r, _) in take.iter().enumerate().filter(|(_, t)| **t) {
                 let geometry = geoms.get(r).and_then(|b| b.as_deref()).and_then(wkb::decode).and_then(|g| self.reproject.geometry(g));
@@ -347,8 +347,11 @@ fn read_column<T: PqType>(r: &mut ColumnReaderImpl<T>, n: usize, max_def: i16) -
     Ok(out)
 }
 
-/// Reads `n` rows of a field column as attribute values.
-fn read_values(rg: &dyn RowGroupReader, col: usize, n: usize) -> Result<Vec<Value>> {
+/// Reads a field column as attribute values: those of the rows `take` marks (the rest are null,
+/// so a sample doesn't copy every row).
+fn read_values(rg: &dyn RowGroupReader, col: usize, take: &[bool]) -> Result<Vec<Value>> {
+    let n = take.len();
+    let on = |r: usize| take.get(r).copied().unwrap_or(false);
     let desc = rg.metadata().column(col).column_descr_ptr();
     let max_def = desc.max_def_level();
     let scale = decimal_scale(&desc).map(|s| 10f64.powi(-s));
@@ -371,19 +374,23 @@ fn read_values(rg: &dyn RowGroupReader, col: usize, n: usize) -> Result<Vec<Valu
         }
         ColumnReader::ByteArrayColumnReader(mut r) => read_column(&mut r, n, max_def)?
             .into_iter()
-            .map(|v| v.map(|b| Value::Text(String::from_utf8_lossy(b.data()).into_owned())).unwrap_or_default())
+            .enumerate()
+            .map(|(i, v)| v.filter(|_| on(i)).map(|b| Value::Text(String::from_utf8_lossy(b.data()).into_owned())).unwrap_or_default())
             .collect(),
         _ => vec![Value::Null; n],
     })
 }
 
-/// Reads `n` rows of a binary column (the WKB geometry).
-fn read_bytes(rg: &dyn RowGroupReader, col: usize, n: usize) -> Result<Vec<Option<Vec<u8>>>> {
+/// Reads a binary column (the WKB geometry), copying only the rows `take` marks.
+fn read_bytes(rg: &dyn RowGroupReader, col: usize, take: &[bool]) -> Result<Vec<Option<Vec<u8>>>> {
     let max_def = rg.metadata().column(col).column_descr().max_def_level();
+    let on = |r: usize| take.get(r).copied().unwrap_or(false);
     match rg.get_column_reader(col).map_err(err)? {
-        ColumnReader::ByteArrayColumnReader(mut r) => {
-            Ok(read_column(&mut r, n, max_def)?.into_iter().map(|v| v.map(|b| b.data().to_vec())).collect())
-        }
+        ColumnReader::ByteArrayColumnReader(mut r) => Ok(read_column(&mut r, take.len(), max_def)?
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| v.filter(|_| on(i)).map(|b| b.data().to_vec()))
+            .collect()),
         _ => Err(DataError::Format("GeoParquet: the geometry column is not binary".into())),
     }
 }

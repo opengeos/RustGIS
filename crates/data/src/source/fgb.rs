@@ -70,7 +70,8 @@ impl FgbSource {
             extent,
             count: (count > 0).then_some(count),
             crs: reproject.label(),
-            indexed: h.index_node_size() > 0 && count > 0,
+            // The crate's index search assumes the default node size; other files are scanned.
+            indexed: h.index_node_size() == flatgeobuf::packed_r_tree::PackedRTree::DEFAULT_NODE_SIZE && count > 0,
         };
         let mut src = FgbSource { info, input, reproject };
         if src.info.geometry_type == GeometryType::None {
