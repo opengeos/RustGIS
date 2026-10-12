@@ -313,13 +313,14 @@ impl std::fmt::Debug for Agent {
 }
 
 /// Runs a conversation to its end with a blocking transport (the command line, tests).
-/// `confirm` answers approval prompts.
+/// `confirm` answers approval prompts: (what, why, whether it is file or network access rather than
+/// an action reserved to the user).
 pub fn run_blocking(
     agent: &mut Agent,
     text: &str,
     s: &mut Session,
     mut send: impl FnMut(&HttpRequest) -> Result<HttpResponse, String>,
-    mut confirm: impl FnMut(&str, &str) -> bool,
+    mut confirm: impl FnMut(&str, &str, bool) -> bool,
 ) {
     let mut step = agent.ask(text, s);
     loop {
@@ -330,7 +331,7 @@ pub fn run_blocking(
                 agent.receive(g, r, s)
             }
             Step::Confirm => {
-                let allow = agent.pending(s).is_some_and(|(what, why, _)| confirm(&what, &why));
+                let allow = agent.pending(s).is_some_and(|(what, why, access)| confirm(&what, &why, access));
                 agent.decide(allow, false, s)
             }
             Step::Done => return,

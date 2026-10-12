@@ -66,5 +66,6 @@ The provider is `--provider` (`anthropic`, `openai`, `gemini`, `openrouter`, `ol
 else `RUSTGIS_ASSISTANT_PROVIDER`, else the first with a key in the environment, else Ollama.
 `--model` and `--base-url` override the defaults. The answer goes to standard output and each
 command the assistant ran to standard error. Commands that read or write files or use the
-network are declined unless you pass `--yes`. `--trace log.txt` appends each request and response
+network are declined unless you pass `--yes`; plugin commands, scripts, tasks, models and
+replacing the project are always declined here. `--trace log.txt` appends each request and response
 body (never the headers, which carry the key) to a file.

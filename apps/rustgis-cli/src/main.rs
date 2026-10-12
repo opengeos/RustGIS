@@ -167,11 +167,15 @@ fn ask(s: &mut Session, args: &[String]) -> Result<(), String> {
         }
         r
     };
-    agent::run_blocking(&mut a, &prompt, s, send, |what, why| {
-        if !yes {
-            eprintln!("  declined: {what} ({why}; pass --yes to allow)");
+    // `--yes` allows file and network access; actions reserved to the user (plugins, scripts,
+    // tasks, models, replacing the project) are never run from here.
+    agent::run_blocking(&mut a, &prompt, s, send, |what, why, access| {
+        let allow = yes && access;
+        if !allow {
+            let hint = if access { "; pass --yes to allow" } else { "" };
+            eprintln!("  declined: {what} ({why}{hint})");
         }
-        yes
+        allow
     });
     show(&a);
     if a.transcript.iter().any(|e| matches!(e, Entry::Error(_))) {

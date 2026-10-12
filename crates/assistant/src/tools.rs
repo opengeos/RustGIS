@@ -129,7 +129,8 @@ pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
 }
 
 /// What "allow for this conversation" remembers for a call: its command (a tool's id for
-/// `gp.run`), and only for file and network access. Plugin commands, the user's own automation and
+/// `gp.run`) with its exact parameters, so allowing one file or address allows no other. Only file
+/// and network access can be allowed for good: plugin commands, the user's own automation and
 /// replacing the project are asked about every time.
 pub fn approval_key(s: &Session, call: &ToolCall) -> Option<String> {
     let id = match call.name.as_str() {
@@ -140,7 +141,7 @@ pub fn approval_key(s: &Session, call: &ToolCall) -> Option<String> {
     if id.starts_with(rustgis_engine::plugins::PREFIX) || user_only(&id) || s.registry.get(id.split(':').next().unwrap_or("")).is_none() {
         return None;
     }
-    Some(id)
+    Some(format!("{id} {}", obj_arg(&call.args, "params")))
 }
 
 /// A one-line description of a call for the transcript and the approval prompt.

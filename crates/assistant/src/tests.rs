@@ -89,7 +89,7 @@ fn agent_runs_commands_and_answers() {
             requests.push(body(req));
             replies.pop_front().map(ok).unwrap_or_else(|| Err("no more replies".into()))
         },
-        |_, _| true,
+        |_, _, _| true,
     );
     let c = s.map().center_lonlat();
     assert!((c.x - 2.35).abs() < 0.01 && (c.y - 48.85).abs() < 0.01, "map moved to {c:?}");
@@ -321,7 +321,7 @@ fn steps_are_bounded_and_stop_works() {
             n += 1;
             ok(call(&format!("c{n}"), "list_layers", json!({})))
         },
-        |_, _| true,
+        |_, _, _| true,
     );
     assert_eq!(n, MAX_STEPS as usize);
     assert!(matches!(a.transcript.last(), Some(Entry::Note(_))));
@@ -407,6 +407,7 @@ fn always_allow_is_per_command_and_never_for_reserved_actions() {
     let dir = std::env::temp_dir();
     let export = |n: u32| json!({"command": "share.exportLayer", "params": {"layer": "Lakes", "path": dir.join(format!("rustgis-assistant-test-{n}.geojson"))}});
     let reply = json!({"choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [
+        {"id": "c0", "type": "function", "function": {"name": "run_command", "arguments": export(1).to_string()}},
         {"id": "c1", "type": "function", "function": {"name": "run_command", "arguments": export(1).to_string()}},
         {"id": "c2", "type": "function", "function": {"name": "run_command", "arguments": export(2).to_string()}},
         {"id": "c3", "type": "function", "function": {"name": "run_command", "arguments": json!({"command": "map.addTiles", "params": {"url": "https://t.example/{z}/{x}/{y}.png"}}).to_string()}},
@@ -414,8 +415,11 @@ fn always_allow_is_per_command_and_never_for_reserved_actions() {
     ]}, "finish_reason": "tool_calls"}]});
     assert_eq!(a.receive(a.generation(), ok(reply), &mut s), Step::Confirm);
     assert!(a.pending(&s).is_some_and(|p| p.2));
-    // Allowing the export for the conversation lets the second export through, not the tiles.
+    // Allowing the export for the conversation allows that file only: the next export (another
+    // file) asks again, and so do the tiles.
     assert_eq!(a.decide(true, true, &mut s), Step::Confirm);
+    assert!(a.pending(&s).is_some_and(|p| p.0.starts_with("share.exportLayer") && p.2));
+    assert_eq!(a.decide(false, false, &mut s), Step::Confirm);
     assert!(a.pending(&s).is_some_and(|p| p.0.starts_with("map.addTiles")));
     assert_eq!(a.decide(false, false, &mut s), Step::Confirm);
     // Replacing the project is never allowed for good.
