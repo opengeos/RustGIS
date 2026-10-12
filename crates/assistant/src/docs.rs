@@ -74,31 +74,59 @@ pub fn page(path: &str) -> Option<&'static Page> {
     PAGES.iter().find(|pg| pg.path.eq_ignore_ascii_case(&with_md) || pg.path.eq_ignore_ascii_case(&format!("{p}/index.md")))
 }
 
-/// A page's sections: (heading, body), the text before the first heading under an empty one.
-/// Lines in code blocks never start a section.
-pub fn sections(text: &str) -> Vec<(&str, &str)> {
+/// A page's headings: (level, heading, where its line starts). Lines in fenced code (``` or ~~~)
+/// and indented code (four spaces or more) are never headings.
+fn headings(text: &str) -> Vec<(usize, &str, usize)> {
     let mut out = Vec::new();
-    let mut heading = "";
-    let mut start = 0;
-    let mut fenced = false;
+    let mut fence: Option<&str> = None;
     let mut at = 0;
     for line in text.split_inclusive('\n') {
-        let t = line.trim_start();
-        if t.starts_with("```") {
-            fenced = !fenced;
-        } else if !fenced && t.starts_with('#') {
-            let h = t.trim_start_matches('#');
-            if h.starts_with(' ') {
-                out.push((heading, text.get(start..at).unwrap_or("")));
-                heading = h.trim();
-                start = at + line.len();
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let t = line.trim_start_matches(' ');
+        if indent <= 3 && !t.starts_with('\t') {
+            let marker = ["```", "~~~"].into_iter().find(|m| t.starts_with(m));
+            match (fence, marker) {
+                (None, Some(m)) => fence = Some(m),
+                (Some(f), Some(m)) if f == m => fence = None,
+                (None, None) if t.starts_with('#') => {
+                    let level = t.len() - t.trim_start_matches('#').len();
+                    let h = t.get(level..).unwrap_or("");
+                    if level <= 6 && h.starts_with([' ', '\t']) {
+                        out.push((level, h.trim(), at));
+                    }
+                }
+                _ => {}
             }
         }
         at += line.len();
     }
-    out.push((heading, text.get(start..).unwrap_or("")));
+    out
+}
+
+/// A page's sections: (heading, body up to the next heading of any level), the text before the
+/// first heading under an empty one.
+pub fn sections(text: &str) -> Vec<(&str, &str)> {
+    let hs = headings(text);
+    let line_end = |at: usize| text.get(at..).and_then(|t| t.find('\n')).map_or(text.len(), |n| at + n + 1);
+    let mut out = vec![("", text.get(..hs.first().map_or(text.len(), |h| h.2)).unwrap_or(""))];
+    for (i, &(_, heading, at)) in hs.iter().enumerate() {
+        let end = hs.get(i + 1).map_or(text.len(), |h| h.2);
+        out.push((heading, text.get(line_end(at).min(end)..end).unwrap_or("")));
+    }
     out.retain(|(h, b)| !h.is_empty() || !b.trim().is_empty());
     out
+}
+
+/// A section by its heading (any case, or its anchor), with its subsections and its heading
+/// line: (heading, Markdown).
+fn find_section<'a>(text: &'a str, want: &str) -> Option<(&'a str, &'a str)> {
+    let hs = headings(text);
+    let want_slug = slug(want);
+    let i = hs.iter().position(|(_, h, _)| h.eq_ignore_ascii_case(want) || slug(h) == want_slug)?;
+    let &(level, heading, at) = hs.get(i)?;
+    // Up to the next heading at the same level or above.
+    let end = hs.iter().skip(i + 1).find(|h| h.0 <= level).map_or(text.len(), |h| h.2);
+    Some((heading, text.get(at..end)?))
 }
 
 /// The anchor the site gives a heading.
@@ -196,13 +224,11 @@ pub fn read(path: &str, section: Option<&str>) -> Result<Value, String> {
     let (text, url) = match section.map(str::trim).filter(|s| !s.is_empty()) {
         None => (pg.text, pg.url()),
         Some(want) => {
-            let want_slug = slug(want);
-            let found =
-                sections(pg.text).into_iter().find(|(h, _)| h.eq_ignore_ascii_case(want) || slug(h) == want_slug).ok_or_else(|| {
-                    let hs: Vec<&str> = sections(pg.text).into_iter().map(|(h, _)| h).filter(|h| !h.is_empty()).collect();
-                    format!("{} has no section '{want}' (its sections: {})", pg.path, hs.join("; "))
-                })?;
-            (found.1, format!("{}#{}", pg.url(), slug(found.0)))
+            let (heading, text) = find_section(pg.text, want).ok_or_else(|| {
+                let hs: Vec<&str> = headings(pg.text).into_iter().map(|h| h.1).collect();
+                format!("{} has no section '{want}' (its sections: {})", pg.path, hs.join("; "))
+            })?;
+            (text, format!("{}#{}", pg.url(), slug(heading)))
         }
     };
     Ok(json!({"page": pg.path, "title": pg.title(), "url": url, "markdown": crate::tools::clip(text.trim(), MAX_READ)}))

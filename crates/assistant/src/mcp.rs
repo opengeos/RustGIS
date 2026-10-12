@@ -67,7 +67,18 @@ impl Server {
             Ok(v) => v,
             Err(e) => return Some(error(&Value::Null, PARSE_ERROR, &format!("not JSON: {e}"))),
         };
-        let reply = self.handle_value(s, &msg)?;
+        let reply = match &msg {
+            // A batch (protocol 2025-03-26): one reply per request, none when all are notifications.
+            Value::Array(batch) if batch.is_empty() => error_value(&Value::Null, INVALID_REQUEST, "empty batch"),
+            Value::Array(batch) => {
+                let replies: Vec<Value> = batch.iter().filter_map(|m| self.handle_value(s, m)).collect();
+                if replies.is_empty() {
+                    return None;
+                }
+                Value::Array(replies)
+            }
+            _ => self.handle_value(s, &msg)?,
+        };
         Some(reply.to_string())
     }
 

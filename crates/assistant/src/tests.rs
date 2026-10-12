@@ -569,6 +569,15 @@ fn mcp_protocol_errors() {
     assert_eq!(rpc(&server, &mut s, "tools/call", json!({"name": "no_such_tool"}))["error"]["code"], -32602);
     assert_eq!(rpc(&server, &mut s, "tools/call", json!({"name": "list_layers", "arguments": [1]}))["error"]["code"], -32602);
     assert_eq!(rpc(&server, &mut s, "resources/read", json!({"uri": "rustgis://docs/nope.md"}))["error"]["code"], -32002);
+    // Batches: one reply per request, none for notifications only.
+    let batch = r#"[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":2,"method":"nope"}]"#;
+    let r: Value = serde_json::from_str(&server.handle(&mut s, batch).unwrap()).unwrap();
+    assert_eq!(r.as_array().map(Vec::len), Some(2));
+    assert_eq!(r[0]["id"], 1);
+    assert_eq!(r[1]["error"]["code"], -32601);
+    assert!(server.handle(&mut s, r#"[{"jsonrpc":"2.0","method":"notifications/initialized"}]"#).is_none());
+    let r: Value = serde_json::from_str(&server.handle(&mut s, "[]").unwrap()).unwrap();
+    assert_eq!(r["error"]["code"], -32600);
     // A response to us (we send no requests) gets no reply.
     assert!(server.handle(&mut s, r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).is_none());
 }
@@ -650,6 +659,9 @@ fn mcp_serves_the_docs() {
     assert!(!err && text.contains("Command Line"), "{text}");
     let (err, text) = call_tool(&server, &mut s, "read_doc", json!({"page": "cli.md", "section": "chaining commands"}));
     assert!(!err && text.contains("--cmd") && text.contains("#chaining-commands"), "{text}");
+    // A section comes with its heading and its subsections.
+    let (err, text) = call_tool(&server, &mut s, "read_doc", json!({"page": "mcp.md", "section": "MCP Server"}));
+    assert!(!err && text.contains("## Tools") && text.contains("# MCP Server"), "{text}");
     let (err, text) = call_tool(&server, &mut s, "read_doc", json!({"page": "cli.md", "section": "no such section"}));
     assert!(err && text.contains("Chaining commands"), "{text}");
     let (err, _) = call_tool(&server, &mut s, "read_doc", json!({"page": "../../etc/passwd"}));
@@ -688,8 +700,11 @@ fn docs_pages_and_addresses() {
     assert_eq!(docs::slug("Chaining commands"), "chaining-commands");
     assert_eq!(docs::slug("What the agent may do"), "what-the-agent-may-do");
     // Headings in code blocks aren't sections.
-    let secs = docs::sections("# T\nintro\n```sh\n# a comment\n```\n## Next\nbody\n");
-    assert_eq!(secs.iter().map(|s| s.0).collect::<Vec<_>>(), ["T", "Next"]);
+    let text =
+        "# T\nintro\n```sh\n# a comment\n```\n~~~\n# also code\n~~~\n    # indented code\n## Next\nbody\n### Sub\nmore\n## Last\n#tag\n";
+    let secs = docs::sections(text);
+    assert_eq!(secs.iter().map(|s| s.0).collect::<Vec<_>>(), ["T", "Next", "Sub", "Last"]);
+    assert_eq!(secs.get(1).map(|s| s.1), Some("body\n"));
 }
 
 #[test]
