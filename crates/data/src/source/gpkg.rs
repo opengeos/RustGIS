@@ -59,12 +59,29 @@ impl GpkgSource {
         Self::open_conn(open_db(path)?, layer, None)
     }
 
-    /// Opens a GeoPackage held in memory, through a temporary copy (SQLite reads files).
+    /// Opens a GeoPackage held in memory, through a temporary copy (SQLite reads files). The copy
+    /// is a new file with a name no one can guess, so another user can't plant one in its place.
     pub fn open_bytes(bytes: &[u8], layer: Option<&str>) -> Result<Self> {
+        use std::io::Write;
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
-        let p = std::env::temp_dir().join(format!("rustgis-{}-{}.gpkg", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-        crate::io::write_atomic(&p, bytes)?;
+        let mut tries = 0;
+        let (p, mut f) = loop {
+            let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+            let salt = std::collections::hash_map::RandomState::new();
+            let tag = std::hash::BuildHasher::hash_one(&salt, (nanos, N.fetch_add(1, Ordering::Relaxed)));
+            let p = std::env::temp_dir().join(format!("rustgis-{}-{tag:016x}.gpkg", std::process::id()));
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+                Ok(f) => break (p, f),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries < 8 => tries += 1,
+                Err(e) => return Err(e.into()),
+            }
+        };
+        if let Err(e) = f.write_all(bytes).and_then(|_| f.sync_all()) {
+            let _ = std::fs::remove_file(&p);
+            return Err(e.into());
+        }
+        drop(f);
         match open_db(&p).and_then(|c| Self::open_conn(c, layer, Some(p.clone()))) {
             Ok(s) => Ok(s),
             Err(e) => {

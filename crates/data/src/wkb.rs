@@ -13,7 +13,7 @@ const MAX_DEPTH: usize = 8;
 /// Decodes a WKB geometry. `None` when it is malformed, empty or of an unsupported type.
 pub fn decode(bytes: &[u8]) -> Option<Geometry> {
     let mut r = Reader { b: bytes, pos: 0 };
-    r.geometry(0)
+    r.geometry(0).flatten()
 }
 
 /// Encodes a geometry as ISO WKB (2D, little-endian).
@@ -139,31 +139,42 @@ impl Reader<'_> {
         Some(Coord::new(x, y))
     }
 
-    fn coords(&mut self, h: Head) -> Option<Vec<Coord>> {
+    /// A coordinate sequence, and whether every coordinate is finite. `None` when malformed.
+    fn coords(&mut self, h: Head) -> Option<(Vec<Coord>, bool)> {
         let n = self.count(h, h.dims * 8)?;
         let mut v = Vec::with_capacity(n);
+        let mut finite = true;
         for _ in 0..n {
             let c = self.coord(h)?;
-            if c.is_finite() {
-                v.push(c);
-            }
+            finite &= c.is_finite();
+            v.push(c);
         }
-        Some(v)
+        Some((v, finite))
     }
 
-    fn rings(&mut self, h: Head) -> Option<Vec<Vec<Coord>>> {
+    /// A polygon's rings: `Some(None)` when its exterior is unusable (fewer than three points or a
+    /// non-finite one), so a hole is never taken for the exterior. Unusable holes are dropped.
+    fn rings(&mut self, h: Head) -> Option<Option<Vec<Vec<Coord>>>> {
         let n = self.count(h, 4)?;
         let mut rings = Vec::with_capacity(n);
-        for _ in 0..n {
-            let r = self.coords(h)?;
-            if r.len() >= 3 {
+        let mut exterior_ok = true;
+        // Every ring is read whatever it holds, so the reader ends up past the polygon.
+        for i in 0..n {
+            let (r, finite) = self.coords(h)?;
+            let usable = finite && r.len() >= 3;
+            if i == 0 {
+                exterior_ok = usable;
+            }
+            if usable {
                 rings.push(r);
             }
         }
-        Some(rings)
+        Some((exterior_ok && !rings.is_empty()).then_some(rings))
     }
 
-    fn geometry(&mut self, depth: usize) -> Option<Geometry> {
+    /// The next geometry: `None` when malformed (where the bytes after it start is unknown),
+    /// `Some(None)` when it is well formed but empty or unusable.
+    fn geometry(&mut self, depth: usize) -> Option<Option<Geometry>> {
         if depth > MAX_DEPTH {
             return None;
         }
@@ -172,30 +183,24 @@ impl Reader<'_> {
             1 => {
                 let c = self.coord(h)?;
                 // An empty point is NaN, NaN.
-                c.is_finite().then_some(Geometry::Point(c))
+                Some(c.is_finite().then_some(Geometry::Point(c)))
             }
             2 => {
-                let line = self.coords(h)?;
-                (line.len() >= 2).then(|| Geometry::Line(vec![line]))
+                let (line, finite) = self.coords(h)?;
+                Some((finite && line.len() >= 2).then(|| Geometry::Line(vec![line])))
             }
-            3 => {
-                let rings = self.rings(h)?;
-                (!rings.is_empty()).then(|| Geometry::Polygon(vec![rings]))
-            }
+            3 => Some(self.rings(h)?.map(|rings| Geometry::Polygon(vec![rings]))),
             4..=7 => {
                 let n = self.count(h, 5)?;
                 let mut parts = Vec::with_capacity(n.min(1 << 16));
                 for _ in 0..n {
-                    let start = self.pos;
-                    match self.geometry(depth + 1) {
-                        Some(g) => parts.push(g),
-                        // An empty member (a NaN point, a short ring) is skipped; a malformed one
-                        // ends the read, since where the next member starts is unknown.
-                        None if self.pos > start && self.left() > 0 => {}
-                        None => break,
+                    // An empty member is skipped; a malformed one makes the whole geometry
+                    // malformed, since where the next member starts is unknown.
+                    if let Some(g) = self.geometry(depth + 1)? {
+                        parts.push(g);
                     }
                 }
-                merge(parts)
+                Some(merge(parts))
             }
             _ => None,
         }
@@ -267,6 +272,22 @@ mod tests {
     }
 
     #[test]
+    fn a_bad_exterior_ring_drops_the_polygon_not_promotes_a_hole() {
+        let ring = |pts: &[(f64, f64)]| pts.iter().map(|&(x, y)| Coord::new(x, y)).collect::<Vec<_>>();
+        let hole = ring(&[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 1.0)]);
+        // An exterior of two points, then a hole.
+        let g = Geometry::Polygon(vec![vec![ring(&[(0.0, 0.0), (9.0, 0.0)]), hole.clone()]]);
+        assert_eq!(decode(&encode(&g)), None);
+        // A NaN vertex in the exterior.
+        let g = Geometry::Polygon(vec![vec![ring(&[(0.0, 0.0), (f64::NAN, 0.0), (9.0, 9.0), (0.0, 0.0)]), hole.clone()]]);
+        assert_eq!(decode(&encode(&g)), None);
+        // A short hole is dropped, the polygon kept.
+        let outer = ring(&[(0.0, 0.0), (9.0, 0.0), (9.0, 9.0), (0.0, 0.0)]);
+        let g = Geometry::Polygon(vec![vec![outer.clone(), ring(&[(1.0, 1.0)]), hole.clone()]]);
+        assert_eq!(decode(&encode(&g)), Some(Geometry::Polygon(vec![vec![outer, hole]])));
+    }
+
+    #[test]
     fn hostile_input_is_none() {
         assert_eq!(decode(&[]), None);
         assert_eq!(decode(&[7]), None);
@@ -288,6 +309,13 @@ mod tests {
         for n in 0..full.len() {
             let _ = decode(&full[..n]);
         }
+        // A multipolygon whose second member is truncated mid-ring is malformed as a whole.
+        let two = encode(&Geometry::Polygon(vec![
+            vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 0.0), Coord::new(1.0, 1.0), Coord::new(0.0, 0.0)]],
+            vec![vec![Coord::new(5.0, 5.0), Coord::new(6.0, 5.0), Coord::new(6.0, 6.0), Coord::new(5.0, 5.0)]],
+        ]));
+        assert!(decode(&two).is_some());
+        assert_eq!(decode(&two[..two.len() - 20]), None);
         // An empty point.
         let mut p = vec![1u8];
         p.extend_from_slice(&1u32.to_le_bytes());
