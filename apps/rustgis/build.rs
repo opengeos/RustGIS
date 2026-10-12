@@ -66,7 +66,11 @@ END
                 ico = ico.display().to_string().replace('\\', "\\\\"),
             ),
         )?;
-        embed_resource::compile(&rc, embed_resource::NONE).manifest_required()?;
+        // Without a resource compiler (rc.exe or windres) the exe just has no icon: warn rather
+        // than fail a plain `cargo build`.
+        if let Err(e) = embed_resource::compile(&rc, embed_resource::NONE).manifest_optional() {
+            println!("cargo:warning=rustgis.exe gets no icon: {e}");
+        }
         Ok(())
     }
 
