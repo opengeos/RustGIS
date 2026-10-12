@@ -496,7 +496,7 @@ impl RustGisApp {
             use base64::Engine;
             return self.add_picture(json!({"image": base64::engine::general_purpose::STANDARD.encode(bytes)}));
         }
-        if rustgis_engine::data::raster::is_raster_name(name) {
+        if rustgis_engine::data::raster::is_raster_name(name) || rustgis_engine::data::source::is_source_name(name) {
             use base64::Engine;
             let data = base64::engine::general_purpose::STANDARD.encode(bytes);
             return self.run("layer.addDataBytes", json!({"fileName": name, "data": data}));
@@ -712,9 +712,10 @@ impl RustGisApp {
                     self.ui.pending_picture = None;
                     self.ui.pending_open = None;
                     open("data");
-                } else if let Some(path) =
-                    dialogs::pick_open(&["geojson", "json", "csv", "shp", "tif", "tiff", "asc"], tl!("Vector and raster data"))
-                {
+                } else if let Some(path) = dialogs::pick_open(
+                    &["geojson", "json", "csv", "shp", "gpkg", "parquet", "geoparquet", "fgb", "tif", "tiff", "asc"],
+                    tl!("Vector and raster data"),
+                ) {
                     return self.run("layer.addData", json!({"path": path}));
                 }
             }

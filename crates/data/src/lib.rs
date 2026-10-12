@@ -9,7 +9,9 @@ pub mod interop;
 pub mod io;
 pub mod query;
 pub mod raster;
+pub mod source;
 pub mod value;
+pub mod wkb;
 pub mod zip;
 
 pub use geometry::{Geometry, GeometryType};

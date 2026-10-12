@@ -75,7 +75,7 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 
 | Area | Highlights |
 |---|---|
-| **Data** | GeoJSON, CSV with longitude/latitude, Shapefile in; GeoJSON, CSV, KML, GPX and WKT out; standalone tables; layer and map files, styles, templates and packages |
+| **Data** | GeoJSON, CSV with longitude/latitude, Shapefile, GeoPackage, GeoParquet and FlatGeobuf in; GeoJSON, CSV, KML, GPX and WKT out; standalone tables; layer and map files, styles, templates and packages |
 | **Rasters** | GeoTIFF and cloud-optimised GeoTIFF (any pixel type, tiled or striped, compressed), ASCII grids; reprojection from any EPSG code; Stretch, RGB, Classify, Unique Values, Colormap and Shaded Relief; DRA, band combinations, brightness/contrast/gamma; raster functions, indices, change detection, classification, georeferencing |
 | **Maps** | Multiple maps per project; a 3D globe; Web Mercator or any projection (Equal Earth, Robinson, Winkel Tripel, polar and regional presets, or an EPSG code); bookmarks, extent history, Go To XY; five offline basemaps |
 | **Web tiles** | XYZ/TMS/WMS raster tiles, Mapbox Vector Tiles and MapLibre styles (sprites, patterns, expressions), cached and fetched in the background |
@@ -131,7 +131,7 @@ Layered crates, each depending only on the ones below it:
 | Layer | Crate | Job |
 |---|---|---|
 | L0 | `rustgis-geom` | coordinates, extents, Web Mercator, geodesic distance/area, scale |
-| L1 | `rustgis-data` | features and typed attributes; GeoJSON, CSV, Shapefile; SQL where clauses; rasters and their coordinate systems |
+| L1 | `rustgis-data` | features and typed attributes; GeoJSON, CSV, Shapefile; GeoPackage, GeoParquet and FlatGeobuf providers; SQL where clauses; rasters and their coordinate systems |
 | L2 | `rustgis-map`, `rustgis-analysis` | layers, symbology, labeling, camera, basemaps; geoprocessing (on `geo`) |
 | L2 | `rustgis-tiles` | web map tiles: XYZ/TMS/WMS, Mapbox Vector Tiles, MapLibre styles, the tile cache |
 | L3 | `rustgis-render` | tiny-skia renderer, label placement, PNG export, fonts |

@@ -3,7 +3,7 @@ name = "rustgis-data"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "RustGIS L1: feature model, attribute values, vector I/O (GeoJSON, CSV, Shapefile) and rasters (GeoTIFF, ASCII grid)"
+description = "RustGIS L1: feature model, attribute values, vector I/O (GeoJSON, CSV, Shapefile), data providers (GeoParquet, FlatGeobuf, GeoPackage) and rasters (GeoTIFF, ASCII grid)"
 
 [lints]
 workspace = true
@@ -19,3 +19,15 @@ tiff = { workspace = true }
 proj4rs = { workspace = true }
 crs-definitions = { workspace = true }
 miniz_oxide = { workspace = true }
+parquet = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-cast = { workspace = true }
+bytes = { workspace = true }
+flatgeobuf = { workspace = true }
+geozero = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# zstd is C: native only. GeoParquet files compressed with it don't open in the browser yet.
+parquet = { workspace = true, features = ["zstd"] }
+rusqlite = { workspace = true }

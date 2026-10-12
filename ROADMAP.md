@@ -7,7 +7,7 @@ or enterprise portal sharing yet, so real depth is lower than the checklist sugg
 ## Done
 - Layered workspace, command registry with undo, project files (`.rgis`), `rustgis-cli`, the
   web app (WebAssembly), 15 interface languages.
-- Data: GeoJSON, CSV (lon/lat), Shapefile in; GeoJSON, CSV, KML, GPX and WKT out; standalone
+- Data: GeoJSON, CSV (lon/lat), Shapefile, GeoPackage, GeoParquet and FlatGeobuf in; GeoJSON, CSV, KML, GPX and WKT out; standalone
   tables; layer, map, style, template, task and package files.
 - Rasters: GeoTIFF/COG and ASCII grids, EPSG reprojection, stretch/RGB/classified/shaded-relief
   symbology, raster functions, indices, change detection, classification, georeferencing.
@@ -32,7 +32,7 @@ or enterprise portal sharing yet, so real depth is lower than the checklist sugg
   downloads.rustgis.app.
 
 ## Next
-- Data: GeoPackage and FlatGeobuf in and out; Shapefile out; Shapefiles in the web app.
+- Data: GeoPackage and FlatGeobuf out; Shapefile out; Shapefiles and GeoPackages in the web app.
 - Editing: vertex editing (move, add and delete vertices of existing features).
 - Analysis: spatial join, intersect and union, near, heat maps.
 - 3D: full scenes with terrain, beyond the globe and 2.5D extrusion.

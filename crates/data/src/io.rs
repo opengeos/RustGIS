@@ -10,7 +10,7 @@ use crate::{Coord, DataError, Dataset, Field, FieldType, Geometry, GeometryType,
 const MAX_BYTES: u64 = 256 << 20;
 
 /// File types the readers understand, for open dialogs.
-pub const READ_EXTENSIONS: &[&str] = &["geojson", "json", "csv", "txt", "shp"];
+pub const READ_EXTENSIONS: &[&str] = &["geojson", "json", "csv", "txt", "shp", "gpkg", "parquet", "geoparquet", "fgb"];
 
 /// Reads vector data held in memory (a browser upload or a drop), choosing the reader by the
 /// file name's extension. Shapefiles need their sidecar files, so they're read from disk only.
@@ -26,6 +26,9 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
         "geojson" | "json" => read_geojson(text()?, &name)?,
         "csv" | "txt" => read_csv(text()?, &name)?,
         "shp" => return Err(DataError::Unsupported("shp here: open Shapefiles from disk in the desktop app".into())),
+        e if crate::source::EXTENSIONS.contains(&e) => {
+            crate::source::materialize(crate::source::open_bytes(file_name, bytes.to_vec(), None)?.as_ref())?
+        }
         other => return Err(DataError::Unsupported(other.to_string())),
     };
     out.0.source = Some(file_name.to_string());
@@ -53,6 +56,8 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
             }
             read_shapefile(path, &name)?
         }
+        // Read in place by a provider, so there's no size cap on the file, only on the features.
+        e if crate::source::EXTENSIONS.contains(&e) => crate::source::materialize(crate::source::open_path(path, None)?.as_ref())?,
         other => return Err(DataError::Unsupported(other.to_string())),
     };
     out.0.source = Some(path.display().to_string());

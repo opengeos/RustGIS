@@ -29,7 +29,7 @@ pub(crate) fn need_raster(s: &Session) -> Option<&'static str> {
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addDataBytes", "Add Data (from file contents)", "Map › Layer", add_bytes)
-            .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv", "data": base64}"#),
+            .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv|.parquet|.fgb|.gpkg", "data": base64}"#),
         C::new("raster.symbology", "Symbology", "Raster Layer › Rendering", symbology).when(need_raster).params(
             r#"{"layer"?, "type": "stretch"|"rgb"|"classify"|"unique"|"colormap"|"shadedRelief", "band"?: 1.., "ramp"?, "invert"?: bool, "classes"?: 1..32, "method"?, "azimuth"?, "altitude"?, "zFactor"?}"#,
         ),
@@ -159,6 +159,11 @@ fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
         let r = raster::read_bytes(&name, &bytes).map_err(|e| format!("{name}: {e}"))?;
         let title = r.name.clone();
         return add_raster(s, &title, RasterLayer::from_bytes(r, name, bytes));
+    }
+    // GeoParquet and FlatGeobuf uploads (binary vector files).
+    if rustgis_data::source::is_source_name(&name) {
+        let read = rustgis_data::io::read_bytes(&name, &bytes).map_err(|e| format!("{name}: {e}"))?;
+        return super::layer::add_read(s, p, read);
     }
     let text = String::from_utf8(bytes).map_err(|_| format!("{name} is not a text file"))?;
     super::layer::add_data_text(s, &json!({"fileName": name, "text": text}))

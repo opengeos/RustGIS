@@ -1,0 +1,298 @@
+//! Well-known binary (WKB) geometry: the encoding GeoParquet and GeoPackage store geometry in.
+//!
+//! Reads ISO WKB (2D, Z, M, ZM) and PostGIS extended WKB (Z/M/SRID flags); Z and M are dropped.
+//! The input is hostile: every count is checked against the bytes left, nesting is bounded and a
+//! malformed geometry is `None`, never a panic.
+
+use crate::Geometry;
+use rustgis_geom::Coord;
+
+/// Deepest nesting accepted (a collection of collections of …).
+const MAX_DEPTH: usize = 8;
+
+/// Decodes a WKB geometry. `None` when it is malformed, empty or of an unsupported type.
+pub fn decode(bytes: &[u8]) -> Option<Geometry> {
+    let mut r = Reader { b: bytes, pos: 0 };
+    r.geometry(0)
+}
+
+/// Encodes a geometry as ISO WKB (2D, little-endian).
+pub fn encode(g: &Geometry) -> Vec<u8> {
+    let mut out = Vec::new();
+    let head = |out: &mut Vec<u8>, ty: u32| {
+        out.push(1);
+        out.extend_from_slice(&ty.to_le_bytes());
+    };
+    let count = |out: &mut Vec<u8>, n: usize| out.extend_from_slice(&(u32::try_from(n).unwrap_or(u32::MAX)).to_le_bytes());
+    let coord = |out: &mut Vec<u8>, c: &Coord| {
+        out.extend_from_slice(&c.x.to_le_bytes());
+        out.extend_from_slice(&c.y.to_le_bytes());
+    };
+    let ring = |out: &mut Vec<u8>, r: &[Coord]| {
+        count(out, r.len());
+        r.iter().for_each(|c| coord(out, c));
+    };
+    match g {
+        Geometry::Point(c) => {
+            head(&mut out, 1);
+            coord(&mut out, c);
+        }
+        Geometry::MultiPoint(v) => {
+            head(&mut out, 4);
+            count(&mut out, v.len());
+            for c in v {
+                head(&mut out, 1);
+                coord(&mut out, c);
+            }
+        }
+        Geometry::Line(parts) => {
+            head(&mut out, 5);
+            count(&mut out, parts.len());
+            for p in parts {
+                head(&mut out, 2);
+                ring(&mut out, p);
+            }
+        }
+        Geometry::Polygon(polys) => {
+            head(&mut out, 6);
+            count(&mut out, polys.len());
+            for rings in polys {
+                head(&mut out, 3);
+                count(&mut out, rings.len());
+                rings.iter().for_each(|r| ring(&mut out, r));
+            }
+        }
+    }
+    out
+}
+
+struct Reader<'a> {
+    b: &'a [u8],
+    pos: usize,
+}
+
+#[derive(Clone, Copy)]
+struct Head {
+    little: bool,
+    ty: u32,
+    dims: usize,
+}
+
+impl Reader<'_> {
+    fn left(&self) -> usize {
+        self.b.len().saturating_sub(self.pos)
+    }
+
+    fn take<const N: usize>(&mut self) -> Option<[u8; N]> {
+        let s = self.b.get(self.pos..self.pos.checked_add(N)?)?;
+        self.pos += N;
+        s.try_into().ok()
+    }
+
+    fn u32(&mut self, little: bool) -> Option<u32> {
+        let a = self.take::<4>()?;
+        Some(if little { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) })
+    }
+
+    fn f64(&mut self, little: bool) -> Option<f64> {
+        let a = self.take::<8>()?;
+        Some(if little { f64::from_le_bytes(a) } else { f64::from_be_bytes(a) })
+    }
+
+    fn head(&mut self) -> Option<Head> {
+        let little = match self.take::<1>()? {
+            [0] => false,
+            [1] => true,
+            _ => return None,
+        };
+        let raw = self.u32(little)?;
+        // Extended WKB: flags in the high bits, then an optional SRID.
+        let (mut z, mut m) = (raw & 0x8000_0000 != 0, raw & 0x4000_0000 != 0);
+        if raw & 0x2000_0000 != 0 {
+            self.u32(little)?;
+        }
+        let mut ty = raw & 0x0FFF_FFFF;
+        // ISO WKB: thousands carry the dimensions.
+        match ty / 1000 {
+            0 => {}
+            1 => z = true,
+            2 => m = true,
+            3 => (z, m) = (true, true),
+            _ => return None,
+        }
+        ty %= 1000;
+        Some(Head { little, ty, dims: 2 + usize::from(z) + usize::from(m) })
+    }
+
+    /// A count of items each at least `min_bytes` long, rejected when it can't fit.
+    fn count(&mut self, h: Head, min_bytes: usize) -> Option<usize> {
+        let n = usize::try_from(self.u32(h.little)?).ok()?;
+        (n.checked_mul(min_bytes)? <= self.left()).then_some(n)
+    }
+
+    fn coord(&mut self, h: Head) -> Option<Coord> {
+        let x = self.f64(h.little)?;
+        let y = self.f64(h.little)?;
+        for _ in 2..h.dims {
+            self.f64(h.little)?;
+        }
+        Some(Coord::new(x, y))
+    }
+
+    fn coords(&mut self, h: Head) -> Option<Vec<Coord>> {
+        let n = self.count(h, h.dims * 8)?;
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            let c = self.coord(h)?;
+            if c.is_finite() {
+                v.push(c);
+            }
+        }
+        Some(v)
+    }
+
+    fn rings(&mut self, h: Head) -> Option<Vec<Vec<Coord>>> {
+        let n = self.count(h, 4)?;
+        let mut rings = Vec::with_capacity(n);
+        for _ in 0..n {
+            let r = self.coords(h)?;
+            if r.len() >= 3 {
+                rings.push(r);
+            }
+        }
+        Some(rings)
+    }
+
+    fn geometry(&mut self, depth: usize) -> Option<Geometry> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let h = self.head()?;
+        match h.ty {
+            1 => {
+                let c = self.coord(h)?;
+                // An empty point is NaN, NaN.
+                c.is_finite().then_some(Geometry::Point(c))
+            }
+            2 => {
+                let line = self.coords(h)?;
+                (line.len() >= 2).then(|| Geometry::Line(vec![line]))
+            }
+            3 => {
+                let rings = self.rings(h)?;
+                (!rings.is_empty()).then(|| Geometry::Polygon(vec![rings]))
+            }
+            4..=7 => {
+                let n = self.count(h, 5)?;
+                let mut parts = Vec::with_capacity(n.min(1 << 16));
+                for _ in 0..n {
+                    let start = self.pos;
+                    match self.geometry(depth + 1) {
+                        Some(g) => parts.push(g),
+                        // An empty member (a NaN point, a short ring) is skipped; a malformed one
+                        // ends the read, since where the next member starts is unknown.
+                        None if self.pos > start && self.left() > 0 => {}
+                        None => break,
+                    }
+                }
+                merge(parts)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Merges the members of a multi-geometry or collection into one geometry of the first member's
+/// kind; members of other kinds are dropped.
+fn merge(parts: Vec<Geometry>) -> Option<Geometry> {
+    let first = parts.first()?.kind();
+    let mut points = Vec::new();
+    let mut lines = Vec::new();
+    let mut polys = Vec::new();
+    for g in parts.into_iter().filter(|g| g.kind() == first) {
+        match g {
+            Geometry::Point(c) => points.push(c),
+            Geometry::MultiPoint(v) => points.extend(v),
+            Geometry::Line(p) => lines.extend(p),
+            Geometry::Polygon(p) => polys.extend(p),
+        }
+    }
+    match first {
+        crate::GeometryType::Point if points.len() == 1 => points.first().copied().map(Geometry::Point),
+        crate::GeometryType::Point => Some(Geometry::MultiPoint(points)),
+        crate::GeometryType::Polyline => Some(Geometry::Line(lines)),
+        crate::GeometryType::Polygon => Some(Geometry::Polygon(polys)),
+        crate::GeometryType::None => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn square() -> Geometry {
+        let r = vec![Coord::new(0.0, 0.0), Coord::new(1.0, 0.0), Coord::new(1.0, 1.0), Coord::new(0.0, 0.0)];
+        Geometry::Polygon(vec![vec![r]])
+    }
+
+    #[test]
+    fn round_trips() {
+        for g in [
+            Geometry::Point(Coord::new(1.5, -2.0)),
+            Geometry::MultiPoint(vec![Coord::new(1.0, 2.0), Coord::new(3.0, 4.0)]),
+            Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)]]),
+            square(),
+        ] {
+            assert_eq!(decode(&encode(&g)), Some(g));
+        }
+    }
+
+    #[test]
+    fn reads_big_endian_z_and_ewkb() {
+        // Big-endian ISO PointZ (1001).
+        let mut b = vec![0u8];
+        b.extend_from_slice(&1001u32.to_be_bytes());
+        for v in [3.0f64, 4.0, 99.0] {
+            b.extend_from_slice(&v.to_be_bytes());
+        }
+        assert_eq!(decode(&b), Some(Geometry::Point(Coord::new(3.0, 4.0))));
+        // EWKB point with Z and an SRID.
+        let mut e = vec![1u8];
+        e.extend_from_slice(&(1u32 | 0x8000_0000 | 0x2000_0000).to_le_bytes());
+        e.extend_from_slice(&4326u32.to_le_bytes());
+        for v in [5.0f64, 6.0, 7.0] {
+            e.extend_from_slice(&v.to_le_bytes());
+        }
+        assert_eq!(decode(&e), Some(Geometry::Point(Coord::new(5.0, 6.0))));
+    }
+
+    #[test]
+    fn hostile_input_is_none() {
+        assert_eq!(decode(&[]), None);
+        assert_eq!(decode(&[7]), None);
+        // A line claiming four billion points.
+        let mut b = vec![1u8];
+        b.extend_from_slice(&2u32.to_le_bytes());
+        b.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(decode(&b), None);
+        // Deep nesting of collections.
+        let mut deep = Vec::new();
+        for _ in 0..64 {
+            deep.push(1u8);
+            deep.extend_from_slice(&7u32.to_le_bytes());
+            deep.extend_from_slice(&1u32.to_le_bytes());
+        }
+        assert_eq!(decode(&deep), None);
+        // Every truncation of a valid polygon.
+        let full = encode(&square());
+        for n in 0..full.len() {
+            let _ = decode(&full[..n]);
+        }
+        // An empty point.
+        let mut p = vec![1u8];
+        p.extend_from_slice(&1u32.to_le_bytes());
+        p.extend_from_slice(&f64::NAN.to_le_bytes());
+        p.extend_from_slice(&f64::NAN.to_le_bytes());
+        assert_eq!(decode(&p), None);
+    }
+}

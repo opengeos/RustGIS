@@ -7,6 +7,9 @@
 | GeoJSON (`.geojson`, `.json`) | Yes | Yes |
 | CSV (`.csv`, `.txt`) with longitude/latitude columns | Yes | Yes |
 | Shapefile (`.shp` + `.dbf`) | Yes (desktop) | No |
+| GeoPackage (`.gpkg`, the first feature table) | Yes (desktop) | No |
+| GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | No |
+| FlatGeobuf (`.fgb`) | Yes | No |
 | KML, GPX, CSV with WKT geometry | No | Yes (Analysis › Workflows › Data Interop) |
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
 | ASCII grid (`.asc`, with an optional `.prj`) | Yes | No |
@@ -19,7 +22,9 @@ geometry, opens as a standalone table, listed under the map in Contents. **Map �
 Graphics Layer** adds a layer for [drawn graphics](cartography.md#graphics), and **Insert ›
 Layer Templates** adds empty layers with ready-made schemas to draw into.
 
-Vector coordinates are WGS 84 longitude/latitude and are displayed in Web Mercator. Rasters keep
+Vector coordinates are WGS 84 longitude/latitude and are displayed in Web Mercator. GeoPackage,
+GeoParquet and FlatGeobuf files in another coordinate system (any EPSG code) are converted as they
+are read. Rasters keep
 their own coordinate system (any EPSG code, such as UTM zones or national grids) and are
 reprojected on the fly as they draw.
 

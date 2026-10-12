@@ -6,7 +6,7 @@ engine scriptable and the front end swappable.
 | Layer | Crate | Job |
 | --- | --- | --- |
 | L0 | `rustgis-geom` | Coordinates, extents, Web Mercator, geodesic distance/area, scale |
-| L1 | `rustgis-data` | Features and typed attributes; GeoJSON, CSV, Shapefile; SQL where clauses; rasters (GeoTIFF, ASCII grid) and their coordinate systems |
+| L1 | `rustgis-data` | Features and typed attributes; GeoJSON, CSV, Shapefile; data providers reading GeoPackage, GeoParquet and FlatGeobuf in place by their spatial index; SQL where clauses; rasters (GeoTIFF, ASCII grid) and their coordinate systems |
 | L2 | `rustgis-map`, `rustgis-analysis` | Layers, symbology, labeling, camera, basemaps and web tile layers; geoprocessing tools |
 | L2 | `rustgis-tiles` | Web map tiles: XYZ/TMS/WMS raster tiles, Mapbox Vector Tiles and a subset of MapLibre styles; a cache that fetches in the background (worker threads natively, the browser's `fetch` on the web) |
 | L3 | `rustgis-render` | tiny-skia renderer, label placement, PNG export |

@@ -57,7 +57,7 @@ engine, choose RustGIS. Both keep your data on your machine.
 
 | | **RustGIS** | **GeoLibre** | **QGIS** | **ArcGIS Pro** | **ArcGIS Online** |
 |---|---|---|---|---|---|
-| **Format breadth** | Focused: GeoJSON, CSV, Shapefile; GeoTIFF/COG and ASCII grids; KML, GPX and WKT out | Wide: DuckDB-WASM Spatial plus in-house readers | **Widest**: everything GDAL/OGR reads | Very wide, plus native Esri formats | Common upload formats |
+| **Format breadth** | Focused: GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet, FlatGeobuf; GeoTIFF/COG and ASCII grids; KML, GPX and WKT out | Wide: DuckDB-WASM Spatial plus in-house readers | **Widest**: everything GDAL/OGR reads | Very wide, plus native Esri formats | Common upload formats |
 | **Cloud-native data** | Cloud-optimised GeoTIFF (as files) | GeoParquet, FlatGeobuf, PMTiles, COG, Zarr, streamed over HTTP | GeoParquet, FlatGeobuf, PMTiles, COG, Zarr | GeoParquet, COG, Zarr | Hosted layers |
 | **Web maps and tiles** | XYZ/TMS/WMS raster tiles, Mapbox Vector Tiles, MapLibre styles | XYZ, WMS/WFS/WMTS, OGC API, vector tiles, MapLibre styles | Full OGC support, vector tiles | Full OGC support | Yes |
 | **Coordinate systems** | Rasters in any EPSG code, reprojected on the fly; the map in presets or projected EPSG codes | Reprojects on import, EPSG catalog | Full PROJ support | Full support | Web Mercator focus |
@@ -126,8 +126,8 @@ opens, and writes MapLibre styles and OGC API Features collections for the web.
 
 Stated plainly, so the tables above are worth trusting:
 
-- **Format breadth.** No GeoPackage, FlatGeobuf, GeoParquet, File Geodatabase or databases yet,
-  and no Shapefile writing. GDAL-based tools read far more.
+- **Format breadth.** GeoPackage, GeoParquet and FlatGeobuf are read but not written; no File
+  Geodatabase or databases yet, and no Shapefile writing. GDAL-based tools read far more.
 - **Coordinate systems.** Vector data is stored in longitude/latitude; there is no full PROJ.
 - **Editing depth.** No vertex editing of existing features yet, and no versioned or
   multi-user editing.
