@@ -179,14 +179,19 @@ pub const MAX_RESPONSE: usize = 8 << 20;
 /// HTTP only to this computer or the local network (Ollama, LM Studio).
 pub fn allowed_url(url: &str) -> bool {
     let url = url.trim();
-    if url.starts_with("https://") {
-        return true;
-    }
-    let Some(rest) = url.strip_prefix("http://") else { return false };
+    let (https, rest) = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
+        (Some(r), _) => (true, r),
+        (None, Some(r)) => (false, r),
+        _ => return false,
+    };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    // No credentials in the address: `http://localhost@evil.example` is not local.
-    if authority.contains('@') {
+    // No credentials in the address (they would be echoed in errors), and
+    // `http://localhost@evil.example` is not local.
+    if authority.is_empty() || authority.contains('@') {
         return false;
+    }
+    if https {
+        return true;
     }
     let host = if let Some(v6) = authority.strip_prefix('[') {
         v6.split(']').next().unwrap_or("")

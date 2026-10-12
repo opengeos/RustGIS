@@ -55,6 +55,8 @@ fn urls_allowed() {
     assert!(!allowed_url("http://172.40.0.2/v1"));
     assert!(!allowed_url("http://10.example.com/v1"));
     assert!(!allowed_url("file:///etc/passwd"));
+    assert!(!allowed_url("https://user:key@api.example.com/v1"));
+    assert!(!allowed_url("https://"));
     assert!(!allowed_url(""));
 }
 
@@ -428,4 +430,17 @@ fn always_allow_is_per_command_and_never_for_reserved_actions() {
     for n in [1, 2] {
         let _ = std::fs::remove_file(dir.join(format!("rustgis-assistant-test-{n}.geojson")));
     }
+}
+
+#[test]
+fn stopping_a_request_drops_its_message() {
+    let s = sample();
+    let mut a = Agent::new(cfg("openai"), &s);
+    let Step::Send(_) = a.ask("first", &s) else { panic!("expected a request") };
+    a.stop();
+    let Step::Send(req) = a.ask("second", &s) else { panic!("expected a request") };
+    let msgs = body(&req)["messages"].as_array().cloned().unwrap_or_default();
+    let users: Vec<&Value> = msgs.iter().filter(|m| m["role"] == "user").collect();
+    assert_eq!(users.len(), 1);
+    assert!(users[0]["content"].as_str().is_some_and(|t| t.starts_with("<map>") && t.ends_with("second")));
 }

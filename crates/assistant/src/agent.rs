@@ -237,7 +237,14 @@ impl Agent {
     pub fn stop(&mut self) {
         match std::mem::replace(&mut self.state, State::Idle) {
             State::Idle => return,
-            State::Waiting => {}
+            // The unanswered message is dropped: two user turns in a row are refused by some
+            // providers. The map context goes again with the next one.
+            State::Waiting => {
+                if matches!(self.turns.last(), Some(Turn::User(_))) {
+                    self.turns.pop();
+                    self.last_context.clear();
+                }
+            }
             State::Calls(q, mut results) => {
                 // Every call the model made gets a result, or the next request is malformed.
                 for c in q {

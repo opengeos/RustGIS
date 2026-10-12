@@ -165,8 +165,8 @@ pub fn run(s: &mut Session, call: &ToolCall) -> Result<String, String> {
     let a = &call.args;
     let v = match call.name.as_str() {
         "list_layers" => s.run("info.project", &Value::Null)?,
-        "search_commands" => search_commands(s, a),
-        "search_tools" => search_tools(a),
+        "search_commands" => search_commands(s, a)?,
+        "search_tools" => search_tools(a)?,
         "describe_tool" => describe_tool(a)?,
         "run_command" => {
             let id = str_arg(a, "command").ok_or("command is required")?;
@@ -244,20 +244,25 @@ fn score(words: &[String], fields: &[&str]) -> usize {
         .sum()
 }
 
-fn words(a: &Value) -> Vec<String> {
-    str_arg(a, "query")
+/// The query's words (plural `s` dropped), or an error when it has none.
+fn words(a: &Value) -> Result<Vec<String>, String> {
+    let words: Vec<String> = str_arg(a, "query")
         .unwrap_or_default()
         .to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
+        .map(|w| if w.len() > 3 { w.trim_end_matches('s') } else { w })
         .filter(|w| w.len() > 1)
-        .map(|w| w.trim_end_matches('s').to_string())
-        .filter(|w| !w.is_empty())
+        .map(str::to_string)
         .take(12)
-        .collect()
+        .collect();
+    if words.is_empty() {
+        return Err("query needs at least one word of two or more letters, e.g. \"basemap\"".into());
+    }
+    Ok(words)
 }
 
-fn search_commands(s: &Session, a: &Value) -> Value {
-    let words = words(a);
+fn search_commands(s: &Session, a: &Value) -> Result<Value, String> {
+    let words = words(a)?;
     let limit = limit_arg(a, 12, 40);
     let mut hits: Vec<(usize, Value)> = s
         .registry
@@ -269,18 +274,18 @@ fn search_commands(s: &Session, a: &Value) -> Value {
             let (id, label, loc, params) =
                 (c.id.to_lowercase(), c.label.to_lowercase(), c.location.to_lowercase(), c.params.to_lowercase());
             let sc = score(&words, &[&id, &label, &loc, &params]);
-            (sc > 0 || words.is_empty()).then(|| {
+            (sc > 0).then(|| {
                 (sc, json!({"id": c.id, "label": c.label, "location": c.location, "params": c.params, "changesProject": c.mutates}))
             })
         })
         .collect();
     hits.sort_by_key(|h| std::cmp::Reverse(h.0));
     let total = hits.len();
-    json!({"matches": total, "commands": hits.into_iter().take(limit).map(|h| h.1).collect::<Vec<_>>()})
+    Ok(json!({"matches": total, "commands": hits.into_iter().take(limit).map(|h| h.1).collect::<Vec<_>>()}))
 }
 
-fn search_tools(a: &Value) -> Value {
-    let words = words(a);
+fn search_tools(a: &Value) -> Result<Value, String> {
+    let words = words(a)?;
     let limit = limit_arg(a, 12, 40);
     let mut hits: Vec<(usize, Value)> = analysis::tools()
         .filter_map(|t| {
@@ -291,7 +296,7 @@ fn search_tools(a: &Value) -> Value {
         .collect();
     hits.sort_by_key(|h| std::cmp::Reverse(h.0));
     let total = hits.len();
-    json!({"matches": total, "tools": hits.into_iter().take(limit).map(|h| h.1).collect::<Vec<_>>()})
+    Ok(json!({"matches": total, "tools": hits.into_iter().take(limit).map(|h| h.1).collect::<Vec<_>>()}))
 }
 
 fn describe_tool(a: &Value) -> Result<Value, String> {

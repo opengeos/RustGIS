@@ -43,5 +43,7 @@ pub fn send(req: &HttpRequest) -> Result<HttpResponse, String> {
 /// The scheme and host of a URL (errors never repeat a path that might carry a key).
 fn host(url: &str) -> String {
     let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
-    format!("{scheme}://{}", rest.split(['/', '?', '#']).next().unwrap_or(""))
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Never the user name or password.
+    format!("{scheme}://{}", authority.rsplit('@').next().unwrap_or(""))
 }

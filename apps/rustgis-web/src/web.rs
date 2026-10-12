@@ -151,10 +151,16 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// Makes an HTTP request (the AI assistant's calls to its model), returning the response of any
 /// status.
 async fn http(req: rustgis_ui_egui::rustgis_assistant::HttpRequest) -> Result<rustgis_ui_egui::rustgis_assistant::HttpResponse, String> {
+    use rustgis_ui_egui::rustgis_assistant::provider::{MAX_RESPONSE, allowed_url};
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    if !allowed_url(&req.url) {
+        return Err(format!("{}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed", req.url));
+    }
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
     init.set_method(req.method);
+    // The API key is never carried on to another address.
+    init.set_redirect(web_sys::RequestRedirect::Error);
     let headers = web_sys::Headers::new().map_err(err)?;
     for (k, v) in &req.headers {
         headers.set(k, v).map_err(err)?;
@@ -170,9 +176,15 @@ async fn http(req: rustgis_ui_egui::rustgis_assistant::HttpRequest) -> Result<ru
         .dyn_into()
         .map_err(err)?;
     let status = resp.status();
+    // Too large by its header: refused before it is read.
+    if let Ok(Some(len)) = resp.headers().get("content-length").map(|v| v.and_then(|s| s.parse::<u64>().ok()))
+        && len > MAX_RESPONSE as u64
+    {
+        return Err(format!("{len} bytes is too large"));
+    }
     let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(err)?).await.map_err(err)?;
     let bytes = js_sys::Uint8Array::new(&buf);
-    if bytes.length() as usize > rustgis_ui_egui::rustgis_assistant::provider::MAX_RESPONSE {
+    if bytes.length() as usize > MAX_RESPONSE {
         return Err(format!("{} bytes is too large", bytes.length()));
     }
     Ok(rustgis_ui_egui::rustgis_assistant::HttpResponse { status, body: bytes.to_vec() })
