@@ -14,7 +14,8 @@ use std::process::Command;
 /// File types read through GDAL. A File Geodatabase is a folder ending in `.gdb`.
 /// (Not `.vrt`, which can point GDAL at any file on the machine, nor `.sqlite`, more often a plain
 /// database than a spatial one.)
-pub const EXTENSIONS: &[&str] = &["kml", "kmz", "gpx", "gml", "dxf", "gdb", "tab", "mif", "osm", "pbf", "geojsonl", "geojsons", "gmt"];
+// KML, KMZ and GPX have built-in readers (`kml`, `gpx`), in the browser too.
+pub const EXTENSIONS: &[&str] = &["gml", "dxf", "gdb", "tab", "mif", "osm", "pbf", "geojsonl", "geojsons", "gmt"];
 
 /// Most layers converted from one file.
 const MAX_LAYERS: usize = 64;
@@ -310,7 +311,7 @@ mod tests {
 
     #[test]
     fn names() {
-        assert!(is_gdal_name("a.KML") && is_gdal_name("/x/roads.gdb/") && is_gdal_name("t.gpx"));
+        assert!(is_gdal_name("a.GML") && is_gdal_name("/x/roads.gdb/") && !is_gdal_name("t.gpx"));
         assert!(!is_gdal_name("a.geojson") && !is_gdal_name("a.fgb") && !is_gdal_name("noext"));
         // A layer named like an option never reaches GDAL.
         let e = convert_one_in(&std::env::temp_dir(), Path::new("x.kml"), "-overwrite", None, None, true).unwrap_err();

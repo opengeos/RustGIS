@@ -289,34 +289,52 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::source::duckdb::is_duckdb_name(path) {
         return add_duckdb(s, p, path);
     }
-    if path.to_ascii_lowercase().ends_with(".zip") {
+    if rustgis_data::io::is_multi_layer_name(path) {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
         if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
             return Err(format!("{path} is too large to open"));
         }
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        return add_zip(s, p, path, &bytes);
+        let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
+        return add_layers(s, p, &full, &bytes);
     }
     let read = rustgis_data::io::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
     add_read(s, p, read)
 }
 
-/// Adds the layers of a zip archive: each Shapefile in it, and its other vector files. A name
-/// given applies to the first.
-pub(crate) fn add_zip(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8]) -> CmdResult {
-    let reads = rustgis_data::io::read_zip(file_name, bytes).map_err(|e| e.to_string())?;
+/// Adds every layer of a file that holds several: the Shapefiles (and other files) of a zip, a KML
+/// or KMZ's points, lines and polygons drawn in its styles, a GPX's waypoints, routes, tracks and
+/// track points. `"layer"` picks one by name; a name given applies to the first.
+pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8]) -> CmdResult {
+    let mut reads = rustgis_data::io::read_layers(file_name, bytes).map_err(|e| e.to_string())?;
+    if let Some(want) = ps(p, "layer").map(str::trim).filter(|t| !t.is_empty()) {
+        let names: Vec<String> = reads.iter().map(|r| r.dataset.name.clone()).collect();
+        // By its full name or its last word ("tracks" for "walk tracks").
+        let pick = |n: &str| n.eq_ignore_ascii_case(want) || n.rsplit(' ').next().is_some_and(|w| w.eq_ignore_ascii_case(want));
+        reads.retain(|r| pick(&r.dataset.name));
+        if reads.is_empty() {
+            return Err(format!("{file_name}: no layer '{want}' (layers: {})", names.join(", ")));
+        }
+    }
     let mut added = Vec::new();
     let mut failed = Vec::new();
     let mut q = p.clone();
     for read in reads {
-        let name = read.0.name.clone();
-        // A layer that can't be added is skipped and said; the others are still added.
-        match add_read(s, &q, read) {
-            Ok(r) => added.push(r),
+        let name = read.dataset.name.clone();
+        let styles = read.styles;
+        // A layer that can't be added is skipped and said; the others are still added. A name
+        // given goes to the first layer actually added.
+        match add_read(s, &q, (read.dataset, read.report)) {
+            Ok(r) => {
+                if let Some(id) = r.get("layer").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok()) {
+                    apply_styles(s, id, &styles);
+                }
+                added.push(r);
+                if let Some(o) = q.as_object_mut() {
+                    o.remove("name");
+                }
+            }
             Err(e) => failed.push(format!("{name}: {e}")),
-        }
-        if let Some(o) = q.as_object_mut() {
-            o.remove("name");
         }
     }
     if added.is_empty() {
@@ -334,6 +352,67 @@ pub(crate) fn add_zip(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8])
         out["layer"] = first.clone();
     }
     Ok(out)
+}
+
+/// Draws a layer in the styles its file declares (KML): unique values of its `style` field, each
+/// style's colours and widths, the layer's default symbol for anything a style leaves unset.
+fn apply_styles(s: &mut Session, id: u32, styles: &[(String, rustgis_data::kml::Style)]) {
+    use rustgis_map::Symbol;
+    // A legend of hundreds of styles helps no one; such files keep the default symbol.
+    if styles.is_empty() || styles.len() > 64 {
+        return;
+    }
+    let Some(layer) = s.map_mut().layer_mut(id) else { return };
+    let g = layer.dataset.geometry_type;
+    let base = match &layer.renderer {
+        Renderer::Single(sym) => *sym,
+        _ => Symbol::default_for(g, id),
+    };
+    let rgba = |c: [u8; 4]| Rgba::new(c[0], c[1], c[2], c[3]);
+    let classes = styles
+        .iter()
+        .map(|(name, st)| {
+            let mut sym = base;
+            match g {
+                GeometryType::Point => {
+                    if let Some(c) = st.icon {
+                        sym.fill = rgba(c);
+                    }
+                    if let Some(k) = st.scale {
+                        sym.size = (base.size * k).clamp(2.0, 40.0);
+                    }
+                }
+                GeometryType::Polyline => {
+                    if let Some(c) = st.stroke {
+                        sym.stroke = rgba(c);
+                        sym.fill = rgba(c);
+                    }
+                    if let Some(w) = st.width {
+                        sym.stroke_width = w.clamp(0.3, 20.0);
+                    }
+                }
+                _ => {
+                    if let Some(c) = st.fill {
+                        sym.fill = rgba(c);
+                    }
+                    if !st.filled {
+                        sym.fill = Rgba::TRANSPARENT;
+                    }
+                    if let Some(c) = st.stroke {
+                        sym.stroke = rgba(c);
+                    }
+                    if let Some(w) = st.width {
+                        sym.stroke_width = w.clamp(0.0, 20.0);
+                    }
+                    if !st.outlined {
+                        sym.stroke = Rgba::TRANSPARENT;
+                    }
+                }
+            }
+            (name.clone(), sym)
+        })
+        .collect();
+    layer.renderer = Renderer::Unique { field: "style".into(), classes, other: base, ramp: Default::default() };
 }
 
 /// The layers a file holds, without adding them: a GeoPackage's feature tables, a GDAL dataset's
@@ -358,6 +437,11 @@ fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
     }
     if !Path::new(path).is_file() {
         return Err(format!("{path}: no such file"));
+    }
+    if rustgis_data::io::is_multi_layer_name(path) {
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let layers: Vec<String> = rustgis_data::io::read_layers(path, &bytes).map_err(err)?.into_iter().map(|l| l.dataset.name).collect();
+        return Ok(json!({"count": layers.len(), "layers": layers}));
     }
     let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if !rustgis_data::io::READ_EXTENSIONS.contains(&ext.as_str()) && !rustgis_data::raster::is_raster_name(path) {

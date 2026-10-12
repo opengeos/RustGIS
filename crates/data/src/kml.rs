@@ -1,0 +1,497 @@
+//! KML and KMZ: placemarks with their names, descriptions, extended data, folders and styles.
+//!
+//! A document becomes one layer per kind of geometry it holds (points, lines, polygons). Each
+//! feature keeps its folder path and the id of its style; the styles (line and fill colours,
+//! widths, icon colours) are returned beside the layer so the map can draw them. Ground overlays
+//! (georeferenced images) are counted in a note, not drawn.
+//!
+//! The file is hostile: no DTD is read (so no entity expansion), the node count is capped, nesting
+//! is bounded, and a malformed placemark is skipped and counted.
+
+use std::collections::HashMap;
+
+use roxmltree::{Document, Node, ParsingOptions};
+use rustgis_geom::Coord;
+
+use crate::{DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
+
+/// Most XML nodes parsed from one document.
+const MAX_NODES: u32 = 50_000_000;
+/// Deepest nesting of folders and multi-geometries followed.
+const MAX_DEPTH: usize = 64;
+
+/// How a KML style draws: colours as RGBA.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Style {
+    /// The line (and polygon outline) colour.
+    pub stroke: Option<[u8; 4]>,
+    pub width: Option<f32>,
+    /// The polygon fill; `None` when the style says not to fill.
+    pub fill: Option<[u8; 4]>,
+    /// Whether polygons are filled (`<fill>0</fill>` turns it off).
+    pub filled: bool,
+    /// Whether polygons are outlined (`<outline>0</outline>` turns it off).
+    pub outlined: bool,
+    /// The point icon's colour tint.
+    pub icon: Option<[u8; 4]>,
+    pub scale: Option<f32>,
+}
+
+/// A layer read from a KML document: its features, what was skipped, and the styles its features'
+/// `style` field names.
+pub struct Layer {
+    pub dataset: Dataset,
+    pub report: ReadReport,
+    pub styles: Vec<(String, Style)>,
+}
+
+/// Reads a KML document, or the main document of a KMZ (`doc.kml`, else the first `.kml` in it).
+pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<Layer>> {
+    let path = std::path::Path::new(file_name);
+    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("layer").to_string();
+    let is_kmz =
+        path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("kmz")) || bytes.starts_with(b"PK\x03\x04");
+    let owned;
+    let text_bytes: &[u8] = if is_kmz {
+        let mut entries = crate::zip::read_matching(bytes, |n| n.to_ascii_lowercase().ends_with(".kml"))
+            .map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
+        // doc.kml by convention, else the shallowest .kml.
+        entries.sort_by_key(|(n, _)| (!n.eq_ignore_ascii_case("doc.kml"), n.matches('/').count(), n.clone()));
+        owned = entries
+            .into_iter()
+            .next()
+            .map(|(_, b)| b)
+            .ok_or_else(|| DataError::Format(format!("{file_name}: no .kml document in the archive")))?;
+        &owned
+    } else {
+        bytes
+    };
+    let text = std::str::from_utf8(text_bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")))?;
+    let text = text.trim_start_matches('\u{feff}');
+    let opts = ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..ParsingOptions::default() };
+    let doc = Document::parse_with_options(text, opts).map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
+    let mut r = Reader {
+        styles: HashMap::new(),
+        maps: HashMap::new(),
+        inline: Vec::new(),
+        rows: Vec::new(),
+        keys: Vec::new(),
+        skipped: 0,
+        overlays: 0,
+    };
+    r.collect_styles(doc.root());
+    r.walk(doc.root(), &mut Vec::new(), 0);
+    Ok(r.layers(&name))
+}
+
+/// One placemark, before it's put in a layer.
+struct Row {
+    geometry: Geometry,
+    name: Option<String>,
+    description: Option<String>,
+    folder: String,
+    style: Option<String>,
+    data: Vec<(String, String)>,
+}
+
+struct Reader {
+    styles: HashMap<String, Style>,
+    /// StyleMap id → the style its "normal" pair names.
+    maps: HashMap<String, String>,
+    /// Inline styles, given ids `inline-1`, `inline-2`… (equal ones share one).
+    inline: Vec<Style>,
+    rows: Vec<Row>,
+    /// Extended data keys, in the order first seen.
+    keys: Vec<String>,
+    skipped: usize,
+    overlays: usize,
+}
+
+fn local<'a>(n: &Node<'a, '_>) -> &'a str {
+    n.tag_name().name()
+}
+
+fn child<'a, 'i>(n: &Node<'a, 'i>, name: &str) -> Option<Node<'a, 'i>> {
+    n.children().find(|c| c.is_element() && local(c) == name)
+}
+
+/// The text of an element (its text and CDATA children joined), trimmed.
+fn text_of(n: &Node) -> String {
+    n.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect::<String>().trim().to_string()
+}
+
+fn child_text(n: &Node, name: &str) -> Option<String> {
+    child(n, name).map(|c| text_of(&c)).filter(|t| !t.is_empty())
+}
+
+/// A KML colour, `aabbggrr` in hex, as RGBA.
+fn color(s: &str) -> Option<[u8; 4]> {
+    let s = s.trim().trim_start_matches('#');
+    let v = u32::from_str_radix(s.get(..8)?, 16).ok()?;
+    let [a, b, g, r] = v.to_be_bytes();
+    Some([r, g, b, a])
+}
+
+fn style_of(n: &Node) -> Style {
+    let mut s = Style { filled: true, outlined: true, ..Style::default() };
+    if let Some(l) = child(n, "LineStyle") {
+        s.stroke = child_text(&l, "color").and_then(|c| color(&c));
+        s.width = child_text(&l, "width").and_then(|w| w.parse::<f32>().ok()).filter(|w| w.is_finite()).map(|w| w.clamp(0.0, 50.0));
+    }
+    if let Some(p) = child(n, "PolyStyle") {
+        s.fill = child_text(&p, "color").and_then(|c| color(&c));
+        s.filled = child_text(&p, "fill").is_none_or(|f| f != "0");
+        s.outlined = child_text(&p, "outline").is_none_or(|f| f != "0");
+    }
+    if let Some(i) = child(n, "IconStyle") {
+        s.icon = child_text(&i, "color").and_then(|c| color(&c));
+        s.scale = child_text(&i, "scale").and_then(|w| w.parse::<f32>().ok()).filter(|w| w.is_finite()).map(|w| w.clamp(0.1, 10.0));
+    }
+    s
+}
+
+/// Coordinates: `lon,lat[,alt]` tuples separated by white space; malformed ones are dropped.
+fn coords(s: &str) -> Vec<Coord> {
+    s.split_whitespace()
+        .filter_map(|t| {
+            let mut it = t.split(',');
+            let x = it.next()?.trim().parse::<f64>().ok()?;
+            let y = it.next()?.trim().parse::<f64>().ok()?;
+            (x.is_finite() && y.is_finite()).then(|| Coord::new(x, y))
+        })
+        .collect()
+}
+
+/// The parts of a geometry element: (points, lines, polygons), MultiGeometry flattened.
+#[derive(Default)]
+struct Parts {
+    points: Vec<Coord>,
+    lines: Vec<Vec<Coord>>,
+    polygons: Vec<Vec<Vec<Coord>>>,
+}
+
+fn geometry(n: &Node, out: &mut Parts, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    match local(n) {
+        "Point" => out.points.extend(child_text(n, "coordinates").map(|c| coords(&c)).unwrap_or_default().into_iter().take(1)),
+        "LineString" | "LinearRing" => {
+            let c = child_text(n, "coordinates").map(|c| coords(&c)).unwrap_or_default();
+            if c.len() >= 2 {
+                out.lines.push(c);
+            }
+        }
+        "Polygon" => {
+            let ring =
+                |b: Node| child(&b, "LinearRing").and_then(|r| child_text(&r, "coordinates")).map(|c| coords(&c)).filter(|c| c.len() >= 3);
+            if let Some(outer) = child(n, "outerBoundaryIs").and_then(ring) {
+                let mut rings = vec![outer];
+                rings.extend(n.children().filter(|c| c.is_element() && local(c) == "innerBoundaryIs").filter_map(ring));
+                out.polygons.push(rings);
+            }
+        }
+        // A track: gx:coord elements of "lon lat alt".
+        "Track" => {
+            let c: Vec<Coord> = n
+                .children()
+                .filter(|c| c.is_element() && local(c) == "coord")
+                .filter_map(|c| {
+                    let t = text_of(&c);
+                    let mut it = t.split_whitespace();
+                    let x = it.next()?.parse::<f64>().ok()?;
+                    let y = it.next()?.parse::<f64>().ok()?;
+                    (x.is_finite() && y.is_finite()).then(|| Coord::new(x, y))
+                })
+                .collect();
+            if c.len() >= 2 {
+                out.lines.push(c);
+            }
+        }
+        "MultiGeometry" | "MultiTrack" => {
+            for c in n.children().filter(|c| c.is_element()) {
+                geometry(&c, out, depth + 1);
+            }
+        }
+        _ => {}
+    }
+}
+
+impl Reader {
+    /// Styles and style maps anywhere in the document, by id.
+    fn collect_styles(&mut self, root: Node) {
+        for n in root.descendants().filter(|n| n.is_element()) {
+            let Some(id) = n.attribute("id") else { continue };
+            match local(&n) {
+                "Style" => {
+                    self.styles.insert(id.to_string(), style_of(&n));
+                }
+                "StyleMap" => {
+                    let normal = n
+                        .children()
+                        .filter(|p| p.is_element() && local(p) == "Pair")
+                        .find(|p| child_text(p, "key").as_deref() == Some("normal"));
+                    if let Some(url) = normal.and_then(|p| child_text(&p, "styleUrl")) {
+                        self.maps.insert(id.to_string(), url.trim_start_matches('#').to_string());
+                    } else if let Some(s) = normal.and_then(|p| child(&p, "Style")) {
+                        let key = format!("{id}-normal");
+                        self.styles.insert(key.clone(), style_of(&s));
+                        self.maps.insert(id.to_string(), key);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The style id a placemark draws with: its inline style, else its styleUrl (through a style
+    /// map). Only ids defined in this document count.
+    fn style_for(&mut self, pm: &Node) -> Option<String> {
+        if let Some(s) = child(pm, "Style") {
+            let s = style_of(&s);
+            let i = match self.inline.iter().position(|x| *x == s) {
+                Some(i) => i,
+                None => {
+                    self.inline.push(s);
+                    self.inline.len() - 1
+                }
+            };
+            let id = format!("inline-{}", i + 1);
+            self.styles.insert(id.clone(), s);
+            return Some(id);
+        }
+        let url = child_text(pm, "styleUrl")?;
+        // Only references within the document (`#id`).
+        let id = url.rsplit_once('#').map(|(_, id)| id).unwrap_or(&url).to_string();
+        let mut id = id;
+        // A style map points to a style (bounded, in case maps point at each other).
+        for _ in 0..4 {
+            match self.maps.get(&id) {
+                Some(next) => id = next.clone(),
+                None => break,
+            }
+        }
+        self.styles.contains_key(&id).then_some(id)
+    }
+
+    fn walk(&mut self, n: Node, folders: &mut Vec<String>, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        for c in n.children().filter(|c| c.is_element()) {
+            match local(&c) {
+                "Folder" | "Document" => {
+                    let named = local(&c) == "Folder";
+                    if named {
+                        folders.push(child_text(&c, "name").unwrap_or_default());
+                    }
+                    self.walk(c, folders, depth + 1);
+                    if named {
+                        folders.pop();
+                    }
+                }
+                "Placemark" => self.placemark(&c, folders),
+                "GroundOverlay" => self.overlays += 1,
+                "kml" => self.walk(c, folders, depth + 1),
+                _ => {}
+            }
+        }
+    }
+
+    fn placemark(&mut self, pm: &Node, folders: &[String]) {
+        let mut parts = Parts::default();
+        for g in pm.children().filter(|c| c.is_element()) {
+            geometry(&g, &mut parts, 0);
+        }
+        let mut data = Vec::new();
+        if let Some(ext) = child(pm, "ExtendedData") {
+            for d in ext.descendants().filter(|d| d.is_element()) {
+                let pair = match local(&d) {
+                    "Data" => d.attribute("name").map(|k| (k.to_string(), child_text(&d, "value").unwrap_or_default())),
+                    "SimpleData" => d.attribute("name").map(|k| (k.to_string(), text_of(&d))),
+                    _ => None,
+                };
+                if let Some((k, v)) = pair.filter(|(k, _)| !k.trim().is_empty()) {
+                    if !self.keys.contains(&k) {
+                        self.keys.push(k.clone());
+                    }
+                    data.push((k, v));
+                }
+            }
+        }
+        let style = self.style_for(pm);
+        let folder = folders.iter().filter(|f| !f.is_empty()).cloned().collect::<Vec<_>>().join(" / ");
+        let name = child_text(pm, "name");
+        let description = child_text(pm, "description");
+        // A placemark mixing kinds (a MultiGeometry of a point and a line) gives one feature per
+        // kind, each in its layer.
+        let mut any = false;
+        let mut push = |geometry: Geometry, rows: &mut Vec<Row>| {
+            any = true;
+            rows.push(Row {
+                geometry,
+                name: name.clone(),
+                description: description.clone(),
+                folder: folder.clone(),
+                style: style.clone(),
+                data: data.clone(),
+            });
+        };
+        match parts.points.len() {
+            0 => {}
+            1 => push(Geometry::Point(parts.points[0]), &mut self.rows),
+            _ => push(Geometry::MultiPoint(parts.points), &mut self.rows),
+        }
+        if !parts.lines.is_empty() {
+            push(Geometry::Line(parts.lines), &mut self.rows);
+        }
+        if !parts.polygons.is_empty() {
+            push(Geometry::Polygon(parts.polygons), &mut self.rows);
+        }
+        if !any {
+            self.skipped += 1;
+        }
+    }
+
+    /// The layers: one per kind of geometry, in points, lines, polygons order.
+    fn layers(self, name: &str) -> Vec<Layer> {
+        let kinds = [(GeometryType::Point, "points"), (GeometryType::Polyline, "lines"), (GeometryType::Polygon, "polygons")];
+        let present: Vec<_> = kinds.iter().filter(|(k, _)| self.rows.iter().any(|r| r.geometry.kind() == *k)).collect();
+        let mut fields = vec![
+            Field::new("name", FieldType::Text),
+            Field::new("description", FieldType::Text),
+            Field::new("folder", FieldType::Text),
+            Field::new("style", FieldType::Text),
+        ];
+        // Extended data keys that don't clash with those.
+        let keys: Vec<String> = self.keys.iter().filter(|k| !fields.iter().any(|f| f.name.eq_ignore_ascii_case(k))).cloned().collect();
+        fields.extend(keys.iter().map(|k| Field::new(k.clone(), FieldType::Text)));
+        let mut out = Vec::new();
+        for (i, (kind, label)) in present.iter().enumerate() {
+            let title = if present.len() == 1 { name.to_string() } else { format!("{name} {label}") };
+            let mut ds = Dataset::new(title, *kind, fields.clone());
+            let mut used: Vec<String> = Vec::new();
+            for r in self.rows.iter().filter(|r| r.geometry.kind() == *kind) {
+                let mut attrs = vec![
+                    r.name.clone().map(Value::Text).unwrap_or_default(),
+                    r.description.clone().map(Value::Text).unwrap_or_default(),
+                    if r.folder.is_empty() { Value::Null } else { Value::Text(r.folder.clone()) },
+                    r.style.clone().map(Value::Text).unwrap_or_default(),
+                ];
+                attrs.extend(
+                    keys.iter().map(|k| r.data.iter().find(|(dk, _)| dk == k).map(|(_, v)| Value::Text(v.clone())).unwrap_or_default()),
+                );
+                if let Some(s) = &r.style
+                    && !used.contains(s)
+                {
+                    used.push(s.clone());
+                }
+                ds.push_next(Some(r.geometry.clone()), attrs);
+            }
+            crate::io::type_text_columns(&mut ds);
+            let mut report = ReadReport::default();
+            // The notes go with the first layer only.
+            if i == 0 {
+                report.skipped = self.skipped;
+                if self.skipped > 0 {
+                    report.messages.push(format!("{name}: {} placemarks without a geometry RustGIS draws were skipped", self.skipped));
+                }
+                if self.overlays > 0 {
+                    report.messages.push(format!("{name}: {} ground overlays (images) aren't shown", self.overlays));
+                }
+            }
+            let styles = used.into_iter().filter_map(|id| self.styles.get(&id).map(|s| (id, *s))).collect();
+            out.push(Layer { dataset: ds, report, styles });
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DOC: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">
+<Document><name>Trip</name>
+  <Style id="red"><LineStyle><color>ff0000ff</color><width>3</width></LineStyle><PolyStyle><color>7f00ff00</color><outline>0</outline></PolyStyle></Style>
+  <Style id="pin-n"><IconStyle><color>ffff0000</color><scale>1.5</scale></IconStyle></Style>
+  <StyleMap id="pin"><Pair><key>normal</key><styleUrl>#pin-n</styleUrl></Pair><Pair><key>highlight</key><styleUrl>#red</styleUrl></Pair></StyleMap>
+  <Folder><name>Day 1</name>
+    <Placemark><name>Start &amp; end</name><styleUrl>#pin</styleUrl><description><![CDATA[<b>Café</b>]]></description>
+      <ExtendedData><Data name="rating"><value>5</value></Data><SchemaData><SimpleData name="kind">cafe</SimpleData></SchemaData></ExtendedData>
+      <Point><coordinates>2.35,48.85,30</coordinates></Point></Placemark>
+    <Folder><name>Walk</name>
+      <Placemark><name>Route</name><styleUrl>#red</styleUrl><LineString><coordinates>2.35,48.85 2.36,48.86
+        2.37,48.87</coordinates></LineString></Placemark>
+    </Folder>
+  </Folder>
+  <Placemark><name>Park</name><Style><PolyStyle><color>ff00aa00</color></PolyStyle></Style>
+    <MultiGeometry><Polygon><outerBoundaryIs><LinearRing><coordinates>0,0 1,0 1,1 0,0</coordinates></LinearRing></outerBoundaryIs>
+      <innerBoundaryIs><LinearRing><coordinates>0.1,0.1 0.2,0.1 0.2,0.2 0.1,0.1</coordinates></LinearRing></innerBoundaryIs></Polygon>
+      <Point><coordinates>0.5,0.5</coordinates></Point></MultiGeometry></Placemark>
+  <Placemark><name>Track</name><gx:Track><when>2020-01-01T00:00:00Z</when><gx:coord>1 2 3</gx:coord><gx:coord>1.1 2.1 3</gx:coord></gx:Track></Placemark>
+  <Placemark><name>Nothing</name></Placemark>
+  <GroundOverlay><Icon><href>map.png</href></Icon></GroundOverlay>
+</Document></kml>"##;
+
+    #[test]
+    fn reads_placemarks_folders_data_and_styles() {
+        let layers = read("trip.kml", DOC.as_bytes()).unwrap();
+        let names: Vec<&str> = layers.iter().map(|l| l.dataset.name.as_str()).collect();
+        assert_eq!(names, ["trip points", "trip lines", "trip polygons"]);
+        let pts = &layers[0];
+        let ds = &pts.dataset;
+        assert_eq!(ds.features.len(), 2, "the start and the park's point");
+        let f = |n: &str| ds.field_index(n).unwrap();
+        assert_eq!(ds.value(0, f("name")), &Value::Text("Start & end".into()));
+        assert_eq!(ds.value(0, f("description")), &Value::Text("<b>Café</b>".into()));
+        assert_eq!(ds.value(0, f("folder")), &Value::Text("Day 1".into()));
+        assert_eq!(ds.value(0, f("rating")), &Value::Int(5), "a whole-number column is typed");
+        assert_eq!(ds.value(0, f("kind")), &Value::Text("cafe".into()));
+        // The style map resolves to its normal style.
+        assert_eq!(ds.value(0, f("style")), &Value::Text("pin-n".into()));
+        let pin = pts.styles.iter().find(|(id, _)| id == "pin-n").unwrap().1;
+        assert_eq!(pin.icon, Some([0, 0, 255, 255]));
+        assert_eq!(pin.scale, Some(1.5));
+        assert_eq!(pts.report.skipped, 1);
+        assert!(pts.report.messages.iter().any(|m| m.contains("ground overlays")));
+
+        let lines = &layers[1].dataset;
+        assert_eq!(lines.features.len(), 2, "the route and the track");
+        assert_eq!(lines.value(0, lines.field_index("folder").unwrap()), &Value::Text("Day 1 / Walk".into()));
+        let red = layers[1].styles.iter().find(|(id, _)| id == "red").unwrap().1;
+        assert_eq!((red.stroke, red.width), (Some([255, 0, 0, 255]), Some(3.0)));
+        assert!(matches!(&lines.features[1].geometry, Some(Geometry::Line(p)) if p[0].len() == 2));
+
+        let polys = &layers[2];
+        assert!(matches!(&polys.dataset.features[0].geometry, Some(Geometry::Polygon(p)) if p[0].len() == 2));
+        let style = polys.dataset.value(0, polys.dataset.field_index("style").unwrap()).to_string();
+        assert_eq!(style, "inline-1");
+        assert_eq!(polys.styles[0].1.fill, Some([0, 170, 0, 255]));
+    }
+
+    #[test]
+    fn kmz_and_hostile_input() {
+        let kmz = crate::zip::write(&[("files/x.png".into(), vec![1, 2]), ("doc.kml".into(), DOC.as_bytes().to_vec())]).unwrap();
+        assert_eq!(read("trip.kmz", &kmz).unwrap().len(), 3);
+        // An entity bomb's DTD is refused.
+        let bomb = r#"<?xml version="1.0"?><!DOCTYPE kml [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;">]><kml><Document><name>&b;</name></Document></kml>"#;
+        assert!(read("b.kml", bomb.as_bytes()).is_err());
+        assert!(read("x.kml", b"<kml><Placemark>").is_err());
+        assert!(read("x.kml", &[0xff, 0xfe, 0x00]).is_err());
+        assert!(read("x.kmz", b"PK\x03\x04junk").is_err());
+        // Deep nesting is bounded, not followed to a stack overflow.
+        let deep = format!(
+            "<kml>{}<Placemark><Point><coordinates>1,2</coordinates></Point></Placemark>{}</kml>",
+            "<Folder>".repeat(500),
+            "</Folder>".repeat(500)
+        );
+        let _ = read("deep.kml", deep.as_bytes());
+        for n in (0..DOC.len()).step_by(53) {
+            let _ = read("t.kml", &DOC.as_bytes()[..n]);
+        }
+        // An empty document has no layers.
+        assert!(read("e.kml", b"<kml><Document/></kml>").unwrap().is_empty());
+    }
+}

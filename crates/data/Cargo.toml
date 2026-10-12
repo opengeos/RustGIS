@@ -19,6 +19,7 @@ tiff = { workspace = true }
 proj4rs = { workspace = true }
 crs-definitions = { workspace = true }
 miniz_oxide = { workspace = true }
+roxmltree = { workspace = true }
 parquet = { workspace = true }
 bytes = { workspace = true }
 flatgeobuf = { workspace = true }

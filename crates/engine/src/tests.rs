@@ -2394,7 +2394,7 @@ fn any_command_editing_a_streamed_layer_is_undone() {
     let _ = std::fs::remove_file(path);
 }
 
-/// A GPX through GDAL, when it is installed (skipped otherwise).
+/// A GDAL-only format (GeoJSON sequence), when GDAL is installed (skipped otherwise).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn gdal_formats_open_when_gdal_is_installed() {
@@ -2403,6 +2403,64 @@ fn gdal_formats_open_when_gdal_is_installed() {
     }
     let dir = std::env::temp_dir().join(format!("rustgis-engine-gdal-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    let seq = dir.join("walk.geojsonl");
+    std::fs::write(
+        &seq,
+        "{\"type\":\"Feature\",\"properties\":{\"name\":\"start\"},\"geometry\":{\"type\":\"Point\",\"coordinates\":[7,45]}}\n{\"type\":\"Feature\",\"properties\":{\"name\":\"end\"},\"geometry\":{\"type\":\"Point\",\"coordinates\":[7.1,45.1]}}\n",
+    )
+    .unwrap();
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": seq.display().to_string()})).unwrap();
+    let l = s.map().layers.iter().find(|l| l.dataset.features.len() == 2).unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(l.dataset.source.as_deref(), Some(std::path::absolute(&seq).unwrap().display().to_string().as_str()));
+    // Streamed, the layer remembers the original file.
+    let r = s.run("layer.addData", &json!({"path": seq.display().to_string(), "stream": true})).unwrap();
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).unwrap().source.as_ref().unwrap().gdal.is_some());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// KML (with its styles), KMZ and GPX through the built-in readers: files on disk and uploads.
+#[test]
+fn kml_and_gpx_add_as_layers() {
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-kml-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let kml = r##"<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+<Style id="red"><LineStyle><color>ff0000ff</color><width>4</width></LineStyle></Style>
+<Style id="blue"><LineStyle><color>ffff0000</color></LineStyle></Style>
+<Placemark><name>a</name><styleUrl>#red</styleUrl><LineString><coordinates>7,45 8,46</coordinates></LineString></Placemark>
+<Placemark><name>b</name><styleUrl>#blue</styleUrl><LineString><coordinates>7,46 8,45</coordinates></LineString></Placemark>
+<Placemark><name>p</name><Point><coordinates>7.5,45.5</coordinates></Point></Placemark>
+</Document></kml>"##;
+    let path = dir.join("roads.kml");
+    std::fs::write(&path, kml).unwrap();
+    let mut s = Session::new(Project::default());
+    let listed = s.run("info.fileLayers", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!(listed["layers"], json!(["roads points", "roads lines"]));
+    let r = s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!(r["layers"].as_array().map(Vec::len), Some(2), "{r}");
+    let lines = s.map().layer_by_name("roads lines").unwrap();
+    match &lines.renderer {
+        rustgis_map::Renderer::Unique { field, classes, .. } => {
+            assert_eq!(field, "style");
+            let red = classes.iter().find(|(k, _)| k == "red").unwrap().1;
+            assert_eq!((red.stroke, red.stroke_width), (rustgis_map::Rgba::new(255, 0, 0, 255), 4.0));
+        }
+        other => panic!("{other:?}"),
+    }
+    // One layer by name.
+    let one = s.run("layer.addData", &json!({"path": path.display().to_string(), "layer": "lines"})).unwrap();
+    assert_eq!(one["layers"].as_array().map(Vec::len), Some(1));
+    assert!(s.run("layer.addData", &json!({"path": path.display().to_string(), "layer": "nope"})).is_err());
+    // A KMZ upload (the web app).
+    {
+        use base64::Engine;
+        let kmz = rustgis_data::zip::write(&[("doc.kml".to_string(), kml.as_bytes().to_vec())]).unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(kmz);
+        let r = s.run("layer.addDataBytes", &json!({"fileName": "roads.kmz", "data": data})).unwrap();
+        assert_eq!(r["layers"].as_array().map(Vec::len), Some(2), "{r}");
+    }
+    // GPX: waypoints, tracks and track points.
     let gpx = dir.join("walk.gpx");
     std::fs::write(
         &gpx,
@@ -2412,17 +2470,16 @@ fn gdal_formats_open_when_gdal_is_installed() {
     )
     .unwrap();
     let mut s = Session::new(Project::default());
-    let r = s.run("layer.addData", &json!({"path": gpx.display().to_string()})).unwrap();
+    s.run("layer.addData", &json!({"path": gpx.display().to_string()})).unwrap();
     let names: Vec<String> = s.map().layers.iter().map(|l| l.name.clone()).collect();
-    assert!(names.contains(&"waypoints".to_string()) && names.contains(&"tracks".to_string()), "{names:?} {r}");
-    let wpt = s.map().layer_by_name("waypoints").unwrap();
-    assert_eq!(wpt.dataset.features.len(), 2);
-    assert_eq!(wpt.dataset.source.as_deref(), Some(std::path::absolute(&gpx).unwrap().display().to_string().as_str()));
-    // Streamed, the layer remembers the original file.
-    let r = s.run("layer.addData", &json!({"path": gpx.display().to_string(), "layer": "tracks", "stream": true})).unwrap();
-    let id = r["layer"].as_u64().unwrap() as u32;
-    let g = s.map().layer(id).unwrap().source.as_ref().unwrap().gdal.clone().unwrap();
-    assert_eq!(g.layer, "tracks");
+    for n in ["walk waypoints", "walk tracks", "walk track points"] {
+        assert!(names.contains(&n.to_string()), "{names:?}");
+    }
+    assert_eq!(s.map().layer_by_name("walk waypoints").unwrap().dataset.features.len(), 2);
+    let project = dir.join("p.rgis").display().to_string();
+    s.run("project.saveAs", &json!({"path": project})).unwrap();
+    s.run("project.open", &json!({"path": project})).unwrap();
+    assert_eq!(s.map().layers.len(), 3);
     let _ = std::fs::remove_dir_all(dir);
 }
 

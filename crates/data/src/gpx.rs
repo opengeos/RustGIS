@@ -1,0 +1,198 @@
+//! GPX: GPS exchange files, split into layers as GPS software shows them — waypoints, routes,
+//! tracks (one line per track, its segments as parts) and track points (with elevation and time,
+//! for profiles and time series).
+//!
+//! The file is hostile: no DTD is read, the node count is capped, and points without valid
+//! coordinates are skipped and counted.
+
+use roxmltree::{Document, Node, ParsingOptions};
+use rustgis_geom::Coord;
+
+use crate::{DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
+
+/// Most XML nodes parsed from one file.
+const MAX_NODES: u32 = 50_000_000;
+
+fn local<'a>(n: &Node<'a, '_>) -> &'a str {
+    n.tag_name().name()
+}
+
+fn children<'a, 'i>(n: &Node<'a, 'i>, name: &'static str) -> impl Iterator<Item = Node<'a, 'i>> {
+    n.children().filter(move |c| c.is_element() && local(c) == name)
+}
+
+fn child_text(n: &Node, name: &str) -> Option<String> {
+    let c = n.children().find(|c| c.is_element() && local(c) == name)?;
+    let t = c.children().filter(|t| t.is_text()).filter_map(|t| t.text()).collect::<String>();
+    let t = t.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
+/// A point's coordinate from its `lat` and `lon` attributes.
+fn coord(n: &Node) -> Option<Coord> {
+    let x = n.attribute("lon")?.trim().parse::<f64>().ok()?;
+    let y = n.attribute("lat")?.trim().parse::<f64>().ok()?;
+    ((-180.0..=180.0).contains(&x) && (-90.0..=90.0).contains(&y)).then(|| Coord::new(x, y))
+}
+
+fn text(v: Option<String>) -> Value {
+    v.map(Value::Text).unwrap_or_default()
+}
+
+/// Reads a GPX file into its layers (those with features).
+pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>> {
+    let name = std::path::Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or("gpx").to_string();
+    let text_in = std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")))?;
+    let opts = ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..ParsingOptions::default() };
+    let doc = Document::parse_with_options(text_in.trim_start_matches('\u{feff}'), opts)
+        .map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
+    let gpx = doc.root_element();
+    if local(&gpx) != "gpx" {
+        return Err(DataError::Format(format!("{file_name}: not a GPX file")));
+    }
+    let mut skipped = 0usize;
+    let point_fields = |extra: &[(&str, FieldType)]| {
+        let mut f: Vec<Field> = extra.iter().map(|(n, t)| Field::new(*n, *t)).collect();
+        f.extend(["name", "ele", "time", "desc", "cmt", "sym", "type"].iter().map(|n| Field::new(*n, FieldType::Text)));
+        f
+    };
+    let point_attrs =
+        |p: &Node| -> Vec<Value> { ["name", "ele", "time", "desc", "cmt", "sym", "type"].iter().map(|k| text(child_text(p, k))).collect() };
+
+    let mut waypoints = Dataset::new(format!("{name} waypoints"), GeometryType::Point, point_fields(&[]));
+    for w in children(&gpx, "wpt") {
+        match coord(&w) {
+            Some(c) => waypoints.push_next(Some(Geometry::Point(c)), point_attrs(&w)),
+            None => skipped += 1,
+        }
+    }
+
+    let line_fields = || {
+        ["name", "desc", "cmt", "type", "number", "points"]
+            .iter()
+            .map(|n| Field::new(*n, if *n == "points" { FieldType::Integer } else { FieldType::Text }))
+            .collect::<Vec<_>>()
+    };
+    let line_attrs = |n: &Node, points: usize| -> Vec<Value> {
+        let mut v: Vec<Value> = ["name", "desc", "cmt", "type", "number"].iter().map(|k| text(child_text(n, k))).collect();
+        v.push(Value::Int(i64::try_from(points).unwrap_or(i64::MAX)));
+        v
+    };
+    let mut routes = Dataset::new(format!("{name} routes"), GeometryType::Polyline, line_fields());
+    for r in children(&gpx, "rte") {
+        let mut pts = Vec::new();
+        for p in children(&r, "rtept") {
+            match coord(&p) {
+                Some(c) => pts.push(c),
+                None => skipped += 1,
+            }
+        }
+        let n = pts.len();
+        if n >= 2 {
+            routes.push_next(Some(Geometry::Line(vec![pts])), line_attrs(&r, n));
+        } else {
+            skipped += 1;
+        }
+    }
+
+    let mut tracks = Dataset::new(format!("{name} tracks"), GeometryType::Polyline, line_fields());
+    let mut track_points = Dataset::new(
+        format!("{name} track points"),
+        GeometryType::Point,
+        point_fields(&[("track", FieldType::Integer), ("segment", FieldType::Integer)]),
+    );
+    for (ti, t) in children(&gpx, "trk").enumerate() {
+        let mut parts = Vec::new();
+        let mut count = 0;
+        for (si, seg) in children(&t, "trkseg").enumerate() {
+            let mut part = Vec::new();
+            for p in children(&seg, "trkpt") {
+                let Some(c) = coord(&p) else {
+                    skipped += 1;
+                    continue;
+                };
+                part.push(c);
+                let mut attrs = vec![Value::Int(ti as i64 + 1), Value::Int(si as i64 + 1)];
+                attrs.extend(point_attrs(&p));
+                track_points.push_next(Some(Geometry::Point(c)), attrs);
+            }
+            count += part.len();
+            if part.len() >= 2 {
+                parts.push(part);
+            }
+        }
+        if parts.is_empty() {
+            skipped += 1;
+        } else {
+            tracks.push_next(Some(Geometry::Line(parts)), line_attrs(&t, count));
+        }
+    }
+
+    let mut out = Vec::new();
+    for mut ds in [waypoints, routes, tracks, track_points] {
+        if ds.features.is_empty() {
+            continue;
+        }
+        crate::io::type_text_columns(&mut ds);
+        out.push((ds, ReadReport::default()));
+    }
+    if let Some((_, report)) = out.first_mut() {
+        report.skipped = skipped;
+        if skipped > 0 {
+            report.messages.push(format!("{name}: {skipped} points, routes or tracks without usable coordinates were skipped"));
+        }
+    }
+    if out.is_empty() {
+        return Err(DataError::Format(format!("{file_name}: no waypoints, routes or tracks")));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GPX: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1">
+  <wpt lat="48.85" lon="2.35"><ele>35</ele><name>Paris</name><sym>Flag</sym></wpt>
+  <wpt lat="91" lon="2"><name>bad</name></wpt>
+  <rte><name>R1</name><rtept lat="1" lon="1"/><rtept lat="2" lon="2"/></rte>
+  <trk><name>Morning run</name><type>running</type>
+    <trkseg><trkpt lat="45.0" lon="6.0"><ele>1000.5</ele><time>2024-05-01T07:00:00Z</time></trkpt>
+            <trkpt lat="45.001" lon="6.001"><ele>1002</ele><time>2024-05-01T07:00:10Z</time></trkpt></trkseg>
+    <trkseg><trkpt lat="45.01" lon="6.01"/><trkpt lat="45.02" lon="6.02"/><trkpt lat="x" lon="6"/></trkseg>
+  </trk>
+</gpx>"#;
+
+    #[test]
+    fn splits_into_layers() {
+        let layers = read("run.gpx", GPX.as_bytes()).unwrap();
+        let names: Vec<&str> = layers.iter().map(|l| l.0.name.as_str()).collect();
+        assert_eq!(names, ["run waypoints", "run routes", "run tracks", "run track points"]);
+        let (wpt, report) = &layers[0];
+        assert_eq!(wpt.features.len(), 1);
+        assert_eq!(wpt.value(0, wpt.field_index("ele").unwrap()), &Value::Int(35));
+        assert_eq!(report.skipped, 2, "the waypoint off the globe and the track point without coordinates");
+        let trk = &layers[2].0;
+        assert!(matches!(&trk.features[0].geometry, Some(Geometry::Line(p)) if p.len() == 2));
+        assert_eq!(trk.value(0, trk.field_index("points").unwrap()), &Value::Int(4));
+        assert_eq!(trk.value(0, trk.field_index("type").unwrap()), &Value::Text("running".into()));
+        let tp = &layers[3].0;
+        assert_eq!(tp.features.len(), 4);
+        assert_eq!(tp.value(0, tp.field_index("ele").unwrap()), &Value::Float(1000.5));
+        assert_eq!(tp.value(1, tp.field_index("time").unwrap()), &Value::Text("2024-05-01T07:00:10Z".into()));
+        assert_eq!(tp.value(3, tp.field_index("segment").unwrap()), &Value::Int(2));
+    }
+
+    #[test]
+    fn hostile_input() {
+        assert!(read("x.gpx", b"<kml/>").is_err());
+        assert!(read("x.gpx", b"<gpx>").is_err());
+        assert!(read("x.gpx", b"<gpx version=\"1.1\"></gpx>").is_err());
+        let bomb = r#"<?xml version="1.0"?><!DOCTYPE gpx [<!ENTITY a "aaaa">]><gpx><wpt lat="1" lon="1"><name>&a;</name></wpt></gpx>"#;
+        assert!(read("b.gpx", bomb.as_bytes()).is_err());
+        for n in (0..GPX.len()).step_by(41) {
+            let _ = read("t.gpx", &GPX.as_bytes()[..n]);
+        }
+    }
+}

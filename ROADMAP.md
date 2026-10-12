@@ -7,7 +7,7 @@ or enterprise portal sharing yet, so real depth is lower than the checklist sugg
 ## Done
 - Layered workspace, command registry with undo, project files (`.rgis`), `rustgis-cli`, the
   web app (WebAssembly), 15 interface languages.
-- Data: GeoJSON, CSV (lon/lat), Shapefile, GeoPackage, GeoParquet and FlatGeobuf in (large files
+- Data: GeoJSON, CSV (lon/lat), Shapefile, GeoPackage, GeoParquet, FlatGeobuf, KML/KMZ and GPX in (large files
   read in place, a view at a time), the vector formats GDAL reads when it is installed, and SQL
   queries and DuckDB databases (DuckDB Spatial) when DuckDB is;
   GeoJSON, CSV, GeoPackage, GeoParquet, Shapefile, FlatGeobuf, KML/KMZ, GPX and WKT out;

@@ -543,7 +543,7 @@ impl RustGisApp {
         }
         if rustgis_engine::data::raster::is_raster_name(name)
             || rustgis_engine::data::source::is_source_name(name)
-            || lower.ends_with(".zip")
+            || rustgis_engine::data::io::is_multi_layer_name(name)
         {
             use base64::Engine;
             let data = base64::engine::general_purpose::STANDARD.encode(bytes);

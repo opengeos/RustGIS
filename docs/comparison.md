@@ -127,7 +127,7 @@ opens, and writes MapLibre styles and OGC API Features collections for the web.
 Stated plainly, so the tables above are worth trusting:
 
 - **Format breadth.** There is no database connection (beyond DuckDB files) yet, and the web
-  app doesn't write GeoPackages. Other vector formats (KML,
+  app doesn't write GeoPackages. Other vector formats (GML,
   File Geodatabase, DXF…) need GDAL installed, and SQL queries need DuckDB, which RustGIS calls
   rather than links; GDAL rasters aren't read.
 - **Coordinate systems.** Vector data is stored in longitude/latitude; there is no full PROJ.

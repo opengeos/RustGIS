@@ -13,7 +13,8 @@ Formats](data-formats.md).
 | GeoPackage (`.gpkg`, every feature table) | Yes (desktop) | Yes (desktop) |
 | GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | Yes |
 | FlatGeobuf (`.fgb`) | Yes | Yes (`share.exportLayer`) |
-| Through GDAL: KML/KMZ, GPX, GML, DXF, File Geodatabase (`.gdb` folder), MapInfo, OpenStreetMap… | Yes (desktop, when GDAL is installed) | KML, KMZ and GPX |
+| KML/KMZ (with their styles), GPX | Yes | Yes |
+| Through GDAL: GML, DXF, File Geodatabase (`.gdb` folder), MapInfo, OpenStreetMap… | Yes (desktop, when GDAL is installed) | No |
 | DuckDB databases (`.duckdb`, `.ddb`) and SQL queries | Yes (desktop, when DuckDB is installed) | No |
 | KML, GPX, CSV with WKT geometry | No | Yes (Analysis › Workflows › Data Interop) |
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
@@ -37,7 +38,7 @@ reprojected on the fly as they draw.
 
 When [GDAL](https://gdal.org) is installed (its `ogr2ogr` and `ogrinfo` programs on the `PATH`,
 or the folder holding them in `RUSTGIS_GDAL_BIN`; GDAL 3.7 or later), the desktop app also opens
-the vector formats GDAL reads: KML and KMZ, GPX, GML, DXF, File Geodatabases, MapInfo, OpenStreetMap
+the vector formats GDAL reads: GML, DXF, File Geodatabases, MapInfo, OpenStreetMap
 and more. RustGIS doesn't link to GDAL: each layer is converted once, by `ogr2ogr`, into a
 FlatGeobuf with a spatial index in WGS 84 (GDAL reprojects it), kept in the cache folder
 (`~/.cache/rustgis/gdal` on Linux, `~/Library/Caches/RustGIS/gdal` on macOS,

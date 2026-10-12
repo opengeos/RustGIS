@@ -47,6 +47,7 @@ crs-definitions = { version = "0.6", default-features = false, features = ["proj
 base64 = "0.22"
 # Deflate for PDF image streams.
 miniz_oxide = "0.8"
+roxmltree = "0.21"
 epaint_default_fonts = "0.36"
 # Vector data providers: GeoParquet (pure Rust, so the browser reads it too), FlatGeobuf and
 # GeoPackage (SQLite, desktop only).
