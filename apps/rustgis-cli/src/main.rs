@@ -207,8 +207,12 @@ fn mcp(s: &mut Session, args: &[String]) -> Result<(), String> {
         if n == 0 {
             break;
         }
-        let line = if buf.len() as u64 > MAX_LINE && buf.last() != Some(&b'\n') {
-            // Skip the rest of the line, then answer with a parse error.
+        let refuse = |stdout: &mut std::io::StdoutLock, why: &str| {
+            let e = json!({"jsonrpc": "2.0", "id": Value::Null, "error": {"code": -32700, "message": why}});
+            writeln!(stdout, "{e}").and_then(|()| stdout.flush()).is_ok()
+        };
+        if buf.len() as u64 > MAX_LINE && buf.last() != Some(&b'\n') {
+            // Skip the rest of the line, then say why it wasn't read.
             loop {
                 buf.clear();
                 let m = (&mut stdin).take(MAX_LINE).read_until(b'\n', &mut buf).map_err(|e| format!("reading standard input: {e}"))?;
@@ -216,19 +220,26 @@ fn mcp(s: &mut Session, args: &[String]) -> Result<(), String> {
                     break;
                 }
             }
-            "\u{0}message too long".to_string()
-        } else {
-            // A bad byte becomes a parse error for that message, not the end of the server.
-            String::from_utf8_lossy(&buf).into_owned()
+            if !refuse(&mut stdout, "message too long (64 MB at most)") {
+                break;
+            }
+            continue;
+        }
+        // Messages are UTF-8; a bad byte could change a path inside one, so it isn't guessed at.
+        let Ok(line) = std::str::from_utf8(&buf) else {
+            if !refuse(&mut stdout, "message is not UTF-8") {
+                break;
+            }
+            continue;
         };
         if line.trim().is_empty() {
             continue;
         }
         // A last resort: a panic answers that request with an error instead of ending the server.
-        let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &line))).unwrap_or_else(|_| {
+        let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, line))).unwrap_or_else(|_| {
             // The panic message is already on standard error; the id lets the client match the error.
             eprintln!("rustgis-cli: a request failed unexpectedly; the project may be partly changed");
-            let id = serde_json::from_str::<Value>(&line)
+            let id = serde_json::from_str::<Value>(line)
                 .ok()
                 .and_then(|v| v.get("id").cloned())
                 .filter(|id| id.is_string() || id.is_number())

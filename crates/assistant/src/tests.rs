@@ -578,6 +578,9 @@ fn mcp_protocol_errors() {
     assert!(server.handle(&mut s, r#"[{"jsonrpc":"2.0","method":"notifications/initialized"}]"#).is_none());
     let r: Value = serde_json::from_str(&server.handle(&mut s, "[]").unwrap()).unwrap();
     assert_eq!(r["error"]["code"], -32600);
+    let big = Value::Array(vec![json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}); mcp::MAX_BATCH + 1]).to_string();
+    let r: Value = serde_json::from_str(&server.handle(&mut s, &big).unwrap()).unwrap();
+    assert_eq!(r["error"]["code"], -32600);
     // A response to us (we send no requests) gets no reply.
     assert!(server.handle(&mut s, r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).is_none());
 }
@@ -700,8 +703,7 @@ fn docs_pages_and_addresses() {
     assert_eq!(docs::slug("Chaining commands"), "chaining-commands");
     assert_eq!(docs::slug("What the agent may do"), "what-the-agent-may-do");
     // Headings in code blocks aren't sections.
-    let text =
-        "# T\nintro\n```sh\n# a comment\n```\n~~~\n# also code\n~~~\n    # indented code\n## Next\nbody\n### Sub\nmore\n## Last\n#tag\n";
+    let text = "# T\nintro\n```sh\n# a comment\n```\n~~~\n# also code\n~~~\n    # indented code\n````md\n```\n# inside a longer fence\n```not a close\n````\n## Next\nbody\n### Sub\nmore\n## Last\n#tag\n";
     let secs = docs::sections(text);
     assert_eq!(secs.iter().map(|s| s.0).collect::<Vec<_>>(), ["T", "Next", "Sub", "Last"]);
     assert_eq!(secs.get(1).map(|s| s.1), Some("body\n"));

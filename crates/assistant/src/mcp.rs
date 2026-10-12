@@ -21,6 +21,9 @@ use crate::{docs, tools};
 /// The protocol versions this server speaks, newest first.
 pub const VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
+/// The most messages one batch may hold.
+pub const MAX_BATCH: usize = 16;
+
 /// The largest map image `view_map` draws (pixels a side).
 const MAX_VIEW: f64 = 2048.0;
 
@@ -70,6 +73,10 @@ impl Server {
         let reply = match &msg {
             // A batch (protocol 2025-03-26): one reply per request, none when all are notifications.
             Value::Array(batch) if batch.is_empty() => error_value(&Value::Null, INVALID_REQUEST, "empty batch"),
+            // Each reply is held until the batch is done, and a map image can be megabytes.
+            Value::Array(batch) if batch.len() > MAX_BATCH => {
+                error_value(&Value::Null, INVALID_REQUEST, &format!("a batch holds at most {MAX_BATCH} messages"))
+            }
             Value::Array(batch) => {
                 let replies: Vec<Value> = batch.iter().filter_map(|m| self.handle_value(s, m)).collect();
                 if replies.is_empty() {

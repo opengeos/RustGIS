@@ -25,6 +25,7 @@ pub const PAGES: &[Page] = pages![
     "getting-started.md",
     "user-guide/index.md",
     "user-guide/data.md",
+    "user-guide/data-formats.md",
     "user-guide/maps.md",
     "user-guide/cartography.md",
     "user-guide/editing.md",
@@ -78,16 +79,22 @@ pub fn page(path: &str) -> Option<&'static Page> {
 /// and indented code (four spaces or more) are never headings.
 fn headings(text: &str) -> Vec<(usize, &str, usize)> {
     let mut out = Vec::new();
-    let mut fence: Option<&str> = None;
+    // The open fence: its character and length.
+    let mut fence: Option<(char, usize)> = None;
     let mut at = 0;
     for line in text.split_inclusive('\n') {
         let indent = line.len() - line.trim_start_matches(' ').len();
         let t = line.trim_start_matches(' ');
         if indent <= 3 && !t.starts_with('\t') {
-            let marker = ["```", "~~~"].into_iter().find(|m| t.starts_with(m));
+            // A fence is three or more backticks or tildes (CommonMark).
+            let marker = ['`', '~'].into_iter().find_map(|c| {
+                let n = t.len() - t.trim_start_matches(c).len();
+                (n >= 3).then_some((c, n))
+            });
             match (fence, marker) {
                 (None, Some(m)) => fence = Some(m),
-                (Some(f), Some(m)) if f == m => fence = None,
+                // It closes on the same character, at least as long, with nothing after it.
+                (Some((c, n)), Some((mc, mn))) if c == mc && mn >= n && t.get(mn..).is_some_and(|r| r.trim().is_empty()) => fence = None,
                 (None, None) if t.starts_with('#') => {
                     let level = t.len() - t.trim_start_matches('#').len();
                     let h = t.get(level..).unwrap_or("");
@@ -122,7 +129,8 @@ pub fn sections(text: &str) -> Vec<(&str, &str)> {
 fn find_section<'a>(text: &'a str, want: &str) -> Option<(&'a str, &'a str)> {
     let hs = headings(text);
     let want_slug = slug(want);
-    let i = hs.iter().position(|(_, h, _)| h.eq_ignore_ascii_case(want) || slug(h) == want_slug)?;
+    // An empty anchor (a heading of only symbols) matches nothing by anchor.
+    let i = hs.iter().position(|(_, h, _)| h.eq_ignore_ascii_case(want) || (!want_slug.is_empty() && slug(h) == want_slug))?;
     let &(level, heading, at) = hs.get(i)?;
     // Up to the next heading at the same level or above.
     let end = hs.iter().skip(i + 1).find(|h| h.0 <= level).map_or(text.len(), |h| h.2);
