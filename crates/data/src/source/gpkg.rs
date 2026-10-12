@@ -411,8 +411,9 @@ pub fn write(ds: &crate::Dataset, path: &Path) -> Result<()> {
         let conn = Connection::open(&tmp).map_err(err)?;
         build(&conn, ds)?;
         conn.close().map_err(|(_, e)| err(e))?;
-        // Built without syncing (fast); synced once before it replaces anything.
-        std::fs::File::open(&tmp)?.sync_all()?;
+        // Built without syncing (fast); synced once before it replaces anything. (Windows flushes
+        // only a handle open for writing.)
+        std::fs::OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
         std::fs::rename(&tmp, path)?;
         // The old file's journal or write-ahead log would be replayed against the new one.
         for side in ["-wal", "-shm", "-journal"] {
