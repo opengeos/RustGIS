@@ -91,6 +91,8 @@ struct LayerInfo {
     name: String,
     single: bool,
     count: Option<i64>,
+    /// Whether the layer says its coordinate system.
+    has_srs: bool,
 }
 
 /// The vector layers of a dataset, from `ogrinfo -json`.
@@ -112,7 +114,8 @@ fn list(src: &Path) -> Result<Vec<LayerInfo>> {
             let geom = l.get("geometryFields").and_then(|g| g.as_array()).and_then(|g| g.first())?;
             let ty = geom.get("type").and_then(|t| t.as_str()).unwrap_or("Geometry").to_ascii_lowercase();
             let single = ["point", "linestring", "polygon", "curve", "surface"].iter().any(|k| ty.contains(k));
-            Some(LayerInfo { name, single, count: l.get("featureCount").and_then(|c| c.as_i64()) })
+            let has_srs = geom.get("coordinateSystem").is_some_and(|c| !c.is_null());
+            Some(LayerInfo { name, single, count: l.get("featureCount").and_then(|c| c.as_i64()), has_srs })
         })
         .take(MAX_LAYERS)
         .collect())
@@ -156,7 +159,7 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
     for l in chosen {
         let families: Vec<Option<Family>> = if l.single { vec![None] } else { Family::ALL.iter().copied().map(Some).collect() };
         for family in families {
-            match convert_one_in(dir, src, &l.name, family, crs) {
+            match convert_one_in(dir, src, &l.name, family, crs, l.has_srs) {
                 Ok(Some((path, unprojected))) => out.push(Converted {
                     path,
                     unprojected,
@@ -185,11 +188,22 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
 /// features. The cache key covers the file's path, size and modification time.
 pub fn convert_one(src: &Path, layer: &str, family: Option<Family>, crs: Option<&str>) -> Result<Option<PathBuf>> {
     let dir = cache_dir().ok_or_else(|| DataError::Format("no cache folder for GDAL conversions".into()))?;
-    Ok(convert_one_in(&dir, src, layer, family, crs)?.map(|(p, _)| p))
+    // Whether the layer says its coordinate system, as a fresh listing tells.
+    let has_srs = list(src)?.into_iter().find(|l| l.name == layer).is_none_or(|l| l.has_srs);
+    Ok(convert_one_in(&dir, src, layer, family, crs, has_srs)?.map(|(p, _)| p))
 }
 
 /// The conversion and whether it is unprojected (see [`Converted::unprojected`]).
-fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, crs: Option<&str>) -> Result<Option<(PathBuf, bool)>> {
+/// `has_srs` says whether the layer gives its coordinate system: one that doesn't (and has no
+/// `crs` given) is taken as it is, unprojected.
+fn convert_one_in(
+    dir: &Path,
+    src: &Path,
+    layer: &str,
+    family: Option<Family>,
+    crs: Option<&str>,
+    has_srs: bool,
+) -> Result<Option<(PathBuf, bool)>> {
     // A name GDAL would take for an option (a file can name its own layers).
     if layer.starts_with('-') {
         return Err(DataError::Format(format!("layer '{layer}': a name starting with '-' isn't read")));
@@ -232,36 +246,25 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, c
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = dir.join(format!("{tag}.{}{n:04}.tmp.fgb", std::process::id()));
-    let run = |reproject: bool| -> std::io::Result<std::process::Output> {
-        let _ = std::fs::remove_file(&tmp);
-        let mut c = Command::new(&ogr2ogr);
-        c.args(["-f", "FlatGeobuf", "-skipfailures", "-nlt", "PROMOTE_TO_MULTI", "-dim", "XY", "-lco", "SPATIAL_INDEX=YES"]);
-        if let Some(crs) = crs {
-            c.args(["-s_srs", crs]);
-        }
-        if reproject {
-            c.args(["-t_srs", "EPSG:4326"]);
-        }
-        if let Some(f) = family {
-            c.args(["-where", f.filter()]);
-        }
-        c.arg(&tmp).arg(&full).arg(layer);
-        output(c, CONVERT_TIMEOUT)
-    };
-    let mut res = run(true)?;
-    // A layer without a coordinate system can't be reprojected: take it as it is (unless one was
-    // given, which GDAL then needs to reproject from). Any other failure is reported as it is.
-    let mut unprojected = false;
-    let about_srs = |e: &[u8]| {
-        let e = String::from_utf8_lossy(e).to_ascii_lowercase();
-        e.contains("coordinate system") || e.contains("srs") || e.contains("transform")
-    };
-    if !res.status.success() && crs.is_none() && about_srs(&res.stderr) {
-        res = run(false)?;
-        unprojected = true;
+    // Reprojected to WGS 84 from its own coordinate system, or from the one given; a layer with
+    // neither is taken as it is.
+    let unprojected = crs.is_none() && !has_srs;
+    let mut c = Command::new(&ogr2ogr);
+    c.args(["-f", "FlatGeobuf", "-skipfailures", "-nlt", "PROMOTE_TO_MULTI", "-dim", "XY", "-lco", "SPATIAL_INDEX=YES"]);
+    if let Some(crs) = crs {
+        c.args(["-s_srs", crs]);
     }
+    if !unprojected {
+        c.args(["-t_srs", "EPSG:4326"]);
+    }
+    if let Some(f) = family {
+        c.args(["-where", f.filter()]);
+    }
+    c.arg(&tmp).arg(&full).arg(layer);
+    // The temp file goes whatever happens, unless it becomes the conversion.
+    let mut tmp_guard = TempFile(Some(tmp.clone()));
+    let res = output(c, CONVERT_TIMEOUT)?;
     if !res.status.success() {
-        let _ = std::fs::remove_file(&tmp);
         let text = String::from_utf8_lossy(&res.stderr);
         // The ERROR lines say what went wrong (the rest is the usage text); else the first line.
         let mut msg: Vec<&str> = text.lines().filter(|l| l.contains("ERROR")).take(3).collect();
@@ -271,23 +274,28 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, c
         let msg = if msg.is_empty() { format!("ogr2ogr failed ({})", res.status) } else { msg.join(" ") };
         return Err(DataError::Format(format!("GDAL: {msg}")));
     }
-    // An empty family is remembered, so the file isn't converted again for it.
-    // (A filter matching nothing leaves no file at all.)
     // Whether it holds anything: a feature read, not the header's count (which FlatGeobuf may leave
-    // out, as 0).
+    // out, as 0). A filter matching nothing leaves no file at all.
     let any = tmp.exists()
         && super::open_path(&tmp, None)
             .ok()
             .is_some_and(|s| s.read(&super::Request { extent: None, limit: 1 }).is_ok_and(|b| !b.features.is_empty()));
-    let _ = std::fs::remove_file(&out);
-    let _ = std::fs::remove_file(&empty);
+    // The entry is replaced in an order that never leaves it naming a missing file: the new state
+    // first, then the key that vouches for it.
+    let _ = std::fs::remove_file(&keyfile);
     if !any {
-        let _ = std::fs::remove_file(&tmp);
+        // An empty family is remembered, so the file isn't converted again for it.
         std::fs::write(&empty, b"")?;
+        let _ = std::fs::remove_file(&out);
         std::fs::write(&keyfile, &key)?;
         return Ok(None);
     }
+    // A rename replaces the old conversion in one step (Windows needs it gone first).
+    #[cfg(windows)]
+    let _ = std::fs::remove_file(&out);
     std::fs::rename(&tmp, &out)?;
+    tmp_guard.0 = None;
+    let _ = std::fs::remove_file(&empty);
     if unprojected {
         std::fs::write(&raw, b"")?;
     } else {
@@ -295,6 +303,17 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, c
     }
     std::fs::write(&keyfile, &key)?;
     Ok(Some((out, unprojected)))
+}
+
+/// A file removed when dropped (unless taken out first).
+struct TempFile(Option<PathBuf>);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        if let Some(p) = &self.0 {
+            let _ = std::fs::remove_file(p);
+        }
+    }
 }
 
 /// The longest a conversion may run, and the longest a layer listing may.
@@ -397,7 +416,7 @@ mod tests {
         assert!(is_gdal_name("a.KML") && is_gdal_name("/x/roads.gdb/") && is_gdal_name("t.gpx"));
         assert!(!is_gdal_name("a.geojson") && !is_gdal_name("a.fgb") && !is_gdal_name("noext"));
         // A layer named like an option never reaches GDAL.
-        let e = convert_one_in(&std::env::temp_dir(), Path::new("x.kml"), "-overwrite", None, None).unwrap_err();
+        let e = convert_one_in(&std::env::temp_dir(), Path::new("x.kml"), "-overwrite", None, None, true).unwrap_err();
         assert!(e.to_string().contains("starting with '-'"), "{e}");
         // Pruning touches only the cache's own files.
         assert!(ours("0123456789abcdef.fgb") && ours("0123456789abcdef.key") && ours("0123456789abcdef.empty"));
