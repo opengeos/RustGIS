@@ -245,7 +245,8 @@ fn tool_list() -> Vec<Value> {
 
 fn annotations(name: &str) -> Value {
     let ro = read_only(name);
-    json!({"readOnlyHint": ro, "destructiveHint": false, "idempotentHint": ro, "openWorldHint": !ro})
+    // Commands can delete features, overwrite files and replace the project.
+    json!({"readOnlyHint": ro, "destructiveHint": !ro, "idempotentHint": ro, "openWorldHint": !ro})
 }
 
 fn resource_list() -> Vec<Value> {

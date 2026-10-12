@@ -120,7 +120,8 @@ fn words(query: &str) -> Vec<String> {
         .to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.chars().count() > 1)
-        .map(|w| if w.len() > 3 { w.trim_end_matches('s') } else { w })
+        // One plural `s` ("labels" finds "label"); "class" and "address" stay whole.
+        .map(|w| if w.chars().count() > 3 && !w.ends_with("ss") { w.strip_suffix('s').unwrap_or(w) } else { w })
         .map(str::to_string)
         .take(12)
         .collect()

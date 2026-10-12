@@ -554,6 +554,9 @@ fn mcp_initializes_and_lists_tools() {
     for t in tools["tools"].as_array().unwrap() {
         assert_eq!(t["inputSchema"]["type"], "object", "{}", t["name"]);
         assert!(t["description"].as_str().is_some_and(|d| !d.is_empty()));
+        let runs = matches!(t["name"].as_str(), Some("run_command" | "run_tool"));
+        assert_eq!(t["annotations"]["readOnlyHint"], !runs, "{}", t["name"]);
+        assert_eq!(t["annotations"]["destructiveHint"], runs, "{}", t["name"]);
     }
 }
 
@@ -629,6 +632,9 @@ fn mcp_serves_the_docs() {
     let v: Value = serde_json::from_str(&text).unwrap();
     assert!(v["results"].as_array().unwrap().iter().any(|r| r["page"] == "user-guide/cartography.md"), "{text}");
     assert!(v["results"][0]["url"].as_str().unwrap().starts_with(docs::SITE));
+    // A plural finds the singular; words ending in "ss" keep their ending.
+    let (_, text) = call_tool(&server, &mut s, "search_docs", json!({"query": "classes"}));
+    assert!(text.contains("class"), "{text}");
     let (err, _) = call_tool(&server, &mut s, "search_docs", json!({"query": "?"}));
     assert!(err);
 
