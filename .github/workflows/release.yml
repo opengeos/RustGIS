@@ -154,9 +154,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           chmod +x dist/*.AppImage
-          cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE"/dist/*.AppImage --appimage-extract > /dev/null
+          cd "$RUNNER_TEMP" && rm -rf squashfs-root
+          "$GITHUB_WORKSPACE"/dist/*.AppImage --appimage-extract > /dev/null
           squashfs-root/usr/bin/rustgis-cli logo logo.png --size 64
           test -x squashfs-root/AppRun
+          # The GUI cannot start on a headless runner: check that its libraries resolve.
+          if ldd squashfs-root/usr/bin/rustgis | grep 'not found'; then exit 1; fi
+          rm -rf squashfs-root
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7

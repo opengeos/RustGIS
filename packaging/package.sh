@@ -78,10 +78,12 @@ case "$os" in
       fi
       echo "dpkg-shlibdeps failed; using a minimal Depends list" >&2
     fi
-    # Debian sorts a pre-release before its release only with ~ (0.2.0~rc.1).
+    # Debian and RPM sort a pre-release before its release only with ~ (0.2.0~rc.1). Worked out
+    # here: older bash keeps the backslash of ${version/-/\~} inside a here-document.
+    pkgver="$(printf '%s' "$version" | tr - '~')"
     cat > "$p/DEBIAN/control" <<CONTROL
 Package: rustgis
-Version: ${version/-/\~}
+Version: $pkgver
 Section: science
 Priority: optional
 Architecture: $debarch
@@ -106,7 +108,7 @@ CONTROL
 %global debug_package %{nil}
 %global __os_install_post %{nil}
 Name: rustgis
-Version: ${version/-/\~}
+Version: $pkgver
 Release: 1
 Summary: Desktop GIS with a ribbon workflow, written in Rust
 License: Apache-2.0
