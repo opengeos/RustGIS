@@ -164,9 +164,10 @@ impl GpkgSource {
                 }
             }
         }
+        // Looked up without regard to case, as SQLite names are; the real name is kept.
         let rtree_name = format!("rtree_{table}_{geom}");
         let rtree: Option<String> = conn
-            .query_row("SELECT name FROM sqlite_master WHERE name = ?1 AND type = 'table'", [&rtree_name], |r| r.get(0))
+            .query_row("SELECT name FROM sqlite_master WHERE lower(name) = lower(?1) AND type = 'table'", [&rtree_name], |r| r.get(0))
             .ok()
             .filter(|_| pk.is_some());
         let declared: Option<Extent> = conn

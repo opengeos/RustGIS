@@ -23,8 +23,8 @@ use std::sync::Arc;
 /// Values read per call.
 const BATCH: usize = 8192;
 
-/// Most rows read from one row group.
-const MAX_GROUP_ROWS: usize = 1 << 24;
+/// Most rows read from one row group (fewer in the browser, whose memory is smaller).
+const MAX_GROUP_ROWS: usize = if cfg!(target_arch = "wasm32") { 1 << 21 } else { 1 << 24 };
 
 /// A GeoParquet file.
 pub struct ParquetSource {
