@@ -75,7 +75,7 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 
 | Area | Highlights |
 |---|---|
-| **Data** | GeoJSON, CSV with longitude/latitude, Shapefile, GeoPackage, GeoParquet and FlatGeobuf in (large files read in place), and every vector format GDAL reads when it is installed; PMTiles archives (web or file); GeoJSON, CSV, FlatGeobuf, KML, GPX and WKT out; standalone tables; layer and map files, styles, templates and packages |
+| **Data** | GeoJSON, CSV with longitude/latitude, Shapefile, GeoPackage, GeoParquet and FlatGeobuf in (large files read in place), every vector format GDAL reads when it is installed, and SQL queries and DuckDB databases through DuckDB Spatial when DuckDB is; PMTiles archives (web or file); GeoJSON, CSV, FlatGeobuf, KML, GPX and WKT out; standalone tables; layer and map files, styles, templates and packages |
 | **Rasters** | GeoTIFF and cloud-optimised GeoTIFF (any pixel type, tiled or striped, compressed), ASCII grids; reprojection from any EPSG code; Stretch, RGB, Classify, Unique Values, Colormap and Shaded Relief; DRA, band combinations, brightness/contrast/gamma; raster functions, indices, change detection, classification, georeferencing |
 | **Maps** | Multiple maps per project; a 3D globe; Web Mercator or any projection (Equal Earth, Robinson, Winkel Tripel, polar and regional presets, or an EPSG code); bookmarks, extent history, Go To XY; five offline basemaps |
 | **Web tiles** | XYZ/TMS/WMS raster tiles, Mapbox Vector Tiles and MapLibre styles (sprites, patterns, expressions), cached and fetched in the background |

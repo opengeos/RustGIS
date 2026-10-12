@@ -5,8 +5,8 @@ limits. [Data](data.md) covers adding data, large files and rasters in more deta
 Basemaps](maps.md#basemaps) covers web tile layers.
 
 Most formats open in the desktop app and in the [web app](https://web.rustgis.app) alike. Those
-that need C libraries (SQLite for GeoPackage, GDAL) or files on disk are desktop-only, as the
-tables say.
+that need C libraries (SQLite for GeoPackage, GDAL, DuckDB) or files on disk are desktop-only, as
+the tables say.
 
 ## Vector and tabular files
 
@@ -41,6 +41,18 @@ GDAL](data.md#formats-through-gdal).
 | MapInfo | `.tab`, `.mif` | Keep the companion files together. |
 | OpenStreetMap | `.osm`, `.osm.pbf` | |
 | GeoJSON Lines, GMT | `.geojsonl`, `.geojsons`, `.gmt` | |
+
+## SQL queries and DuckDB databases
+
+With [DuckDB](https://duckdb.org) installed (the `duckdb` program on the `PATH`, DuckDB 1.5 or
+later), the desktop app adds the result of an SQL query as a layer, and opens DuckDB database files.
+Results are written as cached GeoParquet, so large ones stream too: see [SQL queries and DuckDB
+databases](data.md#sql-queries-and-duckdb-databases).
+
+| Source | How to add it | Notes |
+| --- | --- | --- |
+| SQL query | `layer.addSql` with `"sql"` | One DuckDB `SELECT` with DuckDB Spatial: Parquet, CSV, GeoParquet and `ST_Read` files, web addresses (`https://`, `s3://`). Give `"crs"` for a geometry that doesn't say its coordinate system. |
+| DuckDB database | `.duckdb`, `.ddb`: Add Data | Every table with a geometry column becomes a layer (`"layer"` picks one). Converted once, until the file changes. |
 
 ## Rasters
 

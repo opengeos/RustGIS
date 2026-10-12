@@ -6,6 +6,7 @@
 //! time too. Nothing links to GDAL: without the program, these formats report how to get it.
 //! Layers mixing geometry types (KML often does) become one converted layer per type.
 
+use super::external::{self, TempFile, fnv1a, output, stamp, touch};
 use crate::{DataError, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -44,14 +45,7 @@ pub struct Converted {
 
 /// A GDAL program (`ogr2ogr`, `ogrinfo`): from `RUSTGIS_GDAL_BIN` (a folder), else on the `PATH`.
 pub fn program(name: &str) -> Option<PathBuf> {
-    let exe = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
-    let dirs: Vec<PathBuf> = std::env::var_os("RUSTGIS_GDAL_BIN")
-        .map(PathBuf::from)
-        .into_iter()
-        .chain(std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default())
-        .collect();
-    // Only absolute folders: an empty or relative PATH entry would look in the current folder.
-    dirs.into_iter().filter(|d| d.is_absolute()).map(|d| d.join(&exe)).find(|p| p.is_file())
+    external::program("RUSTGIS_GDAL_BIN", name)
 }
 
 /// Whether GDAL's programs are installed.
@@ -68,20 +62,7 @@ fn missing() -> DataError {
 
 /// Where converted layers are kept: the platform's cache folder, or `RUSTGIS_GDAL_CACHE`.
 pub fn cache_dir() -> Option<PathBuf> {
-    if let Some(d) = std::env::var_os("RUSTGIS_GDAL_CACHE") {
-        return Some(PathBuf::from(d));
-    }
-    let base = if cfg!(target_os = "windows") {
-        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("RustGIS").join("cache"))
-    } else if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches/RustGIS"))
-    } else {
-        std::env::var_os("XDG_CACHE_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-            .map(|d| d.join("rustgis"))
-    };
-    base.map(|b| b.join("gdal"))
+    external::cache_dir("RUSTGIS_GDAL_CACHE", "gdal")
 }
 
 /// A layer: its name, whether it holds one kind of geometry (`Some`) or mixes them (`None`), and
@@ -101,7 +82,7 @@ fn list(src: &Path) -> Result<Vec<LayerInfo>> {
     let src = std::path::absolute(src).unwrap_or_else(|_| src.to_path_buf());
     let mut c = Command::new(ogrinfo);
     c.arg("-json").arg("-ro").arg("-so").arg("-nomd").arg(&src);
-    let out = output(c, LIST_TIMEOUT)?;
+    let out = output(c, LIST_TIMEOUT, "GDAL")?;
     if !out.status.success() {
         return Err(DataError::Format(format!("GDAL: {}", String::from_utf8_lossy(&out.stderr).trim())));
     }
@@ -223,7 +204,7 @@ fn convert_one_in(
     }
     let ogr2ogr = program("ogr2ogr").ok_or_else(missing)?;
     std::fs::create_dir_all(dir)?;
-    prune(dir);
+    external::prune(dir, ours, KEEP);
     let full = std::path::absolute(src).unwrap_or_else(|_| src.to_path_buf());
     let (len, modified) = stamp(&full)?;
     // The cache key, spelled out: kept beside the conversion and checked, so a hash collision
@@ -240,11 +221,6 @@ fn convert_one_in(
     let same = stored == key || stored.strip_suffix(UNPROJECTED) == Some(key.as_str());
     let was_unprojected = stored.ends_with(UNPROJECTED);
     // A hit is touched, so pruning removes what isn't used rather than what is old.
-    let touch = |p: &Path| {
-        if let Ok(f) = std::fs::File::options().write(true).open(p) {
-            let _ = f.set_modified(std::time::SystemTime::now());
-        }
-    };
     if same && empty.exists() {
         touch(&empty);
         touch(&keyfile);
@@ -276,7 +252,7 @@ fn convert_one_in(
     c.arg(&tmp).arg(&full).arg(layer);
     // The temp file goes whatever happens, unless it becomes the conversion.
     let mut tmp_guard = TempFile(Some(tmp.clone()));
-    let res = output(c, CONVERT_TIMEOUT)?;
+    let res = output(c, CONVERT_TIMEOUT, "GDAL")?;
     if !res.status.success() {
         let text = String::from_utf8_lossy(&res.stderr);
         // The ERROR lines say what went wrong (the rest is the usage text); else the first line.
@@ -313,17 +289,6 @@ fn convert_one_in(
     Ok(Some((out, unprojected)))
 }
 
-/// A file removed when dropped (unless taken out first).
-struct TempFile(Option<PathBuf>);
-
-impl Drop for TempFile {
-    fn drop(&mut self) {
-        if let Some(p) = &self.0 {
-            let _ = std::fs::remove_file(p);
-        }
-    }
-}
-
 /// The longest a conversion may run, and the longest a layer listing may.
 const CONVERT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
@@ -331,88 +296,12 @@ const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60)
 /// Conversions not used for this long are removed from the cache.
 const KEEP: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
 
-/// Runs a GDAL program, reading its output as it comes (so a chatty one can't block on a full
-/// pipe) and killing it if it runs past `timeout`.
-fn output(mut c: Command, timeout: std::time::Duration) -> std::io::Result<std::process::Output> {
-    use std::io::Read;
-    use std::process::Stdio;
-    let mut child = c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-    let drain = |p: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = p {
-                let _ = p.read_to_end(&mut buf);
-            }
-            buf
-        })
-    };
-    let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let start = std::time::Instant::now();
-    let status = loop {
-        if let Some(st) = child.try_wait()? {
-            break st;
-        }
-        if start.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                format!("GDAL ran for more than {} minutes", timeout.as_secs() / 60),
-            ));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
-    Ok(std::process::Output { status, stdout: out.join().unwrap_or_default(), stderr: err.join().unwrap_or_default() })
-}
-
-/// A file's size and modification time; for a folder (a File Geodatabase), those of its files,
-/// so an edit inside it is noticed.
-fn stamp(p: &Path) -> Result<(u64, u128)> {
-    let m = std::fs::metadata(p)?;
-    let t = |m: &std::fs::Metadata| {
-        m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0)
-    };
-    if !m.is_dir() {
-        return Ok((m.len(), t(&m)));
-    }
-    let (mut len, mut newest) = (0u64, t(&m));
-    for e in std::fs::read_dir(p)?.flatten().take(100_000) {
-        if let Ok(em) = e.metadata() {
-            len = len.saturating_add(em.len());
-            newest = newest.max(t(&em));
-        }
-    }
-    Ok((len, newest))
-}
-
-/// A 64-bit FNV-1a hash: stable across Rust releases, unlike `DefaultHasher`.
-fn fnv1a(b: &[u8]) -> u64 {
-    b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &x| (h ^ u64::from(x)).wrapping_mul(0x0000_0100_0000_01b3))
-}
-
 /// Whether a file name is one this module writes: `<16 hex>.fgb|.key|.empty`, or a
 /// `<16 hex>.<pid>.tmp.fgb` left by a conversion that didn't finish.
 fn ours(name: &str) -> bool {
     let Some((tag, rest)) = name.split_once('.') else { return false };
     let tmp = rest.strip_suffix(".tmp.fgb").is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()));
     tag.len() == 16 && tag.bytes().all(|b| b.is_ascii_hexdigit()) && (matches!(rest, "fgb" | "key" | "empty") || tmp)
-}
-
-/// Removes conversions not used for [`KEEP`] (best effort). Only this module's files are touched,
-/// whatever else the cache folder holds.
-fn prune(dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    let now = std::time::SystemTime::now();
-    for e in entries.flatten().take(100_000) {
-        if !e.file_name().to_str().is_some_and(ours) || !e.file_type().is_ok_and(|t| t.is_file()) {
-            continue;
-        }
-        let old = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age > KEEP);
-        if old {
-            let _ = std::fs::remove_file(e.path());
-        }
-    }
 }
 
 #[cfg(test)]

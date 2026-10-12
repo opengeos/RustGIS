@@ -722,6 +722,8 @@ impl RustGisApp {
                         "parquet",
                         "geoparquet",
                         "fgb",
+                        "duckdb",
+                        "ddb",
                         "pmtiles",
                         "kml",
                         "kmz",

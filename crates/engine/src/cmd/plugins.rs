@@ -205,6 +205,9 @@ const WRITES_FILES: &[&str] = &["project.save", "project.saveAs"];
 /// plugins may pass: `layer.addDataBytes`, `map.import` from text.)
 const PLACE_KEYS: &[&str] = &["path", "folder", "dir", "file", "url", "uri", "source", "output", "connection", "database"];
 
+/// The command running an SQL query through DuckDB, which can read any file and web address.
+pub const SQL: &str = "layer.addSql";
+
 /// What a command reaches beyond the project when run with some parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reach {
@@ -234,6 +237,9 @@ pub fn reaches(spec: &C, params: &Value) -> Option<Reach> {
     if super::tiles::NETWORK.contains(&spec.id) {
         return Some(Reach::Network);
     }
+    if spec.id == SQL {
+        return Some(Reach::Files);
+    }
     let files = super::items::names_place(params, PLACE_KEYS, 0)
         || PLACE_KEYS.iter().any(|k| spec.params.contains(&format!("\"{k}\"")))
         || WRITES_FILES.contains(&spec.id)
@@ -246,6 +252,10 @@ fn refused(plugin: &Plugin, spec: &C, params: &Value) -> Option<String> {
     let m = &plugin.manifest;
     if user_only(spec.id) {
         return Some(format!("plugins can't run '{}'", spec.id));
+    }
+    // An SQL query reads files and web addresses alike.
+    if spec.id == SQL && !(m.has(Permission::Files) && m.has(Permission::Network)) {
+        return Some(format!("{} needs the 'files' and 'network' permissions to run '{}'", m.name, spec.id));
     }
     match reaches(spec, params) {
         Some(Reach::Files)

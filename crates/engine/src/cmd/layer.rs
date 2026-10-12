@@ -12,7 +12,10 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Map › Layer", add_data)
-            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage or GDAL layer", "stream"?: bool, "crs"?: "EPSG:… for a GDAL file that doesn't say"}"#),
+            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL or DuckDB layer", "stream"?: bool, "crs"?: "EPSG:… for a GDAL or DuckDB file that doesn't say"}"#),
+        C::new("layer.addSql", "Add Data From SQL", "Map › Layer", add_sql).params(
+            r#"{"sql": "one DuckDB SELECT; DuckDB Spatial's ST_ functions, read_parquet('…'), web addresses", "name"?: string, "database"?: "a .duckdb file whose tables the query names", "crs"?: "EPSG:… of a geometry that doesn't say", "stream"?: bool}"#,
+        ),
         C::new("layer.loadAll", "Load All Features", "Contents", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addDataText", "Add Data (from text)", "Map › Layer", add_data_text).params(r#"{"fileName": "name.geojson|.csv", "text": string}"#),
         C::new("layer.addSample", "Add Sample Data", "Map › Layer › Add Data", add_sample).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
@@ -279,6 +282,10 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::source::gdal::is_gdal_name(path) {
         return add_gdal(s, p, path);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if rustgis_data::source::duckdb::is_duckdb_name(path) {
+        return add_duckdb(s, p, path);
+    }
     let read = rustgis_data::io::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
     add_read(s, p, read)
 }
@@ -391,6 +398,142 @@ fn add_gdal(s: &mut Session, p: &Value, path: &str) -> CmdResult {
         s.notify(format!("{path}: {f}"), true);
     }
     let original = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
+    let parts = converted
+        .into_iter()
+        .map(|c| Converted {
+            path: c.path,
+            name: c.name,
+            unprojected: c.unprojected,
+            origin: ConvertedOrigin::Gdal(rustgis_map::source::GdalOrigin {
+                path: original.clone(),
+                layer: c.layer,
+                family: c.family,
+                crs: crs.map(str::to_string),
+            }),
+        })
+        .collect();
+    add_converted(s, p, path, &original, parts)
+}
+
+/// Adds the tables of a DuckDB database that have a geometry column (or the one `layer` names),
+/// each converted once into GeoParquet in the cache.
+#[cfg(not(target_arch = "wasm32"))]
+fn add_duckdb(s: &mut Session, p: &Value, path: &str) -> CmdResult {
+    use rustgis_data::source::duckdb;
+    let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
+    let db = Path::new(path);
+    let err = |e: rustgis_data::DataError| format!("{path}: {e}");
+    let tables = match ps(p, "layer").map(str::trim).filter(|l| !l.is_empty()) {
+        Some(l) => vec![duckdb::find_table(db, l).map_err(err)?],
+        None => duckdb::tables(db).map_err(err)?,
+    };
+    if tables.is_empty() {
+        return Err(format!("{path}: no tables with a geometry column"));
+    }
+    let original = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
+    let mut parts = Vec::new();
+    let single = tables.len() == 1;
+    for t in tables {
+        let out = match duckdb::convert_table(db, &t, crs) {
+            Ok(o) => o,
+            // A table that fails doesn't stop the others.
+            Err(e) if !single => {
+                s.notify(format!("{path}: {}: {e}", t.label()), true);
+                continue;
+            }
+            Err(e) => return Err(err(e)),
+        };
+        let origin = |family| rustgis_map::source::DuckdbOrigin {
+            sql: None,
+            database: Some(original.clone()),
+            table: Some(t.label()),
+            crs: crs.map(str::to_string),
+            family,
+        };
+        parts.extend(duckdb_parts(s, &t.label(), out, origin));
+    }
+    add_converted(s, p, path, &original, parts)
+}
+
+/// Runs a DuckDB query and adds its result as a layer (a layer per geometry type it mixes).
+fn add_sql(s: &mut Session, p: &Value) -> CmdResult {
+    let sql = s_req(p, "sql")?;
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, sql);
+        Err("SQL queries run through DuckDB in the desktop app".into())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rustgis_data::source::duckdb;
+        let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
+        let database = ps(p, "database").map(str::trim).filter(|d| !d.is_empty());
+        let full = database.map(|d| std::path::absolute(d).map(|p| p.display().to_string()).unwrap_or_else(|_| d.to_string()));
+        let q = duckdb::Query { sql, database: database.map(Path::new), crs };
+        let out = duckdb::run(&q).map_err(|e| e.to_string())?;
+        let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Query");
+        let origin = |family| rustgis_map::source::DuckdbOrigin {
+            sql: Some(sql.to_string()),
+            database: full.clone(),
+            table: None,
+            crs: crs.map(str::to_string),
+            family,
+        };
+        let parts = duckdb_parts(s, name, out, origin);
+        // The name given names the layer, or the layers by geometry type.
+        let mut q = p.clone();
+        if let Some(o) = q.as_object_mut() {
+            o.remove("name");
+        }
+        add_converted(s, &q, "the query", full.as_deref().unwrap_or("DuckDB query"), parts)
+    }
+}
+
+/// The layers of a DuckDB result: named `name`, or `name (points)` and so on when it mixes
+/// geometry types.
+#[cfg(not(target_arch = "wasm32"))]
+fn duckdb_parts(
+    s: &mut Session,
+    name: &str,
+    out: rustgis_data::source::duckdb::Output,
+    origin: impl Fn(rustgis_data::source::Family) -> rustgis_map::source::DuckdbOrigin,
+) -> Vec<Converted> {
+    if out.skipped > 0 {
+        s.notify(format!("{name}: {} rows without a geometry were left out", out.skipped), false);
+    }
+    let mixed = out.parts.len() > 1;
+    out.parts
+        .into_iter()
+        .map(|part| Converted {
+            path: part.path,
+            name: if mixed { format!("{name} ({})", part.family.label()) } else { name.to_string() },
+            unprojected: out.unprojected,
+            origin: ConvertedOrigin::Duckdb(origin(part.family)),
+        })
+        .collect()
+}
+
+/// A layer another program (GDAL, DuckDB) converted into the cache.
+#[cfg(not(target_arch = "wasm32"))]
+struct Converted {
+    path: std::path::PathBuf,
+    name: String,
+    /// Its coordinates are the source's own, in a coordinate system it doesn't say.
+    unprojected: bool,
+    origin: ConvertedOrigin,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum ConvertedOrigin {
+    Gdal(rustgis_map::source::GdalOrigin),
+    Duckdb(rustgis_map::source::DuckdbOrigin),
+}
+
+/// Adds converted layers like the files they are (streamed when large), remembering where they came
+/// from so a project can convert them again. `label` names the source in messages, `original` is
+/// the layers' source.
+#[cfg(not(target_arch = "wasm32"))]
+fn add_converted(s: &mut Session, p: &Value, label: &str, original: &str, converted: Vec<Converted>) -> CmdResult {
     let empty_before = s.map().layers.is_empty();
     let single = converted.len() == 1;
     let (mut ids, mut features, mut streamed) = (Vec::new(), 0u64, false);
@@ -402,9 +545,9 @@ fn add_gdal(s: &mut Session, p: &Value, path: &str) -> CmdResult {
         if let Some(v) = p.get("stream") {
             q["stream"] = v.clone();
         }
-        let fgb = c.path.display().to_string();
+        let file = c.path.display().to_string();
         // One layer that can't be added doesn't stop the others.
-        let r = match add_source(s, &q, Origin::Path(&fgb)) {
+        let r = match add_source(s, &q, Origin::Path(&file)) {
             Ok(r) => r,
             Err(e) if !single => {
                 s.notify(format!("{}: {e}", c.name), true);
@@ -416,22 +559,21 @@ fn add_gdal(s: &mut Session, p: &Value, path: &str) -> CmdResult {
         streamed |= r["streamed"].as_bool().unwrap_or(false);
         for id in r["layers"].as_array().into_iter().flatten().filter_map(Value::as_u64).filter_map(|i| u32::try_from(i).ok()) {
             if let Some(l) = s.map_mut().layer_mut(id) {
-                l.dataset.source = Some(original.clone());
+                l.dataset.source = Some(original.to_string());
                 if let Some(src) = &mut l.source {
-                    src.gdal = Some(rustgis_map::source::GdalOrigin {
-                        path: original.clone(),
-                        layer: c.layer.clone(),
-                        family: c.family,
-                        crs: crs.map(str::to_string),
-                    });
+                    match &c.origin {
+                        ConvertedOrigin::Gdal(g) => src.gdal = Some(g.clone()),
+                        ConvertedOrigin::Duckdb(d) => src.duckdb = Some(d.clone()),
+                    }
                 }
             }
-            // GDAL couldn't reproject it, or its coordinates go past longitude/latitude: the file's
-            // coordinate system is unknown.
+            // The source couldn't be reprojected, or its coordinates go past longitude/latitude:
+            // its coordinate system is unknown.
             let e = s.map().layer(id).map(|l| l.extent()).unwrap_or_default();
-            if c.unprojected || (!e.is_empty() && (e.min_x < -181.0 || e.max_x > 181.0 || e.min_y < -91.0 || e.max_y > 91.0)) {
+            let outside = !e.is_empty() && (e.min_x < -181.0 || e.max_x > 181.0 || e.min_y < -91.0 || e.max_y > 91.0);
+            if outside || (c.unprojected && matches!(c.origin, ConvertedOrigin::Gdal(_))) {
                 s.notify(
-                    format!("{}: the file doesn't say its coordinate system; add it again with \"crs\" (such as EPSG:2263)", c.name),
+                    format!("{}: the data doesn't say its coordinate system; add it again with \"crs\" (such as EPSG:2263)", c.name),
                     true,
                 );
             }
@@ -445,7 +587,7 @@ fn add_gdal(s: &mut Session, p: &Value, path: &str) -> CmdResult {
         }
     }
     if ids.is_empty() {
-        return Err(format!("{path}: none of its layers could be added"));
+        return Err(format!("{label}: none of its layers could be added"));
     }
     Ok(json!({"layer": ids.first(), "layers": ids, "features": features, "streamed": streamed}))
 }

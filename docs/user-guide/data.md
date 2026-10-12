@@ -14,6 +14,7 @@ Formats](data-formats.md).
 | GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | No |
 | FlatGeobuf (`.fgb`) | Yes | Yes (`share.exportLayer`) |
 | Through GDAL: KML/KMZ, GPX, GML, DXF, File Geodatabase (`.gdb` folder), MapInfo, OpenStreetMap… | Yes (desktop, when GDAL is installed) | No |
+| DuckDB databases (`.duckdb`, `.ddb`) and SQL queries | Yes (desktop, when DuckDB is installed) | No |
 | KML, GPX, CSV with WKT geometry | No | Yes (Analysis › Workflows › Data Interop) |
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
 | ASCII grid (`.asc`, with an optional `.prj`) | Yes | No |
@@ -45,6 +46,49 @@ reuses the conversion until the file changes, and large layers stream like any l
 (below). Every layer of the file is added; a layer mixing geometry types, as KML often does, is
 added as one layer per type. Projects remember the original file and convert it again if the
 cached copy is gone.
+
+## SQL queries and DuckDB databases
+
+When [DuckDB](https://duckdb.org) is installed (the `duckdb` program on the `PATH`, or the folder
+holding it in `RUSTGIS_DUCKDB_BIN`; DuckDB 1.5 or later), the desktop app adds the result of an SQL
+query as a layer, with the `layer.addSql` command (Add Data From SQL in command search):
+
+```json
+{"sql": "SELECT name, geometry FROM read_parquet('places.parquet') WHERE country = 'FR'", "name": "French places"}
+```
+
+The query is one DuckDB `SELECT` (or `FROM …`, `WITH …`), with [DuckDB
+Spatial](https://duckdb.org/docs/stable/core_extensions/spatial/overview)'s `ST_` functions: it can
+read Parquet, CSV, JSON and GeoParquet files, anything `ST_Read` reads, and web addresses (`https://`,
+`s3://`), so a bounding box of [Overture Maps](https://overturemaps.org) is one query:
+
+```sql
+SELECT id, names.primary AS name, geometry
+FROM read_parquet('s3://overturemaps-us-west-2/release/2026-09-23.1/theme=places/type=place/*', hive_partitioning = 1)
+WHERE bbox.xmin BETWEEN -83.95 AND -83.89 AND bbox.ymin BETWEEN 35.94 AND 35.98
+```
+
+The first geometry column becomes the layer's geometry; other columns become its attributes (types
+RustGIS doesn't read, such as dates and lists, as text). A geometry that says its coordinate system
+is converted to longitude/latitude; give `"crs"` (such as `EPSG:2263`) for one that doesn't. A
+result mixing geometry types becomes a layer per type, and rows without a geometry are left out.
+`"database"` opens a DuckDB database (read only) so the query names its tables plainly.
+
+**Map › Add Data** opens a DuckDB database file (`.duckdb`, `.ddb`): every table with a geometry
+column becomes a layer (`"layer"` picks one).
+
+RustGIS doesn't link to DuckDB: it runs `duckdb`, which writes the result as GeoParquet in the
+cache folder (`~/.cache/rustgis/duckdb` on Linux, `~/Library/Caches/RustGIS/duckdb` on macOS,
+`%LOCALAPPDATA%\RustGIS\cache\duckdb` on Windows, or `RUSTGIS_DUCKDB_CACHE`), sorted along a
+Hilbert curve with a bounding-box covering, so large results stream like any large GeoParquet
+(below). DuckDB Spatial is installed the first time (a download from DuckDB's extension
+repository). A database table is converted once and reused until the file changes; a query runs
+afresh each time. Projects remember the query or table and run it again if the cached result is
+gone.
+
+A query can read any file the app can and fetch any web address, so the [AI
+Assistant](assistant.md) asks before it runs one, and plugins need both the files and network
+permissions.
 
 ## Large files
 

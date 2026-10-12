@@ -2426,6 +2426,91 @@ fn gdal_formats_open_when_gdal_is_installed() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// SQL queries and DuckDB databases through DuckDB, when it is installed; without it, both say
+/// how to get it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn duckdb_queries_and_databases() {
+    let mut s = Session::new(Project::default());
+    let query = "SELECT 'a' AS name, ST_Point(7, 45) AS geom UNION ALL SELECT 'b', ST_GeomFromText('LINESTRING(7 45, 8 46)')";
+    if !rustgis_data::source::duckdb::available() {
+        let e = s.run("layer.addSql", &json!({"sql": query})).unwrap_err();
+        assert!(e.contains("need DuckDB"), "{e}");
+        let e = s.run("layer.addData", &json!({"path": "/nowhere/x.duckdb"})).unwrap_err();
+        assert!(e.contains("need DuckDB"), "{e}");
+        return;
+    }
+    // A result mixing geometry types: a layer per type.
+    let r = s.run("layer.addSql", &json!({"sql": query, "name": "Trip"})).unwrap();
+    let names: Vec<String> = s.map().layers.iter().map(|l| l.name.clone()).collect();
+    assert_eq!(names, vec!["Trip (points)", "Trip (lines)"], "{r}");
+    // Streamed, a layer remembers its query; the project runs it again when the result is gone.
+    let r = s
+        .run(
+            "layer.addSql",
+            &json!({"sql": "SELECT i AS id, ST_Point(i, i / 2) AS geom FROM range(50) t(i)", "name": "Pts", "stream": true}),
+        )
+        .unwrap();
+    assert_eq!(r["features"], 50);
+    let id = r["layer"].as_u64().unwrap() as u32;
+    let src = s.map().layer(id).unwrap().source.clone().unwrap();
+    let d = src.duckdb.clone().unwrap();
+    assert!(d.sql.as_deref().is_some_and(|q| q.contains("range(50)")) && d.family == rustgis_data::source::Family::Points);
+    let cached = src.path.clone().unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    std::fs::remove_file(&cached).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let l = t.map().layer_by_name("Pts").unwrap();
+    let again = l.source.as_ref().unwrap();
+    assert!(again.is_open(), "{:?}", again.error);
+    assert_eq!(again.info().and_then(|i| i.count), Some(50));
+    assert_ne!(again.path.as_deref(), Some(cached.as_str()));
+    // Errors are DuckDB's, and nothing is added.
+    let before = s.map().layers.len();
+    assert!(s.run("layer.addSql", &json!({"sql": "SELECT 1 AS a"})).unwrap_err().contains("no geometry column"));
+    assert!(s.run("layer.addSql", &json!({"sql": "SELECT * FROM nowhere"})).unwrap_err().contains("nowhere"));
+    assert_eq!(s.map().layers.len(), before);
+
+    // A database file: its geometry tables become layers, or the one named.
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-duckdb-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("places.duckdb");
+    let ok = std::process::Command::new(rustgis_data::source::duckdb::program().unwrap())
+        .arg(&db)
+        .arg("-c")
+        .arg("LOAD spatial; CREATE TABLE towns AS SELECT 'x' AS name, ST_Point(2.35, 48.85) AS geom; CREATE TABLE lakes AS SELECT ST_GeomFromText('POLYGON((6 46, 7 46, 7 47, 6 46))') AS geom; CREATE TABLE notes(t TEXT);")
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok);
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": db.display().to_string()})).unwrap();
+    let mut names: Vec<String> = s.map().layers.iter().map(|l| l.name.clone()).collect();
+    names.sort();
+    assert_eq!(names, vec!["lakes", "towns"], "{r}");
+    assert_eq!(
+        s.map().layer_by_name("towns").unwrap().dataset.source.as_deref(),
+        Some(std::path::absolute(&db).unwrap().display().to_string().as_str())
+    );
+    let r = s.run("layer.addData", &json!({"path": db.display().to_string(), "layer": "towns", "stream": true, "name": "T"})).unwrap();
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert_eq!(s.map().layer(id).unwrap().source.as_ref().unwrap().duckdb.as_ref().unwrap().table.as_deref(), Some("towns"));
+    assert!(s.run("layer.addData", &json!({"path": db.display().to_string(), "layer": "notes"})).is_err());
+    // A query over the database's tables.
+    let r = s.run("layer.addSql", &json!({"sql": "SELECT * FROM towns", "database": db.display().to_string(), "name": "Q"})).unwrap();
+    assert_eq!(r["features"], 1);
+    // Projected coordinates that don't say their system are pointed out; "crs" converts them.
+    let projected = "SELECT ST_Point(500000, 4200000) AS geom";
+    s.run("layer.addSql", &json!({"sql": projected, "name": "Utm"})).unwrap();
+    assert!(s.notices.iter().any(|n| n.error && n.text.starts_with("Utm: the data doesn't say its coordinate system")));
+    let r = s.run("layer.addSql", &json!({"sql": projected, "name": "Utm2", "crs": "EPSG:32633"})).unwrap();
+    let e = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().extent();
+    assert!((e.min_x - 15.0).abs() < 0.01 && (e.min_y - 37.95).abs() < 0.05, "{e:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn pmtiles_archives_become_tile_layers() {
     let mut s = Session::new(Project::default());

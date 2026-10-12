@@ -126,6 +126,9 @@ pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
         });
     }
     let spec = s.registry.get(&id)?;
+    if id == rustgis_engine::cmd::plugins::SQL {
+        return Some("it runs an SQL query, which can read files on this computer and addresses on the internet".into());
+    }
     match reaches(spec, &params) {
         Some(Reach::Files) => Some("it reads or writes files on this computer".into()),
         Some(Reach::Network) => Some("it connects to an address on the internet".into()),

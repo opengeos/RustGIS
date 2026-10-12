@@ -8,7 +8,8 @@ or enterprise portal sharing yet, so real depth is lower than the checklist sugg
 - Layered workspace, command registry with undo, project files (`.rgis`), `rustgis-cli`, the
   web app (WebAssembly), 15 interface languages.
 - Data: GeoJSON, CSV (lon/lat), Shapefile, GeoPackage, GeoParquet and FlatGeobuf in (large files
-  read in place, a view at a time), and the vector formats GDAL reads when it is installed;
+  read in place, a view at a time), the vector formats GDAL reads when it is installed, and SQL
+  queries and DuckDB databases (DuckDB Spatial) when DuckDB is;
   GeoJSON, CSV, FlatGeobuf, KML, GPX and WKT out; standalone tables; layer, map, style, template,
   task and package files.
 - Rasters: GeoTIFF/COG and ASCII grids, EPSG reprojection, stretch/RGB/classified/shaded-relief

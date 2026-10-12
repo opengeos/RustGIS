@@ -54,6 +54,29 @@ pub struct SourceLayer {
     /// converted copy is gone (desktop only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gdal: Option<GdalOrigin>,
+    /// For a layer from a DuckDB query or database table: run again when the result in the cache
+    /// is gone (desktop only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duckdb: Option<DuckdbOrigin>,
+}
+
+/// Where a layer from DuckDB came from: a query, or a table of a database.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DuckdbOrigin {
+    /// The query (for a table, none).
+    #[serde(default)]
+    pub sql: Option<String>,
+    /// The database opened for the query, or holding the table.
+    #[serde(default)]
+    pub database: Option<String>,
+    /// The table, as `table` or `schema.table`.
+    #[serde(default)]
+    pub table: Option<String>,
+    /// The coordinate system given for a geometry that doesn't say.
+    #[serde(default)]
+    pub crs: Option<String>,
+    /// The geometry family of the result this layer shows.
+    pub family: rustgis_data::source::Family,
 }
 
 /// Where a layer read through GDAL came from.
@@ -78,6 +101,23 @@ impl std::fmt::Debug for SourceLayer {
             .field("error", &self.error)
             .finish_non_exhaustive()
     }
+}
+
+/// Runs a DuckDB layer's query (or converts its table) again: the result's part of the layer's
+/// geometry family.
+#[cfg(not(target_arch = "wasm32"))]
+fn rerun(d: &DuckdbOrigin) -> rustgis_data::Result<std::path::PathBuf> {
+    use rustgis_data::source::duckdb;
+    let database = d.database.as_deref().map(std::path::Path::new);
+    let out = match (&d.table, database) {
+        (Some(t), Some(db)) => duckdb::convert_table(db, &duckdb::find_table(db, t)?, d.crs.as_deref())?,
+        _ => duckdb::run(&duckdb::Query { sql: d.sql.as_deref().unwrap_or_default(), database, crs: d.crs.as_deref() })?,
+    };
+    out.parts
+        .into_iter()
+        .find(|p| p.family == d.family)
+        .map(|p| p.path)
+        .ok_or_else(|| rustgis_data::DataError::Format(format!("the query returns no {} any more", d.family.label())))
 }
 
 /// What the layer's features hold.
@@ -152,7 +192,20 @@ impl SourceLayer {
                         Err(e) => Err(e),
                     }
                 }
-                (r, _) => r,
+                (r, _) => match (r, &self.duckdb) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    (Err(_), Some(d)) if !std::path::Path::new(p).exists() => match rerun(d) {
+                        Ok(fresh) => {
+                            let r = rustgis_data::source::open_path(&fresh, None);
+                            if r.is_ok() {
+                                self.path = Some(fresh.display().to_string());
+                            }
+                            r
+                        }
+                        Err(e) => Err(e),
+                    },
+                    (r, _) => r,
+                },
             }
         } else {
             return Err("the layer has no source".into());

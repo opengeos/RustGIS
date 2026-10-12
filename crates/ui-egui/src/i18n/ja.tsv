@@ -60,6 +60,7 @@ Add Commands	コマンドの追加
 Add Data	データの追加
 Add Data (from file contents)	データの追加（ファイル内容から）
 Add Data (from text)	データの追加（テキストから）
+Add Data From SQL	SQL からデータを追加
 Add Data Store…	データ ストアの追加…
 Add Data…	データの追加…
 Add Element	エレメントの追加
