@@ -281,7 +281,8 @@ fn with_notices(r: Value, s: &Session, mark: u64) -> Value {
 /// converted).
 fn error_with_notices(e: String, s: &Session, mark: u64) -> String {
     let said: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).filter(|t| *t != e).collect();
-    if said.is_empty() { e } else { format!("{e}\n{}", said.join("\n")) }
+    // Clipped like a result: an MCP client gets the error as it is.
+    if said.is_empty() { e } else { clip(&format!("{e}\n{}", said.join("\n")), MAX_RESULT) }
 }
 
 /// How well `words` match `hay` (all lower case): matched words, with whole-id hits counting more.
