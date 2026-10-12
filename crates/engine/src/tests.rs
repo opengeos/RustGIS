@@ -2447,3 +2447,13 @@ fn pmtiles_archives_become_tile_layers() {
     t.run("project.openText", &json!({"text": text})).unwrap();
     assert_eq!(t.map().tiles.iter().filter(|x| x.kind == rustgis_map::TileKind::PmTiles).count(), 2);
 }
+
+#[test]
+fn pmtiles_from_network_shares_are_refused() {
+    let mut s = Session::new(Project::default());
+    for p in [r"\\attacker\share\x.pmtiles", "//attacker/share/x.pmtiles", "file://attacker/share/x.pmtiles"] {
+        assert!(s.run("map.addTiles", &json!({"url": p, "kind": "pmtiles"})).is_err(), "{p}");
+    }
+    assert!(crate::render::rustgis_tiles::pmtiles::check_local(r"\\attacker\share\x.pmtiles").is_err());
+    assert!(crate::render::rustgis_tiles::pmtiles::check_local("/data/x.pmtiles").is_ok());
+}

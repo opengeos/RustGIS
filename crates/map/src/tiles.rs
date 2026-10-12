@@ -190,8 +190,11 @@ pub fn check_path(path: &str) -> Result<(), String> {
         return Err("the path is too long or has control characters".into());
     }
     let windows_drive = p.as_bytes().get(1) == Some(&b':') && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
-    if !(p.starts_with('/') || windows_drive || p.starts_with("\\\\")) {
-        return Err(format!("'{p}': give the full path of the PMTiles file"));
+    // Not a network share (\\server\share, or file://server/…), which a project could use to
+    // make Windows connect to another machine.
+    let share = p.starts_with("\\\\") || p.starts_with("//") || (path.starts_with("file://") && !p.starts_with('/'));
+    if share || !(p.starts_with('/') || windows_drive) {
+        return Err(format!("'{p}': give the full path of the PMTiles file on this computer"));
     }
     if !p.to_ascii_lowercase().ends_with(".pmtiles") {
         return Err(format!("'{p}' isn't a .pmtiles file"));

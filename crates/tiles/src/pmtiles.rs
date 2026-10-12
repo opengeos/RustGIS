@@ -114,8 +114,11 @@ pub fn is_local(archive: &str) -> bool {
 pub fn check_local(archive: &str) -> Result<(), String> {
     let p = archive.strip_prefix("file://").unwrap_or(archive);
     let drive = p.as_bytes().get(1) == Some(&b':') && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
-    if !(p.starts_with('/') || drive || p.starts_with("\\\\")) || p.chars().any(char::is_control) {
-        return Err(format!("'{p}': a PMTiles file is given by its full path"));
+    // A path on this computer: not a network share (\\server\share, or file://server/…), which a
+    // project could use to make Windows connect to another machine.
+    let share = p.starts_with("\\\\") || p.starts_with("//") || (archive.starts_with("file://") && !p.starts_with('/'));
+    if share || !(p.starts_with('/') || drive) || p.chars().any(char::is_control) || p.len() > 4096 {
+        return Err(format!("'{p}': a PMTiles file is given by its full path on this computer"));
     }
     if !p.to_ascii_lowercase().ends_with(".pmtiles") {
         return Err(format!("'{p}' isn't a .pmtiles file"));

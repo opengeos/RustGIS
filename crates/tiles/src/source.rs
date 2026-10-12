@@ -286,7 +286,7 @@ fn pmtiles_style(spec: &Spec, info: &pmtiles::Info) -> Option<Value> {
     // Each archive starts the palette somewhere of its own, so two archives look apart.
     let start = spec.url.bytes().fold(0usize, |h, b| h.wrapping_mul(31).wrapping_add(usize::from(b)));
     for (i, name) in names.iter().take(64).enumerate() {
-        let c = COLOURS.get((start + i) % COLOURS.len()).copied().unwrap_or("#3182bd");
+        let c = COLOURS.get(start.wrapping_add(i) % COLOURS.len()).copied().unwrap_or("#3182bd");
         layers.push(json!({"id": format!("{name}-fill"), "type": "fill", "source": "vector", "source-layer": name,
             "filter": ["==", "$type", "Polygon"], "paint": {"fill-color": c, "fill-opacity": 0.35}}));
         layers.push(json!({"id": format!("{name}-line"), "type": "line", "source": "vector", "source-layer": name,
