@@ -180,7 +180,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq rpm appstream
-          pipx install copr-cli
+          # Pinned: this step holds the COPR token.
+          pipx install 'copr-cli==2.6'
           mkdir -p ~/.config
           (umask 077; printf '%s\n' "$COPR_CONFIG" > ~/.config/copr)
 
