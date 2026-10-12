@@ -1336,7 +1336,7 @@ Run {name}	Chạy {name}
 Running…	Đang chạy…
 RustGIS	RustGIS
 RustGIS deep learning package	Gói học sâu RustGIS
-RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, keeps your data on your machine, and every action is a command you can also run from the command line.	RustGIS là một GIS miễn phí và mã nguồn mở viết bằng Rust thuần. Nó chạy trên máy tính và trong trình duyệt, giữ dữ liệu của bạn trên máy của bạn, và mọi thao tác đều là một lệnh mà bạn cũng có thể chạy từ dòng lệnh.
+RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, and every action is a command you can also run from the command line.	RustGIS là một GIS miễn phí và mã nguồn mở viết bằng Rust thuần. Nó chạy trên máy tính và trong trình duyệt, và mọi thao tác đều là một lệnh mà bạn cũng có thể chạy từ dòng lệnh.
 RustGIS layer file	Tệp lớp RustGIS
 RustGIS layers, maps and projects	Lớp, bản đồ và dự án RustGIS
 RustGIS layout	Bố cục RustGIS

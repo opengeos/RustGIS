@@ -37,7 +37,7 @@ cargo run --release -p rustgis -- atlas.rgis   # a saved project
 ## Your own data
 
 **Map › Add Data** (or drop files on the window) opens GeoJSON, CSV with longitude and latitude
-columns, Shapefiles, GeoTIFFs and ASCII grids. **Project › New › Map** starts from a blank map.
+columns, GeoTIFFs and ASCII grids, and on the desktop also Shapefiles. **Project › New › Map** starts from a blank map.
 See [Data](user-guide/data.md) for the details of each format.
 
 ## Ask the AI Assistant

@@ -2,7 +2,7 @@
 //!
 //! The tab, group and feature names of a full desktop GIS ribbon, used as RustGIS's feature
 //! checklist. Each row maps to the RustGIS command implementing it, or `None` when it is still
-//! missing. `cargo xtask parity` reports coverage.
+//! missing. `rustgis-cli parity` reports coverage.
 
 pub struct Feature {
     pub tab: &'static str,

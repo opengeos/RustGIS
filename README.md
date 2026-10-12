@@ -6,8 +6,8 @@
 
 <p align="center">
   <b>A fast, free and open-source GIS in pure Rust for mapping, analyzing and sharing geospatial data.</b><br>
-  Native on Windows, macOS and Linux, and in your web browser. Your data stays on your machine,
-  and every action is a command you can script.
+  Native on Windows, macOS and Linux, and in your web browser. Your data stays on your machine
+  unless you send it to an AI model you choose, and every action is a command you can script.
 </p>
 
 <p align="center">
@@ -33,9 +33,10 @@
   server to run.
 - **Runs everywhere.** The same app on Windows, macOS and Linux, and compiled to WebAssembly at
   [web.rustgis.app](https://web.rustgis.app) with nothing to install.
-- **Local and private.** Your files are read and written on your machine; nothing is uploaded.
-  The network is used only when you ask for it: web basemaps, plugins, the GeoLibre tools and
-  the AI model you pick.
+- **Local and private.** Your files are read and written on your machine, and nothing is uploaded
+  on its own. The network is used only when you ask for it: web basemaps, plugins, the GeoLibre
+  tools and the AI model you pick, which receives your questions and the data it reads to answer
+  them.
 - **Everything is a command.** Every button in the ribbon is a command with an id. Script it from
   `rustgis-cli`, chain it in notebooks and models, or ask the AI Assistant to run it for you.
 - **Familiar.** A ribbon of tabs and contextual tab groups, Contents and Catalog panes, an

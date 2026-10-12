@@ -35,9 +35,10 @@ Click the model name or the gear to open the settings. The assistant works with:
 | Ollama (local) | `qwen3` | none; the server from `OLLAMA_BASE_URL` (default `http://localhost:11434`) |
 | OpenAI-compatible | — | LM Studio, vLLM, llama.cpp…: the address from `OPENAI_COMPATIBLE_BASE_URL`, an optional `OPENAI_COMPATIBLE_API_KEY` |
 
-The ↻ button lists the provider's models. On the desktop the first provider with a key in the
-environment is chosen at start; `RUSTGIS_ASSISTANT_PROVIDER` and `RUSTGIS_ASSISTANT_MODEL` pick
-one. Models that call tools well give the best results; small local models may stop early or
+The ↻ button lists the provider's models. The provider and model you last chose in the settings
+are used at start. Until you choose one, `RUSTGIS_ASSISTANT_PROVIDER` and
+`RUSTGIS_ASSISTANT_MODEL` pick them, and otherwise the desktop uses the first provider with a key
+in the environment. Saved settings win over the environment. Models that call tools well give the best results; small local models may stop early or
 skip steps.
 
 ## Privacy

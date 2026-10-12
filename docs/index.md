@@ -4,8 +4,8 @@
 data.**
 
 RustGIS runs natively on Windows, macOS and Linux, and in your web browser. Your data stays on
-your machine, and every action is a command you can script from the command line, a notebook or
-the AI Assistant.
+your machine unless you send it to an AI model you choose, and every action is a command you can
+script from the command line, a notebook or the AI Assistant.
 
 [Try it in your browser](https://web.rustgis.app){ .md-button .md-button--primary }
 [Download](installation.md){ .md-button }

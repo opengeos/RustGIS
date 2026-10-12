@@ -1336,7 +1336,7 @@ Run {name}	Запустить {name}
 Running…	Выполняется…
 RustGIS	RustGIS
 RustGIS deep learning package	Пакет глубокого обучения RustGIS
-RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, keeps your data on your machine, and every action is a command you can also run from the command line.	RustGIS — свободная ГИС с открытым исходным кодом на чистом Rust. Она работает на компьютере и в браузере, хранит ваши данные на вашем устройстве, а каждое действие — это команда, которую можно выполнить и из командной строки.
+RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, and every action is a command you can also run from the command line.	RustGIS — свободная ГИС с открытым исходным кодом на чистом Rust. Она работает на компьютере и в браузере, а каждое действие — это команда, которую можно выполнить и из командной строки.
 RustGIS layer file	Файл слоя RustGIS
 RustGIS layers, maps and projects	Слои, карты и проекты RustGIS
 RustGIS layout	Макет RustGIS
