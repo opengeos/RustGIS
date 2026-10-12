@@ -1,0 +1,6 @@
+{"dark":true}
+{"cmd":"map.basemap","params":{"name":"midnight"}}
+{"cmd":"bookmark.go","params":{"name":"Europe"}}
+{"cmd":"ui.tab","params":{"tab":"View"}}
+{"steps":10}
+{"shot":"target/shots/dark.png"}

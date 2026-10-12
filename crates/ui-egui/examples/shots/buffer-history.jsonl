@@ -1,0 +1,7 @@
+{"cmd":"bookmark.go","params":{"name":"Africa"}}
+{"cmd":"layer.select","params":{"layer":"Cities"}}
+{"cmd":"gp.run","params":{"tool":"buffer","params":{"input":"Cities","distance":300,"units":"Kilometers","dissolve":"All"}}}
+{"cmd":"ui.gp.open","params":{"tool":"buffer"}}
+{"cmd":"ui.tab","params":{"tab":"Analysis"}}
+{"steps":10}
+{"shot":"target/shots/buffer-history.png"}

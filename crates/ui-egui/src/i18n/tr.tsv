@@ -9,7 +9,7 @@
 <None>	<Yok>
 A 3D globe seen from space.	Uzaydan görülen 3B küre.
 A blank map with a basemap	Altlık haritalı boş bir harita
-A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Saf Rust ile yazılmış, hızlı ve açık kaynaklı bir masaüstü CBS; masaüstü CBS'nin şerit iş akışıyla: haritalar ve katmanlar, semboloji, etiketleme, seçim, düzenleme, coğrafi işleme ve dışa aktarma.
+A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	Masaüstünde ve tarayıcıda coğrafi verileri haritalamak, analiz etmek ve paylaşmak için saf Rust ile yazılmış hızlı, özgür ve açık kaynaklı bir CBS.
 A flat scene centred on the view (azimuthal equidistant).	Görünümün ortasında düz bir sahne (azimutal eşit uzaklık).
 A globe scene.	Bir küre sahnesi.
 A magnifying lens that follows the pointer.	İşaretçiyi izleyen bir büyüteç.
@@ -1336,7 +1336,7 @@ Run {name}	Çalıştır: {name}
 Running…	Çalışıyor…
 RustGIS	RustGIS
 RustGIS deep learning package	RustGIS derin öğrenme paketi
-RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS, saf Rust ile yazılmış açık kaynaklı bir masaüstü CBS'dir. Şeridi alışılmış masaüstü CBS iş akışını izler; her eylem, komut satırından da çalıştırabileceğiniz bir komuttur.
+RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, keeps your data on your machine, and every action is a command you can also run from the command line.	RustGIS, saf Rust ile yazılmış özgür ve açık kaynaklı bir CBS'dir. Masaüstünde ve tarayıcıda çalışır, verilerinizi bilgisayarınızda tutar ve her işlem komut satırından da çalıştırabileceğiniz bir komuttur.
 RustGIS layer file	RustGIS katman dosyası
 RustGIS layers, maps and projects	RustGIS katmanları, haritaları ve projeleri
 RustGIS layout	RustGIS sayfa düzeni

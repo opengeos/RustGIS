@@ -89,7 +89,7 @@ Homepage: https://rustgis.app
 Installed-Size: $(du -sk "$p/usr" | cut -f1)
 Depends: ${shlibs:-libc6, libgcc-s1}, libxkbcommon0, libwayland-client0 | libx11-6
 Recommends: libxkbcommon-x11-0, libxcursor1, libxi6, libxrandr2, libvulkan1 | libegl1
-Description: Desktop GIS with a ribbon workflow, written in Rust
+Description: Fast, open-source GIS for mapping, analyzing and sharing geospatial data
  Maps and layers, symbology, labeling, selection, editing, geoprocessing and
  export. Includes rustgis-cli for scripting every command.
 CONTROL

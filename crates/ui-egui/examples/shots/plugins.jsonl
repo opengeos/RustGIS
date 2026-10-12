@@ -1,0 +1,3 @@
+{"cmd":"ui.plugins","params":{"open":true,"tab":"browse"}}
+{"sleep":8000}
+{"shot":"target/shots/plugins.png"}

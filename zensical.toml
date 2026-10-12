@@ -1,6 +1,6 @@
 [project]
 site_name = "RustGIS"
-site_description = "A fast, open-source desktop GIS in pure Rust with a familiar ribbon workflow"
+site_description = "A fast, free and open-source GIS in pure Rust for mapping, analyzing and sharing geospatial data, on the desktop and in the browser"
 site_author = "opengeos"
 site_url = "https://rustgis.app"
 repo_url = "https://github.com/opengeos/RustGIS"
@@ -12,12 +12,22 @@ nav = [
   { "Installation" = "installation.md" },
   { "Getting Started" = "getting-started.md" },
   { "Web App" = "https://web.rustgis.app" },
-  { "User Guide" = "user-guide.md" },
+  { "User Guide" = [
+    "user-guide/index.md",
+    "user-guide/data.md",
+    "user-guide/maps.md",
+    "user-guide/cartography.md",
+    "user-guide/editing.md",
+    "user-guide/analysis.md",
+    "user-guide/layouts.md",
+    "user-guide/sharing.md",
+    "user-guide/workspace.md",
+    "user-guide/assistant.md",
+  ] },
   { "Command Line" = "cli.md" },
   { "Plugins" = "plugins.md" },
   { "Languages" = "i18n.md" },
   { "Architecture" = "architecture.md" },
-  { "Feature Coverage" = "parity.md" },
   { "Contributing" = "contributing.md" },
   { "Report Issues" = "https://github.com/opengeos/RustGIS/issues" },
 ]
@@ -27,6 +37,7 @@ logo = "https://assets.rustgis.app/images/logo.svg"
 favicon = "https://assets.rustgis.app/images/favicon.png"
 features = [
   "content.code.copy",
+  "navigation.indexes",
   "navigation.footer",
   "navigation.instant",
   "navigation.top",

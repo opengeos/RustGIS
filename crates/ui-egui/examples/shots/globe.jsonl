@@ -1,0 +1,5 @@
+{"cmd":"map.projection","params":{"type":"globe"}}
+{"cmd":"map.goToXY","params":{"lon":15,"lat":25,"scale":70000000}}
+{"cmd":"ui.tab","params":{"tab":"View"}}
+{"steps":10}
+{"shot":"target/shots/globe.png"}

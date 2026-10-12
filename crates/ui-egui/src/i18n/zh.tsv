@@ -9,7 +9,7 @@
 <None>	<无>
 A 3D globe seen from space.	从太空看到的三维地球。
 A blank map with a basemap	带底图的空白地图
-A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	一款用纯 Rust 编写的快速、开源桌面 GIS，采用桌面 GIS 的功能区工作流：地图与图层、符号系统、标注、选择、编辑、地理处理和导出。
+A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	一款快速、免费、开源的纯 Rust GIS，用于在桌面和浏览器中制图、分析和共享地理空间数据。
 A flat scene centred on the view (azimuthal equidistant).	以视图为中心的平面场景（方位等距投影）。
 A globe scene.	地球仪场景。
 A magnifying lens that follows the pointer.	跟随指针的放大镜。
@@ -1336,7 +1336,7 @@ Run {name}	运行 {name}
 Running…	正在运行…
 RustGIS	RustGIS
 RustGIS deep learning package	RustGIS 深度学习包
-RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS 是一款用纯 Rust 编写的开源桌面 GIS。其功能区遵循熟悉的桌面 GIS 工作流；每个操作都是一条命令，也可以从命令行运行。
+RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, keeps your data on your machine, and every action is a command you can also run from the command line.	RustGIS 是一款用纯 Rust 编写的免费开源 GIS。它可在桌面和浏览器中运行，数据保存在您自己的设备上，并且每个操作都是一条命令，也可以在命令行中运行。
 RustGIS layer file	RustGIS 图层文件
 RustGIS layers, maps and projects	RustGIS 图层、地图和工程
 RustGIS layout	RustGIS 布局

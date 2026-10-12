@@ -8,7 +8,6 @@ rustgis-cli tools                     # geoprocessing tools
 rustgis-cli info data.geojson         # layer summary as JSON
 rustgis-cli render data.geojson map.png --basemap ocean --width 1600 --height 900
 rustgis-cli render data.geojson map.png --tiles 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
-rustgis-cli parity                    # ribbon feature coverage
 rustgis-cli logo icon.png --size 256  # the app icon as a PNG
 rustgis-cli plugins                   # installed plugins (also: browse, get, install, uninstall…)
 ```
@@ -51,7 +50,7 @@ rustgis-cli run --data dem.tif \
 
 ## Asking the AI assistant
 
-`ask` gives the [AI Assistant](user-guide.md#ai-assistant) one request. It loads data like `run`,
+`ask` gives the [AI Assistant](user-guide/assistant.md) one request. It loads data like `run`,
 then the model answers and acts on the project through commands; `--save` keeps the result:
 
 ```sh

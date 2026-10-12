@@ -9,7 +9,7 @@
 <None>	<없음>
 A 3D globe seen from space.	우주에서 본 3D 지구본.
 A blank map with a basemap	배경지도가 있는 빈 지도
-A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	순수 Rust로 작성된 빠른 오픈 소스 데스크톱 GIS로, 데스크톱 GIS의 리본 워크플로를 제공합니다: 지도와 레이어, 심볼, 라벨, 선택, 편집, 지오프로세싱 및 내보내기.
+A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	순수 Rust로 작성된 빠르고 무료인 오픈 소스 GIS로, 데스크톱과 브라우저에서 지리공간 데이터를 지도화하고 분석하고 공유할 수 있습니다.
 A flat scene centred on the view (azimuthal equidistant).	뷰를 중심으로 한 평면 장면(방위 정거도법).
 A globe scene.	지구본 장면.
 A magnifying lens that follows the pointer.	포인터를 따라 움직이는 돋보기.
@@ -1336,7 +1336,7 @@ Run {name}	{name} 실행
 Running…	실행 중…
 RustGIS	RustGIS
 RustGIS deep learning package	RustGIS 딥러닝 패키지
-RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS는 순수 Rust로 작성된 오픈 소스 데스크톱 GIS입니다. 리본은 익숙한 데스크톱 GIS 워크플로를 따르며, 모든 작업은 명령줄에서도 실행할 수 있는 명령입니다.
+RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, keeps your data on your machine, and every action is a command you can also run from the command line.	RustGIS는 순수 Rust로 작성된 무료 오픈 소스 GIS입니다. 데스크톱과 브라우저에서 실행되고, 데이터를 사용자의 컴퓨터에 보관하며, 모든 작업은 명령줄에서도 실행할 수 있는 명령입니다.
 RustGIS layer file	RustGIS 레이어 파일
 RustGIS layers, maps and projects	RustGIS 레이어, 지도 및 프로젝트
 RustGIS layout	RustGIS 레이아웃

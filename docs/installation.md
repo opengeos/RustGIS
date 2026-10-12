@@ -16,9 +16,9 @@ builds of the desktop app and `rustgis-cli`:
 On macOS the command line tool is a separate `rustgis-cli-<version>-macos-<arch>.tar.gz`;
 the other packages include it. `SHA256SUMS` lists the checksum of every file.
 
-The builds are not yet signed. On macOS, the first time, right-click RustGIS in Applications
-and choose **Open** (or run `xattr -dr com.apple.quarantine /Applications/RustGIS.app`). On
-Windows, choose **More info › Run anyway** if SmartScreen warns about an unknown publisher.
+The macOS app and command line tool are signed with a Developer ID and notarized by Apple, so
+they open without warnings. The Windows build is not yet signed: choose **More info › Run
+anyway** if SmartScreen warns about an unknown publisher.
 
 ## From source
 
@@ -54,7 +54,8 @@ RustGIS also runs in the browser, compiled to WebAssembly: open
 **[web.rustgis.app](https://web.rustgis.app)**. It is the same app with three differences:
 
 - **Open** and **Add Data** use the browser's file picker, and you can drop files on the page.
-  GeoJSON, CSV and `.rgisx` projects work; Shapefiles need the desktop app.
+  GeoJSON, CSV, GeoTIFF, ASCII grids and `.rgisx` projects work; Shapefiles need the desktop
+  app.
 - **Save** and **Export** download the file.
 - The interface uses the built-in font, because a web page can't read installed fonts.
 

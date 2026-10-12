@@ -488,7 +488,7 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
                 });
             });
             ui.add_space(8.0);
-            ui.label(tl!("A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export."));
+            ui.label(tl!("A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser."));
             ui.add_space(4.0);
             project_links(ui);
             ui.add_space(6.0);

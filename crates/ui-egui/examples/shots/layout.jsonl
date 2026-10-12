@@ -1,0 +1,4 @@
+{"cmd":"layout.new","params":{"name":"World Population","page":"a4","orientation":"landscape"}}
+{"cmd":"ui.tab","params":{"tab":"Layout"}}
+{"steps":10}
+{"shot":"target/shots/layout.png"}

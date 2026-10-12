@@ -1,0 +1,4 @@
+{"cmd":"ui.pane.assistant","params":{"ask":"Which 5 African countries have the largest population? Select them and zoom to them."}}
+{"cmd":"ui.tab","params":{"tab":"Analysis"}}
+{"sleep":60000}
+{"shot":"target/shots/assistant.png"}

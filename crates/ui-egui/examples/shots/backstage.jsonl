@@ -1,0 +1,3 @@
+{"cmd":"ui.backstage","params":{"open":true}}
+{"steps":10}
+{"shot":"target/shots/backstage.png"}

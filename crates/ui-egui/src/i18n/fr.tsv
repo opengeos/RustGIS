@@ -9,7 +9,7 @@
 <None>	<Aucun>
 A 3D globe seen from space.	Un globe 3D vu de l'espace.
 A blank map with a basemap	Une carte vierge avec un fond de carte
-A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Un SIG bureautique rapide et open source écrit en Rust pur, avec le ruban des SIG bureautiques : cartes et couches, symbologie, étiquetage, sélection, édition, géotraitement et export.
+A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	Un SIG rapide, libre et open source écrit en Rust pur, pour cartographier, analyser et partager des données géospatiales sur le bureau et dans le navigateur.
 A flat scene centred on the view (azimuthal equidistant).	Une scène plane centrée sur la vue (azimutale équidistante).
 A globe scene.	Une scène globe.
 A magnifying lens that follows the pointer.	Une loupe qui suit le pointeur.
@@ -1336,7 +1336,7 @@ Run {name}	Exécuter {name}
 Running…	Exécution…
 RustGIS	RustGIS
 RustGIS deep learning package	Paquetage d'apprentissage profond RustGIS
-RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS est un SIG bureautique open source écrit en Rust pur. Son ruban suit le flux de travail familier des SIG bureautiques ; chaque action est une commande que vous pouvez aussi lancer en ligne de commande.
+RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, keeps your data on your machine, and every action is a command you can also run from the command line.	RustGIS est un SIG libre et open source écrit en Rust pur. Il fonctionne sur le bureau et dans le navigateur, garde vos données sur votre machine, et chaque action est une commande que vous pouvez aussi exécuter en ligne de commande.
 RustGIS layer file	Fichier de couche RustGIS
 RustGIS layers, maps and projects	Couches, cartes et projets RustGIS
 RustGIS layout	Mise en page RustGIS

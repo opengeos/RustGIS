@@ -9,7 +9,7 @@
 <None>	<Tidak ada>
 A 3D globe seen from space.	Globe 3D yang terlihat dari luar angkasa.
 A blank map with a basemap	Peta kosong dengan peta dasar
-A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	GIS desktop sumber terbuka yang cepat, ditulis dengan Rust murni, dengan alur kerja ribbon khas GIS desktop: peta dan layer, simbologi, pelabelan, seleksi, penyuntingan, geoprosesing, dan ekspor.
+A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	SIG yang cepat, bebas, dan sumber terbuka yang ditulis dalam Rust murni, untuk memetakan, menganalisis, dan berbagi data geospasial di desktop dan di peramban.
 A flat scene centred on the view (azimuthal equidistant).	Scene datar yang berpusat pada tampilan (azimutal ekuidistan).
 A globe scene.	Scene globe.
 A magnifying lens that follows the pointer.	Lensa pembesar yang mengikuti penunjuk.
@@ -1336,7 +1336,7 @@ Run {name}	Jalankan {name}
 Running…	Berjalan…
 RustGIS	RustGIS
 RustGIS deep learning package	Paket deep learning RustGIS
-RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS adalah GIS desktop sumber terbuka yang ditulis dengan Rust murni. Ribbon-nya mengikuti alur kerja GIS desktop yang familiar; setiap aksi adalah perintah yang juga dapat dijalankan dari baris perintah.
+RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, keeps your data on your machine, and every action is a command you can also run from the command line.	RustGIS adalah SIG bebas dan sumber terbuka yang ditulis dalam Rust murni. Aplikasi ini berjalan di desktop dan di peramban, menyimpan data Anda di komputer Anda, dan setiap tindakan adalah perintah yang juga dapat Anda jalankan dari baris perintah.
 RustGIS layer file	File layer RustGIS
 RustGIS layers, maps and projects	Layer, peta, dan proyek RustGIS
 RustGIS layout	Tata letak RustGIS

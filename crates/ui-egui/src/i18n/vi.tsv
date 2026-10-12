@@ -9,7 +9,7 @@
 <None>	<Không có>
 A 3D globe seen from space.	Quả địa cầu 3D nhìn từ không gian.
 A blank map with a basemap	Bản đồ trống có bản đồ nền
-A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Một GIS máy tính để bàn mã nguồn mở, nhanh, viết hoàn toàn bằng Rust, với quy trình làm việc dạng ribbon của GIS máy tính để bàn: bản đồ và lớp, ký hiệu, nhãn, chọn, chỉnh sửa, xử lý không gian và xuất.
+A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	Một GIS nhanh, miễn phí và mã nguồn mở viết bằng Rust thuần, để lập bản đồ, phân tích và chia sẻ dữ liệu không gian địa lý trên máy tính và trong trình duyệt.
 A flat scene centred on the view (azimuthal equidistant).	Cảnh phẳng có tâm là khung nhìn (phương vị đẳng cự).
 A globe scene.	Cảnh quả địa cầu.
 A magnifying lens that follows the pointer.	Kính lúp di chuyển theo con trỏ.
@@ -1336,7 +1336,7 @@ Run {name}	Chạy {name}
 Running…	Đang chạy…
 RustGIS	RustGIS
 RustGIS deep learning package	Gói học sâu RustGIS
-RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS là GIS máy tính để bàn mã nguồn mở viết hoàn toàn bằng Rust. Ribbon của nó theo quy trình GIS máy tính để bàn quen thuộc; mọi thao tác đều là một lệnh mà bạn cũng có thể chạy từ dòng lệnh.
+RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, keeps your data on your machine, and every action is a command you can also run from the command line.	RustGIS là một GIS miễn phí và mã nguồn mở viết bằng Rust thuần. Nó chạy trên máy tính và trong trình duyệt, giữ dữ liệu của bạn trên máy của bạn, và mọi thao tác đều là một lệnh mà bạn cũng có thể chạy từ dòng lệnh.
 RustGIS layer file	Tệp lớp RustGIS
 RustGIS layers, maps and projects	Lớp, bản đồ và dự án RustGIS
 RustGIS layout	Bố cục RustGIS

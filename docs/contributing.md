@@ -20,6 +20,11 @@ zensical serve        # http://localhost:8000
 Images live in [rustgis-assets](https://github.com/opengeos/rustgis-assets) and are linked by
 URL; don't commit images to this repository.
 
+The screenshots are rendered by the app itself. `crates/ui-egui/examples/shots/render.sh`
+runs the `ui_shot` scripts beside it and writes WebP files to `target/shots/`; copy them to
+`images/` in rustgis-assets. The `assistant` shot asks a real model, so set an AI Assistant
+provider and key first (see [AI Assistant](user-guide/assistant.md#choosing-a-model)).
+
 ## Releases
 
 1. Bump `version` in the workspace `Cargo.toml` and merge it.

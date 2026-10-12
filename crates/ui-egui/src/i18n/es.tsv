@@ -9,7 +9,7 @@
 <None>	<Ninguno>
 A 3D globe seen from space.	Un globo 3D visto desde el espacio.
 A blank map with a basemap	Un mapa en blanco con un mapa base
-A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Un SIG de escritorio rápido y de código abierto escrito en Rust puro, con el flujo de trabajo de cinta de los SIG de escritorio: mapas y capas, simbología, etiquetado, selección, edición, geoprocesamiento y exportación.
+A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	Un SIG rápido, libre y de código abierto escrito en Rust puro, para cartografiar, analizar y compartir datos geoespaciales en el escritorio y en el navegador.
 A flat scene centred on the view (azimuthal equidistant).	Una escena plana centrada en la vista (acimutal equidistante).
 A globe scene.	Una escena de globo.
 A magnifying lens that follows the pointer.	Una lupa que sigue al puntero.
@@ -1336,7 +1336,7 @@ Run {name}	Ejecutar {name}
 Running…	Ejecutando…
 RustGIS	RustGIS
 RustGIS deep learning package	Paquete de aprendizaje profundo de RustGIS
-RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS es un SIG de escritorio de código abierto escrito en Rust puro. Su cinta sigue el flujo de trabajo habitual de los SIG de escritorio; cada acción es un comando que también puede ejecutar desde la línea de comandos.
+RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, keeps your data on your machine, and every action is a command you can also run from the command line.	RustGIS es un SIG libre y de código abierto escrito en Rust puro. Funciona en el escritorio y en el navegador, mantiene sus datos en su equipo, y cada acción es un comando que también puede ejecutar desde la línea de comandos.
 RustGIS layer file	Archivo de capa de RustGIS
 RustGIS layers, maps and projects	Capas, mapas y proyectos de RustGIS
 RustGIS layout	Diseño de RustGIS

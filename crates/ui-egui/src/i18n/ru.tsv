@@ -9,7 +9,7 @@
 <None>	<Нет>
 A 3D globe seen from space.	Трёхмерный глобус, вид из космоса.
 A blank map with a basemap	Пустая карта с базовой картой
-A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Быстрая ГИС с открытым исходным кодом для настольных компьютеров, написанная на чистом Rust, с ленточным интерфейсом настольной ГИС: карты и слои, символы, подписи, выборка, редактирование, геообработка и экспорт.
+A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	Быстрая, свободная ГИС с открытым исходным кодом на чистом Rust для картографирования, анализа и обмена геопространственными данными на компьютере и в браузере.
 A flat scene centred on the view (azimuthal equidistant).	Плоская сцена с центром в виде (азимутальная равнопромежуточная).
 A globe scene.	Сцена-глобус.
 A magnifying lens that follows the pointer.	Увеличительная лупа, следующая за указателем.
@@ -1336,7 +1336,7 @@ Run {name}	Запустить {name}
 Running…	Выполняется…
 RustGIS	RustGIS
 RustGIS deep learning package	Пакет глубокого обучения RustGIS
-RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS — настольная ГИС с открытым исходным кодом, написанная на чистом Rust. Её лента повторяет привычный порядок работы настольной ГИС; каждое действие — это команда, которую также можно выполнить из командной строки.
+RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, keeps your data on your machine, and every action is a command you can also run from the command line.	RustGIS — свободная ГИС с открытым исходным кодом на чистом Rust. Она работает на компьютере и в браузере, хранит ваши данные на вашем устройстве, а каждое действие — это команда, которую можно выполнить и из командной строки.
 RustGIS layer file	Файл слоя RustGIS
 RustGIS layers, maps and projects	Слои, карты и проекты RustGIS
 RustGIS layout	Макет RustGIS

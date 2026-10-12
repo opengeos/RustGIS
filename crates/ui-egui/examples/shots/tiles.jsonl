@@ -1,0 +1,8 @@
+{"cmd":"project.new","params":{"name":"Paris"}}
+{"cmd":"map.addTiles","params":{"url":"https://tiles.openfreemap.org/styles/liberty","name":"OpenFreeMap Liberty","replace":true}}
+{"cmd":"map.goToXY","params":{"lon":2.34,"lat":48.86,"scale":150000}}
+{"cmd":"ui.tab","params":{"tab":"Map"}}
+{"sleep":15000}
+{"click":"Basemap"}
+{"steps":10}
+{"shot":"target/shots/tiles.png"}
