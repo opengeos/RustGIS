@@ -27,6 +27,8 @@ struct Geo {
     unknown_epsg: Option<u32>,
     geographic_model: bool,
     nodata: Option<f64>,
+    /// Why the file's own projection couldn't be read, if it has one.
+    custom_error: Option<String>,
 }
 
 fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
@@ -45,9 +47,17 @@ fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
     // A projected file with a user-defined projection (the NLCD's Albers, say) defines it in its
     // keys: read as its own system, never as the geographic system it's based on.
     let user_defined = key(1024) == Some(1) && key(3072).is_none_or(|c| !usable(&c));
+    // A projection the keys don't describe well enough is left unknown (the open goes on, and fails
+    // later only if the coordinates aren't degrees), its reason kept for the message.
+    let mut custom_error = None;
     let (code, crs) = if user_defined {
-        let crs = custom_crs(&keys, &gdoubles, &gascii)?;
-        (None, Some(crs))
+        match custom_crs(&keys, &gdoubles, &gascii) {
+            Ok(crs) => (None, Some(crs)),
+            Err(e) => {
+                custom_error = Some(e.to_string());
+                (None, None)
+            }
+        }
     } else {
         let code = key(3072).filter(usable).or(key(2048).filter(usable)).map(u32::from);
         (code, code.and_then(Crs::from_epsg))
@@ -81,7 +91,7 @@ fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
         .flatten()
         .and_then(|v| v.into_string().ok())
         .and_then(|s| s.trim_matches(|c: char| c == '\0' || c.is_whitespace()).parse::<f64>().ok());
-    Ok(Geo { transform, crs, unknown_epsg: code.filter(|_| crs.is_none()), geographic_model, nodata })
+    Ok(Geo { transform, crs, unknown_epsg: code.filter(|_| crs.is_none()), geographic_model, nodata, custom_error })
 }
 
 /// A GeoKey's parameter: inline, or from the double or ASCII parameter tags.
@@ -535,6 +545,11 @@ fn read_limited<R: Read + Seek>(r: R, name: &str, max: usize) -> Result<Raster> 
             if let Some(code) = geo.unknown_epsg {
                 return Err(err(format!("the coordinate system EPSG:{code} isn't supported")));
             }
+            if let Some(e) = &geo.custom_error
+                && !degrees
+            {
+                return Err(DataError::Format(e.clone()));
+            }
             if geo.geographic_model || degrees {
                 Crs::LonLat
             } else {
@@ -785,16 +800,17 @@ mod tests {
     #[test]
     fn large_files_without_overviews_are_read_as_one() {
         // 300 × 200: over a 10,000-sample limit, so every 4th pixel each way is kept.
-        let (w, h) = (300u32, 200u32);
+        // 301 × 203 in 4-row strips: the last strip is short, the width odd.
+        let (w, h) = (301u32, 203u32);
         let data: Vec<u8> = (0..w * h).map(|i| ((i % w + i / w) % 251) as u8).collect();
         let bytes = grey8(w, h, &data, None);
         let full = read(std::io::Cursor::new(&bytes), "full").unwrap();
         let r = read_limited(std::io::Cursor::new(&bytes), "big", 10_000).unwrap();
-        assert_eq!((r.width, r.height), (75, 50));
-        assert_eq!(r.overview, Some((300, 200)));
+        assert_eq!((r.width, r.height), (76, 51));
+        assert_eq!(r.overview, Some((301, 203)));
         assert_eq!(r.transform.pixel_width, full.transform.pixel_width * 4.0);
         assert_eq!((r.transform.origin_x, r.transform.origin_y), (full.transform.origin_x, full.transform.origin_y));
-        for (x, y) in [(0i64, 0i64), (1, 1), (74, 49), (30, 7)] {
+        for (x, y) in [(0i64, 0i64), (1, 1), (75, 50), (74, 49), (30, 7)] {
             assert_eq!(r.value(0, x, y), full.value(0, x * 4, y * 4), "{x},{y}");
         }
     }
@@ -829,5 +845,14 @@ mod tests {
         let back = read(std::io::Cursor::new(write(&r, 0).unwrap()), "back").unwrap();
         assert_eq!(back.crs.custom_def().unwrap().proj4, r.crs.custom_def().unwrap().proj4);
         assert_eq!(back.value(0, 1, 1), Some(4.0));
+        // Saved, it is its definition, not this run's number for it.
+        let json = serde_json::to_string(&r.crs).unwrap();
+        assert!(json.contains("+proj=aea"), "{json}");
+        let again: Crs = serde_json::from_str(&json).unwrap();
+        assert_eq!(again.custom_def().unwrap().proj4, r.crs.custom_def().unwrap().proj4);
+        // A transformation it doesn't know: unknown, not a failed open, when the coordinates are degrees.
+        let mut odd = keys;
+        odd[27] = 99; // ProjCoordTransGeoKey
+        assert!(custom_crs(&odd, &doubles, "").is_err());
     }
 }

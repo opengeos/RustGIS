@@ -8,8 +8,9 @@
 use rustgis_geom::{Coord, lonlat_to_merc, merc_to_lonlat};
 use serde::{Deserialize, Serialize};
 
-/// A raster's coordinate system.
+/// A raster's coordinate system. Saved as its EPSG code, or a custom one as its definition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "SavedCrs", try_from = "SavedCrs")]
 pub enum Crs {
     /// WGS 84 longitude/latitude in degrees (EPSG:4326).
     LonLat,
@@ -20,6 +21,44 @@ pub enum Crs {
     /// A projection defined in the file (see [`Crs::custom`]); the number is its place in this
     /// run's table, so it is never saved (rasters are read again from their files).
     Custom(u32),
+}
+
+/// How a [`Crs`] is saved: a custom system by its PROJ definition, never by its number in a run's
+/// table.
+#[derive(Serialize, Deserialize)]
+enum SavedCrs {
+    LonLat,
+    WebMercator,
+    Epsg(u16),
+    Proj { proj4: String, label: String },
+}
+
+impl From<Crs> for SavedCrs {
+    fn from(c: Crs) -> Self {
+        match c {
+            Crs::LonLat => SavedCrs::LonLat,
+            Crs::WebMercator => SavedCrs::WebMercator,
+            Crs::Epsg(e) => SavedCrs::Epsg(e),
+            Crs::Custom(_) => match c.custom_def() {
+                Some(d) => SavedCrs::Proj { proj4: d.proj4.clone(), label: d.label.clone() },
+                None => SavedCrs::LonLat,
+            },
+        }
+    }
+}
+
+impl TryFrom<SavedCrs> for Crs {
+    type Error = String;
+    fn try_from(s: SavedCrs) -> Result<Self, String> {
+        Ok(match s {
+            SavedCrs::LonLat => Crs::LonLat,
+            SavedCrs::WebMercator => Crs::WebMercator,
+            SavedCrs::Epsg(e) => Crs::Epsg(e),
+            SavedCrs::Proj { proj4, label } => {
+                Crs::custom(CustomCrs { proj4, label, geokeys: Vec::new(), doubles: Vec::new(), ascii: String::new() })?
+            }
+        })
+    }
 }
 
 /// A coordinate system a file defines itself.
@@ -50,14 +89,15 @@ impl Crs {
     pub fn custom(def: CustomCrs) -> Result<Crs, String> {
         proj4rs::Proj::from_proj_string(&def.proj4).map_err(|e| format!("{}: {e}", def.proj4))?;
         let mut t = custom_table().lock().unwrap_or_else(|e| e.into_inner());
+        let index = |i: usize| u32::try_from(i).map(Crs::Custom).map_err(|_| "too many coordinate systems defined by files".to_string());
         if let Some(i) = t.iter().position(|d| d.proj4 == def.proj4) {
-            return Ok(Crs::Custom(u32::try_from(i).unwrap_or(0)));
+            return index(i);
         }
         if t.len() >= MAX_CUSTOM {
             return Err("too many coordinate systems defined by files".into());
         }
         t.push(std::sync::Arc::new(def));
-        Ok(Crs::Custom(u32::try_from(t.len() - 1).unwrap_or(0)))
+        index(t.len() - 1)
     }
 
     /// The definition of a [`Crs::Custom`].
