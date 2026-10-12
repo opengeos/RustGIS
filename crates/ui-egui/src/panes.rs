@@ -620,6 +620,7 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         "tif",
                         "tiff",
                         "asc",
+                        "rgis",
                         "rgisx",
                         "rgispkg",
                         "rgismap",
@@ -637,7 +638,7 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
             let icon = if is_dir {
                 "add_folder"
-            } else if name.ends_with(".rgisx") {
+            } else if rustgis_engine::project::is_project_file(&name) {
                 "logo"
             } else {
                 "add_data"
@@ -648,7 +649,7 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             if resp.double_clicked() || (is_dir && resp.clicked()) {
                 if is_dir {
                     app.table.folder = Some(path.clone());
-                } else if name.ends_with(".rgisx") || name.ends_with(".rgispkg") {
+                } else if rustgis_engine::project::is_project_file(&name) || name.ends_with(".rgispkg") {
                     let _ = app.run("project.open", json!({"path": path.display().to_string()}));
                     app.map.invalidate();
                 } else if name.ends_with(".rgismap") || name.ends_with(".rgismpk") {

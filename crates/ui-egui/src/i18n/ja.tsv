@@ -1069,7 +1069,7 @@ One per line: code=name	1 行に 1 つ: コード=名前
 Only features matching this expression draw in {layer}.	この式に一致するフィーチャのみが {layer} に描画されます。
 Opacity	不透明度
 Open	開く
-Open a .rgisx project	.rgisx プロジェクトを開く
+Open a .rgis project	.rgis プロジェクトを開く
 open a layout first	先にレイアウトを開いてください
 Open a RustGIS or Jupyter notebook.	RustGIS または Jupyter のノートブックを開きます。
 Open a RustGIS project.	RustGIS プロジェクトを開きます。

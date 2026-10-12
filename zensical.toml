@@ -24,6 +24,7 @@ nav = [
     "user-guide/workspace.md",
     "user-guide/assistant.md",
   ] },
+  { "Comparison" = "comparison.md" },
   { "Command Line" = "cli.md" },
   { "Plugins" = "plugins.md" },
   { "Languages" = "i18n.md" },

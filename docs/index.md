@@ -10,6 +10,7 @@ the AI Assistant.
 [Try it in your browser](https://web.rustgis.app){ .md-button .md-button--primary }
 [Download](installation.md){ .md-button }
 [Get started](getting-started.md){ .md-button }
+[Compare](comparison.md){ .md-button }
 
 ![RustGIS with the Map tab of the ribbon open over a world map in the Equal Earth projection, countries shaded by population](https://assets.rustgis.app/images/hero.webp)
 
@@ -32,7 +33,7 @@ the AI Assistant.
 -   **Analysis**
 
     SQL selection, overlay and proximity tools, guided workflows, ModelBuilder, imagery tools and
-    over 1,000 GeoLibre tools for terrain, hydrology and LiDAR.
+    over 1,000 GeoLibre and Whitebox tools for terrain, hydrology and LiDAR.
     [Analysis](user-guide/analysis.md)
 
 -   **Editing**

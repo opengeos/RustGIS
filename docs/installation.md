@@ -3,7 +3,8 @@
 ## Download
 
 Each [GitHub release](https://github.com/opengeos/RustGIS/releases/latest) carries ready-to-run
-builds of the desktop app and `rustgis-cli`:
+builds of the desktop app and `rustgis-cli`. The same files, grouped by platform, are mirrored at
+**[downloads.rustgis.app](https://downloads.rustgis.app)**:
 
 | Platform | File |
 | --- | --- |
@@ -54,7 +55,7 @@ RustGIS also runs in the browser, compiled to WebAssembly: open
 **[web.rustgis.app](https://web.rustgis.app)**. It is the same app with three differences:
 
 - **Open** and **Add Data** use the browser's file picker, and you can drop files on the page.
-  GeoJSON, CSV, GeoTIFF, ASCII grids and `.rgisx` projects work; Shapefiles need the desktop
+  GeoJSON, CSV, GeoTIFF, ASCII grids and `.rgis` projects work; Shapefiles need the desktop
   app.
 - **Save** and **Export** download the file.
 - The interface uses the built-in font, because a web page can't read installed fonts.

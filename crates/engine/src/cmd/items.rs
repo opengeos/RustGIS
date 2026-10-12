@@ -53,7 +53,7 @@ pub fn commands() -> Vec<C> {
         C::new("map.save", "Save Map File", "Share › Save As", |s, p| save_item(s, "map", p))
         .view()
         .params(r#"{"path": "*.rgismap", "map"?: name}"#),
-        C::new("map.import", "Import", "Insert › Project", import_maps).params(r#"{"path": "*.rgismap|*.rgisx|*.rgispkg", "text"?: map file JSON}"#),
+        C::new("map.import", "Import", "Insert › Project", import_maps).params(r#"{"path": "*.rgismap|*.rgis|*.rgispkg", "text"?: map file JSON}"#),
         C::new("layer.save", "Save Layer File", "Share › Save As", |s, p| save_item(s, "layer", p))
         .view()
         .when(need_layer)
@@ -85,7 +85,7 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"added": n}))
         })
         .params(r#"{"path"?: "*.rgisstyle", "text"?: style file JSON}"#),
-        C::new("style.import", "Import Styles", "Insert › Styles", import_styles).params(r#"{"path"?: "*.rgislyr|*.rgismap|*.rgisx", "text"?: JSON}"#),
+        C::new("style.import", "Import Styles", "Insert › Styles", import_styles).params(r#"{"path"?: "*.rgislyr|*.rgismap|*.rgis", "text"?: JSON}"#),
         C::new("style.apply", "Apply Style", "Insert › Styles", |s, p| {
             let name = ps(p, "name").ok_or("name is required")?;
             let st = s.project.styles.iter().find(|t| t.name.eq_ignore_ascii_case(name)).cloned().ok_or_else(|| format!("no style '{name}'"))?;
@@ -268,9 +268,11 @@ pub(crate) fn read_text(p: &Value) -> Result<String, String> {
 
 /// The project JSON inside a package.
 pub fn package_text(bytes: &[u8]) -> Result<String, String> {
-    let entries = rustgis_data::zip::read_matching(bytes, |n| n.ends_with(".rgisx") || n.ends_with(".rgismap"))?;
-    let (_, data) =
-        entries.into_iter().find(|(n, _)| n.ends_with(".rgisx") || n.ends_with(".rgismap")).ok_or("the package holds no project or map")?;
+    let entries = rustgis_data::zip::read_matching(bytes, |n| crate::project::is_project_file(n) || n.ends_with(".rgismap"))?;
+    let (_, data) = entries
+        .into_iter()
+        .find(|(n, _)| crate::project::is_project_file(n) || n.ends_with(".rgismap"))
+        .ok_or("the package holds no project or map")?;
     String::from_utf8(data).map_err(|_| "the package's project is damaged".to_string())
 }
 
@@ -405,8 +407,11 @@ fn package_project(s: &Session) -> Result<Vec<u8>, String> {
     }
     let text = serde_json::to_string(&p).map_err(|e| e.to_string())?;
     let readme =
-        format!("{} — a RustGIS project package.\nOpen it with RustGIS (Project › Open), or unzip it for {}.rgisx.\n", p.name, p.name);
-    rustgis_data::zip::write(&[(format!("{}.rgisx", safe(&p.name)), text.into_bytes()), ("README.txt".into(), readme.into_bytes())])
+        format!("{} — a RustGIS project package.\nOpen it with RustGIS (Project › Open), or unzip it for {}.rgis.\n", p.name, p.name);
+    rustgis_data::zip::write(&[
+        (format!("{}.{}", safe(&p.name), crate::project::EXTENSION), text.into_bytes()),
+        ("README.txt".into(), readme.into_bytes()),
+    ])
 }
 
 fn safe(name: &str) -> String {

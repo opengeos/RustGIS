@@ -1069,7 +1069,7 @@ One per line: code=name	每行一个：代码=名称
 Only features matching this expression draw in {layer}.	只有与此表达式匹配的要素才会在 {layer} 中绘制。
 Opacity	不透明度
 Open	打开
-Open a .rgisx project	打开 .rgisx 工程
+Open a .rgis project	打开 .rgis 工程
 open a layout first	请先打开布局
 Open a RustGIS or Jupyter notebook.	打开 RustGIS 或 Jupyter 笔记本。
 Open a RustGIS project.	打开 RustGIS 工程。

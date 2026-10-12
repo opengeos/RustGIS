@@ -1069,7 +1069,7 @@ One per line: code=name	Um por linha: código=nome
 Only features matching this expression draw in {layer}.	Somente as feições que atendem a esta expressão são desenhadas em {layer}.
 Opacity	Opacidade
 Open	Abrir
-Open a .rgisx project	Abrir um projeto .rgisx
+Open a .rgis project	Abrir um projeto .rgis
 open a layout first	abra primeiro um layout
 Open a RustGIS or Jupyter notebook.	Abrir um notebook do RustGIS ou do Jupyter.
 Open a RustGIS project.	Abrir um projeto do RustGIS.

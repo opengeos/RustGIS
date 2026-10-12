@@ -11,7 +11,7 @@
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
 | ASCII grid (`.asc`, with an optional `.prj`) | Yes | No |
 | Web tiles: XYZ/TMS/WMS rasters, Mapbox Vector Tiles, MapLibre styles | Yes | Yes (Imagery › Create Hosted Imagery) |
-| RustGIS project (`.rgisx`) | Yes | Yes |
+| RustGIS project (`.rgis`; older `.rgisx` files open too) | Yes | Yes |
 
 Add data with **Map › Add Data**, by dropping files on the window, or by passing them on the
 command line (`rustgis places.geojson`). A CSV without coordinate columns, or a layer without

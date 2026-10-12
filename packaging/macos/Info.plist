@@ -19,7 +19,7 @@
   <array>
     <dict>
       <key>CFBundleTypeName</key><string>RustGIS project</string>
-      <key>CFBundleTypeExtensions</key><array><string>rgisx</string></array>
+      <key>CFBundleTypeExtensions</key><array><string>rgis</string><string>rgisx</string></array>
       <key>CFBundleTypeRole</key><string>Editor</string>
       <key>LSHandlerRank</key><string>Owner</string>
     </dict>

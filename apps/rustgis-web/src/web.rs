@@ -230,11 +230,11 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
             let inbox = open_inbox.clone();
             let ctx = ctx.clone();
             let dialog = if purpose == "project" {
-                rfd::AsyncFileDialog::new().add_filter("RustGIS project", &["rgisx"])
+                rfd::AsyncFileDialog::new().add_filter("RustGIS project", &["rgis", "rgisx"])
             } else if purpose == "item" {
                 rfd::AsyncFileDialog::new().add_filter(
                     "RustGIS items",
-                    &["rgismap", "rgismpk", "rgispkg", "rgislyr", "rgisstyle", "rgistemplate", "rgistask", "rgisx"],
+                    &["rgismap", "rgismpk", "rgispkg", "rgislyr", "rgisstyle", "rgistemplate", "rgistask", "rgis", "rgisx"],
                 )
             } else if purpose == "layout" {
                 rfd::AsyncFileDialog::new().add_filter("RustGIS layout", &["rgislayout"])

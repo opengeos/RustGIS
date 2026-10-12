@@ -1069,7 +1069,7 @@ One per line: code=name	Her satıra bir tane: kod=ad
 Only features matching this expression draw in {layer}.	{layer} katmanında yalnızca bu ifadeyle eşleşen detaylar çizilir.
 Opacity	Opaklık
 Open	Aç
-Open a .rgisx project	Bir .rgisx projesi aç
+Open a .rgis project	Bir .rgis projesi aç
 open a layout first	önce bir sayfa düzeni açın
 Open a RustGIS or Jupyter notebook.	Bir RustGIS veya Jupyter not defteri aç.
 Open a RustGIS project.	Bir RustGIS projesi aç.

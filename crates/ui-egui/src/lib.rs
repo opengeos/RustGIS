@@ -434,7 +434,7 @@ impl RustGisApp {
         r
     }
 
-    /// Opens a file by name and contents: a `.rgisx` project, a raster, or vector data.
+    /// Opens a file by name and contents: a `.rgis` project, a raster, or vector data.
     /// Failures are reported to the user (command errors through `Session::run`, others here).
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
         let lower = name.to_ascii_lowercase();
@@ -502,11 +502,11 @@ impl RustGisApp {
             return self.run("layer.addDataBytes", json!({"fileName": name, "data": data}));
         }
         let Ok(text) = std::str::from_utf8(bytes) else {
-            let e = crate::i18n::fmt("{name} is not a text file: RustGIS opens GeoJSON, CSV, GeoTIFF and .rgisx here", &[("name", name)]);
+            let e = crate::i18n::fmt("{name} is not a text file: RustGIS opens GeoJSON, CSV, GeoTIFF and .rgis here", &[("name", name)]);
             self.session.notify(e.clone(), true);
             return Err(e);
         };
-        if name.to_ascii_lowercase().ends_with(".rgisx") {
+        if rustgis_engine::project::is_project_file(name) {
             let r = self.run("project.openText", json!({"text": text, "name": name}));
             self.map.invalidate();
             r
@@ -726,7 +726,7 @@ impl RustGisApp {
                     self.ui.pending_open = None;
                     open("project");
                     self.ui.backstage = false;
-                } else if let Some(path) = dialogs::pick_open(&["rgisx"], tl!("RustGIS project")) {
+                } else if let Some(path) = dialogs::pick_open(&["rgis", "rgisx"], tl!("RustGIS project")) {
                     let r = self.run("project.open", json!({"path": path}));
                     self.ui.backstage = false;
                     self.map.invalidate();
@@ -735,7 +735,7 @@ impl RustGisApp {
             }
             "ui.save" | "ui.saveAs" if self.services.download.is_some() => {
                 let text = serde_json::to_string(&self.session.project).map_err(|e| e.to_string())?;
-                let name = format!("{}.rgisx", self.session.project.name);
+                let name = format!("{}.rgis", self.session.project.name);
                 self.download(&name, text.into_bytes());
                 self.session.dirty = false;
             }
@@ -746,8 +746,8 @@ impl RustGisApp {
                 return self.run("ui.saveAs", Value::Null);
             }
             "ui.saveAs" => {
-                let name = format!("{}.rgisx", self.session.project.name);
-                if let Some(path) = dialogs::pick_save(&name, &["rgisx"], tl!("RustGIS project")) {
+                let name = format!("{}.rgis", self.session.project.name);
+                if let Some(path) = dialogs::pick_save(&name, &["rgis"], tl!("RustGIS project")) {
                     return self.run("project.saveAs", json!({"path": path}));
                 }
             }
@@ -863,10 +863,10 @@ impl RustGisApp {
             "ui.openItem" => {
                 let kind = p.get("kind").and_then(Value::as_str).ok_or("kind is required")?;
                 let (cmd, exts, label): (&str, &[&str], &str) = match kind {
-                    "map" => ("map.import", &["rgismap", "rgismpk", "rgisx", "rgispkg"], "RustGIS maps and projects"),
+                    "map" => ("map.import", &["rgismap", "rgismpk", "rgis", "rgisx", "rgispkg"], "RustGIS maps and projects"),
                     "layer" => ("layer.addLayerFile", &["rgislyr"], "RustGIS layer file"),
                     "styles" => ("style.add", &["rgisstyle"], "RustGIS styles"),
-                    "importStyles" => ("style.import", &["rgislyr", "rgismap", "rgisx"], "RustGIS layers, maps and projects"),
+                    "importStyles" => ("style.import", &["rgislyr", "rgismap", "rgis", "rgisx"], "RustGIS layers, maps and projects"),
                     "template" => ("project.fromTemplate", &["rgistemplate"], "RustGIS project template"),
                     "task" => ("task.import", &["rgistask"], "RustGIS task"),
                     "report" => ("report.open", &["rgisreport", "rgisrpttemplate"], "RustGIS report or report template"),
@@ -1291,7 +1291,7 @@ impl RustGisApp {
                     }
                     continue;
                 }
-                let cmd = if p.to_ascii_lowercase().ends_with(".rgisx") { "project.open" } else { "layer.addData" };
+                let cmd = if rustgis_engine::project::is_project_file(&p) { "project.open" } else { "layer.addData" };
                 let _ = self.run(cmd, json!({"path": p}));
                 self.map.invalidate();
             }

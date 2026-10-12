@@ -1069,7 +1069,7 @@ One per line: code=name	Eén per regel: code=naam
 Only features matching this expression draw in {layer}.	Alleen objecten die aan deze expressie voldoen worden getekend in {layer}.
 Opacity	Dekking
 Open	Openen
-Open a .rgisx project	Een .rgisx-project openen
+Open a .rgis project	Een .rgis-project openen
 open a layout first	open eerst een lay-out
 Open a RustGIS or Jupyter notebook.	Een RustGIS- of Jupyter-notebook openen.
 Open a RustGIS project.	Een RustGIS-project openen.

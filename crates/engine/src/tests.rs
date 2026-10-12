@@ -36,7 +36,7 @@ fn worldview_swaps_only_untouched_sample_countries() {
     s.dirty = true;
     assert!(!swap_countries(&mut s, Worldview::Default, Worldview::China));
     s.dirty = false;
-    s.path = Some("atlas.rgisx".into());
+    s.path = Some("atlas.rgis".into());
     assert!(!swap_countries(&mut s, Worldview::Default, Worldview::China));
     // Not someone else's layer named Countries.
     let mut t = world();
@@ -103,7 +103,7 @@ fn project_save_and_open_roundtrip() {
     let mut s = world();
     let dir = std::env::temp_dir().join(format!("rustgis-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("atlas.rgisx");
+    let path = dir.join("atlas.rgis");
     s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
     let mut t = Session::new(Project::default());
     t.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
@@ -115,6 +115,25 @@ fn project_save_and_open_roundtrip() {
 }
 
 #[test]
+fn project_extension_is_rgis_and_legacy_rgisx_opens() {
+    let mut s = world();
+    let dir = std::env::temp_dir().join(format!("rustgis-ext-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.run("project.saveAs", &json!({"path": dir.join("atlas").display().to_string()})).unwrap();
+    let saved = dir.join("atlas.rgis");
+    assert!(saved.exists(), "a path without an extension gets .rgis");
+    let legacy = dir.join("old.rgisx");
+    std::fs::copy(&saved, &legacy).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.open", &json!({"path": legacy.display().to_string()})).unwrap();
+    assert_eq!(t.map().layers.len(), 4);
+    for (name, is) in [("a.rgis", true), ("A.RGISX", true), ("a.rgismap", false), ("a.rgispkg", false), ("rgis", false)] {
+        assert_eq!(crate::project::is_project_file(name), is, "{name}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn save_clears_dirty_and_open_clears_history() {
     let mut s = world();
     assert!(!s.dirty && !s.can_undo(), "a fresh sample is clean");
@@ -122,7 +141,7 @@ fn save_clears_dirty_and_open_clears_history() {
     assert!(s.dirty && s.can_undo());
     let dir = std::env::temp_dir().join(format!("rustgis-dirty-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("a.rgisx");
+    let path = dir.join("a.rgis");
     s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
     assert!(!s.dirty, "saving clears the dirty marker");
     assert!(s.can_undo(), "saving keeps the edit history");
@@ -351,7 +370,7 @@ fn raster_layers_open_style_identify_and_round_trip() {
     s.run("layer.addData", &json!({"path": tif.display().to_string()})).unwrap();
     assert!(s.map().layer_by_name("out").is_some_and(|l| l.raster.as_ref().is_some_and(|r| r.path.is_some())));
     // Save and reload the project: the upload is embedded, the file is reopened by path.
-    let proj = dir.join("p.rgisx");
+    let proj = dir.join("p.rgis");
     s.run("project.saveAs", &json!({"path": proj.display().to_string()})).unwrap();
     s.run("project.open", &json!({"path": proj.display().to_string()})).unwrap();
     for name in ["scene", "out"] {
@@ -1807,7 +1826,7 @@ fn reports_group_summarise_relate_export_and_reopen() {
     let count =
         |s: &Session| crate::cmd::report::build(s, pi).unwrap().blocks.iter().filter(|b| matches!(b, Block::Picture { .. })).count();
     assert_eq!(count(&s), 0, "an unsaved project reads no picture files");
-    s.run("project.saveAs", &json!({"path": dir.join("p.rgisx").to_str().unwrap()})).unwrap();
+    s.run("project.saveAs", &json!({"path": dir.join("p.rgis").to_str().unwrap()})).unwrap();
     assert_eq!(count(&s), 1, "only the relative path inside the project folder");
     // Renaming a report keeps links to it; exports are .pdf or .png only.
     s.run("report.update", &json!({"report": "Cities", "name": "World cities"})).unwrap();

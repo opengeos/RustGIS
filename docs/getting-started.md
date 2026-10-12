@@ -10,7 +10,7 @@
 ```sh
 cargo run --release -p rustgis                  # opens the World Atlas sample
 cargo run --release -p rustgis -- places.geojson
-cargo run --release -p rustgis -- atlas.rgisx   # a saved project
+cargo run --release -p rustgis -- atlas.rgis   # a saved project
 ```
 
 ## Five minutes with the World Atlas
@@ -29,7 +29,7 @@ cargo run --release -p rustgis -- atlas.rgisx   # a saved project
    adds a web tile layer.
 6. **Share.** **Share › Export Map** saves a PNG with labels and a scale bar. **Insert › New
    Layout** makes a printable page with a legend and north arrow. **Project › Save As** writes a
-   `.rgisx` project.
+   `.rgis` project.
 
 !!! tip "Command search"
     Press ++ctrl+k++ to find any command or geoprocessing tool by name.

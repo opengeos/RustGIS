@@ -1069,7 +1069,7 @@ One per line: code=name	Einer pro Zeile: Code=Name
 Only features matching this expression draw in {layer}.	Nur Objekte, die diesem Ausdruck entsprechen, werden in {layer} gezeichnet.
 Opacity	Deckkraft
 Open	Öffnen
-Open a .rgisx project	Ein .rgisx-Projekt öffnen
+Open a .rgis project	Ein .rgis-Projekt öffnen
 open a layout first	zuerst ein Layout öffnen
 Open a RustGIS or Jupyter notebook.	Ein RustGIS- oder Jupyter-Notizbuch öffnen.
 Open a RustGIS project.	Ein RustGIS-Projekt öffnen.

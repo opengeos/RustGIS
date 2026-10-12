@@ -68,7 +68,7 @@ Contextual tabs appear while something is selected:
 
 ## Projects
 
-A project (`.rgisx`) holds maps, layouts, reports, presentations, notebooks, styles, tasks and
+A project (`.rgis`) holds maps, layouts, reports, presentations, notebooks, styles, tasks and
 models. Vector data added from files is stored inside the project, so a project file is
 self-contained; rasters are referenced by path on the desktop and stored inside the project in
 the web app. **Project › New** starts a blank map or the World Atlas sample; **Save** and **Save

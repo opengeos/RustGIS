@@ -3,6 +3,7 @@
   <mime-type type="application/x-rustgis-project">
     <comment>RustGIS project</comment>
     <sub-class-of type="application/json"/>
+    <glob pattern="*.rgis"/>
     <glob pattern="*.rgisx"/>
   </mime-type>
 </mime-info>

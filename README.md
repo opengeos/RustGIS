@@ -40,7 +40,7 @@
   `rustgis-cli`, chain it in notebooks and models, or ask the AI Assistant to run it for you.
 - **Familiar.** A ribbon of tabs and contextual tab groups, Contents and Catalog panes, an
   attribute table, and undo for every change.
-- **Extensible.** Over 1,000 GeoLibre tools for terrain, hydrology, LiDAR and remote sensing, and
+- **Extensible.** Over 1,000 GeoLibre and Whitebox tools for terrain, hydrology, LiDAR and remote sensing, and
   sandboxed WebAssembly [plugins](docs/plugins.md) that add commands, tools and ribbon tabs.
 
 ## A tour
@@ -51,7 +51,7 @@
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/assistant.webp" alt="The AI Assistant pane: asked for the five most populous African countries, it read the Countries table, selected them and zoomed to them" width="100%"><p align="center"><sub><b>AI Assistant.</b> Ask about your data or tell the map what to do. The assistant runs RustGIS commands for you, and each change can be undone.</sub></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/buffer-history.webp" alt="The Analysis tab with a gallery of geoprocessing tools and the Geoprocessing pane showing Buffer; dissolved 300 km buffers around African cities" width="100%"><p align="center"><sub><b>Analysis.</b> A tool gallery, the Geoprocessing pane and a run history, guided workflows, ModelBuilder, and 1,000+ GeoLibre tools.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/buffer-history.webp" alt="The Analysis tab with a gallery of geoprocessing tools and the Geoprocessing pane showing Buffer; dissolved 300 km buffers around African cities" width="100%"><p align="center"><sub><b>Analysis.</b> A tool gallery, the Geoprocessing pane and a run history, guided workflows, ModelBuilder, and 1,000+ GeoLibre and Whitebox tools.</sub></p></td>
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/raster.webp" alt="A shaded-relief elevation model of the Sierra Nevada with the Raster Layer tab open" width="100%"><p align="center"><sub><b>Rasters.</b> GeoTIFF and COG of any pixel type, reprojected on the fly, with stretch, RGB, classified and shaded-relief symbology.</sub></p></td>
 </tr>
 <tr>
@@ -64,7 +64,7 @@
 </tr>
 <tr>
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/dark.webp" alt="RustGIS in dark mode with the View tab open over a map of Europe on the Midnight basemap" width="100%"><p align="center"><sub><b>Dark mode</b> and the View tab: effects, scene settings, panes and linked views.</sub></p></td>
-<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/backstage.webp" alt="The Project backstage with cards to start a blank map, the World Atlas sample, or open a project" width="100%"><p align="center"><sub><b>Projects.</b> Start blank, from the World Atlas sample, or open a <code>.rgisx</code> project.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/backstage.webp" alt="The Project backstage with cards to start a blank map, the World Atlas sample, or open a project" width="100%"><p align="center"><sub><b>Projects.</b> Start blank, from the World Atlas sample, or open a <code>.rgis</code> project.</sub></p></td>
 </tr>
 </table>
 
@@ -80,7 +80,7 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 | **Web tiles** | XYZ/TMS/WMS raster tiles, Mapbox Vector Tiles and MapLibre styles (sprites, patterns, expressions), cached and fetched in the background |
 | **Cartography** | Single symbol, unique values, graduated colours, proportional symbols; collision-free labels with placement, scale ranges and annotation; masking, display filters, aggregation bins, 2.5D extrusion; graphics and dynamic text |
 | **Editing** | Create, move, rotate, scale, merge, split and explode features; snapping, templates, elevation, traverse, topology rules; domains, subtypes, attribute rules, relationships, archiving; undo for everything |
-| **Analysis** | Selection by attributes (SQL) and location; Buffer, Clip, Erase, Dissolve, Summarize Within, Summary Statistics and more; viewshed, line of sight, IDW, shortest path, suitability modelling; ModelBuilder and scripts; 1,000+ [GeoLibre](https://github.com/opengeos/geolibre-rust) raster, vector, LiDAR, hydrology and terrain tools |
+| **Analysis** | Selection by attributes (SQL) and location; Buffer, Clip, Erase, Dissolve, Summarize Within, Summary Statistics and more; viewshed, line of sight, IDW, shortest path, suitability modelling; ModelBuilder and scripts; 1,000+ [GeoLibre](https://github.com/opengeos/geolibre-rust) and Whitebox raster, vector, LiDAR, hydrology and terrain tools |
 | **Imagery** | Ortho and reality mapping, pixel classification (k-means, minimum distance, a trainable neural network), mensuration, hosted imagery tiles |
 | **Layouts and reports** | Page layouts with map frames, legends, scale bars, grids and map series; reports with groups, statistics, charts and subreports; presentations (HTML slideshow, PDF); notebooks (Jupyter in and out) |
 | **Sharing** | PNG export at any DPI; PDF; web map pages, OGC API Features collections, MapLibre styles, glTF scenes, locators; project, map and mobile map packages; offline areas with sync |
@@ -88,14 +88,16 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 | **Plugins** | Sandboxed WebAssembly [plugins](docs/plugins.md) add commands, tools and ribbon tabs; install them from [plugins.rustgis.app](https://plugins.rustgis.app) on the desktop, command line and web |
 | **Interface** | Command search (Ctrl+K), keyboard shortcuts, dark mode, a customizable ribbon and Quick Access Toolbar, linked side-by-side maps, 15 languages |
 
-The [user guide](https://rustgis.app/user-guide/) covers each area in detail, and
+The [user guide](https://rustgis.app/user-guide/) covers each area in detail,
+[Comparison](https://rustgis.app/comparison/) sets RustGIS beside GeoLibre, QGIS and ArcGIS, and
 [ROADMAP.md](ROADMAP.md) lists what's next.
 
 ## Get RustGIS
 
 - **Web app**: open **[web.rustgis.app](https://web.rustgis.app)**. The same ribbon and tools,
   with the browser's file picker for data and projects, and downloads for Save and Export.
-- **Desktop**: download the app for Windows, macOS or Linux from the
+- **Desktop**: download the app for Windows, macOS or Linux from
+  [downloads.rustgis.app](https://downloads.rustgis.app) or the
   [latest release](https://github.com/opengeos/RustGIS/releases/latest) (see
   [Installation](docs/installation.md) for the files and first-run notes).
 - **From source**: `cargo run --release -p rustgis` (Rust 1.90 or later).
@@ -104,7 +106,7 @@ The [user guide](https://rustgis.app/user-guide/) covers each area in detail, an
 
 ```sh
 cargo run --release -p rustgis                       # the desktop app with the World Atlas sample
-cargo run --release -p rustgis -- data.geojson       # open data (or a .rgisx project)
+cargo run --release -p rustgis -- data.geojson       # open data (or a .rgis project)
 ```
 
 Command line: every ribbon action is a command with an id.
@@ -115,7 +117,7 @@ rustgis-cli render countries.geojson map.png --basemap ocean
 rustgis-cli run --sample \
   --cmd 'gp.run={"tool":"countPoints","params":{"polygons":"Countries","points":"Cities"}}' \
   --cmd 'layer.symbology={"layer":"Countries_Summarize","type":"graduated","field":"point_count"}' \
-  --cmd 'share.exportMap={"path":"out.png","dpi":192}' --save atlas.rgisx
+  --cmd 'share.exportMap={"path":"out.png","dpi":192}' --save atlas.rgis
 rustgis-cli ask --sample "Which 5 countries have the largest GDP?"
 ```
 

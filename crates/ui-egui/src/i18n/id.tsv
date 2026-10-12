@@ -1069,7 +1069,7 @@ One per line: code=name	Satu per baris: kode=nama
 Only features matching this expression draw in {layer}.	Hanya fitur yang cocok dengan ekspresi ini yang digambar di {layer}.
 Opacity	Opasitas
 Open	Buka
-Open a .rgisx project	Buka proyek .rgisx
+Open a .rgis project	Buka proyek .rgis
 open a layout first	buka tata letak terlebih dahulu
 Open a RustGIS or Jupyter notebook.	Buka notebook RustGIS atau Jupyter.
 Open a RustGIS project.	Buka proyek RustGIS.

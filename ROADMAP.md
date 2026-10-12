@@ -5,7 +5,7 @@ Every feature on the ribbon checklist (`crates/engine/src/catalog.rs`, printed b
 or enterprise portal sharing yet, so real depth is lower than the checklist suggests.
 
 ## Done
-- Layered workspace, command registry with undo, project files (`.rgisx`), `rustgis-cli`, the
+- Layered workspace, command registry with undo, project files (`.rgis`), `rustgis-cli`, the
   web app (WebAssembly), 15 interface languages.
 - Data: GeoJSON, CSV (lon/lat), Shapefile in; GeoJSON, CSV, KML, GPX and WKT out; standalone
   tables; layer, map, style, template, task and package files.
@@ -19,7 +19,7 @@ or enterprise portal sharing yet, so real depth is lower than the checklist sugg
   topology; domains, subtypes, attribute rules, contingent values, relationships, archiving.
 - Analysis: selection by attributes and location; overlay, proximity and summary tools; guided
   workflows (viewshed, line of sight, IDW, shortest path, suitability); ModelBuilder and
-  scripts; the GeoLibre suite (1,000+ tools) natively and in the browser.
+  scripts; the GeoLibre and Whitebox suite (1,000+ tools) natively and in the browser.
 - Layouts (map frames, surrounds, map series, PDF), reports, presentations and notebooks.
 - Sharing as open formats (web maps, OGC API Features collections, MapLibre styles, glTF
   scenes, locators), offline areas with sync, deep learning pixel classification, hosted
