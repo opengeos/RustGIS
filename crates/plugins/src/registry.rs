@@ -144,6 +144,18 @@ pub fn parse(text: &str, url: &str) -> Result<Vec<Entry>, String> {
         if !e.homepage.starts_with("https://") && !e.homepage.starts_with("http://") {
             e.homepage.clear();
         }
+        // Only the name and description are translated here, in at most 64 languages, each at
+        // most 2,000 bytes: the registry comes from the network.
+        let (name, description) = (e.name.clone(), e.description.clone());
+        e.i18n = std::mem::take(&mut e.i18n)
+            .into_iter()
+            .take(64)
+            .map(|(lang, mut t)| {
+                t.retain(|k, v| (*k == name || *k == description) && v.len() <= 2_000);
+                (lang, t)
+            })
+            .filter(|(lang, t)| lang.len() <= 16 && !t.is_empty())
+            .collect();
         out.push(e);
     }
     out.sort_by_key(|e| e.name.to_lowercase());

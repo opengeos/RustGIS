@@ -153,7 +153,8 @@ fn tools_join_the_geoprocessing_tools() {
 fn registries_and_blocklists_are_read_defensively() {
     let sha = "a".repeat(64);
     let text = json!({"version": 1, "plugins": [
-        {"id": "b-plugin", "name": "B", "version": "1.2.0", "package": "packages/b/b-1.2.0.rgplugin", "sha256": sha},
+        {"id": "b-plugin", "name": "B", "version": "1.2.0", "package": "packages/b/b-1.2.0.rgplugin", "sha256": sha,
+         "i18n": {"de": {"B": "Be", "Other": "Andere", "Long": "x".repeat(5000)}, "fr": {"Other": "Autre"}}},
         {"id": "a-plugin", "name": "A", "version": "0.1.0", "package": "https://example.com/a.rgplugin", "sha256": sha, "homepage": "javascript:alert(1)"},
         {"id": "bad", "name": "Bad", "version": "1.0.0", "package": "http://insecure.example.com/x.rgplugin", "sha256": sha},
         {"id": "nohash", "name": "No hash", "version": "1.0.0", "package": "x.rgplugin", "sha256": "abc"},
@@ -165,6 +166,10 @@ fn registries_and_blocklists_are_read_defensively() {
     assert_eq!(v.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["a-plugin", "b-plugin"]);
     assert_eq!(v[1].package, "https://plugins.rustgis.app/packages/b/b-1.2.0.rgplugin");
     assert!(v[0].homepage.is_empty(), "only http(s) homepages");
+    // Only the name and description keep translations.
+    assert_eq!(v[1].translate("de", "B"), "Be");
+    assert_eq!(v[1].i18n.get("de").map(|t| t.len()), Some(1));
+    assert!(!v[1].i18n.contains_key("fr"));
     assert!(registry::parse("[]", "x").unwrap().is_empty());
     assert!(registry::parse("{", "x").is_err());
     assert_eq!(registry::resolve("http://localhost:8000/r/registry.json", "/p.rgplugin"), "http://localhost:8000/p.rgplugin");
