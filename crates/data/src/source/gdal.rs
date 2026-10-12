@@ -91,7 +91,9 @@ struct LayerInfo {
 /// The vector layers of a dataset, from `ogrinfo -json`.
 fn list(src: &Path) -> Result<Vec<LayerInfo>> {
     let ogrinfo = program("ogrinfo").ok_or_else(missing)?;
-    let out = Command::new(ogrinfo).arg("-json").arg("-ro").arg("-so").arg("-nomd").arg(src).output()?;
+    let mut c = Command::new(ogrinfo);
+    c.arg("-json").arg("-ro").arg("-so").arg("-nomd").arg(src);
+    let out = output(c, LIST_TIMEOUT)?;
     if !out.status.success() {
         return Err(DataError::Format(format!("GDAL: {}", String::from_utf8_lossy(&out.stderr).trim())));
     }
@@ -181,22 +183,30 @@ pub fn convert_one(src: &Path, layer: &str, family: Option<Family>, crs: Option<
 }
 
 fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, crs: Option<&str>) -> Result<Option<PathBuf>> {
-    use std::hash::{Hash, Hasher};
+    // A name GDAL would take for an option (a file can name its own layers).
+    if layer.starts_with('-') {
+        return Err(DataError::Format(format!("layer '{layer}': a name starting with '-' isn't read")));
+    }
     let ogr2ogr = program("ogr2ogr").ok_or_else(missing)?;
     std::fs::create_dir_all(dir)?;
+    prune(dir);
     let full = std::path::absolute(src).unwrap_or_else(|_| src.to_path_buf());
-    let meta = std::fs::metadata(&full)?;
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    (full.to_string_lossy(), layer, family.map(Family::label), crs, meta.len(), meta.modified().ok()).hash(&mut h);
-    let out = dir.join(format!("{:016x}.fgb", h.finish()));
-    let empty = dir.join(format!("{:016x}.empty", h.finish()));
-    if empty.exists() {
+    let (len, modified) = stamp(&full)?;
+    // The cache key, spelled out: kept beside the conversion and checked, so a hash collision
+    // can't hand back another file's layer.
+    let key = format!("{}\n{layer}\n{:?}\n{:?}\n{len}\n{modified}", full.display(), family.map(Family::label), crs);
+    let tag = format!("{:016x}", fnv1a(key.as_bytes()));
+    let out = dir.join(format!("{tag}.fgb"));
+    let empty = dir.join(format!("{tag}.empty"));
+    let keyfile = dir.join(format!("{tag}.key"));
+    let same = std::fs::read_to_string(&keyfile).is_ok_and(|k| k == key);
+    if same && empty.exists() {
         return Ok(None);
     }
-    if out.metadata().is_ok_and(|m| m.len() > 0) {
+    if same && out.metadata().is_ok_and(|m| m.len() > 0) {
         return Ok(Some(out));
     }
-    let tmp = dir.join(format!("{:016x}.{}.tmp.fgb", h.finish(), std::process::id()));
+    let tmp = dir.join(format!("{tag}.{}.tmp.fgb", std::process::id()));
     let run = |reproject: bool| -> std::io::Result<std::process::Output> {
         let _ = std::fs::remove_file(&tmp);
         let mut c = Command::new(&ogr2ogr);
@@ -211,7 +221,7 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, c
             c.args(["-where", f.filter()]);
         }
         c.arg(&tmp).arg(&full).arg(layer);
-        c.output()
+        output(c, CONVERT_TIMEOUT)
     };
     let mut res = run(true)?;
     // A layer without a coordinate system can't be reprojected: take it as it is (unless one was
@@ -229,13 +239,96 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, c
     // An empty family is remembered, so the file isn't converted again for it.
     // (A filter matching nothing leaves no file at all.)
     let count = if tmp.exists() { super::open_path(&tmp, None).ok().and_then(|s| s.info().count).unwrap_or(0) } else { 0 };
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_file(&empty);
     if count == 0 {
         let _ = std::fs::remove_file(&tmp);
-        let _ = std::fs::write(&empty, b"");
+        std::fs::write(&empty, b"")?;
+        std::fs::write(&keyfile, &key)?;
         return Ok(None);
     }
     std::fs::rename(&tmp, &out)?;
+    std::fs::write(&keyfile, &key)?;
     Ok(Some(out))
+}
+
+/// The longest a conversion may run, and the longest a layer listing may.
+const CONVERT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Conversions not used for this long are removed from the cache.
+const KEEP: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
+
+/// Runs a GDAL program, reading its output as it comes (so a chatty one can't block on a full
+/// pipe) and killing it if it runs past `timeout`.
+fn output(mut c: Command, timeout: std::time::Duration) -> std::io::Result<std::process::Output> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let drain = |p: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = p {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(st) = child.try_wait()? {
+            break st;
+        }
+        if start.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("GDAL ran for more than {} minutes", timeout.as_secs() / 60),
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    Ok(std::process::Output { status, stdout: out.join().unwrap_or_default(), stderr: err.join().unwrap_or_default() })
+}
+
+/// A file's size and modification time; for a folder (a File Geodatabase), those of its files,
+/// so an edit inside it is noticed.
+fn stamp(p: &Path) -> Result<(u64, u128)> {
+    let m = std::fs::metadata(p)?;
+    let t = |m: &std::fs::Metadata| {
+        m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0)
+    };
+    if !m.is_dir() {
+        return Ok((m.len(), t(&m)));
+    }
+    let (mut len, mut newest) = (0u64, t(&m));
+    for e in std::fs::read_dir(p)?.flatten().take(100_000) {
+        if let Ok(em) = e.metadata() {
+            len = len.saturating_add(em.len());
+            newest = newest.max(t(&em));
+        }
+    }
+    Ok((len, newest))
+}
+
+/// A 64-bit FNV-1a hash: stable across Rust releases, unlike `DefaultHasher`.
+fn fnv1a(b: &[u8]) -> u64 {
+    b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &x| (h ^ u64::from(x)).wrapping_mul(0x0000_0100_0000_01b3))
+}
+
+/// Removes conversions not touched for [`KEEP`] (best effort).
+fn prune(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let now = std::time::SystemTime::now();
+    for e in entries.flatten().take(100_000) {
+        let old = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age > KEEP);
+        if old {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -246,6 +339,12 @@ mod tests {
     fn names() {
         assert!(is_gdal_name("a.KML") && is_gdal_name("/x/roads.gdb/") && is_gdal_name("t.gpx"));
         assert!(!is_gdal_name("a.geojson") && !is_gdal_name("a.fgb") && !is_gdal_name("noext"));
+        // A layer named like an option never reaches GDAL.
+        let e = convert_one_in(&std::env::temp_dir(), Path::new("x.kml"), "-overwrite", None, None).unwrap_err();
+        assert!(e.to_string().contains("starting with '-'"), "{e}");
+        // The cache key's hash is stable.
+        assert_eq!(fnv1a(b"rustgis"), fnv1a(b"rustgis"));
+        assert_ne!(fnv1a(b"a"), fnv1a(b"b"));
     }
 
     /// A KML mixing points and polygons, through GDAL when it is installed (skipped otherwise).
