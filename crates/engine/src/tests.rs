@@ -2500,6 +2500,7 @@ fn geopackage_table_cap_is_reported() {
     assert_eq!(r["layers"].as_array().map(Vec::len), Some(32));
     assert_eq!(r["tables"], 34);
     assert_eq!(r["skipped"], json!(["t_33", "t_34"]));
+    assert_eq!(r["skippedCount"], 2);
     let said = s.notices_since(mark);
     assert!(said.iter().any(|n| n.text.contains("first 32 of 34 tables")), "{said:?}");
     // A table past the cap is added by name.

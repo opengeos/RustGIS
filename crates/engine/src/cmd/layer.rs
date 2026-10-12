@@ -320,7 +320,8 @@ pub(crate) enum Origin<'a> {
 /// Most GeoPackage tables added at once.
 const MAX_TABLES: usize = 32;
 
-/// Most skipped tables named in `layer.addData`'s result (`info.fileLayers` lists them all).
+/// Most skipped tables named in `layer.addData`'s result (`skippedCount` counts them all, and
+/// `info.fileLayers` lists them).
 const MAX_SKIPPED_NAMED: usize = 100;
 
 /// Adds a GeoPackage, GeoParquet or FlatGeobuf file: each feature table becomes a layer. Large
@@ -342,13 +343,6 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
             let mut all = source::layers(Path::new(path)).map_err(err)?;
             if all.len() > MAX_TABLES {
                 total = Some(all.len());
-                s.notify(
-                    format!(
-                        "{label}: added the first {MAX_TABLES} of {} tables; add others by name with \"layer\" (info.fileLayers lists them)",
-                        all.len()
-                    ),
-                    false,
-                );
                 skipped = all.split_off(MAX_TABLES);
             }
             all.into_iter().map(Some).collect()
@@ -419,8 +413,16 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
     }
     let first = ids.first().copied();
     let mut out = json!({"layer": first, "layers": ids, "features": features, "streamed": streamed});
+    // Said once the tables are in: a failure above is the error instead.
     if let Some(total) = total {
+        s.notify(
+            format!(
+                "{label}: added the first {MAX_TABLES} of {total} tables; add others by name with \"layer\" (info.fileLayers lists them)"
+            ),
+            false,
+        );
         out["tables"] = json!(total);
+        out["skippedCount"] = json!(skipped.len());
         // Named up to a bound, so a file of thousands of tables can't flood an agent's context.
         out["skipped"] = json!(skipped.iter().take(MAX_SKIPPED_NAMED).collect::<Vec<_>>());
     }
