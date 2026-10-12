@@ -143,11 +143,36 @@ cargo build --release --target wasm32-unknown-unknown
   `buffer`…), or a puzzle piece when it isn't one.
 - Tool parameter `kind`s: `layer`, `vectorLayer`, `polygonLayer`, `pointLayer`, `field`,
   `numericField`, `number`, `text`, `choice` (with `choices`) and `bool`.
-- `i18n` translates the plugin's own labels, help, names and summaries into the interface
-  language, by language code (`de`, or `zh-CN` with a fallback to `zh`).
+- `i18n` translates the plugin's own text into the interface language, by language code (`de`,
+  `zh-CN`…). See [Translations](#translations).
 
 A package is a zip archive named `<id>-<version>.rgplugin`. It holds `plugin.json` and the module
 at its root, or inside one top-level folder. Packages are at most 64 MB, and modules at most 48 MB.
+
+### Translations
+
+A plugin speaks the interface language through its `i18n` table: for each language code, its
+English strings and their translations, written exactly as they appear in `plugin.json`
+(`\n` included):
+
+```json
+"i18n": {
+  "de": { "Bounding Boxes": "Begrenzungsrahmen", "Input features": "Eingabe-Features" },
+  "zh-CN": { "Bounding Boxes": "边界框", "Input features": "输入要素" }
+}
+```
+
+- It covers the plugin's name and description, command labels and help, tool names, summaries
+  and toolboxes, parameter labels and `choice` values, and the tab, group and menu labels. A
+  string with no translation shows in English.
+- RustGIS's interface languages are `de`, `es`, `fr`, `it`, `nl`, `pt`, `ru`, `tr`, `az`, `id`,
+  `vi`, `zh`, `ja` and `ko`. A code with a region matches its language: `zh-CN` serves `zh`.
+- The registry copies the name and description translations into `registry.json`, so the
+  Plugin Manager lists plugins in the interface language before they are installed.
+- Messages a plugin builds while it runs can follow the interface language too: every request
+  carries its code as `lang`. In the SDK that is `req.lang`, and `req.tr` looks a message up in
+  `i18n`.
+- Up to 64 languages and 20,000 translated strings in all.
 
 ### A tab of its own
 
@@ -223,7 +248,8 @@ The module exports:
 - `rustgis_call(ptr: i32, len: i32) -> i64`, which handles the request and returns
   `reply_ptr << 32 | reply_len`. The reply is `{"ok": value}` or `{"error": "text"}`.
 
-Requests are `{"abi": 1, "kind": "command" | "tool", "id": "...", "params": {...}, "layers": {...}}`.
+Requests are `{"abi": 1, "kind": "command" | "tool", "id": "...", "params": {...}, "layers": {...}, "lang": "de"}`.
+`lang` is the interface language's code (`en` for English).
 Tools also get `layers`, which maps each layer's name to its FeatureCollection. A tool's `ok`
 value is `{"layers": [{"name", "geojson"}], "tables": [...], "selection": {"layer", "rows"},
 "messages": [...]}`.

@@ -219,6 +219,17 @@ fn versions_and_translations() {
     let m = Manifest::parse(&testing::manifest("tr", &[])).unwrap();
     assert_eq!(m.translate("de-AT", "Hello"), "Hallo");
     assert_eq!(m.translate("fr", "Hello"), "Hello");
+    // The interface's `zh` finds a plugin's `zh-CN`; an exact match wins over another region.
+    let mut m = m;
+    m.i18n.insert("zh-TW".into(), [("Hello".to_string(), "哈囉".to_string())].into());
+    m.i18n.insert("zh-CN".into(), [("Hello".to_string(), "你好".to_string())].into());
+    assert_eq!(m.translate("zh", "Hello"), "你好");
+    assert_eq!(m.translate("zh-TW", "Hello"), "哈囉");
+    // Loaded plugins translate for the interface (tool names, parameters), by language.
+    load("unit-i18n", &[]);
+    assert_eq!(crate::translate("de", "Hello").as_deref(), Some("Hallo"));
+    assert_eq!(crate::translate("fr", "Hello"), None);
+    assert_eq!(crate::translate("de", "Not a plugin string"), None);
 }
 
 #[test]

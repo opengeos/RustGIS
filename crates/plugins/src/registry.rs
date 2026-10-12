@@ -1,6 +1,8 @@
 //! The plugin registry: a curated list of plugins (`registry.json`) and a list of pulled ones
 //! (`blocklist.json`), published at <https://plugins.rustgis.app>.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -43,6 +45,16 @@ pub struct Entry {
     pub min_rustgis_version: String,
     #[serde(default)]
     pub permissions: Vec<Permission>,
+    /// The plugin's `name` and `description` in other languages, from its manifest's `i18n`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub i18n: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl Entry {
+    /// `s` (the name or description) in language `lang`, or `s`.
+    pub fn translate<'a>(&'a self, lang: &str, s: &'a str) -> &'a str {
+        crate::manifest::translate(&self.i18n, lang, s)
+    }
 }
 
 /// A pulled plugin: every version (no `sha256`), or the one package with that hash.

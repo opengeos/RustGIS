@@ -77,6 +77,30 @@ static PLUGINS: RwLock<Vec<Arc<Plugin>>> = RwLock::new(Vec::new());
 /// have added this session (they can withdraw plugins, never bring one back).
 static BLOCKED: RwLock<Vec<registry::Blocked>> = RwLock::new(Vec::new());
 static BLOCKED_EXTRA: RwLock<Vec<registry::Blocked>> = RwLock::new(Vec::new());
+/// The interface language's code, sent to plugins in every request.
+static LANGUAGE: RwLock<String> = RwLock::new(String::new());
+
+/// Sets the interface language (`de`, `zh`…). Plugins get it as `lang` in each command and tool
+/// request, to word the messages they build in it.
+pub fn set_language(code: &str) {
+    if let Ok(mut l) = LANGUAGE.write()
+        && *l != code
+    {
+        *l = code.to_string();
+    }
+}
+
+/// The interface language's code (`en` until [`set_language`] is called).
+pub fn language() -> String {
+    LANGUAGE.read().ok().filter(|l| !l.is_empty()).map(|l| l.clone()).unwrap_or_else(|| "en".into())
+}
+
+/// `s` in language `lang` from the `i18n` of the first enabled plugin that translates it. The
+/// interface uses it for plugin text its own catalog doesn't have (tool names, parameters…).
+pub fn translate(lang: &str, s: &str) -> Option<String> {
+    let plugins = PLUGINS.read().ok()?;
+    plugins.iter().filter(|p| p.enabled).map(|p| p.manifest.translate(lang, s)).find(|t| *t != s).map(str::to_string)
+}
 
 /// The loaded plugins, by name.
 pub fn list() -> Vec<Arc<Plugin>> {
@@ -242,7 +266,7 @@ pub fn command(id: &str) -> Option<PluginCommand> {
 
 /// Runs a plugin command, letting it reach the project through `host`.
 pub fn run_command(cmd: &PluginCommand, host: &mut dyn Host, params: &Value) -> Result<Value, String> {
-    let request = json!({"abi": manifest::ABI, "kind": "command", "id": cmd.decl.id, "params": params});
+    let request = json!({"abi": manifest::ABI, "kind": "command", "id": cmd.decl.id, "params": params, "lang": language()});
     runtime::call(&cmd.plugin.module, host, &request, runtime::COMMAND_FUEL).map_err(|e| format!("{}: {e}", cmd.decl.label))
 }
 

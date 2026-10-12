@@ -1221,6 +1221,7 @@ impl RustGisApp {
         // Fonts installed last frame are active now.
         self.fonts_pending = false;
         i18n::set_current(self.lang());
+        rustgis_engine::plugins::set_language(self.lang().code());
         panes::poll_geolibre(self, ctx);
         pluginsui::poll(self, ctx);
         assistantpane::poll(self, ctx);

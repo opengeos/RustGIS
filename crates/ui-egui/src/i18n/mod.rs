@@ -237,9 +237,37 @@ pub fn t(s: &str) -> &str {
     tr(current(), s)
 }
 
-/// `s` in `lang`; strings without a translation come back unchanged.
+/// `s` in `lang`; strings without a translation come back unchanged. Text the catalog doesn't
+/// have may be a plugin's (a tool name, a parameter label…): its own `i18n` translates it.
 pub fn tr(lang: Lang, s: &str) -> &str {
-    lang.0.catalog().get(s).copied().unwrap_or(s)
+    if let Some(t) = lang.0.catalog().get(s) {
+        return t;
+    }
+    if lang == Lang::EN {
+        return s;
+    }
+    plugin_tr(lang, s).unwrap_or(s)
+}
+
+thread_local! {
+    /// Plugin translations handed out so far, leaked once each so lookups return `&'static str`
+    /// like the catalogs. Bounded: plugins' `i18n` tables are limited in size.
+    static PLUGIN_STRINGS: std::cell::RefCell<std::collections::HashSet<&'static str>> = Default::default();
+}
+
+/// `s` translated by a loaded plugin's `i18n`.
+fn plugin_tr(lang: Lang, s: &str) -> Option<&'static str> {
+    let t = rustgis_engine::plugins::translate(lang.code(), s)?;
+    PLUGIN_STRINGS.with_borrow_mut(|seen| {
+        Some(match seen.get(t.as_str()) {
+            Some(&kept) => kept,
+            None => {
+                let kept: &'static str = Box::leak(t.into_boxed_str());
+                seen.insert(kept);
+                kept
+            }
+        })
+    })
 }
 
 /// A location such as `Map › Navigate`, translated segment by segment.
