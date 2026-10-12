@@ -50,10 +50,11 @@ miniz_oxide = "0.8"
 epaint_default_fonts = "0.36"
 # Vector data providers: GeoParquet (pure Rust, so the browser reads it too), FlatGeobuf and
 # GeoPackage (SQLite, desktop only).
-parquet = { version = "60", default-features = false, features = ["arrow", "snap", "lz4", "flate2", "flate2-rust_backend", "brotli"] }
+# Read without Arrow, which would make the web app's WebAssembly far larger (Arrow is only used
+# by the tests, to write sample files).
+parquet = { version = "60", default-features = false, features = ["snap", "lz4", "flate2", "flate2-rust_backend"] }
 arrow-array = { version = "60", default-features = false }
 arrow-schema = { version = "60", default-features = false }
-arrow-cast = { version = "60", default-features = false }
 bytes = "1"
 flatgeobuf = { version = "6", default-features = false }
 geozero = { version = "0.15", default-features = false, features = ["with-wkb"] }

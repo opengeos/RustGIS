@@ -20,9 +20,6 @@ proj4rs = { workspace = true }
 crs-definitions = { workspace = true }
 miniz_oxide = { workspace = true }
 parquet = { workspace = true }
-arrow-array = { workspace = true }
-arrow-schema = { workspace = true }
-arrow-cast = { workspace = true }
 bytes = { workspace = true }
 flatgeobuf = { workspace = true }
 geozero = { workspace = true }
@@ -31,3 +28,9 @@ geozero = { workspace = true }
 # zstd is C: native only. GeoParquet files compressed with it don't open in the browser yet.
 parquet = { workspace = true, features = ["zstd"] }
 rusqlite = { workspace = true }
+
+[dev-dependencies]
+# Writing sample GeoParquet files.
+parquet = { workspace = true, features = ["arrow"] }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }

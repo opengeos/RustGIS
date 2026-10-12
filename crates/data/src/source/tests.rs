@@ -53,9 +53,12 @@ fn write_parquet(path: &Path, covering: bool) {
     } else {
         r#"{"version":"1.0.0","primary_column":"geometry","columns":{"geometry":{"encoding":"WKB","geometry_types":["Point"]}}}"#
     };
-    let schema = Arc::new(Schema::new(fields).with_metadata(std::collections::HashMap::from([("geo".to_string(), geo.to_string())])));
+    let schema = Arc::new(Schema::new(fields));
     let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
-    let props = ::parquet::file::properties::WriterProperties::builder().set_max_row_group_row_count(Some(50)).build();
+    let props = ::parquet::file::properties::WriterProperties::builder()
+        .set_max_row_group_row_count(Some(50))
+        .set_key_value_metadata(Some(vec![::parquet::file::metadata::KeyValue::new("geo".to_string(), geo.to_string())]))
+        .build();
     let mut w = ::parquet::arrow::ArrowWriter::try_new(std::fs::File::create(path).unwrap(), schema, Some(props)).unwrap();
     w.write(&batch).unwrap();
     w.close().unwrap();

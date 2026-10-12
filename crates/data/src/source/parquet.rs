@@ -1,79 +1,70 @@
-//! GeoParquet: columnar files with WKB geometry, read with the pure-Rust `parquet` crate.
+//! GeoParquet: columnar files with WKB geometry, read with the pure-Rust `parquet` crate's column
+//! readers (no Arrow, which would make the browser build far larger).
 //!
 //! Extent queries prune whole row groups by the bounding-box statistics of the bbox covering
 //! column (GeoParquet 1.1, `covering.bbox`), then filter rows by those bounding boxes before any
 //! geometry is decoded. Only the columns needed are read. Files without a covering still work: their
 //! geometry is decoded and tested row by row.
 
-use super::{Batch, FeatureSource, Reproject, Request, Sampler, SourceInfo, clamp_limit, in_request, stride};
+use super::{Batch, FeatureSource, Reproject, Request, Sampler, SourceInfo, clamp_limit, in_request};
 use crate::{DataError, Feature, Field, FieldType, GeometryType, Result, Value, wkb};
-use arrow_array::{Array, ArrayRef, RecordBatch, cast::AsArray};
-use arrow_schema::DataType;
 use bytes::Bytes;
-use parquet::arrow::ProjectionMask;
-use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector};
-use parquet::file::reader::ChunkReader;
+use parquet::basic::{ConvertedType, LogicalType, Type as Physical};
+use parquet::column::reader::{ColumnReader, ColumnReaderImpl};
+use parquet::data_type::DataType as PqType;
+use parquet::file::metadata::ParquetMetaData;
+use parquet::file::reader::{FileReader, RowGroupReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
+use parquet::schema::types::ColumnDescPtr;
 use rustgis_geom::Extent;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::Arc;
 
+/// Values read per call.
 const BATCH: usize = 8192;
-
-/// Where the bytes are: a file reopened for every read, or a browser upload held in memory.
-#[derive(Clone, Debug)]
-enum Input {
-    Path(PathBuf),
-    Bytes(Bytes),
-}
 
 /// A GeoParquet file.
 pub struct ParquetSource {
     info: SourceInfo,
-    input: Input,
-    meta: ArrowReaderMetadata,
-    /// Root column index of the geometry.
+    reader: Arc<dyn FileReader>,
+    /// Leaf column index of the geometry.
     geom_col: usize,
-    /// Root column index of each field, in `info.fields` order.
+    /// Leaf column index of each field, in `info.fields` order.
     field_cols: Vec<usize>,
     /// Leaf column indices of the bbox covering's xmin, ymin, xmax, ymax.
-    covering: Option<Covering>,
+    covering: Option<[usize; 4]>,
     reproject: Reproject,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Covering {
-    /// Root column index of the struct (or of the four columns, when they're top-level).
-    leaves: [usize; 4],
-    roots: [usize; 4],
 }
 
 impl ParquetSource {
     pub fn open_path(path: &Path, name: &str) -> Result<Self> {
         let file = std::fs::File::open(path)?;
-        let meta = ArrowReaderMetadata::load(&file, ArrowReaderOptions::new()).map_err(err)?;
-        Self::new(Input::Path(path.to_path_buf()), meta, name)
+        Self::new(Arc::new(SerializedFileReader::new(file).map_err(err)?), name)
     }
 
     pub fn open_bytes(bytes: Vec<u8>, name: &str) -> Result<Self> {
-        let bytes = Bytes::from(bytes);
-        let meta = ArrowReaderMetadata::load(&bytes, ArrowReaderOptions::new()).map_err(err)?;
-        Self::new(Input::Bytes(bytes), meta, name)
+        Self::new(Arc::new(SerializedFileReader::new(Bytes::from(bytes)).map_err(err)?), name)
     }
 
-    fn new(input: Input, meta: ArrowReaderMetadata, name: &str) -> Result<Self> {
-        let schema = meta.schema().clone();
-        let kv = meta.metadata().file_metadata().key_value_metadata();
-        // The file's `geo` key, or the copy in the embedded Arrow schema (some writers keep only that).
+    fn new(reader: Arc<dyn FileReader>, name: &str) -> Result<Self> {
+        let md = reader.metadata();
+        let schema = md.file_metadata().schema_descr();
+        let kv = md.file_metadata().key_value_metadata();
         let geo: Option<serde_json::Value> = kv
             .and_then(|kv| kv.iter().find(|k| k.key == "geo"))
             .and_then(|k| k.value.as_deref())
-            .or_else(|| schema.metadata().get("geo").map(String::as_str))
             .and_then(|v| serde_json::from_str(v).ok());
+        // Top-level leaf columns by name (nested ones are left out of the fields).
+        let top = |i: usize| -> Option<String> {
+            let c = schema.column(i);
+            (c.path().parts().len() == 1 && c.max_rep_level() == 0).then(|| c.name().to_string())
+        };
+        let leaf_named = |n: &str| (0..schema.num_columns()).find(|&i| top(i).as_deref() == Some(n));
         // The geometry column: the metadata's primary column, else a binary column with a usual name.
         let primary = geo.as_ref().and_then(|g| g.get("primary_column")).and_then(|v| v.as_str()).map(str::to_string).or_else(|| {
             ["geometry", "geom", "wkb_geometry", "the_geom", "wkb"]
                 .into_iter()
-                .find(|n| schema.fields().iter().any(|f| f.name() == n && is_binary(f.data_type())))
+                .find(|n| leaf_named(n).is_some_and(|i| schema.column(i).physical_type() == Physical::BYTE_ARRAY))
                 .map(str::to_string)
         });
         let Some(primary) = primary else {
@@ -84,23 +75,23 @@ impl ParquetSource {
         if !encoding.eq_ignore_ascii_case("wkb") {
             return Err(DataError::Unsupported(format!("GeoParquet geometry encoding '{encoding}' (only WKB is read)")));
         }
-        let geom_col = schema.index_of(&primary).map_err(|_| DataError::Format(format!("no column '{primary}'")))?;
-        if !is_binary(schema.field(geom_col).data_type()) {
+        let geom_col = leaf_named(&primary).ok_or_else(|| DataError::Format(format!("no column '{primary}'")))?;
+        if schema.column(geom_col).physical_type() != Physical::BYTE_ARRAY {
             return Err(DataError::Format(format!("geometry column '{primary}' is not binary")));
         }
         let mut notes = Vec::new();
         let reproject = Reproject::from_epsg(crs_code(col_meta.and_then(|c| c.get("crs"))), &mut notes);
-        let covering = find_covering(&meta, col_meta, &primary);
-        let covering_roots: Vec<usize> = covering.map(|c| c.roots.to_vec()).unwrap_or_default();
+        let covering = find_covering(md, col_meta, &primary);
 
         let mut fields = Vec::new();
         let mut field_cols = Vec::new();
-        for (i, f) in schema.fields().iter().enumerate() {
-            if i == geom_col || covering_roots.contains(&i) {
+        for i in 0..schema.num_columns() {
+            if i == geom_col || covering.is_some_and(|c| c.contains(&i)) {
                 continue;
             }
-            if let Some(ty) = field_type(f.data_type()) {
-                fields.push(Field::new(f.name().clone(), ty));
+            let Some(name) = top(i) else { continue };
+            if let Some(ty) = field_type(&schema.column(i)) {
+                fields.push(Field::new(name, ty));
                 field_cols.push(i);
             }
         }
@@ -119,9 +110,9 @@ impl ParquetSource {
         });
         let extent = match bbox {
             Some(e) => reproject.extent_to_lonlat(&e),
-            None => covering.map(|c| reproject.extent_to_lonlat(&groups_extent(&meta, c))).unwrap_or(Extent::EMPTY),
+            None => covering.map(|c| reproject.extent_to_lonlat(&groups_extent(md, c))).unwrap_or(Extent::EMPTY),
         };
-        let count = u64::try_from(meta.metadata().file_metadata().num_rows()).ok();
+        let count = u64::try_from(md.file_metadata().num_rows()).ok();
         let info = SourceInfo {
             name: name.to_string(),
             format: "GeoParquet",
@@ -132,151 +123,11 @@ impl ParquetSource {
             crs: reproject.label(),
             indexed: covering.is_some(),
         };
-        let mut src = ParquetSource { info, input, meta, geom_col, field_cols, covering, reproject };
+        let mut src = ParquetSource { info, reader, geom_col, field_cols, covering, reproject };
         if src.info.geometry_type == GeometryType::None {
             src.info.geometry_type = super::peek_kind(&src);
         }
         Ok(src)
-    }
-
-    fn builder<T: ChunkReader + 'static>(&self, input: T) -> ParquetRecordBatchReaderBuilder<T> {
-        ParquetRecordBatchReaderBuilder::new_with_metadata(input, self.meta.clone()).with_batch_size(BATCH)
-    }
-
-    fn read_with<T: ChunkReader + 'static>(&self, input: impl Fn() -> Result<T>, req: &Request) -> Result<Batch> {
-        let limit = clamp_limit(req.limit);
-        let md = self.meta.metadata();
-        let native = req.extent.map(|e| self.reproject.extent_from_lonlat(&e));
-        // Row groups whose bounding box meets the extent.
-        let groups: Vec<usize> = (0..md.num_row_groups())
-            .filter(|&g| match (native, self.covering) {
-                (Some(e), Some(c)) => group_extent(md, g, c).is_none_or(|ge| ge.intersects(&e)),
-                _ => true,
-            })
-            .collect();
-        let rows_in = |g: &usize| md.row_group(*g).num_rows().max(0) as u64;
-        let first_row: Vec<u64> = {
-            let mut acc = 0u64;
-            (0..md.num_row_groups())
-                .map(|g| {
-                    let r = acc;
-                    acc += rows_in(&g);
-                    r
-                })
-                .collect()
-        };
-        if groups.is_empty() {
-            return Ok(Batch { complete: true, ..Batch::default() });
-        }
-
-        // Which rows of those groups to read: with a covering and an extent, exactly the rows whose
-        // bounding box meets it; otherwise all of them.
-        let mut keep: Option<Vec<bool>> = None;
-        if let (Some(e), Some(c)) = (native, self.covering) {
-            let mask = ProjectionMask::roots(self.meta.parquet_schema(), dedup(c.roots));
-            let reader = self.builder(input()?).with_row_groups(groups.clone()).with_projection(mask).build().map_err(err)?;
-            let mut k = Vec::new();
-            for b in reader {
-                let b = b.map_err(arrow_err)?;
-                let cols = bbox_columns(&b);
-                for r in 0..b.num_rows() {
-                    let hit = match &cols {
-                        Some([x0, y0, x1, y1]) => {
-                            let v = |a: &arrow_array::Float64Array| if a.is_null(r) { f64::NAN } else { a.value(r) };
-                            let be = Extent::new(v(x0), v(y0), v(x1), v(y1));
-                            be.is_empty() || be.intersects(&e)
-                        }
-                        None => true,
-                    };
-                    k.push(hit);
-                }
-            }
-            keep = Some(k);
-        }
-        let total: u64 = groups.iter().map(rows_in).sum();
-        let matched = keep.as_ref().map(|k| k.iter().filter(|&&b| b).count() as u64).unwrap_or(total);
-        // An extent without a covering is tested on the decoded geometry, so every row is read and
-        // the matches are sampled as they come.
-        let late = native.is_some() && keep.is_none();
-        let step = if late { 1 } else { stride(matched, limit) };
-        let mut sample = Sampler::new(limit);
-        // Every `step`-th kept row.
-        let mut take = Vec::with_capacity(usize::try_from(total).unwrap_or(0).min(1 << 26));
-        let mut seen = 0u64;
-        for i in 0..usize::try_from(total).unwrap_or(usize::MAX) {
-            let kept = keep.as_ref().is_none_or(|k| k.get(i).copied().unwrap_or(false));
-            let on = kept && seen.is_multiple_of(step);
-            if kept {
-                seen += 1;
-            }
-            take.push(on);
-        }
-        let selection = to_selection(&take);
-
-        let mut roots: Vec<usize> = vec![self.geom_col];
-        roots.extend(&self.field_cols);
-        let mask = ProjectionMask::roots(self.meta.parquet_schema(), roots);
-        let reader = self
-            .builder(input()?)
-            .with_row_groups(groups.clone())
-            .with_projection(mask)
-            .with_row_selection(selection)
-            .build()
-            .map_err(err)?;
-        // Row ids: the row's position in the file, so they stay put between reads.
-        let mut ids = Vec::new();
-        {
-            let mut i = 0usize;
-            for &g in &groups {
-                let base = first_row.get(g).copied().unwrap_or(0);
-                for r in 0..rows_in(&g) {
-                    if take.get(i).copied().unwrap_or(false) {
-                        ids.push(base + r + 1);
-                    }
-                    i += 1;
-                }
-            }
-        }
-        let mut out = Batch { matched, complete: step == 1, ..Batch::default() };
-        let mut row = 0usize;
-        for b in reader {
-            let b = b.map_err(arrow_err)?;
-            // A projection keeps the file's column order: find the columns by name.
-            let schema = self.meta.schema();
-            let col = |root: usize| b.column_by_name(schema.field(root).name());
-            let Some(geoms) = col(self.geom_col) else { return Err(DataError::Format("GeoParquet: geometry column missing".into())) };
-            let attrs: Vec<(FieldType, Option<ArrayRef>)> =
-                self.info.fields.iter().zip(&self.field_cols).map(|(f, &root)| (f.ty, col(root).and_then(|c| convert(c, f.ty)))).collect();
-            for r in 0..b.num_rows() {
-                let id = ids.get(row).copied().unwrap_or(row as u64 + 1);
-                row += 1;
-                let geometry = wkb_at(geoms, r).and_then(wkb::decode).and_then(|g| self.reproject.geometry(g));
-                let Some(geometry) = geometry else {
-                    out.skipped += 1;
-                    continue;
-                };
-                if !in_request(&geometry, req) || (late && !sample.wants()) {
-                    continue;
-                }
-                let values = attrs.iter().map(|(ty, a)| a.as_ref().map(|a| value_at(a, *ty, r)).unwrap_or(Value::Null)).collect();
-                let f = Feature { id, geometry: Some(geometry), attrs: values };
-                if late {
-                    sample.keep(f);
-                    continue;
-                }
-                out.features.push(f);
-                if out.features.len() >= limit {
-                    out.complete = false;
-                    return Ok(out);
-                }
-            }
-        }
-        if late {
-            out.matched = sample.seen();
-            out.complete = sample.complete();
-            out.features = sample.items;
-        }
-        Ok(out)
     }
 }
 
@@ -286,23 +137,84 @@ impl FeatureSource for ParquetSource {
     }
 
     fn read(&self, req: &Request) -> Result<Batch> {
-        match &self.input {
-            Input::Path(p) => self.read_with(|| Ok(std::fs::File::open(p)?), req),
-            Input::Bytes(b) => self.read_with(|| Ok(b.clone()), req),
+        let limit = clamp_limit(req.limit);
+        let md = self.reader.metadata();
+        let native = req.extent.map(|e| self.reproject.extent_from_lonlat(&e));
+        let rows_in = |g: usize| usize::try_from(md.row_group(g).num_rows()).unwrap_or(0);
+        // Row groups whose bounding box meets the extent.
+        let groups: Vec<usize> = (0..md.num_row_groups())
+            .filter(|&g| match (native, self.covering) {
+                (Some(e), Some(c)) => group_extent(md, g, c).is_none_or(|ge| ge.intersects(&e)),
+                _ => true,
+            })
+            .collect();
+
+        // Which rows of those groups match: with a covering and an extent, exactly the rows whose
+        // bounding box meets it (read from the covering alone); otherwise all of them.
+        let mut keep: Vec<Option<Vec<bool>>> = Vec::with_capacity(groups.len());
+        for &g in &groups {
+            keep.push(match (native, self.covering) {
+                (Some(e), Some(c)) => {
+                    let rg = self.reader.get_row_group(g).map_err(err)?;
+                    let n = rows_in(g);
+                    let cols: Vec<Vec<Option<f64>>> = c.iter().map(|&i| read_f64(rg.as_ref(), i, n)).collect::<Result<_>>()?;
+                    let v = |k: usize, r: usize| cols.get(k).and_then(|c| c.get(r).copied().flatten()).unwrap_or(f64::NAN);
+                    Some(
+                        (0..n)
+                            .map(|r| {
+                                let be = Extent::new(v(0, r), v(1, r), v(2, r), v(3, r));
+                                be.is_empty() || be.intersects(&e)
+                            })
+                            .collect(),
+                    )
+                }
+                _ => None,
+            });
         }
+        let matched: u64 =
+            groups.iter().zip(&keep).map(|(&g, k)| k.as_ref().map(|k| k.iter().filter(|&&b| b).count()).unwrap_or(rows_in(g)) as u64).sum();
+        // An extent without a covering is tested on the decoded geometry: the matches are sampled
+        // as they come. Otherwise the match count is known, and every `step`-th is read.
+        let late = native.is_some() && self.covering.is_none();
+        let mut sample = if late { Sampler::new(limit) } else { Sampler::with_total(limit, matched) };
+        let mut skipped = 0;
+        let mut starts = Vec::with_capacity(md.num_row_groups());
+        let mut first_row = 0u64;
+        for g in 0..md.num_row_groups() {
+            starts.push(first_row);
+            first_row += rows_in(g) as u64;
+        }
+        for (&g, k) in groups.iter().zip(&keep) {
+            let n = rows_in(g);
+            // The rows of this group the sample takes, decided before anything else is read.
+            let take: Vec<bool> =
+                (0..n).map(|r| k.as_ref().is_none_or(|k| k.get(r).copied().unwrap_or(false)) && (late || sample.wants())).collect();
+            if !take.iter().any(|&t| t) {
+                continue;
+            }
+            let rg = self.reader.get_row_group(g).map_err(err)?;
+            let geoms = read_bytes(rg.as_ref(), self.geom_col, n)?;
+            let attrs: Vec<Vec<Value>> = self.field_cols.iter().map(|&c| read_values(rg.as_ref(), c, n)).collect::<Result<_>>()?;
+            let base = starts.get(g).copied().unwrap_or(0);
+            for (r, _) in take.iter().enumerate().filter(|(_, t)| **t) {
+                let geometry = geoms.get(r).and_then(|b| b.as_deref()).and_then(wkb::decode).and_then(|g| self.reproject.geometry(g));
+                let Some(geometry) = geometry else {
+                    skipped += 1;
+                    continue;
+                };
+                if !in_request(&geometry, req) || (late && !sample.wants()) {
+                    continue;
+                }
+                let values = attrs.iter().map(|col| col.get(r).cloned().unwrap_or(Value::Null)).collect();
+                sample.keep(Feature { id: base + r as u64 + 1, geometry: Some(geometry), attrs: values });
+            }
+        }
+        Ok(Batch { matched: if late { sample.seen() } else { matched }, complete: sample.complete(), skipped, features: sample.items })
     }
 }
 
 fn err(e: parquet::errors::ParquetError) -> DataError {
     DataError::Format(format!("GeoParquet: {e}"))
-}
-
-fn arrow_err(e: arrow_schema::ArrowError) -> DataError {
-    DataError::Format(format!("GeoParquet: {e}"))
-}
-
-fn is_binary(t: &DataType) -> bool {
-    matches!(t, DataType::Binary | DataType::LargeBinary | DataType::BinaryView)
 }
 
 fn geometry_type_name(t: &str) -> Option<GeometryType> {
@@ -331,9 +243,10 @@ fn crs_code(crs: Option<&serde_json::Value>) -> Option<u32> {
     }
 }
 
-/// The bbox covering: the declared `covering.bbox`, else a `<geometry>_bbox` / `bbox` struct.
-fn find_covering(meta: &ArrowReaderMetadata, col_meta: Option<&serde_json::Value>, primary: &str) -> Option<Covering> {
-    let schema = meta.parquet_schema();
+/// The bbox covering's leaf columns: the declared `covering.bbox`, else a `<geometry>_bbox` or
+/// `bbox` struct.
+fn find_covering(md: &ParquetMetaData, col_meta: Option<&serde_json::Value>, primary: &str) -> Option<[usize; 4]> {
+    let schema = md.file_metadata().schema_descr();
     let leaf = |path: &[&str]| -> Option<usize> {
         let want = path.join(".");
         (0..schema.num_columns()).find(|&i| schema.column(i).path().string() == want)
@@ -350,21 +263,15 @@ fn find_covering(meta: &ArrowReaderMetadata, col_meta: Option<&serde_json::Value
         }
     };
     let mut leaves = [0usize; 4];
-    let mut roots = [0usize; 4];
     for (i, p) in paths.iter().enumerate() {
         let refs: Vec<&str> = p.iter().map(String::as_str).collect();
         let l = leaf(&refs)?;
+        if !matches!(schema.column(l).physical_type(), Physical::FLOAT | Physical::DOUBLE) || schema.column(l).max_rep_level() > 0 {
+            return None;
+        }
         *leaves.get_mut(i)? = l;
-        *roots.get_mut(i)? = schema.get_column_root_idx(l);
     }
-    Some(Covering { leaves, roots })
-}
-
-fn dedup(roots: [usize; 4]) -> Vec<usize> {
-    let mut v = roots.to_vec();
-    v.sort_unstable();
-    v.dedup();
-    v
+    Some(leaves)
 }
 
 fn stat(s: Option<&Statistics>, max: bool) -> Option<f64> {
@@ -376,96 +283,117 @@ fn stat(s: Option<&Statistics>, max: bool) -> Option<f64> {
 }
 
 /// A row group's bounding box from its covering statistics.
-fn group_extent(md: &parquet::file::metadata::ParquetMetaData, g: usize, c: Covering) -> Option<Extent> {
+fn group_extent(md: &ParquetMetaData, g: usize, c: [usize; 4]) -> Option<Extent> {
     let rg = md.row_groups().get(g)?;
-    let s = |i: usize, max: bool| stat(rg.columns().get(*c.leaves.get(i)?)?.statistics(), max);
+    let s = |i: usize, max: bool| stat(rg.columns().get(*c.get(i)?)?.statistics(), max);
     let e = Extent::new(s(0, false)?, s(1, false)?, s(2, true)?, s(3, true)?);
     (!e.is_empty()).then_some(e)
 }
 
-fn groups_extent(meta: &ArrowReaderMetadata, c: Covering) -> Extent {
-    let md = meta.metadata();
+fn groups_extent(md: &ParquetMetaData, c: [usize; 4]) -> Extent {
     (0..md.num_row_groups()).filter_map(|g| group_extent(md, g, c)).fold(Extent::EMPTY, |a, e| a.union(&e))
 }
 
-/// The four covering columns of a batch read with only them projected, as doubles.
-fn bbox_columns(b: &RecordBatch) -> Option<[arrow_array::Float64Array; 4]> {
-    let mut leaves: Vec<ArrayRef> = Vec::new();
-    for c in b.columns() {
-        match c.data_type() {
-            DataType::Struct(_) => leaves.extend(c.as_struct().columns().iter().cloned()),
-            _ => leaves.push(c.clone()),
-        }
-    }
-    let f = |i: usize| -> Option<arrow_array::Float64Array> {
-        let a = arrow_cast::cast(leaves.get(i)?, &DataType::Float64).ok()?;
-        a.as_primitive_opt::<arrow_array::types::Float64Type>().cloned()
-    };
-    Some([f(0)?, f(1)?, f(2)?, f(3)?])
+fn is_text(c: &ColumnDescPtr) -> bool {
+    matches!(c.logical_type_ref(), Some(LogicalType::String | LogicalType::Enum | LogicalType::Json))
+        || matches!(c.converted_type(), ConvertedType::UTF8 | ConvertedType::ENUM | ConvertedType::JSON)
 }
 
-/// Run-length encodes a row mask as a selection.
-fn to_selection(take: &[bool]) -> RowSelection {
-    let mut sel: Vec<RowSelector> = Vec::new();
-    let mut i = 0;
-    while i < take.len() {
-        let on = take.get(i).copied().unwrap_or(false);
-        let mut j = i;
-        while j < take.len() && take.get(j).copied().unwrap_or(false) == on {
-            j += 1;
-        }
-        sel.push(if on { RowSelector::select(j - i) } else { RowSelector::skip(j - i) });
-        i = j;
+/// The scale of a decimal column (its values are integers × 10^-scale).
+fn decimal_scale(c: &ColumnDescPtr) -> Option<i32> {
+    match c.logical_type_ref() {
+        Some(LogicalType::Decimal(d)) => Some(d.scale),
+        _ if c.converted_type() == ConvertedType::DECIMAL => Some(c.type_scale()),
+        _ => None,
     }
-    RowSelection::from(sel)
 }
 
-fn field_type(t: &DataType) -> Option<FieldType> {
-    use DataType as D;
-    Some(match t {
-        D::Int8 | D::Int16 | D::Int32 | D::Int64 | D::UInt8 | D::UInt16 | D::UInt32 | D::UInt64 => FieldType::Integer,
-        D::Float16 | D::Float32 | D::Float64 | D::Decimal32(..) | D::Decimal64(..) | D::Decimal128(..) | D::Decimal256(..) => {
-            FieldType::Double
-        }
-        D::Boolean => FieldType::Boolean,
-        D::Utf8 | D::LargeUtf8 | D::Utf8View | D::Date32 | D::Date64 | D::Timestamp(..) | D::Time32(_) | D::Time64(_) => FieldType::Text,
-        D::Dictionary(_, v) if matches!(v.as_ref(), D::Utf8 | D::LargeUtf8 | D::Utf8View) => FieldType::Text,
+/// A field type for a top-level column; `None` for types not read (binary, INT96, fixed-length).
+fn field_type(c: &ColumnDescPtr) -> Option<FieldType> {
+    Some(match c.physical_type() {
+        Physical::BOOLEAN => FieldType::Boolean,
+        Physical::INT32 | Physical::INT64 if decimal_scale(c).is_some() => FieldType::Double,
+        Physical::INT32 | Physical::INT64 => FieldType::Integer,
+        Physical::FLOAT | Physical::DOUBLE => FieldType::Double,
+        Physical::BYTE_ARRAY if is_text(c) => FieldType::Text,
         _ => return None,
     })
 }
 
-/// A column cast to the field's storage type.
-fn convert(a: &ArrayRef, ty: FieldType) -> Option<ArrayRef> {
-    let to = match ty {
-        FieldType::Integer => DataType::Int64,
-        FieldType::Double => DataType::Float64,
-        FieldType::Boolean => DataType::Boolean,
-        FieldType::Text => DataType::Utf8,
+/// Reads `n` rows of a flat column, `None` where a row is null.
+fn read_column<T: PqType>(r: &mut ColumnReaderImpl<T>, n: usize, max_def: i16) -> Result<Vec<Option<T::T>>> {
+    let mut out: Vec<Option<T::T>> = Vec::with_capacity(n.min(1 << 24));
+    let mut defs = Vec::new();
+    let mut values = Vec::new();
+    while out.len() < n {
+        defs.clear();
+        values.clear();
+        let want = (n - out.len()).min(BATCH);
+        let (records, _, levels) = r.read_records(want, Some(&mut defs), None, &mut values).map_err(err)?;
+        if records == 0 {
+            break;
+        }
+        if max_def == 0 {
+            out.extend(values.drain(..).map(Some));
+        } else {
+            let mut it = values.drain(..);
+            for d in defs.iter().take(levels) {
+                out.push(if *d == max_def { it.next() } else { None });
+            }
+        }
+    }
+    out.truncate(n);
+    out.resize_with(n, || None);
+    Ok(out)
+}
+
+/// Reads `n` rows of a field column as attribute values.
+fn read_values(rg: &dyn RowGroupReader, col: usize, n: usize) -> Result<Vec<Value>> {
+    let desc = rg.metadata().column(col).column_descr_ptr();
+    let max_def = desc.max_def_level();
+    let scale = decimal_scale(&desc).map(|s| 10f64.powi(-s));
+    let int = |v: Option<i64>| match (v, scale) {
+        (None, _) => Value::Null,
+        (Some(i), Some(f)) => Value::Float(i as f64 * f),
+        (Some(i), None) => Value::Int(i),
     };
-    arrow_cast::cast(a, &to).ok()
+    Ok(match rg.get_column_reader(col).map_err(err)? {
+        ColumnReader::BoolColumnReader(mut r) => {
+            read_column(&mut r, n, max_def)?.into_iter().map(|v| v.map(Value::Bool).unwrap_or_default()).collect()
+        }
+        ColumnReader::Int32ColumnReader(mut r) => read_column(&mut r, n, max_def)?.into_iter().map(|v| int(v.map(i64::from))).collect(),
+        ColumnReader::Int64ColumnReader(mut r) => read_column(&mut r, n, max_def)?.into_iter().map(int).collect(),
+        ColumnReader::FloatColumnReader(mut r) => {
+            read_column(&mut r, n, max_def)?.into_iter().map(|v| v.map(|f| Value::Float(f64::from(f))).unwrap_or_default()).collect()
+        }
+        ColumnReader::DoubleColumnReader(mut r) => {
+            read_column(&mut r, n, max_def)?.into_iter().map(|v| v.map(Value::Float).unwrap_or_default()).collect()
+        }
+        ColumnReader::ByteArrayColumnReader(mut r) => read_column(&mut r, n, max_def)?
+            .into_iter()
+            .map(|v| v.map(|b| Value::Text(String::from_utf8_lossy(b.data()).into_owned())).unwrap_or_default())
+            .collect(),
+        _ => vec![Value::Null; n],
+    })
 }
 
-fn value_at(a: &ArrayRef, ty: FieldType, r: usize) -> Value {
-    if r >= a.len() || a.is_null(r) {
-        return Value::Null;
+/// Reads `n` rows of a binary column (the WKB geometry).
+fn read_bytes(rg: &dyn RowGroupReader, col: usize, n: usize) -> Result<Vec<Option<Vec<u8>>>> {
+    let max_def = rg.metadata().column(col).column_descr().max_def_level();
+    match rg.get_column_reader(col).map_err(err)? {
+        ColumnReader::ByteArrayColumnReader(mut r) => {
+            Ok(read_column(&mut r, n, max_def)?.into_iter().map(|v| v.map(|b| b.data().to_vec())).collect())
+        }
+        _ => Err(DataError::Format("GeoParquet: the geometry column is not binary".into())),
     }
-    match ty {
-        FieldType::Integer => a.as_primitive_opt::<arrow_array::types::Int64Type>().map(|v| Value::Int(v.value(r))),
-        FieldType::Double => a.as_primitive_opt::<arrow_array::types::Float64Type>().map(|v| Value::Float(v.value(r))),
-        FieldType::Boolean => a.as_boolean_opt().map(|v| Value::Bool(v.value(r))),
-        FieldType::Text => a.as_string_opt::<i32>().map(|v| Value::Text(v.value(r).to_string())),
-    }
-    .unwrap_or(Value::Null)
 }
 
-fn wkb_at(a: &ArrayRef, r: usize) -> Option<&[u8]> {
-    if r >= a.len() || a.is_null(r) {
-        return None;
-    }
-    match a.data_type() {
-        DataType::Binary => a.as_binary_opt::<i32>().map(|v| v.value(r)),
-        DataType::LargeBinary => a.as_binary_opt::<i64>().map(|v| v.value(r)),
-        DataType::BinaryView => a.as_binary_view_opt().map(|v| v.value(r)),
-        _ => None,
+/// Reads `n` rows of a float or double column as doubles.
+fn read_f64(rg: &dyn RowGroupReader, col: usize, n: usize) -> Result<Vec<Option<f64>>> {
+    let max_def = rg.metadata().column(col).column_descr().max_def_level();
+    match rg.get_column_reader(col).map_err(err)? {
+        ColumnReader::FloatColumnReader(mut r) => Ok(read_column(&mut r, n, max_def)?.into_iter().map(|v| v.map(f64::from)).collect()),
+        ColumnReader::DoubleColumnReader(mut r) => read_column(&mut r, n, max_def),
+        _ => Ok(vec![None; n]),
     }
 }
