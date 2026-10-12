@@ -1,9 +1,22 @@
 # nl interface catalog: English<TAB>translation
+ by 	 door
+(b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+00:00 UTC	00:00 UTC
+06:00 UTC	06:00 UTC
+12:00 UTC	12:00 UTC
+18:00 UTC	18:00 UTC
+3D mesh	3D-mesh
 <None>	<Geen>
 A 3D globe seen from space.	Een 3D-globe, gezien vanuit de ruimte.
 A blank map with a basemap	Een lege kaart met een basiskaart
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Een snelle, opensource desktop-GIS geschreven in puur Rust, met de lintwerkwijze van desktop-GIS: kaarten en lagen, symbologie, labels, selectie, bewerken, geoverwerking en exporteren.
+A flat scene centred on the view (azimuthal equidistant).	Een vlakke scène gecentreerd op de weergave (azimutaal equidistant).
+A globe scene.	Een wereldbolscène.
+A magnifying lens that follows the pointer.	Een vergrootglas dat de aanwijzer volgt.
+A notebook of text and command cells.	Een notebook met tekst- en opdrachtcellen.
 A projected coordinate system.	Een geprojecteerd coördinatensysteem.
+A report listing the selected layer's records, page after page.	Een rapport met de records van de geselecteerde laag, pagina na pagina.
+A template with the first selected feature's values	Een sjabloon met de waarden van het eerste geselecteerde object
 A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	Het adres van een tegeldienst: rastertegels met {z}/{x}/{y} (of {-y}, {q}, {bbox-epsg-3857} voor WMS), vectortegels (.pbf) of TileJSON, of een MapLibre-stijl.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Een waarde, een veld of twee daarvan verbonden door + − × ÷. Geldt voor de geselecteerde rijen, of voor alle rijen als er geen geselecteerd zijn.
 About	Over
@@ -13,67 +26,157 @@ About RustGIS.	Over RustGIS.
 Above	Boven
 Above Left	Linksboven
 Above Right	Rechtsboven
+Accessibility	Toegankelijkheid
 Activate Map	Kaart activeren
 Add	Toevoegen
 Add\nData	Gegevens\ntoevoegen
 Add\nField	Veld\ntoevoegen
+Add ({n})	Toevoegen ({n})
+Add a bar chart of a layer's numeric field.	Een staafdiagram van een numeriek veld van een laag toevoegen.
 Add a field to the selected layer.	Een veld toevoegen aan de geselecteerde laag.
 Add a field.	Een veld toevoegen.
+Add a legend of the map frame's layers.	Een legenda van de lagen van het kaartkader toevoegen.
+Add a map frame showing a map of the project.	Een kaartkader met een kaart van het project toevoegen.
 Add a new map to the project.	Een nieuwe kaart aan het project toevoegen.
+Add a north arrow for the map frame.	Een noordpijl voor het kaartkader toevoegen.
+Add a page	Een pagina toevoegen
+Add a page layout for printing and exporting the map.	Een paginalay-out toevoegen om de kaart af te drukken en te exporteren.
+Add a page to the presentation.	Een pagina aan de presentatie toevoegen.
+Add a PNG or JPEG picture to the page.	Een PNG- of JPEG-afbeelding aan de pagina toevoegen.
+Add a presentation file.	Een presentatiebestand toevoegen.
+Add a report file, or a report template for the selected layer.	Een rapportbestand toevoegen, of een rapportsjabloon voor de geselecteerde laag.
+Add a scale bar for the map frame.	Een schaalbalk voor het kaartkader toevoegen.
+add a second map first (Insert › New Map)	voeg eerst een tweede kaart toe (Invoegen › Nieuwe kaart)
+Add a second map frame first	Voeg eerst een tweede kaartkader toe
+Add a text element.	Een tekstelement toevoegen.
+Add an elevation raster first.	Voeg eerst een hoogteraster toe.
+Add an empty layer with a ready-made schema, to draw into.	Een lege laag met een kant-en-klaar schema toevoegen, om in te tekenen.
+Add and Open	Toevoegen en openen
+Add and Open Notebook	Notebook toevoegen en openen
+Add Archive	Archief toevoegen
+add at least two keyframes	voeg minstens twee sleutelframes toe
+Add Cell	Cel toevoegen
+Add Commands	Opdrachten toevoegen
 Add Data	Gegevens toevoegen
 Add Data (from file contents)	Gegevens toevoegen (uit bestandsinhoud)
 Add Data (from text)	Gegevens toevoegen (uit tekst)
+Add Data Store…	Gegevensopslag toevoegen…
 Add Data…	Gegevens toevoegen…
+Add Element	Element toevoegen
 Add Field	Veld toevoegen
 Add field	Veld toevoegen
+Add Folder	Map toevoegen
 Add GeoJSON, CSV or Shapefile data to the map.	GeoJSON-, CSV- of Shapefile-gegevens aan de kaart toevoegen.
+Add Graphic	Grafisch element toevoegen
+Add Graphics Layer	Grafische laag toevoegen
+Add Job	Job toevoegen
+Add Keyframe	Sleutelframe toevoegen
+Add Layer File	Laagbestand toevoegen
+Add Page After	Pagina erna toevoegen
+Add Page Before	Pagina ervoor toevoegen
+Add pages, layouts, related reports and related records to the report.	Pagina's, lay-outs, gerelateerde rapporten en gerelateerde records aan het rapport toevoegen.
 Add Plugin Folder…	Pluginmap toevoegen…
 Add raster tiles, vector tiles or a map style by address.	Rastertegels, vectortegels of een kaartstijl toevoegen via een adres.
+Add Rule	Regel toevoegen
 Add sample countries	Voorbeeldlanden toevoegen
 Add Sample Data	Voorbeeldgegevens toevoegen
+Add Step	Stap toevoegen
+Add Style	Stijl toevoegen
+Add Style File…	Stijlbestand toevoegen…
+Add Task Step	Taakstap toevoegen
+Add Text	Tekst toevoegen
+Add text that updates: page, date, scale, map and more.	Tekst toevoegen die bijwerkt: pagina, datum, schaal, kaart en meer.
+Add the attribute table of a layer in the map frame.	De attributentabel van een laag in het kaartkader toevoegen.
+Add the current view as a keyframe.	De huidige weergave als sleutelframe toevoegen.
+Add the maps of a map file, map package, project or project package.	De kaarten van een kaartbestand, kaartpakket, project of projectpakket toevoegen.
 Add Tile Layer	Tegellaag toevoegen
 Add Tile Layer…	Tegellaag toevoegen…
 Add To Current Selection	Toevoegen aan huidige selectie
 Add vector data.	Vectorgegevens toevoegen.
+Additional surrounds.	Extra kaartelementen.
 Address	Adres
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Voegt geodetische oppervlakte (km²), lengte (km) of zwaartepuntcoördinaten toe als velden.
+Aggregation	Aggregatie
+AI	AI
+AI\nAssistant	AI-\nassistent
+AI Assistant	AI-assistent
+AI provider	AI-aanbieder
+Alignment	Uitlijning
 All	Alle
 All categories	Alle categorieën
 All files	Alle bestanden
+All Selected	Alle geselecteerde
+All steps done.	Alle stappen voltooid.
+Allow	Toestaan
+Allow only certain combinations of values across fields.	Alleen bepaalde combinaties van waarden over velden toestaan.
+Allow such actions for this conversation	Zulke acties toestaan voor dit gesprek
+Allow this action?	Deze actie toestaan?
+Along Selected Line	Langs geselecteerde lijn
 Altitude	Hoogte
 Analysis	Analyse
+Analysis › AI	Analyse › AI
 AND	AND
+Angle	Hoek
+Animation	Animatie
+API key	API-sleutel
 Apply	Toepassen
+Apply a function to a raster	Een functie op een raster toepassen
+Apply Control Points	Controlepunten toepassen
+Apply Style	Stijl toepassen
+Apply to the selected layer	Toepassen op de geselecteerde laag
+Archive	Archief
+Archive History	Archiefgeschiedenis
+Archiving	Archivering
+Area	Oppervlakte
 Area of use: longitude {w}° to {e}°, latitude {s}° to {n}°	Toepassingsgebied: lengte {w}° tot {e}°, breedte {s}° tot {n}°
 Area of use: the whole world	Toepassingsgebied: de hele wereld
 Area of use: within {r}° of the {lon}° meridian	Toepassingsgebied: binnen {r}° van de meridiaan {lon}°
 Area of use: within {r}° of {lon}°, {lat}°	Toepassingsgebied: binnen {r}° van {lon}°, {lat}°
 Area {area}   ·   Perimeter {perimeter}	Oppervlakte {area}   ·   Omtrek {perimeter}
+Areas (name, land use, area)	Gebieden (naam, landgebruik, oppervlakte)
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Stel een vraag over je gegevens, of beschrijf wat er met de kaart moet gebeuren. De assistent voert RustGIS-opdrachten voor je uit; elke wijziging kan ongedaan worden gemaakt.
+Ask about the map, or tell it what to do…	Stel een vraag over de kaart, of zeg wat er moet gebeuren…
+Ask about your data, or tell the assistant what to do with the map.	Stel een vraag over je gegevens, of vertel de assistent wat er met de kaart moet gebeuren.
+Assistant settings	Instellingen van de assistent
 Atlas	Atlas
+Attachments	Bijlagen
 Attribute\nTable	Attributen-\ntabel
+Attribute Rules	Attribuutregels
 Attribute Table	Attributentabel
 Attribute table	Attributentabel
 Attributes	Attributen
 Attribution	Bronvermelding
 Aurora	Aurora
+Auto Cache	Automatische cache
+Auto-complete (2 clicks)	Automatisch aanvullen (2 klikken)
+Auto-complete Profile	Profiel automatisch aanvullen
+Autofill Fields	Velden automatisch invullen
 Automatic	Automatisch
 Automatic (system language)	Automatisch (systeemtaal)
+Automatic (system time zone and region)	Automatisch (tijdzone en regio van het systeem)
 Automatic ({kind})	Automatisch ({kind})
 Azimuth	Azimut
 Back to Explore; cancel a sketch	Terug naar Verkennen; schets annuleren
+Back to the Map	Terug naar de kaart
 Back to the map	Terug naar de kaart
 Back to tools	Terug naar gereedschappen
+Backdrop	Achtergrond
 Band	Band
 Band Combination	Bandcombinatie
+Band values at a point	Bandwaarden op een punt
 Band {n}	Band {n}
 Bands	Banden
+Bands: blue green red NIR SWIR	Banden: blauw groen rood NIR SWIR
 Basemap	Basiskaart
 Basemaps	Basiskaarten
 Below	Onder
+Below 1:5,000,000 show everything; beyond it only what matches:	Onder 1:5.000.000 alles tonen; daarboven alleen wat overeenkomt:
 Below Left	Linksonder
 Below Right	Rechtsonder
 Bilinear	Bilineair
 Blank	Leeg
+Blank Letter page	Lege Letter-pagina
+Blank Page	Lege pagina
 Blue	Blauw
 Bold	Vet
 Bold label text.	Labeltekst vet.
@@ -81,112 +184,204 @@ Bookmarks	Bladwijzers
 Boolean	Booleaans
 Bounding\nGeometry	Begrenzende\ngeometrie
 Brightness	Helderheid
+Brightness, contrast, saturation and sepia for the whole map.	Helderheid, contrast, verzadiging en sepia voor de hele kaart.
 Browse	Bladeren
 Browse Plugins	Plugins bekijken
 Browse the geoprocessing toolbox.	Door de geoverwerkingsgereedschappen bladeren.
 Browse the project's maps, tables and folders.	Door de kaarten, tabellen en mappen van het project bladeren.
+Browse this folder below	Door deze map bladeren hieronder
 Browse, install, update and remove plugins.	Plugins bekijken, installeren, bijwerken en verwijderen.
 Buffer	Buffer
+Buffer the cities by 200 km	Een buffer van 200 km rond de steden maken
+Build	Bouwen
+Build a surface model and mesh from elevation rasters	Een oppervlaktemodel en mesh bouwen uit hoogterasters
+Build Mosaic	Mozaïek bouwen
+Bundle the active map and its data.	De actieve kaart en de gegevens ervan bundelen.
+Bundle the geoprocessing history with the layers it made.	De geoverwerkingsgeschiedenis bundelen met de lagen die ze heeft gemaakt.
+Bundle the project and its data into one file to share.	Het project en de gegevens ervan bundelen in één bestand om te delen.
+Bundle the visible layers, with simplified geometry for phones and tablets.	De zichtbare lagen bundelen, met vereenvoudigde geometrie voor telefoons en tablets.
 By\nAttributes	Op\nattributen
 By\nLocation	Op\nlocatie
 by {author}	door {author}
+By {field}	Op {field}
 Calculate	Berekenen
 Calculate\nField	Veld\nberekenen
 Calculate\nGeometry	Geometrie\nberekenen
 Calculate Field	Veld berekenen
 Calculate field	Veld berekenen
 Calculate field values.	Veldwaarden berekenen.
+Calculate fields and enforce conditions on every edit.	Velden berekenen en voorwaarden afdwingen bij elke bewerking.
 Calculate Geometry Attributes	Geometrie-attributen berekenen
+Calculation	Berekening
+Camera	Camera
+Camera Effect	Camera-effect
 Can't read this folder	Kan deze map niet lezen
 Cancel	Annuleren
+Cancel Caching	Cachen annuleren
+Capture To Clipboard	Naar klembord kopiëren
 CARGO_PKG_VERSION	CARGO_PKG_VERSION
 Cartography	Cartografie
 Case Field	Groeperingsveld
+Cast Shadow	Schaduw werpen
 Catalog	Catalogus
 Catalog\nPane	Catalogus-\nvenster
+Catalog View	Catalogusweergave
 Cell size	Celgrootte
+cell size °	celgrootte °
 Centered	Gecentreerd
+Chain functions	Functies koppelen
+Chain raster functions.	Rasterfuncties koppelen.
+Chain tools into a model; build one from your history.	Gereedschappen koppelen tot een model; bouw er een uit je geschiedenis.
+Change Detection	Veranderingsdetectie
 Change the map's backdrop.	De achtergrond van de kaart wijzigen.
 Change the map's coordinate system	Het coördinatenstelsel van de kaart wijzigen
+Change the page size and orientation.	Het paginaformaat en de oriëntatie wijzigen.
 Change the project (add layers, edit features, change symbology)	Het project wijzigen (lagen toevoegen, objecten bewerken, symbologie wijzigen)
+Chart categories	Diagramcategorieën
+Chart Frame	Diagramkader
+China	China
 Choose a band combination to display the raster layer.	Kies een bandcombinatie om de rasterlaag weer te geven.
 Choose a contrast stretch for the raster layer.	Kies een contraststretch voor de rasterlaag.
+Choose a model.	Kies een model.
 Choose a resampling type for the raster layer.	Kies een resamplingtype voor de rasterlaag.
+Choose extra buttons for the Quick Access Toolbar.	Extra knoppen kiezen voor de werkbalk Snelle toegang.
 Choose how the flat map lays out the Earth.	Kiezen hoe de platte kaart de aarde weergeeft.
 Choose how the layer is drawn.	Kiezen hoe de laag wordt getekend.
 Choose how the raster is drawn.	Kies hoe het raster wordt getekend.
 Choose the interface language.	De interfacetaal kiezen.
 Choose which layers a click identifies.	Kiezen welke lagen een klik identificeert.
+Choose which tabs the ribbon shows.	Kiezen welke tabbladen het lint toont.
 Circle	Cirkel
 Classes	Klassen
+Classes from training polygons.	Klassen uit trainingspolygonen.
+Classification\nTools	Classificatie-\ngereedschappen
+Classification\nWizard	Classificatie-\nwizard
+Classification Tools	Classificatiegereedschappen
+Classification Wizard	Classificatiewizard
 Classify	Classificeren
+Classify from training polygons	Classificeren op basis van trainingspolygonen
 Clear	Wissen
 Clear\nLimits	Limieten\nwissen
+Clear Filters	Filters wissen
 Clear History	Geschiedenis wissen
 Clear Limits	Limieten wissen
 Clear Selection	Selectie wissen
 Clear selection	Selectie wissen
 Clear the selection in every layer.	De selectie in alle lagen wissen.
 Clear the selection.	De selectie wissen.
+Click a pixel on the map	Klik op een pixel op de kaart
+Click a point on the map	Klik op een punt op de kaart
 Click or drag a box to select features. Shift adds, Ctrl removes.	Klik of sleep een kader om objecten te selecteren. Shift voegt toe, Ctrl verwijdert.
 Click or drag a box · Shift adds · Ctrl removes	Klik of sleep een kader · Shift voegt toe · Ctrl verwijdert
+Click points a smooth curve passes through; double-click to finish.	Klik op punten waar een vloeiende curve doorheen loopt; dubbelklik om te voltooien.
+Click the corners of a polygon; double-click to close it.	Klik op de hoeken van een polygoon; dubbelklik om te sluiten.
 Click the corners of the area · double-click to finish	Klik op de hoeken van het gebied · dubbelklik om te voltooien
+Click the frame's corners · double-click to finish · Esc to stop	Klik op de hoeken van het kader · dubbelklik om te voltooien · Esc om te stoppen
 Click the map to add a point	Klik op de kaart om een punt toe te voegen
+Click the map to place a point	Klik op de kaart om een punt te plaatsen
+Click the map to place text	Klik op de kaart om tekst te plaatsen
+Click the map to place text with live values, such as the scale or date.	Klik op de kaart om tekst met live waarden te plaatsen, zoals de schaal of datum.
+Click the map to place text.	Klik op de kaart om tekst te plaatsen.
+Click the map: {n} of {total}	Klik op de kaart: {n} van {total}
+Click the observer on the map	Klik op de waarnemer op de kaart
+Click the observer, then the target	Klik op de waarnemer en daarna op het doel
+Click the polygon's corners	Klik op de hoeken van de polygoon
+Click the start, then the end	Klik op het begin en daarna op het einde
+Click the vertices of a line; double-click to finish.	Klik op de hoekpunten van een lijn; dubbelklik om te voltooien.
 Click to add points · double-click to finish · Esc to stop	Klik om punten toe te voegen · dubbelklik om te voltooien · Esc om te stoppen
+Click to add vertices · double-click to close	Klik om hoekpunten toe te voegen · dubbelklik om te sluiten
 Click to add vertices · double-click to close the polygon	Klik om hoekpunten toe te voegen · dubbelklik om de polygoon te sluiten
+Click to add vertices · double-click to finish	Klik om hoekpunten toe te voegen · dubbelklik om te voltooien
 Click to add vertices · double-click to finish the line	Klik om hoekpunten toe te voegen · dubbelklik om de lijn te voltooien
+Click to place a point graphic.	Klik om een puntelement te plaatsen.
 Click to switch between decimal degrees and DMS	Klik om te wisselen tussen decimale graden en GMS
 Clip	Clippen
+Clip a raster to the view, or resample it.	Een raster clippen tot de weergave, of het herbemonsteren.
 Clip Features	Objecten clippen
+Clip or resample	Clippen of herbemonsteren
+Clip To Map View	Clippen tot kaartweergave
 Clipboard	Klembord
 Close	Sluiten
 Close (Esc)	Sluiten (Esc)
 Close Table	Tabel sluiten
 Close table	Tabel sluiten
+Close the layout and show the map.	De lay-out sluiten en de kaart tonen.
 Closest	Dichtstbij
+Coded values, one per line: code=description	Gecodeerde waarden, één per regel: code=beschrijving
 Collapse or expand the ribbon	Lint samenvouwen of uitvouwen
 Collapse the ribbon (Ctrl+F1)	Lint samenvouwen (Ctrl+F1)
 Color	Kleur
 Color Infrared (4, 1, 2)	Kleur-infrarood (4, 1, 2)
 Color Scheme	Kleurenschema
 Color scheme	Kleurenschema
+Color Vision	Kleurenzicht
+Color Vision Simulator	Kleurenzichtsimulator
 Colormap	Kleurenkaart
 Colors from the raster's own color table.	Kleuren uit de eigen kleurentabel van het raster.
+Combinations from the box above, one per line	Combinaties uit het vak hierboven, één per regel
 Command\nSearch	Opdracht\nzoeken
+command is required	opdracht is vereist
 Command Search	Opdracht zoeken
+Commands	Opdrachten
 Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	Opdrachten op het tabblad Plugins: {commands} · Gereedschappen in het geoverwerkingsvenster: {tools}
+Commands…	Opdrachten…
+Compare	Vergelijken
+Compare two rasters	Twee rasters vergelijken
 Completed	Voltooid
 Compute a field's values.	De waarden van een veld berekenen.
+Connect a folder to the Catalog.	Een map met de catalogus verbinden.
+Connections	Verbindingen
+Constant	Constante
+Constant height	Constante hoogte
+Constant…	Constante…
 Contents	Inhoud
+Contingent Values	Afhankelijke waarden
 Contrast	Contrast
 Conversion	Conversie
 Convert	Converteren
+Convert a layer to another format	Een laag naar een ander formaat converteren
 Convert the selected layer's labels into an annotation layer.	De labels van de geselecteerde laag converteren naar een annotatielaag.
 Convert To Annotation	Converteren naar annotatie
+Converted data	Geconverteerde gegevens
+Convert…	Converteren…
 Coordinate System	Coördinatenstelsel
 Coordinate system	Coördinatensysteem
 Coordinate System…	Coördinatenstelsel…
+Copied the map to the clipboard	De kaart is naar het klembord gekopieerd
 Copied {path}	{path} gekopieerd
 Copies the (selected) features of a layer to a new layer.	Kopieert de (geselecteerde) objecten van een laag naar een nieuwe laag.
 Copy	Kopiëren
+Copy an image of the map to the clipboard.	Een afbeelding van de kaart naar het klembord kopiëren.
 Copy Coordinates	Coördinaten kopiëren
 Copy Path	Pad kopiëren
 Copy the selected features (also as GeoJSON text).	De geselecteerde objecten kopiëren (ook als GeoJSON-tekst).
 Copy the selected features and delete them.	De geselecteerde objecten kopiëren en verwijderen.
 Copy the selected layer's data source path.	Het gegevensbronpad van de geselecteerde laag kopiëren.
+Corrections	Correcties
+Cost	Kosten
+could not draw the map	kan de kaart niet tekenen
 Couldn't download the font for {language}; pick the language again to retry.	Kan het lettertype voor {language} niet downloaden; kies de taal opnieuw om het nog eens te proberen.
 Couldn't load the plugin registry: {error}	Kan het pluginregister niet laden: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Aantal, som, gemiddelde, min, max en standaardafwijking van een veld, optioneel per groeperingsveld.
 Countries, cities, rivers and lakes	Landen, steden, rivieren en meren
 Counts the points that fall inside each polygon.	Telt de punten die binnen elke polygoon vallen.
+Counts, totals and top categories of what's in view.	Aantallen, totalen en topcategorieën van wat in beeld is.
 Create	Maken
+Create (click points)	Maken (klik op punten)
 Create a new project or start from the World Atlas sample.	Een nieuw project maken of beginnen met het voorbeeld World Atlas.
 Create Feature	Object maken
+Create Hosted\nImagery	Gehoste beelden\nmaken
+Create Hosted Imagery	Gehoste beelden maken
+Create Hosted Imagery…	Gehoste beelden maken…
 Create Line	Lijn maken
 Create Point	Punt maken
 Create Polygon	Polygoon maken
+Create Profile	Profiel maken
+Create Thumbnail	Miniatuur maken
 Creates a point inside each input feature.	Maakt een punt binnen elk invoerobject.
 Creates polygons around input features at a given distance.	Maakt polygonen rond invoerobjecten op een opgegeven afstand.
+Cross Section	Dwarsdoorsnede
+Cross Section (2 clicks)	Dwarsdoorsnede (2 klikken)
 Ctrl+	Ctrl+
 Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
 Ctrl+F1	Ctrl+F1
@@ -194,129 +389,289 @@ Ctrl+K	Ctrl+K
 Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
+Current date	Huidige datum
 Current Project	Huidig project
+Current time	Huidige tijd
+Curve	Curve
+Customize	Aanpassen
 Cut	Knippen
+Cut a raster into web map tiles	Een raster in webkaarttegels opdelen
+Cut a raster into web map tiles (XYZ PNG) with a viewer page.	Een raster in webkaarttegels (XYZ PNG) opdelen, met een viewerpagina.
 Dark\nMode	Donkere\nmodus
 Data	Gegevens
 Data Design	Gegevensontwerp
+Data Engineering	Data-engineering
+Data Interop	Data-interoperabiliteit
 Data Management	Gegevensbeheer
+Data Stores	Gegevensopslagen
 Data type	Gegevenstype
 Data…	Gegevens…
+Day and night shading for a time.	Dag- en nachtschaduw voor een tijdstip.
+Decline	Weigeren
+Deep Learning	Deep learning
+Deep Learning\nTools	Deep learning-\ngereedschappen
+Deep Learning Package	Deep learning-pakket
+Deep Learning Tools	Deep learning-gereedschappen
+Default	Standaard
 Definition\nQuery	Definitie-\nquery
 Definition Query	Definitiequery
 Definition query	Definitiequery
 Definition Query…	Definitiequery…
 Delete	Verwijderen
+Delete Cell	Cel verwijderen
+Delete Element	Element verwijderen
 Delete Field	Veld verwijderen
+Delete Job	Job verwijderen
+Delete Layout	Lay-out verwijderen
 Delete Map	Kaart verwijderen
+Delete Model	Model verwijderen
+Delete Notebook	Notebook verwijderen
+Delete Page	Pagina verwijderen
+Delete Presentation	Presentatie verwijderen
+Delete Report	Rapport verwijderen
 Delete selected features	Geselecteerde objecten verwijderen
 Delete selected rows	Geselecteerde rijen verwijderen
+Delete Style	Stijl verwijderen
+Delete Task	Taak verwijderen
 Delete the selected features.	De geselecteerde objecten verwijderen.
+Depth Priority	Diepteprioriteit
+Descending	Aflopend
 Details	Details
 Details of the selected layer.	Details van de geselecteerde laag.
 Deviations	Afwijkingen
+Diagnostic\nMonitor	Diagnostische\nmonitor
+Diagnostic Monitor	Diagnostische monitor
 Diamond	Ruit
+Difference, ratio or percent change between two rasters.	Verschil, verhouding of procentuele verandering tussen twee rasters.
 Display	Weergave
+Display Filters	Weergavefilters
+Display Filters ({n})	Weergavefilters ({n})
+Display Type	Weergavetype
 Dissolve	Samenvoegen
 Dissolve Field	Samenvoegveld
 Distance	Afstand
+Distances along the surface, heights, areas and volumes.	Afstanden over het oppervlak, hoogten, oppervlakten en volumes.
+Distinct	Uniek
+Domains	Domeinen
+Done	Gereed
 Double	Decimaal getal
 Double-click	Dubbelklik
 Double-click to add	Dubbelklik om toe te voegen
+Download\nMap	Kaart\ndownloaden
+Download Map	Kaart downloaden
 Download the GeoLibre runner	GeoLibre-runner downloaden
 Downloaded {name}	{name} gedownload
 Downloading… {mb} MB	Downloaden… {mb} MB
 DRA	DRA
 Drag / middle-drag	Slepen / slepen met middelste knop
+Drag a box	Sleep een kader
 Drag a box or click to zoom in	Sleep een kader of klik om in te zoomen
+Drag a box to draw an ellipse.	Sleep een kader om een ellips te tekenen.
 Drag a box to zoom into.	Sleep een kader om op in te zoomen.
+Drag a rectangle, then pick a PNG or JPEG image to place in it.	Sleep een rechthoek en kies dan een PNG- of JPEG-afbeelding om erin te plaatsen.
+Drag from the centre out	Sleep vanuit het midden naar buiten
+Drag from the centre to draw a circle.	Sleep vanuit het midden om een cirkel te tekenen.
+Drag the frame's outline · Esc to stop	Sleep de omtrek van het kader · Esc om te stoppen
+drag the picture's rectangle on the map first	sleep eerst de rechthoek van de afbeelding op de kaart
+Drag to draw	Sleep om te tekenen
+Drag to draw a freehand line.	Sleep om een lijn uit de vrije hand te tekenen.
+Drag to draw a freehand polygon.	Sleep om een polygoon uit de vrije hand te tekenen.
+Drag to draw a rectangle.	Sleep om een rechthoek te tekenen.
 Draw a halo around label text.	Een halo rond de labeltekst tekenen.
+Draw a labelled latitude/longitude grid over the map frame.	Een gelabeld raster van breedte- en lengtegraden over het kaartkader tekenen.
 Draw labels at every scale and distance.	Labels op elke schaal en afstand tekenen.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	Nieuwe objecten tekenen in de geselecteerde laag. Dubbelklik om lijnen en polygonen te voltooien.
+Draw points as bins coloured by how many fall in each.	Punten tekenen als vakken gekleurd naar het aantal in elk vak.
+Draw polygons as outlines only.	Polygonen alleen als omtrek tekenen.
 Draw the layer at every scale.	De laag op elke schaal tekenen.
+Draw the selected layer above others.	De geselecteerde laag boven andere tekenen.
+Draw the selected layer below others.	De geselecteerde laag onder andere tekenen.
 Drawing	Tekenen
+Drawing Effects	Tekeneffecten
+Drawing Mode	Tekenmodus
 Drawing Order	Tekenvolgorde
 Dusk	Schemering
+Dynamic\nText	Dynamische\ntekst
+Dynamic Picture	Dynamische afbeelding
+Dynamic picture	Dynamische afbeelding
 Dynamic range adjustment (stretch the pixels in view)	Dynamische bereikaanpassing (pixels in beeld stretchen)
 Dynamic range adjustment: stretch using the pixels in view.	Dynamische bereikaanpassing: stretchen met de pixels in beeld.
+Dynamic text:	Dynamische tekst:
 e.g.  pop_est / 1000000   or   'Africa'   or   name	Bijv.  pop_est / 1000000   of   'Africa'   of   name
 e.g. continent = 'Europe'	bijv. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	bijv. pop_est > 100000000 AND continent = 'Asia'
+Each geoprocessing run becomes a step, chained by its outputs	Elke geoverwerkingsrun wordt een stap, gekoppeld via de uitvoer
 East	Oost
 Eckert IV (equal-area world)	Eckert IV (oppervlaktegetrouwe wereld)
+Edge	Rand
+Edges	Randen
 Edit	Bewerken
+Edit and run the notebook.	Het notebook bewerken en uitvoeren.
 Edit Attribute	Attribuut bewerken
 Edit attributes in the table.	Attributen in de tabel bewerken.
+Edit Cell	Cel bewerken
+Edit Status	Bewerkingsstatus
+Edit Vertices	Hoekpunten bewerken
+Editing	Bewerken
+Editing on	Bewerken aan
+Editing Settings	Bewerkingsinstellingen
+Editing settings.	Bewerkingsinstellingen.
+Editor\nTools	Editor-\ngereedschappen
+Editor Tools	Editorgereedschappen
+Edits since the project was saved.	Bewerkingen sinds het project is opgeslagen.
 Edits the project	Bewerkt het project
 Effects	Effecten
+Element	Element
+Element Properties	Elementeigenschappen
+Elevation	Hoogte
+Elevation profiles along lines, cross sections and more.	Hoogteprofielen langs lijnen, dwarsdoorsneden en meer.
+Ellipse	Ellips
+Embeddings	Embeddings
 Ember	Gloed
+Empty	Leeg
+Empty Cache	Cache legen
+Enable Lighting	Belichting inschakelen
 Enable Plugin	Plugin inschakelen
 Enabled	Ingeschakeld
 Encloses each feature, or all features, in its convex hull.	Omsluit elk object, of alle objecten, met de convexe omhulling.
+End	Einde
 Enhancement	Verbetering
+Enter an API key.	Voer een API-sleutel in.
+Enter the provider's address.	Voer het adres van de aanbieder in.
+Enter to send, Shift+Enter for a new line	Enter om te verzenden, Shift+Enter voor een nieuwe regel
+Environments	Omgevingen
 EPSG code	EPSG-code
 Equal Earth	Equal Earth
 Equal Interval	Gelijke interval
 Equirectangular (Plate Carrée)	Equirectangulair (Plate Carrée)
 Erase	Uitwissen
 Erase Features	Objecten uitwissen
+Error Inspector	Foutinspecteur
+Error Inspector (validate)	Foutinspecteur (valideren)
 Esc	Esc
 Europe Equal Area (ETRS89 LAEA)	Europa oppervlaktegetrouw (ETRS89 LAEA)
+Every band's value at a pixel.	De waarde van elke band op een pixel.
+Every editing tool.	Alle bewerkingsgereedschappen.
+Everyday tools.	Alledaagse gereedschappen.
+Everywhere	Overal
+Existing Template	Bestaand sjabloon
 Expand Legend	Legenda uitvouwen
 Expand the ribbon (Ctrl+F1)	Lint uitvouwen (Ctrl+F1)
+Explode	Opsplitsen
+Exploratory 3D Analysis	Verkennende 3D-analyse
+Exploratory Analysis	Verkennende analyse
 Explore	Verkennen
 Export	Exporteren
 Export\nFeatures	Objecten\nexporteren
+Export\nLayout	Lay-out\nexporteren
 Export\nMap	Kaart\nexporteren
 Export\nRaster	Raster\nexporteren
+Export Animation	Animatie exporteren
 Export Features	Objecten exporteren
 Export Features (tool)	Objecten exporteren (gereedschap)
 Export Features…	Objecten exporteren…
+Export Layout	Lay-out exporteren
 Export Map	Kaart exporteren
 Export Map failed unexpectedly	Kaart exporteren onverwacht mislukt
 Export Map…	Kaart exporteren…
+Export Mesh	Mesh exporteren
+Export Mesh (OBJ)…	Mesh exporteren (OBJ)…
+Export Presentation	Presentatie exporteren
+Export Presentation…	Presentatie exporteren…
 Export Raster	Raster exporteren
 Export Raster…	Raster exporteren…
+Export Report	Rapport exporteren
+Export Report…	Rapport exporteren…
 Export Table	Tabel exporteren
+Export the animation as PNG frames (zip).	De animatie exporteren als PNG-frames (zip).
 Export the layer.	De laag exporteren.
+Export the layout as PDF or PNG.	De lay-out exporteren als PDF of PNG.
 Export the map view as a PNG image (with labels and a scale bar).	De kaartweergave exporteren als PNG-afbeelding (met labels en schaalbalk).
+Export the open layout as PDF or PNG.	De geopende lay-out exporteren als PDF of PNG.
+Export the presentation as a slideshow or PDF, or save it as a file.	De presentatie exporteren als diavoorstelling of PDF, of opslaan als bestand.
+Export the report, or save it as a report file or template.	Het rapport exporteren, of opslaan als rapportbestand of -sjabloon.
+Export the selected layer as a 3D model (OBJ), polygons extruded.	De geselecteerde laag exporteren als 3D-model (OBJ), met geëxtrudeerde polygonen.
 Export the selected layer to GeoJSON or CSV.	De geselecteerde laag exporteren naar GeoJSON of CSV.
+Export To 3D	Exporteren naar 3D
+Export To 3D File	Exporteren naar 3D-bestand
+exporting animations needs the desktop app	animaties exporteren vereist de desktopapp
+Export…	Exporteren…
 Expression	Expressie
+Extent Indicator	Bereikindicator
+Extent: {extent}	Bereik: {extent}
 Extract	Extraheren
 Extracts the parts of input features that fall inside clip polygons.	Extraheert de delen van invoerobjecten die binnen de clippolygonen vallen.
+Extruded shapes cast shadows on the map.	Geëxtrudeerde vormen werpen schaduw op de kaart.
+Extrusion	Extrusie
+Face Culling	Face culling
+Faces	Vlakken
+Factor	Factor
 Failed	Mislukt
 Farthest	Verst
+Faster drawing: no antialiasing.	Sneller tekenen: geen anti-aliasing.
 Feature	Object
+Feature\nAnalysis	Objecten-\nanalyse
 Feature\nTo Point	Object\nnaar punt
+Feature Cache	Objectcache
 Feature Layer	Objectlaag
 Feature Layer › Drawing	Objectlaag › Tekenen
+Feature Templates	Objectsjablonen
+Feature templates: default values for new features.	Objectsjablonen: standaardwaarden voor nieuwe objecten.
 Feature To Point	Object naar punt
 Features	Objecten
+Features most like the selected one	Objecten die het meest op het geselecteerde lijken
 Field	Veld
+field * 2, 'text', a + b	field * 2, 'text', a + b
 Field name	Veldnaam
 Fields	Velden
+fields, comma separated	velden, door komma's gescheiden
+Fields, statistics, groups, pictures, attachments and charts in the report.	Velden, statistieken, groepen, afbeeldingen, bijlagen en diagrammen in het rapport.
 Fields:	Velden:
+File	Bestand
 file path	bestandspad
+Fill	Vulling
+Fill Cache	Cache vullen
+Fill the cache whenever the projection changes.	De cache vullen telkens wanneer de projectie verandert.
+Film grain	Filmkorrel
 Filter rows…	Rijen filteren…
 Find a place by coordinates.	Een plaats zoeken op coördinaten.
 Find and run geoprocessing tools.	Geoverwerkingsgereedschappen zoeken en uitvoeren.
 Find any command by name (Ctrl+K).	Elke opdracht op naam zoeken (Ctrl+K).
+Find Place	Plaats zoeken
 Find plugins in the RustGIS plugin registry.	Plugins zoeken in het RustGIS-pluginregister.
+Find Similar	Vergelijkbare zoeken
 Find Tools	Gereedschappen zoeken
+Finish Polygon	Polygoon voltooien
+Finish Profile	Profiel voltooien
 Finish Tool Run	Gereedschapsrun afronden
 Finished: {tool}	Klaar: {tool}
+First-Person	Eerste persoon
+First-Person Navigation	Navigatie in eerste persoon
+Fit To Map View	Passend in kaartweergave
 Fixed Zoom In	Vast inzoomen
 Fixed Zoom Out	Vast uitzoomen
+Flip Line	Lijn omdraaien
+Fog	Mist
+Folder	Map
+Folder Connections	Mapverbindingen
+folder connections need the desktop app	mapverbindingen vereisen de desktopapp
 Folders	Mappen
 Forest	Bos
+Frame rate	Framesnelheid
+Frame rate, draw time, data size and memory.	Framesnelheid, tekentijd, gegevensgrootte en geheugen.
+Free the prepared geometry.	De voorbereide geometrie vrijgeven.
+Freehand	Uit de vrije hand
+From Selection	Uit selectie
 from the address	uit het adres
 from the service	van de dienst
 Full Extent	Volledig bereik
 Full extent	Volledig bereik
 Full size	Volledige grootte
+Function Editor	Functie-editor
 Gamma	Gamma
 Generalization	Generalisatie
 Geo-\nprocessing	Geo-\nverwerking
+Geodata Service	Geodatadienst
 GeoJSON or CSV	GeoJSON of CSV
 GeoLibre	GeoLibre
 GeoLibre Tools	GeoLibre-gereedschappen
@@ -325,8 +680,13 @@ Geometry	Geometrie
 Geoprocessing	Geoverwerking
 Geoprocessing history.	Geschiedenis van geoverwerking.
 Geoprocessing Pane	Geoverwerkingsvenster
+Georeference	Georefereren
+Geostatistical Wizard	Geostatistische wizard
 GeoTIFF	GeoTIFF
+Get a key	Sleutel aanvragen
+Get it	Downloaden
 GitHub	GitHub
+Global	Globaal
 Globe	Wereldbol
 Go	Ga
 Go back to the previous extent.	Terug naar het vorige bereik.
@@ -334,25 +694,72 @@ Go forward to the next extent.	Verder naar het volgende bereik.
 Go to a saved extent or save the current one.	Naar een opgeslagen bereik gaan of het huidige opslaan.
 Go To Bookmark	Naar bladwijzer gaan
 Go To XY	Ga naar XY
+Google Gemini	Google Gemini
 Graduated Colors	Gegradueerde kleuren
+Graphic Style	Grafische stijl
+Graphics	Grafische elementen
+Graphics and Text	Grafische elementen en tekst
+Graphics Layer	Grafische laag
 Graticule	Graticule
 Green	Groen
 Greys	Grijzen
+Grid	Raster
+Ground\nTo Grid	Grond\nnaar raster
+Ground To Grid	Grond naar raster
+Group	Groeperen
+Group features by an integer code, each with default values.	Objecten groeperen op een gehele code, elk met standaardwaarden.
 Group Option	Groeperingsoptie
+Groups	Groepen
+Guided analysis: suitability, visibility, networks, interpolation and more.	Begeleide analyse: geschiktheid, zichtbaarheid, netwerken, interpolatie en meer.
 Halo	Halo
 Harbour (qualitative)	Haven (kwalitatief)
+Haze	Nevel
+Haze, fog, rain or snow over the map.	Nevel, mist, regen of sneeuw over de kaart.
+Height	Hoogte
+Height (mm)	Hoogte (mm)
 Help	Help
+Hexagons	Zeshoeken
+Hide	Verbergen
+Hide features far from the view's centre.	Objecten ver van het midden van de weergave verbergen.
 Hide labels when the viewer is closer than this.	Labels verbergen wanneer de kijker dichterbij is.
 Hide labels when the viewer is farther than this.	Labels verbergen wanneer de kijker verder weg is.
+Hide walls facing away from you.	Wanden die van je af gericht zijn verbergen.
+High values of the first raster and low values of the second score best.	Hoge waarden van het eerste raster en lage waarden van het tweede scoren het best.
 Histogram Equalize	Histogram egaliseren
+Histograms and correlations	Histogrammen en correlaties
 History	Geschiedenis
+Hold	Vasthouden
 Home	Home
 Homepage	Website
+Hosted Imagery	Gehoste beelden
+How the layer's colours combine with what's beneath.	Hoe de kleuren van de laag zich mengen met wat eronder ligt.
 Identify	Identificeren
+Illumination	Verlichting
+Image Classification	Beeldclassificatie
+Image Page	Afbeeldingspagina
+Imagery	Beelden
+Image…	Afbeelding…
+Import	Importeren
 Import\nProject	Project\nimporteren
+Import Deep Learning Package	Deep learning-pakket importeren
+Import Layout	Lay-out importeren
+Import Layout…	Lay-out importeren…
+Import Package…	Pakket importeren…
+Import Presentation	Presentatie importeren
+Import Report	Rapport importeren
+Import Styles	Stijlen importeren
+Import Styles From…	Stijlen importeren uit…
+Import Task	Taak importeren
+Import Task…	Taak importeren…
+Import Thumbnail	Miniatuur importeren
+Import Web Tool	Webtool importeren
 In Beyond	Ingezoomd voorbij
+In Progress	Bezig
+in progress	bezig
 In project	In project
 In use	In gebruik
+Indices	Indices
+Infographics	Infographics
 Information	Informatie
 Input Features	Invoerobjecten
 Input Polygons	Invoerpolygonen
@@ -376,66 +783,142 @@ Installed	Geïnstalleerd
 Installed plugins are kept in {folder}	Geïnstalleerde plugins worden bewaard in {folder}
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	{name} {version} geïnstalleerd. Je vindt de plugin op het tabblad Plugins; de gereedschappen staan ook in het geoverwerkingsvenster.
 Interface font: {font}	Interfacelettertype: {font}
+Interpolate a surface from points (IDW)	Een oppervlak interpoleren uit punten (IDW)
 Invalid: {error}	Ongeldig: {error}
 Invert	Omkeren
 Invert color scheme	Kleurenschema omkeren
 Invert the selection.	De selectie omkeren.
 IS NULL	IS NULL
+it connects to an address on the internet	het maakt verbinding met een adres op internet
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	het is aan jou voorbehouden (plugins, scripts, taken, modellen en de GeoLibre-runner)
+it reads or writes files on this computer	het leest of schrijft bestanden op deze computer
+it replaces the open project	het vervangt het geopende project
+it runs a plugin's command	het voert een opdracht van een plugin uit
 It runs in a sandbox with no other access to your computer or the network.	De plugin draait in een sandbox zonder verdere toegang tot je computer of het netwerk.
 It's too large to keep in the browser: install it again on your next visit.	De plugin is te groot om in de browser te bewaren: installeer hem bij je volgende bezoek opnieuw.
+Item Pop-ups	Item-pop-ups
+Jobs	Jobs
+Keep a history of every edit to the layer, to look back or restore.	Een geschiedenis van elke bewerking aan de laag bijhouden, om terug te kijken of te herstellen.
+Keep an archive of edits	Een archief van bewerkingen bijhouden
 keep current	huidige behouden
 Keep the labelled features fixed as the map moves.	De gelabelde objecten vasthouden terwijl de kaart beweegt.
+Keep the last drawing tool active after each graphic.	Het laatste tekengereedschap actief houden na elk grafisch element.
+Keep the last tool active	Het laatste gereedschap actief houden
+Keep Tool	Gereedschap vasthouden
 Keyboard Shortcuts	Sneltoetsen
 Keyboard shortcuts.	Sneltoetsen.
 Kilometers	Kilometer
+kind is required	kind is vereist
 Label	Label
 Label Class	Labelklasse
 Label Distance Range	Labelafstandsbereik
 Label Field	Labelveld
 Label Placement	Labelplaatsing
+Label the cities with their names	De steden labelen met hun namen
 Label Visibility Range	Labelzichtbaarheidsbereik
 Labeling	Labels
 Lagoon	Lagune
 Lambert Cylindrical Equal Area	Lambert cilindrisch oppervlaktegetrouw
+Landscape	Liggend
 Language	Taal
+Lasso	Lasso
+Lasso (draw)	Lasso (tekenen)
 Last map render time	Laatste rendertijd van de kaart
+Latitude	Breedtegraad
 Latitude (Y)	Breedtegraad (Y)
 Layer	Laag
+Layer\nTemplates	Laag-\nsjablonen
+Layer Blend	Laagmenging
+Layer Extrusion	Laagextrusie
+Layer File	Laagbestand
 Layer From\nSelection	Laag uit\nselectie
+Layer Template	Laagsjabloon
+Layer Templates	Laagsjablonen
 Layers	Lagen
 Layers and Table Views	Lagen en tabelweergaven
+Layout	Lay-out
+Layout\nFile	Lay-out-\nbestand
+Layout after: {name}	Lay-out na: {name}
+Layout before: {name}	Lay-out voor: {name}
+Layout File…	Lay-outbestand…
+Layout name	Naam van lay-out
+Layouts	Lay-outs
+Learn	Leren
+Learning\nResources	Leer-\nbronnen
 Left	Links
+Legend	Legenda
+Length {length} · gain {gain} m · loss {loss} m	Lengte {length} · stijging {gain} m · daling {loss} m
+Light and Shadow	Licht en schaduw
+Light the extruded shapes from the north-west.	De geëxtrudeerde vormen vanuit het noordwesten belichten.
+Lighting	Belichting
 LIKE	LIKE
+Limit a field to coded values or a range.	Een veld beperken tot gecodeerde waarden of een bereik.
+Limit where tools work, and the cell size of new rasters.	Beperken waar gereedschappen werken, en de celgrootte van nieuwe rasters.
 Limit which features draw with a SQL expression.	Beperken welke objecten worden getekend met een SQL-expressie.
+Line	Lijn
 Line color	Lijnkleur
+Line Of Sight	Zichtlijn
+Line of sight between two points	Zichtlijn tussen twee punten
 Line width	Lijndikte
+Line {n} isn't four numbers (column row lon lat)	Regel {n} bestaat niet uit vier getallen (kolom rij lon lat)
+Lines	Lijnen
 LineString	LineString
+Link	Koppelen
+Link Cursors	Cursors koppelen
+Link Views	Weergaven koppelen
 List Commands	Opdrachten weergeven
+List the provider's models	Modellen van de aanbieder weergeven
 Lit	Belicht
+Live summary of the features in view.	Live samenvatting van de objecten in beeld.
 Load an unpacked plugin from its folder while you develop it.	Een uitgepakte plugin vanuit zijn map laden terwijl je hem ontwikkelt.
 Load GeoLibre tools	GeoLibre-gereedschappen laden
 Loaded {name} from its folder.	{name} geladen vanuit zijn map.
 Loading the GeoLibre tools…	GeoLibre-gereedschappen laden…
 Loads map tiles from the web	Laadt kaarttegels van het web
+Local	Lokaal
 Locate	Lokaliseren
 Locate GeoLibre Runner	GeoLibre-runner zoeken
 Locate the GeoLibre runner	GeoLibre-runner zoeken
 Locate…	Zoeken…
 Location	Locatie
+Locator	Locator
 Lock	Vergrendelen
 Long	Lang geheel getal
+Longitude	Lengtegraad
 Longitude (X)	Lengtegraad (X)
+Lower Priority	Lagere prioriteit
+Magnifier	Vergrootglas
 Major Lakes	Grote meren
 Major Rivers	Grote rivieren
 Make a new layer of the selected features.	Een nieuwe laag maken van de geselecteerde objecten.
 Make Layer From Selected Features	Laag maken van geselecteerde objecten
 Manage	Beheren
 Manage Edits	Bewerkingen beheren
+Manage Templates	Sjablonen beheren
 Map	Kaart
+Map\nFrame	Kaart-\nkader
+Map (the current view)	Kaart (de huidige weergave)
+Map draw	Kaart tekenen
+Map File	Kaartbestand
+Map Frame	Kaartkader
+Map Frames	Kaartkaders
+Map name	Kaartnaam
+Map Page	Kaartpagina
+Map scale	Kaartschaal
+Map Series	Kaartreeks
+Map Series Page	Kaartreekspagina
+Map series page name	Naam van kaartreekspagina
 Map style (JSON)	Kaartstijl (JSON)
+Map Surrounds	Kaartelementen
+Map Thumbnail	Kaartminiatuur
+Map View	Kaartweergave
 Map › Layer	Kaart › Laag
+map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}	map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}
+Mapping	Kartering
 Maps	Kaarten
+Maps move together.	Kaarten bewegen samen.
 Marker	Markering
+Masking	Maskeren
 Max	Max
 Max %	Max %
 Maximum zoom	Maximaal zoomniveau
@@ -444,6 +927,12 @@ Measure	Meten
 Measure Area	Oppervlakte meten
 Measure Distance	Afstand meten
 Measure geodesic distances and areas on the map.	Geodetische afstanden en oppervlakten op de kaart meten.
+Measure with an elevation raster	Meten met een hoogteraster
+Measurements so far.	Metingen tot nu toe.
+Mensuration	Mensuratie
+Mensuration Tools	Mensuratiegereedschappen
+Merge	Samenvoegen
+Merge elevation rasters into a surface model and export a 3D mesh.	Hoogterasters samenvoegen tot een oppervlaktemodel en een 3D-mesh exporteren.
 Merges polygons that share a field value into one feature per value.	Voegt polygonen met dezelfde veldwaarde samen tot één object per waarde.
 Meters	Meter
 Method	Methode
@@ -454,68 +943,166 @@ Min	Min
 Min %	Min %
 Minimum Bounding Geometry	Minimale begrenzende geometrie
 Minimum Maximum	Minimum maximum
+Minutes	Minuten
+minutes ago	minuten geleden
+Mobile Map	Mobiele kaart
 Mod+	Mod+
+Model	Model
+Model\nBuilder	Model-\nBuilder
+model id	model-id
+ModelBuilder	ModelBuilder
+Models	Modellen
+Modify	Wijzigen
+Modify Selected Features	Geselecteerde objecten wijzigen
 Mollweide (equal-area world)	Mollweide (oppervlaktegetrouwe wereld)
+More	Meer
+Mosaic images into an orthomosaic	Beelden tot een orthomozaïek samenvoegen
+Mosaic the visible rasters into an orthomosaic.	De zichtbare rasters tot een orthomozaïek samenvoegen.
 Mouse wheel	Muiswiel
+Move	Verplaatsen
+Move (m)	Verplaatsen (m)
 Move Down	Omlaag
 Move down	Omlaag
 Move Up	Omhoog
 Move up	Omhoog
+Move, rotate, scale, merge, explode, split or flip the selected features.	De geselecteerde objecten verplaatsen, roteren, schalen, samenvoegen, opsplitsen, splitsen of omdraaien.
+Move, Rotate, Scale…	Verplaatsen, roteren, schalen…
 Name	Naam
 Natural Breaks (Jenks)	Natuurlijke grenzen (Jenks)
 Natural Color (1, 2, 3)	Natuurlijke kleuren (1, 2, 3)
 Natural Earth	Natural Earth
 Navigate	Navigeren
+Navigate with the mouse (planar) or walk with W A S D, Q and E (first-person).	Navigeren met de muis (vlak) of lopen met W A S D, Q en E (eerste persoon).
 Navigation	Navigatie
+Navigation Mode	Navigatiemodus
+Navigator	Navigator
+NDVI, NDWI, SAVI, NBR, NDBI, EVI.	NDVI, NDWI, SAVI, NBR, NDBI, EVI.
 Nearest Neighbor	Dichtstbijzijnde buur
+Neatline	Kaderlijn
 Needs three or more bands.	Vereist drie of meer banden.
+Neighborhood Explorer	Buurtverkenner
+Network Analysis	Netwerkanalyse
 New	Nieuw
 New\nBookmark	Nieuwe\nbladwijzer
+New\nLayout	Nieuwe\nlay-out
 New\nMap	Nieuwe\nkaart
+New\nNotebook	Nieuw\nnotebook
+New\nPresentation	Nieuwe\npresentatie
+New\nReport	Nieuw\nrapport
+New\nWorkspace	Nieuwe\nwerkruimte
 New / Open / Save project	Project nieuw / openen / opslaan
 New Bookmark	Nieuwe bladwijzer
 New Bookmark…	Nieuwe bladwijzer…
+New conversation	Nieuw gesprek
+New Custom Template	Nieuw aangepast sjabloon
+New Custom Template…	Nieuw aangepast sjabloon…
+New features use this template's values	Nieuwe objecten gebruiken de waarden van dit sjabloon
+New job name	Naam van nieuwe job
+New Layout	Nieuwe lay-out
 New Map	Nieuwe kaart
+New Model From History	Nieuw model uit geschiedenis
+New Notebook	Nieuw notebook
+New Presentation	Nieuwe presentatie
 New Project	Nieuw project
 New project	Nieuw project
+New Relationship…	Nieuwe relatie…
+New Report	Nieuw rapport
 New Selection	Nieuwe selectie
+New Style	Nieuwe stijl
+New Style From Layer	Nieuwe stijl uit laag
+New Task	Nieuwe taak
+New Task From History	Nieuwe taak uit geschiedenis
+New Template	Nieuw sjabloon
+New Template (a layout page)	Nieuw sjabloon (een lay-outpagina)
+New Workspace	Nieuwe werkruimte
+New Workspace From Visible Rasters	Nieuwe werkruimte uit zichtbare rasters
 Next	Volgende
 Next Extent	Volgend bereik
+Next Page	Volgende pagina
 No	Nee
 No bookmarks yet	Nog geen bladwijzers
+No edits since the project was saved	Geen bewerkingen sinds het project is opgeslagen
+No mask	Geen masker
+No notebooks yet. Insert › New Notebook starts one, or Add and Open Notebook opens one.	Nog geen notebooks. Invoegen › Nieuw notebook start er een, of Notebook toevoegen en openen opent er een.
+No offline areas	Geen offline gebieden
+No other reports	Geen andere rapporten
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Er zijn geen plugins geïnstalleerd. Blader door het pluginregister of installeer een .rgplugin-bestand.
 No plugins match.	Geen plugins gevonden.
 No Pop-ups	Geen pop-ups
+No presentations yet. Insert › New Presentation starts one.	Nog geen presentaties. Invoegen › Nieuwe presentatie start er een.
+No relationships (Data Design › Relationships)	Geen relaties (Gegevensontwerp › Relaties)
+No relationships yet	Nog geen relaties
+No reports yet. Insert › New Report lists the selected layer's records.	Nog geen rapporten. Invoegen › Nieuw rapport geeft de records van de geselecteerde laag weer.
 No standalone tables	Geen zelfstandige tabellen
+No styles yet	Nog geen stijlen
+No tasks yet. Insert › Task makes one, for example from your geoprocessing history.	Nog geen taken. Invoegen › Taak maakt er een, bijvoorbeeld uit je geoverwerkingsgeschiedenis.
 NoData	NoData
 None	Geen
 None. Add one by address, or from a basemap plugin.	Geen. Voeg er een toe via een adres of vanuit een basiskaartplugin.
 North	Noord
+North\nArrow	Noord-\npijl
 North Polar Stereographic	Polair stereografisch noord
+not a RustGIS layout	geen RustGIS-lay-out
+not needed	niet nodig
 Not saved yet	Nog niet opgeslagen
+Notebook	Notebook
+Notebook Pane	Notebookvenster
+Nothing shared yet. Share › Share As makes web maps, layers, styles, scenes and more.	Nog niets gedeeld. Delen › Delen als maakt webkaarten, lagen, stijlen, scènes en meer.
+Now	Nu
+Nulls	Null-waarden
+Observations (observer, date, species, count)	Waarnemingen (waarnemer, datum, soort, aantal)
+observer height m	waarnemershoogte m
 Ocean	Oceaan
+Off	Uit
+Offline	Offline
+Offline area	Offline gebied
 OID	OID
+Ollama (local)	Ollama (lokaal)
+On	Aan
+On Hold	In de wacht
+on hold	in de wacht
+On the desktop, the key can also come from {vars}.	Op de desktop kan de sleutel ook uit {vars} komen.
+On-screen compass, zoom slider and pan pad.	Kompas, zoomschuif en pankussen op het scherm.
+One command per line: id {json}. Lines starting with # are comments.	Eén opdracht per regel: id {json}. Regels die met # beginnen zijn commentaar.
+One page per feature of an index layer.	Eén pagina per object van een indexlaag.
+One per line: code=name	Eén per regel: code=naam
 Only features matching this expression draw in {layer}.	Alleen objecten die aan deze expressie voldoen worden getekend in {layer}.
 Opacity	Dekking
 Open	Openen
 Open a .rgisx project	Een .rgisx-project openen
+open a layout first	open eerst een lay-out
+Open a RustGIS or Jupyter notebook.	Een RustGIS- of Jupyter-notebook openen.
 Open a RustGIS project.	Een RustGIS-project openen.
+Open an offline area to edit.	Een offline gebied openen om te bewerken.
+Open Custom Template	Aangepast sjabloon openen
+Open Custom Template…	Aangepast sjabloon openen…
 Open folder	Map openen
+Open Layout	Lay-out openen
+Open Notebook	Notebook openen
+Open Offline Map	Offline kaart openen
+Open Presentation	Presentatie openen
 Open Project	Project openen
 Open project	Project openen
 Open Project (from text)	Project openen (uit tekst)
+Open Report	Rapport openen
 Open the attribute table of the selected layer.	De attributentabel van de geselecteerde laag openen.
 Open the layer's attribute table.	De attributentabel van de laag openen.
 Open the layer's table.	De tabel van de laag openen.
+Open the RustGIS user guide.	De RustGIS-gebruikershandleiding openen.
 Open the selected layer's table.	De tabel van de geselecteerde laag openen.
 Open the Symbology pane.	Het symbologievenster openen.
 Open {code} on epsg.io	{code} openen op epsg.io
 Open, save and create projects	Projecten openen, opslaan en maken
+OpenAI-compatible	OpenAI-compatibel
+Opened {name} for printing	{name} geopend om af te drukken
 Open…	Openen…
+Options	Opties
 OR	OR
 Or	Of
+Ortho Mapping	Orthokartering
 Out Beyond	Uitgezoomd voorbij
 Outline	Omtrek
+Outline another frame's extent in this map frame.	Het bereik van een ander kader in dit kaartkader omlijnen.
 Outline color	Omtrekkleur
 Outline width	Omtrekdikte
 Output	Uitvoer
@@ -525,20 +1112,53 @@ Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional 
 Overlay	Overlay
 overlay	overlay
 Overlay (a transparent layer kept on top, such as labels or roads)	Overlay (een transparante laag die bovenop blijft, zoals labels of wegen)
+Package	Pakket
+Package a trained deep learning model.	Een getraind deep learning-model verpakken.
+Package Map	Kaart verpakken
+Package Project	Project verpakken
+Package Results	Resultaten verpakken
+Page	Pagina
+Page\nSize	Pagina-\nformaat
+Page after: {name}	Pagina na: {name}
+Page before: {name}	Pagina voor: {name}
+Page number	Paginanummer
+Page Properties	Pagina-eigenschappen
+Page Setup	Pagina-instelling
+Page Size	Paginaformaat
+Page text	Paginatekst
+Page title	Paginatitel
+Page {n} of {total}	Pagina {n} van {total}
+Page {n} of {total}: {name}	Pagina {n} van {total}: {name}
+Pages of maps, text, images and videos, shown one after another.	Pagina's met kaarten, tekst, afbeeldingen en video's, na elkaar getoond.
 Pan (Explore) · any tool	Pannen (Verkennen) · elk gereedschap
 Pan to a longitude/latitude.	Pannen naar een lengte-/breedtegraad.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Pan met de muis, zoom met het wiel en klik op objecten om hun attributen te zien.
+Pane Sets	Venstersets
 Paper	Papier
 Parent folder	Bovenliggende map
 Paste	Plakken
 Paste copied features into the selected layer, or as a new layer.	Gekopieerde objecten in de geselecteerde laag plakken, of als nieuwe laag.
 Paste Special	Plakken speciaal
 Paste Special (as a new layer)	Plakken speciaal (als nieuwe laag)
+paste your key	plak je sleutel
 Pause	Pauzeren
+PDF or PNG	PDF of PNG
 Percent Clip	Percentage afkappen
+Performance	Prestaties
+Picture	Afbeelding
+Pictures	Afbeeldingen
+Pictures, attachments and chart	Afbeeldingen, bijlagen en diagram
 Pixel	Pixel
+Pixel Editor	Pixeleditor
 Pixel type	Pixeltype
+Place a raster on the map	Een raster op de kaart plaatsen
+Place a raster on the map from control points or the view.	Een raster op de kaart plaatsen vanuit controlepunten of de weergave.
 Placement	Plaatsing
+Places (name, category, address, rating)	Plaatsen (naam, categorie, adres, waardering)
+Planar	Vlak
+Planar Navigation	Vlakke navigatie
+Play	Afspelen
+Play the animation.	De animatie afspelen.
 Plugin\nManager	Plugin-\nbeheer
 Plugin folder	Pluginmap
 Plugin Manager	Pluginbeheer
@@ -546,30 +1166,78 @@ Plugin Manager…	Pluginbeheer…
 Plugin registry	Pluginregister
 Plugins	Plugins
 Plugins are .rgplugin files. Install only plugins from people you trust.	Plugins zijn .rgplugin-bestanden. Installeer alleen plugins van mensen die je vertrouwt.
+Plugins run in a sandbox: they can't reach your files or the network, and they change the project only through RustGIS's own commands, within the permissions you accept.	Plugins draaien in een sandbox: ze kunnen niet bij je bestanden of het netwerk, en ze wijzigen het project alleen via de eigen opdrachten van RustGIS, binnen de rechten die je accepteert.
+PNG frames (zip)	PNG-frames (zip)
 PNG image	PNG-afbeelding
 Point	Punt
+Points	Punten
+points each	punten elk
 Polar, conformal: Antarctica and the Southern Ocean.	Polair, hoekgetrouw: Antarctica en de Zuidelijke Oceaan.
 Polar, conformal: the Arctic and the northern lands.	Polair, hoekgetrouw: het Noordpoolgebied en de noordelijke landen.
 Polygon	Polygoon
+Polygon (draw)	Polygoon (tekenen)
+Polygons	Polygonen
 Polyline	Polylijn
 Pop-up Mode	Pop-upmodus
 Pop-ups	Pop-ups
+pop_max > 1000000	pop_max > 1000000
 Populated Places	Bewoonde plaatsen
+Portal	Portal
+Portrait	Staand
+Postprocessing	Nabewerking
+power 2	macht 2
+Prepare every layer's geometry for this projection.	De geometrie van elke laag voorbereiden voor deze projectie.
+Presentation	Presentatie
+Presentation File	Presentatiebestand
+Presentation Pane	Presentatievenster
+Preview and set up the report.	Het rapport bekijken en instellen.
+Preview, edit and play the presentation.	De presentatie bekijken, bewerken en afspelen.
 Previous	Vorige
 Previous Extent	Vorig bereik
+Previous Page	Vorige pagina
 Primary\nSymbology	Primaire\nsymbologie
 Primary symbology	Primaire symbologie
+Print	Afdrukken
+Print\nLayout	Lay-out\nafdrukken
+Print Map	Kaart afdrukken
+Print the layout.	De lay-out afdrukken.
+Print the map view (through the system's PDF viewer).	De kaartweergave afdrukken (via de PDF-viewer van het systeem).
+Print the open layout (through the system's PDF viewer).	De geopende lay-out afdrukken (via de PDF-viewer van het systeem).
+printing failed unexpectedly	afdrukken onverwacht mislukt
+printing needs the desktop app	afdrukken vereist de desktopapp
+Process	Verwerken
+Profile	Profiel
+Profile Along a Line	Profiel langs een lijn
+Profile Along Selected Lines	Profiel langs geselecteerde lijnen
+Profile every field	Elk veld profileren
+Profile Viewing	Profielweergave
 PROJ definition	PROJ-definitie
 Project	Project
+Project\nPackage	Project-\npakket
 Project Info	Projectinfo
+Project Template	Projectsjabloon
+Project templates: start projects from a saved setup.	Projectsjablonen: projecten starten vanuit een opgeslagen opzet.
 Projection	Projectie
 Projections	Projecties
 Proportional Symbols	Proportionele symbolen
+Provider	Aanbieder
 Proximity	Nabijheid
+Put the layer back as it was then	De laag terugzetten zoals ze toen was
 Quantile	Kwantiel
+Quick\nAccess	Snelle\ntoegang
 Quick Access Toolbar	Werkbalk Snelle toegang
+radius km	straal km
+radius m	straal m
+Rain	Regen
+Raise polygons by a height or a field.	Polygonen verhogen met een hoogte of een veld.
+Raise Priority	Prioriteit verhogen
+Random points in polygons	Willekeurige punten in polygonen
+Raster	Raster
+Raster\nAnalysis	Raster-\nanalyse
 Raster\nInformation	Raster-\ninformatie
 Raster Data	Rastergegevens
+Raster Effects	Rastereffecten
+Raster Functions	Rasterfuncties
 Raster Information	Rasterinformatie
 Raster Layer	Rasterlaag
 Raster tiles (XYZ)	Rastertegels (XYZ)
@@ -578,6 +1246,9 @@ Read and write files on this computer	Bestanden op deze computer lezen en schrij
 Read the map's layers and features	De lagen en objecten van de kaart lezen
 Reads and writes files	Leest en schrijft bestanden
 Reads the map	Leest de kaart
+Ready To Use	Klaar voor gebruik
+Reality Mapping	Reality mapping
+Rectangle	Rechthoek
 Red	Rood
 Redo	Opnieuw
 Redo the change you undid.	De ongedaan gemaakte wijziging opnieuw uitvoeren.
@@ -585,57 +1256,171 @@ Redo {action}	{action} opnieuw
 Red–Blue	Rood–Blauw
 Refine the search to see {n} more	Verfijn de zoekopdracht om {n} meer te zien
 Refresh	Vernieuwen
+Refresh Map Series	Kaartreeks vernieuwen
+Refresh the map series from its index layer.	De kaartreeks vernieuwen vanuit de indexlaag.
 Regional, equal-area: the contiguous United States.	Regionaal, oppervlaktegetrouw: de aaneengesloten Verenigde Staten.
 Regional, equal-area: the European standard for statistics.	Regionaal, oppervlaktegetrouw: de Europese standaard voor statistiek.
+Relate	Relateren
+Related\nData	Gerelateerde\ngegevens
+Related Data	Gerelateerde gegevens
+Related Report	Gerelateerd rapport
+Related report: {name}	Gerelateerd rapport: {name}
+Relationship	Relatie
+Relationship name	Naam van relatie
+Relationships	Relaties
+Remember the key on this computer	Sleutel op deze computer onthouden
 Remove	Verwijderen
 Remove All	Alles verwijderen
+Remove an offline area.	Een offline gebied verwijderen.
 Remove Bookmark	Bladwijzer verwijderen
+Remove Folder	Map verwijderen
 Remove From Current Selection	Verwijderen uit huidige selectie
+Remove Keyframe	Sleutelframe verwijderen
+Remove Section	Sectie verwijderen
+Remove the last keyframe.	Het laatste sleutelframe verwijderen.
 Remove the layer from the map.	De laag van de kaart verwijderen.
+Remove Tile Layer	Tegellaag verwijderen
 Removes the parts of polygon features that overlap erase polygons.	Verwijdert de delen van polygoonobjecten die overlappen met de wispolygonen.
 Removes vertices that deviate less than a tolerance (Douglas–Peucker).	Verwijdert hoekpunten die minder dan een tolerantie afwijken (Douglas–Peucker).
 Rename	Hernoemen
 Rename Layer	Laag hernoemen
+Rename Layout	Lay-out hernoemen
 Rename Map	Kaart hernoemen
 Rename Project	Project hernoemen
 Rename…	Hernoemen…
 Rendering	Weergave
+Replace Web Layer	Weblaag vervangen
+Report	Rapport
+Report File	Rapportbestand
+Report Pane	Rapportvenster
+Report Properties	Rapporteigenschappen
+Report Section	Rapportsectie
+Report Template	Rapportsjabloon
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	Verzoeken sturen je bericht en de laagnamen, velden en door de assistent gelezen rijen van de kaart naar de aanbieder.
+Resample	Herbemonsteren
 Resampling	Resampling
 Resampling Type	Resamplingtype
 Reset	Herstellen
 Reset brightness, contrast and gamma.	Helderheid, contrast en gamma herstellen.
+Reset Effects	Effecten herstellen
+Restore	Herstellen
+Restore From Archive	Herstellen uit archief
+Results	Resultaten
+Resume	Hervatten
 RGB	RGB
+Ribbon	Lint
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Dekking lintfuncties: {done} van {total} functies ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Lintpariteit: {done} van {total} lintfuncties hebben een RustGIS-opdracht.
 Right	Rechts
 Robinson	Robinson
+Rotate	Roteren
+Rotate (°)	Roteren (°)
+Rotate 90°	90° roteren
+Rotation	Rotatie
+Rotation Type	Rotatietype
+rotation °	rotatie °
+Routes (name, surface, length)	Routes (naam, wegdek, lengte)
+Rows	Rijen
+Rule name	Naam van regel
 Run	Uitvoeren
+Run All	Alles uitvoeren
+Run Cells	Cellen uitvoeren
+Run Chain	Keten uitvoeren
+Run commands from text, one per line.	Opdrachten uit tekst uitvoeren, één per regel.
+Run Model	Model uitvoeren
+Run Script	Script uitvoeren
+Run Task	Taak uitvoeren
+Run the task	De taak uitvoeren
 Run Tool	Gereedschap uitvoeren
+Run {name}	{name} uitvoeren
 Running…	Bezig…
 RustGIS	RustGIS
+RustGIS deep learning package	RustGIS-deep learning-pakket
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS is een opensource desktop-GIS geschreven in puur Rust. Het lint volgt de vertrouwde werkwijze van desktop-GIS; elke actie is een opdracht die je ook vanaf de opdrachtregel kunt uitvoeren.
+RustGIS layer file	RustGIS-laagbestand
+RustGIS layers, maps and projects	RustGIS-lagen, -kaarten en -projecten
+RustGIS layout	RustGIS-lay-out
+RustGIS maps and projects	RustGIS-kaarten en -projecten
+RustGIS or Jupyter notebook	RustGIS- of Jupyter-notebook
 RustGIS plugin	RustGIS-plugin
+RustGIS presentation	RustGIS-presentatie
 RustGIS project	RustGIS-project
+RustGIS project template	RustGIS-projectsjabloon
+RustGIS report or report template	RustGIS-rapport of -rapportsjabloon
+RustGIS styles	RustGIS-stijlen
+RustGIS task	RustGIS-taak
+RUSTGIS_ASSISTANT_MODEL	RUSTGIS_ASSISTANT_MODEL
+RUSTGIS_ASSISTANT_PROVIDER	RUSTGIS_ASSISTANT_PROVIDER
 Sample data (Natural Earth)	Voorbeeldgegevens (Natural Earth)
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Voorbeeldgegevens © Natural Earth (publiek domein). RustGIS valt onder de Apache-2.0-licentie.
 Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	Voorbeeldgegevens: Natural Earth (publiek domein). Licentie Apache-2.0.
+Saturation	Verzadiging
 Save	Opslaan
 Save As	Opslaan als
+Save As Presentation File…	Opslaan als presentatiebestand…
+Save As Report File…	Opslaan als rapportbestand…
+Save As Report Template…	Opslaan als rapportsjabloon…
+Save as {name}	Opslaan als {name}
+Save As…	Opslaan als…
+Save Layer File	Laagbestand opslaan
+Save Layout File	Lay-outbestand opslaan
+Save Map File	Kaartbestand opslaan
+Save Notebook	Notebook opslaan
+save or load a pane set by name	een vensterset op naam opslaan of laden
 Save Project	Project opslaan
 Save project	Project opslaan
 Save Project As	Project opslaan als
+Save Project Template	Projectsjabloon opslaan
+Save Style Items	Stijlitems opslaan
+Save Task Item	Taakitem opslaan
+Save the active map (with its data) as a map file.	De actieve kaart (met de gegevens) opslaan als kaartbestand.
 Save the current extent as a bookmark.	Het huidige bereik opslaan als bladwijzer.
+Save the last task as a task file.	De laatste taak opslaan als taakbestand.
+Save the layout as a layout file.	De lay-out opslaan als lay-outbestand.
+Save the open layout as a layout file.	De geopende lay-out opslaan als lay-outbestand.
+Save the panes you have open, and switch back to them.	De geopende vensters opslaan en er later naar terugschakelen.
 Save the project under a new name.	Het project onder een nieuwe naam opslaan.
 Save the project with your edits.	Het project met je bewerkingen opslaan.
+Save the project's setup, without its features, as a template.	De opzet van het project, zonder objecten, opslaan als sjabloon.
+Save the project's styles to a style file.	De stijlen van het project opslaan in een stijlbestand.
 Save the raster as a GeoTIFF.	Het raster opslaan als GeoTIFF.
+Save the selected layer with its symbology as a layer file.	De geselecteerde laag met haar symbologie opslaan als laagbestand.
+Save Web Link Chart	Web-koppelingsdiagram opslaan
+Save Web Map	Webkaart opslaan
+Save Web Scene	Webscène opslaan
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Opgeslagen sleutels worden onversleuteld bewaard in de voorkeuren van de app (op het web in de opslag van de browser).
+Saved symbology: apply it to the selected layer, or save the layer's.	Opgeslagen symbologie: toepassen op de geselecteerde laag, of die van de laag opslaan.
+Saved {name}	{name} opgeslagen
+saving failed unexpectedly	opslaan onverwacht mislukt
+Scale	Schaal
+Scale\nBar	Schaal-\nbalk
+Scale (×)	Schaal (×)
+scale 0.9996	schaal 0,9996
 Scale 1:	Schaal 1:
+Scale and rotate entered distances and directions to the grid.	Ingevoerde afstanden en richtingen schalen en roteren naar het raster.
+Scale ×2	Schaal ×2
+Scale ×½	Schaal ×½
+Scene	Scène
+Score two rasters 1–10 and weight them	Twee rasters scoren van 1–10 en wegen
+Script	Script
+Scroll the ribbon left	Lint naar links schuiven
+Scroll the ribbon right	Lint naar rechts schuiven
+Scroll the tabs left	Tabbladen naar links schuiven
+Scroll the tabs right	Tabbladen naar rechts schuiven
 Search commands — e.g. buffer, basemap, labels	Opdrachten zoeken — bijv. buffer, basiskaart, labels
 Search Distance (km)	Zoekafstand (km)
+Search every command and its parameters	Alle opdrachten en hun parameters doorzoeken
 Search plugins	Plugins zoeken
+Seconds	Seconden
+Sections	Secties
+See and set the camera's position and scale.	De positie en schaal van de camera bekijken en instellen.
+See the map as people with colour vision deficiencies do.	De kaart zien zoals mensen met een kleurenzichtstoornis.
 See the tools you've run.	De uitgevoerde gereedschappen bekijken.
 Select	Selecteren
 Select (click)	Selecteren (klik)
 Select (rectangle)	Selecteren (rechthoek)
+Select a feature layer in the Contents pane	Selecteer een objectlaag in het venster Inhoud
+Select a layer in the Contents pane	Selecteer een laag in het venster Inhoud
 select a layer in the Contents pane first	selecteer eerst een laag in het venster Inhoud
 Select a layer in the Contents pane.	Selecteer een laag in het venster Inhoud.
 Select All	Alles selecteren
@@ -650,102 +1435,236 @@ Select features with a SQL expression.	Objecten selecteren met een SQL-expressie
 Select Layer	Laag selecteren
 Select Layer By Attribute	Laag selecteren op attribuut
 Select Layer By Location	Laag selecteren op locatie
+Select Related	Gerelateerde selecteren
 Select Rows	Rijen selecteren
 Select rows with a SQL expression.	Rijen selecteren met een SQL-expressie.
 Select Subset From Current Selection	Subset selecteren uit huidige selectie
+Select the rows related to the selection.	De rijen selecteren die aan de selectie gerelateerd zijn.
 Selectable	Selecteerbaar
 Selectable Layers	Selecteerbare lagen
 Selected	Geselecteerd
 Selected Features: {n}	Geselecteerde objecten: {n}
 Selected in Contents	Geselecteerd in Inhoud
 Selected only	Alleen geselecteerde
+Selected records only	Alleen geselecteerde records
 Selecting Features	Objecten selecteren
 Selection	Selectie
 Selection Type	Selectietype
 Selects features that intersect features in another layer.	Selecteert objecten die objecten in een andere laag snijden.
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Selecteert objecten met een SQL-where-clausule, bijv. pop_est > 1000000.
+Send	Verzenden
+Send offline edits back and refresh.	Offline bewerkingen terugsturen en vernieuwen.
+Sepia	Sepia
+Set	Instellen
+Set Cell Size	Celgrootte instellen
+Set Domain	Domein instellen
+Set Filter	Filter instellen
 Set Map Tool	Kaartgereedschap instellen
 Set Scale	Schaal instellen
+Set Subtypes	Subtypen instellen
+Set the pixels inside a polygon	De pixels binnen een polygoon instellen
+Set the pixels inside a polygon.	De pixels binnen een polygoon instellen.
 Settings	Instellingen
+Shade walls by the way they face the light.	Wanden schaduwen naar hoe ze naar het licht gericht zijn.
 Shaded	Schaduw
 Shaded Relief	Schaduwreliëf
 Shape	Vorm
 Share	Delen
+Share As	Delen als
+Share every layer and table as OGC API Features collections.	Alle lagen en tabellen delen als OGC API Features-collecties.
+Share the last model as a tool file.	Het laatste model delen als gereedschapsbestand.
+Share the map as a web page that needs no server.	De kaart delen als webpagina die geen server nodig heeft.
+Share the map in 3D (glTF), polygons extruded.	De kaart in 3D delen (glTF), met geëxtrudeerde polygonen.
+Share the map's relationships as a link chart page.	De relaties van de kaart delen als koppelingsdiagrampagina.
+Share the selected layer as an OGC API Features collection with its style.	De geselecteerde laag delen als OGC API Features-collectie met haar stijl.
+Share the selected layer's names as a place-search locator.	De namen van de geselecteerde laag delen als locator om plaatsen te zoeken.
+Share the selected layer's symbology as a MapLibre style.	De symbologie van de geselecteerde laag delen als MapLibre-stijl.
 Share › Output	Delen › Uitvoer
+Shared Items	Gedeelde items
+Shares made, with Manage tools to update them.	Gemaakte deelacties, met beheergereedschappen om ze bij te werken.
 Shift+	Shift+
 Shift+drag	Shift+slepen
 Shortcuts	Sneltoetsen
+Shortest route over a line network	Kortste route over een lijnennetwerk
+Show	Tonen
+Show a second map beside this one.	Een tweede kaart naast deze tonen.
+Show details when hovering items in the Catalog view.	Details tonen bij het aanwijzen van items in de catalogusweergave.
+Show different features at different scales.	Verschillende objecten tonen op verschillende schalen.
 Show latitude/longitude lines on the basemap.	Lengte- en breedtelijnen op de basiskaart tonen.
+Show Map	Kaart tonen
 Show or hide	Tonen of verbergen
+Show or hide the AI Assistant.	De AI-assistent tonen of verbergen.
 Show or hide the Catalog pane.	Het catalogusvenster tonen of verbergen.
 Show or hide the Contents pane.	Het venster Inhoud tonen of verbergen.
 Show or hide the Geoprocessing pane.	Het geoverwerkingsvenster tonen of verbergen.
 Show or hide the layer.	De laag tonen of verbergen.
 Show the labels that don't fit, in red.	De labels die niet passen in rood tonen.
+Show the layer only inside another layer's polygons.	De laag alleen binnen de polygonen van een andere laag tonen.
+Show the layer only left of a divider, to compare it with what's beneath.	De laag alleen links van een scheidingslijn tonen, om te vergelijken met wat eronder ligt.
 Show the map as a 3D globe, or as a flat map again.	De kaart als 3D-wereldbol tonen, of weer als platte kaart.
+Show the next map series page.	De volgende pagina van de kaartreeks tonen.
+Show the pointer's place on the other map.	De plaats van de aanwijzer op de andere kaart tonen.
+Show the previous map series page.	De vorige pagina van de kaartreeks tonen.
 Show the Symbology pane for the selected layer.	Het symbologievenster voor de geselecteerde laag tonen.
+Show vertices	Hoekpunten tonen
+Side by Side	Naast elkaar
 Simplify	Vereenvoudigen
+Simulation	Simulatie
 Single Symbol	Enkel symbool
 Size	Grootte
 Size, bands, statistics and coordinate system.	Grootte, banden, statistieken en coördinatensysteem.
+Slideshow, PDF or PNG	Diavoorstelling, PDF of PNG
+Slope, aspect, hillshade, NDVI, band math, thresholds.	Helling, expositie, reliëfschaduw, NDVI, bandberekening, drempelwaarden.
+Slope, hillshade, NDVI and more.	Helling, reliëfschaduw, NDVI en meer.
+Small scales	Kleine schalen
+Snap new vertices to nearby vertices, edges and line ends.	Nieuwe hoekpunten laten snappen aan nabije hoekpunten, randen en lijneinden.
+Snap Point	Snappunt
+Snapping	Snappen
+Snow	Sneeuw
 Source	Bron
 South	Zuid
 South Polar Stereographic	Polair stereografisch zuid
+Speaker notes	Sprekersnotities
+Spectral Analysis	Spectrale analyse
+Spectral indices	Spectrale indices
+Speed Display	Snelle weergave
+Split	Splitsen
+Split (click the line)	Splitsen (klik op de lijn)
+SQL that must be true, e.g. pop > 0	SQL die waar moet zijn, bijv. pop > 0
 Square	Vierkant
+Squares	Vierkanten
 Standalone Tables	Zelfstandige tabellen
 Standard Deviation	Standaardafwijking
 Star	Ster
 Start	Start
+Start Over	Opnieuw beginnen
 Statistics	Statistieken
 Statistics Field	Statistiekveld
+Status	Status
 Status Bar	Statusbalk
 Std. Dev.	Std.afw.
+Step through a task.	Stap voor stap door een taak.
+Step {n} done	Stap {n} voltooid
+Stop	Stoppen
 Stop drawing labels, for faster navigation.	Stoppen met labels tekenen, voor sneller navigeren.
+Stop filling the cache.	Stoppen met het vullen van de cache.
+Stopped.	Gestopt.
 Stretch	Stretch
 Stretch\nType	Stretch-\ntype
+Stretch it over the map view, or give control points (one per line: column row lon lat).	Over de kaartweergave uitrekken, of controlepunten opgeven (één per regel: kolom rij lon lat).
 Stretch Type	Stretchtype
 Stretch type	Stretchtype
+Style	Stijl
+Style Items	Stijlitems
+Styles	Stijlen
+Subreport	Subrapport
+Subreport: {name}	Subrapport: {name}
+Subtypes	Subtypen
+Subtypes, one per line: code=name	Subtypen, één per regel: code=naam
+Suitability Modeler	Geschiktheidsmodelleerder
 Summarize	Samenvatten
 Summarize\nWithin	Samenvatten\nbinnen
 Summarize Within	Samenvatten binnen
 Summary\nStatistics	Samenvattende\nstatistieken
 Summary Statistics	Samenvattende statistieken
+Supplemental Page	Aanvullende pagina
+Supplemental Page After	Aanvullende pagina erna
+Surface	Oppervlak
+Surface: {layer}	Oppervlak: {layer}
+Swipe	Vegen
 Switch	Wisselen
 Switch between light and dark themes.	Wisselen tussen licht en donker thema.
 Switch Selection	Selectie wisselen
 Switch selection	Selectie wisselen
+Switch to a dark basemap	Overschakelen naar een donkere basiskaart
 Symbol	Symbool
 Symbol Color	Symboolkleur
 Symbology	Symbologie
 Symbology Pane	Symbologievenster
 Symbology Pane…	Symbologievenster…
+Sync	Synchroniseren
+tab is required	tab is vereist
 Table	Tabel
+Table Frame	Tabelkader
 Tables	Tabellen
+Take the data in view offline, to edit and sync back later.	De gegevens in beeld offline nemen, om te bewerken en later terug te synchroniseren.
+Task	Taak
+Task Item	Taakitem
+Tasks	Taken
+Tasks: guided steps that each run a command.	Taken: begeleide stappen die elk een opdracht uitvoeren.
+Template name	Naam van sjabloon
+Templates	Sjablonen
 Terrain	Terrein
 Text	Tekst
 Text Symbol	Tekstsymbool
+The assistant is busy; stop it or wait for it to finish.	De assistent is bezig; stop hem of wacht tot hij klaar is.
+The assistant wants to run this, and {why}:	De assistent wil het volgende uitvoeren, en {why}:
+the capture failed unexpectedly	het vastleggen is onverwacht mislukt
+the Help tab always shows	het tabblad Help wordt altijd getoond
+The job covers the map view	De job beslaat de kaartweergave
+The key is kept for this session only.	De sleutel wordt alleen voor deze sessie bewaard.
+the layout export failed unexpectedly	het exporteren van de lay-out is onverwacht mislukt
 The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	De lijst met plugins om door te bladeren. Laat leeg voor het RustGIS-pluginregister.
 the map has no layers	de kaart heeft geen lagen
 The map is drawn in this coordinate system; layers are projected on the fly.	De kaart wordt in dit coördinatenstelsel getekend; lagen worden direct geprojecteerd.
+The map view as it is now	De kaartweergave zoals ze nu is
+The model answering; click to change it	Het model dat antwoordt; klik om het te wijzigen
+the model declined this request	het model heeft dit verzoek geweigerd
+The model sent an empty reply; ask again, or try another model.	Het model stuurde een leeg antwoord; vraag het opnieuw of probeer een ander model.
+the page is too large to draw	de pagina is te groot om te tekenen
+the presentation export failed unexpectedly	het exporteren van de presentatie is onverwacht mislukt
+the preview failed unexpectedly	het voorbeeld is onverwacht mislukt
+The project's items in place of the map.	De items van het project in plaats van de kaart.
+The project's thumbnail, from an image.	De miniatuur van het project, uit een afbeelding.
+The project's thumbnail, from the map view.	De miniatuur van het project, uit de kaartweergave.
 The raster's data couldn't be read.	De rastergegevens konden niet worden gelezen.
 The raster's data couldn't be read: {path}	De rastergegevens konden niet worden gelezen: {path}
+the reply reached its length limit	het antwoord heeft de maximale lengte bereikt
+the report export failed unexpectedly	het exporteren van het rapport is onverwacht mislukt
 Thermal	Thermisch
+Thinking…	Denkt na…
+this build can't download plugins	deze build kan geen plugins downloaden
+this build can't reach AI providers	deze build kan geen AI-providers bereiken
 This map has no layers yet.	Deze kaart heeft nog geen lagen.
+This map's thumbnail, from an image.	De miniatuur van deze kaart, uit een afbeelding.
+This map's thumbnail, from the view.	De miniatuur van deze kaart, uit de weergave.
 This plugin can:	Deze plugin kan:
+Thumbnail	Miniatuur
+Tile Layer Properties	Eigenschappen van tegellaag
+Tile Layers	Tegellagen
+Tilt-shift	Tilt-shift
+Tilt-shift blur and film grain.	Tilt-shift-vervaging en filmkorrel.
 Tint by elevation	Kleuren op hoogte
+Title	Titel
 Toggle Dark Mode	Donkere modus aan/uit
 Tolerance (km)	Tolerantie (km)
+Tool Gallery	Gereedschapsgalerij
 Toolbox	Gereedschapskist
 Toolboxes	Gereedschapskisten
 Tools	Gereedschappen
+Tools that analyse features.	Gereedschappen die objecten analyseren.
+Tools that analyse rasters.	Gereedschappen die rasters analyseren.
 Tools you run appear here.	Uitgevoerde gereedschappen verschijnen hier.
 Topmost Layer	Bovenste laag
+Topology	Topologie
+Topology Options	Topologie-opties
+Topology Options…	Topologie-opties…
+Topology rules and the errors they find.	Topologieregels en de fouten die ze vinden.
 Total {total}   ·   Segment {segment}	Totaal {total}   ·   Segment {segment}
+Track jobs and their status.	Jobs en hun status volgen.
+Train a neural network on training polygons	Een neuraal netwerk trainen op trainingspolygonen
+Train a neural network on training polygons and classify every pixel.	Een neuraal netwerk trainen op trainingspolygonen en elke pixel classificeren.
+Train And Classify	Trainen en classificeren
+Train Deep Learning Model	Deep learning-model trainen
+Trained models	Getrainde modellen
 Transparency	Transparantie
+Traverse	Polygoontrek
 Triangle	Driehoek
+Turn editing on or off for the map.	Bewerken voor de kaart in- of uitschakelen.
 Turn Labels Off	Labels uitschakelen
 Turn labels on or off for the selected layer.	Labels voor de geselecteerde laag in- of uitschakelen.
 Turn labels on or off.	Labels in- of uitschakelen.
+Turn Off	Uitschakelen
 Type	Type
 Unavailable: {reason}	Niet beschikbaar: {reason}
 Undo	Ongedaan maken
@@ -757,33 +1676,76 @@ Uninstall Plugin	Plugin verwijderen
 Uninstalled {id}.	{id} verwijderd.
 Unique Values	Unieke waarden
 Units	Eenheden
+Unsupervised classes (k-means)	Niet-gesuperviseerde klassen (k-means)
+Unsupervised classes (k-means).	Niet-gesuperviseerde klassen (k-means).
 Update	Bijwerken
+Update Job	Job bijwerken
 Update to {version}	Bijwerken naar {version}
+Upload File	Bestand uploaden
+Upload File…	Bestand uploaden…
 USA Contiguous Albers Equal Area	VS (aaneengesloten) Albers oppervlaktegetrouw
+Valid combinations, one per line: a, b	Geldige combinaties, één per regel: a, b
 Valid expression · {n} matching rows	Geldige expressie · {n} overeenkomende rijen
+Validate	Valideren
+value (empty: no-data)	waarde (leeg: no-data)
 Vector and raster data	Vector- en rastergegevens
 Vector tiles (MVT)	Vectortegels (MVT)
 Version {version}	Versie {version}
+Vertex	Hoekpunt
+Video	Video
+Video file or URL	Videobestand of URL
+Video Page	Videopagina
+Videos	Video's
+Video…	Video…
 View	Beeld
+View Clipping	Weergave clippen
+View Effects	Weergave-effecten
 View Unplaced	Niet-geplaatste tonen
 View › Windows	Beeld › Vensters
+Viewshed from a point	Zichtbaarheidsgebied vanaf een punt
+Vignette	Vignet
+Vignette and edge outlines.	Vignet en randcontouren.
 Visibility	Zichtbaarheid
+Visibility Analysis	Zichtbaarheidsanalyse
 Visibility Range	Zichtbaarheidsbereik
 Visible	Zichtbaar
 Visible Layers	Zichtbare lagen
+Visual Effect	Visueel effect
+Volume	Volume
+Walk	Lopen
+Weather	Weer
+Web\nMap	Web-\nkaart
+Web Layer	Weblaag
+Web Link Chart	Web-koppelingsdiagram
 Web Mercator	Web Mercator
+Web Scene	Webscène
+Web Style	Webstijl
 Web Tile Layers	Webtegellagen
+Web Tool	Webtool
 Website	Website
+Weights	Gewichten
 Welcome to RustGIS	Welkom bij RustGIS
 West	West
 WGS 84 / Globe	WGS 84 / Wereldbol
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
+What's near a point	Wat er bij een punt in de buurt is
 Where	Waar
 Where Clause	Where-clausule
 Where labels sit relative to their features.	Waar labels staan ten opzichte van hun objecten.
+Where new features get their elevation (the z field).	Waar nieuwe objecten hun hoogte vandaan halen (het z-veld).
+Where tools work	Waar gereedschappen werken
+Which 5 countries have the largest GDP?	Welke 5 landen hebben het hoogste bbp?
+Whose borders the sample countries and the basemap outline show.	Wiens grenzen de voorbeeldlanden en de basiskaartomtrek tonen.
+Width (mm)	Breedte (mm)
 Windows	Vensters
 Winkel Tripel	Winkel Tripel
+Wireframe	Draadmodel
 Withdrawn	Teruggetrokken
+Workflow Manager	Workflowbeheer
+Workflows	Workflows
+Workspace	Werkruimte
+Workspace cell size and blending.	Celgrootte en menging van de werkruimte.
+Workspace Options	Werkruimte-opties
 World	Wereld
 World Atlas	Wereldatlas
 World Atlas Sample	Voorbeeld Wereldatlas
@@ -798,10 +1760,16 @@ World, equal-area, cylindrical: true sizes, flattened near the poles.	Wereld, op
 World, equal-area: true sizes with a Robinson-like look.	Wereld, oppervlaktegetrouw: ware grootten met een Robinson-achtig uiterlijk.
 World, equal-area: true sizes with rounded poles.	Wereld, oppervlaktegetrouw: ware grootten met afgeronde polen.
 World, equal-area: true sizes, shapes bend towards the edges.	Wereld, oppervlaktegetrouw: ware grootten, vormen buigen naar de randen.
+Worldview	Grenzen
 Write a plugin	Een plugin schrijven
+X (mm)	X (mm)
+Y (mm)	Y (mm)
 Yes	Ja
+z (m)	z (m)
 Z factor	Z-factor
+Zoom	Zoomen
 Zoom about the pointer	Zoomen rond de aanwijzer
+Zoom Frame	Zoomkader
 Zoom In	Inzoomen
 Zoom in	Inzoomen
 Zoom in / out	In- / uitzoomen
@@ -814,13 +1782,16 @@ Zoom To	Zoomen naar
 Zoom To\nLayer	Zoomen\nnaar laag
 Zoom to a box (Explore)	Zoomen naar een kader (Verkennen)
 Zoom To Layer	Zoomen naar laag
+Zoom To Map View	Zoomen naar kaartweergave
 Zoom To Selection	Zoomen naar selectie
 Zoom to selection	Zoomen naar selectie
+Zoom to the error	Zoomen naar de fout
 Zoom to the extent of all layers.	Zoomen naar het bereik van alle lagen.
 Zoom to the layer's extent.	Zoomen naar het bereik van de laag.
 Zoom to the selected features.	Zoomen naar de geselecteerde objecten.
 Zoom to the selection.	Zoomen naar de selectie.
 Zoom to the whole world.	Zoomen naar de hele wereld.
+Zoom to Tokyo	Zoomen naar Tokio
 Zoom To World	Zoomen naar wereld
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} is gewijzigd sinds de installatie; installeer het opnieuw via Pluginbeheer.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} is uit het pluginregister teruggetrokken en is uitgeschakeld.
@@ -829,66 +1800,6 @@ Zoom To World	Zoomen naar wereld
 {name}: the download is a different plugin; it wasn't installed.	{name}: de download is een andere plugin; de plugin is niet geïnstalleerd.
 {shown} of {total} plugins	{shown} van {total} plugins
 {total} plugins	{total} plugins
-⌘K	⌘K
-Scroll the ribbon left	Lint naar links schuiven
-Scroll the ribbon right	Lint naar rechts schuiven
-Scroll the tabs left	Tabbladen naar links schuiven
-Scroll the tabs right	Tabbladen naar rechts schuiven
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: alleen HTTPS-adressen, of gewoon HTTP op deze computer of dit netwerk, zijn toegestaan
-The assistant is busy; stop it or wait for it to finish.	De assistent is bezig; stop hem of wacht tot hij klaar is.
-The model answering; click to change it	Het model dat antwoordt; klik om het te wijzigen
-Assistant settings	Instellingen van de assistent
-New conversation	Nieuw gesprek
-AI provider	AI-aanbieder
-Provider	Aanbieder
-Model	Model
-model id	model-id
-List the provider's models	Modellen van de aanbieder weergeven
-API key	API-sleutel
-not needed	niet nodig
-paste your key	plak je sleutel
-Hide	Verbergen
-Show	Tonen
-Remember the key on this computer	Sleutel op deze computer onthouden
-On the desktop, the key can also come from {vars}.	Op de desktop kan de sleutel ook uit {vars} komen.
-Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Opgeslagen sleutels worden onversleuteld bewaard in de voorkeuren van de app (op het web in de opslag van de browser).
-The key is kept for this session only.	De sleutel wordt alleen voor deze sessie bewaard.
-Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	Verzoeken sturen je bericht en de laagnamen, velden en door de assistent gelezen rijen van de kaart naar de aanbieder.
-Get it	Downloaden
-Get a key	Sleutel aanvragen
-Allow this action?	Deze actie toestaan?
-The assistant wants to run this, and {why}:	De assistent wil het volgende uitvoeren, en {why}:
-Allow such actions for this conversation	Zulke acties toestaan voor dit gesprek
-Allow	Toestaan
-Decline	Weigeren
-Ask about the map, or tell it what to do…	Stel een vraag over de kaart, of zeg wat er moet gebeuren…
-Enter to send, Shift+Enter for a new line	Enter om te verzenden, Shift+Enter voor een nieuwe regel
-Stop	Stoppen
-Send	Verzenden
-Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Stel een vraag over je gegevens, of beschrijf wat er met de kaart moet gebeuren. De assistent voert RustGIS-opdrachten voor je uit; elke wijziging kan ongedaan worden gemaakt.
-Thinking…	Denkt na…
-Which 5 countries have the largest GDP?	Welke 5 landen hebben het hoogste bbp?
-Zoom to Tokyo	Zoomen naar Tokio
-Label the cities with their names	De steden labelen met hun namen
-Buffer the cities by 200 km	Een buffer van 200 km rond de steden maken
-Switch to a dark basemap	Overschakelen naar een donkere basiskaart
-AI	AI
-AI\nAssistant	AI-\nassistent
-Ask about your data, or tell the assistant what to do with the map.	Stel een vraag over je gegevens, of vertel de assistent wat er met de kaart moet gebeuren.
-AI Assistant	AI-assistent
-Show or hide the AI Assistant.	De AI-assistent tonen of verbergen.
-Ollama (local)	Ollama (lokaal)
-OpenAI-compatible	OpenAI-compatibel
-Google Gemini	Google Gemini
-Choose a model.	Kies een model.
-Enter the provider's address.	Voer het adres van de aanbieder in.
-Enter an API key.	Voer een API-sleutel in.
-Stopped.	Gestopt.
-The model sent an empty reply; ask again, or try another model.	Het model stuurde een leeg antwoord; vraag het opnieuw of probeer een ander model.
-it runs a plugin's command	het voert een opdracht van een plugin uit
-it replaces the open project	het vervangt het geopende project
-it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	het is aan jou voorbehouden (plugins, scripts, taken, modellen en de GeoLibre-runner)
-it reads or writes files on this computer	het leest of schrijft bestanden op deze computer
-it connects to an address on the internet	het maakt verbinding met een adres op internet
-the reply reached its length limit	het antwoord heeft de maximale lengte bereikt
-the model declined this request	het model heeft dit verzoek geweigerd
+© OpenStreetMap contributors	© OpenStreetMap-bijdragers
+⌘K	⌘K

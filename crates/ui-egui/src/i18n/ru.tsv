@@ -1,9 +1,22 @@
 # ru interface catalog: English<TAB>translation
+ by 	 по
+(b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+00:00 UTC	00:00 UTC
+06:00 UTC	06:00 UTC
+12:00 UTC	12:00 UTC
+18:00 UTC	18:00 UTC
+3D mesh	3D-сетка
 <None>	<Нет>
 A 3D globe seen from space.	Трёхмерный глобус, вид из космоса.
 A blank map with a basemap	Пустая карта с базовой картой
 A fast, open-source desktop GIS written in pure Rust, with the ribbon workflow of desktop GIS: maps and layers, symbology, labeling, selection, editing, geoprocessing and export.	Быстрая ГИС с открытым исходным кодом для настольных компьютеров, написанная на чистом Rust, с ленточным интерфейсом настольной ГИС: карты и слои, символы, подписи, выборка, редактирование, геообработка и экспорт.
+A flat scene centred on the view (azimuthal equidistant).	Плоская сцена с центром в виде (азимутальная равнопромежуточная).
+A globe scene.	Сцена-глобус.
+A magnifying lens that follows the pointer.	Увеличительная лупа, следующая за указателем.
+A notebook of text and command cells.	Блокнот из текстовых и командных ячеек.
 A projected coordinate system.	Система координат проекции.
+A report listing the selected layer's records, page after page.	Отчёт со списком записей выбранного слоя, страница за страницей.
+A template with the first selected feature's values	Шаблон со значениями первого выбранного объекта
 A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	Адрес сервиса тайлов: растровые тайлы с {z}/{x}/{y} (или {-y}, {q}, {bbox-epsg-3857} для WMS), векторные тайлы (.pbf) или TileJSON, либо стиль MapLibre.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Значение, поле или два из них, соединённые знаком + − × ÷. Применяется к выбранным строкам или ко всем строкам, если ничего не выбрано.
 About	О программе
@@ -13,67 +26,157 @@ About RustGIS.	О RustGIS.
 Above	Сверху
 Above Left	Сверху слева
 Above Right	Сверху справа
+Accessibility	Специальные возможности
 Activate Map	Активировать карту
 Add	Добавить
 Add\nData	Добавить\nданные
 Add\nField	Добавить\nполе
+Add ({n})	Добавить ({n})
+Add a bar chart of a layer's numeric field.	Добавить столбчатую диаграмму числового поля слоя.
 Add a field to the selected layer.	Добавить поле в выбранный слой.
 Add a field.	Добавить поле.
+Add a legend of the map frame's layers.	Добавить легенду слоёв фрейма карты.
+Add a map frame showing a map of the project.	Добавить фрейм карты, показывающий карту проекта.
 Add a new map to the project.	Добавить новую карту в проект.
+Add a north arrow for the map frame.	Добавить стрелку севера для фрейма карты.
+Add a page	Добавить страницу
+Add a page layout for printing and exporting the map.	Добавить макет страницы для печати и экспорта карты.
+Add a page to the presentation.	Добавить страницу в презентацию.
+Add a PNG or JPEG picture to the page.	Добавить на страницу изображение PNG или JPEG.
+Add a presentation file.	Добавить файл презентации.
+Add a report file, or a report template for the selected layer.	Добавить файл отчёта или шаблон отчёта для выбранного слоя.
+Add a scale bar for the map frame.	Добавить масштабную линейку для фрейма карты.
+add a second map first (Insert › New Map)	сначала добавьте вторую карту (Вставка › Новая карта)
+Add a second map frame first	Сначала добавьте второй фрейм карты
+Add a text element.	Добавить текстовый элемент.
+Add an elevation raster first.	Сначала добавьте растр высот.
+Add an empty layer with a ready-made schema, to draw into.	Добавить пустой слой с готовой схемой, чтобы рисовать в нём.
+Add and Open	Добавить и открыть
+Add and Open Notebook	Добавить и открыть блокнот
+Add Archive	Добавить архив
+add at least two keyframes	добавьте не менее двух ключевых кадров
+Add Cell	Добавить ячейку
+Add Commands	Добавить команды
 Add Data	Добавить данные
 Add Data (from file contents)	Добавить данные (из содержимого файла)
 Add Data (from text)	Добавить данные (из текста)
+Add Data Store…	Добавить хранилище данных…
 Add Data…	Добавить данные…
+Add Element	Добавить элемент
 Add Field	Добавить поле
 Add field	Добавить поле
+Add Folder	Добавить папку
 Add GeoJSON, CSV or Shapefile data to the map.	Добавить на карту данные GeoJSON, CSV или Shapefile.
+Add Graphic	Добавить графику
+Add Graphics Layer	Добавить графический слой
+Add Job	Добавить задание
+Add Keyframe	Добавить ключевой кадр
+Add Layer File	Добавить файл слоя
+Add Page After	Добавить страницу после
+Add Page Before	Добавить страницу перед
+Add pages, layouts, related reports and related records to the report.	Добавить в отчёт страницы, макеты, связанные отчёты и связанные записи.
 Add Plugin Folder…	Добавить папку модуля…
 Add raster tiles, vector tiles or a map style by address.	Добавить растровые тайлы, векторные тайлы или стиль карты по адресу.
+Add Rule	Добавить правило
 Add sample countries	Добавить пример стран
 Add Sample Data	Добавить пример данных
+Add Step	Добавить шаг
+Add Style	Добавить стиль
+Add Style File…	Добавить файл стилей…
+Add Task Step	Добавить шаг задачи
+Add Text	Добавить текст
+Add text that updates: page, date, scale, map and more.	Добавить обновляемый текст: страница, дата, масштаб, карта и другое.
+Add the attribute table of a layer in the map frame.	Добавить таблицу атрибутов слоя из фрейма карты.
+Add the current view as a keyframe.	Добавить текущий вид как ключевой кадр.
+Add the maps of a map file, map package, project or project package.	Добавить карты из файла карты, пакета карты, проекта или пакета проекта.
 Add Tile Layer	Добавить слой тайлов
 Add Tile Layer…	Добавить слой тайлов…
 Add To Current Selection	Добавить к текущей выборке
 Add vector data.	Добавить векторные данные.
+Additional surrounds.	Дополнительные элементы оформления.
 Address	Адрес
 Adds geodesic area (km²), length (km) or centroid coordinates as fields.	Добавляет в виде полей геодезическую площадь (км²), длину (км) или координаты центроида.
+Aggregation	Агрегация
+AI	ИИ
+AI\nAssistant	Помощник\nИИ
+AI Assistant	ИИ-помощник
+AI provider	Поставщик ИИ
+Alignment	Выравнивание
 All	Все
 All categories	Все категории
 All files	Все файлы
+All Selected	Все выбранные
+All steps done.	Все шаги выполнены.
+Allow	Разрешить
+Allow only certain combinations of values across fields.	Разрешить только определённые сочетания значений в полях.
+Allow such actions for this conversation	Разрешать такие действия в этом разговоре
+Allow this action?	Разрешить это действие?
+Along Selected Line	Вдоль выбранной линии
 Altitude	Высота
 Analysis	Анализ
+Analysis › AI	Анализ › ИИ
 AND	AND
+Angle	Угол
+Animation	Анимация
+API key	Ключ API
 Apply	Применить
+Apply a function to a raster	Применить функцию к растру
+Apply Control Points	Применить контрольные точки
+Apply Style	Применить стиль
+Apply to the selected layer	Применить к выбранному слою
+Archive	Архив
+Archive History	История архива
+Archiving	Архивирование
+Area	Площадь
 Area of use: longitude {w}° to {e}°, latitude {s}° to {n}°	Область применения: долгота от {w}° до {e}°, широта от {s}° до {n}°
 Area of use: the whole world	Область применения: весь мир
 Area of use: within {r}° of the {lon}° meridian	Область применения: в пределах {r}° от меридиана {lon}°
 Area of use: within {r}° of {lon}°, {lat}°	Область применения: в пределах {r}° от {lon}°, {lat}°
 Area {area}   ·   Perimeter {perimeter}	Площадь {area}   ·   Периметр {perimeter}
+Areas (name, land use, area)	Территории (название, землепользование, площадь)
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Задайте вопрос о своих данных или опишите, что сделать с картой. Помощник выполняет команды RustGIS за вас; любое изменение можно отменить.
+Ask about the map, or tell it what to do…	Спросите о карте или скажите, что сделать…
+Ask about your data, or tell the assistant what to do with the map.	Спросите о своих данных или скажите помощнику, что сделать с картой.
+Assistant settings	Настройки помощника
 Atlas	Атлас
+Attachments	Вложения
 Attribute\nTable	Таблица\nатрибутов
+Attribute Rules	Правила атрибутов
 Attribute Table	Таблица атрибутов
 Attribute table	Таблица атрибутов
 Attributes	Атрибуты
 Attribution	Атрибуция
 Aurora	Аврора
+Auto Cache	Автокэш
+Auto-complete (2 clicks)	Автозавершение (2 щелчка)
+Auto-complete Profile	Профиль с автозавершением
+Autofill Fields	Автозаполнение полей
 Automatic	Автоматически
 Automatic (system language)	Автоматически (язык системы)
+Automatic (system time zone and region)	Автоматически (часовой пояс и регион системы)
 Automatic ({kind})	Автоматически ({kind})
 Azimuth	Азимут
 Back to Explore; cancel a sketch	Назад к обзору; отменить эскиз
+Back to the Map	Назад к карте
 Back to the map	Назад к карте
 Back to tools	Назад к инструментам
+Backdrop	Фон
 Band	Канал
 Band Combination	Комбинация каналов
+Band values at a point	Значения каналов в точке
 Band {n}	Канал {n}
 Bands	Каналы
+Bands: blue green red NIR SWIR	Каналы: синий, зелёный, красный, NIR, SWIR
 Basemap	Базовая карта
 Basemaps	Базовые карты
 Below	Снизу
+Below 1:5,000,000 show everything; beyond it only what matches:	Мельче 1:5 000 000 показывать всё; крупнее только подходящее:
 Below Left	Снизу слева
 Below Right	Снизу справа
 Bilinear	Билинейная
 Blank	Пустая
+Blank Letter page	Пустая страница Letter
+Blank Page	Пустая страница
 Blue	Синий
 Bold	Жирный
 Bold label text.	Жирный текст подписей.
@@ -81,112 +184,204 @@ Bookmarks	Закладки
 Boolean	Логическое
 Bounding\nGeometry	Ограничивающая\nгеометрия
 Brightness	Яркость
+Brightness, contrast, saturation and sepia for the whole map.	Яркость, контраст, насыщенность и сепия для всей карты.
 Browse	Обзор
 Browse Plugins	Обзор модулей
 Browse the geoprocessing toolbox.	Просмотр набора инструментов геообработки.
 Browse the project's maps, tables and folders.	Просмотр карт, таблиц и папок проекта.
+Browse this folder below	Просматривать эту папку ниже
 Browse, install, update and remove plugins.	Просмотр, установка, обновление и удаление модулей.
 Buffer	Буфер
+Buffer the cities by 200 km	Построить буфер 200 км вокруг городов
+Build	Построить
+Build a surface model and mesh from elevation rasters	Построить модель поверхности и сетку из растров высот
+Build Mosaic	Построить мозаику
+Bundle the active map and its data.	Упаковать активную карту и её данные.
+Bundle the geoprocessing history with the layers it made.	Упаковать историю геообработки вместе с созданными слоями.
+Bundle the project and its data into one file to share.	Упаковать проект и его данные в один файл для обмена.
+Bundle the visible layers, with simplified geometry for phones and tablets.	Упаковать видимые слои с упрощённой геометрией для телефонов и планшетов.
 By\nAttributes	По\nатрибутам
 By\nLocation	По\nрасположению
 by {author}	автор: {author}
+By {field}	По {field}
 Calculate	Вычислить
 Calculate\nField	Вычислить\nполе
 Calculate\nGeometry	Вычислить\nгеометрию
 Calculate Field	Вычислить поле
 Calculate field	Вычислить поле
 Calculate field values.	Вычислить значения поля.
+Calculate fields and enforce conditions on every edit.	Вычислять поля и проверять условия при каждой правке.
 Calculate Geometry Attributes	Вычислить геометрические атрибуты
+Calculation	Вычисление
+Camera	Камера
+Camera Effect	Эффект камеры
 Can't read this folder	Не удаётся прочитать эту папку
 Cancel	Отмена
+Cancel Caching	Отменить кэширование
+Capture To Clipboard	Снимок в буфер обмена
 CARGO_PKG_VERSION	CARGO_PKG_VERSION
 Cartography	Картография
 Case Field	Поле группировки
+Cast Shadow	Отбрасывать тени
 Catalog	Каталог
 Catalog\nPane	Панель\nкаталога
+Catalog View	Вид каталога
 Cell size	Размер ячейки
+cell size °	размер ячейки °
 Centered	По центру
+Chain functions	Цепочка функций
+Chain raster functions.	Объединить растровые функции в цепочку.
+Chain tools into a model; build one from your history.	Объединяйте инструменты в модель; создайте её из истории.
+Change Detection	Обнаружение изменений
 Change the map's backdrop.	Изменить фон карты.
 Change the map's coordinate system	Изменить систему координат карты
+Change the page size and orientation.	Изменить размер и ориентацию страницы.
 Change the project (add layers, edit features, change symbology)	Изменять проект (добавлять слои, редактировать объекты, менять символы)
+Chart categories	Категории диаграммы
+Chart Frame	Фрейм диаграммы
+China	Китай
 Choose a band combination to display the raster layer.	Выберите комбинацию каналов для отображения растрового слоя.
 Choose a contrast stretch for the raster layer.	Выберите растяжку контраста для растрового слоя.
+Choose a model.	Выберите модель.
 Choose a resampling type for the raster layer.	Выберите тип передискретизации для растрового слоя.
+Choose extra buttons for the Quick Access Toolbar.	Выбрать дополнительные кнопки для панели быстрого доступа.
 Choose how the flat map lays out the Earth.	Выбрать, как плоская карта отображает Землю.
 Choose how the layer is drawn.	Выбрать способ отображения слоя.
 Choose how the raster is drawn.	Выберите способ отрисовки растра.
 Choose the interface language.	Выбрать язык интерфейса.
 Choose which layers a click identifies.	Выбрать, какие слои идентифицируются по щелчку.
+Choose which tabs the ribbon shows.	Выбрать, какие вкладки показывает лента.
 Circle	Круг
 Classes	Классы
+Classes from training polygons.	Классы по обучающим полигонам.
+Classification\nTools	Инструменты\nклассификации
+Classification\nWizard	Мастер\nклассификации
+Classification Tools	Инструменты классификации
+Classification Wizard	Мастер классификации
 Classify	Классифицировать
+Classify from training polygons	Классифицировать по обучающим полигонам
 Clear	Очистить
 Clear\nLimits	Сбросить\nограничения
+Clear Filters	Сбросить фильтры
 Clear History	Очистить историю
 Clear Limits	Сбросить ограничения
 Clear Selection	Очистить выборку
 Clear selection	Очистить выборку
 Clear the selection in every layer.	Очистить выборку во всех слоях.
 Clear the selection.	Очистить выборку.
+Click a pixel on the map	Щёлкните пиксель на карте
+Click a point on the map	Щёлкните точку на карте
 Click or drag a box to select features. Shift adds, Ctrl removes.	Щёлкните или растяните рамку, чтобы выбрать объекты. Shift добавляет, Ctrl удаляет.
 Click or drag a box · Shift adds · Ctrl removes	Щёлкните или растяните рамку · Shift добавляет · Ctrl удаляет
+Click points a smooth curve passes through; double-click to finish.	Щёлкайте точки, через которые проходит гладкая кривая; двойной щелчок для завершения.
+Click the corners of a polygon; double-click to close it.	Щёлкайте по углам полигона; двойной щелчок замыкает его.
 Click the corners of the area · double-click to finish	Щёлкайте по углам области · двойной щелчок для завершения
+Click the frame's corners · double-click to finish · Esc to stop	Щёлкайте по углам фрейма · двойной щелчок для завершения · Esc для остановки
 Click the map to add a point	Щёлкните по карте, чтобы добавить точку
+Click the map to place a point	Щёлкните по карте, чтобы поставить точку
+Click the map to place text	Щёлкните по карте, чтобы разместить текст
+Click the map to place text with live values, such as the scale or date.	Щёлкните по карте, чтобы разместить текст с живыми значениями, например масштабом или датой.
+Click the map to place text.	Щёлкните по карте, чтобы разместить текст.
+Click the map: {n} of {total}	Щёлкните по карте: {n} из {total}
+Click the observer on the map	Щёлкните по наблюдателю на карте
+Click the observer, then the target	Щёлкните по наблюдателю, затем по цели
+Click the polygon's corners	Щёлкайте по углам полигона
+Click the start, then the end	Щёлкните начало, затем конец
+Click the vertices of a line; double-click to finish.	Щёлкайте по вершинам линии; двойной щелчок для завершения.
 Click to add points · double-click to finish · Esc to stop	Щёлкайте, чтобы добавить точки · двойной щелчок для завершения · Esc для остановки
+Click to add vertices · double-click to close	Щёлкайте, чтобы добавить вершины · двойной щелчок замыкает
 Click to add vertices · double-click to close the polygon	Щёлкайте, чтобы добавить вершины · двойной щелчок замыкает полигон
+Click to add vertices · double-click to finish	Щёлкайте, чтобы добавить вершины · двойной щелчок для завершения
 Click to add vertices · double-click to finish the line	Щёлкайте, чтобы добавить вершины · двойной щелчок завершает линию
+Click to place a point graphic.	Щёлкните, чтобы разместить точечную графику.
 Click to switch between decimal degrees and DMS	Щёлкните для переключения между десятичными градусами и ГМС
 Clip	Обрезать
+Clip a raster to the view, or resample it.	Обрезать растр по виду или передискретизировать его.
 Clip Features	Обрезать объекты
+Clip or resample	Обрезать или передискретизировать
+Clip To Map View	Обрезать по виду карты
 Clipboard	Буфер обмена
 Close	Закрыть
 Close (Esc)	Закрыть (Esc)
 Close Table	Закрыть таблицу
 Close table	Закрыть таблицу
+Close the layout and show the map.	Закрыть макет и показать карту.
 Closest	Ближайшее
+Coded values, one per line: code=description	Кодированные значения, по одному в строке: код=описание
 Collapse or expand the ribbon	Свернуть или развернуть ленту
 Collapse the ribbon (Ctrl+F1)	Свернуть ленту (Ctrl+F1)
 Color	Цвет
 Color Infrared (4, 1, 2)	Цветной инфракрасный (4, 1, 2)
 Color Scheme	Цветовая схема
 Color scheme	Цветовая схема
+Color Vision	Цветовое зрение
+Color Vision Simulator	Симулятор цветового зрения
 Colormap	Цветовая карта
 Colors from the raster's own color table.	Цвета из собственной цветовой таблицы растра.
+Combinations from the box above, one per line	Сочетания из поля выше, по одному в строке
 Command\nSearch	Поиск\nкоманд
+command is required	требуется command
 Command Search	Поиск команд
+Commands	Команды
 Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	Команды на вкладке «Модули»: {commands} · Инструменты на панели геообработки: {tools}
+Commands…	Команды…
+Compare	Сравнить
+Compare two rasters	Сравнить два растра
 Completed	Выполнено
 Compute a field's values.	Вычислить значения поля.
+Connect a folder to the Catalog.	Подключить папку к каталогу.
+Connections	Подключения
+Constant	Константа
+Constant height	Постоянная высота
+Constant…	Константа…
 Contents	Содержание
+Contingent Values	Условные значения
 Contrast	Контраст
 Conversion	Преобразование
 Convert	Преобразовать
+Convert a layer to another format	Преобразовать слой в другой формат
 Convert the selected layer's labels into an annotation layer.	Преобразовать подписи выбранного слоя в слой аннотаций.
 Convert To Annotation	Преобразовать в аннотации
+Converted data	Преобразованные данные
+Convert…	Преобразовать…
 Coordinate System	Система координат
 Coordinate system	Система координат
 Coordinate System…	Система координат…
+Copied the map to the clipboard	Карта скопирована в буфер обмена
 Copied {path}	Скопировано: {path}
 Copies the (selected) features of a layer to a new layer.	Копирует (выбранные) объекты слоя в новый слой.
 Copy	Копировать
+Copy an image of the map to the clipboard.	Копировать изображение карты в буфер обмена.
 Copy Coordinates	Копировать координаты
 Copy Path	Копировать путь
 Copy the selected features (also as GeoJSON text).	Копировать выбранные объекты (также как текст GeoJSON).
 Copy the selected features and delete them.	Копировать выбранные объекты и удалить их.
 Copy the selected layer's data source path.	Копировать путь к источнику данных выбранного слоя.
+Corrections	Коррекция
+Cost	Стоимость
+could not draw the map	не удалось отрисовать карту
 Couldn't download the font for {language}; pick the language again to retry.	Не удалось загрузить шрифт для {language}; выберите язык ещё раз, чтобы повторить попытку.
 Couldn't load the plugin registry: {error}	Не удалось загрузить каталог модулей: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Количество, сумма, среднее, минимум, максимум и стандартное отклонение поля, при необходимости по полю группировки.
 Countries, cities, rivers and lakes	Страны, города, реки и озёра
 Counts the points that fall inside each polygon.	Подсчитывает точки, попадающие в каждый полигон.
+Counts, totals and top categories of what's in view.	Количества, итоги и основные категории в пределах вида.
 Create	Создать
+Create (click points)	Создать (щелчками по точкам)
 Create a new project or start from the World Atlas sample.	Создайте новый проект или начните с примера «Атлас мира».
 Create Feature	Создать объект
+Create Hosted\nImagery	Создать размещённые\nизображения
+Create Hosted Imagery	Создать размещённые изображения
+Create Hosted Imagery…	Создать размещённые изображения…
 Create Line	Создать линию
 Create Point	Создать точку
 Create Polygon	Создать полигон
+Create Profile	Создать профиль
+Create Thumbnail	Создать эскиз
 Creates a point inside each input feature.	Создаёт точку внутри каждого входного объекта.
 Creates polygons around input features at a given distance.	Создаёт полигоны вокруг входных объектов на заданном расстоянии.
+Cross Section	Поперечный разрез
+Cross Section (2 clicks)	Поперечный разрез (2 щелчка)
 Ctrl+	Ctrl+
 Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
 Ctrl+F1	Ctrl+F1
@@ -194,129 +389,289 @@ Ctrl+K	Ctrl+K
 Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
+Current date	Текущая дата
 Current Project	Текущий проект
+Current time	Текущее время
+Curve	Кривая
+Customize	Настроить
 Cut	Вырезать
+Cut a raster into web map tiles	Нарезать растр на тайлы веб-карты
+Cut a raster into web map tiles (XYZ PNG) with a viewer page.	Нарезать растр на тайлы веб-карты (XYZ PNG) со страницей просмотра.
 Dark\nMode	Тёмная\nтема
 Data	Данные
 Data Design	Структура данных
+Data Engineering	Инженерия данных
+Data Interop	Совместимость данных
 Data Management	Управление данными
+Data Stores	Хранилища данных
 Data type	Тип данных
 Data…	Данные…
+Day and night shading for a time.	Затенение дня и ночи на заданное время.
+Decline	Отклонить
+Deep Learning	Глубокое обучение
+Deep Learning\nTools	Инструменты\nглуб. обучения
+Deep Learning Package	Пакет глубокого обучения
+Deep Learning Tools	Инструменты глубокого обучения
+Default	По умолчанию
 Definition\nQuery	Запрос\nопределения
 Definition Query	Запрос определения
 Definition query	Запрос определения
 Definition Query…	Запрос определения…
 Delete	Удалить
+Delete Cell	Удалить ячейку
+Delete Element	Удалить элемент
 Delete Field	Удалить поле
+Delete Job	Удалить задание
+Delete Layout	Удалить макет
 Delete Map	Удалить карту
+Delete Model	Удалить модель
+Delete Notebook	Удалить блокнот
+Delete Page	Удалить страницу
+Delete Presentation	Удалить презентацию
+Delete Report	Удалить отчёт
 Delete selected features	Удалить выбранные объекты
 Delete selected rows	Удалить выбранные строки
+Delete Style	Удалить стиль
+Delete Task	Удалить задачу
 Delete the selected features.	Удалить выбранные объекты.
+Depth Priority	Приоритет глубины
+Descending	По убыванию
 Details	Сведения
 Details of the selected layer.	Сведения о выбранном слое.
 Deviations	Отклонения
+Diagnostic\nMonitor	Монитор\nдиагностики
+Diagnostic Monitor	Монитор диагностики
 Diamond	Ромб
+Difference, ratio or percent change between two rasters.	Разность, отношение или процентное изменение между двумя растрами.
 Display	Отображение
+Display Filters	Фильтры отображения
+Display Filters ({n})	Фильтры отображения ({n})
+Display Type	Тип отображения
 Dissolve	Объединить
 Dissolve Field	Поле объединения
 Distance	Расстояние
+Distances along the surface, heights, areas and volumes.	Расстояния по поверхности, высоты, площади и объёмы.
+Distinct	Уникальные
+Domains	Домены
+Done	Готово
 Double	Вещественное
 Double-click	Двойной щелчок
 Double-click to add	Двойной щелчок — добавить
+Download\nMap	Скачать\nкарту
+Download Map	Скачать карту
 Download the GeoLibre runner	Скачать модуль запуска GeoLibre
 Downloaded {name}	Загружено: {name}
 Downloading… {mb} MB	Загрузка… {mb} МБ
 DRA	DRA
 Drag / middle-drag	Перетаскивание / средней кнопкой
+Drag a box	Растяните рамку
 Drag a box or click to zoom in	Растяните рамку или щёлкните для приближения
+Drag a box to draw an ellipse.	Растяните рамку, чтобы нарисовать эллипс.
 Drag a box to zoom into.	Растяните рамку для приближения.
+Drag a rectangle, then pick a PNG or JPEG image to place in it.	Растяните прямоугольник, затем выберите изображение PNG или JPEG для размещения в нём.
+Drag from the centre out	Тяните от центра наружу
+Drag from the centre to draw a circle.	Тяните от центра, чтобы нарисовать круг.
+Drag the frame's outline · Esc to stop	Обведите контур фрейма · Esc для остановки
+drag the picture's rectangle on the map first	сначала растяните прямоугольник изображения на карте
+Drag to draw	Тяните, чтобы рисовать
+Drag to draw a freehand line.	Тяните, чтобы нарисовать линию от руки.
+Drag to draw a freehand polygon.	Тяните, чтобы нарисовать полигон от руки.
+Drag to draw a rectangle.	Тяните, чтобы нарисовать прямоугольник.
 Draw a halo around label text.	Рисовать ореол вокруг текста подписей.
+Draw a labelled latitude/longitude grid over the map frame.	Нарисовать подписанную сетку широт и долгот поверх фрейма карты.
 Draw labels at every scale and distance.	Отображать подписи при любом масштабе и расстоянии.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	Рисуйте новые объекты в выбранном слое. Двойной щелчок завершает линии и полигоны.
+Draw points as bins coloured by how many fall in each.	Отображать точки ячейками, окрашенными по их количеству в каждой.
+Draw polygons as outlines only.	Отображать полигоны только контурами.
 Draw the layer at every scale.	Отображать слой в любом масштабе.
+Draw the selected layer above others.	Отображать выбранный слой над остальными.
+Draw the selected layer below others.	Отображать выбранный слой под остальными.
 Drawing	Отображение
+Drawing Effects	Эффекты отображения
+Drawing Mode	Режим отображения
 Drawing Order	Порядок отображения
 Dusk	Сумерки
+Dynamic\nText	Динамический\nтекст
+Dynamic Picture	Динамическое изображение
+Dynamic picture	Динамическое изображение
 Dynamic range adjustment (stretch the pixels in view)	Динамическая настройка диапазона (растяжка по видимым пикселям)
 Dynamic range adjustment: stretch using the pixels in view.	Динамическая настройка диапазона: растяжка по видимым пикселям.
+Dynamic text:	Динамический текст:
 e.g.  pop_est / 1000000   or   'Africa'   or   name	напр.  pop_est / 1000000   или   'Africa'   или   name
 e.g. continent = 'Europe'	напр. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	напр. pop_est > 100000000 AND continent = 'Asia'
+Each geoprocessing run becomes a step, chained by its outputs	Каждый запуск геообработки становится шагом, связанным через свои результаты
 East	Восток
 Eckert IV (equal-area world)	Эккерт IV (равновеликая карта мира)
+Edge	Край
+Edges	Края
 Edit	Правка
+Edit and run the notebook.	Редактировать и запускать блокнот.
 Edit Attribute	Изменить атрибут
 Edit attributes in the table.	Редактировать атрибуты в таблице.
+Edit Cell	Изменить ячейку
+Edit Status	Состояние правок
+Edit Vertices	Изменить вершины
+Editing	Редактирование
+Editing on	Редактирование вкл.
+Editing Settings	Параметры редактирования
+Editing settings.	Параметры редактирования.
+Editor\nTools	Инструменты\nредактора
+Editor Tools	Инструменты редактора
+Edits since the project was saved.	Правки после сохранения проекта.
 Edits the project	Изменяет проект
 Effects	Эффекты
+Element	Элемент
+Element Properties	Свойства элемента
+Elevation	Высота
+Elevation profiles along lines, cross sections and more.	Профили высот вдоль линий, поперечные разрезы и другое.
+Ellipse	Эллипс
+Embeddings	Эмбеддинги
 Ember	Угли
+Empty	Пусто
+Empty Cache	Очистить кэш
+Enable Lighting	Включить освещение
 Enable Plugin	Включить модуль
 Enabled	Включён
 Encloses each feature, or all features, in its convex hull.	Заключает каждый объект или все объекты в выпуклую оболочку.
+End	Конец
 Enhancement	Улучшение
+Enter an API key.	Введите ключ API.
+Enter the provider's address.	Введите адрес поставщика.
+Enter to send, Shift+Enter for a new line	Enter — отправить, Shift+Enter — новая строка
+Environments	Среды
 EPSG code	Код EPSG
 Equal Earth	Equal Earth
 Equal Interval	Равные интервалы
 Equirectangular (Plate Carrée)	Равнопромежуточная (Plate Carrée)
 Erase	Стереть
 Erase Features	Стереть объекты
+Error Inspector	Инспектор ошибок
+Error Inspector (validate)	Инспектор ошибок (проверка)
 Esc	Esc
 Europe Equal Area (ETRS89 LAEA)	Европа, равновеликая (ETRS89 LAEA)
+Every band's value at a pixel.	Значения всех каналов в пикселе.
+Every editing tool.	Все инструменты редактирования.
+Everyday tools.	Повседневные инструменты.
+Everywhere	Везде
+Existing Template	Существующий шаблон
 Expand Legend	Развернуть легенду
 Expand the ribbon (Ctrl+F1)	Развернуть ленту (Ctrl+F1)
+Explode	Разбить
+Exploratory 3D Analysis	Исследовательский 3D-анализ
+Exploratory Analysis	Исследовательский анализ
 Explore	Обзор
 Export	Экспорт
 Export\nFeatures	Экспорт\nобъектов
+Export\nLayout	Экспорт\nмакета
 Export\nMap	Экспорт\nкарты
 Export\nRaster	Экспорт\nрастра
+Export Animation	Экспорт анимации
 Export Features	Экспорт объектов
 Export Features (tool)	Экспорт объектов (инструмент)
 Export Features…	Экспорт объектов…
+Export Layout	Экспорт макета
 Export Map	Экспорт карты
 Export Map failed unexpectedly	Экспорт карты неожиданно завершился ошибкой
 Export Map…	Экспорт карты…
+Export Mesh	Экспорт сетки
+Export Mesh (OBJ)…	Экспорт сетки (OBJ)…
+Export Presentation	Экспорт презентации
+Export Presentation…	Экспорт презентации…
 Export Raster	Экспорт растра
 Export Raster…	Экспорт растра…
+Export Report	Экспорт отчёта
+Export Report…	Экспорт отчёта…
 Export Table	Экспорт таблицы
+Export the animation as PNG frames (zip).	Экспортировать анимацию как кадры PNG (zip).
 Export the layer.	Экспортировать слой.
+Export the layout as PDF or PNG.	Экспортировать макет в PDF или PNG.
 Export the map view as a PNG image (with labels and a scale bar).	Экспортировать вид карты как изображение PNG (с подписями и масштабной линейкой).
+Export the open layout as PDF or PNG.	Экспортировать открытый макет в PDF или PNG.
+Export the presentation as a slideshow or PDF, or save it as a file.	Экспортировать презентацию как слайд-шоу или PDF либо сохранить её как файл.
+Export the report, or save it as a report file or template.	Экспортировать отчёт либо сохранить его как файл или шаблон отчёта.
+Export the selected layer as a 3D model (OBJ), polygons extruded.	Экспортировать выбранный слой как 3D-модель (OBJ) с выдавленными полигонами.
 Export the selected layer to GeoJSON or CSV.	Экспортировать выбранный слой в GeoJSON или CSV.
+Export To 3D	Экспорт в 3D
+Export To 3D File	Экспорт в 3D-файл
+exporting animations needs the desktop app	для экспорта анимаций нужно настольное приложение
+Export…	Экспорт…
 Expression	Выражение
+Extent Indicator	Индикатор экстента
+Extent: {extent}	Экстент: {extent}
 Extract	Извлечение
 Extracts the parts of input features that fall inside clip polygons.	Извлекает части входных объектов, попадающие внутрь обрезающих полигонов.
+Extruded shapes cast shadows on the map.	Выдавленные фигуры отбрасывают тени на карту.
+Extrusion	Выдавливание
+Face Culling	Отсечение граней
+Faces	Грани
+Factor	Коэффициент
 Failed	Ошибка
 Farthest	Самое дальнее
+Faster drawing: no antialiasing.	Быстрая отрисовка: без сглаживания.
 Feature	Объект
+Feature\nAnalysis	Анализ\nобъектов
 Feature\nTo Point	Объект\nв точку
+Feature Cache	Кэш объектов
 Feature Layer	Векторный слой
 Feature Layer › Drawing	Векторный слой › Отображение
+Feature Templates	Шаблоны объектов
+Feature templates: default values for new features.	Шаблоны объектов: значения по умолчанию для новых объектов.
 Feature To Point	Объект в точку
 Features	Объекты
+Features most like the selected one	Объекты, наиболее похожие на выбранный
 Field	Поле
+field * 2, 'text', a + b	field * 2, 'text', a + b
 Field name	Имя поля
 Fields	Поля
+fields, comma separated	поля через запятую
+Fields, statistics, groups, pictures, attachments and charts in the report.	Поля, статистика, группы, изображения, вложения и диаграммы в отчёте.
 Fields:	Поля:
+File	Файл
 file path	путь к файлу
+Fill	Заливка
+Fill Cache	Заполнить кэш
+Fill the cache whenever the projection changes.	Заполнять кэш при каждой смене проекции.
+Film grain	Зернистость плёнки
 Filter rows…	Фильтр строк…
 Find a place by coordinates.	Найти место по координатам.
 Find and run geoprocessing tools.	Найти и запустить инструменты геообработки.
 Find any command by name (Ctrl+K).	Найти любую команду по названию (Ctrl+K).
+Find Place	Найти место
 Find plugins in the RustGIS plugin registry.	Найти модули в каталоге модулей RustGIS.
+Find Similar	Найти похожие
 Find Tools	Найти инструменты
+Finish Polygon	Завершить полигон
+Finish Profile	Завершить профиль
 Finish Tool Run	Завершить запуск инструмента
 Finished: {tool}	Готово: {tool}
+First-Person	От первого лица
+First-Person Navigation	Навигация от первого лица
+Fit To Map View	Подогнать к виду карты
 Fixed Zoom In	Фиксированное приближение
 Fixed Zoom Out	Фиксированное отдаление
+Flip Line	Развернуть линию
+Fog	Туман
+Folder	Папка
+Folder Connections	Подключения к папкам
+folder connections need the desktop app	для подключения к папкам нужно настольное приложение
 Folders	Папки
 Forest	Лес
+Frame rate	Частота кадров
+Frame rate, draw time, data size and memory.	Частота кадров, время отрисовки, объём данных и память.
+Free the prepared geometry.	Освободить подготовленную геометрию.
+Freehand	От руки
+From Selection	Из выборки
 from the address	из адреса
 from the service	из сервиса
 Full Extent	Полный экстент
 Full extent	Полный экстент
 Full size	Полный размер
+Function Editor	Редактор функций
 Gamma	Гамма
 Generalization	Генерализация
 Geo-\nprocessing	Гео-\nобработка
+Geodata Service	Сервис геоданных
 GeoJSON or CSV	GeoJSON или CSV
 GeoLibre	GeoLibre
 GeoLibre Tools	Инструменты GeoLibre
@@ -325,8 +680,13 @@ Geometry	Геометрия
 Geoprocessing	Геообработка
 Geoprocessing history.	История геообработки.
 Geoprocessing Pane	Панель геообработки
+Georeference	Привязка
+Geostatistical Wizard	Мастер геостатистики
 GeoTIFF	GeoTIFF
+Get a key	Получить ключ
+Get it	Получить
 GitHub	GitHub
+Global	Глобальная
 Globe	Глобус
 Go	Перейти
 Go back to the previous extent.	Вернуться к предыдущему экстенту.
@@ -334,25 +694,72 @@ Go forward to the next extent.	Перейти к следующему эксте
 Go to a saved extent or save the current one.	Перейти к сохранённому экстенту или сохранить текущий.
 Go To Bookmark	Перейти к закладке
 Go To XY	Перейти к XY
+Google Gemini	Google Gemini
 Graduated Colors	Градуированные цвета
+Graphic Style	Стиль графики
+Graphics	Графика
+Graphics and Text	Графика и текст
+Graphics Layer	Графический слой
 Graticule	Сетка координат
 Green	Зелёный
 Greys	Оттенки серого
+Grid	Сетка
+Ground\nTo Grid	Земля\nв сетку
+Ground To Grid	Земля в сетку
+Group	Группа
+Group features by an integer code, each with default values.	Группировать объекты по целочисленному коду, каждая группа со своими значениями по умолчанию.
 Group Option	Способ группировки
+Groups	Группы
+Guided analysis: suitability, visibility, networks, interpolation and more.	Пошаговый анализ: пригодность, видимость, сети, интерполяция и другое.
 Halo	Ореол
 Harbour (qualitative)	Гавань (качественная)
+Haze	Дымка
+Haze, fog, rain or snow over the map.	Дымка, туман, дождь или снег над картой.
+Height	Высота
+Height (mm)	Высота (мм)
 Help	Справка
+Hexagons	Шестиугольники
+Hide	Скрыть
+Hide features far from the view's centre.	Скрывать объекты, далёкие от центра вида.
 Hide labels when the viewer is closer than this.	Скрывать подписи, когда наблюдатель ближе этого расстояния.
 Hide labels when the viewer is farther than this.	Скрывать подписи, когда наблюдатель дальше этого расстояния.
+Hide walls facing away from you.	Скрывать стены, обращённые от вас.
+High values of the first raster and low values of the second score best.	Лучшую оценку получают высокие значения первого растра и низкие значения второго.
 Histogram Equalize	Выравнивание гистограммы
+Histograms and correlations	Гистограммы и корреляции
 History	История
+Hold	Приостановить
 Home	Home
 Homepage	Домашняя страница
+Hosted Imagery	Размещённые изображения
+How the layer's colours combine with what's beneath.	Как цвета слоя смешиваются с нижележащими.
 Identify	Идентифицировать
+Illumination	Освещение
+Image Classification	Классификация изображений
+Image Page	Страница изображения
+Imagery	Изображения
+Image…	Изображение…
+Import	Импорт
 Import\nProject	Импорт\nпроекта
+Import Deep Learning Package	Импорт пакета глубокого обучения
+Import Layout	Импорт макета
+Import Layout…	Импорт макета…
+Import Package…	Импорт пакета…
+Import Presentation	Импорт презентации
+Import Report	Импорт отчёта
+Import Styles	Импорт стилей
+Import Styles From…	Импорт стилей из…
+Import Task	Импорт задачи
+Import Task…	Импорт задачи…
+Import Thumbnail	Импорт эскиза
+Import Web Tool	Импорт веб-инструмента
 In Beyond	Вкл. за пределами
+In Progress	Выполняется
+in progress	выполняется
 In project	В проекте
 In use	Используется
+Indices	Индексы
+Infographics	Инфографика
 Information	Информация
 Input Features	Входные объекты
 Input Polygons	Входные полигоны
@@ -376,66 +783,142 @@ Installed	Установлен
 Installed plugins are kept in {folder}	Установленные модули хранятся в {folder}
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	Установлен модуль {name} {version}. Он находится на вкладке «Модули»; его инструменты также есть на панели геообработки.
 Interface font: {font}	Шрифт интерфейса: {font}
+Interpolate a surface from points (IDW)	Интерполировать поверхность по точкам (IDW)
 Invalid: {error}	Недопустимо: {error}
 Invert	Инвертировать
 Invert color scheme	Инвертировать цветовую схему
 Invert the selection.	Инвертировать выборку.
 IS NULL	IS NULL
+it connects to an address on the internet	подключается к адресу в интернете
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	доступно только вам (модули, скрипты, задачи, модели и средство запуска GeoLibre)
+it reads or writes files on this computer	читает или записывает файлы на этом компьютере
+it replaces the open project	заменяет открытый проект
+it runs a plugin's command	запускает команду модуля
 It runs in a sandbox with no other access to your computer or the network.	Он работает в песочнице без какого-либо другого доступа к вашему компьютеру или сети.
 It's too large to keep in the browser: install it again on your next visit.	Модуль слишком велик для хранения в браузере: установите его заново при следующем посещении.
+Item Pop-ups	Всплывающие окна элементов
+Jobs	Задания
+Keep a history of every edit to the layer, to look back or restore.	Хранить историю всех правок слоя, чтобы просматривать или восстанавливать их.
+Keep an archive of edits	Хранить архив правок
 keep current	оставить текущее
 Keep the labelled features fixed as the map moves.	Сохранять подписанные объекты неизменными при перемещении карты.
+Keep the last drawing tool active after each graphic.	Оставлять последний инструмент рисования активным после каждой графики.
+Keep the last tool active	Оставлять последний инструмент активным
+Keep Tool	Удерживать инструмент
 Keyboard Shortcuts	Сочетания клавиш
 Keyboard shortcuts.	Сочетания клавиш.
 Kilometers	Километры
+kind is required	требуется kind
 Label	Подпись
 Label Class	Класс подписей
 Label Distance Range	Диапазон расстояний подписей
 Label Field	Поле подписей
 Label Placement	Размещение подписей
+Label the cities with their names	Подписать города их названиями
 Label Visibility Range	Диапазон видимости подписей
 Labeling	Подписи
 Lagoon	Лагуна
 Lambert Cylindrical Equal Area	Равновеликая цилиндрическая Ламберта
+Landscape	Альбомная
 Language	Язык
+Lasso	Лассо
+Lasso (draw)	Лассо (рисование)
 Last map render time	Время последней отрисовки карты
+Latitude	Широта
 Latitude (Y)	Широта (Y)
 Layer	Слой
+Layer\nTemplates	Шаблоны\nслоёв
+Layer Blend	Смешивание слоя
+Layer Extrusion	Выдавливание слоя
+Layer File	Файл слоя
 Layer From\nSelection	Слой из\nвыборки
+Layer Template	Шаблон слоя
+Layer Templates	Шаблоны слоёв
 Layers	Слои
 Layers and Table Views	Слои и табличные представления
+Layout	Макет
+Layout\nFile	Файл\nмакета
+Layout after: {name}	Макет после: {name}
+Layout before: {name}	Макет перед: {name}
+Layout File…	Файл макета…
+Layout name	Имя макета
+Layouts	Макеты
+Learn	Обучение
+Learning\nResources	Учебные\nматериалы
 Left	Слева
+Legend	Легенда
+Length {length} · gain {gain} m · loss {loss} m	Длина {length} · подъём {gain} м · спуск {loss} м
+Light and Shadow	Свет и тень
+Light the extruded shapes from the north-west.	Освещать выдавленные фигуры с северо-запада.
+Lighting	Освещение
 LIKE	LIKE
+Limit a field to coded values or a range.	Ограничить поле кодированными значениями или диапазоном.
+Limit where tools work, and the cell size of new rasters.	Ограничить область работы инструментов и размер ячейки новых растров.
 Limit which features draw with a SQL expression.	Ограничить отображаемые объекты выражением SQL.
+Line	Линия
 Line color	Цвет линии
+Line Of Sight	Линия видимости
+Line of sight between two points	Линия видимости между двумя точками
 Line width	Толщина линии
+Line {n} isn't four numbers (column row lon lat)	Строка {n} не содержит четырёх чисел (column row lon lat)
+Lines	Линии
 LineString	LineString
+Link	Связать
+Link Cursors	Связать курсоры
+Link Views	Связать виды
 List Commands	Список команд
+List the provider's models	Показать модели поставщика
 Lit	Освещено
+Live summary of the features in view.	Живая сводка объектов в пределах вида.
 Load an unpacked plugin from its folder while you develop it.	Загрузить нераспакованный модуль из его папки во время разработки.
 Load GeoLibre tools	Загрузить инструменты GeoLibre
 Loaded {name} from its folder.	Модуль {name} загружен из своей папки.
 Loading the GeoLibre tools…	Загрузка инструментов GeoLibre…
 Loads map tiles from the web	Загружает тайлы карты из интернета
+Local	Локальная
 Locate	Найти место
 Locate GeoLibre Runner	Указать модуль запуска GeoLibre
 Locate the GeoLibre runner	Указать модуль запуска GeoLibre
 Locate…	Указать…
 Location	Расположение
+Locator	Локатор
 Lock	Закрепить
 Long	Длинное целое
+Longitude	Долгота
 Longitude (X)	Долгота (X)
+Lower Priority	Понизить приоритет
+Magnifier	Лупа
 Major Lakes	Крупные озёра
 Major Rivers	Крупные реки
 Make a new layer of the selected features.	Создать новый слой из выбранных объектов.
 Make Layer From Selected Features	Создать слой из выбранных объектов
 Manage	Управление
 Manage Edits	Управление правками
+Manage Templates	Управление шаблонами
 Map	Карта
+Map\nFrame	Фрейм\nкарты
+Map (the current view)	Карта (текущий вид)
+Map draw	Отрисовка карты
+Map File	Файл карты
+Map Frame	Фрейм карты
+Map Frames	Фреймы карты
+Map name	Имя карты
+Map Page	Страница карты
+Map scale	Масштаб карты
+Map Series	Серия карт
+Map Series Page	Страница серии карт
+Map series page name	Имя страницы серии карт
 Map style (JSON)	Стиль карты (JSON)
+Map Surrounds	Элементы оформления карты
+Map Thumbnail	Эскиз карты
+Map View	Вид карты
 Map › Layer	Карта › Слой
+map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}	map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}
+Mapping	Картографирование
 Maps	Карты
+Maps move together.	Карты перемещаются синхронно.
 Marker	Маркер
+Masking	Маскирование
 Max	Макс.
 Max %	Макс. %
 Maximum zoom	Максимальный масштаб
@@ -444,6 +927,12 @@ Measure	Измерить
 Measure Area	Измерить площадь
 Measure Distance	Измерить расстояние
 Measure geodesic distances and areas on the map.	Измерять геодезические расстояния и площади на карте.
+Measure with an elevation raster	Измерение по растру высот
+Measurements so far.	Измерения на данный момент.
+Mensuration	Мензурация
+Mensuration Tools	Инструменты мензурации
+Merge	Слить
+Merge elevation rasters into a surface model and export a 3D mesh.	Объединить растры высот в модель поверхности и экспортировать 3D-сетку.
 Merges polygons that share a field value into one feature per value.	Объединяет полигоны с одинаковым значением поля в один объект для каждого значения.
 Meters	Метры
 Method	Метод
@@ -454,68 +943,166 @@ Min	Мин.
 Min %	Мин. %
 Minimum Bounding Geometry	Минимальная ограничивающая геометрия
 Minimum Maximum	Минимум-максимум
+Minutes	Минуты
+minutes ago	минут назад
+Mobile Map	Мобильная карта
 Mod+	Mod+
+Model	Модель
+Model\nBuilder	Конструктор\nмоделей
+model id	идентификатор модели
+ModelBuilder	ModelBuilder
+Models	Модели
+Modify	Изменение
+Modify Selected Features	Изменить выбранные объекты
 Mollweide (equal-area world)	Мольвейде (равновеликая карта мира)
+More	Ещё
+Mosaic images into an orthomosaic	Сшить изображения в ортомозаику
+Mosaic the visible rasters into an orthomosaic.	Сшить видимые растры в ортомозаику.
 Mouse wheel	Колесо мыши
+Move	Переместить
+Move (m)	Переместить (м)
 Move Down	Переместить вниз
 Move down	Переместить вниз
 Move Up	Переместить вверх
 Move up	Переместить вверх
+Move, rotate, scale, merge, explode, split or flip the selected features.	Переместить, повернуть, масштабировать, слить, разбить, разделить или развернуть выбранные объекты.
+Move, Rotate, Scale…	Переместить, повернуть, масштабировать…
 Name	Имя
 Natural Breaks (Jenks)	Естественные границы (Дженкс)
 Natural Color (1, 2, 3)	Естественные цвета (1, 2, 3)
 Natural Earth	Natural Earth
 Navigate	Навигация
+Navigate with the mouse (planar) or walk with W A S D, Q and E (first-person).	Перемещайтесь мышью (планарный режим) или ходите клавишами W A S D, Q и E (от первого лица).
 Navigation	Навигация
+Navigation Mode	Режим навигации
+Navigator	Навигатор
+NDVI, NDWI, SAVI, NBR, NDBI, EVI.	NDVI, NDWI, SAVI, NBR, NDBI, EVI.
 Nearest Neighbor	Ближайший сосед
+Neatline	Рамка
 Needs three or more bands.	Нужно три или более канала.
+Neighborhood Explorer	Анализ окрестности
+Network Analysis	Сетевой анализ
 New	Создать
 New\nBookmark	Новая\nзакладка
+New\nLayout	Новый\nмакет
 New\nMap	Новая\nкарта
+New\nNotebook	Новый\nблокнот
+New\nPresentation	Новая\nпрезентация
+New\nReport	Новый\nотчёт
+New\nWorkspace	Новое рабочее\nпространство
 New / Open / Save project	Создать / открыть / сохранить проект
 New Bookmark	Новая закладка
 New Bookmark…	Новая закладка…
+New conversation	Новый разговор
+New Custom Template	Новый пользовательский шаблон
+New Custom Template…	Новый пользовательский шаблон…
+New features use this template's values	Новые объекты получают значения этого шаблона
+New job name	Имя нового задания
+New Layout	Новый макет
 New Map	Новая карта
+New Model From History	Новая модель из истории
+New Notebook	Новый блокнот
+New Presentation	Новая презентация
 New Project	Новый проект
 New project	Новый проект
+New Relationship…	Новое отношение…
+New Report	Новый отчёт
 New Selection	Новая выборка
+New Style	Новый стиль
+New Style From Layer	Новый стиль из слоя
+New Task	Новая задача
+New Task From History	Новая задача из истории
+New Template	Новый шаблон
+New Template (a layout page)	Новый шаблон (страница макета)
+New Workspace	Новое рабочее пространство
+New Workspace From Visible Rasters	Новое рабочее пространство из видимых растров
 Next	Далее
 Next Extent	Следующий экстент
+Next Page	Следующая страница
 No	Нет
 No bookmarks yet	Закладок пока нет
+No edits since the project was saved	Нет правок после сохранения проекта
+No mask	Без маски
+No notebooks yet. Insert › New Notebook starts one, or Add and Open Notebook opens one.	Блокнотов пока нет. Вставка › Новый блокнот создаёт блокнот, а «Добавить и открыть блокнот» открывает существующий.
+No offline areas	Нет автономных областей
+No other reports	Других отчётов нет
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Модули не установлены. Просмотрите каталог модулей или установите файл .rgplugin.
 No plugins match.	Подходящих модулей нет.
 No Pop-ups	Без всплывающих окон
+No presentations yet. Insert › New Presentation starts one.	Презентаций пока нет. Вставка › Новая презентация создаёт презентацию.
+No relationships (Data Design › Relationships)	Нет отношений (Структура данных › Отношения)
+No relationships yet	Отношений пока нет
+No reports yet. Insert › New Report lists the selected layer's records.	Отчётов пока нет. Вставка › Новый отчёт выводит записи выбранного слоя.
 No standalone tables	Нет отдельных таблиц
+No styles yet	Стилей пока нет
+No tasks yet. Insert › Task makes one, for example from your geoprocessing history.	Задач пока нет. Вставка › Задача создаёт задачу, например из истории геообработки.
 NoData	NoData
 None	Нет
 None. Add one by address, or from a basemap plugin.	Нет. Добавьте слой по адресу или из плагина базовых карт.
 North	Север
+North\nArrow	Стрелка\nсевера
 North Polar Stereographic	Северная полярная стереографическая
+not a RustGIS layout	не макет RustGIS
+not needed	не требуется
 Not saved yet	Ещё не сохранено
+Notebook	Блокнот
+Notebook Pane	Панель блокнота
+Nothing shared yet. Share › Share As makes web maps, layers, styles, scenes and more.	Пока ничего не опубликовано. Поделиться › Поделиться как создаёт веб-карты, слои, стили, сцены и другое.
+Now	Сейчас
+Nulls	Пустые значения
+Observations (observer, date, species, count)	Наблюдения (наблюдатель, дата, вид, количество)
+observer height m	высота наблюдателя, м
 Ocean	Океан
+Off	Выкл.
+Offline	Автономно
+Offline area	Автономная область
 OID	OID
+Ollama (local)	Ollama (локально)
+On	Вкл.
+On Hold	Приостановлено
+on hold	приостановлено
+On the desktop, the key can also come from {vars}.	На компьютере ключ также может браться из {vars}.
+On-screen compass, zoom slider and pan pad.	Экранный компас, ползунок масштаба и панель перемещения.
+One command per line: id {json}. Lines starting with # are comments.	По одной команде в строке: id {json}. Строки, начинающиеся с #, являются комментариями.
+One page per feature of an index layer.	По одной странице на каждый объект индексного слоя.
+One per line: code=name	По одному в строке: код=имя
 Only features matching this expression draw in {layer}.	В слое {layer} отображаются только объекты, соответствующие этому выражению.
 Opacity	Непрозрачность
 Open	Открыть
 Open a .rgisx project	Открыть проект .rgisx
+open a layout first	сначала откройте макет
+Open a RustGIS or Jupyter notebook.	Открыть блокнот RustGIS или Jupyter.
 Open a RustGIS project.	Открыть проект RustGIS.
+Open an offline area to edit.	Открыть автономную область для редактирования.
+Open Custom Template	Открыть пользовательский шаблон
+Open Custom Template…	Открыть пользовательский шаблон…
 Open folder	Открыть папку
+Open Layout	Открыть макет
+Open Notebook	Открыть блокнот
+Open Offline Map	Открыть автономную карту
+Open Presentation	Открыть презентацию
 Open Project	Открыть проект
 Open project	Открыть проект
 Open Project (from text)	Открыть проект (из текста)
+Open Report	Открыть отчёт
 Open the attribute table of the selected layer.	Открыть таблицу атрибутов выбранного слоя.
 Open the layer's attribute table.	Открыть таблицу атрибутов слоя.
 Open the layer's table.	Открыть таблицу слоя.
+Open the RustGIS user guide.	Открыть руководство пользователя RustGIS.
 Open the selected layer's table.	Открыть таблицу выбранного слоя.
 Open the Symbology pane.	Открыть панель «Символы».
 Open {code} on epsg.io	Открыть {code} на epsg.io
 Open, save and create projects	Открытие, сохранение и создание проектов
+OpenAI-compatible	Совместимый с OpenAI
+Opened {name} for printing	{name} открыт для печати
 Open…	Открыть…
+Options	Параметры
 OR	OR
 Or	Или
+Ortho Mapping	Ортотрансформирование
 Out Beyond	Выкл. за пределами
 Outline	Контур
+Outline another frame's extent in this map frame.	Обвести экстент другого фрейма в этом фрейме карты.
 Outline color	Цвет контура
 Outline width	Толщина контура
 Output	Вывод
@@ -525,20 +1112,53 @@ Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional 
 Overlay	Наложение
 overlay	наложение
 Overlay (a transparent layer kept on top, such as labels or roads)	Наложение (прозрачный слой поверх остальных, например подписи или дороги)
+Package	Пакет
+Package a trained deep learning model.	Упаковать обученную модель глубокого обучения.
+Package Map	Упаковать карту
+Package Project	Упаковать проект
+Package Results	Упаковать результаты
+Page	Страница
+Page\nSize	Размер\nстраницы
+Page after: {name}	Страница после: {name}
+Page before: {name}	Страница перед: {name}
+Page number	Номер страницы
+Page Properties	Свойства страницы
+Page Setup	Параметры страницы
+Page Size	Размер страницы
+Page text	Текст страницы
+Page title	Заголовок страницы
+Page {n} of {total}	Страница {n} из {total}
+Page {n} of {total}: {name}	Страница {n} из {total}: {name}
+Pages of maps, text, images and videos, shown one after another.	Страницы с картами, текстом, изображениями и видео, показываемые одна за другой.
 Pan (Explore) · any tool	Панорамирование (обзор) · любой инструмент
 Pan to a longitude/latitude.	Переместиться к долготе/широте.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Панорамируйте мышью, масштабируйте колесом и щёлкайте по объектам, чтобы увидеть их атрибуты.
+Pane Sets	Наборы панелей
 Paper	Бумага
 Parent folder	Родительская папка
 Paste	Вставить
 Paste copied features into the selected layer, or as a new layer.	Вставить скопированные объекты в выбранный слой или как новый слой.
 Paste Special	Специальная вставка
 Paste Special (as a new layer)	Специальная вставка (как новый слой)
+paste your key	вставьте ключ
 Pause	Приостановить
+PDF or PNG	PDF или PNG
 Percent Clip	Процентное отсечение
+Performance	Производительность
+Picture	Изображение
+Pictures	Изображения
+Pictures, attachments and chart	Изображения, вложения и диаграмма
 Pixel	Пиксель
+Pixel Editor	Редактор пикселей
 Pixel type	Тип пикселя
+Place a raster on the map	Разместить растр на карте
+Place a raster on the map from control points or the view.	Разместить растр на карте по контрольным точкам или по виду.
 Placement	Размещение
+Places (name, category, address, rating)	Места (название, категория, адрес, рейтинг)
+Planar	Планарная
+Planar Navigation	Планарная навигация
+Play	Воспроизвести
+Play the animation.	Воспроизвести анимацию.
 Plugin\nManager	Менеджер\nмодулей
 Plugin folder	Папка модуля
 Plugin Manager	Менеджер модулей
@@ -546,30 +1166,78 @@ Plugin Manager…	Менеджер модулей…
 Plugin registry	Каталог модулей
 Plugins	Модули
 Plugins are .rgplugin files. Install only plugins from people you trust.	Модули — это файлы .rgplugin. Устанавливайте модули только от тех, кому доверяете.
+Plugins run in a sandbox: they can't reach your files or the network, and they change the project only through RustGIS's own commands, within the permissions you accept.	Модули работают в песочнице: у них нет доступа к вашим файлам и сети, и они изменяют проект только через собственные команды RustGIS в рамках разрешений, которые вы приняли.
+PNG frames (zip)	Кадры PNG (zip)
 PNG image	Изображение PNG
 Point	Точка
+Points	Точки
+points each	точек в каждом
 Polar, conformal: Antarctica and the Southern Ocean.	Полярная, равноугольная: Антарктида и Южный океан.
 Polar, conformal: the Arctic and the northern lands.	Полярная, равноугольная: Арктика и северные земли.
 Polygon	Полигон
+Polygon (draw)	Полигон (рисование)
+Polygons	Полигоны
 Polyline	Полилиния
 Pop-up Mode	Режим всплывающих окон
 Pop-ups	Всплывающие окна
+pop_max > 1000000	pop_max > 1000000
 Populated Places	Населённые пункты
+Portal	Портал
+Portrait	Книжная
+Postprocessing	Постобработка
+power 2	степень 2
+Prepare every layer's geometry for this projection.	Подготовить геометрию всех слоёв для этой проекции.
+Presentation	Презентация
+Presentation File	Файл презентации
+Presentation Pane	Панель презентации
+Preview and set up the report.	Предпросмотр и настройка отчёта.
+Preview, edit and play the presentation.	Предпросмотр, редактирование и показ презентации.
 Previous	Назад
 Previous Extent	Предыдущий экстент
+Previous Page	Предыдущая страница
 Primary\nSymbology	Основные\nсимволы
 Primary symbology	Основные символы
+Print	Печать
+Print\nLayout	Печать\nмакета
+Print Map	Печать карты
+Print the layout.	Напечатать макет.
+Print the map view (through the system's PDF viewer).	Напечатать вид карты (через системную программу просмотра PDF).
+Print the open layout (through the system's PDF viewer).	Напечатать открытый макет (через системную программу просмотра PDF).
+printing failed unexpectedly	печать неожиданно завершилась ошибкой
+printing needs the desktop app	для печати нужно настольное приложение
+Process	Обработка
+Profile	Профиль
+Profile Along a Line	Профиль вдоль линии
+Profile Along Selected Lines	Профиль вдоль выбранных линий
+Profile every field	Профиль всех полей
+Profile Viewing	Просмотр профиля
 PROJ definition	Определение PROJ
 Project	Проект
+Project\nPackage	Пакет\nпроекта
 Project Info	Сведения о проекте
+Project Template	Шаблон проекта
+Project templates: start projects from a saved setup.	Шаблоны проектов: начинайте проекты с сохранённой настройки.
 Projection	Проекция
 Projections	Проекции
 Proportional Symbols	Пропорциональные символы
+Provider	Поставщик
 Proximity	Близость
+Put the layer back as it was then	Вернуть слой в тогдашнее состояние
 Quantile	Квантили
+Quick\nAccess	Быстрый\nдоступ
 Quick Access Toolbar	Панель быстрого доступа
+radius km	радиус, км
+radius m	радиус, м
+Rain	Дождь
+Raise polygons by a height or a field.	Поднять полигоны на высоту или по полю.
+Raise Priority	Повысить приоритет
+Random points in polygons	Случайные точки в полигонах
+Raster	Растр
+Raster\nAnalysis	Анализ\nрастров
 Raster\nInformation	Сведения\nо растре
 Raster Data	Данные растра
+Raster Effects	Эффекты растра
+Raster Functions	Растровые функции
 Raster Information	Сведения о растре
 Raster Layer	Растровый слой
 Raster tiles (XYZ)	Растровые тайлы (XYZ)
@@ -578,6 +1246,9 @@ Read and write files on this computer	Читать и записывать фа�
 Read the map's layers and features	Читать слои и объекты карты
 Reads and writes files	Читает и записывает файлы
 Reads the map	Читает карту
+Ready To Use	Готово к использованию
+Reality Mapping	Картографирование реальности
+Rectangle	Прямоугольник
 Red	Красный
 Redo	Повторить
 Redo the change you undid.	Повторить отменённое изменение.
@@ -585,57 +1256,171 @@ Redo {action}	Повторить: {action}
 Red–Blue	Красный–синий
 Refine the search to see {n} more	Уточните поиск, чтобы увидеть ещё {n}
 Refresh	Обновить
+Refresh Map Series	Обновить серию карт
+Refresh the map series from its index layer.	Обновить серию карт по её индексному слою.
 Regional, equal-area: the contiguous United States.	Региональная, равновеликая: смежные штаты США.
 Regional, equal-area: the European standard for statistics.	Региональная, равновеликая: европейский стандарт для статистики.
+Relate	Связь
+Related\nData	Связанные\nданные
+Related Data	Связанные данные
+Related Report	Связанный отчёт
+Related report: {name}	Связанный отчёт: {name}
+Relationship	Отношение
+Relationship name	Имя отношения
+Relationships	Отношения
+Remember the key on this computer	Запомнить ключ на этом компьютере
 Remove	Удалить
 Remove All	Удалить все
+Remove an offline area.	Удалить автономную область.
 Remove Bookmark	Удалить закладку
+Remove Folder	Удалить папку
 Remove From Current Selection	Удалить из текущей выборки
+Remove Keyframe	Удалить ключевой кадр
+Remove Section	Удалить раздел
+Remove the last keyframe.	Удалить последний ключевой кадр.
 Remove the layer from the map.	Удалить слой с карты.
+Remove Tile Layer	Удалить слой тайлов
 Removes the parts of polygon features that overlap erase polygons.	Удаляет части полигональных объектов, перекрывающиеся со стирающими полигонами.
 Removes vertices that deviate less than a tolerance (Douglas–Peucker).	Удаляет вершины, отклоняющиеся меньше чем на допуск (Дуглас–Пекер).
 Rename	Переименовать
 Rename Layer	Переименовать слой
+Rename Layout	Переименовать макет
 Rename Map	Переименовать карту
 Rename Project	Переименовать проект
 Rename…	Переименовать…
 Rendering	Отрисовка
+Replace Web Layer	Заменить веб-слой
+Report	Отчёт
+Report File	Файл отчёта
+Report Pane	Панель отчёта
+Report Properties	Свойства отчёта
+Report Section	Раздел отчёта
+Report Template	Шаблон отчёта
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	Запросы отправляют поставщику ваше сообщение, а также названия слоёв карты, их поля и строки, прочитанные помощником.
+Resample	Передискретизировать
 Resampling	Передискретизация
 Resampling Type	Тип передискретизации
 Reset	Сбросить
 Reset brightness, contrast and gamma.	Сбросить яркость, контраст и гамму.
+Reset Effects	Сбросить эффекты
+Restore	Восстановить
+Restore From Archive	Восстановить из архива
+Results	Результаты
+Resume	Возобновить
 RGB	RGB
+Ribbon	Лента
 Ribbon feature coverage: {done} of {total} features ({pct}%).	Охват функций ленты: {done} из {total} ({pct}%).
 Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Соответствие ленты: команд RustGIS для функций ленты — {done} из {total}.
 Right	Справа
 Robinson	Робинсон
+Rotate	Повернуть
+Rotate (°)	Повернуть (°)
+Rotate 90°	Повернуть на 90°
+Rotation	Поворот
+Rotation Type	Тип поворота
+rotation °	поворот °
+Routes (name, surface, length)	Маршруты (название, покрытие, длина)
+Rows	Строки
+Rule name	Имя правила
 Run	Запустить
+Run All	Запустить все
+Run Cells	Запустить ячейки
+Run Chain	Запустить цепочку
+Run commands from text, one per line.	Выполнить команды из текста, по одной в строке.
+Run Model	Запустить модель
+Run Script	Запустить скрипт
+Run Task	Запустить задачу
+Run the task	Запустить задачу
 Run Tool	Запустить инструмент
+Run {name}	Запустить {name}
 Running…	Выполняется…
 RustGIS	RustGIS
+RustGIS deep learning package	Пакет глубокого обучения RustGIS
 RustGIS is an open-source desktop GIS written in pure Rust. Its ribbon follows the familiar desktop GIS workflow; every action is a command you can also run from the command line.	RustGIS — настольная ГИС с открытым исходным кодом, написанная на чистом Rust. Её лента повторяет привычный порядок работы настольной ГИС; каждое действие — это команда, которую также можно выполнить из командной строки.
+RustGIS layer file	Файл слоя RustGIS
+RustGIS layers, maps and projects	Слои, карты и проекты RustGIS
+RustGIS layout	Макет RustGIS
+RustGIS maps and projects	Карты и проекты RustGIS
+RustGIS or Jupyter notebook	Блокнот RustGIS или Jupyter
 RustGIS plugin	Модуль RustGIS
+RustGIS presentation	Презентация RustGIS
 RustGIS project	Проект RustGIS
+RustGIS project template	Шаблон проекта RustGIS
+RustGIS report or report template	Отчёт или шаблон отчёта RustGIS
+RustGIS styles	Стили RustGIS
+RustGIS task	Задача RustGIS
+RUSTGIS_ASSISTANT_MODEL	RUSTGIS_ASSISTANT_MODEL
+RUSTGIS_ASSISTANT_PROVIDER	RUSTGIS_ASSISTANT_PROVIDER
 Sample data (Natural Earth)	Пример данных (Natural Earth)
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Пример данных © Natural Earth (общественное достояние). RustGIS распространяется по лицензии Apache-2.0.
 Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	Пример данных: Natural Earth (общественное достояние). Лицензия Apache-2.0.
+Saturation	Насыщенность
 Save	Сохранить
 Save As	Сохранить как
+Save As Presentation File…	Сохранить как файл презентации…
+Save As Report File…	Сохранить как файл отчёта…
+Save As Report Template…	Сохранить как шаблон отчёта…
+Save as {name}	Сохранить как {name}
+Save As…	Сохранить как…
+Save Layer File	Сохранить файл слоя
+Save Layout File	Сохранить файл макета
+Save Map File	Сохранить файл карты
+Save Notebook	Сохранить блокнот
+save or load a pane set by name	сохранить или загрузить набор панелей по имени
 Save Project	Сохранить проект
 Save project	Сохранить проект
 Save Project As	Сохранить проект как
+Save Project Template	Сохранить шаблон проекта
+Save Style Items	Сохранить элементы стилей
+Save Task Item	Сохранить элемент задачи
+Save the active map (with its data) as a map file.	Сохранить активную карту (с её данными) как файл карты.
 Save the current extent as a bookmark.	Сохранить текущий экстент как закладку.
+Save the last task as a task file.	Сохранить последнюю задачу как файл задачи.
+Save the layout as a layout file.	Сохранить макет как файл макета.
+Save the open layout as a layout file.	Сохранить открытый макет как файл макета.
+Save the panes you have open, and switch back to them.	Сохранить открытые панели и возвращаться к ним.
 Save the project under a new name.	Сохранить проект под новым именем.
 Save the project with your edits.	Сохранить проект с вашими правками.
+Save the project's setup, without its features, as a template.	Сохранить настройку проекта без его объектов как шаблон.
+Save the project's styles to a style file.	Сохранить стили проекта в файл стилей.
 Save the raster as a GeoTIFF.	Сохранить растр как GeoTIFF.
+Save the selected layer with its symbology as a layer file.	Сохранить выбранный слой с его символами как файл слоя.
+Save Web Link Chart	Сохранить веб-диаграмму связей
+Save Web Map	Сохранить веб-карту
+Save Web Scene	Сохранить веб-сцену
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Сохранённые ключи хранятся в настройках приложения в незашифрованном виде (в веб-версии — в хранилище браузера).
+Saved symbology: apply it to the selected layer, or save the layer's.	Сохранённые символы: примените их к выбранному слою или сохраните символы слоя.
+Saved {name}	Сохранено: {name}
+saving failed unexpectedly	сохранение неожиданно завершилось ошибкой
+Scale	Масштаб
+Scale\nBar	Масштабная\nлинейка
+Scale (×)	Масштаб (×)
+scale 0.9996	масштаб 0.9996
 Scale 1:	Масштаб 1:
+Scale and rotate entered distances and directions to the grid.	Масштабировать и поворачивать введённые расстояния и направления к сетке.
+Scale ×2	Масштаб ×2
+Scale ×½	Масштаб ×½
+Scene	Сцена
+Score two rasters 1–10 and weight them	Оценить два растра по шкале 1–10 и взвесить их
+Script	Скрипт
+Scroll the ribbon left	Прокрутить ленту влево
+Scroll the ribbon right	Прокрутить ленту вправо
+Scroll the tabs left	Прокрутить вкладки влево
+Scroll the tabs right	Прокрутить вкладки вправо
 Search commands — e.g. buffer, basemap, labels	Поиск команд — напр. буфер, базовая карта, подписи
 Search Distance (km)	Расстояние поиска (км)
+Search every command and its parameters	Поиск по всем командам и их параметрам
 Search plugins	Поиск модулей
+Seconds	Секунды
+Sections	Разделы
+See and set the camera's position and scale.	Просмотр и настройка положения и масштаба камеры.
+See the map as people with colour vision deficiencies do.	Увидеть карту так, как её видят люди с нарушениями цветового зрения.
 See the tools you've run.	Просмотр запущенных инструментов.
 Select	Выбрать
 Select (click)	Выбрать (щелчком)
 Select (rectangle)	Выбрать (прямоугольником)
+Select a feature layer in the Contents pane	Выберите векторный слой на панели «Содержание»
+Select a layer in the Contents pane	Выберите слой на панели «Содержание»
 select a layer in the Contents pane first	сначала выберите слой на панели «Содержание»
 Select a layer in the Contents pane.	Выберите слой на панели «Содержание».
 Select All	Выбрать все
@@ -650,102 +1435,236 @@ Select features with a SQL expression.	Выбрать объекты с помо
 Select Layer	Выбрать слой
 Select Layer By Attribute	Выбрать в слое по атрибуту
 Select Layer By Location	Выбрать в слое по расположению
+Select Related	Выбрать связанные
 Select Rows	Выбрать строки
 Select rows with a SQL expression.	Выбрать строки с помощью выражения SQL.
 Select Subset From Current Selection	Выбрать подмножество из текущей выборки
+Select the rows related to the selection.	Выбрать строки, связанные с выборкой.
 Selectable	Доступен для выбора
 Selectable Layers	Слои, доступные для выбора
 Selected	Выбрано
 Selected Features: {n}	Выбрано объектов: {n}
 Selected in Contents	Выбранные в содержании
 Selected only	Только выбранные
+Selected records only	Только выбранные записи
 Selecting Features	Выбор объектов
 Selection	Выборка
 Selection Type	Тип выборки
 Selects features that intersect features in another layer.	Выбирает объекты, пересекающие объекты другого слоя.
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Выбирает объекты с помощью SQL-условия WHERE, напр. pop_est > 1000000.
+Send	Отправить
+Send offline edits back and refresh.	Отправить автономные правки и обновить.
+Sepia	Сепия
+Set	Задать
+Set Cell Size	Задать размер ячейки
+Set Domain	Задать домен
+Set Filter	Задать фильтр
 Set Map Tool	Выбрать инструмент карты
 Set Scale	Задать масштаб
+Set Subtypes	Задать подтипы
+Set the pixels inside a polygon	Задать пиксели внутри полигона
+Set the pixels inside a polygon.	Задать пиксели внутри полигона.
 Settings	Настройки
+Shade walls by the way they face the light.	Затенять стены в зависимости от их ориентации к свету.
 Shaded	Затенено
 Shaded Relief	Теневой рельеф
 Shape	Форма
 Share	Поделиться
+Share As	Поделиться как
+Share every layer and table as OGC API Features collections.	Опубликовать все слои и таблицы как коллекции OGC API Features.
+Share the last model as a tool file.	Опубликовать последнюю модель как файл инструмента.
+Share the map as a web page that needs no server.	Опубликовать карту как веб-страницу, не требующую сервера.
+Share the map in 3D (glTF), polygons extruded.	Опубликовать карту в 3D (glTF) с выдавленными полигонами.
+Share the map's relationships as a link chart page.	Опубликовать отношения карты как страницу диаграммы связей.
+Share the selected layer as an OGC API Features collection with its style.	Опубликовать выбранный слой как коллекцию OGC API Features с его стилем.
+Share the selected layer's names as a place-search locator.	Опубликовать названия выбранного слоя как локатор для поиска мест.
+Share the selected layer's symbology as a MapLibre style.	Опубликовать символы выбранного слоя как стиль MapLibre.
 Share › Output	Поделиться › Вывод
+Shared Items	Опубликованные элементы
+Shares made, with Manage tools to update them.	Созданные публикации с инструментами управления для их обновления.
 Shift+	Shift+
 Shift+drag	Shift+перетаскивание
 Shortcuts	Сочетания клавиш
+Shortest route over a line network	Кратчайший маршрут по линейной сети
+Show	Показать
+Show a second map beside this one.	Показать вторую карту рядом с этой.
+Show details when hovering items in the Catalog view.	Показывать сведения при наведении на элементы в виде каталога.
+Show different features at different scales.	Показывать разные объекты при разных масштабах.
 Show latitude/longitude lines on the basemap.	Показывать линии широты и долготы на базовой карте.
+Show Map	Показать карту
 Show or hide	Показать или скрыть
+Show or hide the AI Assistant.	Показать или скрыть ИИ-помощника.
 Show or hide the Catalog pane.	Показать или скрыть панель «Каталог».
 Show or hide the Contents pane.	Показать или скрыть панель «Содержание».
 Show or hide the Geoprocessing pane.	Показать или скрыть панель «Геообработка».
 Show or hide the layer.	Показать или скрыть слой.
 Show the labels that don't fit, in red.	Показывать неразмещённые подписи красным.
+Show the layer only inside another layer's polygons.	Показывать слой только внутри полигонов другого слоя.
+Show the layer only left of a divider, to compare it with what's beneath.	Показывать слой только слева от разделителя, чтобы сравнить его с нижележащим.
 Show the map as a 3D globe, or as a flat map again.	Показать карту в виде 3D-глобуса или снова в виде плоской карты.
+Show the next map series page.	Показать следующую страницу серии карт.
+Show the pointer's place on the other map.	Показывать положение указателя на другой карте.
+Show the previous map series page.	Показать предыдущую страницу серии карт.
 Show the Symbology pane for the selected layer.	Показать панель «Символы» для выбранного слоя.
+Show vertices	Показывать вершины
+Side by Side	Рядом
 Simplify	Упростить
+Simulation	Моделирование
 Single Symbol	Единый символ
 Size	Размер
 Size, bands, statistics and coordinate system.	Размер, каналы, статистика и система координат.
+Slideshow, PDF or PNG	Слайд-шоу, PDF или PNG
+Slope, aspect, hillshade, NDVI, band math, thresholds.	Уклон, экспозиция, отмывка рельефа, NDVI, растровая алгебра, пороги.
+Slope, hillshade, NDVI and more.	Уклон, отмывка рельефа, NDVI и другое.
+Small scales	Мелкие масштабы
+Snap new vertices to nearby vertices, edges and line ends.	Привязывать новые вершины к ближайшим вершинам, рёбрам и концам линий.
+Snap Point	Точка привязки
+Snapping	Привязка
+Snow	Снег
 Source	Источник
 South	Юг
 South Polar Stereographic	Южная полярная стереографическая
+Speaker notes	Заметки докладчика
+Spectral Analysis	Спектральный анализ
+Spectral indices	Спектральные индексы
+Speed Display	Отображение скорости
+Split	Разделить
+Split (click the line)	Разделить (щёлкните по линии)
+SQL that must be true, e.g. pop > 0	SQL-условие, которое должно быть истинным, напр. pop > 0
 Square	Квадрат
+Squares	Квадраты
 Standalone Tables	Отдельные таблицы
 Standard Deviation	Стандартное отклонение
 Star	Звезда
 Start	Начало
+Start Over	Начать заново
 Statistics	Статистика
 Statistics Field	Поле статистики
+Status	Состояние
 Status Bar	Строка состояния
 Std. Dev.	Ст. откл.
+Step through a task.	Пошаговое выполнение задачи.
+Step {n} done	Шаг {n} выполнен
+Stop	Остановить
 Stop drawing labels, for faster navigation.	Не отображать подписи для ускорения навигации.
+Stop filling the cache.	Прекратить заполнение кэша.
+Stopped.	Остановлено.
 Stretch	Растяжка
 Stretch\nType	Тип\nрастяжки
+Stretch it over the map view, or give control points (one per line: column row lon lat).	Растяните его по виду карты или задайте контрольные точки (по одной в строке: column row lon lat).
 Stretch Type	Тип растяжки
 Stretch type	Тип растяжки
+Style	Стиль
+Style Items	Элементы стилей
+Styles	Стили
+Subreport	Подотчёт
+Subreport: {name}	Подотчёт: {name}
+Subtypes	Подтипы
+Subtypes, one per line: code=name	Подтипы, по одному в строке: код=имя
+Suitability Modeler	Моделирование пригодности
 Summarize	Сводка
 Summarize\nWithin	Сводка\nвнутри
 Summarize Within	Сводка внутри
 Summary\nStatistics	Сводная\nстатистика
 Summary Statistics	Сводная статистика
+Supplemental Page	Дополнительная страница
+Supplemental Page After	Дополнительная страница после
+Surface	Поверхность
+Surface: {layer}	Поверхность: {layer}
+Swipe	Шторка
 Switch	Инвертировать
 Switch between light and dark themes.	Переключение между светлой и тёмной темами.
 Switch Selection	Инвертировать выборку
 Switch selection	Инвертировать выборку
+Switch to a dark basemap	Переключиться на тёмную базовую карту
 Symbol	Символ
 Symbol Color	Цвет символа
 Symbology	Символы
 Symbology Pane	Панель символов
 Symbology Pane…	Панель символов…
+Sync	Синхронизировать
+tab is required	требуется tab
 Table	Таблица
+Table Frame	Фрейм таблицы
 Tables	Таблицы
+Take the data in view offline, to edit and sync back later.	Перевести данные в пределах вида в автономный режим, чтобы редактировать и затем синхронизировать.
+Task	Задача
+Task Item	Элемент задачи
+Tasks	Задачи
+Tasks: guided steps that each run a command.	Задачи: пошаговые инструкции, каждый шаг которых выполняет команду.
+Template name	Имя шаблона
+Templates	Шаблоны
 Terrain	Рельеф
 Text	Текст
 Text Symbol	Текстовый символ
+The assistant is busy; stop it or wait for it to finish.	Помощник занят; остановите его или дождитесь завершения.
+The assistant wants to run this, and {why}:	Помощник хочет выполнить следующее, но это действие {why}:
+the capture failed unexpectedly	снимок неожиданно завершился ошибкой
+the Help tab always shows	вкладка «Справка» отображается всегда
+The job covers the map view	Задание охватывает вид карты
+The key is kept for this session only.	Ключ хранится только в течение этого сеанса.
+the layout export failed unexpectedly	экспорт макета неожиданно завершился ошибкой
 The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	Список модулей для просмотра. Оставьте пустым, чтобы использовать каталог модулей RustGIS.
 the map has no layers	на карте нет слоёв
 The map is drawn in this coordinate system; layers are projected on the fly.	Карта рисуется в этой системе координат; слои проецируются на лету.
+The map view as it is now	Вид карты в текущем состоянии
+The model answering; click to change it	Модель, которая отвечает; щёлкните, чтобы сменить
+the model declined this request	модель отклонила этот запрос
+The model sent an empty reply; ask again, or try another model.	Модель прислала пустой ответ; спросите ещё раз или попробуйте другую модель.
+the page is too large to draw	страница слишком велика для отрисовки
+the presentation export failed unexpectedly	экспорт презентации неожиданно завершился ошибкой
+the preview failed unexpectedly	предпросмотр неожиданно завершился ошибкой
+The project's items in place of the map.	Элементы проекта вместо карты.
+The project's thumbnail, from an image.	Эскиз проекта из изображения.
+The project's thumbnail, from the map view.	Эскиз проекта из вида карты.
 The raster's data couldn't be read.	Не удалось прочитать данные растра.
 The raster's data couldn't be read: {path}	Не удалось прочитать данные растра: {path}
+the reply reached its length limit	ответ достиг предельной длины
+the report export failed unexpectedly	экспорт отчёта неожиданно завершился ошибкой
 Thermal	Тепловая
+Thinking…	Думает…
+this build can't download plugins	эта сборка не может загружать модули
+this build can't reach AI providers	эта сборка не может подключаться к поставщикам ИИ
 This map has no layers yet.	На этой карте пока нет слоёв.
+This map's thumbnail, from an image.	Эскиз этой карты из изображения.
+This map's thumbnail, from the view.	Эскиз этой карты из вида.
 This plugin can:	Этот модуль может:
+Thumbnail	Эскиз
+Tile Layer Properties	Свойства слоя тайлов
+Tile Layers	Слои тайлов
+Tilt-shift	Тилт-шифт
+Tilt-shift blur and film grain.	Размытие тилт-шифт и зернистость плёнки.
 Tint by elevation	Окраска по высоте
+Title	Заголовок
 Toggle Dark Mode	Переключить тёмную тему
 Tolerance (km)	Допуск (км)
+Tool Gallery	Галерея инструментов
 Toolbox	Набор инструментов
 Toolboxes	Наборы инструментов
 Tools	Инструменты
+Tools that analyse features.	Инструменты для анализа объектов.
+Tools that analyse rasters.	Инструменты для анализа растров.
 Tools you run appear here.	Здесь появятся запущенные инструменты.
 Topmost Layer	Верхний слой
+Topology	Топология
+Topology Options	Параметры топологии
+Topology Options…	Параметры топологии…
+Topology rules and the errors they find.	Правила топологии и найденные ими ошибки.
 Total {total}   ·   Segment {segment}	Всего {total}   ·   Сегмент {segment}
+Track jobs and their status.	Отслеживание заданий и их состояния.
+Train a neural network on training polygons	Обучить нейросеть на обучающих полигонах
+Train a neural network on training polygons and classify every pixel.	Обучить нейросеть на обучающих полигонах и классифицировать каждый пиксель.
+Train And Classify	Обучить и классифицировать
+Train Deep Learning Model	Обучить модель глубокого обучения
+Trained models	Обученные модели
 Transparency	Прозрачность
+Traverse	Ход
 Triangle	Треугольник
+Turn editing on or off for the map.	Включить или выключить редактирование карты.
 Turn Labels Off	Выключить подписи
 Turn labels on or off for the selected layer.	Включить или выключить подписи для выбранного слоя.
 Turn labels on or off.	Включить или выключить подписи.
+Turn Off	Выключить
 Type	Тип
 Unavailable: {reason}	Недоступно: {reason}
 Undo	Отменить
@@ -757,33 +1676,76 @@ Uninstall Plugin	Удалить модуль
 Uninstalled {id}.	Модуль {id} удалён.
 Unique Values	Уникальные значения
 Units	Единицы
+Unsupervised classes (k-means)	Классы без учителя (k-средних)
+Unsupervised classes (k-means).	Классы без учителя (k-средних).
 Update	Обновить
+Update Job	Обновить задание
 Update to {version}	Обновить до {version}
+Upload File	Загрузить файл
+Upload File…	Загрузить файл…
 USA Contiguous Albers Equal Area	Равновеликая Альберса для смежных штатов США
+Valid combinations, one per line: a, b	Допустимые сочетания, по одному в строке: a, b
 Valid expression · {n} matching rows	Выражение допустимо · Подходящих строк: {n}
+Validate	Проверить
+value (empty: no-data)	значение (пусто: нет данных)
 Vector and raster data	Векторные и растровые данные
 Vector tiles (MVT)	Векторные тайлы (MVT)
 Version {version}	Версия {version}
+Vertex	Вершина
+Video	Видео
+Video file or URL	Видеофайл или URL
+Video Page	Страница видео
+Videos	Видео
+Video…	Видео…
 View	Вид
+View Clipping	Обрезка вида
+View Effects	Эффекты вида
 View Unplaced	Показать неразмещённые
 View › Windows	Вид › Окна
+Viewshed from a point	Зона видимости из точки
+Vignette	Виньетка
+Vignette and edge outlines.	Виньетка и контуры краёв.
 Visibility	Видимость
+Visibility Analysis	Анализ видимости
 Visibility Range	Диапазон видимости
 Visible	Видимый
 Visible Layers	Видимые слои
+Visual Effect	Визуальный эффект
+Volume	Объём
+Walk	Ходьба
+Weather	Погода
+Web\nMap	Веб-\nкарта
+Web Layer	Веб-слой
+Web Link Chart	Веб-диаграмма связей
 Web Mercator	Web Mercator
+Web Scene	Веб-сцена
+Web Style	Веб-стиль
 Web Tile Layers	Слои веб-тайлов
+Web Tool	Веб-инструмент
 Website	Веб-сайт
+Weights	Веса
 Welcome to RustGIS	Добро пожаловать в RustGIS
 West	Запад
 WGS 84 / Globe	WGS 84 / Глобус
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
+What's near a point	Что находится рядом с точкой
 Where	Где
 Where Clause	Условие WHERE
 Where labels sit relative to their features.	Положение подписей относительно их объектов.
+Where new features get their elevation (the z field).	Откуда новые объекты получают высоту (поле z).
+Where tools work	Где работают инструменты
+Which 5 countries have the largest GDP?	У каких 5 стран самый большой ВВП?
+Whose borders the sample countries and the basemap outline show.	Чьи границы показывают примеры стран и контуры базовой карты.
+Width (mm)	Ширина (мм)
 Windows	Окна
 Winkel Tripel	Винкель-Трипель
+Wireframe	Каркас
 Withdrawn	Отозван
+Workflow Manager	Менеджер рабочих процессов
+Workflows	Рабочие процессы
+Workspace	Рабочее пространство
+Workspace cell size and blending.	Размер ячейки и смешивание рабочего пространства.
+Workspace Options	Параметры рабочего пространства
 World	Мир
 World Atlas	Атлас мира
 World Atlas Sample	Пример «Атлас мира»
@@ -798,10 +1760,16 @@ World, equal-area, cylindrical: true sizes, flattened near the poles.	Мир, р
 World, equal-area: true sizes with a Robinson-like look.	Мир, равновеликая: истинные площади, внешне похожа на проекцию Робинсона.
 World, equal-area: true sizes with rounded poles.	Мир, равновеликая: истинные площади со скруглёнными полюсами.
 World, equal-area: true sizes, shapes bend towards the edges.	Мир, равновеликая: истинные площади, формы изгибаются к краям.
+Worldview	Границы
 Write a plugin	Написать модуль
+X (mm)	X (мм)
+Y (mm)	Y (мм)
 Yes	Да
+z (m)	z (м)
 Z factor	Z-фактор
+Zoom	Масштаб
 Zoom about the pointer	Масштабирование относительно указателя
+Zoom Frame	Масштабировать фрейм
 Zoom In	Приблизить
 Zoom in	Приблизить
 Zoom in / out	Приблизить / отдалить
@@ -814,13 +1782,16 @@ Zoom To	Приблизить к
 Zoom To\nLayer	Приблизить\nк слою
 Zoom to a box (Explore)	Приблизить к рамке (обзор)
 Zoom To Layer	Приблизить к слою
+Zoom To Map View	Приблизить к виду карты
 Zoom To Selection	Приблизить к выборке
 Zoom to selection	Приблизить к выборке
+Zoom to the error	Приблизить к ошибке
 Zoom to the extent of all layers.	Приблизить к экстенту всех слоёв.
 Zoom to the layer's extent.	Приблизить к экстенту слоя.
 Zoom to the selected features.	Приблизить к выбранным объектам.
 Zoom to the selection.	Приблизить к выборке.
 Zoom to the whole world.	Показать весь мир.
+Zoom to Tokyo	Приблизить к Токио
 Zoom To World	Приблизить к миру
 {id} changed since it was installed; install it again from the Plugin Manager.	Модуль {id} изменился после установки; установите его заново через Менеджер модулей.
 {name} was withdrawn from the plugin registry and has been turned off.	Модуль {name} отозван из каталога модулей и отключён.
@@ -829,66 +1800,6 @@ Zoom To World	Приблизить к миру
 {name}: the download is a different plugin; it wasn't installed.	{name}: загружен другой модуль; модуль не установлен.
 {shown} of {total} plugins	Модулей: {shown} из {total}
 {total} plugins	Модулей: {total}
-⌘K	⌘K
-Scroll the ribbon left	Прокрутить ленту влево
-Scroll the ribbon right	Прокрутить ленту вправо
-Scroll the tabs left	Прокрутить вкладки влево
-Scroll the tabs right	Прокрутить вкладки вправо
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: разрешены только адреса HTTPS или обычный HTTP на этом компьютере или в этой сети
-The assistant is busy; stop it or wait for it to finish.	Помощник занят; остановите его или дождитесь завершения.
-The model answering; click to change it	Модель, которая отвечает; щёлкните, чтобы сменить
-Assistant settings	Настройки помощника
-New conversation	Новый разговор
-AI provider	Поставщик ИИ
-Provider	Поставщик
-Model	Модель
-model id	идентификатор модели
-List the provider's models	Показать модели поставщика
-API key	Ключ API
-not needed	не требуется
-paste your key	вставьте ключ
-Hide	Скрыть
-Show	Показать
-Remember the key on this computer	Запомнить ключ на этом компьютере
-On the desktop, the key can also come from {vars}.	На компьютере ключ также может браться из {vars}.
-Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Сохранённые ключи хранятся в настройках приложения в незашифрованном виде (в веб-версии — в хранилище браузера).
-The key is kept for this session only.	Ключ хранится только в течение этого сеанса.
-Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	Запросы отправляют поставщику ваше сообщение, а также названия слоёв карты, их поля и строки, прочитанные помощником.
-Get it	Получить
-Get a key	Получить ключ
-Allow this action?	Разрешить это действие?
-The assistant wants to run this, and {why}:	Помощник хочет выполнить следующее, но это действие {why}:
-Allow such actions for this conversation	Разрешать такие действия в этом разговоре
-Allow	Разрешить
-Decline	Отклонить
-Ask about the map, or tell it what to do…	Спросите о карте или скажите, что сделать…
-Enter to send, Shift+Enter for a new line	Enter — отправить, Shift+Enter — новая строка
-Stop	Остановить
-Send	Отправить
-Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Задайте вопрос о своих данных или опишите, что сделать с картой. Помощник выполняет команды RustGIS за вас; любое изменение можно отменить.
-Thinking…	Думает…
-Which 5 countries have the largest GDP?	У каких 5 стран самый большой ВВП?
-Zoom to Tokyo	Приблизить к Токио
-Label the cities with their names	Подписать города их названиями
-Buffer the cities by 200 km	Построить буфер 200 км вокруг городов
-Switch to a dark basemap	Переключиться на тёмную базовую карту
-AI	ИИ
-AI\nAssistant	Помощник\nИИ
-Ask about your data, or tell the assistant what to do with the map.	Спросите о своих данных или скажите помощнику, что сделать с картой.
-AI Assistant	ИИ-помощник
-Show or hide the AI Assistant.	Показать или скрыть ИИ-помощника.
-Ollama (local)	Ollama (локально)
-OpenAI-compatible	Совместимый с OpenAI
-Google Gemini	Google Gemini
-Choose a model.	Выберите модель.
-Enter the provider's address.	Введите адрес поставщика.
-Enter an API key.	Введите ключ API.
-Stopped.	Остановлено.
-The model sent an empty reply; ask again, or try another model.	Модель прислала пустой ответ; спросите ещё раз или попробуйте другую модель.
-it runs a plugin's command	запускает команду модуля
-it replaces the open project	заменяет открытый проект
-it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	доступно только вам (модули, скрипты, задачи, модели и средство запуска GeoLibre)
-it reads or writes files on this computer	читает или записывает файлы на этом компьютере
-it connects to an address on the internet	подключается к адресу в интернете
-the reply reached its length limit	ответ достиг предельной длины
-the model declined this request	модель отклонила этот запрос
+© OpenStreetMap contributors	© участники OpenStreetMap
+⌘K	⌘K
