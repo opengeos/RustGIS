@@ -93,7 +93,7 @@ fn open_inputs(s: &mut Session, args: &[String]) -> Result<(), String> {
 fn ask(s: &mut Session, args: &[String]) -> Result<(), String> {
     use rustgis_assistant::{Agent, Config, Entry, agent, http, provider};
     // The first value that isn't an option's.
-    let takes_value = ["--provider", "--model", "--base-url", "--project", "--data", "--save", "--trace"];
+    let takes_value = ["--provider", "--model", "--base-url", "--project", "--data", "--save", "--trace", "--plugin", "--registry"];
     let prompt = args
         .iter()
         .enumerate()

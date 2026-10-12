@@ -58,7 +58,7 @@ pub struct Agent {
     last_context: String,
     /// Goes up when a run is stopped or cleared: responses to older requests are dropped.
     generation: u64,
-    /// Calls approved for the rest of the conversation, by approval reason.
+    /// Commands approved for the rest of the conversation (see [`tools::approval_key`]).
     always: Vec<String>,
     system: String,
 }
@@ -87,12 +87,18 @@ impl Agent {
         matches!(self.state, State::Waiting)
     }
 
-    /// The call waiting for the user's approval: (summary, reason).
-    pub fn pending(&self, s: &Session) -> Option<(String, String)> {
+    /// The call waiting for the user's approval: (summary, reason, whether it may be allowed for
+    /// the rest of the conversation).
+    pub fn pending(&self, s: &Session) -> Option<(String, String, bool)> {
         let State::Calls(q, _) = &self.state else { return None };
         let call = q.front()?;
         let reason = tools::gate(s, call)?;
-        (!self.always.contains(&reason)).then(|| (tools::summary(call), reason))
+        (!self.approved(s, call)).then(|| (tools::summary(call), reason, tools::approval_key(s, call).is_some()))
+    }
+
+    /// Whether the user allowed calls like this one for the rest of the conversation.
+    fn approved(&self, s: &Session, call: &ToolCall) -> bool {
+        tools::approval_key(s, call).is_some_and(|k| self.always.contains(&k))
     }
 
     /// Changes in the generation tell a caller its response is stale.
@@ -173,9 +179,7 @@ impl Agent {
         loop {
             let State::Calls(q, _) = &self.state else { return Step::Done };
             let Some(call) = q.front().cloned() else { break };
-            if let Some(reason) = tools::gate(s, &call)
-                && !self.always.contains(&reason)
-            {
+            if tools::gate(s, &call).is_some() && !self.approved(s, &call) {
                 return Step::Confirm;
             }
             self.run_front(s, true);
@@ -220,9 +224,10 @@ impl Agent {
         }
         if allow
             && always
-            && let Some((_, reason)) = self.pending(s)
+            && let State::Calls(q, _) = &self.state
+            && let Some(key) = q.front().and_then(|c| tools::approval_key(s, c))
         {
-            self.always.push(reason);
+            self.always.push(key);
         }
         self.run_front(s, allow);
         self.drain(s)
@@ -325,7 +330,7 @@ pub fn run_blocking(
                 agent.receive(g, r, s)
             }
             Step::Confirm => {
-                let allow = agent.pending(s).is_some_and(|(what, why)| confirm(&what, &why));
+                let allow = agent.pending(s).is_some_and(|(what, why, _)| confirm(&what, &why));
                 agent.decide(allow, false, s)
             }
             Step::Done => return,

@@ -128,6 +128,21 @@ pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
     }
 }
 
+/// What "allow for this conversation" remembers for a call: its command (a tool's id for
+/// `gp.run`), and only for file and network access. Plugin commands, the user's own automation and
+/// replacing the project are asked about every time.
+pub fn approval_key(s: &Session, call: &ToolCall) -> Option<String> {
+    let id = match call.name.as_str() {
+        "run_command" => str_arg(&call.args, "command")?,
+        "run_tool" => format!("gp.run:{}", str_arg(&call.args, "tool")?),
+        _ => return None,
+    };
+    if id.starts_with(rustgis_engine::plugins::PREFIX) || user_only(&id) || s.registry.get(id.split(':').next().unwrap_or("")).is_none() {
+        return None;
+    }
+    Some(id)
+}
+
 /// A one-line description of a call for the transcript and the approval prompt.
 pub fn summary(call: &ToolCall) -> String {
     let short = |v: Value| {
@@ -339,11 +354,24 @@ fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
         };
         let fi =
             ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case(&by)).ok_or_else(|| format!("{} has no field '{by}'", l.name))?;
-        let val = |r: &usize| ds.features.get(*r).and_then(|f| f.attrs.get(fi)).cloned().unwrap_or_default();
-        rows.sort_by(|x, y| val(x).partial_cmp(&val(y)).unwrap_or(std::cmp::Ordering::Equal));
-        if desc {
-            rows.reverse();
-        }
+        // A total order (a partial one can make `sort_by` panic): numbers, then text, then empty
+        // values.
+        let key = |r: usize| -> (u8, f64, String) {
+            match ds.features.get(r).and_then(|f| f.attrs.get(fi)) {
+                Some(rustgis_engine::data::Value::Null) | None => (2, 0.0, String::new()),
+                Some(v) => match v.as_f64() {
+                    Some(x) => (0, x, String::new()),
+                    None => (1, 0.0, v.to_string().to_lowercase()),
+                },
+            }
+        };
+        let mut keyed: Vec<(usize, (u8, f64, String))> = rows.iter().map(|&r| (r, key(r))).collect();
+        // Descending reverses within numbers and within text; empty values stay last.
+        keyed.sort_by(|(_, a), (_, b)| {
+            let within = a.1.total_cmp(&b.1).then_with(|| a.2.cmp(&b.2));
+            a.0.cmp(&b.0).then(if desc { within.reverse() } else { within })
+        });
+        rows = keyed.into_iter().map(|(r, _)| r).collect();
     }
     let limit = limit_arg(a, 20, 200);
     let out: Vec<Value> = rows

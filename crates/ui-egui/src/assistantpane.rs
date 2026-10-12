@@ -41,6 +41,15 @@ pub struct AssistantState {
     /// "Allow for this conversation" in the approval card.
     always: bool,
     loaded: bool,
+    /// Settings changed and not yet saved: they are saved once no settings field is being typed in.
+    unsaved: bool,
+}
+
+/// The settings fields typed into (saved when none has focus).
+const FIELDS: [&str; 3] = ["assistant_model", "assistant_url", "assistant_key"];
+
+fn typing(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| FIELDS.iter().any(|f| m.has_focus(egui::Id::new(f))))
 }
 
 fn pref(app: &RustGisApp, key: &str) -> Option<String> {
@@ -168,8 +177,15 @@ fn with_agent(app: &mut RustGisApp, f: impl FnOnce(&mut Agent, &mut rustgis_engi
     Some(step)
 }
 
-/// Per-frame: responses that arrived, and a message queued by a command.
+/// Per-frame: responses that arrived, a message queued by a command, and settings to save.
 pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
+    if app.assistant.unsaved && !typing(ctx) {
+        app.assistant.unsaved = false;
+        save_pref(app, "assistant_remember_key", if app.assistant.remember_key { "on" } else { "off" });
+        if let Some(cfg) = app.assistant.agent.as_ref().map(|a| a.config.clone()) {
+            save_config(app, &cfg);
+        }
+    }
     if let Some(text) = app.assistant.queued.take() {
         ensure_loaded(app);
         if app.assistant.agent.as_ref().is_some_and(Agent::busy) {
@@ -292,7 +308,7 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.end_row();
         ui.label(tl!("Model"));
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut cfg.model).desired_width(150.0).hint_text(tl!("model id")));
+            ui.add(egui::TextEdit::singleline(&mut cfg.model).id(egui::Id::new(FIELDS[0])).desired_width(150.0).hint_text(tl!("model id")));
             if !app.assistant.models.is_empty() {
                 egui::ComboBox::from_id_salt("assistant_models").selected_text("").width(24.0).height(320.0).show_ui(ui, |ui| {
                     for m in &app.assistant.models {
@@ -315,13 +331,19 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         });
         ui.end_row();
         ui.label(tl!("Address"));
-        ui.add(egui::TextEdit::singleline(&mut cfg.base_url).desired_width(200.0));
+        ui.add(egui::TextEdit::singleline(&mut cfg.base_url).id(egui::Id::new(FIELDS[1])).desired_width(200.0));
         ui.end_row();
         let preset = provider::preset(&cfg.provider);
         ui.label(tl!("API key"));
         ui.horizontal(|ui| {
             let hint = if preset.is_some_and(|p| p.keyless) { tl!("not needed") } else { tl!("paste your key") };
-            ui.add(egui::TextEdit::singleline(&mut cfg.key).password(!app.assistant.show_key).desired_width(150.0).hint_text(hint));
+            ui.add(
+                egui::TextEdit::singleline(&mut cfg.key)
+                    .id(egui::Id::new(FIELDS[2]))
+                    .password(!app.assistant.show_key)
+                    .desired_width(150.0)
+                    .hint_text(hint),
+            );
             let eye = if app.assistant.show_key { tl!("Hide") } else { tl!("Show") };
             if ui.small_button(eye).clicked() {
                 app.assistant.show_key = !app.assistant.show_key;
@@ -359,8 +381,7 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.label(RichText::new(tl!(why)).small().color(t.amber));
     }
     if (cfg.clone(), app.assistant.remember_key) != before {
-        save_pref(app, "assistant_remember_key", if app.assistant.remember_key { "on" } else { "off" });
-        save_config(app, &cfg);
+        app.assistant.unsaved = true;
         if let Some(a) = app.assistant.agent.as_mut() {
             a.config = cfg;
         }
@@ -370,14 +391,19 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 fn composer(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, busy: bool, ctx: &egui::Context) {
     // An action waiting for approval comes first.
     let pending = app.assistant.agent.as_ref().and_then(|a| a.pending(&app.session));
-    if let Some((what, why)) = pending {
+    if let Some((what, why, can_always)) = pending {
         egui::Frame::NONE.fill(t.amber.gamma_multiply(0.15)).corner_radius(6).inner_margin(8).stroke(egui::Stroke::new(1.0, t.amber)).show(
             ui,
             |ui| {
                 ui.label(RichText::new(tl!("Allow this action?")).font(semibold(12.5)));
                 ui.label(RichText::new(crate::i18n::fmt("The assistant wants to run this, and {why}:", &[("why", tl!(&why))])).small());
                 ui.label(RichText::new(what).monospace().small());
-                ui.checkbox(&mut app.assistant.always, tl!("Allow such actions for this conversation"));
+                // Plugin commands, scripts and replacing the project are asked about every time.
+                if can_always {
+                    ui.checkbox(&mut app.assistant.always, tl!("Allow such actions for this conversation"));
+                } else {
+                    app.assistant.always = false;
+                }
                 ui.horizontal(|ui| {
                     let allow = crate::widgets::primary_button(ui, tl!("Allow"), true, vec2(70.0, 26.0)).clicked();
                     let deny = ui.button(tl!("Decline")).clicked();

@@ -128,7 +128,7 @@ fn file_access_needs_approval() {
     let step =
         a.receive(a.generation(), ok(call("c1", "run_command", json!({"command": "share.exportMap", "params": {"path": path}}))), &mut s);
     assert_eq!(step, Step::Confirm);
-    let (what, why) = a.pending(&s).unwrap_or_default();
+    let (what, why, _) = a.pending(&s).unwrap_or_default();
     assert!(what.starts_with("share.exportMap") && why.contains("files"), "{what} / {why}");
     let Step::Send(req) = a.decide(false, false, &mut s) else { panic!("expected a request") };
     assert!(!path.exists());
@@ -368,4 +368,60 @@ fn empty_replies_are_reported() {
     let empty = json!({"choices": [{"message": {"role": "assistant", "content": "", "reasoning": "…"}, "finish_reason": "stop"}]});
     assert_eq!(a.receive(a.generation(), ok(empty), &mut s), Step::Done);
     assert!(matches!(a.transcript.last(), Some(Entry::Note(n)) if n.contains("empty")));
+}
+
+#[test]
+fn ordering_mixed_columns_never_panics() {
+    use rustgis_engine::data::Value as V;
+    let mut s = sample();
+    let id = s.layer_id(&json!({"layer": "Cities"})).unwrap_or(0);
+    // A column of mixed numbers, numeric text, words, NaN and nulls.
+    let mixed = [V::Int(5), V::Text("abc".into()), V::Text("10".into()), V::Float(f64::NAN), V::Null, V::Text("9".into()), V::Bool(true)];
+    if let Some(l) = s.map_mut().layer_mut(id) {
+        let fi = l.dataset.fields.iter().position(|f| f.name == "name").unwrap_or(0);
+        for (i, f) in l.dataset.features.iter_mut().enumerate() {
+            if let Some(a) = f.attrs.get_mut(fi) {
+                *a = mixed[i % mixed.len()].clone();
+            }
+        }
+    }
+    let t = ToolCall {
+        id: "x".into(),
+        name: "read_features".into(),
+        args: json!({"layer": "Cities", "order_by": "name DESC", "fields": ["name"], "limit": 30}),
+    };
+    let r = tools::run(&mut s, &t);
+    let v: Value = r.as_deref().ok().and_then(|r| serde_json::from_str(r).ok()).unwrap_or(Value::Null);
+    let rows = v["rows"].as_array().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 30, "{r:?}");
+    // Numbers (numeric text too) first, largest first; empty values last.
+    assert_eq!(rows[0]["name"], "10", "{r:?}");
+    assert!(rows.iter().all(|r| !r["name"].is_null()), "{r:?}");
+}
+
+#[test]
+fn always_allow_is_per_command_and_never_for_reserved_actions() {
+    let mut s = sample();
+    let mut a = Agent::new(cfg("openai"), &s);
+    let Step::Send(_) = a.ask("x", &s) else { panic!("expected a request") };
+    let dir = std::env::temp_dir();
+    let export = |n: u32| json!({"command": "share.exportLayer", "params": {"layer": "Lakes", "path": dir.join(format!("rustgis-assistant-test-{n}.geojson"))}});
+    let reply = json!({"choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [
+        {"id": "c1", "type": "function", "function": {"name": "run_command", "arguments": export(1).to_string()}},
+        {"id": "c2", "type": "function", "function": {"name": "run_command", "arguments": export(2).to_string()}},
+        {"id": "c3", "type": "function", "function": {"name": "run_command", "arguments": json!({"command": "map.addTiles", "params": {"url": "https://t.example/{z}/{x}/{y}.png"}}).to_string()}},
+        {"id": "c4", "type": "function", "function": {"name": "run_command", "arguments": json!({"command": "project.new"}).to_string()}}
+    ]}, "finish_reason": "tool_calls"}]});
+    assert_eq!(a.receive(a.generation(), ok(reply), &mut s), Step::Confirm);
+    assert!(a.pending(&s).is_some_and(|p| p.2));
+    // Allowing the export for the conversation lets the second export through, not the tiles.
+    assert_eq!(a.decide(true, true, &mut s), Step::Confirm);
+    assert!(a.pending(&s).is_some_and(|p| p.0.starts_with("map.addTiles")));
+    assert_eq!(a.decide(false, false, &mut s), Step::Confirm);
+    // Replacing the project is never allowed for good.
+    assert!(a.pending(&s).is_some_and(|p| p.0.starts_with("project.new") && !p.2));
+    let _ = a.decide(false, false, &mut s);
+    for n in [1, 2] {
+        let _ = std::fs::remove_file(dir.join(format!("rustgis-assistant-test-{n}.geojson")));
+    }
 }
