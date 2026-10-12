@@ -3,7 +3,7 @@ name = "rustgis-data"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "RustGIS L1: feature model, attribute values, vector I/O (GeoJSON, CSV, Shapefile), data providers (GeoParquet, FlatGeobuf, GeoPackage) and rasters (GeoTIFF, ASCII grid)"
+description = "RustGIS L1: feature model, attribute values, vector I/O (GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet, FlatGeobuf, KML/KMZ, GPX), data providers (GeoParquet, FlatGeobuf, GeoPackage) and rasters (GeoTIFF, ASCII grid)"
 
 [lints]
 workspace = true

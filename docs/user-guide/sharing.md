@@ -6,7 +6,8 @@
 bar and tile credits (`share.exportMap` on the command line); **Print Map** sends it through
 the system's PDF viewer, **Capture To Clipboard** copies it, and **Export To 3D** writes a layer
 as a Wavefront OBJ model with polygons extruded by a field. **Data › Export** (or the Export
-Features tool) writes a layer to GeoJSON or CSV, **Raster Data › Export** a raster to GeoTIFF, and
+Features tool) writes a layer to GeoJSON, CSV, GeoPackage, GeoParquet, Shapefile, FlatGeobuf, KML,
+KMZ or GPX (see [Writing](data-formats.md#writing)), **Raster Data › Export** a raster to GeoTIFF, and
 **Data Interop** converts layers to KML, GPX or CSV with WKT. Layouts, reports and presentations
 export to PDF from their own tabs and panes (see [Layouts and Reports](layouts.md)).
 

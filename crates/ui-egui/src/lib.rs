@@ -1294,9 +1294,15 @@ impl RustGisApp {
                     .active_layer
                     .and_then(|id| self.session.map().layer(id))
                     .ok_or("select a layer in the Contents pane first")?;
-                let text = rustgis_engine::data::io::to_geojson(&l.dataset).to_string();
-                let name = format!("{}.geojson", l.name);
-                self.download(&name, text.into_bytes());
+                // GeoJSON unless a format is asked for (any but GeoPackage, which needs SQLite).
+                let ext = p.get("format").and_then(Value::as_str).unwrap_or("geojson").to_ascii_lowercase();
+                // A streamed layer exports its whole source, not the features read for the view.
+                let whole = if l.is_streamed() { Some(l.load_all()?) } else { None };
+                let (bytes, _) =
+                    rustgis_engine::data::io::write_bytes(whole.as_ref().unwrap_or(&l.dataset), &ext).map_err(|e| e.to_string())?;
+                let ext = if ext == "shp" { "zip".to_string() } else { ext };
+                let name = format!("{}.{ext}", l.name);
+                self.download(&name, bytes);
             }
             "ui.exportRaster" if self.services.download.is_some() => {
                 // The web app: encode once and download.
@@ -1334,7 +1340,19 @@ impl RustGisApp {
                     .and_then(|id| self.session.map().layer(id))
                     .map(|l| format!("{}.geojson", l.name))
                     .unwrap_or_default();
-                if let Some(path) = dialogs::pick_save(&name, &["geojson", "csv", "fgb"], tl!("GeoJSON, CSV or FlatGeobuf")) {
+                // Format names aren't translated.
+                let formats: &[(&str, &[&str])] = &[
+                    ("GeoJSON", &["geojson", "json"]),
+                    ("GeoPackage", &["gpkg"]),
+                    ("GeoParquet", &["parquet"]),
+                    ("Shapefile", &["shp"]),
+                    ("FlatGeobuf", &["fgb"]),
+                    ("CSV", &["csv"]),
+                    ("KML", &["kml"]),
+                    ("KMZ", &["kmz"]),
+                    ("GPX", &["gpx"]),
+                ];
+                if let Some(path) = dialogs::pick_save_as(&name, formats) {
                     return self.run("share.exportLayer", json!({"path": path}));
                 }
             }

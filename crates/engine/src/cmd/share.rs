@@ -1,4 +1,5 @@
-//! Share tab: export the map as PNG and layers as GeoJSON/CSV.
+//! Share tab: export the map as PNG and layers as GeoJSON, CSV, FlatGeobuf, GeoPackage,
+//! GeoParquet, Shapefile, KML/KMZ or GPX.
 
 use std::path::Path;
 
@@ -16,7 +17,7 @@ pub fn commands() -> Vec<C> {
         C::new("share.exportLayer", "Export Features", "Share › Output", export_layer)
             .view()
             .when(need_layer)
-            .params(r#"{"layer"?, "path": "*.geojson|*.csv|*.fgb"}"#),
+            .params(r#"{"layer"?, "path": "*.geojson|*.csv|*.fgb|*.gpkg|*.parquet|*.shp|*.zip|*.kml|*.kmz|*.gpx"}"#),
         C::new("share.exportTable", "Export Table", "Share › Output", |s, p| {
             let name = ps(p, "table").ok_or("table is required")?;
             let path = ps(p, "path").ok_or("path is required")?;
@@ -75,12 +76,12 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     // A streamed layer exports its whole source, not the features read for the view.
     let whole = if l.is_streamed() { Some(l.load_all()?) } else { None };
     let ds = whole.as_ref().unwrap_or(&l.dataset);
-    rustgis_data::io::write_path(ds, Path::new(&path)).map_err(|e| e.to_string())?;
-    // FlatGeobuf holds features with geometry only.
-    let without = ds.features.iter().filter(|f| f.geometry.is_none()).count();
-    if without > 0 && path.to_ascii_lowercase().ends_with(".fgb") {
-        s.notify(format!("{path}: {without} features without geometry were left out"), false);
+    let left_out = rustgis_data::io::write_path(ds, Path::new(&path)).map_err(|e| e.to_string())?;
+    let written = ds.features.len().saturating_sub(left_out);
+    // FlatGeobuf, KML, GPX and Shapefile hold features with geometry only.
+    if left_out > 0 {
+        s.notify(format!("{path}: {left_out} features without geometry were left out"), false);
     }
     s.notify(format!("Exported {path}"), false);
-    Ok(json!({"path": path}))
+    Ok(json!({"path": path, "features": written, "leftOut": left_out}))
 }

@@ -57,7 +57,7 @@ engine, choose RustGIS. Both keep your data on your machine.
 
 | | **RustGIS** | **GeoLibre** | **QGIS** | **ArcGIS Pro** | **ArcGIS Online** |
 |---|---|---|---|---|---|
-| **Format breadth** | Focused: GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet, FlatGeobuf (large files read in place); GeoTIFF/COG and ASCII grids; KML, GPX and WKT out; with GDAL installed, the vector formats it reads; with DuckDB, SQL queries over files and web addresses | Wide: DuckDB-WASM Spatial plus in-house readers | **Widest**: everything GDAL/OGR reads | Very wide, plus native Esri formats | Common upload formats |
+| **Format breadth** | Focused: GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet, FlatGeobuf in and out (large files read in place); GeoTIFF/COG and ASCII grids; KML, KMZ, GPX and WKT out; with GDAL installed, the vector formats it reads; with DuckDB, SQL queries over files and web addresses | Wide: DuckDB-WASM Spatial plus in-house readers | **Widest**: everything GDAL/OGR reads | Very wide, plus native Esri formats | Common upload formats |
 | **Cloud-native data** | GeoParquet, FlatGeobuf (large files read in place), PMTiles over HTTP byte ranges, cloud-optimised GeoTIFF (as files) | GeoParquet, FlatGeobuf, PMTiles, COG, Zarr, streamed over HTTP | GeoParquet, FlatGeobuf, PMTiles, COG, Zarr | GeoParquet, COG, Zarr | Hosted layers |
 | **Web maps and tiles** | XYZ/TMS/WMS raster tiles, Mapbox Vector Tiles, MapLibre styles | XYZ, WMS/WFS/WMTS, OGC API, vector tiles, MapLibre styles | Full OGC support, vector tiles | Full OGC support | Yes |
 | **Coordinate systems** | Rasters in any EPSG code, reprojected on the fly; the map in presets or projected EPSG codes | Reprojects on import, EPSG catalog | Full PROJ support | Full support | Web Mercator focus |
@@ -119,15 +119,15 @@ versioned editing, the deepest 3D and imagery workflows, or organizational suppo
 **Choose ArcGIS Online when** the priority is hosted layers, organizational sharing and the
 surrounding Esri app family.
 
-They also compose: RustGIS reads and writes GeoJSON, CSV and GeoTIFF, which every tool above
+They also compose: RustGIS reads and writes GeoJSON, CSV, GeoPackage, GeoParquet, Shapefile and GeoTIFF, which every tool above
 opens, and writes MapLibre styles and OGC API Features collections for the web.
 
 ## Where RustGIS is not the strongest option
 
 Stated plainly, so the tables above are worth trusting:
 
-- **Format breadth.** GeoPackage and GeoParquet are read but not written, and there is no
-  Shapefile writing or database connection (beyond DuckDB files) yet. Other vector formats (KML,
+- **Format breadth.** There is no database connection (beyond DuckDB files) yet, and the web
+  app doesn't write GeoPackages. Other vector formats (KML,
   File Geodatabase, DXF…) need GDAL installed, and SQL queries need DuckDB, which RustGIS calls
   rather than links; GDAL rasters aren't read.
 - **Coordinate systems.** Vector data is stored in longitude/latitude; there is no full PROJ.

@@ -421,6 +421,21 @@ pub fn pick_save(name: &str, exts: &[&str], label: &str) -> Option<String> {
     rfd::FileDialog::new().set_file_name(name).add_filter(label, exts).save_file().map(|p| p.display().to_string())
 }
 
+/// A save dialog with one filter per format: (label, extensions), the first selected.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn pick_save_as(name: &str, formats: &[(&str, &[&str])]) -> Option<String> {
+    formats
+        .iter()
+        .fold(rfd::FileDialog::new().set_file_name(name), |d, (label, exts)| d.add_filter(*label, exts))
+        .save_file()
+        .map(|p| p.display().to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn pick_save_as(_: &str, _: &[(&str, &[&str])]) -> Option<String> {
+    None
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn pick_open(_: &[&str], _: &str) -> Option<String> {
     None

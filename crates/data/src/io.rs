@@ -85,20 +85,79 @@ fn check_size(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Writes a dataset by extension (`.geojson`/`.json`, `.csv` or `.fgb`).
-pub fn write_path(ds: &Dataset, path: &Path) -> Result<()> {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    let text = match ext.as_str() {
-        "geojson" | "json" => serde_json::to_string(&to_geojson(ds)).map_err(|e| DataError::Format(e.to_string()))?,
-        "csv" => to_csv(ds)?,
-        "fgb" => {
-            write_atomic(path, &crate::source::fgb::write(ds)?)?;
-            return Ok(());
+/// Extensions [`write_path`] writes (GeoPackage on the desktop only).
+pub const WRITE_EXTENSIONS: &[&str] = &["geojson", "json", "csv", "fgb", "gpkg", "parquet", "geoparquet", "shp", "kml", "kmz", "gpx"];
+
+/// The field KML and GPX name placemarks by: one called `name`, if any.
+fn name_field(ds: &Dataset) -> Option<usize> {
+    ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case("name"))
+}
+
+/// Features a format that holds only features with geometry leaves out.
+fn without_geometry(ds: &Dataset) -> usize {
+    ds.features.iter().filter(|f| f.geometry.is_none()).count()
+}
+
+/// A dataset encoded in the format of extension `ext`, as one file, and the number of features the
+/// format couldn't hold. A Shapefile (`shp` or `zip`) comes as a zip of its files, named after the
+/// dataset. GeoPackage needs a file ([`write_path`]).
+pub fn write_bytes(ds: &Dataset, ext: &str) -> Result<(Vec<u8>, usize)> {
+    let fmt = |e: serde_json::Error| DataError::Format(e.to_string());
+    Ok(match ext.to_ascii_lowercase().as_str() {
+        "geojson" | "json" => (serde_json::to_vec(&to_geojson(ds)).map_err(fmt)?, 0),
+        "csv" => (to_csv(ds)?.into_bytes(), 0),
+        "fgb" => (crate::source::fgb::write(ds)?, without_geometry(ds)),
+        "parquet" | "geoparquet" => (crate::source::parquet::write(ds)?, 0),
+        "kml" => (crate::interop::to_kml(ds, name_field(ds)).into_bytes(), without_geometry(ds)),
+        "kmz" => {
+            let kml = crate::interop::to_kml(ds, name_field(ds)).into_bytes();
+            (crate::zip::write(&[("doc.kml".to_string(), kml)]).map_err(DataError::Format)?, without_geometry(ds))
+        }
+        "gpx" => (crate::interop::to_gpx(ds, name_field(ds)).into_bytes(), without_geometry(ds)),
+        "shp" | "zip" => {
+            let (parts, left_out) = shapefile_parts(ds)?;
+            let base: String = ds.name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') { c } else { '_' }).collect();
+            let base = if base.trim().is_empty() { "layer".to_string() } else { base };
+            let entries: Vec<(String, Vec<u8>)> = parts.into_iter().map(|(e, b)| (format!("{base}.{e}"), b)).collect();
+            (crate::zip::write(&entries).map_err(DataError::Format)?, left_out)
         }
         other => return Err(DataError::Unsupported(other.to_string())),
-    };
-    write_atomic(path, text.as_bytes())?;
-    Ok(())
+    })
+}
+
+/// Writes a dataset by extension (see [`WRITE_EXTENSIONS`]); returns the number of features the
+/// format couldn't hold (FlatGeobuf, KML, GPX and Shapefile hold only features with geometry). A
+/// Shapefile is written as its `.shp`, `.shx`, `.dbf`, `.prj` and `.cpg` files (or zipped, to a
+/// `.zip`).
+pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "gpkg" => {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                crate::source::gpkg::write(ds, path)?;
+                Ok(0)
+            }
+            #[cfg(target_arch = "wasm32")]
+            Err(DataError::Unsupported("GeoPackage in the browser".into()))
+        }
+        "shp" => {
+            let (parts, left_out) = shapefile_parts(ds)?;
+            // A spatial index left from an older file of the same name would no longer match.
+            for stale in ["qix", "sbn", "sbx"] {
+                let _ = std::fs::remove_file(path.with_extension(stale));
+            }
+            for (e, bytes) in parts {
+                write_atomic(&path.with_extension(e), &bytes)?;
+            }
+            Ok(left_out)
+        }
+        _ => {
+            let (bytes, left_out) = write_bytes(ds, &ext)?;
+            write_atomic(path, &bytes)?;
+            Ok(left_out)
+        }
+    }
 }
 
 /// Writes through a temporary file that is synced and renamed into place, so an interrupted
@@ -610,6 +669,179 @@ fn integral_numeric_to_integer(ds: &mut Dataset) {
             }
         }
     }
+}
+
+/// WGS 84 as ESRI WKT, for a Shapefile's `.prj`.
+const WGS84_PRJ: &str = "GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]]";
+
+/// The longest prefix of `s` that fits in `max` bytes, cut at a character boundary.
+fn cut(s: &str, max: usize) -> &str {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.get(..end).unwrap_or("")
+}
+
+/// dBase field names (at most 10 bytes, unique without regard to case) for the fields.
+fn dbf_names(fields: &[Field]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(fields.len());
+    for f in fields {
+        let base = cut(f.name.trim(), 10);
+        let base = if base.is_empty() { "FIELD" } else { base };
+        let taken = |n: &str, out: &[String]| out.iter().any(|o| o.eq_ignore_ascii_case(n));
+        let name = if !taken(base, &out) {
+            base.to_string()
+        } else {
+            (1..100_000)
+                .map(|i| {
+                    let tag = format!("_{i}");
+                    format!("{}{tag}", cut(base, 10 - tag.len()))
+                })
+                .find(|n| !taken(n, &out))
+                .unwrap_or_else(|| base.to_string())
+        };
+        out.push(name);
+    }
+    out
+}
+
+/// A dataset as the files of a Shapefile: (extension, bytes) for `.shp`, `.shx`, `.dbf`, `.prj`
+/// (WGS 84) and `.cpg` (UTF-8). Shapefiles hold one kind of shape and features with geometry:
+/// features without it (or with nothing drawable) are left out, and the count of them returned.
+/// Field names are cut to dBase's 10 bytes and text to 254.
+pub fn shapefile_parts(ds: &Dataset) -> Result<(Vec<(&'static str, Vec<u8>)>, usize)> {
+    use shapefile::dbase::{FieldName, FieldValue, Record, TableWriterBuilder};
+    use std::io::Cursor;
+    let fmt = |e: shapefile::Error| DataError::Format(format!("Shapefile: {e}"));
+    let names = dbf_names(&ds.fields);
+    let dbf_name = |n: &str| FieldName::try_from(n).map_err(|e| DataError::Format(format!("Shapefile: field {n}: {e}")));
+    let mut table = TableWriterBuilder::new();
+    // Per field: decimals of a Double field (numbers too large for 24 characters become null).
+    let mut decimals = vec![0usize; ds.fields.len()];
+    for (k, (f, n)) in ds.fields.iter().zip(&names).enumerate() {
+        table = match f.ty {
+            // 18 digits: GDAL reads a wider field as a real number.
+            FieldType::Integer => table.add_numeric_field(dbf_name(n)?, 18, 0),
+            FieldType::Double => {
+                let max = ds.features.iter().filter_map(|r| r.attrs.get(k).and_then(Value::as_f64)).fold(0.0f64, |m, v| m.max(v.abs()));
+                // Digits before the point, a sign and the point itself; the rest are decimals.
+                let int_digits = if max >= 1.0 { max.log10().floor() as usize + 1 } else { 1 };
+                let d = 24usize.saturating_sub(int_digits + 2).min(15);
+                if let Some(slot) = decimals.get_mut(k) {
+                    *slot = d;
+                }
+                table.add_numeric_field(dbf_name(n)?, 24, u8::try_from(d).unwrap_or(15))
+            }
+            FieldType::Boolean => table.add_logical_field(dbf_name(n)?),
+            FieldType::Text => {
+                let longest = ds.features.iter().filter_map(|r| r.attrs.get(k)).map(|v| v.to_string().len()).max().unwrap_or(0);
+                table.add_character_field(dbf_name(n)?, u8::try_from(longest.clamp(1, 254)).unwrap_or(254))
+            }
+        };
+    }
+    let record = |r: &crate::Feature| -> Record {
+        let mut rec = Record::default();
+        for (k, (f, n)) in ds.fields.iter().zip(&names).enumerate() {
+            let v = r.attrs.get(k).unwrap_or(&Value::Null);
+            let value = match f.ty {
+                FieldType::Integer | FieldType::Double => {
+                    let x = v.as_f64().filter(|x| {
+                        // Whatever doesn't fit the field is null rather than cut short.
+                        let d = decimals.get(k).copied().unwrap_or(0);
+                        format!("{x:.d$}").len() <= if f.ty == FieldType::Integer { 18 } else { 24 }
+                    });
+                    FieldValue::Numeric(if f.ty == FieldType::Integer { x.map(f64::round) } else { x })
+                }
+                FieldType::Boolean => FieldValue::Logical(match v {
+                    Value::Bool(b) => Some(*b),
+                    Value::Int(i) => Some(*i != 0),
+                    _ => None,
+                }),
+                FieldType::Text => FieldValue::Character((!v.is_null()).then(|| cut(&v.to_string(), 254).to_string())),
+            };
+            rec.insert(n.clone(), value);
+        }
+        rec
+    };
+
+    let pt = |c: &Coord| shapefile::Point::new(c.x, c.y);
+    let finite = |c: &&Coord| c.x.is_finite() && c.y.is_finite();
+    let (mut shp, mut shx, mut dbf) = (Cursor::new(Vec::new()), Cursor::new(Vec::new()), Cursor::new(Vec::new()));
+    let mut left_out = 0;
+    let mut written = 0;
+    {
+        let shapes = shapefile::ShapeWriter::with_shx(&mut shp, &mut shx);
+        let mut w = shapefile::Writer::new(shapes, table.build_with_dest(&mut dbf));
+        let multi_points = ds.features.iter().any(|f| matches!(f.geometry, Some(Geometry::MultiPoint(_))));
+        for f in &ds.features {
+            let ok = match (&f.geometry, ds.geometry_type) {
+                (Some(Geometry::Point(c)), GeometryType::Point) if !multi_points && finite(&c) => {
+                    w.write_shape_and_record(&pt(c), &record(f)).map_err(fmt)?;
+                    true
+                }
+                (Some(g @ (Geometry::Point(_) | Geometry::MultiPoint(_))), GeometryType::Point) => {
+                    let mut pts = Vec::new();
+                    g.for_each_coord(|c| pts.push(c));
+                    let pts: Vec<shapefile::Point> = pts.iter().filter(finite).map(pt).collect();
+                    if pts.is_empty() {
+                        false
+                    } else {
+                        w.write_shape_and_record(&shapefile::Multipoint::new(pts), &record(f)).map_err(fmt)?;
+                        true
+                    }
+                }
+                (Some(Geometry::Line(parts)), GeometryType::Polyline) => {
+                    let parts: Vec<Vec<shapefile::Point>> =
+                        parts.iter().map(|p| p.iter().filter(finite).map(pt).collect::<Vec<_>>()).filter(|p| p.len() >= 2).collect();
+                    if parts.is_empty() {
+                        false
+                    } else {
+                        w.write_shape_and_record(&shapefile::Polyline::with_parts(parts), &record(f)).map_err(fmt)?;
+                        true
+                    }
+                }
+                (Some(Geometry::Polygon(polys)), GeometryType::Polygon) => {
+                    let mut rings = Vec::new();
+                    for poly in polys {
+                        let mut it = poly.iter().map(|r| r.iter().filter(finite).map(pt).collect::<Vec<_>>()).filter(|r| r.len() >= 3);
+                        // A polygon whose outer ring is gone loses its holes too.
+                        let outer_kept = poly.first().is_some_and(|r| r.iter().filter(finite).count() >= 3);
+                        if let Some(outer) = it.next().filter(|_| outer_kept) {
+                            rings.push(shapefile::PolygonRing::Outer(outer));
+                            rings.extend(it.map(shapefile::PolygonRing::Inner));
+                        }
+                    }
+                    if rings.is_empty() {
+                        false
+                    } else {
+                        w.write_shape_and_record(&shapefile::Polygon::with_rings(rings), &record(f)).map_err(fmt)?;
+                        true
+                    }
+                }
+                _ => false,
+            };
+            if ok {
+                written += 1;
+            } else {
+                left_out += 1;
+            }
+        }
+        if written == 0 {
+            let what = if ds.geometry_type == GeometryType::None { "a table without geometry" } else { "a layer with no features to draw" };
+            return Err(DataError::Unsupported(format!("{what} as a Shapefile")));
+        }
+    }
+    Ok((
+        vec![
+            ("shp", shp.into_inner()),
+            ("shx", shx.into_inner()),
+            ("dbf", dbf.into_inner()),
+            ("prj", WGS84_PRJ.as_bytes().to_vec()),
+            ("cpg", b"UTF-8".to_vec()),
+        ],
+        left_out,
+    ))
 }
 
 fn is_outer<P>(r: &shapefile::PolygonRing<P>) -> bool {

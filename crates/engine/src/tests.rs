@@ -2647,3 +2647,33 @@ fn blank_project_starts_in_a_projected_crs() {
     }
     assert!(crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap().len() > 1000);
 }
+
+#[test]
+fn layers_export_to_geopackage_geoparquet_shapefile_and_kmz() {
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = world();
+    let want = s.map().layers.iter().find(|l| l.name == "Countries").unwrap().dataset.features.len();
+    for ext in ["gpkg", "parquet", "shp", "kmz", "zip"] {
+        let path = dir.join(format!("countries.{ext}")).display().to_string();
+        let r = s.run("share.exportLayer", &json!({"layer": "Countries", "path": path})).unwrap();
+        assert_eq!((r["features"].as_u64(), r["leftOut"].as_u64()), (Some(want as u64), Some(0)), "{ext}");
+        if matches!(ext, "kmz" | "zip") {
+            assert!(std::fs::metadata(&path).unwrap().len() > 0);
+            continue;
+        }
+        // Added back, drawn and saved in a project that reopens.
+        let r = s.run("layer.addData", &json!({"path": path})).unwrap();
+        let id = r["layer"].as_u64().unwrap() as u32;
+        let l = s.map().layer(id).unwrap();
+        let n = if l.is_streamed() { l.load_all().unwrap().features.len() } else { l.dataset.features.len() };
+        assert_eq!(n, want, "{ext}");
+    }
+    let project = dir.join("p.rgis").display().to_string();
+    s.run("project.saveAs", &json!({"path": project})).unwrap();
+    s.run("project.open", &json!({"path": project})).unwrap();
+    s.run("share.exportMap", &json!({"path": dir.join("m.png").display().to_string()})).unwrap();
+    // Not a format it writes.
+    assert!(s.run("share.exportLayer", &json!({"layer": "Countries", "path": dir.join("x.dwg").display().to_string()})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

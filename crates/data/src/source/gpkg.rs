@@ -366,6 +366,233 @@ impl FeatureSource for GpkgSource {
     }
 }
 
+/// WGS 84 as OGC WKT, the coordinate system GeoPackages are written in.
+const WGS84_WKT: &str = "GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]],AXIS[\"Latitude\",NORTH],AXIS[\"Longitude\",EAST],AUTHORITY[\"EPSG\",\"4326\"]]";
+
+/// A geometry as a GeoPackage blob: the `GP` header (little-endian, WGS 84, an XY envelope) and
+/// the WKB. Points of a multipoint layer are written as one-point multipoints.
+fn blob(g: &crate::Geometry, multi_points: bool) -> Vec<u8> {
+    let g = match g {
+        crate::Geometry::Point(c) if multi_points => &crate::Geometry::MultiPoint(vec![*c]),
+        g => g,
+    };
+    let e = g.extent();
+    let mut out = Vec::with_capacity(40 + g.coord_count() * 16);
+    out.extend_from_slice(b"GP");
+    out.push(0);
+    if e.is_empty() {
+        // No coordinates: flagged empty, without an envelope.
+        out.push(0b1_0001);
+        out.extend_from_slice(&4326i32.to_le_bytes());
+    } else {
+        out.push(0b0000_0011);
+        out.extend_from_slice(&4326i32.to_le_bytes());
+        for v in [e.min_x, e.max_x, e.min_y, e.max_y] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    out.extend_from_slice(&wkb::encode(g));
+    out
+}
+
+/// A name not taken by a field (`base`, else `base_1`, `base_2`, …).
+fn free_name(fields: &[Field], base: &str) -> String {
+    let taken = |n: &str| fields.iter().any(|f| f.name.eq_ignore_ascii_case(n));
+    (0..).map(|i| if i == 0 { base.to_string() } else { format!("{base}_{i}") }).find(|n| !taken(n)).unwrap_or_else(|| base.to_string())
+}
+
+/// Writes a dataset as a GeoPackage with one table (WGS 84, with an R-tree spatial index), or an
+/// attributes table for a dataset without geometry. The file is built beside `path` and moved into
+/// place when complete, so a failed write leaves any existing file as it was.
+pub fn write(ds: &crate::Dataset, path: &Path) -> Result<()> {
+    let Some(name) = path.file_name() else {
+        return Err(DataError::Format(format!("{} is not a file path", path.display())));
+    };
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(name);
+    tmp_name.push(format!(".{}.tmp", std::process::id()));
+    let tmp = path.with_file_name(tmp_name);
+    // A new file, so nothing already at that name is followed or reused.
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let res = (|| {
+        let conn = Connection::open(&tmp).map_err(err)?;
+        build(&conn, ds)?;
+        conn.close().map_err(|(_, e)| err(e))?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
+}
+
+fn build(conn: &Connection, ds: &crate::Dataset) -> Result<()> {
+    use rusqlite::types::Value as Sql;
+    // Not a reserved name, and never empty.
+    let mut table: String = ds.name.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string();
+    if table.is_empty() {
+        table = "layer".into();
+    }
+    if table.to_ascii_lowercase().starts_with("gpkg_")
+        || table.to_ascii_lowercase().starts_with("sqlite_")
+        || table.to_ascii_lowercase().starts_with("rtree_")
+    {
+        table = format!("layer_{table}");
+    }
+    let has_geom = ds.geometry_type != GeometryType::None;
+    let fid = free_name(&ds.fields, "fid");
+    let geom = free_name(&ds.fields, "geom");
+    let multi_points = ds.features.iter().any(|f| matches!(f.geometry, Some(crate::Geometry::MultiPoint(_))));
+    let geom_type = match ds.geometry_type {
+        GeometryType::Point if multi_points => "MULTIPOINT",
+        GeometryType::Point => "POINT",
+        GeometryType::Polyline => "MULTILINESTRING",
+        GeometryType::Polygon => "MULTIPOLYGON",
+        GeometryType::None => "",
+    };
+    let (t, g, i) = (quote(&table), quote(&geom), quote(&fid));
+    let mut sql = String::from(
+        "PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;
+        PRAGMA application_id = 1196444487; PRAGMA user_version = 10400;
+        CREATE TABLE gpkg_spatial_ref_sys (srs_name TEXT NOT NULL, srs_id INTEGER PRIMARY KEY, organization TEXT NOT NULL,
+            organization_coordsys_id INTEGER NOT NULL, definition TEXT NOT NULL, description TEXT);
+        CREATE TABLE gpkg_contents (table_name TEXT NOT NULL PRIMARY KEY, data_type TEXT NOT NULL, identifier TEXT UNIQUE,
+            description TEXT DEFAULT '', last_change DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            min_x DOUBLE, min_y DOUBLE, max_x DOUBLE, max_y DOUBLE, srs_id INTEGER,
+            CONSTRAINT fk_gc_r_srs_id FOREIGN KEY (srs_id) REFERENCES gpkg_spatial_ref_sys(srs_id));
+        CREATE TABLE gpkg_geometry_columns (table_name TEXT NOT NULL, column_name TEXT NOT NULL, geometry_type_name TEXT NOT NULL,
+            srs_id INTEGER NOT NULL, z TINYINT NOT NULL, m TINYINT NOT NULL,
+            CONSTRAINT pk_geom_cols PRIMARY KEY (table_name, column_name),
+            CONSTRAINT uk_gc_table_name UNIQUE (table_name),
+            CONSTRAINT fk_gc_tn FOREIGN KEY (table_name) REFERENCES gpkg_contents(table_name),
+            CONSTRAINT fk_gc_srs FOREIGN KEY (srs_id) REFERENCES gpkg_spatial_ref_sys (srs_id));
+        CREATE TABLE gpkg_extensions (table_name TEXT, column_name TEXT, extension_name TEXT NOT NULL, definition TEXT NOT NULL,
+            scope TEXT NOT NULL, CONSTRAINT ge_tce UNIQUE (table_name, column_name, extension_name));
+        BEGIN;",
+    );
+    let mut cols = vec![format!("{i} INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL")];
+    if has_geom {
+        cols.push(format!("{g} {geom_type}"));
+    }
+    for f in &ds.fields {
+        let ty = match f.ty {
+            FieldType::Integer => "INTEGER",
+            FieldType::Double => "REAL",
+            FieldType::Boolean => "BOOLEAN",
+            FieldType::Text => "TEXT",
+        };
+        cols.push(format!("{} {ty}", quote(&f.name)));
+    }
+    sql.push_str(&format!("CREATE TABLE {t} ({});", cols.join(", ")));
+    let rt = quote(&format!("rtree_{table}_{geom}"));
+    if has_geom {
+        sql.push_str(&format!("CREATE VIRTUAL TABLE {rt} USING rtree(id, minx, maxx, miny, maxy);"));
+    }
+    conn.execute_batch(&sql).map_err(err)?;
+    conn.execute(
+        "INSERT INTO gpkg_spatial_ref_sys VALUES
+            ('Undefined cartesian SRS', -1, 'NONE', -1, 'undefined', 'undefined cartesian coordinate reference system'),
+            ('Undefined geographic SRS', 0, 'NONE', 0, 'undefined', 'undefined geographic coordinate reference system'),
+            ('WGS 84 geodetic', 4326, 'EPSG', 4326, ?1, 'longitude/latitude coordinates in decimal degrees on the WGS 84 spheroid')",
+        [WGS84_WKT],
+    )
+    .map_err(err)?;
+
+    // Feature ids are kept when they are unique and fit; otherwise SQLite numbers the rows.
+    let mut seen = std::collections::HashSet::new();
+    let keep_ids = ds.features.iter().all(|f| i64::try_from(f.id).is_ok() && seen.insert(f.id));
+    {
+        let names: Vec<String> =
+            std::iter::once(i.clone()).chain(has_geom.then(|| g.clone())).chain(ds.fields.iter().map(|f| quote(&f.name))).collect();
+        let marks = vec!["?"; names.len()].join(", ");
+        let mut st = conn.prepare(&format!("INSERT INTO {t} ({}) VALUES ({marks})", names.join(", "))).map_err(err)?;
+        // The spatial index is filled here; its triggers (which call functions only GeoPackage
+        // software defines) are created after.
+        let mut index =
+            if has_geom { Some(conn.prepare(&format!("INSERT INTO {rt} VALUES (?1, ?2, ?3, ?4, ?5)")).map_err(err)?) } else { None };
+        for f in &ds.features {
+            let mut row: Vec<Sql> = Vec::with_capacity(names.len());
+            row.push(if keep_ids { i64::try_from(f.id).map(Sql::Integer).unwrap_or(Sql::Null) } else { Sql::Null });
+            if has_geom {
+                row.push(f.geometry.as_ref().map(|x| Sql::Blob(blob(x, multi_points))).unwrap_or(Sql::Null));
+            }
+            for (k, fd) in ds.fields.iter().enumerate() {
+                row.push(match (f.attrs.get(k).unwrap_or(&Value::Null), fd.ty) {
+                    (Value::Null, _) => Sql::Null,
+                    (Value::Int(x), _) => Sql::Integer(*x),
+                    (Value::Float(x), _) if x.is_finite() => Sql::Real(*x),
+                    (Value::Float(_), _) => Sql::Null,
+                    (Value::Bool(b), _) => Sql::Integer(i64::from(*b)),
+                    (Value::Text(s), FieldType::Text) => Sql::Text(s.clone()),
+                    (v, ty) => match Value::parse(&v.to_string(), ty) {
+                        Value::Int(x) => Sql::Integer(x),
+                        Value::Float(x) if x.is_finite() => Sql::Real(x),
+                        Value::Bool(b) => Sql::Integer(i64::from(b)),
+                        _ => Sql::Null,
+                    },
+                });
+            }
+            st.execute(params_from_iter(row)).map_err(err)?;
+            let e = f.geometry.as_ref().map(|x| x.extent()).unwrap_or(Extent::EMPTY);
+            if let (Some(ix), false) = (index.as_mut(), e.is_empty()) {
+                ix.execute(rusqlite::params![conn.last_insert_rowid(), e.min_x, e.max_x, e.min_y, e.max_y]).map_err(err)?;
+            }
+        }
+    }
+
+    let e = ds.extent();
+    let bounds: [Option<f64>; 4] = if e.is_empty() { [None; 4] } else { [Some(e.min_x), Some(e.min_y), Some(e.max_x), Some(e.max_y)] };
+    let srs: Option<i64> = has_geom.then_some(4326);
+    conn.execute(
+        "INSERT INTO gpkg_contents (table_name, data_type, identifier, min_x, min_y, max_x, max_y, srs_id) VALUES (?1, ?2, ?1, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![table, if has_geom { "features" } else { "attributes" }, bounds[0], bounds[1], bounds[2], bounds[3], srs],
+    )
+    .map_err(err)?;
+    if has_geom {
+        conn.execute("INSERT INTO gpkg_geometry_columns VALUES (?1, ?2, ?3, 4326, 0, 0)", rusqlite::params![table, geom, geom_type])
+            .map_err(err)?;
+        // The GeoPackage 1.4 triggers that keep the index in step with edits.
+        let trig = |s: &str| quote(&format!("rtree_{table}_{geom}_{s}"));
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER {ins} AFTER INSERT ON {t} WHEN (new.{g} NOT NULL AND NOT ST_IsEmpty(NEW.{g}))
+            BEGIN INSERT OR REPLACE INTO {rt} VALUES (NEW.{i}, ST_MinX(NEW.{g}), ST_MaxX(NEW.{g}), ST_MinY(NEW.{g}), ST_MaxY(NEW.{g})); END;
+            CREATE TRIGGER {u6} AFTER UPDATE OF {g} ON {t} WHEN OLD.{i} = NEW.{i}
+                AND (NEW.{g} NOTNULL AND NOT ST_IsEmpty(NEW.{g})) AND (OLD.{g} NOTNULL AND NOT ST_IsEmpty(OLD.{g}))
+            BEGIN UPDATE {rt} SET minx = ST_MinX(NEW.{g}), maxx = ST_MaxX(NEW.{g}), miny = ST_MinY(NEW.{g}), maxy = ST_MaxY(NEW.{g})
+                WHERE id = NEW.{i}; END;
+            CREATE TRIGGER {u7} AFTER UPDATE OF {g} ON {t} WHEN OLD.{i} = NEW.{i}
+                AND (NEW.{g} NOTNULL AND NOT ST_IsEmpty(NEW.{g})) AND (OLD.{g} ISNULL OR ST_IsEmpty(OLD.{g}))
+            BEGIN INSERT INTO {rt} VALUES (NEW.{i}, ST_MinX(NEW.{g}), ST_MaxX(NEW.{g}), ST_MinY(NEW.{g}), ST_MaxY(NEW.{g})); END;
+            CREATE TRIGGER {u2} AFTER UPDATE OF {g} ON {t} WHEN OLD.{i} = NEW.{i} AND (NEW.{g} ISNULL OR ST_IsEmpty(NEW.{g}))
+            BEGIN DELETE FROM {rt} WHERE id = OLD.{i}; END;
+            CREATE TRIGGER {u5} AFTER UPDATE ON {t} WHEN OLD.{i} != NEW.{i} AND (NEW.{g} NOTNULL AND NOT ST_IsEmpty(NEW.{g}))
+            BEGIN DELETE FROM {rt} WHERE id = OLD.{i};
+                INSERT INTO {rt} VALUES (NEW.{i}, ST_MinX(NEW.{g}), ST_MaxX(NEW.{g}), ST_MinY(NEW.{g}), ST_MaxY(NEW.{g})); END;
+            CREATE TRIGGER {u4} AFTER UPDATE ON {t} WHEN OLD.{i} != NEW.{i} AND (NEW.{g} ISNULL OR ST_IsEmpty(NEW.{g}))
+            BEGIN DELETE FROM {rt} WHERE id IN (OLD.{i}, NEW.{i}); END;
+            CREATE TRIGGER {del} AFTER DELETE ON {t} WHEN old.{g} NOT NULL
+            BEGIN DELETE FROM {rt} WHERE id = OLD.{i}; END;",
+            ins = trig("insert"),
+            u2 = trig("update2"),
+            u4 = trig("update4"),
+            u5 = trig("update5"),
+            u6 = trig("update6"),
+            u7 = trig("update7"),
+            del = trig("delete"),
+        ))
+        .map_err(err)?;
+        conn.execute(
+            "INSERT INTO gpkg_extensions VALUES (?1, ?2, 'gpkg_rtree_index', 'http://www.geopackage.org/spec120/#extension_rtree', 'write-only')",
+            rusqlite::params![table, geom],
+        )
+        .map_err(err)?;
+    }
+    conn.execute_batch("COMMIT;").map_err(err)?;
+    Ok(())
+}
+
 /// A GeoPackage geometry blob flagged empty: valid, with nothing to draw.
 fn is_empty_blob(b: &[u8]) -> bool {
     b.starts_with(b"GP") && b.get(3).is_some_and(|f| f & 0b1_0000 != 0)

@@ -348,3 +348,150 @@ fn vector_samples() {
         }
     }
 }
+
+/// A polygon layer with every field type, a hole, a multipolygon, a feature without geometry,
+/// long and clashing field names and non-ASCII text.
+fn export_sample() -> Dataset {
+    let mut ds = Dataset::new(
+        "Parcels",
+        GeometryType::Polygon,
+        vec![
+            Field::new("population_total", FieldType::Integer),
+            Field::new("population_density", FieldType::Double),
+            Field::new("name", FieldType::Text),
+            Field::new("ok", FieldType::Boolean),
+            Field::new("geometry", FieldType::Text),
+        ],
+    );
+    let sq = |x: f64, y: f64, s: f64| {
+        vec![Coord::new(x, y), Coord::new(x + s, y), Coord::new(x + s, y + s), Coord::new(x, y + s), Coord::new(x, y)]
+    };
+    ds.push(
+        Some(Geometry::Polygon(vec![vec![sq(0.0, 0.0, 10.0), sq(2.0, 2.0, 2.0)]])),
+        vec![Value::Int(1_234_567), Value::Float(12.5), Value::Text("Zürich — 東京".into()), Value::Bool(true), Value::Text("g".into())],
+    );
+    ds.push(
+        Some(Geometry::Polygon(vec![vec![sq(20.0, 20.0, 1.0)], vec![sq(-30.0, -40.0, 5.0)]])),
+        vec![Value::Int(-3), Value::Float(-0.25), Value::Null, Value::Bool(false), Value::Null],
+    );
+    ds.push(None, vec![Value::Null, Value::Null, Value::Text("no shape".into()), Value::Null, Value::Null]);
+    ds
+}
+
+#[test]
+fn writes_geopackage_geoparquet_and_shapefile() {
+    let ds = export_sample();
+    let d = dir().join("export");
+    std::fs::create_dir_all(&d).unwrap();
+    for ext in ["gpkg", "parquet", "shp", "fgb"] {
+        let p = d.join(format!("parcels.{ext}"));
+        let left_out = crate::io::write_path(&ds, &p).unwrap();
+        let holds_all = matches!(ext, "gpkg" | "parquet");
+        assert_eq!(left_out, if holds_all { 0 } else { 1 }, "{ext}");
+        let (back, _) = crate::io::read_path(&p).unwrap();
+        // Readers skip rows without geometry (the GeoPackage still holds three, below).
+        assert_eq!(back.features.len(), 2, "{ext}");
+        assert_eq!(back.geometry_type, GeometryType::Polygon, "{ext}");
+        let e = back.extent();
+        assert_eq!((e.min_x, e.min_y, e.max_x, e.max_y), (-30.0, -40.0, 21.0, 21.0), "{ext}");
+        let field = |name: &str| back.field_index(name).unwrap_or_else(|| panic!("{ext}: no field {name} in {:?}", back.fields));
+        let pop = if ext == "shp" { field("population") } else { field("population_total") };
+        let dens = if ext == "shp" { field("populati_1") } else { field("population_density") };
+        let name = field("name");
+        let first = back.features.iter().find(|f| f.attrs[name] == Value::Text("Zürich — 東京".into())).unwrap();
+        assert_eq!(first.attrs[pop].as_f64(), Some(1_234_567.0), "{ext}");
+        assert_eq!(first.attrs[dens].as_f64(), Some(12.5), "{ext}");
+        assert!(matches!(&first.geometry, Some(Geometry::Polygon(p)) if p.len() == 1 && p[0].len() == 2), "{ext}: the hole is kept");
+        let second = back.features.iter().find(|f| f.attrs[pop].as_f64() == Some(-3.0)).unwrap();
+        assert!(matches!(&second.geometry, Some(Geometry::Polygon(p)) if p.len() == 2), "{ext}: both parts are kept");
+        assert_eq!(second.attrs[name], Value::Null, "{ext}");
+        if holds_all {
+            // The clashing field keeps its name; the geometry column took another.
+            assert_eq!(back.value(0, field("geometry")), &Value::Text("g".into()), "{ext}");
+        }
+    }
+    // The Shapefile's companion files.
+    for e in ["shx", "dbf", "prj", "cpg"] {
+        assert!(d.join(format!("parcels.{e}")).exists(), "{e}");
+    }
+    // GeoPackage and GeoParquet keep feature ids and answer extent queries by their index.
+    for ext in ["gpkg", "parquet"] {
+        let s = open_path(&d.join(format!("parcels.{ext}")), None).unwrap();
+        assert_eq!(s.info().count, Some(3), "{ext}");
+        let b = s.read(&Request { extent: Some(Extent::new(15.0, 15.0, 25.0, 25.0)), limit: 100 }).unwrap();
+        assert_eq!(b.features.len(), 1, "{ext}");
+        if ext == "gpkg" {
+            assert_eq!(b.features[0].id, 2);
+        }
+    }
+    // Written again over the old files.
+    let mut fewer = ds.clone();
+    fewer.features.truncate(1);
+    for ext in ["gpkg", "parquet", "shp"] {
+        let p = d.join(format!("parcels.{ext}"));
+        crate::io::write_path(&fewer, &p).unwrap();
+        assert_eq!(crate::io::read_path(&p).unwrap().0.features.len(), 1, "{ext}");
+    }
+}
+
+#[test]
+fn writes_points_lines_kmz_and_zipped_shapefiles() {
+    let mut pts = Dataset::new("Cities", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    pts.push(Some(Geometry::Point(Coord::new(2.35, 48.85))), vec![Value::Text("Paris".into())]);
+    pts.push(Some(Geometry::MultiPoint(vec![Coord::new(1.0, 1.0), Coord::new(2.0, 2.0)])), vec![Value::Text("Pair".into())]);
+    let mut lines = Dataset::new("Roads", GeometryType::Polyline, vec![Field::new("len", FieldType::Double)]);
+    lines.push(
+        Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)], vec![Coord::new(5.0, 5.0), Coord::new(6.0, 5.0)]])),
+        vec![Value::Float(1e30)],
+    );
+    lines.push(Some(Geometry::Line(vec![vec![Coord::new(3.0, 3.0)]])), vec![Value::Float(2.0)]);
+    let d = dir().join("export2");
+    std::fs::create_dir_all(&d).unwrap();
+    for ds in [&pts, &lines] {
+        for ext in ["gpkg", "parquet", "shp"] {
+            let p = d.join(format!("{}.{ext}", ds.name));
+            let left_out = crate::io::write_path(ds, &p).unwrap();
+            let (back, _) = crate::io::read_path(&p).unwrap();
+            assert_eq!(back.geometry_type, ds.geometry_type, "{ext}");
+            // A one-point line can't be a Shapefile polyline (and isn't read back from the others).
+            let lost = usize::from(ds.name == "Roads");
+            assert_eq!((left_out, back.features.len()), (if ext == "shp" { lost } else { 0 }, 2 - lost), "{} {ext}", ds.name);
+            assert_eq!(
+                back.extent(),
+                ds.features.iter().take(2 - lost).filter_map(|f| f.geometry.as_ref()).fold(Extent::EMPTY, |e, g| e.union(&g.extent()))
+            );
+        }
+    }
+    // A number too large for a dBase field is null rather than cut short.
+    let (roads, _) = crate::io::read_path(&d.join("Roads.shp")).unwrap();
+    assert_eq!(roads.value(0, 0), &Value::Null);
+    // KMZ: the KML zipped as doc.kml.
+    let (kmz, left_out) = crate::io::write_bytes(&pts, "kmz").unwrap();
+    assert_eq!(left_out, 0);
+    let entries = crate::zip::read(&kmz).unwrap();
+    assert_eq!(entries[0].0, "doc.kml");
+    assert!(String::from_utf8_lossy(&entries[0].1).contains("<name>Paris</name>"));
+    // A zipped Shapefile opens as one.
+    let (zipped, _) = crate::io::write_bytes(&pts, "shp").unwrap();
+    let entries = crate::zip::read(&zipped).unwrap();
+    let names: Vec<&str> = entries.iter().map(|e| e.0.as_str()).collect();
+    assert_eq!(names, ["Cities.shp", "Cities.shx", "Cities.dbf", "Cities.prj", "Cities.cpg"]);
+    let unzipped = d.join("unzipped");
+    std::fs::create_dir_all(&unzipped).unwrap();
+    for (n, b) in &entries {
+        std::fs::write(unzipped.join(n), b).unwrap();
+    }
+    let (back, _) = crate::io::read_path(&unzipped.join("Cities.shp")).unwrap();
+    assert_eq!(back.features.len(), 2);
+    // Tables have no Shapefile or FlatGeobuf form, but GeoPackage and GeoParquet hold them.
+    let mut table = Dataset::new("t", GeometryType::None, vec![Field::new("a", FieldType::Integer)]);
+    table.push(None, vec![Value::Int(1)]);
+    assert!(crate::io::write_bytes(&table, "shp").is_err());
+    assert!(crate::io::write_bytes(&table, "parquet").is_ok());
+    crate::io::write_path(&table, &d.join("t.gpkg")).unwrap();
+    // An empty layer writes too.
+    let empty = Dataset::new("e", GeometryType::Point, vec![]);
+    assert!(crate::io::write_bytes(&empty, "parquet").is_ok());
+    crate::io::write_path(&empty, &d.join("e.gpkg")).unwrap();
+    assert!(crate::io::write_bytes(&empty, "shp").is_err());
+}

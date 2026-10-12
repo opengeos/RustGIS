@@ -74,8 +74,12 @@ databases](data.md#sql-queries-and-duckdb-databases).
 
 | Format | How to write it | Notes |
 | --- | --- | --- |
-| GeoJSON, CSV | Data › Export (`share.exportLayer`) | A streamed layer writes its whole source. |
+| GeoJSON, CSV | Data › Export (`share.exportLayer`) | A streamed layer writes its whole source (as every format below does). In the web app the export downloads GeoJSON; `ui.exportLayer` with a `format` (any below but GeoPackage) downloads that format. |
+| GeoPackage | Data › Export to `.gpkg` (desktop) | One feature table (an attributes table for a layer without geometry) in WGS 84, with an R-tree spatial index and the GeoPackage 1.4 triggers that keep it current when other software edits the file. Feature ids are kept. |
+| GeoParquet | Data › Export to `.parquet` | GeoParquet 1.1: WKB geometry in WGS 84, Snappy compression, row groups of 65,536 features and a `bbox` covering column so readers can skip rows by extent. |
+| Shapefile | Data › Export to `.shp` (or `.zip` for the files zipped) | Writes `.shp`, `.shx`, `.dbf`, `.prj` (WGS 84) and `.cpg` (UTF-8). Field names are cut to 10 characters (made unique), text to 254 bytes, and numbers too wide for a dBase field are left empty; features without geometry, and lines of a single point, are left out (and reported). |
 | FlatGeobuf | Data › Export to `.fgb` | With a spatial index; features without geometry are left out (and reported). |
+| KML, KMZ, GPX | Data › Export to `.kml`, `.kmz` or `.gpx` | Placemarks named by a `name` field, if there is one; features without geometry are left out. |
 | KML, GPX, CSV with WKT | Analysis › Workflows › Data Interop | |
 | GeoTIFF | Raster Data › Export | |
 | PNG | Share › Export Map (`share.exportMap`) | At any DPI, with labels, scale bar and tile credits. |

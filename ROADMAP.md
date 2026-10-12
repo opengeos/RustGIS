@@ -10,7 +10,8 @@ or enterprise portal sharing yet, so real depth is lower than the checklist sugg
 - Data: GeoJSON, CSV (lon/lat), Shapefile, GeoPackage, GeoParquet and FlatGeobuf in (large files
   read in place, a view at a time), the vector formats GDAL reads when it is installed, and SQL
   queries and DuckDB databases (DuckDB Spatial) when DuckDB is;
-  GeoJSON, CSV, FlatGeobuf, KML, GPX and WKT out; standalone tables; layer, map, style, template,
+  GeoJSON, CSV, GeoPackage, GeoParquet, Shapefile, FlatGeobuf, KML/KMZ, GPX and WKT out;
+  standalone tables; layer, map, style, template,
   task and package files.
 - Rasters: GeoTIFF/COG and ASCII grids, EPSG reprojection, stretch/RGB/classified/shaded-relief
   symbology, raster functions, indices, change detection, classification, georeferencing.
@@ -37,7 +38,7 @@ or enterprise portal sharing yet, so real depth is lower than the checklist sugg
   downloads.rustgis.app.
 
 ## Next
-- Data: GeoPackage and GeoParquet out; Shapefile out; Shapefiles and GeoPackages in the web app.
+- Data: Shapefiles and GeoPackages in the web app.
 - Editing: vertex editing (move, add and delete vertices of existing features).
 - Analysis: spatial join, intersect and union, near, heat maps.
 - 3D: full scenes with terrain, beyond the globe and 2.5D extrusion.

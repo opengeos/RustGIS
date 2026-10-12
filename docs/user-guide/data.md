@@ -9,11 +9,11 @@ Formats](data-formats.md).
 | --- | --- | --- |
 | GeoJSON (`.geojson`, `.json`) | Yes | Yes |
 | CSV (`.csv`, `.txt`) with longitude/latitude columns | Yes | Yes |
-| Shapefile (`.shp` + `.dbf`) | Yes (desktop) | No |
-| GeoPackage (`.gpkg`, every feature table) | Yes (desktop) | No |
-| GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | No |
+| Shapefile (`.shp` + `.dbf`) | Yes (desktop) | Yes (`share.exportLayer`) |
+| GeoPackage (`.gpkg`, every feature table) | Yes (desktop) | Yes (desktop) |
+| GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | Yes |
 | FlatGeobuf (`.fgb`) | Yes | Yes (`share.exportLayer`) |
-| Through GDAL: KML/KMZ, GPX, GML, DXF, File Geodatabase (`.gdb` folder), MapInfo, OpenStreetMap… | Yes (desktop, when GDAL is installed) | No |
+| Through GDAL: KML/KMZ, GPX, GML, DXF, File Geodatabase (`.gdb` folder), MapInfo, OpenStreetMap… | Yes (desktop, when GDAL is installed) | KML, KMZ and GPX |
 | DuckDB databases (`.duckdb`, `.ddb`) and SQL queries | Yes (desktop, when DuckDB is installed) | No |
 | KML, GPX, CSV with WKT geometry | No | Yes (Analysis › Workflows › Data Interop) |
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
