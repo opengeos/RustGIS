@@ -200,10 +200,20 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, c
     let empty = dir.join(format!("{tag}.empty"));
     let keyfile = dir.join(format!("{tag}.key"));
     let same = std::fs::read_to_string(&keyfile).is_ok_and(|k| k == key);
+    // A hit is touched, so pruning removes what isn't used rather than what is old.
+    let touch = |p: &Path| {
+        if let Ok(f) = std::fs::File::options().write(true).open(p) {
+            let _ = f.set_modified(std::time::SystemTime::now());
+        }
+    };
     if same && empty.exists() {
+        touch(&empty);
+        touch(&keyfile);
         return Ok(None);
     }
     if same && out.metadata().is_ok_and(|m| m.len() > 0) {
+        touch(&out);
+        touch(&keyfile);
         return Ok(Some(out));
     }
     let tmp = dir.join(format!("{tag}.{}.tmp.fgb", std::process::id()));
@@ -231,17 +241,26 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, c
     }
     if !res.status.success() {
         let _ = std::fs::remove_file(&tmp);
-        let msg = String::from_utf8_lossy(&res.stderr);
-        // The first lines say what went wrong; the rest is the usage text.
-        let msg: Vec<&str> = msg.lines().filter(|l| l.contains("ERROR")).take(3).collect();
-        return Err(DataError::Format(format!("GDAL: {}", msg.join(" "))));
+        let text = String::from_utf8_lossy(&res.stderr);
+        // The ERROR lines say what went wrong (the rest is the usage text); else the first line.
+        let mut msg: Vec<&str> = text.lines().filter(|l| l.contains("ERROR")).take(3).collect();
+        if msg.is_empty() {
+            msg = text.lines().filter(|l| !l.trim().is_empty()).take(1).collect();
+        }
+        let msg = if msg.is_empty() { format!("ogr2ogr failed ({})", res.status) } else { msg.join(" ") };
+        return Err(DataError::Format(format!("GDAL: {msg}")));
     }
     // An empty family is remembered, so the file isn't converted again for it.
     // (A filter matching nothing leaves no file at all.)
-    let count = if tmp.exists() { super::open_path(&tmp, None).ok().and_then(|s| s.info().count).unwrap_or(0) } else { 0 };
+    // Whether it holds anything: a feature read, not the header's count (which FlatGeobuf may leave
+    // out, as 0).
+    let any = tmp.exists()
+        && super::open_path(&tmp, None)
+            .ok()
+            .is_some_and(|s| s.read(&super::Request { extent: None, limit: 1 }).is_ok_and(|b| !b.features.is_empty()));
     let _ = std::fs::remove_file(&out);
     let _ = std::fs::remove_file(&empty);
-    if count == 0 {
+    if !any {
         let _ = std::fs::remove_file(&tmp);
         std::fs::write(&empty, b"")?;
         std::fs::write(&keyfile, &key)?;
@@ -319,11 +338,23 @@ fn fnv1a(b: &[u8]) -> u64 {
     b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &x| (h ^ u64::from(x)).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
-/// Removes conversions not touched for [`KEEP`] (best effort).
+/// Whether a file name is one this module writes: `<16 hex>.fgb|.key|.empty`, or a
+/// `<16 hex>.<pid>.tmp.fgb` left by a conversion that didn't finish.
+fn ours(name: &str) -> bool {
+    let Some((tag, rest)) = name.split_once('.') else { return false };
+    let tmp = rest.strip_suffix(".tmp.fgb").is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()));
+    tag.len() == 16 && tag.bytes().all(|b| b.is_ascii_hexdigit()) && (matches!(rest, "fgb" | "key" | "empty") || tmp)
+}
+
+/// Removes conversions not used for [`KEEP`] (best effort). Only this module's files are touched,
+/// whatever else the cache folder holds.
 fn prune(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     let now = std::time::SystemTime::now();
     for e in entries.flatten().take(100_000) {
+        if !e.file_name().to_str().is_some_and(ours) || !e.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
         let old = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age > KEEP);
         if old {
             let _ = std::fs::remove_file(e.path());
@@ -342,6 +373,10 @@ mod tests {
         // A layer named like an option never reaches GDAL.
         let e = convert_one_in(&std::env::temp_dir(), Path::new("x.kml"), "-overwrite", None, None).unwrap_err();
         assert!(e.to_string().contains("starting with '-'"), "{e}");
+        // Pruning touches only the cache's own files.
+        assert!(ours("0123456789abcdef.fgb") && ours("0123456789abcdef.key") && ours("0123456789abcdef.empty"));
+        assert!(ours("0123456789abcdef.4242.tmp.fgb"));
+        assert!(!ours("notes.fgb") && !ours("0123456789abcdef.txt") && !ours("photo.jpg") && !ours("0123456789abcdef.x.tmp.fgb"));
         // The cache key's hash is stable.
         assert_eq!(fnv1a(b"rustgis"), fnv1a(b"rustgis"));
         assert_ne!(fnv1a(b"a"), fnv1a(b"b"));
