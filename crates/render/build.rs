@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const BASE: &str = "https://assets.rustgis.app/data";
-const FILES: [&str; 4] = ["countries.geojson", "cities.geojson", "rivers.geojson", "lakes.geojson"];
+const FILES: [&str; 5] = ["countries.geojson", "countries_chn.geojson", "cities.geojson", "rivers.geojson", "lakes.geojson"];
 
 fn valid(p: &Path) -> bool {
     std::fs::read(p).is_ok_and(|b| b.len() > 2 && b.first() == Some(&b'{'))

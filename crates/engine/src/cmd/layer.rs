@@ -321,7 +321,7 @@ fn add_sample(s: &mut Session, p: &Value) -> CmdResult {
     use crate::sample::*;
     let name = s_req(p, "name")?.to_ascii_lowercase();
     let (text, title) = match name.as_str() {
-        "countries" => (COUNTRIES, "Countries"),
+        "countries" => (countries(), "Countries"),
         "cities" => (CITIES, "Cities"),
         "rivers" => (RIVERS, "Rivers"),
         "lakes" => (LAKES, "Lakes"),

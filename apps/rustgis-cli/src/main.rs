@@ -33,7 +33,7 @@ use serde_json::{Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png> [--size N]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P]"
+        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png> [--size N]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]"
     );
     ExitCode::from(2)
 }
@@ -88,6 +88,13 @@ fn main() -> ExitCode {
             }
         }
     }
+    // Whose borders the built-in countries and world outline show: the system's by default.
+    let worldview = opt(&args, "--worldview").unwrap_or("auto");
+    if worldview != "auto" && rustgis_engine::sample::Worldview::from_code(worldview).is_none() {
+        eprintln!("rustgis-cli: --worldview {worldview}: expected auto, default or china");
+        return ExitCode::from(2);
+    }
+    rustgis_engine::sample::apply_worldview(worldview);
     let mut s = Session::new(Project::default());
     let res: Result<(), String> = (|| match cmd {
         "plugins" => {

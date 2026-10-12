@@ -6,10 +6,47 @@ use rustgis_map::{Bookmark, Camera, ClassMethod, Marker, Ramp, Renderer, Rgba, S
 
 use crate::Project;
 
-pub use rustgis_render::sample_data::{CITIES, COUNTRIES, LAKES, RIVERS};
+pub use rustgis_render::sample_data::{CITIES, COUNTRIES, COUNTRIES_CHN, LAKES, RIVERS, Worldview, countries, set_worldview, worldview};
+
+/// The worldview this system calls for: `RUSTGIS_WORLDVIEW` (`default` or `china`) when set, else
+/// China when the system's time zone or first locale is mainland China's. Nothing is looked up
+/// over the network.
+pub fn system_worldview() -> Worldview {
+    if cfg!(test) {
+        return Worldview::Default;
+    }
+    if let Some(w) = std::env::var("RUSTGIS_WORLDVIEW").ok().and_then(|v| Worldview::from_code(&v)) {
+        return w;
+    }
+    let tz = iana_time_zone::get_timezone().ok();
+    let locales: Vec<String> = sys_locale::get_locales().take(4).collect();
+    Worldview::detect(tz.as_deref(), locales.iter().map(String::as_str))
+}
+
+/// Applies a worldview preference: `auto` (or anything unknown) follows the system.
+pub fn apply_worldview(pref: &str) -> Worldview {
+    let w = Worldview::from_code(pref).unwrap_or_else(system_worldview);
+    set_worldview(w);
+    w
+}
 
 fn cam(lon: f64, lat: f64, res: f64) -> Camera {
     Camera { center: lonlat_to_merc(Coord::new(lon, lat)), res }
+}
+
+/// Puts the built-in countries in the current worldview into the layer named `Countries` (an
+/// untouched sample project's, after the worldview changed). Returns whether a layer was updated.
+pub fn refresh_countries(s: &mut crate::Session) -> bool {
+    let Ok((ds, _)) = read_geojson(countries(), "Countries") else {
+        return false;
+    };
+    let Some(l) = s.map_mut().layers.iter_mut().find(|l| l.name == "Countries") else {
+        return false;
+    };
+    l.dataset = ds;
+    l.selection.clear();
+    l.touch_geometry();
+    true
 }
 
 /// "World Atlas": countries by population, cities sized by population, rivers and lakes.
@@ -19,7 +56,7 @@ pub fn world_project() -> Project {
     map.name = "World".into();
     map.basemap = rustgis_map::Basemap::Ocean;
     let mut add = |name: &str, text: &str| read_geojson(text, name).ok().map(|(ds, _)| map.add_dataset(ds));
-    let countries = add("Countries", COUNTRIES);
+    let countries = add("Countries", countries());
     let lakes = add("Lakes", LAKES);
     let rivers = add("Rivers", RIVERS);
     let cities = add("Cities", CITIES);

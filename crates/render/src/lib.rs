@@ -24,9 +24,77 @@ pub use tiles::spec as tile_spec;
 /// Natural Earth 1:110m sample data (public domain), fetched by `build.rs` from rustgis-assets.
 pub mod sample_data {
     pub const COUNTRIES: &str = include_str!(concat!(env!("OUT_DIR"), "/countries.geojson"));
+    /// The countries as China sees its borders (Natural Earth's China point of view).
+    pub const COUNTRIES_CHN: &str = include_str!(concat!(env!("OUT_DIR"), "/countries_chn.geojson"));
     pub const CITIES: &str = include_str!(concat!(env!("OUT_DIR"), "/cities.geojson"));
     pub const RIVERS: &str = include_str!(concat!(env!("OUT_DIR"), "/rivers.geojson"));
     pub const LAKES: &str = include_str!(concat!(env!("OUT_DIR"), "/lakes.geojson"));
+
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    /// Whose view of disputed borders the built-in countries and world outline show.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum Worldview {
+        /// Natural Earth's de facto borders.
+        #[default]
+        Default,
+        /// China's view (required for maps shown in China).
+        China,
+    }
+
+    impl Worldview {
+        pub fn code(self) -> &'static str {
+            match self {
+                Worldview::Default => "default",
+                Worldview::China => "china",
+            }
+        }
+
+        pub fn from_code(code: &str) -> Option<Worldview> {
+            match code.trim().to_ascii_lowercase().as_str() {
+                "default" => Some(Worldview::Default),
+                "china" | "chn" | "cn" => Some(Worldview::China),
+                _ => None,
+            }
+        }
+
+        /// The worldview for a system in time zone `tz` (IANA, such as `Asia/Shanghai`) whose
+        /// preferred locales are `locales` (such as `zh-CN`, `zh_CN.UTF-8`): China when the time
+        /// zone is one of mainland China's or the first locale is mainland Chinese.
+        pub fn detect<'a>(tz: Option<&str>, locales: impl IntoIterator<Item = &'a str>) -> Worldview {
+            let china_tz = tz.is_some_and(|tz| {
+                matches!(
+                    tz.trim(),
+                    "Asia/Shanghai" | "Asia/Chongqing" | "Asia/Chungking" | "Asia/Harbin" | "Asia/Urumqi" | "Asia/Kashgar" | "PRC"
+                )
+            });
+            let china_locale = locales.into_iter().next().is_some_and(|tag| {
+                let base = tag.split(['.', '@']).next().unwrap_or("").replace('_', "-").to_ascii_lowercase();
+                let mut parts = base.split('-');
+                parts.next() == Some("zh") && parts.any(|p| p == "cn")
+            });
+            if china_tz || china_locale { Worldview::China } else { Worldview::Default }
+        }
+    }
+
+    static WORLDVIEW: AtomicU8 = AtomicU8::new(0);
+
+    /// Sets the worldview of the countries sample and the basemap's world outline.
+    pub fn set_worldview(w: Worldview) {
+        WORLDVIEW.store(w as u8, Ordering::Relaxed);
+    }
+
+    pub fn worldview() -> Worldview {
+        if WORLDVIEW.load(Ordering::Relaxed) == Worldview::China as u8 { Worldview::China } else { Worldview::Default }
+    }
+
+    /// The countries GeoJSON in the current worldview.
+    pub fn countries() -> &'static str {
+        match worldview() {
+            Worldview::Default => COUNTRIES,
+            Worldview::China => COUNTRIES_CHN,
+        }
+    }
 }
 
 use std::sync::OnceLock;
@@ -139,10 +207,13 @@ pub fn viewing_distance(ground_res: f64, view_height: f64) -> f64 {
     ground_res * view_height * 0.866
 }
 
-/// The built-in world outline used by every basemap (Natural Earth 1:110m, public domain).
+/// The built-in world outline used by every basemap (Natural Earth 1:110m, public domain), in the
+/// current worldview.
 fn world() -> &'static Vec<Geometry> {
-    static W: OnceLock<Vec<Geometry>> = OnceLock::new();
-    W.get_or_init(|| match rustgis_data::io::read_geojson(sample_data::COUNTRIES, "world") {
+    static W: [OnceLock<Vec<Geometry>>; 2] = [OnceLock::new(), OnceLock::new()];
+    let wv = sample_data::worldview();
+    let cell = &W[wv as usize];
+    cell.get_or_init(|| match rustgis_data::io::read_geojson(sample_data::countries(), "world") {
         Ok((ds, _)) => ds.features.into_iter().filter_map(|f| f.geometry).map(|g| g.map_coords(&lonlat_to_merc)).collect(),
         Err(e) => {
             log::warn!("built-in world outline unreadable: {e}");
@@ -153,8 +224,9 @@ fn world() -> &'static Vec<Geometry> {
 
 /// The built-in world outline in longitude/latitude, for the globe.
 fn world_lonlat() -> &'static Vec<Geometry> {
-    static W: OnceLock<Vec<Geometry>> = OnceLock::new();
-    W.get_or_init(|| world().iter().map(|g| g.map_coords(&rustgis_geom::merc_to_lonlat)).collect())
+    static W: [OnceLock<Vec<Geometry>>; 2] = [OnceLock::new(), OnceLock::new()];
+    let cell = &W[sample_data::worldview() as usize];
+    cell.get_or_init(|| world().iter().map(|g| g.map_coords(&rustgis_geom::merc_to_lonlat)).collect())
 }
 
 thread_local! {
@@ -167,7 +239,7 @@ thread_local! {
 fn world_in(flat: &rustgis_map::projection::Flat, key: &str) -> std::rc::Rc<Vec<Geometry>> {
     WORLD_IN.with(|cell| {
         cell.borrow_mut()
-            .entry(key.to_string())
+            .entry(format!("{}:{key}", sample_data::worldview().code()))
             .or_insert_with(|| {
                 let f = |c: Coord| flat.forward_checked(c).unwrap_or(Coord::new(f64::NAN, f64::NAN));
                 std::rc::Rc::new(world_lonlat().iter().map(|g| g.map_coords(&f)).collect())
@@ -1196,6 +1268,39 @@ mod tests {
 
     use super::*;
     use rustgis_data::{Field, FieldType, Value};
+
+    #[test]
+    fn worldview_detection_and_data() {
+        use sample_data::Worldview::{China, Default};
+        let detect = |tz: Option<&str>, locales: &[&str]| sample_data::Worldview::detect(tz, locales.iter().copied());
+        assert_eq!(detect(Some("Asia/Shanghai"), &["en-US"]), China);
+        assert_eq!(detect(Some("Asia/Urumqi"), &[]), China);
+        assert_eq!(detect(Some("Europe/Berlin"), &["zh-CN", "en"]), China);
+        assert_eq!(detect(None, &["zh_CN.UTF-8"]), China);
+        assert_eq!(detect(None, &["zh-Hans-CN"]), China);
+        assert_eq!(detect(Some("Asia/Taipei"), &["zh-TW"]), Default);
+        assert_eq!(detect(Some("Asia/Hong_Kong"), &["zh-HK"]), Default);
+        assert_eq!(detect(Some("America/New_York"), &["en-US", "zh-CN"]), Default);
+        assert_eq!(detect(None, &[]), Default);
+        assert_eq!(sample_data::Worldview::from_code(" China "), Some(China));
+        assert_eq!(sample_data::Worldview::from_code("default"), Some(Default));
+        assert_eq!(sample_data::Worldview::from_code("auto"), None);
+        // Both files have the same fields; in China's view Taiwan is part of China.
+        let read = |text| rustgis_data::io::read_geojson(text, "Countries").unwrap().0;
+        let (def, chn) = (read(sample_data::COUNTRIES), read(sample_data::COUNTRIES_CHN));
+        let fields = |d: &Dataset| d.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+        assert_eq!(fields(&def), fields(&chn));
+        let names = |d: &Dataset| {
+            let i = d.fields.iter().position(|f| f.name == "name").unwrap();
+            d.features
+                .iter()
+                .filter_map(|f| if let Some(Value::Text(t)) = f.attrs.get(i) { Some(t.clone()) } else { None })
+                .collect::<Vec<_>>()
+        };
+        assert!(names(&def).iter().any(|n| n == "Taiwan"));
+        assert!(!names(&chn).iter().any(|n| n == "Taiwan"));
+        assert!(names(&chn).iter().any(|n| n == "China"));
+    }
 
     #[test]
     fn renders_world_and_layers() {
