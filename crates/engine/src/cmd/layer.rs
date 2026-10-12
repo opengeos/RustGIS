@@ -372,7 +372,12 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
 #[cfg(not(target_arch = "wasm32"))]
 fn add_gdal(s: &mut Session, p: &Value, path: &str) -> CmdResult {
     let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
-    let converted = rustgis_data::source::gdal::convert(Path::new(path), ps(p, "layer"), crs).map_err(|e| format!("{path}: {e}"))?;
+    let (converted, failed) =
+        rustgis_data::source::gdal::convert(Path::new(path), ps(p, "layer"), crs).map_err(|e| format!("{path}: {e}"))?;
+    // Layers GDAL couldn't convert are said, so the file isn't taken for whole.
+    for f in failed {
+        s.notify(format!("{path}: {f}"), true);
+    }
     let original = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
     let empty_before = s.map().layers.is_empty();
     let single = converted.len() == 1;

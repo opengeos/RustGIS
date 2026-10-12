@@ -130,12 +130,14 @@ pub fn layers(src: &Path) -> Result<Vec<String>> {
 /// Converts the dataset's layers (or just `layer`) to FlatGeobufs, reusing earlier conversions of
 /// the same file.
 /// `crs` gives the coordinate system of a file that doesn't say (`EPSG:2263`; a DXF often doesn't).
-pub fn convert(src: &Path, layer: Option<&str>, crs: Option<&str>) -> Result<Vec<Converted>> {
+/// Returns the converted layers, and the layers that couldn't be converted (with why), so a
+/// partial result is never mistaken for the whole file.
+pub fn convert(src: &Path, layer: Option<&str>, crs: Option<&str>) -> Result<(Vec<Converted>, Vec<String>)> {
     let dir = cache_dir().ok_or_else(|| DataError::Format("no cache folder for GDAL conversions".into()))?;
     convert_in(&dir, src, layer, crs)
 }
 
-fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) -> Result<Vec<Converted>> {
+fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) -> Result<(Vec<Converted>, Vec<String>)> {
     if let Some(c) = crs
         && (c.len() > 64 || c.starts_with('-') || !c.chars().all(|ch| ch.is_ascii_alphanumeric() || ":_.".contains(ch)))
     {
@@ -156,8 +158,11 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
         }));
     }
     let mut out = Vec::new();
+    let mut failed = Vec::new();
     let mut last = None;
     for l in chosen {
+        let before = out.len();
+        let mut errors = Vec::new();
         let families: Vec<Option<Family>> = if l.single { vec![None] } else { Family::ALL.iter().copied().map(Some).collect() };
         for family in families {
             match convert_one_in(dir, src, &l.name, family, crs, l.has_srs) {
@@ -175,14 +180,21 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
                 Ok(None) => {}
                 // A layer (or a family filter the driver can't apply) that fails doesn't stop the
                 // others; the file fails only if nothing converts.
-                Err(e) => last = Some(e),
+                Err(e) => errors.push(e),
             }
+        }
+        // A layer none of whose parts converted is reported, with the first reason.
+        if out.len() == before
+            && let Some(e) = errors.into_iter().next()
+        {
+            failed.push(format!("{}: {e}", l.name));
+            last = Some(e);
         }
     }
     if out.is_empty() {
         return Err(last.unwrap_or_else(|| DataError::Format("GDAL found no features to read".into())));
     }
-    Ok(out)
+    Ok((out, failed))
 }
 
 /// Converts one layer (or one geometry family of it) into the cache; `None` when it has no
@@ -221,8 +233,12 @@ fn convert_one_in(
     let out = dir.join(format!("{tag}.fgb"));
     let empty = dir.join(format!("{tag}.empty"));
     let keyfile = dir.join(format!("{tag}.key"));
-    let raw = dir.join(format!("{tag}.raw"));
-    let same = std::fs::read_to_string(&keyfile).is_ok_and(|k| k == key);
+    // The key file holds the key, then whether the conversion is unprojected: one file, so the two
+    // can't disagree.
+    const UNPROJECTED: &str = "\nunprojected";
+    let stored = std::fs::read_to_string(&keyfile).unwrap_or_default();
+    let same = stored == key || stored.strip_suffix(UNPROJECTED) == Some(key.as_str());
+    let was_unprojected = stored.ends_with(UNPROJECTED);
     // A hit is touched, so pruning removes what isn't used rather than what is old.
     let touch = |p: &Path| {
         if let Ok(f) = std::fs::File::options().write(true).open(p) {
@@ -237,11 +253,7 @@ fn convert_one_in(
     if same && out.metadata().is_ok_and(|m| m.len() > 0) {
         touch(&out);
         touch(&keyfile);
-        let unprojected = raw.exists();
-        if unprojected {
-            touch(&raw);
-        }
-        return Ok(Some((out, unprojected)));
+        return Ok(Some((out, was_unprojected)));
     }
     // Unique to this conversion, even with others of the same layer running in this process.
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -297,12 +309,7 @@ fn convert_one_in(
     std::fs::rename(&tmp, &out)?;
     tmp_guard.0 = None;
     let _ = std::fs::remove_file(&empty);
-    if unprojected {
-        std::fs::write(&raw, b"")?;
-    } else {
-        let _ = std::fs::remove_file(&raw);
-    }
-    std::fs::write(&keyfile, &key)?;
+    std::fs::write(&keyfile, if unprojected { format!("{key}{UNPROJECTED}") } else { key.clone() })?;
     Ok(Some((out, unprojected)))
 }
 
@@ -389,7 +396,7 @@ fn fnv1a(b: &[u8]) -> u64 {
 fn ours(name: &str) -> bool {
     let Some((tag, rest)) = name.split_once('.') else { return false };
     let tmp = rest.strip_suffix(".tmp.fgb").is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()));
-    tag.len() == 16 && tag.bytes().all(|b| b.is_ascii_hexdigit()) && (matches!(rest, "fgb" | "key" | "empty" | "raw") || tmp)
+    tag.len() == 16 && tag.bytes().all(|b| b.is_ascii_hexdigit()) && (matches!(rest, "fgb" | "key" | "empty") || tmp)
 }
 
 /// Removes conversions not used for [`KEEP`] (best effort). Only this module's files are touched,
@@ -447,7 +454,8 @@ mod tests {
         )
         .unwrap();
         let cache = dir.join("cache");
-        let out = convert_in(&cache, &kml, None, None).unwrap();
+        let (out, failed) = convert_in(&cache, &kml, None, None).unwrap();
+        assert!(failed.is_empty(), "{failed:?}");
         let kinds: Vec<(String, u64)> = out
             .iter()
             .map(|c| {
@@ -457,7 +465,7 @@ mod tests {
             .collect();
         assert_eq!(kinds, vec![("mixed (points)".to_string(), 2), ("mixed (polygons)".to_string(), 1)], "{kinds:?}");
         // Converted once: the second call reuses the cache.
-        let again = convert_in(&cache, &kml, Some("mixed"), None).unwrap();
+        let (again, _) = convert_in(&cache, &kml, Some("mixed"), None).unwrap();
         assert_eq!(again.iter().map(|c| &c.path).collect::<Vec<_>>(), out.iter().map(|c| &c.path).collect::<Vec<_>>());
         let _ = std::fs::remove_dir_all(dir);
     }
