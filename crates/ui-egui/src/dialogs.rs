@@ -40,10 +40,11 @@ impl Dialogs {
             "exportLayer" => "exportLayer",
             other => return Err(format!("unknown dialog '{other}'")),
         };
-        if matches!(name, "addField" | "calculateField" | "definitionQuery" | "renameLayer" | "exportLayer")
-            && active.is_none_or(|l| name == "exportLayer" && l.is_raster())
-        {
+        if matches!(name, "addField" | "calculateField" | "definitionQuery" | "renameLayer" | "exportLayer") && active.is_none() {
             return Err("select a layer in the Contents pane first".into());
+        }
+        if name == "exportLayer" && active.is_some_and(|l| l.is_raster()) {
+            return Err("Export Features needs a vector layer (Raster Data › Export writes a raster)".into());
         }
         if name == "selectByAttributes" && s.map().layers.is_empty() {
             return Err("the map has no layers".into());

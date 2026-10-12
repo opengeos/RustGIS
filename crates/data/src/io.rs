@@ -158,13 +158,40 @@ pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
                 return Err(e.into());
             }
             written.sort_by_key(|(_, target)| target == path);
-            for (k, (tmp, target)) in written.iter().enumerate() {
-                if let Err(e) = std::fs::rename(tmp, target) {
-                    for (t, _) in written.iter().skip(k) {
-                        let _ = std::fs::remove_file(t);
+            // The old parts are moved aside first and put back if any new part fails to land, so
+            // the old Shapefile stays a matching set.
+            let mut backups: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+            let mut placed: Vec<std::path::PathBuf> = Vec::new();
+            let mut result = Ok(());
+            for (tmp, target) in &written {
+                if target.exists() {
+                    let bak = temp_beside(target)?;
+                    if let Err(e) = std::fs::rename(target, &bak) {
+                        result = Err(e);
+                        break;
                     }
-                    return Err(e.into());
+                    backups.push((bak, target.clone()));
                 }
+                if let Err(e) = std::fs::rename(tmp, target) {
+                    result = Err(e);
+                    break;
+                }
+                placed.push(target.clone());
+            }
+            if let Err(e) = result {
+                for p in &placed {
+                    let _ = std::fs::remove_file(p);
+                }
+                for (bak, target) in &backups {
+                    let _ = std::fs::rename(bak, target);
+                }
+                for (tmp, _) in &written {
+                    let _ = std::fs::remove_file(tmp);
+                }
+                return Err(e.into());
+            }
+            for (bak, _) in &backups {
+                let _ = std::fs::remove_file(bak);
             }
             // A spatial index left from an older file of the same name would no longer match.
             for stale in ["qix", "sbn", "sbx"] {
