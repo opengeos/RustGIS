@@ -7,6 +7,7 @@
 pub mod ascii;
 pub mod crs;
 pub mod geotiff;
+pub mod wkt;
 
 use std::path::Path;
 
@@ -394,18 +395,19 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<Raster> {
     }
 }
 
-/// The EPSG code in a `.prj` next to an ASCII grid, when it names one.
-/// Only `.prj` files that name an EPSG authority are understood (not bare `PROJCS` names).
+/// The coordinate system in a `.prj` next to an ASCII grid, when it's one RustGIS understands.
 fn sidecar_crs(path: &Path) -> Option<Crs> {
+    wkt::crs_from_wkt(&read_prj(path)?).ok()
+}
+
+/// The text of the `.prj` next to a file (`None` when there's none, or it's too large to be one).
+pub fn read_prj(path: &Path) -> Option<String> {
     let prj = path.with_extension("prj");
     let meta = std::fs::metadata(&prj).ok()?;
     if !meta.is_file() || meta.len() > 1 << 20 {
         return None;
     }
-    let text = std::fs::read_to_string(prj).ok()?;
-    let at = text.rfind("AUTHORITY[\"EPSG\",")?;
-    let code: String = text.get(at + 17..)?.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
-    Crs::from_epsg(code.parse().ok()?)
+    std::fs::read_to_string(prj).ok()
 }
 
 #[cfg(test)]
