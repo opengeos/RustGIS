@@ -10,10 +10,11 @@ use crate::{Coord, DataError, Dataset, Field, FieldType, Geometry, GeometryType,
 const MAX_BYTES: u64 = 256 << 20;
 
 /// File types the readers understand, for open dialogs.
-pub const READ_EXTENSIONS: &[&str] = &["geojson", "json", "csv", "txt", "shp", "gpkg", "parquet", "geoparquet", "fgb"];
+pub const READ_EXTENSIONS: &[&str] = &["geojson", "json", "csv", "txt", "shp", "zip", "gpkg", "parquet", "geoparquet", "fgb"];
 
 /// Reads vector data held in memory (a browser upload or a drop), choosing the reader by the
-/// file name's extension. Shapefiles need their sidecar files, so they're read from disk only.
+/// file name's extension. A Shapefile needs its sidecar files, so it comes zipped (`.zip`, whose
+/// first layer is read).
 pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)> {
     let path = Path::new(file_name);
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -25,7 +26,18 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
     let mut out = match ext.as_str() {
         "geojson" | "json" => read_geojson(text()?, &name)?,
         "csv" | "txt" => read_csv(text()?, &name)?,
-        "shp" => return Err(DataError::Unsupported("shp here: open Shapefiles from disk in the desktop app".into())),
+        "shp" => return Err(DataError::Unsupported("shp on its own: zip it with its .dbf, .shx and .prj and add the zip".into())),
+        // The first layer of the archive (`read_zip` reads them all), saying what else it holds.
+        "zip" => {
+            let layers = read_zip(file_name, bytes)?;
+            let rest: Vec<String> = layers.iter().skip(1).map(|(d, _)| d.name.clone()).collect();
+            let mut first = layers.into_iter().next().ok_or_else(|| DataError::Format(format!("{file_name}: empty")))?;
+            if !rest.is_empty() {
+                let leaf = Path::new(file_name).file_name().and_then(|n| n.to_str()).unwrap_or(file_name);
+                first.1.messages.push(format!("{leaf}: read its first layer; it also holds {}", rest.join(", ")));
+            }
+            return Ok(first);
+        }
         // A copy, since only borrowed bytes are given; `read_owned` takes them without one.
         e if crate::source::EXTENSIONS.contains(&e) => return read_owned(file_name, bytes.to_vec()),
         other => return Err(DataError::Unsupported(other.to_string())),
@@ -68,6 +80,10 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
                 check_size(&dbf)?;
             }
             read_shapefile(path, &name)?
+        }
+        "zip" => {
+            check_size(path)?;
+            read_bytes(&path.display().to_string(), &std::fs::read(path)?)?
         }
         // Read in place by a provider, so there's no size cap on the file, only on the features.
         e if crate::source::EXTENSIONS.contains(&e) => crate::source::materialize(crate::source::open_path(path, None)?.as_ref())?,
@@ -165,7 +181,14 @@ pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
             let mut result = Ok(());
             for (tmp, target) in &written {
                 if target.exists() {
-                    let bak = temp_beside(target)?;
+                    // Any failure here rolls back like a failed rename.
+                    let bak = match temp_beside(target) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            result = Err(e);
+                            break;
+                        }
+                    };
                     if let Err(e) = std::fs::rename(target, &bak) {
                         result = Err(e);
                         break;
@@ -357,7 +380,7 @@ pub fn read_geojson(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
                 coerce(v, field.ty)
             })
             .collect();
-        ds.push(geom, attrs);
+        ds.push_next(geom, attrs);
     }
     ds.geometry_type = dominant_type(&ds);
     if report.skipped > 0 {
@@ -501,7 +524,7 @@ pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
         };
         let attrs =
             ds.fields.iter().enumerate().map(|(i, f)| Value::parse(&unguard(r.get(i).map(|s| s.as_str()).unwrap_or("")), f.ty)).collect();
-        ds.push(geom, attrs);
+        ds.push_next(geom, attrs);
     }
     if report.skipped > malformed {
         report.messages.push(format!("{} rows had no usable coordinates", report.skipped - malformed));
@@ -568,34 +591,141 @@ pub fn to_csv(ds: &Dataset) -> Result<String> {
 // Shapefile
 
 fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
+    let dbf = path.with_extension("dbf");
+    if !dbf.is_file() {
+        return Err(DataError::Format(format!("Shapefile: {} is missing", dbf.display())));
+    }
+    let shx = path.with_extension("shx");
+    let parts = ShapefileParts {
+        shp: std::fs::read(path)?,
+        shx: if shx.is_file() { Some(std::fs::read(shx)?) } else { None },
+        dbf: std::fs::read(dbf)?,
+        prj: crate::raster::read_prj(path),
+    };
+    read_shapefile_parts(parts, name)
+}
+
+/// Most layers read from one zip archive.
+pub const MAX_ZIP_LAYERS: usize = 32;
+
+/// Reads the vector data in a zip archive: each Shapefile in it (its `.shp` with the `.dbf`,
+/// `.shx` and `.prj` beside it), then every other file the readers understand (GeoJSON, CSV,
+/// GeoParquet, FlatGeobuf…; `.txt` files in archives are readmes, so they're skipped), at most
+/// [`MAX_ZIP_LAYERS`]. Folders inside are fine; macOS
+/// resource forks (`__MACOSX/`, `._*`) are ignored.
+pub fn read_zip(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>> {
+    let lower = |n: &str| n.to_ascii_lowercase();
+    let is_fork = |n: &str| n.split('/').any(|part| part == "__MACOSX" || part.starts_with("._"));
+    let ext_of = |n: &str| Path::new(n).extension().and_then(|e| e.to_str()).map(lower).unwrap_or_default();
+    let wanted = |n: &str| {
+        let e = ext_of(n);
+        !is_fork(n)
+            && (matches!(e.as_str(), "shp" | "shx" | "dbf" | "prj")
+                || (!matches!(e.as_str(), "zip" | "txt") && READ_EXTENSIONS.contains(&e.as_str())))
+    };
+    let entries = crate::zip::read_matching(bytes, wanted).map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
+    // Sidecar files by their path without the extension, compared without regard to case.
+    let stem = |n: &str| lower(n.get(..n.len().saturating_sub(ext_of(n).len() + 1)).unwrap_or(n));
+    // Entries are taken out as they're used, so no file's bytes are copied.
+    let mut entries: Vec<Option<(String, Vec<u8>)>> = entries.into_iter().map(Some).collect();
+    let mut shps: Vec<String> = entries.iter().flatten().filter(|(n, _)| ext_of(n) == "shp").map(|(n, _)| n.clone()).collect();
+    shps.sort();
+    let take = |entries: &mut Vec<Option<(String, Vec<u8>)>>, base: &str, ext: &str| -> Option<(String, Vec<u8>)> {
+        entries.iter_mut().find(|e| e.as_ref().is_some_and(|(n, _)| ext_of(n) == ext && stem(n) == base))?.take()
+    };
+    let mut out = Vec::new();
+    // Members that couldn't be read are skipped, and said in the first layer's report.
+    let mut skipped: Vec<String> = Vec::new();
+    for n in shps {
+        if out.len() >= MAX_ZIP_LAYERS {
+            break;
+        }
+        let base = stem(&n);
+        let name = Path::new(&n).file_stem().and_then(|s| s.to_str()).unwrap_or("layer").to_string();
+        let shp = take(&mut entries, &base, "shp").map(|(_, b)| b).unwrap_or_default();
+        let shx = take(&mut entries, &base, "shx").map(|(_, b)| b);
+        let prj = take(&mut entries, &base, "prj").map(|(_, b)| String::from_utf8_lossy(&b).into_owned());
+        let Some((_, dbf)) = take(&mut entries, &base, "dbf") else {
+            skipped.push(format!("{n} (no .dbf beside it)"));
+            continue;
+        };
+        match read_shapefile_parts(ShapefileParts { shp, shx, dbf, prj }, &name) {
+            Ok(mut read) => {
+                read.0.source = Some(format!("{file_name}/{n}"));
+                out.push(read);
+            }
+            Err(e) => skipped.push(format!("{n} ({e})")),
+        }
+    }
+    let mut others: Vec<(String, Vec<u8>)> =
+        entries.into_iter().flatten().filter(|(n, _)| !matches!(ext_of(n).as_str(), "shp" | "shx" | "dbf" | "prj")).collect();
+    others.sort_by(|a, b| a.0.cmp(&b.0));
+    for (n, b) in others {
+        if out.len() >= MAX_ZIP_LAYERS {
+            skipped.push(format!("{n} (past the {MAX_ZIP_LAYERS}-layer limit)"));
+            continue;
+        }
+        let leaf = n.rsplit('/').next().unwrap_or(&n);
+        match read_bytes(leaf, &b) {
+            Ok(mut read) => {
+                read.0.source = Some(format!("{file_name}/{n}"));
+                out.push(read);
+            }
+            Err(e) => skipped.push(format!("{n} ({e})")),
+        }
+    }
+    if out.is_empty() {
+        let why = if skipped.is_empty() { String::new() } else { format!(": {}", skipped.join("; ")) };
+        return Err(DataError::Format(format!("{file_name}: no Shapefile or other vector data in the archive could be read{why}")));
+    }
+    if let Some((_, report)) = out.first_mut()
+        && !skipped.is_empty()
+    {
+        report.messages.push(format!("{file_name}: skipped {}", skipped.join("; ")));
+    }
+    Ok(out)
+}
+
+/// The files of a Shapefile, read into memory.
+struct ShapefileParts {
+    shp: Vec<u8>,
+    shx: Option<Vec<u8>>,
+    dbf: Vec<u8>,
+    prj: Option<String>,
+}
+
+fn read_shapefile_parts(parts: ShapefileParts, name: &str) -> Result<(Dataset, ReadReport)> {
     use shapefile::Shape;
     use shapefile::dbase::FieldValue;
+    use std::io::Cursor;
     let fmt = |e: shapefile::Error| DataError::Format(format!("Shapefile: {e}"));
+    let dbf = shapefile::dbase::Reader::new(Cursor::new(parts.dbf)).map_err(|e| DataError::Format(format!("Shapefile: the .dbf: {e}")))?;
     // Field order comes from the .dbf header (records are unordered maps).
-    let dbf = path.with_extension("dbf");
-    let order: Vec<(String, FieldType)> = match shapefile::dbase::Reader::from_path(&dbf) {
-        Ok(r) => r
-            .fields()
-            .iter()
-            .filter(|f| f.name() != "DeletionFlag")
-            .map(|f| {
-                use shapefile::dbase::FieldType as D;
-                let ty = match f.field_type() {
-                    D::Numeric | D::Float | D::Double | D::Currency => FieldType::Double,
-                    D::Integer => FieldType::Integer,
-                    D::Logical => FieldType::Boolean,
-                    _ => FieldType::Text,
-                };
-                (f.name().to_string(), ty)
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    let mut reader = shapefile::Reader::from_path(path).map_err(fmt)?;
+    let order: Vec<(String, FieldType)> = dbf
+        .fields()
+        .iter()
+        .filter(|f| f.name() != "DeletionFlag")
+        .map(|f| {
+            use shapefile::dbase::FieldType as D;
+            let ty = match f.field_type() {
+                D::Numeric | D::Float | D::Double | D::Currency => FieldType::Double,
+                D::Integer => FieldType::Integer,
+                D::Logical => FieldType::Boolean,
+                _ => FieldType::Text,
+            };
+            (f.name().to_string(), ty)
+        })
+        .collect();
+    let shapes = match parts.shx {
+        Some(shx) => shapefile::ShapeReader::with_shx(Cursor::new(parts.shp), Cursor::new(shx)),
+        None => shapefile::ShapeReader::new(Cursor::new(parts.shp)),
+    }
+    .map_err(fmt)?;
+    let mut reader = shapefile::Reader::new(shapes, dbf);
     let fields: Vec<Field> = order.iter().map(|(n, t)| Field::new(n.clone(), *t)).collect();
     let mut ds = Dataset::new(name, GeometryType::None, fields);
     let mut report = ReadReport::default();
-    let to_lonlat = shapefile_crs(path, &mut report);
+    let to_lonlat = shapefile_crs(parts.prj.as_deref(), &mut report);
     let (mut converted, mut unconverted) = (0usize, 0usize);
     let pt = |x: f64, y: f64| Coord::new(x, y);
     for item in reader.iter_shapes_and_records() {
@@ -655,7 +785,7 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
                 _ => Value::Null,
             })
             .collect();
-        ds.push(geom, attrs);
+        ds.push_next(geom, attrs);
     }
     ds.geometry_type = dominant_type(&ds);
     integral_numeric_to_integer(&mut ds);
@@ -677,9 +807,8 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
 /// Converts a Shapefile's coordinates to longitude/latitude, from the coordinate system in its
 /// `.prj`: `None` for longitude/latitude, or when there's no `.prj` or it isn't understood (said in
 /// the report).
-fn shapefile_crs(path: &Path, report: &mut ReadReport) -> Option<crate::raster::Transformer> {
-    let prj = crate::raster::read_prj(path)?;
-    let crs = match crate::raster::wkt::read_wkt(&prj) {
+fn shapefile_crs(prj: Option<&str>, report: &mut ReadReport) -> Option<crate::raster::Transformer> {
+    let crs = match crate::raster::wkt::read_wkt(prj?) {
         Ok((c, note)) => {
             if let Some(n) = note {
                 report.messages.push(format!("the .prj file: {n}"));
@@ -1074,5 +1203,64 @@ mod tests {
         let (_, rep) = read_path(&shp).unwrap();
         assert!(rep.messages.iter().any(|m| m.contains("not longitude/latitude")), "{:?}", rep.messages);
         std::fs::remove_dir_all(&dir).ok();
+    }
+    /// Zipped Shapefiles are read from memory (the web app's way to open them), with their `.prj`,
+    /// from folders inside the archive, beside other vector files; truncations are errors.
+    #[test]
+    fn zipped_shapefiles() {
+        use shapefile::dbase::{FieldValue, Record, TableWriterBuilder};
+        use std::io::Cursor;
+        let (mut shp, mut shx, mut dbf) = (Cursor::new(Vec::new()), Cursor::new(Vec::new()), Cursor::new(Vec::new()));
+        {
+            let table = TableWriterBuilder::new().add_character_field("name".try_into().unwrap(), 10);
+            let mut w = shapefile::Writer::new(shapefile::ShapeWriter::with_shx(&mut shp, &mut shx), table.build_with_dest(&mut dbf));
+            let mut r = Record::default();
+            r.insert("name".into(), FieldValue::Character(Some("paris".into())));
+            w.write_shape_and_record(&shapefile::Point::new(451_219.33, 5_411_550.20), &r).unwrap();
+        }
+        let prj = r#"PROJCS["WGS_1984_UTM_Zone_31N",GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["False_Easting",500000.0],PARAMETER["False_Northing",0.0],PARAMETER["Central_Meridian",3.0],PARAMETER["Scale_Factor",0.9996],PARAMETER["Latitude_Of_Origin",0.0],UNIT["Meter",1.0]]"#;
+        let geojson = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"n":1},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#;
+        let entries = vec![
+            ("data/Paris.SHP".to_string(), shp.into_inner()),
+            ("data/Paris.shx".to_string(), shx.into_inner()),
+            ("data/Paris.dbf".to_string(), dbf.into_inner()),
+            ("data/Paris.prj".to_string(), prj.as_bytes().to_vec()),
+            ("__MACOSX/data/._Paris.shp".to_string(), vec![0; 10]),
+            ("extra/points.geojson".to_string(), geojson.as_bytes().to_vec()),
+            ("ne_VERSION.txt".to_string(), b"5.1.1".to_vec()),
+        ];
+        let zip = crate::zip::write(&entries).unwrap();
+        let layers = read_zip("upload.zip", &zip).unwrap();
+        assert_eq!(layers.len(), 2);
+        let (ds, rep) = &layers[0];
+        assert_eq!(ds.name, "Paris");
+        let c = ds.features[0].geometry.as_ref().and_then(Geometry::label_point).unwrap();
+        assert!((c.x - 2.335).abs() < 1e-6 && (c.y - 48.855).abs() < 1e-6, "{c:?}");
+        assert!(rep.messages.is_empty(), "{:?}", rep.messages);
+        assert_eq!(ds.value(0, 0), &Value::Text("paris".into()));
+        assert_eq!(layers[1].0.name, "points");
+        // read_bytes takes the first layer.
+        assert_eq!(read_bytes("upload.zip", &zip).unwrap().0.name, "Paris");
+        // Without its .dbf the Shapefile is skipped (and said); the rest of the archive is read.
+        let no_dbf: Vec<_> = entries.iter().filter(|(n, _)| !n.ends_with(".dbf")).cloned().collect();
+        let layers = read_zip("x.zip", &crate::zip::write(&no_dbf).unwrap()).unwrap();
+        assert_eq!(layers.len(), 1);
+        assert!(layers[0].1.messages.iter().any(|m| m.contains("no .dbf")), "{:?}", layers[0].1.messages);
+        // A metadata file that isn't GeoJSON doesn't keep the Shapefile out.
+        let mut with_meta = entries.clone();
+        with_meta.push(("data/metadata.json".to_string(), br#"{"title": "not GeoJSON"}"#.to_vec()));
+        let layers = read_zip("x.zip", &crate::zip::write(&with_meta).unwrap()).unwrap();
+        assert_eq!(layers.len(), 2);
+        assert!(layers[0].1.messages.iter().any(|m| m.contains("metadata.json")), "{:?}", layers[0].1.messages);
+        // Nothing readable at all is an error.
+        let only_shp: Vec<_> = entries.iter().filter(|(n, _)| n.ends_with(".SHP")).cloned().collect();
+        assert!(read_zip("x.zip", &crate::zip::write(&only_shp).unwrap()).is_err());
+        // Nothing to read.
+        assert!(read_zip("x.zip", &crate::zip::write(&[("a.txt.bak".to_string(), vec![1])]).unwrap()).is_err());
+        for n in (0..zip.len()).step_by(37) {
+            let _ = read_zip("x.zip", &zip[..n]);
+        }
+        // A .shp alone is refused with a hint to zip it.
+        assert!(read_bytes("x.shp", &entries[0].1).is_err());
     }
 }

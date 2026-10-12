@@ -289,8 +289,51 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::source::duckdb::is_duckdb_name(path) {
         return add_duckdb(s, p, path);
     }
+    if path.to_ascii_lowercase().ends_with(".zip") {
+        let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+        if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
+            return Err(format!("{path} is too large to open"));
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        return add_zip(s, p, path, &bytes);
+    }
     let read = rustgis_data::io::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
     add_read(s, p, read)
+}
+
+/// Adds the layers of a zip archive: each Shapefile in it, and its other vector files. A name
+/// given applies to the first.
+pub(crate) fn add_zip(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8]) -> CmdResult {
+    let reads = rustgis_data::io::read_zip(file_name, bytes).map_err(|e| e.to_string())?;
+    let mut added = Vec::new();
+    let mut failed = Vec::new();
+    let mut q = p.clone();
+    for read in reads {
+        let name = read.0.name.clone();
+        // A layer that can't be added is skipped and said; the others are still added.
+        match add_read(s, &q, read) {
+            Ok(r) => added.push(r),
+            Err(e) => failed.push(format!("{name}: {e}")),
+        }
+        if let Some(o) = q.as_object_mut() {
+            o.remove("name");
+        }
+    }
+    if added.is_empty() {
+        return Err(failed.join("; "));
+    }
+    for f in &failed {
+        s.notify(format!("{file_name}: {f}"), true);
+    }
+    let layers: Vec<Value> = added.iter().filter_map(|r| r.get("layer").cloned()).collect();
+    let tables: Vec<Value> = added.iter().filter_map(|r| r.get("table").cloned()).collect();
+    let features: u64 = added.iter().filter_map(|r| r.get("features").and_then(Value::as_u64)).sum();
+    let mut out = json!({"layers": layers, "tables": tables, "features": features});
+    // The first layer, as the result of adding a single file says it.
+    if let Some(first) = layers.first() {
+        out["layer"] = first.clone();
+    }
+    Ok(out)
 }
 
 /// The layers a file holds, without adding them: a GeoPackage's feature tables, a GDAL dataset's

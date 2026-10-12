@@ -104,6 +104,15 @@ impl Dataset {
         self.features.push(Feature { id, geometry, attrs });
     }
 
+    /// Pushes a feature with the id one past the last feature's, padding/truncating attributes:
+    /// for readers filling a new dataset, where [`Dataset::push`]'s search for the largest id
+    /// would make reading quadratic.
+    pub fn push_next(&mut self, geometry: Option<Geometry>, mut attrs: Vec<Value>) {
+        attrs.resize(self.fields.len(), Value::Null);
+        let id = self.features.last().map(|f| f.id.saturating_add(1)).unwrap_or(1);
+        self.features.push(Feature { id, geometry, attrs });
+    }
+
     /// Adds a field (if missing) and returns its index.
     pub fn ensure_field(&mut self, name: &str, ty: FieldType) -> usize {
         if let Some(i) = self.field_index(name) {

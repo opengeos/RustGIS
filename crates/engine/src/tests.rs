@@ -2681,3 +2681,39 @@ fn layers_export_to_geopackage_geoparquet_shapefile_and_kmz() {
     assert!(s.run("share.exportLayer", &json!({"layer": "Countries", "path": dir.join("x.dwg").display().to_string()})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn zipped_shapefiles_add_as_layers() {
+    use base64::Engine;
+    // The sample's countries and cities as Shapefiles in one zip, under a folder.
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-zip-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut entries = Vec::new();
+    for (name, text) in [("countries", crate::sample::countries()), ("cities", crate::sample::CITIES)] {
+        let (ds, _) = rustgis_data::io::read_bytes(&format!("{name}.geojson"), text.as_bytes()).unwrap();
+        let (zipped, _) = rustgis_data::io::write_bytes(&ds, "shp").unwrap();
+        for (n, b) in rustgis_data::zip::read(&zipped).unwrap() {
+            entries.push((format!("world/{n}"), b));
+        }
+    }
+    let zip = rustgis_data::zip::write(&entries).unwrap();
+    // Uploaded (the web app).
+    let mut s = Session::new(Project::default());
+    let data = base64::engine::general_purpose::STANDARD.encode(&zip);
+    let r = s.run("layer.addDataBytes", &json!({"fileName": "world.zip", "data": data})).unwrap();
+    assert_eq!(r["layers"].as_array().map(Vec::len), Some(2), "{r}");
+    let names: Vec<&str> = s.map().layers.iter().map(|l| l.name.as_str()).collect();
+    assert!(names.contains(&"cities") && names.contains(&"countries"), "{names:?}");
+    // From disk (the desktop app), saved and reopened with the project.
+    let path = dir.join("world.zip");
+    std::fs::write(&path, &zip).unwrap();
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": path.display().to_string(), "name": "Towns"})).unwrap();
+    assert!(r["features"].as_u64().unwrap() > 10, "{r}");
+    assert_eq!(s.map().layers.iter().filter(|l| l.name == "Towns").count(), 1);
+    let project = dir.join("p.rgis").display().to_string();
+    s.run("project.saveAs", &json!({"path": project})).unwrap();
+    s.run("project.open", &json!({"path": project})).unwrap();
+    assert_eq!(s.map().layers.len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}

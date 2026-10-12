@@ -541,7 +541,10 @@ impl RustGisApp {
             use base64::Engine;
             return self.add_picture(json!({"image": base64::engine::general_purpose::STANDARD.encode(bytes)}));
         }
-        if rustgis_engine::data::raster::is_raster_name(name) || rustgis_engine::data::source::is_source_name(name) {
+        if rustgis_engine::data::raster::is_raster_name(name)
+            || rustgis_engine::data::source::is_source_name(name)
+            || lower.ends_with(".zip")
+        {
             use base64::Engine;
             let data = base64::engine::general_purpose::STANDARD.encode(bytes);
             return self.run("layer.addDataBytes", json!({"fileName": name, "data": data}));
@@ -847,6 +850,7 @@ impl RustGisApp {
                         "json",
                         "csv",
                         "shp",
+                        "zip",
                         "gpkg",
                         "parquet",
                         "geoparquet",
