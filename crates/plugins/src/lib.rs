@@ -23,6 +23,7 @@ pub mod testing;
 mod tests;
 pub mod tools;
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use serde_json::{Value, json};
@@ -77,15 +78,33 @@ static PLUGINS: RwLock<Vec<Arc<Plugin>>> = RwLock::new(Vec::new());
 /// have added this session (they can withdraw plugins, never bring one back).
 static BLOCKED: RwLock<Vec<registry::Blocked>> = RwLock::new(Vec::new());
 static BLOCKED_EXTRA: RwLock<Vec<registry::Blocked>> = RwLock::new(Vec::new());
+/// Goes up whenever the loaded plugins change (load, unload, enable), so callers can cache.
+static REVISION: AtomicU64 = AtomicU64::new(0);
+/// Whether an enabled plugin has translations (`i18n`): if none has, lookups skip the list.
+static TRANSLATES: AtomicBool = AtomicBool::new(false);
+
+/// A number that changes whenever the loaded plugins do.
+pub fn revision() -> u64 {
+    REVISION.load(Ordering::Relaxed)
+}
+
+/// Records a change to the plugin list `v`.
+fn changed(v: &[Arc<Plugin>]) {
+    TRANSLATES.store(v.iter().any(|p| p.enabled && !p.manifest.i18n.is_empty()), Ordering::Relaxed);
+    REVISION.fetch_add(1, Ordering::Relaxed);
+}
+
 /// The interface language's code, sent to plugins in every request.
 static LANGUAGE: RwLock<String> = RwLock::new(String::new());
 
 /// Sets the interface language (`de`, `zh`…). Plugins get it as `lang` in each command and tool
 /// request, to word the messages they build in it.
 pub fn set_language(code: &str) {
-    if let Ok(mut l) = LANGUAGE.write()
-        && *l != code
-    {
+    // Called every frame: the write lock only when the language changed.
+    if LANGUAGE.read().is_ok_and(|l| *l == code) {
+        return;
+    }
+    if let Ok(mut l) = LANGUAGE.write() {
         *l = code.to_string();
     }
 }
@@ -98,6 +117,9 @@ pub fn language() -> String {
 /// `s` in language `lang` from the `i18n` of the first enabled plugin that translates it. The
 /// interface uses it for plugin text its own catalog doesn't have (tool names, parameters…).
 pub fn translate(lang: &str, s: &str) -> Option<String> {
+    if !TRANSLATES.load(Ordering::Relaxed) {
+        return None;
+    }
     let plugins = PLUGINS.read().ok()?;
     plugins.iter().filter(|p| p.enabled).map(|p| p.manifest.translate(lang, s)).find(|t| *t != s).map(str::to_string)
 }
@@ -150,6 +172,7 @@ pub fn register(mut plugin: Plugin) -> Arc<Plugin> {
     if let Ok(mut v) = PLUGINS.write() {
         v.retain(|p| p.manifest.id != plugin.manifest.id);
         v.push(plugin.clone());
+        changed(&v);
     }
     tools::reload();
     plugin
@@ -160,6 +183,7 @@ pub fn unload(id: &str) -> bool {
     let removed = PLUGINS.write().map(|mut v| {
         let n = v.len();
         v.retain(|p| p.manifest.id != id);
+        changed(&v);
         v.len() != n
     });
     tools::reload();
@@ -177,6 +201,7 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
         if let Some(slot) = v.get_mut(i) {
             *slot = Arc::new(new);
         }
+        changed(&v);
     }
     drop(v);
     tools::reload();
