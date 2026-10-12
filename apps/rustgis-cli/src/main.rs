@@ -53,11 +53,12 @@ fn print(v: &Value) {
 /// Runs a command; what it said beside its result (the app's status bar) goes to standard error.
 fn run(s: &mut Session, id: &str, p: Value) -> Result<Value, String> {
     let mark = s.notice_mark();
-    let r = s.run(id, &p).map_err(|e| format!("{id}: {e}"));
-    for n in s.notices_since(mark) {
+    let r = s.run(id, &p);
+    // A failure is noted too; it's printed once, by the caller.
+    for n in s.notices_since(mark).iter().filter(|n| r.as_ref().err() != Some(&n.text)) {
         eprintln!("rustgis-cli: {}{}", if n.error { "error: " } else { "" }, n.text);
     }
-    r
+    r.map_err(|e| format!("{id}: {e}"))
 }
 
 fn is_project(path: &str) -> bool {
