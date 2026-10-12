@@ -2335,3 +2335,19 @@ fn tools_read_streamed_layers_whole() {
     assert_eq!(out.dataset.features.len(), 2500);
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn a_streamed_layer_whose_file_goes_away_shows_an_error_not_stale_features() {
+    let path = grid_fgb("vanishing", 40);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
+    let v = view_of(&mut s, rustgis_geom::Extent::new(0.0, 0.0, 30.0, 30.0));
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    assert!(!s.map().layers[0].dataset.features.is_empty());
+    std::fs::remove_file(&path).unwrap();
+    let v = view_of(&mut s, rustgis_geom::Extent::new(-150.0, -60.0, -120.0, -30.0));
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    let l = &s.map().layers[0];
+    assert!(l.dataset.features.is_empty());
+    assert!(l.source.as_ref().unwrap().error.is_some());
+}

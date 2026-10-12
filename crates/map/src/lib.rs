@@ -239,14 +239,22 @@ impl Layer {
                 return false;
             }
         }
-        if let source::Polled::Done(_, batch) = src.poll(block) {
-            self.install(batch.features);
+        // A failed read leaves nothing drawn for it (its error shows in Contents), not the
+        // previous view's features.
+        match src.poll(block) {
+            source::Polled::Done(_, batch) => self.install(batch.features),
+            source::Polled::Failed(_) => self.install(Vec::new()),
+            source::Polled::Idle | source::Polled::Waiting => {}
         }
         let Some(src) = &mut self.source else { return false };
         if let Some(e) = src.wanted(view) {
             src.start(e, block);
-            if block && let source::Polled::Done(_, batch) = src.poll(true) {
-                self.install(batch.features);
+            match src.poll(block) {
+                source::Polled::Done(_, batch) => self.install(batch.features),
+                source::Polled::Failed(_) => self.install(Vec::new()),
+                // A thread that couldn't start leaves an error and no read.
+                source::Polled::Idle if src.error.is_some() => self.install(Vec::new()),
+                source::Polled::Idle | source::Polled::Waiting => {}
             }
         }
         self.source.as_ref().is_some_and(|s| s.is_pending())
