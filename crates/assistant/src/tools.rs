@@ -1,0 +1,425 @@
+//! The tools the model calls, and what they do to the session.
+//!
+//! Every RustGIS action is a command, so a handful of tools reach all of them: the model finds a
+//! command or geoprocessing tool by searching, then runs it by id. Runs go through
+//! [`Session::run`], so each is one undo step and is restored if it fails. Commands that reach
+//! beyond the project (files, the network, the user's own automation) need the user's approval
+//! first ([`gate`]).
+
+use rustgis_engine::cmd::plugins::{Reach, reaches, user_only};
+use rustgis_engine::{Session, analysis};
+use serde_json::{Value, json};
+
+use crate::provider::{ToolCall, ToolDef};
+
+/// The longest tool result handed to the model (characters).
+pub const MAX_RESULT: usize = 8000;
+
+pub fn defs() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "list_layers",
+            description: "The project's map: its layers (id, name, type, feature count, fields, visibility, selection), basemap, centre and scale.",
+            schema: json!({"type": "object", "properties": {}}),
+        },
+        ToolDef {
+            name: "search_commands",
+            description: "Search RustGIS commands (map navigation, layers, symbology, labels, selection, editing, layouts, export…) by words. Returns each command's id, label, ribbon location and parameters.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Words to look for, e.g. \"basemap\", \"label field\", \"zoom layer\""},
+                    "limit": {"type": "integer", "description": "At most this many (default 12)"}
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolDef {
+            name: "run_command",
+            description: "Run a RustGIS command by id with JSON parameters (see search_commands for ids and parameters). Each run is one undo step. Commands that read or write files, use the network or replace the project ask the user first.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Command id, e.g. map.goToXY"},
+                    "params": {"type": "object", "description": "The command's parameters"}
+                },
+                "required": ["command"]
+            }),
+        },
+        ToolDef {
+            name: "search_tools",
+            description: "Search geoprocessing tools (buffer, clip, dissolve, spatial join, statistics, raster analysis…) by words. Returns each tool's id, name, toolbox and summary.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Words to look for"},
+                    "limit": {"type": "integer", "description": "At most this many (default 12)"}
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolDef {
+            name: "describe_tool",
+            description: "A geoprocessing tool's parameters: name, kind, whether required, default and help.",
+            schema: json!({
+                "type": "object",
+                "properties": {"tool": {"type": "string", "description": "Tool id"}},
+                "required": ["tool"]
+            }),
+        },
+        ToolDef {
+            name: "run_tool",
+            description: "Run a geoprocessing tool. Its output is added to the map as a new layer, whose name the result gives (use it as the input of a next step). One undo step.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "tool": {"type": "string", "description": "Tool id"},
+                    "params": {"type": "object", "description": "The tool's parameters by name; layers by name"}
+                },
+                "required": ["tool"]
+            }),
+        },
+        ToolDef {
+            name: "read_features",
+            description: "Read a vector layer's attribute rows, optionally only those matching a where clause (SQL-like: pop_max > 1000000 AND continent = 'Asia'). Returns the number matching and up to `limit` rows, each with its row number (_row, for select.rows) and location (_lon, _lat).",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "layer": {"type": "string", "description": "Layer name or id"},
+                    "where": {"type": "string", "description": "A where clause; empty for all rows"},
+                    "fields": {"type": "array", "items": {"type": "string"}, "description": "Only these fields (default all)"},
+                    "order_by": {"type": "string", "description": "Sort by this field"},
+                    "descending": {"type": "boolean"},
+                    "selected": {"type": "boolean", "description": "Only the selected rows"},
+                    "limit": {"type": "integer", "description": "At most this many rows (default 20, at most 200)"}
+                },
+                "required": ["layer"]
+            }),
+        },
+    ]
+}
+
+/// Whether a call needs the user's approval, and why.
+pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
+    let (id, params) = match call.name.as_str() {
+        "run_command" => (str_arg(&call.args, "command").unwrap_or_default(), obj_arg(&call.args, "params")),
+        "run_tool" => (
+            "gp.run".to_string(),
+            json!({"tool": str_arg(&call.args, "tool").unwrap_or_default(), "params": obj_arg(&call.args, "params")}),
+        ),
+        _ => return None,
+    };
+    if id.starts_with(rustgis_engine::plugins::PREFIX) {
+        return Some("it runs a plugin's command".into());
+    }
+    if user_only(&id) && !matches!(id.as_str(), "edit.undo" | "edit.redo") {
+        return Some(match id.as_str() {
+            "project.new" | "project.open" | "project.openText" | "project.sample" | "project.fromTemplate" => {
+                "it replaces the open project".into()
+            }
+            _ => "it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)".into(),
+        });
+    }
+    let spec = s.registry.get(&id)?;
+    match reaches(spec, &params) {
+        Some(Reach::Files) => Some("it reads or writes files on this computer".into()),
+        Some(Reach::Network) => Some("it connects to an address on the internet".into()),
+        None => None,
+    }
+}
+
+/// A one-line description of a call for the transcript and the approval prompt.
+pub fn summary(call: &ToolCall) -> String {
+    let short = |v: Value| {
+        let t = v.to_string();
+        if t.chars().count() > 300 { format!("{}…", t.chars().take(300).collect::<String>()) } else { t }
+    };
+    match call.name.as_str() {
+        "run_command" => format!("{} {}", str_arg(&call.args, "command").unwrap_or_default(), short(obj_arg(&call.args, "params"))),
+        "run_tool" => format!(
+            "gp.run {}",
+            short(json!({"tool": str_arg(&call.args, "tool").unwrap_or_default(), "params": obj_arg(&call.args, "params")}))
+        ),
+        other => format!("{other} {}", short(call.args.clone())),
+    }
+}
+
+/// Runs a call; `Err` is a result the model is told failed.
+pub fn run(s: &mut Session, call: &ToolCall) -> Result<String, String> {
+    let a = &call.args;
+    let v = match call.name.as_str() {
+        "list_layers" => s.run("info.project", &Value::Null)?,
+        "search_commands" => search_commands(s, a),
+        "search_tools" => search_tools(a),
+        "describe_tool" => describe_tool(a)?,
+        "run_command" => {
+            let id = str_arg(a, "command").ok_or("command is required")?;
+            if id.starts_with("ui.") {
+                return Err("ui.* commands only open panes and dialogs; the assistant can't use them".into());
+            }
+            if s.registry.get(&id).is_none() && !id.starts_with(rustgis_engine::plugins::PREFIX) {
+                return Err(format!("unknown command '{id}'; find ids with search_commands"));
+            }
+            let before = layer_names(s);
+            let r = s.run(&id, &obj_arg(a, "params"))?;
+            with_new_layers(r, s, &before)
+        }
+        "run_tool" => {
+            let tool = str_arg(a, "tool").ok_or("tool is required")?;
+            let before = layer_names(s);
+            let r = s.run("gp.run", &json!({"tool": tool, "params": obj_arg(a, "params")}))?;
+            with_new_layers(r, s, &before)
+        }
+        "read_features" => read_features(s, a)?,
+        other => return Err(format!("unknown tool '{other}'")),
+    };
+    Ok(clip(&v.to_string(), MAX_RESULT))
+}
+
+/// `text`, cut to `max` characters with a note when longer.
+pub fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    format!("{}… (cut: {} characters in all)", text.chars().take(max).collect::<String>(), text.chars().count())
+}
+
+fn str_arg(a: &Value, k: &str) -> Option<String> {
+    match a.get(k)? {
+        Value::String(s) => Some(s.trim().to_string()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// An object parameter, which some models send as JSON text.
+fn obj_arg(a: &Value, k: &str) -> Value {
+    match a.get(k) {
+        Some(Value::String(t)) if !t.trim().is_empty() => serde_json::from_str(t).unwrap_or(Value::Null),
+        Some(v @ Value::Object(_)) => v.clone(),
+        _ => json!({}),
+    }
+}
+
+fn limit_arg(a: &Value, default: usize, max: usize) -> usize {
+    a.get("limit").and_then(Value::as_u64).map_or(default, |n| usize::try_from(n).unwrap_or(max)).clamp(1, max)
+}
+
+fn layer_names(s: &Session) -> Vec<(u32, String)> {
+    s.map().layers.iter().map(|l| (l.id, l.name.clone())).collect()
+}
+
+/// A run's result, with the layers it added named (the next step's inputs).
+fn with_new_layers(r: Value, s: &Session, before: &[(u32, String)]) -> Value {
+    let added: Vec<String> = s.map().layers.iter().filter(|l| !before.iter().any(|(id, _)| *id == l.id)).map(|l| l.name.clone()).collect();
+    if added.is_empty() {
+        return if r.is_null() { json!({"ok": true}) } else { r };
+    }
+    json!({"result": r, "layersAdded": added})
+}
+
+/// How well `words` match `hay` (all lower case): matched words, with whole-id hits counting more.
+fn score(words: &[String], fields: &[&str]) -> usize {
+    words
+        .iter()
+        .map(|w| {
+            fields.iter().enumerate().map(|(i, f)| if f.contains(w.as_str()) { if i == 0 { 3 } else { 2 } } else { 0 }).max().unwrap_or(0)
+        })
+        .sum()
+}
+
+fn words(a: &Value) -> Vec<String> {
+    str_arg(a, "query")
+        .unwrap_or_default()
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 1)
+        .map(|w| w.trim_end_matches('s').to_string())
+        .filter(|w| !w.is_empty())
+        .take(12)
+        .collect()
+}
+
+fn search_commands(s: &Session, a: &Value) -> Value {
+    let words = words(a);
+    let limit = limit_arg(a, 12, 40);
+    let mut hits: Vec<(usize, Value)> = s
+        .registry
+        .commands
+        .iter()
+        // Internal plumbing the model has no use for.
+        .filter(|c| !matches!(c.id, "gp.finish" | "info.commands"))
+        .filter_map(|c| {
+            let (id, label, loc, params) =
+                (c.id.to_lowercase(), c.label.to_lowercase(), c.location.to_lowercase(), c.params.to_lowercase());
+            let sc = score(&words, &[&id, &label, &loc, &params]);
+            (sc > 0 || words.is_empty()).then(|| {
+                (sc, json!({"id": c.id, "label": c.label, "location": c.location, "params": c.params, "changesProject": c.mutates}))
+            })
+        })
+        .collect();
+    hits.sort_by_key(|h| std::cmp::Reverse(h.0));
+    let total = hits.len();
+    json!({"matches": total, "commands": hits.into_iter().take(limit).map(|h| h.1).collect::<Vec<_>>()})
+}
+
+fn search_tools(a: &Value) -> Value {
+    let words = words(a);
+    let limit = limit_arg(a, 12, 40);
+    let mut hits: Vec<(usize, Value)> = analysis::tools()
+        .filter_map(|t| {
+            let (id, name, tb, summary) = (t.id.to_lowercase(), t.name.to_lowercase(), t.toolbox.to_lowercase(), t.summary.to_lowercase());
+            let sc = score(&words, &[&id, &name, &tb, &summary]);
+            (sc > 0).then(|| (sc, json!({"id": t.id, "name": t.name, "toolbox": t.toolbox, "summary": clip(t.summary, 200)})))
+        })
+        .collect();
+    hits.sort_by_key(|h| std::cmp::Reverse(h.0));
+    let total = hits.len();
+    json!({"matches": total, "tools": hits.into_iter().take(limit).map(|h| h.1).collect::<Vec<_>>()})
+}
+
+fn describe_tool(a: &Value) -> Result<Value, String> {
+    let id = str_arg(a, "tool").ok_or("tool is required")?;
+    let t = analysis::tool(&id).ok_or_else(|| format!("no tool '{id}'; find ids with search_tools"))?;
+    let params: Vec<Value> = t
+        .params
+        .iter()
+        .map(|p| {
+            let kind = match p.kind {
+                analysis::ParamKind::Choice(c) => json!({"choice": c}),
+                k => json!(format!("{k:?}")),
+            };
+            json!({"name": p.name, "label": p.label, "kind": kind, "required": p.required, "default": p.default, "help": clip(p.help, 300)})
+        })
+        .collect();
+    Ok(json!({"id": t.id, "name": t.name, "toolbox": t.toolbox, "summary": t.summary, "params": params}))
+}
+
+fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
+    let layer = a.get("layer").cloned().ok_or("layer is required")?;
+    let id = s.layer_id(&json!({"layer": layer}))?;
+    let l = s.map().layer(id).ok_or("no such layer")?;
+    if l.is_raster() {
+        return Err(format!("{} is a raster layer; it has no rows (try the raster.info command)", l.name));
+    }
+    let ds = &l.dataset;
+    let mut rows: Vec<usize> = if a.get("selected").and_then(Value::as_bool) == Some(true) {
+        l.selection.iter().copied().filter(|&r| r < ds.features.len()).collect()
+    } else {
+        (0..ds.features.len()).collect()
+    };
+    if let Some(w) = str_arg(a, "where").filter(|w| !w.is_empty()) {
+        let hits: std::collections::HashSet<usize> = rustgis_engine::data::query::select(&w, ds)?.into_iter().collect();
+        rows.retain(|r| hits.contains(r));
+    }
+    let fields: Vec<usize> = match a.get("fields").and_then(Value::as_array) {
+        Some(names) if !names.is_empty() => {
+            let mut v = Vec::new();
+            for n in names.iter().filter_map(Value::as_str) {
+                let i = ds
+                    .fields
+                    .iter()
+                    .position(|f| f.name.eq_ignore_ascii_case(n))
+                    .ok_or_else(|| format!("{} has no field '{n}'", l.name))?;
+                v.push(i);
+            }
+            v
+        }
+        _ => (0..ds.fields.len()).collect(),
+    };
+    if let Some(by) = str_arg(a, "order_by").filter(|f| !f.is_empty()) {
+        // SQL habits: `pop_max DESC`.
+        let lower = by.to_ascii_lowercase();
+        let (by, desc) = if let Some(f) = lower.strip_suffix(" desc") {
+            (by.get(..f.len()).unwrap_or("").trim().to_string(), true)
+        } else if let Some(f) = lower.strip_suffix(" asc") {
+            (by.get(..f.len()).unwrap_or("").trim().to_string(), false)
+        } else {
+            (by, a.get("descending").and_then(Value::as_bool) == Some(true))
+        };
+        let fi =
+            ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case(&by)).ok_or_else(|| format!("{} has no field '{by}'", l.name))?;
+        let val = |r: &usize| ds.features.get(*r).and_then(|f| f.attrs.get(fi)).cloned().unwrap_or_default();
+        rows.sort_by(|x, y| val(x).partial_cmp(&val(y)).unwrap_or(std::cmp::Ordering::Equal));
+        if desc {
+            rows.reverse();
+        }
+    }
+    let limit = limit_arg(a, 20, 200);
+    let out: Vec<Value> = rows
+        .iter()
+        .take(limit)
+        .filter_map(|&r| {
+            let f = ds.features.get(r)?;
+            let mut o = serde_json::Map::new();
+            o.insert("_row".into(), json!(r));
+            // Where it is (its extent's centre), for zooming or going to it.
+            if let Some(g) = &f.geometry {
+                let c = g.extent().center();
+                if c.x.is_finite() && c.y.is_finite() {
+                    o.insert("_lon".into(), json!((c.x * 1e5).round() / 1e5));
+                    o.insert("_lat".into(), json!((c.y * 1e5).round() / 1e5));
+                }
+            }
+            for &fi in &fields {
+                let (Some(field), Some(v)) = (ds.fields.get(fi), f.attrs.get(fi)) else { continue };
+                let v = match v {
+                    rustgis_engine::data::Value::Null => Value::Null,
+                    rustgis_engine::data::Value::Int(i) => json!(i),
+                    rustgis_engine::data::Value::Float(x) => json!(x),
+                    rustgis_engine::data::Value::Bool(b) => json!(b),
+                    rustgis_engine::data::Value::Text(t) => json!(clip(t, 200)),
+                };
+                o.insert(field.name.clone(), v);
+            }
+            Some(Value::Object(o))
+        })
+        .collect();
+    Ok(json!({"layer": l.name, "total": ds.features.len(), "matched": rows.len(), "rows": out}))
+}
+
+/// The map as the model sees it at the start of a request: one line per layer.
+pub fn context(s: &Session) -> String {
+    let m = s.map();
+    let c = m.center_lonlat();
+    let mut out = format!(
+        "Map \"{}\": basemap {}, projection {}, centre {:.4}, {:.4} (lon, lat), scale 1:{:.0}.",
+        m.name,
+        m.basemap.code(),
+        m.projection.code(),
+        c.x,
+        c.y,
+        m.scale()
+    );
+    if let Some(l) = s.active_layer.and_then(|id| m.layer(id)) {
+        out.push_str(&format!(" Selected in Contents: \"{}\".", l.name));
+    }
+    if m.layers.is_empty() {
+        out.push_str("\nNo layers.");
+    } else {
+        out.push_str("\nLayers (top first):");
+    }
+    for l in m.layers.iter().take(60) {
+        let mut line = if l.is_raster() {
+            format!("\n- \"{}\" (id {}, raster", l.name, l.id)
+        } else {
+            format!("\n- \"{}\" (id {}, {}, {} features", l.name, l.id, l.geometry_type().label(), l.dataset.features.len())
+        };
+        if !l.visible {
+            line.push_str(", hidden");
+        }
+        if !l.selection.is_empty() {
+            line.push_str(&format!(", {} selected", l.selection.len()));
+        }
+        line.push(')');
+        if !l.dataset.fields.is_empty() {
+            let fields: Vec<String> = l.dataset.fields.iter().take(40).map(|f| format!("{}:{}", f.name, f.ty.label())).collect();
+            line.push_str(&format!(" fields: {}", fields.join(", ")));
+        }
+        out.push_str(&clip(&line, 1500));
+    }
+    if m.layers.len() > 60 {
+        out.push_str(&format!("\n… and {} more (list_layers lists them all).", m.layers.len() - 60));
+    }
+    out
+}

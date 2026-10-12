@@ -8,6 +8,9 @@
 //! rustgis-cli run [--sample | --project p.rgisx | --data f.geojson …] \
 //!     --cmd 'gp.run={"tool":"buffer","params":{"input":"Cities","distance":100}}' \
 //!     --cmd 'share.exportMap={"path":"out.png"}' [--save out.rgisx]
+//! rustgis-cli ask [--sample | --project p.rgisx | --data f.geojson …] "Which cities have over 10 million people?" \
+//!     [--provider anthropic|openai|gemini|openrouter|ollama|custom] [--model M] [--base-url URL] [--yes] [--save out.rgisx] [--trace log.txt]
+//! rustgis-cli ask --models [--provider P]                # list the provider's models
 //! rustgis-cli parity                                    # ribbon feature coverage report
 //! rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id>
 //!                      | browse | get <id>] [--registry URL]
@@ -33,7 +36,7 @@ use serde_json::{Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png> [--size N]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P]"
+        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png> [--size N]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]"
     );
     ExitCode::from(2)
 }
@@ -64,6 +67,115 @@ fn load(s: &mut Session, path: &str) -> Result<(), String> {
         run(s, "project.open", json!({"path": path}))?;
     } else {
         run(s, "layer.addData", json!({"path": path}))?;
+    }
+    Ok(())
+}
+
+/// Opens `--sample`, `--project` and every `--data`.
+fn open_inputs(s: &mut Session, args: &[String]) -> Result<(), String> {
+    if args.iter().any(|a| a == "--sample") {
+        run(s, "project.sample", Value::Null)?;
+    }
+    if let Some(p) = opt(args, "--project") {
+        load(s, p)?;
+    }
+    for (i, a) in args.iter().enumerate() {
+        if a == "--data"
+            && let Some(p) = args.get(i + 1)
+        {
+            load(s, p)?;
+        }
+    }
+    Ok(())
+}
+
+/// `ask "<request>"`: one conversation turn with the AI assistant, which acts on the project.
+fn ask(s: &mut Session, args: &[String]) -> Result<(), String> {
+    use rustgis_assistant::{Agent, Config, Entry, agent, http, provider};
+    // The first value that isn't an option's.
+    let takes_value = ["--provider", "--model", "--base-url", "--project", "--data", "--save", "--trace"];
+    let prompt = args
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(i, a)| !a.starts_with("--") && !args.get(i - 1).is_some_and(|p| takes_value.contains(&p.as_str())))
+        .map(|(_, a)| a.clone());
+    let provider = opt(args, "--provider")
+        .map(str::to_string)
+        .or_else(|| std::env::var("RUSTGIS_ASSISTANT_PROVIDER").ok())
+        .or_else(|| {
+            // The first provider with a key in the environment.
+            provider::PRESETS.iter().find(|p| !Config::from_env(p.id).key.is_empty()).map(|p| p.id.to_string())
+        })
+        .unwrap_or_else(|| "ollama".into());
+    if provider::preset(&provider).is_none() {
+        let ids: Vec<&str> = provider::PRESETS.iter().map(|p| p.id).collect();
+        return Err(format!("unknown provider '{provider}' (one of {})", ids.join(", ")));
+    }
+    let mut cfg = Config::from_env(&provider);
+    if let Some(m) = opt(args, "--model").map(str::to_string).or_else(|| std::env::var("RUSTGIS_ASSISTANT_MODEL").ok()) {
+        cfg.model = m;
+    }
+    if let Some(u) = opt(args, "--base-url") {
+        cfg.base_url = u.to_string();
+    }
+    if args.iter().any(|a| a == "--models") {
+        let r = http::send(&provider::models_request(&cfg))?;
+        for m in provider::parse_models(cfg.api(), &r)? {
+            out!("{m}");
+        }
+        return Ok(());
+    }
+    let prompt = prompt.ok_or("ask needs a request, e.g. rustgis-cli ask --sample \"Which countries have the largest GDP?\"")?;
+    if let Some(why) = cfg.missing() {
+        let env = provider::preset(&provider).map(|p| p.key_env.join(" or ")).unwrap_or_default();
+        return Err(format!("{provider}: {why} (set {env})"));
+    }
+    eprintln!("[{} · {}]", cfg.provider, cfg.model);
+    let yes = args.iter().any(|a| a == "--yes");
+    let mut a = Agent::new(cfg, s);
+    let mut shown = 0;
+    let mut show = |a: &Agent| {
+        for e in a.transcript.iter().skip(shown) {
+            match e {
+                Entry::User(_) => {}
+                Entry::Assistant(t) => out!("{t}"),
+                Entry::Tool { summary, result, error, .. } => {
+                    let r: String = result.chars().take(200).collect();
+                    eprintln!("  {} {summary} → {r}", if *error { "✗" } else { "✓" });
+                }
+                Entry::Error(e) => eprintln!("rustgis-cli: {e}"),
+                Entry::Note(n) => eprintln!("({n})"),
+            }
+        }
+        shown = a.transcript.len();
+    };
+    // `--trace FILE`: each request and response body (never the headers, which carry the key).
+    let trace = opt(args, "--trace").map(std::path::PathBuf::from);
+    let send = |req: &rustgis_assistant::HttpRequest| {
+        let r = http::send(req);
+        if let Some(path) = &trace {
+            let resp = match &r {
+                Ok(r) => format!("HTTP {}\n{}", r.status, String::from_utf8_lossy(&r.body)),
+                Err(e) => e.clone(),
+            };
+            let entry = format!("> {} {}\n{}\n< {resp}\n\n", req.method, req.url, req.body.as_deref().unwrap_or(""));
+            let written = std::fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut f| f.write_all(entry.as_bytes()));
+            if let Err(e) = written {
+                eprintln!("rustgis-cli: {}: {e}", path.display());
+            }
+        }
+        r
+    };
+    agent::run_blocking(&mut a, &prompt, s, send, |what, why| {
+        if !yes {
+            eprintln!("  declined: {what} ({why}; pass --yes to allow)");
+        }
+        yes
+    });
+    show(&a);
+    if a.transcript.iter().any(|e| matches!(e, Entry::Error(_))) {
+        return Err("the assistant couldn't finish".into());
     }
     Ok(())
 }
@@ -171,20 +283,16 @@ fn main() -> ExitCode {
             print(&run(&mut s, "share.exportMap", json!({"path": out, "dpi": dpi}))?);
             Ok(())
         }
+        "ask" => {
+            open_inputs(&mut s, &args)?;
+            ask(&mut s, &args)?;
+            if let Some(p) = opt(&args, "--save") {
+                run(&mut s, "project.saveAs", json!({"path": p}))?;
+            }
+            Ok(())
+        }
         "run" => {
-            if args.iter().any(|a| a == "--sample") {
-                run(&mut s, "project.sample", Value::Null)?;
-            }
-            if let Some(p) = opt(&args, "--project") {
-                load(&mut s, p)?;
-            }
-            for (i, a) in args.iter().enumerate() {
-                if a == "--data"
-                    && let Some(p) = args.get(i + 1)
-                {
-                    load(&mut s, p)?;
-                }
-            }
+            open_inputs(&mut s, &args)?;
             for (i, a) in args.iter().enumerate() {
                 if a == "--cmd"
                     && let Some(c) = args.get(i + 1)

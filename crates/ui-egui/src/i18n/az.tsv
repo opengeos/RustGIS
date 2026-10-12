@@ -834,3 +834,61 @@ Scroll the ribbon left	Lenti sola sürüşdür
 Scroll the ribbon right	Lenti sağa sürüşdür
 Scroll the tabs left	Vərəqləri sola sürüşdür
 Scroll the tabs right	Vərəqləri sağa sürüşdür
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: yalnız HTTPS ünvanlarına və ya bu kompüterdə, yaxud bu şəbəkədə adi HTTP-yə icazə verilir
+The assistant is busy; stop it or wait for it to finish.	Köməkçi məşğuldur; onu dayandırın və ya bitirməsini gözləyin.
+The model answering; click to change it	Cavab verən model; dəyişmək üçün klikləyin
+Assistant settings	Köməkçi parametrləri
+New conversation	Yeni söhbət
+AI provider	Sİ provayderi
+Provider	Provayder
+Model	Model
+model id	model identifikatoru
+List the provider's models	Provayderin modellərini siyahıla
+API key	API açarı
+not needed	lazım deyil
+paste your key	açarınızı yapışdırın
+Hide	Gizlət
+Show	Göstər
+Remember the key on this computer	Açarı bu kompüterdə yadda saxla
+On the desktop, the key can also come from {vars}.	Masaüstündə açar {vars} dəyişənlərindən də götürülə bilər.
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Saxlanılan açarlar tətbiqin tənzimləmələrində şifrələnmədən saxlanılır (vebdə brauzerin yaddaşında).
+The key is kept for this session only.	Açar yalnız bu sessiya üçün saxlanılır.
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	Sorğular mesajınızı, eləcə də xəritənin lay adlarını, sahələrini və köməkçinin oxuduğu sətirləri provayderə göndərir.
+Get it	Yüklə
+Get a key	Açar əldə et
+Allow this action?	Bu əməliyyata icazə verilsin?
+The assistant wants to run this, and {why}:	Köməkçi bunu icra etmək istəyir; bu əməliyyat {why}:
+Allow such actions for this conversation	Bu söhbətdə belə əməliyyatlara icazə ver
+Allow	İcazə ver
+Decline	İmtina et
+Ask about the map, or tell it what to do…	Xəritə haqqında soruşun və ya nə edəcəyini deyin…
+Enter to send, Shift+Enter for a new line	Göndərmək üçün Enter, yeni sətir üçün Shift+Enter
+Stop	Dayandır
+Send	Göndər
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Məlumatlarınız haqqında sual verin və ya xəritə ilə nə edilməli olduğunu təsvir edin. Köməkçi sizin üçün RustGIS əmrlərini icra edir; hər dəyişiklik geri alına bilər.
+Thinking…	Düşünür…
+Which 5 countries have the largest GDP?	Hansı 5 ölkənin ÜDM-i ən böyükdür?
+Zoom to Tokyo	Tokioya yaxınlaşdır
+Label the cities with their names	Şəhərləri adları ilə etiketlə
+Buffer the cities by 200 km	Şəhərlərin ətrafında 200 km bufer yarat
+Switch to a dark basemap	Tünd əsas xəritəyə keç
+AI	Sİ
+AI\nAssistant	Sİ\nköməkçisi
+Ask about your data, or tell the assistant what to do with the map.	Məlumatlarınız haqqında soruşun və ya köməkçiyə xəritə ilə nə edəcəyini deyin.
+AI Assistant	Sİ köməkçisi
+Show or hide the AI Assistant.	Sİ köməkçisini göstər və ya gizlət.
+Ollama (local)	Ollama (yerli)
+OpenAI-compatible	OpenAI ilə uyğun
+Google Gemini	Google Gemini
+Choose a model.	Model seçin.
+Enter the provider's address.	Provayderin ünvanını daxil edin.
+Enter an API key.	API açarını daxil edin.
+Stopped.	Dayandırıldı.
+The model sent an empty reply; ask again, or try another model.	Model boş cavab göndərdi; yenidən soruşun və ya başqa model sınayın.
+it runs a plugin's command	plaginin əmrini icra edir
+it replaces the open project	açıq layihəni əvəz edir
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	yalnız sizin üçün nəzərdə tutulub (plaginlər, skriptlər, tapşırıqlar, modellər və GeoLibre icraçısı)
+it reads or writes files on this computer	bu kompüterdəki faylları oxuyur və ya yazır
+it connects to an address on the internet	internetdəki ünvana qoşulur
+the reply reached its length limit	cavab uzunluq həddinə çatdı
+the model declined this request	model bu sorğunu rədd etdi

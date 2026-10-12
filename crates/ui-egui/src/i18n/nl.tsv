@@ -834,3 +834,61 @@ Scroll the ribbon left	Lint naar links schuiven
 Scroll the ribbon right	Lint naar rechts schuiven
 Scroll the tabs left	Tabbladen naar links schuiven
 Scroll the tabs right	Tabbladen naar rechts schuiven
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: alleen HTTPS-adressen, of gewoon HTTP op deze computer of dit netwerk, zijn toegestaan
+The assistant is busy; stop it or wait for it to finish.	De assistent is bezig; stop hem of wacht tot hij klaar is.
+The model answering; click to change it	Het model dat antwoordt; klik om het te wijzigen
+Assistant settings	Instellingen van de assistent
+New conversation	Nieuw gesprek
+AI provider	AI-aanbieder
+Provider	Aanbieder
+Model	Model
+model id	model-id
+List the provider's models	Modellen van de aanbieder weergeven
+API key	API-sleutel
+not needed	niet nodig
+paste your key	plak je sleutel
+Hide	Verbergen
+Show	Tonen
+Remember the key on this computer	Sleutel op deze computer onthouden
+On the desktop, the key can also come from {vars}.	Op de desktop kan de sleutel ook uit {vars} komen.
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Opgeslagen sleutels worden onversleuteld bewaard in de voorkeuren van de app (op het web in de opslag van de browser).
+The key is kept for this session only.	De sleutel wordt alleen voor deze sessie bewaard.
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	Verzoeken sturen je bericht en de laagnamen, velden en door de assistent gelezen rijen van de kaart naar de aanbieder.
+Get it	Downloaden
+Get a key	Sleutel aanvragen
+Allow this action?	Deze actie toestaan?
+The assistant wants to run this, and {why}:	De assistent wil het volgende uitvoeren, en {why}:
+Allow such actions for this conversation	Zulke acties toestaan voor dit gesprek
+Allow	Toestaan
+Decline	Weigeren
+Ask about the map, or tell it what to do…	Stel een vraag over de kaart, of zeg wat er moet gebeuren…
+Enter to send, Shift+Enter for a new line	Enter om te verzenden, Shift+Enter voor een nieuwe regel
+Stop	Stoppen
+Send	Verzenden
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Stel een vraag over je gegevens, of beschrijf wat er met de kaart moet gebeuren. De assistent voert RustGIS-opdrachten voor je uit; elke wijziging kan ongedaan worden gemaakt.
+Thinking…	Denkt na…
+Which 5 countries have the largest GDP?	Welke 5 landen hebben het hoogste bbp?
+Zoom to Tokyo	Zoomen naar Tokio
+Label the cities with their names	De steden labelen met hun namen
+Buffer the cities by 200 km	Een buffer van 200 km rond de steden maken
+Switch to a dark basemap	Overschakelen naar een donkere basiskaart
+AI	AI
+AI\nAssistant	AI-\nassistent
+Ask about your data, or tell the assistant what to do with the map.	Stel een vraag over je gegevens, of vertel de assistent wat er met de kaart moet gebeuren.
+AI Assistant	AI-assistent
+Show or hide the AI Assistant.	De AI-assistent tonen of verbergen.
+Ollama (local)	Ollama (lokaal)
+OpenAI-compatible	OpenAI-compatibel
+Google Gemini	Google Gemini
+Choose a model.	Kies een model.
+Enter the provider's address.	Voer het adres van de aanbieder in.
+Enter an API key.	Voer een API-sleutel in.
+Stopped.	Gestopt.
+The model sent an empty reply; ask again, or try another model.	Het model stuurde een leeg antwoord; vraag het opnieuw of probeer een ander model.
+it runs a plugin's command	het voert een opdracht van een plugin uit
+it replaces the open project	het vervangt het geopende project
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	het is aan jou voorbehouden (plugins, scripts, taken, modellen en de GeoLibre-runner)
+it reads or writes files on this computer	het leest of schrijft bestanden op deze computer
+it connects to an address on the internet	het maakt verbinding met een adres op internet
+the reply reached its length limit	het antwoord heeft de maximale lengte bereikt
+the model declined this request	het model heeft dit verzoek geweigerd

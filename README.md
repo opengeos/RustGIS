@@ -53,6 +53,7 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 | **Analysis** | Buffer, Clip, Erase, Dissolve, Minimum Bounding Geometry, Feature To Point, Simplify, Summarize Within, Calculate Geometry, Summary Statistics, Export Features; plus 1,000+ raster, vector, LiDAR, hydrology and terrain tools from the [GeoLibre](https://github.com/opengeos/geolibre-rust) suite (an optional download: desktop, command line and web app) |
 | **Inquiry** | Identify pop-ups, geodesic distance and area measurement, live coordinates (DD or DMS) |
 | **Share** | PNG export with labels and a scale bar at any DPI; export layers to GeoJSON/CSV |
+| **AI Assistant** | Ask about your data or tell the map what to do, in plain language: the assistant runs RustGIS commands and tools for you (each one undoable), with Anthropic, OpenAI, Gemini, OpenRouter, Ollama or any OpenAI-compatible model; also `rustgis-cli ask` |
 | **Productivity** | Command search (Ctrl+K), keyboard shortcuts, dark mode, Catalog pane with folder browsing |
 | **Plugins** | Sandboxed WebAssembly [plugins](docs/plugins.md) add commands and tools; browse and install them from [plugins.rustgis.app](https://plugins.rustgis.app) on the desktop, command line and web |
 | **Languages** | The interface in 15 languages (English, German, Spanish, French, Italian, Dutch, Portuguese, Russian, Turkish, Azerbaijani, Indonesian, Vietnamese, Chinese, Japanese, Korean), following the system language or chosen under View › Language |
@@ -101,6 +102,7 @@ Layered crates, each depending only on the ones below it:
 | L2 | `rustgis-map`, `rustgis-analysis` | layers, symbology, labeling, camera, basemaps; geoprocessing (on `geo`) |
 | L3 | `rustgis-render` | tiny-skia renderer, label placement, PNG export |
 | L4 | `rustgis-engine` | session, undo, command registry, parity catalog, sample project |
+| L5 | `rustgis-assistant` | the AI assistant: a chat agent that acts through commands |
 | L6 | `rustgis-ui-egui` | the ribbon front end (swappable) |
 | apps | `rustgis`, `rustgis-cli`, `rustgis-web` | desktop, command line, browser (WebAssembly) |
 

@@ -49,8 +49,14 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 RightPane::Report => ("Report", "ui.pane.report"),
                 RightPane::Presentation => ("Presentation", "ui.pane.presentation"),
                 RightPane::Notebook => ("Notebook", "ui.pane.notebook"),
+                RightPane::Assistant => ("AI Assistant", "ui.pane.assistant"),
             };
             pane_header(app, ui, tl!(title), close, &t);
+            // The chat lays out its own scrolling, with the message box kept at the bottom.
+            if right == RightPane::Assistant {
+                crate::assistantpane::show(app, ui, &t);
+                return;
+            }
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| match right {
                     RightPane::Geoprocessing => geoprocessing(app, ui, &t),
@@ -69,6 +75,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     RightPane::Report => crate::reportpane::report(app, ui, &t),
                     RightPane::Presentation => crate::docpanes::presentation(app, ui, &t),
                     RightPane::Notebook => crate::docpanes::notebook(app, ui, &t),
+                    RightPane::Assistant => {}
                 });
             });
         });

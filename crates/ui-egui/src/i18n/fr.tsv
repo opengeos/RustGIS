@@ -834,3 +834,61 @@ Scroll the ribbon left	Faire défiler le ruban vers la gauche
 Scroll the ribbon right	Faire défiler le ruban vers la droite
 Scroll the tabs left	Faire défiler les onglets vers la gauche
 Scroll the tabs right	Faire défiler les onglets vers la droite
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url} : seules les adresses HTTPS, ou HTTP simple sur cet ordinateur ou ce réseau, sont autorisées
+The assistant is busy; stop it or wait for it to finish.	L'assistant est occupé ; arrêtez-le ou attendez qu'il ait terminé.
+The model answering; click to change it	Le modèle qui répond ; cliquez pour le changer
+Assistant settings	Paramètres de l'assistant
+New conversation	Nouvelle conversation
+AI provider	Fournisseur d'IA
+Provider	Fournisseur
+Model	Modèle
+model id	identifiant du modèle
+List the provider's models	Lister les modèles du fournisseur
+API key	Clé API
+not needed	non requise
+paste your key	collez votre clé
+Hide	Masquer
+Show	Afficher
+Remember the key on this computer	Mémoriser la clé sur cet ordinateur
+On the desktop, the key can also come from {vars}.	Sur le bureau, la clé peut aussi provenir de {vars}.
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Les clés enregistrées sont conservées non chiffrées dans les préférences de l'application (dans le stockage du navigateur sur le web).
+The key is kept for this session only.	La clé n'est conservée que pour cette session.
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	Les requêtes envoient au fournisseur votre message ainsi que les noms des couches de la carte, leurs champs et les lignes lues par l'assistant.
+Get it	L'obtenir
+Get a key	Obtenir une clé
+Allow this action?	Autoriser cette action ?
+The assistant wants to run this, and {why}:	L'assistant veut exécuter ceci, et {why} :
+Allow such actions for this conversation	Autoriser ce type d'action pour cette conversation
+Allow	Autoriser
+Decline	Refuser
+Ask about the map, or tell it what to do…	Posez une question sur la carte, ou dites-lui quoi faire…
+Enter to send, Shift+Enter for a new line	Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne
+Stop	Arrêter
+Send	Envoyer
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Posez une question sur vos données, ou décrivez ce qu'il faut faire avec la carte. L'assistant exécute des commandes RustGIS pour vous ; chaque modification peut être annulée.
+Thinking…	Réflexion…
+Which 5 countries have the largest GDP?	Quels sont les 5 pays ayant le PIB le plus élevé ?
+Zoom to Tokyo	Zoomer sur Tokyo
+Label the cities with their names	Étiqueter les villes avec leur nom
+Buffer the cities by 200 km	Créer une zone tampon de 200 km autour des villes
+Switch to a dark basemap	Passer à un fond de carte sombre
+AI	IA
+AI\nAssistant	Assistant\nIA
+Ask about your data, or tell the assistant what to do with the map.	Posez une question sur vos données, ou dites à l'assistant quoi faire avec la carte.
+AI Assistant	Assistant IA
+Show or hide the AI Assistant.	Afficher ou masquer l'assistant IA.
+Ollama (local)	Ollama (local)
+OpenAI-compatible	Compatible OpenAI
+Google Gemini	Google Gemini
+Choose a model.	Choisissez un modèle.
+Enter the provider's address.	Saisissez l'adresse du fournisseur.
+Enter an API key.	Saisissez une clé API.
+Stopped.	Arrêté.
+The model sent an empty reply; ask again, or try another model.	Le modèle a renvoyé une réponse vide ; reposez la question ou essayez un autre modèle.
+it runs a plugin's command	il exécute une commande d'extension
+it replaces the open project	il remplace le projet ouvert
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	il vous est réservé (extensions, scripts, tâches, modèles et exécuteur GeoLibre)
+it reads or writes files on this computer	il lit ou écrit des fichiers sur cet ordinateur
+it connects to an address on the internet	il se connecte à une adresse sur Internet
+the reply reached its length limit	la réponse a atteint sa longueur maximale
+the model declined this request	le modèle a refusé cette demande

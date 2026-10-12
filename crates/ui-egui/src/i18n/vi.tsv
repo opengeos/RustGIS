@@ -834,3 +834,61 @@ Scroll the ribbon left	Cuộn ribbon sang trái
 Scroll the ribbon right	Cuộn ribbon sang phải
 Scroll the tabs left	Cuộn các thẻ sang trái
 Scroll the tabs right	Cuộn các thẻ sang phải
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: chỉ cho phép địa chỉ HTTPS, hoặc HTTP thường trên máy tính hay mạng này
+The assistant is busy; stop it or wait for it to finish.	Trợ lý đang bận; hãy dừng nó hoặc đợi nó hoàn tất.
+The model answering; click to change it	Mô hình đang trả lời; nhấp để thay đổi
+Assistant settings	Cài đặt trợ lý
+New conversation	Cuộc trò chuyện mới
+AI provider	Nhà cung cấp AI
+Provider	Nhà cung cấp
+Model	Mô hình
+model id	mã mô hình
+List the provider's models	Liệt kê các mô hình của nhà cung cấp
+API key	Khóa API
+not needed	không cần
+paste your key	dán khóa của bạn
+Hide	Ẩn
+Show	Hiện
+Remember the key on this computer	Ghi nhớ khóa trên máy tính này
+On the desktop, the key can also come from {vars}.	Trên máy tính, khóa cũng có thể lấy từ {vars}.
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Khóa đã lưu được giữ không mã hóa trong tùy chọn của ứng dụng (trong bộ nhớ của trình duyệt trên web).
+The key is kept for this session only.	Khóa chỉ được giữ trong phiên này.
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	Yêu cầu sẽ gửi tin nhắn của bạn cùng tên lớp, trường của bản đồ và các hàng mà trợ lý đọc tới nhà cung cấp.
+Get it	Tải về
+Get a key	Lấy khóa
+Allow this action?	Cho phép thao tác này?
+The assistant wants to run this, and {why}:	Trợ lý muốn chạy thao tác sau, cần bạn cho phép vì {why}:
+Allow such actions for this conversation	Cho phép các thao tác như vậy trong cuộc trò chuyện này
+Allow	Cho phép
+Decline	Từ chối
+Ask about the map, or tell it what to do…	Hỏi về bản đồ, hoặc bảo nó cần làm gì…
+Enter to send, Shift+Enter for a new line	Enter để gửi, Shift+Enter để xuống dòng
+Stop	Dừng
+Send	Gửi
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Đặt câu hỏi về dữ liệu của bạn, hoặc mô tả việc cần làm với bản đồ. Trợ lý sẽ chạy các lệnh RustGIS cho bạn; mọi thay đổi đều có thể hoàn tác.
+Thinking…	Đang suy nghĩ…
+Which 5 countries have the largest GDP?	5 quốc gia nào có GDP lớn nhất?
+Zoom to Tokyo	Thu phóng tới Tokyo
+Label the cities with their names	Gắn nhãn tên cho các thành phố
+Buffer the cities by 200 km	Tạo vùng đệm 200 km quanh các thành phố
+Switch to a dark basemap	Chuyển sang bản đồ nền tối
+AI	AI
+AI\nAssistant	Trợ lý\nAI
+Ask about your data, or tell the assistant what to do with the map.	Hỏi về dữ liệu của bạn, hoặc bảo trợ lý cần làm gì với bản đồ.
+AI Assistant	Trợ lý AI
+Show or hide the AI Assistant.	Hiện hoặc ẩn Trợ lý AI.
+Ollama (local)	Ollama (cục bộ)
+OpenAI-compatible	Tương thích OpenAI
+Google Gemini	Google Gemini
+Choose a model.	Hãy chọn một mô hình.
+Enter the provider's address.	Hãy nhập địa chỉ của nhà cung cấp.
+Enter an API key.	Hãy nhập khóa API.
+Stopped.	Đã dừng.
+The model sent an empty reply; ask again, or try another model.	Mô hình gửi về một câu trả lời trống; hãy hỏi lại hoặc thử mô hình khác.
+it runs a plugin's command	nó chạy một lệnh của plugin
+it replaces the open project	nó thay thế dự án đang mở
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	nó chỉ dành cho bạn (plugin, tập lệnh, tác vụ, mô hình và trình chạy GeoLibre)
+it reads or writes files on this computer	nó đọc hoặc ghi tệp trên máy tính này
+it connects to an address on the internet	nó kết nối tới một địa chỉ trên internet
+the reply reached its length limit	câu trả lời đã chạm giới hạn độ dài
+the model declined this request	mô hình đã từ chối yêu cầu này

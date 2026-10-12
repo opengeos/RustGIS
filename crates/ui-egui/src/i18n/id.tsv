@@ -834,3 +834,61 @@ Scroll the ribbon left	Gulir ribbon ke kiri
 Scroll the ribbon right	Gulir ribbon ke kanan
 Scroll the tabs left	Gulir tab ke kiri
 Scroll the tabs right	Gulir tab ke kanan
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: hanya alamat HTTPS, atau HTTP biasa di komputer atau jaringan ini, yang diizinkan
+The assistant is busy; stop it or wait for it to finish.	Asisten sedang sibuk; hentikan atau tunggu hingga selesai.
+The model answering; click to change it	Model yang menjawab; klik untuk mengubahnya
+Assistant settings	Pengaturan asisten
+New conversation	Percakapan baru
+AI provider	Penyedia AI
+Provider	Penyedia
+Model	Model
+model id	id model
+List the provider's models	Tampilkan daftar model penyedia
+API key	Kunci API
+not needed	tidak diperlukan
+paste your key	tempel kunci Anda
+Hide	Sembunyikan
+Show	Tampilkan
+Remember the key on this computer	Ingat kunci di komputer ini
+On the desktop, the key can also come from {vars}.	Di desktop, kunci juga dapat diambil dari {vars}.
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Kunci yang disimpan disimpan tanpa enkripsi di preferensi aplikasi (di penyimpanan browser pada versi web).
+The key is kept for this session only.	Kunci hanya disimpan untuk sesi ini.
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	Permintaan mengirimkan pesan Anda serta nama layer, kolom, dan baris peta yang dibaca asisten kepada penyedia.
+Get it	Dapatkan
+Get a key	Dapatkan kunci
+Allow this action?	Izinkan tindakan ini?
+The assistant wants to run this, and {why}:	Asisten ingin menjalankan tindakan berikut, yang {why}:
+Allow such actions for this conversation	Izinkan tindakan seperti ini untuk percakapan ini
+Allow	Izinkan
+Decline	Tolak
+Ask about the map, or tell it what to do…	Tanyakan tentang peta, atau beri tahu apa yang harus dilakukan…
+Enter to send, Shift+Enter for a new line	Enter untuk mengirim, Shift+Enter untuk baris baru
+Stop	Hentikan
+Send	Kirim
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Ajukan pertanyaan tentang data Anda, atau jelaskan apa yang harus dilakukan pada peta. Asisten menjalankan perintah RustGIS untuk Anda; setiap perubahan dapat diurungkan.
+Thinking…	Berpikir…
+Which 5 countries have the largest GDP?	5 negara mana yang memiliki PDB terbesar?
+Zoom to Tokyo	Zoom ke Tokyo
+Label the cities with their names	Beri label nama pada kota-kota
+Buffer the cities by 200 km	Buat buffer 200 km di sekitar kota-kota
+Switch to a dark basemap	Beralih ke peta dasar gelap
+AI	AI
+AI\nAssistant	Asisten\nAI
+Ask about your data, or tell the assistant what to do with the map.	Tanyakan tentang data Anda, atau beri tahu asisten apa yang harus dilakukan pada peta.
+AI Assistant	Asisten AI
+Show or hide the AI Assistant.	Tampilkan atau sembunyikan Asisten AI.
+Ollama (local)	Ollama (lokal)
+OpenAI-compatible	Kompatibel dengan OpenAI
+Google Gemini	Google Gemini
+Choose a model.	Pilih model.
+Enter the provider's address.	Masukkan alamat penyedia.
+Enter an API key.	Masukkan kunci API.
+Stopped.	Dihentikan.
+The model sent an empty reply; ask again, or try another model.	Model mengirim balasan kosong; tanyakan lagi, atau coba model lain.
+it runs a plugin's command	menjalankan perintah plugin
+it replaces the open project	mengganti proyek yang terbuka
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	hanya boleh dilakukan oleh Anda (plugin, skrip, tugas, model, dan runner GeoLibre)
+it reads or writes files on this computer	membaca atau menulis file di komputer ini
+it connects to an address on the internet	terhubung ke alamat di internet
+the reply reached its length limit	balasan mencapai batas panjangnya
+the model declined this request	model menolak permintaan ini

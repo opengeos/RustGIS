@@ -834,3 +834,61 @@ Scroll the ribbon left	리본을 왼쪽으로 스크롤
 Scroll the ribbon right	리본을 오른쪽으로 스크롤
 Scroll the tabs left	탭을 왼쪽으로 스크롤
 Scroll the tabs right	탭을 오른쪽으로 스크롤
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: HTTPS 주소 또는 이 컴퓨터나 네트워크의 일반 HTTP만 허용됩니다
+The assistant is busy; stop it or wait for it to finish.	어시스턴트가 작업 중입니다. 중지하거나 완료될 때까지 기다리세요.
+The model answering; click to change it	응답하는 모델입니다. 클릭하여 변경하세요
+Assistant settings	어시스턴트 설정
+New conversation	새 대화
+AI provider	AI 공급자
+Provider	공급자
+Model	모델
+model id	모델 ID
+List the provider's models	공급자의 모델 나열
+API key	API 키
+not needed	필요 없음
+paste your key	키를 붙여넣으세요
+Hide	숨기기
+Show	표시
+Remember the key on this computer	이 컴퓨터에 키 기억
+On the desktop, the key can also come from {vars}.	데스크톱에서는 {vars}에서 키를 가져올 수도 있습니다.
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	저장된 키는 앱 환경설정에 암호화되지 않은 상태로 보관됩니다(웹에서는 브라우저 저장소).
+The key is kept for this session only.	키는 이 세션 동안만 보관됩니다.
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	요청 시 메시지와 함께 지도의 레이어 이름, 필드, 어시스턴트가 읽은 행이 공급자에게 전송됩니다.
+Get it	받기
+Get a key	키 받기
+Allow this action?	이 작업을 허용하시겠습니까?
+The assistant wants to run this, and {why}:	어시스턴트가 다음 작업을 실행하려고 합니다. 이 작업은 {why} 작업입니다:
+Allow such actions for this conversation	이 대화에서 이러한 작업 허용
+Allow	허용
+Decline	거부
+Ask about the map, or tell it what to do…	지도에 대해 묻거나 할 일을 알려 주세요…
+Enter to send, Shift+Enter for a new line	Enter로 보내기, Shift+Enter로 줄 바꿈
+Stop	중지
+Send	보내기
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	데이터에 대해 질문하거나 지도로 할 일을 설명하세요. 어시스턴트가 RustGIS 명령을 대신 실행하며, 모든 변경은 실행 취소할 수 있습니다.
+Thinking…	생각 중…
+Which 5 countries have the largest GDP?	GDP가 가장 큰 5개 국가는 어디인가요?
+Zoom to Tokyo	도쿄로 확대
+Label the cities with their names	도시에 이름 라벨 표시
+Buffer the cities by 200 km	도시 주변에 200km 버퍼 만들기
+Switch to a dark basemap	어두운 배경지도로 전환
+AI	AI
+AI\nAssistant	AI\n어시스턴트
+Ask about your data, or tell the assistant what to do with the map.	데이터에 대해 묻거나 지도로 할 일을 어시스턴트에게 알려 주세요.
+AI Assistant	AI 어시스턴트
+Show or hide the AI Assistant.	AI 어시스턴트를 표시하거나 숨깁니다.
+Ollama (local)	Ollama(로컬)
+OpenAI-compatible	OpenAI 호환
+Google Gemini	Google Gemini
+Choose a model.	모델을 선택하세요.
+Enter the provider's address.	공급자의 주소를 입력하세요.
+Enter an API key.	API 키를 입력하세요.
+Stopped.	중지되었습니다.
+The model sent an empty reply; ask again, or try another model.	모델이 빈 응답을 보냈습니다. 다시 질문하거나 다른 모델을 사용해 보세요.
+it runs a plugin's command	플러그인의 명령을 실행하는
+it replaces the open project	열려 있는 프로젝트를 바꾸는
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	사용자만 실행할 수 있는(플러그인, 스크립트, 작업, 모델, GeoLibre 실행기)
+it reads or writes files on this computer	이 컴퓨터의 파일을 읽거나 쓰는
+it connects to an address on the internet	인터넷의 주소에 연결하는
+the reply reached its length limit	응답이 길이 제한에 도달했습니다
+the model declined this request	모델이 이 요청을 거부했습니다

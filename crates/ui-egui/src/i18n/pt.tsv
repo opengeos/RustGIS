@@ -834,3 +834,61 @@ Scroll the ribbon left	Rolar a faixa de opções para a esquerda
 Scroll the ribbon right	Rolar a faixa de opções para a direita
 Scroll the tabs left	Rolar as guias para a esquerda
 Scroll the tabs right	Rolar as guias para a direita
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: só são permitidos endereços HTTPS, ou HTTP simples neste computador ou nesta rede
+The assistant is busy; stop it or wait for it to finish.	O assistente está ocupado; interrompa-o ou aguarde até que termine.
+The model answering; click to change it	O modelo que responde; clique para alterá-lo
+Assistant settings	Configurações do assistente
+New conversation	Nova conversa
+AI provider	Provedor de IA
+Provider	Provedor
+Model	Modelo
+model id	id do modelo
+List the provider's models	Listar os modelos do provedor
+API key	Chave de API
+not needed	não é necessária
+paste your key	cole sua chave
+Hide	Ocultar
+Show	Mostrar
+Remember the key on this computer	Lembrar a chave neste computador
+On the desktop, the key can also come from {vars}.	No desktop, a chave também pode vir de {vars}.
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	As chaves salvas ficam sem criptografia nas preferências do aplicativo (no armazenamento do navegador, na web).
+The key is kept for this session only.	A chave é mantida apenas durante esta sessão.
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	As solicitações enviam ao provedor sua mensagem e os nomes das camadas do mapa, os campos e as linhas que o assistente lê.
+Get it	Obter
+Get a key	Obter uma chave
+Allow this action?	Permitir esta ação?
+The assistant wants to run this, and {why}:	O assistente quer executar o seguinte, e {why}:
+Allow such actions for this conversation	Permitir ações desse tipo nesta conversa
+Allow	Permitir
+Decline	Recusar
+Ask about the map, or tell it what to do…	Pergunte sobre o mapa ou diga o que fazer…
+Enter to send, Shift+Enter for a new line	Enter para enviar, Shift+Enter para uma nova linha
+Stop	Parar
+Send	Enviar
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Faça uma pergunta sobre seus dados ou descreva o que fazer com o mapa. O assistente executa comandos do RustGIS para você; toda alteração pode ser desfeita.
+Thinking…	Pensando…
+Which 5 countries have the largest GDP?	Quais 5 países têm o maior PIB?
+Zoom to Tokyo	Aproximar de Tóquio
+Label the cities with their names	Rotular as cidades com seus nomes
+Buffer the cities by 200 km	Criar um buffer de 200 km ao redor das cidades
+Switch to a dark basemap	Mudar para um mapa base escuro
+AI	IA
+AI\nAssistant	Assistente\nde IA
+Ask about your data, or tell the assistant what to do with the map.	Pergunte sobre seus dados ou diga ao assistente o que fazer com o mapa.
+AI Assistant	Assistente de IA
+Show or hide the AI Assistant.	Mostrar ou ocultar o Assistente de IA.
+Ollama (local)	Ollama (local)
+OpenAI-compatible	Compatível com OpenAI
+Google Gemini	Google Gemini
+Choose a model.	Escolha um modelo.
+Enter the provider's address.	Informe o endereço do provedor.
+Enter an API key.	Informe uma chave de API.
+Stopped.	Interrompido.
+The model sent an empty reply; ask again, or try another model.	O modelo enviou uma resposta vazia; pergunte novamente ou tente outro modelo.
+it runs a plugin's command	executa um comando de um plugin
+it replaces the open project	substitui o projeto aberto
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	é reservado a você (plugins, scripts, tarefas, modelos e o executor do GeoLibre)
+it reads or writes files on this computer	lê ou grava arquivos neste computador
+it connects to an address on the internet	conecta-se a um endereço na internet
+the reply reached its length limit	a resposta atingiu seu limite de tamanho
+the model declined this request	o modelo recusou esta solicitação

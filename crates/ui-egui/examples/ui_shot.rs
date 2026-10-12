@@ -3,7 +3,7 @@
 //! `cargo run -p rustgis-ui-egui --example ui_shot -- script.jsonl`
 //!
 //! The script is JSON lines: `{"cmd": id, "params": {...}}` runs a command (ui.* included),
-//! `{"shot": "/abs/out.png"}` saves the window, `{"steps": n}` runs frames, `{"click": label}` clicks the first widget whose label contains it, `{"dark": true}`
+//! `{"shot": "/abs/out.png"}` saves the window, `{"steps": n}` runs frames, `{"sleep": ms}` runs frames for that long, `{"click": label}` clicks the first widget whose label contains it, `{"dark": true}`
 //! switches theme, and `{"width": w, "height": h}` on the first line sets the size (default
 //! 1480×900 at 2×). The window opens the World Atlas sample.
 
@@ -45,6 +45,13 @@ fn main() {
                     println!("{p}");
                 }
                 Err(e) => eprintln!("render failed: {e}"),
+            }
+        } else if let Some(ms) = l.get("sleep").and_then(|v| v.as_u64()) {
+            // Real time passing, for work off the frame (downloads, the AI assistant's model).
+            let end = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+            while std::time::Instant::now() < end {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                harness.step();
             }
         } else if let Some(n) = l.get("steps").and_then(|v| v.as_u64()) {
             for _ in 0..n {

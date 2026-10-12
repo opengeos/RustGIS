@@ -23,6 +23,7 @@ work.
 | L3 | `plugins` | plugins: sandboxed WebAssembly modules (`wasmi`) adding commands and tools; `.rgplugin` packages, the plugin registry (see `docs/plugins.md`) |
 | L3 | `geolibre` | the GeoLibre/Whitebox tool suite as geoprocessing tools (engine feature `geolibre`): run by the optional `geolibre` program natively, by geolibre-rust's WASI runner in the browser |
 | L4 | `engine` | `Session`, undo, command registry, ribbon feature catalog, sample project |
+| L5 | `assistant` | the AI Assistant: a chat agent (sans I/O: `provider` builds and reads OpenAI/Anthropic/Gemini requests, `agent` loops, `tools` run commands; file, network and plugin commands wait for the user's approval) |
 | L6 | `ui-egui` | ribbon, panes, map view, attribute table, dialogs (swappable) |
 | apps | `rustgis`, `rustgis-cli`, `rustgis-web` | desktop app, command line, browser (WebAssembly) |
 

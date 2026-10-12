@@ -329,6 +329,16 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
             p.line(&[(6.0, 9.0), (9.0, 12.0), (6.0, 15.0)], 1.6, Color32::from_rgb(0x8F, 0xD1, 0x8F));
             p.line(&[(11.0, 15.0), (17.0, 15.0)], 1.6, Color32::WHITE);
         }
+        "assistant" => {
+            // A speech bubble with a sparkle.
+            p.rect(2.0, 5.0, 15.5, 11.5, Some(p.tint(40)), Some((1.4, ink)), 3.0);
+            p.fill(&[(5.5, 16.0), (10.0, 16.0), (5.5, 20.5)], ink);
+            for x in [6.0, 9.75, 13.5] {
+                p.circle(x, 10.75, 1.1, Some(ink), None);
+            }
+            p.fill(&[(19.0, 1.0), (20.2, 5.3), (19.0, 9.6), (17.8, 5.3)], p.acc);
+            p.fill(&[(14.7, 5.3), (19.0, 4.1), (23.3, 5.3), (19.0, 6.5)], p.acc);
+        }
         "history" => {
             p.circle(12.5, 12.0, 8.5, Some(p.tint(40)), Some((1.4, ink)));
             p.line(&[(12.5, 7.0), (12.5, 12.0), (16.0, 14.0)], 1.6, ink);

@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 rustgis-engine = { workspace = true }
+rustgis-assistant = { workspace = true }
 egui = { workspace = true }
 egui_extras = { workspace = true }
 serde = { workspace = true }

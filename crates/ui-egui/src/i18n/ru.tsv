@@ -834,3 +834,61 @@ Scroll the ribbon left	Прокрутить ленту влево
 Scroll the ribbon right	Прокрутить ленту вправо
 Scroll the tabs left	Прокрутить вкладки влево
 Scroll the tabs right	Прокрутить вкладки вправо
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: разрешены только адреса HTTPS или обычный HTTP на этом компьютере или в этой сети
+The assistant is busy; stop it or wait for it to finish.	Помощник занят; остановите его или дождитесь завершения.
+The model answering; click to change it	Модель, которая отвечает; щёлкните, чтобы сменить
+Assistant settings	Настройки помощника
+New conversation	Новый разговор
+AI provider	Поставщик ИИ
+Provider	Поставщик
+Model	Модель
+model id	идентификатор модели
+List the provider's models	Показать модели поставщика
+API key	Ключ API
+not needed	не требуется
+paste your key	вставьте ключ
+Hide	Скрыть
+Show	Показать
+Remember the key on this computer	Запомнить ключ на этом компьютере
+On the desktop, the key can also come from {vars}.	На компьютере ключ также может браться из {vars}.
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Сохранённые ключи хранятся в настройках приложения в незашифрованном виде (в веб-версии — в хранилище браузера).
+The key is kept for this session only.	Ключ хранится только в течение этого сеанса.
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	Запросы отправляют поставщику ваше сообщение, а также названия слоёв карты, их поля и строки, прочитанные помощником.
+Get it	Получить
+Get a key	Получить ключ
+Allow this action?	Разрешить это действие?
+The assistant wants to run this, and {why}:	Помощник хочет выполнить следующее, но это действие {why}:
+Allow such actions for this conversation	Разрешать такие действия в этом разговоре
+Allow	Разрешить
+Decline	Отклонить
+Ask about the map, or tell it what to do…	Спросите о карте или скажите, что сделать…
+Enter to send, Shift+Enter for a new line	Enter — отправить, Shift+Enter — новая строка
+Stop	Остановить
+Send	Отправить
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Задайте вопрос о своих данных или опишите, что сделать с картой. Помощник выполняет команды RustGIS за вас; любое изменение можно отменить.
+Thinking…	Думает…
+Which 5 countries have the largest GDP?	У каких 5 стран самый большой ВВП?
+Zoom to Tokyo	Приблизить к Токио
+Label the cities with their names	Подписать города их названиями
+Buffer the cities by 200 km	Построить буфер 200 км вокруг городов
+Switch to a dark basemap	Переключиться на тёмную базовую карту
+AI	ИИ
+AI\nAssistant	Помощник\nИИ
+Ask about your data, or tell the assistant what to do with the map.	Спросите о своих данных или скажите помощнику, что сделать с картой.
+AI Assistant	ИИ-помощник
+Show or hide the AI Assistant.	Показать или скрыть ИИ-помощника.
+Ollama (local)	Ollama (локально)
+OpenAI-compatible	Совместимый с OpenAI
+Google Gemini	Google Gemini
+Choose a model.	Выберите модель.
+Enter the provider's address.	Введите адрес поставщика.
+Enter an API key.	Введите ключ API.
+Stopped.	Остановлено.
+The model sent an empty reply; ask again, or try another model.	Модель прислала пустой ответ; спросите ещё раз или попробуйте другую модель.
+it runs a plugin's command	запускает команду модуля
+it replaces the open project	заменяет открытый проект
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	доступно только вам (модули, скрипты, задачи, модели и средство запуска GeoLibre)
+it reads or writes files on this computer	читает или записывает файлы на этом компьютере
+it connects to an address on the internet	подключается к адресу в интернете
+the reply reached its length limit	ответ достиг предельной длины
+the model declined this request	модель отклонила этот запрос

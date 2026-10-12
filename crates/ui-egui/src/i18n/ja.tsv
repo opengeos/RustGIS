@@ -834,3 +834,61 @@ Scroll the ribbon left	リボンを左にスクロール
 Scroll the ribbon right	リボンを右にスクロール
 Scroll the tabs left	タブを左にスクロール
 Scroll the tabs right	タブを右にスクロール
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: 使用できるのは HTTPS のアドレス、またはこのコンピューターかネットワーク上の通常の HTTP のみです
+The assistant is busy; stop it or wait for it to finish.	アシスタントは処理中です。停止するか、完了するまでお待ちください。
+The model answering; click to change it	応答しているモデル。クリックで変更
+Assistant settings	アシスタントの設定
+New conversation	新しい会話
+AI provider	AI プロバイダー
+Provider	プロバイダー
+Model	モデル
+model id	モデル ID
+List the provider's models	プロバイダーのモデルを一覧表示
+API key	API キー
+not needed	不要
+paste your key	キーを貼り付け
+Hide	非表示
+Show	表示
+Remember the key on this computer	このコンピューターにキーを保存する
+On the desktop, the key can also come from {vars}.	デスクトップ版では、キーを {vars} から取得することもできます。
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	保存したキーは暗号化されずにアプリの設定に保存されます（Web 版ではブラウザーのストレージ）。
+The key is kept for this session only.	キーはこのセッションの間だけ保持されます。
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	リクエストでは、メッセージに加えて、マップのレイヤー名、フィールド、アシスタントが読み取った行がプロバイダーに送信されます。
+Get it	入手する
+Get a key	キーを取得
+Allow this action?	この操作を許可しますか？
+The assistant wants to run this, and {why}:	アシスタントが次の操作を実行しようとしています（{why}ため、確認が必要です）:
+Allow such actions for this conversation	この会話ではこの種の操作を許可する
+Allow	許可
+Decline	拒否
+Ask about the map, or tell it what to do…	マップについて質問するか、操作を指示してください…
+Enter to send, Shift+Enter for a new line	Enter で送信、Shift+Enter で改行
+Stop	停止
+Send	送信
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	データについて質問するか、マップで行いたいことを説明してください。アシスタントが RustGIS のコマンドを代わりに実行します。変更はすべて元に戻せます。
+Thinking…	考え中…
+Which 5 countries have the largest GDP?	GDP が最も大きい 5 か国はどこですか？
+Zoom to Tokyo	東京にズーム
+Label the cities with their names	都市に名前のラベルを付ける
+Buffer the cities by 200 km	都市に 200 km のバッファーを作成
+Switch to a dark basemap	暗いベースマップに切り替える
+AI	AI
+AI\nAssistant	AI\nアシスタント
+Ask about your data, or tell the assistant what to do with the map.	データについて質問するか、マップで行うことをアシスタントに指示してください。
+AI Assistant	AI アシスタント
+Show or hide the AI Assistant.	AI アシスタントを表示または非表示にします。
+Ollama (local)	Ollama（ローカル）
+OpenAI-compatible	OpenAI 互換
+Google Gemini	Google Gemini
+Choose a model.	モデルを選択してください。
+Enter the provider's address.	プロバイダーのアドレスを入力してください。
+Enter an API key.	API キーを入力してください。
+Stopped.	停止しました。
+The model sent an empty reply; ask again, or try another model.	モデルから空の応答が返されました。もう一度質問するか、別のモデルをお試しください。
+it runs a plugin's command	プラグインのコマンドを実行する
+it replaces the open project	開いているプロジェクトを置き換える
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	ユーザー本人専用の操作（プラグイン、スクリプト、タスク、モデル、GeoLibre ランナー）である
+it reads or writes files on this computer	このコンピューター上のファイルを読み書きする
+it connects to an address on the internet	インターネット上のアドレスに接続する
+the reply reached its length limit	応答が長さの上限に達しました
+the model declined this request	モデルがこのリクエストを拒否しました

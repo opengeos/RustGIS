@@ -834,3 +834,61 @@ Scroll the ribbon left	向左滚动功能区
 Scroll the ribbon right	向右滚动功能区
 Scroll the tabs left	向左滚动选项卡
 Scroll the tabs right	向右滚动选项卡
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}：仅允许 HTTPS 地址，或本机、本地网络上的普通 HTTP 地址
+The assistant is busy; stop it or wait for it to finish.	助手正忙；请停止它或等待其完成。
+The model answering; click to change it	正在回答的模型；单击可更改
+Assistant settings	助手设置
+New conversation	新对话
+AI provider	AI 提供商
+Provider	提供商
+Model	模型
+model id	模型 ID
+List the provider's models	列出提供商的模型
+API key	API 密钥
+not needed	无需填写
+paste your key	粘贴您的密钥
+Hide	隐藏
+Show	显示
+Remember the key on this computer	在此计算机上记住密钥
+On the desktop, the key can also come from {vars}.	在桌面版中，密钥也可以来自 {vars}。
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	保存的密钥以未加密形式保存在应用的首选项中（网页版保存在浏览器存储中）。
+The key is kept for this session only.	密钥仅在本次会话中保留。
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	请求会将您的消息以及地图的图层名称、字段和助手读取的行发送给提供商。
+Get it	获取
+Get a key	获取密钥
+Allow this action?	允许此操作？
+The assistant wants to run this, and {why}:	助手想要执行以下操作，由于{why}，需要您确认：
+Allow such actions for this conversation	在本次对话中允许此类操作
+Allow	允许
+Decline	拒绝
+Ask about the map, or tell it what to do…	询问有关地图的问题，或告诉它要做什么…
+Enter to send, Shift+Enter for a new line	按 Enter 发送，Shift+Enter 换行
+Stop	停止
+Send	发送
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	提出有关数据的问题，或描述要对地图进行的操作。助手会为您运行 RustGIS 命令；每项更改都可以撤销。
+Thinking…	思考中…
+Which 5 countries have the largest GDP?	哪 5 个国家的 GDP 最高？
+Zoom to Tokyo	缩放至东京
+Label the cities with their names	用名称标注城市
+Buffer the cities by 200 km	为城市创建 200 公里缓冲区
+Switch to a dark basemap	切换到深色底图
+AI	AI
+AI\nAssistant	AI\n助手
+Ask about your data, or tell the assistant what to do with the map.	询问有关数据的问题，或告诉助手要对地图做什么。
+AI Assistant	AI 助手
+Show or hide the AI Assistant.	显示或隐藏 AI 助手。
+Ollama (local)	Ollama（本地）
+OpenAI-compatible	OpenAI 兼容
+Google Gemini	Google Gemini
+Choose a model.	请选择模型。
+Enter the provider's address.	请输入提供商的地址。
+Enter an API key.	请输入 API 密钥。
+Stopped.	已停止。
+The model sent an empty reply; ask again, or try another model.	模型返回了空回复；请重新提问，或尝试其他模型。
+it runs a plugin's command	它会运行插件的命令
+it replaces the open project	它会替换当前打开的工程
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	它仅限您本人执行（插件、脚本、任务、模型和 GeoLibre 运行器）
+it reads or writes files on this computer	它会读取或写入此计算机上的文件
+it connects to an address on the internet	它会连接到互联网上的地址
+the reply reached its length limit	回复已达到长度上限
+the model declined this request	模型拒绝了此请求

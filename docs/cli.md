@@ -48,3 +48,23 @@ rustgis-cli run --data dem.tif \
 ```
 
 ![A map of Europe exported by rustgis-cli](https://assets.rustgis.app/images/cli-export.webp)
+
+## Asking the AI assistant
+
+`ask` gives the [AI Assistant](user-guide.md#ai-assistant) one request. It loads data like `run`,
+then the model answers and acts on the project through commands; `--save` keeps the result:
+
+```sh
+export ANTHROPIC_API_KEY=…            # or OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY
+rustgis-cli ask --sample "Which 5 countries have the largest GDP?"
+rustgis-cli ask --sample "Buffer the cities by 200 km and label them" --save buffered.rgisx
+rustgis-cli ask --data parcels.geojson --provider ollama --model qwen3:8b "Summarise the fields"
+rustgis-cli ask --models --provider openai          # the provider's models
+```
+
+The provider is `--provider` (`anthropic`, `openai`, `gemini`, `openrouter`, `ollama`, `custom`),
+else `RUSTGIS_ASSISTANT_PROVIDER`, else the first with a key in the environment, else Ollama.
+`--model` and `--base-url` override the defaults. The answer goes to standard output and each
+command the assistant ran to standard error. Commands that read or write files or use the
+network are declined unless you pass `--yes`. `--trace log.txt` appends each request and response
+body (never the headers, which carry the key) to a file.

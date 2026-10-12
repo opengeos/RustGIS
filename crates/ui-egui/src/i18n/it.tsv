@@ -834,3 +834,61 @@ Scroll the ribbon left	Scorri la barra multifunzione a sinistra
 Scroll the ribbon right	Scorri la barra multifunzione a destra
 Scroll the tabs left	Scorri le schede a sinistra
 Scroll the tabs right	Scorri le schede a destra
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: sono consentiti solo indirizzi HTTPS, o HTTP semplice su questo computer o su questa rete
+The assistant is busy; stop it or wait for it to finish.	L'assistente è occupato; fermalo o attendi che finisca.
+The model answering; click to change it	Il modello che risponde; fai clic per cambiarlo
+Assistant settings	Impostazioni dell'assistente
+New conversation	Nuova conversazione
+AI provider	Provider di IA
+Provider	Provider
+Model	Modello
+model id	id del modello
+List the provider's models	Elenca i modelli del provider
+API key	Chiave API
+not needed	non necessaria
+paste your key	incolla la tua chiave
+Hide	Nascondi
+Show	Mostra
+Remember the key on this computer	Ricorda la chiave su questo computer
+On the desktop, the key can also come from {vars}.	Sul desktop, la chiave può provenire anche da {vars}.
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Le chiavi salvate sono conservate non cifrate nelle preferenze dell'app (nella memoria del browser sul web).
+The key is kept for this session only.	La chiave viene conservata solo per questa sessione.
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	Le richieste inviano al provider il tuo messaggio e i nomi dei layer della mappa, i campi e le righe lette dall'assistente.
+Get it	Scaricalo
+Get a key	Ottieni una chiave
+Allow this action?	Consentire questa azione?
+The assistant wants to run this, and {why}:	L'assistente vuole eseguire quanto segue, che {why}:
+Allow such actions for this conversation	Consenti azioni di questo tipo per questa conversazione
+Allow	Consenti
+Decline	Rifiuta
+Ask about the map, or tell it what to do…	Chiedi qualcosa sulla mappa, o dille cosa fare…
+Enter to send, Shift+Enter for a new line	Invio per inviare, Maiusc+Invio per andare a capo
+Stop	Interrompi
+Send	Invia
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Fai una domanda sui tuoi dati, o descrivi cosa fare con la mappa. L'assistente esegue i comandi di RustGIS per te; ogni modifica può essere annullata.
+Thinking…	Sto pensando…
+Which 5 countries have the largest GDP?	Quali sono i 5 paesi con il PIL più alto?
+Zoom to Tokyo	Zoom su Tokyo
+Label the cities with their names	Etichetta le città con i loro nomi
+Buffer the cities by 200 km	Crea un buffer di 200 km attorno alle città
+Switch to a dark basemap	Passa a una mappa di base scura
+AI	IA
+AI\nAssistant	Assistente\nIA
+Ask about your data, or tell the assistant what to do with the map.	Chiedi qualcosa sui tuoi dati, o di' all'assistente cosa fare con la mappa.
+AI Assistant	Assistente IA
+Show or hide the AI Assistant.	Mostra o nascondi l'assistente IA.
+Ollama (local)	Ollama (locale)
+OpenAI-compatible	Compatibile con OpenAI
+Google Gemini	Google Gemini
+Choose a model.	Scegli un modello.
+Enter the provider's address.	Inserisci l'indirizzo del provider.
+Enter an API key.	Inserisci una chiave API.
+Stopped.	Interrotto.
+The model sent an empty reply; ask again, or try another model.	Il modello ha inviato una risposta vuota; chiedi di nuovo o prova un altro modello.
+it runs a plugin's command	esegue un comando di un plugin
+it replaces the open project	sostituisce il progetto aperto
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	è riservato a te (plugin, script, attività, modelli e l'esecutore GeoLibre)
+it reads or writes files on this computer	legge o scrive file su questo computer
+it connects to an address on the internet	si connette a un indirizzo su Internet
+the reply reached its length limit	la risposta ha raggiunto il limite di lunghezza
+the model declined this request	il modello ha rifiutato questa richiesta

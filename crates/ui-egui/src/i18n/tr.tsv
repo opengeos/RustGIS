@@ -834,3 +834,61 @@ Scroll the ribbon left	Şeridi sola kaydır
 Scroll the ribbon right	Şeridi sağa kaydır
 Scroll the tabs left	Sekmeleri sola kaydır
 Scroll the tabs right	Sekmeleri sağa kaydır
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: yalnızca HTTPS adreslerine ya da bu bilgisayarda veya ağda düz HTTP'ye izin verilir
+The assistant is busy; stop it or wait for it to finish.	Asistan meşgul; durdurun veya bitirmesini bekleyin.
+The model answering; click to change it	Yanıt veren model; değiştirmek için tıklayın
+Assistant settings	Asistan ayarları
+New conversation	Yeni sohbet
+AI provider	YZ sağlayıcısı
+Provider	Sağlayıcı
+Model	Model
+model id	model kimliği
+List the provider's models	Sağlayıcının modellerini listele
+API key	API anahtarı
+not needed	gerekmiyor
+paste your key	anahtarınızı yapıştırın
+Hide	Gizle
+Show	Göster
+Remember the key on this computer	Anahtarı bu bilgisayarda hatırla
+On the desktop, the key can also come from {vars}.	Masaüstünde anahtar {vars} değişkenlerinden de alınabilir.
+Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Kaydedilen anahtarlar uygulamanın tercihlerinde şifrelenmeden saklanır (web'de tarayıcının deposunda).
+The key is kept for this session only.	Anahtar yalnızca bu oturum için saklanır.
+Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	İstekler, mesajınızı ve haritanın katman adlarını, alanlarını ve asistanın okuduğu satırları sağlayıcıya gönderir.
+Get it	İndir
+Get a key	Anahtar al
+Allow this action?	Bu işleme izin verilsin mi?
+The assistant wants to run this, and {why}:	Asistan şunu çalıştırmak istiyor; bu işlem {why}:
+Allow such actions for this conversation	Bu sohbette bu tür işlemlere izin ver
+Allow	İzin ver
+Decline	Reddet
+Ask about the map, or tell it what to do…	Harita hakkında sorun ya da ne yapacağını söyleyin…
+Enter to send, Shift+Enter for a new line	Göndermek için Enter, yeni satır için Shift+Enter
+Stop	Durdur
+Send	Gönder
+Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Verileriniz hakkında bir soru sorun ya da haritayla ne yapılacağını anlatın. Asistan RustGIS komutlarını sizin için çalıştırır; her değişiklik geri alınabilir.
+Thinking…	Düşünüyor…
+Which 5 countries have the largest GDP?	GSYİH'si en büyük 5 ülke hangileri?
+Zoom to Tokyo	Tokyo'ya yakınlaştır
+Label the cities with their names	Şehirleri adlarıyla etiketle
+Buffer the cities by 200 km	Şehirlerin etrafında 200 km'lik tampon oluştur
+Switch to a dark basemap	Koyu bir altlık haritaya geç
+AI	YZ
+AI\nAssistant	YZ\nAsistanı
+Ask about your data, or tell the assistant what to do with the map.	Verileriniz hakkında sorun ya da asistana haritayla ne yapacağını söyleyin.
+AI Assistant	YZ Asistanı
+Show or hide the AI Assistant.	YZ Asistanını göster veya gizle.
+Ollama (local)	Ollama (yerel)
+OpenAI-compatible	OpenAI uyumlu
+Google Gemini	Google Gemini
+Choose a model.	Bir model seçin.
+Enter the provider's address.	Sağlayıcının adresini girin.
+Enter an API key.	Bir API anahtarı girin.
+Stopped.	Durduruldu.
+The model sent an empty reply; ask again, or try another model.	Model boş bir yanıt gönderdi; yeniden sorun veya başka bir model deneyin.
+it runs a plugin's command	bir eklentinin komutunu çalıştırır
+it replaces the open project	açık projeyi değiştirir
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	yalnızca size ayrılmıştır (eklentiler, betikler, görevler, modeller ve GeoLibre çalıştırıcısı)
+it reads or writes files on this computer	bu bilgisayardaki dosyaları okur veya yazar
+it connects to an address on the internet	internetteki bir adrese bağlanır
+the reply reached its length limit	yanıt uzunluk sınırına ulaştı
+the model declined this request	model bu isteği reddetti

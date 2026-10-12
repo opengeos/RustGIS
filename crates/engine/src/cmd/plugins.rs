@@ -182,9 +182,7 @@ pub(crate) fn leak(s: &str) -> &'static str {
     new
 }
 
-/// Commands a plugin may never run: plugin management, the GeoLibre runner, the user's own
-/// automation (scripts, tasks, models run with the user's trust), and replacing the project or
-/// stepping through its undo history.
+/// Commands reserved to the user (see [`user_only`]); plugin management is too.
 const NEVER: &[&str] = &[
     "gp.installGeolibre",
     "gp.setGeolibre",
@@ -207,35 +205,64 @@ const WRITES_FILES: &[&str] = &["project.save", "project.saveAs"];
 /// plugins may pass: `layer.addDataBytes`, `map.import` from text.)
 const PLACE_KEYS: &[&str] = &["path", "folder", "dir", "file", "url", "uri", "source", "output", "connection", "database"];
 
+/// What a command reaches beyond the project when run with some parameters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// Reads or writes files, or runs a native program (the GeoLibre suite) that does.
+    Files,
+    /// Fetches from an address (web tiles).
+    Network,
+}
+
+/// Whether `id` is reserved to the user: plugin management, the GeoLibre runner, the user's own
+/// automation (scripts, tasks, models run with the user's trust), and replacing the project or
+/// stepping through its undo history. Plugins never run these; the AI assistant asks first.
+pub fn user_only(id: &str) -> bool {
+    id.starts_with("plugin.") || NEVER.contains(&id)
+}
+
+/// What running `spec` with `params` reaches beyond the project, if anything: by what the
+/// parameters name, what the command's parameters can name, and what it is.
+pub fn reaches(spec: &C, params: &Value) -> Option<Reach> {
+    // External tools (the GeoLibre suite) run a native program that reads files a parameter
+    // names, including bare file names.
+    if spec.id == "gp.run" && ps(params, "tool").and_then(rustgis_analysis::tool).is_some_and(super::gp::is_geolibre_tool) {
+        return Some(Reach::Files);
+    }
+    // Commands that fetch from an address read and write no files, so `files` doesn't come into
+    // it (their addresses would look like paths to the check below).
+    if super::tiles::NETWORK.contains(&spec.id) {
+        return Some(Reach::Network);
+    }
+    let files = super::items::names_place(params, PLACE_KEYS, 0)
+        || PLACE_KEYS.iter().any(|k| spec.params.contains(&format!("\"{k}\"")))
+        || WRITES_FILES.contains(&spec.id)
+        || ["share.", "offline.", "cache.", "notebook."].iter().any(|p| spec.id.starts_with(p));
+    files.then_some(Reach::Files)
+}
+
 /// Why a plugin may not run `id` with `params`, if it may not.
 fn refused(plugin: &Plugin, spec: &C, params: &Value) -> Option<String> {
     let m = &plugin.manifest;
-    if spec.id.starts_with("plugin.") || NEVER.contains(&spec.id) {
+    if user_only(spec.id) {
         return Some(format!("plugins can't run '{}'", spec.id));
     }
-    // External tools (the GeoLibre suite) run a native program that reads files a parameter
-    // names, including bare file names: they need `files`.
-    if spec.id == "gp.run"
-        && !m.has(Permission::Files)
-        && ps(params, "tool").and_then(rustgis_analysis::tool).is_some_and(super::gp::is_geolibre_tool)
-    {
-        return Some(format!("{} needs the 'files' permission to run GeoLibre tools", m.name));
-    }
-    // Commands that fetch from an address (web tiles) need `network`: the address could carry
-    // what the plugin read out of the project. They read and write no files, so `files` doesn't
-    // come into it (their addresses would look like paths to the check below).
-    let network = super::tiles::NETWORK.contains(&spec.id);
-    if network && !m.has(Permission::Network) {
-        return Some(format!("{} needs the 'network' permission to run '{}'", m.name, spec.id));
-    }
-    // By what the parameters name, what the command's parameters can name, and what it is.
-    let reaches = !network
-        && (super::items::names_place(params, PLACE_KEYS, 0)
-            || PLACE_KEYS.iter().any(|k| spec.params.contains(&format!("\"{k}\"")))
-            || WRITES_FILES.contains(&spec.id)
-            || ["share.", "offline.", "cache.", "notebook."].iter().any(|p| spec.id.starts_with(p)));
-    if reaches && !m.has(Permission::Files) {
-        return Some(format!("{} needs the 'files' permission to run '{}'", m.name, spec.id));
+    match reaches(spec, params) {
+        Some(Reach::Files)
+            if spec.id == "gp.run"
+                && !m.has(Permission::Files)
+                && ps(params, "tool").and_then(rustgis_analysis::tool).is_some_and(super::gp::is_geolibre_tool) =>
+        {
+            return Some(format!("{} needs the 'files' permission to run GeoLibre tools", m.name));
+        }
+        // The address could carry what the plugin read out of the project.
+        Some(Reach::Network) if !m.has(Permission::Network) => {
+            return Some(format!("{} needs the 'network' permission to run '{}'", m.name, spec.id));
+        }
+        Some(Reach::Files) if !m.has(Permission::Files) => {
+            return Some(format!("{} needs the 'files' permission to run '{}'", m.name, spec.id));
+        }
+        _ => {}
     }
     if spec.mutates && !m.has(Permission::Edit) {
         return Some(format!("{} needs the 'edit' permission to run '{}'", m.name, spec.id));

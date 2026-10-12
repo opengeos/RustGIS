@@ -9,6 +9,7 @@
 #[macro_use]
 pub mod i18n;
 mod analysispane;
+mod assistantpane;
 mod backstage;
 mod chrome;
 mod dialogs;
@@ -29,6 +30,7 @@ mod workspacepanes;
 use rustgis_engine::{Project, Session};
 use serde_json::{Value, json};
 
+pub use rustgis_assistant;
 pub use rustgis_engine;
 
 /// Files read asynchronously (browser uploads, drops) waiting to be opened: (file name, bytes).
@@ -60,6 +62,9 @@ pub struct Services {
     pub geolibre_run: Option<Box<dyn Fn(rustgis_engine::cmd::gp::ExternalRun, Slot<rustgis_engine::cmd::gp::ExternalOutput>)>>,
     /// Downloads a URL into the slot (the browser's fetch; the desktop downloads on a thread).
     pub fetch: Option<Box<dyn Fn(&str, Slot<Result<Vec<u8>, String>>)>>,
+    /// Makes an HTTP request (the AI assistant's calls to its model) and puts the response, of any
+    /// status, in the slot (the browser's fetch; the desktop sends it on a thread).
+    pub http: Option<Box<dyn Fn(rustgis_assistant::HttpRequest, Slot<Result<rustgis_assistant::HttpResponse, String>>)>>,
 }
 
 /// A new private folder for one print job: unique, created fresh (never an existing path) and,
@@ -135,6 +140,7 @@ pub enum RightPane {
     Report,
     Presentation,
     Notebook,
+    Assistant,
 }
 
 pub struct UiState {
@@ -221,6 +227,8 @@ pub struct RustGisApp {
     pub plugins: pluginsui::PluginsState,
     pub reports: reportpane::ReportState,
     pub docs: docpanes::DocState,
+    /// The AI Assistant's conversation and settings.
+    pub assistant: assistantpane::AssistantState,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     sent_title: String,
@@ -259,6 +267,7 @@ impl RustGisApp {
             plugins: pluginsui::PluginsState::default(),
             reports: reportpane::ReportState::default(),
             docs: docpanes::DocState::default(),
+            assistant: assistantpane::AssistantState::default(),
             fonts_frames: 0,
             applied_dark: None,
             sent_title: String::new(),
@@ -862,6 +871,14 @@ impl RustGisApp {
             "ui.pane.report" => toggle_right(&mut self.ui, RightPane::Report),
             "ui.pane.presentation" => toggle_right(&mut self.ui, RightPane::Presentation),
             "ui.pane.notebook" => toggle_right(&mut self.ui, RightPane::Notebook),
+            // `{"ask": text}` opens the pane and sends the text.
+            "ui.pane.assistant" => match p.get("ask").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()) {
+                Some(text) => {
+                    self.ui.right = Some(RightPane::Assistant);
+                    self.assistant.queued = Some(text.to_string());
+                }
+                None => toggle_right(&mut self.ui, RightPane::Assistant),
+            },
             "ui.newPresentation" | "ui.newNotebook" => {
                 let (cmd, pane) = if id == "ui.newPresentation" {
                     ("presentation.new", RightPane::Presentation)
@@ -1112,6 +1129,7 @@ impl RustGisApp {
         i18n::set_current(self.lang());
         panes::poll_geolibre(self, ctx);
         pluginsui::poll(self, ctx);
+        assistantpane::poll(self, ctx);
         self.ensure_script_font();
         // Fonts downloaded by the web app.
         let fonts: Vec<(String, Vec<u8>)> = match &self.services.font_inbox {

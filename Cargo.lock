@@ -3259,9 +3259,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustgis-assistant"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "rustgis-engine",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "rustgis-cli"
 version = "0.1.0"
 dependencies = [
+ "rustgis-assistant",
  "rustgis-engine",
  "serde_json",
 ]
@@ -3396,6 +3407,7 @@ dependencies = [
  "image",
  "log",
  "rfd",
+ "rustgis-assistant",
  "rustgis-engine",
  "rustgis-plugins",
  "serde",

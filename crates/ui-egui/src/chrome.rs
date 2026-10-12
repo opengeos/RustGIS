@@ -415,6 +415,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             ("ui.plugins", "Plugin Manager…", "Plugins"),
             ("ui.pane.geoprocessing", "Geoprocessing Pane", "View › Windows"),
             ("ui.pane.symbology", "Symbology Pane", "Feature Layer › Drawing"),
+            ("ui.pane.assistant", "AI Assistant", "Analysis › AI"),
             ("ui.theme", "Toggle Dark Mode", "View"),
             ("ui.exportMap", "Export Map…", "Share › Output"),
         ] {

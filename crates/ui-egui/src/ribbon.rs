@@ -1159,6 +1159,19 @@ fn analysis_tab(app: &mut RustGisApp, ui: &mut Ui) {
             });
         });
     });
+    group(ui, "AI", |ui| {
+        big(
+            ui,
+            app,
+            "assistant",
+            "AI\nAssistant",
+            "Ask about your data, or tell the assistant what to do with the map.",
+            "ui.pane.assistant",
+            Value::Null,
+            app.ui.right == Some(RightPane::Assistant),
+            false,
+        );
+    });
     group(ui, "Portal", |ui| {
         for (kind, icon, label, desc) in [
             ("feature", "buffer", "Feature\nAnalysis", "Tools that analyse features."),
@@ -1536,6 +1549,18 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 "ui.pane.details",
                 Value::Null,
                 app.ui.right == Some(RightPane::Details),
+            );
+        });
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "assistant",
+                "AI Assistant",
+                "Show or hide the AI Assistant.",
+                "ui.pane.assistant",
+                Value::Null,
+                app.ui.right == Some(RightPane::Assistant),
             );
         });
         small(
