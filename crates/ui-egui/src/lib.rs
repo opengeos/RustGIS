@@ -283,8 +283,11 @@ impl RustGisApp {
         if let Some(lang) = self.services.load_pref.as_ref().and_then(|load| load("language")) {
             self.ui.language = lang;
         }
-        if let Some(w) = self.services.load_pref.as_ref().and_then(|load| load("worldview")) {
-            self.ui.worldview = w;
+        // A stored value that is neither `auto` nor a known worldview means `auto`.
+        if let Some(w) = self.services.load_pref.as_ref().and_then(|load| load("worldview"))
+            && rustgis_engine::sample::Worldview::from_code(&w).is_some()
+        {
+            self.ui.worldview = w.trim().to_ascii_lowercase();
         }
         self.apply_worldview();
         if let Some(m) = self.services.load_pref.as_ref().and_then(|load| load("ribbon_minimized")) {
