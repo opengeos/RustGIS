@@ -144,8 +144,10 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    // A range asked for and the whole file answered: the server doesn't do ranges.
-    if range.is_some() && resp.status() != 206 {
+    // A range asked for and the whole file answered (200): fine for a range from the start that
+    // holds the whole file (a small archive), checked once it's read; else no ranges.
+    let whole = range.is_some() && resp.status() != 206;
+    if range.is_some_and(|(a, _)| whole && a > 0) {
         return Err(format!("{url}: the server doesn't answer byte-range requests"));
     }
     // Fonts are at most about 10 MB and plugins 64 MB; refuse anything over 64 MB, by header when there is one and
@@ -159,6 +161,11 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let bytes = js_sys::Uint8Array::new(&buf);
     if bytes.length() > 64 << 20 {
         return Err(format!("{} bytes is too large", bytes.length()));
+    }
+    if let Some((a, b)) = range.filter(|_| whole)
+        && u64::from(bytes.length()) > b - a + 1
+    {
+        return Err(format!("{url}: the server doesn't answer byte-range requests"));
     }
     Ok(bytes.to_vec())
 }

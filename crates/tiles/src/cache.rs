@@ -488,14 +488,25 @@ mod native {
         if resp.status().as_u16() == 204 {
             return Ok(Vec::new());
         }
-        // A range asked for and the whole file answered: the server doesn't do ranges.
-        if range.is_some() && resp.status().as_u16() != 206 {
+        // A range asked for and the whole file answered (200): fine for a range from the start
+        // that holds the whole file (a small archive's header read), cut to the range; otherwise
+        // the server doesn't do ranges.
+        let whole = range.is_some() && resp.status().as_u16() != 206;
+        if let Some((a, _)) = range.filter(|_| whole)
+            && a > 0
+        {
             return Err(format!("{url}: the server doesn't answer byte-range requests"));
         }
         let mut buf = Vec::new();
         resp.body_mut().with_config().limit(MAX_BYTES as u64 + 1).reader().read_to_end(&mut buf).map_err(|e| e.to_string())?;
         if buf.len() > MAX_BYTES {
             return Err(format!("larger than {} MB", MAX_BYTES >> 20));
+        }
+        if let Some((a, b)) = range.filter(|_| whole) {
+            if buf.len() as u64 > b - a + 1 {
+                return Err(format!("{url}: the server doesn't answer byte-range requests"));
+            }
+            buf.truncate(usize::try_from(b - a + 1).unwrap_or(usize::MAX));
         }
         Ok(buf)
     }
