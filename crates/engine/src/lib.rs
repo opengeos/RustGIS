@@ -465,8 +465,9 @@ impl Session {
         self.redo.last().map(|u| u.1)
     }
 
-    /// Forgets undo/redo and extent history and marks the project clean (after new/open).
-    pub(crate) fn clear_history(&mut self) {
+    /// Forgets undo/redo and extent history and marks the project clean (after new/open, or a
+    /// front end setting up how the project starts).
+    pub fn clear_history(&mut self) {
         self.undo.clear();
         self.redo.clear();
         self.back.clear();

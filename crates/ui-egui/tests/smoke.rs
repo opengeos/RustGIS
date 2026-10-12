@@ -324,3 +324,68 @@ fn language_switch_waits_for_its_font() {
     h.step();
     assert_eq!(h.state().lang().code(), "de");
 }
+
+/// Settings › Start-up (discussion #81): the preferences are saved, a later start follows them,
+/// a shell's overrides win, and the start is neither an edit to undo nor unsaved work.
+#[test]
+fn start_up_preferences() {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    let store: Arc<Mutex<HashMap<String, String>>> = Arc::default();
+    let services = || {
+        let (load, save) = (store.clone(), store.clone());
+        rustgis_ui_egui::Services {
+            load_pref: Some(Box::new(move |k| load.lock().unwrap().get(k).cloned())),
+            save_pref: Some(Box::new(move |k, v| {
+                save.lock().unwrap().insert(k.to_string(), v.to_string());
+            })),
+            ..Default::default()
+        }
+    };
+    let mut app = RustGisApp::with_sample().with_services(services());
+    assert!(app.run("ui.startup", json!({"projection": "nope"})).is_err());
+    let r = app.run("ui.startup", json!({"blank": true, "projection": "epsg:3010"})).unwrap();
+    assert_eq!(r, json!({"blank": true, "projection": "EPSG:3010", "extent": null}));
+    assert_eq!(store.lock().unwrap().get("start_project").map(String::as_str), Some("blank"));
+
+    let mut app = RustGisApp::with_sample().with_services(services());
+    app.start(&Default::default()).unwrap();
+    assert!(app.session.map().layers.is_empty());
+    assert_eq!(app.session.map().projection.code(), "EPSG:3010");
+    assert!(!app.session.dirty && !app.session.can_undo());
+
+    // The web app's `?projection=robinson` without `?blank`: the sample still goes when the
+    // preference says blank; an explicit `Some(false)` keeps it.
+    let mut app = RustGisApp::with_sample().with_services(services());
+    let start = |blank, projection: &str, extent: Option<&str>| rustgis_ui_egui::Start {
+        blank,
+        projection: Some(projection.into()),
+        extent: extent.map(String::from),
+    };
+    app.start(&start(Some(false), "robinson", None)).unwrap();
+    assert!(!app.session.map().layers.is_empty());
+    assert_eq!(app.session.map().projection.code(), "robinson");
+    assert!(app.start(&start(Some(false), "EPSG:4326", None)).is_err(), "degrees are refused");
+
+    // A start extent: saved from the view, or given by the shell (`?extent=`).
+    let mut app = RustGisApp::with_sample().with_services(services());
+    app.start(&start(Some(true), "EPSG:3010", Some("10.5,55,24.5,69.5"))).unwrap();
+    let view = app.session.run("map.extent", &json!(null)).unwrap();
+    let e = rustgis_ui_egui::parse_extent(&view["extent"].as_array().unwrap().iter().map(|x| x.to_string()).collect::<Vec<_>>().join(","))
+        .unwrap();
+    assert!(e[0] < 11.0 && e[2] > 24.0 && e[1] < 55.5 && e[3] > 69.0, "Sweden is in view: {e:?}");
+    assert!(e[2] - e[0] < 90.0 && e[3] - e[1] < 25.0, "and not the world: {e:?}");
+    assert!(app.start(&start(None, "EPSG:3010", Some("10,60,5,50"))).is_err(), "west after east");
+    app.run("ui.startup", json!({"extent": "view"})).unwrap();
+    assert!(store.lock().unwrap().get("start_extent").is_some_and(|v| v.split(',').count() == 4));
+    let mut again = RustGisApp::with_sample().with_services(services());
+    assert!(again.ui.start_extent.is_some());
+    again.start(&Default::default()).unwrap();
+    assert!(again.run("ui.startup", json!({"extent": [1, 2]})).is_err());
+    again.run("ui.startup", json!({"extent": null})).unwrap();
+    assert_eq!(store.lock().unwrap().get("start_extent").map(String::as_str), Some(""));
+
+    // Web Mercator is the default, stored as nothing.
+    app.run("ui.startup", json!({"blank": false, "projection": "mercator"})).unwrap();
+    assert_eq!(store.lock().unwrap().get("start_projection").map(String::as_str), Some(""));
+}

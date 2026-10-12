@@ -2521,6 +2521,85 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
         language_menu(app, ui);
         worldview_menu(app, ui);
     });
+    group(ui, "Start-up", |ui| start_project_menu(app, ui));
+}
+
+/// Settings › Start-up › Start With: the World Atlas sample or an empty project.
+fn start_project_menu(app: &mut RustGisApp, ui: &mut Ui) {
+    let blank = app.ui.start_blank;
+    let current = if blank { tl!("Blank Map") } else { tl!("World Atlas") };
+    let label = format!("{}\n{current}", tl!("Start With"));
+    big_menu(ui, app, "map", &label, "What RustGIS opens with: the World Atlas sample or a blank map.", move |ui, app| {
+        for (b, name) in [(false, tl!("World Atlas")), (true, tl!("Blank Map"))] {
+            if ui.add(egui::Button::selectable(blank == b, name)).clicked() {
+                let _ = app.run("ui.startup", json!({"blank": b}));
+                ui.close();
+            }
+        }
+    });
+    start_projection_menu(app, ui);
+    start_extent_menu(app, ui);
+}
+
+/// Settings › Start-up › Extent: the full extent or a saved view.
+fn start_extent_menu(app: &mut RustGisApp, ui: &mut Ui) {
+    let saved = app.ui.start_extent;
+    let current = if saved.is_some() { tl!("Saved View") } else { tl!("Full Extent") };
+    let label = format!("{}\n{current}", tl!("Extent"));
+    big_menu(ui, app, "zoom_full", &label, "Where the map opens: the full extent or a view you saved.", move |ui, app| {
+        if ui.add(egui::Button::selectable(saved.is_none(), tl!("Full Extent"))).clicked() {
+            let _ = app.run("ui.startup", json!({"extent": null}));
+            ui.close();
+        }
+        if ui.button(tl!("Use Current View")).clicked() {
+            if let Err(e) = app.run("ui.startup", json!({"extent": "view"})) {
+                app.session.notify(e, true);
+            }
+            ui.close();
+        }
+        if let Some(e) = saved {
+            ui.separator();
+            ui.label(format!("{:.4}, {:.4}, {:.4}, {:.4}", e[0], e[1], e[2], e[3]));
+        }
+    });
+}
+
+/// Settings › Start-up › Projection: the projection the map opens in.
+fn start_projection_menu(app: &mut RustGisApp, ui: &mut Ui) {
+    let current = if app.ui.start_projection.is_empty() { "mercator".to_string() } else { app.ui.start_projection.clone() };
+    let shown = rustgis_engine::map::Projection::from_code(&current).map(|p| p.label()).unwrap_or_else(|_| current.clone());
+    let label = format!("{}\n{}", tl!("Projection"), tl!(shown.as_str()));
+    big_menu(ui, app, "basemap", &label, "The projection the map opens in.", move |ui, app| {
+        let mut items: Vec<(String, String)> = vec![("mercator".into(), "Web Mercator".into()), ("globe".into(), "Globe".into())];
+        items.extend(rustgis_engine::map::projection::PRESETS.iter().map(|(id, label, _)| (id.to_string(), label.to_string())));
+        for (id, label) in items {
+            if ui.add(egui::Button::selectable(current == id, tl!(label.as_str()))).clicked() {
+                let _ = app.run("ui.startup", json!({"projection": id}));
+                ui.close();
+            }
+        }
+        ui.separator();
+        ui.label(tl!("EPSG code"));
+        ui.horizontal(|ui| {
+            let edit = ui.add(egui::TextEdit::singleline(&mut app.ui.start_projection_input).hint_text("3010").desired_width(90.0));
+            let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button(tl!("Use")).clicked() || enter {
+                let code = format!("EPSG:{}", app.ui.start_projection_input.trim().trim_start_matches("EPSG:").trim_start_matches("epsg:"));
+                match app.run("ui.startup", json!({"projection": code})) {
+                    Ok(_) => {
+                        app.ui.start_projection_input.clear();
+                        ui.close();
+                    }
+                    Err(e) => app.session.notify(e, true),
+                }
+            }
+        });
+        if let Ok(rustgis_engine::map::Projection::Custom(c)) = rustgis_engine::map::Projection::from_code(&current)
+            && c.starts_with("EPSG:")
+        {
+            ui.add(egui::Button::selectable(true, c.as_str()));
+        }
+    });
 }
 
 fn help_tab(app: &mut RustGisApp, ui: &mut Ui) {

@@ -2525,3 +2525,27 @@ fn notices_since_survives_the_cap() {
     assert_eq!(s.notices_since(mark).iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), ["last"]);
     assert_eq!(s.notices_since(0).len(), 200);
 }
+
+/// The web app's `?blank&projection=EPSG:3010` (discussion #81): an empty project starts in a
+/// national grid, and that start is neither an edit to undo nor unsaved work.
+#[test]
+fn blank_project_starts_in_a_projected_crs() {
+    isolate_plugins();
+    let mut s = Session::new(Project::default());
+    assert!(s.map().layers.is_empty());
+    let r = s.run("map.projection", &json!({"type": "EPSG:3010"})).unwrap();
+    assert_eq!(r["projection"], "EPSG:3010");
+    assert!(s.dirty && s.can_undo());
+    s.clear_history();
+    assert!(!s.dirty && !s.can_undo());
+    assert_eq!(s.map().projection.code(), "EPSG:3010");
+    // It opens on the country, and reports that view back.
+    s.run("map.zoomToExtent", &json!({"extent": [10.5, 55.0, 24.5, 69.5]})).unwrap();
+    let e = s.run("map.extent", &Value::Null).unwrap()["extent"].clone();
+    let n: Vec<f64> = e.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+    assert!(n[0] < 11.0 && n[2] > 24.0 && n[1] < 55.5 && n[3] > 69.0 && n[3] - n[1] < 25.0, "{n:?}");
+    for bad in [json!(null), json!([1, 2, 3]), json!([20, 50, 10, 60]), json!([0, 0, 200, 10]), json!(["a", 0, 1, 1])] {
+        assert!(s.run("map.zoomToExtent", &json!({"extent": bad})).is_err(), "{bad}");
+    }
+    assert!(crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap().len() > 1000);
+}

@@ -176,6 +176,7 @@ Below Right	Rechtsonder
 Bilinear	Bilineair
 Blank	Leeg
 Blank Letter page	Lege Letter-pagina
+Blank Map	Lege kaart
 Blank Page	Lege pagina
 Blue	Blauw
 Bold	Vet
@@ -597,6 +598,7 @@ Export To 3D File	Exporteren naar 3D-bestand
 exporting animations needs the desktop app	animaties exporteren vereist de desktopapp
 Export…	Exporteren…
 Expression	Expressie
+Extent	Extent
 Extent Indicator	Bereikindicator
 Extent: {extent}	Bereik: {extent}
 Extract	Extraheren
@@ -1390,6 +1392,7 @@ Save Web Map	Webkaart opslaan
 Save Web Scene	Webscène opslaan
 Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Opgeslagen sleutels worden onversleuteld bewaard in de voorkeuren van de app (op het web in de opslag van de browser).
 Saved symbology: apply it to the selected layer, or save the layer's.	Opgeslagen symbologie: toepassen op de geselecteerde laag, of die van de laag opslaan.
+Saved View	Opgeslagen weergave
 Saved {name}	{name} opgeslagen
 saving failed unexpectedly	opslaan onverwacht mislukt
 Scale	Schaal
@@ -1538,6 +1541,8 @@ Standard Deviation	Standaardafwijking
 Star	Ster
 Start	Start
 Start Over	Opnieuw beginnen
+Start With	Starten met
+Start-up	Opstarten
 Statistics	Statistieken
 Statistics Field	Statistiekveld
 Status	Status
@@ -1617,6 +1622,7 @@ the preview failed unexpectedly	het voorbeeld is onverwacht mislukt
 The project's items in place of the map.	De items van het project in plaats van de kaart.
 The project's thumbnail, from an image.	De miniatuur van het project, uit een afbeelding.
 The project's thumbnail, from the map view.	De miniatuur van het project, uit de kaartweergave.
+The projection the map opens in.	De projectie waarin de kaart opent.
 The raster's data couldn't be read.	De rastergegevens konden niet worden gelezen.
 The raster's data couldn't be read: {path}	De rastergegevens konden niet worden gelezen: {path}
 the reply reached its length limit	het antwoord heeft de maximale lengte bereikt
@@ -1684,6 +1690,8 @@ Update to {version}	Bijwerken naar {version}
 Upload File	Bestand uploaden
 Upload File…	Bestand uploaden…
 USA Contiguous Albers Equal Area	VS (aaneengesloten) Albers oppervlaktegetrouw
+Use	Gebruiken
+Use Current View	Huidige weergave gebruiken
 Valid combinations, one per line: a, b	Geldige combinaties, één per regel: a, b
 Valid expression · {n} matching rows	Geldige expressie · {n} overeenkomende rijen
 Validate	Valideren
@@ -1728,11 +1736,13 @@ Welcome to RustGIS	Welkom bij RustGIS
 West	West
 WGS 84 / Globe	WGS 84 / Wereldbol
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
+What RustGIS opens with: the World Atlas sample or a blank map.	Waarmee RustGIS opent: het voorbeeld World Atlas of een lege kaart.
 What's near a point	Wat er bij een punt in de buurt is
 Where	Waar
 Where Clause	Where-clausule
 Where labels sit relative to their features.	Waar labels staan ten opzichte van hun objecten.
 Where new features get their elevation (the z field).	Waar nieuwe objecten hun hoogte vandaan halen (het z-veld).
+Where the map opens: the full extent or a view you saved.	Waar de kaart opent: de volledige extent of een opgeslagen weergave.
 Where tools work	Waar gereedschappen werken
 Which 5 countries have the largest GDP?	Welke 5 landen hebben het hoogste bbp?
 Whose borders the sample countries and the basemap outline show.	Wiens grenzen de voorbeeldlanden en de basiskaartomtrek tonen.

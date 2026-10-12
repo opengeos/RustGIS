@@ -88,6 +88,11 @@ fn main() -> eframe::Result {
         RustGisApp::new(Session::new(Project::default()))
     };
     let mut app = app.with_services(prefs::services());
+    // Settings › Start-up; `--sample` still opens the sample.
+    let blank = if args.iter().any(|a| a == "--sample") { Some(false) } else { (!files.is_empty()).then_some(true) };
+    if let Err(e) = app.start(&rustgis_ui_egui::Start { blank, ..Default::default() }) {
+        log::warn!("start-up: {e}");
+    }
     for e in plugin_errors {
         log::warn!("{e}");
         app.session.notify(e, true);
