@@ -188,13 +188,13 @@ pub fn run(s: &mut Session, call: &ToolCall) -> Result<String, String> {
                 return Err(format!("unknown command '{id}'; find ids with search_commands"));
             }
             let (before, mark) = (layer_names(s), s.notice_mark());
-            let r = s.run(&id, &params_arg(a)?)?;
+            let r = s.run(&id, &params_arg(a)?).map_err(|e| error_with_notices(e, s, mark))?;
             with_notices(with_new_layers(r, s, &before), s, mark)
         }
         "run_tool" => {
             let tool = str_arg(a, "tool").ok_or("tool is required")?;
             let (before, mark) = (layer_names(s), s.notice_mark());
-            let r = s.run("gp.run", &json!({"tool": tool, "params": params_arg(a)?}))?;
+            let r = s.run("gp.run", &json!({"tool": tool, "params": params_arg(a)?})).map_err(|e| error_with_notices(e, s, mark))?;
             with_notices(with_new_layers(r, s, &before), s, mark)
         }
         "read_features" => read_features(s, a)?,
@@ -275,6 +275,13 @@ fn with_notices(r: Value, s: &Session, mark: u64) -> Value {
         }
         other => json!({"result": other, "notices": said}),
     }
+}
+
+/// A failed run's error with what the command said before failing (a GDAL layer that couldn't be
+/// converted).
+fn error_with_notices(e: String, s: &Session, mark: u64) -> String {
+    let said: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).filter(|t| *t != e).collect();
+    if said.is_empty() { e } else { format!("{e}\n{}", said.join("\n")) }
 }
 
 /// How well `words` match `hay` (all lower case): matched words, with whole-id hits counting more.

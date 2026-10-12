@@ -303,6 +303,10 @@ fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
     if !Path::new(path).is_file() {
         return Err(format!("{path}: no such file"));
     }
+    let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !rustgis_data::io::READ_EXTENSIONS.contains(&ext.as_str()) && !rustgis_data::raster::is_raster_name(path) {
+        return Err(format!("{path}: not a data file RustGIS reads"));
+    }
     let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
     Ok(json!({"count": 1, "layers": [name]}))
 }
@@ -315,6 +319,9 @@ pub(crate) enum Origin<'a> {
 
 /// Most GeoPackage tables added at once.
 const MAX_TABLES: usize = 32;
+
+/// Most skipped tables named in `layer.addData`'s result (`info.fileLayers` lists them all).
+const MAX_SKIPPED_NAMED: usize = 100;
 
 /// Adds a GeoPackage, GeoParquet or FlatGeobuf file: each feature table becomes a layer. Large
 /// sources (or any, with `"stream": true`) are streamed, read in place a view at a time; smaller
@@ -414,7 +421,8 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
     let mut out = json!({"layer": first, "layers": ids, "features": features, "streamed": streamed});
     if let Some(total) = total {
         out["tables"] = json!(total);
-        out["skipped"] = json!(skipped);
+        // Named up to a bound, so a file of thousands of tables can't flood an agent's context.
+        out["skipped"] = json!(skipped.iter().take(MAX_SKIPPED_NAMED).collect::<Vec<_>>());
     }
     Ok(out)
 }

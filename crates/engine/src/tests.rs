@@ -2507,6 +2507,9 @@ fn geopackage_table_cap_is_reported() {
     assert!(one.get("skipped").is_none());
     assert_eq!(s.map().layers.len(), 33);
     assert!(s.run("info.fileLayers", &json!({"path": dir.join("none.geojson").display().to_string()})).is_err());
+    let notes = dir.join("notes.rgis");
+    std::fs::write(&notes, "{}").unwrap();
+    assert!(s.run("info.fileLayers", &json!({"path": notes.display().to_string()})).is_err(), "not a data file");
     std::fs::remove_dir_all(&dir).ok();
 }
 
