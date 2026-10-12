@@ -15,15 +15,16 @@ builds of the desktop app and `rustgis-cli`:
 | Linux x64 / arm64 (other) | `RustGIS-<version>-linux-x86_64.tar.gz` / `RustGIS-<version>-linux-aarch64.tar.gz` |
 
 On macOS the command line tool is a separate `rustgis-cli-<version>-macos-<arch>.tar.gz`;
-the other packages include it (the MSIX adds `rustgis-cli` to every terminal). `SHA256SUMS` lists the checksum of every file.
+the other packages include it (the MSIX adds `rustgis-cli` to every terminal). `SHA256SUMS`
+lists the checksum of every file.
 
 The `.msix` is the package submitted to the Microsoft Store, which signs it. It is unsigned
 on the release page, so Windows only installs it from the Store; download the portable zip
 instead.
 
-The builds are not yet signed. On macOS, the first time, right-click RustGIS in Applications
-and choose **Open** (or run `xattr -dr com.apple.quarantine /Applications/RustGIS.app`). On
-Windows, choose **More info › Run anyway** if SmartScreen warns about an unknown publisher.
+The macOS DMG and command line tool are signed with a Developer ID and notarized by Apple,
+so they open without a warning. The Windows builds are not yet signed: choose
+**More info › Run anyway** if SmartScreen warns about an unknown publisher.
 
 ## From source
 
