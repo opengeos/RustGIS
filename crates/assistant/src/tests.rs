@@ -612,6 +612,11 @@ fn mcp_limits_what_the_agent_may_do() {
         let (err, _) = call_tool(server, &mut s, "run_command", json!({"command": "plugin.uninstall", "params": {"id": "x"}}));
         assert!(err);
     }
+    // Opening a project or template reads a file.
+    for (cmd, params) in [("project.open", json!({"path": "a.rgis"})), ("project.fromTemplate", json!({"path": "a.rgistemplate"}))] {
+        let (err, text) = call_tool(&server, &mut s, "run_command", json!({"command": cmd, "params": params}));
+        assert!(err && text.contains("--yes"), "{cmd}: {text}");
+    }
     // A project from text can bring web layers in, which drawing the map would fetch.
     let (err, text) = call_tool(&server, &mut s, "run_command", json!({"command": "project.openText", "params": {"text": "{}"}}));
     assert!(err && text.contains("--yes"), "{text}");
