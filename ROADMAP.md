@@ -27,6 +27,9 @@ or enterprise portal sharing yet, so real depth is lower than the checklist sugg
 - The AI Assistant (Anthropic, OpenAI, Gemini, OpenRouter, Ollama, OpenAI-compatible) in the
   app, the web app and `rustgis-cli ask`.
 - Sandboxed WebAssembly plugins with a registry at plugins.rustgis.app.
+- Desktop packages: Windows installers (setup.exe, .msi), a portable zip and a Store MSIX; a
+  signed and notarized macOS DMG; Linux .deb, .rpm, AppImage and tarballs; a download mirror at
+  downloads.rustgis.app.
 
 ## Next
 - Data: GeoPackage and FlatGeobuf in and out; Shapefile out; Shapefiles in the web app.
