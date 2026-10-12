@@ -475,6 +475,8 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
     let fields: Vec<Field> = order.iter().map(|(n, t)| Field::new(n.clone(), *t)).collect();
     let mut ds = Dataset::new(name, GeometryType::None, fields);
     let mut report = ReadReport::default();
+    let to_lonlat = shapefile_crs(path, &mut report);
+    let mut unconverted = 0usize;
     let pt = |x: f64, y: f64| Coord::new(x, y);
     for item in reader.iter_shapes_and_records() {
         let Ok((shape, record)) = item else {
@@ -506,6 +508,16 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
                 continue;
             }
         };
+        let geom = match (&to_lonlat, geom) {
+            (Some(t), Some(g)) => {
+                let mut ok = true;
+                let out = g.map_coords(&|c| t.to_lonlat(c).unwrap_or(Coord::new(f64::NAN, f64::NAN)));
+                out.for_each_coord(|c| ok &= c.is_finite());
+                unconverted += usize::from(!ok);
+                ok.then_some(out)
+            }
+            (_, g) => g,
+        };
         let attrs = ds
             .fields
             .iter()
@@ -533,7 +545,34 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
     if report.skipped > 0 {
         report.messages.push(format!("{} shapes were unreadable or unsupported", report.skipped));
     }
+    if unconverted > 0 {
+        report.messages.push(format!("{unconverted} shapes couldn't be converted to longitude/latitude and have no geometry"));
+    }
     Ok((ds, report))
+}
+
+/// Converts a Shapefile's coordinates to longitude/latitude, from the coordinate system in its
+/// `.prj`: `None` for longitude/latitude, or when there's no `.prj` or it isn't understood (said in
+/// the report).
+fn shapefile_crs(path: &Path, report: &mut ReadReport) -> Option<crate::raster::Transformer> {
+    let prj = crate::raster::read_prj(path)?;
+    let crs = match crate::raster::wkt::crs_from_wkt(&prj) {
+        Ok(c) => c,
+        Err(e) => {
+            report.messages.push(format!("the .prj file: {e}; coordinates are read as longitude/latitude"));
+            return None;
+        }
+    };
+    if crs == crate::raster::Crs::LonLat {
+        return None;
+    }
+    match crs.transformer() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            report.messages.push(format!("the .prj file: {e}; coordinates are read as longitude/latitude"));
+            None
+        }
+    }
 }
 
 /// The .dbf header doesn't say whether a Numeric column has decimals, so a Double column whose
@@ -684,6 +723,45 @@ mod tests {
         let (ds, _) = read_path(&p).unwrap();
         assert_eq!(ds.geometry_type, GeometryType::Polygon);
         assert!(read_path(&dir.join("x.kml")).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A projected Shapefile is converted to longitude/latitude by its `.prj` (issue #84).
+    #[test]
+    fn shapefile_prj_reprojects() {
+        use shapefile::dbase::{FieldValue, Record, TableWriterBuilder};
+        let dir = std::env::temp_dir().join(format!("rustgis-shp-prj-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shp = dir.join("paris.shp");
+        {
+            let table = TableWriterBuilder::new().add_character_field("name".try_into().unwrap(), 10);
+            let mut w = shapefile::Writer::from_path(&shp, table).unwrap();
+            let mut r = Record::default();
+            r.insert("name".into(), FieldValue::Character(Some("paris".into())));
+            // Paris in UTM zone 31N.
+            w.write_shape_and_record(&shapefile::Point::new(451_219.33, 5_411_550.20), &r).unwrap();
+        }
+        let at = |ds: &Dataset| ds.features[0].geometry.as_ref().and_then(Geometry::label_point).unwrap();
+
+        // As ArcGIS and GDAL write it: Esri WKT with no EPSG authority.
+        let prj = r#"PROJCS["WGS_1984_UTM_Zone_31N",GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["False_Easting",500000.0],PARAMETER["False_Northing",0.0],PARAMETER["Central_Meridian",3.0],PARAMETER["Scale_Factor",0.9996],PARAMETER["Latitude_Of_Origin",0.0],UNIT["Meter",1.0]]"#;
+        std::fs::write(dir.join("paris.prj"), prj).unwrap();
+        let (ds, rep) = read_path(&shp).unwrap();
+        let c = at(&ds);
+        assert!((c.x - 2.335).abs() < 1e-6 && (c.y - 48.855).abs() < 1e-6, "{c:?}");
+        assert!(rep.messages.is_empty(), "{:?}", rep.messages);
+        assert_eq!(ds.value(0, 0), &Value::Text("paris".into()));
+
+        // A .prj that isn't understood is said, not passed over.
+        std::fs::write(dir.join("paris.prj"), r#"PROJCS["x",PROJECTION["Hotine_Oblique_Mercator"]]"#).unwrap();
+        let (ds, rep) = read_path(&shp).unwrap();
+        assert_eq!(at(&ds).x, 451_219.33);
+        assert!(rep.messages.iter().any(|m| m.contains(".prj") && m.contains("Hotine")), "{:?}", rep.messages);
+
+        // No .prj: read as longitude/latitude, with the out-of-range warning.
+        std::fs::remove_file(dir.join("paris.prj")).unwrap();
+        let (_, rep) = read_path(&shp).unwrap();
+        assert!(rep.messages.iter().any(|m| m.contains("not longitude/latitude")), "{:?}", rep.messages);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -14,7 +14,7 @@ tables say.
 | --- | --- | --- | --- |
 | GeoJSON | `.geojson`, `.json` | Map › Add Data, or drop the file | Features with typed attributes; a `GeometryCollection` keeps its first member. |
 | CSV | `.csv`, `.txt` | Add Data | Longitude/latitude columns become points; a CSV without them opens as a standalone table. |
-| Shapefile | `.shp` with `.dbf` (and `.shx`) | Add Data (desktop) | Read in longitude/latitude; a `.prj` isn't applied. |
+| Shapefile | `.shp` with `.dbf` (and `.shx`) | Add Data (desktop) | Converted to longitude/latitude from the coordinate system in its `.prj` (EPSG, Esri or OGC WKT; Web Mercator, UTM, State Plane and other common projections); without a `.prj` it must be in longitude/latitude. |
 | GeoPackage | `.gpkg` | Add Data (desktop) | Every feature table becomes a layer (`"layer"` picks one). Read in place by its R-tree; any EPSG system is reprojected. |
 | GeoParquet | `.parquet`, `.geoparquet` | Add Data, or upload in the web app | WKB geometry, with the CRS from the file's `geo` metadata. Row groups are pruned by the bbox covering. zstd-compressed files open on the desktop only; Brotli isn't read. |
 | FlatGeobuf | `.fgb` | Add Data, or upload | Read in place by its packed R-tree. |
