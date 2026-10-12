@@ -1,0 +1,82 @@
+# Supported Data Formats
+
+This page lists the data formats RustGIS reads and writes, how to add each one, and the main
+limits. [Data](data.md) covers adding data, large files and rasters in more detail; [Maps and
+Basemaps](maps.md#basemaps) covers web tile layers.
+
+Most formats open in the desktop app and in the [web app](https://web.rustgis.app) alike. Those
+that need C libraries (SQLite for GeoPackage, GDAL) or files on disk are desktop-only, as the
+tables say.
+
+## Vector and tabular files
+
+| Format | Extensions or source | How to add it | Notes |
+| --- | --- | --- | --- |
+| GeoJSON | `.geojson`, `.json` | Map › Add Data, or drop the file | Features with typed attributes; a `GeometryCollection` keeps its first member. |
+| CSV | `.csv`, `.txt` | Add Data | Longitude/latitude columns become points; a CSV without them opens as a standalone table. |
+| Shapefile | `.shp` with `.dbf` (and `.shx`) | Add Data (desktop) | Read in longitude/latitude; a `.prj` isn't applied. |
+| GeoPackage | `.gpkg` | Add Data (desktop) | Every feature table becomes a layer (`"layer"` picks one). Read in place by its R-tree; any EPSG system is reprojected. |
+| GeoParquet | `.parquet`, `.geoparquet` | Add Data, or upload in the web app | WKB geometry, with the CRS from the file's `geo` metadata. Row groups are pruned by the bbox covering. zstd-compressed files open on the desktop only; Brotli isn't read. |
+| FlatGeobuf | `.fgb` | Add Data, or upload | Read in place by its packed R-tree. |
+| Standalone tables | CSV, or any layer without geometry | Add Data | Listed under the map in Contents; join or relate them to layers. |
+
+Files with more than 100,000 features (GeoPackage, GeoParquet, FlatGeobuf) are read in place, a view
+at a time, rather than loaded whole: see [Large files](data.md#large-files). They draw, label,
+identify and run through tools like any layer; **Load All Features** loads one to edit it.
+
+## Formats read through GDAL
+
+With [GDAL](https://gdal.org) installed (its `ogr2ogr` and `ogrinfo` on the `PATH`, GDAL 3.7 or
+later), the desktop app also reads the vector formats below. Each layer is converted once into a
+cached, indexed FlatGeobuf, so large ones stream too: see [Formats through
+GDAL](data.md#formats-through-gdal).
+
+| Format | Extensions or source | Notes |
+| --- | --- | --- |
+| KML / KMZ | `.kml`, `.kmz` | A layer that mixes points, lines and polygons becomes a layer of each. |
+| GPX | `.gpx` | Waypoints, routes, tracks and their points as separate layers. |
+| Esri File Geodatabase | `.gdb` folder | Every feature class becomes a layer. |
+| AutoCAD DXF | `.dxf` | Give `"crs"` (such as `EPSG:2263`) when the drawing doesn't say its coordinate system. |
+| GML | `.gml` | |
+| MapInfo | `.tab`, `.mif` | Keep the companion files together. |
+| OpenStreetMap | `.osm`, `.osm.pbf` | |
+| GeoJSON Lines, GMT | `.geojsonl`, `.geojsons`, `.gmt` | |
+
+## Rasters
+
+| Format | Extensions or source | How to add it | Notes |
+| --- | --- | --- | --- |
+| GeoTIFF / Cloud-optimised GeoTIFF | `.tif`, `.tiff` | Add Data, or upload | Regular or cloud-optimised, striped or tiled; grey, RGB(A), palette (with its colour table) or multiband. Any EPSG system, or the file's own projection from its GeoKeys (Albers, LCC, transverse Mercator…), reprojected as it draws. A large file opens from its overview, or one made as it is read when it has none. |
+| ASCII grid | `.asc` (with an optional `.prj`) | Add Data, or upload | |
+
+## Tiles and web services
+
+| Format | Extensions or source | How to add it | Notes |
+| --- | --- | --- | --- |
+| Raster tiles | XYZ/TMS template (`{z}/{x}/{y}`, `{-y}`, `{s}`, `{q}`), WMS (`{bbox-epsg-3857}`) | Map › Basemap › Add Tile Layer | PNG, JPEG and WebP. |
+| Vector tiles | Mapbox Vector Tiles (`.pbf`, `.mvt`) template, or TileJSON | Add Tile Layer | Drawn in a built-in style that knows the OpenMapTiles, Protomaps and Shortbread schemas. |
+| MapLibre styles | `style.json` | Add Tile Layer | The style's vector and raster sources, sprite, expressions and zoom functions. |
+| PMTiles | `.pmtiles`: a web address, or a file on the desktop | Add Tile Layer (or its **PMTiles File…** button), Add Data, or drop the file | Raster or vector, as the archive says. Read a tile at a time by byte ranges (the server must allow them, and CORS in the web app). A vector archive is drawn in the built-in style when it is a basemap, otherwise with each of its layers in its own colour. |
+
+## Writing
+
+| Format | How to write it | Notes |
+| --- | --- | --- |
+| GeoJSON, CSV | Data › Export (`share.exportLayer`) | A streamed layer writes its whole source. |
+| FlatGeobuf | Data › Export to `.fgb` | With a spatial index; features without geometry are left out (and reported). |
+| KML, GPX, CSV with WKT | Analysis › Workflows › Data Interop | |
+| GeoTIFF | Raster Data › Export | |
+| PNG | Share › Export Map (`share.exportMap`) | At any DPI, with labels, scale bar and tile credits. |
+| PDF | Layouts, reports and presentations | |
+| Wavefront OBJ, glTF | Share › Export To 3D, Share As › Web Scene | Polygons extruded by a field. |
+| Web map, OGC API Features, MapLibre style | Share › Share As | Open-format files that need no server: see [Sharing](sharing.md). |
+| Raster tiles | Imagery › Create Hosted Imagery | |
+
+## RustGIS files
+
+| File | Extension | Notes |
+| --- | --- | --- |
+| Project | `.rgis` (older `.rgisx` open too) | Saves streamed layers' file paths, not their features; a browser upload is kept inside. |
+| Map, layer, style, template, task and layout files | `.rgismap`, `.rgislyr`, `.rgisstyle`, `.rgistemplate`, `.rgistask`, `.rgislayout` | See [Project items](data.md#project-items). |
+| Project package | `.rgispkg` | Everything, rasters included. |
+| Plugin | `.rgplugin` | See [Plugins](../plugins.md). |

@@ -1808,3 +1808,6 @@ The layer's file couldn't be read: {error}	Katmanın dosyası okunamadı: {error
 {type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, yerinde okunur · görünümde {total} detaydan {n} tanesi · {renderer}
 Load All Features	Tüm detayları yükle
 GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV veya FlatGeobuf
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	Bir karo servisinin adresi: {z}/{x}/{y} içeren raster karolar (veya WMS için {-y}, {q}, {bbox-epsg-3857}), vektör karolar (.pbf) veya TileJSON ya da bir MapLibre stili; ya da bir PMTiles arşivi (bir web adresi veya bu bilgisayardaki bir dosya).
+PMTiles File…	PMTiles Dosyası…
+PMTiles archive	PMTiles arşivi

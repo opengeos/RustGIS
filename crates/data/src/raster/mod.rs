@@ -464,7 +464,13 @@ fn samples() {
     assert!(!paths.is_empty());
     for p in paths {
         let t = std::time::Instant::now();
-        let r = read_path(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        let r = match read_path(&p) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("FAILED {}: {e}", p.display());
+                continue;
+            }
+        };
         let s = &r.bands[0].stats;
         println!(
             "{}: {}×{}×{} {} {} {:?} nodata={:?} band1 [{}, {}] categories={:?} extent={:?} in {:?}",

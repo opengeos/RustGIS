@@ -2,6 +2,9 @@
 
 ## Formats
 
+Every format, with how to add it and its limits, is listed on [Supported Data
+Formats](data-formats.md).
+
 | Format | Read | Write |
 | --- | --- | --- |
 | GeoJSON (`.geojson`, `.json`) | Yes | Yes |
@@ -14,7 +17,7 @@
 | KML, GPX, CSV with WKT geometry | No | Yes (Analysis › Workflows › Data Interop) |
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
 | ASCII grid (`.asc`, with an optional `.prj`) | Yes | No |
-| Web tiles: XYZ/TMS/WMS rasters, Mapbox Vector Tiles, MapLibre styles | Yes | Yes (Imagery › Create Hosted Imagery) |
+| Web tiles: XYZ/TMS/WMS rasters, Mapbox Vector Tiles, MapLibre styles, PMTiles archives | Yes | Yes (Imagery › Create Hosted Imagery) |
 | RustGIS project (`.rgis`; older `.rgisx` files open too) | Yes | Yes |
 
 Add data with **Map › Add Data**, by dropping files on the window, or by passing them on the
@@ -75,9 +78,15 @@ Add a GeoTIFF or an ASCII grid with **Add Data**, by dropping it on the window, 
 by picking it. An ASCII grid takes its coordinate system from a `.prj` file next to it that names an EPSG code;
 otherwise, and always in the web app, which only sees the one file, it must be in
 longitude/latitude degrees. Exporting a raster opened from an overview writes that overview.
-GeoTIFFs may be grey, RGB(A), palette or multiband, of any pixel type, tiled or striped, and
-compressed with Deflate, LZW, PackBits or JPEG. A raster too large to hold in memory (more than
-120 million samples) opens from its largest overview that fits.
+GeoTIFFs may be regular or cloud-optimised: grey, RGB(A), palette (coloured by the file's colour
+table, as land cover such as the NLCD is) or multiband, of any pixel type, tiled or striped, and
+compressed with Deflate, LZW, PackBits or JPEG. The coordinate system is an EPSG code, or the
+file's own projection described in its GeoKeys (Albers, Lambert conformal conic, transverse
+Mercator, Mercator, Lambert azimuthal, stereographic, equirectangular and others), which an
+exported GeoTIFF keeps. A raster too large to hold in memory (more than 120 million samples, 32
+million in the web app) opens from its largest overview that fits; one without overviews opens as
+an overview made as it is read, a strip or tile at a time (every second, fourth… pixel each way),
+so reading it takes as long as decoding the whole file once.
 
 Selecting a raster layer in Contents shows the **Raster Layer** tab group:
 

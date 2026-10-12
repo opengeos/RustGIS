@@ -124,14 +124,31 @@ fn storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())
 }
 
-/// Downloads `url`.
+/// Downloads `url`, or the byte range it asks for (a PMTiles archive's part: see
+/// `rustgis_tiles::cache::split_range`).
 async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;
-    let resp: web_sys::Response =
-        wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url)).await.map_err(err)?.dyn_into().map_err(err)?;
+    let (url, range) = rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::split_range(url);
+    let promise = match range {
+        Some((a, b)) => {
+            let init = web_sys::RequestInit::new();
+            let headers = web_sys::Headers::new().map_err(err)?;
+            headers.set("Range", &format!("bytes={a}-{b}")).map_err(err)?;
+            init.set_headers(&headers);
+            window.fetch_with_str_and_init(url, &init)
+        }
+        None => window.fetch_with_str(url),
+    };
+    let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(promise).await.map_err(err)?.dyn_into().map_err(err)?;
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
+    }
+    // A range asked for and the whole file answered (200): fine for a range from the start that
+    // holds the whole file (a small archive), checked once it's read; else no ranges.
+    let whole = range.is_some() && resp.status() != 206;
+    if range.is_some_and(|(a, _)| whole && a > 0) {
+        return Err(format!("{url}: the server doesn't answer byte-range requests"));
     }
     // Fonts are at most about 10 MB and plugins 64 MB; refuse anything over 64 MB, by header when there is one and
     // by the downloaded size otherwise.
@@ -144,6 +161,11 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let bytes = js_sys::Uint8Array::new(&buf);
     if bytes.length() > 64 << 20 {
         return Err(format!("{} bytes is too large", bytes.length()));
+    }
+    if let Some((a, b)) = range.filter(|_| whole)
+        && u64::from(bytes.length()) > b - a + 1
+    {
+        return Err(format!("{url}: the server doesn't answer byte-range requests"));
     }
     Ok(bytes.to_vec())
 }

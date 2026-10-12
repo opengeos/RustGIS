@@ -1808,3 +1808,6 @@ The layer's file couldn't be read: {error}	Berkas layer tidak dapat dibaca: {err
 {type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, dibaca di tempat · {n} dari {total} fitur dalam tampilan · {renderer}
 Load All Features	Muat semua fitur
 GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV atau FlatGeobuf
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	Alamat layanan ubin: ubin raster dengan {z}/{x}/{y} (atau {-y}, {q}, {bbox-epsg-3857} untuk WMS), ubin vektor (.pbf) atau TileJSON, atau gaya MapLibre; atau arsip PMTiles (alamat web, atau berkas di komputer ini).
+PMTiles File…	Berkas PMTiles…
+PMTiles archive	Arsip PMTiles

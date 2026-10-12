@@ -162,8 +162,9 @@ pub fn clear() {
     c.slots.retain(|_, s| matches!(s.entry, Entry::Pending));
     c.bytes = 0;
     drop(c);
-    // Styles and TileJSON documents are read again too.
+    // Styles, TileJSON documents and PMTiles archives are read again too.
     crate::source::forget();
+    crate::pmtiles::forget();
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -203,10 +204,71 @@ fn start(url: String, want: Want) {
         store(&key, entry);
         finished();
     });
+    // A tile from a PMTiles archive is read from the archive, by range.
+    if crate::pmtiles::is_tile(&url) {
+        crate::pmtiles::fetch(&url, done);
+        return;
+    }
+    fetch_bytes(url, done);
+}
+
+/// Marks the part of an address that asks for a byte range, `#rustgis-range=<first>-<last>`:
+/// a fragment, so it never reaches the server, which gets a `Range` header instead.
+pub(crate) const RANGE: &str = "#rustgis-range=";
+
+/// Splits an address into the address to fetch and the byte range it asks for, if any.
+pub fn split_range(url: &str) -> (&str, Option<(u64, u64)>) {
+    match url.rsplit_once(RANGE) {
+        Some((base, r)) => match r.split_once('-').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))) {
+            Some((a, b)) if a <= b => (base, Some((a, b))),
+            _ => (url, None),
+        },
+        None => (url, None),
+    }
+}
+
+/// Fetches an address's bytes, uncached (through the browser's fetcher, or the worker threads).
+pub(crate) fn fetch_bytes(url: String, done: Done) {
     let f = fetcher().lock().unwrap_or_else(|e| e.into_inner()).clone();
     match f {
         Some(f) => f(url, done),
         None => native::fetch(url, done),
+    }
+}
+
+/// Like [`fetch_bytes`], counted as a fetch under way (so exports [`wait`] for it) and drawing
+/// again when it lands: for what the map needs before it can ask for tiles (a PMTiles header).
+pub(crate) fn fetch_counted(url: String, done: Done) {
+    IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+    fetch_bytes(
+        url,
+        Box::new(move |r| {
+            done(r);
+            finished();
+        }),
+    );
+}
+
+/// Reads a range of a local file (`<path>#rustgis-range=a-b`) on the fetch workers, counted like
+/// [`fetch_counted`]; never through an installed fetcher, which only knows web addresses.
+pub(crate) fn fetch_local(url: String, done: Done) {
+    IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+    native::fetch_local(
+        url,
+        Box::new(move |r| {
+            done(r);
+            finished();
+        }),
+    );
+}
+
+/// Something the map draws from arrived outside the cache (a PMTiles archive's header): draw
+/// again.
+pub(crate) fn notify() {
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+    let w = waker().lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(w) = w {
+        w();
     }
 }
 
@@ -337,6 +399,14 @@ mod native {
         })
     }
 
+    /// A local file's range, read on a worker.
+    pub(super) fn fetch_local(url: String, done: Done) {
+        fetch(format!("{LOCAL}{url}"), done);
+    }
+
+    /// Marks a queued job as a local file read.
+    const LOCAL: &str = "local-file:";
+
     pub(super) fn fetch(url: String, done: Done) {
         let q = queue();
         let dropped = {
@@ -384,10 +454,20 @@ mod native {
     /// `source::resolve`); each redirect is checked here.
     pub(super) fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
         use std::io::Read;
+        if let Some(local) = url.strip_prefix(LOCAL) {
+            let (path, range) = super::split_range(local);
+            let (a, b) = range.ok_or("a local read without a range")?;
+            return crate::pmtiles::read_file(path, a, b - a + 1);
+        }
+        let (url, range) = super::split_range(url);
         let mut at = url.to_string();
         let mut redirects = 0;
         let mut resp = loop {
-            let resp = agent.get(&at).call().map_err(|e| e.to_string())?;
+            let mut req = agent.get(&at);
+            if let Some((a, b)) = range {
+                req = req.header("Range", &format!("bytes={a}-{b}"));
+            }
+            let resp = req.call().map_err(|e| e.to_string())?;
             if !resp.status().is_redirection() {
                 break resp;
             }
@@ -408,10 +488,25 @@ mod native {
         if resp.status().as_u16() == 204 {
             return Ok(Vec::new());
         }
+        // A range asked for and the whole file answered (200): fine for a range from the start
+        // that holds the whole file (a small archive's header read), cut to the range; otherwise
+        // the server doesn't do ranges.
+        let whole = range.is_some() && resp.status().as_u16() != 206;
+        if let Some((a, _)) = range.filter(|_| whole)
+            && a > 0
+        {
+            return Err(format!("{url}: the server doesn't answer byte-range requests"));
+        }
         let mut buf = Vec::new();
         resp.body_mut().with_config().limit(MAX_BYTES as u64 + 1).reader().read_to_end(&mut buf).map_err(|e| e.to_string())?;
         if buf.len() > MAX_BYTES {
             return Err(format!("larger than {} MB", MAX_BYTES >> 20));
+        }
+        if let Some((a, b)) = range.filter(|_| whole) {
+            if buf.len() as u64 > b - a + 1 {
+                return Err(format!("{url}: the server doesn't answer byte-range requests"));
+            }
+            buf.truncate(usize::try_from(b - a + 1).unwrap_or(usize::MAX));
         }
         Ok(buf)
     }
@@ -423,6 +518,11 @@ mod native {
 
     pub(super) fn fetch(url: String, done: Done) {
         done(Err(format!("{url}: this build has no way to fetch tiles")));
+    }
+
+    pub(super) fn fetch_local(url: String, done: Done) {
+        let (path, _) = super::split_range(&url);
+        done(Err(format!("{path}: the web app reads PMTiles archives from web addresses only")));
     }
 }
 

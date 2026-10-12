@@ -75,6 +75,17 @@ pub fn decode(bytes: &[u8]) -> Result<Tile, String> {
     parse_tile(bytes)
 }
 
+/// Inflates gzip or zlib bytes (bounded); other bytes are returned as they are.
+pub(crate) fn inflate(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    if bytes.starts_with(&[0x1f, 0x8b]) {
+        return gunzip(bytes);
+    }
+    if is_zlib(bytes) {
+        return inflate::decompress_to_vec_zlib_with_limit(bytes, MAX_INFLATE).map_err(|e| format!("zlib: {:?}", e.status));
+    }
+    Ok(bytes.to_vec())
+}
+
 /// Signed ring area by the shoelace formula, in tile units. Positive = exterior ring (clockwise with y down),
 /// negative = hole. Works on closed and open rings.
 pub fn ring_area(ring: &[[f32; 2]]) -> f64 {

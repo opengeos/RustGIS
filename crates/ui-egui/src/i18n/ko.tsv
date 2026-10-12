@@ -1808,3 +1808,6 @@ The layer's file couldn't be read: {error}	레이어 파일을 읽을 수 없습
 {type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, 제자리에서 읽음 · 보기의 피처 {total}개 중 {n}개 · {renderer}
 Load All Features	모든 피처 불러오기
 GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV 또는 FlatGeobuf
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	타일 서비스 주소: {z}/{x}/{y}가 포함된 래스터 타일(WMS는 {-y}, {q}, {bbox-epsg-3857}), 벡터 타일(.pbf) 또는 TileJSON, 또는 MapLibre 스타일; 또는 PMTiles 아카이브(웹 주소 또는 이 컴퓨터의 파일).
+PMTiles File…	PMTiles 파일…
+PMTiles archive	PMTiles 아카이브

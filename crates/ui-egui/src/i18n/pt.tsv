@@ -1808,3 +1808,6 @@ The layer's file couldn't be read: {error}	Não foi possível ler o arquivo da c
 {type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, lido no local · {n} de {total} feições na vista · {renderer}
 Load All Features	Carregar todas as feições
 GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV ou FlatGeobuf
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	O endereço de um serviço de blocos: blocos raster com {z}/{x}/{y} (ou {-y}, {q}, {bbox-epsg-3857} para WMS), blocos vetoriais (.pbf) ou TileJSON, ou um estilo MapLibre; ou um arquivo PMTiles (um endereço web ou um arquivo neste computador).
+PMTiles File…	Arquivo PMTiles…
+PMTiles archive	Arquivo PMTiles

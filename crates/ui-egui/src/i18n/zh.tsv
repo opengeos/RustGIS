@@ -1808,3 +1808,6 @@ The layer's file couldn't be read: {error}	无法读取图层的文件：{error}
 {type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}，就地读取 · 视图中 {n} / {total} 个要素 · {renderer}
 Load All Features	加载所有要素
 GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV 或 FlatGeobuf
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	瓦片服务的地址：带 {z}/{x}/{y} 的栅格瓦片（WMS 可用 {-y}, {q}, {bbox-epsg-3857}）、矢量瓦片（.pbf）或 TileJSON，或 MapLibre 样式；或 PMTiles 归档（网址或本机文件）。
+PMTiles File…	PMTiles 文件…
+PMTiles archive	PMTiles 归档

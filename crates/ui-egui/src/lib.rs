@@ -722,6 +722,7 @@ impl RustGisApp {
                         "parquet",
                         "geoparquet",
                         "fgb",
+                        "pmtiles",
                         "kml",
                         "kmz",
                         "gpx",

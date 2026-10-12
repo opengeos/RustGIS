@@ -2425,3 +2425,35 @@ fn gdal_formats_open_when_gdal_is_installed() {
     assert_eq!(g.layer, "tracks");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn pmtiles_archives_become_tile_layers() {
+    let mut s = Session::new(Project::default());
+    // A file added as data is a tile layer of kind pmtiles (read when the map draws).
+    let path = std::env::temp_dir().join("rustgis-test-archive.pmtiles");
+    s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    let t = &s.map().tiles[0];
+    assert_eq!(t.kind, rustgis_map::TileKind::PmTiles);
+    assert_eq!(t.name, "rustgis-test-archive");
+    // A web address is guessed from its extension.
+    s.run("map.addTiles", &json!({"url": "https://example.com/data/world.pmtiles"})).unwrap();
+    assert!(s.map().tiles.iter().any(|t| t.kind == rustgis_map::TileKind::PmTiles && t.url.starts_with("https://")));
+    // A relative path or another kind of file is refused.
+    assert!(s.run("map.addTiles", &json!({"url": "world.pmtiles", "kind": "pmtiles"})).is_err());
+    assert!(s.run("map.addTiles", &json!({"url": "/tmp/x.txt", "kind": "pmtiles"})).is_err());
+    // A project keeps the layer.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    assert_eq!(t.map().tiles.iter().filter(|x| x.kind == rustgis_map::TileKind::PmTiles).count(), 2);
+}
+
+#[test]
+fn pmtiles_from_network_shares_are_refused() {
+    let mut s = Session::new(Project::default());
+    for p in [r"\\attacker\share\x.pmtiles", "//attacker/share/x.pmtiles", "file://attacker/share/x.pmtiles"] {
+        assert!(s.run("map.addTiles", &json!({"url": p, "kind": "pmtiles"})).is_err(), "{p}");
+    }
+    assert!(crate::render::rustgis_tiles::pmtiles::check_local(r"\\attacker\share\x.pmtiles").is_err());
+    assert!(crate::render::rustgis_tiles::pmtiles::check_local("/data/x.pmtiles").is_ok());
+}

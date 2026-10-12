@@ -1,14 +1,16 @@
-//! Coordinate reference systems for rasters, by EPSG code.
+//! Coordinate reference systems for rasters, by EPSG code or by definition.
 //!
 //! WGS 84 longitude/latitude and Web Mercator are handled directly; any other EPSG code is
 //! looked up in a built-in table of PROJ definitions and transformed with a pure-Rust PROJ port,
-//! so the browser build works too.
+//! so the browser build works too. A file's own (user-defined) projection, such as the Albers of
+//! the NLCD land cover, is a [`Crs::Custom`]: its PROJ definition, kept in a table for the run.
 
 use rustgis_geom::{Coord, lonlat_to_merc, merc_to_lonlat};
 use serde::{Deserialize, Serialize};
 
-/// A raster's coordinate system.
+/// A raster's coordinate system. Saved as its EPSG code, or a custom one as its definition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "SavedCrs", try_from = "SavedCrs")]
 pub enum Crs {
     /// WGS 84 longitude/latitude in degrees (EPSG:4326).
     LonLat,
@@ -16,9 +18,103 @@ pub enum Crs {
     WebMercator,
     /// Any other EPSG code.
     Epsg(u16),
+    /// A projection defined in the file (see [`Crs::custom`]); the number is its place in this
+    /// run's table, so it is never saved (rasters are read again from their files).
+    Custom(u32),
+}
+
+/// How a [`Crs`] is saved: a custom system by its PROJ definition, never by its number in a run's
+/// table.
+#[derive(Serialize, Deserialize)]
+enum SavedCrs {
+    LonLat,
+    WebMercator,
+    Epsg(u16),
+    Proj { proj4: String, label: String },
+}
+
+impl From<Crs> for SavedCrs {
+    fn from(c: Crs) -> Self {
+        match c {
+            Crs::LonLat => SavedCrs::LonLat,
+            Crs::WebMercator => SavedCrs::WebMercator,
+            Crs::Epsg(e) => SavedCrs::Epsg(e),
+            Crs::Custom(_) => match c.custom_def() {
+                Some(d) => SavedCrs::Proj { proj4: d.proj4.clone(), label: d.label.clone() },
+                None => SavedCrs::LonLat,
+            },
+        }
+    }
+}
+
+impl TryFrom<SavedCrs> for Crs {
+    type Error = String;
+    fn try_from(s: SavedCrs) -> Result<Self, String> {
+        Ok(match s {
+            SavedCrs::LonLat => Crs::LonLat,
+            SavedCrs::WebMercator => Crs::WebMercator,
+            SavedCrs::Epsg(e) => Crs::Epsg(e),
+            SavedCrs::Proj { proj4, label } => {
+                Crs::custom(CustomCrs { proj4, label, geokeys: Vec::new(), doubles: Vec::new(), ascii: String::new() })?
+            }
+        })
+    }
+}
+
+/// A coordinate system a file defines itself.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CustomCrs {
+    /// The PROJ definition (`+proj=aea +lat_1=29.5 …`).
+    pub proj4: String,
+    /// What to call it: the file's citation, or the projection's name.
+    pub label: String,
+    /// The GeoTIFF keys it came from, written back when the raster is saved as a GeoTIFF: the key
+    /// directory, its double parameters and its ASCII parameters.
+    pub geokeys: Vec<u16>,
+    pub doubles: Vec<f64>,
+    pub ascii: String,
+}
+
+/// The most custom systems one run keeps.
+const MAX_CUSTOM: usize = 1024;
+
+fn custom_table() -> &'static std::sync::Mutex<Vec<std::sync::Arc<CustomCrs>>> {
+    static T: std::sync::OnceLock<std::sync::Mutex<Vec<std::sync::Arc<CustomCrs>>>> = std::sync::OnceLock::new();
+    T.get_or_init(Default::default)
 }
 
 impl Crs {
+    /// A file's own coordinate system: checked (its PROJ definition must parse) and added to the
+    /// run's table, once per definition.
+    pub fn custom(def: CustomCrs) -> Result<Crs, String> {
+        proj4rs::Proj::from_proj_string(&def.proj4).map_err(|e| format!("{}: {e}", def.proj4))?;
+        let mut t = custom_table().lock().unwrap_or_else(|e| e.into_inner());
+        let index = |i: usize| u32::try_from(i).map(Crs::Custom).map_err(|_| "too many coordinate systems defined by files".to_string());
+        if let Some(i) = t.iter().position(|d| d.proj4 == def.proj4) {
+            // Keys a file brings fill in a system first known without them (from a saved project).
+            if let Some(slot) = t.get_mut(i)
+                && slot.geokeys.is_empty()
+                && !def.geokeys.is_empty()
+            {
+                *slot = std::sync::Arc::new(def);
+            }
+            return index(i);
+        }
+        if t.len() >= MAX_CUSTOM {
+            return Err("too many coordinate systems defined by files".into());
+        }
+        t.push(std::sync::Arc::new(def));
+        index(t.len() - 1)
+    }
+
+    /// The definition of a [`Crs::Custom`].
+    pub fn custom_def(self) -> Option<std::sync::Arc<CustomCrs>> {
+        match self {
+            Crs::Custom(i) => custom_table().lock().unwrap_or_else(|e| e.into_inner()).get(i as usize).cloned(),
+            _ => None,
+        }
+    }
+
     /// The coordinate system for an EPSG code, or `None` when it isn't known.
     pub fn from_epsg(code: u32) -> Option<Crs> {
         match code {
@@ -31,18 +127,22 @@ impl Crs {
         }
     }
 
-    /// The EPSG code.
+    /// The EPSG code (0 for a custom system, which has none).
     pub fn epsg(self) -> u16 {
         match self {
             Crs::LonLat => 4326,
             Crs::WebMercator => 3857,
             Crs::Epsg(c) => c,
+            Crs::Custom(_) => 0,
         }
     }
 
-    /// `EPSG:32645`.
+    /// `EPSG:32645`, or a custom system's name.
     pub fn label(self) -> String {
-        format!("EPSG:{}", self.epsg())
+        match self.custom_def() {
+            Some(d) => d.label.clone(),
+            None => format!("EPSG:{}", self.epsg()),
+        }
     }
 
     /// Whether coordinates are in degrees.
@@ -51,6 +151,7 @@ impl Crs {
             Crs::LonLat => true,
             Crs::WebMercator => false,
             Crs::Epsg(c) => crs_definitions::from_code(c).is_some_and(|d| d.proj4.contains("+proj=longlat")),
+            Crs::Custom(_) => self.custom_def().is_some_and(|d| d.proj4.contains("+proj=longlat")),
         }
     }
 
@@ -63,6 +164,12 @@ impl Crs {
                 Crs::Epsg(c) => {
                     let def = crs_definitions::from_code(c).ok_or_else(|| format!("unknown coordinate system EPSG:{c}"))?;
                     let native = proj4rs::Proj::from_proj_string(def.proj4).map_err(|e| format!("EPSG:{c}: {e}"))?;
+                    let wgs84 = proj4rs::Proj::from_proj_string("+proj=longlat +datum=WGS84 +no_defs").map_err(|e| e.to_string())?;
+                    Kind::Proj { native: Box::new(native), wgs84: Box::new(wgs84), geographic: self.is_geographic() }
+                }
+                Crs::Custom(_) => {
+                    let def = self.custom_def().ok_or("an unknown custom coordinate system")?;
+                    let native = proj4rs::Proj::from_proj_string(&def.proj4).map_err(|e| format!("{}: {e}", def.label))?;
                     let wgs84 = proj4rs::Proj::from_proj_string("+proj=longlat +datum=WGS84 +no_defs").map_err(|e| e.to_string())?;
                     Kind::Proj { native: Box::new(native), wgs84: Box::new(wgs84), geographic: self.is_geographic() }
                 }

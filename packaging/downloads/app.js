@@ -127,6 +127,8 @@ async function loadManifest() {
     document.querySelector("#file-count").textContent = manifest.artifacts.length;
     document.querySelector("#mirror-size").textContent = formatBytes(manifest.mirrored_bytes);
     document.title = `${manifest.release.tag} · RustGIS downloads`;
+    // Only explain GitHub links when a file is too large to mirror.
+    document.querySelector("#github-legend").hidden = !manifest.artifacts.some((artifact) => !artifact.mirrored);
 
     artifacts = manifest.artifacts.map((artifact) => {
       const platform = platformFor(artifact.name);

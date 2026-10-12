@@ -240,14 +240,24 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
 /// Add Tile Layer: an XYZ/TMS/WMS template, vector tiles or a MapLibre style by address.
 fn add_tiles(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     use rustgis_engine::map::TileKind;
-    ui.label(egui::RichText::new(tl!("A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.")).weak());
+    ui.label(egui::RichText::new(tl!("A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).")).weak());
     egui::Grid::new("tiles").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         ui.label(tl!("Address"));
-        ui.add(
-            egui::TextEdit::singleline(&mut app.dialogs.text)
-                .hint_text("https://tile.openstreetmap.org/{z}/{x}/{y}.png")
-                .desired_width(400.0),
-        );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut app.dialogs.text)
+                    .hint_text("https://tile.openstreetmap.org/{z}/{x}/{y}.png")
+                    .desired_width(if cfg!(target_arch = "wasm32") { 400.0 } else { 320.0 }),
+            );
+            // A PMTiles file on this computer (the web app reads archives from web addresses).
+            if !cfg!(target_arch = "wasm32")
+                && ui.button(tl!("PMTiles File…")).clicked()
+                && let Some(path) = pick_open(&["pmtiles"], tl!("PMTiles archive"))
+            {
+                app.dialogs.text = path;
+                app.dialogs.mode = "pmtiles";
+            }
+        });
         ui.end_row();
         ui.label(tl!("Type"));
         let guessed = TileKind::guess(app.dialogs.text.trim());

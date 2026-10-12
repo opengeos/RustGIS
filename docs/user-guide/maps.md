@@ -23,6 +23,11 @@ Ocean, Atlas, Blank), which need no network, and web tile layers over them:
   `{bbox-epsg-3857}`. PNG, JPEG and WebP.
 - **Vector tiles** (Mapbox Vector Tiles, `.pbf`) from a template or a TileJSON address, drawn in
   a built-in style that knows the OpenMapTiles, Protomaps and Shortbread schemas.
+- **PMTiles archives** (`.pmtiles`) of raster or vector tiles: a web address, read a tile at a
+  time by byte ranges (the server must allow range requests, and CORS for the web app), or on the
+  desktop a file (**PMTiles File…**, Add Data, or drop it on the window). A vector archive that
+  is a basemap is drawn in the built-in style; any other is drawn with each of its layers in a
+  colour of its own.
 - **Map styles**: a MapLibre style document (`style.json`), with its vector and raster sources.
   RustGIS draws background, fill, line, circle and raster layers, point labels with their icons
   from the style's sprite (SDF icons in their `icon-color`), and fill patterns; it evaluates the
