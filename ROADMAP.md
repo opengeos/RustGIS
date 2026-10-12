@@ -38,7 +38,7 @@ or enterprise portal sharing yet, so real depth is lower than the checklist sugg
   downloads.rustgis.app.
 
 ## Next
-- Data: Shapefiles and GeoPackages in the web app.
+- Data: GeoPackages in the web app.
 - Editing: vertex editing (move, add and delete vertices of existing features).
 - Analysis: spatial join, intersect and union, near, heat maps.
 - 3D: full scenes with terrain, beyond the globe and 2.5D extrusion.

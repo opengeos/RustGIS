@@ -14,9 +14,9 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 /// Largest file opened from its contents (a browser upload): 512 MiB, or 256 MiB in the browser.
 #[cfg(not(target_arch = "wasm32"))]
-const MAX_UPLOAD_BYTES: usize = 512 << 20;
+pub(crate) const MAX_UPLOAD_BYTES: usize = 512 << 20;
 #[cfg(target_arch = "wasm32")]
-const MAX_UPLOAD_BYTES: usize = 256 << 20;
+pub(crate) const MAX_UPLOAD_BYTES: usize = 256 << 20;
 
 pub(crate) fn need_raster(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
@@ -159,6 +159,10 @@ fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
         let r = raster::read_bytes(&name, &bytes).map_err(|e| format!("{name}: {e}"))?;
         let title = r.name.clone();
         return add_raster(s, &title, RasterLayer::from_bytes(r, name, bytes));
+    }
+    // Zipped Shapefiles (and other vector files in a zip).
+    if name.to_ascii_lowercase().ends_with(".zip") {
+        return super::layer::add_zip(s, p, &name, &bytes);
     }
     // GeoParquet and FlatGeobuf uploads (binary vector files).
     if rustgis_data::source::is_source_name(&name) {

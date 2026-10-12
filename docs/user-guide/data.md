@@ -9,7 +9,7 @@ Formats](data-formats.md).
 | --- | --- | --- |
 | GeoJSON (`.geojson`, `.json`) | Yes | Yes |
 | CSV (`.csv`, `.txt`) with longitude/latitude columns | Yes | Yes |
-| Shapefile (`.shp` + `.dbf`) | Yes (desktop) | Yes (`share.exportLayer`) |
+| Shapefile (`.shp` + `.dbf`, or zipped in a `.zip`) | Yes (the web app opens zips) | Yes (`share.exportLayer`) |
 | GeoPackage (`.gpkg`, every feature table) | Yes (desktop) | Yes (desktop) |
 | GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | Yes |
 | FlatGeobuf (`.fgb`) | Yes | Yes (`share.exportLayer`) |
