@@ -12,6 +12,10 @@ use std::io::{BufReader, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// A file or an upload, read and seeked.
+trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
 #[derive(Clone, Debug)]
 enum Input {
     Path(PathBuf),
@@ -40,7 +44,12 @@ impl FgbSource {
         let reader = FgbReader::open(r).map_err(err)?;
         let h = reader.header();
         let mut notes = Vec::new();
-        let reproject = Reproject::from_epsg(h.crs().map(|c| c.code()).and_then(|c| u32::try_from(c).ok()), &mut notes);
+        let code = h.crs().map(|c| c.code()).and_then(|c| u32::try_from(c).ok()).filter(|c| *c > 0);
+        // A coordinate system described (by WKT or name) but without an EPSG code can't be converted.
+        if code.is_none() && h.crs().is_some_and(|c| c.wkt().is_some_and(|w| !w.contains("WGS 84") && !w.contains("WGS84"))) {
+            notes.push("its coordinate system has no EPSG code; read as longitude/latitude".into());
+        }
+        let reproject = Reproject::from_epsg(code, &mut notes);
         let fields = h
             .columns()
             .map(|cols| cols.iter().map(|c| Field::new(c.name().to_string(), field_type(c.type_()))).collect())
@@ -76,7 +85,7 @@ impl FgbSource {
         };
         let mut src = FgbSource { info, input, reproject };
         if src.info.geometry_type == GeometryType::None {
-            src.info.geometry_type = super::peek_kind(&src);
+            src.info.geometry_type = src.peek_kind();
         }
         Ok(src)
     }
@@ -136,6 +145,26 @@ impl FgbSource {
         out.complete = sample.complete();
         out.features = sample.items;
         Ok(out)
+    }
+
+    /// The geometry type of a file that declares none (mixed output), from its first features: a
+    /// read that stops there, not a pass over the file.
+    fn peek_kind(&self) -> GeometryType {
+        let first = |r: Box<dyn ReadSeek>| -> Option<GeometryType> {
+            let mut iter = FgbReader::open(r).ok()?.select_all().ok()?;
+            for _ in 0..16 {
+                let f = iter.next().ok()??;
+                if let Some(g) = f.to_wkb(CoordDimensions::xy()).ok().as_deref().and_then(wkb::decode) {
+                    return Some(g.kind());
+                }
+            }
+            None
+        };
+        let r: Option<Box<dyn ReadSeek>> = match &self.input {
+            Input::Path(p) => std::fs::File::open(p).ok().map(|f| Box::new(BufReader::new(f)) as Box<dyn ReadSeek>),
+            Input::Bytes(b) => Some(Box::new(Cursor::new(b.clone()))),
+        };
+        r.and_then(first).unwrap_or(GeometryType::None)
     }
 
     /// The 1-based numbers of the features the index finds in a native extent, in file order.

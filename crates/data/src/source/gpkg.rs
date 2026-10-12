@@ -48,8 +48,12 @@ pub fn layers(path: &Path) -> Result<Vec<String>> {
 
 fn open_db(path: &Path) -> Result<Connection> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(err)?;
-    // A cap on SQLite's page cache, so a huge database can't take all the memory.
-    let _ = conn.execute_batch("PRAGMA cache_size = -65536;");
+    // A cap on SQLite's page cache, so a huge database can't take all the memory; and the file is
+    // hostile: nothing it defines (views, triggers, generated columns) may call functions, and
+    // nothing writes.
+    let _ = conn.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false);
+    let _ = conn.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true);
+    let _ = conn.execute_batch("PRAGMA cache_size = -65536; PRAGMA query_only = ON;");
     Ok(conn)
 }
 
@@ -228,7 +232,8 @@ impl GpkgSource {
 
     /// Turns a row (id, geometry, fields…) into a feature; `None` for an unreadable geometry.
     fn feature(&self, r: &rusqlite::Row<'_>, native: Option<&Extent>, req: &Request) -> rusqlite::Result<Row> {
-        let id = r.get::<_, Option<i64>>(0)?.and_then(|i| u64::try_from(i).ok()).unwrap_or(0);
+        // Integer keys, negative ones too, map to distinct ids.
+        let Some(id) = r.get::<_, Option<i64>>(0)?.map(|i| i as u64) else { return Ok(Row::Bad) };
         let blob = match r.get_ref(1)? {
             ValueRef::Blob(b) => b,
             ValueRef::Null => return Ok(Row::Skip),

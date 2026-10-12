@@ -83,7 +83,13 @@ impl ParquetSource {
             return Err(DataError::Format(format!("geometry column '{primary}' is not binary")));
         }
         let mut notes = Vec::new();
-        let reproject = Reproject::from_epsg(crs_code(col_meta.and_then(|c| c.get("crs"))), &mut notes);
+        let crs = col_meta.and_then(|c| c.get("crs"));
+        let code = crs_code(crs);
+        // A coordinate system given without an EPSG code (and not OGC:CRS84) can't be converted.
+        if code.is_none() && crs.is_some_and(|c| !c.is_null() && !is_crs84(c)) {
+            notes.push("its coordinate system has no EPSG code; read as longitude/latitude".into());
+        }
+        let reproject = Reproject::from_epsg(code, &mut notes);
         let covering = find_covering(md, col_meta, &primary);
 
         let mut fields = Vec::new();
@@ -207,8 +213,9 @@ impl FeatureSource for ParquetSource {
             let geoms = read_bytes(rg.as_ref(), self.geom_col, &take)?;
             let attrs: Vec<Vec<Value>> = self.field_cols.iter().map(|&c| read_values(rg.as_ref(), c, &take)).collect::<Result<_>>()?;
             let base = starts.get(g).copied().unwrap_or(0);
-            for (r, _) in take.iter().enumerate().filter(|(_, t)| **t) {
-                let geometry = geoms.get(r).and_then(|b| b.as_deref()).and_then(wkb::decode).and_then(|g| self.reproject.geometry(g));
+            // The columns hold the taken rows only, in order: the k-th is row `r`.
+            for (k, (r, _)) in take.iter().enumerate().filter(|(_, t)| **t).enumerate() {
+                let geometry = geoms.get(k).and_then(|b| b.as_deref()).and_then(wkb::decode).and_then(|g| self.reproject.geometry(g));
                 let Some(geometry) = geometry else {
                     skipped += 1;
                     continue;
@@ -216,7 +223,7 @@ impl FeatureSource for ParquetSource {
                 if !in_request(&geometry, req) || (late && !sample.wants()) {
                     continue;
                 }
-                let values = attrs.iter().map(|col| col.get(r).cloned().unwrap_or(Value::Null)).collect();
+                let values = attrs.iter().map(|col| col.get(k).cloned().unwrap_or(Value::Null)).collect();
                 sample.keep(Feature { id: base + r as u64 + 1, geometry: Some(geometry), attrs: values });
             }
         }
@@ -236,6 +243,15 @@ fn geometry_type_name(t: &str) -> Option<GeometryType> {
         "Polygon" | "MultiPolygon" => Some(GeometryType::Polygon),
         _ => None,
     }
+}
+
+/// Whether a PROJJSON `crs` is OGC:CRS84 (or EPSG:4326's longitude/latitude twin).
+fn is_crs84(crs: &serde_json::Value) -> bool {
+    let id = crs.get("id");
+    let authority = id.and_then(|i| i.get("authority")).and_then(|a| a.as_str()).unwrap_or("");
+    let code = id.and_then(|i| i.get("code")).map(|c| c.to_string().trim_matches('"').to_string()).unwrap_or_default();
+    (authority.eq_ignore_ascii_case("OGC") && code.eq_ignore_ascii_case("CRS84"))
+        || crs.get("name").and_then(|n| n.as_str()).is_some_and(|n| n.contains("CRS84"))
 }
 
 /// The EPSG code of a GeoParquet `crs` (PROJJSON); absent means OGC:CRS84 (longitude/latitude).
@@ -331,38 +347,52 @@ fn field_type(c: &ColumnDescPtr) -> Option<FieldType> {
     })
 }
 
-/// Reads `n` rows of a flat column, `None` where a row is null.
-fn read_column<T: PqType>(r: &mut ColumnReaderImpl<T>, n: usize, max_def: i16) -> Result<Vec<Option<T::T>>> {
-    let mut out: Vec<Option<T::T>> = Vec::with_capacity(n.min(1 << 24));
+/// Reads the rows `take` marks of a flat column, in order (`None` where a row is null). Runs of
+/// rows not taken are skipped without being decoded into values, so a sample of a large row
+/// group doesn't hold all of it.
+fn read_column<T: PqType>(r: &mut ColumnReaderImpl<T>, take: &[bool], max_def: i16) -> Result<Vec<Option<T::T>>> {
+    let wanted = take.iter().filter(|&&t| t).count();
+    let mut out: Vec<Option<T::T>> = Vec::with_capacity(wanted.min(1 << 24));
     let mut defs = Vec::new();
     let mut values = Vec::new();
-    while out.len() < n {
-        defs.clear();
-        values.clear();
-        let want = (n - out.len()).min(BATCH);
-        let (records, _, levels) = r.read_records(want, Some(&mut defs), None, &mut values).map_err(err)?;
-        if records == 0 {
-            break;
+    let mut i = 0;
+    while i < take.len() {
+        let on = take.get(i).copied().unwrap_or(false);
+        let mut j = i;
+        while j < take.len() && take.get(j).copied().unwrap_or(false) == on {
+            j += 1;
         }
-        if max_def == 0 {
-            out.extend(values.drain(..).map(Some));
-        } else {
-            let mut it = values.drain(..);
-            for d in defs.iter().take(levels) {
-                out.push(if *d == max_def { it.next() } else { None });
+        let mut left = j - i;
+        i = j;
+        if !on {
+            if r.skip_records(left).map_err(err)? < left {
+                break;
+            }
+            continue;
+        }
+        while left > 0 {
+            defs.clear();
+            values.clear();
+            let (records, _, levels) = r.read_records(left.min(BATCH), Some(&mut defs), None, &mut values).map_err(err)?;
+            if records == 0 {
+                return Ok(out);
+            }
+            left = left.saturating_sub(records);
+            if max_def == 0 {
+                out.extend(values.drain(..).map(Some));
+            } else {
+                let mut it = values.drain(..);
+                for d in defs.iter().take(levels) {
+                    out.push(if *d == max_def { it.next() } else { None });
+                }
             }
         }
     }
-    // Only what was read: callers look rows up with `get`.
-    out.truncate(n);
     Ok(out)
 }
 
-/// Reads a field column as attribute values: those of the rows `take` marks (the rest are null,
-/// so a sample doesn't copy every row).
+/// Reads a field column as attribute values, for the rows `take` marks, in order.
 fn read_values(rg: &dyn RowGroupReader, col: usize, take: &[bool]) -> Result<Vec<Value>> {
-    let n = take.len();
-    let on = |r: usize| take.get(r).copied().unwrap_or(false);
     let desc = rg.metadata().column(col).column_descr_ptr();
     let max_def = desc.max_def_level();
     let scale = decimal_scale(&desc).map(|s| 10f64.powi(-s));
@@ -373,45 +403,42 @@ fn read_values(rg: &dyn RowGroupReader, col: usize, take: &[bool]) -> Result<Vec
     };
     Ok(match rg.get_column_reader(col).map_err(err)? {
         ColumnReader::BoolColumnReader(mut r) => {
-            read_column(&mut r, n, max_def)?.into_iter().map(|v| v.map(Value::Bool).unwrap_or_default()).collect()
+            read_column(&mut r, take, max_def)?.into_iter().map(|v| v.map(Value::Bool).unwrap_or_default()).collect()
         }
-        ColumnReader::Int32ColumnReader(mut r) => read_column(&mut r, n, max_def)?.into_iter().map(|v| int(v.map(i64::from))).collect(),
-        ColumnReader::Int64ColumnReader(mut r) => read_column(&mut r, n, max_def)?.into_iter().map(int).collect(),
+        ColumnReader::Int32ColumnReader(mut r) => read_column(&mut r, take, max_def)?.into_iter().map(|v| int(v.map(i64::from))).collect(),
+        ColumnReader::Int64ColumnReader(mut r) => read_column(&mut r, take, max_def)?.into_iter().map(int).collect(),
         ColumnReader::FloatColumnReader(mut r) => {
-            read_column(&mut r, n, max_def)?.into_iter().map(|v| v.map(|f| Value::Float(f64::from(f))).unwrap_or_default()).collect()
+            read_column(&mut r, take, max_def)?.into_iter().map(|v| v.map(|f| Value::Float(f64::from(f))).unwrap_or_default()).collect()
         }
         ColumnReader::DoubleColumnReader(mut r) => {
-            read_column(&mut r, n, max_def)?.into_iter().map(|v| v.map(Value::Float).unwrap_or_default()).collect()
+            read_column(&mut r, take, max_def)?.into_iter().map(|v| v.map(Value::Float).unwrap_or_default()).collect()
         }
-        ColumnReader::ByteArrayColumnReader(mut r) => read_column(&mut r, n, max_def)?
+        ColumnReader::ByteArrayColumnReader(mut r) => read_column(&mut r, take, max_def)?
             .into_iter()
-            .enumerate()
-            .map(|(i, v)| v.filter(|_| on(i)).map(|b| Value::Text(String::from_utf8_lossy(b.data()).into_owned())).unwrap_or_default())
+            .map(|v| v.map(|b| Value::Text(String::from_utf8_lossy(b.data()).into_owned())).unwrap_or_default())
             .collect(),
-        _ => vec![Value::Null; n],
+        _ => Vec::new(),
     })
 }
 
-/// Reads a binary column (the WKB geometry), copying only the rows `take` marks.
+/// Reads a binary column (the WKB geometry), for the rows `take` marks, in order.
 fn read_bytes(rg: &dyn RowGroupReader, col: usize, take: &[bool]) -> Result<Vec<Option<Vec<u8>>>> {
     let max_def = rg.metadata().column(col).column_descr().max_def_level();
-    let on = |r: usize| take.get(r).copied().unwrap_or(false);
     match rg.get_column_reader(col).map_err(err)? {
-        ColumnReader::ByteArrayColumnReader(mut r) => Ok(read_column(&mut r, take.len(), max_def)?
-            .into_iter()
-            .enumerate()
-            .map(|(i, v)| v.filter(|_| on(i)).map(|b| b.data().to_vec()))
-            .collect()),
+        ColumnReader::ByteArrayColumnReader(mut r) => {
+            Ok(read_column(&mut r, take, max_def)?.into_iter().map(|v| v.map(|b| b.data().to_vec())).collect())
+        }
         _ => Err(DataError::Format("GeoParquet: the geometry column is not binary".into())),
     }
 }
 
-/// Reads `n` rows of a float or double column as doubles.
+/// Reads every one of `n` rows of a float or double column as doubles (the covering).
 fn read_f64(rg: &dyn RowGroupReader, col: usize, n: usize) -> Result<Vec<Option<f64>>> {
     let max_def = rg.metadata().column(col).column_descr().max_def_level();
+    let all = vec![true; n];
     match rg.get_column_reader(col).map_err(err)? {
-        ColumnReader::FloatColumnReader(mut r) => Ok(read_column(&mut r, n, max_def)?.into_iter().map(|v| v.map(f64::from)).collect()),
-        ColumnReader::DoubleColumnReader(mut r) => read_column(&mut r, n, max_def),
+        ColumnReader::FloatColumnReader(mut r) => Ok(read_column(&mut r, &all, max_def)?.into_iter().map(|v| v.map(f64::from)).collect()),
+        ColumnReader::DoubleColumnReader(mut r) => read_column(&mut r, &all, max_def),
         _ => Ok(Vec::new()),
     }
 }

@@ -21,7 +21,7 @@ use std::path::Path;
 pub const EXTENSIONS: &[&str] = &["gpkg", "parquet", "geoparquet", "fgb"];
 
 /// The most features one read returns, whatever the request asks for.
-pub const MAX_LIMIT: usize = if cfg!(target_arch = "wasm32") { 500_000 } else { 5_000_000 };
+pub const MAX_LIMIT: usize = if cfg!(target_arch = "wasm32") { 500_000 } else { 2_000_000 };
 
 /// Whether a file name is read through a provider.
 pub fn is_source_name(name: &str) -> bool {
