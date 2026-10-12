@@ -26,9 +26,10 @@
         Square150x150Logo="Assets\Square150x150Logo.png" />
       <Extensions>
         <uap:Extension Category="windows.fileTypeAssociation">
-          <uap:FileTypeAssociation Name="rgisx">
+          <uap:FileTypeAssociation Name="rgis">
             <uap:DisplayName>RustGIS project</uap:DisplayName>
             <uap:SupportedFileTypes>
+              <uap:FileType>.rgis</uap:FileType>
               <uap:FileType>.rgisx</uap:FileType>
             </uap:SupportedFileTypes>
           </uap:FileTypeAssociation>
