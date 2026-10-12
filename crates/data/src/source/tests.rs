@@ -489,6 +489,13 @@ fn writes_points_lines_kmz_and_zipped_shapefiles() {
     assert!(crate::io::write_bytes(&table, "shp").is_err());
     assert!(crate::io::write_bytes(&table, "parquet").is_ok());
     crate::io::write_path(&table, &d.join("t.gpkg")).unwrap();
+    // Field names differing only in case are distinct in a dataset but not in SQLite.
+    let mut cased = Dataset::new("c", GeometryType::Point, vec![Field::new("A", FieldType::Integer), Field::new("a", FieldType::Text)]);
+    cased.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Int(1), Value::Text("x".into())]);
+    crate::io::write_path(&cased, &d.join("c.gpkg")).unwrap();
+    let (back, _) = crate::io::read_path(&d.join("c.gpkg")).unwrap();
+    assert_eq!(back.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["A", "a_1"]);
+    assert_eq!(back.features[0].attrs, [Value::Int(1), Value::Text("x".into())]);
     // An empty layer writes too.
     let empty = Dataset::new("e", GeometryType::Point, vec![]);
     assert!(crate::io::write_bytes(&empty, "parquet").is_ok());

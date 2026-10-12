@@ -78,9 +78,10 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     let ds = whole.as_ref().unwrap_or(&l.dataset);
     let left_out = rustgis_data::io::write_path(ds, Path::new(&path)).map_err(|e| e.to_string())?;
     let written = ds.features.len().saturating_sub(left_out);
-    // FlatGeobuf, KML, GPX and Shapefile hold features with geometry only.
+    // FlatGeobuf, KML, GPX and Shapefile hold features with geometry only (a Shapefile, only
+    // geometry it can draw).
     if left_out > 0 {
-        s.notify(format!("{path}: {left_out} features without geometry were left out"), false);
+        s.notify(format!("{path}: {left_out} features the format can't hold (without geometry) were left out"), false);
     }
     s.notify(format!("Exported {path}"), false);
     Ok(json!({"path": path, "features": written, "leftOut": left_out}))

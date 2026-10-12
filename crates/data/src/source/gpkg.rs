@@ -408,9 +408,12 @@ pub fn write(ds: &crate::Dataset, path: &Path) -> Result<()> {
     let Some(name) = path.file_name() else {
         return Err(DataError::Format(format!("{} is not a file path", path.display())));
     };
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    // Unique per write, so concurrent exports to the same file never share one.
     let mut tmp_name = std::ffi::OsString::from(".");
     tmp_name.push(name);
-    tmp_name.push(format!(".{}.tmp", std::process::id()));
+    tmp_name.push(format!(".{}.{}.tmp", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)));
     let tmp = path.with_file_name(tmp_name);
     // A new file, so nothing already at that name is followed or reused.
     let _ = std::fs::remove_file(&tmp);
@@ -444,6 +447,18 @@ fn build(conn: &Connection, ds: &crate::Dataset) -> Result<()> {
     let has_geom = ds.geometry_type != GeometryType::None;
     let fid = free_name(&ds.fields, "fid");
     let geom = free_name(&ds.fields, "geom");
+    // SQLite column names are unique without regard to case: a later `a` beside `A` becomes `a_1`.
+    let mut columns: Vec<String> = Vec::with_capacity(ds.fields.len());
+    for f in &ds.fields {
+        let taken = |n: &str, cols: &[String]| {
+            cols.iter().any(|c| c.eq_ignore_ascii_case(n)) || n.eq_ignore_ascii_case(&fid) || n.eq_ignore_ascii_case(&geom)
+        };
+        let name = (0..)
+            .map(|i| if i == 0 { f.name.clone() } else { format!("{}_{i}", f.name) })
+            .find(|n| !taken(n, &columns))
+            .unwrap_or_else(|| f.name.clone());
+        columns.push(name);
+    }
     let multi_points = ds.features.iter().any(|f| matches!(f.geometry, Some(crate::Geometry::MultiPoint(_))));
     let geom_type = match ds.geometry_type {
         GeometryType::Point if multi_points => "MULTIPOINT",
@@ -476,14 +491,14 @@ fn build(conn: &Connection, ds: &crate::Dataset) -> Result<()> {
     if has_geom {
         cols.push(format!("{g} {geom_type}"));
     }
-    for f in &ds.fields {
+    for (f, col) in ds.fields.iter().zip(&columns) {
         let ty = match f.ty {
             FieldType::Integer => "INTEGER",
             FieldType::Double => "REAL",
             FieldType::Boolean => "BOOLEAN",
             FieldType::Text => "TEXT",
         };
-        cols.push(format!("{} {ty}", quote(&f.name)));
+        cols.push(format!("{} {ty}", quote(col)));
     }
     sql.push_str(&format!("CREATE TABLE {t} ({});", cols.join(", ")));
     let rt = quote(&format!("rtree_{table}_{geom}"));
@@ -505,7 +520,7 @@ fn build(conn: &Connection, ds: &crate::Dataset) -> Result<()> {
     let keep_ids = ds.features.iter().all(|f| i64::try_from(f.id).is_ok() && seen.insert(f.id));
     {
         let names: Vec<String> =
-            std::iter::once(i.clone()).chain(has_geom.then(|| g.clone())).chain(ds.fields.iter().map(|f| quote(&f.name))).collect();
+            std::iter::once(i.clone()).chain(has_geom.then(|| g.clone())).chain(columns.iter().map(|c| quote(c))).collect();
         let marks = vec!["?"; names.len()].join(", ");
         let mut st = conn.prepare(&format!("INSERT INTO {t} ({}) VALUES ({marks})", names.join(", "))).map_err(err)?;
         // The spatial index is filled here; its triggers (which call functions only GeoPackage

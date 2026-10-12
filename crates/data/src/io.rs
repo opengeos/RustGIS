@@ -85,9 +85,6 @@ fn check_size(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Extensions [`write_path`] writes (GeoPackage on the desktop only).
-pub const WRITE_EXTENSIONS: &[&str] = &["geojson", "json", "csv", "fgb", "gpkg", "parquet", "geoparquet", "shp", "kml", "kmz", "gpx"];
-
 /// The field KML and GPX name placemarks by: one called `name`, if any.
 fn name_field(ds: &Dataset) -> Option<usize> {
     ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case("name"))
@@ -125,7 +122,8 @@ pub fn write_bytes(ds: &Dataset, ext: &str) -> Result<(Vec<u8>, usize)> {
     })
 }
 
-/// Writes a dataset by extension (see [`WRITE_EXTENSIONS`]); returns the number of features the
+/// Writes a dataset by extension (`.geojson`/`.json`, `.csv`, `.fgb`, `.gpkg` on the desktop,
+/// `.parquet`/`.geoparquet`, `.shp`, `.zip`, `.kml`, `.kmz` or `.gpx`); returns the number of features the
 /// format couldn't hold (FlatGeobuf, KML, GPX and Shapefile hold only features with geometry). A
 /// Shapefile is written as its `.shp`, `.shx`, `.dbf`, `.prj` and `.cpg` files (or zipped, to a
 /// `.zip`).
