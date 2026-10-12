@@ -148,6 +148,11 @@ fn check(src: &dyn FeatureSource, expect_indexed: bool) {
     assert_eq!(got.features.len(), in_box(&e), "{}", info.format);
     assert!(got.complete);
     assert!(got.features.iter().all(|f| f.geometry.as_ref().is_some_and(|g| e.contains(g.extent().center()))));
+    // Every feature keeps the id a whole read gives it.
+    let id_of: std::collections::HashMap<String, u64> = all.features.iter().map(|f| (f.attrs[0].to_string() + &f.attrs[1].to_string(), f.id)).collect();
+    for f in &got.features {
+        assert_eq!(id_of.get(&(f.attrs[0].to_string() + &f.attrs[1].to_string())), Some(&f.id), "{}", info.format);
+    }
 
     // A limit: a sample spread over the whole extent, not the first rows.
     let s = src.read(&Request { extent: None, limit: 60 }).unwrap();

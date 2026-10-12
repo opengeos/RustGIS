@@ -162,7 +162,7 @@ fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
     }
     // GeoParquet and FlatGeobuf uploads (binary vector files).
     if rustgis_data::source::is_source_name(&name) {
-        let read = rustgis_data::io::read_bytes(&name, &bytes).map_err(|e| format!("{name}: {e}"))?;
+        let read = rustgis_data::io::read_owned(&name, bytes).map_err(|e| format!("{name}: {e}"))?;
         return super::layer::add_read(s, p, read);
     }
     let text = String::from_utf8(bytes).map_err(|_| format!("{name} is not a text file"))?;

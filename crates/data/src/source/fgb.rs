@@ -81,11 +81,12 @@ impl FgbSource {
         Ok(src)
     }
 
-    fn read_with<R: Read + Seek>(&self, open: impl Fn() -> Result<R>, req: &Request) -> Result<Batch> {
+    /// Reads a request; `scan` ignores the index.
+    fn read_with<R: Read + Seek>(&self, open: &impl Fn() -> Result<R>, req: &Request, scan: bool) -> Result<Batch> {
         let limit = clamp_limit(req.limit);
         let reader = FgbReader::open(open()?).map_err(err)?;
         let native = req.extent.map(|e| self.reproject.extent_from_lonlat(&e));
-        let indexed = native.filter(|_| self.info.indexed);
+        let indexed = native.filter(|_| self.info.indexed && !scan);
         // Feature numbers in the file, for ids that stay put between reads: the index search's
         // results, in the order the selection visits them.
         let numbers: Option<Vec<u64>> = match indexed {
@@ -96,6 +97,13 @@ impl FgbSource {
             Some(e) => reader.select_bbox(e.min_x, e.min_y, e.max_x, e.max_y).map_err(err)?,
             None => reader.select_all().map_err(err)?,
         };
+        // The ids come from a separate walk of the index: should it ever disagree with the
+        // selection, scan instead rather than give features the wrong ids.
+        if let Some(nums) = &numbers
+            && iter.features_count() != Some(nums.len())
+        {
+            return self.read_with(open, req, true);
+        }
         // Without an index, an extent is tested on each feature: sample the matches as they come.
         let late = native.is_some() && indexed.is_none();
         let matched = iter.features_count().map(|n| n as u64).or(self.info.count).unwrap_or(0);
@@ -159,8 +167,8 @@ impl FeatureSource for FgbSource {
 
     fn read(&self, req: &Request) -> Result<Batch> {
         match &self.input {
-            Input::Path(p) => self.read_with(|| Ok(BufReader::new(std::fs::File::open(p)?)), req),
-            Input::Bytes(b) => self.read_with(|| Ok(Cursor::new(b.clone())), req),
+            Input::Path(p) => self.read_with(&|| Ok(BufReader::new(std::fs::File::open(p)?)), req, false),
+            Input::Bytes(b) => self.read_with(&|| Ok(Cursor::new(b.clone())), req, false),
         }
     }
 }

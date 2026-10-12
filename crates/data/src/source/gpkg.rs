@@ -76,7 +76,12 @@ impl GpkgSource {
             let salt = std::collections::hash_map::RandomState::new();
             let tag = std::hash::BuildHasher::hash_one(&salt, (nanos, N.fetch_add(1, Ordering::Relaxed)));
             let p = std::env::temp_dir().join(format!("rustgis-{}-{tag:016x}.gpkg", std::process::id()));
-            match std::fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+            let mut o = std::fs::OpenOptions::new();
+            o.write(true).create_new(true);
+            // Readable by this user only: the copy holds their data, in a shared folder.
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+            match o.open(&p) {
                 Ok(f) => break (p, f),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries < 8 => tries += 1,
                 Err(e) => return Err(e.into()),
@@ -191,9 +196,28 @@ impl GpkgSource {
         };
         let mut src = GpkgSource { info, conn: Mutex::new(Some(conn)), table, geom, pk, rtree, reproject, temp };
         if src.info.geometry_type == GeometryType::None {
-            src.info.geometry_type = super::peek_kind(&src);
+            src.info.geometry_type = src.peek_kind();
         }
         Ok(src)
+    }
+
+    /// The geometry type of a table declared as plain `GEOMETRY`, from its first few rows (a
+    /// query that stops there, rather than a read of the table).
+    fn peek_kind(&self) -> GeometryType {
+        let Ok(guard) = self.conn.lock() else { return GeometryType::None };
+        let Some(conn) = guard.as_ref() else { return GeometryType::None };
+        let sql = format!("SELECT {g} FROM {t} WHERE {g} IS NOT NULL LIMIT 16", g = quote(&self.geom), t = quote(&self.table));
+        let Ok(mut st) = conn.prepare(&sql) else { return GeometryType::None };
+        let Ok(mut rows) = st.query([]) else { return GeometryType::None };
+        while let Ok(Some(r)) = rows.next() {
+            if let Ok(ValueRef::Blob(b)) = r.get_ref(0)
+                && let Some((_, body)) = split_blob(b)
+                && let Some(g) = wkb::decode(body)
+            {
+                return g.kind();
+            }
+        }
+        GeometryType::None
     }
 
     fn select_list(&self) -> String {

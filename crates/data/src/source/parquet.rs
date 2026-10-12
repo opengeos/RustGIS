@@ -23,6 +23,9 @@ use std::sync::Arc;
 /// Values read per call.
 const BATCH: usize = 8192;
 
+/// Most rows read from one row group.
+const MAX_GROUP_ROWS: usize = 1 << 24;
+
 /// A GeoParquet file.
 pub struct ParquetSource {
     info: SourceInfo,
@@ -141,7 +144,14 @@ impl FeatureSource for ParquetSource {
         let limit = clamp_limit(req.limit);
         let md = self.reader.metadata();
         let native = req.extent.map(|e| self.reproject.extent_from_lonlat(&e));
-        let rows_in = |g: usize| usize::try_from(md.row_group(g).num_rows()).unwrap_or(0);
+        // Row counts come from the file: bounded by what the geometry column chunk holds, and by a
+        // cap, so a crafted count can't size a huge allocation.
+        let rows_in = |g: usize| {
+            let rg = md.row_group(g);
+            let rows = usize::try_from(rg.num_rows()).unwrap_or(0);
+            let values = rg.columns().get(self.geom_col).and_then(|c| usize::try_from(c.num_values()).ok()).unwrap_or(0);
+            rows.min(values).min(MAX_GROUP_ROWS)
+        };
         // Row groups whose bounding box meets the extent.
         let groups: Vec<usize> = (0..md.num_row_groups())
             .filter(|&g| match (native, self.covering) {
@@ -343,8 +353,8 @@ fn read_column<T: PqType>(r: &mut ColumnReaderImpl<T>, n: usize, max_def: i16) -
             }
         }
     }
+    // Only what was read: callers look rows up with `get`.
     out.truncate(n);
-    out.resize_with(n, || None);
     Ok(out)
 }
 
@@ -402,6 +412,6 @@ fn read_f64(rg: &dyn RowGroupReader, col: usize, n: usize) -> Result<Vec<Option<
     match rg.get_column_reader(col).map_err(err)? {
         ColumnReader::FloatColumnReader(mut r) => Ok(read_column(&mut r, n, max_def)?.into_iter().map(|v| v.map(f64::from)).collect()),
         ColumnReader::DoubleColumnReader(mut r) => read_column(&mut r, n, max_def),
-        _ => Ok(vec![None; n]),
+        _ => Ok(Vec::new()),
     }
 }
