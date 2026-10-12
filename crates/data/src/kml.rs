@@ -15,8 +15,6 @@ use rustgis_geom::Coord;
 
 use crate::{DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
 
-/// Most XML nodes parsed from one document.
-const MAX_NODES: u32 = 50_000_000;
 /// Deepest nesting of folders and multi-geometries followed.
 const MAX_DEPTH: usize = 64;
 
@@ -53,7 +51,9 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<Layer>> {
         path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("kmz")) || bytes.starts_with(b"PK\x03\x04");
     let owned;
     let text_bytes: &[u8] = if is_kmz {
-        let mut entries = crate::zip::read_matching(bytes, |n| n.to_ascii_lowercase().ends_with(".kml"))
+        // Inflated within the size a file may be read at.
+        let budget = usize::try_from(crate::io::MAX_BYTES).unwrap_or(usize::MAX);
+        let mut entries = crate::zip::read_matching_within(bytes, |n| n.to_ascii_lowercase().ends_with(".kml"), budget)
             .map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
         // doc.kml by convention, else the shallowest .kml.
         entries.sort_by_key(|(n, _)| (!n.eq_ignore_ascii_case("doc.kml"), n.matches('/').count(), n.clone()));
@@ -68,7 +68,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<Layer>> {
     };
     let text = std::str::from_utf8(text_bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")))?;
     let text = text.trim_start_matches('\u{feff}');
-    let opts = ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..ParsingOptions::default() };
+    let opts = ParsingOptions { allow_dtd: false, nodes_limit: crate::io::XML_NODES, ..ParsingOptions::default() };
     let doc = Document::parse_with_options(text, opts).map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
     let mut r = Reader {
         styles: HashMap::new(),
@@ -98,7 +98,8 @@ struct Reader {
     styles: HashMap<String, Style>,
     /// StyleMap id → the style its "normal" pair names.
     maps: HashMap<String, String>,
-    /// Inline styles, given ids `inline-1`, `inline-2`… (equal ones share one).
+    /// Inline styles, given keys `#inline-1`, `#inline-2`… (equal ones share one; no document id
+    /// holds a `#`, so they can't clash).
     inline: Vec<Style>,
     rows: Vec<Row>,
     /// Extended data keys, in the order first seen.
@@ -234,7 +235,8 @@ impl Reader {
                     if let Some(url) = normal.and_then(|p| child_text(&p, "styleUrl")) {
                         self.maps.insert(id.to_string(), url.trim_start_matches('#').to_string());
                     } else if let Some(s) = normal.and_then(|p| child(&p, "Style")) {
-                        let key = format!("{id}-normal");
+                        // A key no document id can be (ids can't hold '#').
+                        let key = format!("#{id}-normal");
                         self.styles.insert(key.clone(), style_of(&s));
                         self.maps.insert(id.to_string(), key);
                     }
@@ -256,13 +258,14 @@ impl Reader {
                     self.inline.len() - 1
                 }
             };
-            let id = format!("inline-{}", i + 1);
+            // A key no document id can be (ids can't hold '#').
+            let id = format!("#inline-{}", i + 1);
             self.styles.insert(id.clone(), s);
             return Some(id);
         }
         let url = child_text(pm, "styleUrl")?;
-        // Only references within the document (`#id`).
-        let id = url.rsplit_once('#').map(|(_, id)| id).unwrap_or(&url).to_string();
+        // Only references within the document (`#id`); a style in another file isn't read.
+        let id = url.strip_prefix('#')?.to_string();
         let mut id = id;
         // A style map points to a style (bounded, in case maps point at each other).
         for _ in 0..4 {
@@ -337,9 +340,9 @@ impl Reader {
                 data: data.clone(),
             });
         };
-        match parts.points.len() {
-            0 => {}
-            1 => push(Geometry::Point(parts.points[0]), &mut self.rows),
+        match parts.points.as_slice() {
+            [] => {}
+            [p] => push(Geometry::Point(*p), &mut self.rows),
             _ => push(Geometry::MultiPoint(parts.points), &mut self.rows),
         }
         if !parts.lines.is_empty() {
@@ -467,7 +470,7 @@ mod tests {
         let polys = &layers[2];
         assert!(matches!(&polys.dataset.features[0].geometry, Some(Geometry::Polygon(p)) if p[0].len() == 2));
         let style = polys.dataset.value(0, polys.dataset.field_index("style").unwrap()).to_string();
-        assert_eq!(style, "inline-1");
+        assert_eq!(style, "#inline-1");
         assert_eq!(polys.styles[0].1.fill, Some([0, 170, 0, 255]));
     }
 

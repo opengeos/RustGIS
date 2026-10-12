@@ -29,7 +29,7 @@ pub(crate) fn need_raster(s: &Session) -> Option<&'static str> {
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addDataBytes", "Add Data (from file contents)", "Map › Layer", add_bytes)
-            .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv|.parquet|.fgb|.gpkg", "data": base64}"#),
+            .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv|.zip|.kml|.kmz|.gpx|.parquet|.fgb|.gpkg", "data": base64, "layer"?: "one layer of a zip, KML or GPX by name", "name"?: text}"#),
         C::new("raster.symbology", "Symbology", "Raster Layer › Rendering", symbology).when(need_raster).params(
             r#"{"layer"?, "type": "stretch"|"rgb"|"classify"|"unique"|"colormap"|"shadedRelief", "band"?: 1.., "ramp"?, "invert"?: bool, "classes"?: 1..32, "method"?, "azimuth"?, "altitude"?, "zFactor"?}"#,
         ),

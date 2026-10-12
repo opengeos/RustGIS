@@ -115,7 +115,12 @@ pub fn read(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
 /// Reads the entries whose names pass `want` (others aren't inflated), within [`MAX_TOTAL`]
 /// inflated bytes in all.
 pub fn read_matching(bytes: &[u8], want: impl Fn(&str) -> bool) -> Result<Vec<(String, Vec<u8>)>, String> {
-    let mut budget = MAX_TOTAL;
+    read_matching_within(bytes, want, MAX_TOTAL)
+}
+
+/// [`read_matching`] within `budget` inflated bytes in all (at most [`MAX_TOTAL`]).
+pub fn read_matching_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: usize) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut budget = budget.min(MAX_TOTAL);
     let bad = || "not a zip archive (or a damaged one)".to_string();
     // The end-of-central-directory record is in the last 64 KiB + 22 bytes.
     let start = bytes.len().saturating_sub(65_557);

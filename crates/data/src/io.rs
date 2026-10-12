@@ -7,11 +7,15 @@ use serde_json::{Map, Value as Json, json};
 use crate::{Coord, DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
 
 /// Largest file read into memory (256 MiB). Parsing JSON can take several times the file size.
-const MAX_BYTES: u64 = 256 << 20;
+pub(crate) const MAX_BYTES: u64 = 256 << 20;
 
 /// File types the readers understand, for open dialogs.
 pub const READ_EXTENSIONS: &[&str] =
     &["geojson", "json", "csv", "txt", "shp", "zip", "kml", "kmz", "gpx", "gpkg", "parquet", "geoparquet", "fgb"];
+
+/// Most XML nodes parsed from one document (KML, GPX): each costs tens of bytes, and the
+/// browser's memory is smaller (a 1M-point GPX track is about 8M nodes).
+pub(crate) const XML_NODES: u32 = if cfg!(target_arch = "wasm32") { 8_000_000 } else { 25_000_000 };
 
 /// A layer read from a file that holds several, with the styles its features' `style` field
 /// names (KML).
@@ -556,7 +560,6 @@ pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
     Ok((ds, report))
 }
 
-/// `0123` or `-007` (but not `0`, `0.5` or `-0.5`): a code, not a number.
 /// The type of a column of text values: Integer or Double when every non-empty value is one,
 /// otherwise (or with no values) Text.
 pub(crate) fn text_type<'a>(vals: impl Iterator<Item = &'a str>) -> FieldType {
@@ -607,6 +610,7 @@ pub(crate) fn type_text_columns(ds: &mut Dataset) {
     }
 }
 
+/// `0123` or `-007` (but not `0`, `0.5` or `-0.5`): a code, not a number.
 fn has_leading_zero(v: &str) -> bool {
     let d = v.strip_prefix(['-', '+']).unwrap_or(v);
     d.len() > 1 && d.starts_with('0') && d.as_bytes().get(1).is_some_and(|b| b.is_ascii_digit())

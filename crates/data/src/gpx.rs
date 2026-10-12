@@ -10,9 +10,6 @@ use rustgis_geom::Coord;
 
 use crate::{DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
 
-/// Most XML nodes parsed from one file.
-const MAX_NODES: u32 = 50_000_000;
-
 fn local<'a>(n: &Node<'a, '_>) -> &'a str {
     n.tag_name().name()
 }
@@ -43,7 +40,7 @@ fn text(v: Option<String>) -> Value {
 pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>> {
     let name = std::path::Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or("gpx").to_string();
     let text_in = std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")))?;
-    let opts = ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..ParsingOptions::default() };
+    let opts = ParsingOptions { allow_dtd: false, nodes_limit: crate::io::XML_NODES, ..ParsingOptions::default() };
     let doc = Document::parse_with_options(text_in.trim_start_matches('\u{feff}'), opts)
         .map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
     let gpx = doc.root_element();
