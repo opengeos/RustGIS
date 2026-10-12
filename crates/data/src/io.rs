@@ -752,9 +752,14 @@ pub fn shapefile_parts(ds: &Dataset) -> Result<(Vec<(&'static str, Vec<u8>)>, us
             // 18 digits: GDAL reads a wider field as a real number.
             FieldType::Integer => table.add_numeric_field(dbf_name(n)?, 18, 0),
             FieldType::Double => {
-                let max = ds.features.iter().filter_map(|r| r.attrs.get(k).and_then(Value::as_f64)).fold(0.0f64, |m, v| m.max(v.abs()));
+                let max = ds
+                    .features
+                    .iter()
+                    .filter_map(|r| r.attrs.get(k).and_then(Value::as_f64))
+                    .filter(|v| v.is_finite())
+                    .fold(0.0f64, |m, v| m.max(v.abs()));
                 // Digits before the point, a sign and the point itself; the rest are decimals.
-                let int_digits = if max >= 1.0 { max.log10().floor() as usize + 1 } else { 1 };
+                let int_digits = if max >= 1.0 { (max.log10().floor() as usize).saturating_add(1) } else { 1 };
                 let d = 24usize.saturating_sub(int_digits + 2).min(15);
                 if let Some(slot) = decimals.get_mut(k) {
                     *slot = d;
@@ -779,7 +784,9 @@ pub fn shapefile_parts(ds: &Dataset) -> Result<(Vec<(&'static str, Vec<u8>)>, us
                         // whole number past 2^53, which dBase's decimal text would hold only
                         // rounded (it goes through f64).
                         let d = decimals.get(k).copied().unwrap_or(0);
-                        let exact = !matches!(v, Value::Int(i) if i.unsigned_abs() > 1 << 53);
+                        // Likewise a number too small for the field's decimals, which would read 0.
+                        let exact = !matches!(v, Value::Int(i) if i.unsigned_abs() > 1 << 53)
+                            && !(f.ty == FieldType::Double && *x != 0.0 && x.abs() < 0.5 * 10f64.powi(-(d as i32)));
                         exact && format!("{x:.d$}").len() <= if f.ty == FieldType::Integer { 18 } else { 24 }
                     });
                     FieldValue::Numeric(if f.ty == FieldType::Integer { x.map(f64::round) } else { x })
