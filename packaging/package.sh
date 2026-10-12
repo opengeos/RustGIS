@@ -3,9 +3,10 @@
 #
 #   packaging/package.sh <version> [rust-target]
 #
-# Linux: a .tar.gz and a .deb. macOS: a .dmg holding RustGIS.app, plus a .tar.gz of the CLI
+# Linux: a .tar.gz, a .deb, an .rpm (when rpmbuild is installed) and an AppImage.
+# macOS: a .dmg holding RustGIS.app, plus a .tar.gz of the CLI
 # (signed and notarized when the MACOS_SIGN_IDENTITY / APPLE_API_* variables are set).
-# Windows (Git Bash): a portable .zip. Build first with
+# Windows (Git Bash): a portable .zip and an .msix for the Microsoft Store. Build first with
 # `cargo build --release --locked -p rustgis -p rustgis-cli [--target T]`.
 set -euo pipefail
 
@@ -77,10 +78,12 @@ case "$os" in
       fi
       echo "dpkg-shlibdeps failed; using a minimal Depends list" >&2
     fi
-    # Debian sorts a pre-release before its release only with ~ (0.2.0~rc.1).
+    # Debian and RPM sort a pre-release before its release only with ~ (0.2.0~rc.1). Worked out
+    # here: older bash keeps the backslash of ${version/-/\~} inside a here-document.
+    pkgver="$(printf '%s' "$version" | tr - '~')"
     cat > "$p/DEBIAN/control" <<CONTROL
 Package: rustgis
-Version: ${version/-/\~}
+Version: $pkgver
 Section: science
 Priority: optional
 Architecture: $debarch
@@ -94,6 +97,87 @@ Description: Fast, open-source GIS for mapping, analyzing and sharing geospatial
  export. Includes rustgis-cli for scripting every command.
 CONTROL
     dpkg-deb --root-owner-group --build "$p" "$dist/rustgis_${version}_${debarch}.deb"
+
+    # RPM package (Fedora, RHEL, openSUSE) from the same tree. Library dependencies are found
+    # by rpmbuild; the run-time loaded windowing and GPU libraries are listed by soname, which
+    # every RPM distribution provides under the same name.
+    if command -v rpmbuild > /dev/null; then
+      r="$work/rpm"
+      mkdir -p "$r/SPECS"
+      cat > "$r/SPECS/rustgis.spec" <<SPEC
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+Name: rustgis
+Version: $pkgver
+Release: 1
+Summary: Fast, open-source GIS for mapping, analyzing and sharing geospatial data
+License: Apache-2.0
+URL: https://rustgis.app
+Requires: libxkbcommon.so.0()(64bit)
+Requires: (libwayland-client.so.0()(64bit) or libX11.so.6()(64bit))
+Recommends: libxkbcommon-x11.so.0()(64bit)
+Recommends: libXcursor.so.1()(64bit)
+Recommends: libXi.so.6()(64bit)
+Recommends: libXrandr.so.2()(64bit)
+Recommends: (libvulkan.so.1()(64bit) or libEGL.so.1()(64bit))
+
+%description
+Maps and layers, symbology, labeling, selection, editing, geoprocessing and
+export. Includes rustgis-cli for scripting every command.
+
+%install
+mkdir -p %{buildroot}
+cp -a "$p/usr" %{buildroot}/
+
+%files
+/usr/bin/rustgis
+/usr/bin/rustgis-cli
+/usr/share/applications/rustgis.desktop
+/usr/share/mime/packages/rustgis.xml
+/usr/share/icons/hicolor/*/apps/rustgis.png
+%license /usr/share/doc/rustgis/copyright
+SPEC
+      rpmbuild --quiet -bb --target "$arch" --define "_topdir $r" "$r/SPECS/rustgis.spec"
+      cp "$r"/RPMS/*/rustgis-*.rpm "$dist/"
+    elif [ -n "${CI:-}" ]; then
+      echo "rpmbuild not found" >&2
+      exit 1
+    else
+      echo "rpmbuild not found: skipping the .rpm" >&2
+    fi
+
+    # AppImage: a single file that runs on most distributions without installing. It uses the
+    # static type-2 runtime, so it needs no libfuse2. The tools are pinned by checksum.
+    case "$arch" in
+      x86_64)
+        tool_sha=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+        runtime_sha=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d ;;
+      aarch64)
+        tool_sha=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+        runtime_sha=00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444 ;;
+      *) tool_sha="" ;;
+    esac
+    if [ -n "$tool_sha" ]; then
+      fetch() { # url sha out
+        curl -fsSL --retry 3 -o "$3" "$1"
+        echo "$2  $3" | sha256sum -c --quiet -
+      }
+      t="$work/appimage-tools"
+      mkdir -p "$t"
+      fetch "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-$arch.AppImage" \
+        "$tool_sha" "$t/appimagetool"
+      fetch "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-$arch" \
+        "$runtime_sha" "$t/runtime"
+      chmod +x "$t/appimagetool"
+      a="$work/RustGIS.AppDir"
+      mkdir -p "$a"
+      cp -a "$p/usr" "$a/"
+      cp "$root/packaging/linux/rustgis.desktop" "$a/"
+      logo "$a/rustgis.png" 256
+      ln -s usr/bin/rustgis "$a/AppRun"
+      ARCH="$arch" APPIMAGE_EXTRACT_AND_RUN=1 "$t/appimagetool" --no-appstream --runtime-file "$t/runtime" \
+        "$a" "$dist/$name.AppImage"
+    fi
     ;;
 
   macos)
@@ -154,10 +238,39 @@ CONTROL
     ;;
 
   windows)
+    # Portable zip: unzip anywhere and run, no installer or admin rights.
     d="$work/$name"
     mkdir -p "$d"
     cp "$bin/rustgis.exe" "$bin/rustgis-cli.exe" "$root/LICENSE" "$root/README.md" "$d/"
-    (cd "$work" && 7z a -tzip -bso0 "$dist/$name.zip" "$name")
+    sed "s/@VERSION@/$version/g" "$root/packaging/windows/README-portable.txt" > "$d/README.txt"
+    (cd "$work" && 7z a -tzip -bso0 "$dist/$name-portable.zip" "$name")
+
+    # MSIX package for the Microsoft Store, which signs it on ingestion. The identity must
+    # match the product reserved in Partner Center (Product identity); override it for a
+    # self-signed sideload build.
+    case "$arch" in x86_64) msixarch=x64 ;; aarch64) msixarch=arm64 ;; *) msixarch="$arch" ;; esac
+    m="$work/msix"
+    mkdir -p "$m/Assets"
+    cp "$bin/rustgis.exe" "$bin/rustgis-cli.exe" "$m/"
+    logo "$m/Assets/Square44x44Logo.png" 44
+    logo "$m/Assets/Square150x150Logo.png" 150
+    logo "$m/Assets/StoreLogo.png" 50
+    # A value for the manifest: XML-escaped, then escaped for a sed replacement.
+    xmlval() { printf '%s' "$1" | sed -e 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g' -e 's/[\\|&]/\\&/g'; }
+    # MSIX versions are four numbers: drop a pre-release suffix (0.2.0-rc.1 -> 0.2.0.0).
+    sed -e "s|@VERSION@|${version%%-*}.0|g" -e "s|@ARCH@|$msixarch|g" \
+      -e "s|@NAME@|$(xmlval "${MSIX_NAME:-OpenGeospatialSolutions.RustGIS}")|g" \
+      -e "s|@PUBLISHER@|$(xmlval "${MSIX_PUBLISHER:-CN=E6AE8172-DC4F-4F79-844B-9D84204BF95A}")|g" \
+      -e "s|@PUBLISHER_DISPLAY_NAME@|$(xmlval "${MSIX_PUBLISHER_DISPLAY_NAME:-Open Geospatial Solutions}")|g" \
+      "$root/packaging/windows/AppxManifest.xml" > "$m/AppxManifest.xml"
+    makeappx="$(command -v makeappx.exe || true)"
+    if [ -z "$makeappx" ]; then
+      # The host's own build of the SDK tools, x64 or ARM64.
+      case "$(uname -m)" in aarch64 | arm64) sdkarch=arm64 ;; *) sdkarch=x64 ;; esac
+      makeappx="$(ls -d "/c/Program Files (x86)/Windows Kits/10/bin/"*/"$sdkarch"/makeappx.exe 2>/dev/null | sort -V | tail -1)"
+    fi
+    [ -n "$makeappx" ] || { echo "makeappx.exe not found: install the Windows SDK" >&2; exit 1; }
+    MSYS2_ARG_CONV_EXCL='*' "$makeappx" pack /d "$(cygpath -w "$m")" /p "$(cygpath -w "$dist/$name.msix")" /o
     ;;
 esac
 

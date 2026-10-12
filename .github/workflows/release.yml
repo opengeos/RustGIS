@@ -67,6 +67,10 @@ jobs:
         shell: bash
         run: cargo build --release --locked -p rustgis -p rustgis-cli
 
+      - name: Install packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
       # macOS: import the Developer ID certificate into a throwaway keychain and write the
       # App Store Connect API key for notarization. Skipped when the secrets are absent (a
       # fork), so package.sh falls back to an ad-hoc signature.
@@ -138,6 +142,25 @@ jobs:
           sudo apt-get install -y ./dist/rustgis_*.deb
           dpkg-deb -f dist/rustgis_*.deb Depends
           rustgis-cli logo "$RUNNER_TEMP/logo.png" --size 64
+
+      - name: Check the .rpm installs on Fedora
+        if: runner.os == 'Linux'
+        run: |
+          rpm -qp --requires dist/rustgis-*.rpm
+          docker run --rm -v "$PWD/dist:/dist:ro" fedora:latest sh -c \
+            'dnf install -y -q /dist/rustgis-*.rpm && rustgis-cli logo /tmp/logo.png --size 64'
+
+      - name: Check the AppImage runs
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x dist/*.AppImage
+          cd "$RUNNER_TEMP" && rm -rf squashfs-root
+          "$GITHUB_WORKSPACE"/dist/*.AppImage --appimage-extract > /dev/null
+          squashfs-root/usr/bin/rustgis-cli logo logo.png --size 64
+          test -x squashfs-root/AppRun
+          # The GUI cannot start on a headless runner: check that its libraries resolve.
+          if ldd squashfs-root/usr/bin/rustgis | grep 'not found'; then exit 1; fi
+          rm -rf squashfs-root
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7

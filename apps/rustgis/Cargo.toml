@@ -17,3 +17,8 @@ eframe = { workspace = true, features = ["default_fonts", "links", "wgpu", "acce
 egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+
+# The Windows exe icon (build.rs). Gated on the host, so other platforms build neither.
+[target.'cfg(windows)'.build-dependencies]
+tiny-skia = { workspace = true }
+embed-resource = "3"

@@ -8,18 +8,26 @@ builds of the desktop app and `rustgis-cli`. The same files, grouped by platform
 
 | Platform | File |
 | --- | --- |
-| Windows x64 | `RustGIS-<version>-windows-x86_64.zip` (portable: unzip and run `rustgis.exe`) |
+| Windows x64 | `RustGIS-<version>-windows-x86_64-portable.zip` (unzip and run `rustgis.exe`) |
+| Windows x64 (Microsoft Store package) | `RustGIS-<version>-windows-x86_64.msix` |
 | macOS Apple Silicon | `RustGIS-<version>-macos-aarch64.dmg` |
 | macOS Intel | `RustGIS-<version>-macos-x86_64.dmg` |
 | Linux x64 / arm64 (Debian, Ubuntu) | `rustgis_<version>_amd64.deb` / `rustgis_<version>_arm64.deb` |
+| Linux x64 / arm64 (Fedora, RHEL, openSUSE) | `rustgis-<version>-1.x86_64.rpm` / `rustgis-<version>-1.aarch64.rpm` |
+| Linux x64 / arm64 (any distribution, no install) | `RustGIS-<version>-linux-x86_64.AppImage` / `RustGIS-<version>-linux-aarch64.AppImage` |
 | Linux x64 / arm64 (other) | `RustGIS-<version>-linux-x86_64.tar.gz` / `RustGIS-<version>-linux-aarch64.tar.gz` |
 
 On macOS the command line tool is a separate `rustgis-cli-<version>-macos-<arch>.tar.gz`;
-the other packages include it. `SHA256SUMS` lists the checksum of every file.
+the other packages include it (the MSIX adds `rustgis-cli` to every terminal). `SHA256SUMS`
+lists the checksum of every file.
 
-The macOS app and command line tool are signed with a Developer ID and notarized by Apple, so
-they open without warnings. The Windows build is not yet signed: choose **More info › Run
-anyway** if SmartScreen warns about an unknown publisher.
+The `.msix` is the package submitted to the Microsoft Store, which signs it. It is unsigned
+on the release page, so Windows only installs it from the Store; download the portable zip
+instead.
+
+The macOS DMG and command line tool are signed with a Developer ID and notarized by Apple,
+so they open without a warning. The Windows builds are not yet signed: choose
+**More info › Run anyway** if SmartScreen warns about an unknown publisher.
 
 ## From source
 
