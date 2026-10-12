@@ -91,6 +91,13 @@ impl Crs {
         let mut t = custom_table().lock().unwrap_or_else(|e| e.into_inner());
         let index = |i: usize| u32::try_from(i).map(Crs::Custom).map_err(|_| "too many coordinate systems defined by files".to_string());
         if let Some(i) = t.iter().position(|d| d.proj4 == def.proj4) {
+            // Keys a file brings fill in a system first known without them (from a saved project).
+            if let Some(slot) = t.get_mut(i)
+                && slot.geokeys.is_empty()
+                && !def.geokeys.is_empty()
+            {
+                *slot = std::sync::Arc::new(def);
+            }
             return index(i);
         }
         if t.len() >= MAX_CUSTOM {

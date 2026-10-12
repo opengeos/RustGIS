@@ -129,10 +129,20 @@ fn custom_crs(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<Crs> {
     };
     // The first of several keys a parameter may be given by.
     let any = |ks: &[u16]| ks.iter().find_map(|k| num(*k));
+    // Metres per linear unit: false eastings and northings are in the file's units, PROJ's in
+    // metres.
+    let (to_m, units) = match short(3076) {
+        Some(9002) => (0.3048, "+units=ft".to_string()),
+        Some(9003) => (1200.0 / 3937.0, "+units=us-ft".to_string()),
+        _ => match num(3077) {
+            Some(m) if m > 0.0 && (m - 1.0).abs() > 1e-12 => (m, format!("+to_meter={m}")),
+            _ => (1.0, "+units=m".to_string()),
+        },
+    };
     let lat0 = any(&[3081, 3085, 3089]).unwrap_or(0.0);
     let lon0 = any(&[3080, 3084, 3088, 3095]).unwrap_or(0.0);
-    let x0 = any(&[3082, 3086, 3090]).unwrap_or(0.0);
-    let y0 = any(&[3083, 3087, 3091]).unwrap_or(0.0);
+    let x0 = any(&[3082, 3086, 3090]).unwrap_or(0.0) * to_m;
+    let y0 = any(&[3083, 3087, 3091]).unwrap_or(0.0) * to_m;
     let k0 = any(&[3092, 3093]).unwrap_or(1.0);
     let (lat1, lat2) = (num(3078).unwrap_or(lat0), num(3079).unwrap_or(lat0));
     let proj = match short(3075) {
@@ -164,14 +174,6 @@ fn custom_crs(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<Crs> {
             (Some(a), Some(rf), _) if a > 0.0 && rf > 0.0 => format!("+a={a} +rf={rf}"),
             (Some(a), _, Some(b)) if a > 0.0 && b > 0.0 => format!("+a={a} +b={b}"),
             _ => "+datum=WGS84".to_string(),
-        },
-    };
-    let units = match short(3076) {
-        Some(9002) => "+units=ft".to_string(),
-        Some(9003) => "+units=us-ft".to_string(),
-        _ => match num(3077) {
-            Some(m) if m > 0.0 && (m - 1.0).abs() > 1e-12 => format!("+to_meter={m}"),
-            _ => "+units=m".to_string(),
         },
     };
     let label = text(3073).or_else(|| text(1026)).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Custom projection".into());
@@ -578,6 +580,10 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
     // A file's own projection is written back as the keys it came in.
     let custom = r.crs.custom_def();
     let keys: Vec<u16> = match &custom {
+        // A system read from a saved project has no keys to write.
+        Some(d) if d.geokeys.is_empty() => {
+            return Err(err(format!("{}: a coordinate system without GeoTIFF keys can't be written", d.label)));
+        }
         Some(d) => d.geokeys.clone(),
         None => vec![
             1,
@@ -850,6 +856,14 @@ mod tests {
         assert!(json.contains("+proj=aea"), "{json}");
         let again: Crs = serde_json::from_str(&json).unwrap();
         assert_eq!(again.custom_def().unwrap().proj4, r.crs.custom_def().unwrap().proj4);
+        // False eastings in US feet become metres for PROJ.
+        let mut feet = keys.to_vec();
+        if let Some(i) = feet.chunks(4).position(|e| e[0] == 3076) {
+            feet[i * 4 + 3] = 9003;
+        }
+        let ft = custom_crs(&feet, &[29.5, 45.5, -96.0, 23.0, 1000.0], "").unwrap();
+        let p = ft.custom_def().unwrap().proj4.clone();
+        assert!(p.contains("+x_0=304.80060960") && p.contains("+units=us-ft"), "{p}");
         // A transformation it doesn't know: unknown, not a failed open, when the coordinates are degrees.
         let mut odd = keys;
         odd[27] = 99; // ProjCoordTransGeoKey
