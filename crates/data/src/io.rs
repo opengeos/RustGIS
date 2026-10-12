@@ -27,8 +27,17 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
         "geojson" | "json" => read_geojson(text()?, &name)?,
         "csv" | "txt" => read_csv(text()?, &name)?,
         "shp" => return Err(DataError::Unsupported("shp on its own: zip it with its .dbf, .shx and .prj and add the zip".into())),
-        // The first layer of the archive (`read_zip` reads them all).
-        "zip" => return read_zip(file_name, bytes)?.into_iter().next().ok_or_else(|| DataError::Format(format!("{file_name}: empty"))),
+        // The first layer of the archive (`read_zip` reads them all), saying what else it holds.
+        "zip" => {
+            let layers = read_zip(file_name, bytes)?;
+            let rest: Vec<String> = layers.iter().skip(1).map(|(d, _)| d.name.clone()).collect();
+            let mut first = layers.into_iter().next().ok_or_else(|| DataError::Format(format!("{file_name}: empty")))?;
+            if !rest.is_empty() {
+                let leaf = Path::new(file_name).file_name().and_then(|n| n.to_str()).unwrap_or(file_name);
+                first.1.messages.push(format!("{leaf}: read its first layer; it also holds {}", rest.join(", ")));
+            }
+            return Ok(first);
+        }
         // A copy, since only borrowed bytes are given; `read_owned` takes them without one.
         e if crate::source::EXTENSIONS.contains(&e) => return read_owned(file_name, bytes.to_vec()),
         other => return Err(DataError::Unsupported(other.to_string())),
