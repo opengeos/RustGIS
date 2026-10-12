@@ -221,6 +221,8 @@ impl<B: AsRef<[u8]>> Db<B> {
                 // WITHOUT ROWID or unparsable tables are passed over; another may be wanted.
                 if let Ok((columns, rowid_column)) = parse_create_table(sql) {
                     match u32::try_from(*root) {
+                        // A virtual table (an R-tree index, say) has no pages of its own.
+                        Ok(0) => {}
                         Ok(root) => out.push(Table { name: name.clone(), root, columns, rowid_column }),
                         Err(_) => err = Some(bad("a table's root page")),
                     }
@@ -325,9 +327,10 @@ fn record(p: &[u8]) -> Result<Vec<Val>, String> {
 /// `WITHOUT ROWID` tables (whose rows are stored differently) are an error.
 pub fn parse_create_table(sql: &str) -> Result<(Vec<Column>, Option<usize>), String> {
     let (open, close) = column_list(sql).ok_or("no column list")?;
-    let tail = sql.get(close + 1..).unwrap_or("").to_ascii_uppercase();
-    let tail = tail.split("--").next().unwrap_or("").to_string();
-    if tail.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "ROWID") {
+    // The words after the column list, comments dropped (`-- note` then `WITHOUT ROWID` on the
+    // next line is still one).
+    let tail = tokens(sql.get(close + 1..).unwrap_or(""));
+    if tail.iter().any(|t| !t.quoted && t.text.eq_ignore_ascii_case("ROWID")) {
         return Err("a WITHOUT ROWID table".into());
     }
     let body = sql.get(open + 1..close).ok_or("no column list")?;
@@ -359,7 +362,6 @@ pub fn parse_create_table(sql: &str) -> Result<(Vec<Column>, Option<usize>), Str
         let decl = ty.join(" ").replace(" (", "(").replace("( ", "(").replace(" )", ")").replace(" ,", ",");
         let words: Vec<String> = toks.iter().filter(|t| !t.quoted).map(|t| up(&t.text)).collect();
         let has = |w: &str| words.iter().any(|x| x == w);
-        // A generated column is stored only when declared STORED.
         // A generated column: `GENERATED ALWAYS AS (…)` or `AS (…)` after the name, outside any
         // parentheses (a CHECK's `CAST(x AS INT)` isn't one); stored only when declared STORED.
         let mut depth = 0usize;
@@ -564,6 +566,8 @@ mod tests {
         assert_eq!(pk, None, "only INTEGER is the rowid");
         assert!(parse_create_table("CREATE TABLE t (a INTEGER PRIMARY KEY) WITHOUT ROWID").is_err());
         assert!(parse_create_table("CREATE TABLE t").is_err());
+        assert!(parse_create_table("CREATE TABLE t (a INTEGER PRIMARY KEY) -- note\n WITHOUT ROWID").is_err());
+        assert!(parse_create_table("CREATE TABLE t (a INT) /* not without rowid */").is_ok());
         let (cols, _) = parse_create_table("CREATE TABLE \"a(b\" (x INT, y TEXT) -- note (with parens)").unwrap();
         assert_eq!(cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["x", "y"]);
     }
@@ -582,6 +586,7 @@ mod tests {
         assert!(record(&rec[..rec.len() - 1]).is_err());
         assert!(record(&[2, 10]).is_err());
     }
+
     /// Databases written by SQLite itself: a table spanning interior pages, rows with overflow
     /// pages, a column added after rows were written, small and large pages; every truncation is
     /// an error, not a panic.
