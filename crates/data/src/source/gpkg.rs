@@ -106,6 +106,10 @@ impl GpkgSource {
                 .ok_or_else(|| DataError::Format(format!("no feature table '{l}' (tables: {})", tables.join(", "))))?,
             None => tables.first().cloned().ok_or_else(|| DataError::Format("the GeoPackage has no feature tables".into()))?,
         };
+        let mut notes = Vec::new();
+        if layer.is_none() && tables.len() > 1 {
+            notes.push(format!("the first of {} feature tables ({})", tables.len(), tables.join(", ")));
+        }
         let (geom, geom_type, srs_id): (String, String, i64) = conn
             .query_row("SELECT column_name, geometry_type_name, srs_id FROM gpkg_geometry_columns WHERE table_name = ?1", [&table], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
@@ -118,7 +122,6 @@ impl GpkgSource {
             .ok()
             .and_then(|(org, id)| if org.eq_ignore_ascii_case("epsg") { u32::try_from(id).ok() } else { None })
             .or_else(|| u32::try_from(srs_id).ok().filter(|c| *c > 0));
-        let mut notes = Vec::new();
         let reproject = Reproject::from_epsg(epsg, &mut notes);
 
         // Columns: the primary key, the geometry and the attribute fields.
@@ -184,6 +187,7 @@ impl GpkgSource {
             count,
             crs: reproject.label(),
             indexed: rtree.is_some(),
+            notes,
         };
         let mut src = GpkgSource { info, conn: Mutex::new(Some(conn)), table, geom, pk, rtree, reproject, temp };
         if src.info.geometry_type == GeometryType::None {
@@ -206,6 +210,9 @@ impl GpkgSource {
             ValueRef::Null => return Ok(Row::Skip),
             _ => return Ok(Row::Bad),
         };
+        if is_empty_blob(blob) {
+            return Ok(Row::Skip);
+        }
         let Some((envelope, body)) = split_blob(blob) else { return Ok(Row::Bad) };
         if let (Some(q), Some(e)) = (native, envelope)
             && !e.intersects(q)
@@ -313,6 +320,11 @@ impl FeatureSource for GpkgSource {
         }
         Ok(out)
     }
+}
+
+/// A GeoPackage geometry blob flagged empty: valid, with nothing to draw.
+fn is_empty_blob(b: &[u8]) -> bool {
+    b.starts_with(b"GP") && b.get(3).is_some_and(|f| f & 0b1_0000 != 0)
 }
 
 /// A GeoPackage geometry blob: the header's envelope (if any) and the WKB after it.

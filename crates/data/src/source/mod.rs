@@ -21,7 +21,7 @@ use std::path::Path;
 pub const EXTENSIONS: &[&str] = &["gpkg", "parquet", "geoparquet", "fgb"];
 
 /// The most features one read returns, whatever the request asks for.
-pub const MAX_LIMIT: usize = if cfg!(target_arch = "wasm32") { 1_000_000 } else { 5_000_000 };
+pub const MAX_LIMIT: usize = if cfg!(target_arch = "wasm32") { 500_000 } else { 5_000_000 };
 
 /// Whether a file name is read through a provider.
 pub fn is_source_name(name: &str) -> bool {
@@ -46,6 +46,9 @@ pub struct SourceInfo {
     pub crs: String,
     /// Whether extent queries use a spatial index rather than a scan.
     pub indexed: bool,
+    /// Things worth telling whoever adds the source (an unknown coordinate system read as
+    /// longitude/latitude, tables left out).
+    pub notes: Vec<String>,
 }
 
 /// A read: the features intersecting `extent` (longitude/latitude; `None` = all), at most `limit`.
@@ -131,7 +134,7 @@ pub fn materialize(src: &dyn FeatureSource) -> Result<(Dataset, ReadReport)> {
     let batch = src.read(&Request::all())?;
     let mut ds = Dataset::new(info.name.clone(), info.geometry_type, info.fields.clone());
     ds.features = batch.features;
-    let mut report = ReadReport { skipped: batch.skipped, messages: Vec::new() };
+    let mut report = ReadReport { skipped: batch.skipped, messages: info.notes.iter().map(|n| format!("{}: {n}", info.name)).collect() };
     if !batch.complete {
         report.messages.push(format!("{}: read a sample of {} of {} features", info.name, ds.features.len(), batch.matched));
     }

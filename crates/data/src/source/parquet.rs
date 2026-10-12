@@ -122,6 +122,7 @@ impl ParquetSource {
             count,
             crs: reproject.label(),
             indexed: covering.is_some(),
+            notes,
         };
         let mut src = ParquetSource { info, reader, geom_col, field_cols, covering, reproject };
         if src.info.geometry_type == GeometryType::None {

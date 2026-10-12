@@ -216,6 +216,20 @@ fn geopackage_reprojects_and_uses_its_rtree() {
 }
 
 #[test]
+fn an_unknown_coordinate_system_is_reported() {
+    let p = dir().join("unknown_crs.gpkg");
+    write_gpkg(&p, true);
+    {
+        let c = rusqlite::Connection::open(&p).unwrap();
+        c.execute("UPDATE gpkg_spatial_ref_sys SET organization_coordsys_id = 9999999, srs_id = 3857", []).unwrap();
+    }
+    let src = open_path(&p, None).unwrap();
+    assert!(src.info().notes.iter().any(|n| n.contains("EPSG:9999999")), "{:?}", src.info().notes);
+    let (_, report) = materialize(src.as_ref()).unwrap();
+    assert!(report.messages.iter().any(|m| m.contains("read as longitude/latitude")), "{:?}", report.messages);
+}
+
+#[test]
 fn hostile_files_are_errors_not_panics() {
     let mut junk = vec![b"PAR1".to_vec(), b"fgb\x03fgb\x00".to_vec(), b"SQLite format 3\0".to_vec(), vec![0xff; 4096], Vec::new()];
     // Every truncation of a real file.
