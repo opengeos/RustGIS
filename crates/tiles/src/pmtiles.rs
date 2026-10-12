@@ -145,8 +145,14 @@ fn archives() -> &'static Mutex<HashMap<String, State>> {
     A.get_or_init(Mutex::default)
 }
 
-fn leaves() -> &'static Mutex<HashMap<(String, u64), Arc<Vec<Entry>>>> {
-    static L: OnceLock<Mutex<HashMap<(String, u64), Arc<Vec<Entry>>>>> = OnceLock::new();
+/// A leaf directory: read, or being read with tiles waiting for it.
+enum Leaf {
+    Ready(Arc<Vec<Entry>>),
+    Loading(Vec<Box<dyn FnOnce(Result<Arc<Vec<Entry>>, String>) + Send>>),
+}
+
+fn leaves() -> &'static Mutex<HashMap<(String, u64), Leaf>> {
+    static L: OnceLock<Mutex<HashMap<(String, u64), Leaf>>> = OnceLock::new();
     L.get_or_init(Mutex::default)
 }
 
@@ -263,7 +269,9 @@ pub(crate) fn fetch(url: &str, done: Done) {
         Box::new(move |info| match info {
             Err(e) => done(Err(e)),
             Ok(info) => {
-                if z < info.min_zoom || z > info.max_zoom {
+                // Outside the archive's zooms, or not a tile of its zoom: none.
+                let n = 1u64 << z;
+                if z < info.min_zoom || z > info.max_zoom || u64::from(x) >= n || u64::from(y) >= n {
                     done(Ok(Vec::new()));
                     return;
                 }
@@ -303,30 +311,59 @@ fn find(archive: String, info: Arc<Info>, id: u64, dir: Arc<Vec<Entry>>, depth: 
     }
     let at = info.leaf_offset.saturating_add(e.offset);
     let key = (archive.clone(), at);
-    let cached = leaves().lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
-    if let Some(leaf) = cached {
-        find(archive, info, id, leaf, depth + 1, done);
-        return;
+    // Continues the lookup once the leaf is there.
+    let next: Box<dyn FnOnce(Result<Arc<Vec<Entry>>, String>) + Send> = {
+        let (archive, info) = (archive.clone(), info.clone());
+        Box::new(move |leaf| match leaf {
+            Ok(leaf) => find(archive, info, id, leaf, depth + 1, done),
+            Err(e) => done(Err(e)),
+        })
+    };
+    // One read per leaf: tiles needing a leaf already on its way wait for it.
+    {
+        let mut l = leaves().lock().unwrap_or_else(|e| e.into_inner());
+        match l.get_mut(&key) {
+            Some(Leaf::Ready(leaf)) => {
+                let leaf = leaf.clone();
+                drop(l);
+                next(Ok(leaf));
+                return;
+            }
+            Some(Leaf::Loading(waiting)) => {
+                waiting.push(next);
+                return;
+            }
+            None => {
+                // Full: one ready leaf makes room (the cache is a working set, not a history).
+                if l.len() >= MAX_LEAVES
+                    && let Some(old) = l.iter().find(|(_, v)| matches!(v, Leaf::Ready(_))).map(|(k, _)| k.clone())
+                {
+                    l.remove(&old);
+                }
+                l.insert(key.clone(), Leaf::Loading(vec![next]));
+            }
+        }
     }
-    let a = archive.clone();
     read(
         &archive,
         at,
         e.length,
         Box::new(move |b| {
-            let leaf = b.and_then(|b| if info.internal_gzip { gunzip(&b) } else { Ok(b) }).and_then(|b| parse_dir(&b));
-            match leaf {
-                Err(e) => done(Err(e)),
-                Ok(leaf) => {
-                    let leaf = Arc::new(leaf);
-                    let mut l = leaves().lock().unwrap_or_else(|e| e.into_inner());
-                    if l.len() >= MAX_LEAVES {
-                        l.clear();
-                    }
-                    l.insert(key, leaf.clone());
-                    drop(l);
-                    find(a, info, id, leaf, depth + 1, done);
+            let leaf = b.and_then(|b| if info.internal_gzip { gunzip(&b) } else { Ok(b) }).and_then(|b| parse_dir(&b)).map(Arc::new);
+            let waiting = {
+                let mut l = leaves().lock().unwrap_or_else(|e| e.into_inner());
+                let w = match &leaf {
+                    Ok(leaf) => l.insert(key.clone(), Leaf::Ready(leaf.clone())),
+                    // A failed leaf is read again by the next tile that needs it.
+                    Err(_) => l.remove(&key),
+                };
+                match w {
+                    Some(Leaf::Loading(w)) => w,
+                    _ => Vec::new(),
                 }
+            };
+            for w in waiting {
+                w(leaf.clone());
             }
         }),
     );
@@ -644,8 +681,9 @@ mod tests {
             for (z, x, y, b) in &tiles {
                 assert_eq!(&get(&format!("pmtiles:{z}/{x}/{y}@{a}")).unwrap(), b, "{z}/{x}/{y} leaf={leaf}");
             }
-            // Not in the archive, or outside its zooms: no tile.
+            // Not in the archive, outside its zooms, or not a tile of its zoom: no tile.
             assert!(get(&format!("pmtiles:1/0/0@{a}")).unwrap().is_empty());
+            assert!(get(&format!("pmtiles:1/2/0@{a}")).unwrap().is_empty());
             assert!(get(&format!("pmtiles:9/0/0@{a}")).unwrap().is_empty());
         }
         // Not an archive.
