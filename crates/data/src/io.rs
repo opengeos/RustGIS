@@ -172,7 +172,14 @@ pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
             let mut result = Ok(());
             for (tmp, target) in &written {
                 if target.exists() {
-                    let bak = temp_beside(target)?;
+                    // Any failure here rolls back like a failed rename.
+                    let bak = match temp_beside(target) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            result = Err(e);
+                            break;
+                        }
+                    };
                     if let Err(e) = std::fs::rename(target, &bak) {
                         result = Err(e);
                         break;
