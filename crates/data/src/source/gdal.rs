@@ -98,8 +98,9 @@ struct LayerInfo {
 /// The vector layers of a dataset, from `ogrinfo -json`.
 fn list(src: &Path) -> Result<Vec<LayerInfo>> {
     let ogrinfo = program("ogrinfo").ok_or_else(missing)?;
+    let src = std::path::absolute(src).unwrap_or_else(|_| src.to_path_buf());
     let mut c = Command::new(ogrinfo);
-    c.arg("-json").arg("-ro").arg("-so").arg("-nomd").arg(src);
+    c.arg("-json").arg("-ro").arg("-so").arg("-nomd").arg(&src);
     let out = output(c, LIST_TIMEOUT)?;
     if !out.status.success() {
         return Err(DataError::Format(format!("GDAL: {}", String::from_utf8_lossy(&out.stderr).trim())));
@@ -172,8 +173,8 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
                 }),
                 // A family the layer doesn't have.
                 Ok(None) => {}
-                Err(e) if family.is_none() => return Err(e),
-                // A family filter the driver can't apply: the other families may still convert.
+                // A layer (or a family filter the driver can't apply) that fails doesn't stop the
+                // others; the file fails only if nothing converts.
                 Err(e) => last = Some(e),
             }
         }

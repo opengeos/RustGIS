@@ -138,11 +138,14 @@ impl SourceLayer {
             match (opened, &self.gdal) {
                 // The converted copy is gone (a cleared cache, another machine): convert again.
                 #[cfg(not(target_arch = "wasm32"))]
-                (Err(_), Some(g)) => {
+                // (Only when it is missing: a copy that's there but unreadable is reported as is.)
+                (Err(_), Some(g)) if !std::path::Path::new(p).exists() => {
                     match rustgis_data::source::gdal::convert_one(std::path::Path::new(&g.path), &g.layer, g.family, g.crs.as_deref()) {
                         Ok(Some(fresh)) => {
                             let r = rustgis_data::source::open_path(&fresh, None);
-                            self.path = Some(fresh.display().to_string());
+                            if r.is_ok() {
+                                self.path = Some(fresh.display().to_string());
+                            }
                             r
                         }
                         Ok(None) => Err(rustgis_data::DataError::Format(format!("{}: the layer has no features", g.path))),
