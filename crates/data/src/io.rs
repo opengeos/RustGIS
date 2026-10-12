@@ -145,7 +145,8 @@ pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
             // are written, the .shp last, so a failed write leaves the old Shapefile whole.
             let mut written: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
             let staged = parts.iter().try_for_each(|(e, bytes)| {
-                let target = path.with_extension(e);
+                // The .shp keeps the name given (`Roads.SHP` stays so); the others take its stem.
+                let target = if *e == "shp" { path.to_path_buf() } else { path.with_extension(e) };
                 let tmp = temp_beside(&target)?;
                 written.push((tmp.clone(), target));
                 write_new(&tmp, bytes)
@@ -156,9 +157,14 @@ pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
                 }
                 return Err(e.into());
             }
-            written.sort_by_key(|(_, target)| target.extension().is_some_and(|x| x == "shp"));
-            for (tmp, target) in &written {
-                std::fs::rename(tmp, target)?;
+            written.sort_by_key(|(_, target)| target == path);
+            for (k, (tmp, target)) in written.iter().enumerate() {
+                if let Err(e) = std::fs::rename(tmp, target) {
+                    for (t, _) in written.iter().skip(k) {
+                        let _ = std::fs::remove_file(t);
+                    }
+                    return Err(e.into());
+                }
             }
             // A spatial index left from an older file of the same name would no longer match.
             for stale in ["qix", "sbn", "sbx"] {
@@ -176,7 +182,7 @@ pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
 
 /// A new temporary name beside `path`, unique per call, so concurrent writes to the same target
 /// never share one.
-fn temp_beside(path: &Path) -> std::io::Result<std::path::PathBuf> {
+pub(crate) fn temp_beside(path: &Path) -> std::io::Result<std::path::PathBuf> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let Some(name) = path.file_name() else {

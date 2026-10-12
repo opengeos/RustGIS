@@ -472,6 +472,9 @@ fn writes_points_lines_kmz_and_zipped_shapefiles() {
     crate::io::write_path(&ids, &d.join("ids.shp")).unwrap();
     let (back, _) = crate::io::read_path(&d.join("ids.shp")).unwrap();
     assert_eq!((back.value(0, 0), back.value(1, 0)), (&Value::Null, &Value::Int(1 << 52)));
+    // An upper-case .SHP keeps its name, so the path given is the file written.
+    crate::io::write_path(&ids, &d.join("Upper.SHP")).unwrap();
+    assert!(crate::io::read_path(&d.join("Upper.SHP")).is_ok());
     // No temporary files are left beside the outputs.
     assert!(std::fs::read_dir(&d).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
     // KMZ: the KML zipped as doc.kml.

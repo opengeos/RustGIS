@@ -405,23 +405,14 @@ fn free_name(fields: &[Field], base: &str) -> String {
 /// attributes table for a dataset without geometry. The file is built beside `path` and moved into
 /// place when complete, so a failed write leaves any existing file as it was.
 pub fn write(ds: &crate::Dataset, path: &Path) -> Result<()> {
-    let Some(name) = path.file_name() else {
-        return Err(DataError::Format(format!("{} is not a file path", path.display())));
-    };
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    // Unique per write, so concurrent exports to the same file never share one.
-    let mut tmp_name = std::ffi::OsString::from(".");
-    tmp_name.push(name);
-    tmp_name.push(format!(".{}.{}.tmp", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)));
-    let tmp = path.with_file_name(tmp_name);
-    // A new file, so nothing already at that name is followed or reused.
-    let _ = std::fs::remove_file(&tmp);
+    let tmp = crate::io::temp_beside(path)?;
     std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
     let res = (|| {
         let conn = Connection::open(&tmp).map_err(err)?;
         build(&conn, ds)?;
         conn.close().map_err(|(_, e)| err(e))?;
+        // Built without syncing (fast); synced once before it replaces anything.
+        std::fs::File::open(&tmp)?.sync_all()?;
         std::fs::rename(&tmp, path)?;
         // The old file's journal or write-ahead log would be replayed against the new one.
         for side in ["-wal", "-shm", "-journal"] {

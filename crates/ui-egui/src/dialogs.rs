@@ -352,7 +352,7 @@ fn buttons(app: &mut RustGisApp, ui: &mut egui::Ui, ok: &str, f: impl FnOnce(&mu
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
         let t = Tokens::get(ui.ctx());
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
-        if crate::widgets::dialog_button(ui, ok, Some(t.accent), vec2(84.0, 28.0)).clicked() || enter {
+        if crate::widgets::dialog_button(ui, tl!(ok), Some(t.accent), vec2(84.0, 28.0)).clicked() || enter {
             match f(app) {
                 Ok(()) => close = true,
                 Err(e) => app.dialogs.error = Some(e),
