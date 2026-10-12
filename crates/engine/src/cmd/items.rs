@@ -552,11 +552,11 @@ fn run_task(s: &mut Session, p: &Value) -> CmdResult {
 /// by looking like a path or URL).
 pub(crate) fn touches_files(command: &str, params: &Value) -> bool {
     const KEYS: &[&str] =
-        &["path", "folder", "dir", "file", "url", "uri", "source", "output", "connection", "database", "data", "text", "poster"];
+        &["path", "folder", "dir", "file", "url", "uri", "source", "output", "connection", "database", "data", "text", "poster", "locator"];
     let reaches = |v: &Value| names_place(v, KEYS, 0);
     let id = command.to_ascii_lowercase();
     let verb = id.split('.').nth(1).unwrap_or("");
-    ["script.", "notebook.", "model.", "project.", "task.", "share.", "offline.", "cache."].iter().any(|p| id.starts_with(p))
+    ["script.", "notebook.", "model.", "project.", "task.", "share.", "offline.", "cache.", "locator."].iter().any(|p| id.starts_with(p))
         || ["import", "export", "open", "save", "add", "package", "upload", "download"].iter().any(|w| verb.starts_with(w))
         || reaches(params)
 }
@@ -756,6 +756,16 @@ pub const ITEMS: &[(&str, &str, &str)] = &[
     ("presentation", "rgispres", "RustGIS presentation"),
     ("notebook", "rgisnb", "RustGIS notebook"),
     ("jupyter", "ipynb", "Jupyter notebook"),
+    ("dlPackage", "rgisdlpk", "RustGIS deep learning package"),
+    ("hostedImagery", "zip", "Web map tiles"),
+    ("webMap", "html", "Web map"),
+    ("webLayer", "zip", "Web layer"),
+    ("webStyle", "json", "Web style"),
+    ("locator", "rgisloc", "Locator"),
+    ("geodataService", "zip", "Geodata service"),
+    ("webTool", "rgistool", "Web tool"),
+    ("webScene", "gltf", "Web scene"),
+    ("linkChart", "html", "Web link chart"),
 ];
 
 /// An item as file bytes, with a suggested file name.
@@ -815,6 +825,21 @@ pub fn item_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec
             let i = super::notebook::index(s, p)?;
             let name = s.project.notebooks.get(i).map(|r| r.name.clone()).unwrap_or_default();
             (name, super::notebook::notebook_file(s, i, kind == "jupyter")?)
+        }
+        "dlPackage" => {
+            let name = match ps(p, "model") {
+                Some(n) => n.to_string(),
+                None => s.project.dl_models.last().map(|m| m.name.clone()).ok_or("train a model first")?,
+            };
+            (name.clone(), super::deeplearning::package(s, &json!({"model": name}))?)
+        }
+        "hostedImagery" => {
+            let name = ps(p, "layer").unwrap_or("tiles").to_string();
+            (format!("{name}_tiles"), super::deeplearning::hosted_bytes(s, p)?.0)
+        }
+        k if super::sharing::KINDS.iter().any(|x| x.0 == k) => {
+            let (name, bytes, _) = super::sharing::share_bytes(s, k, p)?;
+            (name, bytes)
         }
         k => return Err(format!("unknown item '{k}'")),
     };

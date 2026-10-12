@@ -89,6 +89,8 @@ pub const SECTIONS: &[(&str, &str)] = &[
     ("spectral", "Spectral Analysis"),
     ("classify", "Classification Wizard"),
     ("supervised", "Classification Tools"),
+    ("deepLearning", "Deep Learning Tools"),
+    ("hosted", "Hosted Imagery"),
     ("indices", "Indices"),
     ("process", "Process"),
     ("pixels", "Pixel Editor"),
@@ -487,6 +489,49 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     "raster.classifySupervised",
                     json!({"layer": app.workflow.layer, "training": app.workflow.layer2, "classField": app.workflow.field}),
                 );
+            }
+        }
+        "deepLearning" => {
+            heading(ui, "Train a neural network on training polygons");
+            combo(ui, "wf_dl", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_dt", &mut app.workflow.layer2, &polygons);
+            let fields = fields_of(&app.workflow.layer2, false);
+            combo(ui, "wf_df", &mut app.workflow.field, &fields);
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("epochs")).desired_width(60.0));
+                if ui.button(tl!("Train And Classify")).clicked() {
+                    let epochs = app.workflow.number.trim().parse::<f64>().unwrap_or(60.0);
+                    run(
+                        app,
+                        "dl.classify",
+                        json!({"layer": app.workflow.layer, "training": app.workflow.layer2, "classField": app.workflow.field, "epochs": epochs}),
+                    );
+                }
+            });
+            let models: Vec<(String, f64)> = app.session.project.dl_models.iter().map(|m| (m.name.clone(), m.accuracy)).collect();
+            if !models.is_empty() {
+                heading(ui, "Trained models");
+            }
+            for (m, acc) in models {
+                ui.horizontal(|ui| {
+                    ui.label(crate::i18n::fmt("{name} ({acc}% accurate)", &[("name", &m), ("acc", &format!("{:.0}", acc * 100.0))]));
+                    if ui.small_button(tl!("Classify")).clicked() {
+                        run(app, "dl.classify", json!({"layer": app.workflow.layer, "model": m}));
+                    }
+                    if ui.small_button(tl!("Package")).clicked() {
+                        let _ = app.run("ui.saveItem", json!({"kind": "dlPackage", "model": m}));
+                    }
+                });
+            }
+            if ui.button(tl!("Import Package…")).clicked() {
+                let _ = app.run("ui.openItem", json!({"kind": "dlPackage"}));
+            }
+        }
+        "hosted" => {
+            heading(ui, "Cut a raster into web map tiles");
+            combo(ui, "wf_ho", &mut app.workflow.layer, &rasters);
+            if ui.button(tl!("Create Hosted Imagery…")).clicked() {
+                let _ = app.run("ui.saveItem", json!({"kind": "hostedImagery", "layer": app.workflow.layer}));
             }
         }
         "indices" => {

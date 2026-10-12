@@ -50,6 +50,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 RightPane::Presentation => ("Presentation", "ui.pane.presentation"),
                 RightPane::Notebook => ("Notebook", "ui.pane.notebook"),
                 RightPane::Assistant => ("AI Assistant", "ui.pane.assistant"),
+                RightPane::Shares => ("Shared Items", "ui.pane.shares"),
             };
             pane_header(app, ui, tl!(title), close, &t);
             // The chat lays out its own scrolling, with the message box kept at the bottom.
@@ -76,6 +77,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     RightPane::Presentation => crate::docpanes::presentation(app, ui, &t),
                     RightPane::Notebook => crate::docpanes::notebook(app, ui, &t),
                     RightPane::Assistant => {}
+                    RightPane::Shares => crate::docpanes::shares(app, ui, &t),
                 });
             });
         });

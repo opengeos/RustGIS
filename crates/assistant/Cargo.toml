@@ -17,4 +17,3 @@ log = { workspace = true }
 # (the web app's `Services::http`).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
-

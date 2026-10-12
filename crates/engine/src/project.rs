@@ -66,6 +66,14 @@ pub struct Project {
     /// Notebooks of text and command cells.
     #[serde(default)]
     pub notebooks: Vec<crate::cmd::notebook::Notebook>,
+    /// Trained deep learning models.
+    #[serde(default)]
+    pub dl_models: Vec<crate::cmd::deeplearning::DlModel>,
+    /// Shares made (Share › Status › Jobs) and the folders they go to.
+    #[serde(default)]
+    pub shared: Vec<crate::cmd::sharing::SharedItem>,
+    #[serde(default)]
+    pub data_stores: Vec<crate::cmd::sharing::DataStore>,
 }
 
 /// A unit of work tracked in the Workflow Manager.
@@ -191,6 +199,9 @@ impl Project {
             reports: Vec::new(),
             presentations: Vec::new(),
             notebooks: Vec::new(),
+            dl_models: Vec::new(),
+            shared: Vec::new(),
+            data_stores: Vec::new(),
         }
     }
 
@@ -214,6 +225,10 @@ impl Project {
         self.reports.truncate(MAX_ITEMS);
         self.presentations.truncate(MAX_ITEMS);
         self.notebooks.truncate(MAX_ITEMS);
+        self.dl_models.truncate(MAX_ITEMS);
+        self.dl_models.retain(|m| m.model.validate().is_ok());
+        self.shared.truncate(MAX_ITEMS);
+        self.data_stores.truncate(MAX_ITEMS);
         for p in &mut self.presentations {
             p.clamp();
         }
@@ -222,6 +237,7 @@ impl Project {
         }
         unique_names(self.presentations.iter_mut().map(|p| &mut p.name));
         unique_names(self.notebooks.iter_mut().map(|nb| &mut nb.name));
+        unique_names(self.dl_models.iter_mut().map(|m| &mut m.name));
         for m in &mut self.maps {
             // A projection this version can't use (a hand edit, or a newer file) falls back to
             // Web Mercator rather than being named while another is drawn.

@@ -12,6 +12,7 @@
 
 pub mod convert;
 pub mod network;
+pub mod neural;
 pub mod rasterops;
 mod tools;
 pub mod topology;
