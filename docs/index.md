@@ -27,13 +27,13 @@ the command line.
 
 <div class="grid" markdown>
 
-![The Feature Layer tab and the Symbology pane, with African countries selected](https://assets.rustgis.app/images/symbology-table.webp)
+[![The Feature Layer tab and the Symbology pane, with African countries selected](https://assets.rustgis.app/images/symbology-table.webp)](https://assets.rustgis.app/images/symbology-table.webp){ target="_blank" rel="noopener" }
 
-![The Analysis tab's tool gallery and dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)
+[![The Analysis tab's tool gallery and dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)](https://assets.rustgis.app/images/buffer-history.webp){ target="_blank" rel="noopener" }
 
-![Dark mode over Europe on the Midnight basemap](https://assets.rustgis.app/images/dark.webp)
+[![Dark mode over Europe on the Midnight basemap](https://assets.rustgis.app/images/dark.webp)](https://assets.rustgis.app/images/dark.webp){ target="_blank" rel="noopener" }
 
-![The Project backstage](https://assets.rustgis.app/images/backstage.webp)
+[![The Project backstage](https://assets.rustgis.app/images/backstage.webp)](https://assets.rustgis.app/images/backstage.webp){ target="_blank" rel="noopener" }
 
 </div>
 
