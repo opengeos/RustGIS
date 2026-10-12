@@ -19,6 +19,34 @@ fn world() -> Session {
 }
 
 #[test]
+fn worldview_swaps_only_untouched_sample_countries() {
+    use sample::{Worldview, swap_countries};
+    let countries = |s: &Session| s.map().layer_by_name("Countries").unwrap().dataset.features.len();
+    let mut s = world();
+    s.dirty = false;
+    let n = countries(&s);
+    // The layer holds the default countries, not China's.
+    assert!(!swap_countries(&mut s, Worldview::China, Worldview::Default));
+    assert!(swap_countries(&mut s, Worldview::Default, Worldview::China));
+    assert_ne!(countries(&s), n);
+    assert!(!s.dirty);
+    assert!(swap_countries(&mut s, Worldview::China, Worldview::Default));
+    assert_eq!(countries(&s), n);
+    // Not in a project with changes, or a saved one.
+    s.dirty = true;
+    assert!(!swap_countries(&mut s, Worldview::Default, Worldview::China));
+    s.dirty = false;
+    s.path = Some("atlas.rgisx".into());
+    assert!(!swap_countries(&mut s, Worldview::Default, Worldview::China));
+    // Not someone else's layer named Countries.
+    let mut t = world();
+    t.dirty = false;
+    t.run("edit.deleteField", &json!({"layer": "Countries", "field": "pop_est"})).unwrap();
+    t.dirty = false;
+    assert!(!swap_countries(&mut t, Worldview::Default, Worldview::China));
+}
+
+#[test]
 fn sample_project_loads() {
     let s = world();
     let names: Vec<&str> = s.map().layers.iter().map(|l| l.name.as_str()).collect();

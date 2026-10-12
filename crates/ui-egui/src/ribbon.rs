@@ -1746,7 +1746,10 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
         );
     });
-    group(ui, "Language", |ui| language_menu(app, ui));
+    group(ui, "Language", |ui| {
+        language_menu(app, ui);
+        worldview_menu(app, ui);
+    });
 }
 
 fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
@@ -3553,6 +3556,32 @@ fn data_tab(app: &mut RustGisApp, ui: &mut Ui) {
 /// web before a CJK font has been downloaded).
 fn shown_name(ui: &Ui, l: crate::i18n::Lang) -> &'static str {
     if ui.ctx().fonts_mut(|f| f.has_glyphs(&regular(12.5), l.name())) { l.name() } else { l.english() }
+}
+
+/// Whose view of disputed borders the built-in countries and world outline show (View › Language).
+fn worldview_menu(app: &mut RustGisApp, ui: &mut Ui) {
+    use rustgis_engine::sample::Worldview;
+    let name = |w: Worldview| match w {
+        Worldview::Default => tl!("Default"),
+        Worldview::China => tl!("China"),
+    };
+    let auto = app.ui.worldview == crate::i18n::AUTO;
+    let current = rustgis_engine::sample::worldview();
+    let label = if auto { format!("{} ({})", tl!("Automatic"), name(current)) } else { name(current).to_string() };
+    let label = format!("{}\n{label}", tl!("Worldview"));
+    big_menu(ui, app, "globe_view", &label, "Whose borders the sample countries and the basemap outline show.", move |ui, app| {
+        if ui.selectable_label(auto, tl!("Automatic (system time zone and region)")).clicked() {
+            let _ = app.run("ui.worldview", json!({"worldview": crate::i18n::AUTO}));
+            ui.close();
+        }
+        ui.separator();
+        for w in [Worldview::Default, Worldview::China] {
+            if ui.selectable_label(!auto && w == current, name(w)).clicked() {
+                let _ = app.run("ui.worldview", json!({"worldview": w.code()}));
+                ui.close();
+            }
+        }
+    });
 }
 
 /// The interface language picker (View › Language).

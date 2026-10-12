@@ -4,7 +4,7 @@ Every asset file in this repository, with its source and licence.
 
 | File | Author / source | Licence |
 |---|---|---|
-| Sample data (`countries`, `cities`, `rivers`, `lakes` GeoJSON), embedded at build time from [rustgis-assets](https://github.com/opengeos/rustgis-assets/tree/main/data) | Natural Earth 1:110m, attributes trimmed | Public domain |
+| Sample data (`countries`, `countries_chn`, `cities`, `rivers`, `lakes` GeoJSON), embedded at build time from [rustgis-assets](https://github.com/opengeos/rustgis-assets/tree/main/data) | Natural Earth 1:110m, attributes trimmed; `countries_chn` is Natural Earth's China point of view (1:10m, simplified) | Public domain |
 
 Raster coordinate systems are looked up by EPSG code in the PROJ definitions of the
 [crs-definitions](https://crates.io/crates/crs-definitions) crate (CC0-1.0), compiled into the

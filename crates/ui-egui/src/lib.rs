@@ -153,6 +153,9 @@ pub struct UiState {
     pub dark: bool,
     /// Interface language preference: a language code or `auto`.
     pub language: String,
+    /// Worldview preference for the built-in countries and world outline: `auto`, `default` or
+    /// `china`.
+    pub worldview: String,
     /// The ribbon shows only its tabs; clicking a tab opens it until the next click elsewhere.
     pub ribbon_minimized: bool,
     /// A minimized ribbon temporarily opened from its tab strip.
@@ -193,6 +196,7 @@ impl Default for UiState {
             right: None,
             dark: false,
             language: i18n::AUTO.into(),
+            worldview: i18n::AUTO.into(),
             ribbon_minimized: false,
             ribbon_peek: false,
             command_search: None,
@@ -288,6 +292,13 @@ impl RustGisApp {
         if let Some(lang) = self.services.load_pref.as_ref().and_then(|load| load("language")) {
             self.ui.language = lang;
         }
+        // A stored value that is neither `auto` nor a known worldview means `auto`.
+        if let Some(w) = self.services.load_pref.as_ref().and_then(|load| load("worldview"))
+            && rustgis_engine::sample::Worldview::from_code(&w).is_some()
+        {
+            self.ui.worldview = w.trim().to_ascii_lowercase();
+        }
+        self.apply_worldview();
         if let Some(m) = self.services.load_pref.as_ref().and_then(|load| load("ribbon_minimized")) {
             self.ui.ribbon_minimized = m == "true";
         }
@@ -519,15 +530,30 @@ impl RustGisApp {
 
     /// The sample "World Atlas" project.
     pub fn with_sample() -> Self {
+        // Tests don't depend on the machine's time zone and locale.
+        rustgis_engine::sample::apply_worldview(if cfg!(test) { "default" } else { i18n::AUTO });
         let mut s = Session::new(Project::default());
         let _ = s.run("project.sample", &Value::Null);
         s.dirty = false;
         RustGisApp::new(s)
     }
 
+    /// Applies the worldview preference; an untouched sample project's countries follow it.
+    fn apply_worldview(&mut self) {
+        use rustgis_engine::sample;
+        let before = sample::worldview();
+        // Tests don't depend on the machine's time zone and locale.
+        let pref = if cfg!(test) && self.ui.worldview == i18n::AUTO { "default" } else { self.ui.worldview.as_str() };
+        let after = sample::apply_worldview(pref);
+        if after != before {
+            sample::swap_countries(&mut self.session, before, after);
+            self.map.invalidate();
+        }
+    }
+
     /// Runs a command by id: `ui.*` here, everything else in the engine.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        if !matches!(id, "ui.menu" | "ui.ribbon" | "ui.language") {
+        if !matches!(id, "ui.menu" | "ui.ribbon" | "ui.language" | "ui.worldview") {
             self.ui.ribbon_peek = false;
         }
         let r = if id.starts_with("ui.") { self.run_ui(id, &params) } else { self.session.run(id, &params) };
@@ -585,6 +611,17 @@ impl RustGisApp {
                     save("language", &self.ui.language);
                 }
                 self.map.invalidate();
+            }
+            "ui.worldview" => {
+                let code = p.get("worldview").and_then(Value::as_str).unwrap_or(i18n::AUTO).to_ascii_lowercase();
+                if code != i18n::AUTO && rustgis_engine::sample::Worldview::from_code(&code).is_none() {
+                    return Err(format!("unknown worldview '{code}'"));
+                }
+                self.ui.worldview = code;
+                if let Some(save) = &self.services.save_pref {
+                    save("worldview", &self.ui.worldview);
+                }
+                self.apply_worldview();
             }
             "ui.ribbon" => {
                 self.ui.ribbon_minimized = p.get("minimized").and_then(Value::as_bool).unwrap_or(!self.ui.ribbon_minimized);

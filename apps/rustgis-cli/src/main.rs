@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png> [--size N]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]"
+        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png> [--size N]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]"
     );
     ExitCode::from(2)
 }
@@ -93,7 +93,8 @@ fn open_inputs(s: &mut Session, args: &[String]) -> Result<(), String> {
 fn ask(s: &mut Session, args: &[String]) -> Result<(), String> {
     use rustgis_assistant::{Agent, Config, Entry, agent, http, provider};
     // The first value that isn't an option's.
-    let takes_value = ["--provider", "--model", "--base-url", "--project", "--data", "--save", "--trace", "--plugin", "--registry"];
+    let takes_value =
+        ["--provider", "--model", "--base-url", "--project", "--data", "--save", "--trace", "--plugin", "--registry", "--worldview"];
     let prompt = args
         .iter()
         .enumerate()
@@ -204,6 +205,13 @@ fn main() -> ExitCode {
             }
         }
     }
+    // Whose borders the built-in countries and world outline show: the system's by default.
+    let worldview = opt(&args, "--worldview").unwrap_or("auto");
+    if worldview != "auto" && rustgis_engine::sample::Worldview::from_code(worldview).is_none() {
+        eprintln!("rustgis-cli: --worldview {worldview}: expected auto, default or china");
+        return ExitCode::from(2);
+    }
+    rustgis_engine::sample::apply_worldview(worldview);
     let mut s = Session::new(Project::default());
     let res: Result<(), String> = (|| match cmd {
         "plugins" => {
