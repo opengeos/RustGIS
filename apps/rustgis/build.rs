@@ -28,7 +28,7 @@ mod windows {
     pub fn embed_icon() -> Result<(), Box<dyn std::error::Error>> {
         let out = PathBuf::from(std::env::var("OUT_DIR")?);
         let ico = out.join("rustgis.ico");
-        std::fs::write(&ico, ico_bytes()?)?;
+        std::fs::write(&ico, super::logo::ico().ok_or("could not draw the icon")?)?;
         let version = std::env::var("CARGO_PKG_VERSION")?;
         // VERSIONINFO wants four numbers: drop a pre-release suffix (0.2.0-rc.1 -> 0,2,0,0).
         let nums: Vec<&str> = version.split('-').next().unwrap_or("0.0.0").split('.').collect();
@@ -72,33 +72,5 @@ END
             println!("cargo:warning=rustgis.exe gets no icon: {e}");
         }
         Ok(())
-    }
-
-    /// An ICO file holding the logo as PNG images, which Windows Vista and later read.
-    fn ico_bytes() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        const SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
-        let mut images = Vec::new();
-        for size in SIZES {
-            let png = super::logo::pixmap(size).ok_or("could not draw the logo")?.encode_png()?;
-            images.push((size, png));
-        }
-        let mut ico = Vec::new();
-        ico.extend_from_slice(&[0, 0, 1, 0]);
-        ico.extend_from_slice(&u16::try_from(images.len())?.to_le_bytes());
-        let mut offset = 6 + 16 * images.len();
-        for (size, png) in &images {
-            // A dimension of 0 means 256.
-            let dim = u8::try_from(*size).unwrap_or(0);
-            ico.extend_from_slice(&[dim, dim, 0, 0]);
-            ico.extend_from_slice(&1u16.to_le_bytes());
-            ico.extend_from_slice(&32u16.to_le_bytes());
-            ico.extend_from_slice(&u32::try_from(png.len())?.to_le_bytes());
-            ico.extend_from_slice(&u32::try_from(offset)?.to_le_bytes());
-            offset += png.len();
-        }
-        for (_, png) in &images {
-            ico.extend_from_slice(png);
-        }
-        Ok(ico)
     }
 }

@@ -12,9 +12,9 @@
 # Each workflow it triggers withholds its own publishing on a non-release
 # event, so nothing here can write a release asset:
 #
-#   Release - builds the Windows zip, macOS DMGs, Linux tarballs and .deb
-#             packages, installs the .deb, and writes SHA256SUMS; its publish
-#             job is skipped
+#   Release - builds the Windows installers, zip and MSIX, macOS DMGs, Linux
+#             tarballs, .deb/.rpm packages and AppImages, installs them where
+#             it can, and writes SHA256SUMS; its publish job is skipped
 #
 # Deliberately not included: Deploy web.rustgis.app publishes on every push to
 # `main`, so it is continuously covered, and dispatching it here would publish

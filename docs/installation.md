@@ -7,7 +7,9 @@ builds of the desktop app and `rustgis-cli`:
 
 | Platform | File |
 | --- | --- |
-| Windows x64 | `RustGIS-<version>-windows-x86_64-portable.zip` (unzip and run `rustgis.exe`) |
+| Windows x64 (installer, no admin rights) | `RustGIS-<version>-windows-x86_64-setup.exe` |
+| Windows x64 (installer for all users) | `RustGIS-<version>-windows-x86_64.msi` |
+| Windows x64 (no install) | `RustGIS-<version>-windows-x86_64-portable.zip` (unzip and run `rustgis.exe`) |
 | Windows x64 (Microsoft Store package) | `RustGIS-<version>-windows-x86_64.msix` |
 | macOS Apple Silicon | `RustGIS-<version>-macos-aarch64.dmg` |
 | macOS Intel | `RustGIS-<version>-macos-x86_64.dmg` |
@@ -17,12 +19,17 @@ builds of the desktop app and `rustgis-cli`:
 | Linux x64 / arm64 (other) | `RustGIS-<version>-linux-x86_64.tar.gz` / `RustGIS-<version>-linux-aarch64.tar.gz` |
 
 On macOS the command line tool is a separate `rustgis-cli-<version>-macos-<arch>.tar.gz`;
-the other packages include it (the MSIX adds `rustgis-cli` to every terminal). `SHA256SUMS`
-lists the checksum of every file.
+the other packages include it (the Windows installers and the MSIX add `rustgis-cli` to every
+new terminal). `SHA256SUMS` lists the checksum of every file.
+
+On Windows, `setup.exe` installs for your account in `%LOCALAPPDATA%\Programs\RustGIS` and needs
+no admin rights; the `.msi` installs for every user in `Program Files` and suits managed
+deployment (`msiexec /i RustGIS-<version>-windows-x86_64.msi /qn`). Both add a Start menu
+entry, open `.rgis` projects and uninstall from **Settings › Apps**.
 
 The `.msix` is the package submitted to the Microsoft Store, which signs it. It is unsigned
-on the release page, so Windows only installs it from the Store; download the portable zip
-instead.
+on the release page, so Windows only installs it from the Store; download an installer or the
+portable zip instead.
 
 The macOS DMG and command line tool are signed with a Developer ID and notarized by Apple,
 so they open without a warning. The Windows builds are not yet signed: choose

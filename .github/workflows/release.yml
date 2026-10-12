@@ -71,6 +71,20 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y rpm
 
+      # The WiX .NET tool (pinned to 5.x, MS-RL) for the .msi; NSIS for setup.exe when the
+      # runner image lacks it.
+      - name: Install Windows installer tools
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          tools="$HOME/.dotnet/tools"
+          "$tools/wix" extension add --global WixToolset.UI.wixext/5.0.2
+          cygpath -w "$tools" >> "$GITHUB_PATH"
+          if ! command -v makensis > /dev/null && [ ! -x "/c/Program Files (x86)/NSIS/makensis.exe" ]; then
+            choco install nsis -y --no-progress
+          fi
+
       # macOS: import the Developer ID certificate into a throwaway keychain and write the
       # App Store Connect API key for notarization. Skipped when the secrets are absent (a
       # fork), so package.sh falls back to an ad-hoc signature.
@@ -135,6 +149,51 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
           rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+      # Silent installs of both installers: the CLI runs from the install folder and is on the
+      # PATH; uninstalling removes it again.
+      - name: Check the Windows installers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Check($dir, $scope) {
+            & "$dir\rustgis-cli.exe" logo "$env:RUNNER_TEMP\logo.png" --size 64
+            if ($LASTEXITCODE) { throw "rustgis-cli failed in $dir" }
+            $path = [Environment]::GetEnvironmentVariable('Path', $scope) -split ';'
+            if ($path -notcontains $dir.TrimEnd('\') -and $path -notcontains "$($dir.TrimEnd('\'))\") {
+              throw "$dir is not on the $scope PATH"
+            }
+          }
+          function Gone($dir, $scope) {
+            if (Test-Path "$dir\rustgis.exe") { throw "$dir\rustgis.exe is still there" }
+            $path = [Environment]::GetEnvironmentVariable('Path', $scope)
+            if ($path -and $path.Contains($dir.TrimEnd('\'))) { throw "$dir is still on the $scope PATH" }
+          }
+
+          $msi = (Get-Item dist\*.msi).FullName
+          $log = "$env:RUNNER_TEMP\msi.log"
+          $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /l*v `"$log`"" -Wait -PassThru
+          if ($p.ExitCode) { Get-Content $log -Tail 80; throw "msiexec /i exited with $($p.ExitCode)" }
+          $dir = "$env:ProgramFiles\RustGIS"
+          Check $dir 'Machine'
+          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\RustGIS.lnk")) {
+            throw 'no Start menu shortcut'
+          }
+          $p = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn" -Wait -PassThru
+          if ($p.ExitCode) { throw "msiexec /x exited with $($p.ExitCode)" }
+          Gone $dir 'Machine'
+
+          $setup = (Get-Item dist\*-setup.exe).FullName
+          Start-Process $setup -ArgumentList '/S' -Wait
+          $dir = "$env:LOCALAPPDATA\Programs\RustGIS"
+          Check $dir 'User'
+          if ((Get-ItemProperty 'HKCU:\Software\Classes\.rgis').'(default)' -ne 'RustGIS.Project') {
+            throw '.rgis is not associated'
+          }
+          # _?= keeps the uninstaller in place, so -Wait waits for it.
+          Start-Process "$dir\uninstall.exe" -ArgumentList '/S', "_?=$dir" -Wait
+          Gone $dir 'User'
 
       - name: Check the .deb installs
         if: runner.os == 'Linux'

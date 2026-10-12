@@ -6,8 +6,10 @@
 # Linux: a .tar.gz, a .deb, an .rpm (when rpmbuild is installed) and an AppImage.
 # macOS: a .dmg holding RustGIS.app, plus a .tar.gz of the CLI
 # (signed and notarized when the MACOS_SIGN_IDENTITY / APPLE_API_* variables are set).
-# Windows (Git Bash): a portable .zip and an .msix for the Microsoft Store. Build first with
-# `cargo build --release --locked -p rustgis -p rustgis-cli [--target T]`.
+# Windows (Git Bash): a portable .zip, an NSIS setup.exe (per user), a WiX .msi (all users) and
+# an .msix for the Microsoft Store. The installers need makensis and the wix .NET tool with the
+# WixToolset.UI.wixext extension (`wix extension add -g WixToolset.UI.wixext/<wix version>`).
+# Build first with `cargo build --release --locked -p rustgis -p rustgis-cli [--target T]`.
 set -euo pipefail
 
 version="${1:?usage: package.sh <version> [rust-target]}"
@@ -247,10 +249,58 @@ SPEC
     sed "s/@VERSION@/$version/g" "$root/packaging/windows/README-portable.txt" > "$d/README.txt"
     (cd "$work" && 7z a -tzip -bso0 "$dist/$name-portable.zip" "$name")
 
+    # Installers, as GeoLibre ships: setup.exe (NSIS) installs for the current user without admin
+    # rights, the .msi (WiX) for all users. Both add a Start menu shortcut, put rustgis-cli on the
+    # PATH and open .rgis projects. Wizard images are the logo on white, drawn by rustgis-cli.
+    case "$arch" in x86_64) instarch=x64 ;; aarch64) instarch=arm64 ;; *) instarch="$arch" ;; esac
+    s="$work/installer"
+    mkdir -p "$s"
+    cp "$bin/rustgis.exe" "$bin/rustgis-cli.exe" "$root/LICENSE" "$root/packaging/windows/path.ps1" "$s/"
+    "$bin/rustgis-cli.exe" logo "$s/rustgis.ico"
+    "$bin/rustgis-cli.exe" logo "$s/sidebar.bmp" --size 128 --canvas 164x314
+    "$bin/rustgis-cli.exe" logo "$s/banner.bmp" --size 44 --canvas 493x58 --at 440,7
+    "$bin/rustgis-cli.exe" logo "$s/dialog.bmp" --size 120 --canvas 493x312 --at 22,96
+    w() { cygpath -w "$1"; }
+    # A missing tool fails a CI build (the release must carry every package) and is skipped
+    # locally.
+    missing() {
+      if [ -n "${CI:-}" ]; then echo "$1 not found" >&2; exit 1; fi
+      echo "$1 not found: skipping the $2" >&2
+    }
+
+    makensis="$(command -v makensis.exe || command -v makensis || true)"
+    [ -n "$makensis" ] || [ ! -x "/c/Program Files (x86)/NSIS/makensis.exe" ] ||
+      makensis="/c/Program Files (x86)/NSIS/makensis.exe"
+    if [ -n "$makensis" ]; then
+      # VIProductVersion wants four numbers: drop a pre-release suffix (0.2.0-rc.1 -> 0.2.0.0).
+      MSYS2_ARG_CONV_EXCL='*' "$makensis" -V2 -DVERSION="$version" -DVERSION4="${version%%-*}.0" \
+        -DSTAGE="$(w "$s")" -DICON="$(w "$s/rustgis.ico")" -DSIDEBAR="$(w "$s/sidebar.bmp")" \
+        -DOUTFILE="$(w "$dist/$name-setup.exe")" "$(w "$root/packaging/windows/rustgis.nsi")"
+    else
+      missing makensis setup.exe
+    fi
+
+    wix="$(command -v wix.exe || command -v wix || true)"
+    if [ -n "$wix" ]; then
+      # The license dialog shows RTF: LICENSE with RTF's special characters escaped.
+      {
+        printf '{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Segoe UI;}}\\f0\\fs16\n'
+        tr -d '\r' < "$root/LICENSE" | sed -e 's/[\\{}]/\\&/g' -e 's/$/\\par/'
+        printf '}\n'
+      } > "$s/LICENSE.rtf"
+      # MSI versions are three numbers: drop a pre-release suffix.
+      MSYS2_ARG_CONV_EXCL='*' "$wix" build -arch "$instarch" -ext WixToolset.UI.wixext \
+        -d Version="${version%%-*}" -d Stage="$(w "$s")" -d Icon="$(w "$s/rustgis.ico")" \
+        -d License="$(w "$s/LICENSE.rtf")" -d Banner="$(w "$s/banner.bmp")" -d Dialog="$(w "$s/dialog.bmp")" \
+        -o "$(w "$dist/$name.msi")" "$(w "$root/packaging/windows/rustgis.wxs")"
+      rm -f "$dist/$name.wixpdb"
+    else
+      missing wix .msi
+    fi
+
     # MSIX package for the Microsoft Store, which signs it on ingestion. The identity must
     # match the product reserved in Partner Center (Product identity); override it for a
     # self-signed sideload build.
-    case "$arch" in x86_64) msixarch=x64 ;; aarch64) msixarch=arm64 ;; *) msixarch="$arch" ;; esac
     m="$work/msix"
     mkdir -p "$m/Assets"
     cp "$bin/rustgis.exe" "$bin/rustgis-cli.exe" "$m/"
@@ -260,7 +310,7 @@ SPEC
     # A value for the manifest: XML-escaped, then escaped for a sed replacement.
     xmlval() { printf '%s' "$1" | sed -e 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g' -e 's/[\\|&]/\\&/g'; }
     # MSIX versions are four numbers: drop a pre-release suffix (0.2.0-rc.1 -> 0.2.0.0).
-    sed -e "s|@VERSION@|${version%%-*}.0|g" -e "s|@ARCH@|$msixarch|g" \
+    sed -e "s|@VERSION@|${version%%-*}.0|g" -e "s|@ARCH@|$instarch|g" \
       -e "s|@NAME@|$(xmlval "${MSIX_NAME:-OpenGeospatialSolutions.RustGIS}")|g" \
       -e "s|@PUBLISHER@|$(xmlval "${MSIX_PUBLISHER:-CN=E6AE8172-DC4F-4F79-844B-9D84204BF95A}")|g" \
       -e "s|@PUBLISHER_DISPLAY_NAME@|$(xmlval "${MSIX_PUBLISHER_DISPLAY_NAME:-Open Geospatial Solutions}")|g" \
