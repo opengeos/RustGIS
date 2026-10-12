@@ -2351,3 +2351,32 @@ fn a_streamed_layer_whose_file_goes_away_shows_an_error_not_stale_features() {
     assert!(l.dataset.features.is_empty());
     assert!(l.source.as_ref().unwrap().error.is_some());
 }
+
+#[test]
+fn any_command_editing_a_streamed_layer_is_undone() {
+    let path = grid_fgb("guarded", 30);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
+    // A sample of the world, so a closer view reads again.
+    s.map_mut().layers[0].source.as_mut().unwrap().limit = 300;
+    let v = view_of(&mut s, rustgis_geom::Extent::new(-180.0, -80.0, 180.0, 80.0));
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    let before = s.map().layers[0].dataset.features.clone();
+    // Whatever the command, an edit of the window is undone and refused.
+    let r = s.guarded("Some Edit", true, |s| {
+        if let Some(f) = s.map_mut().layers[0].dataset.features.get_mut(0) {
+            f.attrs[0] = rustgis_data::Value::Int(-1);
+        }
+        Ok(Value::Null)
+    });
+    assert!(r.unwrap_err().contains("Load All Features"));
+    assert_eq!(s.map().layers[0].dataset.features, before);
+    // A command whose render reads the source again is fine.
+    let r = s.guarded("Render", true, |s| {
+        let v = view_of(s, rustgis_geom::Extent::new(0.0, 0.0, 20.0, 20.0));
+        crate::render::render_png(s.map_mut(), &v).map(|_| Value::Null)
+    });
+    assert!(r.is_ok(), "{r:?}");
+    assert_ne!(s.map().layers[0].dataset.features.len(), before.len());
+    let _ = std::fs::remove_file(path);
+}

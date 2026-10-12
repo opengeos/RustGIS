@@ -270,6 +270,9 @@ impl Layer {
             f.attrs.resize(fields, rustgis_data::Value::Null);
         }
         self.dataset.windowed = true;
+        if let Some(src) = &mut self.source {
+            src.reads = src.reads.wrapping_add(1);
+        }
         self.selection = if ids.is_empty() {
             Vec::new()
         } else {
@@ -569,7 +572,6 @@ impl Map {
         id
     }
 
-    /// Adds a raster layer; returns its id.
     /// Adds a streamed layer (a large file read in place); returns its id.
     pub fn add_streamed(&mut self, name: impl Into<String>, source: source::SourceLayer) -> u32 {
         let id = self.next_id();
@@ -590,6 +592,7 @@ impl Map {
         pending
     }
 
+    /// Adds a raster layer; returns its id.
     pub fn add_raster(&mut self, name: impl Into<String>, raster: RasterLayer) -> u32 {
         let id = self.next_id();
         self.insert_ranked(Layer::new_raster(id, name, raster));

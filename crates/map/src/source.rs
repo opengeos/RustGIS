@@ -47,6 +47,9 @@ pub struct SourceLayer {
     /// The most features a view reads (0 = [`VIEW_LIMIT`]).
     #[serde(skip)]
     pub limit: usize,
+    /// Reads installed so far: the features changing with it came from the source, not an edit.
+    #[serde(skip)]
+    pub reads: u64,
 }
 
 impl std::fmt::Debug for SourceLayer {
@@ -180,9 +183,10 @@ impl SourceLayer {
                 return None;
             }
         }
-        if let Some(p) = &self.pending
-            && contains(&p.extent, &v)
-        {
+        // One read at a time per layer: while one runs, the view waits for it, and the next
+        // frame after it lands asks again for wherever the view has gone (so fast panning
+        // doesn't pile up reads).
+        if self.pending.is_some() {
             return None;
         }
         Some(clamp_world(&v.padded(0.5, 0.0)))
