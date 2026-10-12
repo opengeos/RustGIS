@@ -60,24 +60,24 @@ the AI Assistant.
 
 <div class="grid" markdown>
 
-![The Feature Layer tab and the Symbology pane, with the larger African countries selected](https://assets.rustgis.app/images/symbology-table.webp)
+[![The Feature Layer tab and the Symbology pane, with the larger African countries selected](https://assets.rustgis.app/images/symbology-table.webp)](https://assets.rustgis.app/images/symbology-table.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
-![The AI Assistant selecting the five most populous African countries](https://assets.rustgis.app/images/assistant.webp)
+[![The AI Assistant selecting the five most populous African countries](https://assets.rustgis.app/images/assistant.webp)](https://assets.rustgis.app/images/assistant.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
-![The Analysis tab's tool gallery and dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)
+[![The Analysis tab's tool gallery and dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)](https://assets.rustgis.app/images/buffer-history.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
-![A shaded-relief elevation model with the Raster Layer tab](https://assets.rustgis.app/images/raster.webp)
+[![A shaded-relief elevation model with the Raster Layer tab](https://assets.rustgis.app/images/raster.webp)](https://assets.rustgis.app/images/raster.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
-![The World Atlas on the 3D globe](https://assets.rustgis.app/images/globe.webp)
+[![The World Atlas on the 3D globe](https://assets.rustgis.app/images/globe.webp)](https://assets.rustgis.app/images/globe.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
-![An OpenFreeMap vector style over Paris with the Basemap gallery](https://assets.rustgis.app/images/tiles.webp)
+[![An OpenFreeMap vector style over Paris with the Basemap gallery](https://assets.rustgis.app/images/tiles.webp)](https://assets.rustgis.app/images/tiles.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
-![A page layout with a map frame, legend, north arrow and scale bar](https://assets.rustgis.app/images/layout.webp)
+[![A page layout with a map frame, legend, north arrow and scale bar](https://assets.rustgis.app/images/layout.webp)](https://assets.rustgis.app/images/layout.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
-![The Plugin Manager browsing the plugin registry](https://assets.rustgis.app/images/plugins.webp)
+[![The Plugin Manager browsing the plugin registry](https://assets.rustgis.app/images/plugins.webp)](https://assets.rustgis.app/images/plugins.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
-![Dark mode over Europe on the Midnight basemap](https://assets.rustgis.app/images/dark.webp)
+[![Dark mode over Europe on the Midnight basemap](https://assets.rustgis.app/images/dark.webp)](https://assets.rustgis.app/images/dark.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
-![The Project backstage](https://assets.rustgis.app/images/backstage.webp)
+[![The Project backstage](https://assets.rustgis.app/images/backstage.webp)](https://assets.rustgis.app/images/backstage.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
 </div>
