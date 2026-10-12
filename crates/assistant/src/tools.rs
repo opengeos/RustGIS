@@ -127,7 +127,12 @@ pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
     }
     let spec = s.registry.get(&id)?;
     if id == rustgis_engine::cmd::plugins::SQL {
-        return Some("it runs an SQL query, which can read files on this computer and addresses on the internet".into());
+        let why = "it runs an SQL query, which can read files on this computer and addresses on the internet";
+        // Views in a database the query opens run too, though the query doesn't show them.
+        return Some(match params.get("database").and_then(Value::as_str).filter(|d| !d.trim().is_empty()) {
+            Some(d) => format!("{why} (as can views in the database {d})"),
+            None => why.into(),
+        });
     }
     match reaches(spec, &params) {
         Some(Reach::Files) => Some("it reads or writes files on this computer".into()),

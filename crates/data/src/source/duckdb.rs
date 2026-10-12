@@ -94,9 +94,6 @@ pub struct Output {
     pub parts: Vec<Part>,
     /// Rows without a geometry, left out.
     pub skipped: u64,
-    /// The geometry column, when it says no coordinate system and none was given: its coordinates
-    /// are taken as longitude/latitude.
-    pub unprojected: bool,
 }
 
 /// A table of a database with a geometry column.
@@ -251,22 +248,20 @@ fn type_crs(ty: &str) -> Option<&str> {
 
 /// The SELECT that turns a result into what is written: the first geometry column in
 /// longitude/latitude, other geometry columns as WKT, types the provider doesn't read as text, and
-/// each row's geometry family. Also whether the geometry is taken as longitude/latitude unchecked.
-fn select(columns: &[Column], crs: Option<&str>, from: &str) -> Result<(String, String, bool)> {
+/// each row's geometry family; and the geometry column's name.
+fn select(columns: &[Column], crs: Option<&str>, from: &str) -> Result<(String, String)> {
     let geom = columns
         .iter()
         .find(|c| is_geometry(&c.ty))
         .ok_or_else(|| DataError::Format("the query returns no geometry column: select one (such as ST_Point(lon, lat) AS geom)".into()))?;
     let g = ident(&geom.name);
-    let mut unprojected = false;
+    // A geometry that says no coordinate system (the usual case for longitude/latitude) is taken
+    // as it is.
     let geom_expr = match (crs, type_crs(&geom.ty)) {
         (Some(c), _) => format!("ST_Transform({g}::GEOMETRY, {}, 'EPSG:4326')", literal(c)),
         (None, Some(t)) if t.eq_ignore_ascii_case("EPSG:4326") || t.eq_ignore_ascii_case("OGC:CRS84") => g.clone(),
         (None, Some(_)) => format!("ST_Transform({g}, 'EPSG:4326')"),
-        (None, None) => {
-            unprojected = true;
-            g.clone()
-        }
+        (None, None) => g.clone(),
     };
     let list: Vec<String> = columns
         .iter()
@@ -283,17 +278,19 @@ fn select(columns: &[Column], crs: Option<&str>, from: &str) -> Result<(String, 
             }
         })
         .collect();
-    Ok((format!("SELECT *, ST_Dimension({g}) AS {DIM} FROM (SELECT {} FROM {from})", list.join(", ")), geom.name.clone(), unprojected))
+    Ok((format!("SELECT *, ST_Dimension({g}) AS {DIM} FROM (SELECT {} FROM {from})", list.join(", ")), geom.name.clone()))
 }
 
 /// Runs a query, writing its result into the cache (always afresh: the data it reads may have
 /// changed).
 pub fn run(q: &Query<'_>) -> Result<Output> {
     let dir = cache_dir().ok_or_else(|| DataError::Format("no cache folder for DuckDB results".into()))?;
-    run_in(&dir, q, None)
+    run_in(&dir, q, false)
 }
 
-fn run_in(dir: &Path, q: &Query<'_>, key: Option<&str>) -> Result<Output> {
+/// Runs a query; `confined` (for a table of a database) as [`prelude`] says. The result's parts are
+/// named after this run alone, so a run never replaces a file a layer may be reading.
+fn run_in(dir: &Path, q: &Query<'_>, confined: bool) -> Result<Output> {
     let sql = q.sql.trim().trim_end_matches(';').trim_end();
     if sql.is_empty() {
         return Err(DataError::Format("the query is empty".into()));
@@ -310,8 +307,7 @@ fn run_in(dir: &Path, q: &Query<'_>, key: Option<&str>) -> Result<Output> {
     }
     std::fs::create_dir_all(dir)?;
     external::prune(dir, ours, KEEP);
-    // A table of a database (the only run with a cache key) is read confined to the cache.
-    let prelude = prelude(dir, q.database, key.is_some())?;
+    let prelude = prelude(dir, q.database, confined)?;
     let from = format!("query({})", literal(sql));
 
     // The result's columns, from DuckDB binding the query (not running it).
@@ -325,7 +321,7 @@ fn run_in(dir: &Path, q: &Query<'_>, key: Option<&str>) -> Result<Output> {
     if columns.iter().any(|c| c.name == DIM) {
         return Err(DataError::Format(format!("the query returns a column named {DIM}")));
     }
-    let (select, geom, unprojected) = select(&columns, q.crs, &from)?;
+    let (select, geom) = select(&columns, q.crs, &from)?;
     let g = ident(&geom);
     // The bounding-box covering, unless the result already has a column of its name.
     let bbox_name = format!("{geom}_bbox");
@@ -355,13 +351,12 @@ fn run_in(dir: &Path, q: &Query<'_>, key: Option<&str>) -> Result<Output> {
     }
     let counts = fetch(dir, &script, &format!("SELECT {DIM} AS dim, count(*)::BIGINT AS n FROM r GROUP BY ALL"), QUERY_TIMEOUT)?;
 
-    let mut out = Output { unprojected, ..Output::default() };
-    let final_tag = key.map(|k| format!("{:016x}", fnv1a(k.as_bytes()))).unwrap_or(run_tag.clone());
+    let mut out = Output::default();
     for row in counts.as_array().into_iter().flatten() {
         let count = row.get("n").and_then(|v| v.as_u64()).unwrap_or(0);
         match row.get("dim").and_then(|v| v.as_i64()).and_then(|d| Family::ALL.into_iter().find(|f| dimension(*f) == d)) {
             Some(family) if count > 0 => {
-                let path = dir.join(format!("{final_tag}.{}.parquet", family.label()));
+                let path = dir.join(format!("{run_tag}.{}.parquet", family.label()));
                 out.parts.push(Part { path, family, count });
             }
             Some(_) => {}
@@ -380,8 +375,6 @@ fn run_in(dir: &Path, q: &Query<'_>, key: Option<&str>) -> Result<Output> {
     // guards.
     for p in &out.parts {
         let from = tmp(p.family);
-        #[cfg(windows)]
-        let _ = std::fs::remove_file(&p.path);
         std::fs::rename(&from, &p.path)?;
         if let Some(g) = guards.iter_mut().find(|g| g.0.as_deref() == Some(from.as_path())) {
             g.0 = None;
@@ -451,7 +444,7 @@ fn convert_table_in(dir: &Path, database: &Path, table: &Table, crs: Option<&str
     let key = format!("{}\n{}\n{}\n{crs:?}\n{len}\n{modified}\n{wal_len}\n{wal_modified}", full.display(), table.schema, table.name);
     let tag = format!("{:016x}", fnv1a(key.as_bytes()));
     let keyfile = dir.join(format!("{tag}.key"));
-    if let Some(hit) = std::fs::read_to_string(&keyfile).ok().and_then(|s| cached(dir, &tag, &key, &s)) {
+    if let Some(hit) = std::fs::read_to_string(&keyfile).ok().and_then(|s| cached(dir, &key, &s)) {
         touch(&keyfile);
         for p in &hit.parts {
             touch(&p.path);
@@ -459,35 +452,37 @@ fn convert_table_in(dir: &Path, database: &Path, table: &Table, crs: Option<&str
         return Ok(hit);
     }
     let _ = std::fs::remove_file(&keyfile);
-    let out = run_in(dir, &Query { sql: &table.sql(), database: Some(&full), crs }, Some(&key))?;
+    // A database is hostile input: its tables are read confined to the cache.
+    let out = run_in(dir, &Query { sql: &table.sql(), database: Some(&full), crs }, true)?;
     // The key goes last, vouching for the parts written before it: the key, then a line per part
-    // and the rows left out.
+    // (its family, rows and file) and the rows left out.
     let mut text = key.clone();
     for p in &out.parts {
-        text.push_str(&format!("\npart {} {}", p.family.label(), p.count));
+        let file = p.path.file_name().and_then(|f| f.to_str()).unwrap_or_default();
+        text.push_str(&format!("\npart {} {} {file}", p.family.label(), p.count));
     }
-    text.push_str(&format!("\nskipped {}\nunprojected {}", out.skipped, out.unprojected));
+    text.push_str(&format!("\nskipped {}", out.skipped));
     std::fs::write(&keyfile, text)?;
     Ok(out)
 }
 
 /// A conversion in the cache, when its key file matches `key` and its parts are all there.
-fn cached(dir: &Path, tag: &str, key: &str, stored: &str) -> Option<Output> {
+fn cached(dir: &Path, key: &str, stored: &str) -> Option<Output> {
     let rest = stored.strip_prefix(key)?.strip_prefix('\n')?;
     let mut out = Output::default();
     for line in rest.lines() {
         let mut w = line.split(' ');
-        match (w.next(), w.next(), w.next()) {
-            (Some("part"), Some(f), Some(n)) => {
+        match (w.next(), w.next(), w.next(), w.next()) {
+            // Only a file of this module's, in the cache folder.
+            (Some("part"), Some(f), Some(n), Some(file)) if ours(file) && file.ends_with(&format!(".{f}.parquet")) => {
                 let family = Family::ALL.into_iter().find(|x| x.label() == f)?;
-                let path = dir.join(format!("{tag}.{f}.parquet"));
+                let path = dir.join(file);
                 if !path.is_file() {
                     return None;
                 }
                 out.parts.push(Part { path, family, count: n.parse().ok()? });
             }
-            (Some("skipped"), Some(n), None) => out.skipped = n.parse().ok()?,
-            (Some("unprojected"), Some(b), None) => out.unprojected = b == "true",
+            (Some("skipped"), Some(n), None, None) => out.skipped = n.parse().ok()?,
             _ => return None,
         }
     }
@@ -554,31 +549,30 @@ mod tests {
         let e = select(&cols(&[("a", "INTEGER")]), None, "x").unwrap_err();
         assert!(e.to_string().contains("no geometry column"), "{e}");
         // Types the provider doesn't read become text; a second geometry, WKT.
-        let (s, g, unprojected) =
+        let (s, g) =
             select(&cols(&[("d", "DATE"), ("geom", "GEOMETRY"), ("n", "DECIMAL(10,2)"), ("g2", "GEOMETRY('EPSG:3857')")]), None, "x")
                 .unwrap();
         assert_eq!(g, "geom");
-        assert!(unprojected);
         assert!(s.contains("CAST(\"d\" AS VARCHAR)") && s.contains("ST_Force2D(\"geom\") AS \"geom\""), "{s}");
         assert!(s.contains(", \"n\",") && s.contains("ST_AsText(\"g2\")"), "{s}");
         // A geometry that says its coordinate system is converted; one given is used.
-        let (s, _, unprojected) = select(&cols(&[("g", "GEOMETRY('EPSG:3857')")]), None, "x").unwrap();
-        assert!(!unprojected && s.contains("ST_Transform(\"g\", 'EPSG:4326')"), "{s}");
-        let (s, _, _) = select(&cols(&[("g", "GEOMETRY('OGC:CRS84')")]), None, "x").unwrap();
+        let (s, _) = select(&cols(&[("g", "GEOMETRY('EPSG:3857')")]), None, "x").unwrap();
+        assert!(s.contains("ST_Transform(\"g\", 'EPSG:4326')"), "{s}");
+        let (s, _) = select(&cols(&[("g", "GEOMETRY('OGC:CRS84')")]), None, "x").unwrap();
         assert!(!s.contains("ST_Transform"), "{s}");
-        let (s, _, unprojected) = select(&cols(&[("g", "GEOMETRY")]), Some("EPSG:2263"), "x").unwrap();
-        assert!(!unprojected && s.contains("ST_Transform(\"g\"::GEOMETRY, 'EPSG:2263', 'EPSG:4326')"), "{s}");
+        let (s, _) = select(&cols(&[("g", "GEOMETRY")]), Some("EPSG:2263"), "x").unwrap();
+        assert!(s.contains("ST_Transform(\"g\"::GEOMETRY, 'EPSG:2263', 'EPSG:4326')"), "{s}");
     }
 
     #[test]
     fn bad_queries_never_reach_duckdb() {
         let dir = std::env::temp_dir();
         for sql in ["", "  ;  ", "SELECT '\0'"] {
-            assert!(run_in(&dir, &Query { sql, ..Query::default() }, None).is_err());
+            assert!(run_in(&dir, &Query { sql, ..Query::default() }, false).is_err());
         }
         let long = "x".repeat(MAX_SQL + 1);
-        assert!(run_in(&dir, &Query { sql: &long, ..Query::default() }, None).unwrap_err().to_string().contains("longer"));
-        let e = run_in(&dir, &Query { sql: "SELECT 1", crs: Some("EPSG:1 OR"), ..Query::default() }, None).unwrap_err();
+        assert!(run_in(&dir, &Query { sql: &long, ..Query::default() }, false).unwrap_err().to_string().contains("longer"));
+        let e = run_in(&dir, &Query { sql: "SELECT 1", crs: Some("EPSG:1 OR"), ..Query::default() }, false).unwrap_err();
         assert!(e.to_string().contains("crs"), "{e}");
     }
 
@@ -599,9 +593,8 @@ mod tests {
             UNION ALL SELECT 2, 'b', NULL, ST_GeomFromText('LINESTRING(0 0, 1 1)') \
             UNION ALL SELECT 3, 'c', NULL, ST_GeomFromText('POINT(11 21)') \
             UNION ALL SELECT 4, 'd', NULL, NULL;";
-        let out = run_in(&cache, &Query { sql, ..Query::default() }, None).unwrap();
+        let out = run_in(&cache, &Query { sql, ..Query::default() }, false).unwrap();
         assert_eq!(out.skipped, 1);
-        assert!(out.unprojected);
         let parts: Vec<(Family, u64)> = out.parts.iter().map(|p| (p.family, p.count)).collect();
         assert_eq!(parts, vec![(Family::Points, 2), (Family::Lines, 1)]);
         let pts = open(&out.parts[0].path);
@@ -619,24 +612,24 @@ mod tests {
 
         // A projected geometry that says its coordinate system comes out in longitude/latitude.
         let out =
-            run_in(&cache, &Query { sql: "SELECT ST_Point(1113194.9, 0)::GEOMETRY('EPSG:3857') AS g", ..Query::default() }, None).unwrap();
-        assert!(!out.unprojected);
+            run_in(&cache, &Query { sql: "SELECT ST_Point(1113194.9, 0)::GEOMETRY('EPSG:3857') AS g", ..Query::default() }, false).unwrap();
         let e = open(&out.parts[0].path).info().extent;
         assert!((e.min_x - 10.0).abs() < 1e-3 && e.min_y.abs() < 1e-6, "{e:?}");
         // …and so does one given with "crs".
         let q = Query { sql: "SELECT ST_Point(1113194.9, 0) AS g", crs: Some("EPSG:3857"), ..Query::default() };
-        let e = open(&run_in(&cache, &q, None).unwrap().parts[0].path).info().extent;
+        let e = open(&run_in(&cache, &q, false).unwrap().parts[0].path).info().extent;
         assert!((e.min_x - 10.0).abs() < 1e-3, "{e:?}");
 
         // Errors: DuckDB's own message, no geometry, not a single SELECT.
-        let e = run_in(&cache, &Query { sql: "SELEC 1", ..Query::default() }, None).unwrap_err().to_string();
+        let e = run_in(&cache, &Query { sql: "SELEC 1", ..Query::default() }, false).unwrap_err().to_string();
         assert!(e.contains("Parser Error"), "{e}");
-        let e = run_in(&cache, &Query { sql: "SELECT ST_Point(0, 0) AS g WHERE false", ..Query::default() }, None).unwrap_err().to_string();
+        let e =
+            run_in(&cache, &Query { sql: "SELECT ST_Point(0, 0) AS g WHERE false", ..Query::default() }, false).unwrap_err().to_string();
         assert_eq!(e, "the query returned no rows");
-        let e = run_in(&cache, &Query { sql: "SELECT 1 AS a", ..Query::default() }, None).unwrap_err().to_string();
+        let e = run_in(&cache, &Query { sql: "SELECT 1 AS a", ..Query::default() }, false).unwrap_err().to_string();
         assert!(e.contains("no geometry column"), "{e}");
         for sql in ["COPY (SELECT 1) TO 'x.csv'", "SELECT ST_Point(0, 0) AS g'); COPY (SELECT 1) TO ('x.csv", "SELECT 1; SELECT 2"] {
-            assert!(run_in(&cache, &Query { sql, ..Query::default() }, None).is_err(), "{sql}");
+            assert!(run_in(&cache, &Query { sql, ..Query::default() }, false).is_err(), "{sql}");
         }
         assert!(!dir.join("x.csv").exists() && !Path::new("x.csv").exists());
 
@@ -672,10 +665,10 @@ mod tests {
         assert_ne!(fresh.parts[0].path, a.parts[0].path);
         std::fs::remove_file(&wal).unwrap();
         let key = std::fs::read_dir(&cache).unwrap().flatten().find(|e| e.file_name().to_string_lossy().ends_with(".key")).unwrap();
-        assert!(std::fs::read_to_string(key.path()).unwrap().ends_with("part points 1000\nskipped 0\nunprojected true"));
+        assert!(std::fs::read_to_string(key.path()).unwrap().contains("part points 1000 "));
         // A query naming the database's tables plainly.
         let q = Query { sql: "SELECT * FROM pts WHERE id < 10", database: Some(&db), crs: None };
-        assert_eq!(run_in(&cache, &q, None).unwrap().parts[0].count, 10);
+        assert_eq!(run_in(&cache, &q, false).unwrap().parts[0].count, 10);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

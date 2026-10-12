@@ -72,7 +72,8 @@ The first geometry column becomes the layer's geometry; other columns become its
 RustGIS doesn't read, such as dates and lists, as text). A geometry that says its coordinate system
 is converted to longitude/latitude; give `"crs"` (such as `EPSG:2263`) for one that doesn't. A
 result mixing geometry types becomes a layer per type, and rows without a geometry are left out.
-`"database"` opens a DuckDB database (read only) so the query names its tables plainly.
+`"database"` opens a DuckDB database (read only) so the query names its tables plainly; the
+database is trusted like the query, since its views run as part of it.
 
 **Map › Add Data** opens a DuckDB database file (`.duckdb`, `.ddb`): every table with a geometry
 column becomes a layer (`"layer"` picks one).

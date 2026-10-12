@@ -583,7 +583,9 @@ fn duckdb_parts(
         .map(|part| Converted {
             path: part.path,
             name: if mixed { format!("{name} ({})", part.family.label()) } else { name.to_string() },
-            unprojected: out.unprojected,
+            // A geometry that says no coordinate system is usually longitude/latitude: only
+            // coordinates past it are pointed out (in add_converted).
+            unprojected: false,
             origin: ConvertedOrigin::Duckdb(origin(part.family)),
         })
         .collect()
