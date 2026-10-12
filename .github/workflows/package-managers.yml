@@ -184,6 +184,12 @@ jobs:
           pipx install 'copr-cli==2.6'
           mkdir -p ~/.config
           (umask 077; printf '%s\n' "$COPR_CONFIG" > ~/.config/copr)
+          # Accept a partial paste of the API page's block: copr-cli needs the section header
+          # and copr_url, which are the same for everyone.
+          grep -q '^\[copr-cli\]' ~/.config/copr || sed -i '1i [copr-cli]' ~/.config/copr
+          grep -q '^copr_url' ~/.config/copr || echo 'copr_url = https://copr.fedorainfracloud.org' >> ~/.config/copr
+          # Show which keys are set (never the values).
+          grep -o '^[a-z_]* *=' ~/.config/copr | tr -d ' =' | paste -sd' '
 
           src="$HOME/rpmbuild/SOURCES"
           packaging/copr/render.sh "$VERSION" "$DATE" "$src"
