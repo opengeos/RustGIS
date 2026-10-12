@@ -74,7 +74,13 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     let l = s.map().layer(id).ok_or("no layer")?;
     // A streamed layer exports its whole source, not the features read for the view.
     let whole = if l.is_streamed() { Some(l.load_all()?) } else { None };
-    rustgis_data::io::write_path(whole.as_ref().unwrap_or(&l.dataset), Path::new(&path)).map_err(|e| e.to_string())?;
+    let ds = whole.as_ref().unwrap_or(&l.dataset);
+    rustgis_data::io::write_path(ds, Path::new(&path)).map_err(|e| e.to_string())?;
+    // FlatGeobuf holds features with geometry only.
+    let without = ds.features.iter().filter(|f| f.geometry.is_none()).count();
+    if without > 0 && path.to_ascii_lowercase().ends_with(".fgb") {
+        s.notify(format!("{path}: {without} features without geometry were left out"), false);
+    }
     s.notify(format!("Exported {path}"), false);
     Ok(json!({"path": path}))
 }

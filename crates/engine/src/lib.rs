@@ -267,6 +267,18 @@ pub(crate) struct PendingRun {
     pub millis: u64,
 }
 
+/// Empties the windows of a project's streamed layers (they are read again from their sources).
+fn strip_windows(p: &mut Project) {
+    for l in p.maps.iter_mut().flat_map(|m| m.layers.iter_mut()) {
+        if let Some(src) = &mut l.source {
+            src.reset();
+            l.dataset.features = Vec::new();
+            l.selection.clear();
+            l.touch_geometry();
+        }
+    }
+}
+
 /// The first streamed layer whose features or fields differ between two versions of a project
 /// for a reason other than a read of its source.
 fn edited_streamed(before: &Project, after: &Project) -> Option<String> {
@@ -391,7 +403,9 @@ impl Session {
             _ => res,
         };
         match (&res, snapshot) {
-            (Ok(_), Some(snap)) => {
+            (Ok(_), Some(mut snap)) => {
+                // Undo keeps streamed layers' sources, not their windows: they read the view again.
+                strip_windows(&mut snap);
                 self.undo.push((snap, label));
                 if self.undo.len() > UNDO_LIMIT {
                     self.undo.remove(0);

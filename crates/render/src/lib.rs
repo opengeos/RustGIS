@@ -584,6 +584,15 @@ pub fn view_lonlat(map: &Map, view: &View) -> Extent {
             }
         }
     }
+    // A pole inside the view lies beyond every edge sample (a polar projection): reach it.
+    for pole in [Coord::new(0.0, 90.0), Coord::new(0.0, -90.0)] {
+        if let Some(p) = flat.forward(pole)
+            && p.is_finite()
+            && e.contains(p)
+        {
+            out = Extent::new(-180.0, out.min_y.min(pole.y), 180.0, out.max_y.max(pole.y));
+        }
+    }
     if out.is_empty() { Extent::WORLD_LONLAT } else { out }
 }
 

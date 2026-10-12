@@ -162,7 +162,7 @@ pub fn external_start(s: &mut Session, tool: &str, params: &Value) -> Result<Ext
             .filter(|t| rustgis_analysis::external_source(t) == Some(rustgis_geolibre::SOURCE))
             .ok_or_else(|| format!("no GeoLibre tool '{tool}'"))?;
         let params = rustgis_analysis::resolve_params(spec, params)?;
-        let job = rustgis_geolibre::prepare(spec, &map_inputs(s, &params)?, &params)?;
+        let job = rustgis_geolibre::prepare(spec, &map_inputs(s, Some(spec), &params)?, &params)?;
         s.next_pending = s.next_pending.wrapping_add(1);
         let id = s.next_pending;
         let run = ExternalRun { id, tool: job.tool.clone(), argv: job.argv("/work"), files: job.files.clone() };
@@ -227,8 +227,8 @@ struct MapInputs<'a>(
 );
 
 /// A tool's inputs on the active map.
-fn map_inputs<'a>(s: &'a Session, params: &Value) -> Result<MapInputs<'a>, String> {
-    let full = streamed_inputs(s.map(), params)?;
+fn map_inputs<'a>(s: &'a Session, spec: Option<&rustgis_analysis::ToolSpec>, params: &Value) -> Result<MapInputs<'a>, String> {
+    let full = streamed_inputs(s.map(), spec, params)?;
     let rows = env_inputs(s.map(), &full, &s.project.gp_env, params)?;
     Ok(MapInputs(s.map(), &s.project.tables, rows, full))
 }
@@ -236,7 +236,11 @@ fn map_inputs<'a>(s: &'a Session, params: &Value) -> Result<MapInputs<'a>, Strin
 /// Every feature of the streamed layers a tool's parameters name (those without a selection,
 /// whose rows the tool reads from the window in view): a tool runs on all the data, not on what
 /// the view happened to read.
-fn streamed_inputs(map: &rustgis_map::Map, params: &Value) -> Result<std::collections::HashMap<String, Dataset>, String> {
+fn streamed_inputs(
+    map: &rustgis_map::Map,
+    spec: Option<&rustgis_analysis::ToolSpec>,
+    params: &Value,
+) -> Result<std::collections::HashMap<String, Dataset>, String> {
     fn names<'v>(v: &'v Value, out: &mut Vec<&'v str>) {
         match v {
             Value::String(s) => out.push(s),
@@ -245,8 +249,20 @@ fn streamed_inputs(map: &rustgis_map::Map, params: &Value) -> Result<std::collec
             _ => {}
         }
     }
+    // The values of the tool's layer parameters (all of them, for a tool without a spec), so a
+    // field or text value that happens to match a layer's name doesn't load it.
+    use rustgis_analysis::ParamKind as K;
     let mut named = Vec::new();
-    names(params, &mut named);
+    match spec {
+        Some(spec) => {
+            for p in spec.params.iter().filter(|p| matches!(p.kind, K::Layer | K::PolygonLayer | K::PointLayer | K::VectorLayer)) {
+                if let Some(v) = params.get(p.name) {
+                    names(v, &mut named);
+                }
+            }
+        }
+        None => names(params, &mut named),
+    }
     let mut full = std::collections::HashMap::new();
     for n in named {
         let key = n.to_ascii_lowercase();
@@ -351,7 +367,7 @@ pub fn run_tool(s: &mut Session, tool: &str, params: &Value) -> CmdResult {
     let tool = tool_id(tool).unwrap_or(tool).to_string();
     let params = params.clone();
     let t0 = now_ms();
-    let inputs = map_inputs(s, &params)?;
+    let inputs = map_inputs(s, rustgis_analysis::tool(&tool), &params)?;
     let mut res = rustgis_analysis::run(&tool, &inputs, &params);
     // A selection made on a streamed layer read whole: its rows, as rows of the window in view.
     if let Ok(r) = &mut res
@@ -361,6 +377,15 @@ pub fn run_tool(s: &mut Session, tool: &str, params: &Value) -> CmdResult {
     {
         let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| full.features.get(*r)).map(|f| f.id).collect();
         *rows = l.dataset.features.iter().enumerate().filter(|(_, f)| ids.contains(&f.id)).map(|(i, _)| i).collect();
+    }
+    // A tool updating a streamed layer it read only partly (its selection, from the window in
+    // view) would replace the whole layer with that part: refused.
+    if let Ok(r) = &res
+        && let Output::Update { layer, .. } = &r.output
+        && !inputs.3.contains_key(&layer.to_ascii_lowercase())
+        && s.map().layer_by_name(layer).is_some_and(|l| l.is_streamed())
+    {
+        res = Err(format!("{layer} is read in place from its file; Load All Features (layer.loadAll) before a tool updates it"));
     }
     drop(inputs);
     let millis = now_ms().saturating_sub(t0);

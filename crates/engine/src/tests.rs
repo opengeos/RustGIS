@@ -2333,6 +2333,16 @@ fn tools_read_streamed_layers_whole() {
     let r = s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "tools", "distance": 1}})).unwrap();
     let out = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
     assert_eq!(out.dataset.features.len(), 2500);
+    // A tool updating the layer from a selection (made in the window) would replace the whole
+    // layer with that part: refused. Without a selection it updates the whole source.
+    let id = s.map().layer_by_name("tools").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().selection = vec![0, 1];
+    let e = s.run("gp.run", &json!({"tool": "calculateGeometry", "params": {"input": "tools"}})).unwrap_err();
+    assert!(e.contains("Load All Features"), "{e}");
+    assert!(s.map().layer(id).unwrap().is_streamed());
+    s.map_mut().layer_mut(id).unwrap().selection.clear();
+    s.run("gp.run", &json!({"tool": "calculateGeometry", "params": {"input": "tools"}})).unwrap();
+    assert_eq!(s.map().layer(id).unwrap().dataset.features.len(), 2500);
     let _ = std::fs::remove_file(path);
 }
 

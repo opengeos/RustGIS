@@ -291,10 +291,13 @@ impl Layer {
         }
         let (mut ds, _) = copy.read_all()?;
         // A sample isn't all of them: refuse rather than run a tool on part of the data.
-        if let Some(n) =
-            copy.info().and_then(|i| i.count).filter(|n| (ds.features.len() as u64) < *n && *n > rustgis_data::source::MAX_LIMIT as u64)
-        {
-            return Err(format!("the layer has {n} features, more than the {} read at once", rustgis_data::source::MAX_LIMIT));
+        let max = rustgis_data::source::MAX_LIMIT;
+        if let Some(n) = copy.info().and_then(|i| i.count).filter(|n| (ds.features.len() as u64) < *n && *n > max as u64) {
+            return Err(format!("the layer has {n} features, more than the {max} read at once"));
+        }
+        // A count the source doesn't know, and a read that hit the limit: maybe not all of them.
+        if copy.info().is_some_and(|i| i.count.is_none()) && ds.features.len() >= max {
+            return Err(format!("the layer has more features than the {max} read at once"));
         }
         ds.name = self.dataset.name.clone();
         ds.fields = self.dataset.fields.clone();
