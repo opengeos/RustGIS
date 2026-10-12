@@ -187,15 +187,15 @@ pub fn run(s: &mut Session, call: &ToolCall) -> Result<String, String> {
             if s.registry.get(&id).is_none() && !id.starts_with(rustgis_engine::plugins::PREFIX) {
                 return Err(format!("unknown command '{id}'; find ids with search_commands"));
             }
-            let before = layer_names(s);
+            let (before, mark) = (layer_names(s), s.notice_mark());
             let r = s.run(&id, &params_arg(a)?)?;
-            with_new_layers(r, s, &before)
+            with_notices(with_new_layers(r, s, &before), s, mark)
         }
         "run_tool" => {
             let tool = str_arg(a, "tool").ok_or("tool is required")?;
-            let before = layer_names(s);
+            let (before, mark) = (layer_names(s), s.notice_mark());
             let r = s.run("gp.run", &json!({"tool": tool, "params": params_arg(a)?}))?;
-            with_new_layers(r, s, &before)
+            with_notices(with_new_layers(r, s, &before), s, mark)
         }
         "read_features" => read_features(s, a)?,
         other => return Err(format!("unknown tool '{other}'")),
@@ -259,6 +259,22 @@ fn with_new_layers(r: Value, s: &Session, before: &[(u32, String)]) -> Value {
         return if r.is_null() { json!({"ok": true}) } else { r };
     }
     json!({"result": r, "layersAdded": added})
+}
+
+/// A run's result with what it said beside it (a notice that only the first tables of a GeoPackage
+/// were added, a file's warnings), which the status bar shows in the app.
+fn with_notices(r: Value, s: &Session, mark: u64) -> Value {
+    let said: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).collect();
+    if said.is_empty() {
+        return r;
+    }
+    match r {
+        Value::Object(mut o) if !o.contains_key("notices") => {
+            o.insert("notices".into(), json!(said));
+            Value::Object(o)
+        }
+        other => json!({"result": other, "notices": said}),
+    }
 }
 
 /// How well `words` match `hay` (all lower case): matched words, with whole-id hits counting more.

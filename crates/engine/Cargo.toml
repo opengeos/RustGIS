@@ -31,5 +31,7 @@ rustgis-geolibre = { workspace = true, optional = true }
 geolibre = ["dep:rustgis-geolibre"]
 
 [dev-dependencies]
+# Writing sample GeoPackages.
+rusqlite = { workspace = true }
 rustgis-plugins = { workspace = true, features = ["testing"] }
 tiny-skia = { workspace = true }

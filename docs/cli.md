@@ -26,6 +26,10 @@ rustgis-cli run --sample \
   --save atlas.rgis
 ```
 
+Each command's result goes to standard output as JSON. What a command says beside it, which the
+app shows in its status bar (a file's warnings, or that only the first 32 tables of a GeoPackage
+were added), goes to standard error.
+
 Installed [plugins](plugins.md) load first (`--no-plugins` skips them), and `--plugin <file or
 folder>` loads one more for this run only. Their commands and tools have ids like
 `plugin:vector-toolkit/hexagon-grid`:

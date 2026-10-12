@@ -13,6 +13,9 @@ pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Map › Layer", add_data)
             .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage or GDAL layer", "stream"?: bool, "crs"?: "EPSG:… for a GDAL file that doesn't say"}"#),
+        C::new("info.fileLayers", "List Layers in File", "Map › Layer › Add Data", file_layers)
+            .view()
+            .params(r#"{"path": string}"#),
         C::new("layer.loadAll", "Load All Features", "Contents", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addDataText", "Add Data (from text)", "Map › Layer", add_data_text).params(r#"{"fileName": "name.geojson|.csv", "text": string}"#),
         C::new("layer.addSample", "Add Sample Data", "Map › Layer › Add Data", add_sample).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
@@ -283,6 +286,27 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     add_read(s, p, read)
 }
 
+/// The layers a file holds, without adding them: a GeoPackage's feature tables, a GDAL dataset's
+/// layers, or the one layer of other files. `layer.addData` takes a name with `"layer"`.
+fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
+    let path = s_req(p, "path")?;
+    let err = |e: rustgis_data::DataError| format!("{path}: {e}");
+    #[cfg(not(target_arch = "wasm32"))]
+    if rustgis_data::source::gdal::is_gdal_name(path) {
+        let layers = rustgis_data::source::gdal::layers(Path::new(path)).map_err(err)?;
+        return Ok(json!({"count": layers.len(), "layers": layers}));
+    }
+    if rustgis_data::source::is_source_name(path) {
+        let layers = rustgis_data::source::layers(Path::new(path)).map_err(err)?;
+        return Ok(json!({"count": layers.len(), "layers": layers}));
+    }
+    if !Path::new(path).is_file() {
+        return Err(format!("{path}: no such file"));
+    }
+    let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
+    Ok(json!({"count": 1, "layers": [name]}))
+}
+
 /// Where a source file is: on disk, or uploaded (its name and bytes).
 pub(crate) enum Origin<'a> {
     Path(&'a str),
@@ -301,14 +325,26 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
         Origin::Path(p) | Origin::Bytes(p, _) => p.to_string(),
     };
     let err = |e: rustgis_data::DataError| format!("{label}: {e}");
+    // Tables past the cap, said in the result as well as in a notice, so the CLI, the MCP server
+    // and the AI Assistant know the file holds more than was added.
+    let mut skipped: Vec<String> = Vec::new();
+    let mut total = None;
     let tables: Vec<Option<String>> = match (ps(p, "layer").map(str::trim).filter(|t| !t.is_empty()), &origin) {
         (Some(t), _) => vec![Some(t.to_string())],
         (None, Origin::Path(path)) if path.to_ascii_lowercase().ends_with(".gpkg") => {
-            let all = source::layers(Path::new(path)).map_err(err)?;
+            let mut all = source::layers(Path::new(path)).map_err(err)?;
             if all.len() > MAX_TABLES {
-                s.notify(format!("{label}: adding the first {MAX_TABLES} of {} tables", all.len()), false);
+                total = Some(all.len());
+                s.notify(
+                    format!(
+                        "{label}: added the first {MAX_TABLES} of {} tables; add others by name with \"layer\" (info.fileLayers lists them)",
+                        all.len()
+                    ),
+                    false,
+                );
+                skipped = all.split_off(MAX_TABLES);
             }
-            all.into_iter().take(MAX_TABLES).map(Some).collect()
+            all.into_iter().map(Some).collect()
         }
         _ => vec![None],
     };
@@ -375,7 +411,12 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
         }
     }
     let first = ids.first().copied();
-    Ok(json!({"layer": first, "layers": ids, "features": features, "streamed": streamed}))
+    let mut out = json!({"layer": first, "layers": ids, "features": features, "streamed": streamed});
+    if let Some(total) = total {
+        out["tables"] = json!(total);
+        out["skipped"] = json!(skipped);
+    }
+    Ok(out)
 }
 
 /// Adds a file GDAL reads (KML, GPX, File Geodatabase, DXF…): each layer is converted once into an
