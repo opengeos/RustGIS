@@ -55,6 +55,53 @@ jobs:
           cd apps/rustgis-web
           trunk build --release --public-url /
 
+      - name: Add Google Analytics
+        # The measurement ID comes from the RUSTGIS_WEB_GA_MEASUREMENT_ID repository variable (its own
+        # GA4 data stream), falling back to RUSTGIS_GA_MEASUREMENT_ID, the docs site's. Only this
+        # deploy adds the tag: the desktop app, the CLI, local and fork builds never load it. A value
+        # that is not a GA4 measurement ID fails the deploy instead of publishing a tag that reports
+        # nowhere.
+        working-directory: dist/web
+        env:
+          RAW_MEASUREMENT_ID: ${{ vars.RUSTGIS_WEB_GA_MEASUREMENT_ID || vars.RUSTGIS_GA_MEASUREMENT_ID }}
+        run: |
+          set -euo pipefail
+          id=$(printf '%s' "${RAW_MEASUREMENT_ID:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:lower:]' '[:upper:]')
+          if [ -z "$id" ]; then
+            echo "Analytics disabled (no measurement ID configured)."
+            exit 0
+          fi
+          if [[ ! $id =~ ^G-[A-Z0-9]{4,24}$ ]]; then
+            echo "::error::RUSTGIS_WEB_GA_MEASUREMENT_ID is not a GA4 measurement ID (G-...)."
+            exit 1
+          fi
+          # The standard Google tag, reporting the page as origin + path: the query string
+          # (`?extent=`, `?lang=`, ...) is dropped from the page and referrer, and the automatic
+          # page view, which would carry it, is replaced by an explicit one.
+          cat > "$RUNNER_TEMP/analytics.html" <<EOF
+          <script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>
+          <script>
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            (function () {
+              var page = { page_location: location.origin + location.pathname };
+              try { if (document.referrer) { var r = new URL(document.referrer); page.page_referrer = r.origin + r.pathname; } } catch (e) {}
+              gtag('set', page);
+              gtag('js', new Date());
+              gtag('config', '${id}', Object.assign({ send_page_view: false }, page));
+              gtag('event', 'page_view', page);
+            })();
+          </script>
+          EOF
+          grep -q '</head>' index.html
+          python3 - "$RUNNER_TEMP/analytics.html" <<'PY'
+          import pathlib, sys
+          tag = pathlib.Path(sys.argv[1]).read_text()
+          page = pathlib.Path("index.html")
+          page.write_text(page.read_text().replace("</head>", tag + "</head>", 1))
+          PY
+          echo "Analytics enabled for $id."
+
       - name: Prepare the site for GitHub Pages
         working-directory: dist/web
         run: |

@@ -1,0 +1,21 @@
+# Privacy
+
+The RustGIS desktop app and command line collect no analytics, telemetry or usage data. Your
+geospatial data and projects stay on your device unless you choose to share or export them.
+
+## Website analytics
+
+The websites we host, the documentation at [rustgis.app](https://rustgis.app) and the web app at
+[web.rustgis.app](https://web.rustgis.app), use Google Analytics 4 to count page visits and see
+which pages are used. Google receives your IP address, the page you are on, the referring page and
+general device and browser information, and sets its own cookies in your browser. It is governed
+by [Google's privacy policy](https://policies.google.com/privacy).
+
+Analytics never see the data you work with: layers, files, projects and coordinates are processed
+in your browser and are not sent to Google. The web app reports its address trimmed to the site and
+path (`https://web.rustgis.app/`), without the query string.
+
+You can block analytics with a content blocker or your browser's tracking protection; the sites
+work normally without them. Analytics run only on the sites we host: the measurement ID is added
+when those sites are deployed, so the desktop app, the command line and any copy you build
+yourself never load them.
