@@ -153,7 +153,7 @@ fn tools_join_the_geoprocessing_tools() {
 fn registries_and_blocklists_are_read_defensively() {
     let sha = "a".repeat(64);
     let text = json!({"version": 1, "plugins": [
-        {"id": "b-plugin", "name": "B", "version": "1.2.0", "package": "packages/b/b-1.2.0.rgplugin", "sha256": sha,
+        {"id": "b-plugin", "name": "B", "description": "Long", "version": "1.2.0", "package": "packages/b/b-1.2.0.rgplugin", "sha256": sha,
          "i18n": {"de": {"B": "Be", "Other": "Andere", "Long": "x".repeat(5000)}, "fr": {"Other": "Autre"}}},
         {"id": "a-plugin", "name": "A", "version": "0.1.0", "package": "https://example.com/a.rgplugin", "sha256": sha, "homepage": "javascript:alert(1)"},
         {"id": "bad", "name": "Bad", "version": "1.0.0", "package": "http://insecure.example.com/x.rgplugin", "sha256": sha},
@@ -170,6 +170,16 @@ fn registries_and_blocklists_are_read_defensively() {
     assert_eq!(v[1].translate("de", "B"), "Be");
     assert_eq!(v[1].i18n.get("de").map(|t| t.len()), Some(1));
     assert!(!v[1].i18n.contains_key("fr"));
+    // Languages with nothing to keep don't use up the 64 allowed: `de` sorts after 70 of them.
+    let mut i18n = serde_json::Map::new();
+    for i in 0..70 {
+        i18n.insert(format!("a{i:02}"), json!({"Other": "x"}));
+    }
+    i18n.insert("de".into(), json!({"C": "Ce"}));
+    let one = json!([{"id": "c-plugin", "name": "C", "version": "1.0.0", "package": "c.rgplugin", "sha256": sha, "i18n": i18n}]);
+    let v = registry::parse(&one.to_string(), "https://plugins.rustgis.app/registry.json").unwrap();
+    assert_eq!(v[0].translate("de", "C"), "Ce");
+    assert_eq!(v[0].i18n.len(), 1);
     assert!(registry::parse("[]", "x").unwrap().is_empty());
     assert!(registry::parse("{", "x").is_err());
     assert_eq!(registry::resolve("http://localhost:8000/r/registry.json", "/p.rgplugin"), "http://localhost:8000/p.rgplugin");

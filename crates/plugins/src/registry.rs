@@ -147,14 +147,16 @@ pub fn parse(text: &str, url: &str) -> Result<Vec<Entry>, String> {
         // Only the name and description are translated here, in at most 64 languages, each at
         // most 2,000 bytes: the registry comes from the network.
         let (name, description) = (e.name.clone(), e.description.clone());
+        // Filtered before the cap, so junk languages can't take the place of real ones.
         e.i18n = std::mem::take(&mut e.i18n)
             .into_iter()
-            .take(64)
+            .filter(|(lang, _)| lang.len() <= 16)
             .map(|(lang, mut t)| {
                 t.retain(|k, v| (*k == name || *k == description) && v.len() <= 2_000);
                 (lang, t)
             })
-            .filter(|(lang, t)| lang.len() <= 16 && !t.is_empty())
+            .filter(|(_, t)| !t.is_empty())
+            .take(64)
             .collect();
         out.push(e);
     }
