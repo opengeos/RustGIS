@@ -72,7 +72,7 @@ The world outline and the World Atlas sample's countries come in two worldviews:
 Earth's default borders, and China's (Natural Earth's China point of view: Taiwan, Aksai Chin
 and South Tibet are part of China). RustGIS picks China's when the system's time zone is
 mainland China's (such as `Asia/Shanghai`) or its first locale is `zh-CN`; nothing is looked up
-over the network. Choose one in **View › Language › Worldview**, set `RUSTGIS_WORLDVIEW`
+over the network. Choose one in **Settings › Language › Worldview**, set `RUSTGIS_WORLDVIEW`
 (`default` or `china`), or pass `--worldview` to `rustgis-cli`. An untouched sample project
 switches its countries at once; others keep the layer they have.
 

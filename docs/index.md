@@ -12,7 +12,7 @@ the command line.
 
 ## Highlights
 
-- **Ribbon workflow**: Map, Insert, Analysis, View, Edit, Share and Help tabs, plus a
+- **Ribbon workflow**: Map, Insert, Analysis, View, Edit, Share, Settings and Help tabs, plus a
   contextual *Feature Layer* tab group (Feature Layer, Labeling, Data) when a layer is selected.
 - **Your data**: GeoJSON, CSV with longitude/latitude, and Shapefile in; GeoJSON and CSV out.
 - **Cartography**: single symbol, unique values, graduated colours (natural breaks, equal

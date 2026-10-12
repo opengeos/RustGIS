@@ -12,7 +12,7 @@ use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, big_menu, col, group, menu_item, small, small_menu, text_w};
 use crate::{RightPane, RustGisApp, icons};
 
-pub const TABS: [&str; 9] = ["Map", "Insert", "Analysis", "View", "Edit", "Imagery", "Share", "Plugins", "Help"];
+pub const TABS: [&str; 10] = ["Map", "Insert", "Analysis", "View", "Edit", "Imagery", "Share", "Plugins", "Settings", "Help"];
 /// The contextual tabs for feature layers: (tab id, caption).
 pub const FEATURE_TABS: &[(&str, &str)] = &[("Feature Layer", "Feature Layer"), ("Labeling", "Labeling"), ("Data", "Data")];
 /// The contextual tab of an open layout.
@@ -101,6 +101,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                             "Imagery" => imagery_tab(app, ui),
                             "Share" => share_tab(app, ui),
                             "Plugins" => plugins_tab(app, ui),
+                            "Settings" => settings_tab(app, ui),
                             "Help" => help_tab(app, ui),
                             "Feature Layer" => feature_layer_tab(app, ui),
                             "Labeling" => labeling_tab(app, ui),
@@ -1721,10 +1722,6 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
         );
     });
-    group(ui, "Language", |ui| {
-        language_menu(app, ui);
-        worldview_menu(app, ui);
-    });
 }
 
 fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
@@ -2492,6 +2489,13 @@ fn plugin_tab(app: &mut RustGisApp, ui: &mut Ui, plugin: &str) {
             }
         });
     }
+}
+
+fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Language", |ui| {
+        language_menu(app, ui);
+        worldview_menu(app, ui);
+    });
 }
 
 fn help_tab(app: &mut RustGisApp, ui: &mut Ui) {
@@ -3533,7 +3537,7 @@ fn shown_name(ui: &Ui, l: crate::i18n::Lang) -> &'static str {
     if ui.ctx().fonts_mut(|f| f.has_glyphs(&regular(12.5), l.name())) { l.name() } else { l.english() }
 }
 
-/// Whose view of disputed borders the built-in countries and world outline show (View › Language).
+/// Whose view of disputed borders the built-in countries and world outline show (Settings › Language).
 fn worldview_menu(app: &mut RustGisApp, ui: &mut Ui) {
     use rustgis_engine::sample::Worldview;
     let name = |w: Worldview| match w {
@@ -3559,7 +3563,7 @@ fn worldview_menu(app: &mut RustGisApp, ui: &mut Ui) {
     });
 }
 
-/// The interface language picker (View › Language).
+/// The interface language picker (Settings › Language).
 fn language_menu(app: &mut RustGisApp, ui: &mut Ui) {
     let current = app.lang();
     let auto = app.ui.language == crate::i18n::AUTO;

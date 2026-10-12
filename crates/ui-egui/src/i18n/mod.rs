@@ -5,7 +5,7 @@
 //!
 //! The `language` preference is `auto` by default: the UI follows the system's languages
 //! (`RUSTGIS_LANGUAGE`, then the OS or browser preferences) when there is a catalog, else English.
-//! View › Language picks one by hand.
+//! Settings › Language picks one by hand.
 //!
 //! The language set follows GeoLibre's, minus scripts egui can't yet shape or lay out
 //! (Arabic, Persian, Hebrew, Hindi, Thai, Georgian).

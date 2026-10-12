@@ -21,7 +21,7 @@ fn every_tab_pane_and_dialog_renders() {
     for _ in 0..4 {
         h.step();
     }
-    for tab in ["Map", "Insert", "Analysis", "View", "Edit", "Share", "Plugins", "Help", "Feature Layer", "Labeling", "Data"] {
+    for tab in ["Map", "Insert", "Analysis", "View", "Edit", "Share", "Plugins", "Settings", "Help", "Feature Layer", "Labeling", "Data"] {
         h.state_mut().ui.tab = tab.into();
         h.step();
         h.step();

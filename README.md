@@ -55,7 +55,7 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 | **Share** | PNG export with labels and a scale bar at any DPI; export layers to GeoJSON/CSV |
 | **Productivity** | Command search (Ctrl+K), keyboard shortcuts, dark mode, Catalog pane with folder browsing |
 | **Plugins** | Sandboxed WebAssembly [plugins](docs/plugins.md) add commands and tools; browse and install them from [plugins.rustgis.app](https://plugins.rustgis.app) on the desktop, command line and web |
-| **Languages** | The interface in 15 languages (English, German, Spanish, French, Italian, Dutch, Portuguese, Russian, Turkish, Azerbaijani, Indonesian, Vietnamese, Chinese, Japanese, Korean), following the system language or chosen under View › Language |
+| **Languages** | The interface in 15 languages (English, German, Spanish, French, Italian, Dutch, Portuguese, Russian, Turkish, Azerbaijani, Indonesian, Vietnamese, Chinese, Japanese, Korean), following the system language or chosen under Settings › Language |
 
 The honest picture is in [ROADMAP.md](ROADMAP.md) and the generated [coverage report](docs/parity.md).
 

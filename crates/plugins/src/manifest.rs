@@ -32,6 +32,7 @@ pub const RESERVED_TABS: &[&str] = &[
     "Imagery",
     "Share",
     "Plugins",
+    "Settings",
     "Help",
     "Feature Layer",
     "Labeling",
