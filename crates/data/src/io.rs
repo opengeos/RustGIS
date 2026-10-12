@@ -584,10 +584,10 @@ pub(crate) fn text_type<'a>(vals: impl Iterator<Item = &'a str>) -> FieldType {
 }
 
 /// Types a dataset's Text columns from their values (see [`text_type`]), for readers whose
-/// formats hold every value as text (KML, GPX).
-pub(crate) fn type_text_columns(ds: &mut Dataset) {
+/// formats hold every value as text (KML, GPX); the columns named in `keep` stay text.
+pub(crate) fn type_text_columns(ds: &mut Dataset, keep: &[&str]) {
     for i in 0..ds.fields.len() {
-        if ds.fields.get(i).map(|f| f.ty) != Some(FieldType::Text) {
+        if ds.fields.get(i).is_none_or(|f| f.ty != FieldType::Text || keep.iter().any(|k| f.name.eq_ignore_ascii_case(k))) {
             continue;
         }
         let ty = text_type(ds.features.iter().filter_map(|f| match f.attrs.get(i) {

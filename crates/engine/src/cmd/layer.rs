@@ -439,6 +439,10 @@ fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
         return Err(format!("{path}: no such file"));
     }
     if rustgis_data::io::is_multi_layer_name(path) {
+        let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+        if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
+            return Err(format!("{path} is too large to open"));
+        }
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
         let layers: Vec<String> = rustgis_data::io::read_layers(path, &bytes).map_err(err)?.into_iter().map(|l| l.dataset.name).collect();
         return Ok(json!({"count": layers.len(), "layers": layers}));

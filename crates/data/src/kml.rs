@@ -15,6 +15,8 @@ use rustgis_geom::Coord;
 
 use crate::{DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
 
+/// Most extended-data columns (distinct names) a document gets.
+const MAX_KEYS: usize = 256;
 /// Deepest nesting of folders and multi-geometries followed.
 const MAX_DEPTH: usize = 64;
 
@@ -73,7 +75,8 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<Layer>> {
     let mut r = Reader {
         styles: HashMap::new(),
         maps: HashMap::new(),
-        inline: Vec::new(),
+        inline: HashMap::new(),
+        dropped_keys: 0,
         rows: Vec::new(),
         keys: Vec::new(),
         skipped: 0,
@@ -100,10 +103,12 @@ struct Reader {
     maps: HashMap<String, String>,
     /// Inline styles, given keys `#inline-1`, `#inline-2`… (equal ones share one; no document id
     /// holds a `#`, so they can't clash).
-    inline: Vec<Style>,
+    inline: HashMap<String, usize>,
     rows: Vec<Row>,
     /// Extended data keys, in the order first seen.
     keys: Vec<String>,
+    /// Extended data entries past the column cap.
+    dropped_keys: usize,
     skipped: usize,
     overlays: usize,
 }
@@ -158,7 +163,8 @@ fn coords(s: &str) -> Vec<Coord> {
             let mut it = t.split(',');
             let x = it.next()?.trim().parse::<f64>().ok()?;
             let y = it.next()?.trim().parse::<f64>().ok()?;
-            (x.is_finite() && y.is_finite()).then(|| Coord::new(x, y))
+            // Longitude/latitude, as KML always is.
+            ((-180.0..=180.0).contains(&x) && (-90.0..=90.0).contains(&y)).then(|| Coord::new(x, y))
         })
         .collect()
 }
@@ -251,13 +257,10 @@ impl Reader {
     fn style_for(&mut self, pm: &Node) -> Option<String> {
         if let Some(s) = child(pm, "Style") {
             let s = style_of(&s);
-            let i = match self.inline.iter().position(|x| *x == s) {
-                Some(i) => i,
-                None => {
-                    self.inline.push(s);
-                    self.inline.len() - 1
-                }
-            };
+            // Equal styles share a key, found by their description (not a scan of every style).
+            let sig = format!("{s:?}");
+            let n = self.inline.len();
+            let i = *self.inline.entry(sig).or_insert(n);
             // A key no document id can be (ids can't hold '#').
             let id = format!("#inline-{}", i + 1);
             self.styles.insert(id.clone(), s);
@@ -316,6 +319,11 @@ impl Reader {
                 };
                 if let Some((k, v)) = pair.filter(|(k, _)| !k.trim().is_empty()) {
                     if !self.keys.contains(&k) {
+                        // At most MAX_KEYS columns of extended data; the rest are dropped.
+                        if self.keys.len() >= MAX_KEYS {
+                            self.dropped_keys += 1;
+                            continue;
+                        }
                         self.keys.push(k.clone());
                     }
                     data.push((k, v));
@@ -391,13 +399,17 @@ impl Reader {
                 }
                 ds.push_next(Some(r.geometry.clone()), attrs);
             }
-            crate::io::type_text_columns(&mut ds);
+            // Extended data is typed; names, descriptions, folders and style ids stay text.
+            crate::io::type_text_columns(&mut ds, &["name", "description", "folder", "style"]);
             let mut report = ReadReport::default();
             // The notes go with the first layer only.
             if i == 0 {
                 report.skipped = self.skipped;
                 if self.skipped > 0 {
                     report.messages.push(format!("{name}: {} placemarks without a geometry RustGIS draws were skipped", self.skipped));
+                }
+                if self.dropped_keys > 0 {
+                    report.messages.push(format!("{name}: extended data past {MAX_KEYS} distinct names was left out"));
                 }
                 if self.overlays > 0 {
                     report.messages.push(format!("{name}: {} ground overlays (images) aren't shown", self.overlays));
@@ -494,6 +506,11 @@ mod tests {
         for n in (0..DOC.len()).step_by(53) {
             let _ = read("t.kml", &DOC.as_bytes()[..n]);
         }
+        // A placemark named with digits keeps its name as text; coordinates off the globe drop.
+        let named = r#"<kml><Placemark><name>42</name><Point><coordinates>1,2</coordinates></Point></Placemark><Placemark><name>x</name><Point><coordinates>500,2</coordinates></Point></Placemark></kml>"#;
+        let l = read("n.kml", named.as_bytes()).unwrap();
+        assert_eq!(l[0].dataset.value(0, 0), &Value::Text("42".into()));
+        assert_eq!(l[0].dataset.features.len(), 1);
         // An empty document has no layers.
         assert!(read("e.kml", b"<kml><Document/></kml>").unwrap().is_empty());
     }

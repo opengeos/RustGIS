@@ -130,7 +130,8 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
         if ds.features.is_empty() {
             continue;
         }
-        crate::io::type_text_columns(&mut ds);
+        // Elevations are typed; names, descriptions, symbols and times stay text.
+        crate::io::type_text_columns(&mut ds, &["name", "desc", "cmt", "sym", "type", "time", "number"]);
         out.push((ds, ReadReport::default()));
     }
     if let Some((_, report)) = out.first_mut() {
