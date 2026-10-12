@@ -145,7 +145,9 @@ pub fn approval_key(s: &Session, call: &ToolCall) -> Option<String> {
         return None;
     }
     // Object keys serialise sorted, so the same parameters always make the same key.
-    Some(format!("{key} {}", obj_arg(&call.args, "params")))
+    // Parameters that won't run make no key.
+    let params = params_arg(&call.args).ok()?;
+    Some(format!("{key} {params}"))
 }
 
 /// A one-line description of a call for the transcript and the approval prompt.
