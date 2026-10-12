@@ -141,12 +141,28 @@ pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
         }
         "shp" => {
             let (parts, left_out) = shapefile_parts(ds)?;
+            // Every part is written to a temporary file first and renamed into place only once all
+            // are written, the .shp last, so a failed write leaves the old Shapefile whole.
+            let mut written: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+            let staged = parts.iter().try_for_each(|(e, bytes)| {
+                let target = path.with_extension(e);
+                let tmp = temp_beside(&target)?;
+                written.push((tmp.clone(), target));
+                write_new(&tmp, bytes)
+            });
+            if let Err(e) = staged {
+                for (tmp, _) in &written {
+                    let _ = std::fs::remove_file(tmp);
+                }
+                return Err(e.into());
+            }
+            written.sort_by_key(|(_, target)| target.extension().is_some_and(|x| x == "shp"));
+            for (tmp, target) in &written {
+                std::fs::rename(tmp, target)?;
+            }
             // A spatial index left from an older file of the same name would no longer match.
             for stale in ["qix", "sbn", "sbx"] {
                 let _ = std::fs::remove_file(path.with_extension(stale));
-            }
-            for (e, bytes) in parts {
-                write_atomic(&path.with_extension(e), &bytes)?;
             }
             Ok(left_out)
         }
@@ -158,27 +174,41 @@ pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
     }
 }
 
-/// Writes through a temporary file that is synced and renamed into place, so an interrupted
-/// write never truncates an existing file. The temporary file is removed on failure.
-pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
+/// A new temporary name beside `path`, unique per call, so concurrent writes to the same target
+/// never share one.
+fn temp_beside(path: &Path) -> std::io::Result<std::path::PathBuf> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let Some(name) = path.file_name() else {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{} is not a file path", path.display())));
     };
-    // A unique temp name per write, so concurrent writes to the same target never share one,
-    // and `create_new` so an existing file or symlink at that name is never followed.
     let mut tmp_name = std::ffi::OsString::from(".");
     tmp_name.push(name);
     tmp_name.push(format!(".{}.{}.tmp", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)));
-    let tmp = path.with_file_name(tmp_name);
+    Ok(path.with_file_name(tmp_name))
+}
+
+/// Writes and syncs a new file (`create_new`, so an existing file or symlink is never followed);
+/// removes it on failure.
+fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
     let res = (|| {
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
         f.write_all(bytes)?;
-        f.sync_all()?;
-        std::fs::rename(&tmp, path)
+        f.sync_all()
     })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(path);
+    }
+    res
+}
+
+/// Writes through a temporary file that is synced and renamed into place, so an interrupted
+/// write never truncates an existing file. The temporary file is removed on failure.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = temp_beside(path)?;
+    write_new(&tmp, bytes)?;
+    let res = std::fs::rename(&tmp, path);
     if res.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -745,9 +775,12 @@ pub fn shapefile_parts(ds: &Dataset) -> Result<(Vec<(&'static str, Vec<u8>)>, us
             let value = match f.ty {
                 FieldType::Integer | FieldType::Double => {
                     let x = v.as_f64().filter(|x| {
-                        // Whatever doesn't fit the field is null rather than cut short.
+                        // Whatever doesn't fit the field is null rather than cut short; so is a
+                        // whole number past 2^53, which dBase's decimal text would hold only
+                        // rounded (it goes through f64).
                         let d = decimals.get(k).copied().unwrap_or(0);
-                        format!("{x:.d$}").len() <= if f.ty == FieldType::Integer { 18 } else { 24 }
+                        let exact = !matches!(v, Value::Int(i) if i.unsigned_abs() > 1 << 53);
+                        exact && format!("{x:.d$}").len() <= if f.ty == FieldType::Integer { 18 } else { 24 }
                     });
                     FieldValue::Numeric(if f.ty == FieldType::Integer { x.map(f64::round) } else { x })
                 }

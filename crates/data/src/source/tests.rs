@@ -465,6 +465,15 @@ fn writes_points_lines_kmz_and_zipped_shapefiles() {
     // A number too large for a dBase field is null rather than cut short.
     let (roads, _) = crate::io::read_path(&d.join("Roads.shp")).unwrap();
     assert_eq!(roads.value(0, 0), &Value::Null);
+    // A whole number past 2^53 would only be stored rounded, so it's null too.
+    let mut ids = Dataset::new("ids", GeometryType::Point, vec![Field::new("id", FieldType::Integer)]);
+    ids.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Int((1 << 53) + 1)]);
+    ids.push(Some(Geometry::Point(Coord::new(1.0, 1.0))), vec![Value::Int(1 << 52)]);
+    crate::io::write_path(&ids, &d.join("ids.shp")).unwrap();
+    let (back, _) = crate::io::read_path(&d.join("ids.shp")).unwrap();
+    assert_eq!((back.value(0, 0), back.value(1, 0)), (&Value::Null, &Value::Int(1 << 52)));
+    // No temporary files are left beside the outputs.
+    assert!(std::fs::read_dir(&d).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
     // KMZ: the KML zipped as doc.kml.
     let (kmz, left_out) = crate::io::write_bytes(&pts, "kmz").unwrap();
     assert_eq!(left_out, 0);

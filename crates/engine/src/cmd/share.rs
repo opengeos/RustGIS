@@ -81,7 +81,7 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     // FlatGeobuf, KML, GPX and Shapefile hold features with geometry only (a Shapefile, only
     // geometry it can draw).
     if left_out > 0 {
-        s.notify(format!("{path}: {left_out} features the format can't hold (without geometry) were left out"), false);
+        s.notify(format!("{path}: {left_out} features without drawable geometry were left out"), false);
     }
     s.notify(format!("Exported {path}"), false);
     Ok(json!({"path": path, "features": written, "leftOut": left_out}))

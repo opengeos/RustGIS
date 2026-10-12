@@ -423,6 +423,12 @@ pub fn write(ds: &crate::Dataset, path: &Path) -> Result<()> {
         build(&conn, ds)?;
         conn.close().map_err(|(_, e)| err(e))?;
         std::fs::rename(&tmp, path)?;
+        // The old file's journal or write-ahead log would be replayed against the new one.
+        for side in ["-wal", "-shm", "-journal"] {
+            let mut p = path.as_os_str().to_owned();
+            p.push(side);
+            let _ = std::fs::remove_file(std::path::PathBuf::from(p));
+        }
         Ok(())
     })();
     if res.is_err() {
