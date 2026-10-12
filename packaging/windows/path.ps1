@@ -7,11 +7,13 @@ $ErrorActionPreference = 'Stop'
 $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
 try {
   $old = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+  # Keep the value's type (REG_SZ or REG_EXPAND_SZ); a new PATH is REG_EXPAND_SZ, as Windows makes it.
+  $kind = if ($key.GetValueNames() -contains 'Path') { $key.GetValueKind('Path') } else { 'ExpandString' }
   $parts = @($old -split ';' | Where-Object { $_ -and ($_.TrimEnd('\') -ne $Folder.TrimEnd('\')) })
   if ($Action -eq 'add') { $parts += $Folder }
   $new = $parts -join ';'
   if ($new -ne $old) {
-    $key.SetValue('Path', $new, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    $key.SetValue('Path', $new, $kind)
   }
 } finally {
   $key.Close()

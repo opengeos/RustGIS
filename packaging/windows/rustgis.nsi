@@ -72,6 +72,8 @@ Section "Install"
   File /oname=$PLUGINSDIR\path.ps1 "${STAGE}\path.ps1"
   nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\path.ps1" add "$INSTDIR"'
   Pop $0
+  StrCmp $0 0 +2
+    MessageBox MB_OK|MB_ICONEXCLAMATION "${APP} is installed, but rustgis-cli could not be added to your PATH ($0). Run it from $INSTDIR instead." /SD IDOK
   !insertmacro RefreshEnvironment
 
   ; Projects open in RustGIS; GeoJSON lists it under Open with.
@@ -106,6 +108,8 @@ Section "Uninstall"
   File /oname=$PLUGINSDIR\path.ps1 "${STAGE}\path.ps1"
   nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\path.ps1" remove "$INSTDIR"'
   Pop $0
+  StrCmp $0 0 +2
+    MessageBox MB_OK|MB_ICONEXCLAMATION "$INSTDIR could not be removed from your PATH ($0). Remove it in Settings › System › About › Advanced system settings › Environment Variables." /SD IDOK
   !insertmacro RefreshEnvironment
 
   ; Only the associations this installer made: another program may own .geojson.

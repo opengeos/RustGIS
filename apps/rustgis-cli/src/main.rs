@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH] [--at X,Y]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]"
+        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]"
     );
     ExitCode::from(2)
 }
@@ -266,16 +266,20 @@ fn main() -> ExitCode {
             // desktop entries.
             let out = args.get(1).filter(|a| !a.starts_with("--")).ok_or("logo needs <out.png> first")?;
             let lower = out.to_ascii_lowercase();
-            if lower.ends_with(".ico") {
-                let ico = rustgis_engine::render::logo::ico().ok_or("could not draw the logo")?;
-                std::fs::write(out, ico).map_err(|e| format!("{out}: {e}"))?;
-                return Ok(());
-            }
             let size = match opt(&args, "--size") {
                 Some(v) => v.parse::<u32>().map_err(|_| format!("--size {v}: expected a whole number"))?,
                 None => 512,
             }
             .clamp(16, 1024);
+            if !lower.ends_with(".bmp") && (opt(&args, "--canvas").is_some() || opt(&args, "--at").is_some()) {
+                return Err("--canvas and --at apply to a .bmp only".into());
+            }
+            if lower.ends_with(".ico") {
+                // Every icon size from 16 to 256 px: --size does not apply.
+                let ico = rustgis_engine::render::logo::ico().ok_or("could not draw the logo")?;
+                std::fs::write(out, ico).map_err(|e| format!("{out}: {e}"))?;
+                return Ok(());
+            }
             if lower.ends_with(".bmp") {
                 // An installer wizard image: the logo on a white canvas (--canvas WxH, default
                 // the logo's size), at --at X,Y (default centred).
