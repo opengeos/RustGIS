@@ -161,9 +161,14 @@ pub fn open_shared(file_name: &str, bytes: std::sync::Arc<Vec<u8>>, layer: Optio
     match ext(path).as_str() {
         "parquet" | "geoparquet" => Ok(Box::new(parquet::ParquetSource::open_shared(bytes, &name)?)),
         "fgb" => Ok(Box::new(fgb::FgbSource::open_shared(bytes, &name)?)),
+        // A GeoPackage held in memory is read with the pure-Rust reader (the browser has no SQLite,
+        // and on the desktop it spares a temporary copy per table); on the desktop, SQLite reads
+        // what that reader can't (UTF-16, WITHOUT ROWID tables).
         #[cfg(not(target_arch = "wasm32"))]
-        "gpkg" => Ok(Box::new(gpkg::GpkgSource::open_bytes(bytes.as_ref(), layer)?)),
-        // The browser has no SQLite: its GeoPackages are read with the pure-Rust reader.
+        "gpkg" => match gpkg_mem::GpkgMemSource::open_shared(bytes.clone(), layer) {
+            Ok(s) => Ok(Box::new(s)),
+            Err(_) => Ok(Box::new(gpkg::GpkgSource::open_bytes(bytes.as_ref(), layer)?)),
+        },
         #[cfg(target_arch = "wasm32")]
         "gpkg" => Ok(Box::new(gpkg_mem::GpkgMemSource::open_shared(bytes, layer)?)),
         other => {

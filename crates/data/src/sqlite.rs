@@ -184,7 +184,8 @@ impl<B: AsRef<[u8]>> Db<B> {
             let k = min_local + (size - min_local) % (u - 4);
             if k <= max_local { k } else { min_local }
         };
-        let mut out = Vec::with_capacity(size);
+        // Grown as pages are read: a forged size can't make a large allocation up front.
+        let mut out = Vec::with_capacity(size.min(local + 4096));
         out.extend_from_slice(page.get(at..at + local).ok_or_else(|| bad("a cell past its page"))?);
         if local < size {
             let mut next = be32(page, at + local).ok_or_else(|| bad("overflow pointer"))?;

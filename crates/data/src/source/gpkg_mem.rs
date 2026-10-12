@@ -172,9 +172,28 @@ impl GpkgMemSource {
         };
         src.info.extent = src.reproject.extent_to_lonlat(&native);
         if src.info.geometry_type == GeometryType::None {
-            src.info.geometry_type = super::peek_kind(&src);
+            src.info.geometry_type = src.peek_kind();
         }
         Ok(src)
+    }
+
+    /// The geometry type of a table declared as plain `GEOMETRY`, from its first few geometries
+    /// (the scan stops there).
+    fn peek_kind(&self) -> GeometryType {
+        let mut kind = GeometryType::None;
+        let mut looked = 0;
+        let _ = self.db.rows(&self.table, |_, r| {
+            looked += 1;
+            if let Some(Val::Blob(b)) = r.get(self.geom_col)
+                && let Some((_, body)) = super::gpkg_blob::split_blob(b)
+                && let Some(g) = wkb::decode(body)
+            {
+                kind = g.kind();
+                return ControlFlow::Break(());
+            }
+            if looked >= 16 { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
+        });
+        kind
     }
 
     /// The union of the envelopes in the geometry headers (native coordinates).

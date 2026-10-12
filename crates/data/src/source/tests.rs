@@ -213,7 +213,8 @@ fn geopackage_reprojects_and_uses_its_rtree() {
     let all = src.read(&Request::all()).unwrap();
     let ok = src.info().fields.iter().position(|f| f.name == "ok").unwrap();
     assert!(all.features.iter().any(|f| f.attrs[ok] == Value::Bool(true)));
-    check(open_bytes("grid.gpkg", std::fs::read(&p).unwrap(), None).unwrap().as_ref(), true);
+    // Held in memory, it's read with the pure-Rust reader (a scan, no R-tree).
+    check(open_bytes("grid.gpkg", std::fs::read(&p).unwrap(), None).unwrap().as_ref(), false);
 
     let p2 = d.join("scan.gpkg");
     write_gpkg(&p2, false);
