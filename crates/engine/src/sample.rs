@@ -10,13 +10,13 @@ pub use rustgis_render::sample_data::{CITIES, COUNTRIES, COUNTRIES_CHN, LAKES, R
 
 /// The worldview this system calls for: `RUSTGIS_WORLDVIEW` (`default` or `china`) when set, else
 /// China when the system's time zone or first locale is mainland China's. Nothing is looked up
-/// over the network.
+/// over the network. Test builds of the engine don't look at the system.
 pub fn system_worldview() -> Worldview {
-    if cfg!(test) {
-        return Worldview::Default;
-    }
     if let Some(w) = std::env::var("RUSTGIS_WORLDVIEW").ok().and_then(|v| Worldview::from_code(&v)) {
         return w;
+    }
+    if cfg!(test) {
+        return Worldview::Default;
     }
     let tz = iana_time_zone::get_timezone().ok();
     let locales: Vec<String> = sys_locale::get_locales().take(4).collect();
@@ -34,16 +34,29 @@ fn cam(lon: f64, lat: f64, res: f64) -> Camera {
     Camera { center: lonlat_to_merc(Coord::new(lon, lat)), res }
 }
 
-/// Puts the built-in countries in the current worldview into the layer named `Countries` (an
-/// untouched sample project's, after the worldview changed). Returns whether a layer was updated.
-pub fn refresh_countries(s: &mut crate::Session) -> bool {
-    let Ok((ds, _)) = read_geojson(countries(), "Countries") else {
+/// The built-in countries in a worldview.
+fn countries_in(w: Worldview) -> &'static str {
+    match w {
+        Worldview::Default => COUNTRIES,
+        Worldview::China => COUNTRIES_CHN,
+    }
+}
+
+/// Swaps an untouched sample project's countries from worldview `from` to `to`: only in a project
+/// that is unsaved, unchanged and has nothing to undo, and only a layer named `Countries` holding
+/// exactly the built-in countries of `from`. Returns whether a layer was swapped.
+pub fn swap_countries(s: &mut crate::Session, from: Worldview, to: Worldview) -> bool {
+    if from == to || s.dirty || s.path.is_some() || s.can_undo() {
+        return false;
+    }
+    let read = |w| read_geojson(countries_in(w), "Countries").ok().map(|(ds, _)| ds);
+    let (Some(old), Some(new)) = (read(from), read(to)) else {
         return false;
     };
-    let Some(l) = s.map_mut().layers.iter_mut().find(|l| l.name == "Countries") else {
+    let Some(l) = s.map_mut().layers.iter_mut().find(|l| l.name == "Countries" && l.dataset.features == old.features) else {
         return false;
     };
-    l.dataset = ds;
+    l.dataset = new;
     l.selection.clear();
     l.touch_geometry();
     true

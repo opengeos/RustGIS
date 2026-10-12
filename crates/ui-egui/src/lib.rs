@@ -238,8 +238,6 @@ pub struct RustGisApp {
     extra_fonts: Vec<(String, std::sync::Arc<egui::FontData>, Option<rustgis_engine::render::fonts::CjkRegion>)>,
     /// The CJK region whose face was put first at the last font install.
     installed_region: Option<rustgis_engine::render::fonts::CjkRegion>,
-    /// The session holds the World Atlas sample: an untouched one follows worldview changes.
-    from_sample: bool,
     fonts_dirty: bool,
     fonts_requested: Vec<String>,
     /// Downloads that failed; cleared when a language is picked, which retries them.
@@ -274,7 +272,6 @@ impl RustGisApp {
             services: Services::default(),
             extra_fonts: Vec::new(),
             installed_region: None,
-            from_sample: false,
             fonts_dirty: false,
             fonts_requested: Vec::new(),
             fonts_failed: Vec::new(),
@@ -521,24 +518,23 @@ impl RustGisApp {
 
     /// The sample "World Atlas" project.
     pub fn with_sample() -> Self {
-        rustgis_engine::sample::apply_worldview(i18n::AUTO);
+        // Tests don't depend on the machine's time zone and locale.
+        rustgis_engine::sample::apply_worldview(if cfg!(test) { "default" } else { i18n::AUTO });
         let mut s = Session::new(Project::default());
         let _ = s.run("project.sample", &Value::Null);
         s.dirty = false;
-        let mut app = RustGisApp::new(s);
-        app.from_sample = true;
-        app
+        RustGisApp::new(s)
     }
 
     /// Applies the worldview preference; an untouched sample project's countries follow it.
     fn apply_worldview(&mut self) {
         use rustgis_engine::sample;
         let before = sample::worldview();
-        if sample::apply_worldview(&self.ui.worldview) != before {
-            if self.from_sample && !self.session.dirty {
-                sample::refresh_countries(&mut self.session);
-                self.session.dirty = false;
-            }
+        // Tests don't depend on the machine's time zone and locale.
+        let pref = if cfg!(test) && self.ui.worldview == i18n::AUTO { "default" } else { self.ui.worldview.as_str() };
+        let after = sample::apply_worldview(pref);
+        if after != before {
+            sample::swap_countries(&mut self.session, before, after);
             self.map.invalidate();
         }
     }
