@@ -1803,3 +1803,8 @@ Zoom To World	世界にズーム
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: 使用できるのは HTTPS のアドレス、またはこのコンピューターかネットワーク上の通常の HTTP のみです
 © OpenStreetMap contributors	© OpenStreetMap contributors
 ⌘K	⌘K
+The layer's file couldn't be read: {error}	レイヤーのファイルを読み込めませんでした: {error}
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}、その場で読み込み · 表示範囲の {matched} 件のフィーチャのうち {n} 件のサンプル（すべて表示するにはズームイン）· {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}、その場で読み込み · 表示範囲のフィーチャ {total} 件中 {n} 件 · {renderer}
+Load All Features	すべてのフィーチャを読み込む
+GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV または FlatGeobuf

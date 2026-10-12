@@ -3697,6 +3697,7 @@ dependencies = [
  "rustgis-geom",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]

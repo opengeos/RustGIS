@@ -1803,3 +1803,8 @@ Zoom To World	Zoom ke Dunia
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: hanya alamat HTTPS, atau HTTP biasa di komputer atau jaringan ini, yang diizinkan
 © OpenStreetMap contributors	© kontributor OpenStreetMap
 ⌘K	⌘K
+The layer's file couldn't be read: {error}	Berkas layer tidak dapat dibaca: {error}
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, dibaca di tempat · sampel {n} dari {matched} fitur dalam tampilan (perbesar untuk melihat semuanya) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, dibaca di tempat · {n} dari {total} fitur dalam tampilan · {renderer}
+Load All Features	Muat semua fitur
+GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV atau FlatGeobuf

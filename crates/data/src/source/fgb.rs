@@ -261,3 +261,52 @@ impl PropertyProcessor for Props<'_> {
         Ok(false)
     }
 }
+
+/// Writes a dataset as FlatGeobuf, with a spatial index (WGS 84 longitude/latitude).
+pub fn write(ds: &crate::Dataset) -> Result<Vec<u8>> {
+    use flatgeobuf::geozero::wkb::Wkb;
+    use flatgeobuf::{FgbCrs, FgbWriter, FgbWriterOptions, GeometryType as G};
+    let ty = match ds.geometry_type {
+        GeometryType::Point => G::Unknown,
+        GeometryType::Polyline => G::MultiLineString,
+        GeometryType::Polygon => G::MultiPolygon,
+        GeometryType::None => return Err(DataError::Unsupported("a table without geometry as FlatGeobuf".into())),
+    };
+    let options = FgbWriterOptions { crs: FgbCrs { code: 4326, ..Default::default() }, ..Default::default() };
+    let mut w = FgbWriter::create_with_options(&ds.name, ty, options).map_err(err)?;
+    for f in &ds.fields {
+        let t = match f.ty {
+            FieldType::Integer => ColumnType::Long,
+            FieldType::Double => ColumnType::Double,
+            FieldType::Boolean => ColumnType::Bool,
+            FieldType::Text => ColumnType::String,
+        };
+        w.add_column(&f.name, t, |_, c| c.nullable = true);
+    }
+    for feat in &ds.features {
+        let Some(g) = &feat.geometry else { continue };
+        let mut failed = None;
+        w.add_feature_geom(Wkb(wkb::encode(g)), |out| {
+            use flatgeobuf::geozero::PropertyProcessor;
+            for (i, (f, v)) in ds.fields.iter().zip(&feat.attrs).enumerate() {
+                let r = match v {
+                    Value::Null => continue,
+                    Value::Int(x) => out.property(i, &f.name, &ColumnValue::Long(*x)),
+                    Value::Float(x) => out.property(i, &f.name, &ColumnValue::Double(*x)),
+                    Value::Bool(x) => out.property(i, &f.name, &ColumnValue::Bool(*x)),
+                    Value::Text(x) => out.property(i, &f.name, &ColumnValue::String(x)),
+                };
+                if let Err(e) = r {
+                    failed = Some(e.to_string());
+                }
+            }
+        })
+        .map_err(|e| DataError::Format(format!("FlatGeobuf: {e}")))?;
+        if let Some(e) = failed {
+            return Err(DataError::Format(format!("FlatGeobuf: {e}")));
+        }
+    }
+    let mut out = Vec::new();
+    w.write(&mut out).map_err(err)?;
+    Ok(out)
+}

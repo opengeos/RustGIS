@@ -267,6 +267,14 @@ pub(crate) struct PendingRun {
     pub millis: u64,
 }
 
+/// Commands that change a layer's features or fields, refused on streamed layers (whose features
+/// are a window read again from the file as the view moves, so edits would be lost).
+fn edits_features(id: &str) -> bool {
+    const SETTINGS: &[&str] =
+        &["edit.enable", "edit.settings", "edit.status", "edit.template", "edit.snapping", "edit.snap", "edit.tools", "edit.copy"];
+    id.starts_with("edit.") && !SETTINGS.contains(&id)
+}
+
 impl Session {
     pub fn new(project: Project) -> Self {
         // Cheap: the suite's tools load the first time a tool list is needed.
@@ -340,6 +348,12 @@ impl Session {
             return Err(format!("{}: {why}", spec.label));
         }
         let (run, mutates, label) = (spec.run, spec.mutates, spec.label);
+        if mutates && edits_features(id) {
+            let target = named.or(active).and_then(|l| self.map().layer(l));
+            if let Some(l) = target.filter(|l| l.is_streamed()) {
+                return Err(format!("{label}: {} is read in place from its file; Load All Features (layer.loadAll) to edit it", l.name));
+            }
+        }
         self.guarded(label, mutates, |s| run(s, params))
     }
 

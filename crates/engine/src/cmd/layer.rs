@@ -11,7 +11,9 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("layer.addData", "Add Data", "Map › Layer", add_data).params(r#"{"path": string, "name"?: string}"#),
+        C::new("layer.addData", "Add Data", "Map › Layer", add_data)
+            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage table", "stream"?: bool}"#),
+        C::new("layer.loadAll", "Load All Features", "Contents", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addDataText", "Add Data (from text)", "Map › Layer", add_data_text).params(r#"{"fileName": "name.geojson|.csv", "text": string}"#),
         C::new("layer.addSample", "Add Sample Data", "Map › Layer › Add Data", add_sample).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
         C::new("layer.remove", "Remove", "Contents", remove).key("Delete").when(need_layer).params(r#"{"layer"?: name|id}"#),
@@ -258,8 +260,140 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if path.to_ascii_lowercase().ends_with(".rgislyr") {
         return add_layer_file(s, path);
     }
+    if rustgis_data::source::is_source_name(path) {
+        return add_source(s, p, Origin::Path(path));
+    }
     let read = rustgis_data::io::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
     add_read(s, p, read)
+}
+
+/// Where a source file is: on disk, or uploaded (its name and bytes).
+pub(crate) enum Origin<'a> {
+    Path(&'a str),
+    Bytes(&'a str, Vec<u8>),
+}
+
+/// Most GeoPackage tables added at once.
+const MAX_TABLES: usize = 32;
+
+/// Adds a GeoPackage, GeoParquet or FlatGeobuf file: each feature table becomes a layer. Large
+/// sources (or any, with `"stream": true`) are streamed, read in place a view at a time; smaller
+/// ones are loaded whole, so they can be edited.
+pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdResult {
+    use rustgis_data::source;
+    let label = match &origin {
+        Origin::Path(p) | Origin::Bytes(p, _) => p.to_string(),
+    };
+    let err = |e: rustgis_data::DataError| format!("{label}: {e}");
+    let tables: Vec<Option<String>> = match (ps(p, "layer").map(str::trim).filter(|t| !t.is_empty()), &origin) {
+        (Some(t), _) => vec![Some(t.to_string())],
+        (None, Origin::Path(path)) if path.to_ascii_lowercase().ends_with(".gpkg") => {
+            let all = source::layers(Path::new(path)).map_err(err)?;
+            if all.len() > MAX_TABLES {
+                s.notify(format!("{label}: adding the first {MAX_TABLES} of {} tables", all.len()), false);
+            }
+            all.into_iter().take(MAX_TABLES).map(Some).collect()
+        }
+        _ => vec![None],
+    };
+    if tables.is_empty() {
+        return Err(format!("{label}: no feature tables"));
+    }
+    let empty_before = s.map().layers.is_empty();
+    let mut ids = Vec::new();
+    let mut streamed = false;
+    let mut features = 0u64;
+    for table in tables {
+        let src = match &origin {
+            Origin::Path(path) => source::open_path(Path::new(path), table.as_deref()),
+            Origin::Bytes(name, bytes) => source::open_bytes(name, bytes.clone(), table.as_deref()),
+        }
+        .map_err(err)?;
+        let info = src.info().clone();
+        let stream = b(p, "stream").unwrap_or(info.count.is_none_or(|c| c > rustgis_map::source::STREAM_ABOVE));
+        // A name given applies to a single table.
+        let name = match ps(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
+            Some(n) if ids.is_empty() => n.to_string(),
+            _ => info.name.clone(),
+        };
+        if stream {
+            let layer = match &origin {
+                Origin::Path(path) => {
+                    let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
+                    rustgis_map::source::SourceLayer::from_path(full, table.clone(), src)
+                }
+                Origin::Bytes(file, bytes) => rustgis_map::source::SourceLayer::from_bytes(*file, bytes.clone(), table.clone(), src),
+            };
+            let unique = unique_name(s, &name);
+            for n in &info.notes {
+                s.notify(format!("{unique}: {n}"), false);
+            }
+            let id = s.map_mut().add_streamed(unique.clone(), layer);
+            s.active_layer = Some(id);
+            ids.push(id);
+            streamed = true;
+            features += info.count.unwrap_or(0);
+            s.notify(
+                format!(
+                    "{unique}: {} features, read in place a view at a time (Load All Features loads them into memory)",
+                    info.count.map(|c| c.to_string()).unwrap_or_else(|| "many".into())
+                ),
+                false,
+            );
+        } else {
+            let (mut ds, report) = source::materialize(src.as_ref()).map_err(err)?;
+            ds.name = name;
+            ds.source = Some(label.clone());
+            features += ds.features.len() as u64;
+            let id = add_dataset(s, ds);
+            ids.push(id);
+            for m in report.messages {
+                s.notify(m, false);
+            }
+        }
+    }
+    if empty_before {
+        let e = ids.iter().filter_map(|id| s.map().layer(*id)).fold(rustgis_geom::Extent::EMPTY, |e, l| e.union(&l.extent()));
+        if !e.is_empty() {
+            s.zoom_to(&e);
+        }
+    }
+    let first = ids.first().copied();
+    Ok(json!({"layer": first, "layers": ids, "features": features, "streamed": streamed}))
+}
+
+fn unique_name(s: &Session, base: &str) -> String {
+    let mut name = base.to_string();
+    let mut i = 1;
+    while s.map().layer_by_name(&name).is_some() {
+        i += 1;
+        name = format!("{base} ({i})");
+    }
+    name
+}
+
+/// The active (or named) layer is streamed.
+fn need_streamed(s: &Session) -> Option<&'static str> {
+    match s.active_layer.and_then(|id| s.map().layer(id)) {
+        Some(l) if l.is_streamed() => None,
+        Some(_) => Some("this layer's features are already in memory"),
+        None => Some("select a layer in the Contents pane first"),
+    }
+}
+
+/// Loads a streamed layer's features into memory, so it can be edited like any other layer.
+fn load_all(s: &mut Session, p: &Value) -> CmdResult {
+    let id = s.layer_id(p)?;
+    let l = s.map().layer(id).ok_or("no such layer")?;
+    let ds = l.load_all()?;
+    let n = ds.features.len();
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    l.dataset = ds;
+    l.dataset.windowed = false;
+    l.source = None;
+    l.selection.clear();
+    l.touch_geometry();
+    Ok(json!({"layer": id, "features": n}))
 }
 
 /// Adds a layer file: a layer with its data, symbology and labels.

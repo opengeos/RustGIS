@@ -1,5 +1,5 @@
 use super::*;
-use crate::{FieldType, Geometry, Value, wkb};
+use crate::{Dataset, Field, FieldType, Geometry, Value, wkb};
 use rustgis_geom::{Coord, lonlat_to_merc};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -233,6 +233,26 @@ fn an_unknown_coordinate_system_is_reported() {
     assert!(src.info().notes.iter().any(|n| n.contains("EPSG:9999999")), "{:?}", src.info().notes);
     let (_, report) = materialize(src.as_ref()).unwrap();
     assert!(report.messages.iter().any(|m| m.contains("read as longitude/latitude")), "{:?}", report.messages);
+}
+
+#[test]
+fn flatgeobuf_round_trips_a_dataset() {
+    let mut ds = Dataset::new("mixed", GeometryType::Polygon, vec![Field::new("n", FieldType::Integer), Field::new("s", FieldType::Text)]);
+    ds.fields.push(Field::new("ok", FieldType::Boolean));
+    ds.fields.push(Field::new("x", FieldType::Double));
+    let sq = |x: f64| vec![vec![Coord::new(x, 0.0), Coord::new(x + 1.0, 0.0), Coord::new(x + 1.0, 1.0), Coord::new(x, 0.0)]];
+    ds.push(Some(Geometry::Polygon(vec![sq(0.0)])), vec![Value::Int(7), Value::Text("a".into()), Value::Bool(true), Value::Float(1.5)]);
+    ds.push(Some(Geometry::Polygon(vec![sq(5.0), sq(9.0)])), vec![Value::Null, Value::Text("b".into()), Value::Null, Value::Null]);
+    let p = dir().join("rt.fgb");
+    crate::io::write_path(&ds, &p).unwrap();
+    let (back, _) = crate::io::read_path(&p).unwrap();
+    assert_eq!(back.features.len(), 2);
+    assert_eq!(back.fields.iter().map(|f| f.ty).collect::<Vec<_>>(), ds.fields.iter().map(|f| f.ty).collect::<Vec<_>>());
+    let a = back.features.iter().find(|f| f.attrs[1] == Value::Text("a".into())).unwrap();
+    assert_eq!(a.attrs, ds.features[0].attrs);
+    let b = back.features.iter().find(|f| f.attrs[1] == Value::Text("b".into())).unwrap();
+    assert_eq!(b.attrs[0], Value::Null);
+    assert!(matches!(&b.geometry, Some(Geometry::Polygon(p)) if p.len() == 2));
 }
 
 #[test]

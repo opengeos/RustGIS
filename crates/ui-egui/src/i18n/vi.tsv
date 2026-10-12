@@ -1803,3 +1803,8 @@ Zoom To World	Thu phóng tới thế giới
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: chỉ cho phép địa chỉ HTTPS, hoặc HTTP thường trên máy tính hay mạng này
 © OpenStreetMap contributors	© Những người đóng góp OpenStreetMap
 ⌘K	⌘K
+The layer's file couldn't be read: {error}	Không thể đọc tệp của lớp: {error}
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, đọc tại chỗ · mẫu gồm {n} trong số {matched} đối tượng trong khung nhìn (phóng to để xem tất cả) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, đọc tại chỗ · {n} trên {total} đối tượng trong khung nhìn · {renderer}
+Load All Features	Tải tất cả đối tượng
+GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV hoặc FlatGeobuf

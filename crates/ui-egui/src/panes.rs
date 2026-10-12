@@ -277,7 +277,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
     }
     x += 24.0;
     let out_of_range = !l.in_scale_range(scale);
-    let missing = l.raster.as_ref().is_some_and(|r| r.data.is_none());
+    let missing = l.raster.as_ref().is_some_and(|r| r.data.is_none()) || l.source.as_ref().is_some_and(|s| s.error.is_some());
     let color = if missing {
         t.red
     } else if !l.visible || out_of_range {
@@ -318,14 +318,45 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
             ),
             None => crate::i18n::fmt("The raster's data couldn't be read: {path}", &[("path", rl.path.as_deref().unwrap_or(""))]),
         },
-        None => crate::i18n::fmt(
-            "{type} · {n} features · {renderer}",
-            &[
-                ("type", tl!(l.geometry_type().label())),
-                ("n", &l.dataset.features.len().to_string()),
-                ("renderer", tl!(l.renderer.kind_label())),
-            ],
-        ),
+        None => match &l.source {
+            Some(src) if src.error.is_some() => {
+                crate::i18n::fmt("The layer's file couldn't be read: {error}", &[("error", src.error.as_deref().unwrap_or(""))])
+            }
+            Some(src) => {
+                let format = src.info().map(|i| i.format).unwrap_or("");
+                let total = src.info().and_then(|i| i.count).map(|c| c.to_string()).unwrap_or_else(|| "?".into());
+                match src.sampled() {
+                    Some((n, matched)) => crate::i18n::fmt(
+                        "{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}",
+                        &[
+                            ("type", tl!(l.geometry_type().label())),
+                            ("format", format),
+                            ("n", &n.to_string()),
+                            ("matched", &matched.to_string()),
+                            ("renderer", tl!(l.renderer.kind_label())),
+                        ],
+                    ),
+                    None => crate::i18n::fmt(
+                        "{type} · {format}, read in place · {n} of {total} features in view · {renderer}",
+                        &[
+                            ("type", tl!(l.geometry_type().label())),
+                            ("format", format),
+                            ("n", &l.dataset.features.len().to_string()),
+                            ("total", &total),
+                            ("renderer", tl!(l.renderer.kind_label())),
+                        ],
+                    ),
+                }
+            }
+            None => crate::i18n::fmt(
+                "{type} · {n} features · {renderer}",
+                &[
+                    ("type", tl!(l.geometry_type().label())),
+                    ("n", &l.dataset.features.len().to_string()),
+                    ("renderer", tl!(l.renderer.kind_label())),
+                ],
+            ),
+        },
     };
     let resp = resp.on_hover_text(tip);
     resp.context_menu(|ui| {
@@ -348,6 +379,10 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
         }
         if !l.is_raster() && ui.button(tl!(if l.labels.enabled { "Turn Labels Off" } else { "Label" })).clicked() {
             let _ = app.run("labels.enable", json!({"layer": l.id}));
+            ui.close();
+        }
+        if l.is_streamed() && ui.button(tl!("Load All Features")).clicked() {
+            let _ = app.run("layer.loadAll", json!({"layer": l.id}));
             ui.close();
         }
         ui.separator();

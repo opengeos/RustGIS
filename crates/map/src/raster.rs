@@ -78,7 +78,7 @@ impl RasterLayer {
     }
 }
 
-mod b64 {
+pub(crate) mod b64 {
     use std::sync::Arc;
 
     use base64::Engine;

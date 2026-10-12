@@ -22,6 +22,8 @@ struct Key {
     draft: bool,
     /// The tile cache's generation (0 for a map without tile layers).
     tiles: u64,
+    /// Streamed layers' reads finished so far: a new one draws the map again.
+    sources: u64,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -276,12 +278,15 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         dark: t.dark,
         draft,
         tiles: 0,
+        sources: rustgis_engine::map::source::generation(),
     };
     // Tiles arriving draw the map again, at most a few times a second.
     static WAKER: std::sync::Once = std::sync::Once::new();
     WAKER.call_once(|| {
         let ctx = ui.ctx().clone();
         rustgis_engine::render::rustgis_tiles::cache::set_waker(move || ctx.request_repaint());
+        let ctx = ui.ctx().clone();
+        rustgis_engine::map::source::set_waker(move || ctx.request_repaint());
     });
     let mut key = key;
     if !app.session.map().tiles.is_empty() {

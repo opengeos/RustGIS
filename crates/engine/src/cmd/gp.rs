@@ -162,11 +162,7 @@ pub fn external_start(s: &mut Session, tool: &str, params: &Value) -> Result<Ext
             .filter(|t| rustgis_analysis::external_source(t) == Some(rustgis_geolibre::SOURCE))
             .ok_or_else(|| format!("no GeoLibre tool '{tool}'"))?;
         let params = rustgis_analysis::resolve_params(spec, params)?;
-        let job = rustgis_geolibre::prepare(
-            spec,
-            &MapInputs(s.map(), &s.project.tables, env_inputs(s.map(), &s.project.gp_env, &params)?),
-            &params,
-        )?;
+        let job = rustgis_geolibre::prepare(spec, &map_inputs(s, &params)?, &params)?;
         s.next_pending = s.next_pending.wrapping_add(1);
         let id = s.next_pending;
         let run = ExternalRun { id, tool: job.tool.clone(), argv: job.argv("/work"), files: job.files.clone() };
@@ -222,16 +218,57 @@ fn finish(s: &mut Session, p: &Value) -> CmdResult {
     apply(s, r.tool, r.params, r.result, r.millis)
 }
 
-struct MapInputs<'a>(&'a rustgis_map::Map, &'a [Dataset], std::collections::HashMap<String, Vec<usize>>);
+struct MapInputs<'a>(
+    &'a rustgis_map::Map,
+    &'a [Dataset],
+    std::collections::HashMap<String, Vec<usize>>,
+    /// Streamed layers the tool reads, loaded whole (by lowercase name).
+    std::collections::HashMap<String, Dataset>,
+);
+
+/// A tool's inputs on the active map.
+fn map_inputs<'a>(s: &'a Session, params: &Value) -> Result<MapInputs<'a>, String> {
+    let full = streamed_inputs(s.map(), params)?;
+    let rows = env_inputs(s.map(), &full, &s.project.gp_env, params)?;
+    Ok(MapInputs(s.map(), &s.project.tables, rows, full))
+}
+
+/// Every feature of the streamed layers a tool's parameters name (those without a selection,
+/// whose rows the tool reads from the window in view): a tool runs on all the data, not on what
+/// the view happened to read.
+fn streamed_inputs(map: &rustgis_map::Map, params: &Value) -> Result<std::collections::HashMap<String, Dataset>, String> {
+    fn names<'v>(v: &'v Value, out: &mut Vec<&'v str>) {
+        match v {
+            Value::String(s) => out.push(s),
+            Value::Array(a) => a.iter().for_each(|x| names(x, out)),
+            Value::Object(o) => o.values().for_each(|x| names(x, out)),
+            _ => {}
+        }
+    }
+    let mut named = Vec::new();
+    names(params, &mut named);
+    let mut full = std::collections::HashMap::new();
+    for n in named {
+        let key = n.to_ascii_lowercase();
+        if full.contains_key(&key) {
+            continue;
+        }
+        if let Some(l) = map.layer_by_name(n).filter(|l| l.is_streamed() && l.selection.is_empty()) {
+            full.insert(key, l.load_all().map_err(|e| format!("{}: {e}", l.name))?);
+        }
+    }
+    Ok(full)
+}
 
 /// The environment's rows for a run, refusing a run whose main input has no features inside the
 /// extent (which would otherwise process everything, or nothing).
 fn env_inputs(
     map: &rustgis_map::Map,
+    full: &std::collections::HashMap<String, Dataset>,
     env: &crate::project::GpEnvironment,
     params: &Value,
 ) -> Result<std::collections::HashMap<String, Vec<usize>>, String> {
-    let rows = env_rows(map, env, params);
+    let rows = env_rows(map, full, env, params);
     if let Some((name, v)) = rows.iter().next()
         && v.is_empty()
     {
@@ -242,7 +279,12 @@ fn env_inputs(
 
 /// The rows of the tool's main input (its `input` layer) inside the environment's extent, when
 /// that layer has no selection. Overlay layers (clip, erase, join targets…) stay whole.
-fn env_rows(map: &rustgis_map::Map, env: &crate::project::GpEnvironment, params: &Value) -> std::collections::HashMap<String, Vec<usize>> {
+fn env_rows(
+    map: &rustgis_map::Map,
+    full: &std::collections::HashMap<String, Dataset>,
+    env: &crate::project::GpEnvironment,
+    params: &Value,
+) -> std::collections::HashMap<String, Vec<usize>> {
     let Some(e) = env.extent else { return std::collections::HashMap::new() };
     let Some(input) = params.get("input").and_then(Value::as_str) else { return std::collections::HashMap::new() };
     // The layer the name finds (the first of that name), as the tool will.
@@ -250,8 +292,8 @@ fn env_rows(map: &rustgis_map::Map, env: &crate::project::GpEnvironment, params:
         .into_iter()
         .filter(|l| !l.is_raster() && l.selection.is_empty())
         .map(|l| {
-            let rows: Vec<usize> = l
-                .dataset
+            let ds = full.get(&l.name.to_ascii_lowercase()).unwrap_or(&l.dataset);
+            let rows: Vec<usize> = ds
                 .features
                 .iter()
                 .enumerate()
@@ -265,7 +307,10 @@ fn env_rows(map: &rustgis_map::Map, env: &crate::project::GpEnvironment, params:
 
 impl Inputs for MapInputs<'_> {
     fn dataset(&self, layer: &str) -> Option<&Dataset> {
-        self.0.layer_by_name(layer).map(|l| &l.dataset).or_else(|| self.1.iter().find(|t| t.name.eq_ignore_ascii_case(layer)))
+        self.3
+            .get(&layer.to_ascii_lowercase())
+            .or_else(|| self.0.layer_by_name(layer).map(|l| &l.dataset))
+            .or_else(|| self.1.iter().find(|t| t.name.eq_ignore_ascii_case(layer)))
     }
     fn selection(&self, layer: &str) -> &[usize] {
         match self.0.layer_by_name(layer) {
@@ -306,8 +351,18 @@ pub fn run_tool(s: &mut Session, tool: &str, params: &Value) -> CmdResult {
     let tool = tool_id(tool).unwrap_or(tool).to_string();
     let params = params.clone();
     let t0 = now_ms();
-    let res =
-        rustgis_analysis::run(&tool, &MapInputs(s.map(), &s.project.tables, env_inputs(s.map(), &s.project.gp_env, &params)?), &params);
+    let inputs = map_inputs(s, &params)?;
+    let mut res = rustgis_analysis::run(&tool, &inputs, &params);
+    // A selection made on a streamed layer read whole: its rows, as rows of the window in view.
+    if let Ok(r) = &mut res
+        && let Output::Selection { layer, rows } = &mut r.output
+        && let Some(full) = inputs.3.get(&layer.to_ascii_lowercase())
+        && let Some(l) = s.map().layer_by_name(layer)
+    {
+        let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| full.features.get(*r)).map(|f| f.id).collect();
+        *rows = l.dataset.features.iter().enumerate().filter(|(_, f)| ids.contains(&f.id)).map(|(i, _)| i).collect();
+    }
+    drop(inputs);
     let millis = now_ms().saturating_sub(t0);
     let name = rustgis_analysis::tool(&tool).map(|t| t.name).unwrap_or("Tool").to_string();
     apply(s, name, params, res, millis)
@@ -336,6 +391,10 @@ fn apply(s: &mut Session, name: String, params: Value, res: Result<rustgis_analy
         Output::Update { layer, dataset } => {
             let l = s.map_mut().layers.iter_mut().find(|l| l.name.eq_ignore_ascii_case(&layer)).ok_or("the input layer disappeared")?;
             l.dataset = dataset;
+            // A streamed layer updated by a tool holds the whole result in memory from now on.
+            l.dataset.windowed = false;
+            l.source = None;
+            l.selection.clear();
             l.touch_geometry();
             json!({"updated": layer})
         }

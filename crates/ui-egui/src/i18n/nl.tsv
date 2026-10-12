@@ -1803,3 +1803,8 @@ Zoom To World	Zoomen naar wereld
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: alleen HTTPS-adressen, of gewoon HTTP op deze computer of dit netwerk, zijn toegestaan
 © OpenStreetMap contributors	© OpenStreetMap-bijdragers
 ⌘K	⌘K
+The layer's file couldn't be read: {error}	Het bestand van de laag kon niet worden gelezen: {error}
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, ter plekke gelezen · een steekproef van {n} van de {matched} objecten in beeld (zoom in om ze allemaal te zien) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, ter plekke gelezen · {n} van {total} objecten in beeld · {renderer}
+Load All Features	Alle objecten laden
+GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV of FlatGeobuf

@@ -1803,3 +1803,8 @@ Zoom To World	Приблизить к миру
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: разрешены только адреса HTTPS или обычный HTTP на этом компьютере или в этой сети
 © OpenStreetMap contributors	© участники OpenStreetMap
 ⌘K	⌘K
+The layer's file couldn't be read: {error}	Не удалось прочитать файл слоя: {error}
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, читается на месте · выборка из {n} из {matched} объектов в области просмотра (приблизьте, чтобы увидеть все) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, читается на месте · {n} из {total} объектов в области просмотра · {renderer}
+Load All Features	Загрузить все объекты
+GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV или FlatGeobuf

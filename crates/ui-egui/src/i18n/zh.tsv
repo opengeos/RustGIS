@@ -1803,3 +1803,8 @@ Zoom To World	缩放至世界
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}：仅允许 HTTPS 地址，或本机、本地网络上的普通 HTTP 地址
 © OpenStreetMap contributors	© OpenStreetMap 贡献者
 ⌘K	⌘K
+The layer's file couldn't be read: {error}	无法读取图层的文件：{error}
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}，就地读取 · 视图中 {matched} 个要素的 {n} 个样本（放大以查看全部）· {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}，就地读取 · 视图中 {n} / {total} 个要素 · {renderer}
+Load All Features	加载所有要素
+GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV 或 FlatGeobuf

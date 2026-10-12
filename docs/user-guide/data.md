@@ -7,9 +7,9 @@
 | GeoJSON (`.geojson`, `.json`) | Yes | Yes |
 | CSV (`.csv`, `.txt`) with longitude/latitude columns | Yes | Yes |
 | Shapefile (`.shp` + `.dbf`) | Yes (desktop) | No |
-| GeoPackage (`.gpkg`, the first feature table) | Yes (desktop) | No |
+| GeoPackage (`.gpkg`, every feature table) | Yes (desktop) | No |
 | GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | No |
-| FlatGeobuf (`.fgb`) | Yes | No |
+| FlatGeobuf (`.fgb`) | Yes | Yes (`share.exportLayer`) |
 | KML, GPX, CSV with WKT geometry | No | Yes (Analysis › Workflows › Data Interop) |
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
 | ASCII grid (`.asc`, with an optional `.prj`) | Yes | No |
@@ -27,6 +27,30 @@ GeoParquet and FlatGeobuf files in another coordinate system (any EPSG code) are
 are read. Rasters keep
 their own coordinate system (any EPSG code, such as UTM zones or national grids) and are
 reprojected on the fly as they draw.
+
+## Large files
+
+GeoPackage, GeoParquet and FlatGeobuf files with more than 100,000 features are read in place
+rather than loaded whole, so files far larger than memory open in a moment. The layer reads the
+features in view, using the file's own spatial index (the GeoPackage R-tree, the FlatGeobuf
+packed R-tree, GeoParquet row-group bounding boxes), in the background as the map moves. When a
+view holds more than 250,000 features (100,000 in the web app), the layer draws an evenly spread
+sample of them and its tooltip in Contents says so: zoom in to see them all. Smaller files load
+whole; `layer.addData` with `"stream": true` or `false` overrides the choice.
+
+A streamed layer works like any other for symbology, labels, pop-ups, selection and the
+attribute table (which lists the features read for the view). Geoprocessing tools read the whole
+file. Edits are refused, since the features are read again as the view moves: right-click the
+layer in Contents and choose **Load All Features** (`layer.loadAll`) to load it into memory and
+edit it. Projects save the layer's file path, not its features, and read the file again when they
+open; a browser upload is kept in the project.
+
+| File | Features | A view read |
+| --- | --- | --- |
+| GeoParquet, 0.1° grid (50 MB) | 1.6 million polygons | 183,000 in 0.15 s |
+| FlatGeobuf, the same grid (335 MB) | 1.6 million polygons | 183,000 in 0.11 s |
+| GeoPackage, the same grid (344 MB) | 1.6 million polygons | 183,000 in 0.18 s |
+| GeoParquet, global grid (190 MB) | 6.5 million polygons | a sample of 136,000 in 0.27 s |
 
 ## Rasters
 

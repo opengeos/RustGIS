@@ -268,6 +268,16 @@ impl Project {
                 {
                     log::warn!("{}: {e}", l.name);
                 }
+                // A streamed layer's features are read again from its source.
+                if let Some(src) = &mut l.source {
+                    l.dataset.windowed = true;
+                    if !src.is_open()
+                        && src.error.is_none()
+                        && let Err(e) = src.open()
+                    {
+                        log::warn!("{}: {e}", l.name);
+                    }
+                }
                 let n = l.dataset.features.len();
                 l.selection.retain(|r| *r < n);
                 let fields = l.dataset.fields.len();

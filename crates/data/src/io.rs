@@ -85,12 +85,16 @@ fn check_size(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Writes a dataset by extension (`.geojson`/`.json` or `.csv`).
+/// Writes a dataset by extension (`.geojson`/`.json`, `.csv` or `.fgb`).
 pub fn write_path(ds: &Dataset, path: &Path) -> Result<()> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let text = match ext.as_str() {
         "geojson" | "json" => serde_json::to_string(&to_geojson(ds)).map_err(|e| DataError::Format(e.to_string()))?,
         "csv" => to_csv(ds)?,
+        "fgb" => {
+            write_atomic(path, &crate::source::fgb::write(ds)?)?;
+            return Ok(());
+        }
         other => return Err(DataError::Unsupported(other.to_string())),
     };
     write_atomic(path, text.as_bytes())?;

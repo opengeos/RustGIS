@@ -41,7 +41,7 @@ pub struct Feature {
 }
 
 /// A feature class: a named table of features sharing a schema and geometry type.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Dataset {
     pub name: String,
     pub geometry_type: GeometryType,
@@ -50,6 +50,24 @@ pub struct Dataset {
     /// Where it was read from, if anywhere.
     #[serde(default)]
     pub source: Option<String>,
+    /// The features are a window onto a source read in place (the part of a large file in view),
+    /// so they aren't saved: the source is read again instead.
+    #[serde(skip)]
+    pub windowed: bool,
+}
+
+impl Serialize for Dataset {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("Dataset", 5)?;
+        st.serialize_field("name", &self.name)?;
+        st.serialize_field("geometry_type", &self.geometry_type)?;
+        st.serialize_field("fields", &self.fields)?;
+        let none: &[Feature] = &[];
+        st.serialize_field("features", if self.windowed { none } else { &self.features })?;
+        st.serialize_field("source", &self.source)?;
+        st.end()
+    }
 }
 
 /// What a reader skipped.
@@ -61,7 +79,7 @@ pub struct ReadReport {
 
 impl Dataset {
     pub fn new(name: impl Into<String>, geometry_type: GeometryType, fields: Vec<Field>) -> Self {
-        Dataset { name: name.into(), geometry_type, fields, features: Vec::new(), source: None }
+        Dataset { name: name.into(), geometry_type, fields, features: Vec::new(), source: None, windowed: false }
     }
 
     /// Index of a field by case-insensitive name.
@@ -124,6 +142,18 @@ impl Dataset {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windowed_features_are_not_saved() {
+        let mut d = Dataset::new("t", GeometryType::Point, vec![Field::new("a", FieldType::Integer)]);
+        d.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![Value::Int(5)]);
+        let back: Dataset = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        assert_eq!(back, d);
+        d.windowed = true;
+        let back: Dataset = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        assert!(back.features.is_empty() && !back.windowed);
+        assert_eq!(back.fields, d.fields);
+    }
 
     #[test]
     fn push_pads_attrs_and_assigns_ids() {

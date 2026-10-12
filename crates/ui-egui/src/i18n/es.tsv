@@ -1803,3 +1803,8 @@ Zoom To World	Zoom al mundo
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: solo se permiten direcciones HTTPS, o HTTP simple en este equipo o en esta red
 © OpenStreetMap contributors	© colaboradores de OpenStreetMap
 ⌘K	⌘K
+The layer's file couldn't be read: {error}	No se pudo leer el archivo de la capa: {error}
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, leído en el sitio · una muestra de {n} de las {matched} entidades a la vista (acerque para verlas todas) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, leído en el sitio · {n} de {total} entidades a la vista · {renderer}
+Load All Features	Cargar todas las entidades
+GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV o FlatGeobuf

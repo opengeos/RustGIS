@@ -1803,3 +1803,8 @@ Zoom To World	Dünyaya Yakınlaştır
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: yalnızca HTTPS adreslerine ya da bu bilgisayarda veya ağda düz HTTP'ye izin verilir
 © OpenStreetMap contributors	© OpenStreetMap katkıcıları
 ⌘K	⌘K
+The layer's file couldn't be read: {error}	Katmanın dosyası okunamadı: {error}
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, yerinde okunur · görünümdeki {matched} detaydan {n} tanesinin örneği (hepsini görmek için yakınlaştırın) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, yerinde okunur · görünümde {total} detaydan {n} tanesi · {renderer}
+Load All Features	Tüm detayları yükle
+GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV veya FlatGeobuf

@@ -184,6 +184,8 @@ pub struct Rendered {
     pub attribution: Vec<String>,
     /// Tiles are still on their way: drawing again later shows more.
     pub tiles_pending: bool,
+    /// Streamed layers are still reading the view: drawing again later shows them.
+    pub data_pending: bool,
     /// Tile layers that couldn't be drawn, and why.
     pub tile_errors: Vec<String>,
 }
@@ -562,6 +564,29 @@ impl Ctx<'_> {
     }
 }
 
+/// The longitude/latitude extent a view shows (the whole world on the globe, or when the
+/// projection can't say).
+pub fn view_lonlat(map: &Map, view: &View) -> Extent {
+    if map.projection.is_globe() {
+        return Extent::WORLD_LONLAT;
+    }
+    let flat = map.flat();
+    let e = view.camera.extent(view.width, view.height);
+    let mut out = Extent::EMPTY;
+    const N: usize = 8;
+    for i in 0..=N {
+        let t = i as f64 / N as f64;
+        let (x, y) = (e.min_x + t * e.width(), e.min_y + t * e.height());
+        for c in [Coord::new(x, e.min_y), Coord::new(x, e.max_y), Coord::new(e.min_x, y), Coord::new(e.max_x, y)] {
+            match flat.inverse(c) {
+                Some(p) if p.is_finite() => out.expand(p),
+                _ => return Extent::WORLD_LONLAT,
+            }
+        }
+    }
+    if out.is_empty() { Extent::WORLD_LONLAT } else { out }
+}
+
 /// Draws the map for the screen. Layers are drawn bottom-up (the last layer in the list first).
 /// On high-density screens rasters are computed at logical-pixel resolution, for speed.
 pub fn render(map: &mut Map, view: &View) -> Option<Rendered> {
@@ -571,6 +596,9 @@ pub fn render(map: &mut Map, view: &View) -> Option<Rendered> {
 fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Rendered> {
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
+    // Streamed layers read the view: in the background for the screen, in place for an export
+    // (the full-resolution render), which waits for them.
+    let data_pending = map.sync_sources(&view_lonlat(map, view), full_res_rasters);
     let globe = map.projection.is_globe().then(|| Globe::new(&view.camera, view.width, view.height));
     let (flat, key) = (map.flat(), map.projection.code());
     let custom = matches!(flat, rustgis_map::projection::Flat::Custom(_)) && globe.is_none();
@@ -910,6 +938,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         unplaced,
         attribution: tile_out.attribution,
         tiles_pending: tile_out.pending,
+        data_pending,
         tile_errors: tile_out.errors,
     })
 }

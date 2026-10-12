@@ -224,6 +224,13 @@ fn utm_tiff_b64() -> String {
     base64::engine::general_purpose::STANDARD.encode(geotiff::write(&r, 0).unwrap())
 }
 
+/// The sample world with a streamed layer active.
+fn with_streamed(path: &std::path::Path) -> Session {
+    let mut s = world();
+    s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true, "name": "Streamed"})).unwrap();
+    s
+}
+
 fn with_raster() -> Session {
     let mut s = world();
     s.run("layer.addDataBytes", &json!({"fileName": "scene.tif", "data": utm_tiff_b64()})).unwrap();
@@ -401,6 +408,7 @@ fn hostile_params_never_panic() {
         json!({"fileName": "a.tif", "data": "AAAA", "type": "unique", "on": "maybe"}),
     ];
     let ids: Vec<&str> = Session::new(Project::default()).registry.commands.iter().map(|c| c.id).collect();
+    let streamed = grid_fgb("hostile", 20);
     for id in ids {
         if matches!(
             id,
@@ -423,6 +431,10 @@ fn hostile_params_never_panic() {
             let _ = s.run("info.project", &Value::Null);
             // Again with a raster layer active.
             let mut s = with_raster();
+            let _ = s.run(id, p);
+            let _ = s.run("info.project", &Value::Null);
+            // And with a streamed layer active.
+            let mut s = with_streamed(&streamed);
             let _ = s.run(id, p);
             let _ = s.run("info.project", &Value::Null);
         }
@@ -2188,4 +2200,138 @@ fn deep_learning_hosted_imagery_and_sharing() {
     s.run("share.webMap", &Value::Null).unwrap();
     s.run("share.dataStore", &json!({"remove": "out"})).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A FlatGeobuf of a grid of points over the world (`n` × `n`), numbered.
+fn grid_fgb(name: &str, n: usize) -> std::path::PathBuf {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
+    let mut ds = Dataset::new(name, GeometryType::Point, vec![Field::new("i", FieldType::Integer), Field::new("x", FieldType::Double)]);
+    for i in 0..n {
+        for j in 0..n {
+            let c = Coord::new(-179.0 + 358.0 * i as f64 / (n - 1) as f64, -80.0 + 160.0 * j as f64 / (n - 1) as f64);
+            ds.push(Some(Geometry::Point(c)), vec![V::Int((i * n + j) as i64), V::Float(c.x)]);
+        }
+    }
+    let p = std::env::temp_dir().join(format!("rustgis-engine-{}-{name}.fgb", std::process::id()));
+    rustgis_data::io::write_path(&ds, &p).unwrap();
+    p
+}
+
+/// A view of a lon/lat box, 800 × 600 points.
+fn view_of(s: &mut Session, e: rustgis_geom::Extent) -> crate::render::View {
+    s.view_size = (800.0, 600.0);
+    s.zoom_to(&e);
+    crate::render::View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false }
+}
+
+#[test]
+fn large_sources_stream_a_view_at_a_time() {
+    let path = grid_fgb("big", 150);
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
+    assert_eq!(r["streamed"], true, "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    // A small view limit, to see sampling without a huge file.
+    s.map_mut().layer_mut(id).unwrap().source.as_mut().unwrap().limit = 5_000;
+    let layer = |s: &Session| s.map().layer(id).unwrap().clone();
+    assert!(layer(&s).is_streamed());
+    // The whole extent, not the part read.
+    assert!(layer(&s).extent().width() > 350.0);
+
+    // The world: a spread sample, capped.
+    let v = view_of(&mut s, rustgis_geom::Extent::new(-180.0, -80.0, 180.0, 80.0));
+    let png = crate::render::render_png(s.map_mut(), &v).unwrap();
+    assert!(!png.is_empty());
+    let l = layer(&s);
+    let n = l.dataset.features.len();
+    assert!(n > 2_000 && n <= 5_000, "{n}");
+    assert!(l.source.as_ref().unwrap().sampled().is_some());
+    assert!(l.dataset.features.iter().any(|f| f.geometry.as_ref().unwrap().extent().min_x > 150.0));
+
+    // Zoomed in: exactly the features in view (padded), all of them.
+    let small = rustgis_geom::Extent::new(10.0, 10.0, 14.0, 13.0);
+    let v = view_of(&mut s, small);
+    let lonlat = crate::render::view_lonlat(s.map(), &v);
+    // Read in the background, as the screen does, then wait for it.
+    let mut pending = s.map_mut().sync_sources(&lonlat, false);
+    let start = std::time::Instant::now();
+    while pending && start.elapsed() < std::time::Duration::from_secs(30) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        pending = s.map_mut().sync_sources(&lonlat, false);
+    }
+    assert!(!pending);
+    let l = layer(&s);
+    assert!(l.source.as_ref().unwrap().sampled().is_none());
+    let w = l.source.as_ref().unwrap().window().unwrap().extent;
+    let inside =
+        |e: &rustgis_geom::Extent| l.dataset.features.iter().filter(|f| e.contains(f.geometry.as_ref().unwrap().extent().center())).count();
+    assert_eq!(inside(&w), l.dataset.features.len());
+    assert!(inside(&lonlat) > 0);
+
+    // A selection survives the next read (by feature id).
+    let ids: Vec<u64> = l.dataset.features.iter().take(3).map(|f| f.id).collect();
+    s.map_mut().layer_mut(id).unwrap().selection = vec![0, 1, 2];
+    let v = view_of(&mut s, rustgis_geom::Extent::new(-40.0, -40.0, 60.0, 60.0));
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    let l = layer(&s);
+    let kept: Vec<u64> = l.selection.iter().map(|r| l.dataset.features[*r].id).collect();
+    assert!(kept.iter().all(|k| ids.contains(k)) && !kept.is_empty(), "{kept:?}");
+
+    // Edits are refused; Load All Features brings them into memory.
+    s.run("edit.enable", &json!({"on": true})).unwrap();
+    s.active_layer = Some(id);
+    let e = s.run("edit.delete", &json!({"layer": id})).unwrap_err();
+    assert!(e.contains("read in place"), "{e}");
+    let r = s.run("layer.loadAll", &json!({"layer": id})).unwrap();
+    assert_eq!(r["features"], 22_500);
+    let l = layer(&s);
+    assert!(!l.is_streamed() && !l.dataset.windowed);
+    s.map_mut().layer_mut(id).unwrap().selection = vec![0];
+    s.run("edit.delete", &json!({"layer": id})).unwrap();
+    assert_eq!(layer(&s).dataset.features.len(), 22_499);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn streamed_layers_save_their_source_not_their_features() {
+    let path = grid_fgb("saved", 60);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
+    let v = view_of(&mut s, rustgis_geom::Extent::new(-180.0, -80.0, 180.0, 80.0));
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    assert_eq!(s.map().layers[0].dataset.features.len(), 3600);
+    let text = serde_json::to_string(&s.project).unwrap();
+    // The window isn't in the project (3,600 features would be far more than this).
+    assert!(text.len() < 20_000, "{}", text.len());
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let l = &t.map().layers[0];
+    assert!(l.is_streamed() && l.source.as_ref().unwrap().is_open());
+    assert!(l.dataset.features.is_empty());
+    let v = view_of(&mut t, rustgis_geom::Extent::new(-180.0, -80.0, 180.0, 80.0));
+    crate::render::render_png(t.map_mut(), &v).unwrap();
+    assert_eq!(t.map().layers[0].dataset.features.len(), 3600);
+    // A missing file is reported, not a crash.
+    let gone = text.replace(&path.display().to_string(), "/nonexistent/gone.fgb");
+    let mut u = Session::new(Project::default());
+    u.run("project.openText", &json!({"text": gone})).unwrap();
+    assert!(u.map().layers[0].source.as_ref().unwrap().error.is_some());
+    crate::render::render_png(u.map_mut(), &v).unwrap();
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn tools_read_streamed_layers_whole() {
+    let path = grid_fgb("tools", 50);
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
+    // Only a corner is in view.
+    let v = view_of(&mut s, rustgis_geom::Extent::new(0.0, 0.0, 20.0, 20.0));
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    let windowed = s.map().layers[0].dataset.features.len();
+    assert!(windowed < 2500, "{windowed}");
+    let r = s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "tools", "distance": 1}})).unwrap();
+    let out = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+    assert_eq!(out.dataset.features.len(), 2500);
+    let _ = std::fs::remove_file(path);
 }

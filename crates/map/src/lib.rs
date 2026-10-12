@@ -12,6 +12,7 @@ pub mod presentation;
 pub mod projection;
 pub mod raster;
 pub mod report;
+pub mod source;
 pub mod symbology;
 pub mod tiles;
 pub mod view;
@@ -138,6 +139,9 @@ pub struct Layer {
     /// Set for raster layers (whose `dataset` is empty).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raster: Option<RasterLayer>,
+    /// Set for streamed layers, whose `dataset` holds the features of the last view read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<source::SourceLayer>,
     #[serde(skip)]
     projected: Vec<Option<Geometry>>,
     #[serde(skip)]
@@ -180,6 +184,7 @@ impl Layer {
             priority: 0,
             design: design::Design::default(),
             raster: None,
+            source: None,
             projected: Vec::new(),
             projected_rev: u64::MAX,
             projected_for: String::new(),
@@ -203,6 +208,87 @@ impl Layer {
         l.graphics = true;
         l.labels.enabled = false;
         l
+    }
+
+    /// A streamed layer: a large file read in place, a view at a time.
+    pub fn new_streamed(id: u32, source: source::SourceLayer) -> Self {
+        let (name, ty, fields) = match source.info() {
+            Some(i) => (i.name.clone(), i.geometry_type, i.fields.clone()),
+            None => ("layer".to_string(), GeometryType::None, Vec::new()),
+        };
+        let mut ds = Dataset::new(name, ty, fields);
+        ds.windowed = true;
+        ds.source = source.path.clone().or_else(|| source.file_name.clone());
+        let mut l = Layer::new(id, ds);
+        l.source = Some(source);
+        l
+    }
+
+    pub fn is_streamed(&self) -> bool {
+        self.source.is_some()
+    }
+
+    /// Keeps a streamed layer's features up with the view (longitude/latitude): takes a finished
+    /// read, and starts one when the view has moved beyond what was read. With `block`, reads in
+    /// place and waits (for exports). Returns whether a read is still running.
+    pub fn sync_source(&mut self, view: &Extent, block: bool) -> bool {
+        let Some(src) = &mut self.source else { return false };
+        if !src.is_open() {
+            // Opened once after a project loads; a failure is kept, not retried every frame.
+            if src.error.is_some() || src.open().is_err() {
+                return false;
+            }
+        }
+        if let source::Polled::Done(_, batch) = src.poll(block) {
+            self.install(batch.features);
+        }
+        let Some(src) = &mut self.source else { return false };
+        if let Some(e) = src.wanted(view) {
+            src.start(e, block);
+            if block && let source::Polled::Done(_, batch) = src.poll(true) {
+                self.install(batch.features);
+            }
+        }
+        self.source.as_ref().is_some_and(|s| s.is_pending())
+    }
+
+    /// Replaces a streamed layer's features, keeping the selection (by feature id).
+    fn install(&mut self, features: Vec<rustgis_data::Feature>) {
+        let ids: std::collections::HashSet<u64> =
+            self.selection.iter().filter_map(|r| self.dataset.features.get(*r)).map(|f| f.id).collect();
+        let fields = self.dataset.fields.len();
+        self.dataset.features = features;
+        for f in &mut self.dataset.features {
+            f.attrs.resize(fields, rustgis_data::Value::Null);
+        }
+        self.dataset.windowed = true;
+        self.selection = if ids.is_empty() {
+            Vec::new()
+        } else {
+            self.dataset.features.iter().enumerate().filter(|(_, f)| ids.contains(&f.id)).map(|(i, _)| i).collect()
+        };
+        self.touch_geometry();
+    }
+
+    /// Every feature of a streamed layer's source (up to the read limit), for tools and for
+    /// loading the layer into memory.
+    pub fn load_all(&self) -> Result<Dataset, String> {
+        let Some(src) = &self.source else { return Ok(self.dataset.clone()) };
+        let mut copy = src.clone();
+        if !copy.is_open() {
+            copy.open()?;
+        }
+        let (mut ds, _) = copy.read_all()?;
+        // A sample isn't all of them: refuse rather than run a tool on part of the data.
+        if let Some(n) =
+            copy.info().and_then(|i| i.count).filter(|n| (ds.features.len() as u64) < *n && *n > rustgis_data::source::MAX_LIMIT as u64)
+        {
+            return Err(format!("the layer has {n} features, more than the {} read at once", rustgis_data::source::MAX_LIMIT));
+        }
+        ds.name = self.dataset.name.clone();
+        ds.fields = self.dataset.fields.clone();
+        ds.source = self.dataset.source.clone();
+        Ok(ds)
     }
 
     /// The symbol a row draws with.
@@ -278,9 +364,11 @@ impl Layer {
 
     /// Extent in longitude/latitude.
     pub fn extent(&self) -> Extent {
-        match &self.raster {
-            Some(r) => r.data.as_ref().map(|d| d.extent()).unwrap_or(Extent::EMPTY),
-            None => self.dataset.extent(),
+        match (&self.raster, &self.source) {
+            (Some(r), _) => r.data.as_ref().map(|d| d.extent()).unwrap_or(Extent::EMPTY),
+            // A streamed layer's whole extent, not just the part read.
+            (None, Some(s)) => s.info().map(|i| i.extent).filter(|e| !e.is_empty()).unwrap_or_else(|| self.dataset.extent()),
+            (None, None) => self.dataset.extent(),
         }
     }
 
@@ -474,6 +562,26 @@ impl Map {
     }
 
     /// Adds a raster layer; returns its id.
+    /// Adds a streamed layer (a large file read in place); returns its id.
+    pub fn add_streamed(&mut self, name: impl Into<String>, source: source::SourceLayer) -> u32 {
+        let id = self.next_id();
+        let mut l = Layer::new_streamed(id, source);
+        l.name = name.into();
+        l.dataset.name = l.name.clone();
+        self.insert_ranked(l);
+        id
+    }
+
+    /// Keeps streamed layers up with a view (longitude/latitude; see [`Layer::sync_source`]).
+    /// Only visible layers read. Returns whether a read is still running.
+    pub fn sync_sources(&mut self, view: &Extent, block: bool) -> bool {
+        let mut pending = false;
+        for l in self.layers.iter_mut().filter(|l| l.is_streamed() && l.visible) {
+            pending |= l.sync_source(view, block);
+        }
+        pending
+    }
+
     pub fn add_raster(&mut self, name: impl Into<String>, raster: RasterLayer) -> u32 {
         let id = self.next_id();
         self.insert_ranked(Layer::new_raster(id, name, raster));

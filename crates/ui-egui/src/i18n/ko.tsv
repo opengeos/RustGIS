@@ -1803,3 +1803,8 @@ Zoom To World	세계로 확대/축소
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: HTTPS 주소 또는 이 컴퓨터나 네트워크의 일반 HTTP만 허용됩니다
 © OpenStreetMap contributors	© OpenStreetMap 기여자
 ⌘K	⌘K
+The layer's file couldn't be read: {error}	레이어 파일을 읽을 수 없습니다: {error}
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, 제자리에서 읽음 · 보기의 피처 {matched}개 중 {n}개 샘플(모두 보려면 확대) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, 제자리에서 읽음 · 보기의 피처 {total}개 중 {n}개 · {renderer}
+Load All Features	모든 피처 불러오기
+GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV 또는 FlatGeobuf

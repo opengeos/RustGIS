@@ -1181,7 +1181,7 @@ impl RustGisApp {
                     .and_then(|id| self.session.map().layer(id))
                     .map(|l| format!("{}.geojson", l.name))
                     .unwrap_or_default();
-                if let Some(path) = dialogs::pick_save(&name, &["geojson", "csv"], tl!("GeoJSON or CSV")) {
+                if let Some(path) = dialogs::pick_save(&name, &["geojson", "csv", "fgb"], tl!("GeoJSON, CSV or FlatGeobuf")) {
                     return self.run("share.exportLayer", json!({"path": path}));
                 }
             }
