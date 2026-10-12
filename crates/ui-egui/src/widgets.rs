@@ -297,12 +297,43 @@ pub fn primary_button(ui: &mut Ui, label: &str, enabled: bool, min_size: egui::V
         t.green
     };
     ui.painter().rect_filled(r, CornerRadius::same(6), fill);
-    // Centre on the glyphs' height, not the line's.
-    let galley = ui.painter().layout_no_wrap(label.to_string(), font, egui::Color32::WHITE);
-    let rows = galley.rows.first().map(|row| row.rect()).unwrap_or(galley.rect);
-    let pos = r.center() - vec2(galley.size().x / 2.0, rows.center().y);
-    ui.painter().galley(pos, galley, egui::Color32::WHITE);
+    centred_label(ui, r, label, font, egui::Color32::WHITE);
     if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
+}
+
+/// A dialog button (OK, Cancel…): `fill` paints it as the default action, otherwise it takes the
+/// theme's button look. Painted like [`primary_button`] so the label sits in the middle.
+pub fn dialog_button(ui: &mut Ui, label: &str, fill: Option<egui::Color32>, min_size: egui::Vec2) -> Response {
+    let font = if fill.is_some() { semibold(12.5) } else { regular(12.5) };
+    let size = vec2(min_size.x.max(text_w(ui, label, font.clone()) + 24.0), min_size.y);
+    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    let v = *ui.style().interact(&resp);
+    let (bg, text) = match fill {
+        Some(c) if resp.is_pointer_button_down_on() => (c.gamma_multiply(0.8), egui::Color32::WHITE),
+        Some(c) if resp.hovered() => (c.gamma_multiply(0.9), egui::Color32::WHITE),
+        Some(c) => (c, egui::Color32::WHITE),
+        None => (v.weak_bg_fill, v.text_color()),
+    };
+    ui.painter().rect(r, v.corner_radius, bg, if fill.is_some() { Stroke::NONE } else { v.bg_stroke }, egui::StrokeKind::Inside);
+    centred_label(ui, r, label, font, text);
+    resp
+}
+
+/// Paints `label` centred in `r` on its capital letters (baseline to cap height) rather than on
+/// the font's line box, whose ascent and descent are uneven in some faces.
+fn centred_label(ui: &Ui, r: Rect, label: &str, font: egui::FontId, color: egui::Color32) {
+    let painter = ui.painter();
+    let galley = painter.layout_no_wrap(label.to_string(), font.clone(), color);
+    let cap = painter.layout_no_wrap("H".to_string(), font, color);
+    let mid = cap
+        .rows
+        .first()
+        .and_then(|row| Some((row.pos.y + row.glyphs.first()?.pos.y, row.pos.y + row.visuals.mesh_bounds.min.y)))
+        .filter(|(base, top)| base > top)
+        .map(|(base, top)| (base + top) / 2.0)
+        .unwrap_or(galley.size().y / 2.0);
+    painter.galley(pos2(r.center().x - galley.size().x / 2.0, r.center().y - mid).round(), galley, color);
 }
 
 /// A small icon button (back, close…), drawn with the app's own icons rather than a glyph the
