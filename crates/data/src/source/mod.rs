@@ -248,7 +248,8 @@ fn around(e: &Extent, f: impl Fn(Coord) -> Option<Coord>) -> Extent {
     out
 }
 
-/// Every `stride`-th of `n` items, so a limited read is spread over the whole match.
+/// The step that keeps at most `limit` of `matched` items, evenly spread (1 when they all fit,
+/// including when `matched` is 0, which `Sampler::new` relies on).
 pub(crate) fn stride(matched: u64, limit: usize) -> u64 {
     if limit == 0 {
         return u64::MAX;

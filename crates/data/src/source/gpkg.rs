@@ -303,15 +303,15 @@ impl FeatureSource for GpkgSource {
                 out.matched = u64::try_from(n).unwrap_or(0);
                 let step = usize::try_from(stride(out.matched, limit)).unwrap_or(usize::MAX);
                 let mut st = conn.prepare(&format!("SELECT id {filter}")).map_err(err)?;
-                let ids: Vec<i64> = st
+                // A row error (a corrupt page) fails the read rather than truncating it quietly.
+                let picked: Vec<i64> = st
                     .query_map(args, |r| r.get(0))
                     .map_err(err)?
-                    .filter_map(std::result::Result::ok)
                     .step_by(step.max(1))
                     .take(limit)
-                    .collect();
+                    .collect::<rusqlite::Result<_>>()
+                    .map_err(err)?;
                 out.complete = step == 1;
-                let picked = ids;
                 for chunk in picked.chunks(CHUNK) {
                     let marks = vec!["?"; chunk.len()].join(",");
                     let sql = format!("SELECT {} FROM {} WHERE {} IN ({marks})", self.select_list(), quote(&self.table), quote(pk));

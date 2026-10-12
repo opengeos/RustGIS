@@ -213,6 +213,12 @@ impl FeatureSource for ParquetSource {
             let rg = self.reader.get_row_group(g).map_err(err)?;
             let geoms = read_bytes(rg.as_ref(), self.geom_col, &take)?;
             let attrs: Vec<Vec<Value>> = self.field_cols.iter().map(|&c| read_values(rg.as_ref(), c, &take)).collect::<Result<_>>()?;
+            // A column shorter than its row group (a truncated or corrupt file) would pair values
+            // with the wrong rows: refuse it.
+            let wanted = take.iter().filter(|&&t| t).count();
+            if geoms.len() != wanted || attrs.iter().any(|a| a.len() != wanted) {
+                return Err(DataError::Format(format!("GeoParquet: row group {g} has columns shorter than its rows")));
+            }
             let base = starts.get(g).copied().unwrap_or(0);
             // The columns hold the taken rows only, in order: the k-th is row `r`.
             for (k, (r, _)) in take.iter().enumerate().filter(|(_, t)| **t).enumerate() {
