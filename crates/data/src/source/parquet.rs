@@ -197,9 +197,10 @@ impl FeatureSource for ParquetSource {
         let mut skipped = 0;
         let mut starts = Vec::with_capacity(md.num_row_groups());
         let mut first_row = 0u64;
+        // From the declared row counts, not the capped ones, so ids stay put whatever is read.
         for g in 0..md.num_row_groups() {
             starts.push(first_row);
-            first_row += rows_in(g) as u64;
+            first_row = first_row.saturating_add(u64::try_from(md.row_group(g).num_rows()).unwrap_or(0));
         }
         for (&g, k) in groups.iter().zip(&keep) {
             let n = rows_in(g);
