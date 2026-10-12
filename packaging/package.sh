@@ -138,7 +138,9 @@ cp -a "$p/usr" %{buildroot}/
 %license /usr/share/doc/rustgis/copyright
 SPEC
       rpmbuild --quiet -bb --target "$arch" --define "_topdir $r" "$r/SPECS/rustgis.spec"
-      cp "$r"/RPMS/*/rustgis-*.rpm "$dist/"
+      # The file is named after $version (0.2.0-rc.1), like the other assets: GitHub rewrites
+      # the ~ of the package version in release asset names.
+      cp "$r"/RPMS/*/rustgis-*.rpm "$dist/rustgis-$version-1.$arch.rpm"
     elif [ -n "${CI:-}" ]; then
       echo "rpmbuild not found" >&2
       exit 1
