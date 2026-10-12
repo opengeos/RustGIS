@@ -2444,7 +2444,8 @@ fn duckdb_queries_and_databases() {
     let r = s.run("layer.addSql", &json!({"sql": query, "name": "Trip"})).unwrap();
     let names: Vec<String> = s.map().layers.iter().map(|l| l.name.clone()).collect();
     assert_eq!(names, vec!["Trip (points)", "Trip (lines)"], "{r}");
-    // Streamed, a layer remembers its query; the project runs it again when the result is gone.
+    // Streamed, a layer remembers its query; a project never runs it again when the result is gone
+    // (a project file is hostile input), and says how to.
     let r = s
         .run(
             "layer.addSql",
@@ -2463,9 +2464,8 @@ fn duckdb_queries_and_databases() {
     t.run("project.openText", &json!({"text": text})).unwrap();
     let l = t.map().layer_by_name("Pts").unwrap();
     let again = l.source.as_ref().unwrap();
-    assert!(again.is_open(), "{:?}", again.error);
-    assert_eq!(again.info().and_then(|i| i.count), Some(50));
-    assert_ne!(again.path.as_deref(), Some(cached.as_str()));
+    assert!(!again.is_open());
+    assert!(again.error.as_deref().is_some_and(|e| e.contains("run the query again")), "{:?}", again.error);
     // Errors are DuckDB's, and nothing is added.
     let before = s.map().layers.len();
     assert!(s.run("layer.addSql", &json!({"sql": "SELECT 1 AS a"})).unwrap_err().contains("no geometry column"));
@@ -2496,7 +2496,16 @@ fn duckdb_queries_and_databases() {
     );
     let r = s.run("layer.addData", &json!({"path": db.display().to_string(), "layer": "towns", "stream": true, "name": "T"})).unwrap();
     let id = r["layer"].as_u64().unwrap() as u32;
-    assert_eq!(s.map().layer(id).unwrap().source.as_ref().unwrap().duckdb.as_ref().unwrap().table.as_deref(), Some("towns"));
+    let src = s.map().layer(id).unwrap().source.clone().unwrap();
+    assert_eq!(src.duckdb.as_ref().unwrap().table.as_deref(), Some("towns"));
+    // A table is converted again when its result is gone.
+    let text = serde_json::to_string(&s.project).unwrap();
+    std::fs::remove_file(src.path.as_deref().unwrap()).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t.map().layer_by_name("T").unwrap().source.as_ref().unwrap();
+    assert!(again.is_open(), "{:?}", again.error);
+    assert_eq!(again.info().and_then(|i| i.count), Some(1));
     assert!(s.run("layer.addData", &json!({"path": db.display().to_string(), "layer": "notes"})).is_err());
     // A query over the database's tables.
     let r = s.run("layer.addSql", &json!({"sql": "SELECT * FROM towns", "database": db.display().to_string(), "name": "Q"})).unwrap();

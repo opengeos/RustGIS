@@ -26,7 +26,10 @@ pub const EXTENSIONS: &[&str] = &["duckdb", "ddb"];
 pub const MAX_SQL: usize = 12_000;
 
 /// Most tables of a database added at once.
-const MAX_TABLES: usize = 64;
+pub const MAX_TABLES: usize = 64;
+
+/// Most tables of a database listed.
+const LIST_LIMIT: usize = 10_000;
 
 /// The longest a query may run, and the longest a table listing may.
 const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
@@ -136,7 +139,11 @@ fn check_crs(crs: Option<&str>) -> Result<()> {
 
 /// The statements every run starts with: DuckDB Spatial (installed the first time), x/y axis
 /// order whatever the coordinate system, and the database, when there is one.
-fn prelude(dir: &Path, database: Option<&Path>) -> Result<String> {
+///
+/// `confined` shuts DuckDB out of every file and web address but the cache folder once the
+/// database is open: a database file is hostile input, and its views can hold any SQL. Tables are
+/// read that way, so adding a database (or a project naming one) reads nothing else.
+fn prelude(dir: &Path, database: Option<&Path>, confined: bool) -> Result<String> {
     let tmp = dir.join("spill");
     let mut s = format!(
         "INSTALL spatial; LOAD spatial; SET geometry_always_xy = true; SET enable_progress_bar = false; SET temp_directory = {};",
@@ -149,39 +156,43 @@ fn prelude(dir: &Path, database: Option<&Path>) -> Result<String> {
         }
         s.push_str(&format!(" ATTACH {} AS src (READ_ONLY); USE src;", literal(&full.display().to_string())));
     }
+    if confined {
+        let allowed = format!("{}{}", dir.display(), std::path::MAIN_SEPARATOR);
+        s.push_str(&format!(
+            " SET allowed_directories = [{}]; SET enable_external_access = false; SET lock_configuration = true;",
+            literal(&allowed)
+        ));
+    }
     Ok(s)
 }
 
-/// Runs a script; its JSON output (the last statement's rows).
-fn run_script(dir: &Path, script: &str, timeout: std::time::Duration) -> Result<serde_json::Value> {
+/// Runs a script.
+fn run_script(dir: &Path, script: &str, timeout: std::time::Duration) -> Result<()> {
     let duckdb = program().ok_or_else(missing)?;
-    // An empty start-up file, so the user's own (~/.duckdbrc) can't change the output.
+    // An empty start-up file, so the user's own (~/.duckdbrc) can't change what runs.
     let init = dir.join("init.sql");
     if !init.is_file() {
         std::fs::write(&init, b"")?;
     }
     let mut c = Command::new(duckdb);
-    c.arg("-init").arg(&init).arg("-json").arg("-c").arg(script);
+    c.arg("-init").arg(&init).arg("-c").arg(script);
     let out = output(c, timeout, "DuckDB")?;
     if !out.status.success() {
         return Err(DataError::Format(format!("DuckDB: {}", message(&String::from_utf8_lossy(&out.stderr), &out.status))));
     }
-    rows(&String::from_utf8_lossy(&out.stdout))
+    Ok(())
 }
 
-/// The last statement's rows in DuckDB's JSON output, which warnings (a web address read from
-/// another region) may come before or after.
-fn rows(stdout: &str) -> Result<serde_json::Value> {
-    let text = strip_ansi(stdout);
-    // The rows start a line with `[{` (a statement with no rows prints nothing).
-    let start = if text.starts_with("[{") { Some(0) } else { text.rfind("\n[{").map(|i| i + 1) };
-    let Some(start) = start else { return Ok(serde_json::Value::Array(Vec::new())) };
-    let mut values = serde_json::Deserializer::from_str(text.get(start..).unwrap_or_default()).into_iter::<serde_json::Value>();
-    match values.next() {
-        Some(Ok(v)) => Ok(v),
-        Some(Err(e)) => Err(DataError::Format(format!("DuckDB: unreadable output ({e})"))),
-        None => Ok(serde_json::Value::Array(Vec::new())),
-    }
+/// Runs `script`, then `select`, whose rows DuckDB writes to a file that is read back: not taken
+/// from what it prints, which warnings share.
+fn fetch(dir: &Path, script: &str, select: &str, timeout: std::time::Duration) -> Result<serde_json::Value> {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let file = dir.join(format!("{:016x}.{}.{n}.rows.tmp.json", fnv1a(select.as_bytes()), std::process::id()));
+    let _guard = TempFile(Some(file.clone()));
+    let copy = format!("{script} COPY ({select}) TO {} (FORMAT json, ARRAY true);", literal(&file.display().to_string()));
+    run_script(dir, &copy, timeout)?;
+    serde_json::from_slice(&std::fs::read(&file)?).map_err(|e| DataError::Format(format!("DuckDB: unreadable result ({e})")))
 }
 
 /// What went wrong, from DuckDB's error output: its first lines, without colours, warnings or
@@ -299,11 +310,12 @@ fn run_in(dir: &Path, q: &Query<'_>, key: Option<&str>) -> Result<Output> {
     }
     std::fs::create_dir_all(dir)?;
     external::prune(dir, ours, KEEP);
-    let prelude = prelude(dir, q.database)?;
+    // A table of a database (the only run with a cache key) is read confined to the cache.
+    let prelude = prelude(dir, q.database, key.is_some())?;
     let from = format!("query({})", literal(sql));
 
     // The result's columns, from DuckDB binding the query (not running it).
-    let described = run_script(dir, &format!("{prelude} DESCRIBE FROM {from};"), QUERY_TIMEOUT)?;
+    let described = fetch(dir, &prelude, &format!("SELECT column_name, column_type FROM (DESCRIBE FROM {from})"), QUERY_TIMEOUT)?;
     let columns: Vec<Column> = described
         .as_array()
         .into_iter()
@@ -333,10 +345,6 @@ fn run_in(dir: &Path, q: &Query<'_>, key: Option<&str>) -> Result<Output> {
     let run_tag = format!("{:016x}", fnv1a(format!("{sql}\n{:?}\n{:?}\n{now}\n{}\n{n}", q.database, q.crs, std::process::id()).as_bytes()));
     let tmp = |f: Family| dir.join(format!("{run_tag}.{}.{n}.{}.tmp.parquet", std::process::id(), f.label()));
     let mut guards: Vec<TempFile> = Family::ALL.iter().map(|f| TempFile(Some(tmp(*f)))).collect();
-    // The counts go to a file of their own, so reading them doesn't depend on what else DuckDB
-    // prints.
-    let counts_file = dir.join(format!("{run_tag}.{}.{n}.counts.tmp.json", std::process::id()));
-    let _counts_guard = TempFile(Some(counts_file.clone()));
     let mut script = format!("{prelude} CREATE TEMP TABLE r AS {select};");
     for f in Family::ALL {
         script.push_str(&format!(
@@ -345,13 +353,7 @@ fn run_in(dir: &Path, q: &Query<'_>, key: Option<&str>) -> Result<Output> {
             literal(&tmp(f).display().to_string())
         ));
     }
-    script.push_str(&format!(
-        " COPY (SELECT {DIM} AS dim, count(*)::BIGINT AS n FROM r GROUP BY ALL) TO {} (FORMAT json, ARRAY true);",
-        literal(&counts_file.display().to_string())
-    ));
-    run_script(dir, &script, QUERY_TIMEOUT)?;
-    let counts: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&counts_file)?).map_err(|e| DataError::Format(format!("DuckDB: unreadable counts ({e})")))?;
+    let counts = fetch(dir, &script, &format!("SELECT {DIM} AS dim, count(*)::BIGINT AS n FROM r GROUP BY ALL"), QUERY_TIMEOUT)?;
 
     let mut out = Output { unprojected, ..Output::default() };
     let final_tag = key.map(|k| format!("{:016x}", fnv1a(k.as_bytes()))).unwrap_or(run_tag.clone());
@@ -397,7 +399,8 @@ fn dimension(f: Family) -> i64 {
     }
 }
 
-/// The tables of a database that have a geometry column.
+/// The tables (and views) of a database that have a geometry column. Read confined: a view
+/// reaching outside the database fails when it is converted.
 pub fn tables(database: &Path) -> Result<Vec<Table>> {
     let dir = cache_dir().ok_or_else(|| DataError::Format("no cache folder for DuckDB results".into()))?;
     tables_in(&dir, database)
@@ -408,11 +411,10 @@ fn tables_in(dir: &Path, database: &Path) -> Result<Vec<Table>> {
         return Err(missing());
     }
     std::fs::create_dir_all(dir)?;
-    let script = format!(
-        "{} SELECT DISTINCT schema_name, table_name FROM duckdb_columns() WHERE database_name = 'src' AND starts_with(data_type, 'GEOMETRY') ORDER BY ALL;",
-        prelude(dir, Some(database))?
+    let select = format!(
+        "SELECT DISTINCT schema_name, table_name FROM duckdb_columns() WHERE database_name = 'src' AND starts_with(data_type, 'GEOMETRY') ORDER BY ALL LIMIT {LIST_LIMIT}"
     );
-    let rows = run_script(dir, &script, LIST_TIMEOUT)?;
+    let rows = fetch(dir, &prelude(dir, Some(database), true)?, &select, LIST_TIMEOUT)?;
     Ok(rows
         .as_array()
         .into_iter()
@@ -420,7 +422,6 @@ fn tables_in(dir: &Path, database: &Path) -> Result<Vec<Table>> {
         .filter_map(|r| {
             Some(Table { schema: r.get("schema_name")?.as_str()?.to_string(), name: r.get("table_name")?.as_str()?.to_string() })
         })
-        .take(MAX_TABLES)
         .collect())
 }
 
@@ -494,7 +495,7 @@ fn cached(dir: &Path, tag: &str, key: &str, stored: &str) -> Option<Output> {
 }
 
 /// Whether a file name is one this module writes: `<16 hex>.<family>.parquet`, `<16 hex>.key`, or
-/// a `<16 hex>.<pid>.<n>.<family>.tmp.parquet` or `<16 hex>.<pid>.<n>.counts.tmp.json` left by a
+/// a `<16 hex>.<pid>.<n>.<family>.tmp.parquet` or `<16 hex>.<pid>.<n>.rows.tmp.json` left by a
 /// run that didn't finish.
 fn ours(name: &str) -> bool {
     let Some((tag, rest)) = name.split_once('.') else { return false };
@@ -509,7 +510,7 @@ fn ours(name: &str) -> bool {
     let parts = |suffix: &str| rest.strip_suffix(suffix).map(|r| r.split('.').map(str::to_string).collect::<Vec<_>>());
     match (parts(".tmp.parquet").as_deref(), parts(".tmp.json").as_deref()) {
         (Some([pid, n, f]), _) => digits(pid) && digits(n) && family(f),
-        (_, Some([pid, n, c])) => digits(pid) && digits(n) && c == "counts",
+        (_, Some([pid, n, c])) => digits(pid) && digits(n) && c == "rows",
         _ => false,
     }
 }
@@ -530,12 +531,6 @@ mod tests {
         assert_eq!(type_crs("GEOMETRY('EPSG:3857')"), Some("EPSG:3857"));
         assert_eq!(type_crs("GEOMETRY"), None);
         assert_eq!(strip_ansi("\u{1b}[90mWARNING\u{1b}[0m x"), "WARNING x");
-        // Rows after (and before) warnings; no rows.
-        let out =
-            "\u{1b}[90mWARNING:\n\u{1b}[00m\u{1b}[90mRan S3 glob from region [x]\n\n\u{1b}[00m[{\"a\":1},\n{\"a\":2}]\nWARNING: [{ later";
-        assert_eq!(rows(out).unwrap(), serde_json::json!([{"a": 1}, {"a": 2}]));
-        assert_eq!(rows("").unwrap(), serde_json::json!([]));
-        assert!(rows("[{ broken").is_err());
         let m = message(
             "WARNING: x\nBinder Error: no column \"b\"\n\nLINE 1: SELECT … query('SELECT b')\n        ^",
             &std::process::ExitStatus::default(),
@@ -546,8 +541,8 @@ mod tests {
     #[test]
     fn cache_files() {
         assert!(ours("0123456789abcdef.points.parquet") && ours("0123456789abcdef.key"));
-        assert!(ours("0123456789abcdef.4242.7.lines.tmp.parquet") && ours("0123456789abcdef.4242.7.counts.tmp.json"));
-        assert!(!ours("0123456789abcdef.4242.7.lines.tmp.json") && !ours("0123456789abcdef.4242.7.counts.tmp.parquet"));
+        assert!(ours("0123456789abcdef.4242.7.lines.tmp.parquet") && ours("0123456789abcdef.4242.7.rows.tmp.json"));
+        assert!(!ours("0123456789abcdef.4242.7.lines.tmp.json") && !ours("0123456789abcdef.4242.7.rows.tmp.parquet"));
         assert!(!ours("0123456789abcdef.parquet") && !ours("0123456789abcdef.other.parquet") && !ours("init.sql"));
         assert!(!ours("data.points.parquet") && !ours("0123456789abcdef.x.7.lines.tmp.parquet"));
     }
@@ -647,16 +642,24 @@ mod tests {
 
         // A database: its geometry tables, converted once.
         let db = dir.join("t.duckdb");
+        let secret = dir.join("secret.txt");
+        std::fs::write(&secret, "do not read").unwrap();
         let duckdb = program().unwrap();
         let st = Command::new(duckdb)
             .arg(&db)
             .arg("-c")
             .arg("LOAD spatial; CREATE SCHEMA s2; CREATE TABLE pts AS SELECT i AS id, ST_Point(i % 360 - 180, i % 170 - 85) AS geom FROM range(1000) t(i); CREATE TABLE s2.polys AS SELECT 1 AS id, ST_GeomFromText('POLYGON((0 0, 1 0, 1 1, 0 0))') AS geom; CREATE TABLE plain(a INT);")
+            .arg("-c")
+            .arg(format!("CREATE VIEW leak AS SELECT content AS c, ST_Point(0, 0) AS geom FROM read_text({});", literal(&secret.display().to_string())))
             .status()
             .unwrap();
         assert!(st.success());
         let tables = tables_in(&cache, &db).unwrap();
-        assert_eq!(tables.iter().map(Table::label).collect::<Vec<_>>(), vec!["pts", "s2.polys"]);
+        assert_eq!(tables.iter().map(Table::label).collect::<Vec<_>>(), vec!["leak", "pts", "s2.polys"]);
+        // A view reaching outside the database is refused: tables are read confined to the cache.
+        let e = convert_table_in(&cache, &db, &tables[0], None).unwrap_err().to_string();
+        assert!(e.contains("Permission Error"), "{e}");
+        let tables = &tables[1..];
         let a = convert_table_in(&cache, &db, &tables[0], None).unwrap();
         assert_eq!(a.parts.iter().map(|p| p.count).collect::<Vec<_>>(), vec![1000]);
         // The second time is a cache hit, read back from the key file.

@@ -83,8 +83,9 @@ cache folder (`~/.cache/rustgis/duckdb` on Linux, `~/Library/Caches/RustGIS/duck
 Hilbert curve with a bounding-box covering, so large results stream like any large GeoParquet
 (below). DuckDB Spatial is installed the first time (a download from DuckDB's extension
 repository). A database table is converted once and reused until the file changes; a query runs
-afresh each time. Projects remember the query or table and run it again if the cached result is
-gone.
+afresh each time. Projects convert a table again if the cached result is gone, but never run a
+query when they open: run it again. A database is read on its own, shut out of other files and web
+addresses, so a view in it that reaches elsewhere fails rather than reading them.
 
 A query can read any file the app can and fetch any web address, so the [AI
 Assistant](assistant.md) asks before it runs one, and plugins need both the files and network

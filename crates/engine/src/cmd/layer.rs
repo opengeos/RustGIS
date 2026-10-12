@@ -430,6 +430,10 @@ fn add_duckdb(s: &mut Session, p: &Value, path: &str) -> CmdResult {
     if tables.is_empty() {
         return Err(format!("{path}: no tables with a geometry column"));
     }
+    if tables.len() > duckdb::MAX_TABLES {
+        s.notify(format!("{path}: adding the first {} of {} tables (\"layer\" picks another)", duckdb::MAX_TABLES, tables.len()), false);
+    }
+    let tables: Vec<_> = tables.into_iter().take(duckdb::MAX_TABLES).collect();
     let original = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
     let mut parts = Vec::new();
     let single = tables.len() == 1;

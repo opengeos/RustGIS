@@ -54,8 +54,8 @@ pub struct SourceLayer {
     /// converted copy is gone (desktop only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gdal: Option<GdalOrigin>,
-    /// For a layer from a DuckDB query or database table: run again when the result in the cache
-    /// is gone (desktop only).
+    /// For a layer from a DuckDB query or database table: a table is converted again when the
+    /// result in the cache is gone (desktop only); a query is not run again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duckdb: Option<DuckdbOrigin>,
 }
@@ -103,15 +103,19 @@ impl std::fmt::Debug for SourceLayer {
     }
 }
 
-/// Runs a DuckDB layer's query (or converts its table) again: the result's part of the layer's
-/// geometry family.
+/// Converts a DuckDB layer's table again: the result's part of the layer's geometry family.
+/// A query is never run again here: a project file is hostile input, and a query can read any file
+/// and send it to any address. Its user runs it again.
 #[cfg(not(target_arch = "wasm32"))]
 fn rerun(d: &DuckdbOrigin) -> rustgis_data::Result<std::path::PathBuf> {
     use rustgis_data::source::duckdb;
-    let database = d.database.as_deref().map(std::path::Path::new);
-    let out = match (&d.table, database) {
+    let out = match (&d.table, d.database.as_deref().map(std::path::Path::new)) {
         (Some(t), Some(db)) => duckdb::convert_table(db, &duckdb::find_table(db, t)?, d.crs.as_deref())?,
-        _ => duckdb::run(&duckdb::Query { sql: d.sql.as_deref().unwrap_or_default(), database, crs: d.crs.as_deref() })?,
+        _ => {
+            return Err(rustgis_data::DataError::Format(
+                "the query's result is no longer in the cache: run the query again (Add Data From SQL)".into(),
+            ));
+        }
     };
     out.parts
         .into_iter()
