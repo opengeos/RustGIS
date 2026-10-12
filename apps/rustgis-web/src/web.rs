@@ -4,7 +4,6 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use rustgis_ui_egui::rustgis_engine::{Project, Session};
 use rustgis_ui_egui::{Inbox, RustGisApp, Services};
 use wasm_bindgen::JsCast as _;
 
@@ -40,14 +39,20 @@ pub fn start() {
                 Box::new(move |cc| {
                     let inbox: Inbox = Inbox::default();
                     let font_inbox: Inbox = Inbox::default();
-                    let app = if query().contains("blank") {
-                        RustGisApp::new(Session::new(Project::default()))
-                    } else {
-                        RustGisApp::with_sample()
-                    };
-                    let mut app = app.with_services(services(inbox.clone(), font_inbox, cc.egui_ctx.clone()));
-                    // `?lang=de` picks the interface language for this visit.
                     let q = query();
+                    let mut app = RustGisApp::with_sample().with_services(services(inbox.clone(), font_inbox, cc.egui_ctx.clone()));
+                    // Settings › Start-up, unless `?blank`, `?projection=EPSG:3010` (a preset id,
+                    // `mercator`, `globe`) or `?extent=minLon,minLat,maxLon,maxLat` says otherwise
+                    // for this visit.
+                    let start = rustgis_ui_egui::Start {
+                        blank: q.trim_start_matches('?').split('&').any(|kv| kv == "blank").then_some(true),
+                        projection: param(&q, "projection").filter(|c| !c.is_empty()),
+                        extent: param(&q, "extent").filter(|c| !c.is_empty()),
+                    };
+                    if let Err(e) = app.start(&start) {
+                        log::warn!("start-up: {e}");
+                    }
+                    // `?lang=de` picks the interface language for this visit.
                     if let Some(code) = q.trim_start_matches('?').split('&').find_map(|kv| kv.strip_prefix("lang=")) {
                         match rustgis_ui_egui::i18n::Lang::from_code(code) {
                             Some(l) => app.ui.language = l.code().to_string(),

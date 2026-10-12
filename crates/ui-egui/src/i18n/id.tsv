@@ -176,6 +176,7 @@ Below Right	Kanan Bawah
 Bilinear	Bilinear
 Blank	Kosong
 Blank Letter page	Halaman Letter kosong
+Blank Map	Peta kosong
 Blank Page	Halaman Kosong
 Blue	Biru
 Bold	Tebal
@@ -597,6 +598,7 @@ Export To 3D File	Ekspor ke File 3D
 exporting animations needs the desktop app	mengekspor animasi memerlukan aplikasi desktop
 Export…	Ekspor…
 Expression	Ekspresi
+Extent	Cakupan
 Extent Indicator	Indikator Cakupan
 Extent: {extent}	Cakupan: {extent}
 Extract	Ekstrak
@@ -1390,6 +1392,7 @@ Save Web Map	Simpan Peta Web
 Save Web Scene	Simpan Scene Web
 Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Kunci yang disimpan disimpan tanpa enkripsi di preferensi aplikasi (di penyimpanan browser pada versi web).
 Saved symbology: apply it to the selected layer, or save the layer's.	Simbologi tersimpan: terapkan pada layer terpilih, atau simpan simbologi layer.
+Saved View	Tampilan tersimpan
 Saved {name}	{name} disimpan
 saving failed unexpectedly	penyimpanan gagal secara tak terduga
 Scale	Skala
@@ -1538,6 +1541,8 @@ Standard Deviation	Simpangan Baku
 Star	Bintang
 Start	Mulai
 Start Over	Mulai Ulang
+Start With	Mulai dengan
+Start-up	Memulai
 Statistics	Statistik
 Statistics Field	Kolom Statistik
 Status	Status
@@ -1617,6 +1622,7 @@ the preview failed unexpectedly	pratinjau gagal secara tak terduga
 The project's items in place of the map.	Item proyek sebagai pengganti peta.
 The project's thumbnail, from an image.	Thumbnail proyek, dari sebuah gambar.
 The project's thumbnail, from the map view.	Thumbnail proyek, dari tampilan peta.
+The projection the map opens in.	Proyeksi saat peta dibuka.
 The raster's data couldn't be read.	Data raster tidak dapat dibaca.
 The raster's data couldn't be read: {path}	Data raster tidak dapat dibaca: {path}
 the reply reached its length limit	balasan mencapai batas panjangnya
@@ -1684,6 +1690,8 @@ Update to {version}	Perbarui ke {version}
 Upload File	Unggah File
 Upload File…	Unggah File…
 USA Contiguous Albers Equal Area	Albers Luas Sama AS Kontinental
+Use	Gunakan
+Use Current View	Gunakan tampilan saat ini
 Valid combinations, one per line: a, b	Kombinasi valid, satu per baris: a, b
 Valid expression · {n} matching rows	Ekspresi valid · {n} baris cocok
 Validate	Validasi
@@ -1728,11 +1736,13 @@ Welcome to RustGIS	Selamat datang di RustGIS
 West	Barat
 WGS 84 / Globe	WGS 84 / Globe
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
+What RustGIS opens with: the World Atlas sample or a blank map.	Apa yang dibuka RustGIS: contoh World Atlas atau peta kosong.
 What's near a point	Apa yang ada di dekat suatu titik
 Where	Where
 Where Clause	Klausa Where
 Where labels sit relative to their features.	Posisi label relatif terhadap fiturnya.
 Where new features get their elevation (the z field).	Asal elevasi fitur baru (kolom z).
+Where the map opens: the full extent or a view you saved.	Tempat peta dibuka: cakupan penuh atau tampilan yang Anda simpan.
 Where tools work	Area kerja alat
 Which 5 countries have the largest GDP?	5 negara mana yang memiliki PDB terbesar?
 Whose borders the sample countries and the basemap outline show.	Batas negara versi siapa yang ditampilkan oleh contoh negara dan garis batas peta dasar.

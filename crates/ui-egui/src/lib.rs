@@ -39,6 +39,24 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 /// A result an asynchronous service fills in when it's done (the app polls it each frame).
 pub type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
 
+/// A shell's overrides of the Settings › Start-up preferences for one launch.
+#[derive(Clone, Debug, Default)]
+pub struct Start {
+    /// Begin with an empty project (`Some(true)`) or the sample (`Some(false)`).
+    pub blank: Option<bool>,
+    /// A projection code: `EPSG:3010`, a preset id, `mercator` or `globe`.
+    pub projection: Option<String>,
+    /// The extent to open on, as `minLon,minLat,maxLon,maxLat`.
+    pub extent: Option<String>,
+}
+
+/// Reads `minLon,minLat,maxLon,maxLat` (commas or spaces) into a valid longitude/latitude extent.
+pub fn parse_extent(text: &str) -> Option<[f64; 4]> {
+    let n: Vec<f64> = text.split([',', ' ']).filter(|x| !x.is_empty()).map(|x| x.trim().parse().ok()).collect::<Option<_>>()?;
+    let e = rustgis_engine::cmd::navigate::lonlat_extent(Some(&serde_json::json!(n)))?;
+    Some([e.min_x, e.min_y, e.max_x, e.max_y])
+}
+
 /// Platform hooks. The desktop app leaves them empty and uses native file dialogs; the web app
 /// supplies an asynchronous file picker (results arrive in `inbox`) and browser downloads.
 #[derive(Default)]
@@ -156,6 +174,20 @@ pub struct UiState {
     /// Worldview preference for the built-in countries and world outline: `auto`, `default` or
     /// `china`.
     pub worldview: String,
+    /// Start-up preference: begin with an empty project instead of the World Atlas sample.
+    pub start_blank: bool,
+    /// Start-up preference: the projection the first map starts in (a [`Projection`] code);
+    /// empty for Web Mercator.
+    ///
+    /// [`Projection`]: rustgis_engine::map::Projection
+    pub start_projection: String,
+    /// The EPSG code typed in Settings › Start-up › Projection.
+    pub start_projection_input: String,
+    /// Start-up preference: the extent the map opens on, `[minLon, minLat, maxLon, maxLat]`;
+    /// `None` for the full extent.
+    pub start_extent: Option<[f64; 4]>,
+    /// The start extent, fitted again once the map view has its real size.
+    pub start_view: Option<[f64; 4]>,
     /// The ribbon shows only its tabs; clicking a tab opens it until the next click elsewhere.
     pub ribbon_minimized: bool,
     /// A minimized ribbon temporarily opened from its tab strip.
@@ -197,6 +229,11 @@ impl Default for UiState {
             dark: false,
             language: i18n::AUTO.into(),
             worldview: i18n::AUTO.into(),
+            start_blank: false,
+            start_projection: String::new(),
+            start_projection_input: String::new(),
+            start_extent: None,
+            start_view: None,
             ribbon_minimized: false,
             ribbon_peek: false,
             command_search: None,
@@ -306,6 +343,14 @@ impl RustGisApp {
             self.ui.worldview = w.trim().to_ascii_lowercase();
         }
         self.apply_worldview();
+        self.ui.start_blank = self.services.load_pref.as_ref().and_then(|load| load("start_project")).as_deref() == Some("blank");
+        // A stored projection this version can't use means Web Mercator.
+        if let Some(code) = self.services.load_pref.as_ref().and_then(|load| load("start_projection"))
+            && let Ok(p) = rustgis_engine::map::Projection::from_code(&code)
+        {
+            self.ui.start_projection = p.code();
+        }
+        self.ui.start_extent = self.services.load_pref.as_ref().and_then(|load| load("start_extent")).and_then(|v| parse_extent(&v));
         if let Some(m) = self.services.load_pref.as_ref().and_then(|load| load("ribbon_minimized")) {
             self.ui.ribbon_minimized = m == "true";
         }
@@ -573,6 +618,44 @@ impl RustGisApp {
         }
     }
 
+    /// Sets up the project the app opens with, from the Settings › Start-up preferences; a shell
+    /// passes its own overrides (the web app's `?blank`, `?projection=` and `?extent=`). Call it
+    /// once, after [`Self::with_services`] and before opening files. The start is not an edit to
+    /// undo or save.
+    pub fn start(&mut self, overrides: &Start) -> Result<(), String> {
+        if overrides.blank.unwrap_or(self.ui.start_blank) {
+            self.run("project.new", Value::Null)?;
+        }
+        let code = overrides.projection.clone().unwrap_or_else(|| self.ui.start_projection.clone());
+        let mut result = Ok(());
+        let mut projected = false;
+        if !code.trim().is_empty() {
+            match self.run("map.projection", serde_json::json!({"type": code})) {
+                Ok(_) => projected = true,
+                Err(e) => result = Err(e),
+            }
+        }
+        let extent = match &overrides.extent {
+            Some(text) => match parse_extent(text) {
+                Some(e) => Some(e),
+                None => {
+                    result = result.and(Err(format!("extent '{text}' is minLon,minLat,maxLon,maxLat")));
+                    self.ui.start_extent
+                }
+            },
+            None => self.ui.start_extent,
+        };
+        if let Some(e) = extent {
+            let _ = self.run("map.zoomToExtent", serde_json::json!({"extent": e}));
+            self.ui.start_view = Some(e);
+        } else if projected {
+            let _ = self.run("map.zoomFull", Value::Null);
+        }
+        self.session.clear_history();
+        self.map.invalidate();
+        result
+    }
+
     /// Runs a command by id: `ui.*` here, everything else in the engine.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         if !matches!(id, "ui.menu" | "ui.ribbon" | "ui.language" | "ui.worldview") {
@@ -644,6 +727,52 @@ impl RustGisApp {
                     save("worldview", &self.ui.worldview);
                 }
                 self.apply_worldview();
+            }
+            "ui.startup" => {
+                let blank = p.get("blank").and_then(Value::as_bool);
+                // Validate before changing anything; `mercator` is stored as the default.
+                let projection = match p.get("projection").and_then(Value::as_str) {
+                    Some(code) => Some(rustgis_engine::map::Projection::from_code(code)?),
+                    None => None,
+                };
+                // `"extent": "view"` takes the map's view, `null` the full extent.
+                let extent = match p.get("extent") {
+                    None => None,
+                    Some(Value::Null) => Some(None),
+                    Some(Value::String(v)) if v == "view" => {
+                        let r = self.session.run("map.extent", &Value::Null)?;
+                        Some(Some(rustgis_engine::cmd::navigate::lonlat_extent(r.get("extent")).ok_or("the view has no extent")?))
+                    }
+                    Some(v) => Some(Some(
+                        rustgis_engine::cmd::navigate::lonlat_extent(Some(v))
+                            .ok_or("extent is [minLon, minLat, maxLon, maxLat], \"view\" or null")?,
+                    )),
+                };
+                if let Some(e) = extent {
+                    self.ui.start_extent = e.map(|e| [e.min_x, e.min_y, e.max_x, e.max_y]);
+                    if let Some(save) = &self.services.save_pref {
+                        let text = self.ui.start_extent.map(|e| e.map(|x| format!("{x:.6}")).join(",")).unwrap_or_default();
+                        save("start_extent", &text);
+                    }
+                }
+                if let Some(b) = blank {
+                    self.ui.start_blank = b;
+                    if let Some(save) = &self.services.save_pref {
+                        save("start_project", if b { "blank" } else { "sample" });
+                    }
+                }
+                if let Some(proj) = projection {
+                    self.ui.start_projection =
+                        if proj == rustgis_engine::map::Projection::WebMercator { String::new() } else { proj.code() };
+                    if let Some(save) = &self.services.save_pref {
+                        save("start_projection", &self.ui.start_projection);
+                    }
+                }
+                return Ok(serde_json::json!({
+                    "blank": self.ui.start_blank,
+                    "projection": if self.ui.start_projection.is_empty() { "mercator" } else { self.ui.start_projection.as_str() },
+                    "extent": self.ui.start_extent,
+                }));
             }
             "ui.ribbon" => {
                 self.ui.ribbon_minimized = p.get("minimized").and_then(Value::as_bool).unwrap_or(!self.ui.ribbon_minimized);

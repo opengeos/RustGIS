@@ -256,6 +256,10 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         return;
     }
     app.session.view_size = (w, h);
+    // The start extent, fitted to the view's real size.
+    if let Some(e) = app.ui.start_view.take() {
+        let _ = app.run("map.zoomToExtent", json!({"extent": e}));
+    }
     let ppp = ui.ctx().pixels_per_point();
     let time = now(ui);
 

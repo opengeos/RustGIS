@@ -176,6 +176,7 @@ Below Right	Aşağı sağ
 Bilinear	Bilinear
 Blank	Boş
 Blank Letter page	Boş Letter səhifəsi
+Blank Map	Boş xəritə
 Blank Page	Boş səhifə
 Blue	Mavi
 Bold	Qalın
@@ -597,6 +598,7 @@ Export To 3D File	3D fayla ixrac et
 exporting animations needs the desktop app	animasiyaların ixracı masaüstü tətbiq tələb edir
 Export…	İxrac et…
 Expression	İfadə
+Extent	Əhatə
 Extent Indicator	Hüdud göstəricisi
 Extent: {extent}	Hüdud: {extent}
 Extract	Çıxarma
@@ -1390,6 +1392,7 @@ Save Web Map	Veb xəritəni saxla
 Save Web Scene	Veb səhnəni saxla
 Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Saxlanılan açarlar tətbiqin tənzimləmələrində şifrələnmədən saxlanılır (vebdə brauzerin yaddaşında).
 Saved symbology: apply it to the selected layer, or save the layer's.	Saxlanmış simvolika: onu seçilmiş laya tətbiq edin və ya layınkını saxlayın.
+Saved View	Saxlanmış görünüş
 Saved {name}	{name} saxlanıldı
 saving failed unexpectedly	saxlama gözlənilmədən uğursuz oldu
 Scale	Miqyas
@@ -1538,6 +1541,8 @@ Standard Deviation	Standart sapma
 Star	Ulduz
 Start	Başla
 Start Over	Yenidən başla
+Start With	Bununla başla
+Start-up	Başlanğıc
 Statistics	Statistika
 Statistics Field	Statistika sahəsi
 Status	Vəziyyət
@@ -1617,6 +1622,7 @@ the preview failed unexpectedly	ön baxış gözlənilmədən uğursuz oldu
 The project's items in place of the map.	Xəritənin yerinə layihənin elementləri.
 The project's thumbnail, from an image.	Təsvirdən layihənin miniatürü.
 The project's thumbnail, from the map view.	Xəritə görünüşündən layihənin miniatürü.
+The projection the map opens in.	Xəritənin açıldığı proyeksiya.
 The raster's data couldn't be read.	Rastrın məlumatı oxuna bilmədi.
 The raster's data couldn't be read: {path}	Rastrın məlumatı oxuna bilmədi: {path}
 the reply reached its length limit	cavab uzunluq həddinə çatdı
@@ -1684,6 +1690,8 @@ Update to {version}	{version} versiyasına yenilə
 Upload File	Fayl yüklə
 Upload File…	Fayl yüklə…
 USA Contiguous Albers Equal Area	ABŞ bitişik ştatlar Albers bərabər sahəli
+Use	İstifadə et
+Use Current View	Cari görünüşdən istifadə et
 Valid combinations, one per line: a, b	Etibarlı kombinasiyalar, hər sətirdə bir: a, b
 Valid expression · {n} matching rows	İfadə düzgündür · {n} uyğun sətir
 Validate	Yoxla
@@ -1728,11 +1736,13 @@ Welcome to RustGIS	RustGIS-ə xoş gəlmisiniz
 West	Qərb
 WGS 84 / Globe	WGS 84 / Qlobus
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
+What RustGIS opens with: the World Atlas sample or a blank map.	RustGIS-in nə ilə açılacağı: World Atlas nümunəsi və ya boş xəritə.
 What's near a point	Nöqtənin yaxınlığında nə var
 Where	Where
 Where Clause	Where şərti
 Where labels sit relative to their features.	Etiketlərin obyektlərinə nisbətən harada yerləşdiyi.
 Where new features get their elevation (the z field).	Yeni obyektlərin hündürlüyünü haradan aldığı (z sahəsi).
+Where the map opens: the full extent or a view you saved.	Xəritənin harada açılacağı: tam əhatə və ya saxladığınız görünüş.
 Where tools work	Alətlərin işlədiyi ərazi
 Which 5 countries have the largest GDP?	Hansı 5 ölkənin ÜDM-i ən böyükdür?
 Whose borders the sample countries and the basemap outline show.	Nümunə ölkələrin və əsas xəritə konturunun kimin sərhədlərini göstərdiyi.

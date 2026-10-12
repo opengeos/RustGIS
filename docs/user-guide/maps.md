@@ -76,7 +76,8 @@ Layers are projected on the fly. Each projection has an area of use: polar proje
 their hemisphere poleward of 30°, regional ones their region, transverse Mercator (UTM) zones
 30° either side of their meridian, and data outside it isn't drawn. Switching keeps the centre
 and scale, and the choice is saved with the map (`map.projection` from the command line). A
-raster already in the map's coordinate system draws without being reprojected. Robinson, Equal
+raster already in the map's coordinate system draws without being reprojected. To open every new
+session in a projection, set it in **Settings › Start-up › Projection**. Robinson, Equal
 Earth, Natural Earth, Winkel Tripel and Eckert IV are computed by RustGIS itself on a sphere,
 so EPSG:8857 (Equal Earth) works too.
 
