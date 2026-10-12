@@ -90,9 +90,10 @@ conversation.
 Your agent asks you before each tool call, and the server adds its own limits:
 
 - Commands that read or write files, connect to an address on the internet or run a plugin's
-  command run only when the server was started with `--yes`. Without it, the agent can still
-  work with the data you gave the server and with the built-in sample, basemaps and
-  geoprocessing.
+  command run only when the server was started with `--yes`, as does opening a project from
+  text (it could bring in web layers). Without it, the agent can still work with the data you
+  gave the server and with the built-in sample, basemaps and geoprocessing. `view_map` draws
+  the web tile layers the project you opened already has, fetching their tiles.
 - Plugin management, scripts, tasks, models and the GeoLibre runner are never run from here.
 - Opening, replacing and undoing in the project are allowed: the project is the agent's own,
   not the one open in the desktop app.

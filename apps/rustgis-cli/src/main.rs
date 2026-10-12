@@ -205,7 +205,10 @@ fn mcp(s: &mut Session, args: &[String]) -> Result<(), String> {
         }
         // A last resort: a panic answers that request with an error instead of ending the server.
         let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &line))).unwrap_or_else(|_| {
-            Some(json!({"jsonrpc": "2.0", "id": Value::Null, "error": {"code": -32603, "message": "internal error"}}).to_string())
+            // The panic message is already on standard error; the id lets the client match the error.
+            eprintln!("rustgis-cli: a request failed unexpectedly; the project may be partly changed");
+            let id = serde_json::from_str::<Value>(&line).ok().and_then(|v| v.get("id").cloned()).unwrap_or(Value::Null);
+            Some(json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32603, "message": "internal error"}}).to_string())
         });
         if let Some(reply) = reply {
             // The client hung up.

@@ -8,7 +8,8 @@
 //!
 //! The client asks its user before each tool call; the server adds its own floor. File and
 //! network access is refused unless the server was started allowing it, and the user's own
-//! automation (scripts, tasks, models, plugin management) is never run.
+//! automation (scripts, tasks, models, plugin management) is never run. Without access, the only
+//! network use left is drawing web tile layers that the project the user opened already has.
 
 use rustgis_engine::Session;
 use rustgis_engine::cmd::plugins::{Reach, reaches, user_only};
@@ -158,6 +159,9 @@ impl Server {
         }
         let why = if id.starts_with(rustgis_engine::plugins::PREFIX) {
             "it runs a plugin's command"
+        } else if id == "project.openText" {
+            // A project can hold web tile layers, which drawing the map (view_map) fetches.
+            "a project can bring in web layers that connect to the internet"
         } else {
             match reaches(s.registry.get(&id)?, &params)? {
                 Reach::Files => "it reads or writes files on this computer",
