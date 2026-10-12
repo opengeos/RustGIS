@@ -26,6 +26,7 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
         "geojson" | "json" => read_geojson(text()?, &name)?,
         "csv" | "txt" => read_csv(text()?, &name)?,
         "shp" => return Err(DataError::Unsupported("shp here: open Shapefiles from disk in the desktop app".into())),
+        // A copy, since only borrowed bytes are given; `read_owned` takes them without one.
         e if crate::source::EXTENSIONS.contains(&e) => return read_owned(file_name, bytes.to_vec()),
         other => return Err(DataError::Unsupported(other.to_string())),
     };

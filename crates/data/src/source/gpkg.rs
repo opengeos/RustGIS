@@ -129,8 +129,17 @@ impl GpkgSource {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
             })
             .ok()
-            .and_then(|(org, id)| if org.eq_ignore_ascii_case("epsg") { u32::try_from(id).ok() } else { None })
-            .or_else(|| u32::try_from(srs_id).ok().filter(|c| *c > 0));
+            .map_or_else(
+                // No row for it: the srs_id is taken as an EPSG code only for WGS 84 and Web
+                // Mercator, the ids writers commonly use without defining.
+                || u32::try_from(srs_id).ok().filter(|c| matches!(c, 4326 | 3857)),
+                // A row: an EPSG code only when the organization is EPSG (a table-local id such as
+                // 100001 isn't one).
+                |(org, id)| if org.eq_ignore_ascii_case("epsg") { u32::try_from(id).ok() } else { None },
+            );
+        if epsg.is_none() && srs_id > 0 && srs_id != 4326 {
+            notes.push(format!("its coordinate system (srs_id {srs_id}) has no EPSG code; read as longitude/latitude"));
+        }
         let reproject = Reproject::from_epsg(epsg, &mut notes);
 
         // Columns: the primary key, the geometry and the attribute fields.
@@ -285,18 +294,23 @@ impl FeatureSource for GpkgSource {
         match (native, &self.rtree, &self.pk) {
             (Some(e), Some(rt), Some(pk)) => {
                 // The index gives the matching ids; an evenly spread sample of them is fetched.
-                let mut st = conn
-                    .prepare(&format!("SELECT id FROM {} WHERE maxx >= ?1 AND minx <= ?2 AND maxy >= ?3 AND miny <= ?4", quote(rt)))
-                    .map_err(err)?;
+                // Counted first, then streamed keeping every `step`-th, so a huge match never sits
+                // in memory as a list of ids.
+                let filter = format!("FROM {} WHERE maxx >= ?1 AND minx <= ?2 AND maxy >= ?3 AND miny <= ?4", quote(rt));
+                let args = [e.min_x, e.max_x, e.min_y, e.max_y];
+                let n: i64 = conn.query_row(&format!("SELECT COUNT(*) {filter}"), args, |r| r.get(0)).map_err(err)?;
+                out.matched = u64::try_from(n).unwrap_or(0);
+                let step = usize::try_from(stride(out.matched, limit)).unwrap_or(usize::MAX);
+                let mut st = conn.prepare(&format!("SELECT id {filter}")).map_err(err)?;
                 let ids: Vec<i64> = st
-                    .query_map([e.min_x, e.max_x, e.min_y, e.max_y], |r| r.get(0))
+                    .query_map(args, |r| r.get(0))
                     .map_err(err)?
                     .filter_map(std::result::Result::ok)
+                    .step_by(step.max(1))
+                    .take(limit)
                     .collect();
-                out.matched = ids.len() as u64;
-                let step = usize::try_from(stride(out.matched, limit)).unwrap_or(usize::MAX);
                 out.complete = step == 1;
-                let picked: Vec<i64> = ids.into_iter().step_by(step.max(1)).collect();
+                let picked = ids;
                 for chunk in picked.chunks(CHUNK) {
                     let marks = vec!["?"; chunk.len()].join(",");
                     let sql = format!("SELECT {} FROM {} WHERE {} IN ({marks})", self.select_list(), quote(&self.table), quote(pk));
