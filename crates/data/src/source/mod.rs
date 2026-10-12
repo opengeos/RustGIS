@@ -9,6 +9,8 @@
 
 pub mod fgb;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod gdal;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gpkg;
 pub mod parquet;
 
@@ -16,6 +18,35 @@ use crate::raster::{Crs, Transformer};
 use crate::{DataError, Dataset, Feature, Field, Geometry, GeometryType, ReadReport, Result};
 use rustgis_geom::{Coord, Extent};
 use std::path::Path;
+
+/// One kind of geometry, for a layer that mixes them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Family {
+    Points,
+    Lines,
+    Polygons,
+}
+
+impl Family {
+    pub const ALL: [Family; 3] = [Family::Points, Family::Lines, Family::Polygons];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Family::Points => "points",
+            Family::Lines => "lines",
+            Family::Polygons => "polygons",
+        }
+    }
+
+    /// An OGR SQL filter on the geometry type.
+    pub fn filter(self) -> &'static str {
+        match self {
+            Family::Points => "OGR_GEOMETRY IN ('POINT', 'MULTIPOINT')",
+            Family::Lines => "OGR_GEOMETRY IN ('LINESTRING', 'MULTILINESTRING')",
+            Family::Polygons => "OGR_GEOMETRY IN ('POLYGON', 'MULTIPOLYGON')",
+        }
+    }
+}
 
 /// File types read through a provider.
 pub const EXTENSIONS: &[&str] = &["gpkg", "parquet", "geoparquet", "fgb"];

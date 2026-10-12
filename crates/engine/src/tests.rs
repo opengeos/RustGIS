@@ -2393,3 +2393,35 @@ fn any_command_editing_a_streamed_layer_is_undone() {
     assert_ne!(s.map().layers[0].dataset.features.len(), before.len());
     let _ = std::fs::remove_file(path);
 }
+
+/// A GPX through GDAL, when it is installed (skipped otherwise).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn gdal_formats_open_when_gdal_is_installed() {
+    if !rustgis_data::source::gdal::available() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-gdal-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let gpx = dir.join("walk.gpx");
+    std::fs::write(
+        &gpx,
+        r#"<?xml version="1.0"?><gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1">
+<wpt lat="45.0" lon="7.0"><name>start</name></wpt><wpt lat="45.1" lon="7.1"><name>end</name></wpt>
+<trk><name>walk</name><trkseg><trkpt lat="45.0" lon="7.0"/><trkpt lat="45.05" lon="7.05"/><trkpt lat="45.1" lon="7.1"/></trkseg></trk></gpx>"#,
+    )
+    .unwrap();
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": gpx.display().to_string()})).unwrap();
+    let names: Vec<String> = s.map().layers.iter().map(|l| l.name.clone()).collect();
+    assert!(names.contains(&"waypoints".to_string()) && names.contains(&"tracks".to_string()), "{names:?} {r}");
+    let wpt = s.map().layer_by_name("waypoints").unwrap();
+    assert_eq!(wpt.dataset.features.len(), 2);
+    assert_eq!(wpt.dataset.source.as_deref(), Some(std::path::absolute(&gpx).unwrap().display().to_string().as_str()));
+    // Streamed, the layer remembers the original file.
+    let r = s.run("layer.addData", &json!({"path": gpx.display().to_string(), "layer": "tracks", "stream": true})).unwrap();
+    let id = r["layer"].as_u64().unwrap() as u32;
+    let g = s.map().layer(id).unwrap().source.as_ref().unwrap().gdal.clone().unwrap();
+    assert_eq!(g.layer, "tracks");
+    let _ = std::fs::remove_dir_all(dir);
+}

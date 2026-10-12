@@ -50,6 +50,22 @@ pub struct SourceLayer {
     /// Reads installed so far: the features changing with it came from the source, not an edit.
     #[serde(skip)]
     pub reads: u64,
+    /// For a layer read through GDAL: the original file, converted again into the cache when the
+    /// converted copy is gone (desktop only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gdal: Option<GdalOrigin>,
+}
+
+/// Where a layer read through GDAL came from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GdalOrigin {
+    pub path: String,
+    pub layer: String,
+    #[serde(default)]
+    pub family: Option<rustgis_data::source::Family>,
+    /// The coordinate system given for a file that doesn't say.
+    #[serde(default)]
+    pub crs: Option<String>,
 }
 
 impl std::fmt::Debug for SourceLayer {
@@ -118,7 +134,23 @@ impl SourceLayer {
             let name = self.file_name.as_deref().unwrap_or("layer.parquet");
             rustgis_data::source::open_shared(name, bytes.clone(), self.table.as_deref())
         } else if let Some(p) = &self.path {
-            rustgis_data::source::open_path(std::path::Path::new(p), self.table.as_deref())
+            let opened = rustgis_data::source::open_path(std::path::Path::new(p), self.table.as_deref());
+            match (opened, &self.gdal) {
+                // The converted copy is gone (a cleared cache, another machine): convert again.
+                #[cfg(not(target_arch = "wasm32"))]
+                (Err(_), Some(g)) => {
+                    match rustgis_data::source::gdal::convert_one(std::path::Path::new(&g.path), &g.layer, g.family, g.crs.as_deref()) {
+                        Ok(Some(fresh)) => {
+                            let r = rustgis_data::source::open_path(&fresh, None);
+                            self.path = Some(fresh.display().to_string());
+                            r
+                        }
+                        Ok(None) => Err(rustgis_data::DataError::Format(format!("{}: the layer has no features", g.path))),
+                        Err(e) => Err(e),
+                    }
+                }
+                (r, _) => r,
+            }
         } else {
             return Err("the layer has no source".into());
         };

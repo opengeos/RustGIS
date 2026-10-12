@@ -713,7 +713,28 @@ impl RustGisApp {
                     self.ui.pending_open = None;
                     open("data");
                 } else if let Some(path) = dialogs::pick_open(
-                    &["geojson", "json", "csv", "shp", "gpkg", "parquet", "geoparquet", "fgb", "tif", "tiff", "asc"],
+                    &[
+                        "geojson",
+                        "json",
+                        "csv",
+                        "shp",
+                        "gpkg",
+                        "parquet",
+                        "geoparquet",
+                        "fgb",
+                        "kml",
+                        "kmz",
+                        "gpx",
+                        "gml",
+                        "dxf",
+                        "tab",
+                        "mif",
+                        "osm",
+                        "pbf",
+                        "tif",
+                        "tiff",
+                        "asc",
+                    ],
                     tl!("Vector and raster data"),
                 ) {
                     return self.run("layer.addData", json!({"path": path}));

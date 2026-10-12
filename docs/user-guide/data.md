@@ -10,6 +10,7 @@
 | GeoPackage (`.gpkg`, every feature table) | Yes (desktop) | No |
 | GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | No |
 | FlatGeobuf (`.fgb`) | Yes | Yes (`share.exportLayer`) |
+| Through GDAL: KML/KMZ, GPX, GML, DXF, File Geodatabase (`.gdb` folder), MapInfo, OpenStreetMap, SQLite… | Yes (desktop, when GDAL is installed) | No |
 | KML, GPX, CSV with WKT geometry | No | Yes (Analysis › Workflows › Data Interop) |
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
 | ASCII grid (`.asc`, with an optional `.prj`) | Yes | No |
@@ -27,6 +28,20 @@ GeoParquet and FlatGeobuf files in another coordinate system (any EPSG code) are
 are read. Rasters keep
 their own coordinate system (any EPSG code, such as UTM zones or national grids) and are
 reprojected on the fly as they draw.
+
+## Formats through GDAL
+
+When [GDAL](https://gdal.org) is installed (its `ogr2ogr` and `ogrinfo` programs on the `PATH`,
+or the folder holding them in `RUSTGIS_GDAL_BIN`; GDAL 3.7 or later), the desktop app also opens
+the vector formats GDAL reads: KML and KMZ, GPX, GML, DXF, File Geodatabases, MapInfo, OpenStreetMap
+and more. RustGIS doesn't link to GDAL: each layer is converted once, by `ogr2ogr`, into a
+FlatGeobuf with a spatial index in WGS 84 (GDAL reprojects it), kept in the cache folder
+(`~/.cache/rustgis/gdal` on Linux, `~/Library/Caches/RustGIS/gdal` on macOS,
+`%LOCALAPPDATA%\RustGIS\cache\gdal` on Windows, or `RUSTGIS_GDAL_CACHE`). Adding the file again
+reuses the conversion until the file changes, and large layers stream like any large FlatGeobuf
+(below). Every layer of the file is added; a layer mixing geometry types, as KML often does, is
+added as one layer per type. Projects remember the original file and convert it again if the
+cached copy is gone.
 
 ## Large files
 

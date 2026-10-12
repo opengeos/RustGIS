@@ -12,7 +12,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Map › Layer", add_data)
-            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage table", "stream"?: bool}"#),
+            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage or GDAL layer", "stream"?: bool, "crs"?: "EPSG:… for a GDAL file that doesn't say"}"#),
         C::new("layer.loadAll", "Load All Features", "Contents", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addDataText", "Add Data (from text)", "Map › Layer", add_data_text).params(r#"{"fileName": "name.geojson|.csv", "text": string}"#),
         C::new("layer.addSample", "Add Sample Data", "Map › Layer › Add Data", add_sample).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
@@ -263,6 +263,10 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::source::is_source_name(path) {
         return add_source(s, p, Origin::Path(path));
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if rustgis_data::source::gdal::is_gdal_name(path) {
+        return add_gdal(s, p, path);
+    }
     let read = rustgis_data::io::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
     add_read(s, p, read)
 }
@@ -360,6 +364,61 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
     }
     let first = ids.first().copied();
     Ok(json!({"layer": first, "layers": ids, "features": features, "streamed": streamed}))
+}
+
+/// Adds a file GDAL reads (KML, GPX, File Geodatabase, DXF…): each layer is converted once into an
+/// indexed FlatGeobuf in the cache, then added like one (streamed when large). A layer mixing
+/// geometry types becomes a layer per type.
+#[cfg(not(target_arch = "wasm32"))]
+fn add_gdal(s: &mut Session, p: &Value, path: &str) -> CmdResult {
+    let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
+    let converted = rustgis_data::source::gdal::convert(Path::new(path), ps(p, "layer"), crs).map_err(|e| format!("{path}: {e}"))?;
+    let original = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
+    let empty_before = s.map().layers.is_empty();
+    let single = converted.len() == 1;
+    let (mut ids, mut features, mut streamed) = (Vec::new(), 0u64, false);
+    for c in converted {
+        let mut q = json!({"name": c.name});
+        if let Some(n) = ps(p, "name").filter(|_| single) {
+            q["name"] = json!(n);
+        }
+        if let Some(v) = p.get("stream") {
+            q["stream"] = v.clone();
+        }
+        let fgb = c.path.display().to_string();
+        let r = add_source(s, &q, Origin::Path(&fgb))?;
+        features += r["features"].as_u64().unwrap_or(0);
+        streamed |= r["streamed"].as_bool().unwrap_or(false);
+        for id in r["layers"].as_array().into_iter().flatten().filter_map(Value::as_u64).filter_map(|i| u32::try_from(i).ok()) {
+            if let Some(l) = s.map_mut().layer_mut(id) {
+                l.dataset.source = Some(original.clone());
+                if let Some(src) = &mut l.source {
+                    src.gdal = Some(rustgis_map::source::GdalOrigin {
+                        path: original.clone(),
+                        layer: c.layer.clone(),
+                        family: c.family,
+                        crs: crs.map(str::to_string),
+                    });
+                }
+            }
+            // Coordinates beyond longitude/latitude: the file's coordinate system is unknown.
+            let e = s.map().layer(id).map(|l| l.extent()).unwrap_or_default();
+            if !e.is_empty() && (e.min_x < -181.0 || e.max_x > 181.0 || e.min_y < -91.0 || e.max_y > 91.0) {
+                s.notify(
+                    format!("{}: the file doesn't say its coordinate system; add it again with \"crs\" (such as EPSG:2263)", c.name),
+                    true,
+                );
+            }
+            ids.push(id);
+        }
+    }
+    if empty_before {
+        let e = ids.iter().filter_map(|id| s.map().layer(*id)).fold(rustgis_geom::Extent::EMPTY, |e, l| e.union(&l.extent()));
+        if !e.is_empty() {
+            s.zoom_to(&e);
+        }
+    }
+    Ok(json!({"layer": ids.first(), "layers": ids, "features": features, "streamed": streamed}))
 }
 
 fn unique_name(s: &Session, base: &str) -> String {
