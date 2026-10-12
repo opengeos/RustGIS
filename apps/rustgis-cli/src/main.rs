@@ -297,11 +297,14 @@ fn main() -> ExitCode {
         }
         "ask" => {
             open_inputs(&mut s, &args)?;
-            ask(&mut s, &args)?;
-            if let Some(p) = opt(&args, "--save") {
+            // What the assistant did is saved even when it couldn't finish.
+            let asked = ask(&mut s, &args);
+            if let Some(p) = opt(&args, "--save")
+                && !args.iter().any(|a| a == "--models")
+            {
                 run(&mut s, "project.saveAs", json!({"path": p}))?;
             }
-            Ok(())
+            asked
         }
         "run" => {
             open_inputs(&mut s, &args)?;

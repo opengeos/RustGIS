@@ -57,6 +57,9 @@ fn urls_allowed() {
     assert!(!allowed_url("file:///etc/passwd"));
     assert!(!allowed_url("https://user:key@api.example.com/v1"));
     assert!(!allowed_url("https://"));
+    assert!(!allowed_url("http://010.0.0.1/v1"));
+    assert!(!allowed_url("http://0177.0.0.1/v1"));
+    assert!(allowed_url("http://10.0.0.1/v1"));
     assert!(!allowed_url(""));
 }
 
@@ -178,6 +181,7 @@ fn geoprocessing_and_reading_data() {
     assert_eq!(r.len(), 3);
     assert!(r[0]["pop_max"].as_i64() >= r[1]["pop_max"].as_i64());
     assert!(tools::run(&mut s, &t("read_features", json!({"layer": "Cities", "fields": ["nope"]}))).is_err());
+    assert!(tools::run(&mut s, &t("read_features", json!({"layer": "Cities", "fields": [1, null]}))).is_err());
     let cmds = tools::run(&mut s, &t("search_commands", json!({"query": "basemap"}))).unwrap_or_default();
     assert!(cmds.contains("map.basemap"), "{cmds}");
 }

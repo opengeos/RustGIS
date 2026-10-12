@@ -336,7 +336,8 @@ fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
     let fields: Vec<usize> = match a.get("fields").and_then(Value::as_array) {
         Some(names) if !names.is_empty() => {
             let mut v = Vec::new();
-            for n in names.iter().filter_map(Value::as_str) {
+            for n in names {
+                let n = n.as_str().ok_or("fields must be field names (strings)")?;
                 let i = ds
                     .fields
                     .iter()

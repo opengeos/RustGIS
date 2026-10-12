@@ -202,6 +202,10 @@ pub fn allowed_url(url: &str) -> bool {
     if host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") || host == "::1" {
         return true;
     }
+    // `010.0.0.1` is octal to the system's resolver (8.0.0.1), not 10.0.0.1.
+    if host.split('.').any(|p| p.len() > 1 && p.starts_with('0')) {
+        return false;
+    }
     let octets: Vec<u8> = host.split('.').filter_map(|p| p.parse().ok()).collect();
     if octets.len() != 4 || host.split('.').count() != 4 {
         return false;
