@@ -11,6 +11,7 @@ pub mod address;
 pub mod cache;
 pub mod draw;
 pub mod mvt;
+pub mod pmtiles;
 pub mod source;
 pub mod sprite;
 pub mod style;

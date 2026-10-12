@@ -1808,3 +1808,6 @@ The layer's file couldn't be read: {error}	No se pudo leer el archivo de la capa
 {type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, leído en el sitio · {n} de {total} entidades a la vista · {renderer}
 Load All Features	Cargar todas las entidades
 GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV o FlatGeobuf
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	La dirección de un servicio de teselas: teselas ráster con {z}/{x}/{y} (o {-y}, {q}, {bbox-epsg-3857} para WMS), teselas vectoriales (.pbf) o TileJSON, o un estilo de MapLibre; o un archivo PMTiles (una dirección web o un archivo de este equipo).
+PMTiles File…	Archivo PMTiles…
+PMTiles archive	Archivo PMTiles

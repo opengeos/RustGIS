@@ -1808,3 +1808,6 @@ The layer's file couldn't be read: {error}	Die Datei des Layers konnte nicht gel
 {type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, direkt gelesen · {n} von {total} Objekten im Ausschnitt · {renderer}
 Load All Features	Alle Objekte laden
 GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV oder FlatGeobuf
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	Die Adresse eines Kacheldienstes: Rasterkacheln mit {z}/{x}/{y} (oder {-y}, {q}, {bbox-epsg-3857} für WMS), Vektorkacheln (.pbf) oder TileJSON, oder ein MapLibre-Stil; oder ein PMTiles-Archiv (eine Webadresse oder eine Datei auf diesem Computer).
+PMTiles File…	PMTiles-Datei…
+PMTiles archive	PMTiles-Archiv

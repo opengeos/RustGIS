@@ -15,6 +15,7 @@ nav = [
   { "User Guide" = [
     "user-guide/index.md",
     "user-guide/data.md",
+    "user-guide/data-formats.md",
     "user-guide/maps.md",
     "user-guide/cartography.md",
     "user-guide/editing.md",

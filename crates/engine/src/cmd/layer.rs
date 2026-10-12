@@ -263,6 +263,15 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::source::is_source_name(path) {
         return add_source(s, p, Origin::Path(path));
     }
+    // A PMTiles archive is a tile layer (raster or vector, as its header says).
+    if path.to_ascii_lowercase().ends_with(".pmtiles") {
+        let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
+        let mut q = json!({"url": full, "kind": "pmtiles"});
+        if let Some(n) = ps(p, "name") {
+            q["name"] = json!(n);
+        }
+        return super::tiles::add(s, &q);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if rustgis_data::source::gdal::is_gdal_name(path) {
         return add_gdal(s, p, path);

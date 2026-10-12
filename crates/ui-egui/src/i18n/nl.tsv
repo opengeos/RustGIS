@@ -1808,3 +1808,6 @@ The layer's file couldn't be read: {error}	Het bestand van de laag kon niet word
 {type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, ter plekke gelezen · {n} van {total} objecten in beeld · {renderer}
 Load All Features	Alle objecten laden
 GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV of FlatGeobuf
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	Het adres van een tegeldienst: rastertegels met {z}/{x}/{y} (of {-y}, {q}, {bbox-epsg-3857} voor WMS), vectortegels (.pbf) of TileJSON, of een MapLibre-stijl; of een PMTiles-archief (een webadres of een bestand op deze computer).
+PMTiles File…	PMTiles-bestand…
+PMTiles archive	PMTiles-archief

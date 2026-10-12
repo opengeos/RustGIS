@@ -1808,3 +1808,6 @@ The layer's file couldn't be read: {error}	Không thể đọc tệp của lớp
 {type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, đọc tại chỗ · {n} trên {total} đối tượng trong khung nhìn · {renderer}
 Load All Features	Tải tất cả đối tượng
 GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV hoặc FlatGeobuf
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	Địa chỉ của dịch vụ ô bản đồ: ô raster với {z}/{x}/{y} (hoặc {-y}, {q}, {bbox-epsg-3857} cho WMS), ô vector (.pbf) hoặc TileJSON, hoặc một kiểu MapLibre; hoặc một kho PMTiles (địa chỉ web hoặc tệp trên máy tính này).
+PMTiles File…	Tệp PMTiles…
+PMTiles archive	Kho PMTiles

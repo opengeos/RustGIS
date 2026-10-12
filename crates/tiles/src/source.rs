@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::cache::{self, Payload, State, Want};
 use crate::style::{Source, Style};
-use crate::{address, template};
+use crate::{address, pmtiles, template};
 
 /// The kind of address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -21,6 +21,8 @@ pub enum Kind {
     Raster,
     Vector,
     Style,
+    /// A PMTiles archive (raster or vector, as its header says).
+    PmTiles,
 }
 
 /// A tile layer, as far as fetching and drawing it goes.
@@ -89,7 +91,9 @@ pub const DEFAULT_STYLE: &str = include_str!("default_style.json");
 /// The style to draw `spec` with, once the documents it needs have been fetched.
 pub fn resolve(spec: &Spec) -> Resolve {
     let key = spec.key();
-    if let Err(e) = address::check(&spec.url, None) {
+    // A PMTiles archive on this computer is a path, not a web address.
+    let local = spec.kind == Kind::PmTiles && pmtiles::is_local(&spec.url);
+    if !local && let Err(e) = address::check(&spec.url, None) {
         return Resolve::Failed(e);
     }
     if let Some(r) = resolved().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
@@ -105,6 +109,14 @@ pub fn resolve(spec: &Spec) -> Resolve {
             Ok(Some(d)) => d,
             Ok(None) => return Resolve::Pending,
             Err(e) => return Resolve::Failed(e),
+        },
+        Kind::PmTiles => match pmtiles::info(&spec.url) {
+            Ok(Some(info)) => match pmtiles_style(spec, &info) {
+                Some(d) => d,
+                None => return Resolve::Failed("the built-in vector style could not be read".into()),
+            },
+            Ok(None) => return Resolve::Pending,
+            Err(e) => return Resolve::Failed(format!("{}: {e}", spec.url)),
         },
     };
     let mut style = match Style::parse(&doc) {
@@ -148,6 +160,10 @@ pub fn resolve(spec: &Spec) -> Resolve {
             }
         } else if let Source::Vector { tiles, .. } | Source::Raster { tiles, .. } = src {
             for t in tiles.iter_mut() {
+                // Tiles from a PMTiles archive: read from the archive the layer names.
+                if spec.kind == Kind::PmTiles && pmtiles::is_tile(t) {
+                    continue;
+                }
                 *t = template::join(&base, t);
                 // A style's tile addresses are the style's choice; a raster or vector layer's
                 // template is the user's.
@@ -223,6 +239,61 @@ fn raster_style(spec: &Spec) -> Value {
         }},
         "layers": [{"id": "raster", "type": "raster", "source": "raster"}],
     })
+}
+
+/// The style for a PMTiles archive: a raster layer for picture tiles; for vector tiles the
+/// built-in style when the archive has the layers it knows (a basemap), otherwise a layer for each
+/// of the archive's vector layers (points, lines and polygons each in their own colour).
+fn pmtiles_style(spec: &Spec, info: &pmtiles::Info) -> Option<Value> {
+    let tiles = vec![pmtiles::template(&spec.url)];
+    let (minzoom, maxzoom) = (info.min_zoom, info.max_zoom);
+    let attribution = if spec.attribution.is_empty() { info.attribution() } else { spec.attribution.clone() };
+    if !info.tile_type.is_vector() {
+        return Some(json!({
+            "version": 8,
+            "sources": {"raster": {
+                "type": "raster", "tiles": tiles, "tileSize": spec.tile_size,
+                "minzoom": minzoom, "maxzoom": maxzoom, "attribution": attribution,
+            }},
+            "layers": [{"id": "raster", "type": "raster", "source": "raster"}],
+        }));
+    }
+    let source = json!({"type": "vector", "tiles": tiles, "minzoom": minzoom, "maxzoom": maxzoom, "attribution": attribution});
+    let names = info.vector_layers();
+    let known = [
+        "water",
+        "roads",
+        "transportation",
+        "buildings",
+        "building",
+        "landuse",
+        "landcover",
+        "boundaries",
+        "boundary",
+        "places",
+        "place",
+        "earth",
+        "streets",
+    ];
+    if names.iter().filter(|n| known.contains(&n.as_str())).count() >= 3 {
+        let mut doc: Value = serde_json::from_str(DEFAULT_STYLE).ok()?;
+        *doc.get_mut("sources")?.get_mut("vector")? = source;
+        return Some(doc);
+    }
+    const COLOURS: [&str; 8] = ["#e6550d", "#3182bd", "#31a354", "#756bb1", "#d6616b", "#8c6d31", "#17becf", "#bcbd22"];
+    let mut layers = Vec::new();
+    // Each archive starts the palette somewhere of its own, so two archives look apart.
+    let start = spec.url.bytes().fold(0usize, |h, b| h.wrapping_mul(31).wrapping_add(usize::from(b)));
+    for (i, name) in names.iter().take(64).enumerate() {
+        let c = COLOURS.get((start + i) % COLOURS.len()).copied().unwrap_or("#3182bd");
+        layers.push(json!({"id": format!("{name}-fill"), "type": "fill", "source": "vector", "source-layer": name,
+            "filter": ["==", "$type", "Polygon"], "paint": {"fill-color": c, "fill-opacity": 0.35}}));
+        layers.push(json!({"id": format!("{name}-line"), "type": "line", "source": "vector", "source-layer": name,
+            "filter": ["in", "$type", "LineString", "Polygon"], "paint": {"line-color": c, "line-width": 1}}));
+        layers.push(json!({"id": format!("{name}-point"), "type": "circle", "source": "vector", "source-layer": name,
+            "filter": ["==", "$type", "Point"], "paint": {"circle-color": c, "circle-radius": 3, "circle-stroke-color": "#ffffff", "circle-stroke-width": 1}}));
+    }
+    Some(json!({"version": 8, "sources": {"vector": source}, "layers": layers}))
 }
 
 fn vector_style(spec: &Spec) -> Option<Value> {

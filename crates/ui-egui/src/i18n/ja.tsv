@@ -1808,3 +1808,6 @@ The layer's file couldn't be read: {error}	レイヤーのファイルを読み�
 {type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}、その場で読み込み · 表示範囲のフィーチャ {total} 件中 {n} 件 · {renderer}
 Load All Features	すべてのフィーチャを読み込む
 GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV または FlatGeobuf
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	タイル サービスのアドレス: {z}/{x}/{y} を含むラスター タイル (WMS の場合は {-y}, {q}, {bbox-epsg-3857})、ベクター タイル (.pbf) または TileJSON、あるいは MapLibre スタイル、または PMTiles アーカイブ（Web アドレスまたはこのコンピューター上のファイル）。
+PMTiles File…	PMTiles ファイル…
+PMTiles archive	PMTiles アーカイブ

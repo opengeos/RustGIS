@@ -14,7 +14,8 @@ or enterprise portal sharing yet, so real depth is lower than the checklist sugg
 - Rasters: GeoTIFF/COG and ASCII grids, EPSG reprojection, stretch/RGB/classified/shaded-relief
   symbology, raster functions, indices, change detection, classification, georeferencing.
 - Maps: multiple maps, a 3D globe, projection presets and EPSG codes, bookmarks, web tile
-  layers (XYZ/TMS/WMS, Mapbox Vector Tiles, MapLibre styles), worldviews.
+  layers (XYZ/TMS/WMS, Mapbox Vector Tiles, MapLibre styles, PMTiles archives),
+  worldviews.
 - Cartography: single, unique values, graduated colours and proportional symbols; labels with
   placement and annotation; masking, display filters, aggregation, extrusion; graphics.
 - Editing: create, move, rotate, scale, merge, split, explode; snapping, templates, elevation,
