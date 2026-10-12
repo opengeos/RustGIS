@@ -189,17 +189,38 @@ fn ask(s: &mut Session, args: &[String]) -> Result<(), String> {
 /// line, until the client closes its end. Only messages go to standard output; notes go to
 /// standard error.
 fn mcp(s: &mut Session, args: &[String]) -> Result<(), String> {
-    use std::io::BufRead;
+    use std::io::{BufRead, Read};
     let server = rustgis_assistant::mcp::Server::new(args.iter().any(|a| a == "--yes"));
     eprintln!(
         "rustgis-cli: MCP server ready ({} layers; file and network access {})",
         s.map().layers.len(),
         if server.allow_access { "allowed" } else { "off, --yes allows it" }
     );
-    let stdin = std::io::stdin();
+    // The longest message read (a project's JSON can be large); longer lines are refused.
+    const MAX_LINE: u64 = 64 * 1024 * 1024;
+    let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
-    for line in stdin.lock().lines() {
-        let line = line.map_err(|e| format!("reading standard input: {e}"))?;
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let n = (&mut stdin).take(MAX_LINE + 1).read_until(b'\n', &mut buf).map_err(|e| format!("reading standard input: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        let line = if buf.len() as u64 > MAX_LINE && buf.last() != Some(&b'\n') {
+            // Skip the rest of the line, then answer with a parse error.
+            loop {
+                buf.clear();
+                let m = (&mut stdin).take(MAX_LINE).read_until(b'\n', &mut buf).map_err(|e| format!("reading standard input: {e}"))?;
+                if m == 0 || buf.last() == Some(&b'\n') {
+                    break;
+                }
+            }
+            "\u{0}message too long".to_string()
+        } else {
+            // A bad byte becomes a parse error for that message, not the end of the server.
+            String::from_utf8_lossy(&buf).into_owned()
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -207,7 +228,11 @@ fn mcp(s: &mut Session, args: &[String]) -> Result<(), String> {
         let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &line))).unwrap_or_else(|_| {
             // The panic message is already on standard error; the id lets the client match the error.
             eprintln!("rustgis-cli: a request failed unexpectedly; the project may be partly changed");
-            let id = serde_json::from_str::<Value>(&line).ok().and_then(|v| v.get("id").cloned()).unwrap_or(Value::Null);
+            let id = serde_json::from_str::<Value>(&line)
+                .ok()
+                .and_then(|v| v.get("id").cloned())
+                .filter(|id| id.is_string() || id.is_number())
+                .unwrap_or(Value::Null);
             Some(json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32603, "message": "internal error"}}).to_string())
         });
         if let Some(reply) = reply {
