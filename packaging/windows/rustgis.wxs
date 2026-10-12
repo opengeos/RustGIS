@@ -32,9 +32,8 @@
           <Extension Id="rgis">
             <Verb Id="open" TargetFile="rustgis.exe" Argument="&quot;%1&quot;" />
           </Extension>
-          <Extension Id="rgisx">
-            <Verb Id="open" TargetFile="rustgis.exe" Argument="&quot;%1&quot;" />
-          </Extension>
+          <!-- The verb is the ProgId's (RustGIS.Project\shell\open): one serves both. -->
+          <Extension Id="rgisx" />
         </ProgId>
         <!-- Listed under Open with for GeoJSON, without taking over the default app. -->
         <RegistryValue Root="HKLM" Key="Software\Classes\.geojson\OpenWithProgids" Name="RustGIS.Project"
