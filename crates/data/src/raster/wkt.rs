@@ -193,16 +193,26 @@ fn norm(s: &str) -> String {
 
 /// The coordinate system a WKT1 text (OGC or Esri) describes.
 pub fn crs_from_wkt(text: &str) -> Result<Crs, String> {
+    read_wkt(text).map(|(crs, _)| crs)
+}
+
+/// The coordinate system a WKT1 text describes, with a note when its datum has no conversion to
+/// WGS 84 given (NAD 27, OSGB 36…), so positions may be off by up to a few hundred metres.
+pub fn read_wkt(text: &str) -> Result<(Crs, Option<String>), String> {
     let root = parse(text)?;
     if let Some(a) = root.child("AUTHORITY")
         && a.title().eq_ignore_ascii_case("EPSG")
         && let Some(crs) = authority_code(a).and_then(Crs::from_epsg)
     {
-        return Ok(crs);
+        return Ok((crs, None));
     }
     match root.name.to_ascii_uppercase().as_str() {
-        "GEOGCS" => geographic(&root),
-        "PROJCS" => projected(&root),
+        "GEOGCS" => Ok((geographic(&root)?, datum_note(Some(&root)))),
+        "PROJCS" => {
+            let crs = projected(&root)?;
+            let note = if matches!(crs, Crs::Custom(_)) { datum_note(root.child("GEOGCS")) } else { None };
+            Ok((crs, note))
+        }
         other => Err(format!("{other} coordinate systems aren't supported")),
     }
 }
@@ -216,15 +226,30 @@ fn authority_code(a: &Node) -> Option<u32> {
     }
 }
 
-/// Longitude/latitude in degrees. Datums differ by metres at most for the systems in use, so any
-/// is read as WGS 84.
+/// Longitude/latitude in degrees: WGS 84 itself for WGS 84, NAD 83 and ETRS 89 (which differ by
+/// a metre or so) from Greenwich, otherwise on the file's own datum and prime meridian.
 fn geographic(g: &Node) -> Result<Crs, String> {
-    match g.child("UNIT").and_then(|u| u.num(0)) {
-        Some(f) if (f - 1f64.to_radians()).abs() > 1e-9 => {
-            Err(format!("angles in {} aren't supported", g.child("UNIT").map_or("", Node::title)))
-        }
-        _ => Ok(Crs::LonLat),
+    if let Some(f) = g.child("UNIT").and_then(|u| u.num(0))
+        && (f - 1f64.to_radians()).abs() > 1e-9
+    {
+        return Err(format!("angles in {} aren't supported", g.child("UNIT").map_or("", Node::title)));
     }
+    let datum = g.child("DATUM");
+    let greenwich = g.child("PRIMEM").and_then(|m| m.num(0)).is_none_or(|pm| pm == 0.0);
+    if greenwich && (datum.is_none() || wgs84_like(datum).is_some()) {
+        return Ok(Crs::LonLat);
+    }
+    let label = match g.title().trim() {
+        "" => "Custom coordinate system".to_string(),
+        t => t.to_string(),
+    };
+    Crs::custom(CustomCrs {
+        proj4: format!("+proj=longlat {} +no_defs", earth(Some(g))),
+        label,
+        geokeys: Vec::new(),
+        doubles: Vec::new(),
+        ascii: String::new(),
+    })
 }
 
 /// A projected system: by EPSG code for the common names, else as a PROJ definition.
@@ -328,7 +353,7 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
         t => t.to_string(),
     };
     Crs::custom(CustomCrs {
-        proj4: format!("{proj} {} {units} +no_defs", earth(p)),
+        proj4: format!("{proj} {} {units} +no_defs", earth(p.child("GEOGCS"))),
         label,
         geokeys: Vec::new(),
         doubles: Vec::new(),
@@ -336,13 +361,10 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
     })
 }
 
-/// The datum, by name for the common ones, else by its spheroid's axes.
-fn earth(p: &Node) -> String {
-    let geog = p.child("GEOGCS");
-    let datum = geog.and_then(|g| g.child("DATUM"));
-    let name = norm(datum.map_or("", Node::title));
-    let mut out = match name.trim_start_matches("D_") {
-        "WGS_1984" | "WGS84" | "WORLD_GEODETIC_SYSTEM_1984" => "+datum=WGS84".to_string(),
+/// The PROJ datum for WGS 84 and the datums that differ from it by a metre or so.
+fn wgs84_like(datum: Option<&Node>) -> Option<&'static str> {
+    match norm(datum.map_or("", Node::title)).trim_start_matches("D_") {
+        "WGS_1984" | "WGS84" | "WORLD_GEODETIC_SYSTEM_1984" => Some("+datum=WGS84"),
         "NORTH_AMERICAN_1983"
         | "NORTH_AMERICAN_DATUM_1983"
         | "NAD_1983"
@@ -351,18 +373,42 @@ fn earth(p: &Node) -> String {
         | "ETRS89"
         | "EUROPEAN_TERRESTRIAL_REFERENCE_SYSTEM_1989"
         | "GDA_1994"
-        | "GDA94" => "+ellps=GRS80 +towgs84=0,0,0".to_string(),
-        _ => {
+        | "GDA94" => Some("+ellps=GRS80 +towgs84=0,0,0"),
+        _ => None,
+    }
+}
+
+/// The datum's `TOWGS84` shift, when it gives a usable one.
+fn towgs84(datum: Option<&Node>) -> Option<Vec<f64>> {
+    datum.and_then(|d| d.child("TOWGS84")).map(Node::nums).filter(|t| (t.len() == 3 || t.len() == 7) && t.iter().all(|v| v.is_finite()))
+}
+
+/// A note when the datum (of a `GEOGCS`) is neither WGS 84-like nor shifted to it by `TOWGS84`.
+fn datum_note(geog: Option<&Node>) -> Option<String> {
+    let datum = geog?.child("DATUM")?;
+    if wgs84_like(Some(datum)).is_some() || towgs84(Some(datum)).is_some() {
+        return None;
+    }
+    Some(format!(
+        "the datum {} has no conversion to WGS 84 in the file, so positions may be off by up to a few hundred metres",
+        datum.title()
+    ))
+}
+
+/// The datum of a `GEOGCS`, by name for the common ones, else by its spheroid's axes; and its
+/// prime meridian.
+fn earth(geog: Option<&Node>) -> String {
+    let datum = geog.and_then(|g| g.child("DATUM"));
+    let mut out = match wgs84_like(datum) {
+        Some(d) => d.to_string(),
+        None => {
             let sph = datum.and_then(|d| d.child("SPHEROID").or_else(|| d.child("ELLIPSOID")));
             let mut s = match (sph.and_then(|s| s.num(0)), sph.and_then(|s| s.num(1))) {
                 (Some(a), Some(rf)) if a > 0.0 && rf > 0.0 => format!("+a={a} +rf={rf}"),
                 (Some(a), _) if a > 0.0 => format!("+a={a} +b={a}"),
                 _ => "+datum=WGS84".to_string(),
             };
-            if let Some(t) = datum.and_then(|d| d.child("TOWGS84")).map(Node::nums)
-                && (t.len() == 3 || t.len() == 7)
-                && t.iter().all(|v| v.is_finite())
-            {
+            if let Some(t) = towgs84(datum) {
                 s.push_str(&format!(" +towgs84={}", t.iter().map(f64::to_string).collect::<Vec<_>>().join(",")));
             }
             s
@@ -419,6 +465,27 @@ mod tests {
         let crs = crs_from_wkt(&renamed).unwrap();
         let ll = crs.transformer().unwrap().to_lonlat(Coord::new(500_000.0, 5_000_000.0)).unwrap();
         assert!((ll.x - 3.0).abs() < 1e-6 && (ll.y - 45.153_477).abs() < 1e-5, "{ll:?}");
+    }
+
+    #[test]
+    fn datums_and_prime_meridians() {
+        // A prime meridian east of Greenwich moves longitudes east.
+        let paris = r#"GEOGCS["Paris lon/lat",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Paris",2.33722917],UNIT["Degree",0.0174532925199433]]"#;
+        let (crs, note) = read_wkt(paris).unwrap();
+        assert!(matches!(crs, Crs::Custom(_)) && note.is_none());
+        let ll = crs.transformer().unwrap().to_lonlat(Coord::new(0.0, 48.85)).unwrap();
+        assert!((ll.x - 2.33722917).abs() < 1e-6 && (ll.y - 48.85).abs() < 1e-6, "{ll:?}");
+        // NAD 27 with no TOWGS84: read, with a note.
+        let nad27 = r#"GEOGCS["GCS_North_American_1927",DATUM["D_North_American_1927",SPHEROID["Clarke_1866",6378206.4,294.9786982]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]"#;
+        let (crs, note) = read_wkt(nad27).unwrap();
+        assert!(crs.is_geographic());
+        assert!(note.is_some_and(|n| n.contains("D_North_American_1927")));
+        // With TOWGS84 there's nothing to say.
+        let shifted = nad27.replace("294.9786982]]", "294.9786982],TOWGS84[-8,160,176,0,0,0,0]]");
+        assert_eq!(read_wkt(&shifted).map(|r| r.1), Ok(None));
+        // Esri names for WGS 84 systems need no note.
+        assert_eq!(read_wkt(GEOG_4326), Ok((Crs::LonLat, None)));
+        assert_eq!(read_wkt(ESRI_32631), Ok((Crs::Epsg(32631), None)));
     }
 
     #[test]

@@ -545,7 +545,9 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
     if report.skipped > 0 {
         report.messages.push(format!("{} shapes were unreadable or unsupported", report.skipped));
     }
-    if unconverted > 0 {
+    if unconverted > 0 && unconverted == ds.features.len() {
+        report.messages.push("no shape could be converted to longitude/latitude: the .prj doesn't seem to match the coordinates".into());
+    } else if unconverted > 0 {
         report.messages.push(format!("{unconverted} shapes couldn't be converted to longitude/latitude and have no geometry"));
     }
     Ok((ds, report))
@@ -556,8 +558,13 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
 /// the report).
 fn shapefile_crs(path: &Path, report: &mut ReadReport) -> Option<crate::raster::Transformer> {
     let prj = crate::raster::read_prj(path)?;
-    let crs = match crate::raster::wkt::crs_from_wkt(&prj) {
-        Ok(c) => c,
+    let crs = match crate::raster::wkt::read_wkt(&prj) {
+        Ok((c, note)) => {
+            if let Some(n) = note {
+                report.messages.push(format!("the .prj file: {n}"));
+            }
+            c
+        }
         Err(e) => {
             report.messages.push(format!("the .prj file: {e}; coordinates are read as longitude/latitude"));
             return None;
