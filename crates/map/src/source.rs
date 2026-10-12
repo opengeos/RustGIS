@@ -254,6 +254,13 @@ impl SourceLayer {
                 None if block && cfg!(not(target_arch = "wasm32")) && start.elapsed() < web_time::Duration::from_secs(60) => {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
+                // An export that waited a minute for the read: say so rather than draw what's
+                // there as if it were the view. (The read carries on; the next view takes it.)
+                None if block && cfg!(not(target_arch = "wasm32")) => {
+                    let e = "reading the layer took more than a minute".to_string();
+                    self.error = Some(e.clone());
+                    return Polled::Failed(e);
+                }
                 None => return Polled::Waiting,
             }
         }

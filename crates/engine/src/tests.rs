@@ -2312,7 +2312,10 @@ fn streamed_layers_save_their_source_not_their_features() {
     crate::render::render_png(t.map_mut(), &v).unwrap();
     assert_eq!(t.map().layers[0].dataset.features.len(), 3600);
     // A missing file is reported, not a crash.
-    let gone = text.replace(&path.display().to_string(), "/nonexistent/gone.fgb");
+    // (The path as the project's JSON spells it: escaped backslashes on Windows.)
+    let quoted = serde_json::to_string(&std::path::absolute(&path).unwrap().display().to_string()).unwrap();
+    assert!(text.contains(quoted.trim_matches('"')), "{text}");
+    let gone = text.replace(quoted.trim_matches('"'), "/nonexistent/gone.fgb");
     let mut u = Session::new(Project::default());
     u.run("project.openText", &json!({"text": gone})).unwrap();
     assert!(u.map().layers[0].source.as_ref().unwrap().error.is_some());
