@@ -2604,6 +2604,16 @@ fn geopackage_table_cap_is_reported() {
     let one = s.run("layer.addData", &json!({"path": p, "layer": "t_34"})).unwrap();
     assert!(one.get("skipped").is_none());
     assert_eq!(s.map().layers.len(), 33);
+    // Uploaded (the web app, which reads it without SQLite): every table too, within the cap.
+    {
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&path).unwrap());
+        let mut s = Session::new(Project::default());
+        let r = s.run("layer.addDataBytes", &json!({"fileName": "many.gpkg", "data": data})).unwrap();
+        assert_eq!(r["layers"].as_array().map(Vec::len), Some(32), "{r}");
+        assert_eq!(r["skippedCount"], 2);
+        assert!(s.map().layers.iter().any(|l| l.name == "t_01"));
+    }
     assert!(s.run("info.fileLayers", &json!({"path": dir.join("none.geojson").display().to_string()})).is_err());
     let notes = dir.join("notes.rgis");
     std::fs::write(&notes, "{}").unwrap();

@@ -5,8 +5,8 @@ limits. [Data](data.md) covers adding data, large files and rasters in more deta
 Basemaps](maps.md#basemaps) covers web tile layers.
 
 Most formats open in the desktop app and in the [web app](https://web.rustgis.app) alike. Those
-that need C libraries (SQLite for GeoPackage, GDAL, DuckDB) or files on disk are desktop-only, as
-the tables say.
+that need C libraries (GDAL, DuckDB) or files on disk are desktop-only, as the tables say. The
+web app reads GeoPackages without SQLite, with a small SQLite file reader written in Rust.
 
 ## Vector and tabular files
 
@@ -15,7 +15,7 @@ the tables say.
 | GeoJSON | `.geojson`, `.json` | Map › Add Data, or drop the file | Features with typed attributes; a `GeometryCollection` keeps its first member. |
 | CSV | `.csv`, `.txt` | Add Data | Longitude/latitude columns become points; a CSV without them opens as a standalone table. |
 | Shapefile | `.shp` with `.dbf` (and `.shx`) | Add Data (desktop) | Converted to longitude/latitude from the coordinate system in its `.prj` (EPSG, Esri or OGC WKT; Web Mercator, UTM, State Plane and other common projections); without a `.prj` it must be in longitude/latitude. |
-| GeoPackage | `.gpkg` | Add Data (desktop) | Every feature table becomes a layer, up to 32 at once (the result counts the rest in `skippedCount` and names up to 100 of them in `skipped`); `"layer"` picks one, and `info.fileLayers` lists them all. Read in place by its R-tree; any EPSG system is reprojected. |
+| GeoPackage | `.gpkg` | Add Data, or upload in the web app | Every feature table becomes a layer, up to 32 at once (the result counts the rest in `skippedCount` and names up to 100 of them in `skipped`); `"layer"` picks one, and `info.fileLayers` lists them all. Read in place by its R-tree; any EPSG system is reprojected. The web app reads the file with its own SQLite reader (tables scanned, the envelope in each geometry header tested first; no R-tree); UTF-16 and `WITHOUT ROWID` tables aren't read there. |
 | GeoParquet | `.parquet`, `.geoparquet` | Add Data, or upload in the web app | WKB geometry, with the CRS from the file's `geo` metadata. Row groups are pruned by the bbox covering. zstd-compressed files open on the desktop only; Brotli isn't read. |
 | FlatGeobuf | `.fgb` | Add Data, or upload | Read in place by its packed R-tree. |
 | Standalone tables | CSV, or any layer without geometry | Add Data | Listed under the map in Contents; join or relate them to layers. |

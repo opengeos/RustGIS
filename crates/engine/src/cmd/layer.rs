@@ -360,6 +360,15 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
             }
             all.into_iter().map(Some).collect()
         }
+        // An uploaded GeoPackage: its tables listed by the pure-Rust reader.
+        (None, Origin::Bytes(name, bytes)) if name.to_ascii_lowercase().ends_with(".gpkg") => {
+            let mut all = source::gpkg_mem::layers(source::Shared(bytes.clone())).map_err(err)?;
+            if all.len() > MAX_TABLES {
+                total = Some(all.len());
+                skipped = all.split_off(MAX_TABLES);
+            }
+            all.into_iter().map(Some).collect()
+        }
         _ => vec![None],
     };
     if tables.is_empty() {

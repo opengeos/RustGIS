@@ -9,9 +9,15 @@ Formats](data-formats.md).
 | --- | --- | --- |
 | GeoJSON (`.geojson`, `.json`) | Yes | Yes |
 | CSV (`.csv`, `.txt`) with longitude/latitude columns | Yes | Yes |
+<<<<<<< HEAD
 | Shapefile (`.shp` + `.dbf`) | Yes (desktop) | Yes (`share.exportLayer`) |
 | GeoPackage (`.gpkg`, every feature table) | Yes (desktop) | Yes (desktop) |
 | GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | Yes |
+=======
+| Shapefile (`.shp` + `.dbf`) | Yes (desktop) | No |
+| GeoPackage (`.gpkg`, every feature table) | Yes | No |
+| GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | No |
+>>>>>>> 95f31d7 (Open GeoPackages in the web app, with a pure-Rust SQLite reader)
 | FlatGeobuf (`.fgb`) | Yes | Yes (`share.exportLayer`) |
 | Through GDAL: KML/KMZ, GPX, GML, DXF, File Geodatabase (`.gdb` folder), MapInfo, OpenStreetMap… | Yes (desktop, when GDAL is installed) | KML, KMZ and GPX |
 | DuckDB databases (`.duckdb`, `.ddb`) and SQL queries | Yes (desktop, when DuckDB is installed) | No |
