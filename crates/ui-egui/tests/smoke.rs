@@ -302,3 +302,25 @@ fn browse_lists_thousands_of_plugins_quickly() {
     h.state_mut().plugins.set_registry(None);
     h.state_mut().plugins.open = false;
 }
+
+/// Switching to a CJK language keeps drawing the previous one for the frame its fonts are
+/// installed in (`set_fonts` takes effect a frame late), so no frame shows missing-glyph boxes.
+#[test]
+fn language_switch_waits_for_its_font() {
+    let mut h = harness();
+    h.state_mut().run("ui.language", json!({"code": "en"})).unwrap();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(h.state().lang().code(), "en");
+    h.state_mut().run("ui.language", json!({"code": "zh"})).unwrap();
+    assert_eq!(h.state().chosen_lang().code(), "zh");
+    h.step();
+    assert_eq!(h.state().lang().code(), "en", "fonts installed this frame aren't active yet");
+    h.step();
+    assert_eq!(h.state().lang().code(), "zh");
+    // Back to an alphabetic language: nothing to wait for.
+    h.state_mut().run("ui.language", json!({"code": "de"})).unwrap();
+    h.step();
+    assert_eq!(h.state().lang().code(), "de");
+}

@@ -3590,7 +3590,7 @@ fn worldview_menu(app: &mut RustGisApp, ui: &mut Ui) {
 
 /// The interface language picker (Settings › Language).
 fn language_menu(app: &mut RustGisApp, ui: &mut Ui) {
-    let current = app.lang();
+    let current = app.chosen_lang();
     let auto = app.ui.language == crate::i18n::AUTO;
     let label = if auto { format!("{} ({})", tl!("Automatic"), shown_name(ui, current)) } else { shown_name(ui, current).to_string() };
     big_menu(ui, app, "globe_lang", &label, "Choose the interface language.", move |ui, app| {

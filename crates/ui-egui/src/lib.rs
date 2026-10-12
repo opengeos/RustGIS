@@ -250,6 +250,11 @@ pub struct RustGisApp {
     fonts_requested: Vec<String>,
     /// Downloads that failed; cleared when a language is picked, which retries them.
     fonts_failed: Vec<String>,
+    /// Fonts were installed this frame: `set_fonts` only takes effect on the next one.
+    fonts_pending: bool,
+    /// The language the interface is drawn in. It trails the chosen one until a font for its
+    /// script is active, so switching to Chinese never draws a frame of missing-glyph boxes.
+    shown_lang: i18n::Lang,
 }
 
 impl RustGisApp {
@@ -284,6 +289,8 @@ impl RustGisApp {
             fonts_dirty: false,
             fonts_requested: Vec::new(),
             fonts_failed: Vec::new(),
+            fonts_pending: false,
+            shown_lang: i18n::Lang::EN,
         }
     }
 
@@ -323,9 +330,24 @@ impl RustGisApp {
         self
     }
 
-    /// The language the interface is drawn in now.
+    /// The language the interface is drawn in now (see [`Self::chosen_lang`]).
     pub fn lang(&self) -> i18n::Lang {
+        self.shown_lang
+    }
+
+    /// The language picked in Settings › Language (or the system's, for `auto`).
+    pub fn chosen_lang(&self) -> i18n::Lang {
         i18n::Lang::from_pref(&self.ui.language)
+    }
+
+    /// Whether the interface can be drawn in `lang` this frame: its script needs no extra font, or
+    /// that font is installed and active (fonts installed this very frame aren't yet). A web app
+    /// waits for the download; a failed one keeps the previous language. A desktop without the
+    /// font has nothing to wait for.
+    fn can_draw(&self, lang: i18n::Lang) -> bool {
+        let Some(region) = Self::script_region(lang.script()) else { return true };
+        let have = self.extra_fonts.iter().any(|(_, _, r)| *r == Some(region));
+        (have || self.services.fetch_font.is_none()) && !self.fonts_pending && self.installed_region == Some(region)
     }
 
     /// On the desktop, an installed CJK face as a last-resort fallback, so CJK text (language names
@@ -346,7 +368,7 @@ impl RustGisApp {
 
     /// The CJK region of the current language, if any.
     fn current_region(&self) -> Option<rustgis_engine::render::fonts::CjkRegion> {
-        Self::script_region(self.lang().script())
+        Self::script_region(self.chosen_lang().script())
     }
 
     /// The CJK font region a script needs, if any.
@@ -1196,6 +1218,8 @@ impl RustGisApp {
 
     /// Per-frame work that doesn't draw (theme, fonts, files that arrived).
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // Fonts installed last frame are active now.
+        self.fonts_pending = false;
         i18n::set_current(self.lang());
         panes::poll_geolibre(self, ctx);
         pluginsui::poll(self, ctx);
@@ -1215,8 +1239,9 @@ impl RustGisApp {
                 log::error!("{url}: no usable font downloaded");
                 // Name the language whose font failed (not the current one), in English: its own
                 // script has no font yet.
-                let language =
-                    i18n::Lang::all().find(|l| region.is_some_and(|r| Self::script_region(l.script()) == Some(r))).unwrap_or(self.lang());
+                let language = i18n::Lang::all()
+                    .find(|l| region.is_some_and(|r| Self::script_region(l.script()) == Some(r)))
+                    .unwrap_or(self.chosen_lang());
                 let msg = i18n::fmt(
                     "Couldn't download the font for {language}; pick the language again to retry.",
                     &[("language", language.english())],
@@ -1238,6 +1263,7 @@ impl RustGisApp {
             self.fonts_dirty = false;
             self.installed_region = self.current_region();
             theme::install_fonts(ctx, &self.extra_fonts, self.installed_region);
+            self.fonts_pending = true;
             self.map.invalidate();
         }
         // Files from the async picker or browser drops.
@@ -1273,6 +1299,17 @@ impl RustGisApp {
             self.add_cjk_fallback();
             self.installed_region = self.current_region();
             theme::install_fonts(ctx, &self.extra_fonts, self.installed_region);
+            self.fonts_pending = true;
+        }
+        // Switch the drawn language once its font can draw it; until then keep the previous one.
+        let chosen = self.chosen_lang();
+        if self.shown_lang != chosen {
+            if self.can_draw(chosen) {
+                self.shown_lang = chosen;
+                self.map.invalidate();
+            } else if self.fonts_pending {
+                ctx.request_repaint();
+            }
         }
         if self.applied_dark != Some(self.ui.dark) {
             let t = if self.ui.dark { theme::Tokens::dark() } else { theme::Tokens::light() };
