@@ -448,3 +448,58 @@ fn stopping_a_request_drops_its_message() {
     assert_eq!(users.len(), 1);
     assert!(users[0]["content"].as_str().is_some_and(|t| t.starts_with("<map>") && t.ends_with("second")));
 }
+
+#[test]
+fn malformed_params_are_refused() {
+    let mut s = sample();
+    let n = s.map().layers.len();
+    for params in [json!("{\"layer\": "), json!("[1]"), json!(5)] {
+        let c = ToolCall { id: "x".into(), name: "run_command".into(), args: json!({"command": "layer.remove", "params": params}) };
+        assert!(tools::run(&mut s, &c).is_err());
+    }
+    assert_eq!(s.map().layers.len(), n, "no layer may be removed by a call whose parameters didn't parse");
+    let c = ToolCall { id: "x".into(), name: "run_command".into(), args: json!({"command": "map.zoomFull", "params": "{}"}) };
+    assert!(tools::run(&mut s, &c).is_ok());
+}
+
+#[test]
+fn stopping_a_follow_up_keeps_the_history_valid() {
+    let mut s = sample();
+    for provider in ["anthropic", "openai", "gemini"] {
+        let mut a = Agent::new(cfg(provider), &s);
+        let Step::Send(_) = a.ask("x", &s) else { panic!("expected a request") };
+        let reply = match provider {
+            "anthropic" => json!({"content": [{"type": "tool_use", "id": "t", "name": "list_layers", "input": {}}]}),
+            "gemini" => {
+                json!({"candidates": [{"content": {"role": "model", "parts": [{"functionCall": {"name": "list_layers", "args": {}}}]}}]})
+            }
+            _ => call("t", "list_layers", json!({})),
+        };
+        // The calls ran and the follow-up request is out when the user stops.
+        let Step::Send(_) = a.receive(a.generation(), ok(reply), &mut s) else { panic!("expected a follow-up") };
+        a.stop();
+        let Step::Send(req) = a.ask("y", &s) else { panic!("expected a request") };
+        let b = body(&req);
+        match provider {
+            // Results and the new text share one user message.
+            "anthropic" => {
+                let msgs = b["messages"].as_array().cloned().unwrap_or_default();
+                assert!(msgs.windows(2).all(|w| w[0]["role"] != w[1]["role"]), "{msgs:?}");
+                let last = msgs.last().cloned().unwrap_or(Value::Null);
+                assert_eq!(last["content"][0]["type"], "tool_result");
+                assert_eq!(last["content"][1]["type"], "text");
+            }
+            // Tool results, then the user's message.
+            "openai" => {
+                let msgs = b["messages"].as_array().cloned().unwrap_or_default();
+                let roles: Vec<&str> = msgs.iter().filter_map(|m| m["role"].as_str()).collect();
+                assert_eq!(roles, ["system", "user", "assistant", "tool", "user"]);
+            }
+            _ => {
+                let c = b["contents"].as_array().cloned().unwrap_or_default();
+                assert_eq!(c.len(), 4);
+                assert!(c[2]["parts"][0].get("functionResponse").is_some());
+            }
+        }
+    }
+}

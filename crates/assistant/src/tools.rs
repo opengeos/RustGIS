@@ -133,15 +133,19 @@ pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
 /// and network access can be allowed for good: plugin commands, the user's own automation and
 /// replacing the project are asked about every time.
 pub fn approval_key(s: &Session, call: &ToolCall) -> Option<String> {
-    let id = match call.name.as_str() {
-        "run_command" => str_arg(&call.args, "command")?,
-        "run_tool" => format!("gp.run:{}", str_arg(&call.args, "tool")?),
+    let (command, key) = match call.name.as_str() {
+        "run_command" => {
+            let id = str_arg(&call.args, "command")?;
+            (id.clone(), id)
+        }
+        "run_tool" => ("gp.run".to_string(), format!("gp.run:{}", str_arg(&call.args, "tool")?)),
         _ => return None,
     };
-    if id.starts_with(rustgis_engine::plugins::PREFIX) || user_only(&id) || s.registry.get(id.split(':').next().unwrap_or("")).is_none() {
+    if command.starts_with(rustgis_engine::plugins::PREFIX) || user_only(&command) || s.registry.get(&command).is_none() {
         return None;
     }
-    Some(format!("{id} {}", obj_arg(&call.args, "params")))
+    // Object keys serialise sorted, so the same parameters always make the same key.
+    Some(format!("{key} {}", obj_arg(&call.args, "params")))
 }
 
 /// A one-line description of a call for the transcript and the approval prompt.
@@ -177,13 +181,13 @@ pub fn run(s: &mut Session, call: &ToolCall) -> Result<String, String> {
                 return Err(format!("unknown command '{id}'; find ids with search_commands"));
             }
             let before = layer_names(s);
-            let r = s.run(&id, &obj_arg(a, "params"))?;
+            let r = s.run(&id, &params_arg(a)?)?;
             with_new_layers(r, s, &before)
         }
         "run_tool" => {
             let tool = str_arg(a, "tool").ok_or("tool is required")?;
             let before = layer_names(s);
-            let r = s.run("gp.run", &json!({"tool": tool, "params": obj_arg(a, "params")}))?;
+            let r = s.run("gp.run", &json!({"tool": tool, "params": params_arg(a)?}))?;
             with_new_layers(r, s, &before)
         }
         "read_features" => read_features(s, a)?,
@@ -208,7 +212,23 @@ fn str_arg(a: &Value, k: &str) -> Option<String> {
     }
 }
 
-/// An object parameter, which some models send as JSON text.
+/// The `params` a command or tool runs with: an object, or JSON text of one (some models send
+/// that). Anything else is an error: running with defaults instead could act on the wrong layer.
+fn params_arg(a: &Value) -> Result<Value, String> {
+    match a.get("params") {
+        None | Some(Value::Null) => Ok(json!({})),
+        Some(v @ Value::Object(_)) => Ok(v.clone()),
+        Some(Value::String(t)) if t.trim().is_empty() => Ok(json!({})),
+        Some(Value::String(t)) => match serde_json::from_str::<Value>(t) {
+            Ok(v @ Value::Object(_)) => Ok(v),
+            Ok(_) => Err("params must be a JSON object".into()),
+            Err(e) => Err(format!("params is not valid JSON: {e}")),
+        },
+        Some(_) => Err("params must be a JSON object".into()),
+    }
+}
+
+/// An object parameter, which some models send as JSON text (leniently, for display and approval).
 fn obj_arg(a: &Value, k: &str) -> Value {
     match a.get(k) {
         Some(Value::String(t)) if !t.trim().is_empty() => serde_json::from_str(t).unwrap_or(Value::Null),
