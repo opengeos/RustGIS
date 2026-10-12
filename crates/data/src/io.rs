@@ -617,43 +617,62 @@ pub fn read_zip(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadRepor
     let entries = crate::zip::read_matching(bytes, wanted).map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
     // Sidecar files by their path without the extension, compared without regard to case.
     let stem = |n: &str| lower(n.get(..n.len().saturating_sub(ext_of(n).len() + 1)).unwrap_or(n));
-    let find = |base: &str, ext: &str| entries.iter().find(|(n, _)| ext_of(n) == ext && stem(n) == base).map(|(_, b)| b);
+    // Entries are taken out as they're used, so no file's bytes are copied.
+    let mut entries: Vec<Option<(String, Vec<u8>)>> = entries.into_iter().map(Some).collect();
+    let mut shps: Vec<String> = entries.iter().flatten().filter(|(n, _)| ext_of(n) == "shp").map(|(n, _)| n.clone()).collect();
+    shps.sort();
+    let take = |entries: &mut Vec<Option<(String, Vec<u8>)>>, base: &str, ext: &str| -> Option<(String, Vec<u8>)> {
+        entries.iter_mut().find(|e| e.as_ref().is_some_and(|(n, _)| ext_of(n) == ext && stem(n) == base))?.take()
+    };
     let mut out = Vec::new();
-    let mut shps: Vec<&(String, Vec<u8>)> = entries.iter().filter(|(n, _)| ext_of(n) == "shp").collect();
-    shps.sort_by(|a, b| a.0.cmp(&b.0));
-    for (n, shp) in shps {
+    // Members that couldn't be read are skipped, and said in the first layer's report.
+    let mut skipped: Vec<String> = Vec::new();
+    for n in shps {
         if out.len() >= MAX_ZIP_LAYERS {
             break;
         }
-        let base = stem(n);
-        let name = Path::new(n).file_stem().and_then(|s| s.to_str()).unwrap_or("layer").to_string();
-        let Some(dbf) = find(&base, "dbf") else {
-            return Err(DataError::Format(format!("{file_name}: {n} has no .dbf beside it")));
+        let base = stem(&n);
+        let name = Path::new(&n).file_stem().and_then(|s| s.to_str()).unwrap_or("layer").to_string();
+        let shp = take(&mut entries, &base, "shp").map(|(_, b)| b).unwrap_or_default();
+        let shx = take(&mut entries, &base, "shx").map(|(_, b)| b);
+        let prj = take(&mut entries, &base, "prj").map(|(_, b)| String::from_utf8_lossy(&b).into_owned());
+        let Some((_, dbf)) = take(&mut entries, &base, "dbf") else {
+            skipped.push(format!("{n} (no .dbf beside it)"));
+            continue;
         };
-        let parts = ShapefileParts {
-            shp: shp.clone(),
-            shx: find(&base, "shx").cloned(),
-            dbf: dbf.clone(),
-            prj: find(&base, "prj").map(|b| String::from_utf8_lossy(b).into_owned()),
-        };
-        let mut read = read_shapefile_parts(parts, &name).map_err(|e| DataError::Format(format!("{n}: {e}")))?;
-        read.0.source = Some(format!("{file_name}/{n}"));
-        out.push(read);
+        match read_shapefile_parts(ShapefileParts { shp, shx, dbf, prj }, &name) {
+            Ok(mut read) => {
+                read.0.source = Some(format!("{file_name}/{n}"));
+                out.push(read);
+            }
+            Err(e) => skipped.push(format!("{n} ({e})")),
+        }
     }
-    let mut others: Vec<&(String, Vec<u8>)> =
-        entries.iter().filter(|(n, _)| !matches!(ext_of(n).as_str(), "shp" | "shx" | "dbf" | "prj")).collect();
+    let mut others: Vec<(String, Vec<u8>)> =
+        entries.into_iter().flatten().filter(|(n, _)| !matches!(ext_of(n).as_str(), "shp" | "shx" | "dbf" | "prj")).collect();
     others.sort_by(|a, b| a.0.cmp(&b.0));
     for (n, b) in others {
         if out.len() >= MAX_ZIP_LAYERS {
-            break;
+            skipped.push(format!("{n} (past the {MAX_ZIP_LAYERS}-layer limit)"));
+            continue;
         }
-        let leaf = n.rsplit('/').next().unwrap_or(n);
-        let mut read = read_bytes(leaf, b).map_err(|e| DataError::Format(format!("{n}: {e}")))?;
-        read.0.source = Some(format!("{file_name}/{n}"));
-        out.push(read);
+        let leaf = n.rsplit('/').next().unwrap_or(&n);
+        match read_bytes(leaf, &b) {
+            Ok(mut read) => {
+                read.0.source = Some(format!("{file_name}/{n}"));
+                out.push(read);
+            }
+            Err(e) => skipped.push(format!("{n} ({e})")),
+        }
     }
     if out.is_empty() {
-        return Err(DataError::Format(format!("{file_name}: no Shapefile or other vector data in the archive")));
+        let why = if skipped.is_empty() { String::new() } else { format!(": {}", skipped.join("; ")) };
+        return Err(DataError::Format(format!("{file_name}: no Shapefile or other vector data in the archive could be read{why}")));
+    }
+    if let Some((_, report)) = out.first_mut()
+        && !skipped.is_empty()
+    {
+        report.messages.push(format!("{file_name}: skipped {}", skipped.join("; ")));
     }
     Ok(out)
 }
@@ -1213,9 +1232,20 @@ mod tests {
         assert_eq!(layers[1].0.name, "points");
         // read_bytes takes the first layer.
         assert_eq!(read_bytes("upload.zip", &zip).unwrap().0.name, "Paris");
-        // Without its .dbf the Shapefile can't be read.
+        // Without its .dbf the Shapefile is skipped (and said); the rest of the archive is read.
         let no_dbf: Vec<_> = entries.iter().filter(|(n, _)| !n.ends_with(".dbf")).cloned().collect();
-        assert!(read_zip("x.zip", &crate::zip::write(&no_dbf).unwrap()).is_err());
+        let layers = read_zip("x.zip", &crate::zip::write(&no_dbf).unwrap()).unwrap();
+        assert_eq!(layers.len(), 1);
+        assert!(layers[0].1.messages.iter().any(|m| m.contains("no .dbf")), "{:?}", layers[0].1.messages);
+        // A metadata file that isn't GeoJSON doesn't keep the Shapefile out.
+        let mut with_meta = entries.clone();
+        with_meta.push(("data/metadata.json".to_string(), br#"{"title": "not GeoJSON"}"#.to_vec()));
+        let layers = read_zip("x.zip", &crate::zip::write(&with_meta).unwrap()).unwrap();
+        assert_eq!(layers.len(), 2);
+        assert!(layers[0].1.messages.iter().any(|m| m.contains("metadata.json")), "{:?}", layers[0].1.messages);
+        // Nothing readable at all is an error.
+        let only_shp: Vec<_> = entries.iter().filter(|(n, _)| n.ends_with(".SHP")).cloned().collect();
+        assert!(read_zip("x.zip", &crate::zip::write(&only_shp).unwrap()).is_err());
         // Nothing to read.
         assert!(read_zip("x.zip", &crate::zip::write(&[("a.txt.bak".to_string(), vec![1])]).unwrap()).is_err());
         for n in (0..zip.len()).step_by(37) {

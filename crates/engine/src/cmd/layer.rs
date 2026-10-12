@@ -306,12 +306,24 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
 pub(crate) fn add_zip(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8]) -> CmdResult {
     let reads = rustgis_data::io::read_zip(file_name, bytes).map_err(|e| e.to_string())?;
     let mut added = Vec::new();
+    let mut failed = Vec::new();
     let mut q = p.clone();
     for read in reads {
-        added.push(add_read(s, &q, read)?);
+        let name = read.0.name.clone();
+        // A layer that can't be added is skipped and said; the others are still added.
+        match add_read(s, &q, read) {
+            Ok(r) => added.push(r),
+            Err(e) => failed.push(format!("{name}: {e}")),
+        }
         if let Some(o) = q.as_object_mut() {
             o.remove("name");
         }
+    }
+    if added.is_empty() {
+        return Err(failed.join("; "));
+    }
+    for f in &failed {
+        s.notify(format!("{file_name}: {f}"), true);
     }
     let layers: Vec<Value> = added.iter().filter_map(|r| r.get("layer").cloned()).collect();
     let tables: Vec<Value> = added.iter().filter_map(|r| r.get("table").cloned()).collect();
