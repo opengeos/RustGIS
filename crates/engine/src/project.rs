@@ -15,7 +15,7 @@ pub const LEGACY_EXTENSION: &str = "rgisx";
 /// Whether a file name or path names a project file (`.rgis`, or the legacy `.rgisx`), ignoring case.
 pub fn is_project_file(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    [EXTENSION, LEGACY_EXTENSION].iter().any(|x| n.ends_with(&format!(".{x}")))
+    [EXTENSION, LEGACY_EXTENSION].iter().any(|x| n.strip_suffix(x).is_some_and(|s| s.ends_with('.')))
 }
 /// Format version written to files.
 pub const FORMAT: u32 = 1;
