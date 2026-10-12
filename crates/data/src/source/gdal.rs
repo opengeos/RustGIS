@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// File types read through GDAL. A File Geodatabase is a folder ending in `.gdb`.
-pub const EXTENSIONS: &[&str] =
-    &["kml", "kmz", "gpx", "gml", "dxf", "gdb", "tab", "mif", "sqlite", "osm", "pbf", "geojsonl", "geojsons", "gmt", "vrt"];
+/// (Not `.vrt`, which can point GDAL at any file on the machine, nor `.sqlite`, more often a plain
+/// database than a spatial one.)
+pub const EXTENSIONS: &[&str] = &["kml", "kmz", "gpx", "gml", "dxf", "gdb", "tab", "mif", "osm", "pbf", "geojsonl", "geojsons", "gmt"];
 
 /// Most layers converted from one file.
 const MAX_LAYERS: usize = 64;
@@ -36,6 +37,9 @@ pub struct Converted {
     /// The layer in the source.
     pub layer: String,
     pub family: Option<Family>,
+    /// GDAL couldn't reproject it (the file doesn't say its coordinate system): its coordinates
+    /// are the file's own.
+    pub unprojected: bool,
 }
 
 /// A GDAL program (`ogr2ogr`, `ogrinfo`): from `RUSTGIS_GDAL_BIN` (a folder), else on the `PATH`.
@@ -46,7 +50,8 @@ pub fn program(name: &str) -> Option<PathBuf> {
         .into_iter()
         .chain(std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default())
         .collect();
-    dirs.into_iter().map(|d| d.join(&exe)).find(|p| p.is_file())
+    // Only absolute folders: an empty or relative PATH entry would look in the current folder.
+    dirs.into_iter().filter(|d| d.is_absolute()).map(|d| d.join(&exe)).find(|p| p.is_file())
 }
 
 /// Whether GDAL's programs are installed.
@@ -152,8 +157,9 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
         let families: Vec<Option<Family>> = if l.single { vec![None] } else { Family::ALL.iter().copied().map(Some).collect() };
         for family in families {
             match convert_one_in(dir, src, &l.name, family, crs) {
-                Ok(Some(path)) => out.push(Converted {
+                Ok(Some((path, unprojected))) => out.push(Converted {
                     path,
+                    unprojected,
                     name: match family {
                         Some(f) => format!("{} ({})", l.name, f.label()),
                         None => l.name.clone(),
@@ -179,10 +185,11 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
 /// features. The cache key covers the file's path, size and modification time.
 pub fn convert_one(src: &Path, layer: &str, family: Option<Family>, crs: Option<&str>) -> Result<Option<PathBuf>> {
     let dir = cache_dir().ok_or_else(|| DataError::Format("no cache folder for GDAL conversions".into()))?;
-    convert_one_in(&dir, src, layer, family, crs)
+    Ok(convert_one_in(&dir, src, layer, family, crs)?.map(|(p, _)| p))
 }
 
-fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, crs: Option<&str>) -> Result<Option<PathBuf>> {
+/// The conversion and whether it is unprojected (see [`Converted::unprojected`]).
+fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, crs: Option<&str>) -> Result<Option<(PathBuf, bool)>> {
     // A name GDAL would take for an option (a file can name its own layers).
     if layer.starts_with('-') {
         return Err(DataError::Format(format!("layer '{layer}': a name starting with '-' isn't read")));
@@ -199,6 +206,7 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, c
     let out = dir.join(format!("{tag}.fgb"));
     let empty = dir.join(format!("{tag}.empty"));
     let keyfile = dir.join(format!("{tag}.key"));
+    let raw = dir.join(format!("{tag}.raw"));
     let same = std::fs::read_to_string(&keyfile).is_ok_and(|k| k == key);
     // A hit is touched, so pruning removes what isn't used rather than what is old.
     let touch = |p: &Path| {
@@ -214,9 +222,16 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, c
     if same && out.metadata().is_ok_and(|m| m.len() > 0) {
         touch(&out);
         touch(&keyfile);
-        return Ok(Some(out));
+        let unprojected = raw.exists();
+        if unprojected {
+            touch(&raw);
+        }
+        return Ok(Some((out, unprojected)));
     }
-    let tmp = dir.join(format!("{tag}.{}.tmp.fgb", std::process::id()));
+    // Unique to this conversion, even with others of the same layer running in this process.
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!("{tag}.{}{n:04}.tmp.fgb", std::process::id()));
     let run = |reproject: bool| -> std::io::Result<std::process::Output> {
         let _ = std::fs::remove_file(&tmp);
         let mut c = Command::new(&ogr2ogr);
@@ -235,9 +250,15 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, c
     };
     let mut res = run(true)?;
     // A layer without a coordinate system can't be reprojected: take it as it is (unless one was
-    // given, which GDAL then needs to reproject from).
-    if !res.status.success() && crs.is_none() {
+    // given, which GDAL then needs to reproject from). Any other failure is reported as it is.
+    let mut unprojected = false;
+    let about_srs = |e: &[u8]| {
+        let e = String::from_utf8_lossy(e).to_ascii_lowercase();
+        e.contains("coordinate system") || e.contains("srs") || e.contains("transform")
+    };
+    if !res.status.success() && crs.is_none() && about_srs(&res.stderr) {
         res = run(false)?;
+        unprojected = true;
     }
     if !res.status.success() {
         let _ = std::fs::remove_file(&tmp);
@@ -267,8 +288,13 @@ fn convert_one_in(dir: &Path, src: &Path, layer: &str, family: Option<Family>, c
         return Ok(None);
     }
     std::fs::rename(&tmp, &out)?;
+    if unprojected {
+        std::fs::write(&raw, b"")?;
+    } else {
+        let _ = std::fs::remove_file(&raw);
+    }
     std::fs::write(&keyfile, &key)?;
-    Ok(Some(out))
+    Ok(Some((out, unprojected)))
 }
 
 /// The longest a conversion may run, and the longest a layer listing may.
@@ -343,7 +369,7 @@ fn fnv1a(b: &[u8]) -> u64 {
 fn ours(name: &str) -> bool {
     let Some((tag, rest)) = name.split_once('.') else { return false };
     let tmp = rest.strip_suffix(".tmp.fgb").is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()));
-    tag.len() == 16 && tag.bytes().all(|b| b.is_ascii_hexdigit()) && (matches!(rest, "fgb" | "key" | "empty") || tmp)
+    tag.len() == 16 && tag.bytes().all(|b| b.is_ascii_hexdigit()) && (matches!(rest, "fgb" | "key" | "empty" | "raw") || tmp)
 }
 
 /// Removes conversions not used for [`KEEP`] (best effort). Only this module's files are touched,

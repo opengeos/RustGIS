@@ -386,7 +386,15 @@ fn add_gdal(s: &mut Session, p: &Value, path: &str) -> CmdResult {
             q["stream"] = v.clone();
         }
         let fgb = c.path.display().to_string();
-        let r = add_source(s, &q, Origin::Path(&fgb))?;
+        // One layer that can't be added doesn't stop the others.
+        let r = match add_source(s, &q, Origin::Path(&fgb)) {
+            Ok(r) => r,
+            Err(e) if !single => {
+                s.notify(format!("{}: {e}", c.name), true);
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         features += r["features"].as_u64().unwrap_or(0);
         streamed |= r["streamed"].as_bool().unwrap_or(false);
         for id in r["layers"].as_array().into_iter().flatten().filter_map(Value::as_u64).filter_map(|i| u32::try_from(i).ok()) {
@@ -401,9 +409,10 @@ fn add_gdal(s: &mut Session, p: &Value, path: &str) -> CmdResult {
                     });
                 }
             }
-            // Coordinates beyond longitude/latitude: the file's coordinate system is unknown.
+            // GDAL couldn't reproject it, or its coordinates go past longitude/latitude: the file's
+            // coordinate system is unknown.
             let e = s.map().layer(id).map(|l| l.extent()).unwrap_or_default();
-            if !e.is_empty() && (e.min_x < -181.0 || e.max_x > 181.0 || e.min_y < -91.0 || e.max_y > 91.0) {
+            if c.unprojected || (!e.is_empty() && (e.min_x < -181.0 || e.max_x > 181.0 || e.min_y < -91.0 || e.max_y > 91.0)) {
                 s.notify(
                     format!("{}: the file doesn't say its coordinate system; add it again with \"crs\" (such as EPSG:2263)", c.name),
                     true,
@@ -417,6 +426,9 @@ fn add_gdal(s: &mut Session, p: &Value, path: &str) -> CmdResult {
         if !e.is_empty() {
             s.zoom_to(&e);
         }
+    }
+    if ids.is_empty() {
+        return Err(format!("{path}: none of its layers could be added"));
     }
     Ok(json!({"layer": ids.first(), "layers": ids, "features": features, "streamed": streamed}))
 }

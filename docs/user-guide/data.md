@@ -10,7 +10,7 @@
 | GeoPackage (`.gpkg`, every feature table) | Yes (desktop) | No |
 | GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | No |
 | FlatGeobuf (`.fgb`) | Yes | Yes (`share.exportLayer`) |
-| Through GDAL: KML/KMZ, GPX, GML, DXF, File Geodatabase (`.gdb` folder), MapInfo, OpenStreetMap, SQLite… | Yes (desktop, when GDAL is installed) | No |
+| Through GDAL: KML/KMZ, GPX, GML, DXF, File Geodatabase (`.gdb` folder), MapInfo, OpenStreetMap… | Yes (desktop, when GDAL is installed) | No |
 | KML, GPX, CSV with WKT geometry | No | Yes (Analysis › Workflows › Data Interop) |
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
 | ASCII grid (`.asc`, with an optional `.prj`) | Yes | No |
