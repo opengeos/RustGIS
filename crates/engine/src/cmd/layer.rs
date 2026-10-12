@@ -265,7 +265,10 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     }
     // A PMTiles archive is a tile layer (raster or vector, as its header says).
     if path.to_ascii_lowercase().ends_with(".pmtiles") {
-        let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
+        if cfg!(target_arch = "wasm32") {
+            return Err(format!("{path}: the web app reads PMTiles archives from web addresses (Map › Basemap › Add Tile Layer)"));
+        }
+        let full = std::path::absolute(path).map(|p| p.display().to_string()).map_err(|e| format!("{path}: {e}"))?;
         let mut q = json!({"url": full, "kind": "pmtiles"});
         if let Some(n) = ps(p, "name") {
             q["name"] = json!(n);

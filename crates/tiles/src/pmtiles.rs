@@ -175,7 +175,8 @@ fn leaves() -> &'static Mutex<HashMap<(String, u64), Leaf>> {
 /// Forgets the archives read (with the tile cache).
 pub(crate) fn forget() {
     archives().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, s| matches!(s, State::Loading(_)));
-    leaves().lock().unwrap_or_else(|e| e.into_inner()).clear();
+    // Reads under way are kept: their waiting tiles are answered when they land.
+    leaves().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, l| matches!(l, Leaf::Loading(_)));
 }
 
 /// An archive's header and metadata: `Ok(None)` while they are read (the map draws again once
@@ -257,11 +258,14 @@ fn finish(archive: &str, r: Result<Info, String>) {
     let r = r.map(Arc::new);
     let waiting = {
         let mut all = archives().lock().unwrap_or_else(|e| e.into_inner());
-        let next = match &r {
-            Ok(i) => State::Ready(i.clone()),
-            Err(e) => State::Failed(e.clone(), Instant::now()),
+        let old = match &r {
+            Ok(i) => all.insert(archive.to_string(), State::Ready(i.clone())),
+            // A read the busy queue dropped isn't the archive's fault: forgotten, so the next
+            // draw reads it again, rather than kept as a failure.
+            Err(e) if e == crate::cache::DROPPED => all.remove(archive),
+            Err(e) => all.insert(archive.to_string(), State::Failed(e.clone(), Instant::now())),
         };
-        match all.insert(archive.to_string(), next) {
+        match old {
             Some(State::Loading(w)) => w,
             _ => Vec::new(),
         }
