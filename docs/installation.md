@@ -7,14 +7,19 @@ builds of the desktop app and `rustgis-cli`:
 
 | Platform | File |
 | --- | --- |
-| Windows x64 | `RustGIS-<version>-windows-x86_64.zip` (portable: unzip and run `rustgis.exe`) |
+| Windows x64 | `RustGIS-<version>-windows-x86_64-portable.zip` (unzip and run `rustgis.exe`) |
+| Windows x64 (Microsoft Store package) | `RustGIS-<version>-windows-x86_64.msix` |
 | macOS Apple Silicon | `RustGIS-<version>-macos-aarch64.dmg` |
 | macOS Intel | `RustGIS-<version>-macos-x86_64.dmg` |
 | Linux x64 / arm64 (Debian, Ubuntu) | `rustgis_<version>_amd64.deb` / `rustgis_<version>_arm64.deb` |
 | Linux x64 / arm64 (other) | `RustGIS-<version>-linux-x86_64.tar.gz` / `RustGIS-<version>-linux-aarch64.tar.gz` |
 
 On macOS the command line tool is a separate `rustgis-cli-<version>-macos-<arch>.tar.gz`;
-the other packages include it. `SHA256SUMS` lists the checksum of every file.
+the other packages include it (the MSIX adds `rustgis-cli` to every terminal). `SHA256SUMS` lists the checksum of every file.
+
+The `.msix` is the package submitted to the Microsoft Store, which signs it. It is unsigned
+on the release page, so Windows only installs it from the Store; download the portable zip
+instead.
 
 The builds are not yet signed. On macOS, the first time, right-click RustGIS in Applications
 and choose **Open** (or run `xattr -dr com.apple.quarantine /Applications/RustGIS.app`). On
