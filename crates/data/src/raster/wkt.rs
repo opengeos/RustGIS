@@ -331,11 +331,15 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
         "STEREOGRAPHIC" => format!("+proj=stere +lat_0={lat0} +k_0={k0} {at}"),
         "OBLIQUE_STEREOGRAPHIC" | "DOUBLE_STEREOGRAPHIC" => format!("+proj=sterea +lat_0={lat0} +k_0={k0} {at}"),
         "POLAR_STEREOGRAPHIC" | "STEREOGRAPHIC_NORTH_POLE" | "STEREOGRAPHIC_SOUTH_POLE" => {
-            // The pole on the side of the latitude of true scale.
+            // The pole on the side of the latitude of true scale. A latitude of origin at the pole
+            // (UPS, EPSG:32761) gives the scale there instead.
             let ts = lat1.unwrap_or(lat0);
             let pole = if method.ends_with("SOUTH_POLE") || ts < 0.0 { -90.0 } else { 90.0 };
-            let ts = if ts == 0.0 { pole } else { ts };
-            format!("+proj=stere +lat_0={pole} +lat_ts={ts} +k_0={k0} {at}")
+            if ts.abs() >= 90.0 || ts == 0.0 {
+                format!("+proj=stere +lat_0={pole} +k_0={k0} {at}")
+            } else {
+                format!("+proj=stere +lat_0={pole} +lat_ts={ts} {at}")
+            }
         }
         "EQUIRECTANGULAR" | "EQUIDISTANT_CYLINDRICAL" | "PLATE_CARREE" => format!("+proj=eqc +lat_ts={} {at}", lat1.unwrap_or(0.0)),
         "CYLINDRICAL_EQUAL_AREA" | "LAMBERT_CYLINDRICAL_EQUAL_AREA" | "BEHRMANN" => {
@@ -486,6 +490,23 @@ mod tests {
         // Esri names for WGS 84 systems need no note.
         assert_eq!(read_wkt(GEOG_4326), Ok((Crs::LonLat, None)));
         assert_eq!(read_wkt(ESRI_32631), Ok((Crs::Epsg(32631), None)));
+    }
+
+    #[test]
+    fn polar_stereographic() {
+        // GDAL's WKT for EPSG:3031 (true scale at 71°S) and EPSG:32761 (UPS South, scale 0.994 at
+        // the pole), without their authorities; the point is 45°E 75°S, from PROJ.
+        let geog = r#"GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]]"#;
+        let antarctic = format!(
+            r#"PROJCS["Antarctic",{geog},PROJECTION["Polar_Stereographic"],PARAMETER["latitude_of_origin",-71],PARAMETER["central_meridian",0],PARAMETER["false_easting",0],PARAMETER["false_northing",0],UNIT["metre",1]]"#
+        );
+        let ups = format!(
+            r#"PROJCS["UPS South",{geog},PROJECTION["Polar_Stereographic"],PARAMETER["latitude_of_origin",-90],PARAMETER["central_meridian",0],PARAMETER["scale_factor",0.994],PARAMETER["false_easting",2000000],PARAMETER["false_northing",2000000],UNIT["metre",1]]"#
+        );
+        for (wkt, xy) in [(antarctic, 1_158_794.740_772_6), (ups, 3_184_085.797_412_3)] {
+            let ll = crs_from_wkt(&wkt).unwrap().transformer().unwrap().to_lonlat(Coord::new(xy, xy)).unwrap();
+            assert!((ll.x - 45.0).abs() < 1e-6 && (ll.y + 75.0).abs() < 1e-6, "{ll:?}");
+        }
     }
 
     #[test]

@@ -476,7 +476,7 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
     let mut ds = Dataset::new(name, GeometryType::None, fields);
     let mut report = ReadReport::default();
     let to_lonlat = shapefile_crs(path, &mut report);
-    let mut unconverted = 0usize;
+    let (mut converted, mut unconverted) = (0usize, 0usize);
     let pt = |x: f64, y: f64| Coord::new(x, y);
     for item in reader.iter_shapes_and_records() {
         let Ok((shape, record)) = item else {
@@ -513,6 +513,7 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
                 let mut ok = true;
                 let out = g.map_coords(&|c| t.to_lonlat(c).unwrap_or(Coord::new(f64::NAN, f64::NAN)));
                 out.for_each_coord(|c| ok &= c.is_finite());
+                converted += usize::from(ok);
                 unconverted += usize::from(!ok);
                 ok.then_some(out)
             }
@@ -545,7 +546,7 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
     if report.skipped > 0 {
         report.messages.push(format!("{} shapes were unreadable or unsupported", report.skipped));
     }
-    if unconverted > 0 && unconverted == ds.features.len() {
+    if unconverted > 0 && converted == 0 {
         report.messages.push("no shape could be converted to longitude/latitude: the .prj doesn't seem to match the coordinates".into());
     } else if unconverted > 0 {
         report.messages.push(format!("{unconverted} shapes couldn't be converted to longitude/latitude and have no geometry"));
