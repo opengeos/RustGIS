@@ -270,7 +270,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
 /// Where a source file is: on disk, or uploaded (its name and bytes).
 pub(crate) enum Origin<'a> {
     Path(&'a str),
-    Bytes(&'a str, Vec<u8>),
+    Bytes(&'a str, std::sync::Arc<Vec<u8>>),
 }
 
 /// Most GeoPackage tables added at once.
@@ -306,7 +306,7 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
     for table in tables {
         let src = match &origin {
             Origin::Path(path) => source::open_path(Path::new(path), table.as_deref()),
-            Origin::Bytes(name, bytes) => source::open_bytes(name, bytes.clone(), table.as_deref()),
+            Origin::Bytes(name, bytes) => source::open_shared(name, bytes.clone(), table.as_deref()),
         }
         .map_err(err)?;
         let info = src.info().clone();

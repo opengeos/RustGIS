@@ -19,7 +19,7 @@ impl<T: Read + Seek> ReadSeek for T {}
 #[derive(Clone, Debug)]
 enum Input {
     Path(PathBuf),
-    Bytes(Arc<[u8]>),
+    Bytes(super::Shared),
 }
 
 /// A FlatGeobuf file.
@@ -36,7 +36,11 @@ impl FgbSource {
     }
 
     pub fn open_bytes(bytes: Vec<u8>, name: &str) -> Result<Self> {
-        let bytes: Arc<[u8]> = bytes.into();
+        Self::open_shared(super::Shared(Arc::new(bytes)), name)
+    }
+
+    /// From bytes shared with the caller, without a copy.
+    pub fn open_shared(bytes: super::Shared, name: &str) -> Result<Self> {
         Self::new(Cursor::new(bytes.clone()), Input::Bytes(bytes), name)
     }
 

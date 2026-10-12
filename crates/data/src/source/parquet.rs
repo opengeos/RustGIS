@@ -46,7 +46,12 @@ impl ParquetSource {
     }
 
     pub fn open_bytes(bytes: Vec<u8>, name: &str) -> Result<Self> {
-        Self::new(Arc::new(SerializedFileReader::new(Bytes::from(bytes)).map_err(err)?), name)
+        Self::open_shared(super::Shared(Arc::new(bytes)), name)
+    }
+
+    /// From bytes shared with the caller, without a copy.
+    pub fn open_shared(bytes: super::Shared, name: &str) -> Result<Self> {
+        Self::new(Arc::new(SerializedFileReader::new(Bytes::from_owner(bytes)).map_err(err)?), name)
     }
 
     fn new(reader: Arc<dyn FileReader>, name: &str) -> Result<Self> {

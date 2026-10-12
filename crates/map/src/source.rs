@@ -99,10 +99,10 @@ impl SourceLayer {
     }
 
     /// A source read from a file's bytes, kept in the project.
-    pub fn from_bytes(file_name: impl Into<String>, bytes: Vec<u8>, table: Option<String>, handle: Box<dyn FeatureSource>) -> Self {
+    pub fn from_bytes(file_name: impl Into<String>, bytes: Arc<Vec<u8>>, table: Option<String>, handle: Box<dyn FeatureSource>) -> Self {
         SourceLayer {
             file_name: Some(file_name.into()),
-            embedded: Some(Arc::new(bytes)),
+            embedded: Some(bytes),
             table,
             handle: Some(Arc::from(handle)),
             ..SourceLayer::default()
@@ -113,7 +113,7 @@ impl SourceLayer {
     pub fn open(&mut self) -> Result<(), String> {
         let src = if let Some(bytes) = &self.embedded {
             let name = self.file_name.as_deref().unwrap_or("layer.parquet");
-            rustgis_data::source::open_bytes(name, bytes.as_ref().clone(), self.table.as_deref())
+            rustgis_data::source::open_shared(name, bytes.clone(), self.table.as_deref())
         } else if let Some(p) = &self.path {
             rustgis_data::source::open_path(std::path::Path::new(p), self.table.as_deref())
         } else {
@@ -211,8 +211,13 @@ impl SourceLayer {
                     w();
                 }
             });
-            if spawned.is_ok() {
-                self.pending = Some(pending);
+            match spawned {
+                Ok(_) => self.pending = Some(pending),
+                // No thread to read on: say so, and don't ask again until the view moves on.
+                Err(e) => {
+                    self.error = Some(format!("couldn't start reading the layer: {e}"));
+                    self.window = Some(Window { extent, complete: true, matched: 0, kept: 0 });
+                }
             }
             return;
         }

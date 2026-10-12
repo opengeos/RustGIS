@@ -103,13 +103,29 @@ pub fn open_path(path: &Path, layer: Option<&str>) -> Result<Box<dyn FeatureSour
 
 /// Opens a file held in memory (a browser upload).
 pub fn open_bytes(file_name: &str, bytes: Vec<u8>, layer: Option<&str>) -> Result<Box<dyn FeatureSource>> {
+    open_shared(file_name, std::sync::Arc::new(bytes), layer)
+}
+
+/// File bytes shared without copying (a layer keeps them for reopening the source).
+#[derive(Clone, Debug)]
+pub struct Shared(pub std::sync::Arc<Vec<u8>>);
+
+impl AsRef<[u8]> for Shared {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
+/// Opens a file held in memory, sharing its bytes rather than copying them.
+pub fn open_shared(file_name: &str, bytes: std::sync::Arc<Vec<u8>>, layer: Option<&str>) -> Result<Box<dyn FeatureSource>> {
     let path = Path::new(file_name);
     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("layer").to_string();
+    let bytes = Shared(bytes);
     match ext(path).as_str() {
-        "parquet" | "geoparquet" => Ok(Box::new(parquet::ParquetSource::open_bytes(bytes, &name)?)),
-        "fgb" => Ok(Box::new(fgb::FgbSource::open_bytes(bytes, &name)?)),
+        "parquet" | "geoparquet" => Ok(Box::new(parquet::ParquetSource::open_shared(bytes, &name)?)),
+        "fgb" => Ok(Box::new(fgb::FgbSource::open_shared(bytes, &name)?)),
         #[cfg(not(target_arch = "wasm32"))]
-        "gpkg" => Ok(Box::new(gpkg::GpkgSource::open_bytes(&bytes, layer)?)),
+        "gpkg" => Ok(Box::new(gpkg::GpkgSource::open_bytes(bytes.as_ref(), layer)?)),
         #[cfg(target_arch = "wasm32")]
         "gpkg" => Err(DataError::Unsupported("gpkg in the browser yet: open GeoPackages in the desktop app".into())),
         other => {
