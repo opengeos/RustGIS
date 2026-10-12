@@ -67,6 +67,10 @@ jobs:
         shell: bash
         run: cargo build --release --locked -p rustgis -p rustgis-cli
 
+      - name: Install packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
       - name: Package
         shell: bash
         env:
@@ -79,6 +83,21 @@ jobs:
           sudo apt-get install -y ./dist/rustgis_*.deb
           dpkg-deb -f dist/rustgis_*.deb Depends
           rustgis-cli logo "$RUNNER_TEMP/logo.png" --size 64
+
+      - name: Check the .rpm installs on Fedora
+        if: runner.os == 'Linux'
+        run: |
+          rpm -qp --requires dist/rustgis-*.rpm
+          docker run --rm -v "$PWD/dist:/dist:ro" fedora:latest sh -c \
+            'dnf install -y -q /dist/rustgis-*.rpm && rustgis-cli logo /tmp/logo.png --size 64'
+
+      - name: Check the AppImage runs
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x dist/*.AppImage
+          cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE"/dist/*.AppImage --appimage-extract > /dev/null
+          squashfs-root/usr/bin/rustgis-cli logo logo.png --size 64
+          test -x squashfs-root/AppRun
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7

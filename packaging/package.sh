@@ -3,7 +3,7 @@
 #
 #   packaging/package.sh <version> [rust-target]
 #
-# Linux: a .tar.gz and a .deb. macOS: a .dmg holding RustGIS.app, plus a .tar.gz of the CLI.
+# Linux: a .tar.gz, a .deb, an .rpm (when rpmbuild is installed) and an AppImage. macOS: a .dmg holding RustGIS.app, plus a .tar.gz of the CLI.
 # Windows (Git Bash): a portable .zip. Build first with
 # `cargo build --release --locked -p rustgis -p rustgis-cli [--target T]`.
 set -euo pipefail
@@ -93,6 +93,87 @@ Description: Desktop GIS with a ribbon workflow, written in Rust
  export. Includes rustgis-cli for scripting every command.
 CONTROL
     dpkg-deb --root-owner-group --build "$p" "$dist/rustgis_${version}_${debarch}.deb"
+
+    # RPM package (Fedora, RHEL, openSUSE) from the same tree. Library dependencies are found
+    # by rpmbuild; the run-time loaded windowing and GPU libraries are listed by soname, which
+    # every RPM distribution provides under the same name.
+    if command -v rpmbuild > /dev/null; then
+      r="$work/rpm"
+      mkdir -p "$r/SPECS"
+      cat > "$r/SPECS/rustgis.spec" <<SPEC
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+Name: rustgis
+Version: ${version/-/\~}
+Release: 1
+Summary: Desktop GIS with a ribbon workflow, written in Rust
+License: Apache-2.0
+URL: https://rustgis.app
+Requires: libxkbcommon.so.0()(64bit)
+Requires: (libwayland-client.so.0()(64bit) or libX11.so.6()(64bit))
+Recommends: libxkbcommon-x11.so.0()(64bit)
+Recommends: libXcursor.so.1()(64bit)
+Recommends: libXi.so.6()(64bit)
+Recommends: libXrandr.so.2()(64bit)
+Recommends: (libvulkan.so.1()(64bit) or libEGL.so.1()(64bit))
+
+%description
+Maps and layers, symbology, labeling, selection, editing, geoprocessing and
+export. Includes rustgis-cli for scripting every command.
+
+%install
+mkdir -p %{buildroot}
+cp -a "$p/usr" %{buildroot}/
+
+%files
+/usr/bin/rustgis
+/usr/bin/rustgis-cli
+/usr/share/applications/rustgis.desktop
+/usr/share/mime/packages/rustgis.xml
+/usr/share/icons/hicolor/*/apps/rustgis.png
+%license /usr/share/doc/rustgis/copyright
+SPEC
+      rpmbuild --quiet -bb --target "$arch" --define "_topdir $r" "$r/SPECS/rustgis.spec"
+      cp "$r"/RPMS/*/rustgis-*.rpm "$dist/"
+    elif [ -n "${CI:-}" ]; then
+      echo "rpmbuild not found" >&2
+      exit 1
+    else
+      echo "rpmbuild not found: skipping the .rpm" >&2
+    fi
+
+    # AppImage: a single file that runs on most distributions without installing. It uses the
+    # static type-2 runtime, so it needs no libfuse2. The tools are pinned by checksum.
+    case "$arch" in
+      x86_64)
+        tool_sha=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+        runtime_sha=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d ;;
+      aarch64)
+        tool_sha=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+        runtime_sha=00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444 ;;
+      *) tool_sha="" ;;
+    esac
+    if [ -n "$tool_sha" ]; then
+      fetch() { # url sha out
+        curl -fsSL --retry 3 -o "$3" "$1"
+        echo "$2  $3" | sha256sum -c --quiet -
+      }
+      t="$work/appimage-tools"
+      mkdir -p "$t"
+      fetch "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-$arch.AppImage" \
+        "$tool_sha" "$t/appimagetool"
+      fetch "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-$arch" \
+        "$runtime_sha" "$t/runtime"
+      chmod +x "$t/appimagetool"
+      a="$work/RustGIS.AppDir"
+      mkdir -p "$a"
+      cp -a "$p/usr" "$a/"
+      cp "$root/packaging/linux/rustgis.desktop" "$a/"
+      logo "$a/rustgis.png" 256
+      ln -s usr/bin/rustgis "$a/AppRun"
+      ARCH="$arch" APPIMAGE_EXTRACT_AND_RUN=1 "$t/appimagetool" --no-appstream --runtime-file "$t/runtime" \
+        "$a" "$dist/$name.AppImage"
+    fi
     ;;
 
   macos)
