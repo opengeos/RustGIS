@@ -805,7 +805,7 @@ mod tests {
 
     #[test]
     fn large_files_without_overviews_are_read_as_one() {
-        // 300 × 200: over a 10,000-sample limit, so every 4th pixel each way is kept.
+        // Over a 10,000-sample limit, so every 4th pixel each way is kept.
         // 301 × 203 in 4-row strips: the last strip is short, the width odd.
         let (w, h) = (301u32, 203u32);
         let data: Vec<u8> = (0..w * h).map(|i| ((i % w + i / w) % 251) as u8).collect();

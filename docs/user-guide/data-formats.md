@@ -46,7 +46,7 @@ GDAL](data.md#formats-through-gdal).
 
 | Format | Extensions or source | How to add it | Notes |
 | --- | --- | --- | --- |
-| GeoTIFF / Cloud-optimised GeoTIFF | `.tif`, `.tiff` | Add Data, or upload | Any EPSG coordinate system, reprojected as it draws; large files show an overview. |
+| GeoTIFF / Cloud-optimised GeoTIFF | `.tif`, `.tiff` | Add Data, or upload | Regular or cloud-optimised, striped or tiled; grey, RGB(A), palette (with its colour table) or multiband. Any EPSG system, or the file's own projection from its GeoKeys (Albers, LCC, transverse Mercator…), reprojected as it draws. A large file opens from its overview, or one made as it is read when it has none. |
 | ASCII grid | `.asc` (with an optional `.prj`) | Add Data, or upload | |
 
 ## Tiles and web services
