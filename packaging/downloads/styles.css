@@ -130,19 +130,10 @@ h1 span {
   letter-spacing: -0.04em;
 }
 
-.release-note > p {
-  max-width: 40rem;
-  color: var(--muted);
-  line-height: 1.7;
-  font-size: 1.02rem;
-}
-
 .release-facts {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  margin: 2rem 0 0;
-  padding-top: 1.25rem;
-  border-top: 1px solid var(--line);
+  margin: 0;
 }
 
 .release-facts div {
@@ -234,6 +225,9 @@ h2 {
   display: inline-flex;
   gap: 0.45rem;
   align-items: center;
+}
+.legend span[hidden] {
+  display: none;
 }
 .legend a {
   margin-left: auto;
