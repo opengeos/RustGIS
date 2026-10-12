@@ -1,6 +1,8 @@
 //! The plugin registry: a curated list of plugins (`registry.json`) and a list of pulled ones
 //! (`blocklist.json`), published at <https://plugins.rustgis.app>.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -43,6 +45,16 @@ pub struct Entry {
     pub min_rustgis_version: String,
     #[serde(default)]
     pub permissions: Vec<Permission>,
+    /// The plugin's `name` and `description` in other languages, from its manifest's `i18n`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub i18n: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl Entry {
+    /// `s` (the name or description) in language `lang`, or `s`.
+    pub fn translate<'a>(&'a self, lang: &str, s: &'a str) -> &'a str {
+        crate::manifest::translate(&self.i18n, lang, s)
+    }
 }
 
 /// A pulled plugin: every version (no `sha256`), or the one package with that hash.
@@ -132,6 +144,20 @@ pub fn parse(text: &str, url: &str) -> Result<Vec<Entry>, String> {
         if !e.homepage.starts_with("https://") && !e.homepage.starts_with("http://") {
             e.homepage.clear();
         }
+        // Only the name and description are translated here, in at most 64 languages, each at
+        // most 2,000 bytes: the registry comes from the network.
+        let (name, description) = (e.name.clone(), e.description.clone());
+        // Filtered before the cap, so junk languages can't take the place of real ones.
+        e.i18n = std::mem::take(&mut e.i18n)
+            .into_iter()
+            .filter(|(lang, _)| lang.len() <= 16)
+            .map(|(lang, mut t)| {
+                t.retain(|k, v| (*k == name || *k == description) && v.len() <= 2_000);
+                (lang, t)
+            })
+            .filter(|(_, t)| !t.is_empty())
+            .take(64)
+            .collect();
         out.push(e);
     }
     out.sort_by_key(|e| e.name.to_lowercase());

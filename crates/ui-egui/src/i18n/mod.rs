@@ -237,9 +237,57 @@ pub fn t(s: &str) -> &str {
     tr(current(), s)
 }
 
-/// `s` in `lang`; strings without a translation come back unchanged.
+/// `s` in `lang`; strings without a translation come back unchanged. Text the catalog doesn't
+/// have may be a plugin's (a tool name, a parameter label…): its own `i18n` translates it.
 pub fn tr(lang: Lang, s: &str) -> &str {
-    lang.0.catalog().get(s).copied().unwrap_or(s)
+    if let Some(t) = lang.0.catalog().get(s) {
+        return t;
+    }
+    if lang == Lang::EN {
+        return s;
+    }
+    plugin_tr(lang, s).unwrap_or(s)
+}
+
+/// Lookups kept before the plugin translation cache starts over (dynamic text, such as layer
+/// names, also misses the catalog).
+const PLUGIN_CACHE: usize = 20_000;
+
+thread_local! {
+    /// Plugin translations handed out so far, leaked once each so lookups return `&'static str`
+    /// like the catalogs. Bounded: plugins' `i18n` tables are limited in size.
+    static PLUGIN_STRINGS: std::cell::RefCell<std::collections::HashSet<&'static str>> = Default::default();
+    /// Plugin lookups this frame and the ones before, misses included: (plugin revision, language,
+    /// results). `tr` runs for every label every frame.
+    static PLUGIN_CACHE_MAP: std::cell::RefCell<(u64, &'static str, std::collections::HashMap<String, Option<&'static str>>)> =
+        Default::default();
+}
+
+/// `s` translated by a loaded plugin's `i18n`.
+fn plugin_tr(lang: Lang, s: &str) -> Option<&'static str> {
+    let revision = rustgis_engine::plugins::revision();
+    PLUGIN_CACHE_MAP.with_borrow_mut(|(rev, code, map)| {
+        if *rev != revision || *code != lang.code() || map.len() > PLUGIN_CACHE {
+            *rev = revision;
+            *code = lang.code();
+            map.clear();
+        }
+        if let Some(hit) = map.get(s) {
+            return *hit;
+        }
+        let found = rustgis_engine::plugins::translate(lang.code(), s).map(|t| {
+            PLUGIN_STRINGS.with_borrow_mut(|seen| match seen.get(t.as_str()) {
+                Some(&kept) => kept,
+                None => {
+                    let kept: &'static str = Box::leak(t.into_boxed_str());
+                    seen.insert(kept);
+                    kept
+                }
+            })
+        });
+        map.insert(s.to_string(), found);
+        found
+    })
 }
 
 /// A location such as `Map › Navigate`, translated segment by segment.

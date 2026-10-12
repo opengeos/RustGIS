@@ -15,7 +15,7 @@ const MAX_PARAMS: usize = 32;
 const MAX_CHOICES: usize = 64;
 const MAX_TEXT: usize = 2_000;
 const MAX_LANGS: usize = 64;
-const MAX_STRINGS: usize = 2_000;
+const MAX_STRINGS: usize = 20_000;
 const MAX_GROUPS: usize = 8;
 const MAX_GROUP_ITEMS: usize = 16;
 const MAX_MENU_ITEMS: usize = 32;
@@ -219,6 +219,20 @@ pub struct Manifest {
     pub i18n: BTreeMap<String, BTreeMap<String, String>>,
 }
 
+/// `s` in language `lang` from `i18n` (translations by language code), or `s`. Tries the exact
+/// code, then the language without its region, then any region of it, so `zh` finds `zh-CN`.
+pub fn translate<'a>(i18n: &'a BTreeMap<String, BTreeMap<String, String>>, lang: &str, s: &'a str) -> &'a str {
+    let base_of = |l: &str| l.split(['-', '_']).next().unwrap_or(l).to_ascii_lowercase();
+    let base = base_of(lang);
+    let pick = |want: &dyn Fn(&str) -> bool| {
+        i18n.iter().filter(|(k, _)| want(k)).find_map(|(_, t)| t.get(s)).map(String::as_str).filter(|t| !t.is_empty())
+    };
+    pick(&|k| k.eq_ignore_ascii_case(lang))
+        .or_else(|| pick(&|k| k.eq_ignore_ascii_case(&base)))
+        .or_else(|| pick(&|k| base_of(k) == base))
+        .unwrap_or(s)
+}
+
 fn default_entry() -> String {
     "plugin.wasm".into()
 }
@@ -376,15 +390,9 @@ impl Manifest {
         Ok(())
     }
 
-    /// `s` in language `lang` (`de`, `zh-CN`; then the language without its region), or `s`.
+    /// `s` in language `lang` (`de`, `zh-CN`), or `s` (see [`translate`]).
     pub fn translate<'a>(&'a self, lang: &str, s: &'a str) -> &'a str {
-        let base = lang.split(['-', '_']).next().unwrap_or(lang);
-        [lang, base]
-            .iter()
-            .find_map(|l| self.i18n.iter().find(|(k, _)| k.eq_ignore_ascii_case(l)).and_then(|(_, t)| t.get(s)))
-            .map(String::as_str)
-            .filter(|t| !t.is_empty())
-            .unwrap_or(s)
+        translate(&self.i18n, lang, s)
     }
 
     /// The command or tool a tab entry names.

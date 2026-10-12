@@ -62,6 +62,9 @@ pub fn swap_countries(s: &mut crate::Session, from: Worldview, to: Worldview) ->
     true
 }
 
+/// Slate gray country borders: visible against both the near-white lowest population class and the ocean.
+const COUNTRY_BORDER: Rgba = Rgba::rgb(0x7D, 0x8C, 0x96);
+
 /// "World Atlas": countries by population, cities sized by population, rivers and lakes.
 pub fn world_project() -> Project {
     let mut p = Project::new("World Atlas");
@@ -74,17 +77,11 @@ pub fn world_project() -> Project {
     let rivers = add("Rivers", RIVERS);
     let cities = add("Cities", CITIES);
     if let Some(l) = countries.and_then(|id| map.layer_mut(id)) {
-        let base = Symbol {
-            fill: Rgba::rgb(200, 200, 200),
-            stroke: Rgba::rgb(255, 255, 255),
-            stroke_width: 0.6,
-            size: 0.0,
-            marker: Marker::Circle,
-        };
+        let base = Symbol { fill: Rgba::rgb(200, 200, 200), stroke: COUNTRY_BORDER, stroke_width: 0.6, size: 0.0, marker: Marker::Circle };
         if let Ok(r) = Renderer::graduated(&l.dataset, "pop_est", 5, ClassMethod::NaturalBreaks, Ramp::Lagoon, base) {
             l.renderer = r;
             l.renderer.map_symbols(|s| {
-                s.stroke = Rgba::rgb(255, 255, 255);
+                s.stroke = COUNTRY_BORDER;
                 s.stroke_width = 0.6;
             });
         }

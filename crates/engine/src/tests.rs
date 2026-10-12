@@ -1728,6 +1728,7 @@ fn registry_downloads_are_checked() {
         size: 0,
         min_rustgis_version: String::new(),
         permissions: Vec::new(),
+        i18n: Default::default(),
     };
     isolate_plugins();
     assert!(crate::cmd::plugins::install_checked(&e, &bytes).unwrap_err().contains("doesn't match"));

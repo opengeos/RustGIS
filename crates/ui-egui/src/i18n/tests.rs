@@ -39,3 +39,18 @@ fn lookup_fallback_and_tags() {
     assert_eq!(first_supported(["xx", "fr-CA", "de"]).map(Lang::code), Some("fr"));
     assert_eq!(fmt("{n} of {total} selected", &[("n", "3"), ("total", "{n}")]), "3 of {n} selected");
 }
+
+#[test]
+fn plugin_strings_use_the_plugins_translations() {
+    use rustgis_engine::plugins;
+    let pkg = plugins::Package::from_zip(&plugins::testing::package("i18n-fallback", &[])).unwrap();
+    plugins::load(pkg, "test").unwrap();
+    let de = Lang::from_code("de").unwrap();
+    // Not in RustGIS's catalog: the plugin's `i18n` has it.
+    assert_eq!(tr(de, "Hello"), "Hallo");
+    assert_eq!(tr(Lang::EN, "Hello"), "Hello");
+    assert_eq!(tr(Lang::from_code("fr").unwrap(), "Hello"), "Hello");
+    // RustGIS's own catalog comes first.
+    assert_eq!(tr(de, "Open"), de.0.catalog().get("Open").copied().unwrap_or("Open"));
+    plugins::unload("i18n-fallback");
+}

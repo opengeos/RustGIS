@@ -610,6 +610,7 @@ fn browse_tab(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
 
 /// One plugin in the Browse list, in a fixed-height row; returns whether Install was clicked.
 fn browse_row(ui: &mut egui::Ui, t: &Tokens, e: &Entry) -> bool {
+    let lang = crate::i18n::current().code();
     let installed = rp::get(&e.id).map(|p| p.manifest.version.clone());
     let blocked = rp::blocked(&e.id, &e.sha256);
     let mut clicked = false;
@@ -636,7 +637,7 @@ fn browse_row(ui: &mut egui::Ui, t: &Tokens, e: &Entry) -> bool {
                 clicked = crate::widgets::primary_button(ui, label, true, vec2(84.0, 24.0)).clicked();
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(&e.name).font(semibold(13.5))).truncate());
+                ui.add(egui::Label::new(egui::RichText::new(e.translate(lang, &e.name)).font(semibold(13.5))).truncate());
                 ui.label(egui::RichText::new(&e.version).size(11.5).color(t.text_dim));
             });
         });
@@ -656,11 +657,12 @@ fn browse_row(ui: &mut egui::Ui, t: &Tokens, e: &Entry) -> bool {
     ui.add(egui::Label::new(egui::RichText::new(by.join(" · ")).size(11.0).color(t.text_dim)).truncate());
     // One line of the description; all of it (and why it was withdrawn) on hover. The reason is
     // also on the Withdrawn label, for a plugin without a description.
-    let mut tip = e.description.clone();
+    let description = e.translate(lang, &e.description);
+    let mut tip = description.to_string();
     if let Some(r) = &reason {
         tip = format!("{tip}\n\n{r}");
     }
-    let desc = ui.add(egui::Label::new(egui::RichText::new(&e.description).size(12.0)).truncate());
+    let desc = ui.add(egui::Label::new(egui::RichText::new(description).size(12.0)).truncate());
     if !tip.trim().is_empty() {
         desc.on_hover_text(tip);
     }

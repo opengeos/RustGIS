@@ -3,7 +3,9 @@
 #
 #   packaging/package.sh <version> [rust-target]
 #
-# Linux: a .tar.gz, a .deb, an .rpm (when rpmbuild is installed) and an AppImage. macOS: a .dmg holding RustGIS.app, plus a .tar.gz of the CLI.
+# Linux: a .tar.gz, a .deb, an .rpm (when rpmbuild is installed) and an AppImage.
+# macOS: a .dmg holding RustGIS.app, plus a .tar.gz of the CLI
+# (signed and notarized when the MACOS_SIGN_IDENTITY / APPLE_API_* variables are set).
 # Windows (Git Bash): a portable .zip. Build first with
 # `cargo build --release --locked -p rustgis -p rustgis-cli [--target T]`.
 set -euo pipefail
@@ -189,18 +191,47 @@ SPEC
       logo "$iconset/icon_${s}x${s}@2x.png" "$((s * 2))"
     done
     iconutil -c icns "$iconset" -o "$app/Contents/Resources/rustgis.icns"
-    # Ad-hoc signature: required to launch on Apple Silicon; not notarized.
-    codesign --force --sign - "$app"
+    # Signing: with MACOS_SIGN_IDENTITY (a Developer ID Application identity in the keychain)
+    # the app and CLI get a hardened-runtime signature; without it, an ad-hoc one, which
+    # Apple Silicon needs to launch anything. With APPLE_API_KEY_PATH, APPLE_API_KEY_ID and
+    # APPLE_API_ISSUER as well, the DMG and the CLI are notarized and the DMG is stapled.
+    identity="${MACOS_SIGN_IDENTITY:-}"
+    sign() {
+      if [ -n "$identity" ]; then
+        codesign --force --options runtime --timestamp --sign "$identity" "$@"
+      else
+        codesign --force --sign - "$@"
+      fi
+    }
+    notarize() {
+      [ -n "$identity" ] && [ -n "${APPLE_API_KEY_PATH:-}" ] || return 0
+      xcrun notarytool submit "$1" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" \
+        --issuer "$APPLE_API_ISSUER" --wait --timeout 30m
+    }
+    sign "$app"
 
     stage="$work/dmg"
     mkdir -p "$stage"
     cp -R "$app" "$stage/"
     ln -s /Applications "$stage/Applications"
     hdiutil create -volname "RustGIS $version" -srcfolder "$stage" -ov -format UDZO "$dist/$name.dmg"
+    if [ -n "$identity" ]; then
+      sign "$dist/$name.dmg"
+      if notarize "$dist/$name.dmg" && [ -n "${APPLE_API_KEY_PATH:-}" ]; then
+        xcrun stapler staple "$dist/$name.dmg"
+      fi
+    fi
 
     d="$work/rustgis-cli-$version-$os-$arch"
     mkdir -p "$d"
     cp "$bin/rustgis-cli" "$root/LICENSE" "$d/"
+    sign "$d/rustgis-cli"
+    # A bare executable cannot be stapled: notarizing it registers the ticket that Gatekeeper
+    # looks up online.
+    if [ -n "$identity" ]; then
+      ditto -c -k "$d/rustgis-cli" "$work/rustgis-cli.zip"
+      notarize "$work/rustgis-cli.zip"
+    fi
     tar -C "$work" -czf "$dist/rustgis-cli-$version-$os-$arch.tar.gz" "$(basename "$d")"
     ;;
 
