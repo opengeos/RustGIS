@@ -1069,7 +1069,7 @@ One per line: code=name	По одному в строке: код=имя
 Only features matching this expression draw in {layer}.	В слое {layer} отображаются только объекты, соответствующие этому выражению.
 Opacity	Непрозрачность
 Open	Открыть
-Open a .rgisx project	Открыть проект .rgisx
+Open a .rgis project	Открыть проект .rgis
 open a layout first	сначала откройте макет
 Open a RustGIS or Jupyter notebook.	Открыть блокнот RustGIS или Jupyter.
 Open a RustGIS project.	Открыть проект RustGIS.

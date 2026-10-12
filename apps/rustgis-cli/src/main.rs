@@ -5,11 +5,11 @@
 //! rustgis-cli tools                                     # list geoprocessing tools
 //! rustgis-cli info data.geojson                         # layer summary as JSON
 //! rustgis-cli render data.geojson out.png [--basemap ocean] [--tiles URL] [--width 1600 --height 900]
-//! rustgis-cli run [--sample | --project p.rgisx | --data f.geojson …] \
+//! rustgis-cli run [--sample | --project p.rgis | --data f.geojson …] \
 //!     --cmd 'gp.run={"tool":"buffer","params":{"input":"Cities","distance":100}}' \
-//!     --cmd 'share.exportMap={"path":"out.png"}' [--save out.rgisx]
-//! rustgis-cli ask [--sample | --project p.rgisx | --data f.geojson …] "Which cities have over 10 million people?" \
-//!     [--provider anthropic|openai|gemini|openrouter|ollama|custom] [--model M] [--base-url URL] [--yes] [--save out.rgisx] [--trace log.txt]
+//!     --cmd 'share.exportMap={"path":"out.png"}' [--save out.rgis]
+//! rustgis-cli ask [--sample | --project p.rgis | --data f.geojson …] "Which cities have over 10 million people?" \
+//!     [--provider anthropic|openai|gemini|openrouter|ollama|custom] [--model M] [--base-url URL] [--yes] [--save out.rgis] [--trace log.txt]
 //! rustgis-cli ask --models [--provider P]                # list the provider's models
 //! rustgis-cli parity                                    # ribbon feature coverage report
 //! rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id>
@@ -54,8 +54,7 @@ fn run(s: &mut Session, id: &str, p: Value) -> Result<Value, String> {
 }
 
 fn is_project(path: &str) -> bool {
-    let p = path.to_ascii_lowercase();
-    p.ends_with(".rgisx") || p.ends_with(".rgispkg")
+    rustgis_engine::project::is_project_file(path) || path.to_ascii_lowercase().ends_with(".rgispkg")
 }
 
 fn num(args: &[String], name: &str) -> Option<f64> {

@@ -31,7 +31,7 @@ Click a tab to peek at its commands while collapsed.
 | Shapefile (`.shp` + `.dbf`) | Yes | No |
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
 | ASCII grid (`.asc`, with an optional `.prj`) | Yes | No |
-| RustGIS project (`.rgisx`) | Yes | Yes |
+| RustGIS project (`.rgis`; older `.rgisx` files open too) | Yes | Yes |
 
 Vector coordinates are WGS 84 longitude/latitude and are displayed in Web Mercator. Rasters keep
 their own coordinate system (any EPSG code, such as UTM zones or national grids) and are

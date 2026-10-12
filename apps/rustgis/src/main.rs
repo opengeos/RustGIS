@@ -1,6 +1,6 @@
 //! RustGIS desktop app.
 //!
-//! `rustgis [project.rgisx | data.geojson|csv|shp …] [--sample]`
+//! `rustgis [project.rgis | data.geojson|csv|shp …] [--sample]`
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -93,7 +93,7 @@ fn main() -> eframe::Result {
         app.session.notify(e, true);
     }
     for f in files {
-        let cmd = if f.to_ascii_lowercase().ends_with(".rgisx") { "project.open" } else { "layer.addData" };
+        let cmd = if rustgis_engine::project::is_project_file(f) { "project.open" } else { "layer.addData" };
         if let Err(e) = app.run(cmd, json!({"path": f})) {
             eprintln!("rustgis: {f}: {e}");
         }

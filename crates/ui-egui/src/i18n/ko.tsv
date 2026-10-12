@@ -1069,7 +1069,7 @@ One per line: code=name	한 줄에 하나씩: code=이름
 Only features matching this expression draw in {layer}.	이 표현식과 일치하는 피처만 {layer}에 그려집니다.
 Opacity	불투명도
 Open	열기
-Open a .rgisx project	.rgisx 프로젝트 열기
+Open a .rgis project	.rgis 프로젝트 열기
 open a layout first	먼저 레이아웃을 여세요
 Open a RustGIS or Jupyter notebook.	RustGIS 또는 Jupyter 노트북을 엽니다.
 Open a RustGIS project.	RustGIS 프로젝트를 엽니다.

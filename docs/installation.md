@@ -54,7 +54,7 @@ RustGIS also runs in the browser, compiled to WebAssembly: open
 **[web.rustgis.app](https://web.rustgis.app)**. It is the same app with three differences:
 
 - **Open** and **Add Data** use the browser's file picker, and you can drop files on the page.
-  GeoJSON, CSV and `.rgisx` projects work; Shapefiles need the desktop app.
+  GeoJSON, CSV and `.rgis` projects work; Shapefiles need the desktop app.
 - **Save** and **Export** download the file.
 - The interface uses the built-in font, because a web page can't read installed fonts.
 

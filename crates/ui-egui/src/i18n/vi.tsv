@@ -1069,7 +1069,7 @@ One per line: code=name	Mỗi dòng một mục: mã=tên
 Only features matching this expression draw in {layer}.	Chỉ các đối tượng khớp biểu thức này được vẽ trong {layer}.
 Opacity	Độ mờ đục
 Open	Mở
-Open a .rgisx project	Mở dự án .rgisx
+Open a .rgis project	Mở dự án .rgis
 open a layout first	hãy mở một bố cục trước
 Open a RustGIS or Jupyter notebook.	Mở sổ tay RustGIS hoặc Jupyter.
 Open a RustGIS project.	Mở một dự án RustGIS.

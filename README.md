@@ -33,7 +33,7 @@
 </tr>
 <tr>
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/dark.webp" alt="RustGIS in dark mode with the View tab open over a map of Europe on the Midnight basemap, cities labelled with halos" width="100%"><p align="center"><sub><b>Dark mode</b> and the View tab: panes, graticule, basemaps.</sub></p></td>
-<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/backstage.webp" alt="The Project backstage with cards to start a blank map, the World Atlas sample, or open a project" width="100%"><p align="center"><sub><b>Project.</b> Start blank, from the World Atlas sample, or open a <code>.rgisx</code> project.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/backstage.webp" alt="The Project backstage with cards to start a blank map, the World Atlas sample, or open a project" width="100%"><p align="center"><sub><b>Project.</b> Start blank, from the World Atlas sample, or open a <code>.rgis</code> project.</sub></p></td>
 </tr>
 </table>
 
@@ -76,7 +76,7 @@ Download the desktop app for Windows, macOS or Linux from the
 
 ```sh
 cargo run --release -p rustgis                       # the desktop app with the World Atlas sample
-cargo run --release -p rustgis -- data.geojson       # open data (or a .rgisx project)
+cargo run --release -p rustgis -- data.geojson       # open data (or a .rgis project)
 ```
 
 Command line: every ribbon action is a command with an id.
@@ -87,7 +87,7 @@ rustgis-cli render countries.geojson map.png --basemap ocean
 rustgis-cli run --sample \
   --cmd 'gp.run={"tool":"countPoints","params":{"polygons":"Countries","points":"Cities"}}' \
   --cmd 'layer.symbology={"layer":"Countries_Summarize","type":"graduated","field":"point_count"}' \
-  --cmd 'share.exportMap={"path":"out.png","dpi":192}' --save atlas.rgisx
+  --cmd 'share.exportMap={"path":"out.png","dpi":192}' --save atlas.rgis
 rustgis-cli parity                                   # ribbon feature coverage checklist
 ```
 

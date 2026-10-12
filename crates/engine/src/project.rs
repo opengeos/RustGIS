@@ -1,4 +1,4 @@
-//! The project: maps, standalone tables and geoprocessing history, saved as JSON (`.rgisx`).
+//! The project: maps, standalone tables and geoprocessing history, saved as JSON (`.rgis`).
 
 use std::path::Path;
 
@@ -8,7 +8,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::GpRecord;
 
-pub const EXTENSION: &str = "rgisx";
+pub const EXTENSION: &str = "rgis";
+/// The project extension earlier versions wrote; such files still open.
+pub const LEGACY_EXTENSION: &str = "rgisx";
+
+/// Whether a file name or path names a project file (`.rgis`, or the legacy `.rgisx`), ignoring case.
+pub fn is_project_file(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    [EXTENSION, LEGACY_EXTENSION].iter().any(|x| n.ends_with(&format!(".{x}")))
+}
 /// Format version written to files.
 pub const FORMAT: u32 = 1;
 /// Largest project file read (512 MiB).

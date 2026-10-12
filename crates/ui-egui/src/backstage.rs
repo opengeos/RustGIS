@@ -108,7 +108,7 @@ fn start(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.ui.backstage = false;
             app.map.invalidate();
         }
-        if card(ui, t, "Open…", "Open a .rgisx project", "open") {
+        if card(ui, t, "Open…", "Open a .rgis project", "open") {
             let _ = app.run("ui.open", Value::Null);
         }
     });

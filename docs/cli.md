@@ -24,7 +24,7 @@ rustgis-cli run --sample \
   --cmd 'layer.symbology={"layer":"Countries_Summarize","type":"graduated","field":"point_count"}' \
   --cmd 'bookmark.go={"name":"Europe"}' \
   --cmd 'share.exportMap={"path":"europe.png","dpi":192}' \
-  --save atlas.rgisx
+  --save atlas.rgis
 ```
 
 Installed [plugins](plugins.md) load first (`--no-plugins` skips them), and `--plugin <file or
@@ -57,7 +57,7 @@ then the model answers and acts on the project through commands; `--save` keeps 
 ```sh
 export ANTHROPIC_API_KEY=…            # or OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY
 rustgis-cli ask --sample "Which 5 countries have the largest GDP?"
-rustgis-cli ask --sample "Buffer the cities by 200 km and label them" --save buffered.rgisx
+rustgis-cli ask --sample "Buffer the cities by 200 km and label them" --save buffered.rgis
 rustgis-cli ask --data parcels.geojson --provider ollama --model qwen3:8b "Summarise the fields"
 rustgis-cli ask --models --provider openai          # the provider's models
 ```

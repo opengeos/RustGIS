@@ -5,7 +5,7 @@
 ```sh
 cargo run --release -p rustgis                  # opens the World Atlas sample
 cargo run --release -p rustgis -- places.geojson
-cargo run --release -p rustgis -- atlas.rgisx   # a saved project
+cargo run --release -p rustgis -- atlas.rgis   # a saved project
 ```
 
 ## Five minutes with the World Atlas
@@ -20,7 +20,7 @@ cargo run --release -p rustgis -- atlas.rgisx   # a saved project
 4. **Analyse.** **Analysis › Buffer**: choose *Cities*, 300 km, *Dissolve: All*, and *Run*. The
    result is added as a new layer, and the run is listed under **Analysis › History**.
 5. **Share.** **Share › Export Map** saves a PNG with labels and a scale bar. **Project › Save
-   As** writes a `.rgisx` project.
+   As** writes a `.rgis` project.
 
 !!! tip "Command search"
     Press ++ctrl+k++ to find any command or geoprocessing tool by name.

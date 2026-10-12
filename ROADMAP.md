@@ -5,7 +5,7 @@ today ([docs/parity.md](docs/parity.md)). Counting depth (no full 3D scenes or e
 yet), real parity is lower.
 
 ## Done (M0–M1)
-- Layered workspace, command registry with undo, project files (`.rgisx`), CLI.
+- Layered workspace, command registry with undo, project files (`.rgis`), CLI.
 - Vector data: GeoJSON, CSV (lon/lat), Shapefile in; GeoJSON, CSV out.
 - Map: Web Mercator view, five basemaps, graticule, bookmarks, extent history, Go To XY.
 - Symbology: single, unique values, graduated colours (Jenks/equal/quantile), proportional
