@@ -42,6 +42,7 @@ pub const PAGES: &[Page] = pages![
     "architecture.md",
     "contributing.md",
     "sponsor.md",
+    "privacy.md",
 ];
 
 /// The longest page or section handed back (characters).
