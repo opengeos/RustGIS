@@ -103,8 +103,24 @@ pub fn is_tile(url: &str) -> bool {
 }
 
 /// Whether an archive address is a file on this computer rather than a web address.
+/// (As `rustgis_map::tiles::is_local_archive` decides it, which a layer's address went through.)
 pub fn is_local(archive: &str) -> bool {
-    !(archive.starts_with("http://") || archive.starts_with("https://"))
+    let lower = archive.get(..8).unwrap_or(archive).to_ascii_lowercase();
+    !(lower.starts_with("http://") || lower.starts_with("https://"))
+}
+
+/// Whether a local archive may be read: an absolute path to a `.pmtiles` file (checked again
+/// here, whatever route the address came by).
+pub fn check_local(archive: &str) -> Result<(), String> {
+    let p = archive.strip_prefix("file://").unwrap_or(archive);
+    let drive = p.as_bytes().get(1) == Some(&b':') && p.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
+    if !(p.starts_with('/') || drive || p.starts_with("\\\\")) || p.chars().any(char::is_control) {
+        return Err(format!("'{p}': a PMTiles file is given by its full path"));
+    }
+    if !p.to_ascii_lowercase().ends_with(".pmtiles") {
+        return Err(format!("'{p}' isn't a .pmtiles file"));
+    }
+    Ok(())
 }
 
 /// The tile id of z/x/y: tiles of lower zooms first, then along a Hilbert curve.
@@ -398,16 +414,23 @@ fn read(archive: &str, at: u64, len: u64, done: Done) {
         done(Err(format!("{len} bytes is too large to read from an archive")));
         return;
     }
+    let end = at.saturating_add(len) - 1;
+    let url = format!("{archive}{}{at}-{end}", crate::cache::RANGE);
     if is_local(archive) {
-        done(read_file(archive, at, len));
+        if let Err(e) = check_local(archive) {
+            done(Err(e));
+            return;
+        }
+        // Read on the fetch workers, as web archives are, never on the frame.
+        crate::cache::fetch_local(url, done);
         return;
     }
-    let end = at.saturating_add(len) - 1;
-    crate::cache::fetch_counted(format!("{archive}{}{at}-{end}", crate::cache::RANGE), done);
+    crate::cache::fetch_counted(url, done);
 }
 
+/// Reads a range of a local archive (on a fetch worker).
 #[cfg(not(target_arch = "wasm32"))]
-fn read_file(archive: &str, at: u64, len: u64) -> Result<Vec<u8>, String> {
+pub(crate) fn read_file(archive: &str, at: u64, len: u64) -> Result<Vec<u8>, String> {
     use std::io::{Read, Seek, SeekFrom};
     let path = archive.strip_prefix("file://").unwrap_or(archive);
     let mut f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
@@ -415,11 +438,6 @@ fn read_file(archive: &str, at: u64, len: u64) -> Result<Vec<u8>, String> {
     let mut buf = Vec::with_capacity(usize::try_from(len).unwrap_or(0).min(MAX_BYTES));
     f.take(len).read_to_end(&mut buf).map_err(|e| e.to_string())?;
     Ok(buf)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn read_file(archive: &str, _at: u64, _len: u64) -> Result<Vec<u8>, String> {
-    Err(format!("{archive}: the web app reads PMTiles archives from web addresses only"))
 }
 
 fn u64_at(b: &[u8], i: usize) -> Option<u64> {
@@ -672,8 +690,15 @@ mod tests {
             let p = dir.join(format!("t{leaf}.pmtiles"));
             std::fs::write(&p, archive(&tiles, 1, leaf, r#"{"vector_layers":[{"id":"roads"}],"attribution":"Test"}"#)).unwrap();
             let a = p.display().to_string();
-            let _ = info(&a);
-            let i = info(&a).unwrap().unwrap();
+            let mut i = info(&a).unwrap();
+            for _ in 0..200 {
+                if i.is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                i = info(&a).unwrap();
+            }
+            let i = i.unwrap();
             assert_eq!(i.tile_type, TileType::Mvt);
             assert_eq!((i.min_zoom, i.max_zoom), (0, 2));
             assert_eq!(i.vector_layers(), vec!["roads".to_string()]);
@@ -716,10 +741,12 @@ mod tests {
             attribution: String::new(),
         };
         let mut resolved = crate::source::resolve(&spec);
-        for _ in 0..3 {
-            if matches!(resolved, crate::source::Resolve::Pending) {
-                resolved = crate::source::resolve(&spec);
+        for _ in 0..200 {
+            if !matches!(resolved, crate::source::Resolve::Pending) {
+                break;
             }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            resolved = crate::source::resolve(&spec);
         }
         let crate::source::Resolve::Ready(r) = resolved else { panic!("not resolved") };
         assert_eq!(r.style.sources.len(), 1);

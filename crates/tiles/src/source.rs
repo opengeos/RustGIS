@@ -93,7 +93,8 @@ pub fn resolve(spec: &Spec) -> Resolve {
     let key = spec.key();
     // A PMTiles archive on this computer is a path, not a web address.
     let local = spec.kind == Kind::PmTiles && pmtiles::is_local(&spec.url);
-    if !local && let Err(e) = address::check(&spec.url, None) {
+    let checked = if local { pmtiles::check_local(&spec.url) } else { address::check(&spec.url, None) };
+    if let Err(e) = checked {
         return Resolve::Failed(e);
     }
     if let Some(r) = resolved().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {

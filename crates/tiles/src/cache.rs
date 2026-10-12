@@ -249,6 +249,19 @@ pub(crate) fn fetch_counted(url: String, done: Done) {
     );
 }
 
+/// Reads a range of a local file (`<path>#rustgis-range=a-b`) on the fetch workers, counted like
+/// [`fetch_counted`]; never through an installed fetcher, which only knows web addresses.
+pub(crate) fn fetch_local(url: String, done: Done) {
+    IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+    native::fetch_local(
+        url,
+        Box::new(move |r| {
+            done(r);
+            finished();
+        }),
+    );
+}
+
 /// Something the map draws from arrived outside the cache (a PMTiles archive's header): draw
 /// again.
 pub(crate) fn notify() {
@@ -386,6 +399,14 @@ mod native {
         })
     }
 
+    /// A local file's range, read on a worker.
+    pub(super) fn fetch_local(url: String, done: Done) {
+        fetch(format!("{LOCAL}{url}"), done);
+    }
+
+    /// Marks a queued job as a local file read.
+    const LOCAL: &str = "local-file:";
+
     pub(super) fn fetch(url: String, done: Done) {
         let q = queue();
         let dropped = {
@@ -433,6 +454,11 @@ mod native {
     /// `source::resolve`); each redirect is checked here.
     pub(super) fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
         use std::io::Read;
+        if let Some(local) = url.strip_prefix(LOCAL) {
+            let (path, range) = super::split_range(local);
+            let (a, b) = range.ok_or("a local read without a range")?;
+            return crate::pmtiles::read_file(path, a, b - a + 1);
+        }
         let (url, range) = super::split_range(url);
         let mut at = url.to_string();
         let mut redirects = 0;
@@ -481,6 +507,11 @@ mod native {
 
     pub(super) fn fetch(url: String, done: Done) {
         done(Err(format!("{url}: this build has no way to fetch tiles")));
+    }
+
+    pub(super) fn fetch_local(url: String, done: Done) {
+        let (path, _) = super::split_range(&url);
+        done(Err(format!("{path}: the web app reads PMTiles archives from web addresses only")));
     }
 }
 
