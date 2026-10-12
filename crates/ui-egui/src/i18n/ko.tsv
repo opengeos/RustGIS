@@ -177,6 +177,7 @@ Below Right	오른쪽 아래
 Bilinear	쌍선형
 Blank	빈 지도
 Blank Letter page	빈 Letter 페이지
+Blank Map	빈 지도
 Blank Page	빈 페이지
 Blue	파랑
 Bold	굵게
@@ -598,6 +599,7 @@ Export To 3D File	3D 파일로 내보내기
 exporting animations needs the desktop app	애니메이션을 내보내려면 데스크톱 앱이 필요합니다
 Export…	내보내기…
 Expression	표현식
+Extent	범위
 Extent Indicator	범위 표시기
 Extent: {extent}	범위: {extent}
 Extract	추출
@@ -1391,6 +1393,7 @@ Save Web Map	웹 지도 저장
 Save Web Scene	웹 장면 저장
 Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	저장된 키는 앱 환경설정에 암호화되지 않은 상태로 보관됩니다(웹에서는 브라우저 저장소).
 Saved symbology: apply it to the selected layer, or save the layer's.	저장된 심볼: 선택한 레이어에 적용하거나 레이어의 심볼을 저장합니다.
+Saved View	저장된 보기
 Saved {name}	{name} 저장됨
 saving failed unexpectedly	저장이 예기치 않게 실패했습니다
 Scale	축척
@@ -1539,6 +1542,8 @@ Standard Deviation	표준편차
 Star	별
 Start	시작
 Start Over	처음부터 다시
+Start With	시작 시
+Start-up	시작
 Statistics	통계
 Statistics Field	통계 필드
 Status	상태
@@ -1618,6 +1623,7 @@ the preview failed unexpectedly	미리 보기가 예기치 않게 실패했습�
 The project's items in place of the map.	지도 대신 프로젝트 항목을 표시합니다.
 The project's thumbnail, from an image.	이미지로 만든 프로젝트 썸네일.
 The project's thumbnail, from the map view.	지도 뷰로 만든 프로젝트 썸네일.
+The projection the map opens in.	지도를 열 때의 투영법.
 The raster's data couldn't be read.	래스터 데이터를 읽을 수 없습니다.
 The raster's data couldn't be read: {path}	래스터 데이터를 읽을 수 없습니다: {path}
 the reply reached its length limit	응답이 길이 제한에 도달했습니다
@@ -1685,6 +1691,8 @@ Update to {version}	{version}(으)로 업데이트
 Upload File	파일 업로드
 Upload File…	파일 업로드…
 USA Contiguous Albers Equal Area	미국 본토 앨버스 정적도법
+Use	사용
+Use Current View	현재 보기 사용
 Valid combinations, one per line: a, b	유효한 조합, 한 줄에 하나씩: a, b
 Valid expression · {n} matching rows	유효한 표현식 · 일치하는 행 {n}개
 Validate	검증
@@ -1729,11 +1737,13 @@ Welcome to RustGIS	RustGIS에 오신 것을 환영합니다
 West	서
 WGS 84 / Globe	WGS 84 / 지구본
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
+What RustGIS opens with: the World Atlas sample or a blank map.	RustGIS가 시작할 때 여는 것: World Atlas 예제 또는 빈 지도.
 What's near a point	지점 주변에 있는 것
 Where	조건
 Where Clause	WHERE 절
 Where labels sit relative to their features.	피처를 기준으로 라벨이 놓이는 위치입니다.
 Where new features get their elevation (the z field).	새 피처가 고도를 가져오는 위치(z 필드).
+Where the map opens: the full extent or a view you saved.	지도가 열리는 위치: 전체 범위 또는 저장한 보기.
 Where tools work	도구가 작동하는 범위
 Which 5 countries have the largest GDP?	GDP가 가장 큰 5개 국가는 어디인가요?
 Whose borders the sample countries and the basemap outline show.	샘플 국가와 배경지도 윤곽에 어느 나라 기준의 국경을 표시할지 정합니다.

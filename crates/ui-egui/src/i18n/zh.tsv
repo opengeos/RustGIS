@@ -177,6 +177,7 @@ Below Right	右下方
 Bilinear	双线性
 Blank	空白
 Blank Letter page	空白 Letter 页面
+Blank Map	空白地图
 Blank Page	空白页面
 Blue	蓝
 Bold	粗体
@@ -598,6 +599,7 @@ Export To 3D File	导出为三维文件
 exporting animations needs the desktop app	导出动画需要桌面应用
 Export…	导出…
 Expression	表达式
+Extent	范围
 Extent Indicator	范围指示器
 Extent: {extent}	范围：{extent}
 Extract	提取
@@ -1391,6 +1393,7 @@ Save Web Map	保存 Web 地图
 Save Web Scene	保存 Web 场景
 Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	保存的密钥以未加密形式保存在应用的首选项中（网页版保存在浏览器存储中）。
 Saved symbology: apply it to the selected layer, or save the layer's.	已保存的符号系统：将其应用于所选图层，或保存图层的符号系统。
+Saved View	已保存的视图
 Saved {name}	已保存 {name}
 saving failed unexpectedly	保存意外失败
 Scale	比例尺
@@ -1539,6 +1542,8 @@ Standard Deviation	标准差
 Star	星形
 Start	开始
 Start Over	重新开始
+Start With	启动时打开
+Start-up	启动
 Statistics	统计
 Statistics Field	统计字段
 Status	状态
@@ -1618,6 +1623,7 @@ the preview failed unexpectedly	预览意外失败
 The project's items in place of the map.	用工程的项目替代地图显示。
 The project's thumbnail, from an image.	工程的缩略图，来自图像。
 The project's thumbnail, from the map view.	工程的缩略图，来自地图视图。
+The projection the map opens in.	地图打开时使用的投影。
 The raster's data couldn't be read.	无法读取栅格数据。
 The raster's data couldn't be read: {path}	无法读取栅格数据：{path}
 the reply reached its length limit	回复已达到长度上限
@@ -1685,6 +1691,8 @@ Update to {version}	更新到 {version}
 Upload File	上传文件
 Upload File…	上传文件…
 USA Contiguous Albers Equal Area	美国本土阿尔伯斯等积投影
+Use	使用
+Use Current View	使用当前视图
 Valid combinations, one per line: a, b	有效组合，每行一个：a, b
 Valid expression · {n} matching rows	有效表达式 · {n} 个匹配行
 Validate	验证
@@ -1729,11 +1737,13 @@ Welcome to RustGIS	欢迎使用 RustGIS
 West	西
 WGS 84 / Globe	WGS 84 / 地球仪
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
+What RustGIS opens with: the World Atlas sample or a blank map.	RustGIS 启动时打开的内容：World Atlas 示例或空白地图。
 What's near a point	某点附近有什么
 Where	条件
 Where Clause	Where 子句
 Where labels sit relative to their features.	标注相对于其要素的位置。
 Where new features get their elevation (the z field).	新要素获取高程（z 字段）的来源。
+Where the map opens: the full extent or a view you saved.	地图打开的位置：全图范围或已保存的视图。
 Where tools work	工具作用范围
 Which 5 countries have the largest GDP?	哪 5 个国家的 GDP 最高？
 Whose borders the sample countries and the basemap outline show.	示例国家和底图轮廓显示哪一方的边界。

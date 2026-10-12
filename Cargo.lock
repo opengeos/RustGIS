@@ -3650,6 +3650,7 @@ dependencies = [
  "base64 0.22.1",
  "iana-time-zone",
  "log",
+ "rusqlite",
  "rustgis-analysis",
  "rustgis-data",
  "rustgis-geolibre",

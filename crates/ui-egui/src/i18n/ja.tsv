@@ -177,6 +177,7 @@ Below Right	右下
 Bilinear	共一次内挿
 Blank	空白
 Blank Letter page	空白の Letter ページ
+Blank Map	空白のマップ
 Blank Page	空白ページ
 Blue	青
 Bold	太字
@@ -598,6 +599,7 @@ Export To 3D File	3D ファイルにエクスポート
 exporting animations needs the desktop app	アニメーションのエクスポートにはデスクトップ アプリが必要です
 Export…	エクスポート…
 Expression	式
+Extent	範囲
 Extent Indicator	範囲インジケーター
 Extent: {extent}	範囲: {extent}
 Extract	抽出
@@ -1391,6 +1393,7 @@ Save Web Map	Web マップの保存
 Save Web Scene	Web シーンの保存
 Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	保存したキーは暗号化されずにアプリの設定に保存されます（Web 版ではブラウザーのストレージ）。
 Saved symbology: apply it to the selected layer, or save the layer's.	保存したシンボル: 選択したレイヤーに適用するか、レイヤーのシンボルを保存します。
+Saved View	保存したビュー
 Saved {name}	{name} を保存しました
 saving failed unexpectedly	保存が予期せず失敗しました
 Scale	縮尺
@@ -1539,6 +1542,8 @@ Standard Deviation	標準偏差
 Star	星
 Start	開始
 Start Over	最初からやり直す
+Start With	起動時
+Start-up	起動
 Statistics	統計
 Statistics Field	統計フィールド
 Status	ステータス
@@ -1618,6 +1623,7 @@ the preview failed unexpectedly	プレビューが予期せず失敗しました
 The project's items in place of the map.	マップの代わりにプロジェクトのアイテムを表示します。
 The project's thumbnail, from an image.	画像から作成するプロジェクトのサムネイル。
 The project's thumbnail, from the map view.	マップ ビューから作成するプロジェクトのサムネイル。
+The projection the map opens in.	マップを開くときの投影法。
 The raster's data couldn't be read.	ラスターのデータを読み込めませんでした。
 The raster's data couldn't be read: {path}	ラスターのデータを読み込めませんでした: {path}
 the reply reached its length limit	応答が長さの上限に達しました
@@ -1685,6 +1691,8 @@ Update to {version}	{version} に更新
 Upload File	ファイルのアップロード
 Upload File…	ファイルのアップロード…
 USA Contiguous Albers Equal Area	米国本土アルベルス正積図法
+Use	使用
+Use Current View	現在のビューを使用
 Valid combinations, one per line: a, b	有効な組み合わせ (1 行に 1 つ): a, b
 Valid expression · {n} matching rows	有効な式 · 一致する行 {n} 件
 Validate	検証
@@ -1729,11 +1737,13 @@ Welcome to RustGIS	RustGIS へようこそ
 West	西
 WGS 84 / Globe	WGS 84 / 地球儀
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
+What RustGIS opens with: the World Atlas sample or a blank map.	RustGIS の起動時に開くもの: World Atlas サンプルまたは空白のマップ。
 What's near a point	ポイントの近くにあるもの
 Where	条件
 Where Clause	WHERE 句
 Where labels sit relative to their features.	フィーチャに対するラベルの位置。
 Where new features get their elevation (the z field).	新しいフィーチャの標高の取得元 (z フィールド)。
+Where the map opens: the full extent or a view you saved.	マップを開く位置: 全範囲または保存したビュー。
 Where tools work	ツールを実行する範囲
 Which 5 countries have the largest GDP?	GDP が最も大きい 5 か国はどこですか？
 Whose borders the sample countries and the basemap outline show.	サンプルの国データとベースマップの輪郭線にどの国の見解による国境を表示するか。

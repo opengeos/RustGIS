@@ -27,6 +27,17 @@ pub fn commands() -> Vec<C> {
             Ok(Value::Null)
         })
         .view(),
+        C::new("map.extent", "View Extent", "Map › Navigate", |s, _| {
+            let e = if s.map().projection.is_globe() { Extent::new(-180.0, -90.0, 180.0, 90.0) } else { super::workspace::view_extent(s) };
+            if e.is_empty() {
+                return Err("the view shows no part of the Earth".into());
+            }
+            Ok(json!({"extent": [e.min_x, e.min_y, e.max_x, e.max_y]}))
+        })
+        .view(),
+        C::new("map.zoomToExtent", "Zoom To Extent", "Map › Navigate", zoom_to_extent)
+            .view()
+            .params(r#"{"extent": [minLon, minLat, maxLon, maxLat]}"#),
         C::new("map.goToXY", "Go To XY", "Map › Navigate", go_to_xy).view().params(r#"{"lon": number, "lat": number, "scale"?: number}"#),
         C::new("map.setScale", "Set Scale", "Status Bar", |s, p| {
             let sc = f(p, "scale").ok_or("scale is required")?;
@@ -114,6 +125,20 @@ fn zoom_full(s: &mut Session, _: &Value) -> CmdResult {
     let e = if e.is_empty() { Extent::new(-170.0, -58.0, 180.0, 78.0) } else { e };
     s.zoom_to(&e);
     Ok(Value::Null)
+}
+
+fn zoom_to_extent(s: &mut Session, p: &Value) -> CmdResult {
+    let e = lonlat_extent(p.get("extent")).ok_or("extent is [minLon, minLat, maxLon, maxLat], west before east and south before north")?;
+    s.zoom_to(&e);
+    Ok(Value::Null)
+}
+
+/// A longitude/latitude extent `[minLon, minLat, maxLon, maxLat]` within ±180/±90, not empty.
+pub fn lonlat_extent(v: Option<&Value>) -> Option<Extent> {
+    let n: Vec<f64> = v?.as_array()?.iter().map(Value::as_f64).collect::<Option<_>>()?;
+    let [x0, y0, x1, y1] = n.as_slice() else { return None };
+    let ok = |x: f64, lim: f64| x.is_finite() && (-lim..=lim).contains(&x);
+    (ok(*x0, 180.0) && ok(*x1, 180.0) && ok(*y0, 90.0) && ok(*y1, 90.0) && x0 < x1 && y0 < y1).then(|| Extent::new(*x0, *y0, *x1, *y1))
 }
 
 fn zoom(s: &mut Session, factor: f64) -> CmdResult {

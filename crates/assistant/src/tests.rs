@@ -158,6 +158,28 @@ fn gate_rules() {
     assert!(sql.as_deref().is_some_and(|w| w.contains("SQL") && w.contains("internet")), "{sql:?}");
     assert!(g("run_tool", json!({"tool": "buffer", "params": {"input": "Cities", "distance": 100}})).is_none());
     assert!(g("list_layers", json!({})).is_none());
+    assert!(g("run_command", json!({"command": "info.fileLayers", "params": {"path": "/etc/passwd"}})).is_some());
+}
+
+/// What a command says beside its result reaches the model (issue #85).
+#[test]
+fn tool_results_carry_notices() {
+    let mut s = sample();
+    let call = ToolCall {
+        id: "x".into(),
+        name: "run_command".into(),
+        args: json!({"command": "layer.addDataText", "params": {"fileName": "pts.csv", "text": "lon,lat\n1,2\nx,y\n"}}),
+    };
+    let out: Value = serde_json::from_str(&tools::run(&mut s, &call).unwrap()).unwrap();
+    assert!(
+        out["notices"].as_array().is_some_and(|n| n.iter().any(|t| t.as_str().is_some_and(|t| t.contains("no usable coordinates")))),
+        "{out}"
+    );
+    let quiet: Value = serde_json::from_str(
+        &tools::run(&mut s, &ToolCall { id: "y".into(), name: "run_command".into(), args: json!({"command": "map.zoomFull"}) }).unwrap(),
+    )
+    .unwrap();
+    assert!(quiet.get("notices").is_none(), "{quiet}");
 }
 
 #[test]

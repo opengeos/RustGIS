@@ -13,6 +13,9 @@ pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Map › Layer", add_data)
             .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL or DuckDB layer", "stream"?: bool, "crs"?: "EPSG:… for a GDAL or DuckDB file that doesn't say"}"#),
+        C::new("info.fileLayers", "List Layers in File", "Map › Layer › Add Data", file_layers)
+            .view()
+            .params(r#"{"path": string}"#),
         C::new("layer.addSql", "Add Data From SQL", "Map › Layer", add_sql).params(
             r#"{"sql": "one DuckDB SELECT; DuckDB Spatial's ST_ functions, read_parquet('…'), web addresses", "name"?: string, "database"?: "a .duckdb file whose tables the query names", "crs"?: "EPSG:… of a geometry that doesn't say", "stream"?: bool}"#,
         ),
@@ -290,6 +293,37 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     add_read(s, p, read)
 }
 
+/// The layers a file holds, without adding them: a GeoPackage's feature tables, a GDAL dataset's
+/// layers, or the one layer of other files. `layer.addData` takes a name with `"layer"`.
+fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
+    let path = s_req(p, "path")?;
+    let err = |e: rustgis_data::DataError| format!("{path}: {e}");
+    #[cfg(not(target_arch = "wasm32"))]
+    if rustgis_data::source::gdal::is_gdal_name(path) {
+        let layers = rustgis_data::source::gdal::layers(Path::new(path)).map_err(err)?;
+        return Ok(json!({"count": layers.len(), "layers": layers}));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if rustgis_data::source::duckdb::is_duckdb_name(path) {
+        let tables = rustgis_data::source::duckdb::tables(Path::new(path)).map_err(err)?;
+        let layers: Vec<String> = tables.iter().map(|t| t.label()).collect();
+        return Ok(json!({"count": layers.len(), "layers": layers}));
+    }
+    if rustgis_data::source::is_source_name(path) {
+        let layers = rustgis_data::source::layers(Path::new(path)).map_err(err)?;
+        return Ok(json!({"count": layers.len(), "layers": layers}));
+    }
+    if !Path::new(path).is_file() {
+        return Err(format!("{path}: no such file"));
+    }
+    let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !rustgis_data::io::READ_EXTENSIONS.contains(&ext.as_str()) && !rustgis_data::raster::is_raster_name(path) {
+        return Err(format!("{path}: not a data file RustGIS reads"));
+    }
+    let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
+    Ok(json!({"count": 1, "layers": [name]}))
+}
+
 /// Where a source file is: on disk, or uploaded (its name and bytes).
 pub(crate) enum Origin<'a> {
     Path(&'a str),
@@ -298,6 +332,10 @@ pub(crate) enum Origin<'a> {
 
 /// Most GeoPackage tables added at once.
 const MAX_TABLES: usize = 32;
+
+/// Most skipped tables named in `layer.addData`'s result (`skippedCount` counts them all, and
+/// `info.fileLayers` lists them).
+const MAX_SKIPPED_NAMED: usize = 100;
 
 /// Adds a GeoPackage, GeoParquet or FlatGeobuf file: each feature table becomes a layer. Large
 /// sources (or any, with `"stream": true`) are streamed, read in place a view at a time; smaller
@@ -308,14 +346,19 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
         Origin::Path(p) | Origin::Bytes(p, _) => p.to_string(),
     };
     let err = |e: rustgis_data::DataError| format!("{label}: {e}");
+    // Tables past the cap, said in the result as well as in a notice, so the CLI, the MCP server
+    // and the AI Assistant know the file holds more than was added.
+    let mut skipped: Vec<String> = Vec::new();
+    let mut total = None;
     let tables: Vec<Option<String>> = match (ps(p, "layer").map(str::trim).filter(|t| !t.is_empty()), &origin) {
         (Some(t), _) => vec![Some(t.to_string())],
         (None, Origin::Path(path)) if path.to_ascii_lowercase().ends_with(".gpkg") => {
-            let all = source::layers(Path::new(path)).map_err(err)?;
+            let mut all = source::layers(Path::new(path)).map_err(err)?;
             if all.len() > MAX_TABLES {
-                s.notify(format!("{label}: adding the first {MAX_TABLES} of {} tables", all.len()), false);
+                total = Some(all.len());
+                skipped = all.split_off(MAX_TABLES);
             }
-            all.into_iter().take(MAX_TABLES).map(Some).collect()
+            all.into_iter().map(Some).collect()
         }
         _ => vec![None],
     };
@@ -382,7 +425,21 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
         }
     }
     let first = ids.first().copied();
-    Ok(json!({"layer": first, "layers": ids, "features": features, "streamed": streamed}))
+    let mut out = json!({"layer": first, "layers": ids, "features": features, "streamed": streamed});
+    // Said once the tables are in: a failure above is the error instead.
+    if let Some(total) = total {
+        s.notify(
+            format!(
+                "{label}: added the first {MAX_TABLES} of {total} tables; add others by name with \"layer\" (info.fileLayers lists them)"
+            ),
+            false,
+        );
+        out["tables"] = json!(total);
+        out["skippedCount"] = json!(skipped.len());
+        // Named up to a bound, so a file of thousands of tables can't flood an agent's context.
+        out["skipped"] = json!(skipped.iter().take(MAX_SKIPPED_NAMED).collect::<Vec<_>>());
+    }
+    Ok(out)
 }
 
 /// Adds a file GDAL reads (KML, GPX, File Geodatabase, DXF…): each layer is converted once into an
@@ -430,10 +487,11 @@ fn add_duckdb(s: &mut Session, p: &Value, path: &str) -> CmdResult {
     if tables.is_empty() {
         return Err(format!("{path}: no tables with a geometry column"));
     }
-    if tables.len() > duckdb::MAX_TABLES {
-        s.notify(format!("{path}: adding the first {} of {} tables (\"layer\" picks another)", duckdb::MAX_TABLES, tables.len()), false);
-    }
-    let tables: Vec<_> = tables.into_iter().take(duckdb::MAX_TABLES).collect();
+    // Tables past the cap, said in the result as well as in a notice (as for a GeoPackage).
+    let total = tables.len();
+    let mut tables = tables;
+    let skipped: Vec<String> =
+        if total > duckdb::MAX_TABLES { tables.split_off(duckdb::MAX_TABLES).iter().map(|t| t.label()).collect() } else { Vec::new() };
     let original = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
     let mut parts = Vec::new();
     let single = tables.len() == 1;
@@ -456,7 +514,21 @@ fn add_duckdb(s: &mut Session, p: &Value, path: &str) -> CmdResult {
         };
         parts.extend(duckdb_parts(s, &t.label(), out, origin));
     }
-    add_converted(s, p, path, &original, parts)
+    let mut out = add_converted(s, p, path, &original, parts)?;
+    // Said once the tables are in: a failure above is the error instead.
+    if !skipped.is_empty() {
+        s.notify(
+            format!(
+                "{path}: added the first {} of {total} tables; add others by name with \"layer\" (info.fileLayers lists them)",
+                duckdb::MAX_TABLES
+            ),
+            false,
+        );
+        out["tables"] = json!(total);
+        out["skippedCount"] = json!(skipped.len());
+        out["skipped"] = json!(skipped.iter().take(MAX_SKIPPED_NAMED).collect::<Vec<_>>());
+    }
+    Ok(out)
 }
 
 /// Runs a DuckDB query and adds its result as a layer (a layer per geometry type it mixes).

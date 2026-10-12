@@ -207,6 +207,8 @@ pub struct Session {
     /// Map view size in logical points (set by the UI each frame).
     pub view_size: (f64, f64),
     pub notices: Vec<Notice>,
+    /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]).
+    notices_given: u64,
     /// Layer whose attribute table is open.
     pub table_layer: Option<u32>,
     /// Edits per layer id since the project was last saved (Edit › Status). A failed command's
@@ -319,6 +321,7 @@ impl Session {
             active_layer: None,
             view_size: (1200.0, 720.0),
             notices: Vec::new(),
+            notices_given: 0,
             table_layer: None,
             clipboard: None,
             keep_tool: false,
@@ -431,9 +434,22 @@ impl Session {
 
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
         self.notices.push(Notice { text: text.into(), error });
+        self.notices_given += 1;
         if self.notices.len() > 200 {
             self.notices.remove(0);
         }
+    }
+
+    /// A mark to pass to [`Session::notices_since`].
+    pub fn notice_mark(&self) -> u64 {
+        self.notices_given
+    }
+
+    /// The notices given since `mark` was taken (those still kept): what a command said beside its
+    /// result, for front ends without a status bar (the CLI, the MCP server, the AI Assistant).
+    pub fn notices_since(&self, mark: u64) -> &[Notice] {
+        let n = usize::try_from(self.notices_given.saturating_sub(mark)).unwrap_or(usize::MAX).min(self.notices.len());
+        self.notices.get(self.notices.len() - n..).unwrap_or_default()
     }
 
     pub fn can_undo(&self) -> bool {
@@ -449,8 +465,9 @@ impl Session {
         self.redo.last().map(|u| u.1)
     }
 
-    /// Forgets undo/redo and extent history and marks the project clean (after new/open).
-    pub(crate) fn clear_history(&mut self) {
+    /// Forgets undo/redo and extent history and marks the project clean (after new/open, or a
+    /// front end setting up how the project starts).
+    pub fn clear_history(&mut self) {
         self.undo.clear();
         self.redo.clear();
         self.back.clear();

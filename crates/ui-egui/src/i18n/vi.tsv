@@ -177,6 +177,7 @@ Below Right	Dưới phải
 Bilinear	Song tuyến
 Blank	Trống
 Blank Letter page	Trang Letter trống
+Blank Map	Bản đồ trống
 Blank Page	Trang trống
 Blue	Xanh lam
 Bold	Đậm
@@ -598,6 +599,7 @@ Export To 3D File	Xuất sang tệp 3D
 exporting animations needs the desktop app	xuất hoạt ảnh cần ứng dụng máy tính
 Export…	Xuất…
 Expression	Biểu thức
+Extent	Phạm vi
 Extent Indicator	Chỉ báo phạm vi
 Extent: {extent}	Phạm vi: {extent}
 Extract	Trích xuất
@@ -1391,6 +1393,7 @@ Save Web Map	Lưu bản đồ web
 Save Web Scene	Lưu cảnh web
 Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Khóa đã lưu được giữ không mã hóa trong tùy chọn của ứng dụng (trong bộ nhớ của trình duyệt trên web).
 Saved symbology: apply it to the selected layer, or save the layer's.	Ký hiệu đã lưu: áp dụng cho lớp được chọn, hoặc lưu ký hiệu của lớp.
+Saved View	Khung nhìn đã lưu
 Saved {name}	Đã lưu {name}
 saving failed unexpectedly	lưu thất bại ngoài dự kiến
 Scale	Tỷ lệ
@@ -1539,6 +1542,8 @@ Standard Deviation	Độ lệch chuẩn
 Star	Ngôi sao
 Start	Bắt đầu
 Start Over	Bắt đầu lại
+Start With	Khởi động với
+Start-up	Khởi động
 Statistics	Thống kê
 Statistics Field	Trường thống kê
 Status	Trạng thái
@@ -1618,6 +1623,7 @@ the preview failed unexpectedly	xem trước thất bại ngoài dự kiến
 The project's items in place of the map.	Các mục của dự án thay cho bản đồ.
 The project's thumbnail, from an image.	Ảnh thu nhỏ của dự án, từ một ảnh.
 The project's thumbnail, from the map view.	Ảnh thu nhỏ của dự án, từ khung nhìn bản đồ.
+The projection the map opens in.	Phép chiếu khi bản đồ mở.
 The raster's data couldn't be read.	Không thể đọc dữ liệu của raster.
 The raster's data couldn't be read: {path}	Không thể đọc dữ liệu của raster: {path}
 the reply reached its length limit	câu trả lời đã chạm giới hạn độ dài
@@ -1685,6 +1691,8 @@ Update to {version}	Cập nhật lên {version}
 Upload File	Tải tệp lên
 Upload File…	Tải tệp lên…
 USA Contiguous Albers Equal Area	Albers đồng diện tích Hoa Kỳ lục địa
+Use	Dùng
+Use Current View	Dùng khung nhìn hiện tại
 Valid combinations, one per line: a, b	Tổ hợp hợp lệ, mỗi dòng một tổ hợp: a, b
 Valid expression · {n} matching rows	Biểu thức hợp lệ · {n} hàng khớp
 Validate	Xác thực
@@ -1729,11 +1737,13 @@ Welcome to RustGIS	Chào mừng đến với RustGIS
 West	Tây
 WGS 84 / Globe	WGS 84 / Quả địa cầu
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
+What RustGIS opens with: the World Atlas sample or a blank map.	RustGIS mở với gì: mẫu World Atlas hoặc một bản đồ trống.
 What's near a point	Những gì gần một điểm
 Where	Điều kiện
 Where Clause	Mệnh đề WHERE
 Where labels sit relative to their features.	Vị trí của nhãn so với đối tượng của chúng.
 Where new features get their elevation (the z field).	Nơi đối tượng mới lấy độ cao (trường z).
+Where the map opens: the full extent or a view you saved.	Bản đồ mở ở đâu: toàn bộ phạm vi hoặc một khung nhìn đã lưu.
 Where tools work	Nơi công cụ hoạt động
 Which 5 countries have the largest GDP?	5 quốc gia nào có GDP lớn nhất?
 Whose borders the sample countries and the basemap outline show.	Biên giới theo quan điểm của ai mà các quốc gia mẫu và đường viền bản đồ nền hiển thị.

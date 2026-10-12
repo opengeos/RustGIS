@@ -2507,6 +2507,9 @@ fn duckdb_queries_and_databases() {
     assert!(again.is_open(), "{:?}", again.error);
     assert_eq!(again.info().and_then(|i| i.count), Some(1));
     assert!(s.run("layer.addData", &json!({"path": db.display().to_string(), "layer": "notes"})).is_err());
+    // Its layers are listed without adding them.
+    let listed = s.run("info.fileLayers", &json!({"path": db.display().to_string()})).unwrap();
+    assert_eq!(listed, json!({"count": 2, "layers": ["lakes", "towns"]}));
     // A query over the database's tables.
     let r = s.run("layer.addSql", &json!({"sql": "SELECT * FROM towns", "database": db.display().to_string(), "name": "Q"})).unwrap();
     assert_eq!(r["features"], 1);
@@ -2550,4 +2553,97 @@ fn pmtiles_from_network_shares_are_refused() {
     }
     assert!(crate::render::rustgis_tiles::pmtiles::check_local(r"\\attacker\share\x.pmtiles").is_err());
     assert!(crate::render::rustgis_tiles::pmtiles::check_local("/data/x.pmtiles").is_ok());
+}
+
+/// A GeoPackage with more feature tables than are added at once says which were left out, in the
+/// result and in a notice (issue #85); `info.fileLayers` lists them all.
+#[test]
+fn geopackage_table_cap_is_reported() {
+    let dir = std::env::temp_dir().join(format!("rustgis-gpkg-cap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("many.gpkg");
+    let _ = std::fs::remove_file(&path);
+    let c = rusqlite::Connection::open(&path).unwrap();
+    c.execute_batch(
+        "CREATE TABLE gpkg_spatial_ref_sys (srs_name TEXT, srs_id INTEGER PRIMARY KEY, organization TEXT, organization_coordsys_id INTEGER, definition TEXT, description TEXT);
+         INSERT INTO gpkg_spatial_ref_sys VALUES ('WGS 84', 4326, 'EPSG', 4326, '', '');
+         CREATE TABLE gpkg_contents (table_name TEXT PRIMARY KEY, data_type TEXT, identifier TEXT, description TEXT, last_change TEXT, min_x DOUBLE, min_y DOUBLE, max_x DOUBLE, max_y DOUBLE, srs_id INTEGER);
+         CREATE TABLE gpkg_geometry_columns (table_name TEXT, column_name TEXT, geometry_type_name TEXT, srs_id INTEGER, z TINYINT, m TINYINT);",
+    )
+    .unwrap();
+    let mut blob = b"GP\x00\x01".to_vec();
+    blob.extend_from_slice(&4326i32.to_le_bytes());
+    blob.extend(rustgis_data::wkb::encode(&rustgis_data::Geometry::Point(rustgis_data::Coord::new(2.35, 48.85))));
+    for i in 1..=34 {
+        let t = format!("t_{i:02}");
+        c.execute_batch(&format!(
+            "INSERT INTO gpkg_contents (table_name, data_type, srs_id) VALUES ('{t}', 'features', 4326);
+             INSERT INTO gpkg_geometry_columns VALUES ('{t}', 'geom', 'POINT', 4326, 0, 0);
+             CREATE TABLE {t} (fid INTEGER PRIMARY KEY AUTOINCREMENT, geom BLOB);"
+        ))
+        .unwrap();
+        c.execute(&format!("INSERT INTO {t} (geom) VALUES (?1)"), [&blob]).unwrap();
+    }
+    drop(c);
+    let p = path.display().to_string();
+
+    let mut s = Session::new(Project::default());
+    let listed = s.run("info.fileLayers", &json!({"path": p})).unwrap();
+    assert_eq!(listed["count"], 34);
+    assert_eq!(listed["layers"][33], "t_34");
+
+    let mark = s.notice_mark();
+    let r = s.run("layer.addData", &json!({"path": p})).unwrap();
+    assert_eq!(r["layers"].as_array().map(Vec::len), Some(32));
+    assert_eq!(r["tables"], 34);
+    assert_eq!(r["skipped"], json!(["t_33", "t_34"]));
+    assert_eq!(r["skippedCount"], 2);
+    let said = s.notices_since(mark);
+    assert!(said.iter().any(|n| n.text.contains("first 32 of 34 tables")), "{said:?}");
+    // A table past the cap is added by name.
+    let one = s.run("layer.addData", &json!({"path": p, "layer": "t_34"})).unwrap();
+    assert!(one.get("skipped").is_none());
+    assert_eq!(s.map().layers.len(), 33);
+    assert!(s.run("info.fileLayers", &json!({"path": dir.join("none.geojson").display().to_string()})).is_err());
+    let notes = dir.join("notes.rgis");
+    std::fs::write(&notes, "{}").unwrap();
+    assert!(s.run("info.fileLayers", &json!({"path": notes.display().to_string()})).is_err(), "not a data file");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn notices_since_survives_the_cap() {
+    let mut s = Session::new(Project::default());
+    for i in 0..250 {
+        s.notify(format!("n{i}"), false);
+    }
+    let mark = s.notice_mark();
+    assert!(s.notices_since(mark).is_empty());
+    s.notify("last", false);
+    assert_eq!(s.notices_since(mark).iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), ["last"]);
+    assert_eq!(s.notices_since(0).len(), 200);
+}
+
+/// The web app's `?blank&projection=EPSG:3010` (discussion #81): an empty project starts in a
+/// national grid, and that start is neither an edit to undo nor unsaved work.
+#[test]
+fn blank_project_starts_in_a_projected_crs() {
+    isolate_plugins();
+    let mut s = Session::new(Project::default());
+    assert!(s.map().layers.is_empty());
+    let r = s.run("map.projection", &json!({"type": "EPSG:3010"})).unwrap();
+    assert_eq!(r["projection"], "EPSG:3010");
+    assert!(s.dirty && s.can_undo());
+    s.clear_history();
+    assert!(!s.dirty && !s.can_undo());
+    assert_eq!(s.map().projection.code(), "EPSG:3010");
+    // It opens on the country, and reports that view back.
+    s.run("map.zoomToExtent", &json!({"extent": [10.5, 55.0, 24.5, 69.5]})).unwrap();
+    let e = s.run("map.extent", &Value::Null).unwrap()["extent"].clone();
+    let n: Vec<f64> = e.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+    assert!(n[0] < 11.0 && n[2] > 24.0 && n[1] < 55.5 && n[3] > 69.0 && n[3] - n[1] < 25.0, "{n:?}");
+    for bad in [json!(null), json!([1, 2, 3]), json!([20, 50, 10, 60]), json!([0, 0, 200, 10]), json!(["a", 0, 1, 1])] {
+        assert!(s.run("map.zoomToExtent", &json!({"extent": bad})).is_err(), "{bad}");
+    }
+    assert!(crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap().len() > 1000);
 }

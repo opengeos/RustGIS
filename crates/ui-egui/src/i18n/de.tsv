@@ -177,6 +177,7 @@ Below Right	Unten rechts
 Bilinear	Bilinear
 Blank	Leer
 Blank Letter page	Leere Letter-Seite
+Blank Map	Leere Karte
 Blank Page	Leere Seite
 Blue	Blau
 Bold	Fett
@@ -598,6 +599,7 @@ Export To 3D File	In 3D-Datei exportieren
 exporting animations needs the desktop app	zum Exportieren von Animationen wird die Desktop-App benötigt
 Export…	Exportieren…
 Expression	Ausdruck
+Extent	Ausdehnung
 Extent Indicator	Ausdehnungsanzeiger
 Extent: {extent}	Ausdehnung: {extent}
 Extract	Extrahieren
@@ -1391,6 +1393,7 @@ Save Web Map	Webkarte speichern
 Save Web Scene	Webszene speichern
 Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Gespeicherte Schlüssel werden unverschlüsselt in den Einstellungen der App abgelegt (im Web im Speicher des Browsers).
 Saved symbology: apply it to the selected layer, or save the layer's.	Gespeicherte Symbologie: auf den ausgewählten Layer anwenden oder die des Layers speichern.
+Saved View	Gespeicherte Ansicht
 Saved {name}	{name} gespeichert
 saving failed unexpectedly	Speichern ist unerwartet fehlgeschlagen
 Scale	Maßstab
@@ -1539,6 +1542,8 @@ Standard Deviation	Standardabweichung
 Star	Stern
 Start	Start
 Start Over	Von vorn beginnen
+Start With	Starten mit
+Start-up	Start
 Statistics	Statistik
 Statistics Field	Statistikfeld
 Status	Status
@@ -1618,6 +1623,7 @@ the preview failed unexpectedly	die Vorschau ist unerwartet fehlgeschlagen
 The project's items in place of the map.	Die Elemente des Projekts anstelle der Karte.
 The project's thumbnail, from an image.	Die Miniaturansicht des Projekts, aus einem Bild.
 The project's thumbnail, from the map view.	Die Miniaturansicht des Projekts, aus der Kartenansicht.
+The projection the map opens in.	Die Projektion, in der die Karte startet.
 The raster's data couldn't be read.	Die Daten des Rasters konnten nicht gelesen werden.
 The raster's data couldn't be read: {path}	Die Daten des Rasters konnten nicht gelesen werden: {path}
 the reply reached its length limit	die Antwort hat ihre Längenbegrenzung erreicht
@@ -1685,6 +1691,8 @@ Update to {version}	Auf {version} aktualisieren
 Upload File	Datei hochladen
 Upload File…	Datei hochladen…
 USA Contiguous Albers Equal Area	USA flächentreue Albers-Projektion
+Use	Übernehmen
+Use Current View	Aktuelle Ansicht verwenden
 Valid combinations, one per line: a, b	Gültige Kombinationen, eine pro Zeile: a, b
 Valid expression · {n} matching rows	Gültiger Ausdruck · {n} passende Zeilen
 Validate	Validieren
@@ -1729,11 +1737,13 @@ Welcome to RustGIS	Willkommen bei RustGIS
 West	West
 WGS 84 / Globe	WGS 84 / Globus
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
+What RustGIS opens with: the World Atlas sample or a blank map.	Womit RustGIS startet: mit dem Beispiel World Atlas oder einer leeren Karte.
 What's near a point	Was sich in der Nähe eines Punktes befindet
 Where	Wo
 Where Clause	WHERE-Klausel
 Where labels sit relative to their features.	Wo Beschriftungen relativ zu ihren Objekten stehen.
 Where new features get their elevation (the z field).	Woher neue Objekte ihre Höhe beziehen (das z-Feld).
+Where the map opens: the full extent or a view you saved.	Wo die Karte startet: in voller Ausdehnung oder in einer gespeicherten Ansicht.
 Where tools work	Wo Werkzeuge arbeiten
 Which 5 countries have the largest GDP?	Welche 5 Länder haben das größte BIP?
 Whose borders the sample countries and the basemap outline show.	Wessen Grenzen die Beispielländer und der Grundkarten-Umriss zeigen.

@@ -177,6 +177,7 @@ Below Right	Снизу справа
 Bilinear	Билинейная
 Blank	Пустая
 Blank Letter page	Пустая страница Letter
+Blank Map	Пустая карта
 Blank Page	Пустая страница
 Blue	Синий
 Bold	Жирный
@@ -598,6 +599,7 @@ Export To 3D File	Экспорт в 3D-файл
 exporting animations needs the desktop app	для экспорта анимаций нужно настольное приложение
 Export…	Экспорт…
 Expression	Выражение
+Extent	Охват
 Extent Indicator	Индикатор экстента
 Extent: {extent}	Экстент: {extent}
 Extract	Извлечение
@@ -1391,6 +1393,7 @@ Save Web Map	Сохранить веб-карту
 Save Web Scene	Сохранить веб-сцену
 Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Сохранённые ключи хранятся в настройках приложения в незашифрованном виде (в веб-версии — в хранилище браузера).
 Saved symbology: apply it to the selected layer, or save the layer's.	Сохранённые символы: примените их к выбранному слою или сохраните символы слоя.
+Saved View	Сохранённый вид
 Saved {name}	Сохранено: {name}
 saving failed unexpectedly	сохранение неожиданно завершилось ошибкой
 Scale	Масштаб
@@ -1539,6 +1542,8 @@ Standard Deviation	Стандартное отклонение
 Star	Звезда
 Start	Начало
 Start Over	Начать заново
+Start With	Начинать с
+Start-up	Запуск
 Statistics	Статистика
 Statistics Field	Поле статистики
 Status	Состояние
@@ -1618,6 +1623,7 @@ the preview failed unexpectedly	предпросмотр неожиданно з
 The project's items in place of the map.	Элементы проекта вместо карты.
 The project's thumbnail, from an image.	Эскиз проекта из изображения.
 The project's thumbnail, from the map view.	Эскиз проекта из вида карты.
+The projection the map opens in.	Проекция, в которой открывается карта.
 The raster's data couldn't be read.	Не удалось прочитать данные растра.
 The raster's data couldn't be read: {path}	Не удалось прочитать данные растра: {path}
 the reply reached its length limit	ответ достиг предельной длины
@@ -1685,6 +1691,8 @@ Update to {version}	Обновить до {version}
 Upload File	Загрузить файл
 Upload File…	Загрузить файл…
 USA Contiguous Albers Equal Area	Равновеликая Альберса для смежных штатов США
+Use	Применить
+Use Current View	Использовать текущий вид
 Valid combinations, one per line: a, b	Допустимые сочетания, по одному в строке: a, b
 Valid expression · {n} matching rows	Выражение допустимо · Подходящих строк: {n}
 Validate	Проверить
@@ -1729,11 +1737,13 @@ Welcome to RustGIS	Добро пожаловать в RustGIS
 West	Запад
 WGS 84 / Globe	WGS 84 / Глобус
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
+What RustGIS opens with: the World Atlas sample or a blank map.	С чем открывается RustGIS: с примером World Atlas или с пустой картой.
 What's near a point	Что находится рядом с точкой
 Where	Где
 Where Clause	Условие WHERE
 Where labels sit relative to their features.	Положение подписей относительно их объектов.
 Where new features get their elevation (the z field).	Откуда новые объекты получают высоту (поле z).
+Where the map opens: the full extent or a view you saved.	Где открывается карта: в полном охвате или в сохранённом виде.
 Where tools work	Где работают инструменты
 Which 5 countries have the largest GDP?	У каких 5 стран самый большой ВВП?
 Whose borders the sample countries and the basemap outline show.	Чьи границы показывают примеры стран и контуры базовой карты.

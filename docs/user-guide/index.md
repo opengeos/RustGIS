@@ -56,7 +56,7 @@ ribbon, arrows at its ends scroll it.
 | **Imagery** | Ortho Mapping, Reality Mapping, Alignment, Analysis, Image Classification, Share, Mensuration, Tools |
 | **Share** | Output (Export Map, Print, Capture), Package, Share As, Layout, Save As |
 | **Plugins** | The Plugin Manager, plus a tab for each [plugin](../plugins.md) that adds one |
-| **Settings** | Language (interface language and worldview) |
+| **Settings** | Language (interface language and worldview), Start-up (start with the sample or a blank map, projection, extent) |
 | **Help** | Customize (ribbon tabs, Quick Access Toolbar), Performance (Diagnostic Monitor), Learn, Help (About, Command Search, Shortcuts) |
 
 Contextual tabs appear while something is selected:
