@@ -101,6 +101,9 @@ The [user guide](https://rustgis.app/user-guide/) covers each area in detail,
   [downloads.rustgis.app](https://downloads.rustgis.app) or the
   [latest release](https://github.com/opengeos/RustGIS/releases/latest) (see
   [Installation](docs/installation.md) for the files and first-run notes).
+- **Package managers**: `winget install OpenGeos.RustGIS`,
+  `brew install --cask opengeos/rustgis/rustgis`, `yay -S rustgis-bin` (AUR), or
+  `sudo dnf copr enable giswqs/rustgis && sudo dnf install rustgis` (Fedora).
 - **From source**: `cargo run --release -p rustgis` (Rust 1.90 or later).
 
 ## Quick start

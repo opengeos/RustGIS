@@ -36,6 +36,23 @@ The macOS DMG and command line tool are signed with a Developer ID and notarized
 so they open without a warning. The Windows builds are not yet signed: choose
 **More info › Run anyway** if SmartScreen warns about an unknown publisher.
 
+## Package managers
+
+RustGIS is also published to these package managers, which keep it up to date:
+
+| Platform | Command |
+| --- | --- |
+| Windows ([winget](https://learn.microsoft.com/windows/package-manager/)) | `winget install OpenGeos.RustGIS` |
+| macOS ([Homebrew](https://brew.sh)) | `brew install --cask opengeos/rustgis/rustgis` |
+| macOS and Linux, command line tool only (Homebrew) | `brew install opengeos/rustgis/rustgis-cli` |
+| Arch Linux ([AUR](https://aur.archlinux.org/packages/rustgis-bin)) | `yay -S rustgis-bin` (or any AUR helper) |
+| Fedora ([COPR](https://copr.fedorainfracloud.org/coprs/giswqs/rustgis/)) | `sudo dnf copr enable giswqs/rustgis && sudo dnf install rustgis` |
+
+winget installs for your account with the setup.exe; add `--scope machine` for the `.msi`. On
+Homebrew 5.1 and later, run `brew trust opengeos/rustgis` once before installing from the tap.
+Each package is the same build as the release page, and a new release reaches the package
+managers shortly after it is published (winget after Microsoft's review).
+
 ## From source
 
 RustGIS builds from source with a recent stable Rust toolchain (1.90 or later).
