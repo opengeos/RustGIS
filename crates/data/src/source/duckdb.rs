@@ -8,7 +8,10 @@
 //! DuckDB: without the program, queries report how to get it.
 //!
 //! The SQL reaches DuckDB only as a string literal handed to its `query()` table function, which
-//! runs a single SELECT: it can't end the statement, write files or run the shell's dot commands.
+//! runs a single SELECT: it can't end the statement, run other statements (`COPY`, `ATTACH`,
+//! `INSTALL`) or the shell's dot commands. It can still read any file and web address, as it is
+//! meant to: the AI Assistant asks before running a query, and plugins need both the files and
+//! network permissions (`rustgis_engine::cmd::plugins::SQL`).
 
 use super::Family;
 use super::external::{self, TempFile, fnv1a, output, stamp, touch};
@@ -330,6 +333,10 @@ fn run_in(dir: &Path, q: &Query<'_>, key: Option<&str>) -> Result<Output> {
     let run_tag = format!("{:016x}", fnv1a(format!("{sql}\n{:?}\n{:?}\n{now}\n{}\n{n}", q.database, q.crs, std::process::id()).as_bytes()));
     let tmp = |f: Family| dir.join(format!("{run_tag}.{}.{n}.{}.tmp.parquet", std::process::id(), f.label()));
     let mut guards: Vec<TempFile> = Family::ALL.iter().map(|f| TempFile(Some(tmp(*f)))).collect();
+    // The counts go to a file of their own, so reading them doesn't depend on what else DuckDB
+    // prints.
+    let counts_file = dir.join(format!("{run_tag}.{}.{n}.counts.tmp.json", std::process::id()));
+    let _counts_guard = TempFile(Some(counts_file.clone()));
     let mut script = format!("{prelude} CREATE TEMP TABLE r AS {select};");
     for f in Family::ALL {
         script.push_str(&format!(
@@ -338,8 +345,13 @@ fn run_in(dir: &Path, q: &Query<'_>, key: Option<&str>) -> Result<Output> {
             literal(&tmp(f).display().to_string())
         ));
     }
-    script.push_str(&format!(" SELECT {DIM} AS dim, count(*)::BIGINT AS n FROM r GROUP BY ALL;"));
-    let counts = run_script(dir, &script, QUERY_TIMEOUT)?;
+    script.push_str(&format!(
+        " COPY (SELECT {DIM} AS dim, count(*)::BIGINT AS n FROM r GROUP BY ALL) TO {} (FORMAT json, ARRAY true);",
+        literal(&counts_file.display().to_string())
+    ));
+    run_script(dir, &script, QUERY_TIMEOUT)?;
+    let counts: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&counts_file)?).map_err(|e| DataError::Format(format!("DuckDB: unreadable counts ({e})")))?;
 
     let mut out = Output { unprojected, ..Output::default() };
     let final_tag = key.map(|k| format!("{:016x}", fnv1a(k.as_bytes()))).unwrap_or(run_tag.clone());
@@ -429,9 +441,13 @@ pub fn convert_table(database: &Path, table: &Table, crs: Option<&str>) -> Resul
 fn convert_table_in(dir: &Path, database: &Path, table: &Table, crs: Option<&str>) -> Result<Output> {
     let full = std::path::absolute(database).unwrap_or_else(|_| database.to_path_buf());
     let (len, modified) = stamp(&full)?;
+    // Changes not yet checkpointed are in the write-ahead log beside the file.
+    let mut wal = full.clone().into_os_string();
+    wal.push(".wal");
+    let (wal_len, wal_modified) = stamp(Path::new(&wal)).unwrap_or((0, 0));
     // The cache key, spelled out: kept beside the conversion and checked, so a hash collision
     // can't hand back another table.
-    let key = format!("{}\n{}\n{}\n{crs:?}\n{len}\n{modified}", full.display(), table.schema, table.name);
+    let key = format!("{}\n{}\n{}\n{crs:?}\n{len}\n{modified}\n{wal_len}\n{wal_modified}", full.display(), table.schema, table.name);
     let tag = format!("{:016x}", fnv1a(key.as_bytes()));
     let keyfile = dir.join(format!("{tag}.key"));
     if let Some(hit) = std::fs::read_to_string(&keyfile).ok().and_then(|s| cached(dir, &tag, &key, &s)) {
@@ -478,7 +494,8 @@ fn cached(dir: &Path, tag: &str, key: &str, stored: &str) -> Option<Output> {
 }
 
 /// Whether a file name is one this module writes: `<16 hex>.<family>.parquet`, `<16 hex>.key`, or
-/// a `<16 hex>.<pid>.<n>.<family>.tmp.parquet` left by a run that didn't finish.
+/// a `<16 hex>.<pid>.<n>.<family>.tmp.parquet` or `<16 hex>.<pid>.<n>.counts.tmp.json` left by a
+/// run that didn't finish.
 fn ours(name: &str) -> bool {
     let Some((tag, rest)) = name.split_once('.') else { return false };
     if tag.len() != 16 || !tag.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -489,8 +506,10 @@ fn ours(name: &str) -> bool {
         return true;
     }
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    match rest.strip_suffix(".tmp.parquet").map(|r| r.split('.').collect::<Vec<_>>()).as_deref() {
-        Some([pid, n, f]) => digits(pid) && digits(n) && family(f),
+    let parts = |suffix: &str| rest.strip_suffix(suffix).map(|r| r.split('.').map(str::to_string).collect::<Vec<_>>());
+    match (parts(".tmp.parquet").as_deref(), parts(".tmp.json").as_deref()) {
+        (Some([pid, n, f]), _) => digits(pid) && digits(n) && family(f),
+        (_, Some([pid, n, c])) => digits(pid) && digits(n) && c == "counts",
         _ => false,
     }
 }
@@ -527,7 +546,8 @@ mod tests {
     #[test]
     fn cache_files() {
         assert!(ours("0123456789abcdef.points.parquet") && ours("0123456789abcdef.key"));
-        assert!(ours("0123456789abcdef.4242.7.lines.tmp.parquet"));
+        assert!(ours("0123456789abcdef.4242.7.lines.tmp.parquet") && ours("0123456789abcdef.4242.7.counts.tmp.json"));
+        assert!(!ours("0123456789abcdef.4242.7.lines.tmp.json") && !ours("0123456789abcdef.4242.7.counts.tmp.parquet"));
         assert!(!ours("0123456789abcdef.parquet") && !ours("0123456789abcdef.other.parquet") && !ours("init.sql"));
         assert!(!ours("data.points.parquet") && !ours("0123456789abcdef.x.7.lines.tmp.parquet"));
     }
@@ -616,6 +636,8 @@ mod tests {
         // Errors: DuckDB's own message, no geometry, not a single SELECT.
         let e = run_in(&cache, &Query { sql: "SELEC 1", ..Query::default() }, None).unwrap_err().to_string();
         assert!(e.contains("Parser Error"), "{e}");
+        let e = run_in(&cache, &Query { sql: "SELECT ST_Point(0, 0) AS g WHERE false", ..Query::default() }, None).unwrap_err().to_string();
+        assert_eq!(e, "the query returned no rows");
         let e = run_in(&cache, &Query { sql: "SELECT 1 AS a", ..Query::default() }, None).unwrap_err().to_string();
         assert!(e.contains("no geometry column"), "{e}");
         for sql in ["COPY (SELECT 1) TO 'x.csv'", "SELECT ST_Point(0, 0) AS g'); COPY (SELECT 1) TO ('x.csv", "SELECT 1; SELECT 2"] {
@@ -639,6 +661,13 @@ mod tests {
         assert_eq!(a.parts.iter().map(|p| p.count).collect::<Vec<_>>(), vec![1000]);
         // The second time is a cache hit, read back from the key file.
         assert_eq!(convert_table_in(&cache, &db, &tables[0], None).unwrap(), a);
+        // Changes still in the write-ahead log are a different file.
+        let mut wal = db.clone().into_os_string();
+        wal.push(".wal");
+        std::fs::write(&wal, b"pending").unwrap();
+        let fresh = convert_table_in(&cache, &db, &tables[0], None).unwrap();
+        assert_ne!(fresh.parts[0].path, a.parts[0].path);
+        std::fs::remove_file(&wal).unwrap();
         let key = std::fs::read_dir(&cache).unwrap().flatten().find(|e| e.file_name().to_string_lossy().ends_with(".key")).unwrap();
         assert!(std::fs::read_to_string(key.path()).unwrap().ends_with("part points 1000\nskipped 0\nunprojected true"));
         // A query naming the database's tables plainly.
