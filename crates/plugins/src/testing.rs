@@ -2,7 +2,8 @@
 //!
 //! It answers by the first letter of the command or tool id. Requests are serialized with
 //! sorted keys, so the id starts at byte 15 (`{"abi":1,"id":"…`) and a one-letter command's
-//! params start at byte 44 (`{"abi":1,"id":"f","kind":"command","params":…}`).
+//! params start at byte 56 (`{"abi":1,"id":"f","kind":"command","lang":"en","params":…}`; every
+//! interface language code is two letters).
 //!
 //! - `h` (hello): logs "hi" and returns `{"hello": "world"}`.
 //! - `f` (forward): sends its params to RustGIS as a host request and returns the reply.
@@ -43,7 +44,7 @@ const WAT: &str = r#"
       (call $log (i32.const 64) (i32.const 2))
       (return (call $reply (i32.const 0) (i32.const 24)))))
     (if (i32.eq (local.get $c) (i32.const 102)) (then
-      (local.set $len (call $call (i32.add (local.get $p) (i32.const 44)) (i32.sub (local.get $n) (i32.const 45))))
+      (local.set $len (call $call (i32.add (local.get $p) (i32.const 56)) (i32.sub (local.get $n) (i32.const 57))))
       (local.set $buf (call $alloc (local.get $len)))
       (call $result (local.get $buf))
       (return (call $reply (local.get $buf) (local.get $len)))))

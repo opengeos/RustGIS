@@ -152,7 +152,8 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
             layers.insert(name.to_string(), layer_geojson(inputs, name)?);
         }
     }
-    let request = json!({"abi": crate::manifest::ABI, "kind": "tool", "id": tid, "params": params, "layers": layers});
+    let request =
+        json!({"abi": crate::manifest::ABI, "kind": "tool", "id": tid, "params": params, "layers": layers, "lang": crate::language()});
     let mut log = Messages(Vec::new());
     let reply = crate::call(&plugin, &mut log, &request, crate::runtime::TOOL_FUEL).map_err(|e| format!("{}: {e}", decl.name))?;
     let mut result = output(&reply, &decl.name)?;
