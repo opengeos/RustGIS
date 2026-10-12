@@ -92,6 +92,8 @@ impl<B: AsRef<[u8]>> Db<B> {
     /// rowid order, until it returns `Break`.
     pub fn scan(&self, root: u32, mut f: impl FnMut(i64, Vec<Val>) -> ControlFlow<()>) -> Result<(), String> {
         let mut seen = vec![false; self.pages as usize + 1];
+        // A page (b-tree or overflow) is read once per scan, so payloads that share an overflow
+        // chain — which only a forged file has — are refused rather than read again and again.
         let mut stack = vec![root];
         // Depth-first, children pushed right to left so rows come out in rowid order.
         while let Some(n) = stack.pop() {
@@ -120,7 +122,7 @@ impl<B: AsRef<[u8]>> Db<B> {
                         let at = be16(page, hdr + 8 + 2 * i).ok_or_else(|| bad("cell pointer"))?;
                         let (size, a) = varint(page, at).ok_or_else(|| bad("leaf cell"))?;
                         let (rowid, a) = varint(page, a).ok_or_else(|| bad("leaf cell"))?;
-                        let payload = self.payload(page, a, size)?;
+                        let payload = self.payload_seen(page, a, size, &mut seen)?;
                         if f(rowid as i64, record(&payload)?).is_break() {
                             return Ok(());
                         }
@@ -162,15 +164,19 @@ impl<B: AsRef<[u8]>> Db<B> {
     }
 
     /// A cell's payload of `size` bytes starting at `at` on `page`, following its overflow pages.
-    fn payload(&self, page: &[u8], at: usize, size: u64) -> Result<Vec<u8>, String> {
+    /// [`Db::payload`] during a scan: each overflow page may be read only once.
+    fn payload_seen(&self, page: &[u8], at: usize, size: u64, seen: &mut [bool]) -> Result<Vec<u8>, String> {
+        self.payload_with(page, at, size, self.usable - 35, Some(seen))
+    }
+
+    fn payload_with(&self, page: &[u8], at: usize, size: u64, max_local: usize, mut seen: Option<&mut [bool]>) -> Result<Vec<u8>, String> {
         let total = self.bytes.as_ref().len() as u64;
         if size > total {
             return Err(bad("a payload larger than the file"));
         }
         let size = size as usize;
         let u = self.usable;
-        // How much of the payload is on the leaf page itself (the SQLite file format's rule).
-        let max_local = u - 35;
+        // How much of the payload is on the page itself (the SQLite file format's rule).
         let local = if size <= max_local {
             size
         } else {
@@ -187,6 +193,12 @@ impl<B: AsRef<[u8]>> Db<B> {
                 hops += 1;
                 if next == 0 || hops > self.pages {
                     return Err(bad("an overflow chain that ends early"));
+                }
+                if let Some(seen) = seen.as_deref_mut() {
+                    let slot = seen.get_mut(next as usize).ok_or_else(|| bad("a page number past the end of the file"))?;
+                    if std::mem::replace(slot, true) {
+                        return Err(bad("an overflow page reached twice"));
+                    }
                 }
                 let p = self.page(next)?;
                 let take = (size - out.len()).min(u - 4);
@@ -347,7 +359,25 @@ pub fn parse_create_table(sql: &str) -> Result<(Vec<Column>, Option<usize>), Str
         let words: Vec<String> = toks.iter().filter(|t| !t.quoted).map(|t| up(&t.text)).collect();
         let has = |w: &str| words.iter().any(|x| x == w);
         // A generated column is stored only when declared STORED.
-        let generated = (has("GENERATED") || has("AS")) && !has("STORED");
+        // A generated column: `GENERATED ALWAYS AS (…)` or `AS (…)` after the name, outside any
+        // parentheses (a CHECK's `CAST(x AS INT)` isn't one); stored only when declared STORED.
+        let mut depth = 0usize;
+        let mut generated_kw = false;
+        for (k, t) in toks.iter().enumerate().skip(1) {
+            match (t.quoted, t.text.as_str()) {
+                (false, "(") => depth += 1,
+                (false, ")") => depth = depth.saturating_sub(1),
+                (false, w) if depth == 0 => {
+                    let w = up(w);
+                    let next_open = toks.get(k + 1).is_some_and(|n| !n.quoted && n.text == "(");
+                    if w == "GENERATED" || (w == "AS" && next_open) {
+                        generated_kw = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let generated = generated_kw && !has("STORED");
         if decl.eq_ignore_ascii_case("INTEGER") && has("PRIMARY") && !has("DESC") {
             rowid_column = Some(columns.len());
         }
@@ -465,7 +495,7 @@ mod tests {
     #[test]
     fn create_table_columns() {
         let (cols, pk) = parse_create_table(
-            r#"CREATE TABLE "my ""t""" ( fid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, "geom" MULTIPOLYGON, [name] TEXT(80) DEFAULT 'a,b', `n` DOUBLE PRECISION, -- note
+            r#"CREATE TABLE "my ""t""" ( fid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, "geom" MULTIPOLYGON CHECK (CAST(1 AS INT) > 0), [name] TEXT(80) DEFAULT 'a,b', `n` DOUBLE PRECISION, -- note
                x NUMERIC(10, 2), g TEXT GENERATED ALWAYS AS (name || 'x') VIRTUAL, CONSTRAINT c UNIQUE (name))"#,
         )
         .unwrap();
@@ -476,6 +506,9 @@ mod tests {
         assert_eq!(cols[3].decl, "DOUBLE PRECISION");
         assert_eq!(cols[4].decl, "NUMERIC(10, 2)");
         assert!(cols[5].generated && !cols[2].generated);
+        assert!(!cols[1].generated, "a CAST … AS inside a CHECK isn't a generated column");
+        let (cols, _) = parse_create_table("CREATE TABLE t (generated TEXT, b INT)").unwrap();
+        assert!(!cols[0].generated, "a column named generated");
         assert_eq!(pk, Some(0));
         let (_, pk) = parse_create_table("CREATE TABLE t (a TEXT, id INTEGER, PRIMARY KEY (id))").unwrap();
         assert_eq!(pk, Some(1));

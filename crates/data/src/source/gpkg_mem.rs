@@ -25,10 +25,13 @@ fn err(e: String) -> DataError {
 }
 
 /// The rows of a small metadata table, as (column name → value) lookups.
-fn meta_rows(db: &Db<Shared>, name: &str) -> Result<Vec<Vec<(String, Val)>>> {
-    let t = db.table(name).map_err(|_| DataError::Format(format!("not a GeoPackage: no {name} table")))?;
+fn meta_rows(db: &Db<Shared>, tables: &[Table], name: &str) -> Result<Vec<Vec<(String, Val)>>> {
+    let t = tables
+        .iter()
+        .find(|t| t.name.eq_ignore_ascii_case(name))
+        .ok_or_else(|| DataError::Format(format!("not a GeoPackage: no {name} table")))?;
     let mut out = Vec::new();
-    db.rows(&t, |_, r| {
+    db.rows(t, |_, r| {
         out.push(t.columns.iter().map(|c| c.name.to_ascii_lowercase()).zip(r.iter().cloned()).collect());
         // Metadata tables are small; a huge one is not a GeoPackage's.
         if out.len() > 100_000 { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
@@ -48,6 +51,15 @@ fn text(v: Option<&Val>) -> Option<String> {
     }
 }
 
+/// An integer value, exactly (an id, a code).
+fn int(v: Option<&Val>) -> Option<i64> {
+    match v? {
+        Val::Int(i) => Some(*i),
+        Val::Real(x) if x.fract() == 0.0 && x.abs() < 9e15 => Some(*x as i64),
+        _ => None,
+    }
+}
+
 fn real(v: Option<&Val>) -> Option<f64> {
     match v? {
         Val::Real(x) => Some(*x),
@@ -59,7 +71,9 @@ fn real(v: Option<&Val>) -> Option<f64> {
 /// The feature tables of a GeoPackage held in memory (sorted, as the desktop lists them).
 pub fn layers(bytes: Shared) -> Result<Vec<String>> {
     let db = Db::open(bytes).map_err(err)?;
-    let mut names: Vec<String> = meta_rows(&db, "gpkg_geometry_columns")?.iter().filter_map(|r| text(get(r, "table_name"))).collect();
+    let tables = db.tables().map_err(err)?;
+    let mut names: Vec<String> =
+        meta_rows(&db, &tables, "gpkg_geometry_columns")?.iter().filter_map(|r| text(get(r, "table_name"))).collect();
     names.sort();
     Ok(names)
 }
@@ -68,7 +82,9 @@ impl GpkgMemSource {
     /// Opens a feature table (default: the first) of the GeoPackage in `bytes`.
     pub fn open_shared(bytes: Shared, layer: Option<&str>) -> Result<Self> {
         let db = Db::open(bytes).map_err(err)?;
-        let geometry_columns = meta_rows(&db, "gpkg_geometry_columns")?;
+        // The schema, read once.
+        let schema = db.tables().map_err(err)?;
+        let geometry_columns = meta_rows(&db, &schema, "gpkg_geometry_columns")?;
         let mut tables: Vec<String> = geometry_columns.iter().filter_map(|r| text(get(r, "table_name"))).collect();
         tables.sort();
         let table_name = match layer {
@@ -89,14 +105,14 @@ impl GpkgMemSource {
             .ok_or_else(|| DataError::Format("GeoPackage: the table's geometry column is missing".into()))?;
         let geom = text(get(gc, "column_name")).unwrap_or_default();
         let geom_type = text(get(gc, "geometry_type_name")).unwrap_or_default();
-        let srs_id = real(get(gc, "srs_id")).map(|v| v as i64).unwrap_or(0);
+        let srs_id = int(get(gc, "srs_id")).unwrap_or(0);
         // The EPSG code, as the desktop reader decides it.
-        let srs = meta_rows(&db, "gpkg_spatial_ref_sys").unwrap_or_default();
-        let row = srs.iter().find(|r| real(get(r, "srs_id")).is_some_and(|v| v as i64 == srs_id));
+        let srs = meta_rows(&db, &schema, "gpkg_spatial_ref_sys").unwrap_or_default();
+        let row = srs.iter().find(|r| int(get(r, "srs_id")) == Some(srs_id));
         let epsg: Option<u32> = match row {
             None => u32::try_from(srs_id).ok().filter(|c| matches!(c, 4326 | 3857)),
-            Some(r) => match (text(get(r, "organization")), real(get(r, "organization_coordsys_id"))) {
-                (Some(org), Some(id)) if org.eq_ignore_ascii_case("epsg") => u32::try_from(id as i64).ok(),
+            Some(r) => match (text(get(r, "organization")), int(get(r, "organization_coordsys_id"))) {
+                (Some(org), Some(id)) if org.eq_ignore_ascii_case("epsg") => u32::try_from(id).ok(),
                 _ => None,
             },
         };
@@ -105,7 +121,11 @@ impl GpkgMemSource {
         }
         let reproject = Reproject::from_epsg(epsg, &mut notes);
 
-        let table = db.table(&table_name).map_err(err)?;
+        let table = schema
+            .iter()
+            .find(|t| t.name.eq_ignore_ascii_case(&table_name))
+            .cloned()
+            .ok_or_else(|| DataError::Format(format!("GeoPackage: no table '{table_name}'")))?;
         let geom_col = table
             .columns
             .iter()
@@ -122,7 +142,7 @@ impl GpkgMemSource {
                 field_cols.push(i);
             }
         }
-        let contents = meta_rows(&db, "gpkg_contents").unwrap_or_default();
+        let contents = meta_rows(&db, &schema, "gpkg_contents").unwrap_or_default();
         let declared = contents.iter().find(|r| text(get(r, "table_name")).is_some_and(|t| t == table_name)).and_then(|r| {
             Some(Extent::new(real(get(r, "min_x"))?, real(get(r, "min_y"))?, real(get(r, "max_x"))?, real(get(r, "max_y"))?))
         });

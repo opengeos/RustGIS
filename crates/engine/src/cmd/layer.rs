@@ -360,14 +360,18 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
             }
             all.into_iter().map(Some).collect()
         }
-        // An uploaded GeoPackage: its tables listed by the pure-Rust reader.
+        // An uploaded GeoPackage: its tables listed by the pure-Rust reader. (On the desktop, SQLite
+        // opens the tables; a file the pure reader can't list adds its first table, as before.)
         (None, Origin::Bytes(name, bytes)) if name.to_ascii_lowercase().ends_with(".gpkg") => {
-            let mut all = source::gpkg_mem::layers(source::Shared(bytes.clone())).map_err(err)?;
+            let listed = source::gpkg_mem::layers(source::Shared(bytes.clone()));
+            #[cfg(not(target_arch = "wasm32"))]
+            let listed = listed.or_else(|_| Ok::<_, rustgis_data::DataError>(Vec::new()));
+            let mut all = listed.map_err(err)?;
             if all.len() > MAX_TABLES {
                 total = Some(all.len());
                 skipped = all.split_off(MAX_TABLES);
             }
-            all.into_iter().map(Some).collect()
+            if all.is_empty() { vec![None] } else { all.into_iter().map(Some).collect() }
         }
         _ => vec![None],
     };
