@@ -27,7 +27,8 @@ or enterprise portal sharing yet, so real depth is lower than the checklist sugg
   scenes, locators), offline areas with sync, deep learning pixel classification, hosted
   imagery tiles.
 - The AI Assistant (Anthropic, OpenAI, Gemini, OpenRouter, Ollama, OpenAI-compatible) in the
-  app, the web app and `rustgis-cli ask`.
+  app, the web app and `rustgis-cli ask`; an MCP server (`rustgis-cli mcp`) for AI agents such
+  as Claude Code, Cursor and VS Code, with the documentation built in.
 - Sandboxed WebAssembly plugins with a registry at plugins.rustgis.app.
 - Desktop packages: Windows installers (setup.exe, .msi), a portable zip and a Store MSIX; a
   signed and notarized macOS DMG; Linux .deb, .rpm, AppImage and tarballs; a download mirror at
@@ -38,4 +39,3 @@ or enterprise portal sharing yet, so real depth is lower than the checklist sugg
 - Editing: vertex editing (move, add and delete vertices of existing features).
 - Analysis: spatial join, intersect and union, near, heat maps.
 - 3D: full scenes with terrain, beyond the globe and 2.5D extrusion.
-- Agents: an MCP server exposing RustGIS commands.

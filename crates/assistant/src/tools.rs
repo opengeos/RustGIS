@@ -99,16 +99,21 @@ pub fn defs() -> Vec<ToolDef> {
     ]
 }
 
-/// Whether a call needs the user's approval, and why.
-pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
-    let (id, params) = match call.name.as_str() {
-        "run_command" => (str_arg(&call.args, "command").unwrap_or_default(), obj_arg(&call.args, "params")),
-        "run_tool" => (
+/// The command a call runs and its parameters (`gp.run` for a tool), if it runs one.
+pub fn target(call: &ToolCall) -> Option<(String, Value)> {
+    match call.name.as_str() {
+        "run_command" => Some((str_arg(&call.args, "command").unwrap_or_default(), obj_arg(&call.args, "params"))),
+        "run_tool" => Some((
             "gp.run".to_string(),
             json!({"tool": str_arg(&call.args, "tool").unwrap_or_default(), "params": obj_arg(&call.args, "params")}),
-        ),
-        _ => return None,
-    };
+        )),
+        _ => None,
+    }
+}
+
+/// Whether a call needs the user's approval, and why.
+pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
+    let (id, params) = target(call)?;
     if id.starts_with(rustgis_engine::plugins::PREFIX) {
         return Some("it runs a plugin's command".into());
     }

@@ -11,6 +11,7 @@
 //! rustgis-cli ask [--sample | --project p.rgis | --data f.geojson …] "Which cities have over 10 million people?" \
 //!     [--provider anthropic|openai|gemini|openrouter|ollama|custom] [--model M] [--base-url URL] [--yes] [--save out.rgis] [--trace log.txt]
 //! rustgis-cli ask --models [--provider P]                # list the provider's models
+//! rustgis-cli mcp [--sample | --project p.rgis | --data f.geojson …] [--yes]   # an MCP server on stdio
 //! rustgis-cli parity                                    # ribbon feature coverage report
 //! rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id>
 //!                      | browse | get <id>] [--registry URL]
@@ -36,7 +37,7 @@ use serde_json::{Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]"
+        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]\n  rustgis-cli mcp [--sample] [--project P] [--data F]… [--yes]"
     );
     ExitCode::from(2)
 }
@@ -180,6 +181,38 @@ fn ask(s: &mut Session, args: &[String]) -> Result<(), String> {
     show(&a);
     if a.transcript.iter().any(|e| matches!(e, Entry::Error(_))) {
         return Err("the assistant couldn't finish".into());
+    }
+    Ok(())
+}
+
+/// `mcp`: a Model Context Protocol server on standard input and output, one JSON-RPC message per
+/// line, until the client closes its end. Only messages go to standard output; notes go to
+/// standard error.
+fn mcp(s: &mut Session, args: &[String]) -> Result<(), String> {
+    use std::io::BufRead;
+    let server = rustgis_assistant::mcp::Server::new(args.iter().any(|a| a == "--yes"));
+    eprintln!(
+        "rustgis-cli: MCP server ready ({} layers; file and network access {})",
+        s.map().layers.len(),
+        if server.allow_access { "allowed" } else { "off, --yes allows it" }
+    );
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout().lock();
+    for line in stdin.lock().lines() {
+        let line = line.map_err(|e| format!("reading standard input: {e}"))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        // A last resort: a panic answers that request with an error instead of ending the server.
+        let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &line))).unwrap_or_else(|_| {
+            Some(json!({"jsonrpc": "2.0", "id": Value::Null, "error": {"code": -32603, "message": "internal error"}}).to_string())
+        });
+        if let Some(reply) = reply {
+            // The client hung up.
+            if writeln!(stdout, "{reply}").and_then(|()| stdout.flush()).is_err() {
+                break;
+            }
+        }
     }
     Ok(())
 }
@@ -332,6 +365,10 @@ fn main() -> ExitCode {
                 run(&mut s, "project.saveAs", json!({"path": p}))?;
             }
             asked
+        }
+        "mcp" => {
+            open_inputs(&mut s, &args)?;
+            mcp(&mut s, &args)
         }
         "run" => {
             open_inputs(&mut s, &args)?;

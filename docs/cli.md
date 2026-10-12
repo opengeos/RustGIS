@@ -68,3 +68,14 @@ command the assistant ran to standard error. Commands that read or write files o
 network are declined unless you pass `--yes`; plugin commands, scripts, tasks, models and
 replacing the project are always declined here. `--trace log.txt` appends each request and response
 body (never the headers, which carry the key) to a file.
+
+## Serving AI agents
+
+`mcp` runs RustGIS as a Model Context Protocol server for agents such as Claude Code, Cursor and
+VS Code, which then run commands, look at the map and search the documentation themselves:
+
+```sh
+claude mcp add rustgis -- rustgis-cli mcp --sample
+```
+
+See [MCP Server](mcp.md).

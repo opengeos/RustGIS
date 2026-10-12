@@ -3604,6 +3604,7 @@ dependencies = [
 name = "rustgis-assistant"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "log",
  "rustgis-engine",
  "serde_json",

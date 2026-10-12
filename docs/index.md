@@ -50,9 +50,9 @@ script from the command line, a notebook or the AI Assistant.
 
 -   **Scriptable and extensible**
 
-    `rustgis-cli` runs any command by id, renders maps and chains tools; sandboxed WebAssembly
-    plugins add commands, tools and ribbon tabs.
-    [Command Line](cli.md) · [Plugins](plugins.md)
+    `rustgis-cli` runs any command by id, renders maps and chains tools; its MCP server lets AI
+    agents make maps; sandboxed WebAssembly plugins add commands, tools and ribbon tabs.
+    [Command Line](cli.md) · [MCP Server](mcp.md) · [Plugins](plugins.md)
 
 </div>
 

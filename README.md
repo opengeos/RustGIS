@@ -85,7 +85,7 @@ Every screenshot is RustGIS itself, rendered offscreen by `cargo run -p rustgis-
 | **Imagery** | Ortho and reality mapping, pixel classification (k-means, minimum distance, a trainable neural network), mensuration, hosted imagery tiles |
 | **Layouts and reports** | Page layouts with map frames, legends, scale bars, grids and map series; reports with groups, statistics, charts and subreports; presentations (HTML slideshow, PDF); notebooks (Jupyter in and out) |
 | **Sharing** | PNG export at any DPI; PDF; web map pages, OGC API Features collections, MapLibre styles, glTF scenes, locators; project, map and mobile map packages; offline areas with sync |
-| **AI Assistant** | Ask about your data or tell the map what to do in plain language, with Anthropic, OpenAI, Gemini, OpenRouter, Ollama or any OpenAI-compatible model; also `rustgis-cli ask` |
+| **AI Assistant** | Ask about your data or tell the map what to do in plain language, with Anthropic, OpenAI, Gemini, OpenRouter, Ollama or any OpenAI-compatible model; also `rustgis-cli ask`, and an [MCP server](docs/mcp.md) (`rustgis-cli mcp`) for Claude Code, Cursor, VS Code and other agents |
 | **Plugins** | Sandboxed WebAssembly [plugins](docs/plugins.md) add commands, tools and ribbon tabs; install them from [plugins.rustgis.app](https://plugins.rustgis.app) on the desktop, command line and web |
 | **Interface** | Command search (Ctrl+K), keyboard shortcuts, dark mode, a customizable ribbon and Quick Access Toolbar, linked side-by-side maps, 15 languages |
 
@@ -120,6 +120,7 @@ rustgis-cli run --sample \
   --cmd 'layer.symbology={"layer":"Countries_Summarize","type":"graduated","field":"point_count"}' \
   --cmd 'share.exportMap={"path":"out.png","dpi":192}' --save atlas.rgis
 rustgis-cli ask --sample "Which 5 countries have the largest GDP?"
+claude mcp add rustgis -- rustgis-cli mcp --sample   # RustGIS as an MCP server for AI agents
 ```
 
 See [Command Line](docs/cli.md) for more.

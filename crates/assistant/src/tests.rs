@@ -503,3 +503,220 @@ fn stopping_a_follow_up_keeps_the_history_valid() {
         }
     }
 }
+
+// The MCP server.
+
+use crate::{docs, mcp};
+
+/// Sends one request and gives back its `result` (or the whole reply when it is an error).
+fn rpc(server: &mcp::Server, s: &mut Session, method: &str, params: Value) -> Value {
+    let msg = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params}).to_string();
+    let reply: Value = serde_json::from_str(&server.handle(s, &msg).unwrap()).unwrap();
+    assert_eq!(reply["id"], 7);
+    if reply.get("error").is_some() { reply } else { reply["result"].clone() }
+}
+
+fn call_tool(server: &mcp::Server, s: &mut Session, name: &str, args: Value) -> (bool, String) {
+    let r = rpc(server, s, "tools/call", json!({"name": name, "arguments": args}));
+    (r["isError"] == true, r["content"][0]["text"].as_str().unwrap_or("").to_string())
+}
+
+#[test]
+fn mcp_initializes_and_lists_tools() {
+    let (server, mut s) = (mcp::Server::default(), sample());
+    let r = rpc(&server, &mut s, "initialize", json!({"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "t"}}));
+    assert_eq!(r["protocolVersion"], "2025-03-26");
+    assert_eq!(r["serverInfo"]["name"], "rustgis");
+    assert!(r["capabilities"]["tools"].is_object());
+    // A version we don't know gets our newest.
+    let r = rpc(&server, &mut s, "initialize", json!({"protocolVersion": "1999-01-01"}));
+    assert_eq!(r["protocolVersion"], mcp::VERSIONS[0]);
+    // Notifications get no reply.
+    assert!(server.handle(&mut s, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+    assert_eq!(rpc(&server, &mut s, "ping", Value::Null), json!({}));
+
+    let tools = rpc(&server, &mut s, "tools/list", json!({}));
+    let names: Vec<&str> = tools["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    for want in [
+        "list_layers",
+        "search_commands",
+        "run_command",
+        "search_tools",
+        "describe_tool",
+        "run_tool",
+        "read_features",
+        "view_map",
+        "search_docs",
+        "read_doc",
+    ] {
+        assert!(names.contains(&want), "{want} missing from {names:?}");
+    }
+    for t in tools["tools"].as_array().unwrap() {
+        assert_eq!(t["inputSchema"]["type"], "object", "{}", t["name"]);
+        assert!(t["description"].as_str().is_some_and(|d| !d.is_empty()));
+    }
+}
+
+#[test]
+fn mcp_protocol_errors() {
+    let (server, mut s) = (mcp::Server::default(), sample());
+    let r: Value = serde_json::from_str(&server.handle(&mut s, "{not json").unwrap()).unwrap();
+    assert_eq!(r["error"]["code"], -32700);
+    assert_eq!(rpc(&server, &mut s, "nope/nothing", json!({}))["error"]["code"], -32601);
+    assert_eq!(rpc(&server, &mut s, "tools/call", json!({"name": "no_such_tool"}))["error"]["code"], -32602);
+    assert_eq!(rpc(&server, &mut s, "tools/call", json!({"name": "list_layers", "arguments": [1]}))["error"]["code"], -32602);
+    assert_eq!(rpc(&server, &mut s, "resources/read", json!({"uri": "rustgis://docs/nope.md"}))["error"]["code"], -32002);
+    // A response to us (we send no requests) gets no reply.
+    assert!(server.handle(&mut s, r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).is_none());
+}
+
+#[test]
+fn mcp_runs_commands_and_shows_the_map() {
+    let (server, mut s) = (mcp::Server::default(), sample());
+    let (err, text) = call_tool(&server, &mut s, "list_layers", json!({}));
+    assert!(!err && text.contains("Countries"), "{text}");
+    let (err, text) = call_tool(&server, &mut s, "run_command", json!({"command": "map.basemap", "params": {"name": "ocean"}}));
+    assert!(!err, "{text}");
+    let (err, text) = call_tool(&server, &mut s, "read_features", json!({"layer": "Cities", "limit": 2}));
+    assert!(!err && text.contains("\"rows\""), "{text}");
+
+    let r = rpc(&server, &mut s, "tools/call", json!({"name": "view_map", "arguments": {"width": 320, "height": 200}}));
+    assert_eq!(r["isError"], false);
+    assert_eq!(r["content"][0]["type"], "image");
+    assert_eq!(r["content"][0]["mimeType"], "image/png");
+    use base64::Engine;
+    let png = base64::engine::general_purpose::STANDARD.decode(r["content"][0]["data"].as_str().unwrap()).unwrap();
+    assert!(png.starts_with(b"\x89PNG"));
+    // Junk sizes are clamped, not refused.
+    let r = rpc(&server, &mut s, "tools/call", json!({"name": "view_map", "arguments": {"width": -5, "height": 1e300}}));
+    assert_eq!(r["isError"], false);
+}
+
+#[test]
+fn mcp_limits_what_the_agent_may_do() {
+    let path = std::env::temp_dir().join(format!("rustgis-mcp-{}.png", std::process::id()));
+    let export = json!({"command": "share.exportMap", "params": {"path": path.to_string_lossy()}});
+
+    let (server, mut s) = (mcp::Server::new(false), sample());
+    let (err, text) = call_tool(&server, &mut s, "run_command", export.clone());
+    assert!(err && text.contains("--yes"), "{text}");
+    assert!(!path.exists());
+    // The user's own automation never runs, even when allowed.
+    let allowed = mcp::Server::new(true);
+    for server in [&server, &allowed] {
+        let (err, text) = call_tool(server, &mut s, "run_command", json!({"command": "script.run", "params": {"code": "x"}}));
+        assert!(err && text.contains("reserved"), "{text}");
+        let (err, _) = call_tool(server, &mut s, "run_command", json!({"command": "plugin.uninstall", "params": {"id": "x"}}));
+        assert!(err);
+    }
+    // The project is the agent's own: replacing it and undoing are allowed.
+    let (err, text) = call_tool(&server, &mut s, "run_command", json!({"command": "project.new"}));
+    assert!(!err, "{text}");
+    let (err, text) = call_tool(&server, &mut s, "run_command", json!({"command": "project.sample"}));
+    assert!(!err, "{text}");
+
+    let (err, text) = call_tool(&allowed, &mut s, "run_command", export);
+    assert!(!err, "{text}");
+    assert!(path.exists());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn mcp_serves_the_docs() {
+    let (server, mut s) = (mcp::Server::default(), sample());
+    let (err, text) = call_tool(&server, &mut s, "search_docs", json!({"query": "graduated colours"}));
+    assert!(!err, "{text}");
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert!(v["results"].as_array().unwrap().iter().any(|r| r["page"] == "user-guide/cartography.md"), "{text}");
+    assert!(v["results"][0]["url"].as_str().unwrap().starts_with(docs::SITE));
+    let (err, _) = call_tool(&server, &mut s, "search_docs", json!({"query": "?"}));
+    assert!(err);
+
+    let (err, text) = call_tool(&server, &mut s, "read_doc", json!({"page": "cli"}));
+    assert!(!err && text.contains("Command Line"), "{text}");
+    let (err, text) = call_tool(&server, &mut s, "read_doc", json!({"page": "cli.md", "section": "chaining commands"}));
+    assert!(!err && text.contains("--cmd") && text.contains("#chaining-commands"), "{text}");
+    let (err, text) = call_tool(&server, &mut s, "read_doc", json!({"page": "cli.md", "section": "no such section"}));
+    assert!(err && text.contains("Chaining commands"), "{text}");
+    let (err, _) = call_tool(&server, &mut s, "read_doc", json!({"page": "../../etc/passwd"}));
+    assert!(err);
+
+    let list = rpc(&server, &mut s, "resources/list", json!({}));
+    assert_eq!(list["resources"].as_array().unwrap().len(), docs::PAGES.len());
+    let r = rpc(&server, &mut s, "resources/read", json!({"uri": "rustgis://docs/user-guide/maps.md"}));
+    assert!(r["contents"][0]["text"].as_str().unwrap().starts_with("# "));
+}
+
+#[test]
+fn docs_pages_and_addresses() {
+    // Every page in docs/ is built in (add new pages to `docs::PAGES`).
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
+    let mut found = Vec::new();
+    let mut dirs = vec![root.clone()];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else if p.extension().is_some_and(|x| x == "md") {
+                found.push(p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    for f in &found {
+        assert!(docs::page(f).is_some(), "docs/{f} is missing from docs::PAGES");
+    }
+    assert_eq!(found.len(), docs::PAGES.len());
+
+    assert_eq!(docs::page("index.md").unwrap().url(), "https://rustgis.app/");
+    assert_eq!(docs::page("user-guide").unwrap().url(), "https://rustgis.app/user-guide/");
+    assert_eq!(docs::page("https://rustgis.app/user-guide/maps/").unwrap().path, "user-guide/maps.md");
+    assert_eq!(docs::slug("Chaining commands"), "chaining-commands");
+    assert_eq!(docs::slug("What the agent may do"), "what-the-agent-may-do");
+    // Headings in code blocks aren't sections.
+    let secs = docs::sections("# T\nintro\n```sh\n# a comment\n```\n## Next\nbody\n");
+    assert_eq!(secs.iter().map(|s| s.0).collect::<Vec<_>>(), ["T", "Next"]);
+}
+
+#[test]
+fn mcp_hostile_messages_never_panic() {
+    let junk = [
+        Value::Null,
+        json!(1),
+        json!("x"),
+        json!([]),
+        json!({}),
+        json!({"name": 5}),
+        json!({"name": "run_command", "arguments": {"command": 5, "params": "{"}}),
+        json!({"name": "run_tool", "arguments": {"tool": "buffer", "params": {"input": [], "distance": "far"}}}),
+        json!({"name": "read_features", "arguments": {"layer": {}, "limit": -1, "order_by": 3, "fields": [1]}}),
+        json!({"name": "view_map", "arguments": {"width": "big"}}),
+        json!({"name": "search_docs", "arguments": {"query": "é".repeat(5000), "limit": 1e30}}),
+        json!({"name": "read_doc", "arguments": {"page": "", "section": "#"}}),
+        json!({"uri": 3}),
+        json!({"protocolVersion": []}),
+    ];
+    let methods = [
+        "initialize",
+        "ping",
+        "tools/list",
+        "tools/call",
+        "resources/list",
+        "resources/read",
+        "resources/templates/list",
+        "prompts/list",
+        "x",
+    ];
+    for allow in [false, true] {
+        let (server, mut s) = (mcp::Server::new(allow), sample());
+        for m in methods {
+            for p in &junk {
+                let msg = json!({"jsonrpc": "2.0", "id": "a", "method": m, "params": p}).to_string();
+                assert!(server.handle(&mut s, &msg).is_some(), "{m} {p}");
+            }
+        }
+        for raw in ["", "[]", "[{}]", "null", "\"x\"", r#"{"id":{},"method":"ping"}"#, r#"{"id":1,"method":7}"#, "\u{0}"] {
+            let _ = server.handle(&mut s, raw);
+        }
+    }
+}
