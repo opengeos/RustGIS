@@ -1288,13 +1288,17 @@ impl RustGisApp {
                 let name = format!("{}.png", self.session.map().name);
                 self.download(&name, png);
             }
+            // Without a format, the Export Features dialog asks for one.
+            "ui.exportLayer" if p.get("format").and_then(Value::as_str).is_none() => {
+                self.dialogs.open("exportLayer", &self.session)?;
+            }
             "ui.exportLayer" if self.services.download.is_some() => {
                 let l = self
                     .session
                     .active_layer
                     .and_then(|id| self.session.map().layer(id))
                     .ok_or("select a layer in the Contents pane first")?;
-                // GeoJSON unless a format is asked for (any but GeoPackage, which needs SQLite).
+                // Any format but GeoPackage, which needs SQLite.
                 let ext = p.get("format").and_then(Value::as_str).unwrap_or("geojson").to_ascii_lowercase();
                 // A streamed layer exports its whole source, not the features read for the view.
                 let whole = if l.is_streamed() { Some(l.load_all()?) } else { None };
@@ -1334,25 +1338,21 @@ impl RustGisApp {
                 }
             }
             "ui.exportLayer" => {
+                let ext = p.get("format").and_then(Value::as_str).unwrap_or("geojson").to_ascii_lowercase();
+                let label = dialogs::EXPORT_FORMATS
+                    .iter()
+                    .find(|(_, e)| *e == ext)
+                    .map(|(l, _)| *l)
+                    .ok_or_else(|| format!("unknown format '{ext}'"))?;
                 let name = self
                     .session
                     .active_layer
                     .and_then(|id| self.session.map().layer(id))
-                    .map(|l| format!("{}.geojson", l.name))
+                    .map(|l| format!("{}.{ext}", l.name))
                     .unwrap_or_default();
-                // Format names aren't translated.
-                let formats: &[(&str, &[&str])] = &[
-                    ("GeoJSON", &["geojson", "json"]),
-                    ("GeoPackage", &["gpkg"]),
-                    ("GeoParquet", &["parquet"]),
-                    ("Shapefile", &["shp"]),
-                    ("FlatGeobuf", &["fgb"]),
-                    ("CSV", &["csv"]),
-                    ("KML", &["kml"]),
-                    ("KMZ", &["kmz"]),
-                    ("GPX", &["gpx"]),
-                ];
-                if let Some(path) = dialogs::pick_save_as(&name, formats) {
+                if let Some(path) = dialogs::pick_save(&name, &[ext.as_str()], label) {
+                    // The format chosen decides, whatever extension was typed.
+                    let path = std::path::Path::new(&path).with_extension(&ext).display().to_string();
                     return self.run("share.exportLayer", json!({"path": path}));
                 }
             }

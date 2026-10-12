@@ -37,9 +37,12 @@ impl Dialogs {
             "graphicText" => "graphicText",
             "camera" => "camera",
             "addTiles" => "addTiles",
+            "exportLayer" => "exportLayer",
             other => return Err(format!("unknown dialog '{other}'")),
         };
-        if matches!(name, "addField" | "calculateField" | "definitionQuery" | "renameLayer") && active.is_none() {
+        if matches!(name, "addField" | "calculateField" | "definitionQuery" | "renameLayer" | "exportLayer")
+            && active.is_none_or(|l| name == "exportLayer" && l.is_raster())
+        {
             return Err("select a layer in the Contents pane first".into());
         }
         if name == "selectByAttributes" && s.map().layers.is_empty() {
@@ -74,6 +77,7 @@ impl Dialogs {
             "calculateField" => self.a = active.and_then(|l| l.dataset.fields.last()).map(|f| f.name.clone()).unwrap_or_default(),
             "definitionQuery" => self.text = active.and_then(|l| l.definition_query.clone()).unwrap_or_default(),
             "renameLayer" => self.text = active.map(|l| l.name.clone()).unwrap_or_default(),
+            "exportLayer" => self.mode = "geojson",
             _ => {}
         }
         Ok(())
@@ -93,6 +97,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "graphicText" => "Add Text",
         "camera" => "Camera",
         "addTiles" => "Add Tile Layer",
+        "exportLayer" => "Export Features",
         _ => "Rename Layer",
     };
     let t = Tokens::get(ctx);
@@ -129,6 +134,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             }
             "coordinateSystem" => close = coordinate_system(app, ui, &t),
             "addTiles" => close = add_tiles(app, ui),
+            "exportLayer" => close = export_layer(app, ui),
             "camera" => {
                 egui::Grid::new("cam").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
                     for (label, v) in [("Longitude", &mut app.dialogs.a), ("Latitude", &mut app.dialogs.b), ("Scale 1:", &mut app.dialogs.c)] {
@@ -235,6 +241,45 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     if !open || close {
         app.dialogs.open = None;
     }
+}
+
+/// The formats Export Features writes: (name, extension). Format names aren't translated.
+pub const EXPORT_FORMATS: &[(&str, &str)] = &[
+    ("GeoJSON", "geojson"),
+    ("GeoPackage", "gpkg"),
+    ("GeoParquet", "parquet"),
+    ("Shapefile", "shp"),
+    ("FlatGeobuf", "fgb"),
+    ("CSV", "csv"),
+    ("KML", "kml"),
+    ("KMZ", "kmz"),
+    ("GPX", "gpx"),
+];
+
+/// Export Features: the active layer, in a format picked here (a file's type isn't changed by
+/// the filter chosen in a save dialog, and the web app has no save dialog).
+fn export_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
+    let web = app.services.download.is_some();
+    egui::Grid::new("export_layer").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+        ui.label(tl!("Layer"));
+        ui.label(&app.dialogs.layer);
+        ui.end_row();
+        ui.label(tl!("Format"));
+        let shown = EXPORT_FORMATS.iter().find(|(_, e)| *e == app.dialogs.mode).map(|(l, _)| *l).unwrap_or("GeoJSON");
+        egui::ComboBox::from_id_salt("export_format").selected_text(shown).width(220.0).show_ui(ui, |ui| {
+            // GeoPackages are written with SQLite, which the web app doesn't have.
+            for (label, ext) in EXPORT_FORMATS.iter().filter(|(_, e)| !(web && *e == "gpkg")) {
+                ui.selectable_value(&mut app.dialogs.mode, *ext, *label);
+            }
+        });
+        ui.end_row();
+    });
+    if app.dialogs.mode == "shp" && web {
+        ui.label(egui::RichText::new(tl!("The Shapefile's files download as one zip.")).small().weak());
+    }
+    buttons(app, ui, if web { "Download" } else { "Export…" }, |app| {
+        app.run("ui.exportLayer", json!({"format": app.dialogs.mode})).map(|_| ())
+    })
 }
 
 /// Add Tile Layer: an XYZ/TMS/WMS template, vector tiles or a MapLibre style by address.
@@ -419,21 +464,6 @@ pub fn pick_open(exts: &[&str], label: &str) -> Option<String> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn pick_save(name: &str, exts: &[&str], label: &str) -> Option<String> {
     rfd::FileDialog::new().set_file_name(name).add_filter(label, exts).save_file().map(|p| p.display().to_string())
-}
-
-/// A save dialog with one filter per format: (label, extensions), the first selected.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn pick_save_as(name: &str, formats: &[(&str, &[&str])]) -> Option<String> {
-    formats
-        .iter()
-        .fold(rfd::FileDialog::new().set_file_name(name), |d, (label, exts)| d.add_filter(*label, exts))
-        .save_file()
-        .map(|p| p.display().to_string())
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn pick_save_as(_: &str, _: &[(&str, &[&str])]) -> Option<String> {
-    None
 }
 
 #[cfg(target_arch = "wasm32")]
