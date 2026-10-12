@@ -13,7 +13,8 @@ by [Google's privacy policy](https://policies.google.com/privacy).
 
 Analytics never see the data you work with: layers, files, projects and coordinates are processed
 in your browser and are not sent to Google. The web app reports its address trimmed to the site and
-path (`https://web.rustgis.app/`), without the query string.
+path (`https://web.rustgis.app/`), without the query string. The documentation reports the full
+page address, which names the page you are reading and, after a search, the words you searched for.
 
 You can block analytics with a content blocker or your browser's tracking protection; the sites
 work normally without them. Analytics run only on the sites we host: the measurement ID is added
