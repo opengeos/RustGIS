@@ -31,12 +31,17 @@ fn meta_rows(db: &Db<Shared>, tables: &[Table], name: &str) -> Result<Vec<Vec<(S
         .find(|t| t.name.eq_ignore_ascii_case(name))
         .ok_or_else(|| DataError::Format(format!("not a GeoPackage: no {name} table")))?;
     let mut out = Vec::new();
+    let mut too_many = false;
     db.rows(t, |_, r| {
         out.push(t.columns.iter().map(|c| c.name.to_ascii_lowercase()).zip(r.iter().cloned()).collect());
         // Metadata tables are small; a huge one is not a GeoPackage's.
-        if out.len() > 100_000 { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
+        too_many = out.len() > 100_000;
+        if too_many { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
     })
     .map_err(err)?;
+    if too_many {
+        return Err(DataError::Format(format!("GeoPackage: the {name} table has more than 100,000 rows")));
+    }
     Ok(out)
 }
 

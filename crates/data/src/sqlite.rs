@@ -324,9 +324,9 @@ fn record(p: &[u8]) -> Result<Vec<Val>, String> {
 /// The columns of a `CREATE TABLE` statement and the index of its `INTEGER PRIMARY KEY` column.
 /// `WITHOUT ROWID` tables (whose rows are stored differently) are an error.
 pub fn parse_create_table(sql: &str) -> Result<(Vec<Column>, Option<usize>), String> {
-    let open = sql.find('(').ok_or("no column list")?;
-    let close = sql.rfind(')').filter(|&c| c > open).ok_or("no column list")?;
+    let (open, close) = column_list(sql).ok_or("no column list")?;
     let tail = sql.get(close + 1..).unwrap_or("").to_ascii_uppercase();
+    let tail = tail.split("--").next().unwrap_or("").to_string();
     if tail.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "ROWID") {
         return Err("a WITHOUT ROWID table".into());
     }
@@ -393,6 +393,53 @@ pub fn parse_create_table(sql: &str) -> Result<(Vec<Column>, Option<usize>), Str
         return Err("no columns".into());
     }
     Ok((columns, rowid_column))
+}
+
+/// The byte offsets of the parentheses around a statement's column list: the first `(` outside
+/// quotes and comments, and the `)` that closes it (a table named `"a(b"` doesn't fool it).
+fn column_list(sql: &str) -> Option<(usize, usize)> {
+    let b = sql.as_bytes();
+    let (mut i, mut depth, mut open) = (0usize, 0usize, None);
+    while let Some(&c) = b.get(i) {
+        match c {
+            b'"' | b'\'' | b'`' | b'[' => {
+                let close = if c == b'[' { b']' } else { c };
+                i += 1;
+                while b.get(i).is_some_and(|&d| d != close) {
+                    i += 1;
+                }
+            }
+            b'-' if b.get(i + 1) == Some(&b'-') => {
+                while b.get(i).is_some_and(|&d| d != b'\n') {
+                    i += 1;
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i < b.len() && !(b.get(i) == Some(&b'*') && b.get(i + 1) == Some(&b'/')) {
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'(' => {
+                if depth == 0 && open.is_none() {
+                    open = Some(i);
+                }
+                depth += 1;
+            }
+            b')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0
+                    && let Some(o) = open
+                {
+                    return Some((o, i));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Splits on commas outside parentheses and quotes.
@@ -517,6 +564,8 @@ mod tests {
         assert_eq!(pk, None, "only INTEGER is the rowid");
         assert!(parse_create_table("CREATE TABLE t (a INTEGER PRIMARY KEY) WITHOUT ROWID").is_err());
         assert!(parse_create_table("CREATE TABLE t").is_err());
+        let (cols, _) = parse_create_table("CREATE TABLE \"a(b\" (x INT, y TEXT) -- note (with parens)").unwrap();
+        assert_eq!(cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["x", "y"]);
     }
 
     #[test]
