@@ -122,11 +122,7 @@ fn poll_opening(app: &mut RustGisApp, ctx: &egui::Context) {
     };
     match r {
         Ok(()) => app.map.invalidate(),
-        Err(e) => {
-            // The release is read again next time (an old one may have been retired).
-            app.ui.catalogs.release = None;
-            app.ui.catalogs.error = Some(e);
-        }
+        Err(e) => app.ui.catalogs.error = Some(e),
     }
 }
 
@@ -139,7 +135,9 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         return;
     };
     let Some((asked, _)) = app.ui.catalogs.waiting.take() else { return };
-    let overture_step = matches!(asked, Asked::Latest { .. } | Asked::Collection { .. } | Asked::Item { .. });
+    // A release that has no such collection any more was retired: the next Add reads the catalog
+    // again. Other failures (the network, a file) keep it.
+    let retired = matches!(asked, Asked::Collection { .. }) && r.as_ref().err().is_some_and(|e| cache::http_status(e) == Some(404));
     let done = match asked {
         Asked::Latest { tiles } => r.and_then(|b| overture::parse_latest(&b)).and_then(|release| {
             app.ui.catalogs.release = Some(release);
@@ -179,13 +177,18 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             }
             app.ui.catalogs.products = p;
         }),
-        Asked::Listing => r.and_then(|b| s3::parse_list(&b)).map(|l| app.ui.catalogs.listing = l),
+        // A next page is added to what is listed already.
+        Asked::Listing => r.and_then(|b| s3::parse_list(&b)).map(|l| {
+            let shown = &mut app.ui.catalogs.listing;
+            shown.prefixes.extend(l.prefixes);
+            shown.objects.extend(l.objects);
+            shown.next = l.next;
+        }),
     };
     match done {
         Ok(()) => app.map.invalidate(),
         Err(e) => {
-            // The release is read again next time (an old one may have been retired).
-            if overture_step {
+            if retired {
                 app.ui.catalogs.release = None;
             }
             app.ui.catalogs.error = Some(e);
@@ -276,20 +279,26 @@ pub fn overture(app: &mut RustGisApp, ui: &mut egui::Ui) {
             }
         };
         if let Err(e) = r {
-            app.ui.catalogs.release = None;
             app.ui.catalogs.error = Some(e);
         }
     }
     status(app, ui);
 }
 
-/// Lists a level of the product browsed.
-fn list(app: &mut RustGisApp) {
+/// Lists a level of the product browsed: from its start, or (`more`) its next page, added to what
+/// is shown.
+fn list(app: &mut RustGisApp, more: bool) {
     let Some((account, product)) = app.ui.catalogs.product.clone() else { return };
-    match sourcecoop::list_url(&account, &product, &app.ui.catalogs.path, None) {
+    let token = if more { app.ui.catalogs.listing.next.clone() } else { None };
+    if more && token.is_none() {
+        return;
+    }
+    match sourcecoop::list_url(&account, &product, &app.ui.catalogs.path, token.as_deref()) {
         Ok(url) => {
             app.ui.catalogs.error = None;
-            app.ui.catalogs.listing = s3::Listing::default();
+            if !more {
+                app.ui.catalogs.listing = s3::Listing::default();
+            }
             app.ui.catalogs.waiting = Some((Asked::Listing, fetch(&url)));
         }
         Err(e) => app.ui.catalogs.error = Some(e),
@@ -335,6 +344,7 @@ pub fn sourcecoop(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let mut into = None;
     let mut up = false;
     let mut add = None;
+    let mut more = false;
     match app.ui.catalogs.product.clone() {
         None => {
             egui::ScrollArea::vertical().max_height(300.0).id_salt("sc_products").show(ui, |ui| {
@@ -361,7 +371,16 @@ pub fn sourcecoop(app: &mut RustGisApp, ui: &mut egui::Ui) {
             egui::ScrollArea::vertical().max_height(300.0).id_salt("sc_files").show(ui, |ui| {
                 for p in &app.ui.catalogs.listing.prefixes {
                     let label = p.strip_prefix(&base).unwrap_or(p).strip_prefix(app.ui.catalogs.path.as_str()).unwrap_or(p);
-                    if ui.selectable_label(false, format!("📁 {label}")).clicked() {
+                    // A folder: the folder icon (drawn) and its name.
+                    let clicked = ui
+                        .horizontal(|ui| {
+                            let t = crate::theme::Tokens::get(ui.ctx());
+                            let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
+                            crate::icons::paint(ui.painter(), r, "open", t.icon, t.accent);
+                            ui.selectable_label(false, label).clicked()
+                        })
+                        .inner;
+                    if clicked {
                         into = Some(p.strip_prefix(&base).unwrap_or(p).to_string());
                     }
                 }
@@ -375,25 +394,37 @@ pub fn sourcecoop(app: &mut RustGisApp, ui: &mut egui::Ui) {
                         ui.label(egui::RichText::new(size_text(o.size)).small().weak());
                     });
                 }
-                if app.ui.catalogs.listing.next.is_some() {
-                    ui.label(egui::RichText::new(tl!("More files than shown: open a folder")).small().weak());
-                }
             });
+            // Past the first page (1000 entries): what is shown, and the next page on request.
+            if app.ui.catalogs.listing.next.is_some() {
+                ui.horizontal(|ui| {
+                    let shown = app.ui.catalogs.listing.prefixes.len() + app.ui.catalogs.listing.objects.len();
+                    ui.label(
+                        egui::RichText::new(crate::i18n::fmt("{n} shown, more in the folder", &[("n", &shown.to_string())])).small().weak(),
+                    );
+                    if ui.add_enabled(!busy, egui::Button::new(tl!("More"))).clicked() {
+                        more = true;
+                    }
+                });
+            }
         }
     }
     if let Some(p) = open_product {
         app.ui.catalogs.product = Some(p);
         app.ui.catalogs.path.clear();
-        list(app);
+        list(app, false);
     }
     if let Some(path) = into {
         app.ui.catalogs.path = path;
-        list(app);
+        list(app, false);
+    }
+    if more {
+        list(app, true);
     }
     if up {
         let p = app.ui.catalogs.path.trim_end_matches('/');
         app.ui.catalogs.path = p.rsplit_once('/').map(|(a, _)| format!("{a}/")).unwrap_or_default();
-        list(app);
+        list(app, false);
     }
     if let Some((account, key)) = add {
         app.ui.catalogs.error = None;

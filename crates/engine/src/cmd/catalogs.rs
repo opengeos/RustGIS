@@ -27,9 +27,12 @@ pub fn area(s: &Session, p: &Value) -> Result<[f64; 4], String> {
     match p.get("bbox") {
         Some(v @ Value::Array(_)) => {
             let n: Option<Vec<f64>> = v.as_array().into_iter().flatten().map(Value::as_f64).collect();
+            let lon = |x: f64| (-180.0..=180.0).contains(&x);
+            let lat = |y: f64| (-90.0..=90.0).contains(&y);
             match n.as_deref().unwrap_or_default() {
-                [w, south, e, n] if w <= e && south <= n => Ok([*w, *south, *e, *n]),
-                _ => Err("bbox is [west, south, east, north], or \"view\"".into()),
+                // West past east crosses the antimeridian: the files either side of it are read.
+                [w, south, e, n] if south <= n && lon(*w) && lon(*e) && lat(*south) && lat(*n) => Ok([*w, *south, *e, *n]),
+                _ => Err("bbox is [west, south, east, north] in degrees (longitudes −180 to 180, south up to north; west past east crosses the antimeridian), or \"view\"".into()),
             }
         }
         Some(Value::String(v)) if v != "view" => Err("bbox is [west, south, east, north], or \"view\"".into()),
@@ -108,15 +111,17 @@ fn overture_add(s: &mut Session, p: &Value) -> CmdResult {
 /// Adds a theme type's files (read in place, the map's view kept), all or none: when one can't be
 /// added, the ones added before it are taken out again, so trying again doesn't add them twice.
 pub(crate) fn add_files(s: &mut Session, ty: &str, urls: &[String]) -> CmdResult {
-    let (n, active) = (urls.len(), s.active_layer);
+    // What a failure puts back: the map as it was (its layers in their order, its layer ids) and
+    // the active layer.
+    let (n, active, before) = (urls.len(), s.active_layer, s.map().clone());
     let mut layers: Vec<u32> = Vec::new();
     for (i, url) in urls.iter().enumerate() {
         match super::layer::add_url(s, &json!({"url": url, "name": overture::layer_name(ty, i, n), "zoom": false})) {
             Ok(r) => layers
                 .extend(r["layers"].as_array().into_iter().flatten().filter_map(Value::as_u64).filter_map(|id| u32::try_from(id).ok())),
             Err(e) => {
-                s.map_mut().layers.retain(|l| !layers.contains(&l.id));
-                s.active_layer = active.filter(|id| s.map().layer(*id).is_some());
+                *s.map_mut() = before;
+                s.active_layer = active;
                 return Err(if n > 1 { format!("{e} (none of the {n} files was added)") } else { e });
             }
         }

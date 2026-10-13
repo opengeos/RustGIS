@@ -4135,3 +4135,30 @@ fn overture_files_are_added_all_or_none() {
     let names: Vec<&str> = s.map().layers.iter().map(|l| l.name.as_str()).collect();
     assert!(names.contains(&"Overture building (1/2)") && names.contains(&"Overture building (2/2)"), "{names:?}");
 }
+
+/// A multi-file add that fails puts the map back exactly: the same layers in the same order, and
+/// the same active layer.
+#[test]
+fn a_failed_multi_file_add_leaves_the_map_as_it_was() {
+    use rustgis_data::{Dataset, Feature, Field, FieldType, Geometry, GeometryType, Value};
+    let mut ds = Dataset::new("b", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
+    for i in 0..20u32 {
+        let c = rustgis_geom::Coord::new(7.0 + 0.01 * f64::from(i), 46.0);
+        ds.features.push(Feature { id: u64::from(i) + 1, geometry: Some(Geometry::Point(c)), attrs: vec![Value::Int(i64::from(i))] });
+    }
+    let (good, _) = serve_ranges(rustgis_data::source::fgb::write(&ds).unwrap());
+    let (bad, _) = serve_ranges(b"not a flatgeobuf at all".to_vec());
+    let mut s = world();
+    // A layer other than the last added is active.
+    let rivers = s.map().layer_by_name("Rivers").unwrap().id;
+    s.active_layer = Some(rivers);
+    let project = serde_json::to_string(&s.project).unwrap();
+    let urls = vec![format!("{good}/part-0.fgb"), format!("{good}/part-1.fgb"), format!("{bad}/part-2.fgb")];
+    assert!(crate::cmd::catalogs::add_files(&mut s, "building", &urls).is_err());
+    assert_eq!(serde_json::to_string(&s.project).unwrap(), project, "the same layers, in the same order");
+    assert_eq!(s.active_layer, Some(rivers));
+    // A box across the antimeridian (west past east) is an area, not an error.
+    let fiji = crate::cmd::catalogs::area(&s, &json!({"bbox": [178.0, -18.0, -178.0, -17.0]})).unwrap();
+    assert_eq!(fiji, [178.0, -18.0, -178.0, -17.0]);
+    assert!(crate::cmd::catalogs::area(&s, &json!({"bbox": [200.0, 0.0, 10.0, 1.0]})).unwrap_err().contains("antimeridian"));
+}
