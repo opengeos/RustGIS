@@ -28,7 +28,7 @@ the maps; while one is open, its groups lead the Publish tab:
 
 ## Reports
 
-**Data › New Report** lists the selected layer's records page after page; the **Report** pane
+**Publish › New Report** lists the selected layer's records page after page; the **Report** pane
 previews it and sets it up.
 
 - **Data**: pick the detail **Fields** (or **Autofill Fields**), **Group** records by up to four
@@ -45,11 +45,11 @@ previews it and sets it up.
   their groups.
 - **Publish › Report**: **Export Report** writes a PDF (or the first page as PNG); **Save As Report
   File** keeps the report, and **Report Template** its design without the data source, to start
-  reports on other layers (**Data › Import Report**).
+  reports on other layers (**Publish › Import Report**).
 
 ## Presentations and notebooks
 
-**Data › New Presentation** starts a presentation with a title page; the **Presentation** pane
+**Publish › New Presentation** starts a presentation with a title page; the **Presentation** pane
 previews, edits and plays it.
 
 - **Page**: a **Map** page shows the map view as it is now, a **Blank** page shows text on a
@@ -60,7 +60,7 @@ previews, edits and plays it.
   keys, `N` for notes, `P` to play; videos play in place), a PDF, or the first page as PNG.
   **Save As Presentation File** keeps it to import into other projects.
 
-**Data › New Notebook** starts a notebook of text and command cells; **Add and Open** opens a
+**Analyze › New Notebook** starts a notebook of text and command cells; **Add and Open** opens a
 RustGIS (`.rgisnb`) or Jupyter (`.ipynb`) notebook. A command cell runs one command per line
 (`id {json}`, as in scripts) and shows each command's result beneath it. Notebooks save in
 either format.

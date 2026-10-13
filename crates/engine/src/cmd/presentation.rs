@@ -19,7 +19,7 @@ pub const EXTENSION: &str = "rgispres";
 const BUDGET: usize = if cfg!(target_arch = "wasm32") { 256 << 20 } else { 1 << 30 };
 
 fn need_presentation(s: &Session) -> Option<&'static str> {
-    if s.project.presentations.is_empty() { Some("add a presentation first (Data › New Presentation)") } else { None }
+    if s.project.presentations.is_empty() { Some("add a presentation first (Publish › New Presentation)") } else { None }
 }
 
 pub fn commands() -> Vec<C> {

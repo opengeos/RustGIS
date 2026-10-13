@@ -1,4 +1,4 @@
-//! Home › Add (Add Graphics Layer) and Insert › Graphics: shapes, text and pictures drawn on the
+//! Home › Add (Add Graphics Layer) and Edit › Graphics: shapes, text and pictures drawn on the
 //! map in graphics layers.
 
 use base64::Engine;

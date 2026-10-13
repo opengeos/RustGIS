@@ -60,7 +60,7 @@ fn message(app: &RustGisApp, ui: &mut Ui, t: &Tokens) {
 pub fn presentation(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     message(app, ui, t);
     if app.session.project.presentations.is_empty() {
-        ui.label(egui::RichText::new(tl!("No presentations yet. Data › New Presentation starts one.")).weak());
+        ui.label(egui::RichText::new(tl!("No presentations yet. Publish › New Presentation starts one.")).weak());
         if ui.button(tl!("New Presentation")).clicked() {
             run(app, "presentation.new", Value::Null);
         }
@@ -282,7 +282,9 @@ fn preview(app: &mut RustGisApp, ui: &mut Ui, i: usize, t: &Tokens) {
 pub fn notebook(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     message(app, ui, t);
     if app.session.project.notebooks.is_empty() {
-        ui.label(egui::RichText::new(tl!("No notebooks yet. Data › New Notebook starts one, or Add and Open Notebook opens one.")).weak());
+        ui.label(
+            egui::RichText::new(tl!("No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.")).weak(),
+        );
         if ui.button(tl!("New Notebook")).clicked() {
             run(app, "notebook.new", Value::Null);
         }

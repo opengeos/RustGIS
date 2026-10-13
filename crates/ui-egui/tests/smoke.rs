@@ -389,3 +389,13 @@ fn start_up_preferences() {
     app.run("ui.startup", json!({"blank": false, "projection": "mercator"})).unwrap();
     assert_eq!(store.lock().unwrap().get("start_projection").map(String::as_str), Some(""));
 }
+
+#[test]
+fn old_and_unknown_tab_names_open_a_current_tab() {
+    let mut h = harness();
+    for (asked, opened) in [("Imagery", "Analyze"), ("Feature Layer", "Style"), ("Share", "Publish"), ("Map", "Home"), ("nope", "Home")] {
+        let _ = h.state_mut().run("ui.tab", json!({"tab": asked}));
+        assert_eq!(h.state().ui.tab, opened, "{asked}");
+        h.step();
+    }
+}

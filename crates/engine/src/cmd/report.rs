@@ -1,4 +1,4 @@
-//! Data › Project (New Report), Data › Report Section and Data, and Share › Save As (Report
+//! Data › Project (New Report), Publish › Report and Data, and Publish › Save As (Report
 //! File, Report Template) and Output (Export Report): reports on a layer's records.
 
 use std::collections::{BTreeMap, HashMap};
@@ -29,7 +29,7 @@ const MAX_RELATED: usize = 200;
 const PDF_BUDGET: usize = if cfg!(target_arch = "wasm32") { 256 << 20 } else { 1 << 30 };
 
 fn need_report(s: &Session) -> Option<&'static str> {
-    if s.project.reports.is_empty() { Some("add a report first (Data › New Report)") } else { None }
+    if s.project.reports.is_empty() { Some("add a report first (Publish › New Report)") } else { None }
 }
 
 pub fn commands() -> Vec<C> {

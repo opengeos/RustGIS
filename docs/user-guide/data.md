@@ -155,13 +155,13 @@ RustGIS saves pieces of a project as files you can share and reuse:
 | --- | --- | --- | --- |
 | Map file (a map with its data) | `.rgismap` | Publish › Save As › Map File | Data › Import |
 | Layer file (a layer with its symbology) | `.rgislyr` | Publish › Save As › Layer File | Add Data |
-| Styles (saved symbology) | `.rgisstyle` | Style › Styles › New Style, then Share › Save As › Style Items | Style › Styles › Add Style File |
-| Project template (the setup without features) | `.rgistemplate` | Data › Templates, or Share › Save As | Data › Templates › Open Custom Template |
+| Styles (saved symbology) | `.rgisstyle` | Style › Styles › New Style, then Publish › Save As › Style Items | Style › Styles › Add Style File |
+| Project template (the setup without features) | `.rgistemplate` | Data › Templates, or Publish › Save As | Data › Templates › Open Custom Template |
 | Project package (everything, rasters included) | `.rgispkg` | Publish › Package › Project | Project › Open |
 | Map package / mobile map package | `.rgismpk` | Publish › Package › Map or Mobile Map | Data › Import |
 | Results package (geoprocessing history and outputs) | `.rgisgpk` | Publish › Package › Results | any zip tool |
 | Task (guided command steps) | `.rgistask` | Data › Task, Publish › Save As › Task Item | Data › Task › Import Task |
-| Layout | `.rgislayout` | Publish › Save Layout File | Data › New Layout › Import Layout |
+| Layout | `.rgislayout` | Publish › Save Layout File | Data › New Publish › Import Layout |
 
 Packages are zip files. A mobile map package keeps only the visible layers and simplifies their
 geometry, for phones and tablets. Styles can also be imported from the layers of a layer file,

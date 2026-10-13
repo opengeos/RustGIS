@@ -438,7 +438,7 @@ fn package_map(s: &Session, mobile: bool, tol: f64) -> Result<Vec<u8>, String> {
     }
     let text = serde_json::to_string(&m).map_err(|e| e.to_string())?;
     let kind = if mobile { "mobile map package" } else { "map package" };
-    let readme = format!("{} — a RustGIS {kind}.\nAdd it to a project with Insert › Import.\n", m.name);
+    let readme = format!("{} — a RustGIS {kind}.\nAdd it to a project with Data › Import.\n", m.name);
     rustgis_data::zip::write(&[(format!("{}.rgismap", safe(&m.name)), text.into_bytes()), ("README.txt".into(), readme.into_bytes())])
 }
 

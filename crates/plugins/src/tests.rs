@@ -265,6 +265,8 @@ fn plugin_tabs_are_checked() {
     for (bad, why) in [
         (json!({"label": "Map", "groups": [{"label": "G", "items": ["h"]}]}), "RustGIS's tabs"),
         (json!({"label": "help", "groups": [{"label": "G", "items": ["h"]}]}), "RustGIS's tabs"),
+        (json!({"label": "Style", "groups": [{"label": "G", "items": ["h"]}]}), "RustGIS's tabs"),
+        (json!({"label": "publish", "groups": [{"label": "G", "items": ["h"]}]}), "RustGIS's tabs"),
         (json!({"label": "", "groups": [{"label": "G", "items": ["h"]}]}), "label"),
         (json!({"label": "T", "groups": []}), "groups"),
         (json!({"label": "T", "groups": [{"label": "G", "items": []}]}), "items"),

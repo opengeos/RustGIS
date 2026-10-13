@@ -61,7 +61,7 @@ impl Notebook {
 }
 
 fn need_notebook(s: &Session) -> Option<&'static str> {
-    if s.project.notebooks.is_empty() { Some("add a notebook first (Data › New Notebook)") } else { None }
+    if s.project.notebooks.is_empty() { Some("add a notebook first (Analyze › New Notebook)") } else { None }
 }
 
 pub fn commands() -> Vec<C> {

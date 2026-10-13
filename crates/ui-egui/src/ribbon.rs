@@ -14,16 +14,36 @@ use crate::{RightPane, RustGisApp, icons};
 
 pub const TABS: [&str; 10] = ["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"];
 
-/// The tab that holds what an older tab name (in saved pane sets, tasks and scripts) held.
+/// The tab that holds what an older tab name (in saved pane sets, tasks and scripts) held; Home for
+/// a name that is no tab. Plugins' tabs pass through.
 pub fn current_tab(name: &str) -> &str {
-    match name {
+    let tab = match name {
         "Map" => "Home",
         "Insert" | "Raster Data" => "Data",
         "Feature Layer" | "Labeling" | "Raster Layer" => "Style",
         "Analysis" | "Imagery" => "Analyze",
         "Share" | "Layout" => "Publish",
         _ => name,
+    };
+    if TABS.contains(&tab) || tab.starts_with("plugin:") { tab } else { "Home" }
+}
+
+/// Saved hidden tabs under the current names: renamed tabs carry over, and names of tabs whose
+/// groups were spread over several others are dropped (they could no longer be shown again).
+pub fn current_hidden_tabs(saved: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in saved {
+        let tab = match name.as_str() {
+            "Map" => "Home",
+            "Analysis" => "Analyze",
+            "Share" => "Publish",
+            n => n,
+        };
+        if (TABS.contains(&tab) || tab.starts_with("plugin:")) && !out.iter().any(|t| t == tab) {
+            out.push(tab.to_string());
+        }
     }
+    out
 }
 
 /// The tab id of a plugin's own tab.
