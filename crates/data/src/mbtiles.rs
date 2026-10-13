@@ -377,17 +377,20 @@ mod file {
     pub fn tile_path(path: &Path, z: u8, x: u32, y: u32) -> Result<Option<Vec<u8>>, String> {
         let Some(row) = flip(z, y) else { return Ok(None) };
         with(path, |c| {
-            let t: Option<Vec<u8>> = c
+            // The size first, so a huge blob is never read into memory.
+            let t: Option<(i64, Option<Vec<u8>>)> = c
                 .query_row(
-                    "SELECT tile_data FROM tiles WHERE zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3",
-                    params![z, x, row],
-                    |r| r.get(0),
+                    "SELECT length(tile_data), CASE WHEN length(tile_data) <= ?4 THEN tile_data END FROM tiles
+                     WHERE zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3",
+                    params![z, x, row, MAX_TILE_BYTES as i64],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()
                 .map_err(|e| format!("{}: {e}", path.display()))?;
             match t {
-                Some(t) if t.len() > MAX_TILE_BYTES => Err(format!("a tile of {} bytes is too large", t.len())),
-                t => Ok(t),
+                Some((len, _)) if len > MAX_TILE_BYTES as i64 => Err(format!("a tile of {len} bytes is too large")),
+                Some((_, t)) => Ok(t),
+                None => Ok(None),
             }
         })
     }
