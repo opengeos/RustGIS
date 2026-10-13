@@ -43,6 +43,7 @@ impl Dialogs {
             "addUrl" => "addUrl",
             "addService" => "addService",
             "addDatabase" => "addDatabase",
+            "stac" => "stac",
             "exportLayer" => "exportLayer",
             other => return Err(format!("unknown dialog '{other}'")),
         };
@@ -108,6 +109,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "addUrl" => "Add Data From URL",
         "addService" => "Add From Service",
         "addDatabase" => "Add From Database",
+        "stac" => "STAC Search",
         "exportLayer" => "Export Features",
         _ => "Rename Layer",
     };
@@ -117,7 +119,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     egui::Window::new(tl!(title)).id(egui::Id::new("dialog")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
         ui.set_width(match which {
             "coordinateSystem" => 660.0,
-            "addTiles" | "addUrl" | "addService" => 560.0,
+            "addTiles" | "addUrl" | "addService" | "stac" => 560.0,
             _ => 440.0,
         });
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
@@ -149,6 +151,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             "addUrl" => close = add_url(app, ui),
             "addService" => close = add_service(app, ui),
             "addDatabase" => close = add_database(app, ui),
+            "stac" => crate::stacui::dialog(app, ui),
             "exportLayer" => close = export_layer(app, ui),
             "camera" => {
                 egui::Grid::new("cam").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {

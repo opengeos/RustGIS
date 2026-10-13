@@ -392,6 +392,7 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
             // Databases are read through DuckDB, a program the browser can't run.
             #[cfg(not(target_arch = "wasm32"))]
             menu_item(ui, app, "", "Database…", "ui.dialog", json!({"name": "addDatabase"}));
+            menu_item(ui, app, "", "STAC Search…", "ui.dialog", json!({"name": "stac"}));
             menu_item(ui, app, "graphics_layer", "Graphics Layer", "graphics.newLayer", Value::Null);
             ui.separator();
             ui.label(egui::RichText::new(tl!("Sample data (Natural Earth)")).small().weak());

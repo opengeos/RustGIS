@@ -22,6 +22,7 @@ mod panes;
 mod pluginsui;
 mod reportpane;
 mod ribbon;
+mod stacui;
 mod table;
 pub mod theme;
 mod update;
@@ -235,6 +236,8 @@ pub struct UiState {
     pub link_zoomed: bool,
     /// The service Add From Service is connected (or connecting) to.
     pub service: Option<ServiceConn>,
+    /// STAC Search: its choices, results and the request under way.
+    pub stac: stacui::State,
     /// A layout picture waiting for its image file (web).
     pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
@@ -280,6 +283,7 @@ impl Default for UiState {
             downloads: Vec::new(),
             link_zoomed: false,
             service: None,
+            stac: Default::default(),
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
             pane_sets: Vec::new(),
@@ -1654,6 +1658,7 @@ impl RustGisApp {
         panes::poll_geolibre(self, ctx);
         self.poll_downloads();
         self.poll_service();
+        stacui::poll(self, ctx);
         pluginsui::poll(self, ctx);
         assistantpane::poll(self, ctx);
         self.ensure_script_font();
