@@ -501,23 +501,31 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize) -> Result<Raster> {
                 best = Some((index, ow, oh));
             }
         }
+        // Every k-th pixel of the full image, the fewest left out that fit.
+        let mut k = 2u32;
+        while !fits(full_w.div_ceil(k), full_h.div_ceil(k), spp, 4) {
+            k = k.saturating_mul(2);
+            if k > 1 << 20 {
+                break;
+            }
+        }
+        let (dw, dh) = (full_w.div_ceil(k), full_h.div_ceil(k));
+        let decimated = (k <= 1 << 20).then_some(u64::from(dw) * u64::from(dh));
         match best {
-            Some((index, ow, oh)) => {
+            // An overview at least as detailed as the full image read sparsely: only it is read.
+            Some((index, ow, oh)) if decimated.is_none_or(|d| u64::from(ow) * u64::from(oh) >= d) => {
                 dec.seek_to_image(index).map_err(err)?;
                 (w, h) = (ow, oh);
             }
-            // No overview: one is made as the full image is read.
-            None => {
-                dec.seek_to_image(0).map_err(err)?;
-                let mut k = 2u32;
-                while !fits(full_w.div_ceil(k), full_h.div_ceil(k), spp, 4) {
-                    k = k.saturating_mul(2);
-                    if k > 1 << 20 {
-                        return Err(err(format!("{full_w} × {full_h} pixels is too large to open")));
-                    }
+            // No overview, or only coarse ones (a 5000-pixel orthophoto with one of 157 pixels,
+            // issue #162): one is made as the full image is read.
+            _ => {
+                if decimated.is_none() {
+                    return Err(err(format!("{full_w} × {full_h} pixels is too large to open")));
                 }
+                dec.seek_to_image(0).map_err(err)?;
                 decimate_by = k;
-                (w, h) = (full_w.div_ceil(k), full_h.div_ceil(k));
+                (w, h) = (dw, dh);
             }
         }
         overview = Some((full_w, full_h));
@@ -1020,6 +1028,12 @@ mod tests {
         assert_eq!((r.width, r.height, r.overview), (20, 20, Some((40, 40))));
         check(&r, 2);
         assert_eq!(r.crs.epsg(), 25832);
+        // With only a coarse overview (the orthophoto's is 157 pixels), every 2nd pixel of the
+        // full image is read instead: four times the detail of the overview.
+        let coarse = rgbi_tiled(&[(40, 16), (10, 16)], pixel);
+        let r = read_limited(reader(std::io::Cursor::new(&coarse)).unwrap(), "rgbi", 2_000).unwrap();
+        assert_eq!((r.width, r.height, r.overview), (20, 20, Some((40, 40))));
+        check(&r, 2);
     }
 
     #[test]
