@@ -12,7 +12,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Home › Add", add_data)
-            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL, DuckDB or DXF layer", "stream"?: bool, "crs"?: "EPSG:… (or WKT) for a CSV's coordinates, or a GDAL or DuckDB file that doesn't say", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
+            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL, DuckDB or DXF layer", "paperSpace"?: "bool: a DXF's layout entities too", "stream"?: bool, "crs"?: "EPSG:… (or WKT) for a CSV's coordinates, or a GDAL or DuckDB file that doesn't say", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
         C::new("info.fileLayers", "List Layers in File", "Home › Add › Add Data", file_layers)
             .view()
             .params(r#"{"path": string}"#),
@@ -390,6 +390,7 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
             let opts = rustgis_data::dxf::Options {
                 crs: crs.map(rustgis_data::raster::Crs::parse).transpose()?,
                 layer: ps(p, "layer").map(str::trim).filter(|l| !l.is_empty()),
+                paper_space: b(p, "paperSpace").unwrap_or(false),
             };
             rustgis_data::dxf::read(file_name, bytes, &opts)
                 .map_err(|e| e.to_string())?

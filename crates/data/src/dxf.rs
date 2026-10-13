@@ -46,11 +46,13 @@ const MAX_COUNT: usize = 1_000_000;
 /// Segments of a full circle.
 const CIRCLE: f64 = 72.0;
 
-/// What to read: the coordinate system of a drawing (which never says), and one DXF layer only.
+/// What to read: the coordinate system of a drawing (which never says), one DXF layer only, and
+/// whether the layouts' entities (paper space) are drawn with the model's.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Options<'a> {
     pub crs: Option<Crs>,
     pub layer: Option<&'a str>,
+    pub paper_space: bool,
 }
 
 pub fn is_dxf_name(name: &str) -> bool {
@@ -256,6 +258,8 @@ struct Ent {
     text: Option<String>,
     height: Option<f64>,
     rotation: Option<f64>,
+    /// In paper space (a layout), not the model (group 67).
+    paper: bool,
     shape: Shape,
 }
 
@@ -586,7 +590,10 @@ fn entity(kind: &'static str, g: &G, vertices: &[Record]) -> Option<Shape> {
         }
         "TEXT" | "ATTRIB" | "ATTDEF" => {
             // The second alignment point when the text is justified, else the first.
-            let justified = g.i(72).unwrap_or(0) != 0 || g.i(73).or(g.i(74)).unwrap_or(0) != 0;
+            // Vertical alignment is 73 for TEXT, 74 for ATTRIB and ATTDEF (their 73 is a field
+            // length).
+            let vertical = if kind == "TEXT" { g.i(73) } else { g.i(74) };
+            let justified = g.i(72).unwrap_or(0) != 0 || vertical.unwrap_or(0) != 0;
             let p = if justified { g.pt(11).or_else(|| g.pt(10))? } else { g.pt(10)? };
             Shape::Point(ocs.apply(p))
         }
@@ -950,7 +957,7 @@ fn drawing(records: &[Record]) -> Drawing {
                         if let Some((name, base, ents)) = block.take()
                             && !name.is_empty()
                         {
-                            d.blocks.insert(name, (base, ents));
+                            d.blocks.insert(name.to_ascii_lowercase(), (base, ents));
                         }
                         continue;
                     }
@@ -995,6 +1002,7 @@ fn drawing(records: &[Record]) -> Drawing {
                     color: g.i(62).unwrap_or(256),
                     linetype: g.s(6).map(|s| s.trim().to_string()),
                     text,
+                    paper: g.i(67) == Some(1),
                     height: if matches!(kind, "TEXT" | "MTEXT" | "ATTRIB" | "ATTDEF") { g.f(40) } else { None },
                     rotation: if matches!(kind, "TEXT" | "MTEXT" | "ATTRIB" | "ATTDEF") { g.f(50) } else { None },
                     shape,
@@ -1013,11 +1021,12 @@ fn drawing(records: &[Record]) -> Drawing {
 
 /// What an inserted entity takes from the INSERT placing it.
 #[derive(Clone, Copy)]
-struct From<'a> {
+struct Inherit<'a> {
     layer: Option<&'a str>,
     color: Option<i64>,
     linetype: Option<&'a str>,
     block: Option<&'a str>,
+    paper: bool,
 }
 
 /// The features drawn, with their attributes (in the order of [`fields`]).
@@ -1033,6 +1042,8 @@ struct Out {
     overworked: bool,
     /// Whether arrays were cut short ([`MAX_ARRAY`], [`MAX_PATH_COPIES`]).
     trimmed: bool,
+    /// Paper-space entities left out.
+    paper: usize,
     /// The copies the arrays above make together on the current nesting path.
     copies: usize,
 }
@@ -1048,6 +1059,7 @@ fn fields() -> Vec<Field> {
         Field::new("rotation", FieldType::Double),
         Field::new("block", FieldType::Text),
         Field::new("elevation", FieldType::Double),
+        Field::new("paperspace", FieldType::Boolean),
     ]
 }
 
@@ -1060,7 +1072,7 @@ fn finite(ps: &[P3]) -> bool {
 }
 
 /// Draws entities through `xf` (a block's placement), into `out`.
-fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: From, depth: usize, stack: &mut Vec<String>, opts: &Options, out: &mut Out) {
+fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: &mut Vec<String>, opts: &Options, out: &mut Out) {
     for e in ents {
         if out.count >= MAX_FEATURES {
             out.capped = true;
@@ -1073,28 +1085,37 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: From, depth: usize, stack: &mu
             out.overworked = true;
             return;
         }
+        // A layout's entities (paper space) aren't the model's: drawn only when asked for.
+        if depth == 0 && e.paper && !opts.paper_space {
+            out.paper += 1;
+            continue;
+        }
         // An entity on layer 0 in a block takes the INSERT's layer; BYBLOCK its colour and linetype.
         let layer = match from.layer {
             Some(l) if e.layer == "0" => l,
             _ => e.layer.as_str(),
         };
+        // The layer's table entry, looked up once.
+        let table = d.layers.get(&layer.to_ascii_lowercase());
         let lt = e.linetype.as_deref();
-        let linetype = match lt.map(str::to_ascii_uppercase).as_deref() {
-            Some("BYBLOCK") => from.linetype.map(str::to_string),
-            None | Some("BYLAYER") => d.layers.get(&layer.to_ascii_lowercase()).map(|(_, l)| l.clone()).filter(|l| !l.is_empty()),
-            _ => lt.map(str::to_string),
+        let linetype = match lt {
+            Some(l) if l.eq_ignore_ascii_case("BYBLOCK") => from.linetype.map(str::to_string),
+            Some(l) if !l.eq_ignore_ascii_case("BYLAYER") => Some(l.to_string()),
+            _ => table.map(|(_, l)| l.clone()).filter(|l| !l.is_empty()),
         };
         let color = match e.color {
             0 => from.color.unwrap_or(7),
-            256 => d.layers.get(&layer.to_ascii_lowercase()).map(|(c, _)| *c).unwrap_or(7),
+            256 => table.map(|(c, _)| *c).unwrap_or(7),
             c => c.abs(),
         };
         if let Shape::Insert(ins) = &e.shape {
-            if depth >= MAX_DEPTH || stack.contains(&ins.block) {
+            // Block names are case-insensitive, in the cycle check too.
+            let key = ins.block.to_ascii_lowercase();
+            if depth >= MAX_DEPTH || stack.contains(&key) {
                 out.cut += 1;
                 continue;
             }
-            let Some((base, inner)) = d.blocks.get(&ins.block) else {
+            let Some((base, inner)) = d.blocks.get(&key) else {
                 // A dimension without its block: the lines and text it describes.
                 if !ins.fallback.is_empty() {
                     let drawn: Vec<Ent> = ins
@@ -1108,6 +1129,7 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: From, depth: usize, stack: &mu
                             text: matches!(s, Shape::Point(_)).then(|| ins.fallback_text.clone()).flatten(),
                             height: None,
                             rotation: None,
+                            paper: e.paper,
                             shape: s.clone(),
                         })
                         .collect();
@@ -1127,7 +1149,7 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: From, depth: usize, stack: &mu
             }
             let outer = out.copies;
             out.copies = outer.max(1).saturating_mul(cols * rows);
-            stack.push(ins.block.clone());
+            stack.push(key);
             for r in 0..rows {
                 for c in 0..cols {
                     let local = Xf::ocs(ins.extrusion)
@@ -1136,11 +1158,12 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: From, depth: usize, stack: &mu
                         .then(&Xf::translate([c as f64 * ins.col_space, r as f64 * ins.row_space, 0.0]))
                         .then(&Xf::scale(ins.scale))
                         .then(&Xf::translate([-base[0], -base[1], -base[2]]));
-                    let inner_from = From {
+                    let inner_from = Inherit {
                         layer: Some(layer),
                         color: Some(color),
                         linetype: linetype.as_deref().or(from.linetype),
                         block: Some(ins.block.as_str()),
+                        paper: from.paper || e.paper,
                     };
                     emit(d, inner, &xf.then(&local), inner_from, depth + 1, stack, opts, out);
                     if out.capped || out.overworked {
@@ -1204,6 +1227,7 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: From, depth: usize, stack: &mu
             e.rotation.map(Value::Float).unwrap_or_default(),
             from.block.map(|b| Value::Text(b.to_string())).unwrap_or_default(),
             first.map(|p| p[2]).filter(|z| z.is_finite()).map(Value::Float).unwrap_or_default(),
+            Value::Bool(e.paper || from.paper),
         ];
         let ds = match target {
             0 => &mut out.points,
@@ -1237,9 +1261,10 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
         steps: 0,
         overworked: false,
         trimmed: false,
+        paper: 0,
         copies: 1,
     };
-    let none = From { layer: None, color: None, linetype: None, block: None };
+    let none = Inherit { layer: None, color: None, linetype: None, block: None, paper: false };
     emit(&d, &d.entities, &Xf::ID, none, 0, &mut Vec::new(), opts, &mut out);
 
     let mut report = ReadReport::default();
@@ -1250,6 +1275,12 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
     }
     if out.capped {
         report.messages.push(format!("the drawing makes more than {MAX_FEATURES} features: the rest are left out"));
+    }
+    if out.paper > 0 {
+        report.messages.push(format!(
+            "{} entities of the drawing's layouts (paper space) were left out; add the drawing with \"paperSpace\" to draw them",
+            out.paper
+        ));
     }
     if out.trimmed {
         report
@@ -1563,14 +1594,14 @@ mod tests {
     #[test]
     fn layers_filter_and_crs() {
         assert_eq!(layers("a.dxf", &sample()).unwrap(), ["Fill", "Labels", "Roads", "Trees"]);
-        let only = read("a.dxf", &sample(), &Options { crs: None, layer: Some("roads") }).unwrap();
+        let only = read("a.dxf", &sample(), &Options { crs: None, layer: Some("roads"), paper_space: false }).unwrap();
         assert_eq!(only.len(), 1);
         assert_eq!(only[0].0.features.len(), 2);
-        assert!(read("a.dxf", &sample(), &Options { crs: None, layer: Some("nope") }).is_err());
+        assert!(read("a.dxf", &sample(), &Options { crs: None, layer: Some("nope"), paper_space: false }).is_err());
         // Converted from a projected system: UTM 33N near its central meridian.
         let crs = Crs::parse("EPSG:32633").unwrap();
         let utm = dxf(&[(0, "SECTION"), (2, "ENTITIES"), (0, "POINT"), (10, "500000"), (20, "4649776"), (0, "ENDSEC"), (0, "EOF")]);
-        let l = read("u.dxf", &utm, &Options { crs: Some(crs), layer: None }).unwrap();
+        let l = read("u.dxf", &utm, &Options { crs: Some(crs), layer: None, paper_space: false }).unwrap();
         assert!(l[0].1.messages.is_empty(), "{:?}", l[0].1.messages);
         if let Some(Geometry::Point(c)) = &l[0].0.features[0].geometry {
             assert!((c.x - 15.0).abs() < 1e-6 && (c.y - 42.0).abs() < 0.01, "{c:?}");
@@ -1755,7 +1786,7 @@ mod tests {
         p.extend([(0, "ENDSEC".into()), (0, "EOF".into())]);
         let text: String = p.iter().map(|(c, v)| format!("{c:>3}\n{v}\n")).collect();
         let t = std::time::Instant::now();
-        let r = read("arrays.dxf", text.as_bytes(), &Options { crs: None, layer: Some("y") });
+        let r = read("arrays.dxf", text.as_bytes(), &Options { crs: None, layer: Some("y"), paper_space: false });
         assert!(t.elapsed() < std::time::Duration::from_secs(60), "{:?}", t.elapsed());
         assert!(r.is_err(), "nothing on layer y");
         // Drawn: a cap stops the walk and says so, and the arrays cut short are said.
@@ -1812,6 +1843,57 @@ mod tests {
             Some(Geometry::Polygon(p)) => assert_eq!(p.len(), 2, "both paths read: {p:?}"),
             g => panic!("{g:?}"),
         }
+    }
+
+    /// Block names match whatever their case; layouts (paper space) are left out unless asked
+    /// for; an attribute's 73 (its field length) isn't a justification.
+    #[test]
+    fn block_case_paper_space_and_attributes() {
+        let d = dxf(&[
+            (0, "SECTION"),
+            (2, "BLOCKS"),
+            (0, "BLOCK"),
+            (2, "TREE"),
+            (0, "POINT"),
+            (10, "1"),
+            (20, "1"),
+            (0, "ENDBLK"),
+            (0, "ENDSEC"),
+            (0, "SECTION"),
+            (2, "ENTITIES"),
+            (0, "INSERT"),
+            (2, "Tree"),
+            (10, "10"),
+            (20, "10"),
+            // A title block on a layout.
+            (0, "LINE"),
+            (67, "1"),
+            (10, "0"),
+            (20, "0"),
+            (11, "297"),
+            (21, "0"),
+            // An attribute with a field length (73) but no justification: placed at its first point.
+            (0, "ATTRIB"),
+            (10, "5"),
+            (20, "5"),
+            (11, "50"),
+            (21, "50"),
+            (73, "12"),
+            (1, "A"),
+            (0, "ENDSEC"),
+            (0, "EOF"),
+        ]);
+        let l = read("p.dxf", &d, &Options::default()).unwrap();
+        assert_eq!(l.len(), 1, "the layout's line is left out");
+        let points: Vec<Option<Geometry>> = l[0].0.features.iter().map(|f| f.geometry.clone()).collect();
+        assert_eq!(points, [Some(Geometry::Point(Coord::new(11.0, 11.0))), Some(Geometry::Point(Coord::new(5.0, 5.0)))]);
+        assert!(l[0].1.messages.iter().any(|m| m.contains("paper space")), "{:?}", l[0].1.messages);
+        assert_eq!(l[0].1.skipped, 0, "the block was found");
+        let all = read("p.dxf", &d, &Options { paper_space: true, ..Options::default() }).unwrap();
+        let lines = &all[1].0;
+        let i = lines.field_index("paperspace").unwrap();
+        assert_eq!(lines.value(0, i), &Value::Bool(true));
+        assert_eq!(all[0].0.value(0, i), &Value::Bool(false));
     }
 
     #[test]
