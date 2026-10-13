@@ -7,11 +7,35 @@ use serde_json::{Map, Value as Json, json};
 use crate::{Coord, DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
 
 /// Largest file read into memory (256 MiB). Parsing JSON can take several times the file size.
-pub(crate) const MAX_BYTES: u64 = 256 << 20;
+pub const MAX_BYTES: u64 = 256 << 20;
 
 /// File types the readers understand, for open dialogs.
-pub const READ_EXTENSIONS: &[&str] =
-    &["geojson", "json", "csv", "tsv", "txt", "shp", "zip", "kml", "kmz", "gpx", "gpkg", "parquet", "geoparquet", "fgb"];
+pub const READ_EXTENSIONS: &[&str] = &[
+    "geojson",
+    "json",
+    "csv",
+    "tsv",
+    "txt",
+    "shp",
+    "zip",
+    "kml",
+    "kmz",
+    "gpx",
+    "gpkg",
+    "parquet",
+    "geoparquet",
+    "fgb",
+    "xlsx",
+    "xlsm",
+    "xlsb",
+    "xls",
+    "ods",
+    "rss",
+    "atom",
+    "georss",
+    "landxml",
+    "xml",
+];
 
 /// Most XML nodes parsed from one document (KML, GPX): each costs tens of bytes, and the
 /// browser's memory is smaller (a 1M-point GPX track is about 8M nodes).
@@ -28,7 +52,7 @@ pub struct LayerRead {
 /// Whether a file holds several layers ([`read_layers`] reads them all): a zip, KML, KMZ or GPX.
 pub fn is_multi_layer_name(name: &str) -> bool {
     let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    matches!(ext.as_str(), "zip" | "kml" | "kmz" | "gpx")
+    matches!(ext.as_str(), "zip" | "kml" | "kmz" | "gpx" | "rss" | "atom" | "georss" | "landxml" | "xml")
 }
 
 /// Reads every layer of a file held in memory: the Shapefiles and other files of a zip, a KML or
@@ -48,6 +72,28 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
             .map(|l| LayerRead { dataset: l.dataset, report: l.report, styles: l.styles })
             .collect(),
         "gpx" => plain(crate::gpx::read(file_name, bytes)?),
+        "rss" | "atom" | "georss" => plain(crate::georss::read(file_name, bytes)?),
+        "landxml" => plain(crate::landxml::read(file_name, bytes, None)?),
+        // Plain XML: whichever of the XML formats its contents say.
+        "xml" => {
+            let text = String::from_utf8_lossy(bytes.get(..bytes.len().min(8192)).unwrap_or(bytes));
+            if crate::landxml::looks_like_landxml(&text) {
+                plain(crate::landxml::read(file_name, bytes, None)?)
+            } else if crate::georss::looks_like_georss(&text) {
+                plain(crate::georss::read(file_name, bytes)?)
+            } else if text.contains("<gpx") {
+                plain(crate::gpx::read(file_name, bytes)?)
+            } else if text.contains("<kml") {
+                crate::kml::read(file_name, bytes)?
+                    .into_iter()
+                    .map(|l| LayerRead { dataset: l.dataset, report: l.report, styles: l.styles })
+                    .collect()
+            } else {
+                return Err(DataError::Format(format!(
+                    "{file_name}: an XML file RustGIS doesn't read (it reads GeoRSS, LandXML, KML and GPX)"
+                )));
+            }
+        }
         _ => plain(vec![read_bytes(file_name, bytes)?]),
     };
     if out.is_empty() {
@@ -611,17 +657,6 @@ pub fn read_csv_with(text: &str, name: &str, opts: &CsvOptions) -> Result<(Datas
     let delimiter = opts.delimiter.unwrap_or_else(|| sniff_delimiter(text));
     let mut rdr = csv::ReaderBuilder::new().flexible(true).delimiter(delimiter).from_reader(text.as_bytes());
     let headers: Vec<String> = rdr.headers().map_err(|e| DataError::Format(format!("CSV: {e}")))?.iter().map(|s| s.to_string()).collect();
-    let find = |names: &[&str]| headers.iter().position(|h| names.contains(&h.trim().to_ascii_lowercase().as_str()));
-    let named = |n: &Option<String>, what: &str| -> Result<Option<usize>> {
-        match n.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-            Some(n) => headers
-                .iter()
-                .position(|h| h.trim().eq_ignore_ascii_case(n))
-                .map(Some)
-                .ok_or_else(|| DataError::Format(format!("no {what} column '{n}' (columns: {})", headers.join(", ")))),
-            None => Ok(None),
-        }
-    };
     let mut malformed = 0usize;
     let rows: Vec<Vec<String>> = rdr
         .records()
@@ -633,6 +668,29 @@ pub fn read_csv_with(text: &str, name: &str, opts: &CsvOptions) -> Result<(Datas
             }
         })
         .collect();
+    read_rows(&headers, &rows, malformed, name, opts)
+}
+
+/// Rows of text cells under a header row (delimited text, a spreadsheet's sheet) as a dataset, as
+/// [`read_csv_with`] describes; `malformed` rows were already passed over.
+pub(crate) fn read_rows(
+    headers: &[String],
+    rows: &[Vec<String>],
+    malformed: usize,
+    name: &str,
+    opts: &CsvOptions,
+) -> Result<(Dataset, ReadReport)> {
+    let find = |names: &[&str]| headers.iter().position(|h| names.contains(&h.trim().to_ascii_lowercase().as_str()));
+    let named = |n: &Option<String>, what: &str| -> Result<Option<usize>> {
+        match n.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            Some(n) => headers
+                .iter()
+                .position(|h| h.trim().eq_ignore_ascii_case(n))
+                .map(Some)
+                .ok_or_else(|| DataError::Format(format!("no {what} column '{n}' (columns: {})", headers.join(", ")))),
+            None => Ok(None),
+        }
+    };
     let (x, y) = (named(&opts.x, "x")?, named(&opts.y, "y")?);
     let wkt_given = named(&opts.wkt, "WKT")?;
     if wkt_given.is_some() && (x.is_some() || y.is_some()) {
@@ -675,7 +733,7 @@ pub fn read_csv_with(text: &str, name: &str, opts: &CsvOptions) -> Result<(Datas
     let mut ds = Dataset::new(name, gt, fields);
     let mut srid: Option<u32> = None;
     let mut bad_wkt = 0usize;
-    for r in &rows {
+    for r in rows {
         let cell = |i: usize| r.get(i).map(|s| s.trim()).unwrap_or("");
         let geom = if let Some((x, y)) = xy {
             match cell(x).parse::<f64>().ok().zip(cell(y).parse::<f64>().ok()) {
@@ -755,6 +813,7 @@ pub fn read_csv_with(text: &str, name: &str, opts: &CsvOptions) -> Result<(Datas
                 }
             }
             if lost > 0 {
+                report.skipped += lost;
                 report.messages.push(format!("{lost} rows couldn't be converted from {} to longitude/latitude", c.label()));
             }
         }
@@ -1160,7 +1219,7 @@ fn integral_numeric_to_integer(ds: &mut Dataset) {
 const WGS84_PRJ: &str = "GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]]";
 
 /// The longest prefix of `s` that fits in `max` bytes, cut at a character boundary.
-fn cut(s: &str, max: usize) -> &str {
+pub(crate) fn cut(s: &str, max: usize) -> &str {
     let mut end = s.len().min(max);
     while !s.is_char_boundary(end) {
         end -= 1;
@@ -1517,6 +1576,7 @@ mod tests {
         }
         let deep = format!("{}POINT (1 2){}", "GEOMETRYCOLLECTION (".repeat(50), ")".repeat(50));
         assert!(parse_wkt(&deep).is_err(), "nesting is bounded");
+        assert_eq!(parse_wkt("SRID=4326 POINT (1 2)").unwrap_err(), "an SRID= without the ';' before its geometry");
         assert_eq!(crate::raster::Crs::parse("epsg:2263").unwrap().epsg(), 2263);
         assert_eq!(crate::raster::Crs::parse("http://www.opengis.net/def/crs/EPSG/0/3857").unwrap(), crate::raster::Crs::WebMercator);
         assert_eq!(crate::raster::Crs::parse("OGC:CRS84").unwrap(), crate::raster::Crs::LonLat);

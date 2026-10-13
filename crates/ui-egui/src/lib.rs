@@ -575,10 +575,18 @@ impl RustGisApp {
         if rustgis_engine::data::raster::is_raster_name(name)
             || rustgis_engine::data::source::is_source_name(name)
             || rustgis_engine::data::io::is_multi_layer_name(name)
+            || rustgis_engine::data::sheets::is_sheet_name(name)
         {
             use base64::Engine;
             let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-            return self.run("layer.addDataBytes", json!({"fileName": name, "data": data}));
+            let mut p = json!({"fileName": name, "data": data});
+            // A spreadsheet picked for Add Delimited Text takes its options.
+            if let Some(Value::Object(opts)) = csv.filter(|_| rustgis_engine::data::sheets::is_sheet_name(name)) {
+                for (k, v) in opts {
+                    p[k] = v;
+                }
+            }
+            return self.run("layer.addDataBytes", p);
         }
         let Ok(text) = std::str::from_utf8(bytes) else {
             let e = crate::i18n::fmt("{name} is not a text file: RustGIS opens GeoJSON, CSV, GeoTIFF and .rgis here", &[("name", name)]);
@@ -890,7 +898,9 @@ impl RustGisApp {
                     self.ui.pending_open = None;
                     self.ui.pending_csv = Some(p.clone());
                     open("text");
-                } else if let Some(path) = dialogs::pick_open(&["csv", "tsv", "txt"], tl!("Delimited text")) {
+                } else if let Some(path) =
+                    dialogs::pick_open(&["csv", "tsv", "txt", "xlsx", "xlsm", "xlsb", "xls", "ods"], tl!("Delimited text and spreadsheets"))
+                {
                     let mut q = p.clone();
                     q["path"] = json!(path);
                     return self.run("layer.addData", q);
@@ -936,6 +946,16 @@ impl RustGisApp {
                         "json",
                         "csv",
                         "tsv",
+                        "xlsx",
+                        "xlsm",
+                        "xlsb",
+                        "xls",
+                        "ods",
+                        "rss",
+                        "georss",
+                        "atom",
+                        "xml",
+                        "landxml",
                         "shp",
                         "zip",
                         "gpkg",

@@ -6,7 +6,8 @@ Many features are first versions: there are no full 3D scenes or enterprise port
 - Layered workspace, command registry with undo, project files (`.rgis`), `rustgis-cli`, the
   web app (WebAssembly), 15 interface languages; a ribbon laid out in the order of the work
   (Home, Data, Style, Edit, Analyze, View, Publish), start-up preferences, Check for Updates.
-- Data: files by their web address; GeoJSON, CSV/TSV (x/y in any EPSG system, or WKT), Shapefile (zipped too, with the coordinate system in its
+- Data: files by their web address; GeoJSON, CSV/TSV (x/y in any EPSG system, or WKT), Excel and OpenDocument spreadsheets,
+  GeoRSS, LandXML, encoded polylines, Shapefile (zipped too, with the coordinate system in its
   `.prj`), GeoPackage, GeoParquet, FlatGeobuf, KML/KMZ (styles included) and GPX in, all of them
   in the web app too (large files read in place, a view at a time); the vector formats GDAL
   reads when it is installed, and SQL queries and DuckDB databases (DuckDB Spatial) when DuckDB

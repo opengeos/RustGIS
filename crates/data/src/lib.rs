@@ -5,13 +5,16 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod geometry;
+pub mod georss;
 pub mod gpx;
 pub mod interop;
 pub mod io;
 pub mod kml;
+pub mod landxml;
 pub mod mbtiles;
 pub mod query;
 pub mod raster;
+pub mod sheets;
 pub mod source;
 pub mod sqlite;
 pub mod value;

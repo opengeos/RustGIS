@@ -174,7 +174,11 @@ pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: V
         }
         return super::tiles::add(s, &q);
     }
-    // Files of several layers: zipped Shapefiles, KML/KMZ, GPX.
+    // A spreadsheet's sheet.
+    if rustgis_data::sheets::is_sheet_name(&name) {
+        return super::layer::add_sheet(s, p, &name, &bytes);
+    }
+    // Files of several layers: zipped Shapefiles, KML/KMZ, GPX, GeoRSS, LandXML.
     if rustgis_data::io::is_multi_layer_name(&name) {
         return super::layer::add_layers(s, p, &name, &bytes);
     }

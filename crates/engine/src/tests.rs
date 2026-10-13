@@ -2763,6 +2763,56 @@ fn downloads_land_in_their_own_project() {
     assert!(!s.download_landed(failed, b"{}".to_vec()));
 }
 
+/// Spreadsheets, GeoRSS, LandXML and encoded polylines through the commands.
+#[test]
+fn spreadsheets_feeds_landxml_and_polylines() {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("rustgis-more-formats-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new(Project::default());
+    // A workbook: the first sheet by default, another by "layer", with a coordinate system.
+    let book = rustgis_data::sheets::xlsx(&[
+        ("Places", &[&["name", "longitude", "latitude"], &["A", "10", "20"]]),
+        ("Survey", &[&["id", "E", "N"], &["1", "992000", "220000"]]),
+    ]);
+    let path = dir.join("book.xlsx");
+    std::fs::write(&path, &book).unwrap();
+    let p = path.display().to_string();
+    assert_eq!(s.run("info.fileLayers", &json!({"path": p})).unwrap()["layers"], json!(["Places", "Survey"]));
+    let r = s.run("layer.addData", &json!({"path": p})).unwrap();
+    assert_eq!(r["features"], 1);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&book);
+    let r = s
+        .run(
+            "layer.addDataBytes",
+            &json!({"fileName": "book.xlsx", "data": b64, "layer": "survey", "x": "E", "y": "N", "crs": "EPSG:2263"}),
+        )
+        .unwrap();
+    let e = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().extent();
+    assert!((e.min_x + 73.96).abs() < 0.05, "{e:?}");
+    assert!(s.run("layer.addData", &json!({"path": p, "layer": "nope"})).is_err());
+    // A GeoRSS feed as plain .xml, by its contents.
+    let feed = dir.join("quakes.xml");
+    std::fs::write(&feed, r#"<rss xmlns:georss="http://www.georss.org/georss"><channel><item><title>Q</title><georss:point>45 -110</georss:point></item></channel></rss>"#).unwrap();
+    s.run("layer.addData", &json!({"path": feed.display().to_string()})).unwrap();
+    assert!(s.map().layer_by_name("quakes points").is_some());
+    // LandXML without a coordinate system, given one.
+    let lx = dir.join("site.landxml");
+    std::fs::write(&lx, r#"<LandXML><CgPoints><CgPoint name="1">4649776 500000</CgPoint></CgPoints></LandXML>"#).unwrap();
+    s.run("layer.addData", &json!({"path": lx.display().to_string(), "crs": "EPSG:32633"})).unwrap();
+    let e = s.map().layer_by_name("site points").unwrap().extent();
+    assert!((e.min_x - 15.0).abs() < 1e-6, "{e:?}");
+    // Encoded polylines.
+    let r = s
+        .run("layer.addEncodedPolyline", &json!({"polyline": ["_p~iF~ps|U_ulLnnqC", "_p~iF~ps|U_ulLnnqC_mqNvxq`@"], "name": "Routes"}))
+        .unwrap();
+    assert_eq!(r["features"], 2);
+    for bad in [json!({}), json!({"polyline": "_p~iF"}), json!({"polyline": "_p~iF~ps|U"}), json!({"polyline": "x", "precision": 99})] {
+        assert!(s.run("layer.addEncodedPolyline", &bad).is_err(), "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn pmtiles_from_network_shares_are_refused() {
     let mut s = Session::new(Project::default());

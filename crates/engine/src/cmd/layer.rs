@@ -25,6 +25,9 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
             .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text}"#),
+        C::new("layer.addEncodedPolyline", "Add Encoded Polyline", "Home › Add", add_encoded_polyline).params(
+            r#"{"polyline": "encoded polyline text" | [texts] (one line each), "precision"?: 5 (Google) | 6 (OSRM, Valhalla), "name"?: text}"#,
+        ),
         C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).params(r#"{"fileName": "name.geojson|.csv|.tsv", "text": string, "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text)}"#),
         C::new("layer.addSample", "Add Sample Data", "Home › Add › Add Data", add_sample).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
         C::new("layer.remove", "Remove", "Layers", remove).key("Delete").when(need_layer).params(r#"{"layer"?: name|id}"#),
@@ -308,6 +311,15 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::source::duckdb::is_duckdb_name(path) {
         return add_duckdb(s, p, path);
     }
+    // A spreadsheet: one sheet ("layer"), read like delimited text.
+    if rustgis_data::sheets::is_sheet_name(path) {
+        let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+        if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
+            return Err(format!("{path} is too large to open"));
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        return add_sheet(s, p, path, &bytes);
+    }
     if rustgis_data::io::is_multi_layer_name(path) {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
         if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
@@ -319,7 +331,8 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     }
     let delimited = read_delimited(p, path, || {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-        if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
+        // The limit the text readers keep without options too.
+        if meta.len() > rustgis_data::io::MAX_BYTES {
             return Err(format!("{path} is too large to open"));
         }
         std::fs::read(path).map_err(|e| format!("{path}: {e}"))
@@ -335,7 +348,22 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
 /// or KMZ's points, lines and polygons drawn in its styles, a GPX's waypoints, routes, tracks and
 /// track points. `"layer"` picks one by name; a name given applies to the first.
 pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8]) -> CmdResult {
-    let mut reads = rustgis_data::io::read_layers(file_name, bytes).map_err(|e| e.to_string())?;
+    // A LandXML file in a coordinate system it doesn't say.
+    let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
+    let landxml = rustgis_data::landxml::is_landxml_name(file_name)
+        || (file_name.to_ascii_lowercase().ends_with(".xml")
+            && rustgis_data::landxml::looks_like_landxml(&String::from_utf8_lossy(bytes.get(..bytes.len().min(4096)).unwrap_or(bytes))));
+    let mut reads = match crs.filter(|_| landxml) {
+        Some(c) => {
+            let crs = rustgis_data::raster::Crs::parse(c)?;
+            rustgis_data::landxml::read(file_name, bytes, Some(crs))
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() })
+                .collect()
+        }
+        None => rustgis_data::io::read_layers(file_name, bytes).map_err(|e| e.to_string())?,
+    };
     if let Some(want) = ps(p, "layer").map(str::trim).filter(|t| !t.is_empty()) {
         let names: Vec<String> = reads.iter().map(|r| r.dataset.name.clone()).collect();
         // By its full name or its last word ("tracks" for "walk tracks").
@@ -466,6 +494,15 @@ fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
     }
     if !Path::new(path).is_file() {
         return Err(format!("{path}: no such file"));
+    }
+    if rustgis_data::sheets::is_sheet_name(path) {
+        let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+        if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
+            return Err(format!("{path} is too large to open"));
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let layers = rustgis_data::sheets::sheet_names(&bytes).map_err(err)?;
+        return Ok(json!({"count": layers.len(), "layers": layers}));
     }
     if rustgis_data::io::is_multi_layer_name(path) {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
@@ -902,9 +939,52 @@ pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
     Ok(json!({"layer": id}))
 }
 
+/// The most polylines added at once.
+const MAX_POLYLINES: usize = 10_000;
+
+/// Adds encoded polylines (routes from Google, OSRM or Valhalla) as a line layer.
+fn add_encoded_polyline(s: &mut Session, p: &Value) -> CmdResult {
+    use rustgis_data::{Dataset, Field, FieldType, Geometry, Value as V};
+    let texts: Vec<&str> = match p.get("polyline") {
+        Some(Value::String(t)) => vec![t.as_str()],
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).take(MAX_POLYLINES + 1).collect(),
+        _ => return Err("polyline is required (text, or a list of texts)".into()),
+    };
+    if texts.len() > MAX_POLYLINES {
+        return Err(format!("at most {MAX_POLYLINES} polylines at once"));
+    }
+    let precision = match f(p, "precision") {
+        Some(v) if v.fract() == 0.0 && (1.0..=10.0).contains(&v) => v as u32,
+        Some(v) => return Err(format!("precision {v}: give a whole number from 1 to 10 (5 for Google and OSRM, 6 for Valhalla)")),
+        None => 5,
+    };
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Polyline");
+    let mut ds =
+        Dataset::new(name, GeometryType::Polyline, vec![Field::new("index", FieldType::Integer), Field::new("points", FieldType::Integer)]);
+    for (i, t) in texts.iter().enumerate() {
+        let pts = rustgis_data::interop::decode_polyline(t, precision).map_err(|e| format!("polyline {}: {e}", i + 1))?;
+        if pts.len() < 2 {
+            return Err(format!("polyline {}: a line needs at least two points", i + 1));
+        }
+        let n = pts.len() as i64;
+        ds.push_next(Some(Geometry::Line(vec![pts])), vec![V::Int(i as i64 + 1), V::Int(n)]);
+    }
+    add_read(s, p, (ds, rustgis_data::ReadReport::default()))
+}
+
+/// Adds a sheet of a spreadsheet (`"layer"` names it; the first by default), read like delimited
+/// text with the same options.
+pub(crate) fn add_sheet(s: &mut Session, p: &Value, file_name: &str, bytes: &[u8]) -> CmdResult {
+    let stem = Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or("sheet");
+    let opts = csv_options(p)?.unwrap_or_default();
+    let sheet = ps(p, "layer").map(str::trim).filter(|l| !l.is_empty());
+    let read = rustgis_data::sheets::read(bytes, stem, sheet, &opts).map_err(|e| format!("{file_name}: {e}"))?;
+    add_read(s, p, read)
+}
+
 /// The `x`, `y`, `wkt`, `crs` and `delimiter` parameters for a delimited text file, when any is
 /// given.
-fn csv_options(p: &Value) -> Result<Option<rustgis_data::io::CsvOptions>, String> {
+pub(crate) fn csv_options(p: &Value) -> Result<Option<rustgis_data::io::CsvOptions>, String> {
     let text = |k: &str| ps(p, k).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
     let (x, y, wkt, crs, delimiter) = (text("x"), text("y"), text("wkt"), text("crs"), ps(p, "delimiter"));
     if x.is_none() && y.is_none() && wkt.is_none() && crs.is_none() && delimiter.is_none() {

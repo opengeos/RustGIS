@@ -60,6 +60,8 @@ bytes = "1"
 flatgeobuf = { version = "6", default-features = false }
 geozero = { version = "0.15", default-features = false, features = ["with-wkb"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
+# Excel and OpenDocument spreadsheets, in pure Rust (the browser too).
+calamine = { version = "0.36", default-features = false }
 
 # ui
 egui = "0.36"

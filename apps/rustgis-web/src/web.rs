@@ -13,6 +13,16 @@ const DATA_EXTS: &[&str] = &[
     "csv",
     "tsv",
     "txt",
+    "xlsx",
+    "xlsm",
+    "xlsb",
+    "xls",
+    "ods",
+    "rss",
+    "atom",
+    "georss",
+    "xml",
+    "landxml",
     "zip",
     "kml",
     "kmz",
@@ -311,7 +321,8 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
             } else if purpose == "plugin" {
                 rfd::AsyncFileDialog::new().add_filter("RustGIS plugin", &["rgplugin"])
             } else if purpose == "text" {
-                rfd::AsyncFileDialog::new().add_filter("Delimited text", &["csv", "tsv", "txt"])
+                rfd::AsyncFileDialog::new()
+                    .add_filter("Delimited text and spreadsheets", &["csv", "tsv", "txt", "xlsx", "xlsm", "xlsb", "xls", "ods"])
             } else if purpose == "picture" {
                 rfd::AsyncFileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg"])
             } else {

@@ -14,6 +14,7 @@ Formats](data-formats.md).
 | GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | Yes |
 | FlatGeobuf (`.fgb`) | Yes | Yes (`share.exportLayer`) |
 | KML/KMZ (with their styles), GPX | Yes | Yes |
+| Spreadsheets (`.xlsx`, `.xls`, `.ods`), GeoRSS feeds, LandXML, encoded polylines | Yes | No |
 | Through GDAL: GML, DXF, File Geodatabase (`.gdb` folder), MapInfo, OpenStreetMap… | Yes (desktop, when GDAL is installed) | No |
 | DuckDB databases (`.duckdb`, `.ddb`) and SQL queries | Yes (desktop, when DuckDB is installed) | No |
 | KML, GPX, CSV with WKT geometry | No | Yes (Analyze › Workflows › Data Interop) |
