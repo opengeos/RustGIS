@@ -372,13 +372,13 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         ("wms", "WMS"),
         ("wmts", "WMTS"),
         ("wfs", "WFS"),
-        ("ogcapi", "OGC API Features"),
+        ("ogcapi", "OGC API Features and Tiles"),
         ("arcgis", "ArcGIS REST"),
     ];
     if app.dialogs.mode == "new" {
         app.dialogs.mode = "auto";
     }
-    ui.label(egui::RichText::new(tl!("A map or feature service's address: WMS, WMTS, WFS, OGC API Features, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer.")).weak());
+    ui.label(egui::RichText::new(tl!("A map or feature service's address: WMS, WMTS, WFS, OGC API Features or Tiles, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer.")).weak());
     let mut connect = false;
     egui::Grid::new("service").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         ui.label(tl!("Address"));

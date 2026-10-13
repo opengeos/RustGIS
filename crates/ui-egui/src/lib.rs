@@ -962,6 +962,12 @@ impl RustGisApp {
                     return self.run("layer.addData", q);
                 }
             }
+            // A STAC item's or collection's address (a `?stac=` link): STAC Search opens on it,
+            // and an item's default asset is added.
+            "ui.stacLink" => {
+                let url = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
+                stacui::open_link(self, url)?;
+            }
             // Data by its web address: the dialog, then (with an address) the download, off the
             // frame; it's added when it lands. A PMTiles archive is a tile layer, never downloaded.
             "ui.addUrl" => {

@@ -11,14 +11,14 @@ pub fn commands() -> Vec<C> {
     vec![
         C::new("stac.collections", "List STAC Collections", "Home › Add › STAC Search", collections)
             .view()
-            .params(r#"{"url"?: "a STAC API (default: Earth Search, https://earth-search.aws.element84.com/v1)"}"#),
+            .params(r#"{"url"?: "a STAC API (default: Earth Search, https://earth-search.aws.element84.com/v1; Planetary Computer: https://planetarycomputer.microsoft.com/api/stac/v1)"}"#),
         C::new("stac.search", "STAC Search", "Home › Add › STAC Search", search).params(
             r#"{"url"?: "a STAC API (default: Earth Search)", "collections"?: id | [ids], "bbox"?: [west, south, east, north] | "view" (the map's extent), "datetime"?: "2024-06-01" | "2024-06-01/2024-06-30", "limit"?: 1–200 (default 10), "maxCloud"?: percent, "footprints"?: bool (adds the items' footprints as a layer, default true)}"#,
         ),
         C::new("stac.addFootprints", "Add STAC Footprints", "Home › Add › STAC Search", add_footprints_cmd)
             .params(r#"{"footprints": GeoJSON FeatureCollection (items' footprints, as STAC Search finds them), "name"?: text}"#),
         C::new("stac.addAsset", "Add STAC Asset", "Home › Add › STAC Search", add_asset).params(
-            r#"{"item": a STAC item (as stac.search returns it) | "url": an item's address, "asset"?: key (default: visual, else the first GeoTIFF, else the first data asset), "name"?: text}"#,
+            r#"{"item": a STAC item (as stac.search returns it) | "url": an item's address (Planetary Computer assets are signed), "asset"?: key (default: visual, else the first GeoTIFF, else the first data asset), "name"?: text}"#,
         ),
     ]
 }
@@ -164,5 +164,8 @@ fn add_asset(s: &mut Session, p: &Value) -> CmdResult {
     let i = item(p)?;
     let (key, href) = i.asset_href(ps(p, "asset"))?;
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| format!("{} {key}", i.id));
+    // A Planetary Computer asset is read with its storage container's token.
+    #[cfg(not(target_arch = "wasm32"))]
+    let href = stac::sign_blocking(&href)?;
     super::layer::add_url(s, &json!({"url": href, "name": name}))
 }

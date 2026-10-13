@@ -43,6 +43,7 @@ pub fn spec(t: &TileLayer) -> Spec {
         tile_size: t.tile_size,
         tms: t.tms,
         attribution: t.attribution.clone(),
+        layers: t.layers.clone(),
     }
 }
 

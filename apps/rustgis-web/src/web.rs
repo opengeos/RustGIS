@@ -106,6 +106,13 @@ pub fn start() {
                             app.session.notify(format!("?data={url}: {e}"), true);
                         }
                     }
+                    // `?stac=<url>`: a STAC item (its default asset is added, signed when it is a
+                    // Planetary Computer one) or a collection (STAC Search opens on it).
+                    for url in params(&q, "stac", 4) {
+                        if let Err(e) = app.run("ui.stacLink", serde_json::json!({"url": url})) {
+                            app.session.notify(format!("?stac={url}: {e}"), true);
+                        }
+                    }
                     for (key, kind) in [("style", Some("style")), ("tiles", None)] {
                         for url in params(&q, key, 8) {
                             let mut p = serde_json::json!({"url": url});

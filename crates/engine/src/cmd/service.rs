@@ -15,7 +15,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("service.layers", "Service Layers", "Home › Add", layers).view().params(
-            r#"{"url": "a WMS, WMTS or WFS address (GetCapabilities is added), an OGC API /collections address, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer", "type"?: "wms"|"wmts"|"wfs"|"ogcapi"|"arcgis" (guessed from the address), "text"?: "the capabilities document, when already fetched"}"#,
+            r#"{"url": "a WMS, WMTS or WFS address (GetCapabilities is added), an OGC API /collections address (features, and map and vector tiles) or landing page (its map tiles), or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer", "type"?: "wms"|"wmts"|"wfs"|"ogcapi"|"arcgis" (guessed from the address), "text"?: "the capabilities document, when already fetched"}"#,
         ),
         C::new("service.add", "Add Service Layer", "Home › Add", add).params(
             r#"{"url": "as service.layers", "type"?, "layer": "the layer's name (service.layers lists them)", "name"?: text, "text"?: "the capabilities document, when already fetched"}"#,
@@ -61,7 +61,7 @@ fn vet(mut svc: Service, caps: &str) -> Service {
     let before = svc.layers.len();
     svc.layers.retain(|l| {
         let u = match &l.offer {
-            Offer::Tiles { template } => template,
+            Offer::Tiles { template } | Offer::VectorTiles { template, .. } => template,
             Offer::Features { url } | Offer::Style { url } => url,
         };
         crate::render::rustgis_tiles::address::check(u, Some(caps)).is_ok()
@@ -92,6 +92,7 @@ pub fn service_json(svc: &Service) -> Value {
                 Offer::Tiles { template } => json!({"type": "tiles", "url": template}),
                 Offer::Features { url } => json!({"type": "features", "url": url}),
                 Offer::Style { url } => json!({"type": "style", "url": url}),
+                Offer::VectorTiles { template, layers } => json!({"type": "vectorTiles", "url": template, "layers": layers}),
             };
             json!({"name": l.name, "title": l.title, "bbox": l.bbox, "offer": offer})
         })
@@ -124,6 +125,11 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
     match &layer.offer {
         Offer::Tiles { template } => {
             let r = super::tiles::add(s, &json!({"url": template, "kind": "raster", "name": name, "overlay": true}))?;
+            zoom(s);
+            Ok(r)
+        }
+        Offer::VectorTiles { template, layers } => {
+            let r = super::tiles::add(s, &json!({"url": template, "kind": "vector", "name": name, "layers": layers, "overlay": true}))?;
             zoom(s);
             Ok(r)
         }

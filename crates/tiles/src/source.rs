@@ -40,12 +40,15 @@ pub struct Spec {
     pub tile_size: u32,
     pub tms: bool,
     pub attribution: String,
+    /// The vector tiles' layer names, when the service says them (an OGC API collection's): drawn
+    /// in colours of their own, as an archive's layers are.
+    pub layers: Vec<String>,
 }
 
 impl Spec {
     fn key(&self) -> String {
         format!(
-            "{:?}|{}|{}|{}|{}|{}|{}|{}",
+            "{:?}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.kind,
             self.url,
             self.subdomains.join(","),
@@ -53,7 +56,8 @@ impl Spec {
             self.max_zoom,
             self.tile_size,
             self.tms,
-            self.attribution
+            self.attribution,
+            self.layers.join(",")
         )
     }
 }
@@ -387,6 +391,18 @@ fn archive_style(spec: &Spec, info: Archive) -> Option<Value> {
 }
 
 fn vector_style(spec: &Spec) -> Option<Value> {
+    // Layers the service named: each in a colour of its own.
+    if !spec.layers.is_empty() && spec.url.contains("{z}") {
+        let archive = Archive {
+            tiles: spec.url.clone(),
+            vector: true,
+            min_zoom: spec.min_zoom,
+            max_zoom: spec.max_zoom,
+            attribution: spec.attribution.clone(),
+            layers: spec.layers.iter().take(64).cloned().collect(),
+        };
+        return archive_style(spec, archive);
+    }
     let mut doc: Value = serde_json::from_str(DEFAULT_STYLE).ok()?;
     let source = if spec.url.contains("{z}") {
         json!({"type": "vector", "tiles": templates(spec), "minzoom": spec.min_zoom, "maxzoom": spec.max_zoom})
@@ -434,6 +450,7 @@ mod tests {
             tile_size: 256,
             tms: false,
             attribution: "&copy; <a href=\"x\">OSM</a>".into(),
+            layers: Vec::new(),
         }
     }
 
@@ -447,6 +464,11 @@ mod tests {
         }
         let Resolve::Ready(v) = resolve(&spec(Kind::Vector, "https://tiles.example.com/{z}/{x}/{y}.pbf")) else { panic!("not ready") };
         assert!(v.style.layers.len() > 10);
+        // Layers a service named (an OGC API collection's) are drawn each in a colour of its own.
+        let mut named = spec(Kind::Vector, "https://tiles.example.com/vineyards/{z}/{y}/{x}?f=mvt");
+        named.layers = vec!["vineyards".into()];
+        let Resolve::Ready(v) = resolve(&named) else { panic!("not ready") };
+        assert_eq!(v.style.layers.len(), 3, "fill, line and point of the one layer");
     }
 
     #[test]

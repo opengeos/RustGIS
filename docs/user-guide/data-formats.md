@@ -91,10 +91,12 @@ command line and MCP).
 | WMTS | Layers whose tile matrix set is Web Mercator's pyramid | A tile layer from the tile template (or KVP GetTile) |
 | WFS 1.1 / 2.0 | Feature types | Their features downloaded as GeoJSON, in the output format the service names (up to 50,000) |
 | OGC API Features | Collections | Their items downloaded as GeoJSON |
+| OGC API Tiles | Collections' map and vector tiles; a landing page's dataset map tiles | A tile layer in WebMercatorQuad (the standard `…/tiles/WebMercatorQuad/{z}/{y}/{x}` path), map tiles in the server's image format, vector tiles drawn layer by layer in colours of their own |
 | ArcGIS REST | FeatureServer and MapServer layers; a MapServer's map; an ImageServer; a VectorTileServer | Layers queried as GeoJSON (up to the server's record limit); a map as its tile cache when it is Web Mercator's pyramid, else exported images; an ImageServer as exported images; a VectorTileServer as its MapLibre style |
 
 The type is guessed from the address (`?SERVICE=`, `/wmts`, `/wfs`, `/collections`, `/rest/services`…) or
-chosen. A service that asks for a token says so. In the web app the server must allow requests
+chosen (an OGC API landing page needs the OGC API type). A server that names its WebMercatorQuad
+tileset otherwise (not by that id) isn't read for tiles. A service that asks for a token says so. In the web app the server must allow requests
 from web pages (CORS).
 
 ## SQL queries and DuckDB databases

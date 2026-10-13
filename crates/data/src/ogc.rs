@@ -1,6 +1,7 @@
 //! OGC web services: what a service offers, from its capabilities document — WMS and WMTS map
-//! layers (as tile templates in Web Mercator), WFS feature types and OGC API Features collections
-//! (as GeoJSON addresses) — and ArcGIS REST services (FeatureServer, MapServer, ImageServer,
+//! layers (as tile templates in Web Mercator), WFS feature types, OGC API Features collections
+//! (as GeoJSON addresses) and OGC API Tiles tilesets (map and vector tiles in WebMercatorQuad) —
+//! and ArcGIS REST services (FeatureServer, MapServer, ImageServer,
 //! VectorTileServer). The documents are hostile input: no DTD is read, nodes are capped, and
 //! only layers RustGIS can draw are listed (the rest are counted in a note).
 
@@ -15,6 +16,9 @@ pub enum Offer {
     Features { url: String },
     /// A MapLibre style document (an ArcGIS vector tile service's).
     Style { url: String },
+    /// Vector tiles (`{z}/{x}/{y}`, Mapbox Vector Tiles) and the names of their layers, as an OGC
+    /// API Tiles collection gives them.
+    VectorTiles { template: String, layers: Vec<String> },
 }
 
 /// A layer a service offers.
@@ -659,9 +663,10 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
     if let Some(token) = query_value(url, "token").filter(|t| !t.is_empty()) {
         for l in &mut service.layers {
             match &mut l.offer {
-                Offer::Tiles { template: u } | Offer::Features { url: u } | Offer::Style { url: u } => {
-                    *u = with_query(u, &format!("token={token}"))
-                }
+                Offer::Tiles { template: u }
+                | Offer::Features { url: u }
+                | Offer::Style { url: u }
+                | Offer::VectorTiles { template: u, .. } => *u = with_query(u, &format!("token={token}")),
             }
         }
     }
@@ -674,7 +679,24 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
 fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
     let collections = v.get("collections").and_then(|c| c.as_array());
     let Some(collections) = collections else {
-        // A landing page: say where the collections are.
+        // A landing page: its dataset's tiles, if it has any; else say where the collections are.
+        let title = v.get("title").and_then(|t| t.as_str()).unwrap_or_default().to_string();
+        let mut service = Service { kind: "OGC API Tiles".into(), title: title.clone(), ..Service::default() };
+        let links = v.get("links").and_then(|l| l.as_array()).cloned().unwrap_or_default();
+        let name = if title.is_empty() { "tiles".to_string() } else { title };
+        // The dataset's layers aren't listed here, so its vector tiles can't be styled: map tiles only.
+        if let Some(t) = tileset(url, &links, TileRel::Map) {
+            service.layers.push(ServiceLayer {
+                name: "map".into(),
+                title: format!("{name} (map tiles)"),
+                offer: Offer::Tiles { template: t },
+                bbox: None,
+            });
+        }
+        if !service.layers.is_empty() {
+            service.notes.push("the dataset's map tiles; add its /collections address for each collection's tiles and features".into());
+            return Ok(service);
+        }
         let has = v
             .get("links")
             .and_then(|l| l.as_array())
@@ -689,13 +711,46 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
     let mut service = Service { kind: "OGC API Features".into(), title, ..Service::default() };
     let root = base(url).trim_end_matches('/').to_string();
     let mut unreadable = 0;
+    let mut tiled = 0;
     for c in collections.iter().take(MAX_LAYERS) {
         let Some(id) = c.get("id").and_then(|i| i.as_str()) else { continue };
         let links = c.get("links").and_then(|l| l.as_array()).cloned().unwrap_or_default();
+        let title = c.get("title").and_then(|t| t.as_str()).unwrap_or(id).to_string();
+        let bbox = c.pointer("/extent/spatial/bbox/0").and_then(|b| b.as_array()).and_then(|b| {
+            let f = |i: usize| b.get(i).and_then(|v| v.as_f64());
+            lonlat_box(f(0)?, f(1)?, f(2)?, f(3)?)
+        });
+        // OGC API Tiles: the collection's map and vector tiles in WebMercatorQuad. Its vector
+        // tiles' layer is named after the collection, as the standard has it.
+        let map = tileset(url, &links, TileRel::Map);
+        let vector = tileset(url, &links, TileRel::Vector);
+        if let Some(t) = &map {
+            service.layers.push(ServiceLayer {
+                name: format!("{id} (map tiles)"),
+                title: format!("{title} (map tiles)"),
+                offer: Offer::Tiles { template: t.clone() },
+                bbox,
+            });
+        }
+        if let Some(t) = &vector {
+            service.layers.push(ServiceLayer {
+                name: format!("{id} (vector tiles)"),
+                title: format!("{title} (vector tiles)"),
+                offer: Offer::VectorTiles { template: t.clone(), layers: vec![id.chars().take(200).collect()] },
+                bbox,
+            });
+        }
+        if map.is_some() || vector.is_some() {
+            tiled += 1;
+        }
         let link = links
             .iter()
             .filter(|l| l.get("rel").and_then(|r| r.as_str()) == Some("items"))
             .find(|l| l.get("type").and_then(|t| t.as_str()).is_none_or(|t| t.contains("json")));
+        // A collection with tiles and no items link has no features to offer.
+        if link.is_none() && (map.is_some() || vector.is_some()) {
+            continue;
+        }
         let declared_geojson = link.and_then(|l| l.get("type").and_then(|t| t.as_str())).is_some_and(|t| t.contains("geo+json"));
         // Without an items link: the standard path under the collections address. A relative
         // link is resolved against the document's address.
@@ -712,20 +767,58 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         let items = if query_value(&items, "limit").is_some() { items } else { with_query(&items, &format!("limit={OGC_API_LIMIT}")) };
         // GeoJSON asked for unless the link says it is already.
         let items = if declared_geojson || query_value(&items, "f").is_some() { items } else { with_query(&items, "f=json") };
-        let title = c.get("title").and_then(|t| t.as_str()).unwrap_or(id).to_string();
-        let bbox = c.pointer("/extent/spatial/bbox/0").and_then(|b| b.as_array()).and_then(|b| {
-            let f = |i: usize| b.get(i).and_then(|v| v.as_f64());
-            lonlat_box(f(0)?, f(1)?, f(2)?, f(3)?)
-        });
         service.layers.push(ServiceLayer { name: id.to_string(), title, offer: Offer::Features { url: items }, bbox });
     }
     if unreadable > 0 {
         service.notes.push(format!("{unreadable} collections link to their items with an address RustGIS doesn't fetch and are left out"));
     }
-    if !service.layers.is_empty() {
+    if service.layers.iter().any(|l| matches!(l.offer, Offer::Features { .. })) {
         service.notes.push(format!("a collection is read up to {OGC_API_LIMIT} features (one page of the server's)"));
     }
+    if tiled > 0 {
+        service.kind = if service.layers.iter().any(|l| matches!(l.offer, Offer::Features { .. })) {
+            "OGC API Features and Tiles".into()
+        } else {
+            "OGC API Tiles".into()
+        };
+    }
     Ok(service)
+}
+
+/// Which tiles of an OGC API: map (pictures) or vector (Mapbox Vector Tiles).
+#[derive(Clone, Copy, PartialEq)]
+enum TileRel {
+    Map,
+    Vector,
+}
+
+/// The `{z}/{x}/{y}` template of a dataset's or collection's tiles in WebMercatorQuad, from its
+/// `tilesets-map` or `tilesets-vector` link: the standard path under the tilesets address
+/// (`…/tiles/WebMercatorQuad/{tileMatrix}/{tileRow}/{tileCol}`), in the server's image format or
+/// as MVT. A server that names its WebMercatorQuad tileset otherwise isn't read this way.
+fn tileset(from: &str, links: &[serde_json::Value], which: TileRel) -> Option<String> {
+    let suffix = match which {
+        TileRel::Map => "tilesets-map",
+        TileRel::Vector => "tilesets-vector",
+    };
+    let link = links
+        .iter()
+        .take(200)
+        .filter(|l| l.get("rel").and_then(|r| r.as_str()).is_some_and(|r| r == suffix || r.ends_with(&format!("/{suffix}"))));
+    // The JSON link first (or one that names no type), else any.
+    let chosen: Vec<&serde_json::Value> = link.collect();
+    let l = chosen.iter().find(|l| l.get("type").and_then(|t| t.as_str()).is_none_or(|t| t.contains("json"))).or_else(|| chosen.first())?;
+    let href = resolve(from, l.get("href")?.as_str()?)?;
+    let at = base(&href).trim_end_matches('/');
+    if at.contains(['{', '}']) || at.len() > 2000 {
+        return None;
+    }
+    // Map tiles come in the server's own image format (PNG or JPEG, which it picks); vector
+    // tiles are asked as MVT.
+    Some(match which {
+        TileRel::Map => format!("{at}/WebMercatorQuad/{{z}}/{{y}}/{{x}}"),
+        TileRel::Vector => format!("{at}/WebMercatorQuad/{{z}}/{{y}}/{{x}}?f=mvt"),
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1098,6 +1191,51 @@ mod tests {
         let s = parse("https://gis.example.org/arcgis/rest/services/P/FeatureServer?token=abc", fs).unwrap();
         let Offer::Features { url } = &s.layers[0].offer else { panic!() };
         assert!(url.ends_with("&token=abc"), "{url}");
+    }
+
+    #[test]
+    fn ogc_api_tiles() {
+        // A collection with features and vector tiles, one with map tiles only, and one whose
+        // tiles link is no web address.
+        let doc = br#"{"title": "Wine", "collections": [
+            {"id": "vineyards", "title": "Vineyards", "extent": {"spatial": {"bbox": [[6, 49, 8, 50]]}}, "links": [
+                {"rel": "http://www.opengis.net/def/rel/ogc/1.0/tilesets-vector", "href": "https://x.org/wine/collections/vineyards/tiles"},
+                {"rel": "http://www.opengis.net/def/rel/ogc/1.0/tilesets-vector", "type": "text/html", "href": "https://x.org/wine/collections/vineyards/tiles?f=html"},
+                {"rel": "items", "type": "application/geo+json", "href": "https://x.org/wine/collections/vineyards/items"}]},
+            {"id": "relief", "links": [{"rel": "tilesets-map", "type": "application/json", "href": "collections/relief/map/tiles?f=json"}]},
+            {"id": "odd", "links": [{"rel": "tilesets-map", "href": "javascript:alert(1)"}]}]}"#;
+        let s = parse("https://x.org/wine/collections", doc).unwrap();
+        assert_eq!(s.kind, "OGC API Features and Tiles");
+        let vt = s.layers.iter().find(|l| l.name == "vineyards (vector tiles)").unwrap();
+        assert_eq!(
+            vt.offer,
+            Offer::VectorTiles {
+                template: "https://x.org/wine/collections/vineyards/tiles/WebMercatorQuad/{z}/{y}/{x}?f=mvt".into(),
+                layers: vec!["vineyards".into()]
+            }
+        );
+        assert_eq!(vt.bbox, Some([6.0, 49.0, 8.0, 50.0]));
+        assert!(s.layers.iter().any(|l| l.name == "vineyards" && matches!(l.offer, Offer::Features { .. })));
+        // Map tiles only: no features offered; the relative link is resolved.
+        let relief: Vec<&ServiceLayer> = s.layers.iter().filter(|l| l.name.starts_with("relief")).collect();
+        assert_eq!(relief.len(), 1);
+        assert_eq!(
+            relief[0].offer,
+            Offer::Tiles { template: "https://x.org/wine/collections/relief/map/tiles/WebMercatorQuad/{z}/{y}/{x}".into() }
+        );
+        assert!(!s.layers.iter().any(|l| l.name.starts_with("odd (")), "a link that isn't a web address is left out");
+        // A landing page with the dataset's map tiles.
+        let landing = br#"{"title": "Earth at Night", "links": [
+            {"rel": "http://www.opengis.net/def/rel/ogc/1.0/tilesets-map", "href": "https://x.org/night/map/tiles"}]}"#;
+        let s = parse("https://x.org/night/", landing).unwrap();
+        assert_eq!(s.kind, "OGC API Tiles");
+        assert_eq!(s.layers[0].offer, Offer::Tiles { template: "https://x.org/night/map/tiles/WebMercatorQuad/{z}/{y}/{x}".into() });
+        // A landing page with neither tiles nor collections still says where to look.
+        assert!(
+            parse("https://x.org/a/", br#"{"links": [{"rel": "data", "href": "https://x.org/a/collections"}]}"#)
+                .unwrap_err()
+                .contains("/collections")
+        );
     }
 
     #[test]

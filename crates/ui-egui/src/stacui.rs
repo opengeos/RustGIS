@@ -1,7 +1,8 @@
 //! STAC Search: an API's collections, a search over the map's extent (or anywhere) with dates and
 //! a cloud limit, the items found with their footprints, and an asset of one added by its web
 //! address. Requests go off the frame through the tile cache's downloads (a thread natively,
-//! fetch on the web).
+//! fetch on the web). A Planetary Computer asset is signed first, with a token fetched the same
+//! way. A `?stac=` link (an item's or a collection's address) opens the dialog on it.
 
 use egui::vec2;
 use rustgis_engine::render::rustgis_tiles::{
@@ -19,7 +20,19 @@ enum Asked {
     Collections,
     /// A search, by its address (which the answer's links are resolved against).
     Search(String),
+    /// A token for an asset that needs signing: the token service's address, the asset's and the
+    /// layer's name.
+    Token {
+        token_url: String,
+        href: String,
+        name: String,
+    },
+    /// An item's or a collection's document (a `?stac=` link), by its address.
+    Link(String),
 }
+
+/// The STAC APIs the dialog offers by name: (label, address).
+pub const APIS: [(&str, &str); 2] = [("Earth Search", stac::EARTH_SEARCH), ("Planetary Computer", stac::PLANETARY_COMPUTER)];
 
 /// The dialog's choices and results.
 pub struct State {
@@ -100,6 +113,102 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             }
             Err(e) => st.error = Some(e),
         },
+        Asked::Token { token_url, href, name } => match r.and_then(|b| stac::parse_sas(&b)) {
+            Ok(token) => {
+                stac::remember_token(&token_url, &token);
+                add_url(app, &stac::sign(&href, &token), &name);
+            }
+            Err(e) => st.error = Some(e),
+        },
+        Asked::Link(url) => landed_link(app, &url, r),
+    }
+}
+
+/// Adds an asset by its address, signing it first when it needs it (a token in hand is used; one
+/// still to fetch is fetched off the frame, and the asset added when it lands).
+fn add_signed(app: &mut RustGisApp, href: &str, name: &str) {
+    if !stac::needs_signing(href) {
+        return add_url(app, href, name);
+    }
+    match stac::sas_token_url(href) {
+        Ok(token_url) => match stac::cached_token(&token_url) {
+            Some(token) => add_url(app, &stac::sign(href, &token), name),
+            None => {
+                let slot = fetch(&token_url);
+                app.ui.stac.info = Some(tl!("Signing the asset (Planetary Computer)…").to_string());
+                app.ui.stac.waiting = Some((Asked::Token { token_url, href: href.to_string(), name: name.to_string() }, slot));
+            }
+        },
+        Err(e) => app.ui.stac.error = Some(e),
+    }
+}
+
+fn add_url(app: &mut RustGisApp, href: &str, name: &str) {
+    if let Err(e) = app.run("ui.addUrl", json!({"url": href, "name": name, "zoom": true})) {
+        app.ui.stac.error = Some(e);
+    }
+}
+
+/// Adds an item's asset (the one named, else the default) under the item's name.
+fn add_item_asset(app: &mut RustGisApp, item: &Item, key: Option<&str>) {
+    match item.asset_href(key) {
+        Ok((key, href)) => add_signed(app, &href, &format!("{} {key}", item.id)),
+        Err(e) => app.ui.stac.error = Some(e),
+    }
+}
+
+/// Opens the dialog on an item's or a collection's address (a `?stac=` link), fetching it off
+/// the frame.
+pub fn open_link(app: &mut RustGisApp, url: &str) -> Result<(), String> {
+    let url = url.trim();
+    rustgis_engine::render::rustgis_tiles::address::check(url, None)?;
+    app.dialogs.open("stac", &app.session)?;
+    let slot = fetch(url);
+    app.ui.stac.error = None;
+    app.ui.stac.info = Some(i18n::fmt("Opening {url}…", &[("url", url)]));
+    app.ui.stac.waiting = Some((Asked::Link(url.to_string()), slot));
+    Ok(())
+}
+
+/// A linked document: an item is shown and its default asset added; a collection is chosen in the
+/// dialog, with its API, ready to search.
+fn landed_link(app: &mut RustGisApp, url: &str, r: Result<Vec<u8>, String>) {
+    let bytes = match r {
+        Ok(b) => b,
+        Err(e) => {
+            app.ui.stac.error = Some(e);
+            return;
+        }
+    };
+    let kind = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|v| Some((v.get("type")?.as_str()?.to_string(), v.get("id").and_then(|i| i.as_str()).map(str::to_string))));
+    // The API is the address before `/collections/`.
+    let api = url.split_once("/collections/").map(|(a, _)| a.to_string());
+    match kind {
+        Some((t, _)) if t == "Feature" => match stac::parse_item(&bytes, url) {
+            Ok(mut item) => {
+                item.url.get_or_insert_with(|| url.to_string());
+                if let Some(api) = api {
+                    app.ui.stac.api = api;
+                }
+                app.ui.stac.collection = item.collection.clone();
+                app.ui.stac.chosen = vec![item.pick(None).map(|a| a.key.clone()).unwrap_or_default()];
+                app.ui.stac.items = vec![item.clone()];
+                app.ui.stac.info = Some(i18n::fmt("Item {id}", &[("id", &item.id)]));
+                show_footprints(app);
+                add_item_asset(app, &item, None);
+            }
+            Err(e) => app.ui.stac.error = Some(e),
+        },
+        Some((t, Some(id))) if t == "Collection" => {
+            if let Some(api) = api {
+                app.ui.stac.api = api;
+            }
+            app.ui.stac.collection = id.chars().take(200).collect();
+            app.ui.stac.info = Some(i18n::fmt("Collection {id}: choose dates and Find Items", &[("id", &app.ui.stac.collection)]));
+        }
+        _ => app.ui.stac.error = Some(i18n::fmt("{url}: not a STAC item or collection", &[("url", url)])),
     }
 }
 
@@ -138,7 +247,21 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
     egui::Grid::new("stac").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         let st = &mut app.ui.stac;
         ui.label(tl!("STAC API"));
-        ui.add(egui::TextEdit::singleline(&mut st.api).desired_width(380.0));
+        ui.horizontal(|ui| {
+            let named = APIS.iter().find(|(_, u)| *u == st.api.trim_end_matches('/')).map(|(l, _)| tl!(*l).to_string());
+            egui::ComboBox::from_id_salt("stac_api").selected_text(named.unwrap_or_else(|| tl!("Other").to_string())).width(150.0).show_ui(
+                ui,
+                |ui| {
+                    for (label, url) in APIS {
+                        if ui.selectable_label(st.api == url, tl!(label)).clicked() && st.api != url {
+                            st.api = url.to_string();
+                            st.collections.clear();
+                        }
+                    }
+                },
+            );
+            ui.add(egui::TextEdit::singleline(&mut st.api).desired_width(230.0));
+        });
         ui.end_row();
         ui.label(tl!("Collection"));
         ui.horizontal(|ui| {
@@ -254,16 +377,8 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
         app.map.invalidate();
     }
     if let Some(i) = add {
-        let Some(item) = app.ui.stac.items.get(i) else { return };
+        let Some(item) = app.ui.stac.items.get(i).cloned() else { return };
         let key = app.ui.stac.chosen.get(i).cloned().unwrap_or_default();
-        match item.asset_href(Some(key.as_str()).filter(|k| !k.is_empty())) {
-            Ok((key, href)) => {
-                let name = format!("{} {key}", item.id);
-                if let Err(e) = app.run("ui.addUrl", json!({"url": href, "name": name})) {
-                    app.ui.stac.error = Some(e);
-                }
-            }
-            Err(e) => app.ui.stac.error = Some(e),
-        }
+        add_item_asset(app, &item, Some(key.as_str()).filter(|k| !k.is_empty()));
     }
 }

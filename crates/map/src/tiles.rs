@@ -123,6 +123,9 @@ pub struct TileLayer {
     /// The catalog entry it came from (`osm`, `esri-imagery`), when it came from one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
+    /// Vector tiles' layer names, when the service gave them (each drawn in a colour of its own).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<String>,
 }
 
 fn max_zoom() -> u8 {
@@ -160,6 +163,7 @@ impl TileLayer {
             opacity: 1.0,
             overlay: false,
             id: String::new(),
+            layers: Vec::new(),
         }
     }
 
@@ -187,6 +191,9 @@ impl TileLayer {
             };
             self.name = if local { file() } else { host_of(&self.url).map(str::to_string) }.unwrap_or_else(|| "Tiles".into());
         }
+        // Layer names (a project file is hostile input): at most 64, each short and printable.
+        self.layers.retain(|l| !l.trim().is_empty() && l.len() <= 200 && !l.chars().any(char::is_control));
+        self.layers.truncate(64);
         self.max_zoom = self.max_zoom.min(MAX_ZOOM);
         self.min_zoom = self.min_zoom.min(self.max_zoom);
         self.tile_size = if self.tile_size >= 384 { 512 } else { 256 };
