@@ -56,6 +56,39 @@ fn sample_project_loads() {
 }
 
 #[test]
+fn layer_move_reorders_in_one_undo_step() {
+    let mut s = world();
+    let names = |s: &Session| s.map().layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    let depth = s.undo_depth();
+    // Down three places: one command, one undo step.
+    s.run("layer.move", &json!({"layer": "Cities", "to": 3})).unwrap();
+    assert_eq!(names(&s), ["Rivers", "Lakes", "Countries", "Cities"]);
+    assert_eq!(s.undo_depth(), depth + 1);
+    // Up, to the middle.
+    s.run("layer.move", &json!({"layer": "Cities", "to": 1})).unwrap();
+    assert_eq!(names(&s), ["Rivers", "Cities", "Lakes", "Countries"]);
+    // Past the end is the bottom.
+    s.run("layer.move", &json!({"layer": "Rivers", "to": 1e9})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Lakes", "Countries", "Rivers"]);
+    // Staying put, a missing or junk position and an unknown layer fail and leave no undo step.
+    let depth = s.undo_depth();
+    for p in [
+        json!({"layer": "Rivers", "to": 3}),
+        json!({"layer": "Rivers", "to": 99}),
+        json!({"layer": "Rivers"}),
+        json!({"layer": "Rivers", "to": -1}),
+        json!({"layer": "Rivers", "to": 1.5}),
+        json!({"layer": "Nope", "to": 0}),
+    ] {
+        assert!(s.run("layer.move", &p).is_err(), "{p}");
+    }
+    assert_eq!(names(&s), ["Cities", "Lakes", "Countries", "Rivers"]);
+    assert_eq!(s.undo_depth(), depth);
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(names(&s), ["Rivers", "Cities", "Lakes", "Countries"]);
+}
+
+#[test]
 fn select_symbolize_undo_redo() {
     let mut s = world();
     let r = s.run("select.byAttributes", &json!({"layer": "Countries", "where": "continent = 'Africa'"})).unwrap();

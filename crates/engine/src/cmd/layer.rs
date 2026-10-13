@@ -6,7 +6,7 @@ use rustgis_data::GeometryType;
 use rustgis_map::{ClassMethod, Marker, Ramp, Renderer, Rgba};
 use serde_json::{Value, json};
 
-use super::{b, f, need_feature_layer, need_layer, ps};
+use super::{b, f, need_feature_layer, need_layer, ps, uint};
 use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
@@ -68,6 +68,7 @@ pub fn commands() -> Vec<C> {
         .when(need_layer),
         C::new("layer.moveUp", "Move Up", "Layers", |s, p| move_layer(s, p, -1)).when(need_layer),
         C::new("layer.moveDown", "Move Down", "Layers", |s, p| move_layer(s, p, 1)).when(need_layer),
+        C::new("layer.move", "Move", "Layers", move_to).when(need_layer).params(r#"{"layer"?: name|id, "to": position (0 = top)}"#),
         C::new("layer.zoomTo", "Zoom To Layer", "Layers", |s, p| {
             let id = s.layer_id(p)?;
             let e = s.map().layer(id).map(|l| l.extent()).unwrap_or_default();
@@ -1359,6 +1360,22 @@ fn move_layer(s: &mut Session, p: &Value, d: i32) -> CmdResult {
         return Err("the layer can't move further".into());
     }
     m.layers.swap(i, j as usize);
+    Ok(Value::Null)
+}
+
+/// Moves a layer to a position in the drawing order: 0 is the top, anything past the end the
+/// bottom. One command (and one undo step) however far the layer travels.
+fn move_to(s: &mut Session, p: &Value) -> CmdResult {
+    let id = s.layer_id(p)?;
+    let to = uint(p, "to").ok_or("to is required: the position in the drawing order, 0 at the top")?;
+    let m = s.map_mut();
+    let i = m.layer_index(id).ok_or("no such layer")?;
+    let to = usize::try_from(to).unwrap_or(usize::MAX).min(m.layers.len().saturating_sub(1));
+    if to == i {
+        return Err("the layer is already there".into());
+    }
+    let l = m.layers.remove(i);
+    m.layers.insert(to, l);
     Ok(Value::Null)
 }
 
