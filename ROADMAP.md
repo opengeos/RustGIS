@@ -4,13 +4,14 @@ Many features are first versions: there are no full 3D scenes or enterprise port
 
 ## Done
 - Layered workspace, command registry with undo, project files (`.rgis`), `rustgis-cli`, the
-  web app (WebAssembly), 15 interface languages.
-- Data: GeoJSON, CSV (lon/lat), Shapefile, GeoPackage, GeoParquet, FlatGeobuf, KML/KMZ and GPX in (large files
-  read in place, a view at a time), the vector formats GDAL reads when it is installed, and SQL
-  queries and DuckDB databases (DuckDB Spatial) when DuckDB is;
-  GeoJSON, CSV, GeoPackage, GeoParquet, Shapefile, FlatGeobuf, KML/KMZ, GPX and WKT out;
-  standalone tables; layer, map, style, template,
-  task and package files.
+  web app (WebAssembly), 15 interface languages; a ribbon laid out in the order of the work
+  (Home, Data, Style, Edit, Analyze, View, Publish), start-up preferences, Check for Updates.
+- Data: GeoJSON, CSV (lon/lat), Shapefile (zipped too, with the coordinate system in its
+  `.prj`), GeoPackage, GeoParquet, FlatGeobuf, KML/KMZ (styles included) and GPX in, all of them
+  in the web app too (large files read in place, a view at a time); the vector formats GDAL
+  reads when it is installed, and SQL queries and DuckDB databases (DuckDB Spatial) when DuckDB
+  is; GeoJSON, CSV, GeoPackage, GeoParquet, Shapefile, FlatGeobuf, KML/KMZ, GPX and WKT out;
+  standalone tables; layer, map, style, template, task and package files.
 - Rasters: GeoTIFF/COG and ASCII grids, EPSG reprojection, stretch/RGB/classified/shaded-relief
   symbology, raster functions, indices, change detection, classification, georeferencing.
 - Maps: multiple maps, a 3D globe, projection presets and EPSG codes, bookmarks, web tile
@@ -32,8 +33,8 @@ Many features are first versions: there are no full 3D scenes or enterprise port
   as Claude Code, Cursor and VS Code, with the documentation built in.
 - Sandboxed WebAssembly plugins with a registry at plugins.rustgis.app.
 - Desktop packages: Windows installers (setup.exe, .msi), a portable zip and a Store MSIX; a
-  signed and notarized macOS DMG; Linux .deb, .rpm, AppImage and tarballs; a download mirror at
-  downloads.rustgis.app.
+  signed and notarized macOS DMG; Linux .deb, .rpm, AppImage and tarballs; Homebrew, the AUR,
+  Fedora COPR and winget; a download mirror at downloads.rustgis.app.
 
 ## Next
 - Editing: vertex editing (move, add and delete vertices of existing features).

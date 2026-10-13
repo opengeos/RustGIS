@@ -20,9 +20,10 @@ script from the command line, a notebook or the AI Assistant.
 
 -   **Your data, any map**
 
-    GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet, FlatGeobuf, GeoTIFF and cloud-optimised GeoTIFF, web tiles, vector tiles and
-    MapLibre styles, drawn on a 3D globe or in any projection.
-    [Data](user-guide/data.md) · [Maps](user-guide/maps.md)
+    GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet, FlatGeobuf, KML, GPX, GeoTIFF and
+    cloud-optimised GeoTIFF, DuckDB databases, web tiles, vector tiles, PMTiles and MapLibre
+    styles, drawn on a 3D globe or in any projection, on the desktop and in the browser.
+    [Data](user-guide/data.md) · [Formats](user-guide/data-formats.md) · [Maps](user-guide/maps.md)
 
 -   **Cartography**
 
