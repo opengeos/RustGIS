@@ -239,6 +239,11 @@ Change the page size and orientation.	更改页面大小和方向。
 Change the project (add layers, edit features, change symbology)	更改工程（添加图层、编辑要素、更改符号系统）
 Chart categories	图表类别
 Chart Frame	图表框
+Check Again	再次检查
+Check for\nUpdates	检查\n更新
+Check for Updates	检查更新
+Check for Updates…	检查更新…
+Checking for updates…	正在检查更新…
 China	中国
 Choose a band combination to display the raster layer.	选择用于显示栅格图层的波段组合。
 Choose a contrast stretch for the raster layer.	为栅格图层选择对比度拉伸。
@@ -358,6 +363,7 @@ Copy the selected layer's data source path.	复制所选图层的数据源路径
 Corrections	校正
 Cost	成本
 could not draw the map	无法绘制地图
+Couldn't check for updates: {error}	无法检查更新：{error}
 Couldn't download the font for {language}; pick the language again to retry.	无法下载 {language} 的字体；请重新选择该语言以重试。
 Couldn't load the plugin registry: {error}	无法加载插件库：{error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	字段的计数、总和、平均值、最小值、最大值和标准差，可按分组字段分别统计。
@@ -690,6 +696,8 @@ GeoTIFF	GeoTIFF
 Get a key	获取密钥
 Get it	获取
 GitHub	GitHub
+GitHub's reply isn't a release	GitHub 的回复不是一个发布版本
+GitHub's reply names no release	GitHub 的回复中没有发布版本
 Global	全局
 Globe	地球仪
 Go	转到
@@ -723,6 +731,7 @@ Haze, fog, rain or snow over the map.	地图上的霾、雾、雨或雪。
 Height	高度
 Height (mm)	高度（mm）
 Help	帮助
+Help › Help	帮助 › 帮助
 Hexagons	六边形
 Hide	隐藏
 Hide features far from the view's centre.	隐藏远离视图中心的要素。
@@ -790,6 +799,7 @@ Install Plugin From Registry	从插件库安装插件
 Install {name} {version}?	安装 {name} {version}？
 Installed	已安装
 Installed plugins are kept in {folder}	已安装的插件保存在 {folder}
+Installed with Homebrew, winget, the AUR or COPR? Update it there.	通过 Homebrew、winget、AUR 或 COPR 安装？请在那里更新。
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	已安装 {name} {version}。可在“插件”选项卡中找到它；其工具也位于工具窗格中。
 Interface font: {font}	界面字体：{font}
 Interpolate a surface from points (IDW)	由点插值生成表面（IDW）
@@ -1102,6 +1112,7 @@ Open Report	打开报表
 Open the attribute table of the selected layer.	打开所选图层的属性表。
 Open the layer's attribute table.	打开图层的属性表。
 Open the layer's table.	打开图层的表。
+Open the Release Page	打开发布页面
 Open the RustGIS user guide.	打开 RustGIS 用户指南。
 Open the selected layer's table.	打开所选图层的表。
 Open the Symbology pane.	打开符号系统窗格。
@@ -1367,6 +1378,8 @@ RustGIS project template	RustGIS 工程模板
 RustGIS report or report template	RustGIS 报表或报表模板
 RustGIS styles	RustGIS 样式
 RustGIS task	RustGIS 任务
+RustGIS {latest} is available.	RustGIS {latest} 已发布。
+RustGIS {version} is the latest version.	RustGIS {version} 是最新版本。
 RUSTGIS_ASSISTANT_MODEL	RUSTGIS_ASSISTANT_MODEL
 RUSTGIS_ASSISTANT_PROVIDER	RUSTGIS_ASSISTANT_PROVIDER
 Sample data (Natural Earth)	示例数据（Natural Earth）
@@ -1435,6 +1448,7 @@ Sections	节
 See and set the camera's position and scale.	查看并设置相机的位置和比例。
 See the map as people with colour vision deficiencies do.	以色觉缺陷人士的视角查看地图。
 See the tools you've run.	查看已运行的工具。
+See whether a newer RustGIS has been released.	检查是否发布了更新的 RustGIS。
 Select	选择
 Select (click)	选择（单击）
 Select (rectangle)	选择（矩形）
@@ -1647,6 +1661,7 @@ the reply reached its length limit	回复已达到长度上限
 the report export failed unexpectedly	报表导出意外失败
 The Shapefile's files download as one zip.	Shapefile 的各个文件将打包为一个 zip 下载。
 the view has no extent	视图没有范围
+The web app always runs the latest release: reload the page to get it.	Web 应用始终运行最新版本：重新加载页面即可获取。
 Thermal	热力
 Thinking…	思考中…
 this build can't download plugins	此版本无法下载插件
@@ -1798,6 +1813,7 @@ Write a plugin	编写插件
 X (mm)	X（mm）
 Y (mm)	Y（mm）
 Yes	是
+You have version {version}.	你的版本是 {version}。
 z (m)	z（m）
 Z factor	Z 因子
 Zoom	缩放

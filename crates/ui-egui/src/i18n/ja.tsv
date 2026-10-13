@@ -239,6 +239,11 @@ Change the page size and orientation.	ページのサイズと向きを変更し
 Change the project (add layers, edit features, change symbology)	プロジェクトの変更 (レイヤーの追加、フィーチャの編集、シンボルの変更)
 Chart categories	グラフのカテゴリ
 Chart Frame	グラフ フレーム
+Check Again	再確認
+Check for\nUpdates	更新の\n確認
+Check for Updates	更新の確認
+Check for Updates…	更新の確認…
+Checking for updates…	更新を確認しています…
 China	中国
 Choose a band combination to display the raster layer.	ラスター レイヤーを表示するバンドの組み合わせを選択します。
 Choose a contrast stretch for the raster layer.	ラスター レイヤーのコントラスト ストレッチを選択します。
@@ -358,6 +363,7 @@ Copy the selected layer's data source path.	選択したレイヤーのデータ
 Corrections	補正
 Cost	コスト
 could not draw the map	マップを描画できませんでした
+Couldn't check for updates: {error}	更新を確認できませんでした: {error}
 Couldn't download the font for {language}; pick the language again to retry.	{language} のフォントをダウンロードできませんでした。もう一度言語を選択して再試行してください。
 Couldn't load the plugin registry: {error}	プラグイン レジストリを読み込めませんでした: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	フィールドの個数、合計、平均、最小、最大、標準偏差。必要に応じてケース フィールドごとに集計します。
@@ -690,6 +696,8 @@ GeoTIFF	GeoTIFF
 Get a key	キーを取得
 Get it	入手する
 GitHub	GitHub
+GitHub's reply isn't a release	GitHub の応答がリリースではありません
+GitHub's reply names no release	GitHub の応答にリリースがありません
 Global	グローバル
 Globe	地球儀
 Go	移動
@@ -723,6 +731,7 @@ Haze, fog, rain or snow over the map.	マップ上のもや、霧、雨、雪。
 Height	高さ
 Height (mm)	高さ (mm)
 Help	ヘルプ
+Help › Help	ヘルプ › ヘルプ
 Hexagons	六角形
 Hide	非表示
 Hide features far from the view's centre.	ビューの中心から遠いフィーチャを非表示にします。
@@ -790,6 +799,7 @@ Install Plugin From Registry	レジストリからプラグインをインスト
 Install {name} {version}?	{name} {version} をインストールしますか？
 Installed	インストール済み
 Installed plugins are kept in {folder}	インストールしたプラグインの保存先: {folder}
+Installed with Homebrew, winget, the AUR or COPR? Update it there.	Homebrew、winget、AUR、COPR でインストールした場合は、そちらで更新してください。
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} をインストールしました。[プラグイン] タブにあります。ツールはツール ウィンドウにもあります。
 Interface font: {font}	インターフェイスのフォント：{font}
 Interpolate a surface from points (IDW)	ポイントから表面を内挿 (IDW)
@@ -1102,6 +1112,7 @@ Open Report	レポートを開く
 Open the attribute table of the selected layer.	選択したレイヤーの属性テーブルを開きます。
 Open the layer's attribute table.	レイヤーの属性テーブルを開きます。
 Open the layer's table.	レイヤーのテーブルを開きます。
+Open the Release Page	リリース ページを開く
 Open the RustGIS user guide.	RustGIS ユーザー ガイドを開きます。
 Open the selected layer's table.	選択したレイヤーのテーブルを開きます。
 Open the Symbology pane.	シンボル ウィンドウを開きます。
@@ -1367,6 +1378,8 @@ RustGIS project template	RustGIS プロジェクト テンプレート
 RustGIS report or report template	RustGIS レポートまたはレポート テンプレート
 RustGIS styles	RustGIS スタイル
 RustGIS task	RustGIS タスク
+RustGIS {latest} is available.	RustGIS {latest} が利用できます。
+RustGIS {version} is the latest version.	RustGIS {version} が最新バージョンです。
 RUSTGIS_ASSISTANT_MODEL	RUSTGIS_ASSISTANT_MODEL
 RUSTGIS_ASSISTANT_PROVIDER	RUSTGIS_ASSISTANT_PROVIDER
 Sample data (Natural Earth)	サンプル データ（Natural Earth）
@@ -1435,6 +1448,7 @@ Sections	セクション
 See and set the camera's position and scale.	カメラの位置と縮尺を表示、設定します。
 See the map as people with colour vision deficiencies do.	色覚特性を持つ人の見え方でマップを表示します。
 See the tools you've run.	実行したツールを表示します。
+See whether a newer RustGIS has been released.	新しい RustGIS がリリースされているか確認します。
 Select	選択
 Select (click)	選択（クリック）
 Select (rectangle)	選択（四角形）
@@ -1647,6 +1661,7 @@ the reply reached its length limit	応答が長さの上限に達しました
 the report export failed unexpectedly	レポートのエクスポートが予期せず失敗しました
 The Shapefile's files download as one zip.	Shapefile のファイルは 1 つの zip としてダウンロードされます。
 the view has no extent	ビューに範囲がありません
+The web app always runs the latest release: reload the page to get it.	Web アプリは常に最新リリースで動作します。ページを再読み込みすると取得できます。
 Thermal	サーマル
 Thinking…	考え中…
 this build can't download plugins	このビルドではプラグインをダウンロードできません
@@ -1798,6 +1813,7 @@ Write a plugin	プラグインを作成
 X (mm)	X (mm)
 Y (mm)	Y (mm)
 Yes	はい
+You have version {version}.	現在のバージョンは {version} です。
 z (m)	z (m)
 Z factor	Z 係数
 Zoom	ズーム

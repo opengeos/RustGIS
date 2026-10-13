@@ -239,6 +239,11 @@ Change the page size and orientation.	페이지 크기와 방향을 변경합니
 Change the project (add layers, edit features, change symbology)	프로젝트 변경 (레이어 추가, 피처 편집, 심볼 변경)
 Chart categories	차트 범주
 Chart Frame	차트 프레임
+Check Again	다시 확인
+Check for\nUpdates	업데이트\n확인
+Check for Updates	업데이트 확인
+Check for Updates…	업데이트 확인…
+Checking for updates…	업데이트 확인 중…
 China	중국
 Choose a band combination to display the raster layer.	래스터 레이어를 표시할 밴드 조합을 선택합니다.
 Choose a contrast stretch for the raster layer.	래스터 레이어의 대비 스트레치를 선택합니다.
@@ -358,6 +363,7 @@ Copy the selected layer's data source path.	선택한 레이어의 데이터 원
 Corrections	보정
 Cost	비용
 could not draw the map	지도를 그릴 수 없습니다
+Couldn't check for updates: {error}	업데이트를 확인할 수 없습니다: {error}
 Couldn't download the font for {language}; pick the language again to retry.	{language} 글꼴을 다운로드할 수 없습니다. 다시 시도하려면 언어를 다시 선택하세요.
 Couldn't load the plugin registry: {error}	플러그인 레지스트리를 불러올 수 없습니다: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	필드의 개수, 합계, 평균, 최소값, 최대값 및 표준 편차를 계산하며, 선택적으로 케이스 필드별로 계산합니다.
@@ -690,6 +696,8 @@ GeoTIFF	GeoTIFF
 Get a key	키 받기
 Get it	받기
 GitHub	GitHub
+GitHub's reply isn't a release	GitHub 응답이 릴리스가 아닙니다
+GitHub's reply names no release	GitHub 응답에 릴리스가 없습니다
 Global	전역
 Globe	지구본
 Go	이동
@@ -723,6 +731,7 @@ Haze, fog, rain or snow over the map.	지도 위의 연무, 안개, 비 또는 �
 Height	높이
 Height (mm)	높이(mm)
 Help	도움말
+Help › Help	도움말 › 도움말
 Hexagons	육각형
 Hide	숨기기
 Hide features far from the view's centre.	뷰 중심에서 멀리 있는 피처를 숨깁니다.
@@ -790,6 +799,7 @@ Install Plugin From Registry	레지스트리에서 플러그인 설치
 Install {name} {version}?	{name} {version}을(를) 설치할까요?
 Installed	설치됨
 Installed plugins are kept in {folder}	설치된 플러그인 위치: {folder}
+Installed with Homebrew, winget, the AUR or COPR? Update it there.	Homebrew, winget, AUR 또는 COPR로 설치했다면 그곳에서 업데이트하세요.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version}을(를) 설치했습니다. 플러그인 탭에서 찾을 수 있으며, 도구는 도구 창에도 있습니다.
 Interface font: {font}	인터페이스 글꼴: {font}
 Interpolate a surface from points (IDW)	포인트로 표면 보간(IDW)
@@ -1102,6 +1112,7 @@ Open Report	보고서 열기
 Open the attribute table of the selected layer.	선택한 레이어의 속성 테이블을 엽니다.
 Open the layer's attribute table.	레이어의 속성 테이블을 엽니다.
 Open the layer's table.	레이어의 테이블을 엽니다.
+Open the Release Page	릴리스 페이지 열기
 Open the RustGIS user guide.	RustGIS 사용자 가이드를 엽니다.
 Open the selected layer's table.	선택한 레이어의 테이블을 엽니다.
 Open the Symbology pane.	심볼 창을 엽니다.
@@ -1367,6 +1378,8 @@ RustGIS project template	RustGIS 프로젝트 템플릿
 RustGIS report or report template	RustGIS 보고서 또는 보고서 템플릿
 RustGIS styles	RustGIS 스타일
 RustGIS task	RustGIS 태스크
+RustGIS {latest} is available.	RustGIS {latest}을(를) 사용할 수 있습니다.
+RustGIS {version} is the latest version.	RustGIS {version}이(가) 최신 버전입니다.
 RUSTGIS_ASSISTANT_MODEL	RUSTGIS_ASSISTANT_MODEL
 RUSTGIS_ASSISTANT_PROVIDER	RUSTGIS_ASSISTANT_PROVIDER
 Sample data (Natural Earth)	샘플 데이터(Natural Earth)
@@ -1435,6 +1448,7 @@ Sections	섹션
 See and set the camera's position and scale.	카메라의 위치와 축척을 확인하고 설정합니다.
 See the map as people with colour vision deficiencies do.	색각 이상이 있는 사람이 보는 방식으로 지도를 봅니다.
 See the tools you've run.	실행한 도구를 확인합니다.
+See whether a newer RustGIS has been released.	새 RustGIS가 출시되었는지 확인합니다.
 Select	선택
 Select (click)	선택(클릭)
 Select (rectangle)	선택(사각형)
@@ -1647,6 +1661,7 @@ the reply reached its length limit	응답이 길이 제한에 도달했습니다
 the report export failed unexpectedly	보고서 내보내기가 예기치 않게 실패했습니다
 The Shapefile's files download as one zip.	Shapefile의 파일은 하나의 zip으로 다운로드됩니다.
 the view has no extent	뷰에 범위가 없습니다
+The web app always runs the latest release: reload the page to get it.	웹 앱은 항상 최신 릴리스로 실행됩니다. 페이지를 새로 고치면 받을 수 있습니다.
 Thermal	열화상
 Thinking…	생각 중…
 this build can't download plugins	이 빌드는 플러그인을 다운로드할 수 없습니다
@@ -1798,6 +1813,7 @@ Write a plugin	플러그인 만들기
 X (mm)	X(mm)
 Y (mm)	Y(mm)
 Yes	예
+You have version {version}.	현재 버전은 {version}입니다.
 z (m)	z(m)
 Z factor	Z 계수
 Zoom	확대/축소

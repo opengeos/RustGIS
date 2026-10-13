@@ -239,6 +239,11 @@ Change the page size and orientation.	Səhifə ölçüsünü və istiqamətini d
 Change the project (add layers, edit features, change symbology)	Layihəni dəyişmək (lay əlavə etmək, obyektləri redaktə etmək, simvolikanı dəyişmək)
 Chart categories	Diaqram kateqoriyaları
 Chart Frame	Diaqram çərçivəsi
+Check Again	Yenidən yoxla
+Check for\nUpdates	Yeniləmələri\nyoxla
+Check for Updates	Yeniləmələri yoxla
+Check for Updates…	Yeniləmələri yoxla…
+Checking for updates…	Yeniləmələr yoxlanılır…
 China	Çin
 Choose a band combination to display the raster layer.	Rastr layını göstərmək üçün kanal kombinasiyası seçin.
 Choose a contrast stretch for the raster layer.	Rastr layı üçün kontrast genişləndirməsi seçin.
@@ -358,6 +363,7 @@ Copy the selected layer's data source path.	Seçilmiş layın məlumat mənbəyi
 Corrections	Düzəlişlər
 Cost	Xərc
 could not draw the map	xəritəni çəkmək mümkün olmadı
+Couldn't check for updates: {error}	Yeniləmələri yoxlamaq mümkün olmadı: {error}
 Couldn't download the font for {language}; pick the language again to retry.	{language} üçün şrift endirilə bilmədi; yenidən cəhd etmək üçün dili yenidən seçin.
 Couldn't load the plugin registry: {error}	Plagin reyestrini yükləmək mümkün olmadı: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Sahənin say, cəm, orta, min, maks və standart sapması, istəyə görə qrup sahəsi üzrə.
@@ -690,6 +696,8 @@ GeoTIFF	GeoTIFF
 Get a key	Açar əldə et
 Get it	Yüklə
 GitHub	GitHub
+GitHub's reply isn't a release	GitHub cavabı buraxılış deyil
+GitHub's reply names no release	GitHub cavabında buraxılış göstərilməyib
 Global	Qlobal
 Globe	Qlobus
 Go	Keç
@@ -723,6 +731,7 @@ Haze, fog, rain or snow over the map.	Xəritə üzərində toz dumanı, duman, y
 Height	Hündürlük
 Height (mm)	Hündürlük (mm)
 Help	Kömək
+Help › Help	Kömək › Kömək
 Hexagons	Altıbucaqlılar
 Hide	Gizlət
 Hide features far from the view's centre.	Görünüşün mərkəzindən uzaq obyektləri gizlədin.
@@ -790,6 +799,7 @@ Install Plugin From Registry	Reyestrdən plagin quraşdır
 Install {name} {version}?	{name} {version} quraşdırılsın?
 Installed	Quraşdırılıb
 Installed plugins are kept in {folder}	Quraşdırılmış plaginlər burada saxlanılır: {folder}
+Installed with Homebrew, winget, the AUR or COPR? Update it there.	Homebrew, winget, AUR və ya COPR ilə quraşdırmısınız? Oradan yeniləyin.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} quraşdırıldı. Onu Plaginlər tabında tapa bilərsiniz; alətləri Alətlər panelində də var.
 Interface font: {font}	İnterfeys şrifti: {font}
 Interpolate a surface from points (IDW)	Nöqtələrdən səth interpolyasiya et (IDW)
@@ -1102,6 +1112,7 @@ Open Report	Hesabatı aç
 Open the attribute table of the selected layer.	Seçilmiş layın atribut cədvəlini açın.
 Open the layer's attribute table.	Layın atribut cədvəlini açın.
 Open the layer's table.	Layın cədvəlini açın.
+Open the Release Page	Buraxılış səhifəsini aç
 Open the RustGIS user guide.	RustGIS istifadəçi təlimatını açın.
 Open the selected layer's table.	Seçilmiş layın cədvəlini açın.
 Open the Symbology pane.	Simvolika panelini açın.
@@ -1367,6 +1378,8 @@ RustGIS project template	RustGIS layihə şablonu
 RustGIS report or report template	RustGIS hesabatı və ya hesabat şablonu
 RustGIS styles	RustGIS üslubları
 RustGIS task	RustGIS tapşırığı
+RustGIS {latest} is available.	RustGIS {latest} mövcuddur.
+RustGIS {version} is the latest version.	RustGIS {version} ən son versiyadır.
 RUSTGIS_ASSISTANT_MODEL	RUSTGIS_ASSISTANT_MODEL
 RUSTGIS_ASSISTANT_PROVIDER	RUSTGIS_ASSISTANT_PROVIDER
 Sample data (Natural Earth)	Nümunə məlumat (Natural Earth)
@@ -1435,6 +1448,7 @@ Sections	Bölmələr
 See and set the camera's position and scale.	Kameranın mövqeyinə və miqyasına baxın və onları təyin edin.
 See the map as people with colour vision deficiencies do.	Xəritəni rəng görmə çatışmazlığı olan insanların gördüyü kimi görün.
 See the tools you've run.	İşə saldığınız alətlərə baxın.
+See whether a newer RustGIS has been released.	RustGIS-in daha yeni versiyasının buraxılıb-buraxılmadığını yoxla.
 Select	Seç
 Select (click)	Seç (klik)
 Select (rectangle)	Seç (düzbucaqlı)
@@ -1647,6 +1661,7 @@ the reply reached its length limit	cavab uzunluq həddinə çatdı
 the report export failed unexpectedly	hesabatın ixracı gözlənilmədən uğursuz oldu
 The Shapefile's files download as one zip.	Shapefile faylları bir zip arxivi kimi endirilir.
 the view has no extent	görünüşün hüdudu yoxdur
+The web app always runs the latest release: reload the page to get it.	Veb tətbiq həmişə ən son buraxılışla işləyir: onu almaq üçün səhifəni yeniləyin.
 Thermal	Termal
 Thinking…	Düşünür…
 this build can't download plugins	bu yığım plaginləri endirə bilmir
@@ -1798,6 +1813,7 @@ Write a plugin	Plagin yaz
 X (mm)	X (mm)
 Y (mm)	Y (mm)
 Yes	Bəli
+You have version {version}.	Sizdə {version} versiyası var.
 z (m)	z (m)
 Z factor	Z əmsalı
 Zoom	Miqyas

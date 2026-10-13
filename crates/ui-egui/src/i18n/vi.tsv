@@ -239,6 +239,11 @@ Change the page size and orientation.	Thay đổi kích thước và hướng tr
 Change the project (add layers, edit features, change symbology)	Thay đổi dự án (thêm lớp, chỉnh sửa đối tượng, thay đổi ký hiệu)
 Chart categories	Danh mục biểu đồ
 Chart Frame	Khung biểu đồ
+Check Again	Kiểm tra lại
+Check for\nUpdates	Kiểm tra\ncập nhật
+Check for Updates	Kiểm tra cập nhật
+Check for Updates…	Kiểm tra cập nhật…
+Checking for updates…	Đang kiểm tra cập nhật…
 China	Trung Quốc
 Choose a band combination to display the raster layer.	Chọn tổ hợp kênh để hiển thị lớp raster.
 Choose a contrast stretch for the raster layer.	Chọn kiểu kéo giãn độ tương phản cho lớp raster.
@@ -358,6 +363,7 @@ Copy the selected layer's data source path.	Sao chép đường dẫn nguồn d�
 Corrections	Hiệu chỉnh
 Cost	Chi phí
 could not draw the map	không thể vẽ bản đồ
+Couldn't check for updates: {error}	Không thể kiểm tra cập nhật: {error}
 Couldn't download the font for {language}; pick the language again to retry.	Không thể tải phông chữ cho {language}; hãy chọn lại ngôn ngữ để thử lại.
 Couldn't load the plugin registry: {error}	Không thể tải kho plugin: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Số lượng, tổng, trung bình, nhỏ nhất, lớn nhất và độ lệch chuẩn của một trường, có thể theo từng trường phân nhóm.
@@ -690,6 +696,8 @@ GeoTIFF	GeoTIFF
 Get a key	Lấy khóa
 Get it	Tải về
 GitHub	GitHub
+GitHub's reply isn't a release	Phản hồi của GitHub không phải là một bản phát hành
+GitHub's reply names no release	Phản hồi của GitHub không nêu bản phát hành nào
 Global	Toàn cục
 Globe	Quả địa cầu
 Go	Đi
@@ -723,6 +731,7 @@ Haze, fog, rain or snow over the map.	Mù khô, sương mù, mưa hoặc tuyết
 Height	Chiều cao
 Height (mm)	Chiều cao (mm)
 Help	Trợ giúp
+Help › Help	Trợ giúp › Trợ giúp
 Hexagons	Lục giác
 Hide	Ẩn
 Hide features far from the view's centre.	Ẩn các đối tượng ở xa tâm khung nhìn.
@@ -790,6 +799,7 @@ Install Plugin From Registry	Cài đặt plugin từ kho
 Install {name} {version}?	Cài đặt {name} {version}?
 Installed	Đã cài đặt
 Installed plugins are kept in {folder}	Plugin đã cài đặt được lưu trong {folder}
+Installed with Homebrew, winget, the AUR or COPR? Update it there.	Đã cài bằng Homebrew, winget, AUR hoặc COPR? Hãy cập nhật ở đó.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	Đã cài đặt {name} {version}. Bạn có thể tìm thấy plugin trên thẻ Plugin; các công cụ của nó cũng có trong ngăn Công cụ.
 Interface font: {font}	Phông giao diện: {font}
 Interpolate a surface from points (IDW)	Nội suy bề mặt từ điểm (IDW)
@@ -1102,6 +1112,7 @@ Open Report	Mở báo cáo
 Open the attribute table of the selected layer.	Mở bảng thuộc tính của lớp được chọn.
 Open the layer's attribute table.	Mở bảng thuộc tính của lớp.
 Open the layer's table.	Mở bảng của lớp.
+Open the Release Page	Mở trang phát hành
 Open the RustGIS user guide.	Mở hướng dẫn sử dụng RustGIS.
 Open the selected layer's table.	Mở bảng của lớp được chọn.
 Open the Symbology pane.	Mở ngăn Ký hiệu.
@@ -1367,6 +1378,8 @@ RustGIS project template	Mẫu dự án RustGIS
 RustGIS report or report template	Báo cáo hoặc mẫu báo cáo RustGIS
 RustGIS styles	Kiểu RustGIS
 RustGIS task	Nhiệm vụ RustGIS
+RustGIS {latest} is available.	Đã có RustGIS {latest}.
+RustGIS {version} is the latest version.	RustGIS {version} là phiên bản mới nhất.
 RUSTGIS_ASSISTANT_MODEL	RUSTGIS_ASSISTANT_MODEL
 RUSTGIS_ASSISTANT_PROVIDER	RUSTGIS_ASSISTANT_PROVIDER
 Sample data (Natural Earth)	Dữ liệu mẫu (Natural Earth)
@@ -1435,6 +1448,7 @@ Sections	Phần
 See and set the camera's position and scale.	Xem và đặt vị trí và tỷ lệ của máy ảnh.
 See the map as people with colour vision deficiencies do.	Xem bản đồ như người bị khiếm khuyết thị giác màu.
 See the tools you've run.	Xem các công cụ bạn đã chạy.
+See whether a newer RustGIS has been released.	Kiểm tra xem đã có bản RustGIS mới hơn chưa.
 Select	Chọn
 Select (click)	Chọn (nhấp)
 Select (rectangle)	Chọn (hình chữ nhật)
@@ -1647,6 +1661,7 @@ the reply reached its length limit	câu trả lời đã chạm giới hạn đ�
 the report export failed unexpectedly	xuất báo cáo thất bại ngoài dự kiến
 The Shapefile's files download as one zip.	Các tệp của Shapefile được tải xuống dưới dạng một tệp zip.
 the view has no extent	khung nhìn không có phạm vi
+The web app always runs the latest release: reload the page to get it.	Ứng dụng web luôn chạy bản phát hành mới nhất: tải lại trang để nhận bản đó.
 Thermal	Nhiệt
 Thinking…	Đang suy nghĩ…
 this build can't download plugins	bản dựng này không thể tải plugin
@@ -1798,6 +1813,7 @@ Write a plugin	Viết plugin
 X (mm)	X (mm)
 Y (mm)	Y (mm)
 Yes	Có
+You have version {version}.	Bạn đang dùng phiên bản {version}.
 z (m)	z (m)
 Z factor	Hệ số Z
 Zoom	Thu phóng

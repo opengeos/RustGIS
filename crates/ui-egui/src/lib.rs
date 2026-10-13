@@ -24,6 +24,7 @@ mod reportpane;
 mod ribbon;
 mod table;
 pub mod theme;
+mod update;
 mod widgets;
 mod workspacepanes;
 
@@ -264,6 +265,8 @@ pub struct RustGisApp {
     pub ws: workspacepanes::WorkspaceState,
     /// The Plugin Manager and plugin downloads.
     pub plugins: pluginsui::PluginsState,
+    /// Help › Check for Updates.
+    pub update: update::UpdateState,
     pub reports: reportpane::ReportState,
     pub docs: docpanes::DocState,
     /// The AI Assistant's conversation and settings.
@@ -309,6 +312,7 @@ impl RustGisApp {
             workflow: analysispane::Workflow::default(),
             ws: workspacepanes::WorkspaceState::default(),
             plugins: pluginsui::PluginsState::default(),
+            update: update::UpdateState::default(),
             reports: reportpane::ReportState::default(),
             docs: docpanes::DocState::default(),
             assistant: assistantpane::AssistantState::default(),
@@ -784,6 +788,7 @@ impl RustGisApp {
             "ui.theme" => self.ui.dark = p.get("dark").and_then(Value::as_bool).unwrap_or(!self.ui.dark),
             "ui.commandSearch" => self.ui.command_search = Some(String::new()),
             "ui.about" => self.ui.about = true,
+            "ui.checkUpdate" => self.update.check(),
             "ui.plugins" => {
                 self.plugins.open = p.get("open").and_then(Value::as_bool).unwrap_or(!self.plugins.open);
                 if let Some(url) = p.get("registry").and_then(Value::as_str) {
@@ -1529,6 +1534,7 @@ impl RustGisApp {
         }
         dialogs::show(self, &ctx);
         pluginsui::show(self, &ctx);
+        update::show(self, &ctx);
         chrome::command_search(self, &ctx);
         chrome::about(self, &ctx);
         chrome::notices(self, &ctx);

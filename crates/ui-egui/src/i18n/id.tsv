@@ -239,6 +239,11 @@ Change the page size and orientation.	Ubah ukuran dan orientasi halaman.
 Change the project (add layers, edit features, change symbology)	Mengubah proyek (menambah layer, mengedit fitur, mengubah simbologi)
 Chart categories	Kategori diagram
 Chart Frame	Bingkai Diagram
+Check Again	Periksa Lagi
+Check for\nUpdates	Periksa\nPembaruan
+Check for Updates	Periksa Pembaruan
+Check for Updates…	Periksa Pembaruan…
+Checking for updates…	Memeriksa pembaruan…
 China	Tiongkok
 Choose a band combination to display the raster layer.	Pilih kombinasi band untuk menampilkan layer raster.
 Choose a contrast stretch for the raster layer.	Pilih peregangan kontras untuk layer raster.
@@ -358,6 +363,7 @@ Copy the selected layer's data source path.	Salin path sumber data layer terpili
 Corrections	Koreksi
 Cost	Biaya
 could not draw the map	tidak dapat menggambar peta
+Couldn't check for updates: {error}	Tidak dapat memeriksa pembaruan: {error}
 Couldn't download the font for {language}; pick the language again to retry.	Tidak dapat mengunduh font untuk {language}; pilih bahasa lagi untuk mencoba ulang.
 Couldn't load the plugin registry: {error}	Tidak dapat memuat registri plugin: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Jumlah, total, rata-rata, min, maks, dan simpangan baku suatu kolom, opsional per kolom kasus.
@@ -690,6 +696,8 @@ GeoTIFF	GeoTIFF
 Get a key	Dapatkan kunci
 Get it	Dapatkan
 GitHub	GitHub
+GitHub's reply isn't a release	Balasan GitHub bukan rilis
+GitHub's reply names no release	Balasan GitHub tidak menyebutkan rilis
 Global	Global
 Globe	Globe
 Go	Pergi
@@ -723,6 +731,7 @@ Haze, fog, rain or snow over the map.	Kabut tipis, kabut, hujan, atau salju di a
 Height	Tinggi
 Height (mm)	Tinggi (mm)
 Help	Bantuan
+Help › Help	Bantuan › Bantuan
 Hexagons	Heksagon
 Hide	Sembunyikan
 Hide features far from the view's centre.	Sembunyikan fitur yang jauh dari pusat tampilan.
@@ -790,6 +799,7 @@ Install Plugin From Registry	Pasang Plugin dari Registri
 Install {name} {version}?	Pasang {name} {version}?
 Installed	Terpasang
 Installed plugins are kept in {folder}	Plugin yang terpasang disimpan di {folder}
+Installed with Homebrew, winget, the AUR or COPR? Update it there.	Dipasang dengan Homebrew, winget, AUR, atau COPR? Perbarui di sana.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} telah dipasang. Temukan di tab Plugin; alat-alatnya juga ada di panel Alat.
 Interface font: {font}	Fon antarmuka: {font}
 Interpolate a surface from points (IDW)	Interpolasi permukaan dari titik (IDW)
@@ -1102,6 +1112,7 @@ Open Report	Buka Laporan
 Open the attribute table of the selected layer.	Buka tabel atribut layer terpilih.
 Open the layer's attribute table.	Buka tabel atribut layer.
 Open the layer's table.	Buka tabel layer.
+Open the Release Page	Buka Halaman Rilis
 Open the RustGIS user guide.	Buka panduan pengguna RustGIS.
 Open the selected layer's table.	Buka tabel layer terpilih.
 Open the Symbology pane.	Buka panel Simbologi.
@@ -1367,6 +1378,8 @@ RustGIS project template	Templat proyek RustGIS
 RustGIS report or report template	Laporan atau templat laporan RustGIS
 RustGIS styles	Gaya RustGIS
 RustGIS task	Tugas RustGIS
+RustGIS {latest} is available.	RustGIS {latest} tersedia.
+RustGIS {version} is the latest version.	RustGIS {version} adalah versi terbaru.
 RUSTGIS_ASSISTANT_MODEL	RUSTGIS_ASSISTANT_MODEL
 RUSTGIS_ASSISTANT_PROVIDER	RUSTGIS_ASSISTANT_PROVIDER
 Sample data (Natural Earth)	Data contoh (Natural Earth)
@@ -1435,6 +1448,7 @@ Sections	Bagian
 See and set the camera's position and scale.	Lihat dan atur posisi serta skala kamera.
 See the map as people with colour vision deficiencies do.	Lihat peta seperti yang dilihat penyandang gangguan penglihatan warna.
 See the tools you've run.	Lihat alat yang telah Anda jalankan.
+See whether a newer RustGIS has been released.	Periksa apakah RustGIS yang lebih baru telah dirilis.
 Select	Pilih
 Select (click)	Pilih (klik)
 Select (rectangle)	Pilih (persegi)
@@ -1647,6 +1661,7 @@ the reply reached its length limit	balasan mencapai batas panjangnya
 the report export failed unexpectedly	ekspor laporan gagal secara tak terduga
 The Shapefile's files download as one zip.	Berkas-berkas Shapefile diunduh sebagai satu zip.
 the view has no extent	tampilan tidak memiliki cakupan
+The web app always runs the latest release: reload the page to get it.	Aplikasi web selalu menjalankan rilis terbaru: muat ulang halaman untuk mendapatkannya.
 Thermal	Termal
 Thinking…	Berpikir…
 this build can't download plugins	build ini tidak dapat mengunduh plugin
@@ -1798,6 +1813,7 @@ Write a plugin	Tulis plugin
 X (mm)	X (mm)
 Y (mm)	Y (mm)
 Yes	Ya
+You have version {version}.	Anda memiliki versi {version}.
 z (m)	z (m)
 Z factor	Faktor Z
 Zoom	Zoom

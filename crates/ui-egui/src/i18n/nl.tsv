@@ -239,6 +239,11 @@ Change the page size and orientation.	Het paginaformaat en de oriëntatie wijzig
 Change the project (add layers, edit features, change symbology)	Het project wijzigen (lagen toevoegen, objecten bewerken, symbologie wijzigen)
 Chart categories	Diagramcategorieën
 Chart Frame	Diagramkader
+Check Again	Opnieuw controleren
+Check for\nUpdates	Updates\nzoeken
+Check for Updates	Naar updates zoeken
+Check for Updates…	Naar updates zoeken…
+Checking for updates…	Zoeken naar updates…
 China	China
 Choose a band combination to display the raster layer.	Kies een bandcombinatie om de rasterlaag weer te geven.
 Choose a contrast stretch for the raster layer.	Kies een contraststretch voor de rasterlaag.
@@ -358,6 +363,7 @@ Copy the selected layer's data source path.	Het gegevensbronpad van de geselecte
 Corrections	Correcties
 Cost	Kosten
 could not draw the map	kan de kaart niet tekenen
+Couldn't check for updates: {error}	Kon niet naar updates zoeken: {error}
 Couldn't download the font for {language}; pick the language again to retry.	Kan het lettertype voor {language} niet downloaden; kies de taal opnieuw om het nog eens te proberen.
 Couldn't load the plugin registry: {error}	Kan het pluginregister niet laden: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Aantal, som, gemiddelde, min, max en standaardafwijking van een veld, optioneel per groeperingsveld.
@@ -690,6 +696,8 @@ GeoTIFF	GeoTIFF
 Get a key	Sleutel aanvragen
 Get it	Downloaden
 GitHub	GitHub
+GitHub's reply isn't a release	Het antwoord van GitHub is geen release
+GitHub's reply names no release	Het antwoord van GitHub noemt geen release
 Global	Globaal
 Globe	Wereldbol
 Go	Ga
@@ -723,6 +731,7 @@ Haze, fog, rain or snow over the map.	Nevel, mist, regen of sneeuw over de kaart
 Height	Hoogte
 Height (mm)	Hoogte (mm)
 Help	Help
+Help › Help	Help › Help
 Hexagons	Zeshoeken
 Hide	Verbergen
 Hide features far from the view's centre.	Objecten ver van het midden van de weergave verbergen.
@@ -790,6 +799,7 @@ Install Plugin From Registry	Plugin installeren vanuit register
 Install {name} {version}?	{name} {version} installeren?
 Installed	Geïnstalleerd
 Installed plugins are kept in {folder}	Geïnstalleerde plugins worden bewaard in {folder}
+Installed with Homebrew, winget, the AUR or COPR? Update it there.	Geïnstalleerd met Homebrew, winget, de AUR of COPR? Werk het daar bij.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} geïnstalleerd. Je vindt de plugin op het tabblad Plugins; de gereedschappen staan ook in het gereedschappenvenster.
 Interface font: {font}	Interfacelettertype: {font}
 Interpolate a surface from points (IDW)	Een oppervlak interpoleren uit punten (IDW)
@@ -1102,6 +1112,7 @@ Open Report	Rapport openen
 Open the attribute table of the selected layer.	De attributentabel van de geselecteerde laag openen.
 Open the layer's attribute table.	De attributentabel van de laag openen.
 Open the layer's table.	De tabel van de laag openen.
+Open the Release Page	Releasepagina openen
 Open the RustGIS user guide.	De RustGIS-gebruikershandleiding openen.
 Open the selected layer's table.	De tabel van de geselecteerde laag openen.
 Open the Symbology pane.	Het symbologievenster openen.
@@ -1367,6 +1378,8 @@ RustGIS project template	RustGIS-projectsjabloon
 RustGIS report or report template	RustGIS-rapport of -rapportsjabloon
 RustGIS styles	RustGIS-stijlen
 RustGIS task	RustGIS-taak
+RustGIS {latest} is available.	RustGIS {latest} is beschikbaar.
+RustGIS {version} is the latest version.	RustGIS {version} is de nieuwste versie.
 RUSTGIS_ASSISTANT_MODEL	RUSTGIS_ASSISTANT_MODEL
 RUSTGIS_ASSISTANT_PROVIDER	RUSTGIS_ASSISTANT_PROVIDER
 Sample data (Natural Earth)	Voorbeeldgegevens (Natural Earth)
@@ -1435,6 +1448,7 @@ Sections	Secties
 See and set the camera's position and scale.	De positie en schaal van de camera bekijken en instellen.
 See the map as people with colour vision deficiencies do.	De kaart zien zoals mensen met een kleurenzichtstoornis.
 See the tools you've run.	De uitgevoerde gereedschappen bekijken.
+See whether a newer RustGIS has been released.	Controleren of er een nieuwere RustGIS is uitgebracht.
 Select	Selecteren
 Select (click)	Selecteren (klik)
 Select (rectangle)	Selecteren (rechthoek)
@@ -1647,6 +1661,7 @@ the reply reached its length limit	het antwoord heeft de maximale lengte bereikt
 the report export failed unexpectedly	het exporteren van het rapport is onverwacht mislukt
 The Shapefile's files download as one zip.	De bestanden van de Shapefile worden als één zip gedownload.
 the view has no extent	de weergave heeft geen bereik
+The web app always runs the latest release: reload the page to get it.	De webapp draait altijd de nieuwste release: herlaad de pagina om die te krijgen.
 Thermal	Thermisch
 Thinking…	Denkt na…
 this build can't download plugins	deze build kan geen plugins downloaden
@@ -1798,6 +1813,7 @@ Write a plugin	Een plugin schrijven
 X (mm)	X (mm)
 Y (mm)	Y (mm)
 Yes	Ja
+You have version {version}.	U hebt versie {version}.
 z (m)	z (m)
 Z factor	Z-factor
 Zoom	Zoomen

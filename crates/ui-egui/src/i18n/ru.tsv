@@ -239,6 +239,11 @@ Change the page size and orientation.	Изменить размер и орие�
 Change the project (add layers, edit features, change symbology)	Изменять проект (добавлять слои, редактировать объекты, менять символы)
 Chart categories	Категории диаграммы
 Chart Frame	Фрейм диаграммы
+Check Again	Проверить снова
+Check for\nUpdates	Проверить\nобновления
+Check for Updates	Проверить обновления
+Check for Updates…	Проверить обновления…
+Checking for updates…	Проверка обновлений…
 China	Китай
 Choose a band combination to display the raster layer.	Выберите комбинацию каналов для отображения растрового слоя.
 Choose a contrast stretch for the raster layer.	Выберите растяжку контраста для растрового слоя.
@@ -358,6 +363,7 @@ Copy the selected layer's data source path.	Копировать путь к и�
 Corrections	Коррекция
 Cost	Стоимость
 could not draw the map	не удалось отрисовать карту
+Couldn't check for updates: {error}	Не удалось проверить обновления: {error}
 Couldn't download the font for {language}; pick the language again to retry.	Не удалось загрузить шрифт для {language}; выберите язык ещё раз, чтобы повторить попытку.
 Couldn't load the plugin registry: {error}	Не удалось загрузить каталог модулей: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Количество, сумма, среднее, минимум, максимум и стандартное отклонение поля, при необходимости по полю группировки.
@@ -690,6 +696,8 @@ GeoTIFF	GeoTIFF
 Get a key	Получить ключ
 Get it	Получить
 GitHub	GitHub
+GitHub's reply isn't a release	Ответ GitHub не является выпуском
+GitHub's reply names no release	В ответе GitHub не указан выпуск
 Global	Глобальная
 Globe	Глобус
 Go	Перейти
@@ -723,6 +731,7 @@ Haze, fog, rain or snow over the map.	Дымка, туман, дождь или 
 Height	Высота
 Height (mm)	Высота (мм)
 Help	Справка
+Help › Help	Справка › Справка
 Hexagons	Шестиугольники
 Hide	Скрыть
 Hide features far from the view's centre.	Скрывать объекты, далёкие от центра вида.
@@ -790,6 +799,7 @@ Install Plugin From Registry	Установить модуль из катало
 Install {name} {version}?	Установить {name} {version}?
 Installed	Установлен
 Installed plugins are kept in {folder}	Установленные модули хранятся в {folder}
+Installed with Homebrew, winget, the AUR or COPR? Update it there.	Установлено через Homebrew, winget, AUR или COPR? Обновите там.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	Установлен модуль {name} {version}. Он находится на вкладке «Модули»; его инструменты также есть на панели «Инструменты».
 Interface font: {font}	Шрифт интерфейса: {font}
 Interpolate a surface from points (IDW)	Интерполировать поверхность по точкам (IDW)
@@ -1102,6 +1112,7 @@ Open Report	Открыть отчёт
 Open the attribute table of the selected layer.	Открыть таблицу атрибутов выбранного слоя.
 Open the layer's attribute table.	Открыть таблицу атрибутов слоя.
 Open the layer's table.	Открыть таблицу слоя.
+Open the Release Page	Открыть страницу выпуска
 Open the RustGIS user guide.	Открыть руководство пользователя RustGIS.
 Open the selected layer's table.	Открыть таблицу выбранного слоя.
 Open the Symbology pane.	Открыть панель «Символы».
@@ -1367,6 +1378,8 @@ RustGIS project template	Шаблон проекта RustGIS
 RustGIS report or report template	Отчёт или шаблон отчёта RustGIS
 RustGIS styles	Стили RustGIS
 RustGIS task	Задача RustGIS
+RustGIS {latest} is available.	Доступна версия RustGIS {latest}.
+RustGIS {version} is the latest version.	RustGIS {version}: последняя версия.
 RUSTGIS_ASSISTANT_MODEL	RUSTGIS_ASSISTANT_MODEL
 RUSTGIS_ASSISTANT_PROVIDER	RUSTGIS_ASSISTANT_PROVIDER
 Sample data (Natural Earth)	Пример данных (Natural Earth)
@@ -1435,6 +1448,7 @@ Sections	Разделы
 See and set the camera's position and scale.	Просмотр и настройка положения и масштаба камеры.
 See the map as people with colour vision deficiencies do.	Увидеть карту так, как её видят люди с нарушениями цветового зрения.
 See the tools you've run.	Просмотр запущенных инструментов.
+See whether a newer RustGIS has been released.	Проверить, вышла ли более новая версия RustGIS.
 Select	Выбрать
 Select (click)	Выбрать (щелчком)
 Select (rectangle)	Выбрать (прямоугольником)
@@ -1647,6 +1661,7 @@ the reply reached its length limit	ответ достиг предельной 
 the report export failed unexpectedly	экспорт отчёта неожиданно завершился ошибкой
 The Shapefile's files download as one zip.	Файлы Shapefile скачиваются одним zip-архивом.
 the view has no extent	у вида нет экстента
+The web app always runs the latest release: reload the page to get it.	Веб-приложение всегда работает на последнем выпуске: перезагрузите страницу, чтобы получить его.
 Thermal	Тепловая
 Thinking…	Думает…
 this build can't download plugins	эта сборка не может загружать модули
@@ -1798,6 +1813,7 @@ Write a plugin	Написать модуль
 X (mm)	X (мм)
 Y (mm)	Y (мм)
 Yes	Да
+You have version {version}.	У вас версия {version}.
 z (m)	z (м)
 Z factor	Z-фактор
 Zoom	Масштаб

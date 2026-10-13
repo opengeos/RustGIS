@@ -387,6 +387,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             ("ui.pane.assistant", "AI Assistant", "Analyze › AI"),
             ("ui.theme", "Toggle Dark Mode", "View"),
             ("ui.exportMap", "Export Map…", "Publish › Output"),
+            ("ui.checkUpdate", "Check for Updates…", "Help › Help"),
         ] {
             if ql.is_empty() || label.to_lowercase().contains(&ql) || tl!(label).to_lowercase().contains(&ql) {
                 hits.push((id.into(), tl!(label).into(), crate::i18n::location(loc)));

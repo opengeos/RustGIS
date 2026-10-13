@@ -633,6 +633,13 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
             p.line(&[(10.5, 6.0), (4.5, 12.0), (10.5, 18.0)], 2.0, ink);
         }
         "run" => p.fill(&[(7.0, 4.0), (20.0, 12.0), (7.0, 20.0)], green),
+        "update" => {
+            // A circular arrow around a downward arrow: fetch the newer version.
+            p.arc(12.0, 12.0, 8.0, 40.0, 320.0, 1.7, ink);
+            p.line(&[(15.6, 5.2), (18.4, 6.9), (18.0, 3.7)], 1.7, ink);
+            p.line(&[(12.0, 8.0), (12.0, 15.0)], 1.8, p.acc);
+            p.line(&[(9.2, 12.4), (12.0, 15.2), (14.8, 12.4)], 1.8, p.acc);
+        }
         "up" => p.line(&[(6.0, 15.0), (12.0, 9.0), (18.0, 15.0)], 1.8, ink),
         "down" => p.line(&[(6.0, 9.0), (12.0, 15.0), (18.0, 9.0)], 1.8, ink),
         "logo" => {

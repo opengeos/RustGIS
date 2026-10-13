@@ -2677,6 +2677,19 @@ fn help_tab(app: &mut RustGisApp, ui: &mut Ui) {
     });
     group(ui, "Help", |ui| {
         big(ui, app, "help", "About", "About RustGIS.", "ui.about", Value::Null, false, false);
+        if !cfg!(target_arch = "wasm32") {
+            big(
+                ui,
+                app,
+                "update",
+                "Check for\nUpdates",
+                "See whether a newer RustGIS has been released.",
+                "ui.checkUpdate",
+                Value::Null,
+                false,
+                false,
+            );
+        }
         big(ui, app, "command", "Command\nSearch", "Find any command by name (Ctrl+K).", "ui.commandSearch", Value::Null, false, false);
         big(ui, app, "settings", "Shortcuts", "Keyboard shortcuts.", "ui.shortcuts", Value::Null, false, false);
     });

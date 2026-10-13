@@ -139,7 +139,7 @@ impl PluginsState {
 }
 
 /// Downloads `url` off the frame.
-fn fetch(app: &RustGisApp, url: &str, limit: usize, ctx: Option<egui::Context>) -> Download {
+pub(crate) fn fetch(app: &RustGisApp, url: &str, limit: usize, ctx: Option<egui::Context>) -> Download {
     let slot: Download = Slot::default();
     // The same rule on every platform: HTTPS, or plain HTTP to this computer.
     if !rp::registry::allowed_url(url) {

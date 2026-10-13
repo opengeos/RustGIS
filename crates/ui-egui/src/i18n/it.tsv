@@ -239,6 +239,11 @@ Change the page size and orientation.	Cambia dimensione e orientamento della pag
 Change the project (add layers, edit features, change symbology)	Modificare il progetto (aggiungere layer, modificare elementi, cambiare la simbologia)
 Chart categories	Categorie del grafico
 Chart Frame	Cornice del grafico
+Check Again	Controlla di nuovo
+Check for\nUpdates	Cerca\naggiornamenti
+Check for Updates	Cerca aggiornamenti
+Check for Updates…	Cerca aggiornamenti…
+Checking for updates…	Ricerca aggiornamenti…
 China	Cina
 Choose a band combination to display the raster layer.	Scegli una combinazione di bande per visualizzare il layer raster.
 Choose a contrast stretch for the raster layer.	Scegli uno stretch del contrasto per il layer raster.
@@ -358,6 +363,7 @@ Copy the selected layer's data source path.	Copia il percorso della sorgente dat
 Corrections	Correzioni
 Cost	Costo
 could not draw the map	impossibile disegnare la mappa
+Couldn't check for updates: {error}	Impossibile cercare aggiornamenti: {error}
 Couldn't download the font for {language}; pick the language again to retry.	Impossibile scaricare il carattere per {language}; seleziona di nuovo la lingua per riprovare.
 Couldn't load the plugin registry: {error}	Impossibile caricare il registro dei plugin: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Conteggio, somma, media, min, max e deviazione standard di un campo, facoltativamente per campo di raggruppamento.
@@ -690,6 +696,8 @@ GeoTIFF	GeoTIFF
 Get a key	Ottieni una chiave
 Get it	Scaricalo
 GitHub	GitHub
+GitHub's reply isn't a release	La risposta di GitHub non è una release
+GitHub's reply names no release	La risposta di GitHub non indica alcuna release
 Global	Globale
 Globe	Globo
 Go	Vai
@@ -723,6 +731,7 @@ Haze, fog, rain or snow over the map.	Foschia, nebbia, pioggia o neve sulla mapp
 Height	Altezza
 Height (mm)	Altezza (mm)
 Help	Aiuto
+Help › Help	Aiuto › Aiuto
 Hexagons	Esagoni
 Hide	Nascondi
 Hide features far from the view's centre.	Nascondi gli elementi lontani dal centro della vista.
@@ -790,6 +799,7 @@ Install Plugin From Registry	Installa plugin dal registro
 Install {name} {version}?	Installare {name} {version}?
 Installed	Installato
 Installed plugins are kept in {folder}	I plugin installati sono conservati in {folder}
+Installed with Homebrew, winget, the AUR or COPR? Update it there.	Installato con Homebrew, winget, AUR o COPR? Aggiornalo da lì.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} installato. Lo trovi nella scheda Plugin; i suoi strumenti sono anche nel pannello Strumenti.
 Interface font: {font}	Font dell'interfaccia: {font}
 Interpolate a surface from points (IDW)	Interpola una superficie da punti (IDW)
@@ -1102,6 +1112,7 @@ Open Report	Apri report
 Open the attribute table of the selected layer.	Apri la tabella degli attributi del layer selezionato.
 Open the layer's attribute table.	Apri la tabella degli attributi del layer.
 Open the layer's table.	Apri la tabella del layer.
+Open the Release Page	Apri la pagina della release
 Open the RustGIS user guide.	Apri la guida utente di RustGIS.
 Open the selected layer's table.	Apri la tabella del layer selezionato.
 Open the Symbology pane.	Apri il pannello Simbologia.
@@ -1367,6 +1378,8 @@ RustGIS project template	Modello di progetto RustGIS
 RustGIS report or report template	Report o modello di report RustGIS
 RustGIS styles	Stili RustGIS
 RustGIS task	Attività RustGIS
+RustGIS {latest} is available.	RustGIS {latest} è disponibile.
+RustGIS {version} is the latest version.	RustGIS {version} è la versione più recente.
 RUSTGIS_ASSISTANT_MODEL	RUSTGIS_ASSISTANT_MODEL
 RUSTGIS_ASSISTANT_PROVIDER	RUSTGIS_ASSISTANT_PROVIDER
 Sample data (Natural Earth)	Dati di esempio (Natural Earth)
@@ -1435,6 +1448,7 @@ Sections	Sezioni
 See and set the camera's position and scale.	Visualizza e imposta posizione e scala della fotocamera.
 See the map as people with colour vision deficiencies do.	Guarda la mappa come la vedono le persone con deficit della visione dei colori.
 See the tools you've run.	Vedi gli strumenti eseguiti.
+See whether a newer RustGIS has been released.	Controlla se è uscita una versione più recente di RustGIS.
 Select	Seleziona
 Select (click)	Seleziona (clic)
 Select (rectangle)	Seleziona (rettangolo)
@@ -1647,6 +1661,7 @@ the reply reached its length limit	la risposta ha raggiunto il limite di lunghez
 the report export failed unexpectedly	l'esportazione del report non è riuscita in modo imprevisto
 The Shapefile's files download as one zip.	I file dello Shapefile vengono scaricati in un unico zip.
 the view has no extent	la vista non ha un'estensione
+The web app always runs the latest release: reload the page to get it.	L'app web esegue sempre l'ultima release: ricarica la pagina per ottenerla.
 Thermal	Termico
 Thinking…	Sto pensando…
 this build can't download plugins	questa build non può scaricare plugin
@@ -1798,6 +1813,7 @@ Write a plugin	Scrivi un plugin
 X (mm)	X (mm)
 Y (mm)	Y (mm)
 Yes	Sì
+You have version {version}.	Hai la versione {version}.
 z (m)	z (m)
 Z factor	Fattore Z
 Zoom	Zoom

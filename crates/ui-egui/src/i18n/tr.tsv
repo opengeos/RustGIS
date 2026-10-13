@@ -239,6 +239,11 @@ Change the page size and orientation.	Sayfa boyutunu ve yönünü değiştir.
 Change the project (add layers, edit features, change symbology)	Projeyi değiştirme (katman ekleme, detayları düzenleme, sembolojiyi değiştirme)
 Chart categories	Grafik kategorileri
 Chart Frame	Grafik Çerçevesi
+Check Again	Yeniden Denetle
+Check for\nUpdates	Güncellemeleri\nDenetle
+Check for Updates	Güncellemeleri Denetle
+Check for Updates…	Güncellemeleri Denetle…
+Checking for updates…	Güncellemeler denetleniyor…
 China	Çin
 Choose a band combination to display the raster layer.	Raster katmanını görüntülemek için bir bant kombinasyonu seçin.
 Choose a contrast stretch for the raster layer.	Raster katmanı için bir kontrast germe seçin.
@@ -358,6 +363,7 @@ Copy the selected layer's data source path.	Seçili katmanın veri kaynağı yol
 Corrections	Düzeltmeler
 Cost	Maliyet
 could not draw the map	harita çizilemedi
+Couldn't check for updates: {error}	Güncellemeler denetlenemedi: {error}
 Couldn't download the font for {language}; pick the language again to retry.	{language} için yazı tipi indirilemedi; yeniden denemek için dili tekrar seçin.
 Couldn't load the plugin registry: {error}	Eklenti kayıt defteri yüklenemedi: {error}
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Bir alanın sayısı, toplamı, ortalaması, minimumu, maksimumu ve standart sapması; isteğe bağlı olarak gruplama alanına göre.
@@ -690,6 +696,8 @@ GeoTIFF	GeoTIFF
 Get a key	Anahtar al
 Get it	İndir
 GitHub	GitHub
+GitHub's reply isn't a release	GitHub yanıtı bir sürüm değil
+GitHub's reply names no release	GitHub yanıtı bir sürüm belirtmiyor
 Global	Genel
 Globe	Küre
 Go	Git
@@ -723,6 +731,7 @@ Haze, fog, rain or snow over the map.	Harita üzerinde pus, sis, yağmur veya ka
 Height	Yükseklik
 Height (mm)	Yükseklik (mm)
 Help	Yardım
+Help › Help	Yardım › Yardım
 Hexagons	Altıgenler
 Hide	Gizle
 Hide features far from the view's centre.	Görünümün merkezinden uzaktaki detayları gizle.
@@ -790,6 +799,7 @@ Install Plugin From Registry	Kayıt Defterinden Eklenti Yükle
 Install {name} {version}?	{name} {version} yüklensin mi?
 Installed	Yüklü
 Installed plugins are kept in {folder}	Yüklü eklentiler şurada tutulur: {folder}
+Installed with Homebrew, winget, the AUR or COPR? Update it there.	Homebrew, winget, AUR veya COPR ile mi kurdunuz? Oradan güncelleyin.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} yüklendi. Eklentiler sekmesinde bulabilirsiniz; araçları Araçlar panelinde de yer alır.
 Interface font: {font}	Arayüz yazı tipi: {font}
 Interpolate a surface from points (IDW)	Noktalardan yüzey enterpole et (IDW)
@@ -1102,6 +1112,7 @@ Open Report	Rapor Aç
 Open the attribute table of the selected layer.	Seçili katmanın öznitelik tablosunu aç.
 Open the layer's attribute table.	Katmanın öznitelik tablosunu aç.
 Open the layer's table.	Katmanın tablosunu aç.
+Open the Release Page	Sürüm Sayfasını Aç
 Open the RustGIS user guide.	RustGIS kullanıcı kılavuzunu aç.
 Open the selected layer's table.	Seçili katmanın tablosunu aç.
 Open the Symbology pane.	Semboloji panelini aç.
@@ -1367,6 +1378,8 @@ RustGIS project template	RustGIS proje şablonu
 RustGIS report or report template	RustGIS raporu veya rapor şablonu
 RustGIS styles	RustGIS stilleri
 RustGIS task	RustGIS görevi
+RustGIS {latest} is available.	RustGIS {latest} kullanılabilir.
+RustGIS {version} is the latest version.	RustGIS {version} en son sürüm.
 RUSTGIS_ASSISTANT_MODEL	RUSTGIS_ASSISTANT_MODEL
 RUSTGIS_ASSISTANT_PROVIDER	RUSTGIS_ASSISTANT_PROVIDER
 Sample data (Natural Earth)	Örnek veri (Natural Earth)
@@ -1435,6 +1448,7 @@ Sections	Bölümler
 See and set the camera's position and scale.	Kameranın konumunu ve ölçeğini gör ve ayarla.
 See the map as people with colour vision deficiencies do.	Haritayı renk görme eksikliği olan kişilerin gördüğü gibi gör.
 See the tools you've run.	Çalıştırdığınız araçları görün.
+See whether a newer RustGIS has been released.	Daha yeni bir RustGIS sürümü yayımlanıp yayımlanmadığını denetle.
 Select	Seç
 Select (click)	Seç (tıklama)
 Select (rectangle)	Seç (dikdörtgen)
@@ -1647,6 +1661,7 @@ the reply reached its length limit	yanıt uzunluk sınırına ulaştı
 the report export failed unexpectedly	rapor dışa aktarımı beklenmedik şekilde başarısız oldu
 The Shapefile's files download as one zip.	Shapefile dosyaları tek bir zip olarak indirilir.
 the view has no extent	görünümün kapsamı yok
+The web app always runs the latest release: reload the page to get it.	Web uygulaması her zaman en son sürümü çalıştırır: almak için sayfayı yeniden yükleyin.
 Thermal	Termal
 Thinking…	Düşünüyor…
 this build can't download plugins	bu sürüm eklenti indiremez
@@ -1798,6 +1813,7 @@ Write a plugin	Eklenti yaz
 X (mm)	X (mm)
 Y (mm)	Y (mm)
 Yes	Evet
+You have version {version}.	Sizdeki sürüm: {version}.
 z (m)	z (m)
 Z factor	Z faktörü
 Zoom	Yakınlaştır

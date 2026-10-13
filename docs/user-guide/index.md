@@ -57,7 +57,7 @@ ribbon, arrows at its ends scroll it.
 | **Publish** | While a layout is open, its groups first (Page, Map Frames, Map Surrounds, Text, Export); then Report, Presentation, Output (Export Map, Print, Capture), Package, Share As, Layout, Save As, Thumbnail |
 | **Plugins** | The Plugin Manager, plus a tab for each [plugin](../plugins.md) that adds one |
 | **Settings** | Language (interface language and worldview), Start-up (start with the sample or a blank map, projection, extent) |
-| **Help** | Customize (ribbon tabs, Quick Access Toolbar), Performance (Diagnostic Monitor), Learn, Help (About, Command Search, Shortcuts) |
+| **Help** | Customize (ribbon tabs, Quick Access Toolbar), Performance (Diagnostic Monitor), Learn, Help (About, Check for Updates, Command Search, Shortcuts) |
 
 The tabs stay the same whatever is selected: Style and Data act on the layer selected in Layers.
 
