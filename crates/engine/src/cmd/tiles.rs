@@ -23,6 +23,9 @@ pub const NETWORK: &[&str] = &[
     "boundaries.add",
     "boundaries.countries",
     "s3.list",
+    "overture.add",
+    "sourcecoop.products",
+    "sourcecoop.list",
 ];
 
 pub fn commands() -> Vec<C> {

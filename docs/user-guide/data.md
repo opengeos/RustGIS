@@ -167,6 +167,42 @@ of the layer's address, so a project saved with one reads it again only while th
 collection ([web app links](../installation.md)). Searches reach the network, so the [AI
 Assistant](assistant.md) asks before it runs them, and plugins need the network permission.
 
+## Overture Maps
+
+**Home › Add Data › Overture Maps…** adds [Overture Maps](https://overturemaps.org)' open data:
+buildings, places, transportation (segments and connectors), administrative divisions, base
+layers (land use, land, land cover, water, infrastructure, bathymetry) and addresses, from the
+latest release (or one named with `"release"`). Two ways:
+
+- **The features where the map is.** A theme's type is a few hundred GeoParquet files, each
+  covering an area; Overture's [STAC catalog](https://stac.overturemaps.org) gives every file's
+  extent, so only the files that cover the map's view are read, in place by range like any
+  GeoParquet by address (see [Files on the web](data-formats.md#files-on-the-web)), and each
+  becomes a layer read a view at a time. Zoom to a city or smaller: a view that takes more than six
+  files is refused (a country takes dozens).
+- **Map tiles of the whole world**, from the theme's PMTiles archive: every zoom, drawn a layer per
+  type. Some themes' tiles hold their features only when zoomed in (places from zoom 14).
+
+`overture.add` does the same (`"theme"`, `"type"`, `"bbox"` or the view, `"tiles": true` for the
+tiles):
+
+```sh
+rustgis-cli run --cmd 'map.zoomToExtent={"extent":[7.40,46.93,7.47,46.97]}' --cmd 'overture.add={"theme":"buildings"}' --cmd 'overture.add={"theme":"transportation"}' --cmd 'share.exportMap={"path":"bern.png"}'
+```
+
+The data's licences differ by theme (OpenStreetMap's ODbL for most, CDLA Permissive 2.0 for
+places); the layer says which.
+
+## Source Cooperative
+
+**Home › Add Data › Source Cooperative…** lists [Source Cooperative](https://source.coop)'s
+featured products (or an account's), browses a product's folders and adds a file by its address on
+the data proxy (`https://data.source.coop/<account>/<product>/…`): GeoParquet, FlatGeobuf,
+cloud-optimised GeoTIFFs and PMTiles are read in place, other files downloaded.
+`sourcecoop.products` (`"account"`) and `sourcecoop.list` (`"account"`, `"product"`, `"path"`)
+list them; a listed file's `"url"` is added with `layer.addUrl`. Like STAC searches, these reach the
+network: the AI Assistant asks first and plugins need the network permission.
+
 ## Geocoding addresses
 
 **Home › Add Data › Geocode Addresses…** (`layer.geocode`) turns a table's addresses into points:

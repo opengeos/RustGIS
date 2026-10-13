@@ -446,6 +446,8 @@ fn hostile_params_never_panic() {
                 | "stac.search"
                 // Asks geoBoundaries for its list.
                 | "boundaries.countries"
+                // Asks Source Cooperative for its featured products.
+                | "sourcecoop.products"
         ) {
             continue;
         }
@@ -4068,4 +4070,32 @@ fn dxf_drawings_by_path_and_upload() {
     assert!(u.notices.iter().any(|n| n.text.contains("doesn't say its coordinate system")), "{:?}", u.notices);
     assert!(u.run("layer.addDataBytes", &json!({"fileName": "bad.dxf", "data": "AAAA"})).is_err());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Overture and Source Cooperative refuse what they can't read before asking anything of the
+/// network (their answers are read by the catalog modules' own tests).
+#[test]
+fn catalog_commands_refuse_bad_parameters() {
+    let mut s = Session::new(Project::default());
+    for bad in [
+        json!({}),
+        json!({"theme": "roads"}),
+        json!({"theme": "buildings", "type": "segment"}),
+        json!({"theme": "buildings", "release": "../x"}),
+        json!({"theme": "buildings", "bbox": [1, 2, 3]}),
+        json!({"theme": "buildings", "bbox": [10, 50, 0, 40]}),
+        json!({"theme": "buildings", "bbox": "everywhere"}),
+    ] {
+        assert!(s.run("overture.add", &bad).is_err(), "{bad}");
+    }
+    for bad in [
+        json!({}),
+        json!({"account": "giswqs"}),
+        json!({"account": "../etc", "product": "p"}),
+        json!({"account": "a", "product": "p", "path": "../../x/"}),
+    ] {
+        assert!(s.run("sourcecoop.list", &bad).is_err(), "{bad}");
+    }
+    assert!(s.run("sourcecoop.products", &json!({"account": "a/b"})).is_err());
+    assert!(s.map().layers.is_empty() && s.map().tiles.is_empty());
 }

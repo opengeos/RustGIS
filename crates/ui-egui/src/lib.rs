@@ -11,6 +11,7 @@ pub mod i18n;
 mod analysispane;
 mod assistantpane;
 mod backstage;
+mod catalogsui;
 mod chrome;
 mod dialogs;
 mod docpanes;
@@ -284,6 +285,8 @@ pub struct UiState {
     pub s3: s3ui::State,
     /// OpenStreetMap and Boundaries: their choices and the request under way.
     pub portals: portalsui::State,
+    /// Overture Maps and Source Cooperative: choices, results and the request under way.
+    pub catalogs: catalogsui::State,
     /// Find Place searches and Geocode Addresses runs under way.
     pub geocode: geocodeui::State,
     /// The Data Sources pane's boxes, and the sources' generation last kept in the preferences.
@@ -341,6 +344,7 @@ impl Default for UiState {
             stac: Default::default(),
             s3: Default::default(),
             portals: Default::default(),
+            catalogs: Default::default(),
             geocode: Default::default(),
             sources: Default::default(),
             sources_saved: 0,
@@ -1845,6 +1849,7 @@ impl RustGisApp {
         stacui::poll(self, ctx);
         s3ui::poll(self, ctx);
         portalsui::poll(self, ctx);
+        catalogsui::poll(self, ctx);
         geocodeui::poll(self, ctx);
         zarrui::poll(self, ctx);
         pluginsui::poll(self, ctx);

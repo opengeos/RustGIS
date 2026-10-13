@@ -408,6 +408,8 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
             menu_item(ui, app, "", "S3…", "ui.dialog", json!({"name": "s3"}));
             menu_item(ui, app, "", "OpenStreetMap…", "ui.dialog", json!({"name": "osm"}));
             menu_item(ui, app, "", "Boundaries…", "ui.dialog", json!({"name": "boundaries"}));
+            menu_item(ui, app, "", "Overture Maps…", "ui.dialog", json!({"name": "overture"}));
+            menu_item(ui, app, "", "Source Cooperative…", "ui.dialog", json!({"name": "sourcecoop"}));
             menu_item(ui, app, "graphics_layer", "Graphics Layer", "graphics.newLayer", Value::Null);
             ui.separator();
             ui.label(egui::RichText::new(tl!("Sample data (Natural Earth)")).small().weak());

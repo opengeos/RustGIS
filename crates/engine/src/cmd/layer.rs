@@ -1382,7 +1382,9 @@ fn add_remote(s: &mut Session, p: &Value, url: &str, src: Box<dyn rustgis_data::
     s.active_layer = Some(id);
     let count = info.count.map(|c| c.to_string()).unwrap_or_else(|| "many".into());
     s.notify(format!("{unique}: {count} features, read in place by range from its address, a view at a time"), false);
-    if (empty_before || b(p, "zoom") == Some(true)) && !info.extent.is_empty() {
+    // Framed when it is the map's first layer, unless told to keep the view (a catalog's data for
+    // the view, such as Overture's).
+    if (empty_before || b(p, "zoom") == Some(true)) && b(p, "zoom") != Some(false) && !info.extent.is_empty() {
         s.zoom_to(&info.extent);
     }
     Ok(json!({"layer": id, "layers": [id], "features": info.count, "streamed": true, "inPlace": true}))

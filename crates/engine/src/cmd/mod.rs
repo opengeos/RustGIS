@@ -1,5 +1,6 @@
 //! Every command, grouped by ribbon tab.
 
+pub mod catalogs;
 pub mod clipboard;
 pub mod deeplearning;
 pub mod design;
@@ -75,6 +76,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(sharing::commands());
     v.extend(stac::commands());
     v.extend(portals::commands());
+    v.extend(catalogs::commands());
     v
 }
 
