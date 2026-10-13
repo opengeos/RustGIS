@@ -16,6 +16,8 @@ pub mod fgb;
 pub mod gdal;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gpkg;
+mod gpkg_blob;
+pub mod gpkg_mem;
 pub mod parquet;
 
 use crate::raster::{Crs, Transformer};
@@ -159,10 +161,12 @@ pub fn open_shared(file_name: &str, bytes: std::sync::Arc<Vec<u8>>, layer: Optio
     match ext(path).as_str() {
         "parquet" | "geoparquet" => Ok(Box::new(parquet::ParquetSource::open_shared(bytes, &name)?)),
         "fgb" => Ok(Box::new(fgb::FgbSource::open_shared(bytes, &name)?)),
+        // The desktop reads GeoPackages with SQLite (and its R-tree); the browser, which has no
+        // SQLite, with the pure-Rust reader.
         #[cfg(not(target_arch = "wasm32"))]
         "gpkg" => Ok(Box::new(gpkg::GpkgSource::open_bytes(bytes.as_ref(), layer)?)),
         #[cfg(target_arch = "wasm32")]
-        "gpkg" => Err(DataError::Unsupported("gpkg in the browser yet: open GeoPackages in the desktop app".into())),
+        "gpkg" => Ok(Box::new(gpkg_mem::GpkgMemSource::open_shared(bytes, layer)?)),
         other => {
             let _ = layer;
             Err(DataError::Unsupported(other.to_string()))

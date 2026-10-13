@@ -241,8 +241,14 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                     ui.label(egui::RichText::new(format!("{} ms", app.map.render_ms)).size(11.0).color(t.text_disabled))
                         .on_hover_text(tl!("Last map render time"));
                     sep(ui, &t);
+                    // Cut to the room left (the whole notice on hover), so a long one doesn't run
+                    // over the selection count and coordinates.
                     if let Some(n) = app.session.notices.last() {
-                        ui.label(egui::RichText::new(&n.text).size(11.5).color(if n.error { t.red } else { t.text_dim }));
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&n.text).size(11.5).color(if n.error { t.red } else { t.text_dim }))
+                                .truncate(),
+                        )
+                        .on_hover_text(&n.text);
                     }
                 });
             });

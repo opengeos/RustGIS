@@ -221,6 +221,34 @@ fn geopackage_reprojects_and_uses_its_rtree() {
     assert!(open_path(&p2, Some("missing")).is_err());
 }
 
+/// The browser's GeoPackage reader (pure Rust) gives what SQLite gives, without the R-tree.
+#[test]
+fn geopackage_in_memory() {
+    let p = dir().join("mem.gpkg");
+    write_gpkg(&p, true);
+    let bytes = Shared(Arc::new(std::fs::read(&p).unwrap()));
+    assert_eq!(gpkg_mem::layers(bytes.clone()).unwrap(), vec!["grid \"q\"".to_string()]);
+    let src = gpkg_mem::GpkgMemSource::open_shared(bytes.clone(), Some("GRID \"Q\"")).unwrap();
+    assert_eq!(src.info().crs, "EPSG:3857");
+    check(&src, false);
+    // The same features, ids and values as SQLite reads.
+    let sql = open_path(&p, None).unwrap();
+    let (mut a, mut b) = (src.read(&Request::all()).unwrap().features, sql.read(&Request::all()).unwrap().features);
+    a.sort_by_key(|f| f.id);
+    b.sort_by_key(|f| f.id);
+    assert_eq!(a, b);
+    // SQLite's R-tree keeps 32-bit floats; the headers' envelopes are exact.
+    let (e, f) = (src.info().extent, sql.info().extent);
+    assert!([e.min_x - f.min_x, e.min_y - f.min_y, e.max_x - f.max_x, e.max_y - f.max_y].iter().all(|d| d.abs() < 1e-4), "{e:?} {f:?}");
+    assert!(gpkg_mem::GpkgMemSource::open_shared(bytes.clone(), Some("missing")).is_err());
+    // Every truncation is an error or a short read, never a panic.
+    for n in (0..bytes.0.len()).step_by(131) {
+        if let Ok(s) = gpkg_mem::GpkgMemSource::open_shared(Shared(Arc::new(bytes.0[..n].to_vec())), None) {
+            let _ = s.read(&Request::all());
+        }
+    }
+}
+
 #[test]
 fn an_unknown_coordinate_system_is_reported() {
     let p = dir().join("unknown_crs.gpkg");
@@ -513,4 +541,49 @@ fn writes_points_lines_kmz_and_zipped_shapefiles() {
     assert!(crate::io::write_bytes(&empty, "parquet").is_ok());
     crate::io::write_path(&empty, &d.join("e.gpkg")).unwrap();
     assert!(crate::io::write_bytes(&empty, "shp").is_err());
+}
+
+/// Compares the browser's GeoPackage reader with SQLite on every table of every `.gpkg` in
+/// `RUSTGIS_SAMPLE_VECTORS`: `cargo test -p rustgis-data --release -- --ignored gpkg_mem_matches --nocapture`.
+#[test]
+#[ignore]
+fn gpkg_mem_matches_sqlite() {
+    let Ok(dir) = std::env::var("RUSTGIS_SAMPLE_VECTORS") else { return };
+    let mut paths: Vec<_> = std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| ext(p) == "gpkg").collect();
+    paths.sort();
+    let (mut tables, mut differ) = (0, 0);
+    for p in paths {
+        let bytes = Shared(Arc::new(std::fs::read(&p).unwrap()));
+        let names = match layers(&p) {
+            Ok(n) => n,
+            Err(e) => {
+                println!("{}: {e}", p.display());
+                continue;
+            }
+        };
+        for name in names {
+            tables += 1;
+            let t = std::time::Instant::now();
+            let mem = gpkg_mem::GpkgMemSource::open_shared(bytes.clone(), Some(&name))
+                .and_then(|s| s.read(&Request::all()).map(|b| (s.info().clone(), b)));
+            let ms = t.elapsed().as_millis();
+            let sql = open_path(&p, Some(&name)).and_then(|s| s.read(&Request::all()).map(|b| (s.info().clone(), b)));
+            match (mem, sql) {
+                (Ok((mi, mut m)), Ok((si, mut s))) => {
+                    m.features.sort_by_key(|f| f.id);
+                    s.features.sort_by_key(|f| f.id);
+                    let same =
+                        m.features == s.features && mi.fields == si.fields && mi.count == si.count && mi.geometry_type == si.geometry_type;
+                    differ += usize::from(!same);
+                    println!("{} {name}: {} features, {ms} ms{}", p.display(), m.features.len(), if same { "" } else { "  DIFFERENT" });
+                }
+                (m, s) => {
+                    differ += usize::from(m.is_ok() != s.is_ok());
+                    println!("{} {name}: mem {:?} / sqlite {:?}", p.display(), m.err(), s.err());
+                }
+            }
+        }
+    }
+    println!("{tables} tables, {differ} different");
+    assert_eq!(differ, 0);
 }

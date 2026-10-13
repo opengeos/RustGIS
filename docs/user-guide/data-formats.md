@@ -5,8 +5,8 @@ limits. [Data](data.md) covers adding data, large files and rasters in more deta
 Basemaps](maps.md#basemaps) covers web tile layers.
 
 Most formats open in the desktop app and in the [web app](https://web.rustgis.app) alike. Those
-that need C libraries (SQLite for GeoPackage, GDAL, DuckDB) or files on disk are desktop-only, as
-the tables say.
+that need C libraries (GDAL, DuckDB) or files on disk are desktop-only, as the tables say. The
+web app reads GeoPackages without SQLite, with a small SQLite file reader written in Rust.
 
 ## Vector and tabular files
 
@@ -17,7 +17,7 @@ the tables say.
 | Shapefile | `.shp` with `.dbf` (and `.shx`), or zipped (`.zip`) | Add Data, drop the file, or upload the zip in the web app | A zip may hold several Shapefiles, in folders, and other vector files (GeoJSON, CSV, GeoParquet, FlatGeobuf); each becomes a layer, at most 32 for the whole archive (Shapefiles first, so other files are left out when Shapefiles fill it). `.txt` files and macOS `__MACOSX` entries are passed over, and a member that can't be read is skipped and named in a notice. Converted to longitude/latitude from the coordinate system in its `.prj` (EPSG, Esri or OGC WKT; Web Mercator, UTM, State Plane and other common projections); without a `.prj` it must be in longitude/latitude. |
 | KML / KMZ | `.kml`, `.kmz` | Add Data, drop the file, or upload it in the web app | A layer for each kind of geometry (points, lines, polygons), with each placemark's name, description, folder path and extended data. Styles are kept: the layer is drawn by unique values of its `style` field, with each KML style's line and fill colours, widths and icon colours (up to 64 styles). Multi-geometries and `gx:Track`s are read; ground overlays are counted, not drawn. |
 | GPX | `.gpx` | Add Data, drop the file, or upload it in the web app | Waypoints, routes, tracks (one line per track, its segments as parts) and track points (with elevation and time) as separate layers. |
-| GeoPackage | `.gpkg` | Add Data (desktop) | Every feature table becomes a layer, up to 32 at once (the result counts the rest in `skippedCount` and names up to 100 of them in `skipped`); `"layer"` picks one, and `info.fileLayers` lists them all. Read in place by its R-tree; any EPSG system is reprojected. |
+| GeoPackage | `.gpkg` | Add Data, or upload in the web app | Every feature table becomes a layer, up to 32 at once (the result counts the rest in `skippedCount` and names up to 100 of them in `skipped`); `"layer"` picks one, and `info.fileLayers` lists them all. Read in place by its R-tree; any EPSG system is reprojected. The web app reads the file with its own SQLite reader (tables scanned, the envelope in each geometry header tested first; no R-tree); UTF-16 databases and `WITHOUT ROWID` tables aren't read there. |
 | GeoParquet | `.parquet`, `.geoparquet` | Add Data, or upload in the web app | WKB geometry, with the CRS from the file's `geo` metadata. Row groups are pruned by the bbox covering. zstd-compressed files open on the desktop only; Brotli isn't read. |
 | FlatGeobuf | `.fgb` | Add Data, or upload | Read in place by its packed R-tree. |
 | Standalone tables | CSV, or any layer without geometry | Add Data | Listed under the map in Contents; join or relate them to layers. |

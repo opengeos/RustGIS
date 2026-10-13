@@ -3,6 +3,7 @@
 //! Extent queries use the table's R-tree spatial index (`rtree_<table>_<column>`) when it has one,
 //! and otherwise scan, testing the envelope in each geometry's header before decoding it.
 
+use super::gpkg_blob::{field_type, is_empty_blob, split_blob};
 use super::{Batch, FeatureSource, Reproject, Request, Sampler, SourceInfo, clamp_limit, in_request, stride};
 use crate::{DataError, Feature, Field, FieldType, GeometryType, Result, Value, wkb};
 use rusqlite::types::ValueRef;
@@ -604,56 +605,6 @@ fn build(conn: &Connection, ds: &crate::Dataset) -> Result<()> {
     }
     conn.execute_batch("COMMIT;").map_err(err)?;
     Ok(())
-}
-
-/// A GeoPackage geometry blob flagged empty: valid, with nothing to draw.
-fn is_empty_blob(b: &[u8]) -> bool {
-    b.starts_with(b"GP") && b.get(3).is_some_and(|f| f & 0b1_0000 != 0)
-}
-
-/// A GeoPackage geometry blob: the header's envelope (if any) and the WKB after it.
-fn split_blob(b: &[u8]) -> Option<(Option<Extent>, &[u8])> {
-    let (magic, rest) = b.split_at_checked(2)?;
-    if magic != b"GP" {
-        // Some writers store plain WKB.
-        return Some((None, b));
-    }
-    let &flags = rest.get(1)?;
-    let little = flags & 1 == 1;
-    let env_len = match (flags >> 1) & 0b111 {
-        0 => 0,
-        1 => 32,
-        2 | 3 => 48,
-        4 => 64,
-        _ => return None,
-    };
-    if flags & 0b1_0000 != 0 {
-        // The empty flag.
-        return None;
-    }
-    let env = b.get(8..8 + env_len)?;
-    let f = |i: usize| -> Option<f64> {
-        let a: [u8; 8] = env.get(i * 8..i * 8 + 8)?.try_into().ok()?;
-        Some(if little { f64::from_le_bytes(a) } else { f64::from_be_bytes(a) })
-    };
-    // Envelope order: min x, max x, min y, max y.
-    let envelope = if env_len >= 32 { Some(Extent::new(f(0)?, f(2)?, f(1)?, f(3)?)).filter(|e| !e.is_empty()) } else { None };
-    Some((envelope, b.get(8 + env_len..)?))
-}
-
-fn field_type(decl: &str) -> Option<FieldType> {
-    let d = decl.to_ascii_uppercase();
-    Some(if d.contains("BOOL") {
-        FieldType::Boolean
-    } else if d.contains("INT") {
-        FieldType::Integer
-    } else if d.contains("REAL") || d.contains("FLOA") || d.contains("DOUB") || d.contains("NUMERIC") || d.contains("DECIMAL") {
-        FieldType::Double
-    } else if d.contains("BLOB") {
-        return None;
-    } else {
-        FieldType::Text
-    })
 }
 
 fn value(v: ValueRef<'_>, ty: FieldType) -> Value {

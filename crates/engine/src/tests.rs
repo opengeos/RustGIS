@@ -2661,6 +2661,10 @@ fn geopackage_table_cap_is_reported() {
     let one = s.run("layer.addData", &json!({"path": p, "layer": "t_34"})).unwrap();
     assert!(one.get("skipped").is_none());
     assert_eq!(s.map().layers.len(), 33);
+    // The pure-Rust reader the web app lists an upload's tables with sees them all.
+    let listed =
+        rustgis_data::source::gpkg_mem::layers(rustgis_data::source::Shared(std::sync::Arc::new(std::fs::read(&path).unwrap()))).unwrap();
+    assert_eq!(listed.len(), 34);
     assert!(s.run("info.fileLayers", &json!({"path": dir.join("none.geojson").display().to_string()})).is_err());
     let notes = dir.join("notes.rgis");
     std::fs::write(&notes, "{}").unwrap();

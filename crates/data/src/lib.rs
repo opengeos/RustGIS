@@ -12,6 +12,7 @@ pub mod kml;
 pub mod query;
 pub mod raster;
 pub mod source;
+pub mod sqlite;
 pub mod value;
 pub mod wkb;
 pub mod zip;
