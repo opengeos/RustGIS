@@ -73,7 +73,11 @@ impl Geocoder {
     /// for at most a request a second and light use.
     pub fn is_public(&self) -> bool {
         let b = self.base.to_ascii_lowercase();
-        b.contains("nominatim.openstreetmap.org") || b.contains("photon.komoot.io")
+        // The host itself, not a path or a look-alike host that contains the name.
+        let host = b.split_once("://").map(|(_, r)| r).unwrap_or(&b).split(['/', '?', '#']).next().unwrap_or("");
+        let host = host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host);
+        let host = host.split(':').next().unwrap_or(host);
+        matches!(host, "nominatim.openstreetmap.org" | "photon.komoot.io")
     }
 
     /// How long to wait between requests, in milliseconds.
@@ -207,6 +211,11 @@ mod tests {
         let g = Geocoder::new(None, None).unwrap();
         assert_eq!(g.kind, Kind::Nominatim);
         assert!(g.is_public() && g.spacing_ms() >= 1000 && g.batch_limit() == PUBLIC_BATCH);
+        // The host decides, not a look-alike or a path.
+        for own in ["https://nominatim.openstreetmap.org.evil.example", "https://geo.example/nominatim.openstreetmap.org"] {
+            assert!(!Geocoder::new(None, Some(own)).unwrap().is_public(), "{own}");
+        }
+        assert!(Geocoder::new(Some("photon"), Some("https://photon.komoot.io:443/api")).unwrap().is_public());
         assert_eq!(
             g.url(" 10 Downing St, London ", 3),
             "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=3&q=10%20Downing%20St%2C%20London"

@@ -13,7 +13,7 @@ pub fn commands() -> Vec<C> {
         C::new("map.findPlace", "Find Place", "Home › Navigate", find_place).params(
             r#"{"query": "a place or an address", "provider"?: "nominatim" (OpenStreetMap, default) | "photon", "url"?: "a geocoding server of your own", "limit"?: 1–20, "go"?: bool (zooms to the first, default true)}"#,
         ),
-        C::new("layer.geocode", "Geocode Addresses", "Analyze › Data", geocode).params(
+        C::new("layer.geocode", "Geocode Addresses", "Home › Add › Add Data", geocode).params(
             r#"{"table"?: "a standalone table (such as a CSV of addresses)", "layer"?: name|id (or the active layer), "address": field | [fields] (joined with commas, such as street, city, country), "provider"?: "nominatim" | "photon", "url"?: "a geocoding server of your own (more than 100 addresses)", "name"?: text}"#,
         ),
     ]
@@ -144,8 +144,10 @@ pub fn check_batch(g: &Geocoder, distinct: usize) -> Result<(), String> {
 /// null when nothing was found).
 fn given_places(v: &Value) -> Result<std::collections::HashMap<String, Option<Place>>, String> {
     let o = v.as_object().ok_or("places is an object from address to {lon, lat, name}")?;
+    if o.len() > rustgis_tiles_max() {
+        return Err(format!("places: {} answers, up to {} per run", o.len(), rustgis_tiles_max()));
+    }
     Ok(o.iter()
-        .take(rustgis_tiles_max())
         .map(|(k, v)| {
             let place = (|| {
                 let (lon, lat) = (v.get("lon")?.as_f64()?, v.get("lat")?.as_f64()?);
@@ -269,5 +271,5 @@ fn lookup(g: &Geocoder, distinct: &[String]) -> Result<Lookup, String> {
 
 #[cfg(target_arch = "wasm32")]
 fn lookup(_: &Geocoder, _: &[String]) -> Result<Lookup, String> {
-    Err("in the web app, geocode addresses with Analyze › Geocode Addresses".into())
+    Err("in the web app, geocode addresses with Home › Add Data › Geocode Addresses".into())
 }

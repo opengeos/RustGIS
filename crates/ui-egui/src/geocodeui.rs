@@ -91,7 +91,8 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 job.failed += 1;
                 job.in_a_row += 1;
                 job.error = Some(e);
-                if job.in_a_row >= 5 {
+                // The same rule as the command's: three refusals before any answer, or five in a row.
+                if job.in_a_row >= 5 || (job.in_a_row >= 3 && job.found.is_empty()) {
                     job.failed += job.queue.len().saturating_sub(job.next);
                     job.next = job.queue.len();
                 }
@@ -136,7 +137,10 @@ pub fn find_place(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     let mut go = false;
     ui.horizontal(|ui| {
         let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text(tl!("A place or an address")).desired_width(330.0));
-        r.request_focus();
+        // Focus the box when the dialog opens, not every frame (the Server box is typed in too).
+        if ui.memory(|m| m.focused().is_none()) {
+            r.request_focus();
+        }
         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if ui.add_enabled(!app.ui.geocode.searching, egui::Button::new(tl!("Search"))).clicked() || enter {
             go = true;
