@@ -232,9 +232,13 @@ pub fn thumbnail(bytes: &[u8], orientation: u16) -> crate::Result<String> {
     let bad = |e: image::ImageError| crate::DataError::Format(format!("the photo: {e}"));
     let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Jpeg);
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(16384);
-    limits.max_image_height = Some(16384);
-    limits.max_alloc = Some(512 << 20);
+    // A photo is decoded whole to make its thumbnail: bounded so a hostile file can't take more
+    // than a large camera photo needs (a 50 MP JPEG fits), and less on the web, where running out
+    // of memory aborts the app.
+    let (side, alloc) = if cfg!(target_arch = "wasm32") { (8192, 160 << 20) } else { (16384, 256 << 20) };
+    limits.max_image_width = Some(side);
+    limits.max_image_height = Some(side);
+    limits.max_alloc = Some(alloc);
     reader.limits(limits);
     let img = reader.decode().map_err(bad)?.thumbnail(THUMB_SIZE, THUMB_SIZE);
     let img = match orientation {

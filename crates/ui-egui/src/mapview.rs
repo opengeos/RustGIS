@@ -1325,16 +1325,26 @@ fn picture_texture(app: &mut RustGisApp, ctx: &egui::Context, value: &str) -> Re
             return Err("the picture is too large to show".to_string());
         }
         let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;
-        let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?.to_rgba8();
+        let img = decode_picture(&bytes)?;
         let (w, h) = (img.width() as usize, img.height() as usize);
-        if w > 2048 || h > 2048 {
-            return Err("the picture is too large to show".to_string());
-        }
         let color = egui::ColorImage::from_rgba_unmultiplied([w, h], img.as_raw());
         Ok(ctx.load_texture("identify_picture", color, egui::TextureOptions::LINEAR))
     })();
     app.map.picture = Some((key, decoded.clone()));
     decoded
+}
+
+/// A picture kept with a feature, decoded for the identify popup. A project's value is hostile:
+/// its size is checked before anything is decoded, so a small compressed picture can't unpack
+/// into a huge one.
+fn decode_picture(bytes: &[u8]) -> Result<image::RgbaImage, String> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(2048);
+    limits.max_image_height = Some(2048);
+    limits.max_alloc = Some(64 << 20);
+    reader.limits(limits);
+    Ok(reader.decode().map_err(|_| "the picture is too large to show, or isn't one".to_string())?.to_rgba8())
 }
 
 /// The on-screen navigator: a north compass, zoom in and out, and four pan arrows.
@@ -1453,5 +1463,23 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.painter().text(pr.center(), Align2::CENTER_CENTER, "+", regular(15.0), t.text_dim);
     if resp.on_hover_text(tl!("New Map")).clicked() {
         let _ = app.run("map.new", Value::Null);
+    }
+}
+
+#[cfg(test)]
+mod picture_tests {
+    #[test]
+    fn large_pictures_are_refused_before_decoding() {
+        let png = |w: u32, h: u32| {
+            let mut out = Vec::new();
+            image::RgbaImage::new(w, h).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+            out
+        };
+        assert!(super::decode_picture(&png(160, 120)).is_ok());
+        // A blank picture compresses to a few KB, but would unpack into far more than shown.
+        let bomb = png(4000, 4000);
+        assert!(bomb.len() < 4 << 20, "{}", bomb.len());
+        assert!(super::decode_picture(&bomb).is_err());
+        assert!(super::decode_picture(b"not a picture").is_err());
     }
 }
