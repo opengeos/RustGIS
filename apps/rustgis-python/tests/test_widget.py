@@ -39,7 +39,7 @@ def test_app_changes_reach_the_session():
     m = rustgis.Map()
     other = rustgis.Session()
     other.add_geojson(POINT, name="Drawn in the app")
-    text = other._engine.project_json()
+    text = other.project_json()
     from_app(m, text)
     assert [layer["name"] for layer in m.layers()] == ["Drawn in the app"]
     # The app's own text is kept, so it isn't sent back to it.
@@ -68,3 +68,11 @@ def test_options_and_local_files(tmp_path):
     # A small file travels with the project: the app in the browser can't read the path.
     assert str(path) not in m._project
     assert m.layers()[0]["features"] == 1
+
+
+def test_add_data_parameters_can_override_the_file_name(tmp_path):
+    path = tmp_path / "sites.geojson"
+    path.write_text(json.dumps(POINT))
+    m = rustgis.Map()
+    m.add_data(path, name="Renamed", fileName="other.geojson")
+    assert [layer["name"] for layer in m.layers()] == ["Renamed"]

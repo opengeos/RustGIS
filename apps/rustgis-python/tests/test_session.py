@@ -104,3 +104,10 @@ def test_a_session_is_usable_from_another_thread():
     t.start()
     t.join()
     assert seen == [len(s.layers())]
+
+
+def test_project_json_reopens_as_the_same_project():
+    s = rustgis.Session(sample=True)
+    other = rustgis.Session()
+    other.run("project.openText", text=s.project_json())
+    assert [layer["name"] for layer in other.layers()] == [layer["name"] for layer in s.layers()]

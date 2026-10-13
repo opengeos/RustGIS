@@ -234,6 +234,14 @@ class Session:
         """
         return self.run("project.saveAs", path=os.fspath(path))
 
+    def project_json(self) -> str:
+        """The project as ``.rgis`` JSON text, as :meth:`save` writes it.
+
+        Returns:
+            The JSON text; ``run("project.openText", text=...)`` opens it.
+        """
+        return self._engine.project_json()
+
     def info(self) -> Dict[str, Any]:
         """The project's summary: the active map, basemap, view and layers."""
         return self.run("info.project")

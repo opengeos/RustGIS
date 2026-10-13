@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import os
 import pathlib
+import threading
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import quote
 
@@ -23,9 +24,9 @@ from . import Layer, PathLike, RustGISError, Session
 DEFAULT_URL = "https://web.rustgis.app/"
 
 #: Files up to this size travel with the project, so the app in the browser shows them too. The
-#: whole project goes to the app after each change, so this stays well under what a notebook's
-#: messages carry comfortably.
-EMBED_LIMIT = 10 << 20
+#: whole project, base64 bytes and all (a third larger), crosses the notebook's websocket after
+#: each change, and some setups cap a message near 10 MB, so this stays small.
+EMBED_LIMIT = 2 << 20
 
 # The extensions `layer.addDataBytes` reads from a file's contents.
 _EMBEDDABLE = {
@@ -71,7 +72,9 @@ class Map(anywidget.AnyWidget):
         """Starts the widget on ``session`` or a new session."""
         super().__init__(height=height, _src=_app_src(url, lang), **kwargs)
         self._session = session if session is not None else Session()
+        # Notices waiting to be read. The app's messages arrive on a thread of Jupyter's own.
         self._held: List[Tuple[str, bool]] = []
+        self._held_lock = threading.Lock()
         if sample:
             self._session.run("project.sample")
         if data is not None:
@@ -137,7 +140,8 @@ class Map(anywidget.AnyWidget):
         Returns:
             ``(text, is_error)`` pairs, oldest first.
         """
-        held, self._held = self._held, []
+        with self._held_lock:
+            held, self._held = self._held, []
         return held + self._session.notices()
 
     def undo(self) -> Any:
@@ -187,7 +191,7 @@ class Map(anywidget.AnyWidget):
     def add_data(self, path: PathLike, name: Optional[str] = None, **params: Any) -> Any:
         """Adds a file as a layer.
 
-        A file of up to 10 MB travels with the project, so the app shows it too; a larger one is
+        A file of up to 2 MB travels with the project, so the app shows it too; a larger one is
         read from its path, which only Python can see: it draws in :meth:`to_png` but not in the
         app.
 
@@ -199,7 +203,7 @@ class Map(anywidget.AnyWidget):
         command, args = _data_args(path)
         if name is not None:
             params["name"] = name
-        return self.run(command, **args, **params)
+        return self.run(command, {**args, **params})
 
     def add_geojson(self, data: Union[Dict[str, Any], str, PathLike], name: str = "GeoJSON") -> Any:
         """Adds GeoJSON as a layer.
@@ -286,11 +290,20 @@ class Map(anywidget.AnyWidget):
     def _push(self) -> None:
         """Sends the session's project to the app, when it changed."""
         try:
-            text = self._session._engine.project_json()
+            text = self._session.project_json()
         except RustGISError as e:
-            self._held.append((f"couldn't show the project in the app: {e}", True))
+            self._hold([(f"couldn't show the project in the app: {e}", True)])
             return
         self._project = text
+
+    def _hold(self, notices: List[Tuple[str, bool]]) -> None:
+        """Keeps notices for :meth:`notices`.
+
+        Args:
+            notices: ``(text, is_error)`` pairs.
+        """
+        with self._held_lock:
+            self._held.extend(notices)
 
     def _on_app(self, _widget: Any, content: Any, _buffers: Any) -> None:
         """Takes the app's messages: its project after a change there, a command's failure.
@@ -309,11 +322,11 @@ class Map(anywidget.AnyWidget):
                 return
             # Opening it reports "Opened ...": not news here, so it is dropped, and what was
             # waiting to be read is kept.
-            self._held.extend(self._session.notices())
+            self._hold(self._session.notices())
             try:
                 self._session.run("project.openText", text=text)
             except RustGISError as e:
-                self._held.append((f"the app's project couldn't be read: {e}", True))
+                self._hold([(f"the app's project couldn't be read: {e}", True)])
                 return
             finally:
                 self._session.notices()
@@ -321,7 +334,7 @@ class Map(anywidget.AnyWidget):
             # project and doesn't open it again.
             self._project = text
         elif kind == "result" and content.get("ok") is False:
-            self._held.append((str(content.get("error", "the command failed")), True))
+            self._hold([(str(content.get("error", "the command failed")), True)])
 
     def __repr__(self) -> str:
         return f"Map(layers={[layer.get('name') for layer in self.layers()]!r})"
@@ -350,11 +363,11 @@ def _data_args(path: PathLike) -> Tuple[str, Dict[str, Any]]:
         The command id and its parameters.
     """
     p = pathlib.Path(os.fspath(path))
-    try:
-        small = p.is_file() and p.stat().st_size <= EMBED_LIMIT
-    except OSError:
-        small = False
-    if small and p.suffix.lower() in _EMBEDDABLE:
-        data = base64.b64encode(p.read_bytes()).decode("ascii")
-        return "layer.addDataBytes", {"fileName": p.name, "data": data}
+    if p.suffix.lower() in _EMBEDDABLE:
+        try:
+            if p.is_file() and p.stat().st_size <= EMBED_LIMIT:
+                data = base64.b64encode(p.read_bytes()).decode("ascii")
+                return "layer.addDataBytes", {"fileName": p.name, "data": data}
+        except OSError:
+            pass
     return "layer.addData", {"path": os.fspath(path)}
