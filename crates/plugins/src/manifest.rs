@@ -21,9 +21,14 @@ const MAX_GROUP_ITEMS: usize = 16;
 const MAX_MENU_ITEMS: usize = 32;
 const MAX_TAB_LABEL: usize = 32;
 
-/// RustGIS's own ribbon tabs (and the Project button): a plugin's tab can't take their names.
+/// RustGIS's own ribbon tabs (and the Project button), and the names they had before: a plugin's
+/// tab can't take them.
 pub const RESERVED_TABS: &[&str] = &[
     "Project",
+    "Home",
+    "Style",
+    "Analyze",
+    "Publish",
     "Map",
     "Insert",
     "Analysis",

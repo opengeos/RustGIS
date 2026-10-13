@@ -1,4 +1,4 @@
-//! Imagery tab: georeferencing, change detection, spectral profiles, classification (k-means and
+//! Analyze tab, imagery groups: georeferencing, change detection, spectral profiles, classification (k-means and
 //! minimum distance), indices, processing (clip, resample), the pixel editor, mensuration, and
 //! ortho and reality mapping workspaces (mosaics of georeferenced images, DSM meshes).
 
@@ -35,15 +35,15 @@ fn first() -> String {
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("raster.georeference", "Georeference", "Imagery › Alignment", georeference).params(
+        C::new("raster.georeference", "Georeference", "Analyze › Alignment", georeference).params(
             r#"{"layer": raster, "points"?: [[column, row, lon, lat], …] (two or more), "extent"?: [minLon, minLat, maxLon, maxLat]}"#,
         ),
-        C::new("raster.change", "Change Detection", "Imagery › Analysis", change)
+        C::new("raster.change", "Change Detection", "Analyze › Image Analysis", change)
             .params(r#"{"before": raster, "after": raster, "band"?: 1-based, "method"?: "difference"|"ratio"|"percent", "name"?}"#),
-        C::new("raster.spectral", "Spectral Analysis", "Imagery › Analysis", spectral)
+        C::new("raster.spectral", "Spectral Analysis", "Analyze › Image Analysis", spectral)
             .view()
             .params(r#"{"layer": raster, "lon"?, "lat"?, "zone"?: polygon layer (the selected or first polygon)}"#),
-        C::new("raster.classify", "Classification Wizard", "Imagery › Image Classification", |s, p| {
+        C::new("raster.classify", "Classification Wizard", "Analyze › Image Classification", |s, p| {
             let r = raster(s, p)?;
             let bands = bands_param(p, &r)?;
             if bands.is_empty() {
@@ -57,20 +57,20 @@ pub fn commands() -> Vec<C> {
             add(s, rasterops::derive(&r, &name(p, format!("{}_classes", r.name)), vec![classes])?, true)
         })
         .params(r#"{"layer": raster, "classes"?: 2..50, "bands"?: [1-based]}"#),
-        C::new("raster.classifySupervised", "Classification Tools", "Imagery › Image Classification", supervised)
+        C::new("raster.classifySupervised", "Classification Tools", "Analyze › Image Classification", supervised)
             .params(r#"{"layer": raster, "training": polygon layer, "classField": field, "bands"?: [1-based]}"#),
-        C::new("raster.index", "Indices", "Imagery › Tools", index).params(
+        C::new("raster.index", "Indices", "Analyze › Imagery Tools", index).params(
             r#"{"layer": raster, "index": "ndvi"|"ndwi"|"savi"|"nbr"|"ndbi"|"evi", "red"?, "green"?, "blue"?, "nir"?, "swir"?: band numbers}"#,
         ),
-        C::new("raster.process", "Process", "Imagery › Tools", process)
+        C::new("raster.process", "Process", "Analyze › Imagery Tools", process)
             .params(r#"{"layer": raster, "operation": "clip"|"resample", "extent"?: [minLon, minLat, maxLon, maxLat] (clip; the view when omitted), "factor"?: n (resample: n×n pixels become one)}"#),
-        C::new("raster.editPixels", "Pixel Editor", "Imagery › Tools", edit_pixels)
+        C::new("raster.editPixels", "Pixel Editor", "Analyze › Imagery Tools", edit_pixels)
             .params(r#"{"layer": raster, "polygon": [[lon, lat], …], "value"?: number (no-data when omitted), "band"?: 1-based (all when omitted)}"#),
         // Measurements are session results, not project changes: no undo step.
-        C::new("raster.measure", "Mensuration Tools", "Imagery › Mensuration", measure).view().params(
+        C::new("raster.measure", "Mensuration Tools", "Analyze › Mensuration", measure).view().params(
             r#"{"layer"?: elevation raster, "kind": "distance"|"area"|"height"|"volume", "points": [[lon, lat], …], "base"?: metres (volume)}"#,
         ),
-        C::new("raster.measurements", "Results", "Imagery › Mensuration", |s, p| {
+        C::new("raster.measurements", "Results", "Analyze › Mensuration", |s, p| {
             if b(p, "clear").unwrap_or(false) {
                 s.measurements.clear();
             }
@@ -78,10 +78,10 @@ pub fn commands() -> Vec<C> {
         })
         .view()
         .params(r#"{"clear"?: bool}"#),
-        C::new("imagery.workspace", "New Workspace", "Imagery › Ortho Mapping", new_workspace).params(
+        C::new("imagery.workspace", "New Workspace", "Analyze › Ortho Mapping", new_workspace).params(
             r#"{"kind": "ortho"|"reality", "name"?: string, "images": [raster layers], "cellSize"?: degrees, "method"?: "first"|"mean"}"#,
         ),
-        C::new("imagery.workspaceOptions", "Workspace Options", "Imagery › Ortho Mapping", |s, p| {
+        C::new("imagery.workspaceOptions", "Workspace Options", "Analyze › Ortho Mapping", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
             let w = s.project.workspaces.iter_mut().find(|w| w.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no workspace '{n}'"))?;
             if p.get("cellSize").is_some() {
@@ -93,8 +93,8 @@ pub fn commands() -> Vec<C> {
             serde_json::to_value(&*w).map_err(|e| e.to_string())
         })
         .params(r#"{"name": workspace, "cellSize"?: degrees|null, "method"?: "first"|"mean"}"#),
-        C::new("imagery.mosaic", "Build Mosaic", "Imagery › Ortho Mapping", mosaic).params(r#"{"name": workspace}"#),
-        C::new("imagery.mesh", "Export Mesh", "Imagery › Reality Mapping", mesh)
+        C::new("imagery.mosaic", "Build Mosaic", "Analyze › Ortho Mapping", mosaic).params(r#"{"name": workspace}"#),
+        C::new("imagery.mesh", "Export Mesh", "Analyze › Reality Mapping", mesh)
             .view()
             .params(r#"{"layer": elevation raster, "path"?: "*.obj" (the text is returned without one), "step"?: pixels between vertices}"#),
     ]

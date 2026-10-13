@@ -39,8 +39,8 @@
   them.
 - **Everything is a command.** Every button in the ribbon is a command with an id. Script it from
   `rustgis-cli`, chain it in notebooks and models, or ask the AI Assistant to run it for you.
-- **Familiar.** A ribbon of tabs and contextual tab groups, Contents and Catalog panes, an
-  attribute table, and undo for every change.
+- **Familiar.** A ribbon laid out in the order of the work (Home, Data, Style, Edit, Analyze,
+  View, Publish), Contents and Catalog panes, an attribute table, and undo for every change.
 - **Extensible.** Over 1,000 GeoLibre and Whitebox tools for terrain, hydrology, LiDAR and remote sensing, and
   sandboxed WebAssembly [plugins](docs/plugins.md) that add commands, tools and ribbon tabs.
 

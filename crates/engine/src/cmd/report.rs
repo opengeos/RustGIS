@@ -1,4 +1,4 @@
-//! Insert › Project (New Report), Insert › Report Section and Data, and Share › Save As (Report
+//! Data › Project (New Report), Publish › Report and Data, and Publish › Save As (Report
 //! File, Report Template) and Output (Export Report): reports on a layer's records.
 
 use std::collections::{BTreeMap, HashMap};
@@ -29,12 +29,12 @@ const MAX_RELATED: usize = 200;
 const PDF_BUDGET: usize = if cfg!(target_arch = "wasm32") { 256 << 20 } else { 1 << 30 };
 
 fn need_report(s: &Session) -> Option<&'static str> {
-    if s.project.reports.is_empty() { Some("add a report first (Insert › New Report)") } else { None }
+    if s.project.reports.is_empty() { Some("add a report first (Publish › New Report)") } else { None }
 }
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("report.new", "New Report", "Insert › Project", new_report).params(
+        C::new("report.new", "New Report", "Data › Project", new_report).params(
             r#"{"layer"?: name (default: the selected layer), "name"?, "title"?, "fields"?: [names] (default: all), "where"?: SQL, "selectedOnly"?: bool, "groups"?: [fields], "sort"?: field, "descending"?: bool, "page"?: "letter"|"a4"|…, "orientation"?: "portrait"|"landscape"}"#,
         ),
         C::new("report.update", "Report Properties", "Report", update).when(need_report).params(
@@ -61,14 +61,14 @@ pub fn commands() -> Vec<C> {
         .when(need_report)
         .params(r#"{"report"?}"#),
         // Report sections.
-        C::new("report.supplementalPage", "Supplemental Page", "Insert › Report Section", |s, p| {
+        C::new("report.supplementalPage", "Supplemental Page", "Publish › Report", |s, p| {
             let title: String = ps(p, "title").unwrap_or("About this report").chars().take(500).collect();
             let text: String = ps(p, "text").unwrap_or("").chars().take(100_000).collect();
             add_section(s, p, Section::Page { title, text, end: b(p, "end").unwrap_or(false) })
         })
         .when(need_report)
         .params(r#"{"report"?, "title"?, "text"?, "end"?: bool (after the records; default before)}"#),
-        C::new("report.newTemplate", "New Template", "Insert › Report Section", |s, p| {
+        C::new("report.newTemplate", "New Template", "Publish › Report", |s, p| {
             let i = index(s, p)?;
             let rname = s.project.reports.get(i).map(|r| r.name.clone()).unwrap_or_default();
             let before = s.active_layout;
@@ -82,7 +82,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_report)
         .params(r#"{"report"?, "name"?, "page"?, "orientation"?, "template"?: "map"|"blank", "end"?: bool}"#),
-        C::new("report.existingTemplate", "Existing Template", "Insert › Report Section", |s, p| {
+        C::new("report.existingTemplate", "Existing Template", "Publish › Report", |s, p| {
             let i = index(s, p)?;
             let layout = if let Some(n) = ps(p, "layout") {
                 s.project.layouts.iter().find(|l| l.name.eq_ignore_ascii_case(n)).map(|l| l.name.clone()).ok_or_else(|| format!("no layout '{n}'"))?
@@ -97,7 +97,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_report)
         .params(r#"{"report"?, "layout"?: a layout's name, "path"?: "*.rgislayout", "text"?: layout JSON, "end"?: bool}"#),
-        C::new("report.relatedReport", "Related Report", "Insert › Report Section", |s, p| {
+        C::new("report.relatedReport", "Related Report", "Publish › Report", |s, p| {
             let i = index(s, p)?;
             let other = ps(p, "related").ok_or("related is required (another report's name)")?;
             let j = s.project.reports.iter().position(|r| r.name.eq_ignore_ascii_case(other)).ok_or_else(|| format!("no report '{other}'"))?;
@@ -109,7 +109,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_report)
         .params(r#"{"report"?, "related": report name}"#),
-        C::new("report.subreport", "Subreport", "Insert › Report Section", subreport)
+        C::new("report.subreport", "Subreport", "Publish › Report", subreport)
             .when(need_report)
             .params(r#"{"report"?, "relationship": name (Data Design › Relationships), "fields"?: [related fields]}"#),
         C::new("report.removeSection", "Remove Section", "Report", |s, p| {
@@ -125,7 +125,7 @@ pub fn commands() -> Vec<C> {
         .when(need_report)
         .params(r#"{"report"?, "index": section number}"#),
         // Data.
-        C::new("report.field", "Field", "Insert › Data", |s, p| {
+        C::new("report.field", "Field", "Data › Data Design", |s, p| {
             let (i, field) = field_of(s, p, "field")?;
             let r = s.project.reports.get_mut(i).ok_or("no report")?;
             toggle(&mut r.fields, field, b(p, "remove").unwrap_or(false));
@@ -133,7 +133,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_report)
         .params(r#"{"report"?, "field": name, "remove"?: bool}"#),
-        C::new("report.autofill", "Autofill Fields", "Insert › Data", |s, p| {
+        C::new("report.autofill", "Autofill Fields", "Data › Data Design", |s, p| {
             let i = index(s, p)?;
             let names = layer_of(s, i)?.dataset.fields.iter().take(MAX_ITEMS).map(|f| f.name.clone()).collect::<Vec<_>>();
             let r = s.project.reports.get_mut(i).ok_or("no report")?;
@@ -142,7 +142,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_report)
         .params(r#"{"report"?}"#),
-        C::new("report.statistics", "Statistics", "Insert › Data", |s, p| {
+        C::new("report.statistics", "Statistics", "Data › Data Design", |s, p| {
             let kind = ps(p, "kind").unwrap_or("sum");
             let kind = StatKind::from_code(kind).ok_or_else(|| format!("unknown statistic '{kind}'"))?;
             let (i, field) = field_of(s, p, "field")?;
@@ -160,7 +160,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_report)
         .params(r#"{"report"?, "field": name, "kind"?: "count"|"sum"|"mean"|"min"|"max", "remove"?: bool}"#),
-        C::new("report.group", "Group", "Insert › Data", |s, p| {
+        C::new("report.group", "Group", "Data › Data Design", |s, p| {
             let (i, field) = field_of(s, p, "field")?;
             let r = s.project.reports.get_mut(i).ok_or("no report")?;
             let remove = b(p, "remove").unwrap_or(false);
@@ -172,7 +172,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_report)
         .params(r#"{"report"?, "field": name, "remove"?: bool}"#),
-        C::new("report.attachments", "Attachments", "Insert › Data", |s, p| {
+        C::new("report.attachments", "Attachments", "Data › Data Design", |s, p| {
             let (i, field) = optional_field(s, p)?;
             let r = s.project.reports.get_mut(i).ok_or("no report")?;
             r.attachments_field = field;
@@ -180,7 +180,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_report)
         .params(r#"{"report"?, "field": name of a field listing each record's attachments (paths separated by ';')|null}"#),
-        C::new("report.dynamicPicture", "Dynamic Picture", "Insert › Data", |s, p| {
+        C::new("report.dynamicPicture", "Dynamic Picture", "Data › Data Design", |s, p| {
             let (i, field) = optional_field(s, p)?;
             let r = s.project.reports.get_mut(i).ok_or("no report")?;
             r.picture_field = field;
@@ -188,7 +188,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_report)
         .params(r#"{"report"?, "field": name of a field holding a picture path or base64 PNG/JPEG|null}"#),
-        C::new("report.chart", "Chart Frame", "Insert › Data", |s, p| {
+        C::new("report.chart", "Chart Frame", "Data › Data Design", |s, p| {
             let i = index(s, p)?;
             let chart = match p.get("category") {
                 None | Some(Value::Null) => None,
@@ -208,7 +208,7 @@ pub fn commands() -> Vec<C> {
         .when(need_report)
         .params(r#"{"report"?, "category": field|null (no chart), "value"?: field to sum (default: count records)}"#),
         // Output.
-        C::new("report.export", "Export Report", "Share › Output", |s, p| {
+        C::new("report.export", "Export Report", "Publish › Output", |s, p| {
             let path = ps(p, "path").ok_or("path is required")?.to_string();
             let i = index(s, p)?;
             let dpi = f(p, "dpi").unwrap_or(150.0).clamp(72.0, 600.0);
@@ -224,15 +224,15 @@ pub fn commands() -> Vec<C> {
         .view()
         .when(need_report)
         .params(r#"{"report"?, "path": "*.pdf|*.png" (PNG: the first page), "dpi"?: 72..600}"#),
-        C::new("report.save", "Report File", "Share › Save As", |s, p| save(s, p, false))
+        C::new("report.save", "Report File", "Publish › Save As", |s, p| save(s, p, false))
             .view()
             .when(need_report)
             .params(r#"{"report"?, "path": "*.rgisreport"}"#),
-        C::new("report.saveTemplate", "Report Template", "Share › Save As", |s, p| save(s, p, true))
+        C::new("report.saveTemplate", "Report Template", "Publish › Save As", |s, p| save(s, p, true))
             .view()
             .when(need_report)
             .params(r#"{"report"?, "path": "*.rgisrpttemplate"}"#),
-        C::new("report.open", "Import Report", "Insert › Project", open).params(
+        C::new("report.open", "Import Report", "Data › Project", open).params(
             r#"{"path"?: "*.rgisreport|*.rgisrpttemplate", "text"?: report JSON, "layer"?: the layer a template reports on (default: the selected layer)}"#,
         ),
     ]

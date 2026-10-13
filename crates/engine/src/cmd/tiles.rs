@@ -1,4 +1,4 @@
-//! Map tab › Layer › Basemap: web tile layers (XYZ/TMS/WMS raster tiles, vector tiles and
+//! Home › Add › Basemap: web tile layers (XYZ/TMS/WMS raster tiles, vector tiles and
 //! MapLibre styles) over the basemap.
 
 use rustgis_map::tiles::{MAX_TILE_LAYERS, TileKind, TileLayer};
@@ -13,15 +13,15 @@ pub const NETWORK: &[&str] = &["map.addTiles"];
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("map.addTiles", "Add Tile Layer", "Map › Layer", add).params(
+        C::new("map.addTiles", "Add Tile Layer", "Home › Add", add).params(
             r#"{"url": "https://…/{z}/{x}/{y}.png" | vector tiles ".pbf" or TileJSON | MapLibre style.json | a PMTiles archive (web address or file path), "kind"?: "raster"|"vector"|"style"|"pmtiles" (guessed from the url), "name"?: text, "attribution"?: text, "minZoom"?: number, "maxZoom"?: number, "tileSize"?: 256|512, "tms"?: bool, "subdomains"?: [text], "opacity"?: 0–1, "overlay"?: bool (a transparent layer kept on top), "replace"?: bool (removes the other tile basemaps, not overlays), "id"?: catalog id}"#,
         ),
-        C::new("map.removeTiles", "Remove Tile Layer", "Map › Layer", remove)
+        C::new("map.removeTiles", "Remove Tile Layer", "Home › Add", remove)
             .params(r#"{"name"?: text, "index"?: number, "id"?: catalog id} (removes every tile layer when none is given)"#),
-        C::new("map.setTiles", "Tile Layer Properties", "Map › Layer", set).params(
+        C::new("map.setTiles", "Tile Layer Properties", "Home › Add", set).params(
             r#"{"name"?: text | "index"?: number (0 = top), "visible"?: bool, "opacity"?: 0–1, "move"?: "up"|"down"|"top"|"bottom", "rename"?: text}"#,
         ),
-        C::new("map.tiles", "Tile Layers", "Map › Layer", |s, _| Ok(list(s))).view(),
+        C::new("map.tiles", "Tile Layers", "Home › Add", |s, _| Ok(list(s))).view(),
     ]
 }
 

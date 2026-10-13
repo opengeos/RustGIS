@@ -60,7 +60,7 @@ pub fn tasks(app: &mut RustGisApp, ui: &mut Ui, _t: &Tokens) {
     message(app, ui);
     let tasks = app.session.project.tasks.clone();
     if tasks.is_empty() {
-        ui.label(egui::RichText::new(tl!("No tasks yet. Insert › Task makes one, for example from your geoprocessing history.")).weak());
+        ui.label(egui::RichText::new(tl!("No tasks yet. Data › Task makes one, for example from your geoprocessing history.")).weak());
         return;
     }
     if !tasks.iter().any(|t| t.name == app.ws.task) {
@@ -425,7 +425,7 @@ pub fn catalog_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let _ = app.run(&cmd, json!({"name": a["name"]}));
         app.ws.catalog_view = false;
         if cmd == "layout.activate" {
-            app.ui.tab = "Layout".into();
+            app.ui.tab = "Publish".into();
         }
         app.map.invalidate();
     }

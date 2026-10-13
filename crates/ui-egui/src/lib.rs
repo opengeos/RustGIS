@@ -1,5 +1,5 @@
-//! L6: the RustGIS desktop front end, built around a ribbon with
-//! contextual tabs, the Contents and Catalog panes, a Geoprocessing pane, the map view, the
+//! L6: the RustGIS desktop front end, built around a ribbon (Home, Data, Style, Edit, Analyze,
+//! View, Publish), the Contents and Catalog panes, a Geoprocessing pane, the map view, the
 //! attribute table and the status bar.
 //!
 //! The UI is thin: it reads [`Session`] state and runs commands by id ([`RustGisApp::run`]).
@@ -195,8 +195,6 @@ pub struct UiState {
     pub command_search: Option<String>,
     pub about: bool,
     pub shortcuts: bool,
-    /// Tab rectangles from the last frame (for the contextual group header).
-    pub tab_rects: Vec<(String, egui::Rect)>,
     pub tab_strip_rect: Option<egui::Rect>,
     /// Tabs hidden from the ribbon (Help › Customize › Ribbon).
     pub hidden_tabs: Vec<String>,
@@ -221,7 +219,7 @@ pub struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         UiState {
-            tab: "Map".into(),
+            tab: "Home".into(),
             backstage: false,
             backstage_page: "open",
             left: Some(LeftPane::Contents),
@@ -239,7 +237,6 @@ impl Default for UiState {
             command_search: None,
             about: false,
             shortcuts: false,
-            tab_rects: Vec::new(),
             tab_strip_rect: None,
             copy_out: None,
             open_url: None,
@@ -357,7 +354,7 @@ impl RustGisApp {
         let list = |s: Option<String>| -> Vec<String> {
             s.map(|v| v.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect()).unwrap_or_default()
         };
-        self.ui.hidden_tabs = list(self.services.load_pref.as_ref().and_then(|load| load("hidden_tabs")));
+        self.ui.hidden_tabs = ribbon::current_hidden_tabs(list(self.services.load_pref.as_ref().and_then(|load| load("hidden_tabs"))));
         self.ui.quick_access = list(self.services.load_pref.as_ref().and_then(|load| load("quick_access")));
         // The browser's GeoLibre tools, loaded in an earlier visit: load them again (the runner
         // comes from the browser's cache).
@@ -834,7 +831,7 @@ impl RustGisApp {
             "ui.backstage" => self.ui.backstage = p.get("open").and_then(Value::as_bool).unwrap_or(!self.ui.backstage),
             "ui.tab" => {
                 if let Some(t) = p.get("tab").and_then(Value::as_str) {
-                    self.ui.tab = t.to_string();
+                    self.ui.tab = ribbon::current_tab(t).to_string();
                 }
             }
             "ui.addData" => {
@@ -1193,7 +1190,7 @@ impl RustGisApp {
                             .ok_or_else(|| format!("no map '{n}'"))?,
                     ),
                     (Some(_), None) => None,
-                    (None, None) => Some(*others.first().ok_or("add a second map first (Insert › New Map)")?),
+                    (None, None) => Some(*others.first().ok_or("add a second map first (Data › New Map)")?),
                 };
             }
             "ui.paneSet" => {
@@ -1202,7 +1199,7 @@ impl RustGisApp {
                     self.ui.pane_sets.push((n.to_string(), self.ui.left, self.ui.right, self.ui.tab.clone()));
                 } else if let Some(n) = p.get("load").and_then(Value::as_str) {
                     let set = self.ui.pane_sets.iter().find(|x| x.0 == n).cloned().ok_or_else(|| format!("no pane set '{n}'"))?;
-                    (self.ui.left, self.ui.right, self.ui.tab) = (set.1, set.2, set.3);
+                    (self.ui.left, self.ui.right, self.ui.tab) = (set.1, set.2, ribbon::current_tab(&set.3).to_string());
                 } else {
                     return Err("save or load a pane set by name".into());
                 }

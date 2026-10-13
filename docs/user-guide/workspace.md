@@ -13,7 +13,7 @@ Tools for working across maps and views, and for setting up the app the way you 
 - **Animation**: add keyframes (views), play them, and export the moves as PNG frames.
 - **Profile**: elevation profiles along clicked points or selected lines, auto-completed to the
   raster's edge, or across a line (a cross section), with gain, loss and a chart.
-- **Infographics** (Map tab) summarise what's in view: counts, totals and top categories.
+- **Infographics** (Home tab) summarise what's in view: counts, totals and top categories.
 - **Offline**: Download Map takes the data in view into an offline area; open it to edit, then
   Sync sends changed, new and deleted features back and refreshes it. **Feature Cache** prepares
   every layer's geometry for the current projection (Fill, Empty, Cancel, Auto Cache).

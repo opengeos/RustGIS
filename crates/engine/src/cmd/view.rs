@@ -67,7 +67,7 @@ pub fn commands() -> Vec<C> {
         .view()
         .params(r#"{"on"?: bool}"#),
         C::new("map.camera", "Camera", "View › Navigation", camera).view().params(r#"{"lon"?, "lat"?, "scale"? (the camera's position when omitted)}"#),
-        C::new("map.navigation", "Navigation Mode", "Map › Navigate", |s, p| {
+        C::new("map.navigation", "Navigation Mode", "Home › Navigate", |s, p| {
             let fp = match ps(p, "mode").ok_or("mode is required")? {
                 "planar" => false,
                 "firstPerson" => true,
@@ -96,7 +96,7 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"projection": m.projection.code(), "label": m.projection.label()}))
         })
         .params(r#"{"mode": "global" (a globe)|"local" (a flat view centred here)}"#),
-        C::new("map.walk", "Walk", "Map › Navigate", walk).view().params(r#"{"forward"?: steps, "right"?: steps, "up"?: steps (first-person navigation)}"#),
+        C::new("map.walk", "Walk", "Home › Navigate", walk).view().params(r#"{"forward"?: steps, "right"?: steps, "up"?: steps (first-person navigation)}"#),
     ]
 }
 

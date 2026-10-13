@@ -14,7 +14,7 @@ pub static TOOLS: &[ToolSpec] = &[
     ToolSpec {
         id: "buffer",
         name: "Buffer",
-        toolbox: "Analysis › Proximity",
+        toolbox: "Analyze › Proximity",
         summary: "Creates polygons around input features at a given distance.",
         params: &[
             P { name: "input", label: "Input Features", kind: K::Layer, required: true, default: "", help: "" },
@@ -28,7 +28,7 @@ pub static TOOLS: &[ToolSpec] = &[
     ToolSpec {
         id: "clip",
         name: "Clip",
-        toolbox: "Analysis › Extract",
+        toolbox: "Analyze › Extract",
         summary: "Extracts the parts of input features that fall inside clip polygons.",
         params: &[
             P { name: "input", label: "Input Features", kind: K::Layer, required: true, default: "", help: "" },
@@ -40,7 +40,7 @@ pub static TOOLS: &[ToolSpec] = &[
     ToolSpec {
         id: "erase",
         name: "Erase",
-        toolbox: "Analysis › Overlay",
+        toolbox: "Analyze › Overlay",
         summary: "Removes the parts of polygon features that overlap erase polygons.",
         params: &[
             P { name: "input", label: "Input Features", kind: K::PolygonLayer, required: true, default: "", help: "" },
@@ -123,7 +123,7 @@ pub static TOOLS: &[ToolSpec] = &[
     ToolSpec {
         id: "countPoints",
         name: "Summarize Within",
-        toolbox: "Analysis › Summarize",
+        toolbox: "Analyze › Summarize",
         summary: "Counts the points that fall inside each polygon.",
         params: &[
             P { name: "polygons", label: "Input Polygons", kind: K::PolygonLayer, required: true, default: "", help: "" },
@@ -143,7 +143,7 @@ pub static TOOLS: &[ToolSpec] = &[
     ToolSpec {
         id: "summaryStatistics",
         name: "Summary Statistics",
-        toolbox: "Analysis › Statistics",
+        toolbox: "Analyze › Statistics",
         summary: "Count, sum, mean, min, max and standard deviation of a field, optionally per case field.",
         params: &[
             P { name: "input", label: "Input Table", kind: K::Layer, required: true, default: "", help: "" },

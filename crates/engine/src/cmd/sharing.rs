@@ -1,4 +1,4 @@
-//! Share › Share As, Manage and Status: web maps, layers, styles, scenes and link charts as
+//! Publish › Share As, Manage and Status: web maps, layers, styles, scenes and link charts as
 //! self-contained open-format files (HTML pages that need no server or library, OGC API Features
 //! static collections, MapLibre style JSON, glTF), locators for place search, geodata services,
 //! and web tools. Each share is recorded as a shared item (Status › Jobs) that the Manage
@@ -81,7 +81,7 @@ fn usable(store: &DataStore) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "the data store '{}' came with the opened project; register it again (Share › Manage › Data Stores) to write to {}",
+            "the data store '{}' came with the opened project; register it again (Publish › Manage › Data Stores) to write to {}",
             store.name, store.path
         ))
     }
@@ -97,7 +97,7 @@ fn safe(name: &str) -> String {
 }
 
 fn need_items(s: &Session) -> Option<&'static str> {
-    if s.project.shared.is_empty() { Some("share something first (Share › Share As)") } else { None }
+    if s.project.shared.is_empty() { Some("share something first (Publish › Share As)") } else { None }
 }
 
 fn web_map(s: &mut Session, p: &Value) -> CmdResult {
@@ -128,7 +128,7 @@ const MANAGE: &str = r#"{"item"?: id|name (default: the last of its kind), "map"
 
 pub fn commands() -> Vec<C> {
     let share_as = |id: &'static str, label: &'static str, run: fn(&mut Session, &Value) -> CmdResult, params: &'static str| {
-        C::new(id, label, "Share › Share As", run).params(params)
+        C::new(id, label, "Publish › Share As", run).params(params)
     };
     vec![
         share_as("share.webMap", "Web Map", web_map, r#"{"map"?: name (default: the active map), "path"?: "*.html" (default: the first data store)}"#),
@@ -139,23 +139,23 @@ pub fn commands() -> Vec<C> {
         share_as("share.webTool", "Web Tool", web_tool, r#"{"model"?: name (default: the last model), "path"?: "*.rgistool"}"#),
         share_as("share.webScene", "Web Scene", web_scene, r#"{"map"?: name, "path"?: "*.gltf" (polygons extruded by their layer's extrusion)}"#),
         share_as("share.linkChart", "Web Link Chart", web_link_chart, r#"{"relationship"?: name (default: every relationship), "path"?: "*.html"}"#),
-        C::new("share.jobs", "Jobs", "Share › Status", |s, _| {
+        C::new("share.jobs", "Jobs", "Publish › Status", |s, _| {
             let items: Vec<Value> = s.project.shared.iter().rev().map(|i| serde_json::to_value(i).unwrap_or(Value::Null)).collect();
             Ok(json!({"items": items, "stores": s.project.data_stores}))
         })
         .view(),
-        C::new("share.saveWebMap", "Save Web Map", "Share › Manage", |s, p| update_item(s, p, "webMap", ps(p, "map"))).when(need_items).params(MANAGE),
-        C::new("share.replaceWebLayer", "Replace Web Layer", "Share › Manage", |s, p| update_item(s, p, "webLayer", ps(p, "layer")))
+        C::new("share.saveWebMap", "Save Web Map", "Publish › Manage", |s, p| update_item(s, p, "webMap", ps(p, "map"))).when(need_items).params(MANAGE),
+        C::new("share.replaceWebLayer", "Replace Web Layer", "Publish › Manage", |s, p| update_item(s, p, "webLayer", ps(p, "layer")))
             .when(need_items)
             .params(r#"{"item"?: id|name (default: the last web layer), "layer"?: the layer replacing it (default: the one it was made from)}"#),
-        C::new("share.dataStore", "Data Stores", "Share › Manage", data_store).params(r#"{"name"?, "path"?: folder, "remove"?: name (no parameters: list them)}"#),
-        C::new("share.upload", "Upload File", "Share › Manage", upload).params(r#"{"path": file, "store"?: name (default: the first data store)}"#),
-        C::new("share.saveWebScene", "Save Web Scene", "Share › Manage", |s, p| update_item(s, p, "webScene", ps(p, "map"))).when(need_items).params(MANAGE),
-        C::new("share.saveWebLinkChart", "Save Web Link Chart", "Share › Manage", |s, p| update_item(s, p, "linkChart", ps(p, "relationship")))
+        C::new("share.dataStore", "Data Stores", "Publish › Manage", data_store).params(r#"{"name"?, "path"?: folder, "remove"?: name (no parameters: list them)}"#),
+        C::new("share.upload", "Upload File", "Publish › Manage", upload).params(r#"{"path": file, "store"?: name (default: the first data store)}"#),
+        C::new("share.saveWebScene", "Save Web Scene", "Publish › Manage", |s, p| update_item(s, p, "webScene", ps(p, "map"))).when(need_items).params(MANAGE),
+        C::new("share.saveWebLinkChart", "Save Web Link Chart", "Publish › Manage", |s, p| update_item(s, p, "linkChart", ps(p, "relationship")))
             .when(need_items)
             .params(r#"{"item"?: id|name (default: the last link chart), "relationship"?: re-share another relationship}"#),
-        C::new("locator.find", "Find Place", "Map › Inquiry", find).params(r#"{"locator"?: shared item name or *.rgisloc path (default: the last locator), "text": search text, "limit"?: 1..100, "zoom"?: bool (go to the best match)}"#),
-        C::new("model.import", "Import Web Tool", "Analysis › Geoprocessing", |s, p| {
+        C::new("locator.find", "Find Place", "Home › Inspect", find).params(r#"{"locator"?: shared item name or *.rgisloc path (default: the last locator), "text": search text, "limit"?: 1..100, "zoom"?: bool (go to the best match)}"#),
+        C::new("model.import", "Import Web Tool", "Analyze › Geoprocessing", |s, p| {
             let text = super::items::read_text(p)?;
             let v: Value = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS web tool: {e}"))?;
             let name = v["name"].as_str().unwrap_or("Tool").chars().take(200).collect::<String>();
@@ -256,7 +256,7 @@ fn target(s: &Session, p: &Value, name: &str, ext: &str) -> Result<String, Strin
     }
     let store = match ps(p, "store") {
         Some(n) => s.project.data_stores.iter().find(|d| d.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no data store '{n}'"))?,
-        None => s.project.data_stores.first().ok_or("pass a path, or register a data store (Share › Manage › Data Stores)")?,
+        None => s.project.data_stores.first().ok_or("pass a path, or register a data store (Publish › Manage › Data Stores)")?,
     };
     usable(store)?;
     Ok(PathBuf::from(&store.path).join(format!("{}.{ext}", safe(name))).display().to_string())
@@ -360,7 +360,7 @@ fn upload(s: &mut Session, p: &Value) -> CmdResult {
     let file = Path::new(src).file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("path must name a file")?;
     let store = match ps(p, "store") {
         Some(n) => s.project.data_stores.iter().find(|d| d.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no data store '{n}'"))?,
-        None => s.project.data_stores.first().ok_or("register a data store first (Share › Manage › Data Stores)")?,
+        None => s.project.data_stores.first().ok_or("register a data store first (Publish › Manage › Data Stores)")?,
     }
     .clone();
     usable(&store)?;

@@ -26,7 +26,7 @@ pub fn commands() -> Vec<C> {
             .key("Mod+Y")
             .view()
             .when(|s| if s.can_redo() { None } else { Some("nothing to redo") }),
-        C::new("tool.set", "Set Map Tool", "Map › Navigate", set_tool)
+        C::new("tool.set", "Set Map Tool", "Home › Navigate", set_tool)
             .view()
             .params(r#"{"tool": "explore"|"select"|"zoomIn"|"measure"|"measureArea"|"createPoint"|"createLine"|"createPolygon"|"graphicPoint"|"graphicText"|"graphicLine"|"graphicCurve"|"graphicFreehand"|"graphicPolygon"|"graphicLasso"|"graphicRectangle"|"graphicCircle"|"graphicEllipse"|"graphicPicture"}"#),
         C::new("info.project", "Project Info", "Project", info).view(),

@@ -1,4 +1,4 @@
-//! The Raster Layer contextual tabs: Rendering (symbology, stretch, DRA, resampling, band
+//! The Style and Data tabs for raster layers: Rendering (symbology, stretch, DRA, resampling, band
 //! combination), Enhancement (brightness, contrast, gamma), plus raster info and export.
 
 use std::path::Path;
@@ -28,12 +28,12 @@ pub(crate) fn need_raster(s: &Session) -> Option<&'static str> {
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("layer.addDataBytes", "Add Data (from file contents)", "Map › Layer", add_bytes)
+        C::new("layer.addDataBytes", "Add Data (from file contents)", "Home › Add", add_bytes)
             .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv|.zip|.kml|.kmz|.gpx|.parquet|.fgb|.gpkg", "data": base64, "layer"?: "one layer of a zip, KML or GPX by name", "name"?: text}"#),
-        C::new("raster.symbology", "Symbology", "Raster Layer › Rendering", symbology).when(need_raster).params(
+        C::new("raster.symbology", "Symbology", "Style › Rendering", symbology).when(need_raster).params(
             r#"{"layer"?, "type": "stretch"|"rgb"|"classify"|"unique"|"colormap"|"shadedRelief", "band"?: 1.., "ramp"?, "invert"?: bool, "classes"?: 1..32, "method"?, "azimuth"?, "altitude"?, "zFactor"?}"#,
         ),
-        C::new("raster.stretch", "Stretch Type", "Raster Layer › Rendering", |s, p| {
+        C::new("raster.stretch", "Stretch Type", "Style › Rendering", |s, p| {
             let code = ps(p, "type").ok_or("type is required")?;
             let st = Stretch::from_code(code, f(p, "low"), f(p, "high"), f(p, "n")).ok_or_else(|| format!("unknown stretch '{code}'"))?;
             with(s, p, |rl, _| {
@@ -43,7 +43,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_raster)
         .params(r#"{"layer"?, "type": "none"|"minMax"|"percentClip"|"standardDeviation"|"histogramEqualize", "low"?: %, "high"?: %, "n"?: deviations}"#),
-        C::new("raster.dra", "DRA", "Raster Layer › Rendering", |s, p| {
+        C::new("raster.dra", "DRA", "Style › Rendering", |s, p| {
             let on = b(p, "on");
             with(s, p, |rl, _| {
                 rl.style.dra = on.unwrap_or(!rl.style.dra);
@@ -52,7 +52,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_raster)
         .params(r#"{"layer"?, "on"?: bool}"#),
-        C::new("raster.resampling", "Resampling Type", "Raster Layer › Rendering", |s, p| {
+        C::new("raster.resampling", "Resampling Type", "Style › Rendering", |s, p| {
             let name = ps(p, "type").ok_or("type is required")?;
             let r = Resampling::from_name(name).ok_or_else(|| format!("unknown resampling '{name}'"))?;
             with(s, p, |rl, _| {
@@ -62,10 +62,10 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_raster)
         .params(r#"{"layer"?, "type": "nearest"|"bilinear"}"#),
-        C::new("raster.bands", "Band Combination", "Raster Layer › Rendering", bands)
+        C::new("raster.bands", "Band Combination", "Style › Rendering", bands)
             .when(need_raster)
             .params(r#"{"layer"?, "red"?: 1.., "green"?: 1.., "blue"?: 1.., "preset"?: "natural"|"colorInfrared"}"#),
-        C::new("raster.enhance", "Enhancement", "Raster Layer › Enhancement", |s, p| {
+        C::new("raster.enhance", "Enhancement", "Style › Enhancement", |s, p| {
             let (br, co, ga) = (f(p, "brightness"), f(p, "contrast"), f(p, "gamma"));
             with(s, p, |rl, _| {
                 if let Some(v) = br {
@@ -82,8 +82,8 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_raster)
         .params(r#"{"layer"?, "brightness"?: -100..100, "contrast"?: -100..100, "gamma"?: 0.1..10}"#),
-        C::new("raster.info", "Raster Information", "Raster Layer › Data", info).view().when(need_raster).params(r#"{"layer"?}"#),
-        C::new("share.exportRaster", "Export Raster", "Raster Layer › Data", export).view().when(need_raster).params(
+        C::new("raster.info", "Raster Information", "Data › Information", info).view().when(need_raster).params(r#"{"layer"?}"#),
+        C::new("share.exportRaster", "Export Raster", "Data › Information", export).view().when(need_raster).params(
             r#"{"layer"?, "path": "*.tif", "band"?: 1..}"#,
         ),
     ]

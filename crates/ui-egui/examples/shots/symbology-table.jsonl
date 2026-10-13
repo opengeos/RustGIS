@@ -3,6 +3,6 @@
 {"cmd":"select.byAttributes","params":{"layer":"Countries","where":"continent = 'Africa' AND pop_est > 30000000"}}
 {"cmd":"table.open"}
 {"cmd":"ui.pane.symbology"}
-{"cmd":"ui.tab","params":{"tab":"Feature Layer"}}
+{"cmd":"ui.tab","params":{"tab":"Style"}}
 {"steps":10}
 {"shot":"target/shots/symbology-table.png"}

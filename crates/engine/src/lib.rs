@@ -32,7 +32,7 @@ pub type CmdResult = Result<Value, String>;
 pub struct CommandSpec {
     pub id: &'static str,
     pub label: &'static str,
-    /// Where it lives in the UI: `Map › Navigate`, `Analysis › Geoprocessing`…
+    /// Where it lives in the UI: `Home › Navigate`, `Analyze › Geoprocessing`…
     pub location: &'static str,
     /// Default shortcut (`Mod+S`, `F5`); `Mod` = Ctrl, or ⌘ on macOS.
     pub shortcut: &'static str,
@@ -202,7 +202,7 @@ pub struct Session {
     /// Bumped on every change so views can cache.
     pub revision: u64,
     pub tool: Tool,
-    /// The layer selected in the Contents pane (drives contextual tabs).
+    /// The layer selected in the Contents pane (the one the Style and Data tabs act on).
     pub active_layer: Option<u32>,
     /// Map view size in logical points (set by the UI each frame).
     pub view_size: (f64, f64),
@@ -214,9 +214,9 @@ pub struct Session {
     /// Edits per layer id since the project was last saved (Edit › Status). A failed command's
     /// are rolled back; undo doesn't subtract them, since they count edits made, not the net change.
     pub edit_counts: std::collections::HashMap<u32, cmd::design::EditCounts>,
-    /// The feature cache fills itself after projection changes (Map › Feature Cache).
+    /// The feature cache fills itself after projection changes (Data › Feature Cache).
     pub auto_cache: bool,
-    /// Mensuration results (Imagery › Mensuration › Results).
+    /// Mensuration results (Analyze › Mensuration › Results).
     pub measurements: Vec<serde_json::Value>,
     /// The last topology check's errors (Edit › Error Inspector).
     pub topology_errors: Vec<TopologyIssue>,
@@ -239,7 +239,7 @@ pub struct Session {
     /// The presentation and notebook open in their panes, if any.
     pub active_presentation: Option<usize>,
     pub active_notebook: Option<usize>,
-    /// Drawing tools stay active after a graphic is drawn (Insert › Graphics).
+    /// Drawing tools stay active after a graphic is drawn (Edit › Graphics).
     pub keep_tool: bool,
     /// Copied features (Edit › Clipboard).
     pub clipboard: Option<cmd::clipboard::Clipboard>,

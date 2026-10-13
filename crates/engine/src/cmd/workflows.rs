@@ -1,4 +1,4 @@
-//! Analysis tab: geoprocessing environments, models, scripts, tool galleries, raster functions
+//! Analyze tab: geoprocessing environments, models, scripts, tool galleries, raster functions
 //! and the workflows (suitability, visibility, lines of sight, interpolation, network routes,
 //! neighbourhoods, simulation, data profiles, exploration, similarity and format conversion).
 
@@ -14,14 +14,14 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("gp.env", "Environments", "Analysis › Geoprocessing", environments).params(
+        C::new("gp.env", "Environments", "Analyze › Geoprocessing", environments).params(
             r#"{"extent"?: "view"|"full"|layer name|[minLon, minLat, maxLon, maxLat]|null, "cellSize"?: degrees|null}"#,
         ),
-        C::new("gp.gallery", "Tool Gallery", "Analysis › Portal", gallery).view().params(r#"{"kind": "ready"|"feature"|"raster"}"#),
-        C::new("model.new", "ModelBuilder", "Analysis › Geoprocessing", new_model).params(
+        C::new("gp.gallery", "Tool Gallery", "Analyze › Portal", gallery).view().params(r#"{"kind": "ready"|"feature"|"raster"}"#),
+        C::new("model.new", "ModelBuilder", "Analyze › Geoprocessing", new_model).params(
             r#"{"name"?: string, "steps"?: [{"tool": id, "params": {…, "%1" for step 1's output}}], "fromHistory"?: bool, "imported"?: bool (from a file: its steps may not touch files)}"#,
         ),
-        C::new("model.run", "Run Model", "Analysis › Geoprocessing", run_model).params(r#"{"name"?: model}"#),
+        C::new("model.run", "Run Model", "Analyze › Geoprocessing", run_model).params(r#"{"name"?: model}"#),
         C::new("model.remove", "Delete Model", "Catalog", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
             let before = s.project.models.len();
@@ -30,34 +30,34 @@ pub fn commands() -> Vec<C> {
             if s.project.models.len() == before { Err(format!("no model '{n}'")) } else { Ok(Value::Null) }
         })
         .params(r#"{"name": model}"#),
-        C::new("script.run", "Run Script", "Analysis › Geoprocessing", run_script)
+        C::new("script.run", "Run Script", "Analyze › Geoprocessing", run_script)
             .params(r#"{"script": "one command per line: id {json}; # comments"}"#),
-        C::new("raster.function", "Raster Functions", "Analysis › Raster", raster_function).params(
+        C::new("raster.function", "Raster Functions", "Analyze › Raster", raster_function).params(
             r#"{"layer": raster, "function": "slope"|"aspect"|"hillshade"|"ndvi"|"bandMath"|"remap"|"threshold"|"resample", "band"?: 1-based, "expression"?: "(b4-b3)/(b4+b3)", "ranges"?: [[lo, hi, value]], "value"?: number, "azimuth"?, "altitude"?, "zFactor"?, "target"?: raster (resample onto its grid), "name"?: output}"#,
         ),
-        C::new("raster.functionChain", "Function Editor", "Analysis › Raster", function_chain)
+        C::new("raster.functionChain", "Function Editor", "Analyze › Raster", function_chain)
             .params(r#"{"layer": raster, "steps": [{"function", …}], "name"?: output}"#),
-        C::new("analysis.suitability", "Suitability Modeler", "Analysis › Workflows", suitability).params(
+        C::new("analysis.suitability", "Suitability Modeler", "Analyze › Workflows", suitability).params(
             r#"{"criteria": [{"layer": raster, "band"?: 1-based, "ranges": [[lo, hi, score]], "weight": number}], "name"?: output}"#,
         ),
-        C::new("analysis.viewshed", "Visibility Analysis", "Analysis › Workflows", viewshed)
+        C::new("analysis.viewshed", "Visibility Analysis", "Analyze › Workflows", viewshed)
             .params(r#"{"layer": elevation raster, "lon", "lat", "height"?: observer metres, "radius"?: metres, "name"?: output}"#),
-        C::new("analysis.lineOfSight", "Line Of Sight", "Analysis › Workflows", line_of_sight).params(
+        C::new("analysis.lineOfSight", "Line Of Sight", "Analyze › Workflows", line_of_sight).params(
             r#"{"layer": elevation raster, "from": [lon, lat], "to": [lon, lat], "observerHeight"?: m, "targetHeight"?: m, "name"?: output}"#,
         ),
-        C::new("analysis.interpolate", "Geostatistical Wizard", "Analysis › Workflows", interpolate).params(
+        C::new("analysis.interpolate", "Geostatistical Wizard", "Analyze › Workflows", interpolate).params(
             r#"{"layer": points, "field": numeric field, "cellSize"?: degrees, "power"?: 2, "neighbors"?: 12, "name"?: output}"#,
         ),
-        C::new("analysis.route", "Network Analysis", "Analysis › Workflows", route).params(
+        C::new("analysis.route", "Network Analysis", "Analyze › Workflows", route).params(
             r#"{"layer": line network, "from": [lon, lat], "to": [lon, lat], "costField"?: field, "snapDistance"?: metres, "name"?: output}"#,
         ),
-        C::new("analysis.neighborhood", "Neighborhood Explorer", "Analysis › Workflows", neighborhood)
+        C::new("analysis.neighborhood", "Neighborhood Explorer", "Analyze › Workflows", neighborhood)
             .view()
             .params(r#"{"lon", "lat", "radius": metres, "layers"?: [names], "select"?: bool}"#),
-        C::new("analysis.simulate", "Simulation", "Analysis › Workflows", simulate).params(
+        C::new("analysis.simulate", "Simulation", "Analyze › Workflows", simulate).params(
             r#"{"layer": polygons, "count"?: points per polygon, "seed"?: number, "field"?: numeric field (count per polygon from it, scaled by "rate"), "rate"?: number, "name"?: output}"#,
         ),
-        C::new("data.profile", "Data Engineering", "Analysis › Workflows", |s, p| {
+        C::new("data.profile", "Data Engineering", "Analyze › Workflows", |s, p| {
             let ds = feature_ds(s, p)?;
             let rows: Vec<Value> = network::profile_fields(ds)
                 .into_iter()
@@ -67,12 +67,12 @@ pub fn commands() -> Vec<C> {
         })
         .view()
         .params(r#"{"layer"?}"#),
-        C::new("data.explore", "Exploratory Analysis", "Analysis › Workflows", explore)
+        C::new("data.explore", "Exploratory Analysis", "Analyze › Workflows", explore)
             .view()
             .params(r#"{"layer"?, "fields"?: [numeric fields], "bins"?: number}"#),
-        C::new("data.similar", "Embeddings", "Analysis › Workflows", similar)
+        C::new("data.similar", "Embeddings", "Analyze › Workflows", similar)
             .params(r#"{"layer"?, "row"?: number (the selected feature when omitted), "fields"?: [numeric fields], "count"?: number, "select"?: bool}"#),
-        C::new("data.convert", "Data Interop", "Analysis › Workflows", convert)
+        C::new("data.convert", "Data Interop", "Analyze › Workflows", convert)
             .view()
             .params(r#"{"layer"?, "format": "geojson"|"csv"|"kml"|"gpx"|"wkt", "path"?: file (the text is returned without one), "nameField"?: field}"#),
     ]

@@ -1,6 +1,6 @@
 {"cmd":"map.projection","params":{"type":"equalEarth"}}
 {"cmd":"map.zoomFull"}
 {"cmd":"layer.select","params":{"layer":"Countries"}}
-{"cmd":"ui.tab","params":{"tab":"Map"}}
+{"cmd":"ui.tab","params":{"tab":"Home"}}
 {"steps":10}
 {"shot":"target/shots/hero.png"}

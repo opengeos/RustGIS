@@ -1,4 +1,4 @@
-//! Map › Layer (Add Data), Contents pane actions, and the Feature Layer / Labeling / Data tabs.
+//! Home › Add (Add Data), Contents pane actions, and the Feature Layer / Labeling / Data tabs.
 
 use std::path::Path;
 
@@ -11,17 +11,17 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("layer.addData", "Add Data", "Map › Layer", add_data)
+        C::new("layer.addData", "Add Data", "Home › Add", add_data)
             .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL or DuckDB layer", "stream"?: bool, "crs"?: "EPSG:… for a GDAL or DuckDB file that doesn't say"}"#),
-        C::new("info.fileLayers", "List Layers in File", "Map › Layer › Add Data", file_layers)
+        C::new("info.fileLayers", "List Layers in File", "Home › Add › Add Data", file_layers)
             .view()
             .params(r#"{"path": string}"#),
-        C::new("layer.addSql", "Add Data From SQL", "Map › Layer", add_sql).params(
+        C::new("layer.addSql", "Add Data From SQL", "Home › Add", add_sql).params(
             r#"{"sql": "one DuckDB SELECT; DuckDB Spatial's ST_ functions, read_parquet('…'), web addresses", "name"?: string, "database"?: "a .duckdb file whose tables the query names", "crs"?: "EPSG:… of a geometry that doesn't say", "stream"?: bool}"#,
         ),
         C::new("layer.loadAll", "Load All Features", "Contents", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
-        C::new("layer.addDataText", "Add Data (from text)", "Map › Layer", add_data_text).params(r#"{"fileName": "name.geojson|.csv", "text": string}"#),
-        C::new("layer.addSample", "Add Sample Data", "Map › Layer › Add Data", add_sample).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
+        C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).params(r#"{"fileName": "name.geojson|.csv", "text": string}"#),
+        C::new("layer.addSample", "Add Sample Data", "Home › Add › Add Data", add_sample).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
         C::new("layer.remove", "Remove", "Contents", remove).key("Delete").when(need_layer).params(r#"{"layer"?: name|id}"#),
         C::new("layer.select", "Select Layer", "Contents", |s, p| {
             s.active_layer = Some(s.layer_id(p)?);
@@ -65,10 +65,10 @@ pub fn commands() -> Vec<C> {
         })
         .view()
         .when(need_layer),
-        C::new("layer.symbology", "Symbology", "Feature Layer › Drawing", symbology)
+        C::new("layer.symbology", "Symbology", "Style › Drawing", symbology)
             .when(need_feature_layer)
             .params(r#"{"layer"?, "type": "single"|"unique"|"graduated"|"proportional", "field"?, "classes"?: 1..12, "method"?: "naturalBreaks"|"equalInterval"|"quantile", "ramp"?: string}"#),
-        C::new("layer.ramp", "Color Scheme", "Feature Layer › Drawing", |s, p| {
+        C::new("layer.ramp", "Color Scheme", "Style › Drawing", |s, p| {
             let r = Ramp::from_name(s_req(p, "ramp")?).ok_or("unknown colour scheme")?;
             with(s, p, |l| match &mut l.raster {
                 Some(rl) => rl.style.set_ramp(r),
@@ -79,7 +79,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_layer),
-        C::new("layer.color", "Symbol Color", "Feature Layer › Drawing", |s, p| {
+        C::new("layer.color", "Symbol Color", "Style › Drawing", |s, p| {
             let c = Rgba::from_hex(s_req(p, "color")?).ok_or("color must be #RRGGBB or #RRGGBBAA")?;
             with(s, p, |l| {
                 let g = l.geometry_type();
@@ -92,7 +92,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_feature_layer)
         .params(r##"{"layer"?, "color": "#RRGGBB"}"##),
-        C::new("layer.outline", "Outline", "Feature Layer › Drawing", |s, p| {
+        C::new("layer.outline", "Outline", "Style › Drawing", |s, p| {
             let c = s.get_color(p, "color")?;
             let w = f(p, "width").map(|w| w.clamp(0.0, 20.0) as f32);
             with(s, p, |l| {
@@ -108,7 +108,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_feature_layer)
         .params(r##"{"layer"?, "color"?: "#RRGGBB", "width"?: number}"##),
-        C::new("layer.marker", "Marker", "Feature Layer › Drawing", |s, p| {
+        C::new("layer.marker", "Marker", "Style › Drawing", |s, p| {
             let shape = ps(p, "shape").map(|n| Marker::ALL.into_iter().find(|m| m.label().eq_ignore_ascii_case(n)).ok_or("unknown marker shape")).transpose()?;
             let size = f(p, "size").map(|v| v.clamp(1.0, 80.0) as f32);
             with(s, p, |l| {
@@ -124,13 +124,13 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_feature_layer)
         .params(r#"{"layer"?, "shape"?: "circle"|"square"|"triangle"|"diamond"|"star", "size"?: number}"#),
-        C::new("layer.transparency", "Transparency", "Feature Layer › Effects", |s, p| {
+        C::new("layer.transparency", "Transparency", "Style › Effects", |s, p| {
             let t = f(p, "value").ok_or("value (0–100) is required")?.clamp(0.0, 100.0) as f32;
             with(s, p, |l| l.transparency = t)
         })
         .when(need_layer)
         .params(r#"{"layer"?, "value": 0..100}"#),
-        C::new("layer.scaleRange", "Visibility Range", "Feature Layer › Visibility Range", |s, p| {
+        C::new("layer.scaleRange", "Visibility Range", "Style › Visibility Range", |s, p| {
             let min = f(p, "min").filter(|v| *v > 0.0);
             let max = f(p, "max").filter(|v| *v > 0.0);
             with(s, p, |l| {
@@ -151,13 +151,13 @@ pub fn commands() -> Vec<C> {
         })
         .view()
         .when(need_layer),
-        C::new("labels.enable", "Label", "Labeling › Layer", |s, p| {
+        C::new("labels.enable", "Label", "Style › Labels", |s, p| {
             let on = b(p, "on");
             with(s, p, |l| l.labels.enabled = on.unwrap_or(!l.labels.enabled))
         })
         .when(need_feature_layer)
         .params(r#"{"layer"?, "on"?: bool}"#),
-        C::new("labels.field", "Label Field", "Labeling › Label Class", |s, p| {
+        C::new("labels.field", "Label Field", "Style › Label Class", |s, p| {
             let name = s_req(p, "field")?.to_string();
             let id = s.layer_id(p)?;
             let fname = s.map().layer(id).and_then(|l| l.dataset.field_index(&name).and_then(|i| l.dataset.fields.get(i)).map(|f| f.name.clone()));
@@ -168,7 +168,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_feature_layer),
-        C::new("labels.style", "Text Symbol", "Labeling › Text Symbol", |s, p| {
+        C::new("labels.style", "Text Symbol", "Style › Text Symbol", |s, p| {
             let size = f(p, "size").map(|v| v.clamp(4.0, 72.0) as f32);
             let color = s.get_color(p, "color")?;
             let (halo, bold) = (b(p, "halo"), b(p, "bold"));
@@ -272,7 +272,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     // A PMTiles archive is a tile layer (raster or vector, as its header says).
     if path.to_ascii_lowercase().ends_with(".pmtiles") {
         if cfg!(target_arch = "wasm32") {
-            return Err(format!("{path}: the web app reads PMTiles archives from web addresses (Map › Basemap › Add Tile Layer)"));
+            return Err(format!("{path}: the web app reads PMTiles archives from web addresses (Home › Basemap › Add Tile Layer)"));
         }
         let full = std::path::absolute(path).map(|p| p.display().to_string()).map_err(|e| format!("{path}: {e}"))?;
         let mut q = json!({"url": full, "kind": "pmtiles"});

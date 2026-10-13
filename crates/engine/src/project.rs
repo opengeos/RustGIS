@@ -77,7 +77,7 @@ pub struct Project {
     /// Trained deep learning models.
     #[serde(default)]
     pub dl_models: Vec<crate::cmd::deeplearning::DlModel>,
-    /// Shares made (Share › Status › Jobs) and the folders they go to.
+    /// Shares made (Publish › Status › Jobs) and the folders they go to.
     #[serde(default)]
     pub shared: Vec<crate::cmd::sharing::SharedItem>,
     #[serde(default)]

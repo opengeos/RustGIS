@@ -1,5 +1,5 @@
 //! Project items: folder connections, map and layer files, styles, project templates, packages,
-//! layer templates, tasks, and 3D export (Insert › Project, Layer Templates and Styles; Share ›
+//! layer templates, tasks, and 3D export (Data › Project, Layer Templates and Styles; Share ›
 //! Package, Save As and Output).
 
 use std::fmt::Write as _;
@@ -19,7 +19,7 @@ const MAX_FILE: u64 = 512 << 20;
 pub fn commands() -> Vec<C> {
     vec![
         // Folder connections.
-        C::new("project.addFolder", "Add Folder", "Insert › Project", |s, p| {
+        C::new("project.addFolder", "Add Folder", "Data › Project", |s, p| {
             let path = ps(p, "path").map(str::trim).filter(|p| !p.is_empty()).ok_or("path is required")?;
             if !cfg!(target_arch = "wasm32") && !Path::new(path).is_dir() {
                 return Err(format!("{path} isn't a folder"));
@@ -37,7 +37,7 @@ pub fn commands() -> Vec<C> {
             if s.project.folders.len() == before { Err(format!("{path} isn't connected")) } else { Ok(Value::Null) }
         })
         .params(r#"{"path": folder}"#),
-        C::new("project.connections", "Connections", "Insert › Project", |s, _| {
+        C::new("project.connections", "Connections", "Data › Project", |s, _| {
             let folders: Vec<Value> = s.project.folders.iter().map(|f| json!({"path": f, "available": Path::new(f).is_dir()})).collect();
             Ok(json!({
                 "folders": folders,
@@ -50,21 +50,21 @@ pub fn commands() -> Vec<C> {
         })
         .view(),
         // Map and layer files.
-        C::new("map.save", "Save Map File", "Share › Save As", |s, p| save_item(s, "map", p))
+        C::new("map.save", "Save Map File", "Publish › Save As", |s, p| save_item(s, "map", p))
         .view()
         .params(r#"{"path": "*.rgismap", "map"?: name}"#),
-        C::new("map.import", "Import", "Insert › Project", import_maps).params(r#"{"path": "*.rgismap|*.rgis|*.rgispkg", "text"?: map file JSON}"#),
-        C::new("layer.save", "Save Layer File", "Share › Save As", |s, p| save_item(s, "layer", p))
+        C::new("map.import", "Import", "Data › Project", import_maps).params(r#"{"path": "*.rgismap|*.rgis|*.rgispkg", "text"?: map file JSON}"#),
+        C::new("layer.save", "Save Layer File", "Publish › Save As", |s, p| save_item(s, "layer", p))
         .view()
         .when(need_layer)
         .params(r#"{"layer"?, "path": "*.rgislyr"}"#),
-        C::new("layer.addLayerFile", "Add Layer File", "Map › Layer", |s, p| {
+        C::new("layer.addLayerFile", "Add Layer File", "Home › Add", |s, p| {
             let text = read_text(p)?;
             super::layer::add_layer_text(s, &text)
         })
         .params(r#"{"path"?: "*.rgislyr", "text"?: layer file JSON}"#),
         // Styles.
-        C::new("style.new", "New Style", "Insert › Styles", |s, p| {
+        C::new("style.new", "New Style", "Style › Styles", |s, p| {
             let id = s.layer_id(p)?;
             let l = s.map().layer(id).ok_or("no such layer")?;
             let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(String::from).unwrap_or_else(|| l.name.clone());
@@ -74,7 +74,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_feature_layer)
         .params(r#"{"layer"?, "name"?: string}"#),
-        C::new("style.add", "Add Style", "Insert › Styles", |s, p| {
+        C::new("style.add", "Add Style", "Style › Styles", |s, p| {
             let text = read_text(p)?;
             let items: Vec<StyleItem> = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS style file: {e}"))?;
             let mut n = 0;
@@ -85,8 +85,8 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"added": n}))
         })
         .params(r#"{"path"?: "*.rgisstyle", "text"?: style file JSON}"#),
-        C::new("style.import", "Import Styles", "Insert › Styles", import_styles).params(r#"{"path"?: "*.rgislyr|*.rgismap|*.rgis", "text"?: JSON}"#),
-        C::new("style.apply", "Apply Style", "Insert › Styles", |s, p| {
+        C::new("style.import", "Import Styles", "Style › Styles", import_styles).params(r#"{"path"?: "*.rgislyr|*.rgismap|*.rgis", "text"?: JSON}"#),
+        C::new("style.apply", "Apply Style", "Style › Styles", |s, p| {
             let name = ps(p, "name").ok_or("name is required")?;
             let st = s.project.styles.iter().find(|t| t.name.eq_ignore_ascii_case(name)).cloned().ok_or_else(|| format!("no style '{name}'"))?;
             let id = s.layer_id(p)?;
@@ -113,17 +113,17 @@ pub fn commands() -> Vec<C> {
             if s.project.styles.len() == before { Err(format!("no style '{name}'")) } else { Ok(Value::Null) }
         })
         .params(r#"{"name": style}"#),
-        C::new("style.save", "Save Style Items", "Share › Save As", |s, p| save_item(s, "styles", p))
+        C::new("style.save", "Save Style Items", "Publish › Save As", |s, p| save_item(s, "styles", p))
         .view()
         .params(r#"{"path": "*.rgisstyle"}"#),
         // Project templates.
-        C::new("project.saveTemplate", "Save Project Template", "Share › Save As", |s, p| save_item(s, "template", p))
+        C::new("project.saveTemplate", "Save Project Template", "Publish › Save As", |s, p| save_item(s, "template", p))
         .view()
         .params(r#"{"path": "*.rgistemplate"}"#),
-        C::new("project.newTemplate", "New Custom Template", "Insert › Project", |s, p| save_item(s, "template", p))
+        C::new("project.newTemplate", "New Custom Template", "Data › Project", |s, p| save_item(s, "template", p))
         .view()
         .params(r#"{"path": "*.rgistemplate", "name"?: template name}"#),
-        C::new("project.fromTemplate", "Open Custom Template", "Insert › Project", |s, p| {
+        C::new("project.fromTemplate", "Open Custom Template", "Data › Project", |s, p| {
             let text = read_text(p)?;
             let mut proj = Project::from_json(&text).map_err(|e| e.replace("RustGIS project", "RustGIS template"))?;
             proj.name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Untitled").chars().take(200).collect();
@@ -134,20 +134,20 @@ pub fn commands() -> Vec<C> {
         .view()
         .params(r#"{"path"?: "*.rgistemplate", "text"?: template JSON, "name"?: new project name}"#),
         // Packages.
-        C::new("project.package", "Package Project", "Share › Package", |s, p| save_item(s, "projectPackage", p))
+        C::new("project.package", "Package Project", "Publish › Package", |s, p| save_item(s, "projectPackage", p))
         .view()
         .params(r#"{"path": "*.rgispkg"}"#),
-        C::new("map.package", "Package Map", "Share › Package", |s, p| save_item(s, if b(p, "mobile").unwrap_or(false) { "mobilePackage" } else { "mapPackage" }, p))
+        C::new("map.package", "Package Map", "Publish › Package", |s, p| save_item(s, if b(p, "mobile").unwrap_or(false) { "mobilePackage" } else { "mapPackage" }, p))
         .view()
         .params(r#"{"path": "*.rgismpk", "mobile"?: bool (simplify geometry and drop hidden layers, for phones and tablets), "tolerance"?: degrees}"#),
-        C::new("gp.package", "Package Results", "Share › Package", |s, p| save_item(s, "gpPackage", p))
+        C::new("gp.package", "Package Results", "Publish › Package", |s, p| save_item(s, "gpPackage", p))
         .view()
         .params(r#"{"path": "*.rgisgpk"}"#),
         // Layer templates.
-        C::new("layer.template", "Layer Template", "Insert › Layer Templates", layer_template)
+        C::new("layer.template", "Layer Template", "Data › Layer Templates", layer_template)
             .params(r#"{"template": "points"|"lines"|"polygons"|"places"|"routes"|"areas"|"observations", "name"?: string}"#),
         // Tasks.
-        C::new("task.new", "New Task", "Insert › Project", |s, p| {
+        C::new("task.new", "New Task", "Data › Project", |s, p| {
             let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Task");
             let steps: Vec<TaskStep> = match p.get("steps") {
                 Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("steps: {e}"))?,
@@ -208,10 +208,10 @@ pub fn commands() -> Vec<C> {
             if s.project.tasks.len() == before { Err(format!("no task '{name}'")) } else { Ok(Value::Null) }
         })
         .params(r#"{"task": name}"#),
-        C::new("task.save", "Save Task Item", "Share › Save As", |s, p| save_item(s, "task", p))
+        C::new("task.save", "Save Task Item", "Publish › Save As", |s, p| save_item(s, "task", p))
         .view()
         .params(r#"{"task"?: name, "path": "*.rgistask"}"#),
-        C::new("task.import", "Import Task", "Insert › Project", |s, p| {
+        C::new("task.import", "Import Task", "Data › Project", |s, p| {
             let text = read_text(p)?;
             let t: Task = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS task: {e}"))?;
             // A task from a file is someone else's: it may not read or write files, or run scripts.
@@ -223,7 +223,7 @@ pub fn commands() -> Vec<C> {
         })
         .params(r#"{"path"?: "*.rgistask", "text"?: task JSON}"#),
         // 3D export.
-        C::new("share.export3d", "Export To 3D File", "Share › Output", export_3d)
+        C::new("share.export3d", "Export To 3D File", "Publish › Output", export_3d)
             .view()
             .when(need_feature_layer)
             .params(r#"{"layer"?, "path": "*.obj", "heightField"?: field (extrusion height in metres), "height"?: metres, "zScale"?: number}"#),
@@ -438,7 +438,7 @@ fn package_map(s: &Session, mobile: bool, tol: f64) -> Result<Vec<u8>, String> {
     }
     let text = serde_json::to_string(&m).map_err(|e| e.to_string())?;
     let kind = if mobile { "mobile map package" } else { "map package" };
-    let readme = format!("{} — a RustGIS {kind}.\nAdd it to a project with Insert › Import.\n", m.name);
+    let readme = format!("{} — a RustGIS {kind}.\nAdd it to a project with Data › Import.\n", m.name);
     rustgis_data::zip::write(&[(format!("{}.rgismap", safe(&m.name)), text.into_bytes()), ("README.txt".into(), readme.into_bytes())])
 }
 

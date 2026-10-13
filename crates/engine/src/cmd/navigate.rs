@@ -1,4 +1,4 @@
-//! Map tab › Navigate, Layer (basemap) and Insert › Project (new map), bookmarks.
+//! Home › Navigate, Add (basemap) and Data › Project (new map), bookmarks.
 
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::{Basemap, Bookmark, Map, Projection};
@@ -9,25 +9,25 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("map.zoomFull", "Full Extent", "Map › Navigate", zoom_full).view(),
-        C::new("map.zoomIn", "Fixed Zoom In", "Map › Navigate", |s, _| zoom(s, 2.0)).view().key("Mod+="),
-        C::new("map.zoomOut", "Fixed Zoom Out", "Map › Navigate", |s, _| zoom(s, 0.5)).view().key("Mod+-"),
-        C::new("map.prevExtent", "Previous Extent", "Map › Navigate", |s, _| {
+        C::new("map.zoomFull", "Full Extent", "Home › Navigate", zoom_full).view(),
+        C::new("map.zoomIn", "Fixed Zoom In", "Home › Navigate", |s, _| zoom(s, 2.0)).view().key("Mod+="),
+        C::new("map.zoomOut", "Fixed Zoom Out", "Home › Navigate", |s, _| zoom(s, 0.5)).view().key("Mod+-"),
+        C::new("map.prevExtent", "Previous Extent", "Home › Navigate", |s, _| {
             if s.extent_back() { Ok(Value::Null) } else { Err("no previous extent".into()) }
         })
         .view()
         .when(|s| if s.can_extent_back() { None } else { Some("no previous extent") }),
-        C::new("map.nextExtent", "Next Extent", "Map › Navigate", |s, _| {
+        C::new("map.nextExtent", "Next Extent", "Home › Navigate", |s, _| {
             if s.extent_forward() { Ok(Value::Null) } else { Err("no next extent".into()) }
         })
         .view()
         .when(|s| if s.can_extent_forward() { None } else { Some("no next extent") }),
-        C::new("map.zoomWorld", "Zoom To World", "Map › Navigate", |s, _| {
+        C::new("map.zoomWorld", "Zoom To World", "Home › Navigate", |s, _| {
             s.zoom_to(&Extent::new(-170.0, -58.0, 180.0, 78.0));
             Ok(Value::Null)
         })
         .view(),
-        C::new("map.extent", "View Extent", "Map › Navigate", |s, _| {
+        C::new("map.extent", "View Extent", "Home › Navigate", |s, _| {
             let e = if s.map().projection.is_globe() { Extent::new(-180.0, -90.0, 180.0, 90.0) } else { super::workspace::view_extent(s) };
             if e.is_empty() {
                 return Err("the view shows no part of the Earth".into());
@@ -35,10 +35,10 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"extent": [e.min_x, e.min_y, e.max_x, e.max_y]}))
         })
         .view(),
-        C::new("map.zoomToExtent", "Zoom To Extent", "Map › Navigate", zoom_to_extent)
+        C::new("map.zoomToExtent", "Zoom To Extent", "Home › Navigate", zoom_to_extent)
             .view()
             .params(r#"{"extent": [minLon, minLat, maxLon, maxLat]}"#),
-        C::new("map.goToXY", "Go To XY", "Map › Navigate", go_to_xy).view().params(r#"{"lon": number, "lat": number, "scale"?: number}"#),
+        C::new("map.goToXY", "Go To XY", "Home › Navigate", go_to_xy).view().params(r#"{"lon": number, "lat": number, "scale"?: number}"#),
         C::new("map.setScale", "Set Scale", "Status Bar", |s, p| {
             let sc = f(p, "scale").ok_or("scale is required")?;
             s.map_mut().set_scale(sc);
@@ -47,7 +47,7 @@ pub fn commands() -> Vec<C> {
         })
         .view()
         .params(r#"{"scale": number}"#),
-        C::new("map.basemap", "Basemap", "Map › Layer", basemap)
+        C::new("map.basemap", "Basemap", "Home › Add", basemap)
             .params(r#"{"name": "paper"|"midnight"|"ocean"|"atlas"|"blank", "keepTiles"?: bool (keeps the web tile basemaps over it)}"#),
         C::new("map.graticule", "Graticule", "View › Display", |s, p| {
             let m = s.map_mut();
@@ -75,16 +75,16 @@ pub fn commands() -> Vec<C> {
             Ok(Value::Array(v))
         })
         .view(),
-        C::new("bookmark.add", "New Bookmark", "Map › Navigate › Bookmarks", add_bookmark).params(r#"{"name"?: string}"#),
-        C::new("bookmark.go", "Go To Bookmark", "Map › Navigate › Bookmarks", go_bookmark).view().params(r#"{"name": string}"#),
-        C::new("bookmark.remove", "Remove Bookmark", "Map › Navigate › Bookmarks", |s, p| {
+        C::new("bookmark.add", "New Bookmark", "Home › Navigate › Bookmarks", add_bookmark).params(r#"{"name"?: string}"#),
+        C::new("bookmark.go", "Go To Bookmark", "Home › Navigate › Bookmarks", go_bookmark).view().params(r#"{"name": string}"#),
+        C::new("bookmark.remove", "Remove Bookmark", "Home › Navigate › Bookmarks", |s, p| {
             let n = s_name(p)?;
             let m = s.map_mut();
             let before = m.bookmarks.len();
             m.bookmarks.retain(|b| !b.name.eq_ignore_ascii_case(n));
             if m.bookmarks.len() == before { Err(format!("no bookmark '{n}'")) } else { Ok(Value::Null) }
         }),
-        C::new("map.new", "New Map", "Insert › Project", new_map).params(r#"{"name"?: string}"#),
+        C::new("map.new", "New Map", "Data › Project", new_map).params(r#"{"name"?: string}"#),
         C::new("map.activate", "Activate Map", "Catalog", |s, p| {
             let n = s_name(p)?;
             let i = s.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no map '{n}'"))?;

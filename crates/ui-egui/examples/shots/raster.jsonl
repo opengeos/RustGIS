@@ -3,6 +3,6 @@
 {"cmd":"layer.zoomTo","params":{"layer":"Elevation"}}
 {"cmd":"layer.select","params":{"layer":"Elevation"}}
 {"cmd":"raster.symbology","params":{"layer":"Elevation","type":"shadedRelief","ramp":"Terrain","zFactor":1.5}}
-{"cmd":"ui.tab","params":{"tab":"Raster Layer"}}
+{"cmd":"ui.tab","params":{"tab":"Style"}}
 {"steps":10}
 {"shot":"target/shots/raster.png"}

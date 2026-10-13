@@ -1,5 +1,5 @@
-//! Insert › Project (New and Import Presentation), Insert › Page (Map, Blank, Image, Video), and
-//! Share › Save As (Presentation File) and Output (Export Presentation): presentations.
+//! Data › Project (New and Import Presentation), Publish › Page (Map, Blank, Image, Video), and
+//! Publish › Save As (Presentation File) and Output (Export Presentation): presentations.
 
 use std::path::Path;
 
@@ -19,12 +19,12 @@ pub const EXTENSION: &str = "rgispres";
 const BUDGET: usize = if cfg!(target_arch = "wasm32") { 256 << 20 } else { 1 << 30 };
 
 fn need_presentation(s: &Session) -> Option<&'static str> {
-    if s.project.presentations.is_empty() { Some("add a presentation first (Insert › New Presentation)") } else { None }
+    if s.project.presentations.is_empty() { Some("add a presentation first (Publish › New Presentation)") } else { None }
 }
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("presentation.new", "New Presentation", "Insert › Project", |s, p| {
+        C::new("presentation.new", "New Presentation", "Data › Project", |s, p| {
             let name = unique_name(s, ps(p, "name").unwrap_or("Presentation"));
             let mut pres = Presentation { name: name.clone(), ..Presentation::default() };
             // A title page to start from.
@@ -44,7 +44,7 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"presentation": i, "name": name}))
         })
         .params(r#"{"name"?, "title"?: the title page's text}"#),
-        C::new("presentation.import", "Import Presentation", "Insert › Project", |s, p| {
+        C::new("presentation.import", "Import Presentation", "Data › Project", |s, p| {
             let text = super::items::read_text(p)?;
             let mut pres: Presentation = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS presentation: {e}"))?;
             pres.clamp();
@@ -75,7 +75,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_presentation)
         .params(r#"{"presentation"?}"#),
-        C::new("presentation.mapPage", "Map Page", "Insert › Page", |s, p| {
+        C::new("presentation.mapPage", "Map Page", "Publish › Page", |s, p| {
             let map = match ps(p, "map") {
                 Some(n) => s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no map '{n}'"))?,
                 None => s.map(),
@@ -90,14 +90,14 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_presentation)
         .params(r#"{"presentation"?, "map"?: name (default: the active map, at its current view), "lon"?, "lat"?, "widthM"?: ground width shown (m), "title"?, "at"?: page index}"#),
-        C::new("presentation.blankPage", "Blank Page", "Insert › Page", |s, p| {
+        C::new("presentation.blankPage", "Blank Page", "Publish › Page", |s, p| {
             let background = super::layout::color(p, "background", Rgba::rgb(0xFF, 0xFF, 0xFF))?;
             let text: String = ps(p, "text").unwrap_or("").chars().take(MAX_TEXT).collect();
             add_page(s, p, ps(p, "title").unwrap_or("").to_string(), PageKind::Blank { text, background })
         })
         .when(need_presentation)
         .params(r##"{"presentation"?, "title"?, "text"?, "background"?: "#RRGGBB", "at"?}"##),
-        C::new("presentation.imagePage", "Image Page", "Insert › Page", |s, p| {
+        C::new("presentation.imagePage", "Image Page", "Publish › Page", |s, p| {
             // A picture opened in the browser arrives as base64 `data`.
             let image = match ps(p, "data") {
                 Some(d) => super::graphics::picture(&json!({"image": d}))?,
@@ -108,7 +108,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_presentation)
         .params(r#"{"presentation"?, "path"?: PNG/JPEG file, "image"?: base64, "data"?: base64, "title"?, "caption"?, "at"?}"#),
-        C::new("presentation.videoPage", "Video Page", "Insert › Page", |s, p| {
+        C::new("presentation.videoPage", "Video Page", "Publish › Page", |s, p| {
             let source: String = ps(p, "source").map(str::trim).filter(|v| !v.is_empty()).ok_or("source is required (a video file or URL)")?.chars().take(MAX_SOURCE).collect();
             let poster = match (ps(p, "poster"), ps(p, "posterImage")) {
                 (Some(path), _) => Some(super::graphics::picture(&json!({"path": path}))?),
@@ -132,7 +132,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_presentation)
         .params(r#"{"presentation"?, "page": index}"#),
-        C::new("presentation.save", "Presentation File", "Share › Save As", |s, p| {
+        C::new("presentation.save", "Presentation File", "Publish › Save As", |s, p| {
             let path = ps(p, "path").ok_or("path is required")?;
             let i = index(s, p)?;
             let bytes = presentation_file(s, i)?;
@@ -142,7 +142,7 @@ pub fn commands() -> Vec<C> {
         .view()
         .when(need_presentation)
         .params(r#"{"presentation"?, "path": "*.rgispres"}"#),
-        C::new("presentation.export", "Export Presentation", "Share › Output", |s, p| {
+        C::new("presentation.export", "Export Presentation", "Publish › Output", |s, p| {
             let path = ps(p, "path").ok_or("path is required")?.to_string();
             let i = index(s, p)?;
             let dpi = f(p, "dpi").unwrap_or(120.0).clamp(48.0, 300.0);

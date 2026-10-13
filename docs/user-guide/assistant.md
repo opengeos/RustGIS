@@ -2,7 +2,7 @@
 
 ![The AI Assistant pane: asked for the five most populous African countries, it read the Countries table, selected them and zoomed to them](https://assets.rustgis.app/images/assistant.webp)
 
-**Analysis › AI Assistant** (also View › Windows, or Command Search) opens a chat pane. Ask a
+**Analyze › AI Assistant** (also View › Windows, or Command Search) opens a chat pane. Ask a
 question about your data or say what to do with the map, and the assistant answers by running
 RustGIS commands and geoprocessing tools for you:
 
