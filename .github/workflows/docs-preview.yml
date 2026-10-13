@@ -62,6 +62,8 @@ jobs:
           export PATH="$RUNNER_TEMP/bin:$PATH"
           cd apps/rustgis-web
           trunk build --release --public-url ./
+          # The service worker, as web-deploy.yml adds it, so the preview installs as an app too.
+          cargo xtask web-pwa ../../dist/web
           mkdir -p ../../site/app
           cp -r ../../dist/web/. ../../site/app/
 

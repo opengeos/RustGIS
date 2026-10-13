@@ -82,7 +82,7 @@ RUSTGIS_DATA_DIR=/path/to/data cargo build --release
 | Linux (X11 and Wayland) | Supported |
 | macOS | Supported |
 | Windows | Supported |
-| Web browser | Supported: [web.rustgis.app](https://web.rustgis.app) (WebGPU or WebGL2) |
+| Web browser | Supported: [web.rustgis.app](https://web.rustgis.app) (WebGPU or WebGL2), installable as an app on iOS, Android and desktops ([how](#install-the-web-app)) |
 
 ## Web app
 
@@ -124,6 +124,29 @@ does: it starts blank, keeps its settings in memory rather than in the browser, 
 the project with the page that frames it through `postMessage` (the messages are described in
 `apps/rustgis-web/src/embed.rs`).
 
+### Install the web app
+
+The web app installs like an app on phones, tablets and computers, with its own icon and a window
+without the browser's toolbars, and starts without a network connection once it has been opened
+online. Nothing is downloaded from an app store, and it updates itself from web.rustgis.app.
+
+| Platform | How |
+| --- | --- |
+| iPhone and iPad | Open web.rustgis.app in Safari, tap **Share**, then **Add to Home Screen** |
+| Android | Open it in Chrome, tap the **⋮** menu, then **Install app** (or **Add to Home screen**) |
+| Windows, macOS, Linux, ChromeOS | In Chrome or Edge, click the install icon at the right of the address bar (or **⋮ › Cast, save and share › Install page as app**) |
+| Mac (Safari 17 or later) | **File › Add to Dock** |
+
+To remove it, delete it like any other app: long-press the icon on a phone or tablet, or use
+**Uninstall** in the app window's menu on a computer.
+
+Offline, the installed app opens the World Atlas sample and the files you open, but not basemap
+tiles, web data, plugins or the AI Assistant, which need the network. When a new version has been
+published while the app is open, a notice offers to reload into it; otherwise the next launch
+picks it up. Two things to know on iPhone and iPad: iOS gives a web page less memory than a
+desktop browser, so very large rasters may not open, and it can clear the offline copy when the
+device runs short of storage, so the next launch then needs a connection.
+
 To build it yourself, install [Trunk](https://trunkrs.dev), the `wasm32-unknown-unknown` target
 and clang (it compiles the Zstandard decoder used for GeoTIFFs to WebAssembly). Linux
 distributions' clang can; on macOS, Apple's can't, so install `llvm` with Homebrew and put its
@@ -133,7 +156,11 @@ distributions' clang can; on macOS, Apple's can't, so install `llvm` with Homebr
 cd apps/rustgis-web
 trunk serve          # http://127.0.0.1:8772
 trunk build --release   # output in dist/web
+cargo xtask web-pwa ../../dist/web   # add the service worker (offline start), as the deploy does
 ```
+
+The service worker is left out of `trunk serve`, so a development build is never served from a
+stale cache.
 
 ## Fonts
 
