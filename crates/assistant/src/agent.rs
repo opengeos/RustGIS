@@ -258,8 +258,9 @@ impl Agent {
 
     /// Runs one step of the conversation. A bug in RustGIS that panics while reading a reply or
     /// running its calls ends the turn with an error in the transcript instead of taking the app
-    /// down with it (the commands it runs are guarded the same way by `Session::run`). Where
-    /// panics abort instead of unwinding (the WebAssembly build), this guard can't help.
+    /// down with it (the commands it runs are guarded the same way by `Session::run`). As there,
+    /// the session keeps whatever a tool changed before it failed. Where panics abort instead of
+    /// unwinding (the WebAssembly build), this guard can't help.
     fn guard(&mut self, f: impl FnOnce(&mut Self) -> Step) -> Step {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut *self))) {
             Ok(step) => step,
@@ -323,11 +324,17 @@ impl Agent {
                 .filter(|c| !answered.contains(&c.id.as_str()))
                 .map(|c| ToolResult { id: c.id.clone(), name: c.name.clone(), content: interrupted.into(), error: true })
                 .collect();
+            let order: Vec<String> = calls.iter().map(|c| c.id.clone()).collect();
             if !missing.is_empty() {
                 match self.turns.last_mut() {
                     Some(Turn::Results(r)) => r.extend(missing),
                     _ => self.turns.push(Turn::Results(missing)),
                 }
+            }
+            // In the order of the calls: Gemini matches results to calls it sent without an id
+            // by their order.
+            if let Some(Turn::Results(r)) = self.turns.last_mut() {
+                r.sort_by_key(|x| order.iter().position(|id| *id == x.id).unwrap_or(usize::MAX));
             }
         }
         self.generation += 1;

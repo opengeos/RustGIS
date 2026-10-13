@@ -99,8 +99,14 @@ mod crash {
         while !entry.is_char_boundary(cut) {
             cut -= 1;
         }
-        let file = std::fs::create_dir_all(dir)
-            .and_then(|_| std::fs::OpenOptions::new().create(true).write(true).append(append).truncate(!append).open(&path));
+        let file = std::fs::create_dir_all(dir).and_then(|_| {
+            let mut options = std::fs::OpenOptions::new();
+            options.create(true).write(true).append(append).truncate(!append);
+            // Readable by this user only: an error message can quote file paths or data.
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            options.open(&path)
+        });
         if let Ok(mut file) = file {
             let _ = file.write_all(entry.get(..cut).unwrap_or_default().as_bytes());
         }
@@ -230,6 +236,11 @@ mod tests {
         // The next launch finds it once.
         let seen = crash::take_previous(Some(dir.clone())).unwrap();
         assert!(seen.ends_with("crash-last.log") && seen.is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&seen).unwrap().permissions().mode() & 0o777, 0o600);
+        }
         assert!(crash::take_previous(Some(dir.clone())).is_none());
         let _ = std::panic::take_hook();
         let _ = std::fs::remove_dir_all(&dir);

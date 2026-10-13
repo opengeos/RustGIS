@@ -307,6 +307,9 @@ fn a_panic_while_handling_a_reply_ends_the_turn_instead_of_the_app() {
     // The call that was running may have done something; the queued one never ran.
     assert!(result("c1").contains("may have partly taken effect"), "{messages:?}");
     assert!(result("c2").starts_with("Not run"), "{messages:?}");
+    // Results go back in the order of the calls (Gemini matches id-less calls by order).
+    let ids: Vec<&str> = messages.iter().filter(|m| m["role"] == "tool").filter_map(|m| m["tool_call_id"].as_str()).collect();
+    assert_eq!(ids, ["c1", "c2"]);
     // A reply after the failure is read as usual.
     assert_eq!(a.receive(a.generation(), ok(say("Done.")), &mut s), Step::Done);
     assert!(matches!(a.transcript.last(), Some(Entry::Assistant(t)) if t == "Done."));
