@@ -15,6 +15,8 @@ pub fn commands() -> Vec<C> {
         C::new("stac.search", "STAC Search", "Home › Add › STAC Search", search).params(
             r#"{"url"?: "a STAC API (default: Earth Search)", "collections"?: id | [ids], "bbox"?: [west, south, east, north] | "view" (the map's extent), "datetime"?: "2024-06-01" | "2024-06-01/2024-06-30", "limit"?: 1–200 (default 10), "maxCloud"?: percent, "footprints"?: bool (adds the items' footprints as a layer, default true)}"#,
         ),
+        C::new("stac.addFootprints", "Add STAC Footprints", "Home › Add › STAC Search", add_footprints_cmd)
+            .params(r#"{"footprints": GeoJSON FeatureCollection (items' footprints, as STAC Search finds them), "name"?: text}"#),
         C::new("stac.addAsset", "Add STAC Asset", "Home › Add › STAC Search", add_asset).params(
             r#"{"item": a STAC item (as stac.search returns it) | "url": an item's address, "asset"?: key (default: visual, else the first GeoTIFF, else the first data asset), "name"?: text}"#,
         ),
@@ -60,11 +62,29 @@ fn view(s: &Session) -> Result<[f64; 4], String> {
 
 /// Adds items' footprints as a polygon layer; its id.
 pub fn add_footprints(s: &mut Session, items: &[Item], name: &str) -> Result<Option<u32>, String> {
-    let fc = stac::footprints_geojson(items);
+    add_collection(s, &stac::footprints_geojson(items), name)
+}
+
+/// `stac.addFootprints`: the footprints the app found (a GeoJSON FeatureCollection) as a layer,
+/// through the command so the change is undoable like any other.
+fn add_footprints_cmd(s: &mut Session, p: &Value) -> CmdResult {
+    let fc = p.get("footprints").ok_or("footprints is a GeoJSON FeatureCollection")?;
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("STAC footprints");
+    match add_collection(s, fc, name)? {
+        Some(id) => Ok(serde_json::json!({"layer": id})),
+        None => Err("no footprints to add".into()),
+    }
+}
+
+fn add_collection(s: &mut Session, fc: &Value, name: &str) -> Result<Option<u32>, String> {
     if fc["features"].as_array().is_none_or(Vec::is_empty) {
         return Ok(None);
     }
-    let (ds, _) = rustgis_data::io::read_geojson(&fc.to_string(), name).map_err(|e| e.to_string())?;
+    let text = fc.to_string();
+    if text.len() > 64 << 20 {
+        return Err("the footprints are too large".into());
+    }
+    let (ds, _) = rustgis_data::io::read_geojson(&text, name).map_err(|e| e.to_string())?;
     let id = super::layer::add_dataset(s, ds);
     // Outlines over a faint fill, so the map (and the scenes added later) show through.
     if let Some(l) = s.map_mut().layer_mut(id)

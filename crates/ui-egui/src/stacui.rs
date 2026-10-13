@@ -110,8 +110,14 @@ fn show_footprints(app: &mut RustGisApp) {
     {
         let _ = app.run("layer.remove", json!({"layer": old}));
     }
-    let items = app.ui.stac.items.clone();
-    match rustgis_engine::cmd::stac::add_footprints(&mut app.session, &items, "STAC footprints") {
+    let fc = rustgis_engine::render::rustgis_tiles::stac::footprints_geojson(&app.ui.stac.items);
+    let added = if fc["features"].as_array().is_none_or(Vec::is_empty) {
+        Ok(None)
+    } else {
+        app.run("stac.addFootprints", json!({"footprints": fc, "name": "STAC footprints"}))
+            .map(|r| r["layer"].as_u64().and_then(|i| u32::try_from(i).ok()))
+    };
+    match added {
         Ok(Some(id)) => {
             app.ui.stac.footprints = Some(id);
             if let Some(e) = app.session.map().layer(id).map(|l| l.extent()) {

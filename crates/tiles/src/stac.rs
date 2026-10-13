@@ -299,7 +299,9 @@ fn item(f: &Value, from: Option<&str>) -> Option<Item> {
 fn footprint_size(g: &Value) -> usize {
     fn count(v: &Value, depth: usize) -> usize {
         match v {
-            Value::Array(a) if depth < 6 => a.iter().map(|x| count(x, depth + 1)).sum(),
+            // Saturating: an array nested too deep counts as too many, and many of them can't
+            // wrap around to a small number.
+            Value::Array(a) if depth < 6 => a.iter().fold(0usize, |n, x| n.saturating_add(count(x, depth + 1))),
             Value::Number(_) => 1,
             Value::Array(_) => usize::MAX / 4,
             _ => 0,
@@ -446,6 +448,14 @@ pub fn footprints_geojson(items: &[Item]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deep_footprints_saturate() {
+        // Many arrays nested too deep: counted as too many, never wrapped to a small number.
+        let deep = serde_json::json!([[[[[[[1]]]]]]]);
+        let g = serde_json::json!({"type": "Polygon", "coordinates": vec![deep; 8]});
+        assert_eq!(footprint_size(&g), usize::MAX);
+    }
 
     #[test]
     fn requests() {
