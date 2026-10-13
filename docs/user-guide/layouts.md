@@ -4,9 +4,9 @@
 
 ![A landscape A4 page layout with a map frame, title, legend, north arrow and scale bar, and the Layout tab open](https://assets.rustgis.app/images/layout.webp)
 
-Insert › New Layout adds a page layout (Letter to A0, landscape or portrait) with a map frame,
+Data › New Layout adds a page layout (Letter to A0, landscape or portrait) with a map frame,
 title, legend, north arrow, scale bar and a dynamic credits line. Layouts open as tabs next to
-the maps, with a Layout tab on the ribbon:
+the maps; while one is open, its groups lead the Publish tab:
 
 - **Map frames**: rectangle, circle and ellipse frames, or polygon and lasso frames drawn on the
   page. Each frame shows a map of the project at its own centre and scale; Shift-drag a frame to
@@ -28,7 +28,7 @@ the maps, with a Layout tab on the ribbon:
 
 ## Reports
 
-**Insert › New Report** lists the selected layer's records page after page; the **Report** pane
+**Data › New Report** lists the selected layer's records page after page; the **Report** pane
 previews it and sets it up.
 
 - **Data**: pick the detail **Fields** (or **Autofill Fields**), **Group** records by up to four
@@ -43,24 +43,24 @@ previews it and sets it up.
   relationship, listed beneath it).
 - A where clause or the layer's selection limits the records; a sort field orders them within
   their groups.
-- **Share › Report**: **Export Report** writes a PDF (or the first page as PNG); **Save As Report
+- **Publish › Report**: **Export Report** writes a PDF (or the first page as PNG); **Save As Report
   File** keeps the report, and **Report Template** its design without the data source, to start
-  reports on other layers (**Insert › Import Report**).
+  reports on other layers (**Data › Import Report**).
 
 ## Presentations and notebooks
 
-**Insert › New Presentation** starts a presentation with a title page; the **Presentation** pane
+**Data › New Presentation** starts a presentation with a title page; the **Presentation** pane
 previews, edits and plays it.
 
 - **Page**: a **Map** page shows the map view as it is now, a **Blank** page shows text on a
   coloured page, an **Image** page a picture with a caption, and a **Video** page a video file or
   URL with an optional poster picture.
 - Each page has a title, speaker notes and a duration (for **Play**), and can move up or down.
-- **Share › Presentation › Export Presentation** writes a self-contained HTML slideshow (arrow
+- **Publish › Presentation › Export Presentation** writes a self-contained HTML slideshow (arrow
   keys, `N` for notes, `P` to play; videos play in place), a PDF, or the first page as PNG.
   **Save As Presentation File** keeps it to import into other projects.
 
-**Insert › New Notebook** starts a notebook of text and command cells; **Add and Open** opens a
+**Data › New Notebook** starts a notebook of text and command cells; **Add and Open** opens a
 RustGIS (`.rgisnb`) or Jupyter (`.ipynb`) notebook. A command cell runs one command per line
 (`id {json}`, as in scripts) and shows each command's result beneath it. Notebooks save in
 either format.

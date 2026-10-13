@@ -1,4 +1,4 @@
-//! Feature Layer and Raster Layer tabs: blending, masking, swipe, raster rotation, display
+//! Style tab effects: blending, masking, swipe, raster rotation, display
 //! filters, point aggregation, and extrusion with face culling, lighting and shadows.
 
 use rustgis_data::GeometryType;
@@ -28,14 +28,14 @@ fn need_polygons(s: &Session) -> Option<&'static str> {
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("layer.blend", "Layer Blend", "Raster Layer › Effects", |s, p| {
+        C::new("layer.blend", "Layer Blend", "Style › Effects", |s, p| {
             let m = ps(p, "mode").ok_or("mode is required")?;
             let mode = Blend::from_code(m).ok_or_else(|| format!("unknown blend mode '{m}'"))?;
             with(s, p, |l| l.blend = mode)
         })
         .when(need_layer)
         .params(r#"{"layer"?, "mode": "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference"}"#),
-        C::new("layer.mask", "Masking", "Feature Layer › Drawing", |s, p| {
+        C::new("layer.mask", "Masking", "Style › Drawing", |s, p| {
             let id = s.layer_id(p)?;
             let mask = match p.get("mask") {
                 None | Some(Value::Null) => None,
@@ -57,7 +57,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_layer)
         .params(r#"{"layer"?, "mask": polygon layer|null}"#),
-        C::new("layer.swipe", "Swipe", "Raster Layer › Compare", |s, p| {
+        C::new("layer.swipe", "Swipe", "Style › Compare", |s, p| {
             let id = s.layer_id(p)?;
             let pos = match p.get("position") {
                 None | Some(Value::Null) => None,
@@ -72,7 +72,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_layer)
         .params(r#"{"layer"?, "position"?: 0..1, "off"?: bool}"#),
-        C::new("raster.rotation", "Rotation Type", "Raster Layer › Rotation", |s, p| {
+        C::new("raster.rotation", "Rotation Type", "Style › Rotation", |s, p| {
             let a = f(p, "angle").ok_or("angle is required (degrees clockwise)")?;
             let id = s.layer_id(p)?;
             let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
@@ -82,10 +82,10 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_raster)
         .params(r#"{"layer"?, "angle": degrees clockwise}"#),
-        C::new("layer.displayFilters", "Display Filters", "Feature Layer › Drawing", display_filters)
+        C::new("layer.displayFilters", "Display Filters", "Style › Drawing", display_filters)
             .when(need_feature_layer)
             .params(r#"{"layer"?, "filters": [{"name", "minScale"?, "maxScale"?, "where"}] (empty to clear)}"#),
-        C::new("layer.aggregation", "Aggregation", "Feature Layer › Drawing", |s, p| {
+        C::new("layer.aggregation", "Aggregation", "Style › Drawing", |s, p| {
             let id = s.layer_id(p)?;
             if s.map().layer(id).map(|l| l.geometry_type()) != Some(GeometryType::Point) {
                 return Err("aggregation bins point layers".into());
@@ -101,10 +101,10 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_feature_layer)
         .params(r#"{"layer"?, "shape": "hexagon"|"square"|"none", "size"?: points}"#),
-        C::new("layer.extrusion", "Layer Extrusion", "Feature Layer › Extrusion", extrusion).when(need_polygons).params(
+        C::new("layer.extrusion", "Layer Extrusion", "Style › Extrusion", extrusion).when(need_polygons).params(
             r#"{"layer"?, "type": "none"|"height"|"field", "field"?: numeric field (metres), "height"?: metres, "factor"?: number}"#,
         ),
-        C::new("layer.faces", "Faces", "Feature Layer › Faces", |s, p| {
+        C::new("layer.faces", "Faces", "Style › Faces", |s, p| {
             let (cull, light) = (b(p, "culling"), b(p, "lighting"));
             change_extrusion(s, p, |x| {
                 if let Some(v) = cull {
@@ -117,7 +117,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_polygons)
         .params(r#"{"layer"?, "culling"?: bool, "lighting"?: bool}"#),
-        C::new("layer.lightShadow", "Light and Shadow", "Feature Layer › Light and Shadow", |s, p| {
+        C::new("layer.lightShadow", "Light and Shadow", "Style › Light and Shadow", |s, p| {
             let (light, shadow) = (b(p, "lighting"), b(p, "shadows"));
             change_extrusion(s, p, |x| {
                 if let Some(v) = light {

@@ -1,4 +1,4 @@
-//! The Workflows pane (the Analysis tab's workflows, raster functions and models) and the Script
+//! The Workflows pane (the Analyze tab's workflows, raster functions and models) and the Script
 //! pane (commands run from text). Map clicks fill in points where a workflow needs them.
 
 use egui::{Ui, vec2};

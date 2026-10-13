@@ -1,4 +1,4 @@
-//! Map › Selection.
+//! Home › Selection.
 
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::PopupMode;
@@ -9,12 +9,12 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("select.byAttributes", "Select By Attributes", "Map › Selection", by_attributes)
+        C::new("select.byAttributes", "Select By Attributes", "Home › Selection", by_attributes)
             .when(need_layers)
             .params(r#"{"layer"?, "where": "SQL clause", "mode"?: "new"|"add"|"remove"|"subset"}"#),
-        C::new("select.byRect", "Select (rectangle)", "Map › Selection", by_rect)
+        C::new("select.byRect", "Select (rectangle)", "Home › Selection", by_rect)
             .params(r#"{"minLon", "minLat", "maxLon", "maxLat", "mode"?: "new"|"add"|"remove"}"#),
-        C::new("select.atPoint", "Select (click)", "Map › Selection", at_point).params(r#"{"lon", "lat", "tolerancePx"?, "mode"?}"#),
+        C::new("select.atPoint", "Select (click)", "Home › Selection", at_point).params(r#"{"lon", "lat", "tolerancePx"?, "mode"?}"#),
         C::new("select.rows", "Select Rows", "Attribute Table", |s, p| {
             let id = s.layer_id(p)?;
             let rows: Vec<usize> = p
@@ -26,7 +26,7 @@ pub fn commands() -> Vec<C> {
             Ok(Value::Null)
         })
         .params(r#"{"layer"?, "rows": [number], "mode"?}"#),
-        C::new("select.clear", "Clear", "Map › Selection", |s, _| {
+        C::new("select.clear", "Clear", "Home › Selection", |s, _| {
             s.map_mut().clear_selection();
             Ok(Value::Null)
         })
@@ -46,7 +46,7 @@ pub fn commands() -> Vec<C> {
             Ok(Value::Null)
         })
         .when(need_layer),
-        C::new("select.zoomTo", "Zoom To Selection", "Map › Selection", |s, _| {
+        C::new("select.zoomTo", "Zoom To Selection", "Home › Selection", |s, _| {
             let e = s.map().selection_extent();
             if e.is_empty() {
                 return Err("nothing with a shape is selected".into());
@@ -72,10 +72,10 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"layer": nid}))
         })
         .when(need_selection),
-        C::new("identify", "Identify", "Map › Inquiry", identify).view().params(
+        C::new("identify", "Identify", "Home › Inspect", identify).view().params(
             r#"{"lon", "lat", "tolerancePx"?, "mode"?: "topmost"|"visible"|"selectable"|"selectedInContents"|"none" (the map's pop-up mode when omitted)}"#,
         ),
-        C::new("map.popupMode", "Pop-up Mode", "Map › Navigate", popup_mode)
+        C::new("map.popupMode", "Pop-up Mode", "Home › Navigate", popup_mode)
             .params(r#"{"mode": "topmost"|"visible"|"selectable"|"selectedInContents"|"none"}"#),
     ]
 }

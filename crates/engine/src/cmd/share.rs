@@ -1,4 +1,4 @@
-//! Share tab: export the map as PNG and layers as GeoJSON, CSV, FlatGeobuf, GeoPackage,
+//! Publish tab: export the map as PNG and layers as GeoJSON, CSV, FlatGeobuf, GeoPackage,
 //! GeoParquet, Shapefile, KML/KMZ or GPX.
 
 use std::path::Path;
@@ -11,14 +11,14 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("share.exportMap", "Export Map", "Share › Output", export_map)
+        C::new("share.exportMap", "Export Map", "Publish › Output", export_map)
             .view()
             .params(r#"{"path": "*.png", "width"?: px, "height"?: px, "dpi"?: 96..600}"#),
-        C::new("share.exportLayer", "Export Features", "Share › Output", export_layer)
+        C::new("share.exportLayer", "Export Features", "Publish › Output", export_layer)
             .view()
             .when(need_layer)
             .params(r#"{"layer"?, "path": "*.geojson|*.csv|*.fgb|*.gpkg|*.parquet|*.shp|*.zip|*.kml|*.kmz|*.gpx"}"#),
-        C::new("share.exportTable", "Export Table", "Share › Output", |s, p| {
+        C::new("share.exportTable", "Export Table", "Publish › Output", |s, p| {
             let name = ps(p, "table").ok_or("table is required")?;
             let path = ps(p, "path").ok_or("path is required")?;
             let t = s.project.tables.iter().find(|t| t.name.eq_ignore_ascii_case(name)).ok_or_else(|| format!("no table '{name}'"))?;

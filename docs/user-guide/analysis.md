@@ -2,7 +2,7 @@
 
 ## Selection and queries
 
-**Map › Select** picks features by clicking or dragging a box (Shift adds, Ctrl removes).
+**Home › Select** picks features by clicking or dragging a box (Shift adds, Ctrl removes).
 **Select By Attributes** takes a SQL clause and checks it as you type; **Select By Location**
 picks features that touch another layer's features or lie within a search distance of them (or,
 inverted, those that don't). Selected features draw in
@@ -23,19 +23,19 @@ gdp_md IS NULL
 
 ![The Analysis tab's tool gallery and the Geoprocessing pane with Buffer open; 300 km dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)
 
-Open a tool from the **Analysis** tab's gallery, **Analysis › Tools** (the Geoprocessing pane,
+Open a tool from the **Analysis** tab's gallery, **Analyze › Tools** (the Geoprocessing pane,
 which searches every tool) or Command Search. Fill in its parameters and click **Run**: the
-result is added to the map, and the run is listed under **Analysis › History**. The built-in tools:
+result is added to the map, and the run is listed under **Analyze › History**. The built-in tools:
 
 | Tool | Toolbox |
 | --- | --- |
-| Buffer | Analysis › Proximity |
-| Clip, Erase | Analysis › Extract / Overlay |
+| Buffer | Analyze › Proximity |
+| Clip, Erase | Analyze › Extract / Overlay |
 | Dissolve | Data Management › Generalization |
 | Minimum Bounding Geometry, Feature To Point, Calculate Geometry Attributes | Data Management › Features |
 | Simplify | Cartography › Generalization |
 | Select Layer By Location / Attribute | Data Management › Layers and Table Views |
-| Summarize Within, Summary Statistics | Analysis › Summarize / Statistics |
+| Summarize Within, Summary Statistics | Analyze › Summarize / Statistics |
 | Export Features | Conversion |
 
 Tools honour the current selection: with features selected, only those are processed.
@@ -96,7 +96,7 @@ in the page, so the page is busy while it computes.
 
 ## Analysis workflows
 
-The Analysis tab's Workflows pane holds guided analyses. Where one needs points, it asks you to
+The Analyze tab's Workflows pane holds guided analyses. Where one needs points, it asks you to
 click them on the map:
 
 | Workflow | What it does |
@@ -123,7 +123,7 @@ geoprocessing you've run into a model. The **Script** pane runs commands from te
 
 ## Imagery
 
-The Imagery tab opens its tools in the Workflows pane:
+The Analyze tab's imagery groups open their tools in the Workflows pane:
 
 - **Ortho Mapping** and **Reality Mapping** workspaces mosaic georeferenced images into an
   orthomosaic, or elevation rasters into a surface model that exports as a 3D mesh (OBJ).
@@ -139,9 +139,9 @@ The Imagery tab opens its tools in the Workflows pane:
 
 ## Deep learning and hosted imagery
 
-**Imagery › Deep Learning Tools** trains a neural network (a multilayer perceptron) on the pixels
+**Analyze › Deep Learning Tools** trains a neural network (a multilayer perceptron) on the pixels
 under training polygons and classifies every pixel, adding a class raster with a confidence band
 and reporting the accuracy on held-back pixels. Trained models stay in the project; **Share ›
-Package › Deep Learning** saves one as a package to apply in other projects. **Imagery › Create
+Package › Deep Learning** saves one as a package to apply in other projects. **Analyze › Create
 Hosted Imagery** cuts a raster into XYZ web map tiles (PNG, transparent outside the raster) with
 a TileJSON file and a viewer page.

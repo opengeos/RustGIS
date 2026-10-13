@@ -4,7 +4,7 @@
 
 ![The Feature Layer tab and the Symbology pane with graduated colours; the larger African countries are selected on the map and in the attribute table](https://assets.rustgis.app/images/symbology-table.webp)
 
-Select a layer in Contents and open **Feature Layer › Symbology** (or the Symbology pane):
+Select a layer in Contents and open **Style › Symbology** (or the Symbology pane):
 
 - **Single Symbol**: one fill, outline and marker for every feature.
 - **Unique Values**: one colour per distinct value of a field.
@@ -12,16 +12,16 @@ Select a layer in Contents and open **Feature Layer › Symbology** (or the Symb
   interval or quantile.
 - **Proportional Symbols**: point size grows with a numeric field.
 
-Pick a colour scheme from the pane's swatches. The Feature Layer tab sets the fill **Color**,
+Pick a colour scheme from the pane's swatches. The Style tab sets the fill **Color**,
 the **Outline** width, **Transparency** and a **Visibility Range** (the scales between which the
 layer draws); points can be circles, squares, triangles, diamonds or stars. **Data › Definition
 Query** draws only the features matching a SQL clause, and a layer with
-[subtypes](editing.md#data-design) can be symbolized by them. **Insert › Styles** saves symbology
+[subtypes](editing.md#data-design) can be symbolized by them. **Style › Styles** saves symbology
 as styles to reuse on other layers and in other projects.
 
 ## Labeling
 
-Turn labels on per layer (Map › Labeling › Label, or the Labeling tab), then:
+Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 
 - **Visibility Range**: draw labels only between two scales (Out Beyond / In Beyond), or between
   two viewing distances (Closest / Farthest). Clear Limits removes all four.
@@ -34,7 +34,7 @@ Turn labels on per layer (Map › Labeling › Label, or the Labeling tab), then
 
 ## Layer effects
 
-These draw on top of the symbology. On the Feature Layer tab: **Masking** shows a layer only inside another layer's polygons;
+These draw on top of the symbology. On the Style tab: **Masking** shows a layer only inside another layer's polygons;
 **Display Filters** show different features at different scales (a SQL condition per scale
 range); **Aggregation** draws points as hexagon or square bins coloured by count; **Extrusion**
 raises polygons by a height or a numeric field in an oblique 2.5D view, with **Face Culling**,
@@ -45,7 +45,7 @@ Layer tab: **Layer Blend** (multiply, screen, overlay, darken, lighten, differen
 
 ## Graphics
 
-Insert › Graphics draws shapes in a graphics layer (Map › Add Data › Graphics Layer, or one is
+Edit › Graphics draws shapes in a graphics layer (Home › Add Data › Graphics Layer, or one is
 made with the first graphic). Point, Line, Curve and Polygon are clicked vertex by vertex
 (double-click to finish); Freehand, Lasso, Rectangle, Circle and Ellipse are dragged. Text places
 a label where you click, and Dynamic Text adds tokens that update as the map changes: `{map}`,

@@ -1,6 +1,6 @@
 # Maps and Basemaps
 
-A project holds one or more maps (**Insert › New Map**), each with its own layers, basemap,
+A project holds one or more maps (**Data › New Map**), each with its own layers, basemap,
 projection, bookmarks and view settings. Maps open as tabs above the map view.
 
 ## Navigating
@@ -15,7 +15,7 @@ effects](#view-effects) below.
 
 ![A MapLibre style from OpenFreeMap drawn over Paris, with the Basemap gallery listing the built-in basemaps and the web tile layer](https://assets.rustgis.app/images/tiles.webp)
 
-**Map › Basemap** offers five built-in basemaps drawn from a world outline (Paper, Midnight,
+**Home › Basemap** offers five built-in basemaps drawn from a world outline (Paper, Midnight,
 Ocean, Atlas, Blank), which need no network, and web tile layers over them:
 
 - **Raster tiles** from an XYZ or TMS template (`https://…/{z}/{x}/{y}.png`; `{-y}` for rows
@@ -107,5 +107,5 @@ tritanopia or achromatopsia see it (on screen only; exports are untouched).
 its order, **View Clipping** hides features beyond a distance from the centre, and **Speed
 Display** draws without antialiasing. The **Navigator** adds a compass, zoom buttons and a pan
 pad; **Camera** shows and sets the position and scale; the **Magnifier** shows twice the map under
-the pointer. On the Map tab, **First-Person** navigation walks with W A S D and flies up and down
+the pointer. On the Home tab, **First-Person** navigation walks with W A S D and flies up and down
 with Q and E. **View › Display › Dark Mode** switches the whole interface to a dark theme.

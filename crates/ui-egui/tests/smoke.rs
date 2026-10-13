@@ -21,7 +21,7 @@ fn every_tab_pane_and_dialog_renders() {
     for _ in 0..4 {
         h.step();
     }
-    for tab in ["Map", "Insert", "Analysis", "View", "Edit", "Share", "Plugins", "Settings", "Help", "Feature Layer", "Labeling", "Data"] {
+    for tab in ["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"] {
         h.state_mut().ui.tab = tab.into();
         h.step();
         h.step();
@@ -113,7 +113,7 @@ fn a_tab_strip_wider_than_the_window_scrolls_with_arrow_buttons() {
     h.step();
     h.step();
     let _ = h.get_by_label("Scroll the tabs left");
-    // Scrolling to the end reaches the last contextual tab.
+    // Scrolling to the end reaches the last tab.
     for _ in 0..20 {
         let Some(right) = h.query_by_label("Scroll the tabs right") else { break };
         right.click();
@@ -121,12 +121,12 @@ fn a_tab_strip_wider_than_the_window_scrolls_with_arrow_buttons() {
         h.step();
     }
     assert!(h.query_by_label("Scroll the tabs right").is_none());
-    h.get_by_label("Data").click();
+    h.get_by_label("Help").click();
     h.step();
     h.step();
-    assert_eq!(h.state().ui.tab, "Data");
+    assert_eq!(h.state().ui.tab, "Help");
     // A tab opened off screen scrolls into view, so the left arrow goes away.
-    h.state_mut().ui.tab = "Map".into();
+    h.state_mut().ui.tab = "Home".into();
     for _ in 0..4 {
         h.step();
     }

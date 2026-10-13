@@ -1,5 +1,5 @@
-//! Imagery › Image Classification (Deep Learning Tools), Share › Package (Deep Learning) and
-//! Imagery › Share (Create Hosted Imagery): neural-network pixel classification with models kept
+//! Analyze › Image Classification (Deep Learning Tools), Publish › Package (Deep Learning) and
+//! Analyze › Imagery Sharing (Create Hosted Imagery): neural-network pixel classification with models kept
 //! in the project and shared as packages, and rasters cut into web map tiles.
 
 use std::collections::HashMap;
@@ -47,7 +47,7 @@ fn need_model(s: &Session) -> Option<&'static str> {
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("dl.train", "Train Deep Learning Model", "Imagery › Image Classification", |s, p| {
+        C::new("dl.train", "Train Deep Learning Model", "Analyze › Image Classification", |s, p| {
             let m = train(s, p)?;
             let mut r = json!({"model": m.name, "accuracy": m.accuracy, "classes": m.model.classes, "epochs": m.epochs});
             r["replaced"] = json!(store(s, m));
@@ -55,10 +55,10 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_raster)
         .params(r#"{"layer": raster, "training": polygon layer, "classField": field naming each polygon's class, "bands"?: [1-based], "hidden"?: [units per hidden layer] (default [32, 16]), "epochs"?: 1..500 (default 60), "model"?: name}"#),
-        C::new("dl.classify", "Deep Learning Tools", "Imagery › Image Classification", classify).when(need_raster).params(
+        C::new("dl.classify", "Deep Learning Tools", "Analyze › Image Classification", classify).when(need_raster).params(
             r#"{"layer": raster, "model"?: a trained model's name, or "training" + "classField" (+ "bands", "hidden", "epochs") to train one first, "name"?: output}"#,
         ),
-        C::new("dl.package", "Deep Learning Package", "Share › Package", |s, p| {
+        C::new("dl.package", "Deep Learning Package", "Publish › Package", |s, p| {
             let path = ps(p, "path").ok_or("path is required")?;
             let bytes = package(s, p)?;
             rustgis_data::io::write_atomic(Path::new(path), &bytes).map_err(|e| format!("{path}: {e}"))?;
@@ -67,7 +67,7 @@ pub fn commands() -> Vec<C> {
         .view()
         .when(need_model)
         .params(r#"{"model"?: name (default: the last trained), "path": "*.rgisdlpk"}"#),
-        C::new("dl.import", "Import Deep Learning Package", "Imagery › Image Classification", |s, p| {
+        C::new("dl.import", "Import Deep Learning Package", "Analyze › Image Classification", |s, p| {
             let bytes = read_bytes(p)?;
             // Only the model is inflated, whatever else the package holds.
             let entries = rustgis_data::zip::read_matching(&bytes, |n| n == "model.json")?;
@@ -93,14 +93,14 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"model": name}))
         })
         .params(r#"{"path"?: "*.rgisdlpk", "data"?: base64}"#),
-        C::new("dl.remove", "Delete Model", "Imagery › Image Classification", |s, p| {
+        C::new("dl.remove", "Delete Model", "Analyze › Image Classification", |s, p| {
             let i = model_index(s, p)?;
             s.project.dl_models.remove(i);
             Ok(Value::Null)
         })
         .when(need_model)
         .params(r#"{"model": name}"#),
-        C::new("imagery.hostedImagery", "Create Hosted Imagery", "Imagery › Share", hosted).view().when(need_raster).params(
+        C::new("imagery.hostedImagery", "Create Hosted Imagery", "Analyze › Imagery Sharing", hosted).view().when(need_raster).params(
             r#"{"layer": raster, "path": "*.zip" (z/x/y.png tiles, tiles.json and a viewer page), "minZoom"?: 0..22, "maxZoom"?: 0..22 (default: the raster's resolution)}"#,
         ),
     ]

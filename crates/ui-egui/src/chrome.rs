@@ -64,48 +64,15 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                 // narrow window the search box shrinks to an icon and the title shortens or hides
                 // instead of overlapping other controls.
                 let qat_end = ui.cursor().min.x + 8.0;
-                // Contextual tab group caption, centred over its tabs.
-                let mut band_x: Option<(f32, f32)> = None;
-                if let Some((caption, _)) = crate::ribbon::context(app) {
-                    let rects: Vec<Rect> =
-                        app.ui.tab_rects.iter().filter(|(n, _)| crate::ribbon::is_context_tab(n)).map(|(_, r)| *r).collect();
-                    if let (Some(a), Some(b)) = (rects.first(), rects.last()) {
-                        let band = Rect::from_min_max(pos2(a.min.x, full.max.y - 20.0), pos2(b.max.x, full.max.y));
-                        ui.painter().rect_filled(band, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.context_tint);
-                        ui.painter().rect_filled(
-                            Rect::from_min_max(band.min, pos2(band.max.x, band.min.y + 3.0)),
-                            CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
-                            t.context,
-                        );
-                        // On a narrow window the tab strip may show only part of the group.
-                        let caption = tl!(caption);
-                        if text_w(ui, caption, semibold(11.0)) + 8.0 <= band.width() {
-                            ui.painter().text(
-                                pos2(band.center().x, band.center().y + 1.5),
-                                Align2::CENTER_CENTER,
-                                caption,
-                                semibold(11.0),
-                                t.context,
-                            );
-                        }
-                        band_x = Some((band.min.x, band.max.x));
-                    }
-                }
                 // Command search on the right: full width when there is room, a round icon button
-                // otherwise. It never reaches into the contextual caption or the toolbar.
+                // otherwise. It never reaches into the toolbar.
                 let label = tl!("Command Search");
                 let hint = if cfg!(target_os = "macos") { "⌘K" } else { "Ctrl+K" };
                 let right = full.max.x;
-                let blocked = band_x.map(|(_, b)| b + 12.0).unwrap_or(qat_end).max(qat_end);
-                let room = right - blocked;
+                let room = right - qat_end;
                 let full_w = (text_w(ui, label, regular(12.0)) + text_w(ui, hint, regular(11.0)) + 70.0).clamp(200.0, 260.0);
-                // Room kept for the title next to the search box, unless it fits left of the
-                // contextual caption.
-                let title_guess = text_w(ui, &app.session.project.name, semibold(12.5)) + 16.0;
-                let reserve = match band_x {
-                    Some((a, _)) if a - 16.0 - (qat_end + 8.0) >= title_guess => 0.0,
-                    _ => title_guess.min(160.0),
-                };
+                // Room kept for the title next to the search box.
+                let reserve = (text_w(ui, &app.session.project.name, semibold(12.5)) + 16.0).min(160.0);
                 let sw = if room >= full_w + reserve + 24.0 {
                     full_w
                 } else if room >= 150.0 + reserve {
@@ -140,17 +107,13 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                 if resp.clicked() {
                     app.ui.command_search = Some(String::new());
                 }
-                // Title: centred when it fits, otherwise in the widest free gap; the map name and
-                // then the project name drop out when there is no room.
+                // Title: centred when it fits, otherwise in the free gap; the map name and then the
+                // project name drop out when there is no room.
                 let title = format!("{}{}", app.session.project.name, if app.session.dirty { " •" } else { "" });
                 let sub = format!("  —  {}", app.session.map().name);
                 let (title_w, sub_w) = (text_w(ui, &title, semibold(12.5)), text_w(ui, &sub, regular(12.0)));
-                let mut gaps = vec![(qat_end + 8.0, sr.min.x - 16.0)];
-                if let Some((a, b)) = band_x {
-                    gaps = vec![(qat_end + 8.0, a - 16.0), (b + 16.0, sr.min.x - 16.0)];
-                }
-                let best = gaps.iter().copied().filter(|(a, b)| b > a).max_by(|x, y| (x.1 - x.0).total_cmp(&(y.1 - y.0)));
-                if let Some((a, b)) = best {
+                let (a, b) = (qat_end + 8.0, sr.min.x - 16.0);
+                if b > a {
                     let with_sub = title_w + sub_w <= b - a;
                     let tw = if with_sub { title_w + sub_w } else { title_w };
                     if tw <= b - a {
@@ -417,13 +380,13 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             }
         }
         for (id, label, loc) in [
-            ("ui.addData", "Add Data…", "Map › Layer"),
+            ("ui.addData", "Add Data…", "Home › Add"),
             ("ui.plugins", "Plugin Manager…", "Plugins"),
             ("ui.pane.geoprocessing", "Geoprocessing Pane", "View › Windows"),
-            ("ui.pane.symbology", "Symbology Pane", "Feature Layer › Drawing"),
-            ("ui.pane.assistant", "AI Assistant", "Analysis › AI"),
+            ("ui.pane.symbology", "Symbology Pane", "Style › Drawing"),
+            ("ui.pane.assistant", "AI Assistant", "Analyze › AI"),
             ("ui.theme", "Toggle Dark Mode", "View"),
-            ("ui.exportMap", "Export Map…", "Share › Output"),
+            ("ui.exportMap", "Export Map…", "Publish › Output"),
         ] {
             if ql.is_empty() || label.to_lowercase().contains(&ql) || tl!(label).to_lowercase().contains(&ql) {
                 hits.push((id.into(), tl!(label).into(), crate::i18n::location(loc)));

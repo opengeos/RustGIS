@@ -53,7 +53,7 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.label(egui::RichText::new(m.as_str()).small().color(c));
     }
     if app.session.project.reports.is_empty() {
-        ui.label(egui::RichText::new(tl!("No reports yet. Insert › New Report lists the selected layer's records.")).weak());
+        ui.label(egui::RichText::new(tl!("No reports yet. Data › New Report lists the selected layer's records.")).weak());
         if ui.button(tl!("New Report")).clicked() {
             run(app, "report.new", Value::Null);
         }

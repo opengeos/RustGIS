@@ -1,4 +1,4 @@
-//! Map › Layer (Add Graphics Layer) and Insert › Graphics: shapes, text and pictures drawn on the
+//! Home › Add (Add Graphics Layer) and Insert › Graphics: shapes, text and pictures drawn on the
 //! map in graphics layers.
 
 use base64::Engine;
@@ -17,19 +17,19 @@ const MAX_POINTS: usize = 100_000;
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("graphics.newLayer", "Add Graphics Layer", "Map › Layer", |s, p| {
+        C::new("graphics.newLayer", "Add Graphics Layer", "Home › Add", |s, p| {
             let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Graphics");
             let id = new_layer(s, name);
             Ok(json!({"layer": id}))
         })
         .params(r#"{"name"?: string}"#),
-        C::new("graphics.add", "Add Graphic", "Insert › Graphics", add).params(
+        C::new("graphics.add", "Add Graphic", "Edit › Graphics", add).params(
             r##"{"shape": "point"|"text"|"line"|"curve"|"freehand"|"polygon"|"lasso"|"rectangle"|"circle"|"ellipse"|"picture", "points": [[lon, lat], …] (rectangle, ellipse, picture: two corners; circle: centre and a point on the edge), "layer"?: graphics layer, "text"?: string (dynamic tokens: {map} {scale} {date} {time} {crs} {layers} {center}), "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "image"?: base64 PNG/JPEG, "path"?: picture file}"##,
         ),
-        C::new("graphics.style", "Graphic Style", "Insert › Graphics", style)
+        C::new("graphics.style", "Graphic Style", "Edit › Graphics", style)
             .when(super::need_selection)
             .params(r##"{"fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "text"?: string}"##),
-        C::new("graphics.keepTool", "Keep the last tool active", "Insert › Graphics", |s, p| {
+        C::new("graphics.keepTool", "Keep the last tool active", "Edit › Graphics", |s, p| {
             s.keep_tool = b(p, "on").unwrap_or(!s.keep_tool);
             Ok(json!({"keepTool": s.keep_tool}))
         })

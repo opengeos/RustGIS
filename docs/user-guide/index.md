@@ -25,7 +25,7 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
   under **Help › Customize › Quick Access**.
 - **Contents pane** (left): the map's layers in drawing order, with their legends. Tick a layer to
   show or hide it; right-click it to move it, zoom to it, rename or remove it and more.
-  Selecting a layer opens its contextual tabs.
+  The Style and Data tabs act on the layer selected here.
 - **Map view**: one tab per map and layout. The buttons at the top right zoom in, zoom out and go
   to the full extent; the north arrow and scale bar sit in the corners; tile credits at the bottom
   right.

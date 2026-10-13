@@ -1,4 +1,4 @@
-//! Insert › Project (New Notebook, Add and Open Notebook): notebooks of text and command cells.
+//! Data › Project (New Notebook, Add and Open Notebook): notebooks of text and command cells.
 //! A command cell is a script (one command per line, `id {json}`) whose results show beneath it.
 //! Notebooks save as RustGIS notebooks or Jupyter notebooks, and open from either.
 
@@ -61,12 +61,12 @@ impl Notebook {
 }
 
 fn need_notebook(s: &Session) -> Option<&'static str> {
-    if s.project.notebooks.is_empty() { Some("add a notebook first (Insert › New Notebook)") } else { None }
+    if s.project.notebooks.is_empty() { Some("add a notebook first (Data › New Notebook)") } else { None }
 }
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("notebook.new", "New Notebook", "Insert › Project", |s, p| {
+        C::new("notebook.new", "New Notebook", "Data › Project", |s, p| {
             let name = unique_name(s, ps(p, "name").unwrap_or("Notebook"));
             let nb = Notebook {
                 name: name.clone(),
@@ -81,7 +81,7 @@ pub fn commands() -> Vec<C> {
             Ok(r)
         })
         .params(r#"{"name"?}"#),
-        C::new("notebook.open", "Add and Open Notebook", "Insert › Project", |s, p| {
+        C::new("notebook.open", "Add and Open Notebook", "Data › Project", |s, p| {
             let text = super::items::read_text(p)?;
             let fallback =
                 ps(p, "path").map(|x| Path::new(x).file_stem().map_or_else(|| x.to_string(), |n| n.to_string_lossy().into_owned()));

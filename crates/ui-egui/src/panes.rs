@@ -519,7 +519,7 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                             );
                             if resp.clicked() {
                                 let _ = app.run("layout.activate", json!({"name": n}));
-                                app.ui.tab = "Layout".into();
+                                app.ui.tab = "Publish".into();
                             }
                             resp.context_menu(|ui| {
                                 if ui.button(tl!("Delete")).clicked() {

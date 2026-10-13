@@ -1,4 +1,4 @@
-//! Analysis tab: run geoprocessing tools and keep their history.
+//! Analyze tab: run geoprocessing tools and keep their history.
 
 use rustgis_analysis::{Inputs, Output, OutputLayer, RasterInput};
 use rustgis_data::Dataset;
@@ -9,8 +9,8 @@ use crate::{CmdResult, CommandSpec as C, GpRecord, Session};
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("gp.run", "Run Tool", "Analysis › Geoprocessing", run).when(need_layers).params(r#"{"tool": tool id, "params": {...}}"#),
-        C::new("gp.tools", "Tools", "Analysis › Geoprocessing", |_, _| {
+        C::new("gp.run", "Run Tool", "Analyze › Geoprocessing", run).when(need_layers).params(r#"{"tool": tool id, "params": {...}}"#),
+        C::new("gp.tools", "Tools", "Analyze › Geoprocessing", |_, _| {
             Ok(Value::Array(
                 rustgis_analysis::tools()
                     .map(|t| {
@@ -21,20 +21,20 @@ pub fn commands() -> Vec<C> {
             ))
         })
         .view(),
-        C::new("gp.geolibre", "GeoLibre Tools", "Analysis › Geoprocessing", |_, _| Ok(geolibre_status())).view(),
-        C::new("gp.installGeolibre", "Install GeoLibre Tools", "Analysis › Geoprocessing", |_, _| {
+        C::new("gp.geolibre", "GeoLibre Tools", "Analyze › Geoprocessing", |_, _| Ok(geolibre_status())).view(),
+        C::new("gp.installGeolibre", "Install GeoLibre Tools", "Analyze › Geoprocessing", |_, _| {
             let path = install_geolibre(&|_, _| {})?;
             #[cfg(all(feature = "geolibre", not(target_arch = "wasm32")))]
             rustgis_geolibre::set_runner(Some(std::path::PathBuf::from(&path)))?;
             Ok(json!({"path": path, "status": geolibre_status()}))
         })
         .view(),
-        C::new("gp.finish", "Finish Tool Run", "Analysis › Geoprocessing", finish)
+        C::new("gp.finish", "Finish Tool Run", "Analyze › Geoprocessing", finish)
             .params(r#"{"id": a finished run (the browser's GeoLibre tools run asynchronously)}"#),
-        C::new("gp.setGeolibre", "Locate GeoLibre Runner", "Analysis › Geoprocessing", set_geolibre)
+        C::new("gp.setGeolibre", "Locate GeoLibre Runner", "Analyze › Geoprocessing", set_geolibre)
             .view()
             .params(r#"{"path"?: "the geolibre executable (empty: look in the usual places)"}"#),
-        C::new("gp.clearHistory", "Clear History", "Analysis › Geoprocessing › History", |s, _| {
+        C::new("gp.clearHistory", "Clear History", "Analyze › Geoprocessing › History", |s, _| {
             s.project.gp_history.clear();
             Ok(Value::Null)
         }),

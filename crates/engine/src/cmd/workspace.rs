@@ -1,4 +1,4 @@
-//! View tab (Link Views, Thumbnail, Animation, Profile Viewing, Workflow Manager), Map tab
+//! View tab (Link Views, Thumbnail, Animation, Profile Viewing, Workflow Manager), Home and Data
 //! (Infographics, Offline, Feature Cache) and Help (Diagnostic Monitor) commands.
 
 use base64::Engine;
@@ -25,13 +25,13 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"linked": s.project.link_views}))
         })
         .params(r#"{"on"?: bool}"#),
-        C::new("project.thumbnail", "Create Thumbnail", "View › Thumbnail", |s, p| {
+        C::new("project.thumbnail", "Create Thumbnail", "Publish › Thumbnail", |s, p| {
             let t = thumbnail(s, p)?;
             s.project.thumbnail = t;
             Ok(json!({"thumbnail": s.project.thumbnail.is_some()}))
         })
         .params(r#"{"create"?: bool (from the map view), "image"?: base64 PNG/JPEG, "path"?: image file, "clear"?: bool}"#),
-        C::new("map.thumbnail", "Map Thumbnail", "View › Thumbnail", |s, p| {
+        C::new("map.thumbnail", "Map Thumbnail", "Publish › Thumbnail", |s, p| {
             let t = thumbnail(s, p)?;
             s.map_mut().thumbnail = t;
             Ok(json!({"thumbnail": s.map().thumbnail.is_some()}))
@@ -179,15 +179,15 @@ pub fn commands() -> Vec<C> {
         .view()
         .params(r#"{"layer": elevation raster, "lines": line layer}"#),
         // Infographics and diagnostics.
-        C::new("info.infographic", "Infographics", "Map › Inquiry", infographic)
+        C::new("info.infographic", "Infographics", "Home › Inspect", infographic)
             .view()
             .params(r#"{"layer"? (every visible feature layer when omitted)}"#),
         C::new("info.diagnostics", "Diagnostic Monitor", "Help › Performance", |s, _| Ok(diagnostics(s))).view(),
         // Offline areas.
-        C::new("offline.download", "Download Map", "Map › Offline", offline_download)
+        C::new("offline.download", "Download Map", "Data › Offline", offline_download)
             .params(r#"{"name"?: string, "extent"?: [minLon, minLat, maxLon, maxLat] (the map view when omitted)}"#),
-        C::new("offline.sync", "Sync", "Map › Offline", offline_sync).params(r#"{"name": offline area}"#),
-        C::new("offline.remove", "Remove", "Map › Offline", |s, p| {
+        C::new("offline.sync", "Sync", "Data › Offline", offline_sync).params(r#"{"name": offline area}"#),
+        C::new("offline.remove", "Remove", "Data › Offline", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
             let before = s.project.offline_areas.len();
             s.project.offline_areas.retain(|a| !a.name.eq_ignore_ascii_case(n));
@@ -209,7 +209,7 @@ pub fn commands() -> Vec<C> {
             Ok(Value::Null)
         })
         .params(r#"{"name": offline area}"#),
-        C::new("offline.open", "Open Offline Map", "Map › Offline", |s, p| {
+        C::new("offline.open", "Open Offline Map", "Data › Offline", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
             let a =
                 s.project.offline_areas.iter().find(|a| a.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no offline area '{n}'"))?;
@@ -229,12 +229,12 @@ pub fn commands() -> Vec<C> {
         })
         .params(r#"{"name": offline area}"#),
         // Feature cache.
-        C::new("cache.fill", "Fill Cache", "Map › Feature Cache", |s, _| {
+        C::new("cache.fill", "Fill Cache", "Data › Feature Cache", |s, _| {
             let n = fill_cache(s);
             Ok(json!({"cached": n}))
         })
         .view(),
-        C::new("cache.empty", "Empty Cache", "Map › Feature Cache", |s, _| {
+        C::new("cache.empty", "Empty Cache", "Data › Feature Cache", |s, _| {
             let mut n = 0;
             for m in &mut s.project.maps {
                 for l in &mut m.layers {
@@ -247,12 +247,12 @@ pub fn commands() -> Vec<C> {
         .view(),
         // A fill runs to the end in one go (it's quick); cancelling stops the automatic fills
         // that follow projection changes.
-        C::new("cache.cancel", "Cancel Caching", "Map › Feature Cache", |s, _| {
+        C::new("cache.cancel", "Cancel Caching", "Data › Feature Cache", |s, _| {
             s.auto_cache = false;
             Ok(Value::Null)
         })
         .view(),
-        C::new("cache.auto", "Auto Cache", "Map › Feature Cache", |s, p| {
+        C::new("cache.auto", "Auto Cache", "Data › Feature Cache", |s, p| {
             s.auto_cache = b(p, "on").unwrap_or(!s.auto_cache);
             if s.auto_cache {
                 fill_cache(s);

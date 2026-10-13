@@ -1,5 +1,5 @@
-//! The ribbon: the tab strip (with the Project button and the contextual Feature Layer or Raster
-//! Layer tab group) and every tab's groups. Each control runs a command by id.
+//! The ribbon: the tab strip (with the Project button) and every tab's groups. Each control runs a
+//! command by id.
 
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::Tool;
@@ -12,31 +12,20 @@ use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, big_menu, col, group, menu_item, small, small_menu, text_w};
 use crate::{RightPane, RustGisApp, icons};
 
-pub const TABS: [&str; 10] = ["Map", "Insert", "Analysis", "View", "Edit", "Imagery", "Share", "Plugins", "Settings", "Help"];
-/// The contextual tabs for feature layers: (tab id, caption).
-pub const FEATURE_TABS: &[(&str, &str)] = &[("Feature Layer", "Feature Layer"), ("Labeling", "Labeling"), ("Data", "Data")];
-/// The contextual tab of an open layout.
-pub const LAYOUT_TABS: &[(&str, &str)] = &[("Layout", "Layout")];
-/// The contextual tabs for raster layers.
-pub const RASTER_TABS: &[(&str, &str)] = &[("Raster Layer", "Raster Layer"), ("Raster Data", "Data")];
+pub const TABS: [&str; 10] = ["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"];
 
-/// The contextual tab group for the layer selected in Contents: its caption (shown above its
-/// tabs) and tabs.
-pub fn context(app: &RustGisApp) -> Option<(&'static str, &'static [(&'static str, &'static str)])> {
-    if app.session.active_layout.is_some() {
-        return Some(("Layout", LAYOUT_TABS));
-    }
-    let l = app.session.active_layer.and_then(|id| app.session.map().layer(id))?;
-    if l.is_raster() {
-        Some(("Raster Layer", RASTER_TABS))
-    } else if l.geometry_type() != GeometryType::None {
-        Some(("Feature Layer", FEATURE_TABS))
-    } else {
-        None
+/// The tab that holds what an older tab name (in saved pane sets, tasks and scripts) held.
+pub fn current_tab(name: &str) -> &str {
+    match name {
+        "Map" => "Home",
+        "Insert" | "Raster Data" => "Data",
+        "Feature Layer" | "Labeling" | "Raster Layer" => "Style",
+        "Analysis" | "Imagery" => "Analyze",
+        "Share" | "Layout" => "Publish",
+        _ => name,
     }
 }
 
-/// Whether a tab id belongs to a contextual group.
 /// The tab id of a plugin's own tab.
 pub fn plugin_tab_id(plugin: &str) -> String {
     format!("plugin:{plugin}")
@@ -52,17 +41,8 @@ fn plugin_tabs(app: &RustGisApp) -> Vec<(String, String)> {
         .collect()
 }
 
-pub fn is_context_tab(tab: &str) -> bool {
-    FEATURE_TABS.iter().chain(RASTER_TABS).chain(LAYOUT_TABS).any(|(id, _)| *id == tab)
-}
-
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let tabs = context(app).map(|(_, tabs)| tabs).unwrap_or(&[]);
-    if is_context_tab(&app.ui.tab) && !tabs.iter().any(|(id, _)| *id == app.ui.tab) {
-        // Switching between a feature and a raster layer keeps a contextual tab open.
-        app.ui.tab = tabs.first().map(|(id, _)| id.to_string()).unwrap_or_else(|| "Map".into());
-    }
     // A plugin's tab whose plugin was turned off or removed.
     if app.ui.tab.starts_with("plugin:") && !plugin_tabs(app).iter().any(|(id, _)| *id == app.ui.tab) {
         app.ui.tab = "Plugins".into();
@@ -94,22 +74,16 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                         let tab = app.ui.tab.clone();
                         match tab.as_str() {
                             t if t.starts_with("plugin:") => plugin_tab(app, ui, t.trim_start_matches("plugin:")),
-                            "Insert" => insert_tab(app, ui),
-                            "Analysis" => analysis_tab(app, ui),
-                            "View" => view_tab(app, ui),
+                            "Data" => data_tab(app, ui),
+                            "Style" => style_tab(app, ui),
                             "Edit" => edit_tab(app, ui),
-                            "Imagery" => imagery_tab(app, ui),
-                            "Share" => share_tab(app, ui),
+                            "Analyze" => analyze_tab(app, ui),
+                            "View" => view_tab(app, ui),
+                            "Publish" => publish_tab(app, ui),
                             "Plugins" => plugins_tab(app, ui),
                             "Settings" => settings_tab(app, ui),
                             "Help" => help_tab(app, ui),
-                            "Feature Layer" => feature_layer_tab(app, ui),
-                            "Labeling" => labeling_tab(app, ui),
-                            "Data" => data_tab(app, ui),
-                            "Raster Layer" => raster_layer_tab(app, ui),
-                            "Raster Data" => raster_data_tab(app, ui),
-                            "Layout" => layout_tab(app, ui),
-                            _ => map_tab(app, ui),
+                            _ => home_tab(app, ui),
                         }
                     });
                 });
@@ -193,14 +167,10 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.ui.backstage = true;
         }
         ui.add_space(6.0);
-        // RustGIS's tabs, then plugins' own tabs, then the contextual tabs; the user can hide any
-        // of the first two.
+        // RustGIS's tabs, then plugins' own tabs; the user can hide any of them.
         let mut tabs: Vec<(String, String)> = TABS.iter().map(|t| (t.to_string(), tl!(*t).to_string())).collect();
         tabs.extend(plugin_tabs(app));
         tabs.retain(|(id, _)| !app.ui.hidden_tabs.iter().any(|h| h == id));
-        if let Some((_, ctx)) = context(app) {
-            tabs.extend(ctx.iter().map(|(id, c)| (id.to_string(), tl!(*c).to_string())));
-        }
         // The tabs scroll between the Project button and the right-side controls (the collapse
         // button and the active tool indicator) when the window is too narrow for them.
         let tool = tool_indicator(app, ui);
@@ -225,10 +195,8 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
-                    let mut rects = Vec::new();
                     for (tab, caption) in &tabs {
                         let tab = tab.as_str();
-                        let is_ctx = is_context_tab(tab);
                         let active = app.ui.tab == tab;
                         let font = if active { semibold(12.5) } else { regular(12.5) };
                         let shown = caption.as_str();
@@ -236,9 +204,6 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
                         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, shown));
                         let body = Rect::from_min_max(pos2(r.min.x, r.min.y + 3.0), r.max);
-                        if is_ctx {
-                            ui.painter().rect_filled(body, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.context_tint);
-                        }
                         if active {
                             ui.painter().rect_filled(body, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.ribbon);
                             ui.painter().rect_stroke(
@@ -252,7 +217,7 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                                 0.0,
                                 t.ribbon,
                             );
-                            let bar = if is_ctx { t.context } else { t.accent };
+                            let bar = t.accent;
                             ui.painter().rect_filled(
                                 Rect::from_min_max(pos2(r.min.x + 8.0, r.max.y - 3.0), pos2(r.max.x - 8.0, r.max.y - 1.0)),
                                 CornerRadius::same(1),
@@ -261,13 +226,7 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         } else if resp.hovered() {
                             ui.painter().rect_filled(body.shrink2(vec2(1.0, 2.0)), CornerRadius::same(5), t.hover);
                         }
-                        let color = if is_ctx {
-                            t.context
-                        } else if active {
-                            t.text
-                        } else {
-                            t.text_dim
-                        };
+                        let color = if active { t.text } else { t.text_dim };
                         ui.painter().text(pos2(r.center().x, r.center().y + 1.5), Align2::CENTER_CENTER, shown, font, color);
                         if resp.double_clicked() {
                             let _ = app.run("ui.ribbon", Value::Null);
@@ -282,23 +241,9 @@ fn tab_strip(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         if active && scrolls < 3 {
                             ui.scroll_to_rect_animation(r.expand2(vec2(SCROLL_BUTTON_W, 0.0)), None, egui::style::ScrollAnimation::none());
                         }
-                        rects.push((tab.to_string(), r));
                     }
-                    rects
-                })
-                .inner
+                });
             });
-        // Only the visible part of each tab, not under the arrow buttons: the contextual caption
-        // above them follows it.
-        let mut view = scroll.inner_rect;
-        let max = scroll.content_size.x - view.width();
-        if scroll.state.offset.x > 0.5 {
-            view.min.x += SCROLL_BUTTON_W;
-        }
-        if max >= 1.0 && scroll.state.offset.x < max - 0.5 {
-            view.max.x -= SCROLL_BUTTON_W;
-        }
-        app.ui.tab_rects = scroll.inner.iter().map(|(n, r)| (n.clone(), r.intersect(view))).filter(|(_, r)| r.width() >= 8.0).collect();
         scroll_buttons(ui, t, &scroll, [tl!("Scroll the tabs left"), tl!("Scroll the tabs right")]);
         app.ui.tab_strip_rect = Some(ui.max_rect());
         // Right side: collapse/expand the ribbon, then the quick tool indicator.
@@ -334,7 +279,7 @@ fn tool_btn(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, desc: &s
     }
 }
 
-/// The Clipboard group shared by the Map and Edit tabs.
+/// The Clipboard group of the Edit tab.
 fn clipboard_group(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Clipboard", |ui| {
         big_menu(ui, app, "paste", "Paste", "Paste copied features into the selected layer, or as a new layer.", |ui, app| {
@@ -349,14 +294,13 @@ fn clipboard_group(app: &mut RustGisApp, ui: &mut Ui) {
     });
 }
 
-fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
-    clipboard_group(app, ui);
+fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Navigate", |ui| {
         tool_btn(
             ui,
             app,
             "explore",
-            "Explore",
+            "Pan",
             "Pan with the mouse, zoom with the wheel and click features to see their attributes.",
             Tool::Explore,
         );
@@ -379,8 +323,8 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
         });
         col(ui, |ui| {
             small(ui, app, "zoom_full", "Full Extent", "Zoom to the extent of all layers.", "map.zoomFull", Value::Null, false);
-            small(ui, app, "zoom_in", "Fixed Zoom In", "Zoom in on the centre of the map.", "map.zoomIn", Value::Null, false);
-            small(ui, app, "zoom_out", "Fixed Zoom Out", "Zoom out from the centre of the map.", "map.zoomOut", Value::Null, false);
+            small(ui, app, "zoom_in", "Zoom In", "Zoom in on the centre of the map.", "map.zoomIn", Value::Null, false);
+            small(ui, app, "zoom_out", "Zoom Out", "Zoom out from the centre of the map.", "map.zoomOut", Value::Null, false);
         });
         col(ui, |ui| {
             small(ui, app, "prev_extent", "Previous", "Go back to the previous extent.", "map.prevExtent", Value::Null, false);
@@ -407,7 +351,7 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 },
             );
             let mode = app.session.map().popup_mode;
-            small_menu(ui, app, "popup", "Pop-ups", "Choose which layers a click identifies.", |ui, app| {
+            small_menu(ui, app, "popup", "Identify", "Choose which layers a click identifies.", |ui, app| {
                 for m in rustgis_engine::map::PopupMode::ALL {
                     if ui.radio(mode == m, tl!(m.label())).clicked() {
                         let _ = app.run("map.popupMode", json!({"mode": m.code()}));
@@ -417,7 +361,8 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
             });
         });
     });
-    group(ui, "Layer", |ui| {
+    bookmarks_group(app, ui);
+    group(ui, "Add", |ui| {
         big_menu(ui, app, "basemap", "Basemap", "Change the map's backdrop.", basemap_gallery);
         big_menu(ui, app, "add_data", "Add\nData", "Add GeoJSON, CSV or Shapefile data to the map.", |ui, app| {
             menu_item(ui, app, "", "Data…", "ui.addData", Value::Null);
@@ -461,7 +406,7 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
             small(ui, app, "table", "Attributes", "Open the attribute table of the selected layer.", "table.open", Value::Null, false);
         });
     });
-    group(ui, "Inquiry", |ui| {
+    group(ui, "Inspect", |ui| {
         big_menu(ui, app, "measure", "Measure", "Measure geodesic distances and areas on the map.", |ui, app| {
             if ui.button(tl!("Measure Distance")).clicked() {
                 let _ = app.run("tool.set", json!({"tool": "measure"}));
@@ -480,7 +425,7 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 ui,
                 app,
                 "zoom_box",
-                "Zoom In",
+                "Zoom Box",
                 "Drag a box to zoom into.",
                 "tool.set",
                 json!({"tool": "zoomIn"}),
@@ -497,109 +442,6 @@ fn map_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 app.ui.right == Some(RightPane::Infographics),
             );
         });
-    });
-    group(ui, "Offline", |ui| {
-        let areas: Vec<String> = app.session.project.offline_areas.iter().map(|a| a.name.clone()).collect();
-        big(
-            ui,
-            app,
-            "export",
-            "Download\nMap",
-            "Take the data in view offline, to edit and sync back later.",
-            "offline.download",
-            Value::Null,
-            false,
-            false,
-        );
-        col(ui, |ui| {
-            for (icon, label, cmd, desc) in [
-                ("redo", "Sync", "offline.sync", "Send offline edits back and refresh."),
-                ("map", "Open", "offline.open", "Open an offline area to edit."),
-                ("delete", "Remove", "offline.remove", "Remove an offline area."),
-            ] {
-                let a = areas.clone();
-                small_menu(ui, app, icon, label, desc, move |ui, app| {
-                    if a.is_empty() {
-                        ui.label(egui::RichText::new(tl!("No offline areas")).weak());
-                    }
-                    for n in &a {
-                        if ui.button(n.as_str()).clicked() {
-                            let _ = app.run(cmd, json!({"name": n}));
-                            app.map.invalidate();
-                            ui.close();
-                        }
-                    }
-                });
-            }
-        });
-    });
-    group(ui, "Feature Cache", |ui| {
-        col(ui, |ui| {
-            small(ui, app, "add_data", "Fill", "Prepare every layer's geometry for this projection.", "cache.fill", Value::Null, false);
-            small(ui, app, "clear_sel", "Empty", "Free the prepared geometry.", "cache.empty", Value::Null, false);
-        });
-        col(ui, |ui| {
-            small(ui, app, "close", "Cancel", "Stop filling the cache.", "cache.cancel", Value::Null, false);
-            small(
-                ui,
-                app,
-                "redo",
-                "Auto Cache",
-                "Fill the cache whenever the projection changes.",
-                "cache.auto",
-                Value::Null,
-                app.session.auto_cache,
-            );
-        });
-    });
-    group(ui, "Labeling", |ui| {
-        let on = app.session.active_layer.and_then(|id| app.session.map().layer(id)).is_some_and(|l| l.labels.enabled);
-        big(
-            ui,
-            app,
-            if on { "label" } else { "label_off" },
-            "Label",
-            "Turn labels on or off for the selected layer.",
-            "labels.enable",
-            Value::Null,
-            on,
-            false,
-        );
-        let d = app.session.map().label_display;
-        col(ui, |ui| {
-            small(
-                ui,
-                app,
-                "label_lock",
-                "Lock",
-                "Keep the labelled features fixed as the map moves.",
-                "labels.lock",
-                Value::Null,
-                d.locked,
-            );
-            small(ui, app, "label_pause", "Pause", "Stop drawing labels, for faster navigation.", "labels.pause", Value::Null, d.paused);
-            small(
-                ui,
-                app,
-                "label_unplaced",
-                "View Unplaced",
-                "Show the labels that don't fit, in red.",
-                "labels.viewUnplaced",
-                Value::Null,
-                d.show_unplaced,
-            );
-        });
-        big(
-            ui,
-            app,
-            "label_convert",
-            "Convert",
-            "Convert the selected layer's labels into an annotation layer.",
-            "labels.convert",
-            Value::Null,
-            false,
-            false,
-        );
     });
 }
 
@@ -697,7 +539,119 @@ fn tile_layers(ui: &mut Ui, app: &mut RustGisApp, t: &Tokens) {
     });
 }
 
-fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
+fn offline_group(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Offline", |ui| {
+        let areas: Vec<String> = app.session.project.offline_areas.iter().map(|a| a.name.clone()).collect();
+        big(
+            ui,
+            app,
+            "export",
+            "Download\nMap",
+            "Take the data in view offline, to edit and sync back later.",
+            "offline.download",
+            Value::Null,
+            false,
+            false,
+        );
+        col(ui, |ui| {
+            for (icon, label, cmd, desc) in [
+                ("redo", "Sync", "offline.sync", "Send offline edits back and refresh."),
+                ("map", "Open", "offline.open", "Open an offline area to edit."),
+                ("delete", "Remove", "offline.remove", "Remove an offline area."),
+            ] {
+                let a = areas.clone();
+                small_menu(ui, app, icon, label, desc, move |ui, app| {
+                    if a.is_empty() {
+                        ui.label(egui::RichText::new(tl!("No offline areas")).weak());
+                    }
+                    for n in &a {
+                        if ui.button(n.as_str()).clicked() {
+                            let _ = app.run(cmd, json!({"name": n}));
+                            app.map.invalidate();
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        });
+    });
+}
+
+fn feature_cache_group(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Feature Cache", |ui| {
+        col(ui, |ui| {
+            small(ui, app, "add_data", "Fill", "Prepare every layer's geometry for this projection.", "cache.fill", Value::Null, false);
+            small(ui, app, "clear_sel", "Empty", "Free the prepared geometry.", "cache.empty", Value::Null, false);
+        });
+        col(ui, |ui| {
+            small(ui, app, "close", "Cancel", "Stop filling the cache.", "cache.cancel", Value::Null, false);
+            small(
+                ui,
+                app,
+                "redo",
+                "Auto Cache",
+                "Fill the cache whenever the projection changes.",
+                "cache.auto",
+                Value::Null,
+                app.session.auto_cache,
+            );
+        });
+    });
+}
+
+fn labeling_group(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Labeling", |ui| {
+        let on = app.session.active_layer.and_then(|id| app.session.map().layer(id)).is_some_and(|l| l.labels.enabled);
+        big(
+            ui,
+            app,
+            if on { "label" } else { "label_off" },
+            "Label",
+            "Turn labels on or off for the selected layer.",
+            "labels.enable",
+            Value::Null,
+            on,
+            false,
+        );
+        let d = app.session.map().label_display;
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "label_lock",
+                "Lock",
+                "Keep the labelled features fixed as the map moves.",
+                "labels.lock",
+                Value::Null,
+                d.locked,
+            );
+            small(ui, app, "label_pause", "Pause", "Stop drawing labels, for faster navigation.", "labels.pause", Value::Null, d.paused);
+            small(
+                ui,
+                app,
+                "label_unplaced",
+                "View Unplaced",
+                "Show the labels that don't fit, in red.",
+                "labels.viewUnplaced",
+                Value::Null,
+                d.show_unplaced,
+            );
+        });
+        big(
+            ui,
+            app,
+            "label_convert",
+            "Convert",
+            "Convert the selected layer's labels into an annotation layer.",
+            "labels.convert",
+            Value::Null,
+            false,
+            false,
+        );
+    });
+}
+
+fn project_group(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Project", |ui| {
         big(ui, app, "new_map", "New\nMap", "Add a new map to the project.", "map.new", Value::Null, false, false);
         big(ui, app, "toolbox", "Toolbox", "Browse the geoprocessing toolbox.", "ui.pane.geoprocessing", Value::Null, false, false);
@@ -707,14 +661,14 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 let text = format!("{} ({w:.0} × {h:.0} mm)", tl!(*label));
                 if ui.button(text).clicked() {
                     let _ = app.run("layout.new", json!({"page": id}));
-                    app.ui.tab = "Layout".into();
+                    app.ui.tab = "Publish".into();
                     ui.close();
                 }
             }
             ui.separator();
             if ui.button(tl!("Blank Letter page")).clicked() {
                 let _ = app.run("layout.new", json!({"template": "blank"}));
-                app.ui.tab = "Layout".into();
+                app.ui.tab = "Publish".into();
                 ui.close();
             }
             menu_item(ui, app, "open", "Import Layout…", "ui.importLayout", Value::Null);
@@ -755,6 +709,9 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             });
         });
     });
+}
+
+fn report_group(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Report", |ui| {
         big(
             ui,
@@ -880,6 +837,9 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
         );
     });
+}
+
+fn presentation_group(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Presentation", |ui| {
         big(
             ui,
@@ -921,6 +881,9 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             );
         });
     });
+}
+
+fn notebook_group(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Notebook", |ui| {
         big(ui, app, "python", "New\nNotebook", "A notebook of text and command cells.", "ui.newNotebook", Value::Null, false, false);
         col(ui, |ui| {
@@ -946,6 +909,9 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             );
         });
     });
+}
+
+fn layer_templates_group(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Layer Templates", |ui| {
         big_menu(ui, app, "graphics_layer", "Layer\nTemplates", "Add an empty layer with a ready-made schema, to draw into.", |ui, app| {
             for (id, label) in [
@@ -961,6 +927,9 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             }
         });
     });
+}
+
+fn styles_group(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Styles", |ui| {
         big_menu(ui, app, "symbology", "Styles", "Saved symbology: apply it to the selected layer, or save the layer's.", |ui, app| {
             let styles: Vec<(String, String)> =
@@ -977,6 +946,9 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             menu_item(ui, app, "open", "Import Styles From…", "ui.openItem", json!({"kind": "importStyles"}));
         });
     });
+}
+
+fn bookmarks_group(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Bookmarks", |ui| {
         big(
             ui,
@@ -990,6 +962,9 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
         );
     });
+}
+
+fn graphics_group(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Graphics", |ui| {
         let tools: [&[(&str, &str, &str, &str)]; 4] = [
             &[
@@ -1025,6 +1000,9 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             });
         }
     });
+}
+
+fn graphics_and_text_group(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Graphics and Text", |ui| {
         for (icon, label, desc, code) in [
             ("g_text", "Text", "Click the map to place text.", "graphicText"),
@@ -1037,19 +1015,36 @@ fn insert_tab(app: &mut RustGisApp, ui: &mut Ui) {
             }
         }
     });
-    group(ui, "Data", |ui| {
-        big(ui, app, "field", "Add\nField", "Add a field to the selected layer.", "ui.dialog", json!({"name": "addField"}), false, false);
-        big(
-            ui,
-            app,
-            "calculate",
-            "Calculate\nField",
-            "Compute a field's values.",
-            "ui.dialog",
-            json!({"name": "calculateField"}),
-            false,
-            false,
-        );
+}
+
+fn thumbnail_group(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Thumbnail", |ui| {
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "export_map",
+                "Create Thumbnail",
+                "The project's thumbnail, from the map view.",
+                "project.thumbnail",
+                json!({"create": true}),
+                app.session.project.thumbnail.is_some(),
+            );
+            small(ui, app, "open", "Import Thumbnail", "The project's thumbnail, from an image.", "ui.importThumbnail", Value::Null, false);
+        });
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "map",
+                "Map Thumbnail",
+                "This map's thumbnail, from the view.",
+                "map.thumbnail",
+                json!({"create": true}),
+                app.session.map().thumbnail.is_some(),
+            );
+            small(ui, app, "open", "Import", "This map's thumbnail, from an image.", "ui.importThumbnail", json!({"map": true}), false);
+        });
     });
 }
 
@@ -1094,7 +1089,7 @@ const GALLERY: &[(&str, &str, &str)] = &[
     ("exportFeatures", "export_layer", "Export\nFeatures"),
 ];
 
-fn analysis_tab(app: &mut RustGisApp, ui: &mut Ui) {
+fn analysis_groups(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Geoprocessing", |ui| {
         big(
             ui,
@@ -1581,6 +1576,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
         let dark = app.ui.dark;
         big(ui, app, "dark", "Dark\nMode", "Switch between light and dark themes.", "ui.theme", Value::Null, dark, false);
     });
+    labeling_group(app, ui);
     group(ui, "Navigation", |ui| {
         big(ui, app, "zoom_world", "World", "Zoom to the whole world.", "map.zoomWorld", Value::Null, false, false);
         col(ui, |ui| {
@@ -1686,34 +1682,6 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             );
         });
     });
-    group(ui, "Thumbnail", |ui| {
-        col(ui, |ui| {
-            small(
-                ui,
-                app,
-                "export_map",
-                "Create Thumbnail",
-                "The project's thumbnail, from the map view.",
-                "project.thumbnail",
-                json!({"create": true}),
-                app.session.project.thumbnail.is_some(),
-            );
-            small(ui, app, "open", "Import Thumbnail", "The project's thumbnail, from an image.", "ui.importThumbnail", Value::Null, false);
-        });
-        col(ui, |ui| {
-            small(
-                ui,
-                app,
-                "map",
-                "Map Thumbnail",
-                "This map's thumbnail, from the view.",
-                "map.thumbnail",
-                json!({"create": true}),
-                app.session.map().thumbnail.is_some(),
-            );
-            small(ui, app, "open", "Import", "This map's thumbnail, from an image.", "ui.importThumbnail", json!({"map": true}), false);
-        });
-    });
     group(ui, "Animation", |ui| {
         let n = app.session.map().animation.len();
         col(ui, |ui| {
@@ -1749,8 +1717,62 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
     });
 }
 
+/// The Data tab: bringing data in, tables, fields, queries, relationships and export.
+fn data_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    project_group(app, ui);
+    layer_templates_group(app, ui);
+    if active_layer(app).is_some_and(|l| l.is_raster()) {
+        raster_data_groups(app, ui);
+    } else {
+        feature_data_groups(app, ui);
+    }
+    offline_group(app, ui);
+    feature_cache_group(app, ui);
+}
+
+/// The Style tab: the drawing of the layer selected in Contents (its symbology, labels and
+/// effects), or a hint when none is.
+fn style_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    match active_layer(app) {
+        Some(l) if l.is_raster() => raster_style_groups(app, ui),
+        Some(l) if l.geometry_type() != GeometryType::None => {
+            feature_style_groups(app, ui);
+            label_groups(app, ui);
+        }
+        _ => group(ui, "Layer", |ui| {
+            let t = Tokens::get(ui.ctx());
+            ui.add_sized(
+                vec2(220.0, CONTENT_H),
+                egui::Label::new(egui::RichText::new(tl!("Select a layer in Contents to style it.")).color(t.text_dim)).wrap(),
+            );
+        }),
+    }
+    styles_group(app, ui);
+}
+
+/// The Analyze tab: geoprocessing, workflows, imagery and notebooks.
+fn analyze_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    analysis_groups(app, ui);
+    notebook_group(app, ui);
+    imagery_groups(app, ui);
+}
+
+/// The Publish tab: the open layout's groups first, then reports, presentations, export and
+/// sharing.
+fn publish_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    layout_groups(app, ui);
+    report_group(app, ui);
+    presentation_group(app, ui);
+    share_groups(app, ui);
+    thumbnail_group(app, ui);
+}
+
+/// The layer selected in Contents.
+fn active_layer(app: &RustGisApp) -> Option<&rustgis_engine::map::Layer> {
+    app.session.active_layer.and_then(|id| app.session.map().layer(id))
+}
+
 fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
-    clipboard_group(app, ui);
     let editing = app.session.map().editing.clone();
     let pane = app.ui.right == Some(RightPane::Editing);
     group(ui, "Manage Edits", |ui| {
@@ -1885,21 +1907,12 @@ fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
         );
     });
-    group(ui, "Selection", |ui| {
-        tool_btn(ui, app, "select", "Select", "Select features on the map.", Tool::Select);
-        col(ui, |ui| {
-            small(ui, app, "table", "Attributes", "Edit attributes in the table.", "table.open", Value::Null, false);
-            small(ui, app, "clear_sel", "Clear", "Clear the selection.", "select.clear", Value::Null, false);
-            small(ui, app, "zoom_sel", "Zoom To", "Zoom to the selection.", "select.zoomTo", Value::Null, false);
-        });
-    });
-    group(ui, "Fields", |ui| {
-        big(ui, app, "field", "Add\nField", "Add a field.", "ui.dialog", json!({"name": "addField"}), false, false);
-        big(ui, app, "calculate", "Calculate", "Calculate field values.", "ui.dialog", json!({"name": "calculateField"}), false, false);
-    });
+    graphics_group(app, ui);
+    graphics_and_text_group(app, ui);
+    clipboard_group(app, ui);
 }
 
-fn share_tab(app: &mut RustGisApp, ui: &mut Ui) {
+fn share_groups(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Output", |ui| {
         big(
             ui,
@@ -2191,7 +2204,7 @@ fn layout_frame(app: &RustGisApp) -> Option<u32> {
         .or_else(|| l.first_frame())
 }
 
-fn layout_tab(app: &mut RustGisApp, ui: &mut Ui) {
+fn layout_groups(app: &mut RustGisApp, ui: &mut Ui) {
     use rustgis_engine::map::layout::ElementKind;
     let Some(li) = app.session.active_layout else { return };
     let Some(layout) = app.session.project.layouts.get(li).cloned() else { return };
@@ -2650,7 +2663,7 @@ fn help_tab(app: &mut RustGisApp, ui: &mut Ui) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// contextual tabs
+// Style and Data groups for the selected layer
 
 const SCALES: [f64; 10] =
     [1_000.0, 10_000.0, 50_000.0, 100_000.0, 500_000.0, 1_000_000.0, 5_000_000.0, 10_000_000.0, 50_000_000.0, 100_000_000.0];
@@ -2674,7 +2687,7 @@ pub fn fmt_thousands(v: f64) -> String {
     if v < 0.0 { format!("-{out}") } else { out }
 }
 
-fn feature_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
+fn feature_style_groups(app: &mut RustGisApp, ui: &mut Ui) {
     let Some(layer) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned() else { return };
     visibility_and_effects(app, ui, &layer);
     drawing_group(app, ui, &layer);
@@ -2846,7 +2859,7 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
     }
 }
 
-fn imagery_tab(app: &mut RustGisApp, ui: &mut Ui) {
+fn imagery_groups(app: &mut RustGisApp, ui: &mut Ui) {
     let wf = |section: &str| json!({"section": section});
     group(ui, "Ortho Mapping", |ui| {
         big(
@@ -2889,7 +2902,7 @@ fn imagery_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
         );
     });
-    group(ui, "Analysis", |ui| {
+    group(ui, "Image Analysis", |ui| {
         col(ui, |ui| {
             small(
                 ui,
@@ -2952,7 +2965,7 @@ fn imagery_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
         );
     });
-    group(ui, "Share", |ui| {
+    group(ui, "Imagery Sharing", |ui| {
         big(
             ui,
             app,
@@ -2979,7 +2992,7 @@ fn imagery_tab(app: &mut RustGisApp, ui: &mut Ui) {
         );
         small(ui, app, "history", "Results", "Measurements so far.", "ui.pane.workflows", wf("mensuration"), false);
     });
-    group(ui, "Tools", |ui| {
+    group(ui, "Imagery Tools", |ui| {
         col(ui, |ui| {
             small(ui, app, "resample", "Process", "Clip a raster to the view, or resample it.", "ui.pane.workflows", wf("process"), false);
             small(ui, app, "stretch", "Indices", "NDVI, NDWI, SAVI, NBR, NDBI, EVI.", "ui.pane.workflows", wf("indices"), false);
@@ -3174,7 +3187,7 @@ fn layer_group(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map::L
     });
 }
 
-fn raster_layer_tab(app: &mut RustGisApp, ui: &mut Ui) {
+fn raster_style_groups(app: &mut RustGisApp, ui: &mut Ui) {
     let Some(layer) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned() else { return };
     let Some(rl) = layer.raster.clone() else { return };
     visibility_and_effects(app, ui, &layer);
@@ -3388,7 +3401,7 @@ fn raster_renderer_icon(r: &RasterRenderer) -> &'static str {
     }
 }
 
-fn raster_data_tab(app: &mut RustGisApp, ui: &mut Ui) {
+fn raster_data_groups(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Information", |ui| {
         big(
             ui,
@@ -3416,13 +3429,13 @@ fn renderer_icon(r: &Renderer) -> &'static str {
     }
 }
 
-fn labeling_tab(app: &mut RustGisApp, ui: &mut Ui) {
+fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
     let Some(layer) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned() else { return };
-    group(ui, "Layer", |ui| {
+    group(ui, "Labels", |ui| {
         let on = layer.labels.enabled;
         big(ui, app, if on { "label" } else { "label_off" }, "Label", "Turn labels on or off.", "labels.enable", Value::Null, on, false);
     });
-    group(ui, "Visibility Range", |ui| {
+    group(ui, "Label Range", |ui| {
         ui.vertical(|ui| {
             ui.add_space(6.0);
             for (label, cur, key) in [("Out Beyond", layer.labels.min_scale, "min"), ("In Beyond", layer.labels.max_scale, "max")] {
@@ -3523,7 +3536,7 @@ fn labeling_tab(app: &mut RustGisApp, ui: &mut Ui) {
     });
 }
 
-fn data_tab(app: &mut RustGisApp, ui: &mut Ui) {
+fn feature_data_groups(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Definition Query", |ui| {
         let has = app.session.active_layer.and_then(|id| app.session.map().layer(id)).is_some_and(|l| l.definition_query.is_some());
         big(

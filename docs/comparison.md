@@ -30,8 +30,8 @@ They differ in how they are built and who they suit:
   and Esri services, native Android and iOS apps, a Jupyter widget, a Python package and
   real-time collaboration.
 - **RustGIS** is written entirely in Rust and draws its own interface on the GPU (egui). It is
-  one native program with no browser engine or JavaScript runtime inside, a ribbon of tabs
-  and contextual tab groups, and an engine where every button is a command with an id, run the
+  one native program with no browser engine or JavaScript runtime inside, a ribbon laid
+  out in the order of the work, and an engine where every button is a command with an id, run the
   same way by the ribbon, `rustgis-cli`, notebooks, models and the AI Assistant.
 
 If you want the widest data access and the most platforms, choose GeoLibre. If you want a
@@ -48,7 +48,7 @@ engine, choose RustGIS. Both keep your data on your machine.
 | **Desktop** | Windows, macOS, Linux: one native program | Windows, macOS, Linux (Tauri) | Windows, macOS, Linux | Windows only | — |
 | **Browser** | Full app compiled to WebAssembly | Full app, nothing to install | No official browser build | No | Yes (the product *is* the browser app) |
 | **Mobile** | — | Native Android and iOS apps | Via QField / Mergin Maps (separate apps) | — | Via ArcGIS Field Maps (separate app) |
-| **Interface** | Ribbon with contextual tab groups | Panels and toolbars | Toolbars and panels | Ribbon with contextual tab groups | Web map viewer and apps |
+| **Interface** | Ribbon, tabs in the order of the work | Panels and toolbars | Toolbars and panels | Ribbon with contextual tab groups | Web map viewer and apps |
 | **Works offline** | Yes: the desktop app needs no network; offline areas with sync | Yes: PWA install, offline areas, desktop build | Yes | Yes | Limited (Field Maps offline areas) |
 | **Where your data lives** | Your device | Your device, processed client-side | Your device | Your device / your enterprise geodatabase | Vendor cloud |
 | **Project file** | `.rgis` (JSON, open) | `.geolibre` / `.geolibre.json` (open, documented) | `.qgs` / `.qgz` (open) | `.aprx` (proprietary) | Web map JSON (hosted) |
@@ -102,7 +102,7 @@ engine, choose RustGIS. Both keep your data on your machine.
 ## Where each one is the right choice
 
 **Choose RustGIS when** you want a compact, native desktop GIS that installs as one program, a
-ribbon workflow like the one in ArcGIS Pro without the licence, every action scriptable from
+ribbon interface without a licence, every action scriptable from
 the command line with the same ids the interface uses, plugins that run sandboxed, or an AI
 assistant whose every step is an undoable command.
 

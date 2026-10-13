@@ -12,7 +12,7 @@ web app reads GeoPackages without SQLite, with a small SQLite file reader writte
 
 | Format | Extensions or source | How to add it | Notes |
 | --- | --- | --- | --- |
-| GeoJSON | `.geojson`, `.json` | Map › Add Data, or drop the file | Features with typed attributes; a `GeometryCollection` keeps its first member. |
+| GeoJSON | `.geojson`, `.json` | Home › Add Data, or drop the file | Features with typed attributes; a `GeometryCollection` keeps its first member. |
 | CSV | `.csv`, `.txt` | Add Data | Longitude/latitude columns become points; a CSV without them opens as a standalone table. |
 | Shapefile | `.shp` with `.dbf` (and `.shx`), or zipped (`.zip`) | Add Data, drop the file, or upload the zip in the web app | A zip may hold several Shapefiles, in folders, and other vector files (GeoJSON, CSV, GeoParquet, FlatGeobuf); each becomes a layer, at most 32 for the whole archive (Shapefiles first, so other files are left out when Shapefiles fill it). `.txt` files and macOS `__MACOSX` entries are passed over, and a member that can't be read is skipped and named in a notice. Converted to longitude/latitude from the coordinate system in its `.prj` (EPSG, Esri or OGC WKT; Web Mercator, UTM, State Plane and other common projections); without a `.prj` it must be in longitude/latitude. |
 | KML / KMZ | `.kml`, `.kmz` | Add Data, drop the file, or upload it in the web app | A layer for each kind of geometry (points, lines, polygons), with each placemark's name, description, folder path and extended data. Styles are kept: the layer is drawn by unique values of its `style` field, with each KML style's line and fill colours, widths and icon colours (up to 64 styles). Multi-geometries and `gx:Track`s are read; ground overlays are counted, not drawn. |
@@ -65,7 +65,7 @@ databases](data.md#sql-queries-and-duckdb-databases).
 
 | Format | Extensions or source | How to add it | Notes |
 | --- | --- | --- | --- |
-| Raster tiles | XYZ/TMS template (`{z}/{x}/{y}`, `{-y}`, `{s}`, `{q}`), WMS (`{bbox-epsg-3857}`) | Map › Basemap › Add Tile Layer | PNG, JPEG and WebP. |
+| Raster tiles | XYZ/TMS template (`{z}/{x}/{y}`, `{-y}`, `{s}`, `{q}`), WMS (`{bbox-epsg-3857}`) | Home › Basemap › Add Tile Layer | PNG, JPEG and WebP. |
 | Vector tiles | Mapbox Vector Tiles (`.pbf`, `.mvt`) template, or TileJSON | Add Tile Layer | Drawn in a built-in style that knows the OpenMapTiles, Protomaps and Shortbread schemas. |
 | MapLibre styles | `style.json` | Add Tile Layer | The style's vector and raster sources, sprite, expressions and zoom functions. |
 | PMTiles | `.pmtiles`: a web address, or a file on the desktop | Add Tile Layer (or its **PMTiles File…** button), Add Data, or drop the file | Raster or vector, as the archive says. Read a tile at a time by byte ranges (the server must allow them, and CORS in the web app). A vector archive is drawn in the built-in style when it is a basemap, otherwise with each of its layers in its own colour. |
@@ -80,13 +80,13 @@ databases](data.md#sql-queries-and-duckdb-databases).
 | Shapefile | Data › Export to `.shp` (or `.zip` for the files zipped) | Writes `.shp`, `.shx`, `.dbf`, `.prj` (WGS 84) and `.cpg` (UTF-8). Field names are cut to 10 characters (made unique), text to 254 bytes, and numbers too wide for a dBase field are left empty; features without geometry, and lines of a single point, are left out (and reported). |
 | FlatGeobuf | Data › Export to `.fgb` | With a spatial index; features without geometry are left out (and reported). |
 | KML, KMZ, GPX | Data › Export to `.kml`, `.kmz` or `.gpx` | Placemarks named by a `name` field, if there is one; features without geometry are left out. |
-| KML, GPX, CSV with WKT | Analysis › Workflows › Data Interop | |
-| GeoTIFF | Raster Data › Export | |
-| PNG | Share › Export Map (`share.exportMap`) | At any DPI, with labels, scale bar and tile credits. |
+| KML, GPX, CSV with WKT | Analyze › Workflows › Data Interop | |
+| GeoTIFF | Data › Export | |
+| PNG | Publish › Export Map (`share.exportMap`) | At any DPI, with labels, scale bar and tile credits. |
 | PDF | Layouts, reports and presentations | |
-| Wavefront OBJ, glTF | Share › Export To 3D, Share As › Web Scene | Polygons extruded by a field. |
-| Web map, OGC API Features, MapLibre style | Share › Share As | Open-format files that need no server: see [Sharing](sharing.md). |
-| Raster tiles | Imagery › Create Hosted Imagery | |
+| Wavefront OBJ, glTF | Publish › Export To 3D, Share As › Web Scene | Polygons extruded by a field. |
+| Web map, OGC API Features, MapLibre style | Publish › Share As | Open-format files that need no server: see [Sharing](sharing.md). |
+| Raster tiles | Analyze › Create Hosted Imagery | |
 
 ## RustGIS files
 

@@ -1,4 +1,4 @@
-//! Map › Labeling (lock, pause, unplaced labels, convert to annotation) and the Labeling tab's
+//! View › Labeling (lock, pause, unplaced labels, convert to annotation) and the Style tab's label
 //! visibility range and placement.
 
 use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as Attr};
@@ -11,37 +11,37 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("labels.lock", "Lock", "Map › Labeling", |s, p| {
+        C::new("labels.lock", "Lock", "View › Labeling", |s, p| {
             let d = &mut s.map_mut().label_display;
             d.locked = b(p, "on").unwrap_or(!d.locked);
             Ok(json!({"locked": d.locked}))
         })
         .view()
         .params(r#"{"on"?: bool}"#),
-        C::new("labels.pause", "Pause", "Map › Labeling", |s, p| {
+        C::new("labels.pause", "Pause", "View › Labeling", |s, p| {
             let d = &mut s.map_mut().label_display;
             d.paused = b(p, "on").unwrap_or(!d.paused);
             Ok(json!({"paused": d.paused}))
         })
         .view()
         .params(r#"{"on"?: bool}"#),
-        C::new("labels.viewUnplaced", "View Unplaced", "Map › Labeling", |s, p| {
+        C::new("labels.viewUnplaced", "View Unplaced", "View › Labeling", |s, p| {
             let d = &mut s.map_mut().label_display;
             d.show_unplaced = b(p, "on").unwrap_or(!d.show_unplaced);
             Ok(json!({"showUnplaced": d.show_unplaced}))
         })
         .view()
         .params(r#"{"on"?: bool}"#),
-        C::new("labels.convert", "Convert To Annotation", "Map › Labeling", convert)
+        C::new("labels.convert", "Convert To Annotation", "View › Labeling", convert)
             .when(need_feature_layer)
             .params(r#"{"layer"?, "name"?: string}"#),
-        C::new("labels.scaleRange", "Label Visibility Range", "Labeling › Visibility Range", scale_range)
+        C::new("labels.scaleRange", "Label Visibility Range", "Style › Label Range", scale_range)
             .when(need_feature_layer)
             .params(r#"{"layer"?, "min"?: scale|null (out beyond), "max"?: scale|null (in beyond), "clear"?: bool (clears the scale and distance limits, as Clear Limits does)}"#),
-        C::new("labels.distanceRange", "Label Distance Range", "Labeling › Visibility Range", distance_range)
+        C::new("labels.distanceRange", "Label Distance Range", "Style › Label Range", distance_range)
             .when(need_feature_layer)
             .params(r#"{"layer"?, "closest"?: metres|null, "farthest"?: metres|null, "clear"?: bool}"#),
-        C::new("labels.placement", "Label Placement", "Labeling › Label Placement", |s, p| {
+        C::new("labels.placement", "Label Placement", "Style › Label Placement", |s, p| {
             let code = ps(p, "position").ok_or("position is required")?;
             let pos = LabelPlacement::from_code(code).ok_or_else(|| format!("unknown placement '{code}'"))?;
             with(s, p, |l| l.labels.placement = pos)

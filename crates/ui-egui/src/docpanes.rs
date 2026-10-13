@@ -60,7 +60,7 @@ fn message(app: &RustGisApp, ui: &mut Ui, t: &Tokens) {
 pub fn presentation(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     message(app, ui, t);
     if app.session.project.presentations.is_empty() {
-        ui.label(egui::RichText::new(tl!("No presentations yet. Insert › New Presentation starts one.")).weak());
+        ui.label(egui::RichText::new(tl!("No presentations yet. Data › New Presentation starts one.")).weak());
         if ui.button(tl!("New Presentation")).clicked() {
             run(app, "presentation.new", Value::Null);
         }
@@ -282,9 +282,7 @@ fn preview(app: &mut RustGisApp, ui: &mut Ui, i: usize, t: &Tokens) {
 pub fn notebook(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     message(app, ui, t);
     if app.session.project.notebooks.is_empty() {
-        ui.label(
-            egui::RichText::new(tl!("No notebooks yet. Insert › New Notebook starts one, or Add and Open Notebook opens one.")).weak(),
-        );
+        ui.label(egui::RichText::new(tl!("No notebooks yet. Data › New Notebook starts one, or Add and Open Notebook opens one.")).weak());
         if ui.button(tl!("New Notebook")).clicked() {
             run(app, "notebook.new", Value::Null);
         }
@@ -371,12 +369,14 @@ pub fn notebook(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     });
 }
 
-/// Shared items (Share › Status › Jobs) with their Manage tools, and the data stores.
+/// Shared items (Publish › Status › Jobs) with their Manage tools, and the data stores.
 pub fn shares(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     message(app, ui, t);
     let items = app.session.project.shared.clone();
     if items.is_empty() {
-        ui.label(egui::RichText::new(tl!("Nothing shared yet. Share › Share As makes web maps, layers, styles, scenes and more.")).weak());
+        ui.label(
+            egui::RichText::new(tl!("Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.")).weak(),
+        );
     }
     for it in items.iter().rev() {
         egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t.border)).corner_radius(4).inner_margin(egui::Margin::same(6)).show(ui, |ui| {

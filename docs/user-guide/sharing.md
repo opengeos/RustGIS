@@ -2,12 +2,12 @@
 
 ## Exporting
 
-**Share › Output › Export Map** writes the map view as a PNG at any DPI, with labels, the scale
+**Publish › Output › Export Map** writes the map view as a PNG at any DPI, with labels, the scale
 bar and tile credits (`share.exportMap` on the command line); **Print Map** sends it through
 the system's PDF viewer, **Capture To Clipboard** copies it, and **Export To 3D** writes a layer
 as a Wavefront OBJ model with polygons extruded by a field. **Data › Export** (or the Export
 Features tool) writes a layer to GeoJSON, CSV, GeoPackage, GeoParquet, Shapefile, FlatGeobuf, KML,
-KMZ or GPX (see [Writing](data-formats.md#writing)), **Raster Data › Export** a raster to GeoTIFF, and
+KMZ or GPX (see [Writing](data-formats.md#writing)), **Data › Export** a raster to GeoTIFF, and
 **Data Interop** converts layers to KML, GPX or CSV with WKT. Layouts, reports and presentations
 export to PDF from their own tabs and panes (see [Layouts and Reports](layouts.md)).
 
@@ -15,8 +15,8 @@ Packages and project item files are described under [Data › Project items](dat
 
 ## Sharing as open formats
 
-**Share › Share As** writes open-format files that work without a server, to a chosen file or the
-first **data store** (a folder registered under **Share › Manage › Data Stores**):
+**Publish › Share As** writes open-format files that work without a server, to a chosen file or the
+first **data store** (a folder registered under **Publish › Manage › Data Stores**):
 
 - **Web Map**: a self-contained HTML page with the map's layers (rasters as images), pan and zoom,
   a layer list and pop-ups.

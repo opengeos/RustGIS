@@ -1,5 +1,5 @@
-//! Insert › Project (New Layout, Import Layout), Insert › Map Frames, Map Surrounds and Text, and
-//! Share › Output (Export Layout) and Save As (Layout File): page layouts.
+//! Data › Project (New Layout, Import Layout), Publish › Map Frames, Map Surrounds and Text, and
+//! Publish › Output (Export Layout) and Save As (Layout File): page layouts.
 
 use std::path::Path;
 
@@ -21,7 +21,7 @@ const MAX_LAYOUT: u64 = 64 << 20;
 
 pub fn commands() -> Vec<C> {
     vec![
-        C::new("layout.new", "New Layout", "Insert › Project", new_layout).params(
+        C::new("layout.new", "New Layout", "Data › Project", new_layout).params(
             r#"{"name"?: string, "page"?: "letter"|"legal"|"tabloid"|"a5"|"a4"|"a3"|"a2"|"a1"|"a0", "orientation"?: "landscape"|"portrait", "width"?: mm, "height"?: mm, "template"?: "map" (frame, title, legend, north arrow, scale bar; the default)|"blank"}"#,
         ),
         C::new("layout.activate", "Open Layout", "Catalog", |s, p| {
@@ -61,37 +61,37 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"name": unique}))
         })
         .params(r#"{"name"?: string, "newName": string}"#),
-        C::new("layout.page", "Page Size", "Layout › Page Setup", page).params(
+        C::new("layout.page", "Page Size", "Publish › Page Setup", page).params(
             r#"{"layout"?, "page"?: page id, "orientation"?: "landscape"|"portrait", "width"?: mm, "height"?: mm}"#,
         ),
-        C::new("layout.addFrame", "Map Frame", "Insert › Map Frames", add_frame).params(
+        C::new("layout.addFrame", "Map Frame", "Publish › Map Frames", add_frame).params(
             r#"{"layout"?, "shape"?: "rectangle"|"circle"|"ellipse"|"polygon"|"lasso", "points"?: [[u, v], …] (polygon/lasso, 0..1 across the frame), "map"?: name, "x"?, "y"?, "w"?, "h"?: mm}"#,
         ),
-        C::new("layout.addElement", "Add Element", "Insert › Map Surrounds", add_element).params(
+        C::new("layout.addElement", "Add Element", "Publish › Map Surrounds", add_element).params(
             r##"{"layout"?, "kind": "northArrow"|"scaleBar"|"legend"|"text"|"dynamicText"|"picture"|"table"|"chart"|"rectangle"|"extentIndicator"|"grid", "frame"?: element id (default: the first map frame), "of"?: frame id (extentIndicator), "text"?, "size"?, "color"?: "#RRGGBB", "image"?: base64, "path"?: picture file, "layer"?, "field"?, "label"?, "rows"?, "step"?: degrees (grid), "x"?, "y"?, "w"?, "h"?: mm}"##,
         ),
-        C::new("layout.update", "Element Properties", "Layout › Element", update).params(
+        C::new("layout.update", "Element Properties", "Publish › Element", update).params(
             r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "text"?, "size"?, "color"?, "bold"?, "title"?, "map"?, "scale"?, "center"?: [lon, lat], "layer"?, "field"?, "rows"?}"##,
         ),
-        C::new("layout.removeElement", "Delete Element", "Layout › Element", |s, p| {
+        C::new("layout.removeElement", "Delete Element", "Publish › Element", |s, p| {
             let id = element_id(p)?;
             let l = active(s, p)?;
             if l.remove(id) { Ok(Value::Null) } else { Err(format!("no element {id}")) }
         })
         .params(r#"{"layout"?, "element": id}"#),
-        C::new("layout.frameZoom", "Zoom Frame", "Layout › Map Frame", frame_zoom).params(
+        C::new("layout.frameZoom", "Zoom Frame", "Publish › Map Frame", frame_zoom).params(
             r#"{"layout"?, "element"?: frame id, "to"?: "view" (the map view's extent, the default)|"full"|"selection"|"layer", "layer"?}"#,
         ),
-        C::new("layout.series", "Map Series", "Insert › Map Frames", series).params(
+        C::new("layout.series", "Map Series", "Publish › Map Frames", series).params(
             r#"{"layout"?, "layer": index layer, "nameField"?: string, "frame"?: id, "margin"?: 0..1, "off"?: bool}"#,
         ),
-        C::new("layout.seriesPage", "Map Series Page", "Insert › Map Frames", series_page).params(r#"{"layout"?, "page": number|"next"|"previous"}"#),
-        C::new("layout.seriesRefresh", "Refresh Map Series", "Insert › Map Frames", |s, p| series_page(s, &json!({"layout": p.get("layout"), "page": "current"})))
+        C::new("layout.seriesPage", "Map Series Page", "Publish › Map Frames", series_page).params(r#"{"layout"?, "page": number|"next"|"previous"}"#),
+        C::new("layout.seriesRefresh", "Refresh Map Series", "Publish › Map Frames", |s, p| series_page(s, &json!({"layout": p.get("layout"), "page": "current"})))
             .params(r#"{"layout"?}"#),
-        C::new("layout.export", "Export Layout", "Share › Output", export)
+        C::new("layout.export", "Export Layout", "Publish › Output", export)
             .view()
             .params(r#"{"layout"?, "path": "*.png|*.pdf", "dpi"?: 72..600, "allPages"?: bool (default true: every map series page, up to 500; false: the current page; PDF)}"#),
-        C::new("layout.save", "Save Layout File", "Share › Save As", |s, p| {
+        C::new("layout.save", "Save Layout File", "Publish › Save As", |s, p| {
             let path = ps(p, "path").ok_or("path is required")?;
             let l = active(s, p)?.clone();
             let text = serde_json::to_string_pretty(&l).map_err(|e| e.to_string())?;
@@ -100,7 +100,7 @@ pub fn commands() -> Vec<C> {
         })
         .view()
         .params(r#"{"layout"?, "path": "*.rgislayout"}"#),
-        C::new("layout.import", "Import Layout", "Insert › Project", |s, p| {
+        C::new("layout.import", "Import Layout", "Data › Project", |s, p| {
             let text = match (ps(p, "text"), ps(p, "path")) {
                 (Some(t), _) => t.to_string(),
                 (None, Some(path)) => {

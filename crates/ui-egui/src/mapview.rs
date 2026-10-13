@@ -1372,7 +1372,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         );
         if resp.clicked() && !is {
             let _ = app.run("layout.activate", json!({"name": n}));
-            app.ui.tab = "Layout".into();
+            app.ui.tab = "Publish".into();
         }
         x += w + 2.0;
     }
