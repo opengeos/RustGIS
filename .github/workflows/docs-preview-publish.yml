@@ -19,6 +19,8 @@
 # A fork's site is unreviewed HTML and JavaScript, so it is published only when the run was started
 # by someone with write access: a maintainer who added the `preview` label or re-ran the
 # docs-preview workflow. The label is then taken off, so every new commit needs a new approval.
+# A maintainer's own push to a fork's branch (a maintainer edit) starts the run, so it counts as
+# their approval.
 # Same-repository pull requests come from people with write access and publish on every push.
 name: docs-preview-publish
 
@@ -86,8 +88,12 @@ jobs:
             echo "::error::The build named no valid pull request number."
             exit 1
           fi
-          read -r state sha repo < <(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" \
-            --jq '[.state, .head.sha, (.head.repo.full_name // "")] | @tsv')
+          # Captured first so a failing call fails the step (`read < <(…)` would hide it).
+          info=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" \
+            --jq '[.state, .head.sha, (.head.repo.full_name // "-")] | @tsv')
+          IFS=$'\t' read -r state sha repo <<< "$info"
+          # A deleted fork has no head repository; the head commit must still match.
+          [ "$repo" = - ] && repo="$RUN_REPO"
           if [ "$sha" != "$RUN_SHA" ] || [ "$repo" != "$RUN_REPO" ]; then
             echo "Pull request #${pr} is now at ${sha:0:7} (${repo}); the build was ${RUN_SHA:0:7} (${RUN_REPO}). Nothing to publish."
             echo "mode=skip" >> "$GITHUB_OUTPUT"
@@ -98,8 +104,18 @@ jobs:
           if [ "$state" = open ] && [ "$HAS_SITE" = true ]; then
             mode=deploy
             if [ "$fork" = true ]; then
-              permission=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${STARTED_BY}/permission" \
-                --jq '.permission' 2>/dev/null || echo none)
+              # Someone who isn't a collaborator is a 404; any other failure fails the step
+              # rather than passing for "not approved".
+              if ! permission=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${STARTED_BY}/permission" \
+                --jq '.permission' 2> permission.err); then
+                if grep -q 'HTTP 404' permission.err; then
+                  permission=none
+                else
+                  cat permission.err >&2
+                  echo "::error::Could not look up ${STARTED_BY}'s permission."
+                  exit 1
+                fi
+              fi
               case "$permission" in
                 admin | maintain | write) echo "Fork preview approved by ${STARTED_BY}." ;;
                 *)
