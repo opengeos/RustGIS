@@ -13,7 +13,8 @@ Many features are first versions: there are no full 3D scenes or enterprise port
   reads when it is installed, and SQL queries and DuckDB databases (DuckDB Spatial) when DuckDB
   is; GeoJSON, CSV, GeoPackage, GeoParquet, Shapefile, FlatGeobuf, KML/KMZ, GPX and WKT out;
   standalone tables; layer, map, style, template, task and package files.
-- Rasters: GeoTIFF/COG and ASCII grids, EPSG reprojection, stretch/RGB/classified/shaded-relief
+- Rasters: GeoTIFF/COG and ASCII grids (and JPEG 2000, NetCDF, HDF, ERDAS Imagine… through GDAL),
+  EPSG reprojection, stretch/RGB/classified/shaded-relief
   symbology, raster functions, indices, change detection, classification, georeferencing.
 - Maps: multiple maps, a 3D globe, projection presets and EPSG codes, bookmarks, web tile
   layers (XYZ/TMS/WMS, Mapbox Vector Tiles, MapLibre styles, PMTiles and MBTiles archives),

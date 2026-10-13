@@ -146,6 +146,31 @@ pub fn add_path(s: &mut Session, path: &str, name: Option<&str>) -> CmdResult {
     add_raster(s, &name, RasterLayer::from_path(r, full))
 }
 
+/// Adds a raster GDAL reads (converted once to a GeoTIFF in the cache): `"layer"` picks a
+/// subdataset (a NetCDF variable) and `"crs"` gives a coordinate system the file doesn't say.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn add_gdal_path(s: &mut Session, p: &Value, path: &str) -> CmdResult {
+    use rustgis_data::raster::gdal;
+    let text = |k: &str| ps(p, k).map(str::trim).filter(|v| !v.is_empty());
+    let c = gdal::convert(Path::new(path), text("layer"), text("crs")).map_err(|e| format!("{path}: {e}"))?;
+    let r = raster::read_converted(Path::new(path), &c).map_err(|e| format!("{path}: {e}"))?;
+    if c.assumed_lonlat {
+        s.notify(format!("{path} doesn't say its coordinate system; its coordinates look like longitude/latitude, so it's read as WGS 84 (give \"crs\" if not)"), false);
+    }
+    if !c.others.is_empty() {
+        let shown: Vec<&str> = c.others.iter().take(20).map(String::as_str).collect();
+        s.notify(format!("{path} has more variables ({}): add one with \"layer\"", shown.join(", ")), false);
+    }
+    let name = text("name").map(str::to_string).unwrap_or_else(|| r.name.clone());
+    // A project names the file itself, with the subdataset and coordinate system chosen, and
+    // converts it again (from the cache, while it is there) when it opens.
+    let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
+    let mut rl = RasterLayer::from_path(r, full);
+    rl.subdataset = c.subdataset.clone();
+    rl.crs = text("crs").map(str::to_string);
+    add_raster(s, &name, rl)
+}
+
 fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
     use base64::Engine;
     let name = ps(p, "fileName").ok_or("fileName is required")?.to_string();

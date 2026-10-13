@@ -271,6 +271,10 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::raster::is_raster_name(path) {
         return super::raster::add_path(s, path, ps(p, "name").map(str::trim).filter(|n| !n.is_empty()));
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if rustgis_data::raster::gdal::is_gdal_raster_name(path) {
+        return super::raster::add_gdal_path(s, p, path);
+    }
     if path.to_ascii_lowercase().ends_with(".rgislyr") {
         return add_layer_file(s, path);
     }

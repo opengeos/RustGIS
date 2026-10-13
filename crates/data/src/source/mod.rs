@@ -10,7 +10,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod duckdb;
 #[cfg(not(target_arch = "wasm32"))]
-mod external;
+pub(crate) mod external;
 pub mod fgb;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gdal;

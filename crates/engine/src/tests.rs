@@ -2813,6 +2813,36 @@ fn spreadsheets_feeds_landxml_and_polylines() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A raster GDAL reads, added with a coordinate system: the project names the file and the
+/// choice, and opens it again after the conversion cache is cleared. (Runs where GDAL is.)
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn gdal_rasters_reopen_with_their_choices() {
+    // Found as the app finds it (the PATH, or RUSTGIS_GDAL_BIN).
+    let Some(translate) = rustgis_data::source::gdal::program("gdal_translate") else { return };
+    let dir = std::env::temp_dir().join(format!("rustgis-gdal-reopen-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let asc = dir.join("g.asc");
+    // UTM 33N coordinates and no .prj: the file doesn't say its system.
+    std::fs::write(&asc, "ncols 2\nnrows 2\nxllcorner 500000\nyllcorner 4649776\ncellsize 100\n1 2\n3 4\n").unwrap();
+    let img = dir.join("g.img");
+    if !std::process::Command::new(&translate).args(["-q", "-of", "HFA"]).arg(&asc).arg(&img).status().is_ok_and(|s| s.success()) {
+        return;
+    }
+    let mut s = Session::new(Project::default());
+    let p = img.display().to_string();
+    assert!(s.run("layer.addData", &json!({"path": p})).is_err(), "no coordinate system, not lon/lat");
+    s.run("layer.addData", &json!({"path": p, "crs": "EPSG:32633"})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(text.contains("\"crs\":\"EPSG:32633\""), "the choice is saved");
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let l = t.map().layers.iter().find(|l| l.is_raster()).unwrap();
+    assert!(l.raster.as_ref().is_some_and(|r| r.data.is_some()), "read again from the file");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn pmtiles_from_network_shares_are_refused() {
     let mut s = Session::new(Project::default());

@@ -6,6 +6,8 @@
 
 pub mod ascii;
 pub mod crs;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod gdal;
 pub mod geotiff;
 pub mod wkt;
 
@@ -374,8 +376,38 @@ pub fn read_path(path: &Path) -> Result<Raster> {
             let text = std::fs::read_to_string(path)?;
             ascii::read(&text, &name, sidecar_crs(path))?
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        _ if gdal::is_gdal_raster_name(&path.to_string_lossy()) => {
+            // Converted once to a GeoTIFF in the cache; the layer still names this file.
+            return read_converted(path, &gdal::convert(path, None, None)?);
+        }
         other => return Err(DataError::Unsupported(format!(".{other}"))),
     };
+    r.source = Some(path.display().to_string());
+    Ok(r)
+}
+
+/// Reads a raster file, with the GDAL choices a raster GDAL reads may have been added with: its
+/// subdataset (a NetCDF variable) and the coordinate system it doesn't say. Other files ignore
+/// them.
+pub fn read_path_with(path: &Path, subdataset: Option<&str>, crs: Option<&str>) -> Result<Raster> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if (subdataset.is_some() || crs.is_some()) && gdal::is_gdal_raster_name(&path.to_string_lossy()) {
+        return read_converted(path, &gdal::convert(path, subdataset, crs)?);
+    }
+    let _ = (subdataset, crs);
+    read_path(path)
+}
+
+/// Reads the GeoTIFF GDAL converted `path` to, named and sourced as `path` (and its subdataset).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_converted(path: &Path, c: &gdal::Converted) -> Result<Raster> {
+    let f = std::fs::File::open(&c.path)?;
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("raster");
+    let mut r = geotiff::read(std::io::BufReader::new(f), stem)?;
+    if let Some(s) = &c.subdataset {
+        r.name = format!("{stem} {}", gdal::short_name(s));
+    }
     r.source = Some(path.display().to_string());
     Ok(r)
 }
