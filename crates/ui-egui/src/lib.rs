@@ -1838,6 +1838,9 @@ impl RustGisApp {
         self.poll_downloads();
         sqlpane::poll(self, ctx);
         self.poll_service();
+        // Sources the AI Assistant or a background add brought in (not through `run`) are kept
+        // too: a generation compared each frame.
+        sourcespane::save(self);
         stacui::poll(self, ctx);
         s3ui::poll(self, ctx);
         portalsui::poll(self, ctx);

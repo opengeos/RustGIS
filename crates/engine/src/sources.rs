@@ -101,11 +101,15 @@ impl Sources {
     pub fn keep(&mut self, list: &str, s: Source) -> Result<(), String> {
         let s = clean(s)?;
         let l = self.list_mut(list)?;
-        l.retain(|r| !same(r, &s));
-        if l.len() >= MAX_KEPT {
-            return Err(format!("up to {MAX_KEPT} sources in {list}"));
+        // The same source keeps its place.
+        if let Some(slot) = l.iter_mut().find(|r| same(r, &s)) {
+            *slot = s;
+        } else {
+            if l.len() >= MAX_KEPT {
+                return Err(format!("up to {MAX_KEPT} sources in {list}"));
+            }
+            l.push(s);
         }
-        l.push(s);
         self.generation += 1;
         Ok(())
     }
@@ -180,45 +184,50 @@ pub fn default_name(address: &str) -> String {
     if n.is_empty() { address.chars().take(80).collect() } else { n }
 }
 
-/// Whether a query or object key names a secret.
+/// Whether a query or `extra` key names a secret, wherever it is: an exact list (case aside),
+/// and any key naming a password, secret or token. Short keys that are ordinary elsewhere (an
+/// ArcGIS or WMS `sr`, an OAuth `code`) are judged with the rest of the query ([`secret_in`]).
 fn secret_key(k: &str) -> bool {
     let k = k.to_ascii_lowercase();
     matches!(
         k.as_str(),
-        "password"
-            | "pass"
-            | "passwd"
-            | "pwd"
-            | "secret"
-            | "token"
+        "token"
             | "access_token"
+            | "id_token"
+            | "refresh_token"
             | "api_key"
             | "apikey"
+            | "api-key"
+            | "x-api-key"
             | "key"
+            | "access_key"
+            | "accesskey"
+            | "secret"
+            | "client_secret"
+            | "password"
+            | "passwd"
+            | "pwd"
             | "sig"
             | "signature"
-            | "se"
-            | "sp"
-            | "sv"
-            | "sr"
-            | "st"
-            | "spr"
-            | "skoid"
-            | "sktid"
-            | "skt"
-            | "ske"
-            | "sks"
-            | "skv"
-            | "code"
-            | "auth"
-            | "authorization"
-            | "secretaccesskey"
-            | "sessiontoken"
+            | "sas"
     ) || k.starts_with("x-amz-")
         || k.starts_with("x-goog-")
         || k.contains("password")
         || k.contains("secret")
         || k.contains("token")
+}
+
+/// The query keys of an Azure shared access signature, a secret only in one (a query with both
+/// `sig` and `sv`).
+const SAS_KEYS: &[&str] =
+    &["sv", "se", "sp", "sr", "st", "spr", "sip", "si", "ss", "srt", "skoid", "sktid", "skt", "ske", "sks", "skv", "sdd"];
+
+/// Whether query key `k` is a secret in a query holding `keys` (lower-cased): [`secret_key`], an
+/// Azure SAS's fields in a SAS, and an OAuth redirect's `code` (with its `state`).
+fn secret_in(k: &str, keys: &[String]) -> bool {
+    let k = k.to_ascii_lowercase();
+    let has = |x: &str| keys.iter().any(|q| q == x);
+    secret_key(&k) || (has("sig") && has("sv") && SAS_KEYS.contains(&k.as_str())) || (k == "code" && has("state"))
 }
 
 /// An address without what would give someone else the user's access: the user and password of
@@ -233,6 +242,18 @@ pub fn redact(address: &str) -> String {
         return rustgis_data::source::pgconn::public_label(address).unwrap_or_default();
     }
     let Some((scheme, rest)) = address.split_once("://") else { return address.to_string() };
+    // The user and password go first, before anything splits the address: a password may hold
+    // an unencoded `/`, `?`, `#` or `@`. They end at the last `@` before the first `/`, or (a `/`
+    // in the password) at the last `@` with a `:` before it.
+    let first_slash = rest.find('/').unwrap_or(rest.len());
+    let cut = rest
+        .get(..first_slash)
+        .and_then(|a| a.rfind('@'))
+        .or_else(|| rest.rfind('@').filter(|&i| rest.get(..i).is_some_and(|u| u.contains(':'))));
+    let rest = match cut {
+        Some(i) => rest.get(i + 1..).unwrap_or(""),
+        None => rest,
+    };
     // The fragment never: OAuth and SAS-style links carry tokens there, and nothing that adds a
     // source needs it.
     let rest = rest.split('#').next().unwrap_or(rest);
@@ -240,25 +261,11 @@ pub fn redact(address: &str) -> String {
         Some((b, q)) => (b, Some(q)),
         None => (rest, None),
     };
-    let end = before_query.find('/').unwrap_or(before_query.len());
-    let (authority, path) = before_query.split_at(end);
-    // The user stays (a database's role), the password goes.
-    let authority = match authority.rsplit_once('@') {
-        Some((userinfo, host)) => match userinfo.split_once(':') {
-            Some((user, _)) => format!("{user}@{host}"),
-            None => format!("{userinfo}@{host}"),
-        },
-        None => authority.to_string(),
-    };
-    let mut out = format!("{scheme}://{authority}{path}");
+    let mut out = format!("{scheme}://{before_query}");
     if let Some(q) = query {
-        let kept: Vec<&str> = q
-            .split('&')
-            .filter(|kv| {
-                let k = kv.split_once('=').map(|(k, _)| k).unwrap_or(kv);
-                !kv.is_empty() && !secret_key(k)
-            })
-            .collect();
+        let key = |kv: &str| kv.split_once('=').map(|(k, _)| k).unwrap_or(kv).to_ascii_lowercase();
+        let keys: Vec<String> = q.split('&').map(key).collect();
+        let kept: Vec<&str> = q.split('&').filter(|kv| !kv.is_empty() && !secret_in(&key(kv), &keys)).collect();
         if !kept.is_empty() {
             out.push('?');
             out.push_str(&kept.join("&"));
@@ -432,6 +439,12 @@ mod tests {
         // The same kind and address: one entry, with the last one's extra.
         assert_eq!(s.saved.len(), 1);
         assert_eq!(s.saved[0].extra, json!({"type": "wms", "layer": "roads"}));
+        // Saved again, a source keeps its place in the list.
+        s.keep("saved", Source { kind: "file".into(), address: "/z.gpkg".into(), ..Source::default() }).unwrap();
+        s.keep("saved", svc(json!({"type": "wmts"}))).unwrap();
+        assert_eq!(s.saved[0].address, "https://h/wms");
+        assert_eq!(s.saved[0].extra, json!({"type": "wmts"}));
+        assert!(s.forget("saved", "file", "/z.gpkg").unwrap());
         // Another kind at the same address is another source.
         s.keep("saved", Source { kind: "url".into(), address: "https://h/wms".into(), ..Source::default() }).unwrap();
         assert_eq!(s.saved.len(), 2);
@@ -445,7 +458,34 @@ mod tests {
 
     #[test]
     fn secrets_are_never_kept() {
-        assert_eq!(redact("https://me:pw@host.example/a?token=abc&layer=x&X-Amz-Signature=1#k"), "https://me@host.example/a?layer=x");
+        assert_eq!(redact("https://me:pw@host.example/a?token=abc&layer=x&X-Amz-Signature=1#k"), "https://host.example/a?layer=x");
+        // The user and password go, whatever the password holds (an unencoded `?`, `/`, `#`, `@`).
+        for (given, kept) in [
+            ("https://u:p?w@host.example/x", "https://host.example/x"),
+            ("https://u:p/w@host.example/x", "https://host.example/x"),
+            ("https://u:p#w@host.example/x", "https://host.example/x"),
+            ("https://u:p@w@host.example/x", "https://host.example/x"),
+            ("https://u@host.example/x", "https://host.example/x"),
+            ("https://host.example/@user/x", "https://host.example/@user/x"),
+        ] {
+            assert_eq!(redact(given), kept, "{given}");
+        }
+        // Short keys are secrets only where they are: an ArcGIS `sr` and a WMS `code` stay; an Azure
+        // SAS's fields and an OAuth redirect's code go.
+        assert_eq!(
+            redact("https://h/arcgis/rest/services/x/MapServer/export?bbox=1&sr=3857&f=image"),
+            "https://h/arcgis/rest/services/x/MapServer/export?bbox=1&sr=3857&f=image"
+        );
+        assert_eq!(redact("https://h/wms?service=WMS&code=EPSG:4326"), "https://h/wms?service=WMS&code=EPSG:4326");
+        assert_eq!(
+            redact("https://a.blob.core.windows.net/c/x.tif?sv=2024&sr=b&sp=r&se=2026&sig=abc&layer=1"),
+            "https://a.blob.core.windows.net/c/x.tif?layer=1"
+        );
+        assert_eq!(redact("https://h/cb?code=xyz&state=s&tile=1"), "https://h/cb?state=s&tile=1");
+        for k in ["Refresh_Token", "x-api-key", "API-KEY", "client_secret", "accessKey", "X-Amz-Credential", "x-amz-security-token", "pwd"]
+        {
+            assert_eq!(redact(&format!("https://h/x?{k}=v&a=1")), "https://h/x?a=1", "{k}");
+        }
         // A fragment is never kept (OAuth and SAS-style links put tokens there).
         for f in ["#Access_Token=t", "#sig=s", "#password=p", "#id_token=i", "#map=4/1/2"] {
             assert_eq!(redact(&format!("https://h.example/x.fgb{f}")), "https://h.example/x.fgb", "{f}");

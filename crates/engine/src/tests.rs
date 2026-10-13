@@ -3981,7 +3981,7 @@ fn data_sources_recent_favourites_and_saved() {
     // Favourites and saved services, kept without their secrets.
     s.run("sources.favourite", &json!({"kind": "file", "address": p})).unwrap();
     let r = s.run("sources.save", &json!({"kind": "service", "address": "https://me:pw@gis.example/wms?token=abc&map=m", "name": "My WMS", "extra": {"type": "wms", "password": "x"}})).unwrap();
-    assert_eq!(r["address"], "https://me@gis.example/wms?map=m");
+    assert_eq!(r["address"], "https://gis.example/wms?map=m");
     s.run("sources.save", &json!({"kind": "database", "address": "postgres:host=h dbname=g user=u password=secret"})).unwrap();
     let text = s.sources.to_json();
     for secret in ["pw", "abc", "secret", "\"x\""] {
@@ -3993,7 +3993,7 @@ fn data_sources_recent_favourites_and_saved() {
     // Removed by list, kind and address; an unknown one is an error.
     s.run("sources.favourite", &json!({"kind": "file", "address": p, "on": false})).unwrap();
     assert!(s.sources.favourites.is_empty());
-    s.run("sources.remove", &json!({"list": "saved", "kind": "service", "address": "https://me@gis.example/wms?map=m"})).unwrap();
+    s.run("sources.remove", &json!({"list": "saved", "kind": "service", "address": "https://gis.example/wms?map=m"})).unwrap();
     assert_eq!(s.sources.saved.len(), 1);
     for bad in [
         json!({"list": "saved", "kind": "service", "address": "https://nowhere"}),
