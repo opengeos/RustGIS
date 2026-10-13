@@ -57,7 +57,8 @@ impl Spec {
             self.tile_size,
             self.tms,
             self.attribution,
-            self.layers.join(",")
+            // Each name with its length, so ["a,b"] and ["a", "b"] differ.
+            self.layers.iter().map(|l| format!("{}:{l}", l.len())).collect::<String>()
         )
     }
 }
@@ -374,9 +375,15 @@ fn archive_style(spec: &Spec, info: Archive) -> Option<Value> {
         *doc.get_mut("sources")?.get_mut("vector")? = source;
         return Some(doc);
     }
+    Some(named_layers_style(spec, source, &names))
+}
+
+/// Each named vector layer in a colour of its own (an archive's that isn't a basemap, or the
+/// layers a service named).
+fn named_layers_style(spec: &Spec, source: Value, names: &[String]) -> Value {
     const COLOURS: [&str; 8] = ["#e6550d", "#3182bd", "#31a354", "#756bb1", "#d6616b", "#8c6d31", "#17becf", "#bcbd22"];
     let mut layers = Vec::new();
-    // Each archive starts the palette somewhere of its own, so two archives look apart.
+    // Each source starts the palette somewhere of its own, so two of them look apart.
     let start = spec.url.bytes().fold(0usize, |h, b| h.wrapping_mul(31).wrapping_add(usize::from(b)));
     for (i, name) in names.iter().take(64).enumerate() {
         let c = COLOURS.get(start.wrapping_add(i) % COLOURS.len()).copied().unwrap_or("#3182bd");
@@ -387,21 +394,17 @@ fn archive_style(spec: &Spec, info: Archive) -> Option<Value> {
         layers.push(json!({"id": format!("{name}-point"), "type": "circle", "source": "vector", "source-layer": name,
             "filter": ["==", "$type", "Point"], "paint": {"circle-color": c, "circle-radius": 3, "circle-stroke-color": "#ffffff", "circle-stroke-width": 1}}));
     }
-    Some(json!({"version": 8, "sources": {"vector": source}, "layers": layers}))
+    json!({"version": 8, "sources": {"vector": source}, "layers": layers})
 }
 
 fn vector_style(spec: &Spec) -> Option<Value> {
     // Layers the service named: each in a colour of its own.
+    // They keep their own colours even when their names are a basemap's (the archive guess), and
+    // the template's options (`tms`, `{s}`) apply as for any template.
     if !spec.layers.is_empty() && spec.url.contains("{z}") {
-        let archive = Archive {
-            tiles: spec.url.clone(),
-            vector: true,
-            min_zoom: spec.min_zoom,
-            max_zoom: spec.max_zoom,
-            attribution: spec.attribution.clone(),
-            layers: spec.layers.iter().take(64).cloned().collect(),
-        };
-        return archive_style(spec, archive);
+        let source = json!({"type": "vector", "tiles": templates(spec), "minzoom": spec.min_zoom, "maxzoom": spec.max_zoom, "attribution": spec.attribution});
+        let names: Vec<String> = spec.layers.iter().take(64).cloned().collect();
+        return Some(named_layers_style(spec, source, &names));
     }
     let mut doc: Value = serde_json::from_str(DEFAULT_STYLE).ok()?;
     let source = if spec.url.contains("{z}") {
@@ -469,6 +472,29 @@ mod tests {
         named.layers = vec!["vineyards".into()];
         let Resolve::Ready(v) = resolve(&named) else { panic!("not ready") };
         assert_eq!(v.style.layers.len(), 3, "fill, line and point of the one layer");
+        // Named layers keep their own colours even when the names are a basemap's, and the
+        // template's options apply (TMS rows, subdomains).
+        let mut basemapish = spec(Kind::Vector, "https://{s}.tiles.example.com/osm/{z}/{y}/{x}.pbf");
+        basemapish.layers = vec!["water".into(), "roads".into(), "buildings".into()];
+        basemapish.tms = true;
+        let Resolve::Ready(v) = resolve(&basemapish) else { panic!("not ready") };
+        assert_eq!(v.style.layers.len(), 9, "three named layers, not the basemap style");
+        match v.style.sources.first().map(|s| &s.1) {
+            Some(Source::Vector { tiles, .. }) => {
+                assert_eq!(tiles.len(), 3);
+                assert!(tiles.iter().all(|t| t.contains("{-y}") && !t.contains("{s}")), "{tiles:?}");
+            }
+            _ => panic!("no vector source"),
+        }
+    }
+
+    #[test]
+    fn layer_lists_key_apart() {
+        let mut one = spec(Kind::Vector, "https://t.example.com/{z}/{x}/{y}.pbf");
+        one.layers = vec!["a,b".into()];
+        let mut two = one.clone();
+        two.layers = vec!["a".into(), "b".into()];
+        assert_ne!(one.key(), two.key());
     }
 
     #[test]

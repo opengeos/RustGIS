@@ -2987,6 +2987,20 @@ fn services_list_and_add_layers() {
     let e = s.map().layer_by_name("Wells").unwrap().extent();
     assert!((e.min_x - 10.0).abs() < 1e-9 && (e.min_y - 50.0).abs() < 1e-9, "{e:?}");
     assert!(s.notices.iter().any(|n| n.text.contains("1 of its 9 features")));
+    // An OGC API layer added with its tileset's advertised template (the app reads it first); a
+    // given template that isn't one, or points inward, is refused.
+    let tiled = r#"{"collections": [{"id": "relief", "links": [{"rel": "tilesets-map", "href": "https://x.org/relief/map/tiles"}]}]}"#;
+    let api = "https://x.org/collections";
+    let r = s
+        .run(
+            "service.add",
+            &json!({"url": api, "layer": "relief (map tiles)", "text": tiled, "tiles": "https://x.org/relief/map/tiles/smerc/{z}/{y}/{x}.png"}),
+        )
+        .unwrap();
+    assert!(s.map().tiles.iter().any(|t| t.url == "https://x.org/relief/map/tiles/smerc/{z}/{y}/{x}.png"), "{r}");
+    for bad in ["https://x.org/relief.png", "http://169.254.169.254/{z}/{x}/{y}", "http://127.0.0.1/{z}/{x}/{y}"] {
+        assert!(s.run("service.add", &json!({"url": api, "layer": "relief (map tiles)", "text": tiled, "tiles": bad})).is_err(), "{bad}");
+    }
 }
 
 /// A KMZ's ground overlays become raster layers kept in the project; a KML whose picture is a web

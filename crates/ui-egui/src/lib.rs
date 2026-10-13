@@ -153,6 +153,34 @@ pub struct ServiceConn {
     /// What `service.layers` made of it.
     pub listing: Option<Value>,
     pub error: Option<String>,
+    /// An OGC API layer whose advertised tile template is being read before it is added.
+    pub resolving: Option<TilesResolve>,
+}
+
+/// Reading an OGC API layer's tile template from its tileset list (and tileset), off the frame.
+pub struct TilesResolve {
+    /// `service.add`'s parameters, given the template as `"tiles"` once read.
+    pub params: Value,
+    /// The tileset list, whose query the template keeps; the document being read; how many have
+    /// been.
+    pub list: String,
+    pub doc: String,
+    pub read: u8,
+    pub vector: bool,
+    /// The usual-path template, when the advertised one can't be read.
+    pub fallback: String,
+    pub slot: Slot<Result<Vec<u8>, String>>,
+}
+
+/// Fetches an address into a slot, off the frame.
+pub(crate) fn fetch_into(url: &str) -> Slot<Result<Vec<u8>, String>> {
+    let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
+    let land = slot.clone();
+    rustgis_engine::render::rustgis_tiles::cache::download(
+        url,
+        Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
+    );
+    slot
 }
 
 /// Panes on the left of the map.
@@ -1036,7 +1064,8 @@ impl RustGisApp {
                 );
                 // The dialog shows the address connected to, however the connection was asked for.
                 self.dialogs.text = url.to_string();
-                self.ui.service = Some(ServiceConn { url: url.to_string(), kind, slot, text: None, listing: None, error: None });
+                self.ui.service =
+                    Some(ServiceConn { url: url.to_string(), kind, slot, text: None, listing: None, error: None, resolving: None });
             }
             "ui.addData" => {
                 if let Some(open) = &self.services.open_async {
@@ -1695,8 +1724,38 @@ impl RustGisApp {
         }
     }
 
+    /// Moves an OGC API layer's template reading along: the list, then the tileset when the list
+    /// doesn't carry the template; the layer is added with the template read, or the usual path.
+    fn poll_tiles_resolve(&mut self) {
+        use rustgis_engine::data::ogc::{TilesStep, resolve_tiles};
+        let Some(conn) = &mut self.ui.service else { return };
+        let Some(res) = &mut conn.resolving else { return };
+        let Some(r) = res.slot.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+        let step = r.ok().and_then(|body| resolve_tiles(&res.list, &res.doc, &body, res.vector));
+        let template = match step {
+            Some(TilesStep::Next(next)) if res.read < 2 => {
+                res.read += 1;
+                res.doc = next.clone();
+                res.slot = fetch_into(&next);
+                return;
+            }
+            Some(TilesStep::Template(t)) => t,
+            _ => res.fallback.clone(),
+        };
+        let Some(res) = conn.resolving.take() else { return };
+        let mut p = res.params;
+        p["tiles"] = json!(template);
+        let title = p["name"].as_str().unwrap_or("").to_string();
+        match self.run("service.add", p) {
+            Ok(_) => self.dialogs.info = Some(format!("{} {title}", tl!("Added"))),
+            Err(e) => self.dialogs.error = Some(e),
+        }
+        self.map.invalidate();
+    }
+
     /// Lists a service's layers once its capabilities have arrived.
     fn poll_service(&mut self) {
+        self.poll_tiles_resolve();
         let Some(conn) = &mut self.ui.service else { return };
         let Some(r) = conn.slot.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
         match r {

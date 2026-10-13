@@ -30,6 +30,9 @@ pub struct ServiceLayer {
     pub offer: Offer,
     /// Its longitude/latitude bounds (west, south, east, north), when the service says.
     pub bbox: Option<[f64; 4]>,
+    /// An OGC API tileset list (JSON) whose WebMercatorQuad tileset advertises the tile template:
+    /// the offer's template is the standard path, used when the advertised one can't be read.
+    pub tilesets: Option<String>,
 }
 
 /// A service's capabilities: its kind (`WMS`, `WMTS`, `WFS`, `OGC API Features`), title, the
@@ -321,7 +324,7 @@ fn wms(url: &str, root: &Node) -> Service {
             ),
         );
         let title = child_text(&layer, "Title").unwrap_or_else(|| name.clone());
-        service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox });
+        service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox, tilesets: None });
     }
     service.layers.reverse();
     if skipped > 0 {
@@ -443,7 +446,7 @@ fn wmts(url: &str, root: &Node) -> Service {
             let hi: Vec<f64> = child_text(&b, "UpperCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
             lonlat_box(*lo.first()?, *lo.get(1)?, *hi.first()?, *hi.get(1)?)
         });
-        service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox });
+        service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox, tilesets: None });
     }
     if skipped > 0 {
         service.notes.push(format!("{skipped} layers have no Web Mercator tile matrix set RustGIS can draw and are left out"));
@@ -542,7 +545,7 @@ fn wfs(url: &str, root: &Node) -> Service {
             )
         };
         let url = with_query(&get, &query);
-        service.layers.push(ServiceLayer { name, title, offer: Offer::Features { url }, bbox });
+        service.layers.push(ServiceLayer { name, title, offer: Offer::Features { url }, bbox, tilesets: None });
     }
     service
 }
@@ -616,7 +619,13 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 continue;
             }
             let url = format!("{b}/{id}/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson");
-            service.layers.push(ServiceLayer { name: id.to_string(), title: name.to_string(), offer: Offer::Features { url }, bbox: full });
+            service.layers.push(ServiceLayer {
+                name: id.to_string(),
+                title: name.to_string(),
+                offer: Offer::Features { url },
+                bbox: full,
+                tilesets: None,
+            });
         }
     };
     if lower.ends_with("/featureserver") {
@@ -635,12 +644,19 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             title: format!("{title} (map)"),
             offer: Offer::Tiles { template },
             bbox: full,
+            tilesets: None,
         });
         features(&mut service);
     } else if lower.ends_with("/imageserver") {
         service.kind = "ArcGIS ImageServer".into();
         let template = format!("{b}/exportImage?bbox={{bbox-epsg-3857}}&bboxSR=3857&imageSR=3857&size=256,256&format=png&f=image");
-        service.layers.push(ServiceLayer { name: "image".into(), title: title.clone(), offer: Offer::Tiles { template }, bbox: full });
+        service.layers.push(ServiceLayer {
+            name: "image".into(),
+            title: title.clone(),
+            offer: Offer::Tiles { template },
+            bbox: full,
+            tilesets: None,
+        });
     } else if lower.ends_with("/vectortileserver") {
         service.kind = "ArcGIS VectorTileServer".into();
         let style = v
@@ -648,7 +664,13 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             .and_then(|s| s.as_str())
             .map(|s| format!("{b}/{}/root.json", s.trim_matches('/')))
             .unwrap_or_else(|| format!("{b}/resources/styles/root.json"));
-        service.layers.push(ServiceLayer { name: "style".into(), title: title.clone(), offer: Offer::Style { url: style }, bbox: full });
+        service.layers.push(ServiceLayer {
+            name: "style".into(),
+            title: title.clone(),
+            offer: Offer::Style { url: style },
+            bbox: full,
+            tilesets: None,
+        });
     } else {
         return Err("an ArcGIS address, but not a FeatureServer, MapServer, ImageServer or VectorTileServer".into());
     }
@@ -685,12 +707,13 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         let links = v.get("links").and_then(|l| l.as_array()).cloned().unwrap_or_default();
         let name = if title.is_empty() { "tiles".to_string() } else { title };
         // The dataset's layers aren't listed here, so its vector tiles can't be styled: map tiles only.
-        if let Some(t) = tileset(url, &links, TileRel::Map) {
+        if let Some((t, list)) = tileset(url, &links, TileRel::Map) {
             service.layers.push(ServiceLayer {
                 name: "map".into(),
                 title: format!("{name} (map tiles)"),
                 offer: Offer::Tiles { template: t },
                 bbox: None,
+                tilesets: Some(list),
             });
         }
         if !service.layers.is_empty() {
@@ -724,20 +747,22 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         // tiles' layer is named after the collection, as the standard has it.
         let map = tileset(url, &links, TileRel::Map);
         let vector = tileset(url, &links, TileRel::Vector);
-        if let Some(t) = &map {
+        if let Some((t, list)) = &map {
             service.layers.push(ServiceLayer {
                 name: format!("{id} (map tiles)"),
                 title: format!("{title} (map tiles)"),
                 offer: Offer::Tiles { template: t.clone() },
                 bbox,
+                tilesets: Some(list.clone()),
             });
         }
-        if let Some(t) = &vector {
+        if let Some((t, list)) = &vector {
             service.layers.push(ServiceLayer {
                 name: format!("{id} (vector tiles)"),
                 title: format!("{title} (vector tiles)"),
                 offer: Offer::VectorTiles { template: t.clone(), layers: vec![id.chars().take(200).collect()] },
                 bbox,
+                tilesets: Some(list.clone()),
             });
         }
         if map.is_some() || vector.is_some() {
@@ -767,7 +792,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         let items = if query_value(&items, "limit").is_some() { items } else { with_query(&items, &format!("limit={OGC_API_LIMIT}")) };
         // GeoJSON asked for unless the link says it is already.
         let items = if declared_geojson || query_value(&items, "f").is_some() { items } else { with_query(&items, "f=json") };
-        service.layers.push(ServiceLayer { name: id.to_string(), title, offer: Offer::Features { url: items }, bbox });
+        service.layers.push(ServiceLayer { name: id.to_string(), title, offer: Offer::Features { url: items }, bbox, tilesets: None });
     }
     if unreadable > 0 {
         service.notes.push(format!("{unreadable} collections link to their items with an address RustGIS doesn't fetch and are left out"));
@@ -792,11 +817,13 @@ enum TileRel {
     Vector,
 }
 
-/// The `{z}/{x}/{y}` template of a dataset's or collection's tiles in WebMercatorQuad, from its
-/// `tilesets-map` or `tilesets-vector` link: the standard path under the tilesets address
-/// (`…/tiles/WebMercatorQuad/{tileMatrix}/{tileRow}/{tileCol}`), in the server's image format or
-/// as MVT. A server that names its WebMercatorQuad tileset otherwise isn't read this way.
-fn tileset(from: &str, links: &[serde_json::Value], which: TileRel) -> Option<String> {
+/// The tiles of a dataset or collection in WebMercatorQuad, from its `tilesets-map` or
+/// `tilesets-vector` link: the template at the usual path under the tileset list
+/// (`…/WebMercatorQuad/{tileMatrix}/{tileRow}/{tileCol}`), and the list's address (JSON), whose
+/// WebMercatorQuad tileset advertises the template [`resolve_tiles`] reads (the usual path is what
+/// is used when that can't be read). Both keep the link's query (a token, a collections choice),
+/// all but `f`.
+fn tileset(from: &str, links: &[serde_json::Value], which: TileRel) -> Option<(String, String)> {
     let suffix = match which {
         TileRel::Map => "tilesets-map",
         TileRel::Vector => "tilesets-vector",
@@ -815,10 +842,110 @@ fn tileset(from: &str, links: &[serde_json::Value], which: TileRel) -> Option<St
     }
     // Map tiles come in the server's own image format (PNG or JPEG, which it picks); vector
     // tiles are asked as MVT.
-    Some(match which {
+    let template = match which {
         TileRel::Map => format!("{at}/WebMercatorQuad/{{z}}/{{y}}/{{x}}"),
         TileRel::Vector => format!("{at}/WebMercatorQuad/{{z}}/{{y}}/{{x}}?f=mvt"),
-    })
+    };
+    let list = if query_value(&href, "f").is_some() { href.clone() } else { with_query(&href, "f=json") };
+    Some((carry_query(&template, &href), list))
+}
+
+/// `template` with the query parameters of `link` it doesn't have, but `f` (the representation
+/// the link was for).
+fn carry_query(template: &str, link: &str) -> String {
+    let q = link.split('#').next().and_then(|u| u.split_once('?')).map(|(_, q)| q).unwrap_or("");
+    let mut out = template.to_string();
+    for kv in q.split('&').take(32) {
+        let k = kv.split_once('=').map(|(k, _)| k).unwrap_or(kv);
+        if kv.is_empty() || k.eq_ignore_ascii_case("f") || query_value(&out, k).is_some() || kv.contains(['{', '}']) {
+            continue;
+        }
+        out = with_query(&out, kv);
+    }
+    out
+}
+
+/// What an OGC API tiles document says on the way to a tile template: the template, or the
+/// address of the document to read next (a tileset list's WebMercatorQuad tileset).
+#[derive(Clone, Debug, PartialEq)]
+pub enum TilesStep {
+    Template(String),
+    Next(String),
+}
+
+/// One step of reading an OGC API tile template: `body` is the tileset list (or a tileset)
+/// fetched from `doc`; `list` is the list's address, whose query the template keeps. `None` when
+/// the document names no WebMercatorQuad tileset or tile template.
+pub fn resolve_tiles(list: &str, doc: &str, body: &[u8], vector: bool) -> Option<TilesStep> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let links = |v: &serde_json::Value| v.get("links").and_then(|l| l.as_array()).cloned().unwrap_or_default();
+    let Some(sets) = v.get("tilesets").and_then(|t| t.as_array()) else {
+        // A tileset: its tile template.
+        return item_template(doc, &links(&v), vector).map(|t| TilesStep::Template(carry_query(&t, list)));
+    };
+    let mercator = |t: &serde_json::Value| {
+        let tiling = links(t);
+        let named: Vec<String> = ["tileMatrixSetURI", "tileMatrixSetId", "tileMatrixSet", "id"]
+            .iter()
+            .filter_map(|k| t.get(*k).and_then(|x| x.as_str()))
+            .chain(
+                tiling
+                    .iter()
+                    .filter(|l| l.get("rel").and_then(|r| r.as_str()).is_some_and(|r| r.contains("tiling-scheme")))
+                    .filter_map(|l| l.get("href").and_then(|h| h.as_str())),
+            )
+            .map(|n| base(n).trim_end_matches('/').to_ascii_lowercase())
+            .collect();
+        named.iter().any(|n| n.ends_with("webmercatorquad") || n.ends_with("googlemapscompatible"))
+    };
+    let kind_fits = |t: &serde_json::Value| match t.get("dataType").and_then(|d| d.as_str()) {
+        Some(d) => (d == "vector") == vector,
+        None => true,
+    };
+    let t = sets.iter().take(200).find(|t| mercator(t) && kind_fits(t))?;
+    let ls = links(t);
+    if let Some(template) = item_template(doc, &ls, vector) {
+        return Some(TilesStep::Template(carry_query(&template, list)));
+    }
+    let next = ls
+        .iter()
+        .find(|l| l.get("rel").and_then(|r| r.as_str()).is_some_and(|r| r == "self" || r.ends_with("/tileset")))
+        .and_then(|l| resolve(doc, l.get("href")?.as_str()?))?;
+    let next = carry_query(&next, list);
+    Some(TilesStep::Next(if query_value(&next, "f").is_some() { next } else { with_query(&next, "f=json") }))
+}
+
+/// A tileset's advertised tile template (its `item` link, `{tileMatrix}/{tileRow}/{tileCol}`) as
+/// `{z}/{y}/{x}`, in the tiles' format: MVT for vector tiles, an image (PNG first) for map tiles.
+fn item_template(from: &str, links: &[serde_json::Value], vector: bool) -> Option<String> {
+    let items: Vec<&serde_json::Value> = links
+        .iter()
+        .take(200)
+        .filter(|l| l.get("rel").and_then(|r| r.as_str()).is_some_and(|r| r == "item" || r.ends_with("/item")))
+        .filter(|l| l.get("href").and_then(|h| h.as_str()).is_some_and(|h| h.contains("{tileMatrix}")))
+        .collect();
+    let ty = |l: &&&serde_json::Value| l.get("type").and_then(|t| t.as_str()).unwrap_or("").to_ascii_lowercase();
+    let pick = if vector {
+        items.iter().find(|l| {
+            let t = ty(l);
+            t.contains("mapbox-vector-tile") || t.contains("mvt") || t.contains("protobuf")
+        })
+    } else {
+        items.iter().find(|l| ty(l) == "image/png").or_else(|| items.iter().find(|l| ty(l).starts_with("image/")))
+    }
+    .or_else(|| items.first())?;
+    let href = pick.get("href")?.as_str()?;
+    if href.len() > 2000 {
+        return None;
+    }
+    let t = href.replace("{tileMatrix}", "{z}").replace("{tileRow}", "{y}").replace("{tileCol}", "{x}");
+    // Only the three coordinates are filled in.
+    let rest = t.replace("{z}", "").replace("{y}", "").replace("{x}", "");
+    if rest.contains(['{', '}']) {
+        return None;
+    }
+    let t = resolve(from, &t)?;
+    is_web(&t).then_some(t)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1236,6 +1363,58 @@ mod tests {
                 .unwrap_err()
                 .contains("/collections")
         );
+        // The tileset list to read the advertised template from, with the link's query kept (but
+        // its `f`), on the list and the usual-path template alike.
+        assert_eq!(vt.tilesets.as_deref(), Some("https://x.org/wine/collections/vineyards/tiles?f=json"));
+        let tokened = br#"{"collections": [{"id": "roads", "links": [
+            {"rel": "tilesets-map", "href": "https://x.org/c/roads/map/tiles?token=abc&f=json"}]}]}"#;
+        let s = parse("https://x.org/c", tokened).unwrap();
+        assert_eq!(
+            s.layers[0].offer,
+            Offer::Tiles { template: "https://x.org/c/roads/map/tiles/WebMercatorQuad/{z}/{y}/{x}?token=abc".into() }
+        );
+        assert_eq!(s.layers[0].tilesets.as_deref(), Some("https://x.org/c/roads/map/tiles?token=abc&f=json"));
+    }
+
+    #[test]
+    fn ogc_api_advertised_tile_templates() {
+        let list = "https://x.org/c/roads/tiles?token=abc&f=json";
+        // A list whose WebMercatorQuad tileset (named otherwise, as CubeWerx's `smerc`) points to
+        // the tileset document; a tileset of another grid is passed over.
+        let sets = br#"{"tilesets": [
+            {"tileMatrixSetURI": "http://www.opengis.net/def/tilematrixset/OGC/1.0/WorldCRS84Quad", "links": [{"rel": "self", "href": "crs84"}]},
+            {"dataType": "vector", "tileMatrixSetURI": "http://www.opengis.net/def/tilematrixset/OGC/1.0/WebMercatorQuad", "links": [{"rel": "self", "href": "https://x.org/c/roads/tiles/smerc"}]}]}"#;
+        assert_eq!(
+            resolve_tiles(list, list, sets, true),
+            Some(TilesStep::Next("https://x.org/c/roads/tiles/smerc?token=abc&f=json".into()))
+        );
+        assert_eq!(resolve_tiles(list, list, sets, false), None, "no map tileset in WebMercatorQuad");
+        // The tileset's item links: MVT for vector tiles, PNG first for map tiles, the token kept.
+        let tileset = br#"{"links": [
+            {"rel": "item", "type": "image/jpeg", "templated": true, "href": "https://x.org/c/roads/tiles/smerc/{tileMatrix}/{tileRow}/{tileCol}.jpg"},
+            {"rel": "item", "type": "image/png", "templated": true, "href": "https://x.org/c/roads/tiles/smerc/{tileMatrix}/{tileRow}/{tileCol}.png"},
+            {"rel": "item", "type": "application/vnd.mapbox-vector-tile", "templated": true, "href": "smerc/{tileMatrix}/{tileRow}/{tileCol}.mvt"}]}"#;
+        let doc = "https://x.org/c/roads/tiles/smerc?token=abc&f=json";
+        assert_eq!(
+            resolve_tiles(list, doc, tileset, true),
+            Some(TilesStep::Template("https://x.org/c/roads/tiles/smerc/{z}/{y}/{x}.mvt?token=abc".into()))
+        );
+        assert_eq!(
+            resolve_tiles(list, doc, tileset, false),
+            Some(TilesStep::Template("https://x.org/c/roads/tiles/smerc/{z}/{y}/{x}.png?token=abc".into()))
+        );
+        // A list that carries its tilesets' item links needs no second document.
+        let inline = br#"{"tilesets": [{"tileMatrixSetId": "WebMercatorQuad", "links": [
+            {"rel": "item", "type": "image/png", "href": "https://x.org/t/{tileMatrix}/{tileRow}/{tileCol}"}]}]}"#;
+        assert_eq!(resolve_tiles(list, list, inline, false), Some(TilesStep::Template("https://x.org/t/{z}/{y}/{x}?token=abc".into())));
+        // A template with other variables, or no web address, isn't taken.
+        for bad in [
+            br#"{"links": [{"rel": "item", "href": "https://x.org/{style}/{tileMatrix}/{tileRow}/{tileCol}"}]}"#.as_slice(),
+            br#"{"links": [{"rel": "item", "href": "javascript:{tileMatrix}"}]}"#.as_slice(),
+            b"not json",
+        ] {
+            assert_eq!(resolve_tiles(list, doc, bad, false), None);
+        }
     }
 
     #[test]

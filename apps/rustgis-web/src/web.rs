@@ -108,10 +108,16 @@ pub fn start() {
                     }
                     // `?stac=<url>`: a STAC item (its default asset is added, signed when it is a
                     // Planetary Computer one) or a collection (STAC Search opens on it).
-                    for url in params(&q, "stac", 4) {
-                        if let Err(e) = app.run("ui.stacLink", serde_json::json!({"url": url})) {
-                            app.session.notify(format!("?stac={url}: {e}"), true);
-                        }
+                    // One link: the dialog follows one document at a time, so others are said to
+                    // be skipped rather than lost.
+                    let stac = params(&q, "stac", 4);
+                    if let Some(url) = stac.first()
+                        && let Err(e) = app.run("ui.stacLink", serde_json::json!({"url": url}))
+                    {
+                        app.session.notify(format!("?stac={url}: {e}"), true);
+                    }
+                    if stac.len() > 1 {
+                        app.session.notify(format!("only the first ?stac= link is opened ({} more were left out)", stac.len() - 1), false);
                     }
                     for (key, kind) in [("style", Some("style")), ("tiles", None)] {
                         for url in params(&q, key, 8) {

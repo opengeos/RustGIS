@@ -473,7 +473,29 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             if kind != "auto" {
                 p["type"] = json!(kind);
             }
-            app.run("service.add", p).map(|_| tl!("Added"))
+            match l.get("tilesets").and_then(Value::as_str) {
+                // An OGC API layer: its tileset's advertised template is read first, off the
+                // frame (poll_tiles_resolve adds the layer).
+                Some(list) => {
+                    p["name"] = json!(title);
+                    let fallback = offer.get("url").and_then(Value::as_str).unwrap_or("").to_string();
+                    let vector = offer.get("type").and_then(Value::as_str) == Some("vectorTiles");
+                    let slot = crate::fetch_into(list);
+                    if let Some(c) = &mut app.ui.service {
+                        c.resolving = Some(crate::TilesResolve {
+                            params: p,
+                            list: list.to_string(),
+                            doc: list.to_string(),
+                            read: 0,
+                            vector,
+                            fallback,
+                            slot,
+                        });
+                    }
+                    Ok(tl!("Reading the tileset of"))
+                }
+                None => app.run("service.add", p).map(|_| tl!("Added")),
+            }
         };
         match r {
             Ok(m) => app.dialogs.info = Some(format!("{m} {title}")),

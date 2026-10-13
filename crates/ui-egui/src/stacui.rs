@@ -183,30 +183,41 @@ fn landed_link(app: &mut RustGisApp, url: &str, r: Result<Vec<u8>, String>) {
     let kind = serde_json::from_slice::<serde_json::Value>(&bytes)
         .ok()
         .and_then(|v| Some((v.get("type")?.as_str()?.to_string(), v.get("id").and_then(|i| i.as_str()).map(str::to_string))));
-    // The API is the address before `/collections/`.
-    let api = url.split_once("/collections/").map(|(a, _)| a.to_string());
+    // The API: the address before `/collections/`, else the document's root (or parent) link.
+    let api = stac::api_of(&bytes, url);
+    // Without one, the dialog keeps its API, and says which it is.
+    let unknown =
+        |app: &RustGisApp| i18n::fmt("The link doesn't say its STAC API: Find Items searches {api}", &[("api", &app.ui.stac.api)]);
     match kind {
         Some((t, _)) if t == "Feature" => match stac::parse_item(&bytes, url) {
             Ok(mut item) => {
                 item.url.get_or_insert_with(|| url.to_string());
-                if let Some(api) = api {
-                    app.ui.stac.api = api;
-                }
                 app.ui.stac.collection = item.collection.clone();
                 app.ui.stac.chosen = vec![item.pick(None).map(|a| a.key.clone()).unwrap_or_default()];
                 app.ui.stac.items = vec![item.clone()];
+                let found = api.is_some();
+                if let Some(api) = api {
+                    app.ui.stac.api = api;
+                }
                 app.ui.stac.info = Some(i18n::fmt("Item {id}", &[("id", &item.id)]));
+                if !found {
+                    app.ui.stac.info = Some(format!("{} · {}", i18n::fmt("Item {id}", &[("id", &item.id)]), unknown(app)));
+                }
                 show_footprints(app);
                 add_item_asset(app, &item, None);
             }
             Err(e) => app.ui.stac.error = Some(e),
         },
         Some((t, Some(id))) if t == "Collection" => {
+            let found = api.is_some();
             if let Some(api) = api {
                 app.ui.stac.api = api;
             }
             app.ui.stac.collection = id.chars().take(200).collect();
             app.ui.stac.info = Some(i18n::fmt("Collection {id}: choose dates and Find Items", &[("id", &app.ui.stac.collection)]));
+            if !found {
+                app.ui.stac.info = Some(format!("{} · {}", app.ui.stac.info.clone().unwrap_or_default(), unknown(app)));
+            }
         }
         _ => app.ui.stac.error = Some(i18n::fmt("{url}: not a STAC item or collection", &[("url", url)])),
     }

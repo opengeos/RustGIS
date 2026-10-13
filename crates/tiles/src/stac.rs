@@ -213,6 +213,24 @@ pub fn parse_items(bytes: &[u8], from: &str) -> Result<(Vec<Item>, Option<String
 }
 
 /// An item from its own document.
+/// The STAC API an item or collection fetched from `from` belongs to: the address before
+/// `/collections/`, else its `root` link's (a static catalog's `….json` root is no API), else the
+/// collection its `parent` link names. `None` when nothing says.
+pub fn api_of(bytes: &[u8], from: &str) -> Option<String> {
+    let before = |u: &str| u.split_once("/collections/").map(|(a, _)| a.to_string());
+    if let Some(a) = before(from) {
+        return Some(a);
+    }
+    let v = json(bytes).ok()?;
+    if let Some(root) = link(&v, "root", from) {
+        let r = root.split(['?', '#']).next().unwrap_or(&root).trim_end_matches('/').to_string();
+        if !r.to_ascii_lowercase().ends_with(".json") && is_web(&r) {
+            return Some(r);
+        }
+    }
+    link(&v, "parent", from).and_then(|p| before(&p))
+}
+
 pub fn parse_item(bytes: &[u8], from: &str) -> Result<Item, String> {
     item(&json(bytes)?, Some(from)).ok_or_else(|| "the answer isn't a STAC item".to_string())
 }
@@ -550,6 +568,19 @@ pub fn footprints_geojson(items: &[Item]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_of_a_linked_document() {
+        // The address before /collections/.
+        assert_eq!(api_of(b"{}", "https://x.org/v1/collections/s2/items/a").as_deref(), Some("https://x.org/v1"));
+        // Else the root link (a static catalog's .json root is no API), else the parent collection's.
+        let item = br#"{"links": [{"rel": "root", "href": "https://api.example.org/stac/v1/"}]}"#;
+        assert_eq!(api_of(item, "https://cdn.example.org/items/a.json").as_deref(), Some("https://api.example.org/stac/v1"));
+        let static_root = br#"{"links": [{"rel": "root", "href": "../catalog.json"},
+            {"rel": "parent", "href": "https://api.example.org/v1/collections/s2"}]}"#;
+        assert_eq!(api_of(static_root, "https://cdn.example.org/s2/a.json").as_deref(), Some("https://api.example.org/v1"));
+        assert_eq!(api_of(br#"{"links": [{"rel": "root", "href": "catalog.json"}]}"#, "https://cdn.example.org/a.json"), None);
+    }
 
     #[test]
     fn deep_footprints_saturate() {
