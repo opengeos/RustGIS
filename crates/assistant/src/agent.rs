@@ -253,12 +253,13 @@ impl Agent {
         if !self.busy() {
             return;
         }
-        self.halt(Entry::Note("Stopped.".into()));
+        self.halt(Entry::Note("Stopped.".into()), "Stopped by the user.", "Stopped by the user.");
     }
 
     /// Runs one step of the conversation. A bug in RustGIS that panics while reading a reply or
     /// running its calls ends the turn with an error in the transcript instead of taking the app
-    /// down with it (the commands it runs are guarded the same way by `Session::run`).
+    /// down with it (the commands it runs are guarded the same way by `Session::run`). Where
+    /// panics abort instead of unwinding (the WebAssembly build), this guard can't help.
     fn guard(&mut self, f: impl FnOnce(&mut Self) -> Step) -> Step {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut *self))) {
             Ok(step) => step,
@@ -268,7 +269,11 @@ impl Agent {
                     .map(|s| s.to_string())
                     .or_else(|| payload.downcast_ref::<String>().cloned())
                     .unwrap_or_default();
-                self.halt(Entry::Error(INTERNAL_ERROR.into()));
+                self.halt(
+                    Entry::Error(INTERNAL_ERROR.into()),
+                    "Not run: RustGIS ran into an internal error before this call.",
+                    "RustGIS failed while running this call, so it may have partly taken effect. Check before running it again.",
+                );
                 if !detail.is_empty() {
                     self.transcript.push(Entry::Note(tools::clip(&detail, 300)));
                 }
@@ -277,13 +282,15 @@ impl Agent {
         }
     }
 
-    /// Ends the run, leaving a conversation the provider accepts, and notes why.
-    fn halt(&mut self, why: Entry) {
+    /// Ends the run, leaving a conversation the provider accepts, and notes why. Calls still
+    /// queued get the result `queued`; a call that was running when the run ended (it has left the
+    /// queue but has no result) gets `interrupted`.
+    fn halt(&mut self, why: Entry, queued: &str, interrupted: &str) {
         match std::mem::replace(&mut self.state, State::Idle) {
-            State::Idle => {}
             // The unanswered message is dropped: two user turns in a row are refused by some
-            // providers. The map context goes again with the next one.
-            State::Waiting => {
+            // providers. The map context goes again with the next one. (Idle: `ask` failed
+            // before the request went out.)
+            State::Idle | State::Waiting => {
                 if matches!(self.turns.last(), Some(Turn::User(_))) {
                     self.turns.pop();
                     self.last_context.clear();
@@ -292,7 +299,7 @@ impl Agent {
             State::Calls(q, mut results) => {
                 // Every call the model made gets a result, or the next request is malformed.
                 for c in q {
-                    results.push(ToolResult { id: c.id, name: c.name, content: "Stopped by the user.".into(), error: true });
+                    results.push(ToolResult { id: c.id, name: c.name, content: queued.into(), error: true });
                 }
                 if !results.is_empty() {
                     self.turns.push(Turn::Results(results));
@@ -314,7 +321,7 @@ impl Agent {
             let missing: Vec<ToolResult> = calls
                 .iter()
                 .filter(|c| !answered.contains(&c.id.as_str()))
-                .map(|c| ToolResult { id: c.id.clone(), name: c.name.clone(), content: "Not run.".into(), error: true })
+                .map(|c| ToolResult { id: c.id.clone(), name: c.name.clone(), content: interrupted.into(), error: true })
                 .collect();
             if !missing.is_empty() {
                 match self.turns.last_mut() {

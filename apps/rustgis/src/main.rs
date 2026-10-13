@@ -67,7 +67,7 @@ mod crash {
     use std::io::Write;
     use std::path::{Path, PathBuf};
 
-    /// The log starts over past this size.
+    /// The log never grows past this size.
     const MAX_LOG: u64 = 256 * 1024;
 
     /// Writes every panic to `<dir>/crash.log`, then reports it as before.
@@ -82,14 +82,10 @@ mod crash {
 
     fn write(dir: &Path, info: &std::panic::PanicHookInfo<'_>) {
         let path = dir.join("crash.log");
-        let append = std::fs::metadata(&path).is_ok_and(|m| m.len() < MAX_LOG);
-        let file = std::fs::create_dir_all(dir)
-            .and_then(|_| std::fs::OpenOptions::new().create(true).write(true).append(append).truncate(!append).open(&path));
-        let Ok(mut file) = file else { return };
+        let used = std::fs::metadata(&path).map_or(0, |m| m.len());
         let thread = std::thread::current();
-        let _ = writeln!(
-            file,
-            "--- RustGIS {} on {} {}, {} UTC, thread {}\n{info}\n{}\n",
+        let entry = format!(
+            "--- RustGIS {} on {} {}, {} UTC, thread {}\n{info}\n{}\n\n",
             env!("CARGO_PKG_VERSION"),
             std::env::consts::OS,
             std::env::consts::ARCH,
@@ -97,6 +93,17 @@ mod crash {
             thread.name().unwrap_or("unnamed"),
             std::backtrace::Backtrace::force_capture(),
         );
+        // The log starts over when this entry doesn't fit, and one huge entry is cut to the cap.
+        let append = used.saturating_add(entry.len() as u64) <= MAX_LOG;
+        let mut cut = entry.len().min(usize::try_from(MAX_LOG).unwrap_or(usize::MAX));
+        while !entry.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let file = std::fs::create_dir_all(dir)
+            .and_then(|_| std::fs::OpenOptions::new().create(true).write(true).append(append).truncate(!append).open(&path));
+        if let Ok(mut file) = file {
+            let _ = file.write_all(entry.get(..cut).unwrap_or_default().as_bytes());
+        }
     }
 
     fn utc_now() -> String {

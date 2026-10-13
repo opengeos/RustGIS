@@ -82,6 +82,6 @@ body:
     id: screenshots
     attributes:
       label: Screenshots or logs
-      description: Add screenshots, screen recordings, or terminal output if they help explain the problem. If the desktop app closed unexpectedly, attach `crash.log` or `crash-last.log` from its settings folder (`%APPDATA%\RustGIS` on Windows, `~/Library/Application Support/RustGIS` on macOS, `~/.config/rustgis` on Linux).
+      description: 'Add screenshots, screen recordings, or terminal output if they help explain the problem. If the desktop app closed unexpectedly, attach `crash.log` or `crash-last.log` from its settings folder (`%APPDATA%\RustGIS` on Windows, `~/Library/Application Support/RustGIS` on macOS, `$XDG_CONFIG_HOME/rustgis` or `~/.config/rustgis` on Linux). Read it first: an error message can include file paths or layer names, so remove anything you don''t want to share.'
     validations:
       required: false

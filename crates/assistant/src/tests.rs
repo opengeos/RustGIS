@@ -282,7 +282,12 @@ fn a_panic_while_handling_a_reply_ends_the_turn_instead_of_the_app() {
     let mut s = sample();
     let mut a = Agent::new(cfg("openai"), &s);
     let Step::Send(_) = a.ask("label the cities", &s) else { panic!("expected a request") };
-    let step = a.receive(a.generation(), ok(call("c1", "test_panic", json!({}))), &mut s);
+    // Two calls: the first panics while it runs, the second is still queued.
+    let two = json!({"choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [
+        {"id": "c1", "type": "function", "function": {"name": "test_panic", "arguments": "{}"}},
+        {"id": "c2", "type": "function", "function": {"name": "search_commands", "arguments": "{\"query\": \"label\"}"}}]},
+        "finish_reason": "tool_calls"}]});
+    let step = a.receive(a.generation(), ok(two), &mut s);
     assert_eq!(step, Step::Done);
     assert!(!a.busy());
     assert!(a.transcript.iter().any(|e| matches!(e, Entry::Error(m) if m == INTERNAL_ERROR)));
@@ -291,7 +296,17 @@ fn a_panic_while_handling_a_reply_ends_the_turn_instead_of_the_app() {
     let Step::Send(req) = a.ask("try again", &s) else { panic!("expected a request") };
     let b = body(&req);
     let messages = b["messages"].as_array().cloned().unwrap_or_default();
-    assert!(messages.iter().any(|m| m["role"] == "tool" && m["tool_call_id"] == "c1"), "{messages:?}");
+    let result = |id: &str| {
+        messages
+            .iter()
+            .find(|m| m["role"] == "tool" && m["tool_call_id"] == id)
+            .and_then(|m| m["content"].as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    // The call that was running may have done something; the queued one never ran.
+    assert!(result("c1").contains("may have partly taken effect"), "{messages:?}");
+    assert!(result("c2").starts_with("Not run"), "{messages:?}");
     // A reply after the failure is read as usual.
     assert_eq!(a.receive(a.generation(), ok(say("Done.")), &mut s), Step::Done);
     assert!(matches!(a.transcript.last(), Some(Entry::Assistant(t)) if t == "Done."));
