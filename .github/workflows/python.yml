@@ -116,7 +116,7 @@ jobs:
           cp apps/rustgis-python/dist/*.tar.gz apps/rustgis-python/tests/test_session.py /tmp/sdist-check/
           cd /tmp/sdist-check
           # conda-forge and other repackagers need the license in the sdist.
-          tar tzf ./*.tar.gz | grep -q '/LICENSE$' || { echo "::error::The sdist has no LICENSE file."; exit 1; }
+          tar tzf ./*.tar.gz | grep '/LICENSE$' || { echo "::error::The sdist has no LICENSE file."; exit 1; }
           python -m pip install ./*.tar.gz pytest
           python -m pytest -q test_session.py
       - uses: actions/upload-artifact@v7
