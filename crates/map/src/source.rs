@@ -161,7 +161,7 @@ struct Pending {
 }
 
 /// A source being opened off the frame.
-type Opening = Arc<Mutex<Option<Result<Box<dyn FeatureSource>, String>>>>;
+type Opening = Arc<Mutex<Option<Result<Arc<dyn FeatureSource>, String>>>>;
 
 /// Tells the app something landed (a read, or a source opened by its address).
 fn landed() {
@@ -265,7 +265,8 @@ impl SourceLayer {
     /// (or footer) off the frame, taken by a later call when it has landed.
     fn open_remote(&mut self, url: &str) -> Result<(), String> {
         if let Some(slot) = self.opening.clone() {
-            let done = slot.lock().ok().and_then(|mut s| s.take());
+            // Read, not taken: copies of the layer (undo, Load All Features) share the slot.
+            let done = slot.lock().ok().and_then(|s| s.clone());
             return match done {
                 None => Ok(()),
                 Some(r) => {
@@ -275,8 +276,8 @@ impl SourceLayer {
             };
         }
         match rustgis_data::source::open_url_now(url) {
-            Ok(s) => self.opened(Ok(s)),
-            Err(_) if rustgis_data::source::remote::file(url).is_missing() => {
+            Ok(s) => self.opened(Ok(Arc::from(s))),
+            Err(e) if e.to_string().contains(rustgis_data::source::remote::NEED) => {
                 let slot: Opening = Arc::new(Mutex::new(None));
                 let land = slot.clone();
                 self.opening = Some(slot);
@@ -284,7 +285,7 @@ impl SourceLayer {
                     url,
                     Box::new(move |r| {
                         if let Ok(mut s) = land.lock() {
-                            *s = Some(r.map_err(|e| e.to_string()));
+                            *s = Some(r.map(Arc::from).map_err(|e| e.to_string()));
                         }
                         landed();
                     }),
@@ -295,10 +296,10 @@ impl SourceLayer {
         }
     }
 
-    fn opened(&mut self, r: Result<Box<dyn FeatureSource>, String>) -> Result<(), String> {
+    fn opened(&mut self, r: Result<Arc<dyn FeatureSource>, String>) -> Result<(), String> {
         match r {
             Ok(s) => {
-                self.handle = Some(Arc::from(s));
+                self.handle = Some(s);
                 self.window = None;
                 self.error = None;
                 Ok(())

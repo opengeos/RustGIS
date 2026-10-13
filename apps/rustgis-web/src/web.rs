@@ -389,13 +389,17 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     // holds the whole file (a small archive), checked once it's read; else no ranges.
     let whole = range.is_some() && resp.status() != 206;
     if range.is_some_and(|(a, _)| whole && a > 0) {
-        return Err(format!("{url}: the server doesn't answer byte-range requests"));
+        return Err(format!("{url}: {}", cache::NO_RANGES));
     }
     // Fonts are at most about 10 MB and plugins 64 MB; refuse anything larger than allowed, by
     // header when there is one and by the downloaded size otherwise.
     if let Ok(Some(len)) = resp.headers().get("content-length").map(|v| v.and_then(|s| s.parse::<u64>().ok()))
         && len > max
     {
+        // The last bytes asked for and a longer file answered: no ranges, so it is downloaded whole.
+        if whole_tail.is_some() {
+            return Err(format!("{url}: {}", cache::NO_RANGES));
+        }
         return Err(format!("{len} bytes is too large"));
     }
     // Read a chunk at a time, so a body larger than allowed (whatever its header said) is cut
@@ -416,7 +420,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
             if (bytes.len() + n) as u64 > max {
                 let _ = reader.cancel();
                 if whole_tail.is_some() {
-                    return Err(format!("{url}: the server doesn't answer byte-range requests"));
+                    return Err(format!("{url}: {}", cache::NO_RANGES));
                 }
                 return Err(format!("larger than {} MB", max >> 20));
             }
@@ -428,10 +432,10 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     if let Some((a, b)) = range.filter(|_| whole)
         && bytes.len() as u64 > b - a + 1
     {
-        return Err(format!("{url}: the server doesn't answer byte-range requests"));
+        return Err(format!("{url}: {}", cache::NO_RANGES));
     }
     if whole_tail.is_some_and(|n| bytes.len() as u64 > n) {
-        return Err(format!("{url}: the server doesn't answer byte-range requests"));
+        return Err(format!("{url}: {}", cache::NO_RANGES));
     }
     Ok(bytes)
 }

@@ -11,7 +11,9 @@
 //! takes a few rounds, not one per missing piece. Files are hostile input: what a read may hold is
 //! bounded, and a read that keeps needing more stops after [`MAX_ROUNDS`].
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::{DataError, Result};
@@ -28,6 +30,8 @@ pub const READ_BUDGET: u64 = if cfg!(target_arch = "wasm32") { 96 << 20 } else {
 const KEEP: usize = if cfg!(target_arch = "wasm32") { 192 << 20 } else { 640 << 20 };
 /// The most rounds of fetching one read may take.
 pub const MAX_ROUNDS: usize = 48;
+/// The most bytes one round of a read may ask for (readers plan within [`READ_BUDGET`]).
+const ROUND_BUDGET: u64 = READ_BUDGET.saturating_mul(2);
 /// Files kept, with what was fetched of them.
 const MAX_FILES: usize = 32;
 
@@ -46,8 +50,21 @@ pub enum Want {
     Tail(u64),
 }
 
+/// Why a fetch brought no bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Failed {
+    /// Dropped unfetched (the view moved on): asked for again by the next round.
+    Dropped,
+    /// The range starts past the end of the file (HTTP 416).
+    PastEnd,
+    /// The server doesn't answer byte-range requests: the file is downloaded whole instead.
+    NoRanges,
+    /// Anything else, with its message.
+    Other(String),
+}
+
 /// Called once with the bytes asked for, or why they couldn't be had.
-pub type Done = Box<dyn FnOnce(std::result::Result<Vec<u8>, String>) + Send>;
+pub type Done = Box<dyn FnOnce(std::result::Result<Vec<u8>, Failed>) + Send>;
 type Fetcher = Arc<dyn Fn(&str, Want, Done) + Send + Sync>;
 
 fn fetcher() -> &'static Mutex<Option<Fetcher>> {
@@ -80,10 +97,36 @@ struct Store {
     end: Option<u64>,
     /// The file's last bytes, and whether they are the whole file (it was shorter than asked).
     tail: Option<(Arc<Vec<u8>>, bool)>,
-    /// Bytes reads found missing: (start, end, whether asked for exactly (planned ahead) rather
-    /// than found by a read, which is rounded out).
-    missing: Vec<(u64, u64, bool)>,
-    missing_tail: Option<u64>,
+    /// Bytes reads found missing: (the read's drive, start, end, whether asked for exactly
+    /// (planned ahead) rather than found by a read, which is rounded out).
+    missing: Vec<(u64, u64, u64, bool)>,
+    /// The last bytes reads found missing: (the read's drive, how many).
+    missing_tail: Vec<(u64, u64)>,
+}
+
+thread_local! {
+    /// The drive whose read runs on this thread (0: none), so each drive fetches what its own
+    /// read found missing, never another's on the same file.
+    static DRIVE: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Marks the reads on this thread as a drive's while it lives.
+struct Running(u64);
+
+impl Running {
+    fn enter(drive: u64) -> Self {
+        Running(DRIVE.with(|d| d.replace(drive)))
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        DRIVE.with(|d| d.set(self.0));
+    }
+}
+
+fn drive_now() -> u64 {
+    DRIVE.with(Cell::get)
 }
 
 /// A file by its web address: the parts fetched so far.
@@ -153,7 +196,7 @@ impl Remote {
         match found {
             Some(part) => Some(bytes::Bytes::from_owner(part)),
             None => {
-                s.missing.push((at, at.saturating_add(len), exact));
+                s.missing.push((drive_now(), at, at.saturating_add(len), exact));
                 None
             }
         }
@@ -175,7 +218,7 @@ impl Remote {
         match found {
             Some(part) => Some(bytes::Bytes::from_owner(part)),
             None => {
-                s.missing.push((at, at.saturating_add(want.max(1)), false));
+                s.missing.push((drive_now(), at, at.saturating_add(want.max(1)), false));
                 None
             }
         }
@@ -194,7 +237,7 @@ impl Remote {
         match &s.tail {
             Some((t, whole)) if *whole || t.len() as u64 >= n => Some((t.clone(), *whole)),
             _ => {
-                s.missing_tail = Some(s.missing_tail.unwrap_or(0).max(n));
+                s.missing_tail.push((drive_now(), n));
                 None
             }
         }
@@ -203,16 +246,22 @@ impl Remote {
     /// Whether a read found something missing.
     pub fn is_missing(&self) -> bool {
         let s = self.lock();
-        !s.missing.is_empty() || s.missing_tail.is_some()
+        !s.missing.is_empty() || !s.missing_tail.is_empty()
     }
 
     /// The requests that fetch what reads found missing: rounded out, merged and split into
     /// pieces of a bounded size. Forgets them.
-    fn take_missing(&self) -> Vec<Want> {
+    fn take_missing(&self, drive: u64) -> Vec<Want> {
         let mut s = self.lock();
-        let mut ranges: Vec<(u64, u64)> = std::mem::take(&mut s.missing)
+        let (mine, others): (Vec<_>, Vec<_>) = std::mem::take(&mut s.missing).into_iter().partition(|m| m.0 == drive);
+        // What reads outside any drive found missing (a check) is nobody's to fetch.
+        s.missing = others.into_iter().filter(|m| m.0 != 0).collect();
+        let (tails, others): (Vec<_>, Vec<_>) = std::mem::take(&mut s.missing_tail).into_iter().partition(|t| t.0 == drive);
+        s.missing_tail = others.into_iter().filter(|t| t.0 != 0).collect();
+        let tail = tails.into_iter().map(|t| t.1).max();
+        let mut ranges: Vec<(u64, u64)> = mine
             .into_iter()
-            .map(|(a, b, exact)| {
+            .map(|(_, a, b, exact)| {
                 let (a, b) = if exact { (a, b) } else { (a / MIN_FETCH * MIN_FETCH, b.div_ceil(MIN_FETCH).saturating_mul(MIN_FETCH)) };
                 match s.end {
                     Some(end) => (a.min(end), b.min(end)),
@@ -232,13 +281,14 @@ impl Remote {
         let mut out = Vec::new();
         for (a, b) in merged {
             let mut at = a;
+            // `at < b`, so each piece ends past where it starts, even at the end of the range.
             while at < b {
-                let end = (at + MAX_PIECE).min(b);
+                let end = at.saturating_add(MAX_PIECE).min(b);
                 out.push(Want::Range(at, end));
                 at = end;
             }
         }
-        if let Some(n) = s.missing_tail.take() {
+        if let Some(n) = tail {
             out.push(Want::Tail(n));
         }
         out
@@ -352,19 +402,30 @@ pub fn drive<T: Send + 'static>(
     work: Arc<dyn Fn() -> Result<T> + Send + Sync>,
     done: Box<dyn FnOnce(Result<T>) + Send>,
 ) {
-    step(remote, work, done, 0);
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    step(remote, work, done, NEXT.fetch_add(1, Ordering::Relaxed), 0);
 }
 
 fn step<T: Send + 'static>(
     remote: Arc<Remote>,
     work: Arc<dyn Fn() -> Result<T> + Send + Sync>,
     done: Box<dyn FnOnce(Result<T>) + Send>,
+    drive: u64,
     rounds: usize,
 ) {
-    let r = work();
-    let wants = remote.take_missing();
+    let r = {
+        let _running = Running::enter(drive);
+        work()
+    };
+    let wants = remote.take_missing(drive);
     if wants.is_empty() {
         done(r);
+        return;
+    }
+    // Readers plan within READ_BUDGET; a round asking for far more is a hostile file's offsets.
+    let asked: u64 = wants.iter().map(|w| if let Want::Range(a, b) = w { b - a } else { 0 }).fold(0, u64::saturating_add);
+    if asked > ROUND_BUDGET {
+        done(Err(DataError::Format(format!("{}: a read asked for {} MB of the file at once", remote.url, asked >> 20))));
         return;
     }
     if rounds >= MAX_ROUNDS {
@@ -389,10 +450,16 @@ fn step<T: Send + 'static>(
                 (Want::Range(a, b), Ok(bytes)) => remote2.insert(a, b - a, bytes),
                 (Want::Tail(n), Ok(bytes)) => remote2.insert_tail(n, bytes),
                 // A request dropped unfetched (the view moved on) is asked for again next round.
-                (_, Err(e)) if e.contains("dropped") => {}
+                (_, Err(Failed::Dropped)) => {}
                 // A range past the end of the file.
-                (Want::Range(a, b), Err(e)) if e.contains("416") => remote2.insert(a, b - a, Vec::new()),
+                (Want::Range(a, b), Err(Failed::PastEnd)) => remote2.insert(a, b - a, Vec::new()),
                 (_, Err(e)) => {
+                    let e = match e {
+                        Failed::NoRanges => format!("the server doesn't answer byte-range requests ({READ_WHOLE})"),
+                        Failed::PastEnd => "the last bytes asked for past the end of the file".into(),
+                        Failed::Dropped => "the request was dropped".into(),
+                        Failed::Other(e) => e,
+                    };
                     let mut r = round2.lock().unwrap_or_else(|e| e.into_inner());
                     r.failed.get_or_insert(e);
                 }
@@ -405,10 +472,9 @@ fn step<T: Send + 'static>(
             if let Some((Some(done), failed)) = next {
                 match failed {
                     Some(e) => {
-                        let e = if e.contains("byte-range") { format!("{e} ({READ_WHOLE})") } else { e };
                         done(Err(DataError::Format(if e.starts_with(remote2.url()) { e } else { format!("{}: {e}", remote2.url()) })))
                     }
-                    None => step(remote2, work2, done, rounds + 1),
+                    None => step(remote2, work2, done, drive, rounds + 1),
                 }
             }
         });
@@ -526,7 +592,7 @@ pub(crate) mod testing {
         set_fetcher(|url, w, done| {
             let file = served().lock().unwrap_or_else(|e| e.into_inner()).get(url).cloned();
             let Some((f, sent)) = file else {
-                done(Err("HTTP 404".into()));
+                done(Err(Failed::Other("HTTP 404".into())));
                 return;
             };
             let r = match w {
@@ -548,7 +614,7 @@ mod tests {
     fn holds_merges_and_notes_what_is_missing() {
         let r = Remote::new("https://x.org/a.fgb");
         assert!(r.bytes(10, 5).is_none());
-        assert_eq!(r.take_missing(), vec![Want::Range(0, MIN_FETCH)]);
+        assert_eq!(r.take_missing(0), vec![Want::Range(0, MIN_FETCH)]);
         r.insert(0, 8, vec![1; 8]);
         r.insert(8, 8, vec![2; 8]);
         // Touching pieces are one.
@@ -564,12 +630,12 @@ mod tests {
         r.bytes(0, 1);
         r.bytes(MIN_FETCH * 10, 1);
         r.bytes(MIN_FETCH * 10 + 5, MAX_PIECE + 5);
-        let w = r.take_missing();
+        let w = r.take_missing(0);
         assert_eq!(w.first(), Some(&Want::Range(0, MIN_FETCH)));
         assert!(w.len() == 3 && w.iter().all(|w| matches!(w, Want::Range(a, b) if b - a <= MAX_PIECE)));
         // The tail: shorter than asked is the whole file.
         assert!(r.tail(16).is_none());
-        assert!(r.take_missing().contains(&Want::Tail(16)));
+        assert!(r.take_missing(0).contains(&Want::Tail(16)));
         r.insert_tail(16, vec![7; 4]);
         assert_eq!(r.tail(1_000).map(|(t, whole)| (t.len(), whole)), Some((4, true)));
         assert_eq!(r.bytes(0, 4).map(|b| b.to_vec()), Some(vec![7; 4]));
@@ -593,6 +659,49 @@ mod tests {
         drive(r, work, Box::new(move |res| tx.send(res.map_err(|e| e.to_string())).unwrap_or_default()));
         let v = rx.recv().unwrap_or(Err("no answer".into()));
         assert_eq!(v, Ok(u64::from(file[200_000]) + u64::from(file[5000])));
+    }
+
+    #[test]
+    fn hostile_offsets_never_overflow_or_explode() {
+        // Ranges ending at the very end of the address space (a hostile file's offsets).
+        let r = Remote::new("u");
+        assert!(!r.want(u64::MAX - 10, u64::MAX));
+        assert!(r.bytes(u64::MAX - MAX_PIECE / 2, u64::MAX).is_none());
+        let w = r.take_missing(0);
+        assert!(!w.is_empty() && w.iter().all(|w| matches!(w, Want::Range(a, b) if a < b && b - a <= MAX_PIECE)), "{w:?}");
+        // A read planning far more than a read may fetch fails at once, asking for nothing.
+        let r = Arc::new(Remote::new("test:never-served"));
+        let rr = r.clone();
+        let work: Arc<dyn Fn() -> Result<()> + Send + Sync> = Arc::new(move || {
+            rr.want(0, 1 << 40);
+            Err(need())
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        drive(r, work, Box::new(move |res| tx.send(res.map_err(|e| e.to_string())).unwrap_or_default()));
+        let e = rx.recv().unwrap_or(Ok(())).err().unwrap_or_default();
+        assert!(e.contains("at once"), "{e}");
+    }
+
+    #[test]
+    fn each_drive_fetches_what_its_own_read_missed() {
+        let r = Remote::new("u");
+        {
+            let _a = Running::enter(1);
+            r.bytes(0, 1);
+            r.tail(8);
+        }
+        {
+            let _b = Running::enter(2);
+            r.bytes(10 * MIN_FETCH, 1);
+        }
+        // Outside any drive (a check): nobody's, dropped by the next take.
+        r.bytes(20 * MIN_FETCH, 1);
+        // Drive 2 takes its own miss only; drive 1's stay for it.
+        assert_eq!(r.take_missing(2), vec![Want::Range(10 * MIN_FETCH, 11 * MIN_FETCH)]);
+        assert_eq!(r.take_missing(1), vec![Want::Range(0, MIN_FETCH), Want::Tail(8)]);
+        assert!(r.take_missing(0).is_empty() && !r.is_missing());
+        // The drive marker is restored when its read ends.
+        assert_eq!(drive_now(), 0);
     }
 
     #[test]

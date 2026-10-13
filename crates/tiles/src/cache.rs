@@ -59,6 +59,9 @@ pub const MAX_BYTES: usize = 16 << 20;
 /// The error a fetcher gives a request it dropped unfetched (the view moved on): the address is
 /// forgotten rather than failed, so it is fetched again when it is next wanted.
 pub const DROPPED: &str = "dropped: the view moved on";
+/// The end of a fetcher's error when a range was asked for and the server answered with the
+/// whole file: a file read in place by range is downloaded whole instead.
+pub const NO_RANGES: &str = "the server doesn't answer byte-range requests";
 
 enum Entry {
     Ready(Arc<Payload>, usize),
@@ -656,7 +659,7 @@ mod native {
         if let Some((a, _)) = range.filter(|_| whole)
             && a > 0
         {
-            return Err(format!("{url}: the server doesn't answer byte-range requests"));
+            return Err(format!("{url}: {}", super::NO_RANGES));
         }
         let mut buf = Vec::new();
         if !resp.status().is_success() {
@@ -664,9 +667,18 @@ mod native {
         }
         // The last bytes asked for and the whole file answered: fine when it is no longer.
         if let Some(n) = tail.filter(|_| resp.status().as_u16() != 206) {
-            resp.body_mut().with_config().limit(n.saturating_add(1)).reader().read_to_end(&mut buf).map_err(|e| e.to_string())?;
+            // Read one byte past `n` (no more, and no error at the limit): a longer file is
+            // reported as a server without ranges, so the file is downloaded whole instead.
+            let limit = n.saturating_add(1);
+            resp.body_mut()
+                .with_config()
+                .limit(limit.saturating_add(1))
+                .reader()
+                .take(limit)
+                .read_to_end(&mut buf)
+                .map_err(|e| e.to_string())?;
             if buf.len() as u64 > n {
-                return Err(format!("{url}: the server doesn't answer byte-range requests"));
+                return Err(format!("{url}: {}", super::NO_RANGES));
             }
             return Ok(buf);
         }
@@ -676,7 +688,7 @@ mod native {
         }
         if let Some((a, b)) = range.filter(|_| whole) {
             if buf.len() as u64 > b - a + 1 {
-                return Err(format!("{url}: the server doesn't answer byte-range requests"));
+                return Err(format!("{url}: {}", super::NO_RANGES));
             }
             buf.truncate(usize::try_from(b - a + 1).unwrap_or(usize::MAX));
         }

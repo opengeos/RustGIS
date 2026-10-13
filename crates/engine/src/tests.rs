@@ -3433,6 +3433,12 @@ fn sql_workspace_rows_and_schema() {
 /// Serves `body` with byte ranges (`Range: bytes=a-b` answered 206) until the test ends; returns
 /// the base address and the count of bytes sent.
 fn serve_ranges(body: Vec<u8>) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    serve_file(body, true)
+}
+
+/// [`serve_ranges`], or (`ranges` false) a server that ignores `Range` and answers every request
+/// with the whole file.
+fn serve_file(body: Vec<u8>, ranges: bool) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -3444,7 +3450,7 @@ fn serve_ranges(body: Vec<u8>) -> (String, std::sync::Arc<std::sync::atomic::Ato
             let mut buf = [0u8; 4096];
             let read = s.read(&mut buf).unwrap_or(0);
             let req = String::from_utf8_lossy(&buf[..read]).to_ascii_lowercase();
-            let range = req.lines().find_map(|l| l.strip_prefix("range: bytes=")).and_then(|r| {
+            let range = req.lines().filter(|_| ranges).find_map(|l| l.strip_prefix("range: bytes=")).and_then(|r| {
                 let (a, b) = r.trim().split_once('-')?;
                 // A suffix (`-n`): the last n bytes.
                 if a.is_empty() {
@@ -3855,7 +3861,7 @@ fn flatgeobuf_and_geoparquet_by_address_are_read_in_place() {
     }
     let fgb = rustgis_data::source::fgb::write(&ds).unwrap();
     let total = fgb.len();
-    let (base, sent) = serve_ranges(fgb);
+    let (base, sent) = serve_ranges(fgb.clone());
     let mut s = Session::new(Project::default());
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/grid.fgb")})).unwrap();
     assert_eq!((r["inPlace"].as_bool(), r["streamed"].as_bool(), r["features"].as_u64()), (Some(true), Some(true), Some(40_000)), "{r}");
@@ -3888,6 +3894,18 @@ fn flatgeobuf_and_geoparquet_by_address_are_read_in_place() {
     assert!(!again.dataset.features.is_empty(), "{:?}", again.source.as_ref().unwrap().error);
     // Load All Features: every feature, fetched.
     assert_eq!(again.load_all().unwrap().features.len(), 40_000);
+    // Copies of a layer still opening (undo snapshots, Load All Features) all open: they share
+    // what opening brought, none takes it from the others.
+    let (other, _) = serve_ranges(fgb.clone());
+    let mut u = Session::new(Project::default());
+    u.run("project.openText", &json!({"text": text.replace(&base, &other)})).unwrap();
+    let mut a = u.map().layers.iter().find(|l| l.is_streamed()).unwrap().source.clone().unwrap();
+    a.open().unwrap();
+    assert!(!a.is_open() && a.is_pending(), "opened before its header was fetched");
+    let mut b = a.clone();
+    a.wait_open(std::time::Duration::from_secs(60));
+    b.wait_open(std::time::Duration::from_secs(60));
+    assert!(a.is_open() && b.is_open(), "{:?} {:?}", a.error, b.error);
 
     // A GeoParquet (with its bbox covering), from its footer at the end.
     let pq = rustgis_data::source::parquet::write(&ds).unwrap();
@@ -3903,6 +3921,14 @@ fn flatgeobuf_and_geoparquet_by_address_are_read_in_place() {
     // Asked to: downloaded whole.
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/grid.parquet"), "whole": true, "name": "Whole"})).unwrap();
     assert!(r.get("inPlace").is_none(), "{r}");
+    // A server that ignores ranges answers the footer's request with the whole, longer file:
+    // downloaded whole instead, not an error.
+    let pq = rustgis_data::source::parquet::write(&ds).unwrap();
+    assert!(pq.len() > 256 << 10);
+    let (base, _) = serve_file(pq, false);
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/grid.parquet"), "name": "NoRanges"})).unwrap();
+    assert!(r.get("inPlace").is_none(), "{r}");
+    assert!(s.map().layer_by_name("NoRanges").is_some(), "{r}");
     // A file that isn't one: an error, not a hang.
     let (base, _) = serve_ranges(b"not a flatgeobuf at all".to_vec());
     assert!(s.run("layer.addUrl", &json!({"url": format!("{base}/x.fgb")})).is_err());
