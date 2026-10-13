@@ -31,7 +31,8 @@ is a command, a thin egui front end, headless screenshots for UI work.
   commands (`ui.*`) live in `crates/ui-egui/src/lib.rs`. The ribbon, shortcuts, command search
   and CLI dispatch by id. Commands never open dialogs.
 - **Never break wasm**: everything below `apps/` must build for `wasm32-unknown-unknown`
-  (CI runs `cargo build --target wasm32-unknown-unknown -p rustgis-web`). Use `web_time`, not
+  (CI runs `cargo build --target wasm32-unknown-unknown -p rustgis-web`; the Zstandard decoder in
+  `rustgis-data` is C, so this needs clang). Use `web_time`, not
   `std::time`; file access goes through `Services` on the web. `rustgis-geolibre` builds for
   both: natively it runs the `geolibre` program; in the browser the web app runs geolibre-rust's
   WASI runner asynchronously (`external_start` → `Services::geolibre_run` → `gp.finish`).

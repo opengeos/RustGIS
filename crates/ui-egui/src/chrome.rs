@@ -517,19 +517,21 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
     let total = app.session.notices.len();
     if total > app.map.notices_seen {
         for n in app.session.notices.iter().skip(app.map.notices_seen) {
-            app.map.toasts.push((n.text.clone(), n.error, now));
+            app.map.toasts_made += 1;
+            app.map.toasts.push((n.text.clone(), n.error, now, app.map.toasts_made));
         }
         app.map.notices_seen = total;
     }
-    app.map.toasts.retain(|(_, err, at)| now - at < if *err { 6.0 } else { 3.0 });
+    app.map.toasts.retain(|(_, err, at, _)| now - at < if *err { 6.0 } else { 3.0 });
     if app.map.toasts.is_empty() {
         return;
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(250));
     let screen = ctx.content_rect();
     let mut y = screen.max.y - 40.0;
-    for (i, (text, err, at)) in app.map.toasts.iter_mut().rev().take(3).enumerate() {
-        let shown = egui::Area::new(egui::Id::new(("toast", i)))
+    for (text, err, at, k) in app.map.toasts.iter_mut().rev().take(3) {
+        // Keyed by the notice, not the slot, so a selection stays with its text as toasts come and go.
+        let shown = egui::Area::new(egui::Id::new(("toast", *k)))
             .fixed_pos(pos2(screen.max.x - 380.0, y - 44.0))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {

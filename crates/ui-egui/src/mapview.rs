@@ -73,7 +73,10 @@ pub struct MapView {
     pub dms: bool,
     pub render_ms: u64,
     pub notices_seen: usize,
-    pub toasts: Vec<(String, bool, f64)>,
+    /// Toasts showing: text, whether an error, when it came or was last hovered, and its number.
+    pub toasts: Vec<(String, bool, f64, u64)>,
+    /// Toasts made so far, numbering each for a steady id.
+    pub toasts_made: u64,
     camera_moved: bool,
     /// The last snap: its inputs (pointer, camera, undo depth) and where it snapped, if anywhere,
     /// so snapping runs only when one of them changes rather than every frame.
@@ -108,6 +111,7 @@ impl Default for MapView {
             render_ms: 0,
             notices_seen: 0,
             toasts: Vec::new(),
+            toasts_made: 0,
             camera_moved: false,
             snap: None,
             split: None,
