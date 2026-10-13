@@ -76,7 +76,8 @@ impl Sources {
         self.generation += 1;
     }
 
-    /// Keeps a source in `list` (`favourites` or `saved`), replacing the one at the same address.
+    /// Keeps a source in `list` (`favourites` or `saved`), replacing the one with the same
+    /// identity ([`Source::is`]: kind and address), whose name and `extra` the new one's take over.
     pub fn keep(&mut self, list: &str, s: Source) -> Result<(), String> {
         let s = clean(s)?;
         let l = self.list_mut(list)?;
@@ -93,7 +94,7 @@ impl Sources {
     pub fn forget(&mut self, list: &str, kind: &str, address: &str) -> Result<bool, String> {
         let l = self.list_mut(list)?;
         let before = l.len();
-        l.retain(|r| !(r.kind == kind && r.address == address));
+        l.retain(|r| !r.is(kind, address));
         let gone = l.len() != before;
         if gone {
             self.generation += 1;
@@ -112,7 +113,16 @@ impl Sources {
 }
 
 fn same(a: &Source, b: &Source) -> bool {
-    a.kind == b.kind && a.address == b.address && a.extra == b.extra
+    a.is(&b.kind, &b.address)
+}
+
+impl Source {
+    /// A source's identity: its kind and address. Everywhere a list is matched (kept, forgotten,
+    /// noted as recent, shown as a favourite) it is by this; `extra` (a layer, a service type)
+    /// is what the last one kept said.
+    pub fn is(&self, kind: &str, address: &str) -> bool {
+        self.kind == kind && self.address == address
+    }
 }
 
 /// A source made safe to keep: a known kind, bounded text, and an address without secrets.
@@ -196,10 +206,12 @@ fn secret_key(k: &str) -> bool {
 /// S3 presigned URL), and a PostgreSQL connection string's password.
 pub fn redact(address: &str) -> String {
     let lower = address.to_ascii_lowercase();
-    // `postgres:host=… password=…`: the libpq keyword form.
-    if lower.starts_with("postgres:") && !lower.starts_with("postgres://") {
-        let kept: Vec<&str> = address.split_whitespace().filter(|kv| !kv.to_ascii_lowercase().starts_with("password=")).collect();
-        return kept.join(" ");
+    // A PostgreSQL connection (`postgres:` or `postgresql:` keyword strings, GDAL's `PG:`, URIs):
+    // libpq's own rules (quoted values, escapes, `key = value`), without its secrets.
+    if ["postgres:", "postgresql:", "pg:"].iter().any(|p| lower.starts_with(p))
+        && let Some(label) = rustgis_data::source::pgconn::public_label(address)
+    {
+        return label;
     }
     let Some((scheme, rest)) = address.split_once("://") else { return address.to_string() };
     let (rest, frag) = match rest.split_once('#') {
@@ -287,7 +299,12 @@ pub fn added_by(id: &str, p: &Value) -> Option<Source> {
 
 /// Well-known public sources, ready to add: basemap tiles, map and feature services, STAC APIs
 /// and the sample data.
-pub fn library() -> Vec<(&'static str, Source)> {
+pub fn library() -> &'static [(&'static str, Source)] {
+    static LIBRARY: std::sync::OnceLock<Vec<(&'static str, Source)>> = std::sync::OnceLock::new();
+    LIBRARY.get_or_init(build_library)
+}
+
+fn build_library() -> Vec<(&'static str, Source)> {
     let s = |kind: &str, name: &str, address: &str, extra: Value| Source {
         kind: kind.into(),
         name: name.into(),
@@ -353,6 +370,45 @@ pub fn library() -> Vec<(&'static str, Source)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn postgres_connections_lose_every_secret() {
+        // Quoted values with spaces and escapes, `key = value`, other secret keys, every form.
+        for (given, kept) in [
+            ("postgres:host=h password='my secret' user=u", "postgres:host=h user=u"),
+            ("postgres:host=h password = 'a \\'b c' dbname=g", "postgres:host=h dbname=g"),
+            ("postgresql:host=h sslpassword='k k' passfile=/p user=u", "postgres:host=h user=u"),
+            ("PG:host=h dbname=g password=pw", "postgres:host=h dbname=g"),
+            ("postgres:host=h password='unterminated user=u", "postgres:host=h"),
+            ("postgresql://u:p w@h:5432/g?sslmode=require&password=x", "postgresql://u@h:5432/g?sslmode=require"),
+        ] {
+            let r = redact(given);
+            assert_eq!(r, kept, "{given}");
+            for secret in ["secret", "pw", "'b", "k k", "p w", "=x", "unterminated"] {
+                assert!(!r.contains(secret), "{secret} in {r}");
+            }
+        }
+    }
+
+    #[test]
+    fn identity_is_kind_and_address() {
+        let mut s = Sources::default();
+        let svc = |extra: Value| Source { kind: "service".into(), name: "W".into(), address: "https://h/wms".into(), extra };
+        s.keep("saved", svc(json!({"type": "wms"}))).unwrap();
+        s.keep("saved", svc(json!({"type": "wms", "layer": "roads"}))).unwrap();
+        // The same kind and address: one entry, with the last one's extra.
+        assert_eq!(s.saved.len(), 1);
+        assert_eq!(s.saved[0].extra, json!({"type": "wms", "layer": "roads"}));
+        // Another kind at the same address is another source.
+        s.keep("saved", Source { kind: "url".into(), address: "https://h/wms".into(), ..Source::default() }).unwrap();
+        assert_eq!(s.saved.len(), 2);
+        assert!(s.forget("saved", "service", "https://h/wms").unwrap());
+        assert_eq!(s.saved.len(), 1);
+        s.note(svc(Value::Null));
+        s.note(svc(json!({"layer": "x"})));
+        assert_eq!(s.recent.len(), 1);
+        assert!(s.recent[0].is("service", "https://h/wms"));
+    }
 
     #[test]
     fn secrets_are_never_kept() {

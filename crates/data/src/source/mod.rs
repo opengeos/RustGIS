@@ -20,6 +20,7 @@ mod gpkg_blob;
 pub mod gpkg_mem;
 pub mod lidar;
 pub mod parquet;
+pub mod pgconn;
 pub mod remote;
 
 use crate::raster::{Crs, Transformer};

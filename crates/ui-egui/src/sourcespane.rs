@@ -21,6 +21,21 @@ pub struct State {
     service: String,
     database: String,
     stac: String,
+    /// The sources as last shown, and their generation.
+    shown: Option<(u64, std::sync::Arc<rustgis_engine::sources::Sources>)>,
+}
+
+/// The sources to show this frame: the last snapshot unless they changed since.
+fn snapshot(app: &mut RustGisApp) -> std::sync::Arc<rustgis_engine::sources::Sources> {
+    let generation = app.session.sources.generation;
+    match &app.ui.sources.shown {
+        Some((g, s)) if *g == generation => s.clone(),
+        _ => {
+            let s = std::sync::Arc::new(app.session.sources.clone());
+            app.ui.sources.shown = Some((generation, s.clone()));
+            s
+        }
+    }
 }
 
 /// Reads the sources kept with the preferences, once.
@@ -41,6 +56,7 @@ pub fn load(app: &mut RustGisApp) {
         }
         app.session.sources.favourites = kept.favourites;
         app.session.sources.saved = kept.saved;
+        app.session.sources.generation += 1;
     }
     app.ui.sources_saved = app.session.sources.generation;
 }
@@ -150,7 +166,7 @@ fn row(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, s: &Source, list: Option<&
             app.session.notify(e, true);
         }
         resp.context_menu(|ui| {
-            let fav = app.session.sources.favourites.iter().any(|f| f.kind == s.kind && f.address == s.address);
+            let fav = app.session.sources.favourites.iter().any(|f| f.is(&s.kind, &s.address));
             let p = json!({"kind": s.kind, "address": s.address, "name": s.name, "extra": s.extra});
             if !fav && ui.button(tl!("Add to Favourites")).clicked() {
                 let _ = app.run("sources.favourite", p.clone());
@@ -220,7 +236,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     .small()
                     .weak(),
             );
-            let src = app.session.sources.clone();
+            // A snapshot shared across frames, taken again only when the sources change.
+            let src = snapshot(app);
             header(ui, tl!("Favourites"), true, |ui| {
                 if src.favourites.is_empty() {
                     empty(ui, tl!("Right-click a source to add it here"));
@@ -285,18 +302,18 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
             });
             header(ui, tl!("STAC APIs"), false, |ui| {
-                let apis: Vec<Source> =
-                    library().into_iter().filter(|(_, s)| s.kind == "stac").map(|(_, s)| s).chain(saved("stac")).collect();
-                for s in apis {
-                    let list = src.saved.iter().any(|x| x.kind == "stac" && x.address == s.address).then_some("saved");
-                    row(app, ui, t, &s, list);
+                for (_, s) in library().iter().filter(|(_, s)| s.kind == "stac") {
+                    row(app, ui, t, s, None);
+                }
+                for s in src.saved.iter().filter(|s| s.kind == "stac") {
+                    row(app, ui, t, s, Some("saved"));
                 }
                 save_box(app, ui, "stac", "https://…/stac/v1", |st| &mut st.stac);
             });
             header(ui, tl!("Library"), false, |ui| {
                 let mut groups: Vec<&str> = Vec::new();
                 let lib = library();
-                for (g, _) in &lib {
+                for (g, _) in lib {
                     if !groups.contains(g) {
                         groups.push(g);
                     }

@@ -1,0 +1,115 @@
+//! PostgreSQL connection strings (libpq's `key=value` form and URIs): taken apart by libpq's
+//! rules, so a connection can be named without its secrets. Pure text, so the browser build has
+//! it too.
+
+/// Keys of a libpq connection string or URI query that are secrets, or point at one, and are never
+/// kept in a label.
+const SECRET_KEYS: &[&str] = &["password", "sslpassword", "passfile"];
+
+/// A PostgreSQL connection, as written to be kept (a list of sources, a log): `postgres:<keyword
+/// string>` or a `postgresql://` URI, without its password or any other secret, and with no side
+/// effect (unlike `duckdb::Database::parse`, nothing is remembered). Takes `postgres:`, `postgresql:`,
+/// GDAL's `PG:` and the URI forms; `None` for anything else.
+pub fn public_label(s: &str) -> Option<String> {
+    let t = s.trim();
+    let lower = t.to_ascii_lowercase();
+    if lower.starts_with("postgresql://") || lower.starts_with("postgres://") {
+        let (no_userinfo, _) = split_secrets(t, &["password"]);
+        // A secret in the query (`?password=…`) goes too.
+        return Some(match no_userinfo.split_once('?') {
+            Some((base, q)) => {
+                let kept: Vec<&str> = q
+                    .split('&')
+                    .filter(|kv| {
+                        let k = kv.split_once('=').map(|(k, _)| k).unwrap_or(kv);
+                        !kv.is_empty() && !SECRET_KEYS.iter().any(|s| k.eq_ignore_ascii_case(s))
+                    })
+                    .collect();
+                if kept.is_empty() { base.to_string() } else { format!("{base}?{}", kept.join("&")) }
+            }
+            None => no_userinfo,
+        });
+    }
+    let rest = ["postgresql:", "postgres:", "pg:"].iter().find(|p| lower.starts_with(**p)).and_then(|p| t.get(p.len()..))?;
+    let (public, _) = split_secrets(rest.trim(), SECRET_KEYS);
+    Some(format!("postgres:{public}"))
+}
+
+/// A connection string without the values of `secrets` (the first, `password`, returned).
+pub(crate) fn split_secrets(dsn: &str, secrets: &[&str]) -> (String, Option<String>) {
+    let lower = dsn.to_ascii_lowercase();
+    if lower.starts_with("postgresql://") || lower.starts_with("postgres://") {
+        // scheme://[user[:password]@]host…: the credentials are in the authority, before the
+        // path, query or fragment (an `@` there is something else).
+        if let Some((scheme, rest)) = dsn.split_once("://") {
+            let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+            let (authority, tail) = rest.split_at(end);
+            if let Some((userinfo, host)) = authority.rsplit_once('@')
+                && let Some((user, password)) = userinfo.split_once(':')
+            {
+                return (format!("{scheme}://{user}@{host}{tail}"), Some(password.to_string()));
+            }
+        }
+        return (dsn.to_string(), None);
+    }
+    // libpq's keyword = value pairs; a value is a word, or quoted with \' and \\ inside.
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut password = None;
+    let mut chars = dsn.chars().peekable();
+    loop {
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+        if chars.peek().is_none() {
+            break;
+        }
+        let mut key = String::new();
+        while let Some(c) = chars.next_if(|c| !c.is_whitespace() && *c != '=') {
+            key.push(c);
+        }
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+        if chars.next() != Some('=') {
+            // Not a connection string RustGIS can take apart: what came before it (never the
+            // rest, which could hold a password).
+            break;
+        }
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+        let mut value = String::new();
+        if chars.next_if_eq(&'\'').is_some() {
+            loop {
+                match chars.next() {
+                    Some('\\') => value.extend(chars.next()),
+                    Some('\'') => break,
+                    Some(c) => value.push(c),
+                    // An unterminated quote: the rest is dropped (it could be a password).
+                    None => {
+                        key.clear();
+                        break;
+                    }
+                }
+            }
+        } else {
+            while let Some(c) = chars.next_if(|c| !c.is_whitespace()) {
+                if c == '\\' {
+                    value.extend(chars.next());
+                } else {
+                    value.push(c);
+                }
+            }
+        }
+        if key.is_empty() {
+            break;
+        }
+        if key.eq_ignore_ascii_case("password") {
+            password = Some(value);
+        } else if !secrets.iter().any(|s| key.eq_ignore_ascii_case(s)) {
+            pairs.push((key, value));
+        }
+    }
+    let quote = |v: &str| {
+        if !v.is_empty() && !v.contains([' ', '\t', '\'', '\\']) {
+            v.to_string()
+        } else {
+            format!("'{}'", v.replace('\\', "\\\\").replace('\'', "\\'"))
+        }
+    };
+    (pairs.iter().map(|(k, v)| format!("{k}={}", quote(v))).collect::<Vec<_>>().join(" "), password)
+}
