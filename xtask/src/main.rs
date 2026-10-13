@@ -63,8 +63,9 @@ fn cargo(args: &[&str]) -> Result<(), String> {
 const NOT_SHELL: &[&str] = &["sw.js", "CNAME", ".nojekyll"];
 
 /// The files under `dir` (a `trunk build` output) for the service worker to cache, as sorted
-/// `/`-separated paths relative to `dir`, plus a version that changes whenever any of them does.
-fn web_shell(dir: &std::path::Path) -> Result<(Vec<String>, String), String> {
+/// `/`-separated paths relative to `dir`, plus a version that changes whenever any of them or the
+/// service worker `template` does.
+fn web_shell(dir: &std::path::Path, template: &str) -> Result<(Vec<String>, String), String> {
     fn walk(dir: &std::path::Path, base: &str, out: &mut Vec<String>) -> Result<(), String> {
         for entry in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
             let entry = entry.map_err(|e| e.to_string())?;
@@ -90,6 +91,9 @@ fn web_shell(dir: &std::path::Path) -> Result<(Vec<String>, String), String> {
     }
     // FNV-1a over every path and its contents: the same on every platform and Rust version.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in template.bytes().chain([0]) {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
     for f in &files {
         let bytes = std::fs::read(dir.join(f)).map_err(|e| format!("{f}: {e}"))?;
         for b in f.bytes().chain([0]).chain(bytes) {
@@ -128,7 +132,7 @@ fn web_sw(template: &str, files: &[String], version: &str) -> Result<String, Str
 fn web_pwa(dir: Option<String>) -> Result<(), String> {
     let dir = std::path::PathBuf::from(dir.ok_or("usage: cargo xtask web-pwa <trunk build output, e.g. dist/web>")?);
     let template = std::fs::read_to_string(root().join("apps/rustgis-web/sw.js")).map_err(|e| format!("apps/rustgis-web/sw.js: {e}"))?;
-    let (files, version) = web_shell(&dir)?;
+    let (files, version) = web_shell(&dir, &template)?;
     let sw = web_sw(&template, &files, &version)?;
     std::fs::write(dir.join("sw.js"), sw).map_err(|e| format!("{}: {e}", dir.display()))?;
     println!("web-pwa: {} caches {} files (version {version})", dir.join("sw.js").display(), files.len());
@@ -179,13 +183,15 @@ mod tests {
         for f in ["index.html", "app-1.js", "app-1_bg.wasm", "snippets/x/inline0.js", "sw.js", "CNAME", ".nojekyll", ".stage/tmp"] {
             std::fs::write(dir.join(f), f).unwrap();
         }
-        let (files, v1) = web_shell(&dir).unwrap();
+        let (files, v1) = web_shell(&dir, "sw").unwrap();
         assert_eq!(files, ["app-1.js", "app-1_bg.wasm", "index.html", "snippets/x/inline0.js"]);
+        assert_eq!(web_shell(&dir, "sw").unwrap().1, v1);
+        // A new service worker alone is a new version too.
+        assert_ne!(web_shell(&dir, "sw 2").unwrap().1, v1);
         std::fs::write(dir.join("index.html"), "changed").unwrap();
-        let (_, v2) = web_shell(&dir).unwrap();
-        assert_ne!(v1, v2);
+        assert_ne!(web_shell(&dir, "sw").unwrap().1, v1);
         std::fs::remove_file(dir.join("index.html")).unwrap();
-        assert!(web_shell(&dir).is_err());
+        assert!(web_shell(&dir, "sw").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

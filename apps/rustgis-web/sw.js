@@ -32,6 +32,8 @@ const CACHE = PREFIX + VERSION;
 
 const urlOf = (path) => new URL(path, self.registration.scope).href;
 const PAGE = urlOf("index.html");
+// How long the page waits for the network before a cached copy is served instead.
+const PAGE_TIMEOUT_MS = 4000;
 const CACHED = new Set(SHELL.concat(EXTRA).map(urlOf));
 
 self.addEventListener("install", (event) => {
@@ -67,8 +69,31 @@ self.addEventListener("fetch", (event) => {
     const page = req.url.split(/[?#]/)[0];
     if (page !== self.registration.scope && page !== PAGE) return;
     // The cached page stays the one this worker installed with: a newer deploy's page would name
-    // files this cache does not hold.
-    event.respondWith(fetch(req).catch(() => caches.match(PAGE, { cacheName: CACHE }).then((hit) => hit || Response.error())));
+    // files this cache does not hold. A connection that stalls instead of failing gets the cached
+    // page after a few seconds, so the app still starts.
+    const cached = () => caches.match(PAGE, { cacheName: CACHE });
+    event.respondWith(
+      new Promise((resolve) => {
+        let done = false;
+        const finish = (resp) => {
+          if (!done && resp) {
+            done = true;
+            resolve(resp);
+          }
+        };
+        const timer = setTimeout(() => cached().then(finish), PAGE_TIMEOUT_MS);
+        fetch(req).then(
+          (resp) => {
+            clearTimeout(timer);
+            finish(resp);
+          },
+          () => {
+            clearTimeout(timer);
+            cached().then((hit) => finish(hit || Response.error()));
+          },
+        );
+      }),
+    );
     return;
   }
   const key = req.url.split("#")[0];
