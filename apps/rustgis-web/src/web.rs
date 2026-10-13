@@ -376,7 +376,16 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     } else {
         window.fetch_with_str(url)
     };
-    let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(promise).await.map_err(err)?.dyn_into().map_err(err)?;
+    // A refused fetch is an opaque TypeError ("Failed to fetch") by design: the browser doesn't
+    // say why, so the likely reasons are named instead of a JavaScript stack.
+    let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(promise)
+        .await
+        .map_err(|_| {
+            "the browser couldn't reach it (offline, blocked by a browser extension or the network, or the server doesn't accept requests from web pages)"
+                .to_string()
+        })?
+        .dyn_into()
+        .map_err(err)?;
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
