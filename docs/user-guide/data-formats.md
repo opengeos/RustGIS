@@ -60,9 +60,21 @@ app downloads in the background and adds the layer when the file arrives (to the
 started in: opening another meanwhile drops it). A `.pmtiles` address is added as a tile layer
 and read a tile at a time instead.
 
+A cloud-optimised GeoTIFF (a tiled `.tif` with overviews, as most published imagery is) is read
+in place rather than downloaded: its header first, then, by HTTP range requests, only the tiles of
+the overview each part of the view needs, so a Sentinel-2 scene of 300 MB draws in a couple of
+seconds and full detail comes as you zoom in. It is a tile layer (`map.addTiles` kind `cog`,
+saved in the project by its address), drawn under the map's own layers like other tile layers:
+RGB(A) 8-bit images as they are, other images in grey stretched between the 2nd and 98th
+percentiles of their coarsest overview. A GeoTIFF in strips, with bands stored apart, or without
+tiles is downloaded whole as a raster layer, as is any GeoTIFF added with `"whole": true` (for
+the raster tools and symbology). The web app needs the server to allow range requests from web
+pages (CORS with the `Range` header), as public buckets such as Sentinel-2's do.
+
 `layer.addUrl` waits for the download, up to a minute, which suits the command line, MCP and the
 desktop app's assistant; a larger file comes through the From URL… dialog, which downloads in the
-background. In the web app, where nothing may wait, it adds `.pmtiles` addresses only; other files
+background. In the web app, where nothing may wait, it adds `.pmtiles` and GeoTIFF addresses only
+(a GeoTIFF read in place); other files
 come through the From URL… dialog (`ui.addUrl`). GeoJSON, CSV, KML and GPX files are read up to
 256 MB; larger downloads (GeoParquet, FlatGeobuf, GeoPackage, GeoTIFF) up to the limits above.
 

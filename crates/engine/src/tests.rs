@@ -3380,3 +3380,102 @@ fn sql_workspace_rows_and_schema() {
     assert_eq!(r["rows"], json!([[3]]));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Serves `body` with byte ranges (`Range: bytes=a-b` answered 206) until the test ends; returns
+/// the base address and the count of bytes sent.
+fn serve_ranges(body: Vec<u8>) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = sent.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = [0u8; 4096];
+            let read = s.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..read]).to_ascii_lowercase();
+            let range = req.lines().find_map(|l| l.strip_prefix("range: bytes=")).and_then(|r| {
+                let (a, b) = r.trim().split_once('-')?;
+                Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
+            });
+            let (status, part) = match range {
+                Some((a, b)) if a < body.len() => ("206 Partial Content", &body[a..=b.min(body.len() - 1)]),
+                Some(_) => ("416 Range Not Satisfiable", &body[..0]),
+                None => ("200 OK", &body[..]),
+            };
+            count.fetch_add(part.len(), std::sync::atomic::Ordering::Relaxed);
+            let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", part.len());
+            let _ = s.write_all(part);
+        }
+    });
+    (format!("http://{addr}"), sent)
+}
+
+/// A cloud-optimised GeoTIFF by its address is read in place: its header, then only the tiles a
+/// map tile needs, by range; a GeoTIFF in strips is downloaded whole as a raster layer.
+#[test]
+fn cloud_optimised_geotiffs_are_read_in_place() {
+    use crate::render::rustgis_tiles::cache::{self, Payload, State, Want};
+    let file = rustgis_data::raster::cog::example(2048, 256);
+    let total = file.len();
+    let (base, sent) = serve_ranges(file);
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif")})).unwrap();
+    assert_eq!(r["inPlace"], true, "{r}");
+    let t = s.map().tiles.last().unwrap().clone();
+    assert_eq!((t.kind, t.name.as_str()), (rustgis_map::TileKind::Cog, "scene"));
+    // Framed on the file: 10–11° E, 45–46° N.
+    let b = r["bounds"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect::<Vec<_>>();
+    assert!((b[0] - 10.0).abs() < 1e-6 && (b[3] - 46.0).abs() < 1e-6, "{b:?}");
+    // A map tile inside it (zoom 9) is drawn from a few of its tiles, not the whole file.
+    let (z, lon, lat) = (9u32, 10.5f64, 45.5f64);
+    let n = f64::from(1u32 << z);
+    let x = ((lon + 180.0) / 360.0 * n) as u32;
+    let y = ((1.0 - lat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0 * n) as u32;
+    let tile = format!("cog:{z}/{x}/{y}@{base}/scene.tif");
+    let mut got = None;
+    for _ in 0..200 {
+        match cache::get(&tile, Want::Image) {
+            State::Ready(p) => {
+                got = Some(p);
+                break;
+            }
+            State::Failed(e) => panic!("{e}"),
+            State::Pending => cache::wait(std::time::Duration::from_millis(50)),
+        }
+    }
+    let Some(p) = got else { panic!("the tile never came") };
+    let Payload::Image(pm) = &*p else { panic!("not a picture") };
+    assert_eq!((pm.width(), pm.height()), (256, 256));
+    assert!(pm.pixels().iter().any(|px| px.alpha() == 255));
+    let read = sent.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(read < total / 4, "{read} of {total} bytes read");
+    // A tile outside it is empty.
+    assert!(matches!(cache::get(&format!("cog:9/0/0@{base}/scene.tif"), Want::Image), State::Pending | State::Ready(_)));
+    // The project keeps the address; asked to, the file is downloaded whole instead.
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(text.contains("\"kind\":\"cog\"") && text.contains("scene.tif"));
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "whole": true, "name": "Whole"})).unwrap();
+    assert!(r.get("inPlace").is_none(), "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).is_some_and(|l| l.is_raster()), "{r}");
+    // A GeoTIFF in strips isn't cloud-optimised: downloaded whole, a raster layer.
+    let r = rustgis_data::raster::Raster::new(
+        "strips",
+        8,
+        8,
+        vec![vec![3.0; 64]],
+        rustgis_data::raster::GeoTransform { origin_x: 5.0, origin_y: 50.0, pixel_width: 0.1, pixel_height: -0.1 },
+        rustgis_data::raster::Crs::LonLat,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let (base, _) = serve_ranges(rustgis_data::raster::geotiff::write(&r, 0).unwrap());
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/strips.tif")})).unwrap();
+    assert!(r.get("inPlace").is_none(), "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).is_some_and(|l| l.is_raster()), "{r}");
+}

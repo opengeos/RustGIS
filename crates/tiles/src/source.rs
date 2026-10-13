@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::cache::{self, Payload, State, Want};
 use crate::style::{Source, Style};
-use crate::{address, mbtiles, pmtiles, template};
+use crate::{address, cog, mbtiles, pmtiles, template};
 
 /// The kind of address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -25,6 +25,8 @@ pub enum Kind {
     PmTiles,
     /// An MBTiles archive (raster or vector, as its metadata says): a file, or an upload.
     MbTiles,
+    /// A cloud-optimised GeoTIFF by its web address, read in place by range.
+    Cog,
 }
 
 /// A tile layer, as far as fetching and drawing it goes.
@@ -137,6 +139,24 @@ pub fn resolve(spec: &Spec) -> Resolve {
             Ok(None) => return Resolve::Pending,
             Err(e) => return Resolve::Failed(format!("{}: {e}", spec.url)),
         },
+        Kind::Cog => match cog::info(&spec.url) {
+            Ok(Some(info)) => {
+                let archive = Archive {
+                    tiles: cog::template(&spec.url),
+                    vector: false,
+                    min_zoom: info.min_zoom,
+                    max_zoom: info.max_zoom,
+                    attribution: String::new(),
+                    layers: Vec::new(),
+                };
+                match archive_style(spec, archive) {
+                    Some(d) => d,
+                    None => return Resolve::Failed("the raster style could not be made".into()),
+                }
+            }
+            Ok(None) => return Resolve::Pending,
+            Err(e) => return Resolve::Failed(e),
+        },
         Kind::MbTiles => match mbtiles::info(&spec.url) {
             Ok(info) => {
                 let archive = Archive {
@@ -216,7 +236,10 @@ pub fn resolve(spec: &Spec) -> Resolve {
         } else if let Source::Vector { tiles, .. } | Source::Raster { tiles, .. } = src {
             for t in tiles.iter_mut() {
                 // Tiles from an archive: read from the archive the layer names.
-                if (spec.kind == Kind::PmTiles && pmtiles::is_tile(t)) || (spec.kind == Kind::MbTiles && mbtiles::is_tile(t)) {
+                if (spec.kind == Kind::PmTiles && pmtiles::is_tile(t))
+                    || (spec.kind == Kind::MbTiles && mbtiles::is_tile(t))
+                    || (spec.kind == Kind::Cog && cog::is_tile(t))
+                {
                     continue;
                 }
                 *t = template::join(&base, t);

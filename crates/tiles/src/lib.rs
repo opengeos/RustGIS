@@ -9,6 +9,7 @@
 
 pub mod address;
 pub mod cache;
+pub mod cog;
 pub mod draw;
 pub mod geocode;
 pub mod mbtiles;

@@ -27,7 +27,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"database": "as layer.addDatabase", "password"?: string}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add", add_url).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
             .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "service"?: bool (a service's features: their axes and paging are checked)}"#),
@@ -1236,18 +1236,49 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
         }
         return super::tiles::add(s, &q);
     }
+    // A GeoTIFF: read in place when it is cloud-optimised (tiled), otherwise downloaded whole.
+    let tiff = is_tiff_url(url);
     #[cfg(target_arch = "wasm32")]
     {
+        // Nothing may wait here: a GeoTIFF is taken to be cloud-optimised (the layer says if not).
+        if tiff && !super::b(p, "whole").unwrap_or(false) {
+            return add_cog(s, p, url);
+        }
         Err(format!("{url}: in the web app, use Home › Add Data › From URL"))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         // Errors about the address itself name it already.
         let named = |e: String| if e.starts_with(url) { e } else { format!("{url}: {e}") };
+        if tiff && !super::b(p, "whole").unwrap_or(false) && crate::render::rustgis_tiles::cog::probe_blocking(url).map_err(named)? {
+            return add_cog(s, p, url);
+        }
         let bytes = crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?;
         let name = url_file_name(url, &bytes).map_err(named)?;
         super::raster::add_named_bytes(s, p, name, bytes)
     }
+}
+
+/// Whether a web address names a GeoTIFF (by its path's extension).
+pub fn is_tiff_url(url: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
+    path.ends_with(".tif") || path.ends_with(".tiff")
+}
+
+/// Adds a cloud-optimised GeoTIFF by its address as a layer read in place (its tiles by range,
+/// as the view needs them), framed when its header is in.
+fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
+    let stem = url.split(['?', '#']).next().unwrap_or(url).rsplit('/').next().unwrap_or("GeoTIFF");
+    let stem = stem.rsplit_once('.').map(|(a, _)| a).unwrap_or(stem);
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(stem);
+    let mut r = super::tiles::add(s, &json!({"url": url, "kind": "cog", "name": name}))?;
+    if let Ok(Some(info)) = crate::render::rustgis_tiles::cog::info(url) {
+        let [w, so, e, n] = info.bounds;
+        s.zoom_to(&rustgis_geom::Extent::new(w, so, e, n));
+        r["bounds"] = json!(info.bounds);
+    }
+    r["inPlace"] = json!(true);
+    Ok(r)
 }
 
 /// Adds a download the app finished (its bytes handed to the session, not passed as text).

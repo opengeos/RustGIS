@@ -5,6 +5,7 @@
 //! fits.
 
 pub mod ascii;
+pub mod cog;
 pub mod crs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gdal;

@@ -30,10 +30,15 @@ pub enum TileKind {
     /// for one added to the web app (kept in memory, not in the project).
     #[serde(rename = "mbtiles")]
     MbTiles,
+    /// A cloud-optimised GeoTIFF by its web address: drawn from the overview and tiles the view
+    /// needs, read by byte range.
+    #[serde(rename = "cog")]
+    Cog,
 }
 
 impl TileKind {
-    pub const ALL: [TileKind; 5] = [TileKind::Raster, TileKind::Vector, TileKind::Style, TileKind::PmTiles, TileKind::MbTiles];
+    pub const ALL: [TileKind; 6] =
+        [TileKind::Raster, TileKind::Vector, TileKind::Style, TileKind::PmTiles, TileKind::MbTiles, TileKind::Cog];
     pub fn code(self) -> &'static str {
         match self {
             TileKind::Raster => "raster",
@@ -41,6 +46,7 @@ impl TileKind {
             TileKind::Style => "style",
             TileKind::PmTiles => "pmtiles",
             TileKind::MbTiles => "mbtiles",
+            TileKind::Cog => "cog",
         }
     }
     pub fn label(self) -> &'static str {
@@ -50,6 +56,7 @@ impl TileKind {
             TileKind::Style => "Map style (JSON)",
             TileKind::PmTiles => "PMTiles archive",
             TileKind::MbTiles => "MBTiles archive",
+            TileKind::Cog => "Cloud-optimised GeoTIFF",
         }
     }
     pub fn from_code(s: &str) -> Option<TileKind> {
@@ -60,6 +67,7 @@ impl TileKind {
             "style" | "maplibre" | "mapbox" => Some(TileKind::Style),
             "pmtiles" => Some(TileKind::PmTiles),
             "mbtiles" => Some(TileKind::MbTiles),
+            "cog" | "geotiff" => Some(TileKind::Cog),
             _ => None,
         }
     }

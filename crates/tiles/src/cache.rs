@@ -166,6 +166,7 @@ pub fn clear() {
     crate::source::forget();
     crate::pmtiles::forget();
     crate::mbtiles::forget();
+    crate::cog::forget();
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -208,6 +209,11 @@ fn start(url: String, want: Want) {
     // A tile from a PMTiles archive is read from the archive, by range.
     if crate::pmtiles::is_tile(&url) {
         crate::pmtiles::fetch(&url, done);
+        return;
+    }
+    // A tile of a cloud-optimised GeoTIFF is drawn from the file's tiles, read by range.
+    if crate::cog::is_tile(&url) {
+        crate::cog::fetch(&url, done);
         return;
     }
     // A tile from an MBTiles archive is read from the file, or the upload in memory.
@@ -414,8 +420,23 @@ pub fn decode(bytes: &[u8], want: Want) -> Result<Payload, String> {
     }
 }
 
+/// Starts a picture drawn by RustGIS itself (a COG's map tile): its width and height (u32, little
+/// end first), then straight RGBA pixels. No encoding, so no PNG encoder in the browser build.
+pub(crate) const RAW: &[u8] = b"RUSTGIS-RGBA";
+
 /// Decodes a PNG, JPEG or WebP picture into a premultiplied pixmap (at most 4096 pixels a side).
 pub fn decode_image(bytes: &[u8]) -> Result<Pixmap, String> {
+    if let Some(rest) = bytes.strip_prefix(RAW) {
+        let dim = |at: usize| rest.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes).unwrap_or(0);
+        let (w, h) = (dim(0), dim(4));
+        let mut data = rest.get(8..).unwrap_or_default().to_vec();
+        if w == 0 || h == 0 || w > 4096 || h > 4096 || data.len() != (w as usize) * (h as usize) * 4 {
+            return Err("a picture of the wrong size".into());
+        }
+        premultiply(&mut data);
+        return Pixmap::from_vec(data, tiny_skia::IntSize::from_wh(w, h).ok_or("an empty picture")?)
+            .ok_or_else(|| "a picture of the wrong size".into());
+    }
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(4096);
@@ -425,6 +446,12 @@ pub fn decode_image(bytes: &[u8]) -> Result<Pixmap, String> {
     let img = reader.decode().map_err(|e| e.to_string())?.into_rgba8();
     let (w, h) = img.dimensions();
     let mut data = img.into_raw();
+    premultiply(&mut data);
+    Pixmap::from_vec(data, tiny_skia::IntSize::from_wh(w, h).ok_or("an empty picture")?).ok_or_else(|| "a picture of the wrong size".into())
+}
+
+/// Straight RGBA to premultiplied, in place.
+fn premultiply(data: &mut [u8]) {
     for px in data.as_chunks_mut::<4>().0 {
         let a = u16::from(px[3]);
         if a < 255 {
@@ -433,7 +460,6 @@ pub fn decode_image(bytes: &[u8]) -> Result<Pixmap, String> {
             }
         }
     }
-    Pixmap::from_vec(data, tiny_skia::IntSize::from_wh(w, h).ok_or("an empty picture")?).ok_or_else(|| "a picture of the wrong size".into())
 }
 
 #[cfg(not(target_arch = "wasm32"))]

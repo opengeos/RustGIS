@@ -34,6 +34,7 @@ pub fn spec(t: &TileLayer) -> Spec {
             TileKind::Style => Kind::Style,
             TileKind::PmTiles => Kind::PmTiles,
             TileKind::MbTiles => Kind::MbTiles,
+            TileKind::Cog => Kind::Cog,
         },
         url: t.url.clone(),
         subdomains: t.subdomains.clone(),
