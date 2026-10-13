@@ -1,7 +1,8 @@
 # Builds the docs and the web app on every pull request and publishes a preview to GitHub Pages:
 # the `gh-pages` branch of opengeos/rustgis-preview, a folder per pull request
-# (https://opengeos.org/rustgis-preview/pr-<N>/, the app under app/). GitHub Pages takes files up
-# to 100 MB; Cloudflare Pages, used before, stopped at 25 MiB, which the app's WebAssembly reaches.
+# (https://preview.rustgis.app/pr-<N>/, the app under app/). The branch's CNAME file, kept by every
+# publish, holds the domain. GitHub Pages takes files up to 100 MB; Cloudflare Pages, used before,
+# stopped at 25 MiB, which the app's WebAssembly reaches.
 #
 # Required repository secret:
 #   PREVIEW_DEPLOY_KEY - private half of an SSH deploy key with write access to
@@ -148,7 +149,7 @@ jobs:
         if: steps.deploy.outcome == 'success'
         uses: actions/github-script@v9
         env:
-          PREVIEW_URL: https://opengeos.org/rustgis-preview/pr-${{ github.event.pull_request.number }}/
+          PREVIEW_URL: https://preview.rustgis.app/pr-${{ github.event.pull_request.number }}/
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         with:
           script: |
