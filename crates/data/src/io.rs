@@ -608,7 +608,11 @@ pub fn read_csv_with(text: &str, name: &str, opts: &CsvOptions) -> Result<(Datas
     }
     let (x, y) = match (x, y) {
         (Some(x), Some(y)) => (Some(x), Some(y)),
-        (None, None) if wkt_given.is_none() => (find(LON_NAMES).or(find(X_NAMES)), find(LAT_NAMES).or(find(Y_NAMES))),
+        // Found by name, as a pair from one family: longitude/latitude, else easting/northing.
+        (None, None) if wkt_given.is_none() => match (find(LON_NAMES), find(LAT_NAMES)) {
+            (Some(x), Some(y)) => (Some(x), Some(y)),
+            _ => (find(X_NAMES), find(Y_NAMES)),
+        },
         (None, None) => (None, None),
         _ => return Err(DataError::Format("give both the x and the y column".into())),
     };
@@ -1401,6 +1405,9 @@ mod tests {
         assert!(read_csv_with(text, "t", &CsvOptions { x: Some("nope".into()), ..opts.clone() }).is_err());
         assert!(read_csv_with(text, "t", &CsvOptions { y: None, ..opts.clone() }).is_err(), "x without y");
         assert!(read_csv_with(text, "t", &CsvOptions { wkt: Some("id".into()), ..opts }).is_err(), "x/y and WKT");
+        // A longitude without a latitude doesn't pair with a northing.
+        let (ds, _) = read_csv("lon,northing\n1,2\n", "t").unwrap();
+        assert_eq!(ds.geometry_type, GeometryType::None);
         // Easting/northing found by name in a tab-separated file.
         let (ds, _) = read_csv("name\teasting\tnorthing\nA\t500000\t4649776\n", "t").unwrap();
         assert_eq!(ds.geometry_type, GeometryType::Point);

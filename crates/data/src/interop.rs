@@ -240,6 +240,10 @@ impl WktParser {
     fn coord(&mut self) -> Result<Coord, String> {
         let mut v = Vec::with_capacity(4);
         while let Some(WktTok::Num(n)) = self.peek() {
+            // Two to four numbers: a fifth is already wrong, so stop there.
+            if v.len() == 4 {
+                return Err("a coordinate needs two to four numbers".into());
+            }
             v.push(*n);
             self.at += 1;
         }
