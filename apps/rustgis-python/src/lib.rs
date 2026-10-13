@@ -18,8 +18,9 @@ create_exception!(_rustgis, RustGISError, PyException, "A RustGIS command or fil
 
 /// One RustGIS session: a project with its maps, layers, undo history and selection.
 ///
-/// Not shared between threads: the engine's session is single-threaded, as in the app.
-#[pyclass(unsendable, module = "rustgis._rustgis")]
+/// Usable from any thread (Jupyter delivers a widget's messages on one of its own): every method
+/// holds the GIL throughout, so calls take turns.
+#[pyclass(module = "rustgis._rustgis")]
 struct Engine {
     session: Session,
 }
@@ -64,6 +65,12 @@ impl Engine {
         let found = map.layer_by_name(layer).or_else(|| layer.trim().parse::<u32>().ok().and_then(|id| map.layer(id)));
         let found = found.ok_or_else(|| RustGISError::new_err(format!("no layer named '{layer}'")))?;
         Ok(rustgis_engine::data::io::to_geojson(&found.dataset).to_string())
+    }
+
+    /// The project as `.rgis` JSON text, as `project.saveAs` writes it (what `project.openText`
+    /// opens).
+    fn project_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.session.project).map_err(|e| RustGISError::new_err(e.to_string()))
     }
 
     /// The notices commands have given since the last call (a file's warnings, a tool's

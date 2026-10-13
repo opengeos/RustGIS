@@ -22,6 +22,16 @@ gdf = s.layer("Cities").to_geopandas()            # a GeoDataFrame in EPSG:4326
 s.add_geopandas(gdf[gdf.pop_max > 5_000_000], name="Big cities")
 ```
 
+In Jupyter, `rustgis.Map` shows the RustGIS app itself in the cell, in step with its session both
+ways (`pip install "rustgis[jupyter]"`):
+
+```python
+m = rustgis.Map(sample=True)
+m.add_geopandas(gdf, name="Big cities")           # appears in the app
+m                                                 # pan, edit, style there...
+m.info()["center"]                                # ...and read it back here
+```
+
 Every action in RustGIS is a command with an id, the same ids the ribbon, `rustgis-cli` and the
 AI Assistant use: `Session.commands()` lists them with their parameters, and `Session.run` runs
 any of them. See the [Python guide](https://rustgis.app/python/).

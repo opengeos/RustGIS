@@ -209,7 +209,7 @@ const PLACE_KEYS: &[&str] = &["path", "folder", "dir", "file", "url", "uri", "so
 pub const SQL: &str = "layer.addSql";
 
 /// Commands that read a database, which can be a PostgreSQL server's as well as a file.
-const DATABASES: &[&str] = &[SQL, "layer.addDatabase", "info.databaseTables"];
+const DATABASES: &[&str] = &[SQL, "layer.addDatabase", "info.databaseTables", "sql.query", "sql.schema"];
 
 /// What a command reaches beyond the project when run with some parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

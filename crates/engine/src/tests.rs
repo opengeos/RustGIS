@@ -3288,3 +3288,95 @@ fn stac_search_and_assets() {
     }
     assert!(s.run("stac.addAsset", &json!({"item": {"type": "Feature", "id": "x", "assets": {}}})).is_err());
 }
+
+/// Places found by name, and a table's addresses turned into points, through a geocoder of one's
+/// own (a local Nominatim answer here); the app's answers can be passed in instead.
+#[test]
+fn geocoding_places_and_addresses() {
+    use crate::render::rustgis_tiles::geocode::Geocoder;
+    const ANSWER: &[u8] = br#"[{"lat": "48.8584", "lon": "2.2945", "display_name": "Tour Eiffel, Paris", "boundingbox": ["48.857", "48.859", "2.293", "2.296"]}]"#;
+    let base = serve(ANSWER, 4);
+    let mut s = Session::new(Project::default());
+    let r = s.run("map.findPlace", &json!({"query": "Eiffel Tower", "url": base})).unwrap();
+    assert_eq!(r["count"], 1);
+    assert_eq!(r["places"][0]["name"], "Tour Eiffel, Paris");
+    assert!(s.run("map.findPlace", &json!({"query": " "})).is_err());
+    assert!(s.run("map.findPlace", &json!({"query": "x", "provider": "google"})).is_err());
+    // Two rows share an address, asked once; a row without one has no point.
+    let csv = "id,street,city\n1,Champ de Mars,Paris\n2,Champ de Mars,Paris\n3,5 Av. Anatole,Paris\n4,,\n";
+    s.run("layer.addDataText", &json!({"fileName": "sites.csv", "text": csv})).unwrap();
+    assert!(s.project.tables.iter().any(|t| t.name == "sites"), "a table of addresses");
+    let r = s.run("layer.geocode", &json!({"table": "sites", "address": ["street", "city"], "url": base})).unwrap();
+    assert_eq!((r["matched"].as_u64(), r["unmatched"].as_u64()), (Some(3), Some(1)), "{r}");
+    let l = s.map().layer_by_name("sites (geocoded)").unwrap();
+    assert_eq!(l.dataset.features.len(), 4);
+    assert_eq!(l.dataset.fields.last().unwrap().name, "geocoded");
+    assert!(l.dataset.features[3].geometry.is_none());
+    // The app's own answers: one address found, the other not.
+    let places = json!({"Champ de Mars, Paris": {"lon": 2.29, "lat": 48.85, "name": "Champ de Mars"}, "5 Av. Anatole, Paris": null});
+    let r = s.run("layer.geocode", &json!({"layer": "sites", "address": "street, city", "places": places, "name": "G"})).unwrap();
+    assert_eq!((r["matched"].as_u64(), r["unmatched"].as_u64()), (Some(2), Some(2)));
+    for bad in
+        [json!({"layer": "sites"}), json!({"layer": "sites", "address": "nope"}), json!({"layer": "sites", "address": "id", "places": 7})]
+    {
+        assert!(s.run("layer.geocode", &bad).is_err(), "{bad}");
+    }
+    // A server that refuses: the requests are failures, not "not found".
+    let refusing = format!("{}/missing", serve(ANSWER, 2));
+    let e = s.run("layer.geocode", &json!({"table": "sites", "address": ["street", "city"], "url": refusing})).unwrap_err();
+    assert!(e.contains("none of the addresses"), "{e}");
+    assert!(s.notices.iter().any(|n| n.error && n.text.contains("2 addresses couldn't be looked up")));
+    // A public server takes a hundred addresses a run.
+    let g = Geocoder::new(None, None).unwrap();
+    assert!(crate::cmd::geocode::check_batch(&g, 101).unwrap_err().contains("100"));
+}
+
+/// The SQL workspace's commands: a query's first rows without a layer, and a database's columns
+/// (through DuckDB when it is installed; without it, they say how to get it).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn sql_workspace_rows_and_schema() {
+    let mut s = Session::new(Project::default());
+    assert!(s.run("sql.query", &json!({})).is_err());
+    if !rustgis_data::source::duckdb::available() {
+        assert!(s.run("sql.query", &json!({"sql": "SELECT 1"})).unwrap_err().contains("need DuckDB"));
+        return;
+    }
+    let before = s.map().layers.len();
+    let r = s.run("sql.query", &json!({"sql": "SELECT i AS n, ST_Point(i, 0) AS geom FROM range(150) t(i)"})).unwrap();
+    assert_eq!(r["rows"].as_array().map(Vec::len), Some(100), "the default limit");
+    assert_eq!((r["geometry"].as_bool(), r["more"].as_bool()), (Some(true), Some(true)));
+    assert_eq!(r["columns"][0]["name"], "n");
+    assert_eq!(r["rows"][2][1], "POINT (2 0)");
+    // A result the app ran is added only for the query it came from, and kept until it is.
+    let q = "SELECT 'a' AS name, ST_Point(1, 2) AS geom";
+    let out = rustgis_data::source::duckdb::run(&rustgis_data::source::duckdb::Query { sql: q, ..Default::default() }).unwrap();
+    let id = s.sql_ran(q, None, out);
+    assert!(s.run("layer.addSql", &json!({"sql": "SELECT 2 AS x", "ran": id})).unwrap_err().contains("another query"));
+    let r = s.run("layer.addSql", &json!({"sql": q, "ran": id, "name": "Ran"})).unwrap();
+    assert_eq!(r["features"], 1);
+    assert!(s.run("layer.addSql", &json!({"sql": q, "ran": id})).unwrap_err().contains("no longer kept"));
+    s.run("layer.remove", &json!({"layer": "Ran"})).unwrap();
+    assert_eq!(s.map().layers.len(), before, "no layer is added");
+    let r = s.run("sql.query", &json!({"sql": "SELECT 'a' AS x", "limit": 5000})).unwrap();
+    assert_eq!((r["geometry"].as_bool(), r["more"].as_bool()), (Some(false), Some(false)));
+    assert!(s.run("sql.query", &json!({"sql": "SELECT * FROM nowhere"})).unwrap_err().contains("nowhere"));
+    // A database's tables and their columns.
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-sqlws-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("towns.duckdb");
+    let ok = std::process::Command::new(rustgis_data::source::duckdb::program().unwrap())
+        .arg(&db)
+        .arg("-c")
+        .arg("CREATE TABLE towns AS SELECT 'x' AS name, 3 AS pop;")
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok);
+    let r = s.run("sql.schema", &json!({"database": db.display().to_string()})).unwrap();
+    assert_eq!(r["tables"]["towns"], json!(["name", "pop"]));
+    let r = s.run("sql.query", &json!({"sql": "SELECT pop FROM towns", "database": db.display().to_string()})).unwrap();
+    assert_eq!(r["rows"], json!([[3]]));
+    let _ = std::fs::remove_dir_all(dir);
+}

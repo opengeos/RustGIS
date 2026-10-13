@@ -1,7 +1,8 @@
 //! The browser shell: file picker, downloads, drag-and-drop, the unsaved-changes guard and the
 //! eframe web runner.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use rustgis_ui_egui::{Inbox, RustGisApp, Services};
@@ -55,7 +56,9 @@ pub fn start() {
             return;
         };
         let dirty = Rc::new(Cell::new(false));
-        if let Err(e) = guard_unload(dirty.clone()) {
+        // Inside another page (`?embed`) the page holds the work, so leaving it doesn't ask.
+        let embedded = flag(&query(), "embed");
+        if !embedded && let Err(e) = guard_unload(dirty.clone()) {
             log::error!("no unsaved-changes guard: {e}");
         }
         let mut options = eframe::WebOptions::default();
@@ -72,12 +75,13 @@ pub fn start() {
                     let inbox: Inbox = Inbox::default();
                     let font_inbox: Inbox = Inbox::default();
                     let q = query();
-                    let mut app = RustGisApp::with_sample().with_services(services(inbox.clone(), font_inbox, cc.egui_ctx.clone()));
+                    let mut app =
+                        RustGisApp::with_sample().with_services(services(inbox.clone(), font_inbox, cc.egui_ctx.clone(), embedded));
                     // Settings › Start-up, unless `?blank`, `?projection=EPSG:3010` (a preset id,
                     // `mercator`, `globe`) or `?extent=minLon,minLat,maxLon,maxLat` says otherwise
                     // for this visit.
                     let start = rustgis_ui_egui::Start {
-                        blank: q.trim_start_matches('?').split('&').any(|kv| kv == "blank").then_some(true),
+                        blank: (embedded || flag(&q, "blank")).then_some(true),
                         projection: param(&q, "projection").filter(|c| !c.is_empty()),
                         extent: param(&q, "extent").filter(|c| !c.is_empty()),
                     };
@@ -118,7 +122,18 @@ pub fn start() {
                     {
                         log::warn!("?registry={url}: {e}");
                     }
-                    Ok(Box::new(WebShell { app, inbox, dirty }))
+                    let embed = if embedded {
+                        match Embed::listen(cc.egui_ctx.clone()) {
+                            Ok(e) => Some(e),
+                            Err(e) => {
+                                log::error!("?embed: {e}");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    Ok(Box::new(WebShell { app, inbox, dirty, embed }))
                 }),
             )
             .await;
@@ -153,6 +168,11 @@ fn param(q: &str, key: &str) -> Option<String> {
     js_sys::decode_uri_component(&raw.replace('+', " ")).ok().and_then(|s| s.as_string())
 }
 
+/// Whether a query flag is set (`?blank`, `?embed`).
+fn flag(q: &str, key: &str) -> bool {
+    q.trim_start_matches('?').split('&').any(|kv| kv == key)
+}
+
 fn query() -> String {
     web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
 }
@@ -163,6 +183,103 @@ struct WebShell {
     app: RustGisApp,
     inbox: Inbox,
     dirty: Rc<Cell<bool>>,
+    embed: Option<Embed>,
+}
+
+/// The link to the page that embeds the app (`?embed`; see `embed.rs`).
+struct Embed {
+    parent: web_sys::Window,
+    /// Messages from the parent, as JSON, waiting for the next frame.
+    queue: Rc<RefCell<Vec<serde_json::Value>>>,
+    /// The origin of the parent's first message: the only one answered.
+    origin: Rc<RefCell<Option<String>>>,
+    changes: crate::embed::Changes,
+}
+
+impl Embed {
+    /// Takes messages from the parent window and tells it the app is ready.
+    fn listen(ctx: egui::Context) -> Result<Embed, String> {
+        let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
+        let window = web_sys::window().ok_or("no window")?;
+        let parent = window.parent().map_err(err)?.ok_or("no parent window")?;
+        let (queue, origin) = (Rc::new(RefCell::new(Vec::new())), Rc::new(RefCell::new(None::<String>)));
+        let (q, o, from) = (queue.clone(), origin.clone(), parent.clone());
+        let on_message = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+            if !e.source().is_some_and(|s| js_sys::Object::is(&s, &from)) {
+                return;
+            }
+            let mut origin = o.borrow_mut();
+            if origin.as_deref().is_some_and(|known| known != e.origin()) {
+                return;
+            }
+            let Some(text) = js_sys::JSON::stringify(&e.data()).ok().and_then(|t| t.as_string()) else {
+                return;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+                return;
+            };
+            if crate::embed::parse(&value).is_some() {
+                origin.get_or_insert_with(|| e.origin());
+                q.borrow_mut().push(value);
+                ctx.request_repaint();
+            }
+        });
+        window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).map_err(err)?;
+        on_message.forget();
+        let embed = Embed { parent, queue, origin, changes: crate::embed::Changes::default() };
+        // Nothing to hide in it, so it goes to whichever page embeds the app.
+        embed.post(&crate::embed::ready(), "*");
+        Ok(embed)
+    }
+
+    fn post(&self, msg: &serde_json::Value, origin: &str) {
+        match js_sys::JSON::parse(&msg.to_string()) {
+            Ok(v) => {
+                if let Err(e) = self.parent.post_message(&v, origin) {
+                    log::error!("couldn't post to the embedding page: {e:?}");
+                }
+            }
+            Err(e) => log::error!("couldn't post to the embedding page: {e:?}"),
+        }
+    }
+
+    /// Posts to the page that sent the first message; nothing before it has.
+    fn answer(&self, msg: &serde_json::Value) {
+        if let Some(origin) = self.origin.borrow().clone() {
+            self.post(msg, &origin);
+        }
+    }
+
+    /// Runs the page's messages, then posts the project once a change here has settled.
+    fn exchange(&mut self, app: &mut RustGisApp, ctx: &egui::Context) {
+        use crate::embed::{Msg, key, parse};
+        let queued = std::mem::take(&mut *self.queue.borrow_mut());
+        for value in queued {
+            match parse(&value) {
+                Some(Msg::Project(text)) => match app.run("project.openText", serde_json::json!({"text": text})) {
+                    Ok(_) => self.changes.seen(key(&app.session)),
+                    Err(e) => app.session.notify(e, true),
+                },
+                Some(Msg::Run { id, command, params }) => {
+                    let outcome = if crate::embed::runnable(&command) {
+                        app.run(&command, params)
+                    } else {
+                        Err(format!("{command}: only the app's own commands (ui.*) run from the embedding page"))
+                    };
+                    self.answer(&crate::embed::result(id, outcome));
+                }
+                None => {}
+            }
+        }
+        match self.changes.due(key(&app.session), web_time::Instant::now()) {
+            (true, _) => match serde_json::to_string(&app.session.project) {
+                Ok(text) => self.answer(&crate::embed::project(&text)),
+                Err(e) => log::error!("couldn't send the project: {e}"),
+            },
+            (false, Some(wait)) => ctx.request_repaint_after(wait),
+            (false, None) => {}
+        }
+    }
 }
 
 impl eframe::App for WebShell {
@@ -181,6 +298,9 @@ impl eframe::App for WebShell {
                     Err(e) => log::error!("couldn't read dropped file {name}: {e}"),
                 }
             });
+        }
+        if let Some(embed) = &mut self.embed {
+            embed.exchange(&mut self.app, ctx);
         }
         self.app.logic(ctx);
         self.dirty.set(self.app.session.dirty);
@@ -306,7 +426,9 @@ async fn http(req: rustgis_ui_egui::rustgis_assistant::HttpRequest) -> Result<ru
     Ok(rustgis_ui_egui::rustgis_assistant::HttpResponse { status, body: bytes.to_vec() })
 }
 
-fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
+/// The browser's services. Embedded, settings live in memory for the visit: the page that embeds
+/// the app must not read what the user saved on the site.
+fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context, embedded: bool) -> Services {
     // Map tiles come through the browser's fetch (the app repaints when they arrive).
     rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::set_fetcher(|url, done| {
         wasm_bindgen_futures::spawn_local(async move { done(fetch_bytes(&url).await) });
@@ -317,13 +439,28 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
     let font_sink = font_inbox.clone();
     let fetch_ctx = ctx.clone();
     let http_ctx = ctx.clone();
+    let (load_pref, save_pref): (Box<dyn Fn(&str) -> Option<String>>, Box<dyn Fn(&str, &str)>) = if embedded {
+        let prefs = Rc::new(RefCell::new(HashMap::<String, String>::new()));
+        let saved = prefs.clone();
+        (
+            Box::new(move |key: &str| prefs.borrow().get(key).cloned()),
+            Box::new(move |key: &str, value: &str| {
+                saved.borrow_mut().insert(key.to_string(), value.to_string());
+            }),
+        )
+    } else {
+        (
+            Box::new(|key: &str| storage().and_then(|s| s.get_item(&format!("rustgis.{key}")).ok().flatten())),
+            Box::new(|key: &str, value: &str| {
+                if let Some(s) = storage() {
+                    let _ = s.set_item(&format!("rustgis.{key}"), value);
+                }
+            }),
+        )
+    };
     Services {
-        load_pref: Some(Box::new(|key: &str| storage().and_then(|s| s.get_item(&format!("rustgis.{key}")).ok().flatten()))),
-        save_pref: Some(Box::new(|key: &str, value: &str| {
-            if let Some(s) = storage() {
-                let _ = s.set_item(&format!("rustgis.{key}"), value);
-            }
-        })),
+        load_pref: Some(load_pref),
+        save_pref: Some(save_pref),
         fetch_font: Some(Box::new(move |url: &str| {
             let (url, inbox, ctx) = (url.to_string(), font_sink.clone(), font_ctx.clone());
             wasm_bindgen_futures::spawn_local(async move {

@@ -40,6 +40,8 @@ impl Dialogs {
             "camera" => "camera",
             "addTiles" => "addTiles",
             "addCsv" => "addCsv",
+            "findPlace" => "findPlace",
+            "geocode" => "geocode",
             "addUrl" => "addUrl",
             "addService" => "addService",
             "addDatabase" => "addDatabase",
@@ -86,6 +88,12 @@ impl Dialogs {
             "definitionQuery" => self.text = active.and_then(|l| l.definition_query.clone()).unwrap_or_default(),
             "renameLayer" => self.text = active.map(|l| l.name.clone()).unwrap_or_default(),
             "exportLayer" => self.mode = "geojson",
+            // A table of addresses is what's usually geocoded.
+            "geocode" => {
+                if let Some(t) = s.project.tables.last() {
+                    self.layer = t.name.clone();
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -106,6 +114,8 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "camera" => "Camera",
         "addTiles" => "Add Tile Layer",
         "addCsv" => "Add Delimited Text",
+        "findPlace" => "Find Place",
+        "geocode" => "Geocode Addresses",
         "addUrl" => "Add Data From URL",
         "addService" => "Add From Service",
         "addDatabase" => "Add From Database",
@@ -148,6 +158,8 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             "coordinateSystem" => close = coordinate_system(app, ui, &t),
             "addTiles" => close = add_tiles(app, ui),
             "addCsv" => close = add_csv(app, ui),
+            "findPlace" => close = crate::geocodeui::find_place(app, ui),
+            "geocode" => close = crate::geocodeui::geocode(app, ui),
             "addUrl" => close = add_url(app, ui),
             "addService" => close = add_service(app, ui),
             "addDatabase" => close = add_database(app, ui),
@@ -630,7 +642,7 @@ fn add_tiles(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
 }
 
 /// OK/Cancel row; returns true when the dialog should close.
-fn buttons(app: &mut RustGisApp, ui: &mut egui::Ui, ok: &str, f: impl FnOnce(&mut RustGisApp) -> Result<(), String>) -> bool {
+pub(crate) fn buttons(app: &mut RustGisApp, ui: &mut egui::Ui, ok: &str, f: impl FnOnce(&mut RustGisApp) -> Result<(), String>) -> bool {
     let mut close = false;
     ui.add_space(4.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {

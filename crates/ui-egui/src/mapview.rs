@@ -54,6 +54,16 @@ pub struct Popup {
     pub index: usize,
 }
 
+/// A notice shown as a toast.
+pub struct Toast {
+    pub text: String,
+    pub error: bool,
+    /// When it came, or was last hovered (it stays while the pointer is on it).
+    pub at: f64,
+    /// Its number, for a steady id.
+    pub id: u64,
+}
+
 pub struct MapView {
     texture: Option<egui::TextureHandle>,
     key: Option<Key>,
@@ -73,8 +83,7 @@ pub struct MapView {
     pub dms: bool,
     pub render_ms: u64,
     pub notices_seen: usize,
-    /// Toasts showing: text, whether an error, when it came or was last hovered, and its number.
-    pub toasts: Vec<(String, bool, f64, u64)>,
+    pub toasts: Vec<Toast>,
     /// Toasts made so far, numbering each for a steady id.
     pub toasts_made: u64,
     camera_moved: bool,

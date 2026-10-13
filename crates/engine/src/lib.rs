@@ -259,6 +259,10 @@ pub struct Session {
     downloading: Vec<u64>,
     /// Downloads that landed, waiting for `layer.addDownload`.
     pub(crate) downloaded: Vec<(u64, Vec<u8>)>,
+    /// Query results the app ran off the frame (the SQL pane), waiting for `layer.addSql {"ran"}`:
+    /// the id, the query and database (label) they came from, and the result.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) sql_results: Vec<(u64, String, Option<String>, rustgis_data::source::duckdb::Output)>,
 }
 
 /// A finished tool run, held until `gp.finish` applies it.
@@ -351,7 +355,24 @@ impl Session {
             started: Vec::new(),
             downloading: Vec::new(),
             downloaded: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            sql_results: Vec::new(),
         }
+    }
+
+    /// Keeps a query's result the app ran off the frame, for `layer.addSql {"ran": id}`, with the
+    /// query and database it came from: the command takes it only for that same query, so the
+    /// layer's saved query is the one that made it. A few at a time: past that many, the oldest
+    /// are forgotten.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn sql_ran(&mut self, sql: &str, database: Option<&str>, out: rustgis_data::source::duckdb::Output) -> u64 {
+        self.next_pending = self.next_pending.wrapping_add(1);
+        if self.sql_results.len() >= 8 {
+            self.sql_results.remove(0);
+        }
+        let database = database.and_then(|d| cmd::layer::database_param(&serde_json::json!({"database": d}))).map(|d| d.label());
+        self.sql_results.push((self.next_pending, sql.to_string(), database, out));
+        self.next_pending
     }
 
     /// Starts a data download for this project (the front end fetches it): its id, for
@@ -515,6 +536,8 @@ impl Session {
         self.started.clear();
         self.downloading.clear();
         self.downloaded.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.sql_results.clear();
     }
 
     pub(crate) fn undo(&mut self) -> bool {

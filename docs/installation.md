@@ -112,6 +112,11 @@ added is said in a notice. For example,
 `?blank&data=https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson` opens
 the past week's earthquakes.
 
+`?embed` runs the app inside another page, as the [Python package's notebook widget](python.md)
+does: it starts blank, keeps its settings in memory rather than in the browser, and exchanges
+the project with the page that frames it through `postMessage` (the messages are described in
+`apps/rustgis-web/src/embed.rs`).
+
 To build it yourself, install [Trunk](https://trunkrs.dev), the `wasm32-unknown-unknown` target
 and clang (it compiles the Zstandard decoder used for GeoTIFFs to WebAssembly). Linux
 distributions' clang can; on macOS, Apple's can't, so install `llvm` with Homebrew and put its

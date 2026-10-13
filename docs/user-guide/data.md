@@ -66,6 +66,16 @@ query as a layer, with the `layer.addSql` command (Add Data From SQL in command 
 {"sql": "SELECT name, geometry FROM read_parquet('places.parquet') WHERE country = 'FR'", "name": "French places"}
 ```
 
+**Analyze › SQL** opens the SQL pane, a workspace for these queries: an editor (Ctrl+Enter runs
+the query) that completes table and column names of the database named above it and DuckDB
+Spatial's common functions, the result's first 200 rows as a table, **Add to Map** for a result
+with a geometry column, and a history of the queries run (kept by the app with its preferences,
+without the database's password; a query that seems to hold a credential, such as `user:password@`
+in an address, a signed URL or a secret, isn't kept). Queries run in the background, so the app keeps drawing while DuckDB works. The
+commands behind it are `sql.query` (a query's first rows, up to 1,000, without adding a layer) and
+`sql.schema` (a database's tables and their columns); both take `"database"` as `layer.addSql`
+does. The web app has no DuckDB, so the pane says to open the project in the desktop app.
+
 The query is one DuckDB `SELECT` (or `FROM …`, `WITH …`), with [DuckDB
 Spatial](https://duckdb.org/docs/stable/core_extensions/spatial/overview)'s `ST_` functions: it can
 read Parquet, CSV, JSON and GeoParquet files, anything `ST_Read` reads, and web addresses (`https://`,
@@ -150,6 +160,29 @@ Assets are added by their web address: one in a cloud store's own protocol (`s3:
 needs signing (Microsoft Planetary Computer) is refused with a message saying so, and an item on
 the web can't point into the local network. Searches reach the network, so the [AI
 Assistant](assistant.md) asks before it runs them, and plugins need the network permission.
+
+## Geocoding addresses
+
+**Home › Add Data › Geocode Addresses…** (`layer.geocode`) turns a table's addresses into points:
+a CSV of addresses without coordinates is added as a standalone table, then each row's address
+fields (`"address"`: a field, or several such as street, city and country, joined with commas)
+are looked up, each distinct address once. The result is a new point layer holding every field
+plus `geocoded`, what the geocoder called the place; rows that weren't found stay in its table
+without a point.
+
+The geocoder is OpenStreetMap's public [Nominatim](https://nominatim.org) by default, or
+[Photon](https://photon.komoot.io) (`"provider": "photon"`). Their usage policies allow light
+use, so RustGIS sends them at most one request a second and 100 addresses a run; give `"url"` of
+a Nominatim or Photon server of your own for more (up to 10,000, with no wait between requests).
+In the app the requests go out in the background, one at a time, and the layer is added when the
+last answer lands; `layer.geocode` on the command line waits for them.
+
+```sh
+rustgis-cli run --cmd 'layer.addData={"path":"stores.csv"}' --cmd 'layer.geocode={"table":"stores","address":["street","city","country"]}'
+```
+
+The addresses are sent to the geocoder's server, so the [AI Assistant](assistant.md) asks before
+it geocodes, and plugins need the network permission.
 
 ## Large files
 

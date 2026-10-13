@@ -9,6 +9,9 @@ are shortcuts for the common ones.
 >>> s.run("gp.run", tool="buffer", params={"input": "Cities", "distance": 100})
 >>> s.to_png("map.png")
 >>> s.save("atlas.rgis")
+
+In Jupyter, ``rustgis.Map`` shows the RustGIS app in the cell, in step with its session
+(``pip install "rustgis[jupyter]"``).
 """
 
 from __future__ import annotations
@@ -21,9 +24,29 @@ from ._rustgis import Engine as _Engine
 from ._rustgis import RustGISError, __version__
 from ._rustgis import load_plugins as _load_plugins
 
-__all__ = ["Layer", "RustGISError", "Session", "__version__", "load_plugins"]
+__all__ = ["Layer", "Map", "RustGISError", "Session", "__version__", "load_plugins"]
 
 PathLike = Union[str, "os.PathLike[str]"]
+
+
+def __getattr__(name: str) -> Any:
+    """Imports ``Map`` on first use, so the package works without the notebook widget's
+    dependencies.
+
+    Args:
+        name: The attribute asked for.
+
+    Raises:
+        ImportError: When ``Map`` is asked for and anywidget isn't installed.
+        AttributeError: For any other name.
+    """
+    if name == "Map":
+        try:
+            from .widget import Map
+        except ImportError as e:
+            raise ImportError('rustgis.Map needs anywidget: pip install "rustgis[jupyter]"') from e
+        return Map
+    raise AttributeError(f"module 'rustgis' has no attribute {name!r}")
 
 
 def load_plugins() -> List[str]:
@@ -210,6 +233,14 @@ class Session:
             path: Where to save.
         """
         return self.run("project.saveAs", path=os.fspath(path))
+
+    def project_json(self) -> str:
+        """The project as ``.rgis`` JSON text, as :meth:`save` writes it.
+
+        Returns:
+            The JSON text; ``run("project.openText", text=...)`` opens it.
+        """
+        return self._engine.project_json()
 
     def info(self) -> Dict[str, Any]:
         """The project's summary: the active map, basemap, view and layers."""

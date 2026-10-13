@@ -17,7 +17,7 @@ pub fn commands() -> Vec<C> {
             .view()
             .params(r#"{"path": string}"#),
         C::new("layer.addSql", "Add Data From SQL", "Home › Add", add_sql).params(
-            r#"{"sql": "one DuckDB SELECT; DuckDB Spatial's ST_ functions, read_parquet('…'), web addresses", "name"?: string, "database"?: "a .duckdb file or a PostgreSQL connection (postgres:host=… dbname=…) whose tables the query names", "password"?: "the connection's, kept for this session only", "crs"?: "EPSG:… of a geometry that doesn't say", "stream"?: bool}"#,
+            r#"{"sql": "one DuckDB SELECT; DuckDB Spatial's ST_ functions, read_parquet('…'), web addresses", "name"?: string, "database"?: "a .duckdb file or a PostgreSQL connection (postgres:host=… dbname=…) whose tables the query names", "password"?: "the connection's, kept for this session only", "crs"?: "EPSG:… of a geometry that doesn't say", "stream"?: bool, "ran"?: "a result the app ran (the SQL pane)"}"#,
         ),
         C::new("layer.addDatabase", "Add Data From Database", "Home › Add", add_database).params(
             r#"{"database": "postgres:host=… dbname=… user=… (or a postgresql:// address), or a .duckdb file", "password"?: "kept for this session only, never saved", "layer"?: "a table, as table or schema.table (default: every table with a geometry column)", "crs"?: "EPSG:… of a geometry that doesn't say", "name"?: string, "stream"?: bool}"#,
@@ -771,7 +771,7 @@ fn add_gdal(s: &mut Session, p: &Value, path: &str) -> CmdResult {
 /// The database a command names in `database`, with the `password` given remembered for the
 /// session.
 #[cfg(not(target_arch = "wasm32"))]
-fn database_param(p: &Value) -> Option<rustgis_data::source::duckdb::Database> {
+pub fn database_param(p: &Value) -> Option<rustgis_data::source::duckdb::Database> {
     use rustgis_data::source::duckdb::{Database, remember_password};
     let d = ps(p, "database").map(str::trim).filter(|d| !d.is_empty())?;
     let db = match Database::parse(d) {
@@ -905,8 +905,20 @@ fn add_sql(s: &mut Session, p: &Value) -> CmdResult {
         let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
         let database = database_param(p);
         let full = database.as_ref().map(|d| d.label());
-        let q = duckdb::Query { sql, database: database.as_ref(), crs };
-        let out = duckdb::run(&q).map_err(|e| e.to_string())?;
+        // A result the app ran off the frame (the SQL pane), taken only for the query and database
+        // it came from (the layer saves them); or the query run now.
+        let ran = p.get("ran").and_then(Value::as_u64);
+        let out = match ran {
+            Some(id) => {
+                let (_, ran_sql, ran_db, out) =
+                    s.sql_results.iter().find(|(r, ..)| *r == id).ok_or("that query result is no longer kept: run the query again")?;
+                if ran_sql != sql || *ran_db != full {
+                    return Err("that query result came from another query or database: run the query again".into());
+                }
+                out.clone()
+            }
+            None => duckdb::run(&duckdb::Query { sql, database: database.as_ref(), crs }).map_err(|e| e.to_string())?,
+        };
         let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Query");
         let origin = |family| rustgis_map::source::DuckdbOrigin {
             sql: Some(sql.to_string()),
@@ -921,7 +933,12 @@ fn add_sql(s: &mut Session, p: &Value) -> CmdResult {
         if let Some(o) = q.as_object_mut() {
             o.remove("name");
         }
-        add_converted(s, &q, "the query", full.as_deref().unwrap_or("DuckDB query"), parts)
+        let added = add_converted(s, &q, "the query", full.as_deref().unwrap_or("DuckDB query"), parts)?;
+        // The result is used: forgotten once its layers are in (kept if adding failed).
+        if let Some(id) = ran {
+            s.sql_results.retain(|(r, ..)| *r != id);
+        }
+        Ok(added)
     }
 }
 
