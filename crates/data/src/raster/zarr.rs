@@ -33,6 +33,10 @@ const MAX_CHUNK_BYTES: u64 = 1 << 30;
 const MAX_CHUNK_BYTES: u64 = 256 << 20;
 /// Longest coordinate array read (the labels of a time dimension, say).
 const MAX_COORDS: u64 = 4_000_000;
+/// Largest chunk file read from a folder (stored, before decoding).
+pub const MAX_CHUNK_FILE: u64 = MAX_CHUNK_BYTES;
+/// Most bytes of chunk files one read takes from a folder.
+pub const MAX_READ: u64 = 4 << 30;
 
 fn bad(m: impl Into<String>) -> DataError {
     DataError::Format(m.into())
@@ -310,6 +314,13 @@ impl Store {
 
 /// Reads a store's metadata: `docs` are the metadata files found, by key from the root
 /// (`zarr.json`, `.zmetadata`, or each array's `.zarray` and `.zattrs`, or `zarr.json`).
+/// Whether a path from a store's metadata stays inside the store: names joined by `/`, none of
+/// them `.`, `..` or empty, with no root, backslash or drive (`C:`). Paths name files under a
+/// folder and addresses under a web store, so one that climbs out is refused.
+fn safe_path(p: &str) -> bool {
+    p.is_empty() || (!p.starts_with('/') && !p.contains(['\\', ':', '\0']) && p.split('/').all(|s| !s.is_empty() && s != "." && s != ".."))
+}
+
 pub fn parse_store(docs: &[(String, Vec<u8>)]) -> Result<Store> {
     let mut json: HashMap<String, Value> = HashMap::new();
     for (k, b) in docs.iter().take(4 * MAX_ARRAYS) {
@@ -340,6 +351,11 @@ pub fn parse_store(docs: &[(String, Vec<u8>)]) -> Result<Store> {
             break;
         }
         let Some(v) = json.get(k) else { continue };
+        // A key that would lead out of the store (`../x/.zarray`, `/etc/x/.zarray`) is skipped.
+        let dir = k.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        if !safe_path(dir) {
+            continue;
+        }
         let a = if let Some(path) = k.strip_suffix(".zarray") {
             let path = path.trim_end_matches('/');
             let attrs = json.get(&format!("{}.zattrs", if path.is_empty() { String::new() } else { format!("{path}/") }));
@@ -863,8 +879,12 @@ pub fn assemble(store: &Store, plan: &Plan, chunks: &HashMap<String, Vec<u8>>, n
     let mut grid = vec![f32::NAN; h * w];
     let (cy, cx) = (a.chunks.get(plan.y).copied().unwrap_or(1).max(1), a.chunks.get(plan.x).copied().unwrap_or(1).max(1));
     let nd = a.shape.len();
-    // Values meaning "no data", before any scaling.
-    let mut missing: Vec<f64> = [a.fill, attr_f64(a, "_FillValue"), attr_f64(a, "missing_value")].into_iter().flatten().collect();
+    // Values meaning "no data", before any scaling, as xarray reads them: the CF attributes, and a
+    // Zarr 2 array's fill_value (xarray's _FillValue encoding). A Zarr 3 array's fill_value (0 by
+    // default in zarr-python) only stands for chunks that were never written, and those cells stay
+    // empty here; real zeros are kept.
+    let v2_fill = if a.zarr_format == 2 { a.fill } else { None };
+    let mut missing: Vec<f64> = [v2_fill, attr_f64(a, "_FillValue"), attr_f64(a, "missing_value")].into_iter().flatten().collect();
     missing.dedup();
     let scale = attr_f64(a, "scale_factor").unwrap_or(1.0);
     let offset = attr_f64(a, "add_offset").unwrap_or(0.0);
@@ -1034,6 +1054,7 @@ fn label(c: &Array, v: f64) -> String {
             match calendar.as_str() {
                 "standard" | "gregorian" | "proleptic_gregorian" => {
                     if let Some(base) = epoch_seconds(since) {
+                        // `as` saturates rather than wraps.
                         return date_label((base + v * s) as i64);
                     }
                 }
@@ -1054,7 +1075,9 @@ fn label(c: &Array, v: f64) -> String {
 /// A date in a model calendar of fixed-length years (365, 366 or 360 days): `secs` after `since`.
 fn fixed_calendar(calendar: &str, since: &str, secs: f64) -> Option<String> {
     let mut d = since.split([' ', 'T']).next()?.splitn(3, '-').map(|p| p.trim().parse::<i64>().ok());
-    let (y0, m0, d0) = (d.next()??, d.next().flatten().unwrap_or(1).clamp(1, 12), d.next().flatten().unwrap_or(1).max(1));
+    // The parts of a hostile `units` string are kept to sane ranges, so nothing below overflows.
+    let (y0, m0, d0) =
+        (d.next()??.clamp(-MAX_YEAR, MAX_YEAR), d.next().flatten().unwrap_or(1).clamp(1, 12), d.next().flatten().unwrap_or(1).clamp(1, 31));
     let months: [i64; 12] = match calendar {
         "360_day" => [30; 12],
         "all_leap" | "366_day" => [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31],
@@ -1062,8 +1085,9 @@ fn fixed_calendar(calendar: &str, since: &str, secs: f64) -> Option<String> {
     };
     let year: i64 = months.iter().sum();
     let start = months.iter().take((m0 - 1) as usize).sum::<i64>() + d0 - 1;
-    let total = (secs / 86_400.0).floor() as i64 + start;
-    let (y, mut doy) = (y0 + total.div_euclid(year), total.rem_euclid(year));
+    // `as` saturates a float past i64's range; the sums saturate too.
+    let total = ((secs / 86_400.0).floor() as i64).saturating_add(start);
+    let (y, mut doy) = (y0.saturating_add(total.div_euclid(year)), total.rem_euclid(year));
     let mut m = 0usize;
     while m < 11 && doy >= months[m] {
         doy -= months[m];
@@ -1076,11 +1100,16 @@ fn fixed_calendar(calendar: &str, since: &str, secs: f64) -> Option<String> {
 fn epoch_seconds(s: &str) -> Option<f64> {
     let (date, time) = s.split_once([' ', 'T']).unwrap_or((s, "0:0:0"));
     let mut d = date.splitn(3, '-').map(|p| p.trim().parse::<i64>().ok());
-    let (y, m, day) = (d.next()??, d.next().flatten().unwrap_or(1), d.next().flatten().unwrap_or(1));
+    let (y, m, day) =
+        (d.next()??.clamp(-MAX_YEAR, MAX_YEAR), d.next().flatten().unwrap_or(1).clamp(1, 12), d.next().flatten().unwrap_or(1).clamp(1, 31));
     let mut t = time.trim().trim_end_matches('Z').split(':').map(|p| p.trim().parse::<f64>().ok());
     let (hh, mm, ss) = (t.next().flatten().unwrap_or(0.0), t.next().flatten().unwrap_or(0.0), t.next().flatten().unwrap_or(0.0));
     Some(days_from_civil(y, m, day) as f64 * 86_400.0 + hh * 3600.0 + mm * 60.0 + ss)
 }
+
+/// The years a `since` date may name: far past any data, small enough that day counts can't
+/// overflow.
+const MAX_YEAR: i64 = 1_000_000;
 
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
@@ -1094,7 +1123,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 
 fn date_label(t: i64) -> String {
     let (days, secs) = (t.div_euclid(86_400), t.rem_euclid(86_400));
-    let z = days + 719_468;
+    let z = days.saturating_add(719_468);
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
@@ -1182,8 +1211,13 @@ pub fn read_metadata(dir: &std::path::Path) -> Result<Store> {
             read(&mut docs, k.to_string(), dir.join(k))?;
         }
     }
-    let consolidated =
-        docs.iter().any(|(k, b)| k == ".zmetadata" || (k == "zarr.json" && b.windows(21).any(|w| w == b"consolidated_metadata")));
+    // Consolidated: a .zmetadata, or a root zarr.json whose consolidated_metadata is an object
+    // (zarr-python 3 writes `"consolidated_metadata": null` for a store that isn't).
+    let consolidated = docs.iter().any(|(k, b)| {
+        k == ".zmetadata"
+            || (k == "zarr.json"
+                && serde_json::from_slice::<Value>(b).ok().is_some_and(|v| v.get("consolidated_metadata").is_some_and(Value::is_object)))
+    });
     if !consolidated {
         let mut stack = vec![(dir.to_path_buf(), String::new(), 0usize)];
         let mut seen = 0usize;
@@ -1233,8 +1267,8 @@ pub fn read_dir(dir: &std::path::Path, selection: &str, crs: Option<&str>) -> Re
     for k in &p.keys {
         let path = dir.join(k);
         let Ok(meta) = std::fs::metadata(&path) else { continue };
-        total += meta.len();
-        if !meta.is_file() || total > 4 << 30 {
+        total = total.saturating_add(meta.len());
+        if !meta.is_file() || meta.len() > MAX_CHUNK_FILE || total > MAX_READ {
             return Err(bad(format!("{}: the slice's chunks are too large to read", dir.display())));
         }
         chunks.insert(k.clone(), std::fs::read(&path)?);
@@ -1408,7 +1442,7 @@ mod tests {
             "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [3, 4]}},
             "chunk_key_encoding": {"name": "default", "configuration": {"separator": "/"}},
             "codecs": [{"name": "bytes", "configuration": {"endian": "big"}}, {"name": "zstd", "configuration": {"level": 1}}],
-            "fill_value": -9999, "dimension_names": ["y", "x"], "attributes": {"epsg_code": 3857}
+            "fill_value": -9999, "dimension_names": ["y", "x"], "attributes": {"epsg_code": 3857, "_FillValue": -9999}
         });
         let root = serde_json::json!({"zarr_format": 3, "node_type": "group", "consolidated_metadata": {"kind": "inline", "metadata": {
             "elev": z,
@@ -1440,6 +1474,15 @@ mod tests {
         assert_eq!(r.crs, Crs::WebMercator);
         assert_eq!(r.transform, GeoTransform { origin_x: -5.0, origin_y: 350.0, pixel_width: 10.0, pixel_height: -100.0 });
         assert!(r.bands[0].data[5].is_nan());
+        // A Zarr 3 fill_value (0, zarr-python's default) isn't no-data: real zeros stay, and only
+        // the CF _FillValue masks.
+        if let Some(e) = st2.arrays.iter_mut().find(|x| x.path == "elev") {
+            e.fill = Some(0.0);
+            e.attrs.remove("_FillValue");
+        }
+        let r = assemble(&st2, &p, &chunks, "elev", None).unwrap();
+        assert_eq!(r.bands[0].data[0], 0.0);
+        assert_eq!(r.bands[0].data[5], -9999.0);
         // Unknown codecs and sharding are said, not misread.
         let mut sharded = root.clone();
         sharded["consolidated_metadata"]["metadata"]["elev"]["codecs"] = serde_json::json!([{"name": "sharding_indexed"}]);
@@ -1486,6 +1529,51 @@ mod tests {
             let labels = info(&store_m, &HashMap::new());
             assert_eq!(labels["variables"][0]["name"], "t2m");
         }
+    }
+
+    #[test]
+    fn store_paths_stay_inside_and_dates_stay_in_range() {
+        // Keys that would lead out of the store are skipped, never read.
+        let arr = serde_json::json!({"shape": [2, 2], "chunks": [2, 2], "dtype": "<f4", "compressor": null, "fill_value": null, "filters": null, "order": "C", "zarr_format": 2});
+        for bad in ["../up/.zarray", "a/../../x/.zarray", "a\\b/.zarray", "C:x/.zarray", "a//b/.zarray", "./a/.zarray"] {
+            let meta = serde_json::json!({"metadata": {bad: arr.clone()}});
+            assert!(parse_store(&[(".zmetadata".into(), meta.to_string().into_bytes())]).is_err(), "{bad}");
+        }
+        let meta = serde_json::json!({"metadata": {"grp/v/.zarray": arr.clone()}});
+        let st = parse_store(&[(".zmetadata".into(), meta.to_string().into_bytes())]).unwrap();
+        assert_eq!(st.arrays[0].path, "grp/v");
+        assert!(safe_path("") && safe_path("a/b") && !safe_path("/etc") && !safe_path("a/.."));
+        // Hostile `since` dates: kept in range, no overflow (debug builds would panic).
+        let mut t = st.arrays[0].clone();
+        for units in
+            ["days since 9223372036854775807-99-01", "days since -9223372036854775807-01-01", "seconds since 2000-01-01T99999999999:00"]
+        {
+            t.attrs.insert("units".into(), Value::String(units.into()));
+            for cal in ["standard", "noleap", "360_day"] {
+                t.attrs.insert("calendar".into(), Value::String(cal.into()));
+                for v in [0.0, 9.9e12, -9.9e12, 1e300] {
+                    let _ = label(&t, v);
+                }
+            }
+        }
+        assert!(fixed_calendar("noleap", "9223372036854775807-01-01", 1e300).is_some());
+    }
+
+    #[test]
+    fn consolidated_null_is_not_consolidated() {
+        let dir = std::env::temp_dir().join(format!("rustgis-zarr-null-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("v")).unwrap();
+        // zarr-python 3 writes `"consolidated_metadata": null`: the arrays' own files are read.
+        std::fs::write(dir.join("zarr.json"), r#"{"zarr_format": 3, "node_type": "group", "consolidated_metadata": null}"#).unwrap();
+        std::fs::write(
+            dir.join("v/zarr.json"),
+            r#"{"zarr_format": 3, "node_type": "array", "shape": [2, 2], "data_type": "float32", "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [2, 2]}}, "codecs": [{"name": "bytes", "configuration": {"endian": "little"}}], "fill_value": 0, "dimension_names": ["y", "x"]}"#,
+        )
+        .unwrap();
+        let st = read_metadata(&dir).unwrap();
+        assert!(st.array("v").is_some());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

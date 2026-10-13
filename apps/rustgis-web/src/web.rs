@@ -131,7 +131,8 @@ pub fn start() {
                         }
                     }
                     // `?zarr=<url>` opens Add Zarr Variable on a store, its variables listed.
-                    if let Some(url) = param(&q, "zarr").filter(|u| !u.is_empty())
+                    // Read as `?data=` is, so a `+` in the address stays a `+`.
+                    if let Some(url) = params(&q, "zarr", 1).into_iter().next()
                         && let Err(e) = app.run("ui.addZarr", serde_json::json!({"address": url}))
                     {
                         app.session.notify(format!("?zarr={url}: {e}"), true);

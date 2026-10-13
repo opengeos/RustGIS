@@ -64,12 +64,21 @@ pub fn layer_name(root: &str, sel: &zarr::Selection, labels: &[String]) -> Strin
     if root.trim_end_matches('/').to_ascii_lowercase().ends_with(".zarr") { format!("{} {what}", store_name(root)) } else { what }
 }
 
-/// Fetches files of a store by web address, several at a time; a missing one (404, or 403 as
-/// S3 answers for a missing key) is left out.
+/// Whether a fetch's error means the file isn't there: a 404, or a 403 as S3 answers for a key
+/// that doesn't exist when listing isn't allowed. Decided by the HTTP status, never by digits
+/// found in the message.
+pub fn is_absent(error: &str) -> bool {
+    matches!(crate::render::rustgis_tiles::cache::http_status(error), Some(404 | 403))
+}
+
+/// Fetches files of a store by web address, several at a time; a missing one (see [`is_absent`])
+/// is left out. Also says how many were refused with 403, so a store that refuses everything
+/// (access denied) isn't taken for an empty one.
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch(root: &str, keys: &[String]) -> Result<HashMap<String, Vec<u8>>, String> {
+fn fetch(root: &str, keys: &[String]) -> Result<(HashMap<String, Vec<u8>>, usize), String> {
     use std::sync::Mutex;
     let out = Mutex::new(HashMap::new());
+    let forbidden = std::sync::atomic::AtomicUsize::new(0);
     let failure: Mutex<Option<String>> = Mutex::new(None);
     let next = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|scope| {
@@ -87,7 +96,11 @@ fn fetch(root: &str, keys: &[String]) -> Result<HashMap<String, Vec<u8>>, String
                                 o.insert(k.clone(), b);
                             }
                         }
-                        Err(e) if e.contains("404") || e.contains("403") => {}
+                        Err(e) if is_absent(&e) => {
+                            if crate::render::rustgis_tiles::cache::http_status(&e) == Some(403) {
+                                forbidden.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
                         Err(e) => {
                             if let Ok(mut f) = failure.lock() {
                                 f.get_or_insert(format!("{root}/{k}: {e}"));
@@ -101,14 +114,20 @@ fn fetch(root: &str, keys: &[String]) -> Result<HashMap<String, Vec<u8>>, String
     if let Some(e) = failure.into_inner().ok().flatten() {
         return Err(e);
     }
-    out.into_inner().map_err(|_| "a fetch failed".to_string())
+    let out = out.into_inner().map_err(|_| "a fetch failed".to_string())?;
+    Ok((out, forbidden.into_inner()))
 }
 
 /// A store's metadata from its web address.
 #[cfg(not(target_arch = "wasm32"))]
 fn store_at(url: &str) -> Result<zarr::Store, String> {
     let keys: Vec<String> = zarr::METADATA_KEYS.iter().map(|k| k.to_string()).collect();
-    let docs: Vec<(String, Vec<u8>)> = fetch(url, &keys)?.into_iter().collect();
+    let (got, forbidden) = fetch(url, &keys)?;
+    // Every metadata file refused: access is denied, not a store without metadata.
+    if got.is_empty() && forbidden > 0 {
+        return Err(format!("{url}: access denied (HTTP 403)"));
+    }
+    let docs: Vec<(String, Vec<u8>)> = got.into_iter().collect();
     zarr::parse_store(&docs).map_err(|e| format!("{url}: {e}"))
 }
 
@@ -123,8 +142,19 @@ fn info(_s: &mut Session, p: &Value) -> CmdResult {
         Source::Dir(d) => {
             let store = zarr::read_metadata(Path::new(&d)).map_err(|e| format!("{d}: {e}"))?;
             let mut chunks = HashMap::new();
+            // The coordinate chunks, read as read_dir reads a slice's: files only, bounded.
+            let mut total = 0u64;
             for k in zarr::info_keys(&store) {
-                if let Ok(b) = std::fs::read(Path::new(&d).join(&k)) {
+                let path = Path::new(&d).join(&k);
+                let Ok(meta) = std::fs::metadata(&path) else { continue };
+                if !meta.is_file() || meta.len() > zarr::MAX_CHUNK_FILE {
+                    continue;
+                }
+                total = total.saturating_add(meta.len());
+                if total > zarr::MAX_READ {
+                    return Err(format!("{d}: the coordinates are too large to read"));
+                }
+                if let Ok(b) = std::fs::read(&path) {
                     chunks.insert(k, b);
                 }
             }
@@ -132,7 +162,7 @@ fn info(_s: &mut Session, p: &Value) -> CmdResult {
         }
         Source::Url(u) => {
             let store = store_at(&u)?;
-            let chunks = fetch(&u, &zarr::info_keys(&store))?;
+            let (chunks, _) = fetch(&u, &zarr::info_keys(&store))?;
             Ok(zarr::info(&store, &chunks))
         }
     }
@@ -194,7 +224,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             let store = store_at(&u)?;
             pick_variable(&store, &mut sel)?;
             let plan = zarr::plan(&store, &sel).map_err(|e| format!("{u}: {e}"))?;
-            let chunks = fetch(&u, &plan.keys)?;
+            let (chunks, _) = fetch(&u, &plan.keys)?;
             let name = ps(p, "name").map(str::to_string).unwrap_or_else(|| layer_name(&u, &sel, &[]));
             let mut r = zarr::assemble(&store, &plan, &chunks, &name, crs_parsed).map_err(|e| format!("{u}: {e}"))?;
             r.source = Some(u.clone());

@@ -48,6 +48,9 @@ pub struct State {
     queue: Vec<String>,
     waiting: Vec<(String, Answer)>,
     got: HashMap<String, Vec<u8>>,
+    /// Files of this batch refused with 403: all metadata refused is access denied, not a store
+    /// without metadata.
+    forbidden: usize,
     pub error: Option<String>,
 }
 
@@ -60,6 +63,7 @@ impl State {
         self.queue = keys;
         self.waiting.clear();
         self.got.clear();
+        self.forbidden = 0;
         self.phase = phase;
     }
 }
@@ -74,21 +78,25 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     if !st.busy() {
         return;
     }
-    // Landed answers: a missing file (404, or 403 as S3 says it) is left out.
+    // Landed answers: a missing file (404, or 403 as S3 says it, by the HTTP status) is left out.
     let mut failed = None;
+    let mut forbidden = 0;
     st.waiting.retain(|(k, slot)| match take(slot) {
         Some(Ok(b)) => {
             st.got.insert(k.clone(), b);
             false
         }
         Some(Err(e)) => {
-            if !(e.contains("404") || e.contains("403")) {
+            if !rustgis_engine::cmd::zarr::is_absent(&e) {
                 failed = Some(format!("{k}: {e}"));
+            } else if cache::http_status(&e) == Some(403) {
+                forbidden += 1;
             }
             false
         }
         None => true,
     });
+    st.forbidden += forbidden;
     if let Some(e) = failed {
         st.error = Some(e);
         st.phase = Phase::Idle;
@@ -113,6 +121,10 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         Phase::Idle => {}
         Phase::Meta => {
             let docs: Vec<(String, Vec<u8>)> = std::mem::take(&mut st.got).into_iter().collect();
+            if docs.is_empty() && st.forbidden > 0 {
+                st.error = Some(i18n::fmt("{url}: access denied (HTTP 403)", &[("url", &st.root)]));
+                return;
+            }
             match zarr::parse_store(&docs) {
                 Ok(store) => {
                     let keys = zarr::info_keys(&store);
@@ -149,8 +161,10 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                     let index: serde_json::Map<String, Value> = sel.index.iter().map(|(d, i)| (d.clone(), json!(i))).collect();
                     let root = app.ui.zarr.root.clone();
                     let p = json!({"url": root, "variable": sel.variable, "index": index, "ran": id, "name": name});
-                    if app.run("layer.addZarr", p).is_ok() {
-                        app.map.invalidate();
+                    // A failure here (the read handed over, then refused) is said in the dialog.
+                    match app.run("layer.addZarr", p) {
+                        Ok(_) => app.map.invalidate(),
+                        Err(e) => app.ui.zarr.error = Some(e),
                     }
                 }
                 Err(e) => app.ui.zarr.error = Some(e),
