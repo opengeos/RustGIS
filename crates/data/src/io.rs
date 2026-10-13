@@ -529,23 +529,41 @@ pub struct CsvOptions {
 /// The separator of a delimited text file: the most common of `,`, `;`, tab and `|` in its first
 /// line, outside quotes (`,` when none is).
 pub fn sniff_delimiter(text: &str) -> u8 {
-    let line = text.lines().next().unwrap_or("");
-    let mut counts = [0usize; 4];
-    let mut quoted = false;
-    for c in line.chars() {
-        match c {
-            '"' => quoted = !quoted,
-            ',' if !quoted => counts[0] += 1,
-            ';' if !quoted => counts[1] += 1,
-            '\t' if !quoted => counts[2] += 1,
-            '|' if !quoted => counts[3] += 1,
-            _ => {}
-        }
-    }
     let seps = *b",;\t|";
-    // The first of the most common, so a tie keeps the comma.
-    let best = counts.iter().enumerate().fold(0, |b, (i, &n)| if n > counts[b] { i } else { b });
-    seps.get(best).copied().unwrap_or(b',')
+    // Each separator's count on each of the first lines, outside quotes.
+    let counts: Vec<[usize; 4]> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(20)
+        .map(|line| {
+            let mut c = [0usize; 4];
+            let mut quoted = false;
+            for ch in line.chars() {
+                match ch {
+                    '"' => quoted = !quoted,
+                    ',' if !quoted => c[0] += 1,
+                    ';' if !quoted => c[1] += 1,
+                    '\t' if !quoted => c[2] += 1,
+                    '|' if !quoted => c[3] += 1,
+                    _ => {}
+                }
+            }
+            c
+        })
+        .collect();
+    let Some(header) = counts.first() else { return b',' };
+    // One that splits every line into the same number of columns (as `Name; Surname` in a
+    // one-column file doesn't, once there are rows); the most columns wins, a tie keeps the
+    // order above, so the comma.
+    let consistent = |i: usize| header[i] > 0 && counts.iter().all(|c| c[i] == header[i]);
+    let pick = (0..4).filter(|&i| counts.len() > 1 && consistent(i)).fold(None, |b: Option<usize>, i| match b {
+        Some(b) if header[b] >= header[i] => Some(b),
+        _ => Some(i),
+    });
+    // Otherwise (a header alone, or ragged rows): the comma if the header has one, else the most
+    // common.
+    let pick = pick.unwrap_or_else(|| if header[0] > 0 { 0 } else { (0..4).fold(0, |b, i| if header[i] > header[b] { i } else { b }) });
+    seps.get(pick).copied().unwrap_or(b',')
 }
 
 /// Reads CSV; columns named like longitude/latitude become point geometry.
@@ -585,6 +603,9 @@ pub fn read_csv_with(text: &str, name: &str, opts: &CsvOptions) -> Result<(Datas
         .collect();
     let (x, y) = (named(&opts.x, "x")?, named(&opts.y, "y")?);
     let wkt_given = named(&opts.wkt, "WKT")?;
+    if wkt_given.is_some() && (x.is_some() || y.is_some()) {
+        return Err(DataError::Format("give x and y columns, or a WKT column, not both".into()));
+    }
     let (x, y) = match (x, y) {
         (Some(x), Some(y)) => (Some(x), Some(y)),
         (None, None) if wkt_given.is_none() => (find(LON_NAMES).or(find(X_NAMES)), find(LAT_NAMES).or(find(Y_NAMES))),
@@ -1361,6 +1382,10 @@ mod tests {
         assert_eq!(sniff_delimiter("a\tb\n"), b'\t');
         assert_eq!(sniff_delimiter("\"a;b\",c\n"), b',');
         assert_eq!(sniff_delimiter("one\n"), b',');
+        // A semicolon in a one-column file's heading doesn't split it once rows show the shape.
+        assert_eq!(sniff_delimiter("Name; Surname,id\nAda Lovelace,1\nAlan Turing,2\n"), b',');
+        assert_eq!(sniff_delimiter("a;b,c\n1;2,3\n"), b',', "a tie keeps the comma");
+        assert_eq!(sniff_delimiter("x;y\n1,5;2\n3,5;4\n"), b';', "decimal commas");
         // Central Park in New York State Plane (US feet), semicolon-separated, columns named.
         let text = "id;E;N\n1;992000;220000\n2;x;1\n";
         let opts =
@@ -1374,7 +1399,8 @@ mod tests {
         let (_, rep) = read_csv_with(text, "t", &CsvOptions { crs: None, ..opts.clone() }).unwrap();
         assert!(rep.messages.iter().any(|m| m.contains("\"crs\"")), "{:?}", rep.messages);
         assert!(read_csv_with(text, "t", &CsvOptions { x: Some("nope".into()), ..opts.clone() }).is_err());
-        assert!(read_csv_with(text, "t", &CsvOptions { y: None, ..opts }).is_err(), "x without y");
+        assert!(read_csv_with(text, "t", &CsvOptions { y: None, ..opts.clone() }).is_err(), "x without y");
+        assert!(read_csv_with(text, "t", &CsvOptions { wkt: Some("id".into()), ..opts }).is_err(), "x/y and WKT");
         // Easting/northing found by name in a tab-separated file.
         let (ds, _) = read_csv("name\teasting\tnorthing\nA\t500000\t4649776\n", "t").unwrap();
         assert_eq!(ds.geometry_type, GeometryType::Point);

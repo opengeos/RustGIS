@@ -7,8 +7,25 @@ use std::rc::Rc;
 use rustgis_ui_egui::{Inbox, RustGisApp, Services};
 use wasm_bindgen::JsCast as _;
 
-const DATA_EXTS: &[&str] =
-    &["geojson", "json", "csv", "tsv", "txt", "zip", "kml", "kmz", "gpx", "gpkg", "parquet", "geoparquet", "fgb", "mbtiles", "tif", "tiff", "asc"];
+const DATA_EXTS: &[&str] = &[
+    "geojson",
+    "json",
+    "csv",
+    "tsv",
+    "txt",
+    "zip",
+    "kml",
+    "kmz",
+    "gpx",
+    "gpkg",
+    "parquet",
+    "geoparquet",
+    "fgb",
+    "mbtiles",
+    "tif",
+    "tiff",
+    "asc",
+];
 const CANVAS_ID: &str = "rustgis_canvas";
 const LOADING_ID: &str = "rustgis_loading";
 
