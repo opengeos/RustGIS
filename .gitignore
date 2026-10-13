@@ -6,3 +6,20 @@
 /dist
 /.claude/
 /private/
+
+# Docs tooling: the Zensical build cache and the Python environment it runs in.
+/.cache/
+/.venv/
+__pycache__/
+
+# Local secrets: API keys for the AI Assistant and the like.
+.env
+.env.*
+
+# Editors and operating systems.
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
