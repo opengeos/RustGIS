@@ -1,8 +1,9 @@
 name: Python package
 
 # The `rustgis` package on PyPI (apps/rustgis-python): tested on every change to it or the
-# engine; wheels for every platform built on each published release and uploaded to PyPI with
-# trusted publishing (the `pypi` environment, no token).
+# engine; wheels for every platform built on each published release, attached to it and
+# uploaded to PyPI with trusted publishing (the `pypi` environment, no token). The package's
+# version is the workspace's, so each release's wheels carry its tag's version.
 
 on:
   push:
@@ -18,9 +19,11 @@ on:
     types: [published]
   workflow_dispatch:
 
+# A new push to a pull request replaces its earlier run. Runs on main, by hand and for releases
+# are never cancelled: a merge landing mid-build must not stop the wheels being built.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name != 'pull_request' && github.run_id || 'pr' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -33,10 +36,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, python: "3.9" }
+          - { os: ubuntu-latest, python: "3.12" }
           - { os: ubuntu-latest, python: "3.13" }
-          - { os: macos-latest, python: "3.13" }
-          - { os: windows-latest, python: "3.13" }
+          - { os: ubuntu-latest, python: "3.14" }
+          - { os: macos-latest, python: "3.14" }
+          - { os: windows-latest, python: "3.14" }
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -76,7 +80,7 @@ jobs:
           args: --release --locked --out dist
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
       # Each runner builds for its own architecture, so the wheel installs and runs here.
       - name: Smoke-test the wheel
         shell: bash
@@ -104,7 +108,7 @@ jobs:
           args: --out dist
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
       - name: Build and test from the sdist alone
         shell: bash
         run: |
@@ -117,6 +121,26 @@ jobs:
         with:
           name: wheels-sdist
           path: apps/rustgis-python/dist
+
+  # The wheels and the sdist are attached to the GitHub release too, beside the app's packages.
+  release-assets:
+    name: Attach to the release
+    if: github.event_name == 'release'
+    needs: [test, wheels, sdist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
 
   publish:
     name: Publish to PyPI

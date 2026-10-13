@@ -25,6 +25,7 @@ web app reads GeoPackages without SQLite, with a small SQLite file reader writte
 | MapInfo Interchange | `.mif` with its `.mid` (or both zipped) | Add Data, drop the file, or upload the zip | Points, lines, polylines, regions (holes found by nesting), rectangles and ellipses; text and arcs are rows without geometry. Converted from the `CoordSys`: longitude/latitude, Transverse Mercator, Lambert Conformal Conic, Albers or Mercator. |
 | OpenStreetMap PBF | `.osm.pbf` | Add Data, drop the file, or upload | Points (tagged nodes), lines and multipolygons (closed ways that are areas, and multipolygon and boundary relations), with common tags as fields and the rest in `other_tags`, as GDAL gives them. Up to 40 million nodes (4 million in the web app); on the desktop, extracts over 256 MB open through GDAL when it is installed. |
 | TopoJSON | `.topojson`, or `.json` | Add Data, drop the file, or upload | A layer per object, its geometries rebuilt from the shared arcs (quantized or not). |
+| LiDAR point clouds | `.las`, `.laz` (COPC too) | Add Data, drop the file, upload, or From URL… | LAS 1.0–1.4 (point formats 0–10) and LAZ, on the desktop and in the web app: a point layer with each point's `z`, `intensity`, `classification`, `return` and colour (`red`, `green`, `blue`), coloured by ASPRS class (or by elevation when the cloud has one class). A cloud past 2 million points (500,000 in the web app) shows an evenly spread sample of them. Converted from the coordinate system its WKT or GeoTIFF-key record names (the horizontal part of a compound one); a file that names none keeps its coordinates, with a notice. Read in place, so a project keeps the file's path, not its points. |
 | GeoPackage | `.gpkg` | Add Data, or upload in the web app | Every feature table becomes a layer, up to 32 at once (the result counts the rest in `skippedCount` and names up to 100 of them in `skipped`); `"layer"` picks one, and `info.fileLayers` lists them all. Read in place by its R-tree; any EPSG system is reprojected. The web app reads the file with its own SQLite reader (tables scanned, the envelope in each geometry header tested first; no R-tree); UTF-16 databases aren't read there. |
 | GeoParquet | `.parquet`, `.geoparquet` | Add Data, or upload in the web app | WKB geometry, with the CRS from the file's `geo` metadata. Row groups are pruned by the bbox covering. zstd-compressed files open on the desktop only; Brotli isn't read. |
 | FlatGeobuf | `.fgb` | Add Data, or upload | Read in place by its packed R-tree. |
@@ -60,9 +61,21 @@ app downloads in the background and adds the layer when the file arrives (to the
 started in: opening another meanwhile drops it). A `.pmtiles` address is added as a tile layer
 and read a tile at a time instead.
 
+A cloud-optimised GeoTIFF (a tiled `.tif` with overviews, as most published imagery is) is read
+in place rather than downloaded: its header first, then, by HTTP range requests, only the tiles of
+the overview each part of the view needs, so a Sentinel-2 scene of 300 MB draws in a couple of
+seconds and full detail comes as you zoom in. It is a tile layer (`map.addTiles` kind `cog`,
+saved in the project by its address), drawn under the map's own layers like other tile layers:
+RGB(A) 8-bit images as they are, other images in grey stretched between the 2nd and 98th
+percentiles of their coarsest overview. A GeoTIFF in strips, with bands stored apart, or without
+tiles is downloaded whole as a raster layer, as is any GeoTIFF added with `"whole": true` (for
+the raster tools and symbology). The web app needs the server to allow range requests from web
+pages (CORS with the `Range` header), as public buckets such as Sentinel-2's do.
+
 `layer.addUrl` waits for the download, up to a minute, which suits the command line, MCP and the
 desktop app's assistant; a larger file comes through the From URL… dialog, which downloads in the
-background. In the web app, where nothing may wait, it adds `.pmtiles` addresses only; other files
+background. In the web app, where nothing may wait, it adds `.pmtiles` and GeoTIFF addresses only
+(a GeoTIFF read in place); other files
 come through the From URL… dialog (`ui.addUrl`). GeoJSON, CSV, KML and GPX files are read up to
 256 MB; larger downloads (GeoParquet, FlatGeobuf, GeoPackage, GeoTIFF) up to the limits above.
 
@@ -78,10 +91,12 @@ command line and MCP).
 | WMTS | Layers whose tile matrix set is Web Mercator's pyramid | A tile layer from the tile template (or KVP GetTile) |
 | WFS 1.1 / 2.0 | Feature types | Their features downloaded as GeoJSON, in the output format the service names (up to 50,000) |
 | OGC API Features | Collections | Their items downloaded as GeoJSON |
+| OGC API Tiles | Collections' map and vector tiles; a landing page's dataset map tiles | A tile layer in WebMercatorQuad, from the tile template the tileset advertises (its `item` link; `…/tiles/WebMercatorQuad/{z}/{y}/{x}`, the usual path, when that can't be read), keeping the tiles link's query (a token), map tiles in the server's image format, vector tiles drawn layer by layer in colours of their own |
 | ArcGIS REST | FeatureServer and MapServer layers; a MapServer's map; an ImageServer; a VectorTileServer | Layers queried as GeoJSON (up to the server's record limit); a map as its tile cache when it is Web Mercator's pyramid, else exported images; an ImageServer as exported images; a VectorTileServer as its MapLibre style |
 
 The type is guessed from the address (`?SERVICE=`, `/wmts`, `/wfs`, `/collections`, `/rest/services`…) or
-chosen. A service that asks for a token says so. In the web app the server must allow requests
+chosen (an OGC API landing page needs the OGC API type). A WebMercatorQuad tileset is found by its
+tile matrix set, whatever the server calls it. A service that asks for a token says so. In the web app the server must allow requests
 from web pages (CORS).
 
 ## SQL queries and DuckDB databases

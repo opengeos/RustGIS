@@ -16,6 +16,7 @@ Formats](data-formats.md).
 | KML/KMZ (with their styles), GPX | Yes | Yes |
 | Spreadsheets (`.xlsx`, `.xls`, `.ods`), GeoRSS feeds, LandXML, encoded polylines | Yes | No |
 | GML, MapInfo MIF/MID, OpenStreetMap PBF, TopoJSON | Yes | No |
+| LiDAR point clouds: LAS, LAZ, COPC (an evenly spread sample) | Yes | No |
 | Through GDAL: DXF, File Geodatabase (`.gdb` folder), MapInfo TAB, OpenStreetMap XML… | Yes (desktop, when GDAL is installed) | No |
 | DuckDB databases (`.duckdb`, `.ddb`), PostgreSQL/PostGIS databases and SQL queries | Yes (desktop, when DuckDB is installed) | No |
 | KML, GPX, CSV with WKT geometry | No | Yes (Analyze › Workflows › Data Interop) |
@@ -139,13 +140,13 @@ plugins need both the files and network permissions.
 **Home › Add Data › STAC Search…** searches a [STAC](https://stacspec.org) API for imagery and
 other assets: by collection, dates, the most cloud cover and (by default) where the map is. The
 default API is Element 84's [Earth Search](https://earth-search.aws.element84.com/v1)
-(Sentinel-2, Landsat, NAIP, Copernicus DEM and Sentinel-1 on AWS); any STAC API with item search
-works. **Collections** lists what the API offers, **Find Items** shows up to 50 items (date, cloud
+(Sentinel-2, Landsat, NAIP, Copernicus DEM and Sentinel-1 on AWS); Microsoft's [Planetary
+Computer](https://planetarycomputer.microsoft.com/api/stac/v1) is offered beside it, and any
+STAC API with item search works. **Collections** lists what the API offers, **Find Items** shows up to 50 items (date, cloud
 cover, id) and draws their footprints as a layer; a click frames an item, and **Add** adds the
 asset chosen beside it: `visual` (true colour) when there is one, else the first GeoTIFF, else the
-first data asset. Assets download whole (up to 512 MB on the desktop, 256 MB in the web app), so
-a single band or the scene classification is quicker to add than a full-resolution true-colour
-image.
+first data asset. A cloud-optimised GeoTIFF is read in place, the tiles each view needs by range
+(see [Files on the web](data-formats.md#files-on-the-web)); other assets download whole.
 
 The commands do the same: `stac.collections` (`"url"`), `stac.search` (`"collections"`,
 `"bbox"` as `[west, south, east, north]` or `"view"`, `"datetime"` such as
@@ -156,9 +157,13 @@ an item `stac.search` returned (`"item"`) or an item's address (`"url"`) and `"a
 rustgis-cli run --cmd 'stac.search={"collections":"sentinel-2-l2a","bbox":[7.4,46.9,7.5,47],"datetime":"2024-07-01/2024-07-31","maxCloud":20}' --cmd 'stac.addAsset={"url":"https://earth-search.aws.element84.com/v1/collections/sentinel-2-l2a/items/S2B_32TLS_20240727_0_L2A","asset":"scl"}'
 ```
 
-Assets are added by their web address: one in a cloud store's own protocol (`s3://`) or one that
-needs signing (Microsoft Planetary Computer) is refused with a message saying so, and an item on
-the web can't point into the local network. Searches reach the network, so the [AI
+Assets are added by their web address: one in a cloud store's own protocol (`s3://`) is refused
+with a message saying so, and an item on the web can't point into the local network. A Planetary
+Computer asset (in Azure Blob Storage) is signed first: RustGIS asks the Planetary Computer's
+token service for its storage container's token and reuses it for half an hour. The token is part
+of the layer's address, so a project saved with one reads it again only while the token lasts
+(about an hour): add the asset again after that. A `?stac=` link opens the web app on an item or a
+collection ([web app links](../installation.md)). Searches reach the network, so the [AI
 Assistant](assistant.md) asks before it runs them, and plugins need the network permission.
 
 ## Geocoding addresses
@@ -183,6 +188,31 @@ rustgis-cli run --cmd 'layer.addData={"path":"stores.csv"}' --cmd 'layer.geocode
 
 The addresses are sent to the geocoder's server, so the [AI Assistant](assistant.md) asks before
 it geocodes, and plugins need the network permission.
+
+## OpenStreetMap and administrative boundaries
+
+**Home › Add Data › OpenStreetMap…** (`osm.download`) downloads OpenStreetMap data where the map
+is from an [Overpass](https://overpass-api.de) server: a preset (buildings, roads, railways, water,
+land use, parks, points of interest or administrative boundaries) or tag filters such as
+`amenity=cafe, shop`. The answer becomes up to three layers, points, lines and polygons: closed
+ways that are areas (buildings, land use and the like, as OSM reads their tags) are polygons, and
+multipolygon and boundary relations are assembled from their members. A layer's fields are its 25
+most common tags, the rest in `other_tags` as GDAL writes them. The area can be up to 0.25 square
+degrees (about 50 × 50 km), and an answer up to 50,000 elements: the public servers are shared, so
+a larger area is better read from an extract (`.osm.pbf`). `"url"` names another Overpass server
+when the public one is busy.
+
+**Home › Add Data › Boundaries…** (`boundaries.add`) adds a country's administrative boundaries from
+[geoBoundaries](https://www.geoboundaries.org) (CC BY 4.0): the country itself (`ADM0`), its states
+or provinces (`ADM1`) and finer divisions down to `ADM5` where they exist, simplified for the map.
+`boundaries.countries` lists the countries.
+
+```sh
+rustgis-cli run --cmd 'osm.download={"bbox":[7.44,46.944,7.456,46.952],"preset":"buildings"}' --cmd 'boundaries.add={"country":"KEN","level":"ADM1"}'
+```
+
+Both reach the network: the [AI Assistant](assistant.md) asks before it runs them, and plugins need
+the network permission. OpenStreetMap data is © OpenStreetMap contributors (ODbL).
 
 ## Large files
 
@@ -224,7 +254,9 @@ Mercator, Mercator, Lambert azimuthal, stereographic, equirectangular and others
 exported GeoTIFF keeps. A raster too large to hold in memory (more than 120 million samples, 32
 million in the web app) opens from its largest overview that fits; one without overviews opens as
 an overview made as it is read, a strip or tile at a time (every second, fourth… pixel each way),
-so reading it takes as long as decoding the whole file once.
+so reading it takes as long as decoding the whole file once. A cloud-optimised GeoTIFF added by its
+web address is read in place instead, a tile at a time (see [Files on the
+web](data-formats.md#files-on-the-web)).
 
 With a raster layer selected in Layers, the **Style** and **Data** tabs show its groups:
 

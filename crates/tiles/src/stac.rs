@@ -7,6 +7,14 @@ use serde_json::Value;
 
 /// Element 84's Earth Search (Sentinel-2, Landsat, Copernicus DEM and more, on AWS), the default.
 pub const EARTH_SEARCH: &str = "https://earth-search.aws.element84.com/v1";
+/// Microsoft's Planetary Computer, whose assets are signed with a token of their collection's
+/// (see [`sas_token_url`]).
+pub const PLANETARY_COMPUTER: &str = "https://planetarycomputer.microsoft.com/api/stac/v1";
+/// The Planetary Computer's token service.
+const SAS_API: &str = "https://planetarycomputer.microsoft.com/api/sas/v1/token";
+/// How long a token is used: the service's last an hour; a shorter reuse leaves a COG read in
+/// place time to draw.
+const TOKEN_REUSE: web_time::Duration = web_time::Duration::from_secs(30 * 60);
 
 /// The most items a search asks for.
 pub const MAX_ITEMS: usize = 200;
@@ -205,6 +213,24 @@ pub fn parse_items(bytes: &[u8], from: &str) -> Result<(Vec<Item>, Option<String
 }
 
 /// An item from its own document.
+/// The STAC API an item or collection fetched from `from` belongs to: the address before
+/// `/collections/`, else its `root` link's (a static catalog's `….json` root is no API), else the
+/// collection its `parent` link names. `None` when nothing says.
+pub fn api_of(bytes: &[u8], from: &str) -> Option<String> {
+    let before = |u: &str| u.split_once("/collections/").map(|(a, _)| a.to_string());
+    if let Some(a) = before(from) {
+        return Some(a);
+    }
+    let v = json(bytes).ok()?;
+    if let Some(root) = link(&v, "root", from) {
+        let r = root.split(['?', '#']).next().unwrap_or(&root).trim_end_matches('/').to_string();
+        if !r.to_ascii_lowercase().ends_with(".json") && is_web(&r) {
+            return Some(r);
+        }
+    }
+    link(&v, "parent", from).and_then(|p| before(&p))
+}
+
 pub fn parse_item(bytes: &[u8], from: &str) -> Result<Item, String> {
     item(&json(bytes)?, Some(from)).ok_or_else(|| "the answer isn't a STAC item".to_string())
 }
@@ -392,18 +418,112 @@ impl Item {
                 self.id, a.key, a.href
             ));
         }
-        // Planetary Computer's assets are in Azure Blob Storage and need a signature.
-        if lower.contains(".blob.core.windows.net/") && !lower.contains("sig=") {
-            return Err(format!(
-                "{}: asset '{}' needs signing (Microsoft Planetary Computer); sign it with the Planetary Computer's SAS API and add the signed address with From URL…",
-                self.id, a.key
-            ));
-        }
         // Judged by where the item came from; an item given whole may only point at public
-        // addresses (as a document on the web may).
+        // addresses (as a document on the web may). A Planetary Computer asset is signed by the
+        // caller ([`needs_signing`]).
         crate::address::check(&a.href, Some(self.origin.as_deref().unwrap_or(UNTRUSTED)))?;
         Ok((a.key.clone(), a.href.clone()))
     }
+}
+
+/// The host of a web address, lower-cased.
+fn host_of(url: &str) -> String {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+    host.split(':').next().unwrap_or(host).to_ascii_lowercase()
+}
+
+/// Whether an asset's address is in Azure Blob Storage without a signature: a Microsoft
+/// Planetary Computer asset, read with a token from its token service ([`sas_token_url`]).
+pub fn needs_signing(href: &str) -> bool {
+    let lower = href.to_ascii_lowercase();
+    if !lower.starts_with("https://") || !host_of(&lower).ends_with(".blob.core.windows.net") {
+        return false;
+    }
+    let query = lower.split('#').next().and_then(|u| u.split_once('?')).map(|(_, q)| q).unwrap_or("");
+    !query.split('&').any(|kv| kv.split('=').next() == Some("sig"))
+}
+
+/// The request for a token that reads `href`'s storage container (the Planetary Computer's
+/// `token/{account}/{container}`).
+pub fn sas_token_url(href: &str) -> Result<String, String> {
+    let lower = href.to_ascii_lowercase();
+    let host = host_of(&lower);
+    let account = host.strip_suffix(".blob.core.windows.net").unwrap_or("");
+    let path = lower.split_once("://").map(|(_, r)| r).unwrap_or("");
+    let container = path.split(['?', '#']).next().unwrap_or("").split('/').nth(1).unwrap_or("");
+    let ok =
+        |s: &str, max: usize| (3..=max).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if !ok(account, 24) || !ok(container, 63) {
+        return Err(format!("{href}: not an Azure Blob Storage address the Planetary Computer signs"));
+    }
+    Ok(format!("{SAS_API}/{account}/{container}"))
+}
+
+/// The token in the token service's answer (`{"token": "st=…&se=…&sig=…", "msft:expiry": …}`).
+pub fn parse_sas(bytes: &[u8]) -> Result<String, String> {
+    let v = serde_json::from_slice::<Value>(bytes).map_err(|_| "the Planetary Computer's token service didn't answer JSON".to_string())?;
+    let token = v.get("token").and_then(Value::as_str).unwrap_or("").trim().trim_start_matches('?');
+    // A query string's characters only: the token is pasted into addresses.
+    let ok = !token.is_empty()
+        && token.len() <= 4096
+        && token.bytes().all(|b| b.is_ascii_alphanumeric() || b"=&%-_.:+/".contains(&b))
+        && token.split('&').any(|kv| kv.starts_with("sig="));
+    if !ok {
+        return Err("the Planetary Computer's token service gave no usable token".into());
+    }
+    Ok(token.to_string())
+}
+
+/// An address with a token's query added.
+pub fn sign(href: &str, token: &str) -> String {
+    let (base, frag) = href.split_once('#').map(|(b, f)| (b, Some(f))).unwrap_or((href, None));
+    let sep = if base.contains('?') { "&" } else { "?" };
+    match frag {
+        Some(f) => format!("{base}{sep}{token}#{f}"),
+        None => format!("{base}{sep}{token}"),
+    }
+}
+
+fn tokens() -> &'static std::sync::Mutex<std::collections::HashMap<String, (String, web_time::Instant)>> {
+    static T: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (String, web_time::Instant)>>> =
+        std::sync::OnceLock::new();
+    T.get_or_init(Default::default)
+}
+
+/// A token fetched from `token_url` in the last half hour, if any.
+pub fn cached_token(token_url: &str) -> Option<String> {
+    let t = tokens().lock().unwrap_or_else(|e| e.into_inner());
+    t.get(token_url).filter(|(_, at)| at.elapsed() < TOKEN_REUSE).map(|(tok, _)| tok.clone())
+}
+
+/// Keeps a token for reuse ([`cached_token`]).
+pub fn remember_token(token_url: &str, token: &str) {
+    let mut t = tokens().lock().unwrap_or_else(|e| e.into_inner());
+    if t.len() > 64 {
+        t.clear();
+    }
+    t.insert(token_url.to_string(), (token.to_string(), web_time::Instant::now()));
+}
+
+/// `href` signed if it needs it ([`needs_signing`]), waiting for the token service (the command
+/// line; the app fetches tokens off the frame).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn sign_blocking(href: &str) -> Result<String, String> {
+    if !needs_signing(href) {
+        return Ok(href.to_string());
+    }
+    let url = sas_token_url(href)?;
+    let token = match cached_token(&url) {
+        Some(t) => t,
+        None => {
+            let t = parse_sas(&crate::cache::download_blocking(&url)?)?;
+            remember_token(&url, &t);
+            t
+        }
+    };
+    Ok(sign(href, &token))
 }
 
 /// An item as the commands return it (and read back in `stac.addAsset`).
@@ -448,6 +568,19 @@ pub fn footprints_geojson(items: &[Item]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_of_a_linked_document() {
+        // The address before /collections/.
+        assert_eq!(api_of(b"{}", "https://x.org/v1/collections/s2/items/a").as_deref(), Some("https://x.org/v1"));
+        // Else the root link (a static catalog's .json root is no API), else the parent collection's.
+        let item = br#"{"links": [{"rel": "root", "href": "https://api.example.org/stac/v1/"}]}"#;
+        assert_eq!(api_of(item, "https://cdn.example.org/items/a.json").as_deref(), Some("https://api.example.org/stac/v1"));
+        let static_root = br#"{"links": [{"rel": "root", "href": "../catalog.json"},
+            {"rel": "parent", "href": "https://api.example.org/v1/collections/s2"}]}"#;
+        assert_eq!(api_of(static_root, "https://cdn.example.org/s2/a.json").as_deref(), Some("https://api.example.org/v1"));
+        assert_eq!(api_of(br#"{"links": [{"rel": "root", "href": "catalog.json"}]}"#, "https://cdn.example.org/a.json"), None);
+    }
 
     #[test]
     fn deep_footprints_saturate() {
@@ -518,12 +651,32 @@ mod tests {
         let mut pc = i.clone();
         pc.assets = vec![Asset {
             key: "B04".into(),
-            href: "https://sentinel2l2a01.blob.core.windows.net/x/B04.tif".into(),
+            href: "https://sentinel2l2a01.blob.core.windows.net/sentinel2-l2/B04.tif".into(),
             media_type: String::new(),
             roles: vec![],
             title: String::new(),
         }];
-        assert!(pc.asset_href(None).unwrap_err().contains("signing"));
+        // A Planetary Computer asset is added after signing it with its container's token.
+        let (_, href) = pc.asset_href(None).unwrap();
+        assert!(needs_signing(&href));
+        assert_eq!(sas_token_url(&href).unwrap(), "https://planetarycomputer.microsoft.com/api/sas/v1/token/sentinel2l2a01/sentinel2-l2");
+        let token =
+            parse_sas(br#"{"msft:expiry": "2026-10-13T14:00:00Z", "token": "st=2026&se=2026&sp=rl&sv=2024&sr=c&sig=a%2Bb%3D"}"#).unwrap();
+        let signed = sign(&href, &token);
+        assert_eq!(
+            signed,
+            "https://sentinel2l2a01.blob.core.windows.net/sentinel2-l2/B04.tif?st=2026&se=2026&sp=rl&sv=2024&sr=c&sig=a%2Bb%3D"
+        );
+        assert!(!needs_signing(&signed) && !needs_signing("https://data.org/x.tif"));
+        assert!(needs_signing("https://a.blob.core.windows.net/c/x.tif?mysig=1"));
+        // Tokens that aren't a plain query, and addresses that aren't a storage container's.
+        for bad in [&br#"{"token": "sig=x\"<script>"}"#[..], br#"{"token": "st=1"}"#, b"[]", b"<html>"] {
+            assert!(parse_sas(bad).is_err());
+        }
+        assert!(sas_token_url("https://evil.org/x.blob.core.windows.net/c/x.tif").is_err());
+        assert!(sas_token_url("https://a.blob.core.windows.net/").is_err());
+        remember_token("k", "sig=1");
+        assert_eq!(cached_token("k").as_deref(), Some("sig=1"));
         // A web item can't point into the local network.
         let mut local = i.clone();
         local.assets[2].href = "http://192.168.1.2/x.tif".into();

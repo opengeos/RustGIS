@@ -16,6 +16,7 @@ pub mod layout;
 pub mod navigate;
 pub mod notebook;
 pub mod plugins;
+pub mod portals;
 pub mod presentation;
 pub mod project;
 pub mod raster;
@@ -67,6 +68,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(plugins::commands());
     v.extend(sharing::commands());
     v.extend(stac::commands());
+    v.extend(portals::commands());
     v
 }
 

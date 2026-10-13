@@ -15,10 +15,10 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("service.layers", "Service Layers", "Home › Add", layers).view().params(
-            r#"{"url": "a WMS, WMTS or WFS address (GetCapabilities is added), an OGC API /collections address, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer", "type"?: "wms"|"wmts"|"wfs"|"ogcapi"|"arcgis" (guessed from the address), "text"?: "the capabilities document, when already fetched"}"#,
+            r#"{"url": "a WMS, WMTS or WFS address (GetCapabilities is added), an OGC API /collections address (features, and map and vector tiles) or landing page (its map tiles), or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer", "type"?: "wms"|"wmts"|"wfs"|"ogcapi"|"arcgis" (guessed from the address), "text"?: "the capabilities document, when already fetched"}"#,
         ),
         C::new("service.add", "Add Service Layer", "Home › Add", add).params(
-            r#"{"url": "as service.layers", "type"?, "layer": "the layer's name (service.layers lists them)", "name"?: text, "text"?: "the capabilities document, when already fetched"}"#,
+            r#"{"url": "as service.layers", "type"?, "layer": "the layer's name (service.layers lists them)", "name"?: text, "text"?: "the capabilities document, when already fetched", "tiles"?: "an OGC API layer's tile template, when already read from its tileset (the app's)"}"#,
         ),
     ]
 }
@@ -61,7 +61,7 @@ fn vet(mut svc: Service, caps: &str) -> Service {
     let before = svc.layers.len();
     svc.layers.retain(|l| {
         let u = match &l.offer {
-            Offer::Tiles { template } => template,
+            Offer::Tiles { template } | Offer::VectorTiles { template, .. } => template,
             Offer::Features { url } | Offer::Style { url } => url,
         };
         crate::render::rustgis_tiles::address::check(u, Some(caps)).is_ok()
@@ -82,6 +82,40 @@ pub fn features_answer(s: &mut Session, name: &str, bytes: Vec<u8>) -> Vec<u8> {
     rustgis_data::ogc::fix_axes(&bytes).unwrap_or(bytes)
 }
 
+/// A tile template given for a service's layer: a web address with `{z}`, `{x}` and `{y}`, that
+/// the service's document may point to.
+fn checked_template(service: &str, t: &str) -> Result<String, String> {
+    let t = t.trim();
+    if !(t.contains("{z}") && t.contains("{x}") && t.contains("{y}")) || t.len() > 2000 {
+        return Err(format!("{t}: not a tile template"));
+    }
+    crate::render::rustgis_tiles::address::check(t, Some(service))?;
+    Ok(t.to_string())
+}
+
+/// The tile template an OGC API tileset list advertises (its WebMercatorQuad tileset's), read now
+/// (the list, then the tileset when the list doesn't carry it). `None` when it can't be read.
+#[cfg(not(target_arch = "wasm32"))]
+fn advertised_template(list: &str, vector: bool) -> Option<String> {
+    use rustgis_data::ogc::{TilesStep, resolve_tiles};
+    let mut doc = list.to_string();
+    for _ in 0..2 {
+        crate::render::rustgis_tiles::address::check(&doc, Some(list)).ok()?;
+        let body = crate::render::rustgis_tiles::cache::download_blocking(&doc).ok()?;
+        match resolve_tiles(list, &doc, &body, vector)? {
+            TilesStep::Template(t) => return checked_template(list, &t).ok(),
+            TilesStep::Next(next) => doc = next,
+        }
+    }
+    None
+}
+
+/// In the browser nothing waits: the app reads the template itself and passes it as `"tiles"`.
+#[cfg(target_arch = "wasm32")]
+fn advertised_template(_: &str, _: bool) -> Option<String> {
+    None
+}
+
 /// A service as the app and other callers see it.
 pub fn service_json(svc: &Service) -> Value {
     let layers: Vec<Value> = svc
@@ -92,8 +126,9 @@ pub fn service_json(svc: &Service) -> Value {
                 Offer::Tiles { template } => json!({"type": "tiles", "url": template}),
                 Offer::Features { url } => json!({"type": "features", "url": url}),
                 Offer::Style { url } => json!({"type": "style", "url": url}),
+                Offer::VectorTiles { template, layers } => json!({"type": "vectorTiles", "url": template, "layers": layers}),
             };
-            json!({"name": l.name, "title": l.title, "bbox": l.bbox, "offer": offer})
+            json!({"name": l.name, "title": l.title, "bbox": l.bbox, "offer": offer, "tilesets": l.tilesets})
         })
         .collect();
     json!({"kind": svc.kind, "title": svc.title, "count": layers.len(), "layers": layers, "notes": svc.notes})
@@ -121,9 +156,23 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
             s.zoom_to(&rustgis_geom::Extent::new(w, so, e, n));
         }
     };
+    // An OGC API layer's tiles: the template its tileset advertises (given, or read now), else
+    // the usual path.
+    let advertised = match (&layer.tilesets, ps(p, "tiles")) {
+        (Some(_), Some(t)) => Some(checked_template(&url, t)?),
+        (Some(list), None) => advertised_template(list, matches!(layer.offer, Offer::VectorTiles { .. })),
+        _ => None,
+    };
     match &layer.offer {
         Offer::Tiles { template } => {
+            let template = advertised.as_deref().unwrap_or(template);
             let r = super::tiles::add(s, &json!({"url": template, "kind": "raster", "name": name, "overlay": true}))?;
+            zoom(s);
+            Ok(r)
+        }
+        Offer::VectorTiles { template, layers } => {
+            let template = advertised.as_deref().unwrap_or(template);
+            let r = super::tiles::add(s, &json!({"url": template, "kind": "vector", "name": name, "layers": layers, "overlay": true}))?;
             zoom(s);
             Ok(r)
         }

@@ -94,6 +94,46 @@ fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
     Ok(Geo { transform, crs, unknown_epsg: code.filter(|_| crs.is_none()), geographic_model, nodata, custom_error })
 }
 
+/// A cloud-optimised GeoTIFF's coordinate system, georeferencing and no-data value, from its first
+/// image (as [`read`] finds them).
+pub(crate) fn cog_geo<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<(Crs, GeoTransform, Option<f64>)> {
+    let geo = geo_tags(dec)?;
+    let crs = match geo.crs {
+        Some(c) => c,
+        None if geo.geographic_model => Crs::LonLat,
+        None => match geo.unknown_epsg {
+            Some(code) => return Err(err(format!("the coordinate system EPSG:{code} isn't supported"))),
+            None => {
+                return Err(match geo.custom_error {
+                    Some(e) => DataError::Format(e),
+                    None => err("the file's coordinate system isn't recognised"),
+                });
+            }
+        },
+    };
+    Ok((crs, geo.transform, geo.nodata))
+}
+
+#[cfg(test)]
+pub(crate) mod tests_support {
+    /// A small GeoTIFF in strips (as [`super::write`] writes them).
+    pub(crate) fn strip_tiff() -> Vec<u8> {
+        let r = crate::raster::Raster::new(
+            "s",
+            4,
+            4,
+            vec![vec![1.0; 16]],
+            crate::raster::GeoTransform { origin_x: 0.0, origin_y: 1.0, pixel_width: 0.25, pixel_height: -0.25 },
+            crate::raster::Crs::LonLat,
+            None,
+            crate::raster::ColorHint::Gray,
+            "Float32",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        super::write(&r, 0).unwrap_or_else(|e| panic!("{e}"))
+    }
+}
+
 /// A GeoKey's parameter: inline, or from the double or ASCII parameter tags.
 enum KeyValue {
     Short(u16),
@@ -216,7 +256,7 @@ fn samples<R: Read + Seek>(dec: &mut Decoder<R>) -> usize {
 /// A reader that shows palette images as grey ones: the `tiff` crate decodes no palette images, but
 /// decodes their colour indices as grey samples, and the colour table is read from the ColorMap tag
 /// as it is. The only change is the PhotometricInterpretation value (3 → 1) in each image's IFD.
-struct Unpaletted<R> {
+pub(crate) struct Unpaletted<R> {
     inner: R,
     /// Where each palette image's PhotometricInterpretation value is, and what to show there.
     patches: Vec<(u64, [u8; 2])>,
@@ -296,6 +336,19 @@ fn palette_patches<R: Read + Seek>(r: &mut R) -> Vec<(u64, [u8; 2])> {
     };
     let _ = walk();
     patches
+}
+
+/// Any reader, boxed: the decoder is compiled once for every kind of source (a file, bytes in
+/// memory, a COG's ranges), which keeps the browser build small.
+pub(crate) trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
+/// What the decoder reads from.
+pub(crate) type Reader<'a> = Unpaletted<Box<dyn ReadSeek + 'a>>;
+
+/// A reader for the decoder.
+pub(crate) fn reader<'a>(r: impl Read + Seek + 'a) -> std::io::Result<Reader<'a>> {
+    Unpaletted::new(Box::new(r))
 }
 
 impl<R: Read + Seek> Unpaletted<R> {
@@ -399,12 +452,11 @@ fn decimate<R: Read + Seek>(
 /// fits, when the file has overviews; otherwise an overview is made as the image is read, a strip
 /// or tile at a time (a regular, not cloud-optimised, file).
 pub fn read<R: Read + Seek>(r: R, name: &str) -> Result<Raster> {
-    read_limited(r, name, MAX_SAMPLES)
+    read_limited(reader(r).map_err(err)?, name, MAX_SAMPLES)
 }
 
 /// [`read`], holding at most `max` samples (the tests' small limit exercises the overviews).
-fn read_limited<R: Read + Seek>(r: R, name: &str, max: usize) -> Result<Raster> {
-    let r = Unpaletted::new(r).map_err(err)?;
+fn read_limited(r: Reader<'_>, name: &str, max: usize) -> Result<Raster> {
     let palette = !r.patches.is_empty();
     let limits = {
         let mut l = Limits::default();
@@ -811,7 +863,7 @@ mod tests {
         let data: Vec<u8> = (0..w * h).map(|i| ((i % w + i / w) % 251) as u8).collect();
         let bytes = grey8(w, h, &data, None);
         let full = read(std::io::Cursor::new(&bytes), "full").unwrap();
-        let r = read_limited(std::io::Cursor::new(&bytes), "big", 10_000).unwrap();
+        let r = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "big", 10_000).unwrap();
         assert_eq!((r.width, r.height), (76, 51));
         assert_eq!(r.overview, Some((301, 203)));
         assert_eq!(r.transform.pixel_width, full.transform.pixel_width * 4.0);

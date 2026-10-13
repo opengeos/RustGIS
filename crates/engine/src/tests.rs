@@ -444,6 +444,8 @@ fn hostile_params_never_panic() {
                 // Ask Earth Search when no API is given.
                 | "stac.collections"
                 | "stac.search"
+                // Asks geoBoundaries for its list.
+                | "boundaries.countries"
         ) {
             continue;
         }
@@ -3018,6 +3020,20 @@ fn services_list_and_add_layers() {
     let e = s.map().layer_by_name("Wells").unwrap().extent();
     assert!((e.min_x - 10.0).abs() < 1e-9 && (e.min_y - 50.0).abs() < 1e-9, "{e:?}");
     assert!(s.notices.iter().any(|n| n.text.contains("1 of its 9 features")));
+    // An OGC API layer added with its tileset's advertised template (the app reads it first); a
+    // given template that isn't one, or points inward, is refused.
+    let tiled = r#"{"collections": [{"id": "relief", "links": [{"rel": "tilesets-map", "href": "https://x.org/relief/map/tiles"}]}]}"#;
+    let api = "https://x.org/collections";
+    let r = s
+        .run(
+            "service.add",
+            &json!({"url": api, "layer": "relief (map tiles)", "text": tiled, "tiles": "https://x.org/relief/map/tiles/smerc/{z}/{y}/{x}.png"}),
+        )
+        .unwrap();
+    assert!(s.map().tiles.iter().any(|t| t.url == "https://x.org/relief/map/tiles/smerc/{z}/{y}/{x}.png"), "{r}");
+    for bad in ["https://x.org/relief.png", "http://169.254.169.254/{z}/{x}/{y}", "http://127.0.0.1/{z}/{x}/{y}"] {
+        assert!(s.run("service.add", &json!({"url": api, "layer": "relief (map tiles)", "text": tiled, "tiles": bad})).is_err(), "{bad}");
+    }
 }
 
 /// A KMZ's ground overlays become raster layers kept in the project; a KML whose picture is a web
@@ -3411,5 +3427,224 @@ fn sql_workspace_rows_and_schema() {
     assert_eq!(r["tables"]["towns"], json!(["name", "pop"]));
     let r = s.run("sql.query", &json!({"sql": "SELECT pop FROM towns", "database": db.display().to_string()})).unwrap();
     assert_eq!(r["rows"], json!([[3]]));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Serves `body` with byte ranges (`Range: bytes=a-b` answered 206) until the test ends; returns
+/// the base address and the count of bytes sent.
+fn serve_ranges(body: Vec<u8>) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = sent.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = [0u8; 4096];
+            let read = s.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..read]).to_ascii_lowercase();
+            let range = req.lines().find_map(|l| l.strip_prefix("range: bytes=")).and_then(|r| {
+                let (a, b) = r.trim().split_once('-')?;
+                Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
+            });
+            let (status, part) = match range {
+                Some((a, b)) if a < body.len() => ("206 Partial Content", &body[a..=b.min(body.len() - 1)]),
+                Some(_) => ("416 Range Not Satisfiable", &body[..0]),
+                None => ("200 OK", &body[..]),
+            };
+            count.fetch_add(part.len(), std::sync::atomic::Ordering::Relaxed);
+            let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", part.len());
+            let _ = s.write_all(part);
+        }
+    });
+    (format!("http://{addr}"), sent)
+}
+
+/// A cloud-optimised GeoTIFF by its address is read in place: its header, then only the tiles a
+/// map tile needs, by range; a GeoTIFF in strips is downloaded whole as a raster layer.
+#[test]
+fn cloud_optimised_geotiffs_are_read_in_place() {
+    use crate::render::rustgis_tiles::cache::{self, Payload, State, Want};
+    let file = rustgis_data::raster::cog::example(2048, 256);
+    let total = file.len();
+    let (base, sent) = serve_ranges(file);
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif")})).unwrap();
+    assert_eq!(r["inPlace"], true, "{r}");
+    let t = s.map().tiles.last().unwrap().clone();
+    assert_eq!((t.kind, t.name.as_str()), (rustgis_map::TileKind::Cog, "scene"));
+    // Framed on the file: 10–11° E, 45–46° N.
+    let b = r["bounds"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect::<Vec<_>>();
+    assert!((b[0] - 10.0).abs() < 1e-6 && (b[3] - 46.0).abs() < 1e-6, "{b:?}");
+    // A map tile inside it (zoom 9) is drawn from a few of its tiles, not the whole file.
+    let (z, lon, lat) = (9u32, 10.5f64, 45.5f64);
+    let n = f64::from(1u32 << z);
+    let x = ((lon + 180.0) / 360.0 * n) as u32;
+    let y = ((1.0 - lat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0 * n) as u32;
+    let tile = format!("cog:{z}/{x}/{y}@{base}/scene.tif");
+    let mut got = None;
+    for _ in 0..200 {
+        match cache::get(&tile, Want::Image) {
+            State::Ready(p) => {
+                got = Some(p);
+                break;
+            }
+            State::Failed(e) => panic!("{e}"),
+            State::Pending => cache::wait(std::time::Duration::from_millis(50)),
+        }
+    }
+    let Some(p) = got else { panic!("the tile never came") };
+    let Payload::Image(pm) = &*p else { panic!("not a picture") };
+    assert_eq!((pm.width(), pm.height()), (256, 256));
+    assert!(pm.pixels().iter().any(|px| px.alpha() == 255));
+    let read = sent.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(read < total / 4, "{read} of {total} bytes read");
+    // A tile outside it is empty.
+    assert!(matches!(cache::get(&format!("cog:9/0/0@{base}/scene.tif"), Want::Image), State::Pending | State::Ready(_)));
+    // The project keeps the address; asked to, the file is downloaded whole instead.
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(text.contains("\"kind\":\"cog\"") && text.contains("scene.tif"));
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "whole": true, "name": "Whole"})).unwrap();
+    assert!(r.get("inPlace").is_none(), "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).is_some_and(|l| l.is_raster()), "{r}");
+    // A GeoTIFF in strips isn't cloud-optimised: downloaded whole, a raster layer.
+    let r = rustgis_data::raster::Raster::new(
+        "strips",
+        8,
+        8,
+        vec![vec![3.0; 64]],
+        rustgis_data::raster::GeoTransform { origin_x: 5.0, origin_y: 50.0, pixel_width: 0.1, pixel_height: -0.1 },
+        rustgis_data::raster::Crs::LonLat,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let (base, _) = serve_ranges(rustgis_data::raster::geotiff::write(&r, 0).unwrap());
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/strips.tif")})).unwrap();
+    assert!(r.get("inPlace").is_none(), "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).is_some_and(|l| l.is_raster()), "{r}");
+}
+
+/// OpenStreetMap data for an area through an Overpass server (a local one): a layer per geometry
+/// kind; geoBoundaries' GeoJSON given as text; bad requests refused.
+#[test]
+fn osm_and_boundaries() {
+    const ANSWER: &[u8] = br#"{"elements": [
+        {"type": "node", "id": 1, "lat": 46.945, "lon": 7.445, "tags": {"amenity": "cafe", "name": "Kaffee"}},
+        {"type": "way", "id": 2, "tags": {"building": "yes"}, "geometry": [{"lat": 46.94, "lon": 7.44}, {"lat": 46.94, "lon": 7.441}, {"lat": 46.941, "lon": 7.441}, {"lat": 46.94, "lon": 7.44}]},
+        {"type": "way", "id": 3, "tags": {"highway": "residential", "name": "Gasse"}, "geometry": [{"lat": 46.94, "lon": 7.44}, {"lat": 46.945, "lon": 7.445}]}
+    ]}"#;
+    let base = serve(ANSWER, 1);
+    let mut s = Session::new(Project::default());
+    let r = s.run("osm.download", &json!({"bbox": [7.44, 46.94, 7.45, 46.95], "tags": "amenity, building, highway", "url": base})).unwrap();
+    assert_eq!(r["layers"].as_array().map(Vec::len), Some(3), "{r}");
+    let names: Vec<String> = s.map().layers.iter().map(|l| l.name.clone()).collect();
+    assert!(names.iter().any(|n| n == "OSM amenity, building, highway (polygons)"), "{names:?}");
+    // The app's answer, passed in.
+    let r = s
+        .run(
+            "osm.download",
+            &json!({"bbox": [7.44, 46.94, 7.45, 46.95], "preset": "pois", "name": "Cafés", "answer": std::str::from_utf8(ANSWER).unwrap()}),
+        )
+        .unwrap();
+    assert_eq!(r["features"]["points"], 1);
+    for bad in [
+        json!({"bbox": [7.0, 46.0, 8.0, 47.0], "preset": "roads"}),
+        json!({"bbox": [7.44, 46.94, 7.45, 46.95]}),
+        json!({"bbox": [7.44, 46.94, 7.45, 46.95], "preset": "x"}),
+        json!({"bbox": [7.44, 46.94, 7.45, 46.95], "preset": "roads", "answer": "<html>busy</html>"}),
+        json!({"bbox": "here", "preset": "roads"}),
+        // An entry that isn't a number isn't dropped: the box is refused.
+        json!({"bbox": [7.44, "x", 46.94, 7.45, 46.95], "preset": "roads"}),
+        json!({"preset": "roads", "view": false}),
+    ] {
+        assert!(s.run("osm.download", &bad).is_err(), "{bad}");
+    }
+    let gj = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"shapeName": "Bern"}, "geometry": {"type": "Polygon", "coordinates": [[[7, 46], [8, 46], [8, 47], [7, 46]]]}}]}"#;
+    let r = s.run("boundaries.add", &json!({"country": "che", "level": 1, "text": gj})).unwrap();
+    assert_eq!(r["features"], 1);
+    assert!(s.map().layer_by_name("CHE ADM1").is_some());
+    for bad in [
+        json!({}),
+        json!({"country": "CH", "text": gj}),
+        json!({"country": "CHE", "level": "ADM9", "text": gj}),
+        json!({"country": "CHE", "text": "{"}),
+    ] {
+        assert!(s.run("boundaries.add", &bad).is_err(), "{bad}");
+    }
+}
+
+/// A LAS 1.2 file of point format 0 in longitude/latitude: (x, y, z, class) per point.
+fn las_bytes(points: &[(f64, f64, f64, u8)]) -> Vec<u8> {
+    let mut b = vec![0u8; 227];
+    b[0..4].copy_from_slice(b"LASF");
+    b[24] = 1;
+    b[25] = 2;
+    b[94..96].copy_from_slice(&227u16.to_le_bytes());
+    b[96..100].copy_from_slice(&227u32.to_le_bytes());
+    b[105..107].copy_from_slice(&20u16.to_le_bytes());
+    b[107..111].copy_from_slice(&(points.len() as u32).to_le_bytes());
+    for k in 0..3 {
+        b[131 + k * 8..139 + k * 8].copy_from_slice(&1e-6f64.to_le_bytes());
+    }
+    // max x, min x, max y, min y, max z, min z.
+    for (at, v) in [(179, 11.0f64), (187, 10.0), (195, 51.0), (203, 50.0), (211, 400.0), (219, 300.0)] {
+        b[at..at + 8].copy_from_slice(&v.to_le_bytes());
+    }
+    for p in points {
+        let mut r = [0u8; 20];
+        for (k, v) in [p.0, p.1, p.2].iter().enumerate() {
+            r[k * 4..k * 4 + 4].copy_from_slice(&((v / 1e-6).round() as i32).to_le_bytes());
+        }
+        r[14] = 0x09;
+        r[15] = p.3;
+        b.extend_from_slice(&r);
+    }
+    b
+}
+
+/// LiDAR point clouds: read in place (a project keeps the file's path, not its points), coloured
+/// by ASPRS class, from a path and from an upload.
+#[test]
+fn lidar_point_clouds() {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("rustgis-lidar-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pts: Vec<(f64, f64, f64, u8)> =
+        (0..200).map(|i| (10.0 + f64::from(i) / 200.0, 50.5, 300.0 + f64::from(i % 50), if i % 2 == 0 { 2 } else { 6 })).collect();
+    let path = dir.join("scan.las");
+    std::fs::write(&path, las_bytes(&pts)).unwrap();
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!(r["streamed"], true, "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    let l = s.map().layer(id).unwrap();
+    match &l.renderer {
+        rustgis_map::Renderer::Unique { field, classes, .. } => {
+            assert_eq!(field, "classification");
+            let ground = classes.iter().find(|(v, _)| v == "2").unwrap();
+            assert_eq!(ground.1.fill, rustgis_map::Rgba::rgb(0xA6, 0x7C, 0x52));
+        }
+        other => panic!("{other:?}"),
+    }
+    // The project names the file; reopened, the points are read from it again.
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(text.contains("scan.las") && text.len() < 20_000, "{}", text.len());
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t.map().layer_by_name("scan").unwrap().source.as_ref().unwrap();
+    assert!(again.is_open(), "{:?}", again.error);
+    // An upload, and one class only: by elevation.
+    let one: Vec<_> = pts.iter().map(|p| (p.0, p.1, p.2, 2)).collect();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(las_bytes(&one));
+    let r = s.run("layer.addDataBytes", &json!({"fileName": "ground.las", "data": b64})).unwrap();
+    let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+    assert!(matches!(&l.renderer, rustgis_map::Renderer::Graduated { field, .. } if field == "z"), "{:?}", l.renderer);
+    // Not a point cloud.
+    assert!(s.run("layer.addDataBytes", &json!({"fileName": "junk.laz", "data": "AAAA"})).is_err());
     let _ = std::fs::remove_dir_all(dir);
 }

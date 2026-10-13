@@ -27,7 +27,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"database": "as layer.addDatabase", "password"?: string}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add", add_url).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
             .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "service"?: bool (a service's features: their axes and paging are checked)}"#),
@@ -664,7 +664,11 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
         }
         .map_err(err)?;
         let info = src.info().clone();
-        let stream = b(p, "stream").unwrap_or(info.count.is_none_or(|c| c > rustgis_map::source::STREAM_ABOVE));
+        // A point cloud is always read in place, so a project keeps its file's path, not millions
+        // of points; its colours come from a sample of it.
+        let lidar = info.format == "LiDAR";
+        let style = if lidar { lidar_renderer(src.as_ref(), s.map().layers.len() as u32) } else { None };
+        let stream = b(p, "stream").unwrap_or(lidar || info.count.is_none_or(|c| c > rustgis_map::source::STREAM_ABOVE));
         // A name given applies to a single table.
         let name = match ps(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
             Some(n) if ids.is_empty() => n.to_string(),
@@ -683,6 +687,9 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
                 s.notify(format!("{unique}: {n}"), false);
             }
             let id = s.map_mut().add_streamed(unique.clone(), layer);
+            if let (Some(r), Some(l)) = (style.clone(), s.map_mut().layer_mut(id)) {
+                l.renderer = r;
+            }
             s.active_layer = Some(id);
             ids.push(id);
             streamed = true;
@@ -700,6 +707,9 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
             ds.source = Some(label.clone());
             features += ds.features.len() as u64;
             let id = add_dataset(s, ds);
+            if let (Some(r), Some(l)) = (style.clone(), s.map_mut().layer_mut(id)) {
+                l.renderer = r;
+            }
             ids.push(id);
             for m in report.messages {
                 s.notify(m, false);
@@ -728,6 +738,49 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
         out["skipped"] = json!(skipped.iter().take(MAX_SKIPPED_NAMED).collect::<Vec<_>>());
     }
     Ok(out)
+}
+
+/// ASPRS's standard classes, coloured as LiDAR viewers commonly show them.
+const ASPRS: [(i64, [u8; 3]); 13] = [
+    (0, [0xA8, 0xA8, 0xA8]),
+    (1, [0xA8, 0xA8, 0xA8]),
+    (2, [0xA6, 0x7C, 0x52]),
+    (3, [0xB5, 0xDB, 0x7E]),
+    (4, [0x5F, 0xB0, 0x4A]),
+    (5, [0x1F, 0x6E, 0x2C]),
+    (6, [0xE0, 0x5A, 0x3C]),
+    (7, [0xFF, 0x3D, 0xF2]),
+    (9, [0x3C, 0x8C, 0xDC]),
+    (10, [0x80, 0x60, 0x40]),
+    (11, [0x55, 0x55, 0x55]),
+    (17, [0xE6, 0xB8, 0x3A]),
+    (18, [0xFF, 0x3D, 0xF2]),
+];
+
+/// A point cloud's style: small dots by ASPRS class when it has several, else by elevation; from a
+/// sample of its points.
+fn lidar_renderer(src: &dyn rustgis_data::source::FeatureSource, seed: u32) -> Option<Renderer> {
+    let info = src.info();
+    let sample = src.read(&rustgis_data::source::Request { extent: None, limit: 100_000 }).ok()?;
+    let mut ds = rustgis_data::Dataset::new(info.name.clone(), GeometryType::Point, info.fields.clone());
+    ds.features = sample.features;
+    let mut base = rustgis_map::Symbol::default_for(GeometryType::Point, seed);
+    base.size = 2.0;
+    base.stroke_width = 0.0;
+    let classes = ds.field_index("classification").map(|i| ds.unique_values(i, 64).len()).unwrap_or(0);
+    if classes >= 2 {
+        let mut r = Renderer::unique(&ds, "classification", Ramp::Harbour, base).ok()?;
+        if let Renderer::Unique { classes, .. } = &mut r {
+            for (value, sym) in classes.iter_mut() {
+                if let Some((_, [red, g, b_])) = ASPRS.iter().find(|(c, _)| value.parse::<i64>().ok() == Some(*c)) {
+                    sym.fill = Rgba::rgb(*red, *g, *b_);
+                }
+            }
+        }
+        Some(r)
+    } else {
+        Renderer::graduated(&ds, "z", 7, ClassMethod::Quantile, Ramp::Terrain, base).ok()
+    }
 }
 
 /// An OpenStreetMap extract past what the native reader takes, opened through GDAL instead when it
@@ -1237,18 +1290,49 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
         }
         return super::tiles::add(s, &q);
     }
+    // A GeoTIFF: read in place when it is cloud-optimised (tiled), otherwise downloaded whole.
+    let tiff = is_tiff_url(url);
     #[cfg(target_arch = "wasm32")]
     {
+        // Nothing may wait here: a GeoTIFF is taken to be cloud-optimised (the layer says if not).
+        if tiff && !super::b(p, "whole").unwrap_or(false) {
+            return add_cog(s, p, url);
+        }
         Err(format!("{url}: in the web app, use Home › Add Data › From URL"))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         // Errors about the address itself name it already.
         let named = |e: String| if e.starts_with(url) { e } else { format!("{url}: {e}") };
+        if tiff && !super::b(p, "whole").unwrap_or(false) && crate::render::rustgis_tiles::cog::probe_blocking(url).map_err(named)? {
+            return add_cog(s, p, url);
+        }
         let bytes = crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?;
         let name = url_file_name(url, &bytes).map_err(named)?;
         super::raster::add_named_bytes(s, p, name, bytes)
     }
+}
+
+/// Whether a web address names a GeoTIFF (by its path's extension).
+pub fn is_tiff_url(url: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
+    path.ends_with(".tif") || path.ends_with(".tiff")
+}
+
+/// Adds a cloud-optimised GeoTIFF by its address as a layer read in place (its tiles by range,
+/// as the view needs them), framed when its header is in.
+fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
+    let stem = url.split(['?', '#']).next().unwrap_or(url).rsplit('/').next().unwrap_or("GeoTIFF");
+    let stem = stem.rsplit_once('.').map(|(a, _)| a).unwrap_or(stem);
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(stem);
+    let mut r = super::tiles::add(s, &json!({"url": url, "kind": "cog", "name": name}))?;
+    if let Ok(Some(info)) = crate::render::rustgis_tiles::cog::info(url) {
+        let [w, so, e, n] = info.bounds;
+        s.zoom_to(&rustgis_geom::Extent::new(w, so, e, n));
+        r["bounds"] = json!(info.bounds);
+    }
+    r["inPlace"] = json!(true);
+    Ok(r)
 }
 
 /// Adds a download the app finished (its bytes handed to the session, not passed as text).

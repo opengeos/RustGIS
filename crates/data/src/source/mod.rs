@@ -18,6 +18,7 @@ pub mod gdal;
 pub mod gpkg;
 mod gpkg_blob;
 pub mod gpkg_mem;
+pub mod lidar;
 pub mod parquet;
 
 use crate::raster::{Crs, Transformer};
@@ -55,7 +56,7 @@ impl Family {
 }
 
 /// File types read through a provider.
-pub const EXTENSIONS: &[&str] = &["gpkg", "parquet", "geoparquet", "fgb"];
+pub const EXTENSIONS: &[&str] = &["gpkg", "parquet", "geoparquet", "fgb", "las", "laz"];
 
 /// The most features one read returns, whatever the request asks for.
 pub const MAX_LIMIT: usize = if cfg!(target_arch = "wasm32") { 500_000 } else { 2_000_000 };
@@ -129,6 +130,7 @@ pub fn open_path(path: &Path, layer: Option<&str>) -> Result<Box<dyn FeatureSour
     match ext(path).as_str() {
         "parquet" | "geoparquet" => Ok(Box::new(parquet::ParquetSource::open_path(path, &name)?)),
         "fgb" => Ok(Box::new(fgb::FgbSource::open_path(path, &name)?)),
+        "las" | "laz" => Ok(Box::new(lidar::LidarSource::open_path(path, &name)?)),
         #[cfg(not(target_arch = "wasm32"))]
         "gpkg" => Ok(Box::new(gpkg::GpkgSource::open(path, layer)?)),
         other => {
@@ -161,6 +163,7 @@ pub fn open_shared(file_name: &str, bytes: std::sync::Arc<Vec<u8>>, layer: Optio
     match ext(path).as_str() {
         "parquet" | "geoparquet" => Ok(Box::new(parquet::ParquetSource::open_shared(bytes, &name)?)),
         "fgb" => Ok(Box::new(fgb::FgbSource::open_shared(bytes, &name)?)),
+        "las" | "laz" => Ok(Box::new(lidar::LidarSource::open_bytes(bytes.as_ref(), &name)?)),
         // The desktop reads GeoPackages with SQLite (and its R-tree); the browser, which has no
         // SQLite, with the pure-Rust reader.
         #[cfg(not(target_arch = "wasm32"))]

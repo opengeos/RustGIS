@@ -8,11 +8,14 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod address;
+pub mod boundaries;
 pub mod cache;
+pub mod cog;
 pub mod draw;
 pub mod geocode;
 pub mod mbtiles;
 pub mod mvt;
+pub mod overpass;
 pub mod pmtiles;
 pub mod source;
 pub mod sprite;

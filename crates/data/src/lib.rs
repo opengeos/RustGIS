@@ -12,6 +12,7 @@ pub mod interop;
 pub mod io;
 pub mod kml;
 pub mod landxml;
+pub mod lidar;
 pub mod mapinfo;
 pub mod mbtiles;
 pub mod ogc;

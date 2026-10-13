@@ -112,6 +112,18 @@ added is said in a notice. For example,
 `?blank&data=https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson` opens
 the past week's earthquakes.
 
+`?stac=<address>` opens STAC Search on a [STAC](https://stacspec.org) item or collection: an
+item's footprint is drawn and its default asset (its true-colour `visual` image, else its first
+GeoTIFF) added, signed first when it is a Microsoft Planetary Computer one; a collection is chosen
+in the dialog, with its API, ready to search. For example,
+`?stac=https://planetarycomputer.microsoft.com/api/stac/v1/collections/sentinel-2-l2a/items/S2B_MSIL2A_20240727T102559_R108_T32TLS_20240727T131405`
+opens a Sentinel-2 scene of Lake Geneva.
+
+`?embed` runs the app inside another page, as the [Python package's notebook widget](python.md)
+does: it starts blank, keeps its settings in memory rather than in the browser, and exchanges
+the project with the page that frames it through `postMessage` (the messages are described in
+`apps/rustgis-web/src/embed.rs`).
+
 To build it yourself, install [Trunk](https://trunkrs.dev) and the `wasm32-unknown-unknown`
 target, then:
 

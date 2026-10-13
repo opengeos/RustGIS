@@ -21,6 +21,7 @@ mod layoutview;
 mod mapview;
 mod panes;
 mod pluginsui;
+mod portalsui;
 mod reportpane;
 mod ribbon;
 mod sqlpane;
@@ -152,6 +153,34 @@ pub struct ServiceConn {
     /// What `service.layers` made of it.
     pub listing: Option<Value>,
     pub error: Option<String>,
+    /// An OGC API layer whose advertised tile template is being read before it is added.
+    pub resolving: Option<TilesResolve>,
+}
+
+/// Reading an OGC API layer's tile template from its tileset list (and tileset), off the frame.
+pub struct TilesResolve {
+    /// `service.add`'s parameters, given the template as `"tiles"` once read.
+    pub params: Value,
+    /// The tileset list, whose query the template keeps; the document being read; how many have
+    /// been.
+    pub list: String,
+    pub doc: String,
+    pub read: u8,
+    pub vector: bool,
+    /// The usual-path template, when the advertised one can't be read.
+    pub fallback: String,
+    pub slot: Slot<Result<Vec<u8>, String>>,
+}
+
+/// Fetches an address into a slot, off the frame.
+pub(crate) fn fetch_into(url: &str) -> Slot<Result<Vec<u8>, String>> {
+    let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
+    let land = slot.clone();
+    rustgis_engine::render::rustgis_tiles::cache::download(
+        url,
+        Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
+    );
+    slot
 }
 
 /// Panes on the left of the map.
@@ -236,6 +265,9 @@ pub struct UiState {
     pub downloads: Vec<(u64, String, Value, Slot<Result<Vec<u8>, String>>)>,
     /// The SQL pane's editor, results and history.
     pub sql: sqlpane::State,
+    /// GeoTIFFs by address whose headers are being read: cloud-optimised ones are added in
+    /// place, others downloaded (the `ui.addUrl` parameters, and the answer).
+    pub cog_probes: Vec<(Value, Slot<Result<bool, String>>)>,
     /// A link's data (`?data=`) has zoomed the map: the first of its files to land with something
     /// to show does, whichever it is.
     pub link_zoomed: bool,
@@ -243,6 +275,8 @@ pub struct UiState {
     pub service: Option<ServiceConn>,
     /// STAC Search: its choices, results and the request under way.
     pub stac: stacui::State,
+    /// OpenStreetMap and Boundaries: their choices and the request under way.
+    pub portals: portalsui::State,
     /// Find Place searches and Geocode Addresses runs under way.
     pub geocode: geocodeui::State,
     /// A layout picture waiting for its image file (web).
@@ -289,9 +323,11 @@ impl Default for UiState {
             pending_csv: None,
             downloads: Vec::new(),
             sql: Default::default(),
+            cog_probes: Vec::new(),
             link_zoomed: false,
             service: None,
             stac: Default::default(),
+            portals: Default::default(),
             geocode: Default::default(),
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
@@ -954,6 +990,12 @@ impl RustGisApp {
                     return self.run("layer.addData", q);
                 }
             }
+            // A STAC item's or collection's address (a `?stac=` link): STAC Search opens on it,
+            // and an item's default asset is added.
+            "ui.stacLink" => {
+                let url = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
+                stacui::open_link(self, url)?;
+            }
             // Data by its web address: the dialog, then (with an address) the download, off the
             // frame; it's added when it lands. A PMTiles archive is a tile layer, never downloaded.
             "ui.addUrl" => {
@@ -962,6 +1004,19 @@ impl RustGisApp {
                 };
                 if url.to_ascii_lowercase().split(['?', '#']).next().is_some_and(|u| u.ends_with(".pmtiles")) {
                     return self.run("layer.addUrl", p.clone());
+                }
+                // A GeoTIFF: its header first, off the frame; a cloud-optimised one is read in
+                // place, another downloaded (see `poll_downloads`).
+                if rustgis_engine::cmd::layer::is_tiff_url(url) && p.get("whole").and_then(Value::as_bool) != Some(true) {
+                    let slot: Slot<Result<bool, String>> = Slot::default();
+                    let land = slot.clone();
+                    rustgis_engine::render::rustgis_tiles::cog::probe(
+                        url,
+                        Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
+                    );
+                    self.session.notify(i18n::fmt("Reading {url}…", &[("url", url)]), false);
+                    self.ui.cog_probes.push((p.clone(), slot));
+                    return Ok(Value::Null);
                 }
                 let url = url.to_string();
                 let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
@@ -1009,7 +1064,8 @@ impl RustGisApp {
                 );
                 // The dialog shows the address connected to, however the connection was asked for.
                 self.dialogs.text = url.to_string();
-                self.ui.service = Some(ServiceConn { url: url.to_string(), kind, slot, text: None, listing: None, error: None });
+                self.ui.service =
+                    Some(ServiceConn { url: url.to_string(), kind, slot, text: None, listing: None, error: None, resolving: None });
             }
             "ui.addData" => {
                 if let Some(open) = &self.services.open_async {
@@ -1056,6 +1112,8 @@ impl RustGisApp {
                             "mif",
                             "osm",
                             "pbf",
+                            "las",
+                            "laz",
                             "tif",
                             "tiff",
                             "asc",
@@ -1600,6 +1658,30 @@ impl RustGisApp {
     /// Adds the data downloads that have landed (Add Data › From URL). The bytes go to the session
     /// as they are; a download of a project that has since been closed is dropped.
     fn poll_downloads(&mut self) {
+        // GeoTIFFs whose headers are in: read in place, or downloaded whole.
+        let mut probed = Vec::new();
+        self.ui.cog_probes.retain(|(p, slot)| match slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            Some(r) => {
+                probed.push((p.clone(), r));
+                false
+            }
+            None => true,
+        });
+        for (mut p, r) in probed {
+            let url = p.get("url").and_then(Value::as_str).unwrap_or("").to_string();
+            match r {
+                Ok(true) => {
+                    if self.run("layer.addUrl", p).is_ok() {
+                        self.map.invalidate();
+                    }
+                }
+                Ok(false) => {
+                    p["whole"] = json!(true);
+                    let _ = self.run("ui.addUrl", p);
+                }
+                Err(e) => self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true),
+            }
+        }
         let mut landed = Vec::new();
         self.ui.downloads.retain(|(id, url, p, slot)| match slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
             Some(r) => {
@@ -1642,8 +1724,38 @@ impl RustGisApp {
         }
     }
 
+    /// Moves an OGC API layer's template reading along: the list, then the tileset when the list
+    /// doesn't carry the template; the layer is added with the template read, or the usual path.
+    fn poll_tiles_resolve(&mut self) {
+        use rustgis_engine::data::ogc::{TilesStep, resolve_tiles};
+        let Some(conn) = &mut self.ui.service else { return };
+        let Some(res) = &mut conn.resolving else { return };
+        let Some(r) = res.slot.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+        let step = r.ok().and_then(|body| resolve_tiles(&res.list, &res.doc, &body, res.vector));
+        let template = match step {
+            Some(TilesStep::Next(next)) if res.read < 2 => {
+                res.read += 1;
+                res.doc = next.clone();
+                res.slot = fetch_into(&next);
+                return;
+            }
+            Some(TilesStep::Template(t)) => t,
+            _ => res.fallback.clone(),
+        };
+        let Some(res) = conn.resolving.take() else { return };
+        let mut p = res.params;
+        p["tiles"] = json!(template);
+        let title = p["name"].as_str().unwrap_or("").to_string();
+        match self.run("service.add", p) {
+            Ok(_) => self.dialogs.info = Some(format!("{} {title}", tl!("Added"))),
+            Err(e) => self.dialogs.error = Some(e),
+        }
+        self.map.invalidate();
+    }
+
     /// Lists a service's layers once its capabilities have arrived.
     fn poll_service(&mut self) {
+        self.poll_tiles_resolve();
         let Some(conn) = &mut self.ui.service else { return };
         let Some(r) = conn.slot.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
         match r {
@@ -1683,6 +1795,7 @@ impl RustGisApp {
         sqlpane::poll(self, ctx);
         self.poll_service();
         stacui::poll(self, ctx);
+        portalsui::poll(self, ctx);
         geocodeui::poll(self, ctx);
         pluginsui::poll(self, ctx);
         assistantpane::poll(self, ctx);

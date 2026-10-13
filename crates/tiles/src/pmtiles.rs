@@ -746,6 +746,7 @@ mod tests {
             tile_size: 256,
             tms: false,
             attribution: String::new(),
+            layers: Vec::new(),
         };
         let mut resolved = crate::source::resolve(&spec);
         for _ in 0..200 {

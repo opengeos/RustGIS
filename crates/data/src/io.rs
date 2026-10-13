@@ -39,6 +39,8 @@ pub const READ_EXTENSIONS: &[&str] = &[
     "mif",
     "pbf",
     "topojson",
+    "las",
+    "laz",
 ];
 
 /// Most XML nodes parsed from one document (KML, GPX): each costs tens of bytes, and the
@@ -145,6 +147,14 @@ pub fn sniff_extension(bytes: &[u8]) -> Option<&'static str> {
         [b'I', b'I', 42 | 43, 0, ..] | [b'M', b'M', 0, 42 | 43, ..] => "tif",
         [b'P', b'K', 3, 4, ..] => "zip",
         _ if bytes.starts_with(b"SQLite format 3\0") => "gpkg",
+        // LiDAR: LAZ marks its point format's top bits.
+        _ if crate::lidar::looks_like_las(bytes) => {
+            if bytes.get(104).is_some_and(|f| f & 0xC0 != 0) {
+                "laz"
+            } else {
+                "las"
+            }
+        }
         _ if start.starts_with('{') || start.starts_with('[') => "geojson",
         _ if start.starts_with('<') && text.contains("<kml") => "kml",
         _ if start.starts_with('<') && text.contains("<gpx") => "gpx",
