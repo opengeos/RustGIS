@@ -200,7 +200,8 @@ SPEC
     # Signing: with MACOS_SIGN_IDENTITY (a Developer ID Application identity in the keychain)
     # the app and CLI get a hardened-runtime signature; without it, an ad-hoc one, which
     # Apple Silicon needs to launch anything. With APPLE_API_KEY_PATH, APPLE_API_KEY_ID and
-    # APPLE_API_ISSUER as well, the DMG and the CLI are notarized and the DMG is stapled.
+    # APPLE_API_ISSUER as well, the app, the DMG and the CLI are notarized and the app and the
+    # DMG are stapled.
     identity="${MACOS_SIGN_IDENTITY:-}"
     sign() {
       if [ -n "$identity" ]; then
@@ -215,6 +216,15 @@ SPEC
         --issuer "$APPLE_API_ISSUER" --wait --timeout 30m
     }
     sign "$app"
+    # Staple the app itself, not only the DMG: Homebrew and people dragging it to Applications
+    # copy the app out of the DMG, and an app without its own ticket opens only if Gatekeeper
+    # reaches Apple's servers at first launch (#89). Stapling adds a file outside the signed
+    # contents, so the signature stays valid.
+    if [ -n "$identity" ] && [ -n "${APPLE_API_KEY_PATH:-}" ]; then
+      ditto -c -k --keepParent "$app" "$work/RustGIS.app.zip"
+      notarize "$work/RustGIS.app.zip"
+      xcrun stapler staple "$app"
+    fi
 
     stage="$work/dmg"
     mkdir -p "$stage"

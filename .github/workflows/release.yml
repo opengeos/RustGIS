@@ -139,6 +139,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/dmg/RustGIS.app"
           if [ -n "${{ steps.macsign.outputs.api_key_path }}" ]; then
             spctl --assess --type execute --verbose=2 "$RUNNER_TEMP/dmg/RustGIS.app"
+            xcrun stapler validate "$RUNNER_TEMP/dmg/RustGIS.app"
             xcrun stapler validate dist/*.dmg
           fi
           hdiutil detach "$RUNNER_TEMP/dmg"

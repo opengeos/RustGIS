@@ -32,9 +32,12 @@ The `.msix` is the package submitted to the Microsoft Store, which signs it. It 
 on the release page, so Windows only installs it from the Store; download an installer or the
 portable zip instead.
 
-The macOS DMG and command line tool are signed with a Developer ID and notarized by Apple,
-so they open without a warning. The Windows builds are not yet signed: choose
-**More info › Run anyway** if SmartScreen warns about an unknown publisher.
+The macOS DMG and command line tool are signed with a Developer ID and notarized by Apple, so
+they open without a warning. From the release after 0.1.0, the notarization ticket is also
+stapled to RustGIS.app, so it opens even when the Mac cannot reach Apple's servers. If macOS
+says Apple could not verify RustGIS 0.1.0, connect to the internet and open it again, or run
+`xattr -dr com.apple.quarantine /Applications/RustGIS.app`. The Windows builds are not yet
+signed: choose **More info › Run anyway** if SmartScreen warns about an unknown publisher.
 
 ## Package managers
 
