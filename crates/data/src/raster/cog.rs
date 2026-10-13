@@ -21,6 +21,9 @@ use crate::{DataError, Result};
 const MAX_LEVELS: usize = 32;
 /// The most tiles an image may have.
 const MAX_TILES: usize = 4 << 20;
+/// How many tiles all the levels hold together (their offsets and lengths are kept, 16 bytes a
+/// tile): about 128 MB at most.
+const MAX_TOTAL_TILES: usize = 8 << 20;
 /// The largest tile, in samples.
 const MAX_TILE_SAMPLES: usize = 4 << 20;
 /// The most bytes held from a file's header (its IFDs and their tag arrays).
@@ -179,6 +182,15 @@ pub fn is_tiff(bytes: &[u8]) -> bool {
 }
 
 /// The layout of a tiled GeoTIFF, from the bytes read so far.
+/// Takes a level's `n` tiles from what all the levels may hold together.
+fn take_tiles(allowance: &mut usize, n: usize) -> Result<()> {
+    if n > MAX_TILES || n > *allowance {
+        return Err(err(format!("{n} tiles is too many")));
+    }
+    *allowance -= n;
+    Ok(())
+}
+
 pub fn layout(bytes: &Sparse) -> Result<Parse> {
     let r = bytes.reader();
     let watch = r.clone();
@@ -223,6 +235,7 @@ fn read_layout(r: Sparse) -> Result<Parse> {
     };
     let mut levels = Vec::new();
     let mut index = 0usize;
+    let mut allowance = MAX_TOTAL_TILES;
     loop {
         let subfile = dec.find_tag_unsigned::<u32>(Tag::NewSubfileType).ok().flatten().unwrap_or(0);
         // Transparency masks are skipped.
@@ -239,14 +252,15 @@ fn read_layout(r: Sparse) -> Result<Parse> {
                 return Err(err(format!("tiles of {tw} × {th} pixels")));
             }
             let n = (w.div_ceil(tw) as usize).saturating_mul(h.div_ceil(th) as usize);
-            if n > MAX_TILES {
-                return Err(err(format!("{n} tiles is too many")));
-            }
-            let offsets = dec.find_tag_unsigned_vec::<u64>(Tag::TileOffsets).map_err(err)?.unwrap_or_default();
-            let counts = dec.find_tag_unsigned_vec::<u64>(Tag::TileByteCounts).map_err(err)?.unwrap_or_default();
+            take_tiles(&mut allowance, n)?;
+            let mut offsets = dec.find_tag_unsigned_vec::<u64>(Tag::TileOffsets).map_err(err)?.unwrap_or_default();
+            let mut counts = dec.find_tag_unsigned_vec::<u64>(Tag::TileByteCounts).map_err(err)?.unwrap_or_default();
             if offsets.len() < n || counts.len() < n {
                 return Err(err("the tile index is shorter than the image"));
             }
+            // Entries past the image's tiles aren't kept.
+            offsets.truncate(n);
+            counts.truncate(n);
             // An overview a little larger than the one before isn't an overview of it.
             if levels.last().is_none_or(|l: &Level| w < l.width) {
                 levels.push(Level { ifd: index, width: w, height: h, tile_width: tw, tile_height: th, offsets, counts });
@@ -448,6 +462,15 @@ pub fn example(size: u32, tile: u32) -> Vec<u8> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn tile_budget_across_levels() {
+        let mut allowance = MAX_TOTAL_TILES;
+        assert!(take_tiles(&mut allowance, MAX_TILES + 1).is_err());
+        assert!(take_tiles(&mut allowance, MAX_TILES).is_ok() && take_tiles(&mut allowance, MAX_TILES).is_ok());
+        // All the levels together past the budget: refused.
+        assert!(take_tiles(&mut allowance, 1).is_err());
+    }
 
     #[test]
     fn layout_from_the_header_then_tiles_one_by_one() {

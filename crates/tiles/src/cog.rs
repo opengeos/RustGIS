@@ -390,9 +390,14 @@ fn get_tile(info: Arc<Info>, url: String, level: usize, idx: u32, then: Box<dyn 
     let nb = info.layout.bands.max(1);
     let per_band = (l.tile_width as usize) * (l.tile_height as usize);
     let samples = per_band * nb;
-    // A tile the file leaves out (GDAL's sparse files) is empty.
-    if len == 0 || at == 0 {
+    // A tile the file leaves out (GDAL's sparse files: no bytes) is empty.
+    if len == 0 {
         then(Ok(Arc::new(vec![vec![f32::NAN; per_band]; nb])));
+        return;
+    }
+    // Bytes at offset 0 would be the file's header: a broken index, said rather than drawn blank.
+    if at == 0 {
+        then(Err(format!("tile {idx} of level {level} has bytes but no offset")));
         return;
     }
     let key = (url.clone(), level, idx);
