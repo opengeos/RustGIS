@@ -92,8 +92,9 @@ struct Record<'a> {
     groups: Vec<Pair<'a>>,
 }
 
-/// The records of a drawing, in order.
-fn records(text: &str) -> Result<Vec<Record<'_>>> {
+/// The records of a drawing, in order, up to a line that isn't a group code (a stray line, or a
+/// pairing shifted by a missing one): what came before is kept, and the line is said.
+fn records(text: &str) -> (Vec<Record<'_>>, Option<String>) {
     let mut lines = text.lines();
     let mut out: Vec<Record> = Vec::new();
     let mut line = 0usize;
@@ -107,7 +108,8 @@ fn records(text: &str) -> Result<Vec<Record<'_>>> {
         line += 1;
         let value = value.trim_end_matches('\r');
         let Ok(code) = code.parse::<i32>() else {
-            return Err(DataError::Format(format!("line {}: '{}' isn't a DXF group code", line - 1, crate::io::cut(code, 40))));
+            let said = format!("line {}: '{}' isn't a DXF group code: the drawing is read up to it", line - 1, crate::io::cut(code, 40));
+            return (out, Some(said));
         };
         if code == 0 {
             let kind = value.trim();
@@ -119,7 +121,7 @@ fn records(text: &str) -> Result<Vec<Record<'_>>> {
             r.groups.push((code, value));
         }
     }
-    Ok(out)
+    (out, None)
 }
 
 /// A point in three dimensions.
@@ -262,6 +264,8 @@ struct Insert {
 struct Ent {
     kind: &'static str,
     layer: String,
+    /// The layer's name lower-cased (the table's key), once.
+    layer_key: String,
     /// The colour index (256 BYLAYER, 0 BYBLOCK).
     color: i64,
     linetype: Option<String>,
@@ -426,19 +430,33 @@ fn plain_text(s: &str) -> String {
                 Some('}') => out.push('}'),
                 Some('U') if it.peek() == Some(&'+') => {
                     it.next();
-                    let hex: String = (0..4).filter_map(|_| it.next()).collect();
+                    // Up to four hex digits: the text after them is kept.
+                    let mut hex = String::new();
+                    while hex.len() < 4
+                        && let Some(d) = it.next_if(char::is_ascii_hexdigit)
+                    {
+                        hex.push(d);
+                    }
                     if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
                         out.push(ch);
                     }
                 }
                 // Toggles without a value.
                 Some('L' | 'l' | 'O' | 'o' | 'K' | 'k') => {}
-                // Codes with a value up to ';' (font, height, colour, stacking...).
-                Some(_) => {
-                    for x in it.by_ref() {
+                // Codes with a value up to ';' (font, height, colour, stacking...). Without its
+                // ';', a code ends where the next code, group or (except a font's name) word
+                // starts, so the text after it is kept.
+                Some(code) => {
+                    let font = matches!(code, 'f' | 'F');
+                    while let Some(&x) = it.peek() {
                         if x == ';' {
+                            it.next();
                             break;
                         }
+                        if matches!(x, '\\' | '{' | '}') || (!font && x.is_whitespace()) {
+                            break;
+                        }
+                        it.next();
                     }
                 }
                 None => {}
@@ -918,7 +936,8 @@ fn append(ring: &mut Vec<P3>, mut piece: Vec<P3>) {
 
 /// A drawing's layers (name → colour, linetype) and blocks (name → base point and entities).
 struct Drawing {
-    layers: HashMap<String, (i64, String)>,
+    /// Lower-cased name → the name as written, colour, linetype.
+    layers: HashMap<String, (String, i64, String)>,
     blocks: HashMap<String, (P3, Vec<Ent>)>,
     entities: Vec<Ent>,
     /// Entities not drawn, by kind.
@@ -953,7 +972,7 @@ fn drawing(records: &[Record]) -> Drawing {
             "TABLES" if r.kind == "LAYER" => {
                 if let Some(name) = g.s(2).map(str::trim) {
                     let color = g.i(62).map(|c| c.abs()).unwrap_or(7);
-                    d.layers.insert(name.to_ascii_lowercase(), (color, g.s(6).map(str::trim).unwrap_or("").to_string()));
+                    d.layers.insert(name.to_ascii_lowercase(), (name.to_string(), color, g.s(6).map(str::trim).unwrap_or("").to_string()));
                 }
             }
             "BLOCKS" | "ENTITIES" => {
@@ -1009,6 +1028,7 @@ fn drawing(records: &[Record]) -> Drawing {
                 let e = Ent {
                     kind,
                     layer: g.s(8).map(str::trim).unwrap_or("0").to_string(),
+                    layer_key: g.s(8).map(str::trim).unwrap_or("0").to_ascii_lowercase(),
                     color: g.i(62).unwrap_or(256),
                     linetype: g.s(6).map(|s| s.trim().to_string()),
                     text,
@@ -1033,6 +1053,7 @@ fn drawing(records: &[Record]) -> Drawing {
 #[derive(Clone, Copy)]
 struct Inherit<'a> {
     layer: Option<&'a str>,
+    layer_key: Option<&'a str>,
     color: Option<i64>,
     linetype: Option<&'a str>,
     block: Option<&'a str>,
@@ -1107,21 +1128,23 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: 
             continue;
         }
         // An entity on layer 0 in a block takes the INSERT's layer; BYBLOCK its colour and linetype.
-        let layer = match from.layer {
-            Some(l) if e.layer == "0" => l,
-            _ => e.layer.as_str(),
+        let (layer, layer_key) = match (from.layer, from.layer_key) {
+            (Some(l), Some(k)) if e.layer == "0" => (l, k),
+            _ => (e.layer.as_str(), e.layer_key.as_str()),
         };
-        // The layer's table entry, looked up once.
-        let table = d.layers.get(&layer.to_ascii_lowercase());
-        let lt = e.linetype.as_deref();
-        let linetype = match lt {
-            Some(l) if l.eq_ignore_ascii_case("BYBLOCK") => from.linetype.map(str::to_string),
-            Some(l) if !l.eq_ignore_ascii_case("BYLAYER") => Some(l.to_string()),
-            _ => table.map(|(_, l)| l.clone()).filter(|l| !l.is_empty()),
+        // The layer's table entry, by the key lower-cased when the drawing was read.
+        let table = d.layers.get(layer_key);
+        // The linetype, worked out only for what is drawn or placed.
+        let linetype = || -> Option<&str> {
+            match e.linetype.as_deref() {
+                Some(l) if l.eq_ignore_ascii_case("BYBLOCK") => from.linetype,
+                Some(l) if !l.eq_ignore_ascii_case("BYLAYER") => Some(l),
+                _ => table.map(|(_, _, l)| l.as_str()).filter(|l| !l.is_empty()),
+            }
         };
         let color = match e.color {
             0 => from.color.unwrap_or(7),
-            256 => table.map(|(c, _)| *c).unwrap_or(7),
+            256 => table.map(|(_, c, _)| *c).unwrap_or(7),
             c => c.abs(),
         };
         if let Shape::Insert(ins) = &e.shape {
@@ -1140,6 +1163,7 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: 
                         .map(|s| Ent {
                             kind: e.kind,
                             layer: e.layer.clone(),
+                            layer_key: e.layer_key.clone(),
                             color: e.color,
                             linetype: e.linetype.clone(),
                             text: matches!(s, Shape::Point(_)).then(|| ins.fallback_text.clone()).flatten(),
@@ -1176,8 +1200,9 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: 
                         .then(&Xf::translate([-base[0], -base[1], -base[2]]));
                     let inner_from = Inherit {
                         layer: Some(layer),
+                        layer_key: Some(layer_key),
                         color: Some(color),
-                        linetype: linetype.as_deref().or(from.linetype),
+                        linetype: linetype().or(from.linetype),
                         block: Some(ins.block.as_str()),
                         paper: from.paper || e.paper,
                     };
@@ -1250,7 +1275,7 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: 
             Value::Text(layer.to_string()),
             Value::Text(e.kind.to_string()),
             Value::Int(color),
-            linetype.map(Value::Text).unwrap_or_default(),
+            linetype().map(|l| Value::Text(l.to_string())).unwrap_or_default(),
             e.text.clone().map(Value::Text).unwrap_or_default(),
             e.height.map(Value::Float).unwrap_or_default(),
             e.rotation.map(Value::Float).unwrap_or_default(),
@@ -1275,9 +1300,12 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
         return Err(DataError::Unsupported(format!("{file_name}: a binary DXF (save it as an ASCII DXF to read it here)")));
     }
     let text = decode(bytes);
-    let recs = records(text.trim_start_matches('\u{feff}'))?;
+    let (recs, cut_short) = records(text.trim_start_matches('\u{feff}'));
     if !recs.iter().any(|r| r.kind == "SECTION") {
-        return Err(DataError::Format(format!("{file_name}: not a DXF drawing")));
+        return Err(DataError::Format(match cut_short {
+            Some(why) => format!("{file_name}: not a DXF drawing ({why})"),
+            None => format!("{file_name}: not a DXF drawing"),
+        }));
     }
     let d = drawing(&recs);
     let mut out = Out {
@@ -1295,10 +1323,13 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
         vertex_capped: false,
         copies: 1,
     };
-    let none = Inherit { layer: None, color: None, linetype: None, block: None, paper: false };
+    let none = Inherit { layer: None, layer_key: None, color: None, linetype: None, block: None, paper: false };
     emit(&d, &d.entities, &Xf::ID, none, 0, &mut Vec::new(), opts, &mut out);
 
     let mut report = ReadReport::default();
+    if let Some(why) = cut_short {
+        report.messages.push(why);
+    }
     if opts.crs.is_none() {
         report.messages.push(
             "a DXF drawing doesn't say its coordinate system (give \"crs\", such as EPSG:2263): coordinates are kept as they are".into(),
@@ -1380,16 +1411,33 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
 
 /// The DXF layers a drawing draws on (for picking one with [`Options::layer`]).
 pub fn layers(file_name: &str, bytes: &[u8]) -> Result<Vec<String>> {
+    if is_binary(bytes) {
+        return Err(DataError::Unsupported(format!("{file_name}: a binary DXF (save it as an ASCII DXF to read it here)")));
+    }
+    let text = decode(bytes);
+    let (recs, _) = records(text.trim_start_matches('\u{feff}'));
+    if !recs.iter().any(|r| r.kind == "SECTION") {
+        return Err(DataError::Format(format!("{file_name}: not a DXF drawing")));
+    }
+    // The table's layers and those entities (paper space and blocks' too) are on, without
+    // drawing anything. Layer 0 in a block takes its INSERT's, so it isn't one of its own there.
+    let d = drawing(&recs);
     let mut names: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for (ds, _) in read(file_name, bytes, &Options::default())? {
-        let Some(i) = ds.field_index("layer") else { continue };
-        for f in &ds.features {
-            if let Some(Value::Text(l)) = f.attrs.get(i)
-                && seen.insert(l.to_ascii_lowercase())
-            {
-                names.push(l.clone());
-            }
+    let mut add = |name: &str, key: &str| {
+        if seen.insert(key.to_string()) {
+            names.push(name.to_string());
+        }
+    };
+    for (key, (name, _, _)) in &d.layers {
+        add(name, key);
+    }
+    for e in &d.entities {
+        add(&e.layer, &e.layer_key);
+    }
+    for (_, ents) in d.blocks.values() {
+        for e in ents.iter().filter(|e| e.layer != "0") {
+            add(&e.layer, &e.layer_key);
         }
     }
     names.sort_by_key(|n| n.to_ascii_lowercase());
@@ -1627,7 +1675,8 @@ mod tests {
 
     #[test]
     fn layers_filter_and_crs() {
-        assert_eq!(layers("a.dxf", &sample()).unwrap(), ["Fill", "Labels", "Roads", "Trees"]);
+        // The table's layers and the entities' (layer 0: an INSERT without a layer group).
+        assert_eq!(layers("a.dxf", &sample()).unwrap(), ["0", "Fill", "Labels", "Roads", "Trees"]);
         let only = read("a.dxf", &sample(), &Options { crs: None, layer: Some("roads"), paper_space: false }).unwrap();
         assert_eq!(only.len(), 1);
         assert_eq!(only[0].0.features.len(), 2);
@@ -1958,8 +2007,114 @@ mod tests {
         assert!(l[0].1.messages.iter().any(|m| m.contains("coordinates")), "{:?}", l[0].1.messages);
     }
 
+    /// A line that isn't a group code ends the reading there: what came before is kept and said.
+    #[test]
+    fn a_bad_group_code_keeps_what_came_before() {
+        let mut d = dxf(&[(0, "SECTION"), (2, "ENTITIES"), (0, "POINT"), (10, "1"), (20, "2"), (0, "POINT"), (10, "3"), (20, "4")]);
+        d.extend_from_slice(b"not a code\nvalue\n  0\nPOINT\n 10\n5\n 20\n6\n");
+        let l = read("b.dxf", &d, &Options::default()).unwrap();
+        assert_eq!(l[0].0.features.len(), 2);
+        assert!(l[0].1.messages.iter().any(|m| m.contains("line 17") && m.contains("read up to it")), "{:?}", l[0].1.messages);
+    }
+
+    /// A clockwise hatch arc (73 = 0) off the x-axis, as GDAL reads it (ogrdxf_hatch.cpp hands
+    /// the angles un-negated to approximateArcAngles, which measures clockwise): the arc runs over
+    /// the standard angles from -end to -start around its own centre.
+    #[test]
+    fn clockwise_hatch_arc_off_the_axis() {
+        // Centre (10, 5), radius 2, start 30, end 120, clockwise; closed by a line between its ends.
+        let (a, b) = (240f64.to_radians(), 330f64.to_radians());
+        let (ax, ay, bx, by) = (10.0 + 2.0 * a.cos(), 5.0 + 2.0 * a.sin(), 10.0 + 2.0 * b.cos(), 5.0 + 2.0 * b.sin());
+        let (ax, ay, bx, by) = (ax.to_string(), ay.to_string(), bx.to_string(), by.to_string());
+        let h = dxf(&[
+            (0, "SECTION"),
+            (2, "ENTITIES"),
+            (0, "HATCH"),
+            (10, "0"),
+            (20, "0"),
+            (30, "0"),
+            (91, "1"),
+            (92, "1"),
+            (93, "2"),
+            (72, "2"),
+            (10, "10"),
+            (20, "5"),
+            (40, "2"),
+            (50, "30"),
+            (51, "120"),
+            (73, "0"),
+            (72, "1"),
+            (10, &bx),
+            (20, &by),
+            (11, &ax),
+            (21, &ay),
+            (97, "0"),
+            (0, "ENDSEC"),
+            (0, "EOF"),
+        ]);
+        let l = read("cw.dxf", &h, &Options::default()).unwrap();
+        let Some(Geometry::Polygon(p)) = &l[0].0.features[0].geometry else { panic!("a polygon") };
+        let ring = &p[0][0];
+        // Every point on the circle is within 240°..330°: below the centre, right of 9.
+        for c in ring {
+            let r = (c.x - 10.0).hypot(c.y - 5.0);
+            let t = (c.y - 5.0).atan2(c.x - 10.0).to_degrees().rem_euclid(360.0);
+            assert!((r - 2.0).abs() < 1e-6 || r < 2.0, "{c:?}");
+            if (r - 2.0).abs() < 1e-6 {
+                assert!((239.999..=330.001).contains(&t), "{t} at {c:?}");
+            }
+        }
+        let maxy = ring.iter().map(|c| c.y).fold(f64::MIN, f64::max);
+        assert!((maxy - 4.0).abs() < 1e-6, "{maxy}");
+    }
+
+    /// Layers listed without drawing: the table's, the entities' (paper space too) and blocks'.
+    #[test]
+    fn layers_from_the_table_and_entities() {
+        let d = dxf(&[
+            (0, "SECTION"),
+            (2, "TABLES"),
+            (0, "LAYER"),
+            (2, "Empty"),
+            (0, "ENDSEC"),
+            (0, "SECTION"),
+            (2, "BLOCKS"),
+            (0, "BLOCK"),
+            (2, "B"),
+            (0, "POINT"),
+            (8, "InBlock"),
+            (10, "0"),
+            (20, "0"),
+            (0, "POINT"),
+            (8, "0"),
+            (10, "0"),
+            (20, "0"),
+            (0, "ENDBLK"),
+            (0, "ENDSEC"),
+            (0, "SECTION"),
+            (2, "ENTITIES"),
+            (0, "LINE"),
+            (8, "Layout"),
+            (67, "1"),
+            (10, "0"),
+            (20, "0"),
+            (11, "1"),
+            (21, "1"),
+            (0, "INSERT"),
+            (8, "Trees"),
+            (2, "B"),
+            (0, "ENDSEC"),
+            (0, "EOF"),
+        ]);
+        assert_eq!(layers("l.dxf", &d).unwrap(), ["Empty", "InBlock", "Layout", "Trees"]);
+    }
+
     #[test]
     fn text_codes() {
+        // A code without its ';' ends where the next word or code starts; \U+ takes hex digits.
+        assert_eq!(plain_text("\\C1 red \\H2x\\Pnext"), "red next");
+        assert_eq!(plain_text("\\U+00B0C and \\U+12 xyz"), "°C and \u{12} xyz");
+        assert_eq!(plain_text("{\\fArial Narrow|b0;Wide} text"), "Wide text");
         assert_eq!(plain_text("{\\H2.5x;\\C1;Big} \\U+00B0C %%p1 \\Pnext"), "Big °C ±1 next");
         assert_eq!(plain_text("a\\\\b \\{x\\}"), "a\\b {x}");
     }
