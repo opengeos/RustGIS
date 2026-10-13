@@ -111,16 +111,16 @@ fn overture_add(s: &mut Session, p: &Value) -> CmdResult {
 /// Adds a theme type's files (read in place, the map's view kept), all or none: when one can't be
 /// added, the ones added before it are taken out again, so trying again doesn't add them twice.
 pub(crate) fn add_files(s: &mut Session, ty: &str, urls: &[String]) -> CmdResult {
-    // What a failure puts back: the map as it was (its layers in their order, its layer ids) and
-    // the active layer.
-    let (n, active, before) = (urls.len(), s.active_layer, s.map().clone());
+    // What a failure puts back: the map's layers in their order and its layer ids (not a copy of
+    // their data), and the active layer.
+    let (n, active, before) = (urls.len(), s.active_layer, s.map().layer_mark());
     let mut layers: Vec<u32> = Vec::new();
     for (i, url) in urls.iter().enumerate() {
         match super::layer::add_url(s, &json!({"url": url, "name": overture::layer_name(ty, i, n), "zoom": false})) {
             Ok(r) => layers
                 .extend(r["layers"].as_array().into_iter().flatten().filter_map(Value::as_u64).filter_map(|id| u32::try_from(id).ok())),
             Err(e) => {
-                *s.map_mut() = before;
+                s.map_mut().restore_layers(&before);
                 s.active_layer = active;
                 return Err(if n > 1 { format!("{e} (none of the {n} files was added)") } else { e });
             }

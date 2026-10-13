@@ -412,6 +412,13 @@ pub struct Bookmark {
     pub camera: Camera,
 }
 
+/// What [`Map::layer_mark`] records.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayerMark {
+    ids: Vec<u32>,
+    next: u32,
+}
+
 /// A map: an ordered list of layers (index 0 draws on top), a basemap and a camera.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Map {
@@ -541,6 +548,20 @@ impl Map {
         let id = self.next_layer_id.max(self.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1);
         self.next_layer_id = id + 1;
         id
+    }
+
+    /// The map's layers as they stand (their ids in order, and the next id), cheap to take before
+    /// adding several layers that must all go in or none: see [`Map::restore_layers`].
+    pub fn layer_mark(&self) -> LayerMark {
+        LayerMark { ids: self.layers.iter().map(|l| l.id).collect(), next: self.next_layer_id }
+    }
+
+    /// Takes out the layers added since `mark` and puts the others back in its order, with the
+    /// layer ids it had (the layers' data is never copied).
+    pub fn restore_layers(&mut self, mark: &LayerMark) {
+        self.layers.retain(|l| mark.ids.contains(&l.id));
+        self.layers.sort_by_key(|l| mark.ids.iter().position(|id| *id == l.id).unwrap_or(usize::MAX));
+        self.next_layer_id = mark.next;
     }
 
     /// Inserts a layer on top of the layers of its kind: points above lines above polygons above
