@@ -14,7 +14,7 @@ pub fn commands() -> Vec<C> {
             r#"{"query": "a place or an address", "provider"?: "nominatim" (OpenStreetMap, default) | "photon", "url"?: "a geocoding server of your own", "limit"?: 1–20, "go"?: bool (zooms to the first, default true)}"#,
         ),
         C::new("layer.geocode", "Geocode Addresses", "Home › Add › Add Data", geocode).params(
-            r#"{"table"?: "a standalone table (such as a CSV of addresses)", "layer"?: name|id (or the active layer), "address": field | [fields] (joined with commas, such as street, city, country), "provider"?: "nominatim" | "photon", "url"?: "a geocoding server of your own (more than 100 addresses)", "name"?: text}"#,
+            r#"{"table"?: "a standalone table (such as a CSV of addresses)", "layer"?: name|id (or the active layer), "address": field | [fields] (joined with commas, such as street, city, country), "provider"?: "nominatim" | "photon", "url"?: "a geocoding server of your own (more than 100 addresses)", "name"?: text, "places"?: "answers already looked up, {address: {lon, lat, name} | null} (the app's background run; nothing is fetched)"}"#,
         ),
     ]
 }
