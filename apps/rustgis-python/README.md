@@ -1,5 +1,8 @@
 # rustgis
 
+[![PyPI](https://img.shields.io/pypi/v/rustgis.svg)](https://pypi.org/project/rustgis/)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/opengeos/RustGIS/blob/main/apps/rustgis-python/examples/getting-started.ipynb)
+
 Python bindings to [RustGIS](https://rustgis.app), a fast, free and open-source GIS in pure Rust.
 The RustGIS engine runs inside Python, headless: open data and projects, run any of RustGIS's
 commands and over 1,000 geoprocessing tools, style layers, render maps and save projects the
@@ -34,6 +37,7 @@ m.info()["center"]                                # ...and read it back here
 
 Every action in RustGIS is a command with an id, the same ids the ribbon, `rustgis-cli` and the
 AI Assistant use: `Session.commands()` lists them with their parameters, and `Session.run` runs
-any of them. See the [Python guide](https://rustgis.app/python/).
+any of them. See the [Python guide](https://rustgis.app/python/) and the
+[getting-started notebook](https://github.com/opengeos/RustGIS/blob/main/apps/rustgis-python/examples/getting-started.ipynb).
 
 Licensed under Apache-2.0.

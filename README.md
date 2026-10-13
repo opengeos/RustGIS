@@ -15,6 +15,8 @@
   <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2563eb?style=flat-square">
   <img alt="16 languages" src="https://img.shields.io/badge/languages-16-0e9384?style=flat-square">
   <a href="https://plugins.rustgis.app"><img alt="Plugins" src="https://img.shields.io/badge/plugins-registry-7c3aed?style=flat-square"></a>
+  <a href="https://pypi.org/project/rustgis/"><img alt="PyPI" src="https://img.shields.io/pypi/v/rustgis?style=flat-square&logo=python&logoColor=white&label=pypi"></a>
+  <a href="https://colab.research.google.com/github/opengeos/RustGIS/blob/main/apps/rustgis-python/examples/getting-started.ipynb"><img alt="Open in Colab" src="https://colab.research.google.com/assets/colab-badge.svg"></a>
 </p>
 
 <p align="center">
@@ -129,7 +131,8 @@ claude mcp add rustgis -- rustgis-cli mcp --sample   # RustGIS as an MCP server 
 
 See [Command Line](docs/cli.md) for more.
 
-Python: the same engine and commands in-process.
+Python: the same engine and commands in-process (`pip install rustgis`), and the app itself in a
+Jupyter notebook.
 
 ```python
 import rustgis
@@ -139,7 +142,8 @@ s.to_png("map.png")
 gdf = s.layer("Cities_Buffer").to_geopandas()
 ```
 
-See [Python](docs/python.md).
+See [Python](docs/python.md) and the [getting-started notebook](apps/rustgis-python/examples/getting-started.ipynb)
+([open in Colab](https://colab.research.google.com/github/opengeos/RustGIS/blob/main/apps/rustgis-python/examples/getting-started.ipynb)).
 
 ## Architecture
 

@@ -1,5 +1,8 @@
 # Python
 
+[![PyPI](https://img.shields.io/pypi/v/rustgis.svg)](https://pypi.org/project/rustgis/)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/opengeos/RustGIS/blob/main/apps/rustgis-python/examples/getting-started.ipynb)
+
 The `rustgis` package runs the RustGIS engine inside Python, headless. It opens data and
 projects, runs any command and geoprocessing tool, styles layers, renders maps and saves projects
 that the desktop app opens as they are. There is no app to install and no server to run: the
@@ -8,6 +11,9 @@ engine is a native module built for Windows, macOS and Linux, for Python 3.12 an
 ```sh
 pip install rustgis               # pip install "rustgis[geopandas]" for GeoDataFrames
 ```
+
+A [getting-started notebook](https://github.com/opengeos/RustGIS/blob/main/apps/rustgis-python/examples/getting-started.ipynb) walks
+through what follows; [open it in Colab](https://colab.research.google.com/github/opengeos/RustGIS/blob/main/apps/rustgis-python/examples/getting-started.ipynb) to try it without installing anything.
 
 ## A first session
 
@@ -37,7 +43,7 @@ pip install "rustgis[jupyter]"
 ```
 
 ```python
-m = rustgis.Map(sample=True, height="600px")
+m = rustgis.Map(sample=True)                         # height="800px" by default
 m                                                   # the app, in the cell
 
 m.add_geojson("sites.geojson", name="Sites")        # appears in the app

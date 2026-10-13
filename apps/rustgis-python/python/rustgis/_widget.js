@@ -9,7 +9,7 @@ function render({ model, el }) {
   const iframe = document.createElement("iframe");
   iframe.src = src;
   iframe.style.width = "100%";
-  iframe.style.height = model.get("height") || "600px";
+  iframe.style.height = model.get("height") || "800px";
   iframe.style.border = "0";
   iframe.style.display = "block";
   iframe.allow = "fullscreen; clipboard-read; clipboard-write";
@@ -54,7 +54,7 @@ function render({ model, el }) {
     else waiting.push(run);
   };
   const onHeight = () => {
-    iframe.style.height = model.get("height") || "600px";
+    iframe.style.height = model.get("height") || "800px";
   };
 
   window.addEventListener("message", onMessage);

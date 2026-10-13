@@ -42,7 +42,7 @@ class Map(anywidget.AnyWidget):
         session: The session to show; a new one when left out.
         sample: Open the World Atlas sample project.
         data: Files to add as layers.
-        height: The widget's height, as CSS (``"600px"``).
+        height: The widget's height, as CSS (``"800px"``).
         lang: The interface language (``"de"``, ``"ja"``, ...); the browser's when left out.
         url: The web app to show; ``RUSTGIS_WEB_URL`` or https://web.rustgis.app when left out.
         **kwargs: Passed on to ``anywidget.AnyWidget``.
@@ -56,7 +56,7 @@ class Map(anywidget.AnyWidget):
     _esm = pathlib.Path(__file__).parent / "_widget.js"
     _src = traitlets.Unicode("").tag(sync=True)
     _project = traitlets.Unicode("").tag(sync=True)
-    height = traitlets.Unicode("600px").tag(sync=True)
+    height = traitlets.Unicode("800px").tag(sync=True)
 
     def __init__(
         self,
@@ -64,7 +64,7 @@ class Map(anywidget.AnyWidget):
         *,
         sample: bool = False,
         data: Optional[Union[PathLike, Iterable[PathLike]]] = None,
-        height: str = "600px",
+        height: str = "800px",
         lang: Optional[str] = None,
         url: Optional[str] = None,
         **kwargs: Any,
