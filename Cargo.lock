@@ -2431,6 +2431,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "laz"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a1bd8242fad6a61a7520b73d072ddf63dff1f3680e3f5c157b1dc6e8e5ab2ec"
+dependencies = [
+ "byteorder",
+ "num-traits",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3780,6 +3790,7 @@ dependencies = [
  "flatgeobuf",
  "geozero",
  "image",
+ "laz",
  "miniz_oxide 0.8.9",
  "parquet",
  "proj4rs",

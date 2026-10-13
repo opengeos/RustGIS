@@ -64,7 +64,7 @@ engine, choose RustGIS. Both keep your data on your machine.
 | **Geocoding** | Find Place and address tables through Nominatim or Photon (OSM's public servers or your own) | Geocoding search and batch geocoding | Through plugins | ArcGIS World Geocoder (credits) | Yes |
 | **Open-data portals** | OpenStreetMap by area (Overpass) and administrative boundaries (geoBoundaries) | ArcGIS Hub, Socrata, CKAN, US portals, geoBoundaries, Overpass, Natural Earth | Through plugins (QuickOSM) | Living Atlas | Living Atlas |
 | **STAC, databases, Esri services** | STAC search (Earth Search or any STAC API) with footprints and assets by address; PostgreSQL/PostGIS and DuckDB databases (desktop, through DuckDB); WMS, WMTS, WFS, OGC API Features and ArcGIS REST services | STAC browser, PostGIS, DuckDB, Iceberg, ArcGIS services, File Geodatabase (desktop) | STAC, PostGIS, SpatiaLite, Oracle, SQL Server, ArcGIS services | Enterprise geodatabases, Esri services | Hosted only |
-| **3D** | A 3D globe; 2.5D extrusion with lighting and shadows; glTF scene export | Cesium globe, 3D Tiles, I3S, LiDAR, Gaussian splats | Point clouds, 3D map view | **Deepest 3D**: scenes, I3S, mesh, LAS | Scene Viewer |
+| **3D** | A 3D globe; 2.5D extrusion with lighting and shadows; glTF scene export; LiDAR (LAS/LAZ/COPC) as point layers | Cesium globe, 3D Tiles, I3S, LiDAR, Gaussian splats | Point clouds, 3D map view | **Deepest 3D**: scenes, I3S, mesh, LAS | Scene Viewer |
 
 ## Analysis and processing
 

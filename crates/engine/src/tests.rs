@@ -3530,3 +3530,74 @@ fn osm_and_boundaries() {
         assert!(s.run("boundaries.add", &bad).is_err(), "{bad}");
     }
 }
+
+/// A LAS 1.2 file of point format 0 in longitude/latitude: (x, y, z, class) per point.
+fn las_bytes(points: &[(f64, f64, f64, u8)]) -> Vec<u8> {
+    let mut b = vec![0u8; 227];
+    b[0..4].copy_from_slice(b"LASF");
+    b[24] = 1;
+    b[25] = 2;
+    b[94..96].copy_from_slice(&227u16.to_le_bytes());
+    b[96..100].copy_from_slice(&227u32.to_le_bytes());
+    b[105..107].copy_from_slice(&20u16.to_le_bytes());
+    b[107..111].copy_from_slice(&(points.len() as u32).to_le_bytes());
+    for k in 0..3 {
+        b[131 + k * 8..139 + k * 8].copy_from_slice(&1e-6f64.to_le_bytes());
+    }
+    // max x, min x, max y, min y, max z, min z.
+    for (at, v) in [(179, 11.0f64), (187, 10.0), (195, 51.0), (203, 50.0), (211, 400.0), (219, 300.0)] {
+        b[at..at + 8].copy_from_slice(&v.to_le_bytes());
+    }
+    for p in points {
+        let mut r = [0u8; 20];
+        for (k, v) in [p.0, p.1, p.2].iter().enumerate() {
+            r[k * 4..k * 4 + 4].copy_from_slice(&((v / 1e-6).round() as i32).to_le_bytes());
+        }
+        r[14] = 0x09;
+        r[15] = p.3;
+        b.extend_from_slice(&r);
+    }
+    b
+}
+
+/// LiDAR point clouds: read in place (a project keeps the file's path, not its points), coloured
+/// by ASPRS class, from a path and from an upload.
+#[test]
+fn lidar_point_clouds() {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("rustgis-lidar-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pts: Vec<(f64, f64, f64, u8)> =
+        (0..200).map(|i| (10.0 + f64::from(i) / 200.0, 50.5, 300.0 + f64::from(i % 50), if i % 2 == 0 { 2 } else { 6 })).collect();
+    let path = dir.join("scan.las");
+    std::fs::write(&path, las_bytes(&pts)).unwrap();
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!(r["streamed"], true, "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    let l = s.map().layer(id).unwrap();
+    match &l.renderer {
+        rustgis_map::Renderer::Unique { field, classes, .. } => {
+            assert_eq!(field, "classification");
+            let ground = classes.iter().find(|(v, _)| v == "2").unwrap();
+            assert_eq!(ground.1.fill, rustgis_map::Rgba::rgb(0xA6, 0x7C, 0x52));
+        }
+        other => panic!("{other:?}"),
+    }
+    // The project names the file; reopened, the points are read from it again.
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(text.contains("scan.las") && text.len() < 20_000, "{}", text.len());
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t.map().layer_by_name("scan").unwrap().source.as_ref().unwrap();
+    assert!(again.is_open(), "{:?}", again.error);
+    // An upload, and one class only: by elevation.
+    let one: Vec<_> = pts.iter().map(|p| (p.0, p.1, p.2, 2)).collect();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(las_bytes(&one));
+    let r = s.run("layer.addDataBytes", &json!({"fileName": "ground.las", "data": b64})).unwrap();
+    let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+    assert!(matches!(&l.renderer, rustgis_map::Renderer::Graduated { field, .. } if field == "z"), "{:?}", l.renderer);
+    // Not a point cloud.
+    assert!(s.run("layer.addDataBytes", &json!({"fileName": "junk.laz", "data": "AAAA"})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}

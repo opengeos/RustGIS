@@ -16,6 +16,7 @@ Formats](data-formats.md).
 | KML/KMZ (with their styles), GPX | Yes | Yes |
 | Spreadsheets (`.xlsx`, `.xls`, `.ods`), GeoRSS feeds, LandXML, encoded polylines | Yes | No |
 | GML, MapInfo MIF/MID, OpenStreetMap PBF, TopoJSON | Yes | No |
+| LiDAR point clouds: LAS, LAZ, COPC (an evenly spread sample) | Yes | No |
 | Through GDAL: DXF, File Geodatabase (`.gdb` folder), MapInfo TAB, OpenStreetMap XML… | Yes (desktop, when GDAL is installed) | No |
 | DuckDB databases (`.duckdb`, `.ddb`), PostgreSQL/PostGIS databases and SQL queries | Yes (desktop, when DuckDB is installed) | No |
 | KML, GPX, CSV with WKT geometry | No | Yes (Analyze › Workflows › Data Interop) |

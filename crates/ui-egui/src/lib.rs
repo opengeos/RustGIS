@@ -1077,6 +1077,8 @@ impl RustGisApp {
                             "mif",
                             "osm",
                             "pbf",
+                            "las",
+                            "laz",
                             "tif",
                             "tiff",
                             "asc",

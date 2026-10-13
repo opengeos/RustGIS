@@ -37,6 +37,8 @@ const DATA_EXTS: &[&str] = &[
     "mif",
     "pbf",
     "topojson",
+    "las",
+    "laz",
     "tif",
     "tiff",
     "asc",
