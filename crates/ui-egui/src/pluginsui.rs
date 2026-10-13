@@ -175,7 +175,7 @@ pub(crate) fn fetch(app: &RustGisApp, url: &str, limit: usize, ctx: Option<egui:
     slot
 }
 
-fn take(slot: &Download) -> Option<Result<Vec<u8>, String>> {
+pub(crate) fn take(slot: &Download) -> Option<Result<Vec<u8>, String>> {
     slot.lock().ok().and_then(|mut s| s.take())
 }
 

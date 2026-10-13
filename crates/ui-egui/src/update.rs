@@ -44,27 +44,60 @@ pub fn parse_release(body: &[u8]) -> Result<Release, String> {
     let v: Value = serde_json::from_slice(body).map_err(|_| "GitHub's reply isn't a release".to_string())?;
     let tag =
         v.get("tag_name").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).ok_or("GitHub's reply names no release")?;
+    // A tag that isn't a version can't be compared: saying "up to date" would be a guess.
+    if version(tag).is_none() {
+        return Err("GitHub's latest release has no version number".into());
+    }
     let url = v.get("html_url").and_then(Value::as_str).filter(|u| u.starts_with("https://")).unwrap_or(RELEASES);
     Ok(Release { version: tag.trim_start_matches(['v', 'V']).to_string(), url: url.to_string() })
 }
 
-/// Whether version `latest` is newer than `current`. The dotted numbers are compared in order
-/// (missing ones count as 0), and a pre-release (`0.2.0-beta.1`) comes before its release.
-pub fn is_newer(latest: &str, current: &str) -> bool {
-    fn parts(v: &str) -> ([u64; 3], bool) {
-        let v = v.trim().trim_start_matches(['v', 'V']);
-        let (core, pre) = match v.split_once(['-', '+']) {
-            Some((c, rest)) => (c, v[c.len()..].starts_with('-') && !rest.is_empty()),
-            None => (v, false),
-        };
-        let mut n = [0u64; 3];
-        for (slot, part) in n.iter_mut().zip(core.split('.')) {
-            *slot = part.trim().parse().unwrap_or(0);
-        }
-        (n, pre)
+/// A pre-release identifier: numbers sort numerically and before words (`beta.2` < `beta.10`,
+/// `1` < `alpha`).
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Ident {
+    Num(u64),
+    Word(String),
+}
+
+/// A version's dotted numbers (one to three; missing ones are 0) and its pre-release
+/// identifiers, without build metadata; `None` when it isn't a version.
+fn version(v: &str) -> Option<([u64; 3], Vec<Ident>)> {
+    let v = v.trim().trim_start_matches(['v', 'V']);
+    let v = v.split('+').next().unwrap_or(v);
+    let (core, pre) = v.split_once('-').map_or((v, None), |(c, p)| (c, Some(p)));
+    let parts: Vec<&str> = core.split('.').collect();
+    if parts.len() > 3 {
+        return None;
     }
-    let ((a, a_pre), (b, b_pre)) = (parts(latest), parts(current));
-    a > b || (a == b && b_pre && !a_pre)
+    let mut n = [0u64; 3];
+    for (slot, part) in n.iter_mut().zip(&parts) {
+        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        *slot = part.parse().ok()?;
+    }
+    let pre = match pre {
+        None => Vec::new(),
+        Some("") => return None,
+        Some(p) => p.split('.').map(|i| i.parse().map_or_else(|_| Ident::Word(i.to_string()), Ident::Num)).collect(),
+    };
+    Some((n, pre))
+}
+
+/// Whether version `latest` is newer than `current`, in semantic-version order: the numbers
+/// first, then a pre-release (`0.2.0-beta.1`) before its release, and pre-releases by their
+/// identifiers. False when either isn't a version.
+pub fn is_newer(latest: &str, current: &str) -> bool {
+    let (Some((a, a_pre)), Some((b, b_pre))) = (version(latest), version(current)) else { return false };
+    if a != b {
+        return a > b;
+    }
+    match (a_pre.is_empty(), b_pre.is_empty()) {
+        (true, true) | (false, true) => false,
+        (true, false) => true,
+        (false, false) => a_pre > b_pre,
+    }
 }
 
 /// Draws the window, starting and collecting the check.
@@ -72,10 +105,11 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     if !app.update.open {
         return;
     }
-    if std::mem::take(&mut app.update.start) && !cfg!(target_arch = "wasm32") {
+    // A check asked for while one is running waits for that one rather than sending another.
+    if std::mem::take(&mut app.update.start) && app.update.pending.is_none() && !cfg!(target_arch = "wasm32") {
         app.update.pending = Some(crate::pluginsui::fetch(app, LATEST, MAX_BYTES, Some(ctx.clone())));
     }
-    if let Some(r) = app.update.pending.as_ref().and_then(|s| s.lock().ok().and_then(|mut s| s.take())) {
+    if let Some(r) = app.update.pending.as_ref().and_then(crate::pluginsui::take) {
         app.update.pending = None;
         app.update.result = Some(r.and_then(|body| parse_release(&body)));
     }
@@ -124,7 +158,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     }
                 }
                 Some(Err(e)) => {
-                    ui.label(crate::i18n::fmt("Couldn't check for updates: {error}", &[("error", e)]));
+                    ui.label(crate::i18n::fmt("Couldn't check for updates: {error}", &[("error", tl!(e.as_str()))]));
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         if ui.button(tl!("Open the Release Page")).clicked() {
@@ -163,7 +197,15 @@ mod tests {
         assert!(!is_newer("0.2.0-beta.1", "0.2.0"));
         assert!(!is_newer("0.1.0", "0.1.0"));
         assert!(!is_newer("0.1.0", "0.2.0"));
+        assert!(is_newer("0.2.0-beta.2", "0.2.0-beta.1"));
+        assert!(is_newer("0.2.0-beta.10", "0.2.0-beta.2"));
+        assert!(is_newer("0.2.0-rc.1", "0.2.0-beta.3"));
+        assert!(is_newer("0.2.0-beta", "0.2.0-1"));
+        assert!(!is_newer("0.2.0-beta.1", "0.2.0-beta.1"));
+        assert!(!is_newer("0.1.0+build.5", "0.1.0"));
         assert!(!is_newer("junk", "0.1.0"));
+        assert!(!is_newer("release-2.0.0", "0.1.0"));
+        assert!(!is_newer("1.2.3.4", "0.1.0"));
         assert!(!is_newer("", ""));
     }
 
@@ -177,5 +219,8 @@ mod tests {
         assert!(parse_release(b"<html>rate limited</html>").is_err());
         assert!(parse_release(br#"{"message":"Not Found"}"#).is_err());
         assert!(parse_release(br#"{"tag_name":"  "}"#).is_err());
+        // A tag that isn't a version is an error, not "up to date".
+        assert!(parse_release(br#"{"tag_name":"release-2.0.0"}"#).is_err());
+        assert_eq!(parse_release(br#"{"tag_name":"v1.0.0-rc.1"}"#).unwrap().version, "1.0.0-rc.1");
     }
 }
