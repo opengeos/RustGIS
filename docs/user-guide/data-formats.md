@@ -100,7 +100,7 @@ databases](data.md#sql-queries-and-duckdb-databases).
 
 | Format | Extensions or source | How to add it | Notes |
 | --- | --- | --- | --- |
-| GeoTIFF / Cloud-optimised GeoTIFF | `.tif`, `.tiff` | Add Data, or upload | Regular or cloud-optimised, striped or tiled; grey, RGB(A), palette (with its colour table) or multiband. Any EPSG system, or the file's own projection from its GeoKeys (Albers, LCC, transverse Mercator…), reprojected as it draws. A large file opens from its overview, or one made as it is read when it has none. |
+| GeoTIFF / Cloud-optimised GeoTIFF | `.tif`, `.tiff` | Add Data, or upload | Regular or cloud-optimised, striped or tiled; grey, RGB(A), palette (with its colour table) or multiband; Deflate, LZW, PackBits, JPEG or Zstandard compression (Zstandard on the desktop only). Any EPSG system, or the file's own projection from its GeoKeys (Albers, LCC, transverse Mercator…), reprojected as it draws. A large file opens from its overview, or one made as it is read when it has none. |
 | ASCII grid | `.asc` (with an optional `.prj`) | Add Data, or upload | |
 | Rasters GDAL reads | `.jp2`, `.img`, `.hgt`, `.dem`, `.dt0`–`.dt2`, `.nc`, `.hdf`, `.h5`, `.bil`, `.grd`, `.sdat`, `.kea`, `.ers`, `.rst`, `.ntf`, `.ecw`, `.sid`… | Add Data (desktop, with [GDAL](https://gdal.org) installed: `gdal_translate`, `gdalinfo` and `gdalwarp`) | Converted once to a cloud-optimised GeoTIFF in the cache, then read as one. A NetCDF or HDF file's variables are its subdatasets: the first is added, the others are named in a notice, and `"layer"` picks one. A file that doesn't say its coordinate system is read as WGS 84 when its coordinates look like longitude/latitude (0–360° longitudes are moved to -180–180°); otherwise give `"crs"`. |
 

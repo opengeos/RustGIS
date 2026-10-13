@@ -509,7 +509,8 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
     }
 }
 
-/// Toasts for recent notices (errors stay longer).
+/// Toasts for recent notices (errors stay longer, and any stays while the pointer is on it, so
+/// its text can be selected and copied).
 pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let now = ctx.input(|i| i.time);
@@ -527,10 +528,11 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(250));
     let screen = ctx.content_rect();
     let mut y = screen.max.y - 40.0;
-    for (i, (text, err, _)) in app.map.toasts.iter().rev().take(3).enumerate() {
-        egui::Area::new(egui::Id::new(("toast", i))).fixed_pos(pos2(screen.max.x - 380.0, y - 44.0)).order(egui::Order::Tooltip).show(
-            ctx,
-            |ui| {
+    for (i, (text, err, at)) in app.map.toasts.iter_mut().rev().take(3).enumerate() {
+        let shown = egui::Area::new(egui::Id::new(("toast", i)))
+            .fixed_pos(pos2(screen.max.x - 380.0, y - 44.0))
+            .order(egui::Order::Tooltip)
+            .show(ctx, |ui| {
                 egui::Frame::NONE
                     .fill(t.menu)
                     .stroke(Stroke::new(1.0, if *err { t.red } else { t.border_strong }))
@@ -542,11 +544,13 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
                         ui.horizontal(|ui| {
                             let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                             ui.painter().circle_filled(r.center(), 6.0, if *err { t.red } else { t.green });
-                            ui.label(egui::RichText::new(text).size(12.0));
+                            ui.add(egui::Label::new(egui::RichText::new(text.as_str()).size(12.0)).wrap().selectable(true));
                         });
                     });
-            },
-        );
+            });
+        if shown.response.contains_pointer() {
+            *at = now;
+        }
         y -= 52.0;
     }
 }

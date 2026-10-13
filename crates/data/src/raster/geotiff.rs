@@ -16,6 +16,11 @@ use super::{ColorHint, Crs, GeoTransform, MAX_SAMPLES, Raster};
 use crate::{DataError, Result};
 
 fn err(e: impl std::fmt::Display) -> DataError {
+    let e = e.to_string();
+    // Zstandard is decoded by C code, which the browser build leaves out.
+    if cfg!(target_arch = "wasm32") && e.contains("ZSTD") {
+        return DataError::Format(format!("GeoTIFF: {e} in the browser; the desktop app opens Zstandard-compressed files"));
+    }
     DataError::Format(format!("GeoTIFF: {e}"))
 }
 
@@ -775,6 +780,48 @@ mod tests {
             if u16::from_le_bytes(b[e..e + 2].try_into().unwrap()) == 262 {
                 b[e + 8..e + 10].copy_from_slice(&value.to_le_bytes());
             }
+        }
+    }
+
+    /// Recompresses a classic little-endian TIFF's strips with Zstandard (as GDAL's
+    /// `COMPRESS=ZSTD` does), appending them and repointing the strip offsets.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn zstd_strips(b: &mut Vec<u8>) {
+        let u16_at = |b: &[u8], i: usize| u16::from_le_bytes(b[i..i + 2].try_into().unwrap());
+        let u32_at = |b: &[u8], i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap()) as usize;
+        let ifd = u32_at(b, 4);
+        // A tag's directory entry.
+        let entry = |b: &[u8], tag: u16| (0..u16_at(b, ifd) as usize).map(|i| ifd + 2 + i * 12).find(|&e| u16_at(b, e) == tag).unwrap();
+        let (offsets, counts) = (entry(b, 273), entry(b, 279));
+        assert_eq!((u16_at(b, offsets + 2), u16_at(b, counts + 2)), (4, 4), "LONG strip tags");
+        let n = u32_at(b, offsets + 4);
+        let at = |b: &[u8], e: usize| if n == 1 { e + 8 } else { u32_at(b, e + 8) };
+        let (offsets, counts) = (at(b, offsets), at(b, counts));
+        for i in 0..n {
+            let (start, len) = (u32_at(b, offsets + i * 4), u32_at(b, counts + i * 4));
+            let packed = zstd::encode_all(&b[start..start + len], 3).unwrap();
+            let new_start = u32::try_from(b.len()).unwrap();
+            let new_len = u32::try_from(packed.len()).unwrap();
+            b.extend(packed);
+            b[offsets + i * 4..offsets + i * 4 + 4].copy_from_slice(&new_start.to_le_bytes());
+            b[counts + i * 4..counts + i * 4 + 4].copy_from_slice(&new_len.to_le_bytes());
+        }
+        let compression = entry(b, 259);
+        b[compression + 8..compression + 10].copy_from_slice(&50000u16.to_le_bytes());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn zstd_compressed_files_are_read() {
+        // Issue #134: Zstandard is a usual compression for COGs (EnMAP's, among others).
+        let (w, h) = (8u32, 8u32);
+        let data: Vec<u8> = (0..w * h).map(|i| (i * 3 % 251) as u8).collect();
+        let mut bytes = grey8(w, h, &data, None);
+        zstd_strips(&mut bytes);
+        let r = read(std::io::Cursor::new(&bytes), "zstd").unwrap();
+        assert_eq!((r.width, r.height), (8, 8));
+        for (x, y) in [(0i64, 0i64), (7, 0), (3, 5), (7, 7)] {
+            assert_eq!(r.value(0, x, y), Some(f32::from(data[(y * 8 + x) as usize])), "{x},{y}");
         }
     }
 
