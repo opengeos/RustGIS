@@ -98,20 +98,21 @@ impl Sources {
 
     /// Keeps a source in `list` (`favourites` or `saved`), replacing the one with the same
     /// identity ([`Source::is`]: kind and address), whose name and `extra` the new one's take over.
-    pub fn keep(&mut self, list: &str, s: Source) -> Result<(), String> {
+    pub fn keep(&mut self, list: &str, s: Source) -> Result<Source, String> {
         let s = clean(s)?;
         let l = self.list_mut(list)?;
         // The same source keeps its place.
         if let Some(slot) = l.iter_mut().find(|r| same(r, &s)) {
-            *slot = s;
+            *slot = s.clone();
         } else {
             if l.len() >= MAX_KEPT {
                 return Err(format!("up to {MAX_KEPT} sources in {list}"));
             }
-            l.push(s);
+            l.push(s.clone());
         }
         self.generation += 1;
-        Ok(())
+        // What was stored (cleaned): the caller reports it, wherever it sits in the list.
+        Ok(s)
     }
 
     /// Forgets the source of `kind` at `address` from `list`; whether there was one.
@@ -245,11 +246,7 @@ pub fn redact(address: &str) -> String {
     // The user and password go first, before anything splits the address: a password may hold
     // an unencoded `/`, `?`, `#` or `@`. They end at the last `@` before the first `/`, or (a `/`
     // in the password) at the last `@` with a `:` before it.
-    let first_slash = rest.find('/').unwrap_or(rest.len());
-    let cut = rest
-        .get(..first_slash)
-        .and_then(|a| a.rfind('@'))
-        .or_else(|| rest.rfind('@').filter(|&i| rest.get(..i).is_some_and(|u| u.contains(':'))));
+    let cut = rustgis_data::source::pgconn::userinfo_end(rest);
     let rest = match cut {
         Some(i) => rest.get(i + 1..).unwrap_or(""),
         None => rest,
@@ -441,7 +438,10 @@ mod tests {
         assert_eq!(s.saved[0].extra, json!({"type": "wms", "layer": "roads"}));
         // Saved again, a source keeps its place in the list.
         s.keep("saved", Source { kind: "file".into(), address: "/z.gpkg".into(), ..Source::default() }).unwrap();
-        s.keep("saved", svc(json!({"type": "wmts"}))).unwrap();
+        // What `keep` gives back is the entry stored, even when it sits earlier in the list.
+        let kept = s.keep("saved", svc(json!({"type": "wmts"}))).unwrap();
+        assert_eq!((kept.address.as_str(), &kept.extra), ("https://h/wms", &json!({"type": "wmts"})));
+        assert_eq!(s.saved.last().map(|l| l.address.as_str()), Some("/z.gpkg"));
         assert_eq!(s.saved[0].address, "https://h/wms");
         assert_eq!(s.saved[0].extra, json!({"type": "wmts"}));
         assert!(s.forget("saved", "file", "/z.gpkg").unwrap());
@@ -459,6 +459,21 @@ mod tests {
     #[test]
     fn secrets_are_never_kept() {
         assert_eq!(redact("https://me:pw@host.example/a?token=abc&layer=x&X-Amz-Signature=1#k"), "https://host.example/a?layer=x");
+        // A port and an `@` later in the address: an ordinary address, left whole.
+        assert_eq!(redact("https://host.example:8080/@user/x"), "https://host.example:8080/@user/x");
+        assert_eq!(redact("https://h:80/x?email=a@b"), "https://h:80/x?email=a@b");
+        assert_eq!(redact("https://[::1]:8080/@a"), "https://[::1]:8080/@a");
+        // A PostgreSQL URI's password, whatever it holds; its fragment never.
+        for (given, kept) in [
+            ("postgresql://u:p/w@db.example/gis", "postgres:postgresql://u@db.example/gis"),
+            ("postgresql://u:p?w@db.example/gis", "postgres:postgresql://u@db.example/gis"),
+            ("postgresql://u:pw@db.example:5432/gis#x", "postgres:postgresql://u@db.example:5432/gis"),
+            ("postgresql://db.example:5432/gis", "postgres:postgresql://db.example:5432/gis"),
+        ] {
+            let got = redact(given);
+            assert!(!got.contains("p/w") && !got.contains("p?w") && !got.contains("pw@"), "{given} -> {got}");
+            assert!(got.ends_with(kept.trim_start_matches("postgres:")), "{given} -> {got}");
+        }
         // The user and password go, whatever the password holds (an unencoded `?`, `/`, `#`, `@`).
         for (given, kept) in [
             ("https://u:p?w@host.example/x", "https://host.example/x"),

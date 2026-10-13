@@ -39,20 +39,43 @@ pub fn public_label(s: &str) -> Option<String> {
     Some(format!("postgres:{public}"))
 }
 
+/// Where a URI's user and password end (the `@` before the host), given what follows `://`; `None`
+/// when it has none. Normally the authority runs to the first `/`, `?` or `#`, and an `@` in it
+/// ends the userinfo. A password holding an unencoded `/`, `?`, `#` or `@` (malformed, but it
+/// happens) ends the authority early: when the authority so cut has no `@` but a `:` that isn't
+/// a port's (digits only), the last `@` ends the userinfo, so the password is never kept. A real
+/// port (`host:8080/@user`) is left alone.
+pub fn userinfo_end(rest: &str) -> Option<usize> {
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = rest.get(..end)?;
+    if let Some(i) = authority.rfind('@') {
+        return Some(i);
+    }
+    let (_, after) = authority.split_once(':')?;
+    // `host:8080` (or an IPv6 literal's colons) is a host and port, not a user and password.
+    if authority.starts_with('[') || (!after.is_empty() && after.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    // A malformed authority: the password may hold any of `/?#@`, so the last `@` ends it.
+    rest.rfind('@').filter(|&i| i >= end)
+}
+
 /// A connection string without the values of `secrets` (the first, `password`, returned).
 pub(crate) fn split_secrets(dsn: &str, secrets: &[&str]) -> (String, Option<String>) {
     let lower = dsn.to_ascii_lowercase();
     if lower.starts_with("postgresql://") || lower.starts_with("postgres://") {
         // scheme://[user[:password]@]host…: the credentials are in the authority, before the
         // path, query or fragment (an `@` there is something else).
-        if let Some((scheme, rest)) = dsn.split_once("://") {
-            let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-            let (authority, tail) = rest.split_at(end);
-            if let Some((userinfo, host)) = authority.rsplit_once('@')
-                && let Some((user, password)) = userinfo.split_once(':')
-            {
-                return (format!("{scheme}://{user}@{host}{tail}"), Some(password.to_string()));
-            }
+        if let Some((scheme, rest)) = dsn.split_once("://")
+            && let Some(at) = userinfo_end(rest)
+            && let (Some(userinfo), Some(after)) = (rest.get(..at), rest.get(at + 1..))
+        {
+            // The fragment never (it isn't part of a connection).
+            let after = after.split('#').next().unwrap_or(after);
+            return match userinfo.split_once(':') {
+                Some((user, password)) => (format!("{scheme}://{user}@{after}"), Some(password.to_string())),
+                None => (format!("{scheme}://{userinfo}@{after}"), None),
+            };
         }
         return (dsn.to_string(), None);
     }

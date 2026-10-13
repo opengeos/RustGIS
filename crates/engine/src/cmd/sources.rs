@@ -68,12 +68,8 @@ fn source(p: &Value) -> Result<Source, String> {
 
 fn keep(s: &mut Session, p: &Value, list: &str) -> CmdResult {
     let src = source(p)?;
-    s.sources.keep(list, src)?;
-    let kept = match list {
-        "saved" => s.sources.saved.last(),
-        _ => s.sources.favourites.last(),
-    };
-    Ok(kept.map(shown).unwrap_or(Value::Null))
+    let kept = s.sources.keep(list, src)?;
+    Ok(shown(&kept))
 }
 
 fn favourite(s: &mut Session, p: &Value) -> CmdResult {
