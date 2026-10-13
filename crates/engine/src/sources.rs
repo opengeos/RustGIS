@@ -473,6 +473,11 @@ mod tests {
             ("postgresql://u:pw@db.example:5432/gis#x", "postgresql://u@db.example:5432/gis"),
             ("postgresql://db.example:5432/gis", "postgresql://db.example:5432/gis"),
             ("postgresql://h1:5432,h2:5432/db?options=a@b", "postgresql://h1:5432,h2:5432/db?options=a@b"),
+            // A password of digits with an unencoded `/` reads like a port: a database's name
+            // holds no `@`, so the password still goes.
+            ("postgresql://u:123/w@db.example/gis", "postgresql://u@db.example/gis"),
+            // No credentials: the fragment goes all the same.
+            ("postgresql://db.example/gis#x", "postgresql://db.example/gis"),
         ] {
             assert_eq!(redact(given), kept, "{given}");
         }

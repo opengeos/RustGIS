@@ -69,18 +69,28 @@ pub(crate) fn split_secrets(dsn: &str, secrets: &[&str]) -> (String, Option<Stri
     if lower.starts_with("postgresql://") || lower.starts_with("postgres://") {
         // scheme://[user[:password]@]host…: the credentials are in the authority, before the
         // path, query or fragment (an `@` there is something else).
-        if let Some((scheme, rest)) = dsn.split_once("://")
-            && let Some(at) = userinfo_end(rest)
+        let Some((scheme, rest)) = dsn.split_once("://") else { return (dsn.to_string(), None) };
+        // A PostgreSQL URI's path is only the database's name, so an `@` after the authority and
+        // before any query ends a password that held an unencoded `/` (even one of digits only,
+        // which reads like a port: `u:123/w@db`). Found on the whole text: a password may hold
+        // a `#` too.
+        let at = userinfo_end(rest).or_else(|| {
+            let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+            let query = rest.find('?').unwrap_or(rest.len());
+            rest.get(..query)?.rfind('@').filter(|&i| i >= end)
+        });
+        // A connection's fragment is never kept (it isn't part of a connection).
+        let no_fragment = |s: &str| s.split('#').next().unwrap_or(s).to_string();
+        if let Some(at) = at
             && let (Some(userinfo), Some(after)) = (rest.get(..at), rest.get(at + 1..))
         {
-            // The fragment never (it isn't part of a connection).
-            let after = after.split('#').next().unwrap_or(after);
+            let after = no_fragment(after);
             return match userinfo.split_once(':') {
                 Some((user, password)) => (format!("{scheme}://{user}@{after}"), Some(password.to_string())),
                 None => (format!("{scheme}://{userinfo}@{after}"), None),
             };
         }
-        return (dsn.to_string(), None);
+        return (format!("{scheme}://{}", no_fragment(rest)), None);
     }
     // libpq's keyword = value pairs; a value is a word, or quoted with \' and \\ inside.
     let mut pairs: Vec<(String, String)> = Vec::new();
