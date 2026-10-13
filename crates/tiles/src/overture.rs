@@ -175,6 +175,23 @@ pub fn parse_item(bytes: &[u8]) -> Result<String, String> {
     Ok(url)
 }
 
+/// Whether `url` is one of Overture's release files: in its buckets on AWS (by `s3://` or the
+/// bucket's web address) or Azure, a GeoParquet file. Addresses given back to `overture.add` are
+/// held to this, so the command reads Overture's data and nothing else.
+pub fn is_data_file(url: &str) -> bool {
+    const HOMES: [&str; 4] = [
+        "s3://overturemaps-us-west-2/release/",
+        "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/",
+        "https://overturemaps-us-west-2.s3.amazonaws.com/release/",
+        "https://overturemapswestus2.blob.core.windows.net/release/",
+    ];
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    HOMES.iter().any(|h| path.len() > h.len() && path.get(..h.len()).is_some_and(|p| p.eq_ignore_ascii_case(h)))
+        && path.to_ascii_lowercase().ends_with(".parquet")
+        && !path.contains("/../")
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 /// A layer's name: `Overture building`, numbered when the view takes several files.
 pub fn layer_name(ty: &str, i: usize, n: usize) -> String {
     if n > 1 { format!("Overture {ty} ({}/{n})", i + 1) } else { format!("Overture {ty}") }
@@ -192,6 +209,24 @@ pub fn attribution(theme: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_overture_files_are_data_files() {
+        assert!(is_data_file("s3://overturemaps-us-west-2/release/2026-09-23.1/theme=buildings/type=building/part-00001.parquet"));
+        assert!(is_data_file(
+            "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/2026-09-23.1/theme=places/type=place/x.parquet"
+        ));
+        for other in [
+            "https://elsewhere.example/release/x.parquet",
+            "http://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/x.parquet",
+            "http://127.0.0.1/x.parquet",
+            "s3://overturemaps-us-west-2/release/x.fgb",
+            "s3://overturemaps-us-west-2/release/../other/x.parquet",
+            "s3://overturemaps-us-west-2.evil/release/x.parquet",
+        ] {
+            assert!(!is_data_file(other), "{other}");
+        }
+    }
 
     #[test]
     fn themes_releases_and_addresses() {

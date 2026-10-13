@@ -70,8 +70,10 @@ fn overture_add(s: &mut Session, p: &Value) -> CmdResult {
         if urls.is_empty() || urls.len() > overture::MAX_FILES {
             return Err(format!("files is 1 to {} addresses", overture::MAX_FILES));
         }
-        if let Some(u) = urls.iter().find(|u| !rustgis_data::source::is_remote_name(u)) {
-            return Err(format!("{u}: not a GeoParquet or FlatGeobuf address"));
+        // Overture's own files only: the list comes back from the app, but a caller could pass
+        // any address.
+        if let Some(u) = urls.iter().find(|u| !overture::is_data_file(u)) {
+            return Err(format!("{u}: not one of Overture's release files"));
         }
         let mut r = add_files(s, ty, &urls)?;
         s.notify(format!("Overture {ty}: {}", overture::attribution(theme)), false);
