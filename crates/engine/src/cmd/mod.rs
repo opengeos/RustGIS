@@ -31,6 +31,7 @@ pub mod tiles;
 pub mod view;
 pub mod workflows;
 pub mod workspace;
+pub mod zarr;
 
 use serde_json::Value;
 
@@ -45,6 +46,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(service::commands());
     v.extend(layer::commands());
     v.extend(raster::commands());
+    v.extend(zarr::commands());
     v.extend(select::commands());
     v.extend(edit::commands());
     v.extend(clipboard::commands());

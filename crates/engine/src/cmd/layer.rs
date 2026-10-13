@@ -278,6 +278,17 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::raster::is_raster_name(path) {
         return super::raster::add_path(s, path, ps(p, "name").map(str::trim).filter(|n| !n.is_empty()));
     }
+    // A Zarr store's folder: its first variable, or the one "layer" names.
+    #[cfg(not(target_arch = "wasm32"))]
+    if rustgis_data::raster::zarr::is_store(Path::new(path)) {
+        let mut q = json!({"path": path});
+        for (from, to) in [("layer", "variable"), ("name", "name"), ("crs", "crs")] {
+            if let Some(v) = p.get(from) {
+                q[to] = v.clone();
+            }
+        }
+        return super::zarr::add(s, &q);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if rustgis_data::raster::gdal::is_gdal_raster_name(path) {
         return super::raster::add_gdal_path(s, p, path);

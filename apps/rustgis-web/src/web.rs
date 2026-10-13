@@ -130,6 +130,13 @@ pub fn start() {
                             }
                         }
                     }
+                    // `?zarr=<url>` opens Add Zarr Variable on a store, its variables listed.
+                    // Read as `?data=` is, so a `+` in the address stays a `+`.
+                    if let Some(url) = params(&q, "zarr", 1).into_iter().next()
+                        && let Err(e) = app.run("ui.addZarr", serde_json::json!({"address": url}))
+                    {
+                        app.session.notify(format!("?zarr={url}: {e}"), true);
+                    }
                     // `?registry=<url>` opens the Plugin Manager on another plugin registry for this
                     // visit (a pull request's preview, say); installing still asks as usual.
                     if let Some(url) = param(&q, "registry").filter(|u| !u.is_empty())

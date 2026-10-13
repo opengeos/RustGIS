@@ -3648,3 +3648,86 @@ fn lidar_point_clouds() {
     assert!(s.run("layer.addDataBytes", &json!({"fileName": "junk.laz", "data": "AAAA"})).is_err());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A Zarr store in a folder: its variables listed (with time labels), a slice added by command
+/// and by Add Data, saved by folder and selection and read again when the project opens; a slice
+/// the app read itself handed over by id.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn zarr_stores_in_folders_and_handed_over() {
+    let dir = std::env::temp_dir().join(format!("rustgis-zarr-{}", std::process::id()));
+    let store = dir.join("air.zarr");
+    let _ = std::fs::remove_dir_all(&dir);
+    for d in ["t", "lat", "lon", "time"] {
+        std::fs::create_dir_all(store.join(d)).unwrap();
+    }
+    let arr = |shape: &str, chunks: &str, dtype: &str| {
+        serde_json::from_str::<Value>(&format!(
+            r#"{{"shape":{shape},"chunks":{chunks},"dtype":"{dtype}","compressor":null,"fill_value":null,"filters":null,"order":"C","zarr_format":2}}"#
+        ))
+        .unwrap()
+    };
+    let meta = json!({"metadata": {
+        ".zgroup": {"zarr_format": 2},
+        "t/.zarray": arr("[2,3,4]", "[1,3,4]", "<f4"),
+        "t/.zattrs": {"_ARRAY_DIMENSIONS": ["time","lat","lon"], "units": "K"},
+        "lat/.zarray": arr("[3]", "[3]", "<f4"),
+        "lat/.zattrs": {"_ARRAY_DIMENSIONS": ["lat"], "units": "degrees_north"},
+        "lon/.zarray": arr("[4]", "[4]", "<f4"),
+        "lon/.zattrs": {"_ARRAY_DIMENSIONS": ["lon"], "units": "degrees_east"},
+        "time/.zarray": arr("[2]", "[2]", "<i4"),
+        "time/.zattrs": {"_ARRAY_DIMENSIONS": ["time"], "units": "days since 2001-01-01"},
+    }, "zarr_consolidated_format": 1});
+    std::fs::write(store.join(".zmetadata"), meta.to_string()).unwrap();
+    std::fs::write(store.join(".zgroup"), r#"{"zarr_format":2}"#).unwrap();
+    let f32s = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    std::fs::write(store.join("lat/0"), f32s(&[10.0, 20.0, 30.0])).unwrap();
+    std::fs::write(store.join("lon/0"), f32s(&[1.0, 2.0, 3.0, 4.0])).unwrap();
+    std::fs::write(store.join("time/0"), [0i32, 31].iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
+    for t in 0..2 {
+        let v: Vec<f32> = (0..12).map(|i| (t * 100 + i) as f32).collect();
+        std::fs::write(store.join(format!("t/{t}.0.0")), f32s(&v)).unwrap();
+    }
+    let path = store.display().to_string();
+    let mut s = Session::new(Project::default());
+    let info = s.run("raster.zarrInfo", &json!({"path": path})).unwrap();
+    assert_eq!(info["count"], 1);
+    assert_eq!(info["variables"][0]["dims"][0]["labels"], json!(["2001-01-01", "2001-02-01"]));
+    let r = s.run("layer.addZarr", &json!({"path": path, "variable": "t", "index": {"time": 1}})).unwrap();
+    assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(4), Some(3)), "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    let ras = s.map().layer(id).unwrap().raster.clone().unwrap();
+    assert_eq!(ras.subdataset.as_deref(), Some("t[time=1]"));
+    let data = ras.data.clone().unwrap();
+    // North up: the last latitude row (30°N) first.
+    assert_eq!(data.bands[0].data[..4], [108.0, 109.0, 110.0, 111.0]);
+    // The project names the folder and the slice, and reads it again.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t.map().layers.iter().find(|l| l.is_raster()).and_then(|l| l.raster.as_ref()).and_then(|r| r.data.clone()).unwrap();
+    assert_eq!(again.bands[0].data[..4], [108.0, 109.0, 110.0, 111.0]);
+    // Add Data on the folder: the first variable, first step.
+    let r = s.run("layer.addData", &json!({"path": path})).unwrap();
+    let first = s.map().layer(r["layer"].as_u64().unwrap() as u32).and_then(|l| l.raster.as_ref()).and_then(|r| r.data.clone()).unwrap();
+    assert_eq!(first.bands[0].data[0], 8.0);
+    // A slice the app read: its GeoTIFF handed over by id, named by its store and selection.
+    let tif = rustgis_data::raster::geotiff::write(&again, 0).unwrap();
+    let id = s.download_started();
+    assert!(s.download_landed(id, tif));
+    let r = s
+        .run("layer.addZarr", &json!({"url": "https://example.org/data/air.zarr", "variable": "t", "index": {"time": 1}, "ran": id}))
+        .unwrap();
+    let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+    assert!(l.name.starts_with("air t[time=1]"), "{}", l.name);
+    assert!(s.run("layer.addZarr", &json!({"url": "https://example.org/a.zarr", "ran": id})).is_err(), "used once");
+    for bad in [
+        json!({}),
+        json!({"path": path, "variable": "nope"}),
+        json!({"path": path, "variable": "t", "index": {"time": 9}}),
+        json!({"path": "/nowhere/x.zarr"}),
+    ] {
+        assert!(s.run("layer.addZarr", &bad).is_err(), "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

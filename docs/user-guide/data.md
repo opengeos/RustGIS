@@ -270,6 +270,38 @@ With a raster layer selected in Layers, the **Style** and **Data** tabs show its
 Clicking a raster with the Explore tool shows its pixel values. Projects remember a raster's file
 path and reopen it; rasters added in the browser are stored inside the project.
 
+### Zarr stores
+
+**Home › Add Data › Zarr…** (`layer.addZarr`) adds a variable of a [Zarr](https://zarr.dev) store
+(format 2 or 3), the multidimensional arrays climate and Earth-observation data are kept in: give
+the store's web address, or (on the desktop) its folder, and **Connect** lists its variables
+(`raster.zarrInfo`). A variable's map is its latitude/longitude (or y/x) dimensions; its other
+dimensions, such as time or pressure level, are picked a step at a time with a slider, labelled by
+their coordinates (CF time units as dates, the `noleap` and `360_day` model calendars included).
+**Add to Map** adds that step as a raster layer named after the variable and step (`tas
+2014-07-15`), and the dialog stays open to add others. Only the chunks the step needs are fetched,
+a few at a time, in the background.
+
+Stores are read in pure Rust, in the web app as well as on the desktop: Zarr 2 with consolidated
+metadata (`.zmetadata`, as xarray writes) and Zarr 3 (`zarr.json`), chunks compressed with blosc
+(LZ4, zlib or zstd, byte-shuffled), zlib, gzip, zstd or LZ4, of integer or float values, in C or
+Fortran order. Fill values, `_FillValue` and `missing_value` are no data; `scale_factor` and
+`add_offset` are applied. The coordinates must be evenly spaced (a curvilinear grid isn't read);
+longitude/latitude grids of 0–360° are turned to -180–180°, and projected ones take their
+coordinate system from the variable's grid mapping (`crs_wkt`, `spatial_ref`, an EPSG code) or
+`"crs"`. Sharded Zarr 3 arrays, bit-shuffled and blosclz-compressed chunks aren't read yet, and
+say so. A store by web address must allow the browser to fetch it (CORS) for the web app;
+Google Cloud's CMIP6 bucket does, ARCO-ERA5's doesn't (the desktop reads both).
+
+```sh
+rustgis-cli run --cmd 'layer.addZarr={"url":"https://storage.googleapis.com/gcp-public-data-arco-era5/ar/1959-2022-full_37-1h-0p25deg-chunk-1.zarr-v2","variable":"2m_temperature","index":{"time":539100}}'
+```
+
+A store in a folder is saved in the project by its folder and slice (`2m_temperature[time=539100]`)
+and read again when the project opens, as Add Data on the folder does (its first variable); a
+store by web address is kept in the project as the slice read. `?zarr=<address>` in a web app link
+opens the dialog on a store.
+
 ## Project items
 
 RustGIS saves pieces of a project as files you can share and reuse:

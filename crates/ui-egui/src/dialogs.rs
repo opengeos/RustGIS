@@ -48,6 +48,7 @@ impl Dialogs {
             "stac" => "stac",
             "osm" => "osm",
             "boundaries" => "boundaries",
+            "zarr" => "zarr",
             "exportLayer" => "exportLayer",
             other => return Err(format!("unknown dialog '{other}'")),
         };
@@ -124,6 +125,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "stac" => "STAC Search",
         "osm" => "OpenStreetMap",
         "boundaries" => "Administrative Boundaries",
+        "zarr" => "Add Zarr Variable",
         "exportLayer" => "Export Features",
         _ => "Rename Layer",
     };
@@ -132,7 +134,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut close = false;
     egui::Window::new(tl!(title)).id(egui::Id::new("dialog")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
         ui.set_width(match which {
-            "coordinateSystem" => 660.0,
+            "coordinateSystem" | "zarr" => 660.0,
             "addTiles" | "addUrl" | "addService" | "stac" => 560.0,
             _ => 440.0,
         });
@@ -170,6 +172,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             "stac" => crate::stacui::dialog(app, ui),
             "osm" => crate::portalsui::osm(app, ui),
             "boundaries" => crate::portalsui::boundaries(app, ui),
+            "zarr" => close = crate::zarrui::dialog(app, ui),
             "exportLayer" => close = export_layer(app, ui),
             "camera" => {
                 egui::Grid::new("cam").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {

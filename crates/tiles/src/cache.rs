@@ -255,6 +255,15 @@ pub fn split_download(url: &str) -> (&str, bool) {
     }
 }
 
+/// The HTTP status a fetch's error is, if it is one: the whole message, as the native fetcher
+/// (`http status: 404`) and the browser's (`HTTP 404`) give it — never a number found inside
+/// another message (an address can hold "404").
+pub fn http_status(error: &str) -> Option<u16> {
+    let e = error.trim();
+    let code = e.strip_prefix("http status: ").or_else(|| e.strip_prefix("HTTP "))?;
+    (code.len() == 3 && code.bytes().all(|b| b.is_ascii_digit())).then(|| code.parse().ok()).flatten()
+}
+
 /// Downloads a file the user named (data added by its web address): up to [`MAX_DOWNLOAD`]
 /// bytes, uncached, off the frame (a thread natively, the browser's fetch on the web), counted as
 /// a fetch under way.
@@ -649,6 +658,17 @@ mod native {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http_statuses_from_whole_messages() {
+        assert_eq!(http_status("http status: 404"), Some(404));
+        assert_eq!(http_status("HTTP 403"), Some(403));
+        assert_eq!(http_status("HTTP 500"), Some(500));
+        // A number inside another message is not a status.
+        assert_eq!(http_status("https://x.org/404/a.zarr: timed out"), None);
+        assert_eq!(http_status("HTTP 4040"), None);
+        assert_eq!(http_status("io: connection reset (read 404 bytes)"), None);
+    }
 
     #[test]
     fn decodes_pictures_and_documents() {
