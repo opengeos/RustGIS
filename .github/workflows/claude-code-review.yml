@@ -137,8 +137,10 @@ jobs:
     # actors not in its allowed_bots list, and an autofix formatting commit does
     # not need a fresh (paid) review anyway. Skipping here shows the run as
     # skipped instead of failed; a maintainer can still `/claude-review`.
+    # The fork does not ship upstream's Anthropic credential; skip this optional review.
     if: >
-      (github.event_name == 'pull_request_target' &&
+      github.repository == 'opengeos/RustGIS' &&
+      ((github.event_name == 'pull_request_target' &&
         github.event.action != 'labeled' &&
         github.event.sender.type != 'Bot' &&
         (github.event.pull_request.author_association == 'OWNER' ||
@@ -156,7 +158,7 @@ jobs:
         github.event.action == 'labeled' &&
         github.event.sender.type != 'Bot' &&
         github.event.pull_request.state == 'open' &&
-        github.event.label.name == 'claude-review')
+        github.event.label.name == 'claude-review'))
 
     runs-on: ubuntu-latest
     timeout-minutes: 30
