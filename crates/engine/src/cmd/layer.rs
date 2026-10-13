@@ -33,7 +33,7 @@ pub fn commands() -> Vec<C> {
             r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
-            .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "service"?: bool (a service's features: their axes and paging are checked)}"#),
+            .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "service"?: bool (a service's features: their axes and paging are checked), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error)}"#),
         C::new("layer.addEncodedPolyline", "Add Encoded Polyline", "Home › Add", add_encoded_polyline).params(
             r#"{"polyline": "encoded polyline text" | [texts] (one line each), "precision"?: 5 (Google) | 6 (OSRM, Valhalla), "name"?: text}"#,
         ),
@@ -1549,7 +1549,16 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     } else {
         bytes
     };
-    let name = url_file_name(&url, &bytes).map_err(|e| format!("{url}: {e}"))?;
+    // A WCS coverage (Add From Service): a GeoTIFF, or the service's error said as such.
+    let name = if super::b(p, "coverage").unwrap_or(false) {
+        if !(bytes.starts_with(b"II") || bytes.starts_with(b"MM")) {
+            let text = String::from_utf8_lossy(bytes.get(..bytes.len().min(400)).unwrap_or_default()).into_owned();
+            return Err(format!("{}: the service answered with an error: {text}", ps(p, "name").unwrap_or(&url)));
+        }
+        "coverage.tif".to_string()
+    } else {
+        url_file_name(&url, &bytes).map_err(|e| format!("{url}: {e}"))?
+    };
     let mut r = super::raster::add_named_bytes(s, p, name, bytes)?;
     // `"zoom": true` zooms to everything added, whatever the map held (a link's data); `zoomed`
     // says whether there was anything to zoom to (a tile archive adds no layer).

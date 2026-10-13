@@ -378,28 +378,25 @@ fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
 /// How many of a service's layers Add From Service lists.
 const SHOWN_LAYERS: usize = 500;
 
-/// Add From Service: a WMS, WMTS, WFS, OGC API Features or ArcGIS REST service by its address.
+/// Add From Service: a WMS, WMTS, WFS, WCS, OGC API Features or ArcGIS REST service by its address
+/// (or a catalogue searched for them, `cswui`).
 /// Connect fetches its capabilities in the background; its layers are then listed, each with an
 /// Add button (map layers become tile layers, features are downloaded).
 fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
-    const KINDS: [(&str, &str); 6] = [
+    const KINDS: [(&str, &str); 8] = [
         ("auto", "Automatic"),
         ("wms", "WMS"),
         ("wmts", "WMTS"),
         ("wfs", "WFS"),
+        ("wcs", "WCS"),
         ("ogcapi", "OGC API Features and Tiles"),
         ("arcgis", "ArcGIS REST"),
+        ("csw", "Catalogue search (CSW)"),
     ];
     if app.dialogs.mode == "new" {
         app.dialogs.mode = "auto";
     }
-    ui.label(egui::RichText::new(tl!("A map or feature service's address: WMS, WMTS, WFS, OGC API Features or Tiles, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer.")).weak());
-    let mut connect = false;
-    egui::Grid::new("service").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-        ui.label(tl!("Address"));
-        let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).hint_text("https://…/wms").desired_width(420.0));
-        connect |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        ui.end_row();
+    let kinds = |app: &mut RustGisApp, ui: &mut egui::Ui| {
         ui.label(tl!("Type"));
         let shown = KINDS.iter().find(|(c, _)| *c == app.dialogs.mode).map(|(_, l)| tl!(*l).to_string()).unwrap_or_default();
         egui::ComboBox::from_id_salt("service_kind").selected_text(shown).width(240.0).show_ui(ui, |ui| {
@@ -407,6 +404,21 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                 ui.selectable_value(&mut app.dialogs.mode, code, tl!(label));
             }
         });
+    };
+    // A catalogue: searched for records, whose links connect here or download.
+    if app.dialogs.mode == "csw" {
+        ui.label(egui::RichText::new(tl!("A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.")).weak());
+        crate::cswui::form(app, ui, kinds);
+        return false;
+    }
+    ui.label(egui::RichText::new(tl!("A map, feature or coverage service's address: WMS, WMTS, WFS, WCS, OGC API Features or Tiles, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer.")).weak());
+    let mut connect = false;
+    egui::Grid::new("service").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+        ui.label(tl!("Address"));
+        let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).hint_text("https://…/wms").desired_width(420.0));
+        connect |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        ui.end_row();
+        kinds(app, ui);
         ui.end_row();
     });
     let t = Tokens::get(ui.ctx());
@@ -461,6 +473,7 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                         let what = match l.get("offer").and_then(|o| o.get("type")).and_then(Value::as_str) {
                             Some("features") => tl!("features"),
                             Some("style") => tl!("style"),
+                            Some("coverage") => tl!("coverage"),
                             _ => tl!("map"),
                         };
                         ui.label(egui::RichText::new(what).small().weak());
@@ -483,6 +496,18 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         let r = if offer.get("type").and_then(Value::as_str) == Some("features") {
             let items = offer.get("url").and_then(Value::as_str).unwrap_or("").to_string();
             app.run("ui.addUrl", json!({"url": items, "name": title, "service": true})).map(|_| tl!("Downloading…"))
+        } else if offer.get("type").and_then(Value::as_str) == Some("coverage") {
+            // A coverage: its description first, off the frame (poll_describe asks for it).
+            let describe = offer.get("describe").and_then(Value::as_str).unwrap_or("").to_string();
+            let mut p = json!({"url": url, "layer": name, "text": text, "name": title});
+            if kind != "auto" {
+                p["type"] = json!(kind);
+            }
+            let slot = crate::fetch_into(&describe);
+            if let Some(c) = &mut app.ui.service {
+                c.describing = Some((p, slot));
+            }
+            Ok(tl!("Describing"))
         } else {
             let mut p = json!({"url": url, "layer": name, "text": text});
             if kind != "auto" {

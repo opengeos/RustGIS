@@ -19,6 +19,9 @@ pub enum Offer {
     /// Vector tiles (`{z}/{x}/{y}`, Mapbox Vector Tiles) and the names of their layers, as an OGC
     /// API Tiles collection gives them.
     VectorTiles { template: String, layers: Vec<String> },
+    /// A WCS coverage, added as a raster from GetCoverage (a GeoTIFF of the view, or of its
+    /// bounds).
+    Coverage(Coverage),
 }
 
 /// A layer a service offers.
@@ -76,9 +79,11 @@ pub fn capabilities_url(url: &str, kind: Option<&str>) -> String {
         Some("wms") => "WMS",
         Some("wmts") => "WMTS",
         Some("wfs") => "WFS",
+        Some("wcs") => "WCS",
         Some("ogcapi") | Some("features") => return with_query(url, "f=json"),
         _ if rest.contains("wmts") => "WMTS",
         _ if rest.contains("wfs") => "WFS",
+        _ if rest.contains("wcs") => "WCS",
         _ if rest.contains("wms") => "WMS",
         // An OGC API (`…/collections`, `…/ogc/features`, `…/api/…`): asked as JSON.
         _ if segments.iter().any(|s| matches!(*s, "collections" | "api" | "ogcapi" | "ogc")) => return with_query(url, "f=json"),
@@ -203,20 +208,29 @@ pub fn parse(url: &str, body: &[u8]) -> Result<Service, String> {
         }
         return ogc_api(url, &v);
     }
-    // WMS 1.1.1 documents start with a DOCTYPE, so DTDs are allowed here; roxmltree still refuses
-    // entity bombs and external entities, and the node count is capped.
-    let opts = ParsingOptions { allow_dtd: true, nodes_limit: 5_000_000, ..ParsingOptions::default() };
-    let doc = crate::xml::parse(text, opts).map_err(|e| format!("the service's XML: {e}"))?;
+    let doc = xml(text, 5_000_000).map_err(|e| format!("the service's XML: {e}"))?;
     let root = doc.root_element();
     match local(&root) {
         "WMS_Capabilities" | "WMT_MS_Capabilities" => Ok(wms(url, &root)),
+        "Capabilities" if root.descendants().any(|n| n.is_element() && local(&n) == "CoverageSummary") => Ok(wcs(url, &root)),
         "Capabilities" if child(&root, "Contents").is_some() => Ok(wmts(url, &root)),
         "WFS_Capabilities" => Ok(wfs(url, &root)),
+        // WCS 1.0 (`WCS_Capabilities`), 1.1 and 2.0 (`Capabilities` with coverage summaries).
+        "WCS_Capabilities" => Ok(wcs(url, &root)),
         "ServiceExceptionReport" | "ExceptionReport" => {
             Err(format!("the service answered with an error: {}", text_of(&root).chars().take(300).collect::<String>()))
         }
-        other => Err(format!("not a WMS, WMTS or WFS capabilities document (<{other}>)")),
+        other => Err(format!("not a WMS, WMTS, WFS or WCS capabilities document (<{other}>)")),
     }
+}
+
+/// Parses a service's XML document through [`crate::xml::parse`], which refuses deep nesting
+/// (a stack-overflow hazard) and, with the DTD allowed here, entities holding markup.
+fn xml(text: &str, nodes_limit: u32) -> Result<Document<'_>, String> {
+    // WMS 1.1.1 documents start with a DOCTYPE, so DTDs are allowed; roxmltree still refuses
+    // entity bombs and external entities, and the node count is capped.
+    let opts = ParsingOptions { allow_dtd: true, nodes_limit, ..ParsingOptions::default() };
+    crate::xml::parse(text.trim_start(), opts)
 }
 
 fn local<'a>(n: &Node<'a, '_>) -> &'a str {
@@ -551,6 +565,402 @@ fn wfs(url: &str, root: &Node) -> Service {
 }
 
 // ---------------------------------------------------------------------------------------------
+// WCS
+
+/// The largest side, in pixels, of a coverage asked for (GetCoverage scales it to fit).
+pub const COVERAGE_MAX_PIXELS: u32 = 2048;
+
+/// A WCS coverage: what DescribeCoverage and GetCoverage need.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Coverage {
+    /// The service's address for its requests (the capabilities' GetCoverage address).
+    pub endpoint: String,
+    /// The protocol asked in: `2.0.1` or `1.0.0` (a WCS 1.1 service is asked in 1.0, which the
+    /// common servers answer too, rather than 1.1's multipart answers).
+    pub version: String,
+    pub id: String,
+    /// The output formats the capabilities list (WCS 2.0's `formatSupported`).
+    pub formats: Vec<String>,
+}
+
+/// What DescribeCoverage says a coverage is: the GeoTIFF format to ask for, the names of its
+/// longitude-like and latitude-like axes (WCS 2.0's subsets), and its longitude/latitude bounds
+/// when they can be known without reprojecting.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CoverageInfo {
+    pub format: String,
+    pub axes: Option<(String, String)>,
+    pub bbox: Option<[f64; 4]>,
+}
+
+fn wcs(url: &str, root: &Node) -> Service {
+    let title =
+        child(root, "ServiceIdentification").or_else(|| child(root, "Service")).and_then(|s| child_text(&s, "Title")).unwrap_or_default();
+    let doc_version = root.attribute("version").unwrap_or("1.0.0");
+    let v2 = doc_version.starts_with('2');
+    let version = if v2 { "2.0.1" } else { "1.0.0" };
+    let mut service = Service { kind: "WCS".into(), title, ..Service::default() };
+    if doc_version.starts_with("1.1") {
+        service.notes.push("a WCS 1.1 service: its coverages are asked for in WCS 1.0".into());
+    }
+    // GetCoverage's address: an `ows:Operation` (1.1, 2.0) or a `GetCoverage` request's
+    // `OnlineResource` (1.0); the capabilities address when the document gives no web address.
+    let get = root
+        .descendants()
+        .find(|n| n.is_element() && (local(n) == "GetCoverage" || (local(n) == "Operation" && n.attribute("name") == Some("GetCoverage"))))
+        .and_then(|g| g.descendants().find(|n| n.is_element() && local(n) == "Get"))
+        .and_then(|g| href(&g).or_else(|| g.descendants().find(|n| n.is_element() && local(n) == "OnlineResource").and_then(|o| href(&o))))
+        // MapServer escapes its `&` twice: `&amp;` is still there after the XML is read.
+        .map(|h| h.replace("&amp;", "&"))
+        .filter(|h| is_web(h))
+        .unwrap_or_else(|| endpoint(url));
+    let formats: Vec<String> = root
+        .descendants()
+        .filter(|n| n.is_element() && matches!(local(n), "formatSupported" | "SupportedFormat"))
+        .map(|n| text_of(&n))
+        .filter(|f| !f.is_empty() && f.len() < 200)
+        .take(64)
+        .collect();
+    let corners = |b: &Node| -> Option<[f64; 4]> {
+        let lo: Vec<f64> = child_text(b, "LowerCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        let hi: Vec<f64> = child_text(b, "UpperCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        lonlat_box(*lo.first()?, *lo.get(1)?, *hi.first()?, *hi.get(1)?)
+    };
+    let mut add = |id: String, title: Option<String>, bbox: Option<[f64; 4]>| {
+        let coverage = Coverage { endpoint: get.clone(), version: version.into(), id: id.clone(), formats: formats.clone() };
+        service.layers.push(ServiceLayer {
+            title: title.filter(|t| !t.is_empty()).unwrap_or_else(|| id.clone()),
+            name: id,
+            offer: Offer::Coverage(coverage),
+            bbox,
+            tilesets: None,
+        });
+    };
+    let mut n = 0;
+    // WCS 1.1 and 2.0: `CoverageSummary` (nested ones too), named by `CoverageId` or `Identifier`.
+    for s in root.descendants().filter(|n| n.is_element() && local(n) == "CoverageSummary") {
+        let Some(id) = child_text(&s, "CoverageId").or_else(|| child_text(&s, "Identifier")) else { continue };
+        if id.len() > 500 || n >= MAX_LAYERS {
+            continue;
+        }
+        n += 1;
+        let bbox = child(&s, "WGS84BoundingBox").and_then(|b| corners(&b));
+        add(id, child_text(&s, "Title"), bbox);
+    }
+    // WCS 1.0: `CoverageOfferingBrief`, named by `name`, its bounds a `lonLatEnvelope`.
+    for b in root.descendants().filter(|n| n.is_element() && local(n) == "CoverageOfferingBrief") {
+        let Some(id) = child_text(&b, "name") else { continue };
+        if id.len() > 500 || n >= MAX_LAYERS {
+            continue;
+        }
+        n += 1;
+        let bbox = child(&b, "lonLatEnvelope").and_then(|e| {
+            let pos: Vec<f64> = children(&e, "pos")
+                .flat_map(|p| text_of(&p).split_whitespace().filter_map(|t| t.parse().ok()).collect::<Vec<f64>>())
+                .collect();
+            lonlat_box(*pos.first()?, *pos.get(1)?, *pos.get(2)?, *pos.get(3)?)
+        });
+        add(id, child_text(&b, "label"), bbox);
+    }
+    service
+}
+
+/// The DescribeCoverage request of a coverage.
+pub fn describe_coverage_url(c: &Coverage) -> String {
+    let q = if c.version.starts_with('2') {
+        format!("SERVICE=WCS&VERSION={}&REQUEST=DescribeCoverage&COVERAGEID={}", c.version, encode(&c.id))
+    } else {
+        format!("SERVICE=WCS&VERSION=1.0.0&REQUEST=DescribeCoverage&COVERAGE={}", encode(&c.id))
+    };
+    with_query(&c.endpoint, &q)
+}
+
+/// The GeoTIFF format among those offered: one naming TIFF (`image/tiff`, `GeoTIFF`,
+/// `GEOTIFF_INT16`), else `image/tiff`.
+fn tiff_format<'a>(offered: impl IntoIterator<Item = &'a str>) -> String {
+    offered.into_iter().find(|f| f.to_ascii_lowercase().contains("tif")).unwrap_or("image/tiff").to_string()
+}
+
+/// Which of a coverage's axes, by their labels, runs east-west and which north-south: by name
+/// (`Long`/`Lat`, `x`/`y`, `E`/`N`), else in the order given (latitude first for EPSG:4326).
+fn lonlat_axes(labels: &[&str], srs: &str) -> Option<(String, String)> {
+    let (a, b) = (*labels.first()?, *labels.get(1)?);
+    let ok = |s: &str| !s.is_empty() && s.len() <= 32 && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-');
+    if !ok(a) || !ok(b) {
+        return None;
+    }
+    let is_lat = |s: &str| matches!(s.to_ascii_lowercase().as_str(), "lat" | "latitude" | "y" | "n" | "north" | "northing");
+    let is_lon = |s: &str| matches!(s.to_ascii_lowercase().as_str(), "long" | "lon" | "longitude" | "x" | "e" | "east" | "easting");
+    Some(if is_lon(a) || is_lat(b) {
+        (a.to_string(), b.to_string())
+    } else if is_lat(a) || is_lon(b) || srs.ends_with("/4326") || srs.ends_with(":4326") {
+        (b.to_string(), a.to_string())
+    } else {
+        (a.to_string(), b.to_string())
+    })
+}
+
+/// Reads a coverage's DescribeCoverage answer.
+pub fn parse_describe(c: &Coverage, body: &[u8]) -> Result<CoverageInfo, String> {
+    let text = std::str::from_utf8(body).map_err(|_| "the coverage's description isn't UTF-8 text".to_string())?;
+    let doc = xml(text, 1_000_000).map_err(|e| format!("the coverage's description: {e}"))?;
+    let root = doc.root_element();
+    if matches!(local(&root), "ServiceExceptionReport" | "ExceptionReport") {
+        return Err(format!("the service answered with an error: {}", text_of(&root).chars().take(300).collect::<String>()));
+    }
+    if c.version.starts_with('2') {
+        let Some(env) = root.descendants().find(|n| n.is_element() && local(n) == "Envelope") else {
+            return Err(format!("{}: the description gives no envelope", c.id));
+        };
+        let srs = env.attribute("srsName").unwrap_or("").to_string();
+        let labels_text = env.attribute("axisLabels").unwrap_or("").to_string();
+        let labels: Vec<&str> = labels_text.split_whitespace().collect();
+        let axes = lonlat_axes(&labels, &srs);
+        let corner = |k: &str| -> Option<Vec<f64>> {
+            let t = child_text(&env, k)?;
+            Some(t.split_whitespace().filter_map(|v| v.parse().ok()).collect())
+        };
+        let s = srs.to_ascii_lowercase();
+        let bbox = (|| {
+            let (lo, hi) = (corner("lowerCorner")?, corner("upperCorner")?);
+            let (lo0, lo1, hi0, hi1) = (*lo.first()?, *lo.get(1)?, *hi.first()?, *hi.get(1)?);
+            // Which corner value is the longitude: by the axes' order in the labels.
+            let lon_first = match &axes {
+                Some((lon, _)) => labels.first() == Some(&lon.as_str()),
+                None => true,
+            };
+            if s.ends_with("/4326") || s.ends_with(":4326") || s.contains("crs84") {
+                if lon_first { lonlat_box(lo0, lo1, hi0, hi1) } else { lonlat_box(lo1, lo0, hi1, hi0) }
+            } else if is_web_mercator(&srs) {
+                let (w, so) = merc_to_lonlat(lo0, lo1);
+                let (e, n) = merc_to_lonlat(hi0, hi1);
+                lonlat_box(w, so, e, n)
+            } else {
+                None
+            }
+        })();
+        let native = root.descendants().find(|n| n.is_element() && local(n) == "nativeFormat").map(|n| text_of(&n));
+        let offered: Vec<&str> =
+            native.iter().map(String::as_str).filter(|f| !f.is_empty()).chain(c.formats.iter().map(String::as_str)).collect();
+        return Ok(CoverageInfo { format: tiff_format(offered), axes, bbox });
+    }
+    // WCS 1.0: the formats it answers in, and its longitude/latitude envelope.
+    let formats: Vec<String> = root
+        .descendants()
+        .filter(|n| n.is_element() && local(n) == "formats")
+        .map(|n| text_of(&n))
+        .filter(|f| !f.is_empty() && f.len() < 200)
+        .take(64)
+        .collect();
+    if root.descendants().all(|n| !(n.is_element() && local(&n) == "CoverageOffering")) {
+        return Err(format!("{}: not a coverage description", c.id));
+    }
+    let bbox = root.descendants().find(|n| n.is_element() && local(n) == "lonLatEnvelope").and_then(|e| {
+        let pos: Vec<f64> =
+            children(&e, "pos").flat_map(|p| text_of(&p).split_whitespace().filter_map(|t| t.parse().ok()).collect::<Vec<f64>>()).collect();
+        lonlat_box(*pos.first()?, *pos.get(1)?, *pos.get(2)?, *pos.get(3)?)
+    });
+    Ok(CoverageInfo { format: tiff_format(formats.iter().map(String::as_str)), axes: None, bbox })
+}
+
+/// The pixel size of a coverage asked for over a longitude/latitude `area`: its longer side
+/// [`COVERAGE_MAX_PIXELS`], square degrees.
+pub fn coverage_size(area: [f64; 4]) -> (u32, u32) {
+    let (dx, dy) = ((area[2] - area[0]).abs().max(1e-9), (area[3] - area[1]).abs().max(1e-9));
+    let m = f64::from(COVERAGE_MAX_PIXELS);
+    let (w, h) = if dx >= dy { (m, (m * dy / dx).round()) } else { ((m * dx / dy).round(), m) };
+    (w.clamp(1.0, m) as u32, h.clamp(1.0, m) as u32)
+}
+
+/// The GetCoverage request of a coverage over a longitude/latitude `area`, as a GeoTIFF in
+/// EPSG:4326 (the server reprojects; WCS 2.0 through its CRS extension), scaled to fit
+/// [`COVERAGE_MAX_PIXELS`].
+pub fn get_coverage_url(c: &Coverage, info: &CoverageInfo, area: [f64; 4]) -> String {
+    let [w, s, e, n] = area;
+    let (pw, ph) = coverage_size(area);
+    let q = if c.version.starts_with('2') {
+        let (lon, lat) = info.axes.clone().unwrap_or_else(|| ("x".into(), "y".into()));
+        let crs = "http://www.opengis.net/def/crs/EPSG/0/4326";
+        format!(
+            "SERVICE=WCS&VERSION={}&REQUEST=GetCoverage&COVERAGEID={}&FORMAT={}&SUBSETTINGCRS={crs}&OUTPUTCRS={crs}&SUBSET={lon}({w},{e})&SUBSET={lat}({s},{n})&SCALESIZE={lon}({pw}),{lat}({ph})",
+            c.version,
+            encode(&c.id),
+            encode(&info.format)
+        )
+    } else {
+        format!(
+            "SERVICE=WCS&VERSION=1.0.0&REQUEST=GetCoverage&COVERAGE={}&CRS=EPSG:4326&BBOX={w},{s},{e},{n}&WIDTH={pw}&HEIGHT={ph}&FORMAT={}",
+            encode(&c.id),
+            encode(&info.format)
+        )
+    };
+    with_query(&c.endpoint, &q)
+}
+
+/// The part of `area` a coverage covers (all of `area` when its bounds aren't known); `None` when
+/// they don't meet.
+pub fn coverage_area(info: &CoverageInfo, area: [f64; 4]) -> Option<[f64; 4]> {
+    let Some([w, s, e, n]) = info.bbox else { return lonlat_box(area[0], area[1], area[2], area[3]) };
+    lonlat_box(area[0].max(w), area[1].max(s), area[2].min(e), area[3].min(n))
+}
+
+// ---------------------------------------------------------------------------------------------
+// CSW
+
+/// Records asked of a catalogue in one request.
+pub const RECORDS_PAGE: u32 = 20;
+
+/// A catalogue record's link: a service (`wms`, `wmts`, `wfs`, `wcs`, `ogcapi`, `arcgis`) RustGIS
+/// can open, a file to download, or another web page.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordLink {
+    pub url: String,
+    pub kind: &'static str,
+    /// The layer the link names, when it names one (a WMS link's layer).
+    pub name: Option<String>,
+    pub protocol: String,
+}
+
+/// A catalogue record (Dublin Core): its identifier, title, abstract, bounds and links.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Record {
+    pub id: String,
+    pub title: String,
+    pub summary: String,
+    pub bbox: Option<[f64; 4]>,
+    pub links: Vec<RecordLink>,
+}
+
+/// A page of a catalogue search: how many records match, the next page's first position, and the
+/// records.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RecordPage {
+    pub matched: u64,
+    pub next: Option<u64>,
+    pub records: Vec<Record>,
+}
+
+/// The GetRecords request (CSW 2.0.2, Dublin Core records) of a search: words anywhere in the
+/// records, within a longitude/latitude box, from position `start` (1-based).
+pub fn records_url(endpoint_url: &str, words: &str, bbox: Option<[f64; 4]>, start: u64) -> String {
+    let words: String = words.chars().filter(|c| !c.is_control()).take(200).collect::<String>().trim().replace('\'', "''");
+    let mut cql = Vec::new();
+    if !words.is_empty() {
+        cql.push(format!("AnyText LIKE '%{words}%'"));
+    }
+    if let Some([w, s, e, n]) = bbox {
+        cql.push(format!("BBOX(ows:BoundingBox,{w},{s},{e},{n})"));
+    }
+    let mut q = format!(
+        "SERVICE=CSW&VERSION=2.0.2&REQUEST=GetRecords&typeNames=csw:Record&resultType=results&elementSetName=full&outputSchema={}&maxRecords={RECORDS_PAGE}&startPosition={}",
+        encode("http://www.opengis.net/cat/csw/2.0.2"),
+        start.max(1)
+    );
+    if !cql.is_empty() {
+        q.push_str(&format!("&constraintLanguage=CQL_TEXT&constraint_language_version=1.1.0&constraint={}", encode(&cql.join(" AND "))));
+    }
+    with_query(&endpoint(endpoint_url), &q)
+}
+
+/// What a link's protocol (or, when it says nothing useful, its address) makes it.
+fn link_kind(protocol: &str, url: &str) -> &'static str {
+    let p = protocol.to_ascii_lowercase();
+    let u = url.to_ascii_lowercase();
+    let says = |k: &str| p.contains(k);
+    if says("wmts") {
+        "wmts"
+    } else if says("wms") {
+        "wms"
+    } else if says("wfs") {
+        "wfs"
+    } else if says("wcs") {
+        "wcs"
+    } else if says("ogc:api") || says("ogcapi") || says("ogc api") {
+        "ogcapi"
+    } else if says("esri:rest") || says("arcgis") {
+        "arcgis"
+    } else if says("download") {
+        "download"
+    } else if u.contains("service=wmts") || u.contains("/wmts") {
+        "wmts"
+    } else if u.contains("service=wms") || u.contains("/wms") {
+        "wms"
+    } else if u.contains("service=wfs") || u.contains("/wfs") {
+        "wfs"
+    } else if u.contains("service=wcs") || u.contains("/wcs") {
+        "wcs"
+    } else if u.contains("/rest/services/") {
+        "arcgis"
+    } else {
+        "web"
+    }
+}
+
+/// The first line of an attribute or text that repeats itself across languages (geocat's).
+fn first_line(s: &str) -> String {
+    s.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").chars().take(500).collect()
+}
+
+/// Reads a GetRecords answer fetched from `url`.
+pub fn parse_records(url: &str, body: &[u8]) -> Result<RecordPage, String> {
+    let text = std::str::from_utf8(body).map_err(|_| "the catalogue's answer isn't UTF-8 text".to_string())?;
+    let doc = xml(text, 2_000_000).map_err(|e| format!("the catalogue's XML: {e}"))?;
+    let root = doc.root_element();
+    match local(&root) {
+        "GetRecordsResponse" => {}
+        "ServiceExceptionReport" | "ExceptionReport" => {
+            return Err(format!("the catalogue answered with an error: {}", text_of(&root).chars().take(300).collect::<String>()));
+        }
+        other => return Err(format!("not a catalogue's (CSW) answer (<{other}>)")),
+    }
+    let mut page = RecordPage::default();
+    if let Some(r) = root.descendants().find(|n| n.is_element() && local(n) == "SearchResults") {
+        let num = |k: &str| r.attribute(k).and_then(|v| v.trim().parse::<u64>().ok());
+        page.matched = num("numberOfRecordsMatched").unwrap_or(0);
+        page.next = num("nextRecord").filter(|n| *n > 0 && *n <= page.matched);
+    }
+    for rec in root
+        .descendants()
+        .filter(|n| n.is_element() && matches!(local(n), "Record" | "SummaryRecord" | "BriefRecord"))
+        .take(RECORDS_PAGE as usize * 5)
+    {
+        let field = |k: &str| child(&rec, k).map(|c| first_line(&text_of(&c))).filter(|t| !t.is_empty());
+        let id = field("identifier").unwrap_or_default();
+        let title = field("title").unwrap_or_else(|| id.clone());
+        let summary: String =
+            child(&rec, "abstract").or_else(|| child(&rec, "description")).map(|c| first_line(&text_of(&c))).unwrap_or_default();
+        // Bounds: a WGS84 box (longitude first), else a box in EPSG:4326 (latitude first when
+        // given by URN, as the standard has it), else CRS84.
+        let bbox = child(&rec, "WGS84BoundingBox")
+            .and_then(|b| {
+                let lo: Vec<f64> = child_text(&b, "LowerCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+                let hi: Vec<f64> = child_text(&b, "UpperCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+                lonlat_box(*lo.first()?, *lo.get(1)?, *hi.first()?, *hi.get(1)?)
+            })
+            .or_else(|| {
+                let b = child(&rec, "BoundingBox")?;
+                let crs = b.attribute("crs").unwrap_or("").to_ascii_lowercase();
+                let lo: Vec<f64> = child_text(&b, "LowerCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+                let hi: Vec<f64> = child_text(&b, "UpperCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+                let (a, b0, c, d) = (*lo.first()?, *lo.get(1)?, *hi.first()?, *hi.get(1)?);
+                if crs.contains("urn:") && crs.contains("4326") { lonlat_box(b0, a, d, c) } else { lonlat_box(a, b0, c, d) }
+            });
+        let mut links: Vec<RecordLink> = Vec::new();
+        for l in rec.children().filter(|c| c.is_element() && matches!(local(c), "URI" | "references")).take(50) {
+            let Some(href) = text_of(&l).split_whitespace().next().and_then(|u| resolve(url, u)) else { continue };
+            if href.len() > 2000 || links.iter().any(|k| k.url == href) {
+                continue;
+            }
+            let protocol = l.attribute("protocol").or_else(|| l.attribute("scheme")).map(first_line).unwrap_or_default();
+            let name = l.attribute("name").map(first_line).filter(|n| !n.is_empty());
+            links.push(RecordLink { kind: link_kind(&protocol, &href), url: href, name, protocol });
+        }
+        page.records.push(Record { id, title, summary, bbox, links });
+    }
+    Ok(page)
+}
+
+// ---------------------------------------------------------------------------------------------
 // ArcGIS REST
 
 /// Web Mercator metres to longitude/latitude.
@@ -688,7 +1098,8 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 Offer::Tiles { template: u }
                 | Offer::Features { url: u }
                 | Offer::Style { url: u }
-                | Offer::VectorTiles { template: u, .. } => *u = with_query(u, &format!("token={token}")),
+                | Offer::VectorTiles { template: u, .. }
+                | Offer::Coverage(Coverage { endpoint: u, .. }) => *u = with_query(u, &format!("token={token}")),
             }
         }
     }
@@ -1462,5 +1873,146 @@ mod tests {
         assert!(parse("x", b"<ServiceExceptionReport>boom</ServiceExceptionReport>").unwrap_err().contains("boom"));
         assert!(parse("x", b"<html/>").is_err());
         assert!(parse("x", &[0xff]).is_err());
+    }
+
+    #[test]
+    fn wcs_coverages() {
+        let v2 = r#"<wcs:Capabilities version="2.0.1" xmlns:wcs="http://www.opengis.net/wcs/2.0" xmlns:ows="http://www.opengis.net/ows/2.0" xmlns:xlink="http://www.w3.org/1999/xlink">
+            <ows:ServiceIdentification><ows:Title>Soils</ows:Title></ows:ServiceIdentification>
+            <ows:OperationsMetadata><ows:Operation name="GetCoverage"><ows:DCP><ows:HTTP>
+              <ows:Get xlink:href="https://maps.example.org/mapserv?map=/m/soc.map&amp;amp;"/></ows:HTTP></ows:DCP></ows:Operation></ows:OperationsMetadata>
+            <wcs:ServiceMetadata><wcs:formatSupported>image/png</wcs:formatSupported><wcs:formatSupported>image/tiff</wcs:formatSupported></wcs:ServiceMetadata>
+            <wcs:Contents><wcs:CoverageSummary><wcs:CoverageId>soc_mean</wcs:CoverageId>
+              <ows:WGS84BoundingBox><ows:LowerCorner>-180 -56</ows:LowerCorner><ows:UpperCorner>180 84</ows:UpperCorner></ows:WGS84BoundingBox>
+            </wcs:CoverageSummary></wcs:Contents></wcs:Capabilities>"#;
+        let s = parse("https://maps.example.org/mapserv?map=/m/soc.map&SERVICE=WCS&REQUEST=GetCapabilities", v2.as_bytes()).unwrap();
+        assert_eq!((s.kind.as_str(), s.title.as_str()), ("WCS", "Soils"));
+        assert_eq!(s.layers[0].bbox, Some([-180.0, -56.0, 180.0, 84.0]));
+        let Offer::Coverage(c) = &s.layers[0].offer else { panic!("{:?}", s.layers[0].offer) };
+        assert_eq!(c.endpoint, "https://maps.example.org/mapserv?map=/m/soc.map&");
+        assert_eq!((c.version.as_str(), c.id.as_str()), ("2.0.1", "soc_mean"));
+        assert_eq!(
+            describe_coverage_url(c),
+            "https://maps.example.org/mapserv?map=/m/soc.map&SERVICE=WCS&VERSION=2.0.1&REQUEST=DescribeCoverage&COVERAGEID=soc_mean"
+        );
+        let desc = r#"<wcs:CoverageDescriptions xmlns:wcs="http://www.opengis.net/wcs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2">
+            <wcs:CoverageDescription><gml:boundedBy><gml:Envelope srsName="http://www.opengis.net/def/crs/EPSG/0/4326" axisLabels="lat long">
+              <gml:lowerCorner>-56 -180</gml:lowerCorner><gml:upperCorner>84 180</gml:upperCorner></gml:Envelope></gml:boundedBy>
+            <wcs:ServiceParameters><wcs:nativeFormat>image/tiff</wcs:nativeFormat></wcs:ServiceParameters></wcs:CoverageDescription></wcs:CoverageDescriptions>"#;
+        let info = parse_describe(c, desc.as_bytes()).unwrap();
+        assert_eq!(info.axes, Some(("long".into(), "lat".into())));
+        assert_eq!(info.bbox, Some([-180.0, -56.0, 180.0, 84.0]));
+        assert_eq!(info.format, "image/tiff");
+        let area = coverage_area(&info, [170.0, 80.0, 190.0, 90.0]).unwrap();
+        assert_eq!(area, [170.0, 80.0, 180.0, 84.0]);
+        assert_eq!(coverage_size(area), (2048, 819));
+        assert_eq!(coverage_size([0.0, 0.0, 1.0, 4.0]), (512, 2048));
+        assert!(coverage_area(&info, [0.0, 85.0, 1.0, 89.0]).is_none());
+        let get = get_coverage_url(c, &info, [7.0, 46.0, 8.0, 47.0]);
+        assert!(
+            get.contains("COVERAGEID=soc_mean&FORMAT=image%2Ftiff&")
+                && get.contains("&SUBSET=long(7,8)&SUBSET=lat(46,47)&SCALESIZE=long(2048),lat(2048)"),
+            "{get}"
+        );
+        assert!(
+            parse_describe(c, b"<ows:ExceptionReport xmlns:ows='o'>no such coverage</ows:ExceptionReport>")
+                .unwrap_err()
+                .contains("no such coverage")
+        );
+        assert!(parse_describe(c, b"<CoverageDescriptions/>").is_err());
+
+        let v1 = r#"<WCS_Capabilities version="1.0.0" xmlns="http://www.opengis.net/wcs" xmlns:gml="http://www.opengis.net/gml" xmlns:xlink="http://www.w3.org/1999/xlink">
+            <Service><name>MapServer WCS</name><label>Elevation</label></Service>
+            <Capability><Request><GetCoverage><DCPType><HTTP><Get><OnlineResource xlink:href="https://dem.example.org/wcs?"/></Get></HTTP></DCPType></GetCoverage></Request></Capability>
+            <ContentMetadata><CoverageOfferingBrief><name>dem</name><label>Terrain</label>
+              <lonLatEnvelope srsName="urn:ogc:def:crs:OGC:1.3:CRS84"><gml:pos>5 45</gml:pos><gml:pos>11 48</gml:pos></lonLatEnvelope>
+            </CoverageOfferingBrief></ContentMetadata></WCS_Capabilities>"#;
+        let s = parse("https://dem.example.org/wcs", v1.as_bytes()).unwrap();
+        assert_eq!((s.layers[0].title.as_str(), s.layers[0].bbox), ("Terrain", Some([5.0, 45.0, 11.0, 48.0])));
+        let Offer::Coverage(c) = &s.layers[0].offer else { panic!() };
+        assert_eq!(c.version, "1.0.0");
+        let desc = r#"<CoverageDescription xmlns="http://www.opengis.net/wcs" xmlns:gml="http://www.opengis.net/gml"><CoverageOffering><name>dem</name>
+            <lonLatEnvelope><gml:pos>5 45</gml:pos><gml:pos>11 48</gml:pos></lonLatEnvelope>
+            <supportedFormats><formats>PNG</formats><formats>GEOTIFF_INT16</formats></supportedFormats></CoverageOffering></CoverageDescription>"#;
+        let info = parse_describe(c, desc.as_bytes()).unwrap();
+        assert_eq!((info.format.as_str(), info.bbox), ("GEOTIFF_INT16", Some([5.0, 45.0, 11.0, 48.0])));
+        assert_eq!(
+            get_coverage_url(c, &info, [6.0, 46.0, 7.0, 46.5]),
+            "https://dem.example.org/wcs?SERVICE=WCS&VERSION=1.0.0&REQUEST=GetCoverage&COVERAGE=dem&CRS=EPSG:4326&BBOX=6,46,7,46.5&WIDTH=2048&HEIGHT=1024&FORMAT=GEOTIFF_INT16"
+        );
+        assert!(parse_describe(c, b"<CoverageDescription/>").is_err());
+
+        let v11 = r#"<Capabilities version="1.1.1" xmlns="http://www.opengis.net/wcs/1.1.1" xmlns:ows="http://www.opengis.net/ows/1.1">
+            <Contents><CoverageSummary><Identifier>ndvi</Identifier></CoverageSummary></Contents></Capabilities>"#;
+        let s = parse("https://x.org/wcs", v11.as_bytes()).unwrap();
+        assert_eq!(s.kind, "WCS");
+        assert!(matches!(&s.layers[0].offer, Offer::Coverage(c) if c.version == "1.0.0" && c.endpoint == "https://x.org/wcs"));
+        assert!(!s.notes.is_empty());
+        assert_eq!(
+            capabilities_url("https://x.org/geoserver/wcs", None),
+            "https://x.org/geoserver/wcs?SERVICE=WCS&REQUEST=GetCapabilities"
+        );
+
+        assert_eq!(lonlat_axes(&["Lat", "Long"], ""), Some(("Long".into(), "Lat".into())));
+        assert_eq!(lonlat_axes(&["x", "y"], "EPSG:4326"), Some(("x".into(), "y".into())));
+        assert_eq!(lonlat_axes(&["a", "b"], "http://www.opengis.net/def/crs/EPSG/0/4326"), Some(("b".into(), "a".into())));
+        assert_eq!(lonlat_axes(&["x(1)", "y"], ""), None);
+        assert_eq!(lonlat_axes(&["x"], ""), None);
+    }
+
+    #[test]
+    fn csw_records() {
+        let u = records_url(
+            "https://cat.example.org/csw?SERVICE=CSW&REQUEST=GetCapabilities",
+            "O'Brien\u{7}",
+            Some([7.0, 46.0, 8.0, 47.0]),
+            21,
+        );
+        assert!(u.starts_with("https://cat.example.org/csw?SERVICE=CSW&VERSION=2.0.2&REQUEST=GetRecords&"), "{u}");
+        assert!(u.contains("&startPosition=21&") && u.contains("O%27%27Brien") && u.contains("BBOX%28ows:BoundingBox,7,46,8,47%29"), "{u}");
+        assert!(!records_url("https://cat.example.org/csw", " ", None, 0).contains("constraint="));
+
+        let xml = r#"<csw:GetRecordsResponse xmlns:csw="http://www.opengis.net/cat/csw/2.0.2" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dct="http://purl.org/dc/terms/" xmlns:ows="http://www.opengis.net/ows">
+            <csw:SearchResults numberOfRecordsMatched="45" numberOfRecordsReturned="2" nextRecord="3">
+              <csw:Record><dc:identifier>a1</dc:identifier><dc:title>Forests
+                Wälder</dc:title><dct:abstract>Forest cover.</dct:abstract>
+                <dc:URI protocol="OGC:WMS" name="forests">https://geo.example.org/wms?SERVICE=WMS&amp;REQUEST=GetCapabilities</dc:URI>
+                <dc:URI protocol="WWW:DOWNLOAD-1.0-http--download">https://geo.example.org/forests.zip</dc:URI>
+                <dc:URI protocol="WWW:DOWNLOAD-1.0-http--download">https://geo.example.org/forests.zip</dc:URI>
+                <dct:references scheme="ESRI:REST">https://x.org/arcgis/rest/services/F/MapServer</dct:references>
+                <dc:URI>/files/doc.pdf</dc:URI>
+                <dc:URI>https://geo.example.org/geoserver/wfs</dc:URI>
+                <ows:BoundingBox crs="urn:ogc:def:crs:EPSG:6.6:4326"><ows:LowerCorner>45.8 5.9</ows:LowerCorner><ows:UpperCorner>47.8 10.5</ows:UpperCorner></ows:BoundingBox>
+              </csw:Record>
+              <csw:Record><dc:title>Lakes</dc:title>
+                <ows:WGS84BoundingBox><ows:LowerCorner>6 46</ows:LowerCorner><ows:UpperCorner>7 47</ows:UpperCorner></ows:WGS84BoundingBox></csw:Record>
+            </csw:SearchResults></csw:GetRecordsResponse>"#;
+        let page = parse_records("https://cat.example.org/csw?x=1", xml.as_bytes()).unwrap();
+        assert_eq!((page.matched, page.next, page.records.len()), (45, Some(3), 2));
+        let r = &page.records[0];
+        assert_eq!((r.id.as_str(), r.title.as_str(), r.summary.as_str()), ("a1", "Forests", "Forest cover."));
+        assert_eq!(r.bbox, Some([5.9, 45.8, 10.5, 47.8]));
+        let kinds: Vec<&str> = r.links.iter().map(|l| l.kind).collect();
+        assert_eq!(kinds, ["wms", "download", "arcgis", "web", "wfs"]);
+        assert_eq!(r.links[0].name.as_deref(), Some("forests"));
+        assert_eq!(r.links[3].url, "https://cat.example.org/files/doc.pdf");
+        assert_eq!((page.records[1].title.as_str(), page.records[1].bbox), ("Lakes", Some([6.0, 46.0, 7.0, 47.0])));
+
+        let last = xml.replace(r#"nextRecord="3""#, r#"nextRecord="0""#);
+        assert_eq!(parse_records("https://c.org/csw", last.as_bytes()).unwrap().next, None);
+        assert!(
+            parse_records("https://c.org/csw", b"<ows:ExceptionReport xmlns:ows='o'>bad CQL</ows:ExceptionReport>")
+                .unwrap_err()
+                .contains("bad CQL")
+        );
+        assert!(parse_records("https://c.org/csw", b"<WMS_Capabilities/>").is_err());
+        assert!(parse_records("https://c.org/csw", &[0xff, 0xfe]).is_err());
+        let deep = format!("<GetRecordsResponse>{}{}</GetRecordsResponse>", "<a>".repeat(5000), "</a>".repeat(5000));
+        assert!(
+            parse("https://c.org/wms", deep.replace("GetRecordsResponse", "WMS_Capabilities").as_bytes()).unwrap_err().contains("deep")
+        );
+        assert!(parse_records("https://c.org/csw", deep.as_bytes()).unwrap_err().contains("deep"));
+        let many = format!("<GetRecordsResponse>{}</GetRecordsResponse>", "<Record><title>t</title></Record>".repeat(1000));
+        assert_eq!(parse_records("https://c.org/csw", many.as_bytes()).unwrap().records.len(), RECORDS_PAGE as usize * 5);
     }
 }

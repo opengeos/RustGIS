@@ -110,12 +110,28 @@ command line and MCP).
 | WFS 1.1 / 2.0 | Feature types | Their features downloaded as GeoJSON, in the output format the service names (up to 50,000) |
 | OGC API Features | Collections | Their items downloaded as GeoJSON |
 | OGC API Tiles | Collections' map and vector tiles; a landing page's dataset map tiles | A tile layer in WebMercatorQuad, from the tile template the tileset advertises (its `item` link; `…/tiles/WebMercatorQuad/{z}/{y}/{x}`, the usual path, when that can't be read), keeping the tiles link's query (a token), map tiles in the server's image format, vector tiles drawn layer by layer in colours of their own |
+| WCS 1.0 / 2.0 (a 1.1 service is asked in 1.0) | Coverages, with their bounds | A raster: GetCoverage of the map's view within the coverage's bounds (or its whole extent: `"bbox": "full"`), as a GeoTIFF in EPSG:4326, at most 2048 pixels on a side |
 | ArcGIS REST | FeatureServer and MapServer layers; a MapServer's map; an ImageServer; a VectorTileServer | Layers queried as GeoJSON (up to the server's record limit); a map as its tile cache when it is Web Mercator's pyramid, else exported images; an ImageServer as exported images; a VectorTileServer as its MapLibre style |
 
-The type is guessed from the address (`?SERVICE=`, `/wmts`, `/wfs`, `/collections`, `/rest/services`…) or
+The type is guessed from the address (`?SERVICE=`, `/wmts`, `/wfs`, `/wcs`, `/collections`, `/rest/services`…) or
 chosen (an OGC API landing page needs the OGC API type). A WebMercatorQuad tileset is found by its
 tile matrix set, whatever the server calls it. A service that asks for a token says so. In the web app the server must allow requests
 from web pages (CORS).
+
+A coverage is read once, for the view when it was added (its DescribeCoverage first, for its axes,
+format and bounds; `service.coverage` gives the GetCoverage address alone). Moving the map doesn't
+ask for it again: add it again for another area. The server reprojects it to EPSG:4326 (WCS 2.0
+through its CRS extension); one that can't answers with an error, which is shown.
+
+### Catalogues
+
+The same dialog's **Catalogue search (CSW)** type searches a CSW 2.0.2 catalogue (GeoNetwork,
+pycsw, geocat.ch…) by words anywhere in its records and, if you like, the map's area
+(`catalog.search`). Its records are listed 20 at a time (**More** asks for the next), with their
+titles, abstracts (on hover) and bounds (**Zoom**), and a button per link RustGIS can follow: a WMS,
+WMTS, WFS, WCS, OGC API or ArcGIS service connects in the dialog, a download is added as From URL…
+does. Links pointing where a document on the web may not send RustGIS (the local network) are left
+out.
 
 ## SQL queries and DuckDB databases
 

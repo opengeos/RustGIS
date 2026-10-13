@@ -14,6 +14,8 @@ pub const NETWORK: &[&str] = &[
     "layer.addUrl",
     "service.layers",
     "service.add",
+    "service.coverage",
+    "catalog.search",
     "stac.collections",
     "stac.search",
     "stac.addAsset",

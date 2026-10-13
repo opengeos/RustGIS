@@ -3068,6 +3068,70 @@ fn services_list_and_add_layers() {
     }
 }
 
+/// A WCS coverage (from a local server) becomes a raster of the view, asked for in EPSG:4326 within
+/// its bounds; an error answer is refused. A catalogue's records come with the links RustGIS can
+/// follow, those pointing inward left out.
+#[test]
+fn wcs_coverages_and_catalogue_records() {
+    let r = rustgis_data::raster::Raster::new(
+        "soc",
+        8,
+        8,
+        vec![vec![3.0; 64]],
+        rustgis_data::raster::GeoTransform { origin_x: 5.0, origin_y: 50.0, pixel_width: 0.1, pixel_height: -0.1 },
+        rustgis_data::raster::Crs::LonLat,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let (base, _) = serve_file(rustgis_data::raster::geotiff::write(&r, 0).unwrap(), false);
+    let caps = String::from(
+        r#"<wcs:Capabilities version="2.0.1" xmlns:wcs="http://www.opengis.net/wcs/2.0" xmlns:ows="http://www.opengis.net/ows/2.0">
+        <ows:ServiceIdentification><ows:Title>Soils</ows:Title></ows:ServiceIdentification>
+        <wcs:Contents><wcs:CoverageSummary><wcs:CoverageId>soc</wcs:CoverageId><ows:Title>Soil carbon</ows:Title>
+          <ows:WGS84BoundingBox><ows:LowerCorner>5 49.2</ows:LowerCorner><ows:UpperCorner>5.8 50</ows:UpperCorner></ows:WGS84BoundingBox>
+        </wcs:CoverageSummary></wcs:Contents></wcs:Capabilities>"#,
+    );
+    let describe = r#"<CoverageDescriptions><CoverageDescription><Envelope srsName="http://www.opengis.net/def/crs/EPSG/0/4326" axisLabels="Lat Long">
+        <lowerCorner>49.2 5</lowerCorner><upperCorner>50 5.8</upperCorner></Envelope></CoverageDescription></CoverageDescriptions>"#;
+    let url = format!("{base}/wcs");
+    let mut s = Session::new(Project::default());
+    let v = s.run("service.layers", &json!({"url": url, "text": caps})).unwrap();
+    assert_eq!((v["kind"].as_str(), v["layers"][0]["offer"]["type"].as_str()), (Some("WCS"), Some("coverage")), "{v}");
+    let p = json!({"url": url, "layer": "soc", "text": caps, "describe": describe, "bbox": [0, 40, 5.4, 60]});
+    let c = s.run("service.coverage", &p).unwrap();
+    let get = c["url"].as_str().unwrap();
+    assert!(get.contains("SUBSET=Long(5,5.4)&SUBSET=Lat(49.2,50)&SCALESIZE=Long(1024),Lat(2048)"), "{get}");
+    assert_eq!(c["bbox"], json!([5.0, 49.2, 5.4, 50.0]));
+    let r = s.run("service.add", &p).unwrap();
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).is_some_and(|l| l.is_raster() && l.name == "Soil carbon"), "{r}");
+    assert!(
+        s.run("service.coverage", &json!({"url": url, "layer": "soc", "text": caps, "describe": describe, "bbox": [10, 10, 11, 11]}))
+            .is_err()
+    );
+    let full = s.run("service.coverage", &json!({"url": url, "layer": "soc", "text": caps, "describe": describe, "bbox": "full"})).unwrap();
+    assert_eq!(full["bbox"], json!([5.0, 49.2, 5.8, 50.0]));
+    let (err, _) = serve_file(b"<ows:ExceptionReport>no</ows:ExceptionReport>".to_vec(), false);
+    let p = json!({"url": format!("{err}/wcs"), "layer": "soc", "text": caps, "describe": describe, "bbox": "full"});
+    assert!(s.run("service.add", &p).unwrap_err().contains("error"));
+
+    let records = r#"<csw:GetRecordsResponse xmlns:csw="http://www.opengis.net/cat/csw/2.0.2" xmlns:dc="http://purl.org/dc/elements/1.1/">
+        <csw:SearchResults numberOfRecordsMatched="3" nextRecord="2"><csw:Record><dc:title>Forests</dc:title>
+          <dc:URI protocol="OGC:WMS">https://geo.example.org/wms</dc:URI><dc:URI protocol="OGC:WFS">http://192.168.1.2/wfs</dc:URI>
+        </csw:Record></csw:SearchResults></csw:GetRecordsResponse>"#;
+    let v = s.run("catalog.search", &json!({"url": "https://cat.example.org/csw", "query": "forest", "text": records})).unwrap();
+    assert_eq!((v["matched"].as_u64(), v["count"].as_u64(), v["next"].as_u64()), (Some(3), Some(1), Some(2)), "{v}");
+    assert_eq!(
+        v["records"][0]["links"],
+        json!([{"url": "https://geo.example.org/wms", "kind": "wms", "name": null, "protocol": "OGC:WMS"}])
+    );
+    assert!(v["notes"][0].as_str().is_some_and(|n| n.contains("1 links")), "{v}");
+    assert!(v["request"].as_str().is_some_and(|r| r.contains("AnyText%20LIKE%20%27%25forest%25%27")), "{v}");
+    assert!(s.run("catalog.search", &json!({"url": "https://cat.example.org/csw", "text": "<html/>"})).is_err());
+}
+
 /// A KMZ's ground overlays become raster layers kept in the project; a KML whose picture is a web
 /// address or outside its folder says so.
 #[test]

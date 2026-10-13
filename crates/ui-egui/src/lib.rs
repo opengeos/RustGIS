@@ -13,6 +13,7 @@ mod assistantpane;
 mod backstage;
 mod catalogsui;
 mod chrome;
+mod cswui;
 mod dialogs;
 mod docpanes;
 mod editpanes;
@@ -160,6 +161,9 @@ pub struct ServiceConn {
     pub error: Option<String>,
     /// An OGC API layer whose advertised tile template is being read before it is added.
     pub resolving: Option<TilesResolve>,
+    /// A WCS coverage whose description is being read before it is asked for: `service.coverage`'s
+    /// parameters and the description on its way.
+    pub describing: Option<(Value, Slot<Result<Vec<u8>, String>>)>,
 }
 
 /// Reading an OGC API layer's tile template from its tileset list (and tileset), off the frame.
@@ -281,6 +285,8 @@ pub struct UiState {
     /// The service Add From Service is connected (or connecting) to.
     pub service: Option<ServiceConn>,
     /// STAC Search: its choices, results and the request under way.
+    /// Add From Service › Catalogue: the search and the records found.
+    pub csw: cswui::State,
     pub stac: stacui::State,
     /// S3…: the connection form, the bucket browsed and the listing under way.
     pub s3: s3ui::State,
@@ -344,6 +350,7 @@ impl Default for UiState {
             cog_probes: Vec::new(),
             link_zoomed: false,
             service: None,
+            csw: Default::default(),
             stac: Default::default(),
             s3: Default::default(),
             portals: Default::default(),
@@ -1082,8 +1089,10 @@ impl RustGisApp {
                 if p.get("zoom").and_then(Value::as_bool) == Some(true) {
                     q["zoom"] = json!(true);
                 }
-                if p.get("service").and_then(Value::as_bool) == Some(true) {
-                    q["service"] = json!(true);
+                for k in ["service", "coverage"] {
+                    if p.get(k).and_then(Value::as_bool) == Some(true) {
+                        q[k] = json!(true);
+                    }
                 }
                 self.session.notify(i18n::fmt("Downloading {url}…", &[("url", &url)]), false);
                 let id = self.session.download_started();
@@ -1095,10 +1104,23 @@ impl RustGisApp {
                 let Some(url) = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()) else {
                     return self.run("ui.dialog", json!({"name": "addService"}));
                 };
+                // A catalogue: the dialog's search, run for the words given.
+                if p.get("type").and_then(Value::as_str) == Some("csw") {
+                    if self.dialogs.open != Some("addService") {
+                        self.run("ui.dialog", json!({"name": "addService"}))?;
+                    }
+                    self.dialogs.mode = "csw";
+                    self.ui.csw.url = url.to_string();
+                    self.ui.csw.query = p.get("query").and_then(Value::as_str).unwrap_or("").to_string();
+                    self.ui.csw.use_view = p.get("bbox").and_then(Value::as_str) == Some("view");
+                    cswui::search(self, 1);
+                    return Ok(Value::Null);
+                }
                 let kind: &'static str = match p.get("type").and_then(Value::as_str).unwrap_or("auto") {
                     "wms" => "wms",
                     "wmts" => "wmts",
                     "wfs" => "wfs",
+                    "wcs" => "wcs",
                     "ogcapi" => "ogcapi",
                     "arcgis" => "arcgis",
                     _ => "auto",
@@ -1112,8 +1134,16 @@ impl RustGisApp {
                 );
                 // The dialog shows the address connected to, however the connection was asked for.
                 self.dialogs.text = url.to_string();
-                self.ui.service =
-                    Some(ServiceConn { url: url.to_string(), kind, slot, text: None, listing: None, error: None, resolving: None });
+                self.ui.service = Some(ServiceConn {
+                    url: url.to_string(),
+                    kind,
+                    slot,
+                    text: None,
+                    listing: None,
+                    error: None,
+                    resolving: None,
+                    describing: None,
+                });
             }
             "ui.addData" => {
                 if let Some(open) = &self.services.open_async {
@@ -1813,9 +1843,31 @@ impl RustGisApp {
         self.map.invalidate();
     }
 
+    /// Asks for a WCS coverage once its description has arrived: its GetCoverage address for the
+    /// view, downloaded as From URL… does.
+    fn poll_describe(&mut self) {
+        let Some(conn) = &mut self.ui.service else { return };
+        let Some((_, slot)) = &conn.describing else { return };
+        let Some(r) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+        let Some((mut p, _)) = conn.describing.take() else { return };
+        let title = p["name"].as_str().unwrap_or("").to_string();
+        let r = r.and_then(|bytes| {
+            p["describe"] = json!(String::from_utf8_lossy(&bytes));
+            // Not `self.run`: an error belongs in the dialog, not the notices.
+            let c = self.session.run("service.coverage", &p)?;
+            let get = c.get("url").and_then(Value::as_str).unwrap_or("").to_string();
+            self.run("ui.addUrl", json!({"url": get, "name": title, "coverage": true}))
+        });
+        match r {
+            Ok(_) => self.dialogs.info = Some(format!("{} {title}", tl!("Downloading…"))),
+            Err(e) => self.dialogs.error = Some(e),
+        }
+    }
+
     /// Lists a service's layers once its capabilities have arrived.
     fn poll_service(&mut self) {
         self.poll_tiles_resolve();
+        self.poll_describe();
         let Some(conn) = &mut self.ui.service else { return };
         let Some(r) = conn.slot.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
         match r {
@@ -1857,6 +1909,7 @@ impl RustGisApp {
         // Sources the AI Assistant or a background add brought in (not through `run`) are kept
         // too: a generation compared each frame.
         sourcespane::save(self);
+        cswui::poll(self);
         stacui::poll(self, ctx);
         s3ui::poll(self, ctx);
         portalsui::poll(self, ctx);
