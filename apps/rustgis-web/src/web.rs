@@ -76,9 +76,9 @@ pub fn start() {
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
-                Err(e) => {
-                    el.set_inner_html(&format!("<p>Không thể khởi động viRustGIS: {e:?}</p><p>Trình duyệt cần hỗ trợ WebGPU hoặc WebGL2.</p>"))
-                }
+                Err(e) => el.set_inner_html(&format!(
+                    "<p>Không thể khởi động viRustGIS: {e:?}</p><p>Trình duyệt cần hỗ trợ WebGPU hoặc WebGL2.</p>"
+                )),
             }
         }
     });
