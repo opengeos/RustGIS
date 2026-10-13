@@ -55,11 +55,13 @@ impl FeatureSource for LidarSource {
             (Some(e), Some(g)) => e.intersects(&g.extent()),
             (Some(_), None) => false,
         };
-        let matched = self.features.iter().filter(inside).count();
+        // One pass over the points (references, not copies), then every n-th match past the
+        // limit, so the view stays covered evenly.
+        let hits: Vec<&Feature> = self.features.iter().filter(inside).collect();
+        let matched = hits.len();
         let limit = req.limit.max(1);
-        // Past the limit, every n-th match: the view stays covered evenly.
         let step = matched.div_ceil(limit).max(1);
-        let features: Vec<Feature> = self.features.iter().filter(inside).step_by(step).take(limit).cloned().collect();
+        let features: Vec<Feature> = hits.into_iter().step_by(step).take(limit).cloned().collect();
         Ok(Batch { complete: features.len() == matched, matched: matched as u64, features, skipped: 0 })
     }
 }

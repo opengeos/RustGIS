@@ -155,7 +155,10 @@ fn crs_of(vlrs: &[Vlr]) -> Option<std::result::Result<Crs, String>> {
     let mut code = None;
     for k in 0..n {
         let at = 8 + k * 8;
-        let (id, loc, val) = (u16_at(&keys.data, at)?, u16_at(&keys.data, at + 2)?, u16_at(&keys.data, at + 6)?);
+        // A cut-off entry ends the keys; a code found before it stands.
+        let (Some(id), Some(loc), Some(val)) = (u16_at(&keys.data, at), u16_at(&keys.data, at + 2), u16_at(&keys.data, at + 6)) else {
+            break;
+        };
         // ProjectedCSTypeGeoKey first, else GeographicTypeGeoKey; 32767 is "user defined".
         if loc == 0 && val != 32767 && val != 0 && (id == 3072 || (id == 2048 && code.is_none())) {
             code = Some(val);
@@ -250,7 +253,7 @@ pub fn read<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<Crs>
         None => match crs_of(&vlrs) {
             Some(Ok(c)) => Some(c),
             Some(Err(e)) => {
-                report.messages.push(format!("{name}: {e}; coordinates are kept as they are (add it again with \"crs\")"));
+                report.messages.push(format!("{name}: {e}; coordinates are kept as they are"));
                 said = true;
                 None
             }
@@ -272,7 +275,7 @@ pub fn read<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<Crs>
         },
     };
     if crs.is_none() && !lonlat_bounds && !said {
-        report.messages.push(format!("{name}: the file doesn't say its coordinate system; add it again with \"crs\" (such as EPSG:26910)"));
+        report.messages.push(format!("{name}: the file doesn't say its coordinate system; coordinates are kept as they are"));
     }
 
     let has_rgb = matches!(h.format, 2 | 3 | 5 | 7 | 8 | 10);
@@ -292,8 +295,13 @@ pub fn read<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<Crs>
     if total == 0 {
         return Ok((ds, report));
     }
-    let stride = total.div_ceil(MAX_POINTS as u64).max(1);
+    // A LAZ file is decompressed point by point: past MAX_DECOMPRESSED only its first points are
+    // read (and sampled), with a notice.
+    let readable = if h.compressed { total.min(MAX_DECOMPRESSED) } else { total };
+    let stride = readable.div_ceil(MAX_POINTS as u64).max(1);
     let mut points: Vec<Point> = Vec::new();
+    // The brightest colour value read (over every point decompressed, not only the sample).
+    let mut brightest = 0u16;
     let rec_len = usize::from(h.record_len);
     if h.compressed {
         let vlr = vlrs
@@ -301,11 +309,20 @@ pub fn read<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<Crs>
             .find(|v| v.user == "laszip encoded" && v.record == 22204)
             .ok_or_else(|| bad("a LAZ file without its laszip record"))?;
         if total > MAX_DECOMPRESSED {
-            return Err(DataError::Format(format!(
-                "{name}: {total} points is more than RustGIS decompresses ({MAX_DECOMPRESSED}); use a smaller extract"
-            )));
+            report
+                .messages
+                .push(format!("{name}: only its first {MAX_DECOMPRESSED} of {total} points are read (use a smaller extract for the rest)"));
         }
-        laz_points(&mut r, &h, &vlr.data, stride, &mut points)?;
+        let read = laz_points(&mut r, &h, &vlr.data, readable, stride, &mut points, &mut brightest)?;
+        if read < readable {
+            // A damaged or cut-off file: the points before the fault, or nothing to show.
+            if read == 0 {
+                return Err(bad(
+                    "its compressed points couldn't be read (a damaged file, or one written with a LAZ variant RustGIS doesn't read)",
+                ));
+            }
+            report.messages.push(format!("{name}: decompression stopped after {read} of {readable} points (a damaged or cut-off file)"));
+        }
     } else {
         let mut rec = vec![0u8; rec_len];
         let mut i = 0u64;
@@ -323,6 +340,7 @@ pub fn read<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<Crs>
                 break;
             }
             if let Some(p) = point(&h, &rec) {
+                brightest = brightest.max(p.rgb.map_or(0, |c| c.into_iter().max().unwrap_or(0)));
                 points.push(p);
             }
             i += stride;
@@ -331,8 +349,10 @@ pub fn read<R: Read + Seek + Send + Sync>(mut r: R, name: &str, crs: Option<Crs>
     if stride > 1 {
         report.messages.push(format!("{name}: {} of its {total} points are shown, evenly spread", points.len()));
     }
-    // Colours given in 16 bits (the standard) are shown in 8.
-    let wide = points.iter().any(|p| p.rgb.is_some_and(|c| c.iter().any(|v| *v > 255)));
+    // LAS colours are 16-bit by the standard, but some writers store 8-bit values: a file whose
+    // colours never pass 255 (over every point read) is taken as 8-bit. A 16-bit file that dark
+    // throughout can't be told apart, and shows dark either way.
+    let wide = brightest > 255;
     let mut lost = 0usize;
     for (id, p) in points.into_iter().enumerate() {
         let c = Coord::new(p.x, p.y);
@@ -378,27 +398,43 @@ fn read_up_to<R: Read>(r: &mut R, buf: &mut [u8]) -> Result<usize> {
     Ok(got)
 }
 
-/// Decompresses a LAZ file's points in order, keeping every `stride`-th.
-fn laz_points<R: Read + Seek + Send + Sync>(r: &mut R, h: &Header, vlr: &[u8], stride: u64, out: &mut Vec<Point>) -> Result<()> {
+/// Decompresses a LAZ file's first `count` points in order, keeping every `stride`-th; how many
+/// were decompressed (fewer when the file is damaged or cut off).
+fn laz_points<R: Read + Seek + Send + Sync>(
+    r: &mut R,
+    h: &Header,
+    vlr: &[u8],
+    count: u64,
+    stride: u64,
+    out: &mut Vec<Point>,
+    brightest: &mut u16,
+) -> Result<u64> {
     let vlr = laz::LazVlr::from_buffer(vlr).map_err(|e| DataError::Format(format!("LAZ: {e}")))?;
     r.seek(SeekFrom::Start(u64::from(h.point_offset)))?;
     let mut dec = laz::LasZipDecompressor::new(&mut *r, vlr).map_err(|e| DataError::Format(format!("LAZ: {e}")))?;
     let mut rec = vec![0u8; usize::from(h.record_len)];
-    for i in 0..h.count {
+    let mut read = 0u64;
+    for i in 0..count {
         if dec.decompress_one(&mut rec).is_err() {
             // A cut-off file: the points read so far.
             break;
         }
+        read += 1;
+        let p = point(h, &rec);
+        if let Some(c) = p.as_ref().and_then(|p| p.rgb) {
+            *brightest = (*brightest).max(c.into_iter().max().unwrap_or(0));
+        }
         if i % stride == 0
-            && let Some(p) = point(h, &rec)
+            && let Some(p) = p
         {
             out.push(p);
             if out.len() >= MAX_POINTS {
-                break;
+                // The sample is full: the rest of the points count as read.
+                return Ok(count);
             }
         }
     }
-    Ok(())
+    Ok(read)
 }
 
 /// Reads a LAS or LAZ file held in memory.
@@ -473,6 +509,26 @@ mod tests {
             b.extend_from_slice(&r);
         }
         b
+    }
+
+    #[test]
+    fn colours_and_cut_off_geokeys() {
+        // Colours that never pass 255 are 8-bit values, kept as they are.
+        let mut b = las(2, 2, &[(10.0, 50.0, 1.0, 2), (10.5, 50.5, 2.0, 2)], None);
+        for k in 0..2 {
+            let at = 227 + k * usize::from(RECORD_LEN[2]) + 20;
+            b[at..at + 6].copy_from_slice(&[200, 0, 100, 0, 50, 0]);
+        }
+        let (ds, _) = read_bytes(&b, "t", None).unwrap();
+        assert_eq!(&ds.features[0].attrs[4..], &[Value::Int(200), Value::Int(100), Value::Int(50)]);
+        // GeoTIFF keys claiming three entries but cut off after the first: its code stands.
+        let mut data = Vec::new();
+        for v in [1u16, 1, 0, 3, 3072, 0, 1, 32633] {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        data.extend_from_slice(&2048u16.to_le_bytes());
+        let keys = Vlr { user: "LASF_Projection".into(), record: 34735, data };
+        assert!(matches!(crs_of(&[keys]), Some(Ok(c)) if c == Crs::from_epsg(32633).unwrap()));
     }
 
     #[test]
