@@ -3439,6 +3439,16 @@ fn serve_ranges(body: Vec<u8>) -> (String, std::sync::Arc<std::sync::atomic::Ato
 /// [`serve_ranges`], or (`ranges` false) a server that ignores `Range` and answers every request
 /// with the whole file.
 fn serve_file(body: Vec<u8>, ranges: bool) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    serve_gated(body, ranges, None)
+}
+
+/// [`serve_file`] holding every answer until `gate` is set (a request still under way, for as long
+/// as a test needs).
+fn serve_gated(
+    body: Vec<u8>,
+    ranges: bool,
+    gate: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -3449,6 +3459,12 @@ fn serve_file(body: Vec<u8>, ranges: bool) -> (String, std::sync::Arc<std::sync:
             let Ok(mut s) = stream else { continue };
             let mut buf = [0u8; 4096];
             let read = s.read(&mut buf).unwrap_or(0);
+            if let Some(g) = &gate {
+                let start = std::time::Instant::now();
+                while !g.load(std::sync::atomic::Ordering::Relaxed) && start.elapsed() < std::time::Duration::from_secs(60) {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
             let req = String::from_utf8_lossy(&buf[..read]).to_ascii_lowercase();
             let range = req.lines().filter(|_| ranges).find_map(|l| l.strip_prefix("range: bytes=")).and_then(|r| {
                 let (a, b) = r.trim().split_once('-')?;
@@ -3896,13 +3912,16 @@ fn flatgeobuf_and_geoparquet_by_address_are_read_in_place() {
     assert_eq!(again.load_all().unwrap().features.len(), 40_000);
     // Copies of a layer still opening (undo snapshots, Load All Features) all open: they share
     // what opening brought, none takes it from the others.
-    let (other, _) = serve_ranges(fgb.clone());
+    // The server holds its answers, so the copies are made while the header is still on its way.
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (other, _) = serve_gated(fgb.clone(), true, Some(gate.clone()));
     let mut u = Session::new(Project::default());
     u.run("project.openText", &json!({"text": text.replace(&base, &other)})).unwrap();
     let mut a = u.map().layers.iter().find(|l| l.is_streamed()).unwrap().source.clone().unwrap();
     a.open().unwrap();
     assert!(!a.is_open() && a.is_pending(), "opened before its header was fetched");
     let mut b = a.clone();
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
     a.wait_open(std::time::Duration::from_secs(60));
     b.wait_open(std::time::Duration::from_secs(60));
     assert!(a.is_open() && b.is_open(), "{:?} {:?}", a.error, b.error);
