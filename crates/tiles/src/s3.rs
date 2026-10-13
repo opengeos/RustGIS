@@ -334,8 +334,20 @@ fn signer_for(url: &str) -> Option<(Connection, String)> {
     {
         return None;
     }
-    let bucket = aws_bucket(host, rest)?;
-    let c = all.iter().find(|c| c.credentials.is_some() && c.endpoint.is_none() && serves(c, &bucket))?;
+    let c = match aws_bucket(host, rest) {
+        Some(bucket) => all.iter().find(|c| c.credentials.is_some() && c.endpoint.is_none() && serves(c, &bucket))?,
+        // The service itself (`https://s3.<region>.amazonaws.com/`, no bucket): the account's
+        // bucket list (`buckets_url`), signed by an AWS connection of that region. It names no
+        // bucket, so no one else's server sees the request.
+        None => {
+            let path = rest.split_once('/').map(|(_, p)| p).unwrap_or("");
+            let region = host.strip_prefix("s3.").and_then(|r| r.strip_suffix(".amazonaws.com"))?;
+            if !path.split(['?', '#']).next().unwrap_or("").is_empty() {
+                return None;
+            }
+            all.iter().find(|c| c.credentials.is_some() && c.endpoint.is_none() && c.region == region)?
+        }
+    };
     // The region the address names (s3.<region>.amazonaws.com), else the connection's.
     let after = host
         .rsplit_once(".s3.")
@@ -906,6 +918,12 @@ mod tests {
         ] {
             assert!(!prepare(other).unwrap().signed, "{other}");
         }
+        // The account's bucket list (the service root of its region) is signed; another region's
+        // root, and the root with a path, aren't.
+        let c = connection("rule-aws").unwrap();
+        let p = prepare(&buckets_url(&c)).unwrap();
+        assert!(p.signed && p.headers.iter().any(|(k, v)| k == "authorization" && v.contains("/eu-west-1/s3/aws4_request")));
+        assert!(!prepare("https://s3.us-east-1.amazonaws.com/").unwrap().signed);
         disconnect("rule-endpoint");
         disconnect("rule-aws");
         assert!(!prepare("s3://rule-granted/k").unwrap().signed, "grants go with the connection");
