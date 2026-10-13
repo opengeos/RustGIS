@@ -186,7 +186,9 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     }
     // Read a chunk at a time, so a body larger than allowed (whatever its header said) is cut
     // off as soon as it is, never held whole.
-    let mut bytes: Vec<u8> = Vec::new();
+    // Sized by the header when there is one (checked above), so the chunks don't reallocate.
+    let len = resp.headers().get("content-length").ok().flatten().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let mut bytes: Vec<u8> = Vec::with_capacity(usize::try_from(len.min(max)).unwrap_or(0));
     if let Some(body) = resp.body() {
         let reader: web_sys::ReadableStreamDefaultReader =
             body.get_reader().dyn_into().map_err(|_| "the response has no readable body".to_string())?;

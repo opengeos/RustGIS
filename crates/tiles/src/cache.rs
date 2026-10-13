@@ -270,11 +270,23 @@ pub fn download(url: &str, done: Done) {
     }
 }
 
-/// Downloads a file the user named, waiting for it (the command line; never on the frame).
+/// How long a download the caller waits for may take: commands run where the app waits too (the
+/// AI Assistant's), so a large file comes through Add Data › From URL, which downloads off the
+/// frame.
+#[cfg(not(target_arch = "wasm32"))]
+pub const BLOCKING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Downloads a file the user named, waiting for it (at most [`BLOCKING_TIMEOUT`]).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_blocking(url: &str) -> Result<Vec<u8>, String> {
     crate::address::check(url, None)?;
-    native::get(&native::download_agent(), &format!("{DOWNLOAD}{url}"))
+    native::get(&native::download_agent(BLOCKING_TIMEOUT), &format!("{DOWNLOAD}{url}")).map_err(|e| {
+        if e.contains("timeout") || e.contains("timed out") {
+            format!("{e} (a large file: add it with Add Data › From URL, which downloads in the background)")
+        } else {
+            e
+        }
+    })
 }
 
 /// Fetches an address's bytes, uncached (through the browser's fetcher, or the worker threads).
@@ -487,9 +499,9 @@ mod native {
     }
 
     /// An agent for downloads, which may take minutes.
-    pub(super) fn download_agent() -> ureq::Agent {
+    pub(super) fn download_agent(timeout: std::time::Duration) -> ureq::Agent {
         ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(900)))
+            .timeout_global(Some(timeout))
             .user_agent(concat!("RustGIS/", env!("CARGO_PKG_VERSION"), " (+https://rustgis.app)"))
             .max_redirects(0)
             .build()
@@ -498,7 +510,7 @@ mod native {
 
     /// Downloads on a thread of its own, so a large file doesn't hold up the tiles.
     pub(super) fn download(url: String, done: Done) {
-        std::thread::spawn(move || done(get(&download_agent(), &url)));
+        std::thread::spawn(move || done(get(&download_agent(std::time::Duration::from_secs(900)), &url)));
     }
 
     fn work() {

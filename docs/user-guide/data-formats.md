@@ -53,8 +53,9 @@ app downloads in the background and adds the layer when the file arrives (to the
 started in: opening another meanwhile drops it). A `.pmtiles` address is added as a tile layer
 and read a tile at a time instead.
 
-`layer.addUrl` waits for the download, which suits the command line, MCP and the desktop app's
-assistant. In the web app, where nothing may wait, it adds `.pmtiles` addresses only; other files
+`layer.addUrl` waits for the download, up to a minute, which suits the command line, MCP and the
+desktop app's assistant; a larger file comes through the From URL… dialog, which downloads in the
+background. In the web app, where nothing may wait, it adds `.pmtiles` addresses only; other files
 come through the From URL… dialog (`ui.addUrl`). GeoJSON, CSV, KML and GPX files are read up to
 256 MB; larger downloads (GeoParquet, FlatGeobuf, GeoPackage, GeoTIFF) up to the limits above.
 

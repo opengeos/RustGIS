@@ -1506,6 +1506,10 @@ impl RustGisApp {
             match r {
                 Ok(bytes) => {
                     if !self.session.download_landed(id, bytes) {
+                        self.session.notify(
+                            i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", &url)]),
+                            false,
+                        );
                         continue;
                     }
                     p["id"] = json!(id);

@@ -66,7 +66,16 @@ pub fn sniff_extension(bytes: &[u8]) -> Option<&'static str> {
     let head = bytes.get(..bytes.len().min(4096)).unwrap_or(bytes);
     let text = String::from_utf8_lossy(head);
     let start = text.trim_start_matches(['\u{feff}', ' ', '\t', '\r', '\n']);
-    let first_line = start.lines().next().unwrap_or("");
+    let mut lines = start.lines().filter(|l| !l.trim().is_empty());
+    let (first_line, second_line) = (lines.next().unwrap_or(""), lines.next());
+    // A separator splitting the first two lines alike (a header and a row): not a sentence with a
+    // comma, such as a plain-text error.
+    let split_alike = second_line.is_some_and(|second| {
+        [',', ';', '\t', '|'].iter().any(|&c| {
+            let n = first_line.matches(c).count();
+            n > 0 && second.matches(c).count() == n
+        })
+    });
     Some(match bytes {
         [b'P', b'A', b'R', b'1', ..] => "parquet",
         [b'f', b'g', b'b', ..] => "fgb",
@@ -76,13 +85,8 @@ pub fn sniff_extension(bytes: &[u8]) -> Option<&'static str> {
         _ if start.starts_with('{') || start.starts_with('[') => "geojson",
         _ if start.starts_with('<') && text.contains("<kml") => "kml",
         _ if start.starts_with('<') && text.contains("<gpx") => "gpx",
-        // Text whose first line is split by a separator, and no control characters.
-        _ if !start.starts_with('<')
-            && first_line.contains([',', ';', '\t', '|'])
-            && !head.iter().any(|&b| b < 9 || (b > 13 && b < 32)) =>
-        {
-            "csv"
-        }
+        // Text whose first two lines a separator splits alike, and no control characters.
+        _ if !start.starts_with('<') && split_alike && !head.iter().any(|&b| b < 9 || (b > 13 && b < 32)) => "csv",
         _ => return None,
     })
 }
@@ -1354,6 +1358,29 @@ fn group_rings(rings: Vec<(Vec<Coord>, bool)>) -> Geometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formats_by_contents() {
+        let cases: [(&[u8], Option<&str>); 11] = [
+            (b"PAR1\0\0", Some("parquet")),
+            (b"fgb\x03fgb\0", Some("fgb")),
+            (b"II*\0\x08\0", Some("tif")),
+            (b"PK\x03\x04", Some("zip")),
+            (b"SQLite format 3\0", Some("gpkg")),
+            (b"\xef\xbb\xbf  {\"type\":\"FeatureCollection\"}", Some("geojson")),
+            (b"<?xml version=\"1.0\"?><kml xmlns=\"\">", Some("kml")),
+            (b"name;lon;lat\r\nA;7;45\r\n", Some("csv")),
+            (b"name\tlon\tlat\n\nA\t7\t45", Some("csv")),
+            // A sentence with a comma isn't a table, nor a header alone.
+            (b"Not found, try again later.\n", None),
+            (b"name,lon,lat", None),
+        ];
+        for (bytes, want) in cases {
+            assert_eq!(sniff_extension(bytes), want, "{:?}", String::from_utf8_lossy(bytes));
+        }
+        assert_eq!(sniff_extension(b"a,b\n1,2,3\n"), None);
+        assert_eq!(sniff_extension(b"a,b\n1,\x01\n"), None);
+    }
 
     #[test]
     fn geojson_roundtrip() {
