@@ -14,6 +14,7 @@ pub mod kml;
 pub mod landxml;
 pub mod mapinfo;
 pub mod mbtiles;
+pub mod ogc;
 pub mod osm;
 pub mod query;
 pub mod raster;
