@@ -195,7 +195,7 @@ pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: V
     // gather in one.
     if rustgis_data::photo::is_photo_name(&name) {
         let layer = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(super::layer::PHOTOS).to_string();
-        return super::layer::add_photos_to(s, &layer, &[(name, bytes)]);
+        return super::layer::add_photos_to(s, &layer, |reader| reader.add(&name, &bytes));
     }
     if raster::is_raster_name(&name) {
         let r = raster::read_bytes(&name, &bytes).map_err(|e| format!("{name}: {e}"))?;

@@ -47,31 +47,32 @@ fn exif_block(bytes: &[u8]) -> Option<&[u8]> {
     let mut at = 2usize;
     for _ in 0..MAX_SEGMENTS {
         // Fill bytes before a marker.
-        while bytes.get(at) == Some(&0xFF) && bytes.get(at + 1) == Some(&0xFF) {
-            at += 1;
+        while bytes.get(at) == Some(&0xFF) && bytes.get(at.checked_add(1)?) == Some(&0xFF) {
+            at = at.checked_add(1)?;
         }
         if bytes.get(at)? != &0xFF {
             return None;
         }
-        let marker = *bytes.get(at + 1)?;
+        let marker = *bytes.get(at.checked_add(1)?)?;
         // Start of scan, or end of image: no EXIF before the picture.
         if marker == 0xDA || marker == 0xD9 {
             return None;
         }
         // Markers without a length.
         if (0xD0..=0xD7).contains(&marker) || marker == 0x01 {
-            at += 2;
+            at = at.checked_add(2)?;
             continue;
         }
-        let len = usize::from(u16::from_be_bytes([*bytes.get(at + 2)?, *bytes.get(at + 3)?]));
+        let len = usize::from(u16::from_be_bytes([*bytes.get(at.checked_add(2)?)?, *bytes.get(at.checked_add(3)?)?]));
         if len < 2 {
             return None;
         }
-        let body = bytes.get(at + 4..at + 2 + len)?;
+        let end = at.checked_add(2)?.checked_add(len)?;
+        let body = bytes.get(at.checked_add(4)?..end)?;
         if marker == 0xE1 && body.starts_with(b"Exif\0\0") {
             return body.get(6..);
         }
-        at += 2 + len;
+        at = end;
     }
     None
 }
@@ -108,10 +109,11 @@ impl<'a> Tiff<'a> {
         (0..usize::from(n).min(MAX_ENTRIES))
             .filter_map(|i| {
                 let e = offset.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
-                let (tag, ty, count) = (self.u16(e)?, self.u16(e + 2)?, self.u32(e + 4)?);
+                let (tag, ty, count) = (self.u16(e)?, self.u16(e.checked_add(2)?)?, self.u32(e.checked_add(4)?)?);
                 let size = type_size(ty)?.checked_mul(usize::try_from(count).ok()?)?;
                 // Four bytes or fewer sit in the entry itself; more, at the offset it holds.
-                let at = if size <= 4 { e + 8 } else { usize::try_from(self.u32(e + 8)?).ok()? };
+                let value = e.checked_add(8)?;
+                let at = if size <= 4 { value } else { usize::try_from(self.u32(value)?).ok()? };
                 self.b.get(at..at.checked_add(size)?)?;
                 Some(Entry { tag, ty, count: usize::try_from(count).ok()?, at })
             })
@@ -123,7 +125,7 @@ impl<'a> Tiff<'a> {
             return None;
         }
         let at = e.at.checked_add(i.checked_mul(8)?)?;
-        let (n, d) = (self.u32(at)?, self.u32(at + 4)?);
+        let (n, d) = (self.u32(at)?, self.u32(at.checked_add(4)?)?);
         let (n, d) = if e.ty == 10 { (f64::from(n as i32), f64::from(d as i32)) } else { (f64::from(n), f64::from(d)) };
         (d != 0.0).then_some(n / d).filter(|v| v.is_finite())
     }
@@ -152,11 +154,17 @@ impl<'a> Tiff<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Entry {
     tag: u16,
     ty: u16,
     count: usize,
     at: usize,
+}
+
+/// The entry with `tag`, if there is one.
+fn find(es: &[Entry], tag: u16) -> Option<&Entry> {
+    es.iter().find(|e| e.tag == tag)
 }
 
 fn type_size(ty: u16) -> Option<usize> {
@@ -173,28 +181,27 @@ fn type_size(ty: u16) -> Option<usize> {
 pub fn read_exif(bytes: &[u8]) -> Option<Exif> {
     let t = Tiff::new(exif_block(bytes)?)?;
     let ifd0 = t.entries(usize::try_from(t.u32(4)?).ok()?);
-    let find = |es: &[Entry], tag: u16| es.iter().position(|e| e.tag == tag);
     let mut x = Exif { orientation: 1, ..Exif::default() };
-    x.make = find(&ifd0, 0x010F).and_then(|i| t.ascii(&ifd0[i]));
-    x.model = find(&ifd0, 0x0110).and_then(|i| t.ascii(&ifd0[i]));
-    x.orientation = find(&ifd0, 0x0112).and_then(|i| t.short(&ifd0[i])).filter(|o| (1..=8).contains(o)).unwrap_or(1);
+    x.make = find(&ifd0, 0x010F).and_then(|e| t.ascii(e));
+    x.model = find(&ifd0, 0x0110).and_then(|e| t.ascii(e));
+    x.orientation = find(&ifd0, 0x0112).and_then(|e| t.short(e)).filter(|o| (1..=8).contains(o)).unwrap_or(1);
     let tidy =
         |s: String| (s.len() >= 19).then(|| format!("{} {}", s.get(..10).unwrap_or("").replace(':', "-"), s.get(11..19).unwrap_or("")));
     if let Some(exif) = t.pointer(&ifd0, 0x8769) {
         let es = t.entries(exif);
-        x.time = find(&es, 0x9003).and_then(|i| t.ascii(&es[i])).and_then(tidy);
+        x.time = find(&es, 0x9003).and_then(|e| t.ascii(e)).and_then(tidy);
     }
     if x.time.is_none() {
-        x.time = find(&ifd0, 0x0132).and_then(|i| t.ascii(&ifd0[i])).and_then(tidy);
+        x.time = find(&ifd0, 0x0132).and_then(|e| t.ascii(e)).and_then(tidy);
     }
     if let Some(gps) = t.pointer(&ifd0, 0x8825) {
         let es = t.entries(gps);
         let dms = |tag: u16| {
-            let e = &es[find(&es, tag)?];
+            let e = find(&es, tag)?;
             let (d, m, s) = (t.rational(e, 0)?, t.rational(e, 1).unwrap_or(0.0), t.rational(e, 2).unwrap_or(0.0));
             Some(d + m / 60.0 + s / 3600.0)
         };
-        let reference = |tag: u16| find(&es, tag).and_then(|i| t.ascii(&es[i])).unwrap_or_default().to_ascii_uppercase();
+        let reference = |tag: u16| find(&es, tag).and_then(|e| t.ascii(e)).unwrap_or_default().to_ascii_uppercase();
         if let (Some(lat), Some(lon)) = (dms(0x0002), dms(0x0004)) {
             let lat = if reference(0x0001).starts_with('S') { -lat } else { lat };
             let lon = if reference(0x0003).starts_with('W') { -lon } else { lon };
@@ -203,17 +210,14 @@ pub fn read_exif(bytes: &[u8]) -> Option<Exif> {
                 x.position = Some((lon, lat));
             }
         }
-        x.altitude = find(&es, 0x0006).and_then(|i| t.rational(&es[i], 0)).map(|a| {
-            let below = find(&es, 0x0005).and_then(|i| t.short(&es[i])) == Some(1);
+        x.altitude = find(&es, 0x0006).and_then(|e| t.rational(e, 0)).map(|a| {
+            let below = find(&es, 0x0005).and_then(|e| t.short(e)) == Some(1);
             if below { -a } else { a }
         });
-        x.direction = find(&es, 0x0011).and_then(|i| t.rational(&es[i], 0)).filter(|d| (0.0..=360.0).contains(d));
+        x.direction = find(&es, 0x0011).and_then(|e| t.rational(e, 0)).filter(|d| (0.0..=360.0).contains(d));
         if x.time.is_none() {
-            let date = find(&es, 0x001D).and_then(|i| t.ascii(&es[i]));
-            let hms = find(&es, 0x0007).and_then(|i| {
-                let e = &es[i];
-                Some((t.rational(e, 0)?, t.rational(e, 1)?, t.rational(e, 2)?))
-            });
+            let date = find(&es, 0x001D).and_then(|e| t.ascii(e));
+            let hms = find(&es, 0x0007).and_then(|e| Some((t.rational(e, 0)?, t.rational(e, 1)?, t.rational(e, 2)?)));
             if let (Some(d), Some((h, m, s))) = (date, hms) {
                 x.time = Some(format!("{} {:02}:{:02}:{:02} UTC", d.replace(':', "-"), h as u32, m as u32, s as u32));
             }
@@ -299,35 +303,82 @@ pub fn feature(file: &str, bytes: &[u8], id: u64) -> std::result::Result<Feature
     })
 }
 
+/// Builds a photo layer one photo at a time, so only one file's bytes need be held at once.
+/// Photos without a GPS position (or unreadable) are left out and named in the report.
+pub struct Reader {
+    ds: Dataset,
+    report: ReadReport,
+    left_out: Vec<String>,
+    room: usize,
+    over: bool,
+}
+
+impl Reader {
+    /// A reader for a layer named `name` that takes at most `room` photos (and never more than
+    /// [`MAX_PHOTOS`]).
+    pub fn new(name: &str, room: usize) -> Reader {
+        Reader {
+            ds: Dataset::new(name, GeometryType::Point, fields()),
+            report: ReadReport::default(),
+            left_out: Vec::new(),
+            room: room.min(MAX_PHOTOS),
+            over: false,
+        }
+    }
+
+    /// Whether the layer is full: further photos would be left out.
+    pub fn is_full(&self) -> bool {
+        self.ds.features.len() >= self.room
+    }
+
+    /// Reads one photo (its file name and contents).
+    pub fn add(&mut self, file: &str, bytes: &[u8]) {
+        if self.is_full() {
+            self.left_over(1);
+            return;
+        }
+        match feature(file, bytes, self.ds.features.len() as u64) {
+            Ok(f) => self.ds.features.push(f),
+            Err(e) => self.leave_out(e),
+        }
+    }
+
+    /// A photo that could not be read at all (`why` names it).
+    pub fn leave_out(&mut self, why: String) {
+        self.report.skipped += 1;
+        self.left_out.push(why);
+    }
+
+    /// `n` photos left out because the layer is full.
+    pub fn left_over(&mut self, n: usize) {
+        self.report.skipped += n;
+        self.over |= n > 0;
+    }
+
+    /// The layer and its report.
+    pub fn finish(mut self) -> (Dataset, ReadReport) {
+        let left_out = &self.left_out;
+        if !left_out.is_empty() {
+            let shown: Vec<&str> = left_out.iter().take(10).map(String::as_str).collect();
+            let more = if left_out.len() > 10 { format!(" (and {} more)", left_out.len() - 10) } else { String::new() };
+            let what = if left_out.len() == 1 { "1 photo".to_string() } else { format!("{} photos", left_out.len()) };
+            self.report.messages.push(format!("{what} left out: {}{more}", shown.join("; ")));
+        }
+        if self.over {
+            self.report.messages.push(format!("a photo layer holds up to {MAX_PHOTOS} photos; the rest were left out"));
+        }
+        (self.ds, self.report)
+    }
+}
+
 /// Photos as a point layer named `name`: those without a GPS position (or unreadable) are left
 /// out and named in the report.
 pub fn read(name: &str, photos: &[(String, Vec<u8>)]) -> (Dataset, ReadReport) {
-    let mut ds = Dataset::new(name, GeometryType::Point, fields());
-    let mut report = ReadReport::default();
-    let mut left_out = Vec::new();
+    let mut r = Reader::new(name, MAX_PHOTOS);
     for (file, bytes) in photos {
-        if ds.features.len() >= MAX_PHOTOS {
-            report.skipped += 1;
-            continue;
-        }
-        match feature(file, bytes, ds.features.len() as u64) {
-            Ok(f) => ds.features.push(f),
-            Err(e) => {
-                report.skipped += 1;
-                left_out.push(e);
-            }
-        }
+        r.add(file, bytes);
     }
-    if !left_out.is_empty() {
-        let shown: Vec<&str> = left_out.iter().take(10).map(String::as_str).collect();
-        let more = if left_out.len() > 10 { format!(" (and {} more)", left_out.len() - 10) } else { String::new() };
-        let what = if left_out.len() == 1 { "1 photo".to_string() } else { format!("{} photos", left_out.len()) };
-        report.messages.push(format!("{what} left out: {}{more}", shown.join("; ")));
-    }
-    if photos.len() > MAX_PHOTOS {
-        report.messages.push(format!("a photo layer holds up to {MAX_PHOTOS} photos; the rest were left out"));
-    }
-    (ds, report)
+    r.finish()
 }
 
 /// A small JPEG with an EXIF block, for tests: a little-endian or big-endian TIFF with IFD0 (make, model,
@@ -478,5 +529,42 @@ mod tests {
         let _ = read_exif(&junk);
         assert!(read_exif(b"not a jpeg").is_none());
         assert!(is_photo_name("A.JPG") && is_photo_name("b.jpeg") && !is_photo_name("c.png"));
+    }
+
+    #[test]
+    fn offsets_near_the_top_of_the_address_space_are_none() {
+        // Exif and GPS pointers and a value offset near u32::MAX: on 32-bit wasm, usize is u32,
+        // so any unchecked addition would overflow.
+        for le in [true, false] {
+            let w16 = |v: u16| if le { v.to_le_bytes() } else { v.to_be_bytes() };
+            let w32 = |v: u32| if le { v.to_le_bytes() } else { v.to_be_bytes() };
+            let mut tiff = if le { b"II*\0".to_vec() } else { b"MM\0*".to_vec() };
+            tiff.extend(w32(8));
+            tiff.extend(w16(3));
+            for (tag, ty, count, value) in [(0x8769u16, 4u16, 1u32, u32::MAX - 3), (0x8825, 4, 1, u32::MAX), (0x010F, 2, 64, u32::MAX - 7)]
+            {
+                tiff.extend(w16(tag));
+                tiff.extend(w16(ty));
+                tiff.extend(w32(count));
+                tiff.extend(w32(value));
+            }
+            let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+            jpeg.extend(u16::try_from(tiff.len() + 8).unwrap_or(0).to_be_bytes());
+            jpeg.extend(b"Exif\0\0");
+            jpeg.extend(&tiff);
+            jpeg.extend([0xFF, 0xD9]);
+            let x = read_exif(&jpeg).unwrap_or_default();
+            assert!(x.position.is_none() && x.make.is_none() && x.time.is_none());
+            let t = Tiff { b: &tiff, le };
+            for top in [u32::MAX as usize, usize::MAX, usize::MAX - 1, usize::MAX - 11] {
+                assert!(t.entries(top).is_empty() && t.u16(top).is_none() && t.u32(top).is_none());
+                let e = Entry { tag: 2, ty: 5, count: 3, at: top };
+                assert!(t.rational(&e, 0).is_none() && t.rational(&e, 2).is_none());
+                assert!(t.ascii(&Entry { ty: 2, ..e }).is_none() && t.short(&Entry { ty: 1, ..e }).is_none());
+                assert!(t.pointer(&[Entry { tag: 0x8825, ty: 4, count: 1, at: top }], 0x8825).is_none());
+            }
+        }
+        // A JPEG segment length that would run past the end.
+        assert!(read_exif(&[0xFF, 0xD8, 0xFF, 0xE1, 0xFF, 0xFF, b'E']).is_none());
     }
 }

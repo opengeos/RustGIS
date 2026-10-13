@@ -4236,5 +4236,28 @@ fn geotagged_photos_become_a_photo_layer() {
     // Nothing to add: an error, and nothing added.
     assert!(s.run("layer.addPhotos", &json!({})).is_err());
     assert!(s.run("layer.addPhotos", &json!({"paths": [dir.join("plain.jpg").display().to_string()]})).is_err());
+    // Joining a layer one photo short of full: the first photo by name is added, the rest are
+    // left out (and never read), and the map zooms to the photo added, not the far-off one.
+    let near = dir.join("near-full");
+    std::fs::create_dir_all(&near).unwrap();
+    std::fs::write(near.join("b-far.jpg"), photo::example(true, (10.0, "S"), (50.0, "W"))).unwrap();
+    std::fs::write(near.join("a-near.jpg"), photo::example(true, (43.4674, "N"), (11.8851, "E"))).unwrap();
+    let id = s.map().layer_by_name("Photos").unwrap().id;
+    let l = s.map_mut().layer_mut(id).unwrap();
+    let first = l.dataset.features[0].clone();
+    while l.dataset.features.len() < photo::MAX_PHOTOS - 1 {
+        l.dataset.push(first.geometry.clone(), first.attrs.clone());
+    }
+    let r = s.run("layer.addPhotos", &json!({"folder": near.display().to_string()})).unwrap();
+    assert_eq!((r["photos"].as_u64(), r["skipped"].as_u64()), (Some(1), Some(1)), "{r}");
+    let l = s.map().layer_by_name("Photos").unwrap();
+    assert_eq!(l.dataset.features.len(), photo::MAX_PHOTOS);
+    assert_eq!(l.dataset.features.last().unwrap().attrs[0], rustgis_data::Value::Text("a-near".into()));
+    let c = rustgis_geom::merc_to_lonlat(s.map().camera.center);
+    assert!((c.x - 11.8851).abs() < 0.01 && (c.y - 43.4674).abs() < 0.01, "zoomed to {c:?}");
+    // Full: nothing more is added, and that's said.
+    let r = s.run("layer.addPhotos", &json!({"folder": near.display().to_string()}));
+    assert!(r.is_err_and(|e| e.contains("up to")));
+    assert_eq!(s.map().layer_by_name("Photos").unwrap().dataset.features.len(), photo::MAX_PHOTOS);
     let _ = std::fs::remove_dir_all(dir);
 }

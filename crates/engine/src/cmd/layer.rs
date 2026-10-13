@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rustgis_data::GeometryType;
+use rustgis_data::{GeometryType, photo};
 use rustgis_map::{ClassMethod, Marker, Ramp, Renderer, Rgba};
 use serde_json::{Value, json};
 
@@ -294,29 +294,31 @@ pub fn add_dataset(s: &mut Session, mut ds: rustgis_data::Dataset) -> u32 {
 /// The photo layer single photos join (added by Add Data, dropped or uploaded one at a time).
 pub(crate) const PHOTOS: &str = "Photos";
 
-/// Adds photos (file names and contents) as points: to the photo layer named `name` when there is
-/// one, else to a new one. Photos without a GPS position are left out and named in a notice.
-pub(crate) fn add_photos_to(s: &mut Session, name: &str, photos: &[(String, Vec<u8>)]) -> CmdResult {
-    use rustgis_data::photo;
-    let (ds, report) = photo::read(name, photos);
+/// Adds photos as points: to the photo layer named `name` when there is one, else to a new one.
+/// `feed` hands the reader one photo at a time, so only one file's bytes are held at once; the
+/// reader stops taking photos when the layer is full. Photos without a GPS position are left out
+/// and named in a notice.
+pub(crate) fn add_photos_to(s: &mut Session, name: &str, feed: impl FnOnce(&mut photo::Reader)) -> CmdResult {
+    let existing = s.map().layers.iter().find(|l| l.name == name && photo::is_photo_layer(&l.dataset)).map(|l| l.id);
+    let held = existing.and_then(|id| s.map().layer(id)).map_or(0, |l| l.dataset.features.len());
+    let room = photo::MAX_PHOTOS.saturating_sub(held);
+    let mut reader = photo::Reader::new(name, room);
+    feed(&mut reader);
+    let (ds, report) = reader.finish();
     for m in &report.messages {
         s.notify(m.clone(), false);
     }
     if ds.features.is_empty() {
         return Err(report.messages.first().cloned().unwrap_or_else(|| "no photo with a GPS position".into()));
     }
-    let added = ds.features.len();
-    let extent = ds.extent();
-    let existing = s.map().layers.iter().find(|l| l.name == name && photo::is_photo_layer(&l.dataset)).map(|l| l.id);
+    // The reader took no more than there is room for; `take` keeps that so if it ever changes.
+    let added = ds.features.len().min(room);
+    let extent =
+        ds.features.iter().take(added).filter_map(|f| f.geometry.as_ref()).fold(rustgis_geom::Extent::EMPTY, |e, g| e.union(&g.extent()));
     let id = match existing {
         Some(id) => {
             let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
-            let room = photo::MAX_PHOTOS.saturating_sub(l.dataset.features.len());
-            if room < added {
-                s.notify(format!("{name} holds up to {} photos; {} were left out", photo::MAX_PHOTOS, added - room), false);
-            }
-            let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
-            for f in ds.features.into_iter().take(room) {
+            for f in ds.features.into_iter().take(added) {
                 l.dataset.push(f.geometry, f.attrs);
             }
             l.touch_geometry();
@@ -329,6 +331,10 @@ pub(crate) fn add_photos_to(s: &mut Session, name: &str, photos: &[(String, Vec<
     Ok(json!({"layer": id, "photos": added, "skipped": report.skipped}))
 }
 
+/// The most folder entries `layer.addPhotos` lists (it keeps the first photos by name).
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_LISTED: usize = 100_000;
+
 /// `layer.addPhotos`: photo files (or every JPEG in a folder) as points.
 fn add_photos(s: &mut Session, p: &Value) -> CmdResult {
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(PHOTOS).to_string();
@@ -339,7 +345,6 @@ fn add_photos(s: &mut Session, p: &Value) -> CmdResult {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use rustgis_data::photo;
         let mut paths: Vec<std::path::PathBuf> = p
             .get("paths")
             .and_then(Value::as_array)
@@ -350,10 +355,12 @@ fn add_photos(s: &mut Session, p: &Value) -> CmdResult {
             .collect();
         if let Some(folder) = ps(p, "folder").map(str::trim).filter(|f| !f.is_empty()) {
             let entries = std::fs::read_dir(folder).map_err(|e| format!("{folder}: {e}"))?;
+            // Sorted by name before the reader takes the first photos, so which ones are kept
+            // doesn't depend on the order the folder lists them in.
             let mut found: Vec<std::path::PathBuf> = entries
                 .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.is_file() && photo::is_photo_name(&p.to_string_lossy()))
-                .take(photo::MAX_PHOTOS + 1)
+                .filter(|p| photo::is_photo_name(&p.to_string_lossy()) && p.is_file())
+                .take(MAX_LISTED)
                 .collect();
             found.sort();
             paths.extend(found);
@@ -361,24 +368,26 @@ fn add_photos(s: &mut Session, p: &Value) -> CmdResult {
         if paths.is_empty() {
             return Err("give \"paths\" (photo files) or a \"folder\" of photos".into());
         }
-        let mut photos = Vec::new();
-        for path in paths.iter().take(photo::MAX_PHOTOS) {
-            let shown = path.display().to_string();
-            match std::fs::metadata(path) {
-                Ok(m) if m.len() as usize > photo::MAX_BYTES => {
-                    s.notify(format!("{shown}: larger than {} MB", photo::MAX_BYTES >> 20), true)
+        add_photos_to(s, &name, |reader| {
+            for (i, path) in paths.iter().enumerate() {
+                if reader.is_full() {
+                    reader.left_over(paths.len() - i);
+                    break;
                 }
-                Ok(_) => match std::fs::read(path) {
-                    Ok(b) => photos.push((shown, b)),
-                    Err(e) => s.notify(format!("{shown}: {e}"), true),
-                },
-                Err(e) => s.notify(format!("{shown}: {e}"), true),
+                let shown = path.display().to_string();
+                match std::fs::metadata(path) {
+                    Ok(m) if m.len() > photo::MAX_BYTES as u64 => {
+                        reader.leave_out(format!("{shown}: larger than {} MB", photo::MAX_BYTES >> 20))
+                    }
+                    // Read, parsed and thumbnailed, then the bytes are dropped before the next.
+                    Ok(_) => match std::fs::read(path) {
+                        Ok(bytes) => reader.add(&shown, &bytes),
+                        Err(e) => reader.leave_out(format!("{shown}: {e}")),
+                    },
+                    Err(e) => reader.leave_out(format!("{shown}: {e}")),
+                }
             }
-        }
-        if paths.len() > photo::MAX_PHOTOS {
-            s.notify(format!("a photo layer holds up to {} photos; the rest were left out", photo::MAX_PHOTOS), false);
-        }
-        add_photos_to(s, &name, &photos)
+        })
     }
 }
 
