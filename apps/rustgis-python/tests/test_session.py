@@ -46,6 +46,11 @@ def test_errors_raise_rustgis_error(sample):
         sample.layer("No such layer").to_geojson()
 
 
+def test_parameters_must_be_json(sample):
+    with pytest.raises(ValueError, match="finite"):
+        sample.run("map.setScale", scale=float("nan"))
+
+
 def test_geojson_round_trip(sample):
     collection = sample.layer("Cities").to_geojson()
     assert collection["type"] == "FeatureCollection" and len(collection["features"]) > 200

@@ -152,7 +152,11 @@ class Session:
         """
         merged: Dict[str, Any] = dict(params or {})
         merged.update(kwargs)
-        text = self._engine.run(command, json.dumps(merged, default=_jsonable) if merged else "")
+        try:
+            encoded = json.dumps(merged, default=_jsonable, allow_nan=False) if merged else ""
+        except ValueError as e:
+            raise ValueError(f"{command}: parameters must be finite numbers, text, lists and dicts ({e})") from e
+        text = self._engine.run(command, encoded)
         return json.loads(text)
 
     def commands(self) -> List[Dict[str, Any]]:
@@ -241,7 +245,7 @@ class Session:
             params["name"] = name
         return self.run("layer.addData", path=os.fspath(path), **params)
 
-    def add_geojson(self, data: Union[Dict[str, Any], str], name: str = "GeoJSON") -> Any:
+    def add_geojson(self, data: Union[Dict[str, Any], str, PathLike], name: str = "GeoJSON") -> Any:
         """Adds GeoJSON as a layer.
 
         Args:
@@ -249,7 +253,7 @@ class Session:
             name: The layer's name.
         """
         if isinstance(data, dict):
-            text = json.dumps(data, default=_jsonable)
+            text = json.dumps(data, default=_jsonable, allow_nan=False)
         elif isinstance(data, str) and data.lstrip().startswith("{"):
             text = data
         else:
