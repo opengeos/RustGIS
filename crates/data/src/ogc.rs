@@ -612,10 +612,13 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         return Err(format!("an ArcGIS services directory: open one of its services ({})", names.join(", ")));
     }
     // Feature layers (FeatureServer, and a MapServer's layers): queried as GeoJSON, so only from a
-    // service that allows queries (a cached basemap's capabilities are often just "Map,Tilemap").
+    // service that allows queries: "Query", or "Data" on a MapServer (a cached basemap's
+    // capabilities are often just "Map,Tilemap").
     let features = |service: &mut Service| {
-        let queries =
-            v.get("capabilities").and_then(|c| c.as_str()).is_none_or(|c| c.split(',').any(|k| k.trim().eq_ignore_ascii_case("query")));
+        let queries = v
+            .get("capabilities")
+            .and_then(|c| c.as_str())
+            .is_none_or(|c| c.split(',').any(|k| ["query", "data"].iter().any(|q| k.trim().eq_ignore_ascii_case(q))));
         if !queries {
             if v.get("layers").and_then(|l| l.as_array()).is_some_and(|a| !a.is_empty()) {
                 service.notes.push("the service doesn't allow queries, so its layers' features can't be read".into());
@@ -1099,6 +1102,8 @@ mod tests {
         assert!(s.notes.iter().any(|n| n.contains("doesn't allow queries")), "{:?}", s.notes);
         let queried = street.replace(r#""mapName""#, r#""capabilities": "Map,Query,Data", "mapName""#);
         assert_eq!(parse("https://x.org/arcgis/rest/services/S/MapServer", queried.as_bytes()).unwrap().layers.len(), 2);
+        let data = street.replace(r#""mapName""#, r#""capabilities": "Map,Data", "mapName""#);
+        assert_eq!(parse("https://x.org/arcgis/rest/services/S/MapServer", data.as_bytes()).unwrap().layers.len(), 2);
         // A title of its own is kept; one that is HTML is not.
         let titled = r#"{"mapName": "Layers", "documentInfo": {"Title": "Street Map"}, "layers": []}"#;
         assert_eq!(parse("https://x.org/arcgis/rest/services/S/MapServer", titled.as_bytes()).unwrap().title, "Street Map");
