@@ -100,10 +100,27 @@ pub struct State {
     names: Vec<(String, String)>,
     names_for: String,
     names_job: Option<Answer<Vec<(String, String)>>>,
+    /// The completions offered: where the word starts, the cursor, the names, and the text they
+    /// were offered for.
+    offers: Option<(usize, usize, Vec<String>, String)>,
 }
 
 fn take<T>(slot: &Answer<T>) -> Option<Result<T, String>> {
     slot.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// Whether a query seems to hold a credential: `user:password@` in an address, a signed URL's
+/// signature, or a key, token or secret.
+fn holds_secret(q: &str) -> bool {
+    let l = q.to_ascii_lowercase();
+    let userinfo = l.split("://").skip(1).any(|rest| {
+        let authority = rest.split(['/', '?', '#', '\'', '"', ' ']).next().unwrap_or("");
+        authority.rsplit_once('@').is_some_and(|(user, _)| user.contains(':'))
+    });
+    userinfo
+        || ["password", "secret", "token=", "x-amz-signature", "x-goog-signature", "sig=", "key_id", "api_key", "apikey"]
+            .iter()
+            .any(|k| l.contains(k))
 }
 
 /// The database a picker's text names: a bare connection string is a PostgreSQL one.
@@ -124,7 +141,9 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         && let Some(r) = take(slot)
     {
         st.running = None;
-        if r.is_ok() {
+        // A query that seems to hold a credential (a password in an address, a signed URL, a
+        // secret) isn't kept in the history, which is saved with the app's preferences.
+        if r.is_ok() && !holds_secret(&st.shown.0) {
             let q = st.shown.0.clone();
             st.history.retain(|h| *h != q);
             st.history.insert(0, q);
@@ -149,7 +168,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         app.ui.sql.adding = None;
         match r {
             Ok(out) => {
-                let id = app.session.sql_ran(out);
+                let id = app.session.sql_ran(&sql, Some(db.as_str()).filter(|d| !d.is_empty()), out);
                 let mut p = json!({"sql": sql, "name": "Query", "ran": id});
                 if !db.is_empty() {
                     p["database"] = json!(db);
@@ -320,33 +339,34 @@ fn body(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         .show(ui);
     let focused = out.response.response.has_focus();
     let run_key = focused && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter));
-    // Completion of the word before the cursor.
+    // Completion of the word before the cursor. The offers are kept in the state, so they stay
+    // clickable once a button takes the focus from the editor (until the text changes).
     if focused && let Some(range) = out.cursor_range {
         let at: usize = range.primary.index.into();
         let (start, word) = word_before(&app.ui.sql.text, at);
-        if word.chars().count() >= 2 {
-            let offers = completions(&word, &app.ui.sql.names);
-            if !offers.is_empty() {
-                let mut picked = None;
-                ui.horizontal_wrapped(|ui| {
-                    for o in &offers {
-                        if ui.small_button(RichText::new(o).monospace()).clicked() {
-                            picked = Some(o.clone());
-                        }
-                    }
-                });
-                if let Some(o) = picked {
-                    let chars: Vec<char> = app.ui.sql.text.chars().collect();
-                    let before: String = chars.iter().take(start).collect();
-                    let after: String = chars.iter().skip(at).collect();
-                    app.ui.sql.text = format!("{before}{o}{after}");
-                    let mut state = out.state.clone();
-                    let cursor = egui::text::CCursor::new(start + o.chars().count());
-                    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(cursor)));
-                    state.store(ui.ctx(), id);
-                    ui.ctx().memory_mut(|m| m.request_focus(id));
+        let offers = if word.chars().count() >= 2 { completions(&word, &app.ui.sql.names) } else { Vec::new() };
+        app.ui.sql.offers = (!offers.is_empty()).then(|| (start, at, offers, app.ui.sql.text.clone()));
+    }
+    if let Some((start, at, offers, _)) = app.ui.sql.offers.clone().filter(|o| o.3 == app.ui.sql.text) {
+        let mut picked = None;
+        ui.horizontal_wrapped(|ui| {
+            for o in &offers {
+                if ui.small_button(RichText::new(o).monospace()).clicked() {
+                    picked = Some(o.clone());
                 }
             }
+        });
+        if let Some(o) = picked {
+            let chars: Vec<char> = app.ui.sql.text.chars().collect();
+            let before: String = chars.iter().take(start).collect();
+            let after: String = chars.iter().skip(at).collect();
+            app.ui.sql.text = format!("{before}{o}{after}");
+            app.ui.sql.offers = None;
+            let mut state = out.state.clone();
+            let cursor = egui::text::CCursor::new(start + o.chars().count());
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::one(cursor)));
+            state.store(ui.ctx(), id);
+            ui.ctx().memory_mut(|m| m.request_focus(id));
         }
     }
     let running = app.ui.sql.running.is_some();
@@ -450,6 +470,15 @@ fn history(app: &mut RustGisApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secrets_stay_out_of_the_history() {
+        assert!(holds_secret("SELECT * FROM read_parquet('https://me:pw@data.example/x.parquet')"));
+        assert!(holds_secret("SELECT * FROM 's3://b/x.parquet?X-Amz-Signature=abc'"));
+        assert!(holds_secret("CREATE SECRET (TYPE s3, KEY_ID 'k')"));
+        assert!(!holds_secret("SELECT name FROM read_parquet('https://data.example/x.parquet') WHERE a = 'b@c'"));
+        assert!(!holds_secret("SELECT 1"));
+    }
 
     #[test]
     fn completes_names() {

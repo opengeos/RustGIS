@@ -69,8 +69,9 @@ query as a layer, with the `layer.addSql` command (Add Data From SQL in command 
 **Analyze › SQL** opens the SQL pane, a workspace for these queries: an editor (Ctrl+Enter runs
 the query) that completes table and column names of the database named above it and DuckDB
 Spatial's common functions, the result's first 200 rows as a table, **Add to Map** for a result
-with a geometry column, and a history of the queries run (kept by the app, without the database's
-password). Queries run in the background, so the app keeps drawing while DuckDB works. The
+with a geometry column, and a history of the queries run (kept by the app with its preferences,
+without the database's password; a query that seems to hold a credential, such as `user:password@`
+in an address, a signed URL or a secret, isn't kept). Queries run in the background, so the app keeps drawing while DuckDB works. The
 commands behind it are `sql.query` (a query's first rows, up to 1,000, without adding a layer) and
 `sql.schema` (a database's tables and their columns); both take `"database"` as `layer.addSql`
 does. The web app has no DuckDB, so the pane says to open the project in the desktop app.

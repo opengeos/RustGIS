@@ -905,12 +905,17 @@ fn add_sql(s: &mut Session, p: &Value) -> CmdResult {
         let crs = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty());
         let database = database_param(p);
         let full = database.as_ref().map(|d| d.label());
-        // A result the app ran off the frame (the SQL pane), or the query run now.
-        let out = match p.get("ran").and_then(Value::as_u64) {
+        // A result the app ran off the frame (the SQL pane), taken only for the query and database
+        // it came from (the layer saves them); or the query run now.
+        let ran = p.get("ran").and_then(Value::as_u64);
+        let out = match ran {
             Some(id) => {
-                let i =
-                    s.sql_results.iter().position(|(r, _)| *r == id).ok_or("that query result is no longer kept: run the query again")?;
-                s.sql_results.remove(i).1
+                let (_, ran_sql, ran_db, out) =
+                    s.sql_results.iter().find(|(r, ..)| *r == id).ok_or("that query result is no longer kept: run the query again")?;
+                if ran_sql != sql || *ran_db != full {
+                    return Err("that query result came from another query or database: run the query again".into());
+                }
+                out.clone()
             }
             None => duckdb::run(&duckdb::Query { sql, database: database.as_ref(), crs }).map_err(|e| e.to_string())?,
         };
@@ -928,7 +933,12 @@ fn add_sql(s: &mut Session, p: &Value) -> CmdResult {
         if let Some(o) = q.as_object_mut() {
             o.remove("name");
         }
-        add_converted(s, &q, "the query", full.as_deref().unwrap_or("DuckDB query"), parts)
+        let added = add_converted(s, &q, "the query", full.as_deref().unwrap_or("DuckDB query"), parts)?;
+        // The result is used: forgotten once its layers are in (kept if adding failed).
+        if let Some(id) = ran {
+            s.sql_results.retain(|(r, ..)| *r != id);
+        }
+        Ok(added)
     }
 }
 

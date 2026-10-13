@@ -3348,6 +3348,15 @@ fn sql_workspace_rows_and_schema() {
     assert_eq!((r["geometry"].as_bool(), r["more"].as_bool()), (Some(true), Some(true)));
     assert_eq!(r["columns"][0]["name"], "n");
     assert_eq!(r["rows"][2][1], "POINT (2 0)");
+    // A result the app ran is added only for the query it came from, and kept until it is.
+    let q = "SELECT 'a' AS name, ST_Point(1, 2) AS geom";
+    let out = rustgis_data::source::duckdb::run(&rustgis_data::source::duckdb::Query { sql: q, ..Default::default() }).unwrap();
+    let id = s.sql_ran(q, None, out);
+    assert!(s.run("layer.addSql", &json!({"sql": "SELECT 2 AS x", "ran": id})).unwrap_err().contains("another query"));
+    let r = s.run("layer.addSql", &json!({"sql": q, "ran": id, "name": "Ran"})).unwrap();
+    assert_eq!(r["features"], 1);
+    assert!(s.run("layer.addSql", &json!({"sql": q, "ran": id})).unwrap_err().contains("no longer kept"));
+    s.run("layer.remove", &json!({"layer": "Ran"})).unwrap();
     assert_eq!(s.map().layers.len(), before, "no layer is added");
     let r = s.run("sql.query", &json!({"sql": "SELECT 'a' AS x", "limit": 5000})).unwrap();
     assert_eq!((r["geometry"].as_bool(), r["more"].as_bool()), (Some(false), Some(false)));

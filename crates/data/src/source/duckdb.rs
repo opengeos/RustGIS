@@ -531,9 +531,12 @@ fn preview_in(dir: &Path, q: &Query<'_>, limit: usize) -> Result<Preview> {
             let n = ident(&c.name);
             let expr = if is_geometry(&c.ty) {
                 format!("left(ST_AsText({n}), {PREVIEW_TEXT})")
+            } else if matches!(c.ty.as_str(), "FLOAT" | "DOUBLE") {
+                // NaN and infinities aren't JSON numbers: shown empty.
+                format!("CASE WHEN isfinite({n}) THEN {n} END")
             } else if matches!(
                 c.ty.as_str(),
-                "BOOLEAN" | "TINYINT" | "SMALLINT" | "INTEGER" | "UTINYINT" | "USMALLINT" | "FLOAT" | "DOUBLE"
+                "BOOLEAN" | "TINYINT" | "SMALLINT" | "INTEGER" | "BIGINT" | "UTINYINT" | "USMALLINT" | "UINTEGER"
             ) {
                 n
             } else {
@@ -947,6 +950,19 @@ mod tests {
         let p = preview_in(&dir, &Query { sql: "SELECT 42 AS answer", ..Query::default() }, 10).unwrap();
         assert!(!p.geometry && !p.more);
         assert_eq!(p.rows, vec![vec![serde_json::json!(42)]]);
+        // NaN and infinities show empty; big integers stay numbers.
+        let sql = "SELECT 'NaN'::DOUBLE AS a, 'inf'::DOUBLE AS b, 1.5::DOUBLE AS c, 9007199254740993::BIGINT AS d, 7::UINTEGER AS e";
+        let p = preview_in(&dir, &Query { sql, ..Query::default() }, 10).unwrap();
+        assert_eq!(
+            p.rows,
+            vec![vec![
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::json!(1.5),
+                serde_json::json!(9007199254740993i64),
+                serde_json::json!(7)
+            ]]
+        );
         assert!(preview_in(&dir, &Query { sql: "SELECT * FROM nowhere", ..Query::default() }, 10).is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
