@@ -236,11 +236,13 @@ Change Detection	변화 탐지
 Change the map's backdrop.	지도의 배경을 변경합니다.
 Change the map's coordinate system	지도 좌표계 변경
 Change the page size and orientation.	페이지 크기와 방향을 변경합니다.
+Change the project (add layers, edit features, change symbology)	프로젝트 변경 (레이어 추가, 피처 편집, 심볼 변경)
 Chart categories	차트 범주
 Chart Frame	차트 프레임
 China	중국
 Choose a band combination to display the raster layer.	래스터 레이어를 표시할 밴드 조합을 선택합니다.
 Choose a contrast stretch for the raster layer.	래스터 레이어의 대비 스트레치를 선택합니다.
+Choose a model.	모델을 선택하세요.
 Choose a resampling type for the raster layer.	래스터 레이어의 리샘플링 유형을 선택합니다.
 Choose extra buttons for the Quick Access Toolbar.	빠른 실행 도구 모음에 추가할 버튼을 선택합니다.
 Choose how the flat map lays out the Earth.	평면 지도가 지구를 표현하는 방식을 선택합니다.
@@ -533,6 +535,8 @@ Enabled	사용
 Encloses each feature, or all features, in its convex hull.	각 피처 또는 모든 피처를 볼록 껍질로 둘러쌉니다.
 End	끝
 Enhancement	향상
+Enter an API key.	API 키를 입력하세요.
+Enter the provider's address.	공급자의 주소를 입력하세요.
 Enter to send, Shift+Enter for a new line	Enter로 보내기, Shift+Enter로 줄 바꿈
 Environments	환경
 EPSG code	EPSG 코드
@@ -694,6 +698,7 @@ Go forward to the next extent.	다음 범위로 이동합니다.
 Go to a saved extent or save the current one.	저장된 범위로 이동하거나 현재 범위를 저장합니다.
 Go To Bookmark	북마크로 이동
 Go To XY	XY로 이동
+Google Gemini	Google Gemini
 GPX	GPX
 Graduated Colors	단계 색상
 Graphic Style	그래픽 스타일
@@ -793,6 +798,11 @@ Invert	반전
 Invert color scheme	색상표 반전
 Invert the selection.	선택을 반전합니다.
 IS NULL	IS NULL
+it connects to an address on the internet	인터넷의 주소에 연결하는
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	사용자만 실행할 수 있는(플러그인, 스크립트, 작업, 모델, GeoLibre 실행기)
+it reads or writes files on this computer	이 컴퓨터의 파일을 읽거나 쓰는
+it replaces the open project	열려 있는 프로젝트를 바꾸는
+it runs a plugin's command	플러그인의 명령을 실행하는
 It runs in a sandbox with no other access to your computer or the network.	샌드박스에서 실행되며 컴퓨터나 네트워크에 대한 다른 접근 권한은 없습니다.
 It's too large to keep in the browser: install it again on your next visit.	브라우저에 보관하기에는 너무 큽니다. 다음 방문 시 다시 설치하세요.
 Item Pop-ups	항목 팝업
@@ -913,6 +923,7 @@ Map scale	지도 축척
 Map Series	지도 시리즈
 Map Series Page	지도 시리즈 페이지
 Map series page name	지도 시리즈 페이지 이름
+Map style (JSON)	지도 스타일(JSON)
 Map Surrounds	지도 주변 요소
 Map Thumbnail	지도 썸네일
 Map View	지도 뷰
@@ -952,6 +963,7 @@ Mobile Map	모바일 지도
 Mod+	Mod+
 Model	모델
 Model\nBuilder	모델\n빌더
+model id	모델 ID
 ModelBuilder	ModelBuilder
 Models	모델
 Modify	수정
@@ -1059,6 +1071,7 @@ Off	끄기
 Offline	오프라인
 Offline area	오프라인 영역
 OID	OID
+Ollama (local)	Ollama(로컬)
 On	켜기
 On Hold	보류 중
 on hold	보류 중
@@ -1094,6 +1107,7 @@ Open the selected layer's table.	선택한 레이어의 테이블을 엽니다.
 Open the Symbology pane.	심볼 창을 엽니다.
 Open {code} on epsg.io	epsg.io에서 {code} 열기
 Open, save and create projects	프로젝트 열기, 저장 및 만들기
+OpenAI-compatible	OpenAI 호환
 Opened {name} for printing	인쇄하기 위해 {name}을(를) 열었습니다
 Open…	열기…
 Options	옵션
@@ -1110,6 +1124,7 @@ Output Name	출력 이름
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	브라우저에서 실행되는 래스터, 벡터, LiDAR, 수문, 지형 도구 1,000개 이상 (최초 1회 약 25MB 다운로드).
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	래스터, 벡터, LiDAR, 수문, 지형 도구 1,000개 이상 (약 20MB의 선택적 다운로드).
 Overlay	중첩
+overlay	중첩
 Overlay (a transparent layer kept on top, such as labels or roads)	중첩(레이블이나 도로처럼 맨 위에 유지되는 투명 레이어)
 Package	패키지
 Package a trained deep learning model.	학습된 딥러닝 모델을 패키지로 만듭니다.
@@ -1243,7 +1258,9 @@ Raster Effects	래스터 효과
 Raster Functions	래스터 함수
 Raster Information	래스터 정보
 Raster Layer	래스터 레이어
+Raster tiles (XYZ)	래스터 타일(XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	래스터 · {w} × {h} · 밴드 {n}개 · {renderer}
+Read and write files on this computer	이 컴퓨터의 파일 읽기 및 쓰기
 Read the map's layers and features	지도의 레이어 및 피처 읽기
 Reads and writes files	파일 읽기 및 쓰기
 Reads the map	지도 읽기
@@ -1552,6 +1569,7 @@ Step {n} done	{n}단계 완료
 Stop	중지
 Stop drawing labels, for faster navigation.	더 빠른 탐색을 위해 라벨 그리기를 중지합니다.
 Stop filling the cache.	캐시 채우기를 중지합니다.
+Stopped.	중지되었습니다.
 Stretch	스트레치
 Stretch\nType	스트레치\n유형
 Stretch it over the map view, or give control points (one per line: column row lon lat).	지도 뷰에 맞춰 늘이거나 기준점을 입력하세요(한 줄에 하나씩: 열 행 경도 위도).
@@ -1614,6 +1632,8 @@ the map has no layers	지도에 레이어가 없습니다
 The map is drawn in this coordinate system; layers are projected on the fly.	지도는 이 좌표계로 그려지며 레이어는 즉석에서 투영됩니다.
 The map view as it is now	현재 상태의 지도 뷰
 The model answering; click to change it	응답하는 모델입니다. 클릭하여 변경하세요
+the model declined this request	모델이 이 요청을 거부했습니다
+The model sent an empty reply; ask again, or try another model.	모델이 빈 응답을 보냈습니다. 다시 질문하거나 다른 모델을 사용해 보세요.
 the page is too large to draw	페이지가 너무 커서 그릴 수 없습니다
 the presentation export failed unexpectedly	프레젠테이션 내보내기가 예기치 않게 실패했습니다
 the preview failed unexpectedly	미리 보기가 예기치 않게 실패했습니다
@@ -1623,6 +1643,7 @@ The project's thumbnail, from the map view.	지도 뷰로 만든 프로젝트 �
 The projection the map opens in.	지도를 열 때의 투영법.
 The raster's data couldn't be read.	래스터 데이터를 읽을 수 없습니다.
 The raster's data couldn't be read: {path}	래스터 데이터를 읽을 수 없습니다: {path}
+the reply reached its length limit	응답이 길이 제한에 도달했습니다
 the report export failed unexpectedly	보고서 내보내기가 예기치 않게 실패했습니다
 The Shapefile's files download as one zip.	Shapefile의 파일은 하나의 zip으로 다운로드됩니다.
 the view has no extent	뷰에 범위가 없습니다
@@ -1698,6 +1719,7 @@ Valid expression · {n} matching rows	유효한 표현식 · 일치하는 행 {n
 Validate	검증
 value (empty: no-data)	값(비우면 NoData)
 Vector and raster data	벡터 및 래스터 데이터
+Vector tiles (MVT)	벡터 타일(MVT)
 Version {version}	버전 {version}
 Vertex	버텍스
 Video	동영상
@@ -1805,5 +1827,15 @@ Zoom to the selected features.	선택한 피처로 확대합니다.
 Zoom to the whole world.	전 세계로 확대/축소합니다.
 Zoom to Tokyo	도쿄로 확대
 Zoom To World	세계로 확대/축소
+{id} changed since it was installed; install it again from the Plugin Manager.	{id}이(가) 설치 후 변경되었습니다. 플러그인 관리자에서 다시 설치하세요.
+{name} was withdrawn from the plugin registry and has been turned off.	{name}이(가) 플러그인 레지스트리에서 철회되어 비활성화되었습니다.
+{name} was withdrawn from the plugin registry: {reason}	{name}이(가) 플러그인 레지스트리에서 철회되었습니다: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: 다운로드한 파일이 레지스트리와 일치하지 않아 설치하지 않았습니다.
+{name}: the download is a different plugin; it wasn't installed.	{name}: 다운로드한 파일이 다른 플러그인이어서 설치하지 않았습니다.
+{shown} of {total} plugins	플러그인 {total}개 중 {shown}개
+{total} plugins	플러그인 {total}개
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, 제자리에서 읽음 · 보기의 피처 {matched}개 중 {n}개 샘플(모두 보려면 확대) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, 제자리에서 읽음 · 보기의 피처 {total}개 중 {n}개 · {renderer}
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: HTTPS 주소 또는 이 컴퓨터나 네트워크의 일반 HTTP만 허용됩니다
 © OpenStreetMap contributors	© OpenStreetMap 기여자
 ⌘K	⌘K

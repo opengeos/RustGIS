@@ -236,11 +236,13 @@ Change Detection	Dəyişikliklərin aşkarlanması
 Change the map's backdrop.	Xəritənin fonunu dəyişin.
 Change the map's coordinate system	Xəritənin koordinat sistemini dəyiş
 Change the page size and orientation.	Səhifə ölçüsünü və istiqamətini dəyişin.
+Change the project (add layers, edit features, change symbology)	Layihəni dəyişmək (lay əlavə etmək, obyektləri redaktə etmək, simvolikanı dəyişmək)
 Chart categories	Diaqram kateqoriyaları
 Chart Frame	Diaqram çərçivəsi
 China	Çin
 Choose a band combination to display the raster layer.	Rastr layını göstərmək üçün kanal kombinasiyası seçin.
 Choose a contrast stretch for the raster layer.	Rastr layı üçün kontrast genişləndirməsi seçin.
+Choose a model.	Model seçin.
 Choose a resampling type for the raster layer.	Rastr layı üçün yenidən nümunələmə tipini seçin.
 Choose extra buttons for the Quick Access Toolbar.	Sürətli giriş paneli üçün əlavə düymələr seçin.
 Choose how the flat map lays out the Earth.	Düz xəritənin Yeri necə göstərdiyini seçin.
@@ -533,6 +535,8 @@ Enabled	Aktiv
 Encloses each feature, or all features, in its convex hull.	Hər obyekti və ya bütün obyektləri qabarıq örtüyə alır.
 End	Son
 Enhancement	Gücləndirmə
+Enter an API key.	API açarını daxil edin.
+Enter the provider's address.	Provayderin ünvanını daxil edin.
 Enter to send, Shift+Enter for a new line	Göndərmək üçün Enter, yeni sətir üçün Shift+Enter
 Environments	Mühitlər
 EPSG code	EPSG kodu
@@ -694,6 +698,7 @@ Go forward to the next extent.	Növbəti hüduda keçin.
 Go to a saved extent or save the current one.	Saxlanmış hüduda keçin və ya cari hüdudu saxlayın.
 Go To Bookmark	Əlfəcinə keç
 Go To XY	XY-ə keç
+Google Gemini	Google Gemini
 GPX	GPX
 Graduated Colors	Pilləli rənglər
 Graphic Style	Qrafika üslubu
@@ -793,6 +798,11 @@ Invert	Tərsinə çevir
 Invert color scheme	Rəng sxemini tərsinə çevir
 Invert the selection.	Seçimi tərsinə çevirin.
 IS NULL	IS NULL
+it connects to an address on the internet	internetdəki ünvana qoşulur
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	yalnız sizin üçün nəzərdə tutulub (plaginlər, skriptlər, tapşırıqlar, modellər və GeoLibre icraçısı)
+it reads or writes files on this computer	bu kompüterdəki faylları oxuyur və ya yazır
+it replaces the open project	açıq layihəni əvəz edir
+it runs a plugin's command	plaginin əmrini icra edir
 It runs in a sandbox with no other access to your computer or the network.	O, kompüterinizə və ya şəbəkəyə başqa heç bir girişi olmayan qum qutusunda işləyir.
 It's too large to keep in the browser: install it again on your next visit.	Brauzerdə saxlanmaq üçün çox böyükdür: növbəti girişinizdə onu yenidən quraşdırın.
 Item Pop-ups	Element açılan pəncərələri
@@ -913,6 +923,7 @@ Map scale	Xəritə miqyası
 Map Series	Xəritə seriyası
 Map Series Page	Xəritə seriyası səhifəsi
 Map series page name	Xəritə seriyası səhifəsinin adı
+Map style (JSON)	Xəritə üslubu (JSON)
 Map Surrounds	Xəritə elementləri
 Map Thumbnail	Xəritə miniatürü
 Map View	Xəritə görünüşü
@@ -952,6 +963,7 @@ Mobile Map	Mobil xəritə
 Mod+	Mod+
 Model	Model
 Model\nBuilder	Model\nqurucusu
+model id	model identifikatoru
 ModelBuilder	Model qurucusu
 Models	Modellər
 Modify	Dəyişdir
@@ -1059,6 +1071,7 @@ Off	Söndürülü
 Offline	Oflayn
 Offline area	Oflayn ərazi
 OID	OID
+Ollama (local)	Ollama (yerli)
 On	Açıq
 On Hold	Gözləmədə
 on hold	gözləmədə
@@ -1094,6 +1107,7 @@ Open the selected layer's table.	Seçilmiş layın cədvəlini açın.
 Open the Symbology pane.	Simvolika panelini açın.
 Open {code} on epsg.io	{code} kodunu epsg.io-da aç
 Open, save and create projects	Layihələri açın, saxlayın və yaradın
+OpenAI-compatible	OpenAI ilə uyğun
 Opened {name} for printing	{name} çap üçün açıldı
 Open…	Aç…
 Options	Seçimlər
@@ -1110,6 +1124,7 @@ Output Name	Çıxış adı
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Təxminən 25 MB-lıq birdəfəlik endirmə ilə brauzerdə işləyən 1000-dən çox raster, vektor, LiDAR, hidrologiya və relyef aləti.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Təxminən 20 MB-lıq istəyə bağlı endirmə ilə 1000-dən çox raster, vektor, LiDAR, hidrologiya və relyef aləti.
 Overlay	Üst-üstə qoyma
+overlay	üst-üstə qoyma
 Overlay (a transparent layer kept on top, such as labels or roads)	Üst-üstə qoyma (yazılar və ya yollar kimi yuxarıda saxlanan şəffaf lay)
 Package	Paket
 Package a trained deep learning model.	Təlim keçmiş dərin öyrənmə modelini paketləyin.
@@ -1243,7 +1258,9 @@ Raster Effects	Rastr effektləri
 Raster Functions	Rastr funksiyaları
 Raster Information	Rastr məlumatı
 Raster Layer	Rastr layı
+Raster tiles (XYZ)	Rastr kafellər (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Rastr · {w} × {h} · {n} kanal · {renderer}
+Read and write files on this computer	Bu kompüterdəki faylları oxumaq və yazmaq
 Read the map's layers and features	Xəritənin laylarını və obyektlərini oxumaq
 Reads and writes files	Faylları oxuyur və yazır
 Reads the map	Xəritəni oxuyur
@@ -1552,6 +1569,7 @@ Step {n} done	{n}-ci addım tamamlandı
 Stop	Dayandır
 Stop drawing labels, for faster navigation.	Daha sürətli naviqasiya üçün etiketlərin çəkilməsini dayandırın.
 Stop filling the cache.	Keşin doldurulmasını dayandırın.
+Stopped.	Dayandırıldı.
 Stretch	Genişləndirmə
 Stretch\nType	Genişləndirmə\ntipi
 Stretch it over the map view, or give control points (one per line: column row lon lat).	Onu xəritə görünüşünə uyğun dartın və ya nəzarət nöqtələri verin (hər sətirdə bir: sütun sətir uzunluq enlik).
@@ -1614,6 +1632,8 @@ the map has no layers	xəritədə lay yoxdur
 The map is drawn in this coordinate system; layers are projected on the fly.	Xəritə bu koordinat sistemində çəkilir; laylar dərhal proyeksiya olunur.
 The map view as it is now	Xəritə görünüşü indiki halında
 The model answering; click to change it	Cavab verən model; dəyişmək üçün klikləyin
+the model declined this request	model bu sorğunu rədd etdi
+The model sent an empty reply; ask again, or try another model.	Model boş cavab göndərdi; yenidən soruşun və ya başqa model sınayın.
 the page is too large to draw	səhifə çəkmək üçün çox böyükdür
 the presentation export failed unexpectedly	təqdimatın ixracı gözlənilmədən uğursuz oldu
 the preview failed unexpectedly	ön baxış gözlənilmədən uğursuz oldu
@@ -1623,6 +1643,7 @@ The project's thumbnail, from the map view.	Xəritə görünüşündən layihən
 The projection the map opens in.	Xəritənin açıldığı proyeksiya.
 The raster's data couldn't be read.	Rastrın məlumatı oxuna bilmədi.
 The raster's data couldn't be read: {path}	Rastrın məlumatı oxuna bilmədi: {path}
+the reply reached its length limit	cavab uzunluq həddinə çatdı
 the report export failed unexpectedly	hesabatın ixracı gözlənilmədən uğursuz oldu
 The Shapefile's files download as one zip.	Shapefile faylları bir zip arxivi kimi endirilir.
 the view has no extent	görünüşün hüdudu yoxdur
@@ -1698,6 +1719,7 @@ Valid expression · {n} matching rows	İfadə düzgündür · {n} uyğun sətir
 Validate	Yoxla
 value (empty: no-data)	qiymət (boş: məlumat yoxdur)
 Vector and raster data	Vektor və rastr məlumatı
+Vector tiles (MVT)	Vektor kafellər (MVT)
 Version {version}	Versiya {version}
 Vertex	Təpə
 Video	Video
@@ -1805,5 +1827,15 @@ Zoom to the selected features.	Seçilmiş obyektlərə yaxınlaşdırın.
 Zoom to the whole world.	Bütün dünyaya yaxınlaşdırın.
 Zoom to Tokyo	Tokioya yaxınlaşdır
 Zoom To World	Dünyaya yaxınlaşdır
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} quraşdırıldıqdan sonra dəyişib; onu Plagin menecerindən yenidən quraşdırın.
+{name} was withdrawn from the plugin registry and has been turned off.	{name} plagin reyestrindən geri çəkilib və söndürülüb.
+{name} was withdrawn from the plugin registry: {reason}	{name} plagin reyestrindən geri çəkilib: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: endirilən fayl reyestrə uyğun gəlmir; quraşdırılmadı.
+{name}: the download is a different plugin; it wasn't installed.	{name}: endirilən fayl başqa plagindir; quraşdırılmadı.
+{shown} of {total} plugins	{shown} / {total} plagin
+{total} plugins	{total} plagin
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, yerində oxunur · görünüşdəki {matched} obyektdən {n} nümunə (hamısını görmək üçün yaxınlaşdırın) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, yerində oxunur · görünüşdə {total} obyektdən {n} · {renderer}
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: yalnız HTTPS ünvanlarına və ya bu kompüterdə, yaxud bu şəbəkədə adi HTTP-yə icazə verilir
 © OpenStreetMap contributors	© OpenStreetMap iştirakçıları
 ⌘K	⌘K

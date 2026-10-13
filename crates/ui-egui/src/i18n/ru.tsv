@@ -236,11 +236,13 @@ Change Detection	Обнаружение изменений
 Change the map's backdrop.	Изменить фон карты.
 Change the map's coordinate system	Изменить систему координат карты
 Change the page size and orientation.	Изменить размер и ориентацию страницы.
+Change the project (add layers, edit features, change symbology)	Изменять проект (добавлять слои, редактировать объекты, менять символы)
 Chart categories	Категории диаграммы
 Chart Frame	Фрейм диаграммы
 China	Китай
 Choose a band combination to display the raster layer.	Выберите комбинацию каналов для отображения растрового слоя.
 Choose a contrast stretch for the raster layer.	Выберите растяжку контраста для растрового слоя.
+Choose a model.	Выберите модель.
 Choose a resampling type for the raster layer.	Выберите тип передискретизации для растрового слоя.
 Choose extra buttons for the Quick Access Toolbar.	Выбрать дополнительные кнопки для панели быстрого доступа.
 Choose how the flat map lays out the Earth.	Выбрать, как плоская карта отображает Землю.
@@ -533,6 +535,8 @@ Enabled	Включён
 Encloses each feature, or all features, in its convex hull.	Заключает каждый объект или все объекты в выпуклую оболочку.
 End	Конец
 Enhancement	Улучшение
+Enter an API key.	Введите ключ API.
+Enter the provider's address.	Введите адрес поставщика.
 Enter to send, Shift+Enter for a new line	Enter — отправить, Shift+Enter — новая строка
 Environments	Среды
 EPSG code	Код EPSG
@@ -694,6 +698,7 @@ Go forward to the next extent.	Перейти к следующему эксте
 Go to a saved extent or save the current one.	Перейти к сохранённому экстенту или сохранить текущий.
 Go To Bookmark	Перейти к закладке
 Go To XY	Перейти к XY
+Google Gemini	Google Gemini
 GPX	GPX
 Graduated Colors	Градуированные цвета
 Graphic Style	Стиль графики
@@ -793,6 +798,11 @@ Invert	Инвертировать
 Invert color scheme	Инвертировать цветовую схему
 Invert the selection.	Инвертировать выборку.
 IS NULL	IS NULL
+it connects to an address on the internet	подключается к адресу в интернете
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	доступно только вам (модули, скрипты, задачи, модели и средство запуска GeoLibre)
+it reads or writes files on this computer	читает или записывает файлы на этом компьютере
+it replaces the open project	заменяет открытый проект
+it runs a plugin's command	запускает команду модуля
 It runs in a sandbox with no other access to your computer or the network.	Он работает в песочнице без какого-либо другого доступа к вашему компьютеру или сети.
 It's too large to keep in the browser: install it again on your next visit.	Модуль слишком велик для хранения в браузере: установите его заново при следующем посещении.
 Item Pop-ups	Всплывающие окна элементов
@@ -913,6 +923,7 @@ Map scale	Масштаб карты
 Map Series	Серия карт
 Map Series Page	Страница серии карт
 Map series page name	Имя страницы серии карт
+Map style (JSON)	Стиль карты (JSON)
 Map Surrounds	Элементы оформления карты
 Map Thumbnail	Эскиз карты
 Map View	Вид карты
@@ -952,6 +963,7 @@ Mobile Map	Мобильная карта
 Mod+	Mod+
 Model	Модель
 Model\nBuilder	Конструктор\nмоделей
+model id	идентификатор модели
 ModelBuilder	ModelBuilder
 Models	Модели
 Modify	Изменение
@@ -1059,6 +1071,7 @@ Off	Выкл.
 Offline	Автономно
 Offline area	Автономная область
 OID	OID
+Ollama (local)	Ollama (локально)
 On	Вкл.
 On Hold	Приостановлено
 on hold	приостановлено
@@ -1094,6 +1107,7 @@ Open the selected layer's table.	Открыть таблицу выбранно�
 Open the Symbology pane.	Открыть панель «Символы».
 Open {code} on epsg.io	Открыть {code} на epsg.io
 Open, save and create projects	Открытие, сохранение и создание проектов
+OpenAI-compatible	Совместимый с OpenAI
 Opened {name} for printing	{name} открыт для печати
 Open…	Открыть…
 Options	Параметры
@@ -1110,6 +1124,7 @@ Output Name	Имя результата
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Более 1000 инструментов для растров, векторов, LiDAR, гидрологии и рельефа, работающих в браузере, после однократной загрузки около 25 МБ.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Более 1000 инструментов для растров, векторов, LiDAR, гидрологии и рельефа в необязательной загрузке размером около 20 МБ.
 Overlay	Наложение
+overlay	наложение
 Overlay (a transparent layer kept on top, such as labels or roads)	Наложение (прозрачный слой поверх остальных, например подписи или дороги)
 Package	Пакет
 Package a trained deep learning model.	Упаковать обученную модель глубокого обучения.
@@ -1243,7 +1258,9 @@ Raster Effects	Эффекты растра
 Raster Functions	Растровые функции
 Raster Information	Сведения о растре
 Raster Layer	Растровый слой
+Raster tiles (XYZ)	Растровые тайлы (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Растр · {w} × {h} · каналов: {n} · {renderer}
+Read and write files on this computer	Читать и записывать файлы на этом компьютере
 Read the map's layers and features	Читать слои и объекты карты
 Reads and writes files	Читает и записывает файлы
 Reads the map	Читает карту
@@ -1552,6 +1569,7 @@ Step {n} done	Шаг {n} выполнен
 Stop	Остановить
 Stop drawing labels, for faster navigation.	Не отображать подписи для ускорения навигации.
 Stop filling the cache.	Прекратить заполнение кэша.
+Stopped.	Остановлено.
 Stretch	Растяжка
 Stretch\nType	Тип\nрастяжки
 Stretch it over the map view, or give control points (one per line: column row lon lat).	Растяните его по виду карты или задайте контрольные точки (по одной в строке: column row lon lat).
@@ -1614,6 +1632,8 @@ the map has no layers	на карте нет слоёв
 The map is drawn in this coordinate system; layers are projected on the fly.	Карта рисуется в этой системе координат; слои проецируются на лету.
 The map view as it is now	Вид карты в текущем состоянии
 The model answering; click to change it	Модель, которая отвечает; щёлкните, чтобы сменить
+the model declined this request	модель отклонила этот запрос
+The model sent an empty reply; ask again, or try another model.	Модель прислала пустой ответ; спросите ещё раз или попробуйте другую модель.
 the page is too large to draw	страница слишком велика для отрисовки
 the presentation export failed unexpectedly	экспорт презентации неожиданно завершился ошибкой
 the preview failed unexpectedly	предпросмотр неожиданно завершился ошибкой
@@ -1623,6 +1643,7 @@ The project's thumbnail, from the map view.	Эскиз проекта из ви�
 The projection the map opens in.	Проекция, в которой открывается карта.
 The raster's data couldn't be read.	Не удалось прочитать данные растра.
 The raster's data couldn't be read: {path}	Не удалось прочитать данные растра: {path}
+the reply reached its length limit	ответ достиг предельной длины
 the report export failed unexpectedly	экспорт отчёта неожиданно завершился ошибкой
 The Shapefile's files download as one zip.	Файлы Shapefile скачиваются одним zip-архивом.
 the view has no extent	у вида нет экстента
@@ -1698,6 +1719,7 @@ Valid expression · {n} matching rows	Выражение допустимо · �
 Validate	Проверить
 value (empty: no-data)	значение (пусто: нет данных)
 Vector and raster data	Векторные и растровые данные
+Vector tiles (MVT)	Векторные тайлы (MVT)
 Version {version}	Версия {version}
 Vertex	Вершина
 Video	Видео
@@ -1805,5 +1827,15 @@ Zoom to the selected features.	Приблизить к выбранным объ
 Zoom to the whole world.	Показать весь мир.
 Zoom to Tokyo	Приблизить к Токио
 Zoom To World	Приблизить к миру
+{id} changed since it was installed; install it again from the Plugin Manager.	Модуль {id} изменился после установки; установите его заново через Менеджер модулей.
+{name} was withdrawn from the plugin registry and has been turned off.	Модуль {name} отозван из каталога модулей и отключён.
+{name} was withdrawn from the plugin registry: {reason}	Модуль {name} отозван из каталога модулей: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: загруженный файл не совпадает с данными каталога; модуль не установлен.
+{name}: the download is a different plugin; it wasn't installed.	{name}: загружен другой модуль; модуль не установлен.
+{shown} of {total} plugins	Модулей: {shown} из {total}
+{total} plugins	Модулей: {total}
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, читается на месте · выборка из {n} из {matched} объектов в области просмотра (приблизьте, чтобы увидеть все) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, читается на месте · {n} из {total} объектов в области просмотра · {renderer}
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: разрешены только адреса HTTPS или обычный HTTP на этом компьютере или в этой сети
 © OpenStreetMap contributors	© участники OpenStreetMap
 ⌘K	⌘K

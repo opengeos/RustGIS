@@ -236,11 +236,13 @@ Change Detection	Phát hiện thay đổi
 Change the map's backdrop.	Thay đổi nền của bản đồ.
 Change the map's coordinate system	Đổi hệ tọa độ của bản đồ
 Change the page size and orientation.	Thay đổi kích thước và hướng trang.
+Change the project (add layers, edit features, change symbology)	Thay đổi dự án (thêm lớp, chỉnh sửa đối tượng, thay đổi ký hiệu)
 Chart categories	Danh mục biểu đồ
 Chart Frame	Khung biểu đồ
 China	Trung Quốc
 Choose a band combination to display the raster layer.	Chọn tổ hợp kênh để hiển thị lớp raster.
 Choose a contrast stretch for the raster layer.	Chọn kiểu kéo giãn độ tương phản cho lớp raster.
+Choose a model.	Hãy chọn một mô hình.
 Choose a resampling type for the raster layer.	Chọn kiểu lấy mẫu lại cho lớp raster.
 Choose extra buttons for the Quick Access Toolbar.	Chọn các nút bổ sung cho thanh công cụ truy cập nhanh.
 Choose how the flat map lays out the Earth.	Chọn cách bản đồ phẳng thể hiện Trái Đất.
@@ -533,6 +535,8 @@ Enabled	Đã bật
 Encloses each feature, or all features, in its convex hull.	Bao mỗi đối tượng, hoặc tất cả đối tượng, trong bao lồi của nó.
 End	Kết thúc
 Enhancement	Tăng cường
+Enter an API key.	Hãy nhập khóa API.
+Enter the provider's address.	Hãy nhập địa chỉ của nhà cung cấp.
 Enter to send, Shift+Enter for a new line	Enter để gửi, Shift+Enter để xuống dòng
 Environments	Môi trường
 EPSG code	Mã EPSG
@@ -694,6 +698,7 @@ Go forward to the next extent.	Đi tới phạm vi tiếp theo.
 Go to a saved extent or save the current one.	Đi tới phạm vi đã lưu hoặc lưu phạm vi hiện tại.
 Go To Bookmark	Đi tới dấu trang
 Go To XY	Đi tới XY
+Google Gemini	Google Gemini
 GPX	GPX
 Graduated Colors	Màu phân cấp
 Graphic Style	Kiểu đồ họa
@@ -793,6 +798,11 @@ Invert	Đảo ngược
 Invert color scheme	Đảo ngược bảng màu
 Invert the selection.	Đảo ngược vùng chọn.
 IS NULL	IS NULL
+it connects to an address on the internet	nó kết nối tới một địa chỉ trên internet
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	nó chỉ dành cho bạn (plugin, tập lệnh, tác vụ, mô hình và trình chạy GeoLibre)
+it reads or writes files on this computer	nó đọc hoặc ghi tệp trên máy tính này
+it replaces the open project	nó thay thế dự án đang mở
+it runs a plugin's command	nó chạy một lệnh của plugin
 It runs in a sandbox with no other access to your computer or the network.	Plugin chạy trong một hộp cát, không có quyền truy cập nào khác vào máy tính của bạn hay mạng.
 It's too large to keep in the browser: install it again on your next visit.	Plugin quá lớn để lưu trong trình duyệt: hãy cài đặt lại vào lần truy cập tiếp theo.
 Item Pop-ups	Cửa sổ bật lên của mục
@@ -913,6 +923,7 @@ Map scale	Tỷ lệ bản đồ
 Map Series	Chuỗi bản đồ
 Map Series Page	Trang chuỗi bản đồ
 Map series page name	Tên trang chuỗi bản đồ
+Map style (JSON)	Kiểu bản đồ (JSON)
 Map Surrounds	Thành phần quanh bản đồ
 Map Thumbnail	Ảnh thu nhỏ bản đồ
 Map View	Khung nhìn bản đồ
@@ -952,6 +963,7 @@ Mobile Map	Bản đồ di động
 Mod+	Mod+
 Model	Mô hình
 Model\nBuilder	Trình dựng\nmô hình
+model id	mã mô hình
 ModelBuilder	ModelBuilder
 Models	Mô hình
 Modify	Sửa đổi
@@ -1059,6 +1071,7 @@ Off	Tắt
 Offline	Ngoại tuyến
 Offline area	Khu vực ngoại tuyến
 OID	OID
+Ollama (local)	Ollama (cục bộ)
 On	Bật
 On Hold	Tạm hoãn
 on hold	tạm hoãn
@@ -1094,6 +1107,7 @@ Open the selected layer's table.	Mở bảng của lớp được chọn.
 Open the Symbology pane.	Mở ngăn Ký hiệu.
 Open {code} on epsg.io	Mở {code} trên epsg.io
 Open, save and create projects	Mở, lưu và tạo dự án
+OpenAI-compatible	Tương thích OpenAI
 Opened {name} for printing	Đã mở {name} để in
 Open…	Mở…
 Options	Tùy chọn
@@ -1110,6 +1124,7 @@ Output Name	Tên đầu ra
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Hơn 1.000 công cụ raster, vector, LiDAR, thủy văn và địa hình chạy trong trình duyệt, chỉ cần tải một lần khoảng 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Hơn 1.000 công cụ raster, vector, LiDAR, thủy văn và địa hình, qua một bản tải tùy chọn khoảng 20 MB.
 Overlay	Chồng lớp
+overlay	chồng lớp
 Overlay (a transparent layer kept on top, such as labels or roads)	Chồng lớp (một lớp trong suốt luôn ở trên cùng, như nhãn hoặc đường)
 Package	Gói
 Package a trained deep learning model.	Đóng gói một mô hình học sâu đã huấn luyện.
@@ -1243,7 +1258,9 @@ Raster Effects	Hiệu ứng raster
 Raster Functions	Hàm raster
 Raster Information	Thông tin raster
 Raster Layer	Lớp raster
+Raster tiles (XYZ)	Ô raster (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} kênh · {renderer}
+Read and write files on this computer	Đọc và ghi tệp trên máy tính này
 Read the map's layers and features	Đọc các lớp và đối tượng của bản đồ
 Reads and writes files	Đọc và ghi tệp
 Reads the map	Đọc bản đồ
@@ -1552,6 +1569,7 @@ Step {n} done	Đã xong bước {n}
 Stop	Dừng
 Stop drawing labels, for faster navigation.	Ngừng vẽ nhãn để điều hướng nhanh hơn.
 Stop filling the cache.	Dừng nạp bộ đệm.
+Stopped.	Đã dừng.
 Stretch	Kéo giãn
 Stretch\nType	Kiểu\nkéo giãn
 Stretch it over the map view, or give control points (one per line: column row lon lat).	Kéo giãn nó trên khung nhìn bản đồ, hoặc nhập các điểm khống chế (mỗi dòng một điểm: cột hàng kinh độ vĩ độ).
@@ -1614,6 +1632,8 @@ the map has no layers	bản đồ không có lớp nào
 The map is drawn in this coordinate system; layers are projected on the fly.	Bản đồ được vẽ trong hệ tọa độ này; các lớp được chiếu tức thời.
 The map view as it is now	Khung nhìn bản đồ như hiện tại
 The model answering; click to change it	Mô hình đang trả lời; nhấp để thay đổi
+the model declined this request	mô hình đã từ chối yêu cầu này
+The model sent an empty reply; ask again, or try another model.	Mô hình gửi về một câu trả lời trống; hãy hỏi lại hoặc thử mô hình khác.
 the page is too large to draw	trang quá lớn để vẽ
 the presentation export failed unexpectedly	xuất bản trình bày thất bại ngoài dự kiến
 the preview failed unexpectedly	xem trước thất bại ngoài dự kiến
@@ -1623,6 +1643,7 @@ The project's thumbnail, from the map view.	Ảnh thu nhỏ của dự án, từ
 The projection the map opens in.	Phép chiếu khi bản đồ mở.
 The raster's data couldn't be read.	Không thể đọc dữ liệu của raster.
 The raster's data couldn't be read: {path}	Không thể đọc dữ liệu của raster: {path}
+the reply reached its length limit	câu trả lời đã chạm giới hạn độ dài
 the report export failed unexpectedly	xuất báo cáo thất bại ngoài dự kiến
 The Shapefile's files download as one zip.	Các tệp của Shapefile được tải xuống dưới dạng một tệp zip.
 the view has no extent	khung nhìn không có phạm vi
@@ -1698,6 +1719,7 @@ Valid expression · {n} matching rows	Biểu thức hợp lệ · {n} hàng kh�
 Validate	Xác thực
 value (empty: no-data)	giá trị (trống: không có dữ liệu)
 Vector and raster data	Dữ liệu vector và raster
+Vector tiles (MVT)	Ô vector (MVT)
 Version {version}	Phiên bản {version}
 Vertex	Đỉnh
 Video	Video
@@ -1805,5 +1827,15 @@ Zoom to the selected features.	Thu phóng tới các đối tượng được ch
 Zoom to the whole world.	Thu phóng tới toàn thế giới.
 Zoom to Tokyo	Thu phóng tới Tokyo
 Zoom To World	Thu phóng tới thế giới
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} đã thay đổi kể từ khi được cài đặt; hãy cài đặt lại từ Trình quản lý plugin.
+{name} was withdrawn from the plugin registry and has been turned off.	{name} đã bị gỡ khỏi kho plugin và đã bị tắt.
+{name} was withdrawn from the plugin registry: {reason}	{name} đã bị gỡ khỏi kho plugin: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: bản tải xuống không khớp với kho plugin; chưa được cài đặt.
+{name}: the download is a different plugin; it wasn't installed.	{name}: bản tải xuống là một plugin khác; chưa được cài đặt.
+{shown} of {total} plugins	{shown} trên {total} plugin
+{total} plugins	{total} plugin
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, đọc tại chỗ · mẫu gồm {n} trong số {matched} đối tượng trong khung nhìn (phóng to để xem tất cả) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, đọc tại chỗ · {n} trên {total} đối tượng trong khung nhìn · {renderer}
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: chỉ cho phép địa chỉ HTTPS, hoặc HTTP thường trên máy tính hay mạng này
 © OpenStreetMap contributors	© Những người đóng góp OpenStreetMap
 ⌘K	⌘K

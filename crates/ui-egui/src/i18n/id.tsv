@@ -236,11 +236,13 @@ Change Detection	Deteksi Perubahan
 Change the map's backdrop.	Ubah latar belakang peta.
 Change the map's coordinate system	Ubah sistem koordinat peta
 Change the page size and orientation.	Ubah ukuran dan orientasi halaman.
+Change the project (add layers, edit features, change symbology)	Mengubah proyek (menambah layer, mengedit fitur, mengubah simbologi)
 Chart categories	Kategori diagram
 Chart Frame	Bingkai Diagram
 China	Tiongkok
 Choose a band combination to display the raster layer.	Pilih kombinasi band untuk menampilkan layer raster.
 Choose a contrast stretch for the raster layer.	Pilih peregangan kontras untuk layer raster.
+Choose a model.	Pilih model.
 Choose a resampling type for the raster layer.	Pilih tipe resampling untuk layer raster.
 Choose extra buttons for the Quick Access Toolbar.	Pilih tombol tambahan untuk Bilah Akses Cepat.
 Choose how the flat map lays out the Earth.	Pilih cara peta datar menampilkan Bumi.
@@ -533,6 +535,8 @@ Enabled	Aktif
 Encloses each feature, or all features, in its convex hull.	Melingkupi setiap fitur, atau semua fitur, dengan convex hull-nya.
 End	Akhir
 Enhancement	Peningkatan
+Enter an API key.	Masukkan kunci API.
+Enter the provider's address.	Masukkan alamat penyedia.
 Enter to send, Shift+Enter for a new line	Enter untuk mengirim, Shift+Enter untuk baris baru
 Environments	Lingkungan
 EPSG code	Kode EPSG
@@ -694,6 +698,7 @@ Go forward to the next extent.	Maju ke cakupan berikutnya.
 Go to a saved extent or save the current one.	Buka cakupan tersimpan atau simpan cakupan saat ini.
 Go To Bookmark	Buka Penanda
 Go To XY	Pergi ke XY
+Google Gemini	Google Gemini
 GPX	GPX
 Graduated Colors	Warna Bergradasi
 Graphic Style	Gaya Grafik
@@ -793,6 +798,11 @@ Invert	Balik
 Invert color scheme	Balik skema warna
 Invert the selection.	Balik seleksi.
 IS NULL	IS NULL
+it connects to an address on the internet	terhubung ke alamat di internet
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	hanya boleh dilakukan oleh Anda (plugin, skrip, tugas, model, dan runner GeoLibre)
+it reads or writes files on this computer	membaca atau menulis file di komputer ini
+it replaces the open project	mengganti proyek yang terbuka
+it runs a plugin's command	menjalankan perintah plugin
 It runs in a sandbox with no other access to your computer or the network.	Plugin berjalan di sandbox tanpa akses lain ke komputer Anda atau jaringan.
 It's too large to keep in the browser: install it again on your next visit.	Plugin terlalu besar untuk disimpan di peramban: pasang ulang saat kunjungan berikutnya.
 Item Pop-ups	Pop-up Item
@@ -913,6 +923,7 @@ Map scale	Skala peta
 Map Series	Seri Peta
 Map Series Page	Halaman Seri Peta
 Map series page name	Nama halaman seri peta
+Map style (JSON)	Gaya peta (JSON)
 Map Surrounds	Pelengkap Peta
 Map Thumbnail	Thumbnail Peta
 Map View	Tampilan Peta
@@ -952,6 +963,7 @@ Mobile Map	Peta Seluler
 Mod+	Mod+
 Model	Model
 Model\nBuilder	Model\nBuilder
+model id	id model
 ModelBuilder	ModelBuilder
 Models	Model
 Modify	Ubah
@@ -1059,6 +1071,7 @@ Off	Mati
 Offline	Offline
 Offline area	Area offline
 OID	OID
+Ollama (local)	Ollama (lokal)
 On	Nyala
 On Hold	Ditangguhkan
 on hold	ditangguhkan
@@ -1094,6 +1107,7 @@ Open the selected layer's table.	Buka tabel layer terpilih.
 Open the Symbology pane.	Buka panel Simbologi.
 Open {code} on epsg.io	Buka {code} di epsg.io
 Open, save and create projects	Buka, simpan, dan buat proyek
+OpenAI-compatible	Kompatibel dengan OpenAI
 Opened {name} for printing	{name} dibuka untuk dicetak
 Open…	Buka…
 Options	Opsi
@@ -1110,6 +1124,7 @@ Output Name	Nama Keluaran
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Lebih dari 1.000 alat raster, vektor, LiDAR, hidrologi, dan medan yang berjalan di peramban, dengan unduhan sekali sekitar 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Lebih dari 1.000 alat raster, vektor, LiDAR, hidrologi, dan medan, dari unduhan opsional sekitar 20 MB.
 Overlay	Overlay
+overlay	overlay
 Overlay (a transparent layer kept on top, such as labels or roads)	Overlay (layer transparan yang tetap di atas, seperti label atau jalan)
 Package	Paket
 Package a trained deep learning model.	Kemas model deep learning yang telah dilatih.
@@ -1243,7 +1258,9 @@ Raster Effects	Efek Raster
 Raster Functions	Fungsi Raster
 Raster Information	Informasi Raster
 Raster Layer	Layer Raster
+Raster tiles (XYZ)	Ubin raster (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} band · {renderer}
+Read and write files on this computer	Membaca dan menulis file di komputer ini
 Read the map's layers and features	Membaca layer dan fitur peta
 Reads and writes files	Membaca dan menulis file
 Reads the map	Membaca peta
@@ -1552,6 +1569,7 @@ Step {n} done	Langkah {n} selesai
 Stop	Hentikan
 Stop drawing labels, for faster navigation.	Berhenti menggambar label agar navigasi lebih cepat.
 Stop filling the cache.	Hentikan pengisian cache.
+Stopped.	Dihentikan.
 Stretch	Peregangan
 Stretch\nType	Tipe\nPeregangan
 Stretch it over the map view, or give control points (one per line: column row lon lat).	Regangkan di atas tampilan peta, atau berikan titik kontrol (satu per baris: kolom baris bujur lintang).
@@ -1614,6 +1632,8 @@ the map has no layers	peta tidak memiliki layer
 The map is drawn in this coordinate system; layers are projected on the fly.	Peta digambar dalam sistem koordinat ini; lapisan diproyeksikan secara langsung.
 The map view as it is now	Tampilan peta seperti sekarang
 The model answering; click to change it	Model yang menjawab; klik untuk mengubahnya
+the model declined this request	model menolak permintaan ini
+The model sent an empty reply; ask again, or try another model.	Model mengirim balasan kosong; tanyakan lagi, atau coba model lain.
 the page is too large to draw	halaman terlalu besar untuk digambar
 the presentation export failed unexpectedly	ekspor presentasi gagal secara tak terduga
 the preview failed unexpectedly	pratinjau gagal secara tak terduga
@@ -1623,6 +1643,7 @@ The project's thumbnail, from the map view.	Thumbnail proyek, dari tampilan peta
 The projection the map opens in.	Proyeksi saat peta dibuka.
 The raster's data couldn't be read.	Data raster tidak dapat dibaca.
 The raster's data couldn't be read: {path}	Data raster tidak dapat dibaca: {path}
+the reply reached its length limit	balasan mencapai batas panjangnya
 the report export failed unexpectedly	ekspor laporan gagal secara tak terduga
 The Shapefile's files download as one zip.	Berkas-berkas Shapefile diunduh sebagai satu zip.
 the view has no extent	tampilan tidak memiliki cakupan
@@ -1698,6 +1719,7 @@ Valid expression · {n} matching rows	Ekspresi valid · {n} baris cocok
 Validate	Validasi
 value (empty: no-data)	nilai (kosong: tanpa data)
 Vector and raster data	Data vektor dan raster
+Vector tiles (MVT)	Ubin vektor (MVT)
 Version {version}	Versi {version}
 Vertex	Verteks
 Video	Video
@@ -1805,5 +1827,15 @@ Zoom to the selected features.	Zoom ke fitur terpilih.
 Zoom to the whole world.	Zoom ke seluruh dunia.
 Zoom to Tokyo	Zoom ke Tokyo
 Zoom To World	Zoom ke Dunia
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} telah berubah sejak dipasang; pasang ulang dari Pengelola Plugin.
+{name} was withdrawn from the plugin registry and has been turned off.	{name} ditarik dari registri plugin dan telah dinonaktifkan.
+{name} was withdrawn from the plugin registry: {reason}	{name} ditarik dari registri plugin: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: unduhan tidak cocok dengan registri; plugin tidak dipasang.
+{name}: the download is a different plugin; it wasn't installed.	{name}: unduhan adalah plugin yang berbeda; plugin tidak dipasang.
+{shown} of {total} plugins	{shown} dari {total} plugin
+{total} plugins	{total} plugin
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, dibaca di tempat · sampel {n} dari {matched} fitur dalam tampilan (perbesar untuk melihat semuanya) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, dibaca di tempat · {n} dari {total} fitur dalam tampilan · {renderer}
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: hanya alamat HTTPS, atau HTTP biasa di komputer atau jaringan ini, yang diizinkan
 © OpenStreetMap contributors	© kontributor OpenStreetMap
 ⌘K	⌘K

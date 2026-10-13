@@ -236,11 +236,13 @@ Change Detection	Veranderingsdetectie
 Change the map's backdrop.	De achtergrond van de kaart wijzigen.
 Change the map's coordinate system	Het coördinatenstelsel van de kaart wijzigen
 Change the page size and orientation.	Het paginaformaat en de oriëntatie wijzigen.
+Change the project (add layers, edit features, change symbology)	Het project wijzigen (lagen toevoegen, objecten bewerken, symbologie wijzigen)
 Chart categories	Diagramcategorieën
 Chart Frame	Diagramkader
 China	China
 Choose a band combination to display the raster layer.	Kies een bandcombinatie om de rasterlaag weer te geven.
 Choose a contrast stretch for the raster layer.	Kies een contraststretch voor de rasterlaag.
+Choose a model.	Kies een model.
 Choose a resampling type for the raster layer.	Kies een resamplingtype voor de rasterlaag.
 Choose extra buttons for the Quick Access Toolbar.	Extra knoppen kiezen voor de werkbalk Snelle toegang.
 Choose how the flat map lays out the Earth.	Kiezen hoe de platte kaart de aarde weergeeft.
@@ -533,6 +535,8 @@ Enabled	Ingeschakeld
 Encloses each feature, or all features, in its convex hull.	Omsluit elk object, of alle objecten, met de convexe omhulling.
 End	Einde
 Enhancement	Verbetering
+Enter an API key.	Voer een API-sleutel in.
+Enter the provider's address.	Voer het adres van de aanbieder in.
 Enter to send, Shift+Enter for a new line	Enter om te verzenden, Shift+Enter voor een nieuwe regel
 Environments	Omgevingen
 EPSG code	EPSG-code
@@ -694,6 +698,7 @@ Go forward to the next extent.	Verder naar het volgende bereik.
 Go to a saved extent or save the current one.	Naar een opgeslagen bereik gaan of het huidige opslaan.
 Go To Bookmark	Naar bladwijzer gaan
 Go To XY	Ga naar XY
+Google Gemini	Google Gemini
 GPX	GPX
 Graduated Colors	Gegradueerde kleuren
 Graphic Style	Grafische stijl
@@ -793,6 +798,11 @@ Invert	Omkeren
 Invert color scheme	Kleurenschema omkeren
 Invert the selection.	De selectie omkeren.
 IS NULL	IS NULL
+it connects to an address on the internet	het maakt verbinding met een adres op internet
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	het is aan jou voorbehouden (plugins, scripts, taken, modellen en de GeoLibre-runner)
+it reads or writes files on this computer	het leest of schrijft bestanden op deze computer
+it replaces the open project	het vervangt het geopende project
+it runs a plugin's command	het voert een opdracht van een plugin uit
 It runs in a sandbox with no other access to your computer or the network.	De plugin draait in een sandbox zonder verdere toegang tot je computer of het netwerk.
 It's too large to keep in the browser: install it again on your next visit.	De plugin is te groot om in de browser te bewaren: installeer hem bij je volgende bezoek opnieuw.
 Item Pop-ups	Item-pop-ups
@@ -913,6 +923,7 @@ Map scale	Kaartschaal
 Map Series	Kaartreeks
 Map Series Page	Kaartreekspagina
 Map series page name	Naam van kaartreekspagina
+Map style (JSON)	Kaartstijl (JSON)
 Map Surrounds	Kaartelementen
 Map Thumbnail	Kaartminiatuur
 Map View	Kaartweergave
@@ -952,6 +963,7 @@ Mobile Map	Mobiele kaart
 Mod+	Mod+
 Model	Model
 Model\nBuilder	Model-\nBuilder
+model id	model-id
 ModelBuilder	ModelBuilder
 Models	Modellen
 Modify	Wijzigen
@@ -1059,6 +1071,7 @@ Off	Uit
 Offline	Offline
 Offline area	Offline gebied
 OID	OID
+Ollama (local)	Ollama (lokaal)
 On	Aan
 On Hold	In de wacht
 on hold	in de wacht
@@ -1094,6 +1107,7 @@ Open the selected layer's table.	De tabel van de geselecteerde laag openen.
 Open the Symbology pane.	Het symbologievenster openen.
 Open {code} on epsg.io	{code} openen op epsg.io
 Open, save and create projects	Projecten openen, opslaan en maken
+OpenAI-compatible	OpenAI-compatibel
 Opened {name} for printing	{name} geopend om af te drukken
 Open…	Openen…
 Options	Opties
@@ -1110,6 +1124,7 @@ Output Name	Uitvoernaam
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Meer dan 1.000 raster-, vector-, LiDAR-, hydrologie- en terreingereedschappen die in de browser draaien, na een eenmalige download van ongeveer 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Meer dan 1.000 raster-, vector-, LiDAR-, hydrologie- en terreingereedschappen als optionele download van ongeveer 20 MB.
 Overlay	Overlay
+overlay	overlay
 Overlay (a transparent layer kept on top, such as labels or roads)	Overlay (een transparante laag die bovenop blijft, zoals labels of wegen)
 Package	Pakket
 Package a trained deep learning model.	Een getraind deep learning-model verpakken.
@@ -1243,7 +1258,9 @@ Raster Effects	Rastereffecten
 Raster Functions	Rasterfuncties
 Raster Information	Rasterinformatie
 Raster Layer	Rasterlaag
+Raster tiles (XYZ)	Rastertegels (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} banden · {renderer}
+Read and write files on this computer	Bestanden op deze computer lezen en schrijven
 Read the map's layers and features	De lagen en objecten van de kaart lezen
 Reads and writes files	Leest en schrijft bestanden
 Reads the map	Leest de kaart
@@ -1552,6 +1569,7 @@ Step {n} done	Stap {n} voltooid
 Stop	Stoppen
 Stop drawing labels, for faster navigation.	Stoppen met labels tekenen, voor sneller navigeren.
 Stop filling the cache.	Stoppen met het vullen van de cache.
+Stopped.	Gestopt.
 Stretch	Stretch
 Stretch\nType	Stretch-\ntype
 Stretch it over the map view, or give control points (one per line: column row lon lat).	Over de kaartweergave uitrekken, of controlepunten opgeven (één per regel: kolom rij lon lat).
@@ -1614,6 +1632,8 @@ the map has no layers	de kaart heeft geen lagen
 The map is drawn in this coordinate system; layers are projected on the fly.	De kaart wordt in dit coördinatenstelsel getekend; lagen worden direct geprojecteerd.
 The map view as it is now	De kaartweergave zoals ze nu is
 The model answering; click to change it	Het model dat antwoordt; klik om het te wijzigen
+the model declined this request	het model heeft dit verzoek geweigerd
+The model sent an empty reply; ask again, or try another model.	Het model stuurde een leeg antwoord; vraag het opnieuw of probeer een ander model.
 the page is too large to draw	de pagina is te groot om te tekenen
 the presentation export failed unexpectedly	het exporteren van de presentatie is onverwacht mislukt
 the preview failed unexpectedly	het voorbeeld is onverwacht mislukt
@@ -1623,6 +1643,7 @@ The project's thumbnail, from the map view.	De miniatuur van het project, uit de
 The projection the map opens in.	De projectie waarin de kaart opent.
 The raster's data couldn't be read.	De rastergegevens konden niet worden gelezen.
 The raster's data couldn't be read: {path}	De rastergegevens konden niet worden gelezen: {path}
+the reply reached its length limit	het antwoord heeft de maximale lengte bereikt
 the report export failed unexpectedly	het exporteren van het rapport is onverwacht mislukt
 The Shapefile's files download as one zip.	De bestanden van de Shapefile worden als één zip gedownload.
 the view has no extent	de weergave heeft geen bereik
@@ -1698,6 +1719,7 @@ Valid expression · {n} matching rows	Geldige expressie · {n} overeenkomende ri
 Validate	Valideren
 value (empty: no-data)	waarde (leeg: no-data)
 Vector and raster data	Vector- en rastergegevens
+Vector tiles (MVT)	Vectortegels (MVT)
 Version {version}	Versie {version}
 Vertex	Hoekpunt
 Video	Video
@@ -1805,5 +1827,15 @@ Zoom to the selected features.	Zoomen naar de geselecteerde objecten.
 Zoom to the whole world.	Zoomen naar de hele wereld.
 Zoom to Tokyo	Zoomen naar Tokio
 Zoom To World	Zoomen naar wereld
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} is gewijzigd sinds de installatie; installeer het opnieuw via Pluginbeheer.
+{name} was withdrawn from the plugin registry and has been turned off.	{name} is uit het pluginregister teruggetrokken en is uitgeschakeld.
+{name} was withdrawn from the plugin registry: {reason}	{name} is uit het pluginregister teruggetrokken: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: de download komt niet overeen met het register; de plugin is niet geïnstalleerd.
+{name}: the download is a different plugin; it wasn't installed.	{name}: de download is een andere plugin; de plugin is niet geïnstalleerd.
+{shown} of {total} plugins	{shown} van {total} plugins
+{total} plugins	{total} plugins
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, ter plekke gelezen · een steekproef van {n} van de {matched} objecten in beeld (zoom in om ze allemaal te zien) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, ter plekke gelezen · {n} van {total} objecten in beeld · {renderer}
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: alleen HTTPS-adressen, of gewoon HTTP op deze computer of dit netwerk, zijn toegestaan
 © OpenStreetMap contributors	© OpenStreetMap-bijdragers
 ⌘K	⌘K

@@ -236,11 +236,13 @@ Change Detection	変化抽出
 Change the map's backdrop.	マップの背景を変更します。
 Change the map's coordinate system	マップの座標系を変更
 Change the page size and orientation.	ページのサイズと向きを変更します。
+Change the project (add layers, edit features, change symbology)	プロジェクトの変更 (レイヤーの追加、フィーチャの編集、シンボルの変更)
 Chart categories	グラフのカテゴリ
 Chart Frame	グラフ フレーム
 China	中国
 Choose a band combination to display the raster layer.	ラスター レイヤーを表示するバンドの組み合わせを選択します。
 Choose a contrast stretch for the raster layer.	ラスター レイヤーのコントラスト ストレッチを選択します。
+Choose a model.	モデルを選択してください。
 Choose a resampling type for the raster layer.	ラスター レイヤーのリサンプリング タイプを選択します。
 Choose extra buttons for the Quick Access Toolbar.	クイック アクセス ツールバーに追加するボタンを選択します。
 Choose how the flat map lays out the Earth.	平面マップで地球をどのように表すかを選択します。
@@ -533,6 +535,8 @@ Enabled	有効
 Encloses each feature, or all features, in its convex hull.	各フィーチャ、またはすべてのフィーチャを凸包で囲みます。
 End	終了
 Enhancement	強調
+Enter an API key.	API キーを入力してください。
+Enter the provider's address.	プロバイダーのアドレスを入力してください。
 Enter to send, Shift+Enter for a new line	Enter で送信、Shift+Enter で改行
 Environments	環境
 EPSG code	EPSG コード
@@ -694,6 +698,7 @@ Go forward to the next extent.	次の範囲に進みます。
 Go to a saved extent or save the current one.	保存した範囲に移動するか、現在の範囲を保存します。
 Go To Bookmark	ブックマークに移動
 Go To XY	XY に移動
+Google Gemini	Google Gemini
 GPX	GPX
 Graduated Colors	等級色
 Graphic Style	グラフィック スタイル
@@ -793,6 +798,11 @@ Invert	反転
 Invert color scheme	配色を反転
 Invert the selection.	選択を反転します。
 IS NULL	IS NULL
+it connects to an address on the internet	インターネット上のアドレスに接続する
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	ユーザー本人専用の操作（プラグイン、スクリプト、タスク、モデル、GeoLibre ランナー）である
+it reads or writes files on this computer	このコンピューター上のファイルを読み書きする
+it replaces the open project	開いているプロジェクトを置き換える
+it runs a plugin's command	プラグインのコマンドを実行する
 It runs in a sandbox with no other access to your computer or the network.	サンドボックス内で実行され、コンピューターやネットワークへのその他のアクセスはできません。
 It's too large to keep in the browser: install it again on your next visit.	ブラウザーに保存するには大きすぎます。次回のアクセス時に再インストールしてください。
 Item Pop-ups	アイテムのポップアップ
@@ -913,6 +923,7 @@ Map scale	マップ縮尺
 Map Series	マップ シリーズ
 Map Series Page	マップ シリーズ ページ
 Map series page name	マップ シリーズ ページ名
+Map style (JSON)	マップ スタイル (JSON)
 Map Surrounds	マップ整飾
 Map Thumbnail	マップのサムネイル
 Map View	マップ ビュー
@@ -952,6 +963,7 @@ Mobile Map	モバイル マップ
 Mod+	Mod+
 Model	モデル
 Model\nBuilder	モデル\nビルダー
+model id	モデル ID
 ModelBuilder	ModelBuilder
 Models	モデル
 Modify	変更
@@ -1059,6 +1071,7 @@ Off	オフ
 Offline	オフライン
 Offline area	オフライン エリア
 OID	OID
+Ollama (local)	Ollama（ローカル）
 On	オン
 On Hold	保留中
 on hold	保留中
@@ -1094,6 +1107,7 @@ Open the selected layer's table.	選択したレイヤーのテーブルを開�
 Open the Symbology pane.	シンボル ウィンドウを開きます。
 Open {code} on epsg.io	epsg.io で {code} を開く
 Open, save and create projects	プロジェクトを開く、保存する、作成する
+OpenAI-compatible	OpenAI 互換
 Opened {name} for printing	印刷用に {name} を開きました
 Open…	開く…
 Options	オプション
@@ -1110,6 +1124,7 @@ Output Name	出力名
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	ブラウザーで動く、ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツール (初回のみ約 25 MB をダウンロード)。
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツール (約 20 MB のオプションのダウンロード)。
 Overlay	オーバーレイ
+overlay	オーバーレイ
 Overlay (a transparent layer kept on top, such as labels or roads)	オーバーレイ (ラベルや道路など、最前面に保持される透明なレイヤー)
 Package	パッケージ
 Package a trained deep learning model.	学習済みのディープ ラーニング モデルをパッケージ化します。
@@ -1243,7 +1258,9 @@ Raster Effects	ラスター効果
 Raster Functions	ラスター関数
 Raster Information	ラスター情報
 Raster Layer	ラスター レイヤー
+Raster tiles (XYZ)	ラスター タイル (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	ラスター · {w} × {h} · {n} バンド · {renderer}
+Read and write files on this computer	このコンピューター上のファイルの読み書き
 Read the map's layers and features	マップのレイヤーとフィーチャの読み取り
 Reads and writes files	ファイルの読み書き
 Reads the map	マップの読み取り
@@ -1552,6 +1569,7 @@ Step {n} done	ステップ {n} が完了しました
 Stop	停止
 Stop drawing labels, for faster navigation.	ナビゲーションを速くするためにラベルの描画を停止します。
 Stop filling the cache.	キャッシュの作成を停止します。
+Stopped.	停止しました。
 Stretch	ストレッチ
 Stretch\nType	ストレッチ\nタイプ
 Stretch it over the map view, or give control points (one per line: column row lon lat).	マップ ビューに合わせて引き伸ばすか、コントロール ポイントを指定します (1 行に 1 つ: 列 行 経度 緯度)。
@@ -1614,6 +1632,8 @@ the map has no layers	マップにレイヤーがありません
 The map is drawn in this coordinate system; layers are projected on the fly.	マップはこの座標系で描画され、レイヤーはその場で投影されます。
 The map view as it is now	現在のマップ ビュー
 The model answering; click to change it	応答しているモデル。クリックで変更
+the model declined this request	モデルがこのリクエストを拒否しました
+The model sent an empty reply; ask again, or try another model.	モデルから空の応答が返されました。もう一度質問するか、別のモデルをお試しください。
 the page is too large to draw	ページが大きすぎて描画できません
 the presentation export failed unexpectedly	プレゼンテーションのエクスポートが予期せず失敗しました
 the preview failed unexpectedly	プレビューが予期せず失敗しました
@@ -1623,6 +1643,7 @@ The project's thumbnail, from the map view.	マップ ビューから作成す�
 The projection the map opens in.	マップを開くときの投影法。
 The raster's data couldn't be read.	ラスターのデータを読み込めませんでした。
 The raster's data couldn't be read: {path}	ラスターのデータを読み込めませんでした: {path}
+the reply reached its length limit	応答が長さの上限に達しました
 the report export failed unexpectedly	レポートのエクスポートが予期せず失敗しました
 The Shapefile's files download as one zip.	Shapefile のファイルは 1 つの zip としてダウンロードされます。
 the view has no extent	ビューに範囲がありません
@@ -1698,6 +1719,7 @@ Valid expression · {n} matching rows	有効な式 · 一致する行 {n} 件
 Validate	検証
 value (empty: no-data)	値 (空: NoData)
 Vector and raster data	ベクター データとラスター データ
+Vector tiles (MVT)	ベクター タイル (MVT)
 Version {version}	バージョン {version}
 Vertex	頂点
 Video	動画
@@ -1805,5 +1827,15 @@ Zoom to the selected features.	選択したフィーチャにズームします�
 Zoom to the whole world.	世界全体にズームします。
 Zoom to Tokyo	東京にズーム
 Zoom To World	世界にズーム
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} はインストール後に変更されています。プラグイン マネージャーから再インストールしてください。
+{name} was withdrawn from the plugin registry and has been turned off.	{name} はプラグイン レジストリから取り下げられたため、無効にしました。
+{name} was withdrawn from the plugin registry: {reason}	{name} はプラグイン レジストリから取り下げられました: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: ダウンロードした内容がレジストリと一致しないため、インストールしませんでした。
+{name}: the download is a different plugin; it wasn't installed.	{name}: ダウンロードしたのは別のプラグインのため、インストールしませんでした。
+{shown} of {total} plugins	{total} 個中 {shown} 個のプラグイン
+{total} plugins	{total} 個のプラグイン
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}、その場で読み込み · 表示範囲の {matched} 件のフィーチャのうち {n} 件のサンプル（すべて表示するにはズームイン）· {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}、その場で読み込み · 表示範囲のフィーチャ {total} 件中 {n} 件 · {renderer}
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: 使用できるのは HTTPS のアドレス、またはこのコンピューターかネットワーク上の通常の HTTP のみです
 © OpenStreetMap contributors	© OpenStreetMap contributors
 ⌘K	⌘K

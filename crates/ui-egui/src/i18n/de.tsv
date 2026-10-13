@@ -236,11 +236,13 @@ Change Detection	Änderungserkennung
 Change the map's backdrop.	Den Kartenhintergrund ändern.
 Change the map's coordinate system	Koordinatensystem der Karte ändern
 Change the page size and orientation.	Seitengröße und Ausrichtung ändern.
+Change the project (add layers, edit features, change symbology)	Das Projekt ändern (Layer hinzufügen, Objekte bearbeiten, Symbologie ändern)
 Chart categories	Diagrammkategorien
 Chart Frame	Diagrammrahmen
 China	China
 Choose a band combination to display the raster layer.	Eine Kanalkombination zur Anzeige des Raster-Layers wählen.
 Choose a contrast stretch for the raster layer.	Eine Kontraststreckung für den Raster-Layer wählen.
+Choose a model.	Wählen Sie ein Modell.
 Choose a resampling type for the raster layer.	Ein Resampling-Verfahren für den Raster-Layer wählen.
 Choose extra buttons for the Quick Access Toolbar.	Zusätzliche Schaltflächen für die Schnellzugriffsleiste wählen.
 Choose how the flat map lays out the Earth.	Wählen, wie die flache Karte die Erde abbildet.
@@ -533,6 +535,8 @@ Enabled	Aktiviert
 Encloses each feature, or all features, in its convex hull.	Umschließt jedes Objekt oder alle Objekte mit ihrer konvexen Hülle.
 End	Ende
 Enhancement	Verbesserung
+Enter an API key.	Geben Sie einen API-Schlüssel ein.
+Enter the provider's address.	Geben Sie die Adresse des Anbieters ein.
 Enter to send, Shift+Enter for a new line	Enter zum Senden, Shift+Enter für eine neue Zeile
 Environments	Umgebungen
 EPSG code	EPSG-Code
@@ -694,6 +698,7 @@ Go forward to the next extent.	Zur nächsten Ausdehnung wechseln.
 Go to a saved extent or save the current one.	Zu einer gespeicherten Ausdehnung wechseln oder die aktuelle speichern.
 Go To Bookmark	Zu Lesezeichen wechseln
 Go To XY	Zu XY wechseln
+Google Gemini	Google Gemini
 GPX	GPX
 Graduated Colors	Abgestufte Farben
 Graphic Style	Grafikstil
@@ -793,6 +798,11 @@ Invert	Umkehren
 Invert color scheme	Farbschema umkehren
 Invert the selection.	Die Auswahl umkehren.
 IS NULL	IS NULL
+it connects to an address on the internet	es verbindet sich mit einer Adresse im Internet
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	es ist Ihnen vorbehalten (Plugins, Skripte, Aufgaben, Modelle und der GeoLibre-Runner)
+it reads or writes files on this computer	es liest oder schreibt Dateien auf diesem Computer
+it replaces the open project	es ersetzt das geöffnete Projekt
+it runs a plugin's command	es führt einen Befehl eines Plugins aus
 It runs in a sandbox with no other access to your computer or the network.	Es läuft in einer Sandbox ohne weiteren Zugriff auf Ihren Computer oder das Netzwerk.
 It's too large to keep in the browser: install it again on your next visit.	Es ist zu groß, um im Browser gespeichert zu werden: Installieren Sie es bei Ihrem nächsten Besuch erneut.
 Item Pop-ups	Element-Pop-ups
@@ -913,6 +923,7 @@ Map scale	Kartenmaßstab
 Map Series	Kartenserie
 Map Series Page	Kartenserienseite
 Map series page name	Name der Kartenserienseite
+Map style (JSON)	Kartenstil (JSON)
 Map Surrounds	Kartenelemente
 Map Thumbnail	Kartenminiatur
 Map View	Kartenansicht
@@ -952,6 +963,7 @@ Mobile Map	Mobile Karte
 Mod+	Mod+
 Model	Modell
 Model\nBuilder	Model\nBuilder
+model id	Modell-ID
 ModelBuilder	ModelBuilder
 Models	Modelle
 Modify	Ändern
@@ -1059,6 +1071,7 @@ Off	Aus
 Offline	Offline
 Offline area	Offline-Bereich
 OID	OID
+Ollama (local)	Ollama (lokal)
 On	Ein
 On Hold	Zurückgestellt
 on hold	zurückgestellt
@@ -1094,6 +1107,7 @@ Open the selected layer's table.	Die Tabelle des ausgewählten Layers öffnen.
 Open the Symbology pane.	Den Symbologie-Bereich öffnen.
 Open {code} on epsg.io	{code} auf epsg.io öffnen
 Open, save and create projects	Projekte öffnen, speichern und erstellen
+OpenAI-compatible	OpenAI-kompatibel
 Opened {name} for printing	{name} zum Drucken geöffnet
 Open…	Öffnen…
 Options	Optionen
@@ -1110,6 +1124,7 @@ Output Name	Ausgabename
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Über 1.000 Raster-, Vektor-, LiDAR-, Hydrologie- und Geländewerkzeuge, die im Browser laufen, nach einem einmaligen Download von etwa 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Über 1.000 Raster-, Vektor-, LiDAR-, Hydrologie- und Geländewerkzeuge als optionaler Download von etwa 20 MB.
 Overlay	Überlagerung
+overlay	Überlagerung
 Overlay (a transparent layer kept on top, such as labels or roads)	Überlagerung (ein transparenter Layer, der oben bleibt, etwa Beschriftungen oder Straßen)
 Package	Paket
 Package a trained deep learning model.	Ein trainiertes Deep-Learning-Modell packen.
@@ -1243,7 +1258,9 @@ Raster Effects	Rastereffekte
 Raster Functions	Rasterfunktionen
 Raster Information	Rasterinformationen
 Raster Layer	Raster-Layer
+Raster tiles (XYZ)	Rasterkacheln (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} Kanäle · {renderer}
+Read and write files on this computer	Dateien auf diesem Computer lesen und schreiben
 Read the map's layers and features	Layer und Objekte der Karte lesen
 Reads and writes files	Liest und schreibt Dateien
 Reads the map	Liest die Karte
@@ -1552,6 +1569,7 @@ Step {n} done	Schritt {n} erledigt
 Stop	Stoppen
 Stop drawing labels, for faster navigation.	Beschriftungen nicht zeichnen, für schnellere Navigation.
 Stop filling the cache.	Das Füllen des Caches beenden.
+Stopped.	Gestoppt.
 Stretch	Streckung
 Stretch\nType	Streckungs-\ntyp
 Stretch it over the map view, or give control points (one per line: column row lon lat).	Über die Kartenansicht strecken oder Passpunkte angeben (einer pro Zeile: Spalte Zeile Länge Breite).
@@ -1614,6 +1632,8 @@ the map has no layers	die Karte hat keine Layer
 The map is drawn in this coordinate system; layers are projected on the fly.	Die Karte wird in diesem Koordinatensystem gezeichnet; Layer werden spontan projiziert.
 The map view as it is now	Die Kartenansicht im aktuellen Zustand
 The model answering; click to change it	Das antwortende Modell; zum Ändern klicken
+the model declined this request	das Modell hat diese Anfrage abgelehnt
+The model sent an empty reply; ask again, or try another model.	Das Modell hat eine leere Antwort gesendet; fragen Sie erneut oder versuchen Sie ein anderes Modell.
 the page is too large to draw	die Seite ist zu groß zum Zeichnen
 the presentation export failed unexpectedly	der Präsentations-Export ist unerwartet fehlgeschlagen
 the preview failed unexpectedly	die Vorschau ist unerwartet fehlgeschlagen
@@ -1623,6 +1643,7 @@ The project's thumbnail, from the map view.	Die Miniaturansicht des Projekts, au
 The projection the map opens in.	Die Projektion, in der die Karte startet.
 The raster's data couldn't be read.	Die Daten des Rasters konnten nicht gelesen werden.
 The raster's data couldn't be read: {path}	Die Daten des Rasters konnten nicht gelesen werden: {path}
+the reply reached its length limit	die Antwort hat ihre Längenbegrenzung erreicht
 the report export failed unexpectedly	der Berichts-Export ist unerwartet fehlgeschlagen
 The Shapefile's files download as one zip.	Die Dateien des Shapefiles werden als eine ZIP-Datei heruntergeladen.
 the view has no extent	die Ansicht hat keine Ausdehnung
@@ -1698,6 +1719,7 @@ Valid expression · {n} matching rows	Gültiger Ausdruck · {n} passende Zeilen
 Validate	Validieren
 value (empty: no-data)	Wert (leer: NoData)
 Vector and raster data	Vektor- und Rasterdaten
+Vector tiles (MVT)	Vektorkacheln (MVT)
 Version {version}	Version {version}
 Vertex	Stützpunkt
 Video	Video
@@ -1805,5 +1827,15 @@ Zoom to the selected features.	Auf die ausgewählten Objekte zoomen.
 Zoom to the whole world.	Auf die ganze Welt zoomen.
 Zoom to Tokyo	Auf Tokio zoomen
 Zoom To World	Auf Welt zoomen
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} wurde seit der Installation geändert; installieren Sie es erneut über den Plugin-Manager.
+{name} was withdrawn from the plugin registry and has been turned off.	{name} wurde aus dem Plugin-Verzeichnis zurückgezogen und deaktiviert.
+{name} was withdrawn from the plugin registry: {reason}	{name} wurde aus dem Plugin-Verzeichnis zurückgezogen: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: Der Download stimmt nicht mit dem Plugin-Verzeichnis überein; es wurde nicht installiert.
+{name}: the download is a different plugin; it wasn't installed.	{name}: Der Download ist ein anderes Plugin; es wurde nicht installiert.
+{shown} of {total} plugins	{shown} von {total} Plugins
+{total} plugins	{total} Plugins
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, direkt gelesen · eine Stichprobe von {n} der {matched} Objekte im Ausschnitt (zum Anzeigen aller hineinzoomen) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, direkt gelesen · {n} von {total} Objekten im Ausschnitt · {renderer}
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: Erlaubt sind nur HTTPS-Adressen oder einfaches HTTP auf diesem Computer bzw. im lokalen Netzwerk
 © OpenStreetMap contributors	© OpenStreetMap-Mitwirkende
 ⌘K	⌘K

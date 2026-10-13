@@ -236,11 +236,13 @@ Change Detection	Değişim Tespiti
 Change the map's backdrop.	Haritanın arka planını değiştir.
 Change the map's coordinate system	Haritanın koordinat sistemini değiştir
 Change the page size and orientation.	Sayfa boyutunu ve yönünü değiştir.
+Change the project (add layers, edit features, change symbology)	Projeyi değiştirme (katman ekleme, detayları düzenleme, sembolojiyi değiştirme)
 Chart categories	Grafik kategorileri
 Chart Frame	Grafik Çerçevesi
 China	Çin
 Choose a band combination to display the raster layer.	Raster katmanını görüntülemek için bir bant kombinasyonu seçin.
 Choose a contrast stretch for the raster layer.	Raster katmanı için bir kontrast germe seçin.
+Choose a model.	Bir model seçin.
 Choose a resampling type for the raster layer.	Raster katmanı için bir yeniden örnekleme türü seçin.
 Choose extra buttons for the Quick Access Toolbar.	Hızlı Erişim Araç Çubuğu için ek düğmeler seç.
 Choose how the flat map lays out the Earth.	Düz haritanın Dünya'yı nasıl gösterdiğini seçin.
@@ -533,6 +535,8 @@ Enabled	Etkin
 Encloses each feature, or all features, in its convex hull.	Her detayı veya tüm detayları dışbükey zarfı içine alır.
 End	Bitiş
 Enhancement	İyileştirme
+Enter an API key.	Bir API anahtarı girin.
+Enter the provider's address.	Sağlayıcının adresini girin.
 Enter to send, Shift+Enter for a new line	Göndermek için Enter, yeni satır için Shift+Enter
 Environments	Ortamlar
 EPSG code	EPSG kodu
@@ -694,6 +698,7 @@ Go forward to the next extent.	Sonraki kapsama ilerle.
 Go to a saved extent or save the current one.	Kayıtlı bir kapsama git veya geçerli kapsamı kaydet.
 Go To Bookmark	Yer İmine Git
 Go To XY	XY'ye Git
+Google Gemini	Google Gemini
 GPX	GPX
 Graduated Colors	Dereceli Renkler
 Graphic Style	Grafik Stili
@@ -793,6 +798,11 @@ Invert	Ters Çevir
 Invert color scheme	Renk şemasını ters çevir
 Invert the selection.	Seçimi ters çevir.
 IS NULL	IS NULL
+it connects to an address on the internet	internetteki bir adrese bağlanır
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	yalnızca size ayrılmıştır (eklentiler, betikler, görevler, modeller ve GeoLibre çalıştırıcısı)
+it reads or writes files on this computer	bu bilgisayardaki dosyaları okur veya yazar
+it replaces the open project	açık projeyi değiştirir
+it runs a plugin's command	bir eklentinin komutunu çalıştırır
 It runs in a sandbox with no other access to your computer or the network.	Bilgisayarınıza veya ağa başka hiçbir erişimi olmayan bir korumalı alanda çalışır.
 It's too large to keep in the browser: install it again on your next visit.	Tarayıcıda saklanamayacak kadar büyük: Bir sonraki ziyaretinizde yeniden yükleyin.
 Item Pop-ups	Öğe Açılır Pencereleri
@@ -913,6 +923,7 @@ Map scale	Harita ölçeği
 Map Series	Harita Serisi
 Map Series Page	Harita Serisi Sayfası
 Map series page name	Harita serisi sayfa adı
+Map style (JSON)	Harita stili (JSON)
 Map Surrounds	Harita Öğeleri
 Map Thumbnail	Harita Küçük Resmi
 Map View	Harita Görünümü
@@ -952,6 +963,7 @@ Mobile Map	Mobil Harita
 Mod+	Mod+
 Model	Model
 Model\nBuilder	Model\nOluşturucu
+model id	model kimliği
 ModelBuilder	Model Oluşturucu
 Models	Modeller
 Modify	Değiştir
@@ -1059,6 +1071,7 @@ Off	Kapalı
 Offline	Çevrimdışı
 Offline area	Çevrimdışı alan
 OID	OID
+Ollama (local)	Ollama (yerel)
 On	Açık
 On Hold	Beklemede
 on hold	beklemede
@@ -1094,6 +1107,7 @@ Open the selected layer's table.	Seçili katmanın tablosunu aç.
 Open the Symbology pane.	Semboloji panelini aç.
 Open {code} on epsg.io	{code} kodunu epsg.io'da aç
 Open, save and create projects	Projeleri aç, kaydet ve oluştur
+OpenAI-compatible	OpenAI uyumlu
 Opened {name} for printing	{name} yazdırma için açıldı
 Open…	Aç…
 Options	Seçenekler
@@ -1110,6 +1124,7 @@ Output Name	Çıktı Adı
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Yaklaşık 25 MB'lık tek seferlik bir indirmeyle tarayıcıda çalışan 1.000'den fazla raster, vektör, LiDAR, hidroloji ve arazi aracı.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Yaklaşık 20 MB'lık isteğe bağlı bir indirmeyle 1.000'den fazla raster, vektör, LiDAR, hidroloji ve arazi aracı.
 Overlay	Bindirme
+overlay	bindirme
 Overlay (a transparent layer kept on top, such as labels or roads)	Bindirme (etiketler veya yollar gibi üstte tutulan saydam bir katman)
 Package	Paket
 Package a trained deep learning model.	Eğitilmiş bir derin öğrenme modelini paketle.
@@ -1243,7 +1258,9 @@ Raster Effects	Raster Efektleri
 Raster Functions	Raster Fonksiyonları
 Raster Information	Raster Bilgisi
 Raster Layer	Raster Katmanı
+Raster tiles (XYZ)	Raster karolar (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} bant · {renderer}
+Read and write files on this computer	Bu bilgisayardaki dosyaları okuma ve yazma
 Read the map's layers and features	Haritanın katmanlarını ve detaylarını okuma
 Reads and writes files	Dosyaları okur ve yazar
 Reads the map	Haritayı okur
@@ -1552,6 +1569,7 @@ Step {n} done	{n}. adım tamamlandı
 Stop	Durdur
 Stop drawing labels, for faster navigation.	Daha hızlı gezinme için etiket çizmeyi durdur.
 Stop filling the cache.	Önbelleği doldurmayı durdur.
+Stopped.	Durduruldu.
 Stretch	Germe
 Stretch\nType	Germe\nTürü
 Stretch it over the map view, or give control points (one per line: column row lon lat).	Harita görünümüne yay veya kontrol noktaları ver (her satıra bir tane: sütun satır boylam enlem).
@@ -1614,6 +1632,8 @@ the map has no layers	haritada katman yok
 The map is drawn in this coordinate system; layers are projected on the fly.	Harita bu koordinat sisteminde çizilir; katmanlar anında projekte edilir.
 The map view as it is now	Harita görünümünün şu anki hali
 The model answering; click to change it	Yanıt veren model; değiştirmek için tıklayın
+the model declined this request	model bu isteği reddetti
+The model sent an empty reply; ask again, or try another model.	Model boş bir yanıt gönderdi; yeniden sorun veya başka bir model deneyin.
 the page is too large to draw	sayfa çizilemeyecek kadar büyük
 the presentation export failed unexpectedly	sunum dışa aktarımı beklenmedik şekilde başarısız oldu
 the preview failed unexpectedly	önizleme beklenmedik şekilde başarısız oldu
@@ -1623,6 +1643,7 @@ The project's thumbnail, from the map view.	Harita görünümünden projenin kü
 The projection the map opens in.	Haritanın açıldığı projeksiyon.
 The raster's data couldn't be read.	Rasterın verisi okunamadı.
 The raster's data couldn't be read: {path}	Rasterın verisi okunamadı: {path}
+the reply reached its length limit	yanıt uzunluk sınırına ulaştı
 the report export failed unexpectedly	rapor dışa aktarımı beklenmedik şekilde başarısız oldu
 The Shapefile's files download as one zip.	Shapefile dosyaları tek bir zip olarak indirilir.
 the view has no extent	görünümün kapsamı yok
@@ -1698,6 +1719,7 @@ Valid expression · {n} matching rows	Geçerli ifade · {n} eşleşen satır
 Validate	Doğrula
 value (empty: no-data)	değer (boş: veri yok)
 Vector and raster data	Vektör ve raster verisi
+Vector tiles (MVT)	Vektör karolar (MVT)
 Version {version}	Sürüm {version}
 Vertex	Köşe
 Video	Video
@@ -1805,5 +1827,15 @@ Zoom to the selected features.	Seçili detaylara yakınlaştır.
 Zoom to the whole world.	Tüm dünyaya yakınlaştır.
 Zoom to Tokyo	Tokyo'ya yakınlaştır
 Zoom To World	Dünyaya Yakınlaştır
+{id} changed since it was installed; install it again from the Plugin Manager.	{id}, yüklendiğinden beri değişti; Eklenti Yöneticisi'nden yeniden yükleyin.
+{name} was withdrawn from the plugin registry and has been turned off.	{name}, eklenti kayıt defterinden geri çekildi ve devre dışı bırakıldı.
+{name} was withdrawn from the plugin registry: {reason}	{name}, eklenti kayıt defterinden geri çekildi: {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}: İndirilen dosya kayıt defteriyle eşleşmiyor; yüklenmedi.
+{name}: the download is a different plugin; it wasn't installed.	{name}: İndirilen dosya farklı bir eklenti; yüklenmedi.
+{shown} of {total} plugins	{total} eklentiden {shown} tanesi
+{total} plugins	{total} eklenti
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, yerinde okunur · görünümdeki {matched} detaydan {n} tanesinin örneği (hepsini görmek için yakınlaştırın) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, yerinde okunur · görünümde {total} detaydan {n} tanesi · {renderer}
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: yalnızca HTTPS adreslerine ya da bu bilgisayarda veya ağda düz HTTP'ye izin verilir
 © OpenStreetMap contributors	© OpenStreetMap katkıcıları
 ⌘K	⌘K

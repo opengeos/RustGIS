@@ -236,11 +236,13 @@ Change Detection	变化检测
 Change the map's backdrop.	更改地图的背景。
 Change the map's coordinate system	更改地图的坐标系
 Change the page size and orientation.	更改页面大小和方向。
+Change the project (add layers, edit features, change symbology)	更改工程（添加图层、编辑要素、更改符号系统）
 Chart categories	图表类别
 Chart Frame	图表框
 China	中国
 Choose a band combination to display the raster layer.	选择用于显示栅格图层的波段组合。
 Choose a contrast stretch for the raster layer.	为栅格图层选择对比度拉伸。
+Choose a model.	请选择模型。
 Choose a resampling type for the raster layer.	为栅格图层选择重采样类型。
 Choose extra buttons for the Quick Access Toolbar.	为快速访问工具栏选择额外按钮。
 Choose how the flat map lays out the Earth.	选择平面地图如何展示地球。
@@ -533,6 +535,8 @@ Enabled	已启用
 Encloses each feature, or all features, in its convex hull.	用凸包包围每个要素或所有要素。
 End	端点
 Enhancement	增强
+Enter an API key.	请输入 API 密钥。
+Enter the provider's address.	请输入提供商的地址。
 Enter to send, Shift+Enter for a new line	按 Enter 发送，Shift+Enter 换行
 Environments	环境
 EPSG code	EPSG 代码
@@ -694,6 +698,7 @@ Go forward to the next extent.	前进到下一个范围。
 Go to a saved extent or save the current one.	转到已保存的范围或保存当前范围。
 Go To Bookmark	转到书签
 Go To XY	转到 XY
+Google Gemini	Google Gemini
 GPX	GPX
 Graduated Colors	分级色彩
 Graphic Style	图形样式
@@ -793,6 +798,11 @@ Invert	反转
 Invert color scheme	反转配色方案
 Invert the selection.	反转选择。
 IS NULL	IS NULL
+it connects to an address on the internet	它会连接到互联网上的地址
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	它仅限您本人执行（插件、脚本、任务、模型和 GeoLibre 运行器）
+it reads or writes files on this computer	它会读取或写入此计算机上的文件
+it replaces the open project	它会替换当前打开的工程
+it runs a plugin's command	它会运行插件的命令
 It runs in a sandbox with no other access to your computer or the network.	它在沙箱中运行，无法以其他方式访问您的计算机或网络。
 It's too large to keep in the browser: install it again on your next visit.	插件太大，无法保存在浏览器中：请在下次访问时重新安装。
 Item Pop-ups	项目弹出窗口
@@ -913,6 +923,7 @@ Map scale	地图比例尺
 Map Series	地图系列
 Map Series Page	地图系列页面
 Map series page name	地图系列页面名称
+Map style (JSON)	地图样式 (JSON)
 Map Surrounds	地图整饰要素
 Map Thumbnail	地图缩略图
 Map View	地图视图
@@ -952,6 +963,7 @@ Mobile Map	移动地图
 Mod+	Mod+
 Model	模型
 Model\nBuilder	模型\n构建器
+model id	模型 ID
 ModelBuilder	模型构建器
 Models	模型
 Modify	修改
@@ -1059,6 +1071,7 @@ Off	关
 Offline	离线
 Offline area	离线区域
 OID	OID
+Ollama (local)	Ollama（本地）
 On	开
 On Hold	已挂起
 on hold	已挂起
@@ -1094,6 +1107,7 @@ Open the selected layer's table.	打开所选图层的表。
 Open the Symbology pane.	打开符号系统窗格。
 Open {code} on epsg.io	在 epsg.io 上打开 {code}
 Open, save and create projects	打开、保存和创建工程
+OpenAI-compatible	OpenAI 兼容
 Opened {name} for printing	已打开 {name} 以供打印
 Open…	打开…
 Options	选项
@@ -1110,6 +1124,7 @@ Output Name	输出名称
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	1000 多个在浏览器中运行的栅格、矢量、LiDAR、水文和地形工具，只需一次约 25 MB 的下载。
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	1000 多个栅格、矢量、LiDAR、水文和地形工具，约 20 MB 的可选下载。
 Overlay	叠加
+overlay	叠加
 Overlay (a transparent layer kept on top, such as labels or roads)	叠加（保持在最上层的透明图层，如注记或道路）
 Package	打包
 Package a trained deep learning model.	打包已训练的深度学习模型。
@@ -1243,7 +1258,9 @@ Raster Effects	栅格效果
 Raster Functions	栅格函数
 Raster Information	栅格信息
 Raster Layer	栅格图层
+Raster tiles (XYZ)	栅格瓦片 (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	栅格 · {w} × {h} · {n} 个波段 · {renderer}
+Read and write files on this computer	读写此计算机上的文件
 Read the map's layers and features	读取地图的图层和要素
 Reads and writes files	读写文件
 Reads the map	读取地图
@@ -1552,6 +1569,7 @@ Step {n} done	第 {n} 步已完成
 Stop	停止
 Stop drawing labels, for faster navigation.	停止绘制标注，以加快导航。
 Stop filling the cache.	停止填充缓存。
+Stopped.	已停止。
 Stretch	拉伸
 Stretch\nType	拉伸\n类型
 Stretch it over the map view, or give control points (one per line: column row lon lat).	将其拉伸到地图视图，或提供控制点（每行一个：列 行 经度 纬度）。
@@ -1614,6 +1632,8 @@ the map has no layers	地图中没有图层
 The map is drawn in this coordinate system; layers are projected on the fly.	地图以此坐标系绘制；图层将实时投影。
 The map view as it is now	当前的地图视图
 The model answering; click to change it	正在回答的模型；单击可更改
+the model declined this request	模型拒绝了此请求
+The model sent an empty reply; ask again, or try another model.	模型返回了空回复；请重新提问，或尝试其他模型。
 the page is too large to draw	页面太大，无法绘制
 the presentation export failed unexpectedly	演示文稿导出意外失败
 the preview failed unexpectedly	预览意外失败
@@ -1623,6 +1643,7 @@ The project's thumbnail, from the map view.	工程的缩略图，来自地图视
 The projection the map opens in.	地图打开时使用的投影。
 The raster's data couldn't be read.	无法读取栅格数据。
 The raster's data couldn't be read: {path}	无法读取栅格数据：{path}
+the reply reached its length limit	回复已达到长度上限
 the report export failed unexpectedly	报表导出意外失败
 The Shapefile's files download as one zip.	Shapefile 的各个文件将打包为一个 zip 下载。
 the view has no extent	视图没有范围
@@ -1698,6 +1719,7 @@ Valid expression · {n} matching rows	有效表达式 · {n} 个匹配行
 Validate	验证
 value (empty: no-data)	值（空：无数据）
 Vector and raster data	矢量和栅格数据
+Vector tiles (MVT)	矢量瓦片 (MVT)
 Version {version}	版本 {version}
 Vertex	折点
 Video	视频
@@ -1805,5 +1827,15 @@ Zoom to the selected features.	缩放至所选要素。
 Zoom to the whole world.	缩放至全世界。
 Zoom to Tokyo	缩放至东京
 Zoom To World	缩放至世界
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} 在安装后已被更改；请从插件管理器重新安装。
+{name} was withdrawn from the plugin registry and has been turned off.	{name} 已从插件库下架，并已被停用。
+{name} was withdrawn from the plugin registry: {reason}	{name} 已从插件库下架：{reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name}：下载的内容与插件库不符，未安装。
+{name}: the download is a different plugin; it wasn't installed.	{name}：下载的是另一个插件，未安装。
+{shown} of {total} plugins	{total} 个插件中的 {shown} 个
+{total} plugins	{total} 个插件
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}，就地读取 · 视图中 {matched} 个要素的 {n} 个样本（放大以查看全部）· {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}，就地读取 · 视图中 {n} / {total} 个要素 · {renderer}
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}：仅允许 HTTPS 地址，或本机、本地网络上的普通 HTTP 地址
 © OpenStreetMap contributors	© OpenStreetMap 贡献者
 ⌘K	⌘K

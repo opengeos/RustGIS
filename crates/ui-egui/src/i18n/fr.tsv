@@ -236,11 +236,13 @@ Change Detection	Détection des changements
 Change the map's backdrop.	Changer l'arrière-plan de la carte.
 Change the map's coordinate system	Changer le système de coordonnées de la carte
 Change the page size and orientation.	Modifier la taille et l'orientation de la page.
+Change the project (add layers, edit features, change symbology)	Modifier le projet (ajouter des couches, modifier des entités, changer la symbologie)
 Chart categories	Catégories du diagramme
 Chart Frame	Bloc de diagramme
 China	Chine
 Choose a band combination to display the raster layer.	Choisir une combinaison de bandes pour afficher la couche raster.
 Choose a contrast stretch for the raster layer.	Choisir un étirement du contraste pour la couche raster.
+Choose a model.	Choisissez un modèle.
 Choose a resampling type for the raster layer.	Choisir un type de rééchantillonnage pour la couche raster.
 Choose extra buttons for the Quick Access Toolbar.	Choisir des boutons supplémentaires pour la barre d'outils Accès rapide.
 Choose how the flat map lays out the Earth.	Choisir comment la carte plane représente la Terre.
@@ -533,6 +535,8 @@ Enabled	Activée
 Encloses each feature, or all features, in its convex hull.	Englobe chaque entité, ou toutes les entités, dans son enveloppe convexe.
 End	Fin
 Enhancement	Amélioration
+Enter an API key.	Saisissez une clé API.
+Enter the provider's address.	Saisissez l'adresse du fournisseur.
 Enter to send, Shift+Enter for a new line	Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne
 Environments	Environnements
 EPSG code	Code EPSG
@@ -694,6 +698,7 @@ Go forward to the next extent.	Passer à l'emprise suivante.
 Go to a saved extent or save the current one.	Aller à une emprise enregistrée ou enregistrer l'emprise actuelle.
 Go To Bookmark	Aller au signet
 Go To XY	Aller à XY
+Google Gemini	Google Gemini
 GPX	GPX
 Graduated Colors	Couleurs graduées
 Graphic Style	Style de graphique
@@ -793,6 +798,11 @@ Invert	Inverser
 Invert color scheme	Inverser la palette de couleurs
 Invert the selection.	Inverser la sélection.
 IS NULL	IS NULL
+it connects to an address on the internet	il se connecte à une adresse sur Internet
+it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	il vous est réservé (extensions, scripts, tâches, modèles et exécuteur GeoLibre)
+it reads or writes files on this computer	il lit ou écrit des fichiers sur cet ordinateur
+it replaces the open project	il remplace le projet ouvert
+it runs a plugin's command	il exécute une commande d'extension
 It runs in a sandbox with no other access to your computer or the network.	Elle s'exécute dans un bac à sable, sans aucun autre accès à votre ordinateur ni au réseau.
 It's too large to keep in the browser: install it again on your next visit.	Elle est trop volumineuse pour être conservée dans le navigateur : réinstallez-la lors de votre prochaine visite.
 Item Pop-ups	Fenêtres contextuelles des éléments
@@ -913,6 +923,7 @@ Map scale	Échelle de la carte
 Map Series	Série de cartes
 Map Series Page	Page de série de cartes
 Map series page name	Nom de la page de série de cartes
+Map style (JSON)	Style de carte (JSON)
 Map Surrounds	Habillage de la carte
 Map Thumbnail	Miniature de la carte
 Map View	Vue cartographique
@@ -952,6 +963,7 @@ Mobile Map	Carte mobile
 Mod+	Mod+
 Model	Modèle
 Model\nBuilder	Model\nBuilder
+model id	identifiant du modèle
 ModelBuilder	ModelBuilder
 Models	Modèles
 Modify	Modifier
@@ -1059,6 +1071,7 @@ Off	Désactivé
 Offline	Hors connexion
 Offline area	Zone hors connexion
 OID	OID
+Ollama (local)	Ollama (local)
 On	Activé
 On Hold	En attente
 on hold	en attente
@@ -1094,6 +1107,7 @@ Open the selected layer's table.	Ouvrir la table de la couche sélectionnée.
 Open the Symbology pane.	Ouvrir le volet Symbologie.
 Open {code} on epsg.io	Ouvrir {code} sur epsg.io
 Open, save and create projects	Ouvrir, enregistrer et créer des projets
+OpenAI-compatible	Compatible OpenAI
 Opened {name} for printing	{name} ouvert pour impression
 Open…	Ouvrir…
 Options	Options
@@ -1110,6 +1124,7 @@ Output Name	Nom en sortie
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Plus de 1 000 outils raster, vecteur, LiDAR, hydrologie et terrain qui s'exécutent dans le navigateur, après un téléchargement unique d'environ 25 Mo.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Plus de 1 000 outils raster, vecteur, LiDAR, hydrologie et terrain, en téléchargement facultatif d'environ 20 Mo.
 Overlay	Superposition
+overlay	superposition
 Overlay (a transparent layer kept on top, such as labels or roads)	Superposition (une couche transparente gardée au-dessus, comme des étiquettes ou des routes)
 Package	Paquetage
 Package a trained deep learning model.	Empaqueter un modèle d'apprentissage profond entraîné.
@@ -1243,7 +1258,9 @@ Raster Effects	Effets raster
 Raster Functions	Fonctions raster
 Raster Information	Informations raster
 Raster Layer	Couche raster
+Raster tiles (XYZ)	Tuiles raster (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} bandes · {renderer}
+Read and write files on this computer	Lire et écrire des fichiers sur cet ordinateur
 Read the map's layers and features	Lire les couches et les entités de la carte
 Reads and writes files	Lit et écrit des fichiers
 Reads the map	Lit la carte
@@ -1552,6 +1569,7 @@ Step {n} done	Étape {n} terminée
 Stop	Arrêter
 Stop drawing labels, for faster navigation.	Arrêter de dessiner les étiquettes pour une navigation plus rapide.
 Stop filling the cache.	Arrêter le remplissage du cache.
+Stopped.	Arrêté.
 Stretch	Étirement
 Stretch\nType	Type\nd'étirement
 Stretch it over the map view, or give control points (one per line: column row lon lat).	L'étirer sur la vue cartographique, ou fournir des points de contrôle (un par ligne : colonne ligne lon lat).
@@ -1614,6 +1632,8 @@ the map has no layers	la carte n'a aucune couche
 The map is drawn in this coordinate system; layers are projected on the fly.	La carte est dessinée dans ce système de coordonnées ; les couches sont projetées à la volée.
 The map view as it is now	La vue cartographique telle qu'elle est maintenant
 The model answering; click to change it	Le modèle qui répond ; cliquez pour le changer
+the model declined this request	le modèle a refusé cette demande
+The model sent an empty reply; ask again, or try another model.	Le modèle a renvoyé une réponse vide ; reposez la question ou essayez un autre modèle.
 the page is too large to draw	la page est trop grande pour être dessinée
 the presentation export failed unexpectedly	l'export de la présentation a échoué de manière inattendue
 the preview failed unexpectedly	la prévisualisation a échoué de manière inattendue
@@ -1623,6 +1643,7 @@ The project's thumbnail, from the map view.	La miniature du projet, à partir de
 The projection the map opens in.	La projection dans laquelle la carte s'ouvre.
 The raster's data couldn't be read.	Impossible de lire les données du raster.
 The raster's data couldn't be read: {path}	Impossible de lire les données du raster : {path}
+the reply reached its length limit	la réponse a atteint sa longueur maximale
 the report export failed unexpectedly	l'export du rapport a échoué de manière inattendue
 The Shapefile's files download as one zip.	Les fichiers du Shapefile sont téléchargés dans un seul zip.
 the view has no extent	la vue n'a pas d'étendue
@@ -1698,6 +1719,7 @@ Valid expression · {n} matching rows	Expression valide · {n} lignes correspond
 Validate	Valider
 value (empty: no-data)	valeur (vide : no-data)
 Vector and raster data	Données vecteur et raster
+Vector tiles (MVT)	Tuiles vectorielles (MVT)
 Version {version}	Version {version}
 Vertex	Sommet
 Video	Vidéo
@@ -1805,5 +1827,15 @@ Zoom to the selected features.	Zoomer sur les entités sélectionnées.
 Zoom to the whole world.	Zoomer sur le monde entier.
 Zoom to Tokyo	Zoomer sur Tokyo
 Zoom To World	Zoomer sur le monde
+{id} changed since it was installed; install it again from the Plugin Manager.	{id} a été modifiée depuis son installation ; réinstallez-la depuis le Gestionnaire d'extensions.
+{name} was withdrawn from the plugin registry and has been turned off.	{name} a été retirée du registre des extensions et a été désactivée.
+{name} was withdrawn from the plugin registry: {reason}	{name} a été retirée du registre des extensions : {reason}
+{name}: the download doesn't match the registry; it wasn't installed.	{name} : le téléchargement ne correspond pas au registre ; l'extension n'a pas été installée.
+{name}: the download is a different plugin; it wasn't installed.	{name} : le téléchargement est une autre extension ; elle n'a pas été installée.
+{shown} of {total} plugins	{shown} extensions sur {total}
+{total} plugins	{total} extensions
+{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, lu sur place · un échantillon de {n} des {matched} entités visibles (zoomez pour toutes les voir) · {renderer}
+{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, lu sur place · {n} sur {total} entités visibles · {renderer}
+{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url} : seules les adresses HTTPS, ou HTTP simple sur cet ordinateur ou ce réseau, sont autorisées
 © OpenStreetMap contributors	© OpenStreetMap contributors
 ⌘K	⌘K
