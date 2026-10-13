@@ -53,6 +53,8 @@ pub fn start() {
                     if let Err(e) = app.start(&start) {
                         log::warn!("start-up: {e}");
                     }
+                    // viRustGIS defaults to Vietnamese; ?lang=xx still selects another language.
+                    app.ui.language = "vi".to_string();
                     // `?lang=de` picks the interface language for this visit.
                     if let Some(code) = q.trim_start_matches('?').split('&').find_map(|kv| kv.strip_prefix("lang=")) {
                         match rustgis_ui_egui::i18n::Lang::from_code(code) {
@@ -75,7 +77,7 @@ pub fn start() {
             match result {
                 Ok(()) => el.remove(),
                 Err(e) => {
-                    el.set_inner_html(&format!("<p>RustGIS failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>"))
+                    el.set_inner_html(&format!("<p>Không thể khởi động viRustGIS: {e:?}</p><p>Trình duyệt cần hỗ trợ WebGPU hoặc WebGL2.</p>"))
                 }
             }
         }
@@ -258,20 +260,20 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
             let inbox = open_inbox.clone();
             let ctx = ctx.clone();
             let dialog = if purpose == "project" {
-                rfd::AsyncFileDialog::new().add_filter("RustGIS project", &["rgis", "rgisx"])
+                rfd::AsyncFileDialog::new().add_filter("Dự án RustGIS", &["rgis", "rgisx"])
             } else if purpose == "item" {
                 rfd::AsyncFileDialog::new().add_filter(
-                    "RustGIS items",
+                    "Thành phần RustGIS",
                     &["rgismap", "rgismpk", "rgispkg", "rgislyr", "rgisstyle", "rgistemplate", "rgistask", "rgis", "rgisx"],
                 )
             } else if purpose == "layout" {
-                rfd::AsyncFileDialog::new().add_filter("RustGIS layout", &["rgislayout"])
+                rfd::AsyncFileDialog::new().add_filter("Bố cục RustGIS", &["rgislayout"])
             } else if purpose == "plugin" {
-                rfd::AsyncFileDialog::new().add_filter("RustGIS plugin", &["rgplugin"])
+                rfd::AsyncFileDialog::new().add_filter("Tiện ích RustGIS", &["rgplugin"])
             } else if purpose == "picture" {
-                rfd::AsyncFileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg"])
+                rfd::AsyncFileDialog::new().add_filter("Hình ảnh", &["png", "jpg", "jpeg"])
             } else {
-                rfd::AsyncFileDialog::new().add_filter("Vector and raster data", DATA_EXTS)
+                rfd::AsyncFileDialog::new().add_filter("Dữ liệu véc-tơ và raster", DATA_EXTS)
             };
             wasm_bindgen_futures::spawn_local(async move {
                 let Some(file) = dialog.pick_file().await else {
