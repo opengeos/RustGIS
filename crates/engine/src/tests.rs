@@ -2652,6 +2652,45 @@ fn mbtiles_archives_become_tile_layers() {
     assert!(s.run("layer.addDataBytes", &json!({"fileName": "junk.mbtiles", "data": junk64})).is_err());
     for bad in ["red.mbtiles", r"\\attacker\share\x.mbtiles", "/tmp/x.pmtiles", "upload:"] {
         assert!(s.run("map.addTiles", &json!({"url": bad, "kind": "mbtiles"})).is_err(), "{bad}");
+/// Delimited text in a projected system, by path, text and upload; WKT columns; bad options.
+#[test]
+fn delimited_text_with_a_coordinate_system() {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("rustgis-csv-crs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("parks.tsv");
+    std::fs::write(&path, "name\tX\tY\nCentral Park\t992000\t220000\n").unwrap();
+    let p = path.display().to_string();
+    let near_nyc = |s: &Session, id: &Value| {
+        let e = s.map().layer(id.as_u64().unwrap() as u32).unwrap().extent();
+        assert!((e.min_x + 73.96).abs() < 0.05 && (e.min_y - 40.78).abs() < 0.05, "{e:?}");
+    };
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": p, "crs": "EPSG:2263"})).unwrap();
+    near_nyc(&s, &r["layer"]);
+    let text = "id;east;north\n1;992000;220000\n";
+    let r = s.run("layer.addDataText", &json!({"fileName": "a.csv", "text": text, "x": "east", "y": "north", "crs": "2263"})).unwrap();
+    near_nyc(&s, &r["layer"]);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(text);
+    let r = s
+        .run("layer.addDataBytes", &json!({"fileName": "b.csv", "data": b64, "x": "east", "y": "north", "crs": "EPSG:2263", "name": "Up"}))
+        .unwrap();
+    near_nyc(&s, &r["layer"]);
+    assert!(s.map().layer_by_name("Up").is_some());
+    // Without options a WKT column is found; with a SRID it is placed.
+    let r = s.run("layer.addDataText", &json!({"fileName": "w.csv", "text": "wkt,n\n\"SRID=2263;POINT (992000 220000)\",1\n"})).unwrap();
+    near_nyc(&s, &r["layer"]);
+    for (bad, why) in [
+        (json!({"crs": "nowhere"}), "unknown system"),
+        (json!({"x": "missing", "y": "north"}), "missing column"),
+        (json!({"x": "east"}), "x without y"),
+        (json!({"delimiter": ";;"}), "two-character delimiter"),
+    ] {
+        let mut q = json!({"fileName": "a.csv", "text": text});
+        for (k, v) in bad.as_object().unwrap() {
+            q[k] = v.clone();
+        }
+        assert!(s.run("layer.addDataText", &q).is_err(), "{why}");
     }
     let _ = std::fs::remove_dir_all(dir);
 }

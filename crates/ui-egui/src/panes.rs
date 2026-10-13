@@ -651,6 +651,7 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         "geojson",
                         "json",
                         "csv",
+                        "tsv",
                         "shp",
                         "tif",
                         "tiff",

@@ -29,7 +29,7 @@ pub(crate) fn need_raster(s: &Session) -> Option<&'static str> {
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addDataBytes", "Add Data (from file contents)", "Home › Add", add_bytes)
-            .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv|.zip|.kml|.kmz|.gpx|.parquet|.fgb|.gpkg|.mbtiles", "data": base64, "layer"?: "one layer of a zip, KML or GPX by name", "name"?: text}"#),
+            .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv|.zip|.kml|.kmz|.gpx|.parquet|.fgb|.gpkg|.mbtiles", "data": base64, "layer"?: "one layer of a zip, KML or GPX by name", "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text)}"#),
         C::new("raster.symbology", "Symbology", "Style › Rendering", symbology).when(need_raster).params(
             r#"{"layer"?, "type": "stretch"|"rgb"|"classify"|"unique"|"colormap"|"shadedRelief", "band"?: 1.., "ramp"?, "invert"?: bool, "classes"?: 1..32, "method"?, "azimuth"?, "altitude"?, "zFactor"?}"#,
         ),
@@ -178,7 +178,14 @@ fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
         return super::layer::add_source(s, p, super::layer::Origin::Bytes(&name, std::sync::Arc::new(bytes)));
     }
     let text = String::from_utf8(bytes).map_err(|_| format!("{name} is not a text file"))?;
-    super::layer::add_data_text(s, &json!({"fileName": name, "text": text}))
+    // The delimited-text and naming parameters carry over (not the data, already decoded).
+    let mut q = json!({"fileName": name, "text": text});
+    for k in ["name", "x", "y", "wkt", "crs", "delimiter"] {
+        if let Some(v) = p.get(k) {
+            q[k] = v.clone();
+        }
+    }
+    super::layer::add_data_text(s, &q)
 }
 
 fn symbology(s: &mut Session, p: &Value) -> CmdResult {

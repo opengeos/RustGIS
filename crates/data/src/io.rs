@@ -11,7 +11,7 @@ pub(crate) const MAX_BYTES: u64 = 256 << 20;
 
 /// File types the readers understand, for open dialogs.
 pub const READ_EXTENSIONS: &[&str] =
-    &["geojson", "json", "csv", "txt", "shp", "zip", "kml", "kmz", "gpx", "gpkg", "parquet", "geoparquet", "fgb"];
+    &["geojson", "json", "csv", "tsv", "txt", "shp", "zip", "kml", "kmz", "gpx", "gpkg", "parquet", "geoparquet", "fgb"];
 
 /// Most XML nodes parsed from one document (KML, GPX): each costs tens of bytes, and the
 /// browser's memory is smaller (a 1M-point GPX track is about 8M nodes).
@@ -72,7 +72,7 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
     let text = || std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")));
     let mut out = match ext.as_str() {
         "geojson" | "json" => read_geojson(text()?, &name)?,
-        "csv" | "txt" => read_csv(text()?, &name)?,
+        "csv" | "tsv" | "txt" => read_csv(text()?, &name)?,
         "shp" => return Err(DataError::Unsupported("shp on its own: zip it with its .dbf, .shx and .prj and add the zip".into())),
         // The first layer (`read_layers` reads them all), saying what else the file holds.
         "zip" | "kml" | "kmz" | "gpx" => {
@@ -117,7 +117,7 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
             check_size(path)?;
             read_geojson(&std::fs::read_to_string(path)?, &name)?
         }
-        "csv" | "txt" => {
+        "csv" | "tsv" | "txt" => {
             check_size(path)?;
             read_csv(&std::fs::read_to_string(path)?, &name)?
         }
@@ -505,14 +505,73 @@ pub fn to_geojson(ds: &Dataset) -> Json {
 const LON_NAMES: &[&str] = &["lon", "lng", "long", "longitude", "x", "lon_dd", "longitude_dd"];
 const LAT_NAMES: &[&str] = &["lat", "latitude", "y", "lat_dd", "latitude_dd"];
 
+/// Projected coordinate columns, recognised as well as longitude/latitude ones.
+const X_NAMES: &[&str] = &["easting", "point_x", "xcoord", "x_coord"];
+const Y_NAMES: &[&str] = &["northing", "point_y", "ycoord", "y_coord"];
+/// Columns that may hold WKT geometry.
+const WKT_NAMES: &[&str] = &["wkt", "geometry", "geom", "the_geom", "wkb_geometry", "shape", "ewkt"];
+
+/// How to read a delimited text file; everything left out is found from the file.
+#[derive(Clone, Debug, Default)]
+pub struct CsvOptions {
+    /// The column of x (longitude, easting) values.
+    pub x: Option<String>,
+    /// The column of y (latitude, northing) values.
+    pub y: Option<String>,
+    /// A column of WKT (or EWKT) geometry.
+    pub wkt: Option<String>,
+    /// The coordinate system of the coordinates (otherwise an EWKT SRID, or longitude/latitude).
+    pub crs: Option<crate::raster::Crs>,
+    /// The field separator (otherwise the most common of `,`, `;`, tab and `|` in the header).
+    pub delimiter: Option<u8>,
+}
+
+/// The separator of a delimited text file: the most common of `,`, `;`, tab and `|` in its first
+/// line, outside quotes (`,` when none is).
+pub fn sniff_delimiter(text: &str) -> u8 {
+    let line = text.lines().next().unwrap_or("");
+    let mut counts = [0usize; 4];
+    let mut quoted = false;
+    for c in line.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            ',' if !quoted => counts[0] += 1,
+            ';' if !quoted => counts[1] += 1,
+            '\t' if !quoted => counts[2] += 1,
+            '|' if !quoted => counts[3] += 1,
+            _ => {}
+        }
+    }
+    let seps = *b",;\t|";
+    // The first of the most common, so a tie keeps the comma.
+    let best = counts.iter().enumerate().fold(0, |b, (i, &n)| if n > counts[b] { i } else { b });
+    seps.get(best).copied().unwrap_or(b',')
+}
+
 /// Reads CSV; columns named like longitude/latitude become point geometry.
 pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
+    read_csv_with(text, name, &CsvOptions::default())
+}
+
+/// Reads delimited text: points from x/y columns (longitude/latitude unless `crs` says
+/// otherwise), or geometry from a WKT column; without either it is a table.
+pub fn read_csv_with(text: &str, name: &str, opts: &CsvOptions) -> Result<(Dataset, ReadReport)> {
     // Spreadsheet exports often start with a byte-order mark, which would hide the first header.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut rdr = csv::ReaderBuilder::new().flexible(true).from_reader(text.as_bytes());
+    let delimiter = opts.delimiter.unwrap_or_else(|| sniff_delimiter(text));
+    let mut rdr = csv::ReaderBuilder::new().flexible(true).delimiter(delimiter).from_reader(text.as_bytes());
     let headers: Vec<String> = rdr.headers().map_err(|e| DataError::Format(format!("CSV: {e}")))?.iter().map(|s| s.to_string()).collect();
     let find = |names: &[&str]| headers.iter().position(|h| names.contains(&h.trim().to_ascii_lowercase().as_str()));
-    let (lon, lat) = (find(LON_NAMES), find(LAT_NAMES));
+    let named = |n: &Option<String>, what: &str| -> Result<Option<usize>> {
+        match n.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            Some(n) => headers
+                .iter()
+                .position(|h| h.trim().eq_ignore_ascii_case(n))
+                .map(Some)
+                .ok_or_else(|| DataError::Format(format!("no {what} column '{n}' (columns: {})", headers.join(", ")))),
+            None => Ok(None),
+        }
+    };
     let mut malformed = 0usize;
     let rows: Vec<Vec<String>> = rdr
         .records()
@@ -524,40 +583,132 @@ pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
             }
         })
         .collect();
-    // Infer each column's type from its values.
-    let fields: Vec<Field> = headers
+    let (x, y) = (named(&opts.x, "x")?, named(&opts.y, "y")?);
+    let wkt_given = named(&opts.wkt, "WKT")?;
+    let (x, y) = match (x, y) {
+        (Some(x), Some(y)) => (Some(x), Some(y)),
+        (None, None) if wkt_given.is_none() => (find(LON_NAMES).or(find(X_NAMES)), find(LAT_NAMES).or(find(Y_NAMES))),
+        (None, None) => (None, None),
+        _ => return Err(DataError::Format("give both the x and the y column".into())),
+    };
+    let xy = x.zip(y);
+    // A WKT column: the one named, or (without x/y columns) one named like geometry whose first
+    // value reads as WKT.
+    let wkt = wkt_given.or_else(|| {
+        if xy.is_some() {
+            return None;
+        }
+        headers.iter().enumerate().find_map(|(i, h)| {
+            let first = rows.iter().filter_map(|r| r.get(i)).map(|s| s.trim()).find(|s| !s.is_empty())?;
+            (WKT_NAMES.contains(&h.trim().to_ascii_lowercase().as_str()) && crate::interop::parse_wkt(first).is_ok()).then_some(i)
+        })
+    });
+    // Infer each column's type from its values; a WKT column is the geometry, not an attribute.
+    let columns: Vec<usize> = (0..headers.len()).filter(|&i| Some(i) != wkt).collect();
+    let fields: Vec<Field> = columns
         .iter()
-        .enumerate()
-        .map(|(i, h)| Field::new(h.trim(), text_type(rows.iter().filter_map(|r| r.get(i)).map(|s| s.as_str()))))
+        .filter_map(|&i| Some(Field::new(headers.get(i)?.trim(), text_type(rows.iter().filter_map(|r| r.get(i)).map(|s| s.as_str())))))
         .collect();
     let mut report = ReadReport { skipped: malformed, ..ReadReport::default() };
     if malformed > 0 {
         report.messages.push(format!("{malformed} rows were malformed and skipped"));
     }
-    let gt = if lon.is_some() && lat.is_some() { GeometryType::Point } else { GeometryType::None };
+    let gt = if xy.is_some() { GeometryType::Point } else { GeometryType::None };
     let mut ds = Dataset::new(name, gt, fields);
+    let mut srid: Option<u32> = None;
+    let mut bad_wkt = 0usize;
     for r in &rows {
-        let geom = match (lon, lat) {
-            (Some(x), Some(y)) => {
-                let c = r.get(x).and_then(|s| s.trim().parse::<f64>().ok()).zip(r.get(y).and_then(|s| s.trim().parse::<f64>().ok()));
-                match c {
-                    Some((x, y)) if x.is_finite() && y.is_finite() => Some(Geometry::Point(Coord::new(x, y))),
-                    _ => {
-                        report.skipped += 1;
-                        None
-                    }
+        let cell = |i: usize| r.get(i).map(|s| s.trim()).unwrap_or("");
+        let geom = if let Some((x, y)) = xy {
+            match cell(x).parse::<f64>().ok().zip(cell(y).parse::<f64>().ok()) {
+                Some((x, y)) if x.is_finite() && y.is_finite() => Some(Geometry::Point(Coord::new(x, y))),
+                _ => {
+                    report.skipped += 1;
+                    None
                 }
             }
-            _ => None,
+        } else if let Some(w) = wkt {
+            match cell(w) {
+                "" => None,
+                t => match crate::interop::parse_wkt(t) {
+                    Ok((g, s)) => {
+                        srid = srid.or(s);
+                        g
+                    }
+                    Err(_) => {
+                        bad_wkt += 1;
+                        None
+                    }
+                },
+            }
+        } else {
+            None
         };
-        let attrs =
-            ds.fields.iter().enumerate().map(|(i, f)| Value::parse(&unguard(r.get(i).map(|s| s.as_str()).unwrap_or("")), f.ty)).collect();
+        let attrs = columns
+            .iter()
+            .zip(&ds.fields)
+            .map(|(&i, f)| Value::parse(&unguard(r.get(i).map(|s| s.as_str()).unwrap_or("")), f.ty))
+            .collect();
         ds.push_next(geom, attrs);
     }
     if report.skipped > malformed {
         report.messages.push(format!("{} rows had no usable coordinates", report.skipped - malformed));
     }
+    if bad_wkt > 0 {
+        report.messages.push(format!("{bad_wkt} rows had geometry that isn't readable WKT"));
+    }
+    if wkt.is_some() {
+        ds.geometry_type = dominant_type(&ds);
+    }
+    // Coordinates in another system become longitude/latitude.
+    let crs = match (opts.crs, srid) {
+        (Some(c), _) => Some(c),
+        (None, Some(code)) => match crate::raster::Crs::from_epsg(code) {
+            Some(c) => Some(c),
+            None => {
+                report.messages.push(format!("unknown coordinate system SRID {code}; coordinates are read as longitude/latitude"));
+                None
+            }
+        },
+        (None, None) => None,
+    };
+    match crs.filter(|c| *c != crate::raster::Crs::LonLat) {
+        Some(c) => {
+            let t = c.transformer().map_err(DataError::Format)?;
+            let mut lost = 0usize;
+            for f in &mut ds.features {
+                if let Some(g) = f.geometry.take() {
+                    let out = g.map_coords(&|p| t.to_lonlat(p).unwrap_or(Coord::new(f64::NAN, f64::NAN)));
+                    let mut ok = true;
+                    out.for_each_coord(|c| ok &= c.is_finite());
+                    if ok {
+                        f.geometry = Some(out);
+                    } else {
+                        lost += 1;
+                    }
+                }
+            }
+            if lost > 0 {
+                report.messages.push(format!("{lost} rows couldn't be converted from {} to longitude/latitude", c.label()));
+            }
+        }
+        None => {
+            let outside = ds.features.iter().filter_map(|f| f.geometry.as_ref()).any(out_of_lonlat);
+            if outside {
+                report.messages.push(
+                    "coordinates aren't longitude/latitude: give the file's coordinate system (\"crs\", such as EPSG:2263) to place them"
+                        .into(),
+                );
+            }
+        }
+    }
     Ok((ds, report))
+}
+
+/// Whether a geometry has coordinates outside longitude/latitude's range.
+fn out_of_lonlat(g: &Geometry) -> bool {
+    let e = g.extent();
+    e.min_x < -180.0 || e.max_x > 180.0 || e.min_y < -90.0 || e.max_y > 90.0
 }
 
 /// The type of a column of text values: Integer or Double when every non-empty value is one,
@@ -1190,6 +1341,87 @@ mod tests {
         assert_eq!(ds.geometry_type, GeometryType::Point);
         assert!(read_bytes("x.shp", b"").is_err());
         assert!(read_bytes("x.geojson", &[0xff, 0xfe]).is_err());
+    }
+
+    /// Projected x/y columns with a coordinate system, other separators, WKT and EWKT columns, and
+    /// the notes when something can't be placed.
+    #[test]
+    fn delimited_text_options() {
+        use crate::raster::Crs;
+        assert_eq!(sniff_delimiter("a;b;c\n1;2;3"), b';');
+        assert_eq!(sniff_delimiter("a\tb\n"), b'\t');
+        assert_eq!(sniff_delimiter("\"a;b\",c\n"), b',');
+        assert_eq!(sniff_delimiter("one\n"), b',');
+        // Central Park in New York State Plane (US feet), semicolon-separated, columns named.
+        let text = "id;E;N\n1;992000;220000\n2;x;1\n";
+        let opts =
+            CsvOptions { x: Some("e".into()), y: Some("N".into()), crs: Some(Crs::parse("EPSG:2263").unwrap()), ..CsvOptions::default() };
+        let (ds, rep) = read_csv_with(text, "t", &opts).unwrap();
+        assert_eq!(ds.geometry_type, GeometryType::Point);
+        let Some(Geometry::Point(c)) = &ds.features[0].geometry else { panic!() };
+        assert!((c.x + 73.96).abs() < 0.05 && (c.y - 40.78).abs() < 0.05, "{c:?}");
+        assert_eq!(rep.messages, ["1 rows had no usable coordinates"]);
+        // Without the coordinate system, the points are said to be out of place.
+        let (_, rep) = read_csv_with(text, "t", &CsvOptions { crs: None, ..opts.clone() }).unwrap();
+        assert!(rep.messages.iter().any(|m| m.contains("\"crs\"")), "{:?}", rep.messages);
+        assert!(read_csv_with(text, "t", &CsvOptions { x: Some("nope".into()), ..opts.clone() }).is_err());
+        assert!(read_csv_with(text, "t", &CsvOptions { y: None, ..opts }).is_err(), "x without y");
+        // Easting/northing found by name in a tab-separated file.
+        let (ds, _) = read_csv("name\teasting\tnorthing\nA\t500000\t4649776\n", "t").unwrap();
+        assert_eq!(ds.geometry_type, GeometryType::Point);
+        // A WKT column found by name: it is the geometry, not a field; EWKT's SRID places it.
+        let text = "name,geometry\nA,\"SRID=32633;LINESTRING (500000 4649776, 500100 4649876)\"\nB,\"SRID=32633;LINESTRING Z (500000 4649776 3, 500200 4649776 4)\"\nC,POINT (1 2)\nD,\nE,nonsense(\n";
+        let (ds, rep) = read_csv(text, "t").unwrap();
+        assert_eq!(ds.geometry_type, GeometryType::Polyline);
+        assert_eq!(ds.fields.len(), 1);
+        let e = ds.features[0].geometry.as_ref().unwrap().extent();
+        assert!((e.min_x - 15.0).abs() < 0.01 && (e.min_y - 42.0).abs() < 0.05, "{e:?}");
+        assert!(ds.features[3].geometry.is_none());
+        assert_eq!(rep.messages, ["1 rows had geometry that isn't readable WKT"]);
+        // A named WKT column with a given system.
+        let opts = CsvOptions { wkt: Some("g".into()), crs: Some(Crs::WebMercator), ..CsvOptions::default() };
+        let (ds, _) =
+            read_csv_with("g|v\nPOLYGON ((0 0, 1000 0, 1000 1000, 0 0))|1\n", "t", &CsvOptions { delimiter: Some(b'|'), ..opts }).unwrap();
+        assert_eq!(ds.geometry_type, GeometryType::Polygon);
+        assert_eq!(ds.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["v"]);
+    }
+
+    #[test]
+    fn wkt_geometries() {
+        use crate::interop::parse_wkt;
+        let p = |t: &str| parse_wkt(t).unwrap_or_else(|e| panic!("{t}: {e}")).0;
+        assert_eq!(p("POINT (1 2)"), Some(Geometry::Point(Coord::new(1.0, 2.0))));
+        assert_eq!(p("point z (1 2 3)"), Some(Geometry::Point(Coord::new(1.0, 2.0))));
+        assert_eq!(p("POINTZM(1 2 3 4)"), Some(Geometry::Point(Coord::new(1.0, 2.0))));
+        assert_eq!(p("MULTIPOINT ((1 2), (3 4))"), p("MULTIPOINT (1 2, 3 4)"));
+        assert!(matches!(p("MULTILINESTRING ((0 0, 1 1), (2 2, 3 3))"), Some(Geometry::Line(l)) if l.len() == 2));
+        assert!(
+            matches!(p("MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)), ((5 5, 6 5, 6 6, 5 5), (5.1 5.1, 5.2 5.1, 5.2 5.2, 5.1 5.1)))"), Some(Geometry::Polygon(v)) if v.len() == 2 && v[1].len() == 2)
+        );
+        assert_eq!(p("GEOMETRYCOLLECTION (POINT EMPTY, POINT (7 8))"), Some(Geometry::Point(Coord::new(7.0, 8.0))));
+        assert_eq!(p("POLYGON EMPTY"), None);
+        assert_eq!(parse_wkt("SRID=4326;POINT (1 2)").unwrap().1, Some(4326));
+        for bad in [
+            "",
+            "POINT",
+            "POINT (1)",
+            "POINT (1 2 3 4 5)",
+            "POINT (1 2",
+            "POINT (1 2) x",
+            "CIRCLE (1 2)",
+            "POINT (nan 2)",
+            "SRID=x;POINT (1 2)",
+            "POINT (1e999 2)",
+        ] {
+            assert!(parse_wkt(bad).is_err(), "{bad}");
+        }
+        let deep = format!("{}POINT (1 2){}", "GEOMETRYCOLLECTION (".repeat(50), ")".repeat(50));
+        assert!(parse_wkt(&deep).is_err(), "nesting is bounded");
+        assert_eq!(crate::raster::Crs::parse("epsg:2263").unwrap().epsg(), 2263);
+        assert_eq!(crate::raster::Crs::parse("http://www.opengis.net/def/crs/EPSG/0/3857").unwrap(), crate::raster::Crs::WebMercator);
+        assert_eq!(crate::raster::Crs::parse("OGC:CRS84").unwrap(), crate::raster::Crs::LonLat);
+        assert!(crate::raster::Crs::parse("EPSG:999999").is_err());
+        assert!(crate::raster::Crs::parse("Mercator").is_err());
     }
 
     #[test]

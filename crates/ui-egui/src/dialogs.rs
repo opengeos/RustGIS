@@ -37,6 +37,7 @@ impl Dialogs {
             "graphicText" => "graphicText",
             "camera" => "camera",
             "addTiles" => "addTiles",
+            "addCsv" => "addCsv",
             "exportLayer" => "exportLayer",
             other => return Err(format!("unknown dialog '{other}'")),
         };
@@ -98,6 +99,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "graphicText" => "Add Text",
         "camera" => "Camera",
         "addTiles" => "Add Tile Layer",
+        "addCsv" => "Add Delimited Text",
         "exportLayer" => "Export Features",
         _ => "Rename Layer",
     };
@@ -135,6 +137,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             }
             "coordinateSystem" => close = coordinate_system(app, ui, &t),
             "addTiles" => close = add_tiles(app, ui),
+            "addCsv" => close = add_csv(app, ui),
             "exportLayer" => close = export_layer(app, ui),
             "camera" => {
                 egui::Grid::new("cam").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
@@ -280,6 +283,48 @@ fn export_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     }
     buttons(app, ui, if web { "Download" } else { "Export…" }, |app| {
         app.run("ui.exportLayer", json!({"format": app.dialogs.mode})).map(|_| ())
+    })
+}
+
+/// Add Delimited Text: which columns hold the coordinates (or WKT geometry), their coordinate
+/// system and the separator, then the file.
+fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
+    if app.dialogs.mode == "new" {
+        app.dialogs.mode = "auto";
+    }
+    ui.label(egui::RichText::new(tl!("Leave a box empty to find it from the file: x/y columns named like longitude/latitude or easting/northing, or a WKT column named like geometry.")).weak());
+    egui::Grid::new("csv").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+        for (label, hint, v) in [
+            ("X column", "longitude, easting…", &mut app.dialogs.a),
+            ("Y column", "latitude, northing…", &mut app.dialogs.b),
+            ("WKT column", "wkt, geometry…", &mut app.dialogs.c),
+            ("Coordinate system", "EPSG:4326", &mut app.dialogs.text),
+        ] {
+            ui.label(tl!(label));
+            ui.add(egui::TextEdit::singleline(v).hint_text(tl!(hint)).desired_width(240.0));
+            ui.end_row();
+        }
+        ui.label(tl!("Separator"));
+        let seps: [(&'static str, &str); 5] = [("auto", "Automatic"), (",", "Comma"), (";", "Semicolon"), ("\t", "Tab"), ("|", "Pipe")];
+        let shown = seps.iter().find(|(c, _)| *c == app.dialogs.mode).map(|(_, l)| tl!(*l).to_string()).unwrap_or_default();
+        egui::ComboBox::from_id_salt("csv_sep").selected_text(shown).width(240.0).show_ui(ui, |ui| {
+            for (code, label) in seps {
+                ui.selectable_value(&mut app.dialogs.mode, code, tl!(label));
+            }
+        });
+        ui.end_row();
+    });
+    buttons(app, ui, "Choose File…", |app| {
+        let mut p = json!({});
+        for (key, v) in [("x", &app.dialogs.a), ("y", &app.dialogs.b), ("wkt", &app.dialogs.c), ("crs", &app.dialogs.text)] {
+            if !v.trim().is_empty() {
+                p[key] = json!(v.trim());
+            }
+        }
+        if app.dialogs.mode != "auto" {
+            p["delimiter"] = json!(app.dialogs.mode);
+        }
+        app.run("ui.addDelimited", p).map(|_| ())
     })
 }
 

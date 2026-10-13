@@ -207,6 +207,8 @@ pub struct UiState {
     pub pane_sets: Vec<(String, Option<LeftPane>, Option<RightPane>, String)>,
     /// The command an item picked in the browser opens with (web).
     pub pending_open: Option<&'static str>,
+    /// Add Delimited Text's options, for the file being picked (web).
+    pub pending_csv: Option<Value>,
     /// A layout picture waiting for its image file (web).
     pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
@@ -248,6 +250,7 @@ impl Default for UiState {
             pending_picture: None,
             pending_layout_picture: false,
             pending_open: None,
+            pending_csv: None,
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
             pane_sets: Vec::new(),
@@ -487,6 +490,8 @@ impl RustGisApp {
     /// Failures are reported to the user (command errors through `Session::run`, others here).
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
         let lower = name.to_ascii_lowercase();
+        // Add Delimited Text's options go with the file picked for it, and only that one.
+        let csv = self.ui.pending_csv.take();
         // A plugin package: ask before installing it.
         if lower.ends_with(".rgplugin") {
             pluginsui::received(self, bytes.to_vec(), None);
@@ -563,7 +568,13 @@ impl RustGisApp {
             self.map.invalidate();
             r
         } else {
-            self.run("layer.addDataText", json!({"fileName": name, "text": text}))
+            let mut p = json!({"fileName": name, "text": text});
+            if let Some(Value::Object(opts)) = csv.filter(|_| [".csv", ".tsv", ".txt"].iter().any(|e| lower.ends_with(e))) {
+                for (k, v) in opts {
+                    p[k] = v;
+                }
+            }
+            self.run("layer.addDataText", p)
         }
     }
 
@@ -845,18 +856,38 @@ impl RustGisApp {
                     self.ui.tab = ribbon::current_tab(t).to_string();
                 }
             }
+            // Delimited text with its columns and coordinate system: the dialog, then (with the
+            // dialog's options) the file.
+            "ui.addDelimited" => {
+                if !p.is_object() {
+                    return self.run("ui.dialog", json!({"name": "addCsv"}));
+                }
+                if let Some(open) = &self.services.open_async {
+                    self.ui.pending_layout_picture = false;
+                    self.ui.pending_picture = None;
+                    self.ui.pending_open = None;
+                    self.ui.pending_csv = Some(p.clone());
+                    open("text");
+                } else if let Some(path) = dialogs::pick_open(&["csv", "tsv", "txt"], tl!("Delimited text")) {
+                    let mut q = p.clone();
+                    q["path"] = json!(path);
+                    return self.run("layer.addData", q);
+                }
+            }
             "ui.addData" => {
                 if let Some(open) = &self.services.open_async {
                     // A picker cancelled earlier mustn't claim this file.
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
                     self.ui.pending_open = None;
+                    self.ui.pending_csv = None;
                     open("data");
                 } else if let Some(path) = dialogs::pick_open(
                     &[
                         "geojson",
                         "json",
                         "csv",
+                        "tsv",
                         "shp",
                         "zip",
                         "gpkg",

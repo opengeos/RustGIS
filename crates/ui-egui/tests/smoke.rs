@@ -399,3 +399,27 @@ fn old_and_unknown_tab_names_open_a_current_tab() {
         h.step();
     }
 }
+
+/// Add Delimited Text in the web app: the dialog's options go with the file picked next (and
+/// only that one), so a projected CSV lands in place.
+#[test]
+fn delimited_text_options_go_with_the_picked_file() {
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let log = asked.clone();
+    let services = rustgis_ui_egui::Services {
+        open_async: Some(Box::new(move |purpose: &str| log.lock().unwrap().push(purpose.to_string()))),
+        ..Default::default()
+    };
+    let mut app = RustGisApp::with_sample().with_services(services);
+    app.run("ui.addDelimited", json!(null)).unwrap();
+    app.run("ui.addDelimited", json!({"x": "east", "y": "north", "crs": "EPSG:2263", "delimiter": ";"})).unwrap();
+    assert_eq!(asked.lock().unwrap().as_slice(), ["text"]);
+    let r = app.open_bytes("parks.csv", b"name;east;north\nCentral Park;992000;220000\n").unwrap();
+    let id = r["layer"].as_u64().unwrap() as u32;
+    let e = app.session.map().layer(id).unwrap().extent();
+    assert!((e.min_x + 73.96).abs() < 0.05 && (e.min_y - 40.78).abs() < 0.05, "{e:?}");
+    // The next file is read as it is.
+    let r = app.open_bytes("plain.csv", b"lon,lat\n1,2\n").unwrap();
+    let e = app.session.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().extent();
+    assert_eq!((e.min_x, e.min_y), (1.0, 2.0));
+}

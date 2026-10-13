@@ -8,7 +8,7 @@ Formats](data-formats.md).
 | Format | Read | Write |
 | --- | --- | --- |
 | GeoJSON (`.geojson`, `.json`) | Yes | Yes |
-| CSV (`.csv`, `.txt`) with longitude/latitude columns | Yes | Yes |
+| Delimited text (`.csv`, `.tsv`, `.txt`) with x/y columns in any coordinate system, or WKT geometry | Yes | Yes |
 | Shapefile (`.shp` + `.dbf`, or zipped in a `.zip`) | Yes (the web app opens zips) | Yes (`share.exportLayer`) |
 | GeoPackage (`.gpkg`, every feature table) | Yes | Yes (desktop) |
 | GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes (zstd-compressed files on the desktop only) | Yes |
@@ -23,8 +23,11 @@ Formats](data-formats.md).
 | RustGIS project (`.rgis`; older `.rgisx` files open too) | Yes | Yes |
 
 Add data with **Home › Add Data**, by dropping files on the window, or by passing them on the
-command line (`rustgis places.geojson`). A CSV without coordinate columns, or a layer without
-geometry, opens as a standalone table, listed under the map in Layers. **Home › Add Data ›
+command line (`rustgis places.geojson`). **Home › Add Data › Delimited Text…** picks a CSV's x and
+y (or WKT) columns, their coordinate system (such as `EPSG:2263`) and the separator; Add Data finds
+them itself (columns named like longitude/latitude, easting/northing or geometry, and EWKT's
+`SRID=`) and says when coordinates aren't longitude/latitude. A CSV without coordinate columns, or
+a layer without geometry, opens as a standalone table, listed under the map in Layers. **Home › Add Data ›
 Graphics Layer** adds a layer for [drawn graphics](cartography.md#graphics), and **Insert ›
 Layer Templates** adds empty layers with ready-made schemas to draw into.
 

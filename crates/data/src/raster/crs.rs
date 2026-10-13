@@ -127,6 +127,25 @@ impl Crs {
         }
     }
 
+    /// A coordinate system given as text: `EPSG:2263`, `2263`, an OGC URN or URL ending in the
+    /// code, or WKT.
+    pub fn parse(text: &str) -> Result<Crs, String> {
+        let t = text.trim();
+        if t.contains('[') {
+            return super::wkt::crs_from_wkt(t);
+        }
+        let up = t.to_ascii_uppercase();
+        if up.ends_with("CRS84") {
+            return Ok(Crs::LonLat);
+        }
+        let code = t.rsplit([':', '/']).next().unwrap_or(t).trim();
+        let known = t.chars().all(|c| c.is_ascii_digit()) || up.contains("EPSG");
+        match code.parse::<u32>() {
+            Ok(c) if known => Crs::from_epsg(c).ok_or_else(|| format!("unknown coordinate system EPSG:{c}")),
+            _ => Err(format!("'{t}': give a coordinate system as EPSG:<code> or WKT")),
+        }
+    }
+
     /// The EPSG code (0 for a custom system, which has none).
     pub fn epsg(self) -> u16 {
         match self {

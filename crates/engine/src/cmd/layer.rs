@@ -12,7 +12,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Home › Add", add_data)
-            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL or DuckDB layer", "stream"?: bool, "crs"?: "EPSG:… for a GDAL or DuckDB file that doesn't say"}"#),
+            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL or DuckDB layer", "stream"?: bool, "crs"?: "EPSG:… (or WKT) for a CSV's coordinates, or a GDAL or DuckDB file that doesn't say", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
         C::new("info.fileLayers", "List Layers in File", "Home › Add › Add Data", file_layers)
             .view()
             .params(r#"{"path": string}"#),
@@ -20,7 +20,7 @@ pub fn commands() -> Vec<C> {
             r#"{"sql": "one DuckDB SELECT; DuckDB Spatial's ST_ functions, read_parquet('…'), web addresses", "name"?: string, "database"?: "a .duckdb file whose tables the query names", "crs"?: "EPSG:… of a geometry that doesn't say", "stream"?: bool}"#,
         ),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
-        C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).params(r#"{"fileName": "name.geojson|.csv", "text": string}"#),
+        C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).params(r#"{"fileName": "name.geojson|.csv|.tsv", "text": string, "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text)}"#),
         C::new("layer.addSample", "Add Sample Data", "Home › Add › Add Data", add_sample).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
         C::new("layer.remove", "Remove", "Layers", remove).key("Delete").when(need_layer).params(r#"{"layer"?: name|id}"#),
         C::new("layer.select", "Select Layer", "Layers", |s, p| {
@@ -312,7 +312,17 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
         return add_layers(s, p, &full, &bytes);
     }
-    let read = rustgis_data::io::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+    let delimited = read_delimited(p, path, || {
+        let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+        if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
+            return Err(format!("{path} is too large to open"));
+        }
+        std::fs::read(path).map_err(|e| format!("{path}: {e}"))
+    })?;
+    let read = match delimited {
+        Some(read) => read,
+        None => rustgis_data::io::read_path(Path::new(path)).map_err(|e| format!("{path}: {e}"))?,
+    };
     add_read(s, p, read)
 }
 
@@ -887,9 +897,53 @@ pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
     Ok(json!({"layer": id}))
 }
 
+/// The `x`, `y`, `wkt`, `crs` and `delimiter` parameters for a delimited text file, when any is
+/// given.
+fn csv_options(p: &Value) -> Result<Option<rustgis_data::io::CsvOptions>, String> {
+    let text = |k: &str| ps(p, k).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+    let (x, y, wkt, crs, delimiter) = (text("x"), text("y"), text("wkt"), text("crs"), ps(p, "delimiter"));
+    if x.is_none() && y.is_none() && wkt.is_none() && crs.is_none() && delimiter.is_none() {
+        return Ok(None);
+    }
+    let crs = crs.map(|c| rustgis_data::raster::Crs::parse(&c)).transpose()?;
+    let delimiter = match delimiter {
+        None => None,
+        Some("\\t" | "tab" | "\t") => Some(b'\t'),
+        Some(d) if d.len() == 1 && d.is_ascii() && !d.starts_with(['"', '\n', '\r']) => d.bytes().next(),
+        Some(d) => return Err(format!("delimiter '{d}': give one character, such as ; or \\t")),
+    };
+    Ok(Some(rustgis_data::io::CsvOptions { x, y, wkt, crs, delimiter }))
+}
+
+/// Whether a file name is delimited text (CSV, TSV, TXT).
+fn is_delimited_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.ends_with(".csv") || n.ends_with(".tsv") || n.ends_with(".txt")
+}
+
+/// Reads delimited text with the options `p` gives, or `None` when it gives none (or the file
+/// isn't delimited text).
+fn read_delimited(
+    p: &Value,
+    name: &str,
+    bytes: impl FnOnce() -> Result<Vec<u8>, String>,
+) -> Result<Option<(rustgis_data::Dataset, rustgis_data::ReadReport)>, String> {
+    if !is_delimited_name(name) {
+        return Ok(None);
+    }
+    let Some(opts) = csv_options(p)? else { return Ok(None) };
+    let bytes = bytes()?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| format!("{name} is not UTF-8 text"))?;
+    let stem = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or("layer");
+    rustgis_data::io::read_csv_with(text, stem, &opts).map(Some).map_err(|e| format!("{name}: {e}"))
+}
+
 pub(crate) fn add_data_text(s: &mut Session, p: &Value) -> CmdResult {
     let name = s_req(p, "fileName")?;
     let text = s_req(p, "text")?;
+    if let Some(read) = read_delimited(p, name, || Ok(text.as_bytes().to_vec()))? {
+        return add_read(s, p, read);
+    }
     let read = rustgis_data::io::read_bytes(name, text.as_bytes()).map_err(|e| format!("{name}: {e}"))?;
     add_read(s, p, read)
 }

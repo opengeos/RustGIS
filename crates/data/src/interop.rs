@@ -137,6 +137,199 @@ pub fn wkt(g: &Geometry) -> String {
     }
 }
 
+/// The most coordinates one WKT geometry may hold.
+const MAX_WKT_COORDS: usize = 5_000_000;
+
+/// Reads well-known text (or EWKT, `SRID=2263;POINT (…)`): the geometry (`None` when empty) and
+/// the SRID if one is given. Z and M values are dropped; a `GEOMETRYCOLLECTION` keeps its first
+/// non-empty member.
+pub fn parse_wkt(text: &str) -> Result<(Option<Geometry>, Option<u32>), String> {
+    let text = text.trim();
+    let (srid, body) = match text.get(..5).filter(|p| p.eq_ignore_ascii_case("SRID=")).and_then(|_| text.split_once(';')) {
+        Some((s, rest)) => (Some(s.get(5..).unwrap_or("").trim().parse::<u32>().map_err(|_| "a bad SRID".to_string())?), rest),
+        None => (None, text),
+    };
+    let mut p = WktParser { toks: wkt_tokens(body)?, at: 0, coords: 0 };
+    let g = p.geometry(0)?;
+    if p.at != p.toks.len() {
+        return Err("text after the geometry".into());
+    }
+    Ok((g, srid))
+}
+
+#[derive(Debug, PartialEq)]
+enum WktTok {
+    Word(String),
+    Num(f64),
+    Open,
+    Close,
+    Comma,
+}
+
+fn wkt_tokens(s: &str) -> Result<Vec<WktTok>, String> {
+    let mut out = Vec::new();
+    let mut chars = s.char_indices().peekable();
+    while let Some(&(i, c)) = chars.peek() {
+        match c {
+            c if c.is_whitespace() => {
+                chars.next();
+            }
+            '(' | '[' => {
+                out.push(WktTok::Open);
+                chars.next();
+            }
+            ')' | ']' => {
+                out.push(WktTok::Close);
+                chars.next();
+            }
+            ',' => {
+                out.push(WktTok::Comma);
+                chars.next();
+            }
+            c if c.is_ascii_alphabetic() => {
+                let mut end = i;
+                while let Some(&(j, d)) = chars.peek() {
+                    if !d.is_ascii_alphabetic() {
+                        break;
+                    }
+                    end = j + d.len_utf8();
+                    chars.next();
+                }
+                out.push(WktTok::Word(s.get(i..end).unwrap_or("").to_ascii_uppercase()));
+            }
+            c if c.is_ascii_digit() || matches!(c, '-' | '+' | '.') => {
+                let mut end = i;
+                while let Some(&(j, d)) = chars.peek() {
+                    if !(d.is_ascii_digit() || matches!(d, '-' | '+' | '.' | 'e' | 'E')) {
+                        break;
+                    }
+                    end = j + d.len_utf8();
+                    chars.next();
+                }
+                let n: f64 = s.get(i..end).unwrap_or("").parse().map_err(|_| format!("a bad number '{}'", s.get(i..end).unwrap_or("")))?;
+                out.push(WktTok::Num(n));
+            }
+            c => return Err(format!("an unexpected '{c}'")),
+        }
+    }
+    Ok(out)
+}
+
+struct WktParser {
+    toks: Vec<WktTok>,
+    at: usize,
+    coords: usize,
+}
+
+impl WktParser {
+    fn next(&mut self) -> Option<&WktTok> {
+        let t = self.toks.get(self.at);
+        self.at += 1;
+        t
+    }
+
+    fn peek(&self) -> Option<&WktTok> {
+        self.toks.get(self.at)
+    }
+
+    fn expect(&mut self, t: WktTok) -> Result<(), String> {
+        if self.next() == Some(&t) { Ok(()) } else { Err(format!("expected {t:?}")) }
+    }
+
+    /// `x y [z [m]]`.
+    fn coord(&mut self) -> Result<Coord, String> {
+        let mut v = Vec::with_capacity(4);
+        while let Some(WktTok::Num(n)) = self.peek() {
+            v.push(*n);
+            self.at += 1;
+        }
+        self.coords += 1;
+        if self.coords > MAX_WKT_COORDS {
+            return Err("too many coordinates".into());
+        }
+        match v.as_slice() {
+            [x, y, ..] if v.len() <= 4 && x.is_finite() && y.is_finite() => Ok(Coord::new(*x, *y)),
+            _ => Err("a coordinate needs two to four numbers".into()),
+        }
+    }
+
+    /// `( a, b, … )`, each item read by `item`.
+    fn list<T>(&mut self, mut item: impl FnMut(&mut Self) -> Result<T, String>) -> Result<Vec<T>, String> {
+        self.expect(WktTok::Open)?;
+        let mut out = vec![item(self)?];
+        loop {
+            match self.next() {
+                Some(WktTok::Comma) => out.push(item(self)?),
+                Some(WktTok::Close) => return Ok(out),
+                _ => return Err("expected ',' or ')'".into()),
+            }
+        }
+    }
+
+    fn coords(&mut self) -> Result<Vec<Coord>, String> {
+        self.list(Self::coord)
+    }
+
+    fn rings(&mut self) -> Result<Vec<Vec<Coord>>, String> {
+        self.list(Self::coords)
+    }
+
+    /// Whether the next word is `EMPTY` (taken if so).
+    fn empty(&mut self) -> bool {
+        if matches!(self.peek(), Some(WktTok::Word(w)) if w == "EMPTY") {
+            self.at += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn geometry(&mut self, depth: usize) -> Result<Option<Geometry>, String> {
+        if depth > 8 {
+            return Err("geometry collections nested too deep".into());
+        }
+        let Some(WktTok::Word(kind)) = self.next() else { return Err("expected a geometry type".into()) };
+        let kind = kind.clone();
+        // `POINT Z (…)`, `POINTZ (…)`, `POINT ZM (…)`: the dimensions are read, then dropped.
+        if matches!(self.peek(), Some(WktTok::Word(w)) if matches!(w.as_str(), "Z" | "M" | "ZM")) {
+            self.at += 1;
+        }
+        let kind =
+            kind.strip_suffix("ZM").or_else(|| kind.strip_suffix('Z')).or_else(|| kind.strip_suffix('M')).unwrap_or(&kind).to_string();
+        if self.empty() {
+            return Ok(None);
+        }
+        Ok(Some(match kind.as_str() {
+            "POINT" => {
+                self.expect(WktTok::Open)?;
+                let c = self.coord()?;
+                self.expect(WktTok::Close)?;
+                Geometry::Point(c)
+            }
+            // Points with or without their own parentheses.
+            "MULTIPOINT" => Geometry::MultiPoint(self.list(|p| {
+                if p.peek() == Some(&WktTok::Open) {
+                    p.at += 1;
+                    let c = p.coord()?;
+                    p.expect(WktTok::Close)?;
+                    Ok(c)
+                } else {
+                    p.coord()
+                }
+            })?),
+            "LINESTRING" => Geometry::Line(vec![self.coords()?]),
+            "MULTILINESTRING" => Geometry::Line(self.rings()?),
+            "POLYGON" => Geometry::Polygon(vec![self.rings()?]),
+            "MULTIPOLYGON" => Geometry::Polygon(self.list(Self::rings)?),
+            "GEOMETRYCOLLECTION" => {
+                let members = self.list(|p| p.geometry(depth + 1))?;
+                return Ok(members.into_iter().flatten().next());
+            }
+            other => return Err(format!("'{other}' geometries aren't read")),
+        }))
+    }
+}
+
 /// CSV with a `wkt` geometry column and every attribute.
 pub fn to_wkt_csv(ds: &Dataset) -> String {
     // Text starting like a formula is prefixed with ' so spreadsheets show it rather than run it.
