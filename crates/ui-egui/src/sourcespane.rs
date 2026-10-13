@@ -45,18 +45,9 @@ pub fn load(app: &mut RustGisApp) {
     }
     app.ui.sources.loaded = true;
     if let Some(text) = app.services.load_pref.as_ref().and_then(|load| load(PREF)) {
-        let mut kept = rustgis_engine::sources::Sources::from_json(&text);
-        // What this session added before the pane opened stays first.
-        let now = std::mem::take(&mut app.session.sources.recent);
-        for r in kept.recent.drain(..).rev() {
-            app.session.sources.recent.insert(0, r);
-        }
-        for r in now.into_iter().rev() {
-            app.session.sources.note(r);
-        }
-        app.session.sources.favourites = kept.favourites;
-        app.session.sources.saved = kept.saved;
-        app.session.sources.generation += 1;
+        // What this session already has (added, saved or made favourite before the first read)
+        // stays; the stored lists are added after it.
+        app.session.sources.merge(rustgis_engine::sources::Sources::from_json(&text));
     }
     app.ui.sources_saved = app.session.sources.generation;
 }

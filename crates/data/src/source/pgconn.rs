@@ -32,6 +32,10 @@ pub fn public_label(s: &str) -> Option<String> {
     }
     let rest = ["postgresql:", "postgres:", "pg:"].iter().find(|p| lower.starts_with(**p)).and_then(|p| t.get(p.len()..))?;
     let (public, _) = split_secrets(rest.trim(), SECRET_KEYS);
+    // Nothing that names a database (`postgres:dbname`, `PG:`): not a connection to keep.
+    if public.is_empty() {
+        return None;
+    }
     Some(format!("postgres:{public}"))
 }
 

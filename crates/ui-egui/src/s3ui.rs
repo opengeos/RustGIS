@@ -179,7 +179,6 @@ fn store_saved(app: &RustGisApp) {
     }
 }
 
-/// The dialog: a connection, then a bucket browsed a level at a time.
 /// Opens the S3 browser on a session connection (the Data Sources pane's S3 list).
 pub fn open_connection(app: &mut RustGisApp, name: &str) {
     let st = &mut app.ui.s3;
@@ -193,6 +192,7 @@ pub fn open_connection(app: &mut RustGisApp, name: &str) {
     }
 }
 
+/// The dialog: a connection, then a bucket browsed a level at a time.
 pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
     load_saved(app);
     ui.label(egui::RichText::new(tl!("Amazon S3, or an S3-compatible service (MinIO, Cloudflare R2, Wasabi…) by its endpoint. Keys are kept until RustGIS closes; a remembered connection keeps its name, endpoint and region, never its secret.")).weak());

@@ -63,6 +63,26 @@ impl Sources {
         s
     }
 
+    /// Takes in the sources kept with the preferences, keeping what this session already has:
+    /// in-memory entries stay (and first), stored ones are added after them unless the same source
+    /// ([`Source::is`]) is there already.
+    pub fn merge(&mut self, stored: Sources) {
+        fn join(now: &mut Vec<Source>, stored: Vec<Source>, cap: usize) {
+            for s in stored {
+                if now.len() >= cap {
+                    break;
+                }
+                if !now.iter().any(|n| n.is(&s.kind, &s.address)) {
+                    now.push(s);
+                }
+            }
+        }
+        join(&mut self.favourites, stored.favourites, MAX_KEPT);
+        join(&mut self.saved, stored.saved, MAX_KEPT);
+        join(&mut self.recent, stored.recent, MAX_RECENT);
+        self.generation += 1;
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
     }
@@ -208,16 +228,14 @@ pub fn redact(address: &str) -> String {
     let lower = address.to_ascii_lowercase();
     // A PostgreSQL connection (`postgres:` or `postgresql:` keyword strings, GDAL's `PG:`, URIs):
     // libpq's own rules (quoted values, escapes, `key = value`), without its secrets.
-    if ["postgres:", "postgresql:", "pg:"].iter().any(|p| lower.starts_with(p))
-        && let Some(label) = rustgis_data::source::pgconn::public_label(address)
-    {
-        return label;
+    if ["postgres:", "postgresql:", "pg:"].iter().any(|p| lower.starts_with(p)) {
+        // One that can't be taken apart isn't kept (an empty address, refused by `clean`).
+        return rustgis_data::source::pgconn::public_label(address).unwrap_or_default();
     }
     let Some((scheme, rest)) = address.split_once("://") else { return address.to_string() };
-    let (rest, frag) = match rest.split_once('#') {
-        Some((r, f)) => (r, Some(f)),
-        None => (rest, None),
-    };
+    // The fragment never: OAuth and SAS-style links carry tokens there, and nothing that adds a
+    // source needs it.
+    let rest = rest.split('#').next().unwrap_or(rest);
     let (before_query, query) = match rest.split_once('?') {
         Some((b, q)) => (b, Some(q)),
         None => (rest, None),
@@ -245,10 +263,6 @@ pub fn redact(address: &str) -> String {
             out.push('?');
             out.push_str(&kept.join("&"));
         }
-    }
-    if let Some(f) = frag.filter(|f| !f.contains("token") && !f.contains("key=")) {
-        out.push('#');
-        out.push_str(f);
     }
     out
 }
@@ -391,6 +405,25 @@ mod tests {
     }
 
     #[test]
+    fn stored_sources_join_what_the_session_has() {
+        // A favourite made (and a source added) before the stored lists are read survives them.
+        let mut s = Sources::default();
+        s.keep("favourites", Source { kind: "file".into(), address: "/new.gpkg".into(), ..Source::default() }).unwrap();
+        s.note(Source { kind: "file".into(), address: "/added.csv".into(), ..Source::default() });
+        let stored = Sources::from_json(
+            r#"{"favourites":[{"kind":"file","name":"","address":"/old.gpkg"},{"kind":"file","name":"","address":"/new.gpkg"}],"recent":[{"kind":"file","name":"","address":"/older.csv"}],"saved":[{"kind":"stac","name":"","address":"https://s/v1"}]}"#,
+        );
+        let before = s.generation;
+        s.merge(stored);
+        let fav: Vec<&str> = s.favourites.iter().map(|f| f.address.as_str()).collect();
+        assert_eq!(fav, ["/new.gpkg", "/old.gpkg"]);
+        let recent: Vec<&str> = s.recent.iter().map(|f| f.address.as_str()).collect();
+        assert_eq!(recent, ["/added.csv", "/older.csv"]);
+        assert_eq!(s.saved.len(), 1);
+        assert!(s.generation > before);
+    }
+
+    #[test]
     fn identity_is_kind_and_address() {
         let mut s = Sources::default();
         let svc = |extra: Value| Source { kind: "service".into(), name: "W".into(), address: "https://h/wms".into(), extra };
@@ -412,7 +445,15 @@ mod tests {
 
     #[test]
     fn secrets_are_never_kept() {
-        assert_eq!(redact("https://me:pw@host.example/a?token=abc&layer=x&X-Amz-Signature=1#k"), "https://me@host.example/a?layer=x#k");
+        assert_eq!(redact("https://me:pw@host.example/a?token=abc&layer=x&X-Amz-Signature=1#k"), "https://me@host.example/a?layer=x");
+        // A fragment is never kept (OAuth and SAS-style links put tokens there).
+        for f in ["#Access_Token=t", "#sig=s", "#password=p", "#id_token=i", "#map=4/1/2"] {
+            assert_eq!(redact(&format!("https://h.example/x.fgb{f}")), "https://h.example/x.fgb", "{f}");
+        }
+        // A connection with nothing to take apart isn't kept.
+        for bare in ["postgres:dbname", "PG:", "postgres:password='x"] {
+            assert!(clean(Source { kind: "database".into(), address: bare.into(), ..Source::default() }).is_err(), "{bare}");
+        }
         assert_eq!(
             redact("https://acct.blob.core.windows.net/c/a.tif?se=2026&sp=r&sv=1&sig=zzz"),
             "https://acct.blob.core.windows.net/c/a.tif"
