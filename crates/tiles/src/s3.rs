@@ -354,7 +354,14 @@ fn signer_for(url: &str) -> Option<(Connection, String)> {
 /// The bucket an AWS S3 address names: its host's first label (virtual-hosted) or its path's
 /// first part (path-style at `s3.<region>.amazonaws.com`).
 fn aws_bucket(host: &str, rest: &str) -> Option<String> {
-    if let Some(b) = host.split_once(".s3.").map(|(b, _)| b).or_else(|| host.strip_suffix(".s3.amazonaws.com")) {
+    // Virtual-hosted: bucket.s3.amazonaws.com, bucket.s3.<region>.amazonaws.com, or the legacy
+    // bucket.s3-<region>.amazonaws.com.
+    if let Some(b) = host
+        .split_once(".s3.")
+        .map(|(b, _)| b)
+        .or_else(|| host.strip_suffix(".s3.amazonaws.com"))
+        .or_else(|| host.split_once(".s3-").map(|(b, _)| b))
+    {
         return Some(b.to_string());
     }
     let path = rest.split_once('/').map(|(_, p)| p).unwrap_or("");
@@ -684,6 +691,18 @@ pub fn profile(credentials_ini: &str, config_ini: &str, name: &str) -> Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aws_bucket_from_every_host_form() {
+        let b = |host: &str, rest: &str| aws_bucket(host, rest);
+        assert_eq!(b("data.s3.amazonaws.com", "data.s3.amazonaws.com/a/b.tif").as_deref(), Some("data"));
+        assert_eq!(b("data.s3.us-west-2.amazonaws.com", "x/a.tif").as_deref(), Some("data"));
+        // The legacy regional form: the bucket is the host's, never a key's first segment.
+        assert_eq!(b("data.s3-us-west-2.amazonaws.com", "data.s3-us-west-2.amazonaws.com/other/a.tif").as_deref(), Some("data"));
+        // Path style: the first path segment.
+        assert_eq!(b("s3-us-west-2.amazonaws.com", "s3-us-west-2.amazonaws.com/data/a.tif").as_deref(), Some("data"));
+        assert_eq!(b("s3.amazonaws.com", "s3.amazonaws.com/data/a.tif").as_deref(), Some("data"));
+    }
 
     fn example() -> Credentials {
         Credentials {

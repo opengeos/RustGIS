@@ -356,8 +356,9 @@ fn browse(app: &mut RustGisApp, ui: &mut egui::Ui) {
                     if ui.small_button(tl!("Add")).clicked() {
                         // Through the connection browsed with (it serves the bucket now), or by its
                         // public web address at AWS when browsing anonymously.
+                        // Anonymous stays anonymous even for a bucket a connection serves.
                         add = Some(if st.conn.is_empty() {
-                            s3::object_url(&st.bucket, key, None)
+                            s3::anonymous(&s3::object_url(&st.bucket, key, None))
                         } else {
                             format!("s3://{}/{key}", st.bucket)
                         });
