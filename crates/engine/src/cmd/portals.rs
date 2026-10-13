@@ -158,7 +158,14 @@ fn portal_add(s: &mut Session, p: &Value) -> CmdResult {
             if let Some(n) = name {
                 q["name"] = json!(n);
             }
-            super::layer::add_url(s, &q)
+            let r = super::layer::add_url(s, &q)?;
+            // A Socrata export answers as many rows as asked for and says nothing more: as many
+            // as that means there were probably more.
+            let socrata = url.contains("/resource/") && url.contains("limit=");
+            if socrata && r["features"].as_u64() == Some(portal::SOCRATA_ROWS as u64) {
+                s.notify(format!("the dataset was cut at {} rows (Socrata's export gives at most that many)", portal::SOCRATA_ROWS), false);
+            }
+            Ok(r)
         }
         kind @ ("wms" | "wfs" | "arcgis") => {
             let layer = match ps(p, "layer").map(str::trim).filter(|l| !l.is_empty()) {

@@ -211,7 +211,7 @@ impl Portal {
             }
             Kind::Hub => {
                 let r = v.get("features").and_then(Value::as_array).ok_or_else(|| self.not_portal())?;
-                r.iter().take(MAX_RESULTS).filter_map(hub_dataset).collect()
+                r.iter().take(MAX_RESULTS).filter_map(|d| hub_dataset(&self.base, d)).collect()
             }
         };
         for d in &mut out {
@@ -440,7 +440,7 @@ fn socrata_dataset(r: &Value) -> Option<Dataset> {
     if !is_id || !geo || !host_ok(&domain) || text(res, "type", 40) != "dataset" {
         return None;
     }
-    let url = format!("https://{domain}/resource/{id}.geojson?$limit={}", SOCRATA_ROWS);
+    let url = format!("https://{domain}/resource/{id}.geojson?%24limit={}", SOCRATA_ROWS);
     Some(Dataset {
         title: text(res, "name", 300),
         description: snippet(&text(res, "description", 4000)),
@@ -455,13 +455,15 @@ fn socrata_dataset(r: &Value) -> Option<Dataset> {
 /// How many rows a Socrata dataset's GeoJSON asks for (its API answers 1000 when not asked).
 pub const SOCRATA_ROWS: usize = 50_000;
 
-fn hub_dataset(f: &Value) -> Option<Dataset> {
+/// An ArcGIS Hub item, its page on the Hub site searched (`base`: hub.arcgis.com or an
+/// organisation's own).
+fn hub_dataset(base: &str, f: &Value) -> Option<Dataset> {
     let p = f.get("properties")?;
     let url = text(p, "url", 2048);
     let resource = classify("ArcGIS REST", "", &url)?;
     let id = Some(text(p, "id", 100)).filter(|i| !i.is_empty()).unwrap_or_else(|| text(f, "id", 100));
     Some(Dataset {
-        page: (!id.is_empty()).then(|| format!("{HUB}/datasets/{id}")),
+        page: (!id.is_empty()).then(|| format!("{}/datasets/{id}", base.trim_end_matches('/'))),
         title: text(p, "title", 300),
         description: snippet(&Some(text(p, "snippet", 2000)).filter(|s| !s.is_empty()).unwrap_or_else(|| text(p, "description", 2000))),
         organization: text(p, "owner", 200),
@@ -555,7 +557,7 @@ mod tests {
         let s = Portal::new(Some("socrata"), None).unwrap();
         let ds = s.parse("https://api.us.socrata.com/api/catalog/v1?q=parks", soc, None).unwrap();
         assert_eq!(ds.len(), 1);
-        assert_eq!(ds[0].resources[0].url, "https://data.cityofnewyork.us/resource/enfh-gkve.geojson?$limit=50000");
+        assert_eq!(ds[0].resources[0].url, "https://data.cityofnewyork.us/resource/enfh-gkve.geojson?%24limit=50000");
 
         let hub = br#"{"type":"FeatureCollection","features":[{"id":"c5ef","properties":{"id":"c5ef","title":"parks","type":"Feature Service","owner":"nyc","url":"https://services1.arcgis.com/S/arcgis/rest/services/parks/FeatureServer","extent":{"type":"Polygon","coordinates":[[[-73.9,40.76],[-73.87,40.76],[-73.87,40.74],[-73.9,40.76]]]}}},{"properties":{"title":"no url"}}]}"#;
         let h = Portal::new(Some("arcgis-hub"), None).unwrap();
