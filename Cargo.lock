@@ -3783,6 +3783,7 @@ version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
+ "base64 0.22.1",
  "bytes",
  "calamine",
  "crs-definitions",

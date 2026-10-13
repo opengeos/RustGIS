@@ -4192,3 +4192,49 @@ fn a_failed_multi_file_add_leaves_the_map_as_it_was() {
     assert_eq!(fiji, [178.0, -18.0, -178.0, -17.0]);
     assert!(crate::cmd::catalogs::area(&s, &json!({"bbox": [200.0, 0.0, 10.0, 1.0]})).unwrap_err().contains("antimeridian"));
 }
+
+/// Geotagged photos: a folder of them becomes a point layer with each photo's time, camera and
+/// thumbnail; photos without a position are named, not added; an upload joins the Photos layer;
+/// a project keeps the thumbnails.
+#[test]
+fn geotagged_photos_become_a_photo_layer() {
+    use base64::Engine;
+    use rustgis_data::photo;
+    let dir = std::env::temp_dir().join(format!("rustgis-photos-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.jpg"), photo::example(true, (43.4674, "N"), (11.8851, "E"))).unwrap();
+    std::fs::write(dir.join("b.JPEG"), photo::example(false, (43.4671, "N"), (11.8853, "E"))).unwrap();
+    // A JPEG without EXIF, and a file that isn't a photo.
+    std::fs::write(dir.join("plain.jpg"), b"\xFF\xD8\xFF\xD9").unwrap();
+    std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addPhotos", &json!({"folder": dir.display().to_string()})).unwrap();
+    assert_eq!((r["photos"].as_u64(), r["skipped"].as_u64()), (Some(2), Some(1)), "{r}");
+    assert!(s.notices.iter().any(|n| n.text.contains("plain.jpg")), "the photo without EXIF is named");
+    let l = s.map().layer_by_name("Photos").unwrap();
+    assert!(photo::is_photo_layer(&l.dataset));
+    let f = &l.dataset.features[0];
+    assert_eq!(f.attrs[0], rustgis_data::Value::Text("a".into()));
+    assert_eq!(f.attrs[2], rustgis_data::Value::Text("2008-10-22 16:29:49".into()));
+    assert!(matches!(&f.attrs[6], rustgis_data::Value::Text(t) if t.starts_with("data:image/jpeg;base64,")));
+    // An upload (the web app's way, one file at a time) joins the Photos layer.
+    let one = base64::engine::general_purpose::STANDARD.encode(photo::example(true, (43.468, "N"), (11.881, "E")));
+    s.run("layer.addDataBytes", &json!({"fileName": "c.jpg", "data": one})).unwrap();
+    assert_eq!(s.map().layers.iter().filter(|l| l.name == "Photos").count(), 1);
+    assert_eq!(s.map().layer_by_name("Photos").unwrap().dataset.features.len(), 3);
+    // So does a photo added by its path.
+    s.run("layer.addData", &json!({"path": dir.join("a.jpg").display().to_string()})).unwrap();
+    assert_eq!(s.map().layer_by_name("Photos").unwrap().dataset.features.len(), 4);
+    // The project keeps them, thumbnails and all.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t.map().layer_by_name("Photos").unwrap();
+    assert_eq!(again.dataset.features.len(), 4);
+    assert!(photo::is_photo_layer(&again.dataset));
+    // Nothing to add: an error, and nothing added.
+    assert!(s.run("layer.addPhotos", &json!({})).is_err());
+    assert!(s.run("layer.addPhotos", &json!({"paths": [dir.join("plain.jpg").display().to_string()]})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -13,6 +13,9 @@ pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Home › Add", add_data)
             .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL, DuckDB or DXF layer", "paperSpace"?: "bool: a DXF's layout entities too", "stream"?: bool, "crs"?: "EPSG:… (or WKT) for a CSV's coordinates, or a GDAL or DuckDB file that doesn't say", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
+        C::new("layer.addPhotos", "Add Photos", "Home › Add", add_photos).params(
+            r#"{"paths"?: [JPEG photo files], "folder"?: "a folder of photos (every JPEG in it)", "name"?: "the layer (default Photos; photos join it when it exists)"}"#,
+        ),
         C::new("info.fileLayers", "List Layers in File", "Home › Add › Add Data", file_layers)
             .view()
             .params(r#"{"path": string}"#),
@@ -288,8 +291,105 @@ pub fn add_dataset(s: &mut Session, mut ds: rustgis_data::Dataset) -> u32 {
     id
 }
 
+/// The photo layer single photos join (added by Add Data, dropped or uploaded one at a time).
+pub(crate) const PHOTOS: &str = "Photos";
+
+/// Adds photos (file names and contents) as points: to the photo layer named `name` when there is
+/// one, else to a new one. Photos without a GPS position are left out and named in a notice.
+pub(crate) fn add_photos_to(s: &mut Session, name: &str, photos: &[(String, Vec<u8>)]) -> CmdResult {
+    use rustgis_data::photo;
+    let (ds, report) = photo::read(name, photos);
+    for m in &report.messages {
+        s.notify(m.clone(), false);
+    }
+    if ds.features.is_empty() {
+        return Err(report.messages.first().cloned().unwrap_or_else(|| "no photo with a GPS position".into()));
+    }
+    let added = ds.features.len();
+    let extent = ds.extent();
+    let existing = s.map().layers.iter().find(|l| l.name == name && photo::is_photo_layer(&l.dataset)).map(|l| l.id);
+    let id = match existing {
+        Some(id) => {
+            let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+            let room = photo::MAX_PHOTOS.saturating_sub(l.dataset.features.len());
+            if room < added {
+                s.notify(format!("{name} holds up to {} photos; {} were left out", photo::MAX_PHOTOS, added - room), false);
+            }
+            let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+            for f in ds.features.into_iter().take(room) {
+                l.dataset.push(f.geometry, f.attrs);
+            }
+            l.touch_geometry();
+            s.active_layer = Some(id);
+            id
+        }
+        None => add_dataset(s, ds),
+    };
+    s.zoom_to(&extent);
+    Ok(json!({"layer": id, "photos": added, "skipped": report.skipped}))
+}
+
+/// `layer.addPhotos`: photo files (or every JPEG in a folder) as points.
+fn add_photos(s: &mut Session, p: &Value) -> CmdResult {
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(PHOTOS).to_string();
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, name);
+        Err("in the web app, add photos by uploading them (Add Data)".into())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rustgis_data::photo;
+        let mut paths: Vec<std::path::PathBuf> = p
+            .get("paths")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(std::path::PathBuf::from)
+            .collect();
+        if let Some(folder) = ps(p, "folder").map(str::trim).filter(|f| !f.is_empty()) {
+            let entries = std::fs::read_dir(folder).map_err(|e| format!("{folder}: {e}"))?;
+            let mut found: Vec<std::path::PathBuf> = entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.is_file() && photo::is_photo_name(&p.to_string_lossy()))
+                .take(photo::MAX_PHOTOS + 1)
+                .collect();
+            found.sort();
+            paths.extend(found);
+        }
+        if paths.is_empty() {
+            return Err("give \"paths\" (photo files) or a \"folder\" of photos".into());
+        }
+        let mut photos = Vec::new();
+        for path in paths.iter().take(photo::MAX_PHOTOS) {
+            let shown = path.display().to_string();
+            match std::fs::metadata(path) {
+                Ok(m) if m.len() as usize > photo::MAX_BYTES => {
+                    s.notify(format!("{shown}: larger than {} MB", photo::MAX_BYTES >> 20), true)
+                }
+                Ok(_) => match std::fs::read(path) {
+                    Ok(b) => photos.push((shown, b)),
+                    Err(e) => s.notify(format!("{shown}: {e}"), true),
+                },
+                Err(e) => s.notify(format!("{shown}: {e}"), true),
+            }
+        }
+        if paths.len() > photo::MAX_PHOTOS {
+            s.notify(format!("a photo layer holds up to {} photos; the rest were left out", photo::MAX_PHOTOS), false);
+        }
+        add_photos_to(s, &name, &photos)
+    }
+}
+
 fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     let path = s_req(p, "path")?;
+    // A geotagged photo: a point in the photo layer.
+    #[cfg(not(target_arch = "wasm32"))]
+    if rustgis_data::photo::is_photo_name(path) {
+        let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(PHOTOS).to_string();
+        return add_photos(s, &json!({"paths": [path], "name": name}));
+    }
     if rustgis_data::raster::is_raster_name(path) {
         return super::raster::add_path(s, path, ps(p, "name").map(str::trim).filter(|n| !n.is_empty()));
     }

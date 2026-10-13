@@ -191,6 +191,12 @@ fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Adds a file's contents (an upload, a download) as its name's extension says.
 pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: Vec<u8>) -> CmdResult {
+    // A geotagged photo (an upload, a drop): a point in the photo layer, so several uploads
+    // gather in one.
+    if rustgis_data::photo::is_photo_name(&name) {
+        let layer = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(super::layer::PHOTOS).to_string();
+        return super::layer::add_photos_to(s, &layer, &[(name, bytes)]);
+    }
     if raster::is_raster_name(&name) {
         let r = raster::read_bytes(&name, &bytes).map_err(|e| format!("{name}: {e}"))?;
         let title = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| r.name.clone());

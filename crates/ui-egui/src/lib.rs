@@ -1131,6 +1131,8 @@ impl RustGisApp {
                             "atom",
                             "xml",
                             "landxml",
+                            "jpg",
+                            "jpeg",
                             "shp",
                             "zip",
                             "gpkg",

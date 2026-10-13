@@ -10,6 +10,9 @@ use wasm_bindgen::JsCast as _;
 
 const DATA_EXTS: &[&str] = &[
     "geojson",
+    // Geotagged photos (points in the Photos layer).
+    "jpg",
+    "jpeg",
     "json",
     "csv",
     "tsv",
@@ -560,12 +563,15 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context, embedded: bool)
             } else {
                 rfd::AsyncFileDialog::new().add_filter("Vector and raster data", DATA_EXTS)
             };
+            // Data may come several files at once (photos gather in one layer).
+            let many = purpose == "data";
             wasm_bindgen_futures::spawn_local(async move {
-                let Some(file) = dialog.pick_file().await else {
-                    return;
-                };
-                let bytes = file.read().await;
-                inbox.lock().unwrap_or_else(|e| e.into_inner()).push((format!("{mark}{}", file.file_name()), bytes));
+                let files: Vec<rfd::FileHandle> =
+                    if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
+                for file in files {
+                    let bytes = file.read().await;
+                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((format!("{mark}{}", file.file_name()), bytes));
+                }
                 ctx.request_repaint();
             });
         })),

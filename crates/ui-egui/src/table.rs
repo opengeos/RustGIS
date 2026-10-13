@@ -170,8 +170,11 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                                         }
                                     } else {
                                         let v = ds.value(r, c);
-                                        let txt = egui::RichText::new(v.to_string()).size(11.5);
-                                        let txt = if matches!(v, V::Null) { txt.color(t.text_disabled).italics() } else { txt };
+                                        // A picture (a photo's thumbnail) is named, not spelled out.
+                                        let picture = matches!(v, V::Text(s) if crate::mapview::is_picture(s));
+                                        let shown = if picture { tl!("picture").to_string() } else { v.to_string() };
+                                        let txt = egui::RichText::new(shown).size(11.5);
+                                        let txt = if matches!(v, V::Null) || picture { txt.color(t.text_disabled).italics() } else { txt };
                                         let resp = ui.add(egui::Label::new(txt).sense(Sense::click()).truncate());
                                         if resp.double_clicked() && is_layer {
                                             app.table.editing =

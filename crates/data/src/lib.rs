@@ -18,6 +18,7 @@ pub mod mapinfo;
 pub mod mbtiles;
 pub mod ogc;
 pub mod osm;
+pub mod photo;
 pub mod query;
 pub mod raster;
 pub mod sheets;
