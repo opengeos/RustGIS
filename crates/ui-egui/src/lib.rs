@@ -23,6 +23,7 @@ mod panes;
 mod pluginsui;
 mod reportpane;
 mod ribbon;
+mod sqlpane;
 mod stacui;
 mod table;
 pub mod theme;
@@ -181,6 +182,7 @@ pub enum RightPane {
     Notebook,
     Assistant,
     Shares,
+    Sql,
 }
 
 pub struct UiState {
@@ -232,6 +234,8 @@ pub struct UiState {
     /// Data downloading from web addresses (Add Data › From URL): the address, the parameters to
     /// add it with, and where the download lands.
     pub downloads: Vec<(u64, String, Value, Slot<Result<Vec<u8>, String>>)>,
+    /// The SQL pane's editor, results and history.
+    pub sql: sqlpane::State,
     /// A link's data (`?data=`) has zoomed the map: the first of its files to land with something
     /// to show does, whichever it is.
     pub link_zoomed: bool,
@@ -284,6 +288,7 @@ impl Default for UiState {
             pending_open: None,
             pending_csv: None,
             downloads: Vec::new(),
+            sql: Default::default(),
             link_zoomed: false,
             service: None,
             stac: Default::default(),
@@ -762,6 +767,20 @@ impl RustGisApp {
             "ui.pane.editing" => toggle_right(&mut self.ui, RightPane::Editing),
             "ui.pane.design" => toggle_right(&mut self.ui, RightPane::Design),
             "ui.pane.script" => toggle_right(&mut self.ui, RightPane::Script),
+            // The SQL pane; with "sql" (and "database"), opened on that query, run with "run".
+            "ui.pane.sql" => match p.get("sql").and_then(Value::as_str) {
+                Some(sql) => {
+                    self.ui.right = Some(RightPane::Sql);
+                    self.ui.sql.text = sql.chars().take(12_000).collect();
+                    if let Some(d) = p.get("database").and_then(Value::as_str) {
+                        self.ui.sql.database = d.to_string();
+                    }
+                    if p.get("run").and_then(Value::as_bool) == Some(true) {
+                        sqlpane::run_now(self);
+                    }
+                }
+                None => toggle_right(&mut self.ui, RightPane::Sql),
+            },
             // Opens the Workflows pane at a section (staying open when switching sections).
             "ui.pane.workflows" => {
                 let section = p.get("section").and_then(Value::as_str);
@@ -1661,6 +1680,7 @@ impl RustGisApp {
         rustgis_engine::plugins::set_language(self.lang().code());
         panes::poll_geolibre(self, ctx);
         self.poll_downloads();
+        sqlpane::poll(self, ctx);
         self.poll_service();
         stacui::poll(self, ctx);
         geocodeui::poll(self, ctx);

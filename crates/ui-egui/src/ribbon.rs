@@ -1176,6 +1176,16 @@ fn analysis_groups(app: &mut RustGisApp, ui: &mut Ui) {
             small(
                 ui,
                 app,
+                "def_query",
+                "SQL",
+                "Query files, web addresses and databases with DuckDB Spatial; add results to the map.",
+                "ui.pane.sql",
+                Value::Null,
+                app.ui.right == Some(RightPane::Sql),
+            );
+            small(
+                ui,
+                app,
                 "environments",
                 "Environments",
                 "Limit where tools work, and the cell size of new rasters.",

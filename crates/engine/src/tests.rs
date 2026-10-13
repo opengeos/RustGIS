@@ -3330,3 +3330,44 @@ fn geocoding_places_and_addresses() {
     let g = Geocoder::new(None, None).unwrap();
     assert!(crate::cmd::geocode::check_batch(&g, 101).unwrap_err().contains("100"));
 }
+
+/// The SQL workspace's commands: a query's first rows without a layer, and a database's columns
+/// (through DuckDB when it is installed; without it, they say how to get it).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn sql_workspace_rows_and_schema() {
+    let mut s = Session::new(Project::default());
+    assert!(s.run("sql.query", &json!({})).is_err());
+    if !rustgis_data::source::duckdb::available() {
+        assert!(s.run("sql.query", &json!({"sql": "SELECT 1"})).unwrap_err().contains("need DuckDB"));
+        return;
+    }
+    let before = s.map().layers.len();
+    let r = s.run("sql.query", &json!({"sql": "SELECT i AS n, ST_Point(i, 0) AS geom FROM range(150) t(i)"})).unwrap();
+    assert_eq!(r["rows"].as_array().map(Vec::len), Some(100), "the default limit");
+    assert_eq!((r["geometry"].as_bool(), r["more"].as_bool()), (Some(true), Some(true)));
+    assert_eq!(r["columns"][0]["name"], "n");
+    assert_eq!(r["rows"][2][1], "POINT (2 0)");
+    assert_eq!(s.map().layers.len(), before, "no layer is added");
+    let r = s.run("sql.query", &json!({"sql": "SELECT 'a' AS x", "limit": 5000})).unwrap();
+    assert_eq!((r["geometry"].as_bool(), r["more"].as_bool()), (Some(false), Some(false)));
+    assert!(s.run("sql.query", &json!({"sql": "SELECT * FROM nowhere"})).unwrap_err().contains("nowhere"));
+    // A database's tables and their columns.
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-sqlws-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("towns.duckdb");
+    let ok = std::process::Command::new(rustgis_data::source::duckdb::program().unwrap())
+        .arg(&db)
+        .arg("-c")
+        .arg("CREATE TABLE towns AS SELECT 'x' AS name, 3 AS pop;")
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok);
+    let r = s.run("sql.schema", &json!({"database": db.display().to_string()})).unwrap();
+    assert_eq!(r["tables"]["towns"], json!(["name", "pop"]));
+    let r = s.run("sql.query", &json!({"sql": "SELECT pop FROM towns", "database": db.display().to_string()})).unwrap();
+    assert_eq!(r["rows"], json!([[3]]));
+    let _ = std::fs::remove_dir_all(dir);
+}

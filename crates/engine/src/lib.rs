@@ -259,6 +259,9 @@ pub struct Session {
     downloading: Vec<u64>,
     /// Downloads that landed, waiting for `layer.addDownload`.
     pub(crate) downloaded: Vec<(u64, Vec<u8>)>,
+    /// Query results the app ran off the frame (the SQL pane), waiting for `layer.addSql {"ran"}`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) sql_results: Vec<(u64, rustgis_data::source::duckdb::Output)>,
 }
 
 /// A finished tool run, held until `gp.finish` applies it.
@@ -351,7 +354,21 @@ impl Session {
             started: Vec::new(),
             downloading: Vec::new(),
             downloaded: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            sql_results: Vec::new(),
         }
+    }
+
+    /// Keeps a query's result the app ran off the frame, for `layer.addSql {"ran": id}` (the query
+    /// itself is named there too). A few at a time: past that many, the oldest are forgotten.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn sql_ran(&mut self, out: rustgis_data::source::duckdb::Output) -> u64 {
+        self.next_pending = self.next_pending.wrapping_add(1);
+        if self.sql_results.len() >= 8 {
+            self.sql_results.remove(0);
+        }
+        self.sql_results.push((self.next_pending, out));
+        self.next_pending
     }
 
     /// Starts a data download for this project (the front end fetches it): its id, for
@@ -515,6 +532,8 @@ impl Session {
         self.started.clear();
         self.downloading.clear();
         self.downloaded.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.sql_results.clear();
     }
 
     pub(crate) fn undo(&mut self) -> bool {
