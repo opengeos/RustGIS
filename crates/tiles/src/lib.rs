@@ -10,11 +10,13 @@
 pub mod address;
 pub mod cache;
 pub mod draw;
+pub mod geocode;
 pub mod mbtiles;
 pub mod mvt;
 pub mod pmtiles;
 pub mod source;
 pub mod sprite;
+pub mod stac;
 pub mod style;
 pub mod template;
 

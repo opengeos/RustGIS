@@ -91,8 +91,8 @@ lto = "thin"
 codegen-units = 16
 
 # The web app's build (Trunk, `data-cargo-profile` in apps/rustgis-web/index.html): whole-program
-# LTO in one codegen unit makes the WebAssembly about a sixth smaller, which keeps it under
-# Cloudflare Pages' 25 MiB per-file limit. Slower to build, so native releases keep thin LTO.
+# LTO in one codegen unit makes the WebAssembly about a sixth smaller, a quicker download for
+# the web app. Slower to build, so native releases keep thin LTO.
 [profile.web]
 inherits = "release"
 lto = "fat"

@@ -51,11 +51,17 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 RightPane::Notebook => ("Notebook", "ui.pane.notebook"),
                 RightPane::Assistant => ("AI Assistant", "ui.pane.assistant"),
                 RightPane::Shares => ("Shared Items", "ui.pane.shares"),
+                RightPane::Sql => ("SQL", "ui.pane.sql"),
             };
             pane_header(app, ui, tl!(title), close, &t);
             // The chat lays out its own scrolling, with the message box kept at the bottom.
             if right == RightPane::Assistant {
                 crate::assistantpane::show(app, ui, &t);
+                return;
+            }
+            // The SQL pane scrolls its own results sideways.
+            if right == RightPane::Sql {
+                crate::sqlpane::show(app, ui, &t);
                 return;
             }
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -76,7 +82,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                     RightPane::Report => crate::reportpane::report(app, ui, &t),
                     RightPane::Presentation => crate::docpanes::presentation(app, ui, &t),
                     RightPane::Notebook => crate::docpanes::notebook(app, ui, &t),
-                    RightPane::Assistant => {}
+                    RightPane::Assistant | RightPane::Sql => {}
                     RightPane::Shares => crate::docpanes::shares(app, ui, &t),
                 });
             });

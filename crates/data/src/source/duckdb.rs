@@ -461,10 +461,27 @@ pub fn run(q: &Query<'_>) -> Result<Output> {
     run_in(&dir, q, false)
 }
 
-/// Runs a query; `confined` (for a table of a database) as [`prelude`] says. The result's parts are
-/// named after this run alone, so a run never replaces a file a layer may be reading.
-fn run_in(dir: &Path, q: &Query<'_>, confined: bool) -> Result<Output> {
-    let sql = q.sql.trim().trim_end_matches(';').trim_end();
+/// The most rows a preview returns.
+pub const MAX_PREVIEW: usize = 1000;
+/// The longest value a preview shows (text and geometry as WKT are cut there).
+const PREVIEW_TEXT: usize = 300;
+
+/// A query's first rows, as text: what an SQL workspace shows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Preview {
+    /// Each column's name and DuckDB type.
+    pub columns: Vec<(String, String)>,
+    /// The rows, each value as JSON (numbers, booleans and text; null; geometries as WKT).
+    pub rows: Vec<Vec<serde_json::Value>>,
+    /// Whether the result has a geometry column (it can be added to the map).
+    pub geometry: bool,
+    /// Whether there are rows past those returned.
+    pub more: bool,
+}
+
+/// Checks a query before it runs: one statement, not empty, not too long.
+fn checked(sql: &str) -> Result<&str> {
+    let sql = sql.trim().trim_end_matches(';').trim_end();
     if sql.is_empty() {
         return Err(DataError::Format("the query is empty".into()));
     }
@@ -474,6 +491,106 @@ fn run_in(dir: &Path, q: &Query<'_>, confined: bool) -> Result<Output> {
     if sql.contains('\0') {
         return Err(DataError::Format("the query holds a NUL character".into()));
     }
+    Ok(sql)
+}
+
+/// Runs a query and returns its first `limit` rows (at most [`MAX_PREVIEW`]), without writing a
+/// result: an SQL workspace's preview. Geometries come back as WKT, other values DuckDB doesn't
+/// give as JSON scalars as text, and long values cut.
+pub fn preview(q: &Query<'_>, limit: usize) -> Result<Preview> {
+    let dir = cache_dir().ok_or_else(|| DataError::Format("no cache folder for DuckDB results".into()))?;
+    preview_in(&dir, q, limit)
+}
+
+fn preview_in(dir: &Path, q: &Query<'_>, limit: usize) -> Result<Preview> {
+    let sql = checked(q.sql)?;
+    if !available() {
+        return Err(missing());
+    }
+    std::fs::create_dir_all(dir)?;
+    let limit = limit.clamp(1, MAX_PREVIEW);
+    let prelude = prelude(dir, q.database, false)?;
+    let from = format!("query({})", literal(sql));
+    let described =
+        fetch(dir, &prelude, q.database, &format!("SELECT column_name, column_type FROM (DESCRIBE FROM {from})"), QUERY_TIMEOUT)?;
+    let columns: Vec<Column> = described
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| Some(Column { name: c.get("column_name")?.as_str()?.to_string(), ty: c.get("column_type")?.as_str()?.to_string() }))
+        .take(500)
+        .collect();
+    if columns.is_empty() {
+        return Err(DataError::Format("the query returns no columns".into()));
+    }
+    // Columns by position (`c0`, `c1`…), so names that repeat stay apart.
+    let list: Vec<String> = columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let n = ident(&c.name);
+            let expr = if is_geometry(&c.ty) {
+                format!("left(ST_AsText({n}), {PREVIEW_TEXT})")
+            } else if matches!(c.ty.as_str(), "FLOAT" | "DOUBLE") {
+                // NaN and infinities aren't JSON numbers: shown empty.
+                format!("CASE WHEN isfinite({n}) THEN {n} END")
+            } else if matches!(
+                c.ty.as_str(),
+                "BOOLEAN" | "TINYINT" | "SMALLINT" | "INTEGER" | "BIGINT" | "UTINYINT" | "USMALLINT" | "UINTEGER"
+            ) {
+                n
+            } else {
+                format!("left(CAST({n} AS VARCHAR), {PREVIEW_TEXT})")
+            };
+            format!("{expr} AS c{i}")
+        })
+        .collect();
+    // The columns come from DESCRIBE, run against the query itself.
+    let select = format!("SELECT {} FROM {from} LIMIT {}", list.join(", "), limit + 1);
+    let fetched = fetch(dir, &prelude, q.database, &select, QUERY_TIMEOUT)?;
+    let mut rows: Vec<Vec<serde_json::Value>> = fetched
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| (0..columns.len()).map(|i| r.get(format!("c{i}")).cloned().unwrap_or(serde_json::Value::Null)).collect())
+        .collect();
+    let more = rows.len() > limit;
+    rows.truncate(limit);
+    Ok(Preview {
+        geometry: columns.iter().any(|c| is_geometry(&c.ty)),
+        columns: columns.into_iter().map(|c| (c.name, c.ty)).collect(),
+        rows,
+        more,
+    })
+}
+
+/// The tables of a database and their columns (`table` or `schema.table`, column), for completing
+/// names in an SQL workspace. Read confined, as [`tables_of`] is.
+pub fn schema_of(database: &Database) -> Result<Vec<(String, String)>> {
+    let dir = cache_dir().ok_or_else(|| DataError::Format("no cache folder for DuckDB results".into()))?;
+    if !available() {
+        return Err(missing());
+    }
+    std::fs::create_dir_all(&dir)?;
+    let select = format!(
+        "SELECT schema_name, table_name, column_name FROM duckdb_columns() WHERE database_name = 'src' ORDER BY schema_name, table_name, column_index LIMIT {LIST_LIMIT}"
+    );
+    let rows = fetch(&dir, &prelude(&dir, Some(database), true)?, Some(database), &select, LIST_TIMEOUT)?;
+    Ok(rows
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            let t = Table { schema: r.get("schema_name")?.as_str()?.to_string(), name: r.get("table_name")?.as_str()?.to_string() };
+            Some((t.label(), r.get("column_name")?.as_str()?.to_string()))
+        })
+        .collect())
+}
+
+/// Runs a query; `confined` (for a table of a database) as [`prelude`] says. The result's parts are
+/// named after this run alone, so a run never replaces a file a layer may be reading.
+fn run_in(dir: &Path, q: &Query<'_>, confined: bool) -> Result<Output> {
+    let sql = checked(q.sql)?;
     check_crs(q.crs)?;
     if !available() {
         return Err(missing());
@@ -810,6 +927,44 @@ mod tests {
         assert!(run_in(&dir, &Query { sql: &long, ..Query::default() }, false).unwrap_err().to_string().contains("longer"));
         let e = run_in(&dir, &Query { sql: "SELECT 1", crs: Some("EPSG:1 OR"), ..Query::default() }, false).unwrap_err();
         assert!(e.to_string().contains("crs"), "{e}");
+    }
+
+    /// A query's first rows, as an SQL workspace shows them (skipped without DuckDB).
+    #[test]
+    fn previews_rows() {
+        assert!(checked("  ;").is_err() && checked("SELECT 1\0").is_err());
+        if !available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("rustgis-duckdb-preview-{}", std::process::id()));
+        let sql = "SELECT i AS n, i AS n, 'x' || i AS label, DATE '2020-01-02' AS day, ST_Point(i, 2) AS geom FROM range(5) t(i)";
+        let p = preview_in(&dir, &Query { sql, ..Query::default() }, 3).unwrap();
+        let names: Vec<&str> = p.columns.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names.len(), 5, "{names:?}");
+        assert!(p.geometry && p.more);
+        assert_eq!(p.rows.len(), 3);
+        assert_eq!(p.rows[1][2], serde_json::json!("x1"));
+        assert_eq!(p.rows[1][3], serde_json::json!("2020-01-02"));
+        assert_eq!(p.rows[1][4], serde_json::json!("POINT (1 2)"));
+        // A table without geometry, all of it.
+        let p = preview_in(&dir, &Query { sql: "SELECT 42 AS answer", ..Query::default() }, 10).unwrap();
+        assert!(!p.geometry && !p.more);
+        assert_eq!(p.rows, vec![vec![serde_json::json!(42)]]);
+        // NaN and infinities show empty; big integers stay numbers.
+        let sql = "SELECT 'NaN'::DOUBLE AS a, 'inf'::DOUBLE AS b, 1.5::DOUBLE AS c, 9007199254740993::BIGINT AS d, 7::UINTEGER AS e";
+        let p = preview_in(&dir, &Query { sql, ..Query::default() }, 10).unwrap();
+        assert_eq!(
+            p.rows,
+            vec![vec![
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::json!(1.5),
+                serde_json::json!(9007199254740993i64),
+                serde_json::json!(7)
+            ]]
+        );
+        assert!(preview_in(&dir, &Query { sql: "SELECT * FROM nowhere", ..Query::default() }, 10).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// Queries and a database through DuckDB when it is installed (skipped otherwise).

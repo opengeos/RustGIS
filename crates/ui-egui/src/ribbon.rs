@@ -379,6 +379,16 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
                     }
                 }
             });
+            small(
+                ui,
+                app,
+                "search",
+                "Find Place",
+                "Find a place or an address by name (OpenStreetMap).",
+                "ui.dialog",
+                json!({"name": "findPlace"}),
+                false,
+            );
         });
     });
     bookmarks_group(app, ui);
@@ -387,11 +397,13 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
         big_menu(ui, app, "add_data", "Add\nData", "Add GeoJSON, CSV or Shapefile data to the map.", |ui, app| {
             menu_item(ui, app, "", "Data…", "ui.addData", Value::Null);
             menu_item(ui, app, "", "Delimited Text…", "ui.addDelimited", Value::Null);
+            menu_item(ui, app, "", "Geocode Addresses…", "ui.dialog", json!({"name": "geocode"}));
             menu_item(ui, app, "", "From URL…", "ui.addUrl", Value::Null);
             menu_item(ui, app, "", "From Service…", "ui.addService", Value::Null);
             // Databases are read through DuckDB, a program the browser can't run.
             #[cfg(not(target_arch = "wasm32"))]
             menu_item(ui, app, "", "Database…", "ui.dialog", json!({"name": "addDatabase"}));
+            menu_item(ui, app, "", "STAC Search…", "ui.dialog", json!({"name": "stac"}));
             menu_item(ui, app, "graphics_layer", "Graphics Layer", "graphics.newLayer", Value::Null);
             ui.separator();
             ui.label(egui::RichText::new(tl!("Sample data (Natural Earth)")).small().weak());
@@ -1160,6 +1172,16 @@ fn analysis_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 "ui.pane.script",
                 Value::Null,
                 app.ui.right == Some(RightPane::Script),
+            );
+            small(
+                ui,
+                app,
+                "def_query",
+                "SQL",
+                "Query files, web addresses and databases with DuckDB Spatial; add results to the map.",
+                "ui.pane.sql",
+                Value::Null,
+                app.ui.right == Some(RightPane::Sql),
             );
             small(
                 ui,

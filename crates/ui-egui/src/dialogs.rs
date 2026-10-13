@@ -40,9 +40,12 @@ impl Dialogs {
             "camera" => "camera",
             "addTiles" => "addTiles",
             "addCsv" => "addCsv",
+            "findPlace" => "findPlace",
+            "geocode" => "geocode",
             "addUrl" => "addUrl",
             "addService" => "addService",
             "addDatabase" => "addDatabase",
+            "stac" => "stac",
             "exportLayer" => "exportLayer",
             other => return Err(format!("unknown dialog '{other}'")),
         };
@@ -85,6 +88,12 @@ impl Dialogs {
             "definitionQuery" => self.text = active.and_then(|l| l.definition_query.clone()).unwrap_or_default(),
             "renameLayer" => self.text = active.map(|l| l.name.clone()).unwrap_or_default(),
             "exportLayer" => self.mode = "geojson",
+            // A table of addresses is what's usually geocoded.
+            "geocode" => {
+                if let Some(t) = s.project.tables.last() {
+                    self.layer = t.name.clone();
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -105,9 +114,12 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "camera" => "Camera",
         "addTiles" => "Add Tile Layer",
         "addCsv" => "Add Delimited Text",
+        "findPlace" => "Find Place",
+        "geocode" => "Geocode Addresses",
         "addUrl" => "Add Data From URL",
         "addService" => "Add From Service",
         "addDatabase" => "Add From Database",
+        "stac" => "STAC Search",
         "exportLayer" => "Export Features",
         _ => "Rename Layer",
     };
@@ -117,7 +129,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     egui::Window::new(tl!(title)).id(egui::Id::new("dialog")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
         ui.set_width(match which {
             "coordinateSystem" => 660.0,
-            "addTiles" | "addUrl" | "addService" => 560.0,
+            "addTiles" | "addUrl" | "addService" | "stac" => 560.0,
             _ => 440.0,
         });
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
@@ -146,9 +158,12 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             "coordinateSystem" => close = coordinate_system(app, ui, &t),
             "addTiles" => close = add_tiles(app, ui),
             "addCsv" => close = add_csv(app, ui),
+            "findPlace" => close = crate::geocodeui::find_place(app, ui),
+            "geocode" => close = crate::geocodeui::geocode(app, ui),
             "addUrl" => close = add_url(app, ui),
             "addService" => close = add_service(app, ui),
             "addDatabase" => close = add_database(app, ui),
+            "stac" => crate::stacui::dialog(app, ui),
             "exportLayer" => close = export_layer(app, ui),
             "camera" => {
                 egui::Grid::new("cam").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
@@ -627,7 +642,7 @@ fn add_tiles(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
 }
 
 /// OK/Cancel row; returns true when the dialog should close.
-fn buttons(app: &mut RustGisApp, ui: &mut egui::Ui, ok: &str, f: impl FnOnce(&mut RustGisApp) -> Result<(), String>) -> bool {
+pub(crate) fn buttons(app: &mut RustGisApp, ui: &mut egui::Ui, ok: &str, f: impl FnOnce(&mut RustGisApp) -> Result<(), String>) -> bool {
     let mut close = false;
     ui.add_space(4.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {

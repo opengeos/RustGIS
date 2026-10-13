@@ -66,6 +66,16 @@ query as a layer, with the `layer.addSql` command (Add Data From SQL in command 
 {"sql": "SELECT name, geometry FROM read_parquet('places.parquet') WHERE country = 'FR'", "name": "French places"}
 ```
 
+**Analyze › SQL** opens the SQL pane, a workspace for these queries: an editor (Ctrl+Enter runs
+the query) that completes table and column names of the database named above it and DuckDB
+Spatial's common functions, the result's first 200 rows as a table, **Add to Map** for a result
+with a geometry column, and a history of the queries run (kept by the app with its preferences,
+without the database's password; a query that seems to hold a credential, such as `user:password@`
+in an address, a signed URL or a secret, isn't kept). Queries run in the background, so the app keeps drawing while DuckDB works. The
+commands behind it are `sql.query` (a query's first rows, up to 1,000, without adding a layer) and
+`sql.schema` (a database's tables and their columns); both take `"database"` as `layer.addSql`
+does. The web app has no DuckDB, so the pane says to open the project in the desktop app.
+
 The query is one DuckDB `SELECT` (or `FROM …`, `WITH …`), with [DuckDB
 Spatial](https://duckdb.org/docs/stable/core_extensions/spatial/overview)'s `ST_` functions: it can
 read Parquet, CSV, JSON and GeoParquet files, anything `ST_Read` reads, and web addresses (`https://`,
@@ -123,6 +133,56 @@ addresses, so a view in it that reaches elsewhere fails rather than reading them
 A query can read any file the app can and fetch any web address, and a database is a file or a
 server, so the [AI Assistant](assistant.md) asks before it runs a query or reads a database, and
 plugins need both the files and network permissions.
+
+## STAC catalogs
+
+**Home › Add Data › STAC Search…** searches a [STAC](https://stacspec.org) API for imagery and
+other assets: by collection, dates, the most cloud cover and (by default) where the map is. The
+default API is Element 84's [Earth Search](https://earth-search.aws.element84.com/v1)
+(Sentinel-2, Landsat, NAIP, Copernicus DEM and Sentinel-1 on AWS); any STAC API with item search
+works. **Collections** lists what the API offers, **Find Items** shows up to 50 items (date, cloud
+cover, id) and draws their footprints as a layer; a click frames an item, and **Add** adds the
+asset chosen beside it: `visual` (true colour) when there is one, else the first GeoTIFF, else the
+first data asset. Assets download whole (up to 512 MB on the desktop, 256 MB in the web app), so
+a single band or the scene classification is quicker to add than a full-resolution true-colour
+image.
+
+The commands do the same: `stac.collections` (`"url"`), `stac.search` (`"collections"`,
+`"bbox"` as `[west, south, east, north]` or `"view"`, `"datetime"` such as
+`2024-06-01/2024-06-30`, `"limit"`, `"maxCloud"`, `"footprints"`), and `stac.addAsset` with
+an item `stac.search` returned (`"item"`) or an item's address (`"url"`) and `"asset"`:
+
+```sh
+rustgis-cli run --cmd 'stac.search={"collections":"sentinel-2-l2a","bbox":[7.4,46.9,7.5,47],"datetime":"2024-07-01/2024-07-31","maxCloud":20}' --cmd 'stac.addAsset={"url":"https://earth-search.aws.element84.com/v1/collections/sentinel-2-l2a/items/S2B_32TLS_20240727_0_L2A","asset":"scl"}'
+```
+
+Assets are added by their web address: one in a cloud store's own protocol (`s3://`) or one that
+needs signing (Microsoft Planetary Computer) is refused with a message saying so, and an item on
+the web can't point into the local network. Searches reach the network, so the [AI
+Assistant](assistant.md) asks before it runs them, and plugins need the network permission.
+
+## Geocoding addresses
+
+**Home › Add Data › Geocode Addresses…** (`layer.geocode`) turns a table's addresses into points:
+a CSV of addresses without coordinates is added as a standalone table, then each row's address
+fields (`"address"`: a field, or several such as street, city and country, joined with commas)
+are looked up, each distinct address once. The result is a new point layer holding every field
+plus `geocoded`, what the geocoder called the place; rows that weren't found stay in its table
+without a point.
+
+The geocoder is OpenStreetMap's public [Nominatim](https://nominatim.org) by default, or
+[Photon](https://photon.komoot.io) (`"provider": "photon"`). Their usage policies allow light
+use, so RustGIS sends them at most one request a second and 100 addresses a run; give `"url"` of
+a Nominatim or Photon server of your own for more (up to 10,000, with no wait between requests).
+In the app the requests go out in the background, one at a time, and the layer is added when the
+last answer lands; `layer.geocode` on the command line waits for them.
+
+```sh
+rustgis-cli run --cmd 'layer.addData={"path":"stores.csv"}' --cmd 'layer.geocode={"table":"stores","address":["street","city","country"]}'
+```
+
+The addresses are sent to the geocoder's server, so the [AI Assistant](assistant.md) asks before
+it geocodes, and plugins need the network permission.
 
 ## Large files
 

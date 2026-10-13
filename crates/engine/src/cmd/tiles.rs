@@ -9,7 +9,17 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 /// Commands that make the map fetch from an address they're given (a plugin needs the
 /// `network` permission to run them).
-pub const NETWORK: &[&str] = &["map.addTiles", "layer.addUrl", "service.layers", "service.add"];
+pub const NETWORK: &[&str] = &[
+    "map.addTiles",
+    "layer.addUrl",
+    "service.layers",
+    "service.add",
+    "stac.collections",
+    "stac.search",
+    "stac.addAsset",
+    "map.findPlace",
+    "layer.geocode",
+];
 
 pub fn commands() -> Vec<C> {
     vec![
