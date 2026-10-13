@@ -19,9 +19,11 @@ on:
     types: [published]
   workflow_dispatch:
 
+# A new push to a pull request replaces its earlier run. Runs on main, by hand and for releases
+# are never cancelled: a merge landing mid-build must not stop the wheels being built.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name != 'pull_request' && github.run_id || 'pr' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
