@@ -108,4 +108,5 @@ its order, **View Clipping** hides features beyond a distance from the centre, a
 Display** draws without antialiasing. The **Navigator** adds a compass, zoom buttons and a pan
 pad; **Camera** shows and sets the position and scale; the **Magnifier** shows twice the map under
 the pointer. On the Home tab, **First-Person** navigation walks with W A S D and flies up and down
-with Q and E. **View › Display › Dark Mode** switches the whole interface to a dark theme.
+with Q and E. The interface follows the system's light or dark setting; **View › Display › Dark
+Mode** switches it by hand.

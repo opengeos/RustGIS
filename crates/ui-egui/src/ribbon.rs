@@ -1298,6 +1298,12 @@ fn analysis_groups(app: &mut RustGisApp, ui: &mut Ui) {
 }
 
 fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Display", |ui| {
+        let g = app.session.map().graticule;
+        big(ui, app, "graticule", "Graticule", "Show latitude/longitude lines on the basemap.", "map.graticule", Value::Null, g, false);
+        let dark = app.ui.dark;
+        big(ui, app, "dark", "Dark\nMode", "Switch between light and dark themes.", "ui.theme", Value::Null, dark, false);
+    });
     group(ui, "View", |ui| {
         let on = app.session.map().projection.is_globe();
         big(
@@ -1589,12 +1595,6 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             Value::Null,
             app.session.table_layer.is_some(),
         );
-    });
-    group(ui, "Display", |ui| {
-        let g = app.session.map().graticule;
-        big(ui, app, "graticule", "Graticule", "Show latitude/longitude lines on the basemap.", "map.graticule", Value::Null, g, false);
-        let dark = app.ui.dark;
-        big(ui, app, "dark", "Dark\nMode", "Switch between light and dark themes.", "ui.theme", Value::Null, dark, false);
     });
     labeling_group(app, ui);
     group(ui, "Navigation", |ui| {

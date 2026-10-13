@@ -170,6 +170,8 @@ pub struct UiState {
     pub left: Option<LeftPane>,
     pub right: Option<RightPane>,
     pub dark: bool,
+    /// The theme follows the system's light or dark setting until the user picks one.
+    pub dark_follows_system: bool,
     /// Interface language preference: a language code or `auto`.
     pub language: String,
     /// Worldview preference for the built-in countries and world outline: `auto`, `default` or
@@ -226,6 +228,7 @@ impl Default for UiState {
             left: Some(LeftPane::Contents),
             right: None,
             dark: false,
+            dark_follows_system: true,
             language: i18n::AUTO.into(),
             worldview: i18n::AUTO.into(),
             start_blank: false,
@@ -785,7 +788,10 @@ impl RustGisApp {
                     save("ribbon_minimized", if self.ui.ribbon_minimized { "true" } else { "false" });
                 }
             }
-            "ui.theme" => self.ui.dark = p.get("dark").and_then(Value::as_bool).unwrap_or(!self.ui.dark),
+            "ui.theme" => {
+                self.ui.dark = p.get("dark").and_then(Value::as_bool).unwrap_or(!self.ui.dark);
+                self.ui.dark_follows_system = false;
+            }
             "ui.commandSearch" => self.ui.command_search = Some(String::new()),
             "ui.about" => self.ui.about = true,
             "ui.checkUpdate" => self.update.check(),
@@ -1500,6 +1506,11 @@ impl RustGisApp {
             } else if self.fonts_pending {
                 ctx.request_repaint();
             }
+        }
+        if self.ui.dark_follows_system
+            && let Some(system) = ctx.system_theme()
+        {
+            self.ui.dark = system == egui::Theme::Dark;
         }
         if self.applied_dark != Some(self.ui.dark) {
             let t = if self.ui.dark { theme::Tokens::dark() } else { theme::Tokens::light() };
