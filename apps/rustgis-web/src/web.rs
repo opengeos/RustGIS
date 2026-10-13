@@ -42,6 +42,12 @@ pub fn start() {
                     let font_inbox: Inbox = Inbox::default();
                     let q = query();
                     let mut app = RustGisApp::with_sample().with_services(services(inbox.clone(), font_inbox, cc.egui_ctx.clone()));
+                    // The built-in egui Ubuntu Light face lacks Vietnamese glyphs. Load a
+                    // Vietnamese-capable Unicode fallback for the actual egui canvas.
+                    // This uses the existing font inbox; no GIS code or identifiers change.
+                    if let Some(fetch_font) = &app.services.fetch_font {
+                        fetch_font("https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf");
+                    }
                     // Settings › Start-up, unless `?blank`, `?projection=EPSG:3010` (a preset id,
                     // `mercator`, `globe`) or `?extent=minLon,minLat,maxLon,maxLat` says otherwise
                     // for this visit.
