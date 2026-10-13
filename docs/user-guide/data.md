@@ -249,6 +249,30 @@ keys from a profile or the environment are used only with AWS or the profile's o
 private bucket, the `Authorization` and `x-amz-*` headers). The [AI Assistant](assistant.md) asks
 before it connects or lists; plugins can't connect, and need the network permission to list.
 
+## Data Sources
+
+The **Data Sources** pane (**View › Windows › Data Sources**, `ui.pane.sources`) gathers the
+places data comes from:
+
+- **Favourites**: any source, right-clicked and added.
+- **Recent**: the last 20 sources added (files, web addresses, tile layers, services, database
+  tables, Zarr variables, STAC assets, sample data), newest first.
+- **Folders**: the folders connected to the Browser (**Add Folder…**; desktop).
+- **Services**, **Databases** (desktop) and **STAC APIs**: addresses saved with the box under each.
+  A click opens Add From Service, Add From Database or STAC Search connected to it, which lists
+  its layers, tables or collections.
+- **S3**: this session's connections; a click opens the S3 browser on it.
+- **Library**: well-known public sources: OpenStreetMap tiles, EOX Sentinel-2 cloudless and
+  NASA GIBS (WMTS), USGS imagery, topographic and hydrography maps (ArcGIS), GEBCO bathymetry
+  (WMS), Earth Search and Planetary Computer (STAC), and the Natural Earth sample layers.
+
+A click on a file, a web address, a tile layer or a sample adds it at once. The lists are kept
+with the app's preferences, never in a project. They hold no secrets: a web address loses its
+password and any key, token or signature in its query (`token=`, `sig=`, `X-Amz-*`…), and a
+database is kept without its password. The commands `sources.list`, `sources.save`,
+`sources.favourite` and `sources.remove` read and change the lists, for the command line and the
+[AI Assistant](assistant.md). On the command line they last for the run.
+
 ## Large files
 
 GeoPackage, GeoParquet and FlatGeobuf files with more than 100,000 features are read in place

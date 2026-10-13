@@ -25,6 +25,7 @@ mod portalsui;
 mod reportpane;
 mod ribbon;
 mod s3ui;
+mod sourcespane;
 mod sqlpane;
 mod stacui;
 mod table;
@@ -190,6 +191,7 @@ pub(crate) fn fetch_into(url: &str) -> Slot<Result<Vec<u8>, String>> {
 pub enum LeftPane {
     Contents,
     Catalog,
+    Sources,
 }
 
 /// Panes on the right of the map.
@@ -284,6 +286,9 @@ pub struct UiState {
     pub portals: portalsui::State,
     /// Find Place searches and Geocode Addresses runs under way.
     pub geocode: geocodeui::State,
+    /// The Data Sources pane's boxes, and the sources' generation last kept in the preferences.
+    pub sources: sourcespane::State,
+    pub sources_saved: u64,
     /// Add Data › Zarr…: its store, choices and fetches.
     pub zarr: zarrui::State,
     /// A layout picture waiting for its image file (web).
@@ -337,6 +342,8 @@ impl Default for UiState {
             s3: Default::default(),
             portals: Default::default(),
             geocode: Default::default(),
+            sources: Default::default(),
+            sources_saved: 0,
             zarr: Default::default(),
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
@@ -792,6 +799,8 @@ impl RustGisApp {
         if let Err(e) = &r {
             log::info!("{id}: {e}");
         }
+        // Sources added, saved or made favourites are kept with the preferences.
+        sourcespane::save(self);
         r
     }
 
@@ -800,6 +809,7 @@ impl RustGisApp {
         match id {
             "ui.pane.contents" => self.ui.left = if self.ui.left == Some(LeftPane::Contents) { None } else { Some(LeftPane::Contents) },
             "ui.pane.catalog" => self.ui.left = if self.ui.left == Some(LeftPane::Catalog) { None } else { Some(LeftPane::Catalog) },
+            "ui.pane.sources" => self.ui.left = if self.ui.left == Some(LeftPane::Sources) { None } else { Some(LeftPane::Sources) },
             "ui.pane.geoprocessing" => toggle_right(&mut self.ui, RightPane::Geoprocessing),
             "ui.pane.symbology" => {
                 if self.session.active_layer.is_none() {

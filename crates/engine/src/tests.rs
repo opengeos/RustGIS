@@ -3952,3 +3952,60 @@ fn flatgeobuf_and_geoparquet_by_address_are_read_in_place() {
     let (base, _) = serve_ranges(b"not a flatgeobuf at all".to_vec());
     assert!(s.run("layer.addUrl", &json!({"url": format!("{base}/x.fgb")})).is_err());
 }
+
+/// Data sources: what was added lands in Recent (once, newest first); favourites and saved
+/// sources are kept and removed by command; nothing kept holds a secret; the library lists
+/// well-known public sources.
+#[test]
+fn data_sources_recent_favourites_and_saved() {
+    let dir = std::env::temp_dir().join(format!("rustgis-sources-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("towns.geojson");
+    std::fs::write(
+        &path,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#,
+    )
+    .unwrap();
+    let mut s = Session::new(Project::default());
+    let p = path.display().to_string();
+    s.run("layer.addData", &json!({"path": p})).unwrap();
+    s.run("layer.addSample", &json!({"name": "cities"})).unwrap();
+    // A failed add isn't a source.
+    assert!(s.run("layer.addData", &json!({"path": dir.join("missing.geojson").display().to_string()})).is_err());
+    let l = s.run("sources.list", &Value::Null).unwrap();
+    let recent: Vec<&str> = l["recent"].as_array().unwrap().iter().filter_map(|r| r["address"].as_str()).collect();
+    assert_eq!(recent, ["cities", p.as_str()]);
+    assert_eq!(l["recent"][1]["name"], "towns");
+    assert_eq!(l["recent"][1]["addWith"], "layer.addData {path}");
+    assert!(l["library"].as_array().unwrap().iter().any(|x| x["group"] == "Catalogs" && x["kind"] == "stac"));
+    // Favourites and saved services, kept without their secrets.
+    s.run("sources.favourite", &json!({"kind": "file", "address": p})).unwrap();
+    let r = s.run("sources.save", &json!({"kind": "service", "address": "https://me:pw@gis.example/wms?token=abc&map=m", "name": "My WMS", "extra": {"type": "wms", "password": "x"}})).unwrap();
+    assert_eq!(r["address"], "https://me@gis.example/wms?map=m");
+    s.run("sources.save", &json!({"kind": "database", "address": "postgres:host=h dbname=g user=u password=secret"})).unwrap();
+    let text = s.sources.to_json();
+    for secret in ["pw", "abc", "secret", "\"x\""] {
+        assert!(!text.contains(secret), "{secret} in {text}");
+    }
+    // The app keeps them in its preferences and reads them back.
+    let back = rustgis_engine_sources_roundtrip(&text);
+    assert_eq!((back.favourites.len(), back.saved.len(), back.recent.len()), (1, 2, 2));
+    // Removed by list, kind and address; an unknown one is an error.
+    s.run("sources.favourite", &json!({"kind": "file", "address": p, "on": false})).unwrap();
+    assert!(s.sources.favourites.is_empty());
+    s.run("sources.remove", &json!({"list": "saved", "kind": "service", "address": "https://me@gis.example/wms?map=m"})).unwrap();
+    assert_eq!(s.sources.saved.len(), 1);
+    for bad in [
+        json!({"list": "saved", "kind": "service", "address": "https://nowhere"}),
+        json!({"list": "elsewhere", "kind": "file", "address": "x"}),
+        json!({"kind": "nope", "address": "x"}),
+    ] {
+        assert!(s.run("sources.remove", &bad).is_err(), "{bad}");
+    }
+    assert!(s.run("sources.save", &json!({"kind": "nope", "address": "x"})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+fn rustgis_engine_sources_roundtrip(text: &str) -> crate::sources::Sources {
+    crate::sources::Sources::from_json(text)
+}

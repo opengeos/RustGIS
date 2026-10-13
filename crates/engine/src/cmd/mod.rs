@@ -26,6 +26,7 @@ pub mod select;
 pub mod service;
 pub mod share;
 pub mod sharing;
+pub mod sources;
 pub mod sql;
 pub mod stac;
 pub mod tiles;
@@ -46,6 +47,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(tiles::commands());
     v.extend(service::commands());
     v.extend(s3::commands());
+    v.extend(sources::commands());
     v.extend(layer::commands());
     v.extend(raster::commands());
     v.extend(zarr::commands());

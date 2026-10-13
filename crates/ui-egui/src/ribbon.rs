@@ -1565,6 +1565,17 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
         big(
             ui,
             app,
+            "web_map",
+            "Data\nSources",
+            "Show or hide the Data Sources pane: favourites, recent data, saved services, databases and STAC APIs, and a library of public sources.",
+            "ui.pane.sources",
+            Value::Null,
+            app.ui.left == Some(crate::LeftPane::Sources),
+            false,
+        );
+        big(
+            ui,
+            app,
             "geoprocessing",
             "Tools\nPane",
             "Show or hide the Tools pane.",

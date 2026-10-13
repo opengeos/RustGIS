@@ -1,0 +1,422 @@
+//! Data sources the user returns to: favourites, the ones added recently, saved services,
+//! databases and STAC APIs, and a library of well-known public ones. Kept for the session; the
+//! desktop and web apps keep them with their preferences. Never a secret: addresses are kept
+//! without their passwords, tokens or signatures.
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+/// How many recent sources are kept.
+pub const MAX_RECENT: usize = 20;
+/// How many favourites and saved sources are kept.
+pub const MAX_KEPT: usize = 200;
+/// The longest address or name kept.
+const MAX_TEXT: usize = 2048;
+
+/// The kinds of source, by what adds them.
+pub const KINDS: &[&str] = &["file", "url", "tiles", "service", "database", "zarr", "stac", "sample", "s3"];
+
+/// A data source.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Source {
+    /// One of [`KINDS`].
+    pub kind: String,
+    /// What it is called.
+    pub name: String,
+    /// Its path, web address, connection label or name.
+    pub address: String,
+    /// What else adds it: a service's type or layer, a database's table, a Zarr variable.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub extra: Value,
+}
+
+/// The sources kept.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Sources {
+    #[serde(default)]
+    pub favourites: Vec<Source>,
+    #[serde(default)]
+    pub recent: Vec<Source>,
+    #[serde(default)]
+    pub saved: Vec<Source>,
+    /// Bumped on every change, so the app knows when to keep them.
+    #[serde(skip)]
+    pub generation: u64,
+}
+
+impl Sources {
+    /// Sources read back from the app's preferences: each one checked and cleaned again (the
+    /// preferences are a file anyone could have edited).
+    pub fn from_json(text: &str) -> Sources {
+        let v: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+        // Entry by entry: one that doesn't read is dropped, not the whole list.
+        let read = |k: &str| -> Vec<Source> {
+            v.get(k)
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(|x| serde_json::from_value::<Source>(x.clone()).ok()).filter_map(|x| clean(x).ok()).collect())
+                .unwrap_or_default()
+        };
+        let mut s = Sources { favourites: read("favourites"), recent: read("recent"), saved: read("saved"), generation: 0 };
+        s.favourites.truncate(MAX_KEPT);
+        s.saved.truncate(MAX_KEPT);
+        s.recent.truncate(MAX_RECENT);
+        s
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    /// Notes a source just added (the most recent first, each once).
+    pub fn note(&mut self, s: Source) {
+        let Ok(s) = clean(s) else { return };
+        self.recent.retain(|r| !same(r, &s));
+        self.recent.insert(0, s);
+        self.recent.truncate(MAX_RECENT);
+        self.generation += 1;
+    }
+
+    /// Keeps a source in `list` (`favourites` or `saved`), replacing the one at the same address.
+    pub fn keep(&mut self, list: &str, s: Source) -> Result<(), String> {
+        let s = clean(s)?;
+        let l = self.list_mut(list)?;
+        l.retain(|r| !same(r, &s));
+        if l.len() >= MAX_KEPT {
+            return Err(format!("up to {MAX_KEPT} sources in {list}"));
+        }
+        l.push(s);
+        self.generation += 1;
+        Ok(())
+    }
+
+    /// Forgets the source of `kind` at `address` from `list`; whether there was one.
+    pub fn forget(&mut self, list: &str, kind: &str, address: &str) -> Result<bool, String> {
+        let l = self.list_mut(list)?;
+        let before = l.len();
+        l.retain(|r| !(r.kind == kind && r.address == address));
+        let gone = l.len() != before;
+        if gone {
+            self.generation += 1;
+        }
+        Ok(gone)
+    }
+
+    fn list_mut(&mut self, list: &str) -> Result<&mut Vec<Source>, String> {
+        match list {
+            "favourites" => Ok(&mut self.favourites),
+            "saved" => Ok(&mut self.saved),
+            "recent" => Ok(&mut self.recent),
+            other => Err(format!("unknown list '{other}' (favourites, saved or recent)")),
+        }
+    }
+}
+
+fn same(a: &Source, b: &Source) -> bool {
+    a.kind == b.kind && a.address == b.address && a.extra == b.extra
+}
+
+/// A source made safe to keep: a known kind, bounded text, and an address without secrets.
+pub fn clean(mut s: Source) -> Result<Source, String> {
+    if !KINDS.contains(&s.kind.as_str()) {
+        return Err(format!("unknown kind '{}' ({})", s.kind, KINDS.join(", ")));
+    }
+    s.address = redact(s.address.trim());
+    if s.address.is_empty() || s.address.len() > MAX_TEXT || s.address.chars().any(char::is_control) {
+        return Err("a source needs an address (a path, web address or connection)".into());
+    }
+    s.name = s.name.trim().chars().filter(|c| !c.is_control()).take(200).collect();
+    if s.name.is_empty() {
+        s.name = default_name(&s.address);
+    }
+    // What else adds it: a small object of short strings, never anything that looks secret.
+    s.extra = match s.extra {
+        Value::Object(o) => Value::Object(
+            o.into_iter().filter(|(k, v)| k.len() <= 32 && !secret_key(k) && v.as_str().is_some_and(|t| t.len() <= 512)).take(8).collect(),
+        ),
+        _ => Value::Null,
+    };
+    if s.extra.as_object().is_some_and(|o| o.is_empty()) {
+        s.extra = Value::Null;
+    }
+    Ok(s)
+}
+
+/// A name from an address: its last part, without the extension.
+pub fn default_name(address: &str) -> String {
+    let base = address.split(['?', '#']).next().unwrap_or(address).trim_end_matches(['/', '\\']);
+    let last = base.rsplit(['/', '\\']).next().unwrap_or(base);
+    let stem = last.rsplit_once('.').map(|(s, _)| s).filter(|s| !s.is_empty()).unwrap_or(last);
+    let n: String = stem.chars().take(80).collect();
+    if n.is_empty() { address.chars().take(80).collect() } else { n }
+}
+
+/// Whether a query or object key names a secret.
+fn secret_key(k: &str) -> bool {
+    let k = k.to_ascii_lowercase();
+    matches!(
+        k.as_str(),
+        "password"
+            | "pass"
+            | "passwd"
+            | "pwd"
+            | "secret"
+            | "token"
+            | "access_token"
+            | "api_key"
+            | "apikey"
+            | "key"
+            | "sig"
+            | "signature"
+            | "se"
+            | "sp"
+            | "sv"
+            | "sr"
+            | "st"
+            | "spr"
+            | "skoid"
+            | "sktid"
+            | "skt"
+            | "ske"
+            | "sks"
+            | "skv"
+            | "code"
+            | "auth"
+            | "authorization"
+            | "secretaccesskey"
+            | "sessiontoken"
+    ) || k.starts_with("x-amz-")
+        || k.starts_with("x-goog-")
+        || k.contains("password")
+        || k.contains("secret")
+        || k.contains("token")
+}
+
+/// An address without what would give someone else the user's access: the user and password of
+/// a web address, query parameters that are keys, tokens or signatures (a signed blob's SAS, an
+/// S3 presigned URL), and a PostgreSQL connection string's password.
+pub fn redact(address: &str) -> String {
+    let lower = address.to_ascii_lowercase();
+    // `postgres:host=… password=…`: the libpq keyword form.
+    if lower.starts_with("postgres:") && !lower.starts_with("postgres://") {
+        let kept: Vec<&str> = address.split_whitespace().filter(|kv| !kv.to_ascii_lowercase().starts_with("password=")).collect();
+        return kept.join(" ");
+    }
+    let Some((scheme, rest)) = address.split_once("://") else { return address.to_string() };
+    let (rest, frag) = match rest.split_once('#') {
+        Some((r, f)) => (r, Some(f)),
+        None => (rest, None),
+    };
+    let (before_query, query) = match rest.split_once('?') {
+        Some((b, q)) => (b, Some(q)),
+        None => (rest, None),
+    };
+    let end = before_query.find('/').unwrap_or(before_query.len());
+    let (authority, path) = before_query.split_at(end);
+    // The user stays (a database's role), the password goes.
+    let authority = match authority.rsplit_once('@') {
+        Some((userinfo, host)) => match userinfo.split_once(':') {
+            Some((user, _)) => format!("{user}@{host}"),
+            None => format!("{userinfo}@{host}"),
+        },
+        None => authority.to_string(),
+    };
+    let mut out = format!("{scheme}://{authority}{path}");
+    if let Some(q) = query {
+        let kept: Vec<&str> = q
+            .split('&')
+            .filter(|kv| {
+                let k = kv.split_once('=').map(|(k, _)| k).unwrap_or(kv);
+                !kv.is_empty() && !secret_key(k)
+            })
+            .collect();
+        if !kept.is_empty() {
+            out.push('?');
+            out.push_str(&kept.join("&"));
+        }
+    }
+    if let Some(f) = frag.filter(|f| !f.contains("token") && !f.contains("key=")) {
+        out.push('#');
+        out.push_str(f);
+    }
+    out
+}
+
+fn text<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
+    p.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// The source a successful command added, if it adds one.
+pub fn added_by(id: &str, p: &Value) -> Option<Source> {
+    let src = |kind: &str, address: &str, name: Option<&str>, extra: Value| Source {
+        kind: kind.into(),
+        name: name.unwrap_or_default().to_string(),
+        address: address.to_string(),
+        extra,
+    };
+    let layer = |k: &str| text(p, k).map(|l| json!({k: l})).unwrap_or(Value::Null);
+    match id {
+        "layer.addData" => Some(src("file", text(p, "path")?, text(p, "name"), layer("layer"))),
+        "layer.addUrl" | "layer.addDownload" => Some(src("url", text(p, "url")?, text(p, "name"), layer("layer"))),
+        "map.addTiles" => {
+            let url = text(p, "url")?;
+            let mut extra = serde_json::Map::new();
+            if let Some(k) = text(p, "kind") {
+                extra.insert("kind".into(), json!(k));
+            }
+            Some(src("tiles", url, text(p, "name"), Value::Object(extra)))
+        }
+        "service.add" => {
+            let mut extra = serde_json::Map::new();
+            for k in ["layer", "type"] {
+                if let Some(v) = text(p, k) {
+                    extra.insert(k.into(), json!(v));
+                }
+            }
+            Some(src("service", text(p, "url")?, None, Value::Object(extra)))
+        }
+        "layer.addDatabase" => Some(src("database", text(p, "database")?, None, layer("layer"))),
+        "layer.addZarr" => {
+            let address = text(p, "url").or_else(|| text(p, "path"))?;
+            Some(src("zarr", address, None, text(p, "variable").map(|v| json!({"variable": v})).unwrap_or(Value::Null)))
+        }
+        "stac.addAsset" => Some(src("stac", text(p, "url")?, None, layer("asset"))),
+        "layer.addSample" => Some(src("sample", text(p, "name")?, None, Value::Null)),
+        _ => None,
+    }
+}
+
+/// Well-known public sources, ready to add: basemap tiles, map and feature services, STAC APIs
+/// and the sample data.
+pub fn library() -> Vec<(&'static str, Source)> {
+    let s = |kind: &str, name: &str, address: &str, extra: Value| Source {
+        kind: kind.into(),
+        name: name.into(),
+        address: address.into(),
+        extra,
+    };
+    vec![
+        (
+            "Basemaps",
+            s(
+                "tiles",
+                "OpenStreetMap",
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                json!({"attribution": "© OpenStreetMap contributors", "maxZoom": "19"}),
+            ),
+        ),
+        (
+            "Imagery",
+            s("service", "EOX Sentinel-2 cloudless", "https://tiles.maps.eox.at/wmts/1.0.0/WMTSCapabilities.xml", json!({"type": "wmts"})),
+        ),
+        (
+            "Imagery",
+            s(
+                "service",
+                "NASA GIBS (Web Mercator)",
+                "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0/WMTSCapabilities.xml",
+                json!({"type": "wmts"}),
+            ),
+        ),
+        (
+            "Imagery",
+            s(
+                "service",
+                "USGS Imagery",
+                "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer",
+                json!({"type": "arcgis"}),
+            ),
+        ),
+        (
+            "Maps",
+            s("service", "USGS Topo", "https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer", json!({"type": "arcgis"})),
+        ),
+        (
+            "Maps",
+            s("service", "USGS Hydrography", "https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer", json!({"type": "arcgis"})),
+        ),
+        (
+            "Maps",
+            s("service", "GEBCO bathymetry", "https://wms.gebco.net/mapserv?request=getcapabilities&service=wms", json!({"type": "wms"})),
+        ),
+        ("Catalogs", s("stac", "Earth Search (AWS)", "https://earth-search.aws.element84.com/v1", json!({"api": "true"}))),
+        (
+            "Catalogs",
+            s("stac", "Microsoft Planetary Computer", "https://planetarycomputer.microsoft.com/api/stac/v1", json!({"api": "true"})),
+        ),
+        ("Sample data", s("sample", "World Countries", "countries", Value::Null)),
+        ("Sample data", s("sample", "Populated Places", "cities", Value::Null)),
+        ("Sample data", s("sample", "Major Rivers", "rivers", Value::Null)),
+        ("Sample data", s("sample", "Major Lakes", "lakes", Value::Null)),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secrets_are_never_kept() {
+        assert_eq!(redact("https://me:pw@host.example/a?token=abc&layer=x&X-Amz-Signature=1#k"), "https://me@host.example/a?layer=x#k");
+        assert_eq!(
+            redact("https://acct.blob.core.windows.net/c/a.tif?se=2026&sp=r&sv=1&sig=zzz"),
+            "https://acct.blob.core.windows.net/c/a.tif"
+        );
+        assert_eq!(
+            redact("https://m.example/cgi-bin/mapserv?map=/m.map&SERVICE=WMS"),
+            "https://m.example/cgi-bin/mapserv?map=/m.map&SERVICE=WMS"
+        );
+        assert_eq!(redact("postgres:host=h dbname=g password=pw user=u"), "postgres:host=h dbname=g user=u");
+        assert_eq!(redact("postgresql://u:pw@h:5432/g"), "postgresql://u@h:5432/g");
+        assert_eq!(redact("/data/places.gpkg"), "/data/places.gpkg");
+        let s = clean(Source {
+            kind: "service".into(),
+            name: String::new(),
+            address: "https://x.example/wms?apikey=1".into(),
+            extra: json!({"type": "wms", "accessToken": "t", "n": 3}),
+        })
+        .unwrap();
+        assert_eq!((s.address.as_str(), s.name.as_str()), ("https://x.example/wms", "wms"));
+        assert_eq!(s.extra, json!({"type": "wms"}));
+        assert!(clean(Source { kind: "nope".into(), address: "x".into(), ..Source::default() }).is_err());
+        assert!(clean(Source { kind: "file".into(), address: " ".into(), ..Source::default() }).is_err());
+    }
+
+    #[test]
+    fn recent_keeps_each_once_newest_first() {
+        let mut s = Sources::default();
+        for a in ["/a.geojson", "/b.geojson", "/a.geojson"] {
+            s.note(Source { kind: "file".into(), address: a.into(), ..Source::default() });
+        }
+        let names: Vec<&str> = s.recent.iter().map(|r| r.address.as_str()).collect();
+        assert_eq!(names, ["/a.geojson", "/b.geojson"]);
+        for i in 0..40 {
+            s.note(Source { kind: "file".into(), address: format!("/{i}.csv"), ..Source::default() });
+        }
+        assert_eq!(s.recent.len(), MAX_RECENT);
+        // Read back from preferences someone edited: bad entries are dropped, secrets removed.
+        let text = r#"{"favourites":[{"kind":"url","name":"x","address":"https://h/x.fgb?token=s"},{"kind":"bad","name":"","address":"y"}],"recent":[1,2]}"#;
+        let back = Sources::from_json(text);
+        assert_eq!(back.favourites.len(), 1);
+        assert_eq!(back.favourites[0].address, "https://h/x.fgb");
+        assert!(back.recent.is_empty());
+        assert_eq!(Sources::from_json("not json"), Sources::default());
+    }
+
+    #[test]
+    fn commands_name_what_they_added() {
+        let s =
+            added_by("layer.addDatabase", &json!({"database": "postgres:host=h dbname=g password=pw", "password": "pw", "layer": "roads"}))
+                .unwrap();
+        let s = clean(s).unwrap();
+        assert_eq!(s.address, "postgres:host=h dbname=g");
+        assert_eq!(s.extra, json!({"layer": "roads"}));
+        assert!(!serde_json::to_string(&s).unwrap().contains("pw"));
+        assert_eq!(
+            added_by("service.add", &json!({"url": "https://h/wms", "layer": "a", "type": "wms"})).unwrap().extra,
+            json!({"layer": "a", "type": "wms"})
+        );
+        assert!(added_by("layer.remove", &json!({})).is_none());
+        assert!(added_by("layer.addData", &json!({})).is_none());
+        assert!(library().iter().all(|(_, s)| clean(s.clone()).is_ok()));
+    }
+}

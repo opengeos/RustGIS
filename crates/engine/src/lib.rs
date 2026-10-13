@@ -8,6 +8,7 @@
 pub mod cmd;
 pub mod project;
 pub mod sample;
+pub mod sources;
 #[cfg(test)]
 mod tests;
 
@@ -196,6 +197,9 @@ pub struct Session {
     pub project: Project,
     pub path: Option<PathBuf>,
     pub dirty: bool,
+    /// Favourite, recent and saved data sources (kept with the app's preferences, not the
+    /// project).
+    pub sources: sources::Sources,
     pub registry: Registry,
     /// Bumped on every change so views can cache.
     pub revision: u64,
@@ -322,6 +326,7 @@ impl Session {
             project,
             path: None,
             dirty: false,
+            sources: sources::Sources::default(),
             registry: Registry { commands: cmd::all() },
             revision: 1,
             tool: Tool::Explore,
@@ -437,7 +442,14 @@ impl Session {
                 return Err(format!("{label}: {} is read in place from its file; Load All Features (layer.loadAll) to edit it", l.name));
             }
         }
-        self.guarded(label, mutates, |s| run(s, params))
+        let res = self.guarded(label, mutates, |s| run(s, params));
+        // What was added, for the Data Sources pane's Recent list.
+        if res.is_ok()
+            && let Some(src) = sources::added_by(id, params)
+        {
+            self.sources.note(src);
+        }
+        res
     }
 
     /// Runs `f` as the command `label`: when it `mutates`, the project is snapshotted for undo

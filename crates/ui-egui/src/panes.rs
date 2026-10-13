@@ -22,11 +22,13 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             let (title, close) = match left {
                 LeftPane::Contents => ("Layers", "ui.pane.contents"),
                 LeftPane::Catalog => ("Browser", "ui.pane.catalog"),
+                LeftPane::Sources => ("Data Sources", "ui.pane.sources"),
             };
             pane_header(app, ui, tl!(title), close, &t);
             match left {
                 LeftPane::Contents => contents(app, ui, &t),
                 LeftPane::Catalog => catalog(app, ui, &t),
+                LeftPane::Sources => crate::sourcespane::show(app, ui, &t),
             }
         });
     }
