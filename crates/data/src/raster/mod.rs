@@ -414,7 +414,7 @@ pub fn read_converted(path: &Path, c: &gdal::Converted) -> Result<Raster> {
 
 /// A picture (PNG or JPEG) laid over a longitude/latitude box (west, south, east, north) and
 /// turned `rotation` degrees counter-clockwise about its centre: an RGBA raster, as a KML ground
-/// overlay is. Pictures are at most 8192 pixels a side.
+/// overlay is. Pictures are at most 4096 pixels a side, turned ones at most 32 million pixels.
 pub fn from_image(name: &str, bytes: &[u8], bbox: [f64; 4], rotation: f64) -> Result<Raster> {
     let r = from_image_unrotated(name, bytes, bbox)?;
     if !rotation.is_finite() || rotation.abs() < 1e-9 {
@@ -440,6 +440,9 @@ fn rotate(r: &Raster, degrees: f64) -> Result<Raster> {
     let ow = ((max_x - min_x) / px).ceil().clamp(1.0, 16384.0) as u32;
     let oh = ((max_y - min_y) / py).ceil().clamp(1.0, 16384.0) as u32;
     let n = ow as usize * oh as usize;
+    if n > 32 << 20 {
+        return Err(DataError::Format(format!("{}: the turned picture is too large ({ow} × {oh} pixels)", r.name)));
+    }
     let mut bands: Vec<Vec<f32>> = vec![vec![0.0; n]; r.bands.len()];
     for row in 0..oh {
         for col in 0..ow {
@@ -473,9 +476,9 @@ fn from_image_unrotated(name: &str, bytes: &[u8], bbox: [f64; 4]) -> Result<Rast
         .with_guessed_format()
         .map_err(|e| DataError::Format(format!("{name}: {e}")))?;
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
-    limits.max_alloc = Some(512 << 20);
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(128 << 20);
     reader.limits(limits);
     let img = reader.decode().map_err(|e| DataError::Format(format!("{name}: {e}")))?.into_rgba8();
     let (width, height) = img.dimensions();

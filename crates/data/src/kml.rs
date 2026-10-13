@@ -124,6 +124,9 @@ pub fn ground_overlays(file_name: &str, bytes: &[u8]) -> Result<(Vec<(GroundOver
         .map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
     let mut out = Vec::new();
     let mut undrawn = 0usize;
+    let all = doc.descendants().filter(|n| n.is_element() && local(n) == "GroundOverlay").count();
+    // Past the first 256, overlays are counted as not drawn.
+    undrawn += all.saturating_sub(256);
     for g in doc.descendants().filter(|n| n.is_element() && local(n) == "GroundOverlay").take(256) {
         let href = g.descendants().find(|n| n.is_element() && local(n) == "Icon").and_then(|i| child_text(&i, "href"));
         let bbox = g.descendants().find(|n| n.is_element() && local(n) == "LatLonBox").and_then(|b| {

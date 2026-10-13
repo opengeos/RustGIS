@@ -449,8 +449,11 @@ fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8]) -> Vec<(Strin
         let picture = picture.or_else(|| {
             // Beside the document: no web addresses, absolute paths or climbing out of its folder.
             let rel = Path::new(href);
-            let safe =
-                !href.contains("://") && rel.is_relative() && !rel.components().any(|c| matches!(c, std::path::Component::ParentDir));
+            let safe = !href.contains("://")
+                    && rel.components().next().is_some()
+                    // Only names (no root, drive prefix or `..`), so it stays in the folder on
+                    // Windows too (`C:x`, `\\x`).
+                    && rel.components().all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir));
             if !safe {
                 return None;
             }
