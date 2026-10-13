@@ -8,8 +8,8 @@
 # the site to https://preview.rustgis.app/pr-<N>/, or removes a closed pull request's preview. It
 # runs no pull request code. Splitting the two is what lets fork pull requests get a preview:
 # GitHub gives a fork's `pull_request` run no secrets. A fork's preview publishes on every push once
-# its author has had a pull request merged; a first-time contributor's is published only once a
-# maintainer approves the commit, by adding the `preview` label or re-running this workflow.
+# its author has a commit on main; a first-time contributor's is published only once a maintainer
+# approves the commit, by adding the `preview` label or re-running this workflow.
 name: docs-preview
 
 on:

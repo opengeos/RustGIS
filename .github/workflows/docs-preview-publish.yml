@@ -17,7 +17,8 @@
 # secrets, so they publish nothing either.
 #
 # A fork's site is unreviewed HTML and JavaScript. It publishes on every push when the pull
-# request's author has had a pull request merged here before (GitHub's `CONTRIBUTOR` association).
+# request's author already has a commit here, usually from a merged pull request (GitHub's
+# `CONTRIBUTOR` association: "has previously committed to the repository").
 # A first-time contributor's preview is published only when the run was started by someone with
 # write access: a maintainer who added the `preview` label or re-ran the docs-preview workflow.
 # The label is then taken off, so every new commit needs a new approval. A maintainer's own push
@@ -104,7 +105,8 @@ jobs:
           [ "$repo" != "$GITHUB_REPOSITORY" ] && fork=true
           if [ "$state" = open ] && [ "$HAS_SITE" = true ]; then
             mode=deploy
-            # A returning contributor (an earlier pull request merged) publishes on every push.
+            # A returning contributor (an earlier commit here) publishes on every push. `returning`
+            # isn't `true`, so the label is left alone and the comment asks for no approval.
             if [ "$fork" = true ] && [ "$association" = CONTRIBUTOR ]; then
               echo "Fork preview approved: the author has contributed before."
               fork=returning
