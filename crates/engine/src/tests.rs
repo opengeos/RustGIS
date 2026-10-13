@@ -4118,6 +4118,14 @@ fn overture_files_are_added_all_or_none() {
     let e = crate::cmd::catalogs::add_files(&mut s, "building", &urls).unwrap_err();
     assert!(e.contains("none of the 2 files was added"), "{e}");
     assert_eq!(s.map().layers.len(), before, "the first file's layer was taken out again");
+    // The app's way (the files found and opened already): the same, all or none.
+    let files = json!([format!("{good}/part-0.fgb"), format!("{bad}/part-1.fgb")]);
+    assert!(s.run("overture.add", &json!({"theme": "buildings", "files": files})).is_err());
+    assert_eq!(s.map().layers.len(), before);
+    for bad_files in [json!([]), json!("x"), json!(["https://x.org/a.png"]), json!(vec![format!("{good}/a.fgb"); 7])] {
+        assert!(s.run("overture.add", &json!({"theme": "buildings", "files": bad_files})).is_err(), "{bad_files}");
+    }
+    assert_eq!(s.map().layers.len(), before);
     // Both readable: both added, numbered.
     let urls = vec![format!("{good}/part-0.fgb"), format!("{good}/part-1.fgb")];
     let r = crate::cmd::catalogs::add_files(&mut s, "building", &urls).unwrap();

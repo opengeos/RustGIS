@@ -11,7 +11,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("overture.add", "Add Overture Maps Data", "Home › Add › Add Data", overture_add).params(
-            r#"{"theme": "buildings"|"places"|"transportation"|"divisions"|"base"|"addresses", "type"?: "the theme's type (building, building_part; place; segment, connector; division_area, division, division_boundary; land_use, land, land_cover, water, infrastructure, bathymetry; address)", "release"?: "such as 2026-09-23.1 (default: the latest)", "bbox"?: [west, south, east, north] | "view" (the map's extent, the default), "tiles"?: bool (the whole world as map tiles, from the theme's PMTiles archive, instead of the features in view)}"#,
+            r#"{"theme": "buildings"|"places"|"transportation"|"divisions"|"base"|"addresses", "type"?: "the theme's type (building, building_part; place; segment, connector; division_area, division, division_boundary; land_use, land, land_cover, water, infrastructure, bathymetry; address)", "release"?: "such as 2026-09-23.1 (default: the latest)", "bbox"?: [west, south, east, north] | "view" (the map's extent, the default), "tiles"?: bool (the whole world as map tiles, from the theme's PMTiles archive, instead of the features in view), "files"?: [the files' GeoParquet addresses, when already found and opened (the app's background requests)]}"#,
         ),
         C::new("sourcecoop.products", "List Source Cooperative Products", "Home › Add › Add Data", sourcecoop_products)
             .view()
@@ -61,6 +61,22 @@ fn overture_add(s: &mut Session, p: &Value) -> CmdResult {
             &json!({"url": overture::pmtiles_url(&release, theme), "kind": "pmtiles", "name": format!("Overture {theme}"), "overlay": true, "attribution": overture::attribution(theme)}),
         )?;
         r["release"] = json!(release);
+        return Ok(r);
+    }
+    // The files the app found and opened already: added as one (all or none).
+    if let Some(files) = p.get("files") {
+        let urls: Vec<String> =
+            files.as_array().ok_or("files is a list of addresses")?.iter().filter_map(Value::as_str).map(str::to_string).collect();
+        if urls.is_empty() || urls.len() > overture::MAX_FILES {
+            return Err(format!("files is 1 to {} addresses", overture::MAX_FILES));
+        }
+        if let Some(u) = urls.iter().find(|u| !rustgis_data::source::is_remote_name(u)) {
+            return Err(format!("{u}: not a GeoParquet or FlatGeobuf address"));
+        }
+        let mut r = add_files(s, ty, &urls)?;
+        s.notify(format!("Overture {ty}: {}", overture::attribution(theme)), false);
+        r["theme"] = json!(theme);
+        r["type"] = json!(ty);
         return Ok(r);
     }
     let area = area(s, p)?;

@@ -114,20 +114,19 @@ pub fn parse_collection(bytes: &[u8]) -> Result<Vec<File>, String> {
     if boxes.len() != items.len() + 1 {
         return Err("the Overture collection's extents don't match its files".into());
     }
+    // Only Overture's own catalog is followed (an item is fetched, then its file).
+    let ours = format!("{STAC}/");
     let mut out = Vec::with_capacity(items.len());
     for (b, item) in boxes.iter().skip(1).zip(items) {
-        let n: Vec<f64> = b.as_array().into_iter().flatten().filter_map(Value::as_f64).filter(|x| x.is_finite()).collect();
-        // Only Overture's own catalog is followed (an item is fetched, then its file).
-        let ([w, s, e, nn], true) = (n.as_slice().try_into().unwrap_or([f64::NAN; 4]), item.starts_with(&format!("{STAC}/"))) else {
+        if !item.starts_with(&ours) {
             continue;
-        };
-        if w <= e
-            && s <= nn
-            && (-180.0..=180.0).contains(&w)
-            && (-180.0..=180.0).contains(&e)
-            && (-90.0..=90.0).contains(&s)
-            && (-90.0..=90.0).contains(&nn)
-        {
+        }
+        let n: Vec<f64> = b.as_array().into_iter().flatten().filter_map(Value::as_f64).filter(|x| x.is_finite()).collect();
+        let Ok([w, s, e, nn]) = <[f64; 4]>::try_from(n.as_slice()) else { continue };
+        // West past east is a box across the antimeridian (kept: `files_in` reads it as two).
+        let lon = |x: f64| (-180.0..=180.0).contains(&x);
+        let lat = |y: f64| (-90.0..=90.0).contains(&y);
+        if s <= nn && lon(w) && lon(e) && lat(s) && lat(nn) {
             out.push(File { bbox: [w, s, e, nn], item: item.to_string() });
         }
     }
@@ -137,7 +136,17 @@ pub fn parse_collection(bytes: &[u8]) -> Result<Vec<File>, String> {
 /// The files whose extents meet `bbox` (west, south, east, north).
 pub fn files_in(files: &[File], bbox: [f64; 4]) -> Vec<&File> {
     let [w, s, e, n] = bbox;
-    files.iter().filter(|f| f.bbox[0] <= e && f.bbox[2] >= w && f.bbox[1] <= n && f.bbox[3] >= s).collect()
+    // A longitude span meets the area's; a file's box across the antimeridian (west past east) is
+    // the two spans either side of it.
+    let meets = |a: f64, b: f64| a <= e && b >= w;
+    files
+        .iter()
+        .filter(|f| {
+            let [fw, fs, fe, fn_] = f.bbox;
+            let lon = if fw <= fe { meets(fw, fe) } else { meets(fw, 180.0) || meets(-180.0, fe) };
+            lon && fs <= n && fn_ >= s
+        })
+        .collect()
 }
 
 /// A file's GeoParquet address, from its STAC item: the AWS asset's web address (else the first
@@ -225,6 +234,15 @@ mod tests {
         assert_eq!(near.len(), 1);
         assert_eq!(files_in(&files, [9.9, 44.0, 10.1, 44.5]).len(), 2);
         assert!(files_in(&files, [100.0, 0.0, 101.0, 1.0]).is_empty());
+        // A box across the antimeridian (Fiji: 177° east to 178° west) is kept and met from
+        // either side, not elsewhere.
+        let coll = br#"{"extent":{"spatial":{"bbox":[[-180,-90,180,90],[177,-20,-178,-15]]}},
+          "links":[{"rel":"item","href":"https://stac.overturemaps.org/r/b/b/00000/00000.json"}]}"#;
+        let fiji = parse_collection(coll).unwrap();
+        assert_eq!(fiji.len(), 1);
+        assert_eq!(files_in(&fiji, [178.0, -18.0, 178.5, -17.5]).len(), 1);
+        assert_eq!(files_in(&fiji, [-179.5, -17.0, -179.0, -16.5]).len(), 1);
+        assert!(files_in(&fiji, [0.0, -18.0, 1.0, -17.0]).is_empty());
         // Extents that don't match the items, or none: an error.
         assert!(
             parse_collection(

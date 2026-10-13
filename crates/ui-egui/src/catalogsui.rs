@@ -21,11 +21,10 @@ enum Asked {
     Collection {
         area: [f64; 4],
     },
-    /// The `i`th of `n` items; the ones after it.
+    /// An item; the ones after it, and the files' addresses found so far.
     Item {
-        i: usize,
-        n: usize,
         rest: Vec<String>,
+        urls: Vec<String>,
     },
     Products,
     Listing,
@@ -46,6 +45,8 @@ pub struct State {
     pub path: String,
     pub listing: s3::Listing,
     waiting: Option<(Asked, Answer)>,
+    /// Overture's files being opened (their headers read), every one before any is added.
+    opening: Option<(Vec<String>, Vec<Slot<Result<(), String>>>)>,
     pub error: Option<String>,
     pub info: Option<String>,
 }
@@ -63,6 +64,7 @@ impl Default for State {
             path: String::new(),
             listing: s3::Listing::default(),
             waiting: None,
+            opening: None,
             error: None,
             info: None,
         }
@@ -76,14 +78,68 @@ fn fetch(url: &str) -> Answer {
     slot
 }
 
+/// Opens Overture's files (their headers, in the background); once every one is open, they are
+/// added together through `overture.add` (all or none), so a failure adds nothing and trying again
+/// adds nothing twice.
+fn open_files(app: &mut RustGisApp, urls: Vec<String>) {
+    let slots = urls
+        .iter()
+        .map(|url| {
+            let slot: Slot<Result<(), String>> = Slot::default();
+            let land = slot.clone();
+            rustgis_engine::data::source::open_url(
+                url,
+                Box::new(move |r| {
+                    *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r.map(|_| ()).map_err(|e| e.to_string()));
+                }),
+            );
+            slot
+        })
+        .collect();
+    app.ui.catalogs.opening = Some((urls, slots));
+}
+
+/// Adds Overture's files once every one is open.
+fn poll_opening(app: &mut RustGisApp, ctx: &egui::Context) {
+    let Some((_, slots)) = &app.ui.catalogs.opening else { return };
+    let done: Vec<Option<Result<(), String>>> = slots.iter().map(|s| s.lock().unwrap_or_else(|e| e.into_inner()).clone()).collect();
+    if done.iter().any(Option::is_none) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        return;
+    }
+    let Some((urls, _)) = app.ui.catalogs.opening.take() else { return };
+    let failed = done.into_iter().flatten().find_map(Result::err);
+    let st = &app.ui.catalogs;
+    let (theme, ty) = (st.theme.clone(), st.ty.clone());
+    let r = match failed {
+        Some(e) => Err(e),
+        None => app.run("overture.add", json!({"theme": theme, "type": ty, "files": urls})).map(|_| {
+            app.ui.catalogs.info = Some(crate::i18n::fmt(
+                "Reading {n} of Overture's {ty} files where the map is: {attribution}",
+                &[("n", &urls.len().to_string()), ("ty", &ty), ("attribution", overture::attribution(&theme))],
+            ));
+        }),
+    };
+    match r {
+        Ok(()) => app.map.invalidate(),
+        Err(e) => {
+            // The release is read again next time (an old one may have been retired).
+            app.ui.catalogs.release = None;
+            app.ui.catalogs.error = Some(e);
+        }
+    }
+}
+
 /// Lands the answers and moves Overture's steps along.
 pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
+    poll_opening(app, ctx);
     let Some((_, slot)) = &app.ui.catalogs.waiting else { return };
     let Some(r) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
         return;
     };
     let Some((asked, _)) = app.ui.catalogs.waiting.take() else { return };
+    let overture_step = matches!(asked, Asked::Latest { .. } | Asked::Collection { .. } | Asked::Item { .. });
     let done = match asked {
         Asked::Latest { tiles } => r.and_then(|b| overture::parse_latest(&b)).and_then(|release| {
             app.ui.catalogs.release = Some(release);
@@ -101,27 +157,21 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                     &[("n", &hits.len().to_string()), ("ty", &ty), ("max", &overture::MAX_FILES.to_string())],
                 ));
             }
-            let n = hits.len();
             let mut rest = hits.into_iter();
             if let Some(first) = rest.next() {
-                app.ui.catalogs.waiting = Some((Asked::Item { i: 0, n, rest: rest.collect() }, fetch(&first)));
+                app.ui.catalogs.waiting = Some((Asked::Item { rest: rest.collect(), urls: Vec::new() }, fetch(&first)));
             }
             Ok(())
         }),
-        Asked::Item { i, n, mut rest } => r.and_then(|b| overture::parse_item(&b)).and_then(|url| {
-            let ty = app.ui.catalogs.ty.clone();
-            app.run("ui.addUrl", json!({"url": url, "name": overture::layer_name(&ty, i, n), "zoom": false}))?;
+        // Every file's address first, then every file opened: nothing is added until all are.
+        Asked::Item { mut rest, mut urls } => r.and_then(|b| overture::parse_item(&b)).map(|url| {
+            urls.push(url);
             if rest.is_empty() {
-                let theme = app.ui.catalogs.theme.clone();
-                app.ui.catalogs.info = Some(crate::i18n::fmt(
-                    "Reading {n} of Overture's {ty} files where the map is: {attribution}",
-                    &[("n", &n.to_string()), ("ty", &ty), ("attribution", overture::attribution(&theme))],
-                ));
+                open_files(app, urls);
             } else {
                 let next = rest.remove(0);
-                app.ui.catalogs.waiting = Some((Asked::Item { i: i + 1, n, rest }, fetch(&next)));
+                app.ui.catalogs.waiting = Some((Asked::Item { rest, urls }, fetch(&next)));
             }
-            Ok(())
         }),
         Asked::Products => r.and_then(|b| sourcecoop::parse_products(&b)).map(|p| {
             if p.is_empty() {
@@ -133,7 +183,13 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     };
     match done {
         Ok(()) => app.map.invalidate(),
-        Err(e) => app.ui.catalogs.error = Some(e),
+        Err(e) => {
+            // The release is read again next time (an old one may have been retired).
+            if overture_step {
+                app.ui.catalogs.release = None;
+            }
+            app.ui.catalogs.error = Some(e);
+        }
     }
 }
 
@@ -156,7 +212,7 @@ fn overture_next(app: &mut RustGisApp, tiles: bool) -> Result<(), String> {
 }
 
 fn status(app: &RustGisApp, ui: &mut egui::Ui) {
-    if app.ui.catalogs.waiting.is_some() {
+    if app.ui.catalogs.waiting.is_some() || app.ui.catalogs.opening.is_some() {
         ui.horizontal(|ui| {
             ui.spinner();
             ui.label(tl!("Asking the catalog…"));
@@ -175,7 +231,7 @@ fn status(app: &RustGisApp, ui: &mut egui::Ui) {
 /// whole theme as map tiles.
 pub fn overture(app: &mut RustGisApp, ui: &mut egui::Ui) {
     ui.label(egui::RichText::new(tl!("Overture Maps' open data: buildings, places, transportation, administrative divisions, base layers and addresses. Where the map is, its features are read in place from Overture's GeoParquet files (zoom to a city or smaller); the whole world comes as map tiles.")).weak());
-    let busy = app.ui.catalogs.waiting.is_some();
+    let busy = app.ui.catalogs.waiting.is_some() || app.ui.catalogs.opening.is_some();
     egui::Grid::new("overture").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         let st = &mut app.ui.catalogs;
         ui.label(tl!("Theme"));
@@ -220,6 +276,7 @@ pub fn overture(app: &mut RustGisApp, ui: &mut egui::Ui) {
             }
         };
         if let Err(e) = r {
+            app.ui.catalogs.release = None;
             app.ui.catalogs.error = Some(e);
         }
     }
