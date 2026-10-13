@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="https://assets.rustgis.app/images/hero.webp" alt="RustGIS with the Map tab of the ribbon open. The Layers pane lists Cities, Rivers, Lakes and Countries with their legends; the map shows the world in the Equal Earth projection, countries shaded by population, sized city dots and country labels." width="100%">
+  <img src="https://assets.rustgis.app/images/hero.webp" alt="RustGIS with the Home tab of the ribbon open. The Layers pane lists Cities, Rivers, Lakes and Countries with their legends; the map shows the world in the Equal Earth projection, countries shaded by population, sized city dots and country labels." width="100%">
 </p>
 
 ## Why RustGIS
@@ -48,19 +48,19 @@
 
 <table>
 <tr>
-<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/symbology-table.webp" alt="The Feature Layer contextual tab with the Symbology pane showing graduated colours and colour schemes; the larger African countries are selected in cyan on the map and highlighted in the attribute table below" width="100%"><p align="center"><sub><b>Symbology and tables.</b> Selecting a layer opens its contextual tabs: symbology, effects, labeling and data. Selection is synced between the map and the attribute table.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/symbology-table.webp" alt="The Style tab with the Symbology pane showing graduated colours and colour schemes; the larger African countries are selected in cyan on the map and highlighted in the attribute table below" width="100%"><p align="center"><sub><b>Symbology and tables.</b> Selecting a layer opens its contextual tabs: symbology, effects, labeling and data. Selection is synced between the map and the attribute table.</sub></p></td>
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/assistant.webp" alt="The AI Assistant pane: asked for the five most populous African countries, it read the Countries table, selected them and zoomed to them" width="100%"><p align="center"><sub><b>AI Assistant.</b> Ask about your data or tell the map what to do. The assistant runs RustGIS commands for you, and each change can be undone.</sub></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/buffer-history.webp" alt="The Analysis tab with a gallery of geoprocessing tools and the Tools pane showing Buffer; dissolved 300 km buffers around African cities" width="100%"><p align="center"><sub><b>Analysis.</b> A tool gallery, the Tools pane and a run history, guided workflows, ModelBuilder, and 1,000+ GeoLibre and Whitebox tools.</sub></p></td>
-<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/raster.webp" alt="A shaded-relief elevation model of the Sierra Nevada with the Raster Layer tab open" width="100%"><p align="center"><sub><b>Rasters.</b> GeoTIFF and COG of any pixel type, reprojected on the fly, with stretch, RGB, classified and shaded-relief symbology.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/buffer-history.webp" alt="The Analyze tab with a gallery of geoprocessing tools and the Tools pane showing Buffer; dissolved 300 km buffers around African cities" width="100%"><p align="center"><sub><b>Analysis.</b> A tool gallery, the Tools pane and a run history, guided workflows, ModelBuilder, and 1,000+ GeoLibre and Whitebox tools.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/raster.webp" alt="A shaded-relief elevation model of the Sierra Nevada with the Style tab open" width="100%"><p align="center"><sub><b>Rasters.</b> GeoTIFF and COG of any pixel type, reprojected on the fly, with stretch, RGB, classified and shaded-relief symbology.</sub></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/globe.webp" alt="The World Atlas drawn on a 3D globe with the View tab open" width="100%"><p align="center"><sub><b>Globe and projections.</b> A 3D globe, Equal Earth, Robinson, polar and regional presets, or any EPSG code.</sub></p></td>
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/tiles.webp" alt="An OpenFreeMap vector style over Paris, with the Basemap gallery listing the built-in basemaps and the web tile layer" width="100%"><p align="center"><sub><b>Web basemaps.</b> XYZ, TMS and WMS tiles, Mapbox Vector Tiles and MapLibre styles, on the flat map and the globe.</sub></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/layout.webp" alt="A landscape A4 page layout with a map frame, title, legend, north arrow and scale bar, and the Layout tab open" width="100%"><p align="center"><sub><b>Layouts.</b> Map frames, legends, scale bars, grids, map series and PDF export, plus reports and presentations.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/layout.webp" alt="A landscape A4 page layout with a map frame, title, legend, north arrow and scale bar, and the Publish tab open" width="100%"><p align="center"><sub><b>Layouts.</b> Map frames, legends, scale bars, grids, map series and PDF export, plus reports and presentations.</sub></p></td>
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/plugins.webp" alt="The Plugin Manager browsing the plugin registry, listing Basemaps, Hello RustGIS, Map Explorer and Vector Toolkit with their permissions" width="100%"><p align="center"><sub><b>Plugins.</b> Browse and install sandboxed plugins from <a href="https://plugins.rustgis.app">plugins.rustgis.app</a>, each showing the permissions it asks for.</sub></p></td>
 </tr>
 <tr>

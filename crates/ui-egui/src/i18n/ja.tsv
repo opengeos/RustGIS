@@ -17,7 +17,7 @@ A notebook of text and command cells.	テキスト セルとコマンド セル�
 A projected coordinate system.	投影座標系。
 A report listing the selected layer's records, page after page.	選択したレイヤーのレコードをページごとに一覧表示するレポート。
 A template with the first selected feature's values	最初に選択したフィーチャの値を持つテンプレート
-A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	タイル サービスのアドレス: {z}/{x}/{y} を含むラスター タイル (WMS の場合は {-y}, {q}, {bbox-epsg-3857})、ベクター タイル (.pbf) または TileJSON、あるいは MapLibre スタイル。
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	タイル サービスのアドレス: {z}/{x}/{y} を含むラスター タイル (WMS の場合は {-y}, {q}, {bbox-epsg-3857})、ベクター タイル (.pbf) または TileJSON、あるいは MapLibre スタイル、または PMTiles アーカイブ（Web アドレスまたはこのコンピューター上のファイル）。
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	値、フィールド、またはそれらを + − × ÷ で結合したもの。選択した行に適用され、何も選択されていない場合はすべての行に適用されます。
 About	バージョン情報
 About plugins	プラグインについて
@@ -30,10 +30,8 @@ Accessibility	アクセシビリティ
 Activate Map	マップをアクティブ化
 Add	追加
 Add\nData	データの\n追加
-Add\nField	フィールドの\n追加
 Add ({n})	追加 ({n})
 Add a bar chart of a layer's numeric field.	レイヤーの数値フィールドの棒グラフを追加します。
-Add a field to the selected layer.	選択したレイヤーにフィールドを追加します。
 Add a field.	フィールドを追加します。
 Add a legend of the map frame's layers.	マップ フレームのレイヤーの凡例を追加します。
 Add a map frame showing a map of the project.	プロジェクトのマップを表示するマップ フレームを追加します。
@@ -46,7 +44,7 @@ Add a PNG or JPEG picture to the page.	ページに PNG または JPEG の画像
 Add a presentation file.	プレゼンテーション ファイルを追加します。
 Add a report file, or a report template for the selected layer.	レポート ファイル、または選択したレイヤーのレポート テンプレートを追加します。
 Add a scale bar for the map frame.	マップ フレームの縮尺記号を追加します。
-add a second map first (Insert › New Map)	先に 2 つ目のマップを追加してください (挿入 › 新しいマップ)
+add a second map first (Data › New Map)	先に 2 つ目のマップを追加してください ([データ] › [新しいマップ])
 Add a second map frame first	先に 2 つ目のマップ フレームを追加してください
 Add a text element.	テキスト エレメントを追加します。
 Add an elevation raster first.	先に標高ラスターを追加してください。
@@ -115,7 +113,8 @@ Allow this action?	この操作を許可しますか？
 Along Selected Line	選択したラインに沿って
 Altitude	高度
 Analysis	解析
-Analysis › AI	解析 › AI
+Analyze	解析
+Analyze › AI	解析 › AI
 AND	AND
 Angle	角度
 Animation	アニメーション
@@ -193,6 +192,9 @@ Browse the geoprocessing toolbox.	ジオプロセシング ツールボックス
 Browse the project's maps, tables and folders.	プロジェクトのマップ、テーブル、フォルダーを参照します。
 Browse this folder below	このフォルダーを下で参照
 Browse, install, update and remove plugins.	プラグインの参照、インストール、更新、削除を行います。
+Browser	ブラウザー
+Browser\nPane	ブラウザー\nウィンドウ
+Browser View	ブラウザー ビュー
 Buffer	バッファー
 Buffer the cities by 200 km	都市に 200 km のバッファーを作成
 Build	構築
@@ -207,7 +209,6 @@ By\nLocation	空間\n条件
 by {author}	作成者: {author}
 By {field}	{field} 別
 Calculate	計算
-Calculate\nField	フィールド\n演算
 Calculate\nGeometry	ジオメトリ\n演算
 Calculate Field	フィールド演算
 Calculate field	フィールド演算
@@ -225,9 +226,6 @@ CARGO_PKG_VERSION	CARGO_PKG_VERSION
 Cartography	カートグラフィ
 Case Field	ケース フィールド
 Cast Shadow	影を落とす
-Catalog	カタログ
-Catalog\nPane	カタログ\nウィンドウ
-Catalog View	カタログ ビュー
 Cell size	セル サイズ
 cell size °	セル サイズ °
 Centered	中央
@@ -238,13 +236,11 @@ Change Detection	変化抽出
 Change the map's backdrop.	マップの背景を変更します。
 Change the map's coordinate system	マップの座標系を変更
 Change the page size and orientation.	ページのサイズと向きを変更します。
-Change the project (add layers, edit features, change symbology)	プロジェクトの変更 (レイヤーの追加、フィーチャの編集、シンボルの変更)
 Chart categories	グラフのカテゴリ
 Chart Frame	グラフ フレーム
 China	中国
 Choose a band combination to display the raster layer.	ラスター レイヤーを表示するバンドの組み合わせを選択します。
 Choose a contrast stretch for the raster layer.	ラスター レイヤーのコントラスト ストレッチを選択します。
-Choose a model.	モデルを選択してください。
 Choose a resampling type for the raster layer.	ラスター レイヤーのリサンプリング タイプを選択します。
 Choose extra buttons for the Quick Access Toolbar.	クイック アクセス ツールバーに追加するボタンを選択します。
 Choose how the flat map lays out the Earth.	平面マップで地球をどのように表すかを選択します。
@@ -325,18 +321,16 @@ Command\nSearch	コマンド\n検索
 command is required	command は必須です
 Command Search	コマンド検索
 Commands	コマンド
-Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	[プラグイン] タブのコマンド: {commands} · ジオプロセシング ウィンドウのツール: {tools}
+Commands on the Plugins tab: {commands} · Tools in the Tools pane: {tools}	[プラグイン] タブのコマンド: {commands} · ツール ウィンドウのツール: {tools}
 Commands…	コマンド…
 Compare	比較
 Compare two rasters	2 つのラスターを比較
 Completed	完了
-Compute a field's values.	フィールドの値を計算します。
-Connect a folder to the Catalog.	フォルダーをカタログに接続します。
+Connect a folder to the Browser.	フォルダーをブラウザーに接続します。
 Connections	接続
 Constant	定数
 Constant height	一定の高さ
 Constant…	定数…
-Contents	コンテンツ
 Contingent Values	条件付き値
 Contrast	コントラスト
 Conversion	変換
@@ -384,6 +378,7 @@ Creates a point inside each input feature.	各入力フィーチャの内部に�
 Creates polygons around input features at a given distance.	入力フィーチャの周囲に指定した距離でポリゴンを作成します。
 Cross Section	断面
 Cross Section (2 clicks)	断面 (2 クリック)
+CSV	CSV
 Ctrl+	Ctrl+
 Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
 Ctrl+F1	Ctrl+F1
@@ -459,6 +454,7 @@ Done	完了
 Double	倍精度
 Double-click	ダブルクリック
 Double-click to add	ダブルクリックで追加
+Download	ダウンロード
 Download\nMap	マップの\nダウンロード
 Download Map	マップのダウンロード
 Download the GeoLibre runner	GeoLibre ランナーをダウンロード
@@ -510,7 +506,6 @@ Edges	エッジ
 Edit	編集
 Edit and run the notebook.	ノートブックを編集して実行します。
 Edit Attribute	属性の編集
-Edit attributes in the table.	テーブルで属性を編集します。
 Edit Cell	セルの編集
 Edit Status	編集状態
 Edit Vertices	頂点の編集
@@ -538,11 +533,10 @@ Enabled	有効
 Encloses each feature, or all features, in its convex hull.	各フィーチャ、またはすべてのフィーチャを凸包で囲みます。
 End	終了
 Enhancement	強調
-Enter an API key.	API キーを入力してください。
-Enter the provider's address.	プロバイダーのアドレスを入力してください。
 Enter to send, Shift+Enter for a new line	Enter で送信、Shift+Enter で改行
 Environments	環境
 EPSG code	EPSG コード
+EPSG:	EPSG:
 Equal Earth	イコールアース図法
 Equal Interval	等間隔
 Equirectangular (Plate Carrée)	正距円筒図法 (Plate Carrée)
@@ -571,6 +565,7 @@ Export\nRaster	ラスターの\nエクスポート
 Export Animation	アニメーションのエクスポート
 Export Features	フィーチャのエクスポート
 Export Features (tool)	フィーチャのエクスポート（ツール）
+Export Features needs a vector layer (Data › Export Raster writes a raster)	フィーチャのエクスポートにはベクター レイヤーが必要です ([データ] › [ラスターのエクスポート] でラスターを書き出します)
 Export Features…	フィーチャのエクスポート…
 Export Layout	レイアウトのエクスポート
 Export Map	マップのエクスポート
@@ -601,6 +596,7 @@ Export…	エクスポート…
 Expression	式
 Extent	範囲
 Extent Indicator	範囲インジケーター
+extent is [minLon, minLat, maxLon, maxLat], "view" or null	範囲は [minLon, minLat, maxLon, maxLat]、"view"、または null です
 Extent: {extent}	範囲: {extent}
 Extract	抽出
 Extracts the parts of input features that fall inside clip polygons.	入力フィーチャのうち、クリップ ポリゴン内に含まれる部分を抽出します。
@@ -617,7 +613,6 @@ Feature\nAnalysis	フィーチャ\n解析
 Feature\nTo Point	フィーチャ\n→ポイント
 Feature Cache	フィーチャ キャッシュ
 Feature Layer	フィーチャ レイヤー
-Feature Layer › Drawing	フィーチャ レイヤー › 描画
 Feature Templates	フィーチャ テンプレート
 Feature templates: default values for new features.	フィーチャ テンプレート: 新しいフィーチャの既定値。
 Feature To Point	フィーチャ → ポイント
@@ -653,6 +648,7 @@ First-Person Navigation	一人称ナビゲーション
 Fit To Map View	マップ ビューに合わせる
 Fixed Zoom In	固定ズームイン
 Fixed Zoom Out	固定ズームアウト
+FlatGeobuf	FlatGeobuf
 Flip Line	ラインの反転
 Fog	霧
 Folder	フォルダー
@@ -660,6 +656,7 @@ Folder Connections	フォルダー接続
 folder connections need the desktop app	フォルダー接続にはデスクトップ アプリが必要です
 Folders	フォルダー
 Forest	森林
+Format	形式
 Frame rate	フレーム レート
 Frame rate, draw time, data size and memory.	フレーム レート、描画時間、データ サイズ、メモリ。
 Free the prepared geometry.	準備したジオメトリを解放します。
@@ -673,16 +670,16 @@ Full size	フル サイズ
 Function Editor	関数エディター
 Gamma	ガンマ
 Generalization	ジェネラライズ
-Geo-\nprocessing	ジオプロ\nセシング
 Geodata Service	ジオデータ サービス
-GeoJSON or CSV	GeoJSON または CSV
+GeoJSON	GeoJSON
 GeoLibre	GeoLibre
 GeoLibre Tools	GeoLibre ツール
 GeoLibre tools	GeoLibre ツール
 Geometry	ジオメトリ
+GeoPackage	GeoPackage
+GeoParquet	GeoParquet
 Geoprocessing	ジオプロセシング
 Geoprocessing history.	ジオプロセシングの履歴。
-Geoprocessing Pane	ジオプロセシング ウィンドウ
 Georeference	ジオリファレンス
 Geostatistical Wizard	地球統計ウィザード
 GeoTIFF	GeoTIFF
@@ -697,7 +694,7 @@ Go forward to the next extent.	次の範囲に進みます。
 Go to a saved extent or save the current one.	保存した範囲に移動するか、現在の範囲を保存します。
 Go To Bookmark	ブックマークに移動
 Go To XY	XY に移動
-Google Gemini	Google Gemini
+GPX	GPX
 Graduated Colors	等級色
 Graphic Style	グラフィック スタイル
 Graphics	グラフィックス
@@ -733,14 +730,18 @@ Histograms and correlations	ヒストグラムと相関
 History	履歴
 Hold	保留
 Home	ホーム
+Home › Add	ホーム › 追加
 Homepage	ホームページ
 Hosted Imagery	ホスト イメージ
 How the layer's colours combine with what's beneath.	レイヤーの色と下にあるものとの合成方法。
 Identify	個別属性
 Illumination	照明
+Image Analysis	画像解析
 Image Classification	画像分類
 Image Page	画像ページ
 Imagery	画像
+Imagery Sharing	画像の共有
+Imagery Tools	画像ツール
 Image…	画像…
 Import	インポート
 Import\nProject	プロジェクトの\nインポート
@@ -769,8 +770,8 @@ Input Polygons	入力ポリゴン
 Input Rows	入力行
 Input Summary Features	入力集計フィーチャ
 Input Table	入力テーブル
-Inquiry	照会
 Insert	挿入
+Inspect	調査
 Install	インストール
 Install a plugin	プラグインのインストール
 Install a plugin from a .rgplugin file.	.rgplugin ファイルからプラグインをインストールします。
@@ -784,7 +785,7 @@ Install Plugin From Registry	レジストリからプラグインをインスト
 Install {name} {version}?	{name} {version} をインストールしますか？
 Installed	インストール済み
 Installed plugins are kept in {folder}	インストールしたプラグインの保存先: {folder}
-Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	{name} {version} をインストールしました。[プラグイン] タブにあります。ツールはジオプロセシング ウィンドウにもあります。
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} をインストールしました。[プラグイン] タブにあります。ツールはツール ウィンドウにもあります。
 Interface font: {font}	インターフェイスのフォント：{font}
 Interpolate a surface from points (IDW)	ポイントから表面を内挿 (IDW)
 Invalid: {error}	無効：{error}
@@ -792,11 +793,6 @@ Invert	反転
 Invert color scheme	配色を反転
 Invert the selection.	選択を反転します。
 IS NULL	IS NULL
-it connects to an address on the internet	インターネット上のアドレスに接続する
-it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	ユーザー本人専用の操作（プラグイン、スクリプト、タスク、モデル、GeoLibre ランナー）である
-it reads or writes files on this computer	このコンピューター上のファイルを読み書きする
-it replaces the open project	開いているプロジェクトを置き換える
-it runs a plugin's command	プラグインのコマンドを実行する
 It runs in a sandbox with no other access to your computer or the network.	サンドボックス内で実行され、コンピューターやネットワークへのその他のアクセスはできません。
 It's too large to keep in the browser: install it again on your next visit.	ブラウザーに保存するには大きすぎます。次回のアクセス時に再インストールしてください。
 Item Pop-ups	アイテムのポップアップ
@@ -812,14 +808,18 @@ Keyboard Shortcuts	キーボード ショートカット
 Keyboard shortcuts.	キーボード ショートカット。
 Kilometers	キロメートル
 kind is required	kind は必須です
+KML	KML
+KMZ	KMZ
 Label	ラベル
 Label Class	ラベル クラス
 Label Distance Range	ラベル距離範囲
 Label Field	ラベル フィールド
 Label Placement	ラベルの配置
+Label Range	ラベル範囲
 Label the cities with their names	都市に名前のラベルを付ける
 Label Visibility Range	ラベル表示範囲
 Labeling	ラベリング
+Labels	ラベル
 Lagoon	ラグーン
 Lambert Cylindrical Equal Area	ランベルト正積円筒図法
 Landscape	横向き
@@ -870,9 +870,11 @@ Link	リンク
 Link Cursors	カーソルのリンク
 Link Views	ビューのリンク
 List Commands	コマンド一覧
+List Layers in File	ファイル内のレイヤーを一覧表示
 List the provider's models	プロバイダーのモデルを一覧表示
 Lit	明部
 Live summary of the features in view.	表示中のフィーチャのライブ集計。
+Load All Features	すべてのフィーチャを読み込む
 Load an unpacked plugin from its folder while you develop it.	開発中のプラグインを、パッケージ化せずにフォルダーから読み込みます。
 Load GeoLibre tools	GeoLibre ツールを読み込む
 Loaded {name} from its folder.	{name} をフォルダーから読み込みました。
@@ -911,11 +913,9 @@ Map scale	マップ縮尺
 Map Series	マップ シリーズ
 Map Series Page	マップ シリーズ ページ
 Map series page name	マップ シリーズ ページ名
-Map style (JSON)	マップ スタイル (JSON)
 Map Surrounds	マップ整飾
 Map Thumbnail	マップのサムネイル
 Map View	マップ ビュー
-Map › Layer	マップ › レイヤー
 map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}	map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}
 Mapping	マッピング
 Maps	マップ
@@ -952,7 +952,6 @@ Mobile Map	モバイル マップ
 Mod+	Mod+
 Model	モデル
 Model\nBuilder	モデル\nビルダー
-model id	モデル ID
 ModelBuilder	ModelBuilder
 Models	モデル
 Modify	変更
@@ -1026,19 +1025,19 @@ No	いいえ
 No bookmarks yet	ブックマークはまだありません
 No edits since the project was saved	プロジェクトの保存後の編集はありません
 No mask	マスクなし
-No notebooks yet. Insert › New Notebook starts one, or Add and Open Notebook opens one.	ノートブックはまだありません。[挿入] › [新しいノートブック] で作成するか、[ノートブックを追加して開く] で開きます。
+No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	ノートブックはまだありません。[解析] › [新しいノートブック] で作成するか、[ノートブックを追加して開く] で開きます。
 No offline areas	オフライン エリアはありません
 No other reports	他のレポートはありません
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	プラグインがインストールされていません。プラグイン レジストリを参照するか、.rgplugin ファイルをインストールしてください。
 No plugins match.	一致するプラグインはありません。
 No Pop-ups	ポップアップなし
-No presentations yet. Insert › New Presentation starts one.	プレゼンテーションはまだありません。[挿入] › [新しいプレゼンテーション] で作成します。
+No presentations yet. Publish › New Presentation starts one.	プレゼンテーションはまだありません。[公開] › [新しいプレゼンテーション] で作成します。
 No relationships (Data Design › Relationships)	リレーションシップはありません (データ設計 › リレーションシップ)
 No relationships yet	リレーションシップはまだありません
-No reports yet. Insert › New Report lists the selected layer's records.	レポートはまだありません。[挿入] › [新しいレポート] で選択したレイヤーのレコードを一覧表示します。
+No reports yet. Publish › New Report lists the selected layer's records.	レポートはまだありません。[公開] › [新しいレポート] で選択したレイヤーのレコードを一覧表示します。
 No standalone tables	スタンドアロン テーブルはありません
 No styles yet	スタイルはまだありません
-No tasks yet. Insert › Task makes one, for example from your geoprocessing history.	タスクはまだありません。[挿入] › [タスク] で、たとえばジオプロセシングの履歴から作成できます。
+No tasks yet. Data › Task makes one, for example from your geoprocessing history.	タスクはまだありません。[データ] › [タスク] で、ジオプロセシング履歴などから作成します。
 NoData	NoData
 None	なし
 None. Add one by address, or from a basemap plugin.	なし。アドレスで、またはベースマップ プラグインから追加します。
@@ -1050,7 +1049,7 @@ not needed	不要
 Not saved yet	未保存
 Notebook	ノートブック
 Notebook Pane	ノートブック ウィンドウ
-Nothing shared yet. Share › Share As makes web maps, layers, styles, scenes and more.	まだ何も共有されていません。[共有] › [共有形式] で Web マップ、レイヤー、スタイル、シーンなどを作成します。
+Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	まだ何も共有していません。[公開] › [共有形式] で Web マップ、レイヤー、スタイル、シーンなどを作成します。
 Now	現在
 Nulls	Null
 Observations (observer, date, species, count)	観測 (観測者、日付、種、個体数)
@@ -1060,7 +1059,6 @@ Off	オフ
 Offline	オフライン
 Offline area	オフライン エリア
 OID	OID
-Ollama (local)	Ollama（ローカル）
 On	オン
 On Hold	保留中
 on hold	保留中
@@ -1096,7 +1094,6 @@ Open the selected layer's table.	選択したレイヤーのテーブルを開�
 Open the Symbology pane.	シンボル ウィンドウを開きます。
 Open {code} on epsg.io	epsg.io で {code} を開く
 Open, save and create projects	プロジェクトを開く、保存する、作成する
-OpenAI-compatible	OpenAI 互換
 Opened {name} for printing	印刷用に {name} を開きました
 Open…	開く…
 Options	オプション
@@ -1113,7 +1110,6 @@ Output Name	出力名
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	ブラウザーで動く、ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツール (初回のみ約 25 MB をダウンロード)。
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツール (約 20 MB のオプションのダウンロード)。
 Overlay	オーバーレイ
-overlay	オーバーレイ
 Overlay (a transparent layer kept on top, such as labels or roads)	オーバーレイ (ラベルや道路など、最前面に保持される透明なレイヤー)
 Package	パッケージ
 Package a trained deep learning model.	学習済みのディープ ラーニング モデルをパッケージ化します。
@@ -1133,6 +1129,7 @@ Page title	ページ タイトル
 Page {n} of {total}	ページ {n}/{total}
 Page {n} of {total}: {name}	ページ {n}/{total}: {name}
 Pages of maps, text, images and videos, shown one after another.	マップ、テキスト、画像、動画のページを順番に表示します。
+Pan	画面移動
 Pan (Explore) · any tool	画面移動（マップ操作）· 任意のツール
 Pan to a longitude/latitude.	経度/緯度に画面移動します。
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	マウスで画面移動、ホイールでズームし、フィーチャをクリックすると属性が表示されます。
@@ -1170,6 +1167,8 @@ Plugin registry	プラグイン レジストリ
 Plugins	プラグイン
 Plugins are .rgplugin files. Install only plugins from people you trust.	プラグインは .rgplugin ファイルです。信頼できる相手のプラグインのみインストールしてください。
 Plugins run in a sandbox: they can't reach your files or the network, and they change the project only through RustGIS's own commands, within the permissions you accept.	プラグインはサンドボックス内で実行されます。ファイルやネットワークにはアクセスできず、プロジェクトの変更は、許可した権限の範囲内で RustGIS 自身のコマンドを通じてのみ行います。
+PMTiles archive	PMTiles アーカイブ
+PMTiles File…	PMTiles ファイル…
 PNG frames (zip)	PNG フレーム (zip)
 PNG image	PNG 画像
 Point	ポイント
@@ -1182,7 +1181,6 @@ Polygon (draw)	ポリゴン (描画)
 Polygons	ポリゴン
 Polyline	ポリライン
 Pop-up Mode	ポップアップ モード
-Pop-ups	ポップアップ
 pop_max > 1000000	pop_max > 1000000
 Populated Places	人口集中地
 Portal	ポータル
@@ -1225,6 +1223,8 @@ Projections	投影法
 Proportional Symbols	比例シンボル
 Provider	プロバイダー
 Proximity	近接
+Publish	公開
+Publish › Output	公開 › 出力
 Put the layer back as it was then	レイヤーをその時点の状態に戻す
 Quantile	等量
 Quick\nAccess	クイック\nアクセス
@@ -1243,9 +1243,7 @@ Raster Effects	ラスター効果
 Raster Functions	ラスター関数
 Raster Information	ラスター情報
 Raster Layer	ラスター レイヤー
-Raster tiles (XYZ)	ラスター タイル (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	ラスター · {w} × {h} · {n} バンド · {renderer}
-Read and write files on this computer	このコンピューター上のファイルの読み書き
 Read the map's layers and features	マップのレイヤーとフィーチャの読み取り
 Reads and writes files	ファイルの読み書き
 Reads the map	マップの読み取り
@@ -1423,17 +1421,17 @@ See the tools you've run.	実行したツールを表示します。
 Select	選択
 Select (click)	選択（クリック）
 Select (rectangle)	選択（四角形）
-Select a feature layer in the Contents pane	コンテンツ ウィンドウでフィーチャ レイヤーを選択してください
-Select a layer in the Contents pane	コンテンツ ウィンドウでレイヤーを選択してください
-select a layer in the Contents pane first	先にコンテンツ ウィンドウでレイヤーを選択してください
-Select a layer in the Contents pane.	コンテンツ ウィンドウでレイヤーを選択してください。
+Select a feature layer in the Layers pane	レイヤー ウィンドウでフィーチャ レイヤーを選択してください
+Select a layer in Layers to style it.	スタイルを設定するには、レイヤー ウィンドウでレイヤーを選択してください。
+Select a layer in the Layers pane	レイヤー ウィンドウでレイヤーを選択してください
+select a layer in the Layers pane first	先にレイヤー ウィンドウでレイヤーを選択してください
+Select a layer in the Layers pane.	レイヤー ウィンドウでレイヤーを選択してください。
 Select All	すべて選択
 Select By\nAttributes	属性検索\nで選択
 Select By\nLocation	空間検索\nで選択
 Select By Attributes	属性検索で選択
 Select every feature.	すべてのフィーチャを選択します。
 Select features by their spatial relationship.	空間的な関係でフィーチャを選択します。
-Select features on the map.	マップ上でフィーチャを選択します。
 Select features that intersect another layer.	別のレイヤーと交差するフィーチャを選択します。
 Select features with a SQL expression.	SQL 式でフィーチャを選択します。
 Select Layer	レイヤーの選択
@@ -1448,7 +1446,7 @@ Selectable	選択可能
 Selectable Layers	選択可能レイヤー
 Selected	選択済み
 Selected Features: {n}	選択フィーチャ：{n}
-Selected in Contents	コンテンツで選択中
+Selected in Layers	レイヤーで選択中
 Selected only	選択のみ
 Selected records only	選択したレコードのみ
 Selecting Features	フィーチャの選択
@@ -1473,6 +1471,7 @@ Shade walls by the way they face the light.	光に対する向きで壁に陰影
 Shaded	陰影
 Shaded Relief	陰影起伏
 Shape	形状
+Shapefile	Shapefile
 Share	共有
 Share As	共有形式
 Share every layer and table as OGC API Features collections.	すべてのレイヤーとテーブルを OGC API Features コレクションとして共有します。
@@ -1483,7 +1482,6 @@ Share the map's relationships as a link chart page.	マップのリレーショ�
 Share the selected layer as an OGC API Features collection with its style.	選択したレイヤーをスタイル付きの OGC API Features コレクションとして共有します。
 Share the selected layer's names as a place-search locator.	選択したレイヤーの名前を地名検索ロケーターとして共有します。
 Share the selected layer's symbology as a MapLibre style.	選択したレイヤーのシンボルを MapLibre スタイルとして共有します。
-Share › Output	共有 › 出力
 Shared Items	共有アイテム
 Shares made, with Manage tools to update them.	作成した共有。[管理] ツールで更新できます。
 Shift+	Shift+
@@ -1492,16 +1490,16 @@ Shortcuts	ショートカット
 Shortest route over a line network	ライン ネットワーク上の最短ルート
 Show	表示
 Show a second map beside this one.	このマップの横に 2 つ目のマップを表示します。
-Show details when hovering items in the Catalog view.	カタログ ビューでアイテムにポインターを合わせたときに詳細を表示します。
+Show details when hovering items in the Browser view.	ブラウザー ビューでアイテムにポインターを合わせたときに詳細を表示します。
 Show different features at different scales.	縮尺ごとに異なるフィーチャを表示します。
 Show latitude/longitude lines on the basemap.	ベースマップに経緯線を表示します。
 Show Map	マップの表示
 Show or hide	表示/非表示
 Show or hide the AI Assistant.	AI アシスタントを表示または非表示にします。
-Show or hide the Catalog pane.	カタログ ウィンドウの表示/非表示を切り替えます。
-Show or hide the Contents pane.	コンテンツ ウィンドウの表示/非表示を切り替えます。
-Show or hide the Geoprocessing pane.	ジオプロセシング ウィンドウの表示/非表示を切り替えます。
+Show or hide the Browser pane.	ブラウザー ウィンドウの表示/非表示を切り替えます。
 Show or hide the layer.	レイヤーの表示/非表示を切り替えます。
+Show or hide the Layers pane.	レイヤー ウィンドウの表示/非表示を切り替えます。
+Show or hide the Tools pane.	ツール ウィンドウの表示/非表示を切り替えます。
 Show the labels that don't fit, in red.	配置できないラベルを赤で表示します。
 Show the layer only inside another layer's polygons.	別のレイヤーのポリゴン内にのみレイヤーを表示します。
 Show the layer only left of a divider, to compare it with what's beneath.	区切り線の左側にのみレイヤーを表示し、下にあるものと比較します。
@@ -1554,7 +1552,6 @@ Step {n} done	ステップ {n} が完了しました
 Stop	停止
 Stop drawing labels, for faster navigation.	ナビゲーションを速くするためにラベルの描画を停止します。
 Stop filling the cache.	キャッシュの作成を停止します。
-Stopped.	停止しました。
 Stretch	ストレッチ
 Stretch\nType	ストレッチ\nタイプ
 Stretch it over the map view, or give control points (one per line: column row lon lat).	マップ ビューに合わせて引き伸ばすか、コントロール ポイントを指定します (1 行に 1 つ: 列 行 経度 緯度)。
@@ -1562,6 +1559,7 @@ Stretch Type	ストレッチ タイプ
 Stretch type	ストレッチ タイプ
 Style	スタイル
 Style Items	スタイル アイテム
+Style › Drawing	スタイル › 描画
 Styles	スタイル
 Subreport	サブレポート
 Subreport: {name}	サブレポート: {name}
@@ -1609,14 +1607,13 @@ the capture failed unexpectedly	キャプチャが予期せず失敗しました
 the Help tab always shows	[ヘルプ] タブは常に表示されます
 The job covers the map view	ジョブはマップ ビューを対象とします
 The key is kept for this session only.	キーはこのセッションの間だけ保持されます。
+The layer's file couldn't be read: {error}	レイヤーのファイルを読み込めませんでした: {error}
 the layout export failed unexpectedly	レイアウトのエクスポートが予期せず失敗しました
 The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	参照するプラグインの一覧です。空欄にすると RustGIS プラグイン レジストリを使用します。
 the map has no layers	マップにレイヤーがありません
 The map is drawn in this coordinate system; layers are projected on the fly.	マップはこの座標系で描画され、レイヤーはその場で投影されます。
 The map view as it is now	現在のマップ ビュー
 The model answering; click to change it	応答しているモデル。クリックで変更
-the model declined this request	モデルがこのリクエストを拒否しました
-The model sent an empty reply; ask again, or try another model.	モデルから空の応答が返されました。もう一度質問するか、別のモデルをお試しください。
 the page is too large to draw	ページが大きすぎて描画できません
 the presentation export failed unexpectedly	プレゼンテーションのエクスポートが予期せず失敗しました
 the preview failed unexpectedly	プレビューが予期せず失敗しました
@@ -1626,8 +1623,9 @@ The project's thumbnail, from the map view.	マップ ビューから作成す�
 The projection the map opens in.	マップを開くときの投影法。
 The raster's data couldn't be read.	ラスターのデータを読み込めませんでした。
 The raster's data couldn't be read: {path}	ラスターのデータを読み込めませんでした: {path}
-the reply reached its length limit	応答が長さの上限に達しました
 the report export failed unexpectedly	レポートのエクスポートが予期せず失敗しました
+The Shapefile's files download as one zip.	Shapefile のファイルは 1 つの zip としてダウンロードされます。
+the view has no extent	ビューに範囲がありません
 Thermal	サーマル
 Thinking…	考え中…
 this build can't download plugins	このビルドではプラグインをダウンロードできません
@@ -1649,6 +1647,8 @@ Tool Gallery	ツール ギャラリー
 Toolbox	ツールボックス
 Toolboxes	ツールボックス
 Tools	ツール
+Tools\nPane	ツール\nウィンドウ
+Tools Pane	ツール ウィンドウ
 Tools that analyse features.	フィーチャを解析するツール。
 Tools that analyse rasters.	ラスターを解析するツール。
 Tools you run appear here.	実行したツールがここに表示されます。
@@ -1698,7 +1698,6 @@ Valid expression · {n} matching rows	有効な式 · 一致する行 {n} 件
 Validate	検証
 value (empty: no-data)	値 (空: NoData)
 Vector and raster data	ベクター データとラスター データ
-Vector tiles (MVT)	ベクター タイル (MVT)
 Version {version}	バージョン {version}
 Vertex	頂点
 Video	動画
@@ -1709,6 +1708,7 @@ Video…	動画…
 View	表示
 View Clipping	ビューのクリッピング
 View Effects	ビュー効果
+View Extent	表示範囲
 View Unplaced	未配置の表示
 View › Windows	表示 › ウィンドウ
 Viewshed from a point	ポイントからの可視領域
@@ -1780,6 +1780,7 @@ z (m)	z (m)
 Z factor	Z 係数
 Zoom	ズーム
 Zoom about the pointer	ポインターを中心にズーム
+Zoom Box	ボックス ズーム
 Zoom Frame	フレームをズーム
 Zoom In	ズームイン
 Zoom in	ズームイン
@@ -1792,6 +1793,7 @@ Zoom out from the centre of the map.	マップの中心からズームアウト�
 Zoom To	ズーム
 Zoom To\nLayer	レイヤーに\nズーム
 Zoom to a box (Explore)	ボックスにズーム（マップ操作）
+Zoom To Extent	範囲にズーム
 Zoom To Layer	レイヤーにズーム
 Zoom To Map View	マップ ビューにズーム
 Zoom To Selection	選択範囲にズーム
@@ -1800,25 +1802,8 @@ Zoom to the error	エラーにズーム
 Zoom to the extent of all layers.	すべてのレイヤーの範囲にズームします。
 Zoom to the layer's extent.	レイヤーの範囲にズームします。
 Zoom to the selected features.	選択したフィーチャにズームします。
-Zoom to the selection.	選択範囲にズームします。
 Zoom to the whole world.	世界全体にズームします。
 Zoom to Tokyo	東京にズーム
 Zoom To World	世界にズーム
-{id} changed since it was installed; install it again from the Plugin Manager.	{id} はインストール後に変更されています。プラグイン マネージャーから再インストールしてください。
-{name} was withdrawn from the plugin registry and has been turned off.	{name} はプラグイン レジストリから取り下げられたため、無効にしました。
-{name} was withdrawn from the plugin registry: {reason}	{name} はプラグイン レジストリから取り下げられました: {reason}
-{name}: the download doesn't match the registry; it wasn't installed.	{name}: ダウンロードした内容がレジストリと一致しないため、インストールしませんでした。
-{name}: the download is a different plugin; it wasn't installed.	{name}: ダウンロードしたのは別のプラグインのため、インストールしませんでした。
-{shown} of {total} plugins	{total} 個中 {shown} 個のプラグイン
-{total} plugins	{total} 個のプラグイン
-{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: 使用できるのは HTTPS のアドレス、またはこのコンピューターかネットワーク上の通常の HTTP のみです
 © OpenStreetMap contributors	© OpenStreetMap contributors
 ⌘K	⌘K
-The layer's file couldn't be read: {error}	レイヤーのファイルを読み込めませんでした: {error}
-{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}、その場で読み込み · 表示範囲の {matched} 件のフィーチャのうち {n} 件のサンプル（すべて表示するにはズームイン）· {renderer}
-{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}、その場で読み込み · 表示範囲のフィーチャ {total} 件中 {n} 件 · {renderer}
-Load All Features	すべてのフィーチャを読み込む
-GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV または FlatGeobuf
-A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	タイル サービスのアドレス: {z}/{x}/{y} を含むラスター タイル (WMS の場合は {-y}, {q}, {bbox-epsg-3857})、ベクター タイル (.pbf) または TileJSON、あるいは MapLibre スタイル、または PMTiles アーカイブ（Web アドレスまたはこのコンピューター上のファイル）。
-PMTiles File…	PMTiles ファイル…
-PMTiles archive	PMTiles アーカイブ

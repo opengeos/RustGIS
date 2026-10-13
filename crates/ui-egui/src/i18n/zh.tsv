@@ -17,7 +17,7 @@ A notebook of text and command cells.	由文本单元格和命令单元格组成
 A projected coordinate system.	投影坐标系。
 A report listing the selected layer's records, page after page.	逐页列出所选图层记录的报表。
 A template with the first selected feature's values	使用第一个所选要素值的模板
-A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	瓦片服务的地址：带 {z}/{x}/{y} 的栅格瓦片（WMS 可用 {-y}, {q}, {bbox-epsg-3857}）、矢量瓦片（.pbf）或 TileJSON，或 MapLibre 样式。
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	瓦片服务的地址：带 {z}/{x}/{y} 的栅格瓦片（WMS 可用 {-y}, {q}, {bbox-epsg-3857}）、矢量瓦片（.pbf）或 TileJSON，或 MapLibre 样式；或 PMTiles 归档（网址或本机文件）。
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	一个值、一个字段，或用 + − × ÷ 连接的两者。应用于所选行；若未选择任何行，则应用于所有行。
 About	关于
 About plugins	关于插件
@@ -30,10 +30,8 @@ Accessibility	辅助功能
 Activate Map	激活地图
 Add	添加
 Add\nData	添加\n数据
-Add\nField	添加\n字段
 Add ({n})	添加 ({n})
 Add a bar chart of a layer's numeric field.	添加图层数值字段的条形图。
-Add a field to the selected layer.	向所选图层添加字段。
 Add a field.	添加字段。
 Add a legend of the map frame's layers.	添加地图框中图层的图例。
 Add a map frame showing a map of the project.	添加显示工程中某个地图的地图框。
@@ -46,7 +44,7 @@ Add a PNG or JPEG picture to the page.	向页面添加 PNG 或 JPEG 图片。
 Add a presentation file.	添加演示文稿文件。
 Add a report file, or a report template for the selected layer.	添加报表文件，或所选图层的报表模板。
 Add a scale bar for the map frame.	为地图框添加比例尺。
-add a second map first (Insert › New Map)	请先添加第二个地图（插入 › 新建地图）
+add a second map first (Data › New Map)	请先添加第二个地图（“数据 › 新建地图”）
 Add a second map frame first	请先添加第二个地图框
 Add a text element.	添加文本元素。
 Add an elevation raster first.	请先添加高程栅格。
@@ -115,7 +113,8 @@ Allow this action?	允许此操作？
 Along Selected Line	沿所选线
 Altitude	高度角
 Analysis	分析
-Analysis › AI	分析 › AI
+Analyze	分析
+Analyze › AI	分析 › AI
 AND	AND
 Angle	角度
 Animation	动画
@@ -193,6 +192,9 @@ Browse the geoprocessing toolbox.	浏览地理处理工具箱。
 Browse the project's maps, tables and folders.	浏览工程中的地图、表和文件夹。
 Browse this folder below	在下方浏览此文件夹
 Browse, install, update and remove plugins.	浏览、安装、更新和移除插件。
+Browser	浏览器
+Browser\nPane	浏览器\n窗格
+Browser View	浏览器视图
 Buffer	缓冲区
 Buffer the cities by 200 km	为城市创建 200 公里缓冲区
 Build	构建
@@ -207,7 +209,6 @@ By\nLocation	按\n位置
 by {author}	作者：{author}
 By {field}	按 {field}
 Calculate	计算
-Calculate\nField	计算\n字段
 Calculate\nGeometry	计算\n几何
 Calculate Field	计算字段
 Calculate field	计算字段
@@ -225,9 +226,6 @@ CARGO_PKG_VERSION	CARGO_PKG_VERSION
 Cartography	制图
 Case Field	分组字段
 Cast Shadow	投射阴影
-Catalog	目录
-Catalog\nPane	目录\n窗格
-Catalog View	目录视图
 Cell size	像元大小
 cell size °	像元大小 °
 Centered	居中
@@ -238,13 +236,11 @@ Change Detection	变化检测
 Change the map's backdrop.	更改地图的背景。
 Change the map's coordinate system	更改地图的坐标系
 Change the page size and orientation.	更改页面大小和方向。
-Change the project (add layers, edit features, change symbology)	更改工程（添加图层、编辑要素、更改符号系统）
 Chart categories	图表类别
 Chart Frame	图表框
 China	中国
 Choose a band combination to display the raster layer.	选择用于显示栅格图层的波段组合。
 Choose a contrast stretch for the raster layer.	为栅格图层选择对比度拉伸。
-Choose a model.	请选择模型。
 Choose a resampling type for the raster layer.	为栅格图层选择重采样类型。
 Choose extra buttons for the Quick Access Toolbar.	为快速访问工具栏选择额外按钮。
 Choose how the flat map lays out the Earth.	选择平面地图如何展示地球。
@@ -325,18 +321,16 @@ Command\nSearch	命令\n搜索
 command is required	需要提供 command
 Command Search	命令搜索
 Commands	命令
-Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	“插件”选项卡中的命令：{commands} · 地理处理窗格中的工具：{tools}
+Commands on the Plugins tab: {commands} · Tools in the Tools pane: {tools}	“插件”选项卡中的命令：{commands} · 工具窗格中的工具：{tools}
 Commands…	命令…
 Compare	比较
 Compare two rasters	比较两个栅格
 Completed	已完成
-Compute a field's values.	计算字段的值。
-Connect a folder to the Catalog.	将文件夹连接到目录。
+Connect a folder to the Browser.	将文件夹连接到浏览器。
 Connections	连接
 Constant	常量
 Constant height	恒定高度
 Constant…	常量…
-Contents	内容
 Contingent Values	条件值
 Contrast	对比度
 Conversion	转换
@@ -384,6 +378,7 @@ Creates a point inside each input feature.	在每个输入要素内部创建一�
 Creates polygons around input features at a given distance.	在输入要素周围按给定距离创建多边形。
 Cross Section	横截面
 Cross Section (2 clicks)	横截面（2 次单击）
+CSV	CSV
 Ctrl+	Ctrl+
 Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
 Ctrl+F1	Ctrl+F1
@@ -459,6 +454,7 @@ Done	完成
 Double	双精度
 Double-click	双击
 Double-click to add	双击添加
+Download	下载
 Download\nMap	下载\n地图
 Download Map	下载地图
 Download the GeoLibre runner	下载 GeoLibre 运行器
@@ -510,7 +506,6 @@ Edges	边
 Edit	编辑
 Edit and run the notebook.	编辑并运行笔记本。
 Edit Attribute	编辑属性
-Edit attributes in the table.	在表中编辑属性。
 Edit Cell	编辑单元格
 Edit Status	编辑状态
 Edit Vertices	编辑折点
@@ -538,11 +533,10 @@ Enabled	已启用
 Encloses each feature, or all features, in its convex hull.	用凸包包围每个要素或所有要素。
 End	端点
 Enhancement	增强
-Enter an API key.	请输入 API 密钥。
-Enter the provider's address.	请输入提供商的地址。
 Enter to send, Shift+Enter for a new line	按 Enter 发送，Shift+Enter 换行
 Environments	环境
 EPSG code	EPSG 代码
+EPSG:	EPSG:
 Equal Earth	Equal Earth 等积投影
 Equal Interval	相等间隔
 Equirectangular (Plate Carrée)	等距圆柱投影（Plate Carrée）
@@ -571,6 +565,7 @@ Export\nRaster	导出\n栅格
 Export Animation	导出动画
 Export Features	导出要素
 Export Features (tool)	导出要素（工具）
+Export Features needs a vector layer (Data › Export Raster writes a raster)	导出要素需要矢量图层（“数据 › 导出栅格”用于写出栅格）
 Export Features…	导出要素…
 Export Layout	导出布局
 Export Map	导出地图
@@ -601,6 +596,7 @@ Export…	导出…
 Expression	表达式
 Extent	范围
 Extent Indicator	范围指示器
+extent is [minLon, minLat, maxLon, maxLat], "view" or null	范围应为 [minLon, minLat, maxLon, maxLat]、"view" 或 null
 Extent: {extent}	范围：{extent}
 Extract	提取
 Extracts the parts of input features that fall inside clip polygons.	提取输入要素中落在裁剪多边形内的部分。
@@ -617,7 +613,6 @@ Feature\nAnalysis	要素\n分析
 Feature\nTo Point	要素\n转点
 Feature Cache	要素缓存
 Feature Layer	要素图层
-Feature Layer › Drawing	要素图层 › 绘制
 Feature Templates	要素模板
 Feature templates: default values for new features.	要素模板：新要素的默认值。
 Feature To Point	要素转点
@@ -653,6 +648,7 @@ First-Person Navigation	第一人称导航
 Fit To Map View	适合地图视图
 Fixed Zoom In	固定比例放大
 Fixed Zoom Out	固定比例缩小
+FlatGeobuf	FlatGeobuf
 Flip Line	翻转线
 Fog	雾
 Folder	文件夹
@@ -660,6 +656,7 @@ Folder Connections	文件夹连接
 folder connections need the desktop app	文件夹连接需要桌面应用
 Folders	文件夹
 Forest	森林
+Format	格式
 Frame rate	帧率
 Frame rate, draw time, data size and memory.	帧率、绘制时间、数据大小和内存。
 Free the prepared geometry.	释放已准备的几何。
@@ -673,16 +670,16 @@ Full size	原始大小
 Function Editor	函数编辑器
 Gamma	伽马
 Generalization	综合
-Geo-\nprocessing	地理\n处理
 Geodata Service	地理数据服务
-GeoJSON or CSV	GeoJSON 或 CSV
+GeoJSON	GeoJSON
 GeoLibre	GeoLibre
 GeoLibre Tools	GeoLibre 工具
 GeoLibre tools	GeoLibre 工具
 Geometry	几何
+GeoPackage	GeoPackage
+GeoParquet	GeoParquet
 Geoprocessing	地理处理
 Geoprocessing history.	地理处理历史记录。
-Geoprocessing Pane	地理处理窗格
 Georeference	地理配准
 Geostatistical Wizard	地统计向导
 GeoTIFF	GeoTIFF
@@ -697,7 +694,7 @@ Go forward to the next extent.	前进到下一个范围。
 Go to a saved extent or save the current one.	转到已保存的范围或保存当前范围。
 Go To Bookmark	转到书签
 Go To XY	转到 XY
-Google Gemini	Google Gemini
+GPX	GPX
 Graduated Colors	分级色彩
 Graphic Style	图形样式
 Graphics	图形
@@ -733,14 +730,18 @@ Histograms and correlations	直方图和相关性
 History	历史记录
 Hold	挂起
 Home	主页
+Home › Add	主页 › 添加
 Homepage	主页
 Hosted Imagery	托管影像
 How the layer's colours combine with what's beneath.	图层颜色与下方内容的混合方式。
 Identify	识别
 Illumination	照明
+Image Analysis	影像分析
 Image Classification	影像分类
 Image Page	图像页面
 Imagery	影像
+Imagery Sharing	影像共享
+Imagery Tools	影像工具
 Image…	图像…
 Import	导入
 Import\nProject	导入\n工程
@@ -769,8 +770,8 @@ Input Polygons	输入多边形
 Input Rows	输入行
 Input Summary Features	输入汇总要素
 Input Table	输入表
-Inquiry	查询
 Insert	插入
+Inspect	检查
 Install	安装
 Install a plugin	安装插件
 Install a plugin from a .rgplugin file.	从 .rgplugin 文件安装插件。
@@ -784,7 +785,7 @@ Install Plugin From Registry	从插件库安装插件
 Install {name} {version}?	安装 {name} {version}？
 Installed	已安装
 Installed plugins are kept in {folder}	已安装的插件保存在 {folder}
-Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	已安装 {name} {version}。可在“插件”选项卡中找到它；其工具也位于地理处理窗格中。
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	已安装 {name} {version}。可在“插件”选项卡中找到它；其工具也位于工具窗格中。
 Interface font: {font}	界面字体：{font}
 Interpolate a surface from points (IDW)	由点插值生成表面（IDW）
 Invalid: {error}	无效：{error}
@@ -792,11 +793,6 @@ Invert	反转
 Invert color scheme	反转配色方案
 Invert the selection.	反转选择。
 IS NULL	IS NULL
-it connects to an address on the internet	它会连接到互联网上的地址
-it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	它仅限您本人执行（插件、脚本、任务、模型和 GeoLibre 运行器）
-it reads or writes files on this computer	它会读取或写入此计算机上的文件
-it replaces the open project	它会替换当前打开的工程
-it runs a plugin's command	它会运行插件的命令
 It runs in a sandbox with no other access to your computer or the network.	它在沙箱中运行，无法以其他方式访问您的计算机或网络。
 It's too large to keep in the browser: install it again on your next visit.	插件太大，无法保存在浏览器中：请在下次访问时重新安装。
 Item Pop-ups	项目弹出窗口
@@ -812,14 +808,18 @@ Keyboard Shortcuts	键盘快捷键
 Keyboard shortcuts.	键盘快捷键。
 Kilometers	千米
 kind is required	需要提供 kind
+KML	KML
+KMZ	KMZ
 Label	标注
 Label Class	标注类
 Label Distance Range	标注距离范围
 Label Field	标注字段
 Label Placement	标注放置
+Label Range	标注范围
 Label the cities with their names	用名称标注城市
 Label Visibility Range	标注可见范围
 Labeling	标注
+Labels	标注
 Lagoon	泻湖
 Lambert Cylindrical Equal Area	兰伯特等积圆柱投影
 Landscape	横向
@@ -870,9 +870,11 @@ Link	链接
 Link Cursors	链接光标
 Link Views	链接视图
 List Commands	列出命令
+List Layers in File	列出文件中的图层
 List the provider's models	列出提供商的模型
 Lit	亮面
 Live summary of the features in view.	视图中要素的实时汇总。
+Load All Features	加载所有要素
 Load an unpacked plugin from its folder while you develop it.	在开发期间从文件夹加载未打包的插件。
 Load GeoLibre tools	加载 GeoLibre 工具
 Loaded {name} from its folder.	已从文件夹加载 {name}。
@@ -911,11 +913,9 @@ Map scale	地图比例尺
 Map Series	地图系列
 Map Series Page	地图系列页面
 Map series page name	地图系列页面名称
-Map style (JSON)	地图样式 (JSON)
 Map Surrounds	地图整饰要素
 Map Thumbnail	地图缩略图
 Map View	地图视图
-Map › Layer	地图 › 图层
 map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}	map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}
 Mapping	制图
 Maps	地图
@@ -952,7 +952,6 @@ Mobile Map	移动地图
 Mod+	Mod+
 Model	模型
 Model\nBuilder	模型\n构建器
-model id	模型 ID
 ModelBuilder	模型构建器
 Models	模型
 Modify	修改
@@ -1026,19 +1025,19 @@ No	否
 No bookmarks yet	暂无书签
 No edits since the project was saved	自工程保存以来没有编辑
 No mask	无掩膜
-No notebooks yet. Insert › New Notebook starts one, or Add and Open Notebook opens one.	暂无笔记本。使用“插入 › 新建笔记本”新建一个，或使用“添加并打开笔记本”打开一个。
+No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	暂无笔记本。使用“分析 › 新建笔记本”新建一个，或使用“添加并打开笔记本”打开一个。
 No offline areas	无离线区域
 No other reports	无其他报表
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	未安装任何插件。浏览插件库，或安装 .rgplugin 文件。
 No plugins match.	没有匹配的插件。
 No Pop-ups	无弹出窗口
-No presentations yet. Insert › New Presentation starts one.	暂无演示文稿。使用“插入 › 新建演示文稿”新建一个。
+No presentations yet. Publish › New Presentation starts one.	暂无演示文稿。使用“发布 › 新建演示文稿”新建一个。
 No relationships (Data Design › Relationships)	无关系（数据设计 › 关系）
 No relationships yet	暂无关系
-No reports yet. Insert › New Report lists the selected layer's records.	暂无报表。“插入 › 新建报表”会列出所选图层的记录。
+No reports yet. Publish › New Report lists the selected layer's records.	暂无报表。“发布 › 新建报表”会列出所选图层的记录。
 No standalone tables	无独立表
 No styles yet	暂无样式
-No tasks yet. Insert › Task makes one, for example from your geoprocessing history.	暂无任务。使用“插入 › 任务”创建一个，例如根据地理处理历史记录创建。
+No tasks yet. Data › Task makes one, for example from your geoprocessing history.	暂无任务。使用“数据 › 任务”创建一个，例如根据地理处理历史记录创建。
 NoData	NoData
 None	无
 None. Add one by address, or from a basemap plugin.	无。可通过地址添加，或从底图插件添加。
@@ -1050,7 +1049,7 @@ not needed	无需填写
 Not saved yet	尚未保存
 Notebook	笔记本
 Notebook Pane	笔记本窗格
-Nothing shared yet. Share › Share As makes web maps, layers, styles, scenes and more.	尚未共享任何内容。“共享 › 共享为”可创建 Web 地图、图层、样式、场景等。
+Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	尚未共享任何内容。“发布 › 共享为”可创建 Web 地图、图层、样式、场景等。
 Now	现在
 Nulls	空值
 Observations (observer, date, species, count)	观测（观测者、日期、物种、数量）
@@ -1060,7 +1059,6 @@ Off	关
 Offline	离线
 Offline area	离线区域
 OID	OID
-Ollama (local)	Ollama（本地）
 On	开
 On Hold	已挂起
 on hold	已挂起
@@ -1096,7 +1094,6 @@ Open the selected layer's table.	打开所选图层的表。
 Open the Symbology pane.	打开符号系统窗格。
 Open {code} on epsg.io	在 epsg.io 上打开 {code}
 Open, save and create projects	打开、保存和创建工程
-OpenAI-compatible	OpenAI 兼容
 Opened {name} for printing	已打开 {name} 以供打印
 Open…	打开…
 Options	选项
@@ -1113,7 +1110,6 @@ Output Name	输出名称
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	1000 多个在浏览器中运行的栅格、矢量、LiDAR、水文和地形工具，只需一次约 25 MB 的下载。
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	1000 多个栅格、矢量、LiDAR、水文和地形工具，约 20 MB 的可选下载。
 Overlay	叠加
-overlay	叠加
 Overlay (a transparent layer kept on top, such as labels or roads)	叠加（保持在最上层的透明图层，如注记或道路）
 Package	打包
 Package a trained deep learning model.	打包已训练的深度学习模型。
@@ -1133,6 +1129,7 @@ Page title	页面标题
 Page {n} of {total}	第 {n} 页，共 {total} 页
 Page {n} of {total}: {name}	第 {n} 页，共 {total} 页：{name}
 Pages of maps, text, images and videos, shown one after another.	由地图、文本、图像和视频组成、逐页显示的页面。
+Pan	平移
 Pan (Explore) · any tool	平移（浏览）· 任意工具
 Pan to a longitude/latitude.	平移到某个经度/纬度。
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	用鼠标平移，用滚轮缩放，单击要素查看其属性。
@@ -1170,6 +1167,8 @@ Plugin registry	插件库
 Plugins	插件
 Plugins are .rgplugin files. Install only plugins from people you trust.	插件是 .rgplugin 文件。请只安装来自您信任的人的插件。
 Plugins run in a sandbox: they can't reach your files or the network, and they change the project only through RustGIS's own commands, within the permissions you accept.	插件在沙箱中运行：它们无法访问您的文件或网络，只能在您接受的权限范围内通过 RustGIS 自身的命令更改工程。
+PMTiles archive	PMTiles 归档
+PMTiles File…	PMTiles 文件…
 PNG frames (zip)	PNG 帧（zip）
 PNG image	PNG 图像
 Point	点
@@ -1182,7 +1181,6 @@ Polygon (draw)	多边形（绘制）
 Polygons	多边形
 Polyline	折线
 Pop-up Mode	弹出窗口模式
-Pop-ups	弹出窗口
 pop_max > 1000000	pop_max > 1000000
 Populated Places	居民点
 Portal	门户
@@ -1225,6 +1223,8 @@ Projections	投影
 Proportional Symbols	比例符号
 Provider	提供商
 Proximity	邻域
+Publish	发布
+Publish › Output	发布 › 输出
 Put the layer back as it was then	将图层恢复到当时的状态
 Quantile	分位数
 Quick\nAccess	快速\n访问
@@ -1243,9 +1243,7 @@ Raster Effects	栅格效果
 Raster Functions	栅格函数
 Raster Information	栅格信息
 Raster Layer	栅格图层
-Raster tiles (XYZ)	栅格瓦片 (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	栅格 · {w} × {h} · {n} 个波段 · {renderer}
-Read and write files on this computer	读写此计算机上的文件
 Read the map's layers and features	读取地图的图层和要素
 Reads and writes files	读写文件
 Reads the map	读取地图
@@ -1423,17 +1421,17 @@ See the tools you've run.	查看已运行的工具。
 Select	选择
 Select (click)	选择（单击）
 Select (rectangle)	选择（矩形）
-Select a feature layer in the Contents pane	在内容窗格中选择一个要素图层
-Select a layer in the Contents pane	在内容窗格中选择一个图层
-select a layer in the Contents pane first	请先在内容窗格中选择一个图层
-Select a layer in the Contents pane.	在内容窗格中选择一个图层。
+Select a feature layer in the Layers pane	在图层窗格中选择一个要素图层
+Select a layer in Layers to style it.	在图层窗格中选择一个图层以设置其样式。
+Select a layer in the Layers pane	在图层窗格中选择一个图层
+select a layer in the Layers pane first	请先在图层窗格中选择一个图层
+Select a layer in the Layers pane.	在图层窗格中选择一个图层。
 Select All	全选
 Select By\nAttributes	按属性\n选择
 Select By\nLocation	按位置\n选择
 Select By Attributes	按属性选择
 Select every feature.	选择所有要素。
 Select features by their spatial relationship.	按空间关系选择要素。
-Select features on the map.	在地图上选择要素。
 Select features that intersect another layer.	选择与另一图层相交的要素。
 Select features with a SQL expression.	使用 SQL 表达式选择要素。
 Select Layer	选择图层
@@ -1448,7 +1446,7 @@ Selectable	可选
 Selectable Layers	可选图层
 Selected	已选择
 Selected Features: {n}	所选要素：{n}
-Selected in Contents	在内容中选择的图层
+Selected in Layers	在图层中选择的图层
 Selected only	仅所选
 Selected records only	仅所选记录
 Selecting Features	选择要素
@@ -1473,6 +1471,7 @@ Shade walls by the way they face the light.	根据墙面朝向光源的方向进
 Shaded	阴影
 Shaded Relief	晕渲地貌
 Shape	形状
+Shapefile	Shapefile
 Share	共享
 Share As	共享为
 Share every layer and table as OGC API Features collections.	将每个图层和表共享为 OGC API Features 集合。
@@ -1483,7 +1482,6 @@ Share the map's relationships as a link chart page.	将地图的关系共享为�
 Share the selected layer as an OGC API Features collection with its style.	将所选图层及其样式共享为 OGC API Features 集合。
 Share the selected layer's names as a place-search locator.	将所选图层的名称共享为地点搜索定位器。
 Share the selected layer's symbology as a MapLibre style.	将所选图层的符号系统共享为 MapLibre 样式。
-Share › Output	共享 › 输出
 Shared Items	共享项目
 Shares made, with Manage tools to update them.	已创建的共享，可使用管理工具进行更新。
 Shift+	Shift+
@@ -1492,16 +1490,16 @@ Shortcuts	快捷键
 Shortest route over a line network	线网络上的最短路径
 Show	显示
 Show a second map beside this one.	在此地图旁显示第二个地图。
-Show details when hovering items in the Catalog view.	在目录视图中悬停项目时显示详细信息。
+Show details when hovering items in the Browser view.	在浏览器视图中悬停项目时显示详细信息。
 Show different features at different scales.	在不同比例尺下显示不同要素。
 Show latitude/longitude lines on the basemap.	在底图上显示经纬线。
 Show Map	显示地图
 Show or hide	显示或隐藏
 Show or hide the AI Assistant.	显示或隐藏 AI 助手。
-Show or hide the Catalog pane.	显示或隐藏目录窗格。
-Show or hide the Contents pane.	显示或隐藏内容窗格。
-Show or hide the Geoprocessing pane.	显示或隐藏地理处理窗格。
+Show or hide the Browser pane.	显示或隐藏浏览器窗格。
 Show or hide the layer.	显示或隐藏图层。
+Show or hide the Layers pane.	显示或隐藏图层窗格。
+Show or hide the Tools pane.	显示或隐藏工具窗格。
 Show the labels that don't fit, in red.	以红色显示无法放置的标注。
 Show the layer only inside another layer's polygons.	仅在另一图层的多边形内显示该图层。
 Show the layer only left of a divider, to compare it with what's beneath.	仅在分隔线左侧显示该图层，以便与下方内容比较。
@@ -1554,7 +1552,6 @@ Step {n} done	第 {n} 步已完成
 Stop	停止
 Stop drawing labels, for faster navigation.	停止绘制标注，以加快导航。
 Stop filling the cache.	停止填充缓存。
-Stopped.	已停止。
 Stretch	拉伸
 Stretch\nType	拉伸\n类型
 Stretch it over the map view, or give control points (one per line: column row lon lat).	将其拉伸到地图视图，或提供控制点（每行一个：列 行 经度 纬度）。
@@ -1562,6 +1559,7 @@ Stretch Type	拉伸类型
 Stretch type	拉伸类型
 Style	样式
 Style Items	样式项
+Style › Drawing	样式 › 绘制
 Styles	样式
 Subreport	子报表
 Subreport: {name}	子报表：{name}
@@ -1609,14 +1607,13 @@ the capture failed unexpectedly	捕获意外失败
 the Help tab always shows	“帮助”选项卡始终显示
 The job covers the map view	作业覆盖地图视图
 The key is kept for this session only.	密钥仅在本次会话中保留。
+The layer's file couldn't be read: {error}	无法读取图层的文件：{error}
 the layout export failed unexpectedly	布局导出意外失败
 The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	要浏览的插件列表。留空则使用 RustGIS 插件库。
 the map has no layers	地图中没有图层
 The map is drawn in this coordinate system; layers are projected on the fly.	地图以此坐标系绘制；图层将实时投影。
 The map view as it is now	当前的地图视图
 The model answering; click to change it	正在回答的模型；单击可更改
-the model declined this request	模型拒绝了此请求
-The model sent an empty reply; ask again, or try another model.	模型返回了空回复；请重新提问，或尝试其他模型。
 the page is too large to draw	页面太大，无法绘制
 the presentation export failed unexpectedly	演示文稿导出意外失败
 the preview failed unexpectedly	预览意外失败
@@ -1626,8 +1623,9 @@ The project's thumbnail, from the map view.	工程的缩略图，来自地图视
 The projection the map opens in.	地图打开时使用的投影。
 The raster's data couldn't be read.	无法读取栅格数据。
 The raster's data couldn't be read: {path}	无法读取栅格数据：{path}
-the reply reached its length limit	回复已达到长度上限
 the report export failed unexpectedly	报表导出意外失败
+The Shapefile's files download as one zip.	Shapefile 的各个文件将打包为一个 zip 下载。
+the view has no extent	视图没有范围
 Thermal	热力
 Thinking…	思考中…
 this build can't download plugins	此版本无法下载插件
@@ -1649,6 +1647,8 @@ Tool Gallery	工具库
 Toolbox	工具箱
 Toolboxes	工具箱
 Tools	工具
+Tools\nPane	工具\n窗格
+Tools Pane	工具窗格
 Tools that analyse features.	分析要素的工具。
 Tools that analyse rasters.	分析栅格的工具。
 Tools you run appear here.	运行的工具会显示在这里。
@@ -1698,7 +1698,6 @@ Valid expression · {n} matching rows	有效表达式 · {n} 个匹配行
 Validate	验证
 value (empty: no-data)	值（空：无数据）
 Vector and raster data	矢量和栅格数据
-Vector tiles (MVT)	矢量瓦片 (MVT)
 Version {version}	版本 {version}
 Vertex	折点
 Video	视频
@@ -1709,6 +1708,7 @@ Video…	视频…
 View	视图
 View Clipping	视图裁剪
 View Effects	视图效果
+View Extent	视图范围
 View Unplaced	查看未放置
 View › Windows	视图 › 窗口
 Viewshed from a point	从某点的视域
@@ -1780,6 +1780,7 @@ z (m)	z（m）
 Z factor	Z 因子
 Zoom	缩放
 Zoom about the pointer	围绕指针缩放
+Zoom Box	拉框缩放
 Zoom Frame	缩放图框
 Zoom In	放大
 Zoom in	放大
@@ -1792,6 +1793,7 @@ Zoom out from the centre of the map.	以地图中心为基准缩小。
 Zoom To	缩放至
 Zoom To\nLayer	缩放至\n图层
 Zoom to a box (Explore)	缩放到矩形框（浏览）
+Zoom To Extent	缩放至范围
 Zoom To Layer	缩放至图层
 Zoom To Map View	缩放至地图视图
 Zoom To Selection	缩放至所选内容
@@ -1800,25 +1802,8 @@ Zoom to the error	缩放至错误
 Zoom to the extent of all layers.	缩放至所有图层的范围。
 Zoom to the layer's extent.	缩放至图层范围。
 Zoom to the selected features.	缩放至所选要素。
-Zoom to the selection.	缩放至所选内容。
 Zoom to the whole world.	缩放至全世界。
 Zoom to Tokyo	缩放至东京
 Zoom To World	缩放至世界
-{id} changed since it was installed; install it again from the Plugin Manager.	{id} 在安装后已被更改；请从插件管理器重新安装。
-{name} was withdrawn from the plugin registry and has been turned off.	{name} 已从插件库下架，并已被停用。
-{name} was withdrawn from the plugin registry: {reason}	{name} 已从插件库下架：{reason}
-{name}: the download doesn't match the registry; it wasn't installed.	{name}：下载的内容与插件库不符，未安装。
-{name}: the download is a different plugin; it wasn't installed.	{name}：下载的是另一个插件，未安装。
-{shown} of {total} plugins	{total} 个插件中的 {shown} 个
-{total} plugins	{total} 个插件
-{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}：仅允许 HTTPS 地址，或本机、本地网络上的普通 HTTP 地址
 © OpenStreetMap contributors	© OpenStreetMap 贡献者
 ⌘K	⌘K
-The layer's file couldn't be read: {error}	无法读取图层的文件：{error}
-{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}，就地读取 · 视图中 {matched} 个要素的 {n} 个样本（放大以查看全部）· {renderer}
-{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}，就地读取 · 视图中 {n} / {total} 个要素 · {renderer}
-Load All Features	加载所有要素
-GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV 或 FlatGeobuf
-A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	瓦片服务的地址：带 {z}/{x}/{y} 的栅格瓦片（WMS 可用 {-y}, {q}, {bbox-epsg-3857}）、矢量瓦片（.pbf）或 TileJSON，或 MapLibre 样式；或 PMTiles 归档（网址或本机文件）。
-PMTiles File…	PMTiles 文件…
-PMTiles archive	PMTiles 归档

@@ -17,7 +17,7 @@ A notebook of text and command cells.	Metin ve komut hücrelerinden oluşan bir 
 A projected coordinate system.	Projeksiyonlu bir koordinat sistemi.
 A report listing the selected layer's records, page after page.	Seçili katmanın kayıtlarını sayfa sayfa listeleyen bir rapor.
 A template with the first selected feature's values	İlk seçili detayın değerleriyle bir şablon
-A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	Bir karo servisinin adresi: {z}/{x}/{y} içeren raster karolar (veya WMS için {-y}, {q}, {bbox-epsg-3857}), vektör karolar (.pbf) veya TileJSON ya da bir MapLibre stili.
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	Bir karo servisinin adresi: {z}/{x}/{y} içeren raster karolar (veya WMS için {-y}, {q}, {bbox-epsg-3857}), vektör karolar (.pbf) veya TileJSON ya da bir MapLibre stili; ya da bir PMTiles arşivi (bir web adresi veya bu bilgisayardaki bir dosya).
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Bir değer, bir alan veya + − × ÷ ile birleştirilmiş iki tanesi. Seçili satırlara, hiçbiri seçili değilse tüm satırlara uygulanır.
 About	Hakkında
 About plugins	Eklentiler hakkında
@@ -30,10 +30,8 @@ Accessibility	Erişilebilirlik
 Activate Map	Haritayı Etkinleştir
 Add	Ekle
 Add\nData	Veri\nEkle
-Add\nField	Alan\nEkle
 Add ({n})	Ekle ({n})
 Add a bar chart of a layer's numeric field.	Bir katmanın sayısal alanından çubuk grafik ekle.
-Add a field to the selected layer.	Seçili katmana bir alan ekle.
 Add a field.	Bir alan ekle.
 Add a legend of the map frame's layers.	Harita çerçevesinin katmanlarından bir lejant ekle.
 Add a map frame showing a map of the project.	Projenin bir haritasını gösteren harita çerçevesi ekle.
@@ -46,7 +44,7 @@ Add a PNG or JPEG picture to the page.	Sayfaya PNG veya JPEG resim ekle.
 Add a presentation file.	Bir sunum dosyası ekle.
 Add a report file, or a report template for the selected layer.	Bir rapor dosyası veya seçili katman için bir rapor şablonu ekle.
 Add a scale bar for the map frame.	Harita çerçevesi için ölçek çubuğu ekle.
-add a second map first (Insert › New Map)	önce ikinci bir harita ekleyin (Ekle › Yeni Harita)
+add a second map first (Data › New Map)	önce ikinci bir harita ekleyin (Veri › Yeni Harita)
 Add a second map frame first	Önce ikinci bir harita çerçevesi ekleyin
 Add a text element.	Bir metin öğesi ekle.
 Add an elevation raster first.	Önce bir yükseklik rasterı ekleyin.
@@ -115,7 +113,8 @@ Allow this action?	Bu işleme izin verilsin mi?
 Along Selected Line	Seçili Çizgi Boyunca
 Altitude	Yükseklik
 Analysis	Analiz
-Analysis › AI	Analiz › YZ
+Analyze	Analiz
+Analyze › AI	Analiz › YZ
 AND	AND
 Angle	Açı
 Animation	Animasyon
@@ -193,6 +192,9 @@ Browse the geoprocessing toolbox.	Coğrafi işleme araç kutusuna göz at.
 Browse the project's maps, tables and folders.	Projenin haritalarına, tablolarına ve klasörlerine göz at.
 Browse this folder below	Bu klasöre aşağıda göz at
 Browse, install, update and remove plugins.	Eklentilere göz atın, eklentileri yükleyin, güncelleyin ve kaldırın.
+Browser	Tarayıcı
+Browser\nPane	Tarayıcı\nPaneli
+Browser View	Tarayıcı Görünümü
 Buffer	Tampon
 Buffer the cities by 200 km	Şehirlerin etrafında 200 km'lik tampon oluştur
 Build	Oluştur
@@ -207,7 +209,6 @@ By\nLocation	Konuma\nGöre
 by {author}	Geliştirici: {author}
 By {field}	{field} alanına göre
 Calculate	Hesapla
-Calculate\nField	Alan\nHesapla
 Calculate\nGeometry	Geometri\nHesapla
 Calculate Field	Alan Hesapla
 Calculate field	Alan hesapla
@@ -225,9 +226,6 @@ CARGO_PKG_VERSION	CARGO_PKG_VERSION
 Cartography	Kartografya
 Case Field	Gruplama Alanı
 Cast Shadow	Gölge Düşür
-Catalog	Katalog
-Catalog\nPane	Katalog\nPaneli
-Catalog View	Katalog Görünümü
 Cell size	Hücre boyutu
 cell size °	hücre boyutu °
 Centered	Ortalanmış
@@ -238,13 +236,11 @@ Change Detection	Değişim Tespiti
 Change the map's backdrop.	Haritanın arka planını değiştir.
 Change the map's coordinate system	Haritanın koordinat sistemini değiştir
 Change the page size and orientation.	Sayfa boyutunu ve yönünü değiştir.
-Change the project (add layers, edit features, change symbology)	Projeyi değiştirme (katman ekleme, detayları düzenleme, sembolojiyi değiştirme)
 Chart categories	Grafik kategorileri
 Chart Frame	Grafik Çerçevesi
 China	Çin
 Choose a band combination to display the raster layer.	Raster katmanını görüntülemek için bir bant kombinasyonu seçin.
 Choose a contrast stretch for the raster layer.	Raster katmanı için bir kontrast germe seçin.
-Choose a model.	Bir model seçin.
 Choose a resampling type for the raster layer.	Raster katmanı için bir yeniden örnekleme türü seçin.
 Choose extra buttons for the Quick Access Toolbar.	Hızlı Erişim Araç Çubuğu için ek düğmeler seç.
 Choose how the flat map lays out the Earth.	Düz haritanın Dünya'yı nasıl gösterdiğini seçin.
@@ -325,18 +321,16 @@ Command\nSearch	Komut\nAra
 command is required	command gerekli
 Command Search	Komut Ara
 Commands	Komutlar
-Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	Eklentiler sekmesindeki komutlar: {commands} · Coğrafi İşleme panelindeki araçlar: {tools}
+Commands on the Plugins tab: {commands} · Tools in the Tools pane: {tools}	Eklentiler sekmesindeki komutlar: {commands} · Araçlar panelindeki araçlar: {tools}
 Commands…	Komutlar…
 Compare	Karşılaştır
 Compare two rasters	İki rasterı karşılaştır
 Completed	Tamamlandı
-Compute a field's values.	Bir alanın değerlerini hesapla.
-Connect a folder to the Catalog.	Kataloğa bir klasör bağla.
+Connect a folder to the Browser.	Tarayıcıya bir klasör bağla.
 Connections	Bağlantılar
 Constant	Sabit
 Constant height	Sabit yükseklik
 Constant…	Sabit…
-Contents	İçindekiler
 Contingent Values	Koşullu Değerler
 Contrast	Kontrast
 Conversion	Dönüştürme
@@ -384,6 +378,7 @@ Creates a point inside each input feature.	Her girdi detayının içinde bir nok
 Creates polygons around input features at a given distance.	Girdi detaylarının çevresinde belirli bir mesafede poligonlar oluşturur.
 Cross Section	Enine Kesit
 Cross Section (2 clicks)	Enine Kesit (2 tıklama)
+CSV	CSV
 Ctrl+	Ctrl+
 Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
 Ctrl+F1	Ctrl+F1
@@ -459,6 +454,7 @@ Done	Bitti
 Double	Ondalık (Double)
 Double-click	Çift tıklama
 Double-click to add	Eklemek için çift tıklayın
+Download	İndir
 Download\nMap	Haritayı\nİndir
 Download Map	Haritayı İndir
 Download the GeoLibre runner	GeoLibre çalıştırıcısını indir
@@ -510,7 +506,6 @@ Edges	Kenarlar
 Edit	Düzenle
 Edit and run the notebook.	Not defterini düzenle ve çalıştır.
 Edit Attribute	Özniteliği Düzenle
-Edit attributes in the table.	Öznitelikleri tabloda düzenle.
 Edit Cell	Hücreyi Düzenle
 Edit Status	Düzenleme Durumu
 Edit Vertices	Köşeleri Düzenle
@@ -538,11 +533,10 @@ Enabled	Etkin
 Encloses each feature, or all features, in its convex hull.	Her detayı veya tüm detayları dışbükey zarfı içine alır.
 End	Bitiş
 Enhancement	İyileştirme
-Enter an API key.	Bir API anahtarı girin.
-Enter the provider's address.	Sağlayıcının adresini girin.
 Enter to send, Shift+Enter for a new line	Göndermek için Enter, yeni satır için Shift+Enter
 Environments	Ortamlar
 EPSG code	EPSG kodu
+EPSG:	EPSG:
 Equal Earth	Equal Earth
 Equal Interval	Eşit Aralık
 Equirectangular (Plate Carrée)	Eşdikdörtgen (Plate Carrée)
@@ -571,6 +565,7 @@ Export\nRaster	Rasterı\nDışa Aktar
 Export Animation	Animasyonu Dışa Aktar
 Export Features	Detayları Dışa Aktar
 Export Features (tool)	Detayları Dışa Aktar (araç)
+Export Features needs a vector layer (Data › Export Raster writes a raster)	Detayları Dışa Aktar bir vektör katmanı gerektirir (Veri › Rasterı Dışa Aktar raster yazar)
 Export Features…	Detayları Dışa Aktar…
 Export Layout	Sayfa Düzenini Dışa Aktar
 Export Map	Haritayı Dışa Aktar
@@ -601,6 +596,7 @@ Export…	Dışa Aktar…
 Expression	İfade
 Extent	Kapsam
 Extent Indicator	Kapsam Göstergesi
+extent is [minLon, minLat, maxLon, maxLat], "view" or null	kapsam [minLon, minLat, maxLon, maxLat], "view" veya null olmalıdır
 Extent: {extent}	Kapsam: {extent}
 Extract	Çıkar
 Extracts the parts of input features that fall inside clip polygons.	Girdi detaylarının kırpma poligonları içine düşen kısımlarını çıkarır.
@@ -617,7 +613,6 @@ Feature\nAnalysis	Detay\nAnalizi
 Feature\nTo Point	Detaydan\nNoktaya
 Feature Cache	Detay Önbelleği
 Feature Layer	Detay Katmanı
-Feature Layer › Drawing	Detay Katmanı › Çizim
 Feature Templates	Detay Şablonları
 Feature templates: default values for new features.	Detay şablonları: yeni detaylar için varsayılan değerler.
 Feature To Point	Detaydan Noktaya
@@ -653,6 +648,7 @@ First-Person Navigation	Birinci Şahıs Gezinme
 Fit To Map View	Harita Görünümüne Sığdır
 Fixed Zoom In	Sabit Yakınlaştır
 Fixed Zoom Out	Sabit Uzaklaştır
+FlatGeobuf	FlatGeobuf
 Flip Line	Çizgiyi Ters Çevir
 Fog	Sis
 Folder	Klasör
@@ -660,6 +656,7 @@ Folder Connections	Klasör Bağlantıları
 folder connections need the desktop app	klasör bağlantıları masaüstü uygulamasını gerektirir
 Folders	Klasörler
 Forest	Orman
+Format	Biçim
 Frame rate	Kare hızı
 Frame rate, draw time, data size and memory.	Kare hızı, çizim süresi, veri boyutu ve bellek.
 Free the prepared geometry.	Hazırlanan geometriyi serbest bırak.
@@ -673,16 +670,16 @@ Full size	Tam boyut
 Function Editor	Fonksiyon Düzenleyici
 Gamma	Gama
 Generalization	Genelleştirme
-Geo-\nprocessing	Coğrafi\nİşleme
 Geodata Service	Coğrafi Veri Servisi
-GeoJSON or CSV	GeoJSON veya CSV
+GeoJSON	GeoJSON
 GeoLibre	GeoLibre
 GeoLibre Tools	GeoLibre araçları
 GeoLibre tools	GeoLibre araçları
 Geometry	Geometri
+GeoPackage	GeoPackage
+GeoParquet	GeoParquet
 Geoprocessing	Coğrafi İşleme
 Geoprocessing history.	Coğrafi işleme geçmişi.
-Geoprocessing Pane	Coğrafi İşleme Paneli
 Georeference	Coğrafi Referanslama
 Geostatistical Wizard	Jeoistatistik Sihirbazı
 GeoTIFF	GeoTIFF
@@ -697,7 +694,7 @@ Go forward to the next extent.	Sonraki kapsama ilerle.
 Go to a saved extent or save the current one.	Kayıtlı bir kapsama git veya geçerli kapsamı kaydet.
 Go To Bookmark	Yer İmine Git
 Go To XY	XY'ye Git
-Google Gemini	Google Gemini
+GPX	GPX
 Graduated Colors	Dereceli Renkler
 Graphic Style	Grafik Stili
 Graphics	Grafikler
@@ -732,15 +729,19 @@ Histogram Equalize	Histogram Eşitleme
 Histograms and correlations	Histogramlar ve korelasyonlar
 History	Geçmiş
 Hold	Beklet
-Home	Home
+Home	Giriş
+Home › Add	Giriş › Ekle
 Homepage	Ana sayfa
 Hosted Imagery	Barındırılan Görüntüler
 How the layer's colours combine with what's beneath.	Katmanın renklerinin altındakilerle nasıl birleştiği.
 Identify	Tanımla
 Illumination	Aydınlatma
+Image Analysis	Görüntü Analizi
 Image Classification	Görüntü Sınıflandırma
 Image Page	Resim Sayfası
 Imagery	Görüntüler
+Imagery Sharing	Görüntü Paylaşımı
+Imagery Tools	Görüntü Araçları
 Image…	Resim…
 Import	İçe Aktar
 Import\nProject	Proje\nİçe Aktar
@@ -769,8 +770,8 @@ Input Polygons	Girdi Poligonları
 Input Rows	Girdi Satırları
 Input Summary Features	Girdi Özet Detayları
 Input Table	Girdi Tablosu
-Inquiry	Sorgulama
 Insert	Ekle
+Inspect	İncele
 Install	Yükle
 Install a plugin	Eklenti yükle
 Install a plugin from a .rgplugin file.	Bir .rgplugin dosyasından eklenti yükleyin.
@@ -784,7 +785,7 @@ Install Plugin From Registry	Kayıt Defterinden Eklenti Yükle
 Install {name} {version}?	{name} {version} yüklensin mi?
 Installed	Yüklü
 Installed plugins are kept in {folder}	Yüklü eklentiler şurada tutulur: {folder}
-Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	{name} {version} yüklendi. Eklentiler sekmesinde bulabilirsiniz; araçları Coğrafi İşleme panelinde de yer alır.
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} yüklendi. Eklentiler sekmesinde bulabilirsiniz; araçları Araçlar panelinde de yer alır.
 Interface font: {font}	Arayüz yazı tipi: {font}
 Interpolate a surface from points (IDW)	Noktalardan yüzey enterpole et (IDW)
 Invalid: {error}	Geçersiz: {error}
@@ -792,11 +793,6 @@ Invert	Ters Çevir
 Invert color scheme	Renk şemasını ters çevir
 Invert the selection.	Seçimi ters çevir.
 IS NULL	IS NULL
-it connects to an address on the internet	internetteki bir adrese bağlanır
-it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	yalnızca size ayrılmıştır (eklentiler, betikler, görevler, modeller ve GeoLibre çalıştırıcısı)
-it reads or writes files on this computer	bu bilgisayardaki dosyaları okur veya yazar
-it replaces the open project	açık projeyi değiştirir
-it runs a plugin's command	bir eklentinin komutunu çalıştırır
 It runs in a sandbox with no other access to your computer or the network.	Bilgisayarınıza veya ağa başka hiçbir erişimi olmayan bir korumalı alanda çalışır.
 It's too large to keep in the browser: install it again on your next visit.	Tarayıcıda saklanamayacak kadar büyük: Bir sonraki ziyaretinizde yeniden yükleyin.
 Item Pop-ups	Öğe Açılır Pencereleri
@@ -812,14 +808,18 @@ Keyboard Shortcuts	Klavye Kısayolları
 Keyboard shortcuts.	Klavye kısayolları.
 Kilometers	Kilometre
 kind is required	kind gerekli
+KML	KML
+KMZ	KMZ
 Label	Etiket
 Label Class	Etiket Sınıfı
 Label Distance Range	Etiket Mesafe Aralığı
 Label Field	Etiket Alanı
 Label Placement	Etiket Yerleşimi
+Label Range	Etiket Aralığı
 Label the cities with their names	Şehirleri adlarıyla etiketle
 Label Visibility Range	Etiket Görünürlük Aralığı
 Labeling	Etiketleme
+Labels	Etiketler
 Lagoon	Lagün
 Lambert Cylindrical Equal Area	Lambert Silindirik Eşalan
 Landscape	Yatay
@@ -870,9 +870,11 @@ Link	Bağla
 Link Cursors	İmleçleri Bağla
 Link Views	Görünümleri Bağla
 List Commands	Komutları Listele
+List Layers in File	Dosyadaki Katmanları Listele
 List the provider's models	Sağlayıcının modellerini listele
 Lit	Aydınlık
 Live summary of the features in view.	Görünümdeki detayların canlı özeti.
+Load All Features	Tüm detayları yükle
 Load an unpacked plugin from its folder while you develop it.	Geliştirirken paketlenmemiş bir eklentiyi klasöründen yükleyin.
 Load GeoLibre tools	GeoLibre araçlarını yükle
 Loaded {name} from its folder.	{name} klasöründen yüklendi.
@@ -911,11 +913,9 @@ Map scale	Harita ölçeği
 Map Series	Harita Serisi
 Map Series Page	Harita Serisi Sayfası
 Map series page name	Harita serisi sayfa adı
-Map style (JSON)	Harita stili (JSON)
 Map Surrounds	Harita Öğeleri
 Map Thumbnail	Harita Küçük Resmi
 Map View	Harita Görünümü
-Map › Layer	Harita › Katman
 map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}	map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}
 Mapping	Haritalama
 Maps	Haritalar
@@ -952,7 +952,6 @@ Mobile Map	Mobil Harita
 Mod+	Mod+
 Model	Model
 Model\nBuilder	Model\nOluşturucu
-model id	model kimliği
 ModelBuilder	Model Oluşturucu
 Models	Modeller
 Modify	Değiştir
@@ -1026,19 +1025,19 @@ No	Hayır
 No bookmarks yet	Henüz yer imi yok
 No edits since the project was saved	Proje kaydedildiğinden beri düzenleme yok
 No mask	Maske yok
-No notebooks yet. Insert › New Notebook starts one, or Add and Open Notebook opens one.	Henüz not defteri yok. Ekle › Yeni Not Defteri bir tane başlatır veya Not Defteri Ekle ve Aç bir tane açar.
+No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Henüz not defteri yok. Analiz › Yeni Not Defteri bir tane başlatır veya Not Defteri Ekle ve Aç bir tane açar.
 No offline areas	Çevrimdışı alan yok
 No other reports	Başka rapor yok
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Yüklü eklenti yok. Eklenti kayıt defterine göz atın veya bir .rgplugin dosyası yükleyin.
 No plugins match.	Eşleşen eklenti yok.
 No Pop-ups	Açılır Pencere Yok
-No presentations yet. Insert › New Presentation starts one.	Henüz sunum yok. Ekle › Yeni Sunum bir tane başlatır.
+No presentations yet. Publish › New Presentation starts one.	Henüz sunum yok. Yayımla › Yeni Sunum bir tane başlatır.
 No relationships (Data Design › Relationships)	İlişki yok (Veri Tasarımı › İlişkiler)
 No relationships yet	Henüz ilişki yok
-No reports yet. Insert › New Report lists the selected layer's records.	Henüz rapor yok. Ekle › Yeni Rapor seçili katmanın kayıtlarını listeler.
+No reports yet. Publish › New Report lists the selected layer's records.	Henüz rapor yok. Yayımla › Yeni Rapor seçili katmanın kayıtlarını listeler.
 No standalone tables	Bağımsız tablo yok
 No styles yet	Henüz stil yok
-No tasks yet. Insert › Task makes one, for example from your geoprocessing history.	Henüz görev yok. Ekle › Görev bir tane oluşturur, örneğin coğrafi işleme geçmişinizden.
+No tasks yet. Data › Task makes one, for example from your geoprocessing history.	Henüz görev yok. Veri › Görev bir tane oluşturur, örneğin coğrafi işleme geçmişinizden.
 NoData	NoData
 None	Yok
 None. Add one by address, or from a basemap plugin.	Yok. Adresle veya bir altlık harita eklentisinden ekleyin.
@@ -1050,7 +1049,7 @@ not needed	gerekmiyor
 Not saved yet	Henüz kaydedilmedi
 Notebook	Not Defteri
 Notebook Pane	Not Defteri Paneli
-Nothing shared yet. Share › Share As makes web maps, layers, styles, scenes and more.	Henüz paylaşılan bir şey yok. Paylaş › Farklı Paylaş web haritaları, katmanlar, stiller, sahneler ve daha fazlasını oluşturur.
+Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Henüz paylaşılan bir şey yok. Yayımla › Farklı Paylaş web haritaları, katmanlar, stiller, sahneler ve daha fazlasını oluşturur.
 Now	Şimdi
 Nulls	Boş değerler
 Observations (observer, date, species, count)	Gözlemler (gözlemci, tarih, tür, sayı)
@@ -1060,7 +1059,6 @@ Off	Kapalı
 Offline	Çevrimdışı
 Offline area	Çevrimdışı alan
 OID	OID
-Ollama (local)	Ollama (yerel)
 On	Açık
 On Hold	Beklemede
 on hold	beklemede
@@ -1096,7 +1094,6 @@ Open the selected layer's table.	Seçili katmanın tablosunu aç.
 Open the Symbology pane.	Semboloji panelini aç.
 Open {code} on epsg.io	{code} kodunu epsg.io'da aç
 Open, save and create projects	Projeleri aç, kaydet ve oluştur
-OpenAI-compatible	OpenAI uyumlu
 Opened {name} for printing	{name} yazdırma için açıldı
 Open…	Aç…
 Options	Seçenekler
@@ -1113,7 +1110,6 @@ Output Name	Çıktı Adı
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Yaklaşık 25 MB'lık tek seferlik bir indirmeyle tarayıcıda çalışan 1.000'den fazla raster, vektör, LiDAR, hidroloji ve arazi aracı.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Yaklaşık 20 MB'lık isteğe bağlı bir indirmeyle 1.000'den fazla raster, vektör, LiDAR, hidroloji ve arazi aracı.
 Overlay	Bindirme
-overlay	bindirme
 Overlay (a transparent layer kept on top, such as labels or roads)	Bindirme (etiketler veya yollar gibi üstte tutulan saydam bir katman)
 Package	Paket
 Package a trained deep learning model.	Eğitilmiş bir derin öğrenme modelini paketle.
@@ -1133,6 +1129,7 @@ Page title	Sayfa başlığı
 Page {n} of {total}	Sayfa {n} / {total}
 Page {n} of {total}: {name}	Sayfa {n} / {total}: {name}
 Pages of maps, text, images and videos, shown one after another.	Art arda gösterilen harita, metin, resim ve video sayfaları.
+Pan	Kaydır
 Pan (Explore) · any tool	Kaydır (Keşfet) · herhangi bir araç
 Pan to a longitude/latitude.	Bir boylam/enleme kaydır.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Fareyle kaydırın, tekerlekle yakınlaştırın ve özniteliklerini görmek için detaylara tıklayın.
@@ -1170,6 +1167,8 @@ Plugin registry	Eklenti kayıt defteri
 Plugins	Eklentiler
 Plugins are .rgplugin files. Install only plugins from people you trust.	Eklentiler .rgplugin dosyalarıdır. Yalnızca güvendiğiniz kişilerin eklentilerini yükleyin.
 Plugins run in a sandbox: they can't reach your files or the network, and they change the project only through RustGIS's own commands, within the permissions you accept.	Eklentiler bir korumalı alanda çalışır: dosyalarınıza veya ağa erişemezler ve projeyi yalnızca RustGIS'in kendi komutlarıyla, kabul ettiğiniz izinler dahilinde değiştirirler.
+PMTiles archive	PMTiles arşivi
+PMTiles File…	PMTiles Dosyası…
 PNG frames (zip)	PNG kareleri (zip)
 PNG image	PNG görüntüsü
 Point	Nokta
@@ -1182,7 +1181,6 @@ Polygon (draw)	Poligon (çiz)
 Polygons	Poligonlar
 Polyline	Çoklu Çizgi
 Pop-up Mode	Açılır Pencere Modu
-Pop-ups	Açılır Pencereler
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Yerleşim Yerleri
 Portal	Portal
@@ -1225,6 +1223,8 @@ Projections	Projeksiyonlar
 Proportional Symbols	Orantılı Semboller
 Provider	Sağlayıcı
 Proximity	Yakınlık
+Publish	Yayımla
+Publish › Output	Yayımla › Çıktı
 Put the layer back as it was then	Katmanı o zamanki haline geri getir
 Quantile	Kantil
 Quick\nAccess	Hızlı\nErişim
@@ -1243,9 +1243,7 @@ Raster Effects	Raster Efektleri
 Raster Functions	Raster Fonksiyonları
 Raster Information	Raster Bilgisi
 Raster Layer	Raster Katmanı
-Raster tiles (XYZ)	Raster karolar (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} bant · {renderer}
-Read and write files on this computer	Bu bilgisayardaki dosyaları okuma ve yazma
 Read the map's layers and features	Haritanın katmanlarını ve detaylarını okuma
 Reads and writes files	Dosyaları okur ve yazar
 Reads the map	Haritayı okur
@@ -1423,17 +1421,17 @@ See the tools you've run.	Çalıştırdığınız araçları görün.
 Select	Seç
 Select (click)	Seç (tıklama)
 Select (rectangle)	Seç (dikdörtgen)
-Select a feature layer in the Contents pane	İçindekiler panelinde bir detay katmanı seçin
-Select a layer in the Contents pane	İçindekiler panelinde bir katman seçin
-select a layer in the Contents pane first	önce İçindekiler panelinde bir katman seçin
-Select a layer in the Contents pane.	İçindekiler panelinde bir katman seçin.
+Select a feature layer in the Layers pane	Katmanlar panelinde bir detay katmanı seçin
+Select a layer in Layers to style it.	Stil vermek için Katmanlar'da bir katman seçin.
+Select a layer in the Layers pane	Katmanlar panelinde bir katman seçin
+select a layer in the Layers pane first	önce Katmanlar panelinde bir katman seçin
+Select a layer in the Layers pane.	Katmanlar panelinde bir katman seçin.
 Select All	Tümünü Seç
 Select By\nAttributes	Özniteliğe\nGöre Seç
 Select By\nLocation	Konuma\nGöre Seç
 Select By Attributes	Özniteliğe Göre Seç
 Select every feature.	Tüm detayları seç.
 Select features by their spatial relationship.	Detayları mekânsal ilişkilerine göre seç.
-Select features on the map.	Haritada detay seç.
 Select features that intersect another layer.	Başka bir katmanla kesişen detayları seç.
 Select features with a SQL expression.	Detayları bir SQL ifadesiyle seç.
 Select Layer	Katman Seç
@@ -1448,7 +1446,7 @@ Selectable	Seçilebilir
 Selectable Layers	Seçilebilir Katmanlar
 Selected	Seçili
 Selected Features: {n}	Seçili Detaylar: {n}
-Selected in Contents	İçindekiler'de Seçili
+Selected in Layers	Katmanlar'da Seçili
 Selected only	Yalnızca seçililer
 Selected records only	Yalnızca seçili kayıtlar
 Selecting Features	Detay Seçimi
@@ -1473,6 +1471,7 @@ Shade walls by the way they face the light.	Duvarları ışığa baktıkları y�
 Shaded	Gölgeli
 Shaded Relief	Gölgeli Rölyef
 Shape	Şekil
+Shapefile	Shapefile
 Share	Paylaş
 Share As	Farklı Paylaş
 Share every layer and table as OGC API Features collections.	Her katmanı ve tabloyu OGC API Features koleksiyonu olarak paylaş.
@@ -1483,7 +1482,6 @@ Share the map's relationships as a link chart page.	Haritanın ilişkilerini bir
 Share the selected layer as an OGC API Features collection with its style.	Seçili katmanı stiliyle birlikte OGC API Features koleksiyonu olarak paylaş.
 Share the selected layer's names as a place-search locator.	Seçili katmanın adlarını bir yer arama konum bulucusu olarak paylaş.
 Share the selected layer's symbology as a MapLibre style.	Seçili katmanın sembolojisini MapLibre stili olarak paylaş.
-Share › Output	Paylaş › Çıktı
 Shared Items	Paylaşılan Öğeler
 Shares made, with Manage tools to update them.	Yapılan paylaşımlar, güncellemek için Yönet araçlarıyla.
 Shift+	Shift+
@@ -1492,16 +1490,16 @@ Shortcuts	Kısayollar
 Shortest route over a line network	Bir çizgi ağı üzerinde en kısa rota
 Show	Göster
 Show a second map beside this one.	Bunun yanında ikinci bir harita göster.
-Show details when hovering items in the Catalog view.	Katalog görünümünde öğelerin üzerine gelindiğinde ayrıntıları göster.
+Show details when hovering items in the Browser view.	Tarayıcı görünümünde öğelerin üzerine gelindiğinde ayrıntıları göster.
 Show different features at different scales.	Farklı ölçeklerde farklı detaylar göster.
 Show latitude/longitude lines on the basemap.	Altlık haritada enlem/boylam çizgilerini göster.
 Show Map	Haritayı Göster
 Show or hide	Göster veya gizle
 Show or hide the AI Assistant.	YZ Asistanını göster veya gizle.
-Show or hide the Catalog pane.	Katalog panelini göster veya gizle.
-Show or hide the Contents pane.	İçindekiler panelini göster veya gizle.
-Show or hide the Geoprocessing pane.	Coğrafi İşleme panelini göster veya gizle.
+Show or hide the Browser pane.	Tarayıcı panelini göster veya gizle.
 Show or hide the layer.	Katmanı göster veya gizle.
+Show or hide the Layers pane.	Katmanlar panelini göster veya gizle.
+Show or hide the Tools pane.	Araçlar panelini göster veya gizle.
 Show the labels that don't fit, in red.	Sığmayan etiketleri kırmızıyla göster.
 Show the layer only inside another layer's polygons.	Katmanı yalnızca başka bir katmanın poligonları içinde göster.
 Show the layer only left of a divider, to compare it with what's beneath.	Katmanı altındakiyle karşılaştırmak için yalnızca bir ayırıcının solunda göster.
@@ -1554,7 +1552,6 @@ Step {n} done	{n}. adım tamamlandı
 Stop	Durdur
 Stop drawing labels, for faster navigation.	Daha hızlı gezinme için etiket çizmeyi durdur.
 Stop filling the cache.	Önbelleği doldurmayı durdur.
-Stopped.	Durduruldu.
 Stretch	Germe
 Stretch\nType	Germe\nTürü
 Stretch it over the map view, or give control points (one per line: column row lon lat).	Harita görünümüne yay veya kontrol noktaları ver (her satıra bir tane: sütun satır boylam enlem).
@@ -1562,6 +1559,7 @@ Stretch Type	Germe Türü
 Stretch type	Germe türü
 Style	Stil
 Style Items	Stil Öğeleri
+Style › Drawing	Stil › Çizim
 Styles	Stiller
 Subreport	Alt Rapor
 Subreport: {name}	Alt rapor: {name}
@@ -1609,14 +1607,13 @@ the capture failed unexpectedly	yakalama beklenmedik şekilde başarısız oldu
 the Help tab always shows	Yardım sekmesi her zaman görünür
 The job covers the map view	İş harita görünümünü kapsar
 The key is kept for this session only.	Anahtar yalnızca bu oturum için saklanır.
+The layer's file couldn't be read: {error}	Katmanın dosyası okunamadı: {error}
 the layout export failed unexpectedly	sayfa düzeni dışa aktarımı beklenmedik şekilde başarısız oldu
 The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	Göz atılacak eklenti listesi. RustGIS eklenti kayıt defteri için boş bırakın.
 the map has no layers	haritada katman yok
 The map is drawn in this coordinate system; layers are projected on the fly.	Harita bu koordinat sisteminde çizilir; katmanlar anında projekte edilir.
 The map view as it is now	Harita görünümünün şu anki hali
 The model answering; click to change it	Yanıt veren model; değiştirmek için tıklayın
-the model declined this request	model bu isteği reddetti
-The model sent an empty reply; ask again, or try another model.	Model boş bir yanıt gönderdi; yeniden sorun veya başka bir model deneyin.
 the page is too large to draw	sayfa çizilemeyecek kadar büyük
 the presentation export failed unexpectedly	sunum dışa aktarımı beklenmedik şekilde başarısız oldu
 the preview failed unexpectedly	önizleme beklenmedik şekilde başarısız oldu
@@ -1626,8 +1623,9 @@ The project's thumbnail, from the map view.	Harita görünümünden projenin kü
 The projection the map opens in.	Haritanın açıldığı projeksiyon.
 The raster's data couldn't be read.	Rasterın verisi okunamadı.
 The raster's data couldn't be read: {path}	Rasterın verisi okunamadı: {path}
-the reply reached its length limit	yanıt uzunluk sınırına ulaştı
 the report export failed unexpectedly	rapor dışa aktarımı beklenmedik şekilde başarısız oldu
+The Shapefile's files download as one zip.	Shapefile dosyaları tek bir zip olarak indirilir.
+the view has no extent	görünümün kapsamı yok
 Thermal	Termal
 Thinking…	Düşünüyor…
 this build can't download plugins	bu sürüm eklenti indiremez
@@ -1649,6 +1647,8 @@ Tool Gallery	Araç Galerisi
 Toolbox	Araç Kutusu
 Toolboxes	Araç Kutuları
 Tools	Araçlar
+Tools\nPane	Araçlar\nPaneli
+Tools Pane	Araçlar Paneli
 Tools that analyse features.	Detayları analiz eden araçlar.
 Tools that analyse rasters.	Rasterları analiz eden araçlar.
 Tools you run appear here.	Çalıştırdığınız araçlar burada görünür.
@@ -1698,7 +1698,6 @@ Valid expression · {n} matching rows	Geçerli ifade · {n} eşleşen satır
 Validate	Doğrula
 value (empty: no-data)	değer (boş: veri yok)
 Vector and raster data	Vektör ve raster verisi
-Vector tiles (MVT)	Vektör karolar (MVT)
 Version {version}	Sürüm {version}
 Vertex	Köşe
 Video	Video
@@ -1709,6 +1708,7 @@ Video…	Video…
 View	Görünüm
 View Clipping	Görünüm Kırpma
 View Effects	Görünüm Efektleri
+View Extent	Görünüm Kapsamı
 View Unplaced	Yerleşmeyenleri Göster
 View › Windows	Görünüm › Pencereler
 Viewshed from a point	Bir noktadan görünürlük alanı
@@ -1780,6 +1780,7 @@ z (m)	z (m)
 Z factor	Z faktörü
 Zoom	Yakınlaştır
 Zoom about the pointer	İşaretçi etrafında yakınlaştır
+Zoom Box	Kutuyla Yakınlaştır
 Zoom Frame	Çerçeveyi Yakınlaştır
 Zoom In	Yakınlaştır
 Zoom in	Yakınlaştır
@@ -1792,6 +1793,7 @@ Zoom out from the centre of the map.	Haritanın merkezinden uzaklaştır.
 Zoom To	Yakınlaştır
 Zoom To\nLayer	Katmana\nYakınlaştır
 Zoom to a box (Explore)	Kutuya yakınlaştır (Keşfet)
+Zoom To Extent	Kapsama Yakınlaştır
 Zoom To Layer	Katmana Yakınlaştır
 Zoom To Map View	Harita Görünümüne Yakınlaştır
 Zoom To Selection	Seçime Yakınlaştır
@@ -1800,25 +1802,8 @@ Zoom to the error	Hataya yakınlaştır
 Zoom to the extent of all layers.	Tüm katmanların kapsamına yakınlaştır.
 Zoom to the layer's extent.	Katmanın kapsamına yakınlaştır.
 Zoom to the selected features.	Seçili detaylara yakınlaştır.
-Zoom to the selection.	Seçime yakınlaştır.
 Zoom to the whole world.	Tüm dünyaya yakınlaştır.
 Zoom to Tokyo	Tokyo'ya yakınlaştır
 Zoom To World	Dünyaya Yakınlaştır
-{id} changed since it was installed; install it again from the Plugin Manager.	{id}, yüklendiğinden beri değişti; Eklenti Yöneticisi'nden yeniden yükleyin.
-{name} was withdrawn from the plugin registry and has been turned off.	{name}, eklenti kayıt defterinden geri çekildi ve devre dışı bırakıldı.
-{name} was withdrawn from the plugin registry: {reason}	{name}, eklenti kayıt defterinden geri çekildi: {reason}
-{name}: the download doesn't match the registry; it wasn't installed.	{name}: İndirilen dosya kayıt defteriyle eşleşmiyor; yüklenmedi.
-{name}: the download is a different plugin; it wasn't installed.	{name}: İndirilen dosya farklı bir eklenti; yüklenmedi.
-{shown} of {total} plugins	{total} eklentiden {shown} tanesi
-{total} plugins	{total} eklenti
-{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: yalnızca HTTPS adreslerine ya da bu bilgisayarda veya ağda düz HTTP'ye izin verilir
 © OpenStreetMap contributors	© OpenStreetMap katkıcıları
 ⌘K	⌘K
-The layer's file couldn't be read: {error}	Katmanın dosyası okunamadı: {error}
-{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, yerinde okunur · görünümdeki {matched} detaydan {n} tanesinin örneği (hepsini görmek için yakınlaştırın) · {renderer}
-{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, yerinde okunur · görünümde {total} detaydan {n} tanesi · {renderer}
-Load All Features	Tüm detayları yükle
-GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV veya FlatGeobuf
-A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	Bir karo servisinin adresi: {z}/{x}/{y} içeren raster karolar (veya WMS için {-y}, {q}, {bbox-epsg-3857}), vektör karolar (.pbf) veya TileJSON ya da bir MapLibre stili; ya da bir PMTiles arşivi (bir web adresi veya bu bilgisayardaki bir dosya).
-PMTiles File…	PMTiles Dosyası…
-PMTiles archive	PMTiles arşivi

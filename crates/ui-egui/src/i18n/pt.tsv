@@ -17,7 +17,7 @@ A notebook of text and command cells.	Um notebook de células de texto e de coma
 A projected coordinate system.	Um sistema de coordenadas projetadas.
 A report listing the selected layer's records, page after page.	Um relatório que lista os registros da camada selecionada, página após página.
 A template with the first selected feature's values	Um modelo com os valores da primeira feição selecionada
-A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	O endereço de um serviço de blocos: blocos raster com {z}/{x}/{y} (ou {-y}, {q}, {bbox-epsg-3857} para WMS), blocos vetoriais (.pbf) ou TileJSON, ou um estilo MapLibre.
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	O endereço de um serviço de blocos: blocos raster com {z}/{x}/{y} (ou {-y}, {q}, {bbox-epsg-3857} para WMS), blocos vetoriais (.pbf) ou TileJSON, ou um estilo MapLibre; ou um arquivo PMTiles (um endereço web ou um arquivo neste computador).
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Um valor, um campo ou dois deles unidos por + − × ÷. Aplica-se às linhas selecionadas, ou a todas as linhas quando nenhuma estiver selecionada.
 About	Sobre
 About plugins	Sobre plugins
@@ -30,10 +30,8 @@ Accessibility	Acessibilidade
 Activate Map	Ativar mapa
 Add	Adicionar
 Add\nData	Adicionar\ndados
-Add\nField	Adicionar\ncampo
 Add ({n})	Adicionar ({n})
 Add a bar chart of a layer's numeric field.	Adicionar um gráfico de barras de um campo numérico de uma camada.
-Add a field to the selected layer.	Adicionar um campo à camada selecionada.
 Add a field.	Adicionar um campo.
 Add a legend of the map frame's layers.	Adicionar uma legenda das camadas do quadro de mapa.
 Add a map frame showing a map of the project.	Adicionar um quadro de mapa que mostra um mapa do projeto.
@@ -46,7 +44,7 @@ Add a PNG or JPEG picture to the page.	Adicionar uma imagem PNG ou JPEG à pági
 Add a presentation file.	Adicionar um arquivo de apresentação.
 Add a report file, or a report template for the selected layer.	Adicionar um arquivo de relatório ou um modelo de relatório para a camada selecionada.
 Add a scale bar for the map frame.	Adicionar uma barra de escala para o quadro de mapa.
-add a second map first (Insert › New Map)	adicione primeiro um segundo mapa (Inserir › Novo mapa)
+add a second map first (Data › New Map)	adicione primeiro um segundo mapa (Dados › Novo mapa)
 Add a second map frame first	Adicione primeiro um segundo quadro de mapa
 Add a text element.	Adicionar um elemento de texto.
 Add an elevation raster first.	Adicione primeiro um raster de elevação.
@@ -115,7 +113,8 @@ Allow this action?	Permitir esta ação?
 Along Selected Line	Ao longo da linha selecionada
 Altitude	Altitude
 Analysis	Análise
-Analysis › AI	Análise › IA
+Analyze	Análise
+Analyze › AI	Análise › IA
 AND	AND
 Angle	Ângulo
 Animation	Animação
@@ -193,6 +192,9 @@ Browse the geoprocessing toolbox.	Explorar a caixa de ferramentas de geoprocessa
 Browse the project's maps, tables and folders.	Explorar os mapas, tabelas e pastas do projeto.
 Browse this folder below	Explorar esta pasta abaixo
 Browse, install, update and remove plugins.	Explorar, instalar, atualizar e remover plugins.
+Browser	Navegador
+Browser\nPane	Painel\nNavegador
+Browser View	Visualização do navegador
 Buffer	Buffer
 Buffer the cities by 200 km	Criar um buffer de 200 km ao redor das cidades
 Build	Construir
@@ -207,7 +209,6 @@ By\nLocation	Por\nlocalização
 by {author}	por {author}
 By {field}	Por {field}
 Calculate	Calcular
-Calculate\nField	Calcular\ncampo
 Calculate\nGeometry	Calcular\ngeometria
 Calculate Field	Calcular campo
 Calculate field	Calcular campo
@@ -225,9 +226,6 @@ CARGO_PKG_VERSION	CARGO_PKG_VERSION
 Cartography	Cartografia
 Case Field	Campo de caso
 Cast Shadow	Projetar sombra
-Catalog	Catálogo
-Catalog\nPane	Painel\nCatálogo
-Catalog View	Visualização do catálogo
 Cell size	Tamanho da célula
 cell size °	tamanho da célula °
 Centered	Centralizado
@@ -238,13 +236,11 @@ Change Detection	Detecção de mudanças
 Change the map's backdrop.	Alterar o fundo do mapa.
 Change the map's coordinate system	Alterar o sistema de coordenadas do mapa
 Change the page size and orientation.	Alterar o tamanho e a orientação da página.
-Change the project (add layers, edit features, change symbology)	Alterar o projeto (adicionar camadas, editar feições, alterar a simbologia)
 Chart categories	Categorias do gráfico
 Chart Frame	Quadro de gráfico
 China	China
 Choose a band combination to display the raster layer.	Escolha uma combinação de bandas para exibir a camada raster.
 Choose a contrast stretch for the raster layer.	Escolha um realce de contraste para a camada raster.
-Choose a model.	Escolha um modelo.
 Choose a resampling type for the raster layer.	Escolha um tipo de reamostragem para a camada raster.
 Choose extra buttons for the Quick Access Toolbar.	Escolher botões extras para a barra de ferramentas de acesso rápido.
 Choose how the flat map lays out the Earth.	Escolher como o mapa plano representa a Terra.
@@ -325,18 +321,16 @@ Command\nSearch	Pesquisar\ncomandos
 command is required	command é obrigatório
 Command Search	Pesquisa de comandos
 Commands	Comandos
-Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	Comandos na guia Plugins: {commands} · Ferramentas no painel Geoprocessamento: {tools}
+Commands on the Plugins tab: {commands} · Tools in the Tools pane: {tools}	Comandos na guia Plugins: {commands} · Ferramentas no painel Ferramentas: {tools}
 Commands…	Comandos…
 Compare	Comparar
 Compare two rasters	Comparar dois rasters
 Completed	Concluído
-Compute a field's values.	Calcular os valores de um campo.
-Connect a folder to the Catalog.	Conectar uma pasta ao Catálogo.
+Connect a folder to the Browser.	Conectar uma pasta ao Navegador.
 Connections	Conexões
 Constant	Constante
 Constant height	Altura constante
 Constant…	Constante…
-Contents	Conteúdo
 Contingent Values	Valores contingentes
 Contrast	Contraste
 Conversion	Conversão
@@ -384,6 +378,7 @@ Creates a point inside each input feature.	Cria um ponto dentro de cada feição
 Creates polygons around input features at a given distance.	Cria polígonos ao redor das feições de entrada a uma distância especificada.
 Cross Section	Seção transversal
 Cross Section (2 clicks)	Seção transversal (2 cliques)
+CSV	CSV
 Ctrl+	Ctrl+
 Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
 Ctrl+F1	Ctrl+F1
@@ -459,6 +454,7 @@ Done	Concluído
 Double	Duplo
 Double-click	Clique duplo
 Double-click to add	Clique duplo para adicionar
+Download	Baixar
 Download\nMap	Baixar\nmapa
 Download Map	Baixar mapa
 Download the GeoLibre runner	Baixar o executor do GeoLibre
@@ -510,7 +506,6 @@ Edges	Bordas
 Edit	Editar
 Edit and run the notebook.	Editar e executar o notebook.
 Edit Attribute	Editar atributo
-Edit attributes in the table.	Editar atributos na tabela.
 Edit Cell	Editar célula
 Edit Status	Status da edição
 Edit Vertices	Editar vértices
@@ -538,11 +533,10 @@ Enabled	Ativado
 Encloses each feature, or all features, in its convex hull.	Envolve cada feição, ou todas as feições, em seu fecho convexo.
 End	Fim
 Enhancement	Realce
-Enter an API key.	Informe uma chave de API.
-Enter the provider's address.	Informe o endereço do provedor.
 Enter to send, Shift+Enter for a new line	Enter para enviar, Shift+Enter para uma nova linha
 Environments	Ambientes
 EPSG code	Código EPSG
+EPSG:	EPSG:
 Equal Earth	Equal Earth
 Equal Interval	Intervalo igual
 Equirectangular (Plate Carrée)	Equirretangular (Plate Carrée)
@@ -571,6 +565,7 @@ Export\nRaster	Exportar\nraster
 Export Animation	Exportar animação
 Export Features	Exportar feições
 Export Features (tool)	Exportar feições (ferramenta)
+Export Features needs a vector layer (Data › Export Raster writes a raster)	Exportar feições requer uma camada vetorial (Dados › Exportar raster grava um raster)
 Export Features…	Exportar feições…
 Export Layout	Exportar layout
 Export Map	Exportar mapa
@@ -601,6 +596,7 @@ Export…	Exportar…
 Expression	Expressão
 Extent	Extensão
 Extent Indicator	Indicador de extensão
+extent is [minLon, minLat, maxLon, maxLat], "view" or null	a extensão é [minLon, minLat, maxLon, maxLat], "view" ou null
 Extent: {extent}	Extensão: {extent}
 Extract	Extrair
 Extracts the parts of input features that fall inside clip polygons.	Extrai as partes das feições de entrada que ficam dentro dos polígonos de recorte.
@@ -617,7 +613,6 @@ Feature\nAnalysis	Análise de\nfeições
 Feature\nTo Point	Feição\npara ponto
 Feature Cache	Cache de feições
 Feature Layer	Camada de feições
-Feature Layer › Drawing	Camada de feições › Desenho
 Feature Templates	Modelos de feição
 Feature templates: default values for new features.	Modelos de feição: valores padrão para novas feições.
 Feature To Point	Feição para ponto
@@ -653,6 +648,7 @@ First-Person Navigation	Navegação em primeira pessoa
 Fit To Map View	Ajustar à visualização do mapa
 Fixed Zoom In	Aproximação fixa
 Fixed Zoom Out	Afastamento fixo
+FlatGeobuf	FlatGeobuf
 Flip Line	Inverter linha
 Fog	Neblina
 Folder	Pasta
@@ -660,6 +656,7 @@ Folder Connections	Conexões de pasta
 folder connections need the desktop app	conexões de pasta requerem o aplicativo desktop
 Folders	Pastas
 Forest	Floresta
+Format	Formato
 Frame rate	Taxa de quadros
 Frame rate, draw time, data size and memory.	Taxa de quadros, tempo de desenho, tamanho dos dados e memória.
 Free the prepared geometry.	Liberar a geometria preparada.
@@ -673,16 +670,16 @@ Full size	Tamanho total
 Function Editor	Editor de funções
 Gamma	Gama
 Generalization	Generalização
-Geo-\nprocessing	Geoproces-\nsamento
 Geodata Service	Serviço de geodados
-GeoJSON or CSV	GeoJSON ou CSV
+GeoJSON	GeoJSON
 GeoLibre	GeoLibre
 GeoLibre Tools	Ferramentas GeoLibre
 GeoLibre tools	Ferramentas GeoLibre
 Geometry	Geometria
+GeoPackage	GeoPackage
+GeoParquet	GeoParquet
 Geoprocessing	Geoprocessamento
 Geoprocessing history.	Histórico de geoprocessamento.
-Geoprocessing Pane	Painel Geoprocessamento
 Georeference	Georreferenciar
 Geostatistical Wizard	Assistente geoestatístico
 GeoTIFF	GeoTIFF
@@ -697,7 +694,7 @@ Go forward to the next extent.	Avançar para a próxima extensão.
 Go to a saved extent or save the current one.	Ir para uma extensão salva ou salvar a atual.
 Go To Bookmark	Ir para o marcador
 Go To XY	Ir para XY
-Google Gemini	Google Gemini
+GPX	GPX
 Graduated Colors	Cores graduadas
 Graphic Style	Estilo de gráfico
 Graphics	Gráficos
@@ -732,15 +729,19 @@ Histogram Equalize	Equalização de histograma
 Histograms and correlations	Histogramas e correlações
 History	Histórico
 Hold	Em espera
-Home	Home
+Home	Início
+Home › Add	Início › Adicionar
 Homepage	Página inicial
 Hosted Imagery	Imagens hospedadas
 How the layer's colours combine with what's beneath.	Como as cores da camada se combinam com o que está abaixo.
 Identify	Identificar
 Illumination	Iluminação
+Image Analysis	Análise de imagens
 Image Classification	Classificação de imagens
 Image Page	Página de imagem
 Imagery	Imagens
+Imagery Sharing	Compartilhamento de imagens
+Imagery Tools	Ferramentas de imagens
 Image…	Imagem…
 Import	Importar
 Import\nProject	Importar\nprojeto
@@ -769,8 +770,8 @@ Input Polygons	Polígonos de entrada
 Input Rows	Linhas de entrada
 Input Summary Features	Feições de resumo de entrada
 Input Table	Tabela de entrada
-Inquiry	Consulta
 Insert	Inserir
+Inspect	Inspecionar
 Install	Instalar
 Install a plugin	Instalar um plugin
 Install a plugin from a .rgplugin file.	Instalar um plugin de um arquivo .rgplugin.
@@ -784,7 +785,7 @@ Install Plugin From Registry	Instalar plugin do registro
 Install {name} {version}?	Instalar {name} {version}?
 Installed	Instalado
 Installed plugins are kept in {folder}	Os plugins instalados ficam em {folder}
-Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	{name} {version} instalado. Você o encontra na guia Plugins; as ferramentas dele também estão no painel Geoprocessamento.
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} instalado. Você o encontra na guia Plugins; as ferramentas dele também estão no painel Ferramentas.
 Interface font: {font}	Fonte da interface: {font}
 Interpolate a surface from points (IDW)	Interpolar uma superfície a partir de pontos (IDW)
 Invalid: {error}	Inválida: {error}
@@ -792,11 +793,6 @@ Invert	Inverter
 Invert color scheme	Inverter esquema de cores
 Invert the selection.	Inverter a seleção.
 IS NULL	IS NULL
-it connects to an address on the internet	conecta-se a um endereço na internet
-it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	é reservado a você (plugins, scripts, tarefas, modelos e o executor do GeoLibre)
-it reads or writes files on this computer	lê ou grava arquivos neste computador
-it replaces the open project	substitui o projeto aberto
-it runs a plugin's command	executa um comando de um plugin
 It runs in a sandbox with no other access to your computer or the network.	Ele é executado em uma sandbox, sem nenhum outro acesso ao seu computador ou à rede.
 It's too large to keep in the browser: install it again on your next visit.	É grande demais para ser mantido no navegador: instale-o novamente na sua próxima visita.
 Item Pop-ups	Pop-ups de itens
@@ -812,14 +808,18 @@ Keyboard Shortcuts	Atalhos de teclado
 Keyboard shortcuts.	Atalhos de teclado.
 Kilometers	Quilômetros
 kind is required	kind é obrigatório
+KML	KML
+KMZ	KMZ
 Label	Rótulo
 Label Class	Classe de rótulo
 Label Distance Range	Intervalo de distância dos rótulos
 Label Field	Campo de rótulo
 Label Placement	Posicionamento dos rótulos
+Label Range	Intervalo de rótulos
 Label the cities with their names	Rotular as cidades com seus nomes
 Label Visibility Range	Intervalo de visibilidade dos rótulos
 Labeling	Rotulagem
+Labels	Rótulos
 Lagoon	Lagoa
 Lambert Cylindrical Equal Area	Cilíndrica de áreas iguais de Lambert
 Landscape	Paisagem
@@ -870,9 +870,11 @@ Link	Vincular
 Link Cursors	Vincular cursores
 Link Views	Vincular visualizações
 List Commands	Listar comandos
+List Layers in File	Listar camadas do arquivo
 List the provider's models	Listar os modelos do provedor
 Lit	Iluminado
 Live summary of the features in view.	Resumo dinâmico das feições à vista.
+Load All Features	Carregar todas as feições
 Load an unpacked plugin from its folder while you develop it.	Carregar um plugin descompactado a partir da pasta dele enquanto você o desenvolve.
 Load GeoLibre tools	Carregar ferramentas GeoLibre
 Loaded {name} from its folder.	{name} carregado a partir da pasta dele.
@@ -911,11 +913,9 @@ Map scale	Escala do mapa
 Map Series	Série de mapas
 Map Series Page	Página da série de mapas
 Map series page name	Nome da página da série de mapas
-Map style (JSON)	Estilo de mapa (JSON)
 Map Surrounds	Elementos complementares do mapa
 Map Thumbnail	Miniatura do mapa
 Map View	Visualização do mapa
-Map › Layer	Mapa › Camada
 map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}	map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}
 Mapping	Mapeamento
 Maps	Mapas
@@ -952,7 +952,6 @@ Mobile Map	Mapa móvel
 Mod+	Mod+
 Model	Modelo
 Model\nBuilder	Model\nBuilder
-model id	id do modelo
 ModelBuilder	ModelBuilder
 Models	Modelos
 Modify	Modificar
@@ -1026,19 +1025,19 @@ No	Não
 No bookmarks yet	Ainda não há marcadores
 No edits since the project was saved	Nenhuma edição desde que o projeto foi salvo
 No mask	Sem máscara
-No notebooks yet. Insert › New Notebook starts one, or Add and Open Notebook opens one.	Ainda não há notebooks. Inserir › Novo notebook cria um, ou Adicionar e abrir notebook abre um.
+No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Ainda não há notebooks. Análise › Novo notebook cria um, ou Adicionar e abrir notebook abre um.
 No offline areas	Nenhuma área offline
 No other reports	Nenhum outro relatório
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Nenhum plugin instalado. Explore o registro de plugins ou instale um arquivo .rgplugin.
 No plugins match.	Nenhum plugin corresponde.
 No Pop-ups	Sem pop-ups
-No presentations yet. Insert › New Presentation starts one.	Ainda não há apresentações. Inserir › Nova apresentação cria uma.
+No presentations yet. Publish › New Presentation starts one.	Ainda não há apresentações. Publicar › Nova apresentação cria uma.
 No relationships (Data Design › Relationships)	Nenhum relacionamento (Design de dados › Relacionamentos)
 No relationships yet	Ainda não há relacionamentos
-No reports yet. Insert › New Report lists the selected layer's records.	Ainda não há relatórios. Inserir › Novo relatório lista os registros da camada selecionada.
+No reports yet. Publish › New Report lists the selected layer's records.	Ainda não há relatórios. Publicar › Novo relatório lista os registros da camada selecionada.
 No standalone tables	Nenhuma tabela independente
 No styles yet	Ainda não há estilos
-No tasks yet. Insert › Task makes one, for example from your geoprocessing history.	Ainda não há tarefas. Inserir › Tarefa cria uma, por exemplo a partir do seu histórico de geoprocessamento.
+No tasks yet. Data › Task makes one, for example from your geoprocessing history.	Ainda não há tarefas. Dados › Tarefa cria uma, por exemplo a partir do seu histórico de geoprocessamento.
 NoData	NoData
 None	Nenhum
 None. Add one by address, or from a basemap plugin.	Nenhuma. Adicione uma pelo endereço ou a partir de um plugin de mapas base.
@@ -1050,7 +1049,7 @@ not needed	não é necessária
 Not saved yet	Ainda não salvo
 Notebook	Notebook
 Notebook Pane	Painel Notebook
-Nothing shared yet. Share › Share As makes web maps, layers, styles, scenes and more.	Nada compartilhado ainda. Compartilhar › Compartilhar como cria mapas web, camadas, estilos, cenas e mais.
+Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Nada compartilhado ainda. Publicar › Compartilhar como cria mapas web, camadas, estilos, cenas e mais.
 Now	Agora
 Nulls	Nulos
 Observations (observer, date, species, count)	Observações (observador, data, espécie, contagem)
@@ -1060,7 +1059,6 @@ Off	Desativado
 Offline	Offline
 Offline area	Área offline
 OID	OID
-Ollama (local)	Ollama (local)
 On	Ativado
 On Hold	Em espera
 on hold	em espera
@@ -1096,7 +1094,6 @@ Open the selected layer's table.	Abrir a tabela da camada selecionada.
 Open the Symbology pane.	Abrir o painel Simbologia.
 Open {code} on epsg.io	Abrir {code} no epsg.io
 Open, save and create projects	Abrir, salvar e criar projetos
-OpenAI-compatible	Compatível com OpenAI
 Opened {name} for printing	{name} aberto para impressão
 Open…	Abrir…
 Options	Opções
@@ -1113,7 +1110,6 @@ Output Name	Nome de saída
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Mais de 1.000 ferramentas raster, vetoriais, LiDAR, hidrológicas e de terreno que rodam no navegador, após um download único de cerca de 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Mais de 1.000 ferramentas raster, vetoriais, LiDAR, hidrológicas e de terreno, em um download opcional de cerca de 20 MB.
 Overlay	Sobreposição
-overlay	sobreposição
 Overlay (a transparent layer kept on top, such as labels or roads)	Sobreposição (uma camada transparente mantida no topo, como rótulos ou estradas)
 Package	Pacote
 Package a trained deep learning model.	Empacotar um modelo de aprendizado profundo treinado.
@@ -1133,6 +1129,7 @@ Page title	Título da página
 Page {n} of {total}	Página {n} de {total}
 Page {n} of {total}: {name}	Página {n} de {total}: {name}
 Pages of maps, text, images and videos, shown one after another.	Páginas de mapas, texto, imagens e vídeos, mostradas uma após a outra.
+Pan	Mover
 Pan (Explore) · any tool	Deslocar (Explorar) · qualquer ferramenta
 Pan to a longitude/latitude.	Deslocar para uma longitude/latitude.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Desloque o mapa com o mouse, aplique zoom com a roda e clique nas feições para ver seus atributos.
@@ -1170,6 +1167,8 @@ Plugin registry	Registro de plugins
 Plugins	Plugins
 Plugins are .rgplugin files. Install only plugins from people you trust.	Plugins são arquivos .rgplugin. Instale apenas plugins de pessoas em quem você confia.
 Plugins run in a sandbox: they can't reach your files or the network, and they change the project only through RustGIS's own commands, within the permissions you accept.	Os plugins são executados em uma sandbox: não podem acessar seus arquivos nem a rede, e só alteram o projeto por meio dos próprios comandos do RustGIS, dentro das permissões que você aceitar.
+PMTiles archive	Arquivo PMTiles
+PMTiles File…	Arquivo PMTiles…
 PNG frames (zip)	Quadros PNG (zip)
 PNG image	Imagem PNG
 Point	Ponto
@@ -1182,7 +1181,6 @@ Polygon (draw)	Polígono (desenhar)
 Polygons	Polígonos
 Polyline	Polilinha
 Pop-up Mode	Modo de pop-up
-Pop-ups	Pop-ups
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Locais povoados
 Portal	Portal
@@ -1225,6 +1223,8 @@ Projections	Projeções
 Proportional Symbols	Símbolos proporcionais
 Provider	Provedor
 Proximity	Proximidade
+Publish	Publicar
+Publish › Output	Publicar › Saída
 Put the layer back as it was then	Restaurar a camada como estava naquele momento
 Quantile	Quantil
 Quick\nAccess	Acesso\nrápido
@@ -1243,9 +1243,7 @@ Raster Effects	Efeitos raster
 Raster Functions	Funções raster
 Raster Information	Informações do raster
 Raster Layer	Camada raster
-Raster tiles (XYZ)	Blocos raster (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} bandas · {renderer}
-Read and write files on this computer	Ler e gravar arquivos neste computador
 Read the map's layers and features	Ler as camadas e feições do mapa
 Reads and writes files	Lê e grava arquivos
 Reads the map	Lê o mapa
@@ -1423,17 +1421,17 @@ See the tools you've run.	Ver as ferramentas que você executou.
 Select	Selecionar
 Select (click)	Selecionar (clique)
 Select (rectangle)	Selecionar (retângulo)
-Select a feature layer in the Contents pane	Selecione uma camada de feições no painel Conteúdo
-Select a layer in the Contents pane	Selecione uma camada no painel Conteúdo
-select a layer in the Contents pane first	primeiro selecione uma camada no painel Conteúdo
-Select a layer in the Contents pane.	Selecione uma camada no painel Conteúdo.
+Select a feature layer in the Layers pane	Selecione uma camada de feições no painel Camadas
+Select a layer in Layers to style it.	Selecione uma camada em Camadas para estilizá-la.
+Select a layer in the Layers pane	Selecione uma camada no painel Camadas
+select a layer in the Layers pane first	primeiro selecione uma camada no painel Camadas
+Select a layer in the Layers pane.	Selecione uma camada no painel Camadas.
 Select All	Selecionar tudo
 Select By\nAttributes	Selecionar por\natributos
 Select By\nLocation	Selecionar por\nlocalização
 Select By Attributes	Selecionar por atributos
 Select every feature.	Selecionar todas as feições.
 Select features by their spatial relationship.	Selecionar feições por sua relação espacial.
-Select features on the map.	Selecionar feições no mapa.
 Select features that intersect another layer.	Selecionar feições que intersectam outra camada.
 Select features with a SQL expression.	Selecionar feições com uma expressão SQL.
 Select Layer	Selecionar camada
@@ -1448,7 +1446,7 @@ Selectable	Selecionável
 Selectable Layers	Camadas selecionáveis
 Selected	Selecionado
 Selected Features: {n}	Feições selecionadas: {n}
-Selected in Contents	Selecionadas em Conteúdo
+Selected in Layers	Selecionadas em Camadas
 Selected only	Somente selecionadas
 Selected records only	Somente registros selecionados
 Selecting Features	Seleção de feições
@@ -1473,6 +1471,7 @@ Shade walls by the way they face the light.	Sombrear as paredes conforme sua ori
 Shaded	Sombreado
 Shaded Relief	Relevo sombreado
 Shape	Forma
+Shapefile	Shapefile
 Share	Compartilhar
 Share As	Compartilhar como
 Share every layer and table as OGC API Features collections.	Compartilhar todas as camadas e tabelas como coleções OGC API Features.
@@ -1483,7 +1482,6 @@ Share the map's relationships as a link chart page.	Compartilhar os relacionamen
 Share the selected layer as an OGC API Features collection with its style.	Compartilhar a camada selecionada como uma coleção OGC API Features com seu estilo.
 Share the selected layer's names as a place-search locator.	Compartilhar os nomes da camada selecionada como um localizador de pesquisa de locais.
 Share the selected layer's symbology as a MapLibre style.	Compartilhar a simbologia da camada selecionada como um estilo MapLibre.
-Share › Output	Compartilhar › Saída
 Shared Items	Itens compartilhados
 Shares made, with Manage tools to update them.	Compartilhamentos feitos, com ferramentas Gerenciar para atualizá-los.
 Shift+	Shift+
@@ -1492,16 +1490,16 @@ Shortcuts	Atalhos
 Shortest route over a line network	Rota mais curta em uma rede de linhas
 Show	Mostrar
 Show a second map beside this one.	Mostrar um segundo mapa ao lado deste.
-Show details when hovering items in the Catalog view.	Mostrar detalhes ao passar o mouse sobre itens na visualização do Catálogo.
+Show details when hovering items in the Browser view.	Mostrar detalhes ao passar o mouse sobre itens na visualização do Navegador.
 Show different features at different scales.	Mostrar feições diferentes em escalas diferentes.
 Show latitude/longitude lines on the basemap.	Mostrar linhas de latitude/longitude no mapa base.
 Show Map	Mostrar mapa
 Show or hide	Mostrar ou ocultar
 Show or hide the AI Assistant.	Mostrar ou ocultar o Assistente de IA.
-Show or hide the Catalog pane.	Mostrar ou ocultar o painel Catálogo.
-Show or hide the Contents pane.	Mostrar ou ocultar o painel Conteúdo.
-Show or hide the Geoprocessing pane.	Mostrar ou ocultar o painel Geoprocessamento.
+Show or hide the Browser pane.	Mostrar ou ocultar o painel Navegador.
 Show or hide the layer.	Mostrar ou ocultar a camada.
+Show or hide the Layers pane.	Mostrar ou ocultar o painel Camadas.
+Show or hide the Tools pane.	Mostrar ou ocultar o painel Ferramentas.
 Show the labels that don't fit, in red.	Mostrar em vermelho os rótulos que não cabem.
 Show the layer only inside another layer's polygons.	Mostrar a camada somente dentro dos polígonos de outra camada.
 Show the layer only left of a divider, to compare it with what's beneath.	Mostrar a camada somente à esquerda de um divisor, para compará-la com o que está abaixo.
@@ -1554,7 +1552,6 @@ Step {n} done	Etapa {n} concluída
 Stop	Parar
 Stop drawing labels, for faster navigation.	Parar de desenhar rótulos para navegar mais rápido.
 Stop filling the cache.	Parar de preencher o cache.
-Stopped.	Interrompido.
 Stretch	Realce
 Stretch\nType	Tipo de\nrealce
 Stretch it over the map view, or give control points (one per line: column row lon lat).	Esticá-lo sobre a visualização do mapa ou informar pontos de controle (um por linha: column row lon lat).
@@ -1562,6 +1559,7 @@ Stretch Type	Tipo de realce
 Stretch type	Tipo de realce
 Style	Estilo
 Style Items	Itens de estilo
+Style › Drawing	Estilo › Desenho
 Styles	Estilos
 Subreport	Sub-relatório
 Subreport: {name}	Sub-relatório: {name}
@@ -1609,14 +1607,13 @@ the capture failed unexpectedly	a captura falhou inesperadamente
 the Help tab always shows	a guia Ajuda é sempre mostrada
 The job covers the map view	O trabalho abrange a visualização do mapa
 The key is kept for this session only.	A chave é mantida apenas durante esta sessão.
+The layer's file couldn't be read: {error}	Não foi possível ler o arquivo da camada: {error}
 the layout export failed unexpectedly	a exportação do layout falhou inesperadamente
 The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	A lista de plugins para explorar. Deixe vazio para usar o registro de plugins do RustGIS.
 the map has no layers	o mapa não tem camadas
 The map is drawn in this coordinate system; layers are projected on the fly.	O mapa é desenhado neste sistema de coordenadas; as camadas são projetadas em tempo real.
 The map view as it is now	A visualização do mapa como está agora
 The model answering; click to change it	O modelo que responde; clique para alterá-lo
-the model declined this request	o modelo recusou esta solicitação
-The model sent an empty reply; ask again, or try another model.	O modelo enviou uma resposta vazia; pergunte novamente ou tente outro modelo.
 the page is too large to draw	a página é grande demais para ser desenhada
 the presentation export failed unexpectedly	a exportação da apresentação falhou inesperadamente
 the preview failed unexpectedly	a visualização prévia falhou inesperadamente
@@ -1626,8 +1623,9 @@ The project's thumbnail, from the map view.	A miniatura do projeto, a partir da 
 The projection the map opens in.	A projeção em que o mapa abre.
 The raster's data couldn't be read.	Não foi possível ler os dados do raster.
 The raster's data couldn't be read: {path}	Não foi possível ler os dados do raster: {path}
-the reply reached its length limit	a resposta atingiu seu limite de tamanho
 the report export failed unexpectedly	a exportação do relatório falhou inesperadamente
+The Shapefile's files download as one zip.	Os arquivos do Shapefile são baixados como um único zip.
+the view has no extent	a visualização não tem extensão
 Thermal	Térmica
 Thinking…	Pensando…
 this build can't download plugins	esta versão não pode baixar plugins
@@ -1649,6 +1647,8 @@ Tool Gallery	Galeria de ferramentas
 Toolbox	Caixa de ferramentas
 Toolboxes	Caixas de ferramentas
 Tools	Ferramentas
+Tools\nPane	Painel\nFerramentas
+Tools Pane	Painel Ferramentas
 Tools that analyse features.	Ferramentas que analisam feições.
 Tools that analyse rasters.	Ferramentas que analisam rasters.
 Tools you run appear here.	As ferramentas que você executar aparecem aqui.
@@ -1698,7 +1698,6 @@ Valid expression · {n} matching rows	Expressão válida · {n} linhas correspon
 Validate	Validar
 value (empty: no-data)	valor (vazio: sem dados)
 Vector and raster data	Dados vetoriais e raster
-Vector tiles (MVT)	Blocos vetoriais (MVT)
 Version {version}	Versão {version}
 Vertex	Vértice
 Video	Vídeo
@@ -1709,6 +1708,7 @@ Video…	Vídeo…
 View	Exibir
 View Clipping	Recorte da visualização
 View Effects	Efeitos de visualização
+View Extent	Extensão da visualização
 View Unplaced	Ver não posicionados
 View › Windows	Exibir › Janelas
 Viewshed from a point	Bacia visual a partir de um ponto
@@ -1780,6 +1780,7 @@ z (m)	z (m)
 Z factor	Fator Z
 Zoom	Zoom
 Zoom about the pointer	Zoom em torno do ponteiro
+Zoom Box	Zoom por retângulo
 Zoom Frame	Quadro de zoom
 Zoom In	Aproximar
 Zoom in	Aproximar
@@ -1792,6 +1793,7 @@ Zoom out from the centre of the map.	Afastar a partir do centro do mapa.
 Zoom To	Zoom para
 Zoom To\nLayer	Zoom para\na camada
 Zoom to a box (Explore)	Zoom para um retângulo (Explorar)
+Zoom To Extent	Zoom para a extensão
 Zoom To Layer	Zoom para a camada
 Zoom To Map View	Zoom para a visualização do mapa
 Zoom To Selection	Zoom para a seleção
@@ -1800,25 +1802,8 @@ Zoom to the error	Zoom para o erro
 Zoom to the extent of all layers.	Zoom para a extensão de todas as camadas.
 Zoom to the layer's extent.	Zoom para a extensão da camada.
 Zoom to the selected features.	Zoom para as feições selecionadas.
-Zoom to the selection.	Zoom para a seleção.
 Zoom to the whole world.	Zoom para o mundo inteiro.
 Zoom to Tokyo	Aproximar de Tóquio
 Zoom To World	Zoom para o mundo
-{id} changed since it was installed; install it again from the Plugin Manager.	{id} mudou desde que foi instalado; instale-o novamente pelo Gerenciador de plugins.
-{name} was withdrawn from the plugin registry and has been turned off.	{name} foi retirado do registro de plugins e foi desativado.
-{name} was withdrawn from the plugin registry: {reason}	{name} foi retirado do registro de plugins: {reason}
-{name}: the download doesn't match the registry; it wasn't installed.	{name}: o download não corresponde ao registro; não foi instalado.
-{name}: the download is a different plugin; it wasn't installed.	{name}: o download é um plugin diferente; não foi instalado.
-{shown} of {total} plugins	{shown} de {total} plugins
-{total} plugins	{total} plugins
-{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: só são permitidos endereços HTTPS, ou HTTP simples neste computador ou nesta rede
 © OpenStreetMap contributors	© Colaboradores do OpenStreetMap
 ⌘K	⌘K
-The layer's file couldn't be read: {error}	Não foi possível ler o arquivo da camada: {error}
-{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, lido no local · uma amostra de {n} das {matched} feições na vista (aproxime para ver todas) · {renderer}
-{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, lido no local · {n} de {total} feições na vista · {renderer}
-Load All Features	Carregar todas as feições
-GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV ou FlatGeobuf
-A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	O endereço de um serviço de blocos: blocos raster com {z}/{x}/{y} (ou {-y}, {q}, {bbox-epsg-3857} para WMS), blocos vetoriais (.pbf) ou TileJSON, ou um estilo MapLibre; ou um arquivo PMTiles (um endereço web ou um arquivo neste computador).
-PMTiles File…	Arquivo PMTiles…
-PMTiles archive	Arquivo PMTiles

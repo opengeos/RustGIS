@@ -2,7 +2,7 @@
 
 ## Symbology
 
-![The Feature Layer tab and the Symbology pane with graduated colours; the larger African countries are selected on the map and in the attribute table](https://assets.rustgis.app/images/symbology-table.webp)
+![The Style tab and the Symbology pane with graduated colours; the larger African countries are selected on the map and in the attribute table](https://assets.rustgis.app/images/symbology-table.webp)
 
 Select a layer in Layers and open **Style › Symbology** (or the Symbology pane):
 

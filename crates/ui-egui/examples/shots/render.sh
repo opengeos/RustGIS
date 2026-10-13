@@ -11,7 +11,8 @@ dir=crates/ui-egui/examples/shots
 out=target/shots
 mkdir -p "$out"
 [ -f "$out/dem.tif" ] || curl -fsSL -o "$out/dem.tif" https://github.com/giswqs/data/raw/main/raster/srtm90.tif
-cargo build --release -p rustgis-ui-egui --example ui_shot -p rustgis-cli
+cargo build --release -p rustgis-ui-egui --example ui_shot
+cargo build --release -p rustgis-cli
 # Start clean, so a shot that fails to render can't pass off an older capture as new.
 rm -f "$out"/*.png "$out"/*.webp
 # Each script saves target/shots/<its name>.png.

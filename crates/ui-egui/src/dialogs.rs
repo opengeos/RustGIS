@@ -44,7 +44,7 @@ impl Dialogs {
             return Err("select a layer in the Layers pane first".into());
         }
         if name == "exportLayer" && active.is_some_and(|l| l.is_raster()) {
-            return Err("Export Features needs a vector layer (Raster Data › Export writes a raster)".into());
+            return Err("Export Features needs a vector layer (Data › Export Raster writes a raster)".into());
         }
         if name == "selectByAttributes" && s.map().layers.is_empty() {
             return Err("the map has no layers".into());

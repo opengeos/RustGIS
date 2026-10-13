@@ -21,7 +21,7 @@ gdp_md IS NULL
 
 ## Geoprocessing tools
 
-![The Analysis tab's tool gallery and the Tools pane with Buffer open; 300 km dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)
+![The Analyze tab's tool gallery and the Tools pane with Buffer open; 300 km dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)
 
 Open a tool from the **Analyze** tab's gallery, **Analyze › Tools** (the Tools pane,
 which searches every tool) or Command Search. Fill in its parameters and click **Run**: the

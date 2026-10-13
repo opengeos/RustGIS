@@ -17,7 +17,7 @@ A notebook of text and command cells.	Блокнот из текстовых и 
 A projected coordinate system.	Система координат проекции.
 A report listing the selected layer's records, page after page.	Отчёт со списком записей выбранного слоя, страница за страницей.
 A template with the first selected feature's values	Шаблон со значениями первого выбранного объекта
-A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, or a MapLibre style.	Адрес сервиса тайлов: растровые тайлы с {z}/{x}/{y} (или {-y}, {q}, {bbox-epsg-3857} для WMS), векторные тайлы (.pbf) или TileJSON, либо стиль MapLibre.
+A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	Адрес сервиса тайлов: растровые тайлы с {z}/{x}/{y} (или {-y}, {q}, {bbox-epsg-3857} для WMS), векторные тайлы (.pbf) или TileJSON, либо стиль MapLibre; или архив PMTiles (веб-адрес или файл на этом компьютере).
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Значение, поле или два из них, соединённые знаком + − × ÷. Применяется к выбранным строкам или ко всем строкам, если ничего не выбрано.
 About	О программе
 About plugins	О модулях
@@ -30,10 +30,8 @@ Accessibility	Специальные возможности
 Activate Map	Активировать карту
 Add	Добавить
 Add\nData	Добавить\nданные
-Add\nField	Добавить\nполе
 Add ({n})	Добавить ({n})
 Add a bar chart of a layer's numeric field.	Добавить столбчатую диаграмму числового поля слоя.
-Add a field to the selected layer.	Добавить поле в выбранный слой.
 Add a field.	Добавить поле.
 Add a legend of the map frame's layers.	Добавить легенду слоёв фрейма карты.
 Add a map frame showing a map of the project.	Добавить фрейм карты, показывающий карту проекта.
@@ -46,7 +44,7 @@ Add a PNG or JPEG picture to the page.	Добавить на страницу и
 Add a presentation file.	Добавить файл презентации.
 Add a report file, or a report template for the selected layer.	Добавить файл отчёта или шаблон отчёта для выбранного слоя.
 Add a scale bar for the map frame.	Добавить масштабную линейку для фрейма карты.
-add a second map first (Insert › New Map)	сначала добавьте вторую карту (Вставка › Новая карта)
+add a second map first (Data › New Map)	сначала добавьте вторую карту (Данные › Новая карта)
 Add a second map frame first	Сначала добавьте второй фрейм карты
 Add a text element.	Добавить текстовый элемент.
 Add an elevation raster first.	Сначала добавьте растр высот.
@@ -115,7 +113,8 @@ Allow this action?	Разрешить это действие?
 Along Selected Line	Вдоль выбранной линии
 Altitude	Высота
 Analysis	Анализ
-Analysis › AI	Анализ › ИИ
+Analyze	Анализ
+Analyze › AI	Анализ › ИИ
 AND	AND
 Angle	Угол
 Animation	Анимация
@@ -193,6 +192,9 @@ Browse the geoprocessing toolbox.	Просмотр набора инструме
 Browse the project's maps, tables and folders.	Просмотр карт, таблиц и папок проекта.
 Browse this folder below	Просматривать эту папку ниже
 Browse, install, update and remove plugins.	Просмотр, установка, обновление и удаление модулей.
+Browser	Браузер
+Browser\nPane	Панель\nбраузера
+Browser View	Вид браузера
 Buffer	Буфер
 Buffer the cities by 200 km	Построить буфер 200 км вокруг городов
 Build	Построить
@@ -207,7 +209,6 @@ By\nLocation	По\nрасположению
 by {author}	автор: {author}
 By {field}	По {field}
 Calculate	Вычислить
-Calculate\nField	Вычислить\nполе
 Calculate\nGeometry	Вычислить\nгеометрию
 Calculate Field	Вычислить поле
 Calculate field	Вычислить поле
@@ -225,9 +226,6 @@ CARGO_PKG_VERSION	CARGO_PKG_VERSION
 Cartography	Картография
 Case Field	Поле группировки
 Cast Shadow	Отбрасывать тени
-Catalog	Каталог
-Catalog\nPane	Панель\nкаталога
-Catalog View	Вид каталога
 Cell size	Размер ячейки
 cell size °	размер ячейки °
 Centered	По центру
@@ -238,13 +236,11 @@ Change Detection	Обнаружение изменений
 Change the map's backdrop.	Изменить фон карты.
 Change the map's coordinate system	Изменить систему координат карты
 Change the page size and orientation.	Изменить размер и ориентацию страницы.
-Change the project (add layers, edit features, change symbology)	Изменять проект (добавлять слои, редактировать объекты, менять символы)
 Chart categories	Категории диаграммы
 Chart Frame	Фрейм диаграммы
 China	Китай
 Choose a band combination to display the raster layer.	Выберите комбинацию каналов для отображения растрового слоя.
 Choose a contrast stretch for the raster layer.	Выберите растяжку контраста для растрового слоя.
-Choose a model.	Выберите модель.
 Choose a resampling type for the raster layer.	Выберите тип передискретизации для растрового слоя.
 Choose extra buttons for the Quick Access Toolbar.	Выбрать дополнительные кнопки для панели быстрого доступа.
 Choose how the flat map lays out the Earth.	Выбрать, как плоская карта отображает Землю.
@@ -325,18 +321,16 @@ Command\nSearch	Поиск\nкоманд
 command is required	требуется command
 Command Search	Поиск команд
 Commands	Команды
-Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}	Команды на вкладке «Модули»: {commands} · Инструменты на панели геообработки: {tools}
+Commands on the Plugins tab: {commands} · Tools in the Tools pane: {tools}	Команды на вкладке «Модули»: {commands} · Инструменты на панели «Инструменты»: {tools}
 Commands…	Команды…
 Compare	Сравнить
 Compare two rasters	Сравнить два растра
 Completed	Выполнено
-Compute a field's values.	Вычислить значения поля.
-Connect a folder to the Catalog.	Подключить папку к каталогу.
+Connect a folder to the Browser.	Подключить папку к браузеру.
 Connections	Подключения
 Constant	Константа
 Constant height	Постоянная высота
 Constant…	Константа…
-Contents	Содержание
 Contingent Values	Условные значения
 Contrast	Контраст
 Conversion	Преобразование
@@ -384,6 +378,7 @@ Creates a point inside each input feature.	Создаёт точку внутр�
 Creates polygons around input features at a given distance.	Создаёт полигоны вокруг входных объектов на заданном расстоянии.
 Cross Section	Поперечный разрез
 Cross Section (2 clicks)	Поперечный разрез (2 щелчка)
+CSV	CSV
 Ctrl+	Ctrl+
 Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
 Ctrl+F1	Ctrl+F1
@@ -459,6 +454,7 @@ Done	Готово
 Double	Вещественное
 Double-click	Двойной щелчок
 Double-click to add	Двойной щелчок — добавить
+Download	Скачать
 Download\nMap	Скачать\nкарту
 Download Map	Скачать карту
 Download the GeoLibre runner	Скачать модуль запуска GeoLibre
@@ -510,7 +506,6 @@ Edges	Края
 Edit	Правка
 Edit and run the notebook.	Редактировать и запускать блокнот.
 Edit Attribute	Изменить атрибут
-Edit attributes in the table.	Редактировать атрибуты в таблице.
 Edit Cell	Изменить ячейку
 Edit Status	Состояние правок
 Edit Vertices	Изменить вершины
@@ -538,11 +533,10 @@ Enabled	Включён
 Encloses each feature, or all features, in its convex hull.	Заключает каждый объект или все объекты в выпуклую оболочку.
 End	Конец
 Enhancement	Улучшение
-Enter an API key.	Введите ключ API.
-Enter the provider's address.	Введите адрес поставщика.
 Enter to send, Shift+Enter for a new line	Enter — отправить, Shift+Enter — новая строка
 Environments	Среды
 EPSG code	Код EPSG
+EPSG:	EPSG:
 Equal Earth	Equal Earth
 Equal Interval	Равные интервалы
 Equirectangular (Plate Carrée)	Равнопромежуточная (Plate Carrée)
@@ -571,6 +565,7 @@ Export\nRaster	Экспорт\nрастра
 Export Animation	Экспорт анимации
 Export Features	Экспорт объектов
 Export Features (tool)	Экспорт объектов (инструмент)
+Export Features needs a vector layer (Data › Export Raster writes a raster)	Для экспорта объектов нужен векторный слой (Данные › Экспорт растра записывает растр)
 Export Features…	Экспорт объектов…
 Export Layout	Экспорт макета
 Export Map	Экспорт карты
@@ -601,6 +596,7 @@ Export…	Экспорт…
 Expression	Выражение
 Extent	Охват
 Extent Indicator	Индикатор экстента
+extent is [minLon, minLat, maxLon, maxLat], "view" or null	экстент должен быть [minLon, minLat, maxLon, maxLat], "view" или null
 Extent: {extent}	Экстент: {extent}
 Extract	Извлечение
 Extracts the parts of input features that fall inside clip polygons.	Извлекает части входных объектов, попадающие внутрь обрезающих полигонов.
@@ -617,7 +613,6 @@ Feature\nAnalysis	Анализ\nобъектов
 Feature\nTo Point	Объект\nв точку
 Feature Cache	Кэш объектов
 Feature Layer	Векторный слой
-Feature Layer › Drawing	Векторный слой › Отображение
 Feature Templates	Шаблоны объектов
 Feature templates: default values for new features.	Шаблоны объектов: значения по умолчанию для новых объектов.
 Feature To Point	Объект в точку
@@ -653,6 +648,7 @@ First-Person Navigation	Навигация от первого лица
 Fit To Map View	Подогнать к виду карты
 Fixed Zoom In	Фиксированное приближение
 Fixed Zoom Out	Фиксированное отдаление
+FlatGeobuf	FlatGeobuf
 Flip Line	Развернуть линию
 Fog	Туман
 Folder	Папка
@@ -660,6 +656,7 @@ Folder Connections	Подключения к папкам
 folder connections need the desktop app	для подключения к папкам нужно настольное приложение
 Folders	Папки
 Forest	Лес
+Format	Формат
 Frame rate	Частота кадров
 Frame rate, draw time, data size and memory.	Частота кадров, время отрисовки, объём данных и память.
 Free the prepared geometry.	Освободить подготовленную геометрию.
@@ -673,16 +670,16 @@ Full size	Полный размер
 Function Editor	Редактор функций
 Gamma	Гамма
 Generalization	Генерализация
-Geo-\nprocessing	Гео-\nобработка
 Geodata Service	Сервис геоданных
-GeoJSON or CSV	GeoJSON или CSV
+GeoJSON	GeoJSON
 GeoLibre	GeoLibre
 GeoLibre Tools	Инструменты GeoLibre
 GeoLibre tools	Инструменты GeoLibre
 Geometry	Геометрия
+GeoPackage	GeoPackage
+GeoParquet	GeoParquet
 Geoprocessing	Геообработка
 Geoprocessing history.	История геообработки.
-Geoprocessing Pane	Панель геообработки
 Georeference	Привязка
 Geostatistical Wizard	Мастер геостатистики
 GeoTIFF	GeoTIFF
@@ -697,7 +694,7 @@ Go forward to the next extent.	Перейти к следующему эксте
 Go to a saved extent or save the current one.	Перейти к сохранённому экстенту или сохранить текущий.
 Go To Bookmark	Перейти к закладке
 Go To XY	Перейти к XY
-Google Gemini	Google Gemini
+GPX	GPX
 Graduated Colors	Градуированные цвета
 Graphic Style	Стиль графики
 Graphics	Графика
@@ -732,15 +729,19 @@ Histogram Equalize	Выравнивание гистограммы
 Histograms and correlations	Гистограммы и корреляции
 History	История
 Hold	Приостановить
-Home	Home
+Home	Главная
+Home › Add	Главная › Добавить
 Homepage	Домашняя страница
 Hosted Imagery	Размещённые изображения
 How the layer's colours combine with what's beneath.	Как цвета слоя смешиваются с нижележащими.
 Identify	Идентифицировать
 Illumination	Освещение
+Image Analysis	Анализ изображений
 Image Classification	Классификация изображений
 Image Page	Страница изображения
 Imagery	Изображения
+Imagery Sharing	Публикация изображений
+Imagery Tools	Инструменты изображений
 Image…	Изображение…
 Import	Импорт
 Import\nProject	Импорт\nпроекта
@@ -769,8 +770,8 @@ Input Polygons	Входные полигоны
 Input Rows	Входные строки
 Input Summary Features	Входные объекты сводки
 Input Table	Входная таблица
-Inquiry	Запрос
 Insert	Вставка
+Inspect	Изучение
 Install	Установить
 Install a plugin	Установка модуля
 Install a plugin from a .rgplugin file.	Установить модуль из файла .rgplugin.
@@ -784,7 +785,7 @@ Install Plugin From Registry	Установить модуль из катало
 Install {name} {version}?	Установить {name} {version}?
 Installed	Установлен
 Installed plugins are kept in {folder}	Установленные модули хранятся в {folder}
-Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.	Установлен модуль {name} {version}. Он находится на вкладке «Модули»; его инструменты также есть на панели геообработки.
+Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	Установлен модуль {name} {version}. Он находится на вкладке «Модули»; его инструменты также есть на панели «Инструменты».
 Interface font: {font}	Шрифт интерфейса: {font}
 Interpolate a surface from points (IDW)	Интерполировать поверхность по точкам (IDW)
 Invalid: {error}	Недопустимо: {error}
@@ -792,11 +793,6 @@ Invert	Инвертировать
 Invert color scheme	Инвертировать цветовую схему
 Invert the selection.	Инвертировать выборку.
 IS NULL	IS NULL
-it connects to an address on the internet	подключается к адресу в интернете
-it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	доступно только вам (модули, скрипты, задачи, модели и средство запуска GeoLibre)
-it reads or writes files on this computer	читает или записывает файлы на этом компьютере
-it replaces the open project	заменяет открытый проект
-it runs a plugin's command	запускает команду модуля
 It runs in a sandbox with no other access to your computer or the network.	Он работает в песочнице без какого-либо другого доступа к вашему компьютеру или сети.
 It's too large to keep in the browser: install it again on your next visit.	Модуль слишком велик для хранения в браузере: установите его заново при следующем посещении.
 Item Pop-ups	Всплывающие окна элементов
@@ -812,14 +808,18 @@ Keyboard Shortcuts	Сочетания клавиш
 Keyboard shortcuts.	Сочетания клавиш.
 Kilometers	Километры
 kind is required	требуется kind
+KML	KML
+KMZ	KMZ
 Label	Подпись
 Label Class	Класс подписей
 Label Distance Range	Диапазон расстояний подписей
 Label Field	Поле подписей
 Label Placement	Размещение подписей
+Label Range	Диапазон подписей
 Label the cities with their names	Подписать города их названиями
 Label Visibility Range	Диапазон видимости подписей
 Labeling	Подписи
+Labels	Подписи
 Lagoon	Лагуна
 Lambert Cylindrical Equal Area	Равновеликая цилиндрическая Ламберта
 Landscape	Альбомная
@@ -870,9 +870,11 @@ Link	Связать
 Link Cursors	Связать курсоры
 Link Views	Связать виды
 List Commands	Список команд
+List Layers in File	Список слоёв в файле
 List the provider's models	Показать модели поставщика
 Lit	Освещено
 Live summary of the features in view.	Живая сводка объектов в пределах вида.
+Load All Features	Загрузить все объекты
 Load an unpacked plugin from its folder while you develop it.	Загрузить нераспакованный модуль из его папки во время разработки.
 Load GeoLibre tools	Загрузить инструменты GeoLibre
 Loaded {name} from its folder.	Модуль {name} загружен из своей папки.
@@ -911,11 +913,9 @@ Map scale	Масштаб карты
 Map Series	Серия карт
 Map Series Page	Страница серии карт
 Map series page name	Имя страницы серии карт
-Map style (JSON)	Стиль карты (JSON)
 Map Surrounds	Элементы оформления карты
 Map Thumbnail	Эскиз карты
 Map View	Вид карты
-Map › Layer	Карта › Слой
 map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}	map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}
 Mapping	Картографирование
 Maps	Карты
@@ -952,7 +952,6 @@ Mobile Map	Мобильная карта
 Mod+	Mod+
 Model	Модель
 Model\nBuilder	Конструктор\nмоделей
-model id	идентификатор модели
 ModelBuilder	ModelBuilder
 Models	Модели
 Modify	Изменение
@@ -1026,19 +1025,19 @@ No	Нет
 No bookmarks yet	Закладок пока нет
 No edits since the project was saved	Нет правок после сохранения проекта
 No mask	Без маски
-No notebooks yet. Insert › New Notebook starts one, or Add and Open Notebook opens one.	Блокнотов пока нет. Вставка › Новый блокнот создаёт блокнот, а «Добавить и открыть блокнот» открывает существующий.
+No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Блокнотов пока нет. Анализ › Новый блокнот создаёт блокнот, а «Добавить и открыть блокнот» открывает существующий.
 No offline areas	Нет автономных областей
 No other reports	Других отчётов нет
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Модули не установлены. Просмотрите каталог модулей или установите файл .rgplugin.
 No plugins match.	Подходящих модулей нет.
 No Pop-ups	Без всплывающих окон
-No presentations yet. Insert › New Presentation starts one.	Презентаций пока нет. Вставка › Новая презентация создаёт презентацию.
+No presentations yet. Publish › New Presentation starts one.	Презентаций пока нет. Публикация › Новая презентация создаёт презентацию.
 No relationships (Data Design › Relationships)	Нет отношений (Структура данных › Отношения)
 No relationships yet	Отношений пока нет
-No reports yet. Insert › New Report lists the selected layer's records.	Отчётов пока нет. Вставка › Новый отчёт выводит записи выбранного слоя.
+No reports yet. Publish › New Report lists the selected layer's records.	Отчётов пока нет. Публикация › Новый отчёт выводит записи выбранного слоя.
 No standalone tables	Нет отдельных таблиц
 No styles yet	Стилей пока нет
-No tasks yet. Insert › Task makes one, for example from your geoprocessing history.	Задач пока нет. Вставка › Задача создаёт задачу, например из истории геообработки.
+No tasks yet. Data › Task makes one, for example from your geoprocessing history.	Задач пока нет. Данные › Задача создаёт задачу, например из истории геообработки.
 NoData	NoData
 None	Нет
 None. Add one by address, or from a basemap plugin.	Нет. Добавьте слой по адресу или из плагина базовых карт.
@@ -1050,7 +1049,7 @@ not needed	не требуется
 Not saved yet	Ещё не сохранено
 Notebook	Блокнот
 Notebook Pane	Панель блокнота
-Nothing shared yet. Share › Share As makes web maps, layers, styles, scenes and more.	Пока ничего не опубликовано. Поделиться › Поделиться как создаёт веб-карты, слои, стили, сцены и другое.
+Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Пока ничего не опубликовано. Публикация › Поделиться как создаёт веб-карты, слои, стили, сцены и другое.
 Now	Сейчас
 Nulls	Пустые значения
 Observations (observer, date, species, count)	Наблюдения (наблюдатель, дата, вид, количество)
@@ -1060,7 +1059,6 @@ Off	Выкл.
 Offline	Автономно
 Offline area	Автономная область
 OID	OID
-Ollama (local)	Ollama (локально)
 On	Вкл.
 On Hold	Приостановлено
 on hold	приостановлено
@@ -1096,7 +1094,6 @@ Open the selected layer's table.	Открыть таблицу выбранно�
 Open the Symbology pane.	Открыть панель «Символы».
 Open {code} on epsg.io	Открыть {code} на epsg.io
 Open, save and create projects	Открытие, сохранение и создание проектов
-OpenAI-compatible	Совместимый с OpenAI
 Opened {name} for printing	{name} открыт для печати
 Open…	Открыть…
 Options	Параметры
@@ -1113,7 +1110,6 @@ Output Name	Имя результата
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Более 1000 инструментов для растров, векторов, LiDAR, гидрологии и рельефа, работающих в браузере, после однократной загрузки около 25 МБ.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Более 1000 инструментов для растров, векторов, LiDAR, гидрологии и рельефа в необязательной загрузке размером около 20 МБ.
 Overlay	Наложение
-overlay	наложение
 Overlay (a transparent layer kept on top, such as labels or roads)	Наложение (прозрачный слой поверх остальных, например подписи или дороги)
 Package	Пакет
 Package a trained deep learning model.	Упаковать обученную модель глубокого обучения.
@@ -1133,6 +1129,7 @@ Page title	Заголовок страницы
 Page {n} of {total}	Страница {n} из {total}
 Page {n} of {total}: {name}	Страница {n} из {total}: {name}
 Pages of maps, text, images and videos, shown one after another.	Страницы с картами, текстом, изображениями и видео, показываемые одна за другой.
+Pan	Панорамирование
 Pan (Explore) · any tool	Панорамирование (обзор) · любой инструмент
 Pan to a longitude/latitude.	Переместиться к долготе/широте.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Панорамируйте мышью, масштабируйте колесом и щёлкайте по объектам, чтобы увидеть их атрибуты.
@@ -1170,6 +1167,8 @@ Plugin registry	Каталог модулей
 Plugins	Модули
 Plugins are .rgplugin files. Install only plugins from people you trust.	Модули — это файлы .rgplugin. Устанавливайте модули только от тех, кому доверяете.
 Plugins run in a sandbox: they can't reach your files or the network, and they change the project only through RustGIS's own commands, within the permissions you accept.	Модули работают в песочнице: у них нет доступа к вашим файлам и сети, и они изменяют проект только через собственные команды RustGIS в рамках разрешений, которые вы приняли.
+PMTiles archive	Архив PMTiles
+PMTiles File…	Файл PMTiles…
 PNG frames (zip)	Кадры PNG (zip)
 PNG image	Изображение PNG
 Point	Точка
@@ -1182,7 +1181,6 @@ Polygon (draw)	Полигон (рисование)
 Polygons	Полигоны
 Polyline	Полилиния
 Pop-up Mode	Режим всплывающих окон
-Pop-ups	Всплывающие окна
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Населённые пункты
 Portal	Портал
@@ -1225,6 +1223,8 @@ Projections	Проекции
 Proportional Symbols	Пропорциональные символы
 Provider	Поставщик
 Proximity	Близость
+Publish	Публикация
+Publish › Output	Публикация › Вывод
 Put the layer back as it was then	Вернуть слой в тогдашнее состояние
 Quantile	Квантили
 Quick\nAccess	Быстрый\nдоступ
@@ -1243,9 +1243,7 @@ Raster Effects	Эффекты растра
 Raster Functions	Растровые функции
 Raster Information	Сведения о растре
 Raster Layer	Растровый слой
-Raster tiles (XYZ)	Растровые тайлы (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Растр · {w} × {h} · каналов: {n} · {renderer}
-Read and write files on this computer	Читать и записывать файлы на этом компьютере
 Read the map's layers and features	Читать слои и объекты карты
 Reads and writes files	Читает и записывает файлы
 Reads the map	Читает карту
@@ -1423,17 +1421,17 @@ See the tools you've run.	Просмотр запущенных инструме
 Select	Выбрать
 Select (click)	Выбрать (щелчком)
 Select (rectangle)	Выбрать (прямоугольником)
-Select a feature layer in the Contents pane	Выберите векторный слой на панели «Содержание»
-Select a layer in the Contents pane	Выберите слой на панели «Содержание»
-select a layer in the Contents pane first	сначала выберите слой на панели «Содержание»
-Select a layer in the Contents pane.	Выберите слой на панели «Содержание».
+Select a feature layer in the Layers pane	Выберите векторный слой на панели «Слои»
+Select a layer in Layers to style it.	Выберите слой в «Слоях», чтобы настроить его стиль.
+Select a layer in the Layers pane	Выберите слой на панели «Слои»
+select a layer in the Layers pane first	сначала выберите слой на панели «Слои»
+Select a layer in the Layers pane.	Выберите слой на панели «Слои».
 Select All	Выбрать все
 Select By\nAttributes	Выбрать по\nатрибутам
 Select By\nLocation	Выбрать по\nрасположению
 Select By Attributes	Выбрать по атрибутам
 Select every feature.	Выбрать все объекты.
 Select features by their spatial relationship.	Выбрать объекты по их пространственному отношению.
-Select features on the map.	Выбрать объекты на карте.
 Select features that intersect another layer.	Выбрать объекты, пересекающие другой слой.
 Select features with a SQL expression.	Выбрать объекты с помощью выражения SQL.
 Select Layer	Выбрать слой
@@ -1448,7 +1446,7 @@ Selectable	Доступен для выбора
 Selectable Layers	Слои, доступные для выбора
 Selected	Выбрано
 Selected Features: {n}	Выбрано объектов: {n}
-Selected in Contents	Выбранные в содержании
+Selected in Layers	Выбранные в слоях
 Selected only	Только выбранные
 Selected records only	Только выбранные записи
 Selecting Features	Выбор объектов
@@ -1473,6 +1471,7 @@ Shade walls by the way they face the light.	Затенять стены в за�
 Shaded	Затенено
 Shaded Relief	Теневой рельеф
 Shape	Форма
+Shapefile	Shapefile
 Share	Поделиться
 Share As	Поделиться как
 Share every layer and table as OGC API Features collections.	Опубликовать все слои и таблицы как коллекции OGC API Features.
@@ -1483,7 +1482,6 @@ Share the map's relationships as a link chart page.	Опубликовать о�
 Share the selected layer as an OGC API Features collection with its style.	Опубликовать выбранный слой как коллекцию OGC API Features с его стилем.
 Share the selected layer's names as a place-search locator.	Опубликовать названия выбранного слоя как локатор для поиска мест.
 Share the selected layer's symbology as a MapLibre style.	Опубликовать символы выбранного слоя как стиль MapLibre.
-Share › Output	Поделиться › Вывод
 Shared Items	Опубликованные элементы
 Shares made, with Manage tools to update them.	Созданные публикации с инструментами управления для их обновления.
 Shift+	Shift+
@@ -1492,16 +1490,16 @@ Shortcuts	Сочетания клавиш
 Shortest route over a line network	Кратчайший маршрут по линейной сети
 Show	Показать
 Show a second map beside this one.	Показать вторую карту рядом с этой.
-Show details when hovering items in the Catalog view.	Показывать сведения при наведении на элементы в виде каталога.
+Show details when hovering items in the Browser view.	Показывать сведения при наведении на элементы в виде браузера.
 Show different features at different scales.	Показывать разные объекты при разных масштабах.
 Show latitude/longitude lines on the basemap.	Показывать линии широты и долготы на базовой карте.
 Show Map	Показать карту
 Show or hide	Показать или скрыть
 Show or hide the AI Assistant.	Показать или скрыть ИИ-помощника.
-Show or hide the Catalog pane.	Показать или скрыть панель «Каталог».
-Show or hide the Contents pane.	Показать или скрыть панель «Содержание».
-Show or hide the Geoprocessing pane.	Показать или скрыть панель «Геообработка».
+Show or hide the Browser pane.	Показать или скрыть панель «Браузер».
 Show or hide the layer.	Показать или скрыть слой.
+Show or hide the Layers pane.	Показать или скрыть панель «Слои».
+Show or hide the Tools pane.	Показать или скрыть панель «Инструменты».
 Show the labels that don't fit, in red.	Показывать неразмещённые подписи красным.
 Show the layer only inside another layer's polygons.	Показывать слой только внутри полигонов другого слоя.
 Show the layer only left of a divider, to compare it with what's beneath.	Показывать слой только слева от разделителя, чтобы сравнить его с нижележащим.
@@ -1554,7 +1552,6 @@ Step {n} done	Шаг {n} выполнен
 Stop	Остановить
 Stop drawing labels, for faster navigation.	Не отображать подписи для ускорения навигации.
 Stop filling the cache.	Прекратить заполнение кэша.
-Stopped.	Остановлено.
 Stretch	Растяжка
 Stretch\nType	Тип\nрастяжки
 Stretch it over the map view, or give control points (one per line: column row lon lat).	Растяните его по виду карты или задайте контрольные точки (по одной в строке: column row lon lat).
@@ -1562,6 +1559,7 @@ Stretch Type	Тип растяжки
 Stretch type	Тип растяжки
 Style	Стиль
 Style Items	Элементы стилей
+Style › Drawing	Стиль › Отображение
 Styles	Стили
 Subreport	Подотчёт
 Subreport: {name}	Подотчёт: {name}
@@ -1609,14 +1607,13 @@ the capture failed unexpectedly	снимок неожиданно заверши
 the Help tab always shows	вкладка «Справка» отображается всегда
 The job covers the map view	Задание охватывает вид карты
 The key is kept for this session only.	Ключ хранится только в течение этого сеанса.
+The layer's file couldn't be read: {error}	Не удалось прочитать файл слоя: {error}
 the layout export failed unexpectedly	экспорт макета неожиданно завершился ошибкой
 The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	Список модулей для просмотра. Оставьте пустым, чтобы использовать каталог модулей RustGIS.
 the map has no layers	на карте нет слоёв
 The map is drawn in this coordinate system; layers are projected on the fly.	Карта рисуется в этой системе координат; слои проецируются на лету.
 The map view as it is now	Вид карты в текущем состоянии
 The model answering; click to change it	Модель, которая отвечает; щёлкните, чтобы сменить
-the model declined this request	модель отклонила этот запрос
-The model sent an empty reply; ask again, or try another model.	Модель прислала пустой ответ; спросите ещё раз или попробуйте другую модель.
 the page is too large to draw	страница слишком велика для отрисовки
 the presentation export failed unexpectedly	экспорт презентации неожиданно завершился ошибкой
 the preview failed unexpectedly	предпросмотр неожиданно завершился ошибкой
@@ -1626,8 +1623,9 @@ The project's thumbnail, from the map view.	Эскиз проекта из ви�
 The projection the map opens in.	Проекция, в которой открывается карта.
 The raster's data couldn't be read.	Не удалось прочитать данные растра.
 The raster's data couldn't be read: {path}	Не удалось прочитать данные растра: {path}
-the reply reached its length limit	ответ достиг предельной длины
 the report export failed unexpectedly	экспорт отчёта неожиданно завершился ошибкой
+The Shapefile's files download as one zip.	Файлы Shapefile скачиваются одним zip-архивом.
+the view has no extent	у вида нет экстента
 Thermal	Тепловая
 Thinking…	Думает…
 this build can't download plugins	эта сборка не может загружать модули
@@ -1649,6 +1647,8 @@ Tool Gallery	Галерея инструментов
 Toolbox	Набор инструментов
 Toolboxes	Наборы инструментов
 Tools	Инструменты
+Tools\nPane	Панель\nинструментов
+Tools Pane	Панель инструментов
 Tools that analyse features.	Инструменты для анализа объектов.
 Tools that analyse rasters.	Инструменты для анализа растров.
 Tools you run appear here.	Здесь появятся запущенные инструменты.
@@ -1698,7 +1698,6 @@ Valid expression · {n} matching rows	Выражение допустимо · �
 Validate	Проверить
 value (empty: no-data)	значение (пусто: нет данных)
 Vector and raster data	Векторные и растровые данные
-Vector tiles (MVT)	Векторные тайлы (MVT)
 Version {version}	Версия {version}
 Vertex	Вершина
 Video	Видео
@@ -1709,6 +1708,7 @@ Video…	Видео…
 View	Вид
 View Clipping	Обрезка вида
 View Effects	Эффекты вида
+View Extent	Экстент вида
 View Unplaced	Показать неразмещённые
 View › Windows	Вид › Окна
 Viewshed from a point	Зона видимости из точки
@@ -1780,6 +1780,7 @@ z (m)	z (м)
 Z factor	Z-фактор
 Zoom	Масштаб
 Zoom about the pointer	Масштабирование относительно указателя
+Zoom Box	Приблизить рамкой
 Zoom Frame	Масштабировать фрейм
 Zoom In	Приблизить
 Zoom in	Приблизить
@@ -1792,6 +1793,7 @@ Zoom out from the centre of the map.	Отдалить от центра карт
 Zoom To	Приблизить к
 Zoom To\nLayer	Приблизить\nк слою
 Zoom to a box (Explore)	Приблизить к рамке (обзор)
+Zoom To Extent	Приблизить к экстенту
 Zoom To Layer	Приблизить к слою
 Zoom To Map View	Приблизить к виду карты
 Zoom To Selection	Приблизить к выборке
@@ -1800,25 +1802,8 @@ Zoom to the error	Приблизить к ошибке
 Zoom to the extent of all layers.	Приблизить к экстенту всех слоёв.
 Zoom to the layer's extent.	Приблизить к экстенту слоя.
 Zoom to the selected features.	Приблизить к выбранным объектам.
-Zoom to the selection.	Приблизить к выборке.
 Zoom to the whole world.	Показать весь мир.
 Zoom to Tokyo	Приблизить к Токио
 Zoom To World	Приблизить к миру
-{id} changed since it was installed; install it again from the Plugin Manager.	Модуль {id} изменился после установки; установите его заново через Менеджер модулей.
-{name} was withdrawn from the plugin registry and has been turned off.	Модуль {name} отозван из каталога модулей и отключён.
-{name} was withdrawn from the plugin registry: {reason}	Модуль {name} отозван из каталога модулей: {reason}
-{name}: the download doesn't match the registry; it wasn't installed.	{name}: загруженный файл не совпадает с данными каталога; модуль не установлен.
-{name}: the download is a different plugin; it wasn't installed.	{name}: загружен другой модуль; модуль не установлен.
-{shown} of {total} plugins	Модулей: {shown} из {total}
-{total} plugins	Модулей: {total}
-{url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: разрешены только адреса HTTPS или обычный HTTP на этом компьютере или в этой сети
 © OpenStreetMap contributors	© участники OpenStreetMap
 ⌘K	⌘K
-The layer's file couldn't be read: {error}	Не удалось прочитать файл слоя: {error}
-{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}	{type} · {format}, читается на месте · выборка из {n} из {matched} объектов в области просмотра (приблизьте, чтобы увидеть все) · {renderer}
-{type} · {format}, read in place · {n} of {total} features in view · {renderer}	{type} · {format}, читается на месте · {n} из {total} объектов в области просмотра · {renderer}
-Load All Features	Загрузить все объекты
-GeoJSON, CSV or FlatGeobuf	GeoJSON, CSV или FlatGeobuf
-A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).	Адрес сервиса тайлов: растровые тайлы с {z}/{x}/{y} (или {-y}, {q}, {bbox-epsg-3857} для WMS), векторные тайлы (.pbf) или TileJSON, либо стиль MapLibre; или архив PMTiles (веб-адрес или файл на этом компьютере).
-PMTiles File…	Файл PMTiles…
-PMTiles archive	Архив PMTiles
