@@ -598,9 +598,10 @@ pub fn read_csv_with(text: &str, name: &str, opts: &CsvOptions) -> Result<(Datas
         if xy.is_some() {
             return None;
         }
-        headers.iter().enumerate().find_map(|(i, h)| {
+        // The name first: looking for a column's first value costs a pass over the rows.
+        headers.iter().enumerate().filter(|(_, h)| WKT_NAMES.contains(&h.trim().to_ascii_lowercase().as_str())).find_map(|(i, _)| {
             let first = rows.iter().filter_map(|r| r.get(i)).map(|s| s.trim()).find(|s| !s.is_empty())?;
-            (WKT_NAMES.contains(&h.trim().to_ascii_lowercase().as_str()) && crate::interop::parse_wkt(first).is_ok()).then_some(i)
+            crate::interop::parse_wkt(first).is_ok().then_some(i)
         })
     });
     // Infer each column's type from its values; a WKT column is the geometry, not an attribute.
@@ -658,7 +659,15 @@ pub fn read_csv_with(text: &str, name: &str, opts: &CsvOptions) -> Result<(Datas
         report.messages.push(format!("{bad_wkt} rows had geometry that isn't readable WKT"));
     }
     if wkt.is_some() {
+        // The most common kind, as GeoJSON's reader takes it; rows of other kinds are kept (they
+        // draw), and said.
         ds.geometry_type = dominant_type(&ds);
+        let other = ds.features.iter().filter_map(|f| f.geometry.as_ref()).filter(|g| g.kind() != ds.geometry_type).count();
+        if other > 0 {
+            report
+                .messages
+                .push(format!("{other} rows have another kind of geometry than the layer's {}", ds.geometry_type.label().to_lowercase()));
+        }
     }
     // Coordinates in another system become longitude/latitude.
     let crs = match (opts.crs, srid) {
@@ -1377,7 +1386,10 @@ mod tests {
         let e = ds.features[0].geometry.as_ref().unwrap().extent();
         assert!((e.min_x - 15.0).abs() < 0.01 && (e.min_y - 42.0).abs() < 0.05, "{e:?}");
         assert!(ds.features[3].geometry.is_none());
-        assert_eq!(rep.messages, ["1 rows had geometry that isn't readable WKT"]);
+        assert_eq!(
+            rep.messages,
+            ["1 rows had geometry that isn't readable WKT", "1 rows have another kind of geometry than the layer's polyline"]
+        );
         // A named WKT column with a given system.
         let opts = CsvOptions { wkt: Some("g".into()), crs: Some(Crs::WebMercator), ..CsvOptions::default() };
         let (ds, _) =
