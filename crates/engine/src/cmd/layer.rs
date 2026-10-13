@@ -324,6 +324,10 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
         return add_sheet(s, p, path, &bytes);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if large_osm(path) {
+        return add_gdal(s, p, path);
+    }
     if rustgis_data::io::is_multi_layer_name(path) {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
         if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
@@ -508,6 +512,11 @@ fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
         let layers = rustgis_data::sheets::sheet_names(&bytes).map_err(err)?;
         return Ok(json!({"count": layers.len(), "layers": layers}));
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if large_osm(path) {
+        let layers = rustgis_data::source::gdal::layers(Path::new(path)).map_err(err)?;
+        return Ok(json!({"count": layers.len(), "layers": layers}));
+    }
     if rustgis_data::io::is_multi_layer_name(path) {
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
         if meta.len() > super::raster::MAX_UPLOAD_BYTES as u64 {
@@ -653,6 +662,15 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
         out["skipped"] = json!(skipped.iter().take(MAX_SKIPPED_NAMED).collect::<Vec<_>>());
     }
     Ok(out)
+}
+
+/// An OpenStreetMap extract past what the native reader takes, opened through GDAL instead when it
+/// is installed (country-size extracts).
+#[cfg(not(target_arch = "wasm32"))]
+fn large_osm(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".pbf")
+        && std::fs::metadata(path).is_ok_and(|m| m.len() > rustgis_data::io::MAX_BYTES)
+        && rustgis_data::source::gdal::available()
 }
 
 /// Adds a file GDAL reads (KML, GPX, File Geodatabase, DXF…): each layer is converted once into an

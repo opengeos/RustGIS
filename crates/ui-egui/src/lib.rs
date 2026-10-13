@@ -978,6 +978,7 @@ impl RustGisApp {
                             "kmz",
                             "gpx",
                             "gml",
+                            "topojson",
                             "dxf",
                             "tab",
                             "mif",

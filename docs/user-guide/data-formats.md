@@ -21,6 +21,10 @@ web app reads GeoPackages without SQLite, with a small SQLite file reader writte
 | GeoRSS | `.rss`, `.atom`, `.georss`, or `.xml` | Add Data, drop the file, upload, or From URL… | RSS 2.0, RSS 1.0 and Atom feeds with GeoRSS Simple, GeoRSS GML or W3C Basic Geo places: points, lines and polygons layers with each item's title, link, description, date, id and category. |
 | LandXML | `.landxml`, or `.xml` | Add Data, drop the file, or upload | Coordinate geometry points, parcels (polygons), alignments (lines; curves as chords) and TIN surfaces (a triangle per face, with its mean elevation), converted from the file's `epsgCode` or `"crs"`. |
 | Encoded polylines | text | `layer.addEncodedPolyline` with `"polyline"` (one or a list) | Google's encoding, precision 5, or 6 (`"precision"`) as OSRM and Valhalla can give: a line layer. |
+| GML | `.gml` | Add Data, drop the file, or upload | Simple features in GML 2 and 3 (WFS answers, OGR's GML): a layer per feature type, its simple elements as fields. Converted from the `srsName` (EPSG codes, URNs and URLs; the URN and URL forms of geographic systems are latitude first). |
+| MapInfo Interchange | `.mif` with its `.mid` (or both zipped) | Add Data, drop the file, or upload the zip | Points, lines, polylines, regions (holes found by nesting), rectangles and ellipses; text and arcs are rows without geometry. Converted from the `CoordSys`: longitude/latitude, Transverse Mercator, Lambert Conformal Conic, Albers or Mercator. |
+| OpenStreetMap PBF | `.osm.pbf` | Add Data, drop the file, or upload | Points (tagged nodes), lines and multipolygons (closed ways that are areas, and multipolygon and boundary relations), with common tags as fields and the rest in `other_tags`, as GDAL gives them. Up to 40 million nodes (4 million in the web app); on the desktop, extracts over 256 MB open through GDAL when it is installed. |
+| TopoJSON | `.topojson`, or `.json` | Add Data, drop the file, or upload | A layer per object, its geometries rebuilt from the shared arcs (quantized or not). |
 | GeoPackage | `.gpkg` | Add Data, or upload in the web app | Every feature table becomes a layer, up to 32 at once (the result counts the rest in `skippedCount` and names up to 100 of them in `skipped`); `"layer"` picks one, and `info.fileLayers` lists them all. Read in place by its R-tree; any EPSG system is reprojected. The web app reads the file with its own SQLite reader (tables scanned, the envelope in each geometry header tested first; no R-tree); UTF-16 databases aren't read there. |
 | GeoParquet | `.parquet`, `.geoparquet` | Add Data, or upload in the web app | WKB geometry, with the CRS from the file's `geo` metadata. Row groups are pruned by the bbox covering. zstd-compressed files open on the desktop only; Brotli isn't read. |
 | FlatGeobuf | `.fgb` | Add Data, or upload | Read in place by its packed R-tree. |
@@ -41,9 +45,8 @@ GDAL](data.md#formats-through-gdal).
 | --- | --- | --- |
 | Esri File Geodatabase | `.gdb` folder | Every feature class becomes a layer. |
 | AutoCAD DXF | `.dxf` | Give `"crs"` (such as `EPSG:2263`) when the drawing doesn't say its coordinate system. |
-| GML | `.gml` | |
-| MapInfo | `.tab`, `.mif` | Keep the companion files together. |
-| OpenStreetMap | `.osm`, `.osm.pbf` | |
+| MapInfo tables | `.tab` | Keep the companion files together. |
+| OpenStreetMap XML | `.osm` | |
 | GeoJSON Lines, GMT | `.geojsonl`, `.geojsons`, `.gmt` | |
 
 ## Files on the web

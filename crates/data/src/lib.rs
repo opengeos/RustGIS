@@ -6,17 +6,21 @@
 
 pub mod geometry;
 pub mod georss;
+pub mod gml;
 pub mod gpx;
 pub mod interop;
 pub mod io;
 pub mod kml;
 pub mod landxml;
+pub mod mapinfo;
 pub mod mbtiles;
+pub mod osm;
 pub mod query;
 pub mod raster;
 pub mod sheets;
 pub mod source;
 pub mod sqlite;
+pub mod topojson;
 pub mod value;
 pub mod wkb;
 pub mod zip;

@@ -35,6 +35,10 @@ pub const READ_EXTENSIONS: &[&str] = &[
     "georss",
     "landxml",
     "xml",
+    "gml",
+    "mif",
+    "pbf",
+    "topojson",
 ];
 
 /// Most XML nodes parsed from one document (KML, GPX): each costs tens of bytes, and the
@@ -52,7 +56,7 @@ pub struct LayerRead {
 /// Whether a file holds several layers ([`read_layers`] reads them all): a zip, KML, KMZ or GPX.
 pub fn is_multi_layer_name(name: &str) -> bool {
     let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    matches!(ext.as_str(), "zip" | "kml" | "kmz" | "gpx" | "rss" | "atom" | "georss" | "landxml" | "xml")
+    matches!(ext.as_str(), "zip" | "kml" | "kmz" | "gpx" | "rss" | "atom" | "georss" | "landxml" | "xml" | "gml" | "pbf" | "topojson")
 }
 
 /// Reads every layer of a file held in memory: the Shapefiles and other files of a zip, a KML or
@@ -93,6 +97,19 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
                     "{file_name}: an XML file RustGIS doesn't read (it reads GeoRSS, LandXML, KML and GPX)"
                 )));
             }
+        }
+        "gml" => plain(crate::gml::read(file_name, bytes)?),
+        // OpenStreetMap PBF, not a vector tile (`.pbf` too).
+        "pbf" if crate::osm::looks_like_osm_pbf(bytes) => plain(crate::osm::read(file_name, bytes)?),
+        "pbf" => {
+            return Err(DataError::Unsupported(format!(
+                "{file_name}: a .pbf that isn't OpenStreetMap data (vector tiles are added with Add Tile Layer)"
+            )));
+        }
+        // A TopoJSON topology, named .topojson or .json.
+        "topojson" | "json" if ext == "topojson" || std::str::from_utf8(bytes).is_ok_and(crate::topojson::looks_like_topojson) => {
+            let text = std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")))?;
+            plain(crate::topojson::read(file_name, text)?)
         }
         _ => plain(vec![read_bytes(file_name, bytes)?]),
     };
@@ -137,6 +154,19 @@ pub fn sniff_extension(bytes: &[u8]) -> Option<&'static str> {
     })
 }
 
+/// The first layer of a file holding several ([`read_layers`]), saying what else it holds.
+fn first_layer(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)> {
+    let layers = read_layers(file_name, bytes)?;
+    let rest: Vec<String> = layers.iter().skip(1).map(|l| l.dataset.name.clone()).collect();
+    let first = layers.into_iter().next().ok_or_else(|| DataError::Format(format!("{file_name}: empty")))?;
+    let mut first = (first.dataset, first.report);
+    if !rest.is_empty() {
+        let leaf = Path::new(file_name).file_name().and_then(|n| n.to_str()).unwrap_or(file_name);
+        first.1.messages.push(format!("{leaf}: read its first layer; it also holds {}", rest.join(", ")));
+    }
+    Ok(first)
+}
+
 /// Reads vector data held in memory (a browser upload or a drop), choosing the reader by the
 /// file name's extension. A Shapefile needs its sidecar files, so it comes zipped (`.zip`, whose
 /// first layer is read).
@@ -149,21 +179,15 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
     }
     let text = || std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")));
     let mut out = match ext.as_str() {
+        // A TopoJSON topology named .json: its first object, saying what else it holds.
+        "json" if crate::topojson::looks_like_topojson(text()?) => return first_layer(file_name, bytes),
         "geojson" | "json" => read_geojson(text()?, &name)?,
         "csv" | "tsv" | "txt" => read_csv(text()?, &name)?,
+        // A MIF without its .mid (an upload of the one file): no attributes.
+        "mif" => crate::mapinfo::read_bytes(bytes, None, &name)?,
         "shp" => return Err(DataError::Unsupported("shp on its own: zip it with its .dbf, .shx and .prj and add the zip".into())),
         // The first layer (`read_layers` reads them all), saying what else the file holds.
-        "zip" | "kml" | "kmz" | "gpx" => {
-            let layers = read_layers(file_name, bytes)?;
-            let rest: Vec<String> = layers.iter().skip(1).map(|l| l.dataset.name.clone()).collect();
-            let first = layers.into_iter().next().ok_or_else(|| DataError::Format(format!("{file_name}: empty")))?;
-            let mut first = (first.dataset, first.report);
-            if !rest.is_empty() {
-                let leaf = Path::new(file_name).file_name().and_then(|n| n.to_str()).unwrap_or(file_name);
-                first.1.messages.push(format!("{leaf}: read its first layer; it also holds {}", rest.join(", ")));
-            }
-            return Ok(first);
-        }
+        "zip" | "kml" | "kmz" | "gpx" | "gml" | "pbf" | "topojson" => return first_layer(file_name, bytes),
         // A copy, since only borrowed bytes are given; `read_owned` takes them without one.
         e if crate::source::EXTENSIONS.contains(&e) => return read_owned(file_name, bytes.to_vec()),
         other => return Err(DataError::Unsupported(other.to_string())),
@@ -193,7 +217,14 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
     let mut out = match ext.as_str() {
         "geojson" | "json" => {
             check_size(path)?;
-            read_geojson(&std::fs::read_to_string(path)?, &name)?
+            let text = std::fs::read_to_string(path)?;
+            // A TopoJSON topology named .json, as read_bytes reads it.
+            if ext == "json" && crate::topojson::looks_like_topojson(&text) {
+                let leaf = path.file_name().and_then(|n| n.to_str()).unwrap_or("layer.json");
+                first_layer(leaf, text.as_bytes())?
+            } else {
+                read_geojson(&text, &name)?
+            }
         }
         "csv" | "tsv" | "txt" => {
             check_size(path)?;
@@ -207,9 +238,22 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
             }
             read_shapefile(path, &name)?
         }
-        "zip" | "kml" | "kmz" | "gpx" => {
+        "zip" | "kml" | "kmz" | "gpx" | "gml" | "pbf" | "topojson" => {
             check_size(path)?;
             read_bytes(&path.display().to_string(), &std::fs::read(path)?)?
+        }
+        // With its .mid beside it (spelt mid, MID or Mid).
+        "mif" => {
+            check_size(path)?;
+            let mid = ["mid", "MID", "Mid"].iter().map(|e| path.with_extension(e)).find(|p| p.is_file());
+            let mid = match mid {
+                Some(m) => {
+                    check_size(&m)?;
+                    Some(std::fs::read(m)?)
+                }
+                None => None,
+            };
+            crate::mapinfo::read_bytes(&std::fs::read(path)?, mid.as_deref(), &name)?
         }
         // Read in place by a provider, so there's no size cap on the file, only on the features.
         e if crate::source::EXTENSIONS.contains(&e) => crate::source::materialize(crate::source::open_path(path, None)?.as_ref())?,
@@ -544,7 +588,7 @@ fn coerce(v: Value, ty: FieldType) -> Value {
     }
 }
 
-fn dominant_type(ds: &Dataset) -> GeometryType {
+pub(crate) fn dominant_type(ds: &Dataset) -> GeometryType {
     let mut counts = [0usize; 3];
     for g in ds.features.iter().filter_map(|f| f.geometry.as_ref()) {
         match g.kind() {
@@ -971,11 +1015,14 @@ pub fn read_zip(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadRepor
     let lower = |n: &str| n.to_ascii_lowercase();
     let is_fork = |n: &str| n.split('/').any(|part| part == "__MACOSX" || part.starts_with("._"));
     let ext_of = |n: &str| Path::new(n).extension().and_then(|e| e.to_str()).map(lower).unwrap_or_default();
+    // A `.pbf` is read only as an OpenStreetMap extract (`.osm.pbf`): a vector tile set's
+    // `z/x/y.pbf` files aren't extracted at all.
     let wanted = |n: &str| {
         let e = ext_of(n);
         !is_fork(n)
-            && (matches!(e.as_str(), "shp" | "shx" | "dbf" | "prj")
-                || (!matches!(e.as_str(), "zip" | "txt") && READ_EXTENSIONS.contains(&e.as_str())))
+            && (matches!(e.as_str(), "shp" | "shx" | "dbf" | "prj" | "mid")
+                || (e == "pbf" && lower(n).ends_with(".osm.pbf"))
+                || (!matches!(e.as_str(), "zip" | "txt" | "pbf") && READ_EXTENSIONS.contains(&e.as_str())))
     };
     let entries = crate::zip::read_matching(bytes, wanted).map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
     // Sidecar files by their path without the extension, compared without regard to case.
@@ -1011,8 +1058,27 @@ pub fn read_zip(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadRepor
             Err(e) => skipped.push(format!("{n} ({e})")),
         }
     }
+    // MapInfo files with their .mid.
+    let mut mifs: Vec<String> = entries.iter().flatten().filter(|(n, _)| ext_of(n) == "mif").map(|(n, _)| n.clone()).collect();
+    mifs.sort();
+    for n in mifs {
+        if out.len() >= MAX_ZIP_LAYERS {
+            break;
+        }
+        let base = stem(&n);
+        let name = Path::new(&n).file_stem().and_then(|s| s.to_str()).unwrap_or("layer").to_string();
+        let mif = take(&mut entries, &base, "mif").map(|(_, b)| b).unwrap_or_default();
+        let mid = take(&mut entries, &base, "mid").map(|(_, b)| b);
+        match crate::mapinfo::read_bytes(&mif, mid.as_deref(), &name) {
+            Ok(mut read) => {
+                read.0.source = Some(format!("{file_name}/{n}"));
+                out.push(read);
+            }
+            Err(e) => skipped.push(format!("{n} ({e})")),
+        }
+    }
     let mut others: Vec<(String, Vec<u8>)> =
-        entries.into_iter().flatten().filter(|(n, _)| !matches!(ext_of(n).as_str(), "shp" | "shx" | "dbf" | "prj")).collect();
+        entries.into_iter().flatten().filter(|(n, _)| !matches!(ext_of(n).as_str(), "shp" | "shx" | "dbf" | "prj" | "mid")).collect();
     others.sort_by(|a, b| a.0.cmp(&b.0));
     for (n, b) in others {
         if out.len() >= MAX_ZIP_LAYERS {
@@ -1419,6 +1485,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn topojson_named_json_from_disk() {
+        let topo = r#"{"type":"Topology","objects":{"pts":{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[5,6]}]},"more":{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1,2]}]}},"arcs":[]}"#;
+        let path = std::env::temp_dir().join(format!("rustgis-topo-{}.json", std::process::id()));
+        std::fs::write(&path, topo).unwrap();
+        let (ds, report) = read_path(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(ds.features.len(), 1);
+        assert!(report.messages.iter().any(|m| m.contains("also holds")), "{:?}", report.messages);
+    }
+
+    #[test]
     fn formats_by_contents() {
         let cases: [(&[u8], Option<&str>); 11] = [
             (b"PAR1\0\0", Some("parquet")),
@@ -1722,6 +1799,12 @@ mod tests {
         let layers = read_zip("x.zip", &crate::zip::write(&with_meta).unwrap()).unwrap();
         assert_eq!(layers.len(), 2);
         assert!(layers[0].1.messages.iter().any(|m| m.contains("metadata.json")), "{:?}", layers[0].1.messages);
+        // A vector tile set's .pbf files aren't read as OpenStreetMap extracts (nor said).
+        let mut with_tiles = entries.clone();
+        with_tiles.extend((0..3).map(|i| (format!("tiles/3/{i}/1.pbf"), vec![0x1a, 2, 0, 0])));
+        let layers = read_zip("x.zip", &crate::zip::write(&with_tiles).unwrap()).unwrap();
+        assert_eq!(layers.len(), 2);
+        assert!(layers[0].1.messages.is_empty(), "{:?}", layers[0].1.messages);
         // Nothing readable at all is an error.
         let only_shp: Vec<_> = entries.iter().filter(|(n, _)| n.ends_with(".SHP")).cloned().collect();
         assert!(read_zip("x.zip", &crate::zip::write(&only_shp).unwrap()).is_err());

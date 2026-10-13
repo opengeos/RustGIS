@@ -2864,6 +2864,40 @@ fn gdal_rasters_reopen_with_their_choices() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// GML, MapInfo MIF/MID and TopoJSON through the commands, by path, text and zip.
+#[test]
+fn gml_mapinfo_and_topojson() {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("rustgis-native-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new(Project::default());
+    let gml = r#"<ogr:FeatureCollection xmlns:ogr="http://ogr.maptools.org/" xmlns:gml="http://www.opengis.net/gml">
+<gml:featureMember><ogr:towns><ogr:geometryProperty><gml:Point srsName="EPSG:4326"><gml:coordinates>10,50</gml:coordinates></gml:Point></ogr:geometryProperty><ogr:name>A</ogr:name></ogr:towns></gml:featureMember>
+</ogr:FeatureCollection>"#;
+    s.run("layer.addDataText", &json!({"fileName": "towns.gml", "text": gml})).unwrap();
+    assert_eq!(s.map().layer_by_name("towns").map(|l| l.dataset.features.len()), Some(1));
+    // A MIF beside its MID, by path.
+    let mif = "Version 300\nDelimiter \",\"\nCoordSys Earth Projection 1, 104\nColumns 1\n  name Char(10)\nData\nPoint 1 2\nPoint 3 4\n";
+    std::fs::write(dir.join("sites.mif"), mif).unwrap();
+    std::fs::write(dir.join("sites.mid"), "\"X\"\n\"Y\"\n").unwrap();
+    s.run("layer.addData", &json!({"path": dir.join("sites.mif").display().to_string()})).unwrap();
+    let l = s.map().layer_by_name("sites").unwrap();
+    assert_eq!(l.dataset.features[1].attrs[0], rustgis_data::Value::Text("Y".into()));
+    // Zipped together, uploaded.
+    let zip =
+        rustgis_data::zip::write(&[("a/sites2.mif".into(), mif.as_bytes().to_vec()), ("a/sites2.mid".into(), b"\"P\"\n\"Q\"\n".to_vec())])
+            .unwrap();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(zip);
+    s.run("layer.addDataBytes", &json!({"fileName": "mif.zip", "data": b64})).unwrap();
+    assert_eq!(s.map().layer_by_name("sites2").unwrap().dataset.features[0].attrs[0], rustgis_data::Value::Text("P".into()));
+    // TopoJSON, as .topojson and as .json.
+    let topo = r#"{"type":"Topology","objects":{"pts":{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[5,6],"properties":{"n":1}}]}},"arcs":[]}"#;
+    s.run("layer.addDataText", &json!({"fileName": "a.topojson", "text": topo})).unwrap();
+    s.run("layer.addDataText", &json!({"fileName": "b.json", "text": topo})).unwrap();
+    assert!(s.map().layer_by_name("a").is_some() && s.map().layer_by_name("b").is_some());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn pmtiles_from_network_shares_are_refused() {
     let mut s = Session::new(Project::default());
