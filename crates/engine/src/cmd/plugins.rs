@@ -196,6 +196,9 @@ const NEVER: &[&str] = &[
     "project.fromTemplate",
     "edit.undo",
     "edit.redo",
+    // Credentials: a plugin never sets where the user's are sent.
+    "s3.connect",
+    "s3.disconnect",
 ];
 
 /// Commands that write files without naming one in their parameters.

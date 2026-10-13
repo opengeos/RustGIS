@@ -17,6 +17,7 @@ pub mod mbtiles;
 pub mod mvt;
 pub mod overpass;
 pub mod pmtiles;
+pub mod s3;
 pub mod source;
 pub mod sprite;
 pub mod stac;

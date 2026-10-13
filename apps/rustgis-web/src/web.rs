@@ -347,15 +347,27 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let (url, download) = cache::split_download(url);
     let max = if download { cache::MAX_DOWNLOAD as u64 } else { 64 << 20 };
     let (url, range) = cache::split_range(url);
-    let promise = match range {
-        Some((a, b)) => {
-            let init = web_sys::RequestInit::new();
-            let headers = web_sys::Headers::new().map_err(err)?;
+    // An `s3://` address becomes its web address, and a request to an S3 connection's endpoint
+    // is signed (the bucket's CORS rules must allow the Authorization and x-amz-* headers).
+    let prepared = rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::s3::prepare(url)?;
+    let url = prepared.url.as_str();
+    let promise = if range.is_some() || !prepared.headers.is_empty() {
+        let init = web_sys::RequestInit::new();
+        let headers = web_sys::Headers::new().map_err(err)?;
+        if let Some((a, b)) = range {
             headers.set("Range", &format!("bytes={a}-{b}")).map_err(err)?;
-            init.set_headers(&headers);
-            window.fetch_with_str_and_init(url, &init)
         }
-        None => window.fetch_with_str(url),
+        for (k, v) in &prepared.headers {
+            headers.set(k, v).map_err(err)?;
+        }
+        init.set_headers(&headers);
+        // A signed request goes only where its credentials are for.
+        if prepared.signed {
+            init.set_redirect(web_sys::RequestRedirect::Error);
+        }
+        window.fetch_with_str_and_init(url, &init)
+    } else {
+        window.fetch_with_str(url)
     };
     let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(promise).await.map_err(err)?.dyn_into().map_err(err)?;
     if !resp.ok() {

@@ -405,6 +405,7 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
             #[cfg(not(target_arch = "wasm32"))]
             menu_item(ui, app, "", "Database…", "ui.dialog", json!({"name": "addDatabase"}));
             menu_item(ui, app, "", "STAC Search…", "ui.dialog", json!({"name": "stac"}));
+            menu_item(ui, app, "", "S3…", "ui.dialog", json!({"name": "s3"}));
             menu_item(ui, app, "", "OpenStreetMap…", "ui.dialog", json!({"name": "osm"}));
             menu_item(ui, app, "", "Boundaries…", "ui.dialog", json!({"name": "boundaries"}));
             menu_item(ui, app, "graphics_layer", "Graphics Layer", "graphics.newLayer", Value::Null);

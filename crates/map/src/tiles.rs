@@ -215,7 +215,7 @@ pub const UPLOAD: &str = "upload:";
 /// Whether a PMTiles or MBTiles archive address is a file rather than a web address.
 pub fn is_local_archive(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
-    !(lower.starts_with("https://") || lower.starts_with("http://"))
+    !(lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("s3://"))
 }
 
 /// Whether an archive's file path may be read: absolute, a `.<ext>` file (`pmtiles`,
@@ -244,8 +244,8 @@ pub fn check_url(url: &str) -> Result<(), String> {
         return Err("the address is too long".into());
     }
     let lower = url.to_ascii_lowercase();
-    if !(lower.starts_with("https://") || lower.starts_with("http://")) {
-        return Err(format!("'{url}': tile addresses start with https:// or http://"));
+    if !(lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("s3://")) {
+        return Err(format!("'{url}': tile addresses start with https://, http:// or s3://"));
     }
     if host_of(url).is_none_or(str::is_empty) {
         return Err(format!("'{url}' has no host"));

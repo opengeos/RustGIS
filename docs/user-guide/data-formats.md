@@ -53,7 +53,7 @@ GDAL](data.md#formats-through-gdal).
 ## Files on the web
 
 **Home › Add Data › From URL…** (`layer.addUrl` with `"url"`) downloads a file by its `https://`
-address and adds it like a file from this computer: GeoJSON, CSV, GeoParquet, FlatGeobuf,
+(or `s3://`, see [S3 buckets](data.md#s3-buckets)) address and adds it like a file from this computer: GeoJSON, CSV, GeoParquet, FlatGeobuf,
 GeoPackage, zipped Shapefiles, KML/KMZ, GPX or GeoTIFF/COG, up to 512 MB on the desktop and 256 MB
 in the web app (where the server must allow requests from web pages, CORS). The format comes from
 the address, or from the contents when the address has no extension (an API endpoint, say). The

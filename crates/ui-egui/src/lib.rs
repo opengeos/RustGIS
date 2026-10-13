@@ -24,6 +24,7 @@ mod pluginsui;
 mod portalsui;
 mod reportpane;
 mod ribbon;
+mod s3ui;
 mod sqlpane;
 mod stacui;
 mod table;
@@ -276,6 +277,8 @@ pub struct UiState {
     pub service: Option<ServiceConn>,
     /// STAC Search: its choices, results and the request under way.
     pub stac: stacui::State,
+    /// S3…: the connection form, the bucket browsed and the listing under way.
+    pub s3: s3ui::State,
     /// OpenStreetMap and Boundaries: their choices and the request under way.
     pub portals: portalsui::State,
     /// Find Place searches and Geocode Addresses runs under way.
@@ -330,6 +333,7 @@ impl Default for UiState {
             link_zoomed: false,
             service: None,
             stac: Default::default(),
+            s3: Default::default(),
             portals: Default::default(),
             geocode: Default::default(),
             zarr: Default::default(),
@@ -1807,6 +1811,7 @@ impl RustGisApp {
         sqlpane::poll(self, ctx);
         self.poll_service();
         stacui::poll(self, ctx);
+        s3ui::poll(self, ctx);
         portalsui::poll(self, ctx);
         geocodeui::poll(self, ctx);
         zarrui::poll(self, ctx);

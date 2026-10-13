@@ -411,10 +411,10 @@ impl Item {
     pub fn asset_href(&self, key: Option<&str>) -> Result<(String, String), String> {
         let a = self.pick(key)?;
         let lower = a.href.to_ascii_lowercase();
-        if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+        if !(lower.starts_with("https://") || lower.starts_with("http://") || crate::s3::is_s3(&lower)) {
             let scheme = lower.split("://").next().unwrap_or("");
             return Err(format!(
-                "{}: asset '{}' is at {} (a {scheme}:// address); RustGIS adds assets by their web address",
+                "{}: asset '{}' is at {} (a {scheme}:// address); RustGIS adds assets by their web or s3:// address",
                 self.id, a.key, a.href
             ));
         }
@@ -644,9 +644,10 @@ mod tests {
             "https://x.org/v1/collections/sentinel-2-l2a/items/thumb.jpg"
         );
         assert_eq!(items[1].bbox, None, "a bbox off the globe is dropped");
-        // The asset added: the one named, else visual; a cloud store's address is refused by name.
+        // The asset added: the one named, else visual; an s3:// address is kept (fetched through
+        // the S3 connection serving its bucket, or anonymously from AWS).
         assert_eq!(i.asset_href(None).unwrap().0, "visual");
-        assert!(i.asset_href(Some("b04")).unwrap_err().contains("s3://"));
+        assert_eq!(i.asset_href(Some("b04")).unwrap().1, "s3://bucket/B04.tif");
         assert!(i.asset_href(Some("nope")).unwrap_err().contains("visual"));
         let mut pc = i.clone();
         pc.assets = vec![Asset {

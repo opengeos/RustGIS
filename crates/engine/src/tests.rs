@@ -3698,3 +3698,96 @@ fn zarr_stores_in_folders_and_handed_over() {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A stand-in S3 endpoint: answers a listing, an object and a redirect, and keeps each request's
+/// head (path and headers) for the test to look at.
+fn serve_s3() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = [0u8; 8192];
+            let read = s.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..read]).to_string();
+            let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+            log.lock().unwrap().push(req);
+            let (status, body): (&str, &[u8]) = if path.starts_with("/s3-test-bucket?list-type=2") {
+                ("200 OK", br#"<ListBucketResult><Name>s3-test-bucket</Name><IsTruncated>false</IsTruncated><Contents><Key>data/places.geojson</Key><Size>120</Size><LastModified>2024-01-01T00:00:00.000Z</LastModified></Contents><CommonPrefixes><Prefix>data/more/</Prefix></CommonPrefixes></ListBucketResult>"#)
+            } else if path == "/" {
+                (
+                    "200 OK",
+                    br#"<ListAllMyBucketsResult><Buckets><Bucket><Name>s3-test-bucket</Name></Bucket></Buckets></ListAllMyBucketsResult>"#,
+                )
+            } else if path.starts_with("/s3-test-bucket/data/places.geojson") {
+                ("200 OK", br#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"n": 1}, "geometry": {"type": "Point", "coordinates": [10, 20]}}]}"#)
+            } else if path.starts_with("/s3-test-bucket/moved.geojson") {
+                ("301 Moved Permanently\r\nLocation: http://127.0.0.1:9/elsewhere.geojson", b"")
+            } else {
+                ("404 Not Found", b"<Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>")
+            };
+            let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            let _ = s.write_all(body);
+        }
+    });
+    (base, seen)
+}
+
+/// S3 through a connection with credentials: listings and objects by s3:// address, signed for
+/// the connection's endpoint only; the secret never in a result; a signed request isn't
+/// redirected.
+#[test]
+fn s3_connections_listings_and_objects() {
+    let (base, seen) = serve_s3();
+    let mut s = Session::new(Project::default());
+    let r = s
+        .run(
+            "s3.connect",
+            &json!({"name": "s3-test", "endpoint": base, "buckets": ["s3-test-bucket"], "accessKeyId": "AKIDTEST", "secretAccessKey": "very-secret-key", "sessionToken": "token-1"}),
+        )
+        .unwrap();
+    assert_eq!((r["signed"].as_bool(), r["credentials"].as_str()), (Some(true), Some("keys")));
+    assert!(!r.to_string().contains("very-secret-key"));
+    let listed = s.run("s3.connections", &Value::Null).unwrap();
+    assert!(listed.to_string().contains("s3-test") && !listed.to_string().contains("very-secret-key"));
+    // A level of the bucket, and the connection's buckets.
+    let r = s.run("s3.list", &json!({"url": "s3://s3-test-bucket/data/"})).unwrap();
+    assert_eq!(r["prefixes"], json!(["data/more/"]));
+    assert_eq!(r["objects"][0]["url"], "s3://s3-test-bucket/data/places.geojson");
+    let r = s.run("s3.list", &json!({"connection": "s3-test"})).unwrap();
+    assert_eq!(r["buckets"], json!(["s3-test-bucket"]));
+    // An object by its s3:// address, signed with the connection's key (never its secret).
+    let r = s.run("layer.addUrl", &json!({"url": "s3://s3-test-bucket/data/places.geojson"})).unwrap();
+    assert_eq!(r["features"], 1);
+    {
+        let heads = seen.lock().unwrap();
+        let get = heads.iter().find(|h| h.contains("/s3-test-bucket/data/places.geojson")).unwrap().to_ascii_lowercase();
+        assert!(get.contains("authorization: aws4-hmac-sha256 credential=akidtest/"), "{get}");
+        assert!(get.contains("x-amz-security-token: token-1") && get.contains("x-amz-content-sha256: unsigned-payload"));
+        assert!(heads.iter().all(|h| !h.contains("very-secret-key")));
+    }
+    // A redirect isn't followed by a signed request; a missing key says so.
+    let e = s.run("layer.addUrl", &json!({"url": "s3://s3-test-bucket/moved.geojson"})).unwrap_err();
+    assert!(e.contains("redirect"), "{e}");
+    assert!(s.run("layer.addUrl", &json!({"url": "s3://s3-test-bucket/nope.geojson"})).unwrap_err().contains("404"));
+    // Bad parameters; credentials from this computer don't go to another endpoint.
+    for bad in [
+        json!({"name": "x", "endpoint": "ftp://h"}),
+        json!({"name": "x", "accessKeyId": "A"}),
+        json!({"name": "x", "region": "no such"}),
+        json!({"name": "x", "buckets": ["NO_"]}),
+        json!({"name": "x", "endpoint": "https://elsewhere.example", "profile": "default"}),
+    ] {
+        assert!(s.run("s3.connect", &bad).is_err(), "{bad}");
+    }
+    for bad in [json!({"url": "s3://"}), json!({"bucket": "NO_"}), json!({"connection": "nope"}), json!({"url": "https://x.org"})] {
+        assert!(s.run("s3.list", &bad).is_err(), "{bad}");
+    }
+    s.run("s3.disconnect", &json!({"name": "s3-test"})).unwrap();
+    assert!(s.run("s3.disconnect", &json!({"name": "s3-test"})).is_err());
+    // Plugins never connect (they'd choose where the user's credentials go).
+    assert!(crate::cmd::plugins::user_only("s3.connect"));
+}

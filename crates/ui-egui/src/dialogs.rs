@@ -46,6 +46,7 @@ impl Dialogs {
             "addService" => "addService",
             "addDatabase" => "addDatabase",
             "stac" => "stac",
+            "s3" => "s3",
             "osm" => "osm",
             "boundaries" => "boundaries",
             "zarr" => "zarr",
@@ -123,6 +124,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "addService" => "Add From Service",
         "addDatabase" => "Add From Database",
         "stac" => "STAC Search",
+        "s3" => "S3 Buckets",
         "osm" => "OpenStreetMap",
         "boundaries" => "Administrative Boundaries",
         "zarr" => "Add Zarr Variable",
@@ -135,7 +137,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     egui::Window::new(tl!(title)).id(egui::Id::new("dialog")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
         ui.set_width(match which {
             "coordinateSystem" | "zarr" => 660.0,
-            "addTiles" | "addUrl" | "addService" | "stac" => 560.0,
+            "addTiles" | "addUrl" | "addService" | "stac" | "s3" => 560.0,
             _ => 440.0,
         });
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
@@ -170,6 +172,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             "addService" => close = add_service(app, ui),
             "addDatabase" => close = add_database(app, ui),
             "stac" => crate::stacui::dialog(app, ui),
+            "s3" => crate::s3ui::dialog(app, ui),
             "osm" => crate::portalsui::osm(app, ui),
             "boundaries" => crate::portalsui::boundaries(app, ui),
             "zarr" => close = crate::zarrui::dialog(app, ui),

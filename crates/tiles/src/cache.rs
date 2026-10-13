@@ -582,16 +582,31 @@ mod native {
         let (url, whole) = super::split_download(url);
         let max = if whole { super::MAX_DOWNLOAD } else { MAX_BYTES };
         let (url, range) = super::split_range(url);
-        let mut at = url.to_string();
+        // An `s3://` address becomes its web address, and a request to an S3 connection's
+        // endpoint is signed.
+        let prepared = crate::s3::prepare(url)?;
+        let mut at = prepared.url.clone();
         let mut redirects = 0;
         let mut resp = loop {
             let mut req = agent.get(&at);
             if let Some((a, b)) = range {
                 req = req.header("Range", &format!("bytes={a}-{b}"));
             }
+            if redirects == 0 {
+                for (k, v) in &prepared.headers {
+                    req = req.header(k.as_str(), v.as_str());
+                }
+            }
             let resp = req.call().map_err(|e| e.to_string())?;
             if !resp.status().is_redirection() {
                 break resp;
+            }
+            // A signed request goes only where its credentials are for.
+            if prepared.signed {
+                return Err(format!(
+                    "{url}: the S3 endpoint answered with a redirect (HTTP {}), which a signed request doesn't follow: check the connection's region and endpoint",
+                    resp.status().as_u16()
+                ));
             }
             let location = resp.headers().get("location").and_then(|v| v.to_str().ok()).ok_or("a redirect with no Location")?;
             let next = crate::template::join(&at, location);

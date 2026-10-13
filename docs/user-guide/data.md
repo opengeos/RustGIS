@@ -214,6 +214,37 @@ rustgis-cli run --cmd 'osm.download={"bbox":[7.44,46.944,7.456,46.952],"preset":
 Both reach the network: the [AI Assistant](assistant.md) asks before it runs them, and plugins need
 the network permission. OpenStreetMap data is © OpenStreetMap contributors (ODbL).
 
+## S3 buckets
+
+An `s3://bucket/key` address works wherever data is added by its address: **Add Data › From
+URL…** and `layer.addUrl` (a cloud-optimised GeoTIFF is read in place by range, other files are
+downloaded), PMTiles archives, `?data=` links, and STAC assets whose address is an `s3://` one.
+A public bucket needs nothing more: it is read anonymously from AWS.
+
+**Home › Add Data › S3…** (`s3.connect`) connects to a private bucket, or to an S3-compatible
+service (MinIO, Cloudflare R2, Wasabi, source.coop…) by its endpoint, and browses a bucket a
+folder at a time (`s3.list`), adding an object with **Add**. A connection names its endpoint (AWS
+when empty), region and, optionally, the buckets it serves; an `s3://` address is read through
+the connection serving its bucket, and requests to a connection's endpoint are signed (AWS
+Signature Version 4) with its keys. On the desktop, `s3.connect` with `"profile"` reads a
+profile from `~/.aws/credentials` and `~/.aws/config`, and without keys it takes
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (and `AWS_SESSION_TOKEN`, `AWS_REGION`) from the
+environment.
+
+```sh
+rustgis-cli run --cmd 's3.connect={"name":"minio","endpoint":"https://minio.example.org","accessKeyId":"…","secretAccessKey":"…"}' \
+  --cmd 's3.list={"url":"s3://my-bucket/rasters/"}' --cmd 'layer.addUrl={"url":"s3://my-bucket/rasters/dem.tif"}'
+```
+
+Keys are kept until RustGIS closes: never in a project (which keeps the `s3://` address), a
+command's result, a notice or the log. **Remember** keeps a connection's name, endpoint and region
+in the app's settings, never its secret; storing secrets in the system keychain isn't supported.
+Keys go only to the endpoint they're for: a signed request that is redirected isn't followed, and
+keys from a profile or the environment are used only with AWS or the profile's own
+`endpoint_url`. In the web app, the bucket's CORS rules must allow the page's origin (and, for a
+private bucket, the `Authorization` and `x-amz-*` headers). The [AI Assistant](assistant.md) asks
+before it connects or lists; plugins can't connect, and need the network permission to list.
+
 ## Large files
 
 GeoPackage, GeoParquet and FlatGeobuf files with more than 100,000 features are read in place

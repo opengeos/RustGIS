@@ -22,6 +22,7 @@ pub const NETWORK: &[&str] = &[
     "osm.download",
     "boundaries.add",
     "boundaries.countries",
+    "s3.list",
 ];
 
 pub fn commands() -> Vec<C> {
