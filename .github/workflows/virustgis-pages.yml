@@ -1,0 +1,58 @@
+name: Xuất bản viRustGIS Web
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: virustgis-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.repository == 'xulytiengviet/viRustGIS'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Lấy mã nguồn
+        uses: actions/checkout@v4
+      - name: Cài Rust và bộ đích WebAssembly
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Bộ nhớ đệm Rust
+        uses: Swatinem/rust-cache@v2
+      - name: Cài Trunk
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/trunk.tar.gz" https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz
+          echo "f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b  $RUNNER_TEMP/trunk.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar xzf "$RUNNER_TEMP/trunk.tar.gz" -C "$RUNNER_TEMP/bin" trunk
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Biên dịch ứng dụng web gốc bằng tiếng Việt
+        working-directory: apps/rustgis-web
+        run: trunk build --release --public-url /viRustGIS/
+      - name: Kiểm tra đầu ra
+        run: |
+          test -f dist/web/index.html
+          find dist/web -name '*_bg.wasm' | grep -q .
+          touch dist/web/.nojekyll
+      - name: Thiết lập GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Đóng gói trang web
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/web
+      - name: Xuất bản GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
