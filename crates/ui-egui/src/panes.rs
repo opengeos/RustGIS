@@ -232,7 +232,8 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 struct DraggedLayer(u32);
 
 /// Dragging a layer row over the list: marks the gap it would drop into and, on release, moves
-/// it there (`layer.move`, one undo step). Released outside the list, the drag does nothing.
+/// it there (`layer.move`, one undo step). Released anywhere but over the layer rows, the drag
+/// does nothing.
 fn layer_drop(app: &mut RustGisApp, ui: &Ui, blocks: &[(u32, Rect)], t: &Tokens) {
     let Some(dragged) = egui::DragAndDrop::payload::<DraggedLayer>(ui.ctx()) else { return };
     let Some(from) = blocks.iter().position(|(id, _)| *id == dragged.0) else { return };
@@ -245,6 +246,11 @@ fn layer_drop(app: &mut RustGisApp, ui: &Ui, blocks: &[(u32, Rect)], t: &Tokens)
         let dt = ui.input(|i| i.stable_dt).min(0.1);
         ui.scroll_with_delta_animation(vec2(0.0, push * 600.0 * dt), egui::style::ScrollAnimation::none());
         ui.ctx().request_repaint();
+    }
+    // Only the layer rows take a drop: not the map's name above them, the basemap or a table below.
+    let (Some((_, first)), Some((_, last))) = (blocks.first(), blocks.last()) else { return };
+    if pointer.y < first.min.y || pointer.y > last.max.y {
+        return;
     }
     // The gap above the first row whose middle is below the pointer, or the one after the last.
     let gap = blocks.iter().position(|(_, r)| pointer.y < r.center().y).unwrap_or(blocks.len());
