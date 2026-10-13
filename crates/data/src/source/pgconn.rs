@@ -53,7 +53,10 @@ pub fn userinfo_end(rest: &str) -> Option<usize> {
     }
     let (_, after) = authority.split_once(':')?;
     // `host:8080` (or an IPv6 literal's colons) is a host and port, not a user and password.
-    if authority.starts_with('[') || (!after.is_empty() && after.bytes().all(|b| b.is_ascii_digit())) {
+    // A port: empty (`host:`), digits, or digits then another host (libpq's `h1:5432,h2:5432`).
+    let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+    let port = after.is_empty() || digits == after.len() || (digits > 0 && after.as_bytes().get(digits) == Some(&b','));
+    if authority.starts_with('[') || port {
         return None;
     }
     // A malformed authority: the password may hold any of `/?#@`, so the last `@` ends it.

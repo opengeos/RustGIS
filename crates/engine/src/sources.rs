@@ -463,16 +463,18 @@ mod tests {
         assert_eq!(redact("https://host.example:8080/@user/x"), "https://host.example:8080/@user/x");
         assert_eq!(redact("https://h:80/x?email=a@b"), "https://h:80/x?email=a@b");
         assert_eq!(redact("https://[::1]:8080/@a"), "https://[::1]:8080/@a");
-        // A PostgreSQL URI's password, whatever it holds; its fragment never.
+        // An empty port is a port too.
+        assert_eq!(redact("https://host:/x?email=a@b"), "https://host:/x?email=a@b");
+        // A PostgreSQL URI's password, whatever it holds; its fragment never; libpq's hosts kept.
         for (given, kept) in [
-            ("postgresql://u:p/w@db.example/gis", "postgres:postgresql://u@db.example/gis"),
-            ("postgresql://u:p?w@db.example/gis", "postgres:postgresql://u@db.example/gis"),
-            ("postgresql://u:pw@db.example:5432/gis#x", "postgres:postgresql://u@db.example:5432/gis"),
-            ("postgresql://db.example:5432/gis", "postgres:postgresql://db.example:5432/gis"),
+            ("postgresql://u:p/w@db.example/gis", "postgresql://u@db.example/gis"),
+            ("postgresql://u:p?w@db.example/gis", "postgresql://u@db.example/gis"),
+            ("postgresql://u:p#w@db.example/gis", "postgresql://u@db.example/gis"),
+            ("postgresql://u:pw@db.example:5432/gis#x", "postgresql://u@db.example:5432/gis"),
+            ("postgresql://db.example:5432/gis", "postgresql://db.example:5432/gis"),
+            ("postgresql://h1:5432,h2:5432/db?options=a@b", "postgresql://h1:5432,h2:5432/db?options=a@b"),
         ] {
-            let got = redact(given);
-            assert!(!got.contains("p/w") && !got.contains("p?w") && !got.contains("pw@"), "{given} -> {got}");
-            assert!(got.ends_with(kept.trim_start_matches("postgres:")), "{given} -> {got}");
+            assert_eq!(redact(given), kept, "{given}");
         }
         // The user and password go, whatever the password holds (an unencoded `?`, `/`, `#`, `@`).
         for (given, kept) in [
