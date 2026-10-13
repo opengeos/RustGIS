@@ -364,10 +364,14 @@ mod file {
             }
             // That it is an MBTiles file: the tiles table (or view) has its columns. Nothing is read.
             c.prepare("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles LIMIT 0").map_err(sql)?;
-            let says = |k: &str| meta.iter().any(|(n, v)| n.eq_ignore_ascii_case(k) && !v.trim().is_empty());
+            // What the metadata says, if it is usable: a zoom that reads as a number, a format
+            // RustGIS knows.
+            let says = |k: &str, ok: &dyn Fn(&str) -> bool| meta.iter().any(|(n, v)| n.eq_ignore_ascii_case(k) && ok(v.trim()));
+            let zoom = |v: &str| v.parse::<f64>().is_ok_and(f64::is_finite);
+            let format = |v: &str| super::Format::from_name(v) != super::Format::Unknown;
             // The tiles are looked at only for what the metadata leaves out: finding the zooms can
             // scan the whole table (or join a deduplicated layout's view).
-            let zooms = if says("minzoom") && says("maxzoom") {
+            let zooms = if says("minzoom", &zoom) && says("maxzoom", &zoom) {
                 None
             } else {
                 let z: (Option<i64>, Option<i64>) =
@@ -378,7 +382,7 @@ mod file {
                 }
             };
             // A tile's first bytes say its format when the metadata doesn't.
-            let first: Option<Vec<u8>> = if says("format") {
+            let first: Option<Vec<u8>> = if says("format", &format) {
                 None
             } else {
                 c.query_row("SELECT substr(tile_data, 1, 16) FROM tiles LIMIT 1", [], |r| r.get(0)).optional().map_err(sql)?
@@ -451,6 +455,27 @@ mod tests {
         assert_eq!((i.format, i.min_zoom, i.max_zoom), (Format::Png, 3, 5));
         assert_eq!(i.bounds[0], -180.0);
         assert!(i.json.is_null());
+    }
+
+    /// Metadata that can't be used (zooms that aren't numbers, an unknown format) is made up from
+    /// the tiles, as missing metadata is.
+    #[test]
+    fn junk_metadata_falls_back_to_the_tiles() {
+        let path = std::env::temp_dir().join(format!("rustgis-mbtiles-junk-{}.mbtiles", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = rusqlite::Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE metadata (name text, value text); CREATE TABLE tiles (zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB);
+                 INSERT INTO metadata VALUES ('minzoom', 'abc'), ('maxzoom', ''), ('format', 'tiff-ish');",
+            )
+            .unwrap();
+            c.execute("INSERT INTO tiles VALUES (2, 0, 0, ?1), (3, 1, 1, ?1)", [b"\x89PNG\r\n\x1a\n".to_vec()]).unwrap();
+        }
+        let info = open_path(&path).unwrap();
+        assert_eq!((info.min_zoom, info.max_zoom, info.format), (2, 3, Format::Png));
+        close(&path);
+        let _ = std::fs::remove_file(&path);
     }
 
     /// Plain and deduplicated layouts written by SQLite read the same through both readers.
