@@ -25,7 +25,7 @@ is a command, a thin egui front end, headless screenshots for UI work.
 | L4 | `engine` | `Session`, undo, command registry, sample project |
 | L5 | `assistant` | the AI Assistant: a chat agent (sans I/O: `provider` builds and reads OpenAI/Anthropic/Gemini requests, `agent` loops, `tools` run commands; file, network and plugin commands wait for the user's approval) |
 | L6 | `ui-egui` | ribbon, panes, map view, attribute table, dialogs (swappable) |
-| apps | `rustgis`, `rustgis-cli`, `rustgis-web` | desktop app, command line, browser (WebAssembly) |
+| apps | `rustgis`, `rustgis-cli`, `rustgis-web`, `rustgis-python` | desktop app, command line, browser (WebAssembly), the `rustgis` Python package (PyO3, built with maturin) |
 
 - **Everything is a command**: a `CommandSpec` in `crates/engine/src/cmd/*.rs`. UI-only
   commands (`ui.*`) live in `crates/ui-egui/src/lib.rs`. The ribbon, shortcuts, command search

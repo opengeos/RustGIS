@@ -27,6 +27,7 @@ nav = [
   ] },
   { "Comparison" = "comparison.md" },
   { "Command Line" = "cli.md" },
+  { "Python" = "python.md" },
   { "MCP Server" = "mcp.md" },
   { "Plugins" = "plugins.md" },
   { "Languages" = "i18n.md" },

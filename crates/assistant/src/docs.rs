@@ -36,6 +36,7 @@ pub const PAGES: &[Page] = pages![
     "user-guide/assistant.md",
     "comparison.md",
     "cli.md",
+    "python.md",
     "mcp.md",
     "plugins.md",
     "i18n.md",

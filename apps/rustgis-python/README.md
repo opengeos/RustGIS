@@ -1,0 +1,29 @@
+# rustgis
+
+Python bindings to [RustGIS](https://rustgis.app), a fast, free and open-source GIS in pure Rust.
+The RustGIS engine runs inside Python, headless: open data and projects, run any of RustGIS's
+commands and over 1,000 geoprocessing tools, style layers, render maps and save projects the
+desktop app opens as they are.
+
+```sh
+pip install rustgis            # add [geopandas] for GeoDataFrame in and out
+```
+
+```python
+import rustgis
+
+s = rustgis.Session(sample=True)                  # the World Atlas sample
+s.run("gp.run", tool="buffer", params={"input": "Cities", "distance": 100})
+s.run("layer.symbology", layer="Countries", type="graduated", field="pop_est")
+s.to_png("map.png", width=1600, height=900)      # or just `s` in Jupyter
+s.save("atlas.rgis")                              # open it in the RustGIS app
+
+gdf = s.layer("Cities").to_geopandas()            # a GeoDataFrame in EPSG:4326
+s.add_geopandas(gdf[gdf.pop_max > 5_000_000], name="Big cities")
+```
+
+Every action in RustGIS is a command with an id, the same ids the ribbon, `rustgis-cli` and the
+AI Assistant use: `Session.commands()` lists them with their parameters, and `Session.run` runs
+any of them. See the [Python guide](https://rustgis.app/python/).
+
+Licensed under Apache-2.0.

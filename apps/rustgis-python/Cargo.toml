@@ -1,0 +1,25 @@
+[package]
+name = "rustgis-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Python bindings to the RustGIS engine (the `rustgis` package on PyPI)"
+
+[lints]
+workspace = true
+
+[lib]
+name = "_rustgis"
+crate-type = ["cdylib"]
+# The module links against Python only when loaded by it; there is nothing to run under cargo test.
+test = false
+doctest = false
+
+[dependencies]
+rustgis-engine = { workspace = true, features = ["geolibre"] }
+serde_json = { workspace = true }
+pyo3 = { version = "0.29", features = ["abi3-py39", "generate-import-lib"] }
+
+[build-dependencies]
+pyo3-build-config = "0.29"

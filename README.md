@@ -128,6 +128,18 @@ claude mcp add rustgis -- rustgis-cli mcp --sample   # RustGIS as an MCP server 
 
 See [Command Line](docs/cli.md) for more.
 
+Python: the same engine and commands in-process.
+
+```python
+import rustgis
+s = rustgis.Session(sample=True)
+s.run("gp.run", tool="buffer", params={"input": "Cities", "distance": 100})
+s.to_png("map.png")
+gdf = s.layer("Cities_Buffer").to_geopandas()
+```
+
+See [Python](docs/python.md).
+
 ## Architecture
 
 Layered crates, each depending only on the ones below it:

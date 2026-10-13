@@ -1,0 +1,114 @@
+name: Python package
+
+# The `rustgis` package on PyPI (apps/rustgis-python): tested on every change to it or the
+# engine; wheels for every platform built on each published release and uploaded to PyPI with
+# trusted publishing (the `pypi` environment, no token).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "apps/rustgis-python/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/python.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.9" }
+          - { os: ubuntu-latest, python: "3.13" }
+          - { os: macos-latest, python: "3.13" }
+          - { os: windows-latest, python: "3.13" }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build and install
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "./apps/rustgis-python[test,geopandas]"
+      - name: Test
+        working-directory: apps/rustgis-python
+        run: python -m pytest -q
+
+  wheels:
+    name: Wheels (${{ matrix.platform.name }})
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { name: linux-x86_64, runner: ubuntu-latest, target: x86_64, manylinux: "2_28" }
+          - { name: linux-aarch64, runner: ubuntu-22.04-arm, target: aarch64, manylinux: "2_28" }
+          - { name: macos-x86_64, runner: macos-15-intel, target: x86_64 }
+          - { name: macos-aarch64, runner: macos-latest, target: aarch64 }
+          - { name: windows-x86_64, runner: windows-latest, target: x64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: apps/rustgis-python
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux || 'auto' }}
+          args: --release --locked --out dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.platform.name }}
+          path: apps/rustgis-python/dist
+
+  sdist:
+    name: Source distribution
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: apps/rustgis-python
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-sdist
+          path: apps/rustgis-python/dist
+
+  publish:
+    name: Publish to PyPI
+    if: github.event_name == 'release'
+    needs: [test, wheels, sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
