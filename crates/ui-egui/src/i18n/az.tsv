@@ -1339,8 +1339,6 @@ Results	Nəticələr
 Resume	Davam et
 RGB	RGB
 Ribbon	Lent
-Ribbon feature coverage: {done} of {total} features ({pct}%).	Lent funksiyalarının əhatəsi: {total} funksiyadan {done} ({pct}%).
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Lent uyğunluğu: {total} lent funksiyasından {done} RustGIS əmrinə malikdir.
 Right	Sağ
 Robinson	Robinson
 Rotate	Döndər

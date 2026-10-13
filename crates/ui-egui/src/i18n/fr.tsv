@@ -1339,8 +1339,6 @@ Results	Résultats
 Resume	Reprendre
 RGB	RVB
 Ribbon	Ruban
-Ribbon feature coverage: {done} of {total} features ({pct}%).	Couverture des fonctions du ruban : {done} sur {total} fonctions ({pct} %).
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Parité du ruban : {done} fonctions du ruban sur {total} ont une commande RustGIS.
 Right	Droite
 Robinson	Robinson
 Rotate	Faire pivoter

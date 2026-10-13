@@ -1,12 +1,10 @@
-//! L4: the session (project, undo, active map/layer/tool), the command registry and the
-//! ribbon feature catalog.
+//! L4: the session (project, undo, active map/layer/tool) and the command registry.
 //!
 //! **Everything is a command.** Each user-visible action is a [`CommandSpec`] with an id; the
 //! ribbon, keyboard shortcuts, command search and the command line all dispatch through
 //! [`Session::run`]. Programmatic calls never open dialogs.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-pub mod catalog;
 pub mod cmd;
 pub mod project;
 pub mod sample;

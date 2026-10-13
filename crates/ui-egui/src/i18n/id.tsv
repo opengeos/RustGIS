@@ -1339,8 +1339,6 @@ Results	Hasil
 Resume	Lanjutkan
 RGB	RGB
 Ribbon	Ribbon
-Ribbon feature coverage: {done} of {total} features ({pct}%).	Cakupan fitur ribbon: {done} dari {total} fitur ({pct}%).
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Paritas ribbon: {done} dari {total} fitur ribbon memiliki perintah RustGIS.
 Right	Kanan
 Robinson	Robinson
 Rotate	Putar

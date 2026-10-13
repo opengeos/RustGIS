@@ -1339,8 +1339,6 @@ Results	Результаты
 Resume	Возобновить
 RGB	RGB
 Ribbon	Лента
-Ribbon feature coverage: {done} of {total} features ({pct}%).	Охват функций ленты: {done} из {total} ({pct}%).
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Соответствие ленты: команд RustGIS для функций ленты — {done} из {total}.
 Right	Справа
 Robinson	Робинсон
 Rotate	Повернуть

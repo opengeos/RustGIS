@@ -157,14 +157,6 @@ fn about(ui: &mut Ui, t: &Tokens) {
     ui.add_space(4.0);
     crate::chrome::project_links(ui);
     ui.add_space(8.0);
-    let (done, total) = rustgis_engine::catalog::coverage();
-    ui.label(
-        egui::RichText::new(crate::i18n::fmt(
-            "Ribbon parity: {done} of {total} ribbon features have a RustGIS command.",
-            &[("done", &done.to_string()), ("total", &total.to_string())],
-        ))
-        .color(t.text_dim),
-    );
     ui.label(
         egui::RichText::new(tl!("Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.")).color(t.text_dim),
     );

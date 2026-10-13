@@ -22,7 +22,7 @@ is a command, a thin egui front end, headless screenshots for UI work.
 | L3 | `render` | tiny-skia map renderer, label placement, PNG export, font discovery |
 | L3 | `plugins` | plugins: sandboxed WebAssembly modules (`wasmi`) adding commands and tools; `.rgplugin` packages, the plugin registry (see `docs/plugins.md`) |
 | L3 | `geolibre` | the GeoLibre/Whitebox tool suite as geoprocessing tools (engine feature `geolibre`): run by the optional `geolibre` program natively, by geolibre-rust's WASI runner in the browser |
-| L4 | `engine` | `Session`, undo, command registry, ribbon feature catalog, sample project |
+| L4 | `engine` | `Session`, undo, command registry, sample project |
 | L5 | `assistant` | the AI Assistant: a chat agent (sans I/O: `provider` builds and reads OpenAI/Anthropic/Gemini requests, `agent` loops, `tools` run commands; file, network and plugin commands wait for the user's approval) |
 | L6 | `ui-egui` | ribbon, panes, map view, attribute table, dialogs (swappable) |
 | apps | `rustgis`, `rustgis-cli`, `rustgis-web` | desktop app, command line, browser (WebAssembly) |
@@ -41,8 +41,6 @@ is a command, a thin egui front end, headless screenshots for UI work.
   `crates/ui-egui/src/i18n/*.tsv` (format in `docs/i18n.md`). Command ids, data and the CLI are
   never translated.
 - **Layering** is enforced by `cargo xtask layers`: nothing below L6 depends on egui/eframe/rfd.
-- **Coverage** is measured against a ribbon feature checklist (`crates/engine/src/catalog.rs`,
-  `rustgis-cli parity` prints it). A test enforces a floor that only rises.
 
 ## Assets
 - No third-party vendor icons, images, styles, fonts, help text or code. Icons are drawn in

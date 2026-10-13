@@ -1339,8 +1339,6 @@ Results	Ergebnisse
 Resume	Fortsetzen
 RGB	RGB
 Ribbon	Menüband
-Ribbon feature coverage: {done} of {total} features ({pct}%).	Abdeckung der Menüband-Funktionen: {done} von {total} Funktionen ({pct} %).
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Menüband-Parität: {done} von {total} Menüband-Funktionen haben einen RustGIS-Befehl.
 Right	Rechts
 Robinson	Robinson
 Rotate	Drehen

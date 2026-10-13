@@ -1339,8 +1339,6 @@ Results	결과
 Resume	다시 시작
 RGB	RGB
 Ribbon	리본
-Ribbon feature coverage: {done} of {total} features ({pct}%).	리본 기능 지원 범위: {total}개 중 {done}개 기능({pct}%).
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	리본 대응: 리본 기능 {total}개 중 {done}개에 RustGIS 명령이 있습니다.
 Right	오른쪽
 Robinson	로빈슨 도법
 Rotate	회전

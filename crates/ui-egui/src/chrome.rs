@@ -466,8 +466,6 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
             ui.add_space(4.0);
             project_links(ui);
             ui.add_space(6.0);
-            let (done, total) = rustgis_engine::catalog::coverage();
-            ui.label(egui::RichText::new(crate::i18n::fmt("Ribbon feature coverage: {done} of {total} features ({pct}%).", &[("done", &done.to_string()), ("total", &total.to_string()), ("pct", &(done * 100 / total.max(1)).to_string())])).small());
             ui.label(egui::RichText::new(tl!("Sample data: Natural Earth (public domain). Licensed under Apache-2.0.")).small().weak());
             let (fonts_from, _) = (rustgis_engine::render::fonts::ui_fonts().source.clone(), ());
             ui.label(egui::RichText::new(crate::i18n::fmt("Interface font: {font}", &[("font", &fonts_from)])).small().weak());

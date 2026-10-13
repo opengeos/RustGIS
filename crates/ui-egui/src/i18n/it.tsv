@@ -1339,8 +1339,6 @@ Results	Risultati
 Resume	Riprendi
 RGB	RGB
 Ribbon	Barra multifunzione
-Ribbon feature coverage: {done} of {total} features ({pct}%).	Copertura funzioni della barra multifunzione: {done} di {total} funzioni ({pct}%).
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Parità della barra multifunzione: {done} di {total} funzioni hanno un comando RustGIS.
 Right	Destra
 Robinson	Robinson
 Rotate	Ruota

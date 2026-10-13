@@ -1339,8 +1339,6 @@ Results	Resultados
 Resume	Retomar
 RGB	RGB
 Ribbon	Faixa de opções
-Ribbon feature coverage: {done} of {total} features ({pct}%).	Cobertura de recursos da faixa de opções: {done} de {total} recursos ({pct}%).
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Paridade da faixa de opções: {done} de {total} recursos da faixa têm um comando do RustGIS.
 Right	Direita
 Robinson	Robinson
 Rotate	Girar

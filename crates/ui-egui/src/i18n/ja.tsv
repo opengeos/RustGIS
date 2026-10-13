@@ -1339,8 +1339,6 @@ Results	結果
 Resume	再開
 RGB	RGB
 Ribbon	リボン
-Ribbon feature coverage: {done} of {total} features ({pct}%).	リボン機能のカバー率：{total} 件中 {done} 件の機能（{pct}%）。
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	リボンの対応状況：{total} 件のリボン機能のうち {done} 件に RustGIS コマンドがあります。
 Right	右
 Robinson	ロビンソン図法
 Rotate	回転

@@ -1339,8 +1339,6 @@ Results	Resultaten
 Resume	Hervatten
 RGB	RGB
 Ribbon	Lint
-Ribbon feature coverage: {done} of {total} features ({pct}%).	Dekking lintfuncties: {done} van {total} functies ({pct}%).
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Lintpariteit: {done} van {total} lintfuncties hebben een RustGIS-opdracht.
 Right	Rechts
 Robinson	Robinson
 Rotate	Roteren

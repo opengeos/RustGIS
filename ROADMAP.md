@@ -1,8 +1,6 @@
 # Roadmap
 
-Every feature on the ribbon checklist (`crates/engine/src/catalog.rs`, printed by
-`rustgis-cli parity`) has a command today. Many are first versions: there are no full 3D scenes
-or enterprise portal sharing yet, so real depth is lower than the checklist suggests.
+Many features are first versions: there are no full 3D scenes or enterprise portal sharing yet.
 
 ## Done
 - Layered workspace, command registry with undo, project files (`.rgis`), `rustgis-cli`, the

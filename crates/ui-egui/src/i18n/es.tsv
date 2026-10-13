@@ -1339,8 +1339,6 @@ Results	Resultados
 Resume	Reanudar
 RGB	RGB
 Ribbon	Cinta
-Ribbon feature coverage: {done} of {total} features ({pct}%).	Cobertura de funciones de la cinta: {done} de {total} funciones ({pct}%).
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Paridad de la cinta: {done} de {total} funciones de la cinta tienen un comando de RustGIS.
 Right	Derecha
 Robinson	Robinson
 Rotate	Rotar

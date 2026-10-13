@@ -12,7 +12,6 @@
 //!     [--provider anthropic|openai|gemini|openrouter|ollama|custom] [--model M] [--base-url URL] [--yes] [--save out.rgis] [--trace log.txt]
 //! rustgis-cli ask --models [--provider P]                # list the provider's models
 //! rustgis-cli mcp [--sample | --project p.rgis | --data f.geojson …] [--yes]   # an MCP server on stdio
-//! rustgis-cli parity                                    # ribbon feature coverage report
 //! rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id>
 //!                      | browse | get <id>] [--registry URL]
 //! ```
@@ -25,7 +24,7 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-/// `println!` that ignores a closed pipe (`rustgis-cli parity | head`).
+/// `println!` that ignores a closed pipe (`rustgis-cli commands | head`).
 macro_rules! out {
     ($($t:tt)*) => {{
         let _ = writeln!(std::io::stdout(), $($t)*);
@@ -37,7 +36,7 @@ use serde_json::{Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools | parity\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]\n  rustgis-cli mcp [--sample] [--project P] [--data F]… [--yes]"
+        "usage:\n  rustgis-cli commands | tools\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]\n  rustgis-cli mcp [--sample] [--project P] [--data F]… [--yes]"
     );
     ExitCode::from(2)
 }
@@ -314,24 +313,6 @@ fn main() -> ExitCode {
         }
         "tools" => {
             print(&run(&mut s, "gp.tools", Value::Null)?);
-            Ok(())
-        }
-        "parity" => {
-            let (done, total) = rustgis_engine::catalog::coverage();
-            out!("Ribbon feature coverage: {done}/{total} ({}%)", done * 100 / total.max(1));
-            let mut cur = ("", "");
-            for f in rustgis_engine::catalog::FEATURES {
-                if (f.tab, f.group) != cur {
-                    out!("\n{} › {}", f.tab, f.group);
-                    cur = (f.tab, f.group);
-                }
-                out!(
-                    "  [{}] {}{}",
-                    if f.command.is_some() { "x" } else { " " },
-                    f.name,
-                    f.command.map(|c| format!("  ({c})")).unwrap_or_default()
-                );
-            }
             Ok(())
         }
         "info" => {

@@ -1339,8 +1339,6 @@ Results	Sonuçlar
 Resume	Sürdür
 RGB	RGB
 Ribbon	Şerit
-Ribbon feature coverage: {done} of {total} features ({pct}%).	Şerit özellik kapsamı: {total} özellikten {done} tanesi (%{pct}).
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Şerit eşliği: {total} şerit özelliğinden {done} tanesinin RustGIS komutu var.
 Right	Sağ
 Robinson	Robinson
 Rotate	Döndür

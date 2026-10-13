@@ -1339,8 +1339,6 @@ Results	Kết quả
 Resume	Tiếp tục
 RGB	RGB
 Ribbon	Ribbon
-Ribbon feature coverage: {done} of {total} features ({pct}%).	Độ phủ tính năng ribbon: {done} trên {total} tính năng ({pct}%).
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	Tương đương ribbon: {done} trên {total} tính năng ribbon có lệnh RustGIS.
 Right	Phải
 Robinson	Robinson
 Rotate	Xoay

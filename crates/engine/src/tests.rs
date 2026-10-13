@@ -191,20 +191,6 @@ fn open_from_text() {
 }
 
 #[test]
-fn catalog_ids_exist() {
-    let s = Session::new(Project::default());
-    for f in crate::catalog::FEATURES {
-        if let Some(id) = f.command {
-            assert!(id.starts_with("ui.") || s.registry.get(id).is_some(), "catalog names unknown command {id}");
-        }
-    }
-    let (done, total) = crate::catalog::coverage();
-    assert!(total > 250);
-    // The floor only rises.
-    assert!(done >= 316, "coverage fell to {done}");
-}
-
-#[test]
 fn command_ids_are_unique() {
     let s = Session::new(Project::default());
     let mut ids: Vec<&str> = s.registry.commands.iter().map(|c| c.id).collect();

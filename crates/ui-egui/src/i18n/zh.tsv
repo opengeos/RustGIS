@@ -1339,8 +1339,6 @@ Results	结果
 Resume	继续
 RGB	RGB
 Ribbon	功能区
-Ribbon feature coverage: {done} of {total} features ({pct}%).	功能区要素覆盖率：{total} 个要素中已完成 {done} 个（{pct}%）。
-Ribbon parity: {done} of {total} ribbon features have a RustGIS command.	功能区对等：{total} 个功能区功能中有 {done} 个具有 RustGIS 命令。
 Right	右侧
 Robinson	罗宾森投影
 Rotate	旋转
