@@ -553,7 +553,12 @@ fn add_database(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                 p[key] = json!(v.trim());
             }
         }
-        app.run("layer.addDatabase", p).map(|_| ())
+        let r = app.run("layer.addDatabase", p).map(|_| ());
+        // The password is the session's to keep, not the dialog's.
+        if r.is_ok() {
+            app.dialogs.b.clear();
+        }
+        r
     })
 }
 

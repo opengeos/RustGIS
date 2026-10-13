@@ -110,6 +110,13 @@ impl std::fmt::Debug for SourceLayer {
 fn rerun(d: &DuckdbOrigin) -> rustgis_data::Result<std::path::PathBuf> {
     use rustgis_data::source::duckdb;
     let out = match (&d.table, d.database.as_deref().map(duckdb::Database::parse)) {
+        // A project names its server, so it never connects on its own: it would send the user's
+        // own PostgreSQL credentials (PGPASSWORD, ~/.pgpass) to whatever host the file says.
+        (Some(_), Some(duckdb::Database::Postgres(_))) => {
+            return Err(rustgis_data::DataError::Format(
+                "the table's result is no longer in the cache: add it again (Add Data › Database…)".into(),
+            ));
+        }
         (Some(t), Some(db)) => duckdb::convert_table_of(&db, &duckdb::find_table_of(&db, t)?, d.crs.as_deref())?,
         _ => {
             return Err(rustgis_data::DataError::Format(

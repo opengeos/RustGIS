@@ -2591,10 +2591,12 @@ fn postgres_databases() {
     let text = serde_json::to_string(&s.project).unwrap();
     assert!(text.contains("postgres:") && !text.contains("password"), "{text}");
     std::fs::remove_file(src.path.as_deref().unwrap()).unwrap();
+    // A project never connects to its server on its own (it would hand over the user's
+    // credentials to whatever host the file names): the layer says to add the table again.
     let mut t = Session::new(Project::default());
     t.run("project.openText", &json!({"text": text})).unwrap();
     let again = t.map().layer_by_name("P").unwrap().source.as_ref().unwrap();
-    assert!(again.is_open(), "{:?}", again.error);
+    assert!(!again.is_open() && again.error.as_deref().is_some_and(|e| e.contains("add it again")), "{:?}", again.error);
     // A query over the database's tables.
     let r = s.run("layer.addSql", &json!({"sql": format!("SELECT * FROM {first} LIMIT 3"), "database": conn, "name": "Q"})).unwrap();
     assert!(r["features"].as_u64().unwrap() <= 3, "{r}");

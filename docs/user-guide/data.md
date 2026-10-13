@@ -99,9 +99,11 @@ connection is read only.
 
 The password is kept until RustGIS closes and never written to the project, which names the
 connection without it; it reaches DuckDB in its environment (`PGPASSWORD`), never on its command
-line. Without one, libpq's own `PGPASSWORD` or `~/.pgpass` serve, so a project that reopens a
-connection after the app restarts needs one of those, or the table added again. A connection's
-table is converted afresh each time it is added (the database can change at any time), and
+line. Without one, libpq's own `PGPASSWORD` or `~/.pgpass` serve. A project keeps the table's
+result from when it was added, but never connects to the server on its own (a project file could
+name any host, and libpq would hand it your credentials): when the result is gone, add the table
+again. A connection's table is converted afresh each time it is added (the database can change at
+any time), and
 `layer.addSql` takes a connection as its `"database"` too, so a query names its tables plainly:
 
 ```sh
