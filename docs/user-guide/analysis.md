@@ -21,21 +21,21 @@ gdp_md IS NULL
 
 ## Geoprocessing tools
 
-![The Analysis tab's tool gallery and the Geoprocessing pane with Buffer open; 300 km dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)
+![The Analysis tab's tool gallery and the Tools pane with Buffer open; 300 km dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)
 
-Open a tool from the **Analysis** tab's gallery, **Analyze › Tools** (the Geoprocessing pane,
+Open a tool from the **Analyze** tab's gallery, **Analyze › Tools** (the Tools pane,
 which searches every tool) or Command Search. Fill in its parameters and click **Run**: the
 result is added to the map, and the run is listed under **Analyze › History**. The built-in tools:
 
 | Tool | Toolbox |
 | --- | --- |
-| Buffer | Analyze › Proximity |
-| Clip, Erase | Analyze › Extract / Overlay |
+| Buffer | Analysis › Proximity |
+| Clip, Erase | Analysis › Extract / Overlay |
 | Dissolve | Data Management › Generalization |
 | Minimum Bounding Geometry, Feature To Point, Calculate Geometry Attributes | Data Management › Features |
 | Simplify | Cartography › Generalization |
 | Select Layer By Location / Attribute | Data Management › Layers and Table Views |
-| Summarize Within, Summary Statistics | Analyze › Summarize / Statistics |
+| Summarize Within, Summary Statistics | Analysis › Summarize / Statistics |
 | Export Features | Conversion |
 
 Tools honour the current selection: with features selected, only those are processed.
@@ -50,7 +50,7 @@ interpolation and vector work. They run on the map's layers and add their output
 layers.
 
 The suite is an optional download, so RustGIS itself stays small: the **GeoLibre runner**, a
-single `geolibre` program (about 20 MB to download). In the Geoprocessing pane, click
+single `geolibre` program (about 20 MB to download). In the Tools pane, click
 **Install GeoLibre tools** under *GeoLibre tools*: RustGIS downloads the latest runner for your
 platform from the [geolibre-rust releases](https://github.com/opengeos/geolibre-rust/releases/latest),
 checks it against its published SHA-256 checksum (which catches a corrupted download; the
@@ -66,7 +66,7 @@ To install it yourself instead, download the archive for your platform
 RustGIS also finds the runner without asking when it is next to the RustGIS program (or in a
 `geolibre` folder beside it), on your `PATH`, or named by the `RUSTGIS_GEOLIBRE` environment
 variable (the command line uses these). The tools then appear under **GeoLibre › Raster,
-Vector, Lidar, Hydrology, Terrain, Conversion** in the Geoprocessing pane and the Catalog's
+Vector, Lidar, Hydrology, Terrain, Conversion** in the Tools pane and the Browser's
 toolboxes, and Find Tools searches them.
 
 - Raster inputs are passed as their own files; vector layers (or their selection) are written
@@ -81,7 +81,7 @@ toolboxes, and Find Tools searches them.
   `gp.tools` lists every tool's parameters, `gp.geolibre` shows the runner in use and
   `gp.setGeolibre={"path":"…"}` picks one.
 
-In the web app, click **Load GeoLibre tools** in the Geoprocessing pane instead. RustGIS
+In the web app, click **Load GeoLibre tools** in the Tools pane instead. RustGIS
 loads geolibre-rust's WebAssembly runner (the `geolibre-wasm` package, from jsDelivr, about
 25 MB the first time, then from the browser's cache) and the tools run in the page, in an
 in-memory folder: nothing is uploaded. The web app remembers this and loads them again on your

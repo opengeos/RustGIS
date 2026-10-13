@@ -4,7 +4,7 @@
 
 ![The Feature Layer tab and the Symbology pane with graduated colours; the larger African countries are selected on the map and in the attribute table](https://assets.rustgis.app/images/symbology-table.webp)
 
-Select a layer in Contents and open **Style › Symbology** (or the Symbology pane):
+Select a layer in Layers and open **Style › Symbology** (or the Symbology pane):
 
 - **Single Symbol**: one fill, outline and marker for every feature.
 - **Unique Values**: one colour per distinct value of a field.

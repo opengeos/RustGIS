@@ -15,7 +15,7 @@ effects](#view-effects) below.
 
 ![A MapLibre style from OpenFreeMap drawn over Paris, with the Basemap gallery listing the built-in basemaps and the web tile layer](https://assets.rustgis.app/images/tiles.webp)
 
-**Home › Basemap** offers five built-in basemaps drawn from a world outline (Paper, Midnight,
+**Home › Add › Basemap** offers five built-in basemaps drawn from a world outline (Paper, Midnight,
 Ocean, Atlas, Blank), which need no network, and web tile layers over them:
 
 - **Raster tiles** from an XYZ or TMS template (`https://…/{z}/{x}/{y}.png`; `{-y}` for rows

@@ -22,7 +22,7 @@ pub(crate) fn need_raster(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
         Some(l) if l.raster.as_ref().is_some_and(|r| r.data.is_some()) => None,
         Some(l) if l.is_raster() => Some("the raster's data couldn't be read"),
-        _ => Some("select a raster layer in the Contents pane first"),
+        _ => Some("select a raster layer in the Layers pane first"),
     }
 }
 

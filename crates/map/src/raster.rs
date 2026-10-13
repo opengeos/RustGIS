@@ -549,7 +549,7 @@ pub enum RasterLegend {
 }
 
 impl RasterLayer {
-    /// Legend rows for the Contents pane.
+    /// Legend rows for the Layers pane.
     pub fn legend(&self) -> Vec<RasterLegend> {
         let Some(r) = &self.data else { return Vec::new() };
         let band_name = |b: usize| r.bands.get(b).map(|b| b.name.clone()).unwrap_or_default();

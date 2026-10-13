@@ -21,7 +21,7 @@ Open **Plugins › Plugin Manager**:
 
 A plugin's commands and tools appear on the **Plugins** tab, in a group named after the
 plugin, or on the plugin's own tab if it has one. Its commands are also in command search, and
-its tools are in the **Geoprocessing** pane under **Plugins ›**.
+its tools are in the **Tools** pane under **Plugins ›**.
 
 The desktop app keeps installed packages in its data folder (`plugins/` beside the GeoLibre
 runner, or `$RUSTGIS_PLUGINS_DIR`) and loads them at startup. The web app remembers the
@@ -197,7 +197,7 @@ can hide it like any other. Declare it in `plugin.json`:
 ```
 
 - `items` lists the buttons. An item is a command id, `tool:<id>` (which opens that tool in the
-  Geoprocessing pane), or a dropdown `menu` whose `items` are command ids or `tool:<id>`.
+  Tools pane), or a dropdown `menu` whose `items` are command ids or `tool:<id>`.
 - A tab has 1 to 8 groups, a group has 1 to 16 items, and a menu has 1 to 32 entries. Every
   entry must name one of the plugin's own commands or tools.
 - The label can't be the name of one of RustGIS's tabs (Map, Insert, Analysis, Plugins…). The

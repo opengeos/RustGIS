@@ -99,7 +99,7 @@ fn no_params() -> String {
     "{}".into()
 }
 
-/// A tool parameter: the Geoprocessing pane turns its kind into a widget.
+/// A tool parameter: the Tools pane turns its kind into a widget.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParamDecl {
@@ -134,7 +134,7 @@ pub struct GroupDecl {
     pub items: Vec<ItemDecl>,
 }
 
-/// A button: a command id or `tool:<id>` (opens the tool in the Geoprocessing pane), or a
+/// A button: a command id or `tool:<id>` (opens the tool in the Tools pane), or a
 /// dropdown menu of them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -171,7 +171,7 @@ pub fn is_layer_kind(kind: &str) -> bool {
 }
 
 /// A geoprocessing tool the plugin adds (`plugin:<plugin>/<tool>`), listed in the
-/// Geoprocessing pane under "Plugins › <toolbox>".
+/// Tools pane under "Plugins › <toolbox>".
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDecl {

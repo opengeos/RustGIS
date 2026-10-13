@@ -106,7 +106,7 @@ pub struct Layer {
     /// Selected rows (indices into `dataset.features`).
     #[serde(default)]
     pub selection: Vec<usize>,
-    /// Whether the Contents pane shows the legend classes.
+    /// Whether the Layers pane shows the legend classes.
     #[serde(default = "yes")]
     pub expanded: bool,
     #[serde(default = "yes")]
@@ -239,7 +239,7 @@ impl Layer {
                 return false;
             }
         }
-        // A failed read leaves nothing drawn for it (its error shows in Contents), not the
+        // A failed read leaves nothing drawn for it (its error shows in Layers), not the
         // previous view's features.
         match src.poll(block) {
             source::Polled::Done(_, batch) => self.install(batch.features),
@@ -461,7 +461,7 @@ pub enum PopupMode {
     Visible,
     /// The topmost feature of a selectable layer.
     Selectable,
-    /// Only the layer selected in the Contents pane.
+    /// Only the layer selected in the Layers pane.
     SelectedInContents,
     /// No pop-ups.
     None,
@@ -484,7 +484,7 @@ impl PopupMode {
             PopupMode::Topmost => "Topmost Layer",
             PopupMode::Visible => "Visible Layers",
             PopupMode::Selectable => "Selectable Layers",
-            PopupMode::SelectedInContents => "Selected in Contents",
+            PopupMode::SelectedInContents => "Selected in Layers",
             PopupMode::None => "No Pop-ups",
         }
     }

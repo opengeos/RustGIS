@@ -1,4 +1,4 @@
-//! Home › Add (Add Data), Contents pane actions, and the Feature Layer / Labeling / Data tabs.
+//! Home › Add (Add Data), Layers pane actions, and the Feature Layer / Labeling / Data tabs.
 
 use std::path::Path;
 
@@ -19,16 +19,16 @@ pub fn commands() -> Vec<C> {
         C::new("layer.addSql", "Add Data From SQL", "Home › Add", add_sql).params(
             r#"{"sql": "one DuckDB SELECT; DuckDB Spatial's ST_ functions, read_parquet('…'), web addresses", "name"?: string, "database"?: "a .duckdb file whose tables the query names", "crs"?: "EPSG:… of a geometry that doesn't say", "stream"?: bool}"#,
         ),
-        C::new("layer.loadAll", "Load All Features", "Contents", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
+        C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).params(r#"{"fileName": "name.geojson|.csv", "text": string}"#),
         C::new("layer.addSample", "Add Sample Data", "Home › Add › Add Data", add_sample).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
-        C::new("layer.remove", "Remove", "Contents", remove).key("Delete").when(need_layer).params(r#"{"layer"?: name|id}"#),
-        C::new("layer.select", "Select Layer", "Contents", |s, p| {
+        C::new("layer.remove", "Remove", "Layers", remove).key("Delete").when(need_layer).params(r#"{"layer"?: name|id}"#),
+        C::new("layer.select", "Select Layer", "Layers", |s, p| {
             s.active_layer = Some(s.layer_id(p)?);
             Ok(Value::Null)
         })
         .view(),
-        C::new("layer.rename", "Rename", "Contents", |s, p| {
+        C::new("layer.rename", "Rename", "Layers", |s, p| {
             let n = s_req(p, "name")?.trim().chars().take(200).collect::<String>();
             if n.is_empty() {
                 return Err("name is required".into());
@@ -47,14 +47,14 @@ pub fn commands() -> Vec<C> {
             Ok(r)
         })
         .when(need_layer),
-        C::new("layer.visibility", "Visibility", "Contents", |s, p| {
+        C::new("layer.visibility", "Visibility", "Layers", |s, p| {
             let on = b(p, "visible");
             with(s, p, |l| l.visible = on.unwrap_or(!l.visible))
         })
         .when(need_layer),
-        C::new("layer.moveUp", "Move Up", "Contents", |s, p| move_layer(s, p, -1)).when(need_layer),
-        C::new("layer.moveDown", "Move Down", "Contents", |s, p| move_layer(s, p, 1)).when(need_layer),
-        C::new("layer.zoomTo", "Zoom To Layer", "Contents", |s, p| {
+        C::new("layer.moveUp", "Move Up", "Layers", |s, p| move_layer(s, p, -1)).when(need_layer),
+        C::new("layer.moveDown", "Move Down", "Layers", |s, p| move_layer(s, p, 1)).when(need_layer),
+        C::new("layer.zoomTo", "Zoom To Layer", "Layers", |s, p| {
             let id = s.layer_id(p)?;
             let e = s.map().layer(id).map(|l| l.extent()).unwrap_or_default();
             if e.is_empty() {
@@ -140,12 +140,12 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_layer)
         .params(r#"{"layer"?, "min"?: scale (out beyond), "max"?: scale (in beyond)}"#),
-        C::new("layer.selectable", "Selectable", "Contents", |s, p| {
+        C::new("layer.selectable", "Selectable", "Layers", |s, p| {
             let on = b(p, "on");
             with(s, p, |l| l.selectable = on.unwrap_or(!l.selectable))
         })
         .when(need_feature_layer),
-        C::new("layer.expand", "Expand Legend", "Contents", |s, p| {
+        C::new("layer.expand", "Expand Legend", "Layers", |s, p| {
             let on = b(p, "on");
             with(s, p, |l| l.expanded = on.unwrap_or(!l.expanded))
         })
@@ -272,7 +272,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     // A PMTiles archive is a tile layer (raster or vector, as its header says).
     if path.to_ascii_lowercase().ends_with(".pmtiles") {
         if cfg!(target_arch = "wasm32") {
-            return Err(format!("{path}: the web app reads PMTiles archives from web addresses (Home › Basemap › Add Tile Layer)"));
+            return Err(format!("{path}: the web app reads PMTiles archives from web addresses (Home › Add › Basemap › Add Tile Layer)"));
         }
         let full = std::path::absolute(path).map(|p| p.display().to_string()).map_err(|e| format!("{path}: {e}"))?;
         let mut q = json!({"url": full, "kind": "pmtiles"});
@@ -828,7 +828,7 @@ fn need_streamed(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
         Some(l) if l.is_streamed() => None,
         Some(_) => Some("this layer's features are already in memory"),
-        None => Some("select a layer in the Contents pane first"),
+        None => Some("select a layer in the Layers pane first"),
     }
 }
 

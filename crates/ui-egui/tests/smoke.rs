@@ -160,7 +160,7 @@ fn plugins_install_from_a_file_after_a_prompt() {
     h.step();
     h.get_by_label("Hello").click();
     h.step();
-    // Its tools: a button on the Plugins tab, and listed in the Geoprocessing pane.
+    // Its tools: a button on the Plugins tab, and listed in the Tools pane.
     h.get_by_label("Make Points").click();
     h.step();
     h.step();

@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="https://assets.rustgis.app/images/hero.webp" alt="RustGIS with the Map tab of the ribbon open. The Contents pane lists Cities, Rivers, Lakes and Countries with their legends; the map shows the world in the Equal Earth projection, countries shaded by population, sized city dots and country labels." width="100%">
+  <img src="https://assets.rustgis.app/images/hero.webp" alt="RustGIS with the Map tab of the ribbon open. The Layers pane lists Cities, Rivers, Lakes and Countries with their legends; the map shows the world in the Equal Earth projection, countries shaded by population, sized city dots and country labels." width="100%">
 </p>
 
 ## Why RustGIS
@@ -40,7 +40,7 @@
 - **Everything is a command.** Every button in the ribbon is a command with an id. Script it from
   `rustgis-cli`, chain it in notebooks and models, or ask the AI Assistant to run it for you.
 - **Familiar.** A ribbon laid out in the order of the work (Home, Data, Style, Edit, Analyze,
-  View, Publish), Contents and Catalog panes, an attribute table, and undo for every change.
+  View, Publish), Layers and Browser panes, an attribute table, and undo for every change.
 - **Extensible.** Over 1,000 GeoLibre and Whitebox tools for terrain, hydrology, LiDAR and remote sensing, and
   sandboxed WebAssembly [plugins](docs/plugins.md) that add commands, tools and ribbon tabs.
 
@@ -52,7 +52,7 @@
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/assistant.webp" alt="The AI Assistant pane: asked for the five most populous African countries, it read the Countries table, selected them and zoomed to them" width="100%"><p align="center"><sub><b>AI Assistant.</b> Ask about your data or tell the map what to do. The assistant runs RustGIS commands for you, and each change can be undone.</sub></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/buffer-history.webp" alt="The Analysis tab with a gallery of geoprocessing tools and the Geoprocessing pane showing Buffer; dissolved 300 km buffers around African cities" width="100%"><p align="center"><sub><b>Analysis.</b> A tool gallery, the Geoprocessing pane and a run history, guided workflows, ModelBuilder, and 1,000+ GeoLibre and Whitebox tools.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/buffer-history.webp" alt="The Analysis tab with a gallery of geoprocessing tools and the Tools pane showing Buffer; dissolved 300 km buffers around African cities" width="100%"><p align="center"><sub><b>Analysis.</b> A tool gallery, the Tools pane and a run history, guided workflows, ModelBuilder, and 1,000+ GeoLibre and Whitebox tools.</sub></p></td>
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/raster.webp" alt="A shaded-relief elevation model of the Sierra Nevada with the Raster Layer tab open" width="100%"><p align="center"><sub><b>Rasters.</b> GeoTIFF and COG of any pixel type, reprojected on the fly, with stretch, RGB, classified and shaded-relief symbology.</sub></p></td>
 </tr>
 <tr>

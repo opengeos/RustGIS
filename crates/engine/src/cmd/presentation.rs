@@ -59,7 +59,7 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"presentation": i, "name": name}))
         })
         .params(r#"{"path"?: "*.rgispres", "text"?: presentation JSON}"#),
-        C::new("presentation.activate", "Open Presentation", "Catalog", |s, p| {
+        C::new("presentation.activate", "Open Presentation", "Browser", |s, p| {
             let i = index(s, p)?;
             s.active_presentation = Some(i);
             Ok(json!({"presentation": i}))
@@ -67,7 +67,7 @@ pub fn commands() -> Vec<C> {
         .view()
         .when(need_presentation)
         .params(r#"{"presentation": name|index}"#),
-        C::new("presentation.remove", "Delete Presentation", "Catalog", |s, p| {
+        C::new("presentation.remove", "Delete Presentation", "Browser", |s, p| {
             let i = index(s, p)?;
             s.project.presentations.remove(i);
             s.active_presentation = None;

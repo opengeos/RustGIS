@@ -17,15 +17,15 @@ cargo run --release -p rustgis -- atlas.rgis   # a saved project
 
 1. **Explore.** Drag to pan, scroll to zoom, and click a country to see its attributes in a
    pop-up. Press ++home++ for the full extent, or pick a place from **Home › Bookmarks**.
-2. **Style a layer.** Click *Countries* in the Contents pane. The *Feature Layer* tab group
-   appears. Open **Style › Symbology**, choose *Graduated Colors* or *Unique Values*,
+2. **Style a layer.** Click *Countries* in the Layers pane, then open the
+   **Style** tab and **Style › Symbology**, choose *Graduated Colors* or *Unique Values*,
    and pick a colour scheme.
 3. **Select.** **Home › Select By Attributes**, enter `continent = 'Asia'`, and press *Apply*.
    Open the attribute table with ++ctrl+t++. Rows and map features stay in sync.
 4. **Analyse.** **Analyze › Buffer**: choose *Cities*, 300 km, *Dissolve: All*, and *Run*. The
    result is added as a new layer, and the run is listed under **Analyze › History**.
 5. **Change the view.** **View › Globe** turns the map into a 3D globe; **View › Projection**
-   offers Equal Earth, Robinson and other projections. **Home › Basemap** switches the basemap or
+   offers Equal Earth, Robinson and other projections. **Home › Add › Basemap** switches the basemap or
    adds a web tile layer.
 6. **Share.** **Publish › Export Map** saves a PNG with labels and a scale bar. **Data › New
    Layout** makes a printable page with a legend and north arrow. **Project › Save As** writes a

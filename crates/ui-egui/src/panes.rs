@@ -1,4 +1,4 @@
-//! Docked panes: Contents and Catalog on the left; Geoprocessing, Symbology, History and Details
+//! Docked panes: Layers and Browser on the left; Geoprocessing, Symbology, History and Details
 //! on the right.
 
 use std::collections::HashMap;
@@ -20,8 +20,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     if let Some(left) = app.ui.left {
         egui::Panel::left("left_pane").resizable(true).default_size(270.0).size_range(200.0..=480.0).frame(frame).show(ui, |ui| {
             let (title, close) = match left {
-                LeftPane::Contents => ("Contents", "ui.pane.contents"),
-                LeftPane::Catalog => ("Catalog", "ui.pane.catalog"),
+                LeftPane::Contents => ("Layers", "ui.pane.contents"),
+                LeftPane::Catalog => ("Browser", "ui.pane.catalog"),
             };
             pane_header(app, ui, tl!(title), close, &t);
             match left {
@@ -33,7 +33,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     if let Some(right) = app.ui.right {
         egui::Panel::right("right_pane").resizable(true).default_size(320.0).size_range(260.0..=560.0).frame(frame).show(ui, |ui| {
             let (title, close) = match right {
-                RightPane::Geoprocessing => ("Geoprocessing", "ui.pane.geoprocessing"),
+                RightPane::Geoprocessing => ("Tools", "ui.pane.geoprocessing"),
                 RightPane::Symbology => ("Symbology", "ui.pane.symbology"),
                 RightPane::History => ("History", "ui.pane.history"),
                 RightPane::Details => ("Details", "ui.pane.details"),
@@ -1310,7 +1310,7 @@ fn ramp_swatch(ui: &mut Ui, ramp: Ramp, w: f32, selected: bool, t: &Tokens) -> e
 
 fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let Some(l) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned() else {
-        ui.label(egui::RichText::new(tl!("Select a layer in the Contents pane.")).color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Select a layer in the Layers pane.")).color(t.text_dim));
         return;
     };
     if l.is_raster() {
@@ -1566,7 +1566,7 @@ fn history(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 
 fn details(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let Some(l) = app.session.active_layer.and_then(|id| app.session.map().layer(id)) else {
-        ui.label(egui::RichText::new(tl!("Select a layer in the Contents pane.")).color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Select a layer in the Layers pane.")).color(t.text_dim));
         return;
     };
     let e = l.extent();

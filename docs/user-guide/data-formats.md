@@ -20,7 +20,7 @@ web app reads GeoPackages without SQLite, with a small SQLite file reader writte
 | GeoPackage | `.gpkg` | Add Data, or upload in the web app | Every feature table becomes a layer, up to 32 at once (the result counts the rest in `skippedCount` and names up to 100 of them in `skipped`); `"layer"` picks one, and `info.fileLayers` lists them all. Read in place by its R-tree; any EPSG system is reprojected. The web app reads the file with its own SQLite reader (tables scanned, the envelope in each geometry header tested first; no R-tree); UTF-16 databases and `WITHOUT ROWID` tables aren't read there. |
 | GeoParquet | `.parquet`, `.geoparquet` | Add Data, or upload in the web app | WKB geometry, with the CRS from the file's `geo` metadata. Row groups are pruned by the bbox covering. zstd-compressed files open on the desktop only; Brotli isn't read. |
 | FlatGeobuf | `.fgb` | Add Data, or upload | Read in place by its packed R-tree. |
-| Standalone tables | CSV, or any layer without geometry | Add Data | Listed under the map in Contents; join or relate them to layers. |
+| Standalone tables | CSV, or any layer without geometry | Add Data | Listed under the map in Layers; join or relate them to layers. |
 
 Files with more than 100,000 features (GeoPackage, GeoParquet, FlatGeobuf) are read in place, a view
 at a time, rather than loaded whole: see [Large files](data.md#large-files). They draw, label,
@@ -65,7 +65,7 @@ databases](data.md#sql-queries-and-duckdb-databases).
 
 | Format | Extensions or source | How to add it | Notes |
 | --- | --- | --- | --- |
-| Raster tiles | XYZ/TMS template (`{z}/{x}/{y}`, `{-y}`, `{s}`, `{q}`), WMS (`{bbox-epsg-3857}`) | Home › Basemap › Add Tile Layer | PNG, JPEG and WebP. |
+| Raster tiles | XYZ/TMS template (`{z}/{x}/{y}`, `{-y}`, `{s}`, `{q}`), WMS (`{bbox-epsg-3857}`) | Home › Add › Basemap › Add Tile Layer | PNG, JPEG and WebP. |
 | Vector tiles | Mapbox Vector Tiles (`.pbf`, `.mvt`) template, or TileJSON | Add Tile Layer | Drawn in a built-in style that knows the OpenMapTiles, Protomaps and Shortbread schemas. |
 | MapLibre styles | `style.json` | Add Tile Layer | The style's vector and raster sources, sprite, expressions and zoom functions. |
 | PMTiles | `.pmtiles`: a web address, or a file on the desktop | Add Tile Layer (or its **PMTiles File…** button), Add Data, or drop the file | Raster or vector, as the archive says. Read a tile at a time by byte ranges (the server must allow them, and CORS in the web app). A vector archive is drawn in the built-in style when it is a basemap, otherwise with each of its layers in its own colour. |

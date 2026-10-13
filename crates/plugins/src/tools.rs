@@ -1,4 +1,4 @@
-//! Plugin tools in the Geoprocessing pane: each enabled plugin's tools join the external tools
+//! Plugin tools in the Tools pane: each enabled plugin's tools join the external tools
 //! (under "Plugins ›" toolboxes) and run in the plugin's module with their layers as GeoJSON.
 
 use std::collections::HashSet;

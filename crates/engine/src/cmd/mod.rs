@@ -83,7 +83,7 @@ pub(crate) fn b(p: &Value, k: &str) -> Option<bool> {
 pub(crate) fn need_layer(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
         Some(_) => None,
-        None => Some("select a layer in the Contents pane first"),
+        None => Some("select a layer in the Layers pane first"),
     }
 }
 
@@ -92,7 +92,7 @@ pub(crate) fn need_feature_layer(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
         Some(l) if !l.is_raster() => None,
         Some(_) => Some("this works on feature layers, not rasters"),
-        None => Some("select a layer in the Contents pane first"),
+        None => Some("select a layer in the Layers pane first"),
     }
 }
 

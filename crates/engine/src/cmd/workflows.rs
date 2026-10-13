@@ -22,7 +22,7 @@ pub fn commands() -> Vec<C> {
             r#"{"name"?: string, "steps"?: [{"tool": id, "params": {…, "%1" for step 1's output}}], "fromHistory"?: bool, "imported"?: bool (from a file: its steps may not touch files)}"#,
         ),
         C::new("model.run", "Run Model", "Analyze › Geoprocessing", run_model).params(r#"{"name"?: model}"#),
-        C::new("model.remove", "Delete Model", "Catalog", |s, p| {
+        C::new("model.remove", "Delete Model", "Browser", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
             let before = s.project.models.len();
             s.project.models.retain(|m| !m.name.eq_ignore_ascii_case(n));

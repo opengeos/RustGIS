@@ -202,7 +202,7 @@ pub struct Session {
     /// Bumped on every change so views can cache.
     pub revision: u64,
     pub tool: Tool,
-    /// The layer selected in the Contents pane (the one the Style and Data tabs act on).
+    /// The layer selected in the Layers pane (the one the Style and Data tabs act on).
     pub active_layer: Option<u32>,
     /// Map view size in logical points (set by the UI each frame).
     pub view_size: (f64, f64),
@@ -631,10 +631,9 @@ impl Session {
                 .map(|l| l.id)
                 .or_else(|| s.parse::<u32>().ok().filter(|id| map.layer(*id).is_some()))
                 .ok_or_else(|| format!("no layer named '{s}'")),
-            _ => self
-                .active_layer
-                .filter(|id| map.layer(*id).is_some())
-                .ok_or_else(|| "select a layer in the Contents pane first".to_string()),
+            _ => {
+                self.active_layer.filter(|id| map.layer(*id).is_some()).ok_or_else(|| "select a layer in the Layers pane first".to_string())
+            }
         }
     }
 

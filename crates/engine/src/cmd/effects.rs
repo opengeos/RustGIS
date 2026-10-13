@@ -14,7 +14,7 @@ fn need_raster(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
         Some(l) if l.is_raster() => None,
         Some(_) => Some("this works on raster layers"),
-        None => Some("select a layer in the Contents pane first"),
+        None => Some("select a layer in the Layers pane first"),
     }
 }
 
@@ -22,7 +22,7 @@ fn need_polygons(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
         Some(l) if l.geometry_type() == GeometryType::Polygon => None,
         Some(_) => Some("this works on polygon layers"),
-        None => Some("select a layer in the Contents pane first"),
+        None => Some("select a layer in the Layers pane first"),
     }
 }
 

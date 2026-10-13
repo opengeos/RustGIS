@@ -695,7 +695,7 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
     #[cfg(target_arch = "wasm32")]
     {
         let _ = job;
-        Err(format!("{}: in the browser, run GeoLibre tools from the Geoprocessing pane", spec.name))
+        Err(format!("{}: in the browser, run GeoLibre tools from the Tools pane", spec.name))
     }
 }
 

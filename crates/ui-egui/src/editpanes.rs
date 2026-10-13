@@ -192,7 +192,7 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         });
     } else {
-        ui.label(egui::RichText::new(tl!("Select a layer in the Contents pane")).weak().small());
+        ui.label(egui::RichText::new(tl!("Select a layer in the Layers pane")).weak().small());
     }
 
     heading(ui, "Snapping");
@@ -337,7 +337,7 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 pub fn design(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     message(app, ui, t);
     let Some(l) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).filter(|l| !l.is_raster()).cloned() else {
-        ui.label(egui::RichText::new(tl!("Select a feature layer in the Contents pane")).weak());
+        ui.label(egui::RichText::new(tl!("Select a feature layer in the Layers pane")).weak());
         return;
     };
     ui.label(egui::RichText::new(&l.name).font(semibold(13.0)));

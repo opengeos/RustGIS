@@ -309,7 +309,7 @@ fn install_confirmed(app: &mut RustGisApp) {
                 }
             });
             let mut text = crate::i18n::fmt(
-                "Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Geoprocessing pane.",
+                "Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.",
                 &[("name", &p.manifest.name), ("version", &p.manifest.version)],
             );
             if keeps_prefs() && !kept {
@@ -528,7 +528,7 @@ fn installed_tab(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
             ui.add_space(4.0);
             permissions(ui, t, &m.permissions);
             let adds = crate::i18n::fmt(
-                "Commands on the Plugins tab: {commands} · Tools in the Geoprocessing pane: {tools}",
+                "Commands on the Plugins tab: {commands} · Tools in the Tools pane: {tools}",
                 &[("commands", &m.commands.len().to_string()), ("tools", &m.tools.len().to_string())],
             );
             ui.label(egui::RichText::new(adds).size(11.0).color(t.text_dim));

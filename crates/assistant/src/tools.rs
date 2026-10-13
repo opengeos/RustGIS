@@ -486,7 +486,7 @@ pub fn context(s: &Session) -> String {
         m.scale()
     );
     if let Some(l) = s.active_layer.and_then(|id| m.layer(id)) {
-        out.push_str(&format!(" Selected in Contents: \"{}\".", l.name));
+        out.push_str(&format!(" Selected in Layers: \"{}\".", l.name));
     }
     if m.layers.is_empty() {
         out.push_str("\nNo layers.");

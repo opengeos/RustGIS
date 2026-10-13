@@ -133,7 +133,7 @@ fn rename(s: &mut Session, p: &Value) -> CmdResult {
 fn set_tool(s: &mut Session, p: &Value) -> CmdResult {
     let t = parse_tool(p)?;
     if t.creates() {
-        let id = s.layer_id(&Value::Null).map_err(|_| "select the layer to edit in the Contents pane first".to_string())?;
+        let id = s.layer_id(&Value::Null).map_err(|_| "select the layer to edit in the Layers pane first".to_string())?;
         let gt = s.map().layer(id).map(|l| l.geometry_type());
         let ok = matches!(
             (t, gt),

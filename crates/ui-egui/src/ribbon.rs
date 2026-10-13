@@ -694,9 +694,9 @@ fn project_group(app: &mut RustGisApp, ui: &mut Ui) {
             menu_item(ui, app, "open", "Import Layout…", "ui.importLayout", Value::Null);
         });
         col(ui, |ui| {
-            small(ui, app, "catalog", "Catalog", "Browse the project's maps, tables and folders.", "ui.pane.catalog", Value::Null, false);
+            small(ui, app, "catalog", "Browser", "Browse the project's maps, tables and folders.", "ui.pane.catalog", Value::Null, false);
             small(ui, app, "add_data", "Add Data", "Add vector data.", "ui.addData", Value::Null, false);
-            small(ui, app, "add_folder", "Add Folder", "Connect a folder to the Catalog.", "ui.addFolder", Value::Null, false);
+            small(ui, app, "add_folder", "Add Folder", "Connect a folder to the Browser.", "ui.addFolder", Value::Null, false);
         });
         col(ui, |ui| {
             small(
@@ -1076,7 +1076,7 @@ pub const QUICK: &[(&str, &str)] = &[
     ("table.open", "Attribute Table"),
     ("map.zoomFull", "Full Extent"),
     ("select.clear", "Clear Selection"),
-    ("ui.pane.geoprocessing", "Geoprocessing"),
+    ("ui.pane.geoprocessing", "Tools Pane"),
     ("ui.commandSearch", "Command Search"),
 ];
 
@@ -1506,8 +1506,8 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             ui,
             app,
             "contents",
-            "Contents",
-            "Show or hide the Contents pane.",
+            "Layers",
+            "Show or hide the Layers pane.",
             "ui.pane.contents",
             Value::Null,
             app.ui.left == Some(crate::LeftPane::Contents),
@@ -1517,8 +1517,8 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             ui,
             app,
             "catalog",
-            "Catalog\nPane",
-            "Show or hide the Catalog pane.",
+            "Browser\nPane",
+            "Show or hide the Browser pane.",
             "ui.pane.catalog",
             Value::Null,
             app.ui.left == Some(crate::LeftPane::Catalog),
@@ -1528,8 +1528,8 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             ui,
             app,
             "geoprocessing",
-            "Geo-\nprocessing",
-            "Show or hide the Geoprocessing pane.",
+            "Tools\nPane",
+            "Show or hide the Tools pane.",
             "ui.pane.geoprocessing",
             Value::Null,
             app.ui.right == Some(RightPane::Geoprocessing),
@@ -1655,7 +1655,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 ui,
                 app,
                 "catalog",
-                "Catalog View",
+                "Browser View",
                 "The project's items in place of the map.",
                 "ui.catalogView",
                 Value::Null,
@@ -1695,7 +1695,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 app,
                 "identify",
                 "Item Pop-ups",
-                "Show details when hovering items in the Catalog view.",
+                "Show details when hovering items in the Browser view.",
                 "ui.itemPopups",
                 Value::Null,
                 app.ws.item_popups,
@@ -1750,7 +1750,7 @@ fn data_tab(app: &mut RustGisApp, ui: &mut Ui) {
     feature_cache_group(app, ui);
 }
 
-/// The Style tab: the drawing of the layer selected in Contents (its symbology, labels and
+/// The Style tab: the drawing of the layer selected in Layers (its symbology, labels and
 /// effects), or a hint when none is.
 fn style_tab(app: &mut RustGisApp, ui: &mut Ui) {
     match active_layer(app) {
@@ -1763,7 +1763,7 @@ fn style_tab(app: &mut RustGisApp, ui: &mut Ui) {
             let t = Tokens::get(ui.ctx());
             ui.add_sized(
                 vec2(220.0, CONTENT_H),
-                egui::Label::new(egui::RichText::new(tl!("Select a layer in Contents to style it.")).color(t.text_dim)).wrap(),
+                egui::Label::new(egui::RichText::new(tl!("Select a layer in Layers to style it.")).color(t.text_dim)).wrap(),
             );
         }),
     }
@@ -1787,7 +1787,7 @@ fn publish_tab(app: &mut RustGisApp, ui: &mut Ui) {
     thumbnail_group(app, ui);
 }
 
-/// The layer selected in Contents.
+/// The layer selected in Layers.
 fn active_layer(app: &RustGisApp) -> Option<&rustgis_engine::map::Layer> {
     app.session.active_layer.and_then(|id| app.session.map().layer(id))
 }
@@ -2474,7 +2474,7 @@ fn plugins_tab(app: &mut RustGisApp, ui: &mut Ui) {
     // A group per enabled plugin with commands, in the interface language when it has one
     // (plugins with a tab of their own are on that tab instead).
     let lang = app.lang().code();
-    // Its tools too: each opens in the Geoprocessing pane.
+    // Its tools too: each opens in the Tools pane.
     for p in rustgis_engine::plugins::list()
         .into_iter()
         .filter(|p| p.enabled && p.manifest.tab.is_none() && !(p.manifest.commands.is_empty() && p.manifest.tools.is_empty()))
@@ -2502,7 +2502,7 @@ fn plugin_tab(app: &mut RustGisApp, ui: &mut Ui, plugin: &str) {
     let Some(tab) = p.manifest.tab.as_ref() else { return };
     let m = &p.manifest;
     let lang = app.lang().code();
-    // What a button runs: a command, or the Geoprocessing pane open on a tool.
+    // What a button runs: a command, or the Tools pane open on a tool.
     let target = |e: Entry<'_>| -> (String, String, String, String, Value) {
         match e {
             Entry::Command(c) => {

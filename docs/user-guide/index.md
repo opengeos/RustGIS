@@ -12,7 +12,7 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
 | [Analysis](analysis.md) | Selection and SQL queries, geoprocessing, the GeoLibre tools, guided workflows, imagery |
 | [Layouts and Reports](layouts.md) | Page layouts, map series, reports, presentations and notebooks |
 | [Sharing](sharing.md) | Exports, packages and open-format web maps, layers, styles and scenes |
-| [Workspace](workspace.md) | Linked views, the Catalog view, animation, profiles, offline areas, customizing the ribbon |
+| [Workspace](workspace.md) | Linked views, the Browser view, animation, profiles, offline areas, customizing the ribbon |
 | [AI Assistant](assistant.md) | A chat pane that answers questions and acts on the map through commands |
 
 ![RustGIS with the Map tab of the ribbon open over a world map in the Equal Earth projection, countries shaded by population](https://assets.rustgis.app/images/hero.webp)
@@ -23,7 +23,7 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
   open, save, About).
 - **Quick Access Toolbar** (top left): New, Open, Save, Undo and Redo, plus any commands you add
   under **Help › Customize › Quick Access**.
-- **Contents pane** (left): the map's layers in drawing order, with their legends. Tick a layer to
+- **Layers pane** (left): the map's layers in drawing order, with their legends. Tick a layer to
   show or hide it; right-click it to move it, zoom to it, rename or remove it and more.
   The Style and Data tabs act on the layer selected here.
 - **Map view**: one tab per map and layout. The buttons at the top right zoom in, zoom out and go
@@ -48,24 +48,18 @@ ribbon, arrows at its ends scroll it.
 
 | Tab | Groups |
 | --- | --- |
-| **Map** | Clipboard, Navigate (Explore, Bookmarks, extents, Go To XY, Pop-ups), Layer (Basemap, Add Data), Selection, Inquiry (Measure, Locate, Infographics), Offline, Feature Cache, Labeling |
-| **Insert** | Project (New Map, New Layout, Toolbox, Import, Add Folder, Templates, Task), Report, Presentation, Notebook, Layer Templates, Styles, Bookmarks, Graphics, Graphics and Text, Data |
-| **Analysis** | Geoprocessing (History, Tools, ModelBuilder, Script, Environments, Ready To Use), AI (AI Assistant), Portal (Feature and Raster Analysis), Workflows, Raster (Raster Functions, Function Editor), the tool gallery, Selection |
-| **View** | View (Globe, Projection, Global, Local), Effects, Scene, Windows, Display, Navigation, Link, Workspace, Thumbnail, Animation, Profile |
-| **Edit** | Manage Edits (Edit, Save, Undo), Snapping, Features (Create, Modify, Delete), Tools, Elevation, Corrections, Selection, Fields |
-| **Imagery** | Ortho Mapping, Reality Mapping, Alignment, Analysis, Image Classification, Share, Mensuration, Tools |
-| **Share** | Output (Export Map, Print, Capture), Package, Share As, Layout, Save As |
+| **Home** | Navigate (Pan, Bookmarks, extents, Zoom In/Out, Go To XY, Identify), Bookmarks, Add (Basemap, Add Data), Selection, Inspect (Measure, Locate, Zoom Box, Infographics) |
+| **Data** | Project (New Map, New Layout, Toolbox, Import, Add Folder, Templates, Task), Layer Templates, Definition Query, Table, Selection, Data Design, Archiving, Relationship, Export (for a raster layer: Information, Export), Offline, Feature Cache |
+| **Style** | For the layer selected in Layers: visibility range, transparency, symbology, drawing effects, extrusion and labels (labels, label range, placement, label class, text symbol) for a vector layer; visibility range, transparency, swipe, raster effects, rendering and enhancement for a raster layer; Styles |
+| **Edit** | Manage Edits (Edit, Save, Undo), Snapping, Features (Create, Modify, Delete), Tools, Elevation, Corrections, Graphics, Graphics and Text, Clipboard |
+| **Analyze** | Geoprocessing (History, Tools, ModelBuilder, Script, Environments, Ready To Use), AI (AI Assistant), Portal (Feature and Raster Analysis), Workflows, Raster (Raster Functions, Function Editor), the tool gallery, Selection, Notebook, the imagery groups (Ortho Mapping, Reality Mapping, Alignment, Image Analysis, Image Classification, Imagery Sharing, Mensuration, Imagery Tools) |
+| **View** | View (Globe, Projection, Global, Local), Effects, Scene, Windows, Display, Labeling, Navigation, Link, Workspace, Animation, Profile |
+| **Publish** | While a layout is open, its groups first (Page, Map Frames, Map Surrounds, Text, Export); then Report, Presentation, Output (Export Map, Print, Capture), Package, Share As, Layout, Save As, Thumbnail |
 | **Plugins** | The Plugin Manager, plus a tab for each [plugin](../plugins.md) that adds one |
 | **Settings** | Language (interface language and worldview), Start-up (start with the sample or a blank map, projection, extent) |
 | **Help** | Customize (ribbon tabs, Quick Access Toolbar), Performance (Diagnostic Monitor), Learn, Help (About, Command Search, Shortcuts) |
 
-Contextual tabs appear while something is selected:
-
-| Group | Tabs | Shown when |
-| --- | --- | --- |
-| **Feature Layer** | Feature Layer (visibility range, transparency, symbology, drawing effects, extrusion), Labeling (visibility range, placement, label class, text symbol), Data (definition query, table, selection, data design, archiving, relationships, export) | A vector layer is selected in Contents |
-| **Raster Layer** | Raster Layer (visibility range, transparency, swipe, raster effects, rendering, enhancement), Data (information, export) | A raster layer is selected |
-| **Layout** | Layout (page, map frames, map surrounds, text, export) | A layout tab is active |
+The tabs stay the same whatever is selected: Style and Data act on the layer selected in Layers.
 
 ## Projects
 

@@ -35,7 +35,7 @@ pub struct Project {
     pub gp_history: Vec<GpRecord>,
     #[serde(default)]
     pub layouts: Vec<rustgis_map::layout::Layout>,
-    /// Folder connections shown in the Catalog.
+    /// Folder connections shown in the Browser.
     #[serde(default)]
     pub folders: Vec<String>,
     /// Saved symbology, applied to layers by name.

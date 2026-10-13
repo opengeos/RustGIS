@@ -85,7 +85,7 @@ pub fn commands() -> Vec<C> {
             if m.bookmarks.len() == before { Err(format!("no bookmark '{n}'")) } else { Ok(Value::Null) }
         }),
         C::new("map.new", "New Map", "Data › Project", new_map).params(r#"{"name"?: string}"#),
-        C::new("map.activate", "Activate Map", "Catalog", |s, p| {
+        C::new("map.activate", "Activate Map", "Browser", |s, p| {
             let n = s_name(p)?;
             let i = s.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no map '{n}'"))?;
             s.project.active_map = i;
@@ -94,7 +94,7 @@ pub fn commands() -> Vec<C> {
             Ok(Value::Null)
         })
         .view(),
-        C::new("map.rename", "Rename Map", "Contents", |s, p| {
+        C::new("map.rename", "Rename Map", "Layers", |s, p| {
             let n = s_name(p)?.trim();
             if n.is_empty() {
                 return Err("name is required".into());
@@ -102,7 +102,7 @@ pub fn commands() -> Vec<C> {
             s.map_mut().name = n.chars().take(200).collect();
             Ok(Value::Null)
         }),
-        C::new("map.remove", "Delete Map", "Catalog", |s, p| {
+        C::new("map.remove", "Delete Map", "Browser", |s, p| {
             if s.project.maps.len() < 2 {
                 return Err("a project keeps at least one map".into());
             }

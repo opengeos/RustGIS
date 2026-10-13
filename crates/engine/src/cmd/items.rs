@@ -30,7 +30,7 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"folders": s.project.folders}))
         })
         .params(r#"{"path": folder}"#),
-        C::new("project.removeFolder", "Remove Folder", "Catalog", |s, p| {
+        C::new("project.removeFolder", "Remove Folder", "Browser", |s, p| {
             let path = ps(p, "path").ok_or("path is required")?;
             let before = s.project.folders.len();
             s.project.folders.retain(|f| f != path);
@@ -106,7 +106,7 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_feature_layer)
         .params(r#"{"layer"?, "name": style}"#),
-        C::new("style.remove", "Delete Style", "Catalog", |s, p| {
+        C::new("style.remove", "Delete Style", "Browser", |s, p| {
             let name = ps(p, "name").ok_or("name is required")?;
             let before = s.project.styles.len();
             s.project.styles.retain(|t| !t.name.eq_ignore_ascii_case(name));

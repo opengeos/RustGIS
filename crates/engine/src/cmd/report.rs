@@ -40,7 +40,7 @@ pub fn commands() -> Vec<C> {
         C::new("report.update", "Report Properties", "Report", update).when(need_report).params(
             r#"{"report"?: name|index, "name"?, "title"?, "layer"?, "where"?, "selectedOnly"?, "sort"?: field|null, "descending"?, "page"?, "orientation"?, "width"?, "height"?: mm}"#,
         ),
-        C::new("report.activate", "Open Report", "Catalog", |s, p| {
+        C::new("report.activate", "Open Report", "Browser", |s, p| {
             let i = index(s, p)?;
             s.active_report = Some(i);
             Ok(json!({"report": i}))
@@ -48,7 +48,7 @@ pub fn commands() -> Vec<C> {
         .view()
         .when(need_report)
         .params(r#"{"report": name|index}"#),
-        C::new("report.remove", "Delete Report", "Catalog", |s, p| {
+        C::new("report.remove", "Delete Report", "Browser", |s, p| {
             let i = index(s, p)?;
             let gone = s.project.reports.remove(i).name;
             // Other reports' links to it go too.

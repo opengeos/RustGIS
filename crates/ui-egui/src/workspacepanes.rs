@@ -1,5 +1,5 @@
 //! Panes for tasks, the Workflow Manager, elevation profiles, the Diagnostic Monitor and
-//! infographics, and the Catalog view shown in place of the map.
+//! infographics, and the Browser view shown in place of the map.
 
 use egui::{Color32, Sense, Ui, pos2, vec2};
 use serde_json::{Value, json};
@@ -362,7 +362,7 @@ pub fn infographics(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
 }
 
-/// The Catalog view: the project's items as a grid of cards, in place of the map.
+/// The Browser view: the project's items as a grid of cards, in place of the map.
 pub fn catalog_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let p = &app.session.project;
     let mut items: Vec<(&str, String, &str, Option<Value>)> = Vec::new();
@@ -391,7 +391,7 @@ pub fn catalog_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         items.push(("map", a.name.clone(), "Offline area", Some(json!({"cmd": "offline.open", "name": a.name}))));
     }
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("Catalog")).font(semibold(16.0)));
+        ui.label(egui::RichText::new(tl!("Browser")).font(semibold(16.0)));
         if ui.button(tl!("Back to the Map")).clicked() {
             app.ws.catalog_view = false;
         }

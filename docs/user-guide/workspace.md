@@ -4,7 +4,7 @@ Tools for working across maps and views, and for setting up the app the way you 
 
 - **Side by Side** shows a second map beside the active one; **Link Views** keeps maps at the same
   place and scale, and **Link Cursors** marks the pointer's place on the other map.
-- **Catalog View** shows the project's maps, layouts, tables, styles, tasks, models, folders and
+- **Browser View** shows the project's maps, layouts, tables, styles, tasks, models, folders and
   offline areas as cards (double-click to open); **Item Pop-ups** add hover details.
 - **Pane Sets** save the panes you have open and bring them back. **Tasks** steps through a
   task's instructions; the **Workflow Manager** tracks jobs (new, in progress, on hold, done)

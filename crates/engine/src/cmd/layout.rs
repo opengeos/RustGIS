@@ -24,26 +24,26 @@ pub fn commands() -> Vec<C> {
         C::new("layout.new", "New Layout", "Data › Project", new_layout).params(
             r#"{"name"?: string, "page"?: "letter"|"legal"|"tabloid"|"a5"|"a4"|"a3"|"a2"|"a1"|"a0", "orientation"?: "landscape"|"portrait", "width"?: mm, "height"?: mm, "template"?: "map" (frame, title, legend, north arrow, scale bar; the default)|"blank"}"#,
         ),
-        C::new("layout.activate", "Open Layout", "Catalog", |s, p| {
+        C::new("layout.activate", "Open Layout", "Browser", |s, p| {
             let i = index(s, &by_name(p))?;
             s.active_layout = Some(i);
             Ok(json!({"layout": i}))
         })
         .view()
         .params(r#"{"name": string}"#),
-        C::new("layout.close", "Show Map", "Catalog", |s, _| {
+        C::new("layout.close", "Show Map", "Browser", |s, _| {
             s.active_layout = None;
             Ok(Value::Null)
         })
         .view(),
-        C::new("layout.remove", "Delete Layout", "Catalog", |s, p| {
+        C::new("layout.remove", "Delete Layout", "Browser", |s, p| {
             let i = index(s, &by_name(p))?;
             s.project.layouts.remove(i);
             s.active_layout = None;
             Ok(Value::Null)
         })
         .params(r#"{"name"?: string}"#),
-        C::new("layout.rename", "Rename Layout", "Catalog", |s, p| {
+        C::new("layout.rename", "Rename Layout", "Browser", |s, p| {
             let name: String = ps(p, "newName").map(str::trim).filter(|n| !n.is_empty()).ok_or("newName is required")?.chars().take(200).collect();
             let i = index(s, &by_name(p))?;
             // Unique among the other layouts, so names keep finding one layout.

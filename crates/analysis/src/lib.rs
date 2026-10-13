@@ -1,6 +1,6 @@
 //! L2: geoprocessing tools.
 //!
-//! Each tool is a [`ToolSpec`]: an id, a toolbox, parameters for the Geoprocessing pane, and a
+//! Each tool is a [`ToolSpec`]: an id, a toolbox, parameters for the Tools pane, and a
 //! pure `run` function over datasets. Inputs refer to layers by name through [`Inputs`]. Work is
 //! done in Web Mercator metres; distances are corrected for scale distortion at each feature's
 //! latitude so a 100 km buffer is about 100 km on the ground.
@@ -22,7 +22,7 @@ pub use tools::{TOOLS, simplify_geometry};
 use rustgis_data::Dataset;
 use serde_json::Value;
 
-/// Parameter kinds, which the Geoprocessing pane turns into widgets.
+/// Parameter kinds, which the Tools pane turns into widgets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParamKind {
     /// Any layer.

@@ -2,7 +2,7 @@
 
 ## Creating features
 
-**Edit › Create** draws new points, lines and polygons into the layer selected in Contents:
+**Edit › Create** draws new points, lines and polygons into the layer selected in Layers:
 click each vertex and double-click to finish (++esc++ cancels). **Delete** (++delete++) removes
 the selected features. Edit attributes in the attribute table (++ctrl+t++): double-click a cell
 to change it. **Data › Data Design** (and **Data › Fields**) adds and deletes fields and calculates a
@@ -45,11 +45,11 @@ attribute edits, Calculate Field):
 ## Clipboard and pop-ups
 
 Copy (++ctrl+c++) and Cut (++ctrl+x++) take the selected features. Paste (++ctrl+v++) adds them to
-the layer selected in Contents, matching fields by name; Paste Special adds them as a new layer.
+the layer selected in Layers, matching fields by name; Paste Special adds them as a new layer.
 Copied features also go on the system clipboard as GeoJSON, so they can be pasted into another
 RustGIS window or a text editor, and GeoJSON copied elsewhere pastes into RustGIS. Copy Path copies
 the selected layer's data source path.
 
 Pop-ups (Home › Navigate) choose what a click with Explore identifies: the topmost feature, every
 visible layer's feature (step through them with ‹ ›), only selectable layers, only the layer
-selected in Contents, or nothing.
+selected in Layers, or nothing.

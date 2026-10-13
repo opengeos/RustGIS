@@ -93,7 +93,7 @@ pub fn commands() -> Vec<C> {
             push(s, nb)
         })
         .params(r#"{"path"?: "*.rgisnb|*.ipynb", "text"?: notebook JSON}"#),
-        C::new("notebook.activate", "Open Notebook", "Catalog", |s, p| {
+        C::new("notebook.activate", "Open Notebook", "Browser", |s, p| {
             let i = index(s, p)?;
             s.active_notebook = Some(i);
             Ok(json!({"notebook": i}))
@@ -101,7 +101,7 @@ pub fn commands() -> Vec<C> {
         .view()
         .when(need_notebook)
         .params(r#"{"notebook": name|index}"#),
-        C::new("notebook.remove", "Delete Notebook", "Catalog", |s, p| {
+        C::new("notebook.remove", "Delete Notebook", "Browser", |s, p| {
             let i = index(s, p)?;
             let nb = s.project.notebooks.remove(i);
             s.trusted_notebooks.remove(&nb.name.to_ascii_lowercase());

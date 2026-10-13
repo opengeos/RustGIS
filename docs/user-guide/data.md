@@ -24,7 +24,7 @@ Formats](data-formats.md).
 
 Add data with **Home › Add Data**, by dropping files on the window, or by passing them on the
 command line (`rustgis places.geojson`). A CSV without coordinate columns, or a layer without
-geometry, opens as a standalone table, listed under the map in Contents. **Home › Add Data ›
+geometry, opens as a standalone table, listed under the map in Layers. **Home › Add Data ›
 Graphics Layer** adds a layer for [drawn graphics](cartography.md#graphics), and **Insert ›
 Layer Templates** adds empty layers with ready-made schemas to draw into.
 
@@ -100,13 +100,13 @@ rather than loaded whole, so files far larger than memory open in a moment. The 
 features in view, using the file's own spatial index (the GeoPackage R-tree, the FlatGeobuf
 packed R-tree, GeoParquet row-group bounding boxes), in the background as the map moves. When a
 view holds more than 250,000 features (100,000 in the web app), the layer draws an evenly spread
-sample of them and its tooltip in Contents says so: zoom in to see them all. Smaller files load
+sample of them and its tooltip in Layers says so: zoom in to see them all. Smaller files load
 whole; `layer.addData` with `"stream": true` or `false` overrides the choice.
 
 A streamed layer works like any other for symbology, labels, pop-ups, selection and the
 attribute table (which lists the features read for the view). Geoprocessing tools read the whole
 file. Edits are refused, since the features are read again as the view moves: right-click the
-layer in Contents and choose **Load All Features** (`layer.loadAll`) to load it into memory and
+layer in Layers and choose **Load All Features** (`layer.loadAll`) to load it into memory and
 edit it. Projects save the layer's file path, not its features, and read the file again when they
 open; a browser upload is kept in the project.
 
@@ -135,7 +135,7 @@ million in the web app) opens from its largest overview that fits; one without o
 an overview made as it is read, a strip or tile at a time (every second, fourth… pixel each way),
 so reading it takes as long as decoding the whole file once.
 
-Selecting a raster layer in Contents shows the **Raster Layer** tab group:
+With a raster layer selected in Layers, the **Style** and **Data** tabs show its groups:
 
 | Tab › Group | Controls |
 | --- | --- |
@@ -166,6 +166,6 @@ RustGIS saves pieces of a project as files you can share and reuse:
 Packages are zip files. A mobile map package keeps only the visible layers and simplifies their
 geometry, for phones and tablets. Styles can also be imported from the layers of a layer file,
 map file or project. Data › Layer Templates adds empty layers with ready-made schemas (places,
-routes, areas, observations…) to draw into. Add Folder connects a folder to the Catalog, which
+routes, areas, observations…) to draw into. Add Folder connects a folder to the Browser, which
 also lists the project's layouts, styles and tasks. A task's steps each run a command; New Task
 From History turns the geoprocessing history into a task you can replay.

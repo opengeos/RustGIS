@@ -1,5 +1,5 @@
 //! L6: the RustGIS desktop front end, built around a ribbon (Home, Data, Style, Edit, Analyze,
-//! View, Publish), the Contents and Catalog panes, a Geoprocessing pane, the map view, the
+//! View, Publish), the Layers and Browser panes, a Tools pane, the map view, the
 //! attribute table and the status bar.
 //!
 //! The UI is thin: it reads [`Session`] state and runs commands by id ([`RustGisApp::run`]).
@@ -363,7 +363,7 @@ impl RustGisApp {
         }
         // Plugins the web app installed in earlier visits (the desktop loads its plugins folder).
         pluginsui::restore(&mut self);
-        // A GeoLibre runner located earlier (Locate… in the Geoprocessing pane).
+        // A GeoLibre runner located earlier (Locate… in the Tools pane).
         if let Some(path) = self.services.load_pref.as_ref().and_then(|load| load("geolibre_runner")).filter(|p| !p.is_empty())
             && let Err(e) = self.session.run("gp.setGeolibre", &json!({"path": path}))
         {
@@ -676,7 +676,7 @@ impl RustGisApp {
             "ui.pane.geoprocessing" => toggle_right(&mut self.ui, RightPane::Geoprocessing),
             "ui.pane.symbology" => {
                 if self.session.active_layer.is_none() {
-                    return Err("select a layer in the Contents pane first".into());
+                    return Err("select a layer in the Layers pane first".into());
                 }
                 toggle_right(&mut self.ui, RightPane::Symbology)
             }
@@ -1298,7 +1298,7 @@ impl RustGisApp {
                     .session
                     .active_layer
                     .and_then(|id| self.session.map().layer(id))
-                    .ok_or("select a layer in the Contents pane first")?;
+                    .ok_or("select a layer in the Layers pane first")?;
                 // Any format but GeoPackage, which needs SQLite.
                 let ext = p.get("format").and_then(Value::as_str).unwrap_or("geojson").to_ascii_lowercase();
                 // A streamed layer exports its whole source, not the features read for the view.
