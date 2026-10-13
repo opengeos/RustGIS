@@ -29,8 +29,6 @@ pub struct State {
     /// The search under way: the portal, its address and the box it keeps to.
     waiting: Option<(Portal, String, Option<[f64; 4]>, Answer)>,
     pub found: Vec<Dataset>,
-    /// The portal the results came from (resources are judged as found there).
-    pub from: String,
     pub error: Option<String>,
     pub info: Option<String>,
 }
@@ -44,7 +42,6 @@ impl Default for State {
             here: false,
             waiting: None,
             found: Vec::new(),
-            from: String::new(),
             error: None,
             info: None,
         }
@@ -68,7 +65,6 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 crate::i18n::fmt("{n} datasets on {portal}", &[("n", &found.len().to_string()), ("portal", &portal.label())])
             });
             st.found = found;
-            st.from = url;
         }
         Err(e) => st.error = Some(e),
     }
