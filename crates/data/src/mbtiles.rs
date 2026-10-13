@@ -366,7 +366,9 @@ mod file {
             c.prepare("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles LIMIT 0").map_err(sql)?;
             // What the metadata says, if it is usable: a zoom that reads as a number, a format
             // RustGIS knows.
-            let says = |k: &str, ok: &dyn Fn(&str) -> bool| meta.iter().any(|(n, v)| n.eq_ignore_ascii_case(k) && ok(v.trim()));
+            let says = |k: &str, ok: &dyn Fn(&str) -> bool| {
+                meta.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).is_some_and(|(_, v)| ok(v.trim()))
+            };
             let zoom = |v: &str| v.parse::<f64>().is_ok_and(f64::is_finite);
             let format = |v: &str| super::Format::from_name(v) != super::Format::Unknown;
             // The tiles are looked at only for what the metadata leaves out: finding the zooms can
