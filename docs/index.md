@@ -12,7 +12,7 @@ script from the command line, a notebook or the AI Assistant.
 [Get started](getting-started.md){ .md-button }
 [Compare](comparison.md){ .md-button }
 
-![RustGIS with the Home tab of the ribbon open over a world map in the Equal Earth projection, countries shaded by population](https://assets.rustgis.app/images/hero.webp)
+[![RustGIS with the Home tab of the ribbon open over a world map in the Equal Earth projection, countries shaded by population](https://assets.rustgis.app/images/hero.webp)](https://assets.rustgis.app/images/hero.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
 ## Highlights
 
