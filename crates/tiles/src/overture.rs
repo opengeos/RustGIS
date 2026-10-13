@@ -165,12 +165,10 @@ pub fn parse_item(bytes: &[u8]) -> Result<String, String> {
         .and_then(href)
         .or_else(|| assets.values().take(50).find(parquet).and_then(href))
         .ok_or("the Overture item has no GeoParquet file")?;
-    let lower = url.to_ascii_lowercase();
-    if !(lower.starts_with("https://") || lower.starts_with("s3://"))
-        || url.len() > 2048
-        || url.chars().any(|c| c.is_whitespace() || c.is_control())
-    {
-        return Err("the Overture item's file has no web address".into());
+    // Overture's own release files only, wherever the item points (a catalog is fetched from the
+    // web, so its links are held to Overture's buckets like the app's `files` are).
+    if url.len() > 2048 || !is_data_file(&url) {
+        return Err("the Overture item's file isn't one of Overture's release files".into());
     }
     Ok(url)
 }
@@ -292,9 +290,12 @@ mod tests {
     fn items() {
         let item = br#"{"type":"Feature","assets":{"aws":{"href":"https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/r/theme=buildings/type=building/part-00000.zstd.parquet","type":"application/vnd.apache.parquet"},"azure":{"href":"https://overturemapswestus2.blob.core.windows.net/x.parquet"}}}"#;
         assert!(parse_item(item).unwrap().ends_with("part-00000.zstd.parquet"));
-        // Without an AWS asset: the first GeoParquet one.
-        let item = br#"{"assets":{"thumb":{"href":"https://x.example/a.png"},"data":{"href":"https://x.example/a.parquet"}}}"#;
-        assert_eq!(parse_item(item).unwrap(), "https://x.example/a.parquet");
+        // Without an AWS asset: the first GeoParquet one, if it is Overture's.
+        let item = br#"{"assets":{"thumb":{"href":"https://x.example/a.png"},"data":{"href":"https://overturemapswestus2.blob.core.windows.net/release/r/a.parquet"}}}"#;
+        assert_eq!(parse_item(item).unwrap(), "https://overturemapswestus2.blob.core.windows.net/release/r/a.parquet");
+        // An item pointing anywhere else (a malformed or compromised catalog): refused.
+        let item = br#"{"assets":{"aws":{"href":"https://x.example/release/a.parquet"}}}"#;
+        assert!(parse_item(item).is_err());
         for bad in [&br#"{"assets":{}}"#[..], br#"{"assets":{"aws":{"href":"file:///etc/x.parquet"}}}"#, b"[]"] {
             assert!(parse_item(bad).is_err());
         }
