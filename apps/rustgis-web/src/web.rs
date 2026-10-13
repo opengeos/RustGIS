@@ -261,7 +261,11 @@ impl Embed {
                     Err(e) => app.session.notify(e, true),
                 },
                 Some(Msg::Run { id, command, params }) => {
-                    let outcome = app.run(&command, params);
+                    let outcome = if crate::embed::runnable(&command) {
+                        app.run(&command, params)
+                    } else {
+                        Err(format!("{command}: only the app's own commands (ui.*) run from the embedding page"))
+                    };
                     self.answer(&crate::embed::result(id, outcome));
                 }
                 None => {}

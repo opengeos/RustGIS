@@ -51,8 +51,10 @@ m.run_in_app("ui.language", code="de")              # a command only the app has
 ```
 
 `Map` has the `Session` methods (`run`, `add_data`, `layers`, `to_png`, ...); `m.session` is the
-session itself. Files of up to 100 MB travel with the project, so the app shows them; a larger
+session itself. Files of up to 10 MB travel with the project, so the app shows them; a larger
 file is read from its path, which only Python can see, so it draws in `to_png` but not in the app.
+The whole project goes across after each change, so changes made on both sides at once don't
+merge: the later one wins.
 
 The app is the [web app](installation.md), loaded from https://web.rustgis.app, so the
 notebook needs to be online. `Map(url=...)` or the `RUSTGIS_WEB_URL` environment variable points

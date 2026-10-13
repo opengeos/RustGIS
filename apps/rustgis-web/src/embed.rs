@@ -9,7 +9,7 @@
 //! | From the page | Does |
 //! |---|---|
 //! | `{"rustgis": "project", "text": <project JSON>}` | replaces the project with the page's copy |
-//! | `{"rustgis": "run", "id": <any>, "command": <id>, "params"?: {…}}` | runs a command, answered with `result` |
+//! | `{"rustgis": "run", "id": <any>, "command": <id>, "params"?: {…}}` | runs one of the app's own commands (`ui.*`), answered with `result` |
 //!
 //! | From the app | Says |
 //! |---|---|
@@ -18,7 +18,9 @@
 //! | `{"rustgis": "result", "id", "ok": true, "value"}` or `{…, "ok": false, "error"}` | a `run`'s outcome |
 //!
 //! Only messages from the parent window are taken, and the app answers only the origin that sent
-//! the first of them. A change is posted once the project has stayed the same for [`SETTLE`], so a
+//! the first of them. Any page may frame the app, so `run` takes only the interface's commands
+//! (`ui.*`: panes, the language, the theme); everything else changes the project, which the page
+//! sends whole and the app only opens. A change is posted once the project has stayed the same for [`SETTLE`], so a
 //! pan sends one message, not one a frame; the page's own project is never echoed back.
 
 use serde_json::{Value, json};
@@ -47,6 +49,11 @@ pub fn parse(v: &Value) -> Option<Msg> {
         }),
         _ => None,
     }
+}
+
+/// Whether the embedding page may run `command`: the interface's own commands only.
+pub fn runnable(command: &str) -> bool {
+    command.strip_prefix("ui.").is_some_and(|rest| !rest.is_empty())
 }
 
 pub fn ready() -> Value {
@@ -137,6 +144,14 @@ mod tests {
             [json!("hello"), json!({"type": "project"}), json!({"rustgis": "project"}), json!({"rustgis": 1}), json!({"rustgis": "run"})]
         {
             assert_eq!(parse(&other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn the_page_runs_only_interface_commands() {
+        assert!(runnable("ui.language"));
+        for other in ["ui.", "layer.addData", "project.open", "share.exportMap", "gp.run", "uix.language", ""] {
+            assert!(!runnable(other), "{other}");
         }
     }
 

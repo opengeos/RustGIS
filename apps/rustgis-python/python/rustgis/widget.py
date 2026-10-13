@@ -22,8 +22,10 @@ from . import Layer, PathLike, RustGISError, Session
 #: ``trunk serve``, a self-hosted copy).
 DEFAULT_URL = "https://web.rustgis.app/"
 
-#: Files up to this size travel with the project, so the app in the browser shows them too.
-EMBED_LIMIT = 100 << 20
+#: Files up to this size travel with the project, so the app in the browser shows them too. The
+#: whole project goes to the app after each change, so this stays well under what a notebook's
+#: messages carry comfortably.
+EMBED_LIMIT = 10 << 20
 
 # The extensions `layer.addDataBytes` reads from a file's contents.
 _EMBEDDABLE = {
@@ -185,7 +187,7 @@ class Map(anywidget.AnyWidget):
     def add_data(self, path: PathLike, name: Optional[str] = None, **params: Any) -> Any:
         """Adds a file as a layer.
 
-        A file of up to 100 MB travels with the project, so the app shows it too; a larger one is
+        A file of up to 10 MB travels with the project, so the app shows it too; a larger one is
         read from its path, which only Python can see: it draws in :meth:`to_png` but not in the
         app.
 
