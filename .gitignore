@@ -4,4 +4,5 @@
 /site
 .wrangler/
 /dist
-.claude/scheduled_tasks.lock
+/.claude/
+/private/
