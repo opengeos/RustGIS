@@ -361,6 +361,10 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
     let landxml = rustgis_data::landxml::is_landxml_name(file_name)
         || (file_name.to_ascii_lowercase().ends_with(".xml")
             && rustgis_data::landxml::looks_like_landxml(&String::from_utf8_lossy(bytes.get(..bytes.len().min(4096)).unwrap_or(bytes))));
+    let lower = file_name.to_ascii_lowercase();
+    let kml = lower.ends_with(".kml") || lower.ends_with(".kmz");
+    // A KML's ground overlays (pictures) are raster layers, added after its placemarks.
+    let overlays = if kml && ps(p, "layer").is_none() { ground_overlays(s, file_name, bytes) } else { Vec::new() };
     let mut reads = match crs.filter(|_| landxml) {
         Some(c) => {
             let crs = rustgis_data::raster::Crs::parse(c)?;
@@ -370,7 +374,12 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
                 .map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() })
                 .collect()
         }
-        None => rustgis_data::io::read_layers(file_name, bytes).map_err(|e| e.to_string())?,
+        None => match rustgis_data::io::read_layers(file_name, bytes) {
+            Ok(r) => r,
+            // A document of overlays only.
+            Err(_) if !overlays.is_empty() => Vec::new(),
+            Err(e) => return Err(e.to_string()),
+        },
     };
     if let Some(want) = ps(p, "layer").map(str::trim).filter(|t| !t.is_empty()) {
         let names: Vec<String> = reads.iter().map(|r| r.dataset.name.clone()).collect();
@@ -402,6 +411,12 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
             Err(e) => failed.push(format!("{name}: {e}")),
         }
     }
+    for (name, raster) in overlays {
+        match super::raster::add_overlay(s, &name, raster) {
+            Ok(r) => added.push(r),
+            Err(e) => failed.push(format!("{name}: {e}")),
+        }
+    }
     if added.is_empty() {
         return Err(failed.join("; "));
     }
@@ -417,6 +432,47 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
         out["layer"] = first.clone();
     }
     Ok(out)
+}
+
+/// A KML or KMZ's ground overlays as rasters: pictures inside a KMZ, or files beside a KML on
+/// disk (by a relative path that stays in its folder). Overlays that can't be drawn are said.
+fn ground_overlays(s: &mut Session, file_name: &str, bytes: &[u8]) -> Vec<(String, rustgis_data::raster::Raster)> {
+    let (found, undrawn) = match rustgis_data::kml::ground_overlays(file_name, bytes) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    let mut notes = Vec::new();
+    let dir = Path::new(file_name).parent().filter(|d| d.is_absolute());
+    for (g, picture) in found {
+        let href = g.href.trim();
+        let picture = picture.or_else(|| {
+            // Beside the document: no web addresses, absolute paths or climbing out of its folder.
+            let rel = Path::new(href);
+            let safe =
+                !href.contains("://") && rel.is_relative() && !rel.components().any(|c| matches!(c, std::path::Component::ParentDir));
+            if !safe {
+                return None;
+            }
+            let p = dir?.join(rel);
+            (std::fs::metadata(&p).ok()?.len() < 256 << 20).then(|| std::fs::read(p).ok()).flatten()
+        });
+        let Some(picture) = picture else {
+            notes.push(format!("{} (its picture {href} isn't in the file or beside it)", g.name));
+            continue;
+        };
+        match rustgis_data::raster::from_image(&g.name, &picture, g.bbox, g.rotation) {
+            Ok(r) => out.push((g.name.clone(), r)),
+            Err(e) => notes.push(format!("{} ({e})", g.name)),
+        }
+    }
+    if undrawn > 0 {
+        notes.push(format!("{undrawn} ground overlays without a picture or a box (LatLonBox)"));
+    }
+    if !notes.is_empty() {
+        s.notify(format!("{file_name}: {}", notes.join("; ")), false);
+    }
+    out
 }
 
 /// Draws a layer in the styles its file declares (KML): unique values of its `style` field, each
