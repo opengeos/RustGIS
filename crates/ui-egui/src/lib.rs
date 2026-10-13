@@ -1143,6 +1143,7 @@ impl RustGisApp {
                             "gml",
                             "topojson",
                             "dxf",
+                            "dwg",
                             "tab",
                             "mif",
                             "osm",

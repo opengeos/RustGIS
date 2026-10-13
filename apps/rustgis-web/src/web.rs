@@ -34,6 +34,7 @@ const DATA_EXTS: &[&str] = &[
     "fgb",
     "mbtiles",
     "gml",
+    "dxf",
     "mif",
     "pbf",
     "topojson",

@@ -4009,3 +4009,63 @@ fn data_sources_recent_favourites_and_saved() {
 fn rustgis_engine_sources_roundtrip(text: &str) -> crate::sources::Sources {
     crate::sources::Sources::from_json(text)
 }
+
+/// A DXF drawing through the commands: read natively (not through GDAL) by path and upload, its
+/// own layers listed and picked with "layer", and its coordinates converted with "crs".
+#[test]
+fn dxf_drawings_by_path_and_upload() {
+    use base64::Engine;
+    let pairs: &[(i32, &str)] = &[
+        (0, "SECTION"),
+        (2, "ENTITIES"),
+        (0, "LINE"),
+        (8, "Roads"),
+        (10, "500000"),
+        (20, "4649776"),
+        (11, "500100"),
+        (21, "4649776"),
+        (0, "POINT"),
+        (8, "Wells"),
+        (10, "500050"),
+        (20, "4649800"),
+        (0, "TEXT"),
+        (8, "Wells"),
+        (10, "500050"),
+        (20, "4649800"),
+        (1, "W1"),
+        (0, "ENDSEC"),
+        (0, "EOF"),
+    ];
+    let text: String = pairs.iter().map(|(c, v)| format!("{c:>3}\n{v}\n")).collect();
+    assert!(!rustgis_data::source::gdal::is_gdal_name("site.dxf"));
+    let dir = std::env::temp_dir().join(format!("rustgis-dxf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("site.dxf");
+    std::fs::write(&path, &text).unwrap();
+    let path = path.display().to_string();
+    let mut s = Session::new(Project::default());
+    let listed = s.run("info.fileLayers", &json!({"path": path})).unwrap();
+    assert_eq!(listed, json!({"count": 2, "layers": ["Roads", "Wells"]}));
+    // Converted from UTM 33N: the line runs east from 15° E, 42° N.
+    let r = s.run("layer.addData", &json!({"path": path, "crs": "EPSG:32633"})).unwrap();
+    let mut names: Vec<String> = s.map().layers.iter().map(|l| l.name.clone()).collect();
+    names.sort();
+    assert_eq!(names, ["site lines", "site points"], "{r}");
+    let e = s.map().layer_by_name("site lines").unwrap().extent();
+    assert!((e.min_x - 15.0).abs() < 1e-6 && (e.min_y - 42.0).abs() < 0.01, "{e:?}");
+    // One DXF layer, by its name.
+    let mut t = Session::new(Project::default());
+    t.run("layer.addData", &json!({"path": path, "layer": "wells", "crs": "EPSG:32633"})).unwrap();
+    let only: Vec<String> = t.map().layers.iter().map(|l| l.name.clone()).collect();
+    assert_eq!(only, ["site points"]);
+    assert_eq!(t.map().layers[0].dataset.features.len(), 2);
+    assert!(t.run("layer.addData", &json!({"path": path, "layer": "nope"})).unwrap_err().contains("nothing drawn on layer 'nope'"));
+    // Without "crs" the coordinates are kept, and the user is told.
+    let mut u = Session::new(Project::default());
+    u.run("layer.addDataBytes", &json!({"fileName": "upload.dxf", "data": base64::engine::general_purpose::STANDARD.encode(&text)}))
+        .unwrap();
+    assert_eq!(u.map().layers.len(), 2);
+    assert!(u.notices.iter().any(|n| n.text.contains("doesn't say its coordinate system")), "{:?}", u.notices);
+    assert!(u.run("layer.addDataBytes", &json!({"fileName": "bad.dxf", "data": "AAAA"})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}

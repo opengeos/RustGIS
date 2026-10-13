@@ -57,7 +57,7 @@ engine, choose RustGIS. Both keep your data on your machine.
 
 | | **RustGIS** | **GeoLibre** | **QGIS** | **ArcGIS Pro** | **ArcGIS Online** |
 |---|---|---|---|---|---|
-| **Format breadth** | Focused: GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet, FlatGeobuf, KML/KMZ and GPX in and out (large files read in place); GeoTIFF/COG and ASCII grids; WKT out; with GDAL installed, the vector formats it reads; with DuckDB, SQL queries over files and web addresses | Wide: DuckDB-WASM Spatial plus in-house readers | **Widest**: everything GDAL/OGR reads | Very wide, plus native Esri formats | Common upload formats |
+| **Format breadth** | Focused: GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet, FlatGeobuf, KML/KMZ and GPX in and out (large files read in place); GML, MapInfo MIF, OSM PBF, TopoJSON, DXF, LiDAR and spreadsheets in; GeoTIFF/COG and ASCII grids; WKT out; with GDAL installed, the vector formats it reads; with DuckDB, SQL queries over files and web addresses | Wide: DuckDB-WASM Spatial plus in-house readers | **Widest**: everything GDAL/OGR reads | Very wide, plus native Esri formats | Common upload formats |
 | **Cloud-native data** | GeoParquet, FlatGeobuf, PMTiles and cloud-optimised GeoTIFF read in place, large files and web addresses alike (by address, over HTTP byte ranges: a COG reads only the tiles the view needs, a FlatGeobuf only its index and the features in view, a GeoParquet its footer and the row groups in view, desktop and web), Zarr 2 and 3 stores (the chunks of the step picked, desktop and web), from `s3://` buckets too (private ones signed with a connection's keys, S3-compatible services by endpoint) | GeoParquet, FlatGeobuf, PMTiles, COG, Zarr, streamed over HTTP | GeoParquet, FlatGeobuf, PMTiles, COG, Zarr | GeoParquet, COG, Zarr | Hosted layers |
 | **Web maps and tiles** | XYZ/TMS/WMS raster tiles, WMTS, OGC API Tiles, Mapbox Vector Tiles, MapLibre styles | XYZ, WMS/WFS/WMTS, OGC API, vector tiles, MapLibre styles | Full OGC support, vector tiles | Full OGC support | Yes |
 | **Coordinate systems** | Rasters in any EPSG code, reprojected on the fly; the map in presets or projected EPSG codes | Reprojects on import, EPSG catalog | Full PROJ support | Full support | Web Mercator focus |
@@ -129,8 +129,8 @@ opens, and writes MapLibre styles and OGC API Features collections for the web.
 Stated plainly, so the tables above are worth trusting:
 
 - **Format breadth.** Databases are DuckDB files and PostgreSQL/PostGIS (through DuckDB, on the
-  desktop), and the web app doesn't write GeoPackages. Other vector formats (GML,
-  File Geodatabase, DXF…) need GDAL installed, and SQL queries need DuckDB, which RustGIS calls
+  desktop), and the web app doesn't write GeoPackages. Other vector formats (File Geodatabase,
+  DWG…) need GDAL installed, and SQL queries need DuckDB, which RustGIS calls
   rather than links; GDAL rasters aren't read.
 - **Coordinate systems.** Vector data is stored in longitude/latitude; there is no full PROJ.
 - **Editing depth.** No vertex editing of existing features yet, and no versioned or

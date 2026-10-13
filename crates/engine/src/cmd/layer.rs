@@ -12,7 +12,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Home › Add", add_data)
-            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL or DuckDB layer", "stream"?: bool, "crs"?: "EPSG:… (or WKT) for a CSV's coordinates, or a GDAL or DuckDB file that doesn't say", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
+            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL, DuckDB or DXF layer", "stream"?: bool, "crs"?: "EPSG:… (or WKT) for a CSV's coordinates, or a GDAL or DuckDB file that doesn't say", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
         C::new("info.fileLayers", "List Layers in File", "Home › Add › Add Data", file_layers)
             .view()
             .params(r#"{"path": string}"#),
@@ -383,7 +383,20 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
     let kml = lower.ends_with(".kml") || lower.ends_with(".kmz");
     // A KML's ground overlays (pictures) are raster layers, added after its placemarks.
     let overlays = if kml && ps(p, "layer").is_none() { ground_overlays(s, file_name, bytes) } else { Vec::new() };
+    // A DXF drawing: its coordinate system (it never says) and one of its own layers.
+    let dxf = rustgis_data::dxf::is_dxf_name(file_name);
     let mut reads = match crs.filter(|_| landxml) {
+        _ if dxf => {
+            let opts = rustgis_data::dxf::Options {
+                crs: crs.map(rustgis_data::raster::Crs::parse).transpose()?,
+                layer: ps(p, "layer").map(str::trim).filter(|l| !l.is_empty()),
+            };
+            rustgis_data::dxf::read(file_name, bytes, &opts)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() })
+                .collect()
+        }
         Some(c) => {
             let crs = rustgis_data::raster::Crs::parse(c)?;
             rustgis_data::landxml::read(file_name, bytes, Some(crs))
@@ -399,7 +412,9 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
             Err(e) => return Err(e.to_string()),
         },
     };
-    if let Some(want) = ps(p, "layer").map(str::trim).filter(|t| !t.is_empty()) {
+    if let Some(want) = ps(p, "layer").map(str::trim).filter(|t| !t.is_empty())
+        && !dxf
+    {
         let names: Vec<String> = reads.iter().map(|r| r.dataset.name.clone()).collect();
         // By its full name or its last word ("tracks" for "walk tracks").
         let pick = |n: &str| n.eq_ignore_ascii_case(want) || n.rsplit(' ').next().is_some_and(|w| w.eq_ignore_ascii_case(want));
@@ -592,6 +607,16 @@ fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(not(target_arch = "wasm32"))]
     if large_osm(path) {
         let layers = rustgis_data::source::gdal::layers(Path::new(path)).map_err(err)?;
+        return Ok(json!({"count": layers.len(), "layers": layers}));
+    }
+    // A DXF drawing's own layers (the ones it draws on), picked with "layer".
+    if rustgis_data::dxf::is_dxf_name(path) {
+        let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+        if meta.len() > rustgis_data::io::MAX_BYTES {
+            return Err(format!("{path} is too large to open"));
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let layers = rustgis_data::dxf::layers(path, &bytes).map_err(err)?;
         return Ok(json!({"count": layers.len(), "layers": layers}));
     }
     if rustgis_data::io::is_multi_layer_name(path) {

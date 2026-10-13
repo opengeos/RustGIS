@@ -36,6 +36,7 @@ pub const READ_EXTENSIONS: &[&str] = &[
     "landxml",
     "xml",
     "gml",
+    "dxf",
     "mif",
     "pbf",
     "topojson",
@@ -58,7 +59,10 @@ pub struct LayerRead {
 /// Whether a file holds several layers ([`read_layers`] reads them all): a zip, KML, KMZ or GPX.
 pub fn is_multi_layer_name(name: &str) -> bool {
     let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    matches!(ext.as_str(), "zip" | "kml" | "kmz" | "gpx" | "rss" | "atom" | "georss" | "landxml" | "xml" | "gml" | "pbf" | "topojson")
+    matches!(
+        ext.as_str(),
+        "zip" | "kml" | "kmz" | "gpx" | "rss" | "atom" | "georss" | "landxml" | "xml" | "gml" | "dxf" | "pbf" | "topojson"
+    )
 }
 
 /// Reads every layer of a file held in memory: the Shapefiles and other files of a zip, a KML or
@@ -101,6 +105,7 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
             }
         }
         "gml" => plain(crate::gml::read(file_name, bytes)?),
+        "dxf" => plain(crate::dxf::read(file_name, bytes, &crate::dxf::Options::default())?),
         // OpenStreetMap PBF, not a vector tile (`.pbf` too).
         "pbf" if crate::osm::looks_like_osm_pbf(bytes) => plain(crate::osm::read(file_name, bytes)?),
         "pbf" => {
@@ -197,7 +202,7 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
         "mif" => crate::mapinfo::read_bytes(bytes, None, &name)?,
         "shp" => return Err(DataError::Unsupported("shp on its own: zip it with its .dbf, .shx and .prj and add the zip".into())),
         // The first layer (`read_layers` reads them all), saying what else the file holds.
-        "zip" | "kml" | "kmz" | "gpx" | "gml" | "pbf" | "topojson" => return first_layer(file_name, bytes),
+        "zip" | "kml" | "kmz" | "gpx" | "gml" | "dxf" | "pbf" | "topojson" => return first_layer(file_name, bytes),
         // A copy, since only borrowed bytes are given; `read_owned` takes them without one.
         e if crate::source::EXTENSIONS.contains(&e) => return read_owned(file_name, bytes.to_vec()),
         other => return Err(DataError::Unsupported(other.to_string())),
@@ -248,7 +253,7 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
             }
             read_shapefile(path, &name)?
         }
-        "zip" | "kml" | "kmz" | "gpx" | "gml" | "pbf" | "topojson" => {
+        "zip" | "kml" | "kmz" | "gpx" | "gml" | "dxf" | "pbf" | "topojson" => {
             check_size(path)?;
             read_bytes(&path.display().to_string(), &std::fs::read(path)?)?
         }

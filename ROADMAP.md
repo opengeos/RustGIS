@@ -8,7 +8,7 @@ Many features are first versions: there are no full 3D scenes or enterprise port
   (Home, Data, Style, Edit, Analyze, View, Publish), start-up preferences, Check for Updates.
 - Data: files by their web address; GeoJSON, CSV/TSV (x/y in any EPSG system, or WKT), Excel and OpenDocument spreadsheets,
   GeoRSS, LandXML, encoded polylines, Shapefile (zipped too, with the coordinate system in its
-  `.prj`), GeoPackage, GeoParquet, FlatGeobuf, KML/KMZ (styles included), GPX, GML, MapInfo MIF, OSM PBF, TopoJSON and LiDAR (LAS/LAZ/COPC) in, all of them
+  `.prj`), GeoPackage, GeoParquet, FlatGeobuf, KML/KMZ (styles included), GPX, GML, MapInfo MIF, OSM PBF, TopoJSON, DXF and LiDAR (LAS/LAZ/COPC) in, all of them
   in the web app too (large files read in place, a view at a time); the vector formats GDAL
   reads when it is installed, and SQL queries and DuckDB databases (DuckDB Spatial) when DuckDB
   is; GeoJSON, CSV, GeoPackage, GeoParquet, Shapefile, FlatGeobuf, KML/KMZ, GPX and WKT out;

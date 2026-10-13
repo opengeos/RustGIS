@@ -116,7 +116,7 @@ fn area(r: &[Coord]) -> f64 {
 }
 
 /// A region's rings as polygons: a ring inside another (an odd number of others) is a hole.
-fn region(rings: Vec<Vec<Coord>>) -> Option<Geometry> {
+pub(crate) fn region(rings: Vec<Vec<Coord>>) -> Option<Geometry> {
     let mut rings: Vec<Vec<Coord>> = rings
         .into_iter()
         .filter_map(|mut r| {
