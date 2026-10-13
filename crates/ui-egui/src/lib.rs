@@ -20,6 +20,7 @@ mod geocodeui;
 pub mod icons;
 mod layoutview;
 mod mapview;
+mod opendataui;
 mod panes;
 mod pluginsui;
 mod portalsui;
@@ -287,6 +288,8 @@ pub struct UiState {
     pub portals: portalsui::State,
     /// Overture Maps and Source Cooperative: choices, results and the request under way.
     pub catalogs: catalogsui::State,
+    /// Search Open Data: the portal, the search under way and the datasets found.
+    pub opendata: opendataui::State,
     /// Find Place searches and Geocode Addresses runs under way.
     pub geocode: geocodeui::State,
     /// The Data Sources pane's boxes, and the sources' generation last kept in the preferences.
@@ -345,6 +348,7 @@ impl Default for UiState {
             s3: Default::default(),
             portals: Default::default(),
             catalogs: Default::default(),
+            opendata: Default::default(),
             geocode: Default::default(),
             sources: Default::default(),
             sources_saved: 0,
@@ -1018,6 +1022,11 @@ impl RustGisApp {
             "ui.stacLink" => {
                 let url = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
                 stacui::open_link(self, url)?;
+            }
+            // Search Open Data: the dialog, then (with a query) the search, off the frame.
+            "ui.searchOpenData" => {
+                self.run("ui.dialog", json!({"name": "opendata"}))?;
+                opendataui::start(self, p);
             }
             // Data by its web address: the dialog, then (with an address) the download, off the
             // frame; it's added when it lands. A PMTiles archive is a tile layer, never downloaded.
@@ -1850,6 +1859,7 @@ impl RustGisApp {
         s3ui::poll(self, ctx);
         portalsui::poll(self, ctx);
         catalogsui::poll(self, ctx);
+        opendataui::poll(self, ctx);
         geocodeui::poll(self, ctx);
         zarrui::poll(self, ctx);
         pluginsui::poll(self, ctx);

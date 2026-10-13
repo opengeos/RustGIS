@@ -134,13 +134,13 @@ pub fn service_json(svc: &Service) -> Value {
     json!({"kind": svc.kind, "title": svc.title, "count": layers.len(), "layers": layers, "notes": svc.notes})
 }
 
-fn layers(_s: &mut Session, p: &Value) -> CmdResult {
+pub(crate) fn layers(_s: &mut Session, p: &Value) -> CmdResult {
     Ok(service_json(&capabilities(p)?))
 }
 
 /// Adds one of a service's layers: map layers as tiles (an overlay), a style as a style, features
 /// downloaded.
-fn add(s: &mut Session, p: &Value) -> CmdResult {
+pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     let url = url_of(p)?.to_string();
     let want = ps(p, "layer").map(str::trim).filter(|l| !l.is_empty()).ok_or("layer is required")?;
     let svc = capabilities(p)?;

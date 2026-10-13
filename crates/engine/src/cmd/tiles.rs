@@ -26,6 +26,8 @@ pub const NETWORK: &[&str] = &[
     "overture.add",
     "sourcecoop.products",
     "sourcecoop.list",
+    "portal.search",
+    "portal.add",
 ];
 
 pub fn commands() -> Vec<C> {

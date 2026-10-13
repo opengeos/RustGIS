@@ -51,6 +51,7 @@ impl Dialogs {
             "boundaries" => "boundaries",
             "overture" => "overture",
             "sourcecoop" => "sourcecoop",
+            "opendata" => "opendata",
             "zarr" => "zarr",
             "exportLayer" => "exportLayer",
             other => return Err(format!("unknown dialog '{other}'")),
@@ -131,6 +132,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "boundaries" => "Administrative Boundaries",
         "overture" => "Overture Maps",
         "sourcecoop" => "Source Cooperative",
+        "opendata" => "Search Open Data",
         "zarr" => "Add Zarr Variable",
         "exportLayer" => "Export Features",
         _ => "Rename Layer",
@@ -141,7 +143,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     egui::Window::new(tl!(title)).id(egui::Id::new("dialog")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
         ui.set_width(match which {
             "coordinateSystem" | "zarr" => 660.0,
-            "addTiles" | "addUrl" | "addService" | "stac" | "s3" | "sourcecoop" => 560.0,
+            "addTiles" | "addUrl" | "addService" | "stac" | "s3" | "sourcecoop" | "opendata" => 560.0,
             _ => 440.0,
         });
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
@@ -181,6 +183,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             "boundaries" => crate::portalsui::boundaries(app, ui),
             "overture" => crate::catalogsui::overture(app, ui),
             "sourcecoop" => crate::catalogsui::sourcecoop(app, ui),
+            "opendata" => crate::opendataui::dialog(app, ui),
             "zarr" => close = crate::zarrui::dialog(app, ui),
             "exportLayer" => close = export_layer(app, ui),
             "camera" => {

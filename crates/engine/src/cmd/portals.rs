@@ -1,9 +1,11 @@
-//! Open-data portals: OpenStreetMap data for an area (through Overpass) and administrative
-//! boundaries for a country (from geoBoundaries).
+//! Open-data portals: OpenStreetMap data for an area (through Overpass), administrative boundaries
+//! for a country (from geoBoundaries), and datasets found by text in CKAN catalogues (data.gov),
+//! Socrata sites and ArcGIS Hub.
 
 use serde_json::{Value, json};
 
 use super::{b, ps};
+use crate::render::rustgis_tiles::portal::{self, Portal, Use};
 use crate::render::rustgis_tiles::{boundaries, overpass};
 use crate::{CmdResult, CommandSpec as C, Session};
 
@@ -16,6 +18,12 @@ pub fn commands() -> Vec<C> {
             r#"{"country": "ISO 3166 alpha-3 code (CHE, KEN…)", "level"?: "ADM0" (the country, default) … "ADM5", "name"?: text, "text"?: "the boundaries' GeoJSON, when already fetched (the app's background request)"}"#,
         ),
         C::new("boundaries.countries", "List geoBoundaries Countries", "Home › Add › Add Data", boundaries_countries).view(),
+        C::new("portal.search", "Search Open Data", "Home › Add › Add Data", portal_search).view().params(
+            r#"{"query": text, "portal"?: "ckan" (data.gov's catalogue, the default, or any CKAN site) | "socrata" | "arcgis-hub", "url"?: "the portal: a CKAN site (https://open.canada.ca/data), a Socrata site (data.cityofnewyork.us) or an ArcGIS Hub site", "bbox"?: [west, south, east, north] | "view", "view"?: bool (true: where the map is), "limit"?: 1–50 (20)}"#,
+        ),
+        C::new("portal.add", "Add Open Data", "Home › Add › Add Data", portal_add).params(
+            r#"{"url": "a resource's address, as portal.search lists it", "use"?: "file" (read by address, the default) | "wms" | "wfs" | "arcgis" (a service), "layer"?: "a service's layer (default: its first)", "name"?: text, "portal"?: "the portal's address the resource came from (an address it gives may not reach into the local network)"}"#,
+        ),
     ]
 }
 
@@ -105,6 +113,81 @@ fn boundaries_countries(_s: &mut Session, _p: &Value) -> CmdResult {
     Ok(json!({"count": list.len(), "countries": list.iter().map(|(iso, name)| json!({"iso": iso, "name": name})).collect::<Vec<_>>()}))
 }
 
+/// The portal and search a command names.
+pub fn portal_query(s: &Session, p: &Value) -> Result<(Portal, String, Option<[f64; 4]>, usize), String> {
+    let portal = Portal::new(ps(p, "portal"), ps(p, "url"))?;
+    let query = ps(p, "query").map(str::trim).filter(|q| !q.is_empty()).ok_or("query is required (such as parks)")?.to_string();
+    // Everywhere unless a place is asked for.
+    let place = p.get("bbox").is_some() || b(p, "view") == Some(true);
+    let area = if place { Some(bbox(s, p)?) } else { None };
+    let limit = super::f(p, "limit").map(|l| l.clamp(1.0, portal::MAX_RESULTS as f64) as usize).unwrap_or(20);
+    Ok((portal, query, area, limit))
+}
+
+/// A dataset as the commands and the app list it.
+pub fn dataset_json(d: &portal::Dataset) -> Value {
+    let resources: Vec<Value> = d
+        .resources
+        .iter()
+        .map(|r| match &r.using {
+            Use::File => json!({"format": r.format, "url": r.url, "use": "file"}),
+            Use::Service { kind, layer } => json!({"format": r.format, "url": r.url, "use": kind, "layer": layer}),
+        })
+        .collect();
+    json!({"id": d.id, "title": d.title, "description": d.description, "organization": d.organization, "page": d.page, "bbox": d.bbox, "resources": resources})
+}
+
+fn portal_search(s: &mut Session, p: &Value) -> CmdResult {
+    let (portal, query, area, limit) = portal_query(s, p)?;
+    let url = portal.search_url(&query, area, limit);
+    let found = portal.parse(&url, &fetch(&url)?, area)?;
+    Ok(json!({"portal": portal.label(), "count": found.len(), "datasets": found.iter().map(dataset_json).collect::<Vec<_>>()}))
+}
+
+/// Adds a portal's resource: a file by its address (read in place when it can be), a service's
+/// layer (the one named, or its first).
+fn portal_add(s: &mut Session, p: &Value) -> CmdResult {
+    let url = ps(p, "url").map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required (a resource portal.search lists)")?;
+    // The portal's documents are hostile: an address they give is judged as one found there.
+    let from = ps(p, "portal").map(str::trim).filter(|u| !u.is_empty());
+    crate::render::rustgis_tiles::address::check(url, from)?;
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty());
+    match ps(p, "use").unwrap_or("file") {
+        "file" => {
+            let mut q = json!({"url": url});
+            if let Some(n) = name {
+                q["name"] = json!(n);
+            }
+            super::layer::add_url(s, &q)
+        }
+        kind @ ("wms" | "wfs" | "arcgis") => {
+            let layer = match ps(p, "layer").map(str::trim).filter(|l| !l.is_empty()) {
+                Some(l) => l.to_string(),
+                None => first_layer(s, url, kind)?,
+            };
+            let mut q = json!({"url": url, "type": kind, "layer": layer});
+            if let Some(n) = name {
+                q["name"] = json!(n);
+            }
+            super::service::add(s, &q)
+        }
+        other => Err(format!("'{other}': a resource is used as a file, or a wms, wfs or arcgis service")),
+    }
+}
+
+/// A service's first layer: its first with features, else its first.
+fn first_layer(s: &mut Session, url: &str, kind: &str) -> Result<String, String> {
+    let svc = super::service::layers(s, &json!({"url": url, "type": kind}))?;
+    let layers = svc["layers"].as_array().cloned().unwrap_or_default();
+    layers
+        .iter()
+        .find(|l| l["offer"]["type"] == "features")
+        .or_else(|| layers.first())
+        .and_then(|l| l["name"].as_str())
+        .map(str::to_string)
+        .ok_or_else(|| format!("{url}: the service lists no layer RustGIS can add"))
+}
+
 /// A fetch the command waits for (the command line and the assistant; the app fetches off the
 /// frame and passes the answer).
 #[cfg(not(target_arch = "wasm32"))]
@@ -122,5 +205,5 @@ fn fetch(url: &str) -> Result<Vec<u8>, String> {
 
 #[cfg(target_arch = "wasm32")]
 fn fetch(_url: &str) -> Result<Vec<u8>, String> {
-    Err("in the web app, use Home › Add Data › OpenStreetMap… or Boundaries…".into())
+    Err("in the web app, use Home › Add Data › OpenStreetMap…, Boundaries… or Search Open Data…".into())
 }

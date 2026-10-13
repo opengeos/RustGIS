@@ -18,6 +18,7 @@ pub mod mvt;
 pub mod overpass;
 pub mod overture;
 pub mod pmtiles;
+pub mod portal;
 pub mod remote;
 pub mod s3;
 pub mod source;

@@ -3637,6 +3637,43 @@ fn osm_and_boundaries() {
     }
 }
 
+/// Search Open Data against a local CKAN site: datasets with their resources (what RustGIS can't
+/// add dropped, the best format first), one added by its address; bad requests are refused.
+#[test]
+fn open_data_portal_search_and_add() {
+    let ckan = r#"{"success": true, "result": {"count": 2, "results": [
+        {"name": "parks", "title": "Parks", "notes": "<p>City <b>parks</b> &amp; gardens</p>", "organization": {"title": "City"},
+         "resources": [{"format": "PDF", "url": "{base}/parks.pdf"}, {"format": "CSV", "url": "{base}/parks.csv"}, {"format": "GeoJSON", "url": "{base}/parks.geojson"}]},
+        {"name": "report", "title": "A report", "resources": [{"format": "PDF", "url": "{base}/r.pdf"}]}
+    ]}}"#;
+    let gj = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"n": 1}, "geometry": {"type": "Point", "coordinates": [10, 20]}}]}"#;
+    let base = serve_routes(vec![("/api/3/action/package_search", ckan.to_string()), ("/parks.geojson", gj.to_string())], 2);
+    let mut s = Session::new(Project::default());
+    let r = s.run("portal.search", &json!({"portal": "ckan", "url": base, "query": "parks"})).unwrap();
+    assert_eq!(r["count"], 1, "{r}");
+    let d = &r["datasets"][0];
+    assert_eq!(d["title"], "Parks");
+    assert_eq!(d["description"], "City parks & gardens");
+    let formats: Vec<&str> = d["resources"].as_array().unwrap().iter().filter_map(|x| x["format"].as_str()).collect();
+    assert_eq!(formats, ["GeoJSON", "CSV"]);
+    let url = d["resources"][0]["url"].as_str().unwrap();
+    let r = s.run("portal.add", &json!({"url": url, "name": "Parks", "portal": base})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
+    assert!(s.map().layer_by_name("Parks").is_some());
+    for (id, bad) in [
+        ("portal.search", json!({"portal": "ckan", "url": base})),
+        ("portal.search", json!({"portal": "nope", "query": "parks"})),
+        ("portal.search", json!({"portal": "ckan", "url": "file:///etc", "query": "parks"})),
+        ("portal.add", json!({})),
+        ("portal.add", json!({"url": "file:///etc/passwd"})),
+        ("portal.add", json!({"url": "https://example.org/x.geojson", "use": "ftp"})),
+        // A public portal's document can't point into the local network.
+        ("portal.add", json!({"url": "http://127.0.0.1/x.geojson", "portal": "https://catalog.data.gov"})),
+    ] {
+        assert!(s.run(id, &bad).is_err(), "{id} {bad}");
+    }
+}
+
 /// A LAS 1.2 file of point format 0 in longitude/latitude: (x, y, z, class) per point.
 fn las_bytes(points: &[(f64, f64, f64, u8)]) -> Vec<u8> {
     let mut b = vec![0u8; 227];

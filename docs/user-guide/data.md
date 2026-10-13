@@ -251,6 +251,36 @@ rustgis-cli run --cmd 'osm.download={"bbox":[7.44,46.944,7.456,46.952],"preset":
 Both reach the network: the [AI Assistant](assistant.md) asks before it runs them, and plugins need
 the network permission. OpenStreetMap data is © OpenStreetMap contributors (ODbL).
 
+## Open-data portals
+
+**Home › Add Data › Search Open Data…** (`portal.search`) finds datasets by text in an open-data
+portal and lists, for each, the resources RustGIS can add, the best format first:
+
+- **data.gov and CKAN catalogues**: [catalog.data.gov](https://catalog.data.gov) by default, or a
+  CKAN site by its address (`https://open.canada.ca/data`, `https://data.gov.uk`…). GeoJSON,
+  FlatGeobuf, GeoParquet, GeoPackage, KML, zipped Shapefiles, GeoTIFF, CSV, WMS, WFS and ArcGIS
+  REST resources are offered; web pages, PDFs and the like are left out.
+- **Socrata**: every Socrata site through its discovery API, or one site such as
+  `data.cityofnewyork.us`. Datasets with a location column are added as their GeoJSON export (up
+  to 50,000 rows).
+- **ArcGIS Hub**: [hub.arcgis.com](https://hub.arcgis.com) or an organisation's Hub site; its
+  feature services.
+
+**Only where the map is** keeps to datasets covering the map's view. A file is added by its address
+(`portal.add`, read in place when it can be, as **Add Data From URL…** does); a service opens
+**Add From Service…** connected to it, to pick its layer (`portal.add` takes the first layer with
+features unless `"layer"` names one). A search lists up to 50 datasets.
+
+```sh
+rustgis-cli run --cmd 'portal.search={"portal":"socrata","url":"data.cityofnewyork.us","query":"parks"}'
+rustgis-cli run --sample --cmd 'portal.add={"url":"https://data.cityofnewyork.us/resource/enfh-gkve.geojson?$limit=50000","name":"Parks","portal":"https://api.us.socrata.com"}'
+```
+
+An address a portal lists is judged as one found in a document on the web: it may not point into
+the local network. Both commands reach the network, so the AI Assistant asks before it runs them,
+and plugins need the network permission. A dataset's licence is the portal's: its page (the
+**Page** link) says what it is.
+
 ## S3 buckets
 
 An `s3://bucket/key` address works wherever data is added by its address: **Add Data › From
