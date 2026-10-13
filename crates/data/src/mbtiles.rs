@@ -362,13 +362,27 @@ mod file {
                 let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(sql)?;
                 meta.extend(rows.filter_map(Result::ok));
             }
-            let zooms: (Option<i64>, Option<i64>) =
-                c.query_row("SELECT min(zoom_level), max(zoom_level) FROM tiles", [], |r| Ok((r.get(0)?, r.get(1)?))).map_err(sql)?;
-            let zooms = match zooms {
-                (Some(a), Some(b)) => Some((a.clamp(0, 24) as u8, b.clamp(0, 24) as u8)),
-                _ => None,
+            // That it is an MBTiles file: the tiles table (or view) has its columns. Nothing is read.
+            c.prepare("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles LIMIT 0").map_err(sql)?;
+            let says = |k: &str| meta.iter().any(|(n, v)| n.eq_ignore_ascii_case(k) && !v.trim().is_empty());
+            // The tiles are looked at only for what the metadata leaves out: finding the zooms can
+            // scan the whole table (or join a deduplicated layout's view).
+            let zooms = if says("minzoom") && says("maxzoom") {
+                None
+            } else {
+                let z: (Option<i64>, Option<i64>) =
+                    c.query_row("SELECT min(zoom_level), max(zoom_level) FROM tiles", [], |r| Ok((r.get(0)?, r.get(1)?))).map_err(sql)?;
+                match z {
+                    (Some(a), Some(b)) => Some((a.clamp(0, 24) as u8, b.clamp(0, 24) as u8)),
+                    _ => None,
+                }
             };
-            let first: Option<Vec<u8>> = c.query_row("SELECT tile_data FROM tiles LIMIT 1", [], |r| r.get(0)).optional().map_err(sql)?;
+            // A tile's first bytes say its format when the metadata doesn't.
+            let first: Option<Vec<u8>> = if says("format") {
+                None
+            } else {
+                c.query_row("SELECT substr(tile_data, 1, 16) FROM tiles LIMIT 1", [], |r| r.get(0)).optional().map_err(sql)?
+            };
             Ok(Info::from_metadata(&meta, zooms, first.as_deref()))
         })
     }
