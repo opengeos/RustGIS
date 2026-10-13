@@ -102,11 +102,22 @@ fn entity_with_markup(decl: &[u8]) -> bool {
     let mut at = 0;
     while let Some(p) = decl.get(at..).and_then(|r| r.windows(8).position(|w| w == b"<!ENTITY")) {
         let start = at + p + 8;
-        let end = decl.get(start..).and_then(|r| r.iter().position(|&c| c == b'>')).map(|e| start + e).unwrap_or(decl.len());
-        // The declaration's value, between its quotes: a `<` in it is markup.
-        let body = decl.get(start..end).unwrap_or(&[]);
-        if body.contains(&b'<') {
-            return true;
+        // The declaration runs to the first `>` outside quotes (a quoted value may hold `>`); a
+        // `<` anywhere in it, quoted or not, is markup.
+        let mut quote = None::<u8>;
+        let mut end = decl.len();
+        for (k, &c) in decl.get(start..).unwrap_or(&[]).iter().enumerate() {
+            match (quote, c) {
+                (_, b'<') => return true,
+                (Some(q), c) if c == q => quote = None,
+                (Some(_), _) => {}
+                (None, b'"' | b'\'') => quote = Some(c),
+                (None, b'>') => {
+                    end = start + k;
+                    break;
+                }
+                _ => {}
+            }
         }
         at = end;
     }
@@ -142,6 +153,10 @@ mod tests {
         // An entity holding markup, with a DTD allowed: refused; plain ones are fine.
         let ent = "<!DOCTYPE r [<!ENTITY a \"<b><b>&a;</b></b>\">]><r>&a;</r>";
         assert!(check_depth(ent, true).is_err());
+        // A `>` in the quoted value before its markup doesn't hide the markup.
+        for hidden in ["<!DOCTYPE r [<!ENTITY a \"x>&b;<c>\">]><r/>", "<!DOCTYPE r [<!ENTITY a 'x>y<c>'>]><r/>"] {
+            assert!(check_depth(hidden, true).is_err(), "{hidden}");
+        }
         let plain =
             "<!DOCTYPE WMT_MS_Capabilities SYSTEM \"http://x/WMS_MS_Capabilities.dtd\" [<!ELEMENT VendorSpecificCapabilities EMPTY>]><r/>";
         assert!(check_depth(plain, true).is_ok());
