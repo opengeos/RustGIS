@@ -414,12 +414,18 @@ fn delimited_text_options_go_with_the_picked_file() {
     app.run("ui.addDelimited", json!(null)).unwrap();
     app.run("ui.addDelimited", json!({"x": "east", "y": "north", "crs": "EPSG:2263", "delimiter": ";"})).unwrap();
     assert_eq!(asked.lock().unwrap().as_slice(), ["text"]);
-    let r = app.open_bytes("parks.csv", b"name;east;north\nCentral Park;992000;220000\n").unwrap();
+    // A drop (or another picker's file) doesn't take the options.
+    let r = app.open_picked("dropped.csv", b"lon,lat\n3,4\n").unwrap();
+    let e = app.session.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().extent();
+    assert_eq!((e.min_x, e.min_y), (3.0, 4.0));
+    let picked = format!("{}parks.csv", rustgis_ui_egui::DELIMITED_PICK);
+    let r = app.open_picked(&picked, b"name;east;north\nCentral Park;992000;220000\n").unwrap();
     let id = r["layer"].as_u64().unwrap() as u32;
     let e = app.session.map().layer(id).unwrap().extent();
     assert!((e.min_x + 73.96).abs() < 0.05 && (e.min_y - 40.78).abs() < 0.05, "{e:?}");
-    // The next file is read as it is.
-    let r = app.open_bytes("plain.csv", b"lon,lat\n1,2\n").unwrap();
+    // The options were used up: the next pick is read as it is.
+    let picked = format!("{}plain.csv", rustgis_ui_egui::DELIMITED_PICK);
+    let r = app.open_picked(&picked, b"lon,lat\n1,2\n").unwrap();
     let e = app.session.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().extent();
     assert_eq!((e.min_x, e.min_y), (1.0, 2.0));
 }

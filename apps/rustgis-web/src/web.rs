@@ -257,6 +257,8 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
         open_async: Some(Box::new(move |purpose: &str| {
             let inbox = open_inbox.clone();
             let ctx = ctx.clone();
+            // A file picked for Add Delimited Text carries its dialog's options.
+            let mark = if purpose == "text" { rustgis_ui_egui::DELIMITED_PICK } else { "" };
             let dialog = if purpose == "project" {
                 rfd::AsyncFileDialog::new().add_filter("RustGIS project", &["rgis", "rgisx"])
             } else if purpose == "item" {
@@ -280,7 +282,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context) -> Services {
                     return;
                 };
                 let bytes = file.read().await;
-                inbox.lock().unwrap_or_else(|e| e.into_inner()).push((file.file_name(), bytes));
+                inbox.lock().unwrap_or_else(|e| e.into_inner()).push((format!("{mark}{}", file.file_name()), bytes));
                 ctx.request_repaint();
             });
         })),

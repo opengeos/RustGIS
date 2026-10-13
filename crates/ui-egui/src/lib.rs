@@ -37,6 +37,10 @@ pub use rustgis_engine;
 /// Files read asynchronously (browser uploads, drops) waiting to be opened: (file name, bytes).
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 
+/// Starts the name of a file the web shell's `"text"` picker (Add Delimited Text) put in the
+/// inbox, so the dialog's options go with that file and no other (a drop, another picker).
+pub const DELIMITED_PICK: &str = "\u{1}delimited:";
+
 /// A result an asynchronous service fills in when it's done (the app polls it each frame).
 pub type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
 
@@ -489,9 +493,23 @@ impl RustGisApp {
     /// Opens a file by name and contents: a `.rgis` project, a raster, or vector data.
     /// Failures are reported to the user (command errors through `Session::run`, others here).
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
+        self.open_bytes_with(name, bytes, None)
+    }
+
+    /// Opens a file from the inbox: one the `"text"` picker marked ([`DELIMITED_PICK`]) is read
+    /// with Add Delimited Text's options.
+    pub fn open_picked(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
+        match name.strip_prefix(DELIMITED_PICK) {
+            Some(name) => {
+                let csv = self.ui.pending_csv.take();
+                self.open_bytes_with(name, bytes, csv)
+            }
+            None => self.open_bytes(name, bytes),
+        }
+    }
+
+    fn open_bytes_with(&mut self, name: &str, bytes: &[u8], csv: Option<Value>) -> Result<Value, String> {
         let lower = name.to_ascii_lowercase();
-        // Add Delimited Text's options go with the file picked for it, and only that one.
-        let csv = self.ui.pending_csv.take();
         // A plugin package: ask before installing it.
         if lower.ends_with(".rgplugin") {
             pluginsui::received(self, bytes.to_vec(), None);
@@ -1500,7 +1518,7 @@ impl RustGisApp {
             None => Vec::new(),
         };
         for (name, bytes) in arrived {
-            let _ = self.open_bytes(&name, &bytes);
+            let _ = self.open_picked(&name, &bytes);
         }
         // Files dropped on the desktop window arrive as paths. (The web shell reads browser drops
         // asynchronously and passes them through the inbox instead.)
