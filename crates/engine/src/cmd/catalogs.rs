@@ -77,15 +77,33 @@ fn overture_add(s: &mut Session, p: &Value) -> CmdResult {
             overture::MAX_FILES
         ));
     }
-    let n = hits.len();
-    let mut layers = Vec::new();
-    for (i, f) in hits.iter().enumerate() {
-        let url = overture::parse_item(&fetch(&f.item)?)?;
-        let r = super::layer::add_url(s, &json!({"url": url, "name": overture::layer_name(ty, i, n), "zoom": false}))?;
-        layers.extend(r["layers"].as_array().cloned().unwrap_or_default());
-    }
+    // Every file's address first: a catalog that fails here leaves the project as it was.
+    let urls = hits.iter().map(|f| fetch(&f.item).and_then(|b| overture::parse_item(&b))).collect::<Result<Vec<_>, _>>()?;
+    let mut r = add_files(s, ty, &urls)?;
     s.notify(format!("Overture {ty} ({release}): {}", overture::attribution(theme)), false);
-    Ok(json!({"layers": layers, "files": n, "release": release, "theme": theme, "type": ty}))
+    r["release"] = json!(release);
+    r["theme"] = json!(theme);
+    r["type"] = json!(ty);
+    Ok(r)
+}
+
+/// Adds a theme type's files (read in place, the map's view kept), all or none: when one can't be
+/// added, the ones added before it are taken out again, so trying again doesn't add them twice.
+pub(crate) fn add_files(s: &mut Session, ty: &str, urls: &[String]) -> CmdResult {
+    let (n, active) = (urls.len(), s.active_layer);
+    let mut layers: Vec<u32> = Vec::new();
+    for (i, url) in urls.iter().enumerate() {
+        match super::layer::add_url(s, &json!({"url": url, "name": overture::layer_name(ty, i, n), "zoom": false})) {
+            Ok(r) => layers
+                .extend(r["layers"].as_array().into_iter().flatten().filter_map(Value::as_u64).filter_map(|id| u32::try_from(id).ok())),
+            Err(e) => {
+                s.map_mut().layers.retain(|l| !layers.contains(&l.id));
+                s.active_layer = active.filter(|id| s.map().layer(*id).is_some());
+                return Err(if n > 1 { format!("{e} (none of the {n} files was added)") } else { e });
+            }
+        }
+    }
+    Ok(json!({"layers": layers, "files": n}))
 }
 
 fn sourcecoop_products(_s: &mut Session, p: &Value) -> CmdResult {

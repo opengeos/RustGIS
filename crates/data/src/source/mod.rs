@@ -189,7 +189,10 @@ pub fn open_shared(file_name: &str, bytes: std::sync::Arc<Vec<u8>>, layer: Optio
 pub fn is_remote_name(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     let path = lower.split(['?', '#']).next().unwrap_or(&lower);
-    (lower.starts_with("https://") || lower.starts_with("http://")) && [".fgb", ".parquet", ".geoparquet"].iter().any(|e| path.ends_with(e))
+    // `s3://` too: the app's fetchers check it and read it from its bucket's web address (signed
+    // only for a connection that serves the bucket, see rustgis_tiles::s3).
+    (lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("s3://"))
+        && [".fgb", ".parquet", ".geoparquet"].iter().any(|e| path.ends_with(e))
 }
 
 /// A layer name from a web address: its file name without the extension.

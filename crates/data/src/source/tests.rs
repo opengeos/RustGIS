@@ -734,6 +734,7 @@ fn flatgeobuf_and_geoparquet_by_address() {
     }
     assert!(open_url_blocking("https://test.example/missing.fgb").is_err());
     assert!(is_remote_name("https://x.org/a/b.fgb?sig=1") && is_remote_name("http://x.org/b.geoparquet") && !is_remote_name("/tmp/a.fgb"));
+    assert!(is_remote_name("s3://bucket/a/b.parquet") && !is_remote_name("s3://bucket/a/b.tif") && !is_remote_name("ftp://x.org/a.fgb"));
 }
 
 #[test]

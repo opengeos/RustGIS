@@ -4099,3 +4099,29 @@ fn catalog_commands_refuse_bad_parameters() {
     assert!(s.run("sourcecoop.products", &json!({"account": "a/b"})).is_err());
     assert!(s.map().layers.is_empty() && s.map().tiles.is_empty());
 }
+
+/// Overture's files are added all or none: one that can't be read takes the ones added before it
+/// out again, so trying again doesn't add them twice.
+#[test]
+fn overture_files_are_added_all_or_none() {
+    use rustgis_data::{Dataset, Feature, Field, FieldType, Geometry, GeometryType, Value};
+    let mut ds = Dataset::new("b", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
+    for i in 0..50u32 {
+        let c = rustgis_geom::Coord::new(7.0 + 0.01 * f64::from(i), 46.0);
+        ds.features.push(Feature { id: u64::from(i) + 1, geometry: Some(Geometry::Point(c)), attrs: vec![Value::Int(i64::from(i))] });
+    }
+    let (good, _) = serve_ranges(rustgis_data::source::fgb::write(&ds).unwrap());
+    let (bad, _) = serve_ranges(b"not a flatgeobuf at all".to_vec());
+    let mut s = Session::new(Project::default());
+    let before = s.map().layers.len();
+    let urls = vec![format!("{good}/part-0.fgb"), format!("{bad}/part-1.fgb")];
+    let e = crate::cmd::catalogs::add_files(&mut s, "building", &urls).unwrap_err();
+    assert!(e.contains("none of the 2 files was added"), "{e}");
+    assert_eq!(s.map().layers.len(), before, "the first file's layer was taken out again");
+    // Both readable: both added, numbered.
+    let urls = vec![format!("{good}/part-0.fgb"), format!("{good}/part-1.fgb")];
+    let r = crate::cmd::catalogs::add_files(&mut s, "building", &urls).unwrap();
+    assert_eq!(r["files"], 2);
+    let names: Vec<&str> = s.map().layers.iter().map(|l| l.name.as_str()).collect();
+    assert!(names.contains(&"Overture building (1/2)") && names.contains(&"Overture building (2/2)"), "{names:?}");
+}
