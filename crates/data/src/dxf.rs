@@ -43,6 +43,16 @@ const MAX_PATH_COPIES: usize = 100_000;
 const MAX_STEPS: usize = if cfg!(target_arch = "wasm32") { 2_000_000 } else { 8_000_000 };
 /// The most pieces (vertices, knots, edges) a count in the file may ask for.
 const MAX_COUNT: usize = 1_000_000;
+/// The most coordinates one drawing's features hold together (a block of a large polyline inserted
+/// in an array multiplies them).
+/// (Each costs about 40 bytes while read: 20M is under a gigabyte. Tests use a smaller budget.)
+const MAX_TOTAL_VERTICES: usize = if cfg!(test) {
+    2_000_000
+} else if cfg!(target_arch = "wasm32") {
+    5_000_000
+} else {
+    20_000_000
+};
 /// Segments of a full circle.
 const CIRCLE: f64 = 72.0;
 
@@ -1044,6 +1054,9 @@ struct Out {
     trimmed: bool,
     /// Paper-space entities left out.
     paper: usize,
+    /// Coordinates placed so far ([`MAX_TOTAL_VERTICES`]), and whether the budget ran out.
+    vertices: usize,
+    vertex_capped: bool,
     /// The copies the arrays above make together on the current nesting path.
     copies: usize,
 }
@@ -1074,6 +1087,9 @@ fn finite(ps: &[P3]) -> bool {
 /// Draws entities through `xf` (a block's placement), into `out`.
 fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: &mut Vec<String>, opts: &Options, out: &mut Out) {
     for e in ents {
+        if out.vertex_capped {
+            return;
+        }
         if out.count >= MAX_FEATURES {
             out.capped = true;
             return;
@@ -1166,7 +1182,7 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: 
                         paper: from.paper || e.paper,
                     };
                     emit(d, inner, &xf.then(&local), inner_from, depth + 1, stack, opts, out);
-                    if out.capped || out.overworked {
+                    if out.capped || out.overworked || out.vertex_capped {
                         stack.pop();
                         out.copies = outer;
                         return;
@@ -1182,6 +1198,19 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: Inherit, depth: usize, stack: 
         {
             continue;
         }
+        // Every coordinate placed is charged before it is built: a large polyline in a block
+        // inserted many times can't fill the memory.
+        let n = match &e.shape {
+            Shape::Point(_) => 1,
+            Shape::Line(ps) | Shape::Polygon(ps) => ps.len(),
+            Shape::Rings(rs) => rs.iter().map(Vec::len).sum(),
+            Shape::Insert(_) => 0,
+        };
+        if out.vertices.saturating_add(n) > MAX_TOTAL_VERTICES {
+            out.vertex_capped = true;
+            return;
+        }
+        out.vertices += n;
         let tr = |ps: &[P3]| -> Vec<P3> { ps.iter().map(|p| xf.apply(*p)).collect() };
         let (geometry, first, target) = match &e.shape {
             Shape::Point(p) => {
@@ -1262,6 +1291,8 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
         overworked: false,
         trimmed: false,
         paper: 0,
+        vertices: 0,
+        vertex_capped: false,
         copies: 1,
     };
     let none = Inherit { layer: None, color: None, linetype: None, block: None, paper: false };
@@ -1275,6 +1306,9 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
     }
     if out.capped {
         report.messages.push(format!("the drawing makes more than {MAX_FEATURES} features: the rest are left out"));
+    }
+    if out.vertex_capped {
+        report.messages.push(format!("the drawing's features hold more than {MAX_TOTAL_VERTICES} coordinates: the rest are left out"));
     }
     if out.paper > 0 {
         report.messages.push(format!(
@@ -1894,6 +1928,34 @@ mod tests {
         let i = lines.field_index("paperspace").unwrap();
         assert_eq!(lines.value(0, i), &Value::Bool(true));
         assert_eq!(all[0].0.value(0, i), &Value::Bool(false));
+    }
+
+    /// A large polyline in a block inserted as a 100 × 100 array: coordinates are bounded in total,
+    /// not only per entity.
+    #[test]
+    fn total_coordinates_are_bounded() {
+        let mut text = String::from("  0\nSECTION\n  2\nBLOCKS\n  0\nBLOCK\n  2\nBIG\n  0\nLWPOLYLINE\n");
+        for i in 0..200_000 {
+            text.push_str(&format!(" 10\n{i}\n 20\n0\n"));
+        }
+        text.push_str(
+            "  0\nENDBLK\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n  0\nINSERT\n  2\nBIG\n 70\n100\n 71\n100\n  0\nENDSEC\n  0\nEOF\n",
+        );
+        let t = std::time::Instant::now();
+        let l = read("big.dxf", text.as_bytes(), &Options::default()).unwrap();
+        assert!(t.elapsed() < std::time::Duration::from_secs(60), "{:?}", t.elapsed());
+        let held: usize = l[0]
+            .0
+            .features
+            .iter()
+            .map(|f| match &f.geometry {
+                Some(Geometry::Line(p)) => p.iter().map(Vec::len).sum(),
+                _ => 0,
+            })
+            .sum();
+        assert!(held <= MAX_TOTAL_VERTICES, "{held}");
+        assert_eq!(l[0].0.features.len(), MAX_TOTAL_VERTICES / 200_000);
+        assert!(l[0].1.messages.iter().any(|m| m.contains("coordinates")), "{:?}", l[0].1.messages);
     }
 
     #[test]
