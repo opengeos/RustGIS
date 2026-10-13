@@ -7,24 +7,28 @@
 # docs-preview-publish.yml, started when this workflow finishes, holds the deploy key and publishes
 # the site to https://preview.rustgis.app/pr-<N>/, or removes a closed pull request's preview. It
 # runs no pull request code. Splitting the two is what lets fork pull requests get a preview:
-# GitHub gives a fork's `pull_request` run no secrets.
+# GitHub gives a fork's `pull_request` run no secrets. A fork's preview is published only once a
+# maintainer approves the commit, by adding the `preview` label or re-running this workflow.
 name: docs-preview
 
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened, closed, labeled]
 
 permissions:
   contents: read
 
+# Another label's run does nothing, and gets its own group so it doesn't cancel a build.
 concurrency:
-  group: docs-preview-${{ github.event.pull_request.number }}
+  group: docs-preview-${{ github.event.pull_request.number }}${{ github.event.action == 'labeled' && github.event.label.name != 'preview' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:
   build:
-    if: github.event.action != 'closed'
+    if: >-
+      github.event.action != 'closed' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'preview')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -69,6 +73,7 @@ jobs:
   # The publishing workflow reads the pull request's number from here and checks it against the
   # GitHub API (a fork's run can't be trusted to name its own pull request).
   pr-number:
+    if: github.event.action != 'labeled' || github.event.label.name == 'preview'
     runs-on: ubuntu-latest
     steps:
       - name: Record the pull request number
