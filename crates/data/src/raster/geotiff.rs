@@ -16,11 +16,6 @@ use super::{ColorHint, Crs, GeoTransform, MAX_SAMPLES, Raster};
 use crate::{DataError, Result};
 
 fn err(e: impl std::fmt::Display) -> DataError {
-    let e = e.to_string();
-    // Zstandard is decoded by C code, which the browser build leaves out.
-    if cfg!(target_arch = "wasm32") && e.contains("ZSTD") {
-        return DataError::Format(format!("GeoTIFF: {e} in the browser; the desktop app opens Zstandard-compressed files"));
-    }
     DataError::Format(format!("GeoTIFF: {e}"))
 }
 

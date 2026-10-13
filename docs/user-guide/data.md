@@ -185,10 +185,10 @@ otherwise, and always in the web app, which only sees the one file, it must be i
 longitude/latitude degrees. Exporting a raster opened from an overview writes that overview.
 GeoTIFFs may be regular or cloud-optimised: grey, RGB(A), palette (coloured by the file's colour
 table, as land cover such as the NLCD is) or multiband, of any pixel type, tiled or striped, and
-compressed with Deflate, LZW, PackBits, JPEG or Zstandard (Zstandard on the desktop only). The
-coordinate system is an EPSG code, or the file's own projection described in its GeoKeys (Albers,
-Lambert conformal conic, transverse Mercator, Mercator, Lambert azimuthal, stereographic,
-equirectangular and others), which an exported GeoTIFF keeps. A raster too large to hold in memory (more than 120 million samples, 32
+compressed with Deflate, LZW, PackBits, JPEG or Zstandard. The coordinate system is an EPSG code,
+or the file's own projection described in its GeoKeys (Albers, Lambert conformal conic, transverse
+Mercator, Mercator, Lambert azimuthal, stereographic, equirectangular and others), which an
+exported GeoTIFF keeps. A raster too large to hold in memory (more than 120 million samples, 32
 million in the web app) opens from its largest overview that fits; one without overviews opens as
 an overview made as it is read, a strip or tile at a time (every second, fourth… pixel each way),
 so reading it takes as long as decoding the whole file once.
