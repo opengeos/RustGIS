@@ -5,7 +5,7 @@
 //! VectorTileServer). The documents are hostile input: no DTD is read, nodes are capped, and
 //! only layers RustGIS can draw are listed (the rest are counted in a note).
 
-use roxmltree::{Document, Node, ParsingOptions};
+use roxmltree::{Node, ParsingOptions};
 
 /// What a layer of a service becomes.
 #[derive(Clone, Debug, PartialEq)]
@@ -206,7 +206,7 @@ pub fn parse(url: &str, body: &[u8]) -> Result<Service, String> {
     // WMS 1.1.1 documents start with a DOCTYPE, so DTDs are allowed here; roxmltree still refuses
     // entity bombs and external entities, and the node count is capped.
     let opts = ParsingOptions { allow_dtd: true, nodes_limit: 5_000_000, ..ParsingOptions::default() };
-    let doc = Document::parse_with_options(text, opts).map_err(|e| format!("the service's XML: {e}"))?;
+    let doc = crate::xml::parse(text, opts).map_err(|e| format!("the service's XML: {e}"))?;
     let root = doc.root_element();
     match local(&root) {
         "WMS_Capabilities" | "WMT_MS_Capabilities" => Ok(wms(url, &root)),

@@ -26,6 +26,7 @@ pub mod sqlite;
 pub mod topojson;
 pub mod value;
 pub mod wkb;
+pub mod xml;
 pub mod zip;
 
 pub use geometry::{Geometry, GeometryType};

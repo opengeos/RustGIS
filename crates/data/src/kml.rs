@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use roxmltree::{Document, Node, ParsingOptions};
+use roxmltree::{Node, ParsingOptions};
 use rustgis_geom::Coord;
 
 use crate::{DataError, Dataset, Field, FieldType, Geometry, GeometryType, ReadReport, Result, Value};
@@ -71,7 +71,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<Layer>> {
     let text = std::str::from_utf8(text_bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")))?;
     let text = text.trim_start_matches('\u{feff}');
     let opts = ParsingOptions { allow_dtd: false, nodes_limit: crate::io::XML_NODES, ..ParsingOptions::default() };
-    let doc = Document::parse_with_options(text, opts).map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
+    let doc = crate::xml::parse(text, opts).map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
     let mut r = Reader {
         styles: HashMap::new(),
         maps: HashMap::new(),
@@ -120,8 +120,7 @@ pub fn ground_overlays(file_name: &str, bytes: &[u8]) -> Result<(Vec<(GroundOver
     };
     let text = std::str::from_utf8(doc_bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")))?;
     let opts = ParsingOptions { allow_dtd: false, nodes_limit: crate::io::XML_NODES, ..ParsingOptions::default() };
-    let doc = Document::parse_with_options(text.trim_start_matches('\u{feff}'), opts)
-        .map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
+    let doc = crate::xml::parse(text.trim_start_matches('\u{feff}'), opts).map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
     let mut out = Vec::new();
     let mut undrawn = 0usize;
     let all = doc.descendants().filter(|n| n.is_element() && local(n) == "GroundOverlay").count();

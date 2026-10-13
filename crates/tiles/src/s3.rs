@@ -606,7 +606,8 @@ fn error_of(doc: &roxmltree::Document) -> Option<String> {
 
 fn parse_xml(bytes: &[u8]) -> Result<roxmltree::Document<'_>, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "the answer isn't UTF-8 text".to_string())?;
-    roxmltree::Document::parse(text).map_err(|_| "the answer isn't an S3 listing".to_string())
+    // Through the data crate's depth check: a listing is hostile input like any document.
+    rustgis_data::xml::parse(text, roxmltree::ParsingOptions::default()).map_err(|_| "the answer isn't an S3 listing".to_string())
 }
 
 /// A ListObjectsV2 answer.
