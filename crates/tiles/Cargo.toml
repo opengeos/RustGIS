@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 rustgis-geom = { workspace = true }
+# MBTiles archives are SQLite databases.
+rustgis-data = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 web-time = { workspace = true }

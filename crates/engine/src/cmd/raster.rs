@@ -29,7 +29,7 @@ pub(crate) fn need_raster(s: &Session) -> Option<&'static str> {
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addDataBytes", "Add Data (from file contents)", "Home › Add", add_bytes)
-            .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv|.zip|.kml|.kmz|.gpx|.parquet|.fgb|.gpkg", "data": base64, "layer"?: "one layer of a zip, KML or GPX by name", "name"?: text}"#),
+            .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv|.zip|.kml|.kmz|.gpx|.parquet|.fgb|.gpkg|.mbtiles", "data": base64, "layer"?: "one layer of a zip, KML or GPX by name", "name"?: text}"#),
         C::new("raster.symbology", "Symbology", "Style › Rendering", symbology).when(need_raster).params(
             r#"{"layer"?, "type": "stretch"|"rgb"|"classify"|"unique"|"colormap"|"shadedRelief", "band"?: 1.., "ramp"?, "invert"?: bool, "classes"?: 1..32, "method"?, "azimuth"?, "altitude"?, "zFactor"?}"#,
         ),
@@ -159,6 +159,15 @@ fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
         let r = raster::read_bytes(&name, &bytes).map_err(|e| format!("{name}: {e}"))?;
         let title = r.name.clone();
         return add_raster(s, &title, RasterLayer::from_bytes(r, name, bytes));
+    }
+    // An MBTiles archive: held in memory and drawn as a tile layer.
+    if rustgis_data::mbtiles::is_mbtiles_name(&name) {
+        let url = crate::render::rustgis_tiles::mbtiles::register(&name, &bytes)?;
+        let mut q = json!({"url": url, "kind": "mbtiles"});
+        if let Some(n) = ps(p, "name") {
+            q["name"] = json!(n);
+        }
+        return super::tiles::add(s, &q);
     }
     // Files of several layers: zipped Shapefiles, KML/KMZ, GPX.
     if rustgis_data::io::is_multi_layer_name(&name) {

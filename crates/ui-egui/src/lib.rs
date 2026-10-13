@@ -866,6 +866,7 @@ impl RustGisApp {
                         "duckdb",
                         "ddb",
                         "pmtiles",
+                        "mbtiles",
                         "kml",
                         "kmz",
                         "gpx",

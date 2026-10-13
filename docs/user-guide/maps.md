@@ -25,9 +25,13 @@ Ocean, Atlas, Blank), which need no network, and web tile layers over them:
   a built-in style that knows the OpenMapTiles, Protomaps and Shortbread schemas.
 - **PMTiles archives** (`.pmtiles`) of raster or vector tiles: a web address, read a tile at a
   time by byte ranges (the server must allow range requests, and CORS for the web app), or on the
-  desktop a file (**PMTiles File…**, Add Data, or drop it on the window). A vector archive that
-  is a basemap is drawn in the built-in style; any other is drawn with each of its layers in a
-  colour of its own.
+  desktop a file (**Tile Archive File…**, Add Data, or drop it on the window). A vector archive
+  that is a basemap is drawn in the built-in style; any other is drawn with each of its layers in
+  a colour of its own.
+- **MBTiles files** (`.mbtiles`) of raster or vector tiles, drawn as PMTiles archives are: on
+  the desktop read in place a tile at a time (**Tile Archive File…**, Add Data, or drop it on the
+  window); in the web app added with Add Data and held in memory for the session (a project keeps
+  the layer, and asks for the file again).
 - **Map styles**: a MapLibre style document (`style.json`), with its vector and raster sources.
   RustGIS draws background, fill, line, circle and raster layers, point labels with their icons
   from the style's sprite (SDF icons in their `icon-color`), and fill patterns; it evaluates the

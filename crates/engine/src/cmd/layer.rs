@@ -281,6 +281,20 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         }
         return super::tiles::add(s, &q);
     }
+    // So is an MBTiles archive, read in place a tile at a time.
+    if rustgis_data::mbtiles::is_mbtiles_name(path) {
+        if cfg!(target_arch = "wasm32") {
+            return Err(format!("{path}: in the web app, add the MBTiles file from this computer (Home › Add Data)"));
+        }
+        let full = std::path::absolute(path).map(|p| p.display().to_string()).map_err(|e| format!("{path}: {e}"))?;
+        // Read now, so a file that isn't an archive is said at once rather than when it draws.
+        crate::render::rustgis_tiles::mbtiles::info(&full)?;
+        let mut q = json!({"url": full, "kind": "mbtiles"});
+        if let Some(n) = ps(p, "name") {
+            q["name"] = json!(n);
+        }
+        return super::tiles::add(s, &q);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if rustgis_data::source::gdal::is_gdal_name(path) {
         return add_gdal(s, p, path);

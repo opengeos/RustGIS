@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::cache::{self, Payload, State, Want};
 use crate::style::{Source, Style};
-use crate::{address, pmtiles, template};
+use crate::{address, mbtiles, pmtiles, template};
 
 /// The kind of address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -23,6 +23,8 @@ pub enum Kind {
     Style,
     /// A PMTiles archive (raster or vector, as its header says).
     PmTiles,
+    /// An MBTiles archive (raster or vector, as its metadata says): a file, or an upload.
+    MbTiles,
 }
 
 /// A tile layer, as far as fetching and drawing it goes.
@@ -93,7 +95,13 @@ pub fn resolve(spec: &Spec) -> Resolve {
     let key = spec.key();
     // A PMTiles archive on this computer is a path, not a web address.
     let local = spec.kind == Kind::PmTiles && pmtiles::is_local(&spec.url);
-    let checked = if local { pmtiles::check_local(&spec.url) } else { address::check(&spec.url, None) };
+    let checked = if spec.kind == Kind::MbTiles {
+        mbtiles::check(&spec.url)
+    } else if local {
+        pmtiles::check_local(&spec.url)
+    } else {
+        address::check(&spec.url, None)
+    };
     if let Err(e) = checked {
         return Resolve::Failed(e);
     }
@@ -112,12 +120,39 @@ pub fn resolve(spec: &Spec) -> Resolve {
             Err(e) => return Resolve::Failed(e),
         },
         Kind::PmTiles => match pmtiles::info(&spec.url) {
-            Ok(Some(info)) => match pmtiles_style(spec, &info) {
-                Some(d) => d,
-                None => return Resolve::Failed("the built-in vector style could not be read".into()),
-            },
+            Ok(Some(info)) => {
+                let archive = Archive {
+                    tiles: pmtiles::template(&spec.url),
+                    vector: info.tile_type.is_vector(),
+                    min_zoom: info.min_zoom,
+                    max_zoom: info.max_zoom,
+                    attribution: info.attribution(),
+                    layers: info.vector_layers(),
+                };
+                match archive_style(spec, archive) {
+                    Some(d) => d,
+                    None => return Resolve::Failed("the built-in vector style could not be read".into()),
+                }
+            }
             Ok(None) => return Resolve::Pending,
             Err(e) => return Resolve::Failed(format!("{}: {e}", spec.url)),
+        },
+        Kind::MbTiles => match mbtiles::info(&spec.url) {
+            Ok(info) => {
+                let archive = Archive {
+                    tiles: mbtiles::template(&spec.url),
+                    vector: info.format.is_vector(),
+                    min_zoom: info.min_zoom,
+                    max_zoom: info.max_zoom,
+                    attribution: info.attribution.clone(),
+                    layers: info.vector_layers(),
+                };
+                match archive_style(spec, archive) {
+                    Some(d) => d,
+                    None => return Resolve::Failed("the built-in vector style could not be read".into()),
+                }
+            }
+            Err(e) => return Resolve::Failed(e),
         },
     };
     let mut style = match Style::parse(&doc) {
@@ -161,8 +196,8 @@ pub fn resolve(spec: &Spec) -> Resolve {
             }
         } else if let Source::Vector { tiles, .. } | Source::Raster { tiles, .. } = src {
             for t in tiles.iter_mut() {
-                // Tiles from a PMTiles archive: read from the archive the layer names.
-                if spec.kind == Kind::PmTiles && pmtiles::is_tile(t) {
+                // Tiles from an archive: read from the archive the layer names.
+                if (spec.kind == Kind::PmTiles && pmtiles::is_tile(t)) || (spec.kind == Kind::MbTiles && mbtiles::is_tile(t)) {
                     continue;
                 }
                 *t = template::join(&base, t);
@@ -242,14 +277,26 @@ fn raster_style(spec: &Spec) -> Value {
     })
 }
 
-/// The style for a PMTiles archive: a raster layer for picture tiles; for vector tiles the
+/// A tile archive (PMTiles or MBTiles), as far as styling it goes.
+struct Archive {
+    /// The template of its tile addresses.
+    tiles: String,
+    vector: bool,
+    min_zoom: u8,
+    max_zoom: u8,
+    attribution: String,
+    /// The vector layers its metadata lists.
+    layers: Vec<String>,
+}
+
+/// The style for a tile archive: a raster layer for picture tiles; for vector tiles the
 /// built-in style when the archive has the layers it knows (a basemap), otherwise a layer for each
 /// of the archive's vector layers (points, lines and polygons each in their own colour).
-fn pmtiles_style(spec: &Spec, info: &pmtiles::Info) -> Option<Value> {
-    let tiles = vec![pmtiles::template(&spec.url)];
+fn archive_style(spec: &Spec, info: Archive) -> Option<Value> {
+    let tiles = vec![info.tiles];
     let (minzoom, maxzoom) = (info.min_zoom, info.max_zoom);
-    let attribution = if spec.attribution.is_empty() { info.attribution() } else { spec.attribution.clone() };
-    if !info.tile_type.is_vector() {
+    let attribution = if spec.attribution.is_empty() { info.attribution } else { spec.attribution.clone() };
+    if !info.vector {
         return Some(json!({
             "version": 8,
             "sources": {"raster": {
@@ -260,7 +307,7 @@ fn pmtiles_style(spec: &Spec, info: &pmtiles::Info) -> Option<Value> {
         }));
     }
     let source = json!({"type": "vector", "tiles": tiles, "minzoom": minzoom, "maxzoom": maxzoom, "attribution": attribution});
-    let names = info.vector_layers();
+    let names = info.layers;
     let known = [
         "water",
         "roads",

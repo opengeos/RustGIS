@@ -3753,6 +3753,7 @@ dependencies = [
  "image",
  "log",
  "miniz_oxide 0.8.9",
+ "rustgis-data",
  "rustgis-geom",
  "serde_json",
  "tiny-skia",

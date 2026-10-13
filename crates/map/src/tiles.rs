@@ -26,16 +26,21 @@ pub enum TileKind {
     /// desktop, a file.
     #[serde(rename = "pmtiles")]
     PmTiles,
+    /// An MBTiles archive of raster or vector tiles: a file on the desktop, or `upload:<name>`
+    /// for one added to the web app (kept in memory, not in the project).
+    #[serde(rename = "mbtiles")]
+    MbTiles,
 }
 
 impl TileKind {
-    pub const ALL: [TileKind; 4] = [TileKind::Raster, TileKind::Vector, TileKind::Style, TileKind::PmTiles];
+    pub const ALL: [TileKind; 5] = [TileKind::Raster, TileKind::Vector, TileKind::Style, TileKind::PmTiles, TileKind::MbTiles];
     pub fn code(self) -> &'static str {
         match self {
             TileKind::Raster => "raster",
             TileKind::Vector => "vector",
             TileKind::Style => "style",
             TileKind::PmTiles => "pmtiles",
+            TileKind::MbTiles => "mbtiles",
         }
     }
     pub fn label(self) -> &'static str {
@@ -44,6 +49,7 @@ impl TileKind {
             TileKind::Vector => "Vector tiles (MVT)",
             TileKind::Style => "Map style (JSON)",
             TileKind::PmTiles => "PMTiles archive",
+            TileKind::MbTiles => "MBTiles archive",
         }
     }
     pub fn from_code(s: &str) -> Option<TileKind> {
@@ -53,6 +59,7 @@ impl TileKind {
             "vector" | "mvt" | "pbf" => Some(TileKind::Vector),
             "style" | "maplibre" | "mapbox" => Some(TileKind::Style),
             "pmtiles" => Some(TileKind::PmTiles),
+            "mbtiles" => Some(TileKind::MbTiles),
             _ => None,
         }
     }
@@ -61,6 +68,8 @@ impl TileKind {
         let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
         if path.ends_with(".pmtiles") {
             TileKind::PmTiles
+        } else if path.ends_with(".mbtiles") {
+            TileKind::MbTiles
         } else if path.ends_with(".pbf") || path.ends_with(".mvt") || path.contains("/{z}/{x}/{y}.vector") {
             TileKind::Vector
         } else if path.ends_with("style.json") || (path.contains("/styles/") && !path.contains("{z}")) {
@@ -150,16 +159,24 @@ impl TileLayer {
     /// file or a command.
     pub fn repair(&mut self) -> Result<(), String> {
         self.url = self.url.trim().to_string();
-        let local = self.kind == TileKind::PmTiles && is_local_archive(&self.url);
-        if local {
-            check_path(&self.url)?;
+        let local = matches!(self.kind, TileKind::PmTiles | TileKind::MbTiles) && is_local_archive(&self.url);
+        if let Some(name) = self.url.strip_prefix(UPLOAD).filter(|_| self.kind == TileKind::MbTiles) {
+            if name.is_empty() || name.len() > 512 || name.chars().any(char::is_control) {
+                return Err("an uploaded MBTiles file needs a name".into());
+            }
+        } else if local {
+            check_path(&self.url, if self.kind == TileKind::MbTiles { "mbtiles" } else { "pmtiles" })?;
         } else {
             check_url(&self.url)?;
         }
         self.name = self.name.trim().chars().take(120).collect();
         if self.name.is_empty() {
-            let file =
-                || std::path::Path::new(self.url.trim_start_matches("file://")).file_stem().and_then(|s| s.to_str()).map(str::to_string);
+            let file = || {
+                std::path::Path::new(self.url.trim_start_matches(UPLOAD).trim_start_matches("file://"))
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(str::to_string)
+            };
             self.name = if local { file() } else { host_of(&self.url).map(str::to_string) }.unwrap_or_else(|| "Tiles".into());
         }
         self.max_zoom = self.max_zoom.min(MAX_ZOOM);
@@ -177,14 +194,18 @@ impl TileLayer {
     }
 }
 
-/// Whether a PMTiles archive address is a file rather than a web address.
+/// The prefix of an MBTiles archive added to the web app, held in memory.
+pub const UPLOAD: &str = "upload:";
+
+/// Whether a PMTiles or MBTiles archive address is a file rather than a web address.
 pub fn is_local_archive(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     !(lower.starts_with("https://") || lower.starts_with("http://"))
 }
 
-/// Whether a PMTiles file path may be read: absolute, a `.pmtiles` file, no longer than 4096 bytes.
-pub fn check_path(path: &str) -> Result<(), String> {
+/// Whether an archive's file path may be read: absolute, a `.<ext>` file (`pmtiles`,
+/// `mbtiles`), no longer than 4096 bytes.
+pub fn check_path(path: &str, ext: &str) -> Result<(), String> {
     let p = path.strip_prefix("file://").unwrap_or(path);
     if p.len() > 4096 || p.chars().any(char::is_control) {
         return Err("the path is too long or has control characters".into());
@@ -194,10 +215,10 @@ pub fn check_path(path: &str) -> Result<(), String> {
     // make Windows connect to another machine.
     let share = p.starts_with("\\\\") || p.starts_with("//") || (path.starts_with("file://") && !p.starts_with('/'));
     if share || !(p.starts_with('/') || windows_drive) {
-        return Err(format!("'{p}': give the full path of the PMTiles file on this computer"));
+        return Err(format!("'{p}': give the full path of the archive on this computer"));
     }
-    if !p.to_ascii_lowercase().ends_with(".pmtiles") {
-        return Err(format!("'{p}' isn't a .pmtiles file"));
+    if !p.to_ascii_lowercase().ends_with(&format!(".{ext}")) {
+        return Err(format!("'{p}' isn't a .{ext} file"));
     }
     Ok(())
 }

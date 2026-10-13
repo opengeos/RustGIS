@@ -9,6 +9,7 @@ pub mod gpx;
 pub mod interop;
 pub mod io;
 pub mod kml;
+pub mod mbtiles;
 pub mod query;
 pub mod raster;
 pub mod source;

@@ -14,7 +14,7 @@ pub const NETWORK: &[&str] = &["map.addTiles"];
 pub fn commands() -> Vec<C> {
     vec![
         C::new("map.addTiles", "Add Tile Layer", "Home › Add", add).params(
-            r#"{"url": "https://…/{z}/{x}/{y}.png" | vector tiles ".pbf" or TileJSON | MapLibre style.json | a PMTiles archive (web address or file path), "kind"?: "raster"|"vector"|"style"|"pmtiles" (guessed from the url), "name"?: text, "attribution"?: text, "minZoom"?: number, "maxZoom"?: number, "tileSize"?: 256|512, "tms"?: bool, "subdomains"?: [text], "opacity"?: 0–1, "overlay"?: bool (a transparent layer kept on top), "replace"?: bool (removes the other tile basemaps, not overlays), "id"?: catalog id}"#,
+            r#"{"url": "https://…/{z}/{x}/{y}.png" | vector tiles ".pbf" or TileJSON | MapLibre style.json | a PMTiles archive (web address or file path) | an MBTiles file path, "kind"?: "raster"|"vector"|"style"|"pmtiles"|"mbtiles" (guessed from the url), "name"?: text, "attribution"?: text, "minZoom"?: number, "maxZoom"?: number, "tileSize"?: 256|512, "tms"?: bool, "subdomains"?: [text], "opacity"?: 0–1, "overlay"?: bool (a transparent layer kept on top), "replace"?: bool (removes the other tile basemaps, not overlays), "id"?: catalog id}"#,
         ),
         C::new("map.removeTiles", "Remove Tile Layer", "Home › Add", remove)
             .params(r#"{"name"?: text, "index"?: number, "id"?: catalog id} (removes every tile layer when none is given)"#),
@@ -42,7 +42,7 @@ fn list(s: &Session) -> Value {
 pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     let url = ps(p, "url").map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
     let kind = match ps(p, "kind") {
-        Some(k) => TileKind::from_code(k).ok_or_else(|| format!("unknown kind '{k}' (raster, vector, style or pmtiles)"))?,
+        Some(k) => TileKind::from_code(k).ok_or_else(|| format!("unknown kind '{k}' (raster, vector, style, pmtiles or mbtiles)"))?,
         None => TileKind::guess(url),
     };
     let mut t = TileLayer::new(ps(p, "name").unwrap_or_default(), kind, url);

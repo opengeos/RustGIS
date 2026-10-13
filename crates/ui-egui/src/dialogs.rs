@@ -286,7 +286,7 @@ fn export_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
 /// Add Tile Layer: an XYZ/TMS/WMS template, vector tiles or a MapLibre style by address.
 fn add_tiles(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     use rustgis_engine::map::TileKind;
-    ui.label(egui::RichText::new(tl!("A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, or a PMTiles archive (a web address, or a file on this computer).")).weak());
+    ui.label(egui::RichText::new(tl!("A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, a PMTiles archive (a web address, or a file on this computer), or an MBTiles file on this computer.")).weak());
     egui::Grid::new("tiles").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         ui.label(tl!("Address"));
         ui.horizontal(|ui| {
@@ -295,13 +295,14 @@ fn add_tiles(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                     .hint_text("https://tile.openstreetmap.org/{z}/{x}/{y}.png")
                     .desired_width(if cfg!(target_arch = "wasm32") { 400.0 } else { 320.0 }),
             );
-            // A PMTiles file on this computer (the web app reads archives from web addresses).
+            // A PMTiles or MBTiles file on this computer (the web app reads PMTiles archives from
+            // web addresses, and MBTiles files through Add Data).
             if !cfg!(target_arch = "wasm32")
-                && ui.button(tl!("PMTiles File…")).clicked()
-                && let Some(path) = pick_open(&["pmtiles"], tl!("PMTiles archive"))
+                && ui.button(tl!("Tile Archive File…")).clicked()
+                && let Some(path) = pick_open(&["pmtiles", "mbtiles"], tl!("Tile archive"))
             {
+                app.dialogs.mode = if path.to_ascii_lowercase().ends_with(".mbtiles") { "mbtiles" } else { "pmtiles" };
                 app.dialogs.text = path;
-                app.dialogs.mode = "pmtiles";
             }
         });
         ui.end_row();

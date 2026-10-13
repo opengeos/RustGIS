@@ -165,6 +165,7 @@ pub fn clear() {
     // Styles, TileJSON documents and PMTiles archives are read again too.
     crate::source::forget();
     crate::pmtiles::forget();
+    crate::mbtiles::forget();
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -209,6 +210,11 @@ fn start(url: String, want: Want) {
         crate::pmtiles::fetch(&url, done);
         return;
     }
+    // A tile from an MBTiles archive is read from the file, or the upload in memory.
+    if crate::mbtiles::is_tile(&url) {
+        crate::mbtiles::fetch(&url, done);
+        return;
+    }
     fetch_bytes(url, done);
 }
 
@@ -247,6 +253,11 @@ pub(crate) fn fetch_counted(url: String, done: Done) {
             finished();
         }),
     );
+}
+
+/// Reads a tile of a local MBTiles file on the fetch workers (counted already, as a tile).
+pub(crate) fn fetch_worker(url: String, done: Done) {
+    native::fetch(url, done);
 }
 
 /// Reads a range of a local file (`<path>#rustgis-range=a-b`) on the fetch workers, counted like
@@ -454,6 +465,9 @@ mod native {
     /// `source::resolve`); each redirect is checked here.
     pub(super) fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
         use std::io::Read;
+        if crate::mbtiles::is_tile(url) {
+            return crate::mbtiles::read_local(url);
+        }
         if let Some(local) = url.strip_prefix(LOCAL) {
             let (path, range) = super::split_range(local);
             let (a, b) = range.ok_or("a local read without a range")?;

@@ -19,7 +19,7 @@ Formats](data-formats.md).
 | KML, GPX, CSV with WKT geometry | No | Yes (Analyze › Workflows › Data Interop) |
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
 | ASCII grid (`.asc`, with an optional `.prj`) | Yes | No |
-| Web tiles: XYZ/TMS/WMS rasters, Mapbox Vector Tiles, MapLibre styles, PMTiles archives | Yes | Yes (Analyze › Create Hosted Imagery) |
+| Web tiles: XYZ/TMS/WMS rasters, Mapbox Vector Tiles, MapLibre styles, PMTiles and MBTiles archives | Yes | Yes (Analyze › Create Hosted Imagery) |
 | RustGIS project (`.rgis`; older `.rgisx` files open too) | Yes | Yes |
 
 Add data with **Home › Add Data**, by dropping files on the window, or by passing them on the

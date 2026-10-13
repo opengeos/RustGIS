@@ -38,6 +38,9 @@ pub struct Table {
     pub columns: Vec<Column>,
     /// The `INTEGER PRIMARY KEY` column, which is the rowid (stored as NULL in the rows).
     pub rowid_column: Option<usize>,
+    /// For a `WITHOUT ROWID` table (stored as an index b-tree, primary key first), the column of
+    /// each value in a stored row.
+    pub stored_order: Option<Vec<usize>>,
 }
 
 /// An error reading the file.
@@ -134,6 +137,66 @@ impl<B: AsRef<[u8]>> Db<B> {
         Ok(())
     }
 
+    /// Calls `f` with the values of every entry of the index b-tree rooted at `root` (a
+    /// `WITHOUT ROWID` table's rows), in key order, until it returns `Break`.
+    pub fn scan_index(&self, root: u32, mut f: impl FnMut(Vec<Val>) -> ControlFlow<()>) -> Result<(), String> {
+        enum Step {
+            Page(u32),
+            /// An interior cell's own entry, which sits between two children.
+            Entry(Vec<u8>),
+        }
+        let mut seen = vec![false; self.pages as usize + 1];
+        let max_local = (self.usable - 12) * 64 / 255 - 23;
+        let mut stack = vec![Step::Page(root)];
+        while let Some(step) = stack.pop() {
+            let n = match step {
+                Step::Page(n) => n,
+                Step::Entry(payload) => {
+                    if f(record(&payload)?).is_break() {
+                        return Ok(());
+                    }
+                    continue;
+                }
+            };
+            let slot = seen.get_mut(n as usize).ok_or_else(|| bad("a page number past the end of the file"))?;
+            if std::mem::replace(slot, true) {
+                return Err(bad("a page reached twice"));
+            }
+            let page = self.page(n)?;
+            let hdr = if n == 1 { 100 } else { 0 };
+            let kind = *page.get(hdr).ok_or_else(|| bad("page header"))?;
+            let cells = be16(page, hdr + 3).ok_or_else(|| bad("page header"))?;
+            match kind {
+                // An interior index page: (left child, payload size, payload) cells, then the
+                // right-most child. Each cell's entry comes after its left child's.
+                0x02 => {
+                    let mut steps = Vec::with_capacity(2 * cells + 1);
+                    for i in 0..cells {
+                        let at = be16(page, hdr + 12 + 2 * i).ok_or_else(|| bad("cell pointer"))?;
+                        steps.push(Step::Page(be32(page, at).ok_or_else(|| bad("interior cell"))?));
+                        let (size, a) = varint(page, at + 4).ok_or_else(|| bad("interior cell"))?;
+                        steps.push(Step::Entry(self.payload_with(page, a, size, max_local, Some(&mut seen))?));
+                    }
+                    steps.push(Step::Page(be32(page, hdr + 8).ok_or_else(|| bad("page header"))?));
+                    stack.extend(steps.into_iter().rev());
+                }
+                // A leaf index page: (payload size, payload) cells.
+                0x0a => {
+                    for i in 0..cells {
+                        let at = be16(page, hdr + 8 + 2 * i).ok_or_else(|| bad("cell pointer"))?;
+                        let (size, a) = varint(page, at).ok_or_else(|| bad("leaf cell"))?;
+                        let payload = self.payload_with(page, a, size, max_local, Some(&mut seen))?;
+                        if f(record(&payload)?).is_break() {
+                            return Ok(());
+                        }
+                    }
+                }
+                _ => return Err(bad("an index page of the wrong kind")),
+            }
+        }
+        Ok(())
+    }
+
     /// The number of rows in the table b-tree rooted at `root`, from the leaf pages' cell counts
     /// (no row is decoded).
     pub fn count(&self, root: u32) -> Result<u64, String> {
@@ -218,12 +281,18 @@ impl<B: AsRef<[u8]>> Db<B> {
             if let [Val::Text(kind), Val::Text(name), _, Val::Int(root), Val::Text(sql), ..] = row.as_slice()
                 && kind == "table"
             {
-                // WITHOUT ROWID or unparsable tables are passed over; another may be wanted.
-                if let Ok((columns, rowid_column)) = parse_create_table(sql) {
+                // Unparsable tables are passed over; another may be wanted.
+                if let Ok(p) = parse_table(sql) {
                     match u32::try_from(*root) {
                         // A virtual table (an R-tree index, say) has no pages of its own.
                         Ok(0) => {}
-                        Ok(root) => out.push(Table { name: name.clone(), root, columns, rowid_column }),
+                        Ok(root) => out.push(Table {
+                            name: name.clone(),
+                            root,
+                            columns: p.columns,
+                            rowid_column: p.rowid_column,
+                            stored_order: p.stored_order,
+                        }),
                         Err(_) => err = Some(bad("a table's root page")),
                     }
                 }
@@ -243,9 +312,24 @@ impl<B: AsRef<[u8]>> Db<B> {
 
     /// Calls `f` with each row of `table` as one value per column (the rowid in its
     /// `INTEGER PRIMARY KEY` column; columns added after the row was written are NULL), until it
-    /// returns `Break`.
+    /// returns `Break`. A `WITHOUT ROWID` table's rows come in primary-key order, numbered from 1
+    /// in place of a rowid.
     pub fn rows(&self, table: &Table, mut f: impl FnMut(i64, &[Val]) -> ControlFlow<()>) -> Result<(), String> {
         let mut row = Vec::with_capacity(table.columns.len());
+        if let Some(order) = &table.stored_order {
+            let mut n = 0i64;
+            return self.scan_index(table.root, |stored| {
+                n += 1;
+                row.clear();
+                row.resize(table.columns.len(), Val::Null);
+                for (v, &col) in stored.into_iter().zip(order) {
+                    if let Some(slot) = row.get_mut(col) {
+                        *slot = v;
+                    }
+                }
+                f(n, &row)
+            });
+        }
         self.scan(table.root, |rowid, stored| {
             row.clear();
             let mut stored = stored.into_iter();
@@ -326,13 +410,28 @@ fn record(p: &[u8]) -> Result<Vec<Val>, String> {
 /// The columns of a `CREATE TABLE` statement and the index of its `INTEGER PRIMARY KEY` column.
 /// `WITHOUT ROWID` tables (whose rows are stored differently) are an error.
 pub fn parse_create_table(sql: &str) -> Result<(Vec<Column>, Option<usize>), String> {
+    let p = parse_table(sql)?;
+    if p.stored_order.is_some() {
+        return Err("a WITHOUT ROWID table".into());
+    }
+    Ok((p.columns, p.rowid_column))
+}
+
+/// A `CREATE TABLE` statement, read.
+struct Parsed {
+    columns: Vec<Column>,
+    rowid_column: Option<usize>,
+    stored_order: Option<Vec<usize>>,
+}
+
+/// Reads a `CREATE TABLE` statement, rowid or `WITHOUT ROWID`.
+fn parse_table(sql: &str) -> Result<Parsed, String> {
     let (open, close) = column_list(sql).ok_or("no column list")?;
     // The words after the column list, comments dropped (`-- note` then `WITHOUT ROWID` on the
     // next line is still one).
     let tail = tokens(sql.get(close + 1..).unwrap_or(""));
-    if tail.iter().any(|t| !t.quoted && t.text.eq_ignore_ascii_case("ROWID")) {
-        return Err("a WITHOUT ROWID table".into());
-    }
+    let without_rowid = tail.iter().any(|t| !t.quoted && t.text.eq_ignore_ascii_case("ROWID"));
+    let mut column_pk: Option<usize> = None;
     let body = sql.get(open + 1..close).ok_or("no column list")?;
     let mut columns = Vec::new();
     let mut rowid_column = None;
@@ -381,20 +480,35 @@ pub fn parse_create_table(sql: &str) -> Result<(Vec<Column>, Option<usize>), Str
             }
         }
         let generated = generated_kw && !has("STORED");
+        if has("PRIMARY") {
+            column_pk = Some(columns.len());
+        }
         if decl.eq_ignore_ascii_case("INTEGER") && has("PRIMARY") && !has("DESC") {
             rowid_column = Some(columns.len());
         }
         columns.push(Column { name: first.text.clone(), decl, generated });
+    }
+    if columns.is_empty() {
+        return Err("no columns".into());
+    }
+    if without_rowid {
+        // Stored primary key first (in its order), then the other columns as declared; virtual
+        // generated columns aren't stored.
+        let pk: Vec<usize> = match &table_pk {
+            Some(names) => names.iter().map(|n| columns.iter().position(|c| c.name.eq_ignore_ascii_case(n))).collect::<Option<_>>(),
+            None => column_pk.map(|i| vec![i]),
+        }
+        .ok_or("a WITHOUT ROWID table without a readable primary key")?;
+        let mut order = pk.clone();
+        order.extend((0..columns.len()).filter(|i| !pk.contains(i) && columns.get(*i).is_some_and(|c| !c.generated)));
+        return Ok(Parsed { columns, rowid_column: None, stored_order: Some(order) });
     }
     if rowid_column.is_none()
         && let Some([pk]) = table_pk.as_deref()
     {
         rowid_column = columns.iter().position(|c| c.name.eq_ignore_ascii_case(pk) && c.decl.eq_ignore_ascii_case("INTEGER"));
     }
-    if columns.is_empty() {
-        return Err("no columns".into());
-    }
-    Ok((columns, rowid_column))
+    Ok(Parsed { columns, rowid_column, stored_order: None })
 }
 
 /// The byte offsets of the parentheses around a statement's column list: the first `(` outside
@@ -681,5 +795,87 @@ mod tests {
         }
         assert!(Db::open(&b"SQLite format 3\0"[..]).is_err());
         assert!(Db::open(&b"nope"[..]).is_err());
+    }
+
+    /// `WITHOUT ROWID` tables (index b-trees): a primary key of several columns, out of column
+    /// order, over interior pages, with payloads that overflow; rows come in key order with each
+    /// value in its declared column.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reads_without_rowid_tables() {
+        for page_size in [512, 4096] {
+            let path = std::env::temp_dir().join(format!("rustgis-sqlite-wr-{}-{page_size}.db", std::process::id()));
+            let _ = std::fs::remove_file(&path);
+            {
+                let c = rusqlite::Connection::open(&path).unwrap();
+                c.execute_batch(&format!(
+                    "PRAGMA page_size = {page_size}; PRAGMA journal_mode = DELETE;
+                     CREATE TABLE shallow (data BLOB, z INTEGER, x INTEGER, y INTEGER, PRIMARY KEY (z, x, y)) WITHOUT ROWID;
+                     CREATE TABLE kv (k TEXT PRIMARY KEY, v) WITHOUT ROWID;"
+                ))
+                .unwrap();
+                let tx = c.unchecked_transaction().unwrap();
+                for i in 0..2000i64 {
+                    // Every 50th row carries a blob larger than a page.
+                    let len = if i % 50 == 0 { page_size * 2 + 3 } else { 5 };
+                    let blob: Vec<u8> = (0..len).map(|k| ((k as i64 + i) % 251) as u8).collect();
+                    tx.execute("INSERT INTO shallow VALUES (?1, ?2, ?3, ?4)", rusqlite::params![blob, i % 7, i, 2000 - i]).unwrap();
+                }
+                tx.execute("INSERT INTO kv VALUES ('b', 2), ('a', 'one')", []).unwrap();
+                tx.commit().unwrap();
+            }
+            let bytes = std::fs::read(&path).unwrap();
+            let db = Db::open(bytes.as_slice()).unwrap();
+            let t = db.table("shallow").unwrap();
+            assert_eq!(t.stored_order.as_deref(), Some(&[1, 2, 3, 0][..]));
+            assert_eq!(t.rowid_column, None);
+            let mut rows = Vec::new();
+            db.rows(&t, |n, r| {
+                rows.push((n, r.to_vec()));
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+            assert_eq!(rows.len(), 2000, "{page_size}");
+            let keys: Vec<(i64, i64)> = rows
+                .iter()
+                .map(|(_, r)| match (&r[1], &r[2]) {
+                    (Val::Int(z), Val::Int(x)) => (*z, *x),
+                    other => panic!("{other:?}"),
+                })
+                .collect();
+            let mut sorted = keys.clone();
+            sorted.sort();
+            assert_eq!(keys, sorted, "rows in key order");
+            for (n, r) in &rows {
+                let Val::Int(i) = r[2] else { panic!() };
+                let len = if i % 50 == 0 { page_size * 2 + 3 } else { 5 };
+                assert_eq!(r[0], Val::Blob((0..len).map(|k| ((k as i64 + i) % 251) as u8).collect()), "row {n}");
+                assert_eq!(r[3], Val::Int(2000 - i));
+            }
+            let kv = db.table("kv").unwrap();
+            let mut got = Vec::new();
+            db.rows(&kv, |_, r| {
+                got.push(r.to_vec());
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+            assert_eq!(got, vec![vec![Val::Text("a".into()), Val::Text("one".into())], vec![Val::Text("b".into()), Val::Int(2)]]);
+            if page_size == 512 {
+                for cut in (0..bytes.len()).step_by(173) {
+                    if let Ok(db) = Db::open(&bytes[..cut]) {
+                        let _ = db.rows(&t, |_, _| ControlFlow::Continue(()));
+                    }
+                }
+                let mut junk = bytes.clone();
+                for k in (100..junk.len()).step_by(41) {
+                    junk[k] ^= 0x3c;
+                }
+                if let Ok(db) = Db::open(junk.as_slice()) {
+                    let _ = db.tables();
+                    let _ = db.rows(&t, |_, _| ControlFlow::Continue(()));
+                }
+            }
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }

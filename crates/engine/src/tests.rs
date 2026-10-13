@@ -2588,6 +2588,74 @@ fn pmtiles_archives_become_tile_layers() {
     assert_eq!(t.map().tiles.iter().filter(|x| x.kind == rustgis_map::TileKind::PmTiles).count(), 2);
 }
 
+/// An MBTiles file of one red picture tile: added by path or as an upload, it is a tile layer that
+/// draws, survives a project round trip (by path), and a file that isn't an archive is refused.
+#[test]
+fn mbtiles_archives_become_tile_layers() {
+    use crate::render::View;
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("rustgis-mbtiles-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("red.mbtiles");
+    let _ = std::fs::remove_file(&path);
+    let mut red = tiny_skia::Pixmap::new(256, 256).unwrap();
+    red.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+    let c = rusqlite::Connection::open(&path).unwrap();
+    c.execute_batch(
+        "CREATE TABLE metadata (name text, value text); CREATE TABLE tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);
+         INSERT INTO metadata VALUES ('name', 'Red'), ('format', 'png'), ('minzoom', '0'), ('maxzoom', '0'), ('attribution', '© Red');",
+    )
+    .unwrap();
+    c.execute("INSERT INTO tiles VALUES (0, 0, 0, ?1)", [red.encode_png().unwrap()]).unwrap();
+    drop(c);
+    let p = path.display().to_string();
+
+    let draws_red = |s: &mut Session| {
+        s.run("map.goToXY", &json!({"lon": 10.0, "lat": 20.0, "scale": 50_000_000})).unwrap();
+        let v = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false };
+        let mut px = None;
+        for _ in 0..50 {
+            let r = crate::render::render(s.map_mut(), &v).unwrap();
+            px = r.pixmap.pixel(150, 100);
+            if px.is_some_and(|p| p.red() > 200 && p.green() < 60) {
+                return;
+            }
+            crate::render::rustgis_tiles::cache::wait(std::time::Duration::from_millis(100));
+        }
+        panic!("the tile layer didn't draw: {px:?}");
+    };
+
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": p})).unwrap();
+    let t = &s.map().tiles[0];
+    assert_eq!((t.kind, t.name.as_str()), (rustgis_map::TileKind::MbTiles, "red"));
+    draws_red(&mut s);
+    // A project keeps the layer by its path.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    assert_eq!(t.map().tiles.first().map(|x| x.kind), Some(rustgis_map::TileKind::MbTiles));
+    draws_red(&mut t);
+
+    // An upload is held in memory.
+    let b64 = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&path).unwrap());
+    let mut u = Session::new(Project::default());
+    u.run("layer.addDataBytes", &json!({"fileName": "uploaded.mbtiles", "data": b64})).unwrap();
+    assert_eq!(u.map().tiles[0].url, "upload:uploaded.mbtiles");
+    draws_red(&mut u);
+
+    // Not an archive, a relative path, a network share, an upload never made.
+    let junk = dir.join("junk.mbtiles");
+    std::fs::write(&junk, b"not sqlite").unwrap();
+    assert!(s.run("layer.addData", &json!({"path": junk.display().to_string()})).is_err());
+    let junk64 = base64::engine::general_purpose::STANDARD.encode(b"not sqlite");
+    assert!(s.run("layer.addDataBytes", &json!({"fileName": "junk.mbtiles", "data": junk64})).is_err());
+    for bad in ["red.mbtiles", r"\\attacker\share\x.mbtiles", "/tmp/x.pmtiles", "upload:"] {
+        assert!(s.run("map.addTiles", &json!({"url": bad, "kind": "mbtiles"})).is_err(), "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn pmtiles_from_network_shares_are_refused() {
     let mut s = Session::new(Project::default());

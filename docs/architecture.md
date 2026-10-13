@@ -8,7 +8,7 @@ engine scriptable and the front end swappable.
 | L0 | `rustgis-geom` | Coordinates, extents, Web Mercator, geodesic distance/area, scale |
 | L1 | `rustgis-data` | Features and typed attributes; GeoJSON, CSV, Shapefile; a read-only SQLite file reader (`sqlite`, for GeoPackages in the browser); data providers reading GeoPackage, GeoParquet and FlatGeobuf in place by their spatial index (GDAL formats and DuckDB queries converted by those programs when installed); SQL where clauses; rasters (GeoTIFF, ASCII grid) and their coordinate systems |
 | L2 | `rustgis-map`, `rustgis-analysis` | Layers, symbology, labeling, camera, basemaps and web tile layers; geoprocessing tools |
-| L2 | `rustgis-tiles` | Web map tiles: XYZ/TMS/WMS raster tiles, Mapbox Vector Tiles and a subset of MapLibre styles; a cache that fetches in the background (worker threads natively, the browser's `fetch` on the web) |
+| L2 | `rustgis-tiles` | Web map tiles: XYZ/TMS/WMS raster tiles, Mapbox Vector Tiles, PMTiles and MBTiles archives and a subset of MapLibre styles; a cache that fetches in the background (worker threads natively, the browser's `fetch` on the web) |
 | L3 | `rustgis-render` | tiny-skia renderer, label placement, PNG export |
 | L3 | `rustgis-geolibre` | The [GeoLibre tools](user-guide/analysis.md#geolibre-tools) as geoprocessing tools: run by the optional `geolibre` program natively, by geolibre-rust's WASI runner in the browser |
 | L3 | `rustgis-plugins` | [Plugins](plugins.md): sandboxed WebAssembly modules that add commands and geoprocessing tools; `.rgplugin` packages and the plugin registry |

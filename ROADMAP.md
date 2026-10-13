@@ -15,7 +15,7 @@ Many features are first versions: there are no full 3D scenes or enterprise port
 - Rasters: GeoTIFF/COG and ASCII grids, EPSG reprojection, stretch/RGB/classified/shaded-relief
   symbology, raster functions, indices, change detection, classification, georeferencing.
 - Maps: multiple maps, a 3D globe, projection presets and EPSG codes, bookmarks, web tile
-  layers (XYZ/TMS/WMS, Mapbox Vector Tiles, MapLibre styles, PMTiles archives),
+  layers (XYZ/TMS/WMS, Mapbox Vector Tiles, MapLibre styles, PMTiles and MBTiles archives),
   worldviews.
 - Cartography: single, unique values, graduated colours and proportional symbols; labels with
   placement and annotation; masking, display filters, aggregation, extrusion; graphics.
