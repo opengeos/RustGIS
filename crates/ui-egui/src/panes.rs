@@ -177,9 +177,8 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         });
         let layers: Vec<Layer> = app.session.map().layers.clone();
         let scale = app.session.scale();
-        for l in &layers {
-            layer_row(app, ui, l, scale, t);
-        }
+        let blocks: Vec<(u32, Rect)> = layers.iter().map(|l| (l.id, layer_row(app, ui, l, scale, t))).collect();
+        layer_drop(app, ui, &blocks, t);
         // The basemap row at the bottom, like a desktop GIS.
         ui.add_space(2.0);
         ui.horizontal(|ui| {
@@ -228,13 +227,47 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     });
 }
 
-fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Tokens) {
+/// The layer a row drag carries (egui's drag-and-drop payload).
+#[derive(Clone, Copy)]
+struct DraggedLayer(u32);
+
+/// Dragging a layer row over the list: marks the gap it would drop into and, on release, moves
+/// it there (`layer.move`, one undo step). Released outside the list, the drag does nothing.
+fn layer_drop(app: &mut RustGisApp, ui: &Ui, blocks: &[(u32, Rect)], t: &Tokens) {
+    let Some(dragged) = egui::DragAndDrop::payload::<DraggedLayer>(ui.ctx()) else { return };
+    let Some(from) = blocks.iter().position(|(id, _)| *id == dragged.0) else { return };
+    let Some(pointer) = ui.ctx().pointer_interact_pos().filter(|p| ui.clip_rect().contains(*p)) else { return };
+    // The gap above the first row whose middle is below the pointer, or the one after the last.
+    let gap = blocks.iter().position(|(_, r)| pointer.y < r.center().y).unwrap_or(blocks.len());
+    // The gaps on either side of the dragged row leave it where it is.
+    let to = if gap > from { gap - 1 } else { gap };
+    if to == from {
+        return;
+    }
+    let line = match blocks.get(gap) {
+        Some((_, r)) => Some((r.min.y, r)),
+        None => blocks.last().map(|(_, r)| (r.max.y, r)),
+    };
+    if let Some((y, r)) = line {
+        ui.painter().line_segment([pos2(r.min.x + 8.0, y), pos2(r.max.x - 8.0, y)], Stroke::new(2.0, t.accent));
+    }
+    if ui.input(|i| i.pointer.any_released()) {
+        let _ = app.run("layer.move", json!({"layer": dragged.0, "to": to}));
+    }
+}
+
+/// A layer's row and, expanded, its legend; returns the rectangle of both.
+fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Tokens) -> Rect {
     let active = app.session.active_layer == Some(l.id);
     let row_h = 26.0;
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        egui::DragAndDrop::set_payload(ui.ctx(), DraggedLayer(l.id));
+    }
+    let dragging = egui::DragAndDrop::payload::<DraggedLayer>(ui.ctx()).is_some_and(|d| d.0 == l.id);
     if active {
         ui.painter().rect_filled(r.shrink2(vec2(4.0, 1.0)), CornerRadius::same(5), t.selection);
-    } else if resp.hovered() {
+    } else if resp.hovered() || dragging {
         ui.painter().rect_filled(r.shrink2(vec2(4.0, 1.0)), CornerRadius::same(5), t.hover);
     }
     let mut x = r.min.x + 10.0;
@@ -443,6 +476,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
             ui.painter().text(pos2(r.min.x + 100.0, r.center().y), Align2::LEFT_CENTER, &e.label, regular(11.5), t.text);
         }
     }
+    Rect::from_min_max(r.min, pos2(r.max.x, ui.min_rect().max.y.max(r.max.y)))
 }
 
 // ---------------------------------------------------------------------------------------------
