@@ -31,6 +31,7 @@ pub mod theme;
 mod update;
 mod widgets;
 mod workspacepanes;
+mod zarrui;
 
 use rustgis_engine::{Project, Session};
 use serde_json::{Value, json};
@@ -279,6 +280,8 @@ pub struct UiState {
     pub portals: portalsui::State,
     /// Find Place searches and Geocode Addresses runs under way.
     pub geocode: geocodeui::State,
+    /// Add Data › Zarr…: its store, choices and fetches.
+    pub zarr: zarrui::State,
     /// A layout picture waiting for its image file (web).
     pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
@@ -329,6 +332,7 @@ impl Default for UiState {
             stac: Default::default(),
             portals: Default::default(),
             geocode: Default::default(),
+            zarr: Default::default(),
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
             pane_sets: Vec::new(),
@@ -1623,6 +1627,14 @@ impl RustGisApp {
                     return self.run("share.exportLayer", json!({"path": path}));
                 }
             }
+            // Add Zarr Variable, connected to a store (a link, a script).
+            "ui.addZarr" => {
+                self.dialogs.open("zarr", &self.session)?;
+                if let Some(a) = p.get("address").and_then(Value::as_str) {
+                    self.ui.zarr.address = a.to_string();
+                    zarrui::connect(self);
+                }
+            }
             "ui.dialog" => {
                 let which = p.get("name").and_then(Value::as_str).unwrap_or("");
                 self.dialogs.open(which, &self.session)?;
@@ -1797,6 +1809,7 @@ impl RustGisApp {
         stacui::poll(self, ctx);
         portalsui::poll(self, ctx);
         geocodeui::poll(self, ctx);
+        zarrui::poll(self, ctx);
         pluginsui::poll(self, ctx);
         assistantpane::poll(self, ctx);
         self.ensure_script_font();

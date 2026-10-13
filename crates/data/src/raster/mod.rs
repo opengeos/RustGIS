@@ -11,6 +11,7 @@ pub mod crs;
 pub mod gdal;
 pub mod geotiff;
 pub mod wkt;
+pub mod zarr;
 
 use std::path::Path;
 
@@ -357,6 +358,11 @@ impl Raster {
 
 /// Reads a raster file by path.
 pub fn read_path(path: &Path) -> Result<Raster> {
+    // A Zarr store is a folder: its first variable.
+    #[cfg(not(target_arch = "wasm32"))]
+    if zarr::is_store(path) {
+        return zarr::read_dir(path, "", None);
+    }
     // Only regular files (not FIFOs or devices), and ASCII grids within a size limit, as they
     // are read whole.
     let meta = std::fs::metadata(path)?;
@@ -392,6 +398,11 @@ pub fn read_path(path: &Path) -> Result<Raster> {
 /// subdataset (a NetCDF variable) and the coordinate system it doesn't say. Other files ignore
 /// them.
 pub fn read_path_with(path: &Path, subdataset: Option<&str>, crs: Option<&str>) -> Result<Raster> {
+    // A Zarr store's variable and slice (`t2m[time=3]`).
+    #[cfg(not(target_arch = "wasm32"))]
+    if zarr::is_store(path) {
+        return zarr::read_dir(path, subdataset.unwrap_or(""), crs);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if (subdataset.is_some() || crs.is_some()) && gdal::is_gdal_raster_name(&path.to_string_lossy()) {
         return read_converted(path, &gdal::convert(path, subdataset, crs)?);
