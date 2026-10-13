@@ -167,6 +167,7 @@ pub fn clear() {
     crate::pmtiles::forget();
     crate::mbtiles::forget();
     crate::cog::forget();
+    rustgis_data::source::remote::forget();
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -233,6 +234,21 @@ pub fn split_range(url: &str) -> (&str, Option<(u64, u64)>) {
     match url.rsplit_once(RANGE) {
         Some((base, r)) => match r.split_once('-').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))) {
             Some((a, b)) if a <= b => (base, Some((a, b))),
+            _ => (url, None),
+        },
+        None => (url, None),
+    }
+}
+
+/// Marks an address asking for the file's last bytes, `#rustgis-tail=<n>` (`Range: bytes=-n`),
+/// where its length isn't known (a GeoParquet's footer). A shorter answer is the whole file.
+pub const TAIL: &str = "#rustgis-tail=";
+
+/// Splits an address into the address to fetch and how many of its last bytes it asks for, if any.
+pub fn split_tail(url: &str) -> (&str, Option<u64>) {
+    match url.rsplit_once(TAIL) {
+        Some((base, n)) => match n.parse::<u64>() {
+            Ok(n) if n > 0 => (base, Some(n)),
             _ => (url, None),
         },
         None => (url, None),
@@ -581,6 +597,7 @@ mod native {
         }
         let (url, whole) = super::split_download(url);
         let max = if whole { super::MAX_DOWNLOAD } else { MAX_BYTES };
+        let (url, tail) = super::split_tail(url);
         let (url, range) = super::split_range(url);
         // An `s3://` address becomes its web address, and a request to an S3 connection's
         // endpoint is signed.
@@ -591,6 +608,13 @@ mod native {
             let mut req = agent.get(&at);
             if let Some((a, b)) = range {
                 req = req.header("Range", &format!("bytes={a}-{b}"));
+            } else if let Some(n) = tail {
+                req = req.header("Range", &format!("bytes=-{n}"));
+            }
+            // A range of the file's own bytes: a server compressing its answer would count the
+            // range in the compressed ones.
+            if range.is_some() || tail.is_some() {
+                req = req.header("Accept-Encoding", "identity");
             }
             if redirects == 0 {
                 for (k, v) in &prepared.headers {
@@ -637,6 +661,14 @@ mod native {
         let mut buf = Vec::new();
         if !resp.status().is_success() {
             return Err(format!("HTTP {}", resp.status().as_u16()));
+        }
+        // The last bytes asked for and the whole file answered: fine when it is no longer.
+        if let Some(n) = tail.filter(|_| resp.status().as_u16() != 206) {
+            resp.body_mut().with_config().limit(n.saturating_add(1)).reader().read_to_end(&mut buf).map_err(|e| e.to_string())?;
+            if buf.len() as u64 > n {
+                return Err(format!("{url}: the server doesn't answer byte-range requests"));
+            }
+            return Ok(buf);
         }
         resp.body_mut().with_config().limit(max as u64 + 1).reader().read_to_end(&mut buf).map_err(|e| e.to_string())?;
         if buf.len() > max {

@@ -3446,6 +3446,11 @@ fn serve_ranges(body: Vec<u8>) -> (String, std::sync::Arc<std::sync::atomic::Ato
             let req = String::from_utf8_lossy(&buf[..read]).to_ascii_lowercase();
             let range = req.lines().find_map(|l| l.strip_prefix("range: bytes=")).and_then(|r| {
                 let (a, b) = r.trim().split_once('-')?;
+                // A suffix (`-n`): the last n bytes.
+                if a.is_empty() {
+                    let n = b.parse::<usize>().ok()?.min(body.len());
+                    return Some((body.len() - n, body.len().saturating_sub(1)));
+                }
                 Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
             });
             let (status, part) = match range {
@@ -3832,4 +3837,73 @@ fn s3_connections_listings_and_objects() {
     assert!(s.run("s3.disconnect", &json!({"name": "s3-test"})).is_err());
     // Plugins never connect (they'd choose where the user's credentials go).
     assert!(crate::cmd::plugins::user_only("s3.connect"));
+}
+
+/// A FlatGeobuf and a GeoParquet by their address are read in place, by range: a view fetches a
+/// small part of the file; the project keeps the address and reads it again; asked to, a file is
+/// downloaded whole instead.
+#[test]
+fn flatgeobuf_and_geoparquet_by_address_are_read_in_place() {
+    use rustgis_data::{Dataset, Feature, Field, FieldType, Geometry, GeometryType, Value};
+    let mut ds = Dataset::new("grid", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
+    for i in 0..200u32 {
+        for j in 0..200u32 {
+            let c = rustgis_geom::Coord::new(-179.0 + 1.79 * f64::from(i), -80.0 + 0.8 * f64::from(j));
+            let n = u64::from(i * 200 + j);
+            ds.features.push(Feature { id: n + 1, geometry: Some(Geometry::Point(c)), attrs: vec![Value::Int(n as i64)] });
+        }
+    }
+    let fgb = rustgis_data::source::fgb::write(&ds).unwrap();
+    let total = fgb.len();
+    let (base, sent) = serve_ranges(fgb);
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/grid.fgb")})).unwrap();
+    assert_eq!((r["inPlace"].as_bool(), r["streamed"].as_bool(), r["features"].as_u64()), (Some(true), Some(true), Some(40_000)), "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    // A view: read as the screen reads, in the background.
+    let view = rustgis_geom::Extent::new(10.0, 10.0, 14.0, 13.0);
+    let sync = |s: &mut Session| {
+        let mut pending = s.map_mut().sync_sources(&view, false);
+        let start = std::time::Instant::now();
+        while pending && start.elapsed() < std::time::Duration::from_secs(30) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            pending = s.map_mut().sync_sources(&view, false);
+        }
+        assert!(!pending);
+    };
+    sync(&mut s);
+    let l = s.map().layer(id).unwrap();
+    let w = l.source.as_ref().unwrap().window().unwrap().extent;
+    assert!(!l.dataset.features.is_empty(), "{:?}", l.source.as_ref().unwrap().error);
+    assert!(l.dataset.features.iter().all(|f| w.contains(f.geometry.as_ref().unwrap().extent().center())));
+    let read = sent.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(read < total / 4, "{read} of {total} bytes read");
+    // The project keeps the address, and reads it again.
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(text.contains("grid.fgb") && !text.contains("embedded"));
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    sync(&mut t);
+    let again = t.map().layers.iter().find(|l| l.is_streamed()).unwrap();
+    assert!(!again.dataset.features.is_empty(), "{:?}", again.source.as_ref().unwrap().error);
+    // Load All Features: every feature, fetched.
+    assert_eq!(again.load_all().unwrap().features.len(), 40_000);
+
+    // A GeoParquet (with its bbox covering), from its footer at the end.
+    let pq = rustgis_data::source::parquet::write(&ds).unwrap();
+    let (base, _) = serve_ranges(pq);
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/grid.parquet"), "name": "PQ"})).unwrap();
+    assert_eq!(r["inPlace"].as_bool(), Some(true), "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    sync(&mut s);
+    let l = s.map().layer(id).unwrap();
+    assert!(!l.dataset.features.is_empty(), "{:?}", l.source.as_ref().unwrap().error);
+    assert_eq!(l.name, "PQ");
+
+    // Asked to: downloaded whole.
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/grid.parquet"), "whole": true, "name": "Whole"})).unwrap();
+    assert!(r.get("inPlace").is_none(), "{r}");
+    // A file that isn't one: an error, not a hang.
+    let (base, _) = serve_ranges(b"not a flatgeobuf at all".to_vec());
+    assert!(s.run("layer.addUrl", &json!({"url": format!("{base}/x.fgb")})).is_err());
 }

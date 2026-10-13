@@ -72,11 +72,27 @@ tiles is downloaded whole as a raster layer, as is any GeoTIFF added with `"whol
 the raster tools and symbology). The web app needs the server to allow range requests from web
 pages (CORS with the `Range` header), as public buckets such as Sentinel-2's do.
 
+A GeoParquet or FlatGeobuf file by its address is read in place too, a view at a time, however
+large: the layer is streamed like a large local file, and the view's features are fetched in the
+background by HTTP range requests and drawn as they land. A FlatGeobuf's header and packed R-tree
+index are read first (a level of the tree per round of requests), then only the features in the
+view. A GeoParquet's footer is read first, then the row groups the view meets, by their bounding
+box covering column (`bbox`) and its statistics: the covering of groups on the view's edge, then
+the geometry and attribute columns of the rows taken. A view holding more than a read takes (60,000
+features on the desktop, 30,000 in the web app) shows an evenly spread sample of it, in patches;
+zoom in for all of them. So a 12 GB FlatGeobuf of 11 million areas opens after 65 KB and
+draws a city in about a second from 9 MB, and a 525 MB Overture buildings file opens after 1 MB.
+The project keeps the address and reads it the same way when it opens. A FlatGeobuf without an
+index, a GeoParquet without a covering column, or a server that doesn't answer range requests
+means the file is downloaded whole instead, as is any file added
+with `"whole": true`; Load All Features and the geoprocessing tools fetch the whole file on the
+desktop, while in the web app they need the file downloaded first.
+
 `layer.addUrl` waits for the download, up to a minute, which suits the command line, MCP and the
 desktop app's assistant; a larger file comes through the From URL… dialog, which downloads in the
 background. In the web app, where nothing may wait, it adds `.pmtiles` and GeoTIFF addresses only
-(a GeoTIFF read in place); other files
-come through the From URL… dialog (`ui.addUrl`). GeoJSON, CSV, KML and GPX files are read up to
+(a GeoTIFF read in place); other files, GeoParquet and FlatGeobuf read in place among them,
+come through the From URL… dialog (`ui.addUrl`) or a `?data=` link. GeoJSON, CSV, KML and GPX files are read up to
 256 MB; larger downloads (GeoParquet, FlatGeobuf, GeoPackage, GeoTIFF) up to the limits above.
 
 ## Map and feature services

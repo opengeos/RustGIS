@@ -1301,6 +1301,23 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
         }
         return super::tiles::add(s, &q);
     }
+    // A FlatGeobuf or GeoParquet: read in place by range when it has a spatial index (or a bbox
+    // covering), otherwise downloaded whole.
+    if rustgis_data::source::is_remote_name(url) && !super::b(p, "whole").unwrap_or(false) {
+        // In the browser nothing may wait: the app has fetched what opening needs already.
+        #[cfg(target_arch = "wasm32")]
+        let opened = rustgis_data::source::open_url_now(url);
+        #[cfg(not(target_arch = "wasm32"))]
+        let opened = rustgis_data::source::open_url_blocking(url);
+        match opened {
+            Ok(src) => return add_remote(s, p, url, src),
+            Err(e) if e.to_string().contains(rustgis_data::source::remote::READ_WHOLE) => {}
+            Err(e) => {
+                let e = e.to_string();
+                return Err(if e.starts_with(url) { e } else { format!("{url}: {e}") });
+            }
+        }
+    }
     // A GeoTIFF: read in place when it is cloud-optimised (tiled), otherwise downloaded whole.
     let tiff = is_tiff_url(url);
     #[cfg(target_arch = "wasm32")]
@@ -1322,6 +1339,27 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
         let name = url_file_name(url, &bytes).map_err(named)?;
         super::raster::add_named_bytes(s, p, name, bytes)
     }
+}
+
+/// Adds a FlatGeobuf or GeoParquet by its address as a layer read in place: a view's features at
+/// a time, by range. The project keeps the address.
+fn add_remote(s: &mut Session, p: &Value, url: &str, src: Box<dyn rustgis_data::source::FeatureSource>) -> CmdResult {
+    let info = src.info().clone();
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| info.name.clone());
+    let empty_before = s.map().layers.is_empty();
+    let layer = rustgis_map::source::SourceLayer::from_path(url.to_string(), None, src);
+    let unique = unique_name(s, &name);
+    for n in &info.notes {
+        s.notify(format!("{unique}: {n}"), false);
+    }
+    let id = s.map_mut().add_streamed(unique.clone(), layer);
+    s.active_layer = Some(id);
+    let count = info.count.map(|c| c.to_string()).unwrap_or_else(|| "many".into());
+    s.notify(format!("{unique}: {count} features, read in place by range from its address, a view at a time"), false);
+    if (empty_before || b(p, "zoom") == Some(true)) && !info.extent.is_empty() {
+        s.zoom_to(&info.extent);
+    }
+    Ok(json!({"layer": id, "layers": [id], "features": info.count, "streamed": true, "inPlace": true}))
 }
 
 /// Whether a web address names a GeoTIFF (by its path's extension).

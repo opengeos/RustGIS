@@ -346,16 +346,22 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     // A data download may be up to MAX_DOWNLOAD; anything else is at most 64 MB.
     let (url, download) = cache::split_download(url);
     let max = if download { cache::MAX_DOWNLOAD as u64 } else { 64 << 20 };
+    let (url, tail) = cache::split_tail(url);
     let (url, range) = cache::split_range(url);
     // An `s3://` address becomes its web address, and a request to an S3 connection's endpoint
     // is signed (the bucket's CORS rules must allow the Authorization and x-amz-* headers).
     let prepared = rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::s3::prepare(url)?;
     let url = prepared.url.as_str();
-    let promise = if range.is_some() || !prepared.headers.is_empty() {
+    let asked = match (range, tail) {
+        (Some((a, b)), _) => Some(format!("bytes={a}-{b}")),
+        (None, Some(n)) => Some(format!("bytes=-{n}")),
+        (None, None) => None,
+    };
+    let promise = if asked.is_some() || !prepared.headers.is_empty() {
         let init = web_sys::RequestInit::new();
         let headers = web_sys::Headers::new().map_err(err)?;
-        if let Some((a, b)) = range {
-            headers.set("Range", &format!("bytes={a}-{b}")).map_err(err)?;
+        if let Some(r) = &asked {
+            headers.set("Range", r).map_err(err)?;
         }
         for (k, v) in &prepared.headers {
             headers.set(k, v).map_err(err)?;
@@ -373,6 +379,12 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
+    // The last bytes asked for and the whole file answered: fine when it is no longer.
+    let whole_tail = tail.filter(|_| resp.status() != 206);
+    let max = match whole_tail {
+        Some(n) => n.saturating_add(1),
+        None => max,
+    };
     // A range asked for and the whole file answered (200): fine for a range from the start that
     // holds the whole file (a small archive), checked once it's read; else no ranges.
     let whole = range.is_some() && resp.status() != 206;
@@ -403,6 +415,9 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
             let n = value.length() as usize;
             if (bytes.len() + n) as u64 > max {
                 let _ = reader.cancel();
+                if whole_tail.is_some() {
+                    return Err(format!("{url}: the server doesn't answer byte-range requests"));
+                }
                 return Err(format!("larger than {} MB", max >> 20));
             }
             let at = bytes.len();
@@ -413,6 +428,9 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     if let Some((a, b)) = range.filter(|_| whole)
         && bytes.len() as u64 > b - a + 1
     {
+        return Err(format!("{url}: the server doesn't answer byte-range requests"));
+    }
+    if whole_tail.is_some_and(|n| bytes.len() as u64 > n) {
         return Err(format!("{url}: the server doesn't answer byte-range requests"));
     }
     Ok(bytes)

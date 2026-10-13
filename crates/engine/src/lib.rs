@@ -316,6 +316,8 @@ impl Session {
         #[cfg(feature = "geolibre")]
         rustgis_geolibre::register();
         rustgis_plugins::tools::register();
+        // FlatGeobuf and GeoParquet by their web address are read through the tile fetchers.
+        render::rustgis_tiles::remote::install();
         Session {
             project,
             path: None,

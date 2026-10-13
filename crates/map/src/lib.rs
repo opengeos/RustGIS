@@ -238,6 +238,13 @@ impl Layer {
             if src.error.is_some() || src.open().is_err() {
                 return false;
             }
+            // A source by its web address opens off the frame: an export waits for it.
+            if block {
+                src.wait_open(std::time::Duration::from_secs(60));
+            }
+            if !src.is_open() {
+                return src.is_pending();
+            }
         }
         // A failed read leaves nothing drawn for it (its error shows in Layers), not the
         // previous view's features.

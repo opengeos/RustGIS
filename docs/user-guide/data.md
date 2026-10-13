@@ -26,8 +26,9 @@ Formats](data-formats.md).
 | Web tiles: XYZ/TMS/WMS rasters, Mapbox Vector Tiles, MapLibre styles, PMTiles and MBTiles archives | Yes | Yes (Analyze › Create Hosted Imagery) |
 | RustGIS project (`.rgis`; older `.rgisx` files open too) | Yes | Yes |
 
-Add data with **Home › Add Data** (**From URL…** downloads a file by its web address; see
-[Files on the web](data-formats.md#files-on-the-web)), by dropping files on the window, or by
+Add data with **Home › Add Data** (**From URL…** adds a file by its web address, reading a
+cloud-optimised GeoTIFF, GeoParquet or FlatGeobuf in place, a view at a time, and downloading
+others; see [Files on the web](data-formats.md#files-on-the-web)), by dropping files on the window, or by
 passing them on the command line (`rustgis places.geojson`). **Home › Add Data › Delimited
 Text…** picks a CSV's x and y (or WKT) columns, their coordinate system (such as `EPSG:2263`) and
 the separator; Add Data finds them itself (columns named like longitude/latitude,
