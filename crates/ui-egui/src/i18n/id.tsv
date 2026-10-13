@@ -1374,6 +1374,8 @@ RustGIS plugin	Plugin RustGIS
 RustGIS presentation	Presentasi RustGIS
 RustGIS project	Proyek RustGIS
 RustGIS project template	Templat proyek RustGIS
+RustGIS ran into an internal error last time. The details are in {path}; please attach them to a bug report.	RustGIS mengalami kesalahan internal terakhir kali. Detailnya ada di {path}; lampirkan ke laporan bug.
+RustGIS ran into an internal error while handling the model's reply, so the request was stopped. Please report it at https://github.com/opengeos/RustGIS/issues.	RustGIS mengalami kesalahan internal saat memproses balasan model, jadi permintaan dihentikan. Laporkan di https://github.com/opengeos/RustGIS/issues.
 RustGIS report or report template	Laporan atau templat laporan RustGIS
 RustGIS styles	Gaya RustGIS
 RustGIS task	Tugas RustGIS

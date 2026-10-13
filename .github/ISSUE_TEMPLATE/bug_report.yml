@@ -82,6 +82,6 @@ body:
     id: screenshots
     attributes:
       label: Screenshots or logs
-      description: Add screenshots, screen recordings, or terminal output if they help explain the problem.
+      description: Add screenshots, screen recordings, or terminal output if they help explain the problem. If the desktop app closed unexpectedly, attach `crash.log` or `crash-last.log` from its settings folder (`%APPDATA%\RustGIS` on Windows, `~/Library/Application Support/RustGIS` on macOS, `~/.config/rustgis` on Linux).
     validations:
       required: false

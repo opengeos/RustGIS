@@ -117,3 +117,15 @@ trunk build --release   # output in dist/web
 RustGIS uses an installed sans-serif when it finds one (Segoe UI, San Francisco, Inter, Noto
 Sans, Open Sans or DejaVu Sans) and falls back to a built-in face. Set
 `RUSTGIS_BUILTIN_FONTS=1` to always use the built-in face.
+
+## If RustGIS closes unexpectedly
+
+The desktop app writes what went wrong to `crash.log` in its settings folder:
+`%APPDATA%\RustGIS` on Windows, `~/Library/Application Support/RustGIS` on macOS and
+`~/.config/rustgis` on Linux (or `$XDG_CONFIG_HOME/rustgis`). The next launch moves it to
+`crash-last.log` and names the file in a notice. Attach it to a
+[bug report](https://github.com/opengeos/RustGIS/issues/new?template=bug_report.yml): it holds
+the version, the operating system and where the error happened, not your data.
+
+An error inside the AI Assistant no longer closes the app: it stops the request and says so in
+the chat.

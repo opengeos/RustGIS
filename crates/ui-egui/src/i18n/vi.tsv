@@ -1374,6 +1374,8 @@ RustGIS plugin	Plugin RustGIS
 RustGIS presentation	Bản trình bày RustGIS
 RustGIS project	Dự án RustGIS
 RustGIS project template	Mẫu dự án RustGIS
+RustGIS ran into an internal error last time. The details are in {path}; please attach them to a bug report.	Lần trước RustGIS gặp lỗi nội bộ. Chi tiết nằm trong {path}; hãy đính kèm vào báo cáo lỗi.
+RustGIS ran into an internal error while handling the model's reply, so the request was stopped. Please report it at https://github.com/opengeos/RustGIS/issues.	RustGIS gặp lỗi nội bộ khi xử lý phản hồi của mô hình nên yêu cầu đã bị dừng. Hãy báo lỗi tại https://github.com/opengeos/RustGIS/issues.
 RustGIS report or report template	Báo cáo hoặc mẫu báo cáo RustGIS
 RustGIS styles	Kiểu RustGIS
 RustGIS task	Nhiệm vụ RustGIS

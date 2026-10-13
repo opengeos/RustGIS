@@ -1374,6 +1374,8 @@ RustGIS plugin	RustGIS プラグイン
 RustGIS presentation	RustGIS プレゼンテーション
 RustGIS project	RustGIS プロジェクト
 RustGIS project template	RustGIS プロジェクト テンプレート
+RustGIS ran into an internal error last time. The details are in {path}; please attach them to a bug report.	前回、RustGIS で内部エラーが発生しました。詳細は {path} にあります。バグ報告に添付してください。
+RustGIS ran into an internal error while handling the model's reply, so the request was stopped. Please report it at https://github.com/opengeos/RustGIS/issues.	モデルの応答の処理中に RustGIS で内部エラーが発生したため、リクエストを停止しました。https://github.com/opengeos/RustGIS/issues で報告してください。
 RustGIS report or report template	RustGIS レポートまたはレポート テンプレート
 RustGIS styles	RustGIS スタイル
 RustGIS task	RustGIS タスク

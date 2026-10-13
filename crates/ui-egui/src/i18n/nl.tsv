@@ -1374,6 +1374,8 @@ RustGIS plugin	RustGIS-plugin
 RustGIS presentation	RustGIS-presentatie
 RustGIS project	RustGIS-project
 RustGIS project template	RustGIS-projectsjabloon
+RustGIS ran into an internal error last time. The details are in {path}; please attach them to a bug report.	RustGIS liep de vorige keer tegen een interne fout aan. De details staan in {path}; voeg ze toe aan een foutmelding.
+RustGIS ran into an internal error while handling the model's reply, so the request was stopped. Please report it at https://github.com/opengeos/RustGIS/issues.	RustGIS liep tegen een interne fout aan bij het verwerken van het antwoord van het model, dus het verzoek is gestopt. Meld het op https://github.com/opengeos/RustGIS/issues.
 RustGIS report or report template	RustGIS-rapport of -rapportsjabloon
 RustGIS styles	RustGIS-stijlen
 RustGIS task	RustGIS-taak

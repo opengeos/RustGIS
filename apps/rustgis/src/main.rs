@@ -17,7 +17,7 @@ mod prefs {
     use rustgis_ui_egui::Services;
     use serde_json::{Map, Value};
 
-    fn dir() -> Option<PathBuf> {
+    pub fn dir() -> Option<PathBuf> {
         if cfg!(target_os = "windows") {
             std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("RustGIS"))
         } else if cfg!(target_os = "macos") {
@@ -61,6 +61,77 @@ mod prefs {
     }
 }
 
+/// Crash reports. A panic, caught or not, is written to `crash.log` in the settings folder (a
+/// release build on Windows has no console to print it to), and the next launch says where it is.
+mod crash {
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+
+    /// The log starts over past this size.
+    const MAX_LOG: u64 = 256 * 1024;
+
+    /// Writes every panic to `<dir>/crash.log`, then reports it as before.
+    pub fn install(dir: Option<PathBuf>) {
+        let Some(dir) = dir else { return };
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            write(&dir, info);
+            previous(info);
+        }));
+    }
+
+    fn write(dir: &Path, info: &std::panic::PanicHookInfo<'_>) {
+        let path = dir.join("crash.log");
+        let append = std::fs::metadata(&path).is_ok_and(|m| m.len() < MAX_LOG);
+        let file = std::fs::create_dir_all(dir)
+            .and_then(|_| std::fs::OpenOptions::new().create(true).write(true).append(append).truncate(!append).open(&path));
+        let Ok(mut file) = file else { return };
+        let thread = std::thread::current();
+        let _ = writeln!(
+            file,
+            "--- RustGIS {} on {} {}, {} UTC, thread {}\n{info}\n{}\n",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            utc_now(),
+            thread.name().unwrap_or("unnamed"),
+            std::backtrace::Backtrace::force_capture(),
+        );
+    }
+
+    fn utc_now() -> String {
+        utc(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()))
+    }
+
+    /// Seconds since 1970 as `YYYY-MM-DD HH:MM:SS` (UTC).
+    pub(crate) fn utc(secs: u64) -> String {
+        let (days, rest) = (secs / 86_400, secs % 86_400);
+        // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+        let z = i64::try_from(days).unwrap_or(0) + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + i64::from(month <= 2);
+        format!("{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}", rest / 3600, rest % 3600 / 60, rest % 60)
+    }
+
+    /// The crash log an earlier session left, moved to `crash-last.log` so it is mentioned once.
+    pub fn take_previous(dir: Option<PathBuf>) -> Option<PathBuf> {
+        let dir = dir?;
+        let log = dir.join("crash.log");
+        if !log.is_file() {
+            return None;
+        }
+        let seen = dir.join("crash-last.log");
+        std::fs::rename(&log, &seen).ok()?;
+        Some(seen)
+    }
+}
+
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.0.logic(ctx);
@@ -79,6 +150,9 @@ fn main() -> eframe::Result {
         println!("rustgis {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    // What an earlier session left, before this one can write a new log.
+    let crashed = crash::take_previous(prefs::dir());
+    crash::install(prefs::dir());
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     // Installed plugins, before the first session lists commands and tools.
     let plugin_errors = rustgis_engine::cmd::plugins::load_installed();
@@ -92,6 +166,15 @@ fn main() -> eframe::Result {
     let blank = if args.iter().any(|a| a == "--sample") { Some(false) } else { (!files.is_empty()).then_some(true) };
     if let Err(e) = app.start(&rustgis_ui_egui::Start { blank, ..Default::default() }) {
         log::warn!("start-up: {e}");
+    }
+    if let Some(log) = crashed {
+        // Notices are shown as written: translate this one now that the language is known.
+        rustgis_ui_egui::i18n::set_current(app.lang());
+        let text = rustgis_ui_egui::i18n::fmt(
+            "RustGIS ran into an internal error last time. The details are in {path}; please attach them to a bug report.",
+            &[("path", &log.display().to_string())],
+        );
+        app.session.notify(text, true);
     }
     for e in plugin_errors {
         log::warn!("{e}");
@@ -115,4 +198,33 @@ fn main() -> eframe::Result {
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
     eframe::run_native("RustGIS", options, Box::new(move |_cc| Ok(Box::new(App(app)))))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::crash;
+
+    #[test]
+    fn crash_times_are_utc_dates() {
+        assert_eq!(crash::utc(0), "1970-01-01 00:00:00");
+        assert_eq!(crash::utc(951_782_400), "2000-02-29 00:00:00");
+        assert_eq!(crash::utc(1_700_000_000), "2023-11-14 22:13:20");
+    }
+
+    #[test]
+    fn a_panic_is_logged_and_reported_once() {
+        let dir = std::env::temp_dir().join(format!("rustgis-crash-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        crash::install(Some(dir.clone()));
+        let _ = std::thread::spawn(|| panic!("boom for the crash log")).join();
+        let log = std::fs::read_to_string(dir.join("crash.log")).unwrap();
+        assert!(log.contains("boom for the crash log") && log.contains(env!("CARGO_PKG_VERSION")), "{log}");
+        // The next launch finds it once.
+        let seen = crash::take_previous(Some(dir.clone())).unwrap();
+        assert!(seen.ends_with("crash-last.log") && seen.is_file());
+        assert!(crash::take_previous(Some(dir.clone())).is_none());
+        let _ = std::panic::take_hook();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

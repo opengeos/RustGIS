@@ -206,6 +206,10 @@ pub fn run(s: &mut Session, call: &ToolCall) -> Result<String, String> {
             with_notices(with_new_layers(r, s, &before), s, mark)
         }
         "read_features" => read_features(s, a)?,
+        // Fails the way a bug in RustGIS would, for the agent's panic guard.
+        #[cfg(test)]
+        #[allow(clippy::panic)]
+        "test_panic" => panic!("a test tool panicked"),
         other => return Err(format!("unknown tool '{other}'")),
     };
     Ok(clip(&v.to_string(), MAX_RESULT))

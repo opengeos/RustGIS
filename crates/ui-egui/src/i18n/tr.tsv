@@ -1374,6 +1374,8 @@ RustGIS plugin	RustGIS eklentisi
 RustGIS presentation	RustGIS sunumu
 RustGIS project	RustGIS projesi
 RustGIS project template	RustGIS proje şablonu
+RustGIS ran into an internal error last time. The details are in {path}; please attach them to a bug report.	RustGIS son seferde dahili bir hatayla karşılaştı. Ayrıntılar {path} dosyasında; lütfen bir hata raporuna ekleyin.
+RustGIS ran into an internal error while handling the model's reply, so the request was stopped. Please report it at https://github.com/opengeos/RustGIS/issues.	RustGIS modelin yanıtını işlerken dahili bir hatayla karşılaştı, bu yüzden istek durduruldu. Lütfen https://github.com/opengeos/RustGIS/issues adresinden bildirin.
 RustGIS report or report template	RustGIS raporu veya rapor şablonu
 RustGIS styles	RustGIS stilleri
 RustGIS task	RustGIS görevi
