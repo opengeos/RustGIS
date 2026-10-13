@@ -35,6 +35,12 @@ const MAX_DEPTH: usize = 8;
 const MAX_VERTICES: usize = 1_000_000;
 /// The most copies one INSERT's array makes.
 const MAX_ARRAY: usize = 10_000;
+/// The most copies nested arrays make together along one nesting path (an array of arrays
+/// multiplies).
+const MAX_PATH_COPIES: usize = 100_000;
+/// The most entity placements one drawing's expansion visits, features made or not (inserts of
+/// empty or filtered blocks still cost work).
+const MAX_STEPS: usize = if cfg!(target_arch = "wasm32") { 2_000_000 } else { 8_000_000 };
 /// The most pieces (vertices, knots, edges) a count in the file may ask for.
 const MAX_COUNT: usize = 1_000_000;
 /// Segments of a full circle.
@@ -754,6 +760,16 @@ impl Cursor<'_, '_> {
         }
         None
     }
+    /// An optional group: read when it is the next group, else nothing is consumed.
+    fn opt(&mut self, code: i32) -> Option<f64> {
+        match self.p.get(self.at) {
+            Some((c, v)) if *c == code => {
+                self.at += 1;
+                num(v)
+            }
+            _ => None,
+        }
+    }
     fn count(&mut self, code: i32) -> Option<usize> {
         let n = self.next(code)?;
         (n >= 0.0 && n <= MAX_COUNT as f64).then_some(n as usize)
@@ -775,7 +791,7 @@ fn hatch(g: &G) -> Option<Vec<Vec<P3>>> {
         let mut ring: Vec<P3> = Vec::new();
         if flags & 2 != 0 {
             let has_bulge = cur.next(72)? != 0.0;
-            let _closed = cur.next(73);
+            let _closed = cur.opt(73);
             let n = cur.count(93)?;
             let mut vs: Vec<(P3, f64)> = Vec::with_capacity(n.min(1 << 16));
             for _ in 0..n {
@@ -796,7 +812,7 @@ fn hatch(g: &G) -> Option<Vec<Vec<P3>>> {
                         let c = cur.xy(10)?;
                         let r = cur.next(40)?;
                         let (s, e) = (cur.next(50)?, cur.next(51)?);
-                        let ccw = cur.next(73).unwrap_or(1.0) != 0.0;
+                        let ccw = cur.opt(73).unwrap_or(1.0) != 0.0;
                         // A clockwise arc's angles are mirrored (as GDAL reads them); which way
                         // round it runs, `append` finds from its ends.
                         let (s, e) = if ccw { (s, e) } else { (-e, -s) };
@@ -806,7 +822,7 @@ fn hatch(g: &G) -> Option<Vec<Vec<P3>>> {
                         let (c, major) = (cur.xy(10)?, cur.xy(11)?);
                         let ratio = cur.next(40)?;
                         let (s, e) = (cur.next(50)?, cur.next(51)?);
-                        let ccw = cur.next(73).unwrap_or(1.0) != 0.0;
+                        let ccw = cur.opt(73).unwrap_or(1.0) != 0.0;
                         let (s, e) = if ccw { (s, e) } else { (-e, -s) };
                         let s = s.rem_euclid(360.0);
                         let e = s + sweep(s, e.rem_euclid(360.0), 360.0);
@@ -822,8 +838,8 @@ fn hatch(g: &G) -> Option<Vec<Vec<P3>>> {
                     }
                     4 => {
                         let degree = cur.count(94)?;
-                        let rational = cur.next(73).unwrap_or(0.0) != 0.0;
-                        let _periodic = cur.next(74);
+                        let rational = cur.opt(73).unwrap_or(0.0) != 0.0;
+                        let _periodic = cur.opt(74);
                         let (nk, nc) = (cur.count(95)?, cur.count(96)?);
                         let mut knots = Vec::with_capacity(nk.min(1 << 16));
                         for _ in 0..nk {
@@ -835,7 +851,7 @@ fn hatch(g: &G) -> Option<Vec<Vec<P3>>> {
                             let p = cur.xy(10)?;
                             ctrl.push([p[0], p[1], z]);
                             if rational {
-                                weights.push(cur.next(42).unwrap_or(1.0));
+                                weights.push(cur.opt(42).unwrap_or(1.0));
                             }
                         }
                         let samples = (nc * 8).clamp(16, 4000);
@@ -1012,6 +1028,13 @@ struct Out {
     count: usize,
     capped: bool,
     cut: usize,
+    /// Entity placements visited so far ([`MAX_STEPS`]), and whether the budget ran out.
+    steps: usize,
+    overworked: bool,
+    /// Whether arrays were cut short ([`MAX_ARRAY`], [`MAX_PATH_COPIES`]).
+    trimmed: bool,
+    /// The copies the arrays above make together on the current nesting path.
+    copies: usize,
 }
 
 fn fields() -> Vec<Field> {
@@ -1041,6 +1064,13 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: From, depth: usize, stack: &mu
     for e in ents {
         if out.count >= MAX_FEATURES {
             out.capped = true;
+            return;
+        }
+        // Every placement costs a step, drawn or not: nested arrays of empty or filtered blocks
+        // can't make the walk run on.
+        out.steps += 1;
+        if out.steps > MAX_STEPS {
+            out.overworked = true;
             return;
         }
         // An entity on layer 0 in a block takes the INSERT's layer; BYBLOCK its colour and linetype.
@@ -1087,8 +1117,16 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: From, depth: usize, stack: &mu
                 out.cut += 1;
                 continue;
             };
-            let cols = ins.cols.min(MAX_ARRAY);
-            let rows = ins.rows.min(MAX_ARRAY / cols.max(1)).max(1);
+            // The copies this array may make: within its own cap and what the arrays above it
+            // leave of the path's.
+            let allowed = (MAX_PATH_COPIES / out.copies.max(1)).clamp(1, MAX_ARRAY);
+            let cols = ins.cols.min(allowed);
+            let rows = ins.rows.min(allowed / cols.max(1)).max(1);
+            if cols * rows < ins.cols.saturating_mul(ins.rows) {
+                out.trimmed = true;
+            }
+            let outer = out.copies;
+            out.copies = outer.max(1).saturating_mul(cols * rows);
             stack.push(ins.block.clone());
             for r in 0..rows {
                 for c in 0..cols {
@@ -1105,13 +1143,15 @@ fn emit(d: &Drawing, ents: &[Ent], xf: &Xf, from: From, depth: usize, stack: &mu
                         block: Some(ins.block.as_str()),
                     };
                     emit(d, inner, &xf.then(&local), inner_from, depth + 1, stack, opts, out);
-                    if out.capped {
+                    if out.capped || out.overworked {
                         stack.pop();
+                        out.copies = outer;
                         return;
                     }
                 }
             }
             stack.pop();
+            out.copies = outer;
             continue;
         }
         if let Some(want) = opts.layer
@@ -1194,6 +1234,10 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
         count: 0,
         capped: false,
         cut: 0,
+        steps: 0,
+        overworked: false,
+        trimmed: false,
+        copies: 1,
     };
     let none = From { layer: None, color: None, linetype: None, block: None };
     emit(&d, &d.entities, &Xf::ID, none, 0, &mut Vec::new(), opts, &mut out);
@@ -1206,6 +1250,16 @@ pub fn read(file_name: &str, bytes: &[u8], opts: &Options) -> Result<Vec<(Datase
     }
     if out.capped {
         report.messages.push(format!("the drawing makes more than {MAX_FEATURES} features: the rest are left out"));
+    }
+    if out.trimmed {
+        report
+            .messages
+            .push(format!("block arrays were cut short: at most {MAX_ARRAY} copies each, {MAX_PATH_COPIES} along a nesting path"));
+    }
+    if out.overworked {
+        report
+            .messages
+            .push(format!("the drawing's blocks place more than {MAX_STEPS} entities (arrays of nested blocks): the rest are left out"));
     }
     if !d.unread.is_empty() {
         let kinds: Vec<String> = d.unread.iter().map(|(k, n)| format!("{n} {k}")).collect();
@@ -1661,6 +1715,102 @@ mod tests {
                 }
                 Err(e) => println!("{name}\tERR\t{e}"),
             }
+        }
+    }
+
+    /// Nested arrays multiply: a path's copies and the whole walk are bounded even when nothing is
+    /// drawn (an empty block, or a layer filtered out).
+    #[test]
+    fn nested_arrays_are_bounded() {
+        // Eight levels of 10,000-copy arrays around an empty block: 10,000^8 placements unbounded.
+        let mut p: Vec<(i32, String)> = vec![(0, "SECTION".into()), (2, "BLOCKS".into())];
+        p.extend([(0, "BLOCK".into()), (2, "L0".into()), (0, "ENDBLK".into())]);
+        for level in 1..=8 {
+            p.extend([
+                (0, "BLOCK".into()),
+                (2, format!("L{level}")),
+                (0, "INSERT".into()),
+                (2, format!("L{}", level - 1)),
+                (70, "10000".into()),
+                (71, "1".into()),
+                (0, "ENDBLK".into()),
+            ]);
+        }
+        // A block of one point on layer "x".
+        p.extend([
+            (0, "BLOCK".into()),
+            (2, "P".into()),
+            (0, "POINT".into()),
+            (8, "x".into()),
+            (10, "0".into()),
+            (20, "0".into()),
+            (0, "ENDBLK".into()),
+        ]);
+        p.extend([(0, "ENDSEC".into()), (0, "SECTION".into()), (2, "ENTITIES".into())]);
+        p.extend([(0, "INSERT".into()), (2, "L8".into()), (70, "10000".into())]);
+        // Many large arrays of the point block, read for another layer: nothing drawn, work done.
+        for _ in 0..300 {
+            p.extend([(0, "INSERT".into()), (2, "P".into()), (70, "10000".into()), (71, "10".into())]);
+        }
+        p.extend([(0, "ENDSEC".into()), (0, "EOF".into())]);
+        let text: String = p.iter().map(|(c, v)| format!("{c:>3}\n{v}\n")).collect();
+        let t = std::time::Instant::now();
+        let r = read("arrays.dxf", text.as_bytes(), &Options { crs: None, layer: Some("y") });
+        assert!(t.elapsed() < std::time::Duration::from_secs(60), "{:?}", t.elapsed());
+        assert!(r.is_err(), "nothing on layer y");
+        // Drawn: a cap stops the walk and says so, and the arrays cut short are said.
+        let l = read("arrays.dxf", text.as_bytes(), &Options::default()).unwrap();
+        let said = &l[0].1.messages;
+        assert!(said.iter().any(|m| m.contains("more than")), "{said:?}");
+        assert!(said.iter().any(|m| m.contains("cut short")), "{said:?}");
+        assert!(l[0].0.features.len() <= MAX_FEATURES);
+    }
+
+    /// Optional groups a writer leaves out (an arc's direction, a path's closed flag) don't take
+    /// the rest of the hatch with them.
+    #[test]
+    fn hatch_without_optional_groups() {
+        let h = dxf(&[
+            (0, "SECTION"),
+            (2, "ENTITIES"),
+            (0, "HATCH"),
+            (10, "0"),
+            (20, "0"),
+            (30, "0"),
+            (91, "2"),
+            // Edges, the arc without its counter-clockwise flag (73).
+            (92, "1"),
+            (93, "2"),
+            (72, "1"),
+            (10, "-1"),
+            (20, "0"),
+            (11, "1"),
+            (21, "0"),
+            (72, "2"),
+            (10, "0"),
+            (20, "0"),
+            (40, "1"),
+            (50, "0"),
+            (51, "180"),
+            (97, "0"),
+            // A polyline path without its closed flag (73).
+            (92, "2"),
+            (72, "0"),
+            (93, "3"),
+            (10, "5"),
+            (20, "5"),
+            (10, "6"),
+            (20, "5"),
+            (10, "6"),
+            (20, "6"),
+            (97, "0"),
+            (0, "ENDSEC"),
+            (0, "EOF"),
+        ]);
+        let l = read("h.dxf", &h, &Options::default()).unwrap();
+        match &l[0].0.features[0].geometry {
+            Some(Geometry::Polygon(p)) => assert_eq!(p.len(), 2, "both paths read: {p:?}"),
+            g => panic!("{g:?}"),
         }
     }
 
