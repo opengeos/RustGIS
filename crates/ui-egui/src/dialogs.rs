@@ -38,6 +38,7 @@ impl Dialogs {
             "camera" => "camera",
             "addTiles" => "addTiles",
             "addCsv" => "addCsv",
+            "addUrl" => "addUrl",
             "exportLayer" => "exportLayer",
             other => return Err(format!("unknown dialog '{other}'")),
         };
@@ -100,6 +101,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "camera" => "Camera",
         "addTiles" => "Add Tile Layer",
         "addCsv" => "Add Delimited Text",
+        "addUrl" => "Add Data From URL",
         "exportLayer" => "Export Features",
         _ => "Rename Layer",
     };
@@ -109,7 +111,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     egui::Window::new(tl!(title)).id(egui::Id::new("dialog")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
         ui.set_width(match which {
             "coordinateSystem" => 660.0,
-            "addTiles" => 560.0,
+            "addTiles" | "addUrl" => 560.0,
             _ => 440.0,
         });
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
@@ -138,6 +140,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             "coordinateSystem" => close = coordinate_system(app, ui, &t),
             "addTiles" => close = add_tiles(app, ui),
             "addCsv" => close = add_csv(app, ui),
+            "addUrl" => close = add_url(app, ui),
             "exportLayer" => close = export_layer(app, ui),
             "camera" => {
                 egui::Grid::new("cam").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
@@ -325,6 +328,33 @@ fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             p["delimiter"] = json!(app.dialogs.mode);
         }
         app.run("ui.addDelimited", p).map(|_| ())
+    })
+}
+
+/// Add Data From URL: a file on the web, downloaded and added (a PMTiles archive is read in place).
+fn add_url(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
+    let hint = if cfg!(target_arch = "wasm32") {
+        tl!(
+            "GeoJSON, CSV, GeoParquet, FlatGeobuf, GeoPackage, zipped Shapefiles, KML, GPX or GeoTIFF, up to 256 MB; the server must allow requests from web pages (CORS)."
+        )
+    } else {
+        tl!("GeoJSON, CSV, GeoParquet, FlatGeobuf, GeoPackage, zipped Shapefiles, KML, GPX or GeoTIFF, up to 512 MB.")
+    };
+    ui.label(egui::RichText::new(hint).weak());
+    egui::Grid::new("url").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+        ui.label(tl!("Address"));
+        ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).hint_text("https://…/data.geojson").desired_width(400.0));
+        ui.end_row();
+        ui.label(tl!("Name"));
+        ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text(tl!("from the address")).desired_width(400.0));
+        ui.end_row();
+    });
+    buttons(app, ui, "Add", |app| {
+        let url = app.dialogs.text.trim().to_string();
+        if url.is_empty() {
+            return Err(tl!("Give the file's web address").to_string());
+        }
+        app.run("ui.addUrl", json!({"url": url, "name": app.dialogs.a.trim()})).map(|_| ())
     })
 }
 

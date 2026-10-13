@@ -251,11 +251,14 @@ pub struct Session {
     history_projection: String,
     /// Finished asynchronous tool runs waiting for `gp.finish` (the browser's GeoLibre tools).
     pub(crate) pending: Vec<PendingRun>,
-    #[cfg_attr(not(feature = "geolibre"), allow(dead_code))]
     pub(crate) next_pending: u64,
     /// Asynchronous runs started and not yet complete: (id, job, resolved params, start time).
     #[cfg(feature = "geolibre")]
     pub(crate) started: Vec<(u64, rustgis_geolibre::Job, serde_json::Value, u64)>,
+    /// Data downloads of this project under way (Add Data › From URL), by id.
+    downloading: Vec<u64>,
+    /// Downloads that landed, waiting for `layer.addDownload`.
+    pub(crate) downloaded: Vec<(u64, Vec<u8>)>,
 }
 
 /// A finished tool run, held until `gp.finish` applies it.
@@ -346,7 +349,35 @@ impl Session {
             next_pending: 0,
             #[cfg(feature = "geolibre")]
             started: Vec::new(),
+            downloading: Vec::new(),
+            downloaded: Vec::new(),
         }
+    }
+
+    /// Starts a data download for this project (the front end fetches it): its id, for
+    /// [`Session::download_landed`].
+    pub fn download_started(&mut self) -> u64 {
+        self.next_pending = self.next_pending.wrapping_add(1);
+        // A few at a time: past that many, the oldest are forgotten.
+        if self.downloading.len() >= 64 {
+            self.downloading.remove(0);
+        }
+        self.downloading.push(self.next_pending);
+        self.next_pending
+    }
+
+    /// Hands over a download's bytes, for `layer.addDownload {"id"}`; `false` when it was dropped
+    /// (another project was opened meanwhile).
+    pub fn download_landed(&mut self, id: u64, bytes: Vec<u8>) -> bool {
+        let Some(i) = self.downloading.iter().position(|d| *d == id) else { return false };
+        self.downloading.remove(i);
+        self.downloaded.push((id, bytes));
+        true
+    }
+
+    /// Forgets a download that failed.
+    pub fn download_failed(&mut self, id: u64) {
+        self.downloading.retain(|d| *d != id);
     }
 
     pub fn map(&self) -> &Map {
@@ -482,6 +513,8 @@ impl Session {
         self.pending.clear();
         #[cfg(feature = "geolibre")]
         self.started.clear();
+        self.downloading.clear();
+        self.downloaded.clear();
     }
 
     pub(crate) fn undo(&mut self) -> bool {

@@ -59,6 +59,34 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
     Ok(out)
 }
 
+/// The extension of a file from its first bytes, for a download whose address doesn't say:
+/// GeoParquet, FlatGeobuf, GeoTIFF, a zip, a GeoPackage, KML, GPX, GeoJSON or delimited text
+/// (`None` for anything else, such as a web page).
+pub fn sniff_extension(bytes: &[u8]) -> Option<&'static str> {
+    let head = bytes.get(..bytes.len().min(4096)).unwrap_or(bytes);
+    let text = String::from_utf8_lossy(head);
+    let start = text.trim_start_matches(['\u{feff}', ' ', '\t', '\r', '\n']);
+    let first_line = start.lines().next().unwrap_or("");
+    Some(match bytes {
+        [b'P', b'A', b'R', b'1', ..] => "parquet",
+        [b'f', b'g', b'b', ..] => "fgb",
+        [b'I', b'I', 42 | 43, 0, ..] | [b'M', b'M', 0, 42 | 43, ..] => "tif",
+        [b'P', b'K', 3, 4, ..] => "zip",
+        _ if bytes.starts_with(b"SQLite format 3\0") => "gpkg",
+        _ if start.starts_with('{') || start.starts_with('[') => "geojson",
+        _ if start.starts_with('<') && text.contains("<kml") => "kml",
+        _ if start.starts_with('<') && text.contains("<gpx") => "gpx",
+        // Text whose first line is split by a separator, and no control characters.
+        _ if !start.starts_with('<')
+            && first_line.contains([',', ';', '\t', '|'])
+            && !head.iter().any(|&b| b < 9 || (b > 13 && b < 32)) =>
+        {
+            "csv"
+        }
+        _ => return None,
+    })
+}
+
 /// Reads vector data held in memory (a browser upload or a drop), choosing the reader by the
 /// file name's extension. A Shapefile needs its sidecar files, so it comes zipped (`.zip`, whose
 /// first layer is read).

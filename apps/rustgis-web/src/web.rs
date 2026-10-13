@@ -152,7 +152,11 @@ fn storage() -> Option<web_sys::Storage> {
 async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;
-    let (url, range) = rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::split_range(url);
+    use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache;
+    // A data download may be up to MAX_DOWNLOAD; anything else is at most 64 MB.
+    let (url, download) = cache::split_download(url);
+    let max = if download { cache::MAX_DOWNLOAD as u64 } else { 64 << 20 };
+    let (url, range) = cache::split_range(url);
     let promise = match range {
         Some((a, b)) => {
             let init = web_sys::RequestInit::new();
@@ -173,24 +177,41 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     if range.is_some_and(|(a, _)| whole && a > 0) {
         return Err(format!("{url}: the server doesn't answer byte-range requests"));
     }
-    // Fonts are at most about 10 MB and plugins 64 MB; refuse anything over 64 MB, by header when there is one and
-    // by the downloaded size otherwise.
+    // Fonts are at most about 10 MB and plugins 64 MB; refuse anything larger than allowed, by
+    // header when there is one and by the downloaded size otherwise.
     if let Ok(Some(len)) = resp.headers().get("content-length").map(|v| v.and_then(|s| s.parse::<u64>().ok()))
-        && len > 64 << 20
+        && len > max
     {
         return Err(format!("{len} bytes is too large"));
     }
-    let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(err)?).await.map_err(err)?;
-    let bytes = js_sys::Uint8Array::new(&buf);
-    if bytes.length() > 64 << 20 {
-        return Err(format!("{} bytes is too large", bytes.length()));
+    // Read a chunk at a time, so a body larger than allowed (whatever its header said) is cut
+    // off as soon as it is, never held whole.
+    let mut bytes: Vec<u8> = Vec::new();
+    if let Some(body) = resp.body() {
+        let reader: web_sys::ReadableStreamDefaultReader =
+            body.get_reader().dyn_into().map_err(|_| "the response has no readable body".to_string())?;
+        loop {
+            let chunk = wasm_bindgen_futures::JsFuture::from(reader.read()).await.map_err(err)?;
+            if js_sys::Reflect::get(&chunk, &"done".into()).ok().and_then(|d| d.as_bool()).unwrap_or(true) {
+                break;
+            }
+            let value = js_sys::Uint8Array::new(&js_sys::Reflect::get(&chunk, &"value".into()).map_err(err)?);
+            let n = value.length() as usize;
+            if (bytes.len() + n) as u64 > max {
+                let _ = reader.cancel();
+                return Err(format!("larger than {} MB", max >> 20));
+            }
+            let at = bytes.len();
+            bytes.resize(at + n, 0);
+            value.copy_to(bytes.get_mut(at..).unwrap_or_default());
+        }
     }
     if let Some((a, b)) = range.filter(|_| whole)
-        && u64::from(bytes.length()) > b - a + 1
+        && bytes.len() as u64 > b - a + 1
     {
         return Err(format!("{url}: the server doesn't answer byte-range requests"));
     }
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 /// Makes an HTTP request (the AI assistant's calls to its model), returning the response of any

@@ -233,6 +233,50 @@ pub fn split_range(url: &str) -> (&str, Option<(u64, u64)>) {
     }
 }
 
+/// Starts an address that [`download`] made: the fetchers take up to [`MAX_DOWNLOAD`] bytes for
+/// it, and [`MAX_BYTES`] (a tile) for any other. No tile, style or archive address can start with
+/// it: those pass `address::check`, which takes only `http(s)://` ones.
+pub const DOWNLOAD: &str = "rustgis-download:";
+
+/// The most bytes a data download may have.
+pub const MAX_DOWNLOAD: usize = if cfg!(target_arch = "wasm32") { 256 << 20 } else { 512 << 20 };
+
+/// Splits an address into the address to fetch and whether it is a download ([`DOWNLOAD`]).
+pub fn split_download(url: &str) -> (&str, bool) {
+    match url.strip_prefix(DOWNLOAD) {
+        Some(u) => (u, true),
+        None => (url, false),
+    }
+}
+
+/// Downloads a file the user named (data added by its web address): up to [`MAX_DOWNLOAD`]
+/// bytes, uncached, off the frame (a thread natively, the browser's fetch on the web), counted as
+/// a fetch under way.
+pub fn download(url: &str, done: Done) {
+    if let Err(e) = crate::address::check(url, None) {
+        done(Err(e));
+        return;
+    }
+    let marked = format!("{DOWNLOAD}{url}");
+    IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+    let done: Done = Box::new(move |r| {
+        done(r);
+        finished();
+    });
+    let f = fetcher().lock().unwrap_or_else(|e| e.into_inner()).clone();
+    match f {
+        Some(f) => f(marked, done),
+        None => native::download(marked, done),
+    }
+}
+
+/// Downloads a file the user named, waiting for it (the command line; never on the frame).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_blocking(url: &str) -> Result<Vec<u8>, String> {
+    crate::address::check(url, None)?;
+    native::get(&native::download_agent(), &format!("{DOWNLOAD}{url}"))
+}
+
 /// Fetches an address's bytes, uncached (through the browser's fetcher, or the worker threads).
 pub(crate) fn fetch_bytes(url: String, done: Done) {
     let f = fetcher().lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -442,6 +486,21 @@ mod native {
             .into()
     }
 
+    /// An agent for downloads, which may take minutes.
+    pub(super) fn download_agent() -> ureq::Agent {
+        ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(900)))
+            .user_agent(concat!("RustGIS/", env!("CARGO_PKG_VERSION"), " (+https://rustgis.app)"))
+            .max_redirects(0)
+            .build()
+            .into()
+    }
+
+    /// Downloads on a thread of its own, so a large file doesn't hold up the tiles.
+    pub(super) fn download(url: String, done: Done) {
+        std::thread::spawn(move || done(get(&download_agent(), &url)));
+    }
+
     fn work() {
         let agent = agent();
         let q = queue();
@@ -473,6 +532,8 @@ mod native {
             let (a, b) = range.ok_or("a local read without a range")?;
             return crate::pmtiles::read_file(path, a, b - a + 1);
         }
+        let (url, whole) = super::split_download(url);
+        let max = if whole { super::MAX_DOWNLOAD } else { MAX_BYTES };
         let (url, range) = super::split_range(url);
         let mut at = url.to_string();
         let mut redirects = 0;
@@ -512,9 +573,12 @@ mod native {
             return Err(format!("{url}: the server doesn't answer byte-range requests"));
         }
         let mut buf = Vec::new();
-        resp.body_mut().with_config().limit(MAX_BYTES as u64 + 1).reader().read_to_end(&mut buf).map_err(|e| e.to_string())?;
-        if buf.len() > MAX_BYTES {
-            return Err(format!("larger than {} MB", MAX_BYTES >> 20));
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {}", resp.status().as_u16()));
+        }
+        resp.body_mut().with_config().limit(max as u64 + 1).reader().read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        if buf.len() > max {
+            return Err(format!("larger than {} MB", max >> 20));
         }
         if let Some((a, b)) = range.filter(|_| whole) {
             if buf.len() as u64 > b - a + 1 {
@@ -532,6 +596,10 @@ mod native {
 
     pub(super) fn fetch(url: String, done: Done) {
         done(Err(format!("{url}: this build has no way to fetch tiles")));
+    }
+
+    pub(super) fn download(url: String, done: Done) {
+        fetch(url, done);
     }
 
     pub(super) fn fetch_local(url: String, done: Done) {

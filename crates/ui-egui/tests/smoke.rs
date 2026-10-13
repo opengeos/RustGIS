@@ -429,3 +429,40 @@ fn delimited_text_options_go_with_the_picked_file() {
     let e = app.session.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().extent();
     assert_eq!((e.min_x, e.min_y), (1.0, 2.0));
 }
+
+/// Add Data From URL downloads off the frame and adds the file when it lands; a failed download
+/// is said.
+#[test]
+fn data_from_a_web_address_lands_later() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let body = br#"{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [1, 2]}}"#;
+        for stream in listener.incoming().take(1) {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = [0u8; 2048];
+            let _ = s.read(&mut buf);
+            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            let _ = s.write_all(body);
+        }
+    });
+    let mut h = harness();
+    h.step();
+    let before = h.state().session.map().layers.len();
+    h.state_mut().run("ui.addUrl", json!(null)).unwrap();
+    h.step();
+    h.state_mut().run("ui.addUrl", json!({"url": format!("http://{addr}/pin"), "name": "Pin"})).unwrap();
+    h.state_mut().run("ui.addUrl", json!({"url": "http://169.254.169.254/x.geojson"})).unwrap();
+    for _ in 0..100 {
+        h.step();
+        if h.state().session.map().layer_by_name("Pin").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(h.state().session.map().layers.len(), before + 1);
+    assert!(h.state().session.map().layer_by_name("Pin").is_some());
+    assert!(h.state().session.notices.iter().any(|n| n.error && n.text.contains("never fetched")));
+    assert!(h.state().ui.downloads.is_empty());
+}

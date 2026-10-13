@@ -2699,6 +2699,70 @@ fn delimited_text_with_a_coordinate_system() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Serves `body` to each of `n` requests on a local port; returns the base address.
+pub(crate) fn serve(body: &'static [u8], n: usize) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(n) {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = [0u8; 4096];
+            let read = s.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..read]);
+            let status = if req.contains("/missing") { "404 Not Found" } else { "200 OK" };
+            let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            let _ = s.write_all(body);
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// Data added by its web address: the format from the address or, without one, the contents; a
+/// page that isn't data, a missing file and a forbidden address are refused.
+#[test]
+fn data_from_a_web_address() {
+    const GEOJSON: &[u8] = br#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"n": 1}, "geometry": {"type": "Point", "coordinates": [10, 20]}}]}"#;
+    let base = serve(GEOJSON, 3);
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/places.geojson")})).unwrap();
+    assert_eq!(r["features"], 1);
+    assert!(s.map().layer_by_name("places").is_some());
+    // An API address without an extension: the contents say GeoJSON.
+    s.run("layer.addUrl", &json!({"url": format!("{base}/api/items?f=json"), "name": "Api"})).unwrap();
+    assert!(s.map().layer_by_name("Api").is_some());
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/missing.geojson")})).unwrap_err();
+    assert!(e.contains("404"), "{e}");
+    let page = serve(b"<!doctype html><html>not data</html>", 1);
+    let e = s.run("layer.addUrl", &json!({"url": format!("{page}/index")})).unwrap_err();
+    assert!(e.contains("not a data format"), "{e}");
+    for bad in ["file:///etc/passwd", "/tmp/x.geojson", "http://169.254.169.254/latest.geojson", ""] {
+        assert!(s.run("layer.addUrl", &json!({"url": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(crate::cmd::layer::url_file_name("https://x.org/a/b/roads.parquet?sig=1", b"PAR1").unwrap(), "roads.parquet");
+    assert_eq!(crate::cmd::layer::url_file_name("https://x.org/a/b/", b"PAR1").unwrap(), "b.parquet");
+    assert_eq!(crate::cmd::layer::url_file_name("https://x.org", b"lon,lat\n1,2").unwrap(), "data.csv");
+    assert_eq!(crate::cmd::layer::url_file_name("https://x.org/q.json", b"[]").unwrap(), "q.geojson");
+}
+
+/// The app's downloads land in the project they were started for, as bytes (no base64); one
+/// whose project was closed meanwhile is dropped.
+#[test]
+fn downloads_land_in_their_own_project() {
+    let mut s = Session::new(Project::default());
+    let id = s.download_started();
+    assert!(s.download_landed(id, br#"{"type": "Point", "coordinates": [1, 2]}"#.to_vec()));
+    let r = s.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/api?f=json", "name": "Api"})).unwrap();
+    assert_eq!(r["features"], 1);
+    assert!(s.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/a.geojson"})).is_err(), "used once");
+    let late = s.download_started();
+    s.run("project.new", &json!({})).unwrap();
+    assert!(!s.download_landed(late, b"{}".to_vec()), "another project is open now");
+    let failed = s.download_started();
+    s.download_failed(failed);
+    assert!(!s.download_landed(failed, b"{}".to_vec()));
+}
+
 #[test]
 fn pmtiles_from_network_shares_are_refused() {
     let mut s = Session::new(Project::default());

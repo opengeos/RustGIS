@@ -20,6 +20,11 @@ pub fn commands() -> Vec<C> {
             r#"{"sql": "one DuckDB SELECT; DuckDB Spatial's ST_ functions, read_parquet('…'), web addresses", "name"?: string, "database"?: "a .duckdb file whose tables the query names", "crs"?: "EPSG:… of a geometry that doesn't say", "stream"?: bool}"#,
         ),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
+        C::new("layer.addUrl", "Add Data From URL", "Home › Add", add_url).params(
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX"}"#,
+        ),
+        C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
+            .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text}"#),
         C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).params(r#"{"fileName": "name.geojson|.csv|.tsv", "text": string, "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text)}"#),
         C::new("layer.addSample", "Add Sample Data", "Home › Add › Add Data", add_sample).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
         C::new("layer.remove", "Remove", "Layers", remove).key("Delete").when(need_layer).params(r#"{"layer"?: name|id}"#),
@@ -936,6 +941,75 @@ fn read_delimited(
     let text = std::str::from_utf8(&bytes).map_err(|_| format!("{name} is not UTF-8 text"))?;
     let stem = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or("layer");
     rustgis_data::io::read_csv_with(text, stem, &opts).map(Some).map_err(|e| format!("{name}: {e}"))
+}
+
+/// The file name for data downloaded from `url`: its last path segment when that has an extension
+/// RustGIS reads, else `<segment or "data">.<ext>` with the extension its contents suggest
+/// (an error when they suggest none).
+pub fn url_file_name(url: &str, bytes: &[u8]) -> Result<String, String> {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let path = path.split_once("://").map_or(path, |(_, rest)| rest.split_once('/').map_or("", |(_, p)| p));
+    let last: String = path
+        .rsplit('/')
+        .find(|p| !p.is_empty())
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, '\\' | ':'))
+        .take(120)
+        .collect();
+    let ext = Path::new(&last).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    let known = rustgis_data::io::READ_EXTENSIONS.contains(&ext.as_str()) || rustgis_data::raster::is_raster_name(&last) || ext == "tsv";
+    if known && ext != "json" {
+        return Ok(last);
+    }
+    let stem = Path::new(&last).file_stem().and_then(|s| s.to_str()).filter(|s| !s.is_empty()).unwrap_or("data");
+    match rustgis_data::io::sniff_extension(bytes) {
+        Some(ext) => Ok(format!("{stem}.{ext}")),
+        None => {
+            Err("not a data format RustGIS reads (GeoJSON, CSV, GeoParquet, FlatGeobuf, GeoPackage, zipped Shapefiles, KML, GPX, GeoTIFF)"
+                .into())
+        }
+    }
+}
+
+/// Downloads data from a web address and adds it (the command line, MCP and the assistant; the
+/// app downloads off the frame and adds the bytes).
+fn add_url(s: &mut Session, p: &Value) -> CmdResult {
+    let url = ps(p, "url").map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+        return Err(format!("{url}: give an http:// or https:// address (Add Data opens files)"));
+    }
+    // A PMTiles archive is read a tile at a time, never downloaded whole.
+    if lower.split(['?', '#']).next().is_some_and(|p| p.ends_with(".pmtiles")) {
+        let mut q = json!({"url": url, "kind": "pmtiles"});
+        if let Some(n) = ps(p, "name") {
+            q["name"] = json!(n);
+        }
+        return super::tiles::add(s, &q);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Err(format!("{url}: in the web app, use Home › Add Data › From URL"))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Errors about the address itself name it already.
+        let named = |e: String| if e.starts_with(url) { e } else { format!("{url}: {e}") };
+        let bytes = crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?;
+        let name = url_file_name(url, &bytes).map_err(named)?;
+        super::raster::add_named_bytes(s, p, name, bytes)
+    }
+}
+
+/// Adds a download the app finished (its bytes handed to the session, not passed as text).
+fn add_download(s: &mut Session, p: &Value) -> CmdResult {
+    let id = f(p, "id").filter(|v| *v >= 0.0 && v.fract() == 0.0).map(|v| v as u64).ok_or("id is required")?;
+    let url = ps(p, "url").unwrap_or("data").to_string();
+    let i = s.downloaded.iter().position(|(d, _)| *d == id).ok_or("no such download (it was dropped when another project opened)")?;
+    let (_, bytes) = s.downloaded.remove(i);
+    let name = url_file_name(&url, &bytes).map_err(|e| format!("{url}: {e}"))?;
+    super::raster::add_named_bytes(s, p, name, bytes)
 }
 
 pub(crate) fn add_data_text(s: &mut Session, p: &Value) -> CmdResult {

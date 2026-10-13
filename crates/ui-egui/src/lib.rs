@@ -213,6 +213,9 @@ pub struct UiState {
     pub pending_open: Option<&'static str>,
     /// Add Delimited Text's options, for the file being picked (web).
     pub pending_csv: Option<Value>,
+    /// Data downloading from web addresses (Add Data › From URL): the address, the parameters to
+    /// add it with, and where the download lands.
+    pub downloads: Vec<(u64, String, Value, Slot<Result<Vec<u8>, String>>)>,
     /// A layout picture waiting for its image file (web).
     pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
@@ -255,6 +258,7 @@ impl Default for UiState {
             pending_layout_picture: false,
             pending_open: None,
             pending_csv: None,
+            downloads: Vec::new(),
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
             pane_sets: Vec::new(),
@@ -892,6 +896,32 @@ impl RustGisApp {
                     return self.run("layer.addData", q);
                 }
             }
+            // Data by its web address: the dialog, then (with an address) the download, off the
+            // frame; it's added when it lands. A PMTiles archive is a tile layer, never downloaded.
+            "ui.addUrl" => {
+                let Some(url) = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()) else {
+                    return self.run("ui.dialog", json!({"name": "addUrl"}));
+                };
+                if url.to_ascii_lowercase().split(['?', '#']).next().is_some_and(|u| u.ends_with(".pmtiles")) {
+                    return self.run("layer.addUrl", p.clone());
+                }
+                let url = url.to_string();
+                let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
+                let land = slot.clone();
+                rustgis_engine::render::rustgis_tiles::cache::download(
+                    &url,
+                    Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
+                );
+                let mut q = json!({});
+                for k in ["name", "layer"] {
+                    if let Some(v) = p.get(k).filter(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())) {
+                        q[k] = v.clone();
+                    }
+                }
+                self.session.notify(i18n::fmt("Downloading {url}…", &[("url", &url)]), false);
+                let id = self.session.download_started();
+                self.ui.downloads.push((id, url, q, slot));
+            }
             "ui.addData" => {
                 if let Some(open) = &self.services.open_async {
                     // A picker cancelled earlier mustn't claim this file.
@@ -1461,6 +1491,38 @@ impl RustGisApp {
         Ok(Value::Null)
     }
 
+    /// Adds the data downloads that have landed (Add Data › From URL). The bytes go to the session
+    /// as they are; a download of a project that has since been closed is dropped.
+    fn poll_downloads(&mut self) {
+        let mut landed = Vec::new();
+        self.ui.downloads.retain(|(id, url, p, slot)| match slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            Some(r) => {
+                landed.push((*id, url.clone(), p.clone(), r));
+                false
+            }
+            None => true,
+        });
+        for (id, url, mut p, r) in landed {
+            match r {
+                Ok(bytes) => {
+                    if !self.session.download_landed(id, bytes) {
+                        continue;
+                    }
+                    p["id"] = json!(id);
+                    p["url"] = json!(url);
+                    // A failure is said by `run`.
+                    if self.run("layer.addDownload", p).is_ok() {
+                        self.map.invalidate();
+                    }
+                }
+                Err(e) => {
+                    self.session.download_failed(id);
+                    self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true);
+                }
+            }
+        }
+    }
+
     /// Per-frame work that doesn't draw (theme, fonts, files that arrived).
     pub fn logic(&mut self, ctx: &egui::Context) {
         // Fonts installed last frame are active now.
@@ -1468,6 +1530,7 @@ impl RustGisApp {
         i18n::set_current(self.lang());
         rustgis_engine::plugins::set_language(self.lang().code());
         panes::poll_geolibre(self, ctx);
+        self.poll_downloads();
         pluginsui::poll(self, ctx);
         assistantpane::poll(self, ctx);
         self.ensure_script_font();

@@ -42,6 +42,22 @@ GDAL](data.md#formats-through-gdal).
 | OpenStreetMap | `.osm`, `.osm.pbf` | |
 | GeoJSON Lines, GMT | `.geojsonl`, `.geojsons`, `.gmt` | |
 
+## Files on the web
+
+**Home › Add Data › From URL…** (`layer.addUrl` with `"url"`) downloads a file by its `https://`
+address and adds it like a file from this computer: GeoJSON, CSV, GeoParquet, FlatGeobuf,
+GeoPackage, zipped Shapefiles, KML/KMZ, GPX or GeoTIFF/COG, up to 512 MB on the desktop and 256 MB
+in the web app (where the server must allow requests from web pages, CORS). The format comes from
+the address, or from the contents when the address has no extension (an API endpoint, say). The
+app downloads in the background and adds the layer when the file arrives (to the project it was
+started in: opening another meanwhile drops it). A `.pmtiles` address is added as a tile layer
+and read a tile at a time instead.
+
+`layer.addUrl` waits for the download, which suits the command line, MCP and the desktop app's
+assistant. In the web app, where nothing may wait, it adds `.pmtiles` addresses only; other files
+come through the From URL… dialog (`ui.addUrl`). GeoJSON, CSV, KML and GPX files are read up to
+256 MB; larger downloads (GeoParquet, FlatGeobuf, GeoPackage, GeoTIFF) up to the limits above.
+
 ## SQL queries and DuckDB databases
 
 With [DuckDB](https://duckdb.org) installed (the `duckdb` program on the `PATH`, DuckDB 1.5 or

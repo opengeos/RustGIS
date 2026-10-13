@@ -155,6 +155,11 @@ fn add_bytes(s: &mut Session, p: &Value) -> CmdResult {
         return Err(format!("{name} is too large to open"));
     }
     let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(|e| format!("data: {e}"))?;
+    add_named_bytes(s, p, name, bytes)
+}
+
+/// Adds a file's contents (an upload, a download) as its name's extension says.
+pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: Vec<u8>) -> CmdResult {
     if raster::is_raster_name(&name) {
         let r = raster::read_bytes(&name, &bytes).map_err(|e| format!("{name}: {e}"))?;
         let title = r.name.clone();

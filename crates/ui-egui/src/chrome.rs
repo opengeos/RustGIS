@@ -382,6 +382,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
         for (id, label, loc) in [
             ("ui.addData", "Add Data…", "Home › Add"),
             ("ui.addDelimited", "Add Delimited Text…", "Home › Add"),
+            ("ui.addUrl", "Add Data From URL…", "Home › Add"),
             ("ui.plugins", "Plugin Manager…", "Plugins"),
             ("ui.pane.geoprocessing", "Tools Pane", "View › Windows"),
             ("ui.pane.symbology", "Symbology Pane", "Style › Drawing"),
