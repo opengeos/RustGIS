@@ -334,12 +334,12 @@ fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     })
 }
 
-/// Add From Service: a WMS, WMTS, WFS, OGC API Features or ArcGIS REST service by its address.
-/// Connect fetches its capabilities in the background; its layers are then listed, each with an
-/// Add button (map layers become tile layers, features are downloaded).
 /// How many of a service's layers Add From Service lists.
 const SHOWN_LAYERS: usize = 500;
 
+/// Add From Service: a WMS, WMTS, WFS, OGC API Features or ArcGIS REST service by its address.
+/// Connect fetches its capabilities in the background; its layers are then listed, each with an
+/// Add button (map layers become tile layers, features are downloaded).
 fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     const KINDS: [(&str, &str); 6] = [
         ("auto", "Automatic"),

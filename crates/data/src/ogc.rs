@@ -155,6 +155,25 @@ fn with_query(url: &str, q: &str) -> String {
     }
 }
 
+/// A service's address for its requests when its document names none: the address without the
+/// OGC request parameters, keeping the others (MapServer's `map=`, a token).
+fn endpoint(url: &str) -> String {
+    let b = base(url);
+    let kept: Vec<&str> = url
+        .split('#')
+        .next()
+        .and_then(|u| u.split_once('?'))
+        .map(|(_, q)| q)
+        .unwrap_or("")
+        .split('&')
+        .filter(|kv| {
+            let k = kv.split_once('=').map(|(k, _)| k).unwrap_or(kv).to_ascii_lowercase();
+            !kv.is_empty() && !matches!(k.as_str(), "service" | "request" | "version" | "acceptversions" | "sections" | "f")
+        })
+        .collect();
+    if kept.is_empty() { b.to_string() } else { format!("{b}?{}", kept.join("&")) }
+}
+
 /// The part of an address before its query.
 fn base(url: &str) -> &str {
     url.split(['?', '#']).next().unwrap_or(url)
@@ -243,7 +262,7 @@ fn wms(url: &str, root: &Node) -> Service {
         .and_then(|g| child(&g, "OnlineResource"))
         .and_then(|o| href(&o))
         .filter(|h| is_web(h))
-        .unwrap_or_else(|| base(url).to_string());
+        .unwrap_or_else(|| endpoint(url));
     let formats: Vec<String> = root
         .descendants()
         .find(|n| n.is_element() && local(n) == "GetMap")
@@ -335,8 +354,9 @@ fn mercator_matrices(tms: &Node) -> Option<Vec<(String, u8)>> {
         let id = child_text(&m, "Identifier")?;
         let sd = child_text(&m, "ScaleDenominator")?.parse::<f64>().ok()?;
         let w = child_text(&m, "TileWidth").and_then(|t| t.parse::<u32>().ok()).unwrap_or(256);
-        // Zoom from the scale (tiles of 512 px are a zoom finer for the same scale).
-        let z = (Z0_SCALE / sd * f64::from(w) / 256.0).log2();
+        // Zoom from the scale: a pyramid of 512 px tiles has half the scale denominator of a
+        // 256 px one at the same zoom.
+        let z = (Z0_SCALE / sd * 256.0 / f64::from(w)).log2();
         let zr = z.round();
         if (z - zr).abs() > 0.02 || !(0.0..=30.0).contains(&zr) {
             return None;
@@ -365,7 +385,7 @@ fn wmts(url: &str, root: &Node) -> Service {
         .and_then(|g| g.descendants().find(|n| n.is_element() && local(n) == "Get"))
         .and_then(|g| href(&g))
         .filter(|h| is_web(h))
-        .unwrap_or_else(|| base(url).to_string());
+        .unwrap_or_else(|| endpoint(url));
     let mut skipped = 0;
     for layer in children(&contents, "Layer").take(MAX_LAYERS) {
         let Some(name) = child_text(&layer, "Identifier") else { continue };
@@ -463,7 +483,7 @@ fn wfs(url: &str, root: &Node) -> Service {
         .and_then(|g| g.descendants().find(|n| n.is_element() && local(n) == "Get"))
         .and_then(|g| href(&g).or_else(|| g.attribute("onlineResource").map(str::to_string)))
         .filter(|h| is_web(h))
-        .unwrap_or_else(|| base(url).to_string());
+        .unwrap_or_else(|| endpoint(url));
     // The GeoJSON output format the server names (GetFeature's, else the service-wide list);
     // `application/json` when it lists none.
     let formats: Vec<String> = {
@@ -634,6 +654,16 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         && service.layers.iter().any(|l| matches!(l.offer, Offer::Features { .. }))
     {
         service.notes.push(format!("a feature layer is read up to the server's {max} features per request"));
+    }
+    // A secured service's token goes with every request.
+    if let Some(token) = query_value(url, "token").filter(|t| !t.is_empty()) {
+        for l in &mut service.layers {
+            match &mut l.offer {
+                Offer::Tiles { template: u } | Offer::Features { url: u } | Offer::Style { url: u } => {
+                    *u = with_query(u, &format!("token={token}"))
+                }
+            }
+        }
     }
     Ok(service)
 }
@@ -1039,6 +1069,35 @@ mod tests {
         assert_eq!(template, "https://tiles.example.org/normal/gm/EPSG:3857:{z}/{y}/{x}.jpg");
         assert_eq!(s.layers[0].bbox, Some([5.0, 45.0, 11.0, 48.0]));
         assert!(s.notes.iter().any(|n| n.contains("1 layers")));
+    }
+
+    #[test]
+    fn wmts_512_pyramids_and_kept_queries() {
+        // A 512 px Web Mercator pyramid: half the scale denominator of a 256 px one at each zoom.
+        let mut matrices = String::new();
+        for z in 0..=3 {
+            let sd = Z0_SCALE / f64::from(1u32 << (z + 1));
+            matrices.push_str(&format!("<TileMatrix><ows:Identifier>{z}</ows:Identifier><ScaleDenominator>{sd}</ScaleDenominator><TopLeftCorner>-20037508.3427892 20037508.3427892</TopLeftCorner><TileWidth>512</TileWidth><TileHeight>512</TileHeight></TileMatrix>"));
+        }
+        let xml = format!(
+            r#"<Capabilities xmlns="http://www.opengis.net/wmts/1.0" xmlns:ows="http://www.opengis.net/ows/1.1" version="1.0.0">
+<Contents><Layer><ows:Title>Big</ows:Title><ows:Identifier>big</ows:Identifier><Style isDefault="true"><ows:Identifier>s</ows:Identifier></Style><Format>image/png</Format><TileMatrixSetLink><TileMatrixSet>m512</TileMatrixSet></TileMatrixSetLink>
+ <ResourceURL format="image/png" resourceType="tile" template="https://t.example.org/{{TileMatrix}}/{{TileRow}}/{{TileCol}}.png"/></Layer>
+<TileMatrixSet><ows:Identifier>m512</ows:Identifier><ows:SupportedCRS>EPSG:3857</ows:SupportedCRS>{matrices}</TileMatrixSet></Contents></Capabilities>"#
+        );
+        let s = parse("https://t.example.org/WMTSCapabilities.xml", xml.as_bytes()).unwrap();
+        assert_eq!(s.layers.len(), 1, "{:?}", s.notes);
+        // MapServer's map= (and a token) stay; the request's own parameters go.
+        assert_eq!(
+            endpoint("https://m.example.org/cgi-bin/mapserv?map=/maps/demo.map&SERVICE=WMS&REQUEST=GetCapabilities&token=t"),
+            "https://m.example.org/cgi-bin/mapserv?map=/maps/demo.map&token=t"
+        );
+        assert_eq!(endpoint("https://m.example.org/wms?service=WMS"), "https://m.example.org/wms");
+        // An ArcGIS service's token goes with its requests.
+        let fs = br#"{"layers": [{"id": 0, "name": "Parcels"}]}"#;
+        let s = parse("https://gis.example.org/arcgis/rest/services/P/FeatureServer?token=abc", fs).unwrap();
+        let Offer::Features { url } = &s.layers[0].offer else { panic!() };
+        assert!(url.ends_with("&token=abc"), "{url}");
     }
 
     #[test]

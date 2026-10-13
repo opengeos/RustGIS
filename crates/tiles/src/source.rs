@@ -176,11 +176,20 @@ pub fn resolve(spec: &Spec) -> Resolve {
             let u = template::join(&base, &u);
             // An ArcGIS vector tile service answers its TileJSON-like description as JSON only
             // when asked (`?f=json`); its styles point at the service itself.
-            let u = if u.split(['?', '#']).next().unwrap_or(&u).trim_end_matches('/').to_ascii_lowercase().ends_with("/vectortileserver")
-                && !u.contains("f=json")
-            {
+            let path = u.split(['?', '#']).next().unwrap_or(&u).trim_end_matches('/').to_string();
+            // The query's other parameters (a token) stay; `f` is the one asked for.
+            let others: Vec<&str> = u
+                .split('#')
+                .next()
+                .and_then(|x| x.split_once('?'))
+                .map(|(_, q)| q)
+                .unwrap_or("")
+                .split('&')
+                .filter(|kv| !kv.is_empty() && !kv.split_once('=').map(|(k, _)| k).unwrap_or(kv).eq_ignore_ascii_case("f"))
+                .collect();
+            let u = if path.to_ascii_lowercase().ends_with("/vectortileserver") {
                 // With the slash, so the tile paths it gives resolve inside the service.
-                format!("{}/?f=json", u.split(['?', '#']).next().unwrap_or(&u).trim_end_matches('/'))
+                if others.is_empty() { format!("{path}/?f=json") } else { format!("{path}/?f=json&{}", others.join("&")) }
             } else {
                 u
             };
