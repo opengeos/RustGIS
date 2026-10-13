@@ -3,7 +3,7 @@
 The `rustgis` package runs the RustGIS engine inside Python, headless. It opens data and
 projects, runs any command and geoprocessing tool, styles layers, renders maps and saves projects
 that the desktop app opens as they are. There is no app to install and no server to run: the
-engine is a native module built for Windows, macOS and Linux, for Python 3.9 and later.
+engine is a native module built for Windows, macOS and Linux, for Python 3.12 and later.
 
 ```sh
 pip install rustgis               # pip install "rustgis[geopandas]" for GeoDataFrames
@@ -22,7 +22,43 @@ s.to_png("map.png", width=1600, height=900)
 s.save("atlas.rgis")
 ```
 
-In Jupyter, a session on the last line of a cell shows its map.
+In Jupyter, a session on the last line of a cell shows its map as a picture. For the app itself,
+use a `Map`.
+
+## The app in a notebook
+
+`rustgis.Map` shows the RustGIS app (ribbon, panes, map) in the cell, kept in step with its
+session: what Python adds or styles appears in the app, and what you do in the app (an edit, a new
+layer, a pan) is back in the session for Python to read. It needs
+[anywidget](https://anywidget.dev), and works in JupyterLab, Notebook, VS Code and Colab.
+
+```sh
+pip install "rustgis[jupyter]"
+```
+
+```python
+m = rustgis.Map(sample=True, height="600px")
+m                                                   # the app, in the cell
+
+m.add_geojson("sites.geojson", name="Sites")        # appears in the app
+m.run("layer.symbology", layer="Sites", type="unique", field="name")
+m.set_center(10, 50, scale=5_000_000)
+m.add_tiles("https://tile.openstreetmap.org/{z}/{x}/{y}.png", name="OpenStreetMap")
+
+m.info()["center"]                                  # where the app's map is now
+m.save("sites.rgis")                                # with what was done in the app
+m.run_in_app("ui.language", code="de")              # a command only the app has
+```
+
+`Map` has the `Session` methods (`run`, `add_data`, `layers`, `to_png`, ...); `m.session` is the
+session itself. Files of up to 100 MB travel with the project, so the app shows them; a larger
+file is read from its path, which only Python can see, so it draws in `to_png` but not in the app.
+
+The app is the [web app](installation.md), loaded from https://web.rustgis.app, so the
+notebook needs to be online. `Map(url=...)` or the `RUSTGIS_WEB_URL` environment variable points
+it at another copy (a self-hosted one, or `trunk serve` in `apps/rustgis-web`). Settings you
+change in the widget last until the cell is run again: an embedded app keeps nothing in the
+browser.
 
 ## Commands
 

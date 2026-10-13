@@ -92,3 +92,15 @@ def test_geopandas_round_trip(sample):
     assert isinstance(gdf, gpd.GeoDataFrame) and gdf.crs.to_epsg() == 4326
     sample.add_geopandas(gdf.head(5), name="Five")
     assert sample.layer("Five").info["features"] == 5
+
+
+def test_a_session_is_usable_from_another_thread():
+    """Jupyter delivers widget messages on a thread of its own."""
+    import threading
+
+    s = rustgis.Session(sample=True)
+    seen = []
+    t = threading.Thread(target=lambda: seen.append(len(s.layers())))
+    t.start()
+    t.join()
+    assert seen == [len(s.layers())]

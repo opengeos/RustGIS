@@ -7,11 +7,12 @@ name = "rustgis"
 description = "Python bindings to RustGIS, a fast, free and open-source GIS in pure Rust"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 authors = [{ name = "Qiusheng Wu", email = "giswqs@gmail.com" }]
-keywords = ["gis", "geospatial", "maps", "geoprocessing", "rust"]
+keywords = ["gis", "geospatial", "maps", "geoprocessing", "rust", "jupyter", "anywidget"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Framework :: Jupyter",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
@@ -22,7 +23,8 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 geopandas = ["geopandas>=0.14"]
-test = ["pytest>=7"]
+jupyter = ["anywidget>=0.9"]
+test = ["pytest>=7", "anywidget>=0.9"]
 
 [project.urls]
 Homepage = "https://rustgis.app"
