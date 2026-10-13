@@ -1,0 +1,186 @@
+# Publishes the site docs-preview.yml built for a pull request to GitHub Pages: the `gh-pages`
+# branch of opengeos/rustgis-preview, a folder per pull request
+# (https://preview.rustgis.app/pr-<N>/, the app under app/). The branch's CNAME file, kept by every
+# publish, holds the domain. GitHub Pages takes files up to 100 MB; Cloudflare Pages, used before,
+# stopped at 25 MiB, which the app's WebAssembly reaches. A closed pull request's preview is
+# removed.
+#
+# Required repository secret:
+#   PREVIEW_DEPLOY_KEY - private half of an SSH deploy key with write access to
+#                        opengeos/rustgis-preview
+#
+# `workflow_run` runs this file as it is on main, with the repository's secrets, for every pull
+# request's build, forks included. It runs no pull request code and treats the build's artifacts as
+# hostile: the pull request number is checked against the GitHub API (the pull request's head
+# commit and repository must be the build's), and links in the site are dropped. A build that is
+# no longer the pull request's head (a newer push) publishes nothing. Dependabot runs get no
+# secrets, so they publish nothing either.
+name: docs-preview-publish
+
+on:
+  workflow_run:
+    workflows: [docs-preview]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: docs-preview-publish-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEY: ${{ secrets.PREVIEW_DEPLOY_KEY != '' }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: preview-pr
+          path: preview-pr
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      # An open pull request's build carries the site (deploy); a closed one's doesn't (remove).
+      # The pull request's state must agree, and its head must be the commit that was built.
+      - name: Check the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+          set -euo pipefail
+          pr=$(head -c 16 preview-pr/pr.txt | tr -d '[:space:]')
+          if ! [[ "$pr" =~ ^[0-9]{1,9}$ ]]; then
+            echo "::error::The build named no valid pull request number."
+            exit 1
+          fi
+          read -r state sha repo < <(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" \
+            --jq '[.state, .head.sha, (.head.repo.full_name // "")] | @tsv')
+          if [ "$sha" != "$RUN_SHA" ] || [ "$repo" != "$RUN_REPO" ]; then
+            echo "Pull request #${pr} is now at ${sha:0:7} (${repo}); the build was ${RUN_SHA:0:7} (${RUN_REPO}). Nothing to publish."
+            echo "mode=skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          has_site=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+            --jq '[.artifacts[] | select(.name == "preview-site")] | length')
+          if [ "$state" = open ] && [ "$has_site" -gt 0 ]; then
+            mode=deploy
+          elif [ "$state" = closed ] && [ "$has_site" -eq 0 ]; then
+            mode=remove
+          else
+            echo "Pull request #${pr} is ${state} but the build doesn't match. Nothing to publish."
+            mode=skip
+          fi
+          echo "Pull request #${pr} at ${RUN_SHA:0:7}: ${mode}"
+          {
+            echo "number=${pr}"
+            echo "mode=${mode}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v8
+        if: steps.pr.outputs.mode == 'deploy'
+        with:
+          name: preview-site
+          path: site
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Check the site's file sizes
+        if: steps.pr.outputs.mode == 'deploy'
+        run: |
+          set -euo pipefail
+          oversized=$(find site -type f -size +95M -print)
+          if [ -n "$oversized" ]; then
+            echo "::error::A file is near or over GitHub Pages' 100 MB per-file limit: $oversized"
+            exit 1
+          fi
+          echo "Site: $(du -sh site | cut -f1); largest file: $(find site -type f -printf '%s %p\n' | sort -n | tail -1)"
+          # The site is the pull request's output: links in it are dropped, never followed (a
+          # link could point at the deploy key this job writes).
+          find site -type l -print -delete
+
+      - name: Configure the preview repository deploy key
+        if: env.HAS_KEY == 'true' && steps.pr.outputs.mode != 'skip'
+        env:
+          PREVIEW_DEPLOY_KEY: ${{ secrets.PREVIEW_DEPLOY_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$PREVIEW_DEPLOY_KEY" > "$HOME/.ssh/rustgis-preview"
+          chmod 600 "$HOME/.ssh/rustgis-preview"
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Publish to GitHub Pages
+        id: deploy
+        if: env.HAS_KEY == 'true' && steps.pr.outputs.mode != 'skip'
+        env:
+          MODE: ${{ steps.pr.outputs.mode }}
+          PR: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/rustgis-preview -o IdentitiesOnly=yes
+        run: |
+          set -euo pipefail
+          dir="pr-${PR}"
+          # Every publish rewrites gh-pages as one parentless commit holding the open pull
+          # requests' previews, so the repository stays near the size of the live previews.
+          # Publishes for different pull requests can meet: a push that lost the race starts over,
+          # as does a clone that failed (the network). gh-pages must exist (it holds the CNAME).
+          for attempt in 1 2 3 4 5 6; do
+            [ "$attempt" -gt 1 ] && sleep $(((attempt - 1) * 15))
+            rm -rf pages
+            if ! git clone -q --depth 1 --branch gh-pages git@github.com:opengeos/rustgis-preview.git pages; then
+              continue
+            fi
+            base=$(git -C pages rev-parse HEAD)
+            rm -rf "pages/${dir}"
+            if [ "$MODE" = deploy ]; then
+              cp -r site "pages/${dir}"
+            fi
+            touch pages/.nojekyll
+            git -C pages config user.name "github-actions[bot]"
+            git -C pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            # An orphan branch keeps the index of the files checked out, so `add -A` stages the
+            # whole tree as it is now: one commit with no parent.
+            git -C pages checkout -q --orphan snapshot
+            git -C pages add -A
+            git -C pages commit -q --allow-empty -m "${MODE} ${dir} (${HEAD_SHA:0:7}) from ${GITHUB_REPOSITORY}"
+            if git -C pages push -q --force-with-lease="gh-pages:${base}" origin snapshot:gh-pages; then
+              echo "Published: ${MODE} ${dir}"
+              exit 0
+            fi
+          done
+          echo "::error::Could not publish the preview after 6 tries (gh-pages couldn't be cloned, or other publishes kept changing it)."
+          exit 1
+
+      - name: Comment preview URL on PR
+        if: steps.deploy.outcome == 'success' && steps.pr.outputs.mode == 'deploy'
+        uses: actions/github-script@v9
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        with:
+          script: |
+            const marker = '<!-- docs-preview -->';
+            const issue_number = Number(process.env.PR);
+            const url = `https://preview.rustgis.app/pr-${issue_number}/`;
+            const body = `${marker}\n### 📖 Docs preview\n\n| Item | Value |\n| --- | --- |\n| Preview | ${url} |\n| Web app | ${url}app/ |\n| Commit | \`${process.env.HEAD_SHA.slice(0, 7)}\` |\n\nGitHub Pages takes a minute or two to publish a new commit.`;
+            const { owner, repo } = context.repo;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
