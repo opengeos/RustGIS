@@ -411,6 +411,8 @@ fn hostile_params_never_panic() {
                 // Ask Earth Search when no API is given.
                 | "stac.collections"
                 | "stac.search"
+                // Asks geoBoundaries for its list.
+                | "boundaries.countries"
         ) {
             continue;
         }
@@ -3478,4 +3480,50 @@ fn cloud_optimised_geotiffs_are_read_in_place() {
     assert!(r.get("inPlace").is_none(), "{r}");
     let id = r["layer"].as_u64().unwrap() as u32;
     assert!(s.map().layer(id).is_some_and(|l| l.is_raster()), "{r}");
+}
+
+/// OpenStreetMap data for an area through an Overpass server (a local one): a layer per geometry
+/// kind; geoBoundaries' GeoJSON given as text; bad requests refused.
+#[test]
+fn osm_and_boundaries() {
+    const ANSWER: &[u8] = br#"{"elements": [
+        {"type": "node", "id": 1, "lat": 46.945, "lon": 7.445, "tags": {"amenity": "cafe", "name": "Kaffee"}},
+        {"type": "way", "id": 2, "tags": {"building": "yes"}, "geometry": [{"lat": 46.94, "lon": 7.44}, {"lat": 46.94, "lon": 7.441}, {"lat": 46.941, "lon": 7.441}, {"lat": 46.94, "lon": 7.44}]},
+        {"type": "way", "id": 3, "tags": {"highway": "residential", "name": "Gasse"}, "geometry": [{"lat": 46.94, "lon": 7.44}, {"lat": 46.945, "lon": 7.445}]}
+    ]}"#;
+    let base = serve(ANSWER, 1);
+    let mut s = Session::new(Project::default());
+    let r = s.run("osm.download", &json!({"bbox": [7.44, 46.94, 7.45, 46.95], "tags": "amenity, building, highway", "url": base})).unwrap();
+    assert_eq!(r["layers"].as_array().map(Vec::len), Some(3), "{r}");
+    let names: Vec<String> = s.map().layers.iter().map(|l| l.name.clone()).collect();
+    assert!(names.iter().any(|n| n == "OSM amenity, building, highway (polygons)"), "{names:?}");
+    // The app's answer, passed in.
+    let r = s
+        .run(
+            "osm.download",
+            &json!({"bbox": [7.44, 46.94, 7.45, 46.95], "preset": "pois", "name": "Cafés", "answer": std::str::from_utf8(ANSWER).unwrap()}),
+        )
+        .unwrap();
+    assert_eq!(r["features"]["points"], 1);
+    for bad in [
+        json!({"bbox": [7.0, 46.0, 8.0, 47.0], "preset": "roads"}),
+        json!({"bbox": [7.44, 46.94, 7.45, 46.95]}),
+        json!({"bbox": [7.44, 46.94, 7.45, 46.95], "preset": "x"}),
+        json!({"bbox": [7.44, 46.94, 7.45, 46.95], "preset": "roads", "answer": "<html>busy</html>"}),
+        json!({"bbox": "here", "preset": "roads"}),
+    ] {
+        assert!(s.run("osm.download", &bad).is_err(), "{bad}");
+    }
+    let gj = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"shapeName": "Bern"}, "geometry": {"type": "Polygon", "coordinates": [[[7, 46], [8, 46], [8, 47], [7, 46]]]}}]}"#;
+    let r = s.run("boundaries.add", &json!({"country": "che", "level": 1, "text": gj})).unwrap();
+    assert_eq!(r["features"], 1);
+    assert!(s.map().layer_by_name("CHE ADM1").is_some());
+    for bad in [
+        json!({}),
+        json!({"country": "CH", "text": gj}),
+        json!({"country": "CHE", "level": "ADM9", "text": gj}),
+        json!({"country": "CHE", "text": "{"}),
+    ] {
+        assert!(s.run("boundaries.add", &bad).is_err(), "{bad}");
+    }
 }

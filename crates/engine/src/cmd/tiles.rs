@@ -19,6 +19,9 @@ pub const NETWORK: &[&str] = &[
     "stac.addAsset",
     "map.findPlace",
     "layer.geocode",
+    "osm.download",
+    "boundaries.add",
+    "boundaries.countries",
 ];
 
 pub fn commands() -> Vec<C> {

@@ -21,6 +21,7 @@ mod layoutview;
 mod mapview;
 mod panes;
 mod pluginsui;
+mod portalsui;
 mod reportpane;
 mod ribbon;
 mod sqlpane;
@@ -246,6 +247,8 @@ pub struct UiState {
     pub service: Option<ServiceConn>,
     /// STAC Search: its choices, results and the request under way.
     pub stac: stacui::State,
+    /// OpenStreetMap and Boundaries: their choices and the request under way.
+    pub portals: portalsui::State,
     /// Find Place searches and Geocode Addresses runs under way.
     pub geocode: geocodeui::State,
     /// A layout picture waiting for its image file (web).
@@ -296,6 +299,7 @@ impl Default for UiState {
             link_zoomed: false,
             service: None,
             stac: Default::default(),
+            portals: Default::default(),
             geocode: Default::default(),
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
@@ -1724,6 +1728,7 @@ impl RustGisApp {
         sqlpane::poll(self, ctx);
         self.poll_service();
         stacui::poll(self, ctx);
+        portalsui::poll(self, ctx);
         geocodeui::poll(self, ctx);
         pluginsui::poll(self, ctx);
         assistantpane::poll(self, ctx);

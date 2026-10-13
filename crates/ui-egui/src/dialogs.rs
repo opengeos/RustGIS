@@ -46,6 +46,8 @@ impl Dialogs {
             "addService" => "addService",
             "addDatabase" => "addDatabase",
             "stac" => "stac",
+            "osm" => "osm",
+            "boundaries" => "boundaries",
             "exportLayer" => "exportLayer",
             other => return Err(format!("unknown dialog '{other}'")),
         };
@@ -120,6 +122,8 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "addService" => "Add From Service",
         "addDatabase" => "Add From Database",
         "stac" => "STAC Search",
+        "osm" => "OpenStreetMap",
+        "boundaries" => "Administrative Boundaries",
         "exportLayer" => "Export Features",
         _ => "Rename Layer",
     };
@@ -164,6 +168,8 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             "addService" => close = add_service(app, ui),
             "addDatabase" => close = add_database(app, ui),
             "stac" => crate::stacui::dialog(app, ui),
+            "osm" => crate::portalsui::osm(app, ui),
+            "boundaries" => crate::portalsui::boundaries(app, ui),
             "exportLayer" => close = export_layer(app, ui),
             "camera" => {
                 egui::Grid::new("cam").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {

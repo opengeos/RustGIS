@@ -184,6 +184,31 @@ rustgis-cli run --cmd 'layer.addData={"path":"stores.csv"}' --cmd 'layer.geocode
 The addresses are sent to the geocoder's server, so the [AI Assistant](assistant.md) asks before
 it geocodes, and plugins need the network permission.
 
+## OpenStreetMap and administrative boundaries
+
+**Home › Add Data › OpenStreetMap…** (`osm.download`) downloads OpenStreetMap data where the map
+is from an [Overpass](https://overpass-api.de) server: a preset (buildings, roads, railways, water,
+land use, parks, points of interest or administrative boundaries) or tag filters such as
+`amenity=cafe, shop`. The answer becomes up to three layers, points, lines and polygons: closed
+ways that are areas (buildings, land use and the like, as OSM reads their tags) are polygons, and
+multipolygon and boundary relations are assembled from their members. A layer's fields are its 25
+most common tags, the rest in `other_tags` as GDAL writes them. The area can be up to 0.25 square
+degrees (about 50 × 50 km), and an answer up to 50,000 elements: the public servers are shared, so
+a larger area is better read from an extract (`.osm.pbf`). `"url"` names another Overpass server
+when the public one is busy.
+
+**Home › Add Data › Boundaries…** (`boundaries.add`) adds a country's administrative boundaries from
+[geoBoundaries](https://www.geoboundaries.org) (CC BY 4.0): the country itself (`ADM0`), its states
+or provinces (`ADM1`) and finer divisions down to `ADM5` where they exist, simplified for the map.
+`boundaries.countries` lists the countries.
+
+```sh
+rustgis-cli run --cmd 'osm.download={"bbox":[7.44,46.944,7.456,46.952],"preset":"buildings"}' --cmd 'boundaries.add={"country":"KEN","level":"ADM1"}'
+```
+
+Both reach the network: the [AI Assistant](assistant.md) asks before it runs them, and plugins need
+the network permission. OpenStreetMap data is © OpenStreetMap contributors (ODbL).
+
 ## Large files
 
 GeoPackage, GeoParquet and FlatGeobuf files with more than 100,000 features are read in place
