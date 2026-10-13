@@ -162,11 +162,18 @@ fn int(v: Option<&Val>) -> Option<i64> {
 }
 
 /// A key joining a deduplicated layout's tiles to their data.
-fn key(v: Option<&Val>) -> Option<String> {
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Key {
+    Int(i64),
+    Text(String),
+    Blob(Vec<u8>),
+}
+
+fn key(v: Option<&Val>) -> Option<Key> {
     match v? {
-        Val::Int(i) => Some(format!("i{i}")),
-        Val::Text(t) => Some(format!("t{t}")),
-        Val::Blob(b) => Some(format!("b{b:?}")),
+        Val::Int(i) => Some(Key::Int(*i)),
+        Val::Text(t) => Some(Key::Text(t.clone())),
+        Val::Blob(b) => Some(Key::Blob(b.clone())),
         _ => None,
     }
 }
@@ -242,10 +249,14 @@ pub fn read_bytes(bytes: &[u8]) -> Result<Archive, String> {
             .find(|t| t.name != shallow.0.name && col(t, "tile_data").is_some() && col(t, &id_name).is_some())
             .ok_or("no table of tile data: not an MBTiles file")?;
         let (di, dd) = (col(data_table, &id_name), col(data_table, "tile_data"));
-        let mut blobs: HashMap<String, Arc<[u8]>> = HashMap::new();
+        // Tiles too large to draw are left out here, not after they're held. (The blobs together
+        // are no larger than the file: the reader visits each page once.)
+        let mut blobs: HashMap<Key, Arc<[u8]>> = HashMap::new();
         let mut too_many = false;
         db.rows(data_table, |_, r| {
-            if let (Some(k), Some(Val::Blob(b))) = (key(di.and_then(|i| r.get(i))), dd.and_then(|i| r.get(i))) {
+            if let (Some(k), Some(Val::Blob(b))) = (key(di.and_then(|i| r.get(i))), dd.and_then(|i| r.get(i)))
+                && b.len() <= MAX_TILE_BYTES
+            {
                 blobs.insert(k, b.as_slice().into());
             }
             too_many = blobs.len() > MAX_TILES;
@@ -276,6 +287,7 @@ mod file {
 
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Mutex, OnceLock};
 
     use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
@@ -284,6 +296,8 @@ mod file {
 
     /// Open connections kept per file, for the tile readers to share.
     const POOL: usize = 4;
+    /// Goes up when connections are closed, so one in use then isn't put back for reuse.
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
 
     fn pool() -> &'static Mutex<HashMap<PathBuf, Vec<Connection>>> {
         static P: OnceLock<Mutex<HashMap<PathBuf, Vec<Connection>>>> = OnceLock::new();
@@ -302,6 +316,7 @@ mod file {
 
     /// Runs `f` with a connection to `path`, from the pool or newly opened, and puts it back.
     fn with<T>(path: &Path, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
+        let generation = GENERATION.load(Ordering::SeqCst);
         let pooled = pool().lock().unwrap_or_else(|e| e.into_inner()).get_mut(path).and_then(Vec::pop);
         let conn = match pooled {
             Some(c) => c,
@@ -309,6 +324,10 @@ mod file {
         };
         let r = f(&conn);
         let mut all = pool().lock().unwrap_or_else(|e| e.into_inner());
+        // Closed while in use (the file changed, or the cache was cleared): not reused.
+        if GENERATION.load(Ordering::SeqCst) != generation {
+            return r;
+        }
         // A few files are open at a time: past that many, start again rather than grow.
         if all.len() >= 16 && !all.contains_key(path) {
             all.clear();
@@ -322,12 +341,16 @@ mod file {
 
     /// Forgets the open connections to `path` (it changed on disk, or was closed).
     pub fn close(path: &Path) {
-        pool().lock().unwrap_or_else(|e| e.into_inner()).remove(path);
+        let mut all = pool().lock().unwrap_or_else(|e| e.into_inner());
+        GENERATION.fetch_add(1, Ordering::SeqCst);
+        all.remove(path);
     }
 
     /// Forgets every open connection.
     pub fn close_all() {
-        pool().lock().unwrap_or_else(|e| e.into_inner()).clear();
+        let mut all = pool().lock().unwrap_or_else(|e| e.into_inner());
+        GENERATION.fetch_add(1, Ordering::SeqCst);
+        all.clear();
     }
 
     /// The metadata of the MBTiles file at `path`.
