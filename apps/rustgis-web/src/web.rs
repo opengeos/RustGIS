@@ -87,6 +87,26 @@ pub fn start() {
                             None => log::warn!("?lang={code}: no such interface language; following the browser's"),
                         }
                     }
+                    // `?data=<url>` (repeatable) adds data by web address, downloaded in the
+                    // background, the map zoomed to the first file that lands with something to
+                    // show; `?style=<url>` adds a MapLibre style; `?tiles=<template>` a tile
+                    // layer. Links that share a map. What fails is said in a notice.
+                    for url in params(&q, "data", 16) {
+                        if let Err(e) = app.run("ui.addUrl", serde_json::json!({"url": url, "zoom": true})) {
+                            app.session.notify(format!("?data={url}: {e}"), true);
+                        }
+                    }
+                    for (key, kind) in [("style", Some("style")), ("tiles", None)] {
+                        for url in params(&q, key, 8) {
+                            let mut p = serde_json::json!({"url": url});
+                            if let Some(kind) = kind {
+                                p["kind"] = serde_json::json!(kind);
+                            }
+                            if let Err(e) = app.run("map.addTiles", p) {
+                                app.session.notify(format!("?{key}={url}: {e}"), true);
+                            }
+                        }
+                    }
                     // `?registry=<url>` opens the Plugin Manager on another plugin registry for this
                     // visit (a pull request's preview, say); installing still asks as usual.
                     if let Some(url) = param(&q, "registry").filter(|u| !u.is_empty())
@@ -107,6 +127,20 @@ pub fn start() {
             }
         }
     });
+}
+
+/// Up to `max` values of a query parameter that may repeat (`?data=a&data=b`), percent-decoded.
+/// A `+` stays a `+` (it is one in a web address): a value holding `&`, `#` or a space must be
+/// percent-encoded.
+fn params(q: &str, key: &str, max: usize) -> Vec<String> {
+    q.trim_start_matches('?')
+        .split('&')
+        .filter_map(|kv| kv.strip_prefix(key)?.strip_prefix('='))
+        .filter(|raw| !raw.trim().is_empty())
+        .take(max)
+        .filter_map(|raw| js_sys::decode_uri_component(raw).ok().and_then(|s| s.as_string()))
+        .filter(|v| !v.trim().is_empty())
+        .collect()
 }
 
 /// A query parameter's value, percent-decoded.

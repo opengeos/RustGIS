@@ -24,7 +24,7 @@ pub fn commands() -> Vec<C> {
             r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
-            .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text}"#),
+            .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool}"#),
         C::new("layer.addEncodedPolyline", "Add Encoded Polyline", "Home › Add", add_encoded_polyline).params(
             r#"{"polyline": "encoded polyline text" | [texts] (one line each), "precision"?: 5 (Google) | 6 (OSRM, Valhalla), "name"?: text}"#,
         ),
@@ -1089,7 +1089,33 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     let i = s.downloaded.iter().position(|(d, _)| *d == id).ok_or("no such download (it was dropped when another project opened)")?;
     let (_, bytes) = s.downloaded.remove(i);
     let name = url_file_name(&url, &bytes).map_err(|e| format!("{url}: {e}"))?;
-    super::raster::add_named_bytes(s, p, name, bytes)
+    let mut r = super::raster::add_named_bytes(s, p, name, bytes)?;
+    // `"zoom": true` zooms to everything added, whatever the map held (a link's data); `zoomed`
+    // says whether there was anything to zoom to (a tile archive adds no layer).
+    if b(p, "zoom") == Some(true) {
+        let zoomed = zoom_to_added(s, &r);
+        if let Some(o) = r.as_object_mut() {
+            o.insert("zoomed".into(), json!(zoomed));
+        }
+    }
+    Ok(r)
+}
+
+/// Zooms to the layers a command's result names (`layer`, `layers`), all of them together;
+/// whether any had an extent.
+fn zoom_to_added(s: &mut Session, r: &Value) -> bool {
+    let ids = r.get("layers").and_then(Value::as_array).into_iter().flatten().chain(r.get("layer"));
+    let e = ids
+        .filter_map(Value::as_u64)
+        .filter_map(|i| u32::try_from(i).ok())
+        .filter_map(|id| s.map().layer(id).map(|l| l.extent()))
+        .filter(|e| !e.is_empty())
+        .fold(rustgis_geom::Extent::EMPTY, |a, e| a.union(&e));
+    if e.is_empty() {
+        return false;
+    }
+    s.zoom_to(&e);
+    true
 }
 
 pub(crate) fn add_data_text(s: &mut Session, p: &Value) -> CmdResult {

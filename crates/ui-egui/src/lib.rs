@@ -216,6 +216,9 @@ pub struct UiState {
     /// Data downloading from web addresses (Add Data › From URL): the address, the parameters to
     /// add it with, and where the download lands.
     pub downloads: Vec<(u64, String, Value, Slot<Result<Vec<u8>, String>>)>,
+    /// A link's data (`?data=`) has zoomed the map: the first of its files to land with something
+    /// to show does, whichever it is.
+    pub link_zoomed: bool,
     /// A layout picture waiting for its image file (web).
     pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
@@ -259,6 +262,7 @@ impl Default for UiState {
             pending_open: None,
             pending_csv: None,
             downloads: Vec::new(),
+            link_zoomed: false,
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
             pane_sets: Vec::new(),
@@ -928,6 +932,9 @@ impl RustGisApp {
                         q[k] = v.clone();
                     }
                 }
+                if p.get("zoom").and_then(Value::as_bool) == Some(true) {
+                    q["zoom"] = json!(true);
+                }
                 self.session.notify(i18n::fmt("Downloading {url}…", &[("url", &url)]), false);
                 let id = self.session.download_started();
                 self.ui.downloads.push((id, url, q, slot));
@@ -1534,9 +1541,18 @@ impl RustGisApp {
                     }
                     p["id"] = json!(id);
                     p["url"] = json!(url);
-                    // A failure is said by `run`.
-                    if self.run("layer.addDownload", p).is_ok() {
-                        self.map.invalidate();
+                    let zoom = p.get("zoom").and_then(Value::as_bool) == Some(true);
+                    if zoom && self.ui.link_zoomed {
+                        p["zoom"] = json!(false);
+                    }
+                    match self.run("layer.addDownload", p) {
+                        Ok(r) => {
+                            if r.get("zoomed").and_then(Value::as_bool) == Some(true) {
+                                self.ui.link_zoomed = true;
+                            }
+                            self.map.invalidate();
+                        }
+                        Err(e) => self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true),
                     }
                 }
                 Err(e) => {

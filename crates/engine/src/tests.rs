@@ -2761,6 +2761,27 @@ fn downloads_land_in_their_own_project() {
     let failed = s.download_started();
     s.download_failed(failed);
     assert!(!s.download_landed(failed, b"{}".to_vec()));
+    // A link's first file zooms the map to it, whatever the map held.
+    let mut w = world();
+    let id = w.download_started();
+    assert!(w.download_landed(id, br#"{"type": "Point", "coordinates": [151.2, -33.9]}"#.to_vec()));
+    w.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/sydney.geojson", "zoom": true})).unwrap();
+    let c = rustgis_geom::merc_to_lonlat(w.map().camera.center);
+    assert!((c.x - 151.2).abs() < 0.5 && (c.y + 33.9).abs() < 0.5, "{c:?}");
+    // A file of several layers (a GPX's waypoints and track): the map frames them all.
+    let gpx = br#"<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1"><wpt lat="10" lon="10"/><trk><trkseg><trkpt lat="20" lon="30"/><trkpt lat="21" lon="31"/></trkseg></trk></gpx>"#;
+    let id = w.download_started();
+    assert!(w.download_landed(id, gpx.to_vec()));
+    let r = w.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/trip.gpx", "zoom": true})).unwrap();
+    assert_eq!(r["zoomed"], true, "{r}");
+    let c = rustgis_geom::merc_to_lonlat(w.map().camera.center);
+    assert!(c.x > 15.0 && c.x < 26.0 && c.y > 10.0 && c.y < 21.0, "{c:?}");
+    // Without "zoom" the map stays where it is.
+    let id = w.download_started();
+    assert!(w.download_landed(id, br#"{"type": "Point", "coordinates": [-70, -40]}"#.to_vec()));
+    let r = w.run("layer.addDownload", &json!({"id": id, "url": "https://x.org/far.geojson"})).unwrap();
+    assert!(r.get("zoomed").is_none());
+    assert_eq!(rustgis_geom::merc_to_lonlat(w.map().camera.center), c);
 }
 
 /// Spreadsheets, GeoRSS, LandXML and encoded polylines through the commands.

@@ -103,6 +103,15 @@ open on an area, `?lang=de` (or any language code) to pick the interface languag
 force WebGL2. Combine them with `&`, so a self-hosted build can link to
 `?blank&projection=EPSG:3010&extent=10.5,55,24.5,69.5`.
 
+Links can carry data too: `?data=<address>` adds a file by its web address (any format Add Data
+reads, downloaded in the background; repeat it for up to 16, and the map zooms to the first that
+lands with something to show), `?style=<address>` adds a MapLibre style, and `?tiles=<template>`
+a tile layer. Percent-encode an address holding `&`, `#` or spaces (`encodeURIComponent`); a `+`
+stays a `+`. The server must allow the browser to fetch the file (CORS); a file that can't be
+added is said in a notice. For example,
+`?blank&data=https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson` opens
+the past week's earthquakes.
+
 To build it yourself, install [Trunk](https://trunkrs.dev) and the `wasm32-unknown-unknown`
 target, then:
 
