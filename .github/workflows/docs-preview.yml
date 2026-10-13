@@ -94,6 +94,9 @@ jobs:
             exit 1
           fi
           echo "Site: $(du -sh site | cut -f1); largest file: $(find site -type f -printf '%s %p\n' | sort -n | tail -1)"
+          # The site is the pull request's output: links in it are dropped, never followed (a
+          # link could point at the deploy key this job writes).
+          find site -type l -print -delete
 
       - name: Configure the preview repository deploy key
         if: env.HAS_KEY == 'true'
@@ -121,10 +124,14 @@ jobs:
           dir="pr-${PR}"
           # Every publish rewrites gh-pages as one parentless commit holding the open pull
           # requests' previews, so the repository stays near the size of the live previews.
-          # Publishes for different pull requests can meet: a push that lost the race starts over.
+          # Publishes for different pull requests can meet: a push that lost the race starts over,
+          # as does a clone that failed (the network). gh-pages must exist (it holds the CNAME).
           for attempt in 1 2 3 4 5 6; do
+            [ "$attempt" -gt 1 ] && sleep $(((attempt - 1) * 15))
             rm -rf pages
-            git clone -q --depth 1 --branch gh-pages git@github.com:opengeos/rustgis-preview.git pages
+            if ! git clone -q --depth 1 --branch gh-pages git@github.com:opengeos/rustgis-preview.git pages; then
+              continue
+            fi
             base=$(git -C pages rev-parse HEAD)
             rm -rf "pages/${dir}"
             if [ "$MODE" = deploy ]; then
@@ -133,6 +140,8 @@ jobs:
             touch pages/.nojekyll
             git -C pages config user.name "github-actions[bot]"
             git -C pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            # An orphan branch keeps the index of the files checked out, so `add -A` stages the
+            # whole tree as it is now: one commit with no parent.
             git -C pages checkout -q --orphan snapshot
             git -C pages add -A
             git -C pages commit -q --allow-empty -m "${MODE} ${dir} (${HEAD_SHA:0:7}) from ${GITHUB_REPOSITORY}"
@@ -140,9 +149,8 @@ jobs:
               echo "Published: ${MODE} ${dir}"
               exit 0
             fi
-            sleep $((attempt * 15))
           done
-          echo "::error::Could not publish the preview: other publishes kept changing gh-pages."
+          echo "::error::Could not publish the preview after 6 tries (gh-pages couldn't be cloned, or other publishes kept changing it)."
           exit 1
 
       - name: Comment preview URL on PR
