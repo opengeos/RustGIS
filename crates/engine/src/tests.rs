@@ -3511,6 +3511,9 @@ fn osm_and_boundaries() {
         json!({"bbox": [7.44, 46.94, 7.45, 46.95], "preset": "x"}),
         json!({"bbox": [7.44, 46.94, 7.45, 46.95], "preset": "roads", "answer": "<html>busy</html>"}),
         json!({"bbox": "here", "preset": "roads"}),
+        // An entry that isn't a number isn't dropped: the box is refused.
+        json!({"bbox": [7.44, "x", 46.94, 7.45, 46.95], "preset": "roads"}),
+        json!({"preset": "roads", "view": false}),
     ] {
         assert!(s.run("osm.download", &bad).is_err(), "{bad}");
     }

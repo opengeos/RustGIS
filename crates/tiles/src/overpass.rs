@@ -183,7 +183,7 @@ pub fn parse(bytes: &[u8]) -> Result<Answer, String> {
     let mut points = Vec::new();
     let mut lines = Vec::new();
     let mut polygons = Vec::new();
-    let (mut other_relations, mut broken) = (0usize, 0usize);
+    let (mut other_relations, mut broken, mut stray_inner) = (0usize, 0usize, 0usize);
     for el in elements.iter().take(MAX_ELEMENTS) {
         let tags: Vec<(String, String)> = el
             .get("tags")
@@ -221,7 +221,8 @@ pub fn parse(bytes: &[u8]) -> Result<Answer, String> {
                     continue;
                 }
                 match multipolygon(el.get("members")) {
-                    Some(polys) if !polys.is_empty() => {
+                    Some((polys, stray)) if !polys.is_empty() => {
+                        stray_inner += stray;
                         polygons.push(("relation", id, tags, json!({"type": "MultiPolygon", "coordinates": polys})))
                     }
                     _ => broken += 1,
@@ -242,6 +243,9 @@ pub fn parse(bytes: &[u8]) -> Result<Answer, String> {
     }
     if broken > 0 {
         notes.push(format!("{broken} ways or relations without a whole geometry were left out"));
+    }
+    if stray_inner > 0 {
+        notes.push(format!("{stray_inner} inner rings (holes) outside every outer ring of their relation were left out"));
     }
     Ok(Answer { points: collection(points), lines: collection(lines), polygons: collection(polygons), notes })
 }
@@ -300,9 +304,15 @@ fn coords(g: Option<&Value>) -> Ring {
         .collect()
 }
 
+/// A tag key or value in other_tags' `"key"=>"value"` form: backslashes, then quotes, escaped.
+fn escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// A multipolygon relation's polygons: its outer and inner member ways joined into rings, each
-/// inner ring in the outer one holding it.
-fn multipolygon(members: Option<&Value>) -> Option<Vec<Vec<Ring>>> {
+/// inner ring in the outer one holding it; and how many inner rings no outer ring holds (left
+/// out).
+fn multipolygon(members: Option<&Value>) -> Option<(Vec<Vec<Ring>>, usize)> {
     let (mut outer, mut inner): (Vec<Ring>, Vec<Ring>) = (Vec::new(), Vec::new());
     for m in members?.as_array()?.iter().take(MAX_MEMBERS) {
         if m.get("type").and_then(Value::as_str) != Some("way") {
@@ -322,13 +332,17 @@ fn multipolygon(members: Option<&Value>) -> Option<Vec<Vec<Ring>>> {
         return None;
     }
     let mut polys: Vec<Vec<Ring>> = outer.into_iter().map(|r| vec![r]).collect();
+    let mut stray = 0usize;
     for ring in join(inner) {
-        let Some(p) = ring.first() else { continue };
-        if let Some(poly) = polys.iter_mut().find(|poly| poly.first().is_some_and(|o| inside(*p, o))) {
-            poly.push(ring);
+        // An inner ring may touch its outer ring at a vertex, which tests either way: the first of
+        // a few vertices inside an outer ring decides.
+        let holder = ring.iter().take(8).find_map(|p| polys.iter().position(|poly| poly.first().is_some_and(|o| inside(*p, o))));
+        match holder.and_then(|i| polys.get_mut(i)) {
+            Some(poly) => poly.push(ring),
+            None => stray += 1,
         }
     }
-    Some(polys)
+    Some((polys, stray))
 }
 
 /// Joins ways end to end into closed rings; a chain that can't be closed is dropped.
@@ -382,7 +396,9 @@ fn collection(features: Vec<(&str, i64, Vec<(String, String)>, Value)>) -> Value
         }
     }
     counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let columns: Vec<&str> = counts.iter().take(MAX_COLUMNS).map(|(k, _)| k.as_str()).collect();
+    // `osm_type` and `osm_id` are the columns RustGIS adds; a tag of that name stays in other_tags.
+    let columns: Vec<&str> =
+        counts.iter().map(|(k, _)| k.as_str()).filter(|k| !matches!(*k, "osm_type" | "osm_id")).take(MAX_COLUMNS).collect();
     let feats: Vec<Value> = features
         .iter()
         .map(|(kind, id, tags, geom)| {
@@ -395,7 +411,7 @@ fn collection(features: Vec<(&str, i64, Vec<(String, String)>, Value)>) -> Value
             let rest: Vec<String> = tags
                 .iter()
                 .filter(|(k, _)| !columns.contains(&k.as_str()))
-                .map(|(k, v)| format!("\"{}\"=>\"{}\"", k.replace('"', "\\\""), v.replace('"', "\\\"")))
+                .map(|(k, v)| format!("\"{}\"=>\"{}\"", escape(k), escape(v)))
                 .collect();
             if !rest.is_empty() {
                 props.insert("other_tags".into(), json!(rest.join(",")));
@@ -483,5 +499,26 @@ mod tests {
         let p = &r.points["features"][0]["properties"];
         assert_eq!(p.as_object().map(Map::len), Some(2 + MAX_COLUMNS + 1));
         assert!(p["other_tags"].as_str().is_some_and(|t| t.contains("\"k39\"=>\"v\"")));
+    }
+
+    #[test]
+    fn escapes_reserved_names_and_stray_holes() {
+        // A backslash is escaped before a quote; a tag named osm_id stays out of the columns.
+        let a = json!({"elements": [{"type": "node", "id": 7, "lat": 1, "lon": 1, "tags": {"name": "x", "osm_id": "999", "note": "a\\\"b\\"}}]});
+        let r = parse(a.to_string().as_bytes()).unwrap();
+        let p = &r.points["features"][0]["properties"];
+        assert_eq!(p["osm_id"], json!(7));
+        let other = p["other_tags"].as_str().unwrap();
+        assert!(other.contains(r#""osm_id"=>"999""#), "{other}");
+        assert_eq!(escape("a\"b\\"), r#"a\"b\\"#);
+        // A hole outside its relation's outer ring is left out, and said.
+        let way = |pts: &[[f64; 2]], role: &str| json!({"type": "way", "role": role, "geometry": pts.iter().map(|[x, y]| json!({"lon": x, "lat": y})).collect::<Vec<_>>()});
+        let outer = way(&[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0], [0.0, 0.0]], "outer");
+        let hole = way(&[[1.0, 1.0], [2.0, 1.0], [2.0, 2.0], [1.0, 1.0]], "inner");
+        let stray = way(&[[9.0, 9.0], [10.0, 9.0], [10.0, 10.0], [9.0, 9.0]], "inner");
+        let rel = json!({"elements": [{"type": "relation", "id": 1, "tags": {"type": "multipolygon", "landuse": "x"}, "members": [outer, hole, stray]}]});
+        let r = parse(rel.to_string().as_bytes()).unwrap();
+        assert_eq!(r.polygons["features"][0]["geometry"]["coordinates"][0].as_array().map(Vec::len), Some(2));
+        assert!(r.notes.iter().any(|n| n.contains("1 inner rings")), "{:?}", r.notes);
     }
 }

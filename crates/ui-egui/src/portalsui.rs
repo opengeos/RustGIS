@@ -27,6 +27,10 @@ pub struct State {
     pub server: String,
     /// geoBoundaries' countries: code and name.
     pub countries: Vec<(String, String)>,
+    /// The country list was asked for (once a session: an empty or failed answer leaves the code
+    /// to be typed, with `countries_error` saying why).
+    countries_asked: bool,
+    pub countries_error: Option<String>,
     pub country: String,
     pub level: String,
     waiting: Option<(Asked, Answer)>,
@@ -41,6 +45,8 @@ impl Default for State {
             tags: String::new(),
             server: String::new(),
             countries: Vec::new(),
+            countries_asked: false,
+            countries_error: None,
             country: String::new(),
             level: "ADM1".into(),
             waiting: None,
@@ -79,7 +85,19 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 ));
             })
         }),
-        Asked::Countries => r.and_then(|b| boundaries::parse_countries(&b)).map(|c| app.ui.portals.countries = c),
+        // The list's own outcome, kept apart from the dialog's actions (a failure leaves the code to
+        // be typed, and isn't asked again).
+        Asked::Countries => {
+            app.ui.portals.countries_error = match r.and_then(|b| boundaries::parse_countries(&b)) {
+                Ok(c) if c.is_empty() => Some(tl!("geoBoundaries listed no countries: type a country's code").to_string()),
+                Ok(c) => {
+                    app.ui.portals.countries = c;
+                    None
+                }
+                Err(e) => Some(crate::i18n::fmt("The country list couldn't be read ({e}): type a country's code", &[("e", &e)])),
+            };
+            Ok(())
+        }
         Asked::Meta(mut p) => r.and_then(|b| boundaries::parse_meta(&b)).map(|m| {
             p["name"] = json!(format!("{} {}", m.name, m.level));
             app.ui.portals.waiting = Some((Asked::Boundary(p), fetch(&m.geojson)));
@@ -163,9 +181,13 @@ pub fn osm(app: &mut RustGisApp, ui: &mut egui::Ui) {
 pub fn boundaries(app: &mut RustGisApp, ui: &mut egui::Ui) {
     ui.label(egui::RichText::new(tl!("A country's administrative boundaries from geoBoundaries (CC BY 4.0): the country itself (ADM0), its first-level divisions (ADM1, such as states) and finer ones.")).weak());
     let busy = app.ui.portals.waiting.is_some();
-    // The country list, once.
-    if app.ui.portals.countries.is_empty() && !busy && app.ui.portals.error.is_none() {
+    // The country list, asked for once.
+    if !app.ui.portals.countries_asked && !busy {
+        app.ui.portals.countries_asked = true;
         app.ui.portals.waiting = Some((Asked::Countries, fetch(&boundaries::countries_url())));
+    }
+    if let Some(e) = &app.ui.portals.countries_error {
+        ui.label(egui::RichText::new(e).small().weak());
     }
     egui::Grid::new("boundaries").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         let st = &mut app.ui.portals;

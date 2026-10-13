@@ -10,7 +10,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("osm.download", "Download OpenStreetMap Data", "Home › Add › Add Data", osm_download).params(
-            r#"{"bbox"?: [west, south, east, north] | "view" (the map's extent, the default), "preset"?: "buildings"|"roads"|"railways"|"water"|"landuse"|"parks"|"pois"|"boundaries", "tags"?: "key=value, key" (any of them), "url"?: "an Overpass server (default https://overpass-api.de/api/interpreter)", "name"?: text, "answer"?: "the server's JSON answer, when already fetched (the app's background request)"}"#,
+            r#"{"bbox"?: [west, south, east, north] | "view" (the map's extent, the default), "view"?: bool (false: a bbox must be given), "preset"?: "buildings"|"roads"|"railways"|"water"|"landuse"|"parks"|"pois"|"boundaries", "tags"?: "key=value, key" (any of them), "url"?: "an Overpass server (default https://overpass-api.de/api/interpreter)", "name"?: text, "answer"?: "the server's JSON answer, when already fetched (the app's background request)"}"#,
         ),
         C::new("boundaries.add", "Add Administrative Boundaries", "Home › Add › Add Data", boundaries_add).params(
             r#"{"country": "ISO 3166 alpha-3 code (CHE, KEN…)", "level"?: "ADM0" (the country, default) … "ADM5", "name"?: text, "text"?: "the boundaries' GeoJSON, when already fetched (the app's background request)"}"#,
@@ -23,8 +23,9 @@ pub fn commands() -> Vec<C> {
 fn bbox(s: &Session, p: &Value) -> Result<[f64; 4], String> {
     match p.get("bbox") {
         Some(v @ Value::Array(_)) => {
-            let n: Vec<f64> = v.as_array().into_iter().flatten().filter_map(Value::as_f64).collect();
-            match n.as_slice() {
+            // Every entry a number: one that isn't is an error, not dropped.
+            let n: Option<Vec<f64>> = v.as_array().into_iter().flatten().map(Value::as_f64).collect();
+            match n.as_deref().unwrap_or_default() {
                 [w, south, e, n] => Ok([*w, *south, *e, *n]),
                 _ => Err("bbox is [west, south, east, north], or \"view\"".into()),
             }
