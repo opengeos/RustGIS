@@ -224,15 +224,18 @@ A public bucket needs nothing more: it is read anonymously from AWS.
 **Home › Add Data › S3…** (`s3.connect`) connects to a private bucket, or to an S3-compatible
 service (MinIO, Cloudflare R2, Wasabi, source.coop…) by its endpoint, and browses a bucket a
 folder at a time (`s3.list`), adding an object with **Add**. A connection names its endpoint (AWS
-when empty), region and, optionally, the buckets it serves; an `s3://` address is read through
-the connection serving its bucket, and requests to a connection's endpoint are signed (AWS
-Signature Version 4) with its keys. On the desktop, `s3.connect` with `"profile"` reads a
-profile from `~/.aws/credentials` and `~/.aws/config`, and without keys it takes
-`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (and `AWS_SESSION_TOKEN`, `AWS_REGION`) from the
-environment.
+when empty), its region and the buckets it serves: the ones it is given (`"buckets"`) and the ones
+browsed through it this session. An `s3://` address of one of them is read through that
+connection, signed (AWS Signature Version 4) with its keys; an address of any other bucket (a
+project's, a link's) is read anonymously from AWS, never with your keys or from your endpoint.
+Keys are typed, or, on the desktop and only when chosen, read from an AWS profile
+(`"profile"`: `~/.aws/credentials` and `~/.aws/config`) or from the environment
+(`"environment": true`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
+`AWS_REGION`); without any, the connection is anonymous. **AWS, anonymous** in the dialog browses
+with no keys at all.
 
 ```sh
-rustgis-cli run --cmd 's3.connect={"name":"minio","endpoint":"https://minio.example.org","accessKeyId":"…","secretAccessKey":"…"}' \
+rustgis-cli run --cmd 's3.connect={"name":"minio","endpoint":"https://minio.example.org","buckets":["my-bucket"],"accessKeyId":"…","secretAccessKey":"…"}' \
   --cmd 's3.list={"url":"s3://my-bucket/rasters/"}' --cmd 'layer.addUrl={"url":"s3://my-bucket/rasters/dem.tif"}'
 ```
 

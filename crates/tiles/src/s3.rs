@@ -108,12 +108,37 @@ pub fn connect(mut c: Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// Forgets a connection (and its credentials); whether there was one by that name.
+/// Forgets a connection (and its credentials, and the buckets granted to it); whether there was
+/// one by that name.
 pub fn disconnect(name: &str) -> bool {
     let mut all = lock();
     let before = all.len();
     all.retain(|c| c.name != name);
+    granted().retain(|(n, _)| n != name);
     all.len() != before
+}
+
+fn granted() -> std::sync::MutexGuard<'static, Vec<(String, String)>> {
+    static G: std::sync::OnceLock<Mutex<Vec<(String, String)>>> = std::sync::OnceLock::new();
+    G.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Lets a connection serve a bucket for the rest of the session: the user browsed or added it
+/// through that connection.
+pub fn grant(name: &str, bucket: &str) {
+    if !valid_bucket(bucket) || connection(name).is_none() {
+        return;
+    }
+    let mut g = granted();
+    g.retain(|(_, b)| b != bucket);
+    if g.len() < 4096 {
+        g.push((name.to_string(), bucket.to_string()));
+    }
+}
+
+/// Whether a connection serves a bucket: it was given the bucket, or the bucket was granted to it.
+fn serves(c: &Connection, bucket: &str) -> bool {
+    c.buckets.iter().any(|b| b == bucket) || granted().iter().any(|(n, b)| *n == c.name && b == bucket)
 }
 
 /// The session's connections.
@@ -137,9 +162,17 @@ fn endpoint(e: &str) -> Result<String, String> {
     if rest.is_empty() || rest.contains(['/', '?', '#', '@']) {
         return Err(format!("{e}: an endpoint is a scheme and a host (and port), such as https://s3.example.org"));
     }
-    let e = format!("{}://{}", scheme.to_ascii_lowercase(), rest.to_ascii_lowercase());
+    let e = origin(scheme, rest);
     crate::address::check(&e, None)?;
     Ok(e)
+}
+
+/// A scheme and authority as compared: lower-case, without the scheme's default port.
+fn origin(scheme: &str, authority: &str) -> String {
+    let (scheme, authority) = (scheme.to_ascii_lowercase(), authority.to_ascii_lowercase());
+    let default = if scheme == "https" { ":443" } else { ":80" };
+    let authority = authority.strip_suffix(default).unwrap_or(&authority);
+    format!("{scheme}://{authority}")
 }
 
 /// Whether `b` is a bucket name S3 accepts (3–63 lower-case letters, digits, dots and hyphens).
@@ -169,10 +202,29 @@ pub fn parse(url: &str) -> Result<(String, String), String> {
     Ok((bucket.to_string(), key.to_string()))
 }
 
-/// The connection serving a bucket: one that names it, else the first that names none.
+/// The connection serving a bucket: one given the bucket, or one it was granted to this session
+/// ([`grant`]). None serves any other bucket: an address naming it (a project's, a link's) is read
+/// anonymously from AWS, never with the user's keys or from the user's endpoint.
 pub fn for_bucket(bucket: &str) -> Option<Connection> {
     let all = lock();
-    all.iter().find(|c| c.buckets.iter().any(|b| b == bucket)).or_else(|| all.iter().find(|c| c.buckets.is_empty())).cloned()
+    all.iter().find(|c| serves(c, bucket)).cloned()
+}
+
+/// Starts an address read anonymously whatever the connections: nothing signed, and an `s3://`
+/// address read from AWS (the S3 dialog's "AWS, anonymous").
+pub const ANONYMOUS: &str = "rustgis-anonymous:";
+
+/// An address read anonymously ([`ANONYMOUS`]).
+pub fn anonymous(url: &str) -> String {
+    format!("{ANONYMOUS}{url}")
+}
+
+/// Splits off [`ANONYMOUS`]: the address, and whether it is read anonymously.
+pub fn split_anonymous(url: &str) -> (&str, bool) {
+    match url.strip_prefix(ANONYMOUS) {
+        Some(u) => (u, true),
+        None => (url, false),
+    }
 }
 
 /// The web address of an object (or, with an empty key, of its bucket) through a connection:
@@ -192,8 +244,10 @@ pub fn object_url(bucket: &str, key: &str, conn: Option<&Connection>) -> String 
 
 /// The web address an `s3://` address is fetched from.
 pub fn https_url(url: &str) -> Result<String, String> {
+    let (url, anonymous) = split_anonymous(url);
     let (bucket, key) = parse(url)?;
-    Ok(object_url(&bucket, &key, for_bucket(&bucket).as_ref()))
+    let conn = if anonymous { None } else { for_bucket(&bucket) };
+    Ok(object_url(&bucket, &key, conn.as_ref()))
 }
 
 /// A request ready to send: its web address, the headers to add, and whether it is signed (a
@@ -209,54 +263,92 @@ pub struct Prepared {
 /// connection's endpoint (or to AWS S3 for an AWS connection) is signed with its credentials.
 /// Other addresses pass unchanged.
 pub fn prepare(url: &str) -> Result<Prepared, String> {
-    let (url, conn) = if is_s3(url) {
+    let (url, anonymous) = split_anonymous(url);
+    let (url, signer) = if is_s3(url) {
         let (bucket, key) = parse(url)?;
-        let conn = for_bucket(&bucket);
-        (object_url(&bucket, &key, conn.as_ref()), conn)
+        let conn = if anonymous { None } else { for_bucket(&bucket) };
+        let region = conn.as_ref().map(|c| c.region.clone()).unwrap_or_default();
+        (object_url(&bucket, &key, conn.as_ref()), conn.map(|c| (c, region)))
     } else {
-        (url.to_string(), signer_for(url))
+        (url.to_string(), if anonymous { None } else { signer_for(url) })
     };
-    let creds = match conn.as_ref().and_then(|c| c.credentials.as_ref().map(|cr| (c, cr))) {
-        Some(x) => x,
-        None => return Ok(Prepared { url, headers: Vec::new(), signed: false }),
+    let Some((c, region)) = signer.filter(|(c, _)| c.credentials.is_some()) else {
+        return Ok(Prepared { url, headers: Vec::new(), signed: false });
     };
-    let (c, cr) = creds;
-    let headers = sign_get(&url, &c.region, cr, &amz_date(now_secs()))?;
+    let Some(cr) = c.credentials.as_ref() else {
+        return Ok(Prepared { url, headers: Vec::new(), signed: false });
+    };
+    // Sent in the form it is signed in: the path's parts encoded as S3 encodes them.
+    let url = canonical_url(&url)?;
+    let headers = sign_get(&url, &region, cr, &amz_date(now_secs()))?;
     Ok(Prepared { url, headers, signed: true })
 }
 
-/// The connection whose credentials sign a request to `url`: one whose endpoint is the address's
-/// scheme and authority, or (an AWS connection) an S3 address at amazonaws.com of a bucket it
-/// serves.
-fn signer_for(url: &str) -> Option<Connection> {
+/// A web address with its path in S3's canonical form: each part decoded, then encoded.
+fn canonical_url(url: &str) -> Result<String, String> {
+    let (scheme, rest) = url.split_once("://").ok_or_else(|| format!("{url}: not a web address"))?;
+    let rest = rest.split('#').next().unwrap_or(rest);
+    let end = rest.find(['/', '?']).unwrap_or(rest.len());
+    let (authority, path_query) = rest.split_at(end);
+    let (path, query) = match path_query.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
+        None => (path_query, None),
+    };
+    let mut out = format!("{scheme}://{authority}{}", canonical_path(path));
+    if let Some(q) = query {
+        out.push('?');
+        out.push_str(q);
+    }
+    Ok(out)
+}
+
+/// A path as S3 signs it: each part decoded (a `+` is a plus) and encoded again.
+fn canonical_path(path: &str) -> String {
+    if path.is_empty() {
+        return "/".into();
+    }
+    path.split('/').map(|part| encode(&decode_path(part), true)).collect::<Vec<_>>().join("/")
+}
+
+/// The connection whose credentials sign a request to `url`, and the region it is signed for:
+/// one whose endpoint is the address's scheme and authority (default ports aside), or (an AWS
+/// connection) an address at AWS S3 of a bucket the connection serves ([`for_bucket`]): never
+/// another bucket at amazonaws.com.
+fn signer_for(url: &str) -> Option<(Connection, String)> {
     let lower = url.to_ascii_lowercase();
     let (scheme, rest) = lower.split_once("://")?;
     let authority = rest.split(['/', '?', '#']).next()?;
     if authority.contains('@') {
         return None;
     }
+    let here = origin(scheme, authority);
     let all = lock();
-    let signed = all.iter().filter(|c| c.credentials.is_some());
-    let mut aws = None;
-    for c in signed {
-        match &c.endpoint {
-            Some(ep) if *ep == format!("{scheme}://{authority}") => return Some(c.clone()),
-            Some(_) => {}
-            None if scheme == "https" && aws.is_none() => {
-                let host = authority.split(':').next().unwrap_or(authority);
-                let bucket = aws_bucket(host, rest);
-                let serves = match &bucket {
-                    Some(b) => c.buckets.is_empty() || c.buckets.contains(b),
-                    None => c.buckets.is_empty(),
-                };
-                if host.ends_with(".amazonaws.com") && (host.starts_with("s3.") || host.contains(".s3.")) && serves {
-                    aws = Some(c.clone());
-                }
-            }
-            None => {}
-        }
+    if let Some(c) = all.iter().find(|c| c.credentials.is_some() && c.endpoint.as_deref() == Some(here.as_str())) {
+        return Some((c.clone(), c.region.clone()));
     }
-    aws
+    let host = authority.split(':').next().unwrap_or(authority);
+    if scheme != "https"
+        || here != format!("https://{host}")
+        || !host.ends_with(".amazonaws.com")
+        || !(host.starts_with("s3.") || host.contains(".s3.") || host.starts_with("s3-") || host.contains(".s3-"))
+    {
+        return None;
+    }
+    let bucket = aws_bucket(host, rest)?;
+    let c = all.iter().find(|c| c.credentials.is_some() && c.endpoint.is_none() && serves(c, &bucket))?;
+    // The region the address names (s3.<region>.amazonaws.com), else the connection's.
+    let after = host
+        .rsplit_once(".s3.")
+        .map(|(_, a)| a)
+        .or_else(|| host.strip_prefix("s3."))
+        .or_else(|| host.rsplit_once(".s3-").map(|(_, a)| a))
+        .or_else(|| host.strip_prefix("s3-"));
+    let region = after
+        .and_then(|a| a.split('.').next())
+        .filter(|r| !r.is_empty() && *r != "amazonaws" && *r != "dualstack")
+        .map(str::to_string)
+        .unwrap_or_else(|| c.region.clone());
+    Some((c.clone(), region))
 }
 
 /// The bucket an AWS S3 address names: its host's first label (virtual-hosted) or its path's
@@ -307,8 +399,8 @@ fn split_url(url: &str) -> Result<(String, String, String), String> {
     let (path, query) = path_query.split_once('?').unwrap_or((path_query, ""));
     let path = if path.is_empty() { "/" } else { path };
     // The default port isn't part of Host.
-    let host = authority.to_ascii_lowercase();
-    let host = host.strip_suffix(":443").filter(|_| url.to_ascii_lowercase().starts_with("https://")).unwrap_or(&host).to_string();
+    let scheme = url.split_once("://").map(|(s, _)| s).unwrap_or("https");
+    let host = origin(scheme, authority).split_once("://").map(|(_, h)| h.to_string()).unwrap_or_default();
     Ok((host, path.to_string(), query.to_string()))
 }
 
@@ -367,6 +459,11 @@ pub fn encode(s: &str, slash: bool) -> String {
         }
     }
     out
+}
+
+/// Decodes a path's percent-escapes (a `+` stays a plus).
+fn decode_path(s: &str) -> String {
+    decode(&s.replace('+', "%2B"))
 }
 
 /// Decodes percent-escapes (and `+` as a space, as query strings do).
@@ -740,6 +837,59 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn connections_sign_only_buckets_they_serve() {
+        let cr = || Some(Credentials { access_key_id: "AKID2".into(), secret_access_key: "s2".into(), session_token: None });
+        // A connection given no buckets claims none: another bucket is read anonymously from AWS.
+        connect(Connection {
+            name: "rule-endpoint".into(),
+            endpoint: Some("https://minio.rule.example:443".into()),
+            region: String::new(),
+            buckets: vec![],
+            credentials: cr(),
+        })
+        .unwrap();
+        assert_eq!(connection("rule-endpoint").unwrap().endpoint.as_deref(), Some("https://minio.rule.example"), "default port dropped");
+        let p = prepare("s3://rule-other-bucket/k").unwrap();
+        assert_eq!((p.url.as_str(), p.signed), ("https://rule-other-bucket.s3.amazonaws.com/k", false));
+        // Its own endpoint is signed, whatever the default port's spelling; the path as S3 encodes it.
+        let p = prepare("https://minio.rule.example:443/b-1/a b(1)+c%7e.tif").unwrap();
+        assert!(p.signed);
+        assert_eq!(p.url, "https://minio.rule.example:443/b-1/a%20b%281%29%2Bc~.tif");
+        // A bucket browsed through it is served from then on.
+        grant("rule-endpoint", "rule-granted");
+        let p = prepare("s3://rule-granted/k").unwrap();
+        assert_eq!((p.url.as_str(), p.signed), ("https://minio.rule.example/rule-granted/k", true));
+        // ... unless read anonymously on purpose.
+        let p = prepare(&anonymous("s3://rule-granted/k")).unwrap();
+        assert_eq!((p.url.as_str(), p.signed), ("https://rule-granted.s3.amazonaws.com/k", false));
+        assert!(crate::address::check(&anonymous("s3://rule-granted/k"), None).is_ok());
+        // An AWS connection signs only its buckets at amazonaws.com, for the region the address names.
+        connect(Connection {
+            name: "rule-aws".into(),
+            endpoint: None,
+            region: "eu-west-1".into(),
+            buckets: vec!["rule-mine".into()],
+            credentials: cr(),
+        })
+        .unwrap();
+        let p = prepare("https://rule-mine.s3.us-west-2.amazonaws.com/k").unwrap();
+        assert!(p.signed && p.headers.iter().any(|(k, v)| k == "authorization" && v.contains("/us-west-2/s3/aws4_request")));
+        let p = prepare("https://rule-mine.s3.amazonaws.com/k").unwrap();
+        assert!(p.headers.iter().any(|(k, v)| k == "authorization" && v.contains("/eu-west-1/s3/aws4_request")));
+        for other in [
+            "https://rule-theirs.s3.amazonaws.com/k",
+            "https://s3.us-east-1.amazonaws.com/rule-theirs/k",
+            "https://rule-mine.s3.amazonaws.com.evil.example/k",
+            "http://rule-mine.s3.amazonaws.com/k",
+        ] {
+            assert!(!prepare(other).unwrap().signed, "{other}");
+        }
+        disconnect("rule-endpoint");
+        disconnect("rule-aws");
+        assert!(!prepare("s3://rule-granted/k").unwrap().signed, "grants go with the connection");
     }
 
     #[test]

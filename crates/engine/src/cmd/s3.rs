@@ -10,21 +10,22 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("s3.connect", "Connect to S3", "Home › Add › S3", connect).params(
-            r#"{"name"?: text (default "default"), "endpoint"?: "https://… of an S3-compatible service (MinIO, Cloudflare R2, Wasabi…); AWS when absent", "region"?: text (default us-east-1), "buckets"?: [names] (the buckets it serves; every bucket when absent), "accessKeyId"?: text, "secretAccessKey"?: text, "sessionToken"?: text, "profile"?: "an AWS profile in ~/.aws/credentials and config (desktop)", "anonymous"?: bool (public buckets: nothing signed)} — credentials are kept for the session only"#,
-        ),
-        C::new("s3.disconnect", "Disconnect From S3", "Home › Add › S3", disconnect).params(r#"{"name": text}"#),
+            r#"{"name"?: text (default "default"), "endpoint"?: "https://… of an S3-compatible service (MinIO, Cloudflare R2, Wasabi…); AWS when absent", "region"?: text (default us-east-1), "buckets"?: [names] (the buckets it serves; others are read anonymously unless browsed through it with s3.list), "accessKeyId"?: text, "secretAccessKey"?: text, "sessionToken"?: text, "profile"?: "an AWS profile in ~/.aws/credentials and config (desktop)", "environment"?: bool (AWS_ACCESS_KEY_ID… from the environment, desktop)} — without keys, a profile or environment, the connection is anonymous; credentials are kept for the session only"#,
+        )
+        .view(),
+        C::new("s3.disconnect", "Disconnect From S3", "Home › Add › S3", disconnect).view().params(r#"{"name": text}"#),
         C::new("s3.connections", "S3 Connections", "Home › Add › S3", |_s, _p| {
             Ok(json!({"connections": s3::connections().iter().map(Connection::public).collect::<Vec<_>>()}))
         })
         .view(),
-        C::new("s3.list", "List S3 Bucket", "Home › Add › S3", list).params(
-            r#"{"url"?: "s3://bucket/prefix/", "bucket"?: text, "prefix"?: text, "connection"?: "a connection's name: its buckets when no bucket is given", "limit"?: number (default 1000, at most 10000)}"#,
+        C::new("s3.list", "List S3 Bucket", "Home › Add › S3", list).view().params(
+            r#"{"url"?: "s3://bucket/prefix/", "bucket"?: text, "prefix"?: text, "connection"?: "a connection's name: its buckets when no bucket is given; a bucket listed through it is served by it from then on", "limit"?: number (default 1000, at most 10000)}"#,
         ),
     ]
 }
 
-/// The credentials a connection is made with: given, from a profile, or from the environment
-/// (desktop), or none (anonymous). The profile's endpoint comes along.
+/// The credentials a connection is made with: given, from a profile or the environment (desktop,
+/// only when asked for by name), or none (anonymous). The profile's endpoint comes along.
 fn credentials(p: &Value) -> Result<(Option<Credentials>, Option<String>, Option<String>, &'static str), String> {
     let text = |k: &str| ps(p, k).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
     if super::b(p, "anonymous").unwrap_or(false) {
@@ -38,8 +39,7 @@ fn credentials(p: &Value) -> Result<(Option<Credentials>, Option<String>, Option
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let profile = text("profile").or_else(|| std::env::var("AWS_PROFILE").ok().filter(|v| !v.is_empty()));
-        if let Some(name) = profile {
+        if let Some(name) = text("profile") {
             let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(std::path::PathBuf::from);
             let file = |var: &str, default: &str| {
                 std::env::var_os(var).map(std::path::PathBuf::from).or_else(|| home.as_ref().map(|h| h.join(".aws").join(default)))
@@ -57,8 +57,12 @@ fn credentials(p: &Value) -> Result<(Option<Credentials>, Option<String>, Option
                 None => Err(format!("the AWS profile '{name}' has no access key (in ~/.aws/credentials or ~/.aws/config)")),
             };
         }
-        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-        if let (Some(access_key_id), Some(secret_access_key)) = (env("AWS_ACCESS_KEY_ID"), env("AWS_SECRET_ACCESS_KEY")) {
+        // The environment's keys only when asked for: never for a blank form.
+        if super::b(p, "environment").unwrap_or(false) {
+            let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+            let (Some(access_key_id), Some(secret_access_key)) = (env("AWS_ACCESS_KEY_ID"), env("AWS_SECRET_ACCESS_KEY")) else {
+                return Err("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY aren't set".into());
+            };
             let region = env("AWS_REGION").or_else(|| env("AWS_DEFAULT_REGION"));
             return Ok((
                 Some(Credentials { access_key_id, secret_access_key, session_token: env("AWS_SESSION_TOKEN") }),
@@ -69,8 +73,8 @@ fn credentials(p: &Value) -> Result<(Option<Credentials>, Option<String>, Option
         }
     }
     #[cfg(target_arch = "wasm32")]
-    if text("profile").is_some() {
-        return Err("AWS profiles are read by the desktop app; give accessKeyId and secretAccessKey".into());
+    if text("profile").is_some() || super::b(p, "environment").unwrap_or(false) {
+        return Err("AWS profiles and the environment are read by the desktop app; give accessKeyId and secretAccessKey".into());
     }
     Ok((None, None, None, "anonymous"))
 }
@@ -97,7 +101,8 @@ fn connect(_s: &mut Session, p: &Value) -> CmdResult {
     let c = Connection {
         name,
         endpoint: endpoint.or(profile_endpoint),
-        region: ps(p, "region").map(str::to_string).or(region).unwrap_or_default(),
+        // A blank region leaves the profile's or the environment's.
+        region: ps(p, "region").map(str::trim).filter(|r| !r.is_empty()).map(str::to_string).or(region).unwrap_or_default(),
         buckets,
         credentials: creds,
     };
@@ -161,6 +166,11 @@ fn list(_s: &mut Session, p: &Value) -> CmdResult {
             let buckets = s3::parse_buckets(&fetch(&s3::buckets_url(&c))?)?;
             return Ok(json!({"connection": c.name, "buckets": buckets}));
         };
+        // A bucket listed through a connection is served by it from then on (its objects are read
+        // with its keys); otherwise the bucket's own connection, if any, or anonymously.
+        if let Some(c) = &named {
+            s3::grant(&c.name, &bucket);
+        }
         let conn = named.or_else(|| s3::for_bucket(&bucket));
         let (mut prefixes, mut objects, mut token, mut pages) = (Vec::new(), Vec::new(), None::<String>, 0);
         loop {

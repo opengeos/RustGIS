@@ -3753,8 +3753,17 @@ fn s3_connections_listings_and_objects() {
     assert!(!r.to_string().contains("very-secret-key"));
     let listed = s.run("s3.connections", &Value::Null).unwrap();
     assert!(listed.to_string().contains("s3-test") && !listed.to_string().contains("very-secret-key"));
-    // A level of the bucket, and the connection's buckets.
+    // A blank form is anonymous: never the environment's or a profile's keys unless asked for.
+    let r = s.run("s3.connect", &json!({"name": "s3-blank", "region": ""})).unwrap();
+    assert_eq!(
+        (r["signed"].as_bool(), r["credentials"].as_str(), r["region"].as_str()),
+        (Some(false), Some("anonymous"), Some("us-east-1"))
+    );
+    s.run("s3.disconnect", &json!({"name": "s3-blank"})).unwrap();
+    // A level of the bucket, and the connection's buckets; listing isn't an edit of the project.
+    assert!(!s.dirty && !s.can_undo());
     let r = s.run("s3.list", &json!({"url": "s3://s3-test-bucket/data/"})).unwrap();
+    assert!(!s.dirty && !s.can_undo(), "a listing is no edit");
     assert_eq!(r["prefixes"], json!(["data/more/"]));
     assert_eq!(r["objects"][0]["url"], "s3://s3-test-bucket/data/places.geojson");
     let r = s.run("s3.list", &json!({"connection": "s3-test"})).unwrap();

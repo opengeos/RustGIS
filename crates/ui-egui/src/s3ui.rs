@@ -20,8 +20,19 @@ struct Saved {
     name: String,
     endpoint: String,
     region: String,
-    anonymous: bool,
+    /// Where its keys come from ([`SOURCES`]); typed keys are typed again.
+    source: String,
+    profile: String,
 }
+
+/// Where a connection's keys come from: typed, an AWS profile or the environment (desktop), or
+/// none (public buckets). The profile and the environment are used only when chosen here.
+const SOURCES: [(&str, &str); 4] = [
+    ("keys", "Typed below"),
+    ("profile", "An AWS profile"),
+    ("environment", "The environment (AWS_ACCESS_KEY_ID…)"),
+    ("none", "None (public buckets)"),
+];
 
 /// The dialog's form, browsing place and requests under way.
 #[derive(Default)]
@@ -31,7 +42,9 @@ pub struct State {
     region: String,
     key: String,
     secret: String,
-    anonymous: bool,
+    /// Where the keys come from ([`SOURCES`]; empty: typed).
+    source: String,
+    profile: String,
     remember: bool,
     saved: Vec<Saved>,
     saved_loaded: bool,
@@ -115,10 +128,18 @@ fn list(st: &mut State) {
         return;
     }
     st.bucket = bucket;
-    let conn = current(st).or_else(|| s3::for_bucket(&st.bucket));
     st.listing = None;
     st.error = None;
-    st.listing_job = Some(fetch(&s3::list_url(&st.bucket, &st.prefix, None, conn.as_ref())));
+    // Through the connection chosen, which serves the bucket from then on; "AWS, anonymous"
+    // reads AWS with no keys whatever the connections.
+    let url = match current(st) {
+        Some(c) => {
+            s3::grant(&c.name, &st.bucket);
+            s3::list_url(&st.bucket, &st.prefix, None, Some(&c))
+        }
+        None => s3::anonymous(&s3::list_url(&st.bucket, &st.prefix, None, None)),
+    };
+    st.listing_job = Some(fetch(&url));
 }
 
 fn load_saved(app: &mut RustGisApp) {
@@ -138,7 +159,8 @@ fn load_saved(app: &mut RustGisApp) {
             name: s(c, "name"),
             endpoint: s(c, "endpoint"),
             region: s(c, "region"),
-            anonymous: c.get("anonymous").and_then(Value::as_bool).unwrap_or(false),
+            source: s(c, "source"),
+            profile: s(c, "profile"),
         })
         .filter(|c| !c.name.is_empty())
         .collect();
@@ -150,7 +172,7 @@ fn store_saved(app: &RustGisApp) {
         .s3
         .saved
         .iter()
-        .map(|c| json!({"name": c.name, "endpoint": c.endpoint, "region": c.region, "anonymous": c.anonymous}))
+        .map(|c| json!({"name": c.name, "endpoint": c.endpoint, "region": c.region, "source": c.source, "profile": c.profile}))
         .collect();
     if let Some(save) = &app.services.save_pref {
         save(SAVED, &Value::Array(v).to_string());
@@ -180,13 +202,18 @@ fn connection_form(app: &mut RustGisApp, ui: &mut egui::Ui) {
                     st.name = c.name.clone();
                     st.endpoint = c.endpoint.clone();
                     st.region = c.region.clone();
-                    st.anonymous = c.anonymous;
+                    st.source = c.source.clone();
+                    st.profile = c.profile.clone();
                     st.remember = true;
                 }
             }
         });
     }
     let st = &mut app.ui.s3;
+    if !SOURCES.iter().any(|(c, _)| *c == st.source) {
+        st.source = "keys".into();
+    }
+    let typed = st.source == "keys";
     egui::Grid::new("s3_conn").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Name"));
         ui.add(egui::TextEdit::singleline(&mut st.name).hint_text("default").desired_width(300.0));
@@ -197,34 +224,53 @@ fn connection_form(app: &mut RustGisApp, ui: &mut egui::Ui) {
         ui.label(tl!("Region"));
         ui.add(egui::TextEdit::singleline(&mut st.region).hint_text(s3::DEFAULT_REGION).desired_width(300.0));
         ui.end_row();
+        ui.label(tl!("Keys from"));
+        let shown = SOURCES.iter().find(|(c, _)| *c == st.source).map(|(_, l)| tl!(*l).to_string()).unwrap_or_default();
+        egui::ComboBox::from_id_salt("s3_source").selected_text(shown).width(300.0).show_ui(ui, |ui| {
+            for (code, label) in SOURCES {
+                // AWS profiles and the environment are the desktop's.
+                if cfg!(target_arch = "wasm32") && matches!(code, "profile" | "environment") {
+                    continue;
+                }
+                ui.selectable_value(&mut st.source, code.to_string(), tl!(label));
+            }
+        });
+        ui.end_row();
+        if st.source == "profile" {
+            ui.label(tl!("Profile"));
+            ui.add(egui::TextEdit::singleline(&mut st.profile).hint_text("default").desired_width(300.0));
+            ui.end_row();
+        }
         ui.label(tl!("Access key ID"));
-        ui.add_enabled(!st.anonymous, egui::TextEdit::singleline(&mut st.key).desired_width(300.0));
+        ui.add_enabled(typed, egui::TextEdit::singleline(&mut st.key).desired_width(300.0));
         ui.end_row();
         ui.label(tl!("Secret access key"));
-        ui.add_enabled(!st.anonymous, egui::TextEdit::singleline(&mut st.secret).password(true).desired_width(300.0));
+        ui.add_enabled(typed, egui::TextEdit::singleline(&mut st.secret).password(true).desired_width(300.0));
         ui.end_row();
     });
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut st.anonymous, tl!("Public buckets (no keys)"));
-        ui.checkbox(&mut st.remember, tl!("Remember (without the secret)"));
-    });
+    ui.checkbox(&mut st.remember, tl!("Remember (without the secret)"));
     if ui.button(tl!("Connect")).clicked() {
         let name = if st.name.trim().is_empty() { "default".to_string() } else { st.name.trim().to_string() };
         let mut p = json!({"name": name, "region": st.region.trim()});
         if !st.endpoint.trim().is_empty() {
             p["endpoint"] = json!(st.endpoint.trim());
         }
-        if st.anonymous {
-            p["anonymous"] = json!(true);
-        } else if !st.key.trim().is_empty() || !st.secret.is_empty() {
-            p["accessKeyId"] = json!(st.key.trim());
-            p["secretAccessKey"] = json!(st.secret.trim());
+        match st.source.as_str() {
+            "profile" => p["profile"] = json!(if st.profile.trim().is_empty() { "default" } else { st.profile.trim() }),
+            "environment" => p["environment"] = json!(true),
+            "keys" if !st.key.trim().is_empty() || !st.secret.is_empty() => {
+                p["accessKeyId"] = json!(st.key.trim());
+                p["secretAccessKey"] = json!(st.secret.trim());
+            }
+            // Nothing typed, or none chosen: anonymous.
+            _ => {}
         }
         let remember = st.remember.then(|| Saved {
             name: name.clone(),
             endpoint: st.endpoint.trim().to_string(),
             region: st.region.trim().to_string(),
-            anonymous: st.anonymous,
+            source: st.source.clone(),
+            profile: st.profile.trim().to_string(),
         });
         match app.run("s3.connect", p) {
             Ok(_) => {
@@ -248,8 +294,9 @@ fn connection_form(app: &mut RustGisApp, ui: &mut egui::Ui) {
 fn browse(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let conns = s3::connections();
     let st = &mut app.ui.s3;
-    if !conns.iter().any(|c| c.name == st.conn) {
-        st.conn = conns.first().map(|c| c.name.clone()).unwrap_or_default();
+    // A connection since forgotten: back to anonymous (never another connection's keys).
+    if !st.conn.is_empty() && !conns.iter().any(|c| c.name == st.conn) {
+        st.conn.clear();
     }
     let shown = if st.conn.is_empty() { tl!("AWS, anonymous").to_string() } else { st.conn.clone() };
     let mut go = false;
@@ -307,7 +354,13 @@ fn browse(app: &mut RustGisApp, ui: &mut egui::Ui) {
             for (key, size) in &objects {
                 ui.horizontal(|ui| {
                     if ui.small_button(tl!("Add")).clicked() {
-                        add = Some(format!("s3://{}/{key}", st.bucket));
+                        // Through the connection browsed with (it serves the bucket now), or by its
+                        // public web address at AWS when browsing anonymously.
+                        add = Some(if st.conn.is_empty() {
+                            s3::object_url(&st.bucket, key, None)
+                        } else {
+                            format!("s3://{}/{key}", st.bucket)
+                        });
                     }
                     ui.label(key.strip_prefix(st.prefix.as_str()).unwrap_or(key));
                     ui.label(egui::RichText::new(size_text(*size)).small().weak());
