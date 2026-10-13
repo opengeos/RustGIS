@@ -104,6 +104,9 @@ pub fn connect(mut c: Connection) -> Result<(), String> {
     if all.len() >= MAX_CONNECTIONS {
         return Err(format!("up to {MAX_CONNECTIONS} connections"));
     }
+    // A connection replaced by name starts afresh: the buckets granted to the old one (browsed
+    // through another endpoint or with other keys) aren't the new one's.
+    granted().retain(|(n, _)| n != &c.name);
     all.push(c);
     Ok(())
 }
@@ -272,7 +275,7 @@ pub fn prepare(url: &str) -> Result<Prepared, String> {
     } else {
         (url.to_string(), if anonymous { None } else { signer_for(url) })
     };
-    let Some((c, region)) = signer.filter(|(c, _)| c.credentials.is_some()) else {
+    let Some((c, region)) = signer else {
         return Ok(Prepared { url, headers: Vec::new(), signed: false });
     };
     let Some(cr) = c.credentials.as_ref() else {
@@ -924,6 +927,16 @@ mod tests {
         let p = prepare(&buckets_url(&c)).unwrap();
         assert!(p.signed && p.headers.iter().any(|(k, v)| k == "authorization" && v.contains("/eu-west-1/s3/aws4_request")));
         assert!(!prepare("https://s3.us-east-1.amazonaws.com/").unwrap().signed);
+        // Replacing a connection by name forgets what was granted to the old one.
+        connect(Connection {
+            name: "rule-endpoint".into(),
+            endpoint: Some("https://other.rule.example".into()),
+            region: String::new(),
+            buckets: vec![],
+            credentials: cr(),
+        })
+        .unwrap();
+        assert!(!prepare("s3://rule-granted/k").unwrap().signed, "grants don't pass to a replacement");
         disconnect("rule-endpoint");
         disconnect("rule-aws");
         assert!(!prepare("s3://rule-granted/k").unwrap().signed, "grants go with the connection");
