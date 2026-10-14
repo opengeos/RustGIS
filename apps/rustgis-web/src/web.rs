@@ -562,6 +562,8 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context, embedded: bool)
                     "RustGIS items",
                     &["rgismap", "rgismpk", "rgispkg", "rgislyr", "rgisstyle", "rgisramp", "rgistemplate", "rgistask", "rgis", "rgisx"],
                 )
+            } else if purpose == "ramp" {
+                rfd::AsyncFileDialog::new().add_filter("Colour ramps", &["rgisramp", "xml", "qml", "txt", "clr", "cpt"])
             } else if purpose == "layout" {
                 rfd::AsyncFileDialog::new().add_filter("RustGIS layout", &["rgislayout"])
             } else if purpose == "plugin" {

@@ -1755,7 +1755,10 @@ fn ramp_picker(app: &mut RustGisApp, ui: &mut Ui, cur: &Ramp, t: &Tokens) {
         ui.label(egui::RichText::new(tl!("Custom")).size(11.5).color(t.text_dim));
         grid(app, ui, "custom_ramps", custom);
     }
-    if ui.small_button(tl!("Add Color Ramp File…")).on_hover_text(tl!("Add color ramps from a .rgisramp file to the project.")).clicked()
+    if ui
+        .small_button(tl!("Add Color Ramp File…"))
+        .on_hover_text(tl!("Add color ramps to the project from a .rgisramp file, a QGIS style, a GDAL color file or a GMT palette."))
+        .clicked()
     {
         let _ = app.run("ui.openItem", json!({"kind": "ramps"}));
     }

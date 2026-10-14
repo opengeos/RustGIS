@@ -627,6 +627,7 @@ impl RustGisApp {
             (".rgislyr", "layer.addLayerFile"),
             (".rgisstyle", "style.add"),
             (".rgisramp", "ramp.add"),
+            (".cpt", "ramp.add"),
             (".rgistemplate", "project.fromTemplate"),
             (".rgistask", "task.import"),
             (".rgisreport", "report.open"),
@@ -646,7 +647,12 @@ impl RustGisApp {
         }
         if let Some(cmd) = self.ui.pending_open.take().or(item) {
             use base64::Engine;
-            let r = self.run(cmd, json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)}));
+            let mut p = json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)});
+            // A colour ramp file's name tells its format and names its ramp.
+            if cmd == "ramp.add" {
+                p["file"] = json!(name);
+            }
+            let r = self.run(cmd, p);
             self.map.invalidate();
             return r;
         }
@@ -1362,7 +1368,7 @@ impl RustGisApp {
                     "map" => ("map.import", &["rgismap", "rgismpk", "rgis", "rgisx", "rgispkg"], "RustGIS maps and projects"),
                     "layer" => ("layer.addLayerFile", &["rgislyr"], "RustGIS layer file"),
                     "styles" => ("style.add", &["rgisstyle"], "RustGIS styles"),
-                    "ramps" => ("ramp.add", &["rgisramp"], "RustGIS colour ramps"),
+                    "ramps" => ("ramp.add", &["rgisramp", "xml", "qml", "txt", "clr", "cpt"], "Colour ramps (RustGIS, QGIS, GDAL, GMT)"),
                     "importStyles" => ("style.import", &["rgislyr", "rgismap", "rgis", "rgisx"], "RustGIS layers, maps and projects"),
                     "template" => ("project.fromTemplate", &["rgistemplate"], "RustGIS project template"),
                     "task" => ("task.import", &["rgistask"], "RustGIS task"),
@@ -1374,7 +1380,7 @@ impl RustGisApp {
                 };
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_open = Some(cmd);
-                    open("item");
+                    open(if kind == "ramps" { "ramp" } else { "item" });
                 } else if let Some(path) = dialogs::pick_open(exts, tl!(label)) {
                     let r = self.run(cmd, json!({"path": path}));
                     self.map.invalidate();

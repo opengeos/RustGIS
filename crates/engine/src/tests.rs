@@ -1083,6 +1083,40 @@ fn custom_colour_ramps_add_apply_save_and_travel() {
 }
 
 #[test]
+fn colour_ramps_from_qgis_gdal_and_gmt_files() {
+    use rustgis_map::color::RampKind;
+    let dir = std::env::temp_dir().join(format!("rustgis-palettes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |n: &str| dir.join(n).display().to_string();
+    let mut s = world();
+    // A GMT palette by path: named after the file, with the kind given.
+    std::fs::write(path("relief.cpt"), "-100 0/0/255 0 255/255/255\n0 255/255/255 100 255/0/0\n").unwrap();
+    let r = s.run("ramp.add", &json!({"path": path("relief.cpt"), "kind": "diverging"})).unwrap();
+    assert_eq!(r["added"], json!(["relief"]));
+    assert_eq!(s.project.ramps[0].kind(), RampKind::Diverging);
+    // GDAL colour-relief text, as the web app passes a picked file: its bytes and name.
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode("0, 0, 0, 0, 255\n10, 255, 255, 255, 255\nnv, 0, 0, 0, 0\n");
+    let r = s.run("ramp.add", &json!({"data": data, "file": "Grey.txt"})).unwrap();
+    assert_eq!(r["added"], json!(["Grey"]));
+    // A QGIS style as text, with the format named.
+    let xml = r#"<!DOCTYPE qgis_style><qgis_style version="2"><colorramps><colorramp type="gradient" name="Q"><Option type="Map">
+        <Option type="QString" name="color1" value="0,0,0,255"/><Option type="QString" name="color2" value="255,255,255,255"/>
+        </Option></colorramp></colorramps></qgis_style>"#;
+    s.run("ramp.add", &json!({"text": xml, "format": "qgis", "name": "From QGIS"})).unwrap();
+    assert_eq!(s.project.ramps.iter().map(|r| r.name()).collect::<Vec<_>>(), ["relief", "Grey", "From QGIS"]);
+    s.run("layer.ramp", &json!({"layer": "Countries", "ramp": "relief"})).unwrap();
+    for bad in [
+        json!({"text": xml, "format": "svg"}),
+        json!({"text": xml, "kind": "round"}),
+        json!({"text": r##"{"name": "Ember", "stops": ["#000000", "#ffffff"]}"##}),
+    ] {
+        assert!(s.run("ramp.add", &bad).is_err(), "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn project_items_files_styles_packages_tasks_and_3d() {
     let dir = std::env::temp_dir().join(format!("rustgis-items-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

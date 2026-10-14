@@ -190,3 +190,4 @@ databases](data.md#sql-queries-and-duckdb-databases).
 | Map, layer, style, color ramp, template, task and layout files | `.rgismap`, `.rgislyr`, `.rgisstyle`, `.rgisramp`, `.rgistemplate`, `.rgistask`, `.rgislayout` | See [Project items](data.md#project-items). |
 | Project package | `.rgispkg` | Everything, rasters included. |
 | Plugin | `.rgplugin` | See [Plugins](../plugins.md). |
+| Color ramps from other tools | QGIS style `.xml` and layer style `.qml`, GDAL color-relief `.txt`, GMT `.cpt` | Read as custom color ramps; see [Custom color ramps](cartography.md#color-ramps-from-other-tools). |

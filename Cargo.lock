@@ -3860,6 +3860,7 @@ dependencies = [
  "base64 0.22.1",
  "crs-definitions",
  "proj4rs",
+ "roxmltree",
  "rustgis-data",
  "rustgis-geom",
  "serde",
