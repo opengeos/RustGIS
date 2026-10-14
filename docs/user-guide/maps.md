@@ -111,7 +111,8 @@ Effect** (tilt-shift blur, film grain) and **Postprocessing** (brightness, contr
 sepia). The **Color Vision** simulator shows the map as people with protanopia, deuteranopia,
 tritanopia or achromatopsia see it (on screen only; exports are untouched).
 
-**Global** shows a globe; **Local** a flat view centred where you are (azimuthal equidistant).
+**Global** shows a globe; **Local** a flat view centred where you are (azimuthal equidistant;
+desktop and command line only, as the web app doesn't include that projection).
 **Wireframe** draws polygons as outlines, **Depth Priority** lifts a layer above others whatever
 its order, **View Clipping** hides features beyond a distance from the centre, and **Speed
 Display** draws without antialiasing. The **Navigator** adds a compass, zoom buttons and a pan

@@ -1761,12 +1761,18 @@ fn view_effects_scene_and_navigation() {
     s.run("map.displayType", &json!({"mode": "quality"})).unwrap();
     assert!(png(&mut s) == plain);
     // Views and navigation.
-    s.run("map.viewMode", &json!({"mode": "local"})).unwrap();
-    assert!(s.map().projection.code().starts_with("local:"));
-    let local = png(&mut s);
-    // The local view is azimuthal equidistant, not Web Mercator under another name (#208).
-    s.run("map.projection", &json!({"type": "mercator"})).unwrap();
-    assert!(png(&mut s) != local, "a local view draws in its own projection");
+    // Local views are native-only: the browser build leaves out proj4rs' `aeqd` (crates/map/Cargo.toml).
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        s.run("map.viewMode", &json!({"mode": "local"})).unwrap();
+        assert!(s.map().projection.code().starts_with("local:"));
+        let local = png(&mut s);
+        // The local view is azimuthal equidistant, not Web Mercator under another name (#208).
+        s.run("map.projection", &json!({"type": "mercator"})).unwrap();
+        assert!(png(&mut s) != local, "a local view draws in its own projection");
+    }
+    #[cfg(target_arch = "wasm32")]
+    assert!(s.run("map.viewMode", &json!({"mode": "local"})).is_err(), "no aeqd in the browser build");
     s.run("map.viewMode", &json!({"mode": "global"})).unwrap();
     assert!(s.map().projection.is_globe());
     s.run("map.navigation", &json!({"mode": "planar"})).unwrap();
