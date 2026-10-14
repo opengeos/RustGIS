@@ -25,7 +25,10 @@ nav = [
     "user-guide/workspace.md",
     "user-guide/assistant.md",
   ] },
-  { "Comparison" = "comparison.md" },
+  { "Comparison" = [
+    "comparison/index.md",
+    "comparison/qgis.md",
+  ] },
   { "Command Line" = "cli.md" },
   { "Python" = "python.md" },
   { "MCP Server" = "mcp.md" },

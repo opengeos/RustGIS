@@ -10,7 +10,7 @@ script from the command line, a notebook or the AI Assistant.
 [Try it in your browser](https://web.rustgis.app){ .md-button .md-button--primary }
 [Download](installation.md){ .md-button }
 [Get started](getting-started.md){ .md-button }
-[Compare](comparison.md){ .md-button }
+[Compare](comparison/index.md){ .md-button }
 
 [![RustGIS with the Home tab of the ribbon open over a world map in the Equal Earth projection, countries shaded by population](https://assets.rustgis.app/images/hero.webp)](https://assets.rustgis.app/images/hero.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
