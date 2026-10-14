@@ -284,9 +284,9 @@ pub struct UiState {
     pub link_zoomed: bool,
     /// The service Add From Service is connected (or connecting) to.
     pub service: Option<ServiceConn>,
-    /// STAC Search: its choices, results and the request under way.
     /// Add From Service › Catalogue: the search and the records found.
     pub csw: cswui::State,
+    /// STAC Search: its choices, results and the request under way.
     pub stac: stacui::State,
     /// S3…: the connection form, the bucket browsed and the listing under way.
     pub s3: s3ui::State,
