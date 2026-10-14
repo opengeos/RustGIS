@@ -186,6 +186,26 @@ fn specs() -> Vec<ToolSpec> {
     out
 }
 
+/// Where tool `id` sits: `GeoLibre › Terrain › Derivatives`, as in GeoLibre's Processing
+/// menu (`menu.tsv`). The manifests carry only a top-level `category`, which a tool missing
+/// from the menu keeps: `GeoLibre › Raster`.
+fn toolbox_of(id: &str, category: &str) -> String {
+    static MENU: std::sync::LazyLock<HashMap<&'static str, (&'static str, &'static str)>> = std::sync::LazyLock::new(|| {
+        include_str!("menu.tsv")
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .filter_map(|l| {
+                let mut f = l.split('\t');
+                Some((f.next()?, (f.next()?, f.next()?)))
+            })
+            .collect()
+    });
+    match MENU.get(id) {
+        Some((top, sub)) => format!("GeoLibre › {top} › {sub}"),
+        None => format!("GeoLibre › {category}"),
+    }
+}
+
 fn spec_of(m: &Value) -> Option<(ToolSpec, Meta)> {
     let id = m.get("id")?.as_str()?;
     let name = m.get("display_name").and_then(Value::as_str).filter(|n| !n.is_empty()).unwrap_or(id);
@@ -257,7 +277,7 @@ fn spec_of(m: &Value) -> Option<(ToolSpec, Meta)> {
     let spec = ToolSpec {
         id: leak(format!("{PREFIX}{id}")),
         name: leak(name),
-        toolbox: leak(format!("GeoLibre › {category}")),
+        toolbox: leak(toolbox_of(id, &category)),
         summary: leak(summary),
         params: Box::leak(params.into_boxed_slice()),
         run: rustgis_analysis::external_placeholder,

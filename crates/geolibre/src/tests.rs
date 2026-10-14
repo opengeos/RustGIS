@@ -73,6 +73,10 @@ fn runner_values_and_choices() {
     assert!(convert(&line, |c| (c.x < 0.5).then_some(c)).is_none());
     assert!(convert(&line, |_| Some(Coord::new(f64::NAN, 0.0))).is_none());
     assert_eq!(safe("a b/c.tif"), "a_b_c_tif");
+    // Only the runner Install put in place can be uninstalled, not one of the user's own.
+    let installed = install::install_dir().unwrap().join("geolibre");
+    assert!(install::is_installed(&installed));
+    assert!(!install::is_installed(std::path::Path::new("/usr/local/bin/geolibre")));
 }
 
 #[test]
@@ -82,7 +86,7 @@ fn manifests_become_tool_forms() {
     assert!(tools.len() > 1000, "{}", tools.len());
     let slope = rustgis_analysis::tool("geolibre:slope").unwrap();
     assert!(rustgis_analysis::is_external(slope));
-    assert_eq!(slope.toolbox, "GeoLibre › Raster");
+    assert_eq!(slope.toolbox, "GeoLibre › Terrain › Derivatives");
     assert_eq!(slope.params.first().map(|p| p.kind), Some(ParamKind::RasterLayer));
     assert!(slope.params.iter().all(|p| p.name != "output"), "outputs are not form fields");
     let units = slope.params.iter().find(|p| p.name == "units").unwrap();
@@ -171,6 +175,9 @@ fn prepare_and_finish_without_a_runner() {
         ]
     });
     let (spec, meta) = spec_of(&manifest).unwrap();
+    // Not in GeoLibre's menu: the manifest's category; a menu tool gets its subcategory.
+    assert_eq!(spec.toolbox, "GeoLibre › Vector");
+    assert_eq!(toolbox_of("slope", "Raster"), "GeoLibre › Terrain › Derivatives");
     let params = rustgis_analysis::resolve_params(&spec, &json!({"input": "pts", "others": "dem;dem", "distance": "250"})).unwrap();
     let job = prepare_with(&spec, &meta, &f, &params).unwrap();
     // Inputs are staged as numbered files, even the same layer twice.

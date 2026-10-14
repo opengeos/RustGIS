@@ -185,6 +185,7 @@ pub(crate) fn leak(s: &str) -> &'static str {
 /// Commands reserved to the user (see [`user_only`]); plugin management is too.
 const NEVER: &[&str] = &[
     "gp.installGeolibre",
+    "gp.uninstallGeolibre",
     "gp.setGeolibre",
     "script.run",
     "task.run",

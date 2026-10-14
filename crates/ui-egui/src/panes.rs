@@ -549,22 +549,14 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 };
                 for b in boxes {
                     egui::CollapsingHeader::new(crate::i18n::location(b)).default_open(false).show(ui, |ui| {
-                        let mut subs: Vec<&str> = tools().filter(|x| x.toolbox.split(" › ").next() == Some(b)).map(|x| x.toolbox).collect();
-                        subs.dedup();
-                        // A large toolbox (the GeoLibre suite) opens one sub-toolbox at a time.
-                        if subs.len() > 1 && tools().filter(|x| x.toolbox.starts_with(b)).count() > 40 {
-                            for sub in subs {
-                                egui::CollapsingHeader::new(crate::i18n::location(sub.trim_start_matches(b).trim_start_matches(" › ")))
-                                    .id_salt(("toolbox", sub))
-                                    .default_open(false)
-                                    .show(ui, |ui| {
-                                        for tool in tools().filter(|x| x.toolbox == sub) {
-                                            link(app, ui, tool);
-                                        }
-                                    });
-                            }
+                        let in_box: Vec<&rustgis_engine::analysis::ToolSpec> =
+                            tools().filter(|x| x.toolbox.split(" › ").next() == Some(b)).collect();
+                        // A large toolbox (the GeoLibre suite) opens one level at a time:
+                        // `GeoLibre › Raster › General`.
+                        if in_box.len() > 40 {
+                            toolbox_levels(app, ui, &in_box, 1, &link);
                         } else {
-                            for tool in tools().filter(|x| x.toolbox.split(" › ").next() == Some(b)) {
+                            for tool in in_box {
                                 link(app, ui, tool);
                             }
                         }
@@ -770,6 +762,31 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
 }
 
+/// `tools` grouped by the `depth`-th part of their toolbox (`GeoLibre › Raster › General`), one
+/// closed header per group and nested again below it; tools whose toolbox stops here are listed.
+fn toolbox_levels(
+    app: &mut RustGisApp,
+    ui: &mut Ui,
+    tools: &[&'static rustgis_engine::analysis::ToolSpec],
+    depth: usize,
+    link: &dyn Fn(&mut RustGisApp, &mut Ui, &rustgis_engine::analysis::ToolSpec),
+) {
+    let part = |x: &rustgis_engine::analysis::ToolSpec| x.toolbox.split(" › ").nth(depth);
+    let mut groups: Vec<&str> = tools.iter().filter_map(|x| part(x)).collect();
+    groups.sort();
+    groups.dedup();
+    for g in groups {
+        let inside: Vec<_> = tools.iter().copied().filter(|x| part(x) == Some(g)).collect();
+        let path: Vec<&str> = inside.first().map(|x| x.toolbox.split(" › ").take(depth + 1).collect()).unwrap_or_default();
+        egui::CollapsingHeader::new(crate::i18n::location(g)).id_salt(("toolbox", path)).default_open(false).show(ui, |ui| {
+            toolbox_levels(app, ui, &inside, depth + 1, link);
+        });
+    }
+    for tool in tools.iter().filter(|x| part(x).is_none()) {
+        link(app, ui, tool);
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Geoprocessing
 
@@ -785,6 +802,8 @@ pub struct GpForm {
     pub web_load: Option<crate::Slot<Result<String, String>>>,
     /// A tool running in the browser's GeoLibre runner: its run id, and where the result lands.
     pub web_run: Option<(u64, &'static str, crate::Slot<rustgis_engine::cmd::gp::ExternalOutput>)>,
+    /// Uninstall was pressed once: the button now asks to confirm.
+    pub confirm_uninstall: bool,
 }
 
 /// Starts loading the browser's GeoLibre tools (the runner downloads once, then the browser
@@ -985,6 +1004,55 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     );
 }
 
+/// Uninstalls the GeoLibre tools (a second press confirms): natively the runner that Install
+/// put in place (not one of the user's own, found with Locate… or on the `PATH`); in the
+/// browser, the loaded tools, which then stop loading at startup.
+fn geolibre_uninstall(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+    let status = rustgis_engine::cmd::gp::geolibre_status();
+    let web = status["web"] == true;
+    if !web && status["installed"] != true {
+        return;
+    }
+    let label = match (web, app.gp.confirm_uninstall) {
+        (_, true) => tl!("Confirm uninstall"),
+        (true, false) => tl!("Remove"),
+        (false, false) => tl!("Uninstall"),
+    };
+    let tip = if web {
+        tl!("Unload the GeoLibre tools and stop loading them when RustGIS starts.")
+    } else {
+        tl!("Delete the GeoLibre runner that RustGIS installed. Install it again at any time.")
+    };
+    let text = egui::RichText::new(label).size(11.0);
+    let resp = ui.small_button(if app.gp.confirm_uninstall { text.color(t.red) } else { text }).on_hover_text(tip);
+    if !resp.clicked() {
+        // A click elsewhere takes back the first press.
+        if app.gp.confirm_uninstall && ui.input(|i| i.pointer.any_click()) && !resp.hovered() {
+            app.gp.confirm_uninstall = false;
+        }
+        return;
+    }
+    if !app.gp.confirm_uninstall {
+        app.gp.confirm_uninstall = true;
+        return;
+    }
+    app.gp.confirm_uninstall = false;
+    match app.run("gp.uninstallGeolibre", Value::Null) {
+        Ok(_) => {
+            if let Some(save) = &app.services.save_pref {
+                // Forget the runner Install remembered (or, in the browser, the loaded tools).
+                if web {
+                    save("geolibre_web", "off");
+                } else {
+                    save("geolibre_runner", "");
+                }
+            }
+            app.gp.last = None;
+        }
+        Err(e) => app.gp.last = Some((false, vec![e])),
+    }
+}
+
 /// The browser's version of the card: load the WASI runner's tools.
 fn geolibre_web_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.add_space(6.0);
@@ -1066,16 +1134,43 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 return;
             }
             if q.is_empty() {
-                ui.label(egui::RichText::new(tl!("GeoLibre")).size(11.0).color(t.text_dim));
-                let mut boxes: Vec<&str> = external.iter().map(|t| t.toolbox).collect();
-                boxes.dedup();
-                for b in boxes {
-                    let n = external.iter().filter(|x| x.toolbox == b).count();
-                    egui::CollapsingHeader::new(format!("{} ({n})", crate::i18n::location(b.rsplit(" › ").next().unwrap_or(b))))
-                        .id_salt(("gp-box", b))
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tl!("GeoLibre")).size(11.0).color(t.text_dim));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| geolibre_uninstall(app, ui, t));
+                });
+                if let Some((false, msgs)) = &app.gp.last {
+                    for m in msgs {
+                        ui.label(egui::RichText::new(m).size(11.0).color(t.red));
+                    }
+                }
+                // As in GeoLibre's Processing menu: category › subcategory › tools
+                // (`GeoLibre › Terrain › Derivatives`; a tool without a subcategory sits
+                // directly in its category).
+                let level = |tool: &rustgis_engine::analysis::ToolSpec, i: usize| tool.toolbox.split(" › ").nth(i);
+                let mut tops: Vec<&str> = external.iter().filter_map(|x| level(x, 1)).collect();
+                tops.sort();
+                tops.dedup();
+                for top in tops {
+                    let in_top: Vec<_> = external.iter().filter(|x| level(x, 1) == Some(top)).collect();
+                    egui::CollapsingHeader::new(format!("{} ({})", crate::i18n::location(top), in_top.len()))
+                        .id_salt(("gp-box", top))
                         .default_open(false)
                         .show(ui, |ui| {
-                            for tool in external.iter().filter(|x| x.toolbox == b) {
+                            let mut subs: Vec<&str> = in_top.iter().filter_map(|x| level(x, 2)).collect();
+                            subs.sort();
+                            subs.dedup();
+                            for sub in subs {
+                                let in_sub: Vec<_> = in_top.iter().copied().filter(|x| level(x, 2) == Some(sub)).collect();
+                                egui::CollapsingHeader::new(format!("{} ({})", crate::i18n::location(sub), in_sub.len()))
+                                    .id_salt(("gp-box", top, sub))
+                                    .default_open(false)
+                                    .show(ui, |ui| {
+                                        for tool in in_sub {
+                                            row(app, ui, tool);
+                                        }
+                                    });
+                            }
+                            for tool in in_top.iter().copied().filter(|x| level(x, 2).is_none()) {
                                 row(app, ui, tool);
                             }
                         });

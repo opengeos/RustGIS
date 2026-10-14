@@ -561,6 +561,8 @@ fn hostile_params_never_panic() {
                 | "share.exportRaster"
                 // Download from the network.
                 | "gp.installGeolibre"
+                // Deletes the installed GeoLibre runner.
+                | "gp.uninstallGeolibre"
                 | "plugin.registry"
                 | "plugin.installFromRegistry"
                 // Ask Earth Search when no API is given.
@@ -1773,7 +1775,8 @@ fn plugin_edits_are_one_undo_step() {
     assert!(forward(&mut s, "eng-edit", "layer.remove", json!({"layer": "Nope"})).is_err());
     assert_eq!(s.map().layers.len(), n);
     // Some things are off limits whatever the permissions.
-    for op in ["script.run", "project.new", "edit.undo", "plugin.uninstall", "plugin:eng-edit/h", "gp.setGeolibre"] {
+    for op in ["script.run", "project.new", "edit.undo", "plugin.uninstall", "plugin:eng-edit/h", "gp.setGeolibre", "gp.uninstallGeolibre"]
+    {
         assert!(forward(&mut s, "eng-edit", op, json!({})).is_err(), "{op}");
     }
     // Files need their own permission.

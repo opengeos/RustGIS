@@ -142,6 +142,21 @@ pub fn install(progress: &dyn Fn(u64, Option<u64>)) -> Result<PathBuf, String> {
     Ok(dest)
 }
 
+/// Whether `exe` is the runner [`install`] put in place (rather than one found elsewhere).
+pub fn is_installed(exe: &Path) -> bool {
+    install_dir().is_some_and(|d| exe.parent() == Some(d.as_path()))
+}
+
+/// Removes what [`install`] put in place: its whole folder. A runner found elsewhere (chosen
+/// with Locate…, or on the `PATH`) is the user's own and is left alone.
+pub fn uninstall() -> Result<(), String> {
+    let dir = install_dir().ok_or("can't find the GeoLibre install folder")?;
+    if !dir.exists() {
+        return Err("the GeoLibre runner isn't installed".into());
+    }
+    std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))
+}
+
 fn unpack(bytes: &[u8], target: &str, into: &Path) -> Result<(), String> {
     if target.contains("windows") {
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
