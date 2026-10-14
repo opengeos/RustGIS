@@ -45,8 +45,7 @@ ab_glyph = "0.2"
 tiff = "0.11"
 # The tests' Zstandard-compressed GeoTIFFs (the version the tiff crate decodes with).
 zstd = { version = "0.13", default-features = false }
-# `aeqd` (azimuthal equidistant) draws the local views (`local:lon,lat`, map.viewMode "local").
-proj4rs = { version = "0.2", default-features = false, features = ["aeqd"] }
+proj4rs = { version = "0.2", default-features = false }
 crs-definitions = { version = "0.6", default-features = false, features = ["proj4"] }
 base64 = "0.22"
 # Deflate for PDF image streams.
