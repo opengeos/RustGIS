@@ -600,4 +600,27 @@ fn web_save_asks_for_the_file_name() {
     h.state_mut().run("ui.save", json!(null)).unwrap();
     assert_eq!(h.state().dialogs.open, None);
     assert_eq!(names(&got).last().map(String::as_str), Some("test.rgis"));
+    // Another project in its place hasn't been saved: Save asks again, even under the same name.
+    let n = names(&got).len();
+    h.state_mut().run("project.new", json!({"name": "test"})).unwrap();
+    h.state_mut().run("ui.save", json!(null)).unwrap();
+    assert_eq!(h.state().dialogs.open, Some("saveProject"));
+    assert_eq!(names(&got).len(), n);
+}
+
+/// Without a browser's downloads, Save Project As (opened by `ui.dialog`) saves nothing and
+/// leaves the project as it was.
+#[test]
+fn save_project_dialog_needs_downloads() {
+    let mut h = harness();
+    h.state_mut().run("layer.color", json!({"layer": "Countries", "color": "#336699"})).unwrap();
+    h.state_mut().run("ui.dialog", json!({"name": "saveProject"})).unwrap();
+    h.step();
+    h.state_mut().dialogs.text = "Elsewhere".into();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").click();
+    h.step();
+    assert!(h.state().dialogs.error.is_some());
+    assert_eq!(h.state().session.project.name, "World Atlas");
+    assert!(h.state().session.dirty);
 }

@@ -731,11 +731,21 @@ impl RustGisApp {
         if stem.is_empty() || stem.contains(['/', '\\']) {
             return Err(tl!("type a file name").into());
         }
+        if self.services.download.is_none() {
+            return Err("this build saves projects with Save As".into());
+        }
         let stem: String = stem.chars().take(200).collect();
-        // Not an undoable edit: saving names the project, as `project.saveAs` does.
-        self.session.project.name = stem.clone();
+        // Not an undoable edit: saving names the project, as `project.saveAs` does, once the
+        // file is written.
+        let old = std::mem::replace(&mut self.session.project.name, stem.clone());
+        let text = match serde_json::to_string(&self.session.project) {
+            Ok(text) => text,
+            Err(e) => {
+                self.session.project.name = old;
+                return Err(e.to_string());
+            }
+        };
         let file = format!("{stem}.rgis");
-        let text = serde_json::to_string(&self.session.project).map_err(|e| e.to_string())?;
         self.download(&file, text.into_bytes());
         self.session.dirty = false;
         self.ui.web_file = Some(file);
@@ -846,6 +856,11 @@ impl RustGisApp {
         let r = if id.starts_with("ui.") { self.run_ui(id, &params) } else { self.session.run(id, &params) };
         if let Err(e) = &r {
             log::info!("{id}: {e}");
+        }
+        // A project replacing this one hasn't been saved in the browser yet (opening a file
+        // names it again).
+        if r.is_ok() && matches!(id, "project.new" | "project.sample" | "project.open" | "project.openText" | "project.fromTemplate") {
+            self.ui.web_file = None;
         }
         // Sources added, saved or made favourites are kept with the preferences.
         sourcespane::save(self);
