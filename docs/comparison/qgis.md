@@ -33,11 +33,11 @@ licence, and the two read and write the same open formats.
 
 The same World Atlas data, styled the same way, in each app.
 
-[![RustGIS 0.2 with the World Atlas on the globe: the ribbon, the Layers pane and the AI Assistant](https://assets.rustgis.app/images/hero.webp)](https://assets.rustgis.app/images/hero.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-*RustGIS 0.2: the ribbon, the Layers pane and the AI Assistant.*
+[![RustGIS with the World Atlas on the globe: the ribbon, the Layers pane and the AI Assistant](https://assets.rustgis.app/images/hero.webp)](https://assets.rustgis.app/images/hero.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
+*RustGIS: the ribbon, the Layers pane and the AI Assistant.*
 
-[![QGIS 4.2 with the same World Atlas data on an orthographic globe: toolbars, the Browser and Layers panels](https://assets.rustgis.app/images/qgis-world-atlas.webp)](https://assets.rustgis.app/images/qgis-world-atlas.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-*QGIS 4.2 with the same data and styling: toolbars and the Browser and Layers panels.*
+[![QGIS with the same World Atlas data on an orthographic globe: toolbars, the Browser and Layers panels](https://assets.rustgis.app/images/qgis-world-atlas.webp)](https://assets.rustgis.app/images/qgis-world-atlas.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
+*QGIS with the same data and styling: toolbars and the Browser and Layers panels.*
 
 ## Where RustGIS is stronger
 
