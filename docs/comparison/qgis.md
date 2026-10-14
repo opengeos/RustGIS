@@ -14,13 +14,13 @@ together. For RustGIS beside GeoLibre, ArcGIS Pro and ArcGIS Online as well, see
 ## The short answer
 
 **QGIS is the mature, complete open-source desktop GIS.** Over twenty years it has grown the
-widest format support (everything GDAL/OGR and PROJ handle), the deepest open-source
-cartography, thorough editing, GRASS and SAGA processing, QGIS Server, mobile companions
-(QField, Mergin Maps) and thousands of Python plugins, with a large community, training material
-and books behind it.
+widest format support (through GDAL/OGR) and full coordinate-system support (through PROJ), the
+deepest open-source cartography, thorough editing, GRASS and SAGA processing, QGIS Server,
+mobile companions (QField, Mergin Maps) and thousands of Python plugins, with a large community,
+training material and books behind it.
 
 **RustGIS is younger and narrower, built differently.** It is one native program written
-entirely in Rust, a 20–30 MB download that also runs as the whole app in a browser tab. Its
+entirely in Rust, an 18–30 MB download that also runs as the whole app in a browser tab. Its
 interface is a ribbon laid out in the order of the work, every button is a command you can run
 from the command line, Python or an AI agent, and its plugins run sandboxed.
 
@@ -31,7 +31,7 @@ licence, and the two read and write the same open formats.
 
 ## Where RustGIS is stronger
 
-- **Installing it.** RustGIS is a single program with no Python, Qt or GDAL inside: the 0.2.0
+- **Installing it.** RustGIS is a single program with no Python, Qt or GDAL inside: the
   installers are 18–30 MB depending on the platform (a portable Windows zip, a macOS DMG, an
   AppImage, `.deb`/`.rpm`, Homebrew, winget, the AUR, Fedora COPR). QGIS installers bundle a
   Python interpreter, Qt, GDAL, GRASS and more, and run to hundreds of megabytes. See
@@ -76,8 +76,8 @@ licence, and the two read and write the same open formats.
 
 ## Where QGIS is stronger
 
-- **Format and database breadth.** QGIS reads and writes everything GDAL/OGR does, natively.
-  RustGIS reads a focused set of formats with its own code (see
+- **Format and database breadth.** QGIS opens the formats its GDAL/OGR build supports, natively,
+  and writes many of them. RustGIS reads a focused set of formats with its own code (see
   [Data formats](../user-guide/data-formats.md)) and reaches the rest, such as File Geodatabase,
   DWG, JPEG 2000 or NetCDF, only when GDAL's programs are installed. QGIS also connects to
   PostGIS, SpatiaLite, Oracle and SQL Server and edits in them directly; RustGIS reaches
@@ -122,7 +122,7 @@ licence, and the two read and write the same open formats.
 | **Download** | 18–30 MB, one program | Hundreds of MB (bundles Python, Qt, GDAL, GRASS…) |
 | **Platforms** | Windows, macOS, Linux, and the browser (WebAssembly) | Windows, macOS, Linux |
 | **Interface** | Ribbon with Command Search | Toolbars, menus and docked panels |
-| **Formats** | A focused set read natively; more through GDAL when installed | Everything GDAL/OGR reads and writes |
+| **Formats** | A focused set read natively; more through GDAL when installed | Whatever its GDAL/OGR build supports (read/write varies by driver) |
 | **Coordinate systems** | Vectors in WGS 84; rasters and the map by EPSG code | Full PROJ |
 | **Geoprocessing** | 1,000+ (GeoLibre and Whitebox) plus built-in vector tools | 1,000+ (native, GDAL, GRASS, SAGA) |
 | **Editing** | Create, move, rotate, scale, split, merge, snapping; no vertex editing yet | Complete digitizing and topology tools |
