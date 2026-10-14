@@ -5,6 +5,7 @@ Every asset file in this repository, with its source and licence.
 | File | Author / source | Licence |
 |---|---|---|
 | Sample data (`countries`, `countries_chn`, `cities`, `rivers`, `lakes` GeoJSON), embedded at build time from [rustgis-assets](https://github.com/opengeos/rustgis-assets/tree/main/data) | Natural Earth 1:110m, attributes trimmed; `countries_chn` is Natural Earth's China point of view (1:10m, simplified) | Public domain |
+| QGIS screenshot (`qgis-world-atlas.webp` in [rustgis-assets](https://github.com/opengeos/rustgis-assets/tree/main/images)), on the [RustGIS and QGIS](docs/comparison/qgis.md) page | Taken by the RustGIS project: [QGIS](https://qgis.org) 4.2 showing the Natural Earth sample data above | QGIS is GPL-2.0-or-later; the data is public domain |
 
 Raster coordinate systems are looked up by EPSG code in the PROJ definitions of the
 [crs-definitions](https://crates.io/crates/crs-definitions) crate (CC0-1.0), compiled into the
