@@ -30,7 +30,7 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"layout": i}))
         })
         .view()
-        .params(r#"{"name": string, "layout"?: name|index (instead of name)}"#),
+        .params(r#"{"name": string | "layout": name|index}"#),
         C::new("layout.close", "Show Map", "Browser", |s, _| {
             s.active_layout = None;
             Ok(Value::Null)
@@ -80,7 +80,7 @@ pub fn commands() -> Vec<C> {
         })
         .params(r#"{"layout"?, "element": id}"#),
         C::new("layout.frameZoom", "Zoom Frame", "Publish › Map Frame", frame_zoom).params(
-            r#"{"layout"?, "element"?: frame id, "to"?: "view" (the map view's extent, the default)|"full"|"selection"|"layer", "layer"?}"#,
+            r#"{"layout"?, "element"?: frame id, "frame"?: (as element), "to"?: "view" (the map view's extent, the default)|"full"|"selection"|"layer", "layer"?}"#,
         ),
         C::new("layout.series", "Map Series", "Publish › Map Frames", series).params(
             r#"{"layout"?, "layer": index layer, "nameField"?: string, "frame"?: id, "margin"?: 0..1, "off"?: bool}"#,

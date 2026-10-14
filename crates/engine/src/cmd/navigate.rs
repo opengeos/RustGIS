@@ -40,7 +40,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"extent": [minLon, minLat, maxLon, maxLat]}"#),
         C::new("map.goToXY", "Go To XY", "Home › Navigate", go_to_xy)
             .view()
-            .params(r#"{"lon": number, "lat": number, "x"?, "y"?: (lon and lat), "scale"?: number}"#),
+            .params(r#"{"lon" | "x": number, "lat" | "y": number, "scale"?: number}"#),
         C::new("map.setScale", "Set Scale", "Status Bar", |s, p| {
             let sc = f(p, "scale").ok_or("scale is required")?;
             s.map_mut().set_scale(sc);

@@ -58,7 +58,7 @@ pub fn commands() -> Vec<C> {
             s.active_presentation = Some(i);
             Ok(json!({"presentation": i, "name": name}))
         })
-        .params(r#"{"path"?: "*.rgispres", "text"?: presentation JSON}"#),
+        .params(r#"{"path"?: "*.rgispres", "text"?: presentation JSON, "data"?: base64 file}"#),
         C::new("presentation.activate", "Open Presentation", "Browser", |s, p| {
             let i = index(s, p)?;
             s.active_presentation = Some(i);

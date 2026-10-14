@@ -162,7 +162,7 @@ pub fn commands() -> Vec<C> {
             let steps = v.get("steps").cloned().ok_or("not a RustGIS web tool (no steps)")?;
             s.run("model.new", &json!({"name": name, "steps": steps, "imported": true}))
         })
-        .params(r#"{"path"?: "*.rgistool", "text"?: tool JSON}"#),
+        .params(r#"{"path"?: "*.rgistool", "text"?: tool JSON, "data"?: base64 file}"#),
     ]
 }
 

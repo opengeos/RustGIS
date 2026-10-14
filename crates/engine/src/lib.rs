@@ -79,8 +79,9 @@ impl CommandSpec {
 }
 
 /// The keys of a `{"key": …, "other"?: …}` description: quoted words at the top level that open
-/// an entry (after `{` or a top-level `,`, followed by `?`, `:`, `,` or `}`) or an alternative
-/// (after `|`, followed by `?` or `:`, as in `"path": folder | "url": …`).
+/// an entry (after `{` or a top-level `,`, followed by `?`, `:`, `,`, `}` or `|`) or an
+/// alternative (after `|`, followed by `?` or `:`, as in `"path": folder | "url": …` or
+/// `"lon" | "x": number`).
 pub fn param_keys(desc: &str) -> Option<Vec<&str>> {
     #[derive(PartialEq)]
     enum At {
@@ -99,7 +100,7 @@ pub fn param_keys(desc: &str) -> Option<Vec<&str>> {
                 let end = bytes.get(i + 1..).and_then(|r| r.iter().position(|&c| c == b'"')).map_or(bytes.len(), |n| i + 1 + n);
                 let next = bytes.get(end + 1..).and_then(|r| r.iter().find(|c| !c.is_ascii_whitespace()));
                 let key = match at {
-                    At::Entry => matches!(next, Some(b'?' | b':' | b',' | b'}')),
+                    At::Entry => matches!(next, Some(b'?' | b':' | b',' | b'}' | b'|')),
                     At::Alternative => matches!(next, Some(b'?' | b':')),
                     At::Value => false,
                 };

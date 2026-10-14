@@ -55,7 +55,7 @@ pub fn commands() -> Vec<C> {
         C::new("map.save", "Save Map File", "Publish › Save As", |s, p| save_item(s, "map", p))
         .view()
         .params(r#"{"path": "*.rgismap", "map"?: name}"#),
-        C::new("map.import", "Import", "Data › Project", import_maps).params(r#"{"path": "*.rgismap|*.rgis|*.rgispkg", "text"?: map file JSON, "data"?: base64 file}"#),
+        C::new("map.import", "Import", "Data › Project", import_maps).params(r#"{"path": "*.rgismap|*.rgis|*.rgispkg" | "text": map file JSON | "data": base64 file}"#),
         C::new("layer.save", "Save Layer File", "Publish › Save As", |s, p| save_item(s, "layer", p))
         .view()
         .when(need_layer)
@@ -162,7 +162,7 @@ pub fn commands() -> Vec<C> {
         // Project templates.
         C::new("project.saveTemplate", "Save Project Template", "Publish › Save As", |s, p| save_item(s, "template", p))
         .view()
-        .params(r#"{"path": "*.rgistemplate"}"#),
+        .params(r#"{"path": "*.rgistemplate", "name"?: template name}"#),
         C::new("project.newTemplate", "New Custom Template", "Data › Project", |s, p| save_item(s, "template", p))
         .view()
         .params(r#"{"path": "*.rgistemplate", "name"?: template name}"#),

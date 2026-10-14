@@ -33,7 +33,7 @@ pub fn commands() -> Vec<C> {
         C::new("script.run", "Run Script", "Analyze › Geoprocessing", run_script)
             .params(r#"{"script": "one command per line: id {json}; # comments"}"#),
         C::new("raster.function", "Raster Functions", "Analyze › Raster", raster_function).params(
-            r#"{"layer": raster, "function": "slope"|"aspect"|"hillshade"|"ndvi"|"bandMath"|"remap"|"threshold"|"resample", "band"?: 1-based, "expression"?: "(b4-b3)/(b4+b3)", "ranges"?: [[lo, hi, value]], "value"?: number, "azimuth"?, "altitude"?, "zFactor"?, "target"?: raster (resample onto its grid), "name"?: output}"#,
+            r#"{"layer": raster, "function": "slope"|"aspect"|"hillshade"|"ndvi"|"bandMath"|"remap"|"threshold"|"resample", "band"?: 1-based, "expression"?: "(b4-b3)/(b4+b3)", "ranges"?: [[lo, hi, value]], "value"?: number, "keep"?: bool (remap: keep unmatched cells), "nir"?, "red"?: band numbers (ndvi; default 4 and 3), "azimuth"?, "altitude"?, "zFactor"?, "target"?: raster (resample onto its grid), "name"?: output}"#,
         ),
         C::new("raster.functionChain", "Function Editor", "Analyze › Raster", function_chain)
             .params(r#"{"layer": raster, "steps": [{"function", …}], "name"?: output}"#),

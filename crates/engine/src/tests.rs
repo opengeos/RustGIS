@@ -4581,26 +4581,32 @@ fn coverage_answers_that_are_not_geotiffs_are_errors() {
 }
 
 /// The keys a command's source reads from its parameters, found by scanning `src/cmd/*.rs`: the
-/// command's function (or closure) and the functions of the same file it calls, a few deep.
+/// command's function (or closure) and the functions it passes its parameters to (in its own
+/// file, or another's as `module::name(…)`), a few calls deep.
 fn keys_read_by_commands() -> Vec<(String, std::collections::BTreeSet<String>)> {
     use std::collections::{BTreeMap, BTreeSet};
+    type Fn = (Vec<String>, String);
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cmd");
-    let mut out = Vec::new();
+    // Each module's functions: their `&Value` arguments and bodies.
+    let mut modules: BTreeMap<String, (String, BTreeMap<String, Fn>)> = BTreeMap::new();
     for entry in std::fs::read_dir(dir).unwrap() {
-        let src = std::fs::read_to_string(entry.unwrap().path()).unwrap();
-        // Each function's body and the names of its `&Value` arguments.
-        let mut fns: BTreeMap<String, (Vec<String>, String)> = BTreeMap::new();
+        let path = entry.unwrap().path();
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        let src = std::fs::read_to_string(&path).unwrap();
+        let mut fns: BTreeMap<String, Fn> = BTreeMap::new();
         let mut rest = src.as_str();
         while let Some(at) = rest.find("fn ") {
             let after = &rest[at + 3..];
             let name: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
             let Some(open) = after.find('{') else { break };
-            let sig = &after[..open];
             let body = balanced(&after[open..]);
-            let args = value_args(sig);
-            fns.entry(name).or_insert((args, body.to_string()));
+            fns.entry(name).or_insert((value_args(&after[..open]), body.to_string()));
             rest = &after[open..];
         }
+        modules.insert(stem, (src, fns));
+    }
+    let mut out = Vec::new();
+    for (stem, (src, fns)) in &modules {
         let mut rest = src.as_str();
         while let Some(at) = rest.find("C::new(") {
             let call = balanced(&rest[at + 6..]);
@@ -4614,19 +4620,20 @@ fn keys_read_by_commands() -> Vec<(String, std::collections::BTreeSet<String>)> 
             }
             let tail = tail.trim_start_matches([',', ' ', '\n']);
             let mut keys = BTreeSet::new();
-            let mut todo: Vec<(Vec<String>, String)> = Vec::new();
+            let mut todo: Vec<(String, Fn)> = Vec::new();
             if let Some(closure) = tail.strip_prefix('|') {
                 let args = closure[..closure.find('|').unwrap()].split(',').map(|a| a.trim().to_string()).skip(1).collect();
-                todo.push((args, tail.to_string()));
+                todo.push((stem.clone(), (args, tail.to_string())));
             } else {
                 let name: String = tail.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-                todo.extend(fns.get(&name).cloned());
+                todo.extend(fns.get(&name).cloned().map(|f| (stem.clone(), f)));
             }
             let mut seen = BTreeSet::new();
             let mut depth = 0;
-            while !todo.is_empty() && depth < 4 {
-                for (args, body) in std::mem::take(&mut todo) {
-                    for a in args.iter().filter(|a| !a.starts_with('_')) {
+            while !todo.is_empty() && depth < 6 {
+                for (module, (args, body)) in std::mem::take(&mut todo) {
+                    let args: Vec<&String> = args.iter().filter(|a| !a.starts_with('_')).collect();
+                    for a in &args {
                         // The helpers that read a key: `ps(p, "key")`…
                         for h in ["ps", "f", "b", "uint", "s_req", "color", "get_color", "band", "point", "limit", "method"] {
                             keys.extend(literal_keys(&body, &format!("{h}({a}, \"")));
@@ -4640,11 +4647,20 @@ fn keys_read_by_commands() -> Vec<(String, std::collections::BTreeSet<String>)> 
                             keys.insert("table".to_string());
                         }
                     }
-                    // Same-file functions it calls with one of its parameter values.
-                    for (name, f) in &fns {
-                        if !seen.contains(name) && args.iter().any(|a| calls(&body, name, a)) {
-                            seen.insert(name.clone());
-                            todo.push(f.clone());
+                    // The functions it passes one of its parameter values to, at any position.
+                    for (m, (_, mfns)) in &modules {
+                        for (name, f) in mfns {
+                            let qualified = if m == "mod" { format!("super::{name}") } else { format!("{m}::{name}") };
+                            let call = if *m == module { name.as_str() } else { qualified.as_str() };
+                            let key = format!("{m}::{name}");
+                            // A dispatcher by kind: its arms read keys for other commands.
+                            if key == "items::item_bytes" {
+                                continue;
+                            }
+                            if !seen.contains(&key) && args.iter().any(|a| calls(&body, call, a)) {
+                                seen.insert(key);
+                                todo.push((m.clone(), f.clone()));
+                            }
                         }
                     }
                 }
@@ -4687,14 +4703,32 @@ fn balanced(s: &str) -> &str {
     s
 }
 
-/// Whether `body` calls `name(` with `arg` first (or after the session), not as part of a longer name.
+/// Whether `body` calls `name(…)` (not as part of a longer name) with `arg` itself as one of its
+/// arguments (`p`, `&p`, `p.clone()`).
 fn calls(body: &str, name: &str, arg: &str) -> bool {
-    [format!("{name}({arg}"), format!("{name}(s, {arg}"), format!("{name}(&{arg}")].iter().any(|pat| {
-        body.match_indices(pat.as_str()).any(|(i, _)| {
-            let before = body[..i].chars().next_back();
-            let after = body[i + pat.len()..].chars().next();
-            !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
-        })
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    body.match_indices(&format!("{name}(")).any(|(i, m)| {
+        let before = body[..i].chars().next_back();
+        if word(before) || before == Some('.') || (!name.contains("::") && before == Some(':')) {
+            return false;
+        }
+        let args = balanced(&body[i + m.len() - 1..]);
+        let inner = &args[1..args.len().saturating_sub(1)];
+        // The arguments, split at top-level commas.
+        let (mut depth, mut start, mut found) = (0i32, 0, false);
+        for (j, c) in inner.char_indices().chain([(inner.len(), ',')]) {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth -= 1,
+                ',' if depth == 0 => {
+                    let a = inner[start..j].trim();
+                    found |= [arg.to_string(), format!("&{arg}"), format!("{arg}.clone()")].contains(&a.to_string());
+                    start = j + 1;
+                }
+                _ => {}
+            }
+        }
+        found
     })
 }
 
@@ -4752,6 +4786,7 @@ fn param_keys_reads_descriptions() {
     );
     // Alternatives.
     assert_eq!(param_keys(r#"{"path": folder | "url": "https://…", "name"?: text}"#), Some(vec!["path", "url", "name"]));
+    assert_eq!(param_keys(r#"{"lon" | "x": number, "lat" | "y": number}"#), Some(vec!["lon", "x", "lat", "y"]));
     assert_eq!(param_keys(r##"{"color": "#RRGGBB"|"#RRGGBBAA"}"##), Some(vec!["color"]));
     assert_eq!(param_keys("a GeoJSON text"), None);
     // Every command's description reads as keys, and names a key once.
