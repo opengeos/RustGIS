@@ -732,7 +732,7 @@ impl RustGisApp {
             return Err(tl!("type a file name").into());
         }
         if self.services.download.is_none() {
-            return Err("this build saves projects with Save As".into());
+            return Err(tl!("this build saves projects with Save As").into());
         }
         let stem: String = stem.chars().take(200).collect();
         // Not an undoable edit: saving names the project, as `project.saveAs` does, once the
