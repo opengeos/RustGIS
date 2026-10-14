@@ -364,11 +364,9 @@ fn finite_or(v: f64, d: f64) -> f64 {
 }
 
 /// The camera that shows a frame's centre at its paper scale in `map`'s projection, for a frame
-/// `w`×`h` logical points. On the globe the map's own camera is used.
+/// `w`×`h` logical points. The globe takes its camera in Web Mercator, whose ground scale at the
+/// centre it matches, so it is handled like the flat map.
 pub fn frame_camera(map: &Map, center: Coord, scale: f64) -> Camera {
-    if map.projection.is_globe() {
-        return map.camera;
-    }
     let mut cam = map.camera;
     if let Some(c) = map.to_map(center) {
         cam.center = c;
@@ -497,6 +495,20 @@ mod tests {
         assert!((cam.res - 264.583).abs() < 0.5, "{}", cam.res);
         let (c, s) = fit_scale(&map, &rustgis_geom::Extent::new(-10.0, -10.0, 10.0, 10.0), 200.0, 200.0).unwrap_or_default();
         assert!(c.x.abs() < 1e-6 && s > 1e7 && s < 2e7, "{c:?} {s}");
+    }
+
+    #[test]
+    fn frame_camera_follows_the_frame_on_the_globe() {
+        let mut map = Map::new("Map");
+        map.projection = crate::Projection::Globe;
+        let near = frame_camera(&map, Coord::new(10.0, 20.0), 60_000_000.0);
+        let far = frame_camera(&map, Coord::new(10.0, 20.0), 300_000_000.0);
+        assert!((far.res / near.res - 5.0).abs() < 1e-6, "{} {}", near.res, far.res);
+        let c = map.to_lonlat(near.center).unwrap_or_default();
+        assert!((c.x - 10.0).abs() < 1e-6 && (c.y - 20.0).abs() < 1e-6, "{c:?}");
+        // The globe's ground scale at the centre is the frame's paper scale.
+        let ground = near.res * 20f64.to_radians().cos();
+        assert!((ground - 60_000_000.0 * PAPER_M_PER_PT).abs() < 1e-3, "{ground}");
     }
 
     #[test]
