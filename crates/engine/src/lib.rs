@@ -128,6 +128,11 @@ pub fn param_keys(desc: &str) -> Option<Vec<&str>> {
     Some(keys)
 }
 
+/// `s` cut to `n` characters, with `…` when cut.
+fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() > n { s.chars().take(n).chain(['…']).collect() } else { s.to_string() }
+}
+
 pub struct Registry {
     pub commands: Vec<CommandSpec>,
 }
@@ -484,10 +489,15 @@ impl Session {
         let Some(&spec) = self.registry.get(id) else { return Err(format!("unknown command '{id}'")) };
         // Keys the command does not read: said, so a script or an agent can correct itself.
         if let (Value::Object(given), Some(known)) = (params, spec.param_keys()) {
-            let unknown: Vec<String> = given.keys().filter(|k| !known.contains(&k.as_str())).map(|k| format!("'{k}'")).collect();
+            // Bounded: the keys come from the caller (the first few, each clipped).
+            let unknown: Vec<&String> = given.keys().filter(|k| !known.contains(&k.as_str())).collect();
             if !unknown.is_empty() {
+                let mut said: Vec<String> = unknown.iter().take(5).map(|k| format!("'{}'", clip(k, 40))).collect();
+                if unknown.len() > 5 {
+                    said.push(format!("{} more", unknown.len() - 5));
+                }
                 let reads = if known.is_empty() { "no parameters".to_string() } else { known.join(", ") };
-                self.notify(format!("{id} ignores {} (it reads {reads})", unknown.join(", ")), false);
+                self.notify(format!("{id} ignores {} (it reads {reads})", said.join(", ")), false);
             }
         }
         // Layer conditions apply to the layer the parameters name, falling back to the active one.

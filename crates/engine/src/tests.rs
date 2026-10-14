@@ -4812,4 +4812,13 @@ fn unknown_params_are_said() {
     assert!(s.notices_since(mark).is_empty());
     s.run("layout.close", &json!({"x": 1})).unwrap();
     assert_eq!(s.notices_since(mark).first().map(|n| n.text.as_str()), Some("layout.close ignores 'x' (it reads no parameters)"));
+    // Many or long keys are said briefly.
+    let mut junk = serde_json::Map::new();
+    for i in 0..1000 {
+        junk.insert(format!("{i:04}{}", "k".repeat(500)), Value::Null);
+    }
+    let mark = s.notice_mark();
+    s.run("layout.close", &Value::Object(junk)).unwrap();
+    let said = s.notices_since(mark).first().map(|n| n.text.clone()).unwrap_or_default();
+    assert!(said.len() < 500 && said.contains("995 more"), "{said}");
 }
