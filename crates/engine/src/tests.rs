@@ -4579,3 +4579,202 @@ fn coverage_answers_that_are_not_geotiffs_are_errors() {
         assert!(e.starts_with("c: the service answered with an error"), "{e}");
     }
 }
+
+/// The keys a command's source reads from its parameters, found by scanning `src/cmd/*.rs`: the
+/// command's function (or closure) and the functions of the same file it calls, a few deep.
+fn keys_read_by_commands() -> Vec<(String, std::collections::BTreeSet<String>)> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cmd");
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let src = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+        // Each function's body and the names of its `&Value` arguments.
+        let mut fns: BTreeMap<String, (Vec<String>, String)> = BTreeMap::new();
+        let mut rest = src.as_str();
+        while let Some(at) = rest.find("fn ") {
+            let after = &rest[at + 3..];
+            let name: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            let Some(open) = after.find('{') else { break };
+            let sig = &after[..open];
+            let body = balanced(&after[open..]);
+            let args = value_args(sig);
+            fns.entry(name).or_insert((args, body.to_string()));
+            rest = &after[open..];
+        }
+        let mut rest = src.as_str();
+        while let Some(at) = rest.find("C::new(") {
+            let call = balanced(&rest[at + 6..]);
+            rest = &rest[at + 6..];
+            let parts: Vec<&str> = call.splitn(2, '"').collect();
+            let id: String = parts.get(1).unwrap_or(&"").chars().take_while(|c| *c != '"').collect();
+            // After the three strings: a function name or a closure.
+            let mut tail = call;
+            for _ in 0..6 {
+                tail = &tail[tail.find('"').map_or(tail.len(), |i| i + 1)..];
+            }
+            let tail = tail.trim_start_matches([',', ' ', '\n']);
+            let mut keys = BTreeSet::new();
+            let mut todo: Vec<(Vec<String>, String)> = Vec::new();
+            if let Some(closure) = tail.strip_prefix('|') {
+                let args = closure[..closure.find('|').unwrap()].split(',').map(|a| a.trim().to_string()).skip(1).collect();
+                todo.push((args, tail.to_string()));
+            } else {
+                let name: String = tail.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                todo.extend(fns.get(&name).cloned());
+            }
+            let mut seen = BTreeSet::new();
+            let mut depth = 0;
+            while !todo.is_empty() && depth < 4 {
+                for (args, body) in std::mem::take(&mut todo) {
+                    for a in args.iter().filter(|a| !a.starts_with('_')) {
+                        // The helpers that read a key: `ps(p, "key")`…
+                        for h in ["ps", "f", "b", "uint", "s_req", "color", "get_color", "band", "point", "limit", "method"] {
+                            keys.extend(literal_keys(&body, &format!("{h}({a}, \"")));
+                        }
+                        keys.extend(literal_keys(&body, &format!("{a}.get(\"")));
+                        keys.extend(literal_keys(&body, &format!("{a}[\"")));
+                        if body.contains(&format!("layer_id({a})")) || body.contains(&format!("layer_id(&{a})")) {
+                            keys.insert("layer".to_string());
+                        }
+                        if body.contains(&format!("table_index({a})")) {
+                            keys.insert("table".to_string());
+                        }
+                    }
+                    // Same-file functions it calls with one of its parameter values.
+                    for (name, f) in &fns {
+                        if !seen.contains(name) && args.iter().any(|a| calls(&body, name, a)) {
+                            seen.insert(name.clone());
+                            todo.push(f.clone());
+                        }
+                    }
+                }
+                depth += 1;
+            }
+            out.push((id, keys));
+        }
+    }
+    out
+}
+
+/// `s` from its opening bracket to the matching close, skipping strings, raw strings and chars.
+fn balanced(s: &str) -> &str {
+    let b = s.as_bytes();
+    let (mut depth, mut i) = (0i32, 0);
+    while i < b.len() {
+        match b[i] {
+            b'r' if b.get(i + 1) == Some(&b'#') && b.get(i + 2) == Some(&b'"') => {
+                i += s[i + 3..].find("\"#").map_or(b.len(), |n| n + 4);
+            }
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'\'' if b.get(i + 2) == Some(&b'\'') => i += 2,
+            b'\'' if b.get(i + 1) == Some(&b'\\') && b.get(i + 3) == Some(&b'\'') => i += 3,
+            b'{' | b'(' | b'[' => depth += 1,
+            b'}' | b')' | b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &s[..=i];
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    s
+}
+
+/// Whether `body` calls `name(` with `arg` first (or after the session), not as part of a longer name.
+fn calls(body: &str, name: &str, arg: &str) -> bool {
+    [format!("{name}({arg}"), format!("{name}(s, {arg}"), format!("{name}(&{arg}")].iter().any(|pat| {
+        body.match_indices(pat.as_str()).any(|(i, _)| {
+            let before = body[..i].chars().next_back();
+            let after = body[i + pat.len()..].chars().next();
+            !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+    })
+}
+
+/// The names of the `&Value` arguments in a function signature.
+fn value_args(sig: &str) -> Vec<String> {
+    sig.split([',', '('])
+        .filter_map(|a| {
+            a.split_once(':').filter(|(_, t)| t.trim().starts_with("&") && t.contains("Value")).map(|(n, _)| n.trim().to_string())
+        })
+        .collect()
+}
+
+/// The string literals that follow `prefix` (not part of a longer name) in `body`.
+fn literal_keys(body: &str, prefix: &str) -> Vec<String> {
+    body.match_indices(prefix)
+        .filter(|(i, _)| !body[..*i].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_'))
+        .map(|(i, _)| body[i + prefix.len()..].chars().take_while(|c| *c != '"').collect::<String>())
+        .filter(|k| !k.is_empty())
+        .collect()
+}
+
+#[test]
+fn params_name_every_key_a_command_reads() {
+    // Read by a shared helper but of no use to the command.
+    let unused = [("profile.alongSelected", "row"), ("sources.remove", "name"), ("sources.remove", "extra")];
+    let s = Session::new(Project::default());
+    let mut missing = Vec::new();
+    let found = keys_read_by_commands();
+    assert!(found.len() > 300, "the scan found {} commands", found.len());
+    for (id, keys) in found {
+        let Some(spec) = s.registry.get(&id) else { continue };
+        let named = spec.param_keys().unwrap_or_default();
+        let absent: Vec<_> = keys
+            .iter()
+            .filter(|k| {
+                !named.contains(&k.as_str()) && !spec.params.contains(&format!("\"{k}\"")) && !unused.contains(&(id.as_str(), k.as_str()))
+            })
+            .collect();
+        if !absent.is_empty() {
+            missing.push(format!("{id}: {absent:?} (params {})", spec.params));
+        }
+    }
+    assert!(missing.is_empty(), "{} commands read keys their params don't name:\n{}", missing.len(), missing.join("\n"));
+}
+
+#[test]
+fn param_keys_reads_descriptions() {
+    use crate::param_keys;
+    assert_eq!(param_keys("{}"), Some(vec![]));
+    assert_eq!(param_keys(r#"{"layer"?, "name": string}"#), Some(vec!["layer", "name"]));
+    // Values, nested objects and prose are not keys.
+    assert_eq!(
+        param_keys(r#"{"mode": "a"|"b", "steps"?: [{"tool": id}], "extent"?: [w, s, e, n] (clip, "view")}"#),
+        Some(vec!["mode", "steps", "extent"])
+    );
+    // Alternatives.
+    assert_eq!(param_keys(r#"{"path": folder | "url": "https://…", "name"?: text}"#), Some(vec!["path", "url", "name"]));
+    assert_eq!(param_keys(r##"{"color": "#RRGGBB"|"#RRGGBBAA"}"##), Some(vec!["color"]));
+    assert_eq!(param_keys("a GeoJSON text"), None);
+    // Every command's description reads as keys, and names a key once.
+    for c in &Session::new(Project::default()).registry.commands {
+        let keys = c.param_keys().unwrap_or_else(|| panic!("{}: params {} are not an object", c.id, c.params));
+        let mut unique = keys.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), keys.len(), "{}: {}", c.id, c.params);
+    }
+}
+
+#[test]
+fn unknown_params_are_said() {
+    let mut s = world();
+    let mark = s.notice_mark();
+    s.run("layer.moveDown", &json!({"layer": "Cities", "steps": 13})).unwrap();
+    let said: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).collect();
+    assert_eq!(said, ["layer.moveDown ignores 'steps' (it reads layer)"]);
+    // Known keys, and commands that take none, say nothing more.
+    let mark = s.notice_mark();
+    s.run("layer.rename", &json!({"layer": "Cities", "name": "Towns"})).unwrap();
+    assert!(s.notices_since(mark).is_empty());
+    s.run("layout.close", &json!({"x": 1})).unwrap();
+    assert_eq!(s.notices_since(mark).first().map(|n| n.text.as_str()), Some("layout.close ignores 'x' (it reads no parameters)"));
+}

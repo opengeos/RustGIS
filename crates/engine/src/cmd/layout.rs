@@ -30,7 +30,7 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"layout": i}))
         })
         .view()
-        .params(r#"{"name": string}"#),
+        .params(r#"{"name": string, "layout"?: name|index (instead of name)}"#),
         C::new("layout.close", "Show Map", "Browser", |s, _| {
             s.active_layout = None;
             Ok(Value::Null)
@@ -42,7 +42,7 @@ pub fn commands() -> Vec<C> {
             s.active_layout = None;
             Ok(Value::Null)
         })
-        .params(r#"{"name"?: string}"#),
+        .params(r#"{"name"?: string, "layout"?: name|index (instead of name; default: the open layout)}"#),
         C::new("layout.rename", "Rename Layout", "Browser", |s, p| {
             let name: String = ps(p, "newName").map(str::trim).filter(|n| !n.is_empty()).ok_or("newName is required")?.chars().take(200).collect();
             let i = index(s, &by_name(p))?;
@@ -60,7 +60,7 @@ pub fn commands() -> Vec<C> {
             }
             Ok(json!({"name": unique}))
         })
-        .params(r#"{"name"?: string, "newName": string}"#),
+        .params(r#"{"name"?: string, "layout"?: name|index (instead of name; default: the open layout), "newName": string}"#),
         C::new("layout.page", "Page Size", "Publish › Page Setup", page).params(
             r#"{"layout"?, "page"?: page id, "orientation"?: "landscape"|"portrait", "width"?: mm, "height"?: mm}"#,
         ),
@@ -68,7 +68,7 @@ pub fn commands() -> Vec<C> {
             r#"{"layout"?, "shape"?: "rectangle"|"circle"|"ellipse"|"polygon"|"lasso", "points"?: [[u, v], …] (polygon/lasso, 0..1 across the frame), "map"?: name, "x"?, "y"?, "w"?, "h"?: mm}"#,
         ),
         C::new("layout.addElement", "Add Element", "Publish › Map Surrounds", add_element).params(
-            r##"{"layout"?, "kind": "northArrow"|"scaleBar"|"legend"|"text"|"dynamicText"|"picture"|"table"|"chart"|"rectangle"|"extentIndicator"|"grid", "frame"?: element id (default: the first map frame), "of"?: frame id (extentIndicator), "text"?, "size"?, "color"?: "#RRGGBB", "image"?: base64, "path"?: picture file, "layer"?, "field"?, "label"?, "rows"?, "step"?: degrees (grid), "x"?, "y"?, "w"?, "h"?: mm}"##,
+            r##"{"layout"?, "kind": "northArrow"|"scaleBar"|"legend"|"text"|"dynamicText"|"picture"|"table"|"chart"|"rectangle"|"extentIndicator"|"grid", "frame"?: element id (default: the first map frame), "of"?: frame id (extentIndicator), "text"?, "size"?, "color"?: "#RRGGBB"|"#RRGGBBAA", "bold"?: bool (text), "title"?: legend title (default "Legend"), "fill"?: "#RRGGBBAA" (rectangle), "width"?: outline width (rectangle), "image"?: base64, "path"?: picture file, "layer"?, "field"?, "label"?, "rows"?, "step"?: degrees, "labels"?: bool, "off"?: bool (grid), "x"?, "y"?, "w"?, "h"?: mm}"##,
         ),
         C::new("layout.update", "Element Properties", "Publish › Element", update).params(
             r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "text"?, "size"?, "color"?, "bold"?, "title"?, "map"?, "scale"?, "center"?: [lon, lat], "layer"?, "field"?, "rows"?}"##,

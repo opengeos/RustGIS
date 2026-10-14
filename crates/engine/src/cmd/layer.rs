@@ -30,7 +30,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"database": "as layer.addDatabase", "password"?: string}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add", add_url).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: zoom to what was added (default: only when the map was empty)", "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
             .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "service"?: bool (a service's features: their axes and paging are checked), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error)}"#),
@@ -43,7 +43,7 @@ pub fn commands() -> Vec<C> {
         C::new("layer.select", "Select Layer", "Layers", |s, p| {
             s.active_layer = Some(s.layer_id(p)?);
             Ok(Value::Null)
-        })
+        }).params(r#"{"layer"?: name|id (default: the active layer)}"#)
         .view(),
         C::new("layer.rename", "Rename", "Layers", |s, p| {
             let n = s_req(p, "name")?.trim().chars().take(200).collect::<String>();
@@ -62,15 +62,15 @@ pub fn commands() -> Vec<C> {
                 }
             }
             Ok(r)
-        })
+        }).params(r#"{"layer"?, "name": string}"#)
         .when(need_layer),
         C::new("layer.visibility", "Visibility", "Layers", |s, p| {
             let on = b(p, "visible");
             with(s, p, |l| l.visible = on.unwrap_or(!l.visible))
-        })
+        }).params(r#"{"layer"?, "visible"?: bool (toggles when omitted)}"#)
         .when(need_layer),
-        C::new("layer.moveUp", "Move Up", "Layers", |s, p| move_layer(s, p, -1)).when(need_layer),
-        C::new("layer.moveDown", "Move Down", "Layers", |s, p| move_layer(s, p, 1)).when(need_layer),
+        C::new("layer.moveUp", "Move Up", "Layers", |s, p| move_layer(s, p, -1)).params(r#"{"layer"?: name|id (default: the active layer)}"#).when(need_layer),
+        C::new("layer.moveDown", "Move Down", "Layers", |s, p| move_layer(s, p, 1)).params(r#"{"layer"?: name|id (default: the active layer)}"#).when(need_layer),
         C::new("layer.move", "Move", "Layers", move_to).when(need_layer).params(r#"{"layer"?: name|id, "to": position (0 = top)}"#),
         C::new("layer.zoomTo", "Zoom To Layer", "Layers", |s, p| {
             let id = s.layer_id(p)?;
@@ -80,7 +80,7 @@ pub fn commands() -> Vec<C> {
             }
             s.zoom_to(&e);
             Ok(Value::Null)
-        })
+        }).params(r#"{"layer"?: name|id (default: the active layer)}"#)
         .view()
         .when(need_layer),
         C::new("layer.symbology", "Symbology", "Style › Drawing", symbology)
@@ -95,7 +95,7 @@ pub fn commands() -> Vec<C> {
                     l.renderer.apply_ramp(r, g)
                 }
             })
-        })
+        }).params(r#"{"layer"?, "ramp": colour ramp name}"#)
         .when(need_layer),
         C::new("layer.color", "Symbol Color", "Style › Drawing", |s, p| {
             let c = Rgba::from_hex(s_req(p, "color")?).ok_or("color must be #RRGGBB or #RRGGBBAA")?;
@@ -109,7 +109,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_feature_layer)
-        .params(r##"{"layer"?, "color": "#RRGGBB"}"##),
+        .params(r##"{"layer"?, "color": "#RRGGBB"|"#RRGGBBAA"}"##),
         C::new("layer.outline", "Outline", "Style › Drawing", |s, p| {
             let c = s.get_color(p, "color")?;
             let w = f(p, "width").map(|w| w.clamp(0.0, 20.0) as f32);
@@ -125,7 +125,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_feature_layer)
-        .params(r##"{"layer"?, "color"?: "#RRGGBB", "width"?: number}"##),
+        .params(r##"{"layer"?, "color"?: "#RRGGBB"|"#RRGGBBAA", "width"?: number}"##),
         C::new("layer.marker", "Marker", "Style › Drawing", |s, p| {
             let shape = ps(p, "shape").map(|n| Marker::ALL.into_iter().find(|m| m.label().eq_ignore_ascii_case(n)).ok_or("unknown marker shape")).transpose()?;
             let size = f(p, "size").map(|v| v.clamp(1.0, 80.0) as f32);
@@ -161,12 +161,12 @@ pub fn commands() -> Vec<C> {
         C::new("layer.selectable", "Selectable", "Layers", |s, p| {
             let on = b(p, "on");
             with(s, p, |l| l.selectable = on.unwrap_or(!l.selectable))
-        })
+        }).params(r#"{"layer"?, "on"?: bool (toggles when omitted)}"#)
         .when(need_feature_layer),
         C::new("layer.expand", "Expand Legend", "Layers", |s, p| {
             let on = b(p, "on");
             with(s, p, |l| l.expanded = on.unwrap_or(!l.expanded))
-        })
+        }).params(r#"{"layer"?, "on"?: bool (toggles when omitted)}"#)
         .view()
         .when(need_layer),
         C::new("labels.enable", "Label", "Style › Labels", |s, p| {
@@ -184,7 +184,7 @@ pub fn commands() -> Vec<C> {
                 l.labels.field = fname.clone();
                 l.labels.enabled = true;
             })
-        })
+        }).params(r#"{"layer"?, "field": name}"#)
         .when(need_feature_layer),
         C::new("labels.style", "Text Symbol", "Style › Text Symbol", |s, p| {
             let size = f(p, "size").map(|v| v.clamp(4.0, 72.0) as f32);
@@ -206,7 +206,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_feature_layer)
-        .params(r##"{"layer"?, "size"?: number, "color"?: "#RRGGBB", "halo"?: bool, "bold"?: bool}"##),
+        .params(r##"{"layer"?, "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "bold"?: bool}"##),
         C::new("layer.definitionQuery", "Definition Query", "Data › Definition Query", |s, p| {
             let q = ps(p, "where").map(str::trim).unwrap_or("").to_string();
             let id = s.layer_id(p)?;
@@ -222,7 +222,7 @@ pub fn commands() -> Vec<C> {
         C::new("table.open", "Attribute Table", "Data › Table", |s, p| {
             s.table_layer = Some(s.layer_id(p)?);
             Ok(Value::Null)
-        })
+        }).params(r#"{"layer"?: name|id (default: the active layer)}"#)
         .view()
         .key("Ctrl+T")
         .when(need_feature_layer),
@@ -241,12 +241,12 @@ pub fn commands() -> Vec<C> {
             s.project.tables.remove(i);
             Ok(Value::Null)
         })
-        .params(r#"{"table": name|id (a standalone table; of tables sharing a name, the name is the first)}"#),
+        .params(r#"{"table": name|id (a standalone table; of tables sharing a name, the name is the first)} (the old position, "at", is refused)"#),
         C::new("layer.fields", "Fields", "Data › Data Design", |s, p| {
             let id = s.layer_id(p)?;
             let l = s.map().layer(id).ok_or("no layer")?;
             Ok(json!(l.dataset.fields.iter().map(|f| json!({"name": f.name, "type": f.ty.label(), "alias": f.alias})).collect::<Vec<_>>()))
-        })
+        }).params(r#"{"layer"?: name|id (default: the active layer)}"#)
         .view()
         .when(need_feature_layer),
     ]

@@ -41,9 +41,9 @@ pub fn commands() -> Vec<C> {
             r#"{"criteria": [{"layer": raster, "band"?: 1-based, "ranges": [[lo, hi, score]], "weight": number}], "name"?: output}"#,
         ),
         C::new("analysis.viewshed", "Visibility Analysis", "Analyze › Workflows", viewshed)
-            .params(r#"{"layer": elevation raster, "lon", "lat", "height"?: observer metres, "radius"?: metres, "name"?: output}"#),
+            .params(r#"{"layer": elevation raster, "lon", "lat", "band"?: 1-based, "height"?: observer metres, "radius"?: metres, "name"?: output}"#),
         C::new("analysis.lineOfSight", "Line Of Sight", "Analyze › Workflows", line_of_sight).params(
-            r#"{"layer": elevation raster, "from": [lon, lat], "to": [lon, lat], "observerHeight"?: m, "targetHeight"?: m, "name"?: output}"#,
+            r#"{"layer": elevation raster, "from": [lon, lat], "to": [lon, lat], "band"?: 1-based, "observerHeight"?: m, "targetHeight"?: m, "name"?: output}"#,
         ),
         C::new("analysis.interpolate", "Geostatistical Wizard", "Analyze › Workflows", interpolate).params(
             r#"{"layer": points, "field": numeric field, "cellSize"?: degrees, "power"?: 2, "neighbors"?: 12, "name"?: output}"#,

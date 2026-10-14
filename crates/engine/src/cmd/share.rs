@@ -24,6 +24,9 @@ pub fn commands() -> Vec<C> {
             rustgis_data::io::write_path(&t.dataset, Path::new(path)).map_err(|e| e.to_string())?;
             Ok(json!({"path": path}))
         })
+        .params(
+            r#"{"table": name|id (a standalone table), "path": "*.geojson|*.csv|*.fgb|*.gpkg|*.parquet|*.shp|*.zip|*.kml|*.kmz|*.gpx"}"#,
+        )
         .view(),
     ]
 }

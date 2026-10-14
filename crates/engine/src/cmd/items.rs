@@ -55,7 +55,7 @@ pub fn commands() -> Vec<C> {
         C::new("map.save", "Save Map File", "Publish › Save As", |s, p| save_item(s, "map", p))
         .view()
         .params(r#"{"path": "*.rgismap", "map"?: name}"#),
-        C::new("map.import", "Import", "Data › Project", import_maps).params(r#"{"path": "*.rgismap|*.rgis|*.rgispkg", "text"?: map file JSON}"#),
+        C::new("map.import", "Import", "Data › Project", import_maps).params(r#"{"path": "*.rgismap|*.rgis|*.rgispkg", "text"?: map file JSON, "data"?: base64 file}"#),
         C::new("layer.save", "Save Layer File", "Publish › Save As", |s, p| save_item(s, "layer", p))
         .view()
         .when(need_layer)
@@ -64,7 +64,7 @@ pub fn commands() -> Vec<C> {
             let text = read_text(p)?;
             super::layer::add_layer_text(s, &text)
         })
-        .params(r#"{"path"?: "*.rgislyr", "text"?: layer file JSON}"#),
+        .params(r#"{"path"?: "*.rgislyr", "text"?: layer file JSON, "data"?: base64 file}"#),
         // Styles.
         C::new("style.new", "New Style", "Style › Styles", |s, p| {
             let id = s.layer_id(p)?;
@@ -86,8 +86,8 @@ pub fn commands() -> Vec<C> {
             }
             Ok(json!({"added": n}))
         })
-        .params(r#"{"path"?: "*.rgisstyle", "text"?: style file JSON}"#),
-        C::new("style.import", "Import Styles", "Style › Styles", import_styles).params(r#"{"path"?: "*.rgislyr|*.rgismap|*.rgis", "text"?: JSON}"#),
+        .params(r#"{"path"?: "*.rgisstyle", "text"?: style file JSON, "data"?: base64 file}"#),
+        C::new("style.import", "Import Styles", "Style › Styles", import_styles).params(r#"{"path"?: "*.rgislyr|*.rgismap|*.rgis", "text"?: JSON, "data"?: base64 file}"#),
         C::new("style.apply", "Apply Style", "Style › Styles", |s, p| {
             let name = ps(p, "name").ok_or("name is required")?;
             let st = s.project.styles.iter().find(|t| t.name.eq_ignore_ascii_case(name)).cloned().ok_or_else(|| format!("no style '{name}'"))?;
@@ -148,7 +148,7 @@ pub fn commands() -> Vec<C> {
             }
             Ok(json!({"added": names}))
         })
-        .params(r#"{"path"?: "*.rgisramp", "text"?: colour ramp file JSON}"#),
+        .params(r#"{"path"?: "*.rgisramp", "text"?: colour ramp file JSON, "data"?: base64 file}"#),
         C::new("ramp.remove", "Delete Color Ramp", "Browser", |s, p| {
             let name = ps(p, "name").ok_or("name is required")?;
             let before = s.project.ramps.len();
@@ -175,7 +175,7 @@ pub fn commands() -> Vec<C> {
             Ok(Value::Null)
         })
         .view()
-        .params(r#"{"path"?: "*.rgistemplate", "text"?: template JSON, "name"?: new project name}"#),
+        .params(r#"{"path"?: "*.rgistemplate", "text"?: template JSON, "data"?: base64 file, "name"?: new project name}"#),
         // Packages.
         C::new("project.package", "Package Project", "Publish › Package", |s, p| save_item(s, "projectPackage", p))
         .view()
@@ -264,7 +264,7 @@ pub fn commands() -> Vec<C> {
             let steps = serde_json::to_value(&t.steps).map_err(|e| e.to_string())?;
             s.run("task.new", &json!({"name": t.name, "description": t.description, "steps": steps, "imported": true}))
         })
-        .params(r#"{"path"?: "*.rgistask", "text"?: task JSON}"#),
+        .params(r#"{"path"?: "*.rgistask", "text"?: task JSON, "data"?: base64 file}"#),
         // 3D export.
         C::new("share.export3d", "Export To 3D File", "Publish › Output", export_3d)
             .view()
