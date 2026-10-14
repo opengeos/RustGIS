@@ -930,6 +930,17 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         geolibre_web_card(app, ui, t);
         return;
     }
+    // An installed runner that lists no tools (broken, or a failed download of its list): it
+    // can still be removed from here.
+    if status["installed"] == true {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(tl!("The installed GeoLibre runner lists no tools.")).size(11.0).color(t.text_dim));
+            geolibre_uninstall(app, ui, t);
+        });
+        if let Some(e) = &app.gp.uninstall_error {
+            ui.label(egui::RichText::new(e).size(11.0).color(t.red));
+        }
+    }
     let download = status["download"].as_str().unwrap_or("https://github.com/opengeos/geolibre-rust/releases/latest").to_string();
     ui.add_space(6.0);
     egui::Frame::NONE.stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(

@@ -74,9 +74,11 @@ fn runner_values_and_choices() {
     assert!(convert(&line, |_| Some(Coord::new(f64::NAN, 0.0))).is_none());
     assert_eq!(safe("a b/c.tif"), "a_b_c_tif");
     // Only the runner Install put in place can be uninstalled, not one of the user's own.
-    let installed = install::install_dir().unwrap().join("geolibre");
-    assert!(install::is_installed(&installed));
-    assert!(!install::is_installed(std::path::Path::new("/usr/local/bin/geolibre")));
+    if let Some(dir) = install::install_dir() {
+        assert!(install::is_installed(&dir.join(runner::exe_name())));
+        assert!(!install::is_installed(&dir.join("mine").join(runner::exe_name())));
+        assert!(!install::is_installed(&dir.join("other-program")));
+    }
 }
 
 #[test]

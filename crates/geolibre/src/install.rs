@@ -144,17 +144,23 @@ pub fn install(progress: &dyn Fn(u64, Option<u64>)) -> Result<PathBuf, String> {
 
 /// Whether `exe` is the runner [`install`] put in place (rather than one found elsewhere).
 pub fn is_installed(exe: &Path) -> bool {
-    install_dir().is_some_and(|d| exe.parent() == Some(d.as_path()))
+    install_dir().is_some_and(|d| exe == d.join(crate::runner::exe_name()))
 }
 
-/// Removes what [`install`] put in place: its whole folder. A runner found elsewhere (chosen
-/// with Locate…, or on the `PATH`) is the user's own and is left alone.
+/// Removes what [`install`] put in place: the program (and an older copy set aside while
+/// replacing it), then the folder if nothing else is in it. Other files there, and a runner
+/// found elsewhere (chosen with Locate…, or on the `PATH`), are the user's and are left alone.
 pub fn uninstall() -> Result<(), String> {
     let dir = install_dir().ok_or("can't find the GeoLibre install folder")?;
-    if !dir.exists() {
+    let exe = dir.join(crate::runner::exe_name());
+    if !exe.is_file() {
         return Err("the GeoLibre runner isn't installed".into());
     }
-    std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))
+    std::fs::remove_file(&exe).map_err(|e| format!("{}: {e}", exe.display()))?;
+    let _ = std::fs::remove_file(dir.join(format!("{}.old", crate::runner::exe_name())));
+    // Fails, keeping the folder, when something else is in it.
+    let _ = std::fs::remove_dir(&dir);
+    Ok(())
 }
 
 fn unpack(bytes: &[u8], target: &str, into: &Path) -> Result<(), String> {
