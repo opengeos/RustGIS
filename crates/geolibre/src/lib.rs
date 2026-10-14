@@ -186,23 +186,16 @@ fn specs() -> Vec<ToolSpec> {
     out
 }
 
-/// Where tool `id` sits: `GeoLibre › Terrain › Derivatives`, as in GeoLibre's Processing
-/// menu (`menu.tsv`). The manifests carry only a top-level `category`, which a tool missing
-/// from the menu keeps: `GeoLibre › Raster`.
-fn toolbox_of(id: &str, category: &str) -> String {
-    static MENU: std::sync::LazyLock<HashMap<&'static str, (&'static str, &'static str)>> = std::sync::LazyLock::new(|| {
-        include_str!("menu.tsv")
-            .lines()
-            .filter(|l| !l.starts_with('#'))
-            .filter_map(|l| {
-                let mut f = l.split('\t');
-                Some((f.next()?, (f.next()?, f.next()?)))
-            })
-            .collect()
-    });
-    match MENU.get(id) {
-        Some((top, sub)) => format!("GeoLibre › {top} › {sub}"),
-        None => format!("GeoLibre › {category}"),
+/// Where a tool sits: `GeoLibre › Terrain › Derivatives`, from its manifest's `taxonomy`
+/// (geolibre-rust's menu grouping). A runner too old to list one gives the coarse `category`:
+/// `GeoLibre › Raster`.
+fn toolbox_of(m: &Value, category: &str) -> String {
+    let taxonomy = m.get("taxonomy");
+    let part = |k: &str| taxonomy.and_then(|t| t.get(k)).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+    match (part("category"), part("subcategory")) {
+        (Some(top), Some(sub)) => format!("GeoLibre › {top} › {sub}"),
+        (Some(top), None) => format!("GeoLibre › {top}"),
+        _ => format!("GeoLibre › {category}"),
     }
 }
 
@@ -277,7 +270,7 @@ fn spec_of(m: &Value) -> Option<(ToolSpec, Meta)> {
     let spec = ToolSpec {
         id: leak(format!("{PREFIX}{id}")),
         name: leak(name),
-        toolbox: leak(toolbox_of(id, &category)),
+        toolbox: leak(toolbox_of(m, &category)),
         summary: leak(summary),
         params: Box::leak(params.into_boxed_slice()),
         run: rustgis_analysis::external_placeholder,

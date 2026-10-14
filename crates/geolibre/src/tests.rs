@@ -86,7 +86,8 @@ fn manifests_become_tool_forms() {
     assert!(tools.len() > 1000, "{}", tools.len());
     let slope = rustgis_analysis::tool("geolibre:slope").unwrap();
     assert!(rustgis_analysis::is_external(slope));
-    assert_eq!(slope.toolbox, "GeoLibre › Terrain › Derivatives");
+    // Grouped by the runner's taxonomy; a runner from before it, by the coarse category.
+    assert!(matches!(slope.toolbox, "GeoLibre › Terrain › Derivatives" | "GeoLibre › Raster"), "{}", slope.toolbox);
     assert_eq!(slope.params.first().map(|p| p.kind), Some(ParamKind::RasterLayer));
     assert!(slope.params.iter().all(|p| p.name != "output"), "outputs are not form fields");
     let units = slope.params.iter().find(|p| p.name == "units").unwrap();
@@ -175,9 +176,11 @@ fn prepare_and_finish_without_a_runner() {
         ]
     });
     let (spec, meta) = spec_of(&manifest).unwrap();
-    // Not in GeoLibre's menu: the manifest's category; a menu tool gets its subcategory.
+    // No `taxonomy` (an older runner): the coarse category. With one: category › subcategory.
     assert_eq!(spec.toolbox, "GeoLibre › Vector");
-    assert_eq!(toolbox_of("slope", "Raster"), "GeoLibre › Terrain › Derivatives");
+    let placed = json!({"id": "slope", "taxonomy": {"category": "Terrain", "subcategory": "Derivatives"}});
+    assert_eq!(toolbox_of(&placed, "Raster"), "GeoLibre › Terrain › Derivatives");
+    assert_eq!(toolbox_of(&json!({"taxonomy": {"category": " ", "subcategory": 3}}), "Raster"), "GeoLibre › Raster");
     let params = rustgis_analysis::resolve_params(&spec, &json!({"input": "pts", "others": "dem;dem", "distance": "250"})).unwrap();
     let job = prepare_with(&spec, &meta, &f, &params).unwrap();
     // Inputs are staged as numbered files, even the same layer twice.

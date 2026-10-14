@@ -72,9 +72,10 @@ To install it yourself instead, download the archive for your platform
 RustGIS also finds the runner without asking when it is next to the RustGIS program (or in a
 `geolibre` folder beside it), on your `PATH`, or named by the `RUSTGIS_GEOLIBRE` environment
 variable (the command line uses these). The tools then appear under **GeoLibre** in the Tools
-pane and the Browser's toolboxes, grouped as in GeoLibre's Processing menu: a category
-(Conversion, Hydrology, LiDAR, Network, Projection, Raster, Remote Sensing, Terrain, Vector),
-then a subcategory (**GeoLibre › Terrain › Derivatives**). Find Tools searches them.
+pane and the Browser's toolboxes, grouped by the category and subcategory the runner gives
+each tool (Conversion, Hydrology, LiDAR, Projection, Raster, Remote Sensing, Terrain, Vector,
+then e.g. **GeoLibre › Terrain › Derivatives**). A runner too old to list subcategories groups
+them by category only. Find Tools searches them.
 
 - Raster inputs are passed as their own files; vector layers (or their selection) are written
   in the first raster input's coordinate system, or the UTM zone around the data, so distances
