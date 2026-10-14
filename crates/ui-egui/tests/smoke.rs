@@ -176,6 +176,9 @@ fn plugins_install_from_a_file_after_a_prompt() {
         h.step();
         h.step();
     }
+    // The Tools pane has an Uninstall of its own when a GeoLibre runner is installed on this
+    // machine: closed, the only one is the plugin's.
+    h.state_mut().ui.right = None;
     h.state_mut().run("ui.plugins", json!({"open": true, "tab": "installed"})).unwrap();
     h.step();
     h.get_by_label("Uninstall").click();

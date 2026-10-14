@@ -50,6 +50,25 @@ ramps with the `ramp.add` command (`{"path": "ramps.rgisramp"}`, or the JSON its
 `{"text": …}`), and then name them like built-in schemes, for example
 `layer.ramp={"ramp":"Phosphor Frostfire"}`.
 
+### Color ramps from other tools
+
+**Add Color Ramp File** also reads the color ramp files other tools write, so a palette from
+QGIS, GDAL, GMT or a tool like Phosphor can be added without converting it first:
+
+| Format | Extension | What RustGIS reads |
+| --- | --- | --- |
+| QGIS style | `.xml` | Every gradient ramp (discrete ones as steps) and preset ramp (as a qualitative ramp) in a Style Manager export, with its name. ColorBrewer, cpt-city and random ramps hold no colors and are skipped. |
+| QGIS layer style | `.qml` | The layer's color ramp, or a raster's color map. |
+| GDAL color-relief text | `.txt` | `value R G B [A]` lines (as `gdaldem color-relief` takes them), separated by spaces, tabs, commas or colons; values may be percentages and colors may be names; `nv` lines are skipped. A QGIS color map export reads the same way. |
+| GMT palette | `.cpt` | `z0 color0 z1 color1` lines, with colors as `r/g/b`, `r g b`, `#RRGGBB`, grey levels, names or HSV; `B`, `F` and `N` lines are skipped. |
+
+These formats tie colors to data values; the ramp keeps their spacing, from the lowest value
+to the highest, and a sharp change between two colors stays sharp. A ramp from a GDAL or GMT
+file is named after the file and is sequential; the `ramp.add` command takes a `name` and a
+`kind` to change that (`{"path": "relief.cpt", "kind": "diverging"}`), and a `format`
+(`rgisramp`, `qgis`, `gdal` or `cpt`) for text without a file name. A file with more than 256
+colors is resampled to 256 evenly spaced stops.
+
 Sequential and diverging ramps blend between their stops; when there are as many classes as
 stops, each class takes a stop's color exactly, so a stepped palette keeps its colors. A
 qualitative ramp gives each class the next stop, starting again after the last. A layer keeps

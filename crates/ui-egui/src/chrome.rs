@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::mapview::Toast;
 use crate::theme::{Tokens, regular, semibold};
-use crate::widgets::{row_button, small, text_w};
+use crate::widgets::{enabled, row_button, small, text_w, why_disabled};
 use crate::{RustGisApp, icons};
 
 pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
@@ -411,14 +411,23 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
         ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         egui::ScrollArea::vertical().max_height(list_h).show(ui, |ui| {
             let row_w = ui.available_width();
-            for (i, (id, label, loc)) in hits.iter().take(40).enumerate() {
+            // Enter runs the first command that is available now.
+            let mut first = true;
+            for (id, label, loc) in hits.iter().take(40) {
+                // Unavailable commands stay listed, greyed out, with the reason on hover.
+                let on = id.starts_with("gp:") || enabled(app, id);
                 let mut b = egui::Button::new(egui::RichText::new(label).size(13.0)).frame(false).min_size(vec2(row_w, 26.0));
                 if show_loc {
                     b = b.right_text(egui::RichText::new(loc).size(11.0).weak());
                 }
                 // The scroll area would clip a fill wider than the row.
-                let resp = row_button(ui, true, b, 0.0);
-                if resp.clicked() || (i == 0 && ui.input(|i| i.key_pressed(Key::Enter))) {
+                let mut resp = row_button(ui, on, b, 0.0);
+                if let Some(why) = why_disabled(app, id) {
+                    resp = resp.on_disabled_hover_text(crate::i18n::fmt("Unavailable: {reason}", &[("reason", tl!(why))]));
+                }
+                let enter = on && first && ui.input(|i| i.key_pressed(Key::Enter));
+                first &= !on;
+                if resp.clicked() || enter {
                     chosen = Some(id.clone());
                 }
             }

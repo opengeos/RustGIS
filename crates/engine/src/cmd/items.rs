@@ -6,7 +6,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType};
-use rustgis_map::color::CustomRamp;
+use rustgis_map::color::RampKind;
+use rustgis_map::palette::{RampFormat, read_ramps};
 use rustgis_map::{Layer, Map, Ramp};
 use serde_json::{Value, json};
 
@@ -121,18 +122,19 @@ pub fn commands() -> Vec<C> {
         // Custom colour ramps.
         C::new("ramp.add", "Add Color Ramps", "Style › Styles", |s, p| {
             let text = read_text(p)?;
-            // A list of ramps, or one ramp on its own.
-            let ramps: Vec<CustomRamp> = match serde_json::from_str::<Value>(&text).map_err(|e| format!("not a RustGIS colour ramp file: {e}"))? {
-                v @ Value::Array(_) => serde_json::from_value(v),
-                v => serde_json::from_value(v).map(|r| vec![r]),
-            }
-            .map_err(|e| format!("not a RustGIS colour ramp file: {e}"))?;
-            if ramps.is_empty() {
-                return Err("the file has no colour ramps".into());
-            }
-            if ramps.len() > 1000 {
-                return Err("a colour ramp file holds at most 1000 ramps".into());
-            }
+            // RustGIS's own files, QGIS styles, GDAL colour-relief text and GMT palettes.
+            let format = match ps(p, "format") {
+                Some(f) => Some(RampFormat::from_name(f).ok_or_else(|| format!("unknown colour ramp format '{f}'"))?),
+                None => None,
+            };
+            let kind = match ps(p, "kind") {
+                Some(k) => Some(
+                    serde_json::from_value::<RampKind>(json!(k.trim().to_ascii_lowercase())).map_err(|_| format!("unknown ramp kind '{k}'"))?,
+                ),
+                None => None,
+            };
+            let file = ps(p, "path").or(ps(p, "file"));
+            let ramps = read_ramps(&text, file, format, ps(p, "name"), kind)?;
             if let Some(r) = ramps.iter().find(|r| Ramp::from_name(r.name()).is_some()) {
                 return Err(format!("'{}' is the name of a built-in colour scheme; rename the ramp", r.name()));
             }
@@ -148,7 +150,9 @@ pub fn commands() -> Vec<C> {
             }
             Ok(json!({"added": names}))
         })
-        .params(r#"{"path"?: "*.rgisramp", "text"?: colour ramp file JSON, "data"?: base64 file}"#),
+        .params(
+            r#"{"path"?: "*.rgisramp|*.xml|*.qml|*.txt|*.cpt", "text"?: file contents, "data"?: base64 file, "file"?: file name for "text" or "data", "format"?: "rgisramp"|"qgis"|"gdal"|"cpt", "name"?: name for a single ramp, "kind"?: "sequential"|"diverging"|"qualitative"}"#,
+        ),
         C::new("ramp.remove", "Delete Color Ramp", "Browser", |s, p| {
             let name = ps(p, "name").ok_or("name is required")?;
             let before = s.project.ramps.len();

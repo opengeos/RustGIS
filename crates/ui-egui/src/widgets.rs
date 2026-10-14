@@ -36,7 +36,7 @@ pub fn enabled(app: &RustGisApp, id: &str) -> bool {
     }
 }
 
-fn why_disabled(app: &RustGisApp, id: &str) -> Option<&'static str> {
+pub fn why_disabled(app: &RustGisApp, id: &str) -> Option<&'static str> {
     app.session.registry.get(id).and_then(|s| (s.enabled)(&app.session))
 }
 
