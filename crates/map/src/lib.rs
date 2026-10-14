@@ -394,6 +394,21 @@ impl Layer {
         }
     }
 
+    /// Extent in longitude/latitude of the features the definition query lets through (the whole
+    /// extent without a query, for rasters and for streamed layers, whose rows are only those read).
+    pub fn shown_extent(&self) -> Extent {
+        let query = self.definition_query.as_deref().is_some_and(|q| !q.trim().is_empty());
+        if !query || self.raster.is_some() || self.source.is_some() {
+            return self.extent();
+        }
+        self.visible_rows()
+            .iter()
+            .zip(&self.dataset.features)
+            .filter(|(v, _)| **v)
+            .filter_map(|(_, f)| f.geometry.as_ref())
+            .fold(Extent::EMPTY, |e, g| e.union(&g.extent()))
+    }
+
     pub fn selection_extent(&self) -> Extent {
         self.selection
             .iter()
@@ -847,5 +862,20 @@ mod tests {
         assert_eq!(m.hits_in(&e, 1e6), vec![(id, vec![0])]);
         m.layers[0].definition_query = Some("n = 2".into());
         assert_eq!(m.hits_in(&e, 1e6), vec![]);
+    }
+
+    #[test]
+    fn shown_extent_follows_the_definition_query() {
+        let mut m = Map::new("Map");
+        m.add_dataset(points());
+        let l = &mut m.layers[0];
+        assert_eq!(l.shown_extent(), Extent::new(0.0, 0.0, 10.0, 10.0));
+        l.definition_query = Some("n = 2".into());
+        assert_eq!(l.shown_extent(), Extent::new(10.0, 10.0, 10.0, 10.0));
+        l.definition_query = Some("n = 3".into());
+        assert!(l.shown_extent().is_empty());
+        // An invalid query hides nothing.
+        l.definition_query = Some("n = = 2".into());
+        assert_eq!(l.shown_extent(), Extent::new(0.0, 0.0, 10.0, 10.0));
     }
 }
