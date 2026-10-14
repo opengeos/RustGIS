@@ -169,7 +169,11 @@ impl Projector {
             let lon0 = if f64::is_finite(lon0) { lon0 } else { 0.0 };
             return Ok(Projector { engine: Engine::World(crate::world::World { kind, lon0 }), to_meter: 1.0, domain });
         }
-        let native = proj4rs::Proj::from_proj_string(&def).map_err(|e| format!("{code}: {e}"))?;
+        let native = proj4rs::Proj::from_proj_string(&def).map_err(|e| match e {
+            // A known code whose method isn't implemented (EPSG:5880's +proj=poly, say): name it.
+            proj4rs::errors::Error::ProjectionNotFound => format!("{code}: its projection method (+proj={proj}) isn't supported"),
+            e => format!("{code}: {e}"),
+        })?;
         let wgs84 = proj4rs::Proj::from_proj_string("+proj=longlat +datum=WGS84 +no_defs").map_err(|e| e.to_string())?;
         let to_meter = native.to_meter();
         let engine = Engine::Proj { native: Box::new(native), wgs84: Box::new(wgs84) };
@@ -372,6 +376,38 @@ mod tests {
         // Equal Earth by its EPSG code goes to the built-in engine too.
         let ee = Projector::new("EPSG:8857").unwrap();
         assert!(format!("{ee:?}").contains("eqearth"));
+    }
+
+    #[test]
+    fn codes_whose_method_cannot_be_drawn_are_refused() {
+        // EPSG:5880 (SIRGAS 2000 / Brazil Polyconic) is in the EPSG table, but its method
+        // (+proj=poly) has no implementation: refuse it rather than accept it and draw the map
+        // in Web Mercator while naming EPSG:5880 (opengeos/RustGIS#208).
+        assert!(lookup("EPSG:5880").is_ok(), "the code itself is known");
+        let e = Projector::new("EPSG:5880").unwrap_err();
+        assert!(e.contains("EPSG:5880") && e.contains("poly"), "{e}");
+        let e = crate::Projection::from_code("EPSG:5880").unwrap_err();
+        assert!(e.contains("poly"), "{e}");
+        // Codes that can be drawn are still accepted, by number or preset.
+        for ok in ["EPSG:3035", "epsg:32633", "EPSG:8858", "equalEarth", "usaAlbers", "local:12.5,41.9", "mercator", "globe"] {
+            crate::Projection::from_code(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+    }
+
+    #[test]
+    fn local_views_are_azimuthal_equidistant() {
+        // map.viewMode "local" relies on +proj=aeqd: it must build (not fall back to Web Mercator)
+        // and keep true distances from its centre.
+        let p = Projector::new("local:12.5,41.9").unwrap_or_else(|e| panic!("{e}"));
+        let o = p.forward(Coord::new(12.5, 41.9)).unwrap();
+        assert!(o.x.abs() < 1e-6 && o.y.abs() < 1e-6, "the centre is the origin: {o:?}");
+        let c = Coord::new(13.5, 42.4);
+        let m = p.forward(c).unwrap();
+        let back = p.inverse(m).unwrap();
+        assert!((back.x - c.x).abs() < 1e-7 && (back.y - c.y).abs() < 1e-7, "{back:?}");
+        // Distance from the centre on the map is the WGS84 geodesic distance (Vincenty: 99 580.4 m).
+        let d = (m.x * m.x + m.y * m.y).sqrt();
+        assert!((d - 99_580.4).abs() < 1.0, "{d}");
     }
 
     #[test]

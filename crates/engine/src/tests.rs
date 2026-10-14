@@ -450,6 +450,11 @@ fn custom_projections_switch_keep_scale_query_and_render() {
     assert!(crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap().len() > 1000);
     assert!(s.run("map.projection", &json!({"type": "EPSG:4326"})).is_err(), "degrees are refused");
     assert!(s.run("map.projection", &json!({"type": "nope"})).is_err());
+    // A known code whose method isn't implemented (Brazil Polyconic) is refused, not drawn in
+    // Web Mercator under its own name; the map keeps its projection (#208).
+    let e = s.run("map.projection", &json!({"type": "EPSG:5880"})).unwrap_err();
+    assert!(e.contains("poly"), "{e}");
+    assert_eq!(s.map().projection.code(), "EPSG:32617");
     assert!(s.run("map.goToXY", &json!({"lon": 100.0, "lat": 0.0})).is_err(), "folded far side of the UTM zone");
     // Undo and save/reload keep the projection.
     s.run("map.projection", &json!({"type": "mollweide"})).unwrap();
@@ -1758,7 +1763,10 @@ fn view_effects_scene_and_navigation() {
     // Views and navigation.
     s.run("map.viewMode", &json!({"mode": "local"})).unwrap();
     assert!(s.map().projection.code().starts_with("local:"));
-    png(&mut s);
+    let local = png(&mut s);
+    // The local view is azimuthal equidistant, not Web Mercator under another name (#208).
+    s.run("map.projection", &json!({"type": "mercator"})).unwrap();
+    assert!(png(&mut s) != local, "a local view draws in its own projection");
     s.run("map.viewMode", &json!({"mode": "global"})).unwrap();
     assert!(s.map().projection.is_globe());
     s.run("map.navigation", &json!({"mode": "planar"})).unwrap();
