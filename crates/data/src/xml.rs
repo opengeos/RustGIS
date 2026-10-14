@@ -48,19 +48,37 @@ pub fn check_depth(text: &str, allow_dtd: bool) -> Result<(), String> {
             }
         } else if rest.starts_with(b"<!") {
             // A DOCTYPE (with any internal subset): to its closing `>`, `[ … ]` and quotes skipped.
+            // Comments and processing instructions in the subset are skipped whole (an apostrophe in
+            // one isn't a quote). A declaration that never ends is refused: the rest of the
+            // document would go uncounted.
             let mut j = i + 2;
             let (mut bracket, mut quote) = (0usize, None::<u8>);
+            let mut closed = false;
             while let Some(&c) = b.get(j) {
+                if quote.is_none() && b.get(j..).is_some_and(|r| r.starts_with(b"<!--")) {
+                    j = find(j + 4, b"-->").map(|e| e + 3).ok_or("the document's DOCTYPE has an unclosed comment")?;
+                    continue;
+                }
+                if quote.is_none() && b.get(j..).is_some_and(|r| r.starts_with(b"<?")) {
+                    j = find(j + 2, b"?>").map(|e| e + 2).ok_or("the document's DOCTYPE has an unclosed instruction")?;
+                    continue;
+                }
                 match (quote, c) {
                     (Some(q), c) if c == q => quote = None,
                     (Some(_), _) => {}
                     (None, b'"' | b'\'') => quote = Some(c),
                     (None, b'[') => bracket += 1,
                     (None, b']') => bracket = bracket.saturating_sub(1),
-                    (None, b'>') if bracket == 0 => break,
+                    (None, b'>') if bracket == 0 => {
+                        closed = true;
+                        break;
+                    }
                     _ => {}
                 }
                 j += 1;
+            }
+            if !closed {
+                return Err("the document's DOCTYPE never ends".into());
             }
             let decl = b.get(i..j).unwrap_or(&[]);
             if allow_dtd && entity_with_markup(decl) {
@@ -157,6 +175,16 @@ mod tests {
         for hidden in ["<!DOCTYPE r [<!ENTITY a \"x>&b;<c>\">]><r/>", "<!DOCTYPE r [<!ENTITY a 'x>y<c>'>]><r/>"] {
             assert!(check_depth(hidden, true).is_err(), "{hidden}");
         }
+        // A comment or instruction in the subset with an apostrophe doesn't hide the document
+        // after it: its nesting is still counted.
+        for subset in ["<!-- it's -->", "<?pi it's?>"] {
+            let doc = format!("<!DOCTYPE r [ {subset} ]>{}", nested(10_000));
+            assert!(check_depth(&doc, true).is_err() && check_depth(&doc, false).is_err(), "{subset}");
+            let ok = format!("<!DOCTYPE r [ {subset} ]><r/>");
+            assert!(check_depth(&ok, true).is_ok(), "{subset}");
+        }
+        // A DOCTYPE that never ends is refused rather than skipping the rest.
+        assert!(check_depth(&format!("<!DOCTYPE r [ '{}", nested(10)), true).is_err());
         let plain =
             "<!DOCTYPE WMT_MS_Capabilities SYSTEM \"http://x/WMS_MS_Capabilities.dtd\" [<!ELEMENT VendorSpecificCapabilities EMPTY>]><r/>";
         assert!(check_depth(plain, true).is_ok());
