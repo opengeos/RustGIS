@@ -137,6 +137,10 @@ pub fn commands() -> Vec<C> {
                 return Err(format!("'{}' is the name of a built-in colour scheme; rename the ramp", r.name()));
             }
             let names: Vec<String> = ramps.iter().map(|r| r.name().to_string()).collect();
+            let new = names.iter().filter(|n| !s.project.ramps.iter().any(|r| r.name().eq_ignore_ascii_case(n))).count();
+            if s.project.ramps.len() + new > crate::project::MAX_ITEMS {
+                return Err(format!("a project holds at most {} colour ramps; delete some first", crate::project::MAX_ITEMS));
+            }
             for r in ramps {
                 // A ramp with the same name is replaced.
                 s.project.ramps.retain(|t| !t.name().eq_ignore_ascii_case(r.name()));

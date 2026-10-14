@@ -235,9 +235,21 @@ pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: V
 }
 
 fn symbology(s: &mut Session, p: &Value) -> CmdResult {
-    let (_, r) = get(s, p)?;
+    let (id, r) = get(s, p)?;
     let kind = ps(p, "type").unwrap_or("stretch").to_string();
-    let ramp = ps(p, "ramp").map(|n| s.ramp(n)).transpose()?;
+    // A custom ramp deleted from the project is still found on the raster that uses it.
+    let ramp = ps(p, "ramp")
+        .map(|n| {
+            s.ramp(n).or_else(|e| {
+                s.map()
+                    .layer(id)
+                    .and_then(|l| l.raster.as_ref())
+                    .and_then(|rl| rl.style.renderer.ramp())
+                    .filter(|r| r.name().eq_ignore_ascii_case(n.trim()))
+                    .ok_or(e)
+            })
+        })
+        .transpose()?;
     let bnd = band(p, "band", &r)?;
     with(s, p, |rl, r| {
         let cur_band = rl.style.renderer.bands().first().copied().unwrap_or(0);

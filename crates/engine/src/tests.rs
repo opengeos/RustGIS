@@ -1020,6 +1020,25 @@ fn custom_colour_ramps_add_apply_save_and_travel() {
     s.run("ramp.remove", &json!({"name": "PHOSPHOR FROSTFIRE"})).unwrap();
     assert!(s.run("ramp.remove", &json!({"name": "Phosphor Frostfire"})).is_err());
     assert_eq!(fills(&s).0, stops, "removing a ramp leaves layers that use it alone");
+    // ...which can still be restyled with it, by name or by leaving the ramp out.
+    let grad = json!({"layer": "Cities", "type": "graduated", "field": "pop_max", "classes": 3, "method": "quantile"});
+    let mut named = grad.clone();
+    named["ramp"] = json!("Phosphor Frostfire");
+    s.run("layer.symbology", &named).unwrap();
+    assert_eq!(fills(&s), (stops.clone(), "Phosphor Frostfire".to_string()));
+    s.run("layer.symbology", &grad).unwrap();
+    assert_eq!(fills(&s).1, "Phosphor Frostfire", "a ramp left out is kept");
+    named["ramp"] = json!("Nope");
+    assert!(s.run("layer.symbology", &named).is_err(), "an unknown ramp is an error");
+    // A hand-edited project's repeated or built-in names are made unique, keeping every ramp.
+    let mut p = s.project.clone();
+    p.ramps = serde_json::from_str(
+        r##"[{"name": "Brand", "stops": ["#000000", "#ffffff"]}, {"name": "brand", "stops": ["#111111", "#ffffff"]},
+            {"name": "Ember", "stops": ["#222222", "#ffffff"]}]"##,
+    )
+    .unwrap();
+    p.normalize();
+    assert_eq!(p.ramps.iter().map(|r| r.name()).collect::<Vec<_>>(), ["Brand", "brand 2", "Ember (custom)"]);
     let mut t = world();
     t.run("layer.addData", &json!({"path": path("cities.rgislyr")})).unwrap();
     match &t.map().layer_by_name("Cities (2)").unwrap().renderer {
@@ -1042,6 +1061,10 @@ fn custom_colour_ramps_add_apply_save_and_travel() {
     assert!(matches!(style(&r), RasterRenderer::Stretch { ramp: Ramp::Custom(_), .. }));
     r.run("raster.symbology", &json!({"type": "classify", "classes": 3})).unwrap();
     assert!(matches!(style(&r), RasterRenderer::Classify { ramp: Ramp::Custom(_), .. }), "classify keeps the ramp");
+    r.run("ramp.remove", &json!({"name": "Phosphor Frostfire"})).unwrap();
+    r.run("raster.symbology", &json!({"type": "classify", "classes": 4, "ramp": "Phosphor Frostfire"})).unwrap();
+    assert!(matches!(style(&r), RasterRenderer::Classify { ramp: Ramp::Custom(_), .. }), "the raster's own copy is found by name");
+    assert!(r.run("raster.symbology", &json!({"type": "stretch", "ramp": "Nope"})).is_err());
     assert!(crate::cmd::share::map_png(&mut r, Some(200.0), Some(150.0), None).unwrap().len() > 1000);
     let _ = std::fs::remove_dir_all(&dir);
 }

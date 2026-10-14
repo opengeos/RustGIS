@@ -1663,7 +1663,17 @@ fn move_to(s: &mut Session, p: &Value) -> CmdResult {
 fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     let id = s.layer_id(p)?;
     let kind = ps(p, "type").unwrap_or("single").to_ascii_lowercase();
-    let ramp = ps(p, "ramp").and_then(|n| s.ramp(n).ok());
+    // The layer's own ramp: kept when no other is named and the type stays, and found by name even
+    // after a custom ramp has been deleted from the project.
+    let current = s.map().layer(id).and_then(|l| match (&l.renderer, kind.as_str()) {
+        (Renderer::Graduated { ramp, .. }, "graduated" | "graduatedcolors")
+        | (Renderer::Unique { ramp, .. }, "unique" | "uniquevalues") => Some(ramp.clone()),
+        _ => None,
+    });
+    let ramp = match ps(p, "ramp") {
+        Some(n) => Some(s.ramp(n).or_else(|e| current.filter(|r| r.name().eq_ignore_ascii_case(n.trim())).ok_or(e))?),
+        None => current,
+    };
     let method = ps(p, "method").and_then(ClassMethod::from_name).unwrap_or_default();
     let classes = f(p, "classes").map(|c| c.clamp(1.0, 12.0) as usize).unwrap_or(5);
     let l = s.map().layer(id).ok_or("no such layer")?;

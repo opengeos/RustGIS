@@ -185,6 +185,11 @@ impl CustomRamp {
         &self.name
     }
 
+    /// The name, to make it unique among a project's ramps (keep it non-empty).
+    pub fn name_mut(&mut self) -> &mut String {
+        &mut self.name
+    }
+
     pub fn kind(&self) -> RampKind {
         self.kind
     }
