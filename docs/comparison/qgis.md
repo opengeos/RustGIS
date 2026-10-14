@@ -7,9 +7,9 @@ together. For RustGIS beside GeoLibre, ArcGIS Pro and ArcGIS Online as well, see
 
 !!! note "How to read this"
     This page is written by the RustGIS project, so read it with that in mind. It reflects
-    RustGIS as of **October 2026** and QGIS's out-of-the-box behaviour (the 3.x long-term
-    release), not everything reachable through its plugins. Found something wrong or out of
-    date? Please [open an issue](https://github.com/opengeos/RustGIS/issues).
+    RustGIS as of **October 2026** and QGIS's out-of-the-box behaviour, not everything
+    reachable through its plugins. Found something wrong or out of date? Please
+    [open an issue](https://github.com/opengeos/RustGIS/issues).
 
 ## The short answer
 
