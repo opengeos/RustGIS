@@ -19,6 +19,44 @@ Query** draws only the features matching a SQL clause, and a layer with
 [subtypes](editing.md#data-design) can be symbolized by them. **Style › Styles** saves symbology
 as styles to reuse on other layers and in other projects.
 
+### Custom color ramps
+
+Besides the built-in color schemes, a project can hold your own color ramps: an organization's
+palette, a published scheme such as a ColorBrewer, cmocean or viridis ramp, or one designed in a
+tool like [Phosphor](https://www.joshuastevens.net/phosphor/). Add them from a color ramp file
+with **Style › Styles › Add Color Ramp File** (or **Add Color Ramp File** under the swatches in
+the Symbology pane). They appear under **Custom** in the Symbology pane, for feature layers and
+rasters (Stretch, Classify, Unique Values and Shaded Relief) alike, and under **Color Ramps** in
+the Browser, where right-click deletes one. **Publish › Save As › Color Ramps** saves the
+project's custom ramps to a file.
+
+A color ramp file (`.rgisramp`) is JSON: a list of ramps (or one ramp on its own), each with a
+`name`, a `kind` (`sequential`, the default, `diverging` or `qualitative`) and its `stops`:
+
+```json
+[{
+  "name": "Phosphor Frostfire",
+  "kind": "diverging",
+  "stops": ["#eff6ff", "#abc5e8", "#87a0d7", "#7b5ca6", "#ca7482", "#f5b88e", "#fff5da"]
+}]
+```
+
+Stops are `#RRGGBB` or `#RRGGBBAA` colors, evenly spaced from the first to the last. For uneven
+spacing, give a stop as `{"pos": 0.25, "color": "#87a0d7"}`, with `pos` from 0 to 1; plain
+stops between two positioned ones are spaced evenly between them. A ramp has 2 to 256 stops (a
+qualitative one can have 1), and can't take the name of a built-in scheme; adding a ramp with
+the name of one already in the project replaces it. Scripts, the CLI and the AI Assistant add
+ramps with the `ramp.add` command (`{"path": "ramps.rgisramp"}`, or the JSON itself as
+`{"text": …}`), and then name them like built-in schemes, for example
+`layer.ramp={"ramp":"Phosphor Frostfire"}`.
+
+Sequential and diverging ramps blend between their stops; when there are as many classes as
+stops, each class takes a stop's color exactly, so a stepped palette keeps its colors. A
+qualitative ramp gives each class the next stop, starting again after the last. A layer keeps
+its own copy of the ramp it uses, so layer files, map files and packages keep their colors in
+projects that don't have the ramp, and deleting a ramp from the project leaves layers that use
+it unchanged.
+
 ## Labeling
 
 Turn labels on per layer (View › Labeling › Label, or the Style tab), then:

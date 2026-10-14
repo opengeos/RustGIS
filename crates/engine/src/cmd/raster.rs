@@ -237,7 +237,7 @@ pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: V
 fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     let (_, r) = get(s, p)?;
     let kind = ps(p, "type").unwrap_or("stretch").to_string();
-    let ramp = ps(p, "ramp").map(|n| Ramp::from_name(n).ok_or_else(|| format!("unknown colour scheme '{n}'"))).transpose()?;
+    let ramp = ps(p, "ramp").map(|n| s.ramp(n)).transpose()?;
     let bnd = band(p, "band", &r)?;
     with(s, p, |rl, r| {
         let cur_band = rl.style.renderer.bands().first().copied().unwrap_or(0);

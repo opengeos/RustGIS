@@ -6,7 +6,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType};
-use rustgis_map::{Layer, Map};
+use rustgis_map::color::CustomRamp;
+use rustgis_map::{Layer, Map, Ramp};
 use serde_json::{Value, json};
 
 use super::{b, f, need_feature_layer, need_layer, ps};
@@ -45,6 +46,7 @@ pub fn commands() -> Vec<C> {
                 "layouts": s.project.layouts.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
                 "tables": s.project.tables.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
                 "styles": s.project.styles.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+                "ramps": s.project.ramps.iter().map(|r| r.name().to_string()).collect::<Vec<_>>(),
                 "tasks": s.project.tasks.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
             }))
         })
@@ -116,6 +118,43 @@ pub fn commands() -> Vec<C> {
         C::new("style.save", "Save Style Items", "Publish › Save As", |s, p| save_item(s, "styles", p))
         .view()
         .params(r#"{"path": "*.rgisstyle"}"#),
+        // Custom colour ramps.
+        C::new("ramp.add", "Add Color Ramps", "Style › Styles", |s, p| {
+            let text = read_text(p)?;
+            // A list of ramps, or one ramp on its own.
+            let ramps: Vec<CustomRamp> = match serde_json::from_str::<Value>(&text).map_err(|e| format!("not a RustGIS colour ramp file: {e}"))? {
+                v @ Value::Array(_) => serde_json::from_value(v),
+                v => serde_json::from_value(v).map(|r| vec![r]),
+            }
+            .map_err(|e| format!("not a RustGIS colour ramp file: {e}"))?;
+            if ramps.is_empty() {
+                return Err("the file has no colour ramps".into());
+            }
+            if ramps.len() > 1000 {
+                return Err("a colour ramp file holds at most 1000 ramps".into());
+            }
+            if let Some(r) = ramps.iter().find(|r| Ramp::from_name(r.name()).is_some()) {
+                return Err(format!("'{}' is the name of a built-in colour scheme; rename the ramp", r.name()));
+            }
+            let names: Vec<String> = ramps.iter().map(|r| r.name().to_string()).collect();
+            for r in ramps {
+                // A ramp with the same name is replaced.
+                s.project.ramps.retain(|t| !t.name().eq_ignore_ascii_case(r.name()));
+                s.project.ramps.push(r);
+            }
+            Ok(json!({"added": names}))
+        })
+        .params(r#"{"path"?: "*.rgisramp", "text"?: colour ramp file JSON}"#),
+        C::new("ramp.remove", "Delete Color Ramp", "Browser", |s, p| {
+            let name = ps(p, "name").ok_or("name is required")?;
+            let before = s.project.ramps.len();
+            s.project.ramps.retain(|r| !r.name().eq_ignore_ascii_case(name.trim()));
+            if s.project.ramps.len() == before { Err(format!("no colour ramp '{name}'")) } else { Ok(Value::Null) }
+        })
+        .params(r#"{"name": colour ramp}"#),
+        C::new("ramp.save", "Save Color Ramps", "Publish › Save As", |s, p| save_item(s, "ramps", p))
+        .view()
+        .params(r#"{"path": "*.rgisramp"}"#),
         // Project templates.
         C::new("project.saveTemplate", "Save Project Template", "Publish › Save As", |s, p| save_item(s, "template", p))
         .view()
@@ -749,6 +788,7 @@ pub const ITEMS: &[(&str, &str, &str)] = &[
     ("map", "rgismap", "RustGIS map file"),
     ("layer", "rgislyr", "RustGIS layer file"),
     ("styles", "rgisstyle", "RustGIS styles"),
+    ("ramps", "rgisramp", "RustGIS colour ramps"),
     ("template", "rgistemplate", "RustGIS project template"),
     ("projectPackage", "rgispkg", "RustGIS project package"),
     ("mapPackage", "rgismpk", "RustGIS map package"),
@@ -793,6 +833,12 @@ pub fn item_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec
                 return Err("the project has no styles; make one with New Style".into());
             }
             ("styles".to_string(), to_json(&s.project.styles)?)
+        }
+        "ramps" => {
+            if s.project.ramps.is_empty() {
+                return Err("the project has no custom colour ramps; add some with Add Color Ramp File".into());
+            }
+            ("ramps".to_string(), to_json(&s.project.ramps)?)
         }
         "template" => {
             let mut t = template(&s.project);

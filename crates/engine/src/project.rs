@@ -45,6 +45,9 @@ pub struct Project {
     /// Saved symbology, applied to layers by name.
     #[serde(default)]
     pub styles: Vec<StyleItem>,
+    /// Custom colour ramps, offered beside the built-in ones (renderers keep their own copy).
+    #[serde(default)]
+    pub ramps: Vec<rustgis_map::color::CustomRamp>,
     /// Step-by-step tasks: guided command sequences.
     #[serde(default)]
     pub tasks: Vec<Task>,
@@ -257,6 +260,7 @@ impl Project {
             layouts: Vec::new(),
             folders: Vec::new(),
             styles: Vec::new(),
+            ramps: Vec::new(),
             tasks: Vec::new(),
             gp_env: GpEnvironment::default(),
             models: Vec::new(),

@@ -621,6 +621,29 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     }
                 });
             }
+            let ramps: Vec<Ramp> = app.session.project.ramps.iter().map(|r| Ramp::Custom(Box::new(r.clone()))).collect();
+            if !ramps.is_empty() {
+                egui::CollapsingHeader::new(egui::RichText::new(tl!("Color Ramps")).font(semibold(12.5))).default_open(true).show(
+                    ui,
+                    |ui| {
+                        for r in ramps {
+                            ui.horizontal(|ui| {
+                                ramp_swatch(ui, &r, 16.0, false, t);
+                                let resp = ui.link(r.name()).on_hover_text(tl!("Apply to the selected layer"));
+                                if resp.clicked() {
+                                    let _ = app.run("layer.ramp", json!({"ramp": r.name()}));
+                                }
+                                resp.context_menu(|ui| {
+                                    if ui.button(tl!("Delete")).clicked() {
+                                        let _ = app.run("ramp.remove", json!({"name": r.name()}));
+                                        ui.close();
+                                    }
+                                });
+                            });
+                        }
+                    },
+                );
+            }
             let tasks: Vec<(String, usize)> = app.session.project.tasks.iter().map(|tk| (tk.name.clone(), tk.steps.len())).collect();
             if !tasks.is_empty() {
                 egui::CollapsingHeader::new(egui::RichText::new(tl!("Tasks")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
@@ -1365,7 +1388,7 @@ pub fn tool_icon(id: &str) -> &'static str {
 // ---------------------------------------------------------------------------------------------
 // Symbology
 
-fn ramp_swatch(ui: &mut Ui, ramp: Ramp, w: f32, selected: bool, t: &Tokens) -> egui::Response {
+fn ramp_swatch(ui: &mut Ui, ramp: &Ramp, w: f32, selected: bool, t: &Tokens) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(w, 18.0), Sense::click());
     let n = 24;
     for i in 0..n {
@@ -1455,7 +1478,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         Renderer::Single(s) => symbol_editor(app, ui, *s, g, t),
         Renderer::Unique { field, classes, ramp, .. } => {
             field_combo(app, ui, "Field", field, &all, "unique");
-            ramp_picker(app, ui, *ramp, t);
+            ramp_picker(app, ui, ramp, t);
             ui.add_space(6.0);
             ui.label(
                 egui::RichText::new(crate::i18n::fmt("{n} classes", &[("n", &classes.len().to_string())])).size(11.5).color(t.text_dim),
@@ -1469,7 +1492,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 egui::ComboBox::from_id_salt("sym_method").selected_text(tl!(method.label())).width(180.0).show_ui(ui, |ui| {
                     for m in ClassMethod::ALL {
                         if ui.selectable_label(m == *method, tl!(m.label())).clicked() {
-                            let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{m:?}"), "classes": breaks.len(), "ramp": format!("{ramp:?}")}));
+                            let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{m:?}"), "classes": breaks.len(), "ramp": ramp.name()}));
                         }
                     }
                 });
@@ -1478,10 +1501,13 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 ui.label(tl!("Classes"));
                 let mut k = breaks.len();
                 if ui.add(egui::DragValue::new(&mut k).range(1..=12)).changed() {
-                    let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{method:?}"), "classes": k, "ramp": format!("{ramp:?}")}));
+                    let _ = app.run(
+                        "layer.symbology",
+                        json!({"type": "graduated", "field": field, "method": format!("{method:?}"), "classes": k, "ramp": ramp.name()}),
+                    );
                 }
             });
-            ramp_picker(app, ui, *ramp, t);
+            ramp_picker(app, ui, ramp, t);
             ui.add_space(6.0);
             legend_list(ui, &l, t);
         }
@@ -1518,20 +1544,35 @@ fn field_combo(app: &mut RustGisApp, ui: &mut Ui, label: &str, cur: &str, fields
     });
 }
 
-fn ramp_picker(app: &mut RustGisApp, ui: &mut Ui, cur: Ramp, t: &Tokens) {
+fn ramp_picker(app: &mut RustGisApp, ui: &mut Ui, cur: &Ramp, t: &Tokens) {
     ui.add_space(4.0);
     ui.label(egui::RichText::new(tl!("Color scheme")).size(11.5).color(t.text_dim));
     let w = (ui.available_width() - 8.0) / 2.0;
-    egui::Grid::new("ramps").spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        for (i, r) in Ramp::ALL.into_iter().enumerate() {
-            if ramp_swatch(ui, r, w, r == cur, t).on_hover_text(tl!(r.label())).clicked() {
-                let _ = app.run("layer.ramp", json!({"ramp": format!("{r:?}")}));
+    let grid = |app: &mut RustGisApp, ui: &mut Ui, id: &str, ramps: Vec<Ramp>| {
+        egui::Grid::new(id).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+            for (i, r) in ramps.iter().enumerate() {
+                // Built-in names are translated; a custom ramp's is the user's own.
+                let tip = if matches!(r, Ramp::Custom(_)) { r.label() } else { tl!(r.label()) };
+                if ramp_swatch(ui, r, w, r == cur, t).on_hover_text(tip).clicked() {
+                    let _ = app.run("layer.ramp", json!({"ramp": r.name()}));
+                }
+                if i % 2 == 1 {
+                    ui.end_row();
+                }
             }
-            if i % 2 == 1 {
-                ui.end_row();
-            }
-        }
-    });
+        });
+    };
+    grid(app, ui, "ramps", Ramp::ALL.to_vec());
+    let custom: Vec<Ramp> = app.session.project.ramps.iter().map(|r| Ramp::Custom(Box::new(r.clone()))).collect();
+    if !custom.is_empty() {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(tl!("Custom")).size(11.5).color(t.text_dim));
+        grid(app, ui, "custom_ramps", custom);
+    }
+    if ui.small_button(tl!("Add Color Ramp File…")).on_hover_text(tl!("Add color ramps from a .rgisramp file to the project.")).clicked()
+    {
+        let _ = app.run("ui.openItem", json!({"kind": "ramps"}));
+    }
 }
 
 fn legend_list(ui: &mut Ui, l: &Layer, t: &Tokens) {
@@ -1875,10 +1916,10 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
         RasterRenderer::Stretch { band, ramp, invert } => {
             let code = style.renderer.code();
             band_combo(app, ui, "Band", *band, &|i| ("raster.symbology".into(), json!({"type": code, "band": i + 1})));
-            ramp_picker(app, ui, *ramp, t);
+            ramp_picker(app, ui, ramp, t);
             let mut inv = *invert;
             if ui.checkbox(&mut inv, tl!("Invert color scheme")).changed() {
-                let _ = app.run("raster.symbology", json!({"type": "stretch", "invert": inv, "ramp": format!("{ramp:?}")}));
+                let _ = app.run("raster.symbology", json!({"type": "stretch", "invert": inv, "ramp": ramp.name()}));
             }
         }
         RasterRenderer::Rgb { red, green, blue } => {
@@ -1887,7 +1928,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             }
         }
         RasterRenderer::Classify { band, method, ramp, breaks } => {
-            let (m, k, r) = (*method, breaks.len(), *ramp);
+            let (m, k, r) = (*method, breaks.len(), ramp.name().to_string());
             band_combo(app, ui, "Band", *band, &|i| {
                 ("raster.symbology".into(), json!({"type": "classify", "band": i + 1, "classes": k, "method": format!("{m:?}")}))
             });
@@ -1896,10 +1937,8 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 egui::ComboBox::from_id_salt("raster_method").selected_text(tl!(method.label())).width(180.0).show_ui(ui, |ui| {
                     for mm in ClassMethod::ALL {
                         if ui.selectable_label(mm == m, tl!(mm.label())).clicked() {
-                            let _ = app.run(
-                                "raster.symbology",
-                                json!({"type": "classify", "method": format!("{mm:?}"), "classes": k, "ramp": format!("{r:?}")}),
-                            );
+                            let _ = app
+                                .run("raster.symbology", json!({"type": "classify", "method": format!("{mm:?}"), "classes": k, "ramp": r}));
                         }
                     }
                 });
@@ -1908,17 +1947,14 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 ui.label(tl!("Classes"));
                 let mut kk = k;
                 if ui.add(egui::DragValue::new(&mut kk).range(1..=32)).changed() {
-                    let _ = app.run(
-                        "raster.symbology",
-                        json!({"type": "classify", "method": format!("{m:?}"), "classes": kk, "ramp": format!("{r:?}")}),
-                    );
+                    let _ = app.run("raster.symbology", json!({"type": "classify", "method": format!("{m:?}"), "classes": kk, "ramp": r}));
                 }
             });
-            ramp_picker(app, ui, *ramp, t);
+            ramp_picker(app, ui, ramp, t);
         }
         RasterRenderer::UniqueValues { band, ramp, values } => {
             band_combo(app, ui, "Band", *band, &|i| ("raster.symbology".into(), json!({"type": "unique", "band": i + 1})));
-            ramp_picker(app, ui, *ramp, t);
+            ramp_picker(app, ui, ramp, t);
             ui.label(
                 egui::RichText::new(crate::i18n::fmt("{n} classes", &[("n", &values.len().to_string())])).size(11.5).color(t.text_dim),
             );
@@ -1927,11 +1963,11 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             ui.label(egui::RichText::new(tl!("Colors from the raster's own color table.")).size(11.5).color(t.text_dim));
         }
         RasterRenderer::ShadedRelief { band, ramp, azimuth, altitude, z_factor } => {
-            let (az, alt, zf, rp) = (*azimuth, *altitude, *z_factor, *ramp);
+            let (az, alt, zf, rp) = (*azimuth, *altitude, *z_factor, ramp.as_ref().map(|r| r.name().to_string()));
             let relief = move |band: usize, az: f64, alt: f64, zf: f64| {
                 let mut p = json!({"type": "shadedRelief", "band": band + 1, "azimuth": az, "altitude": alt, "zFactor": zf});
-                match rp {
-                    Some(r) => p["ramp"] = json!(format!("{r:?}")),
+                match &rp {
+                    Some(r) => p["ramp"] = json!(r),
                     None => p["grey"] = json!(true),
                 }
                 p
@@ -1955,7 +1991,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     ui.end_row();
                 }
             });
-            let mut tint = rp.is_some();
+            let mut tint = ramp.is_some();
             if ui.checkbox(&mut tint, tl!("Tint by elevation")).changed() {
                 let mut p = relief(*band, az, alt, zf);
                 if tint {
@@ -1966,7 +2002,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 }
                 let _ = app.run("raster.symbology", p);
             }
-            if let Some(r) = rp {
+            if let Some(r) = ramp {
                 ramp_picker(app, ui, r, t);
             }
         }

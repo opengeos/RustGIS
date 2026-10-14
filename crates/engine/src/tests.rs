@@ -971,6 +971,82 @@ fn layouts_compose_export_and_round_trip() {
 }
 
 #[test]
+fn custom_colour_ramps_add_apply_save_and_travel() {
+    use rustgis_map::{Ramp, RasterRenderer, Renderer, Rgba};
+    let dir = std::env::temp_dir().join(format!("rustgis-ramps-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |n: &str| dir.join(n).display().to_string();
+    let mut s = world();
+    let file = r##"[
+        {"name": "Phosphor Frostfire", "kind": "diverging", "stops": ["#eff6ff", "#7b5ca6", "#fff5da"]},
+        {"name": "Brand", "kind": "qualitative", "stops": ["#112233", "#445566"]}
+    ]"##;
+    let r = s.run("ramp.add", &json!({"text": file})).unwrap();
+    assert_eq!(r["added"], json!(["Phosphor Frostfire", "Brand"]));
+    // One ramp on its own is a file too; the same name replaces it.
+    s.run("ramp.add", &json!({"text": r##"{"name": "brand", "kind": "qualitative", "stops": ["#112233", "#445566", "#778899"]}"##}))
+        .unwrap();
+    assert_eq!(s.project.ramps.len(), 2);
+    for bad in
+        [r##"{"name": "Ember", "stops": ["#000000", "#ffffff"]}"##, r##"[]"##, r##"{"name": "x", "stops": ["#000000"]}"##, "not json"]
+    {
+        assert!(s.run("ramp.add", &json!({"text": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(s.project.ramps.len(), 2, "a refused file adds nothing");
+    assert_eq!(s.run("project.connections", &Value::Null).unwrap()["ramps"], json!(["Phosphor Frostfire", "brand"]));
+
+    // Three classes from a three-stop ramp take its colours as they are.
+    s.run(
+        "layer.symbology",
+        &json!({"layer": "Cities", "type": "graduated", "field": "pop_max", "classes": 3, "ramp": "phosphor frostfire"}),
+    )
+    .unwrap();
+    let fills = |s: &Session| match &s.map().layer_by_name("Cities").unwrap().renderer {
+        Renderer::Graduated { symbols, ramp, .. } => (symbols.iter().map(|y| y.fill).collect::<Vec<_>>(), ramp.name().to_string()),
+        r => panic!("{r:?}"),
+    };
+    let stops = vec![Rgba::rgb(0xef, 0xf6, 0xff), Rgba::rgb(0x7b, 0x5c, 0xa6), Rgba::rgb(0xff, 0xf5, 0xda)];
+    assert_eq!(fills(&s), (stops.clone(), "Phosphor Frostfire".to_string()));
+    // Color Scheme recolours with a custom ramp too.
+    s.run("layer.ramp", &json!({"layer": "Countries", "ramp": "Brand"})).unwrap();
+    assert!(s.run("layer.ramp", &json!({"layer": "Countries", "ramp": "Nope"})).is_err());
+
+    // Saved with the project, and inside the layer's renderer.
+    let p = crate::Project::from_json(&serde_json::to_string(&s.project).unwrap()).unwrap();
+    assert_eq!(p.ramps, s.project.ramps);
+    // A layer file carries the ramp to a project that doesn't have it.
+    s.run("layer.save", &json!({"layer": "Cities", "path": path("cities.rgislyr")})).unwrap();
+    s.run("ramp.save", &json!({"path": path("mine.rgisramp")})).unwrap();
+    s.run("ramp.remove", &json!({"name": "PHOSPHOR FROSTFIRE"})).unwrap();
+    assert!(s.run("ramp.remove", &json!({"name": "Phosphor Frostfire"})).is_err());
+    assert_eq!(fills(&s).0, stops, "removing a ramp leaves layers that use it alone");
+    let mut t = world();
+    t.run("layer.addData", &json!({"path": path("cities.rgislyr")})).unwrap();
+    match &t.map().layer_by_name("Cities (2)").unwrap().renderer {
+        Renderer::Graduated { symbols, ramp: Ramp::Custom(c), .. } => {
+            assert_eq!(c.name(), "Phosphor Frostfire");
+            assert_eq!(symbols.iter().map(|y| y.fill).collect::<Vec<_>>(), stops);
+        }
+        r => panic!("{r:?}"),
+    }
+    // The saved file adds them back.
+    t.run("ramp.add", &json!({"path": path("mine.rgisramp")})).unwrap();
+    assert_eq!(t.project.ramps.len(), 2);
+    assert!(Session::new(Project::default()).run("ramp.save", &json!({"path": path("none.rgisramp")})).is_err());
+
+    // Rasters: stretch and classify with a custom ramp.
+    let mut r = with_raster();
+    r.run("ramp.add", &json!({"path": path("mine.rgisramp")})).unwrap();
+    r.run("raster.symbology", &json!({"type": "stretch", "ramp": "Phosphor Frostfire"})).unwrap();
+    let style = |r: &Session| r.map().layers.last().unwrap().raster.as_ref().unwrap().style.renderer.clone();
+    assert!(matches!(style(&r), RasterRenderer::Stretch { ramp: Ramp::Custom(_), .. }));
+    r.run("raster.symbology", &json!({"type": "classify", "classes": 3})).unwrap();
+    assert!(matches!(style(&r), RasterRenderer::Classify { ramp: Ramp::Custom(_), .. }), "classify keeps the ramp");
+    assert!(crate::cmd::share::map_png(&mut r, Some(200.0), Some(150.0), None).unwrap().len() > 1000);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn project_items_files_styles_packages_tasks_and_3d() {
     let dir = std::env::temp_dir().join(format!("rustgis-items-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

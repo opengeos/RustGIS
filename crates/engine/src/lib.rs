@@ -693,6 +693,19 @@ impl Session {
         }
     }
 
+    /// A colour ramp by name: one of the built-in ones, else one of the project's custom ramps.
+    pub fn ramp(&self, name: &str) -> Result<rustgis_map::Ramp, String> {
+        rustgis_map::Ramp::from_name(name)
+            .or_else(|| {
+                self.project
+                    .ramps
+                    .iter()
+                    .find(|r| r.name().eq_ignore_ascii_case(name.trim()))
+                    .map(|r| rustgis_map::Ramp::Custom(Box::new(r.clone())))
+            })
+            .ok_or_else(|| format!("unknown colour scheme '{name}'"))
+    }
+
     /// Resolves a `layer` parameter (name or id), defaulting to the active layer.
     pub fn layer_id(&self, p: &Value) -> Result<u32, String> {
         let map = self.map();
