@@ -804,6 +804,8 @@ pub struct GpForm {
     pub web_run: Option<(u64, &'static str, crate::Slot<rustgis_engine::cmd::gp::ExternalOutput>)>,
     /// Uninstall was pressed once: the button now asks to confirm.
     pub confirm_uninstall: bool,
+    /// Why the last uninstall failed (apart from `last`, which a tool run sets too).
+    pub uninstall_error: Option<String>,
 }
 
 /// Starts loading the browser's GeoLibre tools (the runner downloads once, then the browser
@@ -1047,9 +1049,9 @@ fn geolibre_uninstall(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     save("geolibre_runner", "");
                 }
             }
-            app.gp.last = None;
+            app.gp.uninstall_error = None;
         }
-        Err(e) => app.gp.last = Some((false, vec![e])),
+        Err(e) => app.gp.uninstall_error = Some(e),
     }
 }
 
@@ -1138,10 +1140,8 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     ui.label(egui::RichText::new(tl!("GeoLibre")).size(11.0).color(t.text_dim));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| geolibre_uninstall(app, ui, t));
                 });
-                if let Some((false, msgs)) = &app.gp.last {
-                    for m in msgs {
-                        ui.label(egui::RichText::new(m).size(11.0).color(t.red));
-                    }
+                if let Some(e) = &app.gp.uninstall_error {
+                    ui.label(egui::RichText::new(e).size(11.0).color(t.red));
                 }
                 // As in GeoLibre's Processing menu: category › subcategory › tools
                 // (`GeoLibre › Terrain › Derivatives`; a tool without a subcategory sits
