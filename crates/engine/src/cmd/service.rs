@@ -296,7 +296,8 @@ pub fn records_request(s: &Session, p: &Value) -> Result<String, String> {
 /// A WCS coverage's answer is a GeoTIFF; anything else (an XML exception, an HTML page, plain
 /// text) is the service's error, its start reported.
 pub(crate) fn coverage_check(name: &str, bytes: &[u8]) -> Result<(), String> {
-    if bytes.starts_with(b"II") || bytes.starts_with(b"MM") {
+    // TIFF's and BigTIFF's byte-order marks with their magic numbers.
+    if [&b"II*\0"[..], b"MM\0*", b"II+\0", b"MM\0+"].iter().any(|m| bytes.starts_with(m)) {
         return Ok(());
     }
     let text = String::from_utf8_lossy(bytes.get(..bytes.len().min(400)).unwrap_or_default()).into_owned();

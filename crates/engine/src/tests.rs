@@ -4368,7 +4368,8 @@ fn coverage_answers_that_are_not_geotiffs_are_errors() {
     use crate::cmd::service::coverage_check;
     assert!(coverage_check("c", b"II*\0rest").is_ok());
     assert!(coverage_check("c", b"MM\0*rest").is_ok());
-    for bad in [&b"<ows:ExceptionReport/>"[..], b"Service unavailable", b"", b"\xff\xd8\xff"] {
+    assert!(coverage_check("c", b"II+\0rest").is_ok());
+    for bad in [&b"<ows:ExceptionReport/>"[..], b"Service unavailable", b"", b"\xff\xd8\xff", b"MM: service down", b"II"] {
         let e = coverage_check("c", bad).err().unwrap_or_default();
         assert!(e.starts_with("c: the service answered with an error"), "{e}");
     }
