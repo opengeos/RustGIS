@@ -606,6 +606,10 @@ fn web_save_asks_for_the_file_name() {
     h.state_mut().run("ui.save", json!(null)).unwrap();
     assert_eq!(h.state().dialogs.open, Some("saveProject"));
     assert_eq!(names(&got).len(), n);
+    // A name that can't be a file name is offered as one that can.
+    h.state_mut().run("project.new", json!({"name": "Roads 2024/25"})).unwrap();
+    h.state_mut().run("ui.saveAs", json!(null)).unwrap();
+    assert_eq!(h.state().dialogs.text, "Roads 2024-25.rgis");
 }
 
 /// Without a browser's downloads, Save Project As (opened by `ui.dialog`) saves nothing and
