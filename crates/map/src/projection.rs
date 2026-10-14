@@ -155,6 +155,11 @@ impl std::fmt::Debug for Projector {
 const LIMIT: f64 = 4.0e7;
 
 impl Projector {
+    /// The projector for a code `lookup` accepts: a preset id or name, `EPSG:<n>` or
+    /// `local:lon,lat`. World projections proj4rs lacks are computed here; the rest go to
+    /// proj4rs. Fails when the code is unknown, or when its method can't be computed (its
+    /// `+proj=` name is in the message), so a map is never drawn in another projection than the
+    /// one it names.
     pub fn new(code: &str) -> Result<Projector, String> {
         let (def, _) = lookup(code)?;
         let code_t = code.trim();
