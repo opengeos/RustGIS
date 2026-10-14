@@ -18,7 +18,8 @@ browser tab through WebAssembly.
     Please [open an issue](https://github.com/opengeos/RustGIS/issues).
 
 Coming from QGIS? [RustGIS and QGIS](qgis.md) goes deeper: the pros and cons of each, how QGIS
-concepts map onto RustGIS, and how to use the two together.
+concepts map onto RustGIS, and how to use the two together. Deciding between RustGIS and its
+sibling? [RustGIS and GeoLibre](geolibre.md) compares the two in detail.
 
 ## RustGIS and GeoLibre
 
@@ -39,7 +40,8 @@ They differ in how they are built and who they suit:
 
 If you want the widest data access and the most platforms, choose GeoLibre. If you want a
 compact native desktop GIS with a classic ribbon workflow and a fully scriptable command
-engine, choose RustGIS. Both keep your data on your machine.
+engine, choose RustGIS. Both keep your data on your machine. See
+[RustGIS and GeoLibre](geolibre.md) for a closer look.
 
 ## At a glance
 
@@ -148,6 +150,7 @@ Stated plainly, so the tables above are worth trusting:
 ## See also
 
 - [User Guide](../user-guide/index.md): what RustGIS does, page by page
+- [RustGIS and GeoLibre](geolibre.md): a closer look at the sibling project
 - [RustGIS and QGIS](qgis.md): a closer look, for QGIS users
 - [Command Line](../cli.md): scripting RustGIS
 - [GeoLibre's comparison](https://geolibre.app/comparison/): GeoLibre against QGIS, ArcGIS,

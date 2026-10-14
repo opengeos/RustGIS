@@ -27,6 +27,7 @@ nav = [
   ] },
   { "Comparison" = [
     "comparison/index.md",
+    "comparison/geolibre.md",
     "comparison/qgis.md",
   ] },
   { "Command Line" = "cli.md" },
