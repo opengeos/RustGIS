@@ -724,10 +724,11 @@ pub fn parse_describe(c: &Coverage, body: &[u8]) -> Result<CoverageInfo, String>
         let bbox = (|| {
             let (lo, hi) = (corner("lowerCorner")?, corner("upperCorner")?);
             let (lo0, lo1, hi0, hi1) = (*lo.first()?, *lo.get(1)?, *hi.first()?, *hi.get(1)?);
-            // Which corner value is the longitude: by the axes' order in the labels.
+            // Which corner value is the longitude: by the axes' order in the labels; without
+            // labels, EPSG:4326's own order (latitude first), CRS84's and others' longitude first.
             let lon_first = match &axes {
                 Some((lon, _)) => labels.first() == Some(&lon.as_str()),
-                None => true,
+                None => !(s.ends_with("/4326") || s.ends_with(":4326")),
             };
             if s.ends_with("/4326") || s.ends_with(":4326") || s.contains("crs84") {
                 if lon_first { lonlat_box(lo0, lo1, hi0, hi1) } else { lonlat_box(lo1, lo0, hi1, hi0) }
@@ -1920,6 +1921,9 @@ mod tests {
                 .contains("no such coverage")
         );
         assert!(parse_describe(c, b"<CoverageDescriptions/>").is_err());
+        // No axis labels: EPSG:4326's corners are latitude first.
+        let unlabelled = desc.replace(r#" axisLabels="lat long""#, "");
+        assert_eq!(parse_describe(c, unlabelled.as_bytes()).unwrap().bbox, Some([-180.0, -56.0, 180.0, 84.0]));
 
         let v1 = r#"<WCS_Capabilities version="1.0.0" xmlns="http://www.opengis.net/wcs" xmlns:gml="http://www.opengis.net/gml" xmlns:xlink="http://www.w3.org/1999/xlink">
             <Service><name>MapServer WCS</name><label>Elevation</label></Service>
