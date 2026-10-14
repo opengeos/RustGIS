@@ -201,10 +201,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let bytes = crate::render::rustgis_tiles::cache::download_blocking(&get).map_err(|e| format!("{name}: {e}"))?;
-                if bytes.starts_with(b"<") {
-                    let text = String::from_utf8_lossy(bytes.get(..bytes.len().min(400)).unwrap_or(&bytes)).into_owned();
-                    return Err(format!("{name}: the service answered with an error: {text}"));
-                }
+                coverage_check(&name, &bytes)?;
                 super::raster::add_named_bytes(s, &json!({"name": name}), format!("{name}.tif"), bytes)
             }
         }
@@ -294,6 +291,16 @@ pub fn records_request(s: &Session, p: &Value) -> Result<String, String> {
     };
     let start = p.get("start").and_then(Value::as_u64).unwrap_or(1).clamp(1, 1_000_000);
     Ok(rustgis_data::ogc::records_url(url, words, bbox, start))
+}
+
+/// A WCS coverage's answer is a GeoTIFF; anything else (an XML exception, an HTML page, plain
+/// text) is the service's error, its start reported.
+pub(crate) fn coverage_check(name: &str, bytes: &[u8]) -> Result<(), String> {
+    if bytes.starts_with(b"II") || bytes.starts_with(b"MM") {
+        return Ok(());
+    }
+    let text = String::from_utf8_lossy(bytes.get(..bytes.len().min(400)).unwrap_or_default()).into_owned();
+    Err(format!("{name}: the service answered with an error: {text}"))
 }
 
 /// `catalog.search`: a page of a catalogue's (CSW) records matching words and an area, with the

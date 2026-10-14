@@ -4362,3 +4362,14 @@ fn geotagged_photos_become_a_photo_layer() {
     assert_eq!(s.map().layer_by_name("Photos").unwrap().dataset.features.len(), photo::MAX_PHOTOS);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn coverage_answers_that_are_not_geotiffs_are_errors() {
+    use crate::cmd::service::coverage_check;
+    assert!(coverage_check("c", b"II*\0rest").is_ok());
+    assert!(coverage_check("c", b"MM\0*rest").is_ok());
+    for bad in [&b"<ows:ExceptionReport/>"[..], b"Service unavailable", b"", b"\xff\xd8\xff"] {
+        let e = coverage_check("c", bad).err().unwrap_or_default();
+        assert!(e.starts_with("c: the service answered with an error"), "{e}");
+    }
+}

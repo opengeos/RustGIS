@@ -1551,10 +1551,7 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     };
     // A WCS coverage (Add From Service): a GeoTIFF, or the service's error said as such.
     let name = if super::b(p, "coverage").unwrap_or(false) {
-        if !(bytes.starts_with(b"II") || bytes.starts_with(b"MM")) {
-            let text = String::from_utf8_lossy(bytes.get(..bytes.len().min(400)).unwrap_or_default()).into_owned();
-            return Err(format!("{}: the service answered with an error: {text}", ps(p, "name").unwrap_or(&url)));
-        }
+        super::service::coverage_check(ps(p, "name").unwrap_or(&url), &bytes)?;
         "coverage.tif".to_string()
     } else {
         url_file_name(&url, &bytes).map_err(|e| format!("{url}: {e}"))?

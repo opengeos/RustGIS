@@ -20,6 +20,8 @@ pub struct State {
     records: Vec<Value>,
     matched: u64,
     next: Option<u64>,
+    /// The first page's parameters, which More pages through (not the form, edited since).
+    asked: Value,
     notes: Vec<String>,
     pub error: Option<String>,
 }
@@ -41,10 +43,19 @@ const KINDS: [(&str, &str); 7] = [
 /// Asks for a page of records: the first (`start` 1) replaces those found, a later one adds to them.
 pub fn search(app: &mut RustGisApp, start: u64) {
     let st = &app.ui.csw;
-    let mut p = json!({"url": st.url.trim(), "query": st.query.trim(), "start": start});
-    if st.use_view {
-        p["bbox"] = json!("view");
-    }
+    let mut p = if start <= 1 || !st.asked.is_object() {
+        let mut p = json!({"url": st.url.trim(), "query": st.query.trim()});
+        // The map's area now, not when More is pressed.
+        if st.use_view {
+            p["bbox"] =
+                rustgis_engine::cmd::catalogs::area(&app.session, &json!({"bbox": "view"})).map_or_else(|_| json!("view"), |a| json!(a));
+        }
+        p
+    } else {
+        st.asked.clone()
+    };
+    let asked = p.clone();
+    p["start"] = json!(start);
     match rustgis_engine::cmd::service::records_request(&app.session, &p) {
         Ok(request) => {
             let st = &mut app.ui.csw;
@@ -54,6 +65,7 @@ pub fn search(app: &mut RustGisApp, start: u64) {
                 st.notes.clear();
                 st.matched = 0;
                 st.next = None;
+                st.asked = asked;
             }
             st.waiting = Some((p, crate::fetch_into(&request)));
         }
