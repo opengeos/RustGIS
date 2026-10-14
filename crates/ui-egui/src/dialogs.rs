@@ -69,6 +69,7 @@ impl Dialogs {
             "opendata" => "opendata",
             "zarr" => "zarr",
             "exportLayer" => "exportLayer",
+            "saveProject" => "saveProject",
             other => return Err(format!("unknown dialog '{other}'")),
         };
         if matches!(name, "addField" | "calculateField" | "definitionQuery" | "renameLayer" | "exportLayer") && active.is_none() {
@@ -109,6 +110,7 @@ impl Dialogs {
             "calculateField" => self.a = active.and_then(|l| l.dataset.fields.last()).map(|f| f.name.clone()).unwrap_or_default(),
             "definitionQuery" => self.text = active.and_then(|l| l.definition_query.clone()).unwrap_or_default(),
             "renameLayer" => self.text = active.map(|l| l.name.clone()).unwrap_or_default(),
+            "saveProject" => self.text = format!("{}.rgis", s.project.name),
             "exportLayer" => self.mode = "geojson",
             // A table of addresses is what's usually geocoded: picked by its id (`flag` says the
             // choice is a table), since names can repeat.
@@ -151,6 +153,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "opendata" => "Search Open Data",
         "zarr" => "Add Zarr Variable",
         "exportLayer" => "Export Features",
+        "saveProject" => "Save Project As",
         _ => "Rename Layer",
     };
     let t = Tokens::get(ctx);
@@ -292,6 +295,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 field_chips(app, ui);
                 close = buttons(app, ui, "Apply", |app| app.run("layer.definitionQuery", json!({"where": app.dialogs.text})).map(|_| ()));
             }
+            "saveProject" => close = save_project(app, ui),
             _ => {
                 ui.label(tl!("Name"));
                 ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).desired_width(f32::INFINITY));
@@ -308,6 +312,26 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     if !open || close {
         app.dialogs.open = None;
     }
+}
+
+/// Save Project As in the browser, which has no save dialog: the file name to download the
+/// project as. The browser decides where downloads go.
+fn save_project(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
+    ui.label(tl!("File name"));
+    let mut edit = egui::TextEdit::singleline(&mut app.dialogs.text).desired_width(f32::INFINITY).show(ui);
+    // Opened: the name is selected, so typing replaces it.
+    if app.dialogs.mode == "new" {
+        app.dialogs.mode = "";
+        edit.response.request_focus();
+        let end = app.dialogs.text.chars().count();
+        edit.state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(end))));
+        edit.state.store(ui.ctx(), edit.response.id);
+    }
+    ui.label(egui::RichText::new(tl!("The project downloads as this file, to the folder your browser saves downloads in.")).small().weak());
+    buttons(app, ui, "Save", |app| {
+        let file = app.dialogs.text.clone();
+        app.save_download(&file)
+    })
 }
 
 /// The formats Export Features writes: (name, extension). Format names aren't translated.

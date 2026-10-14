@@ -357,6 +357,26 @@ fn open_from_text() {
 }
 
 #[test]
+fn opened_project_is_named_after_its_file() {
+    // Issue #197: a project saved from the sample and renamed kept the sample's name.
+    let mut s = world();
+    let text = serde_json::to_string(&s.project).unwrap();
+    s.run("project.openText", &json!({"text": text, "fileName": "test.rgis"})).unwrap();
+    assert_eq!(s.project.name, "test");
+    s.run("project.openText", &json!({"text": text})).unwrap();
+    assert_eq!(s.project.name, "World Atlas", "without a file name the project keeps its own");
+    s.run("project.openText", &json!({"text": text, "fileName": " .rgis"})).unwrap();
+    assert_eq!(s.project.name, "World Atlas", "an empty file name doesn't rename it");
+    let dir = std::env::temp_dir().join(format!("rustgis-named-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Trip plan.rgis");
+    std::fs::write(&path, &text).unwrap();
+    s.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!(s.project.name, "Trip plan");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn command_ids_are_unique() {
     let s = Session::new(Project::default());
     let mut ids: Vec<&str> = s.registry.commands.iter().map(|c| c.id).collect();

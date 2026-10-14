@@ -268,6 +268,8 @@ pub struct UiState {
     pub pane_sets: Vec<(String, Option<LeftPane>, Option<RightPane>, String)>,
     /// The command an item picked in the browser opens with (web).
     pub pending_open: Option<&'static str>,
+    /// The file the project was last saved or opened as (web), which Save downloads again.
+    pub web_file: Option<String>,
     /// Add Delimited Text, for the file being picked (web): `null` opens its dialog for the file,
     /// a script's options are read with it.
     pub pending_csv: Option<Value>,
@@ -345,6 +347,7 @@ impl Default for UiState {
             pending_picture: None,
             pending_layout_picture: false,
             pending_open: None,
+            web_file: None,
             pending_csv: None,
             downloads: Vec::new(),
             sql: Default::default(),
@@ -703,7 +706,10 @@ impl RustGisApp {
             return Err(e);
         };
         if rustgis_engine::project::is_project_file(name) {
-            let r = self.run("project.openText", json!({"text": text}));
+            let r = self.run("project.openText", json!({"text": text, "fileName": name}));
+            if r.is_ok() {
+                self.ui.web_file = Some(format!("{}.rgis", self.session.project.name));
+            }
             self.map.invalidate();
             r
         } else {
@@ -715,6 +721,25 @@ impl RustGisApp {
             }
             self.run("layer.addDataText", p)
         }
+    }
+
+    /// Downloads the project as `file` (web), naming the project after it as Save As does
+    /// natively. A name without the `.rgis` extension gets it.
+    pub(crate) fn save_download(&mut self, file: &str) -> Result<(), String> {
+        let file = file.trim();
+        let stem = if file.to_ascii_lowercase().ends_with(".rgis") { file.get(..file.len() - 5).unwrap_or(file) } else { file }.trim();
+        if stem.is_empty() || stem.contains(['/', '\\']) {
+            return Err(tl!("type a file name").into());
+        }
+        let stem: String = stem.chars().take(200).collect();
+        // Not an undoable edit: saving names the project, as `project.saveAs` does.
+        self.session.project.name = stem.clone();
+        let file = format!("{stem}.rgis");
+        let text = serde_json::to_string(&self.session.project).map_err(|e| e.to_string())?;
+        self.download(&file, text.into_bytes());
+        self.session.dirty = false;
+        self.ui.web_file = Some(file);
+        Ok(())
     }
 
     /// Offers bytes as a download (web).
@@ -1239,11 +1264,15 @@ impl RustGisApp {
                     return r;
                 }
             }
+            // The browser can't write a file in place: Save downloads the project again under the
+            // file name it was saved or opened as, and Save As (or a first Save) asks for one.
             "ui.save" | "ui.saveAs" if self.services.download.is_some() => {
-                let text = serde_json::to_string(&self.session.project).map_err(|e| e.to_string())?;
                 let name = format!("{}.rgis", self.session.project.name);
-                self.download(&name, text.into_bytes());
-                self.session.dirty = false;
+                if id == "ui.save" && self.ui.web_file.as_deref() == Some(name.as_str()) {
+                    self.save_download(&name)?;
+                } else {
+                    self.dialogs.open("saveProject", &self.session)?;
+                }
             }
             "ui.save" => {
                 if self.session.path.is_some() {

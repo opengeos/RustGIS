@@ -542,3 +542,62 @@ fn a_service_is_listed_when_its_capabilities_land() {
     assert_eq!(conn.listing.as_ref().unwrap()["layers"][0]["name"], "a");
     h.step();
 }
+
+/// Save in the web app (issue #197): the browser has no save dialog, so the first Save and every
+/// Save As ask for the file name, and Save then downloads under it; an opened file keeps its name.
+#[test]
+fn web_save_asks_for_the_file_name() {
+    let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+    let log = got.clone();
+    let services = rustgis_ui_egui::Services {
+        download: Some(Box::new(move |name: &str, bytes: Vec<u8>| log.lock().unwrap().push((name.to_string(), bytes)))),
+        ..Default::default()
+    };
+    let app = RustGisApp::with_sample().with_services(services);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
+        |ui, app: &mut RustGisApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    let names = |got: &std::sync::Mutex<Vec<(String, Vec<u8>)>>| got.lock().unwrap().iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
+    // A project never saved: Save asks first, with the project's name.
+    h.state_mut().run("layer.color", json!({"layer": "Countries", "color": "#336699"})).unwrap();
+    h.state_mut().run("ui.save", json!(null)).unwrap();
+    assert_eq!(h.state().dialogs.open, Some("saveProject"));
+    assert_eq!(h.state().dialogs.text, "World Atlas.rgis");
+    assert!(names(&got).is_empty());
+    h.step();
+    h.state_mut().dialogs.text = "  ".into();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").click();
+    h.step();
+    assert_eq!(h.state().dialogs.open, Some("saveProject"), "an empty name is refused");
+    assert!(h.state().dialogs.error.is_some() && names(&got).is_empty());
+    h.state_mut().dialogs.text = "Trip plan".into();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").click();
+    h.step();
+    h.step();
+    assert_eq!(h.state().dialogs.open, None);
+    assert_eq!(names(&got), ["Trip plan.rgis"]);
+    assert_eq!(h.state().session.project.name, "Trip plan");
+    assert!(!h.state().session.dirty);
+    // Saved once: Save downloads under that name again without asking; Save As asks.
+    h.state_mut().run("ui.save", json!(null)).unwrap();
+    assert_eq!(h.state().dialogs.open, None);
+    assert_eq!(names(&got), ["Trip plan.rgis", "Trip plan.rgis"]);
+    h.state_mut().run("ui.saveAs", json!(null)).unwrap();
+    assert_eq!(h.state().dialogs.open, Some("saveProject"));
+    assert_eq!(h.state().dialogs.text, "Trip plan.rgis");
+    h.state_mut().dialogs.open = None;
+    // An opened file names the project, and Save keeps its name.
+    let bytes = got.lock().unwrap()[0].1.clone();
+    h.state_mut().open_picked("test.rgis", &bytes).unwrap();
+    assert_eq!(h.state().session.project.name, "test");
+    h.state_mut().run("ui.save", json!(null)).unwrap();
+    assert_eq!(h.state().dialogs.open, None);
+    assert_eq!(names(&got).last().map(String::as_str), Some("test.rgis"));
+}
