@@ -1649,7 +1649,9 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.horizontal(|ui| {
             ui.spinner();
             let name = rustgis_engine::analysis::tool(job.tool).map(|t| t.name).unwrap_or(job.tool);
-            ui.label(egui::RichText::new(format!("{} {}", tl!("Running…"), tl!(name))).size(12.0));
+            // Two labels, not one sentence put together from translated pieces.
+            ui.label(egui::RichText::new(tl!("Running…")).size(12.0));
+            ui.label(egui::RichText::new(tl!(name)).size(12.0).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 cancel = ui.add_enabled(!job.control.is_cancelled(), egui::Button::new(tl!("Cancel"))).clicked();
             });

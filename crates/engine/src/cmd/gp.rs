@@ -349,7 +349,7 @@ fn fit_to_changes(
         return;
     };
     layer.clone_from(&now.name);
-    if fingerprint(&now.dataset) == was.fingerprint {
+    if was.fingerprint.is_some() && fingerprint(&now.dataset) == was.fingerprint {
         return;
     }
     match &mut r.output {
@@ -366,7 +366,8 @@ pub(crate) struct Read {
     id: u32,
     /// Its features' ids, in order: what its rows were.
     ids: Vec<u64>,
-    fingerprint: u64,
+    /// None when it couldn't be taken: the layer then counts as changed.
+    fingerprint: Option<u64>,
 }
 
 impl Read {
@@ -376,7 +377,7 @@ impl Read {
 }
 
 /// A hash of a dataset's contents, without keeping a copy of them.
-fn fingerprint(d: &Dataset) -> u64 {
+fn fingerprint(d: &Dataset) -> Option<u64> {
     use std::hash::Hasher;
     struct W(std::hash::DefaultHasher);
     impl std::io::Write for W {
@@ -389,9 +390,9 @@ fn fingerprint(d: &Dataset) -> u64 {
         }
     }
     let mut w = W(std::hash::DefaultHasher::new());
-    // Serializing a dataset doesn't fail; were it to, the hash would still be of what was written.
-    let _ = serde_json::to_writer(&mut w, d);
-    w.0.finish()
+    // A hash of part of it would say too little.
+    serde_json::to_writer(&mut w, d).ok()?;
+    Some(w.0.finish())
 }
 
 /// Fits a tool's result to the map: a selection it made on a streamed layer it read whole
