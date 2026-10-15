@@ -5,15 +5,14 @@ name: Python package
 # uploaded to PyPI with trusted publishing (the `pypi` environment, no token). The package's
 # version is the workspace's, so each release's wheels carry its tag's version.
 #
-# Pull requests test on Linux only; macOS and Windows on main, by hand, for releases, and for a
-# pull request labelled `ci:macos`, `ci:windows` or `ci:full` (adding the label runs just that
-# platform; later pushes include it).
+# Pull requests test on Linux only; macOS and Windows on main, by hand and for releases, and for
+# a pull request labelled `ci:macos`, `ci:windows` or `ci:full` (adding the label runs that
+# platform straight away, in ci-label.yml; later pushes include it here).
 
 on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
     paths:
       - "apps/rustgis-python/**"
       - "crates/**"
@@ -27,7 +26,7 @@ on:
 # A new push to a pull request replaces its earlier run. Runs on main, by hand and for releases
 # are never cancelled: a merge landing mid-build must not stop the wheels being built.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name != 'pull_request' && github.run_id || github.event.action == 'labeled' && github.event.label.name || 'pr' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name != 'pull_request' && github.run_id || 'pr' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -38,52 +37,23 @@ jobs:
     name: Platforms
     runs-on: ubuntu-latest
     outputs:
-      include: ${{ steps.plan.outputs.include }}
+      os: ${{ steps.os.outputs.os }}
     steps:
-      - id: plan
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - id: os
         env:
           EVENT: ${{ github.event_name }}
           ACTION: ${{ github.event.action }}
-          LABEL: ${{ github.event.label.name }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-        run: |
-          # Whether the pull request asks for a platform: by the label just added, or (on a
-          # push to it) by the labels it has.
-          asks() {
-            if [ "$ACTION" = labeled ]; then [ "$LABEL" = "$1" ] || [ "$LABEL" = ci:full ]
-            else jq -e --arg l "$1" 'index($l) or index("ci:full")' <<<"$LABELS" >/dev/null; fi
-          }
-          runs=()
-          # Adding a label runs only the platform it names.
-          [ "$ACTION" = labeled ] || runs+=(ubuntu-latest:3.12 ubuntu-latest:3.13 ubuntu-latest:3.14)
-          if [ "$EVENT" != pull_request ] || asks ci:macos; then runs+=(macos-latest:3.14); fi
-          if [ "$EVENT" != pull_request ] || asks ci:windows; then runs+=(windows-latest:3.14); fi
-          echo "include=$(jq -cn '$ARGS.positional | map(split(":") | {os: .[0], python: .[1]})' --args "${runs[@]}")" >> "$GITHUB_OUTPUT"
+        run: echo "os=$(.github/scripts/platforms.sh)" >> "$GITHUB_OUTPUT"
 
   test:
-    name: Test (${{ matrix.os }}, Python ${{ matrix.python }})
     needs: plan
-    if: needs.plan.outputs.include != '[]'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.plan.outputs.include) }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Build and install
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install "./apps/rustgis-python[test,geopandas]"
-      - name: Test
-        working-directory: apps/rustgis-python
-        run: python -m pytest -q
+    uses: ./.github/workflows/test-python.yml
+    with:
+      os: ${{ needs.plan.outputs.os }}
 
   wheels:
     name: Wheels (${{ matrix.platform.name }})
