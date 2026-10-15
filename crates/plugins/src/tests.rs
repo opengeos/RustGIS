@@ -512,6 +512,9 @@ fn process_packages_unpack_safely() {
     // Paths out of the folder are refused, and nothing is left behind.
     let evil = zip(&[("plugin.json", manifest.as_bytes(), 0o644), ("../evil.txt", b"x", 0o644)]);
     assert!(crate::store::install_bytes(&evil).unwrap_err().contains("unsafe path"));
+    // ...and the package that was installed stays the one kept, so the next start loads it.
+    assert!(crate::store::load_installed().is_empty(), "{:?}", crate::store::load_installed());
+    assert!(dir.join("data/b.txt").is_file());
     assert!(!plugins.join("unpacked/evil.txt").exists() && !plugins.join("evil.txt").exists());
     assert!(dir.join("data/b.txt").is_file(), "the installed copy stays");
     // Uninstalling removes the files.

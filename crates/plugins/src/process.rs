@@ -17,7 +17,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel, sync_channel};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -92,9 +92,11 @@ enum Line {
     TooLong,
 }
 
-/// Reads the program's output lines on a thread, so waiting for one can time out.
+/// Reads the program's output lines on a thread, so waiting for one can time out. A few lines
+/// at most wait to be handled: a program printing faster than RustGIS reads is made to wait
+/// rather than filling memory.
 fn lines(out: impl Read + Send + 'static) -> Receiver<Line> {
-    let (tx, rx) = channel();
+    let (tx, rx) = sync_channel(8);
     std::thread::spawn(move || {
         let mut r = BufReader::new(out);
         loop {
