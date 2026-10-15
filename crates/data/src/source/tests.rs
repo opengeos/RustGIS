@@ -911,15 +911,15 @@ fn shapefile_in_place_keeps_large_whole_numbers_exact() {
     std::fs::create_dir_all(&d).unwrap();
     let p = d.join("ids.shp");
     let mut ds = Dataset::new("ids", GeometryType::Point, vec![Field::new("id", FieldType::Integer)]);
-    for i in 0..3 {
+    for i in 0..5 {
         ds.push(Some(Geometry::Point(Coord::new(i as f64, 0.0))), vec![Value::Int(i)]);
     }
     write_shapefile(&ds, &p);
     // The id column (18 digits, no decimals) as another program writes it: values past f64's
-    // exact integers, and one that isn't whole.
+    // exact integers, whole ones written with a point or exponent, and one that isn't whole.
     let mut dbf = std::fs::read(p.with_extension("dbf")).unwrap();
     let (header, row) = (u16::from_le_bytes([dbf[8], dbf[9]]) as usize, u16::from_le_bytes([dbf[10], dbf[11]]) as usize);
-    for (i, text) in ["123456789012345678", "-98765432109876543", "12.5"].iter().enumerate() {
+    for (i, text) in ["123456789012345678", "-98765432109876543", "12.0", "1e3", "12.5"].iter().enumerate() {
         let at = header + i * row + 1;
         dbf[at..at + 18].copy_from_slice(format!("{text:>18}").as_bytes());
     }
@@ -927,7 +927,16 @@ fn shapefile_in_place_keeps_large_whole_numbers_exact() {
     let src = open_path(&p, None).unwrap();
     assert_eq!(src.info().fields[0].ty, FieldType::Integer);
     let got: Vec<Value> = src.read(&Request::all()).unwrap().features.into_iter().map(|f| f.attrs[0].clone()).collect();
-    assert_eq!(got, vec![Value::Int(123_456_789_012_345_678), Value::Int(-98_765_432_109_876_543), Value::Float(12.5)]);
+    assert_eq!(
+        got,
+        vec![
+            Value::Int(123_456_789_012_345_678),
+            Value::Int(-98_765_432_109_876_543),
+            Value::Int(12),
+            Value::Int(1000),
+            Value::Float(12.5)
+        ]
+    );
 }
 
 #[test]
