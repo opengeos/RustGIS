@@ -32,6 +32,14 @@ pub const PRESETS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// Whether local views (`local:lon,lat`, azimuthal equidistant) can be drawn in this build. They
+/// need proj4rs' `aeqd`, which the browser build leaves out (Cargo.toml); asking the projection
+/// itself, rather than the target, keeps the command, the ribbon and the tests in step with it.
+pub fn local_views_supported() -> bool {
+    static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SUPPORTED.get_or_init(|| Projector::new("local:0,0").is_ok())
+}
+
 /// The PROJ definition and label of a projection code: a preset id or `EPSG:<code>`.
 pub fn lookup(code: &str) -> Result<(String, String), String> {
     let code = code.trim();
@@ -397,16 +405,17 @@ mod tests {
         for ok in ["EPSG:3035", "epsg:32633", "EPSG:8858", "equalEarth", "usaAlbers", "mercator", "globe"] {
             crate::Projection::from_code(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
         }
-        // Local views need proj4rs' `aeqd`, which the browser build leaves out (Cargo.toml).
-        #[cfg(not(target_arch = "wasm32"))]
-        crate::Projection::from_code("local:12.5,41.9").unwrap_or_else(|e| panic!("{e}"));
-        #[cfg(target_arch = "wasm32")]
-        assert!(crate::Projection::from_code("local:12.5,41.9").is_err(), "no aeqd in the browser build");
+        // Local views are accepted exactly where they can be drawn (`aeqd` is native-only, Cargo.toml).
+        let local = crate::Projection::from_code("local:12.5,41.9");
+        assert_eq!(local.is_ok(), local_views_supported(), "{local:?}");
+        assert_eq!(local_views_supported(), !cfg!(target_arch = "wasm32"), "aeqd on native targets only");
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))] // `aeqd` is native-only (Cargo.toml)
     fn local_views_are_azimuthal_equidistant() {
+        if !local_views_supported() {
+            return; // the browser build (see codes_whose_method_cannot_be_drawn_are_refused)
+        }
         // map.viewMode "local" relies on +proj=aeqd: it must build (not fall back to Web Mercator)
         // and keep true distances from its centre.
         let p = Projector::new("local:12.5,41.9").unwrap_or_else(|e| panic!("{e}"));

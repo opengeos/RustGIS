@@ -1834,18 +1834,18 @@ fn view_effects_scene_and_navigation() {
     s.run("map.displayType", &json!({"mode": "quality"})).unwrap();
     assert!(png(&mut s) == plain);
     // Views and navigation.
-    // Local views are native-only: the browser build leaves out proj4rs' `aeqd` (crates/map/Cargo.toml).
-    #[cfg(not(target_arch = "wasm32"))]
-    {
+    // Local views need proj4rs' `aeqd`, which the browser build leaves out (crates/map/Cargo.toml).
+    if rustgis_map::projection::local_views_supported() {
         s.run("map.viewMode", &json!({"mode": "local"})).unwrap();
         assert!(s.map().projection.code().starts_with("local:"));
         let local = png(&mut s);
         // The local view is azimuthal equidistant, not Web Mercator under another name (#208).
         s.run("map.projection", &json!({"type": "mercator"})).unwrap();
         assert!(png(&mut s) != local, "a local view draws in its own projection");
+    } else {
+        let e = s.run("map.viewMode", &json!({"mode": "local"})).unwrap_err();
+        assert!(e.contains("web app"), "{e}");
     }
-    #[cfg(target_arch = "wasm32")]
-    assert!(s.run("map.viewMode", &json!({"mode": "local"})).unwrap_err().contains("web app"), "no aeqd in the browser build");
     s.run("map.viewMode", &json!({"mode": "global"})).unwrap();
     assert!(s.map().projection.is_globe());
     s.run("map.navigation", &json!({"mode": "planar"})).unwrap();

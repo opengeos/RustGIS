@@ -87,7 +87,7 @@ pub fn commands() -> Vec<C> {
                 "global" => rustgis_map::Projection::Globe,
                 "local" => {
                     // The browser build leaves out proj4rs' `aeqd` (crates/map/Cargo.toml).
-                    if cfg!(target_arch = "wasm32") {
+                    if !rustgis_map::projection::local_views_supported() {
                         return Err("local views aren't available in the web app".to_string());
                     }
                     let c = s.map().center_lonlat();

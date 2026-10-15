@@ -1354,8 +1354,6 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
             false,
         );
         let current = app.session.map().projection.code();
-        // Local views need proj4rs' `aeqd`, which the browser build leaves out (crates/map/Cargo.toml).
-        #[cfg(not(target_arch = "wasm32"))]
         let local = current.starts_with("local:");
         big_menu(ui, app, "basemap", "Projection", "Choose how the flat map lays out the Earth.", move |ui, app| {
             let mut items: Vec<(String, String)> = vec![("mercator".into(), "Web Mercator".into())];
@@ -1376,17 +1374,19 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
         });
         col(ui, |ui| {
             small(ui, app, "globe_view", "Global", "A globe scene.", "map.viewMode", json!({"mode": "global"}), on);
-            #[cfg(not(target_arch = "wasm32"))]
-            small(
-                ui,
-                app,
-                "map",
-                "Local",
-                "A flat scene centred on the view (azimuthal equidistant).",
-                "map.viewMode",
-                json!({"mode": "local"}),
-                local,
-            );
+            // Local views need proj4rs' `aeqd`, which the browser build leaves out (crates/map/Cargo.toml).
+            if rustgis_engine::map::projection::local_views_supported() {
+                small(
+                    ui,
+                    app,
+                    "map",
+                    "Local",
+                    "A flat scene centred on the view (azimuthal equidistant).",
+                    "map.viewMode",
+                    json!({"mode": "local"}),
+                    local,
+                );
+            }
         });
     });
     let v = app.session.map().view.clone();
