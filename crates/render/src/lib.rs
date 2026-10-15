@@ -752,7 +752,9 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
             }
             continue;
         }
-        let mut rows = layer.visible_rows();
+        // The definition query and the display filters that apply at this scale (a feature draws
+        // only if it matches all of them).
+        let mut rows = layer.drawn_rows(scale);
         // View clipping: features entirely beyond the distance from the view's centre are left
         // out; one reaching into it (its box's nearest point within the distance) still draws.
         if let Some((centre, d)) = clip {
@@ -763,16 +765,6 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                         let near = Coord::new(centre.x.clamp(e.min_x, e.max_x), centre.y.clamp(e.min_y, e.max_y));
                         rustgis_geom::haversine_m(centre, near) <= d
                     });
-                }
-            }
-        }
-        // Display filters: at a scale where several apply, a feature draws only if it matches all
-        // of them. Expressions are checked when a filter is added; one that stops reading (a
-        // field removed since) is skipped. Parsing is cheap next to evaluating every row.
-        for f in layer.display_filters.iter().filter(|f| f.applies(scale)) {
-            if let Ok(e) = rustgis_data::query::parse(&f.where_, &layer.dataset) {
-                for (r, keep) in rows.iter_mut().enumerate() {
-                    *keep = *keep && rustgis_data::query::eval(&e, &layer.dataset, r);
                 }
             }
         }

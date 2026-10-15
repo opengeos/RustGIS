@@ -372,6 +372,20 @@ impl Layer {
         self.min_scale.is_none_or(|m| scale <= m) && self.max_scale.is_none_or(|m| scale >= m)
     }
 
+    /// Rows drawn at a scale denominator: those passing the definition query and every display
+    /// filter that applies at that scale (a filter that no longer reads is skipped).
+    pub fn drawn_rows(&self, scale: f64) -> Vec<bool> {
+        let mut rows = self.visible_rows();
+        for f in self.display_filters.iter().filter(|f| f.applies(scale)) {
+            if let Ok(e) = rustgis_data::query::parse(&f.where_, &self.dataset) {
+                for (r, keep) in rows.iter_mut().enumerate() {
+                    *keep = *keep && rustgis_data::query::eval(&e, &self.dataset, r);
+                }
+            }
+        }
+        rows
+    }
+
     /// Rows passing the definition query (all rows when none or invalid).
     pub fn visible_rows(&self) -> Vec<bool> {
         let n = self.dataset.features.len();
@@ -813,7 +827,8 @@ impl Map {
             if !l.visible || !l.in_scale_range(scale) || !keep(l) {
                 continue;
             }
-            let rows = l.visible_rows();
+            // Only features drawn: the definition query and the display filters let them through.
+            let rows = l.drawn_rows(scale);
             let id = l.id;
             let proj = l.projected_in(&flat, &key);
             let hits = proj
@@ -909,6 +924,22 @@ mod tests {
             l.definition_query = Some("n = 1".into());
         }
         assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, false, 100), vec![(below, 0)]);
+    }
+
+    #[test]
+    fn hits_at_skips_features_display_filters_hide() {
+        let mut m = Map::new("Map");
+        let mut d = points();
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Int(3)]);
+        let id = m.add_dataset(d);
+        let p = lonlat_to_merc(Coord::new(0.0, 0.0));
+        let filter = |min_scale| effects::DisplayFilter { name: "big".into(), min_scale, max_scale: None, where_: "n = 3".into() };
+        m.layers[0].display_filters = vec![filter(None)];
+        assert_eq!(m.layers[0].drawn_rows(1e6), vec![false, false, true]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 100), vec![(id, 2)]);
+        // A filter that doesn't apply at this scale hides nothing.
+        m.layers[0].display_filters = vec![filter(Some(1e5))];
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 100), vec![(id, 2), (id, 0)]);
     }
 
     #[test]

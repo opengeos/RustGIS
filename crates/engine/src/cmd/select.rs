@@ -244,5 +244,7 @@ fn feature_json(map: &rustgis_map::Map, id: u32, row: usize) -> Option<Value> {
     for (i, fd) in l.dataset.fields.iter().enumerate() {
         attrs.insert(fd.name.clone(), json!(l.dataset.value(row, i).to_string()));
     }
-    Some(json!({"layer": l.name, "layerId": id, "row": row, "attributes": attrs}))
+    // The feature id finds the feature again after a streamed layer reads another window.
+    let fid = l.dataset.features.get(row).map(|f| f.id);
+    Some(json!({"layer": l.name, "layerId": id, "row": row, "fid": fid, "attributes": attrs}))
 }

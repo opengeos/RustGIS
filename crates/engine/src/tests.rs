@@ -794,6 +794,9 @@ fn identify_reports_every_overlapping_feature() {
     let top = s.run("identify", &at).unwrap();
     assert_eq!(rows(&top), [(id, 1), (id, 0)]);
     assert_eq!(top["row"], 1);
+    // Each result carries its feature id, to find the feature again after a streamed read.
+    assert_eq!(top["results"][0]["fid"], 2);
+    assert_eq!(top["results"][1]["fid"], 1);
     s.run("layer.visibility", &json!({"layer": "Floats", "visible": true})).unwrap();
     s.run("map.popupMode", &json!({"mode": "visible"})).unwrap();
     assert_eq!(rows(&s.run("identify", &at).unwrap()), [(float, 0), (id, 1), (id, 0)]);
