@@ -1374,7 +1374,6 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
         });
         col(ui, |ui| {
             small(ui, app, "globe_view", "Global", "A globe scene.", "map.viewMode", json!({"mode": "global"}), on);
-            // Local views need proj4rs' `aeqd`, which the browser build leaves out (crates/map/Cargo.toml).
             if rustgis_engine::map::projection::local_views_supported() {
                 small(
                     ui,

@@ -86,7 +86,6 @@ pub fn commands() -> Vec<C> {
             let next = match ps(p, "mode").ok_or("mode is required")? {
                 "global" => rustgis_map::Projection::Globe,
                 "local" => {
-                    // The browser build leaves out proj4rs' `aeqd` (crates/map/Cargo.toml).
                     if !rustgis_map::projection::local_views_supported() {
                         return Err("local views aren't available in the web app".to_string());
                     }

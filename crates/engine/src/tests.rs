@@ -1834,7 +1834,6 @@ fn view_effects_scene_and_navigation() {
     s.run("map.displayType", &json!({"mode": "quality"})).unwrap();
     assert!(png(&mut s) == plain);
     // Views and navigation.
-    // Local views need proj4rs' `aeqd`, which the browser build leaves out (crates/map/Cargo.toml).
     if rustgis_map::projection::local_views_supported() {
         s.run("map.viewMode", &json!({"mode": "local"})).unwrap();
         assert!(s.map().projection.code().starts_with("local:"));
