@@ -302,12 +302,11 @@ pub fn prepare(id: &str, progress: &mut dyn FnMut(&str)) -> Result<PathBuf, Stri
 }
 
 /// Removes plugin `id`'s environment, if it has one.
+///
+/// Its lock file (`.<id>.lock`) stays: deleting it while a preparation holds it would let another
+/// lock a new file and run alongside. It's empty.
 pub fn remove(id: &str) -> Result<(), String> {
-    let Some(env) = env_dir(id) else { return Ok(()) };
-    if let Some(parent) = env.parent() {
-        let _ = std::fs::remove_file(parent.join(format!(".{id}.lock")));
-    }
-    match Some(env).filter(|d| d.is_dir()) {
+    match env_dir(id).filter(|d| d.is_dir()) {
         Some(d) => std::fs::remove_dir_all(&d).map_err(|e| format!("{}: {e}", d.display())),
         None => Ok(()),
     }

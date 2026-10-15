@@ -635,6 +635,55 @@ fn python_environments_are_made() {
     let _ = std::fs::remove_dir_all(&plugins);
 }
 
+/// A preparation waits for the lock another holds (here, the test), then finds the environment
+/// ready and is done: no download, so it runs offline.
+#[test]
+fn python_environment_preparations_wait_for_the_lock() {
+    use std::sync::{Arc, Mutex};
+    let plugins = std::env::temp_dir().join(format!("rustgis-test-pyenv-wait-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&plugins);
+    let _store = store_lock();
+    crate::store::set_dir(Some(plugins.clone()));
+    let dir = plugins.join("src");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut m: Value = serde_json::from_str(&testing::manifest("pyenv-wait", &[])).unwrap();
+    m["runtime"] = json!("process");
+    m["run"] = json!(["python", "main.py"]);
+    m["python"] = json!({"version": "3.12"});
+    std::fs::write(dir.join("plugin.json"), m.to_string()).unwrap();
+    let p = crate::load(Package::from_dir(&dir).unwrap(), "test").unwrap();
+    let env = p.env_check().unwrap().env.clone();
+    std::fs::create_dir_all(env.parent().unwrap()).unwrap();
+    let held = std::fs::File::create(env.parent().unwrap().join(".pyenv-wait.lock")).unwrap();
+    held.lock().unwrap();
+
+    let said = Arc::new(Mutex::new(Vec::<String>::new()));
+    let heard = said.clone();
+    let prep = std::thread::spawn(move || crate::pyenv::prepare("pyenv-wait", &mut |l| heard.lock().unwrap().push(l.to_string())));
+    let t0 = std::time::Instant::now();
+    while said.lock().unwrap().is_empty() && t0.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(!prep.is_finished(), "it waits while the lock is held");
+    assert_eq!(*said.lock().unwrap(), ["Waiting for another preparation of this environment to finish"]);
+
+    // Meanwhile, "the other preparation" makes the environment, then lets go.
+    let python = crate::pyenv::python_in(&env);
+    std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+    std::fs::write(&python, "").unwrap();
+    let made_for = {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(b"3.12\n").iter().map(|b| format!("{b:02x}")).collect::<String>()
+    };
+    std::fs::write(env.join(".rustgis-env"), made_for).unwrap();
+    drop(held);
+    assert_eq!(prep.join().unwrap().unwrap(), python);
+    assert_eq!(said.lock().unwrap().len(), 1, "nothing else was done: {:?}", said.lock().unwrap());
+    crate::unload("pyenv-wait");
+    let _ = std::fs::remove_dir_all(&plugins);
+}
+
 /// Two preparations of one environment at once (the app and rustgis-cli): the second waits for
 /// the first and finds its environment (network; run by hand with `--ignored`).
 #[test]
