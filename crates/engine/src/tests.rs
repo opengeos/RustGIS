@@ -5063,6 +5063,30 @@ fn geojson_read_in_place_when_asked_or_large() {
     s.run("layer.loadAll", &json!({"layer": id})).unwrap();
     let whole = rustgis_data::io::read_path(&p).unwrap().0;
     assert_eq!(s.map().layer(id).unwrap().dataset.features, whole.features);
+    // Larger than IN_PLACE_ABOVE (trailing whitespace pads it): read in place without being asked,
+    // and streamed past STREAM_ABOVE features.
+    let n = rustgis_map::source::STREAM_ABOVE as usize + 1;
+    let mut many = Dataset::new("many", GeometryType::Point, vec![Field::new("i", FieldType::Integer)]);
+    for i in 0..n {
+        many.push(Some(Geometry::Point(Coord::new(-179.0 + 358.0 * i as f64 / n as f64, 0.0))), vec![V::Int(i as i64)]);
+    }
+    let large = std::env::temp_dir().join(format!("rustgis-engine-{}-large.geojson", std::process::id()));
+    let mut text = rustgis_data::io::to_geojson(&many).to_string().into_bytes();
+    let json_len = text.len();
+    let pad = (rustgis_data::source::geojson::IN_PLACE_ABOVE as usize + 1).saturating_sub(text.len());
+    text.resize(text.len() + pad, b' ');
+    std::fs::write(&large, &text).unwrap();
+    let mut u = Session::new(Project::default());
+    let r = u.run("layer.addData", &json!({"path": large.display().to_string()})).unwrap();
+    assert_eq!(r["streamed"], true, "{r}");
+    assert_eq!(r["features"], n as u64, "{r}");
+    // A large file that isn't JSON says why, rather than falling back to a whole read.
+    text.truncate(json_len / 2);
+    text.resize(rustgis_data::source::geojson::IN_PLACE_ABOVE as usize + 1, b' ');
+    std::fs::write(&large, &text).unwrap();
+    let e = u.run("layer.addData", &json!({"path": large.display().to_string()})).unwrap_err();
+    assert!(e.contains("GeoJSON") && !e.contains("too large"), "{e}");
+    let _ = std::fs::remove_file(&large);
     // A document that isn't a FeatureCollection is read whole even when asked to stream.
     let one = std::env::temp_dir().join(format!("rustgis-engine-{}-one.geojson", std::process::id()));
     std::fs::write(&one, r#"{"type":"Point","coordinates":[1,2]}"#).unwrap();

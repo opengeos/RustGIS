@@ -773,12 +773,13 @@ fn geojson_in_place_matches_one_read_whole() {
         {"type":"Feature","properties":{},"geometry":{"type":"MultiPoint","coordinates":[[9,9],[8,8]]}}
     ],"type":"FeatureCollection","name":"m"}"#;
     let docs = [("mixed.geojson", mixed.to_string()), ("parcels.json", crate::io::to_geojson(&export_sample()).to_string())];
-    for (file, text) in docs {
+    for ((file, text), in_memory) in docs.iter().flat_map(|d| [(d, crate::io::MAX_BYTES), (d, 0)]) {
         let p = d.join(file);
-        std::fs::write(&p, &text).unwrap();
-        let (whole, whole_report) = crate::io::read_geojson(&text, "x").unwrap();
-        let src = open_path(&p, None).unwrap();
-        let (inplace, report) = materialize(src.as_ref()).unwrap();
+        std::fs::write(&p, text).unwrap();
+        let (whole, whole_report) = crate::io::read_geojson(text, "x").unwrap();
+        // Scanned in memory, and through a buffer, as a file too large to hold is.
+        let src = geojson::GeoJsonSource::open_with(&p, "x", in_memory).unwrap();
+        let (inplace, report) = materialize(&src).unwrap();
         assert_eq!(inplace.fields, whole.fields, "{file}");
         assert_eq!(inplace.geometry_type, whole.geometry_type, "{file}");
         assert_eq!(inplace.features, whole.features, "{file}");
@@ -808,8 +809,10 @@ fn damaged_geojson_is_an_error_not_a_panic() {
     let p = d.join("cut.geojson");
     for n in 0..text.len() {
         std::fs::write(&p, &text.as_bytes()[..n]).unwrap();
-        if let Ok(s) = open_path(&p, None) {
-            let _ = s.read(&Request::all());
+        for in_memory in [crate::io::MAX_BYTES, 0] {
+            if let Ok(s) = geojson::GeoJsonSource::open_with(&p, "x", in_memory) {
+                let _ = s.read(&Request::all());
+            }
         }
     }
     // A file that changes after it's opened: features are skipped, not misread or a panic.

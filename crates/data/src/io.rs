@@ -531,8 +531,8 @@ pub fn read_geojson(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
 pub(crate) trait FeatureSink {
     /// The `"features"` member starts (again, when a document repeats it: the last one wins).
     fn restart(&mut self);
-    /// One element of `"features"`, as its text, at `offset` bytes into the document.
-    fn feature(&mut self, raw: &str, offset: usize);
+    /// One element of `"features"`, as its text.
+    fn feature(&mut self, raw: &str);
 }
 
 /// Reads a GeoJSON document's top level, handing each element of `"features"` to `sink` as it is
@@ -540,15 +540,12 @@ pub(crate) trait FeatureSink {
 /// `"features"` isn't an array.
 pub(crate) fn stream_features(text: &str, sink: &mut dyn FeatureSink) -> std::result::Result<Map<String, Json>, serde_json::Error> {
     use serde::de::DeserializeSeed;
-    let start = text.as_ptr() as usize;
-    Streamed { sink, start }.deserialize(&mut serde_json::Deserializer::from_str(text))
+    Streamed { sink }.deserialize(&mut serde_json::Deserializer::from_str(text))
 }
 
 /// The top level of a GeoJSON document: its members, but for `"features"`, which go to a sink.
 struct Streamed<'a> {
     sink: &'a mut dyn FeatureSink,
-    /// Where the document starts in memory, for features' offsets.
-    start: usize,
 }
 
 impl<'de> serde::de::DeserializeSeed<'de> for Streamed<'_> {
@@ -571,7 +568,7 @@ impl<'de> serde::de::Visitor<'de> for Streamed<'_> {
         while let Some(key) = map.next_key::<String>()? {
             if key == "features" {
                 self.sink.restart();
-                map.next_value_seed(Features { sink: &mut *self.sink, start: self.start })?;
+                map.next_value_seed(Features { sink: &mut *self.sink })?;
             } else {
                 rest.insert(key, map.next_value()?);
             }
@@ -583,7 +580,6 @@ impl<'de> serde::de::Visitor<'de> for Streamed<'_> {
 /// A FeatureCollection's `"features"` array, a feature at a time.
 struct Features<'a> {
     sink: &'a mut dyn FeatureSink,
-    start: usize,
 }
 
 impl<'de> serde::de::DeserializeSeed<'de> for Features<'_> {
@@ -603,8 +599,7 @@ impl<'de> serde::de::Visitor<'de> for Features<'_> {
 
     fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<(), A::Error> {
         while let Some(raw) = seq.next_element::<&'de serde_json::value::RawValue>()? {
-            let text = raw.get();
-            self.sink.feature(text, (text.as_ptr() as usize).saturating_sub(self.start));
+            self.sink.feature(raw.get());
         }
         Ok(())
     }
@@ -648,6 +643,7 @@ impl Schema {
 }
 
 /// A feature's attributes from its properties, for `fields` (see [`Schema::fields`]).
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn geojson_attrs(f: &Json, fields: &[Field]) -> Vec<Value> {
     let props = f.get("properties").and_then(Json::as_object);
     fields
@@ -678,10 +674,11 @@ impl FeatureSink for Collector {
         *self = Collector::default();
     }
 
-    fn feature(&mut self, raw: &str, _offset: usize) {
-        // The text was read as JSON once already, so this doesn't fail.
-        if let Ok(f) = serde_json::from_str::<Json>(raw) {
-            self.add(&f);
+    fn feature(&mut self, raw: &str) {
+        // Valid JSON, but its numbers may not fit (1e400): such a feature is skipped and counted.
+        match serde_json::from_str::<Json>(raw) {
+            Ok(f) => self.add(&f),
+            Err(_) => self.skipped += 1,
         }
     }
 }

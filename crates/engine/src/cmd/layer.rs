@@ -430,9 +430,14 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         && b(p, "stream").unwrap_or_else(|| {
             std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() > rustgis_data::source::geojson::IN_PLACE_ABOVE)
         })
-        && let Ok(r) = add_source(s, p, Origin::Path(path))
     {
-        return Ok(r);
+        let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
+        match rustgis_data::source::geojson::GeoJsonSource::open_path(Path::new(path), name) {
+            Ok(src) => return add_source_with(s, p, Origin::Path(path), Some(Box::new(src))),
+            // Not a FeatureCollection: read whole below.
+            Err(rustgis_data::DataError::Unsupported(_)) => {}
+            Err(e) => return Err(format!("{path}: {e}")),
+        }
     }
     // A PMTiles archive is a tile layer (raster or vector, as its header says).
     if path.to_ascii_lowercase().ends_with(".pmtiles") {
@@ -796,6 +801,16 @@ const MAX_SKIPPED_NAMED: usize = 100;
 /// sources (or any, with `"stream": true`) are streamed, read in place a view at a time; smaller
 /// ones are loaded whole, so they can be edited.
 pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdResult {
+    add_source_with(s, p, origin, None)
+}
+
+/// [`add_source`], with the source already open (its one table).
+fn add_source_with(
+    s: &mut Session,
+    p: &Value,
+    origin: Origin<'_>,
+    mut opened: Option<Box<dyn rustgis_data::source::FeatureSource>>,
+) -> CmdResult {
     use rustgis_data::source;
     let label = match &origin {
         Origin::Path(p) | Origin::Bytes(p, _) => p.to_string(),
@@ -837,11 +852,14 @@ pub(crate) fn add_source(s: &mut Session, p: &Value, origin: Origin<'_>) -> CmdR
     let mut streamed = false;
     let mut features = 0u64;
     for table in tables {
-        let src = match &origin {
-            Origin::Path(path) => source::open_path(Path::new(path), table.as_deref()),
-            Origin::Bytes(name, bytes) => source::open_shared(name, bytes.clone(), table.as_deref()),
-        }
-        .map_err(err)?;
+        let src = match opened.take() {
+            Some(src) => src,
+            None => match &origin {
+                Origin::Path(path) => source::open_path(Path::new(path), table.as_deref()),
+                Origin::Bytes(name, bytes) => source::open_shared(name, bytes.clone(), table.as_deref()),
+            }
+            .map_err(err)?,
+        };
         let info = src.info().clone();
         // A point cloud is always read in place, so a project keeps its file's path, not millions
         // of points; its colours come from a sample of it.
