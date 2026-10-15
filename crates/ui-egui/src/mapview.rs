@@ -1306,10 +1306,12 @@ fn outline_feature(app: &RustGisApp, p: &egui::Painter, rect: Rect, id: u32, row
     let Some(g) = app.session.map().layer(id).and_then(|l| l.dataset.features.get(row)).and_then(|f| f.geometry.as_ref()) else { return };
     let stroke = Stroke::new(2.5, Color32::from_rgb(0x00, 0xE5, 0xFF));
     let mut budget = OUTLINE_VERTICES;
-    // A line broken where it leaves the view's projection (behind the globe).
-    let mut line = |pts: &[Coord]| {
+    // A line broken where it leaves the view's projection (behind the globe); a ring is closed
+    // back to its first vertex when it isn't stored closed.
+    let mut line = |pts: &[Coord], ring: bool| {
+        let close = if ring && pts.len() > 2 && pts.first() != pts.last() { pts.first() } else { None };
         let mut run: Vec<Pos2> = Vec::new();
-        for c in pts.iter().take(budget) {
+        for c in pts.iter().take(budget).chain(close) {
             match lonlat_to_screen(app, rect, *c) {
                 Some(s) => run.push(s),
                 None if run.len() > 1 => {
@@ -1331,8 +1333,8 @@ fn outline_feature(app: &RustGisApp, p: &egui::Painter, rect: Rect, id: u32, row
     match g {
         Geometry::Point(c) => point(c),
         Geometry::MultiPoint(v) => v.iter().take(OUTLINE_VERTICES).for_each(point),
-        Geometry::Line(parts) => parts.iter().for_each(|part| line(part.as_slice())),
-        Geometry::Polygon(polys) => polys.iter().flatten().for_each(|ring| line(ring.as_slice())),
+        Geometry::Line(parts) => parts.iter().for_each(|part| line(part.as_slice(), false)),
+        Geometry::Polygon(polys) => polys.iter().flatten().for_each(|ring| line(ring.as_slice(), true)),
     }
 }
 
