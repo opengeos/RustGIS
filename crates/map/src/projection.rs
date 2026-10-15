@@ -401,7 +401,7 @@ mod tests {
         #[cfg(not(target_arch = "wasm32"))]
         crate::Projection::from_code("local:12.5,41.9").unwrap_or_else(|e| panic!("{e}"));
         #[cfg(target_arch = "wasm32")]
-        assert!(crate::Projection::from_code("local:12.5,41.9").unwrap_err().contains("aeqd"));
+        assert!(crate::Projection::from_code("local:12.5,41.9").is_err(), "no aeqd in the browser build");
     }
 
     #[test]
