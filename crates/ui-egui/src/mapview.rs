@@ -1300,8 +1300,10 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
         // The feature shown is the one selected, as after the click. Not through `select.rows`:
         // browsing a pop-up mustn't fill the undo history; the new revision redraws the map.
         let shown = pp.info["results"].get(i);
-        if let Some((id, row)) = shown.and_then(|r| Some((u32::try_from(r["layerId"].as_u64()?).ok()?, r["row"].as_u64()?))) {
-            rustgis_engine::cmd::select::set(&mut app.session, id, vec![row as usize], rustgis_engine::cmd::select::Mode::New);
+        if let Some((id, row)) =
+            shown.and_then(|r| Some((u32::try_from(r["layerId"].as_u64()?).ok()?, usize::try_from(r["row"].as_u64()?).ok()?)))
+        {
+            rustgis_engine::cmd::select::set(&mut app.session, id, vec![row], rustgis_engine::cmd::select::Mode::New);
             app.session.revision = app.session.revision.wrapping_add(1);
         }
     }
