@@ -20,6 +20,7 @@ const MAX_GROUPS: usize = 8;
 const MAX_GROUP_ITEMS: usize = 16;
 const MAX_MENU_ITEMS: usize = 32;
 const MAX_TAB_LABEL: usize = 32;
+const MAX_RUN_ARGS: usize = 64;
 
 /// RustGIS's own ribbon tabs (and the Project button), and the names they had before: a plugin's
 /// tab can't take them.
@@ -73,6 +74,61 @@ impl Permission {
             Permission::Edit => "Change the project (add layers, edit features, change symbology)",
             Permission::Files => "Read and write files on this computer",
             Permission::Network => "Load map tiles from addresses it chooses",
+        }
+    }
+}
+
+/// How a plugin runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Runtime {
+    /// A WebAssembly module, sandboxed: the same on the desktop, the command line and the web.
+    #[default]
+    Wasm,
+    /// A program on the user's computer (`run`), not sandboxed: the desktop and command line
+    /// only. It speaks the same ABI over its standard input and output.
+    Process,
+}
+
+/// A process plugin's program and arguments, the same everywhere or by platform.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RunDecl {
+    Everywhere(Vec<String>),
+    ByPlatform {
+        #[serde(default)]
+        windows: Option<Vec<String>>,
+        #[serde(default)]
+        macos: Option<Vec<String>>,
+        #[serde(default)]
+        linux: Option<Vec<String>>,
+        #[serde(default)]
+        default: Option<Vec<String>>,
+    },
+}
+
+impl RunDecl {
+    /// The program and arguments for this platform, if the plugin runs on it.
+    pub fn for_this_platform(&self) -> Option<&[String]> {
+        match self {
+            RunDecl::Everywhere(v) => Some(v),
+            RunDecl::ByPlatform { windows, macos, linux, default } => {
+                let own = if cfg!(target_os = "windows") {
+                    windows
+                } else if cfg!(target_os = "macos") {
+                    macos
+                } else {
+                    linux
+                };
+                own.as_ref().or(default.as_ref()).map(Vec::as_slice)
+            }
+        }
+    }
+
+    fn all(&self) -> Vec<&Vec<String>> {
+        match self {
+            RunDecl::Everywhere(v) => vec![v],
+            RunDecl::ByPlatform { windows, macos, linux, default } => [windows, macos, linux, default].into_iter().flatten().collect(),
         }
     }
 }
@@ -206,9 +262,16 @@ pub struct Manifest {
     pub homepage: String,
     #[serde(default)]
     pub license: String,
-    /// The WebAssembly module, relative to `plugin.json`.
+    /// The WebAssembly module, relative to `plugin.json` (WebAssembly plugins).
     #[serde(default = "default_entry")]
     pub entry: String,
+    /// `wasm` (the default) or `process`.
+    #[serde(default)]
+    pub runtime: Runtime,
+    /// For a process plugin: the program and its arguments, run in the plugin's folder. A bare
+    /// name is looked up on `PATH`; a relative path is in the plugin's folder.
+    #[serde(default)]
+    pub run: Option<RunDecl>,
     /// The plugin ABI the module was built for.
     #[serde(default = "default_abi")]
     pub abi: u32,
@@ -325,8 +388,30 @@ impl Manifest {
         if version_parts(&self.version).is_none() {
             return Err(format!("plugin.json: version '{}' is not a version number like 1.0.0", self.version));
         }
-        if !valid_path(&self.entry) || !self.entry.ends_with(".wasm") {
-            return Err("plugin.json: entry must be a relative path to a .wasm file inside the package".into());
+        match self.runtime {
+            Runtime::Wasm => {
+                if !valid_path(&self.entry) || !self.entry.ends_with(".wasm") {
+                    return Err("plugin.json: entry must be a relative path to a .wasm file inside the package".into());
+                }
+                if self.run.is_some() {
+                    return Err("plugin.json: 'run' is for process plugins (\"runtime\": \"process\")".into());
+                }
+            }
+            Runtime::Process => {
+                let run = self.run.as_ref().ok_or("plugin.json: a process plugin needs 'run': its program and arguments")?;
+                let all = run.all();
+                if all.is_empty() {
+                    return Err("plugin.json: 'run' names no program".into());
+                }
+                for argv in all {
+                    if argv.first().is_none_or(|p| p.trim().is_empty())
+                        || argv.len() > MAX_RUN_ARGS
+                        || argv.iter().any(|a| a.len() > MAX_TEXT || a.contains('\0'))
+                    {
+                        return Err(format!("plugin.json: 'run' must be a program and at most {} arguments", MAX_RUN_ARGS - 1));
+                    }
+                }
+            }
         }
         if self.abi != ABI {
             return Err(format!("{} was built for plugin ABI {}; this RustGIS runs ABI {ABI}", self.name, self.abi));

@@ -778,6 +778,7 @@ Import Thumbnail	导入缩略图
 Import Web Tool	导入 Web 工具
 In Beyond	放大超过
 In Progress	进行中
+In RustGIS, it can:	在 RustGIS 中，它可以：
 in progress	进行中
 In project	在工程中
 In use	正在使用
@@ -813,6 +814,7 @@ Invert	反转
 Invert color scheme	反转配色方案
 Invert the selection.	反转选择。
 IS NULL	IS NULL
+It runs: {program}	它运行：{program}
 it connects to an address on the internet	它会连接到互联网上的地址
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	它仅限您本人执行（插件、脚本、任务、模型和 GeoLibre 运行器）
 it reads or writes files on this computer	它会读取或写入此计算机上的文件
@@ -1071,6 +1073,7 @@ None. Add one by address, or from a basemap plugin.	无。可通过地址添加�
 North	北
 North\nArrow	指北\n针
 North Polar Stereographic	北极球面投影
+Not sandboxed	未沙箱隔离
 not a RustGIS layout	不是 RustGIS 布局
 not needed	无需填写
 Not saved yet	尚未保存
@@ -1202,6 +1205,7 @@ PMTiles archive	PMTiles 归档
 PMTiles File…	PMTiles 文件…
 PNG frames (zip)	PNG 帧（zip）
 PNG image	PNG 图像
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	标为“未沙箱隔离”的插件则作为程序在您的计算机上运行，能做您能做的任何事。
 Point	点
 Points	点
 points each	每个多边形的点数
@@ -1641,6 +1645,7 @@ Text	文本
 Text Symbol	文本符号
 The assistant is busy; stop it or wait for it to finish.	助手正忙；请停止它或等待其完成。
 The assistant wants to run this, and {why}:	助手想要执行以下操作，由于{why}，需要您确认：
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	此插件作为程序在您的计算机上运行，位于 RustGIS 沙箱之外。它能做您能做的任何事：读取和更改您的文件、使用网络以及运行其他程序。请仅在信任其作者时安装。
 the capture failed unexpectedly	捕获意外失败
 the Help tab always shows	“帮助”选项卡始终显示
 The job covers the map view	作业覆盖地图视图
@@ -1855,6 +1860,7 @@ Zoom to Tokyo	缩放至东京
 Zoom To World	缩放至世界
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} 在安装后已被更改；请从插件管理器重新安装。
 {name} is larger than {mb} MB	{name} 大于 {mb} MB
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} 作为程序在您的计算机上运行：需要桌面应用或 rustgis-cli。
 {name} was withdrawn from the plugin registry and has been turned off.	{name} 已从插件库下架，并已被停用。
 {name} was withdrawn from the plugin registry: {reason}	{name} 已从插件库下架：{reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}：下载的内容与插件库不符，未安装。

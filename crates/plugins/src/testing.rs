@@ -121,3 +121,88 @@ pub fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
     }
     w.finish().map(|c| c.into_inner()).unwrap_or_default()
 }
+
+/// The argument that tells a test binary, started as a process plugin, to act as one (see
+/// [`serve_if_child`]). It doubles as a test filter that matches no test.
+const CHILD_MARK: &str = "rustgis-plugin-child-mode";
+
+/// `run` for a process plugin played by this test binary: it starts the test named `test` (in
+/// the crate's tests, it calls [`serve_if_child`]) and nothing else.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn child_run(test: &str) -> Vec<String> {
+    let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+    [exe.as_str(), test, CHILD_MARK, "--exact", "--nocapture", "--test-threads=1"].iter().map(|s| s.to_string()).collect()
+}
+
+/// A manifest for the process test plugin: the test module's commands and tools, run by `run`.
+/// With `files`, its tool `r` takes a file.
+pub fn process_manifest(id: &str, permissions: &[&str], run: &[String]) -> String {
+    let mut m: serde_json::Value = serde_json::from_str(&manifest(id, permissions)).unwrap_or_default();
+    m["runtime"] = serde_json::json!("process");
+    m["run"] = serde_json::json!(run);
+    if let Some(c) = m["commands"].as_array_mut() {
+        c.push(serde_json::json!({"id": "n", "label": "Noisy"}));
+        c.push(serde_json::json!({"id": "c", "label": "Crash"}));
+    }
+    m.to_string()
+}
+
+/// In a test binary started by a process test plugin ([`child_run`]): answers one request as the
+/// test module does, then exits. Elsewhere it returns at once.
+///
+/// - `h` logs "hi" and returns `{"hello": "world"}`; `f` sends its params as a host request
+///   and returns the reply; `e` fails with "nope"; `n` prints a line that isn't JSON first;
+///   `c` writes "boom" to its error output and exits without answering; `s` never answers.
+/// - Tools: `m` returns the layer "Made"; `x` selects rows 0 and 2 of "Cities"; `r` returns the
+///   names of the files it was given as its messages.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn serve_if_child() {
+    use serde_json::{Value, json};
+    use std::io::{BufRead, Write};
+    if !std::env::args().any(|a| a == CHILD_MARK) {
+        return;
+    }
+    let mut out = std::io::stdout();
+    // The test harness has printed "test … " without a line end: start a line of our own.
+    let _ = writeln!(out);
+    let mut input = std::io::stdin().lock();
+    let mut line = String::new();
+    let _ = input.read_line(&mut line);
+    let req: Value = serde_json::from_str(&line).unwrap_or_default();
+    let params = req.get("params").cloned().unwrap_or_default();
+    let reply = match req.get("id").and_then(Value::as_str).and_then(|s| s.chars().next()) {
+        Some('h') => {
+            let _ = writeln!(out, "{}", json!({"log": "hi"}));
+            json!({"ok": {"hello": "world"}})
+        }
+        Some('f') => {
+            let _ = writeln!(out, "{}", json!({"call": {"op": params["op"], "params": params["params"]}}));
+            let _ = out.flush();
+            let mut answer = String::new();
+            let _ = input.read_line(&mut answer);
+            serde_json::from_str(&answer).unwrap_or_else(|_| json!({"error": "no answer"}))
+        }
+        Some('n') => {
+            let _ = writeln!(out, "a library printing");
+            json!({"ok": {"n": 1}})
+        }
+        Some('c') => {
+            eprintln!("boom");
+            std::process::exit(3);
+        }
+        Some('s') => loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        },
+        Some('m') => json!({"ok": {"layers": [{"name": "Made", "geojson": {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"n": 1}, "geometry": {"type": "Point", "coordinates": [1, 2]}}]}}], "messages": ["made"]}}),
+        Some('x') => json!({"ok": {"selection": {"layer": "Cities", "rows": [0, 2]}}}),
+        Some('r') => {
+            let names: Vec<Value> = req["files"].as_object().map(|f| f.values().map(|v| v["name"].clone()).collect()).unwrap_or_default();
+            json!({"ok": {"layers": [], "messages": names}})
+        }
+        _ => json!({"error": "nope"}),
+    };
+    let _ = writeln!(out, "{reply}");
+    let _ = out.flush();
+    std::process::exit(0);
+}

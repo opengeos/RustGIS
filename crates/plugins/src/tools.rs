@@ -162,7 +162,7 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
     }
     let request = request(decl, params, layers)?;
     let mut log = Messages(Vec::new());
-    let reply = crate::call(&plugin, &mut log, &request, crate::runtime::TOOL_FUEL).map_err(|e| format!("{}: {e}", decl.name))?;
+    let reply = crate::call(&plugin, &mut log, &request, true).map_err(|e| format!("{}: {e}", decl.name))?;
     let mut result = output(&reply, &decl.name)?;
     log.0.append(&mut result.messages);
     result.messages = log.0;

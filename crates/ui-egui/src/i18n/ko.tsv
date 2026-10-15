@@ -778,6 +778,7 @@ Import Thumbnail	썸네일 가져오기
 Import Web Tool	웹 도구 가져오기
 In Beyond	다음보다 확대 시
 In Progress	진행 중
+In RustGIS, it can:	RustGIS에서 할 수 있는 작업:
 in progress	진행 중
 In project	프로젝트 내
 In use	사용 중
@@ -813,6 +814,7 @@ Invert	반전
 Invert color scheme	색상표 반전
 Invert the selection.	선택을 반전합니다.
 IS NULL	IS NULL
+It runs: {program}	실행 명령: {program}
 it connects to an address on the internet	인터넷의 주소에 연결하는
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	사용자만 실행할 수 있는(플러그인, 스크립트, 작업, 모델, GeoLibre 실행기)
 it reads or writes files on this computer	이 컴퓨터의 파일을 읽거나 쓰는
@@ -1071,6 +1073,7 @@ None. Add one by address, or from a basemap plugin.	없음. 주소로 추가하�
 North	북
 North\nArrow	방위\n표
 North Polar Stereographic	북극 평사도법
+Not sandboxed	샌드박스 밖
 not a RustGIS layout	RustGIS 레이아웃이 아닙니다
 not needed	필요 없음
 Not saved yet	아직 저장되지 않음
@@ -1202,6 +1205,7 @@ PMTiles archive	PMTiles 아카이브
 PMTiles File…	PMTiles 파일…
 PNG frames (zip)	PNG 프레임(zip)
 PNG image	PNG 이미지
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	'샌드박스 밖'으로 표시된 플러그인은 컴퓨터의 프로그램으로 실행되며 사용자가 할 수 있는 모든 작업을 할 수 있습니다.
 Point	포인트
 Points	포인트
 points each	각 포인트 수
@@ -1641,6 +1645,7 @@ Text	텍스트
 Text Symbol	텍스트 심볼
 The assistant is busy; stop it or wait for it to finish.	어시스턴트가 작업 중입니다. 중지하거나 완료될 때까지 기다리세요.
 The assistant wants to run this, and {why}:	어시스턴트가 다음 작업을 실행하려고 합니다. 이 작업은 {why} 작업입니다:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	이 플러그인은 RustGIS 샌드박스 밖에서 컴퓨터의 프로그램으로 실행됩니다. 파일 읽기 및 변경, 네트워크 사용, 다른 프로그램 실행 등 사용자가 할 수 있는 모든 작업을 할 수 있습니다. 작성자를 신뢰하는 경우에만 설치하세요.
 the capture failed unexpectedly	캡처가 예기치 않게 실패했습니다
 the Help tab always shows	도움말 탭은 항상 표시됩니다
 The job covers the map view	작업 범위는 지도 뷰입니다
@@ -1855,6 +1860,7 @@ Zoom to Tokyo	도쿄로 확대
 Zoom To World	세계로 확대/축소
 {id} changed since it was installed; install it again from the Plugin Manager.	{id}이(가) 설치 후 변경되었습니다. 플러그인 관리자에서 다시 설치하세요.
 {name} is larger than {mb} MB	{name}의 크기가 {mb}MB를 초과합니다
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name}은(는) 컴퓨터의 프로그램으로 실행됩니다. 데스크톱 앱이나 rustgis-cli가 필요합니다.
 {name} was withdrawn from the plugin registry and has been turned off.	{name}이(가) 플러그인 레지스트리에서 철회되어 비활성화되었습니다.
 {name} was withdrawn from the plugin registry: {reason}	{name}이(가) 플러그인 레지스트리에서 철회되었습니다: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: 다운로드한 파일이 레지스트리와 일치하지 않아 설치하지 않았습니다.

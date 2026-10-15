@@ -778,6 +778,7 @@ Import Thumbnail	Importa miniatura
 Import Web Tool	Importa strumento web
 In Beyond	Oltre (ingrandimento)
 In Progress	In corso
+In RustGIS, it can:	In RustGIS può:
 in progress	in corso
 In project	Nel progetto
 In use	In uso
@@ -813,6 +814,7 @@ Invert	Inverti
 Invert color scheme	Inverti schema di colori
 Invert the selection.	Inverti la selezione.
 IS NULL	IS NULL
+It runs: {program}	Esegue: {program}
 it connects to an address on the internet	si connette a un indirizzo su Internet
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	è riservato a te (plugin, script, attività, modelli e l'esecutore GeoLibre)
 it reads or writes files on this computer	legge o scrive file su questo computer
@@ -1071,6 +1073,7 @@ None. Add one by address, or from a basemap plugin.	Nessuno. Aggiungine uno tram
 North	Nord
 North\nArrow	Freccia\ndel nord
 North Polar Stereographic	Stereografica polare nord
+Not sandboxed	Fuori dalla sandbox
 not a RustGIS layout	non è un layout RustGIS
 not needed	non necessaria
 Not saved yet	Non ancora salvato
@@ -1202,6 +1205,7 @@ PMTiles archive	Archivio PMTiles
 PMTiles File…	File PMTiles…
 PNG frames (zip)	Fotogrammi PNG (zip)
 PNG image	Immagine PNG
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	I plugin contrassegnati con «Fuori dalla sandbox» vengono invece eseguiti come programmi sul computer e possono fare tutto ciò che puoi fare tu.
 Point	Punto
 Points	Punti
 points each	punti ciascuno
@@ -1641,6 +1645,7 @@ Text	Testo
 Text Symbol	Simbolo di testo
 The assistant is busy; stop it or wait for it to finish.	L'assistente è occupato; fermalo o attendi che finisca.
 The assistant wants to run this, and {why}:	L'assistente vuole eseguire quanto segue, che {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Questo plugin viene eseguito come programma sul computer, fuori dalla sandbox di RustGIS. Può fare tutto ciò che puoi fare tu: leggere e modificare i tuoi file, usare la rete ed eseguire altri programmi. Installalo solo se ti fidi del suo autore.
 the capture failed unexpectedly	la cattura non è riuscita in modo imprevisto
 the Help tab always shows	la scheda Aiuto è sempre visibile
 The job covers the map view	Il lavoro copre la vista della mappa
@@ -1855,6 +1860,7 @@ Zoom to Tokyo	Zoom su Tokyo
 Zoom To World	Zoom al mondo
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} è cambiato dopo l'installazione; installalo di nuovo dal Gestore plugin.
 {name} is larger than {mb} MB	{name} supera i {mb} MB
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} viene eseguito come programma sul computer: richiede l'app desktop o rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} è stato ritirato dal registro dei plugin ed è stato disattivato.
 {name} was withdrawn from the plugin registry: {reason}	{name} è stato ritirato dal registro dei plugin: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: il download non corrisponde al registro; non è stato installato.

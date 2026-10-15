@@ -778,6 +778,7 @@ Import Thumbnail	Küçük Resmi İçe Aktar
 Import Web Tool	Web Aracını İçe Aktar
 In Beyond	Ötesinde Açık
 In Progress	Devam Ediyor
+In RustGIS, it can:	RustGIS'te şunları yapabilir:
 in progress	devam ediyor
 In project	Projede
 In use	Kullanımda
@@ -813,6 +814,7 @@ Invert	Ters Çevir
 Invert color scheme	Renk şemasını ters çevir
 Invert the selection.	Seçimi ters çevir.
 IS NULL	IS NULL
+It runs: {program}	Çalıştırdığı: {program}
 it connects to an address on the internet	internetteki bir adrese bağlanır
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	yalnızca size ayrılmıştır (eklentiler, betikler, görevler, modeller ve GeoLibre çalıştırıcısı)
 it reads or writes files on this computer	bu bilgisayardaki dosyaları okur veya yazar
@@ -1071,6 +1073,7 @@ None. Add one by address, or from a basemap plugin.	Yok. Adresle veya bir altlı
 North	Kuzey
 North\nArrow	Kuzey\nOku
 North Polar Stereographic	Kuzey Kutup Stereografik
+Not sandboxed	Korumalı alan dışında
 not a RustGIS layout	bir RustGIS sayfa düzeni değil
 not needed	gerekmiyor
 Not saved yet	Henüz kaydedilmedi
@@ -1202,6 +1205,7 @@ PMTiles archive	PMTiles arşivi
 PMTiles File…	PMTiles Dosyası…
 PNG frames (zip)	PNG kareleri (zip)
 PNG image	PNG görüntüsü
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	"Korumalı alan dışında" olarak işaretlenen eklentiler bunun yerine bilgisayarınızda program olarak çalışır ve sizin yapabildiğiniz her şeyi yapabilir.
 Point	Nokta
 Points	Noktalar
 points each	nokta (her biri)
@@ -1641,6 +1645,7 @@ Text	Metin
 Text Symbol	Metin Sembolü
 The assistant is busy; stop it or wait for it to finish.	Asistan meşgul; durdurun veya bitirmesini bekleyin.
 The assistant wants to run this, and {why}:	Asistan şunu çalıştırmak istiyor; bu işlem {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Bu eklenti, RustGIS'in korumalı alanının dışında, bilgisayarınızda bir program olarak çalışır. Sizin yapabildiğiniz her şeyi yapabilir: dosyalarınızı okuyup değiştirebilir, ağı kullanabilir ve başka programlar çalıştırabilir. Yalnızca yazarına güveniyorsanız yükleyin.
 the capture failed unexpectedly	yakalama beklenmedik şekilde başarısız oldu
 the Help tab always shows	Yardım sekmesi her zaman görünür
 The job covers the map view	İş harita görünümünü kapsar
@@ -1855,6 +1860,7 @@ Zoom to Tokyo	Tokyo'ya yakınlaştır
 Zoom To World	Dünyaya Yakınlaştır
 {id} changed since it was installed; install it again from the Plugin Manager.	{id}, yüklendiğinden beri değişti; Eklenti Yöneticisi'nden yeniden yükleyin.
 {name} is larger than {mb} MB	{name}, {mb} MB'tan büyük
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} bilgisayarınızda bir program olarak çalışır: masaüstü uygulamasını veya rustgis-cli'yi gerektirir.
 {name} was withdrawn from the plugin registry and has been turned off.	{name}, eklenti kayıt defterinden geri çekildi ve devre dışı bırakıldı.
 {name} was withdrawn from the plugin registry: {reason}	{name}, eklenti kayıt defterinden geri çekildi: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: İndirilen dosya kayıt defteriyle eşleşmiyor; yüklenmedi.

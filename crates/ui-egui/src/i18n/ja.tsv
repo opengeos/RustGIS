@@ -778,6 +778,7 @@ Import Thumbnail	サムネイルのインポート
 Import Web Tool	Web ツールのインポート
 In Beyond	拡大の限界
 In Progress	進行中
+In RustGIS, it can:	RustGIS 内でできること:
 in progress	進行中
 In project	プロジェクト内
 In use	使用中
@@ -813,6 +814,7 @@ Invert	反転
 Invert color scheme	配色を反転
 Invert the selection.	選択を反転します。
 IS NULL	IS NULL
+It runs: {program}	実行するもの: {program}
 it connects to an address on the internet	インターネット上のアドレスに接続する
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	ユーザー本人専用の操作（プラグイン、スクリプト、タスク、モデル、GeoLibre ランナー）である
 it reads or writes files on this computer	このコンピューター上のファイルを読み書きする
@@ -1071,6 +1073,7 @@ None. Add one by address, or from a basemap plugin.	なし。アドレスで、�
 North	北
 North\nArrow	方位\n記号
 North Polar Stereographic	北極ステレオ図法
+Not sandboxed	サンドボックス外
 not a RustGIS layout	RustGIS レイアウトではありません
 not needed	不要
 Not saved yet	未保存
@@ -1202,6 +1205,7 @@ PMTiles archive	PMTiles アーカイブ
 PMTiles File…	PMTiles ファイル…
 PNG frames (zip)	PNG フレーム (zip)
 PNG image	PNG 画像
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	「サンドボックス外」と表示されたプラグインは、コンピューター上のプログラムとして実行され、あなたができることは何でもできます。
 Point	ポイント
 Points	ポイント
 points each	ポイント数 (各)
@@ -1641,6 +1645,7 @@ Text	テキスト
 Text Symbol	テキスト シンボル
 The assistant is busy; stop it or wait for it to finish.	アシスタントは処理中です。停止するか、完了するまでお待ちください。
 The assistant wants to run this, and {why}:	アシスタントが次の操作を実行しようとしています（{why}ため、確認が必要です）:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	このプラグインは RustGIS のサンドボックスの外で、コンピューター上のプログラムとして実行されます。ファイルの読み取りや変更、ネットワークの使用、他のプログラムの実行など、あなたができることは何でもできます。作者を信頼できる場合にのみインストールしてください。
 the capture failed unexpectedly	キャプチャが予期せず失敗しました
 the Help tab always shows	[ヘルプ] タブは常に表示されます
 The job covers the map view	ジョブはマップ ビューを対象とします
@@ -1855,6 +1860,7 @@ Zoom to Tokyo	東京にズーム
 Zoom To World	世界にズーム
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} はインストール後に変更されています。プラグイン マネージャーから再インストールしてください。
 {name} is larger than {mb} MB	{name} は {mb} MB を超えています
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} はコンピューター上のプログラムとして実行されます。デスクトップ アプリまたは rustgis-cli が必要です。
 {name} was withdrawn from the plugin registry and has been turned off.	{name} はプラグイン レジストリから取り下げられたため、無効にしました。
 {name} was withdrawn from the plugin registry: {reason}	{name} はプラグイン レジストリから取り下げられました: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: ダウンロードした内容がレジストリと一致しないため、インストールしませんでした。

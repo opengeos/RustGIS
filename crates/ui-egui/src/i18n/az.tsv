@@ -778,6 +778,7 @@ Import Thumbnail	Miniatürü idxal et
 Import Web Tool	Veb aləti idxal et
 In Beyond	Yaxınlaşma həddi
 In Progress	İcra olunur
+In RustGIS, it can:	RustGIS-də bunları edə bilər:
 in progress	icra olunur
 In project	Layihədə
 In use	İstifadədədir
@@ -813,6 +814,7 @@ Invert	Tərsinə çevir
 Invert color scheme	Rəng sxemini tərsinə çevir
 Invert the selection.	Seçimi tərsinə çevirin.
 IS NULL	IS NULL
+It runs: {program}	İşə saldığı: {program}
 it connects to an address on the internet	internetdəki ünvana qoşulur
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	yalnız sizin üçün nəzərdə tutulub (plaginlər, skriptlər, tapşırıqlar, modellər və GeoLibre icraçısı)
 it reads or writes files on this computer	bu kompüterdəki faylları oxuyur və ya yazır
@@ -1071,6 +1073,7 @@ None. Add one by address, or from a basemap plugin.	Heç biri. Ünvanla və ya �
 North	Şimal
 North\nArrow	Şimal\noxu
 North Polar Stereographic	Şimal qütb stereoqrafik
+Not sandboxed	Qum qutusundan kənar
 not a RustGIS layout	RustGIS tərtibatı deyil
 not needed	lazım deyil
 Not saved yet	Hələ saxlanmayıb
@@ -1202,6 +1205,7 @@ PMTiles archive	PMTiles arxivi
 PMTiles File…	PMTiles faylı…
 PNG frames (zip)	PNG kadrları (zip)
 PNG image	PNG təsviri
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	"Qum qutusundan kənar" kimi işarələnmiş plaginlər isə kompüterinizdə proqram kimi işləyir və sizin edə bildiyiniz hər şeyi edə bilər.
 Point	Nöqtə
 Points	Nöqtələr
 points each	hər birində nöqtə
@@ -1641,6 +1645,7 @@ Text	Mətn
 Text Symbol	Mətn simvolu
 The assistant is busy; stop it or wait for it to finish.	Köməkçi məşğuldur; onu dayandırın və ya bitirməsini gözləyin.
 The assistant wants to run this, and {why}:	Köməkçi bunu icra etmək istəyir; bu əməliyyat {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Bu plagin RustGIS-in qum qutusundan kənarda, kompüterinizdə proqram kimi işləyir. Sizin edə bildiyiniz hər şeyi edə bilər: fayllarınızı oxuyub dəyişə, şəbəkədən istifadə edə və başqa proqramlar işə sala bilər. Onu yalnız müəllifinə etibar edirsinizsə quraşdırın.
 the capture failed unexpectedly	çəkiliş gözlənilmədən uğursuz oldu
 the Help tab always shows	Kömək tabı həmişə göstərilir
 The job covers the map view	İş xəritə görünüşünü əhatə edir
@@ -1855,6 +1860,7 @@ Zoom to Tokyo	Tokioya yaxınlaşdır
 Zoom To World	Dünyaya yaxınlaşdır
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} quraşdırıldıqdan sonra dəyişib; onu Plagin menecerindən yenidən quraşdırın.
 {name} is larger than {mb} MB	{name} {mb} MB-dan böyükdür
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} kompüterinizdə proqram kimi işləyir: masaüstü tətbiq və ya rustgis-cli tələb edir.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} plagin reyestrindən geri çəkilib və söndürülüb.
 {name} was withdrawn from the plugin registry: {reason}	{name} plagin reyestrindən geri çəkilib: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: endirilən fayl reyestrə uyğun gəlmir; quraşdırılmadı.

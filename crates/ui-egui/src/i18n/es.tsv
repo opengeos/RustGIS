@@ -778,6 +778,7 @@ Import Thumbnail	Importar miniatura
 Import Web Tool	Importar herramienta web
 In Beyond	Límite al acercar
 In Progress	En curso
+In RustGIS, it can:	En RustGIS, puede:
 in progress	en curso
 In project	En el proyecto
 In use	En uso
@@ -813,6 +814,7 @@ Invert	Invertir
 Invert color scheme	Invertir esquema de color
 Invert the selection.	Invertir la selección.
 IS NULL	IS NULL
+It runs: {program}	Ejecuta: {program}
 it connects to an address on the internet	se conecta a una dirección de internet
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	está reservado para usted (complementos, scripts, tareas, modelos y el ejecutor de GeoLibre)
 it reads or writes files on this computer	lee o escribe archivos en este equipo
@@ -1071,6 +1073,7 @@ None. Add one by address, or from a basemap plugin.	Ninguna. Añada una por dire
 North	Norte
 North\nArrow	Flecha\nde norte
 North Polar Stereographic	Estereográfica polar norte
+Not sandboxed	Sin aislamiento
 not a RustGIS layout	no es un diseño de RustGIS
 not needed	no es necesaria
 Not saved yet	Aún no guardado
@@ -1202,6 +1205,7 @@ PMTiles archive	Archivo PMTiles
 PMTiles File…	Archivo PMTiles…
 PNG frames (zip)	Fotogramas PNG (zip)
 PNG image	Imagen PNG
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	Los complementos marcados como «Sin aislamiento» se ejecutan, en cambio, como programas en su equipo y pueden hacer todo lo que usted puede.
 Point	Punto
 Points	Puntos
 points each	puntos cada uno
@@ -1641,6 +1645,7 @@ Text	Texto
 Text Symbol	Símbolo de texto
 The assistant is busy; stop it or wait for it to finish.	El asistente está ocupado; deténgalo o espere a que termine.
 The assistant wants to run this, and {why}:	El asistente quiere ejecutar lo siguiente, y {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Este complemento se ejecuta como un programa en su equipo, fuera del entorno aislado de RustGIS. Puede hacer todo lo que usted puede: leer y modificar sus archivos, usar la red y ejecutar otros programas. Instálelo solo si confía en su autor.
 the capture failed unexpectedly	la captura falló inesperadamente
 the Help tab always shows	la pestaña Ayuda siempre se muestra
 The job covers the map view	El trabajo cubre la vista del mapa
@@ -1855,6 +1860,7 @@ Zoom to Tokyo	Hacer zoom a Tokio
 Zoom To World	Zoom al mundo
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} ha cambiado desde que se instaló; vuelva a instalarlo desde el Administrador de complementos.
 {name} is larger than {mb} MB	{name} ocupa más de {mb} MB
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} se ejecuta como un programa en su equipo: requiere la aplicación de escritorio o rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} se ha retirado del registro de complementos y se ha desactivado.
 {name} was withdrawn from the plugin registry: {reason}	{name} se ha retirado del registro de complementos: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: la descarga no coincide con el registro; no se ha instalado.

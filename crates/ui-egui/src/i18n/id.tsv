@@ -778,6 +778,7 @@ Import Thumbnail	Impor Thumbnail
 Import Web Tool	Impor Alat Web
 In Beyond	Perbesar Melewati
 In Progress	Sedang Berjalan
+In RustGIS, it can:	Di RustGIS, plugin ini dapat:
 in progress	sedang berjalan
 In project	Dalam proyek
 In use	Digunakan
@@ -813,6 +814,7 @@ Invert	Balik
 Invert color scheme	Balik skema warna
 Invert the selection.	Balik seleksi.
 IS NULL	IS NULL
+It runs: {program}	Yang dijalankan: {program}
 it connects to an address on the internet	terhubung ke alamat di internet
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	hanya boleh dilakukan oleh Anda (plugin, skrip, tugas, model, dan runner GeoLibre)
 it reads or writes files on this computer	membaca atau menulis file di komputer ini
@@ -1071,6 +1073,7 @@ None. Add one by address, or from a basemap plugin.	Tidak ada. Tambahkan melalui
 North	Utara
 North\nArrow	Panah\nUtara
 North Polar Stereographic	Stereografis Kutub Utara
+Not sandboxed	Tanpa sandbox
 not a RustGIS layout	bukan tata letak RustGIS
 not needed	tidak diperlukan
 Not saved yet	Belum disimpan
@@ -1202,6 +1205,7 @@ PMTiles archive	Arsip PMTiles
 PMTiles File…	Berkas PMTiles…
 PNG frames (zip)	Bingkai PNG (zip)
 PNG image	Gambar PNG
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	Plugin bertanda "Tanpa sandbox" berjalan sebagai program di komputer Anda dan dapat melakukan apa pun yang dapat Anda lakukan.
 Point	Titik
 Points	Titik
 points each	titik masing-masing
@@ -1641,6 +1645,7 @@ Text	Teks
 Text Symbol	Simbol Teks
 The assistant is busy; stop it or wait for it to finish.	Asisten sedang sibuk; hentikan atau tunggu hingga selesai.
 The assistant wants to run this, and {why}:	Asisten ingin menjalankan tindakan berikut, yang {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Plugin ini berjalan sebagai program di komputer Anda, di luar sandbox RustGIS. Plugin ini dapat melakukan apa pun yang dapat Anda lakukan: membaca dan mengubah file Anda, menggunakan jaringan, dan menjalankan program lain. Pasang hanya jika Anda memercayai pembuatnya.
 the capture failed unexpectedly	penangkapan gagal secara tak terduga
 the Help tab always shows	tab Bantuan selalu ditampilkan
 The job covers the map view	Pekerjaan mencakup tampilan peta
@@ -1855,6 +1860,7 @@ Zoom to Tokyo	Zoom ke Tokyo
 Zoom To World	Zoom ke Dunia
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} telah berubah sejak dipasang; pasang ulang dari Pengelola Plugin.
 {name} is larger than {mb} MB	{name} lebih besar dari {mb} MB
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} berjalan sebagai program di komputer Anda: memerlukan aplikasi desktop atau rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} ditarik dari registri plugin dan telah dinonaktifkan.
 {name} was withdrawn from the plugin registry: {reason}	{name} ditarik dari registri plugin: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: unduhan tidak cocok dengan registri; plugin tidak dipasang.

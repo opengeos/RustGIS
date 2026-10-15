@@ -344,3 +344,146 @@ fn file_parameters_need_files_and_hand_tools_the_file() {
     assert!(crate::tools::request(decl, &at(max + 1), Default::default()).unwrap_err().contains("larger"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------------------------------------------------------------------------------------------
+// process plugins
+
+/// This test binary, started as the process test plugin, answers one request and exits.
+#[test]
+fn process_child() {
+    testing::serve_if_child();
+}
+
+/// A folder holding the process test plugin's manifest (played by this binary).
+fn process_folder(id: &str, perms: &[&str]) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rustgis-test-process-{id}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = testing::child_run("tests::process_child");
+    std::fs::write(dir.join("plugin.json"), testing::process_manifest(id, perms, &run)).unwrap();
+    dir
+}
+
+#[test]
+fn process_plugins_answer_like_modules() {
+    let dir = process_folder("proc", &["files"]);
+    let pkg = Package::from_dir(&dir).unwrap();
+    assert!(pkg.wasm.is_empty() && pkg.dir.as_deref() == Some(dir.as_path()));
+    let p = crate::prepare(pkg, "test").unwrap();
+    assert_eq!(p.info()["runtime"], "process");
+    let request = |id: &str, params: Value| json!({"abi": 1, "kind": "command", "id": id, "params": params, "lang": "en"});
+
+    let mut host = Recorder::default();
+    assert_eq!(crate::call(&p, &mut host, &request("h", json!({})), false).unwrap(), json!({"hello": "world"}));
+    assert_eq!(host.logs, ["hi"]);
+    // Host requests go through the host, and their answers come back.
+    let echoed = crate::call(&p, &mut host, &request("f", json!({"op": "host.echo", "params": {"a": [1, 2]}})), false).unwrap();
+    assert_eq!(echoed, json!({"a": [1, 2]}));
+    assert_eq!(host.ops, ["host.echo"]);
+    let e = crate::call(&p, &mut host, &request("f", json!({"op": "nope.op", "params": {}})), false).unwrap_err();
+    assert!(e.contains("no 'nope.op'"), "{e}");
+    assert_eq!(crate::call(&p, &mut host, &request("e", json!({})), false).unwrap_err(), "nope");
+    // Other output is skipped; a crash is an error naming what it wrote last, never a hang.
+    assert_eq!(crate::call(&p, &mut host, &request("n", json!({})), false).unwrap(), json!({"n": 1}));
+    let e = crate::call(&p, &mut host, &request("c", json!({})), false).unwrap_err();
+    assert!(e.contains("exited without answering") && e.contains("boom"), "{e}");
+    // Tools run the same way, files included.
+    let tool = json!({"abi": 1, "kind": "tool", "id": "r", "params": {"model": "run.nc"}, "files": {"model": {"name": "run.nc", "data": ""}}, "layers": {}, "lang": "en"});
+    assert_eq!(crate::call(&p, &mut host, &tool, true).unwrap()["messages"], json!(["run.nc"]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn process_plugins_that_hang_are_stopped() {
+    let dir = std::env::temp_dir();
+    let spec = crate::process::Spec::new(&testing::child_run("tests::process_child"), &dir).unwrap();
+    let t0 = std::time::Instant::now();
+    let req = json!({"abi": 1, "kind": "command", "id": "s", "params": {}, "lang": "en"});
+    let e = crate::process::call(&spec, &mut Recorder::default(), &req, Some(std::time::Duration::from_secs(2))).unwrap_err();
+    assert!(e.contains("too long") && t0.elapsed() < std::time::Duration::from_secs(20), "{e}");
+    // A program that can't be started is an error too.
+    let missing = crate::process::Spec::new(&["rustgis-no-such-program".to_string()], &dir).unwrap();
+    assert!(crate::process::call(&missing, &mut Recorder::default(), &req, None).unwrap_err().contains("couldn't start"));
+}
+
+#[test]
+fn process_manifests_are_checked() {
+    let base = |extra: Value| {
+        let mut m = json!({"id": "p", "name": "P", "version": "1.0.0", "commands": [{"id": "h", "label": "H"}]});
+        for (k, v) in extra.as_object().unwrap() {
+            m[k] = v.clone();
+        }
+        Manifest::parse(&m.to_string())
+    };
+    assert!(base(json!({"runtime": "process", "run": ["python3", "main.py"]})).is_ok());
+    assert!(base(json!({"runtime": "process"})).unwrap_err().contains("needs 'run'"));
+    assert!(base(json!({"runtime": "process", "run": []})).is_err());
+    assert!(base(json!({"runtime": "process", "run": [" "]})).is_err());
+    assert!(base(json!({"runtime": "process", "run": {"windos": ["x"]}})).unwrap_err().contains("names no program"));
+    assert!(base(json!({"runtime": "process", "run": vec!["a"; 65]})).is_err());
+    assert!(base(json!({"run": ["python3"]})).unwrap_err().contains("process plugins"));
+    assert!(base(json!({"runtime": "native"})).is_err());
+    // By platform: this one's, else the default; none is an error when it's prepared.
+    let m = base(json!({"runtime": "process", "run": {"windows": ["w"], "macos": ["m"], "linux": ["l"]}})).unwrap();
+    let mine = if cfg!(windows) {
+        "w"
+    } else if cfg!(target_os = "macos") {
+        "m"
+    } else {
+        "l"
+    };
+    assert_eq!(m.run.as_ref().unwrap().for_this_platform().unwrap(), [mine.to_string()]);
+    let m = base(json!({"runtime": "process", "run": {"default": ["d"]}})).unwrap();
+    assert_eq!(m.run.as_ref().unwrap().for_this_platform().unwrap(), ["d".to_string()]);
+    let other = if cfg!(windows) { "linux" } else { "windows" };
+    let m = base(json!({"runtime": "process", "run": {other: ["x"]}})).unwrap();
+    let pkg = Package { manifest: m, wasm: Vec::new(), sha256: String::new(), dir: Some(std::env::temp_dir()) };
+    assert!(crate::prepare(pkg, "test").unwrap_err().contains("doesn't run on this platform"));
+}
+
+#[test]
+fn process_packages_unpack_safely() {
+    use std::io::Write;
+    let plugins = std::env::temp_dir().join(format!("rustgis-test-unpack-{}", std::process::id()));
+    crate::store::set_dir(Some(plugins.clone()));
+    let run = testing::child_run("tests::process_child");
+    let manifest = testing::process_manifest("unpacked", &[], &run);
+    let zip = |files: &[(&str, &[u8], u32)]| {
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, bytes, mode) in files {
+            let opts = zip::write::SimpleFileOptions::default().unix_permissions(*mode);
+            w.start_file(*name, opts).unwrap();
+            w.write_all(bytes).unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    };
+    // In one top-level folder, with an executable.
+    let good =
+        zip(&[("u/plugin.json", manifest.as_bytes(), 0o644), ("u/bin/tool.sh", b"#!/bin/sh\n", 0o755), ("u/data/a.txt", b"a", 0o644)]);
+    let p = crate::store::install_bytes(&good).unwrap();
+    let dir = plugins.join("unpacked/unpacked");
+    assert_eq!(std::fs::read(dir.join("data/a.txt")).unwrap(), b"a");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(dir.join("bin/tool.sh")).unwrap().permissions().mode() & 0o777, 0o755);
+    }
+    // It runs from there.
+    let req = json!({"abi": 1, "kind": "command", "id": "h", "params": {}, "lang": "en"});
+    assert_eq!(crate::call(&p, &mut Recorder::default(), &req, false).unwrap(), json!({"hello": "world"}));
+    // The same package again isn't unpacked again; a changed one replaces the folder.
+    std::fs::write(dir.join("data/a.txt"), b"edited").unwrap();
+    crate::store::install_bytes(&good).unwrap();
+    assert_eq!(std::fs::read(dir.join("data/a.txt")).unwrap(), b"edited");
+    let changed = zip(&[("plugin.json", manifest.as_bytes(), 0o644), ("data/b.txt", b"b", 0o644)]);
+    crate::store::install_bytes(&changed).unwrap();
+    assert!(dir.join("data/b.txt").is_file() && !dir.join("data/a.txt").exists());
+    // Paths out of the folder are refused, and nothing is left behind.
+    let evil = zip(&[("plugin.json", manifest.as_bytes(), 0o644), ("../evil.txt", b"x", 0o644)]);
+    assert!(crate::store::install_bytes(&evil).unwrap_err().contains("unsafe path"));
+    assert!(!plugins.join("unpacked/evil.txt").exists() && !plugins.join("evil.txt").exists());
+    assert!(dir.join("data/b.txt").is_file(), "the installed copy stays");
+    // Uninstalling removes the files.
+    crate::store::uninstall("unpacked").unwrap();
+    assert!(!dir.exists());
+    let _ = std::fs::remove_dir_all(&plugins);
+}

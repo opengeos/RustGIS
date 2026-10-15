@@ -778,6 +778,7 @@ Import Thumbnail	Nhập ảnh thu nhỏ
 Import Web Tool	Nhập công cụ web
 In Beyond	Khi phóng to hơn
 In Progress	Đang thực hiện
+In RustGIS, it can:	Trong RustGIS, nó có thể:
 in progress	đang thực hiện
 In project	Trong dự án
 In use	Đang dùng
@@ -813,6 +814,7 @@ Invert	Đảo ngược
 Invert color scheme	Đảo ngược bảng màu
 Invert the selection.	Đảo ngược vùng chọn.
 IS NULL	IS NULL
+It runs: {program}	Lệnh chạy: {program}
 it connects to an address on the internet	nó kết nối tới một địa chỉ trên internet
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	nó chỉ dành cho bạn (plugin, tập lệnh, tác vụ, mô hình và trình chạy GeoLibre)
 it reads or writes files on this computer	nó đọc hoặc ghi tệp trên máy tính này
@@ -1071,6 +1073,7 @@ None. Add one by address, or from a basemap plugin.	Không có. Thêm bằng đ�
 North	Bắc
 North\nArrow	Mũi tên\nchỉ bắc
 North Polar Stereographic	Phép chiếu nổi cực Bắc
+Not sandboxed	Không có hộp cát
 not a RustGIS layout	không phải bố cục RustGIS
 not needed	không cần
 Not saved yet	Chưa lưu
@@ -1202,6 +1205,7 @@ PMTiles archive	Kho PMTiles
 PMTiles File…	Tệp PMTiles…
 PNG frames (zip)	Khung hình PNG (zip)
 PNG image	Ảnh PNG
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	Các plugin được đánh dấu "Không có hộp cát" thì chạy như chương trình trên máy tính của bạn và có thể làm mọi việc bạn làm được.
 Point	Điểm
 Points	Điểm
 points each	điểm mỗi vùng
@@ -1641,6 +1645,7 @@ Text	Văn bản
 Text Symbol	Ký hiệu văn bản
 The assistant is busy; stop it or wait for it to finish.	Trợ lý đang bận; hãy dừng nó hoặc đợi nó hoàn tất.
 The assistant wants to run this, and {why}:	Trợ lý muốn chạy thao tác sau, cần bạn cho phép vì {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Plugin này chạy như một chương trình trên máy tính của bạn, bên ngoài hộp cát của RustGIS. Nó có thể làm mọi việc bạn làm được: đọc và thay đổi tệp của bạn, dùng mạng và chạy các chương trình khác. Chỉ cài đặt nếu bạn tin tưởng tác giả của nó.
 the capture failed unexpectedly	chụp thất bại ngoài dự kiến
 the Help tab always shows	thẻ Trợ giúp luôn hiển thị
 The job covers the map view	Tác vụ bao phủ khung nhìn bản đồ
@@ -1855,6 +1860,7 @@ Zoom to Tokyo	Thu phóng tới Tokyo
 Zoom To World	Thu phóng tới thế giới
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} đã thay đổi kể từ khi được cài đặt; hãy cài đặt lại từ Trình quản lý plugin.
 {name} is larger than {mb} MB	{name} lớn hơn {mb} MB
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} chạy như một chương trình trên máy tính của bạn: cần ứng dụng máy tính hoặc rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} đã bị gỡ khỏi kho plugin và đã bị tắt.
 {name} was withdrawn from the plugin registry: {reason}	{name} đã bị gỡ khỏi kho plugin: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: bản tải xuống không khớp với kho plugin; chưa được cài đặt.

@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! <data>/plugins/<id>.rgplugin    installed packages
+//! <data>/plugins/unpacked/<id>/   an installed process plugin's files, where its program runs
 //! <data>/plugins/state.json       {"disabled": [ids], "folders": [plugin folders]}
 //! <data>/plugins/blocklist.json   the registry's blocklist, as last fetched
 //! ```
@@ -12,7 +13,12 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Package, Plugin, registry};
+use crate::{Package, Plugin, Runtime, registry};
+
+/// The most a process plugin's files may take unpacked (a guard against zip bombs).
+const MAX_UNPACKED: u64 = 1024 * 1024 * 1024;
+/// The file in an unpacked folder naming the package it came from (its SHA-256).
+const UNPACKED_FROM: &str = ".rustgis-package";
 
 /// The environment variable that names the plugins folder, ahead of the usual place.
 pub const ENV: &str = "RUSTGIS_PLUGINS_DIR";
@@ -90,7 +96,7 @@ pub fn load_installed() -> Vec<String> {
     // Folders after packages: a development copy wins over an installed one.
     paths.extend(st.folders.iter().map(PathBuf::from));
     for path in paths {
-        match Package::from_path(&path).and_then(|pkg| crate::load(pkg, &path.display().to_string())) {
+        match read_package(&path).and_then(|pkg| crate::load(pkg, &path.display().to_string())) {
             Ok(p) => {
                 if st.disabled.contains(&p.manifest.id) {
                     let _ = crate::set_enabled(&p.manifest.id, false);
@@ -102,10 +108,103 @@ pub fn load_installed() -> Vec<String> {
     errors
 }
 
+/// A package file or a plugin folder, a process plugin's package unpacked to run.
+fn read_package(path: &Path) -> Result<Package, String> {
+    if path.is_dir() {
+        return Package::from_dir(path);
+    }
+    let len = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
+    if len > crate::package::MAX_PACKAGE as u64 {
+        return Err(format!("{} is larger than {} MB", path.display(), crate::package::MAX_PACKAGE / (1024 * 1024)));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut pkg = Package::from_zip(&bytes)?;
+    unpack(&bytes, &mut pkg)?;
+    Ok(pkg)
+}
+
+/// Where an installed process plugin's files are unpacked.
+fn unpacked_dir(id: &str) -> Option<PathBuf> {
+    dir().map(|d| d.join("unpacked").join(id))
+}
+
+/// Unpacks a process plugin's package (`bytes`) to run from, unless that copy is already there,
+/// and points `pkg` at it. Other plugins need nothing unpacked.
+pub fn unpack(bytes: &[u8], pkg: &mut Package) -> Result<(), String> {
+    if pkg.manifest.runtime != Runtime::Process {
+        return Ok(());
+    }
+    let target = unpacked_dir(&pkg.manifest.id).ok_or("there is no folder for plugins")?;
+    if std::fs::read_to_string(target.join(UNPACKED_FROM)).is_ok_and(|s| s.trim() == pkg.sha256) {
+        pkg.dir = Some(target);
+        return Ok(());
+    }
+    let parent = target.parent().ok_or("there is no folder for plugins")?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    // Unpacked beside it, then swapped in: a failure leaves the old copy (or nothing).
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let tmp = parent.join(format!(".{}-{nanos}", pkg.manifest.id));
+    let res = extract(bytes, &tmp).and_then(|_| {
+        rustgis_data::io::write_atomic(&tmp.join(UNPACKED_FROM), pkg.sha256.as_bytes()).map_err(|e| e.to_string())?;
+        if target.exists() {
+            std::fs::remove_dir_all(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+        }
+        std::fs::rename(&tmp, &target).map_err(|e| format!("{}: {e}", target.display()))
+    });
+    if res.is_err() {
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+    res?;
+    pkg.dir = Some(target);
+    Ok(())
+}
+
+/// Writes a package's files (those under its `plugin.json`'s folder) into `to`: only paths
+/// inside it, at most [`MAX_UNPACKED`] in all, keeping Unix file modes (executables).
+fn extract(bytes: &[u8], to: &Path) -> Result<(), String> {
+    use std::io::Read;
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("not a plugin package: {e}"))?;
+    let root = crate::package::root_of(&zip)?;
+    std::fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    let mut total = 0u64;
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
+        // `enclosed_name` refuses absolute paths and `..`: nothing lands outside `to`.
+        let Some(name) = f.enclosed_name() else { return Err(format!("the package has an unsafe path: {}", f.name())) };
+        let Ok(rel) = name.strip_prefix(&root) else { continue };
+        if rel.as_os_str().is_empty() {
+            continue;
+        }
+        let path = to.join(rel);
+        if f.is_dir() {
+            std::fs::create_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            continue;
+        }
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        }
+        let mut out = std::fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        // Counted as written, not as the archive claims.
+        let n = std::io::copy(&mut (&mut f).take(MAX_UNPACKED - total + 1), &mut out).map_err(|e| format!("{}: {e}", path.display()))?;
+        total += n;
+        if total > MAX_UNPACKED {
+            return Err(format!("the package unpacks to more than {} MB", MAX_UNPACKED / (1024 * 1024)));
+        }
+        #[cfg(unix)]
+        if let Some(mode) = f.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            // The owner can always read and write; others' bits as packed, never set-id.
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode((mode & 0o777) | 0o600));
+        }
+    }
+    Ok(())
+}
+
 /// Installs a package's bytes: checks it, copies it into the plugins folder (replacing an
 /// older copy) and loads it.
 pub fn install_bytes(bytes: &[u8]) -> Result<Arc<Plugin>, String> {
-    let pkg = Package::from_zip(bytes)?;
+    let mut pkg = Package::from_zip(bytes)?;
+    unpack(bytes, &mut pkg)?;
     let dir = dir().ok_or("there is no folder for plugins")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join(format!("{}.rgplugin", pkg.manifest.id));
@@ -154,6 +253,9 @@ pub fn uninstall(id: &str) -> Result<(), String> {
         let path = d.join(format!("{id}.rgplugin"));
         if path.is_file() && path.display().to_string() == plugin.source {
             std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            if let Some(unpacked) = unpacked_dir(id).filter(|u| u.is_dir()) {
+                std::fs::remove_dir_all(&unpacked).map_err(|e| format!("{}: {e}", unpacked.display()))?;
+            }
         }
     }
     Ok(())

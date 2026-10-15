@@ -778,6 +778,7 @@ Import Thumbnail	Импорт эскиза
 Import Web Tool	Импорт веб-инструмента
 In Beyond	Вкл. за пределами
 In Progress	Выполняется
+In RustGIS, it can:	В RustGIS он может:
 in progress	выполняется
 In project	В проекте
 In use	Используется
@@ -813,6 +814,7 @@ Invert	Инвертировать
 Invert color scheme	Инвертировать цветовую схему
 Invert the selection.	Инвертировать выборку.
 IS NULL	IS NULL
+It runs: {program}	Запускает: {program}
 it connects to an address on the internet	подключается к адресу в интернете
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	доступно только вам (модули, скрипты, задачи, модели и средство запуска GeoLibre)
 it reads or writes files on this computer	читает или записывает файлы на этом компьютере
@@ -1071,6 +1073,7 @@ None. Add one by address, or from a basemap plugin.	Нет. Добавьте с�
 North	Север
 North\nArrow	Стрелка\nсевера
 North Polar Stereographic	Северная полярная стереографическая
+Not sandboxed	Без песочницы
 not a RustGIS layout	не макет RustGIS
 not needed	не требуется
 Not saved yet	Ещё не сохранено
@@ -1202,6 +1205,7 @@ PMTiles archive	Архив PMTiles
 PMTiles File…	Файл PMTiles…
 PNG frames (zip)	Кадры PNG (zip)
 PNG image	Изображение PNG
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	Модули с пометкой «Без песочницы» работают как программы на вашем компьютере и могут всё, что можете вы.
 Point	Точка
 Points	Точки
 points each	точек в каждом
@@ -1641,6 +1645,7 @@ Text	Текст
 Text Symbol	Текстовый символ
 The assistant is busy; stop it or wait for it to finish.	Помощник занят; остановите его или дождитесь завершения.
 The assistant wants to run this, and {why}:	Помощник хочет выполнить следующее, но это действие {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Этот модуль работает как программа на вашем компьютере, вне песочницы RustGIS. Он может всё, что можете вы: читать и изменять ваши файлы, использовать сеть и запускать другие программы. Устанавливайте его, только если доверяете автору.
 the capture failed unexpectedly	снимок неожиданно завершился ошибкой
 the Help tab always shows	вкладка «Справка» отображается всегда
 The job covers the map view	Задание охватывает вид карты
@@ -1855,6 +1860,7 @@ Zoom to Tokyo	Приблизить к Токио
 Zoom To World	Приблизить к миру
 {id} changed since it was installed; install it again from the Plugin Manager.	Модуль {id} изменился после установки; установите его заново через Менеджер модулей.
 {name} is larger than {mb} MB	{name} больше {mb} МБ
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} работает как программа на вашем компьютере: нужно настольное приложение или rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	Модуль {name} отозван из каталога модулей и отключён.
 {name} was withdrawn from the plugin registry: {reason}	Модуль {name} отозван из каталога модулей: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: загруженный файл не совпадает с данными каталога; модуль не установлен.

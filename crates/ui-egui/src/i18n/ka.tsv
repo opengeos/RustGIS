@@ -778,6 +778,7 @@ Import Thumbnail	მინიატურის იმპორტი
 Import Web Tool	ვებ ხელსაწყოს იმპორტი
 In Beyond	შორს, მის მიღმა
 In Progress	მიმდინარეობს
+In RustGIS, it can:	RustGIS-ში მას შეუძლია:
 in progress	მიმდინარეობს
 In project	პროექტში
 In use	გამოიყენება
@@ -813,6 +814,7 @@ Invert	ინვერსია
 Invert color scheme	ფერთა სქემის ინვერსია
 Invert the selection.	მონიშვნის ინვერსია.
 IS NULL	IS NULL
+It runs: {program}	ის უშვებს: {program}
 it connects to an address on the internet	ის უკავშირდება ინტერნეტის მისამართს
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	ის დაცულია თქვენთვის (დანამატები, სკრიპტები, დავალებები, მოდელები და GeoLibre-ის გამშვები)
 it reads or writes files on this computer	ის კითხულობს ან წერს ფაილებს ამ კომპიუტერში
@@ -1071,6 +1073,7 @@ None. Add one by address, or from a basemap plugin.	არცერთი. დ�
 North	ჩრდილოეთი
 North\nArrow	ჩრდილოეთის\nისარი
 North Polar Stereographic	ჩრდილოეთის პოლარული სტერეოგრაფიული
+Not sandboxed	იზოლაციის გარეშე
 not a RustGIS layout	ეს RustGIS-ის განლაგება არ არის
 not needed	საჭირო არ არის
 Not saved yet	ჯერ არ არის შენახული
@@ -1202,6 +1205,7 @@ PMTiles archive	PMTiles არქივი
 PMTiles File…	PMTiles ფაილი…
 PNG frames (zip)	PNG კადრები (zip)
 PNG image	PNG სურათი
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	„იზოლაციის გარეშე“ მონიშნული დანამატები სამაგიეროდ მუშაობს როგორც პროგრამები თქვენს კომპიუტერზე და შეუძლია ყველაფერი, რაც თქვენ შეგიძლიათ.
 Point	წერტილი
 Points	წერტილები
 points each	წერტილი თითოეულში
@@ -1641,6 +1645,7 @@ Text	ტექსტი
 Text Symbol	ტექსტის სიმბოლო
 The assistant is busy; stop it or wait for it to finish.	ასისტენტი დაკავებულია; შეაჩერეთ ან დაელოდეთ დასრულებას.
 The assistant wants to run this, and {why}:	ასისტენტს სურს ამის გაშვება და მიზეზი ასეთია: {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	ეს დანამატი მუშაობს როგორც პროგრამა თქვენს კომპიუტერზე, RustGIS-ის იზოლირებული გარემოს გარეთ. მას შეუძლია ყველაფერი, რაც თქვენ შეგიძლიათ: თქვენი ფაილების წაკითხვა და შეცვლა, ქსელის გამოყენება და სხვა პროგრამების გაშვება. დააინსტალირეთ მხოლოდ მაშინ, თუ მის ავტორს ენდობით.
 the capture failed unexpectedly	გადაღება მოულოდნელად ჩავარდა
 the Help tab always shows	დახმარების ჩანართი ყოველთვის ჩანს
 The job covers the map view	სამუშაო მოიცავს რუკის ხედს
@@ -1855,6 +1860,7 @@ Zoom to Tokyo	გადიდება ტოკიოზე
 Zoom To World	გადიდება მსოფლიოზე
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} შეიცვალა ინსტალაციის შემდეგ; დააყენეთ ხელახლა დანამატების მენეჯერიდან.
 {name} is larger than {mb} MB	{name} {mb} მბ-ზე დიდია
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} მუშაობს როგორც პროგრამა თქვენს კომპიუტერზე: საჭიროა დესკტოპ აპლიკაცია ან rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} დანამატების რეესტრიდან გაუქმდა და გამორთულია.
 {name} was withdrawn from the plugin registry: {reason}	{name} დანამატების რეესტრიდან გაუქმდა: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: ჩამოტვირთული რეესტრს არ ემთხვევა; არ დაყენებულა.

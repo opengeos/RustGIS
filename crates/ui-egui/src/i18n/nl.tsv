@@ -778,6 +778,7 @@ Import Thumbnail	Miniatuur importeren
 Import Web Tool	Webtool importeren
 In Beyond	Ingezoomd voorbij
 In Progress	Bezig
+In RustGIS, it can:	In RustGIS kan hij:
 in progress	bezig
 In project	In project
 In use	In gebruik
@@ -813,6 +814,7 @@ Invert	Omkeren
 Invert color scheme	Kleurenschema omkeren
 Invert the selection.	De selectie omkeren.
 IS NULL	IS NULL
+It runs: {program}	Hij voert uit: {program}
 it connects to an address on the internet	het maakt verbinding met een adres op internet
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	het is aan jou voorbehouden (plugins, scripts, taken, modellen en de GeoLibre-runner)
 it reads or writes files on this computer	het leest of schrijft bestanden op deze computer
@@ -1071,6 +1073,7 @@ None. Add one by address, or from a basemap plugin.	Geen. Voeg er een toe via ee
 North	Noord
 North\nArrow	Noord-\npijl
 North Polar Stereographic	Polair stereografisch noord
+Not sandboxed	Niet in sandbox
 not a RustGIS layout	geen RustGIS-lay-out
 not needed	niet nodig
 Not saved yet	Nog niet opgeslagen
@@ -1202,6 +1205,7 @@ PMTiles archive	PMTiles-archief
 PMTiles File…	PMTiles-bestand…
 PNG frames (zip)	PNG-frames (zip)
 PNG image	PNG-afbeelding
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	Plugins met het label 'Niet in sandbox' draaien in plaats daarvan als programma's op je computer en kunnen alles wat jij kunt.
 Point	Punt
 Points	Punten
 points each	punten elk
@@ -1641,6 +1645,7 @@ Text	Tekst
 Text Symbol	Tekstsymbool
 The assistant is busy; stop it or wait for it to finish.	De assistent is bezig; stop hem of wacht tot hij klaar is.
 The assistant wants to run this, and {why}:	De assistent wil het volgende uitvoeren, en {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Deze plugin draait als programma op je computer, buiten de sandbox van RustGIS. Hij kan alles wat jij kunt: je bestanden lezen en wijzigen, het netwerk gebruiken en andere programma's starten. Installeer hem alleen als je de maker vertrouwt.
 the capture failed unexpectedly	het vastleggen is onverwacht mislukt
 the Help tab always shows	het tabblad Help wordt altijd getoond
 The job covers the map view	De job beslaat de kaartweergave
@@ -1855,6 +1860,7 @@ Zoom to Tokyo	Zoomen naar Tokio
 Zoom To World	Zoomen naar wereld
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} is gewijzigd sinds de installatie; installeer het opnieuw via Pluginbeheer.
 {name} is larger than {mb} MB	{name} is groter dan {mb} MB
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} draait als programma op je computer: daarvoor is de desktopapp of rustgis-cli nodig.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} is uit het pluginregister teruggetrokken en is uitgeschakeld.
 {name} was withdrawn from the plugin registry: {reason}	{name} is uit het pluginregister teruggetrokken: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: de download komt niet overeen met het register; de plugin is niet geïnstalleerd.

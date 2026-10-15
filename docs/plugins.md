@@ -63,6 +63,9 @@ described below, and RustGIS checks each one:
 - No plugin may run the user's scripts, tasks or models, install or locate other software,
   manage plugins, replace the project, or step through undo history.
 
+A [process plugin](#process-plugins) is the exception: it is a program on your computer, not
+sandboxed, and the install prompt says so.
+
 The install prompt lists these permissions. Each call has a fuel budget, so a plugin stuck in a
 loop is stopped. Memory is capped at 512 MB, and requests and replies are size-limited. A plugin
 that traps, panics or returns garbage produces an error message, never a crash.
@@ -280,6 +283,95 @@ value is `{"layers": [{"name", "geojson"}], "tables": [...], "selection": {"laye
 
 Each call gets a fresh instance, so a module keeps no state between calls and need not free
 memory. The fuel budget is about 2×10⁹ instructions for a command and 4×10¹⁰ for a tool.
+
+## Process plugins
+
+A process plugin is a program on your computer instead of a WebAssembly module: a Python script,
+or an executable in any language. It can use the file system, threads and any library, which
+lets existing analysis code (numpy, xarray, GDAL…) become a plugin without a rewrite. It is **not
+sandboxed**: it can do anything you can. The install prompt says so, and the Plugin Manager
+marks it *Not sandboxed*. Process plugins run on the desktop and the command line, not in the
+web app.
+
+```json
+{
+  "id": "hello-python",
+  "name": "Hello Python",
+  "version": "0.1.0",
+  "runtime": "process",
+  "run": { "windows": ["python", "main.py"], "default": ["python3", "main.py"] },
+  "permissions": [],
+  "commands": [{ "id": "layer-count", "label": "Count\nLayers" }],
+  "tools": [{
+    "id": "feature-count", "name": "Count Features", "summary": "Counts a layer's features.",
+    "params": [{ "name": "input", "label": "Input layer", "kind": "vectorLayer", "required": true }]
+  }]
+}
+```
+
+- `"runtime": "process"` and `run`: the program and its arguments, started in the plugin's
+  folder. A bare name (`python3`) is looked up on `PATH`; a relative path (`bin/tool`) is in the
+  plugin's folder. `run` can name a program per platform (`windows`, `macos`, `linux`, and
+  `default` for the rest). There is no `entry`.
+- Commands, tools, tabs, translations and permissions work as for WebAssembly plugins.
+  Permissions still decide which host requests RustGIS answers, but they don't limit what the
+  program itself can do.
+- A `.rgplugin` holds the plugin's files (the manifest, scripts, executables). Installing it
+  unpacks them to `unpacked/<id>/` in the plugins folder, keeping executables executable. A
+  plugin folder installed for development (Plugin Manager › Settings, or
+  `rustgis-cli plugins install ./folder`) runs where it is.
+
+### The protocol
+
+Each command or tool call starts the program once. It speaks the [ABI](#the-abi-version-1)'s
+requests and replies over its standard input and output, one JSON object per line:
+
+1. RustGIS writes the request: `{"abi", "kind", "id", "params", "layers", "files", "lang"}`, as
+   a WebAssembly module gets it.
+2. The program writes lines:
+   - `{"call": {"op": "...", "params": {...}}}`: a [host request](#what-a-plugin-can-ask-for).
+     RustGIS answers with one line, `{"ok": value}` or `{"error": "text"}`.
+   - `{"log": "text"}`: a line for the log (and a tool's run messages).
+   - Last, `{"ok": value}` or `{"error": "text"}`: the result.
+3. RustGIS then closes the program's input; a program still running a few seconds later is
+   stopped.
+
+Output lines that aren't JSON objects are logged and skipped, since libraries print, and so is
+the program's error output. A command is stopped after 2 minutes; a tool runs until it finishes.
+While it runs, RustGIS waits for it.
+
+The plugin above, in Python with no SDK:
+
+```python
+import json
+import sys
+
+
+def call(op, params):
+    """Sends a request to RustGIS and returns its answer."""
+    print(json.dumps({"call": {"op": op, "params": params}}), flush=True)
+    reply = json.loads(sys.stdin.readline())
+    if "error" in reply:
+        raise RuntimeError(reply["error"])
+    return reply["ok"]
+
+
+req = json.loads(sys.stdin.readline())
+try:
+    if req["id"] == "layer-count":
+        n = len(call("host.layers", {}))
+        call("host.notify", {"text": f"The map has {n} layers."})
+        result = {"ok": {"layers": n}}
+    elif req["id"] == "feature-count":
+        layer = req["params"]["input"]
+        n = len(req["layers"][layer]["features"])
+        result = {"ok": {"layers": [], "messages": [f"{layer} has {n} features."]}}
+    else:
+        result = {"error": f"unknown command '{req['id']}'"}
+except Exception as e:
+    result = {"error": str(e)}
+print(json.dumps(result), flush=True)
+```
 
 ## Publishing a plugin
 

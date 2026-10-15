@@ -2126,6 +2126,37 @@ fn plugin_file_parameters_reach_files_and_stay_out_of_the_history() {
     rustgis_plugins::unload("eng-file-edit");
 }
 
+/// This test binary, started as the process test plugin, answers one request and exits.
+#[test]
+fn plugin_process_child() {
+    rustgis_plugins::testing::serve_if_child();
+}
+
+#[test]
+fn process_plugins_reach_the_project_like_modules() {
+    let mut s = world();
+    let dir = std::env::temp_dir().join(format!("rustgis-test-eng-process-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = rustgis_plugins::testing::child_run("tests::plugin_process_child");
+    let manifest = |perms: &[&str]| rustgis_plugins::testing::process_manifest("eng-proc", perms, &run);
+    std::fs::write(dir.join("plugin.json"), manifest(&["edit"])).unwrap();
+    rustgis_plugins::load(rustgis_plugins::Package::from_dir(&dir).unwrap(), "test").unwrap();
+    assert_eq!(s.run("plugin:eng-proc/h", &Value::Null).unwrap(), json!({"hello": "world"}));
+    // Its host requests go through the same checks, and its edits are one undo step.
+    let fc = json!({"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [3, 4]}}]});
+    forward(&mut s, "eng-proc", "host.addLayer", json!({"name": "From Process", "geojson": fc})).unwrap();
+    assert!(s.map().layer_by_name("From Process").is_some());
+    assert!(s.undo());
+    assert!(s.map().layer_by_name("From Process").is_none());
+    let e = forward(&mut s, "eng-proc", "layer.addData", json!({"path": "/etc/passwd"})).unwrap_err();
+    assert!(e.contains("'files' permission"), "{e}");
+    // Its tools run in the Geoprocessing pane.
+    s.run("gp.run", &json!({"tool": "plugin:eng-proc/m", "params": {"input": "Cities"}})).unwrap();
+    assert_eq!(s.map().layer_by_name("Made").map(|l| l.dataset.features.len()), Some(1));
+    rustgis_plugins::unload("eng-proc");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn plugins_install_and_uninstall_from_files() {
     isolate_plugins();

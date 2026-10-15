@@ -261,6 +261,13 @@ pub fn received(app: &mut RustGisApp, bytes: Vec<u8>, from: Option<Box<Entry>>) 
             }
         }
         let pkg = Package::from_zip(&bytes)?;
+        // The browser can't start programs.
+        if cfg!(target_arch = "wasm32") && pkg.manifest.runtime == rp::Runtime::Process {
+            return Err(crate::i18n::fmt(
+                "{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.",
+                &[("name", &pkg.manifest.name)],
+            ));
+        }
         if let Some(e) = &from
             && pkg.manifest.id != e.id
         {
@@ -452,8 +459,14 @@ fn chip(ui: &mut egui::Ui, t: &Tokens, text: &str, color: egui::Color32) {
         });
 }
 
-fn permissions(ui: &mut egui::Ui, t: &Tokens, perms: &[rp::Permission]) {
-    ui.horizontal_wrapped(|ui| permission_chips(ui, t, perms));
+fn permissions(ui: &mut egui::Ui, t: &Tokens, perms: &[rp::Permission], native: bool) {
+    ui.horizontal_wrapped(|ui| {
+        // A process plugin can do anything: said first, whatever its permissions.
+        if native {
+            chip(ui, t, tl!("Not sandboxed"), t.red);
+        }
+        permission_chips(ui, t, perms)
+    });
 }
 
 /// The permission chips, in the current layout (one line in a Browse row).
@@ -526,7 +539,7 @@ fn installed_tab(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
                 ui.label(egui::RichText::new(m.translate(lang, &m.description)).size(12.0));
             }
             ui.add_space(4.0);
-            permissions(ui, t, &m.permissions);
+            permissions(ui, t, &m.permissions, m.runtime == rp::Runtime::Process);
             let adds = crate::i18n::fmt(
                 "Commands on the Plugins tab: {commands} · Tools in the Tools pane: {tools}",
                 &[("commands", &m.commands.len().to_string()), ("tools", &m.tools.len().to_string())],
@@ -731,6 +744,10 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
             ))
             .size(11.5),
         );
+        ui.label(
+            egui::RichText::new(tl!("Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can."))
+                .size(11.5),
+        );
         if let Some(f) = folder {
             ui.label(
                 egui::RichText::new(crate::i18n::fmt("Installed plugins are kept in {folder}", &[("folder", &f)]))
@@ -766,17 +783,39 @@ fn confirm(app: &mut RustGisApp, ctx: &egui::Context, t: &Tokens) {
             ui.label(&m.description);
         }
         ui.add_space(8.0);
-        ui.label(egui::RichText::new(tl!("This plugin can:")).font(semibold(12.5)));
+        let native = m.runtime == rp::Runtime::Process;
+        if native {
+            // Not sandboxed: said first and plainly, with what it will run.
+            egui::Frame::NONE
+                .fill(t.red.gamma_multiply(0.12))
+                .stroke(Stroke::new(1.0, t.red))
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(egui::RichText::new(tl!("Not sandboxed")).font(semibold(12.5)).color(t.red));
+                    ui.label(tl!(
+                        "This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author."
+                    ));
+                    if let Some(argv) = m.run.as_ref().and_then(|r| r.for_this_platform()) {
+                        ui.label(egui::RichText::new(crate::i18n::fmt("It runs: {program}", &[("program", &argv.join(" "))])).monospace().size(11.5));
+                    }
+                });
+            ui.add_space(6.0);
+        }
+        ui.label(egui::RichText::new(if native { tl!("In RustGIS, it can:") } else { tl!("This plugin can:") }).font(semibold(12.5)));
         ui.label(format!("• {}", tl!("Read the map's layers and features")));
         for p in &m.permissions {
             ui.label(format!("• {}", tl!(p.describe())));
         }
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(tl!("It runs in a sandbox with no other access to your computer or the network."))
-                .size(11.5)
-                .color(t.text_dim),
-        );
+        if !native {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(tl!("It runs in a sandbox with no other access to your computer or the network."))
+                    .size(11.5)
+                    .color(t.text_dim),
+            );
+        }
         ui.add_space(10.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
             if crate::widgets::primary_button(ui, tl!("Install"), true, vec2(88.0, 28.0)).clicked() {
