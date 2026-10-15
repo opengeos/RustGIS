@@ -885,6 +885,12 @@ fn start_plugin_run(app: &mut RustGisApp, tool: &'static str, params: &Value, ct
 /// Applies a plugin tool run that finished on its thread.
 pub fn poll_plugin_run(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(job) = &app.gp.plugin_run else { return };
+    // Its project was closed: stop it, as its result has nowhere to go.
+    if !rustgis_engine::cmd::gp::plugin_waiting(&app.session, job.id) {
+        job.control.cancel();
+        app.gp.plugin_run = None;
+        return;
+    }
     let Some(result) = take(&job.slot) else {
         // Its progress line changes as it logs.
         ctx.request_repaint_after(std::time::Duration::from_millis(250));

@@ -637,6 +637,7 @@ impl Session {
         self.pending.clear();
         #[cfg(feature = "geolibre")]
         self.started.clear();
+        self.plugin_runs.clear();
         self.downloading.clear();
         self.downloaded.clear();
         #[cfg(not(target_arch = "wasm32"))]

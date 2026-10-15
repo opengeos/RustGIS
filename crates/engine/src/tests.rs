@@ -2146,6 +2146,14 @@ fn plugin_tools_run_off_the_session() {
     assert!(plugin_start(&mut s, "buffer", &json!({"input": "Cities"})).err().unwrap().contains("no plugin tool"));
     assert!(plugin_complete(&mut s, run.id, Err("late".into())).unwrap_err().contains("dropped"));
     assert!(crate::cmd::gp::is_plugin_tool("plugin:eng-bg/m") && !crate::cmd::gp::is_plugin_tool("buffer"));
+    // A run of a project closed while it ran doesn't land in the next one.
+    let run = plugin_start(&mut s, "plugin:eng-bg/m", &json!({"input": "Cities"})).unwrap();
+    assert!(crate::cmd::gp::plugin_waiting(&s, run.id));
+    s.run("project.new", &Value::Null).unwrap();
+    assert!(!crate::cmd::gp::plugin_waiting(&s, run.id));
+    let r = run.run(&Control::default());
+    assert!(plugin_complete(&mut s, run.id, r).unwrap_err().contains("dropped"));
+    assert!(s.run("gp.finish", &json!({"id": run.id})).is_err() && s.map().layer_by_name("Made").is_none());
     rustgis_plugins::unload("eng-bg");
 }
 

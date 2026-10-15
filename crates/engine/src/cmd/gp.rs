@@ -297,6 +297,12 @@ pub fn plugin_start(s: &mut Session, tool: &str, params: &Value) -> Result<Plugi
     Ok(PluginRun { id, tool: spec.id, job })
 }
 
+/// Whether a run from [`plugin_start`] still waits for its result: opening or creating a
+/// project drops the runs of the previous one.
+pub fn plugin_waiting(s: &Session, id: u64) -> bool {
+    s.plugin_runs.iter().any(|r| r.id == id)
+}
+
 /// Finishes a run from [`plugin_start`] with what [`PluginRun::run`] returned: `gp.finish
 /// {"id"}` then applies it like `gp.run` would, with undo and history.
 pub fn plugin_complete(s: &mut Session, id: u64, result: Result<rustgis_analysis::ToolResult, String>) -> Result<(), String> {
