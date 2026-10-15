@@ -238,10 +238,22 @@ pub fn prepare(id: &str, progress: &mut dyn FnMut(&str)) -> Result<PathBuf, Stri
     if check.ready() {
         return Ok(python_in(&check.env));
     }
-    let want = check.made_for()?;
-    let uv = uv(progress)?;
     let parent = check.env.parent().ok_or("there is no folder for plugins")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    // One at a time per plugin, across processes too (the app and rustgis-cli): an OS file
+    // lock, which the OS releases if its holder dies. Whoever waited finds the environment the
+    // other made, and is done.
+    let lock_path = parent.join(format!(".{id}.lock"));
+    let lock = std::fs::File::create(&lock_path).map_err(|e| format!("{}: {e}", lock_path.display()))?;
+    if lock.try_lock().is_err() {
+        progress("Waiting for another preparation of this environment to finish");
+        lock.lock().map_err(|e| format!("{}: {e}", lock_path.display()))?;
+    }
+    if check.ready() {
+        return Ok(python_in(&check.env));
+    }
+    let want = check.made_for()?;
+    let uv = uv(progress)?;
     // Made beside it, then swapped in: a failure leaves the old environment (or none).
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let tmp = parent.join(format!(".{id}-{nanos}"));

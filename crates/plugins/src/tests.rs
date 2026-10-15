@@ -634,3 +634,41 @@ fn python_environments_are_made() {
     crate::unload("pyenv-made");
     let _ = std::fs::remove_dir_all(&plugins);
 }
+
+/// Two preparations of one environment at once (the app and rustgis-cli): the second waits for
+/// the first and finds its environment (network; run by hand with `--ignored`).
+#[test]
+#[ignore]
+fn python_environments_are_prepared_one_at_a_time() {
+    let plugins = std::env::temp_dir().join(format!("rustgis-test-pyenv-lock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&plugins);
+    let _store = store_lock();
+    crate::store::set_dir(Some(plugins.clone()));
+    let dir = plugins.join("src");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut m: Value = serde_json::from_str(&testing::manifest("pyenv-lock", &[])).unwrap();
+    m["runtime"] = json!("process");
+    m["run"] = json!(["python", "main.py"]);
+    m["python"] = json!({"version": "3.12"});
+    std::fs::write(dir.join("plugin.json"), m.to_string()).unwrap();
+    crate::load(Package::from_dir(&dir).unwrap(), "test").unwrap();
+    let runs: Vec<_> = (0..2)
+        .map(|_| {
+            std::thread::spawn(|| {
+                let mut said = Vec::new();
+                let r = crate::pyenv::prepare("pyenv-lock", &mut |l| said.push(l.to_string()));
+                (r, said)
+            })
+        })
+        .collect();
+    let results: Vec<_> = runs.into_iter().map(|t| t.join().unwrap()).collect();
+    for (r, said) in &results {
+        assert!(r.as_ref().is_ok_and(|p| p.is_file()), "{r:?} {said:?}");
+    }
+    // Exactly one of them made it; the other waited and found it.
+    let made = results.iter().filter(|(_, said)| said.iter().any(|l| l.starts_with("Installing Python"))).count();
+    assert_eq!(made, 1, "{:?}", results.iter().map(|(_, s)| s).collect::<Vec<_>>());
+    assert_eq!(crate::pyenv::status("pyenv-lock"), Some(true));
+    crate::unload("pyenv-lock");
+    let _ = std::fs::remove_dir_all(&plugins);
+}
