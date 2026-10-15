@@ -359,6 +359,11 @@ view holds more than 250,000 features (100,000 in the web app), the layer draws 
 sample of them and its tooltip in Layers says so: zoom in to see them all. Smaller files load
 whole; `layer.addData` with `"stream": true` or `false` overrides the choice.
 
+On the desktop, a GeoJSON FeatureCollection larger than 32 MB is read the same way, with no size
+limit: opening reads the file once, keeping each feature's place in it and its bounding box (a
+file over 256 MB through a buffer, so it is never held whole), and each view parses just the
+features it shows. A single feature, a bare geometry or TopoJSON is loaded whole.
+
 A streamed layer works like any other for symbology, labels, pop-ups, selection and the
 attribute table (which lists the features read for the view). Geoprocessing tools read the whole
 file. Edits are refused, since the features are read again as the view moves: right-click the

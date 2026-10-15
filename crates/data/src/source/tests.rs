@@ -929,3 +929,84 @@ fn shapefile_in_place_keeps_large_whole_numbers_exact() {
     let got: Vec<Value> = src.read(&Request::all()).unwrap().features.into_iter().map(|f| f.attrs[0].clone()).collect();
     assert_eq!(got, vec![Value::Int(123_456_789_012_345_678), Value::Int(-98_765_432_109_876_543), Value::Float(12.5)]);
 }
+
+#[test]
+fn geojson_read_in_place() {
+    let mut ds =
+        Dataset::new("grid", GeometryType::Point, vec![Field::new("name", FieldType::Text), Field::new("value", FieldType::Integer)]);
+    for (c, name, v) in points() {
+        ds.push(Some(Geometry::Point(c)), vec![Value::Text(name), Value::Int(v)]);
+    }
+    let p = dir().join("grid.geojson");
+    crate::io::write_path(&ds, &p).unwrap();
+    let src = open_path(&p, None).unwrap();
+    assert_eq!(src.info().format, "GeoJSON");
+    check(src.as_ref(), false);
+}
+
+#[test]
+fn geojson_in_place_matches_one_read_whole() {
+    let d = dir().join("geojson-whole");
+    std::fs::create_dir_all(&d).unwrap();
+    // Types widened over features, a feature with geometry that can't be read (its properties
+    // still count), one without geometry, mixed kinds, nested values and repeated keys.
+    let mixed = r#"{"features":[
+        {"type":"Feature","properties":{"a":1,"b":null,"n":{"x":[1,2]}},"geometry":{"type":"Point","coordinates":[1,2]}},
+        {"type":"Feature","properties":{"a":2.5,"c":"x"},"geometry":{"type":"Nope"}},
+        {"type":"Feature","properties":{"c":true,"d":null},"geometry":null},
+        {"type":"Feature","properties":{"a":3},"geometry":{"type":"Polygon","coordinates":[[[0,0],[4,0],[4,4],[0,0]],[[1,1],[2,1],[2,2],[1,1]]]}},
+        {"type":"Feature","properties":{"b":"t"},"geometry":{"type":"MultiLineString","coordinates":[[[0,0],[1,1]],[[5,5],[6,7]]]}},
+        null,
+        {"type":"Feature","properties":{},"geometry":{"type":"MultiPoint","coordinates":[[9,9],[8,8]]}}
+    ],"type":"FeatureCollection","name":"m"}"#;
+    let docs = [("mixed.geojson", mixed.to_string()), ("parcels.json", crate::io::to_geojson(&export_sample()).to_string())];
+    for ((file, text), in_memory) in docs.iter().flat_map(|d| [(d, crate::io::MAX_BYTES), (d, 0)]) {
+        let p = d.join(file);
+        std::fs::write(&p, text).unwrap();
+        let (whole, whole_report) = crate::io::read_geojson(text, "x").unwrap();
+        // Scanned in memory, and through a buffer, as a file too large to hold is.
+        let src = geojson::GeoJsonSource::open_with(&p, "x", in_memory).unwrap();
+        let (inplace, report) = materialize(&src).unwrap();
+        assert_eq!(inplace.fields, whole.fields, "{file}");
+        assert_eq!(inplace.geometry_type, whole.geometry_type, "{file}");
+        assert_eq!(inplace.features, whole.features, "{file}");
+        assert_eq!(report.messages.len(), whole_report.messages.len(), "{file}: {:?}", report.messages);
+        // Extent reads skip features without geometry, and find each by its box.
+        let b = src.read(&Request { extent: Some(Extent::new(0.5, 0.5, 1.5, 2.5)), limit: 100 }).unwrap();
+        assert!(b.features.iter().all(|f| f.geometry.is_some()), "{file}");
+    }
+    // Not a FeatureCollection, or not GeoJSON: not read in place.
+    for (file, text) in [
+        ("one.geojson", r#"{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}"#),
+        ("bare.geojson", r#"{"type":"Point","coordinates":[1,2]}"#),
+        ("topo.json", r#"{"type":"Topology","objects":{},"arcs":[]}"#),
+        ("list.json", "[1, 2]"),
+        ("trailing.geojson", r#"{"type":"FeatureCollection","features":[]} {"#),
+    ] {
+        let p = d.join(file);
+        std::fs::write(&p, text).unwrap();
+        assert!(open_path(&p, None).is_err() && geojson::GeoJsonSource::open_with(&p, "x", 0).is_err(), "{file}");
+    }
+}
+
+#[test]
+fn damaged_geojson_is_an_error_not_a_panic() {
+    let d = dir().join("geojson-junk");
+    std::fs::create_dir_all(&d).unwrap();
+    let text = crate::io::to_geojson(&export_sample()).to_string();
+    let p = d.join("cut.geojson");
+    for n in 0..text.len() {
+        std::fs::write(&p, &text.as_bytes()[..n]).unwrap();
+        for in_memory in [crate::io::MAX_BYTES, 0] {
+            if let Ok(s) = geojson::GeoJsonSource::open_with(&p, "x", in_memory) {
+                let _ = s.read(&Request::all());
+            }
+        }
+    }
+    // A file that changes after it's opened: features are skipped, not misread or a panic.
+    std::fs::write(&p, &text).unwrap();
+    let src = open_path(&p, None).unwrap();
+    std::fs::write(&p, &text.as_bytes()[..text.len() / 2]).unwrap();
+    let b = src.read(&Request::all()).unwrap();
+    assert!(b.skipped > 0);
+}
