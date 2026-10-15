@@ -774,25 +774,37 @@ fn popup_modes_choose_what_identify_reports() {
 fn identify_reports_every_overlapping_feature() {
     use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
     let mut s = world();
-    // Two buoys on one spot of the South Atlantic, far from any country.
+    // Two buoys on one spot of the South Atlantic, far from any country, under a float.
+    let spot = || Some(Geometry::Point(rustgis_geom::Coord::new(-20.0, -30.0)));
     let mut d = Dataset::new("Buoys", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
     for n in [1, 2] {
-        d.push(Some(Geometry::Point(rustgis_geom::Coord::new(-20.0, -30.0))), vec![V::Int(n)]);
+        d.push(spot(), vec![V::Int(n)]);
     }
-    let id = s.map_mut().add_dataset(d);
+    let id = u64::from(s.map_mut().add_dataset(d));
+    let mut d = Dataset::new("Floats", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
+    d.push(spot(), vec![V::Int(1)]);
+    let float = u64::from(s.map_mut().add_dataset(d));
     let at = json!({"lon": -20.0, "lat": -30.0, "tolerancePx": 5});
     let rows = |v: &Value| {
         v["results"].as_array().unwrap().iter().map(|r| (r["layerId"].as_u64().unwrap(), r["row"].as_u64().unwrap())).collect::<Vec<_>>()
     };
-    // Both, the one drawn on top first, in the default (topmost layer) mode too (#232).
+    // Topmost: every feature of the top layer with one; both buoys, the one drawn on top first (#232).
+    assert_eq!(rows(&s.run("identify", &at).unwrap()), [(float, 0)]);
+    s.run("layer.visibility", &json!({"layer": "Floats", "visible": false})).unwrap();
     let top = s.run("identify", &at).unwrap();
-    assert_eq!(rows(&top), [(u64::from(id), 1), (u64::from(id), 0)]);
+    assert_eq!(rows(&top), [(id, 1), (id, 0)]);
     assert_eq!(top["row"], 1);
+    s.run("layer.visibility", &json!({"layer": "Floats", "visible": true})).unwrap();
     s.run("map.popupMode", &json!({"mode": "visible"})).unwrap();
-    assert_eq!(rows(&s.run("identify", &at).unwrap()), [(u64::from(id), 1), (u64::from(id), 0)]);
+    assert_eq!(rows(&s.run("identify", &at).unwrap()), [(float, 0), (id, 1), (id, 0)]);
+    // Selectable: every selectable layer, not only the top one.
+    s.run("map.popupMode", &json!({"mode": "selectable"})).unwrap();
+    assert_eq!(rows(&s.run("identify", &at).unwrap()), [(float, 0), (id, 1), (id, 0)]);
+    s.run("layer.selectable", &json!({"layer": "Floats", "on": false})).unwrap();
+    assert_eq!(rows(&s.run("identify", &at).unwrap()), [(id, 1), (id, 0)]);
     // A definition query hides one.
     s.run("layer.definitionQuery", &json!({"layer": "Buoys", "where": "n = 1"})).unwrap();
-    assert_eq!(rows(&s.run("identify", &at).unwrap()), [(u64::from(id), 0)]);
+    assert_eq!(rows(&s.run("identify", &at).unwrap()), [(id, 0)]);
 }
 
 #[test]

@@ -474,7 +474,7 @@ pub enum PopupMode {
     Topmost,
     /// Every visible layer's feature under the pointer.
     Visible,
-    /// The topmost feature of a selectable layer.
+    /// Every selectable layer's features under the pointer.
     Selectable,
     /// Only the layer selected in the Layers pane.
     SelectedInContents,
@@ -774,12 +774,21 @@ impl Map {
     }
 
     /// Every feature under a point in the visible layers `keep` accepts: top layer first and, in
-    /// a layer, the one drawn on top first. At most `limit` of them.
-    pub fn hits_at(&mut self, p: Coord, tol: f64, scale: f64, keep: impl Fn(&Layer) -> bool, limit: usize) -> Vec<(u32, usize)> {
+    /// a layer, the one drawn on top first. At most `limit` of them; with `first_layer`, only
+    /// those of the top layer with any.
+    pub fn hits_at(
+        &mut self,
+        p: Coord,
+        tol: f64,
+        scale: f64,
+        keep: impl Fn(&Layer) -> bool,
+        first_layer: bool,
+        limit: usize,
+    ) -> Vec<(u32, usize)> {
         let (flat, key) = (self.flat(), self.projection.code());
         let mut out = Vec::new();
         for l in &mut self.layers {
-            if out.len() >= limit {
+            if out.len() >= limit || (first_layer && !out.is_empty()) {
                 break;
             }
             if !l.visible || !l.in_scale_range(scale) || !keep(l) {
@@ -861,13 +870,16 @@ mod tests {
         let above = m.add_dataset(points());
         let p = lonlat_to_merc(Coord::new(0.0, 0.0));
         // Top layer first; in a layer, the feature drawn last (on top) first.
-        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, 100), vec![(above, 0), (below, 2), (below, 0)]);
-        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, 2), vec![(above, 0), (below, 2)]);
-        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, 100), vec![(below, 2), (below, 0)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 100), vec![(above, 0), (below, 2), (below, 0)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 2), vec![(above, 0), (below, 2)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, false, 100), vec![(below, 2), (below, 0)]);
+        // Only the top layer with a hit.
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, true, 100), vec![(above, 0)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, true, 100), vec![(below, 2), (below, 0)]);
         // Features the definition query hides aren't hit.
         if let Some(l) = m.layers.iter_mut().find(|l| l.id == below) {
             l.definition_query = Some("n = 1".into());
         }
-        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, 100), vec![(below, 0)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, false, 100), vec![(below, 0)]);
     }
 }

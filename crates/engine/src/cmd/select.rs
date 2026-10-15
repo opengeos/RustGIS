@@ -209,16 +209,14 @@ fn identify(s: &mut Session, p: &Value) -> CmdResult {
         PopupMode::SelectedInContents => Some(l.id) == active,
         _ => true,
     };
+    // Every feature under the click in the layers the mode takes; topmost stops at the first layer.
+    let first_layer = mode == PopupMode::Topmost;
     let hits = match s.map().to_map(Coord::new(lon, lat)) {
-        Some(pt) => s.map_mut().hits_at(pt, tol, scale, keep, MAX_IDENTIFIED),
+        Some(pt) => s.map_mut().hits_at(pt, tol, scale, keep, first_layer, MAX_IDENTIFIED),
         None => Vec::new(),
     };
     let map = s.map();
-    // Every feature under the click, of every layer or (topmost, selectable) of the top one.
-    let top = hits.first().map(|h| h.0);
-    let one_layer = matches!(mode, PopupMode::Topmost | PopupMode::Selectable);
-    let results: Vec<Value> =
-        hits.iter().filter(|(id, _)| !one_layer || Some(*id) == top).filter_map(|(id, row)| feature_json(map, *id, *row)).collect();
+    let results: Vec<Value> = hits.iter().filter_map(|(id, row)| feature_json(map, *id, *row)).collect();
     let Some(first) = results.first().cloned() else {
         // No feature: report the pixel of the topmost raster instead.
         if mode == PopupMode::SelectedInContents && active.and_then(|id| map.layer(id)).is_some_and(|l| !l.is_raster()) {
