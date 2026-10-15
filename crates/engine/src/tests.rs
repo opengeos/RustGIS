@@ -5328,3 +5328,63 @@ fn large_shapefiles_are_read_in_place() {
         }
     }
 }
+
+/// A PostGIS layer in a project names its connection without the password, and opening the
+/// project never sends the user's own credentials: a server that wants one is reported, with how
+/// to connect again.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn postgis_layers_reopen_without_secrets() {
+    // Nothing listens on port 1: the connection is refused at once.
+    let mut s = Session::new(Project::default());
+    let mut src: rustgis_map::source::SourceLayer = serde_json::from_value(json!({
+        "postgis": {"database": "postgres:host=127.0.0.1 port=1 dbname=gis user=me", "table": "roads", "family": "Lines"}
+    }))
+    .unwrap();
+    let e = src.open().unwrap_err();
+    assert!(e.contains("connect again with Add Data › Database"), "{e}");
+    assert!(!src.is_open());
+    // Saved again, it keeps its table and never a password.
+    let saved = serde_json::to_string(&src).unwrap();
+    assert!(saved.contains("\"table\":\"roads\"") && !saved.contains("password"), "{saved}");
+    // A connection that isn't there fails as an error, never a panic, and adds nothing.
+    let before = s.map().layers.len();
+    let e = s.run("layer.addDatabase", &json!({"database": "postgres:host=127.0.0.1 port=1 dbname=gis", "password": "pw"})).unwrap_err();
+    assert!(e.starts_with("gis: ") && !e.contains("pw"), "{e}");
+    let e = s.run("info.databaseTables", &json!({"database": "postgresql://u:pw@127.0.0.1:1/gis"})).unwrap_err();
+    assert!(!e.contains(":pw"), "{e}");
+    assert_eq!(s.map().layers.len(), before);
+}
+
+/// A live PostGIS database through the commands: `RUSTGIS_TEST_POSTGIS="postgres:host=… dbname=…
+/// user=… password=…"` names one with PostGIS's `us_cities`-style tables (any will do); every
+/// table is added, drawn, saved and opened again.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore]
+fn postgis_live_end_to_end() {
+    let Ok(dsn) = std::env::var("RUSTGIS_TEST_POSTGIS") else { return };
+    let mut s = Session::new(Project::default());
+    let listed = s.run("info.databaseTables", &json!({"database": dsn})).unwrap();
+    let names: Vec<String> = listed["layers"].as_array().unwrap().iter().filter_map(|v| v.as_str()).map(str::to_string).collect();
+    assert!(!names.is_empty());
+    let r = s.run("layer.addDatabase", &json!({"database": dsn, "layer": names[0]})).unwrap();
+    assert!(r["features"].as_u64().unwrap() > 0, "{r}");
+    // Streamed when asked: saved without its features or the password, read again when opened.
+    let r = s.run("layer.addDatabase", &json!({"database": dsn, "layer": names[0], "stream": true, "name": "live"})).unwrap();
+    assert_eq!(r["streamed"], true);
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).unwrap().source.as_ref().unwrap().postgis.is_some());
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-postgis-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("map.png");
+    s.run("share.exportMap", &json!({"path": png.display().to_string()})).unwrap();
+    assert!(std::fs::metadata(&png).unwrap().len() > 1000);
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(!text.contains("password"), "the project keeps no password");
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let l = t.map().layer_by_name("live").unwrap();
+    assert!(l.source.as_ref().unwrap().is_open(), "{:?}", l.source.as_ref().unwrap().error);
+    let _ = std::fs::remove_dir_all(&dir);
+}
