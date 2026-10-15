@@ -3886,6 +3886,7 @@ dependencies = [
  "log",
  "rustgis-analysis",
  "rustgis-data",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "sha2",

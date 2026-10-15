@@ -400,6 +400,19 @@ fn process_plugins_that_hang_are_stopped() {
     let req = json!({"abi": 1, "kind": "command", "id": "s", "params": {}, "lang": "en"});
     let e = crate::process::call(&spec, &mut Recorder::default(), &req, Some(std::time::Duration::from_secs(2))).unwrap_err();
     assert!(e.contains("too long") && t0.elapsed() < std::time::Duration::from_secs(20), "{e}");
+    // What it started is stopped with it: here, a copy of itself that never answers.
+    #[cfg(unix)]
+    {
+        let mut host = Recorder::default();
+        let req = json!({"abi": 1, "kind": "command", "id": "g", "params": {}, "lang": "en"});
+        assert!(crate::process::call(&spec, &mut host, &req, Some(std::time::Duration::from_secs(3))).is_err());
+        let pid = host.logs.first().and_then(|p| p.parse::<i32>().ok()).and_then(rustix::process::Pid::from_raw).unwrap();
+        let t0 = std::time::Instant::now();
+        while rustix::process::test_kill_process(pid).is_ok() && t0.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(rustix::process::test_kill_process(pid).is_err(), "the grandchild {pid:?} still runs");
+    }
     // A program that can't be started is an error too.
     let missing = crate::process::Spec::new(&["rustgis-no-such-program".to_string()], &dir).unwrap();
     assert!(crate::process::call(&missing, &mut Recorder::default(), &req, None).unwrap_err().contains("couldn't start"));
@@ -422,6 +435,13 @@ fn process_manifests_are_checked() {
     assert!(base(json!({"runtime": "process", "run": vec!["a"; 65]})).is_err());
     assert!(base(json!({"run": ["python3"]})).unwrap_err().contains("process plugins"));
     assert!(base(json!({"runtime": "native"})).is_err());
+    // A program by a relative path stays in the plugin's folder.
+    assert!(base(json!({"runtime": "process", "run": ["bin/tool"]})).is_ok());
+    for bad in ["../../bin/sh", "bin/../../x", "bin\\tool.exe", "./tool"] {
+        assert!(base(json!({"runtime": "process", "run": [bad]})).unwrap_err().contains("plugin's folder"), "{bad}");
+    }
+    let abs = if cfg!(windows) { "C:\\Python\\python.exe" } else { "/usr/bin/python3" };
+    assert!(base(json!({"runtime": "process", "run": [abs, "main.py"]})).is_ok());
     // By platform: this one's, else the default; none is an error when it's prepared.
     let m = base(json!({"runtime": "process", "run": {"windows": ["w"], "macos": ["m"], "linux": ["l"]}})).unwrap();
     let mine = if cfg!(windows) {
@@ -477,6 +497,14 @@ fn process_packages_unpack_safely() {
     let changed = zip(&[("plugin.json", manifest.as_bytes(), 0o644), ("data/b.txt", b"b", 0o644)]);
     crate::store::install_bytes(&changed).unwrap();
     assert!(dir.join("data/b.txt").is_file() && !dir.join("data/a.txt").exists());
+    // A package that can't run here is refused before it touches the installed copy.
+    let mut elsewhere: Value = serde_json::from_str(&manifest).unwrap();
+    elsewhere["run"] = json!({if cfg!(windows) { "linux" } else { "windows" }: ["x"]});
+    let elsewhere = zip(&[("plugin.json", elsewhere.to_string().as_bytes(), 0o644), ("data/c.txt", b"c", 0o644)]);
+    assert!(crate::store::install_bytes(&elsewhere).unwrap_err().contains("doesn't run on this platform"));
+    assert!(dir.join("data/b.txt").is_file() && !dir.join("data/c.txt").exists());
+    let p = crate::get("unpacked").unwrap();
+    assert_eq!(crate::call(&p, &mut Recorder::default(), &req, false).unwrap(), json!({"hello": "world"}));
     // Paths out of the folder are refused, and nothing is left behind.
     let evil = zip(&[("plugin.json", manifest.as_bytes(), 0o644), ("../evil.txt", b"x", 0o644)]);
     assert!(crate::store::install_bytes(&evil).unwrap_err().contains("unsafe path"));

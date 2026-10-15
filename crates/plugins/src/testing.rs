@@ -152,7 +152,9 @@ pub fn process_manifest(id: &str, permissions: &[&str], run: &[String]) -> Strin
 ///
 /// - `h` logs "hi" and returns `{"hello": "world"}`; `f` sends its params as a host request
 ///   and returns the reply; `e` fails with "nope"; `n` prints a line that isn't JSON first;
-///   `c` writes "boom" to its error output and exits without answering; `s` never answers.
+///   `c` writes "boom" to its error output and exits without answering; `s` never answers;
+///   `g` starts another copy of itself that never answers, logs its process id and never
+///   answers either.
 /// - Tools: `m` returns the layer "Made"; `x` selects rows 0 and 2 of "Cities"; `r` returns the
 ///   names of the files it was given as its messages.
 #[cfg(not(target_arch = "wasm32"))]
@@ -193,6 +195,27 @@ pub fn serve_if_child() {
         Some('s') => loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
         },
+        Some('g') => {
+            let argv = child_run(&std::env::args().nth(1).unwrap_or_default());
+            let spawned = argv.split_first().and_then(|(exe, args)| {
+                std::process::Command::new(exe)
+                    .args(args)
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
+                    .spawn()
+                    .ok()
+            });
+            if let Some(mut grandchild) = spawned {
+                if let Some(mut stdin) = grandchild.stdin.take() {
+                    let _ = writeln!(stdin, "{}", json!({"id": "s", "params": {}}));
+                }
+                let _ = writeln!(out, "{}", json!({"log": grandchild.id().to_string()}));
+                let _ = out.flush();
+            }
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        }
         Some('m') => json!({"ok": {"layers": [{"name": "Made", "geojson": {"type": "FeatureCollection", "features": [
             {"type": "Feature", "properties": {"n": 1}, "geometry": {"type": "Point", "coordinates": [1, 2]}}]}}], "messages": ["made"]}}),
         Some('x') => json!({"ok": {"selection": {"layer": "Cities", "rows": [0, 2]}}}),

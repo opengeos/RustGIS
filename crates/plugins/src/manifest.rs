@@ -410,6 +410,16 @@ impl Manifest {
                     {
                         return Err(format!("plugin.json: 'run' must be a program and at most {} arguments", MAX_RUN_ARGS - 1));
                     }
+                    // A program by a relative path is in the plugin's folder: no `..` out of it.
+                    if let Some(p) = argv.first()
+                        && p.contains(['/', '\\'])
+                        && !std::path::Path::new(p).is_absolute()
+                        && !valid_path(p)
+                    {
+                        return Err(format!(
+                            "plugin.json: 'run' names '{p}': a program in the plugin's folder (forward slashes, no '..'), one on PATH, or a full path"
+                        ));
+                    }
                 }
             }
         }

@@ -34,6 +34,8 @@ const MAX_LINE: usize = 256 * 1024 * 1024;
 const MAX_HOST_CALLS: u32 = 100_000;
 /// The most lines of its own output a program may log in one call.
 const MAX_LOGGED: usize = 200;
+/// The longest line of a program's error output kept (a longer one is split).
+const MAX_ERROR_LINE: usize = 64 * 1024;
 
 /// How to start a process plugin.
 #[derive(Clone, Debug)]
@@ -63,6 +65,13 @@ impl Spec {
     fn command(&self) -> Command {
         let mut c = Command::new(self.program_path());
         c.args(&self.args).current_dir(&self.dir).envs(self.env.iter().map(|(k, v)| (k, v)));
+        // A group of its own, so stopping it stops what it started too (workers, a wrapper's
+        // program), and their pipes close.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            c.process_group(0);
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -116,8 +125,15 @@ fn errors(err: impl Read + Send + 'static) -> Kept {
     let kept = Kept::default();
     let k = kept.clone();
     std::thread::spawn(move || {
-        for line in BufReader::new(err).lines() {
-            let Ok(line) = line else { break };
+        let mut r = BufReader::new(err);
+        loop {
+            // Bounded: endless output without a line end is read in pieces.
+            let mut buf = Vec::new();
+            match (&mut r).take(MAX_ERROR_LINE as u64).read_until(b'\n', &mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let line = String::from_utf8_lossy(&buf).trim_end().to_string();
             let Ok(mut k) = k.lock() else { break };
             k.push_back(line.chars().take(1_000).collect::<String>());
             if k.len() > 20 {
@@ -128,7 +144,7 @@ fn errors(err: impl Read + Send + 'static) -> Kept {
     kept
 }
 
-/// Stops the program if it hasn't exited on its own within `grace`.
+/// Stops the program, and what it started, if it hasn't exited on its own within `grace`.
 fn finish(child: &mut Child, grace: Duration) {
     let start = Instant::now();
     loop {
@@ -136,11 +152,33 @@ fn finish(child: &mut Child, grace: Duration) {
             Ok(Some(_)) => return,
             Ok(None) if start.elapsed() < grace => std::thread::sleep(Duration::from_millis(10)),
             _ => {
+                // Before the program is reaped, so its id (its group's) can't have been reused.
+                kill_tree(child);
                 let _ = child.kill();
                 let _ = child.wait();
                 return;
             }
         }
+    }
+}
+
+/// Stops the processes a program started: its process group (Unix), its process tree (Windows).
+fn kill_tree(child: &Child) {
+    #[cfg(unix)]
+    {
+        let _ = rustix::process::kill_process_group(rustix::process::Pid::from_child(child), rustix::process::Signal::KILL);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
     }
 }
 

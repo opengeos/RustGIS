@@ -135,28 +135,34 @@ pub fn unpack(bytes: &[u8], pkg: &mut Package) -> Result<(), String> {
         return Ok(());
     }
     let target = unpacked_dir(&pkg.manifest.id).ok_or("there is no folder for plugins")?;
-    if std::fs::read_to_string(target.join(UNPACKED_FROM)).is_ok_and(|s| s.trim() == pkg.sha256) {
-        pkg.dir = Some(target);
+    unpack_to(bytes, &pkg.sha256, &target)?;
+    pkg.dir = Some(target);
+    Ok(())
+}
+
+/// Unpacks a package to `target`, the folder a process plugin runs from, unless that copy is
+/// already there.
+fn unpack_to(bytes: &[u8], sha256: &str, target: &Path) -> Result<(), String> {
+    if std::fs::read_to_string(target.join(UNPACKED_FROM)).is_ok_and(|s| s.trim() == sha256) {
         return Ok(());
     }
     let parent = target.parent().ok_or("there is no folder for plugins")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     // Unpacked beside it, then swapped in: a failure leaves the old copy (or nothing).
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let tmp = parent.join(format!(".{}-{nanos}", pkg.manifest.id));
+    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = parent.join(format!(".{name}-{nanos}"));
     let res = extract(bytes, &tmp).and_then(|_| {
-        rustgis_data::io::write_atomic(&tmp.join(UNPACKED_FROM), pkg.sha256.as_bytes()).map_err(|e| e.to_string())?;
+        rustgis_data::io::write_atomic(&tmp.join(UNPACKED_FROM), sha256.as_bytes()).map_err(|e| e.to_string())?;
         if target.exists() {
-            std::fs::remove_dir_all(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+            std::fs::remove_dir_all(target).map_err(|e| format!("{}: {e}", target.display()))?;
         }
-        std::fs::rename(&tmp, &target).map_err(|e| format!("{}: {e}", target.display()))
+        std::fs::rename(&tmp, target).map_err(|e| format!("{}: {e}", target.display()))
     });
     if res.is_err() {
         let _ = std::fs::remove_dir_all(&tmp);
     }
-    res?;
-    pkg.dir = Some(target);
-    Ok(())
+    res
 }
 
 /// Writes a package's files (those under its `plugin.json`'s folder) into `to`: only paths
@@ -204,13 +210,23 @@ fn extract(bytes: &[u8], to: &Path) -> Result<(), String> {
 /// older copy) and loads it.
 pub fn install_bytes(bytes: &[u8]) -> Result<Arc<Plugin>, String> {
     let mut pkg = Package::from_zip(bytes)?;
-    unpack(bytes, &mut pkg)?;
+    // A process plugin is checked (blocklist, platform) before its files replace an installed
+    // copy's: a package that won't load leaves the old one working.
+    let unpack_into = match pkg.manifest.runtime {
+        Runtime::Process => Some(unpacked_dir(&pkg.manifest.id).ok_or("there is no folder for plugins")?),
+        Runtime::Wasm => None,
+    };
+    pkg.dir = unpack_into.clone();
+    let sha256 = pkg.sha256.clone();
     let dir = dir().ok_or("there is no folder for plugins")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join(format!("{}.rgplugin", pkg.manifest.id));
     // Check and compile it, keep it, then load it: a package that doesn't load isn't kept, and
     // one that can't be kept isn't loaded.
     let plugin = crate::prepare(pkg, &path.display().to_string())?;
+    if let Some(target) = &unpack_into {
+        unpack_to(bytes, &sha256, target)?;
+    }
     rustgis_data::io::write_atomic(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(crate::register(plugin))
 }
