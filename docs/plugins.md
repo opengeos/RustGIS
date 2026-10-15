@@ -336,9 +336,9 @@ requests and replies over its standard input and output, one JSON object per lin
 3. RustGIS then closes the program's input; a program still running a few seconds later is
    stopped.
 
-Output lines that aren't JSON objects are logged and skipped, since libraries print, and so is
-the program's error output. A command is stopped after 2 minutes; a tool runs until it finishes.
-While it runs, RustGIS waits for it.
+Output lines that aren't protocol messages are logged and skipped, since libraries print (even
+JSON), and so is the program's error output. A command is stopped after 2 minutes; a tool runs
+until it finishes. While it runs, RustGIS waits for it.
 
 The plugin above, in Python with no SDK:
 

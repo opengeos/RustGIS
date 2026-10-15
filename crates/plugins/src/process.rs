@@ -96,7 +96,7 @@ enum Line {
 /// at most wait to be handled: a program printing faster than RustGIS reads is made to wait
 /// rather than filling memory.
 fn lines(out: impl Read + Send + 'static) -> Receiver<Line> {
-    let (tx, rx) = sync_channel(8);
+    let (tx, rx) = sync_channel(2);
     std::thread::spawn(move || {
         let mut r = BufReader::new(out);
         loop {
@@ -224,7 +224,10 @@ pub fn call(spec: &Spec, host: &mut dyn Host, request: &Value, timeout: Option<D
     let rx = lines(stdout);
     let stdin = writer(stdin);
     let res = converse(&stdin, &rx, host, request, timeout);
-    // Its input closed, a program that answered exits; one that didn't is stopped.
+    // Its input closed, a program that answered exits; one that didn't is stopped. Its output
+    // isn't read any more: one still printing gets a broken pipe rather than waiting on a full
+    // queue until it's stopped.
+    drop(rx);
     drop(stdin);
     finish(&mut child, if res.is_ok() { EXIT_GRACE } else { Duration::ZERO });
     // A moment for what a failing program wrote last to arrive.
@@ -265,9 +268,10 @@ fn converse(
             Line::End => return Err("it exited without answering".into()),
             Line::TooLong => return Err(format!("it sent a line longer than {} MB", MAX_LINE / (1024 * 1024))),
         };
-        // Lines that aren't JSON objects are other output (a library printing): logged, skipped.
+        // Lines that aren't protocol messages are other output (a library printing, even a JSON
+        // object of its own): logged and skipped.
         let msg = match serde_json::from_slice::<Value>(&bytes) {
-            Ok(Value::Object(m)) => m,
+            Ok(Value::Object(m)) if ["call", "log", "error", "ok"].iter().any(|k| m.contains_key(*k)) => m,
             _ => {
                 if logged < MAX_LOGGED {
                     logged += 1;
@@ -301,8 +305,6 @@ fn converse(
             return Err(e.as_str().map(str::to_string).unwrap_or_else(|| e.to_string()));
         } else if let Some(v) = msg.get("ok") {
             return Ok(v.clone());
-        } else {
-            return Err("it sent a line with neither 'ok', 'error', 'call' nor 'log'".into());
         }
     }
 }

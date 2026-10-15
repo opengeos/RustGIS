@@ -151,7 +151,7 @@ pub fn process_manifest(id: &str, permissions: &[&str], run: &[String]) -> Strin
 /// test module does, then exits. Elsewhere it returns at once.
 ///
 /// - `h` logs "hi" and returns `{"hello": "world"}`; `f` sends its params as a host request
-///   and returns the reply; `e` fails with "nope"; `n` prints a line that isn't JSON first;
+///   and returns the reply; `e` fails with "nope"; `n` prints a line that isn't JSON and a JSON object that isn't a message first;
 ///   `c` writes "boom" to its error output and exits without answering; `s` never answers;
 ///   `g` starts another copy of itself that never answers, logs its process id and never
 ///   answers either.
@@ -186,6 +186,7 @@ pub fn serve_if_child() {
         }
         Some('n') => {
             let _ = writeln!(out, "a library printing");
+            let _ = writeln!(out, "{}", json!({"library": "a JSON object of its own"}));
             json!({"ok": {"n": 1}})
         }
         Some('c') => {
