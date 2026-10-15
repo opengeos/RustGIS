@@ -635,7 +635,7 @@ fn frame_zoom(s: &mut Session, p: &Value) -> CmdResult {
         }
         "layer" => {
             let n = ps(p, "layer").ok_or("layer is required")?;
-            let e = m.layer_by_name(n).ok_or_else(|| format!("no layer '{n}'"))?.extent();
+            let e = m.layer_by_name(n).ok_or_else(|| format!("no layer '{n}'"))?.shown_extent();
             set_frame(s, li, frame, &e)?;
         }
         o => return Err(format!("unknown zoom '{o}'")),

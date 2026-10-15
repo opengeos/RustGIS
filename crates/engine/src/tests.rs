@@ -927,6 +927,30 @@ fn graphics_draw_shapes_text_and_pictures() {
 }
 
 #[test]
+fn zooms_to_a_layer_follow_its_definition_query() {
+    let mut s = world();
+    s.run("layer.definitionQuery", &json!({"layer": "Countries", "where": "continent = 'South America'"})).unwrap();
+    let in_south_america = |c: rustgis_geom::Coord| (-85.0..-30.0).contains(&c.x) && (-60.0..15.0).contains(&c.y);
+    // The frame zooms to the countries drawn, not the whole dataset (#206).
+    s.run("layout.new", &json!({"page": "a4", "orientation": "portrait", "template": "map"})).unwrap();
+    s.run("layout.frameZoom", &json!({"to": "layer", "layer": "Countries"})).unwrap();
+    let Some(rustgis_map::layout::ElementKind::MapFrame { center, scale, .. }) =
+        s.project.layouts[0].first_frame().and_then(|id| s.project.layouts[0].element(id)).map(|e| e.kind.clone())
+    else {
+        panic!("no frame")
+    };
+    assert!(in_south_america(center), "{center:?}");
+    assert!(scale < 150_000_000.0, "{scale}");
+    // So does the map view.
+    s.run("layer.zoomTo", &json!({"layer": "Countries"})).unwrap();
+    assert!(in_south_america(s.map().center_lonlat()), "{:?}", s.map().center_lonlat());
+    // A query no country passes leaves nothing to zoom to.
+    s.run("layer.definitionQuery", &json!({"layer": "Countries", "where": "continent = 'Atlantis'"})).unwrap();
+    assert!(s.run("layer.zoomTo", &json!({"layer": "Countries"})).is_err());
+    assert!(s.run("layout.frameZoom", &json!({"to": "layer", "layer": "Countries"})).is_err());
+}
+
+#[test]
 fn layouts_compose_export_and_round_trip() {
     use base64::Engine;
     let dir = std::env::temp_dir().join(format!("rustgis-layout-{}", std::process::id()));
