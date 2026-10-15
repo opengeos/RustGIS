@@ -19,6 +19,8 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/python.yml"
+      - ".github/workflows/test-python.yml"
+      - ".github/scripts/platforms.sh"
   release:
     types: [published]
   workflow_dispatch:

@@ -15,6 +15,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   plan:
     name: Pythons
@@ -38,6 +41,8 @@ jobs:
         include: ${{ fromJSON(needs.plan.outputs.include) }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v7
