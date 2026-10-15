@@ -51,6 +51,14 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 /// inbox, so the dialog's options go with that file and no other (a drop, another picker).
 pub const DELIMITED_PICK: &str = "\u{1}delimited:";
 
+/// The `open_async` purpose for a tool's file parameter, followed by the extensions it offers
+/// (`toolfile:nc,nc4`; none for any file).
+pub const TOOL_FILE_PURPOSE: &str = "toolfile:";
+
+/// Starts the name of a file the web shell's tool file picker put in the inbox: it goes to the
+/// Tools pane's file parameter, not onto the map.
+pub const TOOL_FILE_PICK: &str = "\u{1}toolfile:";
+
 /// A result an asynchronous service fills in when it's done (the app polls it each frame).
 pub type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
 
@@ -606,8 +614,13 @@ impl RustGisApp {
     }
 
     /// Opens a file from the inbox: one the `"text"` picker marked ([`DELIMITED_PICK`]) opens Add
-    /// Delimited Text for it, or is read with a script's options.
+    /// Delimited Text for it, or is read with a script's options; one the tool file picker marked
+    /// ([`TOOL_FILE_PICK`]) goes to the Tools pane.
     pub fn open_picked(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
+        if let Some(name) = name.strip_prefix(TOOL_FILE_PICK) {
+            panes::received_file(self, name, bytes);
+            return Ok(Value::Null);
+        }
         match name.strip_prefix(DELIMITED_PICK) {
             Some(name) => match self.ui.pending_csv.take() {
                 Some(Value::Null) => dialogs::open_csv(self, name, dialogs::CsvSource::Bytes(bytes.to_vec())),

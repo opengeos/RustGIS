@@ -586,10 +586,11 @@ fn select_by_location(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     let invert = s(p, "invert") == "Yes";
     let hits: Vec<usize> = (0..ds.features.len())
         .filter(|r| {
-            let hit = ds.features.get(*r).and_then(|f| f.geometry.as_ref()).is_some_and(|g| {
-                let gg = to_geo(g);
-                selectors.iter().any(|s| s.intersects(&gg))
-            });
+            let Some(g) = ds.features.get(*r).and_then(|f| f.geometry.as_ref()) else {
+                return false;
+            };
+            let gg = to_geo(g);
+            let hit = selectors.iter().any(|s| s.intersects(&gg));
             hit != invert
         })
         .collect();
@@ -925,6 +926,32 @@ mod tests {
             for p in &junk {
                 let _ = crate::run(t.id, &m, p);
             }
+        }
+    }
+
+    #[test]
+    fn select_by_location_invert_excludes_features_without_geometry() {
+        let mut polys = Dataset::new("polys", GeometryType::Polygon, vec![]);
+        polys.push(Some(sq(0.0, 0.0, 2.0)), vec![]);
+        let mut pts = Dataset::new("pts", GeometryType::Point, vec![]);
+        pts.push(Some(Geometry::Point(Coord::new(1.0, 1.0))), vec![]); // inside
+        pts.push(Some(Geometry::Point(Coord::new(10.0, 10.0))), vec![]); // outside
+        pts.push(None, vec![]); // no geometry (unplaced record)
+        let m = Map(HashMap::from([("polys".to_string(), polys), ("pts".to_string(), pts)]));
+
+        let res_normal = crate::run("selectByLocation", &m, &serde_json::json!({"input": "pts", "select": "polys"})).unwrap();
+        match res_normal.output {
+            Output::Selection { rows, .. } => assert_eq!(rows, vec![0], "normal select should only select intersecting feature"),
+            _ => panic!("expected selection"),
+        }
+
+        let res_inverted =
+            crate::run("selectByLocation", &m, &serde_json::json!({"input": "pts", "select": "polys", "invert": "Yes"})).unwrap();
+        match res_inverted.output {
+            Output::Selection { rows, .. } => {
+                assert_eq!(rows, vec![1], "inverted select should exclude unplaced records with null geometry")
+            }
+            _ => panic!("expected selection"),
         }
     }
 }

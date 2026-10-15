@@ -106,7 +106,7 @@ pub struct ParamDecl {
     pub name: String,
     pub label: String,
     /// `layer`, `vectorLayer`, `polygonLayer`, `pointLayer`, `field`, `numericField`, `number`,
-    /// `text`, `choice` or `bool`.
+    /// `text`, `choice`, `bool` or `file` (needs the `files` permission).
     pub kind: String,
     #[serde(default)]
     pub required: bool,
@@ -116,6 +116,9 @@ pub struct ParamDecl {
     /// For `choice`: the choices.
     #[serde(default)]
     pub choices: Vec<String>,
+    /// For `file`: the extensions the file picker offers (`nc`, `tif`); empty for any file.
+    #[serde(default)]
+    pub extensions: Vec<String>,
     #[serde(default)]
     pub help: String,
 }
@@ -163,7 +166,10 @@ pub enum Entry<'a> {
 
 /// The parameter kinds a tool may use.
 pub const PARAM_KINDS: &[&str] =
-    &["layer", "vectorLayer", "polygonLayer", "pointLayer", "field", "numericField", "number", "text", "choice", "bool"];
+    &["layer", "vectorLayer", "polygonLayer", "pointLayer", "field", "numericField", "number", "text", "choice", "bool", "file"];
+
+/// The most extensions a `file` parameter may list.
+const MAX_EXTENSIONS: usize = 16;
 
 /// Whether a parameter kind names a layer (its features are passed to the tool).
 pub fn is_layer_kind(kind: &str) -> bool {
@@ -371,6 +377,18 @@ impl Manifest {
                 }
                 for c in &p.choices {
                     check_text("choice", c, true)?;
+                }
+                // A file parameter hands the tool a file's contents: only with `files`.
+                if p.kind == "file" && !self.has(Permission::Files) {
+                    return Err(format!("plugin.json: {}: '{}' is a file, which needs the 'files' permission", t.name, p.name));
+                }
+                if p.extensions.len() > MAX_EXTENSIONS
+                    || p.extensions.iter().any(|e| e.is_empty() || e.len() > 16 || !e.chars().all(|c| c.is_ascii_alphanumeric()))
+                {
+                    return Err(format!(
+                        "plugin.json: {}: '{}' has invalid extensions (at most {MAX_EXTENSIONS}, letters and digits without the dot)",
+                        t.name, p.name
+                    ));
                 }
                 if let Some(d) = &p.default
                     && d.to_string().len() > MAX_TEXT

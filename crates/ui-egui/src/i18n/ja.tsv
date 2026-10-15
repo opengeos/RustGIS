@@ -1,6 +1,7 @@
 # ja interface catalog: English<TAB>translation
  by 	 ×
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+(filtered)	(フィルター適用)
 00:00 UTC	00:00 UTC
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
@@ -1853,6 +1854,7 @@ Zoom to the whole world.	世界全体にズームします。
 Zoom to Tokyo	東京にズーム
 Zoom To World	世界にズーム
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} はインストール後に変更されています。プラグイン マネージャーから再インストールしてください。
+{name} is larger than {mb} MB	{name} は {mb} MB を超えています
 {name} was withdrawn from the plugin registry and has been turned off.	{name} はプラグイン レジストリから取り下げられたため、無効にしました。
 {name} was withdrawn from the plugin registry: {reason}	{name} はプラグイン レジストリから取り下げられました: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: ダウンロードした内容がレジストリと一致しないため、インストールしませんでした。

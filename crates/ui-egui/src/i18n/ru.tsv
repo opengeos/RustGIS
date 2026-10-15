@@ -1,6 +1,7 @@
 # ru interface catalog: English<TAB>translation
  by 	 по
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+(filtered)	(отфильтрован)
 00:00 UTC	00:00 UTC
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
@@ -1853,6 +1854,7 @@ Zoom to the whole world.	Показать весь мир.
 Zoom to Tokyo	Приблизить к Токио
 Zoom To World	Приблизить к миру
 {id} changed since it was installed; install it again from the Plugin Manager.	Модуль {id} изменился после установки; установите его заново через Менеджер модулей.
+{name} is larger than {mb} MB	{name} больше {mb} МБ
 {name} was withdrawn from the plugin registry and has been turned off.	Модуль {name} отозван из каталога модулей и отключён.
 {name} was withdrawn from the plugin registry: {reason}	Модуль {name} отозван из каталога модулей: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: загруженный файл не совпадает с данными каталога; модуль не установлен.

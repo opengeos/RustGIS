@@ -73,7 +73,7 @@ pub fn commands() -> Vec<C> {
         }).params(r#"{"layer"?: name|id (default: the active layer, which need not be the layer last selected in)}"#)
         .when(need_selection),
         C::new("identify", "Identify", "Home › Inspect", identify).view().params(
-            r#"{"lon", "lat", "tolerancePx"?, "mode"?: "topmost"|"visible"|"selectable"|"selectedInContents"|"none" (the map's pop-up mode when omitted)}"#,
+            r#"{"lon", "lat", "tolerancePx"?, "mode"?: "topmost"|"visible"|"selectable"|"selectedInContents"|"none" (the map's pop-up mode when omitted; the mode picks the layers, and every feature under the point in them, up to 100, is in "results")}"#,
         ),
         C::new("map.popupMode", "Pop-up Mode", "Home › Navigate", popup_mode)
             .params(r#"{"mode": "topmost"|"visible"|"selectable"|"selectedInContents"|"none"}"#),
@@ -188,6 +188,9 @@ fn at_point(s: &mut Session, p: &Value) -> CmdResult {
     }
 }
 
+/// The most features one identify reports, so a click on a dense spot stays quick.
+const MAX_IDENTIFIED: usize = 100;
+
 fn identify(s: &mut Session, p: &Value) -> CmdResult {
     let mode = match ps(p, "mode") {
         Some(m) => PopupMode::from_code(m).ok_or_else(|| format!("unknown pop-up mode '{m}'"))?,
@@ -200,20 +203,20 @@ fn identify(s: &mut Session, p: &Value) -> CmdResult {
     let lat = f(p, "lat").ok_or("lat is required")?;
     let tol = f(p, "tolerancePx").unwrap_or(4.0).clamp(0.0, 50.0) * s.map().camera.res;
     let scale = s.scale();
-    let hits = match s.map().to_map(Coord::new(lon, lat)) {
-        Some(pt) => s.map_mut().hits_at(pt, tol, scale),
-        None => Vec::new(),
-    };
     let active = s.active_layer;
-    let map = s.map();
-    let keep = |id: u32| match mode {
-        PopupMode::Selectable => map.layer(id).is_some_and(|l| l.selectable),
-        PopupMode::SelectedInContents => Some(id) == active,
+    let keep = |l: &rustgis_map::Layer| match mode {
+        PopupMode::Selectable => l.selectable,
+        PopupMode::SelectedInContents => Some(l.id) == active,
         _ => true,
     };
-    let hits: Vec<(u32, usize)> = hits.into_iter().filter(|(id, _)| keep(*id)).collect();
-    let take = if mode == PopupMode::Visible { hits.len() } else { 1 };
-    let results: Vec<Value> = hits.iter().take(take).filter_map(|(id, row)| feature_json(map, *id, *row)).collect();
+    // Every feature under the click in the layers the mode takes; topmost stops at the first layer.
+    let first_layer = mode == PopupMode::Topmost;
+    let hits = match s.map().to_map(Coord::new(lon, lat)) {
+        Some(pt) => s.map_mut().hits_at(pt, tol, scale, keep, first_layer, MAX_IDENTIFIED),
+        None => Vec::new(),
+    };
+    let map = s.map();
+    let results: Vec<Value> = hits.iter().filter_map(|(id, row)| feature_json(map, *id, *row)).collect();
     let Some(first) = results.first().cloned() else {
         // No feature: report the pixel of the topmost raster instead.
         if mode == PopupMode::SelectedInContents && active.and_then(|id| map.layer(id)).is_some_and(|l| !l.is_raster()) {
@@ -241,5 +244,7 @@ fn feature_json(map: &rustgis_map::Map, id: u32, row: usize) -> Option<Value> {
     for (i, fd) in l.dataset.fields.iter().enumerate() {
         attrs.insert(fd.name.clone(), json!(l.dataset.value(row, i).to_string()));
     }
-    Some(json!({"layer": l.name, "layerId": id, "row": row, "attributes": attrs}))
+    // The feature id finds the feature again after a streamed layer reads another window.
+    let fid = l.dataset.features.get(row).map(|f| f.id);
+    Some(json!({"layer": l.name, "layerId": id, "row": row, "fid": fid, "attributes": attrs}))
 }

@@ -1297,6 +1297,21 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
         app.map.popup = None;
     } else if let (Some(i), Some(pp)) = (step, &mut app.map.popup) {
         pp.index = i;
+        // The feature shown is the one selected, as after the click. Not through `select.rows`:
+        // browsing a pop-up mustn't fill the undo history; the new revision redraws the map.
+        // Found again by its feature id: a streamed layer may have read another window since the
+        // click, moving the feature to another row (or out of the layer: then nothing is selected).
+        let shown = pp.info["results"].get(i).and_then(|r| Some((u32::try_from(r["layerId"].as_u64()?).ok()?, r["fid"].as_u64()?)));
+        let found = shown.and_then(|(id, fid)| {
+            let row = app.session.map().layer(id)?.dataset.features.iter().position(|f| f.id == fid)?;
+            Some((id, row))
+        });
+        if let Some((id, row)) = found {
+            rustgis_engine::cmd::select::set(&mut app.session, id, vec![row], rustgis_engine::cmd::select::Mode::New);
+        } else {
+            app.session.map_mut().clear_selection();
+        }
+        app.session.revision = app.session.revision.wrapping_add(1);
     }
 }
 

@@ -554,8 +554,17 @@ fn services(inbox: Inbox, font_inbox: Inbox, ctx: egui::Context, embedded: bool)
             let inbox = open_inbox.clone();
             let ctx = ctx.clone();
             // A file picked for Add Delimited Text carries its dialog's options.
-            let mark = if purpose == "text" { rustgis_ui_egui::DELIMITED_PICK } else { "" };
-            let dialog = if purpose == "project" {
+            // So does a file picked for a tool's file parameter, which goes to the Tools pane.
+            let tool_exts = purpose.strip_prefix(rustgis_ui_egui::TOOL_FILE_PURPOSE);
+            let mark = match (purpose, tool_exts) {
+                ("text", _) => rustgis_ui_egui::DELIMITED_PICK,
+                (_, Some(_)) => rustgis_ui_egui::TOOL_FILE_PICK,
+                _ => "",
+            };
+            let dialog = if let Some(exts) = tool_exts {
+                let exts: Vec<&str> = exts.split(',').filter(|e| !e.is_empty()).collect();
+                if exts.is_empty() { rfd::AsyncFileDialog::new() } else { rfd::AsyncFileDialog::new().add_filter(exts.join(", "), &exts) }
+            } else if purpose == "project" {
                 rfd::AsyncFileDialog::new().add_filter("RustGIS project", &["rgis", "rgisx"])
             } else if purpose == "item" {
                 rfd::AsyncFileDialog::new().add_filter(

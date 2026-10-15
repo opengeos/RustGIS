@@ -776,6 +776,46 @@ fn popup_modes_choose_what_identify_reports() {
 }
 
 #[test]
+fn identify_reports_every_overlapping_feature() {
+    use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as V};
+    let mut s = world();
+    // Two buoys on one spot of the South Atlantic, far from any country, under a float.
+    let spot = || Some(Geometry::Point(rustgis_geom::Coord::new(-20.0, -30.0)));
+    let mut d = Dataset::new("Buoys", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
+    for n in [1, 2] {
+        d.push(spot(), vec![V::Int(n)]);
+    }
+    let id = u64::from(s.map_mut().add_dataset(d));
+    let mut d = Dataset::new("Floats", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
+    d.push(spot(), vec![V::Int(1)]);
+    let float = u64::from(s.map_mut().add_dataset(d));
+    let at = json!({"lon": -20.0, "lat": -30.0, "tolerancePx": 5});
+    let rows = |v: &Value| {
+        v["results"].as_array().unwrap().iter().map(|r| (r["layerId"].as_u64().unwrap(), r["row"].as_u64().unwrap())).collect::<Vec<_>>()
+    };
+    // Topmost: every feature of the top layer with one; both buoys, the one drawn on top first (#232).
+    assert_eq!(rows(&s.run("identify", &at).unwrap()), [(float, 0)]);
+    s.run("layer.visibility", &json!({"layer": "Floats", "visible": false})).unwrap();
+    let top = s.run("identify", &at).unwrap();
+    assert_eq!(rows(&top), [(id, 1), (id, 0)]);
+    assert_eq!(top["row"], 1);
+    // Each result carries its feature id, to find the feature again after a streamed read.
+    assert_eq!(top["results"][0]["fid"], 2);
+    assert_eq!(top["results"][1]["fid"], 1);
+    s.run("layer.visibility", &json!({"layer": "Floats", "visible": true})).unwrap();
+    s.run("map.popupMode", &json!({"mode": "visible"})).unwrap();
+    assert_eq!(rows(&s.run("identify", &at).unwrap()), [(float, 0), (id, 1), (id, 0)]);
+    // Selectable: every selectable layer, not only the top one.
+    s.run("map.popupMode", &json!({"mode": "selectable"})).unwrap();
+    assert_eq!(rows(&s.run("identify", &at).unwrap()), [(float, 0), (id, 1), (id, 0)]);
+    s.run("layer.selectable", &json!({"layer": "Floats", "on": false})).unwrap();
+    assert_eq!(rows(&s.run("identify", &at).unwrap()), [(id, 1), (id, 0)]);
+    // A definition query hides one.
+    s.run("layer.definitionQuery", &json!({"layer": "Buoys", "where": "n = 1"})).unwrap();
+    assert_eq!(rows(&s.run("identify", &at).unwrap()), [(id, 0)]);
+}
+
+#[test]
 fn label_range_placement_lock_and_convert() {
     use crate::render::View;
     let mut s = world();
@@ -895,6 +935,30 @@ fn graphics_draw_shapes_text_and_pictures() {
 }
 
 #[test]
+fn zooms_to_a_layer_follow_its_definition_query() {
+    let mut s = world();
+    s.run("layer.definitionQuery", &json!({"layer": "Countries", "where": "continent = 'South America'"})).unwrap();
+    let in_south_america = |c: rustgis_geom::Coord| (-85.0..-30.0).contains(&c.x) && (-60.0..15.0).contains(&c.y);
+    // The frame zooms to the countries drawn, not the whole dataset (#206).
+    s.run("layout.new", &json!({"page": "a4", "orientation": "portrait", "template": "map"})).unwrap();
+    s.run("layout.frameZoom", &json!({"to": "layer", "layer": "Countries"})).unwrap();
+    let Some(rustgis_map::layout::ElementKind::MapFrame { center, scale, .. }) =
+        s.project.layouts[0].first_frame().and_then(|id| s.project.layouts[0].element(id)).map(|e| e.kind.clone())
+    else {
+        panic!("no frame")
+    };
+    assert!(in_south_america(center), "{center:?}");
+    assert!(scale < 150_000_000.0, "{scale}");
+    // So does the map view.
+    s.run("layer.zoomTo", &json!({"layer": "Countries"})).unwrap();
+    assert!(in_south_america(s.map().center_lonlat()), "{:?}", s.map().center_lonlat());
+    // A query no country passes leaves nothing to zoom to.
+    s.run("layer.definitionQuery", &json!({"layer": "Countries", "where": "continent = 'Atlantis'"})).unwrap();
+    assert!(s.run("layer.zoomTo", &json!({"layer": "Countries"})).is_err());
+    assert!(s.run("layout.frameZoom", &json!({"to": "layer", "layer": "Countries"})).is_err());
+}
+
+#[test]
 fn layouts_compose_export_and_round_trip() {
     use base64::Engine;
     let dir = std::env::temp_dir().join(format!("rustgis-layout-{}", std::process::id()));
@@ -942,6 +1006,15 @@ fn layouts_compose_export_and_round_trip() {
     s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": frame})).unwrap();
     assert!(s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": inset})).is_err());
     assert!(s.run("layout.addElement", &json!({"kind": "sparkles"})).is_err());
+    // A hairline rule keeps its height when added and when edited (#211).
+    let rule = s.run("layout.addElement", &json!({"kind": "rectangle", "color": "#000000", "w": 136, "h": 0.15})).unwrap()["element"]
+        .as_u64()
+        .unwrap() as u32;
+    assert_eq!(s.project.layouts[0].element(rule).map(|e| e.h), Some(0.15));
+    s.run("layout.update", &json!({"element": rule, "h": 0.35})).unwrap();
+    assert_eq!(s.project.layouts[0].element(rule).map(|e| e.h), Some(0.35));
+    let err = s.run("layout.addElement", &json!({"kind": "rectangle", "h": 0})).unwrap_err();
+    assert!(err.contains("more than 0"), "{err}");
     // Frame zooms and edits.
     s.run("layout.frameZoom", &json!({"element": frame, "to": "layer", "layer": "Lakes"})).unwrap();
     s.run("layout.update", &json!({"element": frame, "x": 12, "w": 180, "center": [10, 50]})).unwrap();
@@ -2028,6 +2101,29 @@ fn plugin_tools_run_in_the_geoprocessing_pane() {
     assert_eq!(s.map().layer_by_name("Cities").unwrap().selection, vec![0, 2]);
     assert!(s.run("gp.run", &json!({"tool": "plugin:eng-tools/m", "params": {}})).unwrap_err().contains("required"));
     rustgis_plugins::unload("eng-tools");
+}
+
+#[test]
+fn plugin_file_parameters_reach_files_and_stay_out_of_the_history() {
+    use crate::cmd::plugins::{Reach, reaches};
+    let mut s = world();
+    plugin("eng-file", &["files"]);
+    let run = json!({"tool": "plugin:eng-file/r", "params": {"model": "/data/pism.nc"}});
+    // Running a tool that reads a file reaches files (the assistant asks first)...
+    let gp = s.registry.get("gp.run").copied().unwrap();
+    assert!(matches!(reaches(&gp, &run), Some(Reach::Files)));
+    assert!(reaches(&gp, &json!({"tool": "plugin:eng-file/m", "params": {"input": "Cities"}})).is_none());
+    // ...so a plugin without `files` can't run it.
+    plugin("eng-file-edit", &["edit"]);
+    let e = forward(&mut s, "eng-file-edit", "gp.run", run).unwrap_err();
+    assert!(e.contains("'files' permission"), "{e}");
+    // A file picked in the browser travels with its contents, but the history keeps its name.
+    let picked = json!({"tool": "plugin:eng-file/r", "params": {"model": {"name": "pism.nc", "data": "Q0RGAQ=="}}});
+    s.run("gp.run", &picked).unwrap();
+    let h = s.project.gp_history.last().unwrap();
+    assert!(h.ok && h.params["model"] == "pism.nc", "{h:?}");
+    rustgis_plugins::unload("eng-file");
+    rustgis_plugins::unload("eng-file-edit");
 }
 
 #[test]

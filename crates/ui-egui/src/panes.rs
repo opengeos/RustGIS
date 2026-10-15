@@ -357,7 +357,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
     } else {
         t.text
     };
-    let name = if l.definition_query.is_some() { format!("{}  (filtered)", l.name) } else { l.name.clone() };
+    let name = if l.definition_query.is_some() { format!("{}  {}", l.name, tl!("(filtered)")) } else { l.name.clone() };
     ui.painter().text(pos2(x, r.center().y), Align2::LEFT_CENTER, &name, if active { semibold(12.5) } else { regular(12.5) }, color);
     if !l.selection.is_empty() {
         let badge = format!("{}", l.selection.len());
@@ -836,6 +836,11 @@ pub struct GpForm {
     pub web_load: Option<crate::Slot<Result<String, String>>>,
     /// A tool running in the browser's GeoLibre runner: its run id, and where the result lands.
     pub web_run: Option<(u64, &'static str, crate::Slot<rustgis_engine::cmd::gp::ExternalOutput>)>,
+    /// Files picked in the browser for file parameters, which have no paths there: (name,
+    /// contents), sent with the run while the parameter still shows that name.
+    pub files: HashMap<&'static str, (String, Vec<u8>)>,
+    /// The tool and file parameter the browser's file picker is choosing for.
+    pub pending_file: Option<(&'static str, &'static str)>,
     /// Uninstall was pressed once: the button now asks to confirm.
     pub confirm_uninstall: bool,
     /// Why the last uninstall failed (apart from `last`, which a tool run sets too).
@@ -909,6 +914,7 @@ impl GpForm {
         self.tool = tool;
         self.values.clear();
         self.tables.clear();
+        self.files.clear();
         self.last = None;
         let Some(spec) = tool.and_then(rustgis_engine::analysis::tool) else { return };
         let active = s.active_layer.and_then(|id| s.map().layer(id));
@@ -1334,11 +1340,14 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let kind_names = |raster: bool| -> Vec<String> {
         app.session.map().layers.iter().filter(|l| l.is_raster() == raster).map(|l| l.name.clone()).collect()
     };
+    let plugin_tool = spec.id.starts_with(rustgis_engine::plugins::PREFIX);
     let first_layer = spec
         .params
         .iter()
         .find(|p| matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer | ParamKind::VectorLayer))
         .map(|p| p.name);
+    // The file parameter whose Browse was pressed: picked once the form is drawn.
+    let mut browse_for = None;
     for p in spec.params {
         let label = ui.label(egui::RichText::new(format!("{}{}", tl!(p.label), if p.required { " *" } else { "" })).size(12.0));
         if !p.help.is_empty() {
@@ -1466,12 +1475,35 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     ParamKind::Path => tl!("file path"),
                     _ => "",
                 };
-                if ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(f32::INFINITY)).changed() {
+                let mut browse = false;
+                // Browse picks a file to read: on the desktop for any file input (GeoLibre's too);
+                // in the browser, where the file itself goes with the run, only for plugins.
+                let browsable = p.kind == ParamKind::Path && (app.services.open_async.is_none() || plugin_tool);
+                let changed = if browsable {
+                    // One row: the path box takes what the button leaves.
+                    let row = vec2(ui.available_width(), ui.spacing().interact_size.y);
+                    ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        browse = ui.button(tl!("Browse")).clicked();
+                        ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(f32::INFINITY)).changed()
+                    })
+                    .inner
+                } else {
+                    ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(f32::INFINITY)).changed()
+                };
+                if changed {
+                    // A path typed in replaces a file picked in the browser.
+                    app.gp.files.remove(p.name);
                     app.gp.values.insert(p.name, v);
+                }
+                if browse {
+                    browse_for = Some(p.name);
                 }
             }
         }
         ui.add_space(4.0);
+    }
+    if let Some(param) = browse_for {
+        browse_file(app, spec.id, param);
     }
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
@@ -1496,6 +1528,12 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                             if builtin { json!(id) } else { json!(id.to_string()) }
                         }
                         (ParamKind::Number, _) => v.trim().parse::<f64>().map(|n| json!(n)).unwrap_or(json!(v)),
+                        // A file picked in the browser goes with its contents.
+                        (ParamKind::Path, _) if app.gp.files.get(p.name).is_some_and(|(n, _)| n == v) => {
+                            use base64::Engine;
+                            let bytes = app.gp.files.get(p.name).map(|(_, b)| b.as_slice()).unwrap_or_default();
+                            json!({"name": v, "data": base64::engine::general_purpose::STANDARD.encode(bytes)})
+                        }
                         (ParamKind::Bool, _) => json!(v == "true"),
                         _ => json!(v),
                     };
@@ -1550,6 +1588,40 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
             });
     }
+}
+
+/// Picks a file for a tool's file parameter: its path on the desktop, and in the browser, which
+/// has no paths, the file itself (it arrives in [`received_file`]).
+fn browse_file(app: &mut RustGisApp, tool: &'static str, param: &'static str) {
+    let exts = rustgis_engine::plugins::tools::file_extensions(tool, param);
+    if let Some(open) = &app.services.open_async {
+        app.gp.pending_file = Some((tool, param));
+        open(&format!("{}{}", crate::TOOL_FILE_PURPOSE, exts.join(",")));
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let exts: Vec<&str> = exts.iter().map(String::as_str).collect();
+        let dialog = rfd::FileDialog::new();
+        let dialog = if exts.is_empty() { dialog } else { dialog.add_filter(exts.join(", "), &exts).add_filter(tl!("All files"), &["*"]) };
+        if let Some(path) = dialog.pick_file() {
+            app.gp.files.remove(param);
+            app.gp.values.insert(param, path.display().to_string());
+        }
+    }
+}
+
+/// A file the browser's picker chose for a tool's file parameter: kept for the run, if that
+/// tool is still open.
+pub fn received_file(app: &mut RustGisApp, name: &str, bytes: &[u8]) {
+    let Some((_, param)) = app.gp.pending_file.take().filter(|(t, _)| app.gp.tool == Some(*t)) else { return };
+    if bytes.len() > rustgis_engine::plugins::tools::MAX_FILE {
+        let mb = rustgis_engine::plugins::tools::MAX_FILE / (1024 * 1024);
+        app.gp.last = Some((false, vec![crate::i18n::fmt("{name} is larger than {mb} MB", &[("name", name), ("mb", &mb.to_string())])]));
+        return;
+    }
+    app.gp.values.insert(param, name.to_string());
+    app.gp.files.insert(param, (name.to_string(), bytes.to_vec()));
 }
 
 pub fn tool_icon(id: &str) -> &'static str {

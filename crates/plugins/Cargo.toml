@@ -13,6 +13,8 @@ rustgis-data = { workspace = true }
 rustgis-analysis = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# A tool's files travel in its request as base64.
+base64 = { workspace = true }
 log = { workspace = true }
 # A pure-Rust WebAssembly interpreter: the same sandbox on the desktop, the command line and in
 # the browser, with fuel and memory limits so a plugin can't hang or exhaust the app.

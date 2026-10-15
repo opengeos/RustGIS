@@ -5,7 +5,7 @@ use std::path::Path;
 
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::Rgba;
-use rustgis_map::layout::{ElementKind, FrameShape, Grid, Layout, MapSeries, PAGES, fit_scale};
+use rustgis_map::layout::{ElementKind, FrameShape, Grid, Layout, MIN_ELEMENT_MM, MapSeries, PAGES, fit_scale};
 use serde_json::{Value, json};
 
 use super::{b, f, ps};
@@ -261,7 +261,7 @@ fn place(p: &Value, l: &Layout, (dx, dy, dw, dh): (f64, f64, f64, f64)) -> Resul
     let v = |k: &str, d: f64| f(p, k).unwrap_or(d);
     let (x, y, w, h) = (v("x", dx), v("y", dy), v("w", dw.min(l.width - 10.0).max(5.0)), v("h", dh.min(l.height - 10.0).max(5.0)));
     if w <= 0.0 || h <= 0.0 || w > 5000.0 || h > 5000.0 || x.abs() > 5000.0 || y.abs() > 5000.0 {
-        return Err("element sizes are 0 to 5000 mm".into());
+        return Err("element sizes are more than 0 and up to 5000 mm".into());
     }
     Ok((x, y, w, h))
 }
@@ -520,10 +520,10 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(v) = num("y", -5000.0, 5000.0) {
         e.y = v;
     }
-    if let Some(v) = num("w", 1.0, 5000.0) {
+    if let Some(v) = num("w", MIN_ELEMENT_MM, 5000.0) {
         e.w = v;
     }
-    if let Some(v) = num("h", 1.0, 5000.0) {
+    if let Some(v) = num("h", MIN_ELEMENT_MM, 5000.0) {
         e.h = v;
     }
     if let Some(n) = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
@@ -635,7 +635,7 @@ fn frame_zoom(s: &mut Session, p: &Value) -> CmdResult {
         }
         "layer" => {
             let n = ps(p, "layer").ok_or("layer is required")?;
-            let e = m.layer_by_name(n).ok_or_else(|| format!("no layer '{n}'"))?.extent();
+            let e = m.layer_by_name(n).ok_or_else(|| format!("no layer '{n}'"))?.shown_extent();
             set_frame(s, li, frame, &e)?;
         }
         o => return Err(format!("unknown zoom '{o}'")),

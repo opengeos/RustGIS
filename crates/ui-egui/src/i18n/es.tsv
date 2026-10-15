@@ -1,6 +1,7 @@
 # es interface catalog: English<TAB>translation
  by 	 por
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+(filtered)	(filtrada)
 00:00 UTC	00:00 UTC
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
@@ -1853,6 +1854,7 @@ Zoom to the whole world.	Zoom a todo el mundo.
 Zoom to Tokyo	Hacer zoom a Tokio
 Zoom To World	Zoom al mundo
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} ha cambiado desde que se instaló; vuelva a instalarlo desde el Administrador de complementos.
+{name} is larger than {mb} MB	{name} ocupa más de {mb} MB
 {name} was withdrawn from the plugin registry and has been turned off.	{name} se ha retirado del registro de complementos y se ha desactivado.
 {name} was withdrawn from the plugin registry: {reason}	{name} se ha retirado del registro de complementos: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: la descarga no coincide con el registro; no se ha instalado.

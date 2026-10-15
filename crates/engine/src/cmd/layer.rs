@@ -77,7 +77,7 @@ pub fn commands() -> Vec<C> {
         C::new("layer.move", "Move", "Layers", move_to).when(need_layer).params(r#"{"layer"?: name|id, "to": position (0 = top)}"#),
         C::new("layer.zoomTo", "Zoom To Layer", "Layers", |s, p| {
             let id = s.layer_id(p)?;
-            let e = s.map().layer(id).map(|l| l.extent()).unwrap_or_default();
+            let e = s.map().layer(id).map(|l| l.shown_extent()).unwrap_or_default();
             if e.is_empty() {
                 return Err("the layer has no features".into());
             }

@@ -1,6 +1,7 @@
 # tr interface catalog: English<TAB>translation
  by 	 ×
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+(filtered)	(filtrelenmiş)
 00:00 UTC	00:00 UTC
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
@@ -1853,6 +1854,7 @@ Zoom to the whole world.	Tüm dünyaya yakınlaştır.
 Zoom to Tokyo	Tokyo'ya yakınlaştır
 Zoom To World	Dünyaya Yakınlaştır
 {id} changed since it was installed; install it again from the Plugin Manager.	{id}, yüklendiğinden beri değişti; Eklenti Yöneticisi'nden yeniden yükleyin.
+{name} is larger than {mb} MB	{name}, {mb} MB'tan büyük
 {name} was withdrawn from the plugin registry and has been turned off.	{name}, eklenti kayıt defterinden geri çekildi ve devre dışı bırakıldı.
 {name} was withdrawn from the plugin registry: {reason}	{name}, eklenti kayıt defterinden geri çekildi: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: İndirilen dosya kayıt defteriyle eşleşmiyor; yüklenmedi.

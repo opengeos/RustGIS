@@ -372,6 +372,20 @@ impl Layer {
         self.min_scale.is_none_or(|m| scale <= m) && self.max_scale.is_none_or(|m| scale >= m)
     }
 
+    /// Rows drawn at a scale denominator: those passing the definition query and every display
+    /// filter that applies at that scale (a filter that no longer reads is skipped).
+    pub fn drawn_rows(&self, scale: f64) -> Vec<bool> {
+        let mut rows = self.visible_rows();
+        for f in self.display_filters.iter().filter(|f| f.applies(scale)) {
+            if let Ok(e) = rustgis_data::query::parse(&f.where_, &self.dataset) {
+                for (r, keep) in rows.iter_mut().enumerate() {
+                    *keep = *keep && rustgis_data::query::eval(&e, &self.dataset, r);
+                }
+            }
+        }
+        rows
+    }
+
     /// Rows passing the definition query (all rows when none or invalid).
     pub fn visible_rows(&self) -> Vec<bool> {
         let n = self.dataset.features.len();
@@ -392,6 +406,21 @@ impl Layer {
             (None, Some(s)) => s.info().map(|i| i.extent).filter(|e| !e.is_empty()).unwrap_or_else(|| self.dataset.extent()),
             (None, None) => self.dataset.extent(),
         }
+    }
+
+    /// Extent in longitude/latitude of the features the definition query lets through (the whole
+    /// extent without a query, for rasters and for streamed layers, whose rows are only those read).
+    pub fn shown_extent(&self) -> Extent {
+        let query = self.definition_query.as_deref().is_some_and(|q| !q.trim().is_empty());
+        if !query || self.raster.is_some() || self.source.is_some() {
+            return self.extent();
+        }
+        self.visible_rows()
+            .iter()
+            .zip(&self.dataset.features)
+            .filter(|(v, _)| **v)
+            .filter_map(|(_, f)| f.geometry.as_ref())
+            .fold(Extent::EMPTY, |e, g| e.union(&g.extent()))
     }
 
     pub fn selection_extent(&self) -> Extent {
@@ -474,7 +503,7 @@ pub enum PopupMode {
     Topmost,
     /// Every visible layer's feature under the pointer.
     Visible,
-    /// The topmost feature of a selectable layer.
+    /// Every selectable layer's features under the pointer.
     Selectable,
     /// Only the layer selected in the Layers pane.
     SelectedInContents,
@@ -773,25 +802,42 @@ impl Map {
         None
     }
 
-    /// The topmost feature under a point in every visible layer, top layer first.
-    pub fn hits_at(&mut self, p: Coord, tol: f64, scale: f64) -> Vec<(u32, usize)> {
+    /// Every feature under a point in the visible layers `keep` accepts: top layer first and, in
+    /// a layer, the one drawn on top first. At most `limit` of them; with `first_layer`, only
+    /// those of the top layer with any.
+    pub fn hits_at(
+        &mut self,
+        p: Coord,
+        tol: f64,
+        scale: f64,
+        keep: impl Fn(&Layer) -> bool,
+        first_layer: bool,
+        limit: usize,
+    ) -> Vec<(u32, usize)> {
         let (flat, key) = (self.flat(), self.projection.code());
         let mut out = Vec::new();
-        for l in &mut self.layers {
-            if !l.visible || !l.in_scale_range(scale) {
+        // Top first, as drawn: a higher depth priority is above whatever the order.
+        let mut order: Vec<usize> = (0..self.layers.len()).collect();
+        order.sort_by_key(|i| std::cmp::Reverse(self.layers.get(*i).map_or(0, |l| l.priority)));
+        for i in order {
+            let Some(l) = self.layers.get_mut(i) else { continue };
+            if out.len() >= limit || (first_layer && !out.is_empty()) {
+                break;
+            }
+            if !l.visible || !l.in_scale_range(scale) || !keep(l) {
                 continue;
             }
-            let rows = l.visible_rows();
+            // Only features drawn: the definition query and the display filters let them through.
+            let rows = l.drawn_rows(scale);
             let id = l.id;
             let proj = l.projected_in(&flat, &key);
-            if let Some(row) = proj
+            let hits = proj
                 .iter()
                 .enumerate()
                 .rev()
-                .find_map(|(row, g)| (rows.get(row) == Some(&true) && g.as_ref().is_some_and(|g| g.hit(p, tol))).then_some(row))
-            {
-                out.push((id, row));
-            }
+                .filter(|(row, g)| rows.get(*row) == Some(&true) && g.as_ref().is_some_and(|g| g.hit(p, tol)))
+                .map(|(row, _)| (id, row));
+            out.extend(hits.take(limit - out.len()));
         }
         out
     }
@@ -847,5 +893,67 @@ mod tests {
         assert_eq!(m.hits_in(&e, 1e6), vec![(id, vec![0])]);
         m.layers[0].definition_query = Some("n = 2".into());
         assert_eq!(m.hits_in(&e, 1e6), vec![]);
+    }
+
+    #[test]
+    fn hits_at_finds_every_overlapping_feature() {
+        let mut m = Map::new("Map");
+        let mut d = points();
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Int(3)]);
+        let below = m.add_dataset(d);
+        let above = m.add_dataset(points());
+        let p = lonlat_to_merc(Coord::new(0.0, 0.0));
+        // Top layer first; in a layer, the feature drawn last (on top) first.
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 100), vec![(above, 0), (below, 2), (below, 0)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 2), vec![(above, 0), (below, 2)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, false, 100), vec![(below, 2), (below, 0)]);
+        // Only the top layer with a hit.
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, true, 100), vec![(above, 0)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, true, 100), vec![(below, 2), (below, 0)]);
+        // A higher depth priority draws on top, whatever the order.
+        if let Some(l) = m.layers.iter_mut().find(|l| l.id == below) {
+            l.priority = 1;
+        }
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, true, 100), vec![(below, 2), (below, 0)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 100), vec![(below, 2), (below, 0), (above, 0)]);
+        if let Some(l) = m.layers.iter_mut().find(|l| l.id == below) {
+            l.priority = 0;
+        }
+        // Features the definition query hides aren't hit.
+        if let Some(l) = m.layers.iter_mut().find(|l| l.id == below) {
+            l.definition_query = Some("n = 1".into());
+        }
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, false, 100), vec![(below, 0)]);
+    }
+
+    #[test]
+    fn hits_at_skips_features_display_filters_hide() {
+        let mut m = Map::new("Map");
+        let mut d = points();
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Int(3)]);
+        let id = m.add_dataset(d);
+        let p = lonlat_to_merc(Coord::new(0.0, 0.0));
+        let filter = |min_scale| effects::DisplayFilter { name: "big".into(), min_scale, max_scale: None, where_: "n = 3".into() };
+        m.layers[0].display_filters = vec![filter(None)];
+        assert_eq!(m.layers[0].drawn_rows(1e6), vec![false, false, true]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 100), vec![(id, 2)]);
+        // A filter that doesn't apply at this scale hides nothing.
+        m.layers[0].display_filters = vec![filter(Some(1e5))];
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 100), vec![(id, 2), (id, 0)]);
+    }
+
+    #[test]
+    fn shown_extent_follows_the_definition_query() {
+        let mut m = Map::new("Map");
+        m.add_dataset(points());
+        let l = &mut m.layers[0];
+        assert_eq!(l.shown_extent(), Extent::new(0.0, 0.0, 10.0, 10.0));
+        l.definition_query = Some("n = 2".into());
+        assert_eq!(l.shown_extent(), Extent::new(10.0, 10.0, 10.0, 10.0));
+        l.definition_query = Some("n = 3".into());
+        assert!(l.shown_extent().is_empty());
+        // An invalid query hides nothing.
+        l.definition_query = Some("n = = 2".into());
+        assert_eq!(l.shown_extent(), Extent::new(0.0, 0.0, 10.0, 10.0));
     }
 }
