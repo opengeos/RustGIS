@@ -245,9 +245,15 @@ pub fn prepare(id: &str, progress: &mut dyn FnMut(&str)) -> Result<PathBuf, Stri
     // other made, and is done.
     let lock_path = parent.join(format!(".{id}.lock"));
     let lock = std::fs::File::create(&lock_path).map_err(|e| format!("{}: {e}", lock_path.display()))?;
-    if lock.try_lock().is_err() {
-        progress("Waiting for another preparation of this environment to finish");
-        lock.lock().map_err(|e| format!("{}: {e}", lock_path.display()))?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            progress("Waiting for another preparation of this environment to finish");
+            lock.lock().map_err(|e| format!("{}: {e}", lock_path.display()))?;
+        }
+        // A folder whose file system can't lock (some network mounts): prepared unlocked, as
+        // before there was a lock, rather than not at all.
+        Err(std::fs::TryLockError::Error(e)) => log::warn!("{}: can't lock ({e}); preparing without it", lock_path.display()),
     }
     if check.ready() {
         return Ok(python_in(&check.env));
@@ -297,7 +303,11 @@ pub fn prepare(id: &str, progress: &mut dyn FnMut(&str)) -> Result<PathBuf, Stri
 
 /// Removes plugin `id`'s environment, if it has one.
 pub fn remove(id: &str) -> Result<(), String> {
-    match env_dir(id).filter(|d| d.is_dir()) {
+    let Some(env) = env_dir(id) else { return Ok(()) };
+    if let Some(parent) = env.parent() {
+        let _ = std::fs::remove_file(parent.join(format!(".{id}.lock")));
+    }
+    match Some(env).filter(|d| d.is_dir()) {
         Some(d) => std::fs::remove_dir_all(&d).map_err(|e| format!("{}: {e}", d.display())),
         None => Ok(()),
     }
