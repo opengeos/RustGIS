@@ -1772,7 +1772,7 @@ fn view_effects_scene_and_navigation() {
         assert!(png(&mut s) != local, "a local view draws in its own projection");
     }
     #[cfg(target_arch = "wasm32")]
-    assert!(s.run("map.viewMode", &json!({"mode": "local"})).is_err(), "no aeqd in the browser build");
+    assert!(s.run("map.viewMode", &json!({"mode": "local"})).unwrap_err().contains("web app"), "no aeqd in the browser build");
     s.run("map.viewMode", &json!({"mode": "global"})).unwrap();
     assert!(s.map().projection.is_globe());
     s.run("map.navigation", &json!({"mode": "planar"})).unwrap();

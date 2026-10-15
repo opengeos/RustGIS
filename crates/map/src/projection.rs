@@ -394,12 +394,18 @@ mod tests {
         let e = crate::Projection::from_code("EPSG:5880").unwrap_err();
         assert!(e.contains("poly"), "{e}");
         // Codes that can be drawn are still accepted, by number or preset.
-        for ok in ["EPSG:3035", "epsg:32633", "EPSG:8858", "equalEarth", "usaAlbers", "local:12.5,41.9", "mercator", "globe"] {
+        for ok in ["EPSG:3035", "epsg:32633", "EPSG:8858", "equalEarth", "usaAlbers", "mercator", "globe"] {
             crate::Projection::from_code(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
         }
+        // Local views need proj4rs' `aeqd`, which the browser build leaves out (Cargo.toml).
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::Projection::from_code("local:12.5,41.9").unwrap_or_else(|e| panic!("{e}"));
+        #[cfg(target_arch = "wasm32")]
+        assert!(crate::Projection::from_code("local:12.5,41.9").unwrap_err().contains("aeqd"));
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))] // `aeqd` is native-only (Cargo.toml)
     fn local_views_are_azimuthal_equidistant() {
         // map.viewMode "local" relies on +proj=aeqd: it must build (not fall back to Web Mercator)
         // and keep true distances from its centre.

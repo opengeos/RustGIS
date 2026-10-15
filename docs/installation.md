@@ -100,7 +100,7 @@ RustGIS also runs in the browser, compiled to WebAssembly: open
 
 The web app opens the way **Settings › Start-up** says (remembered in the browser). The URL can
 override that for one visit: add `?blank` to start with an empty project,
-`?projection=EPSG:3010` (any projected EPSG code, a preset id such as `robinson`, or `globe`) to
+`?projection=EPSG:3010` (a supported projected EPSG code, a preset id such as `robinson`, or `globe`) to
 start in another projection, `?extent=10.5,55,24.5,69.5` (west, south, east, north in degrees) to
 open on an area, `?lang=de` (or any language code) to pick the interface language, or `?webgl` to
 force WebGL2. Combine them with `&`, so a self-hosted build can link to
