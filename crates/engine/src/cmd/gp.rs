@@ -250,11 +250,6 @@ impl PluginRun {
     }
 }
 
-/// Whether `tool` (an id or a name) is a plugin's tool.
-pub fn is_plugin_tool(tool: &str) -> bool {
-    tool_id(tool).unwrap_or(tool).starts_with(rustgis_plugins::PREFIX)
-}
-
 /// A plugin tool's run started and not yet complete.
 pub(crate) struct StartedRun {
     id: u64,
@@ -264,8 +259,8 @@ pub(crate) struct StartedRun {
     t0: u64,
     /// The feature ids of the streamed layers it reads whole, by lowercase name.
     full_ids: FullIds,
-    /// The other layers it reads, as it read them (their ids and data), by lowercase name.
-    read: std::collections::HashMap<String, (u32, Dataset)>,
+    /// The other layers it reads, as it read them, by lowercase name.
+    read: std::collections::HashMap<String, Read>,
 }
 
 /// The feature ids of the streamed layers a tool read whole, by lowercase name: what its
@@ -292,7 +287,7 @@ pub fn plugin_start(s: &mut Session, tool: &str, params: &Value) -> Result<Plugi
         .into_iter()
         .filter_map(|n| s.map().layer_by_name(n))
         .filter(|l| !l.is_streamed())
-        .map(|l| (l.name.to_ascii_lowercase(), (l.id, l.dataset.clone())))
+        .map(|l| (l.name.to_ascii_lowercase(), Read::of(l)))
         .collect();
     s.next_pending = s.next_pending.wrapping_add(1);
     let id = s.next_pending;
@@ -330,34 +325,68 @@ pub fn plugin_complete(s: &mut Session, id: u64, result: Result<rustgis_analysis
     Ok(())
 }
 
-/// Fits a background run's result to edits made while it ran: a selection of a layer that
-/// changed selects the same features (by id) where they now are, and an update of a layer that
-/// changed, which would discard those edits, is refused.
+/// Fits a background run's result to edits made while it ran: its layer is the one it read,
+/// whatever its name now; a selection of a layer that changed selects the same features (by id)
+/// where they now are; and an update of a layer that changed, which would discard those edits,
+/// or of one removed, is refused.
 fn fit_to_changes(
     s: &Session,
     res: &mut Result<rustgis_analysis::ToolResult, String>,
     tool: &str,
-    read: &std::collections::HashMap<String, (u32, Dataset)>,
+    read: &std::collections::HashMap<String, Read>,
 ) {
     let Ok(r) = res else { return };
-    let (layer, update) = match &r.output {
-        Output::Selection { layer, .. } => (layer.clone(), false),
-        Output::Update { layer, .. } => (layer.clone(), true),
-        _ => return,
+    let (Output::Selection { layer, .. } | Output::Update { layer, .. }) = &mut r.output else { return };
+    let Some(was) = read.get(&layer.to_ascii_lowercase()) else { return };
+    // The layer it read, by id: renamed perhaps, but not another of the same name.
+    let Some(now) = s.map().layer(was.id) else {
+        *res = Err(format!("{layer} was removed while {tool} ran"));
+        return;
     };
-    let Some((id, was)) = read.get(&layer.to_ascii_lowercase()) else { return };
-    let now = s.map().layer_by_name(&layer);
-    if now.is_some_and(|l| l.id == *id && l.dataset == *was) {
+    layer.clone_from(&now.name);
+    if fingerprint(&now.dataset) == was.fingerprint {
         return;
     }
-    if update {
-        *res = Err(format!("{layer} changed while {tool} ran; run it again"));
-    } else if let (Ok(r), Some(l)) = (res, now)
-        && let Output::Selection { rows, .. } = &mut r.output
-    {
-        let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| was.features.get(*r)).map(|f| f.id).collect();
-        *rows = l.dataset.features.iter().enumerate().filter(|(_, f)| ids.contains(&f.id)).map(|(i, _)| i).collect();
+    match &mut r.output {
+        Output::Selection { rows, .. } => {
+            let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| was.ids.get(*r)).copied().collect();
+            *rows = now.dataset.features.iter().enumerate().filter(|(_, f)| ids.contains(&f.id)).map(|(i, _)| i).collect();
+        }
+        _ => *res = Err(format!("{} changed while {tool} ran; run it again", now.name)),
     }
+}
+
+/// A layer a background run read, to tell whether it changed while the run went on.
+pub(crate) struct Read {
+    id: u32,
+    /// Its features' ids, in order: what its rows were.
+    ids: Vec<u64>,
+    fingerprint: u64,
+}
+
+impl Read {
+    fn of(l: &rustgis_map::Layer) -> Self {
+        Read { id: l.id, ids: l.dataset.features.iter().map(|f| f.id).collect(), fingerprint: fingerprint(&l.dataset) }
+    }
+}
+
+/// A hash of a dataset's contents, without keeping a copy of them.
+fn fingerprint(d: &Dataset) -> u64 {
+    use std::hash::Hasher;
+    struct W(std::hash::DefaultHasher);
+    impl std::io::Write for W {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.write(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut w = W(std::hash::DefaultHasher::new());
+    // Serializing a dataset doesn't fail; were it to, the hash would still be of what was written.
+    let _ = serde_json::to_writer(&mut w, d);
+    w.0.finish()
 }
 
 /// Fits a tool's result to the map: a selection it made on a streamed layer it read whole

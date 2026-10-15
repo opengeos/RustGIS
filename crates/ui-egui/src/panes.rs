@@ -868,15 +868,20 @@ fn start_plugin_run(app: &mut RustGisApp, tool: &'static str, params: &Value, ct
             let control = std::sync::Arc::new(rustgis_engine::plugins::tools::Control::default());
             let (out, ctl, ctx) = (slot.clone(), control.clone(), ctx.clone());
             let id = run.id;
-            std::thread::spawn(move || {
+            let spawned = std::thread::Builder::new().name(tool.into()).spawn(move || {
                 let r = run.run(&ctl);
                 if let Ok(mut s) = out.lock() {
                     *s = Some(r);
                 }
                 ctx.request_repaint();
             });
-            app.gp.plugin_run = Some(PluginJob { id, tool, slot, control });
-            app.gp.last = None;
+            match spawned {
+                Ok(_) => {
+                    app.gp.plugin_run = Some(PluginJob { id, tool, slot, control });
+                    app.gp.last = None;
+                }
+                Err(e) => app.gp.last = Some((false, vec![e.to_string()])),
+            }
         }
         Err(e) => app.gp.last = Some((false, vec![e])),
     }
