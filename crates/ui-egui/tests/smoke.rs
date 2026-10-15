@@ -226,7 +226,7 @@ fn plugins_can_have_a_tab_of_their_own() {
     h.get_by_label("Tab Select").click();
     h.step();
     assert_eq!(h.state().gp.tool, Some("plugin:ui-tab/x"));
-    // Hidden, then shown again, from Help › Ribbon.
+    // Hidden, then shown again, from Settings › Customize › Ribbon.
     h.state_mut().run("ui.customizeRibbon", json!({"tab": "plugin:ui-tab"})).unwrap();
     h.step();
     assert!(h.state().ui.hidden_tabs.contains(&"plugin:ui-tab".to_string()));
@@ -401,6 +401,20 @@ fn old_and_unknown_tab_names_open_a_current_tab() {
         assert_eq!(h.state().ui.tab, opened, "{asked}");
         h.step();
     }
+}
+
+/// Settings holds Customize › Ribbon, so it (like Help) can't be hidden.
+#[test]
+fn settings_and_help_tabs_always_show() {
+    let mut h = harness();
+    for tab in ["Settings", "Help"] {
+        assert!(h.state_mut().run("ui.customizeRibbon", json!({"tab": tab})).is_err(), "{tab}");
+    }
+    h.state_mut().run("ui.customizeRibbon", json!({"tab": "Edit"})).unwrap();
+    assert_eq!(h.state().ui.hidden_tabs, vec!["Edit".to_string()]);
+    h.state_mut().ui.tab = "Settings".into();
+    h.step();
+    h.step();
 }
 
 /// Add Delimited Text in the web app with a script's options: they go with the file picked next

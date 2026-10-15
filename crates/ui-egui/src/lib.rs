@@ -268,7 +268,7 @@ pub struct UiState {
     pub about: bool,
     pub shortcuts: bool,
     pub tab_strip_rect: Option<egui::Rect>,
-    /// Tabs hidden from the ribbon (Help › Customize › Ribbon).
+    /// Tabs hidden from the ribbon (Settings › Customize › Ribbon).
     pub hidden_tabs: Vec<String>,
     /// Extra Quick Access Toolbar commands.
     pub quick_access: Vec<String>,
@@ -1644,8 +1644,8 @@ impl RustGisApp {
             }
             "ui.customizeRibbon" => {
                 let tab = p.get("tab").and_then(Value::as_str).ok_or("tab is required")?.to_string();
-                if tab == "Help" {
-                    return Err("the Help tab always shows".into());
+                if ribbon::FIXED_TABS.contains(&tab.as_str()) {
+                    return Err(format!("the {tab} tab always shows"));
                 }
                 if self.ui.hidden_tabs.contains(&tab) {
                     self.ui.hidden_tabs.retain(|t| *t != tab);

@@ -14,6 +14,9 @@ use crate::{RightPane, RustGisApp, icons};
 
 pub const TABS: [&str; 10] = ["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"];
 
+/// Tabs that always show: Settings holds Customize › Ribbon, the way to show hidden tabs again.
+pub const FIXED_TABS: [&str; 2] = ["Settings", "Help"];
+
 /// The tab that holds what an older tab name (in saved pane sets, tasks and scripts) held; Home for
 /// a name that is no tab. Plugins' tabs pass through.
 pub fn current_tab(name: &str) -> &str {
@@ -29,7 +32,8 @@ pub fn current_tab(name: &str) -> &str {
 }
 
 /// Saved hidden tabs under the current names: renamed tabs carry over, and names of tabs whose
-/// groups were spread over several others are dropped (they could no longer be shown again).
+/// groups were spread over several others are dropped (they could no longer be shown again), and so
+/// are the tabs that always show.
 pub fn current_hidden_tabs(saved: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for name in saved {
@@ -39,7 +43,7 @@ pub fn current_hidden_tabs(saved: Vec<String>) -> Vec<String> {
             "Share" => "Publish",
             n => n,
         };
-        if (TABS.contains(&tab) || tab.starts_with("plugin:")) && !out.iter().any(|t| t == tab) {
+        if (TABS.contains(&tab) || tab.starts_with("plugin:")) && !FIXED_TABS.contains(&tab) && !out.iter().any(|t| t == tab) {
             out.push(tab.to_string());
         }
     }
@@ -2609,6 +2613,30 @@ fn plugin_tab(app: &mut RustGisApp, ui: &mut Ui, plugin: &str) {
 }
 
 fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Customize", |ui| {
+        let hidden = app.ui.hidden_tabs.clone();
+        // RustGIS's tabs and plugins' tabs.
+        let mut all: Vec<(String, String)> =
+            TABS.iter().filter(|t| !FIXED_TABS.contains(*t)).map(|t| (t.to_string(), tl!(*t).to_string())).collect();
+        all.extend(plugin_tabs(app));
+        big_menu(ui, app, "settings", "Ribbon", "Choose which tabs the ribbon shows.", move |ui, app| {
+            for (tab, caption) in &all {
+                let mut on = !hidden.iter().any(|h| h == tab);
+                if ui.checkbox(&mut on, caption.as_str()).clicked() {
+                    let _ = app.run("ui.customizeRibbon", json!({"tab": tab}));
+                }
+            }
+        });
+        let qa = app.ui.quick_access.clone();
+        big_menu(ui, app, "command", "Quick\nAccess", "Choose extra buttons for the Quick Access Toolbar.", move |ui, app| {
+            for (id, label) in QUICK {
+                let mut on = qa.iter().any(|c| c == id);
+                if ui.checkbox(&mut on, tl!(*label)).clicked() {
+                    let _ = app.run("ui.quickAccess", json!({"command": id}));
+                }
+            }
+        });
+    });
     group(ui, "Language", |ui| {
         language_menu(app, ui);
         worldview_menu(app, ui);
@@ -2695,29 +2723,6 @@ fn start_projection_menu(app: &mut RustGisApp, ui: &mut Ui) {
 }
 
 fn help_tab(app: &mut RustGisApp, ui: &mut Ui) {
-    group(ui, "Customize", |ui| {
-        let hidden = app.ui.hidden_tabs.clone();
-        // RustGIS's tabs and plugins' tabs.
-        let mut all: Vec<(String, String)> = TABS.iter().filter(|t| **t != "Help").map(|t| (t.to_string(), tl!(*t).to_string())).collect();
-        all.extend(plugin_tabs(app));
-        big_menu(ui, app, "settings", "Ribbon", "Choose which tabs the ribbon shows.", move |ui, app| {
-            for (tab, caption) in &all {
-                let mut on = !hidden.iter().any(|h| h == tab);
-                if ui.checkbox(&mut on, caption.as_str()).clicked() {
-                    let _ = app.run("ui.customizeRibbon", json!({"tab": tab}));
-                }
-            }
-        });
-        let qa = app.ui.quick_access.clone();
-        big_menu(ui, app, "command", "Quick\nAccess", "Choose extra buttons for the Quick Access Toolbar.", move |ui, app| {
-            for (id, label) in QUICK {
-                let mut on = qa.iter().any(|c| c == id);
-                if ui.checkbox(&mut on, tl!(*label)).clicked() {
-                    let _ = app.run("ui.quickAccess", json!({"command": id}));
-                }
-            }
-        });
-    });
     group(ui, "Performance", |ui| {
         big(
             ui,
@@ -3791,4 +3796,15 @@ fn language_menu(app: &mut RustGisApp, ui: &mut Ui) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_hidden_tabs_never_hide_the_fixed_tabs() {
+        let saved = ["Settings", "Help", "Edit", "Share", "Edit"].iter().map(|t| t.to_string()).collect();
+        assert_eq!(current_hidden_tabs(saved), vec!["Edit".to_string(), "Publish".to_string()]);
+    }
 }
