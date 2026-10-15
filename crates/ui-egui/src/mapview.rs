@@ -1429,7 +1429,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let mut x = r.min.x + 6.0;
     let names: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
     let active = if app.session.active_layout.is_some() { usize::MAX } else { app.session.project.active_map };
-    // A tab's close button deletes it after the strip is drawn: (command, name, was in view).
+    // A tab's close button deletes it after the strip is drawn: (command, name, was the active map).
     let mut close: Option<(&str, String, bool)> = None;
     for (i, n) in names.iter().enumerate() {
         let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0 + TAB_CLOSE_W;
@@ -1459,7 +1459,8 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         );
         // Over the tab's fill, so painted after it.
         if tab_close(ui, t, tr, egui::Id::new(("maptab_close", i)), is, !last, tip) {
-            close = Some(("map.remove", n.clone(), is));
+            // The project's active map, even behind an open layout: its popup goes with it.
+            close = Some(("map.remove", n.clone(), i == app.session.project.active_map));
         }
         if resp.clicked() && !is {
             let _ = app.run("layout.close", Value::Null);
@@ -1501,7 +1502,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         );
         // Over the tab's fill, so painted after it.
         if tab_close(ui, t, tr, egui::Id::new(("layouttab_close", i)), is, true, tl!("Delete Layout")) {
-            close = Some(("layout.remove", n.clone(), is));
+            close = Some(("layout.remove", n.clone(), false));
         }
         if resp.clicked() && !is {
             let _ = app.run("layout.activate", json!({"name": n}));
@@ -1518,10 +1519,9 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if resp.on_hover_text(tl!("New Map")).clicked() {
         let _ = app.run("map.new", Value::Null);
     }
-    if let Some((cmd, name, in_view)) = close
+    if let Some((cmd, name, active_map)) = close
         && app.run(cmd, json!({"name": name})).is_ok()
-        && in_view
-        && cmd == "map.remove"
+        && active_map
     {
         app.map.popup = None;
     }
@@ -1534,8 +1534,8 @@ const TAB_CLOSE_W: f32 = 18.0;
 /// `enabled: false` dims it and only explains why (`tip`). True when clicked.
 fn tab_close(ui: &mut Ui, t: &Tokens, tab: Rect, id: egui::Id, in_view: bool, enabled: bool, tip: &str) -> bool {
     let cr = Rect::from_center_size(pos2(tab.max.x - 13.0, tab.center().y), vec2(16.0, 16.0));
-    // Added after the tab, so it sits on top: its click doesn't also open the tab.
-    let resp = ui.interact(cr, id, if enabled { Sense::click() } else { Sense::hover() });
+    // Added after the tab, so it sits on top: its click (even dimmed) doesn't also open the tab.
+    let resp = ui.interact(cr, id, Sense::click());
     if !(in_view || ui.rect_contains_pointer(tab)) {
         return false;
     }
