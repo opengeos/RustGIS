@@ -807,6 +807,7 @@ Installed	Geïnstalleerd
 Installed plugins are kept in {folder}	Geïnstalleerde plugins worden bewaard in {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Geïnstalleerd met Homebrew, winget, de AUR of COPR? Werk het daar bij.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} geïnstalleerd. Je vindt de plugin op het tabblad Plugins; de gereedschappen staan ook in het gereedschappenvenster.
+Installing it downloads Python {version} and the packages it needs from the internet.	Bij het installeren worden Python {version} en de benodigde pakketten van internet gedownload.
 Interface font: {font}	Interfacelettertype: {font}
 Interpolate a surface from points (IDW)	Een oppervlak interpoleren uit punten (IDW)
 Invalid: {error}	Ongeldig: {error}
@@ -1216,6 +1217,7 @@ Polygon (draw)	Polygoon (tekenen)
 Polygons	Polygonen
 Polyline	Polylijn
 Pop-up Mode	Pop-upmodus
+Prepare	Voorbereiden
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Bewoonde plaatsen
 Portal	Portal
@@ -1223,6 +1225,7 @@ Portrait	Staand
 Postprocessing	Nabewerking
 power 2	macht 2
 Prepare every layer's geometry for this projection.	De geometrie van elke laag voorbereiden voor deze projectie.
+Preparing its Python environment…	Python-omgeving wordt voorbereid…
 Presentation	Presentatie
 Presentation File	Presentatiebestand
 Presentation Pane	Presentatievenster
@@ -1261,6 +1264,9 @@ Proximity	Nabijheid
 Publish	Publiceren
 Publish › Output	Publiceren › Uitvoer
 Put the layer back as it was then	De laag terugzetten zoals ze toen was
+Python environment failed: {error}	Python-omgeving mislukt: {error}
+Python environment not prepared	Python-omgeving niet voorbereid
+Python environment ready	Python-omgeving gereed
 Quantile	Kwantiel
 Quick\nAccess	Snelle\ntoegang
 Quick Access Toolbar	Werkbalk Snelle toegang

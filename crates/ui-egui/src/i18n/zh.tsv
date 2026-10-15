@@ -807,6 +807,7 @@ Installed	已安装
 Installed plugins are kept in {folder}	已安装的插件保存在 {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	通过 Homebrew、winget、AUR 或 COPR 安装？请在那里更新。
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	已安装 {name} {version}。可在“插件”选项卡中找到它；其工具也位于工具窗格中。
+Installing it downloads Python {version} and the packages it needs from the internet.	安装时会从互联网下载 Python {version} 及其所需的软件包。
 Interface font: {font}	界面字体：{font}
 Interpolate a surface from points (IDW)	由点插值生成表面（IDW）
 Invalid: {error}	无效：{error}
@@ -1216,6 +1217,7 @@ Polygon (draw)	多边形（绘制）
 Polygons	多边形
 Polyline	折线
 Pop-up Mode	弹出窗口模式
+Prepare	准备
 pop_max > 1000000	pop_max > 1000000
 Populated Places	居民点
 Portal	门户
@@ -1223,6 +1225,7 @@ Portrait	纵向
 Postprocessing	后处理
 power 2	幂次 2
 Prepare every layer's geometry for this projection.	为此投影准备每个图层的几何。
+Preparing its Python environment…	正在准备其 Python 环境…
 Presentation	演示文稿
 Presentation File	演示文稿文件
 Presentation Pane	演示文稿窗格
@@ -1261,6 +1264,9 @@ Proximity	邻域
 Publish	发布
 Publish › Output	发布 › 输出
 Put the layer back as it was then	将图层恢复到当时的状态
+Python environment failed: {error}	Python 环境准备失败：{error}
+Python environment not prepared	Python 环境尚未准备
+Python environment ready	Python 环境已就绪
 Quantile	分位数
 Quick\nAccess	快速\n访问
 Quick Access Toolbar	快速访问工具栏

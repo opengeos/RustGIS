@@ -311,6 +311,7 @@ pub fn uninstall(id: &str) -> Result<(), String> {
             if let Some(unpacked) = unpacked_dir(id).filter(|u| u.is_dir()) {
                 std::fs::remove_dir_all(&unpacked).map_err(|e| format!("{}: {e}", unpacked.display()))?;
             }
+            crate::pyenv::remove(id)?;
         }
     }
     Ok(())

@@ -348,6 +348,13 @@ fn file_parameters_need_files_and_hand_tools_the_file() {
 // ---------------------------------------------------------------------------------------------
 // process plugins
 
+/// Held by the tests that set the plugins folder, a global: one at a time.
+static STORE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn store_lock() -> std::sync::MutexGuard<'static, ()> {
+    STORE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// This test binary, started as the process test plugin, answers one request and exits.
 #[test]
 fn process_child() {
@@ -468,6 +475,7 @@ fn process_manifests_are_checked() {
 fn process_packages_unpack_safely() {
     use std::io::Write;
     let plugins = std::env::temp_dir().join(format!("rustgis-test-unpack-{}", std::process::id()));
+    let _store = store_lock();
     crate::store::set_dir(Some(plugins.clone()));
     let run = testing::child_run("tests::process_child");
     let manifest = testing::process_manifest("unpacked", &[], &run);
@@ -520,5 +528,109 @@ fn process_packages_unpack_safely() {
     // Uninstalling removes the files.
     crate::store::uninstall("unpacked").unwrap();
     assert!(!dir.exists());
+    let _ = std::fs::remove_dir_all(&plugins);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Python environments
+
+#[test]
+fn python_environments_are_declared_checked_and_required() {
+    let base = |python: Value| {
+        let m = json!({"id": "py", "name": "Py", "version": "1.0.0", "runtime": "process", "run": ["python", "main.py"],
+            "python": python, "commands": [{"id": "h", "label": "H"}]});
+        Manifest::parse(&m.to_string())
+    };
+    assert_eq!(base(json!({})).unwrap().python.unwrap().version, "3.12");
+    assert!(base(json!({"version": "3.11", "requirements": "req/requirements.txt"})).is_ok());
+    for bad in [json!({"version": "2.7"}), json!({"version": "3.x"}), json!({"version": ""}), json!({"requirements": "../r.txt"})] {
+        assert!(base(bad.clone()).is_err(), "{bad}");
+    }
+    let wasm = json!({"id": "w", "name": "W", "version": "1.0.0", "python": {}, "commands": [{"id": "h", "label": "H"}]});
+    assert!(Manifest::parse(&wasm.to_string()).unwrap_err().contains("process plugins"));
+
+    // Loaded, `python` is the environment's interpreter, and calls wait for it to be ready.
+    let plugins = std::env::temp_dir().join(format!("rustgis-test-pyenv-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&plugins);
+    let _store = store_lock();
+    crate::store::set_dir(Some(plugins.clone()));
+    let dir = plugins.join("src");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("requirements.txt"), "numpy\n").unwrap();
+    let mut m: Value = serde_json::from_str(&testing::manifest("pyenv-test", &[])).unwrap();
+    m["runtime"] = json!("process");
+    m["run"] = json!(["python", "main.py"]);
+    m["python"] = json!({"version": "3.12", "requirements": "requirements.txt"});
+    std::fs::write(dir.join("plugin.json"), m.to_string()).unwrap();
+    let p = crate::load(Package::from_dir(&dir).unwrap(), "test").unwrap();
+    let check = p.env_check().unwrap().clone();
+    assert_eq!(check.env, plugins.join("envs/pyenv-test"));
+    assert_eq!(crate::pyenv::status("pyenv-test"), Some(false));
+    let req = json!({"abi": 1, "kind": "command", "id": "h", "params": {}, "lang": "en"});
+    let e = crate::call(&p, &mut Recorder::default(), &req, false).unwrap_err();
+    assert!(e.contains("Python environment isn't ready") && e.contains("plugins prepare pyenv-test"), "{e}");
+
+    // An environment made for these requirements is ready; changed requirements need another.
+    let python = crate::pyenv::python_in(&check.env);
+    std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+    std::fs::write(&python, "").unwrap();
+    let made_for = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"3.12\nnumpy\n");
+        h.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>()
+    };
+    std::fs::write(check.env.join(".rustgis-env"), &made_for).unwrap();
+    assert!(check.ready() && crate::pyenv::status("pyenv-test") == Some(true));
+    std::fs::write(dir.join("requirements.txt"), "numpy\nscipy\n").unwrap();
+    let p = crate::load(Package::from_dir(&dir).unwrap(), "test").unwrap();
+    assert!(!p.env_check().unwrap().ready(), "changed requirements need a new environment");
+    assert_eq!(crate::pyenv::status("h-not-loaded"), None);
+    crate::unload("pyenv-test");
+    // An installed package (unpacked only after it's checked) loads; the environment made above
+    // for the same requirements serves it, and uninstalling removes it.
+    let pkg = testing::zip_of(&[("plugin.json", m.to_string().as_bytes()), ("requirements.txt", b"numpy\n")]);
+    let p = crate::store::install_bytes(&pkg).unwrap();
+    assert!(p.dir().unwrap().join("requirements.txt").is_file());
+    assert_eq!(crate::pyenv::status("pyenv-test"), Some(true));
+    crate::store::uninstall("pyenv-test").unwrap();
+    assert!(!check.env.exists());
+    let _ = std::fs::remove_dir_all(&plugins);
+}
+
+/// Downloads uv and a Python and runs a plugin in its environment (network; run by hand:
+/// `cargo test -p rustgis-plugins --features testing -- --ignored python_environments_are_made`).
+#[test]
+#[ignore]
+fn python_environments_are_made() {
+    let plugins = std::env::temp_dir().join(format!("rustgis-test-pyenv-made-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&plugins);
+    let _store = store_lock();
+    crate::store::set_dir(Some(plugins.clone()));
+    let dir = plugins.join("src");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("requirements.txt"), "six\n").unwrap();
+    std::fs::write(
+        dir.join("main.py"),
+        "import json, sys, six\nreq = json.loads(sys.stdin.readline())\nprint(json.dumps({'ok': {'python': sys.version_info[:2], 'six': six.__version__}}), flush=True)\n",
+    )
+    .unwrap();
+    let mut m: Value = serde_json::from_str(&testing::manifest("pyenv-made", &[])).unwrap();
+    m["runtime"] = json!("process");
+    m["run"] = json!(["python", "main.py"]);
+    m["python"] = json!({"version": "3.12", "requirements": "requirements.txt"});
+    std::fs::write(dir.join("plugin.json"), m.to_string()).unwrap();
+    let p = crate::load(Package::from_dir(&dir).unwrap(), "test").unwrap();
+    let mut said = Vec::new();
+    let python = crate::pyenv::prepare("pyenv-made", &mut |l| said.push(l.to_string())).unwrap();
+    assert!(python.is_file() && said.last().map(String::as_str) == Some("Ready"), "{said:?}");
+    let req = json!({"abi": 1, "kind": "command", "id": "h", "params": {}, "lang": "en"});
+    let out = crate::call(&p, &mut Recorder::default(), &req, false).unwrap();
+    assert_eq!(out["python"], json!([3, 12]));
+    // Ready now: preparing again does nothing.
+    let t0 = std::time::Instant::now();
+    crate::pyenv::prepare("pyenv-made", &mut |_| {}).unwrap();
+    assert!(t0.elapsed() < std::time::Duration::from_secs(2));
+    crate::unload("pyenv-made");
     let _ = std::fs::remove_dir_all(&plugins);
 }

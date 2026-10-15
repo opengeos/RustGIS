@@ -807,6 +807,7 @@ Installed	インストール済み
 Installed plugins are kept in {folder}	インストールしたプラグインの保存先: {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Homebrew、winget、AUR、COPR でインストールした場合は、そちらで更新してください。
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} をインストールしました。[プラグイン] タブにあります。ツールはツール ウィンドウにもあります。
+Installing it downloads Python {version} and the packages it needs from the internet.	インストールすると、Python {version} と必要なパッケージがインターネットからダウンロードされます。
 Interface font: {font}	インターフェイスのフォント：{font}
 Interpolate a surface from points (IDW)	ポイントから表面を内挿 (IDW)
 Invalid: {error}	無効：{error}
@@ -1216,6 +1217,7 @@ Polygon (draw)	ポリゴン (描画)
 Polygons	ポリゴン
 Polyline	ポリライン
 Pop-up Mode	ポップアップ モード
+Prepare	準備
 pop_max > 1000000	pop_max > 1000000
 Populated Places	人口集中地
 Portal	ポータル
@@ -1223,6 +1225,7 @@ Portrait	縦向き
 Postprocessing	後処理
 power 2	べき乗 2
 Prepare every layer's geometry for this projection.	この投影法用にすべてのレイヤーのジオメトリを準備します。
+Preparing its Python environment…	Python 環境を準備しています…
 Presentation	プレゼンテーション
 Presentation File	プレゼンテーション ファイル
 Presentation Pane	プレゼンテーション ウィンドウ
@@ -1261,6 +1264,9 @@ Proximity	近接
 Publish	公開
 Publish › Output	公開 › 出力
 Put the layer back as it was then	レイヤーをその時点の状態に戻す
+Python environment failed: {error}	Python 環境の準備に失敗しました: {error}
+Python environment not prepared	Python 環境が準備されていません
+Python environment ready	Python 環境の準備完了
 Quantile	等量
 Quick\nAccess	クイック\nアクセス
 Quick Access Toolbar	クイック アクセス ツールバー

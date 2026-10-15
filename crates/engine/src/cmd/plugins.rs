@@ -27,7 +27,24 @@ pub fn commands() -> Vec<C> {
         C::new("plugin.installFromRegistry", "Install Plugin From Registry", "Plugins › Manage", install_from_registry)
             .view()
             .params(r#"{"id": plugin id, "url"?: registry.json}"#),
+        C::new("plugin.prepare", "Prepare Plugin Environment", "Plugins › Manage", prepare)
+            .view()
+            .params(r#"{"id": plugin id (a process plugin that declares "python": downloads its Python and packages)}"#),
     ]
+}
+
+/// Makes a Python plugin's environment (it can take minutes: downloads).
+fn prepare(_: &mut Session, p: &Value) -> CmdResult {
+    let id = ps(p, "id").ok_or("id is required")?;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let python = rustgis_plugins::pyenv::prepare(id, &mut |line| log::info!("plugin {id}: {line}"))?;
+        Ok(json!({"id": id, "python": python.display().to_string()}))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Err(format!("{id}: Python environments need the desktop app or rustgis-cli"))
+    }
 }
 
 /// Loads the installed plugins (desktop and command line); returns what failed to load.

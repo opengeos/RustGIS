@@ -807,6 +807,7 @@ Installed	დაინსტალირებულია
 Installed plugins are kept in {folder}	დაინსტალირებული დანამატები ინახება აქ: {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	დაყენებულია Homebrew-ით, winget-ით, AUR-ით ან COPR-ით? განაახლეთ იქვე.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	დაყენდა {name} {version}. მოძებნეთ დანამატების ჩანართზე; მისი ხელსაწყოები ხელსაწყოების პანელშიც არის.
+Installing it downloads Python {version} and the packages it needs from the internet.	ინსტალაციისას ინტერნეტიდან ჩამოიტვირთება Python {version} და მისთვის საჭირო პაკეტები.
 Interface font: {font}	ინტერფეისის შრიფტი: {font}
 Interpolate a surface from points (IDW)	ზედაპირის ინტერპოლაცია წერტილებიდან (IDW)
 Invalid: {error}	არასწორია: {error}
@@ -1216,6 +1217,7 @@ Polygon (draw)	პოლიგონი (ხატვა)
 Polygons	პოლიგონები
 Polyline	პოლილაინი
 Pop-up Mode	ამომხტარი ფანჯრის რეჟიმი
+Prepare	მომზადება
 pop_max > 1000000	pop_max > 1000000
 Populated Places	დასახლებული პუნქტები
 Portal	პორტალი
@@ -1223,6 +1225,7 @@ Portrait	ვერტიკალური
 Postprocessing	პოსტდამუშავება
 power 2	ხარისხი 2
 Prepare every layer's geometry for this projection.	ამ პროექციისთვის ყველა ფენის გეომეტრიის მომზადება.
+Preparing its Python environment…	მისი Python გარემო მზადდება…
 Presentation	პრეზენტაცია
 Presentation File	პრეზენტაციის ფაილი
 Presentation Pane	პრეზენტაციის პანელი
@@ -1261,6 +1264,9 @@ Proximity	სიახლოვე
 Publish	გამოქვეყნება
 Publish › Output	გამოქვეყნება › გამოსავალი
 Put the layer back as it was then	ფენის დაბრუნება იმ მდგომარეობაში, როგორიც მაშინ იყო
+Python environment failed: {error}	Python გარემო ვერ მომზადდა: {error}
+Python environment not prepared	Python გარემო არ არის მომზადებული
+Python environment ready	Python გარემო მზადაა
 Quantile	კვანტილი
 Quick\nAccess	სწრაფი\nწვდომა
 Quick Access Toolbar	სწრაფი წვდომის პანელი

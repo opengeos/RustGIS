@@ -807,6 +807,7 @@ Installed	Установлен
 Installed plugins are kept in {folder}	Установленные модули хранятся в {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Установлено через Homebrew, winget, AUR или COPR? Обновите там.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	Установлен модуль {name} {version}. Он находится на вкладке «Модули»; его инструменты также есть на панели «Инструменты».
+Installing it downloads Python {version} and the packages it needs from the internet.	При установке из интернета загружаются Python {version} и нужные ему пакеты.
 Interface font: {font}	Шрифт интерфейса: {font}
 Interpolate a surface from points (IDW)	Интерполировать поверхность по точкам (IDW)
 Invalid: {error}	Недопустимо: {error}
@@ -1216,6 +1217,7 @@ Polygon (draw)	Полигон (рисование)
 Polygons	Полигоны
 Polyline	Полилиния
 Pop-up Mode	Режим всплывающих окон
+Prepare	Подготовить
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Населённые пункты
 Portal	Портал
@@ -1223,6 +1225,7 @@ Portrait	Книжная
 Postprocessing	Постобработка
 power 2	степень 2
 Prepare every layer's geometry for this projection.	Подготовить геометрию всех слоёв для этой проекции.
+Preparing its Python environment…	Подготовка его окружения Python…
 Presentation	Презентация
 Presentation File	Файл презентации
 Presentation Pane	Панель презентации
@@ -1261,6 +1264,9 @@ Proximity	Близость
 Publish	Публикация
 Publish › Output	Публикация › Вывод
 Put the layer back as it was then	Вернуть слой в тогдашнее состояние
+Python environment failed: {error}	Ошибка окружения Python: {error}
+Python environment not prepared	Окружение Python не подготовлено
+Python environment ready	Окружение Python готово
 Quantile	Квантили
 Quick\nAccess	Быстрый\nдоступ
 Quick Access Toolbar	Панель быстрого доступа

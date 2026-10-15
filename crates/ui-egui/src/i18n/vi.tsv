@@ -807,6 +807,7 @@ Installed	Đã cài đặt
 Installed plugins are kept in {folder}	Plugin đã cài đặt được lưu trong {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Đã cài bằng Homebrew, winget, AUR hoặc COPR? Hãy cập nhật ở đó.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	Đã cài đặt {name} {version}. Bạn có thể tìm thấy plugin trên thẻ Plugin; các công cụ của nó cũng có trong ngăn Công cụ.
+Installing it downloads Python {version} and the packages it needs from the internet.	Khi cài đặt sẽ tải Python {version} và các gói cần thiết từ internet.
 Interface font: {font}	Phông giao diện: {font}
 Interpolate a surface from points (IDW)	Nội suy bề mặt từ điểm (IDW)
 Invalid: {error}	Không hợp lệ: {error}
@@ -1216,6 +1217,7 @@ Polygon (draw)	Vùng (vẽ)
 Polygons	Vùng
 Polyline	Đường gấp khúc
 Pop-up Mode	Chế độ cửa sổ bật lên
+Prepare	Chuẩn bị
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Khu dân cư
 Portal	Cổng thông tin
@@ -1223,6 +1225,7 @@ Portrait	Dọc
 Postprocessing	Hậu xử lý
 power 2	lũy thừa 2
 Prepare every layer's geometry for this projection.	Chuẩn bị hình học của mọi lớp cho phép chiếu này.
+Preparing its Python environment…	Đang chuẩn bị môi trường Python của nó…
 Presentation	Bản trình bày
 Presentation File	Tệp bản trình bày
 Presentation Pane	Ngăn bản trình bày
@@ -1261,6 +1264,9 @@ Proximity	Lân cận
 Publish	Xuất bản
 Publish › Output	Xuất bản › Đầu ra
 Put the layer back as it was then	Đưa lớp trở lại như lúc đó
+Python environment failed: {error}	Môi trường Python thất bại: {error}
+Python environment not prepared	Môi trường Python chưa được chuẩn bị
+Python environment ready	Môi trường Python đã sẵn sàng
 Quantile	Phân vị
 Quick\nAccess	Truy cập\nnhanh
 Quick Access Toolbar	Thanh truy cập nhanh

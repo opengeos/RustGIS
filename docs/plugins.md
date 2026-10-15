@@ -373,6 +373,33 @@ except Exception as e:
 print(json.dumps(result), flush=True)
 ```
 
+### Python environments
+
+A Python plugin can have RustGIS make its environment, so its users don't install Python or
+any package themselves:
+
+```json
+"runtime": "process",
+"python": { "version": "3.12", "requirements": "requirements.txt" },
+"run": ["python", "main.py"]
+```
+
+- `python` in `run` is then that environment's interpreter, on every platform.
+- RustGIS makes the environment when the plugin is installed: in the background in the desktop
+  app (the Plugin Manager shows how it's going, and a **Prepare** button makes it again), and
+  before the command returns in `rustgis-cli plugins install` and `get`.
+  `rustgis-cli plugins prepare <id>` and the `plugin.prepare` command make it on demand.
+- It uses [uv](https://github.com/astral-sh/uv), which RustGIS downloads once (a pinned version,
+  checked against its pinned SHA-256; `RUSTGIS_UV` names one to use instead). uv installs a
+  standalone Python of the version asked for and the packages in the requirements file, from
+  PyPI. Pythons and uv's cache are shared in `tools/` in the plugins folder; each plugin's
+  environment is in `envs/<id>/`.
+- The environment is made again when the Python version or the requirements change (a plugin
+  update), and removed with the plugin. Until it's ready, the plugin's calls fail with a
+  message saying how to prepare it.
+- The first install downloads Python and the packages: tens to hundreds of MB, depending on
+  them. The install prompt says so.
+
 ## Publishing a plugin
 
 Open a pull request on

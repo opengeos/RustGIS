@@ -807,6 +807,7 @@ Installed	Quraşdırılıb
 Installed plugins are kept in {folder}	Quraşdırılmış plaginlər burada saxlanılır: {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Homebrew, winget, AUR və ya COPR ilə quraşdırmısınız? Oradan yeniləyin.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} quraşdırıldı. Onu Plaginlər tabında tapa bilərsiniz; alətləri Alətlər panelində də var.
+Installing it downloads Python {version} and the packages it needs from the internet.	Quraşdırma internetdən Python {version} və lazım olan paketləri yükləyir.
 Interface font: {font}	İnterfeys şrifti: {font}
 Interpolate a surface from points (IDW)	Nöqtələrdən səth interpolyasiya et (IDW)
 Invalid: {error}	Yanlışdır: {error}
@@ -1216,6 +1217,7 @@ Polygon (draw)	Poliqon (çəkmə)
 Polygons	Poliqonlar
 Polyline	Polixətt
 Pop-up Mode	Açılan pəncərə rejimi
+Prepare	Hazırla
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Yaşayış məntəqələri
 Portal	Portal
@@ -1223,6 +1225,7 @@ Portrait	Kitab
 Postprocessing	Sonrakı emal
 power 2	qüvvət 2
 Prepare every layer's geometry for this projection.	Hər layın həndəsəsini bu proyeksiya üçün hazırlayın.
+Preparing its Python environment…	Onun Python mühiti hazırlanır…
 Presentation	Təqdimat
 Presentation File	Təqdimat faylı
 Presentation Pane	Təqdimat paneli
@@ -1261,6 +1264,9 @@ Proximity	Yaxınlıq
 Publish	Nəşr
 Publish › Output	Nəşr › Çıxış
 Put the layer back as it was then	Layı o vaxtkı vəziyyətinə qaytar
+Python environment failed: {error}	Python mühiti alınmadı: {error}
+Python environment not prepared	Python mühiti hazırlanmayıb
+Python environment ready	Python mühiti hazırdır
 Quantile	Kvantil
 Quick\nAccess	Sürətli\ngiriş
 Quick Access Toolbar	Sürətli giriş paneli

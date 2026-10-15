@@ -807,6 +807,7 @@ Installed	Instalado
 Installed plugins are kept in {folder}	Os plugins instalados ficam em {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Instalou com Homebrew, winget, AUR ou COPR? Atualize por lá.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} instalado. Você o encontra na guia Plugins; as ferramentas dele também estão no painel Ferramentas.
+Installing it downloads Python {version} and the packages it needs from the internet.	A instalação baixa da internet o Python {version} e os pacotes de que ele precisa.
 Interface font: {font}	Fonte da interface: {font}
 Interpolate a surface from points (IDW)	Interpolar uma superfície a partir de pontos (IDW)
 Invalid: {error}	Inválida: {error}
@@ -1216,6 +1217,7 @@ Polygon (draw)	Polígono (desenhar)
 Polygons	Polígonos
 Polyline	Polilinha
 Pop-up Mode	Modo de pop-up
+Prepare	Preparar
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Locais povoados
 Portal	Portal
@@ -1223,6 +1225,7 @@ Portrait	Retrato
 Postprocessing	Pós-processamento
 power 2	potência 2
 Prepare every layer's geometry for this projection.	Preparar a geometria de todas as camadas para esta projeção.
+Preparing its Python environment…	Preparando o ambiente Python…
 Presentation	Apresentação
 Presentation File	Arquivo de apresentação
 Presentation Pane	Painel Apresentação
@@ -1261,6 +1264,9 @@ Proximity	Proximidade
 Publish	Publicar
 Publish › Output	Publicar › Saída
 Put the layer back as it was then	Restaurar a camada como estava naquele momento
+Python environment failed: {error}	Falha no ambiente Python: {error}
+Python environment not prepared	Ambiente Python não preparado
+Python environment ready	Ambiente Python pronto
 Quantile	Quantil
 Quick\nAccess	Acesso\nrápido
 Quick Access Toolbar	Barra de ferramentas de acesso rápido

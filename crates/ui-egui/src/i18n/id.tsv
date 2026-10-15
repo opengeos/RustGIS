@@ -807,6 +807,7 @@ Installed	Terpasang
 Installed plugins are kept in {folder}	Plugin yang terpasang disimpan di {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Dipasang dengan Homebrew, winget, AUR, atau COPR? Perbarui di sana.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} telah dipasang. Temukan di tab Plugin; alat-alatnya juga ada di panel Alat.
+Installing it downloads Python {version} and the packages it needs from the internet.	Memasangnya akan mengunduh Python {version} dan paket yang diperlukan dari internet.
 Interface font: {font}	Fon antarmuka: {font}
 Interpolate a surface from points (IDW)	Interpolasi permukaan dari titik (IDW)
 Invalid: {error}	Tidak valid: {error}
@@ -1216,6 +1217,7 @@ Polygon (draw)	Poligon (gambar)
 Polygons	Poligon
 Polyline	Polyline
 Pop-up Mode	Mode Pop-up
+Prepare	Siapkan
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Tempat Berpenduduk
 Portal	Portal
@@ -1223,6 +1225,7 @@ Portrait	Potret
 Postprocessing	Pascaproses
 power 2	pangkat 2
 Prepare every layer's geometry for this projection.	Siapkan geometri setiap layer untuk proyeksi ini.
+Preparing its Python environment…	Menyiapkan lingkungan Python-nya…
 Presentation	Presentasi
 Presentation File	File Presentasi
 Presentation Pane	Panel Presentasi
@@ -1261,6 +1264,9 @@ Proximity	Kedekatan
 Publish	Publikasi
 Publish › Output	Publikasi › Keluaran
 Put the layer back as it was then	Kembalikan layer seperti pada saat itu
+Python environment failed: {error}	Lingkungan Python gagal: {error}
+Python environment not prepared	Lingkungan Python belum disiapkan
+Python environment ready	Lingkungan Python siap
 Quantile	Kuantil
 Quick\nAccess	Akses\nCepat
 Quick Access Toolbar	Bilah Akses Cepat

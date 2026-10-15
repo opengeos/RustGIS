@@ -13,7 +13,7 @@
 //! rustgis-cli ask --models [--provider P]                # list the provider's models
 //! rustgis-cli mcp [--sample | --project p.rgis | --data f.geojson …] [--yes]   # an MCP server on stdio
 //! rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id>
-//!                      | browse | get <id>] [--registry URL]
+//!                      | browse | get <id> | prepare <id>] [--registry URL]
 //! ```
 //!
 //! Installed plugins are loaded first (`--no-plugins` skips them); `--plugin <file|folder>`
@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]\n  rustgis-cli mcp [--sample] [--project P] [--data F]… [--yes]"
+        "usage:\n  rustgis-cli commands | tools\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id> | prepare <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]\n  rustgis-cli mcp [--sample] [--project P] [--data F]… [--yes]"
     );
     ExitCode::from(2)
 }
@@ -58,6 +58,13 @@ fn run(s: &mut Session, id: &str, p: Value) -> Result<Value, String> {
         eprintln!("rustgis-cli: {}{}", if n.error { "error: " } else { "" }, n.text);
     }
     r.map_err(|e| format!("{id}: {e}"))
+}
+
+/// Makes a Python plugin's environment, saying what it's doing as it goes.
+fn prepare_env(id: &str) -> Result<String, String> {
+    eprintln!("rustgis-cli: preparing {id}'s Python environment (the first time downloads Python and its packages)");
+    let python = rustgis_engine::plugins::pyenv::prepare(id, &mut |line| eprintln!("rustgis-cli: {line}"))?;
+    Ok(python.display().to_string())
 }
 
 fn is_project(path: &str) -> bool {
@@ -302,8 +309,16 @@ fn main() -> ExitCode {
                 Some("disable") => run(&mut s, "plugin.enable", json!({"id": arg("disable")?, "enabled": false}))?,
                 Some("browse") => run(&mut s, "plugin.registry", json!({"url": registry}))?,
                 Some("get") => run(&mut s, "plugin.installFromRegistry", json!({"id": arg("get")?, "url": registry}))?,
+                Some("prepare") => json!({"python": prepare_env(&arg("prepare")?)?}),
                 Some(other) => return Err(format!("unknown plugins subcommand '{other}'")),
             };
+            // A Python plugin just installed gets its environment now, so it runs.
+            if matches!(args.get(1).map(String::as_str), Some("install" | "get"))
+                && let Some(id) = out.get("id").and_then(Value::as_str)
+                && rustgis_engine::plugins::pyenv::status(id) == Some(false)
+            {
+                prepare_env(id)?;
+            }
             print(&out);
             Ok(())
         }

@@ -133,6 +133,23 @@ impl RunDecl {
     }
 }
 
+/// A process plugin's Python environment, which RustGIS makes for it: a Python of `version`
+/// with the packages `requirements` lists (a requirements file in the plugin's folder). The
+/// plugin's `run` then names `python` for that environment's interpreter.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PythonDecl {
+    /// The Python version (`3.12`).
+    #[serde(default = "default_python")]
+    pub version: String,
+    /// A requirements file in the plugin's folder (`requirements.txt`); empty for none.
+    #[serde(default)]
+    pub requirements: String,
+}
+
+fn default_python() -> String {
+    "3.12".into()
+}
+
 /// A command the plugin adds: a button on the Plugins tab, an entry in command search and a
 /// command id for scripts and the command line (`plugin:<plugin>/<command>`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -272,6 +289,9 @@ pub struct Manifest {
     /// name is looked up on `PATH`; a relative path is in the plugin's folder.
     #[serde(default)]
     pub run: Option<RunDecl>,
+    /// For a process plugin in Python: the environment RustGIS makes for it.
+    #[serde(default)]
+    pub python: Option<PythonDecl>,
     /// The plugin ABI the module was built for.
     #[serde(default = "default_abi")]
     pub abi: u32,
@@ -393,11 +413,21 @@ impl Manifest {
                 if !valid_path(&self.entry) || !self.entry.ends_with(".wasm") {
                     return Err("plugin.json: entry must be a relative path to a .wasm file inside the package".into());
                 }
-                if self.run.is_some() {
-                    return Err("plugin.json: 'run' is for process plugins (\"runtime\": \"process\")".into());
+                if self.run.is_some() || self.python.is_some() {
+                    return Err("plugin.json: 'run' and 'python' are for process plugins (\"runtime\": \"process\")".into());
                 }
             }
             Runtime::Process => {
+                if let Some(py) = &self.python {
+                    let mut parts = py.version.split('.');
+                    let numbers = py.version.split('.').all(|p| !p.is_empty() && p.len() <= 3 && p.bytes().all(|b| b.is_ascii_digit()));
+                    if !numbers || parts.next() != Some("3") || py.version.len() > 16 {
+                        return Err(format!("plugin.json: python version '{}' must look like 3.12", py.version));
+                    }
+                    if !py.requirements.is_empty() && !valid_path(&py.requirements) {
+                        return Err("plugin.json: python requirements must be a file in the plugin's folder".into());
+                    }
+                }
                 let run = self.run.as_ref().ok_or("plugin.json: a process plugin needs 'run': its program and arguments")?;
                 let all = run.all();
                 if all.is_empty() {

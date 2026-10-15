@@ -47,6 +47,8 @@ pub struct Spec {
     pub dir: PathBuf,
     /// Environment variables for the program (tests only: a manifest can't set them).
     pub(crate) env: Vec<(String, String)>,
+    /// For a plugin with a Python environment (`"python"`): the check that it's ready.
+    pub env_check: Option<crate::pyenv::EnvCheck>,
 }
 
 impl Spec {
@@ -56,7 +58,7 @@ impl Spec {
         // Absolute: the program starts in the folder, so a relative folder would be followed
         // twice (`./plugin/plugin/bin/tool`).
         let dir = std::path::absolute(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        Ok(Spec { program: program.clone(), args: args.to_vec(), dir, env: Vec::new() })
+        Ok(Spec { program: program.clone(), args: args.to_vec(), dir, env: Vec::new(), env_check: None })
     }
 
     /// The program to start: a path relative to the plugin's folder, or a name for `PATH`.
@@ -209,6 +211,12 @@ fn send(stdin: &Sender<Vec<u8>>, v: &Value) -> Result<(), String> {
 /// Runs one call: starts the program, sends `request`, answers its host requests through
 /// `host`, and returns its `ok` value or its error. `timeout` (none for tools) stops it.
 pub fn call(spec: &Spec, host: &mut dyn Host, request: &Value, timeout: Option<Duration>) -> Result<Value, String> {
+    if let Some(check) = spec.env_check.as_ref().filter(|c| !c.ready()) {
+        return Err(format!(
+            "its Python environment isn't ready: prepare it in Plugins › Plugin Manager › Installed, or with rustgis-cli plugins prepare {}",
+            check.id
+        ));
+    }
     let mut child = spec
         .command()
         .stdin(Stdio::piped())

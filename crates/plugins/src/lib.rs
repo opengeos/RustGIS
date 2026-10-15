@@ -19,6 +19,8 @@ pub mod manifest;
 pub mod package;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod process;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod pyenv;
 pub mod registry;
 pub mod runtime;
 #[cfg(not(target_arch = "wasm32"))]
@@ -58,7 +60,7 @@ pub struct Plugin {
 enum Code {
     Wasm(wasmi::Module),
     #[cfg(not(target_arch = "wasm32"))]
-    Process(process::Spec),
+    Process(Box<process::Spec>),
 }
 
 impl std::fmt::Debug for Plugin {
@@ -72,6 +74,24 @@ impl std::fmt::Debug for Plugin {
 }
 
 impl Plugin {
+    /// For a process plugin with a Python environment: the check that it's ready.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn env_check(&self) -> Option<&pyenv::EnvCheck> {
+        match &self.code {
+            Code::Process(spec) => spec.env_check.as_ref(),
+            Code::Wasm(_) => None,
+        }
+    }
+
+    /// A process plugin's folder.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn dir(&self) -> Option<&std::path::Path> {
+        match &self.code {
+            Code::Process(spec) => Some(&spec.dir),
+            Code::Wasm(_) => None,
+        }
+    }
+
     /// A summary for lists and the command line.
     pub fn info(&self) -> Value {
         let m = &self.manifest;
@@ -191,7 +211,15 @@ fn process_code(pkg: &Package) -> Result<Code, String> {
     let dir = pkg.dir.as_ref().ok_or_else(|| format!("{name}: a process plugin runs from a folder; install it first"))?;
     let argv =
         pkg.manifest.run.as_ref().and_then(|r| r.for_this_platform()).ok_or_else(|| format!("{name} doesn't run on this platform"))?;
-    Ok(Code::Process(process::Spec::new(argv, dir)?))
+    let mut spec = process::Spec::new(argv, dir)?;
+    // With a Python environment, `python` is that environment's interpreter.
+    if let Some(check) = pyenv::EnvCheck::of(&pkg.manifest, &spec.dir).map_err(|e| format!("{name}: {e}"))? {
+        if matches!(spec.program.as_str(), "python" | "python3" | "python.exe") {
+            spec.program = pyenv::python_in(&check.env).display().to_string();
+        }
+        spec.env_check = Some(check);
+    }
+    Ok(Code::Process(Box::new(spec)))
 }
 
 #[cfg(target_arch = "wasm32")]

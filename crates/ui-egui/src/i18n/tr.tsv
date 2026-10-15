@@ -807,6 +807,7 @@ Installed	Yüklü
 Installed plugins are kept in {folder}	Yüklü eklentiler şurada tutulur: {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Homebrew, winget, AUR veya COPR ile mi kurdunuz? Oradan güncelleyin.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} yüklendi. Eklentiler sekmesinde bulabilirsiniz; araçları Araçlar panelinde de yer alır.
+Installing it downloads Python {version} and the packages it needs from the internet.	Yüklemek, internetten Python {version} ve gereken paketleri indirir.
 Interface font: {font}	Arayüz yazı tipi: {font}
 Interpolate a surface from points (IDW)	Noktalardan yüzey enterpole et (IDW)
 Invalid: {error}	Geçersiz: {error}
@@ -1216,6 +1217,7 @@ Polygon (draw)	Poligon (çiz)
 Polygons	Poligonlar
 Polyline	Çoklu Çizgi
 Pop-up Mode	Açılır Pencere Modu
+Prepare	Hazırla
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Yerleşim Yerleri
 Portal	Portal
@@ -1223,6 +1225,7 @@ Portrait	Dikey
 Postprocessing	Son İşleme
 power 2	üs 2
 Prepare every layer's geometry for this projection.	Her katmanın geometrisini bu projeksiyon için hazırla.
+Preparing its Python environment…	Python ortamı hazırlanıyor…
 Presentation	Sunum
 Presentation File	Sunum Dosyası
 Presentation Pane	Sunum Paneli
@@ -1261,6 +1264,9 @@ Proximity	Yakınlık
 Publish	Yayımla
 Publish › Output	Yayımla › Çıktı
 Put the layer back as it was then	Katmanı o zamanki haline geri getir
+Python environment failed: {error}	Python ortamı başarısız oldu: {error}
+Python environment not prepared	Python ortamı hazırlanmadı
+Python environment ready	Python ortamı hazır
 Quantile	Kantil
 Quick\nAccess	Hızlı\nErişim
 Quick Access Toolbar	Hızlı Erişim Araç Çubuğu
