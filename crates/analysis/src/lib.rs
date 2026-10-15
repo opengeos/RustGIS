@@ -110,6 +110,10 @@ pub struct ToolResult {
 /// Access to the map's layers by name.
 pub trait Inputs {
     fn dataset(&self, layer: &str) -> Option<&Dataset>;
+    /// A standalone table by its id: an input given as a number, which no name is taken for.
+    fn table(&self, _id: u32) -> Option<&Dataset> {
+        None
+    }
     /// Selected rows of a layer; tools honour a selection like desktop GIS does.
     fn selection(&self, layer: &str) -> &[usize];
     /// A raster layer by name.

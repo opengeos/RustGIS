@@ -20,8 +20,23 @@ pub struct Dialogs {
     pub flag: bool,
     pub error: Option<String>,
     pub info: Option<String>,
-    /// Choices found for the dialog (Add From Database's tables).
+    /// Choices found for the dialog (Add From Database's tables; Add Delimited Text's columns).
     pub list: Vec<String>,
+    /// Add Delimited Text's file, picked before the dialog opens.
+    pub csv: Option<CsvFile>,
+}
+
+/// A file picked for Add Delimited Text.
+pub struct CsvFile {
+    pub name: String,
+    pub source: CsvSource,
+}
+
+/// Where a file picked for Add Delimited Text is: on disk, or (in the browser) its bytes, kept
+/// until it is added.
+pub enum CsvSource {
+    Path(String),
+    Bytes(Vec<u8>),
 }
 
 impl Dialogs {
@@ -54,6 +69,7 @@ impl Dialogs {
             "opendata" => "opendata",
             "zarr" => "zarr",
             "exportLayer" => "exportLayer",
+            "saveProject" => "saveProject",
             other => return Err(format!("unknown dialog '{other}'")),
         };
         if matches!(name, "addField" | "calculateField" | "definitionQuery" | "renameLayer" | "exportLayer") && active.is_none() {
@@ -94,11 +110,14 @@ impl Dialogs {
             "calculateField" => self.a = active.and_then(|l| l.dataset.fields.last()).map(|f| f.name.clone()).unwrap_or_default(),
             "definitionQuery" => self.text = active.and_then(|l| l.definition_query.clone()).unwrap_or_default(),
             "renameLayer" => self.text = active.map(|l| l.name.clone()).unwrap_or_default(),
+            // A file name can't hold a folder separator, which a project name may.
+            "saveProject" => self.text = format!("{}.rgis", s.project.name.replace(['/', '\\'], "-")),
             "exportLayer" => self.mode = "geojson",
-            // A table of addresses is what's usually geocoded.
+            // A table of addresses is what's usually geocoded: picked by its id (`flag` says the
+            // choice is a table), since names can repeat.
             "geocode" => {
                 if let Some(t) = s.project.tables.last() {
-                    self.layer = t.name.clone();
+                    (self.layer, self.flag) = (t.id.to_string(), true);
                 }
             }
             _ => {}
@@ -135,6 +154,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "opendata" => "Search Open Data",
         "zarr" => "Add Zarr Variable",
         "exportLayer" => "Export Features",
+        "saveProject" => "Save Project As",
         _ => "Rename Layer",
     };
     let t = Tokens::get(ctx);
@@ -276,6 +296,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 field_chips(app, ui);
                 close = buttons(app, ui, "Apply", |app| app.run("layer.definitionQuery", json!({"where": app.dialogs.text})).map(|_| ()));
             }
+            "saveProject" => close = save_project(app, ui),
             _ => {
                 ui.label(tl!("Name"));
                 ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).desired_width(f32::INFINITY));
@@ -292,6 +313,26 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     if !open || close {
         app.dialogs.open = None;
     }
+}
+
+/// Save Project As in the browser, which has no save dialog: the file name to download the
+/// project as. The browser decides where downloads go.
+fn save_project(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
+    ui.label(tl!("File name"));
+    let mut edit = egui::TextEdit::singleline(&mut app.dialogs.text).desired_width(f32::INFINITY).show(ui);
+    // Opened: the name is selected, so typing replaces it.
+    if app.dialogs.mode == "new" {
+        app.dialogs.mode = "";
+        edit.response.request_focus();
+        let end = app.dialogs.text.chars().count();
+        edit.state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(end))));
+        edit.state.store(ui.ctx(), edit.response.id);
+    }
+    ui.label(egui::RichText::new(tl!("The project downloads as this file, to the folder your browser saves downloads in.")).small().weak());
+    buttons(app, ui, "Save", |app| {
+        let file = app.dialogs.text.clone();
+        app.save_download(&file)
+    })
 }
 
 /// The formats Export Features writes: (name, extension). Format names aren't translated.
@@ -333,45 +374,152 @@ fn export_layer(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     })
 }
 
-/// Add Delimited Text: which columns hold the coordinates (or WKT geometry), their coordinate
-/// system and the separator, then the file.
-fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
-    if app.dialogs.mode == "new" {
-        app.dialogs.mode = "auto";
+/// Add Delimited Text's separators: (code, name).
+const SEPARATORS: [(&str, &str); 5] = [("auto", "Automatic"), (",", "Comma"), (";", "Semicolon"), ("\t", "Tab"), ("|", "Pipe")];
+
+/// Opens Add Delimited Text for a file picked: its columns, with the ones found by name picked.
+pub fn open_csv(app: &mut RustGisApp, name: &str, source: CsvSource) -> Result<Value, String> {
+    app.run("ui.dialog", json!({"name": "addCsv"}))?;
+    let file = CsvFile { name: name.to_string(), source };
+    app.dialogs.mode = "auto";
+    show_columns(&mut app.dialogs, csv_columns(&file, "auto"));
+    app.dialogs.csv = Some(file);
+    Ok(Value::Null)
+}
+
+/// The columns of a file picked for Add Delimited Text, split at `separator` (a code of
+/// [`SEPARATORS`]).
+fn csv_columns(file: &CsvFile, separator: &str) -> Result<Value, String> {
+    let p = if separator == "auto" { json!({}) } else { json!({"delimiter": separator}) };
+    match &file.source {
+        CsvSource::Path(path) => rustgis_engine::cmd::layer::columns_in_file(path, &p),
+        CsvSource::Bytes(bytes) => rustgis_engine::cmd::layer::columns_of(&file.name, bytes, &p),
     }
-    ui.label(egui::RichText::new(tl!("Leave a box empty to find it from the file: x/y columns named like longitude/latitude or easting/northing, or a WKT column named like geometry.")).weak());
+}
+
+/// Puts the columns read (`info.fileColumns`' answer) in the dialog, the ones found picked; an
+/// error leaves none.
+fn show_columns(d: &mut Dialogs, found: Result<Value, String>) {
+    let text = |v: &Value| v.as_str().unwrap_or("").to_string();
+    match found {
+        Ok(v) => {
+            d.list = v["columns"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+            (d.a, d.b, d.c) = (text(&v["x"]), text(&v["y"]), text(&v["wkt"]));
+            if let Some((code, _)) = SEPARATORS.iter().find(|(c, _)| v["delimiter"].as_str() == Some(*c)) {
+                d.mode = *code;
+            }
+            d.error = None;
+        }
+        Err(e) => {
+            d.list.clear();
+            (d.a, d.b, d.c) = (String::new(), String::new(), String::new());
+            d.error = Some(e);
+        }
+    }
+}
+
+/// After the columns are read again: the x/y columns (or the WKT column) picked before stay picked
+/// when the file still has them; otherwise the ones found are.
+fn keep_picked(d: &mut Dialogs, [x, y, wkt]: [String; 3]) {
+    let has = |c: &String| !c.is_empty() && d.list.contains(c);
+    let (xy, w) = (has(&x) && has(&y), has(&wkt));
+    if xy {
+        (d.a, d.b, d.c) = (x, y, String::new());
+    } else if w {
+        (d.a, d.b, d.c) = (String::new(), String::new(), wkt);
+    }
+}
+
+/// Add Delimited Text, for the file picked: which of its columns hold the coordinates (or WKT
+/// geometry), their coordinate system and the separator.
+fn add_csv(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
+    let Some(name) = app.dialogs.csv.as_ref().map(|f| f.name.clone()) else {
+        // Opened without a file (`ui.dialog`): the file first.
+        ui.label(tl!("Choose a delimited text file or a spreadsheet, then pick its columns."));
+        let close = buttons(app, ui, "Choose File…", |app| app.run("ui.addDelimited", Value::Null).map(|_| ()));
+        // On the desktop the dialog is open again, for the file picked.
+        return close && app.dialogs.csv.is_none();
+    };
+    let sheet = rustgis_engine::data::sheets::is_sheet_name(&name);
+    let shown = std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or(&name).to_string();
+    ui.label(egui::RichText::new(shown).strong());
+    ui.label(egui::RichText::new(tl!("Columns named like longitude/latitude, easting/northing or geometry are picked for you.")).weak());
+    let mut reread = false;
     egui::Grid::new("csv").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-        for (label, hint, v) in [
-            ("X column", "longitude, easting…", &mut app.dialogs.a),
-            ("Y column", "latitude, northing…", &mut app.dialogs.b),
-            ("WKT column", "wkt, geometry…", &mut app.dialogs.c),
-            ("Coordinate system", "EPSG:4326", &mut app.dialogs.text),
-        ] {
+        let columns = app.dialogs.list.clone();
+        for (i, label) in ["X column", "Y column", "WKT column"].into_iter().enumerate() {
             ui.label(tl!(label));
-            ui.add(egui::TextEdit::singleline(v).hint_text(tl!(hint)).desired_width(240.0));
+            let d = &mut app.dialogs;
+            let v = match i {
+                0 => &mut d.a,
+                1 => &mut d.b,
+                _ => &mut d.c,
+            };
+            let before = v.clone();
+            let selected = if v.is_empty() { tl!("None").to_string() } else { v.clone() };
+            egui::ComboBox::from_id_salt(("csv_column", i)).selected_text(selected).width(240.0).show_ui(ui, |ui| {
+                ui.selectable_value(v, String::new(), tl!("None"));
+                for c in &columns {
+                    ui.selectable_value(v, c.clone(), c.as_str());
+                }
+            });
+            // x/y columns or a WKT column, not both.
+            if *v != before && !v.is_empty() {
+                if i == 2 {
+                    (d.a, d.b) = (String::new(), String::new());
+                } else {
+                    d.c.clear();
+                }
+            }
             ui.end_row();
         }
-        ui.label(tl!("Separator"));
-        let seps: [(&'static str, &str); 5] = [("auto", "Automatic"), (",", "Comma"), (";", "Semicolon"), ("\t", "Tab"), ("|", "Pipe")];
-        let shown = seps.iter().find(|(c, _)| *c == app.dialogs.mode).map(|(_, l)| tl!(*l).to_string()).unwrap_or_default();
-        egui::ComboBox::from_id_salt("csv_sep").selected_text(shown).width(240.0).show_ui(ui, |ui| {
-            for (code, label) in seps {
-                ui.selectable_value(&mut app.dialogs.mode, code, tl!(label));
-            }
-        });
+        ui.label(tl!("Coordinate system"));
+        ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).hint_text("EPSG:4326").desired_width(240.0));
         ui.end_row();
+        // A sheet has no separator.
+        if !sheet {
+            ui.label(tl!("Separator"));
+            let before = app.dialogs.mode;
+            let shown = SEPARATORS.iter().find(|(c, _)| *c == app.dialogs.mode).map(|(_, l)| tl!(*l).to_string()).unwrap_or_default();
+            egui::ComboBox::from_id_salt("csv_sep").selected_text(shown).width(240.0).show_ui(ui, |ui| {
+                for (code, label) in SEPARATORS {
+                    ui.selectable_value(&mut app.dialogs.mode, code, tl!(label));
+                }
+            });
+            reread = app.dialogs.mode != before;
+            ui.end_row();
+        }
     });
-    buttons(app, ui, "Choose File…", |app| {
+    // Another separator splits the header differently: its columns are read again.
+    if reread && let Some(file) = &app.dialogs.csv {
+        let found = csv_columns(file, app.dialogs.mode);
+        let picked = [app.dialogs.a.clone(), app.dialogs.b.clone(), app.dialogs.c.clone()];
+        show_columns(&mut app.dialogs, found);
+        keep_picked(&mut app.dialogs, picked);
+    }
+    buttons(app, ui, "Add", |app| {
         let mut p = json!({});
         for (key, v) in [("x", &app.dialogs.a), ("y", &app.dialogs.b), ("wkt", &app.dialogs.c), ("crs", &app.dialogs.text)] {
             if !v.trim().is_empty() {
                 p[key] = json!(v.trim());
             }
         }
-        if app.dialogs.mode != "auto" {
+        if app.dialogs.mode != "auto" && !sheet {
             p["delimiter"] = json!(app.dialogs.mode);
         }
-        app.run("ui.addDelimited", p).map(|_| ())
+        let file = app.dialogs.csv.take().ok_or("choose a file first")?;
+        let r = match &file.source {
+            CsvSource::Path(path) => {
+                p["path"] = json!(path);
+                app.run("layer.addData", p)
+            }
+            CsvSource::Bytes(bytes) => app.open_bytes_with(&file.name, bytes, Some(p)),
+        };
+        // Kept for another try.
+        if r.is_err() {
+            app.dialogs.csv = Some(file);
+        }
+        r.map(|_| ())
     })
 }
 

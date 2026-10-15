@@ -247,6 +247,7 @@ Checking for updates…	Yeniləmələr yoxlanılır…
 China	Çin
 Choose a band combination to display the raster layer.	Rastr layını göstərmək üçün kanal kombinasiyası seçin.
 Choose a contrast stretch for the raster layer.	Rastr layı üçün kontrast genişləndirməsi seçin.
+Choose a delimited text file or a spreadsheet, then pick its columns.	Ayrılmış mətn faylı və ya cədvəl seçin, sonra onun sütunlarını seçin.
 Choose a model.	Model seçin.
 Choose a resampling type for the raster layer.	Rastr layı üçün yenidən nümunələmə tipini seçin.
 Choose extra buttons for the Quick Access Toolbar.	Sürətli giriş paneli üçün əlavə düymələr seçin.
@@ -323,6 +324,7 @@ Color Vision	Rəng görmə
 Color Vision Simulator	Rəng görmə simulyatoru
 Colormap	Rəng xəritəsi
 Colors from the raster's own color table.	Rastrın öz rəng cədvəlindən rənglər.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	longitude/latitude, easting/northing və ya geometry kimi adlanan sütunlar sizin üçün seçilir.
 Combinations from the box above, one per line	Yuxarıdakı qutudan kombinasiyalar, hər sətirdə bir
 Command\nSearch	Əmr\naxtarışı
 command is required	command tələb olunur
@@ -1816,6 +1818,7 @@ Write a plugin	Plagin yaz
 X (mm)	X (mm)
 X Field	X sahəsi
 XY Table To Point	XY cədvəlindən nöqtəyə
+XY Table To Point…	XY cədvəlindən nöqtəyə…
 Y (mm)	Y (mm)
 Y Field	Y sahəsi
 Yes	Bəli
@@ -1872,3 +1875,4 @@ Signing in with ChatGPT works in the desktop app.	ChatGPT ilə giriş masaüstü
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Giriş məlumatı tətbiqin parametrlər qovluğunda yalnız istifadəçi hesabınız üçün saxlanılır, heç vaxt layihə faylında saxlanılmır.
 Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	Sorğular OpenAI-nin ChatGPT serverinə gedir və abunəliyinizin istifadəsinə hesablanır.
 Sign in with your ChatGPT account.	ChatGPT hesabınızla daxil olun.
+ChatGPT sign-in can only be used with the OpenAI Codex backend	ChatGPT girişi yalnız OpenAI Codex arxa sistemi ilə istifadə edilə bilər

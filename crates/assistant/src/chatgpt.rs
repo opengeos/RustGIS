@@ -164,7 +164,7 @@ impl Tokens {
     /// Whether the access token expires within [`REFRESH_MARGIN`] of `now` (Unix seconds), or
     /// says nothing about when it does.
     pub fn expires_soon(&self, now: i64) -> bool {
-        claims(&self.access_token).expires.is_none_or(|exp| exp - REFRESH_MARGIN <= now)
+        claims(&self.access_token).expires.is_none_or(|exp| exp.saturating_sub(REFRESH_MARGIN) <= now)
     }
 
     /// Puts this account's credentials on a request (replacing any there).
@@ -194,9 +194,7 @@ pub fn parse_refresh(old: &Tokens, resp: &HttpResponse, now: &str) -> Result<Tok
     let v = token_response(resp, "renewing the sign-in")?;
     let mut t = old.clone();
     let field = |k: &str| v.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
-    if let Some(a) = field("access_token") {
-        t.access_token = a;
-    }
+    t.access_token = field("access_token").ok_or("renewing the sign-in: the reply has no access token")?;
     if let Some(i) = field("id_token") {
         t.id_token = i;
     }
@@ -215,13 +213,14 @@ fn token_response(resp: &HttpResponse, what: &str) -> Result<Value, String> {
     let v: Value = serde_json::from_slice(&resp.body).unwrap_or(Value::Null);
     if !(200..300).contains(&resp.status) {
         let code = v.get("error").and_then(|e| e.as_str().or_else(|| e.get("code").and_then(Value::as_str))).unwrap_or("");
-        let desc = v.get("error_description").and_then(Value::as_str).unwrap_or("");
+        // OAuth responses are untrusted and may echo submitted credentials. Report only
+        // recognized protocol codes, never raw descriptions or response bodies.
         let why = match code {
             "invalid_grant" | "refresh_token_expired" | "refresh_token_reused" | "refresh_token_invalidated" => {
                 "the sign-in has expired or was revoked; sign in again".to_string()
             }
-            "" if desc.is_empty() => format!("HTTP {}", resp.status),
-            _ => format!("{code} {desc}").trim().to_string(),
+            "invalid_request" | "invalid_client" | "unauthorized_client" | "unsupported_grant_type" | "invalid_scope" => code.to_string(),
+            _ => format!("HTTP {}", resp.status),
         };
         return Err(format!("{what}: {why}"));
     }
@@ -278,6 +277,17 @@ pub fn query_params(query: &str) -> Vec<(String, String)> {
         .map(|p| p.split_once('=').unwrap_or((p, "")))
         .map(|(k, v)| (urldecode(k), urldecode(v)))
         .collect()
+}
+
+/// Only the Codex backend may receive the stored ChatGPT access token.
+pub fn backend_url(url: &str) -> bool {
+    url.trim().strip_prefix(BACKEND).is_some_and(|rest| rest.starts_with('/')) && !url.contains(['\\', '#'])
+}
+
+#[cfg(any(test, not(target_arch = "wasm32")))]
+pub(crate) fn callback_state_matches(params: &[(String, String)], expected: &str) -> bool {
+    let mut states = params.iter().filter(|(key, _)| key == "state");
+    !expected.is_empty() && states.next().is_some_and(|(_, value)| value == expected) && states.next().is_none()
 }
 
 /// The PKCE challenge (S256) of a verifier.
@@ -370,7 +380,6 @@ mod native {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -384,6 +393,11 @@ mod native {
 
     /// The file name of the sign-in, in the app's settings folder.
     const FILE: &str = "chatgpt-auth.json";
+
+    // STORE protects only short file operations; sign-out on the UI thread never waits on
+    // network I/O. REFRESH serializes rotating grants on background request threads.
+    static STORE: Mutex<()> = Mutex::new(());
+    static REFRESH: Mutex<()> = Mutex::new(());
 
     /// How long the browser has to come back.
     const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -432,26 +446,31 @@ mod native {
 
     /// Keeps the sign-in, readable by this user only.
     pub fn save(t: &Tokens) -> Result<(), String> {
-        let path = auth_path().ok_or("no settings folder")?;
+        let _guard = STORE.lock().map_err(|_| "the sign-in store is unavailable")?;
+        save_unlocked(t)
+    }
+
+    fn save_unlocked(t: &Tokens) -> Result<(), String> {
+        write_tokens(&auth_path().ok_or("no settings folder")?, t)
+    }
+
+    fn write_tokens(path: &std::path::Path, t: &Tokens) -> Result<(), String> {
         let dir = path.parent().ok_or("no settings folder")?;
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let tmp = dir.join(format!("{FILE}.tmp"));
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        // On Windows the settings folder (`%APPDATA%`) is private to the user already.
-        let written =
-            opts.open(&tmp).and_then(|mut f| f.write_all(t.to_json().to_string().as_bytes())).and_then(|_| std::fs::rename(&tmp, &path));
-        written.map_err(|e| format!("{}: {e}", path.display()))
+        // A unique, exclusively created file avoids races and pre-existing symlinks. Tempfiles
+        // have owner-only Unix permissions; persist replaces atomically, including on Windows.
+        let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        tmp.write_all(t.to_json().to_string().as_bytes())
+            .and_then(|_| tmp.as_file().sync_all())
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        tmp.persist(path).map_err(|e| format!("{}: {}", path.display(), e.error))?;
+        Ok(())
     }
 
     /// Signs out: forgets the tokens on this computer (they stay valid at OpenAI until they
     /// expire; revoke them from your ChatGPT account's settings if needed).
     pub fn forget() -> Result<(), String> {
+        let _guard = STORE.lock().map_err(|_| "the sign-in store is unavailable")?;
         let Some(path) = auth_path() else { return Ok(()) };
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
@@ -465,8 +484,9 @@ mod native {
         codex_path().is_some_and(|p| p.is_file())
     }
 
-    /// Copies the Codex CLI's sign-in (the tokens stay Codex's too: both refresh them, and the
-    /// service accepts either refresh until one is used).
+    /// Copies the Codex CLI's sign-in, including its rotating refresh token. Either app's
+    /// renewal can invalidate the other's copy; reuse detection may revoke both sessions.
+    /// Prefer a separate browser sign-in when both apps will be used.
     pub fn import_codex() -> Result<Tokens, String> {
         let path = codex_path().ok_or("no home folder, so no Codex sign-in to import")?;
         let t = read_tokens(&path)?;
@@ -475,33 +495,80 @@ mod native {
     }
 
     /// Renews the tokens with `send` and keeps the result.
-    fn refresh(t: &Tokens, send: &mut dyn FnMut(&HttpRequest) -> Result<HttpResponse, String>) -> Result<Tokens, String> {
+    fn refresh(
+        path: &std::path::Path,
+        t: &Tokens,
+        send: &mut dyn FnMut(&HttpRequest) -> Result<HttpResponse, String>,
+    ) -> Result<Tokens, String> {
         if t.refresh_token.is_empty() {
             return Err("the sign-in can't be renewed (no refresh token); sign in again".into());
         }
         let resp = send(&refresh_request(t))?;
         let fresh = parse_refresh(t, &resp, &rfc3339(now()))?;
-        save(&fresh)?;
+        let _guard = STORE.lock().map_err(|_| "the sign-in store is unavailable")?;
+        // A user can sign out or sign into another account while the grant is in flight.
+        if read_tokens(path).ok().as_ref() != Some(t) {
+            return Err("the ChatGPT sign-in changed; try again".into());
+        }
+        write_tokens(path, &fresh)?;
         Ok(fresh)
     }
 
     /// The signed-in account's tokens, renewed with `send` when they are about to expire.
     pub fn fresh(send: &mut dyn FnMut(&HttpRequest) -> Result<HttpResponse, String>) -> Result<Tokens, String> {
-        let t = load().ok_or("not signed in to ChatGPT")?;
-        if t.expires_soon(now()) { refresh(&t, send) } else { Ok(t) }
+        let path = auth_path().ok_or("no settings folder")?;
+        let _guard = REFRESH.lock().map_err(|_| "the sign-in store is unavailable")?;
+        fresh_at(&path, send)
+    }
+
+    fn fresh_at(path: &std::path::Path, send: &mut dyn FnMut(&HttpRequest) -> Result<HttpResponse, String>) -> Result<Tokens, String> {
+        let t = {
+            let _guard = STORE.lock().map_err(|_| "the sign-in store is unavailable")?;
+            read_tokens(path)?
+        };
+        if t.expires_soon(now()) { refresh(path, &t, send) } else { Ok(t) }
     }
 
     /// Sends a request as the signed-in account (blocking): the tokens are renewed first when
     /// about to expire, and once more if the backend still refuses them.
     pub fn send(req: &HttpRequest) -> Result<HttpResponse, String> {
-        let mut transport = http::send;
-        let t = fresh(&mut transport)?;
-        let resp = http::send(&t.authorize(req.clone()))?;
+        // Reject an edited address before loading credentials or rotating any tokens.
+        if !super::backend_url(&req.url) {
+            return Err("ChatGPT sign-in can only be used with the OpenAI Codex backend".into());
+        }
+        send_at(req, &auth_path().ok_or("no settings folder")?, &mut http::send)
+    }
+
+    fn send_at(
+        req: &HttpRequest,
+        path: &std::path::Path,
+        transport: &mut dyn FnMut(&HttpRequest) -> Result<HttpResponse, String>,
+    ) -> Result<HttpResponse, String> {
+        let t = {
+            let _guard = REFRESH.lock().map_err(|_| "the sign-in store is unavailable")?;
+            fresh_at(path, transport)?
+        };
+        if req.headers.iter().any(|(k, v)| k.eq_ignore_ascii_case("chatgpt-account-id") && v != &t.account_id) {
+            return Err("the ChatGPT account changed; try again".into());
+        }
+        let resp = transport(&t.authorize(req.clone()))?;
         if resp.status != 401 {
             return Ok(resp);
         }
-        let t = refresh(&t, &mut transport)?;
-        http::send(&t.authorize(req.clone()))
+        let t = {
+            let _guard = REFRESH.lock().map_err(|_| "the sign-in store is unavailable")?;
+            let current = {
+                let _store = STORE.lock().map_err(|_| "the sign-in store is unavailable")?;
+                read_tokens(path).map_err(|_| "not signed in to ChatGPT")?
+            };
+            // Another request may already have rotated this token while ours was in flight.
+            // Signing out must not be undone by a late 401 either.
+            if current.account_id != t.account_id {
+                return Err("the ChatGPT account changed; try again".into());
+            }
+            if current.access_token != t.access_token { current } else { refresh(path, &current, transport)? }
+        };
+        transport(&t.authorize(req.clone()))
     }
 
     /// The account signed in on this computer, as its tokens describe it.
@@ -520,7 +587,7 @@ mod native {
         pub url: String,
         pub port: u16,
         outcome: Outcome,
-        cancel: Arc<AtomicBool>,
+        cancel: Arc<Mutex<bool>>,
     }
 
     impl Login {
@@ -530,7 +597,9 @@ mod native {
         }
 
         pub fn cancel(&self) {
-            self.cancel.store(true, Ordering::Relaxed);
+            if let Ok(mut cancel) = self.cancel.lock() {
+                *cancel = true;
+            }
         }
     }
 
@@ -559,7 +628,7 @@ mod native {
         let redirect_uri = format!("http://127.0.0.1:{port}/auth/callback");
         let url = authorize_url(&redirect_uri, &super::pkce_challenge(&verifier), &state);
         let outcome: Outcome = Arc::default();
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(Mutex::new(false));
         let (out, stop) = (outcome.clone(), cancel.clone());
         std::thread::spawn(move || {
             let result = serve(&listener, &stop, &redirect_uri, &verifier, &state);
@@ -571,10 +640,10 @@ mod native {
     }
 
     /// Answers requests until the callback arrives (or the sign-in is cancelled).
-    fn serve(listener: &TcpListener, cancel: &AtomicBool, redirect_uri: &str, verifier: &str, state: &str) -> Result<Tokens, String> {
+    fn serve(listener: &TcpListener, cancel: &Mutex<bool>, redirect_uri: &str, verifier: &str, state: &str) -> Result<Tokens, String> {
         let start = std::time::Instant::now();
         loop {
-            if cancel.load(Ordering::Relaxed) {
+            if *cancel.lock().map_err(|_| "the sign-in was cancelled")? {
                 return Err("the sign-in was cancelled".into());
             }
             if start.elapsed() > LOGIN_TIMEOUT {
@@ -582,7 +651,12 @@ mod native {
             }
             let mut stream = match listener.accept() {
                 Ok((s, _)) => s,
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted | std::io::ErrorKind::ConnectionAborted
+                    ) =>
+                {
                     std::thread::sleep(Duration::from_millis(50));
                     continue;
                 }
@@ -590,6 +664,7 @@ mod native {
             };
             let _ = stream.set_nonblocking(false);
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
             let Some(target) = request_target(&mut stream) else {
                 respond(&mut stream, 400, "Bad request");
                 continue;
@@ -601,14 +676,13 @@ mod native {
             }
             let params = query_params(query);
             let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str()).unwrap_or("");
-            // ChatGPT may append onboarding metadata to the state.
-            if !get("state").starts_with(state) || get("state").is_empty() {
+            if !super::callback_state_matches(&params, state) {
                 respond(&mut stream, 400, "State mismatch");
                 continue;
             }
             if !get("error").is_empty() {
-                let why = format!("{} {}", get("error"), get("error_description")).trim().to_string();
-                respond(&mut stream, 200, &page("Sign-in failed", &why));
+                let why = if get("error") == "access_denied" { "access denied" } else { "authorization failed" };
+                respond(&mut stream, 200, &page("Sign-in failed", why));
                 return Err(format!("the sign-in was refused: {why}"));
             }
             let code = get("code");
@@ -619,9 +693,13 @@ mod native {
             let result = http::send(&exchange_request(code, redirect_uri, verifier)).and_then(|r| parse_exchange(&r, &rfc3339(now())));
             match result {
                 Ok(t) => {
-                    let saved = save(&t);
+                    // Cancellation and persistence share a lock so dropping a pending login
+                    // cannot save its result after cancellation has completed.
+                    if let Err(e) = save_if_active(cancel, &t, &mut save) {
+                        respond(&mut stream, 400, &page("Sign-in failed", &e));
+                        return Err(e);
+                    }
                     respond(&mut stream, 200, &page("Signed in", "RustGIS is signed in to your ChatGPT account. You can close this tab."));
-                    saved?;
                     return Ok(t);
                 }
                 Err(e) => {
@@ -630,6 +708,14 @@ mod native {
                 }
             }
         }
+    }
+
+    fn save_if_active(cancel: &Mutex<bool>, t: &Tokens, persist: &mut dyn FnMut(&Tokens) -> Result<(), String>) -> Result<(), String> {
+        let cancelled = cancel.lock().map_err(|_| "the sign-in was cancelled")?;
+        if *cancelled {
+            return Err("the sign-in was cancelled".into());
+        }
+        persist(t)
     }
 
     /// The request target (`/auth/callback?code=…`) of an HTTP request, read up to its headers' end.
@@ -643,11 +729,15 @@ mod native {
                 Err(_) => return None,
             }
         }
+        if !buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 16 * 1024 {
+            return None;
+        }
         let line = buf.split(|b| *b == b'\n').next()?;
         let line = std::str::from_utf8(line).ok()?.trim();
         let mut parts = line.split(' ');
         let (method, target) = (parts.next()?, parts.next()?);
-        (method == "GET").then(|| target.to_string())
+        let version = parts.next()?;
+        (method == "GET" && version == "HTTP/1.1" && parts.next().is_none()).then(|| target.to_string())
     }
 
     fn respond(stream: &mut TcpStream, status: u16, body: &str) {
@@ -658,8 +748,10 @@ mod native {
             _ => "Error",
         };
         let kind = if body.starts_with("<!DOCTYPE") { "text/html; charset=utf-8" } else { "text/plain; charset=utf-8" };
-        let head =
-            format!("HTTP/1.1 {status} {reason}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+        let head = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: {kind}\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
         let _ = stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(body.as_bytes())).and_then(|_| stream.flush());
     }
 
@@ -676,5 +768,142 @@ mod native {
             t = escape(title),
             b = escape(text)
         )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn synthetic_tokens(exp: i64) -> Tokens {
+            let payload = serde_json::json!({"exp": exp});
+            let access_token = format!("e30.{}.signature", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.to_string()));
+            Tokens { access_token, refresh_token: "synthetic-refresh".into(), account_id: "synthetic-account".into(), ..Default::default() }
+        }
+
+        fn test_request() -> HttpRequest {
+            HttpRequest { method: "POST", url: format!("{}/responses", super::super::BACKEND), headers: vec![], body: None }
+        }
+
+        #[test]
+        fn simultaneous_401_responses_rotate_only_once() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("test-auth.json");
+            write_tokens(&path, &synthetic_tokens(4_000_000_000)).unwrap();
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let rotations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..2).map(|_| {
+                    let (barrier, rotations, path) = (barrier.clone(), rotations.clone(), path.clone());
+                    scope.spawn(move || {
+                        let mut inference = 0;
+                        send_at(&test_request(), &path, &mut |req| {
+                            if req.url.ends_with("/oauth/token") {
+                                rotations.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                return Ok(HttpResponse { status: 200, body: serde_json::json!({"access_token": synthetic_tokens(4_000_000_001).access_token, "refresh_token": "synthetic-rotated"}).to_string().into_bytes() });
+                            }
+                            inference += 1;
+                            if inference == 1 {
+                                barrier.wait();
+                                Ok(HttpResponse { status: 401, body: vec![] })
+                            } else {
+                                assert!(req.headers.iter().any(|(k, v)| k == "Authorization" && v == &format!("Bearer {}", synthetic_tokens(4_000_000_001).access_token)));
+                                Ok(HttpResponse { status: 200, body: vec![] })
+                            }
+                        }).unwrap()
+                    })
+                }).collect();
+                for worker in workers {
+                    assert_eq!(worker.join().unwrap().status, 200);
+                }
+            });
+            assert_eq!(rotations.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(read_tokens(&path).unwrap().refresh_token, "synthetic-rotated");
+        }
+
+        #[test]
+        fn late_401_does_not_restore_a_signed_out_or_different_account() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("test-auth.json");
+            for switch_account in [false, true] {
+                write_tokens(&path, &synthetic_tokens(4_000_000_000)).unwrap();
+                let mut requests = 0;
+                let result = send_at(&test_request(), &path, &mut |_| {
+                    requests += 1;
+                    let _guard = STORE.lock().unwrap();
+                    if switch_account {
+                        let mut other = synthetic_tokens(4_000_000_001);
+                        other.account_id = "other-account".into();
+                        write_tokens(&path, &other).unwrap();
+                    } else {
+                        std::fs::remove_file(&path).unwrap();
+                    }
+                    Ok(HttpResponse { status: 401, body: vec![] })
+                });
+                assert!(result.is_err());
+                assert_eq!(requests, 1, "a late response must not renew or resend");
+                assert_eq!(path.exists(), switch_account);
+            }
+        }
+
+        #[test]
+        fn sign_out_during_refresh_does_not_wait_for_network_or_restore_tokens() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("test-auth.json");
+            write_tokens(&path, &synthetic_tokens(0)).unwrap();
+            let result = send_at(&test_request(), &path, &mut |req| {
+                assert!(req.url.ends_with("/oauth/token"));
+                // Sign-out can acquire STORE even while the refresh transport is running.
+                let start = std::time::Instant::now();
+                let _guard = loop {
+                    if let Ok(guard) = STORE.try_lock() {
+                        break guard;
+                    }
+                    assert!(start.elapsed() < Duration::from_secs(2), "network I/O must not hold the sign-out lock");
+                    std::thread::yield_now();
+                };
+                std::fs::remove_file(&path).unwrap();
+                Ok(HttpResponse {
+                    status: 200,
+                    body: serde_json::json!({"access_token": synthetic_tokens(4_000_000_000).access_token}).to_string().into_bytes(),
+                })
+            });
+            assert!(result.is_err());
+            assert!(!path.exists());
+        }
+
+        #[test]
+        fn cancellation_prevents_persistence() {
+            let cancelled = Mutex::new(true);
+            let mut writes = 0;
+            let result = save_if_active(&cancelled, &Tokens::default(), &mut |_| {
+                writes += 1;
+                Ok(())
+            });
+            assert!(result.is_err());
+            assert_eq!(writes, 0);
+            let result = save_if_active(&Mutex::new(false), &Tokens::default(), &mut |_| Err("disk full".into()));
+            assert_eq!(result, Err("disk full".into()));
+        }
+
+        #[test]
+        fn token_file_replaces_atomically_and_cleans_failed_writes() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("test-auth.json");
+            let first = Tokens { access_token: "synthetic-first".into(), ..Default::default() };
+            let next = Tokens { access_token: "synthetic-next".into(), ..Default::default() };
+            write_tokens(&path, &first).unwrap();
+            write_tokens(&path, &next).unwrap();
+            assert_eq!(read_tokens(&path).unwrap(), next);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            }
+            let destination_dir = dir.path().join("directory");
+            std::fs::create_dir(&destination_dir).unwrap();
+            assert!(write_tokens(&destination_dir, &next).is_err());
+            assert_eq!(read_tokens(&path).unwrap(), next);
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "failed writes leave no token-bearing tempfiles");
+        }
     }
 }

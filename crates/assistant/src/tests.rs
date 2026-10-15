@@ -163,6 +163,7 @@ fn gate_rules() {
     assert!(g("run_tool", json!({"tool": "buffer", "params": {"input": "Cities", "distance": 100}})).is_none());
     assert!(g("list_layers", json!({})).is_none());
     assert!(g("run_command", json!({"command": "info.fileLayers", "params": {"path": "/etc/passwd"}})).is_some());
+    assert!(g("run_command", json!({"command": "info.fileColumns", "params": {"path": "/etc/passwd"}})).is_some());
 }
 
 /// What a command says beside its result reaches the model (issue #85).
@@ -1066,4 +1067,81 @@ fn chatgpt_refresh_and_exchange() {
     });
     assert_eq!(req.headers.iter().filter(|(k, _)| k == "Authorization").count(), 1);
     assert!(req.headers.iter().any(|(k, v)| k == "chatgpt-account-id" && v == "acct-1"));
+}
+
+#[test]
+fn chatgpt_callback_requires_exact_unique_state() {
+    for query in ["state=expected", "code=fake&state=expected"] {
+        assert!(chatgpt::callback_state_matches(&chatgpt::query_params(query), "expected"));
+    }
+    for query in ["", "state=", "state=wrong", "state=expected-suffix", "state=expected&state=wrong", "state=expected&state=expected"] {
+        assert!(!chatgpt::callback_state_matches(&chatgpt::query_params(query), "expected"), "{query}");
+    }
+    assert!(!chatgpt::callback_state_matches(&chatgpt::query_params("state="), ""));
+}
+
+#[test]
+fn chatgpt_only_sends_credentials_to_codex_backend() {
+    assert!(chatgpt::backend_url("https://chatgpt.com/backend-api/codex/responses"));
+    assert!(chatgpt::backend_url("https://chatgpt.com/backend-api/codex/models?client_version=1"));
+    for url in [
+        "http://chatgpt.com/backend-api/codex/responses",
+        "https://chatgpt.com.evil.test/backend-api/codex/responses",
+        "https://chatgpt.com@evil.test/backend-api/codex/responses",
+        "https://evil.test/responses",
+        "http://localhost:1234/responses",
+        "https://chatgpt.com/backend-api/codex-evil/responses",
+        "https://chatgpt.com/backend-api/codex\\evil.test",
+        "https://chatgpt.com/backend-api/codex/responses#fragment",
+    ] {
+        assert!(!chatgpt::backend_url(url), "{url}");
+        // This check runs before any credential file is loaded or a network request is made.
+        #[cfg(not(target_arch = "wasm32"))]
+        assert!(chatgpt::send(&HttpRequest { method: "GET", url: url.into(), headers: vec![], body: None }).unwrap_err().contains("only"));
+    }
+}
+
+#[test]
+fn chatgpt_rejects_invalid_refresh_and_redacts_oauth_errors() {
+    let old = chatgpt_tokens(1_800_000_000);
+    for value in [json!({}), json!({"refresh_token":"rotated"}), json!({"access_token":""}), json!({"access_token":42})] {
+        assert!(chatgpt::parse_refresh(&old, &HttpResponse { status: 200, body: value.to_string().into_bytes() }, "now").is_err());
+    }
+    let hostile = HttpResponse { status: 400, body: br#"{"error":"synthetic-secret", "error_description":"synthetic-secret"}"#.to_vec() };
+    assert!(!chatgpt::parse_refresh(&old, &hostile, "now").unwrap_err().contains("synthetic-secret"));
+    assert!(!chatgpt::parse_exchange(&hostile, "now").unwrap_err().contains("synthetic-secret"));
+    let cfg = chatgpt_cfg();
+    assert!(!format!("{cfg:?}").contains(&cfg.key));
+    assert!(chatgpt::Tokens { access_token: jwt(json!({"exp": i64::MIN})), ..Default::default() }.expires_soon(0));
+}
+
+#[test]
+fn responses_reads_crlf_event_stream() {
+    let item = json!({"type":"message", "content":[{"type":"output_text", "text":"CRLF answer"}]});
+    let mut response = sse(&[item], "completed").unwrap();
+    response.body = String::from_utf8(response.body).unwrap().replace("\n", "\r\n").into_bytes();
+    assert_eq!(parse_reply(Api::Responses, &response).unwrap().text, "CRLF answer");
+}
+
+#[test]
+fn responses_refusal_does_not_replay_unanswered_calls() {
+    let refusal = json!({"type":"message", "content":[{"type":"refusal", "refusal":"declined"}]});
+    let call = json!({"type":"function_call", "call_id":"ignored", "name":"run_command", "arguments":"{}"});
+    let reply = parse_reply(Api::Responses, &sse(&[refusal, call], "completed").unwrap()).unwrap();
+    assert!(reply.calls.is_empty());
+    assert!(!reply.native.as_array().unwrap().iter().any(|item| item["type"] == "function_call"));
+}
+
+#[test]
+fn responses_replay_follows_output_index() {
+    let body = concat!(
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"encrypted_content\":\"synthetic\"}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let reply = parse_reply(Api::Responses, &HttpResponse { status: 200, body: body.as_bytes().to_vec() }).unwrap();
+    assert_eq!(reply.native[0]["type"], "reasoning");
+    assert_eq!(reply.native[1]["type"], "message");
+    assert_eq!(reply.text, "answer");
 }

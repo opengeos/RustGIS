@@ -68,7 +68,8 @@ A project (`.rgis`) holds maps, layouts, reports, presentations, notebooks, styl
 models. Vector data added from files is stored inside the project, so a project file is
 self-contained; rasters are referenced by path on the desktop and stored inside the project in
 the web app. **Project › New** starts a blank map or the World Atlas sample; **Save** and **Save
-As** write the project. See [Data › Project items](data.md#project-items) for the other files
+As** write the project, named after its file; a project opened from a file is named after that
+file too. See [Data › Project items](data.md#project-items) for the other files
 RustGIS reads and writes.
 
 Every change is a command, and every command can be undone (++ctrl+z++) and redone

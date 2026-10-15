@@ -74,10 +74,10 @@ fn load_config(app: &RustGisApp, provider: &str) -> Config {
     if let Some(m) = pref(app, &format!("assistant_model_{provider}")) {
         c.model = m;
     }
-    if let Some(u) = pref(app, &format!("assistant_url_{provider}")) {
+    if let Some(u) = pref(app, &format!("assistant_url_{provider}")).filter(|_| !c.login()) {
         c.base_url = u;
     }
-    if let Some(k) = pref(app, &format!("assistant_key_{provider}")) {
+    if let Some(k) = pref(app, &format!("assistant_key_{provider}")).filter(|_| !c.login()) {
         c.key = k;
     }
     c
@@ -139,6 +139,10 @@ fn dispatch(app: &mut RustGisApp, req: HttpRequest, login: bool, ctx: &egui::Con
             *s = Some(Err(e));
         }
     };
+    if login && !chatgpt::backend_url(&req.url) {
+        fail(&slot, tl!("ChatGPT sign-in can only be used with the OpenAI Codex backend").into());
+        return slot;
+    }
     if !provider::allowed_url(&req.url) {
         fail(
             &slot,
@@ -175,19 +179,32 @@ fn list_models(app: &mut RustGisApp, cfg: &Config, ctx: &egui::Context) {
     app.assistant.models_slot = Some(dispatch(app, req, cfg.login(), ctx));
 }
 
+fn apply_config(app: &mut RustGisApp, cfg: Config) {
+    if let Some(agent) = app.assistant.agent.as_mut() {
+        if agent.config.provider != cfg.provider
+            || (agent.config.login() && (agent.config.account != cfg.account || agent.config.key != cfg.key))
+        {
+            agent.stop();
+            app.assistant.inflight = None;
+        }
+        agent.config = cfg;
+    }
+}
+
 /// A ChatGPT account signed in (or imported): the assistant uses it from now on.
 #[cfg(not(target_arch = "wasm32"))]
 fn signed_in(app: &mut RustGisApp, tokens: &chatgpt::Tokens, ctx: &egui::Context) {
     app.assistant.account = Some(tokens.account());
     app.assistant.login_error = None;
     let Some(mut cfg) = app.assistant.agent.as_ref().map(|a| a.config.clone()) else { return };
+    if !cfg.login() {
+        return;
+    }
     cfg.sign_in(tokens);
     app.assistant.models.clear();
     app.assistant.models_error = None;
     list_models(app, &cfg, ctx);
-    if let Some(a) = app.assistant.agent.as_mut() {
-        a.config = cfg;
-    }
+    apply_config(app, cfg);
     app.assistant.unsaved = true;
 }
 
@@ -311,9 +328,13 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
             icons::paint(ui.painter(), r, "assistant", t.text_dim, t.accent);
             let model_label = egui::Label::new(RichText::new(format!("{} · {}", tl!(label), model)).small().color(t.text_dim))
+                .truncate()
                 .sense(egui::Sense::click());
+            // Room for the two buttons; a long model name is cut short.
+            let w = (ui.available_width() - 2.0 * (26.0 + ui.spacing().item_spacing.x)).max(0.0);
             if ui
-                .add(model_label)
+                .allocate_ui(vec2(w, 16.0), |ui| ui.add(model_label))
+                .inner
                 .on_hover_text(tl!("The model answering; click to change it"))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
@@ -347,7 +368,11 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     );
     // The conversation in between.
     egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
-        egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| transcript(app, ui, t, &ctx));
+        egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+            // Text in a row (a list item, a quote, the user's message) wraps too, instead of widening the pane.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+            transcript(app, ui, t, &ctx);
+        });
     });
 }
 
@@ -365,7 +390,12 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     continue;
                 }
                 if ui.selectable_label(cfg.provider == p.id, tl!(p.label)).clicked() && cfg.provider != p.id {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        app.assistant.login = None;
+                    }
                     cfg = load_config(app, p.id);
+                    app.assistant.models_slot = None;
                     app.assistant.models.clear();
                     app.assistant.models_error = None;
                     app.assistant.login_error = None;
@@ -402,7 +432,7 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         });
         ui.end_row();
         ui.label(tl!("Address"));
-        ui.add(egui::TextEdit::singleline(&mut cfg.base_url).id(egui::Id::new(FIELDS[1])).desired_width(200.0));
+        ui.add_enabled(!cfg.login(), egui::TextEdit::singleline(&mut cfg.base_url).id(egui::Id::new(FIELDS[1])).desired_width(200.0));
         ui.end_row();
         let preset = provider::preset(&cfg.provider);
         if cfg.login() {
@@ -468,9 +498,7 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     if (cfg.clone(), app.assistant.remember_key) != before {
         app.assistant.unsaved = true;
-        if let Some(a) = app.assistant.agent.as_mut() {
-            a.config = cfg;
-        }
+        apply_config(app, cfg);
     }
 }
 
@@ -492,7 +520,9 @@ fn account_row(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Config) 
         if ui.small_button(tl!("Sign out")).clicked() {
             if let Err(e) = chatgpt::forget() {
                 app.assistant.login_error = Some(e);
+                return;
             }
+            app.assistant.models_slot = None;
             cfg.key.clear();
             cfg.account.clear();
             app.assistant.account = None;
@@ -640,7 +670,7 @@ fn transcript(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, ctx: &egui::Context
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                     egui::Frame::NONE.fill(t.selection).corner_radius(8).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
                         ui.set_max_width(ui.available_width() * 0.85);
-                        ui.label(RichText::new(text).color(t.text));
+                        ui.add(egui::Label::new(RichText::new(text).color(t.text)).halign(Align::LEFT));
                     });
                 });
                 ui.add_space(4.0);
@@ -652,12 +682,18 @@ fn transcript(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, ctx: &egui::Context
             Entry::Tool { name, summary, result, error } => {
                 let (mark, col) = if *error { ("✗", t.red) } else { ("✓", t.green) };
                 let head = format!("{mark} {}", summary.chars().take(90).collect::<String>());
-                egui::CollapsingHeader::new(RichText::new(head).monospace().small().color(col))
-                    .id_salt(("assistant_tool", name, summary.as_str(), result.len()))
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(summary).monospace().small());
-                        ui.label(RichText::new(result.chars().take(2000).collect::<String>()).monospace().small().color(t.text_dim));
-                    });
+                // A header never wraps: it is cut to the room there is. Opened, it shows the whole call.
+                let room = (ui.available_width() - ui.spacing().indent - ui.spacing().button_padding.x).max(0.0);
+                let head = egui::WidgetText::from(RichText::new(head).monospace().small().color(col)).into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Truncate),
+                    room,
+                    egui::TextStyle::Button,
+                );
+                egui::CollapsingHeader::new(head).id_salt(("assistant_tool", name, summary.as_str(), result.len())).show(ui, |ui| {
+                    ui.label(RichText::new(summary).monospace().small());
+                    ui.label(RichText::new(result.chars().take(2000).collect::<String>()).monospace().small().color(t.text_dim));
+                });
             }
             Entry::Error(e) => {
                 ui.label(RichText::new(tl!(e)).color(t.red));
@@ -803,4 +839,104 @@ fn inline(ui: &Ui, text: &str, t: &Tokens, size: f32, heading: bool) -> egui::te
     }
     flush(&mut job, &mut buf, bold, italic);
     job
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn late_sign_in_never_changes_another_providers_key() {
+        let mut app = RustGisApp::with_sample();
+        let cfg = Config {
+            provider: "custom".into(),
+            base_url: "http://localhost:1234/v1".into(),
+            model: "test".into(),
+            key: "original-key".into(),
+            account: String::new(),
+        };
+        app.assistant.agent = Some(Agent::new(cfg.clone(), &app.session));
+        let tokens = chatgpt::Tokens { access_token: "synthetic-chatgpt-token".into(), ..Default::default() };
+        signed_in(&mut app, &tokens, &egui::Context::default());
+        assert_eq!(app.assistant.agent.as_ref().unwrap().config, cfg);
+        assert!(app.assistant.models_slot.is_none());
+    }
+
+    #[test]
+    fn provider_change_stops_the_previous_request() {
+        let mut app = RustGisApp::with_sample();
+        let cfg = Config {
+            provider: "custom".into(),
+            base_url: "http://localhost:1234/v1".into(),
+            model: "test".into(),
+            key: String::new(),
+            account: String::new(),
+        };
+        let mut agent = Agent::new(cfg.clone(), &app.session);
+        assert!(matches!(agent.ask("hello", &app.session), Step::Send(_)));
+        let generation = agent.generation();
+        app.assistant.agent = Some(agent);
+        app.assistant.inflight = Some((generation, Slot::default()));
+        apply_config(&mut app, Config { provider: "openai".into(), ..cfg });
+        let agent = app.assistant.agent.as_ref().unwrap();
+        assert!(!agent.busy());
+        assert_ne!(agent.generation(), generation);
+        assert!(app.assistant.inflight.is_none());
+    }
+
+    /// The right pane's width with `entries` in the conversation and `model` as the model's name.
+    fn pane_width(entries: Vec<Entry>, model: &str) -> f32 {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            RustGisApp::with_sample(),
+        );
+        h.state_mut().run("ui.pane.assistant", serde_json::Value::Null).unwrap();
+        for _ in 0..4 {
+            h.step();
+        }
+        let app = h.state_mut();
+        app.assistant.settings = false;
+        let agent = app.assistant.agent.as_mut().unwrap();
+        agent.config.model = model.into();
+        agent.transcript = entries;
+        for _ in 0..6 {
+            h.step();
+        }
+        egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("right_pane")).unwrap().size().x
+    }
+
+    #[test]
+    fn long_lines_wrap_instead_of_widening_the_pane() {
+        let sentence = "The assistant ran the buffer tool on the cities layer and added the result to the map. ".repeat(4);
+        let empty = pane_width(Vec::new(), "m");
+        let mut widened = Vec::new();
+        for (what, entry, model) in [
+            ("a list item", Entry::Assistant(format!("- {sentence}")), "m"),
+            ("a numbered item", Entry::Assistant(format!("1. {sentence}")), "m"),
+            ("a quote", Entry::Assistant(format!("> {sentence}")), "m"),
+            ("a word with no spaces", Entry::Assistant(format!("- {}", "x".repeat(400))), "m"),
+            ("the user's message", Entry::User(sentence.clone()), "m"),
+            (
+                "a tool call",
+                Entry::Tool { name: "run_command".into(), summary: "gp.run ".repeat(20), result: sentence.clone(), error: false },
+                "m",
+            ),
+            (
+                "the model's name",
+                Entry::Assistant("Done.".into()),
+                "provider/a-very-long-model-name-with-many-parts-preview-2026-10-14-extended",
+            ),
+        ] {
+            let w = pane_width(vec![entry], model);
+            if (w - empty).abs() > 0.5 {
+                widened.push(format!("{what}: {empty} to {w}"));
+            }
+        }
+        assert!(widened.is_empty(), "the pane grew wider with {widened:?}");
+    }
 }

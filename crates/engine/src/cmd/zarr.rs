@@ -20,7 +20,7 @@ pub fn commands() -> Vec<C> {
             .view()
             .params(r#"{"path": "a Zarr store's folder" | "url": "https://… a store with consolidated metadata"}"#),
         C::new("layer.addZarr", "Add Zarr Variable", "Home › Add › Add Data", add).params(
-            r#"{"path": folder | "url": "https://…", "variable"?: "its path in the store (default: the first)", "index"?: {"time": 3, "level": 0} (other dimensions' steps, default 0), "crs"?: "EPSG:… for a store that doesn't say", "name"?: text}"#,
+            r#"{"path": folder | "url": "https://…", "variable"?: "its path in the store (default: the first)", "index"?: {"time": 3, "level": 0} (other dimensions' steps, default 0), "crs"?: "EPSG:… for a store that doesn't say", "name"?: text, "ran"?: (internal: a slice the app has read)}"#,
         ),
     ]
 }

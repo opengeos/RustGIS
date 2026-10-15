@@ -247,6 +247,7 @@ Checking for updates…	Đang kiểm tra cập nhật…
 China	Trung Quốc
 Choose a band combination to display the raster layer.	Chọn tổ hợp kênh để hiển thị lớp raster.
 Choose a contrast stretch for the raster layer.	Chọn kiểu kéo giãn độ tương phản cho lớp raster.
+Choose a delimited text file or a spreadsheet, then pick its columns.	Chọn một tệp văn bản phân tách hoặc một bảng tính, rồi chọn các cột của nó.
 Choose a model.	Hãy chọn một mô hình.
 Choose a resampling type for the raster layer.	Chọn kiểu lấy mẫu lại cho lớp raster.
 Choose extra buttons for the Quick Access Toolbar.	Chọn các nút bổ sung cho thanh công cụ truy cập nhanh.
@@ -323,6 +324,7 @@ Color Vision	Thị giác màu
 Color Vision Simulator	Trình mô phỏng thị giác màu
 Colormap	Bản đồ màu
 Colors from the raster's own color table.	Màu lấy từ bảng màu riêng của raster.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	Các cột có tên như longitude/latitude, easting/northing hoặc geometry được chọn sẵn cho bạn.
 Combinations from the box above, one per line	Các tổ hợp từ ô phía trên, mỗi dòng một tổ hợp
 Command\nSearch	Tìm\nlệnh
 command is required	cần có lệnh
@@ -1816,6 +1818,7 @@ Write a plugin	Viết plugin
 X (mm)	X (mm)
 X Field	Trường X
 XY Table To Point	Bảng XY thành điểm
+XY Table To Point…	Bảng XY thành điểm…
 Y (mm)	Y (mm)
 Y Field	Trường Y
 Yes	Có
@@ -1872,3 +1875,4 @@ Signing in with ChatGPT works in the desktop app.	Đăng nhập bằng ChatGPT h
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Thông tin đăng nhập được lưu trong thư mục cài đặt của ứng dụng, chỉ cho tài khoản người dùng của bạn, và không bao giờ trong tệp dự án.
 Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	Yêu cầu được gửi đến máy chủ ChatGPT của OpenAI và được tính vào mức sử dụng gói đăng ký của bạn.
 Sign in with your ChatGPT account.	Hãy đăng nhập bằng tài khoản ChatGPT của bạn.
+ChatGPT sign-in can only be used with the OpenAI Codex backend	Đăng nhập ChatGPT chỉ có thể dùng với hệ thống OpenAI Codex

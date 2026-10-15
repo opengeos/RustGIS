@@ -31,18 +31,21 @@ Add data with **Home › Add Data** (**From URL…** adds a file by its web addr
 cloud-optimised GeoTIFF, GeoParquet or FlatGeobuf in place, a view at a time, and downloading
 others; see [Files on the web](data-formats.md#files-on-the-web)), by dropping files on the window, or by
 passing them on the command line (`rustgis places.geojson`). **Home › Add Data › Delimited
-Text…** picks a CSV's x and y (or WKT) columns, their coordinate system (such as `EPSG:2263`) and
-the separator; Add Data finds them itself (columns named like longitude/latitude,
-easting/northing or geometry, and EWKT's `SRID=`) and says when coordinates aren't
-longitude/latitude. A CSV without coordinate columns, or a layer without geometry, opens as a
+Text…** asks for a CSV or a spreadsheet first, then lists its columns to pick the x and y (or WKT)
+ones from, with the coordinate system (such as `EPSG:2263`) and the separator (changing it reads
+the columns again); `info.fileColumns` lists them for scripts. Add Data finds them itself
+(columns named like longitude/latitude, easting/northing or geometry, and EWKT's `SRID=`) and
+says when coordinates aren't longitude/latitude. A CSV without coordinate columns, or a layer without geometry, opens as a
 standalone table, listed under the map in Layers; right-click it to open or remove it. Tables
 can share a name: commands and tools take a table's id (`info.project` lists them) as well as its
-name, which stands for the first table of that name. The **XY Table To Point** tool
-([Geoprocessing](analysis.md)) makes points of a table already in the project, from two fields of
-coordinates and their coordinate system. In a text field a single comma is the decimal separator
-(`1,234` is 1.234); thousands separators are not read. **Home › Add Data ›
-Graphics Layer** adds a layer for [drawn graphics](cartography.md#graphics), and **Insert ›
-Layer Templates** adds empty layers with ready-made schemas to draw into.
+name, which stands for the first table of that name. An id given as a number is never taken for
+a name. The Tools pane and Geocode Addresses send the id of the table picked; a tool's run keeps
+the table's name beside it (`input_name`). The **XY Table To Point** tool
+([Geoprocessing](analysis.md), and a table's right-click menu) makes points of a table already in
+the project, from two fields of coordinates and their coordinate system. In a text field a single comma is the decimal separator
+(`1,234` is 1.234); thousands separators are not read.
+**Home › Add Data › Graphics Layer** adds a layer for [drawn graphics](cartography.md#graphics),
+and **Insert › Layer Templates** adds empty layers with ready-made schemas to draw into.
 
 Vector coordinates are WGS 84 longitude/latitude and are displayed in Web Mercator. GeoPackage,
 GeoParquet and FlatGeobuf files in another coordinate system (any EPSG code) are converted as they
@@ -442,6 +445,7 @@ RustGIS saves pieces of a project as files you can share and reuse:
 | Map file (a map with its data) | `.rgismap` | Publish › Save As › Map File | Data › Import |
 | Layer file (a layer with its symbology) | `.rgislyr` | Publish › Save As › Layer File | Add Data |
 | Styles (saved symbology) | `.rgisstyle` | Style › Styles › New Style, then Publish › Save As › Style Items | Style › Styles › Add Style File |
+| [Color ramps](cartography.md#custom-color-ramps) | `.rgisramp` (also reads QGIS `.xml`/`.qml`, GDAL color `.txt` and GMT `.cpt`) | Publish › Save As › Color Ramps, or by hand | Style › Styles › Add Color Ramp File |
 | Project template (the setup without features) | `.rgistemplate` | Data › Templates, or Publish › Save As | Data › Templates › Open Custom Template |
 | Project package (everything, rasters included) | `.rgispkg` | Publish › Package › Project | Project › Open |
 | Map package / mobile map package | `.rgismpk` | Publish › Package › Map or Mobile Map | Data › Import |

@@ -989,6 +989,7 @@ fn styles_group(app: &mut RustGisApp, ui: &mut Ui) {
             menu_item(ui, app, "symbology", "New Style From Layer", "style.new", Value::Null);
             menu_item(ui, app, "open", "Add Style File…", "ui.openItem", json!({"kind": "styles"}));
             menu_item(ui, app, "open", "Import Styles From…", "ui.openItem", json!({"kind": "importStyles"}));
+            menu_item(ui, app, "open", "Add Color Ramp File…", "ui.openItem", json!({"kind": "ramps"}));
         });
     });
 }
@@ -2242,6 +2243,16 @@ fn share_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 "Save the project's styles to a style file.",
                 "ui.saveItem",
                 json!({"kind": "styles"}),
+                false,
+            );
+            small(
+                ui,
+                app,
+                "symbology",
+                "Color Ramps",
+                "Save the project's custom color ramps to a color ramp file.",
+                "ui.saveItem",
+                json!({"kind": "ramps"}),
                 false,
             );
         });

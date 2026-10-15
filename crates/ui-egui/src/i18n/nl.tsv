@@ -247,6 +247,7 @@ Checking for updates…	Zoeken naar updates…
 China	China
 Choose a band combination to display the raster layer.	Kies een bandcombinatie om de rasterlaag weer te geven.
 Choose a contrast stretch for the raster layer.	Kies een contraststretch voor de rasterlaag.
+Choose a delimited text file or a spreadsheet, then pick its columns.	Kies een tekstbestand met scheidingstekens of een spreadsheet en kies daarna de kolommen.
 Choose a model.	Kies een model.
 Choose a resampling type for the raster layer.	Kies een resamplingtype voor de rasterlaag.
 Choose extra buttons for the Quick Access Toolbar.	Extra knoppen kiezen voor de werkbalk Snelle toegang.
@@ -323,6 +324,7 @@ Color Vision	Kleurenzicht
 Color Vision Simulator	Kleurenzichtsimulator
 Colormap	Kleurenkaart
 Colors from the raster's own color table.	Kleuren uit de eigen kleurentabel van het raster.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	Kolommen met namen als longitude/latitude, easting/northing of geometry worden voor u gekozen.
 Combinations from the box above, one per line	Combinaties uit het vak hierboven, één per regel
 Command\nSearch	Opdracht\nzoeken
 command is required	opdracht is vereist
@@ -1816,6 +1818,7 @@ Write a plugin	Een plugin schrijven
 X (mm)	X (mm)
 X Field	X-veld
 XY Table To Point	XY-tabel naar punt
+XY Table To Point…	XY-tabel naar punt…
 Y (mm)	Y (mm)
 Y Field	Y-veld
 Yes	Ja
@@ -1872,3 +1875,4 @@ Signing in with ChatGPT works in the desktop app.	Aanmelden met ChatGPT werkt in
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	De aanmelding wordt bewaard in de instellingenmap van de app, alleen voor uw gebruikersaccount, en nooit in een projectbestand.
 Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	Verzoeken gaan naar de ChatGPT-backend van OpenAI en tellen mee voor het gebruik van uw abonnement.
 Sign in with your ChatGPT account.	Meld u aan met uw ChatGPT-account.
+ChatGPT sign-in can only be used with the OpenAI Codex backend	ChatGPT-aanmelding kan alleen worden gebruikt met de OpenAI Codex-backend

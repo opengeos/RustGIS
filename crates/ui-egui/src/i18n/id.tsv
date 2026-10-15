@@ -247,6 +247,7 @@ Checking for updates…	Memeriksa pembaruan…
 China	Tiongkok
 Choose a band combination to display the raster layer.	Pilih kombinasi band untuk menampilkan layer raster.
 Choose a contrast stretch for the raster layer.	Pilih peregangan kontras untuk layer raster.
+Choose a delimited text file or a spreadsheet, then pick its columns.	Pilih file teks berpembatas atau lembar kerja, lalu pilih kolomnya.
 Choose a model.	Pilih model.
 Choose a resampling type for the raster layer.	Pilih tipe resampling untuk layer raster.
 Choose extra buttons for the Quick Access Toolbar.	Pilih tombol tambahan untuk Bilah Akses Cepat.
@@ -323,6 +324,7 @@ Color Vision	Penglihatan Warna
 Color Vision Simulator	Simulator Penglihatan Warna
 Colormap	Peta Warna
 Colors from the raster's own color table.	Warna dari tabel warna raster itu sendiri.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	Kolom bernama seperti longitude/latitude, easting/northing atau geometry dipilih secara otomatis.
 Combinations from the box above, one per line	Kombinasi dari kotak di atas, satu per baris
 Command\nSearch	Cari\nPerintah
 command is required	command wajib diisi
@@ -1816,6 +1818,7 @@ Write a plugin	Tulis plugin
 X (mm)	X (mm)
 X Field	Kolom X
 XY Table To Point	Tabel XY ke Titik
+XY Table To Point…	Tabel XY ke Titik…
 Y (mm)	Y (mm)
 Y Field	Kolom Y
 Yes	Ya
@@ -1872,3 +1875,4 @@ Signing in with ChatGPT works in the desktop app.	Masuk dengan ChatGPT berfungsi
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Info masuk disimpan di folder pengaturan aplikasi, hanya untuk akun pengguna Anda, dan tidak pernah di berkas proyek.
 Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	Permintaan dikirim ke backend ChatGPT milik OpenAI dan dihitung dalam penggunaan langganan Anda.
 Sign in with your ChatGPT account.	Masuk dengan akun ChatGPT Anda.
+ChatGPT sign-in can only be used with the OpenAI Codex backend	Login ChatGPT hanya dapat digunakan dengan backend OpenAI Codex

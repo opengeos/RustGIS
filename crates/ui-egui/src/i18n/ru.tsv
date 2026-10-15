@@ -247,6 +247,7 @@ Checking for updates…	Проверка обновлений…
 China	Китай
 Choose a band combination to display the raster layer.	Выберите комбинацию каналов для отображения растрового слоя.
 Choose a contrast stretch for the raster layer.	Выберите растяжку контраста для растрового слоя.
+Choose a delimited text file or a spreadsheet, then pick its columns.	Выберите текстовый файл с разделителями или электронную таблицу, затем — её столбцы.
 Choose a model.	Выберите модель.
 Choose a resampling type for the raster layer.	Выберите тип передискретизации для растрового слоя.
 Choose extra buttons for the Quick Access Toolbar.	Выбрать дополнительные кнопки для панели быстрого доступа.
@@ -323,6 +324,7 @@ Color Vision	Цветовое зрение
 Color Vision Simulator	Симулятор цветового зрения
 Colormap	Цветовая карта
 Colors from the raster's own color table.	Цвета из собственной цветовой таблицы растра.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	Столбцы с именами вроде longitude/latitude, easting/northing или geometry выбираются автоматически.
 Combinations from the box above, one per line	Сочетания из поля выше, по одному в строке
 Command\nSearch	Поиск\nкоманд
 command is required	требуется command
@@ -1816,6 +1818,7 @@ Write a plugin	Написать модуль
 X (mm)	X (мм)
 X Field	Поле X
 XY Table To Point	Таблица XY в точки
+XY Table To Point…	Таблица XY в точки…
 Y (mm)	Y (мм)
 Y Field	Поле Y
 Yes	Да
@@ -1872,3 +1875,4 @@ Signing in with ChatGPT works in the desktop app.	Вход через ChatGPT р
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Данные входа хранятся в папке настроек приложения, только для вашей учётной записи, и никогда в файле проекта.
 Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	Запросы идут на сервер ChatGPT компании OpenAI и учитываются в использовании вашей подписки.
 Sign in with your ChatGPT account.	Войдите с учётной записью ChatGPT.
+ChatGPT sign-in can only be used with the OpenAI Codex backend	Вход в ChatGPT можно использовать только с сервером OpenAI Codex

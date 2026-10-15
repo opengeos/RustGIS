@@ -22,3 +22,5 @@ log = { workspace = true }
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
 # Random bytes for the sign-in's PKCE verifier and state.
 getrandom = "0.3"
+# Atomic owner-only credential writes on desktop platforms.
+tempfile = "3"

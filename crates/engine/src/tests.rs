@@ -192,6 +192,17 @@ fn standalone_tables_keep_their_ids_in_the_project_file() {
         let out = s.project.tables.last().unwrap();
         assert_eq!(out.value(0, out.field_index("SUM_v").unwrap()), &rustgis_data::Value::Float(sum), "{input}");
     }
+    // A table named as another's id: the text finds it by its name, and a number is the id.
+    s.run("layer.addDataText", &json!({"fileName": format!("{}.csv", counts[1]), "text": "k,v\na,1\n"})).unwrap();
+    assert_eq!(s.project.tables.last().map(|t| t.name.clone()), Some(counts[1].to_string()));
+    for (input, sum) in [(json!(counts[1].to_string()), 1.0), (json!(counts[1]), 99.0)] {
+        s.run("gp.run", &json!({"tool": "summaryStatistics", "params": {"input": input, "field": "v"}})).unwrap();
+        let out = s.project.tables.last().unwrap();
+        assert_eq!(out.value(0, out.field_index("SUM_v").unwrap()), &rustgis_data::Value::Float(sum), "{input}");
+    }
+    for input in [json!(9999), json!(-1), json!(1.5)] {
+        assert!(s.run("gp.run", &json!({"tool": "summaryStatistics", "params": {"input": input, "field": "v"}})).is_err());
+    }
     let dir = std::env::temp_dir().join(format!("rustgis-table-ids-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("counts.csv");
@@ -343,6 +354,26 @@ fn open_from_text() {
     assert!(s.run("project.openText", &json!({"text": "not json"})).is_err());
     s.run("project.openText", &json!({"text": text})).unwrap();
     assert!(s.map().layer_by_name("pts").is_none() && !s.dirty && !s.can_undo());
+}
+
+#[test]
+fn opened_project_is_named_after_its_file() {
+    // Issue #197: a project saved from the sample and renamed kept the sample's name.
+    let mut s = world();
+    let text = serde_json::to_string(&s.project).unwrap();
+    s.run("project.openText", &json!({"text": text, "fileName": "test.rgis"})).unwrap();
+    assert_eq!(s.project.name, "test");
+    s.run("project.openText", &json!({"text": text})).unwrap();
+    assert_eq!(s.project.name, "World Atlas", "without a file name the project keeps its own");
+    s.run("project.openText", &json!({"text": text, "fileName": " .rgis"})).unwrap();
+    assert_eq!(s.project.name, "World Atlas", "an empty file name doesn't rename it");
+    let dir = std::env::temp_dir().join(format!("rustgis-named-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Trip plan.rgis");
+    std::fs::write(&path, &text).unwrap();
+    s.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!(s.project.name, "Trip plan");
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -561,6 +592,8 @@ fn hostile_params_never_panic() {
                 | "share.exportRaster"
                 // Download from the network.
                 | "gp.installGeolibre"
+                // Deletes the installed GeoLibre runner.
+                | "gp.uninstallGeolibre"
                 | "plugin.registry"
                 | "plugin.installFromRegistry"
                 // Ask Earth Search when no API is given.
@@ -904,6 +937,15 @@ fn layouts_compose_export_and_round_trip() {
     s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": frame})).unwrap();
     assert!(s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": inset})).is_err());
     assert!(s.run("layout.addElement", &json!({"kind": "sparkles"})).is_err());
+    // A hairline rule keeps its height when added and when edited (#211).
+    let rule = s.run("layout.addElement", &json!({"kind": "rectangle", "color": "#000000", "w": 136, "h": 0.15})).unwrap()["element"]
+        .as_u64()
+        .unwrap() as u32;
+    assert_eq!(s.project.layouts[0].element(rule).map(|e| e.h), Some(0.15));
+    s.run("layout.update", &json!({"element": rule, "h": 0.35})).unwrap();
+    assert_eq!(s.project.layouts[0].element(rule).map(|e| e.h), Some(0.35));
+    let err = s.run("layout.addElement", &json!({"kind": "rectangle", "h": 0})).unwrap_err();
+    assert!(err.contains("more than 0"), "{err}");
     // Frame zooms and edits.
     s.run("layout.frameZoom", &json!({"element": frame, "to": "layer", "layer": "Lakes"})).unwrap();
     s.run("layout.update", &json!({"element": frame, "x": 12, "w": 180, "center": [10, 50]})).unwrap();
@@ -967,6 +1009,139 @@ fn layouts_compose_export_and_round_trip() {
     assert_eq!(s.active_layout, None);
     s.run("layout.remove", &json!({"name": "Europe 2"})).unwrap();
     assert_eq!(s.project.layouts.len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn custom_colour_ramps_add_apply_save_and_travel() {
+    use rustgis_map::{Ramp, RasterRenderer, Renderer, Rgba};
+    let dir = std::env::temp_dir().join(format!("rustgis-ramps-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |n: &str| dir.join(n).display().to_string();
+    let mut s = world();
+    let file = r##"[
+        {"name": "Phosphor Frostfire", "kind": "diverging", "stops": ["#eff6ff", "#7b5ca6", "#fff5da"]},
+        {"name": "Brand", "kind": "qualitative", "stops": ["#112233", "#445566"]}
+    ]"##;
+    let r = s.run("ramp.add", &json!({"text": file})).unwrap();
+    assert_eq!(r["added"], json!(["Phosphor Frostfire", "Brand"]));
+    // One ramp on its own is a file too; the same name replaces it.
+    s.run("ramp.add", &json!({"text": r##"{"name": "brand", "kind": "qualitative", "stops": ["#112233", "#445566", "#778899"]}"##}))
+        .unwrap();
+    assert_eq!(s.project.ramps.len(), 2);
+    for bad in
+        [r##"{"name": "Ember", "stops": ["#000000", "#ffffff"]}"##, r##"[]"##, r##"{"name": "x", "stops": ["#000000"]}"##, "not json"]
+    {
+        assert!(s.run("ramp.add", &json!({"text": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(s.project.ramps.len(), 2, "a refused file adds nothing");
+    assert_eq!(s.run("project.connections", &Value::Null).unwrap()["ramps"], json!(["Phosphor Frostfire", "brand"]));
+
+    // Three classes from a three-stop ramp take its colours as they are.
+    s.run(
+        "layer.symbology",
+        &json!({"layer": "Cities", "type": "graduated", "field": "pop_max", "classes": 3, "ramp": "phosphor frostfire"}),
+    )
+    .unwrap();
+    let fills = |s: &Session| match &s.map().layer_by_name("Cities").unwrap().renderer {
+        Renderer::Graduated { symbols, ramp, .. } => (symbols.iter().map(|y| y.fill).collect::<Vec<_>>(), ramp.name().to_string()),
+        r => panic!("{r:?}"),
+    };
+    let stops = vec![Rgba::rgb(0xef, 0xf6, 0xff), Rgba::rgb(0x7b, 0x5c, 0xa6), Rgba::rgb(0xff, 0xf5, 0xda)];
+    assert_eq!(fills(&s), (stops.clone(), "Phosphor Frostfire".to_string()));
+    // Color Scheme recolours with a custom ramp too.
+    s.run("layer.ramp", &json!({"layer": "Countries", "ramp": "Brand"})).unwrap();
+    assert!(s.run("layer.ramp", &json!({"layer": "Countries", "ramp": "Nope"})).is_err());
+
+    // Saved with the project, and inside the layer's renderer.
+    let p = crate::Project::from_json(&serde_json::to_string(&s.project).unwrap()).unwrap();
+    assert_eq!(p.ramps, s.project.ramps);
+    // A layer file carries the ramp to a project that doesn't have it.
+    s.run("layer.save", &json!({"layer": "Cities", "path": path("cities.rgislyr")})).unwrap();
+    s.run("ramp.save", &json!({"path": path("mine.rgisramp")})).unwrap();
+    s.run("ramp.remove", &json!({"name": "PHOSPHOR FROSTFIRE"})).unwrap();
+    assert!(s.run("ramp.remove", &json!({"name": "Phosphor Frostfire"})).is_err());
+    assert_eq!(fills(&s).0, stops, "removing a ramp leaves layers that use it alone");
+    // ...which can still be restyled with it, by name or by leaving the ramp out.
+    let grad = json!({"layer": "Cities", "type": "graduated", "field": "pop_max", "classes": 3, "method": "quantile"});
+    let mut named = grad.clone();
+    named["ramp"] = json!("Phosphor Frostfire");
+    s.run("layer.symbology", &named).unwrap();
+    assert_eq!(fills(&s), (stops.clone(), "Phosphor Frostfire".to_string()));
+    s.run("layer.symbology", &grad).unwrap();
+    assert_eq!(fills(&s).1, "Phosphor Frostfire", "a ramp left out is kept");
+    named["ramp"] = json!("Nope");
+    assert!(s.run("layer.symbology", &named).is_err(), "an unknown ramp is an error");
+    // A hand-edited project's repeated or built-in names are made unique, keeping every ramp.
+    let mut p = s.project.clone();
+    p.ramps = serde_json::from_str(
+        r##"[{"name": "Brand", "stops": ["#000000", "#ffffff"]}, {"name": "brand", "stops": ["#111111", "#ffffff"]},
+            {"name": "Ember", "stops": ["#222222", "#ffffff"]}]"##,
+    )
+    .unwrap();
+    p.normalize();
+    assert_eq!(p.ramps.iter().map(|r| r.name()).collect::<Vec<_>>(), ["Brand", "brand 2", "Ember (custom)"]);
+    let mut t = world();
+    t.run("layer.addData", &json!({"path": path("cities.rgislyr")})).unwrap();
+    match &t.map().layer_by_name("Cities (2)").unwrap().renderer {
+        Renderer::Graduated { symbols, ramp: Ramp::Custom(c), .. } => {
+            assert_eq!(c.name(), "Phosphor Frostfire");
+            assert_eq!(symbols.iter().map(|y| y.fill).collect::<Vec<_>>(), stops);
+        }
+        r => panic!("{r:?}"),
+    }
+    // The saved file adds them back.
+    t.run("ramp.add", &json!({"path": path("mine.rgisramp")})).unwrap();
+    assert_eq!(t.project.ramps.len(), 2);
+    assert!(Session::new(Project::default()).run("ramp.save", &json!({"path": path("none.rgisramp")})).is_err());
+
+    // Rasters: stretch and classify with a custom ramp.
+    let mut r = with_raster();
+    r.run("ramp.add", &json!({"path": path("mine.rgisramp")})).unwrap();
+    r.run("raster.symbology", &json!({"type": "stretch", "ramp": "Phosphor Frostfire"})).unwrap();
+    let style = |r: &Session| r.map().layers.last().unwrap().raster.as_ref().unwrap().style.renderer.clone();
+    assert!(matches!(style(&r), RasterRenderer::Stretch { ramp: Ramp::Custom(_), .. }));
+    r.run("raster.symbology", &json!({"type": "classify", "classes": 3})).unwrap();
+    assert!(matches!(style(&r), RasterRenderer::Classify { ramp: Ramp::Custom(_), .. }), "classify keeps the ramp");
+    r.run("ramp.remove", &json!({"name": "Phosphor Frostfire"})).unwrap();
+    r.run("raster.symbology", &json!({"type": "classify", "classes": 4, "ramp": "Phosphor Frostfire"})).unwrap();
+    assert!(matches!(style(&r), RasterRenderer::Classify { ramp: Ramp::Custom(_), .. }), "the raster's own copy is found by name");
+    assert!(r.run("raster.symbology", &json!({"type": "stretch", "ramp": "Nope"})).is_err());
+    assert!(crate::cmd::share::map_png(&mut r, Some(200.0), Some(150.0), None).unwrap().len() > 1000);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn colour_ramps_from_qgis_gdal_and_gmt_files() {
+    use rustgis_map::color::RampKind;
+    let dir = std::env::temp_dir().join(format!("rustgis-palettes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |n: &str| dir.join(n).display().to_string();
+    let mut s = world();
+    // A GMT palette by path: named after the file, with the kind given.
+    std::fs::write(path("relief.cpt"), "-100 0/0/255 0 255/255/255\n0 255/255/255 100 255/0/0\n").unwrap();
+    let r = s.run("ramp.add", &json!({"path": path("relief.cpt"), "kind": "diverging"})).unwrap();
+    assert_eq!(r["added"], json!(["relief"]));
+    assert_eq!(s.project.ramps[0].kind(), RampKind::Diverging);
+    // GDAL colour-relief text, as the web app passes a picked file: its bytes and name.
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode("0, 0, 0, 0, 255\n10, 255, 255, 255, 255\nnv, 0, 0, 0, 0\n");
+    let r = s.run("ramp.add", &json!({"data": data, "file": "Grey.txt"})).unwrap();
+    assert_eq!(r["added"], json!(["Grey"]));
+    // A QGIS style as text, with the format named.
+    let xml = r#"<!DOCTYPE qgis_style><qgis_style version="2"><colorramps><colorramp type="gradient" name="Q"><Option type="Map">
+        <Option type="QString" name="color1" value="0,0,0,255"/><Option type="QString" name="color2" value="255,255,255,255"/>
+        </Option></colorramp></colorramps></qgis_style>"#;
+    s.run("ramp.add", &json!({"text": xml, "format": "qgis", "name": "From QGIS"})).unwrap();
+    assert_eq!(s.project.ramps.iter().map(|r| r.name()).collect::<Vec<_>>(), ["relief", "Grey", "From QGIS"]);
+    s.run("layer.ramp", &json!({"layer": "Countries", "ramp": "relief"})).unwrap();
+    for bad in [
+        json!({"text": xml, "format": "svg"}),
+        json!({"text": xml, "kind": "round"}),
+        json!({"text": r##"{"name": "Ember", "stops": ["#000000", "#ffffff"]}"##}),
+    ] {
+        assert!(s.run("ramp.add", &bad).is_err(), "{bad}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1773,7 +1948,8 @@ fn plugin_edits_are_one_undo_step() {
     assert!(forward(&mut s, "eng-edit", "layer.remove", json!({"layer": "Nope"})).is_err());
     assert_eq!(s.map().layers.len(), n);
     // Some things are off limits whatever the permissions.
-    for op in ["script.run", "project.new", "edit.undo", "plugin.uninstall", "plugin:eng-edit/h", "gp.setGeolibre"] {
+    for op in ["script.run", "project.new", "edit.undo", "plugin.uninstall", "plugin:eng-edit/h", "gp.setGeolibre", "gp.uninstallGeolibre"]
+    {
         assert!(forward(&mut s, "eng-edit", op, json!({})).is_err(), "{op}");
     }
     // Files need their own permission.
@@ -3010,6 +3186,23 @@ fn spreadsheets_feeds_landxml_and_polylines() {
     let e = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().extent();
     assert!((e.min_x + 73.96).abs() < 0.05, "{e:?}");
     assert!(s.run("layer.addData", &json!({"path": p, "layer": "nope"})).is_err());
+    // Its columns, and a delimited file's, for Add Delimited Text.
+    let c = s.run("info.fileColumns", &json!({"path": p, "layer": "Survey"})).unwrap();
+    assert_eq!(c, json!({"columns": ["id", "E", "N"], "x": null, "y": null, "wkt": null, "delimiter": null}));
+    let csv = dir.join("stops.csv");
+    std::fs::write(&csv, "stop;Lon;Lat\nA;1;2\n").unwrap();
+    let csv = csv.display().to_string();
+    let c = s.run("info.fileColumns", &json!({"path": csv})).unwrap();
+    assert_eq!(c, json!({"columns": ["stop", "Lon", "Lat"], "x": "Lon", "y": "Lat", "wkt": null, "delimiter": ";"}));
+    let c = s.run("info.fileColumns", &json!({"path": csv, "delimiter": ","})).unwrap();
+    assert_eq!(c["columns"], json!(["stop;Lon;Lat"]));
+    assert!(s.run("info.fileColumns", &json!({"path": csv, "delimiter": ";;"})).is_err());
+    assert!(s.run("info.fileColumns", &json!({"path": dir.join("missing.csv").display().to_string()})).is_err());
+    // Only the start of delimited text is read: a character cut at its end isn't an error, bytes
+    // that aren't UTF-8 are.
+    let cut = crate::cmd::layer::columns_of("t.csv", b"lon,lat,name\n1,2,\xc3", &json!({})).unwrap();
+    assert_eq!(cut["x"], "lon");
+    assert!(crate::cmd::layer::columns_of("t.csv", b"lon,lat\n\xff,2\n", &json!({})).is_err());
     // A GeoRSS feed as plain .xml, by its contents.
     let feed = dir.join("quakes.xml");
     std::fs::write(&feed, r#"<rss xmlns:georss="http://www.georss.org/georss"><channel><item><title>Q</title><georss:point>45 -110</georss:point></item></channel></rss>"#).unwrap();
@@ -4465,4 +4658,247 @@ fn coverage_answers_that_are_not_geotiffs_are_errors() {
         let e = coverage_check("c", bad).err().unwrap_or_default();
         assert!(e.starts_with("c: the service answered with an error"), "{e}");
     }
+}
+
+/// The keys a command's source reads from its parameters, found by scanning `src/cmd/*.rs`: the
+/// command's function (or closure) and the functions it passes its parameters to (in its own
+/// file, or another's as `module::name(…)`), a few calls deep.
+fn keys_read_by_commands() -> Vec<(String, std::collections::BTreeSet<String>)> {
+    use std::collections::{BTreeMap, BTreeSet};
+    type Fn = (Vec<String>, String);
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cmd");
+    // Each module's functions: their `&Value` arguments and bodies.
+    let mut modules: BTreeMap<String, (String, BTreeMap<String, Fn>)> = BTreeMap::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        let src = std::fs::read_to_string(&path).unwrap();
+        let mut fns: BTreeMap<String, Fn> = BTreeMap::new();
+        let mut rest = src.as_str();
+        while let Some(at) = rest.find("fn ") {
+            let after = &rest[at + 3..];
+            let name: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            let Some(open) = after.find('{') else { break };
+            let body = balanced(&after[open..]);
+            fns.entry(name).or_insert((value_args(&after[..open]), body.to_string()));
+            rest = &after[open..];
+        }
+        modules.insert(stem, (src, fns));
+    }
+    let mut out = Vec::new();
+    for (stem, (src, fns)) in &modules {
+        let mut rest = src.as_str();
+        while let Some(at) = rest.find("C::new(") {
+            let call = balanced(&rest[at + 6..]);
+            rest = &rest[at + 6..];
+            let parts: Vec<&str> = call.splitn(2, '"').collect();
+            let id: String = parts.get(1).unwrap_or(&"").chars().take_while(|c| *c != '"').collect();
+            // After the three strings: a function name or a closure.
+            let mut tail = call;
+            for _ in 0..6 {
+                tail = &tail[tail.find('"').map_or(tail.len(), |i| i + 1)..];
+            }
+            let tail = tail.trim_start_matches([',', ' ', '\n']);
+            let mut keys = BTreeSet::new();
+            let mut todo: Vec<(String, Fn)> = Vec::new();
+            if let Some(closure) = tail.strip_prefix('|') {
+                let args = closure[..closure.find('|').unwrap()].split(',').map(|a| a.trim().to_string()).skip(1).collect();
+                todo.push((stem.clone(), (args, tail.to_string())));
+            } else {
+                let name: String = tail.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                todo.extend(fns.get(&name).cloned().map(|f| (stem.clone(), f)));
+            }
+            let mut seen = BTreeSet::new();
+            let mut depth = 0;
+            while !todo.is_empty() && depth < 6 {
+                for (module, (args, body)) in std::mem::take(&mut todo) {
+                    let args: Vec<&String> = args.iter().filter(|a| !a.starts_with('_')).collect();
+                    for a in &args {
+                        // The helpers that read a key: `ps(p, "key")`…
+                        for h in ["ps", "f", "b", "uint", "s_req", "color", "get_color", "band", "point", "limit", "method"] {
+                            keys.extend(literal_keys(&body, &format!("{h}({a}, \"")));
+                        }
+                        keys.extend(literal_keys(&body, &format!("{a}.get(\"")));
+                        keys.extend(literal_keys(&body, &format!("{a}[\"")));
+                        if body.contains(&format!("layer_id({a})")) || body.contains(&format!("layer_id(&{a})")) {
+                            keys.insert("layer".to_string());
+                        }
+                        if body.contains(&format!("table_index({a})")) {
+                            keys.insert("table".to_string());
+                        }
+                    }
+                    // The functions it passes one of its parameter values to, at any position.
+                    for (m, (_, mfns)) in &modules {
+                        for (name, f) in mfns {
+                            let qualified = if m == "mod" { format!("super::{name}") } else { format!("{m}::{name}") };
+                            let call = if *m == module { name.as_str() } else { qualified.as_str() };
+                            let key = format!("{m}::{name}");
+                            // A dispatcher by kind: its arms read keys for other commands.
+                            if key == "items::item_bytes" {
+                                continue;
+                            }
+                            if !seen.contains(&key) && args.iter().any(|a| calls(&body, call, a)) {
+                                seen.insert(key);
+                                todo.push((m.clone(), f.clone()));
+                            }
+                        }
+                    }
+                }
+                depth += 1;
+            }
+            out.push((id, keys));
+        }
+    }
+    out
+}
+
+/// `s` from its opening bracket to the matching close, skipping strings, raw strings and chars.
+fn balanced(s: &str) -> &str {
+    let b = s.as_bytes();
+    let (mut depth, mut i) = (0i32, 0);
+    while i < b.len() {
+        match b[i] {
+            b'r' if b.get(i + 1) == Some(&b'#') && b.get(i + 2) == Some(&b'"') => {
+                i += s[i + 3..].find("\"#").map_or(b.len(), |n| n + 4);
+            }
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'\'' if b.get(i + 2) == Some(&b'\'') => i += 2,
+            b'\'' if b.get(i + 1) == Some(&b'\\') && b.get(i + 3) == Some(&b'\'') => i += 3,
+            b'{' | b'(' | b'[' => depth += 1,
+            b'}' | b')' | b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &s[..=i];
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    s
+}
+
+/// Whether `body` calls `name(…)` (not as part of a longer name) with `arg` itself as one of its
+/// arguments (`p`, `&p`, `p.clone()`).
+fn calls(body: &str, name: &str, arg: &str) -> bool {
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    body.match_indices(&format!("{name}(")).any(|(i, m)| {
+        let before = body[..i].chars().next_back();
+        if word(before) || before == Some('.') || (!name.contains("::") && before == Some(':')) {
+            return false;
+        }
+        let args = balanced(&body[i + m.len() - 1..]);
+        let inner = &args[1..args.len().saturating_sub(1)];
+        // The arguments, split at top-level commas.
+        let (mut depth, mut start, mut found) = (0i32, 0, false);
+        for (j, c) in inner.char_indices().chain([(inner.len(), ',')]) {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth -= 1,
+                ',' if depth == 0 => {
+                    let a = inner[start..j].trim();
+                    found |= [arg.to_string(), format!("&{arg}"), format!("{arg}.clone()")].contains(&a.to_string());
+                    start = j + 1;
+                }
+                _ => {}
+            }
+        }
+        found
+    })
+}
+
+/// The names of the `&Value` arguments in a function signature.
+fn value_args(sig: &str) -> Vec<String> {
+    sig.split([',', '('])
+        .filter_map(|a| {
+            a.split_once(':').filter(|(_, t)| t.trim().starts_with("&") && t.contains("Value")).map(|(n, _)| n.trim().to_string())
+        })
+        .collect()
+}
+
+/// The string literals that follow `prefix` (not part of a longer name) in `body`.
+fn literal_keys(body: &str, prefix: &str) -> Vec<String> {
+    body.match_indices(prefix)
+        .filter(|(i, _)| !body[..*i].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_'))
+        .map(|(i, _)| body[i + prefix.len()..].chars().take_while(|c| *c != '"').collect::<String>())
+        .filter(|k| !k.is_empty())
+        .collect()
+}
+
+#[test]
+fn params_name_every_key_a_command_reads() {
+    // Read by a shared helper but of no use to the command.
+    let unused = [("profile.alongSelected", "row"), ("sources.remove", "name"), ("sources.remove", "extra")];
+    let s = Session::new(Project::default());
+    let mut missing = Vec::new();
+    let found = keys_read_by_commands();
+    assert!(found.len() > 300, "the scan found {} commands", found.len());
+    for (id, keys) in found {
+        let Some(spec) = s.registry.get(&id) else { continue };
+        let named = spec.param_keys().unwrap_or_default();
+        let absent: Vec<_> = keys
+            .iter()
+            .filter(|k| {
+                !named.contains(&k.as_str()) && !spec.params.contains(&format!("\"{k}\"")) && !unused.contains(&(id.as_str(), k.as_str()))
+            })
+            .collect();
+        if !absent.is_empty() {
+            missing.push(format!("{id}: {absent:?} (params {})", spec.params));
+        }
+    }
+    assert!(missing.is_empty(), "{} commands read keys their params don't name:\n{}", missing.len(), missing.join("\n"));
+}
+
+#[test]
+fn param_keys_reads_descriptions() {
+    use crate::param_keys;
+    assert_eq!(param_keys("{}"), Some(vec![]));
+    assert_eq!(param_keys(r#"{"layer"?, "name": string}"#), Some(vec!["layer", "name"]));
+    // Values, nested objects and prose are not keys.
+    assert_eq!(
+        param_keys(r#"{"mode": "a"|"b", "steps"?: [{"tool": id}], "extent"?: [w, s, e, n] (clip, "view")}"#),
+        Some(vec!["mode", "steps", "extent"])
+    );
+    // Alternatives.
+    assert_eq!(param_keys(r#"{"path": folder | "url": "https://…", "name"?: text}"#), Some(vec!["path", "url", "name"]));
+    assert_eq!(param_keys(r#"{"lon" | "x": number, "lat" | "y": number}"#), Some(vec!["lon", "x", "lat", "y"]));
+    assert_eq!(param_keys(r##"{"color": "#RRGGBB"|"#RRGGBBAA"}"##), Some(vec!["color"]));
+    assert_eq!(param_keys("a GeoJSON text"), None);
+    // Every command's description reads as keys, and names a key once.
+    for c in &Session::new(Project::default()).registry.commands {
+        let keys = c.param_keys().unwrap_or_else(|| panic!("{}: params {} are not an object", c.id, c.params));
+        let mut unique = keys.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), keys.len(), "{}: {}", c.id, c.params);
+    }
+}
+
+#[test]
+fn unknown_params_are_said() {
+    let mut s = world();
+    let mark = s.notice_mark();
+    s.run("layer.moveDown", &json!({"layer": "Cities", "steps": 13})).unwrap();
+    let said: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).collect();
+    assert_eq!(said, ["layer.moveDown ignores 'steps' (it reads layer)"]);
+    // Known keys, and commands that take none, say nothing more.
+    let mark = s.notice_mark();
+    s.run("layer.rename", &json!({"layer": "Cities", "name": "Towns"})).unwrap();
+    assert!(s.notices_since(mark).is_empty());
+    s.run("layout.close", &json!({"x": 1})).unwrap();
+    assert_eq!(s.notices_since(mark).first().map(|n| n.text.as_str()), Some("layout.close ignores 'x' (it reads no parameters)"));
+    // Many or long keys are said briefly.
+    let mut junk = serde_json::Map::new();
+    for i in 0..1000 {
+        junk.insert(format!("{i:04}{}", "k".repeat(500)), Value::Null);
+    }
+    let mark = s.notice_mark();
+    s.run("layout.close", &Value::Object(junk)).unwrap();
+    let said = s.notices_since(mark).first().map(|n| n.text.clone()).unwrap_or_default();
+    assert!(said.len() < 500 && said.contains("995 more"), "{said}");
 }

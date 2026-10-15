@@ -209,16 +209,33 @@ fn provider(app: &mut RustGisApp, ui: &mut egui::Ui) {
 /// after the dialog closes, a request at a time.
 pub fn geocode(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     ui.label(egui::RichText::new(tl!("Turns a table's addresses into points: each row's address fields are joined with commas (such as street, city, country) and looked up. The public servers take up to 100 addresses a run, one a second; a server of your own takes more.")).weak());
-    let tables: Vec<String> = app.session.project.tables.iter().map(|t| t.name.clone()).collect();
+    // A table is picked by its id, since names can repeat: `dialogs.flag` says the choice is a
+    // table, and `dialogs.layer` then holds its id.
+    let tables: Vec<(u32, String)> = app.session.project.tables.iter().map(|t| (t.id, t.name.clone())).collect();
     let layers: Vec<String> = app.session.map().layers.iter().filter(|l| !l.is_raster()).map(|l| l.name.clone()).collect();
     if app.dialogs.layer.is_empty() {
-        app.dialogs.layer = tables.first().or(layers.first()).cloned().unwrap_or_default();
+        match tables.first() {
+            Some((id, _)) => (app.dialogs.layer, app.dialogs.flag) = (id.to_string(), true),
+            None => app.dialogs.layer = layers.first().cloned().unwrap_or_default(),
+        }
     }
+    let table = if app.dialogs.flag { app.dialogs.layer.parse::<u32>().ok() } else { None };
+    let shown = match table {
+        Some(id) => tables.iter().find(|(i, _)| *i == id).map(|(_, n)| n.clone()).unwrap_or_default(),
+        None => app.dialogs.layer.clone(),
+    };
     egui::Grid::new("geocode").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         ui.label(tl!("Table or layer"));
-        egui::ComboBox::from_id_salt("geocode_source").selected_text(app.dialogs.layer.clone()).width(280.0).show_ui(ui, |ui| {
-            for n in tables.iter().chain(&layers) {
-                ui.selectable_value(&mut app.dialogs.layer, n.clone(), n);
+        egui::ComboBox::from_id_salt("geocode_source").selected_text(shown).width(280.0).show_ui(ui, |ui| {
+            for (id, n) in &tables {
+                if ui.selectable_label(table == Some(*id), n).clicked() {
+                    (app.dialogs.layer, app.dialogs.flag) = (id.to_string(), true);
+                }
+            }
+            for n in &layers {
+                if ui.selectable_label(table.is_none() && app.dialogs.layer == *n, n).clicked() {
+                    (app.dialogs.layer, app.dialogs.flag) = (n.clone(), false);
+                }
             }
         });
         ui.end_row();
@@ -234,9 +251,11 @@ pub fn geocode(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         if app.ui.geocode.job.is_some() {
             return Err(tl!("Another run is under way.").to_string());
         }
-        let source = app.dialogs.layer.clone();
-        let key = if tables.contains(&source) && !layers.contains(&source) { "table" } else { "layer" };
-        let mut params = json!({key: source, "address": app.dialogs.a.trim(), "provider": app.dialogs.mode});
+        let mut params = json!({"address": app.dialogs.a.trim(), "provider": app.dialogs.mode});
+        match table {
+            Some(id) => params["table"] = json!(id),
+            None => params["layer"] = json!(app.dialogs.layer),
+        }
         if !app.dialogs.b.trim().is_empty() {
             params["url"] = json!(app.dialogs.b.trim());
         }

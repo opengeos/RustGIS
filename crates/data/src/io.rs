@@ -703,6 +703,63 @@ pub fn sniff_delimiter(text: &str) -> u8 {
     seps.get(pick).copied().unwrap_or(b',')
 }
 
+/// The x/y columns found by name, as a pair from one family: longitude/latitude, else
+/// easting/northing.
+fn found_xy(headers: &[String]) -> Option<(usize, usize)> {
+    let find = |names: &[&str]| headers.iter().position(|h| names.contains(&h.trim().to_ascii_lowercase().as_str()));
+    find(LON_NAMES).zip(find(LAT_NAMES)).or_else(|| find(X_NAMES).zip(find(Y_NAMES)))
+}
+
+/// A WKT column found: one named like geometry whose first value reads as WKT.
+fn found_wkt(headers: &[String], rows: &[Vec<String>]) -> Option<usize> {
+    // The name first: looking for a column's first value costs a pass over the rows.
+    headers.iter().enumerate().filter(|(_, h)| WKT_NAMES.contains(&h.trim().to_ascii_lowercase().as_str())).find_map(|(i, _)| {
+        let first = rows.iter().filter_map(|r| r.get(i)).map(|s| s.trim()).find(|s| !s.is_empty())?;
+        crate::interop::parse_wkt(first).is_ok().then_some(i)
+    })
+}
+
+/// The columns of delimited text or a sheet, and those its geometry is read from when none are
+/// given (see [`read_csv_with`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Columns {
+    pub names: Vec<String>,
+    pub x: Option<String>,
+    pub y: Option<String>,
+    pub wkt: Option<String>,
+    /// The field separator (delimited text only).
+    pub delimiter: Option<u8>,
+}
+
+/// The rows [`csv_columns`] reads: a WKT column is found by its first value.
+const COLUMN_SAMPLE_ROWS: usize = 1000;
+
+/// The columns of rows under a header row, as [`read_rows`] would find them.
+pub(crate) fn columns_of(headers: &[String], rows: &[Vec<String>]) -> Columns {
+    let xy = found_xy(headers);
+    let wkt = if xy.is_some() { None } else { found_wkt(headers, rows) };
+    let name = |i: usize| headers.get(i).map(|h| h.trim().to_string());
+    Columns {
+        names: headers.iter().map(|h| h.trim().to_string()).collect(),
+        x: xy.and_then(|(x, _)| name(x)),
+        y: xy.and_then(|(_, y)| name(y)),
+        wkt: wkt.and_then(name),
+        delimiter: None,
+    }
+}
+
+/// The columns of delimited text (split at `delimiter`, or the one found), without reading all
+/// of it: a WKT column whose first value is past the first [`COLUMN_SAMPLE_ROWS`] rows isn't found.
+pub fn csv_columns(text: &str, delimiter: Option<u8>) -> Result<Columns> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let delimiter = delimiter.unwrap_or_else(|| sniff_delimiter(text));
+    let mut rdr = csv::ReaderBuilder::new().flexible(true).delimiter(delimiter).from_reader(text.as_bytes());
+    let headers: Vec<String> = rdr.headers().map_err(|e| DataError::Format(format!("CSV: {e}")))?.iter().map(|s| s.to_string()).collect();
+    let rows: Vec<Vec<String>> =
+        rdr.records().flatten().take(COLUMN_SAMPLE_ROWS).map(|r| r.iter().map(|s| s.to_string()).collect()).collect();
+    Ok(Columns { delimiter: Some(delimiter), ..columns_of(&headers, &rows) })
+}
+
 /// Reads CSV; columns named like longitude/latitude become point geometry.
 pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
     read_csv_with(text, name, &CsvOptions::default())
@@ -739,7 +796,6 @@ pub(crate) fn read_rows(
     name: &str,
     opts: &CsvOptions,
 ) -> Result<(Dataset, ReadReport)> {
-    let find = |names: &[&str]| headers.iter().position(|h| names.contains(&h.trim().to_ascii_lowercase().as_str()));
     let named = |n: &Option<String>, what: &str| -> Result<Option<usize>> {
         match n.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
             Some(n) => headers
@@ -757,27 +813,13 @@ pub(crate) fn read_rows(
     }
     let (x, y) = match (x, y) {
         (Some(x), Some(y)) => (Some(x), Some(y)),
-        // Found by name, as a pair from one family: longitude/latitude, else easting/northing.
-        (None, None) if wkt_given.is_none() => match (find(LON_NAMES), find(LAT_NAMES)) {
-            (Some(x), Some(y)) => (Some(x), Some(y)),
-            _ => (find(X_NAMES), find(Y_NAMES)),
-        },
+        (None, None) if wkt_given.is_none() => found_xy(headers).unzip(),
         (None, None) => (None, None),
         _ => return Err(DataError::Format("give both the x and the y column".into())),
     };
     let xy = x.zip(y);
-    // A WKT column: the one named, or (without x/y columns) one named like geometry whose first
-    // value reads as WKT.
-    let wkt = wkt_given.or_else(|| {
-        if xy.is_some() {
-            return None;
-        }
-        // The name first: looking for a column's first value costs a pass over the rows.
-        headers.iter().enumerate().filter(|(_, h)| WKT_NAMES.contains(&h.trim().to_ascii_lowercase().as_str())).find_map(|(i, _)| {
-            let first = rows.iter().filter_map(|r| r.get(i)).map(|s| s.trim()).find(|s| !s.is_empty())?;
-            crate::interop::parse_wkt(first).is_ok().then_some(i)
-        })
-    });
+    // A WKT column: the one named, or (without x/y columns) one found.
+    let wkt = wkt_given.or_else(|| if xy.is_some() { None } else { found_wkt(headers, rows) });
     // Infer each column's type from its values; a WKT column is the geometry, not an attribute.
     let columns: Vec<usize> = (0..headers.len()).filter(|&i| Some(i) != wkt).collect();
     let fields: Vec<Field> = columns
@@ -1674,6 +1716,29 @@ mod tests {
         assert_eq!(crate::raster::Crs::parse("OGC:CRS84").unwrap(), crate::raster::Crs::LonLat);
         assert!(crate::raster::Crs::parse("EPSG:999999").is_err());
         assert!(crate::raster::Crs::parse("Mercator").is_err());
+    }
+
+    /// The columns Add Delimited Text offers, and the ones found as the reader finds them.
+    #[test]
+    fn delimited_text_columns() {
+        let c = csv_columns("\u{feff}name;Lat;Lon\nA;1;2\n", None).unwrap();
+        assert_eq!(c.names, ["name", "Lat", "Lon"]);
+        assert_eq!((c.x.as_deref(), c.y.as_deref(), c.wkt.as_deref(), c.delimiter), (Some("Lon"), Some("Lat"), None, Some(b';')));
+        // Longitude/latitude over easting/northing; easting/northing as a pair only.
+        let c = csv_columns("easting,northing,lon,lat\n", None).unwrap();
+        assert_eq!((c.x.as_deref(), c.y.as_deref()), (Some("lon"), Some("lat")));
+        let c = csv_columns("easting,lat\n1,2\n", None).unwrap();
+        assert_eq!((c.x, c.y), (None, None));
+        // A WKT column by its name and first value, not by its name alone.
+        let c = csv_columns("id,geometry\n1,\n2,POINT (1 2)\n", None).unwrap();
+        assert_eq!(c.wkt.as_deref(), Some("geometry"));
+        assert_eq!(csv_columns("id,geometry\n1,not wkt\n", None).unwrap().wkt, None);
+        // The separator given splits the header.
+        let c = csv_columns("a;b,c\n", Some(b',')).unwrap();
+        assert_eq!((c.names, c.delimiter), (vec!["a;b".to_string(), "c".to_string()], Some(b',')));
+        // Nothing to read is no columns, not a crash.
+        assert!(csv_columns("", None).unwrap().names.is_empty());
+        let _ = csv_columns("\"unclosed\n", None);
     }
 
     #[test]

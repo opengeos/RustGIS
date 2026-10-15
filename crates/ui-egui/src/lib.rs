@@ -268,7 +268,10 @@ pub struct UiState {
     pub pane_sets: Vec<(String, Option<LeftPane>, Option<RightPane>, String)>,
     /// The command an item picked in the browser opens with (web).
     pub pending_open: Option<&'static str>,
-    /// Add Delimited Text's options, for the file being picked (web).
+    /// The file the project was last saved or opened as (web), which Save downloads again.
+    pub web_file: Option<String>,
+    /// Add Delimited Text, for the file being picked (web): `null` opens its dialog for the file,
+    /// a script's options are read with it.
     pub pending_csv: Option<Value>,
     /// Data downloading from web addresses (Add Data › From URL): the address, the parameters to
     /// add it with, and where the download lands.
@@ -344,6 +347,7 @@ impl Default for UiState {
             pending_picture: None,
             pending_layout_picture: false,
             pending_open: None,
+            web_file: None,
             pending_csv: None,
             downloads: Vec::new(),
             sql: Default::default(),
@@ -601,14 +605,14 @@ impl RustGisApp {
         self.open_bytes_with(name, bytes, None)
     }
 
-    /// Opens a file from the inbox: one the `"text"` picker marked ([`DELIMITED_PICK`]) is read
-    /// with Add Delimited Text's options.
+    /// Opens a file from the inbox: one the `"text"` picker marked ([`DELIMITED_PICK`]) opens Add
+    /// Delimited Text for it, or is read with a script's options.
     pub fn open_picked(&mut self, name: &str, bytes: &[u8]) -> Result<Value, String> {
         match name.strip_prefix(DELIMITED_PICK) {
-            Some(name) => {
-                let csv = self.ui.pending_csv.take();
-                self.open_bytes_with(name, bytes, csv)
-            }
+            Some(name) => match self.ui.pending_csv.take() {
+                Some(Value::Null) => dialogs::open_csv(self, name, dialogs::CsvSource::Bytes(bytes.to_vec())),
+                csv => self.open_bytes_with(name, bytes, csv),
+            },
             None => self.open_bytes(name, bytes),
         }
     }
@@ -626,6 +630,8 @@ impl RustGisApp {
             (".rgismpk", "map.import"),
             (".rgislyr", "layer.addLayerFile"),
             (".rgisstyle", "style.add"),
+            (".rgisramp", "ramp.add"),
+            (".cpt", "ramp.add"),
             (".rgistemplate", "project.fromTemplate"),
             (".rgistask", "task.import"),
             (".rgisreport", "report.open"),
@@ -645,13 +651,18 @@ impl RustGisApp {
         }
         if let Some(cmd) = self.ui.pending_open.take().or(item) {
             use base64::Engine;
-            let r = self.run(cmd, json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)}));
+            let mut p = json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)});
+            // A colour ramp file's name tells its format and names its ramp.
+            if cmd == "ramp.add" {
+                p["file"] = json!(name);
+            }
+            let r = self.run(cmd, p);
             self.map.invalidate();
             return r;
         }
         if lower.ends_with(".rgispkg") {
             let text = rustgis_engine::cmd::items::package_text(bytes)?;
-            let r = self.run("project.openText", json!({"text": text, "name": name}));
+            let r = self.run("project.openText", json!({"text": text}));
             self.map.invalidate();
             return r;
         }
@@ -695,7 +706,10 @@ impl RustGisApp {
             return Err(e);
         };
         if rustgis_engine::project::is_project_file(name) {
-            let r = self.run("project.openText", json!({"text": text, "name": name}));
+            let r = self.run("project.openText", json!({"text": text, "fileName": name}));
+            if r.is_ok() {
+                self.ui.web_file = Some(format!("{}.rgis", self.session.project.name));
+            }
             self.map.invalidate();
             r
         } else {
@@ -707,6 +721,35 @@ impl RustGisApp {
             }
             self.run("layer.addDataText", p)
         }
+    }
+
+    /// Downloads the project as `file` (web), naming the project after it as Save As does
+    /// natively. A name without the `.rgis` extension gets it.
+    pub(crate) fn save_download(&mut self, file: &str) -> Result<(), String> {
+        let file = file.trim();
+        let stem = if file.to_ascii_lowercase().ends_with(".rgis") { file.get(..file.len() - 5).unwrap_or(file) } else { file }.trim();
+        if stem.is_empty() || stem.contains(['/', '\\']) {
+            return Err(tl!("type a file name").into());
+        }
+        if self.services.download.is_none() {
+            return Err(tl!("this build saves projects with Save As").into());
+        }
+        let stem: String = stem.chars().take(200).collect();
+        // Not an undoable edit: saving names the project, as `project.saveAs` does, once the
+        // file is written.
+        let old = std::mem::replace(&mut self.session.project.name, stem.clone());
+        let text = match serde_json::to_string(&self.session.project) {
+            Ok(text) => text,
+            Err(e) => {
+                self.session.project.name = old;
+                return Err(e.to_string());
+            }
+        };
+        let file = format!("{stem}.rgis");
+        self.download(&file, text.into_bytes());
+        self.session.dirty = false;
+        self.ui.web_file = Some(file);
+        Ok(())
     }
 
     /// Offers bytes as a download (web).
@@ -814,6 +857,11 @@ impl RustGisApp {
         if let Err(e) = &r {
             log::info!("{id}: {e}");
         }
+        // A project replacing this one hasn't been saved in the browser yet (opening a file
+        // names it again).
+        if r.is_ok() && matches!(id, "project.new" | "project.sample" | "project.open" | "project.openText" | "project.fromTemplate") {
+            self.ui.web_file = None;
+        }
         // Sources added, saved or made favourites are kept with the preferences.
         sourcespane::save(self);
         r
@@ -869,6 +917,10 @@ impl RustGisApp {
             "ui.gp.open" => {
                 let tool = p.get("tool").and_then(Value::as_str).and_then(rustgis_engine::analysis::tool);
                 self.gp.open(tool.map(|t| t.id), &self.session);
+                // A standalone table to run the tool on, by its id.
+                if let Some(id) = p.get("table").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()) {
+                    self.gp.pick_table(id, &self.session);
+                }
                 self.ui.right = Some(RightPane::Geoprocessing);
             }
             "ui.language" => {
@@ -1004,24 +1056,27 @@ impl RustGisApp {
                     self.ui.tab = ribbon::current_tab(t).to_string();
                 }
             }
-            // Delimited text with its columns and coordinate system: the dialog, then (with the
-            // dialog's options) the file.
+            // Delimited text: the file, then the dialog to pick its columns. With options (a
+            // script's), the file is read with them instead.
             "ui.addDelimited" => {
-                if !p.is_object() {
-                    return self.run("ui.dialog", json!({"name": "addCsv"}));
-                }
+                let opts = p.is_object().then(|| p.clone());
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_layout_picture = false;
                     self.ui.pending_picture = None;
                     self.ui.pending_open = None;
-                    self.ui.pending_csv = Some(p.clone());
+                    // `null`: the dialog, for the file picked.
+                    self.ui.pending_csv = Some(opts.unwrap_or(Value::Null));
                     open("text");
                 } else if let Some(path) =
                     dialogs::pick_open(&["csv", "tsv", "txt", "xlsx", "xlsm", "xlsb", "xls", "ods"], tl!("Delimited text and spreadsheets"))
                 {
-                    let mut q = p.clone();
-                    q["path"] = json!(path);
-                    return self.run("layer.addData", q);
+                    return match opts {
+                        Some(mut q) => {
+                            q["path"] = json!(path);
+                            self.run("layer.addData", q)
+                        }
+                        None => dialogs::open_csv(self, &path.clone(), dialogs::CsvSource::Path(path)),
+                    };
                 }
             }
             // A STAC item's or collection's address (a `?stac=` link): STAC Search opens on it,
@@ -1224,11 +1279,15 @@ impl RustGisApp {
                     return r;
                 }
             }
+            // The browser can't write a file in place: Save downloads the project again under the
+            // file name it was saved or opened as, and Save As (or a first Save) asks for one.
             "ui.save" | "ui.saveAs" if self.services.download.is_some() => {
-                let text = serde_json::to_string(&self.session.project).map_err(|e| e.to_string())?;
                 let name = format!("{}.rgis", self.session.project.name);
-                self.download(&name, text.into_bytes());
-                self.session.dirty = false;
+                if id == "ui.save" && self.ui.web_file.as_deref() == Some(name.as_str()) {
+                    self.save_download(&name)?;
+                } else {
+                    self.dialogs.open("saveProject", &self.session)?;
+                }
             }
             "ui.save" => {
                 if self.session.path.is_some() {
@@ -1357,6 +1416,7 @@ impl RustGisApp {
                     "map" => ("map.import", &["rgismap", "rgismpk", "rgis", "rgisx", "rgispkg"], "RustGIS maps and projects"),
                     "layer" => ("layer.addLayerFile", &["rgislyr"], "RustGIS layer file"),
                     "styles" => ("style.add", &["rgisstyle"], "RustGIS styles"),
+                    "ramps" => ("ramp.add", &["rgisramp", "xml", "qml", "txt", "clr", "cpt"], "Colour ramps (RustGIS, QGIS, GDAL, GMT)"),
                     "importStyles" => ("style.import", &["rgislyr", "rgismap", "rgis", "rgisx"], "RustGIS layers, maps and projects"),
                     "template" => ("project.fromTemplate", &["rgistemplate"], "RustGIS project template"),
                     "task" => ("task.import", &["rgistask"], "RustGIS task"),
@@ -1368,7 +1428,7 @@ impl RustGisApp {
                 };
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_open = Some(cmd);
-                    open("item");
+                    open(if kind == "ramps" { "ramp" } else { "item" });
                 } else if let Some(path) = dialogs::pick_open(exts, tl!(label)) {
                     let r = self.run(cmd, json!({"path": path}));
                     self.map.invalidate();

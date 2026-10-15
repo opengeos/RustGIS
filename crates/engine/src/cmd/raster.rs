@@ -29,9 +29,9 @@ pub(crate) fn need_raster(s: &Session) -> Option<&'static str> {
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addDataBytes", "Add Data (from file contents)", "Home › Add", add_bytes)
-            .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv|.zip|.kml|.kmz|.gpx|.parquet|.fgb|.gpkg|.mbtiles", "data": base64, "layer"?: "one layer of a zip, KML or GPX by name", "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text)}"#),
+            .params(r#"{"fileName": "name.tif|.tiff|.asc|.geojson|.csv|.zip|.kml|.kmz|.gpx|.parquet|.fgb|.gpkg|.mbtiles", "data": base64, "layer"?: "one layer of a zip, KML or GPX by name", "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"? (as layer.addData)}"#),
         C::new("raster.symbology", "Symbology", "Style › Rendering", symbology).when(need_raster).params(
-            r#"{"layer"?, "type": "stretch"|"rgb"|"classify"|"unique"|"colormap"|"shadedRelief", "band"?: 1.., "ramp"?, "invert"?: bool, "classes"?: 1..32, "method"?, "azimuth"?, "altitude"?, "zFactor"?}"#,
+            r#"{"layer"?, "type": "stretch"|"rgb"|"classify"|"unique"|"colormap"|"shadedRelief", "band"?: 1.., "ramp"?, "invert"?: bool, "classes"?: 1..32, "method"?, "azimuth"?, "altitude"?, "zFactor"?, "grey"?: bool (shadedRelief without its colour ramp)}"#,
         ),
         C::new("raster.stretch", "Stretch Type", "Style › Rendering", |s, p| {
             let code = ps(p, "type").ok_or("type is required")?;
@@ -235,9 +235,21 @@ pub(crate) fn add_named_bytes(s: &mut Session, p: &Value, name: String, bytes: V
 }
 
 fn symbology(s: &mut Session, p: &Value) -> CmdResult {
-    let (_, r) = get(s, p)?;
+    let (id, r) = get(s, p)?;
     let kind = ps(p, "type").unwrap_or("stretch").to_string();
-    let ramp = ps(p, "ramp").map(|n| Ramp::from_name(n).ok_or_else(|| format!("unknown colour scheme '{n}'"))).transpose()?;
+    // A custom ramp deleted from the project is still found on the raster that uses it.
+    let ramp = ps(p, "ramp")
+        .map(|n| {
+            s.ramp(n).or_else(|e| {
+                s.map()
+                    .layer(id)
+                    .and_then(|l| l.raster.as_ref())
+                    .and_then(|rl| rl.style.renderer.ramp())
+                    .filter(|r| r.name().eq_ignore_ascii_case(n.trim()))
+                    .ok_or(e)
+            })
+        })
+        .transpose()?;
     let bnd = band(p, "band", &r)?;
     with(s, p, |rl, r| {
         let cur_band = rl.style.renderer.bands().first().copied().unwrap_or(0);

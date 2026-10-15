@@ -247,6 +247,7 @@ Checking for updates…	Güncellemeler denetleniyor…
 China	Çin
 Choose a band combination to display the raster layer.	Raster katmanını görüntülemek için bir bant kombinasyonu seçin.
 Choose a contrast stretch for the raster layer.	Raster katmanı için bir kontrast germe seçin.
+Choose a delimited text file or a spreadsheet, then pick its columns.	Sınırlandırılmış bir metin dosyası veya elektronik tablo seçin, ardından sütunlarını seçin.
 Choose a model.	Bir model seçin.
 Choose a resampling type for the raster layer.	Raster katmanı için bir yeniden örnekleme türü seçin.
 Choose extra buttons for the Quick Access Toolbar.	Hızlı Erişim Araç Çubuğu için ek düğmeler seç.
@@ -323,6 +324,7 @@ Color Vision	Renk Görme
 Color Vision Simulator	Renk Görme Simülatörü
 Colormap	Renk haritası
 Colors from the raster's own color table.	Rasterin kendi renk tablosundaki renkler.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	longitude/latitude, easting/northing veya geometry gibi adlandırılmış sütunlar sizin için seçilir.
 Combinations from the box above, one per line	Yukarıdaki kutudan kombinasyonlar, her satıra bir tane
 Command\nSearch	Komut\nAra
 command is required	command gerekli
@@ -1816,6 +1818,7 @@ Write a plugin	Eklenti yaz
 X (mm)	X (mm)
 X Field	X Alanı
 XY Table To Point	XY Tablosundan Noktaya
+XY Table To Point…	XY Tablosundan Noktaya…
 Y (mm)	Y (mm)
 Y Field	Y Alanı
 Yes	Evet
@@ -1872,3 +1875,4 @@ Signing in with ChatGPT works in the desktop app.	ChatGPT ile oturum açma masa�
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Oturum, uygulamanın ayarlar klasöründe yalnızca kullanıcı hesabınız için saklanır, asla bir proje dosyasında saklanmaz.
 Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	İstekler OpenAI'nin ChatGPT arka ucuna gider ve aboneliğinizin kullanımından düşülür.
 Sign in with your ChatGPT account.	ChatGPT hesabınızla oturum açın.
+ChatGPT sign-in can only be used with the OpenAI Codex backend	ChatGPT oturum açma yalnızca OpenAI Codex arka ucuyla kullanılabilir

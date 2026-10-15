@@ -136,7 +136,7 @@ pub fn preset(id: &str) -> Option<&'static Preset> {
 }
 
 /// Which model to call, where and with what key.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Config {
     /// A [`Preset`] id.
     pub provider: String,
@@ -147,6 +147,12 @@ pub struct Config {
     /// The ChatGPT workspace a signed-in account's requests are for (`chatgpt-account-id`);
     /// empty for other providers.
     pub account: String,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config").field("provider", &self.provider).field("model", &self.model).finish_non_exhaustive()
+    }
 }
 
 impl Config {
@@ -161,14 +167,21 @@ impl Config {
         if p.id == "ollama" && !base_url.trim_end_matches('/').ends_with("/v1") {
             base_url = format!("{}/v1", base_url.trim_end_matches('/'));
         }
-        let mut cfg = Config { provider: p.id.to_string(), base_url, model: p.model.to_string(), key, account: String::new() };
+        let cfg = Config { provider: p.id.to_string(), base_url, model: p.model.to_string(), key, account: String::new() };
         #[cfg(not(target_arch = "wasm32"))]
-        if p.login
-            && let Some(t) = crate::chatgpt::load()
         {
-            cfg.sign_in(&t);
+            let mut cfg = cfg;
+            if p.login
+                && let Some(t) = crate::chatgpt::load()
+            {
+                cfg.sign_in(&t);
+            }
+            cfg
         }
-        cfg
+        #[cfg(target_arch = "wasm32")]
+        {
+            cfg
+        }
     }
 
     /// Uses a signed-in account's tokens.
@@ -530,7 +543,8 @@ fn responses_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDe
 /// The `data:` payloads of a server-sent event stream, parsed.
 fn sse_events(body: &str) -> Vec<Value> {
     let mut events = Vec::new();
-    for block in body.split("\n\n") {
+    let normalized = body.replace("\r\n", "\n");
+    for block in normalized.split("\n\n") {
         let data: Vec<&str> = block.lines().filter_map(|l| l.strip_prefix("data:")).map(str::trim_start).collect();
         if data.is_empty() {
             continue;
@@ -551,7 +565,7 @@ fn responses_reply(resp: &HttpResponse) -> Result<Reply, String> {
         let msg = serde_json::from_str::<Value>(&text).ok().and_then(|v| error_message(&v));
         return Err(msg.unwrap_or_else(|| http_error(resp)));
     }
-    let mut items: Vec<Value> = Vec::new();
+    let mut indexed_items: Vec<(u64, Value)> = Vec::new();
     let mut last: Option<Value> = None;
     let mut error: Option<String> = None;
     let events = if text.trim_start().starts_with('{') {
@@ -563,7 +577,8 @@ fn responses_reply(resp: &HttpResponse) -> Result<Reply, String> {
         match e.get("type").and_then(Value::as_str) {
             Some("response.output_item.done") => {
                 if let Some(item) = e.get("item") {
-                    items.push(item.clone());
+                    let index = e.get("output_index").and_then(Value::as_u64).unwrap_or(indexed_items.len() as u64);
+                    indexed_items.push((index, item.clone()));
                 }
             }
             Some("response.completed" | "response.incomplete" | "response.failed") => last = e.get("response").cloned(),
@@ -580,8 +595,11 @@ fn responses_reply(resp: &HttpResponse) -> Result<Reply, String> {
         let why = last.pointer("/error/message").and_then(Value::as_str).unwrap_or("no reason given");
         return Err(format!("the model's reply failed: {why}"));
     }
-    if items.is_empty() {
-        items = last.get("output").and_then(Value::as_array).cloned().unwrap_or_default();
+    indexed_items.sort_by_key(|(index, _)| *index);
+    let mut items: Vec<Value> = indexed_items.into_iter().map(|(_, item)| item).collect();
+    if let Some(output) = last.get("output").and_then(Value::as_array).filter(|output| !output.is_empty()) {
+        // The terminal response is authoritative and already ordered.
+        items = output.clone();
     }
     let mut text = String::new();
     let mut calls = Vec::new();
@@ -622,6 +640,8 @@ fn responses_reply(resp: &HttpResponse) -> Result<Reply, String> {
             format!("the model declined this request: {r}")
         });
         calls.clear();
+        // Calls declined on this turn have no outputs to pair with on the next request.
+        items.retain(|item| item.get("type").and_then(Value::as_str) != Some("function_call"));
     }
     // Replayed as sent, minus the server's item ids (the conversation isn't stored there).
     let native: Vec<Value> = items

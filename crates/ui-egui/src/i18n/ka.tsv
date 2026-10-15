@@ -247,6 +247,7 @@ Checking for updates…	მიმდინარეობს განახლ�
 China	ჩინეთი
 Choose a band combination to display the raster layer.	აირჩიეთ არხების კომბინაცია რასტრული ფენის საჩვენებლად.
 Choose a contrast stretch for the raster layer.	აირჩიეთ კონტრასტის გაჭიმვა რასტრული ფენისთვის.
+Choose a delimited text file or a spreadsheet, then pick its columns.	აირჩიეთ გამყოფიანი ტექსტური ფაილი ან ცხრილი, შემდეგ კი მისი სვეტები.
 Choose a model.	აირჩიეთ მოდელი.
 Choose a resampling type for the raster layer.	აირჩიეთ რესემპლირების ტიპი რასტრული ფენისთვის.
 Choose extra buttons for the Quick Access Toolbar.	აირჩიეთ დამატებითი ღილაკები სწრაფი წვდომის პანელისთვის.
@@ -323,6 +324,7 @@ Color Vision	ფერთა აღქმა
 Color Vision Simulator	ფერთა აღქმის სიმულატორი
 Colormap	ფერთა რუკა
 Colors from the raster's own color table.	ფერები რასტრის საკუთარი ფერთა ცხრილიდან.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	სვეტები სახელებით, როგორიცაა longitude/latitude, easting/northing ან geometry, ავტომატურად აირჩევა.
 Combinations from the box above, one per line	ზემოთ მოცემული ველიდან კომბინაციები, თითო ხაზზე ერთი
 Command\nSearch	ბრძანებების\nძიება
 command is required	საჭიროა ბრძანება
@@ -1816,6 +1818,7 @@ Write a plugin	დანამატის დაწერა
 X (mm)	X (მმ)
 X Field	X ველი
 XY Table To Point	XY ცხრილი წერტილებად
+XY Table To Point…	XY ცხრილი წერტილებად…
 Y (mm)	Y (მმ)
 Y Field	Y ველი
 Yes	დიახ
@@ -1872,3 +1875,4 @@ Signing in with ChatGPT works in the desktop app.	ChatGPT-ით შესვლ
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	შესვლის მონაცემები ინახება აპის პარამეტრების საქაღალდეში, მხოლოდ თქვენი მომხმარებლის ანგარიშისთვის, და არასოდეს პროექტის ფაილში.
 Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	მოთხოვნები მიდის OpenAI-ის ChatGPT სერვერზე და ითვლება თქვენი გამოწერის მოხმარებაში.
 Sign in with your ChatGPT account.	შედით თქვენი ChatGPT ანგარიშით.
+ChatGPT sign-in can only be used with the OpenAI Codex backend	ChatGPT-ში შესვლა მხოლოდ OpenAI Codex-ის სერვერთან შეიძლება

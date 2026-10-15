@@ -17,6 +17,10 @@ browser tab through WebAssembly.
     where those products are described in more depth. Found something wrong or out of date?
     Please [open an issue](https://github.com/opengeos/RustGIS/issues).
 
+Coming from QGIS? [RustGIS and QGIS](qgis.md) goes deeper: the pros and cons of each, how QGIS
+concepts map onto RustGIS, and how to use the two together. Deciding between RustGIS and its
+sibling? [RustGIS and GeoLibre](geolibre.md) compares the two in detail.
+
 ## RustGIS and GeoLibre
 
 RustGIS and GeoLibre are both [opengeos](https://github.com/opengeos) projects, and they share
@@ -36,7 +40,8 @@ They differ in how they are built and who they suit:
 
 If you want the widest data access and the most platforms, choose GeoLibre. If you want a
 compact native desktop GIS with a classic ribbon workflow and a fully scriptable command
-engine, choose RustGIS. Both keep your data on your machine.
+engine, choose RustGIS. Both keep your data on your machine. See
+[RustGIS and GeoLibre](geolibre.md) for a closer look.
 
 ## At a glance
 
@@ -94,7 +99,7 @@ engine, choose RustGIS. Both keep your data on your machine.
 
 | | **RustGIS** | **GeoLibre** | **QGIS** | **ArcGIS Pro** | **ArcGIS Online** |
 |---|---|---|---|---|---|
-| **Scripting** | Every action is a command: `rustgis-cli` runs any of them headlessly; a Script pane | Python console, `geolibre` Python package | PyQGIS, `qgis_process` | `arcpy` | ArcGIS API for Python / JavaScript |
+| **Scripting** | Every action is a command: `rustgis-cli` and the `rustgis` Python package run any of them headlessly; a Script pane | Python console, `geolibre` Python package | PyQGIS, `qgis_process` | `arcpy` | ArcGIS API for Python / JavaScript |
 | **Notebooks** | Built-in notebooks of text and command cells; Jupyter `.ipynb` in and out | The whole app as a Jupyter widget | Bindings, not the UI | Notebooks drive `arcpy` | Hosted notebooks |
 | **Plugins** | Sandboxed WebAssembly plugins with declared permissions; a registry; the same file runs on desktop, CLI and web | TypeScript plugin API, a registry | **Largest**: thousands of Python plugins | .NET add-ins, Python toolboxes | App templates |
 | **AI assistant** | Acts through undoable commands; Anthropic, OpenAI, Gemini, OpenRouter, Ollama or any OpenAI-compatible model; bring your own key or sign in with ChatGPT; also on the command line | Natural-language assistant with undoable operations; bring your own key | Via plugins | Copilot features | AI assistants |
@@ -130,20 +135,23 @@ Stated plainly, so the tables above are worth trusting:
 
 - **Format breadth.** Databases are DuckDB files and PostgreSQL/PostGIS (through DuckDB, on the
   desktop), and the web app doesn't write GeoPackages. Other vector formats (File Geodatabase,
-  DWG…) need GDAL installed, and SQL queries need DuckDB, which RustGIS calls
-  rather than links; GDAL rasters aren't read.
+  DWG…) and rasters (JPEG 2000, NetCDF, HDF…) need GDAL installed, and SQL queries need
+  DuckDB, which RustGIS calls rather than links.
 - **Coordinate systems.** Vector data is stored in longitude/latitude; there is no full PROJ.
 - **Editing depth.** No vertex editing of existing features yet, and no versioned or
   multi-user editing.
 - **Specialized analysis.** Spatial joins, overlay union and intersect, network datasets and
   spatial statistics are thin or missing, beyond what the GeoLibre and Whitebox tools cover.
-- **Python.** There is no Python API; automation goes through commands, the CLI and plugins.
+- **Python.** The [`rustgis` package](../python.md) runs commands headlessly, but there is no
+  Python console inside the app and no Python plugins.
 - **Maturity.** RustGIS is young. Many features are first versions; see the
   [roadmap](https://github.com/opengeos/RustGIS/blob/main/ROADMAP.md).
 
 ## See also
 
-- [User Guide](user-guide/index.md): what RustGIS does, page by page
-- [Command Line](cli.md): scripting RustGIS
+- [User Guide](../user-guide/index.md): what RustGIS does, page by page
+- [RustGIS and GeoLibre](geolibre.md): a closer look at the sibling project
+- [RustGIS and QGIS](qgis.md): a closer look, for QGIS users
+- [Command Line](../cli.md): scripting RustGIS
 - [GeoLibre's comparison](https://geolibre.app/comparison/): GeoLibre against QGIS, ArcGIS,
   CARTO, Felt, kepler.gl and Google Earth

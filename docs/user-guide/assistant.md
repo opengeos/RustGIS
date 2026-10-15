@@ -57,9 +57,11 @@ rustgis-cli ask --logout
 The ↻ button lists the models your account may use, and the first of them is chosen when the
 current one isn't offered. Requests go to the backend the Codex CLI uses
 (`https://chatgpt.com/backend-api/codex`), not to the OpenAI API, so they count against your
-subscription's Codex usage limits and work only while the subscription is active. OpenAI permits
-using the Codex sign-in in third-party tools; the backend is OpenAI's product endpoint, though,
-and may change with Codex releases. Signing in needs the desktop app or the command line (it
+subscription's Codex usage limits and work only while the subscription is active. This is a
+Codex-compatible integration using OpenAI's product endpoint, subject to your account's terms;
+the backend may change with Codex releases. It is separate from OpenAI's newer
+[Sign in with ChatGPT for open-source apps](https://developers.openai.com/siwc/token-sharing-open-source),
+which uses dynamic client registration and the public Responses API. Signing in needs the desktop app or the command line (it
 runs a short-lived server on `127.0.0.1:1455` for the browser to return to); the web app doesn't
 offer it. The provider and model you last chose in the settings
 are used at start. Until you choose one, `RUSTGIS_ASSISTANT_PROVIDER` and
@@ -76,7 +78,12 @@ you tick **Remember the key on this computer**, which saves it unencrypted in th
 preferences (in the browser's storage on the web); keys from the environment are never saved.
 A ChatGPT sign-in is kept in `chatgpt-auth.json` in the app's settings folder (readable by your
 user account only), never in the preferences or a project file, and its tokens are never logged;
-RustGIS renews them as they expire.
+RustGIS renews them as they expire. Importing the Codex CLI's sign-in shares its refresh token;
+whichever app renews it first may require the other to sign in again. A separate browser sign-in
+avoids sharing that token. RustGIS serializes refresh and sign-out within one process; avoid
+running multiple RustGIS processes against the same sign-in while tokens are being renewed.
+The ChatGPT provider's address is fixed to the Codex backend so its tokens cannot be sent to a
+custom provider address.
 Plain HTTP is only used for servers on your computer or local network.
 
 In the web app, the browser calls the provider directly. Anthropic, OpenAI, Gemini and

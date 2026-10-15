@@ -247,6 +247,7 @@ Checking for updates…	正在检查更新…
 China	中国
 Choose a band combination to display the raster layer.	选择用于显示栅格图层的波段组合。
 Choose a contrast stretch for the raster layer.	为栅格图层选择对比度拉伸。
+Choose a delimited text file or a spreadsheet, then pick its columns.	选择分隔文本文件或电子表格，然后选择其列。
 Choose a model.	请选择模型。
 Choose a resampling type for the raster layer.	为栅格图层选择重采样类型。
 Choose extra buttons for the Quick Access Toolbar.	为快速访问工具栏选择额外按钮。
@@ -323,6 +324,7 @@ Color Vision	色觉
 Color Vision Simulator	色觉模拟器
 Colormap	色彩映射表
 Colors from the raster's own color table.	使用栅格自带颜色表中的颜色。
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	名为 longitude/latitude、easting/northing 或 geometry 等的列会自动选中。
 Combinations from the box above, one per line	上方框中的组合，每行一个
 Command\nSearch	命令\n搜索
 command is required	需要提供 command
@@ -1816,6 +1818,7 @@ Write a plugin	编写插件
 X (mm)	X（mm）
 X Field	X 字段
 XY Table To Point	XY 表转点
+XY Table To Point…	XY 表转点…
 Y (mm)	Y（mm）
 Y Field	Y 字段
 Yes	是
@@ -1872,3 +1875,4 @@ Signing in with ChatGPT works in the desktop app.	使用 ChatGPT 登录仅适用
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	登录信息保存在应用的设置文件夹中，仅供您的用户账户使用，绝不会写入项目文件。
 Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	请求发送到 OpenAI 的 ChatGPT 后端，并计入您订阅的用量。
 Sign in with your ChatGPT account.	请使用您的 ChatGPT 账户登录。
+ChatGPT sign-in can only be used with the OpenAI Codex backend	ChatGPT 登录只能用于 OpenAI Codex 后端

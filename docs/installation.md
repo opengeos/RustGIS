@@ -92,7 +92,10 @@ RustGIS also runs in the browser, compiled to WebAssembly: open
 - **Open** and **Add Data** use the browser's file picker, and you can drop files on the page.
   GeoJSON, CSV, GeoTIFF, ASCII grids and `.rgis` projects work; Shapefiles need the desktop
   app.
-- **Save** and **Export** download the file.
+- **Save** and **Export** download the file. **Save As**, and the first **Save** of a project,
+  ask for the file name first; the browser decides which folder downloads go to (Firefox, for
+  one, saves to its Downloads folder unless told to ask). A project opened from a file is named
+  after it, and **Save** downloads it under that name again.
 - The interface uses the built-in font, because a web page can't read installed fonts.
 
 The web app opens the way **Settings › Start-up** says (remembered in the browser). The URL can

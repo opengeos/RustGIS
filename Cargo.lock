@@ -3767,6 +3767,7 @@ dependencies = [
  "rustgis-engine",
  "serde_json",
  "sha2",
+ "tempfile",
  "ureq",
 ]
 
@@ -3862,6 +3863,7 @@ dependencies = [
  "base64 0.22.1",
  "crs-definitions",
  "proj4rs",
+ "roxmltree",
  "rustgis-data",
  "rustgis-geom",
  "serde",

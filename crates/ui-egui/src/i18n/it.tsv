@@ -247,6 +247,7 @@ Checking for updates…	Ricerca aggiornamenti…
 China	Cina
 Choose a band combination to display the raster layer.	Scegli una combinazione di bande per visualizzare il layer raster.
 Choose a contrast stretch for the raster layer.	Scegli uno stretch del contrasto per il layer raster.
+Choose a delimited text file or a spreadsheet, then pick its columns.	Scegli un file di testo delimitato o un foglio di calcolo, poi le sue colonne.
 Choose a model.	Scegli un modello.
 Choose a resampling type for the raster layer.	Scegli un tipo di ricampionamento per il layer raster.
 Choose extra buttons for the Quick Access Toolbar.	Scegli pulsanti aggiuntivi per la barra di accesso rapido.
@@ -323,6 +324,7 @@ Color Vision	Visione dei colori
 Color Vision Simulator	Simulatore di visione dei colori
 Colormap	Mappa colori
 Colors from the raster's own color table.	Colori dalla tabella colori del raster.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	Le colonne con nomi come longitude/latitude, easting/northing o geometry vengono scelte per te.
 Combinations from the box above, one per line	Combinazioni dal riquadro sopra, una per riga
 Command\nSearch	Cerca\ncomandi
 command is required	command è obbligatorio
@@ -1816,6 +1818,7 @@ Write a plugin	Scrivi un plugin
 X (mm)	X (mm)
 X Field	Campo X
 XY Table To Point	Da tabella XY a punto
+XY Table To Point…	Da tabella XY a punto…
 Y (mm)	Y (mm)
 Y Field	Campo Y
 Yes	Sì
@@ -1872,3 +1875,4 @@ Signing in with ChatGPT works in the desktop app.	L'accesso con ChatGPT funziona
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	L'accesso è conservato nella cartella delle impostazioni dell'app, solo per il tuo account utente, e mai in un file di progetto.
 Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	Le richieste vanno al backend ChatGPT di OpenAI e contano sull'utilizzo del tuo abbonamento.
 Sign in with your ChatGPT account.	Accedi con il tuo account ChatGPT.
+ChatGPT sign-in can only be used with the OpenAI Codex backend	L’accesso a ChatGPT può essere usato solo con il backend OpenAI Codex

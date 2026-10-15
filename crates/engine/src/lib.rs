@@ -28,6 +28,7 @@ use serde_json::Value;
 pub type CmdResult = Result<Value, String>;
 
 /// A command.
+#[derive(Clone, Copy)]
 pub struct CommandSpec {
     pub id: &'static str,
     pub label: &'static str,
@@ -49,6 +50,12 @@ fn always(_: &Session) -> Option<&'static str> {
 }
 
 impl CommandSpec {
+    /// The top-level keys its [`params`](CommandSpec::params) description names, or `None` when
+    /// the description is not a `{"key": …}` object (nothing to check against).
+    pub fn param_keys(&self) -> Option<Vec<&'static str>> {
+        param_keys(self.params)
+    }
+
     pub const fn new(id: &'static str, label: &'static str, location: &'static str, run: fn(&mut Session, &Value) -> CmdResult) -> Self {
         CommandSpec { id, label, location, shortcut: "", params: "{}", mutates: true, enabled: always, run }
     }
@@ -69,6 +76,61 @@ impl CommandSpec {
         self.enabled = f;
         self
     }
+}
+
+/// The keys of a `{"key": …, "other"?: …}` description: quoted words at the top level that open
+/// an entry (after `{` or a top-level `,`, followed by `?`, `:`, `,`, `}` or `|`) or an
+/// alternative (after `|`, followed by `?` or `:`, as in `"path": folder | "url": …` or
+/// `"lon" | "x": number`).
+pub fn param_keys(desc: &str) -> Option<Vec<&str>> {
+    #[derive(PartialEq)]
+    enum At {
+        Value,
+        Entry,
+        Alternative,
+    }
+    let bytes = desc.as_bytes();
+    if bytes.iter().find(|c| !c.is_ascii_whitespace()) != Some(&b'{') {
+        return None;
+    }
+    let (mut keys, mut depth, mut at, mut i) = (Vec::new(), 0usize, At::Value, 0);
+    while let Some(&c) = bytes.get(i) {
+        match c {
+            b'"' => {
+                let end = bytes.get(i + 1..).and_then(|r| r.iter().position(|&c| c == b'"')).map_or(bytes.len(), |n| i + 1 + n);
+                let next = bytes.get(end + 1..).and_then(|r| r.iter().find(|c| !c.is_ascii_whitespace()));
+                let key = match at {
+                    At::Entry => matches!(next, Some(b'?' | b':' | b',' | b'}' | b'|')),
+                    At::Alternative => matches!(next, Some(b'?' | b':')),
+                    At::Value => false,
+                };
+                if depth == 1 && key {
+                    keys.extend(desc.get(i + 1..end));
+                }
+                at = At::Value;
+                i = end;
+            }
+            b'{' | b'[' | b'(' => {
+                depth += 1;
+                at = if depth == 1 { At::Entry } else { At::Value };
+            }
+            b'}' | b']' | b')' => {
+                depth = depth.saturating_sub(1);
+                at = At::Value;
+            }
+            b',' if depth == 1 => at = At::Entry,
+            b'|' if depth == 1 => at = At::Alternative,
+            c if c.is_ascii_whitespace() => {}
+            _ => at = At::Value,
+        }
+        i += 1;
+    }
+    Some(keys)
+}
+
+/// `s` cut to `n` characters, with `…` when cut.
+fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() > n { s.chars().take(n).chain(['…']).collect() } else { s.to_string() }
 }
 
 pub struct Registry {
@@ -424,7 +486,20 @@ impl Session {
         if id.starts_with(rustgis_plugins::PREFIX) {
             return self.run_plugin(id, params);
         }
-        let Some(spec) = self.registry.get(id) else { return Err(format!("unknown command '{id}'")) };
+        let Some(&spec) = self.registry.get(id) else { return Err(format!("unknown command '{id}'")) };
+        // Keys the command does not read: said, so a script or an agent can correct itself.
+        if let (Value::Object(given), Some(known)) = (params, spec.param_keys()) {
+            // Bounded: the keys come from the caller (the first few, each clipped).
+            let unknown: Vec<&String> = given.keys().filter(|k| !known.contains(&k.as_str())).collect();
+            if !unknown.is_empty() {
+                let mut said: Vec<String> = unknown.iter().take(5).map(|k| format!("'{}'", clip(k, 40))).collect();
+                if unknown.len() > 5 {
+                    said.push(format!("{} more", unknown.len() - 5));
+                }
+                let reads = if known.is_empty() { "no parameters".to_string() } else { known.join(", ") };
+                self.notify(format!("{id} ignores {} (it reads {reads})", said.join(", ")), false);
+            }
+        }
         // Layer conditions apply to the layer the parameters name, falling back to the active one.
         let named = params.get("layer").and_then(|_| self.layer_id(params).ok());
         let active = self.active_layer;
@@ -691,6 +766,19 @@ impl Session {
         if self.table_standalone.is_some_and(|id| self.project.table(id).is_none()) {
             self.table_standalone = None;
         }
+    }
+
+    /// A colour ramp by name: one of the built-in ones, else one of the project's custom ramps.
+    pub fn ramp(&self, name: &str) -> Result<rustgis_map::Ramp, String> {
+        rustgis_map::Ramp::from_name(name)
+            .or_else(|| {
+                self.project
+                    .ramps
+                    .iter()
+                    .find(|r| r.name().eq_ignore_ascii_case(name.trim()))
+                    .map(|r| rustgis_map::Ramp::Custom(Box::new(r.clone())))
+            })
+            .ok_or_else(|| format!("unknown colour scheme '{name}'"))
     }
 
     /// Resolves a `layer` parameter (name or id), defaulting to the active layer.

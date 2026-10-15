@@ -45,6 +45,9 @@ pub struct Project {
     /// Saved symbology, applied to layers by name.
     #[serde(default)]
     pub styles: Vec<StyleItem>,
+    /// Custom colour ramps, offered beside the built-in ones (renderers keep their own copy).
+    #[serde(default)]
+    pub ramps: Vec<rustgis_map::color::CustomRamp>,
     /// Step-by-step tasks: guided command sequences.
     #[serde(default)]
     pub tasks: Vec<Task>,
@@ -257,6 +260,7 @@ impl Project {
             layouts: Vec::new(),
             folders: Vec::new(),
             styles: Vec::new(),
+            ramps: Vec::new(),
             tasks: Vec::new(),
             gp_env: GpEnvironment::default(),
             models: Vec::new(),
@@ -364,6 +368,15 @@ impl Project {
         unique_names(self.presentations.iter_mut().map(|p| &mut p.name));
         unique_names(self.notebooks.iter_mut().map(|nb| &mut nb.name));
         unique_names(self.dl_models.iter_mut().map(|m| &mut m.name));
+        // Custom ramps are found by name, before them the built-in schemes: a hand edit's repeated
+        // or built-in name gets a suffix, so every ramp stays reachable.
+        self.ramps.truncate(MAX_ITEMS);
+        for r in &mut self.ramps {
+            if rustgis_map::Ramp::from_name(r.name()).is_some() {
+                r.name_mut().push_str(" (custom)");
+            }
+        }
+        unique_names(self.ramps.iter_mut().map(|r| r.name_mut()));
         for m in &mut self.maps {
             // A projection this version can't use (a hand edit, or a newer file) falls back to
             // Web Mercator rather than being named while another is drawn.
