@@ -15,6 +15,7 @@ A flat scene centred on the view (azimuthal equidistant).	Cảnh phẳng có tâ
 A globe scene.	Cảnh quả địa cầu.
 A magnifying lens that follows the pointer.	Kính lúp di chuyển theo con trỏ.
 A notebook of text and command cells.	Sổ tay gồm các ô văn bản và ô lệnh.
+A project keeps at least one map	Dự án luôn giữ ít nhất một bản đồ
 A projected coordinate system.	Một hệ tọa độ phép chiếu.
 A report listing the selected layer's records, page after page.	Báo cáo liệt kê các bản ghi của lớp được chọn, hết trang này đến trang khác.
 A template with the first selected feature's values	Mẫu với giá trị của đối tượng được chọn đầu tiên

@@ -15,6 +15,7 @@ A flat scene centred on the view (azimuthal equidistant).	Uma cena plana centrad
 A globe scene.	Uma cena de globo.
 A magnifying lens that follows the pointer.	Uma lupa que acompanha o ponteiro.
 A notebook of text and command cells.	Um notebook de células de texto e de comandos.
+A project keeps at least one map	Um projeto mantém pelo menos um mapa
 A projected coordinate system.	Um sistema de coordenadas projetadas.
 A report listing the selected layer's records, page after page.	Um relatório que lista os registros da camada selecionada, página após página.
 A template with the first selected feature's values	Um modelo com os valores da primeira feição selecionada
