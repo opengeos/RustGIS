@@ -1429,8 +1429,8 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let mut x = r.min.x + 6.0;
     let names: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
     let active = if app.session.active_layout.is_some() { usize::MAX } else { app.session.project.active_map };
-    // A tab's close button deletes it after the strip is drawn: (command, name, was the active map).
-    let mut close: Option<(&str, String, bool)> = None;
+    // A tab's close button deletes its map or layout after the strip is drawn.
+    let mut close: Option<(&str, String)> = None;
     for (i, n) in names.iter().enumerate() {
         let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0 + TAB_CLOSE_W;
         let tr = Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(w, r.height() - 4.0));
@@ -1459,8 +1459,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         );
         // Over the tab's fill, so painted after it.
         if tab_close(ui, t, tr, egui::Id::new(("maptab_close", i)), is, !last, tip) {
-            // The project's active map, even behind an open layout: its popup goes with it.
-            close = Some(("map.remove", n.clone(), i == app.session.project.active_map));
+            close = Some(("map.remove", n.clone()));
         }
         if resp.clicked() && !is {
             let _ = app.run("layout.close", Value::Null);
@@ -1502,7 +1501,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         );
         // Over the tab's fill, so painted after it.
         if tab_close(ui, t, tr, egui::Id::new(("layouttab_close", i)), is, true, tl!("Delete Layout")) {
-            close = Some(("layout.remove", n.clone(), false));
+            close = Some(("layout.remove", n.clone()));
         }
         if resp.clicked() && !is {
             let _ = app.run("layout.activate", json!({"name": n}));
@@ -1519,10 +1518,27 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if resp.on_hover_text(tl!("New Map")).clicked() {
         let _ = app.run("map.new", Value::Null);
     }
-    if let Some((cmd, name, active_map)) = close
-        && app.run(cmd, json!({"name": name})).is_ok()
-        && active_map
-    {
+    match close {
+        Some(("map.remove", name)) => delete_map(app, &name),
+        Some((cmd, name)) => {
+            let _ = app.run(cmd, json!({"name": name}));
+        }
+        None => {}
+    }
+}
+
+/// Deletes a map (`map.remove`) and fixes the view state that holds map positions: the split
+/// view's map moves down with the maps after it, and goes with the deleted one; the popup goes
+/// with the active map, even behind an open layout.
+pub(crate) fn delete_map(app: &mut RustGisApp, name: &str) {
+    let maps = &app.session.project.maps;
+    let Some(i) = maps.iter().position(|m| m.name.eq_ignore_ascii_case(name)) else { return };
+    let was_active = i == app.session.project.active_map;
+    if app.run("map.remove", json!({"name": name})).is_err() {
+        return;
+    }
+    app.ws.split = app.ws.split.and_then(|s| if s == i { None } else { Some(if s > i { s - 1 } else { s }) });
+    if was_active {
         app.map.popup = None;
     }
 }
