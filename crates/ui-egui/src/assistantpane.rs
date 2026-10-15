@@ -3,7 +3,7 @@
 //! thread on the desktop, through `Services::http` (the browser's fetch) on the web.
 
 use egui::{Align, Layout, RichText, Ui, vec2};
-use rustgis_assistant::{Agent, Config, Entry, HttpRequest, HttpResponse, PRESETS, Step, provider};
+use rustgis_assistant::{Agent, Config, Entry, HttpRequest, HttpResponse, PRESETS, Step, chatgpt, provider};
 
 use crate::theme::{Tokens, regular, semibold};
 use crate::{RustGisApp, Slot, icons};
@@ -43,6 +43,12 @@ pub struct AssistantState {
     loaded: bool,
     /// Settings changed and not yet saved: they are saved once no settings field is being typed in.
     unsaved: bool,
+    /// A ChatGPT sign-in under way in the browser (desktop only).
+    #[cfg(not(target_arch = "wasm32"))]
+    login: Option<chatgpt::Login>,
+    /// The ChatGPT account signed in, for the settings.
+    account: Option<chatgpt::Account>,
+    login_error: Option<String>,
 }
 
 /// The settings fields typed into (saved when none has focus).
@@ -97,21 +103,36 @@ fn ensure_loaded(app: &mut RustGisApp) {
         cfg.model = m.trim().to_string();
     }
     app.assistant.settings = cfg.missing().is_some();
+    if cfg.login() && !cfg.key.is_empty() {
+        app.assistant.account = Some(chatgpt::claims(&cfg.key)).map(|a| merge_account(a, &cfg));
+    }
     app.assistant.agent = Some(Agent::new(cfg, &app.session));
+}
+
+/// The account as the tokens on this computer describe it (email and plan are in the id token),
+/// else as the access token does.
+fn merge_account(from_access: chatgpt::Account, cfg: &Config) -> chatgpt::Account {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(a) = chatgpt::account().filter(|a| a.account_id.as_deref().unwrap_or("") == cfg.account.as_str() || cfg.account.is_empty())
+    {
+        return a;
+    }
+    let _ = cfg;
+    from_access
 }
 
 fn save_config(app: &RustGisApp, c: &Config) {
     save_pref(app, "assistant_provider", &c.provider);
     save_pref(app, &format!("assistant_model_{}", c.provider), c.model.trim());
     save_pref(app, &format!("assistant_url_{}", c.provider), c.base_url.trim());
-    // A key from the environment stays there.
+    // A key from the environment stays there; a sign-in's tokens live in their own file.
     let from_env = Config::from_env(&c.provider).key;
-    let keep = app.assistant.remember_key && c.key.trim() != from_env;
+    let keep = app.assistant.remember_key && c.key.trim() != from_env && !c.login();
     save_pref(app, &format!("assistant_key_{}", c.provider), if keep { c.key.trim() } else { "" });
 }
 
-/// Sends a request off the frame.
-fn dispatch(app: &mut RustGisApp, req: HttpRequest, ctx: &egui::Context) -> Reply {
+/// Sends a request off the frame. A signed-in account's requests renew its tokens as needed.
+fn dispatch(app: &mut RustGisApp, req: HttpRequest, login: bool, ctx: &egui::Context) -> Reply {
     let slot: Reply = Slot::default();
     let fail = |slot: &Reply, e: String| {
         if let Ok(mut s) = slot.lock() {
@@ -133,7 +154,7 @@ fn dispatch(app: &mut RustGisApp, req: HttpRequest, ctx: &egui::Context) -> Repl
     {
         let (out, ctx) = (slot.clone(), ctx.clone());
         std::thread::spawn(move || {
-            let r = rustgis_assistant::http::send(&req);
+            let r = if login { chatgpt::send(&req) } else { rustgis_assistant::http::send(&req) };
             if let Ok(mut s) = out.lock() {
                 *s = Some(r);
             }
@@ -142,10 +163,32 @@ fn dispatch(app: &mut RustGisApp, req: HttpRequest, ctx: &egui::Context) -> Repl
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (req, ctx);
+        let _ = (req, ctx, login);
         fail(&slot, "this build can't reach AI providers".into());
     }
     slot
+}
+
+/// Asks the provider for its models.
+fn list_models(app: &mut RustGisApp, cfg: &Config, ctx: &egui::Context) {
+    let req = provider::models_request(cfg);
+    app.assistant.models_slot = Some(dispatch(app, req, cfg.login(), ctx));
+}
+
+/// A ChatGPT account signed in (or imported): the assistant uses it from now on.
+#[cfg(not(target_arch = "wasm32"))]
+fn signed_in(app: &mut RustGisApp, tokens: &chatgpt::Tokens, ctx: &egui::Context) {
+    app.assistant.account = Some(tokens.account());
+    app.assistant.login_error = None;
+    let Some(mut cfg) = app.assistant.agent.as_ref().map(|a| a.config.clone()) else { return };
+    cfg.sign_in(tokens);
+    app.assistant.models.clear();
+    app.assistant.models_error = None;
+    list_models(app, &cfg, ctx);
+    if let Some(a) = app.assistant.agent.as_mut() {
+        a.config = cfg;
+    }
+    app.assistant.unsaved = true;
 }
 
 fn take(slot: &Reply) -> Option<Result<HttpResponse, String>> {
@@ -157,7 +200,8 @@ fn follow(app: &mut RustGisApp, step: Step, ctx: &egui::Context) {
     app.map.invalidate();
     if let Step::Send(req) = step {
         let generation = app.assistant.agent.as_ref().map_or(0, Agent::generation);
-        let slot = dispatch(app, req, ctx);
+        let login = app.assistant.agent.as_ref().is_some_and(|a| a.config.login());
+        let slot = dispatch(app, req, login, ctx);
         app.assistant.inflight = Some((generation, slot));
     }
 }
@@ -210,10 +254,28 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         let api = app.assistant.agent.as_ref().map_or(rustgis_assistant::Api::OpenAi, |a| a.config.api());
         match r.and_then(|r| provider::parse_models(api, &r)) {
             Ok(m) => {
+                // A signed-in account's catalog says which models it may use: the first is
+                // the one to suggest when the chosen one isn't offered.
+                if let Some(a) = app.assistant.agent.as_mut()
+                    && a.config.login()
+                    && let Some(first) = m.first()
+                    && !m.contains(&a.config.model)
+                {
+                    a.config.model = first.clone();
+                    app.assistant.unsaved = true;
+                }
                 app.assistant.models = m;
                 app.assistant.models_error = None;
             }
             Err(e) => app.assistant.models_error = Some(e),
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(r) = app.assistant.login.as_ref().and_then(chatgpt::Login::poll) {
+        app.assistant.login = None;
+        match r {
+            Ok(t) => signed_in(app, &t, ctx),
+            Err(e) => app.assistant.login_error = Some(e),
         }
     }
 }
@@ -298,10 +360,20 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let current = provider::preset(&cfg.provider).map_or("", |p| p.label);
         egui::ComboBox::from_id_salt("assistant_provider").selected_text(tl!(current)).width(180.0).show_ui(ui, |ui| {
             for p in PRESETS {
+                // Signing in needs the browser and a server on this computer: the desktop app.
+                if p.login && cfg!(target_arch = "wasm32") {
+                    continue;
+                }
                 if ui.selectable_label(cfg.provider == p.id, tl!(p.label)).clicked() && cfg.provider != p.id {
                     cfg = load_config(app, p.id);
                     app.assistant.models.clear();
                     app.assistant.models_error = None;
+                    app.assistant.login_error = None;
+                    if cfg.login() && !cfg.key.is_empty() {
+                        app.assistant.account = Some(merge_account(chatgpt::claims(&cfg.key), &cfg));
+                        let ctx = ui.ctx().clone();
+                        list_models(app, &cfg, &ctx);
+                    }
                 }
             }
         });
@@ -324,9 +396,8 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 .on_hover_text(tl!("List the provider's models"))
                 .clicked()
             {
-                let req = provider::models_request(&cfg);
                 let ctx = ui.ctx().clone();
-                app.assistant.models_slot = Some(dispatch(app, req, &ctx));
+                list_models(app, &cfg, &ctx);
             }
         });
         ui.end_row();
@@ -334,47 +405,62 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.add(egui::TextEdit::singleline(&mut cfg.base_url).id(egui::Id::new(FIELDS[1])).desired_width(200.0));
         ui.end_row();
         let preset = provider::preset(&cfg.provider);
-        ui.label(tl!("API key"));
-        ui.horizontal(|ui| {
-            let hint = if preset.is_some_and(|p| p.keyless) { tl!("not needed") } else { tl!("paste your key") };
-            ui.add(
-                egui::TextEdit::singleline(&mut cfg.key)
-                    .id(egui::Id::new(FIELDS[2]))
-                    .password(!app.assistant.show_key)
-                    .desired_width(150.0)
-                    .hint_text(hint),
-            );
-            let eye = if app.assistant.show_key { tl!("Hide") } else { tl!("Show") };
-            if ui.small_button(eye).clicked() {
-                app.assistant.show_key = !app.assistant.show_key;
-            }
-        });
+        if cfg.login() {
+            ui.label(tl!("Account"));
+            ui.horizontal(|ui| account_row(app, ui, t, &mut cfg));
+        } else {
+            ui.label(tl!("API key"));
+            ui.horizontal(|ui| {
+                let hint = if preset.is_some_and(|p| p.keyless) { tl!("not needed") } else { tl!("paste your key") };
+                ui.add(
+                    egui::TextEdit::singleline(&mut cfg.key)
+                        .id(egui::Id::new(FIELDS[2]))
+                        .password(!app.assistant.show_key)
+                        .desired_width(150.0)
+                        .hint_text(hint),
+                );
+                let eye = if app.assistant.show_key { tl!("Hide") } else { tl!("Show") };
+                if ui.small_button(eye).clicked() {
+                    app.assistant.show_key = !app.assistant.show_key;
+                }
+            });
+        }
         ui.end_row();
     });
-    ui.checkbox(&mut app.assistant.remember_key, tl!("Remember the key on this computer"));
     let preset = provider::preset(&cfg.provider);
     let mut notes = Vec::new();
-    if let Some(p) = preset.filter(|p| !p.key_env.is_empty()) {
-        notes.push(crate::i18n::fmt("On the desktop, the key can also come from {vars}.", &[("vars", &p.key_env.join(", "))]));
-    }
-    notes.push(
-        if app.assistant.remember_key {
-            tl!("Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).")
-        } else {
-            tl!("The key is kept for this session only.")
+    if cfg.login() {
+        notes.push(
+            tl!("The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.").to_string(),
+        );
+        notes.push(tl!("Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.").to_string());
+    } else {
+        ui.checkbox(&mut app.assistant.remember_key, tl!("Remember the key on this computer"));
+        if let Some(p) = preset.filter(|p| !p.key_env.is_empty()) {
+            notes.push(crate::i18n::fmt("On the desktop, the key can also come from {vars}.", &[("vars", &p.key_env.join(", "))]));
         }
-        .to_string(),
-    );
+        notes.push(
+            if app.assistant.remember_key {
+                tl!("Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).")
+            } else {
+                tl!("The key is kept for this session only.")
+            }
+            .to_string(),
+        );
+    }
     notes.push(
         tl!("Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.").to_string(),
     );
     for n in notes {
         ui.label(RichText::new(n).small().color(t.text_dim));
     }
-    if let Some(p) = preset.filter(|p| !p.key_url.is_empty()) {
+    if let Some(p) = preset.filter(|p| !p.key_url.is_empty() && !p.login) {
         ui.hyperlink_to(RichText::new(if p.keyless { tl!("Get it") } else { tl!("Get a key") }).small(), p.key_url);
     }
     if let Some(e) = &app.assistant.models_error {
+        ui.label(RichText::new(e.chars().take(300).collect::<String>()).small().color(t.red));
+    }
+    if let Some(e) = &app.assistant.login_error {
         ui.label(RichText::new(e.chars().take(300).collect::<String>()).small().color(t.red));
     }
     if let Some(why) = cfg.missing() {
@@ -386,6 +472,59 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             a.config = cfg;
         }
     }
+}
+
+/// The settings' account row of a sign-in provider: who is signed in and Sign out, or Sign in
+/// (the browser) and, when the Codex CLI is signed in on this computer, using its sign-in.
+#[cfg(not(target_arch = "wasm32"))]
+fn account_row(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Config) {
+    if app.assistant.login.is_some() {
+        ui.spinner();
+        ui.label(RichText::new(tl!("Waiting for the browser…")).small().color(t.text_dim));
+        if ui.small_button(tl!("Cancel")).clicked() {
+            app.assistant.login = None;
+        }
+        return;
+    }
+    if !cfg.key.is_empty() {
+        let who = app.assistant.account.as_ref().map_or_else(|| tl!("signed in").to_string(), chatgpt::Account::label);
+        ui.label(RichText::new(who).small());
+        if ui.small_button(tl!("Sign out")).clicked() {
+            if let Err(e) = chatgpt::forget() {
+                app.assistant.login_error = Some(e);
+            }
+            cfg.key.clear();
+            cfg.account.clear();
+            app.assistant.account = None;
+            app.assistant.models.clear();
+        }
+        return;
+    }
+    if ui.small_button(tl!("Sign in…")).clicked() {
+        match chatgpt::login() {
+            Ok(login) => {
+                app.ui.open_url = Some(login.url.clone());
+                app.assistant.login = Some(login);
+                app.assistant.login_error = None;
+            }
+            Err(e) => app.assistant.login_error = Some(e),
+        }
+    }
+    if chatgpt::codex_available() && ui.small_button(tl!("Use the Codex CLI's sign-in")).clicked() {
+        match chatgpt::import_codex() {
+            Ok(tokens) => {
+                cfg.sign_in(&tokens);
+                let ctx = ui.ctx().clone();
+                signed_in(app, &tokens, &ctx);
+            }
+            Err(e) => app.assistant.login_error = Some(e),
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn account_row(_app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, _cfg: &mut Config) {
+    ui.label(RichText::new(tl!("Signing in with ChatGPT works in the desktop app.")).small().color(t.text_dim));
 }
 
 fn composer(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, busy: bool, ctx: &egui::Context) {

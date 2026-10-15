@@ -1861,3 +1861,14 @@ Zoom To World	Zoomen naar wereld
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: alleen HTTPS-adressen, of gewoon HTTP op deze computer of dit netwerk, zijn toegestaan
 © OpenStreetMap contributors	© OpenStreetMap-bijdragers
 ⌘K	⌘K
+ChatGPT (sign in)	ChatGPT (aanmelden)
+Account	Account
+Waiting for the browser…	Wachten op de browser…
+signed in	aangemeld
+Sign out	Afmelden
+Sign in…	Aanmelden…
+Use the Codex CLI's sign-in	Aanmelding van Codex CLI gebruiken
+Signing in with ChatGPT works in the desktop app.	Aanmelden met ChatGPT werkt in de desktop-app.
+The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	De aanmelding wordt bewaard in de instellingenmap van de app, alleen voor uw gebruikersaccount, en nooit in een projectbestand.
+Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	Verzoeken gaan naar de ChatGPT-backend van OpenAI en tellen mee voor het gebruik van uw abonnement.
+Sign in with your ChatGPT account.	Meld u aan met uw ChatGPT-account.

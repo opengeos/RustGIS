@@ -1861,3 +1861,14 @@ Zoom To World	Zoom para o mundo
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: só são permitidos endereços HTTPS, ou HTTP simples neste computador ou nesta rede
 © OpenStreetMap contributors	© Colaboradores do OpenStreetMap
 ⌘K	⌘K
+ChatGPT (sign in)	ChatGPT (entrar)
+Account	Conta
+Waiting for the browser…	Aguardando o navegador…
+signed in	conectado
+Sign out	Sair
+Sign in…	Entrar…
+Use the Codex CLI's sign-in	Usar o login do Codex CLI
+Signing in with ChatGPT works in the desktop app.	O login com o ChatGPT funciona no aplicativo de desktop.
+The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	O login fica na pasta de configurações do aplicativo, apenas para a sua conta de usuário, e nunca em um arquivo de projeto.
+Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	As solicitações vão para o backend do ChatGPT da OpenAI e contam no uso da sua assinatura.
+Sign in with your ChatGPT account.	Entre com a sua conta do ChatGPT.

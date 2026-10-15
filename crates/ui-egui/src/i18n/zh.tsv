@@ -1861,3 +1861,14 @@ Zoom To World	缩放至世界
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}：仅允许 HTTPS 地址，或本机、本地网络上的普通 HTTP 地址
 © OpenStreetMap contributors	© OpenStreetMap 贡献者
 ⌘K	⌘K
+ChatGPT (sign in)	ChatGPT（登录）
+Account	账户
+Waiting for the browser…	正在等待浏览器…
+signed in	已登录
+Sign out	退出登录
+Sign in…	登录…
+Use the Codex CLI's sign-in	使用 Codex CLI 的登录
+Signing in with ChatGPT works in the desktop app.	使用 ChatGPT 登录仅适用于桌面应用。
+The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	登录信息保存在应用的设置文件夹中，仅供您的用户账户使用，绝不会写入项目文件。
+Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	请求发送到 OpenAI 的 ChatGPT 后端，并计入您订阅的用量。
+Sign in with your ChatGPT account.	请使用您的 ChatGPT 账户登录。

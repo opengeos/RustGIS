@@ -4,6 +4,7 @@ use rustgis_engine::{Project, Session};
 use serde_json::{Value, json};
 
 use crate::agent::{Agent, Entry, INTERNAL_ERROR, MAX_STEPS, Step, run_blocking};
+use crate::chatgpt;
 use crate::provider::*;
 use crate::tools;
 
@@ -20,6 +21,7 @@ fn cfg(provider: &str) -> Config {
         base_url: p.base_url.into(),
         model: if p.model.is_empty() { "m".into() } else { p.model.into() },
         key: "k".into(),
+        account: String::new(),
     }
 }
 
@@ -816,4 +818,252 @@ fn mcp_hostile_messages_never_panic() {
             let _ = server.handle(&mut s, raw);
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The ChatGPT sign-in: the Responses wire format and the tokens
+
+/// A JWT with these claims (unsigned: the tests only read it).
+fn jwt(claims: Value) -> String {
+    use base64::Engine;
+    let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s.as_bytes());
+    format!("{}.{}.{}", b64(r#"{"alg":"none"}"#), b64(&claims.to_string()), b64("sig"))
+}
+
+fn chatgpt_tokens(exp: i64) -> chatgpt::Tokens {
+    chatgpt::Tokens {
+        id_token: jwt(
+            json!({"email": "ann@example.com", "https://api.openai.com/auth": {"chatgpt_plan_type": "pro", "chatgpt_account_id": "acct-1"}}),
+        ),
+        access_token: jwt(json!({"exp": exp, "https://api.openai.com/auth": {"chatgpt_account_id": "acct-1"}})),
+        refresh_token: "r1".into(),
+        account_id: "acct-1".into(),
+        last_refresh: "2026-10-14T00:00:00Z".into(),
+    }
+}
+
+fn chatgpt_cfg() -> Config {
+    let mut c = cfg("chatgpt");
+    c.sign_in(&chatgpt_tokens(4_000_000_000));
+    c
+}
+
+/// A streamed reply, as the backend sends it: the items finished, then the final response.
+fn sse(items: &[Value], status: &str) -> Result<HttpResponse, String> {
+    let mut s = String::from("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n");
+    for (i, item) in items.iter().enumerate() {
+        s.push_str(&format!(
+            "event: response.output_item.done\ndata: {}\n\n",
+            json!({"type": "response.output_item.done", "output_index": i, "item": item})
+        ));
+    }
+    let done = json!({"type": format!("response.{status}"), "response": {"id": "resp_1", "status": status, "output": items,
+        "incomplete_details": if status == "incomplete" { json!({"reason": "max_output_tokens"}) } else { Value::Null }}});
+    s.push_str(&format!("event: response.{status}\ndata: {done}\n\n"));
+    Ok(HttpResponse { status: 200, body: s.into_bytes() })
+}
+
+#[test]
+fn responses_request_shape() {
+    let s = sample();
+    let mut a = Agent::new(chatgpt_cfg(), &s);
+    let Step::Send(req) = a.ask("Zoom to Paris", &s) else { panic!("expected a request") };
+    assert_eq!(req.url, "https://chatgpt.com/backend-api/codex/responses");
+    let h = |k: &str| req.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    assert!(h("Authorization").is_some_and(|v| v.starts_with("Bearer ey")));
+    assert_eq!(h("chatgpt-account-id"), Some("acct-1"));
+    assert_eq!(h("originator"), Some(ORIGINATOR));
+    let b = body(&req);
+    assert_eq!(b["model"], "gpt-6.1-sol");
+    assert_eq!(b["stream"], true);
+    assert_eq!(b["store"], false);
+    assert_eq!(b["include"][0], "reasoning.encrypted_content");
+    assert_eq!(b["input"][0]["role"], "developer");
+    assert_eq!(b["input"][0]["content"][0]["type"], "input_text");
+    assert_eq!(b["input"][1]["role"], "user");
+    assert!(b["input"][1]["content"][0]["text"].as_str().is_some_and(|t| t.ends_with("Zoom to Paris")));
+    let tools = b["tools"].as_array().cloned().unwrap_or_default();
+    assert!(tools.iter().any(|t| t["type"] == "function" && t["name"] == "run_command" && t["parameters"]["type"] == "object"));
+    assert!(!tools.iter().any(|t| t.get("function").is_some()), "Responses tools are flat, not Chat Completions' nested ones");
+}
+
+#[test]
+fn responses_round_trip_replays_reasoning_and_calls() {
+    let mut s = sample();
+    let mut a = Agent::new(chatgpt_cfg(), &s);
+    let call = json!({"id": "fc_1", "type": "function_call", "status": "completed", "call_id": "call_1", "name": "run_command",
+        "arguments": json!({"command": "map.goToXY", "params": {"lon": 2.35, "lat": 48.85, "scale": 5000000}}).to_string()});
+    let reasoning = json!({"id": "rs_1", "type": "reasoning", "summary": [], "encrypted_content": "gAAAA-secret"});
+    let answer = json!({"id": "msg_1", "type": "message", "role": "assistant", "status": "completed",
+        "content": [{"type": "output_text", "text": "Done: **Paris**.", "annotations": []}]});
+    let mut replies: VecDeque<Result<HttpResponse, String>> =
+        VecDeque::from(vec![sse(&[reasoning.clone(), call.clone()], "completed"), sse(&[answer], "completed")]);
+    let mut requests = Vec::new();
+    run_blocking(
+        &mut a,
+        "Zoom to Paris",
+        &mut s,
+        |req| {
+            requests.push(body(req));
+            replies.pop_front().unwrap_or_else(|| Err("no more replies".into()))
+        },
+        |_, _, _| true,
+    );
+    let c = s.map().center_lonlat();
+    assert!((c.x - 2.35).abs() < 0.01, "map moved to {c:?}");
+    assert!(matches!(a.transcript.get(1), Some(Entry::Tool { error: false, .. })), "{:?}", a.transcript);
+    assert!(matches!(a.transcript.last(), Some(Entry::Assistant(t)) if t.contains("Paris")));
+    // The second request replays the reasoning (encrypted, without the server's id) and the call,
+    // then gives the result.
+    let input = requests.get(1).and_then(|b| b["input"].as_array().cloned()).unwrap_or_default();
+    let types: Vec<&str> = input.iter().filter_map(|i| i["type"].as_str()).collect();
+    assert_eq!(types, ["message", "message", "reasoning", "function_call", "function_call_output"], "{input:?}");
+    assert_eq!(input[2]["encrypted_content"], "gAAAA-secret");
+    assert!(input[2].get("id").is_none() && input[3].get("id").is_none());
+    assert_eq!(input[3]["call_id"], "call_1");
+    assert_eq!(input[4]["call_id"], "call_1");
+    assert!(input[4]["output"].as_str().is_some_and(|o| o.contains("ok")));
+}
+
+#[test]
+fn responses_reply_edge_cases() {
+    // Cut short.
+    let msg = json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Half"}]});
+    let r = parse_reply(Api::Responses, &sse(&[msg], "incomplete").unwrap()).unwrap();
+    assert_eq!(r.text, "Half");
+    assert!(r.cut.as_deref().is_some_and(|c| c.contains("length")));
+    // A refusal runs no calls.
+    let refusal = json!({"type": "message", "role": "assistant", "content": [{"type": "refusal", "refusal": "no"}]});
+    let call = json!({"type": "function_call", "call_id": "c", "name": "run_command", "arguments": "{}"});
+    let r = parse_reply(Api::Responses, &sse(&[refusal, call], "completed").unwrap()).unwrap();
+    assert!(r.calls.is_empty() && r.cut.as_deref().is_some_and(|c| c.contains("declined")));
+    // A failed response, and an error event.
+    let body = "data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"overloaded\"}}}\n\n";
+    let e = parse_reply(Api::Responses, &HttpResponse { status: 200, body: body.into() }).unwrap_err();
+    assert!(e.contains("overloaded"), "{e}");
+    let body = "data: {\"type\":\"error\",\"error\":{\"message\":\"bad token\"}}\n\n";
+    assert!(parse_reply(Api::Responses, &HttpResponse { status: 200, body: body.into() }).unwrap_err().contains("bad token"));
+    // An unfinished stream.
+    let body = "data: {\"type\":\"response.created\",\"response\":{}}\n\n";
+    assert!(parse_reply(Api::Responses, &HttpResponse { status: 200, body: body.into() }).unwrap_err().contains("ended"));
+    // The backend's errors: `error` or `detail`.
+    let e = parse_reply(Api::Responses, &HttpResponse { status: 400, body: br#"{"detail":"The 'x' model is not supported"}"#.to_vec() });
+    assert!(e.unwrap_err().contains("not supported"));
+    let e = parse_reply(Api::Responses, &HttpResponse { status: 401, body: b"nope".to_vec() }).unwrap_err();
+    assert!(e.starts_with("HTTP 401"), "{e}");
+    // A plain JSON reply (no stream) reads the same.
+    let v = json!({"status": "completed", "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Hi"}]}]});
+    let r = parse_reply(Api::Responses, &HttpResponse { status: 200, body: v.to_string().into_bytes() }).unwrap();
+    assert_eq!(r.text, "Hi");
+    // Unparsable arguments are kept.
+    let call = json!({"type": "function_call", "call_id": "c", "name": "run_command", "arguments": "{not json"});
+    let r = parse_reply(Api::Responses, &sse(&[call], "completed").unwrap()).unwrap();
+    assert_eq!(r.calls[0].args["_unparsed"], "{not json");
+}
+
+#[test]
+fn responses_models_from_the_catalog() {
+    let cfg = chatgpt_cfg();
+    let req = models_request(&cfg);
+    assert_eq!(req.url, format!("https://chatgpt.com/backend-api/codex/models?client_version={CATALOG_VERSION}"));
+    assert!(req.headers.iter().any(|(k, _)| k == "chatgpt-account-id"));
+    let v = json!({"models": [{"slug": "gpt-6.1-sol", "visibility": "list"}, {"slug": "gpt-reserve", "visibility": "hide"}, {"slug": "gpt-5.6-sol", "visibility": "list"}]});
+    let m = parse_models(Api::Responses, &HttpResponse { status: 200, body: v.to_string().into_bytes() }).unwrap();
+    assert_eq!(m, ["gpt-6.1-sol", "gpt-5.6-sol"], "hidden models are left out, the order is the catalog's");
+    assert!(cfg.missing().is_none());
+    let mut out = cfg;
+    out.key.clear();
+    assert_eq!(out.missing(), Some("Sign in with your ChatGPT account."));
+}
+
+#[test]
+fn chatgpt_tokens_and_claims() {
+    let t = chatgpt_tokens(1_800_000_000);
+    let acct = t.account();
+    assert_eq!(acct.email.as_deref(), Some("ann@example.com"));
+    assert_eq!(acct.plan.as_deref(), Some("pro"));
+    assert_eq!(acct.account_id.as_deref(), Some("acct-1"));
+    assert_eq!(acct.expires, Some(1_800_000_000));
+    assert_eq!(acct.label(), "ann@example.com (Pro)");
+    assert!(!t.expires_soon(1_800_000_000 - 3600));
+    assert!(t.expires_soon(1_800_000_000 - 60));
+    assert!(chatgpt::Tokens { access_token: "not.a".into(), ..Default::default() }.expires_soon(0), "no expiry means refresh");
+    // Codex's auth.json shape, both ways.
+    let v = json!({"auth_mode": "chatgpt", "tokens": {"id_token": t.id_token, "access_token": t.access_token, "refresh_token": "r1", "account_id": "acct-1"}, "last_refresh": "2026-10-14T00:00:00Z"});
+    assert_eq!(chatgpt::Tokens::from_json(&v).unwrap(), t);
+    assert_eq!(chatgpt::Tokens::from_json(&t.to_json()).unwrap(), t);
+    assert!(chatgpt::Tokens::from_json(&json!({"auth_mode": "apikey", "OPENAI_API_KEY": "sk"})).is_err());
+    // A sign-in without an account id takes it from the token.
+    let v = json!({"tokens": {"id_token": t.id_token, "access_token": t.access_token, "refresh_token": "r1"}});
+    assert_eq!(chatgpt::Tokens::from_json(&v).unwrap().account_id, "acct-1");
+    // Never in Debug output.
+    assert!(!format!("{t:?}").contains("ey"));
+    assert_eq!(chatgpt::claims("garbage"), chatgpt::Account::default());
+}
+
+#[test]
+fn chatgpt_refresh_and_exchange() {
+    let t = chatgpt_tokens(1_800_000_000);
+    let req = chatgpt::refresh_request(&t);
+    assert_eq!(req.url, "https://auth.openai.com/oauth/token");
+    let b = body(&req);
+    assert_eq!(b["grant_type"], "refresh_token");
+    assert_eq!(b["client_id"], chatgpt::CLIENT_ID);
+    assert_eq!(b["refresh_token"], "r1");
+    // New tokens where sent, the old ones otherwise.
+    let new_access = jwt(json!({"exp": 1_900_000_000, "https://api.openai.com/auth": {"chatgpt_account_id": "acct-2"}}));
+    let resp = HttpResponse { status: 200, body: json!({"access_token": new_access, "refresh_token": "r2"}).to_string().into_bytes() };
+    let fresh = chatgpt::parse_refresh(&t, &resp, "2026-10-15T00:00:00Z").unwrap();
+    assert_eq!(fresh.access_token, new_access);
+    assert_eq!(fresh.refresh_token, "r2");
+    assert_eq!(fresh.id_token, t.id_token);
+    assert_eq!(fresh.account_id, "acct-2");
+    assert_eq!(fresh.last_refresh, "2026-10-15T00:00:00Z");
+    assert!(!fresh.expires_soon(1_850_000_000));
+    let gone = HttpResponse { status: 400, body: br#"{"error":"invalid_grant","error_description":"expired"}"#.to_vec() };
+    let e = chatgpt::parse_refresh(&t, &gone, "").unwrap_err();
+    assert!(e.contains("sign in again"), "{e}");
+    let e = chatgpt::parse_refresh(&t, &HttpResponse { status: 503, body: b"<html>".to_vec() }, "").unwrap_err();
+    assert!(e.contains("HTTP 503"), "{e}");
+    // The browser flow: the page to open and the code exchange.
+    let challenge = chatgpt::pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk");
+    assert_eq!(challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", "RFC 7636's example");
+    let url = chatgpt::authorize_url("http://127.0.0.1:1455/auth/callback", &challenge, "st ate");
+    assert!(url.starts_with("https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&"));
+    assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback"));
+    assert!(
+        url.contains("code_challenge_method=S256")
+            && url.contains("state=st%20ate")
+            && url.contains("scope=openid%20profile%20email%20offline_access")
+    );
+    let req = chatgpt::exchange_request("c0de", "http://127.0.0.1:1455/auth/callback", "verifier");
+    assert_eq!(
+        req.body.as_deref(),
+        Some(
+            "grant_type=authorization_code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&code=c0de&redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&code_verifier=verifier"
+        )
+    );
+    assert!(req.headers.iter().any(|(_, v)| v == "application/x-www-form-urlencoded"));
+    let resp = HttpResponse {
+        status: 200,
+        body: json!({"id_token": t.id_token, "access_token": t.access_token, "refresh_token": "r3"}).to_string().into_bytes(),
+    };
+    let got = chatgpt::parse_exchange(&resp, "now").unwrap();
+    assert_eq!((got.account_id.as_str(), got.refresh_token.as_str(), got.last_refresh.as_str()), ("acct-1", "r3", "now"));
+    assert!(chatgpt::parse_exchange(&HttpResponse { status: 200, body: b"{}".to_vec() }, "now").is_err());
+    assert_eq!(
+        chatgpt::query_params("code=a%2Fb&state=x+y&flag"),
+        [("code".to_string(), "a/b".to_string()), ("state".into(), "x y".into()), ("flag".into(), String::new())]
+    );
+    assert_eq!(chatgpt::rfc3339(0), "1970-01-01T00:00:00Z");
+    assert_eq!(chatgpt::rfc3339(1_760_448_856), "2025-10-14T13:34:16Z");
+    // Credentials replace any on a request.
+    let req = t.authorize(HttpRequest {
+        method: "GET",
+        url: String::new(),
+        headers: vec![("Authorization".into(), "Bearer old".into())],
+        body: None,
+    });
+    assert_eq!(req.headers.iter().filter(|(k, _)| k == "Authorization").count(), 1);
+    assert!(req.headers.iter().any(|(k, v)| k == "chatgpt-account-id" && v == "acct-1"));
 }

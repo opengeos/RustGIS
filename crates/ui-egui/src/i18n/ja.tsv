@@ -1861,3 +1861,14 @@ Zoom To World	世界にズーム
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: 使用できるのは HTTPS のアドレス、またはこのコンピューターかネットワーク上の通常の HTTP のみです
 © OpenStreetMap contributors	© OpenStreetMap contributors
 ⌘K	⌘K
+ChatGPT (sign in)	ChatGPT（サインイン）
+Account	アカウント
+Waiting for the browser…	ブラウザーを待っています…
+signed in	サインイン済み
+Sign out	サインアウト
+Sign in…	サインイン…
+Use the Codex CLI's sign-in	Codex CLI のサインインを使う
+Signing in with ChatGPT works in the desktop app.	ChatGPT でのサインインはデスクトップアプリで使えます。
+The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	サインイン情報はアプリの設定フォルダーに、あなたのユーザーアカウント専用で保存され、プロジェクトファイルには保存されません。
+Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	リクエストは OpenAI の ChatGPT バックエンドに送られ、サブスクリプションの利用量に含まれます。
+Sign in with your ChatGPT account.	ChatGPT アカウントでサインインしてください。

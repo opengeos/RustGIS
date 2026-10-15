@@ -1861,3 +1861,14 @@ Zoom To World	Dünyaya Yakınlaştır
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: yalnızca HTTPS adreslerine ya da bu bilgisayarda veya ağda düz HTTP'ye izin verilir
 © OpenStreetMap contributors	© OpenStreetMap katkıcıları
 ⌘K	⌘K
+ChatGPT (sign in)	ChatGPT (oturum aç)
+Account	Hesap
+Waiting for the browser…	Tarayıcı bekleniyor…
+signed in	oturum açık
+Sign out	Oturumu kapat
+Sign in…	Oturum aç…
+Use the Codex CLI's sign-in	Codex CLI oturumunu kullan
+Signing in with ChatGPT works in the desktop app.	ChatGPT ile oturum açma masaüstü uygulamasında çalışır.
+The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Oturum, uygulamanın ayarlar klasöründe yalnızca kullanıcı hesabınız için saklanır, asla bir proje dosyasında saklanmaz.
+Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	İstekler OpenAI'nin ChatGPT arka ucuna gider ve aboneliğinizin kullanımından düşülür.
+Sign in with your ChatGPT account.	ChatGPT hesabınızla oturum açın.

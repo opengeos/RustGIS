@@ -1861,3 +1861,14 @@ Zoom To World	Dünyaya yaxınlaşdır
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: yalnız HTTPS ünvanlarına və ya bu kompüterdə, yaxud bu şəbəkədə adi HTTP-yə icazə verilir
 © OpenStreetMap contributors	© OpenStreetMap iştirakçıları
 ⌘K	⌘K
+ChatGPT (sign in)	ChatGPT (daxil ol)
+Account	Hesab
+Waiting for the browser…	Brauzer gözlənilir…
+signed in	daxil olunub
+Sign out	Çıxış
+Sign in…	Daxil ol…
+Use the Codex CLI's sign-in	Codex CLI girişindən istifadə et
+Signing in with ChatGPT works in the desktop app.	ChatGPT ilə giriş masaüstü tətbiqində işləyir.
+The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Giriş məlumatı tətbiqin parametrlər qovluğunda yalnız istifadəçi hesabınız üçün saxlanılır, heç vaxt layihə faylında saxlanılmır.
+Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	Sorğular OpenAI-nin ChatGPT serverinə gedir və abunəliyinizin istifadəsinə hesablanır.
+Sign in with your ChatGPT account.	ChatGPT hesabınızla daxil olun.

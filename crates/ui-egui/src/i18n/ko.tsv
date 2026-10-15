@@ -1861,3 +1861,14 @@ Zoom To World	세계로 확대/축소
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: HTTPS 주소 또는 이 컴퓨터나 네트워크의 일반 HTTP만 허용됩니다
 © OpenStreetMap contributors	© OpenStreetMap 기여자
 ⌘K	⌘K
+ChatGPT (sign in)	ChatGPT (로그인)
+Account	계정
+Waiting for the browser…	브라우저를 기다리는 중…
+signed in	로그인됨
+Sign out	로그아웃
+Sign in…	로그인…
+Use the Codex CLI's sign-in	Codex CLI 로그인 사용
+Signing in with ChatGPT works in the desktop app.	ChatGPT 로그인은 데스크톱 앱에서 작동합니다.
+The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	로그인 정보는 앱의 설정 폴더에 사용자 계정 전용으로 저장되며 프로젝트 파일에는 저장되지 않습니다.
+Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	요청은 OpenAI의 ChatGPT 백엔드로 전송되며 구독 사용량에 포함됩니다.
+Sign in with your ChatGPT account.	ChatGPT 계정으로 로그인하세요.

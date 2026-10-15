@@ -1,6 +1,7 @@
 //! Model providers: building the HTTP request for a conversation and reading the reply, for the
-//! three wire formats the assistant speaks (OpenAI Chat Completions, which OpenRouter, Ollama and
-//! most local servers also speak; Anthropic Messages; Gemini `generateContent`).
+//! four wire formats the assistant speaks (OpenAI Chat Completions, which OpenRouter, Ollama and
+//! most local servers also speak; OpenAI Responses, which the ChatGPT sign-in uses; Anthropic
+//! Messages; Gemini `generateContent`).
 //!
 //! Nothing here does I/O: a request is plain data ([`HttpRequest`]) that the desktop sends on a
 //! thread and the browser sends with its `fetch`.
@@ -12,6 +13,8 @@ use serde_json::{Map, Value, json};
 pub enum Api {
     /// `POST {base}/chat/completions`.
     OpenAi,
+    /// `POST {base}/responses` (streamed): the OpenAI Responses API, as the Codex backend speaks it.
+    Responses,
     /// `POST {base}/v1/messages`.
     Anthropic,
     /// `POST {base}/models/{model}:generateContent`.
@@ -33,6 +36,9 @@ pub struct Preset {
     pub keyless: bool,
     /// Where to get a key.
     pub key_url: &'static str,
+    /// Signs in with an account (see [`crate::chatgpt`]) instead of taking a key: the key is the
+    /// account's access token, kept by the sign-in, never typed or saved with the preferences.
+    pub login: bool,
 }
 
 pub const PRESETS: &[Preset] = &[
@@ -46,6 +52,7 @@ pub const PRESETS: &[Preset] = &[
         url_env: "",
         keyless: false,
         key_url: "https://console.anthropic.com/settings/keys",
+        login: false,
     },
     Preset {
         id: "openai",
@@ -57,6 +64,21 @@ pub const PRESETS: &[Preset] = &[
         url_env: "",
         keyless: false,
         key_url: "https://platform.openai.com/api-keys",
+        login: false,
+    },
+    Preset {
+        id: "chatgpt",
+        label: "ChatGPT (sign in)",
+        api: Api::Responses,
+        base_url: crate::chatgpt::BACKEND,
+        // The first of the account's catalog (the ↻ list) as of Codex 0.162; the catalog says
+        // which are offered to a subscription.
+        model: "gpt-6.1-sol",
+        key_env: &[],
+        url_env: "",
+        keyless: false,
+        key_url: "https://chatgpt.com/",
+        login: true,
     },
     Preset {
         id: "gemini",
@@ -68,6 +90,7 @@ pub const PRESETS: &[Preset] = &[
         url_env: "",
         keyless: false,
         key_url: "https://aistudio.google.com/apikey",
+        login: false,
     },
     Preset {
         id: "openrouter",
@@ -79,6 +102,7 @@ pub const PRESETS: &[Preset] = &[
         url_env: "",
         keyless: false,
         key_url: "https://openrouter.ai/keys",
+        login: false,
     },
     Preset {
         id: "ollama",
@@ -90,6 +114,7 @@ pub const PRESETS: &[Preset] = &[
         url_env: "OLLAMA_BASE_URL",
         keyless: true,
         key_url: "https://ollama.com/download",
+        login: false,
     },
     Preset {
         id: "custom",
@@ -101,6 +126,7 @@ pub const PRESETS: &[Preset] = &[
         url_env: "OPENAI_COMPATIBLE_BASE_URL",
         keyless: true,
         key_url: "",
+        login: false,
     },
 ];
 
@@ -116,11 +142,16 @@ pub struct Config {
     pub provider: String,
     pub base_url: String,
     pub model: String,
+    /// The API key, or the access token of a signed-in account.
     pub key: String,
+    /// The ChatGPT workspace a signed-in account's requests are for (`chatgpt-account-id`);
+    /// empty for other providers.
+    pub account: String,
 }
 
 impl Config {
-    /// The preset's defaults, with a key and base URL from the environment where set.
+    /// The preset's defaults, with a key and base URL from the environment where set (for a
+    /// sign-in provider, the account signed in on this computer).
     pub fn from_env(provider: &str) -> Config {
         let p = preset(provider).unwrap_or(&PRESETS[0]);
         let env = |name: &str| std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
@@ -130,11 +161,29 @@ impl Config {
         if p.id == "ollama" && !base_url.trim_end_matches('/').ends_with("/v1") {
             base_url = format!("{}/v1", base_url.trim_end_matches('/'));
         }
-        Config { provider: p.id.to_string(), base_url, model: p.model.to_string(), key }
+        let mut cfg = Config { provider: p.id.to_string(), base_url, model: p.model.to_string(), key, account: String::new() };
+        #[cfg(not(target_arch = "wasm32"))]
+        if p.login
+            && let Some(t) = crate::chatgpt::load()
+        {
+            cfg.sign_in(&t);
+        }
+        cfg
+    }
+
+    /// Uses a signed-in account's tokens.
+    pub fn sign_in(&mut self, tokens: &crate::chatgpt::Tokens) {
+        self.key = tokens.access_token.clone();
+        self.account = tokens.account_id.clone();
     }
 
     pub fn api(&self) -> Api {
         preset(&self.provider).map_or(Api::OpenAi, |p| p.api)
+    }
+
+    /// Whether the provider signs in with an account rather than a key.
+    pub fn login(&self) -> bool {
+        preset(&self.provider).is_some_and(|p| p.login)
     }
 
     /// Why this configuration can't be used yet, if it can't.
@@ -144,6 +193,8 @@ impl Config {
             Some("Choose a model.")
         } else if self.base_url.trim().is_empty() {
             Some("Enter the provider's address.")
+        } else if self.key.trim().is_empty() && self.login() {
+            Some("Sign in with your ChatGPT account.")
         } else if self.key.trim().is_empty() && !keyless {
             Some("Enter an API key.")
         } else {
@@ -276,6 +327,7 @@ const MAX_TOKENS: u32 = 16_000;
 pub fn chat_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDef]) -> HttpRequest {
     match cfg.api() {
         Api::OpenAi => openai_request(cfg, system, turns, tools),
+        Api::Responses => responses_request(cfg, system, turns, tools),
         Api::Anthropic => anthropic_request(cfg, system, turns, tools),
         Api::Gemini => gemini_request(cfg, system, turns, tools),
     }
@@ -283,12 +335,16 @@ pub fn chat_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDef
 
 /// Reads a chat reply (any status).
 pub fn parse_reply(api: Api, resp: &HttpResponse) -> Result<Reply, String> {
+    if api == Api::Responses {
+        return responses_reply(resp);
+    }
     let v: Value = serde_json::from_slice(&resp.body).map_err(|_| http_error(resp))?;
     if !(200..300).contains(&resp.status) {
         return Err(error_message(&v).unwrap_or_else(|| http_error(resp)));
     }
     match api {
         Api::OpenAi => openai_reply(&v),
+        Api::Responses => responses_reply(resp),
         Api::Anthropic => anthropic_reply(&v),
         Api::Gemini => gemini_reply(&v),
     }
@@ -303,10 +359,13 @@ fn http_error(resp: &HttpResponse) -> String {
     }
 }
 
-/// The message of an error body (all three providers nest it under `error`).
+/// The message of an error body (the providers nest it under `error`; the ChatGPT backend
+/// sometimes says `detail`).
 fn error_message(v: &Value) -> Option<String> {
-    let e = v.get("error")?;
-    let msg = e.get("message").and_then(Value::as_str).or_else(|| e.as_str())?;
+    let msg = match v.get("error") {
+        Some(e) => e.get("message").and_then(Value::as_str).or_else(|| e.as_str())?,
+        None => v.get("detail").and_then(|d| d.as_str().or_else(|| d.get("message").and_then(Value::as_str)))?,
+    };
     Some(msg.chars().take(500).collect())
 }
 
@@ -394,6 +453,187 @@ fn openai_reply(v: &Value) -> Result<Reply, String> {
         o.retain(|k, _| matches!(k.as_str(), "role" | "content" | "tool_calls" | "reasoning_content"));
     }
     Ok(Reply { text, calls, native, cut })
+}
+
+// ---------------------------------------------------------------------------------------------
+// OpenAI Responses (the ChatGPT backend the Codex CLI uses)
+
+/// The `originator` the ChatGPT backend is told requests come from.
+pub const ORIGINATOR: &str = "rustgis";
+
+/// The ChatGPT backend lists the models a Codex CLI of a given version may use (an unknown
+/// version gets none): the catalog asked for is the one of this Codex release.
+pub const CATALOG_VERSION: &str = "0.162.0";
+
+/// Headers a request to the Responses API carries: the bearer token, and for a signed-in
+/// account its workspace.
+fn responses_headers(cfg: &Config) -> Vec<(String, String)> {
+    let mut headers = vec![header("Authorization", &format!("Bearer {}", cfg.key.trim())), header("originator", ORIGINATOR)];
+    if !cfg.account.trim().is_empty() {
+        headers.push(header("chatgpt-account-id", cfg.account.trim()));
+    }
+    headers
+}
+
+/// A `message` input item.
+fn responses_message(role: &str, text: &str) -> Value {
+    json!({"type": "message", "role": role, "content": [{"type": "input_text", "text": text}]})
+}
+
+fn responses_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDef]) -> HttpRequest {
+    // Instructions go as a developer message, as the Codex CLI sends them.
+    let mut input = vec![responses_message("developer", system)];
+    for t in turns {
+        match t {
+            Turn::User(text) => input.push(responses_message("user", text)),
+            Turn::Assistant { native: Some((Api::Responses, items)), .. } => {
+                input.extend(items.as_array().cloned().unwrap_or_default());
+            }
+            Turn::Assistant { text, calls, .. } => {
+                if !text.trim().is_empty() {
+                    input.push(json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}));
+                }
+                for c in calls {
+                    input.push(json!({"type": "function_call", "call_id": c.id, "name": c.name, "arguments": c.args.to_string()}));
+                }
+            }
+            Turn::Results(rs) => {
+                for r in rs {
+                    input.push(json!({"type": "function_call_output", "call_id": r.id, "output": r.content}));
+                }
+            }
+        }
+    }
+    let tools: Vec<Value> = tools
+        .iter()
+        .map(|t| json!({"type": "function", "name": t.name, "description": t.description, "parameters": t.schema, "strict": false}))
+        .collect();
+    let body = json!({
+        "model": cfg.model.trim(),
+        "stream": true,
+        "input": input,
+        "tools": tools,
+        "tool_choice": "auto",
+        "parallel_tool_calls": true,
+        "max_output_tokens": MAX_TOKENS,
+        "reasoning": {"effort": "medium"},
+        // Nothing is kept server-side: the reasoning comes back encrypted and is replayed with
+        // the conversation (`native`), as the Codex CLI does.
+        "store": false,
+        "include": ["reasoning.encrypted_content"],
+    });
+    let mut headers = vec![header("Content-Type", "application/json"), header("Accept", "text/event-stream")];
+    headers.extend(responses_headers(cfg));
+    HttpRequest { method: "POST", url: format!("{}/responses", cfg.base()), headers, body: json_body(&body) }
+}
+
+/// The `data:` payloads of a server-sent event stream, parsed.
+fn sse_events(body: &str) -> Vec<Value> {
+    let mut events = Vec::new();
+    for block in body.split("\n\n") {
+        let data: Vec<&str> = block.lines().filter_map(|l| l.strip_prefix("data:")).map(str::trim_start).collect();
+        if data.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(&data.join("\n")) {
+            events.push(v);
+        }
+    }
+    events
+}
+
+/// Reads a streamed Responses reply, read to its end: the output items the stream finished
+/// (`response.output_item.done`), or those of the final `response` object. A plain JSON reply
+/// (a server that didn't stream) is read the same way.
+fn responses_reply(resp: &HttpResponse) -> Result<Reply, String> {
+    let text = String::from_utf8_lossy(&resp.body);
+    if !(200..300).contains(&resp.status) {
+        let msg = serde_json::from_str::<Value>(&text).ok().and_then(|v| error_message(&v));
+        return Err(msg.unwrap_or_else(|| http_error(resp)));
+    }
+    let mut items: Vec<Value> = Vec::new();
+    let mut last: Option<Value> = None;
+    let mut error: Option<String> = None;
+    let events = if text.trim_start().starts_with('{') {
+        serde_json::from_str::<Value>(&text).ok().map(|v| vec![json!({"type": "response.completed", "response": v})]).unwrap_or_default()
+    } else {
+        sse_events(&text)
+    };
+    for e in &events {
+        match e.get("type").and_then(Value::as_str) {
+            Some("response.output_item.done") => {
+                if let Some(item) = e.get("item") {
+                    items.push(item.clone());
+                }
+            }
+            Some("response.completed" | "response.incomplete" | "response.failed") => last = e.get("response").cloned(),
+            Some("error") => error = error_message(e).or_else(|| e.get("message").and_then(Value::as_str).map(str::to_string)),
+            _ => {}
+        }
+    }
+    if let Some(e) = error {
+        return Err(e);
+    }
+    let last = last
+        .ok_or_else(|| if events.is_empty() { http_error(resp) } else { "the stream ended before the reply was complete".to_string() })?;
+    if last.get("status").and_then(Value::as_str) == Some("failed") {
+        let why = last.pointer("/error/message").and_then(Value::as_str).unwrap_or("no reason given");
+        return Err(format!("the model's reply failed: {why}"));
+    }
+    if items.is_empty() {
+        items = last.get("output").and_then(Value::as_array).cloned().unwrap_or_default();
+    }
+    let mut text = String::new();
+    let mut calls = Vec::new();
+    let mut refused = None;
+    for (i, item) in items.iter().enumerate() {
+        match item.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                for c in item.get("content").and_then(Value::as_array).into_iter().flatten() {
+                    match c.get("type").and_then(Value::as_str) {
+                        Some("output_text") => text.push_str(c.get("text").and_then(Value::as_str).unwrap_or("")),
+                        Some("refusal") => refused = Some(c.get("refusal").and_then(Value::as_str).unwrap_or("").to_string()),
+                        _ => {}
+                    }
+                }
+            }
+            Some("function_call") => calls.push(ToolCall {
+                id: item.get("call_id").and_then(Value::as_str).map_or_else(|| format!("call_{i}"), str::to_string),
+                name: item.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                args: match item.get("arguments") {
+                    Some(Value::String(s)) => serde_json::from_str(s).unwrap_or_else(|_| json!({"_unparsed": s})),
+                    Some(other) => other.clone(),
+                    None => json!({}),
+                },
+            }),
+            _ => {}
+        }
+    }
+    let mut cut = match last.pointer("/incomplete_details/reason").and_then(Value::as_str) {
+        Some("max_output_tokens") => Some("the reply reached its length limit".to_string()),
+        Some("content_filter") => Some("the provider's content filter stopped the reply".to_string()),
+        Some(r) => Some(format!("the reply stopped early ({r})")),
+        None => None,
+    };
+    if let Some(r) = refused {
+        cut = Some(if r.is_empty() {
+            "the model declined this request".to_string()
+        } else {
+            format!("the model declined this request: {r}")
+        });
+        calls.clear();
+    }
+    // Replayed as sent, minus the server's item ids (the conversation isn't stored there).
+    let native: Vec<Value> = items
+        .into_iter()
+        .map(|mut item| {
+            if let Some(o) = item.as_object_mut() {
+                o.remove("id");
+            }
+            item
+        })
+        .collect();
+    Ok(Reply { text, calls, native: Value::Array(native), cut })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -643,6 +883,12 @@ pub fn models_request(cfg: &Config) -> HttpRequest {
             }
             HttpRequest { method: "GET", url: format!("{}/models", cfg.base()), headers, body: None }
         }
+        Api::Responses => HttpRequest {
+            method: "GET",
+            url: format!("{}/models?client_version={CATALOG_VERSION}", cfg.base()),
+            headers: responses_headers(cfg),
+            body: None,
+        },
         Api::Anthropic => HttpRequest {
             method: "GET",
             url: format!("{}/v1/models?limit=1000", cfg.base()),
@@ -677,6 +923,16 @@ pub fn parse_models(api: Api, resp: &HttpResponse) -> Result<Vec<String>, String
             .filter_map(|m| m.get("id").and_then(Value::as_str))
             .map(str::to_string)
             .collect(),
+        // The ChatGPT backend lists its models with a slug and whether they are offered.
+        Api::Responses => v
+            .get("models")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|m| m.get("visibility").and_then(Value::as_str).is_none_or(|v| v == "list"))
+            .filter_map(|m| m.get("slug").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect(),
         Api::Gemini => v
             .get("models")
             .and_then(Value::as_array)
@@ -691,8 +947,11 @@ pub fn parse_models(api: Api, resp: &HttpResponse) -> Result<Vec<String>, String
             .map(|n| n.trim_start_matches("models/").to_string())
             .collect(),
     };
-    ids.sort();
-    ids.dedup();
+    // The ChatGPT catalog comes in its own order (the first is the one to suggest).
+    if api != Api::Responses {
+        ids.sort();
+        ids.dedup();
+    }
     ids.truncate(2000);
     Ok(ids)
 }

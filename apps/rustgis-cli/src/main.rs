@@ -11,6 +11,8 @@
 //! rustgis-cli ask [--sample | --project p.rgis | --data f.geojson …] "Which cities have over 10 million people?" \
 //!     [--provider anthropic|openai|gemini|openrouter|ollama|custom] [--model M] [--base-url URL] [--yes] [--save out.rgis] [--trace log.txt]
 //! rustgis-cli ask --models [--provider P]                # list the provider's models
+//! rustgis-cli ask --login [--import-codex]               # sign in with a ChatGPT account (or copy the Codex CLI's)
+//! rustgis-cli ask --logout
 //! rustgis-cli mcp [--sample | --project p.rgis | --data f.geojson …] [--yes]   # an MCP server on stdio
 //! rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id>
 //!                      | browse | get <id>] [--registry URL]
@@ -36,7 +38,7 @@ use serde_json::{Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]\n  rustgis-cli mcp [--sample] [--project P] [--data F]… [--yes]"
+        "usage:\n  rustgis-cli commands | tools\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id>] [--registry URL]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]\n  rustgis-cli ask --login [--import-codex] | --logout\n  rustgis-cli mcp [--sample] [--project P] [--data F]… [--yes]"
     );
     ExitCode::from(2)
 }
@@ -126,8 +128,33 @@ fn ask(s: &mut Session, args: &[String]) -> Result<(), String> {
     if let Some(u) = opt(args, "--base-url") {
         cfg.base_url = u.to_string();
     }
+    if args.iter().any(|a| a == "--logout") {
+        rustgis_assistant::chatgpt::forget()?;
+        eprintln!("signed out of ChatGPT");
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--login") {
+        use rustgis_assistant::chatgpt;
+        let t = if args.iter().any(|a| a == "--import-codex") {
+            chatgpt::import_codex()?
+        } else {
+            let login = chatgpt::login()?;
+            eprintln!("Open this page in your browser to sign in to ChatGPT:\n{}", login.url);
+            loop {
+                if let Some(r) = login.poll() {
+                    break r?;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+        };
+        eprintln!("signed in as {} (kept in {})", t.account().label(), chatgpt::auth_path().unwrap_or_default().display());
+        return Ok(());
+    }
+    // A signed-in account's requests renew its tokens as needed.
+    let login = cfg.login();
+    let transport = move |req: &rustgis_assistant::HttpRequest| if login { rustgis_assistant::chatgpt::send(req) } else { http::send(req) };
     if args.iter().any(|a| a == "--models") {
-        let r = http::send(&provider::models_request(&cfg))?;
+        let r = transport(&provider::models_request(&cfg))?;
         for m in provider::parse_models(cfg.api(), &r)? {
             out!("{m}");
         }
@@ -135,8 +162,12 @@ fn ask(s: &mut Session, args: &[String]) -> Result<(), String> {
     }
     let prompt = prompt.ok_or("ask needs a request, e.g. rustgis-cli ask --sample \"Which countries have the largest GDP?\"")?;
     if let Some(why) = cfg.missing() {
-        let env = provider::preset(&provider).map(|p| p.key_env.join(" or ")).unwrap_or_default();
-        return Err(format!("{provider}: {why} (set {env})"));
+        let hint = match provider::preset(&provider) {
+            Some(p) if p.login => "run rustgis-cli ask --login".to_string(),
+            Some(p) => format!("set {}", p.key_env.join(" or ")),
+            None => String::new(),
+        };
+        return Err(format!("{provider}: {why} ({hint})"));
     }
     eprintln!("[{} · {}]", cfg.provider, cfg.model);
     let yes = args.iter().any(|a| a == "--yes");
@@ -160,7 +191,7 @@ fn ask(s: &mut Session, args: &[String]) -> Result<(), String> {
     // `--trace FILE`: each request and response body (never the headers, which carry the key).
     let trace = opt(args, "--trace").map(std::path::PathBuf::from);
     let send = |req: &rustgis_assistant::HttpRequest| {
-        let r = http::send(req);
+        let r = transport(req);
         if let Some(path) = &trace {
             let resp = match &r {
                 Ok(r) => format!("HTTP {}\n{}", r.status, String::from_utf8_lossy(&r.body)),

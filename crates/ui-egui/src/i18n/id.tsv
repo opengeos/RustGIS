@@ -1861,3 +1861,14 @@ Zoom To World	Zoom ke Dunia
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: hanya alamat HTTPS, atau HTTP biasa di komputer atau jaringan ini, yang diizinkan
 © OpenStreetMap contributors	© kontributor OpenStreetMap
 ⌘K	⌘K
+ChatGPT (sign in)	ChatGPT (masuk)
+Account	Akun
+Waiting for the browser…	Menunggu peramban…
+signed in	sudah masuk
+Sign out	Keluar
+Sign in…	Masuk…
+Use the Codex CLI's sign-in	Gunakan login Codex CLI
+Signing in with ChatGPT works in the desktop app.	Masuk dengan ChatGPT berfungsi di aplikasi desktop.
+The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Info masuk disimpan di folder pengaturan aplikasi, hanya untuk akun pengguna Anda, dan tidak pernah di berkas proyek.
+Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	Permintaan dikirim ke backend ChatGPT milik OpenAI dan dihitung dalam penggunaan langganan Anda.
+Sign in with your ChatGPT account.	Masuk dengan akun ChatGPT Anda.

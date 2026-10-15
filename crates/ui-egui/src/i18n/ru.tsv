@@ -1861,3 +1861,14 @@ Zoom To World	Приблизить к миру
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: разрешены только адреса HTTPS или обычный HTTP на этом компьютере или в этой сети
 © OpenStreetMap contributors	© участники OpenStreetMap
 ⌘K	⌘K
+ChatGPT (sign in)	ChatGPT (вход)
+Account	Учётная запись
+Waiting for the browser…	Ожидание браузера…
+signed in	вход выполнен
+Sign out	Выйти
+Sign in…	Войти…
+Use the Codex CLI's sign-in	Использовать вход Codex CLI
+Signing in with ChatGPT works in the desktop app.	Вход через ChatGPT работает в настольном приложении.
+The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Данные входа хранятся в папке настроек приложения, только для вашей учётной записи, и никогда в файле проекта.
+Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	Запросы идут на сервер ChatGPT компании OpenAI и учитываются в использовании вашей подписки.
+Sign in with your ChatGPT account.	Войдите с учётной записью ChatGPT.

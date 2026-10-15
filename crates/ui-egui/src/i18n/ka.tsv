@@ -1861,3 +1861,14 @@ Zoom To World	გადიდება მსოფლიოზე
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: დაშვებულია მხოლოდ HTTPS მისამართები ან უბრალო HTTP ამ კომპიუტერზე თუ ქსელში
 © OpenStreetMap contributors	© OpenStreetMap contributors
 ⌘K	⌘K
+ChatGPT (sign in)	ChatGPT (შესვლა)
+Account	ანგარიში
+Waiting for the browser…	ბრაუზერის მოლოდინი…
+signed in	შესულია
+Sign out	გასვლა
+Sign in…	შესვლა…
+Use the Codex CLI's sign-in	Codex CLI-ის შესვლის გამოყენება
+Signing in with ChatGPT works in the desktop app.	ChatGPT-ით შესვლა მუშაობს სამუშაო მაგიდის აპში.
+The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	შესვლის მონაცემები ინახება აპის პარამეტრების საქაღალდეში, მხოლოდ თქვენი მომხმარებლის ანგარიშისთვის, და არასოდეს პროექტის ფაილში.
+Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	მოთხოვნები მიდის OpenAI-ის ChatGPT სერვერზე და ითვლება თქვენი გამოწერის მოხმარებაში.
+Sign in with your ChatGPT account.	შედით თქვენი ChatGPT ანგარიშით.

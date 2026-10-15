@@ -1861,3 +1861,14 @@ Zoom To World	Thu phóng tới thế giới
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: chỉ cho phép địa chỉ HTTPS, hoặc HTTP thường trên máy tính hay mạng này
 © OpenStreetMap contributors	© Những người đóng góp OpenStreetMap
 ⌘K	⌘K
+ChatGPT (sign in)	ChatGPT (đăng nhập)
+Account	Tài khoản
+Waiting for the browser…	Đang chờ trình duyệt…
+signed in	đã đăng nhập
+Sign out	Đăng xuất
+Sign in…	Đăng nhập…
+Use the Codex CLI's sign-in	Dùng đăng nhập của Codex CLI
+Signing in with ChatGPT works in the desktop app.	Đăng nhập bằng ChatGPT hoạt động trong ứng dụng máy tính.
+The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Thông tin đăng nhập được lưu trong thư mục cài đặt của ứng dụng, chỉ cho tài khoản người dùng của bạn, và không bao giờ trong tệp dự án.
+Requests go to OpenAI's ChatGPT backend and count against your subscription's usage.	Yêu cầu được gửi đến máy chủ ChatGPT của OpenAI và được tính vào mức sử dụng gói đăng ký của bạn.
+Sign in with your ChatGPT account.	Hãy đăng nhập bằng tài khoản ChatGPT của bạn.
