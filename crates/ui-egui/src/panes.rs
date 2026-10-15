@@ -1340,6 +1340,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let kind_names = |raster: bool| -> Vec<String> {
         app.session.map().layers.iter().filter(|l| l.is_raster() == raster).map(|l| l.name.clone()).collect()
     };
+    let plugin_tool = spec.id.starts_with(rustgis_engine::plugins::PREFIX);
     let first_layer = spec
         .params
         .iter()
@@ -1475,7 +1476,10 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     _ => "",
                 };
                 let mut browse = false;
-                let changed = if p.kind == ParamKind::Path {
+                // Browse picks a file to read: on the desktop for any file input (GeoLibre's too);
+                // in the browser, where the file itself goes with the run, only for plugins.
+                let browsable = p.kind == ParamKind::Path && (app.services.open_async.is_none() || plugin_tool);
+                let changed = if browsable {
                     // One row: the path box takes what the button leaves.
                     let row = vec2(ui.available_width(), ui.spacing().interact_size.y);
                     ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {

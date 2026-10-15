@@ -333,11 +333,14 @@ fn file_parameters_need_files_and_hand_tools_the_file() {
     for bad in [json!(dir.join("missing.nc").display().to_string()), json!(dir.display().to_string()), json!(7), json!({"data": 7})] {
         assert!(crate::tools::request(decl, &json!({"model": bad}), Default::default()).is_err(), "{bad}");
     }
-    let huge = "A".repeat(crate::tools::MAX_FILE.div_ceil(3) * 4 + 4);
-    assert!(
-        crate::tools::request(decl, &json!({"model": {"name": "big.nc", "data": huge}}), Default::default())
-            .unwrap_err()
-            .contains("larger")
-    );
+    for bad in ["not base64!", "abc", "a=bc", "===="] {
+        assert!(crate::tools::request(decl, &json!({"model": {"name": "m.nc", "data": bad}}), Default::default()).is_err(), "{bad}");
+    }
+    // The limit is on the decoded size, to the byte: base64 of MAX_FILE bytes passes, and of
+    // one more doesn't.
+    let max = crate::tools::MAX_FILE;
+    let at = |n: usize| json!({"model": {"name": "big.nc", "data": b64.encode(vec![0u8; n])}});
+    assert!(crate::tools::request(decl, &at(max), Default::default()).is_ok());
+    assert!(crate::tools::request(decl, &at(max + 1), Default::default()).unwrap_err().contains("larger"));
     let _ = std::fs::remove_dir_all(&dir);
 }

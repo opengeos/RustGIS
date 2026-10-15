@@ -18,7 +18,8 @@ pub const SOURCE: &str = "plugins";
 const MAX_FEATURES: usize = 5_000_000;
 
 /// The largest file a `file` parameter hands a tool. The request carries it as base64 (a third
-/// larger), within the module's message limit.
+/// larger), and the module's copy of the request and the file it decodes from it must fit in
+/// its memory (`runtime::MAX_MEMORY`) beside whatever else the tool holds.
 pub const MAX_FILE: usize = 64 * 1024 * 1024;
 
 /// Adds plugin tools to the geoprocessing tools. Cheap: the list is built when first needed.
@@ -194,7 +195,12 @@ fn file_input(v: &Value) -> Result<Value, String> {
     use base64::Engine;
     if let Some(data) = v.get("data") {
         let data = data.as_str().ok_or("the file's data must be base64 text")?;
-        if data.len() > MAX_FILE.div_ceil(3) * 4 {
+        if !is_base64(data) {
+            return Err("the file's data must be base64 text".into());
+        }
+        // The decoded size, exactly, without decoding it.
+        let padding = data.bytes().rev().take_while(|&c| c == b'=').count();
+        if (data.len() / 4 * 3).saturating_sub(padding) > MAX_FILE {
             return Err(too_big());
         }
         let name = v.get("name").and_then(Value::as_str).map(base_name).filter(|n| !n.is_empty()).unwrap_or("file");
@@ -203,6 +209,13 @@ fn file_input(v: &Value) -> Result<Value, String> {
     let path = v.as_str().ok_or("give a file path")?;
     let bytes = read_file(path)?;
     Ok(json!({"name": base_name(path), "data": base64::engine::general_purpose::STANDARD.encode(bytes)}))
+}
+
+/// Whether `s` is standard, padded base64 (checked without decoding it).
+fn is_base64(s: &str) -> bool {
+    let b = s.as_bytes();
+    let body = b.strip_suffix(b"==").or_else(|| b.strip_suffix(b"=")).unwrap_or(b);
+    b.len().is_multiple_of(4) && body.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'+' || *c == b'/')
 }
 
 fn too_big() -> String {
