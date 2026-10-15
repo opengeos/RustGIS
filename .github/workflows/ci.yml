@@ -1,12 +1,19 @@
 name: CI
 
+# macOS and Windows are slow: pushes to main test on every platform, pull requests on Linux only.
+# A pull request labelled `ci:macos`, `ci:windows` or `ci:full` (both) tests there too: adding
+# the label runs just that platform, and later pushes include it.
+
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
 
+# A label's run doesn't cancel the pull request's other runs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.action == 'labeled' && github.event.label.name || 'run' }}
   cancel-in-progress: true
 
 env:
@@ -14,8 +21,35 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  plan:
+    name: Platforms
+    runs-on: ubuntu-latest
+    outputs:
+      os: ${{ steps.os.outputs.os }}
+    steps:
+      - id: os
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          # Whether the pull request asks for a platform: by the label just added, or (on a
+          # push to it) by the labels it has.
+          asks() {
+            if [ "$ACTION" = labeled ]; then [ "$LABEL" = "$1" ] || [ "$LABEL" = ci:full ]
+            else jq -e --arg l "$1" 'index($l) or index("ci:full")' <<<"$LABELS" >/dev/null; fi
+          }
+          os=()
+          # Adding a label runs only the platform it names.
+          [ "$ACTION" = labeled ] || os+=(ubuntu-latest)
+          if [ "$EVENT" != pull_request ] || asks ci:macos; then os+=(macos-latest); fi
+          if [ "$EVENT" != pull_request ] || asks ci:windows; then os+=(windows-latest); fi
+          echo "os=$(jq -cn '$ARGS.positional' --args "${os[@]}")" >> "$GITHUB_OUTPUT"
+
   lint:
     name: Lint (pre-commit)
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -30,6 +64,7 @@ jobs:
 
   wasm:
     name: Web app (wasm32)
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -42,11 +77,13 @@ jobs:
 
   test:
     name: Test (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.os != '[]'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(needs.plan.outputs.os) }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
