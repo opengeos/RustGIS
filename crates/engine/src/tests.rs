@@ -2146,6 +2146,34 @@ fn plugin_tools_run_off_the_session() {
     assert!(plugin_start(&mut s, "buffer", &json!({"input": "Cities"})).err().unwrap().contains("no plugin tool"));
     assert!(plugin_complete(&mut s, run.id, Err("late".into())).unwrap_err().contains("dropped"));
     assert!(crate::cmd::gp::is_plugin_tool("plugin:eng-bg/m") && !crate::cmd::gp::is_plugin_tool("buffer"));
+    // Edits made while it ran: a selection follows the features it chose, by id...
+    let run = plugin_start(&mut s, "plugin:eng-bg/x", &json!({"input": "Cities"})).unwrap();
+    let ids: Vec<u64> = s.map().layer_by_name("Cities").unwrap().dataset.features.iter().map(|f| f.id).collect();
+    fn cities(s: &mut Session) -> &mut rustgis_map::Layer {
+        s.map_mut().layers.iter_mut().find(|l| l.name == "Cities").unwrap()
+    }
+    cities(&mut s).dataset.features.remove(0);
+    let r = run.run(&Control::default());
+    plugin_complete(&mut s, run.id, r).unwrap();
+    s.run("gp.finish", &json!({"id": run.id})).unwrap();
+    let l = s.map().layer_by_name("Cities").unwrap();
+    assert_eq!(l.selection.iter().map(|&i| l.dataset.features[i].id).collect::<Vec<_>>(), vec![ids[2]]);
+    // ...and an update, which would discard them, is refused.
+    let update = |s: &Session| {
+        let dataset = s.map().layer_by_name("Cities").unwrap().dataset.clone();
+        Ok(rustgis_analysis::ToolResult { output: rustgis_analysis::Output::Update { layer: "Cities".into(), dataset }, messages: vec![] })
+    };
+    let run = plugin_start(&mut s, "plugin:eng-bg/x", &json!({"input": "Cities"})).unwrap();
+    let r = update(&s);
+    plugin_complete(&mut s, run.id, r).unwrap();
+    s.run("gp.finish", &json!({"id": run.id})).unwrap();
+    let run = plugin_start(&mut s, "plugin:eng-bg/x", &json!({"input": "Cities"})).unwrap();
+    let r = update(&s);
+    cities(&mut s).dataset.features.remove(0);
+    plugin_complete(&mut s, run.id, r).unwrap();
+    let e = s.run("gp.finish", &json!({"id": run.id})).unwrap_err();
+    assert_eq!(e, "Cities changed while Select Two ran; run it again");
+    assert_eq!(s.map().layer_by_name("Cities").unwrap().dataset.features.len(), ids.len() - 2);
     // A run of a project closed while it ran doesn't land in the next one.
     let run = plugin_start(&mut s, "plugin:eng-bg/m", &json!({"input": "Cities"})).unwrap();
     assert!(crate::cmd::gp::plugin_waiting(&s, run.id));

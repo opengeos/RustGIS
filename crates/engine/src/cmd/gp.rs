@@ -264,6 +264,8 @@ pub(crate) struct StartedRun {
     t0: u64,
     /// The feature ids of the streamed layers it reads whole, by lowercase name.
     full_ids: FullIds,
+    /// The other layers it reads, as it read them (their ids and data), by lowercase name.
+    read: std::collections::HashMap<String, (u32, Dataset)>,
 }
 
 /// The feature ids of the streamed layers a tool read whole, by lowercase name: what its
@@ -286,10 +288,16 @@ pub fn plugin_start(s: &mut Session, tool: &str, params: &Value) -> Result<Plugi
         .unwrap_or_else(|_| Err(format!("{} failed unexpectedly", spec.name)))?;
     let full_ids = full_ids(&inputs.3);
     drop(inputs);
+    let read = layer_names(Some(spec), &resolved)
+        .into_iter()
+        .filter_map(|n| s.map().layer_by_name(n))
+        .filter(|l| !l.is_streamed())
+        .map(|l| (l.name.to_ascii_lowercase(), (l.id, l.dataset.clone())))
+        .collect();
     s.next_pending = s.next_pending.wrapping_add(1);
     let id = s.next_pending;
     let params = recorded(Some(spec), params.clone());
-    s.plugin_runs.push(StartedRun { id, name: spec.name.to_string(), params, t0: now_ms(), full_ids });
+    s.plugin_runs.push(StartedRun { id, name: spec.name.to_string(), params, t0: now_ms(), full_ids, read });
     // A run that never completes is dropped eventually.
     if s.plugin_runs.len() > MAX_ASYNC_RUNS {
         s.plugin_runs.remove(0);
@@ -313,12 +321,43 @@ pub fn plugin_complete(s: &mut Session, id: u64, result: Result<rustgis_analysis
         .ok_or("the tool's run was dropped (its project was closed, or too many runs were waiting)")?;
     let run = s.plugin_runs.remove(i);
     let mut result = result;
+    fit_to_changes(s, &mut result, &run.name, &run.read);
     fit_to_windows(s, &mut result, &run.full_ids);
     s.pending.push(crate::PendingRun { id, tool: run.name, params: run.params, result, millis: now_ms().saturating_sub(run.t0) });
     if s.pending.len() > MAX_ASYNC_RUNS {
         s.pending.remove(0);
     }
     Ok(())
+}
+
+/// Fits a background run's result to edits made while it ran: a selection of a layer that
+/// changed selects the same features (by id) where they now are, and an update of a layer that
+/// changed, which would discard those edits, is refused.
+fn fit_to_changes(
+    s: &Session,
+    res: &mut Result<rustgis_analysis::ToolResult, String>,
+    tool: &str,
+    read: &std::collections::HashMap<String, (u32, Dataset)>,
+) {
+    let Ok(r) = res else { return };
+    let (layer, update) = match &r.output {
+        Output::Selection { layer, .. } => (layer.clone(), false),
+        Output::Update { layer, .. } => (layer.clone(), true),
+        _ => return,
+    };
+    let Some((id, was)) = read.get(&layer.to_ascii_lowercase()) else { return };
+    let now = s.map().layer_by_name(&layer);
+    if now.is_some_and(|l| l.id == *id && l.dataset == *was) {
+        return;
+    }
+    if update {
+        *res = Err(format!("{layer} changed while {tool} ran; run it again"));
+    } else if let (Ok(r), Some(l)) = (res, now)
+        && let Output::Selection { rows, .. } = &mut r.output
+    {
+        let ids: std::collections::HashSet<u64> = rows.iter().filter_map(|r| was.features.get(*r)).map(|f| f.id).collect();
+        *rows = l.dataset.features.iter().enumerate().filter(|(_, f)| ids.contains(&f.id)).map(|(i, _)| i).collect();
+    }
 }
 
 /// Fits a tool's result to the map: a selection it made on a streamed layer it read whole
@@ -374,6 +413,22 @@ fn streamed_inputs(
     spec: Option<&rustgis_analysis::ToolSpec>,
     params: &Value,
 ) -> Result<std::collections::HashMap<String, Dataset>, String> {
+    let mut full = std::collections::HashMap::new();
+    for n in layer_names(spec, params) {
+        let key = n.to_ascii_lowercase();
+        if full.contains_key(&key) {
+            continue;
+        }
+        if let Some(l) = map.layer_by_name(n).filter(|l| l.is_streamed() && l.selection.is_empty()) {
+            full.insert(key, l.load_all().map_err(|e| format!("{}: {e}", l.name))?);
+        }
+    }
+    Ok(full)
+}
+
+/// The layers a tool's parameters name: the values of its layer parameters (all of them, for a
+/// tool without a spec), so a field or text value that happens to match a layer's name isn't one.
+fn layer_names<'v>(spec: Option<&rustgis_analysis::ToolSpec>, params: &'v Value) -> Vec<&'v str> {
     fn names<'v>(v: &'v Value, out: &mut Vec<&'v str>) {
         match v {
             Value::String(s) => out.push(s),
@@ -382,8 +437,6 @@ fn streamed_inputs(
             _ => {}
         }
     }
-    // The values of the tool's layer parameters (all of them, for a tool without a spec), so a
-    // field or text value that happens to match a layer's name doesn't load it.
     use rustgis_analysis::ParamKind as K;
     let mut named = Vec::new();
     match spec {
@@ -396,17 +449,7 @@ fn streamed_inputs(
         }
         None => names(params, &mut named),
     }
-    let mut full = std::collections::HashMap::new();
-    for n in named {
-        let key = n.to_ascii_lowercase();
-        if full.contains_key(&key) {
-            continue;
-        }
-        if let Some(l) = map.layer_by_name(n).filter(|l| l.is_streamed() && l.selection.is_empty()) {
-            full.insert(key, l.load_all().map_err(|e| format!("{}: {e}", l.name))?);
-        }
-    }
-    Ok(full)
+    named
 }
 
 /// The environment's rows for a run, refusing a run whose main input has no features inside the
