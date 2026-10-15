@@ -115,8 +115,15 @@ pub fn commands() -> Vec<C> {
             let n = s_name(p)?;
             let i = s.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no map '{n}'"))?;
             s.project.maps.remove(i);
-            s.project.active_map = 0;
-            s.active_layer = s.map().layers.first().map(|l| l.id);
+            // Deleting another map keeps the one in view (a map tab's close button).
+            let active = s.project.active_map;
+            if i < active {
+                s.project.active_map = active - 1;
+            } else if i == active {
+                s.project.active_map = 0;
+                s.active_layer = s.map().layers.first().map(|l| l.id);
+                s.table_layer = None;
+            }
             Ok(Value::Null)
         })
         .params(r#"{"name": string}"#),
