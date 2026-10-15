@@ -373,8 +373,11 @@ pub fn read_path(path: &Path) -> Result<Raster> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let mut r = match ext.as_str() {
         "tif" | "tiff" => {
-            let f = std::fs::File::open(path)?;
-            geotiff::read(std::io::BufReader::new(f), &name)?
+            #[cfg(not(target_arch = "wasm32"))]
+            let r = geotiff::read_file(path, &name)?;
+            #[cfg(target_arch = "wasm32")]
+            let r = geotiff::read(std::io::BufReader::new(std::fs::File::open(path)?), &name)?;
+            r
         }
         "asc" => {
             if meta.len() > MAX_ASCII_BYTES {
@@ -414,9 +417,8 @@ pub fn read_path_with(path: &Path, subdataset: Option<&str>, crs: Option<&str>) 
 /// Reads the GeoTIFF GDAL converted `path` to, named and sourced as `path` (and its subdataset).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_converted(path: &Path, c: &gdal::Converted) -> Result<Raster> {
-    let f = std::fs::File::open(&c.path)?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("raster");
-    let mut r = geotiff::read(std::io::BufReader::new(f), stem)?;
+    let mut r = geotiff::read_file(&c.path, stem)?;
     if let Some(s) = &c.subdataset {
         r.name = format!("{stem} {}", gdal::short_name(s));
     }

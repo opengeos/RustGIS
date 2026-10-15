@@ -53,4 +53,5 @@ the selected layer's data source path.
 Pop-ups (Home › Navigate) choose which layers a click with Explore identifies: the topmost layer
 under the click, every visible layer, only selectable layers, only the layer selected in Layers, or
 nothing. The pop-up lists every feature under the click in those layers, overlapping ones included
-(up to 100): step through them with ‹ ›. The feature shown is the one selected.
+(up to 100): step through them with ‹ ›. The feature shown is the one selected. The magnifier in
+the pop-up's header zooms to it.

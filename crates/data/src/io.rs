@@ -1683,7 +1683,7 @@ fn is_outer<P>(r: &shapefile::PolygonRing<P>) -> bool {
 }
 
 /// Groups a flat list of rings (outer flag) into polygons: each hole joins the preceding outer ring.
-fn group_rings(rings: Vec<(Vec<Coord>, bool)>) -> Geometry {
+pub(crate) fn group_rings(rings: Vec<(Vec<Coord>, bool)>) -> Geometry {
     let mut polys: Vec<Vec<Vec<Coord>>> = Vec::new();
     for (ring, outer) in rings {
         match polys.last_mut() {

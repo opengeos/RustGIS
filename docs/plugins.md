@@ -390,10 +390,11 @@ any package themselves:
   before the command returns in `rustgis-cli plugins install` and `get`.
   `rustgis-cli plugins prepare <id>` and the `plugin.prepare` command make it on demand.
 - It uses [uv](https://github.com/astral-sh/uv), which RustGIS downloads once (a pinned version,
-  checked against its pinned SHA-256; `RUSTGIS_UV` names one to use instead). uv installs a
-  standalone Python of the version asked for and the packages in the requirements file, from
-  PyPI. Pythons and uv's cache are shared in `tools/` in the plugins folder; each plugin's
-  environment is in `envs/<id>/`.
+  checked against its pinned SHA-256; `RUSTGIS_UV` names one to use instead, which is then
+  trusted as it is, unchecked). uv installs a standalone Python of the version asked for and
+  the packages in the requirements file, from PyPI. Pythons and uv's cache are shared in
+  `tools/` in the plugins folder; each plugin's environment is in `envs/<id>/`. One
+  environment is made at a time per plugin, even across the app and `rustgis-cli`.
 - The environment is made again when the Python version or the requirements change (a plugin
   update), and removed with the plugin. Until it's ready, the plugin's calls fail with a
   message saying how to prepare it.

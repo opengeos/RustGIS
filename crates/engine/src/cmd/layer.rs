@@ -439,6 +439,15 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
             Err(e) => return Err(format!("{path}: {e}")),
         }
     }
+    // A large Shapefile is read in place, as a GeoPackage is; smaller ones are loaded whole.
+    #[cfg(not(target_arch = "wasm32"))]
+    if path.to_ascii_lowercase().ends_with(".shp")
+        && b(p, "stream").unwrap_or_else(|| {
+            rustgis_data::source::shp::record_count(Path::new(path)).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE)
+        })
+    {
+        return add_source(s, p, Origin::Path(path));
+    }
     // A PMTiles archive is a tile layer (raster or vector, as its header says).
     if path.to_ascii_lowercase().ends_with(".pmtiles") {
         if cfg!(target_arch = "wasm32") {

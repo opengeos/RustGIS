@@ -1153,6 +1153,9 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     let index = pp.index.min(results.saturating_sub(1));
     let info = if results > 1 { pp.info["results"][index].clone() } else { pp.info.clone() };
     let mut step: Option<usize> = None;
+    let mut zoom = false;
+    // The feature shown, as its layer id and feature id (a raster pixel has neither).
+    let shown = info["layerId"].as_u64().and_then(|id| u32::try_from(id).ok()).zip(info["fid"].as_u64());
     let layer = info["layer"].as_str().unwrap_or("").to_string();
     let mut attrs = info["attributes"].as_object().cloned().unwrap_or_default();
     // A picture value (a photo's thumbnail) shows as the picture, not as its text.
@@ -1209,6 +1212,15 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                                 if ui.add(egui::Button::new(tl!("×")).frame(false)).clicked() {
                                     close = true;
+                                }
+                                // A feature (not a raster pixel): zoom to it.
+                                if shown.is_some() {
+                                    let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                                    let ink = if resp.hovered() { t.text } else { t.icon };
+                                    crate::icons::paint(ui.painter(), r, "zoom_sel", ink, t.accent);
+                                    if resp.on_hover_text(tl!("Zoom To")).clicked() {
+                                        zoom = true;
+                                    }
                                 }
                                 // Several features identified: step through them.
                                 if results > 1 {
@@ -1292,6 +1304,20 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     });
     if let Some(l) = new_limit {
         ui.ctx().data_mut(|d| d.insert_temp(limit_id, l));
+    }
+    // Zooms to the feature shown, found by its id, as Zoom To Selection does: the selection and
+    // the undo history are left as they are.
+    if let (true, Some((id, fid))) = (zoom, shown) {
+        let extent = app
+            .session
+            .map()
+            .layer(id)
+            .and_then(|l| l.dataset.features.iter().find(|f| f.id == fid))
+            .and_then(|f| f.geometry.as_ref())
+            .map(|g| g.extent());
+        if let Some(e) = extent.filter(|e| !e.is_empty()) {
+            app.session.zoom_to(&e);
+        }
     }
     if close {
         app.map.popup = None;
