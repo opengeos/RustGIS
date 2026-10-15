@@ -540,7 +540,11 @@ pub(crate) trait FeatureSink {
 /// `"features"` isn't an array.
 pub(crate) fn stream_features(text: &str, sink: &mut dyn FeatureSink) -> std::result::Result<Map<String, Json>, serde_json::Error> {
     use serde::de::DeserializeSeed;
-    Streamed { sink }.deserialize(&mut serde_json::Deserializer::from_str(text))
+    let mut de = serde_json::Deserializer::from_str(text);
+    let rest = Streamed { sink }.deserialize(&mut de)?;
+    // Only whitespace may follow, as when read whole.
+    de.end()?;
+    Ok(rest)
 }
 
 /// The top level of a GeoJSON document: its members, but for `"features"`, which go to a sink.

@@ -56,12 +56,8 @@ impl Scan {
     /// One element of `"features"`, read from `len` bytes at `offset` (with the comma and
     /// whitespace before it).
     fn feature(&mut self, f: &Json, offset: u64, len: u64) {
-        // Only objects are features (read whole, other values become empty ones; they aren't
-        // kept here).
-        if !f.is_object() {
-            self.skipped += 1;
-            return;
-        }
+        // Other values than objects are kept as features without geometry or values, as when
+        // read whole, so features have the same ids both ways.
         // Every feature's properties count in the schema, those with unreadable geometry too.
         if let Some(props) = f.get("properties").and_then(Json::as_object) {
             for (k, v) in props {
@@ -130,7 +126,11 @@ impl GeoJsonSource {
         } else {
             let read = std::rc::Rc::new(std::cell::Cell::new(0u64));
             let file = Counting { inner: BufReader::with_capacity(BUFFER, File::open(path)?), read: read.clone() };
-            Top { scan: &mut scan, read }.deserialize(&mut serde_json::Deserializer::from_reader(file)).map_err(bad)?
+            let mut de = serde_json::Deserializer::from_reader(file);
+            let rest = Top { scan: &mut scan, read }.deserialize(&mut de).map_err(bad)?;
+            // Only whitespace may follow, as when read whole.
+            de.end().map_err(bad)?;
+            rest
         };
         if rest.get("type").and_then(Json::as_str) != Some("FeatureCollection") {
             return Err(DataError::Unsupported("only GeoJSON FeatureCollections are read in place".into()));

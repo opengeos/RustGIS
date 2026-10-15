@@ -931,6 +931,7 @@ fn geojson_in_place_matches_one_read_whole() {
         {"type":"Feature","properties":{"c":true,"d":null},"geometry":null},
         {"type":"Feature","properties":{"a":3},"geometry":{"type":"Polygon","coordinates":[[[0,0],[4,0],[4,4],[0,0]],[[1,1],[2,1],[2,2],[1,1]]]}},
         {"type":"Feature","properties":{"b":"t"},"geometry":{"type":"MultiLineString","coordinates":[[[0,0],[1,1]],[[5,5],[6,7]]]}},
+        null,
         {"type":"Feature","properties":{},"geometry":{"type":"MultiPoint","coordinates":[[9,9],[8,8]]}}
     ],"type":"FeatureCollection","name":"m"}"#;
     let docs = [("mixed.geojson", mixed.to_string()), ("parcels.json", crate::io::to_geojson(&export_sample()).to_string())];
@@ -955,10 +956,11 @@ fn geojson_in_place_matches_one_read_whole() {
         ("bare.geojson", r#"{"type":"Point","coordinates":[1,2]}"#),
         ("topo.json", r#"{"type":"Topology","objects":{},"arcs":[]}"#),
         ("list.json", "[1, 2]"),
+        ("trailing.geojson", r#"{"type":"FeatureCollection","features":[]} {"#),
     ] {
         let p = d.join(file);
         std::fs::write(&p, text).unwrap();
-        assert!(open_path(&p, None).is_err(), "{file}");
+        assert!(open_path(&p, None).is_err() && geojson::GeoJsonSource::open_with(&p, "x", 0).is_err(), "{file}");
     }
 }
 
