@@ -2189,6 +2189,10 @@ fn plugin_tools_run_off_the_session() {
     let r = run.run(&Control::default());
     plugin_complete(&mut s, run.id, r).unwrap();
     assert_eq!(s.run("gp.finish", &json!({"id": run.id})).unwrap_err(), "Cities was removed while Select Two ran");
+    // A run that won't complete can be forgotten.
+    let run = plugin_start(&mut s, "plugin:eng-bg/x", &json!({"input": "Cities"})).unwrap();
+    crate::cmd::gp::plugin_abandon(&mut s, run.id);
+    assert!(!crate::cmd::gp::plugin_waiting(&s, run.id));
     // A run of a project closed while it ran doesn't land in the next one.
     let run = plugin_start(&mut s, "plugin:eng-bg/m", &json!({"input": "Cities"})).unwrap();
     assert!(crate::cmd::gp::plugin_waiting(&s, run.id));

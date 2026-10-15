@@ -870,9 +870,8 @@ fn start_plugin_run(app: &mut RustGisApp, tool: &'static str, params: &Value, ct
             let id = run.id;
             let spawned = std::thread::Builder::new().name(tool.into()).spawn(move || {
                 let r = run.run(&ctl);
-                if let Ok(mut s) = out.lock() {
-                    *s = Some(r);
-                }
+                // Filled even when poisoned, or the pane would wait for it forever.
+                *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(r);
                 ctx.request_repaint();
             });
             match spawned {
@@ -880,7 +879,10 @@ fn start_plugin_run(app: &mut RustGisApp, tool: &'static str, params: &Value, ct
                     app.gp.plugin_run = Some(PluginJob { id, tool, slot, control });
                     app.gp.last = None;
                 }
-                Err(e) => app.gp.last = Some((false, vec![e.to_string()])),
+                Err(e) => {
+                    rustgis_engine::cmd::gp::plugin_abandon(&mut app.session, id);
+                    app.gp.last = Some((false, vec![e.to_string()]));
+                }
             }
         }
         Err(e) => app.gp.last = Some((false, vec![e])),
