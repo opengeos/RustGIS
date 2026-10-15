@@ -1027,10 +1027,6 @@ impl RustGisApp {
                 let (lon, lat) = (p.get("lon").cloned().unwrap_or(Value::Null), p.get("lat").cloned().unwrap_or(Value::Null));
                 let v = self.session.run("identify", &json!({"lon": lon, "lat": lat, "tolerancePx": 5}))?;
                 if let (false, Some(lon), Some(lat)) = (v.is_null(), lon.as_f64(), lat.as_f64()) {
-                    // The feature shown is the one selected, as with a click.
-                    if let (Some(id), Some(row)) = (v["layerId"].as_u64(), v["row"].as_u64()) {
-                        let _ = self.session.run("select.rows", &json!({"layer": id, "rows": [row]}));
-                    }
                     self.map.popup = Some(mapview::Popup { info: v, at: rustgis_engine::geom::Coord::new(lon, lat), index: 0 });
                 } else {
                     self.map.popup = None;

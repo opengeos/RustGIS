@@ -787,7 +787,11 @@ impl Map {
     ) -> Vec<(u32, usize)> {
         let (flat, key) = (self.flat(), self.projection.code());
         let mut out = Vec::new();
-        for l in &mut self.layers {
+        // Top first, as drawn: a higher depth priority is above whatever the order.
+        let mut order: Vec<usize> = (0..self.layers.len()).collect();
+        order.sort_by_key(|i| std::cmp::Reverse(self.layers.get(*i).map_or(0, |l| l.priority)));
+        for i in order {
+            let Some(l) = self.layers.get_mut(i) else { continue };
             if out.len() >= limit || (first_layer && !out.is_empty()) {
                 break;
             }
@@ -876,6 +880,15 @@ mod tests {
         // Only the top layer with a hit.
         assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, true, 100), vec![(above, 0)]);
         assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, true, 100), vec![(below, 2), (below, 0)]);
+        // A higher depth priority draws on top, whatever the order.
+        if let Some(l) = m.layers.iter_mut().find(|l| l.id == below) {
+            l.priority = 1;
+        }
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, true, 100), vec![(below, 2), (below, 0)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 100), vec![(below, 2), (below, 0), (above, 0)]);
+        if let Some(l) = m.layers.iter_mut().find(|l| l.id == below) {
+            l.priority = 0;
+        }
         // Features the definition query hides aren't hit.
         if let Some(l) = m.layers.iter_mut().find(|l| l.id == below) {
             l.definition_query = Some("n = 1".into());
