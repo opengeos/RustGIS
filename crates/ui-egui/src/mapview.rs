@@ -696,12 +696,19 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         // Sketch vertices snap to features when snapping is on.
         let c = if tool.creates() || matches!(tool, Tool::Graphic(_) | Tool::Measure | Tool::MeasureArea) { snapped(app, c) } else { c };
         match tool {
-            // Identifies without selecting: the pop-up outlines the feature it shows.
             Tool::Explore => {
                 let r = app.session.run("identify", &json!({"lon": c.x, "lat": c.y, "tolerancePx": 5}));
                 app.map.popup = match r {
-                    Ok(v) if !v.is_null() => Some(Popup { info: v, at: c, index: 0 }),
-                    _ => None,
+                    Ok(v) if !v.is_null() => {
+                        if let (Some(id), Some(row)) = (v["layerId"].as_u64(), v["row"].as_u64()) {
+                            let _ = app.session.run("select.rows", &json!({"layer": id, "rows": [row]}));
+                        }
+                        Some(Popup { info: v, at: c, index: 0 })
+                    }
+                    _ => {
+                        let _ = app.session.run("select.clear", &Value::Null);
+                        None
+                    }
                 };
             }
             Tool::Select => {
@@ -1163,10 +1170,6 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
         }
     };
     let p = ui.painter();
-    // The feature shown is outlined, so it's clear which of the overlapping ones it is.
-    if let (Some(id), Some(row)) = (info["layerId"].as_u64().and_then(|v| u32::try_from(v).ok()), info["row"].as_u64()) {
-        outline_feature(app, p, rect, id, row as usize);
-    }
     p.circle_filled(anchor, 6.0, Color32::from_rgb(0x00, 0xE5, 0xFF).gamma_multiply(0.5));
     p.circle_stroke(anchor, 6.0, Stroke::new(2.0, Color32::from_rgb(0x00, 0xA8, 0xC0)));
     // The popup is as tall as its rows, up to a limit; the corner grip sets the width and that
@@ -1294,47 +1297,11 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
         app.map.popup = None;
     } else if let (Some(i), Some(pp)) = (step, &mut app.map.popup) {
         pp.index = i;
-    }
-}
-
-/// The most vertices of one feature outlined for a pop-up, so a huge polygon stays quick to draw.
-const OUTLINE_VERTICES: usize = 50_000;
-
-/// Outlines a feature (layer id, row) on the map, as the identify pop-up does for the one it shows.
-fn outline_feature(app: &RustGisApp, p: &egui::Painter, rect: Rect, id: u32, row: usize) {
-    use rustgis_engine::data::Geometry;
-    let Some(g) = app.session.map().layer(id).and_then(|l| l.dataset.features.get(row)).and_then(|f| f.geometry.as_ref()) else { return };
-    let stroke = Stroke::new(2.5, Color32::from_rgb(0x00, 0xE5, 0xFF));
-    let mut budget = OUTLINE_VERTICES;
-    // A line broken where it leaves the view's projection (behind the globe); a ring is closed
-    // back to its first vertex when it isn't stored closed.
-    let mut line = |pts: &[Coord], ring: bool| {
-        let close = if ring && pts.len() > 2 && pts.first() != pts.last() { pts.first() } else { None };
-        let mut run: Vec<Pos2> = Vec::new();
-        for c in pts.iter().take(budget).chain(close) {
-            match lonlat_to_screen(app, rect, *c) {
-                Some(s) => run.push(s),
-                None if run.len() > 1 => {
-                    p.add(egui::Shape::line(std::mem::take(&mut run), stroke));
-                }
-                None => run.clear(),
-            }
+        // The feature shown is the one selected, as after the click.
+        let shown = &pp.info["results"][i];
+        if let (Some(id), Some(row)) = (shown["layerId"].as_u64(), shown["row"].as_u64()) {
+            let _ = app.session.run("select.rows", &json!({"layer": id, "rows": [row]}));
         }
-        budget = budget.saturating_sub(pts.len());
-        if run.len() > 1 {
-            p.add(egui::Shape::line(run, stroke));
-        }
-    };
-    let point = |c: &Coord| {
-        if let Some(s) = lonlat_to_screen(app, rect, *c) {
-            p.circle_stroke(s, 9.0, stroke);
-        }
-    };
-    match g {
-        Geometry::Point(c) => point(c),
-        Geometry::MultiPoint(v) => v.iter().take(OUTLINE_VERTICES).for_each(point),
-        Geometry::Line(parts) => parts.iter().for_each(|part| line(part.as_slice(), false)),
-        Geometry::Polygon(polys) => polys.iter().flatten().for_each(|ring| line(ring.as_slice(), true)),
     }
 }
 
