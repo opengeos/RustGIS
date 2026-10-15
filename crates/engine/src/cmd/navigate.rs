@@ -104,10 +104,20 @@ pub fn commands() -> Vec<C> {
             if n.is_empty() {
                 return Err("name is required".into());
             }
-            s.map_mut().name = n.chars().take(200).collect();
-            Ok(Value::Null)
+            let base: String = n.chars().take(200).collect();
+            // Unique among the other maps, so a name finds one map (tabs, Browser, map frames).
+            let active = s.project.active_map;
+            let taken = |n: &str| s.project.maps.iter().enumerate().any(|(j, m)| j != active && m.name.eq_ignore_ascii_case(n));
+            let mut name = base.clone();
+            let mut k = 1;
+            while taken(&name) {
+                k += 1;
+                name = format!("{base} {k}");
+            }
+            s.map_mut().name = name.clone();
+            Ok(json!({"name": name}))
         })
-        .params(r#"{"name": string (the active map's new name)}"#),
+        .params(r#"{"name": string (the active map's new name; a number is added when another map has it)}"#),
         C::new("map.remove", "Delete Map", "Browser", |s, p| {
             if s.project.maps.len() < 2 {
                 return Err("a project keeps at least one map".into());

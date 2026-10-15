@@ -170,7 +170,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     }
     animate(app, ui);
     // Side by side: the other map on the right, following this one when views are linked.
-    if let Some(other) = app.ws.split.filter(|i| *i != app.session.project.active_map && *i < app.session.project.maps.len()) {
+    let split = app.ws.split.as_deref().and_then(|n| app.session.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(n)));
+    if let Some(other) = split.filter(|i| *i != app.session.project.active_map) {
         let full = ui.available_rect_before_wrap();
         let right = Rect::from_min_max(pos2(full.center().x + 1.0, full.min.y), full.max);
         split_view(app, ui, other, right, &t);
@@ -1527,18 +1528,11 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
 }
 
-/// Deletes a map (`map.remove`) and fixes the view state that holds map positions: the split
-/// view's map moves down with the maps after it, and goes with the deleted one; the popup goes
-/// with the active map, even behind an open layout.
+/// Deletes a map (`map.remove`); the popup goes with the active map, even behind an open layout.
 pub(crate) fn delete_map(app: &mut RustGisApp, name: &str) {
-    let maps = &app.session.project.maps;
-    let Some(i) = maps.iter().position(|m| m.name.eq_ignore_ascii_case(name)) else { return };
-    let was_active = i == app.session.project.active_map;
-    if app.run("map.remove", json!({"name": name})).is_err() {
-        return;
-    }
-    app.ws.split = app.ws.split.and_then(|s| if s == i { None } else { Some(if s > i { s - 1 } else { s }) });
-    if was_active {
+    let p = &app.session.project;
+    let was_active = p.maps.get(p.active_map).is_some_and(|m| m.name.eq_ignore_ascii_case(name));
+    if app.run("map.remove", json!({"name": name})).is_ok() && was_active {
         app.map.popup = None;
     }
 }

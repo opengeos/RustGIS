@@ -5367,3 +5367,26 @@ fn removing_another_map_or_layout_keeps_the_one_in_view() {
     s.run("layout.remove", &json!({"name": "L4"})).unwrap();
     assert_eq!(open(&s), None, "with the map in view, it stays in view");
 }
+
+/// A map's name finds one map (tabs, Browser, map frames): renaming to another map's name adds a
+/// number, and a map keeps its own name in another case.
+#[test]
+fn map_rename_keeps_map_names_unique() {
+    let mut s = world();
+    let first = s.map().name.clone();
+    s.run("map.new", &json!({"name": "B"})).unwrap();
+    let r = s.run("map.rename", &json!({"name": first.to_uppercase()})).unwrap();
+    assert_eq!(r["name"], format!("{} 2", first.to_uppercase()));
+    s.run("map.new", &json!({"name": "C"})).unwrap();
+    assert_eq!(s.run("map.rename", &json!({"name": format!("{} 2", first)})).unwrap()["name"], format!("{first} 2 2"));
+    let own = format!("{} 2 2", first.to_lowercase());
+    assert_eq!(s.run("map.rename", &json!({"name": own})).unwrap()["name"], own.as_str(), "its own name, in another case");
+    let names: Vec<String> = s.project.maps.iter().map(|m| m.name.to_lowercase()).collect();
+    let mut unique = names.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), names.len(), "{names:?}");
+    for p in [json!({}), json!({"name": "  "}), json!({"name": 3})] {
+        assert!(s.run("map.rename", &p).is_err(), "{p}");
+    }
+}
