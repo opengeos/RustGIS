@@ -666,7 +666,8 @@ fn python_environment_preparations_wait_for_the_lock() {
     }
     std::thread::sleep(std::time::Duration::from_millis(200));
     assert!(!prep.is_finished(), "it waits while the lock is held");
-    assert_eq!(*said.lock().unwrap(), ["Waiting for another preparation of this environment to finish"]);
+    let waiting = said.lock().unwrap().clone();
+    assert_eq!(waiting, ["Waiting for another preparation of this environment to finish"]);
 
     // Meanwhile, "the other preparation" makes the environment, then lets go.
     let python = crate::pyenv::python_in(&env);
@@ -679,7 +680,8 @@ fn python_environment_preparations_wait_for_the_lock() {
     std::fs::write(env.join(".rustgis-env"), made_for).unwrap();
     drop(held);
     assert_eq!(prep.join().unwrap().unwrap(), python);
-    assert_eq!(said.lock().unwrap().len(), 1, "nothing else was done: {:?}", said.lock().unwrap());
+    let said = said.lock().unwrap().clone();
+    assert_eq!(said.len(), 1, "nothing else was done: {said:?}");
     crate::unload("pyenv-wait");
     let _ = std::fs::remove_dir_all(&plugins);
 }
