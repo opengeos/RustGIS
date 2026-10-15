@@ -241,6 +241,10 @@ pub fn reaches(spec: &C, params: &Value) -> Option<Reach> {
     if spec.id == "gp.run" && ps(params, "tool").and_then(rustgis_analysis::tool).is_some_and(super::gp::is_geolibre_tool) {
         return Some(Reach::Files);
     }
+    // So do tools with a file parameter (a plugin's `file`): they're handed the file.
+    if spec.id == "gp.run" && ps(params, "tool").and_then(rustgis_analysis::tool).is_some_and(super::gp::reads_files) {
+        return Some(Reach::Files);
+    }
     // Commands that fetch from an address read and write no files, so `files` doesn't come into
     // it (their addresses would look like paths to the check below).
     if super::tiles::NETWORK.contains(&spec.id) {

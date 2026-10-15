@@ -1854,6 +1854,7 @@ Zoom to the whole world.	გადიდება მთელ მსოფლ�
 Zoom to Tokyo	გადიდება ტოკიოზე
 Zoom To World	გადიდება მსოფლიოზე
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} შეიცვალა ინსტალაციის შემდეგ; დააყენეთ ხელახლა დანამატების მენეჯერიდან.
+{name} is larger than {mb} MB	{name} {mb} მბ-ზე დიდია
 {name} was withdrawn from the plugin registry and has been turned off.	{name} დანამატების რეესტრიდან გაუქმდა და გამორთულია.
 {name} was withdrawn from the plugin registry: {reason}	{name} დანამატების რეესტრიდან გაუქმდა: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: ჩამოტვირთული რეესტრს არ ემთხვევა; არ დაყენებულა.

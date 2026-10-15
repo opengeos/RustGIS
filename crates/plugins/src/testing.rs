@@ -13,6 +13,9 @@
 //! - `e` (error): fails with "nope".
 //! - `m` (make, a tool): returns a point layer "Made" and a message.
 //! - `x` (select, a tool): selects rows 0 and 2 of the layer "Cities".
+//! - `r` (read, a tool with a `file` parameter, declared with the `files` permission): returns
+//!   what `m` does. A request carrying files has `files` before `id` (byte 15 is then the `"`
+//!   closing `"files"`), so it's answered the same way.
 
 use std::io::Write;
 
@@ -52,6 +55,8 @@ const WAT: &str = r#"
     (if (i32.eq (local.get $c) (i32.const 103)) (then (return (i64.const 0x7fff000000000010))))
     (if (i32.eq (local.get $c) (i32.const 111)) (then (drop (memory.grow (i32.const 65000))) unreachable))
     (if (i32.eq (local.get $c) (i32.const 109)) (then (return (call $reply (i32.const 256) (i32.const 195)))))
+    (if (i32.or (i32.eq (local.get $c) (i32.const 114)) (i32.eq (local.get $c) (i32.const 34)))
+      (then (return (call $reply (i32.const 256) (i32.const 195)))))
     (if (i32.eq (local.get $c) (i32.const 120)) (then (return (call $reply (i32.const 1024) (i32.const 52)))))
     (call $reply (i32.const 128) (i32.const 16)))
 )
@@ -64,7 +69,7 @@ pub fn wasm() -> Vec<u8> {
 
 /// A manifest for the test module, with the given id and permissions.
 pub fn manifest(id: &str, permissions: &[&str]) -> String {
-    serde_json::json!({
+    let mut m = serde_json::json!({
         "id": id,
         "name": format!("Test {id}"),
         "version": "1.0.0",
@@ -87,8 +92,17 @@ pub fn manifest(id: &str, permissions: &[&str]) -> String {
             {"id": "x", "name": "Select Two", "params": [{"name": "input", "label": "Input", "kind": "layer"}]}
         ],
         "i18n": {"de": {"Hello": "Hallo"}}
-    })
-    .to_string()
+    });
+    // A file parameter needs `files`.
+    if permissions.contains(&"files")
+        && let Some(tools) = m["tools"].as_array_mut()
+    {
+        tools.push(serde_json::json!({"id": "r", "name": "Read File", "params": [
+            {"name": "input", "label": "Input", "kind": "layer"},
+            {"name": "model", "label": "Model", "kind": "file", "required": true, "extensions": ["nc", "nc4"]}
+        ]}));
+    }
+    m.to_string()
 }
 
 /// A `.rgplugin` package of the test module.

@@ -414,8 +414,27 @@ pub fn run_tool(s: &mut Session, tool: &str, params: &Value) -> CmdResult {
     }
     drop(inputs);
     let millis = now_ms().saturating_sub(t0);
-    let name = rustgis_analysis::tool(&tool).map(|t| t.name).unwrap_or("Tool").to_string();
-    apply(s, name, params, res, millis)
+    let spec = rustgis_analysis::tool(&tool);
+    let name = spec.map(|t| t.name).unwrap_or("Tool").to_string();
+    apply(s, name, recorded(spec, params), res, millis)
+}
+
+/// Whether a tool reads a file a parameter names (a plugin's `file`).
+pub fn reads_files(spec: &rustgis_analysis::ToolSpec) -> bool {
+    spec.params.iter().any(|p| p.kind == rustgis_analysis::ParamKind::Path)
+}
+
+/// The parameters as the history keeps them: a file picked in the browser (`{"name", "data"}`)
+/// by its name, not its contents.
+fn recorded(spec: Option<&rustgis_analysis::ToolSpec>, mut params: Value) -> Value {
+    for p in spec.into_iter().flat_map(|t| t.params).filter(|p| p.kind == rustgis_analysis::ParamKind::Path) {
+        if let Some(v) = params.get_mut(p.name)
+            && v.get("data").is_some()
+        {
+            *v = v.get("name").cloned().unwrap_or(Value::Null);
+        }
+    }
+    params
 }
 
 /// Adds a tool's result to the map and the history.

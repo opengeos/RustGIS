@@ -1854,6 +1854,7 @@ Zoom to the whole world.	缩放至全世界。
 Zoom to Tokyo	缩放至东京
 Zoom To World	缩放至世界
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} 在安装后已被更改；请从插件管理器重新安装。
+{name} is larger than {mb} MB	{name} 大于 {mb} MB
 {name} was withdrawn from the plugin registry and has been turned off.	{name} 已从插件库下架，并已被停用。
 {name} was withdrawn from the plugin registry: {reason}	{name} 已从插件库下架：{reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}：下载的内容与插件库不符，未安装。

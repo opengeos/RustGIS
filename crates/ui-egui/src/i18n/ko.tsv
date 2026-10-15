@@ -1854,6 +1854,7 @@ Zoom to the whole world.	전 세계로 확대/축소합니다.
 Zoom to Tokyo	도쿄로 확대
 Zoom To World	세계로 확대/축소
 {id} changed since it was installed; install it again from the Plugin Manager.	{id}이(가) 설치 후 변경되었습니다. 플러그인 관리자에서 다시 설치하세요.
+{name} is larger than {mb} MB	{name}의 크기가 {mb}MB를 초과합니다
 {name} was withdrawn from the plugin registry and has been turned off.	{name}이(가) 플러그인 레지스트리에서 철회되어 비활성화되었습니다.
 {name} was withdrawn from the plugin registry: {reason}	{name}이(가) 플러그인 레지스트리에서 철회되었습니다: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: 다운로드한 파일이 레지스트리와 일치하지 않아 설치하지 않았습니다.

@@ -1854,6 +1854,7 @@ Zoom to the whole world.	Zoomer sur le monde entier.
 Zoom to Tokyo	Zoomer sur Tokyo
 Zoom To World	Zoomer sur le monde
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} a été modifiée depuis son installation ; réinstallez-la depuis le Gestionnaire d'extensions.
+{name} is larger than {mb} MB	{name} dépasse {mb} Mo
 {name} was withdrawn from the plugin registry and has been turned off.	{name} a été retirée du registre des extensions et a été désactivée.
 {name} was withdrawn from the plugin registry: {reason}	{name} a été retirée du registre des extensions : {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name} : le téléchargement ne correspond pas au registre ; l'extension n'a pas été installée.

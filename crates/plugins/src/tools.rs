@@ -1,5 +1,6 @@
 //! Plugin tools in the Tools pane: each enabled plugin's tools join the external tools
-//! (under "Plugins ›" toolboxes) and run in the plugin's module with their layers as GeoJSON.
+//! (under "Plugins ›" toolboxes) and run in the plugin's module with their layers as GeoJSON
+//! and their files as base64.
 
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -15,6 +16,10 @@ pub const SOURCE: &str = "plugins";
 
 /// The most features a tool may return.
 const MAX_FEATURES: usize = 5_000_000;
+
+/// The largest file a `file` parameter hands a tool. The request carries it as base64 (a third
+/// larger), within the module's message limit.
+pub const MAX_FILE: usize = 64 * 1024 * 1024;
 
 /// Adds plugin tools to the geoprocessing tools. Cheap: the list is built when first needed.
 pub fn register() {
@@ -55,6 +60,7 @@ fn kind(decl: &crate::manifest::ParamDecl) -> ParamKind {
             ParamKind::Choice(Box::leak(choices.into_boxed_slice()))
         }
         "bool" => ParamKind::Bool,
+        "file" => ParamKind::Path,
         _ => ParamKind::Text,
     }
 }
@@ -153,14 +159,90 @@ fn run(spec: &ToolSpec, inputs: &dyn Inputs, params: &Value) -> Result<ToolResul
             layers.insert(name.to_string(), layer_geojson(inputs, name)?);
         }
     }
-    let request =
-        json!({"abi": crate::manifest::ABI, "kind": "tool", "id": tid, "params": params, "layers": layers, "lang": crate::language()});
+    let request = request(decl, params, layers)?;
     let mut log = Messages(Vec::new());
     let reply = crate::call(&plugin, &mut log, &request, crate::runtime::TOOL_FUEL).map_err(|e| format!("{}: {e}", decl.name))?;
     let mut result = output(&reply, &decl.name)?;
     log.0.append(&mut result.messages);
     result.messages = log.0;
     Ok(result)
+}
+
+/// The request running the tool `decl`: its parameters and layers, and its files beside them
+/// (`files`, by parameter), the parameters keeping only the files' names.
+pub(crate) fn request(decl: &crate::manifest::ToolDecl, params: &Value, layers: Map<String, Value>) -> Result<Value, String> {
+    let mut params = params.clone();
+    let mut files = Map::new();
+    for p in decl.params.iter().filter(|p| p.kind == "file") {
+        let Some(v) = params.get(&p.name).filter(|v| !v.is_null() && v.as_str() != Some("")) else { continue };
+        let file = file_input(v).map_err(|e| format!("{}: {e}", p.label))?;
+        params[&p.name] = file["name"].clone();
+        files.insert(p.name.clone(), file);
+    }
+    let mut request =
+        json!({"abi": crate::manifest::ABI, "kind": "tool", "id": decl.id, "params": params, "layers": layers, "lang": crate::language()});
+    if !files.is_empty() {
+        request["files"] = Value::Object(files);
+    }
+    Ok(request)
+}
+
+/// What a `file` parameter's value names, as `{"name", "data"}` with the contents in base64. The
+/// value is a path (the desktop and the command line), or a file the user picked in the
+/// browser, which has no paths: already `{"name", "data"}`.
+fn file_input(v: &Value) -> Result<Value, String> {
+    use base64::Engine;
+    if let Some(data) = v.get("data") {
+        let data = data.as_str().ok_or("the file's data must be base64 text")?;
+        if data.len() > MAX_FILE.div_ceil(3) * 4 {
+            return Err(too_big());
+        }
+        let name = v.get("name").and_then(Value::as_str).map(base_name).filter(|n| !n.is_empty()).unwrap_or("file");
+        return Ok(json!({"name": name, "data": data}));
+    }
+    let path = v.as_str().ok_or("give a file path")?;
+    let bytes = read_file(path)?;
+    Ok(json!({"name": base_name(path), "data": base64::engine::general_purpose::STANDARD.encode(bytes)}))
+}
+
+fn too_big() -> String {
+    format!("the file is larger than {} MB", MAX_FILE / (1024 * 1024))
+}
+
+/// The last part of a path, `/` or `\` separated.
+fn base_name(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_file(path: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    if !f.metadata().map_err(|e| format!("{path}: {e}"))?.is_file() {
+        return Err(format!("{path} is not a file"));
+    }
+    // Read one byte past the limit, so a file that grew since it was picked is still caught.
+    let mut bytes = Vec::new();
+    f.take(MAX_FILE as u64 + 1).read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+    if bytes.len() > MAX_FILE {
+        return Err(too_big());
+    }
+    Ok(bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_file(path: &str) -> Result<Vec<u8>, String> {
+    Err(format!("{path}: the browser can't read a file by its path; pick it with Browse"))
+}
+
+/// The extensions a plugin tool's `file` parameter offers in the file picker (empty for any
+/// file, and for a parameter that isn't a plugin's file).
+pub fn file_extensions(tool: &str, param: &str) -> Vec<String> {
+    let Some((pid, tid)) = split_id(tool) else { return Vec::new() };
+    crate::get(pid)
+        .and_then(|p| p.manifest.tools.iter().find(|t| t.id == tid)?.params.iter().find(|p| p.name == param && p.kind == "file").cloned())
+        .map(|p| p.extensions)
+        .unwrap_or_default()
 }
 
 /// Reads a dataset a tool returned: `{"name": "...", "geojson": {FeatureCollection}}`.

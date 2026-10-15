@@ -1854,6 +1854,7 @@ Zoom to the whole world.	Zoomen naar de hele wereld.
 Zoom to Tokyo	Zoomen naar Tokio
 Zoom To World	Zoomen naar wereld
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} is gewijzigd sinds de installatie; installeer het opnieuw via Pluginbeheer.
+{name} is larger than {mb} MB	{name} is groter dan {mb} MB
 {name} was withdrawn from the plugin registry and has been turned off.	{name} is uit het pluginregister teruggetrokken en is uitgeschakeld.
 {name} was withdrawn from the plugin registry: {reason}	{name} is uit het pluginregister teruggetrokken: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: de download komt niet overeen met het register; de plugin is niet geïnstalleerd.

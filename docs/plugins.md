@@ -53,7 +53,8 @@ described below, and RustGIS checks each one:
 - With the **`edit`** permission, it can change the project. It can run commands that edit it and
   add layers. A plugin command that changes the project is one undo step, and it is rolled back
   if the command fails.
-- With the **`files`** permission, it can run commands that read or write files the user names.
+- With the **`files`** permission, it can run commands that read or write files the user names,
+  and its tools can take a file the user picks (a [`file` parameter](#file-parameters)).
 - With the **`network`** permission (and `edit`), it can add web tile layers (`map.addTiles`).
   The map then loads tiles from the addresses the plugin gave, and an address can carry what the
   plugin read from the project, so this is a permission of its own. A command that would bring
@@ -142,12 +143,33 @@ cargo build --release --target wasm32-unknown-unknown
 - `commands[].icon`: the name of one of RustGIS's own icons (`stats`, `zoom_full`, `bookmark`,
   `buffer`…), or a puzzle piece when it isn't one.
 - Tool parameter `kind`s: `layer`, `vectorLayer`, `polygonLayer`, `pointLayer`, `field`,
-  `numericField`, `number`, `text`, `choice` (with `choices`) and `bool`.
+  `numericField`, `number`, `text`, `choice` (with `choices`), `bool` and `file` (see
+  [File parameters](#file-parameters)).
 - `i18n` translates the plugin's own text into the interface language, by language code (`de`,
   `zh-CN`…). See [Translations](#translations).
 
 A package is a zip archive named `<id>-<version>.rgplugin`. It holds `plugin.json` and the module
 at its root, or inside one top-level folder. Packages are at most 64 MB, and modules at most 48 MB.
+
+### File parameters
+
+A tool can read a file the user picks, such as a NetCDF model run, with a `file` parameter.
+The plugin needs the `files` permission:
+
+```json
+{ "name": "model", "label": "Model output", "kind": "file", "required": true, "extensions": ["nc", "nc4"] }
+```
+
+- The Tools pane shows a path box with a **Browse** button. `extensions` (without the dot; up
+  to 16) filters the file picker; leave it out for any file.
+- On the desktop and the command line the value is a path, and RustGIS reads the file. In the
+  web app, which has no paths, the user picks the file and its contents go with the run. A
+  script can do the same with `{"name": "run.nc", "data": base64}`.
+- The tool gets the file in the request's `files`, by parameter name, as
+  `{"name": "run.nc", "data": base64}`. The parameter itself holds just the file name.
+- Files are at most 64 MB. The Geoprocessing history keeps the file's name, not its contents.
+- RustGIS versions before file parameters refuse a plugin that has one, so set
+  `minRustgisVersion` to the first version with them.
 
 ### Translations
 
@@ -224,7 +246,7 @@ Inside a request, `host::call(op, params)` sends one of these to RustGIS:
 `rustgis-cli commands` lists every command id and its parameters.
 
 Tools work differently. A tool receives its layer parameters' features as GeoJSON (only the
-selected features when a layer has a selection). It returns new layers, standalone tables or a
+selected features when a layer has a selection), and its `file` parameters' files. It returns new layers, standalone tables or a
 selection, plus messages for the Geoprocessing history. RustGIS adds the results as it does for
 built-in tools, with undo. Tools can log, but they make no host requests.
 
@@ -250,7 +272,9 @@ The module exports:
 
 Requests are `{"abi": 1, "kind": "command" | "tool", "id": "...", "params": {...}, "layers": {...}, "lang": "de"}`.
 `lang` is the interface language's code (`en` for English).
-Tools also get `layers`, which maps each layer's name to its FeatureCollection. A tool's `ok`
+Tools also get `layers`, which maps each layer's name to its FeatureCollection, and, when
+they have `file` parameters, `files`, which maps each one's name to `{"name", "data"}` with the
+file's contents in base64. A tool's `ok`
 value is `{"layers": [{"name", "geojson"}], "tables": [...], "selection": {"layer", "rows"},
 "messages": [...]}`.
 

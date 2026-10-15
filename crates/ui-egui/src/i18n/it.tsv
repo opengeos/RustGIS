@@ -1854,6 +1854,7 @@ Zoom to the whole world.	Zoom sul mondo intero.
 Zoom to Tokyo	Zoom su Tokyo
 Zoom To World	Zoom al mondo
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} è cambiato dopo l'installazione; installalo di nuovo dal Gestore plugin.
+{name} is larger than {mb} MB	{name} supera i {mb} MB
 {name} was withdrawn from the plugin registry and has been turned off.	{name} è stato ritirato dal registro dei plugin ed è stato disattivato.
 {name} was withdrawn from the plugin registry: {reason}	{name} è stato ritirato dal registro dei plugin: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: il download non corrisponde al registro; non è stato installato.

@@ -2050,6 +2050,29 @@ fn plugin_tools_run_in_the_geoprocessing_pane() {
 }
 
 #[test]
+fn plugin_file_parameters_reach_files_and_stay_out_of_the_history() {
+    use crate::cmd::plugins::{Reach, reaches};
+    let mut s = world();
+    plugin("eng-file", &["files"]);
+    let run = json!({"tool": "plugin:eng-file/r", "params": {"model": "/data/pism.nc"}});
+    // Running a tool that reads a file reaches files (the assistant asks first)...
+    let gp = s.registry.get("gp.run").copied().unwrap();
+    assert!(matches!(reaches(&gp, &run), Some(Reach::Files)));
+    assert!(reaches(&gp, &json!({"tool": "plugin:eng-file/m", "params": {"input": "Cities"}})).is_none());
+    // ...so a plugin without `files` can't run it.
+    plugin("eng-file-edit", &["edit"]);
+    let e = forward(&mut s, "eng-file-edit", "gp.run", run).unwrap_err();
+    assert!(e.contains("'files' permission"), "{e}");
+    // A file picked in the browser travels with its contents, but the history keeps its name.
+    let picked = json!({"tool": "plugin:eng-file/r", "params": {"model": {"name": "pism.nc", "data": "Q0RGAQ=="}}});
+    s.run("gp.run", &picked).unwrap();
+    let h = s.project.gp_history.last().unwrap();
+    assert!(h.ok && h.params["model"] == "pism.nc", "{h:?}");
+    rustgis_plugins::unload("eng-file");
+    rustgis_plugins::unload("eng-file-edit");
+}
+
+#[test]
 fn plugins_install_and_uninstall_from_files() {
     isolate_plugins();
     let mut s = Session::new(Project::default());

@@ -295,3 +295,49 @@ fn large_registries_are_read_quickly() {
     assert_eq!(v.len(), 20_000);
     assert!(t0.elapsed() < std::time::Duration::from_secs(5), "{:?}", t0.elapsed());
 }
+
+#[test]
+fn file_parameters_need_files_and_hand_tools_the_file() {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    // Declared only with `files`, and with plain extensions.
+    let mut m: Value = serde_json::from_str(&testing::manifest("file-param", &["files"])).unwrap();
+    assert!(Manifest::parse(&m.to_string()).is_ok());
+    m["permissions"] = json!([]);
+    assert!(Manifest::parse(&m.to_string()).unwrap_err().contains("'files' permission"));
+    m["permissions"] = json!(["files"]);
+    for bad in [json!([".nc"]), json!([""]), json!(["n c"]), json!(vec!["nc"; 17])] {
+        m["tools"][2]["params"][1]["extensions"] = bad.clone();
+        assert!(Manifest::parse(&m.to_string()).unwrap_err().contains("extensions"), "{bad}");
+    }
+    let m = Manifest::parse(&testing::manifest("file-param", &["files"])).unwrap();
+    let decl = m.tools.iter().find(|t| t.id == "r").unwrap();
+
+    // A path is read; the parameter keeps the file's name and the contents go beside it.
+    let dir = std::env::temp_dir().join(format!("rustgis-test-file-param-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("model.nc");
+    std::fs::write(&path, b"CDF\x01").unwrap();
+    let r = crate::tools::request(decl, &json!({"model": path.display().to_string()}), Default::default()).unwrap();
+    assert_eq!(r["params"]["model"], "model.nc");
+    assert_eq!(r["files"]["model"]["name"], "model.nc");
+    assert_eq!(b64.decode(r["files"]["model"]["data"].as_str().unwrap()).unwrap(), b"CDF\x01");
+    // A file picked in the browser comes with its contents, its name stripped of any folder.
+    let picked = json!({"model": {"name": "C:\\runs\\pism.nc", "data": b64.encode("abc")}});
+    let r = crate::tools::request(decl, &picked, Default::default()).unwrap();
+    assert_eq!(r["params"]["model"], "pism.nc");
+    assert_eq!(r["files"]["model"]["data"], b64.encode("abc"));
+    // No file, no `files`; a missing file, a folder, a non-text value or too large a file is
+    // an error, never a crash.
+    assert!(crate::tools::request(decl, &json!({}), Default::default()).unwrap().get("files").is_none());
+    for bad in [json!(dir.join("missing.nc").display().to_string()), json!(dir.display().to_string()), json!(7), json!({"data": 7})] {
+        assert!(crate::tools::request(decl, &json!({"model": bad}), Default::default()).is_err(), "{bad}");
+    }
+    let huge = "A".repeat(crate::tools::MAX_FILE.div_ceil(3) * 4 + 4);
+    assert!(
+        crate::tools::request(decl, &json!({"model": {"name": "big.nc", "data": huge}}), Default::default())
+            .unwrap_err()
+            .contains("larger")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
