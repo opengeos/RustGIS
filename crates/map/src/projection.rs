@@ -408,6 +408,7 @@ mod tests {
         // Local views are accepted exactly where they can be drawn (`aeqd` is native-only, Cargo.toml).
         let local = crate::Projection::from_code("local:12.5,41.9");
         assert_eq!(local.is_ok(), local_views_supported(), "{local:?}");
+        // Pinned to the target on purpose, so the probe can't drift from the Cargo.toml split unnoticed.
         assert_eq!(local_views_supported(), !cfg!(target_arch = "wasm32"), "aeqd on native targets only");
     }
 
