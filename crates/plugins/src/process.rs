@@ -53,7 +53,10 @@ impl Spec {
     /// The spec for the manifest's `run` on this platform, in `dir`.
     pub fn new(argv: &[String], dir: &Path) -> Result<Spec, String> {
         let (program, args) = argv.split_first().ok_or("'run' names no program")?;
-        Ok(Spec { program: program.clone(), args: args.to_vec(), dir: dir.to_path_buf(), env: Vec::new() })
+        // Absolute: the program starts in the folder, so a relative folder would be followed
+        // twice (`./plugin/plugin/bin/tool`).
+        let dir = std::path::absolute(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        Ok(Spec { program: program.clone(), args: args.to_vec(), dir, env: Vec::new() })
     }
 
     /// The program to start: a path relative to the plugin's folder, or a name for `PATH`.

@@ -154,10 +154,23 @@ fn unpack_to(bytes: &[u8], sha256: &str, target: &Path) -> Result<(), String> {
     let tmp = parent.join(format!(".{name}-{nanos}"));
     let res = extract(bytes, &tmp).and_then(|_| {
         rustgis_data::io::write_atomic(&tmp.join(UNPACKED_FROM), sha256.as_bytes()).map_err(|e| e.to_string())?;
-        if target.exists() {
-            std::fs::remove_dir_all(target).map_err(|e| format!("{}: {e}", target.display()))?;
+        // The old copy is moved aside, not deleted, until the new one is in place: a failure
+        // puts it back, so there is always a folder to run from.
+        let old = parent.join(format!(".{name}-{nanos}-old"));
+        let had_old = target.exists();
+        if had_old {
+            std::fs::rename(target, &old).map_err(|e| format!("{}: {e}", target.display()))?;
         }
-        std::fs::rename(&tmp, target).map_err(|e| format!("{}: {e}", target.display()))
+        if let Err(e) = std::fs::rename(&tmp, target) {
+            if had_old {
+                let _ = std::fs::rename(&old, target);
+            }
+            return Err(format!("{}: {e}", target.display()));
+        }
+        if had_old {
+            let _ = std::fs::remove_dir_all(&old);
+        }
+        Ok(())
     });
     if res.is_err() {
         let _ = std::fs::remove_dir_all(&tmp);
@@ -224,10 +237,12 @@ pub fn install_bytes(bytes: &[u8]) -> Result<Arc<Plugin>, String> {
     // Check and compile it, keep it, then load it: a package that doesn't load isn't kept, and
     // one that can't be kept isn't loaded.
     let plugin = crate::prepare(pkg, &path.display().to_string())?;
+    // The package first: if unpacking then fails, the old copy keeps running now, and the next
+    // start unpacks the package that was installed.
+    rustgis_data::io::write_atomic(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     if let Some(target) = &unpack_into {
         unpack_to(bytes, &sha256, target)?;
     }
-    rustgis_data::io::write_atomic(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(crate::register(plugin))
 }
 

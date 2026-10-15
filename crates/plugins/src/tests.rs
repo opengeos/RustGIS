@@ -413,6 +413,10 @@ fn process_plugins_that_hang_are_stopped() {
         }
         assert!(rustix::process::test_kill_process(pid).is_err(), "the grandchild {pid:?} still runs");
     }
+    // A plugin folder given by a relative path still finds its program in it.
+    let rel = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let spec = crate::process::Spec::new(&["rustgis-no-such-program".to_string()], std::path::Path::new(".")).unwrap();
+    assert!(spec.dir.is_absolute() && spec.dir.ends_with(rel.file_name().unwrap()), "{:?}", spec.dir);
     // A program that can't be started is an error too.
     let missing = crate::process::Spec::new(&["rustgis-no-such-program".to_string()], &dir).unwrap();
     assert!(crate::process::call(&missing, &mut Recorder::default(), &req, None).unwrap_err().contains("couldn't start"));
