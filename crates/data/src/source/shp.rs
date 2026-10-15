@@ -424,9 +424,15 @@ fn value(c: &Column, b: &[u8]) -> Value {
             let t = text();
             if t.is_empty() { Value::Null } else { Value::Text(t) }
         }
+        // A whole-number column's values as integers, exactly (its at most 18 digits fit an i64);
+        // a value that isn't one is kept as a number rather than lost.
         b'N' | b'F' => match number() {
-            Some(v) if c.out == FieldType::Integer && v.fract() == 0.0 && v.abs() < 9.0e15 => Value::Int(v as i64),
-            Some(_) if c.out == FieldType::Integer => Value::Null,
+            Some(_) if c.out == FieldType::Integer => {
+                match std::str::from_utf8(trimmed(b)).ok().and_then(|t| t.strip_prefix('+').unwrap_or(t).parse::<i64>().ok()) {
+                    Some(i) => Value::Int(i),
+                    None => number().map_or(Value::Null, Value::Float),
+                }
+            }
             Some(v) => Value::Float(v),
             None => Value::Null,
         },
