@@ -1297,6 +1297,11 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
         app.map.popup = None;
     } else if let (Some(i), Some(pp)) = (step, &mut app.map.popup) {
         pp.index = i;
+        // The feature shown is the one selected, so it's clear which of the overlapping ones it is.
+        let shown = &pp.info["results"][i];
+        if let (Some(id), Some(row)) = (shown["layerId"].as_u64(), shown["row"].as_u64()) {
+            let _ = app.session.run("select.rows", &json!({"layer": id, "rows": [row]}));
+        }
     }
 }
 

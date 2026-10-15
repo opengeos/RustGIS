@@ -773,25 +773,28 @@ impl Map {
         None
     }
 
-    /// The topmost feature under a point in every visible layer, top layer first.
-    pub fn hits_at(&mut self, p: Coord, tol: f64, scale: f64) -> Vec<(u32, usize)> {
+    /// Every feature under a point in the visible layers `keep` accepts: top layer first and, in
+    /// a layer, the one drawn on top first. At most `limit` of them.
+    pub fn hits_at(&mut self, p: Coord, tol: f64, scale: f64, keep: impl Fn(&Layer) -> bool, limit: usize) -> Vec<(u32, usize)> {
         let (flat, key) = (self.flat(), self.projection.code());
         let mut out = Vec::new();
         for l in &mut self.layers {
-            if !l.visible || !l.in_scale_range(scale) {
+            if out.len() >= limit {
+                break;
+            }
+            if !l.visible || !l.in_scale_range(scale) || !keep(l) {
                 continue;
             }
             let rows = l.visible_rows();
             let id = l.id;
             let proj = l.projected_in(&flat, &key);
-            if let Some(row) = proj
+            let hits = proj
                 .iter()
                 .enumerate()
                 .rev()
-                .find_map(|(row, g)| (rows.get(row) == Some(&true) && g.as_ref().is_some_and(|g| g.hit(p, tol))).then_some(row))
-            {
-                out.push((id, row));
-            }
+                .filter(|(row, g)| rows.get(*row) == Some(&true) && g.as_ref().is_some_and(|g| g.hit(p, tol)))
+                .map(|(row, _)| (id, row));
+            out.extend(hits.take(limit - out.len()));
         }
         out
     }
@@ -847,5 +850,24 @@ mod tests {
         assert_eq!(m.hits_in(&e, 1e6), vec![(id, vec![0])]);
         m.layers[0].definition_query = Some("n = 2".into());
         assert_eq!(m.hits_in(&e, 1e6), vec![]);
+    }
+
+    #[test]
+    fn hits_at_finds_every_overlapping_feature() {
+        let mut m = Map::new("Map");
+        let mut d = points();
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Int(3)]);
+        let below = m.add_dataset(d);
+        let above = m.add_dataset(points());
+        let p = lonlat_to_merc(Coord::new(0.0, 0.0));
+        // Top layer first; in a layer, the feature drawn last (on top) first.
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, 100), vec![(above, 0), (below, 2), (below, 0)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, 2), vec![(above, 0), (below, 2)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, 100), vec![(below, 2), (below, 0)]);
+        // Features the definition query hides aren't hit.
+        if let Some(l) = m.layers.iter_mut().find(|l| l.id == below) {
+            l.definition_query = Some("n = 1".into());
+        }
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, 100), vec![(below, 0)]);
     }
 }
