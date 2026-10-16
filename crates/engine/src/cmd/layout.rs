@@ -59,6 +59,18 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"name": unique}))
         })
         .params(r#"{"name"?: string, "layout"?: name|index (instead of name; default: the open layout), "newName": string}"#),
+        // A copy of a layout with all its elements (#288), right after it and open. Element ids
+        // are per layout, so legends and scale bars stay on their frames, which show the same maps.
+        C::new("layout.duplicate", "Duplicate Layout", "Browser", |s, p| {
+            let i = index(s, &by_name(p))?;
+            let mut l = s.project.layouts.get(i).ok_or("open a layout first")?.clone();
+            l.name = super::copy_name(ps(p, "newName"), &l.name, |n| s.project.layouts.iter().any(|x| x.name.eq_ignore_ascii_case(n)));
+            let name = l.name.clone();
+            s.project.layouts.insert(i + 1, l);
+            s.active_layout = Some(i + 1);
+            Ok(json!({"name": name, "layout": i + 1}))
+        })
+        .params(r#"{"name"?: string, "layout"?: name|index (instead of name; default: the open layout), "newName"?: string (default: "<layout> copy")}"#),
         C::new("layout.page", "Page Size", "Publish › Page Setup", page).params(
             r#"{"layout"?, "page"?: page id, "orientation"?: "landscape"|"portrait", "width"?: mm, "height"?: mm}"#,
         ),
@@ -124,11 +136,16 @@ pub fn commands() -> Vec<C> {
 /// The layout named or numbered by `layout`, else the active one, else the only one.
 fn index(s: &Session, p: &Value) -> Result<usize, String> {
     let ls = &s.project.layouts;
-    if let Some(n) = ps(p, "layout") {
-        return ls.iter().position(|l| l.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no layout '{n}'"));
-    }
-    if let Some(i) = p.get("layout").and_then(Value::as_u64) {
-        return usize::try_from(i).ok().filter(|i| *i < ls.len()).ok_or_else(|| format!("no layout {i}"));
+    // A `layout` that is neither a name nor an index is an error, never the open layout.
+    match p.get("layout") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(n)) => {
+            return ls.iter().position(|l| l.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no layout '{n}'"));
+        }
+        Some(_) => {
+            let i = super::uint(p, "layout").ok_or("layout must be a layout's name or index")?;
+            return usize::try_from(i).ok().filter(|i| *i < ls.len()).ok_or_else(|| format!("no layout {i}"));
+        }
     }
     s.active_layout
         .filter(|i| *i < ls.len())

@@ -414,8 +414,10 @@ Data Design	Desain Data
 Data Engineering	Rekayasa Data
 Data Interop	Interoperabilitas Data
 Data Management	Manajemen Data
+Data Sources	Sumber Data
 Data Stores	Penyimpanan Data
 Data type	Tipe data
+Data\nSources	Sumber\nData
 Data…	Data…
 Day and night shading for a time.	Bayangan siang dan malam untuk suatu waktu.
 Decline	Tolak
@@ -504,6 +506,9 @@ Drawing	Penggambaran
 Drawing Effects	Efek Penggambaran
 Drawing Mode	Mode Penggambaran
 Drawing Order	Urutan Gambar
+Duplicate	Duplikat
+Duplicate Layout	Duplikat Tata Letak
+Duplicate Map	Duplikat Peta
 Dusk	Senja
 Dynamic\nText	Teks\nDinamis
 Dynamic Picture	Gambar Dinamis

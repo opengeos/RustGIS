@@ -414,8 +414,10 @@ Data Design	მონაცემთა დიზაინი
 Data Engineering	მონაცემთა ინჟინერია
 Data Interop	მონაცემთა ურთიერთთავსებადობა
 Data Management	მონაცემთა მართვა
+Data Sources	მონაცემთა წყაროები
 Data Stores	მონაცემთა საცავები
 Data type	მონაცემთა ტიპი
+Data\nSources	მონაცემთა\nწყაროები
 Data…	მონაცემები…
 Day and night shading for a time.	დღისა და ღამის დაჩრდილვა მოცემული დროისთვის.
 Decline	უარყოფა
@@ -504,6 +506,9 @@ Drawing	ხატვა
 Drawing Effects	ხატვის ეფექტები
 Drawing Mode	ხატვის რეჟიმი
 Drawing Order	ხატვის რიგითობა
+Duplicate	დუბლირება
+Duplicate Layout	განლაგების დუბლირება
+Duplicate Map	რუკის დუბლირება
 Dusk	ბინდი
 Dynamic\nText	დინამიკური\nტექსტი
 Dynamic Picture	დინამიკური სურათი

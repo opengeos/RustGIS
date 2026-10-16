@@ -414,8 +414,10 @@ Data Design	Thiết kế dữ liệu
 Data Engineering	Kỹ thuật dữ liệu
 Data Interop	Tương tác dữ liệu
 Data Management	Quản lý dữ liệu
+Data Sources	Nguồn dữ liệu
 Data Stores	Kho dữ liệu
 Data type	Kiểu dữ liệu
+Data\nSources	Nguồn\ndữ liệu
 Data…	Dữ liệu…
 Day and night shading for a time.	Đổ bóng ngày và đêm theo thời điểm.
 Decline	Từ chối
@@ -504,6 +506,9 @@ Drawing	Vẽ
 Drawing Effects	Hiệu ứng vẽ
 Drawing Mode	Chế độ vẽ
 Drawing Order	Thứ tự vẽ
+Duplicate	Nhân bản
+Duplicate Layout	Nhân bản bố cục
+Duplicate Map	Nhân bản bản đồ
 Dusk	Hoàng hôn
 Dynamic\nText	Văn bản\nđộng
 Dynamic Picture	Ảnh động

@@ -414,8 +414,10 @@ Data Design	Veri Tasarımı
 Data Engineering	Veri Mühendisliği
 Data Interop	Veri Birlikte Çalışabilirliği
 Data Management	Veri Yönetimi
+Data Sources	Veri Kaynakları
 Data Stores	Veri Depoları
 Data type	Veri türü
+Data\nSources	Veri\nKaynakları
 Data…	Veri…
 Day and night shading for a time.	Bir zaman için gece ve gündüz gölgelendirmesi.
 Decline	Reddet
@@ -504,6 +506,9 @@ Drawing	Çizim
 Drawing Effects	Çizim Efektleri
 Drawing Mode	Çizim Modu
 Drawing Order	Çizim Sırası
+Duplicate	Çoğalt
+Duplicate Layout	Sayfa Düzenini Çoğalt
+Duplicate Map	Haritayı Çoğalt
 Dusk	Alacakaranlık
 Dynamic\nText	Dinamik\nMetin
 Dynamic Picture	Dinamik Resim

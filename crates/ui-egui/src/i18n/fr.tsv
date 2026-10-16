@@ -414,8 +414,10 @@ Data Design	Conception des données
 Data Engineering	Ingénierie des données
 Data Interop	Interopérabilité des données
 Data Management	Gestion des données
+Data Sources	Sources de données
 Data Stores	Magasins de données
 Data type	Type de données
+Data\nSources	Sources de\ndonnées
 Data…	Données…
 Day and night shading for a time.	Ombrage jour et nuit pour une heure donnée.
 Decline	Refuser
@@ -504,6 +506,9 @@ Drawing	Dessin
 Drawing Effects	Effets de dessin
 Drawing Mode	Mode de dessin
 Drawing Order	Ordre d'affichage
+Duplicate	Dupliquer
+Duplicate Layout	Dupliquer la mise en page
+Duplicate Map	Dupliquer la carte
 Dusk	Crépuscule
 Dynamic\nText	Texte\ndynamique
 Dynamic Picture	Image dynamique

@@ -414,8 +414,10 @@ Data Design	Структура данных
 Data Engineering	Инженерия данных
 Data Interop	Совместимость данных
 Data Management	Управление данными
+Data Sources	Источники данных
 Data Stores	Хранилища данных
 Data type	Тип данных
+Data\nSources	Источники\nданных
 Data…	Данные…
 Day and night shading for a time.	Затенение дня и ночи на заданное время.
 Decline	Отклонить
@@ -504,6 +506,9 @@ Drawing	Отображение
 Drawing Effects	Эффекты отображения
 Drawing Mode	Режим отображения
 Drawing Order	Порядок отображения
+Duplicate	Дублировать
+Duplicate Layout	Дублировать макет
+Duplicate Map	Дублировать карту
 Dusk	Сумерки
 Dynamic\nText	Динамический\nтекст
 Dynamic Picture	Динамическое изображение

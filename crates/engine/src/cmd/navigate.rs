@@ -111,14 +111,7 @@ pub fn commands() -> Vec<C> {
             if n.is_empty() {
                 return Err("name is required".into());
             }
-            // A `map` that isn't a name is an error, never the active map.
-            let i = match p.get("map") {
-                None | Some(Value::Null) => s.project.active_map,
-                Some(Value::String(m)) => {
-                    s.project.maps.iter().position(|x| x.name.eq_ignore_ascii_case(m)).ok_or_else(|| format!("no map '{m}'"))?
-                }
-                Some(_) => return Err("map must be a map's name".into()),
-            };
+            let i = map_at(s, p)?;
             let old = s.project.maps.get(i).map(|m| m.name.clone()).ok_or("no map")?;
             // Unique among the other maps, so a name finds one map (tabs, Browser, map frames).
             let name = super::numbered(n, |n| s.project.maps.iter().enumerate().any(|(j, m)| j != i && m.name.eq_ignore_ascii_case(n)));
@@ -129,6 +122,8 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"name": name}))
         })
         .params(r#"{"name": string (the new name; a number is added when another map has it), "map"?: name (default: the active map)}"#),
+        C::new("map.duplicate", "Duplicate Map", "Browser", duplicate_map)
+            .params(r#"{"map"?: name (default: the active map), "name"?: string (default: "<map> copy"; a number is added when another map has it)}"#),
         C::new("map.remove", "Delete Map", "Browser", |s, p| {
             if s.project.maps.len() < 2 {
                 return Err("a project keeps at least one map".into());
@@ -153,6 +148,38 @@ pub fn commands() -> Vec<C> {
 
 fn s_name(p: &Value) -> Result<&str, String> {
     ps(p, "name").ok_or_else(|| "name is required".to_string())
+}
+
+/// The map `map` names (default: the active one). A `map` that isn't a name is an error, never
+/// the active map.
+fn map_at(s: &Session, p: &Value) -> Result<usize, String> {
+    match p.get("map") {
+        None | Some(Value::Null) => Ok(s.project.active_map),
+        Some(Value::String(m)) => s.project.maps.iter().position(|x| x.name.eq_ignore_ascii_case(m)).ok_or_else(|| format!("no map '{m}'")),
+        Some(_) => Err("map must be a map's name".into()),
+    }
+}
+
+/// A full copy of a map (#288), its data included, right after it and in view. Layer ids are per
+/// map, so the copy keeps them; layouts aren't copied and keep showing the original.
+fn duplicate_map(s: &mut Session, p: &Value) -> CmdResult {
+    let i = map_at(s, p)?;
+    let mut m = s.project.maps.get(i).ok_or("no map")?.clone();
+    m.name = super::copy_name(ps(p, "name"), &m.name, |n| s.project.maps.iter().any(|x| x.name.eq_ignore_ascii_case(n)));
+    m.label_lock = None;
+    for l in &mut m.layers {
+        l.selection.clear();
+    }
+    let name = m.name.clone();
+    let was_active = i == s.project.active_map;
+    s.project.maps.insert(i + 1, m);
+    s.project.active_map = i + 1;
+    // The copy of the map in view keeps its active layer (same ids); another starts on its first.
+    if !was_active {
+        s.active_layer = s.map().layers.first().map(|l| l.id);
+        s.table_layer = None;
+    }
+    Ok(json!({"name": name}))
 }
 
 /// Points layout map frames, presentation map pages and offline areas at a renamed map (#287),

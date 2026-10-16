@@ -111,6 +111,17 @@ pub(crate) fn numbered(base: &str, taken: impl Fn(&str) -> bool) -> String {
     name
 }
 
+/// A copy's name: the one `given` (trimmed), else `<original> copy` with the original cut so
+/// " copy" fits; then [`numbered`] by `taken`.
+pub(crate) fn copy_name(given: Option<&str>, original: &str, taken: impl Fn(&str) -> bool) -> String {
+    const COPY: &str = " copy";
+    let base = match given.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => n.to_string(),
+        None => original.chars().take(MAX_NAME - COPY.len()).chain(COPY.chars()).collect(),
+    };
+    numbered(&base, taken)
+}
+
 pub(crate) fn b(p: &Value, k: &str) -> Option<bool> {
     p.get(k).and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| matches!(s, "true" | "yes" | "1" | "on"))))
 }

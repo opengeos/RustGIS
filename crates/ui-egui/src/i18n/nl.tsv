@@ -414,8 +414,10 @@ Data Design	Gegevensontwerp
 Data Engineering	Data-engineering
 Data Interop	Data-interoperabiliteit
 Data Management	Gegevensbeheer
+Data Sources	Gegevensbronnen
 Data Stores	Gegevensopslagen
 Data type	Gegevenstype
+Data\nSources	Gegevens-\nbronnen
 Data…	Gegevens…
 Day and night shading for a time.	Dag- en nachtschaduw voor een tijdstip.
 Decline	Weigeren
@@ -504,6 +506,9 @@ Drawing	Tekenen
 Drawing Effects	Tekeneffecten
 Drawing Mode	Tekenmodus
 Drawing Order	Tekenvolgorde
+Duplicate	Dupliceren
+Duplicate Layout	Lay-out dupliceren
+Duplicate Map	Kaart dupliceren
 Dusk	Schemering
 Dynamic\nText	Dynamische\ntekst
 Dynamic Picture	Dynamische afbeelding

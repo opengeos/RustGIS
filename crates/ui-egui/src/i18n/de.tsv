@@ -414,8 +414,10 @@ Data Design	Datenentwurf
 Data Engineering	Data Engineering
 Data Interop	Datenaustausch
 Data Management	Datenverwaltung
+Data Sources	Datenquellen
 Data Stores	Datenspeicher
 Data type	Datentyp
+Data\nSources	Daten-\nquellen
 Data…	Daten…
 Day and night shading for a time.	Tag-und-Nacht-Schattierung für einen Zeitpunkt.
 Decline	Ablehnen
@@ -504,6 +506,9 @@ Drawing	Zeichnen
 Drawing Effects	Zeicheneffekte
 Drawing Mode	Zeichenmodus
 Drawing Order	Zeichenreihenfolge
+Duplicate	Duplizieren
+Duplicate Layout	Layout duplizieren
+Duplicate Map	Karte duplizieren
 Dusk	Dämmerung
 Dynamic\nText	Dynamischer\nText
 Dynamic Picture	Dynamisches Bild

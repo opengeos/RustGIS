@@ -414,8 +414,10 @@ Data Design	データ設計
 Data Engineering	データ エンジニアリング
 Data Interop	データ相互運用
 Data Management	データ管理
+Data Sources	データ ソース
 Data Stores	データ ストア
 Data type	データ型
+Data\nSources	データ\nソース
 Data…	データ…
 Day and night shading for a time.	指定時刻の昼夜の陰影。
 Decline	拒否
@@ -504,6 +506,9 @@ Drawing	描画
 Drawing Effects	描画効果
 Drawing Mode	描画モード
 Drawing Order	描画順序
+Duplicate	複製
+Duplicate Layout	レイアウトの複製
+Duplicate Map	マップの複製
 Dusk	夕暮れ
 Dynamic\nText	動的\nテキスト
 Dynamic Picture	動的画像
