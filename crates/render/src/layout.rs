@@ -60,7 +60,7 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
             && let Some(&(_, mi, cam, fw, fh)) = frame(*f)
             && let Some(map) = maps.get_mut(mi)
         {
-            let view = View { width: fw, height: fh, pixels_per_point: 1.0, camera: cam, dark: false };
+            let view = View { width: fw, height: fh, pixels_per_point: 1.0, camera: cam };
             let lonlat = crate::view_lonlat(map, &view);
             map.sync_sources(&lonlat, true);
             shown.push((*f, shown_legends(map, map.ground_res_at(&cam) / rustgis_geom::PIXEL_M)));
@@ -78,7 +78,7 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
                 let Some(map) = maps.get_mut(mi) else { continue };
                 // A frame larger than the page budget is drawn at a lower resolution and scaled up.
                 let fppp = ppp.min((MAX_PIXELS / (fw * fh).max(1.0)).sqrt()).max(0.01);
-                let view = View { width: fw, height: fh, pixels_per_point: fppp, camera: cam, dark: false };
+                let view = View { width: fw, height: fh, pixels_per_point: fppp, camera: cam };
                 let Some(mut img) = crate::render_complete(map, &view) else { continue };
                 for l in img.unplaced.iter().chain(&img.labels) {
                     text::draw(&mut img.pixmap, l, fppp as f32);

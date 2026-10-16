@@ -124,8 +124,6 @@ pub struct View {
     /// Physical pixels per logical point.
     pub pixels_per_point: f64,
     pub camera: Camera,
-    /// The interface is dark: the space around the globe is dark too.
-    pub dark: bool,
 }
 
 impl View {
@@ -626,7 +624,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     // Basemap.
     let (water, land, outline, grat) = map.basemap.palette();
     match &globe {
-        Some(g) => globe_backdrop(&mut pm, g, map.basemap, water, view.dark, view.pixels_per_point as f32),
+        Some(g) => globe_backdrop(&mut pm, g, water, map.view.effects.stars, view.pixels_per_point as f32),
         None => pm.fill(tiny_skia::Color::from_rgba8(water.r(), water.g(), water.b(), 255)),
     }
     if land != water {
@@ -900,7 +898,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         }
     }
     if let Some(g) = &globe {
-        globe_shading(&mut pm, g, map.basemap, water, view.dark, view.pixels_per_point as f32);
+        globe_shading(&mut pm, g, water, map.view.effects.stars, view.pixels_per_point as f32);
     }
     // Tile labels, after every layer's own.
     if lock.is_none() {
@@ -1030,14 +1028,79 @@ fn layer_masks(map: &mut Map, ctx: &Ctx, w: u32, h: u32, flat: &rustgis_map::pro
 }
 
 /// The colour of the space around the globe.
-pub fn globe_space(dark_ui: bool, basemap: rustgis_map::Basemap) -> Rgba {
-    if dark_ui || basemap == rustgis_map::Basemap::Midnight { Rgba::rgb(0x08, 0x0B, 0x10) } else { Rgba::rgb(0xEC, 0xEF, 0xF3) }
+pub fn globe_space() -> Rgba {
+    Rgba::rgb(0x08, 0x0B, 0x10)
 }
 
-/// The globe's backdrop and lighting depend only on the view size, zoom and basemap, not on the
-/// rotation, so they are drawn once and reused while the globe turns.
+/// Side of the starfield tile in logical points: the stars repeat this far apart.
+pub const STAR_TILE: f32 = 512.0;
+
+/// The stars of the space around the globe: a square `STAR_TILE` points a side at `ppp` pixels
+/// per point, transparent between the stars, to be laid edge to edge from the view's top left
+/// corner. The sky is the same every time, and the stars stay put while the globe turns.
+pub fn starfield(ppp: f32) -> Option<Pixmap> {
+    let ppp = if ppp.is_finite() { ppp.clamp(0.25, 4.0) } else { 1.0 };
+    let side = (STAR_TILE * ppp).round().max(1.0);
+    let mut pm = Pixmap::new(side as u32, side as u32)?;
+    let ppp = side / STAR_TILE;
+    // A small fixed-seed generator (SplitMix64), so every view gets the same sky.
+    let mut seed: u64 = 0x5EED_57A2_F1E1_D000;
+    let mut next = || {
+        seed = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = seed;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((z ^ (z >> 31)) >> 40) as f32 / (1u64 << 24) as f32
+    };
+    // Bluish, white and warm stars; most of them faint.
+    let tints = [(0xCF, 0xDD, 0xFF), (0xFF, 0xFF, 0xFF), (0xFF, 0xEA, 0xCC)];
+    for _ in 0..180 {
+        let (x, y) = (2.0 + next() * (STAR_TILE - 4.0), 2.0 + next() * (STAR_TILE - 4.0));
+        let bright = next().powi(3);
+        let tint = tints.get((next() * 3.0) as usize).copied().unwrap_or((0xFF, 0xFF, 0xFF));
+        let (cx, cy) = (x * ppp, y * ppp);
+        let r = (0.3 + 0.8 * bright) * ppp;
+        if bright > 0.6
+            && let Some(path) = PathBuilder::from_circle(cx, cy, r * 2.5)
+        {
+            // A faint halo around the brightest.
+            let halo = paint(Rgba::rgb(tint.0, tint.1, tint.2), 0.12);
+            pm.fill_path(&path, &halo, FillRule::Winding, Transform::identity(), None);
+        }
+        if let Some(path) = PathBuilder::from_circle(cx, cy, r.max(0.35)) {
+            let p = paint(Rgba::rgb(tint.0, tint.1, tint.2), 0.3 + 0.7 * bright);
+            pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+        }
+    }
+    Some(pm)
+}
+
+thread_local! {
+    /// The starfield tile last drawn, and its pixels per point.
+    static STARS: std::cell::RefCell<Option<(u32, Pixmap)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Fills `pm` with the starfield, laid edge to edge from its top left corner.
+fn draw_stars(pm: &mut Pixmap, ppp: f32) {
+    STARS.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        if cache.as_ref().is_none_or(|c| c.0 != ppp.to_bits()) {
+            *cache = starfield(ppp).map(|t| (ppp.to_bits(), t));
+        }
+        let Some((_, tile)) = cache.as_ref() else { return };
+        let shader =
+            tiny_skia::Pattern::new(tile.as_ref(), SpreadMode::Repeat, tiny_skia::FilterQuality::Nearest, 1.0, Transform::identity());
+        let p = Paint { shader, ..Paint::default() };
+        if let Some(r) = tiny_skia::Rect::from_xywh(0.0, 0.0, pm.width() as f32, pm.height() as f32) {
+            pm.fill_rect(r, &p, Transform::identity(), None);
+        }
+    });
+}
+
+/// The globe's backdrop and lighting depend only on the view size, zoom, ocean and stars, not on
+/// the rotation, so they are drawn once and reused while the globe turns.
 struct GlobeLayers {
-    key: (u32, u32, u32, u32, u32, u32, rustgis_map::Basemap, [u8; 4], bool),
+    key: (u32, u32, u32, u32, u32, u32, [u8; 4], bool),
     backdrop: Pixmap,
     shading: Pixmap,
 }
@@ -1046,15 +1109,7 @@ thread_local! {
     static GLOBE_LAYERS: std::cell::RefCell<Option<GlobeLayers>> = const { std::cell::RefCell::new(None) };
 }
 
-fn with_globe_layers(
-    pm: &mut Pixmap,
-    g: &Globe,
-    basemap: rustgis_map::Basemap,
-    water: Rgba,
-    dark: bool,
-    ppp: f32,
-    f: impl FnOnce(&mut Pixmap, &GlobeLayers),
-) {
+fn with_globe_layers(pm: &mut Pixmap, g: &Globe, water: Rgba, stars: bool, ppp: f32, f: impl FnOnce(&mut Pixmap, &GlobeLayers)) {
     let (cx, cy) = g.center();
     let key = (
         pm.width(),
@@ -1063,9 +1118,8 @@ fn with_globe_layers(
         (cx as f32).to_bits(),
         (cy as f32).to_bits(),
         (g.disc_radius() as f32).to_bits(),
-        basemap,
         water.0,
-        dark,
+        stars,
     );
     GLOBE_LAYERS.with(|cell| {
         let mut cache = cell.borrow_mut();
@@ -1074,7 +1128,7 @@ fn with_globe_layers(
             else {
                 return;
             };
-            draw_globe_backdrop(&mut backdrop, g, basemap, water, dark, ppp);
+            draw_globe_backdrop(&mut backdrop, g, water, stars, ppp);
             draw_globe_shading(&mut shading, g, ppp);
             *cache = Some(GlobeLayers { key, backdrop, shading });
         }
@@ -1084,34 +1138,36 @@ fn with_globe_layers(
     });
 }
 
-fn globe_backdrop(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, water: Rgba, dark: bool, ppp: f32) {
-    with_globe_layers(pm, g, basemap, water, dark, ppp, |pm, c| pm.data_mut().copy_from_slice(c.backdrop.data()));
+fn globe_backdrop(pm: &mut Pixmap, g: &Globe, water: Rgba, stars: bool, ppp: f32) {
+    with_globe_layers(pm, g, water, stars, ppp, |pm, c| pm.data_mut().copy_from_slice(c.backdrop.data()));
 }
 
-fn globe_shading(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, water: Rgba, dark: bool, ppp: f32) {
-    with_globe_layers(pm, g, basemap, water, dark, ppp, |pm, c| {
+fn globe_shading(pm: &mut Pixmap, g: &Globe, water: Rgba, stars: bool, ppp: f32) {
+    with_globe_layers(pm, g, water, stars, ppp, |pm, c| {
         pm.draw_pixmap(0, 0, c.shading.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
     });
 }
 
-/// The globe's surroundings and ocean: space (or a soft backdrop), an atmosphere glow, and the
+/// The globe's surroundings and ocean: space (starry, when `stars`), an atmosphere glow, and the
 /// ocean disc.
-fn draw_globe_backdrop(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, water: Rgba, dark_ui: bool, ppp: f32) {
-    let bg = globe_space(dark_ui, basemap);
+fn draw_globe_backdrop(pm: &mut Pixmap, g: &Globe, water: Rgba, stars: bool, ppp: f32) {
+    let bg = globe_space();
     pm.fill(tiny_skia::Color::from_rgba8(bg.r(), bg.g(), bg.b(), 255));
+    if stars {
+        draw_stars(pm, ppp);
+    }
     let (cx, cy) = g.center();
-    draw_globe_disc(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp, basemap, water, dark_ui);
+    draw_globe_disc(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp, water);
 }
 
 /// The atmosphere glow and the ocean disc, for a disc of radius `r` pixels at (`cx`, `cy`).
-fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, basemap: rustgis_map::Basemap, water: Rgba, dark_ui: bool) {
-    let dark = dark_ui || basemap == rustgis_map::Basemap::Midnight;
+fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, water: Rgba) {
     if !(r.is_finite() && r > 0.5 && cx.is_finite() && cy.is_finite()) {
         return;
     }
     // Atmosphere: a glow fading out just beyond the limb.
     let glow_r = r * 1.07;
-    let glow = if dark { (0x5A, 0x9B, 0xF0, 150) } else { (0x7F, 0xB4, 0xE8, 120) };
+    let glow = (0x5A, 0x9B, 0xF0, 150);
     if let Some(shader) = RadialGradient::new(
         Point::from_xy(cx, cy),
         0.0,
@@ -1173,7 +1229,7 @@ pub const GLOBE_GLOW: f32 = 1.07;
 /// them (side `2 × GLOBE_GLOW × r`): the atmosphere and ocean drawn under the map, and the
 /// lighting drawn over it. Neither changes as the globe turns, so a view can scale them while it
 /// moves instead of drawing them again.
-pub fn globe_sprites(basemap: rustgis_map::Basemap, dark: bool, r: f32) -> Option<(Pixmap, Pixmap)> {
+pub fn globe_sprites(basemap: rustgis_map::Basemap, r: f32) -> Option<(Pixmap, Pixmap)> {
     if !(r.is_finite() && r >= 1.0) {
         return None;
     }
@@ -1181,7 +1237,7 @@ pub fn globe_sprites(basemap: rustgis_map::Basemap, dark: bool, r: f32) -> Optio
     let side = (2.0 * GLOBE_GLOW * r.min(2048.0)).round().max(2.0);
     let (r, c) = (side / (2.0 * GLOBE_GLOW), side / 2.0);
     let (mut under, mut over) = (Pixmap::new(side as u32, side as u32)?, Pixmap::new(side as u32, side as u32)?);
-    draw_globe_disc(&mut under, c, c, r, basemap, basemap.palette().0, dark);
+    draw_globe_disc(&mut under, c, c, r, basemap.palette().0);
     draw_globe_light(&mut over, c, c, r);
     Some((under, over))
 }
@@ -1221,7 +1277,7 @@ pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side
             continue;
         }
         let camera = Camera { center: merc.center(), res };
-        let v = View { width: w, height: h, pixels_per_point: ppp, camera, dark: view.dark };
+        let v = View { width: w, height: h, pixels_per_point: ppp, camera };
         // The picture is given the box asked for, though rounding to whole points made it show
         // up to a point less: stretched by under a point, its edges stay exactly where asked, so
         // one at the Web Mercator limit is still stretched on to the pole (drape_mesh).
@@ -1417,7 +1473,7 @@ mod tests {
         m.projection = rustgis_map::Projection::Globe;
         let paris = lonlat_to_merc(Coord::new(2.35, 48.85));
         let camera = Camera { center: paris, res: 2_000.0 };
-        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, dark: false };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera };
         let boxes = Globe::new(&camera, 400.0, 300.0).drape_extents(400.0, 300.0, 0.25);
         let patches = render_globe_drape(&mut m, &view, &boxes, 4096);
         assert_eq!(patches.len(), 1);
@@ -1450,10 +1506,23 @@ mod tests {
         assert!(render_globe_drape(&mut m, &View { camera: Camera { center: paris, res: f64::NAN }, ..view }, &boxes, 4096).is_empty());
         assert!(render_globe_drape(&mut m, &view, &[Extent::EMPTY], 4096).is_empty());
         // The sprites: a square around the disc, or nothing for a junk radius.
-        let (under, over) = globe_sprites(rustgis_map::Basemap::Paper, false, 100.0).unwrap();
+        let (under, over) = globe_sprites(rustgis_map::Basemap::Paper, 100.0).unwrap();
         assert_eq!((under.width(), over.height()), (214, 214));
         assert_eq!(under.pixel(107, 107).map(|c| c.alpha()), Some(255));
-        assert!(globe_sprites(rustgis_map::Basemap::Paper, false, f32::NAN).is_none());
+        assert!(globe_sprites(rustgis_map::Basemap::Paper, f32::NAN).is_none());
+    }
+
+    #[test]
+    fn the_starfield_is_the_same_sky_every_time() {
+        let a = starfield(2.0).unwrap();
+        assert_eq!((a.width(), a.height()), (1024, 1024));
+        assert_eq!(a.data(), starfield(2.0).unwrap().data());
+        // Stars on a transparent sky.
+        let lit = a.pixels().iter().filter(|p| p.alpha() > 0).count();
+        assert!(lit > 100 && lit < a.pixels().len() / 20, "{lit}");
+        // Junk scales still give a tile.
+        assert!(starfield(f32::NAN).is_some_and(|t| t.width() == 512));
+        assert!(starfield(1e9).is_some_and(|t| t.width() == 2048));
     }
 
     #[test]
@@ -1467,7 +1536,7 @@ mod tests {
             l.selection = vec![0];
         }
         let camera = Camera { center: lonlat_to_merc(Coord::new(2.35, 48.85)), res: 5000.0 };
-        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, dark: false };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera };
         let r = render(&mut m, &view).unwrap();
         assert_eq!(r.labels.len(), 1);
         assert_eq!(r.labels[0].text, "Paris");
@@ -1480,7 +1549,7 @@ mod tests {
     fn degenerate_views_do_not_panic() {
         let mut m = Map::new("Map");
         for (w, h) in [(0.0, 0.0), (1e9, 1e9), (f64::NAN, 3.0)] {
-            let view = View { width: w, height: h, pixels_per_point: 1.0, camera: Camera::world(), dark: false };
+            let view = View { width: w, height: h, pixels_per_point: 1.0, camera: Camera::world() };
             let _ = render(&mut m, &view);
         }
     }

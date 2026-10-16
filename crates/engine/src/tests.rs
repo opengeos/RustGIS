@@ -859,7 +859,7 @@ fn label_range_placement_lock_and_convert() {
     let mut s = world();
     s.run("labels.enable", &json!({"layer": "Countries", "on": true})).unwrap();
     s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 20_000_000})).unwrap();
-    let view = |s: &Session| View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false };
+    let view = |s: &Session| View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera };
     let count = |s: &mut Session| {
         let v = view(s);
         crate::render::render(s.map_mut(), &v).unwrap().labels.len()
@@ -935,7 +935,7 @@ fn graphics_draw_shapes_text_and_pictures() {
     assert!(s.run("graphics.add", &json!({"shape": "point", "points": [[0, 0]], "layer": "Cities"})).is_err(), "not a graphics layer");
     // Dynamic text expands when drawn.
     s.run("graphics.add", &json!({"shape": "text", "points": [[10, 50]], "text": "{map} {scale}", "fontSize": 20})).unwrap();
-    let view = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false };
+    let view = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera };
     let r = crate::render::render(s.map_mut(), &view).unwrap();
     assert!(
         r.labels.iter().any(|l| l.text.starts_with("World 1:") && l.size == 20.0),
@@ -948,7 +948,7 @@ fn graphics_draw_shapes_text_and_pictures() {
     let b64 = base64::engine::general_purpose::STANDARD.encode(png.encode_png().unwrap());
     s.run("graphics.add", &json!({"shape": "picture", "points": [[0, 45], [10, 55]], "image": b64})).unwrap();
     assert!(s.run("graphics.add", &json!({"shape": "picture", "points": [[0, 45], [10, 55]], "image": "bm90IGFuIGltYWdl"})).is_err());
-    let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false };
+    let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera };
     let r = crate::render::render(s.map_mut(), &v).unwrap();
     let (x, y) = v.to_screen(rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(5.0, 50.0)));
     let px = r.pixmap.pixel(x as u32, y as u32).unwrap();
@@ -1833,7 +1833,7 @@ fn layer_effects_and_imagery_tools() {
     s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
     let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
     s.run("map.goToXY", &json!({"lon": 10.0, "lat": 48.0, "scale": 20_000_000})).unwrap();
-    let view = |s: &Session| View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false };
+    let view = |s: &Session| View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: s.map().camera };
     let png = |s: &mut Session| {
         let v = view(s);
         crate::render::render(s.map_mut(), &v).unwrap().pixmap
@@ -1944,12 +1944,42 @@ fn layer_effects_and_imagery_tools() {
 }
 
 #[test]
+fn the_globe_has_stars_that_turn_off() {
+    use crate::render::View;
+    let mut s = world();
+    s.run("map.viewMode", &json!({"mode": "global"})).unwrap();
+    // The space in the corner, away from the globe.
+    let corner = |s: &mut Session| {
+        let v = View { width: 1200.0, height: 800.0, pixels_per_point: 1.0, camera: s.map().camera };
+        let pm = crate::render::render(s.map_mut(), &v).unwrap().pixmap;
+        let mut px = Vec::new();
+        for y in 0..150 {
+            for x in 0..150 {
+                px.push(pm.pixel(x, y).map(|c| (c.red(), c.green(), c.blue())));
+            }
+        }
+        px
+    };
+    let starry = corner(&mut s);
+    assert!(s.map().view.effects.stars && starry.iter().any(|p| p != &starry[0]), "stars by default");
+    s.run("map.effects", &json!({"stars": false})).unwrap();
+    let plain = corner(&mut s);
+    assert!(plain.iter().all(|p| p == &plain[0]), "plain space");
+    // Saved with the project; a project from before stars has them.
+    let p = crate::Project::from_json(&serde_json::to_string(&s.project).unwrap()).unwrap();
+    assert!(!p.map().view.effects.stars);
+    assert!(serde_json::from_str::<rustgis_map::view::ViewEffects>("{}").unwrap().stars);
+    s.run("map.effects", &json!({"reset": true})).unwrap();
+    assert!(corner(&mut s) == starry);
+}
+
+#[test]
 fn view_effects_scene_and_navigation() {
     use crate::render::View;
     let mut s = world();
     s.run("map.goToXY", &json!({"lon": 10.0, "lat": 48.0, "scale": 20_000_000})).unwrap();
     let png = |s: &mut Session| {
-        let v = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false };
+        let v = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera: s.map().camera };
         crate::render::render(s.map_mut(), &v).unwrap().pixmap.data().to_vec()
     };
     let plain = png(&mut s);
@@ -2930,7 +2960,7 @@ fn grid_fgb(name: &str, n: usize) -> std::path::PathBuf {
 fn view_of(s: &mut Session, e: rustgis_geom::Extent) -> crate::render::View {
     s.view_size = (800.0, 600.0);
     s.zoom_to(&e);
-    crate::render::View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false }
+    crate::render::View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera }
 }
 
 #[test]
@@ -3371,7 +3401,7 @@ fn mbtiles_archives_become_tile_layers() {
 
     let draws_red = |s: &mut Session| {
         s.run("map.goToXY", &json!({"lon": 10.0, "lat": 20.0, "scale": 50_000_000})).unwrap();
-        let v = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera: s.map().camera, dark: false };
+        let v = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera: s.map().camera };
         let mut px = None;
         for _ in 0..50 {
             let r = crate::render::render(s.map_mut(), &v).unwrap();

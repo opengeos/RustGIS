@@ -1448,12 +1448,16 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
         });
         col(ui, |ui| {
             let (vig, edges, tilt, grain) = (v.effects.vignette, v.effects.edges, v.effects.tilt_shift, v.effects.grain);
-            small_menu(ui, app, "eye", "Visual Effect", "Vignette and edge outlines.", move |ui, app| {
+            let stars = v.effects.stars;
+            small_menu(ui, app, "eye", "Visual Effect", "Vignette, edge outlines and the stars around the globe.", move |ui, app| {
                 if ui.checkbox(&mut vig.clone(), tl!("Vignette")).clicked() {
                     let _ = app.run("map.effects", json!({"vignette": !vig}));
                 }
                 if ui.checkbox(&mut edges.clone(), tl!("Edges")).clicked() {
                     let _ = app.run("map.effects", json!({"edges": !edges}));
+                }
+                if ui.checkbox(&mut stars.clone(), tl!("Stars")).clicked() {
+                    let _ = app.run("map.effects", json!({"stars": !stars}));
                 }
             });
             small_menu(ui, app, "zoom_box", "Camera Effect", "Tilt-shift blur and film grain.", move |ui, app| {
