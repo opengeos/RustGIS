@@ -8,10 +8,13 @@
 //! `"exact": true`, whose whole label is the text), `{"dark": true}` switches theme,
 //! `{"drag": [x, y, dx, dy]}` presses the pointer at (x, y) and moves it by (dx, dy), holding
 //! it (shots then catch the map mid-drag; `{"release": true}` lets go),
+//! `{"scroll": [x, y, dy]}` turns the mouse wheel by `dy` points over (x, y) (negative zooms
+//! out) and runs one frame (shots then catch the map mid-zoom),
 //! `{"titlebar": {"left_inset": 80, "height": 34}}`
 //! draws the header as a macOS unified title bar (`null` turns it off), and
 //! `{"width": w, "height": h}` on the first line sets the size (default
-//! 1480×900 at 2×). The window opens the World Atlas sample.
+//! 1480×900 at 2×; `"dt": seconds` there sets each frame's length, default 0.25, and a
+//! short one such as 0.016 catches the map mid-motion). The window opens the World Atlas sample.
 
 use egui_kittest::kittest::Queryable;
 use rustgis_ui_egui::RustGisApp;
@@ -23,11 +26,13 @@ fn main() {
         script.lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).expect("json line")).collect();
     let w = lines.iter().find_map(|l| l.get("width").and_then(|v| v.as_f64())).unwrap_or(1480.0) as f32;
     let h = lines.iter().find_map(|l| l.get("height").and_then(|v| v.as_f64())).unwrap_or(900.0) as f32;
+    let dt = lines.iter().find_map(|l| l.get("dt").and_then(|v| v.as_f64())).unwrap_or(0.25) as f32;
     let app = RustGisApp::with_sample();
     let mut harness = egui_kittest::Harness::builder()
         .with_size(egui::vec2(w, h))
         .with_pixels_per_point(2.0)
         .with_max_steps(10_000)
+        .with_step_dt(dt)
         .wgpu()
         .build_ui_state(
             |ui, app: &mut RustGisApp| {
@@ -120,6 +125,20 @@ fn main() {
                 harness.event(egui::Event::PointerMoved(egui::pos2(x + dx * t, y + dy * t)));
                 harness.step();
             }
+        } else if let Some(d) = l.get("scroll").and_then(|v| v.as_array()) {
+            let n: Vec<f32> = d.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect();
+            let [x, y, dy] = n[..] else {
+                eprintln!("scroll takes [x, y, dy]");
+                continue;
+            };
+            harness.event(egui::Event::PointerMoved(egui::pos2(x, y)));
+            harness.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, dy),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            });
+            harness.step();
         } else if l.get("release").is_some() {
             if let Some(pos) = harness.ctx.input(|i| i.pointer.latest_pos()) {
                 harness.event(egui::Event::PointerButton {
