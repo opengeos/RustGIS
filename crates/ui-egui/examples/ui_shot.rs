@@ -72,6 +72,9 @@ fn main() {
                 height: num("height"),
                 ..rustgis_ui_egui::TitlebarMetrics::FALLBACK
             });
+            for _ in 0..3 {
+                harness.step();
+            }
         } else if let Some(d) = l.get("dark").and_then(|v| v.as_bool()) {
             harness.state_mut().ui.dark = d;
             for _ in 0..3 {
