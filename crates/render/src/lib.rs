@@ -563,7 +563,7 @@ impl Ctx<'_> {
         let mut sprites = self.sprites.borrow_mut();
         if !sprites.contains_key(&key) {
             // Many symbols (sizes by value, say) would each make a sprite used once: draw directly.
-            if sprites.len() >= MAX_SPRITES || reach > 64 {
+            if sprites.len() >= MAX_SPRITES || reach > MAX_SPRITE_REACH {
                 drop(sprites);
                 draw_marker(pm, x, y, s, 1.0, None, self.ppp);
                 return;
@@ -609,6 +609,10 @@ impl Ctx<'_> {
             Geometry::Polygon(_) if self.wireframe => (s.stroke.with_alpha(255), s.stroke_width.max(1.0) * self.ppp, None),
             Geometry::Polygon(_) => (s.stroke, if s.stroke.a() > 0 { s.stroke_width.max(0.0) * self.ppp } else { 0.0 }, Some(s.fill)),
         };
+        // With its outline, still about a pixel: a thick outline drawn as a dot would lose its ink.
+        if sx + width > 2.0 || sy + width > 2.0 {
+            return false;
+        }
         let (cx, cy) = self.px(Coord::new((e.min_x + e.max_x) / 2.0, (e.min_y + e.max_y) / 2.0));
         // The outline covers the shape grown by half its width all round (round joins); the
         // fill shows inside it.
@@ -795,7 +799,11 @@ fn splat_color(pm: &mut Pixmap, cx: f32, cy: f32, color: Rgba, coverage: f32) {
 }
 
 /// Most marker sprites one render keeps.
-const MAX_SPRITES: usize = 4096;
+const MAX_SPRITES: usize = 1024;
+
+/// Largest marker reach (device pixels from its centre) drawn from a sprite: a bigger marker
+/// gains little from one. With [`MAX_SPRITES`], the cache stays under about 10 MB.
+const MAX_SPRITE_REACH: i64 = 24;
 
 /// A marker centred at (`x`, `y`) device pixels.
 fn draw_marker(pm: &mut Pixmap, x: f32, y: f32, s: &Symbol, opacity: f32, halo: Option<Rgba>, ppp: f32) {
@@ -2299,6 +2307,20 @@ mod tests {
             assert!(total * 20 < ink, "{marker:?}: {total} of {ink}");
         }
         assert!(ctx.sprites.borrow().len() <= 5 * 16);
+    }
+
+    #[test]
+    fn only_features_still_under_a_pixel_with_their_outline_are_splatted() {
+        let view = View { width: 100.0, height: 100.0, pixels_per_point: 2.0, camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0 } };
+        let ctx = Ctx { view: &view, ppp: 2.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+        let ring = vec![Coord::new(0.0, 0.0), Coord::new(0.25, 0.0), Coord::new(0.25, 0.25), Coord::new(0.0, 0.25), Coord::new(0.0, 0.0)];
+        let g = Geometry::Polygon(vec![vec![ring]]);
+        let mut pm = Pixmap::new(200, 200).unwrap();
+        let thin = Symbol { fill: Rgba::rgb(200, 0, 0), stroke: Rgba::rgb(0, 0, 0), stroke_width: 0.5, size: 0.0, marker: Marker::Circle };
+        assert!(ctx.splat(&mut pm, &g.extent(), &g, &thin), "0.5 px across with a 1 px outline");
+        // A 3 pt outline at 2× is 6 px wide: drawn as a ring, not a dot.
+        let thick = Symbol { stroke_width: 3.0, ..thin };
+        assert!(!ctx.splat(&mut pm, &g.extent(), &g, &thick));
     }
 
     #[test]

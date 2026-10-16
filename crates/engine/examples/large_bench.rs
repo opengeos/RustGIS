@@ -25,12 +25,15 @@ fn main() {
             continue;
         }
         println!("{f}: added in {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
-        // `--cmd 'id={json}'` styles the layer first (Unique Values, say).
-        for c in args.windows(2).filter(|w| w.first().is_some_and(|a| a == "--cmd")).filter_map(|w| w.get(1)) {
+        // `--cmd 'id={json}'` styles the layer first (Unique Values, say); a command that fails
+        // would time a different map, so the file is skipped.
+        let styled = args.windows(2).filter(|w| w.first().is_some_and(|a| a == "--cmd")).filter_map(|w| w.get(1)).all(|c| {
             let (id, p) = c.split_once('=').unwrap_or((c, "{}"));
-            if let Err(e) = s.run(id, &serde_json::from_str(p).unwrap_or_default()) {
-                println!("  {id}: {e}");
-            }
+            let r = serde_json::from_str(p).map_err(|e| format!("bad JSON: {e}")).and_then(|p| s.run(id, &p));
+            r.map_err(|e| println!("  {id}: {e}; skipped")).is_ok()
+        });
+        if !styled {
+            continue;
         }
         let e = extent_to_merc(&s.map().full_extent());
         let (w, h) = (1600.0, 1000.0);
@@ -38,12 +41,9 @@ fn main() {
         // Let streamed sources settle at the first view (they read in the background).
         let cam0 = Camera { center: Coord::new((e.min_x + e.max_x) / 2.0, (e.min_y + e.max_y) / 2.0), res: res0 };
         let t = Instant::now();
-        for _ in 0..200 {
-            let r = render(s.map_mut(), &View { width: w, height: h, pixels_per_point: ppp, camera: cam0 });
-            if !r.is_some_and(|r| r.data_pending) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+        if !settle(&mut s, &View { width: w, height: h, pixels_per_point: ppp, camera: cam0 }) {
+            println!("  still reading after 10 s; skipped");
+            continue;
         }
         let n: usize = s.map().layers.iter().map(|l| l.dataset.features.len()).sum();
         println!("  settled in {:.0} ms ({n} features loaded)", t.elapsed().as_secs_f64() * 1000.0);
@@ -52,18 +52,22 @@ fn main() {
             let camera = Camera { center: cam0.center, res };
             let view = View { width: w, height: h, pixels_per_point: ppp, camera };
             // Streamed layers read what this view shows first.
-            for _ in 0..200 {
-                if !render(s.map_mut(), &view).is_some_and(|r| r.data_pending) {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
+            if !settle(&mut s, &view) {
+                println!("  zoom +{z}: still reading after 10 s; skipped");
+                continue;
             }
             let n = 5;
             let mut times = Vec::new();
             for _ in 0..n {
                 let t = Instant::now();
-                let _ = render(s.map_mut(), &view);
+                if render(s.map_mut(), &view).is_none() {
+                    break;
+                }
                 times.push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            if times.len() < n {
+                println!("  zoom +{z}: no frame rendered; skipped");
+                continue;
             }
             let first = times.first().copied().unwrap_or(0.0);
             let rest = times.iter().skip(1).sum::<f64>() / (n - 1) as f64;
@@ -71,4 +75,17 @@ fn main() {
             println!("  zoom +{z} (res {res:>12.2} m, {n_feat} features): first {first:>8.1} ms, then {rest:>8.1} ms/frame");
         }
     }
+}
+
+/// Renders `view` until its streamed layers have read what it shows: `false` when they are still
+/// reading after 10 s, or a frame fails.
+fn settle(s: &mut Session, view: &View) -> bool {
+    for _ in 0..200 {
+        match render(s.map_mut(), view) {
+            Some(r) if r.data_pending => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Some(_) => return true,
+            None => return false,
+        }
+    }
+    false
 }
