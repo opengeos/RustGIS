@@ -1141,6 +1141,21 @@ mod tests {
         let mut lying = good[..32].to_vec();
         lying[24..32].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(Sparse::from_container(&lying).is_none());
+        // Parts at the largest offsets, or past the file's end, are refused or read safely.
+        let container = |len: u64, at: u64, part: &[u8]| {
+            let mut c = good[..16].to_vec();
+            for v in [len, 1, at, part.len() as u64] {
+                c.extend_from_slice(&v.to_le_bytes());
+            }
+            c.extend_from_slice(part);
+            c
+        };
+        assert!(Sparse::from_container(&container(10, 8, b"abcd")).is_none());
+        assert!(Sparse::from_container(&container(u64::MAX, u64::MAX - 1, b"abcd")).is_none());
+        let near_end = Sparse::from_container(&container(u64::MAX, u64::MAX - 8, b"abcd")).unwrap();
+        let mut r = near_end.reader();
+        assert!(std::io::Seek::seek(&mut r, std::io::SeekFrom::End(0)).is_ok());
+        let _ = super::super::read_bytes("x.tif", &container(u64::MAX, u64::MAX - 8, b"II*\0"));
     }
 
     #[test]

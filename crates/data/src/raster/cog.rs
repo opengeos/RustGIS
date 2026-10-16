@@ -103,6 +103,11 @@ impl Sparse {
         }
         for _ in 0..n {
             let (at, size) = (u64_(&mut rest)?, u64_(&mut rest)?);
+            // A part past the file's end (or the largest offset) is a damaged container.
+            let end = at.checked_add(size)?;
+            if s.len.is_some_and(|len| end > len) {
+                return None;
+            }
             let size = usize::try_from(size).ok()?;
             if size > rest.len() {
                 return None;
@@ -140,9 +145,11 @@ impl Read for Sparse {
         });
         match hit {
             Some(src) => {
-                let n = src.len().min(buf.len());
+                // Never past the file's end, whatever a part holds.
+                let left = self.len.map_or(usize::MAX, |len| usize::try_from(len - self.pos).unwrap_or(usize::MAX));
+                let n = src.len().min(buf.len()).min(left);
                 buf[..n].copy_from_slice(&src[..n]);
-                self.pos += n as u64;
+                self.pos = self.pos.saturating_add(n as u64);
                 Ok(n)
             }
             None => {
@@ -164,7 +171,9 @@ impl Seek for Sparse {
             SeekFrom::Current(d) => self.pos.checked_add_signed(d).ok_or_else(|| std::io::Error::other("seek before the start"))?,
             // The file's length isn't known: the end of what was read stands for it.
             SeekFrom::End(d) => {
-                let end = self.len.unwrap_or_else(|| self.chunks.iter().next_back().map(|(at, c)| at + c.len() as u64).unwrap_or(0));
+                let end = self
+                    .len
+                    .unwrap_or_else(|| self.chunks.iter().next_back().map(|(at, c)| at.saturating_add(c.len() as u64)).unwrap_or(0));
                 end.checked_add_signed(d).ok_or_else(|| std::io::Error::other("seek before the start"))?
             }
         };

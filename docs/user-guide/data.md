@@ -421,8 +421,9 @@ web address is read in place instead, a tile at a time (see [Files on the
 web](data-formats.md#files-on-the-web)).
 
 The web app opens a picked or dropped file of up to 256 MB whole. A larger GeoTIFF is read a part
-at a time instead: its header, then only the tiles of the overview it opens from, so a
-cloud-optimised file of any size opens (a 436 MB EnMAP hyperspectral scene reads about 20 MB).
+at a time instead: its header, then only the tiles of the overview it opens from. A
+cloud-optimised file opens however large it is, as long as those parts fit in 256 MB (a 436 MB
+EnMAP hyperspectral scene reads about 20 MB, the 1.6 GB NLCD land cover about 14 MB).
 The parts read are what a saved project keeps. A file that isn't cloud-optimised (in strips, or
 without overviews) needs most of itself, and past 256 MB the web app says to open it in the
 desktop app.
