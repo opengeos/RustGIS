@@ -14,6 +14,9 @@ use crate::{RightPane, RustGisApp, icons};
 
 pub const TABS: [&str; 10] = ["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"];
 
+/// Tabs that always show: Settings holds Customize › Ribbon, the way to show hidden tabs again.
+pub const FIXED_TABS: [&str; 2] = ["Settings", "Help"];
+
 /// The tab that holds what an older tab name (in saved pane sets, tasks and scripts) held; Home for
 /// a name that is no tab. Plugins' tabs pass through.
 pub fn current_tab(name: &str) -> &str {
@@ -29,7 +32,8 @@ pub fn current_tab(name: &str) -> &str {
 }
 
 /// Saved hidden tabs under the current names: renamed tabs carry over, and names of tabs whose
-/// groups were spread over several others are dropped (they could no longer be shown again).
+/// groups were spread over several others are dropped (they could no longer be shown again), and so
+/// are the tabs that always show.
 pub fn current_hidden_tabs(saved: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for name in saved {
@@ -39,7 +43,7 @@ pub fn current_hidden_tabs(saved: Vec<String>) -> Vec<String> {
             "Share" => "Publish",
             n => n,
         };
-        if (TABS.contains(&tab) || tab.starts_with("plugin:")) && !out.iter().any(|t| t == tab) {
+        if (TABS.contains(&tab) || tab.starts_with("plugin:")) && !FIXED_TABS.contains(&tab) && !out.iter().any(|t| t == tab) {
             out.push(tab.to_string());
         }
     }
@@ -405,8 +409,12 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
             #[cfg(not(target_arch = "wasm32"))]
             menu_item(ui, app, "", "Database…", "ui.dialog", json!({"name": "addDatabase"}));
             menu_item(ui, app, "", "STAC Search…", "ui.dialog", json!({"name": "stac"}));
+            menu_item(ui, app, "", "S3…", "ui.dialog", json!({"name": "s3"}));
             menu_item(ui, app, "", "OpenStreetMap…", "ui.dialog", json!({"name": "osm"}));
             menu_item(ui, app, "", "Boundaries…", "ui.dialog", json!({"name": "boundaries"}));
+            menu_item(ui, app, "", "Overture Maps…", "ui.dialog", json!({"name": "overture"}));
+            menu_item(ui, app, "", "Source Cooperative…", "ui.dialog", json!({"name": "sourcecoop"}));
+            menu_item(ui, app, "", "Search Open Data…", "ui.searchOpenData", Value::Null);
             menu_item(ui, app, "graphics_layer", "Graphics Layer", "graphics.newLayer", Value::Null);
             ui.separator();
             ui.label(egui::RichText::new(tl!("Sample data (Natural Earth)")).small().weak());
@@ -985,6 +993,7 @@ fn styles_group(app: &mut RustGisApp, ui: &mut Ui) {
             menu_item(ui, app, "symbology", "New Style From Layer", "style.new", Value::Null);
             menu_item(ui, app, "open", "Add Style File…", "ui.openItem", json!({"kind": "styles"}));
             menu_item(ui, app, "open", "Import Styles From…", "ui.openItem", json!({"kind": "importStyles"}));
+            menu_item(ui, app, "open", "Add Color Ramp File…", "ui.openItem", json!({"kind": "ramps"}));
         });
     });
 }
@@ -1369,16 +1378,18 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
         });
         col(ui, |ui| {
             small(ui, app, "globe_view", "Global", "A globe scene.", "map.viewMode", json!({"mode": "global"}), on);
-            small(
-                ui,
-                app,
-                "map",
-                "Local",
-                "A flat scene centred on the view (azimuthal equidistant).",
-                "map.viewMode",
-                json!({"mode": "local"}),
-                local,
-            );
+            if rustgis_engine::map::projection::local_views_supported() {
+                small(
+                    ui,
+                    app,
+                    "map",
+                    "Local",
+                    "A flat scene centred on the view (azimuthal equidistant).",
+                    "map.viewMode",
+                    json!({"mode": "local"}),
+                    local,
+                );
+            }
         });
     });
     let v = app.session.map().view.clone();
@@ -1564,6 +1575,17 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
         big(
             ui,
             app,
+            "web_map",
+            "Data\nSources",
+            "Show or hide the Data Sources pane: favourites, recent data, saved services, databases and STAC APIs, and a library of public sources.",
+            "ui.pane.sources",
+            Value::Null,
+            app.ui.left == Some(crate::LeftPane::Sources),
+            false,
+        );
+        big(
+            ui,
+            app,
             "geoprocessing",
             "Tools\nPane",
             "Show or hide the Tools pane.",
@@ -1665,7 +1687,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
     });
     group(ui, "Link", |ui| {
         col(ui, |ui| {
-            let split = app.ws.split.is_some();
+            let split = crate::mapview::split_map(app).is_some();
             small(ui, app, "pane_right", "Side by Side", "Show a second map beside this one.", "ui.splitView", Value::Null, split);
             small(ui, app, "zoom_full", "Link Views", "Maps move together.", "view.linkViews", Value::Null, app.session.project.link_views);
             small(
@@ -2229,6 +2251,16 @@ fn share_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 json!({"kind": "styles"}),
                 false,
             );
+            small(
+                ui,
+                app,
+                "symbology",
+                "Color Ramps",
+                "Save the project's custom color ramps to a color ramp file.",
+                "ui.saveItem",
+                json!({"kind": "ramps"}),
+                false,
+            );
         });
         col(ui, |ui| {
             small(
@@ -2581,6 +2613,30 @@ fn plugin_tab(app: &mut RustGisApp, ui: &mut Ui, plugin: &str) {
 }
 
 fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Customize", |ui| {
+        let hidden = app.ui.hidden_tabs.clone();
+        // RustGIS's tabs and plugins' tabs.
+        let mut all: Vec<(String, String)> =
+            TABS.iter().filter(|t| !FIXED_TABS.contains(*t)).map(|t| (t.to_string(), tl!(*t).to_string())).collect();
+        all.extend(plugin_tabs(app));
+        big_menu(ui, app, "settings", "Ribbon", "Choose which tabs the ribbon shows.", move |ui, app| {
+            for (tab, caption) in &all {
+                let mut on = !hidden.iter().any(|h| h == tab);
+                if ui.checkbox(&mut on, caption.as_str()).clicked() {
+                    let _ = app.run("ui.customizeRibbon", json!({"tab": tab}));
+                }
+            }
+        });
+        let qa = app.ui.quick_access.clone();
+        big_menu(ui, app, "command", "Quick\nAccess", "Choose extra buttons for the Quick Access Toolbar.", move |ui, app| {
+            for (id, label) in QUICK {
+                let mut on = qa.iter().any(|c| c == id);
+                if ui.checkbox(&mut on, tl!(*label)).clicked() {
+                    let _ = app.run("ui.quickAccess", json!({"command": id}));
+                }
+            }
+        });
+    });
     group(ui, "Language", |ui| {
         language_menu(app, ui);
         worldview_menu(app, ui);
@@ -2667,29 +2723,6 @@ fn start_projection_menu(app: &mut RustGisApp, ui: &mut Ui) {
 }
 
 fn help_tab(app: &mut RustGisApp, ui: &mut Ui) {
-    group(ui, "Customize", |ui| {
-        let hidden = app.ui.hidden_tabs.clone();
-        // RustGIS's tabs and plugins' tabs.
-        let mut all: Vec<(String, String)> = TABS.iter().filter(|t| **t != "Help").map(|t| (t.to_string(), tl!(*t).to_string())).collect();
-        all.extend(plugin_tabs(app));
-        big_menu(ui, app, "settings", "Ribbon", "Choose which tabs the ribbon shows.", move |ui, app| {
-            for (tab, caption) in &all {
-                let mut on = !hidden.iter().any(|h| h == tab);
-                if ui.checkbox(&mut on, caption.as_str()).clicked() {
-                    let _ = app.run("ui.customizeRibbon", json!({"tab": tab}));
-                }
-            }
-        });
-        let qa = app.ui.quick_access.clone();
-        big_menu(ui, app, "command", "Quick\nAccess", "Choose extra buttons for the Quick Access Toolbar.", move |ui, app| {
-            for (id, label) in QUICK {
-                let mut on = qa.iter().any(|c| c == id);
-                if ui.checkbox(&mut on, tl!(*label)).clicked() {
-                    let _ = app.run("ui.quickAccess", json!({"command": id}));
-                }
-            }
-        });
-    });
     group(ui, "Performance", |ui| {
         big(
             ui,
@@ -3763,4 +3796,15 @@ fn language_menu(app: &mut RustGisApp, ui: &mut Ui) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_hidden_tabs_never_hide_the_fixed_tabs() {
+        let saved = ["Settings", "Help", "Edit", "Share", "Edit"].iter().map(|t| t.to_string()).collect();
+        assert_eq!(current_hidden_tabs(saved), vec!["Edit".to_string(), "Publish".to_string()]);
+    }
 }

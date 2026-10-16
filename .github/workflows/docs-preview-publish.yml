@@ -16,11 +16,13 @@
 # no longer the pull request's head (a newer push) publishes nothing. Dependabot runs get no
 # secrets, so they publish nothing either.
 #
-# A fork's site is unreviewed HTML and JavaScript, so it is published only when the run was started
-# by someone with write access: a maintainer who added the `preview` label or re-ran the
-# docs-preview workflow. The label is then taken off, so every new commit needs a new approval.
-# A maintainer's own push to a fork's branch (a maintainer edit) starts the run, so it counts as
-# their approval.
+# A fork's site is unreviewed HTML and JavaScript. It publishes on every push when the pull
+# request's author already has a commit here, usually from a merged pull request (GitHub's
+# `CONTRIBUTOR` association: "has previously committed to the repository").
+# A first-time contributor's preview is published only when the run was started by someone with
+# write access: a maintainer who added the `preview` label or re-ran the docs-preview workflow.
+# The label is then taken off, so every new commit needs a new approval. A maintainer's own push
+# to a fork's branch (a maintainer edit) starts the run, so it counts as their approval.
 # Same-repository pull requests come from people with write access and publish on every push.
 name: docs-preview-publish
 
@@ -90,8 +92,8 @@ jobs:
           fi
           # Captured first so a failing call fails the step (`read < <(…)` would hide it).
           info=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" \
-            --jq '[.state, .head.sha, (.head.repo.full_name // "-")] | @tsv')
-          IFS=$'\t' read -r state sha repo <<< "$info"
+            --jq '[.state, .head.sha, (.head.repo.full_name // "-"), .author_association] | @tsv')
+          IFS=$'\t' read -r state sha repo association <<< "$info"
           # A deleted fork has no head repository; the head commit must still match.
           [ "$repo" = - ] && repo="$RUN_REPO"
           if [ "$sha" != "$RUN_SHA" ] || [ "$repo" != "$RUN_REPO" ]; then
@@ -103,7 +105,12 @@ jobs:
           [ "$repo" != "$GITHUB_REPOSITORY" ] && fork=true
           if [ "$state" = open ] && [ "$HAS_SITE" = true ]; then
             mode=deploy
-            if [ "$fork" = true ]; then
+            # A returning contributor (an earlier commit here) publishes on every push. `returning`
+            # isn't `true`, so the label is left alone and the comment asks for no approval.
+            if [ "$fork" = true ] && [ "$association" = CONTRIBUTOR ]; then
+              echo "Fork preview approved: the author has contributed before."
+              fork=returning
+            elif [ "$fork" = true ]; then
               # Someone who isn't a collaborator is a 404; any other failure fails the step
               # rather than passing for "not approved".
               if ! permission=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${STARTED_BY}/permission" \

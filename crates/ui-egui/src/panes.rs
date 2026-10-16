@@ -22,11 +22,13 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             let (title, close) = match left {
                 LeftPane::Contents => ("Layers", "ui.pane.contents"),
                 LeftPane::Catalog => ("Browser", "ui.pane.catalog"),
+                LeftPane::Sources => ("Data Sources", "ui.pane.sources"),
             };
             pane_header(app, ui, tl!(title), close, &t);
             match left {
                 LeftPane::Contents => contents(app, ui, &t),
                 LeftPane::Catalog => catalog(app, ui, &t),
+                LeftPane::Sources => crate::sourcespane::show(app, ui, &t),
             }
         });
     }
@@ -204,21 +206,37 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             });
         }
         // Standalone tables.
-        let tables: Vec<String> = app.session.project.tables.iter().map(|t| t.name.clone()).collect();
+        let tables: Vec<(u32, String)> = app.session.project.tables.iter().map(|t| (t.id, t.name.clone())).collect();
         if !tables.is_empty() {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.add_space(12.0);
                 ui.label(egui::RichText::new(tl!("Standalone Tables")).size(11.5).color(t.text_dim));
             });
-            for name in tables {
+            for (id, name) in tables {
                 ui.horizontal(|ui| {
                     ui.add_space(30.0);
                     let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                     icons::paint(ui.painter(), r, "table", t.icon, t.accent);
                     let resp = ui.add(egui::Label::new(egui::RichText::new(&name).size(12.0)).sense(Sense::click()));
-                    if resp.double_clicked() || resp.clicked() {
-                        app.table.standalone = Some(name.clone());
+                    let mut open = resp.double_clicked() || resp.clicked();
+                    resp.context_menu(|ui| {
+                        if ui.button(tl!("Attribute Table")).clicked() {
+                            open = true;
+                            ui.close();
+                        }
+                        if ui.button(tl!("XY Table To Point…")).clicked() {
+                            let _ = app.run("ui.gp.open", json!({"tool": "xyTableToPoint", "table": id}));
+                            ui.close();
+                        }
+                        // Names can repeat: the id says which table. A view open on it closes itself.
+                        if ui.button(tl!("Remove")).clicked() {
+                            let _ = app.run("table.remove", json!({"table": id}));
+                            ui.close();
+                        }
+                    });
+                    if open {
+                        app.session.table_standalone = Some(id);
                         app.session.table_layer = None;
                     }
                 });
@@ -339,7 +357,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Token
     } else {
         t.text
     };
-    let name = if l.definition_query.is_some() { format!("{}  (filtered)", l.name) } else { l.name.clone() };
+    let name = if l.definition_query.is_some() { format!("{}  {}", l.name, tl!("(filtered)")) } else { l.name.clone() };
     ui.painter().text(pos2(x, r.center().y), Align2::LEFT_CENTER, &name, if active { semibold(12.5) } else { regular(12.5) }, color);
     if !l.selection.is_empty() {
         let badge = format!("{}", l.selection.len());
@@ -513,7 +531,7 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         }
                         resp.context_menu(|ui| {
                             if ui.button(tl!("Delete")).clicked() {
-                                let _ = app.run("map.remove", json!({"name": m}));
+                                crate::mapview::delete_map(app, m);
                                 ui.close();
                             }
                         });
@@ -535,22 +553,14 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 };
                 for b in boxes {
                     egui::CollapsingHeader::new(crate::i18n::location(b)).default_open(false).show(ui, |ui| {
-                        let mut subs: Vec<&str> = tools().filter(|x| x.toolbox.split(" › ").next() == Some(b)).map(|x| x.toolbox).collect();
-                        subs.dedup();
-                        // A large toolbox (the GeoLibre suite) opens one sub-toolbox at a time.
-                        if subs.len() > 1 && tools().filter(|x| x.toolbox.starts_with(b)).count() > 40 {
-                            for sub in subs {
-                                egui::CollapsingHeader::new(crate::i18n::location(sub.trim_start_matches(b).trim_start_matches(" › ")))
-                                    .id_salt(("toolbox", sub))
-                                    .default_open(false)
-                                    .show(ui, |ui| {
-                                        for tool in tools().filter(|x| x.toolbox == sub) {
-                                            link(app, ui, tool);
-                                        }
-                                    });
-                            }
+                        let in_box: Vec<&rustgis_engine::analysis::ToolSpec> =
+                            tools().filter(|x| x.toolbox.split(" › ").next() == Some(b)).collect();
+                        // A large toolbox (the GeoLibre suite) opens one level at a time:
+                        // `GeoLibre › Raster › General`.
+                        if in_box.len() > 40 {
+                            toolbox_levels(app, ui, &in_box, 1, &link);
                         } else {
-                            for tool in tools().filter(|x| x.toolbox.split(" › ").next() == Some(b)) {
+                            for tool in in_box {
                                 link(app, ui, tool);
                             }
                         }
@@ -607,6 +617,29 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     }
                 });
             }
+            let ramps: Vec<Ramp> = app.session.project.ramps.iter().map(|r| Ramp::Custom(Box::new(r.clone()))).collect();
+            if !ramps.is_empty() {
+                egui::CollapsingHeader::new(egui::RichText::new(tl!("Color Ramps")).font(semibold(12.5))).default_open(true).show(
+                    ui,
+                    |ui| {
+                        for r in ramps {
+                            ui.horizontal(|ui| {
+                                ramp_swatch(ui, &r, 16.0, false, t);
+                                let resp = ui.link(r.name()).on_hover_text(tl!("Apply to the selected layer"));
+                                if resp.clicked() {
+                                    let _ = app.run("layer.ramp", json!({"ramp": r.name()}));
+                                }
+                                resp.context_menu(|ui| {
+                                    if ui.button(tl!("Delete")).clicked() {
+                                        let _ = app.run("ramp.remove", json!({"name": r.name()}));
+                                        ui.close();
+                                    }
+                                });
+                            });
+                        }
+                    },
+                );
+            }
             let tasks: Vec<(String, usize)> = app.session.project.tasks.iter().map(|tk| (tk.name.clone(), tk.steps.len())).collect();
             if !tasks.is_empty() {
                 egui::CollapsingHeader::new(egui::RichText::new(tl!("Tasks")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
@@ -655,13 +688,13 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 );
             }
             egui::CollapsingHeader::new(egui::RichText::new(tl!("Tables")).font(semibold(12.5))).default_open(true).show(ui, |ui| {
-                let tables: Vec<String> = app.session.project.tables.iter().map(|t| t.name.clone()).collect();
+                let tables: Vec<(u32, String)> = app.session.project.tables.iter().map(|t| (t.id, t.name.clone())).collect();
                 if tables.is_empty() {
                     ui.label(egui::RichText::new(tl!("No standalone tables")).small().weak());
                 }
-                for n in tables {
+                for (id, n) in tables {
                     if ui.link(&n).clicked() {
-                        app.table.standalone = Some(n.clone());
+                        app.session.table_standalone = Some(id);
                         app.session.table_layer = None;
                     }
                 }
@@ -756,6 +789,31 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
 }
 
+/// `tools` grouped by the `depth`-th part of their toolbox (`GeoLibre › Raster › General`), one
+/// closed header per group and nested again below it; tools whose toolbox stops here are listed.
+fn toolbox_levels(
+    app: &mut RustGisApp,
+    ui: &mut Ui,
+    tools: &[&'static rustgis_engine::analysis::ToolSpec],
+    depth: usize,
+    link: &dyn Fn(&mut RustGisApp, &mut Ui, &rustgis_engine::analysis::ToolSpec),
+) {
+    let part = |x: &rustgis_engine::analysis::ToolSpec| x.toolbox.split(" › ").nth(depth);
+    let mut groups: Vec<&str> = tools.iter().filter_map(|x| part(x)).collect();
+    groups.sort();
+    groups.dedup();
+    for g in groups {
+        let inside: Vec<_> = tools.iter().copied().filter(|x| part(x) == Some(g)).collect();
+        let path: Vec<&str> = inside.first().map(|x| x.toolbox.split(" › ").take(depth + 1).collect()).unwrap_or_default();
+        egui::CollapsingHeader::new(crate::i18n::location(g)).id_salt(("toolbox", path)).default_open(false).show(ui, |ui| {
+            toolbox_levels(app, ui, &inside, depth + 1, link);
+        });
+    }
+    for tool in tools.iter().filter(|x| part(x).is_none()) {
+        link(app, ui, tool);
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Geoprocessing
 
@@ -763,14 +821,110 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 pub struct GpForm {
     pub tool: Option<&'static str>,
     pub values: HashMap<&'static str, String>,
+    /// The standalone table picked for an input, by its id (names can repeat); the input's value
+    /// is then the table's name, for show.
+    pub tables: HashMap<&'static str, u32>,
     pub search: String,
     pub last: Option<(bool, Vec<String>)>,
+    /// The fields that can hold coordinates, for the project revision and the input (its name,
+    /// and its id for a table) they were read from: telling them reads rows, too much to do
+    /// every frame.
+    pub coordinate_fields: Option<((u64, String, Option<u32>), Vec<String>)>,
     /// A GeoLibre runner install in progress (it runs on a background thread).
     pub install: Option<std::sync::Arc<std::sync::Mutex<Install>>>,
     /// The browser's GeoLibre tools loading.
     pub web_load: Option<crate::Slot<Result<String, String>>>,
     /// A tool running in the browser's GeoLibre runner: its run id, and where the result lands.
     pub web_run: Option<(u64, &'static str, crate::Slot<rustgis_engine::cmd::gp::ExternalOutput>)>,
+    /// A plugin tool running on a thread of its own, so the window stays responsive.
+    pub plugin_run: Option<PluginJob>,
+    /// Files picked in the browser for file parameters, which have no paths there: (name,
+    /// contents), sent with the run while the parameter still shows that name.
+    pub files: HashMap<&'static str, (String, Vec<u8>)>,
+    /// The tool and file parameter the browser's file picker is choosing for.
+    pub pending_file: Option<(&'static str, &'static str)>,
+    /// Uninstall was pressed once: the button now asks to confirm.
+    pub confirm_uninstall: bool,
+    /// Why the last uninstall failed (apart from `last`, which a tool run sets too).
+    pub uninstall_error: Option<String>,
+}
+
+/// A plugin tool running on a thread of its own.
+pub struct PluginJob {
+    pub id: u64,
+    pub tool: &'static str,
+    /// What the run returned, once it has.
+    pub slot: crate::Slot<Result<rustgis_engine::analysis::ToolResult, String>>,
+    /// Stops the run, and shows what it last logged.
+    pub control: std::sync::Arc<rustgis_engine::plugins::tools::Control>,
+}
+
+/// Starts a plugin tool on a thread of its own; [`poll_plugin_run`] applies what it returns.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_plugin_run(app: &mut RustGisApp, tool: &'static str, params: &Value, ctx: &egui::Context) {
+    match rustgis_engine::cmd::gp::plugin_start(&mut app.session, tool, params) {
+        Ok(run) => {
+            let slot = crate::Slot::default();
+            let control = std::sync::Arc::new(rustgis_engine::plugins::tools::Control::default());
+            let (out, ctl, ctx) = (slot.clone(), control.clone(), ctx.clone());
+            let id = run.id;
+            let spawned = std::thread::Builder::new().name(tool.into()).spawn(move || {
+                let r = run.run(&ctl);
+                // Filled even when poisoned, or the pane would wait for it forever.
+                *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(r);
+                ctx.request_repaint();
+            });
+            match spawned {
+                Ok(_) => {
+                    app.gp.plugin_run = Some(PluginJob { id, tool, slot, control });
+                    app.gp.last = None;
+                }
+                Err(e) => {
+                    rustgis_engine::cmd::gp::plugin_abandon(&mut app.session, id);
+                    app.gp.last = Some((false, vec![e.to_string()]));
+                }
+            }
+        }
+        Err(e) => app.gp.last = Some((false, vec![e])),
+    }
+}
+
+/// Applies a plugin tool run that finished on its thread.
+pub fn poll_plugin_run(app: &mut RustGisApp, ctx: &egui::Context) {
+    let Some(job) = &app.gp.plugin_run else { return };
+    // Its project was closed: stop it, as its result has nowhere to go.
+    if !rustgis_engine::cmd::gp::plugin_waiting(&app.session, job.id) {
+        job.control.cancel();
+        app.gp.plugin_run = None;
+        return;
+    }
+    let Some(result) = take(&job.slot) else {
+        // Its progress line changes as it logs.
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    };
+    let (id, tool) = (job.id, job.tool);
+    app.gp.plugin_run = None;
+    let r = rustgis_engine::cmd::gp::plugin_complete(&mut app.session, id, result).and_then(|_| app.run("gp.finish", json!({"id": id})));
+    finished(app, tool, r);
+}
+
+/// Shows how an asynchronous tool run went: under its form when it's open, else as a notice.
+fn finished(app: &mut RustGisApp, tool: &'static str, r: Result<Value, String>) {
+    let last = match r {
+        Ok(_) => (true, app.session.project.gp_history.last().map(|h| h.messages.clone()).unwrap_or_default()),
+        Err(e) => (false, vec![e]),
+    };
+    // Under its own form only; with another tool open, a notification says how it went.
+    if app.gp.tool == Some(tool) {
+        app.gp.last = Some(last);
+    } else if !last.0 {
+        app.session.notify(last.1.join("\n"), true);
+    } else {
+        let name = rustgis_engine::analysis::tool(tool).map(|t| t.name).unwrap_or(tool);
+        app.session.notify(crate::i18n::fmt("Finished: {tool}", &[("tool", tl!(name))]), false);
+    }
+    app.map.invalidate();
 }
 
 /// Starts loading the browser's GeoLibre tools (the runner downloads once, then the browser
@@ -805,20 +959,7 @@ pub fn poll_geolibre(app: &mut RustGisApp, ctx: &egui::Context) {
     if let Some((id, tool, out)) = app.gp.web_run.as_ref().and_then(|(id, tool, slot)| take(slot).map(|o| (*id, *tool, o))) {
         app.gp.web_run = None;
         let r = rustgis_engine::cmd::gp::external_complete(&mut app.session, id, out).and_then(|_| app.run("gp.finish", json!({"id": id})));
-        let last = match r {
-            Ok(_) => (true, app.session.project.gp_history.last().map(|h| h.messages.clone()).unwrap_or_default()),
-            Err(e) => (false, vec![e]),
-        };
-        // Under its own form only; with another tool open, a notification says how it went.
-        if app.gp.tool == Some(tool) {
-            app.gp.last = Some(last);
-        } else if !last.0 {
-            app.session.notify(last.1.join("\n"), true);
-        } else {
-            let name = rustgis_engine::analysis::tool(tool).map(|t| t.name).unwrap_or(tool);
-            app.session.notify(crate::i18n::fmt("Finished: {tool}", &[("tool", tl!(name))]), false);
-        }
-        app.map.invalidate();
+        finished(app, tool, r);
     }
     if app.gp.web_load.is_some() || app.gp.web_run.is_some() {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -839,6 +980,8 @@ impl GpForm {
     pub fn open(&mut self, tool: Option<&'static str>, s: &Session) {
         self.tool = tool;
         self.values.clear();
+        self.tables.clear();
+        self.files.clear();
         self.last = None;
         let Some(spec) = tool.and_then(rustgis_engine::analysis::tool) else { return };
         let active = s.active_layer.and_then(|id| s.map().layer(id));
@@ -864,6 +1007,16 @@ impl GpForm {
             if let Some(v) = v {
                 self.values.insert(p.name, v);
             }
+        }
+    }
+
+    /// Puts a standalone table, by its id, in the open tool's first input that takes one.
+    pub fn pick_table(&mut self, id: u32, s: &Session) {
+        let spec = self.tool.and_then(rustgis_engine::analysis::tool);
+        let input = spec.and_then(|t| t.params.iter().find(|p| p.kind == ParamKind::Layer));
+        if let (Some(p), Some(t)) = (input, s.project.table(id)) {
+            self.values.insert(p.name, t.name.clone());
+            self.tables.insert(p.name, id);
         }
     }
 }
@@ -894,6 +1047,17 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if status["web"] == true {
         geolibre_web_card(app, ui, t);
         return;
+    }
+    // An installed runner that lists no tools (broken, or a failed download of its list): it
+    // can still be removed from here.
+    if status["installed"] == true {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(tl!("The installed GeoLibre runner lists no tools.")).size(11.0).color(t.text_dim));
+            geolibre_uninstall(app, ui, t);
+        });
+        if let Some(e) = &app.gp.uninstall_error {
+            ui.label(egui::RichText::new(e).size(11.0).color(t.red));
+        }
     }
     let download = status["download"].as_str().unwrap_or("https://github.com/opengeos/geolibre-rust/releases/latest").to_string();
     ui.add_space(6.0);
@@ -969,6 +1133,55 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         },
     );
+}
+
+/// Uninstalls the GeoLibre tools (a second press confirms): natively the runner that Install
+/// put in place (not one of the user's own, found with Locate… or on the `PATH`); in the
+/// browser, the loaded tools, which then stop loading at startup.
+fn geolibre_uninstall(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+    let status = rustgis_engine::cmd::gp::geolibre_status();
+    let web = status["web"] == true;
+    if !web && status["installed"] != true {
+        return;
+    }
+    let label = match (web, app.gp.confirm_uninstall) {
+        (_, true) => tl!("Confirm uninstall"),
+        (true, false) => tl!("Remove"),
+        (false, false) => tl!("Uninstall"),
+    };
+    let tip = if web {
+        tl!("Unload the GeoLibre tools and stop loading them when RustGIS starts.")
+    } else {
+        tl!("Delete the GeoLibre runner that RustGIS installed. Install it again at any time.")
+    };
+    let text = egui::RichText::new(label).size(11.0);
+    let resp = ui.small_button(if app.gp.confirm_uninstall { text.color(t.red) } else { text }).on_hover_text(tip);
+    if !resp.clicked() {
+        // A click elsewhere takes back the first press.
+        if app.gp.confirm_uninstall && ui.input(|i| i.pointer.any_click()) && !resp.hovered() {
+            app.gp.confirm_uninstall = false;
+        }
+        return;
+    }
+    if !app.gp.confirm_uninstall {
+        app.gp.confirm_uninstall = true;
+        return;
+    }
+    app.gp.confirm_uninstall = false;
+    match app.run("gp.uninstallGeolibre", Value::Null) {
+        Ok(_) => {
+            if let Some(save) = &app.services.save_pref {
+                // Forget the runner Install remembered (or, in the browser, the loaded tools).
+                if web {
+                    save("geolibre_web", "off");
+                } else {
+                    save("geolibre_runner", "");
+                }
+            }
+            app.gp.uninstall_error = None;
+        }
+        Err(e) => app.gp.uninstall_error = Some(e),
+    }
 }
 
 /// The browser's version of the card: load the WASI runner's tools.
@@ -1052,16 +1265,41 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 return;
             }
             if q.is_empty() {
-                ui.label(egui::RichText::new(tl!("GeoLibre")).size(11.0).color(t.text_dim));
-                let mut boxes: Vec<&str> = external.iter().map(|t| t.toolbox).collect();
-                boxes.dedup();
-                for b in boxes {
-                    let n = external.iter().filter(|x| x.toolbox == b).count();
-                    egui::CollapsingHeader::new(format!("{} ({n})", crate::i18n::location(b.rsplit(" › ").next().unwrap_or(b))))
-                        .id_salt(("gp-box", b))
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tl!("GeoLibre")).size(11.0).color(t.text_dim));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| geolibre_uninstall(app, ui, t));
+                });
+                if let Some(e) = &app.gp.uninstall_error {
+                    ui.label(egui::RichText::new(e).size(11.0).color(t.red));
+                }
+                // As in GeoLibre's Processing menu: category › subcategory › tools
+                // (`GeoLibre › Terrain › Derivatives`; a tool without a subcategory sits
+                // directly in its category).
+                let level = |tool: &rustgis_engine::analysis::ToolSpec, i: usize| tool.toolbox.split(" › ").nth(i);
+                let mut tops: Vec<&str> = external.iter().filter_map(|x| level(x, 1)).collect();
+                tops.sort();
+                tops.dedup();
+                for top in tops {
+                    let in_top: Vec<_> = external.iter().filter(|x| level(x, 1) == Some(top)).collect();
+                    egui::CollapsingHeader::new(format!("{} ({})", crate::i18n::location(top), in_top.len()))
+                        .id_salt(("gp-box", top))
                         .default_open(false)
                         .show(ui, |ui| {
-                            for tool in external.iter().filter(|x| x.toolbox == b) {
+                            let mut subs: Vec<&str> = in_top.iter().filter_map(|x| level(x, 2)).collect();
+                            subs.sort();
+                            subs.dedup();
+                            for sub in subs {
+                                let in_sub: Vec<_> = in_top.iter().copied().filter(|x| level(x, 2) == Some(sub)).collect();
+                                egui::CollapsingHeader::new(format!("{} ({})", crate::i18n::location(sub), in_sub.len()))
+                                    .id_salt(("gp-box", top, sub))
+                                    .default_open(false)
+                                    .show(ui, |ui| {
+                                        for tool in in_sub {
+                                            row(app, ui, tool);
+                                        }
+                                    });
+                            }
+                            for tool in in_top.iter().copied().filter(|x| level(x, 2).is_none()) {
                                 row(app, ui, tool);
                             }
                         });
@@ -1161,44 +1399,96 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.add_space(4.0);
     ui.separator();
     ui.add_space(4.0);
+    // A standalone table is picked by its id, since names can repeat, and shown by its name.
+    let tables: Vec<(u32, String)> = app.session.project.tables.iter().map(|t| (t.id, t.name.clone())).collect();
     let layer_names = |filter: Option<GeometryType>| -> Vec<String> {
-        let mut v: Vec<String> =
-            app.session.map().layers.iter().filter(|l| filter.is_none_or(|g| l.geometry_type() == g)).map(|l| l.name.clone()).collect();
-        if filter.is_none() {
-            v.extend(app.session.project.tables.iter().map(|t| t.name.clone()));
-        }
-        v
+        app.session.map().layers.iter().filter(|l| filter.is_none_or(|g| l.geometry_type() == g)).map(|l| l.name.clone()).collect()
     };
     let kind_names = |raster: bool| -> Vec<String> {
         app.session.map().layers.iter().filter(|l| l.is_raster() == raster).map(|l| l.name.clone()).collect()
     };
+    let plugin_tool = spec.id.starts_with(rustgis_engine::plugins::PREFIX);
     let first_layer = spec
         .params
         .iter()
         .find(|p| matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer | ParamKind::VectorLayer))
         .map(|p| p.name);
+    // The file parameter whose Browse was pressed: picked once the form is drawn.
+    let mut browse_for = None;
     for p in spec.params {
         let label = ui.label(egui::RichText::new(format!("{}{}", tl!(p.label), if p.required { " *" } else { "" })).size(12.0));
         if !p.help.is_empty() {
             label.on_hover_text(p.help);
         }
-        let cur = app.gp.values.get(p.name).cloned().unwrap_or_default();
+        let mut cur = app.gp.values.get(p.name).cloned().unwrap_or_default();
         let options: Option<Vec<String>> = match p.kind {
-            ParamKind::Layer => Some(layer_names(None)),
+            // Layers by their names, then tables: the value is the name shown, and a table
+            // picked is kept by its id beside it.
+            ParamKind::Layer => {
+                let picked = app.gp.tables.get(p.name).copied();
+                let shown = if cur.is_empty() { "—" } else { cur.as_str() };
+                egui::ComboBox::from_id_salt(("gp", p.name)).selected_text(shown).width(ui.available_width() - 4.0).show_ui(ui, |ui| {
+                    for name in layer_names(None) {
+                        if ui.selectable_label(picked.is_none() && name == cur, &name).clicked() {
+                            app.gp.values.insert(p.name, name);
+                            app.gp.tables.remove(p.name);
+                        }
+                    }
+                    for (id, name) in &tables {
+                        if ui.selectable_label(picked == Some(*id), name).clicked() {
+                            app.gp.values.insert(p.name, name.clone());
+                            app.gp.tables.insert(p.name, *id);
+                        }
+                    }
+                });
+                ui.add_space(4.0);
+                continue;
+            }
             ParamKind::PolygonLayer => Some(layer_names(Some(GeometryType::Polygon))),
             ParamKind::PointLayer => Some(layer_names(Some(GeometryType::Point))),
-            ParamKind::Field | ParamKind::NumericField => {
+            ParamKind::Field | ParamKind::NumericField | ParamKind::CoordinateField => {
                 let lname = first_layer.and_then(|n| app.gp.values.get(n)).cloned().unwrap_or_default();
-                let numeric = p.kind == ParamKind::NumericField;
-                let ds = app
-                    .session
-                    .map()
-                    .layer_by_name(&lname)
-                    .map(|l| &l.dataset)
-                    .or_else(|| app.session.project.tables.iter().find(|t| t.name == lname));
-                let mut v: Vec<String> = ds
-                    .map(|d| d.fields.iter().filter(|f| !numeric || f.ty.is_numeric()).map(|f| f.name.clone()).collect())
-                    .unwrap_or_default();
+                let table = first_layer.and_then(|n| app.gp.tables.get(n)).copied();
+                // The table picked; else the layer or table of that name, as the tool finds it.
+                let ds = match table {
+                    Some(id) => app.session.project.table(id).map(|t| &t.dataset),
+                    None => app.session.map().layer_by_name(&lname).map(|l| &l.dataset).or_else(|| {
+                        let tables = &app.session.project.tables;
+                        rustgis_engine::project::find_table(tables, &lname).and_then(|i| tables.get(i)).map(|t| &t.dataset)
+                    }),
+                };
+                let offered = |d: &rustgis_engine::data::Dataset, i: usize, f: &rustgis_engine::data::Field| match p.kind {
+                    ParamKind::NumericField => f.ty.is_numeric(),
+                    ParamKind::CoordinateField => rustgis_engine::analysis::holds_coordinates(d, i),
+                    _ => true,
+                };
+                let fields = |d: &rustgis_engine::data::Dataset| -> Vec<String> {
+                    d.fields.iter().enumerate().filter(|(i, f)| offered(d, *i, f)).map(|(_, f)| f.name.clone()).collect()
+                };
+                // Telling which fields hold coordinates reads their rows, too much for every frame:
+                // the list is kept until the project or the input changes.
+                let coordinates = p.kind == ParamKind::CoordinateField;
+                let key = (app.session.revision, lname, table);
+                let kept = match &app.gp.coordinate_fields {
+                    Some((of, kept)) if coordinates && *of == key => Some(kept.clone()),
+                    _ => None,
+                };
+                let mut v: Vec<String> = match (ds, kept) {
+                    (None, _) => Vec::new(),
+                    (Some(_), Some(kept)) => kept,
+                    (Some(d), None) => {
+                        let v = fields(d);
+                        if coordinates {
+                            app.gp.coordinate_fields = Some((key, v.clone()));
+                        }
+                        v
+                    }
+                };
+                // A field picked for another layer, which this one doesn't have: unset.
+                if ds.is_some() && !cur.is_empty() && !v.iter().any(|f| f.eq_ignore_ascii_case(&cur)) {
+                    app.gp.values.remove(p.name);
+                    cur.clear();
+                }
                 if !p.required {
                     v.insert(0, String::new());
                 }
@@ -1252,23 +1542,67 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     ParamKind::Path => tl!("file path"),
                     _ => "",
                 };
-                if ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(f32::INFINITY)).changed() {
+                let mut browse = false;
+                // Browse picks a file to read: on the desktop for any file input (GeoLibre's too);
+                // in the browser, where the file itself goes with the run, only for plugins.
+                let browsable = p.kind == ParamKind::Path && (app.services.open_async.is_none() || plugin_tool);
+                let changed = if browsable {
+                    // One row: the path box takes what the button leaves.
+                    let row = vec2(ui.available_width(), ui.spacing().interact_size.y);
+                    ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        browse = ui.button(tl!("Browse")).clicked();
+                        ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(f32::INFINITY)).changed()
+                    })
+                    .inner
+                } else {
+                    ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(f32::INFINITY)).changed()
+                };
+                if changed {
+                    // A path typed in replaces a file picked in the browser.
+                    app.gp.files.remove(p.name);
                     app.gp.values.insert(p.name, v);
+                }
+                if browse {
+                    browse_for = Some(p.name);
                 }
             }
         }
         ui.add_space(4.0);
     }
+    if let Some(param) = browse_for {
+        browse_file(app, spec.id, param);
+    }
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        // One browser run at a time.
-        if crate::widgets::primary_button(ui, tl!("Run"), app.gp.web_run.is_none(), vec2(96.0, 30.0)).clicked() {
+        // One browser run at a time, and one plugin run.
+        let idle = app.gp.web_run.is_none() && app.gp.plugin_run.is_none();
+        if crate::widgets::primary_button(ui, tl!("Run"), idle, vec2(96.0, 30.0)).clicked() {
             let mut params = serde_json::Map::new();
+            // The tools of a suite or a plugin read their inputs as text; a plugin's is handed
+            // every parameter, so it gets only those it declares.
+            let builtin = rustgis_engine::analysis::external_source(spec).is_none();
+            let plugin = spec.id.starts_with(rustgis_engine::plugins::PREFIX);
             for p in spec.params {
                 if let Some(v) = app.gp.values.get(p.name).filter(|v| !v.trim().is_empty()) {
-                    let val = match p.kind {
-                        ParamKind::Number => v.trim().parse::<f64>().map(|n| json!(n)).unwrap_or(json!(v)),
-                        ParamKind::Bool => json!(v == "true"),
+                    let val = match (p.kind, app.gp.tables.get(p.name)) {
+                        // A table goes by its id: a number, which no name is taken for. Its name
+                        // goes beside it (`input_name`) for whoever reads the run afterwards; the
+                        // tools read only the parameters they know.
+                        (ParamKind::Layer, Some(id)) => {
+                            let note = format!("{}_name", p.name);
+                            if !plugin && !spec.params.iter().any(|q| q.name == note) {
+                                params.insert(note, json!(v));
+                            }
+                            if builtin { json!(id) } else { json!(id.to_string()) }
+                        }
+                        (ParamKind::Number, _) => v.trim().parse::<f64>().map(|n| json!(n)).unwrap_or(json!(v)),
+                        // A file picked in the browser goes with its contents.
+                        (ParamKind::Path, _) if app.gp.files.get(p.name).is_some_and(|(n, _)| n == v) => {
+                            use base64::Engine;
+                            let bytes = app.gp.files.get(p.name).map(|(_, b)| b.as_slice()).unwrap_or_default();
+                            json!({"name": v, "data": base64::engine::general_purpose::STANDARD.encode(bytes)})
+                        }
+                        (ParamKind::Bool, _) => json!(v == "true"),
                         _ => json!(v),
                     };
                     params.insert(p.name.to_string(), val);
@@ -1288,6 +1622,10 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     }
                     Err(e) => app.gp.last = Some((false, vec![e])),
                 }
+            } else if plugin && !cfg!(target_arch = "wasm32") {
+                // On a thread of its own: a plugin tool may run for minutes.
+                #[cfg(not(target_arch = "wasm32"))]
+                start_plugin_run(app, spec.id, &params, ui.ctx());
             } else {
                 let r = app.run("gp.run", json!({"tool": spec.id, "params": params}));
                 app.gp.last = Some(match r {
@@ -1304,6 +1642,27 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ui.spinner();
             ui.label(egui::RichText::new(tl!("Running…")).size(12.0));
         });
+    }
+    if let Some(job) = &app.gp.plugin_run {
+        ui.add_space(8.0);
+        let mut cancel = false;
+        ui.horizontal(|ui| {
+            ui.spinner();
+            let name = rustgis_engine::analysis::tool(job.tool).map(|t| t.name).unwrap_or(job.tool);
+            // Two labels, not one sentence put together from translated pieces.
+            ui.label(egui::RichText::new(tl!("Running…")).size(12.0));
+            ui.label(egui::RichText::new(tl!(name)).size(12.0).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                cancel = ui.add_enabled(!job.control.is_cancelled(), egui::Button::new(tl!("Cancel"))).clicked();
+            });
+        });
+        // What the tool last logged, as its progress.
+        if let Some(line) = job.control.last_log() {
+            ui.label(egui::RichText::new(line).size(11.0).color(t.text_dim));
+        }
+        if cancel {
+            job.control.cancel();
+        }
     }
     if let Some((ok, msgs)) = &app.gp.last {
         ui.add_space(8.0);
@@ -1322,6 +1681,40 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
             });
     }
+}
+
+/// Picks a file for a tool's file parameter: its path on the desktop, and in the browser, which
+/// has no paths, the file itself (it arrives in [`received_file`]).
+fn browse_file(app: &mut RustGisApp, tool: &'static str, param: &'static str) {
+    let exts = rustgis_engine::plugins::tools::file_extensions(tool, param);
+    if let Some(open) = &app.services.open_async {
+        app.gp.pending_file = Some((tool, param));
+        open(&format!("{}{}", crate::TOOL_FILE_PURPOSE, exts.join(",")));
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let exts: Vec<&str> = exts.iter().map(String::as_str).collect();
+        let dialog = rfd::FileDialog::new();
+        let dialog = if exts.is_empty() { dialog } else { dialog.add_filter(exts.join(", "), &exts).add_filter(tl!("All files"), &["*"]) };
+        if let Some(path) = dialog.pick_file() {
+            app.gp.files.remove(param);
+            app.gp.values.insert(param, path.display().to_string());
+        }
+    }
+}
+
+/// A file the browser's picker chose for a tool's file parameter: kept for the run, if that
+/// tool is still open.
+pub fn received_file(app: &mut RustGisApp, name: &str, bytes: &[u8]) {
+    let Some((_, param)) = app.gp.pending_file.take().filter(|(t, _)| app.gp.tool == Some(*t)) else { return };
+    if bytes.len() > rustgis_engine::plugins::tools::MAX_FILE {
+        let mb = rustgis_engine::plugins::tools::MAX_FILE / (1024 * 1024);
+        app.gp.last = Some((false, vec![crate::i18n::fmt("{name} is larger than {mb} MB", &[("name", name), ("mb", &mb.to_string())])]));
+        return;
+    }
+    app.gp.values.insert(param, name.to_string());
+    app.gp.files.insert(param, (name.to_string(), bytes.to_vec()));
 }
 
 pub fn tool_icon(id: &str) -> &'static str {
@@ -1346,7 +1739,7 @@ pub fn tool_icon(id: &str) -> &'static str {
 // ---------------------------------------------------------------------------------------------
 // Symbology
 
-fn ramp_swatch(ui: &mut Ui, ramp: Ramp, w: f32, selected: bool, t: &Tokens) -> egui::Response {
+fn ramp_swatch(ui: &mut Ui, ramp: &Ramp, w: f32, selected: bool, t: &Tokens) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(w, 18.0), Sense::click());
     let n = 24;
     for i in 0..n {
@@ -1436,7 +1829,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         Renderer::Single(s) => symbol_editor(app, ui, *s, g, t),
         Renderer::Unique { field, classes, ramp, .. } => {
             field_combo(app, ui, "Field", field, &all, "unique");
-            ramp_picker(app, ui, *ramp, t);
+            ramp_picker(app, ui, ramp, t);
             ui.add_space(6.0);
             ui.label(
                 egui::RichText::new(crate::i18n::fmt("{n} classes", &[("n", &classes.len().to_string())])).size(11.5).color(t.text_dim),
@@ -1450,7 +1843,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 egui::ComboBox::from_id_salt("sym_method").selected_text(tl!(method.label())).width(180.0).show_ui(ui, |ui| {
                     for m in ClassMethod::ALL {
                         if ui.selectable_label(m == *method, tl!(m.label())).clicked() {
-                            let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{m:?}"), "classes": breaks.len(), "ramp": format!("{ramp:?}")}));
+                            let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{m:?}"), "classes": breaks.len(), "ramp": ramp.name()}));
                         }
                     }
                 });
@@ -1459,10 +1852,13 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 ui.label(tl!("Classes"));
                 let mut k = breaks.len();
                 if ui.add(egui::DragValue::new(&mut k).range(1..=12)).changed() {
-                    let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{method:?}"), "classes": k, "ramp": format!("{ramp:?}")}));
+                    let _ = app.run(
+                        "layer.symbology",
+                        json!({"type": "graduated", "field": field, "method": format!("{method:?}"), "classes": k, "ramp": ramp.name()}),
+                    );
                 }
             });
-            ramp_picker(app, ui, *ramp, t);
+            ramp_picker(app, ui, ramp, t);
             ui.add_space(6.0);
             legend_list(ui, &l, t);
         }
@@ -1499,20 +1895,38 @@ fn field_combo(app: &mut RustGisApp, ui: &mut Ui, label: &str, cur: &str, fields
     });
 }
 
-fn ramp_picker(app: &mut RustGisApp, ui: &mut Ui, cur: Ramp, t: &Tokens) {
+fn ramp_picker(app: &mut RustGisApp, ui: &mut Ui, cur: &Ramp, t: &Tokens) {
     ui.add_space(4.0);
     ui.label(egui::RichText::new(tl!("Color scheme")).size(11.5).color(t.text_dim));
     let w = (ui.available_width() - 8.0) / 2.0;
-    egui::Grid::new("ramps").spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        for (i, r) in Ramp::ALL.into_iter().enumerate() {
-            if ramp_swatch(ui, r, w, r == cur, t).on_hover_text(tl!(r.label())).clicked() {
-                let _ = app.run("layer.ramp", json!({"ramp": format!("{r:?}")}));
+    let grid = |app: &mut RustGisApp, ui: &mut Ui, id: &str, ramps: Vec<Ramp>| {
+        egui::Grid::new(id).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+            for (i, r) in ramps.iter().enumerate() {
+                // Built-in names are translated; a custom ramp's is the user's own.
+                let tip = if matches!(r, Ramp::Custom(_)) { r.label() } else { tl!(r.label()) };
+                if ramp_swatch(ui, r, w, r == cur, t).on_hover_text(tip).clicked() {
+                    let _ = app.run("layer.ramp", json!({"ramp": r.name()}));
+                }
+                if i % 2 == 1 {
+                    ui.end_row();
+                }
             }
-            if i % 2 == 1 {
-                ui.end_row();
-            }
-        }
-    });
+        });
+    };
+    grid(app, ui, "ramps", Ramp::ALL.to_vec());
+    let custom: Vec<Ramp> = app.session.project.ramps.iter().map(|r| Ramp::Custom(Box::new(r.clone()))).collect();
+    if !custom.is_empty() {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(tl!("Custom")).size(11.5).color(t.text_dim));
+        grid(app, ui, "custom_ramps", custom);
+    }
+    if ui
+        .small_button(tl!("Add Color Ramp File…"))
+        .on_hover_text(tl!("Add color ramps to the project from a .rgisramp file, a QGIS style, a GDAL color file or a GMT palette."))
+        .clicked()
+    {
+        let _ = app.run("ui.openItem", json!({"kind": "ramps"}));
+    }
 }
 
 fn legend_list(ui: &mut Ui, l: &Layer, t: &Tokens) {
@@ -1856,10 +2270,10 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
         RasterRenderer::Stretch { band, ramp, invert } => {
             let code = style.renderer.code();
             band_combo(app, ui, "Band", *band, &|i| ("raster.symbology".into(), json!({"type": code, "band": i + 1})));
-            ramp_picker(app, ui, *ramp, t);
+            ramp_picker(app, ui, ramp, t);
             let mut inv = *invert;
             if ui.checkbox(&mut inv, tl!("Invert color scheme")).changed() {
-                let _ = app.run("raster.symbology", json!({"type": "stretch", "invert": inv, "ramp": format!("{ramp:?}")}));
+                let _ = app.run("raster.symbology", json!({"type": "stretch", "invert": inv, "ramp": ramp.name()}));
             }
         }
         RasterRenderer::Rgb { red, green, blue } => {
@@ -1868,7 +2282,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             }
         }
         RasterRenderer::Classify { band, method, ramp, breaks } => {
-            let (m, k, r) = (*method, breaks.len(), *ramp);
+            let (m, k, r) = (*method, breaks.len(), ramp.name().to_string());
             band_combo(app, ui, "Band", *band, &|i| {
                 ("raster.symbology".into(), json!({"type": "classify", "band": i + 1, "classes": k, "method": format!("{m:?}")}))
             });
@@ -1877,10 +2291,8 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 egui::ComboBox::from_id_salt("raster_method").selected_text(tl!(method.label())).width(180.0).show_ui(ui, |ui| {
                     for mm in ClassMethod::ALL {
                         if ui.selectable_label(mm == m, tl!(mm.label())).clicked() {
-                            let _ = app.run(
-                                "raster.symbology",
-                                json!({"type": "classify", "method": format!("{mm:?}"), "classes": k, "ramp": format!("{r:?}")}),
-                            );
+                            let _ = app
+                                .run("raster.symbology", json!({"type": "classify", "method": format!("{mm:?}"), "classes": k, "ramp": r}));
                         }
                     }
                 });
@@ -1889,17 +2301,14 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 ui.label(tl!("Classes"));
                 let mut kk = k;
                 if ui.add(egui::DragValue::new(&mut kk).range(1..=32)).changed() {
-                    let _ = app.run(
-                        "raster.symbology",
-                        json!({"type": "classify", "method": format!("{m:?}"), "classes": kk, "ramp": format!("{r:?}")}),
-                    );
+                    let _ = app.run("raster.symbology", json!({"type": "classify", "method": format!("{m:?}"), "classes": kk, "ramp": r}));
                 }
             });
-            ramp_picker(app, ui, *ramp, t);
+            ramp_picker(app, ui, ramp, t);
         }
         RasterRenderer::UniqueValues { band, ramp, values } => {
             band_combo(app, ui, "Band", *band, &|i| ("raster.symbology".into(), json!({"type": "unique", "band": i + 1})));
-            ramp_picker(app, ui, *ramp, t);
+            ramp_picker(app, ui, ramp, t);
             ui.label(
                 egui::RichText::new(crate::i18n::fmt("{n} classes", &[("n", &values.len().to_string())])).size(11.5).color(t.text_dim),
             );
@@ -1908,11 +2317,11 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             ui.label(egui::RichText::new(tl!("Colors from the raster's own color table.")).size(11.5).color(t.text_dim));
         }
         RasterRenderer::ShadedRelief { band, ramp, azimuth, altitude, z_factor } => {
-            let (az, alt, zf, rp) = (*azimuth, *altitude, *z_factor, *ramp);
+            let (az, alt, zf, rp) = (*azimuth, *altitude, *z_factor, ramp.as_ref().map(|r| r.name().to_string()));
             let relief = move |band: usize, az: f64, alt: f64, zf: f64| {
                 let mut p = json!({"type": "shadedRelief", "band": band + 1, "azimuth": az, "altitude": alt, "zFactor": zf});
-                match rp {
-                    Some(r) => p["ramp"] = json!(format!("{r:?}")),
+                match &rp {
+                    Some(r) => p["ramp"] = json!(r),
                     None => p["grey"] = json!(true),
                 }
                 p
@@ -1936,7 +2345,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     ui.end_row();
                 }
             });
-            let mut tint = rp.is_some();
+            let mut tint = ramp.is_some();
             if ui.checkbox(&mut tint, tl!("Tint by elevation")).changed() {
                 let mut p = relief(*band, az, alt, zf);
                 if tint {
@@ -1947,7 +2356,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 }
                 let _ = app.run("raster.symbology", p);
             }
-            if let Some(r) = rp {
+            if let Some(r) = ramp {
                 ramp_picker(app, ui, r, t);
             }
         }

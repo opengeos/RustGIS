@@ -1,6 +1,7 @@
 # pt interface catalog: English<TAB>translation
  by 	 por
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+(filtered)	(filtrada)
 00:00 UTC	00:00 UTC
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
@@ -14,6 +15,7 @@ A flat scene centred on the view (azimuthal equidistant).	Uma cena plana centrad
 A globe scene.	Uma cena de globo.
 A magnifying lens that follows the pointer.	Uma lupa que acompanha o ponteiro.
 A notebook of text and command cells.	Um notebook de células de texto e de comandos.
+A project keeps at least one map	Um projeto mantém pelo menos um mapa
 A projected coordinate system.	Um sistema de coordenadas projetadas.
 A report listing the selected layer's records, page after page.	Um relatório que lista os registros da camada selecionada, página após página.
 A template with the first selected feature's values	Um modelo com os valores da primeira feição selecionada
@@ -247,6 +249,7 @@ Checking for updates…	Procurando atualizações…
 China	China
 Choose a band combination to display the raster layer.	Escolha uma combinação de bandas para exibir a camada raster.
 Choose a contrast stretch for the raster layer.	Escolha um realce de contraste para a camada raster.
+Choose a delimited text file or a spreadsheet, then pick its columns.	Escolha um arquivo de texto delimitado ou uma planilha e depois as colunas.
 Choose a model.	Escolha um modelo.
 Choose a resampling type for the raster layer.	Escolha um tipo de reamostragem para a camada raster.
 Choose extra buttons for the Quick Access Toolbar.	Escolher botões extras para a barra de ferramentas de acesso rápido.
@@ -323,6 +326,7 @@ Color Vision	Visão de cores
 Color Vision Simulator	Simulador de visão de cores
 Colormap	Mapa de cores
 Colors from the raster's own color table.	Cores da própria tabela de cores do raster.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	Colunas com nomes como longitude/latitude, easting/northing ou geometry são escolhidas para você.
 Combinations from the box above, one per line	Combinações da caixa acima, uma por linha
 Command\nSearch	Pesquisar\ncomandos
 command is required	command é obrigatório
@@ -383,6 +387,7 @@ Create Polygon	Criar polígono
 Create Profile	Criar perfil
 Create Thumbnail	Criar miniatura
 Creates a point inside each input feature.	Cria um ponto dentro de cada feição de entrada.
+Creates points from a table's x and y coordinate fields.	Cria pontos a partir dos campos de coordenadas x e y de uma tabela.
 Creates polygons around input features at a given distance.	Cria polígonos ao redor das feições de entrada a uma distância especificada.
 Cross Section	Seção transversal
 Cross Section (2 clicks)	Seção transversal (2 cliques)
@@ -774,6 +779,7 @@ Import Thumbnail	Importar miniatura
 Import Web Tool	Importar ferramenta web
 In Beyond	Limite ao aproximar
 In Progress	Em andamento
+In RustGIS, it can:	No RustGIS, ele pode:
 in progress	em andamento
 In project	No projeto
 In use	Em uso
@@ -802,6 +808,7 @@ Installed	Instalado
 Installed plugins are kept in {folder}	Os plugins instalados ficam em {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Instalou com Homebrew, winget, AUR ou COPR? Atualize por lá.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} instalado. Você o encontra na guia Plugins; as ferramentas dele também estão no painel Ferramentas.
+Installing it downloads Python {version} and the packages it needs from the internet.	A instalação baixa da internet o Python {version} e os pacotes de que ele precisa.
 Interface font: {font}	Fonte da interface: {font}
 Interpolate a surface from points (IDW)	Interpolar uma superfície a partir de pontos (IDW)
 Invalid: {error}	Inválida: {error}
@@ -809,6 +816,7 @@ Invert	Inverter
 Invert color scheme	Inverter esquema de cores
 Invert the selection.	Inverter a seleção.
 IS NULL	IS NULL
+It runs: {program}	Ele executa: {program}
 it connects to an address on the internet	conecta-se a um endereço na internet
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	é reservado a você (plugins, scripts, tarefas, modelos e o executor do GeoLibre)
 it reads or writes files on this computer	lê ou grava arquivos neste computador
@@ -1067,6 +1075,7 @@ None. Add one by address, or from a basemap plugin.	Nenhuma. Adicione uma pelo e
 North	Norte
 North\nArrow	Seta de\nnorte
 North Polar Stereographic	Estereográfica polar norte
+Not sandboxed	Fora da sandbox
 not a RustGIS layout	não é um layout do RustGIS
 not needed	não é necessária
 Not saved yet	Ainda não salvo
@@ -1198,6 +1207,7 @@ PMTiles archive	Arquivo PMTiles
 PMTiles File…	Arquivo PMTiles…
 PNG frames (zip)	Quadros PNG (zip)
 PNG image	Imagem PNG
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	Plugins marcados como "Fora da sandbox" são executados como programas no seu computador e podem fazer tudo o que você pode.
 Point	Ponto
 Points	Pontos
 points each	pontos cada
@@ -1208,6 +1218,7 @@ Polygon (draw)	Polígono (desenhar)
 Polygons	Polígonos
 Polyline	Polilinha
 Pop-up Mode	Modo de pop-up
+Prepare	Preparar
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Locais povoados
 Portal	Portal
@@ -1215,6 +1226,7 @@ Portrait	Retrato
 Postprocessing	Pós-processamento
 power 2	potência 2
 Prepare every layer's geometry for this projection.	Preparar a geometria de todas as camadas para esta projeção.
+Preparing its Python environment…	Preparando o ambiente Python…
 Presentation	Apresentação
 Presentation File	Arquivo de apresentação
 Presentation Pane	Painel Apresentação
@@ -1253,6 +1265,9 @@ Proximity	Proximidade
 Publish	Publicar
 Publish › Output	Publicar › Saída
 Put the layer back as it was then	Restaurar a camada como estava naquele momento
+Python environment failed: {error}	Falha no ambiente Python: {error}
+Python environment not prepared	Ambiente Python não preparado
+Python environment ready	Ambiente Python pronto
 Quantile	Quantil
 Quick\nAccess	Acesso\nrápido
 Quick Access Toolbar	Barra de ferramentas de acesso rápido
@@ -1307,6 +1322,7 @@ Remove Folder	Remover pasta
 Remove From Current Selection	Remover da seleção atual
 Remove Keyframe	Remover quadro-chave
 Remove Section	Remover seção
+Remove Table	Remover tabela
 Remove the last keyframe.	Remover o último quadro-chave.
 Remove the layer from the map.	Remover a camada do mapa.
 Remove Tile Layer	Remover camada de blocos
@@ -1636,6 +1652,7 @@ Text	Texto
 Text Symbol	Símbolo de texto
 The assistant is busy; stop it or wait for it to finish.	O assistente está ocupado; interrompa-o ou aguarde até que termine.
 The assistant wants to run this, and {why}:	O assistente quer executar o seguinte, e {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Este plugin é executado como um programa no seu computador, fora da sandbox do RustGIS. Ele pode fazer tudo o que você pode: ler e alterar seus arquivos, usar a rede e executar outros programas. Instale-o somente se confiar no autor.
 the capture failed unexpectedly	a captura falhou inesperadamente
 the Help tab always shows	a guia Ajuda é sempre mostrada
 The job covers the map view	O trabalho abrange a visualização do mapa
@@ -1812,7 +1829,11 @@ World, equal-area: true sizes, shapes bend towards the edges.	Mundo, equivalente
 Worldview	Fronteiras
 Write a plugin	Escrever um plugin
 X (mm)	X (mm)
+X Field	Campo X
+XY Table To Point	Tabela XY para ponto
+XY Table To Point…	Tabela XY para ponto…
 Y (mm)	Y (mm)
+Y Field	Campo Y
 Yes	Sim
 You have version {version}.	Você tem a versão {version}.
 z (m)	z (m)
@@ -1845,6 +1866,8 @@ Zoom to the whole world.	Zoom para o mundo inteiro.
 Zoom to Tokyo	Aproximar de Tóquio
 Zoom To World	Zoom para o mundo
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} mudou desde que foi instalado; instale-o novamente pelo Gerenciador de plugins.
+{name} is larger than {mb} MB	{name} tem mais de {mb} MB
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} é executado como um programa no seu computador: requer o aplicativo desktop ou o rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} foi retirado do registro de plugins e foi desativado.
 {name} was withdrawn from the plugin registry: {reason}	{name} foi retirado do registro de plugins: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: o download não corresponde ao registro; não foi instalado.
@@ -1856,3 +1879,11 @@ Zoom To World	Zoom para o mundo
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: só são permitidos endereços HTTPS, ou HTTP simples neste computador ou nesta rede
 © OpenStreetMap contributors	© Colaboradores do OpenStreetMap
 ⌘K	⌘K
+MCP Relay	Relé MCP
+MCP relay stopped	Relé MCP parado
+MCP relay listening on 127.0.0.1:{port}	Relé MCP a ouvir em 127.0.0.1:{port}
+MCP relay · {n} attached	Relé MCP · {n} ligados
+Stop MCP relay	Parar o relé MCP
+MCP relay is already listening on 127.0.0.1:{port}; stop it first to use port {asked}	O relé MCP já está a ouvir em 127.0.0.1:{port}; pare-o primeiro para usar a porta {asked}
+Opening {url}…	Abrindo {url}…
+{url}: downloaded after another project was opened, so it wasn't opened	{url}: baixado depois que outro projeto foi aberto, por isso não foi aberto

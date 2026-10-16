@@ -244,10 +244,14 @@ fn to_f32(buf: DecodingResult) -> (Vec<f32>, &'static str) {
     }
 }
 
+/// Bits per sample of the current image (the most of any sample).
+fn bits<R: Read + Seek>(dec: &mut Decoder<R>) -> u16 {
+    dec.find_tag_unsigned_vec::<u16>(Tag::BitsPerSample).ok().flatten().and_then(|v| v.into_iter().max()).unwrap_or(8)
+}
+
 /// Bytes per sample of the current image (from its bits per sample).
 fn sample_bytes<R: Read + Seek>(dec: &mut Decoder<R>) -> usize {
-    let bits = dec.find_tag_unsigned_vec::<u16>(Tag::BitsPerSample).ok().flatten().and_then(|v| v.into_iter().max()).unwrap_or(8);
-    (bits as usize).div_ceil(8).max(1)
+    (bits(dec) as usize).div_ceil(8).max(1)
 }
 
 fn samples<R: Read + Seek>(dec: &mut Decoder<R>) -> usize {
@@ -387,8 +391,104 @@ impl<R: Seek> Seek for Unpaletted<R> {
     }
 }
 
-/// Reads an image too large to hold, a strip or tile at a time, keeping every `k`-th pixel each
-/// way: an overview made as it is read, for a file that has none. Returns the bands.
+/// Opens another reader on the same file, for decoding its chunks on more than one thread.
+pub(crate) type Opener<'a> = &'a (dyn Fn() -> std::io::Result<Reader<'static>> + Sync);
+
+/// How an image is cut into chunks (strips or tiles), and how they're laid out.
+#[derive(Clone, Copy)]
+struct Chunks {
+    w: u32,
+    h: u32,
+    /// Chunk width and height.
+    cw: u32,
+    ch: u32,
+    /// Chunks across and down one plane.
+    across: u32,
+    per_plane: u32,
+    planes: usize,
+    /// Samples in each chunk's pixels.
+    samples: usize,
+    planar: bool,
+}
+
+impl Chunks {
+    fn new<R: Read + Seek>(dec: &mut Decoder<R>, w: u32, h: u32, nbands: usize, planar: bool) -> Self {
+        let tag = |dec: &mut Decoder<R>, t: Tag| dec.find_tag_unsigned::<u32>(t).ok().flatten();
+        // Chunk sizes from the tags (the decoder's own helpers assume a sound file).
+        let tiled = tag(dec, Tag::TileWidth).is_some();
+        let (cw, ch) = if tiled {
+            (tag(dec, Tag::TileWidth).unwrap_or(256).max(1), tag(dec, Tag::TileLength).unwrap_or(256).max(1))
+        } else {
+            (w.max(1), tag(dec, Tag::RowsPerStrip).unwrap_or(h).clamp(1, h.max(1)))
+        };
+        let (across, down) = (w.div_ceil(cw), h.div_ceil(ch));
+        Chunks {
+            w,
+            h,
+            cw,
+            ch,
+            across,
+            per_plane: across.saturating_mul(down),
+            planes: if planar { nbands } else { 1 },
+            samples: if planar { 1 } else { nbands },
+            planar,
+        }
+    }
+
+    fn count(&self) -> u64 {
+        u64::from(self.per_plane) * self.planes as u64
+    }
+
+    /// Chunk `i` (counting through every plane) as (plane, chunk index in the file), when it holds
+    /// a kept row and column; a chunk holding none is skipped unread.
+    fn wanted(&self, i: u64, k: u32) -> Option<(usize, u32)> {
+        let plane = usize::try_from(i / u64::from(self.per_plane.max(1))).ok()?;
+        let c = u32::try_from(i % u64::from(self.per_plane.max(1))).ok()?;
+        let (x0, y0) = ((c % self.across) * self.cw, (c / self.across) * self.ch);
+        let rows = self.ch.min(self.h.saturating_sub(y0));
+        if y0.div_ceil(k) * k >= y0 + rows || x0.div_ceil(k) * k >= x0 + self.cw.min(self.w - x0) {
+            return None;
+        }
+        let index = u32::try_from(plane).ok()?.checked_mul(self.per_plane)?.checked_add(c)?;
+        Some((plane, index))
+    }
+
+    /// Copies every `k`-th pixel each way of chunk `c` of `plane` (decoded as `values`) into
+    /// `bands`, each `ow` pixels wide.
+    fn place(&self, bands: &mut [Vec<f32>], values: &[f32], plane: usize, c: u32, k: u32, ow: usize) {
+        let c = c % self.per_plane.max(1);
+        let (x0, y0) = ((c % self.across) * self.cw, (c / self.across) * self.ch);
+        let rows = self.ch.min(self.h.saturating_sub(y0));
+        // The chunk's row length: the full tile width when padded, else the data width.
+        let stride = (values.len() / (rows as usize).max(1) / self.samples.max(1)).max(1);
+        let mut y = y0.div_ceil(k) * k;
+        while y < y0 + rows {
+            let mut x = x0.div_ceil(k) * k;
+            while x < (x0 + self.cw).min(self.w) {
+                let src = ((y - y0) as usize * stride + (x - x0) as usize) * self.samples;
+                let dst = (y / k) as usize * ow + (x / k) as usize;
+                for b in 0..self.samples {
+                    let band = if self.planar { plane } else { b };
+                    if let (Some(v), Some(slot)) = (values.get(src + b), bands.get_mut(band).and_then(|v| v.get_mut(dst))) {
+                        *slot = *v;
+                    }
+                }
+                x += k;
+            }
+            y += k;
+        }
+    }
+}
+
+/// Fewest chunks worth decoding on more than one thread.
+#[cfg(not(target_arch = "wasm32"))]
+const PARALLEL_CHUNKS: u64 = 16;
+
+/// Reads an image a strip or tile at a time, keeping every `k`-th pixel each way: an overview
+/// made as it is read, for a file too large to hold that has none. Returns the bands. With `k`
+/// 1, the whole image a chunk at a time. With `open`, chunks are decoded on several threads,
+/// each reading image `image` of its own copy of the file.
+#[allow(clippy::too_many_arguments)]
 fn decimate<R: Read + Seek>(
     dec: &mut Decoder<R>,
     w: u32,
@@ -396,64 +496,100 @@ fn decimate<R: Read + Seek>(
     nbands: usize,
     planar: bool,
     k: u32,
+    open: Option<(Opener<'_>, usize, Limits)>,
 ) -> Result<(Vec<Vec<f32>>, &'static str)> {
+    let k = k.max(1);
     let (ow, oh) = (w.div_ceil(k) as usize, h.div_ceil(k) as usize);
     let mut bands = vec![vec![f32::NAN; ow * oh]; nbands];
-    let tag = |dec: &mut Decoder<R>, t: Tag| dec.find_tag_unsigned::<u32>(t).ok().flatten();
-    // Chunk sizes from the tags (the decoder's own helpers assume a sound file).
-    let tiled = tag(dec, Tag::TileWidth).is_some();
-    let (cw, ch) = if tiled {
-        (tag(dec, Tag::TileWidth).unwrap_or(256).max(1), tag(dec, Tag::TileLength).unwrap_or(256).max(1))
-    } else {
-        (w, tag(dec, Tag::RowsPerStrip).unwrap_or(h).clamp(1, h.max(1)))
-    };
-    let (across, down) = (w.div_ceil(cw), h.div_ceil(ch));
-    let per_plane = across.saturating_mul(down);
-    let planes = if planar { nbands } else { 1 };
-    let samples = if planar { 1 } else { nbands };
-    let mut data_type = "Float32";
-    for plane in 0..planes {
-        for c in 0..per_plane {
-            let (col, row) = (c % across, c / across);
-            let (x0, y0) = (col * cw, row * ch);
-            let rows = ch.min(h - y0);
-            // A chunk holding no kept row or column is skipped unread.
-            let first_y = y0.div_ceil(k) * k;
-            let first_x = x0.div_ceil(k) * k;
-            if first_y >= y0 + rows || first_x >= x0 + cw.min(w - x0) {
-                continue;
-            }
-            let index = u32::try_from(plane).unwrap_or(0).saturating_mul(per_plane).saturating_add(c);
-            let (values, dt) = to_f32(dec.read_chunk(index).map_err(err)?);
-            data_type = dt;
-            // The chunk's row length: the full tile width when padded, else the data width.
-            let stride = (values.len() / (rows as usize).max(1) / samples.max(1)).max(1);
-            let mut y = first_y;
-            while y < y0 + rows {
-                let mut x = first_x;
-                while x < (x0 + cw).min(w) {
-                    let src = ((y - y0) as usize * stride + (x - x0) as usize) * samples;
-                    let dst = (y / k) as usize * ow + (x / k) as usize;
-                    for b in 0..samples {
-                        let band = if planar { plane } else { b };
-                        if let (Some(v), Some(slot)) = (values.get(src + b), bands.get_mut(band).and_then(|v| v.get_mut(dst))) {
-                            *slot = *v;
-                        }
-                    }
-                    x += k;
-                }
-                y += k;
-            }
+    let chunks = Chunks::new(dec, w, h, nbands, planar);
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some((open, image, limits)) = open
+        && chunks.count() >= PARALLEL_CHUNKS
+    {
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(16);
+        if threads > 1 {
+            return decimate_parallel(chunks, bands, k, ow, threads, open, image, limits);
         }
     }
+    let _ = open;
+    let mut data_type = "Float32";
+    for i in 0..chunks.count() {
+        let Some((plane, index)) = chunks.wanted(i, k) else { continue };
+        let (values, dt) = to_f32(dec.read_chunk(index).map_err(err)?);
+        data_type = dt;
+        chunks.place(&mut bands, &values, plane, index, k, ow);
+    }
     Ok((bands, data_type))
+}
+
+/// [`decimate`] on `threads` threads, each with its own decoder taking the next chunk in turn.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+fn decimate_parallel(
+    chunks: Chunks,
+    bands: Vec<Vec<f32>>,
+    k: u32,
+    ow: usize,
+    threads: usize,
+    open: Opener<'_>,
+    image: usize,
+    limits: Limits,
+) -> Result<(Vec<Vec<f32>>, &'static str)> {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    let next = AtomicU64::new(0);
+    let failed = AtomicBool::new(false);
+    let failure: Mutex<Option<DataError>> = Mutex::new(None);
+    let out = Mutex::new((bands, "Float32"));
+    let fail = |e: DataError| {
+        failed.store(true, Ordering::Relaxed);
+        if let Ok(mut f) = failure.lock() {
+            f.get_or_insert(e);
+        }
+    };
+    let work = || {
+        let dec = open().map_err(err).and_then(|r| Decoder::new(r).map_err(err)).map(|d| d.with_limits(limits.clone()));
+        let mut dec = match dec.and_then(|mut d| d.seek_to_image(image).map_err(err).map(|()| d)) {
+            Ok(d) => d,
+            Err(e) => return fail(e),
+        };
+        while !failed.load(Ordering::Relaxed) {
+            let i = next.fetch_add(1, Ordering::Relaxed);
+            if i >= chunks.count() {
+                break;
+            }
+            let Some((plane, index)) = chunks.wanted(i, k) else { continue };
+            match dec.read_chunk(index) {
+                Ok(buf) => {
+                    let (values, dt) = to_f32(buf);
+                    if let Ok(mut o) = out.lock() {
+                        o.1 = dt;
+                        chunks.place(&mut o.0, &values, plane, index, k, ow);
+                    }
+                }
+                Err(e) => return fail(err(e)),
+            }
+        }
+    };
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..threads).map(|_| scope.spawn(work)).collect();
+        for h in handles {
+            if h.join().is_err() {
+                fail(err("a chunk couldn't be decoded"));
+            }
+        }
+    });
+    if let Some(e) = failure.into_inner().ok().flatten() {
+        return Err(e);
+    }
+    out.into_inner().map_err(|_| err("a chunk couldn't be decoded"))
 }
 
 /// Reads a GeoTIFF. Images too large for [`MAX_SAMPLES`] are read from their largest overview that
 /// fits, when the file has overviews; otherwise an overview is made as the image is read, a strip
 /// or tile at a time (a regular, not cloud-optimised, file).
 pub fn read<R: Read + Seek>(r: R, name: &str) -> Result<Raster> {
-    read_limited(reader(r).map_err(err)?, name, MAX_SAMPLES)
+    read_limited(reader(r).map_err(err)?, name, MAX_SAMPLES, None)
 }
 
 /// What reading a GeoTIFF from the parts of it read so far came to.
@@ -474,7 +610,7 @@ pub fn read_sparse(parts: &Sparse, name: &str) -> Result<Partial> {
 fn read_sparse_limited(parts: &Sparse, name: &str, max: usize) -> Result<Partial> {
     let r = parts.reader();
     let watch = r.clone();
-    let out = reader(r).map_err(err).and_then(|r| read_limited(r, name, max));
+    let out = reader(r).map_err(err).and_then(|r| read_limited(r, name, max, None));
     // A part missing anywhere (a palette walk that gave up, say) is read before trusting the rest.
     if let Some((a, b)) = watch.missing() {
         return Ok(Partial::Need(a, b));
@@ -482,8 +618,17 @@ fn read_sparse_limited(parts: &Sparse, name: &str, max: usize) -> Result<Partial
     out.map(|r| Partial::Done(Box::new(r)))
 }
 
-/// [`read`], holding at most `max` samples (the tests' small limit exercises the overviews).
-fn read_limited(r: Reader<'_>, name: &str, max: usize) -> Result<Raster> {
+/// [`read`] from a file, decoding its strips or tiles on several threads.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_file(path: &std::path::Path, name: &str) -> Result<Raster> {
+    let path = path.to_path_buf();
+    let open = move || -> std::io::Result<Reader<'static>> { reader(std::io::BufReader::new(std::fs::File::open(&path)?)) };
+    read_limited(open().map_err(err)?, name, MAX_SAMPLES, Some(&open))
+}
+
+/// [`read`], holding at most `max` samples (the tests' small limit exercises the overviews), with
+/// `open` making more readers of the same file for decoding it on several threads.
+fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>) -> Result<Raster> {
     let palette = !r.patches.is_empty();
     let limits = {
         let mut l = Limits::default();
@@ -492,7 +637,7 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize) -> Result<Raster> {
         l.ifd_value_size = 64 << 20;
         l
     };
-    let mut dec = Decoder::new(r).map_err(err)?.with_limits(limits);
+    let mut dec = Decoder::new(r).map_err(err)?.with_limits(limits.clone());
     let (full_w, full_h) = dec.dimensions().map_err(err)?;
     let geo = geo_tags(&mut dec)?;
     let spp = samples(&mut dec);
@@ -507,6 +652,8 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize) -> Result<Raster> {
     let mut overview = None;
     // Every k-th pixel of the full image, for a large one without overviews (1: read whole).
     let mut decimate_by = 1u32;
+    // The image read: 0, the full one, or an overview.
+    let mut image = 0;
     if !fits(w, h, spp, bytes) {
         // The largest overview that fits, whatever order the images are in; a damaged image
         // ends the search rather than the open.
@@ -527,23 +674,32 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize) -> Result<Raster> {
                 best = Some((index, ow, oh));
             }
         }
+        // Every k-th pixel of the full image, the fewest left out that fit.
+        let mut k = 2u32;
+        while !fits(full_w.div_ceil(k), full_h.div_ceil(k), spp, 4) {
+            k = k.saturating_mul(2);
+            if k > 1 << 20 {
+                break;
+            }
+        }
+        let (dw, dh) = (full_w.div_ceil(k), full_h.div_ceil(k));
+        let decimated = (k <= 1 << 20).then_some(u64::from(dw) * u64::from(dh));
         match best {
-            Some((index, ow, oh)) => {
+            // An overview at least as detailed as the full image read sparsely: only it is read.
+            Some((index, ow, oh)) if decimated.is_none_or(|d| u64::from(ow) * u64::from(oh) >= d) => {
                 dec.seek_to_image(index).map_err(err)?;
+                image = index;
                 (w, h) = (ow, oh);
             }
-            // No overview: one is made as the full image is read.
-            None => {
-                dec.seek_to_image(0).map_err(err)?;
-                let mut k = 2u32;
-                while !fits(full_w.div_ceil(k), full_h.div_ceil(k), spp, 4) {
-                    k = k.saturating_mul(2);
-                    if k > 1 << 20 {
-                        return Err(err(format!("{full_w} × {full_h} pixels is too large to open")));
-                    }
+            // No overview, or only coarse ones (a 5000-pixel orthophoto with one of 157 pixels,
+            // issue #162): one is made as the full image is read.
+            _ => {
+                if decimated.is_none() {
+                    return Err(err(format!("{full_w} × {full_h} pixels is too large to open")));
                 }
+                dec.seek_to_image(0).map_err(err)?;
                 decimate_by = k;
-                (w, h) = (full_w.div_ceil(k), full_h.div_ceil(k));
+                (w, h) = (dw, dh);
             }
         }
         overview = Some((full_w, full_h));
@@ -576,35 +732,44 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize) -> Result<Raster> {
     };
     let planar = dec.find_tag_unsigned::<u16>(Tag::PlanarConfiguration).ok().flatten() == Some(2);
     let n = (w as usize) * (h as usize);
-    let (values, data_type) = if decimate_by > 1 {
-        let (bands, dt) = decimate(&mut dec, full_w, full_h, nbands, planar, decimate_by)?;
-        // Already one vector per band: laid out planar.
-        (bands.into_iter().flatten().collect::<Vec<f32>>(), dt)
+    // The decoder leaves out samples past the colour ones (RGB with an undefined fourth band, as
+    // in RGBI orthophotos) a tile row at a time, and writes a padded edge tile's whole width into
+    // the image: past its edge, over the start of the next row (issue #162). Such tiled images
+    // are read a tile at a time, as their chunks come back only as wide as the image.
+    let extra_samples = !planar && samples(&mut dec) > nbands && dec.find_tag_unsigned::<u32>(Tag::TileWidth).ok().flatten().is_some();
+    // A large image, from a file, is read a chunk at a time on several threads (not one of
+    // fewer than 8 bits a sample, whose chunks pack several pixels to a byte).
+    let chunked = open.is_some() && n >= 1 << 20 && bits(&mut dec) >= 8;
+    let (bands, data_type) = if decimate_by > 1 || extra_samples || chunked {
+        let (iw, ih) = if decimate_by > 1 { (full_w, full_h) } else { (w, h) };
+        let open = open.map(|o| (o, image, limits));
+        // Already one vector per band.
+        decimate(&mut dec, iw, ih, nbands, planar, decimate_by, open)?
     } else {
         let mut buf = DecodingResult::U8(Vec::new());
         dec.read_image_to_buffer(&mut buf).map_err(err)?;
-        to_f32(buf)
-    };
-    let planar = planar || decimate_by > 1;
-    if values.len() < n.saturating_mul(nbands) {
-        return Err(err("couldn't read every band"));
-    }
-    let bands: Vec<Vec<f32>> = if nbands == 1 {
-        let mut v = values;
-        v.truncate(n);
-        vec![v]
-    } else if planar {
-        values.chunks(n).take(nbands).map(<[f32]>::to_vec).collect()
-    } else {
-        // One pass over the interleaved pixels.
-        let mut bands: Vec<Vec<f32>> = (0..nbands).map(|_| Vec::with_capacity(n)).collect();
-        for px in values.chunks(nbands).take(n) {
-            for (band, v) in bands.iter_mut().zip(px) {
-                band.push(*v);
-            }
+        let (values, dt) = to_f32(buf);
+        if values.len() < n.saturating_mul(nbands) {
+            return Err(err("couldn't read every band"));
         }
-        drop(values);
-        bands
+        let bands: Vec<Vec<f32>> = if nbands == 1 {
+            let mut v = values;
+            v.truncate(n);
+            vec![v]
+        } else if planar {
+            values.chunks(n).take(nbands).map(<[f32]>::to_vec).collect()
+        } else {
+            // One pass over the interleaved pixels.
+            let mut bands: Vec<Vec<f32>> = (0..nbands).map(|_| Vec::with_capacity(n)).collect();
+            for px in values.chunks(nbands).take(n) {
+                for (band, v) in bands.iter_mut().zip(px) {
+                    band.push(*v);
+                }
+            }
+            drop(values);
+            bands
+        };
+        (bands, dt)
     };
 
     let mut transform = geo.transform;
@@ -922,7 +1087,7 @@ mod tests {
         // 2048 pixels a side in 256-pixel tiles, with overviews of 1024, 512 and 256; at most a
         // million samples, so the 1024 overview is read, and nothing of the full image's tiles.
         let file = super::super::cog::example(2048, 256);
-        let whole = read_limited(reader(std::io::Cursor::new(&file)).unwrap(), "whole", 1 << 20).unwrap();
+        let whole = read_limited(reader(std::io::Cursor::new(&file)).unwrap(), "whole", 1 << 20, None).unwrap();
         assert_eq!((whole.width, whole.height), (1024, 1024));
         let (r, parts) = read_in_parts(&file, 64 << 10, 1 << 20);
         assert_eq!((r.width, r.height, r.overview), (whole.width, whole.height, whole.overview));
@@ -945,7 +1110,7 @@ mod tests {
         let (w, h) = (301u32, 203u32);
         let data: Vec<u8> = (0..w * h).map(|i| ((i % w + i / w) % 251) as u8).collect();
         let bytes = grey8(w, h, &data, None);
-        let whole = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "big", 10_000).unwrap();
+        let whole = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "big", 10_000, None).unwrap();
         let (r, _) = read_in_parts(&bytes, 1000, 10_000);
         assert_eq!((r.width, r.height), (whole.width, whole.height));
         assert_eq!(r.value(0, 30, 7), whole.value(0, 30, 7));
@@ -1011,7 +1176,7 @@ mod tests {
         let data: Vec<u8> = (0..w * h).map(|i| ((i % w + i / w) % 251) as u8).collect();
         let bytes = grey8(w, h, &data, None);
         let full = read(std::io::Cursor::new(&bytes), "full").unwrap();
-        let r = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "big", 10_000).unwrap();
+        let r = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "big", 10_000, None).unwrap();
         assert_eq!((r.width, r.height), (76, 51));
         assert_eq!(r.overview, Some((301, 203)));
         assert_eq!(r.transform.pixel_width, full.transform.pixel_width * 4.0);
@@ -1019,6 +1184,150 @@ mod tests {
         for (x, y) in [(0i64, 0i64), (1, 1), (75, 50), (74, 49), (30, 7)] {
             assert_eq!(r.value(0, x, y), full.value(0, x * 4, y * 4), "{x},{y}");
         }
+    }
+
+    /// Reads `bytes` as from a file, decoding its chunks on several threads.
+    fn read_threaded(bytes: &[u8], max: usize) -> Result<Raster> {
+        let bytes = std::sync::Arc::new(bytes.to_vec());
+        let open = move || reader(std::io::Cursor::new(bytes.as_slice().to_vec()));
+        read_limited(open().unwrap(), "threaded", max, Some(&open))
+    }
+
+    #[test]
+    fn chunks_decoded_on_several_threads_match_one() {
+        // 1031 × 1029 in 4-row strips: 258 strips, over a million pixels, so read a chunk at a
+        // time; the last strip short, the width odd.
+        let (w, h) = (1031u32, 1029u32);
+        let data: Vec<u8> = (0..w * h).map(|i| ((i % w * 7 + i / w * 3) % 253) as u8).collect();
+        let bytes = grey8(w, h, &data, None);
+        let one = read(std::io::Cursor::new(&bytes), "one").unwrap();
+        let many = read_threaded(&bytes, MAX_SAMPLES).unwrap();
+        assert_eq!((many.width, many.height), (w, h));
+        assert!(many.bands.iter().zip(&one.bands).all(|(a, b)| a.data == b.data) && many.bands.len() == one.bands.len());
+        assert_eq!(many.data_type, one.data_type);
+        // Made smaller as it's read: every 4th pixel, as on one thread.
+        let one = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "one", 100_000, None).unwrap();
+        let many = read_threaded(&bytes, 100_000).unwrap();
+        assert_eq!((many.width, many.height, many.overview), (one.width, one.height, Some((w, h))));
+        assert!(many.bands.iter().zip(&one.bands).all(|(a, b)| a.data == b.data) && many.bands.len() == one.bands.len());
+        assert_eq!(many.transform, one.transform);
+    }
+
+    #[test]
+    fn a_damaged_chunk_fails_the_threaded_read() {
+        let (w, h) = (1031u32, 1029u32);
+        let data = vec![7u8; (w * h) as usize];
+        // Cut off partway: the strips past the end can't be read.
+        let bytes = grey8(w, h, &data, None);
+        let cut = &bytes[..bytes.len() / 2];
+        assert!(read_threaded(cut, MAX_SAMPLES).is_err());
+        assert!(read_threaded(cut, 100_000).is_err());
+    }
+
+    /// A tiled, uncompressed RGB GeoTIFF with a fourth, undefined sample (an RGBI orthophoto's
+    /// layout), each image `(size, tile)` in turn: the first the full one, the rest overviews of
+    /// it. Sample `b` of pixel (x, y) at a `k`-times overview is `pixel(b, x·k, y·k)`; edge tiles
+    /// are padded with zeros.
+    fn rgbi_tiled(images: &[(u32, u32)], pixel: impl Fn(u32, u32, u32) -> u8) -> Vec<u8> {
+        let full = images.first().map_or(1, |i| i.0);
+        let mut out = vec![b'I', b'I', 42, 0, 0, 0, 0, 0];
+        let mut next_link = 4;
+        for (i, &(size, tile)) in images.iter().enumerate() {
+            let k = full / size;
+            let n = size.div_ceil(tile);
+            // The tiles' data first, then the IFD pointing at it.
+            let mut offsets = Vec::new();
+            for t in 0..n * n {
+                offsets.push(out.len() as u32);
+                for p in 0..tile * tile {
+                    let (x, y) = ((t % n) * tile + p % tile, (t / n) * tile + p / tile);
+                    for b in 0..4 {
+                        out.push(if x < size && y < size { pixel(b, x * k, y * k) } else { 0 });
+                    }
+                }
+            }
+            // Out-of-line values: (tag, type, count, bytes); type 3 short, 4 long, 12 double.
+            let shorts = |v: &[u16]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+            let longs = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+            let doubles = |v: &[f64]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+            let counts = vec![tile * tile * 4; offsets.len()];
+            let mut e: Vec<(u16, u16, u32, Vec<u8>)> = vec![
+                (254, 4, 1, longs(&[u32::from(i > 0)])),
+                (256, 4, 1, longs(&[size])),
+                (257, 4, 1, longs(&[size])),
+                (258, 3, 4, shorts(&[8; 4])),
+                (259, 3, 1, shorts(&[1])),
+                (262, 3, 1, shorts(&[2])),
+                (277, 3, 1, shorts(&[4])),
+                (284, 3, 1, shorts(&[1])),
+                (322, 4, 1, longs(&[tile])),
+                (323, 4, 1, longs(&[tile])),
+                (324, 4, offsets.len() as u32, longs(&offsets)),
+                (325, 4, counts.len() as u32, longs(&counts)),
+                (338, 3, 1, shorts(&[0])),
+            ];
+            if i == 0 {
+                e.push((33550, 12, 3, doubles(&[0.2, 0.2, 0.0])));
+                e.push((33922, 12, 6, doubles(&[0.0, 0.0, 0.0, 641_000.0, 5_650_000.0, 0.0])));
+                e.push((34735, 3, 8, shorts(&[1, 1, 0, 1, 3072, 0, 1, 25832])));
+            }
+            let mut values: Vec<u8> = Vec::new();
+            let ifd_at = out.len() + out.len() % 2;
+            out.resize(ifd_at, 0);
+            let values_at = ifd_at + 2 + 12 * e.len() + 4;
+            let mut dir = (e.len() as u16).to_le_bytes().to_vec();
+            for (tag, ty, count, bytes) in &mut e {
+                dir.extend(tag.to_le_bytes());
+                dir.extend(ty.to_le_bytes());
+                dir.extend(count.to_le_bytes());
+                if bytes.len() <= 4 {
+                    bytes.resize(4, 0);
+                    dir.extend(bytes.iter());
+                } else {
+                    dir.extend(((values_at + values.len()) as u32).to_le_bytes());
+                    values.extend(bytes.iter());
+                }
+            }
+            out[next_link..next_link + 4].copy_from_slice(&(ifd_at as u32).to_le_bytes());
+            next_link = ifd_at + dir.len();
+            out.extend(dir);
+            out.extend([0; 4]);
+            out.extend(values);
+        }
+        out
+    }
+
+    #[test]
+    fn padded_tiles_with_an_extra_sample_stay_in_their_rows() {
+        // Issue #162: an RGBI orthophoto (5000 pixels in 128-pixel tiles) opened with black
+        // columns down its west edge, the padding of each row's last tile spilt into the next row.
+        let pixel = |b: u32, x: u32, y: u32| ((x + 3 * y + 60 * b) % 250 + 1) as u8;
+        let bytes = rgbi_tiled(&[(40, 16), (20, 16)], pixel);
+        let check = |r: &Raster, k: u32| {
+            assert_eq!((r.band_count(), r.color.clone()), (3, ColorHint::Rgb { alpha: false }));
+            for y in 0..r.height {
+                for x in 0..r.width {
+                    for b in 0..3 {
+                        let want = f32::from(pixel(b, x * k, y * k));
+                        assert_eq!(r.value(b as usize, i64::from(x), i64::from(y)), Some(want), "band {b} at {x},{y} (k {k})");
+                    }
+                }
+            }
+        };
+        // The full image, and the overview a smaller limit (the browser's) opens instead.
+        let r = read(std::io::Cursor::new(&bytes), "rgbi").unwrap();
+        assert_eq!((r.width, r.height, r.overview), (40, 40, None));
+        check(&r, 1);
+        let r = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "rgbi", 2_000, None).unwrap();
+        assert_eq!((r.width, r.height, r.overview), (20, 20, Some((40, 40))));
+        check(&r, 2);
+        assert_eq!(r.crs.epsg(), 25832);
+        // With only a coarse overview (the orthophoto's is 157 pixels), every 2nd pixel of the
+        // full image is read instead: four times the detail of the overview.
+        let coarse = rgbi_tiled(&[(40, 16), (10, 16)], pixel);
+        let r = read_limited(reader(std::io::Cursor::new(&coarse)).unwrap(), "rgbi", 2_000, None).unwrap();
+        assert_eq!((r.width, r.height, r.overview), (20, 20, Some((40, 40))));
+        check(&r, 2);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! Every command, grouped by ribbon tab.
 
+pub mod catalogs;
 pub mod clipboard;
 pub mod deeplearning;
 pub mod design;
@@ -21,10 +22,12 @@ pub mod presentation;
 pub mod project;
 pub mod raster;
 pub mod report;
+pub mod s3;
 pub mod select;
 pub mod service;
 pub mod share;
 pub mod sharing;
+pub mod sources;
 pub mod sql;
 pub mod stac;
 pub mod tiles;
@@ -44,6 +47,8 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(geocode::commands());
     v.extend(tiles::commands());
     v.extend(service::commands());
+    v.extend(s3::commands());
+    v.extend(sources::commands());
     v.extend(layer::commands());
     v.extend(raster::commands());
     v.extend(zarr::commands());
@@ -71,6 +76,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(sharing::commands());
     v.extend(stac::commands());
     v.extend(portals::commands());
+    v.extend(catalogs::commands());
     v
 }
 

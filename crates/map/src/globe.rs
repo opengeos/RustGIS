@@ -51,7 +51,7 @@ impl Projection {
     }
 
     /// A projection by code: `mercator`, `globe`, a preset id or name, or an EPSG code (which
-    /// must name a projected coordinate system).
+    /// must name a projected coordinate system the map can draw).
     pub fn from_code(s: &str) -> Result<Projection, String> {
         match s.trim().to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
             "mercator" | "webmercator" | "2d" | "map" | "epsg:3857" | "3857" | "epsg:900913" => return Ok(Projection::WebMercator),
@@ -59,7 +59,9 @@ impl Projection {
             _ => {}
         }
         let s = s.trim();
-        crate::projection::lookup(s)?;
+        // Build it, not just look it up: a known code whose method has no implementation would
+        // otherwise be accepted and drawn in Web Mercator under its own name (opengeos/RustGIS#208).
+        crate::projection::Projector::new(s)?;
         // A local view keeps its centre.
         if s.starts_with("local:") {
             return Ok(Projection::Custom(s.to_string()));

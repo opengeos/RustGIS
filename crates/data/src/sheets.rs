@@ -7,7 +7,7 @@ use std::io::Cursor;
 
 use calamine::{Data, ExcelDateTime, ExcelDateTimeType, Reader, Sheets, open_workbook_auto_from_rs};
 
-use crate::io::{CsvOptions, read_rows};
+use crate::io::{Columns, CsvOptions, columns_of, read_rows};
 use crate::{DataError, Dataset, ReadReport, Result};
 
 /// Spreadsheet file types.
@@ -34,6 +34,32 @@ pub fn sheet_names(bytes: &[u8]) -> Result<Vec<String>> {
 /// named `<name>` (or `<name> <sheet>` when the workbook has several). The report names the other
 /// sheets.
 pub fn read(bytes: &[u8], name: &str, sheet: Option<&str>, opts: &CsvOptions) -> Result<(Dataset, ReadReport)> {
+    let g = grid(bytes, sheet)?;
+    let title = if g.names.len() > 1 { format!("{name} {}", g.pick) } else { name.to_string() };
+    let (ds, mut report) = read_rows(&g.headers, &g.rows, 0, &title, opts)?;
+    let others: Vec<&str> = g.names.iter().filter(|n| **n != g.pick).map(String::as_str).take(20).collect();
+    if !others.is_empty() {
+        report.messages.push(format!("the workbook has more sheets ({}): add one with \"layer\"", others.join(", ")));
+    }
+    Ok((ds, report))
+}
+
+/// The columns of one sheet of a workbook (`sheet` as [`read`] takes it), and those its geometry
+/// is read from when none are given.
+pub fn columns(bytes: &[u8], sheet: Option<&str>) -> Result<Columns> {
+    let g = grid(bytes, sheet)?;
+    Ok(columns_of(&g.headers, &g.rows))
+}
+
+/// A sheet as text: the workbook's sheets, the one picked, its column names and its rows.
+struct Grid {
+    names: Vec<String>,
+    pick: String,
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+}
+
+fn grid(bytes: &[u8], sheet: Option<&str>) -> Result<Grid> {
     check_expansion(bytes)?;
     let mut wb = open_workbook_auto_from_rs(Cursor::new(bytes)).map_err(|e| DataError::Format(format!("spreadsheet: {e}")))?;
     let names = wb.sheet_names();
@@ -66,13 +92,7 @@ pub fn read(bytes: &[u8], name: &str, sheet: Option<&str>, opts: &CsvOptions) ->
         .map(|(i, h)| if h.trim().is_empty() { column_letter(first_col + i) } else { h.trim().to_string() })
         .collect();
     let rows: Vec<Vec<String>> = rows.filter(|r| r.iter().any(|c| !c.trim().is_empty())).collect();
-    let title = if names.len() > 1 { format!("{name} {pick}") } else { name.to_string() };
-    let (ds, mut report) = read_rows(&headers, &rows, 0, &title, opts)?;
-    let others: Vec<&str> = names.iter().filter(|n| **n != pick).map(String::as_str).take(20).collect();
-    if !others.is_empty() {
-        report.messages.push(format!("the workbook has more sheets ({}): add one with \"layer\"", others.join(", ")));
-    }
-    Ok((ds, report))
+    Ok(Grid { names, pick, headers, rows })
 }
 
 /// A zipped workbook (`.xlsx`, `.ods`) that would inflate past [`crate::zip::MAX_TOTAL`] is
@@ -335,8 +355,16 @@ mod tests {
         assert_eq!(ds.geometry_type, crate::GeometryType::None);
         assert_eq!(ds.fields[1].name, "B", "a column without a heading is named by its letter");
         assert!(read(&book, "book", Some("Missing"), &CsvOptions::default()).is_err());
+        // The columns Add Delimited Text offers, found as the sheet is read.
+        let c = columns(&book, None).unwrap();
+        assert_eq!(c.names, ["name", "lon", "lat", "pop"]);
+        assert_eq!((c.x.as_deref(), c.y.as_deref(), c.delimiter), (Some("lon"), Some("lat"), None));
+        let c = columns(&book, Some("utm")).unwrap();
+        assert_eq!((c.x.as_deref(), c.y.as_deref()), (Some("easting"), Some("northing")));
+        assert_eq!(columns(&book, Some("Notes")).unwrap().names, ["text", "B"]);
         for cut in (0..book.len()).step_by(61) {
             let _ = read(&book[..cut], "t", None, &CsvOptions::default());
+            let _ = columns(&book[..cut], None);
         }
     }
 

@@ -6,6 +6,10 @@
 //! sample when more match). Reads run on a background thread on the desktop, so the map stays
 //! responsive; in the browser they run in place. The window isn't saved with the project: the
 //! source is opened and read again.
+//!
+//! A FlatGeobuf or GeoParquet by its web address is read in place too, by range: opening it and
+//! each read fetch what they need off the frame (desktop and browser alike), the read landing
+//! when its bytes have.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -19,6 +23,9 @@ pub const STREAM_ABOVE: u64 = 100_000;
 
 /// The most features a view reads.
 pub const VIEW_LIMIT: usize = if cfg!(target_arch = "wasm32") { 100_000 } else { 250_000 };
+
+/// The most features a view reads from a file by its web address (each one is fetched).
+pub const REMOTE_VIEW_LIMIT: usize = if cfg!(target_arch = "wasm32") { 30_000 } else { 60_000 };
 
 /// A streamed layer's source.
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -41,6 +48,9 @@ pub struct SourceLayer {
     window: Option<Window>,
     #[serde(skip)]
     pending: Option<Arc<Pending>>,
+    /// A source by its web address being opened (its header or footer being fetched).
+    #[serde(skip)]
+    opening: Option<Opening>,
     /// Why the source couldn't be opened or read.
     #[serde(skip)]
     pub error: Option<String>,
@@ -58,6 +68,25 @@ pub struct SourceLayer {
     /// result in the cache is gone (desktop only); a query is not run again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duckdb: Option<DuckdbOrigin>,
+    /// For a layer read live from a PostGIS table (desktop only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postgis: Option<PostgisOrigin>,
+}
+
+/// A PostGIS table a layer reads live.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PostgisOrigin {
+    /// The connection (`postgres:host=… dbname=…` or a `postgresql://` address), never with its
+    /// password.
+    pub database: String,
+    /// The table, as `table`, `schema.table`, with `:column` when it has several.
+    pub table: String,
+    /// The geometry family read, for a column of mixed types.
+    #[serde(default)]
+    pub family: Option<rustgis_data::source::Family>,
+    /// The coordinate system given for a geometry that doesn't say.
+    #[serde(default)]
+    pub crs: Option<String>,
 }
 
 /// Where a layer from DuckDB came from: a query, or a table of a database.
@@ -131,6 +160,30 @@ fn rerun(d: &DuckdbOrigin) -> rustgis_data::Result<std::path::PathBuf> {
         .ok_or_else(|| rustgis_data::DataError::Format(format!("the query returns no {} any more", d.family.label())))
 }
 
+/// Connects to a PostGIS layer's table again (a project opening). Only a password given this
+/// session is sent: a project file names its server, which must never get the user's own
+/// credentials (`PGPASSWORD`, the password file) just for being opened.
+fn open_postgis(pg: &PostgisOrigin) -> rustgis_data::Result<Box<dyn FeatureSource>> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = pg;
+        Err(rustgis_data::DataError::Format("PostGIS databases are read in the desktop app".into()))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rustgis_data::source::{duckdb::Database, postgis};
+        let Database::Postgres(dsn) = Database::parse(&pg.database) else {
+            return Err(rustgis_data::DataError::Format(format!("{}: not a PostgreSQL connection", pg.database)));
+        };
+        let again = |e: rustgis_data::DataError| {
+            rustgis_data::DataError::Format(format!("{e} (connect again with Add Data › Database…, giving its password)"))
+        };
+        let conn = postgis::connect(&dsn, false).map_err(again)?;
+        let table = postgis::find_table(&conn, &pg.table)?;
+        Ok(Box::new(postgis::PostgisSource::open(conn, table, pg.family, pg.crs.as_deref())?))
+    }
+}
+
 /// What the layer's features hold.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Window {
@@ -148,6 +201,17 @@ pub struct Window {
 struct Pending {
     extent: Extent,
     result: Mutex<Option<Result<Batch, String>>>,
+}
+
+/// A source being opened off the frame.
+type Opening = Arc<Mutex<Option<Result<Arc<dyn FeatureSource>, String>>>>;
+
+/// Tells the app something landed (a read, or a source opened by its address).
+fn landed() {
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+    if let Some(w) = waker().lock().ok().and_then(|w| w.clone()) {
+        w();
+    }
 }
 
 /// What [`SourceLayer::poll`] found.
@@ -168,6 +232,11 @@ impl SourceLayer {
         SourceLayer { path: Some(path.into()), table, handle: Some(Arc::from(handle)), ..SourceLayer::default() }
     }
 
+    /// A PostGIS table read live.
+    pub fn from_postgis(origin: PostgisOrigin, handle: Box<dyn FeatureSource>) -> Self {
+        SourceLayer { postgis: Some(origin), handle: Some(Arc::from(handle)), ..SourceLayer::default() }
+    }
+
     /// A source read from a file's bytes, kept in the project.
     pub fn from_bytes(file_name: impl Into<String>, bytes: Arc<Vec<u8>>, table: Option<String>, handle: Box<dyn FeatureSource>) -> Self {
         SourceLayer {
@@ -179,9 +248,15 @@ impl SourceLayer {
         }
     }
 
-    /// Opens the source again (after a project loads).
+    /// Opens the source again (after a project loads). A source by its web address is opened off
+    /// the frame: `Ok` while it is (see [`SourceLayer::is_pending`]), open once it has landed.
     pub fn open(&mut self) -> Result<(), String> {
-        let src = if let Some(bytes) = &self.embedded {
+        if let Some(url) = self.path.clone().filter(|p| rustgis_data::source::is_remote_name(p)) {
+            return self.open_remote(&url);
+        }
+        let src = if let Some(pg) = &self.postgis {
+            open_postgis(pg)
+        } else if let Some(bytes) = &self.embedded {
             let name = self.file_name.as_deref().unwrap_or("layer.parquet");
             rustgis_data::source::open_shared(name, bytes.clone(), self.table.as_deref())
         } else if let Some(p) = &self.path {
@@ -236,6 +311,71 @@ impl SourceLayer {
         }
     }
 
+    /// Opens a source by its web address: from what is fetched of it, else fetching its header
+    /// (or footer) off the frame, taken by a later call when it has landed.
+    fn open_remote(&mut self, url: &str) -> Result<(), String> {
+        if let Some(slot) = self.opening.clone() {
+            // Read, not taken: copies of the layer (undo, Load All Features) share the slot.
+            let done = slot.lock().ok().and_then(|s| s.clone());
+            return match done {
+                None => Ok(()),
+                Some(r) => {
+                    self.opening = None;
+                    self.opened(r)
+                }
+            };
+        }
+        match rustgis_data::source::open_url_now(url) {
+            Ok(s) => self.opened(Ok(Arc::from(s))),
+            Err(e) if e.to_string().contains(rustgis_data::source::remote::NEED) => {
+                let slot: Opening = Arc::new(Mutex::new(None));
+                let land = slot.clone();
+                self.opening = Some(slot);
+                rustgis_data::source::open_url(
+                    url,
+                    Box::new(move |r| {
+                        if let Ok(mut s) = land.lock() {
+                            *s = Some(r.map(Arc::from).map_err(|e| e.to_string()));
+                        }
+                        landed();
+                    }),
+                );
+                Ok(())
+            }
+            Err(e) => self.opened(Err(e.to_string())),
+        }
+    }
+
+    fn opened(&mut self, r: Result<Arc<dyn FeatureSource>, String>) -> Result<(), String> {
+        match r {
+            Ok(s) => {
+                self.handle = Some(s);
+                self.window = None;
+                self.error = None;
+                Ok(())
+            }
+            Err(e) => {
+                self.error = Some(e.clone());
+                Err(e)
+            }
+        }
+    }
+
+    /// Waits (up to `timeout`) for a source by its web address to open: exports, which draw
+    /// what is there. Native only (in the browser nothing may wait).
+    pub fn wait_open(&mut self, timeout: std::time::Duration) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let start = web_time::Instant::now();
+            while self.opening.is_some() && !self.is_open() && self.error.is_none() && start.elapsed() < timeout {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                let _ = self.open();
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = timeout;
+    }
+
     pub fn is_open(&self) -> bool {
         self.handle.is_some()
     }
@@ -244,10 +384,21 @@ impl SourceLayer {
         self.handle.as_deref().map(|h| h.info())
     }
 
-    /// Every feature of the source, up to the read limit.
+    /// Every feature of the source, up to the read limit (a source by its web address fetching
+    /// what that needs, on the desktop).
     pub fn read_all(&self) -> Result<(rustgis_data::Dataset, rustgis_data::ReadReport), String> {
-        let h = self.handle.as_deref().ok_or("the layer's source isn't open")?;
-        rustgis_data::source::materialize(h).map_err(|e| e.to_string())
+        let h = self.handle.clone().ok_or("the layer's source isn't open")?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if h.remote().is_some() {
+            return rustgis_data::source::materialize(&rustgis_data::source::Fetching(h)).map_err(|e| e.to_string());
+        }
+        let r = rustgis_data::source::materialize(h.as_ref()).map_err(|e| e.to_string());
+        match r {
+            Err(e) if e.contains(rustgis_data::source::remote::NEED) => {
+                Err("the web app reads a file by its address a view at a time: download it to load it whole".into())
+            }
+            r => r,
+        }
     }
 
     pub fn window(&self) -> Option<&Window> {
@@ -255,7 +406,7 @@ impl SourceLayer {
     }
 
     pub fn is_pending(&self) -> bool {
-        self.pending.is_some()
+        self.pending.is_some() || self.opening.is_some()
     }
 
     /// Forgets the window, so the next view reads again (after the source changes).
@@ -294,9 +445,32 @@ impl SourceLayer {
     /// Starts reading an extent: on a background thread unless `block` (or in the browser).
     pub fn start(&mut self, extent: Extent, block: bool) {
         let Some(h) = self.handle.clone() else { return };
-        let req = Request { extent: Some(extent), limit: if self.limit == 0 { VIEW_LIMIT } else { self.limit } };
+        let most = if h.remote().is_some() { REMOTE_VIEW_LIMIT } else { VIEW_LIMIT };
+        let req = Request { extent: Some(extent), limit: if self.limit == 0 { most } else { self.limit } };
         let pending = Arc::new(Pending { extent, result: Mutex::new(None) });
         let p = pending.clone();
+        // A source by its web address: the read runs as its bytes land (on the desktop and in
+        // the browser alike), fetching what it needs in rounds.
+        if let Some(file) = h.remote() {
+            let (h2, p2) = (h.clone(), p.clone());
+            let work = Arc::new(move || {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h2.read(&req)))
+                    .unwrap_or_else(|_| Err(rustgis_data::DataError::Format("the read failed unexpectedly".into())))
+            });
+            rustgis_data::source::remote::drive(
+                file,
+                work,
+                Box::new(move |r| {
+                    if let Ok(mut slot) = p2.result.lock() {
+                        *slot = Some(r.map_err(|e| e.to_string()));
+                    }
+                    landed();
+                }),
+            );
+            self.pending = Some(pending);
+            let _ = block;
+            return;
+        }
         let job = move || {
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.read(&req)))
                 .unwrap_or_else(|_| Err(rustgis_data::DataError::Format("the read failed unexpectedly".into())))

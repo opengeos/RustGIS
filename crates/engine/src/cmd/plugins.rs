@@ -27,7 +27,24 @@ pub fn commands() -> Vec<C> {
         C::new("plugin.installFromRegistry", "Install Plugin From Registry", "Plugins › Manage", install_from_registry)
             .view()
             .params(r#"{"id": plugin id, "url"?: registry.json}"#),
+        C::new("plugin.prepare", "Prepare Plugin Environment", "Plugins › Manage", prepare)
+            .view()
+            .params(r#"{"id": plugin id (a process plugin that declares "python": downloads its Python and packages)}"#),
     ]
+}
+
+/// Makes a Python plugin's environment (it can take minutes: downloads).
+fn prepare(_: &mut Session, p: &Value) -> CmdResult {
+    let id = ps(p, "id").ok_or("id is required")?;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let python = rustgis_plugins::pyenv::prepare(id, &mut |line| log::info!("plugin {id}: {line}"))?;
+        Ok(json!({"id": id, "python": python.display().to_string()}))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Err(format!("{id}: Python environments need the desktop app or rustgis-cli"))
+    }
 }
 
 /// Loads the installed plugins (desktop and command line); returns what failed to load.
@@ -185,6 +202,7 @@ pub(crate) fn leak(s: &str) -> &'static str {
 /// Commands reserved to the user (see [`user_only`]); plugin management is too.
 const NEVER: &[&str] = &[
     "gp.installGeolibre",
+    "gp.uninstallGeolibre",
     "gp.setGeolibre",
     "script.run",
     "task.run",
@@ -196,6 +214,9 @@ const NEVER: &[&str] = &[
     "project.fromTemplate",
     "edit.undo",
     "edit.redo",
+    // Credentials: a plugin never sets where the user's are sent.
+    "s3.connect",
+    "s3.disconnect",
 ];
 
 /// Commands that write files without naming one in their parameters.
@@ -235,6 +256,10 @@ pub fn reaches(spec: &C, params: &Value) -> Option<Reach> {
     // External tools (the GeoLibre suite) run a native program that reads files a parameter
     // names, including bare file names.
     if spec.id == "gp.run" && ps(params, "tool").and_then(rustgis_analysis::tool).is_some_and(super::gp::is_geolibre_tool) {
+        return Some(Reach::Files);
+    }
+    // So do tools with a file parameter (a plugin's `file`): they're handed the file.
+    if spec.id == "gp.run" && ps(params, "tool").and_then(rustgis_analysis::tool).is_some_and(super::gp::reads_files) {
         return Some(Reach::Files);
     }
     // Commands that fetch from an address read and write no files, so `files` doesn't come into

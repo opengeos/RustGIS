@@ -1,6 +1,7 @@
 # id interface catalog: English<TAB>translation
  by 	 oleh
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+(filtered)	(disaring)
 00:00 UTC	00:00 UTC
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
@@ -14,6 +15,7 @@ A flat scene centred on the view (azimuthal equidistant).	Scene datar yang berpu
 A globe scene.	Scene globe.
 A magnifying lens that follows the pointer.	Lensa pembesar yang mengikuti penunjuk.
 A notebook of text and command cells.	Buku catatan berisi sel teks dan sel perintah.
+A project keeps at least one map	Proyek selalu menyimpan setidaknya satu peta
 A projected coordinate system.	Sistem koordinat terproyeksi.
 A report listing the selected layer's records, page after page.	Laporan yang mencantumkan rekaman layer terpilih, halaman demi halaman.
 A template with the first selected feature's values	Templat dengan nilai fitur terpilih pertama
@@ -247,6 +249,7 @@ Checking for updates…	Memeriksa pembaruan…
 China	Tiongkok
 Choose a band combination to display the raster layer.	Pilih kombinasi band untuk menampilkan layer raster.
 Choose a contrast stretch for the raster layer.	Pilih peregangan kontras untuk layer raster.
+Choose a delimited text file or a spreadsheet, then pick its columns.	Pilih file teks berpembatas atau lembar kerja, lalu pilih kolomnya.
 Choose a model.	Pilih model.
 Choose a resampling type for the raster layer.	Pilih tipe resampling untuk layer raster.
 Choose extra buttons for the Quick Access Toolbar.	Pilih tombol tambahan untuk Bilah Akses Cepat.
@@ -323,6 +326,7 @@ Color Vision	Penglihatan Warna
 Color Vision Simulator	Simulator Penglihatan Warna
 Colormap	Peta Warna
 Colors from the raster's own color table.	Warna dari tabel warna raster itu sendiri.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	Kolom bernama seperti longitude/latitude, easting/northing atau geometry dipilih secara otomatis.
 Combinations from the box above, one per line	Kombinasi dari kotak di atas, satu per baris
 Command\nSearch	Cari\nPerintah
 command is required	command wajib diisi
@@ -383,6 +387,7 @@ Create Polygon	Buat Poligon
 Create Profile	Buat Profil
 Create Thumbnail	Buat Thumbnail
 Creates a point inside each input feature.	Membuat titik di dalam setiap fitur masukan.
+Creates points from a table's x and y coordinate fields.	Membuat titik dari kolom koordinat x dan y sebuah tabel.
 Creates polygons around input features at a given distance.	Membuat poligon di sekitar fitur masukan pada jarak tertentu.
 Cross Section	Penampang Melintang
 Cross Section (2 clicks)	Penampang Melintang (2 klik)
@@ -774,6 +779,7 @@ Import Thumbnail	Impor Thumbnail
 Import Web Tool	Impor Alat Web
 In Beyond	Perbesar Melewati
 In Progress	Sedang Berjalan
+In RustGIS, it can:	Di RustGIS, plugin ini dapat:
 in progress	sedang berjalan
 In project	Dalam proyek
 In use	Digunakan
@@ -802,6 +808,7 @@ Installed	Terpasang
 Installed plugins are kept in {folder}	Plugin yang terpasang disimpan di {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Dipasang dengan Homebrew, winget, AUR, atau COPR? Perbarui di sana.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} telah dipasang. Temukan di tab Plugin; alat-alatnya juga ada di panel Alat.
+Installing it downloads Python {version} and the packages it needs from the internet.	Memasangnya akan mengunduh Python {version} dan paket yang diperlukan dari internet.
 Interface font: {font}	Fon antarmuka: {font}
 Interpolate a surface from points (IDW)	Interpolasi permukaan dari titik (IDW)
 Invalid: {error}	Tidak valid: {error}
@@ -809,6 +816,7 @@ Invert	Balik
 Invert color scheme	Balik skema warna
 Invert the selection.	Balik seleksi.
 IS NULL	IS NULL
+It runs: {program}	Yang dijalankan: {program}
 it connects to an address on the internet	terhubung ke alamat di internet
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	hanya boleh dilakukan oleh Anda (plugin, skrip, tugas, model, dan runner GeoLibre)
 it reads or writes files on this computer	membaca atau menulis file di komputer ini
@@ -1067,6 +1075,7 @@ None. Add one by address, or from a basemap plugin.	Tidak ada. Tambahkan melalui
 North	Utara
 North\nArrow	Panah\nUtara
 North Polar Stereographic	Stereografis Kutub Utara
+Not sandboxed	Tanpa sandbox
 not a RustGIS layout	bukan tata letak RustGIS
 not needed	tidak diperlukan
 Not saved yet	Belum disimpan
@@ -1198,6 +1207,7 @@ PMTiles archive	Arsip PMTiles
 PMTiles File…	Berkas PMTiles…
 PNG frames (zip)	Bingkai PNG (zip)
 PNG image	Gambar PNG
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	Plugin bertanda "Tanpa sandbox" berjalan sebagai program di komputer Anda dan dapat melakukan apa pun yang dapat Anda lakukan.
 Point	Titik
 Points	Titik
 points each	titik masing-masing
@@ -1208,6 +1218,7 @@ Polygon (draw)	Poligon (gambar)
 Polygons	Poligon
 Polyline	Polyline
 Pop-up Mode	Mode Pop-up
+Prepare	Siapkan
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Tempat Berpenduduk
 Portal	Portal
@@ -1215,6 +1226,7 @@ Portrait	Potret
 Postprocessing	Pascaproses
 power 2	pangkat 2
 Prepare every layer's geometry for this projection.	Siapkan geometri setiap layer untuk proyeksi ini.
+Preparing its Python environment…	Menyiapkan lingkungan Python-nya…
 Presentation	Presentasi
 Presentation File	File Presentasi
 Presentation Pane	Panel Presentasi
@@ -1253,6 +1265,9 @@ Proximity	Kedekatan
 Publish	Publikasi
 Publish › Output	Publikasi › Keluaran
 Put the layer back as it was then	Kembalikan layer seperti pada saat itu
+Python environment failed: {error}	Lingkungan Python gagal: {error}
+Python environment not prepared	Lingkungan Python belum disiapkan
+Python environment ready	Lingkungan Python siap
 Quantile	Kuantil
 Quick\nAccess	Akses\nCepat
 Quick Access Toolbar	Bilah Akses Cepat
@@ -1307,6 +1322,7 @@ Remove Folder	Hapus Folder
 Remove From Current Selection	Hapus dari Seleksi Saat Ini
 Remove Keyframe	Hapus Keyframe
 Remove Section	Hapus Bagian
+Remove Table	Hapus Tabel
 Remove the last keyframe.	Hapus keyframe terakhir.
 Remove the layer from the map.	Hapus layer dari peta.
 Remove Tile Layer	Hapus Layer Ubin
@@ -1636,6 +1652,7 @@ Text	Teks
 Text Symbol	Simbol Teks
 The assistant is busy; stop it or wait for it to finish.	Asisten sedang sibuk; hentikan atau tunggu hingga selesai.
 The assistant wants to run this, and {why}:	Asisten ingin menjalankan tindakan berikut, yang {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Plugin ini berjalan sebagai program di komputer Anda, di luar sandbox RustGIS. Plugin ini dapat melakukan apa pun yang dapat Anda lakukan: membaca dan mengubah file Anda, menggunakan jaringan, dan menjalankan program lain. Pasang hanya jika Anda memercayai pembuatnya.
 the capture failed unexpectedly	penangkapan gagal secara tak terduga
 the Help tab always shows	tab Bantuan selalu ditampilkan
 The job covers the map view	Pekerjaan mencakup tampilan peta
@@ -1812,7 +1829,11 @@ World, equal-area: true sizes, shapes bend towards the edges.	Dunia, luas sama: 
 Worldview	Batas Negara
 Write a plugin	Tulis plugin
 X (mm)	X (mm)
+X Field	Kolom X
+XY Table To Point	Tabel XY ke Titik
+XY Table To Point…	Tabel XY ke Titik…
 Y (mm)	Y (mm)
+Y Field	Kolom Y
 Yes	Ya
 You have version {version}.	Anda memiliki versi {version}.
 z (m)	z (m)
@@ -1845,6 +1866,8 @@ Zoom to the whole world.	Zoom ke seluruh dunia.
 Zoom to Tokyo	Zoom ke Tokyo
 Zoom To World	Zoom ke Dunia
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} telah berubah sejak dipasang; pasang ulang dari Pengelola Plugin.
+{name} is larger than {mb} MB	{name} lebih besar dari {mb} MB
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} berjalan sebagai program di komputer Anda: memerlukan aplikasi desktop atau rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} ditarik dari registri plugin dan telah dinonaktifkan.
 {name} was withdrawn from the plugin registry: {reason}	{name} ditarik dari registri plugin: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: unduhan tidak cocok dengan registri; plugin tidak dipasang.
@@ -1856,3 +1879,11 @@ Zoom To World	Zoom ke Dunia
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: hanya alamat HTTPS, atau HTTP biasa di komputer atau jaringan ini, yang diizinkan
 © OpenStreetMap contributors	© kontributor OpenStreetMap
 ⌘K	⌘K
+MCP Relay	Relay MCP
+MCP relay stopped	Relay MCP dihentikan
+MCP relay listening on 127.0.0.1:{port}	Relay MCP mendengarkan di 127.0.0.1:{port}
+MCP relay · {n} attached	Relay MCP · {n} terhubung
+Stop MCP relay	Hentikan Relay MCP
+MCP relay is already listening on 127.0.0.1:{port}; stop it first to use port {asked}	Relay MCP sudah mendengarkan di 127.0.0.1:{port}; hentikan dulu untuk memakai port {asked}
+Opening {url}…	Membuka {url}…
+{url}: downloaded after another project was opened, so it wasn't opened	{url}: diunduh setelah proyek lain dibuka, jadi tidak dibuka

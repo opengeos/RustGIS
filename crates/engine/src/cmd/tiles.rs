@@ -14,6 +14,8 @@ pub const NETWORK: &[&str] = &[
     "layer.addUrl",
     "service.layers",
     "service.add",
+    "service.coverage",
+    "catalog.search",
     "stac.collections",
     "stac.search",
     "stac.addAsset",
@@ -22,6 +24,12 @@ pub const NETWORK: &[&str] = &[
     "osm.download",
     "boundaries.add",
     "boundaries.countries",
+    "s3.list",
+    "overture.add",
+    "sourcecoop.products",
+    "sourcecoop.list",
+    "portal.search",
+    "portal.add",
 ];
 
 pub fn commands() -> Vec<C> {
@@ -32,7 +40,7 @@ pub fn commands() -> Vec<C> {
         C::new("map.removeTiles", "Remove Tile Layer", "Home › Add", remove)
             .params(r#"{"name"?: text, "index"?: number, "id"?: catalog id} (removes every tile layer when none is given)"#),
         C::new("map.setTiles", "Tile Layer Properties", "Home › Add", set).params(
-            r#"{"name"?: text | "index"?: number (0 = top), "visible"?: bool, "opacity"?: 0–1, "move"?: "up"|"down"|"top"|"bottom", "rename"?: text}"#,
+            r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "visible"?: bool, "opacity"?: 0–1, "move"?: "up"|"down"|"top"|"bottom", "rename"?: text}"#,
         ),
         C::new("map.tiles", "Tile Layers", "Home › Add", |s, _| Ok(list(s))).view(),
     ]

@@ -70,8 +70,10 @@ switches its countries at once; others keep the layer they have.
 
 The flat map is drawn in Web Mercator by default. **View › Projection** switches it to another
 projection, and clicking the coordinate system in the status bar opens the **Coordinate
-System** dialog, which also takes any projected EPSG code (such as `3035`, `32633` for UTM zone
-33N or `2056` for Switzerland):
+System** dialog, which also takes a projected EPSG code (such as `3035`, `32633` for UTM zone
+33N or `2056` for Switzerland). A code whose projection method or datum grid RustGIS can't use
+(Polyconic such as `5880`, Cassini, oblique Mercator, or a NAD27 code that needs a grid) is refused
+with the reason, rather than drawn in another projection:
 
 | Preset | Kind |
 | --- | --- |
@@ -81,7 +83,9 @@ System** dialog, which also takes any projected EPSG code (such as `3035`, `3263
 | North / South Polar Stereographic | Polar |
 | Europe Equal Area (ETRS89 LAEA), USA Contiguous Albers Equal Area | Regional, equal-area |
 
-Layers are projected on the fly. Each projection has an area of use: polar projections show
+Layers are projected on the fly. A feature that crosses the edge of a world projection (the
+meridian opposite its central one, such as 90°E in Equal Earth Americas) is cut there and drawn on
+both sides of the map. Each projection has an area of use: polar projections show
 their hemisphere poleward of 30°, regional ones their region, transverse Mercator (UTM) zones
 30° either side of their meridian, and data outside it isn't drawn. Switching keeps the centre
 and scale, and the choice is saved with the map (`map.projection` from the command line). A
@@ -111,7 +115,8 @@ Effect** (tilt-shift blur, film grain) and **Postprocessing** (brightness, contr
 sepia). The **Color Vision** simulator shows the map as people with protanopia, deuteranopia,
 tritanopia or achromatopsia see it (on screen only; exports are untouched).
 
-**Global** shows a globe; **Local** a flat view centred where you are (azimuthal equidistant).
+**Global** shows a globe; **Local** a flat view centred where you are (azimuthal equidistant;
+not in the web app, which doesn't include that projection).
 **Wireframe** draws polygons as outlines, **Depth Priority** lifts a layer above others whatever
 its order, **View Clipping** hides features beyond a distance from the centre, and **Speed
 Display** draws without antialiasing. The **Navigator** adds a compass, zoom buttons and a pan

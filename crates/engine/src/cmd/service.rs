@@ -1,12 +1,14 @@
-//! Web map and feature services: connect to a WMS, WMTS, WFS, OGC API Features or ArcGIS REST
-//! service, list what it offers (from its capabilities), and add a layer — map layers as tile
-//! layers, feature types and collections as data downloaded as GeoJSON.
+//! Web map and feature services: connect to a WMS, WMTS, WFS, WCS, OGC API Features or ArcGIS
+//! REST service, list what it offers (from its capabilities), and add a layer — map layers as
+//! tile layers, feature types and collections as data downloaded as GeoJSON, coverages as rasters
+//! (a GeoTIFF of the view from GetCoverage). And search a catalogue (CSW) for records and the
+//! services and files they link to.
 //!
 //! The app fetches the capabilities and features in the background and passes the capabilities
 //! here as `"text"`; the command line, MCP and the desktop assistant let these commands fetch
 //! (waiting for the answer).
 
-use rustgis_data::ogc::{Offer, Service};
+use rustgis_data::ogc::{Coverage, Offer, Service};
 use serde_json::{Value, json};
 
 use super::ps;
@@ -18,7 +20,13 @@ pub fn commands() -> Vec<C> {
             r#"{"url": "a WMS, WMTS or WFS address (GetCapabilities is added), an OGC API /collections address (features, and map and vector tiles) or landing page (its map tiles), or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer", "type"?: "wms"|"wmts"|"wfs"|"ogcapi"|"arcgis" (guessed from the address), "text"?: "the capabilities document, when already fetched"}"#,
         ),
         C::new("service.add", "Add Service Layer", "Home › Add", add).params(
-            r#"{"url": "as service.layers", "type"?, "layer": "the layer's name (service.layers lists them)", "name"?: text, "text"?: "the capabilities document, when already fetched", "tiles"?: "an OGC API layer's tile template, when already read from its tileset (the app's)"}"#,
+            r#"{"url": "as service.layers", "type"?, "layer": "the layer's name (service.layers lists them)", "name"?: text, "text"?: "the capabilities document, when already fetched", "describe"?: "a WCS coverage's DescribeCoverage document, when already fetched", "tiles"?: "an OGC API layer's tile template, when already read from its tileset (the app's)", "bbox"?: [west, south, east, north] | "view" (the default) | "full" (a WCS coverage's area)}"#,
+        ),
+        C::new("service.coverage", "WCS Coverage Request", "Home › Add", coverage).view().params(
+            r#"{"url": "a WCS address", "type"?: "wcs", "layer": "the coverage's name", "text"?: "the capabilities document, when already fetched", "describe"?: "its DescribeCoverage answer, when already fetched", "bbox"?: [west, south, east, north] | "view" (the default) | "full"} → the GetCoverage address of a GeoTIFF (layer.addUrl adds it)"#,
+        ),
+        C::new("catalog.search", "Search Catalogue", "Home › Add", catalog_search).view().params(
+            r#"{"url": "a catalogue's CSW address", "query"?: "words anywhere in the records", "bbox"?: [west, south, east, north] | "view" (none by default), "start"?: "the first record's position (a page's next)", "text"?: "the GetRecords answer, when already fetched"} → records with their service and download links (service.add or layer.addUrl add them)"#,
         ),
     ]
 }
@@ -63,6 +71,7 @@ fn vet(mut svc: Service, caps: &str) -> Service {
         let u = match &l.offer {
             Offer::Tiles { template } | Offer::VectorTiles { template, .. } => template,
             Offer::Features { url } | Offer::Style { url } => url,
+            Offer::Coverage(Coverage { endpoint, .. }) => endpoint,
         };
         crate::render::rustgis_tiles::address::check(u, Some(caps)).is_ok()
     });
@@ -127,6 +136,7 @@ pub fn service_json(svc: &Service) -> Value {
                 Offer::Features { url } => json!({"type": "features", "url": url}),
                 Offer::Style { url } => json!({"type": "style", "url": url}),
                 Offer::VectorTiles { template, layers } => json!({"type": "vectorTiles", "url": template, "layers": layers}),
+                Offer::Coverage(c) => json!({"type": "coverage", "url": c.endpoint, "describe": rustgis_data::ogc::describe_coverage_url(c), "version": c.version}),
             };
             json!({"name": l.name, "title": l.title, "bbox": l.bbox, "offer": offer, "tilesets": l.tilesets})
         })
@@ -134,13 +144,13 @@ pub fn service_json(svc: &Service) -> Value {
     json!({"kind": svc.kind, "title": svc.title, "count": layers.len(), "layers": layers, "notes": svc.notes})
 }
 
-fn layers(_s: &mut Session, p: &Value) -> CmdResult {
+pub(crate) fn layers(_s: &mut Session, p: &Value) -> CmdResult {
     Ok(service_json(&capabilities(p)?))
 }
 
 /// Adds one of a service's layers: map layers as tiles (an overlay), a style as a style, features
 /// downloaded.
-fn add(s: &mut Session, p: &Value) -> CmdResult {
+pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     let url = url_of(p)?.to_string();
     let want = ps(p, "layer").map(str::trim).filter(|l| !l.is_empty()).ok_or("layer is required")?;
     let svc = capabilities(p)?;
@@ -181,6 +191,20 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
             zoom(s);
             Ok(r)
         }
+        Offer::Coverage(c) => {
+            let (get, _) = coverage_request(s, p, c)?;
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = get;
+                Err(format!("{url}: in the web app, Home › Add Data › From Service downloads the coverage"))
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let bytes = crate::render::rustgis_tiles::cache::download_blocking(&get).map_err(|e| format!("{name}: {e}"))?;
+                coverage_check(&name, &bytes)?;
+                super::raster::add_named_bytes(s, &json!({"name": name}), format!("{name}.tif"), bytes)
+            }
+        }
         Offer::Features { url: items } => {
             #[cfg(target_arch = "wasm32")]
             {
@@ -198,4 +222,130 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
             }
         }
     }
+}
+
+/// The area a coverage is asked for over: `bbox` given, `"full"` (its bounds), or the map's view
+/// (the default); within its bounds when they are known.
+fn coverage_area(s: &Session, p: &Value, info: &rustgis_data::ogc::CoverageInfo, id: &str) -> Result<[f64; 4], String> {
+    let area = match p.get("bbox") {
+        Some(Value::String(f)) if f == "full" => {
+            info.bbox.ok_or_else(|| format!("{id}: its bounds aren't known; give bbox or use the view"))?
+        }
+        _ => super::catalogs::area(s, p)?,
+    };
+    if area[0] > area[2] {
+        return Err(format!("{id}: an area across the antimeridian; give it one side at a time"));
+    }
+    rustgis_data::ogc::coverage_area(info, area).ok_or_else(|| format!("{id}: the coverage has no data in the area"))
+}
+
+/// A coverage's GetCoverage address and the area it covers: its description from `"describe"`, or
+/// fetched (waiting for it).
+fn coverage_request(s: &Session, p: &Value, c: &Coverage) -> Result<(String, [f64; 4]), String> {
+    let describe = rustgis_data::ogc::describe_coverage_url(c);
+    let info = match ps(p, "describe") {
+        Some(text) => rustgis_data::ogc::parse_describe(c, text.as_bytes())?,
+        None => fetch_describe(c, &describe)?,
+    };
+    let area = coverage_area(s, p, &info, &c.id)?;
+    let get = rustgis_data::ogc::get_coverage_url(c, &info, area);
+    crate::render::rustgis_tiles::address::check(&get, Some(&c.endpoint))?;
+    Ok((get, area))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_describe(c: &Coverage, describe: &str) -> Result<rustgis_data::ogc::CoverageInfo, String> {
+    let bytes = crate::render::rustgis_tiles::cache::download_blocking(describe).map_err(|e| format!("{}: {e}", c.id))?;
+    rustgis_data::ogc::parse_describe(c, &bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn fetch_describe(c: &Coverage, _: &str) -> Result<rustgis_data::ogc::CoverageInfo, String> {
+    Err(format!("{}: in the web app, the description is read first (give it as \"describe\")", c.id))
+}
+
+/// `service.coverage`: the GetCoverage address of a WCS coverage over an area, for the app (which
+/// downloads it in the background) and for scripts.
+fn coverage(s: &mut Session, p: &Value) -> CmdResult {
+    let url = url_of(p)?.to_string();
+    let want = ps(p, "layer").map(str::trim).filter(|l| !l.is_empty()).ok_or("layer is required")?;
+    let svc = capabilities(p)?;
+    let layer = svc
+        .layers
+        .iter()
+        .find(|l| l.name == want || l.name.eq_ignore_ascii_case(want))
+        .ok_or_else(|| format!("{url}: no coverage '{want}' (service.layers lists them)"))?;
+    let Offer::Coverage(c) = &layer.offer else { return Err(format!("{url}: '{want}' isn't a WCS coverage")) };
+    let (get, area) = coverage_request(s, p, c)?;
+    Ok(json!({"url": get, "name": layer.title, "bbox": area, "describe": rustgis_data::ogc::describe_coverage_url(c)}))
+}
+
+/// The GetRecords request `catalog.search` makes of its parameters (the app fetches it first).
+pub fn records_request(s: &Session, p: &Value) -> Result<String, String> {
+    let url = url_of(p)?;
+    let words = ps(p, "query").unwrap_or("");
+    let bbox = match p.get("bbox") {
+        None | Some(Value::Null) => None,
+        // A box across the antimeridian isn't asked for: the whole catalogue is searched.
+        Some(_) => Some(super::catalogs::area(s, p)?).filter(|a| a[0] <= a[2]),
+    };
+    let start = p.get("start").and_then(Value::as_u64).unwrap_or(1).clamp(1, 1_000_000);
+    Ok(rustgis_data::ogc::records_url(url, words, bbox, start))
+}
+
+/// A WCS coverage's answer is a GeoTIFF; anything else (an XML exception, an HTML page, plain
+/// text) is the service's error, its start reported.
+pub(crate) fn coverage_check(name: &str, bytes: &[u8]) -> Result<(), String> {
+    // TIFF's and BigTIFF's byte-order marks with their magic numbers.
+    if [&b"II*\0"[..], b"MM\0*", b"II+\0", b"MM\0+"].iter().any(|m| bytes.starts_with(m)) {
+        return Ok(());
+    }
+    let text = String::from_utf8_lossy(bytes.get(..bytes.len().min(400)).unwrap_or_default()).into_owned();
+    Err(format!("{name}: the service answered with an error: {text}"))
+}
+
+/// `catalog.search`: a page of a catalogue's (CSW) records matching words and an area, with the
+/// links RustGIS can follow (those pointing where a document on the web may not send it left out).
+fn catalog_search(s: &mut Session, p: &Value) -> CmdResult {
+    let url = url_of(p)?;
+    let request = records_request(s, p)?;
+    let page = match ps(p, "text") {
+        Some(text) => rustgis_data::ogc::parse_records(&request, text.as_bytes()).map_err(|e| format!("{url}: {e}"))?,
+        None => fetch_records(url, &request)?,
+    };
+    let mut dropped = 0usize;
+    let records: Vec<Value> = page
+        .records
+        .iter()
+        .map(|r| {
+            let links: Vec<Value> = r
+                .links
+                .iter()
+                .filter(|l| {
+                    let ok = crate::render::rustgis_tiles::address::check(&l.url, Some(&request)).is_ok();
+                    dropped += usize::from(!ok);
+                    ok
+                })
+                .map(|l| json!({"url": l.url, "kind": l.kind, "name": l.name, "protocol": l.protocol}))
+                .collect();
+            json!({"id": r.id, "title": r.title, "abstract": r.summary, "bbox": r.bbox, "links": links})
+        })
+        .collect();
+    let mut out = json!({"matched": page.matched, "count": records.len(), "next": page.next, "records": records, "request": request});
+    if dropped > 0 {
+        out["notes"] =
+            json!([format!("{dropped} links point to addresses RustGIS won't fetch for a catalogue on the web and are left out")]);
+    }
+    Ok(out)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_records(url: &str, request: &str) -> Result<rustgis_data::ogc::RecordPage, String> {
+    let bytes = crate::render::rustgis_tiles::cache::download_blocking(request).map_err(|e| format!("{url}: {e}"))?;
+    rustgis_data::ogc::parse_records(request, &bytes).map_err(|e| format!("{url}: {e}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn fetch_records(url: &str, _: &str) -> Result<rustgis_data::ogc::RecordPage, String> {
+    Err(format!("{url}: in the web app, use Home › Add Data › From Service › Search Catalogue"))
 }

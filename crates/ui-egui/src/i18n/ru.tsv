@@ -1,6 +1,7 @@
 # ru interface catalog: English<TAB>translation
  by 	 по
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+(filtered)	(отфильтрован)
 00:00 UTC	00:00 UTC
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
@@ -14,6 +15,7 @@ A flat scene centred on the view (azimuthal equidistant).	Плоская сце�
 A globe scene.	Сцена-глобус.
 A magnifying lens that follows the pointer.	Увеличительная лупа, следующая за указателем.
 A notebook of text and command cells.	Блокнот из текстовых и командных ячеек.
+A project keeps at least one map	В проекте остаётся хотя бы одна карта
 A projected coordinate system.	Система координат проекции.
 A report listing the selected layer's records, page after page.	Отчёт со списком записей выбранного слоя, страница за страницей.
 A template with the first selected feature's values	Шаблон со значениями первого выбранного объекта
@@ -247,6 +249,7 @@ Checking for updates…	Проверка обновлений…
 China	Китай
 Choose a band combination to display the raster layer.	Выберите комбинацию каналов для отображения растрового слоя.
 Choose a contrast stretch for the raster layer.	Выберите растяжку контраста для растрового слоя.
+Choose a delimited text file or a spreadsheet, then pick its columns.	Выберите текстовый файл с разделителями или электронную таблицу, затем — её столбцы.
 Choose a model.	Выберите модель.
 Choose a resampling type for the raster layer.	Выберите тип передискретизации для растрового слоя.
 Choose extra buttons for the Quick Access Toolbar.	Выбрать дополнительные кнопки для панели быстрого доступа.
@@ -323,6 +326,7 @@ Color Vision	Цветовое зрение
 Color Vision Simulator	Симулятор цветового зрения
 Colormap	Цветовая карта
 Colors from the raster's own color table.	Цвета из собственной цветовой таблицы растра.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	Столбцы с именами вроде longitude/latitude, easting/northing или geometry выбираются автоматически.
 Combinations from the box above, one per line	Сочетания из поля выше, по одному в строке
 Command\nSearch	Поиск\nкоманд
 command is required	требуется command
@@ -383,6 +387,7 @@ Create Polygon	Создать полигон
 Create Profile	Создать профиль
 Create Thumbnail	Создать эскиз
 Creates a point inside each input feature.	Создаёт точку внутри каждого входного объекта.
+Creates points from a table's x and y coordinate fields.	Создаёт точки по полям координат x и y таблицы.
 Creates polygons around input features at a given distance.	Создаёт полигоны вокруг входных объектов на заданном расстоянии.
 Cross Section	Поперечный разрез
 Cross Section (2 clicks)	Поперечный разрез (2 щелчка)
@@ -774,6 +779,7 @@ Import Thumbnail	Импорт эскиза
 Import Web Tool	Импорт веб-инструмента
 In Beyond	Вкл. за пределами
 In Progress	Выполняется
+In RustGIS, it can:	В RustGIS он может:
 in progress	выполняется
 In project	В проекте
 In use	Используется
@@ -802,6 +808,7 @@ Installed	Установлен
 Installed plugins are kept in {folder}	Установленные модули хранятся в {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Установлено через Homebrew, winget, AUR или COPR? Обновите там.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	Установлен модуль {name} {version}. Он находится на вкладке «Модули»; его инструменты также есть на панели «Инструменты».
+Installing it downloads Python {version} and the packages it needs from the internet.	При установке из интернета загружаются Python {version} и нужные ему пакеты.
 Interface font: {font}	Шрифт интерфейса: {font}
 Interpolate a surface from points (IDW)	Интерполировать поверхность по точкам (IDW)
 Invalid: {error}	Недопустимо: {error}
@@ -809,6 +816,7 @@ Invert	Инвертировать
 Invert color scheme	Инвертировать цветовую схему
 Invert the selection.	Инвертировать выборку.
 IS NULL	IS NULL
+It runs: {program}	Запускает: {program}
 it connects to an address on the internet	подключается к адресу в интернете
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	доступно только вам (модули, скрипты, задачи, модели и средство запуска GeoLibre)
 it reads or writes files on this computer	читает или записывает файлы на этом компьютере
@@ -1067,6 +1075,7 @@ None. Add one by address, or from a basemap plugin.	Нет. Добавьте с�
 North	Север
 North\nArrow	Стрелка\nсевера
 North Polar Stereographic	Северная полярная стереографическая
+Not sandboxed	Без песочницы
 not a RustGIS layout	не макет RustGIS
 not needed	не требуется
 Not saved yet	Ещё не сохранено
@@ -1198,6 +1207,7 @@ PMTiles archive	Архив PMTiles
 PMTiles File…	Файл PMTiles…
 PNG frames (zip)	Кадры PNG (zip)
 PNG image	Изображение PNG
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	Модули с пометкой «Без песочницы» работают как программы на вашем компьютере и могут всё, что можете вы.
 Point	Точка
 Points	Точки
 points each	точек в каждом
@@ -1208,6 +1218,7 @@ Polygon (draw)	Полигон (рисование)
 Polygons	Полигоны
 Polyline	Полилиния
 Pop-up Mode	Режим всплывающих окон
+Prepare	Подготовить
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Населённые пункты
 Portal	Портал
@@ -1215,6 +1226,7 @@ Portrait	Книжная
 Postprocessing	Постобработка
 power 2	степень 2
 Prepare every layer's geometry for this projection.	Подготовить геометрию всех слоёв для этой проекции.
+Preparing its Python environment…	Подготовка его окружения Python…
 Presentation	Презентация
 Presentation File	Файл презентации
 Presentation Pane	Панель презентации
@@ -1253,6 +1265,9 @@ Proximity	Близость
 Publish	Публикация
 Publish › Output	Публикация › Вывод
 Put the layer back as it was then	Вернуть слой в тогдашнее состояние
+Python environment failed: {error}	Ошибка окружения Python: {error}
+Python environment not prepared	Окружение Python не подготовлено
+Python environment ready	Окружение Python готово
 Quantile	Квантили
 Quick\nAccess	Быстрый\nдоступ
 Quick Access Toolbar	Панель быстрого доступа
@@ -1307,6 +1322,7 @@ Remove Folder	Удалить папку
 Remove From Current Selection	Удалить из текущей выборки
 Remove Keyframe	Удалить ключевой кадр
 Remove Section	Удалить раздел
+Remove Table	Удалить таблицу
 Remove the last keyframe.	Удалить последний ключевой кадр.
 Remove the layer from the map.	Удалить слой с карты.
 Remove Tile Layer	Удалить слой тайлов
@@ -1636,6 +1652,7 @@ Text	Текст
 Text Symbol	Текстовый символ
 The assistant is busy; stop it or wait for it to finish.	Помощник занят; остановите его или дождитесь завершения.
 The assistant wants to run this, and {why}:	Помощник хочет выполнить следующее, но это действие {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Этот модуль работает как программа на вашем компьютере, вне песочницы RustGIS. Он может всё, что можете вы: читать и изменять ваши файлы, использовать сеть и запускать другие программы. Устанавливайте его, только если доверяете автору.
 the capture failed unexpectedly	снимок неожиданно завершился ошибкой
 the Help tab always shows	вкладка «Справка» отображается всегда
 The job covers the map view	Задание охватывает вид карты
@@ -1812,7 +1829,11 @@ World, equal-area: true sizes, shapes bend towards the edges.	Мир, равно
 Worldview	Границы
 Write a plugin	Написать модуль
 X (mm)	X (мм)
+X Field	Поле X
+XY Table To Point	Таблица XY в точки
+XY Table To Point…	Таблица XY в точки…
 Y (mm)	Y (мм)
+Y Field	Поле Y
 Yes	Да
 You have version {version}.	У вас версия {version}.
 z (m)	z (м)
@@ -1845,6 +1866,8 @@ Zoom to the whole world.	Показать весь мир.
 Zoom to Tokyo	Приблизить к Токио
 Zoom To World	Приблизить к миру
 {id} changed since it was installed; install it again from the Plugin Manager.	Модуль {id} изменился после установки; установите его заново через Менеджер модулей.
+{name} is larger than {mb} MB	{name} больше {mb} МБ
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} работает как программа на вашем компьютере: нужно настольное приложение или rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	Модуль {name} отозван из каталога модулей и отключён.
 {name} was withdrawn from the plugin registry: {reason}	Модуль {name} отозван из каталога модулей: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: загруженный файл не совпадает с данными каталога; модуль не установлен.
@@ -1856,3 +1879,11 @@ Zoom To World	Приблизить к миру
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: разрешены только адреса HTTPS или обычный HTTP на этом компьютере или в этой сети
 © OpenStreetMap contributors	© участники OpenStreetMap
 ⌘K	⌘K
+MCP Relay	MCP-релей
+MCP relay stopped	MCP-релей остановлен
+MCP relay listening on 127.0.0.1:{port}	MCP-релей слушает 127.0.0.1:{port}
+MCP relay · {n} attached	MCP-релей · {n} подключено
+Stop MCP relay	Остановить MCP-релей
+MCP relay is already listening on 127.0.0.1:{port}; stop it first to use port {asked}	MCP-релей уже слушает 127.0.0.1:{port}; сначала остановите его, чтобы использовать порт {asked}
+Opening {url}…	Открывается {url}…
+{url}: downloaded after another project was opened, so it wasn't opened	{url}: загружен после открытия другого проекта, поэтому не открыт

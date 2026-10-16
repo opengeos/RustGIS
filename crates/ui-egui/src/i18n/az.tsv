@@ -1,6 +1,7 @@
 # az interface catalog: English<TAB>translation
  by 	 ×
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+(filtered)	(süzülmüş)
 00:00 UTC	00:00 UTC
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
@@ -14,6 +15,7 @@ A flat scene centred on the view (azimuthal equidistant).	Görünüşün mərkə
 A globe scene.	Qlobus səhnəsi.
 A magnifying lens that follows the pointer.	Göstəricini izləyən böyüdücü linza.
 A notebook of text and command cells.	Mətn və əmr xanalarından ibarət bloknot.
+A project keeps at least one map	Layihədə ən azı bir xəritə qalır
 A projected coordinate system.	Proyeksiyalı koordinat sistemi.
 A report listing the selected layer's records, page after page.	Seçilmiş layın qeydlərini səhifə-səhifə sadalayan hesabat.
 A template with the first selected feature's values	İlk seçilmiş obyektin qiymətləri ilə şablon
@@ -247,6 +249,7 @@ Checking for updates…	Yeniləmələr yoxlanılır…
 China	Çin
 Choose a band combination to display the raster layer.	Rastr layını göstərmək üçün kanal kombinasiyası seçin.
 Choose a contrast stretch for the raster layer.	Rastr layı üçün kontrast genişləndirməsi seçin.
+Choose a delimited text file or a spreadsheet, then pick its columns.	Ayrılmış mətn faylı və ya cədvəl seçin, sonra onun sütunlarını seçin.
 Choose a model.	Model seçin.
 Choose a resampling type for the raster layer.	Rastr layı üçün yenidən nümunələmə tipini seçin.
 Choose extra buttons for the Quick Access Toolbar.	Sürətli giriş paneli üçün əlavə düymələr seçin.
@@ -323,6 +326,7 @@ Color Vision	Rəng görmə
 Color Vision Simulator	Rəng görmə simulyatoru
 Colormap	Rəng xəritəsi
 Colors from the raster's own color table.	Rastrın öz rəng cədvəlindən rənglər.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	longitude/latitude, easting/northing və ya geometry kimi adlanan sütunlar sizin üçün seçilir.
 Combinations from the box above, one per line	Yuxarıdakı qutudan kombinasiyalar, hər sətirdə bir
 Command\nSearch	Əmr\naxtarışı
 command is required	command tələb olunur
@@ -383,6 +387,7 @@ Create Polygon	Poliqon yarat
 Create Profile	Profil yarat
 Create Thumbnail	Miniatür yarat
 Creates a point inside each input feature.	Hər giriş obyektinin daxilində nöqtə yaradır.
+Creates points from a table's x and y coordinate fields.	Cədvəlin x və y koordinat sahələrindən nöqtələr yaradır.
 Creates polygons around input features at a given distance.	Giriş obyektləri ətrafında verilmiş məsafədə poliqonlar yaradır.
 Cross Section	En kəsik
 Cross Section (2 clicks)	En kəsik (2 klik)
@@ -774,6 +779,7 @@ Import Thumbnail	Miniatürü idxal et
 Import Web Tool	Veb aləti idxal et
 In Beyond	Yaxınlaşma həddi
 In Progress	İcra olunur
+In RustGIS, it can:	RustGIS-də bunları edə bilər:
 in progress	icra olunur
 In project	Layihədə
 In use	İstifadədədir
@@ -802,6 +808,7 @@ Installed	Quraşdırılıb
 Installed plugins are kept in {folder}	Quraşdırılmış plaginlər burada saxlanılır: {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Homebrew, winget, AUR və ya COPR ilə quraşdırmısınız? Oradan yeniləyin.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} quraşdırıldı. Onu Plaginlər tabında tapa bilərsiniz; alətləri Alətlər panelində də var.
+Installing it downloads Python {version} and the packages it needs from the internet.	Quraşdırma internetdən Python {version} və lazım olan paketləri yükləyir.
 Interface font: {font}	İnterfeys şrifti: {font}
 Interpolate a surface from points (IDW)	Nöqtələrdən səth interpolyasiya et (IDW)
 Invalid: {error}	Yanlışdır: {error}
@@ -809,6 +816,7 @@ Invert	Tərsinə çevir
 Invert color scheme	Rəng sxemini tərsinə çevir
 Invert the selection.	Seçimi tərsinə çevirin.
 IS NULL	IS NULL
+It runs: {program}	İşə saldığı: {program}
 it connects to an address on the internet	internetdəki ünvana qoşulur
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	yalnız sizin üçün nəzərdə tutulub (plaginlər, skriptlər, tapşırıqlar, modellər və GeoLibre icraçısı)
 it reads or writes files on this computer	bu kompüterdəki faylları oxuyur və ya yazır
@@ -1067,6 +1075,7 @@ None. Add one by address, or from a basemap plugin.	Heç biri. Ünvanla və ya �
 North	Şimal
 North\nArrow	Şimal\noxu
 North Polar Stereographic	Şimal qütb stereoqrafik
+Not sandboxed	Qum qutusundan kənar
 not a RustGIS layout	RustGIS tərtibatı deyil
 not needed	lazım deyil
 Not saved yet	Hələ saxlanmayıb
@@ -1198,6 +1207,7 @@ PMTiles archive	PMTiles arxivi
 PMTiles File…	PMTiles faylı…
 PNG frames (zip)	PNG kadrları (zip)
 PNG image	PNG təsviri
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	"Qum qutusundan kənar" kimi işarələnmiş plaginlər isə kompüterinizdə proqram kimi işləyir və sizin edə bildiyiniz hər şeyi edə bilər.
 Point	Nöqtə
 Points	Nöqtələr
 points each	hər birində nöqtə
@@ -1208,6 +1218,7 @@ Polygon (draw)	Poliqon (çəkmə)
 Polygons	Poliqonlar
 Polyline	Polixətt
 Pop-up Mode	Açılan pəncərə rejimi
+Prepare	Hazırla
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Yaşayış məntəqələri
 Portal	Portal
@@ -1215,6 +1226,7 @@ Portrait	Kitab
 Postprocessing	Sonrakı emal
 power 2	qüvvət 2
 Prepare every layer's geometry for this projection.	Hər layın həndəsəsini bu proyeksiya üçün hazırlayın.
+Preparing its Python environment…	Onun Python mühiti hazırlanır…
 Presentation	Təqdimat
 Presentation File	Təqdimat faylı
 Presentation Pane	Təqdimat paneli
@@ -1253,6 +1265,9 @@ Proximity	Yaxınlıq
 Publish	Nəşr
 Publish › Output	Nəşr › Çıxış
 Put the layer back as it was then	Layı o vaxtkı vəziyyətinə qaytar
+Python environment failed: {error}	Python mühiti alınmadı: {error}
+Python environment not prepared	Python mühiti hazırlanmayıb
+Python environment ready	Python mühiti hazırdır
 Quantile	Kvantil
 Quick\nAccess	Sürətli\ngiriş
 Quick Access Toolbar	Sürətli giriş paneli
@@ -1307,6 +1322,7 @@ Remove Folder	Qovluğu sil
 Remove From Current Selection	Cari seçimdən çıxar
 Remove Keyframe	Açar kadrı sil
 Remove Section	Bölməni sil
+Remove Table	Cədvəli sil
 Remove the last keyframe.	Son açar kadrı silin.
 Remove the layer from the map.	Layı xəritədən silin.
 Remove Tile Layer	Kafel layını sil
@@ -1636,6 +1652,7 @@ Text	Mətn
 Text Symbol	Mətn simvolu
 The assistant is busy; stop it or wait for it to finish.	Köməkçi məşğuldur; onu dayandırın və ya bitirməsini gözləyin.
 The assistant wants to run this, and {why}:	Köməkçi bunu icra etmək istəyir; bu əməliyyat {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Bu plagin RustGIS-in qum qutusundan kənarda, kompüterinizdə proqram kimi işləyir. Sizin edə bildiyiniz hər şeyi edə bilər: fayllarınızı oxuyub dəyişə, şəbəkədən istifadə edə və başqa proqramlar işə sala bilər. Onu yalnız müəllifinə etibar edirsinizsə quraşdırın.
 the capture failed unexpectedly	çəkiliş gözlənilmədən uğursuz oldu
 the Help tab always shows	Kömək tabı həmişə göstərilir
 The job covers the map view	İş xəritə görünüşünü əhatə edir
@@ -1812,7 +1829,11 @@ World, equal-area: true sizes, shapes bend towards the edges.	Dünya, bərabərs
 Worldview	Sərhədlər
 Write a plugin	Plagin yaz
 X (mm)	X (mm)
+X Field	X sahəsi
+XY Table To Point	XY cədvəlindən nöqtəyə
+XY Table To Point…	XY cədvəlindən nöqtəyə…
 Y (mm)	Y (mm)
+Y Field	Y sahəsi
 Yes	Bəli
 You have version {version}.	Sizdə {version} versiyası var.
 z (m)	z (m)
@@ -1845,6 +1866,8 @@ Zoom to the whole world.	Bütün dünyaya yaxınlaşdırın.
 Zoom to Tokyo	Tokioya yaxınlaşdır
 Zoom To World	Dünyaya yaxınlaşdır
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} quraşdırıldıqdan sonra dəyişib; onu Plagin menecerindən yenidən quraşdırın.
+{name} is larger than {mb} MB	{name} {mb} MB-dan böyükdür
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} kompüterinizdə proqram kimi işləyir: masaüstü tətbiq və ya rustgis-cli tələb edir.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} plagin reyestrindən geri çəkilib və söndürülüb.
 {name} was withdrawn from the plugin registry: {reason}	{name} plagin reyestrindən geri çəkilib: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: endirilən fayl reyestrə uyğun gəlmir; quraşdırılmadı.
@@ -1856,3 +1879,11 @@ Zoom To World	Dünyaya yaxınlaşdır
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: yalnız HTTPS ünvanlarına və ya bu kompüterdə, yaxud bu şəbəkədə adi HTTP-yə icazə verilir
 © OpenStreetMap contributors	© OpenStreetMap iştirakçıları
 ⌘K	⌘K
+MCP Relay	MCP Relay
+MCP relay stopped	MCP rely dayandırıldı
+MCP relay listening on 127.0.0.1:{port}	MCP rely 127.0.0.1:{port} ünvanında dinləyir
+MCP relay · {n} attached	MCP rely · {n} qoşulub
+Stop MCP relay	MCP relyni dayandır
+MCP relay is already listening on 127.0.0.1:{port}; stop it first to use port {asked}	MCP rely artıq 127.0.0.1:{port} ünvanında dinləyir; {asked} portunu istifadə etmək üçün əvvəlcə dayandırın
+Opening {url}…	{url} açılır…
+{url}: downloaded after another project was opened, so it wasn't opened	{url}: başqa layihə açıldıqdan sonra endirildi, ona görə açılmadı

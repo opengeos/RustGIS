@@ -2,8 +2,10 @@
 
 ## Selection and queries
 
-**Home › Select** picks features by clicking or dragging a box (Shift adds, Ctrl removes).
-**Select By Attributes** takes a SQL clause and checks it as you type; **Select By Location**
+**Home › Select** picks features by clicking or dragging a box (Shift adds, Ctrl removes). It
+takes only features that are drawn, in selectable layers: a definition query or a display filter
+hiding a feature keeps it out, and a click picks the feature drawn on top among the selectable
+layers. **Select By Attributes** takes a SQL clause and checks it as you type; **Select By Location**
 picks features that touch another layer's features or lie within a search distance of them (or,
 inverted, those that don't). Selected features draw in
 cyan and are highlighted in the attribute table, and the selection is synced both ways. Switch,
@@ -32,7 +34,7 @@ result is added to the map, and the run is listed under **Analyze › History**.
 | Buffer | Analysis › Proximity |
 | Clip, Erase | Analysis › Extract / Overlay |
 | Dissolve | Data Management › Generalization |
-| Minimum Bounding Geometry, Feature To Point, Calculate Geometry Attributes | Data Management › Features |
+| Minimum Bounding Geometry, Feature To Point, XY Table To Point, Calculate Geometry Attributes | Data Management › Features |
 | Simplify | Cartography › Generalization |
 | Select Layer By Location / Attribute | Data Management › Layers and Table Views |
 | Summarize Within, Summary Statistics | Analysis › Summarize / Statistics |
@@ -59,15 +61,23 @@ release itself is trusted as when you download it by hand) and installs it in it
 on macOS, `%LOCALAPPDATA%\RustGIS\geolibre` on Windows). From the command line,
 `gp.installGeolibre` does the same.
 
+To remove it, click **Uninstall** beside *GeoLibre* at the top of the Tools pane, then
+**Confirm uninstall** (`gp.uninstallGeolibre` from the command line): RustGIS deletes its
+`geolibre` data folder. A runner you located yourself, or one on your `PATH`, is not deleted;
+RustGIS goes on using it. You can install the tools again at any time. In the browser,
+**Remove** unloads the tools and stops loading them when RustGIS starts.
+
 To install it yourself instead, download the archive for your platform
 (`geolibre-<version>-<platform>.tar.gz`, or `.zip` on Windows), unpack it anywhere, and click
 **Locate…** to pick the `geolibre` program; RustGIS remembers it.
 
 RustGIS also finds the runner without asking when it is next to the RustGIS program (or in a
 `geolibre` folder beside it), on your `PATH`, or named by the `RUSTGIS_GEOLIBRE` environment
-variable (the command line uses these). The tools then appear under **GeoLibre › Raster,
-Vector, Lidar, Hydrology, Terrain, Conversion** in the Tools pane and the Browser's
-toolboxes, and Find Tools searches them.
+variable (the command line uses these). The tools then appear under **GeoLibre** in the Tools
+pane and the Browser's toolboxes, grouped by the category and subcategory the runner gives
+each tool (Conversion, Hydrology, LiDAR, Projection, Raster, Remote Sensing, Terrain, Vector,
+then e.g. **GeoLibre › Terrain › Derivatives**). A runner too old to list subcategories groups
+them by category only. Find Tools searches them.
 
 - Raster inputs are passed as their own files; vector layers (or their selection) are written
   in the first raster input's coordinate system, or the UTM zone around the data, so distances

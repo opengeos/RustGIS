@@ -1,6 +1,7 @@
 //! L2: the map model — layers with symbology and labels, the camera, colour ramps and basemaps.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod antimeridian;
 pub mod camera;
 pub mod color;
 pub mod design;
@@ -8,6 +9,7 @@ pub mod effects;
 pub mod globe;
 pub mod graphics;
 pub mod layout;
+pub mod palette;
 pub mod presentation;
 pub mod projection;
 pub mod raster;
@@ -218,7 +220,8 @@ impl Layer {
         };
         let mut ds = Dataset::new(name, ty, fields);
         ds.windowed = true;
-        ds.source = source.path.clone().or_else(|| source.file_name.clone());
+        ds.source =
+            source.path.clone().or_else(|| source.file_name.clone()).or_else(|| source.postgis.as_ref().map(|p| p.database.clone()));
         let mut l = Layer::new(id, ds);
         l.source = Some(source);
         l
@@ -237,6 +240,13 @@ impl Layer {
             // Opened once after a project loads; a failure is kept, not retried every frame.
             if src.error.is_some() || src.open().is_err() {
                 return false;
+            }
+            // A source by its web address opens off the frame: an export waits for it.
+            if block {
+                src.wait_open(std::time::Duration::from_secs(60));
+            }
+            if !src.is_open() {
+                return src.is_pending();
             }
         }
         // A failed read leaves nothing drawn for it (its error shows in Layers), not the
@@ -320,11 +330,14 @@ impl Layer {
 
     /// Copies of every geometry in a map projection's coordinates (`key` names the projection),
     /// rebuilt lazily when the geometry or the projection changes. Points a projection can't show
-    /// become NaN, which the renderer skips.
+    /// become NaN, which the renderer skips; features across a world projection's edge are cut
+    /// there ([`projection::Flat::project`]). There is one entry per feature, row for row, but its
+    /// parts and vertices needn't match the source's (a cut feature has more parts, and a point
+    /// the projection can't use breaks a line): hit-testing and snapping use the shape, never a
+    /// vertex index, which only the source geometry has.
     pub fn projected_in(&mut self, flat: &projection::Flat, key: &str) -> &[Option<Geometry>] {
         if self.projected_rev != self.geometry_rev || self.projected.len() != self.dataset.features.len() || self.projected_for != key {
-            let f = |c: Coord| flat.forward_checked(c).unwrap_or(Coord::new(f64::NAN, f64::NAN));
-            self.projected = self.dataset.features.iter().map(|ft| ft.geometry.as_ref().map(|g| g.map_coords(&f))).collect();
+            self.projected = self.dataset.features.iter().map(|ft| ft.geometry.as_ref().map(|g| flat.project(g))).collect();
             self.projected_rev = self.geometry_rev;
             self.projected_for = key.to_string();
         }
@@ -364,6 +377,20 @@ impl Layer {
         self.min_scale.is_none_or(|m| scale <= m) && self.max_scale.is_none_or(|m| scale >= m)
     }
 
+    /// Rows drawn at a scale denominator: those passing the definition query and every display
+    /// filter that applies at that scale (a filter that no longer reads is skipped).
+    pub fn drawn_rows(&self, scale: f64) -> Vec<bool> {
+        let mut rows = self.visible_rows();
+        for f in self.display_filters.iter().filter(|f| f.applies(scale)) {
+            if let Ok(e) = rustgis_data::query::parse(&f.where_, &self.dataset) {
+                for (r, keep) in rows.iter_mut().enumerate() {
+                    *keep = *keep && rustgis_data::query::eval(&e, &self.dataset, r);
+                }
+            }
+        }
+        rows
+    }
+
     /// Rows passing the definition query (all rows when none or invalid).
     pub fn visible_rows(&self) -> Vec<bool> {
         let n = self.dataset.features.len();
@@ -386,6 +413,21 @@ impl Layer {
         }
     }
 
+    /// Extent in longitude/latitude of the features the definition query lets through (the whole
+    /// extent without a query, for rasters and for streamed layers, whose rows are only those read).
+    pub fn shown_extent(&self) -> Extent {
+        let query = self.definition_query.as_deref().is_some_and(|q| !q.trim().is_empty());
+        if !query || self.raster.is_some() || self.source.is_some() {
+            return self.extent();
+        }
+        self.visible_rows()
+            .iter()
+            .zip(&self.dataset.features)
+            .filter(|(v, _)| **v)
+            .filter_map(|(_, f)| f.geometry.as_ref())
+            .fold(Extent::EMPTY, |e, g| e.union(&g.extent()))
+    }
+
     pub fn selection_extent(&self) -> Extent {
         self.selection
             .iter()
@@ -403,6 +445,13 @@ impl Layer {
 pub struct Bookmark {
     pub name: String,
     pub camera: Camera,
+}
+
+/// What [`Map::layer_mark`] records.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayerMark {
+    ids: Vec<u32>,
+    next: u32,
 }
 
 /// A map: an ordered list of layers (index 0 draws on top), a basemap and a camera.
@@ -459,7 +508,7 @@ pub enum PopupMode {
     Topmost,
     /// Every visible layer's feature under the pointer.
     Visible,
-    /// The topmost feature of a selectable layer.
+    /// Every selectable layer's features under the pointer.
     Selectable,
     /// Only the layer selected in the Layers pane.
     SelectedInContents,
@@ -534,6 +583,20 @@ impl Map {
         let id = self.next_layer_id.max(self.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1);
         self.next_layer_id = id + 1;
         id
+    }
+
+    /// The map's layers as they stand (their ids in order, and the next id), cheap to take before
+    /// adding several layers that must all go in or none: see [`Map::restore_layers`].
+    pub fn layer_mark(&self) -> LayerMark {
+        LayerMark { ids: self.layers.iter().map(|l| l.id).collect(), next: self.next_layer_id }
+    }
+
+    /// Takes out the layers added since `mark` and puts the others back in its order, with the
+    /// layer ids it had (the layers' data is never copied).
+    pub fn restore_layers(&mut self, mark: &LayerMark) {
+        self.layers.retain(|l| mark.ids.contains(&l.id));
+        self.layers.sort_by_key(|l| mark.ids.iter().position(|id| *id == l.id).unwrap_or(usize::MAX));
+        self.next_layer_id = mark.next;
     }
 
     /// Inserts a layer on top of the layers of its kind: points above lines above polygons above
@@ -707,6 +770,12 @@ impl Map {
         self.layers.iter().filter(|l| l.visible).fold(Extent::EMPTY, |e, l| e.union(&l.extent()))
     }
 
+    /// Union of the visible layers' shown extents (lon/lat): what Full Extent zooms to, narrowed by
+    /// each layer's definition query.
+    pub fn shown_extent(&self) -> Extent {
+        self.layers.iter().filter(|l| l.visible).fold(Extent::EMPTY, |e, l| e.union(&l.shown_extent()))
+    }
+
     pub fn selection_count(&self) -> usize {
         self.layers.iter().map(|l| l.selection.len()).sum()
     }
@@ -721,48 +790,48 @@ impl Map {
         }
     }
 
-    /// Topmost feature under a point in the camera's coordinates: (layer id, row).
-    pub fn hit(&mut self, p: Coord, tol: f64, scale: f64) -> Option<(u32, usize)> {
-        let (flat, key) = (self.flat(), self.projection.code());
-        for l in &mut self.layers {
-            if !l.visible || !l.in_scale_range(scale) {
-                continue;
-            }
-            let rows = l.visible_rows();
-            let id = l.id;
-            let proj = l.projected_in(&flat, &key);
-            // Last drawn is on top.
-            for (row, g) in proj.iter().enumerate().rev() {
-                if rows.get(row) == Some(&true)
-                    && let Some(g) = g
-                    && g.hit(p, tol)
-                {
-                    return Some((id, row));
-                }
-            }
-        }
-        None
+    /// The feature drawn on top under a point in the camera's coordinates, among the visible layers
+    /// `keep` accepts: (layer id, row). Draw order and the rows drawn are those of [`Map::hits_at`].
+    pub fn hit(&mut self, p: Coord, tol: f64, scale: f64, keep: impl Fn(&Layer) -> bool) -> Option<(u32, usize)> {
+        self.hits_at(p, tol, scale, keep, true, 1).into_iter().next()
     }
 
-    /// The topmost feature under a point in every visible layer, top layer first.
-    pub fn hits_at(&mut self, p: Coord, tol: f64, scale: f64) -> Vec<(u32, usize)> {
+    /// Every feature under a point in the visible layers `keep` accepts: top layer first and, in
+    /// a layer, the one drawn on top first. At most `limit` of them; with `first_layer`, only
+    /// those of the top layer with any.
+    pub fn hits_at(
+        &mut self,
+        p: Coord,
+        tol: f64,
+        scale: f64,
+        keep: impl Fn(&Layer) -> bool,
+        first_layer: bool,
+        limit: usize,
+    ) -> Vec<(u32, usize)> {
         let (flat, key) = (self.flat(), self.projection.code());
         let mut out = Vec::new();
-        for l in &mut self.layers {
-            if !l.visible || !l.in_scale_range(scale) {
+        // Top first, as drawn: a higher depth priority is above whatever the order.
+        let mut order: Vec<usize> = (0..self.layers.len()).collect();
+        order.sort_by_key(|i| std::cmp::Reverse(self.layers.get(*i).map_or(0, |l| l.priority)));
+        for i in order {
+            let Some(l) = self.layers.get_mut(i) else { continue };
+            if out.len() >= limit || (first_layer && !out.is_empty()) {
+                break;
+            }
+            if !l.visible || !l.in_scale_range(scale) || !keep(l) {
                 continue;
             }
-            let rows = l.visible_rows();
+            // Only features drawn: the definition query and the display filters let them through.
+            let rows = l.drawn_rows(scale);
             let id = l.id;
             let proj = l.projected_in(&flat, &key);
-            if let Some(row) = proj
+            let hits = proj
                 .iter()
                 .enumerate()
                 .rev()
-                .find_map(|(row, g)| (rows.get(row) == Some(&true) && g.as_ref().is_some_and(|g| g.hit(p, tol))).then_some(row))
-            {
-                out.push((id, row));
-            }
+                .filter(|(row, g)| rows.get(*row) == Some(&true) && g.as_ref().is_some_and(|g| g.hit(p, tol)))
+                .map(|(row, _)| (id, row));
+            out.extend(hits.take(limit - out.len()));
         }
         out
     }
@@ -775,7 +844,8 @@ impl Map {
             if !l.visible || !l.selectable || !l.in_scale_range(scale) {
                 continue;
             }
-            let rows = l.visible_rows();
+            // Only features drawn: the definition query and the display filters let them through.
+            let rows = l.drawn_rows(scale);
             let id = l.id;
             let hits: Vec<usize> = l
                 .projected_in(&flat, &key)
@@ -813,10 +883,102 @@ mod tests {
         let id = m.add_dataset(points());
         assert_eq!(m.layers[0].id, id, "points go on top of polygons");
         let p = lonlat_to_merc(Coord::new(10.0, 10.0));
-        assert_eq!(m.hit(p, 1000.0, 1e6), Some((id, 1)));
+        assert_eq!(m.hit(p, 1000.0, 1e6, |_| true), Some((id, 1)));
         let e = Extent::from_points(lonlat_to_merc(Coord::new(-1.0, -1.0)), lonlat_to_merc(Coord::new(1.0, 1.0)));
         assert_eq!(m.hits_in(&e, 1e6), vec![(id, vec![0])]);
         m.layers[0].definition_query = Some("n = 2".into());
         assert_eq!(m.hits_in(&e, 1e6), vec![]);
+    }
+
+    #[test]
+    fn hits_at_finds_every_overlapping_feature() {
+        let mut m = Map::new("Map");
+        let mut d = points();
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Int(3)]);
+        let below = m.add_dataset(d);
+        let above = m.add_dataset(points());
+        let p = lonlat_to_merc(Coord::new(0.0, 0.0));
+        // Top layer first; in a layer, the feature drawn last (on top) first.
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 100), vec![(above, 0), (below, 2), (below, 0)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 2), vec![(above, 0), (below, 2)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, false, 100), vec![(below, 2), (below, 0)]);
+        // Only the top layer with a hit.
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, true, 100), vec![(above, 0)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, true, 100), vec![(below, 2), (below, 0)]);
+        // A higher depth priority draws on top, whatever the order.
+        if let Some(l) = m.layers.iter_mut().find(|l| l.id == below) {
+            l.priority = 1;
+        }
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, true, 100), vec![(below, 2), (below, 0)]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 100), vec![(below, 2), (below, 0), (above, 0)]);
+        if let Some(l) = m.layers.iter_mut().find(|l| l.id == below) {
+            l.priority = 0;
+        }
+        // Features the definition query hides aren't hit.
+        if let Some(l) = m.layers.iter_mut().find(|l| l.id == below) {
+            l.definition_query = Some("n = 1".into());
+        }
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |l| l.id == below, false, 100), vec![(below, 0)]);
+    }
+
+    #[test]
+    fn hits_at_skips_features_display_filters_hide() {
+        let mut m = Map::new("Map");
+        let mut d = points();
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Int(3)]);
+        let id = m.add_dataset(d);
+        let p = lonlat_to_merc(Coord::new(0.0, 0.0));
+        let filter = |min_scale| effects::DisplayFilter { name: "big".into(), min_scale, max_scale: None, where_: "n = 3".into() };
+        m.layers[0].display_filters = vec![filter(None)];
+        assert_eq!(m.layers[0].drawn_rows(1e6), vec![false, false, true]);
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 100), vec![(id, 2)]);
+        // A filter that doesn't apply at this scale hides nothing.
+        m.layers[0].display_filters = vec![filter(Some(1e5))];
+        assert_eq!(m.hits_at(p, 1000.0, 1e6, |_| true, false, 100), vec![(id, 2), (id, 0)]);
+    }
+
+    #[test]
+    fn select_hits_skip_hidden_features_and_follow_draw_order() {
+        let mut m = Map::new("Map");
+        let mut d = points();
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Int(3)]);
+        let below = m.add_dataset(d);
+        let above = m.add_dataset(points());
+        let p = lonlat_to_merc(Coord::new(0.0, 0.0));
+        let e = Extent::from_points(lonlat_to_merc(Coord::new(-1.0, -1.0)), lonlat_to_merc(Coord::new(1.0, 1.0)));
+        let all = |_: &Layer| true;
+        assert_eq!(m.hit(p, 1000.0, 1e6, all), Some((above, 0)));
+        // A higher depth priority draws on top, whatever the order (#243).
+        m.layers.iter_mut().filter(|l| l.id == below).for_each(|l| l.priority = 1);
+        assert_eq!(m.hit(p, 1000.0, 1e6, all), Some((below, 2)));
+        m.layers.iter_mut().filter(|l| l.id == below).for_each(|l| l.priority = 0);
+        // Features a display filter hides are neither clicked nor boxed (#243).
+        let only = |w: &str| vec![effects::DisplayFilter { name: "f".into(), min_scale: None, max_scale: None, where_: w.into() }];
+        m.layers.iter_mut().filter(|l| l.id == above).for_each(|l| l.display_filters = only("n = 2"));
+        m.layers.iter_mut().filter(|l| l.id == below).for_each(|l| l.display_filters = only("n = 3"));
+        assert_eq!(m.hit(p, 1000.0, 1e6, all), Some((below, 2)));
+        assert_eq!(m.hits_in(&e, 1e6), vec![(below, vec![2])]);
+        // A layer the click doesn't take doesn't hide the ones below it.
+        m.layers.iter_mut().for_each(|l| l.display_filters.clear());
+        assert_eq!(m.hit(p, 1000.0, 1e6, |l| l.id != above), Some((below, 2)));
+    }
+
+    #[test]
+    fn shown_extent_follows_the_definition_query() {
+        let mut m = Map::new("Map");
+        m.add_dataset(points());
+        let l = &mut m.layers[0];
+        assert_eq!(l.shown_extent(), Extent::new(0.0, 0.0, 10.0, 10.0));
+        l.definition_query = Some("n = 2".into());
+        assert_eq!(l.shown_extent(), Extent::new(10.0, 10.0, 10.0, 10.0));
+        l.definition_query = Some("n = 3".into());
+        assert!(l.shown_extent().is_empty());
+        // An invalid query hides nothing.
+        l.definition_query = Some("n = = 2".into());
+        assert_eq!(l.shown_extent(), Extent::new(0.0, 0.0, 10.0, 10.0));
+        // The map's shown extent (Full Extent) follows it too; its full extent doesn't.
+        m.layers[0].definition_query = Some("n = 2".into());
+        assert_eq!(m.shown_extent(), Extent::new(10.0, 10.0, 10.0, 10.0));
+        assert_eq!(m.full_extent(), Extent::new(0.0, 0.0, 10.0, 10.0));
     }
 }

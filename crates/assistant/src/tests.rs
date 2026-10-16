@@ -161,6 +161,7 @@ fn gate_rules() {
     assert!(g("run_tool", json!({"tool": "buffer", "params": {"input": "Cities", "distance": 100}})).is_none());
     assert!(g("list_layers", json!({})).is_none());
     assert!(g("run_command", json!({"command": "info.fileLayers", "params": {"path": "/etc/passwd"}})).is_some());
+    assert!(g("run_command", json!({"command": "info.fileColumns", "params": {"path": "/etc/passwd"}})).is_some());
 }
 
 /// What a command says beside its result reaches the model (issue #85).
@@ -649,6 +650,20 @@ fn mcp_protocol_errors() {
     assert_eq!(r["error"]["code"], -32600);
     // A response to us (we send no requests) gets no reply.
     assert!(server.handle(&mut s, r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).is_none());
+}
+
+/// `expects_reply` must answer exactly when the server answers: a bare non-object such as `5`
+/// is an INVALID_REQUEST (`handle_value`), a notification is not.
+#[test]
+fn mcp_expects_reply_matches_the_server() {
+    assert!(mcp::expects_reply("5"), "a bare non-object gets INVALID_REQUEST, so a reply is owed");
+    assert!(mcp::expects_reply(r#""x""#));
+    assert!(mcp::expects_reply(r#"[1]"#), "a batch element that is a non-object");
+    assert!(mcp::expects_reply(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#));
+    assert!(mcp::expects_reply("{not json"), "a parse error is answered");
+    assert!(!mcp::expects_reply(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#));
+    assert!(!mcp::expects_reply(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#));
+    assert!(!mcp::expects_reply(r#"{"jsonrpc":"2.0","id":1,"error":{"code":1}}"#));
 }
 
 #[test]

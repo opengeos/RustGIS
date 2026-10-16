@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use roxmltree::{Document, Node, ParsingOptions};
+use roxmltree::{Node, ParsingOptions};
 use rustgis_geom::Coord;
 
 use crate::raster::Crs;
@@ -192,8 +192,7 @@ pub fn read(file_name: &str, bytes: &[u8]) -> Result<Vec<(Dataset, ReadReport)>>
     let stem = std::path::Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or("gml").to_string();
     let text = std::str::from_utf8(bytes).map_err(|_| DataError::Format(format!("{file_name} is not UTF-8 text")))?;
     let opts = ParsingOptions { allow_dtd: false, nodes_limit: crate::io::XML_NODES, ..ParsingOptions::default() };
-    let doc = Document::parse_with_options(text.trim_start_matches('\u{feff}'), opts)
-        .map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
+    let doc = crate::xml::parse(text.trim_start_matches('\u{feff}'), opts).map_err(|e| DataError::Format(format!("{file_name}: {e}")))?;
     let root = doc.root_element();
     // The features: children of member elements (not of one inside a feature, such as a
     // property or a geometry collection's member named alike).

@@ -1,6 +1,7 @@
 # ka interface catalog: English<TAB>translation
  by 	 ×
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+(filtered)	(გაფილტრული)
 00:00 UTC	00:00 UTC
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
@@ -14,6 +15,7 @@ A flat scene centred on the view (azimuthal equidistant).	ბრტყელი 
 A globe scene.	გლობუსის სცენა.
 A magnifying lens that follows the pointer.	გამადიდებელი შუშა, რომელიც კურსორს მიჰყვება.
 A notebook of text and command cells.	ტექსტისა და ბრძანების უჯრედების რვეული.
+A project keeps at least one map	პროექტში ყოველთვის რჩება მინიმუმ ერთი რუკა
 A projected coordinate system.	დაპროექტებული კოორდინატთა სისტემა.
 A report listing the selected layer's records, page after page.	ანგარიში, რომელიც არჩეული ფენის ჩანაწერებს გვერდ-გვერდ ჩამოთვლის.
 A template with the first selected feature's values	შაბლონი პირველი მონიშნული ობიექტის მნიშვნელობებით
@@ -247,6 +249,7 @@ Checking for updates…	მიმდინარეობს განახლ�
 China	ჩინეთი
 Choose a band combination to display the raster layer.	აირჩიეთ არხების კომბინაცია რასტრული ფენის საჩვენებლად.
 Choose a contrast stretch for the raster layer.	აირჩიეთ კონტრასტის გაჭიმვა რასტრული ფენისთვის.
+Choose a delimited text file or a spreadsheet, then pick its columns.	აირჩიეთ გამყოფიანი ტექსტური ფაილი ან ცხრილი, შემდეგ კი მისი სვეტები.
 Choose a model.	აირჩიეთ მოდელი.
 Choose a resampling type for the raster layer.	აირჩიეთ რესემპლირების ტიპი რასტრული ფენისთვის.
 Choose extra buttons for the Quick Access Toolbar.	აირჩიეთ დამატებითი ღილაკები სწრაფი წვდომის პანელისთვის.
@@ -323,6 +326,7 @@ Color Vision	ფერთა აღქმა
 Color Vision Simulator	ფერთა აღქმის სიმულატორი
 Colormap	ფერთა რუკა
 Colors from the raster's own color table.	ფერები რასტრის საკუთარი ფერთა ცხრილიდან.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	სვეტები სახელებით, როგორიცაა longitude/latitude, easting/northing ან geometry, ავტომატურად აირჩევა.
 Combinations from the box above, one per line	ზემოთ მოცემული ველიდან კომბინაციები, თითო ხაზზე ერთი
 Command\nSearch	ბრძანებების\nძიება
 command is required	საჭიროა ბრძანება
@@ -383,6 +387,7 @@ Create Polygon	პოლიგონის შექმნა
 Create Profile	პროფილის შექმნა
 Create Thumbnail	მინიატურის შექმნა
 Creates a point inside each input feature.	თითოეულ შემავალ ობიექტში წერტილის შექმნა.
+Creates points from a table's x and y coordinate fields.	წერტილების შექმნა ცხრილის x და y კოორდინატების ველებიდან.
 Creates polygons around input features at a given distance.	შემავალი ობიექტების გარშემო პოლიგონების შექმნა მოცემულ მანძილზე.
 Cross Section	განივი ჭრილი
 Cross Section (2 clicks)	განივი ჭრილი (2 დაწკაპუნება)
@@ -774,6 +779,7 @@ Import Thumbnail	მინიატურის იმპორტი
 Import Web Tool	ვებ ხელსაწყოს იმპორტი
 In Beyond	შორს, მის მიღმა
 In Progress	მიმდინარეობს
+In RustGIS, it can:	RustGIS-ში მას შეუძლია:
 in progress	მიმდინარეობს
 In project	პროექტში
 In use	გამოიყენება
@@ -802,6 +808,7 @@ Installed	დაინსტალირებულია
 Installed plugins are kept in {folder}	დაინსტალირებული დანამატები ინახება აქ: {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	დაყენებულია Homebrew-ით, winget-ით, AUR-ით ან COPR-ით? განაახლეთ იქვე.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	დაყენდა {name} {version}. მოძებნეთ დანამატების ჩანართზე; მისი ხელსაწყოები ხელსაწყოების პანელშიც არის.
+Installing it downloads Python {version} and the packages it needs from the internet.	ინსტალაციისას ინტერნეტიდან ჩამოიტვირთება Python {version} და მისთვის საჭირო პაკეტები.
 Interface font: {font}	ინტერფეისის შრიფტი: {font}
 Interpolate a surface from points (IDW)	ზედაპირის ინტერპოლაცია წერტილებიდან (IDW)
 Invalid: {error}	არასწორია: {error}
@@ -809,6 +816,7 @@ Invert	ინვერსია
 Invert color scheme	ფერთა სქემის ინვერსია
 Invert the selection.	მონიშვნის ინვერსია.
 IS NULL	IS NULL
+It runs: {program}	ის უშვებს: {program}
 it connects to an address on the internet	ის უკავშირდება ინტერნეტის მისამართს
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	ის დაცულია თქვენთვის (დანამატები, სკრიპტები, დავალებები, მოდელები და GeoLibre-ის გამშვები)
 it reads or writes files on this computer	ის კითხულობს ან წერს ფაილებს ამ კომპიუტერში
@@ -1067,6 +1075,7 @@ None. Add one by address, or from a basemap plugin.	არცერთი. დ�
 North	ჩრდილოეთი
 North\nArrow	ჩრდილოეთის\nისარი
 North Polar Stereographic	ჩრდილოეთის პოლარული სტერეოგრაფიული
+Not sandboxed	იზოლაციის გარეშე
 not a RustGIS layout	ეს RustGIS-ის განლაგება არ არის
 not needed	საჭირო არ არის
 Not saved yet	ჯერ არ არის შენახული
@@ -1198,6 +1207,7 @@ PMTiles archive	PMTiles არქივი
 PMTiles File…	PMTiles ფაილი…
 PNG frames (zip)	PNG კადრები (zip)
 PNG image	PNG სურათი
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	„იზოლაციის გარეშე“ მონიშნული დანამატები სამაგიეროდ მუშაობს როგორც პროგრამები თქვენს კომპიუტერზე და შეუძლია ყველაფერი, რაც თქვენ შეგიძლიათ.
 Point	წერტილი
 Points	წერტილები
 points each	წერტილი თითოეულში
@@ -1208,6 +1218,7 @@ Polygon (draw)	პოლიგონი (ხატვა)
 Polygons	პოლიგონები
 Polyline	პოლილაინი
 Pop-up Mode	ამომხტარი ფანჯრის რეჟიმი
+Prepare	მომზადება
 pop_max > 1000000	pop_max > 1000000
 Populated Places	დასახლებული პუნქტები
 Portal	პორტალი
@@ -1215,6 +1226,7 @@ Portrait	ვერტიკალური
 Postprocessing	პოსტდამუშავება
 power 2	ხარისხი 2
 Prepare every layer's geometry for this projection.	ამ პროექციისთვის ყველა ფენის გეომეტრიის მომზადება.
+Preparing its Python environment…	მისი Python გარემო მზადდება…
 Presentation	პრეზენტაცია
 Presentation File	პრეზენტაციის ფაილი
 Presentation Pane	პრეზენტაციის პანელი
@@ -1253,6 +1265,9 @@ Proximity	სიახლოვე
 Publish	გამოქვეყნება
 Publish › Output	გამოქვეყნება › გამოსავალი
 Put the layer back as it was then	ფენის დაბრუნება იმ მდგომარეობაში, როგორიც მაშინ იყო
+Python environment failed: {error}	Python გარემო ვერ მომზადდა: {error}
+Python environment not prepared	Python გარემო არ არის მომზადებული
+Python environment ready	Python გარემო მზადაა
 Quantile	კვანტილი
 Quick\nAccess	სწრაფი\nწვდომა
 Quick Access Toolbar	სწრაფი წვდომის პანელი
@@ -1307,6 +1322,7 @@ Remove Folder	საქაღალდის ამოშლა
 Remove From Current Selection	მიმდინარე მონიშვნიდან ამოშლა
 Remove Keyframe	საკვანძო კადრის ამოშლა
 Remove Section	სექციის ამოშლა
+Remove Table	ცხრილის ამოშლა
 Remove the last keyframe.	ბოლო საკვანძო კადრის ამოშლა.
 Remove the layer from the map.	ფენის ამოშლა რუკიდან.
 Remove Tile Layer	ფილების ფენის ამოშლა
@@ -1636,6 +1652,7 @@ Text	ტექსტი
 Text Symbol	ტექსტის სიმბოლო
 The assistant is busy; stop it or wait for it to finish.	ასისტენტი დაკავებულია; შეაჩერეთ ან დაელოდეთ დასრულებას.
 The assistant wants to run this, and {why}:	ასისტენტს სურს ამის გაშვება და მიზეზი ასეთია: {why}:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	ეს დანამატი მუშაობს როგორც პროგრამა თქვენს კომპიუტერზე, RustGIS-ის იზოლირებული გარემოს გარეთ. მას შეუძლია ყველაფერი, რაც თქვენ შეგიძლიათ: თქვენი ფაილების წაკითხვა და შეცვლა, ქსელის გამოყენება და სხვა პროგრამების გაშვება. დააინსტალირეთ მხოლოდ მაშინ, თუ მის ავტორს ენდობით.
 the capture failed unexpectedly	გადაღება მოულოდნელად ჩავარდა
 the Help tab always shows	დახმარების ჩანართი ყოველთვის ჩანს
 The job covers the map view	სამუშაო მოიცავს რუკის ხედს
@@ -1812,7 +1829,11 @@ World, equal-area: true sizes, shapes bend towards the edges.	მსოფლი
 Worldview	მსოფლიო ხედვა
 Write a plugin	დანამატის დაწერა
 X (mm)	X (მმ)
+X Field	X ველი
+XY Table To Point	XY ცხრილი წერტილებად
+XY Table To Point…	XY ცხრილი წერტილებად…
 Y (mm)	Y (მმ)
+Y Field	Y ველი
 Yes	დიახ
 You have version {version}.	თქვენ გაქვთ ვერსია {version}.
 z (m)	z (მ)
@@ -1845,6 +1866,8 @@ Zoom to the whole world.	გადიდება მთელ მსოფლ�
 Zoom to Tokyo	გადიდება ტოკიოზე
 Zoom To World	გადიდება მსოფლიოზე
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} შეიცვალა ინსტალაციის შემდეგ; დააყენეთ ხელახლა დანამატების მენეჯერიდან.
+{name} is larger than {mb} MB	{name} {mb} მბ-ზე დიდია
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} მუშაობს როგორც პროგრამა თქვენს კომპიუტერზე: საჭიროა დესკტოპ აპლიკაცია ან rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} დანამატების რეესტრიდან გაუქმდა და გამორთულია.
 {name} was withdrawn from the plugin registry: {reason}	{name} დანამატების რეესტრიდან გაუქმდა: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: ჩამოტვირთული რეესტრს არ ემთხვევა; არ დაყენებულა.
@@ -1856,3 +1879,11 @@ Zoom To World	გადიდება მსოფლიოზე
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: დაშვებულია მხოლოდ HTTPS მისამართები ან უბრალო HTTP ამ კომპიუტერზე თუ ქსელში
 © OpenStreetMap contributors	© OpenStreetMap contributors
 ⌘K	⌘K
+MCP Relay	MCP რელე
+MCP relay stopped	MCP რელე გაჩერებულია
+MCP relay listening on 127.0.0.1:{port}	MCP რელე უსმენს 127.0.0.1:{port}-ს
+MCP relay · {n} attached	MCP რელე · {n} დაკავშირებული
+Stop MCP relay	MCP რელეს გაჩერება
+MCP relay is already listening on 127.0.0.1:{port}; stop it first to use port {asked}	MCP რელე უკვე უსმენს 127.0.0.1:{port}-ს; ჯერ გააჩერეთ, რომ გამოიყენოთ პორტი {asked}
+Opening {url}…	{url} იხსნება…
+{url}: downloaded after another project was opened, so it wasn't opened	{url}: ჩამოიტვირთა სხვა პროექტის გახსნის შემდეგ, ამიტომ არ გაიხსნა

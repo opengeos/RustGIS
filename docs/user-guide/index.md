@@ -22,7 +22,7 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
 - **Ribbon**: tabs of commands grouped by task. The **Project** button opens the backstage (new,
   open, save, About).
 - **Quick Access Toolbar** (top left): New, Open, Save, Undo and Redo, plus any commands you add
-  under **Help › Customize › Quick Access**.
+  under **Settings › Customize › Quick Access**.
 - **Layers pane** (left): the map's layers in drawing order, with their legends. Tick a layer to
   show or hide it; drag it up or down to change the drawing order; right-click it to zoom to it,
   rename or remove it and more.
@@ -57,8 +57,8 @@ ribbon, arrows at its ends scroll it.
 | **View** | Display, View (Globe, Projection, Global, Local), Effects, Scene, Windows, Labeling, Navigation, Link, Workspace, Animation, Profile |
 | **Publish** | While a layout is open, its groups first (Page, Map Frames, Map Surrounds, Text, Export); then Report, Presentation, Output (Export Map, Print, Capture), Package, Share As, Layout, Save As, Thumbnail |
 | **Plugins** | The Plugin Manager, plus a tab for each [plugin](../plugins.md) that adds one |
-| **Settings** | Language (interface language and worldview), Start-up (start with the sample or a blank map, projection, extent) |
-| **Help** | Customize (ribbon tabs, Quick Access Toolbar), Performance (Diagnostic Monitor), Learn, Help (About, Check for Updates on the desktop, Command Search, Shortcuts) |
+| **Settings** | Customize (ribbon tabs, Quick Access Toolbar), Language (interface language and worldview), Start-up (start with the sample or a blank map, projection, extent) |
+| **Help** | Performance (Diagnostic Monitor), Learn, Help (About, Check for Updates on the desktop, Command Search, Shortcuts) |
 
 The tabs stay the same whatever is selected: Style and Data act on the layer selected in Layers.
 
@@ -68,7 +68,8 @@ A project (`.rgis`) holds maps, layouts, reports, presentations, notebooks, styl
 models. Vector data added from files is stored inside the project, so a project file is
 self-contained; rasters are referenced by path on the desktop and stored inside the project in
 the web app. **Project › New** starts a blank map or the World Atlas sample; **Save** and **Save
-As** write the project. See [Data › Project items](data.md#project-items) for the other files
+As** write the project, named after its file; a project opened from a file is named after that
+file too. See [Data › Project items](data.md#project-items) for the other files
 RustGIS reads and writes.
 
 Every change is a command, and every command can be undone (++ctrl+z++) and redone

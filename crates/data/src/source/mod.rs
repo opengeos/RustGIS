@@ -15,11 +15,19 @@ pub mod fgb;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gdal;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod geojson;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gpkg;
 mod gpkg_blob;
 pub mod gpkg_mem;
 pub mod lidar;
 pub mod parquet;
+pub mod pgconn;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod postgis;
+pub mod remote;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod shp;
 
 use crate::raster::{Crs, Transformer};
 use crate::{DataError, Dataset, Feature, Field, Geometry, GeometryType, ReadReport, Result};
@@ -120,8 +128,14 @@ pub struct Batch {
 /// A vector data source read in place.
 pub trait FeatureSource: Send + Sync {
     fn info(&self) -> &SourceInfo;
-    /// Reads the features a request asks for.
+    /// Reads the features a request asks for. A source read by its web address fails with
+    /// [`remote::NEED`] until the bytes the read needs are fetched: run it with
+    /// [`remote::drive`] (see [`FeatureSource::remote`]).
     fn read(&self, req: &Request) -> Result<Batch>;
+    /// The file a source reads by its web address, a range at a time.
+    fn remote(&self) -> Option<std::sync::Arc<remote::Remote>> {
+        None
+    }
 }
 
 /// Opens a file through its provider. `layer` names a table in a GeoPackage (default: the first).
@@ -133,6 +147,13 @@ pub fn open_path(path: &Path, layer: Option<&str>) -> Result<Box<dyn FeatureSour
         "las" | "laz" => Ok(Box::new(lidar::LidarSource::open_path(path, &name)?)),
         #[cfg(not(target_arch = "wasm32"))]
         "gpkg" => Ok(Box::new(gpkg::GpkgSource::open(path, layer)?)),
+        // Only large GeoJSON files are read in place (see `geojson`); `is_source_name` leaves
+        // them out.
+        #[cfg(not(target_arch = "wasm32"))]
+        "geojson" | "json" => Ok(Box::new(geojson::GeoJsonSource::open_path(path, &name)?)),
+        // Only large Shapefiles are read in place (see `shp`); `is_source_name` leaves them out.
+        #[cfg(not(target_arch = "wasm32"))]
+        "shp" => Ok(Box::new(shp::ShpSource::open_path(path, &name)?)),
         other => {
             let _ = layer;
             Err(DataError::Unsupported(other.to_string()))
@@ -174,6 +195,81 @@ pub fn open_shared(file_name: &str, bytes: std::sync::Arc<Vec<u8>>, layer: Optio
             let _ = layer;
             Err(DataError::Unsupported(other.to_string()))
         }
+    }
+}
+
+/// Whether a web address names a file read in place by range: a FlatGeobuf or a GeoParquet.
+pub fn is_remote_name(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    let path = lower.split(['?', '#']).next().unwrap_or(&lower);
+    // `s3://` too: the app's fetchers check it and read it from its bucket's web address (signed
+    // only for a connection that serves the bucket, see rustgis_tiles::s3).
+    (lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("s3://"))
+        && [".fgb", ".parquet", ".geoparquet"].iter().any(|e| path.ends_with(e))
+}
+
+/// A layer name from a web address: its file name without the extension.
+fn url_name(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let file = path.rsplit('/').next().unwrap_or(path);
+    let stem = file.rsplit_once('.').map(|(a, _)| a).unwrap_or(file);
+    if stem.is_empty() { "layer".to_string() } else { stem.to_string() }
+}
+
+/// One attempt at opening a file by its web address from what is fetched of it so far: fails
+/// with [`remote::NEED`] until its header (or footer) is in. See [`open_url`].
+pub fn open_url_now(url: &str) -> Result<Box<dyn FeatureSource>> {
+    let file = remote::file(url);
+    let name = url_name(url);
+    let lower = url.to_ascii_lowercase();
+    let path = lower.split(['?', '#']).next().unwrap_or(&lower);
+    if path.ends_with(".fgb") {
+        Ok(Box::new(fgb::FgbSource::open_remote(file, &name)?))
+    } else if path.ends_with(".parquet") || path.ends_with(".geoparquet") {
+        Ok(Box::new(parquet::ParquetSource::open_remote(file, &name)?))
+    } else {
+        Err(DataError::Unsupported(format!("{url}: only FlatGeobuf and GeoParquet are read in place by address")))
+    }
+}
+
+/// Opens a file by its web address, fetching what it needs (off the caller's thread).
+pub fn open_url(url: &str, done: Box<dyn FnOnce(Result<Box<dyn FeatureSource>>) + Send>) {
+    let u = url.to_string();
+    remote::drive(remote::file(url), std::sync::Arc::new(move || open_url_now(&u)), done);
+}
+
+/// [`open_url`], waiting for it (the command line and tools).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_url_blocking(url: &str) -> Result<Box<dyn FeatureSource>> {
+    let u = url.to_string();
+    remote::drive_blocking(remote::file(url), std::sync::Arc::new(move || open_url_now(&u)))
+}
+
+/// Reads a request, fetching what a source read by its web address needs, and waiting for it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_blocking(src: &std::sync::Arc<dyn FeatureSource>, req: &Request) -> Result<Batch> {
+    match src.remote() {
+        Some(file) => {
+            let (s, r) = (src.clone(), *req);
+            remote::drive_blocking(file, std::sync::Arc::new(move || s.read(&r)))
+        }
+        None => src.read(req),
+    }
+}
+
+/// A source whose reads wait for the bytes a source by its web address needs (tools and Load
+/// All Features on the desktop).
+#[cfg(not(target_arch = "wasm32"))]
+pub struct Fetching(pub std::sync::Arc<dyn FeatureSource>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FeatureSource for Fetching {
+    fn info(&self) -> &SourceInfo {
+        self.0.info()
+    }
+
+    fn read(&self, req: &Request) -> Result<Batch> {
+        read_blocking(&self.0, req)
     }
 }
 
@@ -239,6 +335,12 @@ impl Reproject {
                 }
             },
         };
+        Reproject::from_crs(crs, notes)
+    }
+
+    /// From a coordinate system; one that can't be converted is taken as longitude/latitude, with
+    /// a note.
+    pub(crate) fn from_crs(crs: Crs, notes: &mut Vec<String>) -> Reproject {
         let t = match crs {
             Crs::LonLat => None,
             other => match other.transformer() {
@@ -250,6 +352,12 @@ impl Reproject {
             },
         };
         Reproject { crs: if t.is_some() { crs } else { Crs::LonLat }, t }
+    }
+
+    /// Whether coordinates are taken as they are.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn is_lonlat(&self) -> bool {
+        self.t.is_none()
     }
 
     pub(crate) fn label(&self) -> String {

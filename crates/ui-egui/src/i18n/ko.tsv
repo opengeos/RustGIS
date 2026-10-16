@@ -1,6 +1,7 @@
 # ko interface catalog: English<TAB>translation
  by 	 ×
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+(filtered)	(필터링됨)
 00:00 UTC	00:00 UTC
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
@@ -14,6 +15,7 @@ A flat scene centred on the view (azimuthal equidistant).	뷰를 중심으로 �
 A globe scene.	지구본 장면.
 A magnifying lens that follows the pointer.	포인터를 따라 움직이는 돋보기.
 A notebook of text and command cells.	텍스트 셀과 명령 셀로 이루어진 노트북.
+A project keeps at least one map	프로젝트에는 지도가 하나 이상 있어야 합니다
 A projected coordinate system.	투영 좌표계.
 A report listing the selected layer's records, page after page.	선택한 레이어의 레코드를 페이지별로 나열하는 보고서.
 A template with the first selected feature's values	첫 번째 선택 피처의 값을 사용하는 템플릿
@@ -247,6 +249,7 @@ Checking for updates…	업데이트 확인 중…
 China	중국
 Choose a band combination to display the raster layer.	래스터 레이어를 표시할 밴드 조합을 선택합니다.
 Choose a contrast stretch for the raster layer.	래스터 레이어의 대비 스트레치를 선택합니다.
+Choose a delimited text file or a spreadsheet, then pick its columns.	구분 기호로 분리된 텍스트 파일이나 스프레드시트를 선택한 다음 열을 고르세요.
 Choose a model.	모델을 선택하세요.
 Choose a resampling type for the raster layer.	래스터 레이어의 리샘플링 유형을 선택합니다.
 Choose extra buttons for the Quick Access Toolbar.	빠른 실행 도구 모음에 추가할 버튼을 선택합니다.
@@ -323,6 +326,7 @@ Color Vision	색각
 Color Vision Simulator	색각 시뮬레이터
 Colormap	컬러맵
 Colors from the raster's own color table.	래스터 자체 색상표의 색상입니다.
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	longitude/latitude, easting/northing 또는 geometry 같은 이름의 열은 자동으로 선택됩니다.
 Combinations from the box above, one per line	위 상자에 있는 값의 조합, 한 줄에 하나씩
 Command\nSearch	명령\n검색
 command is required	command가 필요합니다
@@ -383,6 +387,7 @@ Create Polygon	폴리곤 만들기
 Create Profile	단면도 만들기
 Create Thumbnail	썸네일 만들기
 Creates a point inside each input feature.	각 입력 피처 내부에 포인트를 생성합니다.
+Creates points from a table's x and y coordinate fields.	테이블의 x, y 좌표 필드에서 포인트를 생성합니다.
 Creates polygons around input features at a given distance.	입력 피처 주위에 지정한 거리의 폴리곤을 생성합니다.
 Cross Section	횡단면
 Cross Section (2 clicks)	횡단면(2회 클릭)
@@ -774,6 +779,7 @@ Import Thumbnail	썸네일 가져오기
 Import Web Tool	웹 도구 가져오기
 In Beyond	다음보다 확대 시
 In Progress	진행 중
+In RustGIS, it can:	RustGIS에서 할 수 있는 작업:
 in progress	진행 중
 In project	프로젝트 내
 In use	사용 중
@@ -802,6 +808,7 @@ Installed	설치됨
 Installed plugins are kept in {folder}	설치된 플러그인 위치: {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Homebrew, winget, AUR 또는 COPR로 설치했다면 그곳에서 업데이트하세요.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version}을(를) 설치했습니다. 플러그인 탭에서 찾을 수 있으며, 도구는 도구 창에도 있습니다.
+Installing it downloads Python {version} and the packages it needs from the internet.	설치하면 인터넷에서 Python {version}과 필요한 패키지를 내려받습니다.
 Interface font: {font}	인터페이스 글꼴: {font}
 Interpolate a surface from points (IDW)	포인트로 표면 보간(IDW)
 Invalid: {error}	유효하지 않음: {error}
@@ -809,6 +816,7 @@ Invert	반전
 Invert color scheme	색상표 반전
 Invert the selection.	선택을 반전합니다.
 IS NULL	IS NULL
+It runs: {program}	실행 명령: {program}
 it connects to an address on the internet	인터넷의 주소에 연결하는
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	사용자만 실행할 수 있는(플러그인, 스크립트, 작업, 모델, GeoLibre 실행기)
 it reads or writes files on this computer	이 컴퓨터의 파일을 읽거나 쓰는
@@ -1067,6 +1075,7 @@ None. Add one by address, or from a basemap plugin.	없음. 주소로 추가하�
 North	북
 North\nArrow	방위\n표
 North Polar Stereographic	북극 평사도법
+Not sandboxed	샌드박스 밖
 not a RustGIS layout	RustGIS 레이아웃이 아닙니다
 not needed	필요 없음
 Not saved yet	아직 저장되지 않음
@@ -1198,6 +1207,7 @@ PMTiles archive	PMTiles 아카이브
 PMTiles File…	PMTiles 파일…
 PNG frames (zip)	PNG 프레임(zip)
 PNG image	PNG 이미지
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	'샌드박스 밖'으로 표시된 플러그인은 컴퓨터의 프로그램으로 실행되며 사용자가 할 수 있는 모든 작업을 할 수 있습니다.
 Point	포인트
 Points	포인트
 points each	각 포인트 수
@@ -1208,6 +1218,7 @@ Polygon (draw)	폴리곤(그리기)
 Polygons	폴리곤
 Polyline	폴리라인
 Pop-up Mode	팝업 모드
+Prepare	준비
 pop_max > 1000000	pop_max > 1000000
 Populated Places	인구 밀집 지역
 Portal	포털
@@ -1215,6 +1226,7 @@ Portrait	세로
 Postprocessing	후처리
 power 2	거듭제곱 2
 Prepare every layer's geometry for this projection.	이 투영에 맞게 모든 레이어의 지오메트리를 준비합니다.
+Preparing its Python environment…	Python 환경을 준비하는 중…
 Presentation	프레젠테이션
 Presentation File	프레젠테이션 파일
 Presentation Pane	프레젠테이션 창
@@ -1253,6 +1265,9 @@ Proximity	근접
 Publish	게시
 Publish › Output	게시 › 출력
 Put the layer back as it was then	레이어를 그 시점의 상태로 되돌리기
+Python environment failed: {error}	Python 환경 준비 실패: {error}
+Python environment not prepared	Python 환경이 준비되지 않음
+Python environment ready	Python 환경 준비됨
 Quantile	분위수
 Quick\nAccess	빠른\n실행
 Quick Access Toolbar	빠른 실행 도구 모음
@@ -1307,6 +1322,7 @@ Remove Folder	폴더 제거
 Remove From Current Selection	현재 선택에서 제거
 Remove Keyframe	키프레임 제거
 Remove Section	섹션 제거
+Remove Table	테이블 제거
 Remove the last keyframe.	마지막 키프레임을 제거합니다.
 Remove the layer from the map.	지도에서 레이어를 제거합니다.
 Remove Tile Layer	타일 레이어 제거
@@ -1636,6 +1652,7 @@ Text	텍스트
 Text Symbol	텍스트 심볼
 The assistant is busy; stop it or wait for it to finish.	어시스턴트가 작업 중입니다. 중지하거나 완료될 때까지 기다리세요.
 The assistant wants to run this, and {why}:	어시스턴트가 다음 작업을 실행하려고 합니다. 이 작업은 {why} 작업입니다:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	이 플러그인은 RustGIS 샌드박스 밖에서 컴퓨터의 프로그램으로 실행됩니다. 파일 읽기 및 변경, 네트워크 사용, 다른 프로그램 실행 등 사용자가 할 수 있는 모든 작업을 할 수 있습니다. 작성자를 신뢰하는 경우에만 설치하세요.
 the capture failed unexpectedly	캡처가 예기치 않게 실패했습니다
 the Help tab always shows	도움말 탭은 항상 표시됩니다
 The job covers the map view	작업 범위는 지도 뷰입니다
@@ -1812,7 +1829,11 @@ World, equal-area: true sizes, shapes bend towards the edges.	세계, 정적: �
 Worldview	국경
 Write a plugin	플러그인 만들기
 X (mm)	X(mm)
+X Field	X 필드
+XY Table To Point	XY 테이블을 포인트로
+XY Table To Point…	XY 테이블을 포인트로…
 Y (mm)	Y(mm)
+Y Field	Y 필드
 Yes	예
 You have version {version}.	현재 버전은 {version}입니다.
 z (m)	z(m)
@@ -1845,6 +1866,8 @@ Zoom to the whole world.	전 세계로 확대/축소합니다.
 Zoom to Tokyo	도쿄로 확대
 Zoom To World	세계로 확대/축소
 {id} changed since it was installed; install it again from the Plugin Manager.	{id}이(가) 설치 후 변경되었습니다. 플러그인 관리자에서 다시 설치하세요.
+{name} is larger than {mb} MB	{name}의 크기가 {mb}MB를 초과합니다
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name}은(는) 컴퓨터의 프로그램으로 실행됩니다. 데스크톱 앱이나 rustgis-cli가 필요합니다.
 {name} was withdrawn from the plugin registry and has been turned off.	{name}이(가) 플러그인 레지스트리에서 철회되어 비활성화되었습니다.
 {name} was withdrawn from the plugin registry: {reason}	{name}이(가) 플러그인 레지스트리에서 철회되었습니다: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: 다운로드한 파일이 레지스트리와 일치하지 않아 설치하지 않았습니다.
@@ -1856,3 +1879,11 @@ Zoom To World	세계로 확대/축소
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: HTTPS 주소 또는 이 컴퓨터나 네트워크의 일반 HTTP만 허용됩니다
 © OpenStreetMap contributors	© OpenStreetMap 기여자
 ⌘K	⌘K
+MCP Relay	MCP 릴레이
+MCP relay stopped	MCP 릴레이 중지됨
+MCP relay listening on 127.0.0.1:{port}	MCP 릴레이가 127.0.0.1:{port}에서 대기 중
+MCP relay · {n} attached	MCP 릴레이 · {n} 연결됨
+Stop MCP relay	MCP 릴레이 중지
+MCP relay is already listening on 127.0.0.1:{port}; stop it first to use port {asked}	MCP 릴레이가 이미 127.0.0.1:{port}에서 대기 중입니다. 포트 {asked}를 쓰려면 먼저 중지하세요
+Opening {url}…	{url} 여는 중…
+{url}: downloaded after another project was opened, so it wasn't opened	{url}: 다른 프로젝트를 연 뒤에 다운로드되어 열지 않았습니다

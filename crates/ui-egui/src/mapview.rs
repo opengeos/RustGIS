@@ -93,6 +93,9 @@ pub struct MapView {
     /// The side-by-side map's last render (texture and labels) and what it was drawn for, so it
     /// redraws only when that map, the project or the view changes.
     split: Option<([f64; 8], egui::TextureHandle, Vec<PlacedLabel>)>,
+    /// The picture an identified feature carries (a photo's thumbnail, a `data:image/…` value):
+    /// a hash of the value, and its texture (or why it couldn't be read).
+    picture: Option<(u64, Result<egui::TextureHandle, String>)>,
     /// The tile layers' credits, from the last render.
     attribution: Vec<String>,
     /// Tile layer errors already reported.
@@ -124,6 +127,7 @@ impl Default for MapView {
             camera_moved: false,
             snap: None,
             split: None,
+            picture: None,
             attribution: Vec::new(),
             tile_errors: std::collections::HashSet::new(),
             last_render: -10.0,
@@ -166,7 +170,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     }
     animate(app, ui);
     // Side by side: the other map on the right, following this one when views are linked.
-    if let Some(other) = app.ws.split.filter(|i| *i != app.session.project.active_map && *i < app.session.project.maps.len()) {
+    if let Some(other) = split_map(app).filter(|i| *i != app.session.project.active_map) {
         let full = ui.available_rect_before_wrap();
         let right = Rect::from_min_max(pos2(full.center().x + 1.0, full.min.y), full.max);
         split_view(app, ui, other, right, &t);
@@ -1149,8 +1153,14 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     let index = pp.index.min(results.saturating_sub(1));
     let info = if results > 1 { pp.info["results"][index].clone() } else { pp.info.clone() };
     let mut step: Option<usize> = None;
+    let mut zoom = false;
+    // The feature shown, as its layer id and feature id (a raster pixel has neither).
+    let shown = info["layerId"].as_u64().and_then(|id| u32::try_from(id).ok()).zip(info["fid"].as_u64());
     let layer = info["layer"].as_str().unwrap_or("").to_string();
-    let attrs = info["attributes"].as_object().cloned().unwrap_or_default();
+    let mut attrs = info["attributes"].as_object().cloned().unwrap_or_default();
+    // A picture value (a photo's thumbnail) shows as the picture, not as its text.
+    let picture_key = attrs.iter().find(|(_, v)| v.as_str().is_some_and(is_picture)).map(|(k, _)| k.clone());
+    let picture = picture_key.and_then(|k| attrs.remove(&k)).and_then(|v| v.as_str().map(|s| picture_texture(app, ui.ctx(), s)));
     let title = if info["raster"].as_bool() == Some(true) {
         tl!("Pixel").to_string()
     } else {
@@ -1203,6 +1213,15 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
                                 if ui.add(egui::Button::new(tl!("×")).frame(false)).clicked() {
                                     close = true;
                                 }
+                                // A feature (not a raster pixel): zoom to it.
+                                if shown.is_some() {
+                                    let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                                    let ink = if resp.hovered() { t.text } else { t.icon };
+                                    crate::icons::paint(ui.painter(), r, "zoom_sel", ink, t.accent);
+                                    if resp.on_hover_text(tl!("Zoom To")).clicked() {
+                                        zoom = true;
+                                    }
+                                }
                                 // Several features identified: step through them.
                                 if results > 1 {
                                     if ui.add_enabled(index + 1 < results, egui::Button::new("›").frame(false)).clicked() {
@@ -1222,6 +1241,18 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
                             });
                         });
                     });
+                if let Some(picture) = &picture {
+                    egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 12, top: 8, bottom: 0 }).show(ui, |ui| match picture {
+                        Ok(tex) => {
+                            let size = tex.size_vec2();
+                            let scale = (ui.available_width() / size.x.max(1.0)).min(1.5);
+                            ui.add(egui::Image::new((tex.id(), size * scale)).corner_radius(CornerRadius::same(6)));
+                        }
+                        Err(e) => {
+                            ui.label(egui::RichText::new(e.as_str()).size(11.0).color(t.text_dim));
+                        }
+                    });
+                }
                 // A solid scroll bar in its own gutter, shown when the rows are taller than the
                 // limit (a floating one is invisible until hovered).
                 ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
@@ -1274,11 +1305,87 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     if let Some(l) = new_limit {
         ui.ctx().data_mut(|d| d.insert_temp(limit_id, l));
     }
+    // Zooms to the feature shown, found by its id, as Zoom To Selection does: the selection and
+    // the undo history are left as they are.
+    if let (true, Some((id, fid))) = (zoom, shown) {
+        let extent = app
+            .session
+            .map()
+            .layer(id)
+            .and_then(|l| l.dataset.features.iter().find(|f| f.id == fid))
+            .and_then(|f| f.geometry.as_ref())
+            .map(|g| g.extent());
+        if let Some(e) = extent.filter(|e| !e.is_empty()) {
+            app.session.zoom_to(&e);
+        }
+    }
     if close {
         app.map.popup = None;
     } else if let (Some(i), Some(pp)) = (step, &mut app.map.popup) {
         pp.index = i;
+        // The feature shown is the one selected, as after the click. Not through `select.rows`:
+        // browsing a pop-up mustn't fill the undo history; the new revision redraws the map.
+        // Found again by its feature id: a streamed layer may have read another window since the
+        // click, moving the feature to another row (or out of the layer: then nothing is selected).
+        let shown = pp.info["results"].get(i).and_then(|r| Some((u32::try_from(r["layerId"].as_u64()?).ok()?, r["fid"].as_u64()?)));
+        let found = shown.and_then(|(id, fid)| {
+            let row = app.session.map().layer(id)?.dataset.features.iter().position(|f| f.id == fid)?;
+            Some((id, row))
+        });
+        if let Some((id, row)) = found {
+            rustgis_engine::cmd::select::set(&mut app.session, id, vec![row], rustgis_engine::cmd::select::Mode::New);
+        } else {
+            app.session.map_mut().clear_selection();
+        }
+        app.session.revision = app.session.revision.wrapping_add(1);
     }
+}
+
+/// Whether an attribute value is a picture (a `data:image/png` or `jpeg` address, as a photo's
+/// thumbnail is kept).
+pub(crate) fn is_picture(v: &str) -> bool {
+    v.starts_with("data:image/jpeg;base64,") || v.starts_with("data:image/png;base64,")
+}
+
+/// The texture of a picture value, decoded once and kept while the same value is shown.
+fn picture_texture(app: &mut RustGisApp, ctx: &egui::Context, value: &str) -> Result<egui::TextureHandle, String> {
+    use base64::Engine;
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut h);
+    let key = h.finish();
+    if let Some((k, t)) = &app.map.picture
+        && *k == key
+    {
+        return t.clone();
+    }
+    // Pictures kept with features are small (thumbnails); anything large isn't decoded here.
+    let decoded = (|| {
+        let data = value.split_once(",").map(|(_, d)| d).ok_or("not a picture")?;
+        if data.len() > 4 << 20 {
+            return Err("the picture is too large to show".to_string());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;
+        let img = decode_picture(&bytes)?;
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let color = egui::ColorImage::from_rgba_unmultiplied([w, h], img.as_raw());
+        Ok(ctx.load_texture("identify_picture", color, egui::TextureOptions::LINEAR))
+    })();
+    app.map.picture = Some((key, decoded.clone()));
+    decoded
+}
+
+/// A picture kept with a feature, decoded for the identify popup. A project's value is hostile:
+/// its size is checked before anything is decoded, so a small compressed picture can't unpack
+/// into a huge one.
+fn decode_picture(bytes: &[u8]) -> Result<image::RgbaImage, String> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(2048);
+    limits.max_image_height = Some(2048);
+    limits.max_alloc = Some(64 << 20);
+    reader.limits(limits);
+    Ok(reader.decode().map_err(|_| "the picture is too large to show, or isn't one".to_string())?.to_rgba8())
 }
 
 /// The on-screen navigator: a north compass, zoom in and out, and four pan arrows.
@@ -1322,11 +1429,16 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let mut x = r.min.x + 6.0;
     let names: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
     let active = if app.session.active_layout.is_some() { usize::MAX } else { app.session.project.active_map };
+    // A tab's close button deletes its map or layout after the strip is drawn.
+    let mut close: Option<(&str, String)> = None;
     for (i, n) in names.iter().enumerate() {
-        let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0;
+        let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0 + TAB_CLOSE_W;
         let tr = Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(w, r.height() - 4.0));
         let resp = ui.interact(tr, egui::Id::new(("maptab", i)), Sense::click());
         let is = i == active;
+        // A project keeps at least one map (`map.remove` refuses the last).
+        let last = names.len() < 2;
+        let tip = if last { tl!("A project keeps at least one map") } else { tl!("Delete Map") };
         if is {
             ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.ribbon);
             ui.painter().rect_filled(
@@ -1334,7 +1446,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
                 t.accent,
             );
-        } else if resp.hovered() {
+        } else if resp.contains_pointer() {
             ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.hover);
         }
         icons::paint(ui.painter(), Rect::from_center_size(pos2(tr.min.x + 15.0, tr.center().y), vec2(15.0, 15.0)), "map", t.icon, t.accent);
@@ -1345,6 +1457,10 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             if is { semibold(12.0) } else { regular(12.0) },
             if is { t.text } else { t.text_dim },
         );
+        // Over the tab's fill, so painted after it.
+        if tab_close(ui, t, tr, egui::Id::new(("maptab_close", i)), is, !last, tip) {
+            close = Some(("map.remove", n.clone()));
+        }
         if resp.clicked() && !is {
             let _ = app.run("layout.close", Value::Null);
             let _ = app.run("map.activate", json!({"name": n}));
@@ -1355,7 +1471,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // Layouts, after the maps.
     let layouts: Vec<String> = app.session.project.layouts.iter().map(|l| l.name.clone()).collect();
     for (i, n) in layouts.iter().enumerate() {
-        let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0;
+        let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0 + TAB_CLOSE_W;
         let tr = Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(w, r.height() - 4.0));
         let resp = ui.interact(tr, egui::Id::new(("layouttab", i)), Sense::click());
         let is = app.session.active_layout == Some(i);
@@ -1366,7 +1482,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
                 t.accent,
             );
-        } else if resp.hovered() {
+        } else if resp.contains_pointer() {
             ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.hover);
         }
         icons::paint(
@@ -1383,6 +1499,10 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             if is { semibold(12.0) } else { regular(12.0) },
             if is { t.text } else { t.text_dim },
         );
+        // Over the tab's fill, so painted after it.
+        if tab_close(ui, t, tr, egui::Id::new(("layouttab_close", i)), is, true, tl!("Delete Layout")) {
+            close = Some(("layout.remove", n.clone()));
+        }
         if resp.clicked() && !is {
             let _ = app.run("layout.activate", json!({"name": n}));
             app.ui.tab = "Publish".into();
@@ -1397,5 +1517,73 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.painter().text(pr.center(), Align2::CENTER_CENTER, "+", regular(15.0), t.text_dim);
     if resp.on_hover_text(tl!("New Map")).clicked() {
         let _ = app.run("map.new", Value::Null);
+    }
+    match close {
+        Some(("map.remove", name)) => delete_map(app, &name),
+        Some((cmd, name)) => {
+            let _ = app.run(cmd, json!({"name": name}));
+        }
+        None => {}
+    }
+}
+
+/// The map shown side by side, while its name finds one (a deleted or renamed map's doesn't).
+pub(crate) fn split_map(app: &RustGisApp) -> Option<usize> {
+    let n = app.ws.split.as_deref()?;
+    app.session.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(n))
+}
+
+/// Deletes a map (`map.remove`); the popup goes with the active map, even behind an open layout.
+pub(crate) fn delete_map(app: &mut RustGisApp, name: &str) {
+    let p = &app.session.project;
+    let was_active = p.maps.get(p.active_map).is_some_and(|m| m.name.eq_ignore_ascii_case(name));
+    if app.run("map.remove", json!({"name": name})).is_ok() && was_active {
+        app.map.popup = None;
+    }
+}
+
+/// Room a view tab keeps at its right for the close button.
+const TAB_CLOSE_W: f32 = 18.0;
+
+/// A view tab's close button (×), shown on the tab in view and on the one under the pointer;
+/// `enabled: false` dims it and only explains why (`tip`). True when clicked.
+fn tab_close(ui: &mut Ui, t: &Tokens, tab: Rect, id: egui::Id, in_view: bool, enabled: bool, tip: &str) -> bool {
+    // Hidden, it takes no clicks either: they open the tab (a touch screen has no hover).
+    if !(in_view || ui.rect_contains_pointer(tab)) {
+        return false;
+    }
+    let cr = Rect::from_center_size(pos2(tab.max.x - 13.0, tab.center().y), vec2(16.0, 16.0));
+    // Added after the tab, so it sits on top: its click (even dimmed) doesn't also open the tab.
+    let resp = ui.interact(cr, id, Sense::click());
+    if enabled && resp.hovered() {
+        ui.painter().rect_filled(cr, CornerRadius::same(3), t.pressed);
+    }
+    let ink = if !enabled {
+        t.text_disabled
+    } else if resp.hovered() {
+        t.text
+    } else {
+        t.text_dim
+    };
+    icons::paint(ui.painter(), cr.shrink(3.0), "close", ink, t.accent);
+    let resp = resp.on_hover_text(tip);
+    enabled && resp.clicked()
+}
+
+#[cfg(test)]
+mod picture_tests {
+    #[test]
+    fn large_pictures_are_refused_before_decoding() {
+        let png = |w: u32, h: u32| {
+            let mut out = Vec::new();
+            image::RgbaImage::new(w, h).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+            out
+        };
+        assert!(super::decode_picture(&png(160, 120)).is_ok());
+        // A blank picture compresses to a few KB, but would unpack into far more than shown.
+        let bomb = png(4000, 4000);
+        assert!(bomb.len() < 4 << 20, "{}", bomb.len());
+        assert!(super::decode_picture(&bomb).is_err());
+        assert!(super::decode_picture(b"not a picture").is_err());
     }
 }

@@ -266,9 +266,9 @@ impl RasterRenderer {
     pub fn ramp(&self) -> Option<Ramp> {
         match self {
             RasterRenderer::Stretch { ramp, .. } | RasterRenderer::Classify { ramp, .. } | RasterRenderer::UniqueValues { ramp, .. } => {
-                Some(*ramp)
+                Some(ramp.clone())
             }
-            RasterRenderer::ShadedRelief { ramp, .. } => *ramp,
+            RasterRenderer::ShadedRelief { ramp, .. } => ramp.clone(),
             _ => None,
         }
     }
@@ -340,11 +340,11 @@ impl RasterStyle {
             RasterRenderer::Stretch { ramp: r, .. } | RasterRenderer::Classify { ramp: r, .. } => *r = ramp,
             RasterRenderer::ShadedRelief { ramp: r, .. } => *r = Some(ramp),
             RasterRenderer::UniqueValues { ramp: r, values, .. } => {
-                *r = ramp;
                 let n = values.len();
                 for (i, (_, c)) in values.iter_mut().enumerate() {
                     *c = ramp.pick(i, n);
                 }
+                *r = ramp;
             }
             RasterRenderer::Rgb { .. } | RasterRenderer::Colormap => {}
         }
@@ -579,11 +579,11 @@ impl RasterLayer {
             RasterRenderer::Stretch { band, ramp, invert } => {
                 let n = r.bands.get(*band).map(|b| Normalizer::new(self.style.stretch, &b.stats, &r.data_type));
                 let (lo, hi) = n.map(|n| (n.lo, n.hi)).unwrap_or((0.0, 1.0));
-                vec![RasterLegend::Ramp { ramp: *ramp, invert: *invert, high: fmt_num(hi), low: fmt_num(lo) }]
+                vec![RasterLegend::Ramp { ramp: ramp.clone(), invert: *invert, high: fmt_num(hi), low: fmt_num(lo) }]
             }
             RasterRenderer::ShadedRelief { ramp: Some(ramp), band, .. } => {
                 let s = r.bands.get(*band).map(|b| (b.stats.min, b.stats.max)).unwrap_or((0.0, 1.0));
-                vec![RasterLegend::Ramp { ramp: *ramp, invert: false, high: fmt_num(s.1), low: fmt_num(s.0) }]
+                vec![RasterLegend::Ramp { ramp: ramp.clone(), invert: false, high: fmt_num(s.1), low: fmt_num(s.0) }]
             }
             RasterRenderer::ShadedRelief { ramp: None, .. } => {
                 vec![RasterLegend::Ramp { ramp: Ramp::Greys, invert: true, high: "Lit".into(), low: "Shaded".into() }]

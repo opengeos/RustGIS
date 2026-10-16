@@ -36,6 +36,7 @@ pub const READ_EXTENSIONS: &[&str] = &[
     "landxml",
     "xml",
     "gml",
+    "dxf",
     "mif",
     "pbf",
     "topojson",
@@ -58,7 +59,10 @@ pub struct LayerRead {
 /// Whether a file holds several layers ([`read_layers`] reads them all): a zip, KML, KMZ or GPX.
 pub fn is_multi_layer_name(name: &str) -> bool {
     let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    matches!(ext.as_str(), "zip" | "kml" | "kmz" | "gpx" | "rss" | "atom" | "georss" | "landxml" | "xml" | "gml" | "pbf" | "topojson")
+    matches!(
+        ext.as_str(),
+        "zip" | "kml" | "kmz" | "gpx" | "rss" | "atom" | "georss" | "landxml" | "xml" | "gml" | "dxf" | "pbf" | "topojson"
+    )
 }
 
 /// Reads every layer of a file held in memory: the Shapefiles and other files of a zip, a KML or
@@ -101,6 +105,7 @@ pub fn read_layers(file_name: &str, bytes: &[u8]) -> Result<Vec<LayerRead>> {
             }
         }
         "gml" => plain(crate::gml::read(file_name, bytes)?),
+        "dxf" => plain(crate::dxf::read(file_name, bytes, &crate::dxf::Options::default())?),
         // OpenStreetMap PBF, not a vector tile (`.pbf` too).
         "pbf" if crate::osm::looks_like_osm_pbf(bytes) => plain(crate::osm::read(file_name, bytes)?),
         "pbf" => {
@@ -197,7 +202,7 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
         "mif" => crate::mapinfo::read_bytes(bytes, None, &name)?,
         "shp" => return Err(DataError::Unsupported("shp on its own: zip it with its .dbf, .shx and .prj and add the zip".into())),
         // The first layer (`read_layers` reads them all), saying what else the file holds.
-        "zip" | "kml" | "kmz" | "gpx" | "gml" | "pbf" | "topojson" => return first_layer(file_name, bytes),
+        "zip" | "kml" | "kmz" | "gpx" | "gml" | "dxf" | "pbf" | "topojson" => return first_layer(file_name, bytes),
         // A copy, since only borrowed bytes are given; `read_owned` takes them without one.
         e if crate::source::EXTENSIONS.contains(&e) => return read_owned(file_name, bytes.to_vec()),
         other => return Err(DataError::Unsupported(other.to_string())),
@@ -248,7 +253,7 @@ pub fn read_path(path: &Path) -> Result<(Dataset, ReadReport)> {
             }
             read_shapefile(path, &name)?
         }
-        "zip" | "kml" | "kmz" | "gpx" | "gml" | "pbf" | "topojson" => {
+        "zip" | "kml" | "kmz" | "gpx" | "gml" | "dxf" | "pbf" | "topojson" => {
             check_size(path)?;
             read_bytes(&path.display().to_string(), &std::fs::read(path)?)?
         }
@@ -506,67 +511,228 @@ pub fn geometry_to_geojson(g: &Geometry) -> Json {
 }
 
 /// Reads a GeoJSON FeatureCollection, Feature or bare geometry.
+///
+/// A FeatureCollection is read a feature at a time: each one is parsed, turned into a feature and
+/// dropped before the next, so the whole document is never held as JSON values.
 pub fn read_geojson(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
-    let root: Json = serde_json::from_str(text).map_err(|e| DataError::Format(format!("GeoJSON: {e}")))?;
-    // Borrow the features rather than copying a document that may be very large.
-    let wrapped: Json;
-    let features: Vec<&Json> = match root.get("type").and_then(Json::as_str) {
-        Some("FeatureCollection") => root.get("features").and_then(Json::as_array).map(|a| a.iter().collect()).unwrap_or_default(),
-        Some("Feature") => vec![&root],
-        Some(_) => {
-            wrapped = json!({"type": "Feature", "geometry": &root, "properties": {}});
-            vec![&wrapped]
+    let mut features = Collector::default();
+    match stream_features(text, &mut features) {
+        Ok(rest) => match rest.get("type").and_then(Json::as_str) {
+            Some("FeatureCollection") => Ok(features.finish(name)),
+            Some(_) => read_geojson_value(Json::Object(rest), name),
+            None => Err(DataError::Format("GeoJSON: missing \"type\"".into())),
+        },
+        // Not an object, or "features" not an array: read whole, as before.
+        Err(_) => read_geojson_value(serde_json::from_str(text).map_err(|e| DataError::Format(format!("GeoJSON: {e}")))?, name),
+    }
+}
+
+/// What takes a FeatureCollection's features as they're read.
+pub(crate) trait FeatureSink {
+    /// The `"features"` member starts (again, when a document repeats it: the last one wins).
+    fn restart(&mut self);
+    /// One element of `"features"`, as its text.
+    fn feature(&mut self, raw: &str);
+}
+
+/// Reads a GeoJSON document's top level, handing each element of `"features"` to `sink` as it is
+/// read; returns the other members. Fails for a document that isn't an object, or whose
+/// `"features"` isn't an array.
+pub(crate) fn stream_features(text: &str, sink: &mut dyn FeatureSink) -> std::result::Result<Map<String, Json>, serde_json::Error> {
+    use serde::de::DeserializeSeed;
+    let mut de = serde_json::Deserializer::from_str(text);
+    let rest = Streamed { sink }.deserialize(&mut de)?;
+    // Only whitespace may follow, as when read whole.
+    de.end()?;
+    Ok(rest)
+}
+
+/// The top level of a GeoJSON document: its members, but for `"features"`, which go to a sink.
+struct Streamed<'a> {
+    sink: &'a mut dyn FeatureSink,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for Streamed<'_> {
+    type Value = Map<String, Json>;
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> std::result::Result<Self::Value, D::Error> {
+        d.deserialize_map(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for Streamed<'_> {
+    type Value = Map<String, Json>;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a GeoJSON object")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> std::result::Result<Self::Value, A::Error> {
+        let mut rest = Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if key == "features" {
+                self.sink.restart();
+                map.next_value_seed(Features { sink: &mut *self.sink })?;
+            } else {
+                rest.insert(key, map.next_value()?);
+            }
         }
-        None => return Err(DataError::Format("GeoJSON: missing \"type\"".into())),
-    };
-    // Schema: union of property keys in first-seen order. A type stays unknown until a non-null
-    // value is seen (so `[null, 1, 2]` is Integer), then widens; all-null columns become Text.
-    let mut order: Vec<(String, Option<FieldType>)> = Vec::new();
-    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for &f in &features {
-        if let Some(props) = f.get("properties").and_then(Json::as_object) {
-            for (k, v) in props {
-                let ty = json_type(v);
-                match index.get(k).and_then(|i| order.get_mut(*i)) {
-                    Some((_, cur)) => {
-                        *cur = match *cur {
-                            None => ty,
-                            Some(c) => Some(widen(c, ty)),
-                        }
-                    }
-                    None => {
-                        index.insert(k.clone(), order.len());
-                        order.push((k.clone(), ty));
-                    }
+        Ok(rest)
+    }
+}
+
+/// A FeatureCollection's `"features"` array, a feature at a time.
+struct Features<'a> {
+    sink: &'a mut dyn FeatureSink,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for Features<'_> {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> std::result::Result<(), D::Error> {
+        d.deserialize_seq(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for Features<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("an array of features")
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<(), A::Error> {
+        while let Some(raw) = seq.next_element::<&'de serde_json::value::RawValue>()? {
+            self.sink.feature(raw.get());
+        }
+        Ok(())
+    }
+}
+
+/// A GeoJSON layer's schema as features are read: the union of property keys in first-seen
+/// order. A type stays unknown until a non-null value is seen (so `[null, 1, 2]` is Integer),
+/// then widens; all-null columns become Text.
+#[derive(Default)]
+pub(crate) struct Schema {
+    order: Vec<(String, Option<FieldType>)>,
+    index: std::collections::HashMap<String, usize>,
+}
+
+impl Schema {
+    /// Counts a property; returns its field's index.
+    pub(crate) fn see(&mut self, k: &str, v: &Json) -> usize {
+        let ty = json_type(v);
+        match self.index.get(k) {
+            Some(&i) => {
+                if let Some((_, cur)) = self.order.get_mut(i) {
+                    *cur = match *cur {
+                        None => ty,
+                        Some(c) => Some(widen(c, ty)),
+                    };
                 }
+                i
+            }
+            None => {
+                self.index.insert(k.to_string(), self.order.len());
+                self.order.push((k.to_string(), ty));
+                self.order.len() - 1
             }
         }
     }
-    let fields: Vec<Field> = order.into_iter().map(|(k, ty)| Field::new(k, ty.unwrap_or(FieldType::Text))).collect();
-    let mut report = ReadReport::default();
-    let mut ds = Dataset::new(name, GeometryType::None, fields);
-    for &f in &features {
-        let geom = f.get("geometry").filter(|g| !g.is_null()).and_then(geometry_from_geojson);
-        if geom.is_none() && f.get("geometry").is_some_and(|g| !g.is_null()) {
-            report.skipped += 1;
-            continue;
+
+    /// The fields, typed by every value seen.
+    pub(crate) fn fields(&self) -> Vec<Field> {
+        self.order.iter().map(|(k, ty)| Field::new(k.clone(), ty.unwrap_or(FieldType::Text))).collect()
+    }
+}
+
+/// A feature's attributes from its properties, for `fields` (see [`Schema::fields`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn geojson_attrs(f: &Json, fields: &[Field]) -> Vec<Value> {
+    let props = f.get("properties").and_then(Json::as_object);
+    fields
+        .iter()
+        .map(|field| coerce(props.and_then(|p| p.get(&field.name)).map(Value::from_json).unwrap_or(Value::Null), field.ty))
+        .collect()
+}
+
+/// A feature's geometry: `Ok(None)` for none, `Err` for one that can't be read.
+pub(crate) fn geojson_geometry(f: &Json) -> std::result::Result<Option<Geometry>, ()> {
+    match f.get("geometry").filter(|g| !g.is_null()) {
+        None => Ok(None),
+        Some(g) => geometry_from_geojson(g).map(Some).ok_or(()),
+    }
+}
+
+/// Features as they're read, and the schema so far.
+#[derive(Default)]
+struct Collector {
+    schema: Schema,
+    /// Each feature's geometry and its values by field, typed once every feature is in.
+    features: Vec<(Option<Geometry>, Vec<(usize, Value)>)>,
+    skipped: usize,
+}
+
+impl FeatureSink for Collector {
+    fn restart(&mut self) {
+        *self = Collector::default();
+    }
+
+    fn feature(&mut self, raw: &str) {
+        // Valid JSON, but its numbers may not fit (1e400): such a feature is skipped and counted.
+        match serde_json::from_str::<Json>(raw) {
+            Ok(f) => self.add(&f),
+            Err(_) => self.skipped += 1,
         }
+    }
+}
+
+impl Collector {
+    fn add(&mut self, f: &Json) {
         let props = f.get("properties").and_then(Json::as_object);
-        let attrs = ds
-            .fields
-            .iter()
-            .map(|field| {
-                let v = props.and_then(|p| p.get(&field.name)).map(Value::from_json).unwrap_or(Value::Null);
-                coerce(v, field.ty)
-            })
-            .collect();
-        ds.push_next(geom, attrs);
+        // Every feature's properties count in the schema, those with unreadable geometry too.
+        let attrs: Vec<(usize, Value)> = props.into_iter().flatten().map(|(k, v)| (self.schema.see(k, v), Value::from_json(v))).collect();
+        match geojson_geometry(f) {
+            Ok(geom) => self.features.push((geom, attrs)),
+            Err(()) => self.skipped += 1,
+        }
     }
-    ds.geometry_type = dominant_type(&ds);
-    if report.skipped > 0 {
-        report.messages.push(format!("{} features had unreadable geometry", report.skipped));
+
+    fn finish(self, name: &str) -> (Dataset, ReadReport) {
+        let mut report = ReadReport { skipped: self.skipped, ..ReadReport::default() };
+        let mut ds = Dataset::new(name, GeometryType::None, self.schema.fields());
+        ds.features.reserve(self.features.len());
+        for (geom, values) in self.features {
+            let mut attrs = vec![Value::Null; ds.fields.len()];
+            for (i, v) in values {
+                if let (Some(slot), Some(field)) = (attrs.get_mut(i), ds.fields.get(i)) {
+                    *slot = coerce(v, field.ty);
+                }
+            }
+            ds.push_next(geom, attrs);
+        }
+        ds.geometry_type = dominant_type(&ds);
+        if report.skipped > 0 {
+            report.messages.push(format!("{} features had unreadable geometry", report.skipped));
+        }
+        (ds, report)
     }
-    Ok((ds, report))
+}
+
+/// Reads a GeoJSON document already parsed: a FeatureCollection, Feature or bare geometry.
+fn read_geojson_value(root: Json, name: &str) -> Result<(Dataset, ReadReport)> {
+    let mut features = Collector::default();
+    match root.get("type").and_then(Json::as_str) {
+        Some("FeatureCollection") => {
+            for f in root.get("features").and_then(Json::as_array).into_iter().flatten() {
+                features.add(f);
+            }
+        }
+        Some("Feature") => features.add(&root),
+        Some(_) => features.add(&json!({"type": "Feature", "geometry": &root, "properties": {}})),
+        None => return Err(DataError::Format("GeoJSON: missing \"type\"".into())),
+    }
+    Ok(features.finish(name))
 }
 
 fn json_type(v: &Json) -> Option<FieldType> {
@@ -698,6 +864,63 @@ pub fn sniff_delimiter(text: &str) -> u8 {
     seps.get(pick).copied().unwrap_or(b',')
 }
 
+/// The x/y columns found by name, as a pair from one family: longitude/latitude, else
+/// easting/northing.
+fn found_xy(headers: &[String]) -> Option<(usize, usize)> {
+    let find = |names: &[&str]| headers.iter().position(|h| names.contains(&h.trim().to_ascii_lowercase().as_str()));
+    find(LON_NAMES).zip(find(LAT_NAMES)).or_else(|| find(X_NAMES).zip(find(Y_NAMES)))
+}
+
+/// A WKT column found: one named like geometry whose first value reads as WKT.
+fn found_wkt(headers: &[String], rows: &[Vec<String>]) -> Option<usize> {
+    // The name first: looking for a column's first value costs a pass over the rows.
+    headers.iter().enumerate().filter(|(_, h)| WKT_NAMES.contains(&h.trim().to_ascii_lowercase().as_str())).find_map(|(i, _)| {
+        let first = rows.iter().filter_map(|r| r.get(i)).map(|s| s.trim()).find(|s| !s.is_empty())?;
+        crate::interop::parse_wkt(first).is_ok().then_some(i)
+    })
+}
+
+/// The columns of delimited text or a sheet, and those its geometry is read from when none are
+/// given (see [`read_csv_with`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Columns {
+    pub names: Vec<String>,
+    pub x: Option<String>,
+    pub y: Option<String>,
+    pub wkt: Option<String>,
+    /// The field separator (delimited text only).
+    pub delimiter: Option<u8>,
+}
+
+/// The rows [`csv_columns`] reads: a WKT column is found by its first value.
+const COLUMN_SAMPLE_ROWS: usize = 1000;
+
+/// The columns of rows under a header row, as [`read_rows`] would find them.
+pub(crate) fn columns_of(headers: &[String], rows: &[Vec<String>]) -> Columns {
+    let xy = found_xy(headers);
+    let wkt = if xy.is_some() { None } else { found_wkt(headers, rows) };
+    let name = |i: usize| headers.get(i).map(|h| h.trim().to_string());
+    Columns {
+        names: headers.iter().map(|h| h.trim().to_string()).collect(),
+        x: xy.and_then(|(x, _)| name(x)),
+        y: xy.and_then(|(_, y)| name(y)),
+        wkt: wkt.and_then(name),
+        delimiter: None,
+    }
+}
+
+/// The columns of delimited text (split at `delimiter`, or the one found), without reading all
+/// of it: a WKT column whose first value is past the first [`COLUMN_SAMPLE_ROWS`] rows isn't found.
+pub fn csv_columns(text: &str, delimiter: Option<u8>) -> Result<Columns> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let delimiter = delimiter.unwrap_or_else(|| sniff_delimiter(text));
+    let mut rdr = csv::ReaderBuilder::new().flexible(true).delimiter(delimiter).from_reader(text.as_bytes());
+    let headers: Vec<String> = rdr.headers().map_err(|e| DataError::Format(format!("CSV: {e}")))?.iter().map(|s| s.to_string()).collect();
+    let rows: Vec<Vec<String>> =
+        rdr.records().flatten().take(COLUMN_SAMPLE_ROWS).map(|r| r.iter().map(|s| s.to_string()).collect()).collect();
+    Ok(Columns { delimiter: Some(delimiter), ..columns_of(&headers, &rows) })
+}
+
 /// Reads CSV; columns named like longitude/latitude become point geometry.
 pub fn read_csv(text: &str, name: &str) -> Result<(Dataset, ReadReport)> {
     read_csv_with(text, name, &CsvOptions::default())
@@ -734,7 +957,6 @@ pub(crate) fn read_rows(
     name: &str,
     opts: &CsvOptions,
 ) -> Result<(Dataset, ReadReport)> {
-    let find = |names: &[&str]| headers.iter().position(|h| names.contains(&h.trim().to_ascii_lowercase().as_str()));
     let named = |n: &Option<String>, what: &str| -> Result<Option<usize>> {
         match n.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
             Some(n) => headers
@@ -752,27 +974,13 @@ pub(crate) fn read_rows(
     }
     let (x, y) = match (x, y) {
         (Some(x), Some(y)) => (Some(x), Some(y)),
-        // Found by name, as a pair from one family: longitude/latitude, else easting/northing.
-        (None, None) if wkt_given.is_none() => match (find(LON_NAMES), find(LAT_NAMES)) {
-            (Some(x), Some(y)) => (Some(x), Some(y)),
-            _ => (find(X_NAMES), find(Y_NAMES)),
-        },
+        (None, None) if wkt_given.is_none() => found_xy(headers).unzip(),
         (None, None) => (None, None),
         _ => return Err(DataError::Format("give both the x and the y column".into())),
     };
     let xy = x.zip(y);
-    // A WKT column: the one named, or (without x/y columns) one named like geometry whose first
-    // value reads as WKT.
-    let wkt = wkt_given.or_else(|| {
-        if xy.is_some() {
-            return None;
-        }
-        // The name first: looking for a column's first value costs a pass over the rows.
-        headers.iter().enumerate().filter(|(_, h)| WKT_NAMES.contains(&h.trim().to_ascii_lowercase().as_str())).find_map(|(i, _)| {
-            let first = rows.iter().filter_map(|r| r.get(i)).map(|s| s.trim()).find(|s| !s.is_empty())?;
-            crate::interop::parse_wkt(first).is_ok().then_some(i)
-        })
-    });
+    // A WKT column: the one named, or (without x/y columns) one found.
+    let wkt = wkt_given.or_else(|| if xy.is_some() { None } else { found_wkt(headers, rows) });
     // Infer each column's type from its values; a WKT column is the geometry, not an attribute.
     let columns: Vec<usize> = (0..headers.len()).filter(|&i| Some(i) != wkt).collect();
     let fields: Vec<Field> = columns
@@ -1479,7 +1687,7 @@ fn is_outer<P>(r: &shapefile::PolygonRing<P>) -> bool {
 }
 
 /// Groups a flat list of rings (outer flag) into polygons: each hole joins the preceding outer ring.
-fn group_rings(rings: Vec<(Vec<Coord>, bool)>) -> Geometry {
+pub(crate) fn group_rings(rings: Vec<(Vec<Coord>, bool)>) -> Geometry {
     let mut polys: Vec<Vec<Vec<Coord>>> = Vec::new();
     for (ring, outer) in rings {
         match polys.last_mut() {
@@ -1669,6 +1877,29 @@ mod tests {
         assert_eq!(crate::raster::Crs::parse("OGC:CRS84").unwrap(), crate::raster::Crs::LonLat);
         assert!(crate::raster::Crs::parse("EPSG:999999").is_err());
         assert!(crate::raster::Crs::parse("Mercator").is_err());
+    }
+
+    /// The columns Add Delimited Text offers, and the ones found as the reader finds them.
+    #[test]
+    fn delimited_text_columns() {
+        let c = csv_columns("\u{feff}name;Lat;Lon\nA;1;2\n", None).unwrap();
+        assert_eq!(c.names, ["name", "Lat", "Lon"]);
+        assert_eq!((c.x.as_deref(), c.y.as_deref(), c.wkt.as_deref(), c.delimiter), (Some("Lon"), Some("Lat"), None, Some(b';')));
+        // Longitude/latitude over easting/northing; easting/northing as a pair only.
+        let c = csv_columns("easting,northing,lon,lat\n", None).unwrap();
+        assert_eq!((c.x.as_deref(), c.y.as_deref()), (Some("lon"), Some("lat")));
+        let c = csv_columns("easting,lat\n1,2\n", None).unwrap();
+        assert_eq!((c.x, c.y), (None, None));
+        // A WKT column by its name and first value, not by its name alone.
+        let c = csv_columns("id,geometry\n1,\n2,POINT (1 2)\n", None).unwrap();
+        assert_eq!(c.wkt.as_deref(), Some("geometry"));
+        assert_eq!(csv_columns("id,geometry\n1,not wkt\n", None).unwrap().wkt, None);
+        // The separator given splits the header.
+        let c = csv_columns("a;b,c\n", Some(b',')).unwrap();
+        assert_eq!((c.names, c.delimiter), (vec!["a;b".to_string(), "c".to_string()], Some(b',')));
+        // Nothing to read is no columns, not a crash.
+        assert!(csv_columns("", None).unwrap().names.is_empty());
+        let _ = csv_columns("\"unclosed\n", None);
     }
 
     #[test]

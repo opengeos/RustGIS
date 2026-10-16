@@ -14,7 +14,7 @@ pub fn commands() -> Vec<C> {
             r#"{"query": "a place or an address", "provider"?: "nominatim" (OpenStreetMap, default) | "photon", "url"?: "a geocoding server of your own", "limit"?: 1–20, "go"?: bool (zooms to the first, default true)}"#,
         ),
         C::new("layer.geocode", "Geocode Addresses", "Home › Add › Add Data", geocode).params(
-            r#"{"table"?: "a standalone table (such as a CSV of addresses)", "layer"?: name|id (or the active layer), "address": field | [fields] (joined with commas, such as street, city, country), "provider"?: "nominatim" | "photon", "url"?: "a geocoding server of your own (more than 100 addresses)", "name"?: text, "places"?: "answers already looked up, {address: {lon, lat, name} | null} (the app's background run; nothing is fetched)"}"#,
+            r#"{"table"?: name|id (a standalone table, such as a CSV of addresses), "layer"?: name|id (or the active layer), "address": field | [fields] (joined with commas, such as street, city, country), "provider"?: "nominatim" | "photon", "url"?: "a geocoding server of your own (more than 100 addresses)", "name"?: text, "places"?: "answers already looked up, {address: {lon, lat, name} | null} (the app's background run; nothing is fetched)"}"#,
         ),
     ]
 }
@@ -63,9 +63,10 @@ fn find_place(s: &mut Session, p: &Value) -> CmdResult {
 /// The table or layer whose addresses are geocoded: `table` names a standalone table; `layer` a
 /// layer, or a table when no layer has its name.
 fn source<'a>(s: &'a Session, p: &Value) -> Result<&'a rustgis_data::Dataset, String> {
-    let table = |n: &str| s.project.tables.iter().find(|t| t.name == n);
-    if let Some(n) = ps(p, "table") {
-        return table(n).ok_or_else(|| format!("no table named '{n}'"));
+    let table = |n: &str| s.project.tables.iter().find(|t| t.name == n).map(|t| &t.dataset);
+    if p.get("table").is_some_and(|t| !t.is_null()) {
+        let i = s.table_index(p)?;
+        return s.project.tables.get(i).map(|t| &t.dataset).ok_or_else(|| "no such table".to_string());
     }
     if let Some(n) = ps(p, "layer")
         && s.map().layer_by_name(n).is_none()

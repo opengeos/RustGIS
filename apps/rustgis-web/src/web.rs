@@ -12,6 +12,9 @@ use wasm_bindgen::JsCast as _;
 
 const DATA_EXTS: &[&str] = &[
     "geojson",
+    // Geotagged photos (points in the Photos layer).
+    "jpg",
+    "jpeg",
     "json",
     "csv",
     "tsv",
@@ -36,6 +39,7 @@ const DATA_EXTS: &[&str] = &[
     "fgb",
     "mbtiles",
     "gml",
+    "dxf",
     "mif",
     "pbf",
     "topojson",
@@ -80,6 +84,7 @@ pub fn start() {
                     let font_inbox: Inbox = Inbox::default();
                     let notes = Notes::default();
                     let q = query();
+                    let project = params(&q, "project", 1).into_iter().next();
                     let mut app = RustGisApp::with_sample().with_services(services(
                         inbox.clone(),
                         font_inbox,
@@ -91,7 +96,7 @@ pub fn start() {
                     // `mercator`, `globe`) or `?extent=minLon,minLat,maxLon,maxLat` says otherwise
                     // for this visit.
                     let start = rustgis_ui_egui::Start {
-                        blank: (embedded || flag(&q, "blank")).then_some(true),
+                        blank: (embedded || project.is_some() || flag(&q, "blank")).then_some(true),
                         projection: param(&q, "projection").filter(|c| !c.is_empty()),
                         extent: param(&q, "extent").filter(|c| !c.is_empty()),
                     };
@@ -105,11 +110,26 @@ pub fn start() {
                             None => log::warn!("?lang={code}: no such interface language; following the browser's"),
                         }
                     }
+                    // `?project=<url>` opens a project (`.rgis`) by its web address: a whole map,
+                    // its layers, symbology and view, shared as one link. It replaces the project
+                    // when it lands, so the links that add to a project are left out beside it.
+                    if let Some(url) = &project {
+                        if let Err(e) = app.run("ui.openUrl", serde_json::json!({"url": url})) {
+                            app.session.notify(format!("?project={url}: {e}"), true);
+                        }
+                        let skipped: Vec<&str> =
+                            ["data", "stac", "style", "tiles", "zarr"].into_iter().filter(|k| !params(&q, k, 1).is_empty()).collect();
+                        if !skipped.is_empty() {
+                            let list = skipped.iter().map(|k| format!("?{k}=")).collect::<Vec<_>>().join(", ");
+                            app.session.notify(format!("?project= opens a whole project, so {list} links were left out"), false);
+                        }
+                    }
+                    let links = if project.is_some() { "" } else { q.as_str() };
                     // `?data=<url>` (repeatable) adds data by web address, downloaded in the
                     // background, the map zoomed to the first file that lands with something to
                     // show; `?style=<url>` adds a MapLibre style; `?tiles=<template>` a tile
                     // layer. Links that share a map. What fails is said in a notice.
-                    for url in params(&q, "data", 16) {
+                    for url in params(links, "data", 16) {
                         if let Err(e) = app.run("ui.addUrl", serde_json::json!({"url": url, "zoom": true})) {
                             app.session.notify(format!("?data={url}: {e}"), true);
                         }
@@ -118,7 +138,7 @@ pub fn start() {
                     // Planetary Computer one) or a collection (STAC Search opens on it).
                     // One link: the dialog follows one document at a time, so others are said to
                     // be skipped rather than lost.
-                    let stac = params(&q, "stac", 4);
+                    let stac = params(links, "stac", 4);
                     if let Some(url) = stac.first()
                         && let Err(e) = app.run("ui.stacLink", serde_json::json!({"url": url}))
                     {
@@ -128,7 +148,7 @@ pub fn start() {
                         app.session.notify(format!("only the first ?stac= link is opened ({} more were left out)", stac.len() - 1), false);
                     }
                     for (key, kind) in [("style", Some("style")), ("tiles", None)] {
-                        for url in params(&q, key, 8) {
+                        for url in params(links, key, 8) {
                             let mut p = serde_json::json!({"url": url});
                             if let Some(kind) = kind {
                                 p["kind"] = serde_json::json!(kind);
@@ -140,7 +160,7 @@ pub fn start() {
                     }
                     // `?zarr=<url>` opens Add Zarr Variable on a store, its variables listed.
                     // Read as `?data=` is, so a `+` in the address stays a `+`.
-                    if let Some(url) = params(&q, "zarr", 1).into_iter().next()
+                    if let Some(url) = params(links, "zarr", 1).into_iter().next()
                         && let Err(e) = app.run("ui.addZarr", serde_json::json!({"address": url}))
                     {
                         app.session.notify(format!("?zarr={url}: {e}"), true);
@@ -361,32 +381,71 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     // A data download may be up to MAX_DOWNLOAD; anything else is at most 64 MB.
     let (url, download) = cache::split_download(url);
     let max = if download { cache::MAX_DOWNLOAD as u64 } else { 64 << 20 };
+    let (url, tail) = cache::split_tail(url);
     let (url, range) = cache::split_range(url);
-    let promise = match range {
-        Some((a, b)) => {
-            let init = web_sys::RequestInit::new();
-            let headers = web_sys::Headers::new().map_err(err)?;
-            headers.set("Range", &format!("bytes={a}-{b}")).map_err(err)?;
-            init.set_headers(&headers);
-            window.fetch_with_str_and_init(url, &init)
-        }
-        None => window.fetch_with_str(url),
+    // An `s3://` address becomes its web address, and a request to an S3 connection's endpoint
+    // is signed (the bucket's CORS rules must allow the Authorization and x-amz-* headers).
+    let prepared = rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::s3::prepare(url)?;
+    let url = prepared.url.as_str();
+    let asked = match (range, tail) {
+        (Some((a, b)), _) => Some(format!("bytes={a}-{b}")),
+        (None, Some(n)) => Some(format!("bytes=-{n}")),
+        (None, None) => None,
     };
-    let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(promise).await.map_err(err)?.dyn_into().map_err(err)?;
+    let promise = if asked.is_some() || !prepared.headers.is_empty() {
+        let init = web_sys::RequestInit::new();
+        let headers = web_sys::Headers::new().map_err(err)?;
+        if let Some(r) = &asked {
+            headers.set("Range", r).map_err(err)?;
+        }
+        for (k, v) in &prepared.headers {
+            headers.set(k, v).map_err(err)?;
+        }
+        init.set_headers(&headers);
+        // A signed request goes only where its credentials are for.
+        if prepared.signed {
+            init.set_redirect(web_sys::RequestRedirect::Error);
+        }
+        window.fetch_with_str_and_init(url, &init)
+    } else {
+        window.fetch_with_str(url)
+    };
+    // A refused fetch is an opaque TypeError ("Failed to fetch") by design: the browser doesn't
+    // say why, so the likely reasons are named, with the browser's own message but not its stack.
+    let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(promise)
+        .await
+        .map_err(|e| {
+            let why = e.dyn_ref::<js_sys::Error>().map(|e| String::from(e.message())).unwrap_or_else(|| err(e));
+            format!(
+                "the browser couldn't reach it (offline, blocked by a browser extension or the network, or the server doesn't accept requests from web pages): {why}"
+            )
+        })?
+        .dyn_into()
+        .map_err(err)?;
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
+    // The last bytes asked for and the whole file answered: fine when it is no longer.
+    let whole_tail = tail.filter(|_| resp.status() != 206);
+    let max = match whole_tail {
+        Some(n) => n.saturating_add(1),
+        None => max,
+    };
     // A range asked for and the whole file answered (200): fine for a range from the start that
     // holds the whole file (a small archive), checked once it's read; else no ranges.
     let whole = range.is_some() && resp.status() != 206;
     if range.is_some_and(|(a, _)| whole && a > 0) {
-        return Err(format!("{url}: the server doesn't answer byte-range requests"));
+        return Err(format!("{url}: {}", cache::NO_RANGES));
     }
     // Fonts are at most about 10 MB and plugins 64 MB; refuse anything larger than allowed, by
     // header when there is one and by the downloaded size otherwise.
     if let Ok(Some(len)) = resp.headers().get("content-length").map(|v| v.and_then(|s| s.parse::<u64>().ok()))
         && len > max
     {
+        // The last bytes asked for and a longer file answered: no ranges, so it is downloaded whole.
+        if whole_tail.is_some() {
+            return Err(format!("{url}: {}", cache::NO_RANGES));
+        }
         return Err(format!("{len} bytes is too large"));
     }
     // Read a chunk at a time, so a body larger than allowed (whatever its header said) is cut
@@ -406,6 +465,9 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
             let n = value.length() as usize;
             if (bytes.len() + n) as u64 > max {
                 let _ = reader.cancel();
+                if whole_tail.is_some() {
+                    return Err(format!("{url}: {}", cache::NO_RANGES));
+                }
                 return Err(format!("larger than {} MB", max >> 20));
             }
             let at = bytes.len();
@@ -416,7 +478,10 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     if let Some((a, b)) = range.filter(|_| whole)
         && bytes.len() as u64 > b - a + 1
     {
-        return Err(format!("{url}: the server doesn't answer byte-range requests"));
+        return Err(format!("{url}: {}", cache::NO_RANGES));
+    }
+    if whole_tail.is_some_and(|n| bytes.len() as u64 > n) {
+        return Err(format!("{url}: {}", cache::NO_RANGES));
     }
     Ok(bytes)
 }
@@ -521,14 +586,25 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             let notes = notes.clone();
             let ctx = ctx.clone();
             // A file picked for Add Delimited Text carries its dialog's options.
-            let mark = if purpose == "text" { rustgis_ui_egui::DELIMITED_PICK } else { "" };
-            let dialog = if purpose == "project" {
+            // So does a file picked for a tool's file parameter, which goes to the Tools pane.
+            let tool_exts = purpose.strip_prefix(rustgis_ui_egui::TOOL_FILE_PURPOSE);
+            let mark = match (purpose, tool_exts) {
+                ("text", _) => rustgis_ui_egui::DELIMITED_PICK,
+                (_, Some(_)) => rustgis_ui_egui::TOOL_FILE_PICK,
+                _ => "",
+            };
+            let dialog = if let Some(exts) = tool_exts {
+                let exts: Vec<&str> = exts.split(',').filter(|e| !e.is_empty()).collect();
+                if exts.is_empty() { rfd::AsyncFileDialog::new() } else { rfd::AsyncFileDialog::new().add_filter(exts.join(", "), &exts) }
+            } else if purpose == "project" {
                 rfd::AsyncFileDialog::new().add_filter("RustGIS project", &["rgis", "rgisx"])
             } else if purpose == "item" {
                 rfd::AsyncFileDialog::new().add_filter(
                     "RustGIS items",
-                    &["rgismap", "rgismpk", "rgispkg", "rgislyr", "rgisstyle", "rgistemplate", "rgistask", "rgis", "rgisx"],
+                    &["rgismap", "rgismpk", "rgispkg", "rgislyr", "rgisstyle", "rgisramp", "rgistemplate", "rgistask", "rgis", "rgisx"],
                 )
+            } else if purpose == "ramp" {
+                rfd::AsyncFileDialog::new().add_filter("Colour ramps", &["rgisramp", "xml", "qml", "txt", "clr", "cpt"])
             } else if purpose == "layout" {
                 rfd::AsyncFileDialog::new().add_filter("RustGIS layout", &["rgislayout"])
             } else if purpose == "plugin" {
@@ -541,13 +617,16 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             } else {
                 rfd::AsyncFileDialog::new().add_filter("Vector and raster data", DATA_EXTS)
             };
+            // Data may come several files at once (photos gather in one layer).
+            let many = purpose == "data";
             wasm_bindgen_futures::spawn_local(async move {
-                let Some(file) = dialog.pick_file().await else {
-                    return;
-                };
-                let name = file.file_name();
-                if let Some(bytes) = crate::parts::read_file(file.inner().clone(), notes).await {
-                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((format!("{mark}{name}"), bytes));
+                let files: Vec<rfd::FileHandle> =
+                    if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
+                for file in files {
+                    let name = file.file_name();
+                    if let Some(bytes) = crate::parts::read_file(file.inner().clone(), notes.clone()).await {
+                        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((format!("{mark}{name}"), bytes));
+                    }
                 }
                 ctx.request_repaint();
             });

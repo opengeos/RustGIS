@@ -4,6 +4,7 @@
 //! bad features are skipped and counted in [`ReadReport`].
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod dxf;
 pub mod geometry;
 pub mod georss;
 pub mod gml;
@@ -17,6 +18,7 @@ pub mod mapinfo;
 pub mod mbtiles;
 pub mod ogc;
 pub mod osm;
+pub mod photo;
 pub mod query;
 pub mod raster;
 pub mod sheets;
@@ -25,6 +27,7 @@ pub mod sqlite;
 pub mod topojson;
 pub mod value;
 pub mod wkb;
+pub mod xml;
 pub mod zip;
 
 pub use geometry::{Geometry, GeometryType};
@@ -137,10 +140,15 @@ impl Dataset {
         self.fields.len() - 1
     }
 
-    /// Numeric (min, max) of a field over all features, ignoring non-numbers.
-    pub fn numeric_range(&self, field: usize) -> Option<(f64, f64)> {
+    /// The features `rows` keeps, by position; a row past its end counts, so `&[]` keeps them all.
+    pub fn kept_features<'a>(&'a self, rows: &'a [bool]) -> impl Iterator<Item = &'a Feature> {
+        self.features.iter().enumerate().filter(|(r, _)| rows.get(*r).copied().unwrap_or(true)).map(|(_, f)| f)
+    }
+
+    /// Numeric (min, max) of a field over the features `rows` keeps, ignoring non-numbers.
+    pub fn numeric_range(&self, field: usize, rows: &[bool]) -> Option<(f64, f64)> {
         let mut r: Option<(f64, f64)> = None;
-        for f in &self.features {
+        for f in self.kept_features(rows) {
             if let Some(v) = f.attrs.get(field).and_then(Value::as_f64) {
                 r = Some(match r {
                     Some((a, b)) => (a.min(v), b.max(v)),
@@ -151,9 +159,9 @@ impl Dataset {
         r
     }
 
-    /// Distinct display values of a field, sorted, capped at `limit`.
-    pub fn unique_values(&self, field: usize, limit: usize) -> Vec<String> {
-        let mut v: Vec<String> = self.features.iter().map(|f| f.attrs.get(field).map(|x| x.to_string()).unwrap_or_default()).collect();
+    /// Distinct display values of a field over the features `rows` keeps, sorted, capped at `limit`.
+    pub fn unique_values(&self, field: usize, rows: &[bool], limit: usize) -> Vec<String> {
+        let mut v: Vec<String> = self.kept_features(rows).map(|f| f.attrs.get(field).map(|x| x.to_string()).unwrap_or_default()).collect();
         v.sort();
         v.dedup();
         v.truncate(limit);
@@ -185,7 +193,10 @@ mod tests {
         assert_eq!(d.features[0].attrs.len(), 2);
         assert_eq!(d.features[1].attrs.len(), 2);
         assert_eq!(d.features[1].id, 2);
-        assert_eq!(d.numeric_range(0), Some((1.0, 5.0)));
+        assert_eq!(d.numeric_range(0, &[]), Some((1.0, 5.0)));
+        assert_eq!(d.numeric_range(0, &[false]), Some((1.0, 1.0)));
+        assert_eq!(d.numeric_range(0, &[false, false]), None);
+        assert_eq!(d.unique_values(0, &[true, false], 10), vec!["5"]);
         assert_eq!(d.value(99, 99), &Value::Null);
     }
 }

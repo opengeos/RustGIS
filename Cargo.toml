@@ -27,7 +27,8 @@ rustgis-assistant = { path = "crates/assistant" }
 # foundation
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
 log = "0.4"
 # std::time that also works in the browser (std panics on wasm32-unknown-unknown).
 web-time = "1"
@@ -62,6 +63,11 @@ bytes = "1"
 flatgeobuf = { version = "6", default-features = false }
 geozero = { version = "0.15", default-features = false, features = ["with-wkb"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
+# PostgreSQL/PostGIS, in pure Rust: the client, and TLS through rustls (ring, as ureq has it).
+postgres = { version = "0.19", default-features = false }
+tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
 # Excel and OpenDocument spreadsheets, in pure Rust (the browser too).
 calamine = { version = "0.36", default-features = false }
 laz = { version = "0.13", default-features = false }

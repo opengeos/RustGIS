@@ -1,5 +1,12 @@
 # Installation
 
+## Install with an agent
+
+Point your agent at the [RustGIS skill](https://github.com/opengeos/RustGIS/blob/main/skills/rustgis/SKILL.md)
+and ask it to install RustGIS. The skill picks the platform, installs the app and `rustgis-cli`,
+checks the release checksum, and registers the MCP server. The same skill is how an agent manages
+the desktop app that is already open.
+
 ## Download
 
 Each [GitHub release](https://github.com/opengeos/RustGIS/releases/latest) carries ready-to-run
@@ -82,7 +89,7 @@ RUSTGIS_DATA_DIR=/path/to/data cargo build --release
 | Linux (X11 and Wayland) | Supported |
 | macOS | Supported |
 | Windows | Supported |
-| Web browser | Supported: [web.rustgis.app](https://web.rustgis.app) (WebGPU or WebGL2) |
+| Web browser | Supported: [web.rustgis.app](https://web.rustgis.app) (WebGPU or WebGL2), installable as an app on iOS, Android and desktops ([how](#install-the-web-app)) |
 
 ## Web app
 
@@ -92,12 +99,15 @@ RustGIS also runs in the browser, compiled to WebAssembly: open
 - **Open** and **Add Data** use the browser's file picker, and you can drop files on the page.
   GeoJSON, CSV, GeoTIFF, ASCII grids and `.rgis` projects work; Shapefiles need the desktop
   app.
-- **Save** and **Export** download the file.
+- **Save** and **Export** download the file. **Save As**, and the first **Save** of a project,
+  ask for the file name first; the browser decides which folder downloads go to (Firefox, for
+  one, saves to its Downloads folder unless told to ask). A project opened from a file is named
+  after it, and **Save** downloads it under that name again.
 - The interface uses the built-in font, because a web page can't read installed fonts.
 
 The web app opens the way **Settings › Start-up** says (remembered in the browser). The URL can
 override that for one visit: add `?blank` to start with an empty project,
-`?projection=EPSG:3010` (any projected EPSG code, a preset id such as `robinson`, or `globe`) to
+`?projection=EPSG:3010` (a supported projected EPSG code, a preset id such as `robinson`, or `globe`) to
 start in another projection, `?extent=10.5,55,24.5,69.5` (west, south, east, north in degrees) to
 open on an area, `?lang=de` (or any language code) to pick the interface language, or `?webgl` to
 force WebGL2. Combine them with `&`, so a self-hosted build can link to
@@ -112,6 +122,14 @@ added is said in a notice. For example,
 `?blank&data=https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson` opens
 the past week's earthquakes.
 
+`?project=<address>` opens a whole project by its web address: a `.rgis` file (or a
+`.rgispkg` package), or any address that answers with a project's JSON, such as an API that
+builds the project on the fly. Its maps, layers, symbology and view open as saved, so one link
+shares a styled map. The project replaces the start-up one, so `?data=`, `?stac=`, `?style=`,
+`?tiles=` and `?zarr=` are left out beside it (a notice says so). The data the project points to
+is read as it would be from a saved file, and its servers must allow the browser to fetch it
+(CORS), as must the project's.
+
 `?stac=<address>` opens STAC Search on a [STAC](https://stacspec.org) item or collection: an
 item's footprint is drawn and its default asset (its true-colour `visual` image, else its first
 GeoTIFF) added, signed first when it is a Microsoft Planetary Computer one; a collection is chosen
@@ -124,6 +142,29 @@ does: it starts blank, keeps its settings in memory rather than in the browser, 
 the project with the page that frames it through `postMessage` (the messages are described in
 `apps/rustgis-web/src/embed.rs`).
 
+### Install the web app
+
+The web app installs like an app on phones, tablets and computers, with its own icon and a window
+without the browser's toolbars, and starts without a network connection once it has been opened
+online. Nothing is downloaded from an app store, and it updates itself from web.rustgis.app.
+
+| Platform | How |
+| --- | --- |
+| iPhone and iPad | Open web.rustgis.app in Safari, tap **Share**, then **Add to Home Screen** |
+| Android | Open it in Chrome, tap the **⋮** menu, then **Install app** (or **Add to Home screen**) |
+| Windows, macOS, Linux, ChromeOS | In Chrome or Edge, click the install icon at the right of the address bar (or **⋮ › Cast, save and share › Install page as app**) |
+| Mac (Safari 17 or later) | **File › Add to Dock** |
+
+To remove it, delete it like any other app: long-press the icon on a phone or tablet, or use
+**Uninstall** in the app window's menu on a computer.
+
+Offline, the installed app opens the World Atlas sample and the files you open, but not basemap
+tiles, web data, plugins or the AI Assistant, which need the network. When a new version has been
+published while the app is open, a notice offers to reload into it; otherwise the next launch
+picks it up. Two things to know on iPhone and iPad: iOS gives a web page less memory than a
+desktop browser, so very large rasters may not open, and it can clear the offline copy when the
+device runs short of storage, so the next launch then needs a connection.
+
 To build it yourself, install [Trunk](https://trunkrs.dev), the `wasm32-unknown-unknown` target
 and clang (it compiles the Zstandard decoder used for GeoTIFFs to WebAssembly). Linux
 distributions' clang can; on macOS, Apple's can't, so install `llvm` with Homebrew and put its
@@ -133,7 +174,11 @@ distributions' clang can; on macOS, Apple's can't, so install `llvm` with Homebr
 cd apps/rustgis-web
 trunk serve          # http://127.0.0.1:8772
 trunk build --release   # output in dist/web
+cargo xtask web-pwa ../../dist/web   # add the service worker (offline start), as the deploy does
 ```
+
+The service worker is left out of `trunk serve`, so a development build is never served from a
+stale cache.
 
 ## Fonts
 

@@ -1,6 +1,7 @@
 # ja interface catalog: English<TAB>translation
  by 	 ×
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
+(filtered)	(フィルター適用)
 00:00 UTC	00:00 UTC
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
@@ -14,6 +15,7 @@ A flat scene centred on the view (azimuthal equidistant).	ビューを中心と�
 A globe scene.	地球儀シーン。
 A magnifying lens that follows the pointer.	ポインターに追従する拡大鏡。
 A notebook of text and command cells.	テキスト セルとコマンド セルからなるノートブック。
+A project keeps at least one map	プロジェクトには少なくとも 1 つのマップが必要です
 A projected coordinate system.	投影座標系。
 A report listing the selected layer's records, page after page.	選択したレイヤーのレコードをページごとに一覧表示するレポート。
 A template with the first selected feature's values	最初に選択したフィーチャの値を持つテンプレート
@@ -247,6 +249,7 @@ Checking for updates…	更新を確認しています…
 China	中国
 Choose a band combination to display the raster layer.	ラスター レイヤーを表示するバンドの組み合わせを選択します。
 Choose a contrast stretch for the raster layer.	ラスター レイヤーのコントラスト ストレッチを選択します。
+Choose a delimited text file or a spreadsheet, then pick its columns.	区切りテキストファイルまたはスプレッドシートを選び、次にその列を選択します。
 Choose a model.	モデルを選択してください。
 Choose a resampling type for the raster layer.	ラスター レイヤーのリサンプリング タイプを選択します。
 Choose extra buttons for the Quick Access Toolbar.	クイック アクセス ツールバーに追加するボタンを選択します。
@@ -323,6 +326,7 @@ Color Vision	色覚
 Color Vision Simulator	色覚シミュレーター
 Colormap	カラーマップ
 Colors from the raster's own color table.	ラスター自身のカラー テーブルの色。
+Columns named like longitude/latitude, easting/northing or geometry are picked for you.	longitude/latitude、easting/northing、geometry のような名前の列は自動的に選択されます。
 Combinations from the box above, one per line	上のボックスの値の組み合わせ (1 行に 1 つ)
 Command\nSearch	コマンド\n検索
 command is required	command は必須です
@@ -383,6 +387,7 @@ Create Polygon	ポリゴンの作成
 Create Profile	プロファイルの作成
 Create Thumbnail	サムネイルの作成
 Creates a point inside each input feature.	各入力フィーチャの内部にポイントを作成します。
+Creates points from a table's x and y coordinate fields.	テーブルの X および Y 座標フィールドからポイントを作成します。
 Creates polygons around input features at a given distance.	入力フィーチャの周囲に指定した距離でポリゴンを作成します。
 Cross Section	断面
 Cross Section (2 clicks)	断面 (2 クリック)
@@ -774,6 +779,7 @@ Import Thumbnail	サムネイルのインポート
 Import Web Tool	Web ツールのインポート
 In Beyond	拡大の限界
 In Progress	進行中
+In RustGIS, it can:	RustGIS 内でできること:
 in progress	進行中
 In project	プロジェクト内
 In use	使用中
@@ -802,6 +808,7 @@ Installed	インストール済み
 Installed plugins are kept in {folder}	インストールしたプラグインの保存先: {folder}
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Homebrew、winget、AUR、COPR でインストールした場合は、そちらで更新してください。
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} をインストールしました。[プラグイン] タブにあります。ツールはツール ウィンドウにもあります。
+Installing it downloads Python {version} and the packages it needs from the internet.	インストールすると、Python {version} と必要なパッケージがインターネットからダウンロードされます。
 Interface font: {font}	インターフェイスのフォント：{font}
 Interpolate a surface from points (IDW)	ポイントから表面を内挿 (IDW)
 Invalid: {error}	無効：{error}
@@ -809,6 +816,7 @@ Invert	反転
 Invert color scheme	配色を反転
 Invert the selection.	選択を反転します。
 IS NULL	IS NULL
+It runs: {program}	実行するもの: {program}
 it connects to an address on the internet	インターネット上のアドレスに接続する
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	ユーザー本人専用の操作（プラグイン、スクリプト、タスク、モデル、GeoLibre ランナー）である
 it reads or writes files on this computer	このコンピューター上のファイルを読み書きする
@@ -1067,6 +1075,7 @@ None. Add one by address, or from a basemap plugin.	なし。アドレスで、�
 North	北
 North\nArrow	方位\n記号
 North Polar Stereographic	北極ステレオ図法
+Not sandboxed	サンドボックス外
 not a RustGIS layout	RustGIS レイアウトではありません
 not needed	不要
 Not saved yet	未保存
@@ -1198,6 +1207,7 @@ PMTiles archive	PMTiles アーカイブ
 PMTiles File…	PMTiles ファイル…
 PNG frames (zip)	PNG フレーム (zip)
 PNG image	PNG 画像
+Plugins marked Not sandboxed run as programs on your computer instead, and can do anything you can.	「サンドボックス外」と表示されたプラグインは、コンピューター上のプログラムとして実行され、あなたができることは何でもできます。
 Point	ポイント
 Points	ポイント
 points each	ポイント数 (各)
@@ -1208,6 +1218,7 @@ Polygon (draw)	ポリゴン (描画)
 Polygons	ポリゴン
 Polyline	ポリライン
 Pop-up Mode	ポップアップ モード
+Prepare	準備
 pop_max > 1000000	pop_max > 1000000
 Populated Places	人口集中地
 Portal	ポータル
@@ -1215,6 +1226,7 @@ Portrait	縦向き
 Postprocessing	後処理
 power 2	べき乗 2
 Prepare every layer's geometry for this projection.	この投影法用にすべてのレイヤーのジオメトリを準備します。
+Preparing its Python environment…	Python 環境を準備しています…
 Presentation	プレゼンテーション
 Presentation File	プレゼンテーション ファイル
 Presentation Pane	プレゼンテーション ウィンドウ
@@ -1253,6 +1265,9 @@ Proximity	近接
 Publish	公開
 Publish › Output	公開 › 出力
 Put the layer back as it was then	レイヤーをその時点の状態に戻す
+Python environment failed: {error}	Python 環境の準備に失敗しました: {error}
+Python environment not prepared	Python 環境が準備されていません
+Python environment ready	Python 環境の準備完了
 Quantile	等量
 Quick\nAccess	クイック\nアクセス
 Quick Access Toolbar	クイック アクセス ツールバー
@@ -1307,6 +1322,7 @@ Remove Folder	フォルダーの削除
 Remove From Current Selection	現在の選択から除外
 Remove Keyframe	キーフレームの削除
 Remove Section	セクションの削除
+Remove Table	テーブルの削除
 Remove the last keyframe.	最後のキーフレームを削除します。
 Remove the layer from the map.	マップからレイヤーを削除します。
 Remove Tile Layer	タイル レイヤーの削除
@@ -1636,6 +1652,7 @@ Text	テキスト
 Text Symbol	テキスト シンボル
 The assistant is busy; stop it or wait for it to finish.	アシスタントは処理中です。停止するか、完了するまでお待ちください。
 The assistant wants to run this, and {why}:	アシスタントが次の操作を実行しようとしています（{why}ため、確認が必要です）:
+This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	このプラグインは RustGIS のサンドボックスの外で、コンピューター上のプログラムとして実行されます。ファイルの読み取りや変更、ネットワークの使用、他のプログラムの実行など、あなたができることは何でもできます。作者を信頼できる場合にのみインストールしてください。
 the capture failed unexpectedly	キャプチャが予期せず失敗しました
 the Help tab always shows	[ヘルプ] タブは常に表示されます
 The job covers the map view	ジョブはマップ ビューを対象とします
@@ -1812,7 +1829,11 @@ World, equal-area: true sizes, shapes bend towards the edges.	世界、正積: �
 Worldview	国境
 Write a plugin	プラグインを作成
 X (mm)	X (mm)
+X Field	X フィールド
+XY Table To Point	XY テーブル → ポイント
+XY Table To Point…	XY テーブル → ポイント…
 Y (mm)	Y (mm)
+Y Field	Y フィールド
 Yes	はい
 You have version {version}.	現在のバージョンは {version} です。
 z (m)	z (m)
@@ -1845,6 +1866,8 @@ Zoom to the whole world.	世界全体にズームします。
 Zoom to Tokyo	東京にズーム
 Zoom To World	世界にズーム
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} はインストール後に変更されています。プラグイン マネージャーから再インストールしてください。
+{name} is larger than {mb} MB	{name} は {mb} MB を超えています
+{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} はコンピューター上のプログラムとして実行されます。デスクトップ アプリまたは rustgis-cli が必要です。
 {name} was withdrawn from the plugin registry and has been turned off.	{name} はプラグイン レジストリから取り下げられたため、無効にしました。
 {name} was withdrawn from the plugin registry: {reason}	{name} はプラグイン レジストリから取り下げられました: {reason}
 {name}: the download doesn't match the registry; it wasn't installed.	{name}: ダウンロードした内容がレジストリと一致しないため、インストールしませんでした。
@@ -1856,3 +1879,11 @@ Zoom To World	世界にズーム
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: 使用できるのは HTTPS のアドレス、またはこのコンピューターかネットワーク上の通常の HTTP のみです
 © OpenStreetMap contributors	© OpenStreetMap contributors
 ⌘K	⌘K
+MCP Relay	MCPリレー
+MCP relay stopped	MCPリレーを停止しました
+MCP relay listening on 127.0.0.1:{port}	MCPリレーが127.0.0.1:{port}で待機中
+MCP relay · {n} attached	MCPリレー · {n} 接続中
+Stop MCP relay	MCPリレーを停止
+MCP relay is already listening on 127.0.0.1:{port}; stop it first to use port {asked}	MCPリレーは既に127.0.0.1:{port}で待機中です。ポート{asked}を使うには先に停止してください
+Opening {url}…	{url} を開いています…
+{url}: downloaded after another project was opened, so it wasn't opened	{url}: 別のプロジェクトを開いた後にダウンロードされたため、開きませんでした
