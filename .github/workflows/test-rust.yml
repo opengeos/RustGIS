@@ -22,6 +22,10 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # RUSTFLAGS replaces the `rustflags` in .cargo/config.toml, so Windows repeats the static C
+    # runtime the release builds link.
+    env:
+      RUSTFLAGS: ${{ startsWith(matrix.os, 'windows') && '-D warnings -C target-feature=+crt-static' || '-D warnings' }}
     strategy:
       fail-fast: false
       matrix:

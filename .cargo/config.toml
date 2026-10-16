@@ -8,6 +8,6 @@ PYO3_BUILD_EXTENSION_MODULE = "1"
 
 # Link the C runtime into the Windows programs, so they start on a bare Windows install without
 # the Visual C++ Redistributable (VCRUNTIME140.dll). A RUSTFLAGS environment variable replaces
-# this (CI sets one), so release builds, which set none, are the ones it applies to.
+# this, so the Windows CI tests (.github/workflows/test-rust.yml) repeat the flag in theirs.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
