@@ -81,9 +81,15 @@ jobs:
           tools="$HOME/.dotnet/tools"
           "$tools/wix" extension add --global WixToolset.UI.wixext/5.0.2
           cygpath -w "$tools" >> "$GITHUB_PATH"
-          if ! command -v makensis > /dev/null && [ ! -x "/c/Program Files (x86)/NSIS/makensis.exe" ]; then
-            choco install nsis -y --no-progress
-          fi
+          # The Chocolatey feed times out now and then (504) and choco still exits 0, so retry
+          # and fail here, not later in package.sh with "makensis not found".
+          nsis="/c/Program Files (x86)/NSIS/makensis.exe"
+          for attempt in 1 2 3 4 5; do
+            command -v makensis > /dev/null || [ -x "$nsis" ] && break
+            [ "$attempt" -gt 1 ] && sleep $((attempt * 20))
+            choco install nsis -y --no-progress || true
+          done
+          command -v makensis > /dev/null || [ -x "$nsis" ] || { echo "::error::NSIS did not install"; exit 1; }
 
       # macOS: import the Developer ID certificate into a throwaway keychain and write the
       # App Store Connect API key for notarization. Skipped when the secrets are absent (a
