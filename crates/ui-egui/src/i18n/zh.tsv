@@ -1066,6 +1066,7 @@ Next Page	下一页
 No	否
 No bookmarks yet	暂无书签
 No edits since the project was saved	自工程保存以来没有编辑
+No layers match	没有匹配的图层
 No mask	无掩膜
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	暂无笔记本。使用“分析 › 新建笔记本”新建一个，或使用“添加并打开笔记本”打开一个。
 No offline areas	无离线区域
@@ -1073,7 +1074,6 @@ No other reports	无其他报表
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	未安装任何插件。浏览插件库，或安装 .rgplugin 文件。
 No plugins match.	没有匹配的插件。
 No Pop-ups	无弹出窗口
-No layers match	没有匹配的图层
 No presentations yet. Publish › New Presentation starts one.	暂无演示文稿。使用“发布 › 新建演示文稿”新建一个。
 No relationships (Data Design › Relationships)	无关系（数据设计 › 关系）
 No relationships yet	暂无关系
