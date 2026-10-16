@@ -151,12 +151,13 @@ pub struct Layer {
     /// Each projected geometry's extent, for culling without walking its vertices.
     #[serde(skip)]
     projected_extents: std::sync::Arc<Vec<Extent>>,
-    /// The projected geometry's vertex count.
+    /// The projected geometry's line and ring vertices (those thinning can drop).
     #[serde(skip)]
     projected_vertices: usize,
-    /// Thinned copies of the projected geometry by level, the latest used first (see [`lod`]).
+    /// Thinned copies of the projected geometry by level, the latest used first (see [`lod`]);
+    /// `None` for a level that draws from the full geometry, thinning saving too little there.
     #[serde(skip)]
-    thinned: std::sync::Arc<Vec<(i32, std::sync::Arc<Vec<Option<Geometry>>>)>>,
+    thinned: std::sync::Arc<Vec<(i32, Option<std::sync::Arc<Vec<Option<Geometry>>>>)>>,
     #[serde(skip)]
     projected_rev: u64,
     /// The projection the cache is in.
@@ -367,7 +368,7 @@ impl Layer {
                 self.dataset.features.iter().map(|ft| ft.geometry.as_ref().map(|g| flat.project(g))).collect();
             self.projected_extents =
                 std::sync::Arc::new(projected.iter().map(|g| g.as_ref().map_or(Extent::EMPTY, Geometry::extent)).collect());
-            self.projected_vertices = projected.iter().flatten().map(lod::vertices).sum();
+            self.projected_vertices = projected.iter().flatten().map(lod::thinnable).sum();
             self.projected = std::sync::Arc::new(projected);
             self.thinned = Default::default();
             self.projected_rev = self.geometry_rev;
@@ -395,8 +396,10 @@ impl Layer {
             }
             None => {
                 let t = lod::tolerance(level);
-                let copy = self.projected.iter().map(|g| g.as_ref().map(|g| lod::thin(g, t))).collect();
-                levels.insert(0, (level, std::sync::Arc::new(copy)));
+                let copy: Vec<Option<Geometry>> = self.projected.iter().map(|g| g.as_ref().map(|g| lod::thin(g, t))).collect();
+                let kept: usize = copy.iter().flatten().map(lod::thinnable).sum();
+                let worth = (kept as f64) <= self.projected_vertices as f64 * (1.0 - lod::MIN_SAVING);
+                levels.insert(0, (level, worth.then(|| std::sync::Arc::new(copy))));
                 levels.truncate(lod::LEVELS_KEPT);
             }
         }
@@ -408,7 +411,7 @@ impl Layer {
     pub fn thinned_cache(&self, tol: f64) -> &[Option<Geometry>] {
         let level = lod::level(tol).filter(|_| self.projected_vertices > lod::THIN_ABOVE);
         match level.and_then(|level| self.thinned.iter().find(|(l, _)| *l == level)) {
-            Some((_, g)) if g.len() == self.projected.len() => g,
+            Some((_, Some(g))) if g.len() == self.projected.len() => g,
             _ => &self.projected,
         }
     }
@@ -991,6 +994,22 @@ mod tests {
         l.touch_geometry();
         l.projected();
         assert_eq!(l.thinned_cache(12_000.0).as_ptr(), l.projected_cache().as_ptr());
+    }
+
+    #[test]
+    fn a_level_saving_little_draws_in_full() {
+        // Zoomed in past the vertex spacing, thinning drops nothing: no copy is kept.
+        let flat = projection::Flat::Mercator;
+        let mut l = long_line(lod::THIN_ABOVE + 1000);
+        l.projected();
+        assert_eq!(l.thinned_in(&flat, "mercator", 1.0).as_ptr(), l.projected_cache().as_ptr());
+        // Nor for points, however many.
+        let mut d = Dataset::new("pts", GeometryType::Point, vec![]);
+        let pts = (0..lod::THIN_ABOVE + 10).map(|i| Coord::new(i as f64 * 1e-6, 0.0)).collect();
+        d.push(Some(Geometry::MultiPoint(pts)), vec![]);
+        let mut p = Layer::new(2, d);
+        p.projected();
+        assert_eq!(p.thinned_in(&flat, "mercator", 1e6).as_ptr(), p.projected_cache().as_ptr());
     }
 
     #[test]

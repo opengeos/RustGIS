@@ -783,6 +783,8 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
             layer.projected_cache().iter().map(Option::as_ref).collect()
         };
         // What the features draw from, and their extents for culling (on the flat map, cached).
+        // Only the fills and strokes below draw thinned: the selection, labels, aggregation and
+        // extrusion keep `geoms`, the full geometry, for their exact positions.
         let drawn: Vec<Option<&Geometry>> =
             if globe.is_some() { geoms.clone() } else { layer.thinned_cache(thin_tol).iter().map(Option::as_ref).collect() };
         let extents = if globe.is_some() { &[][..] } else { layer.projected_extents() };

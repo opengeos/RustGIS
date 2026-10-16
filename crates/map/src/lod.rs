@@ -11,8 +11,12 @@ use rustgis_data::{Coord, Geometry};
 /// The tolerance, in device pixels, a thinned copy keeps within.
 pub const THIN_PX: f64 = 0.3;
 
-/// Layers with fewer vertices than this are always drawn from the full geometry.
+/// Layers with fewer line and ring vertices than this are always drawn from the full geometry.
 pub const THIN_ABOVE: usize = 200_000;
+
+/// A level is kept as a copy only when it drops at least this share of the vertices; otherwise
+/// it draws from the full geometry (zoomed in past the vertex spacing, or many tiny features).
+pub const MIN_SAVING: f64 = 0.25;
 
 /// How many levels a layer keeps.
 pub const LEVELS_KEPT: usize = 3;
@@ -29,12 +33,26 @@ pub fn tolerance(level: i32) -> f64 {
 }
 
 /// A copy of `g` keeping, along each line and ring, only vertices at least `tol` (measured as
-/// |dx| + |dy|) from the last vertex kept, and always each one's first and last.
+/// |dx| + |dy|) from the last vertex kept, and always each one's first and last. A ring that
+/// would keep fewer than four vertices stays whole, so a small polygon still has an area to fill.
 pub fn thin(g: &Geometry, tol: f64) -> Geometry {
     match g {
         Geometry::Point(_) | Geometry::MultiPoint(_) => g.clone(),
         Geometry::Line(parts) => Geometry::Line(parts.iter().map(|p| thin_run(p, tol)).collect()),
-        Geometry::Polygon(polys) => Geometry::Polygon(polys.iter().map(|rings| rings.iter().map(|r| thin_run(r, tol)).collect()).collect()),
+        Geometry::Polygon(polys) => Geometry::Polygon(
+            polys
+                .iter()
+                .map(|rings| {
+                    rings
+                        .iter()
+                        .map(|r| {
+                            let kept = thin_run(r, tol);
+                            if kept.len() < 4 { r.clone() } else { kept }
+                        })
+                        .collect()
+                })
+                .collect(),
+        ),
     }
 }
 
@@ -56,6 +74,15 @@ fn thin_run(run: &[Coord], tol: f64) -> Vec<Coord> {
         }
     }
     out
+}
+
+/// The number of vertices thinning can drop: those of its lines and rings (points are drawn
+/// as they are).
+pub fn thinnable(g: &Geometry) -> usize {
+    match g {
+        Geometry::Point(_) | Geometry::MultiPoint(_) => 0,
+        _ => vertices(g),
+    }
 }
 
 /// The number of vertices in a geometry.
@@ -92,6 +119,14 @@ mod tests {
         assert_eq!(kept.len(), 4);
         assert!(kept[1].x.is_nan());
         assert_eq!(kept[2], Coord::new(0.02, 0.0));
+    }
+
+    #[test]
+    fn a_small_ring_stays_whole() {
+        let ring = vec![Coord::new(0.0, 0.0), Coord::new(0.1, 0.0), Coord::new(0.1, 0.1), Coord::new(0.0, 0.1), Coord::new(0.0, 0.0)];
+        let g = Geometry::Polygon(vec![vec![ring.clone()]]);
+        assert_eq!(thin(&g, 1.0), g);
+        assert_eq!(thinnable(&Geometry::MultiPoint(ring)), 0);
     }
 
     #[test]
