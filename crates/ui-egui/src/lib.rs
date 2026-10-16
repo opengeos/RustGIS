@@ -30,6 +30,7 @@ mod portalsui;
 mod reportpane;
 mod ribbon;
 mod s3ui;
+mod searchbox;
 mod sourcespane;
 mod sqlpane;
 mod stacui;
@@ -318,6 +319,8 @@ pub struct UiState {
     pub opendata: opendataui::State,
     /// Find Place searches and Geocode Addresses runs under way.
     pub geocode: geocodeui::State,
+    /// The search box at the foot of the left pane.
+    pub search: searchbox::State,
     /// The Data Sources pane's boxes, and the sources' generation last kept in the preferences.
     pub sources: sourcespane::State,
     pub sources_saved: u64,
@@ -379,6 +382,7 @@ impl Default for UiState {
             catalogs: Default::default(),
             opendata: Default::default(),
             geocode: Default::default(),
+            search: Default::default(),
             sources: Default::default(),
             sources_saved: 0,
             zarr: Default::default(),

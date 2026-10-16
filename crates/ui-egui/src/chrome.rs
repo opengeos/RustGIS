@@ -335,7 +335,9 @@ fn sep(ui: &mut Ui, t: &Tokens) {
 
 /// Global keyboard shortcuts.
 pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
-    let typing = ctx.egui_wants_keyboard_input();
+    // The search box was typed in until egui took its focus away on Escape: that Escape clears
+    // the box, not the tool.
+    let typing = ctx.egui_wants_keyboard_input() || app.ui.search.had_focus;
     let cmd = Modifiers::COMMAND;
     let mut run: Vec<(&str, Value)> = Vec::new();
     ctx.input_mut(|i| {

@@ -1109,6 +1109,13 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         p.rect_filled(bg, CornerRadius::same(12), Color32::from_black_alpha(160));
         p.galley(bg.center() - g.size() / 2.0, g, Color32::WHITE);
     }
+    // The place or coordinate the search box went to.
+    if let Some((c, name)) = &app.ui.search.marker
+        && let Some(sp) = lonlat_to_screen(app, rect, *c)
+        && rect.contains(sp)
+    {
+        crate::searchbox::paint_marker(p, sp, name, t);
+    }
     scale_bar(app, p, rect, t);
     north_arrow(p, rect, t);
     // Attribution.

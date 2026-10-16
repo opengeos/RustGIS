@@ -23,6 +23,7 @@ pub mod project;
 pub mod raster;
 pub mod report;
 pub mod s3;
+pub mod search;
 pub mod select;
 pub mod service;
 pub mod share;
@@ -45,6 +46,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(project::commands());
     v.extend(navigate::commands());
     v.extend(geocode::commands());
+    v.extend(search::commands());
     v.extend(tiles::commands());
     v.extend(service::commands());
     v.extend(s3::commands());

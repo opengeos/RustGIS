@@ -5,7 +5,8 @@
 //! The script is JSON lines: `{"cmd": id, "params": {...}}` runs a command (ui.* included),
 //! `{"shot": "/abs/out.png"}` saves the window, `{"steps": n}` runs frames, `{"sleep": ms}` runs frames
 //! for that long, `{"click": label}` clicks the first widget whose label contains the text (with
-//! `"exact": true`, whose whole label is the text), `{"dark": true}` switches theme,
+//! `"exact": true`, whose whole label is the text), `{"type": text}` types into the focused box,
+//! `{"key": "Enter"}` presses a key (egui's key names), `{"dark": true}` switches theme,
 //! `{"drag": [x, y, dx, dy]}` presses the pointer at (x, y) and moves it by (dx, dy), holding
 //! it (shots then catch the map mid-drag; `{"release": true}` lets go),
 //! `{"titlebar": {"left_inset": 80, "height": 34}}`
@@ -128,6 +129,19 @@ fn main() {
                     pressed: false,
                     modifiers: egui::Modifiers::NONE,
                 });
+            }
+            for _ in 0..3 {
+                harness.step();
+            }
+        } else if let Some(text) = l.get("type").and_then(|v| v.as_str()) {
+            harness.event(egui::Event::Text(text.to_string()));
+            for _ in 0..3 {
+                harness.step();
+            }
+        } else if let Some(k) = l.get("key").and_then(|v| v.as_str()) {
+            match egui::Key::from_name(k) {
+                Some(key) => harness.key_press(key),
+                None => eprintln!("no key named '{k}'"),
             }
             for _ in 0..3 {
                 harness.step();
