@@ -1007,7 +1007,8 @@ fn markdown(ui: &mut Ui, text: &str, t: &Tokens) {
             continue;
         }
         let trimmed = line.trim_start();
-        let indent = (line.len() - trimmed.len()) as f32 * 4.0;
+        // A few levels at most: a reply indented further would push its text out of the pane.
+        let indent = ((line.len() - trimmed.len()) as f32 * 4.0).min(48.0);
         if trimmed.is_empty() {
             ui.add_space(4.0);
         } else if let Some(h) = ["### ", "## ", "# "].iter().find_map(|p| trimmed.strip_prefix(p)) {
@@ -1448,6 +1449,16 @@ mod tests {
 
     /// The right pane's width with `entries` in the conversation and `model` as the model's name.
     fn pane_width(entries: Vec<Entry>, model: &str) -> f32 {
+        let h = chat(entries, model);
+        right_pane(&h).width()
+    }
+
+    fn right_pane(h: &egui_kittest::Harness<'_, RustGisApp>) -> egui::Rect {
+        egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("right_pane")).unwrap().outer_rect
+    }
+
+    /// The window with the assistant open and `entries` in the conversation.
+    fn chat(entries: Vec<Entry>, model: &str) -> egui_kittest::Harness<'static, RustGisApp> {
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
@@ -1468,7 +1479,44 @@ mod tests {
         for _ in 0..6 {
             h.step();
         }
-        egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("right_pane")).unwrap().size().x
+        h
+    }
+
+    /// #307: a reply wider than the pane pushed its edge off the window, so the map covered the
+    /// chat and the edge could not be dragged. The pane stays in the window and keeps resizing.
+    #[test]
+    fn wide_reply_keeps_the_pane_in_the_window_and_resizable() {
+        let sentence = "The assistant ran the buffer tool on the cities layer and added the result to the map. ".repeat(4);
+        let mut h = chat(vec![Entry::Assistant(format!("{}- {sentence}", " ".repeat(400)))], "m");
+        for _ in 0..20 {
+            h.step();
+        }
+        let before = right_pane(&h);
+        let window = h.ctx.content_rect();
+        assert!(before.max.x <= window.max.x + 0.5, "the pane's edge left the window: {before:?} in {window:?}");
+        // Drag the pane's edge 150 points towards the map (grabbed just inside the pane, as the
+        // map's own drag sense is on top at the boundary).
+        let edge = egui::pos2(before.min.x + 2.0, before.center().y);
+        h.hover_at(edge);
+        h.step();
+        h.drag_at(edge);
+        h.step();
+        for dx in [50.0, 100.0, 150.0] {
+            h.hover_at(edge - vec2(dx, 0.0));
+            h.step();
+        }
+        h.event(egui::Event::PointerButton {
+            pos: edge - vec2(150.0, 0.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        for _ in 0..4 {
+            h.step();
+        }
+        let after = right_pane(&h);
+        assert!((after.min.x - (edge.x - 150.0)).abs() < 3.0, "the pane did not follow the drag: {before:?} to {after:?}");
+        assert!(after.max.x <= window.max.x + 0.5, "the pane's edge left the window: {after:?} in {window:?}");
     }
 
     #[test]
@@ -1481,6 +1529,7 @@ mod tests {
             ("a numbered item", Entry::Assistant(format!("1. {sentence}")), "m"),
             ("a quote", Entry::Assistant(format!("> {sentence}")), "m"),
             ("a word with no spaces", Entry::Assistant(format!("- {}", "x".repeat(400))), "m"),
+            ("a deeply indented item", Entry::Assistant(format!("{}- {sentence}", " ".repeat(200))), "m"),
             ("the user's message", Entry::User(sentence.clone()), "m"),
             (
                 "a tool call",

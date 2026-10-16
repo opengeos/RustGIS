@@ -30,62 +30,72 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     }
     if let Some(right) = app.ui.right {
         egui::Panel::right("right_pane").resizable(true).default_size(320.0).size_range(260.0..=560.0).frame(frame).show(ui, |ui| {
-            let (title, close) = match right {
-                RightPane::Geoprocessing => ("Tools", "ui.pane.geoprocessing"),
-                RightPane::Symbology => ("Symbology", "ui.pane.symbology"),
-                RightPane::History => ("History", "ui.pane.history"),
-                RightPane::Details => ("Details", "ui.pane.details"),
-                RightPane::Editing => ("Editing", "ui.pane.editing"),
-                RightPane::Design => ("Data Design", "ui.pane.design"),
-                RightPane::Workflows => ("Workflows", "ui.pane.workflows"),
-                RightPane::Script => ("Script", "ui.pane.script"),
-                RightPane::Tasks => ("Tasks", "ui.pane.tasks"),
-                RightPane::Jobs => ("Workflow Manager", "ui.pane.jobs"),
-                RightPane::Profile => ("Profile", "ui.pane.profile"),
-                RightPane::Diagnostics => ("Diagnostic Monitor", "ui.pane.diagnostics"),
-                RightPane::Infographics => ("Infographics", "ui.pane.infographics"),
-                RightPane::Report => ("Report", "ui.pane.report"),
-                RightPane::Presentation => ("Presentation", "ui.pane.presentation"),
-                RightPane::Notebook => ("Notebook", "ui.pane.notebook"),
-                RightPane::Assistant => ("AI Assistant", "ui.pane.assistant"),
-                RightPane::Shares => ("Shared Items", "ui.pane.shares"),
-                RightPane::Sql => ("SQL", "ui.pane.sql"),
-            };
-            pane_header(app, ui, tl!(title), close, &t);
-            // The chat lays out its own scrolling, with the message box kept at the bottom.
-            if right == RightPane::Assistant {
-                crate::assistantpane::show(app, ui, &t);
-                return;
-            }
-            // The SQL pane scrolls its own results sideways.
-            if right == RightPane::Sql {
-                crate::sqlpane::show(app, ui, &t);
-                return;
-            }
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| match right {
-                    RightPane::Geoprocessing => geoprocessing(app, ui, &t),
-                    RightPane::Symbology => symbology(app, ui, &t),
-                    RightPane::History => history(app, ui, &t),
-                    RightPane::Details => details(app, ui, &t),
-                    RightPane::Editing => crate::editpanes::editing(app, ui, &t),
-                    RightPane::Design => crate::editpanes::design(app, ui, &t),
-                    RightPane::Workflows => crate::analysispane::workflows(app, ui, &t),
-                    RightPane::Script => crate::analysispane::script(app, ui, &t),
-                    RightPane::Tasks => crate::workspacepanes::tasks(app, ui, &t),
-                    RightPane::Jobs => crate::workspacepanes::jobs(app, ui, &t),
-                    RightPane::Profile => crate::workspacepanes::profile(app, ui, &t),
-                    RightPane::Diagnostics => crate::workspacepanes::diagnostics(app, ui, &t),
-                    RightPane::Infographics => crate::workspacepanes::infographics(app, ui, &t),
-                    RightPane::Report => crate::reportpane::report(app, ui, &t),
-                    RightPane::Presentation => crate::docpanes::presentation(app, ui, &t),
-                    RightPane::Notebook => crate::docpanes::notebook(app, ui, &t),
-                    RightPane::Assistant | RightPane::Sql => {}
-                    RightPane::Shares => crate::docpanes::shares(app, ui, &t),
-                });
-            });
+            // The pane is as wide as the user made it. Content wider than that is clipped, never
+            // reported to the panel: egui would keep the panel's edge where the content ends, off
+            // the window, and give the map the room it no longer covers (#307).
+            let rect = ui.available_rect_before_wrap();
+            let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+            right_pane(app, &mut body, right, &t);
+            ui.advance_cursor_after_rect(rect);
         });
     }
+}
+
+fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
+    let (title, close) = match right {
+        RightPane::Geoprocessing => ("Tools", "ui.pane.geoprocessing"),
+        RightPane::Symbology => ("Symbology", "ui.pane.symbology"),
+        RightPane::History => ("History", "ui.pane.history"),
+        RightPane::Details => ("Details", "ui.pane.details"),
+        RightPane::Editing => ("Editing", "ui.pane.editing"),
+        RightPane::Design => ("Data Design", "ui.pane.design"),
+        RightPane::Workflows => ("Workflows", "ui.pane.workflows"),
+        RightPane::Script => ("Script", "ui.pane.script"),
+        RightPane::Tasks => ("Tasks", "ui.pane.tasks"),
+        RightPane::Jobs => ("Workflow Manager", "ui.pane.jobs"),
+        RightPane::Profile => ("Profile", "ui.pane.profile"),
+        RightPane::Diagnostics => ("Diagnostic Monitor", "ui.pane.diagnostics"),
+        RightPane::Infographics => ("Infographics", "ui.pane.infographics"),
+        RightPane::Report => ("Report", "ui.pane.report"),
+        RightPane::Presentation => ("Presentation", "ui.pane.presentation"),
+        RightPane::Notebook => ("Notebook", "ui.pane.notebook"),
+        RightPane::Assistant => ("AI Assistant", "ui.pane.assistant"),
+        RightPane::Shares => ("Shared Items", "ui.pane.shares"),
+        RightPane::Sql => ("SQL", "ui.pane.sql"),
+    };
+    pane_header(app, ui, tl!(title), close, t);
+    // The chat lays out its own scrolling, with the message box kept at the bottom.
+    if right == RightPane::Assistant {
+        crate::assistantpane::show(app, ui, t);
+        return;
+    }
+    // The SQL pane scrolls its own results sideways.
+    if right == RightPane::Sql {
+        crate::sqlpane::show(app, ui, t);
+        return;
+    }
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| match right {
+            RightPane::Geoprocessing => geoprocessing(app, ui, t),
+            RightPane::Symbology => symbology(app, ui, t),
+            RightPane::History => history(app, ui, t),
+            RightPane::Details => details(app, ui, t),
+            RightPane::Editing => crate::editpanes::editing(app, ui, t),
+            RightPane::Design => crate::editpanes::design(app, ui, t),
+            RightPane::Workflows => crate::analysispane::workflows(app, ui, t),
+            RightPane::Script => crate::analysispane::script(app, ui, t),
+            RightPane::Tasks => crate::workspacepanes::tasks(app, ui, t),
+            RightPane::Jobs => crate::workspacepanes::jobs(app, ui, t),
+            RightPane::Profile => crate::workspacepanes::profile(app, ui, t),
+            RightPane::Diagnostics => crate::workspacepanes::diagnostics(app, ui, t),
+            RightPane::Infographics => crate::workspacepanes::infographics(app, ui, t),
+            RightPane::Report => crate::reportpane::report(app, ui, t),
+            RightPane::Presentation => crate::docpanes::presentation(app, ui, t),
+            RightPane::Notebook => crate::docpanes::notebook(app, ui, t),
+            RightPane::Assistant | RightPane::Sql => {}
+            RightPane::Shares => crate::docpanes::shares(app, ui, t),
+        });
+    });
 }
 
 fn pane_header(app: &mut RustGisApp, ui: &mut Ui, title: &str, close: &str, t: &Tokens) {
