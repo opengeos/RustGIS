@@ -600,19 +600,39 @@ fn web_basemaps(ui: &mut Ui, app: &mut RustGisApp, t: &Tokens) {
         }
     });
     ui.add_space(4.0);
-    if rustgis_engine::plugins::get(BASEMAPS_PLUGIN).is_some() {
-        ui.label(egui::RichText::new(tl!("More basemaps are on the Basemaps tab.")).weak().small());
+    // The plugin's tab when it shows; else the Plugin Manager, to turn the plugin on or install it.
+    let tab = plugin_tab_id(BASEMAPS_PLUGIN);
+    let (ask, link, hint, then) = if plugin_tabs(app).iter().any(|(id, _)| *id == tab) {
+        (tl!("More basemaps:"), tl!("Open the Basemaps tab"), tl!("The Basemaps plugin's tab of public basemaps."), None)
+    } else if rustgis_engine::plugins::get(BASEMAPS_PLUGIN).is_some() {
+        (
+            tl!("More basemaps:"),
+            tl!("Turn on the Basemaps plugin"),
+            tl!("It's installed but turned off: turn it on in the Plugin Manager."),
+            Some(json!({"open": true, "tab": "installed"})),
+        )
     } else {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.label(egui::RichText::new(tl!("Want more basemaps?")).weak().small());
-            let link = ui.add(egui::Link::new(egui::RichText::new(tl!("Install the Basemaps plugin")).small().color(t.accent)));
-            if link.on_hover_text(tl!("OpenStreetMap, Esri, USGS, NASA and more, from the plugin registry.")).clicked() {
-                let _ = app.run("ui.plugins", json!({"open": true, "tab": "browse", "filter": BASEMAPS_PLUGIN}));
-                ui.close();
+        (
+            tl!("Want more basemaps?"),
+            tl!("Install the Basemaps plugin"),
+            tl!("OpenStreetMap, Esri, USGS, NASA and more, from the plugin registry."),
+            Some(json!({"open": true, "tab": "browse", "filter": BASEMAPS_PLUGIN})),
+        )
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(egui::RichText::new(ask).weak().small());
+        let resp = ui.add(egui::Link::new(egui::RichText::new(link).small().color(t.accent)));
+        if resp.on_hover_text(hint).clicked() {
+            match then {
+                Some(p) => {
+                    let _ = app.run("ui.plugins", p);
+                }
+                None => app.ui.tab = tab.clone(),
             }
-        });
-    }
+            ui.close();
+        }
+    });
 }
 
 /// The map's web tile layers (top first): shown, opacity, order and removal, and adding one.
