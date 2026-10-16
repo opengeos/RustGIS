@@ -113,12 +113,16 @@ While the globe turns or zooms, the map is drawn flat once and laid over the sph
 graphics card, so it moves smoothly whatever the basemap; labels come back, and the map is
 drawn exactly, as soon as it stops.
 
+The globe hangs in dark space, in the light theme too, with stars around it and now and then a
+shooting star passing behind it. **View › Visual Effect › Stars** turns them off (exports show
+the stars but never the shooting stars).
+
 ## View effects
 
 ![Dark mode over Europe on the Midnight basemap, with the View tab open](https://assets.rustgis.app/images/dark.webp)
 
 The View tab adds effects drawn over the map: **Illumination** (day and night shading for a time,
-with twilight), **Weather** (haze, fog, rain, snow), **Visual Effect** (vignette, edges), **Camera
+with twilight), **Weather** (haze, fog, rain, snow), **Visual Effect** (vignette, edges, the stars around the globe), **Camera
 Effect** (tilt-shift blur, film grain) and **Postprocessing** (brightness, contrast, saturation,
 sepia). The **Color Vision** simulator shows the map as people with protanopia, deuteranopia,
 tritanopia or achromatopsia see it (on screen only; exports are untouched).
