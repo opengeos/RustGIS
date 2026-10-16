@@ -107,6 +107,8 @@ pub struct MapView {
     last_render: f64,
     /// The map drawn flat and laid over the globe while it moves.
     drape: crate::globe_drape::GlobeDrape,
+    /// Shooting stars around the globe.
+    comets: crate::comets::Comets,
 }
 
 impl Default for MapView {
@@ -139,6 +141,7 @@ impl Default for MapView {
             tile_errors: std::collections::HashSet::new(),
             last_render: -10.0,
             drape: Default::default(),
+            comets: Default::default(),
         }
     }
 }
@@ -401,6 +404,16 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     };
     if let Some(tex) = app.map.texture.as_ref().filter(|_| !draped) {
         painter.image(tex.id(), tex_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    }
+    // Shooting stars, while space shows around the globe.
+    let g = Globe::new(&cam, w, h);
+    let (gx, gy) = g.center();
+    let space = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().any(|&(x, y)| (x - gx).hypot(y - gy) > g.disc_radius());
+    if globe_view && space && app.session.map().view.effects.stars {
+        let wait = app.map.comets.paint(&painter, rect, &g, time);
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(wait.clamp(0.0, 60.0)));
+    } else {
+        app.map.comets.clear();
     }
     // Labels (moved with the texture; hidden while zooming, and while the globe moves, where
     // re-placing them every frame would make them flicker).

@@ -13,6 +13,7 @@ mod assistantpane;
 mod backstage;
 mod catalogsui;
 mod chrome;
+mod comets;
 mod cswui;
 mod dialogs;
 mod docpanes;
