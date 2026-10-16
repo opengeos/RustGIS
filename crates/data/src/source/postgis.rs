@@ -28,6 +28,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Tables with an estimated row count above this aren't counted exactly when opened.
 const EXACT_COUNT_BELOW: f64 = 2_000_000.0;
 
+/// How long counting or measuring a table when it opens may take (one never analyzed has no
+/// estimate, and could be large): past it the count or extent is left unknown.
+const PROBE_TIMEOUT: &str = "10s";
+
 /// A geometry (or geography) column of a table or view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Table {
@@ -87,7 +91,6 @@ fn family_of(kind: &str) -> Option<Family> {
     } else if k.starts_with("LINESTRING") || k.starts_with("CIRCULARSTRING") || k.starts_with("COMPOUNDCURVE") || k.starts_with("CURVE") {
         Some(Family::Lines)
     } else if k.starts_with("POLYGON")
-        || k.starts_with("CURVEPOLYGON")
         || k.starts_with("SURFACE")
         || k.starts_with("TRIANGLE")
         || k.starts_with("TIN")
@@ -125,16 +128,17 @@ fn err(e: postgres::Error) -> DataError {
 // Connections
 
 /// How the connection is protected (libpq's `sslmode`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Tls {
-    /// No TLS.
+    /// No TLS (`disable`, and `allow`, which libpq tries without TLS first).
     Disable,
     /// TLS when the server has it (`prefer`, libpq's default) or always (`require`), without
-    /// checking the server's certificate, as libpq does.
+    /// checking the server's certificate, as libpq does: encrypted, but not proof against a
+    /// server in the middle. `verify-full` is.
     Unverified,
-    /// TLS with the server's certificate checked against the web's roots (`verify-ca`,
-    /// `verify-full`).
-    Verified,
+    /// TLS with the server's certificate checked (`verify-ca`, `verify-full`): against the
+    /// certificates of `sslrootcert` (a private authority), else the web's roots.
+    Verified(Option<std::path::PathBuf>),
 }
 
 /// A connection to a server, shared by every layer read from it (a database of many tables
@@ -150,7 +154,7 @@ impl Conn {
     fn with<T>(&self, f: impl FnOnce(&mut postgres::Client) -> std::result::Result<T, postgres::Error>) -> Result<T> {
         let mut guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
         if guard.as_ref().is_none_or(postgres::Client::is_closed) {
-            *guard = Some(open_client(&self.config, self.tls)?);
+            *guard = Some(open_client(&self.config, &self.tls)?);
         }
         let client = guard.as_mut().ok_or_else(|| DataError::Format("not connected".into()))?;
         let r = f(client);
@@ -159,12 +163,30 @@ impl Conn {
         }
         r.map_err(err)
     }
+
+    /// Runs `f` in a read-only transaction seeing one snapshot of the database (`REPEATABLE
+    /// READ`), its statements timing out after `timeout` when given.
+    fn snapshot<T>(
+        &self,
+        timeout: Option<&str>,
+        f: impl FnOnce(&mut postgres::Transaction<'_>) -> std::result::Result<T, postgres::Error>,
+    ) -> Result<T> {
+        self.with(|c| {
+            let mut t = c.build_transaction().isolation_level(postgres::IsolationLevel::RepeatableRead).read_only(true).start()?;
+            if let Some(timeout) = timeout {
+                t.batch_execute(&format!("SET LOCAL statement_timeout = '{timeout}'"))?;
+            }
+            let r = f(&mut t)?;
+            t.commit()?;
+            Ok(r)
+        })
+    }
 }
 
-fn open_client(config: &postgres::Config, tls: Tls) -> Result<postgres::Client> {
+fn open_client(config: &postgres::Config, tls: &Tls) -> Result<postgres::Client> {
     let mut client = match tls {
         Tls::Disable => config.connect(postgres::NoTls),
-        Tls::Unverified | Tls::Verified => config.connect(tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config(tls)?)),
+        Tls::Unverified | Tls::Verified(_) => config.connect(tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config(tls)?)),
     }
     .map_err(|e| match e.as_db_error() {
         Some(db) => DataError::Format(db.message().to_string()),
@@ -180,13 +202,25 @@ fn open_client(config: &postgres::Config, tls: Tls) -> Result<postgres::Client> 
     Ok(client)
 }
 
-fn rustls_config(tls: Tls) -> Result<rustls::ClientConfig> {
+fn rustls_config(tls: &Tls) -> Result<rustls::ClientConfig> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
         .map_err(|e| DataError::Format(format!("TLS: {e}")))?;
     Ok(match tls {
-        Tls::Verified => {
+        Tls::Verified(Some(file)) => {
+            use rustls::pki_types::{CertificateDer, pem::PemObject};
+            let bad = |e: String| DataError::Format(format!("sslrootcert {}: {e}", file.display()));
+            let mut roots = rustls::RootCertStore::empty();
+            for cert in CertificateDer::pem_file_iter(file).map_err(|e| bad(e.to_string()))? {
+                roots.add(cert.map_err(|e| bad(e.to_string()))?).map_err(|e| bad(e.to_string()))?;
+            }
+            if roots.is_empty() {
+                return Err(bad("no certificates".into()));
+            }
+            builder.with_root_certificates(roots).with_no_client_auth()
+        }
+        Tls::Verified(None) => {
             let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
             builder.with_root_certificates(roots).with_no_client_auth()
         }
@@ -234,9 +268,12 @@ impl rustls::client::danger::ServerCertVerifier for Unchecked {
     }
 }
 
-/// Live connections by their connection string, so layers of one server share one.
-fn live() -> &'static Mutex<Vec<(String, Weak<Conn>)>> {
-    static L: OnceLock<Mutex<Vec<(String, Weak<Conn>)>>> = OnceLock::new();
+/// A live connection: its connection string and the password it was opened with.
+type Live = (String, Option<String>, Weak<Conn>);
+
+/// Live connections, so layers of one server share one.
+fn live() -> &'static Mutex<Vec<Live>> {
+    static L: OnceLock<Mutex<Vec<Live>>> = OnceLock::new();
     L.get_or_init(Default::default)
 }
 
@@ -248,11 +285,6 @@ fn live() -> &'static Mutex<Vec<(String, Weak<Conn>)>> {
 /// database), libpq's `PGPASSWORD` and password file serve too; a project opening never hands
 /// them to the server it names.
 pub fn connect(dsn: &str, ask: bool) -> Result<Arc<Conn>> {
-    let mut live = live().lock().unwrap_or_else(|e| e.into_inner());
-    live.retain(|(_, w)| w.strong_count() > 0);
-    if let Some(c) = live.iter().find(|(d, _)| d == dsn).and_then(|(_, w)| w.upgrade()) {
-        return Ok(c);
-    }
     let (mut config, tls) = config(dsn)?;
     let password = super::duckdb::remembered_password(dsn).or_else(|| {
         if !ask {
@@ -260,12 +292,26 @@ pub fn connect(dsn: &str, ask: bool) -> Result<Arc<Conn>> {
         }
         std::env::var("PGPASSWORD").ok().filter(|p| !p.is_empty()).or_else(|| pgpass(&config))
     });
-    if let Some(p) = password {
+    // A connection opened with another password (one given since) isn't shared.
+    let find = |live: &mut Vec<Live>| {
+        live.retain(|(_, _, w)| w.strong_count() > 0);
+        live.iter().find(|(d, p, _)| d == dsn && *p == password).and_then(|(_, _, w)| w.upgrade())
+    };
+    if let Some(c) = find(&mut live().lock().unwrap_or_else(|e| e.into_inner())) {
+        return Ok(c);
+    }
+    if let Some(p) = &password {
         config.password(p);
     }
-    let client = open_client(&config, tls)?;
+    // Connecting can take as long as the timeout: other connections don't wait for it.
+    let client = open_client(&config, &tls)?;
+    let mut live = live().lock().unwrap_or_else(|e| e.into_inner());
+    // Another layer may have connected meanwhile; this one's client then just closes.
+    if let Some(c) = find(&mut live) {
+        return Ok(c);
+    }
     let conn = Arc::new(Conn { config, tls, client: Mutex::new(Some(client)) });
-    live.push((dsn.to_string(), Arc::downgrade(&conn)));
+    live.push((dsn.to_string(), password, Arc::downgrade(&conn)));
     Ok(conn)
 }
 
@@ -276,6 +322,7 @@ fn config(dsn: &str) -> Result<(postgres::Config, Tls)> {
     let t = dsn.trim();
     let lower = t.to_ascii_lowercase();
     let mut sslmode = None;
+    let mut rootcert = None;
     let mut config = if lower.starts_with("postgresql://") || lower.starts_with("postgres://") {
         // `sslmode=verify-…` is libpq's, not the client's: taken out of the query here.
         let (base, query) = t.split_once('?').unwrap_or((t, ""));
@@ -283,6 +330,7 @@ fn config(dsn: &str) -> Result<(postgres::Config, Tls)> {
         for kv in query.split('&').filter(|kv| !kv.is_empty()) {
             match kv.split_once('=') {
                 Some((k, v)) if k.eq_ignore_ascii_case("sslmode") => sslmode = Some(v.to_ascii_lowercase()),
+                Some((k, v)) if k.eq_ignore_ascii_case("sslrootcert") => rootcert = Some(super::pgconn::percent_decode(v)),
                 // libpq options this client has no use for (certificates are checked against the
                 // web's roots).
                 Some((k, _)) if IGNORED.iter().any(|i| k.eq_ignore_ascii_case(i)) => {}
@@ -331,6 +379,7 @@ fn config(dsn: &str) -> Result<(postgres::Config, Tls)> {
                     }
                 }
                 "sslmode" => sslmode = Some(v.to_ascii_lowercase()),
+                "sslrootcert" => rootcert = Some(v),
                 _ => {}
             }
         }
@@ -363,12 +412,15 @@ fn config(dsn: &str) -> Result<(postgres::Config, Tls)> {
     let mode = sslmode.or_else(|| env("PGSSLMODE").map(|m| m.to_ascii_lowercase()));
     let tls = match mode.as_deref() {
         Some("disable") | Some("allow") => Tls::Disable,
-        Some("verify-ca") | Some("verify-full") => Tls::Verified,
+        // libpq's `sslrootcert=system` is the system's roots: the web's, here.
+        Some("verify-ca") | Some("verify-full") => Tls::Verified(
+            rootcert.or_else(|| env("PGSSLROOTCERT")).filter(|r| !r.is_empty() && r != "system").map(std::path::PathBuf::from),
+        ),
         Some("require") => Tls::Unverified,
         Some("prefer") | None => Tls::Unverified,
         Some(other) => return Err(DataError::Format(format!("the connection: sslmode '{other}'"))),
     };
-    config.ssl_mode(match (tls, mode.as_deref()) {
+    config.ssl_mode(match (&tls, mode.as_deref()) {
         (Tls::Disable, _) => postgres::config::SslMode::Disable,
         (_, Some("prefer") | None) => postgres::config::SslMode::Prefer,
         _ => postgres::config::SslMode::Require,
@@ -377,7 +429,7 @@ fn config(dsn: &str) -> Result<(postgres::Config, Tls)> {
 }
 
 /// libpq connection options a `postgresql://` address may carry that this client leaves out.
-const IGNORED: &[&str] = &["sslrootcert", "sslcert", "sslkey", "sslcrl", "gssencmode", "sslcompression", "passfile", "sslpassword"];
+const IGNORED: &[&str] = &["sslcert", "sslkey", "sslcrl", "gssencmode", "sslcompression", "passfile", "sslpassword"];
 
 /// The password for a connection in libpq's password file (`PGPASSFILE`, else `~/.pgpass`, or
 /// `%APPDATA%\postgresql\pgpass.conf`), which libpq ignores when others can read it.
@@ -545,7 +597,8 @@ impl std::fmt::Debug for PostgisSource {
 fn field_cast(ty: &str) -> Option<(FieldType, &'static str)> {
     match ty {
         "int2" | "int4" | "int8" | "oid" => Some((FieldType::Integer, "int8")),
-        "float4" | "float8" | "numeric" | "money" => Some((FieldType::Double, "float8")),
+        "float4" | "float8" | "numeric" => Some((FieldType::Double, "float8")),
+        // `money` has no cast to a number; as text it keeps its currency's format.
         "bool" => Some((FieldType::Boolean, "bool")),
         "geometry" | "geography" | "raster" | "bytea" | "box2d" | "box3d" | "tsvector" => None,
         _ => Some((FieldType::Text, "text")),
@@ -622,14 +675,15 @@ impl PostgisSource {
             }
         }
         // Ids stable between reads: the key, else the row's place in the table (`ctid`); a view
-        // has neither, so its rows are numbered as read.
+        // has neither, and a partitioned table's `ctid`s repeat across its partitions, so their
+        // rows are numbered as read.
         let id = match (&pk, relkind.as_str()) {
             (Some(k), _) => format!("{}::int8", ident(k)),
-            (None, "r" | "m" | "p") => "(((ctid::text::point)[0])::int8 * 65536 + ((ctid::text::point)[1])::int8)".to_string(),
+            (None, "r" | "m") => "(((ctid::text::point)[0])::int8 * 65536 + ((ctid::text::point)[1])::int8)".to_string(),
             _ => "(row_number() OVER ())::int8".to_string(),
         };
-        if pk.is_none() && !matches!(relkind.as_str(), "r" | "m" | "p") {
-            notes.push("a view without a key: its features are numbered as read".into());
+        if pk.is_none() && !matches!(relkind.as_str(), "r" | "m") {
+            notes.push("a view or partitioned table without a single-column key: its features are numbered as read".into());
         }
         let mut select = vec![id, wkb];
         select.extend(casts);
@@ -694,9 +748,14 @@ impl PostgisSource {
             .and_then(|r| r.try_get::<_, f64>(0).ok());
         match estimate {
             Some(n) if n >= EXACT_COUNT_BELOW => Some(n as u64),
+            // No estimate (`-1`: never analyzed) or a small one: counted, within the probe's time.
             _ => {
                 let sql = format!("SELECT count(*) FROM {} WHERE {}", self.table.sql_from(), self.filter(None));
-                self.conn.with(|c| c.query_one(sql.as_str(), &[])).ok().and_then(|r| r.try_get::<_, i64>(0).ok()).map(|n| n.max(0) as u64)
+                self.conn
+                    .snapshot(Some(PROBE_TIMEOUT), |t| t.query_one(sql.as_str(), &[]))
+                    .ok()
+                    .and_then(|r| r.try_get::<_, i64>(0).ok())
+                    .map(|n| n.max(0) as u64)
             }
         }
     }
@@ -720,7 +779,7 @@ impl PostgisSource {
                 .and_then(|r| row_extent(&r))
         };
         let native = estimated.or_else(|| {
-            if self.info.count.is_some_and(|n| n as f64 >= EXACT_COUNT_BELOW) {
+            if self.info.count.is_none_or(|n| n as f64 >= EXACT_COUNT_BELOW) {
                 return None;
             }
             let g = &self.native;
@@ -729,7 +788,7 @@ impl PostgisSource {
                 t.sql_from(),
                 self.filter(None)
             );
-            self.conn.with(|c| c.query_opt(sql.as_str(), &[])).ok().flatten().and_then(|r| row_extent(&r))
+            self.conn.snapshot(Some(PROBE_TIMEOUT), |t| t.query_opt(sql.as_str(), &[])).ok().flatten().and_then(|r| row_extent(&r))
         });
         native.map(|e| self.to_lonlat(&e)).unwrap_or(Extent::EMPTY)
     }
@@ -821,26 +880,29 @@ impl FeatureSource for PostgisSource {
         let args: Vec<f64> = native.map(|e| vec![e.min_x, e.min_y, e.max_x, e.max_y]).unwrap_or_default();
         let params: Vec<&(dyn ToSql + Sync)> = args.iter().map(|a| a as &(dyn ToSql + Sync)).collect();
         let from = self.table.sql_from();
-        // Counted first, so a sample keeps every `step`-th row, numbered on the server.
-        let n: i64 = self
-            .conn
-            .with(|c| c.query_one(format!("SELECT count(*) FROM {from} WHERE {filter}").as_str(), &params))?
-            .try_get(0)
-            .map_err(err)?;
-        out.matched = u64::try_from(n).unwrap_or(0);
-        let step = stride(out.matched, limit);
-        let cols: Vec<String> = self.select.iter().enumerate().map(|(i, e)| format!("{e} AS c{i}")).collect();
-        let sql = if step <= 1 {
-            format!("SELECT {} FROM {from} WHERE {filter} LIMIT {limit}", cols.join(", "))
-        } else {
-            let names: Vec<String> = (0..cols.len()).map(|i| format!("c{i}")).collect();
-            format!(
-                "SELECT {} FROM (SELECT {}, row_number() OVER () AS rn FROM {from} WHERE {filter}) s WHERE (rn - 1) % {step} = 0 LIMIT {limit}",
-                names.join(", "),
-                cols.join(", ")
-            )
-        };
-        let rows = self.conn.with(|c| c.query(sql.as_str(), &params))?;
+        // Counted first, so a sample keeps every `step`-th row, numbered on the server; both in
+        // one snapshot, so the count is of the rows read.
+        let (matched, step, rows) = self.conn.snapshot(None, |t| {
+            let n: i64 = t.query_one(format!("SELECT count(*) FROM {from} WHERE {filter}").as_str(), &params)?.try_get(0)?;
+            let matched = u64::try_from(n).unwrap_or(0);
+            let step = stride(matched, limit);
+            let sql = if step <= 1 {
+                let cols: Vec<String> = self.select.iter().enumerate().map(|(i, e)| format!("{e} AS c{i}")).collect();
+                format!("SELECT {} FROM {from} WHERE {filter} LIMIT {limit}", cols.join(", "))
+            } else {
+                // Rows are numbered as they are, and only those kept are converted (the geometry,
+                // the casts): the expressions name the table's columns, which the sample carries.
+                let id = self.select.first().map(String::as_str).unwrap_or("0");
+                let rest: Vec<String> = self.select.iter().enumerate().skip(1).map(|(i, e)| format!("{e} AS c{i}")).collect();
+                format!(
+                    "SELECT \"rustgis id\" AS c0, {} FROM (SELECT t.*, {id} AS \"rustgis id\", row_number() OVER () AS \"rustgis rn\" \
+                     FROM {from} t WHERE {filter}) s WHERE (\"rustgis rn\" - 1) % {step} = 0 LIMIT {limit}",
+                    rest.join(", ")
+                )
+            };
+            Ok((matched, step, t.query(sql.as_str(), &params)?))
+        })?;
+        out.matched = matched;
         for r in &rows {
             let id = r.try_get::<_, Option<i64>>(0).ok().flatten();
             let geom = r.try_get::<_, Option<Vec<u8>>>(1).ok().flatten().and_then(|b| wkb::decode(&b));
@@ -916,14 +978,19 @@ mod tests {
     #[test]
     fn connection_strings_take_libpq_defaults_and_modes() {
         let (c, tls) = config("host=db.example port=6543 dbname=gis user=me sslmode=verify-full").unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(tls, Tls::Verified);
+        assert_eq!(tls, Tls::Verified(None));
         assert_eq!(c.get_ports(), &[6543]);
         assert_eq!(c.get_dbname(), Some("gis"));
         assert_eq!(c.get_user(), Some("me"));
         let (_, tls) = config("host=h dbname=g sslmode=disable").unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(tls, Tls::Disable);
-        let (c, tls) = config("postgresql://me@h:5433/gis?sslmode=verify-ca&sslrootcert=/x").unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(tls, Tls::Verified);
+        let (c, tls) = config("postgresql://me@h:5433/gis?sslmode=verify-ca&sslrootcert=/x%20y").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(tls, Tls::Verified(Some("/x y".into())));
+        let (_, tls) = config("host=h sslmode=verify-full sslrootcert=system").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(tls, Tls::Verified(None));
+        // A private authority's file that isn't there fails, rather than falling back.
+        let (_, tls) = config("host=h sslmode=verify-full sslrootcert=/nonexistent.pem").unwrap_or_else(|e| panic!("{e}"));
+        assert!(rustls_config(&tls).is_err());
         assert_eq!(c.get_ports(), &[5433]);
         assert_eq!(c.get_dbname(), Some("gis"));
         assert!(config("host=h sslmode=bogus").is_err());

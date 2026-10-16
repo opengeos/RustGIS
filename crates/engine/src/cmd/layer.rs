@@ -797,7 +797,8 @@ fn is_geojson(path: &str) -> bool {
 pub(crate) enum Origin<'a> {
     Path(&'a str),
     Bytes(&'a str, std::sync::Arc<Vec<u8>>),
-    /// A PostGIS table, always opened by the caller.
+    /// A PostGIS table, always opened by the caller (desktop only).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Postgis(&'a rustgis_map::source::PostgisOrigin),
 }
 
