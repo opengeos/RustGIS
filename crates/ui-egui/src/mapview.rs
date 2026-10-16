@@ -72,9 +72,9 @@ pub struct MapView {
     tex_size: (f64, f64),
     /// Where the texture sits on screen this frame.
     tex_rect: Rect,
-    /// How long the last frame drawn mid-motion took (ms): frames slower than this aren't drawn
-    /// mid-motion, which would stall it.
-    motion_ms: u64,
+    /// How long the last frame drawn mid-motion took (ms), and the share of full resolution it
+    /// was drawn at: the next is spaced out by it, and drawn finer or coarser to take about 40 ms.
+    motion_cost: (f64, f64),
     labels: Vec<PlacedLabel>,
     /// On the globe, where each label stands on the Earth, so it follows the globe as it turns
     /// and zooms until the next frame places them again.
@@ -132,7 +132,7 @@ impl Default for MapView {
             tex_camera: Camera::world(),
             tex_size: (0.0, 0.0),
             tex_rect: Rect::NOTHING,
-            motion_ms: 0,
+            motion_cost: (0.0, 1.0),
             labels: Vec::new(),
             label_lonlat: Vec::new(),
             label_camera: Camera::world(),
@@ -360,32 +360,30 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.ctx().request_repaint();
     }
     let stale = app.map.key != Some(key);
-    if app.map.key.is_some_and(|k| k.rev != key.rev || k.sources != key.sources) {
-        app.map.motion_ms = 0;
-    }
     // While the flat map moves its last frame is shifted and scaled, until that no longer covers
-    // the view (zooming out, panning past its edge) or stretches it blurry (zooming in). Then,
-    // when frames are quick enough not to stall the motion, one is drawn mid-motion: for a gap,
-    // at half the resolution over twice the width and height, so the next steps are covered too
-    // (as MapLibre keeps showing the tiles around the view); when stretched, sharp, at the view.
-    let motion = (stale
-        && interacting
-        && !globe_view
-        && app.map.motion_ms <= 100
-        && time - app.map.last_render >= (app.map.motion_ms as f64 / 1000.0 * 1.5).max(1.0 / 30.0)
-        && app.map.texture.is_some())
-    .then(|| {
-        let r = tex_rect(app, cam, rect, false);
-        let stretch = r.width() as f64 / app.map.tex_size.0.max(1.0);
-        if !r.expand(0.5).contains_rect(rect) {
-            Some((w * 2.0, h * 2.0, ppp * 0.5))
-        } else if stretch > 1.3 {
-            Some((w, h, ppp))
-        } else {
-            None
-        }
-    })
-    .flatten();
+    // the view (zooming out, panning past its edge) or stretches it blurry (zooming in). Then a
+    // frame is drawn mid-motion: for a gap, over twice the width and height, so the next steps
+    // are covered too (as MapLibre keeps showing the tiles around the view); when stretched, at
+    // the view. Frames are drawn coarser while they're slow, and sharpening ones spaced out by
+    // how long the last took, so the motion between them stays smooth.
+    let motion = (stale && interacting && !globe_view && app.map.texture.is_some())
+        .then(|| {
+            let r = tex_rect(app, cam, rect, false);
+            let stretch = r.width() as f64 / app.map.tex_size.0.max(1.0);
+            let (ms, k) = app.map.motion_cost;
+            let (vw, vh, most, least) = if !r.expand(0.5).contains_rect(rect) {
+                // A gap is filled at once: each such frame covers zooming out twice as far, so
+                // they can't come often.
+                (w * 2.0, h * 2.0, 0.5, 0.2)
+            } else if stretch > 1.3 && time - app.map.last_render >= motion_gap(ms) {
+                (w, h, 1.0, 0.4)
+            } else {
+                return None;
+            };
+            let k = if ms > 0.0 { k * (40.0 / ms).sqrt().clamp(0.7, 1.4) } else { 1.0 };
+            Some((vw, vh, ppp * (k * most).clamp(least, most) as f32))
+        })
+        .flatten();
     if stale
         && (motion.is_some()
             || !interacting
@@ -429,8 +427,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.map.key = Some(Key { draft: key.draft || motion.is_some(), ..key });
         }
         app.map.render_ms = t0.elapsed().as_millis() as u64;
-        if motion.is_some() {
-            app.map.motion_ms = app.map.render_ms;
+        if let Some((_, _, p)) = motion {
+            let k = (p / ppp) as f64 / if vw > w { 0.5 } else { 1.0 };
+            app.map.motion_cost = (t0.elapsed().as_secs_f64() * 1000.0, k);
             ui.ctx().request_repaint();
         } else if app.map.camera_moved {
             app.session.record_extent();
@@ -488,6 +487,14 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     overlays(app, ui, &painter, rect, &t);
     popup(app, ui, rect);
+}
+
+/// The least time (s) between frames drawn mid-motion, for frames taking `ms` to draw: quick
+/// ones as often as 30 a second, slower ones further apart so the motion between them stays
+/// smooth.
+fn motion_gap(ms: f64) -> f64 {
+    let s = ms.min(300.0) / 1000.0;
+    (if ms <= 60.0 { s * 1.5 } else { s * 3.0 }).max(1.0 / 30.0)
 }
 
 /// Where the map's last frame (drawn for `tex_camera`) lies on screen for the camera `cam`.
