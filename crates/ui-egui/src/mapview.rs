@@ -170,8 +170,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     }
     animate(app, ui);
     // Side by side: the other map on the right, following this one when views are linked.
-    let split = app.ws.split.as_deref().and_then(|n| app.session.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(n)));
-    if let Some(other) = split.filter(|i| *i != app.session.project.active_map) {
+    if let Some(other) = split_map(app).filter(|i| *i != app.session.project.active_map) {
         let full = ui.available_rect_before_wrap();
         let right = Rect::from_min_max(pos2(full.center().x + 1.0, full.min.y), full.max);
         split_view(app, ui, other, right, &t);
@@ -1528,6 +1527,12 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
 }
 
+/// The map shown side by side, while its name finds one (a deleted or renamed map's doesn't).
+pub(crate) fn split_map(app: &RustGisApp) -> Option<usize> {
+    let n = app.ws.split.as_deref()?;
+    app.session.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(n))
+}
+
 /// Deletes a map (`map.remove`); the popup goes with the active map, even behind an open layout.
 pub(crate) fn delete_map(app: &mut RustGisApp, name: &str) {
     let p = &app.session.project;
@@ -1543,12 +1548,13 @@ const TAB_CLOSE_W: f32 = 18.0;
 /// A view tab's close button (×), shown on the tab in view and on the one under the pointer;
 /// `enabled: false` dims it and only explains why (`tip`). True when clicked.
 fn tab_close(ui: &mut Ui, t: &Tokens, tab: Rect, id: egui::Id, in_view: bool, enabled: bool, tip: &str) -> bool {
-    let cr = Rect::from_center_size(pos2(tab.max.x - 13.0, tab.center().y), vec2(16.0, 16.0));
-    // Added after the tab, so it sits on top: its click (even dimmed) doesn't also open the tab.
-    let resp = ui.interact(cr, id, Sense::click());
+    // Hidden, it takes no clicks either: they open the tab (a touch screen has no hover).
     if !(in_view || ui.rect_contains_pointer(tab)) {
         return false;
     }
+    let cr = Rect::from_center_size(pos2(tab.max.x - 13.0, tab.center().y), vec2(16.0, 16.0));
+    // Added after the tab, so it sits on top: its click (even dimmed) doesn't also open the tab.
+    let resp = ui.interact(cr, id, Sense::click());
     if enabled && resp.hovered() {
         ui.painter().rect_filled(cr, CornerRadius::same(3), t.pressed);
     }

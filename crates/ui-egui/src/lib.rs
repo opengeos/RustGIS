@@ -1671,8 +1671,10 @@ impl RustGisApp {
             "ui.linkCursors" => self.ws.link_cursors = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.link_cursors),
             // A second map beside the active one (for linked views and cursors).
             "ui.splitView" => {
+                // On while its map is there: a name left by a deleted or renamed map counts as off.
+                let on = mapview::split_map(self).is_some();
                 let (maps, active) = (&self.session.project.maps, self.session.project.active_map);
-                self.ws.split = match (self.ws.split.is_some(), p.get("map").and_then(Value::as_str)) {
+                self.ws.split = match (on, p.get("map").and_then(Value::as_str)) {
                     (_, Some(n)) => {
                         Some(maps.iter().find(|m| m.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no map '{n}'"))?.name.clone())
                     }
