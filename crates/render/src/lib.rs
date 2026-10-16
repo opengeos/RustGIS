@@ -317,7 +317,12 @@ struct Ctx<'a> {
     cull: Extent,
     /// Set when drawing the globe; coordinates are then longitude/latitude, not Web Mercator.
     globe: Option<Globe>,
+    /// Point marker sprites drawn so far, by symbol and quarter-pixel offset.
+    sprites: std::cell::RefCell<std::collections::HashMap<SpriteKey, Option<Pixmap>>>,
 }
+
+/// A marker sprite's symbol and quarter-pixel offset.
+type SpriteKey = (Rgba, Rgba, u32, u32, Marker, u8, u8);
 
 impl Ctx<'_> {
     /// Logical screen position of a coordinate, `None` when it is behind the globe.
@@ -452,33 +457,49 @@ impl Ctx<'_> {
             }
             return;
         }
-        // Drop vertices closer than ~0.35 px to the previous one: big speed-up when zoomed out.
-        let mut last: Option<(f32, f32)> = None;
-        let n = ring.len();
-        for (i, c) in ring.iter().enumerate() {
-            let (x, y) = self.px(*c);
-            if !x.is_finite() || !y.is_finite() {
-                // A point the projection can't show breaks the line rather than being bridged.
-                if close && last.is_some() {
-                    pb.close();
-                }
-                last = None;
-                continue;
-            }
-            match last {
-                None => pb.move_to(x, y),
-                Some((lx, ly)) => {
-                    if (x - lx).abs() + (y - ly).abs() < 0.35 && i + 1 != n {
-                        continue;
-                    }
-                    pb.line_to(x, y)
+        let ppp = self.view.pixels_per_point;
+        let dev = |c: &Coord| {
+            let (x, y) = self.view.to_screen(*c);
+            (x * ppp, y * ppp)
+        };
+        // Each run of points the projection can show; a point it can't breaks the line rather
+        // than being bridged.
+        let clip = self.clip_box();
+        for run in ring.split(|c| !c.is_finite()) {
+            let mut b = Extent::EMPTY;
+            for c in run {
+                let (x, y) = dev(c);
+                if x.is_finite() && y.is_finite() {
+                    b.expand(Coord::new(x, y));
                 }
             }
-            last = Some((x, y));
+            if b.is_empty() || !b.intersects(&clip) {
+                continue; // wholly off the image
+            }
+            if clip.contains(Coord::new(b.min_x, b.min_y)) && clip.contains(Coord::new(b.max_x, b.max_y)) {
+                emit_run(pb, run.iter().map(dev), close);
+            } else if close {
+                // Zoomed in on a big polygon: its far vertices would be millions of pixels away,
+                // which the rasteriser can't take (and needn't walk). Clipping each ring to a box
+                // well beyond the image keeps the even-odd fill the same inside it.
+                let pts: Vec<(f64, f64)> = run.iter().map(dev).collect();
+                emit_run(pb, clip_ring(&pts, &clip).into_iter(), true);
+            } else {
+                let pts: Vec<(f64, f64)> = run.iter().map(dev).collect();
+                for part in clip_line(&pts, &clip) {
+                    emit_run(pb, part.into_iter(), false);
+                }
+            }
         }
-        if close && last.is_some() {
-            pb.close();
-        }
+    }
+
+    /// The box, in device pixels, paths are clipped to: the image with a wide margin, so a cut
+    /// edge and its stroke stay out of sight.
+    fn clip_box(&self) -> Extent {
+        let (w, h) = self.view.pixel_size();
+        let (w, h) = (w as f64, h as f64);
+        let m = w.max(h) / 2.0 + 64.0;
+        Extent { min_x: -m, min_y: -m, max_x: w + m, max_y: h + m }
     }
 
     fn polygon(&self, pm: &mut Pixmap, polys: &[Vec<Vec<Coord>>], fill: Option<Paint>, stroke: Option<(Paint, f32)>) {
@@ -515,60 +536,100 @@ impl Ctx<'_> {
         if !x.is_finite() || !y.is_finite() {
             return; // behind the globe
         }
-        let r = (s.size.max(1.0) * self.ppp) / 2.0;
-        let mut pb = PathBuilder::new();
-        match s.marker {
-            Marker::Circle => pb.push_circle(x, y, r),
-            Marker::Square => {
-                if let Some(rect) = tiny_skia::Rect::from_xywh(x - r * 0.9, y - r * 0.9, r * 1.8, r * 1.8) {
-                    pb.push_rect(rect)
-                }
-            }
-            Marker::Triangle => {
-                pb.move_to(x, y - r * 1.1);
-                pb.line_to(x + r, y + r * 0.75);
-                pb.line_to(x - r, y + r * 0.75);
-                pb.close();
-            }
-            Marker::Diamond => {
-                pb.move_to(x, y - r * 1.15);
-                pb.line_to(x + r * 0.9, y);
-                pb.line_to(x, y + r * 1.15);
-                pb.line_to(x - r * 0.9, y);
-                pb.close();
-            }
-            Marker::Star => {
-                for i in 0..10 {
-                    let a = std::f32::consts::PI * (i as f32) / 5.0 - std::f32::consts::FRAC_PI_2;
-                    let rr = if i % 2 == 0 { r * 1.2 } else { r * 0.5 };
-                    let (px, py) = (x + rr * a.cos(), y + rr * a.sin());
-                    if i == 0 { pb.move_to(px, py) } else { pb.line_to(px, py) }
-                }
-                pb.close();
-            }
+        // Off the image by more than any marker's reach: nothing to draw.
+        let reach = (s.size.max(1.0) * 0.6 + s.stroke_width.max(0.0) + 4.0) * self.ppp;
+        if x < -reach || y < -reach || x > pm.width() as f32 + reach || y > pm.height() as f32 + reach {
+            return;
         }
-        let Some(path) = pb.finish() else { return };
-        if let Some(h) = halo {
-            let st = Stroke { width: 3.5 * self.ppp, line_join: LineJoin::Round, ..Stroke::default() };
-            pm.stroke_path(&path, &paint(h, 1.0), &st, Transform::identity(), None);
+        draw_marker(pm, x, y, s, opacity, halo, self.ppp);
+    }
+
+    /// A layer's point marker, stamped from a sprite drawn once per symbol and quarter-pixel
+    /// offset: a dense point layer otherwise fills and strokes a path for every point.
+    fn stamp(&self, pm: &mut Pixmap, c: Coord, s: &Symbol) {
+        let (x, y) = self.px(c);
+        if !x.is_finite() || !y.is_finite() {
+            return; // behind the globe
         }
-        pm.fill_path(&path, &paint(s.fill, opacity), FillRule::Winding, Transform::identity(), None);
-        if s.stroke_width > 0.0 && s.stroke.a() > 0 {
-            let st = Stroke { width: s.stroke_width * self.ppp, line_join: LineJoin::Round, ..Stroke::default() };
-            pm.stroke_path(&path, &paint(s.stroke, opacity), &st, Transform::identity(), None);
+        let (fx, fy) = (x.floor(), y.floor());
+        let (qx, qy) = (((x - fx) * 4.0).round(), ((y - fy) * 4.0).round());
+        let (ix, iy) = (fx as i64 + (qx >= 4.0) as i64, fy as i64 + (qy >= 4.0) as i64);
+        let (qx, qy) = ((qx as u8) % 4, (qy as u8) % 4);
+        let reach = ((s.size.max(1.0) * 0.6 + s.stroke_width.max(0.0)) * self.ppp).ceil() as i64 + 3;
+        if ix < -reach || iy < -reach || ix > pm.width() as i64 + reach || iy > pm.height() as i64 + reach {
+            return;
+        }
+        let key = (s.fill, s.stroke, s.stroke_width.to_bits(), s.size.to_bits(), s.marker, qx, qy);
+        let mut sprites = self.sprites.borrow_mut();
+        if !sprites.contains_key(&key) {
+            // Many symbols (sizes by value, say) would each make a sprite used once: draw directly.
+            if sprites.len() >= MAX_SPRITES || reach > 64 {
+                drop(sprites);
+                draw_marker(pm, x, y, s, 1.0, None, self.ppp);
+                return;
+            }
+            let side = (2 * reach + 1) as u32;
+            let sprite = Pixmap::new(side, side).map(|mut sp| {
+                let c = reach as f32 + qx as f32 / 4.0;
+                let d = reach as f32 + qy as f32 / 4.0;
+                draw_marker(&mut sp, c, d, s, 1.0, None, self.ppp);
+                sp
+            });
+            sprites.insert(key, sprite);
+        }
+        if let Some(Some(sp)) = sprites.get(&key) {
+            blend_over(pm, sp, ix - reach, iy - reach);
         }
     }
 
     fn feature(&self, pm: &mut Pixmap, g: &Geometry, s: &Symbol) {
         match g {
-            Geometry::Point(c) => self.marker(pm, *c, s, 1.0, None),
-            Geometry::MultiPoint(v) => v.iter().for_each(|c| self.marker(pm, *c, s, 1.0, None)),
+            Geometry::Point(c) => self.stamp(pm, *c, s),
+            Geometry::MultiPoint(v) => v.iter().for_each(|c| self.stamp(pm, *c, s)),
             Geometry::Line(parts) => self.line(pm, parts, &paint(s.stroke, 1.0), s.stroke_width),
             Geometry::Polygon(polys) if self.wireframe => {
                 self.polygon(pm, polys, None, Some((paint(s.stroke.with_alpha(255), 1.0), s.stroke_width.max(1.0))))
             }
             Geometry::Polygon(polys) => self.polygon(pm, polys, Some(paint(s.fill, 1.0)), Some((paint(s.stroke, 1.0), s.stroke_width))),
         }
+    }
+
+    /// Draws a line or polygon smaller than a device pixel across as the coverage its fill and
+    /// outline would have, spread over the pixels around its centre. `false` (nothing drawn) for
+    /// a bigger feature or a point.
+    fn splat(&self, pm: &mut Pixmap, e: &Extent, g: &Geometry, s: &Symbol) -> bool {
+        let k = self.view.pixels_per_point / self.view.camera.res.max(1e-12);
+        let (sx, sy) = ((e.width() * k) as f32, (e.height() * k) as f32);
+        if !(sx.is_finite() && sy.is_finite()) || sx > 1.0 || sy > 1.0 || e.is_empty() {
+            return false;
+        }
+        let (stroke, width, fill) = match g {
+            Geometry::Point(_) | Geometry::MultiPoint(_) => return false,
+            Geometry::Line(_) => (s.stroke, (s.stroke_width * self.ppp).max(0.5), None),
+            Geometry::Polygon(_) if self.wireframe => (s.stroke.with_alpha(255), s.stroke_width.max(1.0) * self.ppp, None),
+            Geometry::Polygon(_) => (s.stroke, if s.stroke.a() > 0 { s.stroke_width.max(0.0) * self.ppp } else { 0.0 }, Some(s.fill)),
+        };
+        let (cx, cy) = self.px(Coord::new((e.min_x + e.max_x) / 2.0, (e.min_y + e.max_y) / 2.0));
+        // The outline covers the shape grown by half its width all round (round joins); the
+        // fill shows inside it.
+        let inner = (sx - width).max(0.0) * (sy - width).max(0.0);
+        let outer = if width > 0.0 {
+            let hw = width / 2.0;
+            match g {
+                Geometry::Line(_) => (sx.hypot(sy) + width) * width,
+                _ => (sx + width) * (sy + width) - (4.0 - std::f32::consts::PI) * hw * hw,
+            }
+        } else {
+            0.0
+        };
+        if let Some(f) = fill {
+            let area = if width > 0.0 { inner } else { sx * sy };
+            splat_color(pm, cx, cy, f, area);
+        }
+        if width > 0.0 {
+            splat_color(pm, cx, cy, stroke, outer - inner);
+        }
+        true
     }
 
     fn highlight(&self, pm: &mut Pixmap, g: &Geometry, s: &Symbol) {
@@ -581,6 +642,235 @@ impl Ctx<'_> {
                 self.line(pm, parts, &paint(s.stroke, 1.0), s.stroke_width);
             }
             Geometry::Polygon(polys) => self.polygon(pm, polys, Some(paint(SELECTION.with_alpha(40), 1.0)), Some((cyan, 2.0))),
+        }
+    }
+}
+
+/// Adds one run of device-pixel points to a path, dropping points closer than ~0.35 px to the
+/// last one kept (a big speed-up zoomed out), but always the last.
+fn emit_run(pb: &mut PathBuilder, pts: impl ExactSizeIterator<Item = (f64, f64)>, close: bool) {
+    let n = pts.len();
+    let mut last: Option<(f32, f32)> = None;
+    for (i, (x, y)) in pts.enumerate() {
+        let (x, y) = (x as f32, y as f32);
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
+        match last {
+            None => pb.move_to(x, y),
+            Some((lx, ly)) => {
+                if (x - lx).abs() + (y - ly).abs() < 0.35 && i + 1 != n {
+                    continue;
+                }
+                pb.line_to(x, y)
+            }
+        }
+        last = Some((x, y));
+    }
+    if close && last.is_some() {
+        pb.close();
+    }
+}
+
+/// A ring clipped to a box (Sutherland–Hodgman): the part inside it, closed along its edges.
+fn clip_ring(pts: &[(f64, f64)], b: &Extent) -> Vec<(f64, f64)> {
+    let mut cur: Vec<(f64, f64)> = pts.to_vec();
+    // Each edge: is a point inside, and where a segment crosses it.
+    for edge in 0..4 {
+        if cur.is_empty() {
+            break;
+        }
+        let inside = |p: (f64, f64)| match edge {
+            0 => p.0 >= b.min_x,
+            1 => p.0 <= b.max_x,
+            2 => p.1 >= b.min_y,
+            _ => p.1 <= b.max_y,
+        };
+        let cross = |p: (f64, f64), q: (f64, f64)| {
+            let (v, t) = match edge {
+                0 => (b.min_x, (b.min_x - p.0) / (q.0 - p.0)),
+                1 => (b.max_x, (b.max_x - p.0) / (q.0 - p.0)),
+                2 => (b.min_y, (b.min_y - p.1) / (q.1 - p.1)),
+                _ => (b.max_y, (b.max_y - p.1) / (q.1 - p.1)),
+            };
+            if edge < 2 { (v, p.1 + (q.1 - p.1) * t) } else { (p.0 + (q.0 - p.0) * t, v) }
+        };
+        let mut out = Vec::with_capacity(cur.len() + 4);
+        let mut prev = cur.last().copied().unwrap_or((0.0, 0.0));
+        for &p in &cur {
+            match (inside(prev), inside(p)) {
+                (true, true) => out.push(p),
+                (true, false) => out.push(cross(prev, p)),
+                (false, true) => {
+                    out.push(cross(prev, p));
+                    out.push(p);
+                }
+                (false, false) => {}
+            }
+            prev = p;
+        }
+        cur = out;
+    }
+    if cur.len() < 3 { Vec::new() } else { cur }
+}
+
+/// The parts of a line inside a box (each segment clipped by Liang–Barsky).
+fn clip_line(pts: &[(f64, f64)], b: &Extent) -> Vec<Vec<(f64, f64)>> {
+    let mut parts: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut cur: Vec<(f64, f64)> = Vec::new();
+    for w in pts.windows(2) {
+        let (Some(&p), Some(&q)) = (w.first(), w.get(1)) else { continue };
+        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        let (mut t0, mut t1) = (0.0f64, 1.0f64);
+        let mut keep = true;
+        for (num, den) in [(p.0 - b.min_x, -dx), (b.max_x - p.0, dx), (p.1 - b.min_y, -dy), (b.max_y - p.1, dy)] {
+            if den == 0.0 {
+                if num < 0.0 {
+                    keep = false;
+                    break;
+                }
+            } else {
+                let t = num / den;
+                if den < 0.0 {
+                    t0 = t0.max(t);
+                } else {
+                    t1 = t1.min(t);
+                }
+            }
+        }
+        if !keep || t0 > t1 {
+            if cur.len() > 1 {
+                parts.push(std::mem::take(&mut cur));
+            }
+            cur.clear();
+            continue;
+        }
+        let a = (p.0 + dx * t0, p.1 + dy * t0);
+        let z = (p.0 + dx * t1, p.1 + dy * t1);
+        if cur.is_empty() || t0 > 0.0 {
+            if cur.len() > 1 {
+                parts.push(std::mem::take(&mut cur));
+            }
+            cur = vec![a];
+        }
+        cur.push(z);
+        if t1 < 1.0 {
+            parts.push(std::mem::take(&mut cur));
+        }
+    }
+    if cur.len() > 1 {
+        parts.push(cur);
+    }
+    parts
+}
+
+/// Blends `color` at `coverage` (in pixels, spread bilinearly) around (`cx`, `cy`) device pixels.
+fn splat_color(pm: &mut Pixmap, cx: f32, cy: f32, color: Rgba, coverage: f32) {
+    if color.a() == 0 || coverage.is_nan() || coverage <= 0.0 || !cx.is_finite() || !cy.is_finite() {
+        return;
+    }
+    let (x, y) = (cx - 0.5, cy - 0.5);
+    let (fx, fy) = (x - x.floor(), y - y.floor());
+    let (ix, iy) = (x.floor() as i64, y.floor() as i64);
+    let (w, h) = (pm.width() as i64, pm.height() as i64);
+    let data = pm.data_mut();
+    for (dx, dy, wt) in [(0, 0, (1.0 - fx) * (1.0 - fy)), (1, 0, fx * (1.0 - fy)), (0, 1, (1.0 - fx) * fy), (1, 1, fx * fy)] {
+        let (px, py) = (ix + dx, iy + dy);
+        if px < 0 || py < 0 || px >= w || py >= h {
+            continue;
+        }
+        let a = (color.a() as f32 * (coverage * wt).min(1.0)).round() as u16;
+        if a == 0 {
+            continue;
+        }
+        let i = ((py * w + px) * 4) as usize;
+        let Some(d) = data.get_mut(i..i + 4) else { continue };
+        let inv = 255 - a;
+        let src = [color.r(), color.g(), color.b()];
+        for (dc, sc) in d.iter_mut().zip(src) {
+            *dc = ((sc as u16 * a + *dc as u16 * inv + 127) / 255) as u8;
+        }
+        d[3] = (a + (d[3] as u16 * inv + 127) / 255).min(255) as u8;
+    }
+}
+
+/// Most marker sprites one render keeps.
+const MAX_SPRITES: usize = 4096;
+
+/// A marker centred at (`x`, `y`) device pixels.
+fn draw_marker(pm: &mut Pixmap, x: f32, y: f32, s: &Symbol, opacity: f32, halo: Option<Rgba>, ppp: f32) {
+    let r = (s.size.max(1.0) * ppp) / 2.0;
+    let mut pb = PathBuilder::new();
+    match s.marker {
+        Marker::Circle => pb.push_circle(x, y, r),
+        Marker::Square => {
+            if let Some(rect) = tiny_skia::Rect::from_xywh(x - r * 0.9, y - r * 0.9, r * 1.8, r * 1.8) {
+                pb.push_rect(rect)
+            }
+        }
+        Marker::Triangle => {
+            pb.move_to(x, y - r * 1.1);
+            pb.line_to(x + r, y + r * 0.75);
+            pb.line_to(x - r, y + r * 0.75);
+            pb.close();
+        }
+        Marker::Diamond => {
+            pb.move_to(x, y - r * 1.15);
+            pb.line_to(x + r * 0.9, y);
+            pb.line_to(x, y + r * 1.15);
+            pb.line_to(x - r * 0.9, y);
+            pb.close();
+        }
+        Marker::Star => {
+            for i in 0..10 {
+                let a = std::f32::consts::PI * (i as f32) / 5.0 - std::f32::consts::FRAC_PI_2;
+                let rr = if i % 2 == 0 { r * 1.2 } else { r * 0.5 };
+                let (px, py) = (x + rr * a.cos(), y + rr * a.sin());
+                if i == 0 { pb.move_to(px, py) } else { pb.line_to(px, py) }
+            }
+            pb.close();
+        }
+    }
+    let Some(path) = pb.finish() else { return };
+    if let Some(h) = halo {
+        let st = Stroke { width: 3.5 * ppp, line_join: LineJoin::Round, ..Stroke::default() };
+        pm.stroke_path(&path, &paint(h, 1.0), &st, Transform::identity(), None);
+    }
+    pm.fill_path(&path, &paint(s.fill, opacity), FillRule::Winding, Transform::identity(), None);
+    if s.stroke_width > 0.0 && s.stroke.a() > 0 {
+        let st = Stroke { width: s.stroke_width * ppp, line_join: LineJoin::Round, ..Stroke::default() };
+        pm.stroke_path(&path, &paint(s.stroke, opacity), &st, Transform::identity(), None);
+    }
+}
+
+/// Composites premultiplied `src` over `dst` with its top left corner at (`x`, `y`).
+fn blend_over(dst: &mut Pixmap, src: &Pixmap, x: i64, y: i64) {
+    let (dw, dh) = (dst.width() as i64, dst.height() as i64);
+    let (sw, sh) = (src.width() as i64, src.height() as i64);
+    let (x0, x1) = (x.max(0), (x + sw).min(dw));
+    let (y0, y1) = (y.max(0), (y + sh).min(dh));
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let (s, d) = (src.data(), dst.data_mut());
+    let n = ((x1 - x0) * 4) as usize;
+    for row in y0..y1 {
+        let si = (((row - y) * sw + (x0 - x)) * 4) as usize;
+        let di = ((row * dw + x0) * 4) as usize;
+        let (Some(sr), Some(dr)) = (s.get(si..si + n), d.get_mut(di..di + n)) else { continue };
+        for (sp, dp) in sr.as_chunks::<4>().0.iter().zip(dr.as_chunks_mut::<4>().0.iter_mut()) {
+            let sa = sp[3];
+            if sa == 0 {
+                continue;
+            }
+            if sa == 255 {
+                dp.copy_from_slice(sp);
+                continue;
+            }
+            let inv = 255 - sa as u16;
+            for (dc, sc) in dp.iter_mut().zip(sp) {
+                *dc = (*sc as u16 + (*dc as u16 * inv + 127) / 255).min(255) as u8;
+            }
         }
     }
 }
@@ -664,6 +954,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
         wireframe: map.view.wireframe,
         cull: view.camera.extent(view.width, view.height).padded(0.05, 0.0),
         globe,
+        sprites: Default::default(),
     };
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     // The Gpu backend draws flat, effect-free frames; anything else stays on the CPU pixmap.
@@ -929,7 +1220,17 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
                         }
                         continue;
                     }
-                    ctx.feature(dest, g, &layer.symbol(row));
+                    let sym = layer.symbol(row);
+                    // A feature under a pixel across: blend its coverage into the pixels it touches
+                    // (a dense layer seen whole is mostly these, and a path each is slow).
+                    if globe.is_none()
+                        && !layer.graphics
+                        && let Some(e) = extents.get(row)
+                        && ctx.splat(dest, e, g, &sym)
+                    {
+                        continue;
+                    }
+                    ctx.feature(dest, g, &sym);
                 }
             }
             cpu_dirty = true;
@@ -1742,7 +2043,9 @@ mod tests {
         let r = render(&mut m, &view).expect("render");
         assert_eq!(r.pixmap.data().len(), 800 * 500 * 4);
         let h = fnv1a(r.pixmap.data());
-        assert_eq!(h, 0x8caa_2097_9bae_31b7, "golden pixmap hash changed: {h:#x}");
+        // Point markers are stamped from sprites at quarter-pixel offsets (the cities' anti-aliased
+        // edges moved by up to an eighth of a pixel); nothing else changed this frame.
+        assert_eq!(h, 0x89e2_f6ec_5589_a46e, "golden pixmap hash changed: {h:#x}");
     }
 
     fn square_layer(m: &mut Map, name: &str, x: f64, y: f64, s: f64) -> u32 {
@@ -1941,5 +2244,93 @@ mod tests {
         m.projection = rustgis_map::Projection::WebMercator;
         m.view.effects.vignette = true;
         assert!(matches!(render_backend(&mut m, &view, Backend::Gpu), Some(RenderOutput::Cpu(_))), "view effects stay on the CPU renderer");
+    }
+
+    #[test]
+    fn deep_zoom_on_the_coast_does_not_panic() {
+        // Zoomed in to millimetres on a coastline, the land polygon's far vertices were billions
+        // of pixels away, and the rasteriser indexed past its buffer.
+        let mut m = Map::new("Map");
+        for res in [0.05, 0.008, 0.001, 1e-5] {
+            let camera = Camera { center: lonlat_to_merc(Coord::new(-122.2585, 37.8719)), res };
+            let view = View { width: 1600.0, height: 1000.0, pixels_per_point: 1.0, camera };
+            assert!(render(&mut m, &view).is_some(), "{res}");
+        }
+    }
+
+    #[test]
+    fn clips_rings_and_lines_to_a_box() {
+        let b = Extent { min_x: 0.0, min_y: 0.0, max_x: 10.0, max_y: 10.0 };
+        // A square far bigger than the box clips to the box.
+        let big = [(-1e9, -1e9), (1e9, -1e9), (1e9, 1e9), (-1e9, 1e9)];
+        let c = clip_ring(&big, &b);
+        assert_eq!(c.len(), 4);
+        assert!(c.iter().all(|p| (p.0 == 0.0 || p.0 == 10.0) && (p.1 == 0.0 || p.1 == 10.0)), "{c:?}");
+        // One wholly outside clips away; one inside is kept as it is.
+        assert!(clip_ring(&[(20.0, 20.0), (30.0, 20.0), (30.0, 30.0)], &b).is_empty());
+        let inside = [(1.0, 1.0), (5.0, 1.0), (5.0, 5.0)];
+        assert_eq!(clip_ring(&inside, &b), inside.to_vec());
+        // A line in and out of the box comes back as its two parts inside.
+        let parts = clip_line(&[(-5.0, 2.0), (5.0, 2.0), (5.0, 20.0), (8.0, 20.0), (8.0, 5.0), (15.0, 5.0)], &b);
+        assert_eq!(parts, vec![vec![(0.0, 2.0), (5.0, 2.0), (5.0, 10.0)], vec![(8.0, 10.0), (8.0, 5.0), (10.0, 5.0)]]);
+        assert!(clip_line(&[(-5.0, -5.0), (-1.0, 20.0)], &b).is_empty());
+    }
+
+    #[test]
+    fn stamped_markers_match_drawn_ones() {
+        let view = View { width: 120.0, height: 80.0, pixels_per_point: 1.0, camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0 } };
+        let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+        for marker in Marker::ALL {
+            let s = Symbol { fill: Rgba::new(200, 60, 30, 200), stroke: Rgba::rgb(20, 20, 20), stroke_width: 1.2, size: 9.0, marker };
+            let (mut stamped, mut drawn) = (Pixmap::new(120, 80).unwrap(), Pixmap::new(120, 80).unwrap());
+            // Points on and off the quarter-pixel grid, and over the image's edge.
+            for c in
+                [Coord::new(-30.0, 10.0), Coord::new(5.37, -12.81), Coord::new(25.25, 3.5), Coord::new(-61.0, 0.0), Coord::new(40.0, 41.0)]
+            {
+                ctx.stamp(&mut stamped, c, &s);
+                ctx.stamp(&mut stamped, c, &s); // the second comes from the cache
+                ctx.marker(&mut drawn, c, &s, 1.0, None);
+                ctx.marker(&mut drawn, c, &s, 1.0, None);
+            }
+            let worst = stamped.data().iter().zip(drawn.data()).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+            assert!(worst < 120, "{marker:?}: {worst}");
+            let total: u64 = stamped.data().iter().zip(drawn.data()).map(|(a, b)| a.abs_diff(*b) as u64).sum();
+            let ink: u64 = drawn.data().iter().map(|v| *v as u64).sum();
+            assert!(total * 20 < ink, "{marker:?}: {total} of {ink}");
+        }
+        assert!(ctx.sprites.borrow().len() <= 5 * 16);
+    }
+
+    #[test]
+    fn features_under_a_pixel_still_show() {
+        // A dense grid of tiny squares seen whole: each is splatted rather than filled as a path,
+        // and the area still comes out the colour of their outlines.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("cells", GeometryType::Polygon, vec![]);
+        for i in 0..100 {
+            for j in 0..100 {
+                let (x, y) = (i as f64 * 0.01, j as f64 * 0.01);
+                let ring = vec![
+                    Coord::new(x, y),
+                    Coord::new(x + 0.005, y),
+                    Coord::new(x + 0.005, y + 0.005),
+                    Coord::new(x, y + 0.005),
+                    Coord::new(x, y),
+                ];
+                d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+            }
+        }
+        let id = m.add_dataset(d);
+        let sym = m.layer(id).map(|l| l.symbol(0)).unwrap();
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.5, 0.5)), res: 2000.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera };
+        let r = render(&mut m, &view).unwrap();
+        let px = |x: u32, y: u32| r.pixmap.pixel(x, y).unwrap();
+        let (centre, corner) = (px(100, 100), px(2, 2));
+        assert_ne!((centre.red(), centre.green(), centre.blue()), (corner.red(), corner.green(), corner.blue()));
+        // Towards the outline's colour (darker than the blank basemap).
+        let lum = |p: tiny_skia::PremultipliedColorU8| p.red() as u32 + p.green() as u32 + p.blue() as u32;
+        assert!(lum(centre) < lum(corner), "{centre:?} vs {corner:?} ({sym:?})");
     }
 }

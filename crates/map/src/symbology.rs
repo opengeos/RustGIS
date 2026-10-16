@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::color::{Ramp, Rgba};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Marker {
     #[default]
     Circle,
@@ -248,8 +248,16 @@ impl Renderer {
             Renderer::Single(s) => *s,
             Renderer::Unique { field, classes, other, .. } => {
                 let Some(fi) = ds.field_index(field) else { return *other };
-                let v = ds.value(row, fi).to_string();
-                classes.iter().find(|(k, _)| *k == v).map(|c| c.1).unwrap_or(*other)
+                // Text compares as it is; other values as they print.
+                let printed;
+                let v = match ds.value(row, fi) {
+                    rustgis_data::Value::Text(t) => t.as_str(),
+                    v => {
+                        printed = v.to_string();
+                        printed.as_str()
+                    }
+                };
+                classes.iter().find(|(k, _)| k == v).map(|c| c.1).unwrap_or(*other)
             }
             Renderer::Graduated { field, breaks, symbols, .. } => {
                 let fallback = symbols.first().copied().unwrap_or(Symbol::default_for(ds.geometry_type, 0));
