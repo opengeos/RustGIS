@@ -14,12 +14,17 @@ use crate::theme::c32;
 /// How far past the view the drape reaches on each side, as a fraction of its size: the globe
 /// can turn this far before the drape is drawn again.
 const MARGIN: f64 = 0.25;
+/// Zooming out past the drape draws it this much coarser and with this margin instead, so it
+/// keeps covering the view while the zoom goes on, for about the same work.
+const ZOOM_OUT_COARSER: f64 = 2.0;
+const ZOOM_OUT_MARGIN: f64 = 1.0;
 /// Zooming in past this factor of the drape's scale draws it again, sharper.
 const MAX_ZOOM_IN: f64 = 2.0;
 /// Seconds between drawing the drape again for tiles that have arrived meanwhile.
 const TILE_REFRESH: f64 = 0.5;
-/// Largest sprite radius in pixels; a bigger disc scales it up.
-const SPRITE_MAX: f32 = 1024.0;
+/// The sprites' disc radius in pixels: drawn once at this size and scaled with the disc (they
+/// are smooth gradients, so scaling doesn't show).
+const SPRITE_R: f32 = 512.0;
 
 /// What a drape shows, besides the view: a change draws it again.
 #[derive(Clone, Copy, PartialEq)]
@@ -35,8 +40,10 @@ struct Drape {
     key: DrapeKey,
     /// Pixels per point it was drawn at.
     ppp: f32,
-    /// Web Mercator metres per point at the centre when it was drawn.
+    /// Its detail, in Web Mercator metres per point.
     res: f64,
+    /// The camera's resolution when it was drawn.
+    cam_res: f64,
     /// The tile cache's generation when it was drawn, and when (seconds).
     tiles: u64,
     built: f64,
@@ -46,8 +53,6 @@ struct Drape {
 
 struct Sprites {
     key: (Basemap, bool),
-    /// Disc radius in sprite pixels.
-    r: f32,
     under: TextureHandle,
     over: TextureHandle,
 }
@@ -84,9 +89,13 @@ impl GlobeDrape {
                 && g.drape_covers(w, h, &boxes)
         });
         if !fresh {
-            let boxes = g.drape_extents(w, h, MARGIN);
+            // Zooming out: coarser and wider, so the next steps out are covered too.
+            let zooming_out = self.drape.as_ref().is_some_and(|d| res > d.cam_res * 1.01);
+            let (detail, margin) = if zooming_out { (res * ZOOM_OUT_COARSER, ZOOM_OUT_MARGIN) } else { (res, MARGIN) };
+            let boxes = g.drape_extents(w, h, margin);
             let max_side = ctx.input(|i| i.max_texture_side).clamp(256, 4096) as u32;
-            let view = View { width: w, height: h, pixels_per_point: f64::from(drape_ppp), camera: map.camera, dark: key.dark };
+            let camera = rustgis_engine::map::Camera { res: detail, ..map.camera };
+            let view = View { width: w, height: h, pixels_per_point: f64::from(drape_ppp), camera, dark: key.dark };
             let pictures = render::render_globe_drape(map, &view, &boxes, max_side);
             if pictures.is_empty() {
                 self.drape = None;
@@ -114,21 +123,18 @@ impl GlobeDrape {
                     (ll, p.merc, tex)
                 })
                 .collect();
-            self.drape = Some(Drape { key, ppp: drape_ppp, res, tiles, built: time, patches });
+            self.drape = Some(Drape { key, ppp: drape_ppp, res: detail, cam_res: res, tiles, built: time, patches });
         }
-        // The atmosphere and lighting, unless the disc is so big that only its middle shows.
-        let r = g.disc_radius() as f32 * ppp;
-        if g.disc_radius() < 3.0 * w.hypot(h) {
-            let want = r.min(SPRITE_MAX);
-            let skey = (map.basemap, key.dark);
-            let stale = self.sprites.as_ref().is_none_or(|s| s.key != skey || !(0.75..=1.33).contains(&(want / s.r)));
-            if stale && let Some((under, over)) = render::globe_sprites(map.basemap, key.dark, want) {
-                let tex = |name: &str, pm: &render::Pixmap| {
-                    let img = egui::ColorImage::from_rgba_premultiplied([pm.width() as usize, pm.height() as usize], pm.data());
-                    ctx.load_texture(name, img, TextureOptions::LINEAR)
-                };
-                self.sprites = Some(Sprites { key: skey, r: want, under: tex("globe_under", &under), over: tex("globe_over", &over) });
-            }
+        // The atmosphere and lighting, drawn once for the basemap and theme.
+        let skey = (map.basemap, key.dark);
+        if self.sprites.as_ref().is_none_or(|s| s.key != skey)
+            && let Some((under, over)) = render::globe_sprites(map.basemap, key.dark, SPRITE_R)
+        {
+            let tex = |name: &str, pm: &render::Pixmap| {
+                let img = egui::ColorImage::from_rgba_premultiplied([pm.width() as usize, pm.height() as usize], pm.data());
+                ctx.load_texture(name, img, TextureOptions::LINEAR)
+            };
+            self.sprites = Some(Sprites { key: skey, under: tex("globe_under", &under), over: tex("globe_over", &over) });
         }
         true
     }
@@ -153,11 +159,25 @@ impl GlobeDrape {
                 painter.rect_filled(rect, 0.0, c32(map.basemap.palette().0));
             }
         }
-        if let Some(d) = &self.drape {
-            for (_, merc, tex) in &d.patches {
+        for mesh in self.meshes(rect, &g) {
+            painter.add(Shape::mesh(mesh));
+        }
+        if let Some(s) = sprites {
+            painter.image(s.over.id(), sprite_rect, full, Color32::WHITE);
+        }
+    }
+
+    /// The drape's meshes for the globe `g` in `rect`. A picture wholly behind the horizon has
+    /// no triangles and is left out: the GPU can't draw an empty mesh (egui-wgpu panics on an
+    /// empty buffer).
+    fn meshes(&self, rect: Rect, g: &Globe) -> Vec<Mesh> {
+        let Some(d) = &self.drape else { return Vec::new() };
+        d.patches
+            .iter()
+            .filter_map(|(_, merc, tex)| {
                 let m = g.drape_mesh(merc);
-                if !m.pos.iter().flatten().all(|v| v.is_finite()) {
-                    continue;
+                if m.indices.is_empty() || !m.pos.iter().flatten().all(|v| v.is_finite()) {
+                    return None;
                 }
                 let mut mesh = Mesh::with_texture(tex.id());
                 mesh.vertices = m
@@ -171,11 +191,59 @@ impl GlobeDrape {
                     })
                     .collect();
                 mesh.indices = m.indices;
-                painter.add(Shape::mesh(mesh));
-            }
-        }
-        if let Some(s) = sprites {
-            painter.image(s.over.id(), sprite_rect, full, Color32::WHITE);
-        }
+                Some(mesh)
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rustgis_engine::geom::lonlat_to_merc;
+    use rustgis_engine::map::{Camera, Projection};
+
+    use super::*;
+
+    fn globe(lon: f64, res: f64) -> Map {
+        let mut m = Map::new("m");
+        m.projection = Projection::Globe;
+        m.camera = Camera { center: lonlat_to_merc(Coord::new(lon, 0.0)), res };
+        m
+    }
+
+    #[test]
+    fn a_picture_behind_the_horizon_gives_no_empty_mesh() {
+        // Zoomed out, facing 70°E: the drape's margin runs past the antimeridian, so its second
+        // picture (180°–170°W) is all on the far side. Its empty mesh crashed egui-wgpu.
+        let ctx = egui::Context::default();
+        let mut m = globe(70.0, 20_000.0);
+        let key = DrapeKey { rev: 0, dark: false, sources: 0 };
+        let mut d = GlobeDrape::default();
+        assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.0));
+        assert_eq!(d.drape.as_ref().map(|d| d.patches.len()), Some(2));
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let meshes = d.meshes(rect, &Globe::new(&m.camera, 800.0, 600.0));
+        assert_eq!(meshes.len(), 1);
+        assert!(meshes.iter().all(|mesh| !mesh.indices.is_empty() && mesh.is_valid()));
+    }
+
+    #[test]
+    fn zooming_out_draws_a_wider_drape_and_keeps_it() {
+        let ctx = egui::Context::default();
+        let mut m = globe(10.0, 500.0);
+        let key = DrapeKey { rev: 0, dark: false, sources: 0 };
+        let mut d = GlobeDrape::default();
+        assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.0));
+        // Out past the margin: drawn again, coarser and wider ...
+        m.camera.res = 900.0;
+        assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.1));
+        assert_eq!(d.drape.as_ref().map(|d| d.res), Some(1800.0));
+        // ... so a further step out is still covered, and nothing is drawn.
+        m.camera.res = 1_300.0;
+        let built = d.drape.as_ref().map(|d| d.built);
+        assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.2));
+        assert_eq!(d.drape.as_ref().map(|d| d.built), built);
+        // The sprites are drawn once and kept while zooming.
+        assert!(d.sprites.is_some());
     }
 }

@@ -1215,7 +1215,8 @@ pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side
         }
         // Metres per point: the view's, or coarser to fit the size limit.
         let res = res.max(merc.width().max(merc.height()) * ppp / max_side);
-        let (w, h) = ((merc.width() / res).ceil(), (merc.height() / res).ceil());
+        // Whole points, rounded down so the picture never passes the size limit.
+        let (w, h) = ((merc.width() / res).floor().max(1.0), (merc.height() / res).floor().max(1.0));
         if w * ppp < 2.0 || h * ppp < 2.0 {
             continue;
         }
