@@ -300,12 +300,13 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let tiles: Vec<TileLayer> = app.session.map().tiles.clone();
         let mut tiles_shown = 0;
         for (i, tile) in tiles.iter().enumerate().filter(|(_, x)| shows(&x.name)) {
-            tile_row(app, ui, i, tiles.len(), tile, t);
+            tile_row(app, ui, i, tiles.len(), !filtering, tile, t);
             tiles_shown += 1;
         }
         let tables: Vec<(u32, String)> =
             app.session.project.tables.iter().filter(|x| shows(&x.name)).map(|x| (x.id, x.name.clone())).collect();
-        if filtering && blocks.is_empty() && tiles_shown == 0 && tables.is_empty() {
+        // A map with no layers says so below instead.
+        if filtering && !layers.is_empty() && blocks.is_empty() && tiles_shown == 0 && tables.is_empty() {
             ui.add_space(12.0);
             ui.vertical_centered(|ui| {
                 ui.label(egui::RichText::new(tl!("No layers match")).color(t.text_dim));
@@ -438,8 +439,9 @@ fn visibility_box(ui: &Ui, cb: Rect, visible: bool, t: &Tokens) {
 }
 
 /// A web tile layer's row (index `i` of `count`, top first as the map lists them): its checkbox
-/// shows or hides it; right-click sets its opacity, moves it up or down, or removes it.
-fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, tile: &TileLayer, t: &Tokens) {
+/// shows or hides it; right-click sets its opacity, moves it up or down (not with `reorder` off:
+/// the list is filtered), or removes it.
+fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: bool, tile: &TileLayer, t: &Tokens) {
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
     if resp.hovered() {
         ui.painter().rect_filled(r.shrink2(vec2(4.0, 1.0)), CornerRadius::same(5), t.hover);
@@ -472,11 +474,11 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, tile: &Ti
             }
         });
         ui.separator();
-        if ui.add_enabled(i > 0, egui::Button::new(tl!("Move up"))).clicked() {
+        if ui.add_enabled(reorder && i > 0, egui::Button::new(tl!("Move up"))).clicked() {
             action = Some(("map.setTiles", json!({"index": i, "move": "up"})));
             ui.close();
         }
-        if ui.add_enabled(i + 1 < count, egui::Button::new(tl!("Move down"))).clicked() {
+        if ui.add_enabled(reorder && i + 1 < count, egui::Button::new(tl!("Move down"))).clicked() {
             action = Some(("map.setTiles", json!({"index": i, "move": "down"})));
             ui.close();
         }
@@ -490,8 +492,8 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, tile: &Ti
     }
 }
 
-/// A layer's row and, expanded, its legend; returns the rectangle of both.
-/// A layer's row (and legend). With `reorder` off (the list is filtered) it can't be dragged.
+/// A layer's row and, expanded, its legend; returns the rectangle of both. With `reorder` off
+/// (the list is filtered) the row can't be dragged.
 fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: bool, t: &Tokens) -> Rect {
     let active = app.session.active_layer == Some(l.id);
     let row_h = 26.0;
