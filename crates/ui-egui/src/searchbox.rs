@@ -91,7 +91,8 @@ fn rows(st: &State) -> Vec<Row> {
     let mut v: Vec<Row> = (0..st.results.hits.len()).map(Row::Hit).collect();
     match &st.places {
         Places::Found(p) => v.extend((0..p.len()).map(Row::Place)),
-        Places::Idle if st.query.trim().chars().count() >= 2 && !is_coordinate(st) => v.push(Row::SearchPlaces),
+        // The query the results are for, so the rows agree until the next search lands.
+        Places::Idle if st.searched.trim().chars().count() >= 2 && !is_coordinate(st) => v.push(Row::SearchPlaces),
         _ => {}
     }
     v
@@ -159,7 +160,7 @@ fn boxed(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // Named for screen readers (and scripted clicks): the hint text isn't the box's name.
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, tl!("Search the map")));
     let resp = resp.on_hover_text(tl!(
-        "A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table; Enter searches places"
+        "A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place"
     ));
     if resp.changed() {
         st.edited_at = now;
@@ -352,7 +353,7 @@ fn describe(st: &State, row: &Row) -> (String, &'static str, String, Option<Stri
         Row::SearchPlaces => (
             tl!("Places").to_string(),
             "globe_view",
-            crate::i18n::fmt("Search places for “{query}”", &[("query", st.query.trim())]),
+            crate::i18n::fmt("Search places for “{query}”", &[("query", st.searched.trim())]),
             st.results.hits.is_empty().then(|| tl!("Enter").to_string()),
         ),
     }
@@ -397,7 +398,7 @@ fn pick(app: &mut RustGisApp, row: Row) {
                 Ok(g) => {
                     let slot: Answer = crate::Slot::default();
                     let land = slot.clone();
-                    let url = g.url(&st.query, PLACES);
+                    let url = g.url(&st.searched, PLACES);
                     rustgis_engine::render::rustgis_tiles::cache::download(
                         &url,
                         Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),

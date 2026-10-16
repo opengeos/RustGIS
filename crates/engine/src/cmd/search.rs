@@ -88,8 +88,11 @@ pub fn search(s: &Session, query: &str, limit: usize) -> Results {
             out.hits.push(Hit::Bookmark { name: b.name.clone() });
         }
     }
-    // A coordinate is what was meant: its digits aren't looked for in the tables.
-    if q.chars().count() >= MIN_FEATURE_QUERY && !matches!(out.hits.first(), Some(Hit::Coordinate { .. })) {
+    // A query that is plainly a coordinate (a decimal point, a degree mark, a hemisphere) isn't
+    // looked for in the tables; two whole numbers (an id, years, a range) may be either.
+    let plainly_coordinate = matches!(out.hits.first(), Some(Hit::Coordinate { .. }))
+        && q.chars().any(|c| matches!(c, '.' | '°' | 'º' | '\'' | '′' | '"' | '″') || c.is_alphabetic());
+    if q.chars().count() >= MIN_FEATURE_QUERY && !plainly_coordinate {
         let number = q.parse::<f64>().ok().filter(|n| n.is_finite());
         for l in map.layers.iter().filter(|l| !l.is_raster() && !l.graphics) {
             // A field called name (or the like) ranks ahead of the others when they match as well.
@@ -157,10 +160,11 @@ fn name_field(fields: &[rustgis_data::Field]) -> Option<usize> {
 
 /// 0 for the same text, 1 for one starting with the query, 2 for one containing it.
 fn rank_text(t: &str, needle: &str) -> Option<u8> {
-    if t.len() < needle.len() {
-        return None;
-    }
     if t.is_ascii() && needle.is_ascii() {
+        // Lowercasing other text can change its length in bytes, so only here is this a bound.
+        if t.len() < needle.len() {
+            return None;
+        }
         let (h, n) = (t.as_bytes(), needle.as_bytes());
         if h.eq_ignore_ascii_case(n) {
             return Some(0);
@@ -489,6 +493,11 @@ mod tests {
         assert!(r.hits.iter().any(|h| matches!(h, Hit::Feature { field, name: Some(_), .. } if field != "name")), "{r:?}");
         let r = search(&s, "48.85, 2.35", 50);
         assert_eq!(r.hits, vec![Hit::Coordinate { lon: 2.35, lat: 48.85 }]);
+        // Two whole numbers may be a coordinate or values: both are listed.
+        let r = search(&s, "10 20", 50);
+        assert_eq!(r.hits.first(), Some(&Hit::Coordinate { lon: 20.0, lat: 10.0 }));
+        // Lowercasing İ makes it longer, so a match isn't refused by its length.
+        assert_eq!(rank_text("İstanbul", "i̇stanbul"), Some(0));
         assert!(search(&s, "   ", 50).hits.is_empty());
     }
 
