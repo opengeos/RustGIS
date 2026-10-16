@@ -387,8 +387,11 @@ fn config(dsn: &str) -> Result<(postgres::Config, Tls)> {
                     c.application_name(&v);
                 }
                 "connect_timeout" => {
-                    if let Ok(s) = v.trim().parse::<u64>() {
-                        c.connect_timeout(Duration::from_secs(s.max(1)));
+                    // As libpq: zero or less is no limit of its own, so the default applies.
+                    if let Ok(s) = v.trim().parse::<i64>()
+                        && s > 0
+                    {
+                        c.connect_timeout(Duration::from_secs(s.unsigned_abs()));
                     }
                 }
                 "sslmode" => sslmode = Some(v.to_ascii_lowercase()),
@@ -447,6 +450,11 @@ fn config(dsn: &str) -> Result<(postgres::Config, Tls)> {
 /// libpq connection options a `postgresql://` address may carry that this client leaves out.
 const IGNORED: &[&str] = &["sslcert", "sslkey", "sslcrl", "gssencmode", "sslcompression", "passfile", "sslpassword"];
 
+/// Where servers usually put their socket: a password file names a connection through one as
+/// `localhost`.
+#[cfg(unix)]
+const DEFAULT_SOCKET_DIRS: &[&str] = &["/var/run/postgresql", "/run/postgresql", "/tmp"];
+
 /// The password for a connection in libpq's password file (`PGPASSFILE`, else `~/.pgpass`, or
 /// `%APPDATA%\postgresql\pgpass.conf`), which libpq ignores when others can read it.
 fn pgpass(config: &postgres::Config) -> Option<String> {
@@ -465,16 +473,27 @@ fn pgpass(config: &postgres::Config) -> Option<String> {
         }
     }
     let text = std::fs::read_to_string(&path).ok()?;
-    let host = match config.get_hosts().first() {
-        Some(postgres::config::Host::Tcp(h)) => h.clone(),
-        #[cfg(unix)]
-        Some(postgres::config::Host::Unix(_)) => "localhost".into(),
-        None => "localhost".into(),
-    };
+    let host = pgpass_host(config);
     let port = config.get_ports().first().copied().unwrap_or(5432).to_string();
     let user = config.get_user().unwrap_or_default().to_string();
     let db = config.get_dbname().map(str::to_string).unwrap_or_else(|| user.clone());
     pgpass_find(&text, &[&host, &port, &db, &user])
+}
+
+/// The host a password file names a connection by.
+fn pgpass_host(config: &postgres::Config) -> String {
+    // As libpq: the host, else the address, else `localhost`; a socket in the default directory
+    // is `localhost`, another its directory.
+    match config.get_hosts().first() {
+        Some(postgres::config::Host::Tcp(h)) => h.clone(),
+        #[cfg(unix)]
+        Some(postgres::config::Host::Unix(dir)) if !DEFAULT_SOCKET_DIRS.iter().any(|d| dir == std::path::Path::new(d)) => {
+            dir.display().to_string()
+        }
+        #[cfg(unix)]
+        Some(postgres::config::Host::Unix(_)) => "localhost".into(),
+        None => config.get_hostaddrs().first().map_or_else(|| "localhost".into(), ToString::to_string),
+    }
 }
 
 /// The password of the first line of a password file matching `want` (host, port, database,
@@ -699,8 +718,8 @@ impl PostgisSource {
                 fields.push(Field::new(name, ft));
             }
         }
-        // Ids stable between reads: the key, else the row's place in the table (`ctid`); a view
-        // has neither, and a partitioned table's `ctid`s repeat across its partitions, so their
+        // Ids stable between reads: the key, else the row's place in the table (`ctid`, which an
+        // `UPDATE`, `VACUUM FULL` or `CLUSTER` changes); a view has neither, and a partitioned table's `ctid`s repeat across its partitions, so their
         // rows are numbered as read.
         let id = match (&pk, relkind.as_str()) {
             (Some(k), _) => format!("{}::int8", ident(k)),
@@ -709,6 +728,11 @@ impl PostgisSource {
         };
         if pk.is_none() && !matches!(relkind.as_str(), "r" | "m") {
             notes.push("a view or partitioned table without a single-column key: its features are numbered as read".into());
+        } else if pk.is_none() {
+            notes.push(
+                "no single-column integer key: features are numbered by their place in the table, which changes when rows are updated"
+                    .into(),
+            );
         }
         let mut select = vec![id, wkb];
         select.extend(casts);
@@ -746,7 +770,7 @@ impl PostgisSource {
         Ok(src)
     }
 
-    /// The table's spatial index on the column, if it has one (a view's are its tables').
+    /// The table's spatial index on the column, if it has one (a view has none of its own).
     fn has_index(&self) -> bool {
         let rel = format!("{}.{}", ident(&self.table.schema), ident(&self.table.name));
         self.conn
@@ -776,7 +800,7 @@ impl PostgisSource {
             Some(n) if n >= EXACT_COUNT_BELOW => Some(n as u64),
             // No estimate (`-1`: never analyzed) or a small one: counted, within the probe's time.
             _ => {
-                let sql = format!("SELECT count(*) FROM {} WHERE {}", self.table.sql_from(), self.filter(None));
+                let sql = format!("SELECT count(*) FROM {} WHERE {}", self.table.sql_from(), self.filter(false));
                 self.conn
                     .snapshot(Some(PROBE_TIMEOUT), |t| t.query_one(sql.as_str(), &[]))
                     .ok()
@@ -812,7 +836,7 @@ impl PostgisSource {
             let sql = format!(
                 "SELECT ST_XMin(b), ST_YMin(b), ST_XMax(b), ST_YMax(b) FROM (SELECT ST_Extent({g}) AS b FROM {} WHERE {}) s WHERE b IS NOT NULL",
                 t.sql_from(),
-                self.filter(None)
+                self.filter(false)
             );
             self.conn.snapshot(Some(PROBE_TIMEOUT), |t| t.query_opt(sql.as_str(), &[])).ok().flatten().and_then(|r| row_extent(&r))
         });
@@ -857,11 +881,12 @@ impl PostgisSource {
             .and_then(|r| row_extent(&r))
     }
 
-    /// The `WHERE` condition: a geometry, of the family read, in the extent (`$1`–`$4`, native).
-    fn filter(&self, extent: Option<()>) -> String {
+    /// The `WHERE` condition: a geometry, of the family read, and with `in_extent`, in the extent
+    /// given as `$1`–`$4` (in the column's coordinates).
+    fn filter(&self, in_extent: bool) -> String {
         let g = self.table.geom();
         let mut w = format!("{g} IS NOT NULL AND NOT ST_IsEmpty({g})");
-        if extent.is_some() {
+        if in_extent {
             let col = ident(&self.table.column);
             // The column itself, so its index serves (a geography's in longitude/latitude).
             if self.table.geography {
@@ -902,7 +927,7 @@ impl FeatureSource for PostgisSource {
             return Ok(out);
         }
         let native = req.extent.and_then(|e| self.lonlat_to_native(&e));
-        let filter = self.filter(native.map(|_| ()));
+        let filter = self.filter(native.is_some());
         let args: Vec<f64> = native.map(|e| vec![e.min_x, e.min_y, e.max_x, e.max_y]).unwrap_or_default();
         let params: Vec<&(dyn ToSql + Sync)> = args.iter().map(|a| a as &(dyn ToSql + Sync)).collect();
         let from = self.table.sql_from();
@@ -1027,6 +1052,13 @@ mod tests {
         let (c, _) = config("host=h").unwrap_or_else(|e| panic!("{e}"));
         assert!(c.get_user().is_some());
         assert!(c.get_connect_timeout().is_some());
+        // As libpq, a timeout of zero or less is no limit of its own: the default applies.
+        for t in ["0", "-5"] {
+            let (c, _) = config(&format!("host=h connect_timeout={t}")).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(c.get_connect_timeout(), Some(&CONNECT_TIMEOUT));
+        }
+        let (c, _) = config("host=h connect_timeout=30").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(c.get_connect_timeout(), Some(&Duration::from_secs(30)));
     }
 
     #[test]
@@ -1035,6 +1067,15 @@ mod tests {
         assert_eq!(pgpass_find(text, &["db.example", "5432", "gis", "me"]).as_deref(), Some("p:w\\d"));
         assert_eq!(pgpass_find(text, &["x", "1", "y", "z"]).as_deref(), Some("fallback"));
         assert_eq!(pgpass_find("a:b:c", &["a", "b", "c", "d"]), None);
+        // The host it names: the host, else the address, else `localhost`.
+        let host = |dsn: &str| pgpass_host(&config(dsn).unwrap_or_else(|e| panic!("{e}")).0);
+        assert_eq!(host("host=db.example hostaddr=10.0.0.1"), "db.example");
+        assert_eq!(host("hostaddr=10.0.0.1"), "10.0.0.1");
+        #[cfg(unix)]
+        {
+            assert_eq!(host("host=/var/run/postgresql"), "localhost");
+            assert_eq!(host("host=/srv/pg"), "/srv/pg");
+        }
     }
 
     #[test]
