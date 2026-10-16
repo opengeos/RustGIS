@@ -5388,3 +5388,72 @@ fn postgis_live_end_to_end() {
     assert!(l.source.as_ref().unwrap().is_open(), "{:?}", l.source.as_ref().unwrap().error);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Deleting a map or layout other than the one in view (a tab's close button) keeps that view;
+/// deleting the one in view falls back to the first map; the last map stays.
+#[test]
+fn removing_another_map_or_layout_keeps_the_one_in_view() {
+    let mut s = world();
+    for n in ["B", "C"] {
+        s.run("map.new", &json!({"name": n})).unwrap();
+    }
+    let active = |s: &Session| s.map().name.clone();
+    assert_eq!(active(&s), "C");
+    s.run("map.remove", &json!({"name": "B"})).unwrap();
+    assert_eq!(active(&s), "C", "a map before the active one");
+    s.run("map.new", &json!({"name": "D"})).unwrap();
+    s.run("map.activate", &json!({"name": "C"})).unwrap();
+    s.run("map.remove", &json!({"name": "D"})).unwrap();
+    assert_eq!(active(&s), "C", "a map after the active one");
+    let first = s.project.maps[0].name.clone();
+    s.run("map.remove", &json!({"name": "C"})).unwrap();
+    assert_eq!((active(&s), s.project.maps.len()), (first.clone(), 1), "the active map itself");
+    assert!(s.run("map.remove", &json!({"name": first})).is_err(), "the last map");
+    assert_eq!(s.project.maps.len(), 1);
+
+    for n in ["L1", "L2", "L3"] {
+        s.run("layout.new", &json!({"name": n})).unwrap();
+    }
+    let open = |s: &Session| s.active_layout.and_then(|i| s.project.layouts.get(i)).map(|l| l.name.clone());
+    s.run("layout.activate", &json!({"name": "L2"})).unwrap();
+    s.run("layout.remove", &json!({"name": "L1"})).unwrap();
+    assert_eq!(open(&s).as_deref(), Some("L2"), "a layout before the open one");
+    s.run("layout.remove", &json!({"name": "L3"})).unwrap();
+    assert_eq!(open(&s).as_deref(), Some("L2"), "a layout after the open one");
+    s.run("layout.remove", &json!({"name": "L2"})).unwrap();
+    assert_eq!((open(&s), s.project.layouts.len()), (None, 0), "the open layout itself");
+    s.run("layout.new", &json!({"name": "L4"})).unwrap();
+    s.run("layout.close", &Value::Null).unwrap();
+    s.run("layout.remove", &json!({"name": "L4"})).unwrap();
+    assert_eq!(open(&s), None, "with the map in view, it stays in view");
+}
+
+/// A map's name finds one map (tabs, Browser, map frames): renaming to another map's name adds a
+/// number, and a map keeps its own name in another case.
+#[test]
+fn map_rename_keeps_map_names_unique() {
+    let mut s = world();
+    let first = s.map().name.clone();
+    s.run("map.new", &json!({"name": "B"})).unwrap();
+    let r = s.run("map.rename", &json!({"name": first.to_uppercase()})).unwrap();
+    assert_eq!(r["name"], format!("{} 2", first.to_uppercase()));
+    s.run("map.new", &json!({"name": "C"})).unwrap();
+    assert_eq!(s.run("map.rename", &json!({"name": format!("{} 2", first)})).unwrap()["name"], format!("{first} 2 2"));
+    let own = format!("{} 2 2", first.to_lowercase());
+    assert_eq!(s.run("map.rename", &json!({"name": own})).unwrap()["name"], own.as_str(), "its own name, in another case");
+    let names: Vec<String> = s.project.maps.iter().map(|m| m.name.to_lowercase()).collect();
+    let mut unique = names.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), names.len(), "{names:?}");
+    for p in [json!({}), json!({"name": "  "}), json!({"name": 3})] {
+        assert!(s.run("map.rename", &p).is_err(), "{p}");
+    }
+    // A long name keeps to 200 characters, number included.
+    let long = "é".repeat(300);
+    s.run("map.rename", &json!({"name": long})).unwrap();
+    s.run("map.new", &Value::Null).unwrap();
+    let r = s.run("map.rename", &json!({"name": long})).unwrap();
+    let name = r["name"].as_str().unwrap_or_default();
+    assert_eq!((name.chars().count(), name.ends_with(" 2")), (200, true), "{name}");
+}

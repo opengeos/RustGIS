@@ -531,7 +531,7 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         }
                         resp.context_menu(|ui| {
                             if ui.button(tl!("Delete")).clicked() {
-                                let _ = app.run("map.remove", json!({"name": m}));
+                                crate::mapview::delete_map(app, m);
                                 ui.close();
                             }
                         });

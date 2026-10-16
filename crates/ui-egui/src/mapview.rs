@@ -170,7 +170,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     }
     animate(app, ui);
     // Side by side: the other map on the right, following this one when views are linked.
-    if let Some(other) = app.ws.split.filter(|i| *i != app.session.project.active_map && *i < app.session.project.maps.len()) {
+    if let Some(other) = split_map(app).filter(|i| *i != app.session.project.active_map) {
         let full = ui.available_rect_before_wrap();
         let right = Rect::from_min_max(pos2(full.center().x + 1.0, full.min.y), full.max);
         split_view(app, ui, other, right, &t);
@@ -1429,11 +1429,16 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let mut x = r.min.x + 6.0;
     let names: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
     let active = if app.session.active_layout.is_some() { usize::MAX } else { app.session.project.active_map };
+    // A tab's close button deletes its map or layout after the strip is drawn.
+    let mut close: Option<(&str, String)> = None;
     for (i, n) in names.iter().enumerate() {
-        let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0;
+        let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0 + TAB_CLOSE_W;
         let tr = Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(w, r.height() - 4.0));
         let resp = ui.interact(tr, egui::Id::new(("maptab", i)), Sense::click());
         let is = i == active;
+        // A project keeps at least one map (`map.remove` refuses the last).
+        let last = names.len() < 2;
+        let tip = if last { tl!("A project keeps at least one map") } else { tl!("Delete Map") };
         if is {
             ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.ribbon);
             ui.painter().rect_filled(
@@ -1441,7 +1446,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
                 t.accent,
             );
-        } else if resp.hovered() {
+        } else if resp.contains_pointer() {
             ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.hover);
         }
         icons::paint(ui.painter(), Rect::from_center_size(pos2(tr.min.x + 15.0, tr.center().y), vec2(15.0, 15.0)), "map", t.icon, t.accent);
@@ -1452,6 +1457,10 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             if is { semibold(12.0) } else { regular(12.0) },
             if is { t.text } else { t.text_dim },
         );
+        // Over the tab's fill, so painted after it.
+        if tab_close(ui, t, tr, egui::Id::new(("maptab_close", i)), is, !last, tip) {
+            close = Some(("map.remove", n.clone()));
+        }
         if resp.clicked() && !is {
             let _ = app.run("layout.close", Value::Null);
             let _ = app.run("map.activate", json!({"name": n}));
@@ -1462,7 +1471,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // Layouts, after the maps.
     let layouts: Vec<String> = app.session.project.layouts.iter().map(|l| l.name.clone()).collect();
     for (i, n) in layouts.iter().enumerate() {
-        let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0;
+        let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0 + TAB_CLOSE_W;
         let tr = Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(w, r.height() - 4.0));
         let resp = ui.interact(tr, egui::Id::new(("layouttab", i)), Sense::click());
         let is = app.session.active_layout == Some(i);
@@ -1473,7 +1482,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
                 t.accent,
             );
-        } else if resp.hovered() {
+        } else if resp.contains_pointer() {
             ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.hover);
         }
         icons::paint(
@@ -1490,6 +1499,10 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             if is { semibold(12.0) } else { regular(12.0) },
             if is { t.text } else { t.text_dim },
         );
+        // Over the tab's fill, so painted after it.
+        if tab_close(ui, t, tr, egui::Id::new(("layouttab_close", i)), is, true, tl!("Delete Layout")) {
+            close = Some(("layout.remove", n.clone()));
+        }
         if resp.clicked() && !is {
             let _ = app.run("layout.activate", json!({"name": n}));
             app.ui.tab = "Publish".into();
@@ -1505,6 +1518,56 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if resp.on_hover_text(tl!("New Map")).clicked() {
         let _ = app.run("map.new", Value::Null);
     }
+    match close {
+        Some(("map.remove", name)) => delete_map(app, &name),
+        Some((cmd, name)) => {
+            let _ = app.run(cmd, json!({"name": name}));
+        }
+        None => {}
+    }
+}
+
+/// The map shown side by side, while its name finds one (a deleted or renamed map's doesn't).
+pub(crate) fn split_map(app: &RustGisApp) -> Option<usize> {
+    let n = app.ws.split.as_deref()?;
+    app.session.project.maps.iter().position(|m| m.name.eq_ignore_ascii_case(n))
+}
+
+/// Deletes a map (`map.remove`); the popup goes with the active map, even behind an open layout.
+pub(crate) fn delete_map(app: &mut RustGisApp, name: &str) {
+    let p = &app.session.project;
+    let was_active = p.maps.get(p.active_map).is_some_and(|m| m.name.eq_ignore_ascii_case(name));
+    if app.run("map.remove", json!({"name": name})).is_ok() && was_active {
+        app.map.popup = None;
+    }
+}
+
+/// Room a view tab keeps at its right for the close button.
+const TAB_CLOSE_W: f32 = 18.0;
+
+/// A view tab's close button (×), shown on the tab in view and on the one under the pointer;
+/// `enabled: false` dims it and only explains why (`tip`). True when clicked.
+fn tab_close(ui: &mut Ui, t: &Tokens, tab: Rect, id: egui::Id, in_view: bool, enabled: bool, tip: &str) -> bool {
+    // Hidden, it takes no clicks either: they open the tab (a touch screen has no hover).
+    if !(in_view || ui.rect_contains_pointer(tab)) {
+        return false;
+    }
+    let cr = Rect::from_center_size(pos2(tab.max.x - 13.0, tab.center().y), vec2(16.0, 16.0));
+    // Added after the tab, so it sits on top: its click (even dimmed) doesn't also open the tab.
+    let resp = ui.interact(cr, id, Sense::click());
+    if enabled && resp.hovered() {
+        ui.painter().rect_filled(cr, CornerRadius::same(3), t.pressed);
+    }
+    let ink = if !enabled {
+        t.text_disabled
+    } else if resp.hovered() {
+        t.text
+    } else {
+        t.text_dim
+    };
+    icons::paint(ui.painter(), cr.shrink(3.0), "close", ink, t.accent);
+    let resp = resp.on_hover_text(tip);
+    enabled && resp.clicked()
 }
 
 #[cfg(test)]
