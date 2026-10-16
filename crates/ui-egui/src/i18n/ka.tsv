@@ -105,6 +105,7 @@ AI provider	AI პროვაიდერი
 Alignment	განლაგება
 All	ყველა
 All categories	ყველა კატეგორია
+All classes	ყველა კლასი
 All files	ყველა ფაილი
 All Selected	ყველა მონიშნული
 All steps done.	ყველა საფეხური შესრულდა.
@@ -745,6 +746,7 @@ Hide	დამალვა
 Hide features far from the view's centre.	ხედის ცენტრიდან შორს მდებარე ობიექტების დამალვა.
 Hide labels when the viewer is closer than this.	წარწერების დამალვა, როცა მაყურებელი ამაზე ახლოსაა.
 Hide labels when the viewer is farther than this.	წარწერების დამალვა, როცა მაყურებელი ამაზე შორსაა.
+Hide other values	სხვა მნიშვნელობების დამალვა
 Hide walls facing away from you.	თქვენგან გამოსულ მიმართულებით მდებარე კედლების დამალვა.
 High values of the first raster and low values of the second score best.	პირველი რასტრის მაღალი და მეორეს დაბალი მნიშვნელობები ყველაზე მაღალ ქულას იღებს.
 Histogram Equalize	ჰისტოგრამის გათანაბრება
@@ -1083,6 +1085,7 @@ not needed	საჭირო არ არის
 Not saved yet	ჯერ არ არის შენახული
 Notebook	რვეული
 Notebook Pane	რვეულის პანელი
+Nothing named {name} to rename	გადასარქმევად {name} სახელით არაფერია
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	გაზიარებული ჯერ არაფერია. გამოქვეყნება › გაზიარება როგორც ქმნის ვებ რუკებს, ფენებს, სტილებს, სცენებს და სხვას.
 Now	ახლა
 Nulls	Null-ები

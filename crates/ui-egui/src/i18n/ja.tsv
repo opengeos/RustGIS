@@ -105,6 +105,7 @@ AI provider	AI プロバイダー
 Alignment	配置
 All	すべて
 All categories	すべてのカテゴリ
+All classes	すべてのクラス
 All files	すべてのファイル
 All Selected	すべて選択済み
 All steps done.	すべてのステップが完了しました。
@@ -745,6 +746,7 @@ Hide	非表示
 Hide features far from the view's centre.	ビューの中心から遠いフィーチャを非表示にします。
 Hide labels when the viewer is closer than this.	視点がこれより近いときにラベルを非表示にします。
 Hide labels when the viewer is farther than this.	視点がこれより遠いときにラベルを非表示にします。
+Hide other values	その他の値を隠す
 Hide walls facing away from you.	背を向けた壁を非表示にします。
 High values of the first raster and low values of the second score best.	1 つ目のラスターの高い値と 2 つ目のラスターの低い値が最も高いスコアになります。
 Histogram Equalize	ヒストグラム均等化
@@ -1083,6 +1085,7 @@ not needed	不要
 Not saved yet	未保存
 Notebook	ノートブック
 Notebook Pane	ノートブック ウィンドウ
+Nothing named {name} to rename	名前を変更する {name} という項目はありません
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	まだ何も共有していません。[公開] › [共有形式] で Web マップ、レイヤー、スタイル、シーンなどを作成します。
 Now	現在
 Nulls	Null

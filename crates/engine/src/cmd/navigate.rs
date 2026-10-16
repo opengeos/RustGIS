@@ -1,6 +1,8 @@
 //! Home › Navigate, Add (basemap) and Data › Project (new map), bookmarks.
 
 use rustgis_geom::{Coord, Extent};
+use rustgis_map::layout::ElementKind;
+use rustgis_map::presentation::PageKind;
 use rustgis_map::{Basemap, Bookmark, Map, Projection};
 use serde_json::{Value, json};
 
@@ -109,22 +111,24 @@ pub fn commands() -> Vec<C> {
             if n.is_empty() {
                 return Err("name is required".into());
             }
-            let base: String = n.chars().take(200).collect();
+            // A `map` that isn't a name is an error, never the active map.
+            let i = match p.get("map") {
+                None | Some(Value::Null) => s.project.active_map,
+                Some(Value::String(m)) => {
+                    s.project.maps.iter().position(|x| x.name.eq_ignore_ascii_case(m)).ok_or_else(|| format!("no map '{m}'"))?
+                }
+                Some(_) => return Err("map must be a map's name".into()),
+            };
+            let old = s.project.maps.get(i).map(|m| m.name.clone()).ok_or("no map")?;
             // Unique among the other maps, so a name finds one map (tabs, Browser, map frames).
-            let active = s.project.active_map;
-            let taken = |n: &str| s.project.maps.iter().enumerate().any(|(j, m)| j != active && m.name.eq_ignore_ascii_case(n));
-            let mut name = base.clone();
-            let mut k = 1;
-            while taken(&name) {
-                k += 1;
-                // The number fits in the 200 characters a name keeps.
-                let suffix = format!(" {k}");
-                name = base.chars().take(200usize.saturating_sub(suffix.len())).chain(suffix.chars()).collect();
+            let name = super::numbered(n, |n| s.project.maps.iter().enumerate().any(|(j, m)| j != i && m.name.eq_ignore_ascii_case(n)));
+            if let Some(m) = s.project.maps.get_mut(i) {
+                m.name = name.clone();
             }
-            s.map_mut().name = name.clone();
+            follow_renamed_map(s, &old, &name);
             Ok(json!({"name": name}))
         })
-        .params(r#"{"name": string (the active map's new name; a number is added when another map has it)}"#),
+        .params(r#"{"name": string (the new name; a number is added when another map has it), "map"?: name (default: the active map)}"#),
         C::new("map.remove", "Delete Map", "Browser", |s, p| {
             if s.project.maps.len() < 2 {
                 return Err("a project keeps at least one map".into());
@@ -149,6 +153,29 @@ pub fn commands() -> Vec<C> {
 
 fn s_name(p: &Value) -> Result<&str, String> {
     ps(p, "name").ok_or_else(|| "name is required".to_string())
+}
+
+/// Points layout map frames, presentation map pages and offline areas at a renamed map (#287),
+/// so they keep finding it.
+fn follow_renamed_map(s: &mut Session, old: &str, new: &str) {
+    let renamed = |m: &mut String| {
+        if m.eq_ignore_ascii_case(old) {
+            *m = new.to_string();
+        }
+    };
+    for e in s.project.layouts.iter_mut().flat_map(|l| l.elements.iter_mut()) {
+        if let ElementKind::MapFrame { map, .. } = &mut e.kind {
+            renamed(map);
+        }
+    }
+    for page in s.project.presentations.iter_mut().flat_map(|p| p.pages.iter_mut()) {
+        if let PageKind::Map { map, .. } = &mut page.kind {
+            renamed(map);
+        }
+    }
+    for a in &mut s.project.offline_areas {
+        renamed(&mut a.map);
+    }
 }
 
 fn zoom_full(s: &mut Session, _: &Value) -> CmdResult {

@@ -105,6 +105,7 @@ AI provider	AI-aanbieder
 Alignment	Uitlijning
 All	Alle
 All categories	Alle categorieën
+All classes	Alle klassen
 All files	Alle bestanden
 All Selected	Alle geselecteerde
 All steps done.	Alle stappen voltooid.
@@ -745,6 +746,7 @@ Hide	Verbergen
 Hide features far from the view's centre.	Objecten ver van het midden van de weergave verbergen.
 Hide labels when the viewer is closer than this.	Labels verbergen wanneer de kijker dichterbij is.
 Hide labels when the viewer is farther than this.	Labels verbergen wanneer de kijker verder weg is.
+Hide other values	Andere waarden verbergen
 Hide walls facing away from you.	Wanden die van je af gericht zijn verbergen.
 High values of the first raster and low values of the second score best.	Hoge waarden van het eerste raster en lage waarden van het tweede scoren het best.
 Histogram Equalize	Histogram egaliseren
@@ -1083,6 +1085,7 @@ not needed	niet nodig
 Not saved yet	Nog niet opgeslagen
 Notebook	Notebook
 Notebook Pane	Notebookvenster
+Nothing named {name} to rename	Niets met de naam {name} om te hernoemen
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Nog niets gedeeld. Publiceren › Delen als maakt webkaarten, lagen, stijlen, scènes en meer.
 Now	Nu
 Nulls	Null-waarden

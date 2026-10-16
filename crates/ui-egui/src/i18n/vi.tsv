@@ -105,6 +105,7 @@ AI provider	Nhà cung cấp AI
 Alignment	Căn chỉnh
 All	Tất cả
 All categories	Tất cả danh mục
+All classes	Tất cả các lớp
 All files	Tất cả tệp
 All Selected	Tất cả được chọn
 All steps done.	Đã hoàn tất mọi bước.
@@ -745,6 +746,7 @@ Hide	Ẩn
 Hide features far from the view's centre.	Ẩn các đối tượng ở xa tâm khung nhìn.
 Hide labels when the viewer is closer than this.	Ẩn nhãn khi người xem ở gần hơn giá trị này.
 Hide labels when the viewer is farther than this.	Ẩn nhãn khi người xem ở xa hơn giá trị này.
+Hide other values	Ẩn các giá trị khác
 Hide walls facing away from you.	Ẩn các bức tường quay lưng về phía bạn.
 High values of the first raster and low values of the second score best.	Giá trị cao của raster thứ nhất và giá trị thấp của raster thứ hai có điểm tốt nhất.
 Histogram Equalize	Cân bằng histogram
@@ -1083,6 +1085,7 @@ not needed	không cần
 Not saved yet	Chưa lưu
 Notebook	Sổ tay
 Notebook Pane	Ngăn sổ tay
+Nothing named {name} to rename	Không có mục nào tên {name} để đổi tên
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Chưa chia sẻ gì. Xuất bản › Chia sẻ thành tạo bản đồ web, lớp, kiểu, cảnh và nhiều hơn nữa.
 Now	Bây giờ
 Nulls	Giá trị rỗng

@@ -105,6 +105,7 @@ AI provider	KI-Anbieter
 Alignment	Ausrichtung
 All	Alle
 All categories	Alle Kategorien
+All classes	Alle Klassen
 All files	Alle Dateien
 All Selected	Alle ausgewählten
 All steps done.	Alle Schritte erledigt.
@@ -745,6 +746,7 @@ Hide	Ausblenden
 Hide features far from the view's centre.	Objekte weit entfernt vom Ansichtszentrum ausblenden.
 Hide labels when the viewer is closer than this.	Beschriftungen ausblenden, wenn der Betrachter näher ist.
 Hide labels when the viewer is farther than this.	Beschriftungen ausblenden, wenn der Betrachter weiter entfernt ist.
+Hide other values	Andere Werte ausblenden
 Hide walls facing away from you.	Von Ihnen abgewandte Wände ausblenden.
 High values of the first raster and low values of the second score best.	Hohe Werte des ersten und niedrige Werte des zweiten Rasters schneiden am besten ab.
 Histogram Equalize	Histogrammausgleich
@@ -1083,6 +1085,7 @@ not needed	nicht erforderlich
 Not saved yet	Noch nicht gespeichert
 Notebook	Notizbuch
 Notebook Pane	Notizbuchbereich
+Nothing named {name} to rename	Nichts mit dem Namen {name} zum Umbenennen
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Noch nichts geteilt. Veröffentlichen › Teilen als erstellt Webkarten, Layer, Stile, Szenen und mehr.
 Now	Jetzt
 Nulls	Nullwerte

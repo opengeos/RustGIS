@@ -190,6 +190,70 @@ fn tool_results_carry_notices() {
     assert!(quiet.get("notices").is_none(), "{quiet}");
 }
 
+/// map.activate / map.remove must not report the newly visible map's layers as layersAdded (#212).
+#[test]
+fn map_switch_and_remove_do_not_report_layers_added() {
+    let mut s = sample();
+    let t = |name: &str, args: Value| ToolCall { id: "x".into(), name: name.into(), args };
+    let world = s.map().name.clone();
+    assert!(!world.is_empty(), "sample project needs a named map");
+    let on_world: Value = serde_json::from_str(
+        &tools::run(&mut s, &t("run_command", json!({"command": "map.activate", "params": {"name": world}}))).unwrap(),
+    )
+    .unwrap();
+    assert!(on_world.get("layersAdded").is_none(), "activating the current map must not invent layersAdded: {on_world}");
+
+    tools::run(&mut s, &t("run_command", json!({"command": "map.new", "params": {"name": "Repro"}}))).unwrap();
+    assert_eq!(s.map().name, "Repro");
+    let activate: Value = serde_json::from_str(
+        &tools::run(&mut s, &t("run_command", json!({"command": "map.activate", "params": {"name": world}}))).unwrap(),
+    )
+    .unwrap();
+    assert!(activate.get("layersAdded").is_none(), "map.activate must not report the target map's layers as added: {activate}");
+    assert_eq!(s.map().name, world);
+
+    let remove: Value = serde_json::from_str(
+        &tools::run(&mut s, &t("run_command", json!({"command": "map.remove", "params": {"name": "Repro"}}))).unwrap(),
+    )
+    .unwrap();
+    assert!(remove.get("layersAdded").is_none(), "map.remove must not report remaining layers as added: {remove}");
+    assert_eq!(s.project.maps.len(), 1);
+
+    // Removing the active, populated map switches to another map's layers: still nothing added.
+    tools::run(&mut s, &t("run_command", json!({"command": "map.new", "params": {"name": "Gone"}}))).unwrap();
+    let pts = json!({"fileName": "pts.csv", "text": "lon,lat\n1,2\n"});
+    tools::run(&mut s, &t("run_command", json!({"command": "layer.addDataText", "params": pts.clone()}))).unwrap();
+    assert_eq!(s.map().name, "Gone");
+    let remove_active: Value =
+        serde_json::from_str(&tools::run(&mut s, &t("run_command", json!({"command": "map.remove", "params": {"name": "Gone"}}))).unwrap())
+            .unwrap();
+    assert!(remove_active.get("layersAdded").is_none(), "removing the active map must not report the next map's layers: {remove_active}");
+    assert_eq!(s.map().name, world);
+
+    // Renaming the active map keeps its layers: nothing added.
+    let renamed: Value = serde_json::from_str(
+        &tools::run(&mut s, &t("run_command", json!({"command": "map.rename", "params": {"name": "Renamed"}}))).unwrap(),
+    )
+    .unwrap();
+    assert!(renamed.get("layersAdded").is_none(), "map.rename must not report the map's layers as added: {renamed}");
+
+    // A layer added to a map the command also created is still reported.
+    tools::run(&mut s, &t("run_command", json!({"command": "map.new", "params": {"name": "Fresh"}}))).unwrap();
+    let fresh: Value =
+        serde_json::from_str(&tools::run(&mut s, &t("run_command", json!({"command": "layer.addDataText", "params": pts}))).unwrap())
+            .unwrap();
+    assert!(fresh.get("layersAdded").and_then(Value::as_array).is_some_and(|a| a.len() == 1), "{fresh}");
+    tools::run(&mut s, &t("run_command", json!({"command": "map.activate", "params": {"name": "Renamed"}}))).unwrap();
+
+    // Real adds still report layersAdded.
+    let buffered: Value = serde_json::from_str(
+        &tools::run(&mut s, &t("run_tool", json!({"tool": "buffer", "params": {"input": "Cities", "distance": 100}}))).unwrap(),
+    )
+    .unwrap();
+    let added = buffered.get("layersAdded").and_then(Value::as_array);
+    assert!(added.is_some_and(|a| !a.is_empty()), "buffer must name the layer it added: {buffered}");
+}
+
 #[test]
 fn geoprocessing_and_reading_data() {
     let mut s = sample();

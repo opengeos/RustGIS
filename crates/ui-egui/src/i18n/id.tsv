@@ -105,6 +105,7 @@ AI provider	Penyedia AI
 Alignment	Perataan
 All	Semua
 All categories	Semua kategori
+All classes	Semua kelas
 All files	Semua berkas
 All Selected	Semua Terpilih
 All steps done.	Semua langkah selesai.
@@ -745,6 +746,7 @@ Hide	Sembunyikan
 Hide features far from the view's centre.	Sembunyikan fitur yang jauh dari pusat tampilan.
 Hide labels when the viewer is closer than this.	Sembunyikan label saat penampil lebih dekat dari nilai ini.
 Hide labels when the viewer is farther than this.	Sembunyikan label saat penampil lebih jauh dari nilai ini.
+Hide other values	Sembunyikan nilai lain
 Hide walls facing away from you.	Sembunyikan dinding yang membelakangi Anda.
 High values of the first raster and low values of the second score best.	Nilai tinggi raster pertama dan nilai rendah raster kedua mendapat skor terbaik.
 Histogram Equalize	Ekualisasi Histogram
@@ -1083,6 +1085,7 @@ not needed	tidak diperlukan
 Not saved yet	Belum disimpan
 Notebook	Notebook
 Notebook Pane	Panel Notebook
+Nothing named {name} to rename	Tidak ada yang bernama {name} untuk diganti namanya
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Belum ada yang dibagikan. Publikasi › Bagikan Sebagai membuat peta web, layer, gaya, scene, dan lainnya.
 Now	Sekarang
 Nulls	Null

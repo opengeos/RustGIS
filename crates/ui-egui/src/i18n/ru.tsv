@@ -105,6 +105,7 @@ AI provider	Поставщик ИИ
 Alignment	Выравнивание
 All	Все
 All categories	Все категории
+All classes	Все классы
 All files	Все файлы
 All Selected	Все выбранные
 All steps done.	Все шаги выполнены.
@@ -745,6 +746,7 @@ Hide	Скрыть
 Hide features far from the view's centre.	Скрывать объекты, далёкие от центра вида.
 Hide labels when the viewer is closer than this.	Скрывать подписи, когда наблюдатель ближе этого расстояния.
 Hide labels when the viewer is farther than this.	Скрывать подписи, когда наблюдатель дальше этого расстояния.
+Hide other values	Скрыть прочие значения
 Hide walls facing away from you.	Скрывать стены, обращённые от вас.
 High values of the first raster and low values of the second score best.	Лучшую оценку получают высокие значения первого растра и низкие значения второго.
 Histogram Equalize	Выравнивание гистограммы
@@ -1083,6 +1085,7 @@ not needed	не требуется
 Not saved yet	Ещё не сохранено
 Notebook	Блокнот
 Notebook Pane	Панель блокнота
+Nothing named {name} to rename	Нечего переименовывать: нет объекта с именем {name}
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Пока ничего не опубликовано. Публикация › Поделиться как создаёт веб-карты, слои, стили, сцены и другое.
 Now	Сейчас
 Nulls	Пустые значения

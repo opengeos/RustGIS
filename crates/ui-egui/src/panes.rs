@@ -530,6 +530,10 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                             let _ = app.run("map.activate", json!({"name": m}));
                         }
                         resp.context_menu(|ui| {
+                            if ui.button(tl!("Rename…")).clicked() {
+                                let _ = app.run("ui.dialog", json!({"name": "renameMap", "target": m}));
+                                ui.close();
+                            }
                             if ui.button(tl!("Delete")).clicked() {
                                 app.map.deleting = Some(crate::mapview::Deletion::Map(m.clone()));
                                 ui.close();
@@ -587,6 +591,10 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                                 app.ui.tab = "Publish".into();
                             }
                             resp.context_menu(|ui| {
+                                if ui.button(tl!("Rename…")).clicked() {
+                                    let _ = app.run("ui.dialog", json!({"name": "renameLayout", "target": n}));
+                                    ui.close();
+                                }
                                 if ui.button(tl!("Delete")).clicked() {
                                     app.map.deleting = Some(crate::mapview::Deletion::Layout(n.clone()));
                                     ui.close();

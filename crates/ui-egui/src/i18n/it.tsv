@@ -105,6 +105,7 @@ AI provider	Provider di IA
 Alignment	Allineamento
 All	Tutti
 All categories	Tutte le categorie
+All classes	Tutte le classi
 All files	Tutti i file
 All Selected	Tutti selezionati
 All steps done.	Tutti i passaggi completati.
@@ -745,6 +746,7 @@ Hide	Nascondi
 Hide features far from the view's centre.	Nascondi gli elementi lontani dal centro della vista.
 Hide labels when the viewer is closer than this.	Nascondi le etichette quando l'osservatore è più vicino di questo valore.
 Hide labels when the viewer is farther than this.	Nascondi le etichette quando l'osservatore è più lontano di questo valore.
+Hide other values	Nascondi altri valori
 Hide walls facing away from you.	Nascondi le pareti rivolte dalla parte opposta.
 High values of the first raster and low values of the second score best.	I valori alti del primo raster e bassi del secondo ottengono il punteggio migliore.
 Histogram Equalize	Equalizzazione istogramma
@@ -1083,6 +1085,7 @@ not needed	non necessaria
 Not saved yet	Non ancora salvato
 Notebook	Notebook
 Notebook Pane	Pannello Notebook
+Nothing named {name} to rename	Niente di nome {name} da rinominare
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Ancora nulla di condiviso. Pubblica › Condividi come crea mappe web, layer, stili, scene e altro.
 Now	Adesso
 Nulls	Valori nulli

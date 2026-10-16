@@ -1883,6 +1883,35 @@ impl RustGisApp {
                     self.dialogs.a = p.get("lon").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default();
                     self.dialogs.b = p.get("lat").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default();
                 }
+                // Rename Map / Rename Layout remember which one (`target`, by name; default the
+                // one in view), so renaming another from the Browser leaves the view alone.
+                if matches!(which, "renameMap" | "renameLayout") {
+                    let target = p.get("target").and_then(Value::as_str);
+                    let pr = &self.session.project;
+                    let found = if which == "renameMap" {
+                        match target {
+                            Some(n) => pr.maps.iter().find(|m| m.name.eq_ignore_ascii_case(n)),
+                            None => pr.maps.get(pr.active_map),
+                        }
+                        .map(|m| m.name.clone())
+                    } else {
+                        match target {
+                            Some(n) => pr.layouts.iter().find(|l| l.name.eq_ignore_ascii_case(n)),
+                            None => self.session.active_layout.and_then(|i| pr.layouts.get(i)),
+                        }
+                        .map(|l| l.name.clone())
+                    };
+                    let Some(name) = found else {
+                        self.dialogs.open = None;
+                        // With no target, only Rename Layout can miss: no layout is open.
+                        return Err(match target {
+                            Some(n) => i18n::fmt("Nothing named {name} to rename", &[("name", n)]),
+                            None => tl!("open a layout first").to_string(),
+                        });
+                    };
+                    self.dialogs.a = name.clone();
+                    self.dialogs.text = name;
+                }
             }
             // Picks the image for a picture graphic whose corners were just dragged.
             "ui.addPicture" => {
