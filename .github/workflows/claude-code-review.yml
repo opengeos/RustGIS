@@ -301,6 +301,14 @@ jobs:
           base_sha="$(gh api "repos/$REPO/compare/$base...$HEAD_SHA" --jq .merge_base_commit.sha)"
           gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
             --jq '.[] | {filename, status, previous_filename}' > "$RUNNER_TEMP/files.json"
+          # The file list stops at 3000 files; a longer PR keeps the fallback
+          # rather than reporting partial counts.
+          expected="$(jq -r .changedFiles pr-context/metadata.json)"
+          listed="$(jq -s length "$RUNNER_TEMP/files.json")"
+          if [ "$expected" != "$listed" ]; then
+            echo "::warning::PR file list has $listed of $expected files; change stats unavailable"
+            exit 1
+          fi
           for side in base head; do
             sha="$base_sha"
             if [ "$side" = head ]; then sha="$HEAD_SHA"; fi
