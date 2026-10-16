@@ -5629,6 +5629,12 @@ fn bookmarks_export_and_import_across_projections() {
     let added = r["added"].as_array().unwrap();
     assert!(added.iter().any(|n| n == "Here") && !added.iter().any(|n| n == "Americas"), "{added:?}");
     assert_eq!(s.map().bookmarks.len(), before);
+    // Re-importing replaces bookmarks where they are, and names each once.
+    let order: Vec<String> = s.map().bookmarks.iter().map(|b| b.name.clone()).collect();
+    let twice = json!({"bookmarks": [{"name": "Europe", "lon": 10, "lat": 50, "metresPerPixel": 1000}, {"name": "europe", "lon": 11, "lat": 50, "metresPerPixel": 1000}]});
+    let r = s.run("bookmark.import", &json!({"text": twice.to_string()})).unwrap();
+    assert_eq!(r["added"], json!(["Europe"]));
+    assert_eq!(s.map().bookmarks.iter().map(|b| b.name.clone()).collect::<Vec<_>>(), order);
     s.run("bookmark.go", &json!({"name": "Here"})).unwrap();
     let c = s.map().center_lonlat();
     assert!((c.x - 10.0).abs() < 1e-6 && (c.y - 50.0).abs() < 1e-6, "{c:?}");

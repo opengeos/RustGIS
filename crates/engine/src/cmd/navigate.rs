@@ -253,7 +253,7 @@ fn go_bookmark(s: &mut Session, p: &Value) -> CmdResult {
     Ok(Value::Null)
 }
 
-/// Most bookmarks a file adds.
+/// Most bookmarks a map keeps from imported files.
 const MAX_BOOKMARKS: usize = 10_000;
 
 /// The map's bookmarks as a bookmarks file. Places are lon/lat and metres per pixel, so they
@@ -271,6 +271,9 @@ pub(crate) fn bookmarks_file(map: &Map) -> Result<Vec<u8>, String> {
             Some(json!({"name": b.name, "lon": c.x, "lat": c.y, "metresPerPixel": b.camera.res * flat.ground_per_unit(b.camera.center)}))
         })
         .collect();
+    if marks.is_empty() {
+        return Err("none of the map's bookmarks has a place on the earth".into());
+    }
     serde_json::to_vec_pretty(&json!({"type": "rustgisBookmarks", "bookmarks": marks})).map_err(|e| e.to_string())
 }
 
@@ -282,6 +285,9 @@ fn import_bookmarks(s: &mut Session, p: &Value) -> CmdResult {
     let flat = m.flat();
     let mut names = Vec::new();
     for b in list.iter().take(MAX_BOOKMARKS) {
+        if m.bookmarks.len() >= MAX_BOOKMARKS {
+            break;
+        }
         let name: String = match super::ps(b, "name").map(str::trim).filter(|n| !n.is_empty()) {
             Some(n) => n.chars().take(120).collect(),
             None => continue,
@@ -298,9 +304,14 @@ fn import_bookmarks(s: &mut Session, p: &Value) -> CmdResult {
         camera.center = center;
         camera.res = ground / flat.ground_per_unit(center).max(1e-9);
         camera.clamp();
-        m.bookmarks.retain(|b| !b.name.eq_ignore_ascii_case(&name));
-        m.bookmarks.push(Bookmark { name: name.clone(), camera });
-        names.push(name);
+        // A bookmark by the same name is replaced where it is in the list.
+        match m.bookmarks.iter_mut().find(|b| b.name.eq_ignore_ascii_case(&name)) {
+            Some(b) => b.camera = camera,
+            None => m.bookmarks.push(Bookmark { name: name.clone(), camera }),
+        }
+        if !names.iter().any(|n: &String| n.eq_ignore_ascii_case(&name)) {
+            names.push(name);
+        }
     }
     if names.is_empty() {
         return Err("the file has no bookmarks this map can show".into());
