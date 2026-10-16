@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use rustgis_ui_egui::rustgis_engine::cmd::raster::MAX_UPLOAD_BYTES;
 use rustgis_ui_egui::rustgis_engine::data::raster::cog::Sparse;
 use rustgis_ui_egui::rustgis_engine::data::raster::geotiff::{self, Partial};
+use rustgis_ui_egui::{i18n, tl};
 use wasm_bindgen::JsCast;
 
 /// Notices for the app from work done off the frame: the text, and whether it is an error.
@@ -34,7 +35,8 @@ pub async fn read_file(file: web_sys::File, notes: Notes) -> Option<Vec<u8>> {
     let name = file.name();
     let note = |text: String, error: bool| notes.lock().unwrap_or_else(|e| e.into_inner()).push((text, error));
     if wanted(&name, file.size()) {
-        note(format!("Reading {name} a part at a time (it is larger than {} MB)…", MAX_UPLOAD_BYTES >> 20), false);
+        let mb = (MAX_UPLOAD_BYTES >> 20).to_string();
+        note(i18n::fmt("Reading {name} a part at a time (it is larger than {mb} MB)…", &[("name", &name), ("mb", &mb)]), false);
         return match read_parts(&file, &name).await {
             Ok(bytes) => Some(bytes),
             Err(e) => {
@@ -65,19 +67,20 @@ async fn read_parts(file: &web_sys::File, name: &str) -> Result<Vec<u8>, String>
                 // A read up to the next part held, not over it.
                 let end = b.max(a.saturating_add(CHUNK.max(parts.held() / 2))).min(len).min(parts.next_start(a).unwrap_or(len));
                 if a >= end {
-                    return Err("the file ends before its data does".into());
+                    return Err(tl!("the file ends before its data does").to_string());
                 }
                 if parts.held().saturating_add(end - a) > limit {
-                    return Err(format!(
-                        "opening it needs more than the web app's {} MB, as it isn't cloud-optimised (tiled, with overviews); open it in the desktop app",
-                        limit >> 20
+                    let mb = (limit >> 20).to_string();
+                    return Err(i18n::fmt(
+                        "opening it needs more than the web app's {mb} MB, as it isn't cloud-optimised (tiled, with overviews); open it in the desktop app",
+                        &[("mb", &mb)],
                     ));
                 }
                 parts = parts.with(a, slice(file, a, end).await?);
             }
         }
     }
-    Err("too many reads; open it in the desktop app".into())
+    Err(tl!("too many reads; open it in the desktop app").to_string())
 }
 
 /// The bytes `a..b` of a file.
