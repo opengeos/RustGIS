@@ -253,43 +253,24 @@ jobs:
 
           # The review guidelines come from the base branch, not the checkout:
           # a PR that edits AGENTS.md must not rewrite the rules it is judged by.
+          # Only a missing file is tolerated; any other API error fails the
+          # review rather than silently dropping the guidelines.
           base="$(jq -r .baseRefName pr-context/metadata.json)"
-          gh api -X GET "repos/$REPO/contents/AGENTS.md" -f ref="$base" \
-            -H "Accept: application/vnd.github.raw" > pr-context/AGENTS.md \
-            || echo "No AGENTS.md on $base." > pr-context/AGENTS.md
-
-          # Change stats for the summary table: files changed and the total size
-          # change, from the git trees at the merge base and the PR head (blob
-          # sizes in bytes). Best effort: on any failure the reviewer is told
-          # the stats are unavailable rather than guessing them.
-          stats() {
-            set -euo pipefail
-            local head_sha base_sha
-            head_sha="${{ steps.pr.outputs.sha }}"
-            base_sha="$(gh api "repos/$REPO/compare/$base...$head_sha" --jq .merge_base_commit.sha)"
-            gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
-              --jq '.[] | {filename, status, previous_filename}' > "$RUNNER_TEMP/files.json"
-            for side in base head; do
-              sha="$base_sha"; [ "$side" = head ] && sha="$head_sha"
-              gh api "repos/$REPO/git/trees/$sha?recursive=1" \
-                --jq '{truncated, sizes: ([.tree[] | select(.type == "blob") | {key: .path, value: .size}] | from_entries)}' \
-                > "$RUNNER_TEMP/$side.json"
-            done
-            jq -n --slurpfile f "$RUNNER_TEMP/files.json" \
-              --slurpfile b "$RUNNER_TEMP/base.json" --slurpfile h "$RUNNER_TEMP/head.json" '
-              $b[0].sizes as $B | $h[0].sizes as $H | $f as $F |
-              { files_changed: ($F | length),
-                added: ([$F[] | select(.status == "added")] | length),
-                modified: ([$F[] | select(.status == "modified" or .status == "changed")] | length),
-                removed: ([$F[] | select(.status == "removed")] | length),
-                renamed: ([$F[] | select(.status == "renamed" or .status == "copied")] | length),
-                bytes_before: ([$F[] | select(.status != "added") | $B[.previous_filename // .filename] // 0] | add // 0),
-                bytes_after: ([$F[] | select(.status != "removed") | $H[.filename] // 0] | add // 0),
-                trees_truncated: ($b[0].truncated or $h[0].truncated) }
-              | .bytes_change = .bytes_after - .bytes_before'
-          }
-          ( stats ) > pr-context/stats.json \
-            || echo '{"unavailable": "the change stats could not be computed"}' > pr-context/stats.json
+          if gh api -X GET "repos/$REPO/contents/AGENTS.md" -f ref="$base" \
+              -H "Accept: application/vnd.github.raw" > pr-context/AGENTS.md 2> "$RUNNER_TEMP/agents.err"; then
+            # Claude Code may load the checkout's AGENTS.md as project
+            # instructions, so replace the PR's copy with the base one too (its
+            # changes are still in the diff). `rm` unlinks a symlink rather
+            # than following it.
+            rm -rf AGENTS.md
+            cp pr-context/AGENTS.md AGENTS.md
+          elif grep -q "HTTP 404" "$RUNNER_TEMP/agents.err"; then
+            echo "No AGENTS.md on $base." > pr-context/AGENTS.md
+            rm -rf AGENTS.md
+          else
+            cat "$RUNNER_TEMP/agents.err" >&2
+            exit 1
+          fi
 
           size="$(wc -c < pr-context/diff.patch)"
           if [ "$size" -gt "$MAX_DIFF_BYTES" ]; then
@@ -301,6 +282,46 @@ jobs:
           fi
 
           echo "Staged pr-context/: $(wc -c < pr-context/diff.patch) bytes of diff, $(wc -l < pr-context/changed-files.txt) changed files"
+
+      # Change stats for the summary table: files changed and the total size
+      # change, from the git trees at the merge base and the PR head (blob sizes
+      # in bytes). Best effort, in its own step so `set -e` holds: the fallback
+      # is written first and only replaced once every call has succeeded.
+      - name: Stage change stats for the reviewer
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo '{"unavailable": "the change stats could not be computed"}' > pr-context/stats.json
+          base="$(jq -r .baseRefName pr-context/metadata.json)"
+          base_sha="$(gh api "repos/$REPO/compare/$base...$HEAD_SHA" --jq .merge_base_commit.sha)"
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[] | {filename, status, previous_filename}' > "$RUNNER_TEMP/files.json"
+          for side in base head; do
+            sha="$base_sha"
+            if [ "$side" = head ]; then sha="$HEAD_SHA"; fi
+            gh api "repos/$REPO/git/trees/$sha?recursive=1" \
+              --jq '{truncated, sizes: ([.tree[] | select(.type == "blob") | {key: .path, value: .size}] | from_entries)}' \
+              > "$RUNNER_TEMP/$side.json"
+          done
+          jq -n --slurpfile f "$RUNNER_TEMP/files.json" \
+            --slurpfile b "$RUNNER_TEMP/base.json" --slurpfile h "$RUNNER_TEMP/head.json" '
+            $b[0].sizes as $B | $h[0].sizes as $H | $f as $F |
+            { files_changed: ($F | length),
+              added: ([$F[] | select(.status == "added")] | length),
+              modified: ([$F[] | select(.status == "modified" or .status == "changed")] | length),
+              removed: ([$F[] | select(.status == "removed")] | length),
+              renamed: ([$F[] | select(.status == "renamed" or .status == "copied")] | length),
+              bytes_before: ([$F[] | select(.status != "added") | $B[.previous_filename // .filename] // 0] | add // 0),
+              bytes_after: ([$F[] | select(.status != "removed") | $H[.filename] // 0] | add // 0),
+              trees_truncated: ($b[0].truncated or $h[0].truncated) }
+            | .bytes_change = .bytes_after - .bytes_before' > "$RUNNER_TEMP/stats.json"
+          mv "$RUNNER_TEMP/stats.json" pr-context/stats.json
+          cat pr-context/stats.json
 
       - name: Run Claude Code Review
         id: claude-review
@@ -350,7 +371,7 @@ jobs:
             - Security issues such as injection, unsafe input handling, and leaked secrets
             - Performance problems and obvious inefficiencies
             - Code quality, readability, naming, and maintainability
-            - Adherence to the repository guidelines that apply to the changed files. They are staged as `pr-context/AGENTS.md`, taken from the base branch: read it before the diff, and judge against it rather than the checkout's `AGENTS.md`, which the PR may have changed
+            - Adherence to the repository guidelines that apply to the changed files. They are staged as `pr-context/AGENTS.md`, taken from the base branch: read it before the diff, and the checkout's `AGENTS.md` has been replaced with the same copy, and any change the PR makes to it is in the diff
 
             Concentrate on the changed lines, but use repository context to judge whether they are correct. Report findings across a range of confidence levels, not only near-certain ones. It is fine to raise a well-reasoned concern even when you are not fully certain, as long as you state your confidence and reasoning. Skip pre-existing issues unrelated to this change.
 
