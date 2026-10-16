@@ -130,7 +130,7 @@ fn err(e: postgres::Error) -> DataError {
 /// How the connection is protected (libpq's `sslmode`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Tls {
-    /// No TLS (`disable`, and `allow`, which libpq tries without TLS first).
+    /// No TLS (`disable`).
     Disable,
     /// TLS when the server has it (`prefer`, libpq's default) or always (`require`), without
     /// checking the server's certificate, as libpq does: encrypted, but not proof against a
@@ -411,7 +411,10 @@ fn config(dsn: &str) -> Result<(postgres::Config, Tls)> {
     }
     let mode = sslmode.or_else(|| env("PGSSLMODE").map(|m| m.to_ascii_lowercase()));
     let tls = match mode.as_deref() {
-        Some("disable") | Some("allow") => Tls::Disable,
+        Some("disable") => Tls::Disable,
+        // libpq tries without TLS first, then with it; here TLS first, then without (`prefer`), so
+        // a server that only takes TLS connects too.
+        Some("allow") => Tls::Unverified,
         // libpq's `sslrootcert=system` is the system's roots: the web's, here.
         Some("verify-ca") | Some("verify-full") => Tls::Verified(
             rootcert.or_else(|| env("PGSSLROOTCERT")).filter(|r| !r.is_empty() && r != "system").map(std::path::PathBuf::from),
@@ -422,7 +425,7 @@ fn config(dsn: &str) -> Result<(postgres::Config, Tls)> {
     };
     config.ssl_mode(match (&tls, mode.as_deref()) {
         (Tls::Disable, _) => postgres::config::SslMode::Disable,
-        (_, Some("prefer") | None) => postgres::config::SslMode::Prefer,
+        (_, Some("prefer" | "allow") | None) => postgres::config::SslMode::Prefer,
         _ => postgres::config::SslMode::Require,
     });
     Ok((config, tls))
@@ -545,8 +548,20 @@ pub fn families(conn: &Conn, table: &Table) -> Result<Vec<Family>> {
         return Ok(vec![f]);
     }
     let g = table.geom();
-    let sql = format!("SELECT DISTINCT ST_Dimension({g}) FROM {} WHERE {g} IS NOT NULL AND NOT ST_IsEmpty({g})", table.sql_from());
-    let rows = conn.with(|c| c.query(sql.as_str(), &[]))?;
+    let from = table.sql_from();
+    let filter = format!("{g} IS NOT NULL AND NOT ST_IsEmpty({g})");
+    let sql = format!("SELECT DISTINCT ST_Dimension({g}) FROM {from} WHERE {filter}");
+    // A scan of the table, bounded like the other probes; past that, the types of its first rows.
+    let rows = match conn.snapshot(Some(PROBE_TIMEOUT), |t| t.query(sql.as_str(), &[])) {
+        Ok(rows) => rows,
+        Err(_) => {
+            let sql = format!(
+                "SELECT DISTINCT ST_Dimension({g}) FROM (SELECT {} FROM {from} WHERE {filter} LIMIT 100000) s",
+                ident(&table.column)
+            );
+            conn.snapshot(Some(PROBE_TIMEOUT), |t| t.query(sql.as_str(), &[]))?
+        }
+    };
     let mut out: Vec<Family> = rows
         .iter()
         .filter_map(|r| r.try_get::<_, Option<i32>>(0).ok().flatten())

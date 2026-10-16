@@ -113,8 +113,11 @@ column becomes a layer (`"layer"` picks one).
 
 **Home › Add Data › Database…** (`layer.addDatabase`) connects to a PostgreSQL database with
 PostGIS and reads its tables live. RustGIS talks to the server itself (nothing else to install;
-TLS as libpq does it: `sslmode=prefer` by default, `require`, `verify-full` checks the server's
-certificate against the web's roots, `disable`). The connection is a libpq connection string
+TLS as libpq does it). `sslmode=prefer` (the default) and `require` encrypt the connection but
+don't check the server's certificate, so they don't protect against a server in the middle:
+use `verify-full` (or `verify-ca`, which here checks the host name too) on networks you don't
+trust. The certificate is checked against `sslrootcert` (a private authority's PEM file) or the
+web's roots. `disable` turns TLS off. The connection is a libpq connection string
 (`host=localhost port=5432 dbname=gis user=postgres`) or a `postgresql://user@host/dbname`
 address; what it leaves out comes from `PGHOST`, `PGPORT`, `PGUSER` and `PGDATABASE`, as with
 libpq. **List Tables** (`info.databaseTables`) shows the tables and views with a geometry or
@@ -130,8 +133,8 @@ server converts geometry to longitude/latitude (`ST_Transform`, so every coordin
 `spatial_ref_sys` works) and curves to lines; give `"crs"` (such as `EPSG:2263`) for a column whose
 geometry doesn't say its coordinate system. A column of mixed geometry types becomes a layer per
 type, and empty tables (such as the TIGER geocoder's) are left out. Features keep their ids between
-views: the table's integer primary key, else the row's place in the table (a view's rows are
-numbered as read).
+views: the table's integer primary key, else the row's place in the table (the rows of a view or
+a partitioned table without a key are numbered as read).
 
 The password is kept until RustGIS closes and never written to the project, which names the
 connection without it. Without one, `PGPASSWORD` or libpq's password file (`~/.pgpass`, or
