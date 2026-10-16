@@ -6,10 +6,21 @@
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSWindowButton, NSWindowStyleMask};
-use rustgis_ui_egui::TitlebarMetrics;
+use objc2_foundation::{NSUserDefaults, ns_string};
+use rustgis_ui_egui::{DoubleClick, TitlebarMetrics};
 
 /// Space between the zoom button and the first thing in the header.
 const GAP: f32 = 12.0;
+
+/// "Double-click a window's title bar to": the `AppleActionOnDoubleClick` preference. Unset is the
+/// system default (zoom), and so is a value this does not know.
+fn double_click_from(pref: Option<&str>) -> DoubleClick {
+    match pref {
+        Some("Minimize") => DoubleClick::Minimize,
+        Some("None") => DoubleClick::Nothing,
+        _ => DoubleClick::Zoom,
+    }
+}
 
 /// The title bar geometry now, or `None` in full screen (no title bar, no buttons).
 pub fn titlebar() -> Option<TitlebarMetrics> {
@@ -28,8 +39,25 @@ pub fn titlebar() -> Option<TitlebarMetrics> {
         let f = b.frame();
         (f.size.width > 0.0 && f.origin.x > 0.0).then_some((f.origin.x + f.size.width) as f32 + GAP)
     });
+    let pref = NSUserDefaults::standardUserDefaults().stringForKey(ns_string!("AppleActionOnDoubleClick"));
     Some(TitlebarMetrics {
         left_inset: left_inset.unwrap_or(fallback.left_inset),
         height: if height > 0.0 { height } else { fallback.height },
+        double_click: double_click_from(pref.map(|s| s.to_string()).as_deref()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn double_click_setting_follows_the_system_preference() {
+        assert_eq!(double_click_from(Some("Maximize")), DoubleClick::Zoom);
+        assert_eq!(double_click_from(Some("Minimize")), DoubleClick::Minimize);
+        assert_eq!(double_click_from(Some("None")), DoubleClick::Nothing);
+        // Not set (the system default), or a value from a newer macOS: zoom, like Finder.
+        assert_eq!(double_click_from(None), DoubleClick::Zoom);
+        assert_eq!(double_click_from(Some("Fill")), DoubleClick::Zoom);
+    }
 }

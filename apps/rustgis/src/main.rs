@@ -152,7 +152,12 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         {
-            self.0.ui.titlebar = macos::titlebar();
+            let titlebar = macos::titlebar();
+            // egui repaints on events only: when the window system answers late, draw again.
+            if titlebar != self.0.ui.titlebar {
+                ctx.request_repaint();
+            }
+            self.0.ui.titlebar = titlebar;
         }
         self.0.logic(ctx);
         if self.0.quit_requested {

@@ -41,7 +41,7 @@ mod zarrui;
 use rustgis_engine::{Project, Session};
 use serde_json::{Value, json};
 
-pub use chrome::TitlebarMetrics;
+pub use chrome::{DoubleClick, TitlebarMetrics};
 pub use rustgis_assistant;
 pub use rustgis_engine;
 

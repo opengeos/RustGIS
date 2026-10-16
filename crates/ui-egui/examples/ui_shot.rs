@@ -67,8 +67,11 @@ fn main() {
             }
         } else if let Some(t) = l.get("titlebar") {
             let num = |k: &str| t.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-            harness.state_mut().ui.titlebar =
-                t.is_object().then(|| rustgis_ui_egui::TitlebarMetrics { left_inset: num("left_inset"), height: num("height") });
+            harness.state_mut().ui.titlebar = t.is_object().then(|| rustgis_ui_egui::TitlebarMetrics {
+                left_inset: num("left_inset"),
+                height: num("height"),
+                ..rustgis_ui_egui::TitlebarMetrics::FALLBACK
+            });
         } else if let Some(d) = l.get("dark").and_then(|v| v.as_bool()) {
             harness.state_mut().ui.dark = d;
             for _ in 0..3 {

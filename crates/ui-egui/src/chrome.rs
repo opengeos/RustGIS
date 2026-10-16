@@ -19,11 +19,30 @@ pub struct TitlebarMetrics {
     pub left_inset: f32,
     /// Height of the native title bar, in points; the window buttons are centred in it.
     pub height: f32,
+    /// What double-clicking the title bar does, per the system setting.
+    pub double_click: DoubleClick,
+}
+
+/// The system's "double-click a window's title bar to…" setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DoubleClick {
+    Zoom,
+    Minimize,
+    Nothing,
 }
 
 impl TitlebarMetrics {
     /// What to assume before the window system has answered: the usual strip of window buttons.
-    pub const FALLBACK: TitlebarMetrics = TitlebarMetrics { left_inset: 80.0, height: HEADER_HEIGHT };
+    pub const FALLBACK: TitlebarMetrics = TitlebarMetrics { left_inset: 80.0, height: HEADER_HEIGHT, double_click: DoubleClick::Zoom };
+}
+
+/// The window command for a double-click on the header; `maximized` is the window's current state.
+pub fn double_click_command(action: DoubleClick, maximized: bool) -> Option<egui::ViewportCommand> {
+    match action {
+        DoubleClick::Zoom => Some(egui::ViewportCommand::Maximized(!maximized)),
+        DoubleClick::Minimize => Some(egui::ViewportCommand::Minimized(true)),
+        DoubleClick::Nothing => None,
+    }
 }
 
 /// Size and left padding of the header.
@@ -81,7 +100,10 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                 let drag = ui.interact(bar, egui::Id::new("header_drag"), Sense::click_and_drag());
                 if drag.double_clicked() {
                     let maximized = ui.ctx().input(|i| i.viewport().maximized).unwrap_or(false);
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                    let action = app.ui.titlebar.map_or(DoubleClick::Zoom, |m| m.double_click);
+                    if let Some(cmd) = double_click_command(action, maximized) {
+                        ui.ctx().send_viewport_cmd(cmd);
+                    }
                 } else if drag.drag_started() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
@@ -677,7 +699,7 @@ mod tests {
 
     #[test]
     fn header_with_a_unified_title_bar_clears_the_window_buttons() {
-        let l = header_layout(Some(TitlebarMetrics { left_inset: 78.0, height: 28.0 }));
+        let l = header_layout(Some(TitlebarMetrics { left_inset: 78.0, height: 28.0, ..TitlebarMetrics::FALLBACK }));
         assert_eq!(l.left_pad, 78.0);
         assert_eq!(l.height, 34.0, "never shorter than the usual header");
     }
@@ -685,23 +707,32 @@ mod tests {
     #[test]
     fn content_is_centred_on_the_window_buttons_even_in_a_short_title_bar() {
         // Buttons sit at 14 in a 28 high bar; the 34 high header's content must centre there too.
-        let l = header_layout(Some(TitlebarMetrics { left_inset: 78.0, height: 28.0 }));
+        let l = header_layout(Some(TitlebarMetrics { left_inset: 78.0, height: 28.0, ..TitlebarMetrics::FALLBACK }));
         assert_eq!(l.height / 2.0 - l.bottom_pad / 2.0, 14.0);
-        let tall = header_layout(Some(TitlebarMetrics { left_inset: 90.0, height: 40.0 }));
+        let tall = header_layout(Some(TitlebarMetrics { left_inset: 90.0, height: 40.0, ..TitlebarMetrics::FALLBACK }));
         assert_eq!(tall.bottom_pad, 0.0);
         assert_eq!(header_layout(None).bottom_pad, 0.0);
     }
 
     #[test]
+    fn double_clicking_the_header_does_what_the_system_setting_says() {
+        use egui::ViewportCommand::{Maximized, Minimized};
+        assert!(matches!(double_click_command(DoubleClick::Zoom, false), Some(Maximized(true))));
+        assert!(matches!(double_click_command(DoubleClick::Zoom, true), Some(Maximized(false))));
+        assert!(matches!(double_click_command(DoubleClick::Minimize, false), Some(Minimized(true))));
+        assert!(double_click_command(DoubleClick::Nothing, false).is_none());
+    }
+
+    #[test]
     fn a_taller_native_title_bar_makes_the_header_as_tall() {
-        let l = header_layout(Some(TitlebarMetrics { left_inset: 90.0, height: 40.0 }));
+        let l = header_layout(Some(TitlebarMetrics { left_inset: 90.0, height: 40.0, ..TitlebarMetrics::FALLBACK }));
         assert_eq!(l.height, 40.0);
     }
 
     #[test]
     fn hostile_metrics_fall_back_to_sane_values() {
         for (inset, height) in [(f32::NAN, f32::NAN), (-5.0, -5.0), (f32::INFINITY, f32::INFINITY), (1.0e9, 1.0e9)] {
-            let l = header_layout(Some(TitlebarMetrics { left_inset: inset, height }));
+            let l = header_layout(Some(TitlebarMetrics { left_inset: inset, height, ..TitlebarMetrics::FALLBACK }));
             assert!(l.left_pad.is_finite() && (10.0..=120.0).contains(&l.left_pad), "{l:?}");
             assert!(l.height.is_finite() && (34.0..=80.0).contains(&l.height), "{l:?}");
         }
