@@ -1100,6 +1100,9 @@ impl RustGisApp {
                     self.plugins.url = url.to_string();
                     self.plugins.set_registry(None);
                 }
+                if let Some(filter) = p.get("filter").and_then(Value::as_str) {
+                    self.plugins.filter = filter.chars().take(200).collect();
+                }
                 if let Some(tab) = p.get("tab").and_then(Value::as_str) {
                     self.plugins.tab = match tab {
                         "browse" => pluginsui::Tab::Browse,
