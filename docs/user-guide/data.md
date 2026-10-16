@@ -134,7 +134,7 @@ server converts geometry to longitude/latitude (`ST_Transform`, so every coordin
 geometry doesn't say its coordinate system. A column of mixed geometry types becomes a layer per
 type, and empty tables (such as the TIGER geocoder's) are left out. Features keep their ids between
 views: the table's integer primary key, else the row's place in the table (the rows of a view or
-a partitioned table without a key are numbered as read).
+a partitioned table without a key are numbered as read, so theirs can change between views).
 
 The password is kept until RustGIS closes and never written to the project, which names the
 connection without it. Without one, `PGPASSWORD` or libpq's password file (`~/.pgpass`, or

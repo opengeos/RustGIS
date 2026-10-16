@@ -1211,11 +1211,13 @@ fn add_postgis(s: &mut Session, p: &Value, db: &rustgis_data::source::duckdb::Da
             }
         };
         let mixed = families.len() > 1;
-        let mut added = false;
+        // A table is empty when none of its families has rows, not when they failed.
+        let (mut added, mut failed) = (false, false);
         for family in families {
             let src = match postgis::PostgisSource::open(conn.clone(), t.clone(), Some(family), crs) {
                 Ok(src) => src,
                 Err(e) => {
+                    failed = true;
                     fail(s, e.to_string())?;
                     continue;
                 }
@@ -1241,6 +1243,7 @@ fn add_postgis(s: &mut Session, p: &Value, db: &rustgis_data::source::duckdb::Da
             let r = match add_source_with(s, &q, Origin::Postgis(&origin), Some(Box::new(src))) {
                 Ok(r) => r,
                 Err(e) => {
+                    failed = true;
                     fail(s, e)?;
                     continue;
                 }
@@ -1250,7 +1253,7 @@ fn add_postgis(s: &mut Session, p: &Value, db: &rustgis_data::source::duckdb::Da
             streamed |= r["streamed"].as_bool().unwrap_or(false);
             ids.extend(r["layers"].as_array().into_iter().flatten().filter_map(Value::as_u64).filter_map(|i| u32::try_from(i).ok()));
         }
-        if !added {
+        if !added && !failed {
             empty += 1;
         }
     }

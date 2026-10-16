@@ -150,18 +150,25 @@ pub struct Conn {
 }
 
 impl Conn {
-    /// Runs `f` with the client, connecting again when the connection dropped.
-    fn with<T>(&self, f: impl FnOnce(&mut postgres::Client) -> std::result::Result<T, postgres::Error>) -> Result<T> {
+    /// Runs `f` with the client, connecting again when the connection dropped: a drop (a server
+    /// restart, an idle timeout) shows only when it is used, so `f` runs once more on a new one.
+    fn with<T>(&self, mut f: impl FnMut(&mut postgres::Client) -> std::result::Result<T, postgres::Error>) -> Result<T> {
         let mut guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
-        if guard.as_ref().is_none_or(postgres::Client::is_closed) {
-            *guard = Some(open_client(&self.config, &self.tls)?);
-        }
-        let client = guard.as_mut().ok_or_else(|| DataError::Format("not connected".into()))?;
-        let r = f(client);
-        if client.is_closed() {
+        for attempt in 0..2 {
+            if guard.as_ref().is_none_or(postgres::Client::is_closed) {
+                *guard = Some(open_client(&self.config, &self.tls)?);
+            }
+            let client = guard.as_mut().ok_or_else(|| DataError::Format("not connected".into()))?;
+            let r = f(client);
+            if !client.is_closed() {
+                return r.map_err(err);
+            }
             *guard = None;
+            if attempt == 1 || r.is_ok() {
+                return r.map_err(err);
+            }
         }
-        r.map_err(err)
+        Err(DataError::Format("not connected".into()))
     }
 
     /// Runs `f` in a read-only transaction seeing one snapshot of the database (`REPEATABLE
@@ -169,7 +176,7 @@ impl Conn {
     fn snapshot<T>(
         &self,
         timeout: Option<&str>,
-        f: impl FnOnce(&mut postgres::Transaction<'_>) -> std::result::Result<T, postgres::Error>,
+        mut f: impl FnMut(&mut postgres::Transaction<'_>) -> std::result::Result<T, postgres::Error>,
     ) -> Result<T> {
         self.with(|c| {
             let mut t = c.build_transaction().isolation_level(postgres::IsolationLevel::RepeatableRead).read_only(true).start()?;
@@ -354,8 +361,13 @@ fn config(dsn: &str) -> Result<(postgres::Config, Tls)> {
                     }
                 }
                 "port" => {
-                    for p in v.split(',') {
-                        c.port(p.trim().parse().map_err(|_| DataError::Format(format!("the connection: port '{p}'")))?);
+                    // An empty one is the default port, as in libpq.
+                    for p in v.split(',').map(str::trim) {
+                        if p.is_empty() {
+                            c.port(5432);
+                            continue;
+                        }
+                        c.port(p.parse().map_err(|_| DataError::Format(format!("the connection: port '{p}'")))?);
                     }
                 }
                 "dbname" => {
@@ -523,9 +535,12 @@ pub fn tables(conn: &Conn) -> Result<Vec<Table>> {
             })
         })
         .collect();
-    let keys: Vec<(String, String)> = out.iter().map(|t| (t.schema.clone(), t.name.clone())).collect();
+    let mut columns: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    for t in &out {
+        *columns.entry((t.schema.clone(), t.name.clone())).or_default() += 1;
+    }
     for t in &mut out {
-        t.several = keys.iter().filter(|(s, n)| *s == t.schema && *n == t.name).count() > 1;
+        t.several = columns.get(&(t.schema.clone(), t.name.clone())).is_some_and(|n| *n > 1);
     }
     Ok(out)
 }
@@ -551,16 +566,10 @@ pub fn families(conn: &Conn, table: &Table) -> Result<Vec<Family>> {
     let from = table.sql_from();
     let filter = format!("{g} IS NOT NULL AND NOT ST_IsEmpty({g})");
     let sql = format!("SELECT DISTINCT ST_Dimension({g}) FROM {from} WHERE {filter}");
-    // A scan of the table, bounded like the other probes; past that, the types of its first rows.
-    let rows = match conn.snapshot(Some(PROBE_TIMEOUT), |t| t.query(sql.as_str(), &[])) {
-        Ok(rows) => rows,
-        Err(_) => {
-            let sql = format!(
-                "SELECT DISTINCT ST_Dimension({g}) FROM (SELECT {} FROM {from} WHERE {filter} LIMIT 100000) s",
-                ident(&table.column)
-            );
-            conn.snapshot(Some(PROBE_TIMEOUT), |t| t.query(sql.as_str(), &[]))?
-        }
+    // A scan of the table, bounded like the other probes. Past that, the rows may hold any type:
+    // a layer each, those without rows left out when they open (by their count).
+    let Ok(rows) = conn.snapshot(Some(PROBE_TIMEOUT), |t| t.query(sql.as_str(), &[])) else {
+        return Ok(vec![Family::Points, Family::Lines, Family::Polygons]);
     };
     let mut out: Vec<Family> = rows
         .iter()
@@ -706,7 +715,8 @@ impl PostgisSource {
         let family = family.or(table.declared_family());
         let reproject = match srid {
             0 | 4326 => Some(Reproject::from_crs(Crs::LonLat, &mut Vec::new())),
-            s => u32::try_from(s).ok().and_then(Crs::from_epsg).map(|c| Reproject::from_crs(c, &mut Vec::new())),
+            // A coordinate system RustGIS can't convert itself is left to the server.
+            s => u32::try_from(s).ok().and_then(Crs::from_epsg).map(|c| Reproject::from_crs(c, &mut Vec::new())).filter(|r| !r.is_lonlat()),
         };
         let mut src = PostgisSource {
             info: SourceInfo {
@@ -1010,6 +1020,8 @@ mod tests {
         assert_eq!(c.get_dbname(), Some("gis"));
         assert!(config("host=h sslmode=bogus").is_err());
         assert!(config("host=h port=x").is_err());
+        let (c, _) = config("host=a,b port=,6000").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(c.get_ports(), &[5432, 6000]);
         // A user is always set (libpq's default is the login name).
         let (c, _) = config("host=h").unwrap_or_else(|e| panic!("{e}"));
         assert!(c.get_user().is_some());
@@ -1041,7 +1053,9 @@ mod tests {
         let db = super::super::duckdb::Database::parse(&dsn);
         let super::super::duckdb::Database::Postgres(dsn) = db else { panic!("not a connection") };
         let conn = connect(&dsn, true).unwrap_or_else(|e| panic!("{e}"));
-        let all = tables(&conn).unwrap_or_else(|e| panic!("{e}"));
+        // A connection the server drops is opened again on the next use, which still works.
+        let _ = conn.with(|c| c.batch_execute("SELECT pg_terminate_backend(pg_backend_pid())"));
+        let all = tables(&conn).unwrap_or_else(|e| panic!("after a dropped connection: {e}"));
         for t in all.iter().filter(|t| t.schema != "tiger") {
             let fams = families(&conn, t).unwrap_or_else(|e| panic!("{}: {e}", t.label()));
             for f in fams.iter().copied().map(Some).chain(fams.is_empty().then_some(None)) {
