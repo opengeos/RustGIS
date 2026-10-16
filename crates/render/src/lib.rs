@@ -1222,11 +1222,10 @@ pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side
         }
         let camera = Camera { center: merc.center(), res };
         let v = View { width: w, height: h, pixels_per_point: ppp, camera, dark: view.dark };
+        // The picture is given the box asked for, though rounding to whole points made it show
+        // up to a point less: stretched by under a point, its edges stay exactly where asked, so
+        // one at the Web Mercator limit is still stretched on to the pole (drape_mesh).
         if let Some(r) = render(map, &v) {
-            // The box the picture really shows, its size rounded to whole pixels.
-            let (mw, mh) = (f64::from(r.pixmap.width()) / ppp * res, f64::from(r.pixmap.height()) / ppp * res);
-            let c = merc.center();
-            let merc = Extent::new(c.x - mw / 2.0, c.y - mh / 2.0, c.x + mw / 2.0, c.y + mh / 2.0);
             out.push(DrapePatch { pixmap: r.pixmap, merc });
         }
     }
@@ -1436,6 +1435,18 @@ mod tests {
         // Too big a box is drawn coarser, within the limit; junk draws nothing.
         let big = render_globe_drape(&mut m, &view, &[Extent::new(-180.0, -80.0, 180.0, 80.0)], 512);
         assert!(big.iter().all(|p| p.pixmap.width() <= 512 && p.pixmap.height() <= 512));
+        // A box at the Web Mercator limit stays exactly there however coarse the picture, so its
+        // mesh still reaches the pole.
+        let lim = rustgis_geom::MAX_LAT;
+        // (30 km points leave a remainder: the picture is 1335 points tall, 0.8 of a point short.)
+        let coarse = View { camera: Camera { center: paris, res: 30_000.0 }, ..view };
+        let world = render_globe_drape(&mut m, &coarse, &[Extent::new(-180.0, -lim, 180.0, lim)], 4096);
+        let edge = std::f64::consts::PI * rustgis_geom::MERCATOR_R * 0.9999;
+        assert!(
+            world.iter().all(|p| p.merc.max_y >= edge && p.merc.min_y <= -edge),
+            "{:?}",
+            world.iter().map(|p| p.merc).collect::<Vec<_>>()
+        );
         assert!(render_globe_drape(&mut m, &View { camera: Camera { center: paris, res: f64::NAN }, ..view }, &boxes, 4096).is_empty());
         assert!(render_globe_drape(&mut m, &view, &[Extent::EMPTY], 4096).is_empty());
         // The sprites: a square around the disc, or nothing for a junk radius.

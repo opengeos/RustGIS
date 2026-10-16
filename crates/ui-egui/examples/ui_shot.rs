@@ -102,7 +102,10 @@ fn main() {
             }
         } else if let Some(d) = l.get("drag").and_then(|v| v.as_array()) {
             let n: Vec<f32> = d.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect();
-            let (x, y, dx, dy) = (n[0], n[1], n[2], n[3]);
+            let [x, y, dx, dy] = n[..] else {
+                eprintln!("drag takes [x, y, dx, dy]");
+                continue;
+            };
             let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
