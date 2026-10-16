@@ -397,8 +397,10 @@ impl Layer {
             None => {
                 let t = lod::tolerance(level);
                 let copy: Vec<Option<Geometry>> = self.projected.iter().map(|g| g.as_ref().map(|g| lod::thin(g, t))).collect();
-                let kept: usize = copy.iter().flatten().map(lod::thinnable).sum();
-                let worth = (kept as f64) <= self.projected_vertices as f64 * (1.0 - lod::MIN_SAVING);
+                // The saving counts against every vertex the copy holds, points included.
+                let all: usize = self.projected.iter().flatten().map(lod::vertices).sum();
+                let kept: usize = copy.iter().flatten().map(lod::vertices).sum();
+                let worth = (kept as f64) <= all as f64 * (1.0 - lod::MIN_SAVING);
                 levels.insert(0, (level, worth.then(|| std::sync::Arc::new(copy))));
                 levels.truncate(lod::LEVELS_KEPT);
             }
