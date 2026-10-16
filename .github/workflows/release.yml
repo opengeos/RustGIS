@@ -143,10 +143,19 @@ jobs:
         run: |
           hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/dmg" dist/*.dmg
           codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/dmg/RustGIS.app"
+          # stapler validate looks the ticket up in Apple's CloudKit, which drops connections now
+          # and then ("The network connection was lost", error 68): retry before failing.
+          validate() {
+            for attempt in 1 2 3 4 5; do
+              xcrun stapler validate "$1" && return 0
+              [ "$attempt" -lt 5 ] && sleep $((attempt * 15))
+            done
+            return 1
+          }
           if [ -n "${{ steps.macsign.outputs.api_key_path }}" ]; then
             spctl --assess --type execute --verbose=2 "$RUNNER_TEMP/dmg/RustGIS.app"
-            xcrun stapler validate "$RUNNER_TEMP/dmg/RustGIS.app"
-            xcrun stapler validate dist/*.dmg
+            validate "$RUNNER_TEMP/dmg/RustGIS.app"
+            validate dist/*.dmg
           fi
           hdiutil detach "$RUNNER_TEMP/dmg"
 
