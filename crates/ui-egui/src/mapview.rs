@@ -76,6 +76,11 @@ pub struct MapView {
     /// mid-motion, which would stall it.
     motion_ms: u64,
     labels: Vec<PlacedLabel>,
+    /// On the globe, where each label stands on the Earth, so it follows the globe as it turns
+    /// and zooms until the next frame places them again.
+    label_lonlat: Vec<Option<Coord>>,
+    /// The camera the labels were placed for.
+    label_camera: Camera,
     last_interaction: f64,
     drag: Option<(Pos2, DragKind)>,
     sketch: Vec<Coord>,
@@ -129,6 +134,8 @@ impl Default for MapView {
             tex_rect: Rect::NOTHING,
             motion_ms: 0,
             labels: Vec::new(),
+            label_lonlat: Vec::new(),
+            label_camera: Camera::world(),
             last_interaction: -10.0,
             drag: None,
             sketch: Vec::new(),
@@ -395,8 +402,20 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 Some(tex) => tex.set(img, egui::TextureOptions::LINEAR),
                 None => app.map.texture = Some(ui.ctx().load_texture("map", img, egui::TextureOptions::LINEAR)),
             }
-            app.map.labels = r.labels;
-            app.map.labels.splice(0..0, r.unplaced);
+            // A globe drawn roughly mid-motion keeps the last labels, which it would re-place
+            // differently every frame.
+            if !draft {
+                app.map.labels = r.labels;
+                app.map.labels.splice(0..0, r.unplaced);
+                app.map.label_lonlat = match globe_view {
+                    true => {
+                        let g = Globe::new(&cam, w, h);
+                        app.map.labels.iter().map(|l| g.inverse(l.x as f64, l.y as f64)).collect()
+                    }
+                    false => Vec::new(),
+                };
+                app.map.label_camera = cam;
+            }
             app.map.attribution = r.attribution;
             app.map.last_render = time;
             for e in r.tile_errors {
@@ -449,12 +468,19 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     } else {
         app.map.comets.clear();
     }
-    // Labels move with the texture and, while the flat map zooms, spread apart or close up at
-    // their own size, as MapLibre keeps them (rather than vanishing until it settles). They're
-    // hidden while the globe moves or zooms, where re-placing them every frame would flicker.
-    let zooming = (old.res / cam.res - 1.0).abs() > 0.002;
-    let hide_labels = globe_view && (zooming || moving);
-    if !hide_labels {
+    // Labels stay on screen while the map moves, at their own size, as MapLibre keeps them
+    // (rather than vanishing until it settles): on the flat map they move with the texture,
+    // spreading apart or closing up as it zooms; on the globe each follows its place on the
+    // Earth, and those turned behind the horizon drop out.
+    let placed = app.map.label_camera;
+    if globe_view && (placed.center != cam.center || placed.res != cam.res) {
+        let g = Globe::new(&cam, w, h);
+        for (l, c) in app.map.labels.iter().zip(&app.map.label_lonlat) {
+            if let Some((x, y)) = c.and_then(|c| g.forward(c)) {
+                draw_label(&painter, l, rect.min + vec2(x as f32, y as f32));
+            }
+        }
+    } else {
         let s = if globe_view { 1.0 } else { (old.res / cam.res) as f32 };
         for l in &app.map.labels {
             draw_label(&painter, l, tex_rect.min + vec2(l.x, l.y) * s);
