@@ -88,6 +88,11 @@ pub fn commands() -> Vec<C> {
             if m.bookmarks.len() == before { Err(format!("no bookmark '{n}'")) } else { Ok(Value::Null) }
         })
         .params(r#"{"name": string}"#),
+        C::new("bookmark.save", "Export Bookmarks", "Home › Navigate › Bookmarks", |s, p| super::items::save_item(s, "bookmarks", p))
+            .view()
+            .params(r#"{"path": "*.rgisbookmarks"}"#),
+        C::new("bookmark.import", "Import Bookmarks", "Home › Navigate › Bookmarks", import_bookmarks)
+            .params(r#"{"path"?: "*.rgisbookmarks", "text"?: bookmarks JSON, "data"?: base64 file}"#),
         C::new("map.new", "New Map", "Data › Project", new_map).params(r#"{"name"?: string}"#),
         C::new("map.activate", "Activate Map", "Browser", |s, p| {
             let n = s_name(p)?;
@@ -219,6 +224,61 @@ fn go_bookmark(s: &mut Session, p: &Value) -> CmdResult {
     s.map_mut().camera = cam;
     s.record_extent();
     Ok(Value::Null)
+}
+
+/// Most bookmarks a file adds.
+const MAX_BOOKMARKS: usize = 10_000;
+
+/// The map's bookmarks as a bookmarks file. Places are lon/lat and metres per pixel, so they
+/// open in the same place on a map in any projection.
+pub(crate) fn bookmarks_file(map: &Map) -> Result<Vec<u8>, String> {
+    if map.bookmarks.is_empty() {
+        return Err("the map has no bookmarks; save one with New Bookmark".into());
+    }
+    let flat = map.flat();
+    let marks: Vec<Value> = map
+        .bookmarks
+        .iter()
+        .filter_map(|b| {
+            let c = flat.inverse(b.camera.center)?;
+            Some(json!({"name": b.name, "lon": c.x, "lat": c.y, "metresPerPixel": b.camera.res * flat.ground_per_unit(b.camera.center)}))
+        })
+        .collect();
+    serde_json::to_vec_pretty(&json!({"type": "rustgisBookmarks", "bookmarks": marks})).map_err(|e| e.to_string())
+}
+
+fn import_bookmarks(s: &mut Session, p: &Value) -> CmdResult {
+    let text = super::items::read_text(p)?;
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS bookmarks file: {e}"))?;
+    let list = v.get("bookmarks").and_then(Value::as_array).ok_or("not a RustGIS bookmarks file: no bookmarks")?;
+    let m = s.map_mut();
+    let flat = m.flat();
+    let mut names = Vec::new();
+    for b in list.iter().take(MAX_BOOKMARKS) {
+        let name: String = match super::ps(b, "name").map(str::trim).filter(|n| !n.is_empty()) {
+            Some(n) => n.chars().take(120).collect(),
+            None => continue,
+        };
+        let (Some(lon), Some(lat), Some(ground)) = (f(b, "lon"), f(b, "lat"), f(b, "metresPerPixel")) else { continue };
+        if !(lon.is_finite() && lat.is_finite() && (-180.0..=180.0).contains(&lon) && (-90.0..=90.0).contains(&lat)) {
+            continue;
+        }
+        if !(ground.is_finite() && ground > 0.0) {
+            continue;
+        }
+        let Some(center) = flat.forward_checked(Coord::new(lon, lat)) else { continue };
+        let mut camera = m.camera;
+        camera.center = center;
+        camera.res = ground / flat.ground_per_unit(center).max(1e-9);
+        camera.clamp();
+        m.bookmarks.retain(|b| !b.name.eq_ignore_ascii_case(&name));
+        m.bookmarks.push(Bookmark { name: name.clone(), camera });
+        names.push(name);
+    }
+    if names.is_empty() {
+        return Err("the file has no bookmarks this map can show".into());
+    }
+    Ok(json!({"added": names}))
 }
 
 fn new_map(s: &mut Session, p: &Value) -> CmdResult {

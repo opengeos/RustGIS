@@ -5563,3 +5563,33 @@ fn map_rename_keeps_map_names_unique() {
     let name = r["name"].as_str().unwrap_or_default();
     assert_eq!((name.chars().count(), name.ends_with(" 2")), (200, true), "{name}");
 }
+
+#[test]
+fn bookmarks_export_and_import_across_projections() {
+    let mut s = Session::new(sample::world_project());
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 5_000_000})).unwrap();
+    s.run("bookmark.add", &json!({"name": "Here"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("rustgis-bookmarks-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("marks.rgisbookmarks").display().to_string();
+    s.run("bookmark.save", &json!({"path": file})).unwrap();
+    let before = s.map().bookmarks.len();
+    s.run("bookmark.remove", &json!({"name": "Here"})).unwrap();
+    assert_eq!(s.map().bookmarks.len(), before - 1);
+    // Imported into a map in another projection, the bookmark still shows the same place.
+    s.run("map.projection", &json!({"type": "europeEqualArea"})).unwrap();
+    let r = s.run("bookmark.import", &json!({"path": file})).unwrap();
+    // Places a Europe-only projection can't show are left out; same-named bookmarks are replaced.
+    let added = r["added"].as_array().unwrap();
+    assert!(added.iter().any(|n| n == "Here") && !added.iter().any(|n| n == "Americas"), "{added:?}");
+    assert_eq!(s.map().bookmarks.len(), before);
+    s.run("bookmark.go", &json!({"name": "Here"})).unwrap();
+    let c = s.map().center_lonlat();
+    assert!((c.x - 10.0).abs() < 1e-6 && (c.y - 50.0).abs() < 1e-6, "{c:?}");
+    assert!((s.scale() / 5_000_000.0 - 1.0).abs() < 0.02, "{}", s.scale());
+    // Junk is refused, and junk entries are skipped.
+    assert!(s.run("bookmark.import", &json!({"text": "{}"})).is_err());
+    let junk = json!({"bookmarks": [{"name": "Bad", "lon": 500, "lat": 0, "metresPerPixel": 1}, {"name": "", "lon": 0, "lat": 0, "metresPerPixel": 1}]});
+    assert!(s.run("bookmark.import", &json!({"text": junk.to_string()})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
