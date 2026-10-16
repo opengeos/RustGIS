@@ -109,6 +109,10 @@ circles, rasters are draped onto the sphere, and labels, selection, identify, me
 editing work as on the flat map. The scale stays the same when you switch, and the choice is
 saved with each map in the project (`map.projection` from the command line).
 
+While the globe turns or zooms, the map is drawn flat once and laid over the sphere by the
+graphics card, so it moves smoothly whatever the basemap; labels come back, and the map is
+drawn exactly, as soon as it stops.
+
 ## View effects
 
 ![Dark mode over Europe on the Midnight basemap, with the View tab open](https://assets.rustgis.app/images/dark.webp)

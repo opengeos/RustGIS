@@ -100,7 +100,7 @@ pub mod sample_data {
 use std::sync::OnceLock;
 
 use rustgis_data::{Dataset, Geometry, GeometryType};
-use rustgis_geom::{Coord, Extent, lonlat_to_merc};
+use rustgis_geom::{Coord, Extent, extent_to_merc, lonlat_to_merc};
 use rustgis_map::globe::{V3, densify};
 use rustgis_map::{Camera, Globe, Map, Marker, Rgba, Symbol};
 /// The image type pages and maps are drawn into.
@@ -1097,11 +1097,15 @@ fn globe_shading(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, wate
 /// The globe's surroundings and ocean: space (or a soft backdrop), an atmosphere glow, and the
 /// ocean disc.
 fn draw_globe_backdrop(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap, water: Rgba, dark_ui: bool, ppp: f32) {
-    let dark = dark_ui || basemap == rustgis_map::Basemap::Midnight;
     let bg = globe_space(dark_ui, basemap);
     pm.fill(tiny_skia::Color::from_rgba8(bg.r(), bg.g(), bg.b(), 255));
     let (cx, cy) = g.center();
-    let (cx, cy, r) = (cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp);
+    draw_globe_disc(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp, basemap, water, dark_ui);
+}
+
+/// The atmosphere glow and the ocean disc, for a disc of radius `r` pixels at (`cx`, `cy`).
+fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, basemap: rustgis_map::Basemap, water: Rgba, dark_ui: bool) {
+    let dark = dark_ui || basemap == rustgis_map::Basemap::Midnight;
     if !(r.is_finite() && r > 0.5 && cx.is_finite() && cy.is_finite()) {
         return;
     }
@@ -1133,7 +1137,11 @@ fn draw_globe_backdrop(pm: &mut Pixmap, g: &Globe, basemap: rustgis_map::Basemap
 /// Light from the upper left: a soft highlight and a darker limb, so the globe reads as a sphere.
 fn draw_globe_shading(pm: &mut Pixmap, g: &Globe, ppp: f32) {
     let (cx, cy) = g.center();
-    let (cx, cy, r) = (cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp);
+    draw_globe_light(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp);
+}
+
+/// The lighting of a disc of radius `r` pixels at (`cx`, `cy`).
+fn draw_globe_light(pm: &mut Pixmap, cx: f32, cy: f32, r: f32) {
     if !(r.is_finite() && r > 0.5 && cx.is_finite() && cy.is_finite()) {
         return;
     }
@@ -1156,6 +1164,75 @@ fn draw_globe_shading(pm: &mut Pixmap, g: &Globe, ppp: f32) {
         let p = Paint { shader, anti_alias: true, ..Paint::default() };
         pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
     }
+}
+
+/// How far the atmosphere glow reaches, in disc radii.
+pub const GLOBE_GLOW: f32 = 1.07;
+
+/// The globe's surroundings as two square sprites for a disc of radius `r` pixels, centred in
+/// them (side `2 × GLOBE_GLOW × r`): the atmosphere and ocean drawn under the map, and the
+/// lighting drawn over it. Neither changes as the globe turns, so a view can scale them while it
+/// moves instead of drawing them again.
+pub fn globe_sprites(basemap: rustgis_map::Basemap, dark: bool, r: f32) -> Option<(Pixmap, Pixmap)> {
+    if !(r.is_finite() && r >= 1.0) {
+        return None;
+    }
+    // A whole number of pixels a side, with the disc exactly in proportion to it.
+    let side = (2.0 * GLOBE_GLOW * r.min(2048.0)).round().max(2.0);
+    let (r, c) = (side / (2.0 * GLOBE_GLOW), side / 2.0);
+    let (mut under, mut over) = (Pixmap::new(side as u32, side as u32)?, Pixmap::new(side as u32, side as u32)?);
+    draw_globe_disc(&mut under, c, c, r, basemap, basemap.palette().0, dark);
+    draw_globe_light(&mut over, c, c, r);
+    Some((under, over))
+}
+
+/// A part of the map drawn flat, in Web Mercator, to lay over the globe while it turns.
+pub struct DrapePatch {
+    pub pixmap: Pixmap,
+    /// The Web Mercator box the picture shows.
+    pub merc: Extent,
+}
+
+/// Draws the longitude/latitude `boxes` (from `Globe::drape_extents`) of a globe map flat, at
+/// the view's scale, each picture at most `max_side` pixels a side (coarser beyond that). The
+/// globe view then drapes them over the sphere ([`rustgis_map::Globe::drape_mesh`]) while it
+/// turns, with no drawing per frame. Labels are left out (the view hides them while it moves).
+pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side: u32) -> Vec<DrapePatch> {
+    let ppp = if view.pixels_per_point.is_finite() { view.pixels_per_point.clamp(0.25, 4.0) } else { 1.0 };
+    let res = view.camera.res;
+    if !(res.is_finite() && res > 0.0) {
+        return Vec::new();
+    }
+    let max_side = f64::from(max_side.clamp(64, 8192));
+    let projection = std::mem::replace(&mut map.projection, rustgis_map::Projection::WebMercator);
+    let (display, lock) = (map.label_display, map.label_lock.take());
+    map.label_display.paused = true;
+    let mut out = Vec::new();
+    for b in boxes {
+        let merc = extent_to_merc(b);
+        if merc.is_empty() || !(merc.width() > 0.0 && merc.height() > 0.0) {
+            continue;
+        }
+        // Metres per point: the view's, or coarser to fit the size limit.
+        let res = res.max(merc.width().max(merc.height()) * ppp / max_side);
+        let (w, h) = ((merc.width() / res).ceil(), (merc.height() / res).ceil());
+        if w * ppp < 2.0 || h * ppp < 2.0 {
+            continue;
+        }
+        let camera = Camera { center: merc.center(), res };
+        let v = View { width: w, height: h, pixels_per_point: ppp, camera, dark: view.dark };
+        if let Some(r) = render(map, &v) {
+            // The box the picture really shows, its size rounded to whole pixels.
+            let (mw, mh) = (f64::from(r.pixmap.width()) / ppp * res, f64::from(r.pixmap.height()) / ppp * res);
+            let c = merc.center();
+            let merc = Extent::new(c.x - mw / 2.0, c.y - mh / 2.0, c.x + mw / 2.0, c.y + mh / 2.0);
+            out.push(DrapePatch { pixmap: r.pixmap, merc });
+        }
+    }
+    map.projection = projection;
+    map.label_display = display;
+    map.label_lock = lock;
+    out
 }
 
 /// A halo that contrasts with the text colour.
@@ -1329,6 +1406,42 @@ mod tests {
         assert!(names(&def).iter().any(|n| n == "Taiwan"));
         assert!(!names(&chn).iter().any(|n| n == "Taiwan"));
         assert!(names(&chn).iter().any(|n| n == "China"));
+    }
+
+    #[test]
+    fn the_globe_drape_is_the_flat_map_of_its_box() {
+        let mut m = Map::new("Map");
+        let mut d = Dataset::new("pts", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        d.push(Some(Geometry::Point(Coord::new(2.35, 48.85))), vec![Value::Text("Paris".into())]);
+        m.add_dataset(d);
+        m.projection = rustgis_map::Projection::Globe;
+        let paris = lonlat_to_merc(Coord::new(2.35, 48.85));
+        let camera = Camera { center: paris, res: 2_000.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, dark: false };
+        let boxes = Globe::new(&camera, 400.0, 300.0).drape_extents(400.0, 300.0, 0.25);
+        let patches = render_globe_drape(&mut m, &view, &boxes, 4096);
+        assert_eq!(patches.len(), 1);
+        // The map is left as it was.
+        assert!(m.projection.is_globe() && m.label_lock.is_none() && !m.label_display.paused);
+        let p = &patches[0];
+        assert!(p.merc.contains(paris) && p.merc.contains(lonlat_to_merc(boxes[0].center())));
+        // Paris's marker is where the box puts it, as the flat map draws it.
+        let px = |pm: &Pixmap, x: f64, y: f64| pm.pixel(x as u32, y as u32).map(|c| (c.red(), c.green(), c.blue()));
+        let res = p.merc.width() / f64::from(p.pixmap.width());
+        let at = px(&p.pixmap, (paris.x - p.merc.min_x) / res, (p.merc.max_y - paris.y) / res);
+        m.projection = rustgis_map::Projection::WebMercator;
+        let flat = render(&mut m, &View { camera: Camera { center: paris, res }, ..view }).unwrap();
+        assert_eq!(at, px(&flat.pixmap, 200.0, 150.0));
+        // Too big a box is drawn coarser, within the limit; junk draws nothing.
+        let big = render_globe_drape(&mut m, &view, &[Extent::new(-180.0, -80.0, 180.0, 80.0)], 512);
+        assert!(big.iter().all(|p| p.pixmap.width() <= 512 && p.pixmap.height() <= 512));
+        assert!(render_globe_drape(&mut m, &View { camera: Camera { center: paris, res: f64::NAN }, ..view }, &boxes, 4096).is_empty());
+        assert!(render_globe_drape(&mut m, &view, &[Extent::EMPTY], 4096).is_empty());
+        // The sprites: a square around the disc, or nothing for a junk radius.
+        let (under, over) = globe_sprites(rustgis_map::Basemap::Paper, false, 100.0).unwrap();
+        assert_eq!((under.width(), over.height()), (214, 214));
+        assert_eq!(under.pixel(107, 107).map(|c| c.alpha()), Some(255));
+        assert!(globe_sprites(rustgis_map::Basemap::Paper, false, f32::NAN).is_none());
     }
 
     #[test]

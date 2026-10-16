@@ -6,6 +6,8 @@
 //! `{"shot": "/abs/out.png"}` saves the window, `{"steps": n}` runs frames, `{"sleep": ms}` runs frames
 //! for that long, `{"click": label}` clicks the first widget whose label contains the text (with
 //! `"exact": true`, whose whole label is the text), `{"dark": true}` switches theme,
+//! `{"drag": [x, y, dx, dy]}` presses the pointer at (x, y) and moves it by (dx, dy), holding
+//! it (shots then catch the map mid-drag; `{"release": true}` lets go),
 //! `{"titlebar": {"left_inset": 80, "height": 34}}`
 //! draws the header as a macOS unified title bar (`null` turns it off), and
 //! `{"width": w, "height": h}` on the first line sets the size (default
@@ -94,6 +96,35 @@ fn main() {
             match node {
                 Some(node) => node.click(),
                 None => eprintln!("nothing labelled '{label}'"),
+            }
+            for _ in 0..3 {
+                harness.step();
+            }
+        } else if let Some(d) = l.get("drag").and_then(|v| v.as_array()) {
+            let n: Vec<f32> = d.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect();
+            let (x, y, dx, dy) = (n[0], n[1], n[2], n[3]);
+            let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            harness.event(egui::Event::PointerMoved(egui::pos2(x, y)));
+            harness.event(button(egui::pos2(x, y), true));
+            harness.step();
+            for i in 1..=8 {
+                let t = i as f32 / 8.0;
+                harness.event(egui::Event::PointerMoved(egui::pos2(x + dx * t, y + dy * t)));
+                harness.step();
+            }
+        } else if l.get("release").is_some() {
+            if let Some(pos) = harness.ctx.input(|i| i.pointer.latest_pos()) {
+                harness.event(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
             }
             for _ in 0..3 {
                 harness.step();

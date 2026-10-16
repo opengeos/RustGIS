@@ -106,6 +106,8 @@ pub struct MapView {
     tile_errors: std::collections::HashSet<String>,
     /// When the map last rendered (seconds).
     last_render: f64,
+    /// The map drawn flat and laid over the globe while it moves.
+    drape: crate::globe_drape::GlobeDrape,
 }
 
 impl Default for MapView {
@@ -137,6 +139,7 @@ impl Default for MapView {
             attribution: Vec::new(),
             tile_errors: std::collections::HashSet::new(),
             last_render: -10.0,
+            drape: Default::default(),
         }
     }
 }
@@ -290,13 +293,25 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 
     // Render when the map changed and we're not in the middle of a pan/zoom: meanwhile the flat
     // map's last frame is shifted and scaled. The globe can't be faked that way (turning and
-    // zooming in perspective aren't shifts and scales), so while it moves it redraws every frame
-    // at reduced resolution, then once in full when it settles.
+    // zooming in perspective aren't shifts and scales): while it moves, the map drawn flat is
+    // draped over the sphere (see `globe_drape`), or failing that it redraws every frame at
+    // reduced resolution; it is drawn exactly once it settles.
     let cam = app.session.map().camera;
     let globe_view = app.session.map().projection == Projection::Globe;
     let dragging = app.map.drag.is_some_and(|(_, k)| k == DragKind::Pan);
     let moving = dragging || time - app.map.last_interaction < 0.18;
-    let draft = globe_view && moving;
+    let draped = if globe_view && moving {
+        let key =
+            crate::globe_drape::DrapeKey { rev: app.session.revision, dark: t.dark, sources: rustgis_engine::map::source::generation() };
+        let tiles = if app.session.map().tiles.is_empty() { 0 } else { rustgis_engine::render::rustgis_tiles::cache::generation() };
+        app.map.drape.prepare(ui.ctx(), app.session.map_mut(), key, tiles, w, h, ppp, time)
+    } else {
+        if !globe_view {
+            app.map.drape.clear();
+        }
+        false
+    };
+    let draft = globe_view && moving && !draped;
     let render_ppp = if draft { (ppp * 0.6).max(0.5) } else { ppp };
     let key = Key {
         rev: app.session.revision,
@@ -327,7 +342,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
-    let interacting = !globe_view && moving;
+    let interacting = moving && (!globe_view || draped);
     if globe_view && moving {
         // Wake up once the motion has settled, for the full-resolution frame.
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
@@ -373,7 +388,11 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // out never shows a band of window colour around it.
     let basemap = app.session.map().basemap;
     let backdrop = c32(if globe_view { rustgis_engine::render::globe_space(t.dark, basemap) } else { basemap.palette().0 });
-    painter.rect_filled(rect, 0.0, backdrop);
+    if draped {
+        app.map.drape.paint(&painter, rect, app.session.map(), t.dark);
+    } else {
+        painter.rect_filled(rect, 0.0, backdrop);
+    }
     let old = app.map.tex_camera;
     let e0 = old.extent(w, h);
     let to_screen = |c: &Camera, x: f64, y: f64| {
@@ -391,7 +410,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     } else {
         Rect::from_min_max(to_screen(&cam, e0.min_x, e0.max_y), to_screen(&cam, e0.max_x, e0.min_y))
     };
-    if let Some(tex) = &app.map.texture {
+    if let Some(tex) = app.map.texture.as_ref().filter(|_| !draped) {
         painter.image(tex.id(), tex_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
     // Labels (moved with the texture; hidden while zooming, and while the globe moves, where

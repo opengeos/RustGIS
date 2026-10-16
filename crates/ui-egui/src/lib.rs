@@ -18,6 +18,7 @@ mod dialogs;
 mod docpanes;
 mod editpanes;
 mod geocodeui;
+mod globe_drape;
 pub mod icons;
 mod layoutview;
 mod mapview;
