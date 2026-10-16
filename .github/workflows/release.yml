@@ -155,7 +155,10 @@ jobs:
           if [ -n "${{ steps.macsign.outputs.api_key_path }}" ]; then
             spctl --assess --type execute --verbose=2 "$RUNNER_TEMP/dmg/RustGIS.app"
             validate "$RUNNER_TEMP/dmg/RustGIS.app"
-            validate dist/*.dmg
+            # package.sh stapled the DMG and stapling validates the ticket it attaches, so ask
+            # Gatekeeper here: it reads the stapled ticket locally, as a user's Mac does, instead
+            # of another CloudKit lookup that the Intel runners keep losing.
+            spctl --assess --type open --context context:primary-signature --verbose=2 dist/*.dmg
           fi
           hdiutil detach "$RUNNER_TEMP/dmg"
 

@@ -218,9 +218,9 @@ SPEC
     # Stapling fetches the ticket from Apple's CloudKit, which drops connections now and then
     # ("The network connection was lost", error 68): try a few times before failing the build.
     staple() {
-      for attempt in 1 2 3 4 5; do
+      for attempt in 1 2 3 4 5 6 7 8; do
         xcrun stapler staple "$1" && return 0
-        [ "$attempt" -lt 5 ] && sleep $((attempt * 15))
+        [ "$attempt" -lt 8 ] && sleep $((attempt * 15))
       done
       return 1
     }
