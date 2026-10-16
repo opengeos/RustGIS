@@ -258,6 +258,39 @@ jobs:
             -H "Accept: application/vnd.github.raw" > pr-context/AGENTS.md \
             || echo "No AGENTS.md on $base." > pr-context/AGENTS.md
 
+          # Change stats for the summary table: files changed and the total size
+          # change, from the git trees at the merge base and the PR head (blob
+          # sizes in bytes). Best effort: on any failure the reviewer is told
+          # the stats are unavailable rather than guessing them.
+          stats() {
+            set -euo pipefail
+            local head_sha base_sha
+            head_sha="${{ steps.pr.outputs.sha }}"
+            base_sha="$(gh api "repos/$REPO/compare/$base...$head_sha" --jq .merge_base_commit.sha)"
+            gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+              --jq '.[] | {filename, status, previous_filename}' > "$RUNNER_TEMP/files.json"
+            for side in base head; do
+              sha="$base_sha"; [ "$side" = head ] && sha="$head_sha"
+              gh api "repos/$REPO/git/trees/$sha?recursive=1" \
+                --jq '{truncated, sizes: ([.tree[] | select(.type == "blob") | {key: .path, value: .size}] | from_entries)}' \
+                > "$RUNNER_TEMP/$side.json"
+            done
+            jq -n --slurpfile f "$RUNNER_TEMP/files.json" \
+              --slurpfile b "$RUNNER_TEMP/base.json" --slurpfile h "$RUNNER_TEMP/head.json" '
+              $b[0].sizes as $B | $h[0].sizes as $H | $f as $F |
+              { files_changed: ($F | length),
+                added: ([$F[] | select(.status == "added")] | length),
+                modified: ([$F[] | select(.status == "modified" or .status == "changed")] | length),
+                removed: ([$F[] | select(.status == "removed")] | length),
+                renamed: ([$F[] | select(.status == "renamed" or .status == "copied")] | length),
+                bytes_before: ([$F[] | select(.status != "added") | $B[.previous_filename // .filename] // 0] | add // 0),
+                bytes_after: ([$F[] | select(.status != "removed") | $H[.filename] // 0] | add // 0),
+                trees_truncated: ($b[0].truncated or $h[0].truncated) }
+              | .bytes_change = .bytes_after - .bytes_before'
+          }
+          ( stats ) > pr-context/stats.json \
+            || echo '{"unavailable": "the change stats could not be computed"}' > pr-context/stats.json
+
           size="$(wc -c < pr-context/diff.patch)"
           if [ "$size" -gt "$MAX_DIFF_BYTES" ]; then
             head -c "$MAX_DIFF_BYTES" pr-context/diff.patch > pr-context/diff.trimmed
@@ -308,6 +341,7 @@ jobs:
               - `pr-context/changed-files.txt` — changed files with added/removed line counts
               - `pr-context/metadata.json` — PR number, title, body, author, base and head refs
               - `pr-context/AGENTS.md` — the repository's guidelines for contributors and agents, from the base branch
+              - `pr-context/stats.json` — files changed (added, modified, removed, renamed) and the total size of the changed files before and after the PR, in bytes
 
             When the diff alone is not enough to judge correctness, read the surrounding source files for context.
 
@@ -325,6 +359,8 @@ jobs:
             After posting inline comments, end your run by writing the summary as your FINAL MESSAGE. Do not try to post it yourself — you have no tool that can, and a workflow step publishes your final message as the PR comment verbatim. So your final message must be the comment body and nothing else: no preamble, no "I've completed the review", no meta-commentary about the tools you used.
 
             That final message must start with the heading "## Code review" and list the findings grouped by category (Bugs, Security, Performance, Quality, AGENTS.md), each with a one-line description and confidence. If you genuinely find nothing worth raising, say so and note what you checked.
+
+            End the final message with a "### Change size" table built from `pr-context/stats.json`: one row each for files changed (with the added, modified, removed and renamed counts), size before, size after, and the total size change (signed, e.g. "+12.3 KB"). Show sizes in B, KB or MB as fits. If the stats file says they are unavailable, or `trees_truncated` is true, say so under the table instead of estimating.
 
             Do not approve, merge, or modify any code. Only review and comment.
 
