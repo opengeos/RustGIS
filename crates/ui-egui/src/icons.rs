@@ -203,7 +203,9 @@ fn maneuver(p: &P, kind: &str) {
                 _ => 0.0,
             };
             // A stem up from the bottom, then off in the new direction.
-            let (x0, y0) = (12.0 - a.signum() * 2.5, 12.5);
+            // Off-centre away from the turn (`signum` of 0 is 1: straight stays centred).
+            let side = if a == 0.0 { 0.0 } else { a.signum() * 2.5 };
+            let (x0, y0) = (12.0 - side, 12.5);
             let len = if a.abs() > 100.0 { 6.0 } else { 7.5 };
             let (x1, y1) = (x0 + a.to_radians().sin() * len, y0 - a.to_radians().cos() * len);
             p.line(&[(x0, 21.0), (x0, y0), (x1, y1)], 2.2, ink);

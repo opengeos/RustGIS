@@ -978,7 +978,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         };
         // Directions waiting for a place, or a click on another route, takes the click.
         let nav = &app.ui.nav;
-        let other = (nav.routes.len() > 1)
+        let other = (nav.routes.len() > 1 && app.ui.right == Some(crate::RightPane::Directions))
             .then(|| {
                 (0..nav.routes.len())
                     .filter(|&k| k != nav.chosen)

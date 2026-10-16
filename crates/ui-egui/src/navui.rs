@@ -186,8 +186,11 @@ fn save(app: &RustGisApp, k: &str, v: &str) {
 pub fn seed(app: &mut RustGisApp, i: Option<usize>, c: Coord) {
     load(app);
     let st = &mut app.ui.nav;
-    let i = i.unwrap_or(st.points.len() - 1).min(st.points.len() - 1);
-    st.points[i] = Waypoint { text: format!("{:.5}, {:.5}", c.y, c.x), at: Some(c) };
+    let last = st.points.len().saturating_sub(1);
+    let i = i.unwrap_or(last).min(last);
+    if let Some(pt) = st.points.get_mut(i) {
+        *pt = Waypoint { text: format!("{:.5}, {:.5}", c.y, c.x), at: Some(c) };
+    }
     st.picking = st.points.iter().position(|p| p.at.is_none());
     st.matches = None;
     app.ui.right = Some(crate::RightPane::Directions);
@@ -237,7 +240,9 @@ pub fn open_with(app: &mut RustGisApp, p: &serde_json::Value) {
 pub fn click(app: &mut RustGisApp, c: Coord, other: Option<usize>) -> bool {
     let st = &mut app.ui.nav;
     if let Some(i) = st.picking.filter(|i| *i < st.points.len()) {
-        st.points[i] = Waypoint { text: format!("{:.5}, {:.5}", c.y, c.x), at: Some(c) };
+        if let Some(pt) = st.points.get_mut(i) {
+            *pt = Waypoint { text: format!("{:.5}, {:.5}", c.y, c.x), at: Some(c) };
+        }
         st.picking = st.points.iter().position(|p| p.at.is_none());
         st.matches = None;
         return true;
@@ -341,7 +346,8 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     let st = &mut app.ui.nav;
     // Ask again when the places or options changed.
     let key = st.key(&language);
-    if st.consent && st.pending.is_none() && key != st.asked {
+    // Only while the pane is open (a lookup landing after it closed sends nothing; reopening asks).
+    if open && st.consent && st.pending.is_none() && key != st.asked {
         st.clear_routes();
         st.asked = key.clone();
         if !key.is_empty() {

@@ -58,7 +58,9 @@ live traffic, and the public server is shared, so it answers light use only.
 
 `map.route` plans a route from the command line, a script or the AI Assistant, with places given
 as `[lon, lat]`, `"lat, lon"` or a name to look up, and adds it and its steps as layers;
-`ui.pane.directions` with `from`, `to` (and `via`, `mode`) opens the pane on a route:
+`ui.pane.directions` with `from`, `to` (and `via`, `mode`) opens the pane on a route. `map.route`
+sends its places to the same public servers (names to Nominatim, at most five a call, a second
+apart; coordinates to FOSSGIS's Valhalla), so the AI Assistant asks before running it:
 
 ```
 rustgis-cli run --sample --cmd 'map.route={"from":"Brandenburg Gate, Berlin","to":"Alexanderplatz, Berlin","mode":"bike"}'
