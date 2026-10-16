@@ -1537,6 +1537,16 @@ pub enum Deletion {
 /// Browser): a whole map or layout goes in one click. The commands themselves never ask.
 pub fn confirm_delete(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(d) = app.map.deleting.clone() else { return };
+    // Gone meanwhile (a command, the assistant), or the last map now: nothing left to ask.
+    let p = &app.session.project;
+    let possible = match &d {
+        Deletion::Map(n) => p.maps.len() > 1 && p.maps.iter().any(|m| m.name.eq_ignore_ascii_case(n)),
+        Deletion::Layout(n) => p.layouts.iter().any(|l| l.name.eq_ignore_ascii_case(n)),
+    };
+    if !possible {
+        app.map.deleting = None;
+        return;
+    }
     let t = Tokens::get(ctx);
     let title = match &d {
         Deletion::Map(n) => crate::i18n::fmt("Delete the map {name}?", &[("name", n)]),
