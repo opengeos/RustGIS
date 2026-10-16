@@ -428,15 +428,15 @@ fn config(dsn: &str) -> Result<(postgres::Config, Tls)> {
     let mode = sslmode.or_else(|| env("PGSSLMODE").map(|m| m.to_ascii_lowercase()));
     let tls = match mode.as_deref() {
         Some("disable") => Tls::Disable,
-        // libpq tries without TLS first, then with it; here TLS first, then without (`prefer`), so
-        // a server that only takes TLS connects too.
-        Some("allow") => Tls::Unverified,
-        // libpq's `sslrootcert=system` is the system's roots: the web's, here.
+        // The certificate unchecked, as libpq. For `allow` libpq tries without TLS first, then
+        // with it; here TLS first, then without (`prefer`), so a server that only takes TLS
+        // connects too.
+        Some("allow" | "require" | "prefer") | None => Tls::Unverified,
+        // `verify-ca` checks the host name too, stricter than libpq. libpq's
+        // `sslrootcert=system` is the system's roots: the web's, here.
         Some("verify-ca") | Some("verify-full") => Tls::Verified(
             rootcert.or_else(|| env("PGSSLROOTCERT")).filter(|r| !r.is_empty() && r != "system").map(std::path::PathBuf::from),
         ),
-        Some("require") => Tls::Unverified,
-        Some("prefer") | None => Tls::Unverified,
         Some(other) => return Err(DataError::Format(format!("the connection: sslmode '{other}'"))),
     };
     config.ssl_mode(match (&tls, mode.as_deref()) {
@@ -587,8 +587,13 @@ pub fn families(conn: &Conn, table: &Table) -> Result<Vec<Family>> {
     let filter = format!("{g} IS NOT NULL AND NOT ST_IsEmpty({g})");
     let sql = format!("SELECT DISTINCT ST_Dimension({g}) FROM {from} WHERE {filter}");
     // A scan of the table, bounded like the other probes. Past that, the rows may hold any type:
-    // a layer each, those without rows left out when they open (by their count).
-    let Ok(rows) = conn.snapshot(Some(PROBE_TIMEOUT), |t| t.query(sql.as_str(), &[])) else {
+    // a layer each, those without rows left out when they open (by their count). Other errors
+    // (no permission, a dropped connection) are the table's.
+    let rows = conn.snapshot(Some(PROBE_TIMEOUT), |t| match t.query(sql.as_str(), &[]) {
+        Err(e) if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) => Ok(None),
+        r => r.map(Some),
+    })?;
+    let Some(rows) = rows else {
         return Ok(vec![Family::Points, Family::Lines, Family::Polygons]);
     };
     let mut out: Vec<Family> = rows
@@ -730,7 +735,7 @@ impl PostgisSource {
             _ => "(row_number() OVER ())::int8".to_string(),
         };
         if pk.is_none() && !matches!(relkind.as_str(), "r" | "m") {
-            notes.push("a view or partitioned table without a single-column key: its features are numbered as read".into());
+            notes.push("a view or partitioned table without a single-column key: its features are numbered as read, so their ids can change from one read to the next".into());
         } else if pk.is_none() {
             notes.push(
                 "no single-column integer key: features are numbered by their place in the table, which changes when rows are updated"
