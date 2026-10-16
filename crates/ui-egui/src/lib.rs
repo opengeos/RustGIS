@@ -41,6 +41,7 @@ mod zarrui;
 use rustgis_engine::{Project, Session};
 use serde_json::{Value, json};
 
+pub use chrome::TitlebarMetrics;
 pub use rustgis_assistant;
 pub use rustgis_engine;
 
@@ -272,6 +273,8 @@ pub struct UiState {
     pub hidden_tabs: Vec<String>,
     /// Extra Quick Access Toolbar commands.
     pub quick_access: Vec<String>,
+    /// The native title bar the header is drawn into; set by the desktop app on macOS.
+    pub titlebar: Option<TitlebarMetrics>,
     /// Saved pane arrangements: (name, left pane, right pane, tab).
     pub pane_sets: Vec<(String, Option<LeftPane>, Option<RightPane>, String)>,
     /// The command an item picked in the browser opens with (web).
@@ -379,6 +382,7 @@ impl Default for UiState {
             zarr: Default::default(),
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
+            titlebar: None,
             pane_sets: Vec::new(),
         }
     }

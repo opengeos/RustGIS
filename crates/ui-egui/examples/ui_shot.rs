@@ -4,7 +4,7 @@
 //!
 //! The script is JSON lines: `{"cmd": id, "params": {...}}` runs a command (ui.* included),
 //! `{"shot": "/abs/out.png"}` saves the window, `{"steps": n}` runs frames, `{"sleep": ms}` runs frames for that long, `{"click": label}` clicks the first widget whose label contains it (is it, with `"exact": true`), `{"dark": true}`
-//! switches theme, and `{"width": w, "height": h}` on the first line sets the size (default
+//! switches theme, `{"titlebar": {"left_inset": 80, "height": 34}}` draws the header as a macOS unified title bar (`null` turns it off), and `{"width": w, "height": h}` on the first line sets the size (default
 //! 1480×900 at 2×). The window opens the World Atlas sample.
 
 use egui_kittest::kittest::Queryable;
@@ -65,6 +65,10 @@ fn main() {
             for _ in 0..3 {
                 harness.step();
             }
+        } else if let Some(t) = l.get("titlebar") {
+            let num = |k: &str| t.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            harness.state_mut().ui.titlebar =
+                t.is_object().then(|| rustgis_ui_egui::TitlebarMetrics { left_inset: num("left_inset"), height: num("height") });
         } else if let Some(d) = l.get("dark").and_then(|v| v.as_bool()) {
             harness.state_mut().ui.dark = d;
             for _ in 0..3 {

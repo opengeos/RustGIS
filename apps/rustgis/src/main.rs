@@ -8,6 +8,9 @@ use rustgis_engine::{Project, Session};
 use rustgis_ui_egui::RustGisApp;
 use serde_json::json;
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 struct App(RustGisApp);
 
 /// Preferences in `prefs.json` beside the platform's other app settings.
@@ -147,6 +150,10 @@ mod crash {
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        {
+            self.0.ui.titlebar = macos::titlebar();
+        }
         self.0.logic(ctx);
         if self.0.quit_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -206,6 +213,11 @@ fn main() -> eframe::Result {
         .with_inner_size([1480.0, 920.0])
         .with_min_inner_size([900.0, 560.0])
         .with_drag_and_drop(true);
+    // macOS: the header is the title bar, with the window buttons floating over its left end.
+    #[cfg(target_os = "macos")]
+    {
+        viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
+    }
     if let Some((size, rgba)) = rustgis_engine::render::logo::rgba(256) {
         viewport = viewport.with_icon(egui::IconData { rgba, width: size, height: size });
     }

@@ -10,14 +10,62 @@ use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{enabled, row_button, small, text_w, why_disabled};
 use crate::{RustGisApp, icons};
 
+/// The native title bar the header is drawn into (macOS: a transparent title bar over a
+/// full-size content view). The app reads it from the window system; `None` means the system
+/// draws its own title bar above the header.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TitlebarMetrics {
+    /// Width the window buttons (close, minimise, zoom) take from the left edge, in points.
+    pub left_inset: f32,
+    /// Height of the native title bar, in points; the window buttons are centred in it.
+    pub height: f32,
+}
+
+/// Size and left padding of the header.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeaderLayout {
+    pub height: f32,
+    pub left_pad: f32,
+}
+
+const HEADER_HEIGHT: f32 = 34.0;
+const HEADER_PAD: f32 = 10.0;
+
+pub fn header_layout(titlebar: Option<TitlebarMetrics>) -> HeaderLayout {
+    // Whatever the window system reports is clamped; NaN falls back to the plain header.
+    let clamp = |v: f32, lo: f32, hi: f32| if v.is_nan() { lo } else { v.clamp(lo, hi) };
+    match titlebar {
+        None => HeaderLayout { height: HEADER_HEIGHT, left_pad: HEADER_PAD },
+        Some(m) => HeaderLayout { height: clamp(m.height, HEADER_HEIGHT, 80.0), left_pad: clamp(m.left_inset, HEADER_PAD, 120.0) },
+    }
+}
+
 pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    let layout = header_layout(app.ui.titlebar);
     egui::Panel::top("header")
-        .exact_size(34.0)
+        .exact_size(layout.height)
         .show_separator_line(false)
-        .frame(egui::Frame::NONE.fill(t.header).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 0 }))
+        .frame(egui::Frame::NONE.fill(t.header).inner_margin(egui::Margin {
+            left: layout.left_pad.round() as i8,
+            right: 10,
+            top: 0,
+            bottom: 0,
+        }))
         .show(ui, |ui| {
             let full = ui.max_rect();
+            // In a unified title bar the header is the window's title bar: drag it to move the
+            // window, double-click to zoom. Registered first so the buttons above it win clicks.
+            if app.ui.titlebar.is_some() {
+                let bar = Rect::from_min_max(pos2(full.min.x - layout.left_pad, full.min.y), pos2(full.max.x + 10.0, full.max.y));
+                let drag = ui.interact(bar, egui::Id::new("header_drag"), Sense::click_and_drag());
+                if drag.double_clicked() {
+                    let maximized = ui.ctx().input(|i| i.viewport().maximized).unwrap_or(false);
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                } else if drag.drag_started() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+            }
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
                 let (r, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
@@ -593,5 +641,39 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
             toast.at = now;
         }
         y -= 52.0;
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn header_without_a_unified_title_bar_keeps_its_usual_size() {
+        let l = header_layout(None);
+        assert_eq!((l.height, l.left_pad), (34.0, 10.0));
+    }
+
+    #[test]
+    fn header_with_a_unified_title_bar_clears_the_window_buttons() {
+        let l = header_layout(Some(TitlebarMetrics { left_inset: 78.0, height: 28.0 }));
+        assert_eq!(l.left_pad, 78.0);
+        assert_eq!(l.height, 34.0, "never shorter than the usual header");
+    }
+
+    #[test]
+    fn a_taller_native_title_bar_makes_the_header_as_tall() {
+        let l = header_layout(Some(TitlebarMetrics { left_inset: 90.0, height: 40.0 }));
+        assert_eq!(l.height, 40.0);
+    }
+
+    #[test]
+    fn hostile_metrics_fall_back_to_sane_values() {
+        for (inset, height) in [(f32::NAN, f32::NAN), (-5.0, -5.0), (f32::INFINITY, f32::INFINITY), (1.0e9, 1.0e9)] {
+            let l = header_layout(Some(TitlebarMetrics { left_inset: inset, height }));
+            assert!(l.left_pad.is_finite() && (10.0..=120.0).contains(&l.left_pad), "{l:?}");
+            assert!(l.height.is_finite() && (34.0..=80.0).contains(&l.height), "{l:?}");
+        }
     }
 }
