@@ -230,13 +230,19 @@ pub fn patch(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType) {
     }
 }
 
-fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
-    // The name filter (#300), above the list so it stays in view; another map starts unfiltered.
-    let map_name = app.session.map().name.clone();
-    if app.ui.layer_filter_map != map_name {
+/// Clears the Layers pane's filter (#300) when another map comes into view. Run every frame,
+/// whichever pane (if any) is open, so a map visited while Layers was hidden still counts.
+pub fn follow_active_map(app: &mut RustGisApp) {
+    let map = &app.session.map().name;
+    if app.ui.layer_filter_map != *map {
         app.ui.layer_filter.clear();
-        app.ui.layer_filter_map = map_name.clone();
+        app.ui.layer_filter_map.clone_from(map);
     }
+}
+
+fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+    // The name filter (#300), above the list so it stays in view.
+    let map_name = app.session.map().name.clone();
     ui.add_space(8.0);
     filter_box(app, ui, t);
     let q = app.ui.layer_filter.trim().to_lowercase();
@@ -658,11 +664,12 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
             ui.close();
         }
         ui.separator();
-        if ui.button(tl!("Move Up")).clicked() {
+        // Not while the list is filtered: the layer would move among hidden ones.
+        if ui.add_enabled(reorder, egui::Button::new(tl!("Move Up"))).clicked() {
             let _ = app.run("layer.moveUp", json!({"layer": l.id}));
             ui.close();
         }
-        if ui.button(tl!("Move Down")).clicked() {
+        if ui.add_enabled(reorder, egui::Button::new(tl!("Move Down"))).clicked() {
             let _ = app.run("layer.moveDown", json!({"layer": l.id}));
             ui.close();
         }

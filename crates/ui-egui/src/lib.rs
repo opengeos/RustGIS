@@ -2328,6 +2328,7 @@ impl RustGisApp {
         i18n::set_current(self.lang());
         let t = theme::Tokens::get(&ctx);
         chrome::shortcuts(self, &ctx);
+        panes::follow_active_map(self);
         if self.ui.backstage {
             backstage::show(self, ui);
         } else {
