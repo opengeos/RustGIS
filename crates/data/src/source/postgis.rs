@@ -662,6 +662,9 @@ impl PostgisSource {
             srid = conn.with(|c| c.query_opt(sql.as_str(), &[]))?.and_then(|r| r.try_get::<_, i32>(0).ok()).unwrap_or(0);
         }
         let raw_srid = srid;
+        if table.srid == 0 && !table.geography && raw_srid != 0 {
+            notes.push(format!("the column doesn't fix a coordinate system: rows in one other than EPSG:{raw_srid} are left out"));
+        }
         let given = crs.map(str::trim).filter(|c| !c.is_empty());
         let mut native = g.clone();
         if srid == 0 {
@@ -886,6 +889,10 @@ impl PostgisSource {
     fn filter(&self, in_extent: bool) -> String {
         let g = self.table.geom();
         let mut w = format!("{g} IS NOT NULL AND NOT ST_IsEmpty({g})");
+        // A column of no fixed SRID: only the rows in the one read (others would fail the read).
+        if self.table.srid == 0 && !self.table.geography && self.raw_srid != 0 {
+            w.push_str(&format!(" AND ST_SRID({g}) = {}", self.raw_srid));
+        }
         if in_extent {
             let col = ident(&self.table.column);
             // The column itself, so its index serves (a geography's in longitude/latitude).
@@ -982,7 +989,8 @@ impl FeatureSource for PostgisSource {
                     .unwrap_or(Value::Null)
                 })
                 .collect();
-            out.features.push(Feature { id: id as u64, geometry: Some(geometry), attrs });
+            // A negative key keeps its bits: still one id per row, and the same on every read.
+            out.features.push(Feature { id: id.cast_unsigned(), geometry: Some(geometry), attrs });
         }
         out.complete = step <= 1 && (rows.len() as u64) >= out.matched;
         Ok(out)
