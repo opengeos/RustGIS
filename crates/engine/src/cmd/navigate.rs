@@ -112,7 +112,9 @@ pub fn commands() -> Vec<C> {
             let mut k = 1;
             while taken(&name) {
                 k += 1;
-                name = format!("{base} {k}");
+                // The number fits in the 200 characters a name keeps.
+                let suffix = format!(" {k}");
+                name = base.chars().take(200usize.saturating_sub(suffix.len())).chain(suffix.chars()).collect();
             }
             s.map_mut().name = name.clone();
             Ok(json!({"name": name}))

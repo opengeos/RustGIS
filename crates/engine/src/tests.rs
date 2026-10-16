@@ -5389,4 +5389,11 @@ fn map_rename_keeps_map_names_unique() {
     for p in [json!({}), json!({"name": "  "}), json!({"name": 3})] {
         assert!(s.run("map.rename", &p).is_err(), "{p}");
     }
+    // A long name keeps to 200 characters, number included.
+    let long = "é".repeat(300);
+    s.run("map.rename", &json!({"name": long})).unwrap();
+    s.run("map.new", &Value::Null).unwrap();
+    let r = s.run("map.rename", &json!({"name": long})).unwrap();
+    let name = r["name"].as_str().unwrap_or_default();
+    assert_eq!((name.chars().count(), name.ends_with(" 2")), (200, true), "{name}");
 }
