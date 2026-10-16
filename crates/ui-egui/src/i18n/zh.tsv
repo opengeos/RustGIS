@@ -276,7 +276,6 @@ Clear History	清除历史记录
 Clear Limits	清除限制
 Clear Selection	清除选择
 Clear selection	清除选择
-Clear the filter to reorder	清除筛选后才能调整顺序
 Clear the selection in every layer.	清除所有图层中的选择。
 Clear the selection.	清除选择。
 Click a pixel on the map	单击地图上的像素
@@ -655,7 +654,6 @@ Fill	填充
 Fill Cache	填充缓存
 Fill the cache whenever the projection changes.	每当投影更改时填充缓存。
 Film grain	胶片颗粒
-Filter layers	筛选图层
 Filter rows…	筛选行…
 Find a place by coordinates.	按坐标查找位置。
 Find and run geoprocessing tools.	查找并运行地理处理工具。
@@ -1066,7 +1064,6 @@ Next Page	下一页
 No	否
 No bookmarks yet	暂无书签
 No edits since the project was saved	自工程保存以来没有编辑
-No layers match	没有匹配的图层
 No mask	无掩膜
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	暂无笔记本。使用“分析 › 新建笔记本”新建一个，或使用“添加并打开笔记本”打开一个。
 No offline areas	无离线区域

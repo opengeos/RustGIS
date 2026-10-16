@@ -276,7 +276,6 @@ Clear History	Geschiedenis wissen
 Clear Limits	Limieten wissen
 Clear Selection	Selectie wissen
 Clear selection	Selectie wissen
-Clear the filter to reorder	Wis het filter om de volgorde te wijzigen
 Clear the selection in every layer.	De selectie in alle lagen wissen.
 Clear the selection.	De selectie wissen.
 Click a pixel on the map	Klik op een pixel op de kaart
@@ -655,7 +654,6 @@ Fill	Vulling
 Fill Cache	Cache vullen
 Fill the cache whenever the projection changes.	De cache vullen telkens wanneer de projectie verandert.
 Film grain	Filmkorrel
-Filter layers	Lagen filteren
 Filter rows…	Rijen filteren…
 Find a place by coordinates.	Een plaats zoeken op coördinaten.
 Find and run geoprocessing tools.	Geoverwerkingsgereedschappen zoeken en uitvoeren.
@@ -1066,7 +1064,6 @@ Next Page	Volgende pagina
 No	Nee
 No bookmarks yet	Nog geen bladwijzers
 No edits since the project was saved	Geen bewerkingen sinds het project is opgeslagen
-No layers match	Geen lagen gevonden
 No mask	Geen masker
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Nog geen notebooks. Analyseren › Nieuw notebook start er een, of Notebook toevoegen en openen opent er een.
 No offline areas	Geen offline gebieden

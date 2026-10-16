@@ -276,7 +276,6 @@ Clear History	Cancella cronologia
 Clear Limits	Cancella limiti
 Clear Selection	Cancella selezione
 Clear selection	Cancella selezione
-Clear the filter to reorder	Cancella il filtro per riordinare
 Clear the selection in every layer.	Cancella la selezione in tutti i layer.
 Clear the selection.	Cancella la selezione.
 Click a pixel on the map	Fai clic su un pixel sulla mappa
@@ -655,7 +654,6 @@ Fill	Riempimento
 Fill Cache	Riempi cache
 Fill the cache whenever the projection changes.	Riempi la cache ogni volta che cambia la proiezione.
 Film grain	Grana della pellicola
-Filter layers	Filtra layer
 Filter rows…	Filtra righe…
 Find a place by coordinates.	Trova un luogo tramite coordinate.
 Find and run geoprocessing tools.	Trova ed esegui strumenti di geoprocessing.
@@ -1066,7 +1064,6 @@ Next Page	Pagina successiva
 No	No
 No bookmarks yet	Ancora nessun segnalibro
 No edits since the project was saved	Nessuna modifica dal salvataggio del progetto
-No layers match	Nessun layer corrisponde
 No mask	Nessuna maschera
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Ancora nessun notebook. Analisi › Nuovo notebook ne avvia uno, oppure Aggiungi e apri notebook ne apre uno.
 No offline areas	Nessuna area offline

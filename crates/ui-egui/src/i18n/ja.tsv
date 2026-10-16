@@ -276,7 +276,6 @@ Clear History	履歴のクリア
 Clear Limits	制限のクリア
 Clear Selection	選択の解除
 Clear selection	選択の解除
-Clear the filter to reorder	並べ替えるにはフィルターをクリア
 Clear the selection in every layer.	すべてのレイヤーの選択を解除します。
 Clear the selection.	選択を解除します。
 Click a pixel on the map	マップ上のピクセルをクリック
@@ -655,7 +654,6 @@ Fill	塗りつぶし
 Fill Cache	キャッシュの作成
 Fill the cache whenever the projection changes.	投影法が変わるたびにキャッシュを作成します。
 Film grain	フィルム グレイン
-Filter layers	レイヤーを絞り込む
 Filter rows…	行をフィルター…
 Find a place by coordinates.	座標で場所を検索します。
 Find and run geoprocessing tools.	ジオプロセシング ツールを検索して実行します。
@@ -1066,7 +1064,6 @@ Next Page	次のページ
 No	いいえ
 No bookmarks yet	ブックマークはまだありません
 No edits since the project was saved	プロジェクトの保存後の編集はありません
-No layers match	一致するレイヤーはありません
 No mask	マスクなし
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	ノートブックはまだありません。[解析] › [新しいノートブック] で作成するか、[ノートブックを追加して開く] で開きます。
 No offline areas	オフライン エリアはありません

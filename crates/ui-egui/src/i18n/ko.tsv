@@ -276,7 +276,6 @@ Clear History	기록 지우기
 Clear Limits	제한 지우기
 Clear Selection	선택 해제
 Clear selection	선택 해제
-Clear the filter to reorder	순서를 바꾸려면 필터를 지우세요
 Clear the selection in every layer.	모든 레이어의 선택을 해제합니다.
 Clear the selection.	선택을 해제합니다.
 Click a pixel on the map	지도에서 픽셀을 클릭하세요
@@ -655,7 +654,6 @@ Fill	채우기
 Fill Cache	캐시 채우기
 Fill the cache whenever the projection changes.	투영이 바뀔 때마다 캐시를 채웁니다.
 Film grain	필름 그레인
-Filter layers	레이어 필터
 Filter rows…	행 필터…
 Find a place by coordinates.	좌표로 장소를 찾습니다.
 Find and run geoprocessing tools.	지오프로세싱 도구를 찾아 실행합니다.
@@ -1066,7 +1064,6 @@ Next Page	다음 페이지
 No	아니요
 No bookmarks yet	아직 북마크가 없습니다
 No edits since the project was saved	프로젝트를 저장한 이후 편집 내용이 없습니다
-No layers match	일치하는 레이어 없음
 No mask	마스크 없음
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	아직 노트북이 없습니다. 분석 › 새 노트북으로 시작하거나, 노트북 추가 및 열기로 엽니다.
 No offline areas	오프라인 영역 없음

@@ -276,7 +276,6 @@ Clear History	Geçmişi Temizle
 Clear Limits	Sınırları Temizle
 Clear Selection	Seçimi Temizle
 Clear selection	Seçimi temizle
-Clear the filter to reorder	Yeniden sıralamak için filtreyi temizleyin
 Clear the selection in every layer.	Tüm katmanlardaki seçimi temizle.
 Clear the selection.	Seçimi temizle.
 Click a pixel on the map	Haritada bir piksele tıklayın
@@ -655,7 +654,6 @@ Fill	Dolgu
 Fill Cache	Önbelleği Doldur
 Fill the cache whenever the projection changes.	Projeksiyon her değiştiğinde önbelleği doldur.
 Film grain	Film greni
-Filter layers	Katmanları filtrele
 Filter rows…	Satırları filtrele…
 Find a place by coordinates.	Koordinatlarla bir yer bul.
 Find and run geoprocessing tools.	Coğrafi işleme araçlarını bul ve çalıştır.
@@ -1066,7 +1064,6 @@ Next Page	Sonraki Sayfa
 No	Hayır
 No bookmarks yet	Henüz yer imi yok
 No edits since the project was saved	Proje kaydedildiğinden beri düzenleme yok
-No layers match	Eşleşen katman yok
 No mask	Maske yok
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Henüz not defteri yok. Analiz › Yeni Not Defteri bir tane başlatır veya Not Defteri Ekle ve Aç bir tane açar.
 No offline areas	Çevrimdışı alan yok

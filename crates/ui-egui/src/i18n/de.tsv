@@ -276,7 +276,6 @@ Clear History	Verlauf leeren
 Clear Limits	Grenzen aufheben
 Clear Selection	Auswahl aufheben
 Clear selection	Auswahl aufheben
-Clear the filter to reorder	Filter löschen, um die Reihenfolge zu ändern
 Clear the selection in every layer.	Die Auswahl in allen Layern aufheben.
 Clear the selection.	Die Auswahl aufheben.
 Click a pixel on the map	Ein Pixel auf der Karte anklicken
@@ -655,7 +654,6 @@ Fill	Füllung
 Fill Cache	Cache füllen
 Fill the cache whenever the projection changes.	Den Cache füllen, sobald sich die Projektion ändert.
 Film grain	Filmkorn
-Filter layers	Layer filtern
 Filter rows…	Zeilen filtern…
 Find a place by coordinates.	Einen Ort über Koordinaten finden.
 Find and run geoprocessing tools.	Geoverarbeitungswerkzeuge finden und ausführen.
@@ -1066,7 +1064,6 @@ Next Page	Nächste Seite
 No	Nein
 No bookmarks yet	Noch keine Lesezeichen
 No edits since the project was saved	Keine Bearbeitungen seit dem Speichern des Projekts
-No layers match	Keine passenden Layer
 No mask	Keine Maske
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Noch keine Notizbücher. Analysieren › Neues Notizbuch beginnt eines, Notizbuch hinzufügen und öffnen öffnet eines.
 No offline areas	Keine Offline-Bereiche

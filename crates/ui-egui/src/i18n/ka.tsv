@@ -276,7 +276,6 @@ Clear History	ისტორიის გასუფთავება
 Clear Limits	ლიმიტების გასუფთავება
 Clear Selection	მონიშვნის მოხსნა
 Clear selection	მონიშვნის მოხსნა
-Clear the filter to reorder	გაასუფთავეთ ფილტრი თანმიმდევრობის შესაცვლელად
 Clear the selection in every layer.	მონიშვნის მოხსნა ყველა ფენაში.
 Clear the selection.	მონიშვნის მოხსნა.
 Click a pixel on the map	დააწკაპუნეთ პიქსელზე რუკაზე
@@ -655,7 +654,6 @@ Fill	შევსება
 Fill Cache	ქეშის შევსება
 Fill the cache whenever the projection changes.	ქეშის შევსება ყოველ ჯერზე, როცა პროექცია იცვლება.
 Film grain	ფირის მარცვალი
-Filter layers	ფენების გაფილტვრა
 Filter rows…	სტრიქონების გაფილტვრა…
 Find a place by coordinates.	ადგილის პოვნა კოორდინატებით.
 Find and run geoprocessing tools.	გეოდამუშავების ხელსაწყოების პოვნა და გაშვება.
@@ -1066,7 +1064,6 @@ Next Page	შემდეგი გვერდი
 No	არა
 No bookmarks yet	სანიშნეები ჯერ არ არის
 No edits since the project was saved	პროექტის შენახვის შემდეგ რედაქტირება არ ყოფილა
-No layers match	შესაბამისი ფენა არ არის
 No mask	მასკის გარეშე
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	რვეულები ჯერ არ არის. ანალიზი › ახალი რვეული ქმნის ახალს, ხოლო რვეულის დამატება და გახსნა არსებულს ხსნის.
 No offline areas	ოფლაინ არეები არ არის

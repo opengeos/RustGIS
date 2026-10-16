@@ -276,7 +276,6 @@ Clear History	Очистить историю
 Clear Limits	Сбросить ограничения
 Clear Selection	Очистить выборку
 Clear selection	Очистить выборку
-Clear the filter to reorder	Очистите фильтр, чтобы изменить порядок
 Clear the selection in every layer.	Очистить выборку во всех слоях.
 Clear the selection.	Очистить выборку.
 Click a pixel on the map	Щёлкните пиксель на карте
@@ -655,7 +654,6 @@ Fill	Заливка
 Fill Cache	Заполнить кэш
 Fill the cache whenever the projection changes.	Заполнять кэш при каждой смене проекции.
 Film grain	Зернистость плёнки
-Filter layers	Фильтр слоёв
 Filter rows…	Фильтр строк…
 Find a place by coordinates.	Найти место по координатам.
 Find and run geoprocessing tools.	Найти и запустить инструменты геообработки.
@@ -1066,7 +1064,6 @@ Next Page	Следующая страница
 No	Нет
 No bookmarks yet	Закладок пока нет
 No edits since the project was saved	Нет правок после сохранения проекта
-No layers match	Нет подходящих слоёв
 No mask	Без маски
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Блокнотов пока нет. Анализ › Новый блокнот создаёт блокнот, а «Добавить и открыть блокнот» открывает существующий.
 No offline areas	Нет автономных областей
