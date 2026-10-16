@@ -240,15 +240,32 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.add_space(12.0);
         let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
         icons::paint(ui.painter(), r, "search", t.text_dim, t.accent);
+        // The ✕ is as tall as the box (the theme's `interact_size`).
+        let h = ui.spacing().interact_size.y;
         let clear = !app.ui.layer_filter.is_empty();
-        let room = ui.available_width() - if clear { 34.0 } else { 10.0 };
-        let edit = ui.add(egui::TextEdit::singleline(&mut app.ui.layer_filter).hint_text(tl!("Filter layers")).desired_width(room));
-        // Escape clears it (the box gives up its focus on that key, in the same frame).
-        if (edit.has_focus() || edit.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        let room = ui.available_width() - if clear { h + ui.spacing().item_spacing.x + 10.0 } else { 10.0 };
+        // The box keeps Escape (egui would drop its focus on it before the global shortcuts ran,
+        // which then take the key): Escape clears the text, and on an empty box lets go.
+        let keys = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, escape: true, ..Default::default() };
+        let edit = ui.add(
+            egui::TextEdit::singleline(&mut app.ui.layer_filter).hint_text(tl!("Filter layers")).desired_width(room).event_filter(keys),
+        );
+        if edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if app.ui.layer_filter.is_empty() {
+                edit.surrender_focus();
+            }
             app.ui.layer_filter.clear();
         }
-        if clear && crate::widgets::icon_button(ui, "close", tl!("Clear")).clicked() {
-            app.ui.layer_filter.clear();
+        if clear {
+            let (cr, resp) = ui.allocate_exact_size(vec2(h, h), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Clear")));
+            if resp.hovered() {
+                ui.painter().rect_filled(cr, CornerRadius::same(4), t.hover);
+            }
+            icons::paint(ui.painter(), cr.shrink(5.0), "close", t.text_dim, t.accent);
+            if resp.on_hover_text(tl!("Clear")).clicked() {
+                app.ui.layer_filter.clear();
+            }
         }
     });
     let q = app.ui.layer_filter.trim().to_lowercase();
