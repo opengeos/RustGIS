@@ -235,39 +235,8 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         app.ui.layer_filter.clear();
         app.ui.layer_filter_map = map_name.clone();
     }
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.add_space(12.0);
-        let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-        icons::paint(ui.painter(), r, "search", t.text_dim, t.accent);
-        // The ✕ is as tall as the box (the theme's `interact_size`).
-        let h = ui.spacing().interact_size.y;
-        let clear = !app.ui.layer_filter.is_empty();
-        let room = ui.available_width() - if clear { h + ui.spacing().item_spacing.x + 10.0 } else { 10.0 };
-        // The box keeps Escape (egui would drop its focus on it before the global shortcuts ran,
-        // which then take the key): Escape clears the text, and on an empty box lets go.
-        let keys = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, escape: true, ..Default::default() };
-        let edit = ui.add(
-            egui::TextEdit::singleline(&mut app.ui.layer_filter).hint_text(tl!("Filter layers")).desired_width(room).event_filter(keys),
-        );
-        if edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if app.ui.layer_filter.is_empty() {
-                edit.surrender_focus();
-            }
-            app.ui.layer_filter.clear();
-        }
-        if clear {
-            let (cr, resp) = ui.allocate_exact_size(vec2(h, h), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Clear")));
-            if resp.hovered() {
-                ui.painter().rect_filled(cr, CornerRadius::same(4), t.hover);
-            }
-            icons::paint(ui.painter(), cr.shrink(5.0), "close", t.text_dim, t.accent);
-            if resp.on_hover_text(tl!("Clear")).clicked() {
-                app.ui.layer_filter.clear();
-            }
-        }
-    });
+    ui.add_space(8.0);
+    filter_box(app, ui, t);
     let q = app.ui.layer_filter.trim().to_lowercase();
     let filtering = !q.is_empty();
     let shows = |name: &str| !filtering || name.to_lowercase().contains(&q);
@@ -375,6 +344,51 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         }
     });
+}
+
+/// The Layers pane's filter box, drawn like the header's Command Search box: a rounded field
+/// with the search icon and, once it holds text, a ✕ inside it. A click anywhere on the field
+/// puts the cursor in it.
+fn filter_box(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
+    let field = Rect::from_min_max(pos2(row.min.x + 10.0, row.min.y), pos2(row.max.x - 10.0, row.max.y));
+    let id = egui::Id::new("layer_filter");
+    let bg = ui.interact(field, id.with("field"), Sense::click());
+    let focused = ui.memory(|m| m.has_focus(id));
+    let p = ui.painter();
+    p.rect_filled(field, CornerRadius::same(12), if bg.hovered() && !focused { t.hover } else { t.input });
+    p.rect_stroke(field, CornerRadius::same(12), Stroke::new(1.0, if focused { t.accent } else { t.border }), egui::StrokeKind::Inside);
+    let icon = Rect::from_center_size(pos2(field.min.x + 16.0, field.center().y), vec2(14.0, 14.0));
+    icons::paint(p, icon, "search", t.text_dim, t.accent);
+    let clear = !app.ui.layer_filter.is_empty();
+    let cr = Rect::from_center_size(pos2(field.max.x - 13.0, field.center().y), vec2(18.0, 18.0));
+    let end = if clear { cr.min.x - 2.0 } else { field.max.x - 10.0 };
+    let text = Rect::from_min_max(pos2(field.min.x + 28.0, field.min.y), pos2(end, field.max.y));
+    // The box keeps Escape (egui would drop its focus on it before the global shortcuts ran,
+    // which then take the key): Escape clears the text, and on an empty box lets go.
+    let keys = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, escape: true, ..Default::default() };
+    let edit = egui::TextEdit::singleline(&mut app.ui.layer_filter).id(id).hint_text(tl!("Filter layers")).frame(egui::Frame::NONE);
+    let edit = ui.put(text, edit.event_filter(keys));
+    if bg.clicked() {
+        edit.request_focus();
+    }
+    if edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if app.ui.layer_filter.is_empty() {
+            edit.surrender_focus();
+        }
+        app.ui.layer_filter.clear();
+    }
+    if clear {
+        let resp = ui.interact(cr, id.with("clear"), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Clear")));
+        if resp.hovered() {
+            ui.painter().rect_filled(cr, CornerRadius::same(9), t.hover);
+        }
+        icons::paint(ui.painter(), cr.shrink(4.0), "close", t.text_dim, t.accent);
+        if resp.on_hover_text(tl!("Clear")).clicked() {
+            app.ui.layer_filter.clear();
+        }
+    }
 }
 
 /// The layer a row drag carries (egui's drag-and-drop payload).
