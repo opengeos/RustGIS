@@ -22,6 +22,7 @@ mod geocodeui;
 mod globe_drape;
 pub mod icons;
 mod layoutview;
+mod mapgpu;
 mod mapview;
 mod opendataui;
 mod panes;
@@ -445,6 +446,12 @@ pub struct RustGisApp {
 }
 
 impl RustGisApp {
+    /// egui's wgpu render state from the host (`frame.wgpu_render_state()`), feeding the GPU
+    /// map backend. Cheap to call every frame: the state is Arc-backed.
+    pub fn set_render_state(&mut self, rs: Option<egui_wgpu::RenderState>) {
+        self.map.set_render_state(rs);
+    }
+
     pub fn new(session: Session) -> Self {
         let mut s = session;
         if s.active_layer.is_none() {
@@ -508,6 +515,9 @@ impl RustGisApp {
             self.ui.start_projection = p.code();
         }
         self.ui.start_extent = self.services.load_pref.as_ref().and_then(|load| load("start_extent")).and_then(|v| parse_extent(&v));
+        // The GPU map backend: RUSTGIS_GPU forces it on, else the saved preference.
+        self.map.gpu_enabled = std::env::var_os("RUSTGIS_GPU").is_some()
+            || self.services.load_pref.as_ref().and_then(|load| load("ui.map.gpu")).as_deref() == Some("1");
         if let Some(m) = self.services.load_pref.as_ref().and_then(|load| load("ribbon_minimized")) {
             self.ui.ribbon_minimized = m == "true";
         }
@@ -1047,6 +1057,13 @@ impl RustGisApp {
             "ui.theme" => {
                 self.ui.dark = p.get("dark").and_then(Value::as_bool).unwrap_or(!self.ui.dark);
                 self.ui.dark_follows_system = false;
+            }
+            "ui.map.gpu" => {
+                self.map.gpu_enabled = p.get("on").and_then(Value::as_bool).unwrap_or(!self.map.gpu_enabled);
+                if let Some(save) = &self.services.save_pref {
+                    save("ui.map.gpu", if self.map.gpu_enabled { "1" } else { "0" });
+                }
+                self.map.invalidate();
             }
             "ui.commandSearch" => self.ui.command_search = Some(String::new()),
             "ui.about" => self.ui.about = true,

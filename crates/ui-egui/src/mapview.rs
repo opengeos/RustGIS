@@ -122,6 +122,22 @@ pub struct MapView {
     drape: crate::globe_drape::GlobeDrape,
     /// Shooting stars around the globe.
     comets: crate::comets::Comets,
+    /// GPU map backend: pipelines (built lazily from the render state), the uploaded scene,
+    /// and egui's wgpu render state handed over by the host app.
+    pub(crate) gpu_renderer: Option<std::sync::Arc<crate::mapgpu::GpuMapRenderer>>,
+    pub(crate) gpu_frame: Option<std::sync::Arc<crate::mapgpu::SceneBuffers>>,
+    /// The GPU scene's offscreen MSAA target, shared with the paint callback across frames.
+    pub(crate) gpu_target: std::sync::Arc<std::sync::Mutex<Option<crate::mapgpu::SceneTarget>>>,
+    /// The last side-by-side map's GPU scene (its key, buffers and labels), when the second
+    /// map rendered on the GPU.
+    pub(crate) split_gpu: Option<([f64; 8], std::sync::Arc<crate::mapgpu::SceneBuffers>, Vec<PlacedLabel>)>,
+    /// The split map's offscreen MSAA target (its own slot — main and split differ in size).
+    pub(crate) gpu_target_split: std::sync::Arc<std::sync::Mutex<Option<crate::mapgpu::SceneTarget>>>,
+    pub(crate) render_state: Option<egui_wgpu::RenderState>,
+    /// The GPU map backend, for now gated on the RUSTGIS_GPU environment variable.
+    pub gpu_enabled: bool,
+    /// Rolling map-frame timestamps (for the status-bar FPS readout).
+    frame_times: std::collections::VecDeque<f64>,
 }
 
 impl Default for MapView {
@@ -160,14 +176,53 @@ impl Default for MapView {
             last_render: -10.0,
             drape: Default::default(),
             comets: Default::default(),
+            gpu_renderer: None,
+            gpu_frame: None,
+            gpu_target: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            split_gpu: None,
+            gpu_target_split: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            render_state: None,
+            gpu_enabled: std::env::var_os("RUSTGIS_GPU").is_some(),
+            frame_times: std::collections::VecDeque::new(),
         }
     }
 }
 
 impl MapView {
+    /// egui's wgpu render state from the host (`frame.wgpu_render_state()`), for the GPU map
+    /// backend. Cheap to call every frame: the state is Arc-backed and pipelines build lazily.
+    pub fn set_render_state(&mut self, rs: Option<egui_wgpu::RenderState>) {
+        self.render_state = rs;
+    }
+
+    /// Records one drawn map frame (the status bar's FPS readout reads the rolling window).
+    fn record_frame(&mut self, now: f64) {
+        self.frame_times.push_back(now);
+        while self.frame_times.len() > 240 {
+            self.frame_times.pop_front();
+        }
+        while self.frame_times.front().is_some_and(|t| *t < now - 2.0) {
+            self.frame_times.pop_front();
+        }
+    }
+
+    /// Frames drawn in the last second; `None` when the map is idle (egui repaints on demand,
+    /// so no frames means nothing is moving — distinct from "0 fps" when moving).
+    pub(crate) fn fps(&self, now: f64) -> Option<usize> {
+        let live = self.frame_times.back().is_some_and(|t| *t > now - 0.5);
+        live.then(|| self.frame_times.iter().filter(|t| **t > now - 1.0).count())
+    }
+    /// Forces a re-render on the next frame; also drops the GPU frame (the backend toggle
+    /// relies on it).
     pub fn invalidate(&mut self) {
         self.key = None;
+        self.gpu_frame = None;
     }
+    /// The camera the last full render was drawn with (diagnostics and tests).
+    pub fn full_frame_camera(&self) -> Camera {
+        self.tex_camera
+    }
+
     /// How long the last map draw took, in milliseconds.
     pub fn render_ms(&self) -> u64 {
         self.render_ms
@@ -247,19 +302,54 @@ fn split_view(app: &mut RustGisApp, ui: &mut Ui, other: usize, rect: Rect, t: &T
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, c32(m.basemap.palette().0));
     let key = [other as f64, revision as f64, m.camera.center.x, m.camera.center.y, m.camera.res, w, h, f64::from(ppp)];
-    if app.map.split.as_ref().is_none_or(|(k, _, _)| *k != key)
-        && let Some(r) = rustgis_engine::render::render(m, &view)
-    {
-        let img = egui::ColorImage::from_rgba_premultiplied([r.pixmap.width() as usize, r.pixmap.height() as usize], r.pixmap.data());
-        match app.map.split.take() {
-            Some((_, mut tex, _)) => {
-                tex.set(img, egui::TextureOptions::LINEAR);
-                app.map.split = Some((key, tex, r.labels));
+    let gpu_ok = app.map.gpu_enabled
+        && !m.projection.is_globe()
+        && m.view.effects.is_none()
+        && m.view.color_vision == rustgis_engine::map::view::ColorVision::Normal;
+    // Fresh GPU scene? Keep it. Stale? Rebuild. Either way `rendered_gpu` tracks whether the
+    // split map draws from `split_gpu` this frame.
+    let mut rendered_gpu = gpu_ok && app.map.split_gpu.as_ref().is_some_and(|(k, _, _)| *k == key);
+    if gpu_ok && !rendered_gpu {
+        if app.map.gpu_renderer.is_none()
+            && let Some(rs) = &app.map.render_state
+        {
+            app.map.gpu_renderer = Some(std::sync::Arc::new(crate::mapgpu::GpuMapRenderer::new(rs)));
+        }
+        if let (Some(r), Some(rs)) = (&app.map.gpu_renderer, &app.map.render_state)
+            && let Some(rustgis_engine::render::RenderOutput::Gpu(scene)) =
+                rustgis_engine::render::render_backend(m, &view, rustgis_engine::render::Backend::Gpu)
+        {
+            // None = the scene exceeds the device's limits: the CPU path below renders it.
+            if let Some(bufs) = crate::mapgpu::SceneBuffers::from_scene(&rs.device, &rs.queue, r, &scene, m.camera, [w, h], ppp) {
+                app.map.split_gpu = Some((key, std::sync::Arc::new(bufs), scene.labels));
+                rendered_gpu = true;
             }
-            None => app.map.split = Some((key, ui.ctx().load_texture("split_map", img, egui::TextureOptions::LINEAR), r.labels)),
         }
     }
-    if let Some((_, tex, labels)) = &app.map.split {
+    if !rendered_gpu {
+        app.map.split_gpu = None;
+        if app.map.split.as_ref().is_none_or(|(k, _, _)| *k != key)
+            && let Some(r) = rustgis_engine::render::render(m, &view)
+        {
+            let img = egui::ColorImage::from_rgba_premultiplied([r.pixmap.width() as usize, r.pixmap.height() as usize], r.pixmap.data());
+            match app.map.split.take() {
+                Some((_, mut tex, _)) => {
+                    tex.set(img, egui::TextureOptions::LINEAR);
+                    app.map.split = Some((key, tex, r.labels));
+                }
+                None => app.map.split = Some((key, ui.ctx().load_texture("split_map", img, egui::TextureOptions::LINEAR), r.labels)),
+            }
+        }
+    }
+    if let (Some((_, bufs, labels)), Some(gr)) = (&app.map.split_gpu, &app.map.gpu_renderer) {
+        painter.add(egui_wgpu::Callback::new_paint_callback(
+            rect,
+            crate::mapgpu::SceneCallback { renderer: gr.clone(), buffers: bufs.clone(), target: app.map.gpu_target_split.clone() },
+        ));
+        for l in labels {
+            draw_label(&painter, l, pos2(rect.min.x + l.x, rect.min.y + l.y));
+        }
+    } else if let Some((_, tex, labels)) = &app.map.split {
         painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         for l in labels {
             draw_label(&painter, l, pos2(rect.min.x + l.x, rect.min.y + l.y));
@@ -299,6 +389,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     let ppp = ui.ctx().pixels_per_point();
     let time = now(ui);
+    app.map.record_frame(time);
 
     interact(app, ui, &resp, rect);
 
@@ -359,14 +450,39 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if globe_view && !moving && app.map.key.is_some_and(|k| k.draft) {
         ui.ctx().request_repaint();
     }
+    // The GPU backend draws flat, effect-free frames; it re-renders on every change (no
+    // texture-shift trick — meshes re-project in the vertex shader).
+    let gpu_ok = app.map.gpu_enabled
+        && !globe_view
+        && app.session.map().view.effects.is_none()
+        && app.session.map().view.color_vision == rustgis_engine::map::view::ColorVision::Normal;
+    // GPU fast path: during pan/zoom (or a camera animation) with an all-GPU scene (no CPU
+    // image runs — rasters and tiles don't re-project), only the camera changes, so rewrite
+    // the per-draw uniforms instead of re-tessellating. `key` and `tex_camera` stay at the
+    // last full render: the scene's contents (extent culling, the 0.35 px decimation, label
+    // placement) are baked for that camera, so once the motion settles the still-stale key
+    // makes the branch below do one full re-render.
     let stale = app.map.key != Some(key);
-    // While the flat map moves its last frame is shifted and scaled, until that no longer covers
-    // the view (zooming out, panning past its edge) or stretches it blurry (zooming in). Then a
-    // frame is drawn mid-motion: for a gap, over twice the width and height, so the next steps
-    // are covered too (as MapLibre keeps showing the tiles around the view); when stretched, at
-    // the view. Frames are drawn coarser while they're slow, and sharpening ones spaced out by
-    // how long the last took, so the motion between them stays smooth.
-    let motion = (stale && interacting && !globe_view && app.map.texture.is_some())
+    let cam_only = app.map.key.is_some_and(|k| (Key { cam: k.cam, ..key }) == k);
+    let mut fast_engaged = false;
+    if stale
+        && gpu_ok
+        && (interacting || app.ws.playing.is_some())
+        && cam_only
+        && let (Some(gf), Some(rs)) = (&app.map.gpu_frame, &app.map.render_state)
+        && !gf.has_images
+    {
+        gf.set_camera(&rs.queue, &cam);
+        fast_engaged = true;
+    }
+    let stale = app.map.key != Some(key);
+    // While the flat map moves on the CPU its last frame is shifted and scaled, until that no
+    // longer covers the view (zooming out, panning past its edge) or stretches it blurry
+    // (zooming in). Then a frame is drawn mid-motion: for a gap, over twice the width and height,
+    // so the next steps are covered too (as MapLibre keeps showing the tiles around the view);
+    // when stretched, at the view. Frames are drawn coarser while they're slow, and sharpening
+    // ones spaced out by how long the last took, so the motion between them stays smooth.
+    let motion = (stale && interacting && !gpu_ok && !globe_view && app.map.texture.is_some())
         .then(|| {
             let r = tex_rect(app, cam, rect, false);
             let stretch = r.width() as f64 / app.map.tex_size.0.max(1.0);
@@ -384,47 +500,88 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             Some((vw, vh, ppp * (k * most).clamp(least, most) as f32))
         })
         .flatten();
+    let (vw, vh, vppp) = motion.unwrap_or((w, h, render_ppp));
     if stale
+        && !fast_engaged
         && (motion.is_some()
+            || gpu_ok
             || !interacting
             || app.map.texture.is_none()
             || app.map.key.is_some_and(|k| k.rev != key.rev || k.size != key.size))
     {
         let t0 = web_time::Instant::now();
-        let (vw, vh, vppp) = motion.unwrap_or((w, h, render_ppp));
-        let view = View { width: vw, height: vh, pixels_per_point: vppp as f64, camera: cam };
-        if let Some(r) = rustgis_engine::render::render(app.session.map_mut(), &view) {
-            let size = [r.pixmap.width() as usize, r.pixmap.height() as usize];
-            let img = egui::ColorImage::from_rgba_premultiplied(size, r.pixmap.data());
-            match &mut app.map.texture {
-                Some(tex) => tex.set(img, egui::TextureOptions::LINEAR),
-                None => app.map.texture = Some(ui.ctx().load_texture("map", img, egui::TextureOptions::LINEAR)),
+        let view = View { width: w, height: h, pixels_per_point: render_ppp as f64, camera: cam };
+        let mut rendered_gpu = false;
+        if gpu_ok {
+            if app.map.gpu_renderer.is_none()
+                && let Some(rs) = &app.map.render_state
+            {
+                app.map.gpu_renderer = Some(std::sync::Arc::new(crate::mapgpu::GpuMapRenderer::new(rs)));
             }
-            // A globe drawn roughly mid-motion keeps the last labels, which it would re-place
-            // differently every frame.
-            if !draft {
-                app.map.labels = r.labels;
-                app.map.labels.splice(0..0, r.unplaced);
-                app.map.label_lonlat = match globe_view {
-                    true => {
-                        let g = Globe::new(&cam, w, h);
-                        app.map.labels.iter().map(|l| g.inverse(l.x as f64, l.y as f64)).collect()
-                    }
-                    false => Vec::new(),
-                };
+            // A scene over the device's limits (huge buffers, oversized images) is declined
+            // here too: the CPU block below renders the frame instead.
+            if let (Some(r), Some(rs)) = (&app.map.gpu_renderer, &app.map.render_state)
+                && let Some(rustgis_engine::render::RenderOutput::Gpu(scene)) =
+                    rustgis_engine::render::render_backend(app.session.map_mut(), &view, rustgis_engine::render::Backend::Gpu)
+                && let Some(bufs) = crate::mapgpu::SceneBuffers::from_scene(&rs.device, &rs.queue, r, &scene, cam, [w, h], render_ppp)
+            {
+                app.map.gpu_frame = Some(std::sync::Arc::new(bufs));
+                app.map.labels = scene.labels;
+                app.map.labels.splice(0..0, scene.unplaced);
+                app.map.label_lonlat = Vec::new();
                 app.map.label_camera = cam;
-            }
-            app.map.attribution = r.attribution;
-            app.map.last_render = time;
-            for e in r.tile_errors {
-                if app.map.tile_errors.insert(e.clone()) {
-                    app.session.notify(e, true);
+                app.map.attribution = scene.attribution;
+                app.map.last_render = time;
+                for e in scene.tile_errors {
+                    if app.map.tile_errors.insert(e.clone()) {
+                        app.session.notify(e, true);
+                    }
                 }
+                app.map.tex_camera = cam;
+                app.map.tex_size = (w, h);
+                app.map.key = Some(key);
+                rendered_gpu = true;
             }
-            app.map.tex_camera = cam;
-            app.map.tex_size = (vw, vh);
-            // Mid-motion the frame stands in for the real one, which follows once it settles.
-            app.map.key = Some(Key { draft: key.draft || motion.is_some(), ..key });
+        }
+        // The CPU path, unchanged — also the fallback when the GPU backend declines a frame
+        // (render_backend's own compatibility guard, or a scene over the device's limits), or
+        // no render state arrived yet.
+        if !rendered_gpu {
+            app.map.gpu_frame = None;
+            let view = View { width: vw, height: vh, pixels_per_point: vppp as f64, camera: cam };
+            if let Some(r) = rustgis_engine::render::render(app.session.map_mut(), &view) {
+                let size = [r.pixmap.width() as usize, r.pixmap.height() as usize];
+                let img = egui::ColorImage::from_rgba_premultiplied(size, r.pixmap.data());
+                match &mut app.map.texture {
+                    Some(tex) => tex.set(img, egui::TextureOptions::LINEAR),
+                    None => app.map.texture = Some(ui.ctx().load_texture("map", img, egui::TextureOptions::LINEAR)),
+                }
+                // A globe drawn roughly mid-motion keeps the last labels, which it would re-place
+                // differently every frame.
+                if !draft {
+                    app.map.labels = r.labels;
+                    app.map.labels.splice(0..0, r.unplaced);
+                    app.map.label_lonlat = match globe_view {
+                        true => {
+                            let g = Globe::new(&cam, w, h);
+                            app.map.labels.iter().map(|l| g.inverse(l.x as f64, l.y as f64)).collect()
+                        }
+                        false => Vec::new(),
+                    };
+                    app.map.label_camera = cam;
+                }
+                app.map.attribution = r.attribution;
+                app.map.last_render = time;
+                for e in r.tile_errors {
+                    if app.map.tile_errors.insert(e.clone()) {
+                        app.session.notify(e, true);
+                    }
+                }
+                app.map.tex_camera = cam;
+                app.map.tex_size = (vw, vh);
+                // Mid-motion the frame stands in for the real one, which follows once it settles.
+                app.map.key = Some(Key { draft: key.draft || motion.is_some(), ..key });
+            }
         }
         app.map.render_ms = t0.elapsed().as_millis() as u64;
         if let Some((_, _, p)) = motion {
@@ -454,7 +611,15 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let old = app.map.tex_camera;
     let tex_rect = tex_rect(app, cam, rect, globe_view);
     app.map.tex_rect = tex_rect;
-    if let Some(tex) = app.map.texture.as_ref().filter(|_| !draped) {
+    // A fresh GPU frame (re-rendered whenever the key changed, so its camera is the current
+    // one: tex_rect == rect and labels sit unshifted) draws inside egui's wgpu pass. The GPU
+    // backend only serves flat maps, so the globe's drape never meets it.
+    if let (Some(gf), Some(gr)) = (&app.map.gpu_frame, &app.map.gpu_renderer) {
+        painter.add(egui_wgpu::Callback::new_paint_callback(
+            rect,
+            crate::mapgpu::SceneCallback { renderer: gr.clone(), buffers: gf.clone(), target: app.map.gpu_target.clone() },
+        ));
+    } else if let Some(tex) = app.map.texture.as_ref().filter(|_| !draped) {
         painter.image(tex.id(), tex_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
     // Shooting stars, while space shows around the globe.
@@ -1016,8 +1181,10 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
             p.line_segment([c + a, c + b], Stroke::new(2.0, Color32::from_black_alpha(160)));
         }
     }
-    // The magnifier: twice the map under the pointer, in a lens beside it.
+    // The magnifier: twice the map under the pointer, in a lens beside it. It samples the CPU
+    // texture, which GPU frames don't update — hide the lens while the GPU backend is drawing.
     if app.map.magnifier
+        && app.map.gpu_frame.is_none()
         && let (Some(tex), Some(ptr)) = (&app.map.texture, ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p)))
     {
         let r = 70.0;
@@ -1763,5 +1930,26 @@ mod picture_tests {
         assert!(bomb.len() < 4 << 20, "{}", bomb.len());
         assert!(super::decode_picture(&bomb).is_err());
         assert!(super::decode_picture(b"not a picture").is_err());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fps_counts_the_last_second_and_idle_is_none() {
+        let mut mv = MapView::default();
+        assert_eq!(mv.fps(0.0), None, "no frames yet");
+        for i in 0..10 {
+            mv.record_frame(i as f64 * 0.05);
+        }
+        assert_eq!(mv.fps(0.46), Some(10), "all ten frames inside the window");
+        // A second burst later: the first burst has aged out of the 1 s window.
+        for i in 0..10 {
+            mv.record_frame(1.2 + i as f64 * 0.05);
+        }
+        assert_eq!(mv.fps(1.7), Some(10), "only the new burst counts");
+        assert_eq!(mv.fps(2.3), None, "idle (no frame in 500 ms)");
     }
 }
