@@ -258,15 +258,20 @@ jobs:
           base="$(jq -r .baseRefName pr-context/metadata.json)"
           if gh api -X GET "repos/$REPO/contents/AGENTS.md" -f ref="$base" \
               -H "Accept: application/vnd.github.raw" > pr-context/AGENTS.md 2> "$RUNNER_TEMP/agents.err"; then
-            # Claude Code may load the checkout's AGENTS.md as project
-            # instructions, so replace the PR's copy with the base one too (its
-            # changes are still in the diff). `rm` unlinks a symlink rather
-            # than following it.
-            rm -rf AGENTS.md
+            # Claude Code may load instruction files from the checkout as
+            # trusted project instructions, so drop every one the PR ships
+            # (CLAUDE.md, .claude/, nested AGENTS.md…) and put back only the
+            # base AGENTS.md; their changes are still in the diff. `rm`
+            # unlinks a symlink rather than following it.
+            rm -rf .claude CLAUDE.local.md
+            find . -path ./.git -prune -o \( -iname AGENTS.md -o -iname CLAUDE.md \) -print0 \
+              | xargs -0 rm -rf
             cp pr-context/AGENTS.md AGENTS.md
           elif grep -q "HTTP 404" "$RUNNER_TEMP/agents.err"; then
             echo "No AGENTS.md on $base." > pr-context/AGENTS.md
-            rm -rf AGENTS.md
+            rm -rf .claude CLAUDE.local.md
+            find . -path ./.git -prune -o \( -iname AGENTS.md -o -iname CLAUDE.md \) -print0 \
+              | xargs -0 rm -rf
           else
             cat "$RUNNER_TEMP/agents.err" >&2
             exit 1
@@ -366,7 +371,7 @@ jobs:
             Perform a thorough code review of pull request ${{ github.repository }}/pull/${{ steps.pr.outputs.number }}.
 
             You have no Bash tool and no network access; everything you need is already on disk. The repository working directory is the PR head, so Read/Grep/Glob show the *proposed* file contents. The diff and PR metadata have been staged for you:
-              - `pr-context/diff.patch` — the full PR diff (read it first; it may be large, so page through it with Read's offset/limit)
+              - `pr-context/diff.patch` — the full PR diff (read it right after `pr-context/AGENTS.md`; it may be large, so page through it with Read's offset/limit)
               - `pr-context/changed-files.txt` — changed files with added/removed line counts
               - `pr-context/metadata.json` — PR number, title, body, author, base and head refs
               - `pr-context/AGENTS.md` — the repository's guidelines for contributors and agents, from the base branch
@@ -379,7 +384,7 @@ jobs:
             - Security issues such as injection, unsafe input handling, and leaked secrets
             - Performance problems and obvious inefficiencies
             - Code quality, readability, naming, and maintainability
-            - Adherence to the repository guidelines that apply to the changed files. They are staged as `pr-context/AGENTS.md`, taken from the base branch: read it before the diff, and the checkout's `AGENTS.md` has been replaced with the same copy, and any change the PR makes to it is in the diff
+            - Adherence to the repository guidelines that apply to the changed files. They are staged as `pr-context/AGENTS.md`, taken from the base branch, so read that file first. The checkout's `AGENTS.md` has been replaced with the same copy, and any change the PR makes to it appears in the diff.
 
             Concentrate on the changed lines, but use repository context to judge whether they are correct. Report findings across a range of confidence levels, not only near-certain ones. It is fine to raise a well-reasoned concern even when you are not fully certain, as long as you state your confidence and reasoning. Skip pre-existing issues unrelated to this change.
 
