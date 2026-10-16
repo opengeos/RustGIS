@@ -142,7 +142,8 @@ enum Tls {
 }
 
 /// A connection to a server, shared by every layer read from it (a database of many tables
-/// shouldn't take as many of its connections).
+/// shouldn't take as many of its connections). Its statements run one at a time: a slow read
+/// holds up the other layers of that server until it ends or times out.
 pub struct Conn {
     config: postgres::Config,
     tls: Tls,
