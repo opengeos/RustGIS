@@ -256,26 +256,28 @@ jobs:
           # Only a missing file is tolerated; any other API error fails the
           # review rather than silently dropping the guidelines.
           base="$(jq -r .baseRefName pr-context/metadata.json)"
+          agents="$RUNNER_TEMP/AGENTS.md"
           if gh api -X GET "repos/$REPO/contents/AGENTS.md" -f ref="$base" \
-              -H "Accept: application/vnd.github.raw" > pr-context/AGENTS.md 2> "$RUNNER_TEMP/agents.err"; then
-            # Claude Code may load instruction files from the checkout as
-            # trusted project instructions, so drop every one the PR ships
-            # (CLAUDE.md, .claude/, nested AGENTS.md…) and put back only the
-            # base AGENTS.md; their changes are still in the diff. `rm`
-            # unlinks a symlink rather than following it.
-            rm -rf .claude CLAUDE.local.md
-            find . -path ./.git -prune -o \( -iname AGENTS.md -o -iname CLAUDE.md \) -print0 \
-              | xargs -0 rm -rf
-            cp pr-context/AGENTS.md AGENTS.md
+              -H "Accept: application/vnd.github.raw" > "$agents" 2> "$RUNNER_TEMP/agents.err"; then
+            have_agents=1
           elif grep -q "HTTP 404" "$RUNNER_TEMP/agents.err"; then
-            echo "No AGENTS.md on $base." > pr-context/AGENTS.md
-            rm -rf .claude CLAUDE.local.md
-            find . -path ./.git -prune -o \( -iname AGENTS.md -o -iname CLAUDE.md \) -print0 \
-              | xargs -0 rm -rf
+            echo "No AGENTS.md on $base." > "$agents"
+            have_agents=0
           else
             cat "$RUNNER_TEMP/agents.err" >&2
             exit 1
           fi
+          # Claude Code may load instruction files from the checkout as trusted
+          # project instructions, so drop every one the PR ships (CLAUDE.md,
+          # .claude/, nested AGENTS.md…) and put back only the base AGENTS.md;
+          # their changes are still in the diff. `rm` unlinks a symlink rather
+          # than following it. This runs before the base copy is staged, so it
+          # can't delete it.
+          rm -rf .claude CLAUDE.local.md
+          find . -path ./.git -prune -o \( -iname AGENTS.md -o -iname CLAUDE.md \) -print0 \
+            | xargs -0 rm -rf
+          cp "$agents" pr-context/AGENTS.md
+          if [ "$have_agents" = 1 ]; then cp "$agents" AGENTS.md; fi
 
           size="$(wc -c < pr-context/diff.patch)"
           if [ "$size" -gt "$MAX_DIFF_BYTES" ]; then
