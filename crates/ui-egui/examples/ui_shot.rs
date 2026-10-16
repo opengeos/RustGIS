@@ -3,8 +3,11 @@
 //! `cargo run -p rustgis-ui-egui --example ui_shot -- script.jsonl`
 //!
 //! The script is JSON lines: `{"cmd": id, "params": {...}}` runs a command (ui.* included),
-//! `{"shot": "/abs/out.png"}` saves the window, `{"steps": n}` runs frames, `{"sleep": ms}` runs frames for that long, `{"click": label}` clicks the first widget whose label contains it (is it, with `"exact": true`), `{"dark": true}`
-//! switches theme, `{"titlebar": {"left_inset": 80, "height": 34}}` draws the header as a macOS unified title bar (`null` turns it off), and `{"width": w, "height": h}` on the first line sets the size (default
+//! `{"shot": "/abs/out.png"}` saves the window, `{"steps": n}` runs frames, `{"sleep": ms}` runs frames
+//! for that long, `{"click": label}` clicks the first widget whose label contains it (is it, with
+//! `"exact": true`), `{"dark": true}` switches theme, `{"titlebar": {"left_inset": 80, "height": 34}}`
+//! draws the header as a macOS unified title bar (`null` turns it off), and
+//! `{"width": w, "height": h}` on the first line sets the size (default
 //! 1480×900 at 2×). The window opens the World Atlas sample.
 
 use egui_kittest::kittest::Queryable;
