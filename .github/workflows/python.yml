@@ -101,6 +101,10 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # The Python package ships a copy of the license (pyproject.toml's license-files can't
+      # reach the repository root).
+      - name: The license copy matches LICENSE
+        run: cmp LICENSE apps/rustgis-python/LICENSE || { echo "::error::apps/rustgis-python/LICENSE differs from LICENSE."; exit 1; }
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: apps/rustgis-python
