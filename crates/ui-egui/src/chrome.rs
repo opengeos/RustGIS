@@ -21,22 +21,39 @@ pub struct TitlebarMetrics {
     pub height: f32,
 }
 
+impl TitlebarMetrics {
+    /// What to assume before the window system has answered: the usual strip of window buttons.
+    pub const FALLBACK: TitlebarMetrics = TitlebarMetrics { left_inset: 80.0, height: HEADER_HEIGHT };
+}
+
 /// Size and left padding of the header.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HeaderLayout {
     pub height: f32,
     pub left_pad: f32,
+    /// Space kept free at the bottom so the content centres on the window buttons when the native
+    /// title bar is shorter than the header.
+    pub bottom_pad: f32,
 }
 
-const HEADER_HEIGHT: f32 = 34.0;
+/// The usual header height, and the least a unified one gets; the title bar size is
+/// `TitlebarMetrics::height`, which the app falls back to this for.
+pub const HEADER_HEIGHT: f32 = 34.0;
 const HEADER_PAD: f32 = 10.0;
+/// Most a native title bar can add, and the widest strip of window buttons, in points.
+const MAX_TITLEBAR_HEIGHT: f32 = 80.0;
+const MAX_LEFT_INSET: f32 = 120.0;
 
 pub fn header_layout(titlebar: Option<TitlebarMetrics>) -> HeaderLayout {
     // Whatever the window system reports is clamped; NaN falls back to the plain header.
     let clamp = |v: f32, lo: f32, hi: f32| if v.is_nan() { lo } else { v.clamp(lo, hi) };
     match titlebar {
-        None => HeaderLayout { height: HEADER_HEIGHT, left_pad: HEADER_PAD },
-        Some(m) => HeaderLayout { height: clamp(m.height, HEADER_HEIGHT, 80.0), left_pad: clamp(m.left_inset, HEADER_PAD, 120.0) },
+        None => HeaderLayout { height: HEADER_HEIGHT, left_pad: HEADER_PAD, bottom_pad: 0.0 },
+        Some(m) => {
+            let native = clamp(m.height, 0.0, MAX_TITLEBAR_HEIGHT);
+            let height = native.max(HEADER_HEIGHT);
+            HeaderLayout { height, left_pad: clamp(m.left_inset, HEADER_PAD, MAX_LEFT_INSET), bottom_pad: height - native }
+        }
     }
 }
 
@@ -48,16 +65,19 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
         .show_separator_line(false)
         .frame(egui::Frame::NONE.fill(t.header).inner_margin(egui::Margin {
             left: layout.left_pad.round() as i8,
-            right: 10,
+            right: HEADER_PAD as i8,
             top: 0,
-            bottom: 0,
+            bottom: layout.bottom_pad.round() as i8,
         }))
         .show(ui, |ui| {
             let full = ui.max_rect();
             // In a unified title bar the header is the window's title bar: drag it to move the
             // window, double-click to zoom. Registered first so the buttons above it win clicks.
             if app.ui.titlebar.is_some() {
-                let bar = Rect::from_min_max(pos2(full.min.x - layout.left_pad, full.min.y), pos2(full.max.x + 10.0, full.max.y));
+                let bar = Rect::from_min_max(
+                    pos2(full.min.x - layout.left_pad, full.min.y),
+                    pos2(full.max.x + HEADER_PAD, full.max.y + layout.bottom_pad),
+                );
                 let drag = ui.interact(bar, egui::Id::new("header_drag"), Sense::click_and_drag());
                 if drag.double_clicked() {
                     let maximized = ui.ctx().input(|i| i.viewport().maximized).unwrap_or(false);
@@ -660,6 +680,16 @@ mod tests {
         let l = header_layout(Some(TitlebarMetrics { left_inset: 78.0, height: 28.0 }));
         assert_eq!(l.left_pad, 78.0);
         assert_eq!(l.height, 34.0, "never shorter than the usual header");
+    }
+
+    #[test]
+    fn content_is_centred_on_the_window_buttons_even_in_a_short_title_bar() {
+        // Buttons sit at 14 in a 28 high bar; the 34 high header's content must centre there too.
+        let l = header_layout(Some(TitlebarMetrics { left_inset: 78.0, height: 28.0 }));
+        assert_eq!(l.height / 2.0 - l.bottom_pad / 2.0, 14.0);
+        let tall = header_layout(Some(TitlebarMetrics { left_inset: 90.0, height: 40.0 }));
+        assert_eq!(tall.bottom_pad, 0.0);
+        assert_eq!(header_layout(None).bottom_pad, 0.0);
     }
 
     #[test]

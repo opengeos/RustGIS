@@ -8,26 +8,28 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSWindowButton, NSWindowStyleMask};
 use rustgis_ui_egui::TitlebarMetrics;
 
-/// What AppKit reports before the window exists: the usual button strip and title bar height.
-const FALLBACK: TitlebarMetrics = TitlebarMetrics { left_inset: 80.0, height: 34.0 };
 /// Space between the zoom button and the first thing in the header.
 const GAP: f32 = 12.0;
 
 /// The title bar geometry now, or `None` in full screen (no title bar, no buttons).
 pub fn titlebar() -> Option<TitlebarMetrics> {
-    let Some(mtm) = MainThreadMarker::new() else { return Some(FALLBACK) };
+    let fallback = TitlebarMetrics::FALLBACK;
+    let Some(mtm) = MainThreadMarker::new() else { return Some(fallback) };
     let app = NSApplication::sharedApplication(mtm);
-    let Some(window) = app.keyWindow().or_else(|| app.mainWindow()) else { return Some(FALLBACK) };
+    // The main window, not the key one: a file dialog or the About panel can be key.
+    let Some(window) = app.mainWindow().or_else(|| app.keyWindow()) else { return Some(fallback) };
     if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
         return None;
     }
     let height = (window.frame().size.height - window.contentLayoutRect().size.height) as f32;
-    let left_inset = window
-        .standardWindowButton(NSWindowButton::ZoomButton)
-        .map(|b| {
-            let f = b.frame();
-            (f.origin.x + f.size.width) as f32 + GAP
-        })
-        .unwrap_or(FALLBACK.left_inset);
-    Some(TitlebarMetrics { left_inset, height: if height > 0.0 { height } else { FALLBACK.height } })
+    // The button frame is in its title bar container, whose origin is the window's left edge. Until
+    // the window has laid out, it is empty: keep the fallback rather than drawing under the buttons.
+    let left_inset = window.standardWindowButton(NSWindowButton::ZoomButton).and_then(|b| {
+        let f = b.frame();
+        (f.size.width > 0.0 && f.origin.x > 0.0).then_some((f.origin.x + f.size.width) as f32 + GAP)
+    });
+    Some(TitlebarMetrics {
+        left_inset: left_inset.unwrap_or(fallback.left_inset),
+        height: if height > 0.0 { height } else { fallback.height },
+    })
 }
