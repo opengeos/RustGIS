@@ -842,7 +842,11 @@ pub fn paint(st: &State, p: &egui::Painter, rect: Rect, t: &Tokens, to_screen: i
     }
     if let Some(r) = st.route() {
         let done = driving.map(|s| distance_at(r, s.t));
-        let pts = line(r, done.unwrap_or(f64::MIN), f64::MAX);
+        let mut pts = line(r, done.unwrap_or(f64::MIN), f64::MAX);
+        // The way ahead starts at the car itself, not at the next point of the line past it.
+        if let Some(at) = done.and_then(|d| r.at(d)).and_then(|(c, _)| to_screen(c)) {
+            pts.insert(0, at);
+        }
         p.add(egui::Shape::line(pts.clone(), Stroke::new(10.0, CASING)));
         p.add(egui::Shape::line(pts, Stroke::new(6.0, ROUTE)));
         // What's been driven, grey.
