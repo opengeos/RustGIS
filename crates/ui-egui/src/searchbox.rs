@@ -44,8 +44,9 @@ pub struct State {
     /// The row the arrow keys are on, and whether the list scrolls to it.
     active: usize,
     scroll: bool,
-    /// Whether the box had the focus last frame (egui takes it away on Escape before this one).
-    pub had_focus: bool,
+    /// The pass the box last had the focus in: egui takes the focus away on Escape before the
+    /// next pass, so that Escape is the box's when it had the focus one pass ago.
+    pub focus_pass: Option<u64>,
     /// The place or coordinate picked last, and its name.
     pub marker: Option<(Coord, String)>,
 }
@@ -94,6 +95,12 @@ fn rows(st: &State) -> Vec<Row> {
         _ => {}
     }
     v
+}
+
+/// Whether the box had the focus in the pass before `pass`. Stale when the box isn't drawn (the
+/// left pane closed), so the shortcuts aren't held off by a box no longer shown.
+pub fn had_focus(st: &State, pass: u64) -> bool {
+    st.focus_pass.is_some_and(|p| p + 1 == pass)
 }
 
 fn is_coordinate(st: &State) -> bool {
@@ -166,8 +173,9 @@ fn boxed(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     // Escape (the text box gives up the focus on it) and the ✕ clear the box and its marker.
-    let mut clear = st.had_focus && ui.input(|i| i.key_pressed(egui::Key::Escape));
-    st.had_focus = resp.has_focus();
+    let pass = ui.ctx().cumulative_pass_nr();
+    let mut clear = had_focus(st, pass) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    st.focus_pass = resp.has_focus().then_some(pass).or(st.focus_pass);
     if !st.query.is_empty() || st.marker.is_some() {
         let x = Rect::from_center_size(pos2(frame_r.max.x - 13.0, frame_r.center().y), vec2(18.0, 18.0));
         let xr = ui.interact(x, id.with("clear"), Sense::click());
@@ -189,7 +197,7 @@ fn boxed(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if st.query != st.searched {
         if now - st.edited_at >= DEBOUNCE {
             st.searched = st.query.clone();
-            st.results = search::search(&app.session, &st.query, 30);
+            st.results = search::search(&app.session, &st.query, search::LIMIT);
             st.active = 0;
         } else {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(DEBOUNCE));
@@ -413,8 +421,10 @@ fn pick(app: &mut RustGisApp, row: Row) {
         }
         Row::Hit(i) => {
             let Some(hit) = st.results.hits.get(i).cloned() else { return };
-            let query = st.query.clone();
-            if let Err(e) = app.run("map.search", json!({"query": query, "go": i})) {
+            // The query the list was found for (the box may have been typed in since), with the
+            // list's limit, so the index is the row picked.
+            let query = st.searched.clone();
+            if let Err(e) = app.run("map.search", json!({"query": query, "limit": search::LIMIT, "go": i})) {
                 app.session.notify(e, true);
                 return;
             }

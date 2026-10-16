@@ -22,8 +22,12 @@ pub fn commands() -> Vec<C> {
 pub const MIN_FEATURE_QUERY: usize = 2;
 /// Most matches listed for one layer's values.
 const PER_LAYER: usize = 5;
-/// Most rows of a layer whose values are searched; a larger layer's later rows aren't.
-const MAX_ROWS: usize = 200_000;
+/// Most rows of a layer whose values are searched; a larger layer's later rows aren't. The
+/// search box searches as one types, on the frame, so this stays small enough to be quick.
+const MAX_ROWS: usize = 50_000;
+/// The most hits `map.search` lists unless told otherwise; the search box lists as many, so an
+/// index it picks is one the command finds.
+pub const LIMIT: usize = 30;
 /// Most characters of a query, and of a value shown.
 const MAX_CHARS: usize = 200;
 
@@ -235,12 +239,17 @@ fn around(c: Coord) -> Extent {
 
 fn search_cmd(s: &mut Session, p: &Value) -> CmdResult {
     let query = ps(p, "query").map(str::trim).filter(|q| !q.is_empty()).ok_or("query is required")?;
-    let limit = f(p, "limit").filter(|l| l.is_finite()).map(|l| l.clamp(1.0, 50.0) as usize).unwrap_or(20);
+    let limit = f(p, "limit").filter(|l| l.is_finite()).map(|l| l.clamp(1.0, 50.0) as usize).unwrap_or(LIMIT);
     let r = search(s, query, limit);
     let pick = match p.get("go") {
+        None | Some(Value::Null | Value::Bool(false)) => None,
         Some(Value::Bool(true)) => Some(0),
-        Some(Value::Number(n)) => Some(n.as_u64().map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX))),
-        _ => None,
+        Some(v) => Some(
+            v.as_u64()
+                .or_else(|| v.as_f64().filter(|x| x.fract() == 0.0 && *x >= 0.0 && *x <= 1e6).map(|x| x as u64))
+                .and_then(|n| usize::try_from(n).ok())
+                .ok_or("go is true or the index of a hit (0 for the first)")?,
+        ),
     };
     if let Some(i) = pick {
         let hit =
@@ -491,5 +500,8 @@ mod tests {
         assert!(s.map().layers.iter().any(|l| !l.selection.is_empty()));
         assert!(search_cmd(&mut s, &json!({"query": "zzqqxx-none", "go": true})).is_err());
         assert!(search_cmd(&mut s, &json!({"query": "Tokyo", "go": 999})).is_err());
+        assert!(search_cmd(&mut s, &json!({"query": "Tokyo", "go": 0.0})).is_ok());
+        let e = search_cmd(&mut s, &json!({"query": "Tokyo", "go": -1.5})).err().unwrap_or_default();
+        assert!(e.starts_with("go is"), "{e}");
     }
 }
