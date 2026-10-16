@@ -229,15 +229,43 @@ pub fn patch(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType) {
 }
 
 fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
-    // Drawing order header.
+    // The name filter (#300), above the list so it stays in view; another map starts unfiltered.
+    let map_name = app.session.map().name.clone();
+    if app.ui.layer_filter_map != map_name {
+        app.ui.layer_filter.clear();
+        app.ui.layer_filter_map = map_name.clone();
+    }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(12.0);
+        let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+        icons::paint(ui.painter(), r, "search", t.text_dim, t.accent);
+        let clear = !app.ui.layer_filter.is_empty();
+        let room = ui.available_width() - if clear { 34.0 } else { 10.0 };
+        let edit = ui.add(egui::TextEdit::singleline(&mut app.ui.layer_filter).hint_text(tl!("Filter layers")).desired_width(room));
+        // Escape clears it (the box gives up its focus on that key, in the same frame).
+        if (edit.has_focus() || edit.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            app.ui.layer_filter.clear();
+        }
+        if clear && crate::widgets::icon_button(ui, "close", tl!("Clear")).clicked() {
+            app.ui.layer_filter.clear();
+        }
+    });
+    let q = app.ui.layer_filter.trim().to_lowercase();
+    let filtering = !q.is_empty();
+    let shows = |name: &str| !filtering || name.to_lowercase().contains(&q);
+    // Drawing order header.
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.add_space(12.0);
         ui.label(egui::RichText::new(tl!("Drawing Order")).size(11.5).color(t.text_dim));
+        // Rows dropped among hidden layers would land in unclear places.
+        if filtering {
+            ui.label(egui::RichText::new(tl!("Clear the filter to reorder")).size(11.0).color(t.text_disabled));
+        }
     });
     ui.add_space(2.0);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        let map_name = app.session.map().name.clone();
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
@@ -246,25 +274,40 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         });
         let layers: Vec<Layer> = app.session.map().layers.clone();
         let scale = app.session.scale();
-        let blocks: Vec<(u32, Rect)> = layers.iter().map(|l| (l.id, layer_row(app, ui, l, scale, t))).collect();
-        layer_drop(app, ui, &blocks, t);
+        let blocks: Vec<(u32, Rect)> =
+            layers.iter().filter(|l| shows(&l.name)).map(|l| (l.id, layer_row(app, ui, l, scale, !filtering, t))).collect();
+        if !filtering {
+            layer_drop(app, ui, &blocks, t);
+        }
         // Web tile layers (services, tile addresses) draw over the basemap and under the layers.
         let tiles: Vec<TileLayer> = app.session.map().tiles.clone();
-        for (i, tile) in tiles.iter().enumerate() {
+        let mut tiles_shown = 0;
+        for (i, tile) in tiles.iter().enumerate().filter(|(_, x)| shows(&x.name)) {
             tile_row(app, ui, i, tiles.len(), tile, t);
+            tiles_shown += 1;
         }
-        // The basemap row at the bottom, like a desktop GIS.
-        ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            ui.add_space(30.0);
-            let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
-            icons::paint(ui.painter(), r, "basemap", t.icon, t.accent);
-            ui.label(
-                egui::RichText::new(format!("{} · {}", tl!("Basemap"), tl!(app.session.map().basemap.label())))
-                    .size(12.0)
-                    .color(t.text_dim),
-            );
-        });
+        let tables: Vec<(u32, String)> =
+            app.session.project.tables.iter().filter(|x| shows(&x.name)).map(|x| (x.id, x.name.clone())).collect();
+        if filtering && blocks.is_empty() && tiles_shown == 0 && tables.is_empty() {
+            ui.add_space(12.0);
+            ui.vertical_centered(|ui| {
+                ui.label(egui::RichText::new(tl!("No layers match")).color(t.text_dim));
+            });
+        }
+        // The basemap row at the bottom, like a desktop GIS (not a layer, so not while filtering).
+        if !filtering {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.add_space(30.0);
+                let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                icons::paint(ui.painter(), r, "basemap", t.icon, t.accent);
+                ui.label(
+                    egui::RichText::new(format!("{} · {}", tl!("Basemap"), tl!(app.session.map().basemap.label())))
+                        .size(12.0)
+                        .color(t.text_dim),
+                );
+            });
+        }
         if layers.is_empty() {
             ui.add_space(20.0);
             ui.vertical_centered(|ui| {
@@ -277,8 +320,7 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
             });
         }
-        // Standalone tables.
-        let tables: Vec<(u32, String)> = app.session.project.tables.iter().map(|t| (t.id, t.name.clone())).collect();
+        // Standalone tables (those the filter keeps).
         if !tables.is_empty() {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -432,11 +474,13 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, tile: &Ti
 }
 
 /// A layer's row and, expanded, its legend; returns the rectangle of both.
-fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, t: &Tokens) -> Rect {
+/// A layer's row (and legend). With `reorder` off (the list is filtered) it can't be dragged.
+fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: bool, t: &Tokens) -> Rect {
     let active = app.session.active_layer == Some(l.id);
     let row_h = 26.0;
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
-    if resp.drag_started_by(egui::PointerButton::Primary) {
+    let sense = if reorder { Sense::click_and_drag() } else { Sense::click() };
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), sense);
+    if reorder && resp.drag_started_by(egui::PointerButton::Primary) {
         egui::DragAndDrop::set_payload(ui.ctx(), DraggedLayer(l.id));
     }
     let dragging = egui::DragAndDrop::payload::<DraggedLayer>(ui.ctx()).is_some_and(|d| d.0 == l.id);

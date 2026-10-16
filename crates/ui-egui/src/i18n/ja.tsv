@@ -276,6 +276,7 @@ Clear History	履歴のクリア
 Clear Limits	制限のクリア
 Clear Selection	選択の解除
 Clear selection	選択の解除
+Clear the filter to reorder	並べ替えるにはフィルターをクリア
 Clear the selection in every layer.	すべてのレイヤーの選択を解除します。
 Clear the selection.	選択を解除します。
 Click a pixel on the map	マップ上のピクセルをクリック
@@ -654,6 +655,7 @@ Fill	塗りつぶし
 Fill Cache	キャッシュの作成
 Fill the cache whenever the projection changes.	投影法が変わるたびにキャッシュを作成します。
 Film grain	フィルム グレイン
+Filter layers	レイヤーを絞り込む
 Filter rows…	行をフィルター…
 Find a place by coordinates.	座標で場所を検索します。
 Find and run geoprocessing tools.	ジオプロセシング ツールを検索して実行します。
@@ -1071,6 +1073,7 @@ No other reports	他のレポートはありません
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	プラグインがインストールされていません。プラグイン レジストリを参照するか、.rgplugin ファイルをインストールしてください。
 No plugins match.	一致するプラグインはありません。
 No Pop-ups	ポップアップなし
+No layers match	一致するレイヤーはありません
 No presentations yet. Publish › New Presentation starts one.	プレゼンテーションはまだありません。[公開] › [新しいプレゼンテーション] で作成します。
 No relationships (Data Design › Relationships)	リレーションシップはありません (データ設計 › リレーションシップ)
 No relationships yet	リレーションシップはまだありません

@@ -276,6 +276,7 @@ Clear History	기록 지우기
 Clear Limits	제한 지우기
 Clear Selection	선택 해제
 Clear selection	선택 해제
+Clear the filter to reorder	순서를 바꾸려면 필터를 지우세요
 Clear the selection in every layer.	모든 레이어의 선택을 해제합니다.
 Clear the selection.	선택을 해제합니다.
 Click a pixel on the map	지도에서 픽셀을 클릭하세요
@@ -654,6 +655,7 @@ Fill	채우기
 Fill Cache	캐시 채우기
 Fill the cache whenever the projection changes.	투영이 바뀔 때마다 캐시를 채웁니다.
 Film grain	필름 그레인
+Filter layers	레이어 필터
 Filter rows…	행 필터…
 Find a place by coordinates.	좌표로 장소를 찾습니다.
 Find and run geoprocessing tools.	지오프로세싱 도구를 찾아 실행합니다.
@@ -1071,6 +1073,7 @@ No other reports	다른 보고서 없음
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	설치된 플러그인이 없습니다. 플러그인 레지스트리를 둘러보거나 .rgplugin 파일을 설치하세요.
 No plugins match.	일치하는 플러그인이 없습니다.
 No Pop-ups	팝업 없음
+No layers match	일치하는 레이어 없음
 No presentations yet. Publish › New Presentation starts one.	아직 프레젠테이션이 없습니다. 게시 › 새 프레젠테이션으로 시작합니다.
 No relationships (Data Design › Relationships)	관계 없음(데이터 디자인 › 관계)
 No relationships yet	아직 관계가 없습니다

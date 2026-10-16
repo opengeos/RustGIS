@@ -276,6 +276,7 @@ Clear History	Geschiedenis wissen
 Clear Limits	Limieten wissen
 Clear Selection	Selectie wissen
 Clear selection	Selectie wissen
+Clear the filter to reorder	Wis het filter om de volgorde te wijzigen
 Clear the selection in every layer.	De selectie in alle lagen wissen.
 Clear the selection.	De selectie wissen.
 Click a pixel on the map	Klik op een pixel op de kaart
@@ -654,6 +655,7 @@ Fill	Vulling
 Fill Cache	Cache vullen
 Fill the cache whenever the projection changes.	De cache vullen telkens wanneer de projectie verandert.
 Film grain	Filmkorrel
+Filter layers	Lagen filteren
 Filter rows…	Rijen filteren…
 Find a place by coordinates.	Een plaats zoeken op coördinaten.
 Find and run geoprocessing tools.	Geoverwerkingsgereedschappen zoeken en uitvoeren.
@@ -1071,6 +1073,7 @@ No other reports	Geen andere rapporten
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Er zijn geen plugins geïnstalleerd. Blader door het pluginregister of installeer een .rgplugin-bestand.
 No plugins match.	Geen plugins gevonden.
 No Pop-ups	Geen pop-ups
+No layers match	Geen lagen gevonden
 No presentations yet. Publish › New Presentation starts one.	Nog geen presentaties. Publiceren › Nieuwe presentatie start er een.
 No relationships (Data Design › Relationships)	Geen relaties (Gegevensontwerp › Relaties)
 No relationships yet	Nog geen relaties

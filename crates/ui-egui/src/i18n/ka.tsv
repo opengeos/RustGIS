@@ -276,6 +276,7 @@ Clear History	ისტორიის გასუფთავება
 Clear Limits	ლიმიტების გასუფთავება
 Clear Selection	მონიშვნის მოხსნა
 Clear selection	მონიშვნის მოხსნა
+Clear the filter to reorder	გაასუფთავეთ ფილტრი თანმიმდევრობის შესაცვლელად
 Clear the selection in every layer.	მონიშვნის მოხსნა ყველა ფენაში.
 Clear the selection.	მონიშვნის მოხსნა.
 Click a pixel on the map	დააწკაპუნეთ პიქსელზე რუკაზე
@@ -654,6 +655,7 @@ Fill	შევსება
 Fill Cache	ქეშის შევსება
 Fill the cache whenever the projection changes.	ქეშის შევსება ყოველ ჯერზე, როცა პროექცია იცვლება.
 Film grain	ფირის მარცვალი
+Filter layers	ფენების გაფილტვრა
 Filter rows…	სტრიქონების გაფილტვრა…
 Find a place by coordinates.	ადგილის პოვნა კოორდინატებით.
 Find and run geoprocessing tools.	გეოდამუშავების ხელსაწყოების პოვნა და გაშვება.
@@ -1071,6 +1073,7 @@ No other reports	სხვა ანგარიშები არ არის
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	დანამატები არ არის დაინსტალირებული. დაათვალიერეთ დანამატების რეესტრი ან დააყენეთ .rgplugin ფაილი.
 No plugins match.	დანამატები ვერ მოიძებნა.
 No Pop-ups	ამომხტარი ფანჯრების გარეშე
+No layers match	შესაბამისი ფენა არ არის
 No presentations yet. Publish › New Presentation starts one.	პრეზენტაციები ჯერ არ არის. გამოქვეყნება › ახალი პრეზენტაცია ქმნის ახალს.
 No relationships (Data Design › Relationships)	კავშირები არ არის (მონაცემთა დიზაინი › კავშირები)
 No relationships yet	კავშირები ჯერ არ არის

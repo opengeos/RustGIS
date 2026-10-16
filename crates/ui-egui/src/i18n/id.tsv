@@ -276,6 +276,7 @@ Clear History	Bersihkan Riwayat
 Clear Limits	Hapus Batas
 Clear Selection	Bersihkan Seleksi
 Clear selection	Bersihkan seleksi
+Clear the filter to reorder	Hapus filter untuk mengurutkan ulang
 Clear the selection in every layer.	Bersihkan seleksi di setiap layer.
 Clear the selection.	Bersihkan seleksi.
 Click a pixel on the map	Klik sebuah piksel di peta
@@ -654,6 +655,7 @@ Fill	Isian
 Fill Cache	Isi Cache
 Fill the cache whenever the projection changes.	Isi cache setiap kali proyeksi berubah.
 Film grain	Butiran film
+Filter layers	Saring lapisan
 Filter rows…	Saring baris…
 Find a place by coordinates.	Temukan tempat berdasarkan koordinat.
 Find and run geoprocessing tools.	Temukan dan jalankan alat geoprosesing.
@@ -1071,6 +1073,7 @@ No other reports	Tidak ada laporan lain
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Belum ada plugin yang terpasang. Jelajahi registri plugin, atau pasang file .rgplugin.
 No plugins match.	Tidak ada plugin yang cocok.
 No Pop-ups	Tanpa Pop-up
+No layers match	Tidak ada lapisan yang cocok
 No presentations yet. Publish › New Presentation starts one.	Belum ada presentasi. Publikasi › Presentasi Baru memulai presentasi.
 No relationships (Data Design › Relationships)	Tidak ada relasi (Desain Data › Relasi)
 No relationships yet	Belum ada relasi

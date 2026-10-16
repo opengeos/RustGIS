@@ -276,6 +276,7 @@ Clear History	Очистить историю
 Clear Limits	Сбросить ограничения
 Clear Selection	Очистить выборку
 Clear selection	Очистить выборку
+Clear the filter to reorder	Очистите фильтр, чтобы изменить порядок
 Clear the selection in every layer.	Очистить выборку во всех слоях.
 Clear the selection.	Очистить выборку.
 Click a pixel on the map	Щёлкните пиксель на карте
@@ -654,6 +655,7 @@ Fill	Заливка
 Fill Cache	Заполнить кэш
 Fill the cache whenever the projection changes.	Заполнять кэш при каждой смене проекции.
 Film grain	Зернистость плёнки
+Filter layers	Фильтр слоёв
 Filter rows…	Фильтр строк…
 Find a place by coordinates.	Найти место по координатам.
 Find and run geoprocessing tools.	Найти и запустить инструменты геообработки.
@@ -1071,6 +1073,7 @@ No other reports	Других отчётов нет
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Модули не установлены. Просмотрите каталог модулей или установите файл .rgplugin.
 No plugins match.	Подходящих модулей нет.
 No Pop-ups	Без всплывающих окон
+No layers match	Нет подходящих слоёв
 No presentations yet. Publish › New Presentation starts one.	Презентаций пока нет. Публикация › Новая презентация создаёт презентацию.
 No relationships (Data Design › Relationships)	Нет отношений (Структура данных › Отношения)
 No relationships yet	Отношений пока нет

@@ -25,7 +25,8 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
   under **Settings › Customize › Quick Access**.
 - **Layers pane** (left): the map's layers in drawing order, with their legends. Tick a layer to
   show or hide it; drag it up or down to change the drawing order; right-click it to zoom to it,
-  rename or remove it and more.
+  rename or remove it and more. Type in the box at the top to show only the layers and tables
+  whose names contain the text (++escape++ clears it); clear it to reorder layers again.
   The Style and Data tabs act on the layer selected here. The tabs at the top of the left pane
   switch it between **Layers**, **Browser** and **Data Sources** (also in **View › Windows**).
 - **Map view**: one tab per map and layout. The buttons at the top right zoom in, zoom out and go

@@ -276,6 +276,7 @@ Clear History	Geçmişi Temizle
 Clear Limits	Sınırları Temizle
 Clear Selection	Seçimi Temizle
 Clear selection	Seçimi temizle
+Clear the filter to reorder	Yeniden sıralamak için filtreyi temizleyin
 Clear the selection in every layer.	Tüm katmanlardaki seçimi temizle.
 Clear the selection.	Seçimi temizle.
 Click a pixel on the map	Haritada bir piksele tıklayın
@@ -654,6 +655,7 @@ Fill	Dolgu
 Fill Cache	Önbelleği Doldur
 Fill the cache whenever the projection changes.	Projeksiyon her değiştiğinde önbelleği doldur.
 Film grain	Film greni
+Filter layers	Katmanları filtrele
 Filter rows…	Satırları filtrele…
 Find a place by coordinates.	Koordinatlarla bir yer bul.
 Find and run geoprocessing tools.	Coğrafi işleme araçlarını bul ve çalıştır.
@@ -1071,6 +1073,7 @@ No other reports	Başka rapor yok
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Yüklü eklenti yok. Eklenti kayıt defterine göz atın veya bir .rgplugin dosyası yükleyin.
 No plugins match.	Eşleşen eklenti yok.
 No Pop-ups	Açılır Pencere Yok
+No layers match	Eşleşen katman yok
 No presentations yet. Publish › New Presentation starts one.	Henüz sunum yok. Yayımla › Yeni Sunum bir tane başlatır.
 No relationships (Data Design › Relationships)	İlişki yok (Veri Tasarımı › İlişkiler)
 No relationships yet	Henüz ilişki yok

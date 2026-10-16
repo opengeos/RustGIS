@@ -276,6 +276,7 @@ Clear History	清除历史记录
 Clear Limits	清除限制
 Clear Selection	清除选择
 Clear selection	清除选择
+Clear the filter to reorder	清除筛选后才能调整顺序
 Clear the selection in every layer.	清除所有图层中的选择。
 Clear the selection.	清除选择。
 Click a pixel on the map	单击地图上的像素
@@ -654,6 +655,7 @@ Fill	填充
 Fill Cache	填充缓存
 Fill the cache whenever the projection changes.	每当投影更改时填充缓存。
 Film grain	胶片颗粒
+Filter layers	筛选图层
 Filter rows…	筛选行…
 Find a place by coordinates.	按坐标查找位置。
 Find and run geoprocessing tools.	查找并运行地理处理工具。
@@ -1071,6 +1073,7 @@ No other reports	无其他报表
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	未安装任何插件。浏览插件库，或安装 .rgplugin 文件。
 No plugins match.	没有匹配的插件。
 No Pop-ups	无弹出窗口
+No layers match	没有匹配的图层
 No presentations yet. Publish › New Presentation starts one.	暂无演示文稿。使用“发布 › 新建演示文稿”新建一个。
 No relationships (Data Design › Relationships)	无关系（数据设计 › 关系）
 No relationships yet	暂无关系

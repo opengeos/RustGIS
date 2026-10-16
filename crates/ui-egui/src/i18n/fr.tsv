@@ -276,6 +276,7 @@ Clear History	Effacer l'historique
 Clear Limits	Effacer les limites
 Clear Selection	Effacer la sélection
 Clear selection	Effacer la sélection
+Clear the filter to reorder	Effacez le filtre pour réorganiser
 Clear the selection in every layer.	Effacer la sélection dans toutes les couches.
 Clear the selection.	Effacer la sélection.
 Click a pixel on the map	Cliquez sur un pixel de la carte
@@ -654,6 +655,7 @@ Fill	Remplissage
 Fill Cache	Remplir le cache
 Fill the cache whenever the projection changes.	Remplir le cache à chaque changement de projection.
 Film grain	Grain de film
+Filter layers	Filtrer les couches
 Filter rows…	Filtrer les lignes…
 Find a place by coordinates.	Trouver un lieu par ses coordonnées.
 Find and run geoprocessing tools.	Trouver et exécuter des outils de géotraitement.
@@ -1071,6 +1073,7 @@ No other reports	Aucun autre rapport
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Aucune extension installée. Parcourez le registre des extensions ou installez un fichier .rgplugin.
 No plugins match.	Aucune extension ne correspond.
 No Pop-ups	Aucune fenêtre contextuelle
+No layers match	Aucune couche ne correspond
 No presentations yet. Publish › New Presentation starts one.	Aucune présentation pour l'instant. Publication › Nouvelle présentation en crée une.
 No relationships (Data Design › Relationships)	Aucune relation (Conception des données › Relations)
 No relationships yet	Aucune relation pour l'instant

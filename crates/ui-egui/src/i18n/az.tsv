@@ -276,6 +276,7 @@ Clear History	Tarixçəni təmizlə
 Clear Limits	Hədləri təmizlə
 Clear Selection	Seçimi təmizlə
 Clear selection	Seçimi təmizlə
+Clear the filter to reorder	Filtri təmizləyin ki, sıranı dəyişəsiniz
 Clear the selection in every layer.	Bütün laylarda seçimi təmizləyin.
 Clear the selection.	Seçimi təmizləyin.
 Click a pixel on the map	Xəritədə piksel klikləyin
@@ -654,6 +655,7 @@ Fill	Doldurma
 Fill Cache	Keşi doldur
 Fill the cache whenever the projection changes.	Proyeksiya dəyişdikdə keşi doldurun.
 Film grain	Film dənəvərliyi
+Filter layers	Layları süzgəcdən keçir
 Filter rows…	Sətirləri süz…
 Find a place by coordinates.	Koordinatlara görə yer tapın.
 Find and run geoprocessing tools.	Geoemal alətlərini tapın və işə salın.
@@ -1071,6 +1073,7 @@ No other reports	Başqa hesabat yoxdur
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Heç bir plagin quraşdırılmayıb. Plagin reyestrinə baxın və ya .rgplugin faylı quraşdırın.
 No plugins match.	Uyğun plagin yoxdur.
 No Pop-ups	Açılan pəncərə yoxdur
+No layers match	Uyğun lay yoxdur
 No presentations yet. Publish › New Presentation starts one.	Hələ təqdimat yoxdur. Nəşr › Yeni təqdimat birini başladır.
 No relationships (Data Design › Relationships)	Əlaqə yoxdur (Məlumat dizaynı › Əlaqələr)
 No relationships yet	Hələ əlaqə yoxdur

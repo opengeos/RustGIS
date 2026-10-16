@@ -276,6 +276,7 @@ Clear History	Xóa lịch sử
 Clear Limits	Xóa giới hạn
 Clear Selection	Xóa vùng chọn
 Clear selection	Xóa vùng chọn
+Clear the filter to reorder	Xóa bộ lọc để sắp xếp lại
 Clear the selection in every layer.	Xóa vùng chọn trong mọi lớp.
 Clear the selection.	Xóa vùng chọn.
 Click a pixel on the map	Nhấp vào một điểm ảnh trên bản đồ
@@ -654,6 +655,7 @@ Fill	Tô
 Fill Cache	Nạp bộ đệm
 Fill the cache whenever the projection changes.	Nạp bộ đệm mỗi khi phép chiếu thay đổi.
 Film grain	Hạt phim
+Filter layers	Lọc lớp
 Filter rows…	Lọc hàng…
 Find a place by coordinates.	Tìm một địa điểm theo tọa độ.
 Find and run geoprocessing tools.	Tìm và chạy công cụ xử lý không gian.
@@ -1071,6 +1073,7 @@ No other reports	Không có báo cáo nào khác
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Chưa cài đặt plugin nào. Hãy duyệt kho plugin hoặc cài đặt một tệp .rgplugin.
 No plugins match.	Không có plugin nào phù hợp.
 No Pop-ups	Không có cửa sổ bật lên
+No layers match	Không có lớp nào khớp
 No presentations yet. Publish › New Presentation starts one.	Chưa có bản trình bày nào. Xuất bản › Bản trình bày mới tạo một bản trình bày.
 No relationships (Data Design › Relationships)	Không có quan hệ (Thiết kế dữ liệu › Quan hệ)
 No relationships yet	Chưa có quan hệ nào
