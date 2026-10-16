@@ -21,6 +21,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     if let Some(left) = app.ui.left {
         egui::Panel::left("left_pane").resizable(true).default_size(270.0).size_range(200.0..=480.0).frame(frame).show(ui, |ui| {
             left_header(app, ui, left, &t);
+            // The search box sits at the foot of every left pane, the app's lower-left corner.
+            crate::searchbox::show(app, ui, &t);
             match left {
                 LeftPane::Contents => contents(app, ui, &t),
                 LeftPane::Catalog => catalog(app, ui, &t),

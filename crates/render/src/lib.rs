@@ -8,8 +8,10 @@
 
 mod effects;
 pub mod fonts;
+pub mod gpu_scene;
 pub mod layout;
 pub mod logo;
+mod mesh;
 pub mod pdf;
 mod picture;
 pub mod post;
@@ -186,6 +188,30 @@ pub struct Rendered {
     pub data_pending: bool,
     /// Tile layers that couldn't be drawn, and why.
     pub tile_errors: Vec<String>,
+}
+
+/// Which rasteriser [`render_backend`] targets: the tiny-skia CPU pixmap (the default, and the
+/// only path for exports, the globe and effect-heavy frames) or a lyon-tessellated GPU scene
+/// drawn by the UI inside egui's wgpu pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Backend {
+    #[default]
+    Cpu,
+    Gpu,
+}
+
+/// A finished render in either backend.
+pub enum RenderOutput {
+    Cpu(Rendered),
+    Gpu(gpu_scene::GpuScene),
+}
+
+/// Renders the map for the screen in the chosen backend. `Backend::Cpu` is exactly
+/// [`render`]; `Backend::Gpu` draws what it can as tessellated meshes and everything else
+/// (basemap, tiles, rasters, masked/blended/transparent layers) as CPU-rasterized images in
+/// the same z-order.
+pub fn render_backend(map: &mut Map, view: &View, backend: Backend) -> Option<RenderOutput> {
+    render_with_backend(map, view, false, backend)
 }
 
 /// Decodes PNG bytes into a pixmap.
@@ -598,6 +624,31 @@ pub fn render(map: &mut Map, view: &View) -> Option<Rendered> {
 }
 
 fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Rendered> {
+    match render_with_backend(map, view, full_res_rasters, Backend::Cpu) {
+        Some(RenderOutput::Cpu(r)) => Some(r),
+        // The Cpu backend never produces RenderOutput::Gpu.
+        Some(RenderOutput::Gpu(_)) | None => None,
+    }
+}
+
+/// Flushes the GPU pass's CPU accumulator pixmap as an Image draw command and resets it to
+/// transparent. Basemap, tiles, rasters and tiny-skia-only layers draw into the accumulator
+/// between GPU mesh commands, preserving the exact painter's-algorithm order.
+fn flush_acc(pm: &mut Pixmap, cmds: &mut Vec<gpu_scene::DrawCmd>, dirty: &mut bool) -> Option<()> {
+    if *dirty {
+        // Move the pixmap into the command (no full-screen copy) and start a fresh transparent
+        // accumulator.
+        let old = std::mem::replace(pm, Pixmap::new(pm.width(), pm.height())?);
+        cmds.push(gpu_scene::DrawCmd::Image { pixmap: old });
+        *dirty = false;
+    }
+    Some(())
+}
+
+/// The shared render body behind [`render`], [`render_backend`] and the export paths.
+/// `full_res_rasters` renders rasters at full resolution (exports); `backend` selects the CPU
+/// pixmap or a GPU scene (see [`Backend`]).
+fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend) -> Option<RenderOutput> {
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
     // Streamed layers read the view: in the background for the screen, in place for an export
@@ -615,6 +666,19 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         globe,
     };
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    // The Gpu backend draws flat, effect-free frames; anything else stays on the CPU pixmap.
+    let gpu = matches!(backend, Backend::Gpu)
+        && globe.is_none()
+        && map.view.effects.is_none()
+        && map.view.color_vision == rustgis_map::view::ColorVision::Normal;
+    // The effective backend: the Gpu arm at the end only runs when the frame is compatible.
+    let backend = if gpu { Backend::Gpu } else { Backend::Cpu };
+    // GPU draw commands; between them, tiny-skia-only content accumulates in `pm` and is
+    // flushed as ordered Image commands (`flush_acc`, gated by `cpu_dirty`).
+    let mut cmds: Vec<gpu_scene::DrawCmd> = Vec::new();
+    // Map units per physical pixel: the decimation threshold scale (`Ctx::ring_path`'s 0.35 px
+    // rule is applied in screen space) and the stroke shader's width scale.
+    let map_per_px = view.camera.res / view.pixels_per_point;
     // On the globe nothing is culled by the flat extent: the horizon clips instead.
     let visible = |e: &Extent| match &globe {
         Some(g) => g.may_see(e),
@@ -625,8 +689,14 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     let (water, land, outline, grat) = map.basemap.palette();
     match &globe {
         Some(g) => globe_backdrop(&mut pm, g, water, map.view.effects.stars, view.pixels_per_point as f32),
-        None => pm.fill(tiny_skia::Color::from_rgba8(water.r(), water.g(), water.b(), 255)),
+        None if !gpu => pm.fill(tiny_skia::Color::from_rgba8(water.r(), water.g(), water.b(), 255)),
+        // The Gpu scene carries the water backdrop as its clear colour instead — an
+        // always-full-screen Image here would poison `has_images` and kill the camera
+        // fast path.
+        None => {}
     }
+    // Set when tiny-skia actually rasterizes into the accumulator.
+    let mut cpu_dirty = false;
     if land != water {
         let fill = paint(land, 1.0);
         let stroke = (outline.a() > 0).then(|| (paint(outline, 1.0), 0.6));
@@ -640,7 +710,20 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
             if let Geometry::Polygon(polys) = g
                 && visible(&g.extent())
             {
-                ctx.polygon(&mut pm, polys, Some(fill.clone()), stroke.clone());
+                let mut tessellated = false;
+                if gpu {
+                    flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
+                    let e = g.extent();
+                    tessellated =
+                        mesh::collect_basemap(&mut cmds, polys, [e.center().x, e.center().y], land, outline, ctx.ppp, map_per_px).is_ok();
+                }
+                if gpu && !tessellated {
+                    // Lyon refused: tiny-skia still draws the outline.
+                    ctx.polygon(&mut pm, polys, Some(fill.clone()), stroke.clone());
+                    cpu_dirty = true;
+                } else if !gpu {
+                    ctx.polygon(&mut pm, polys, Some(fill.clone()), stroke.clone());
+                }
             }
         }
     }
@@ -678,7 +761,23 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         } else {
             lines.into_iter().map(|l| l.into_iter().map(lonlat_to_merc).collect()).collect()
         };
-        ctx.line(&mut pm, &lines, &p, 0.6);
+        if gpu {
+            let mut e = Extent::EMPTY;
+            for l in &lines {
+                for c in l {
+                    e.expand(*c);
+                }
+            }
+            flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
+            let tessellated = !e.is_empty()
+                && mesh::collect_graticule(&mut cmds, &lines, [e.center().x, e.center().y], grat, ctx.ppp, map_per_px).is_ok();
+            if !tessellated {
+                ctx.line(&mut pm, &lines, &p, 0.6);
+                cpu_dirty = true;
+            }
+        } else {
+            ctx.line(&mut pm, &lines, &p, 0.6);
+        }
     }
 
     // Web tile layers, over the built-in basemap and its graticule.
@@ -687,6 +786,9 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         None => raster::Place::Flat(&flat, &key),
     };
     let tile_out = tiles::draw(&mut pm, map, view, tile_place, !map.label_display.paused && map.label_lock.is_none());
+    // Hidden tile layers draw nothing: marking dirty anyway would emit an empty full-screen
+    // Image command (a pointless upload, and it poisons the camera fast path's `has_images`).
+    cpu_dirty |= map.tiles.iter().any(|t| t.visible);
 
     // Layers, bottom first.
     let mut label_candidates: Vec<(PlacedLabel, f32, (u32, usize))> = Vec::new();
@@ -746,6 +848,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                 } else {
                     raster::draw(&mut pm, data, &rl.style, view, opacity, full_res_rasters, place);
                 }
+                cpu_dirty = true;
             }
             continue;
         }
@@ -788,7 +891,18 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         let extents = if globe.is_some() { &[][..] } else { layer.projected_extents() };
         let mut target = if offscreen { Pixmap::new(w, h)? } else { Pixmap::new(1, 1)? };
         let direct = !offscreen;
-        {
+        // GPU-eligible: a plain vector layer drawn at full opacity with no mask, blend,
+        // aggregation, extrusion or per-row graphics (an inert aggregation/extrusion on the
+        // "wrong" geometry type still falls back — conservative and correct).
+        let gpu_layer = gpu && !offscreen && layer.aggregation.is_none() && layer.extrusion.is_none() && !layer.graphics;
+        // Lyon refuses degenerate geometry tiny-skia draws fine: collect_layer reports it,
+        // and the layer runs the CPU branch below like any ineligible one.
+        let mut gpu_done = false;
+        if gpu_layer {
+            flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
+            gpu_done = mesh::collect_layer(&mut cmds, layer, &geoms, &rows, &visible, ctx.wireframe, ctx.ppp, map_per_px).is_ok();
+        }
+        if !gpu_done {
             let dest = if direct { &mut pm } else { &mut target };
             let aggregate = layer.aggregation.filter(|_| layer.geometry_type() == GeometryType::Point);
             let extrude = layer.extrusion.as_ref().filter(|_| layer.geometry_type() == GeometryType::Polygon && globe.is_none());
@@ -818,6 +932,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
                     ctx.feature(dest, g, &layer.symbol(row));
                 }
             }
+            cpu_dirty = true;
         }
         if !direct {
             composite(&mut pm, &target);
@@ -826,7 +941,15 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
             if let Some(Some(g)) = geoms.get(*row)
                 && rows.get(*row) == Some(&true)
             {
-                ctx.highlight(&mut pm, g, &layer.symbol(*row));
+                // Follow the layer's own backend: when it fell back to the CPU pixmap, the
+                // highlight must too — tessellated here, the layer's later-flushed Image would
+                // draw over it (the CPU path draws highlights over the layer).
+                if gpu_done && mesh::collect_highlight(&mut cmds, g, &layer.symbol(*row), ctx.ppp, map_per_px).is_ok() {
+                    // highlight tessellated into the scene, right after its layer
+                } else {
+                    ctx.highlight(&mut pm, g, &layer.symbol(*row));
+                    cpu_dirty = true;
+                }
             }
         }
         if layer.graphics {
@@ -924,6 +1047,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
     for l in &placed.labels {
         if let Some(icon) = &l.icon {
             draw_icon(&mut pm, icon, view.pixels_per_point as f32);
+            cpu_dirty = true;
         }
     }
     // Effects, and (on screen only) the colour vision simulation.
@@ -939,15 +1063,34 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
         };
         post::apply(&mut pm, &map.view.effects, vision, &lonlat);
     }
-    Some(Rendered {
-        pixmap: pm,
-        labels: placed.labels,
-        unplaced,
-        attribution: tile_out.attribution,
-        tiles_pending: tile_out.pending,
-        data_pending,
-        tile_errors: tile_out.errors,
-    })
+    let labels = placed.labels;
+    let attribution = tile_out.attribution;
+    let tiles_pending = tile_out.pending;
+    let tile_errors = tile_out.errors;
+    match backend {
+        Backend::Cpu => {
+            Some(RenderOutput::Cpu(Rendered { pixmap: pm, labels, unplaced, attribution, tiles_pending, data_pending, tile_errors }))
+        }
+        Backend::Gpu => {
+            flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
+            // Pathological CPU/GPU alternation (rasters, masks, blends between every vector
+            // layer) costs more full-screen uploads than a plain CPU rasterization.
+            let images = cmds.iter().filter(|c| matches!(c, gpu_scene::DrawCmd::Image { .. })).count();
+            if images > 4 {
+                return render_with_backend(map, view, full_res_rasters, Backend::Cpu);
+            }
+            Some(RenderOutput::Gpu(gpu_scene::GpuScene {
+                clear: mesh::premul(water),
+                cmds,
+                labels,
+                unplaced,
+                attribution,
+                tiles_pending,
+                data_pending,
+                tile_errors,
+            }))
+        }
+    }
 }
 
 /// Draws an icon, scaled to its size in logical points.
@@ -1561,5 +1704,242 @@ mod tests {
             let view = View { width: w, height: h, pixels_per_point: 1.0, camera: Camera::world() };
             let _ = render(&mut m, &view);
         }
+    }
+
+    /// The world sample the golden pixmap test renders.
+    fn sample_world() -> Map {
+        let mut m = Map::new("Map");
+        for (name, text) in [
+            ("Countries", sample_data::COUNTRIES),
+            ("Rivers", sample_data::RIVERS),
+            ("Lakes", sample_data::LAKES),
+            ("Cities", sample_data::CITIES),
+        ] {
+            if let Some(d) = world_dataset(name, text) {
+                m.add_dataset(d);
+            }
+        }
+        m
+    }
+
+    fn fnv1a(data: &[u8]) -> u64 {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for b in data {
+            h = (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    /// Golden hash of the sample world render: a byte-lock proving the GPU-backend refactor
+    /// (Backend/RenderOutput plumbing) never changed the CPU path's output. tiny-skia is
+    /// deterministic IEEE f32 with no platform fast-math, so the hash should hold everywhere;
+    /// if a platform or a tiny-skia bump ever disagrees (CI runs Linux/macOS/Windows), convert
+    /// this to a handful of sampled pixels rather than deleting the lock.
+    #[test]
+    fn world_atlas_pixmap_is_byte_stable() {
+        let mut m = sample_world();
+        let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let r = render(&mut m, &view).expect("render");
+        assert_eq!(r.pixmap.data().len(), 800 * 500 * 4);
+        let h = fnv1a(r.pixmap.data());
+        assert_eq!(h, 0x8caa_2097_9bae_31b7, "golden pixmap hash changed: {h:#x}");
+    }
+
+    fn square_layer(m: &mut Map, name: &str, x: f64, y: f64, s: f64) -> u32 {
+        let mut d = Dataset::new(name, GeometryType::Polygon, vec![]);
+        d.push(
+            Some(Geometry::Polygon(vec![vec![vec![
+                Coord::new(x, y),
+                Coord::new(x + s, y),
+                Coord::new(x + s, y + s),
+                Coord::new(x, y + s),
+            ]]])),
+            vec![],
+        );
+        m.add_dataset(d)
+    }
+
+    fn cmd_kinds(scene: &gpu_scene::GpuScene) -> Vec<&'static str> {
+        scene
+            .cmds
+            .iter()
+            .map(|c| match c {
+                gpu_scene::DrawCmd::Mesh { .. } => "mesh",
+                gpu_scene::DrawCmd::Points { .. } => "points",
+                gpu_scene::DrawCmd::Image { .. } => "image",
+            })
+            .collect()
+    }
+
+    #[test]
+    fn gpu_backend_builds_scene_for_flat_world() {
+        let mut m = sample_world();
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "Cities") {
+            l.labels.enabled = true;
+        }
+        let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        let kinds = cmd_kinds(&scene);
+        assert!(kinds.iter().filter(|k| **k == "mesh").count() >= 2, "countries/lakes/rivers as meshes: {kinds:?}");
+        assert!(kinds.contains(&"points"), "cities as marker instances: {kinds:?}");
+        // The label channel is identical to the CPU render's.
+        let mut m2 = sample_world();
+        if let Some(l) = m2.layers.iter_mut().find(|l| l.name == "Cities") {
+            l.labels.enabled = true;
+        }
+        let cpu = render(&mut m2, &view).expect("cpu");
+        assert_eq!(scene.labels.len(), cpu.labels.len());
+        assert_eq!(scene.labels.first().map(|l| l.text.as_str()), cpu.labels.first().map(|l| l.text.as_str()));
+    }
+
+    #[test]
+    fn gpu_backend_interleaves_cpu_image_for_blended_layer() {
+        let mut m = Map::new("Map");
+        // Layers draw bottom-up: the last one in the list first.
+        square_layer(&mut m, "a", 0.0, 0.0, 10.0);
+        let b = square_layer(&mut m, "b", 20.0, 0.0, 10.0);
+        square_layer(&mut m, "c", 40.0, 0.0, 10.0);
+        if let Some(l) = m.layer_mut(b) {
+            l.blend = rustgis_map::effects::Blend::Multiply;
+        }
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        let kinds = cmd_kinds(&scene);
+        let last_image = kinds.iter().rposition(|k| *k == "image").expect("the blended layer's cpu image");
+        assert!(kinds[..last_image].contains(&"mesh"), "a mesh below the blended layer: {kinds:?}");
+        assert!(kinds[last_image + 1..].contains(&"mesh"), "a mesh above the blended layer: {kinds:?}");
+    }
+
+    #[test]
+    fn gpu_backend_skips_the_spurious_image_for_hidden_tile_layers() {
+        let mut m = sample_world();
+        m.tiles.push(rustgis_map::TileLayer::new("hidden", rustgis_map::TileKind::Raster, "https://example.invalid/{z}/{x}/{y}.png"));
+        for t in &mut m.tiles {
+            t.visible = false;
+        }
+        let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        assert!(!scene.cmds.iter().any(|c| matches!(c, gpu_scene::DrawCmd::Image { .. })), "hidden tiles must not emit an empty image");
+    }
+
+    #[test]
+    fn gpu_backend_caps_image_commands_to_a_cpu_frame() {
+        // More than four alternating CPU-only layers costs more full-screen uploads than a
+        // plain CPU rasterization: the whole frame goes to the CPU backend.
+        let build = |blends: usize| {
+            let mut m = Map::new("Map");
+            for i in 0..(blends * 2 + 1) {
+                let id = square_layer(&mut m, &format!("l{i}"), i as f64 * 20.0, 0.0, 10.0);
+                if i % 2 == 1
+                    && let Some(l) = m.layer_mut(id)
+                {
+                    l.transparency = 50.0; // offscreen-composited → an image command each
+                }
+            }
+            m
+        };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let mut three = build(3);
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut three, &view, Backend::Gpu) else { panic!("3 blends stays gpu") };
+        assert_eq!(scene.cmds.iter().filter(|c| matches!(c, gpu_scene::DrawCmd::Image { .. })).count(), 3);
+        let mut five = build(5);
+        assert!(
+            matches!(render_backend(&mut five, &view, Backend::Gpu), Some(RenderOutput::Cpu(_))),
+            "5 blends falls back to the cpu frame"
+        );
+    }
+
+    #[test]
+    fn gpu_backend_appends_selection_highlight() {
+        let mut m = Map::new("Map");
+        let id = square_layer(&mut m, "s", 0.0, 0.0, 10.0);
+        if let Some(l) = m.layer_mut(id) {
+            l.selection = vec![0];
+        }
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        let kinds = cmd_kinds(&scene);
+        assert_eq!(kinds.last(), Some(&"mesh"), "the highlight mesh follows the layer: {kinds:?}");
+        assert!(kinds.iter().filter(|k| **k == "mesh").count() >= 2, "layer mesh + highlight mesh: {kinds:?}");
+    }
+
+    #[test]
+    fn gpu_scene_carries_backdrop_as_clear_color_and_no_image_for_pure_vectors() {
+        let mut m = sample_world();
+        let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        assert!(
+            !scene.cmds.iter().any(|c| matches!(c, gpu_scene::DrawCmd::Image { .. })),
+            "a pure-vector scene must carry no CPU image (it would poison the camera fast path): {} cmds",
+            scene.cmds.len()
+        );
+        let (water, ..) = m.basemap.palette();
+        assert_eq!(scene.clear, mesh::premul(water), "the clear colour is the basemap's water");
+    }
+
+    #[test]
+    fn gpu_backend_skips_non_finite_stroke_widths() {
+        // A hostile symbol state (NaN stroke width) must not put NaN vertices on the GPU:
+        // the line's stroke is skipped, the rest of the scene is unaffected.
+        let mut m = Map::new("Map");
+        let mut d = Dataset::new("l", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-50.0, 0.0), Coord::new(50.0, 0.0)]])), vec![]);
+        let id = m.add_dataset(d);
+        if let Some(l) = m.layer_mut(id) {
+            l.renderer = rustgis_map::Renderer::Single(rustgis_map::Symbol {
+                fill: rustgis_map::Rgba::rgb(0, 0, 200),
+                stroke: rustgis_map::Rgba::rgb(0, 0, 200),
+                stroke_width: f32::NAN,
+                size: 0.0,
+                marker: rustgis_map::Marker::Circle,
+            });
+        }
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        for c in &scene.cmds {
+            if let gpu_scene::DrawCmd::Mesh { vertices, .. } = c {
+                assert!(vertices.iter().all(|v| v.position[0].is_finite() && v.position[1].is_finite() && v.stroke_px.is_finite()));
+            }
+        }
+    }
+
+    #[test]
+    fn gpu_backend_handles_non_finite_geometry_without_panicking() {
+        // A polygon with a NaN vertex (hostile file): the GPU drops the point (lyon's path
+        // builder panics on NaN — never feed it), the healthy layer still tessellates, and
+        // the frame completes like the CPU's.
+        let build = || {
+            let mut m = Map::new("Map");
+            let mut d = Dataset::new("bad", GeometryType::Polygon, vec![]);
+            d.push(
+                Some(Geometry::Polygon(vec![vec![vec![
+                    Coord::new(0.0, 0.0),
+                    Coord::new(10.0, f64::NAN),
+                    Coord::new(10.0, 10.0),
+                    Coord::new(0.0, 10.0),
+                ]]])),
+                vec![],
+            );
+            m.add_dataset(d);
+            square_layer(&mut m, "good", 30.0, 0.0, 10.0);
+            m
+        };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let mut gm = build();
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut gm, &view, Backend::Gpu) else { panic!("gpu scene") };
+        assert!(cmd_kinds(&scene).contains(&"mesh"), "the healthy layer tessellated");
+        let mut cm = build();
+        assert!(render(&mut cm, &view).is_some(), "cpu frame completes too");
+    }
+
+    #[test]
+    fn gpu_backend_falls_back_for_globe_and_effects() {
+        let mut m = sample_world();
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world() };
+        m.projection = rustgis_map::Projection::Globe;
+        assert!(matches!(render_backend(&mut m, &view, Backend::Gpu), Some(RenderOutput::Cpu(_))), "globe stays on the CPU renderer");
+        m.projection = rustgis_map::Projection::WebMercator;
+        m.view.effects.vignette = true;
+        assert!(matches!(render_backend(&mut m, &view, Backend::Gpu), Some(RenderOutput::Cpu(_))), "view effects stay on the CPU renderer");
     }
 }

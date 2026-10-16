@@ -19,6 +19,20 @@ effects](#view-effects) below.
 geocoder of your own given by its address) and zooms to the one picked. The search goes to that
 server over the network; see [Geocoding addresses](data.md#geocoding-addresses) for whole tables.
 
+The **search box** at the foot of the left pane searches the map as you type: a latitude and
+longitude (`40.7, -74.0`, `40.7N 74W` or `40°42'46"N 74°0'21"W`; latitude first unless the
+letters or a number past ±90 say otherwise), the map's layers and bookmarks by name, and the
+values in its layers' attribute tables (the best few per layer, by the feature's name where it has
+one). Places come from Nominatim when you press ++enter++ on **Search places**, since the public
+servers don't allow searching as you type. The arrow keys move through the list and ++enter++
+picks: a layer is zoomed to, a feature selected and zoomed to, and a coordinate or a place is
+marked with a pin until the box is cleared (✕ or ++esc++). `map.search` runs the same search from
+the command line or a script, and goes to a hit with `"go"`:
+
+```
+rustgis-cli run --sample --cmd 'map.search={"query":"Tokyo","go":true}'
+```
+
 ## Basemaps
 
 ![A MapLibre style from OpenFreeMap drawn over Paris, with the Basemap gallery listing the built-in basemaps and the web tile layer](https://assets.rustgis.app/images/tiles.webp)
@@ -140,3 +154,10 @@ pad; **Camera** shows and sets the position and scale; the **Magnifier** shows t
 the pointer. On the Home tab, **First-Person** navigation walks with W A S D and flies up and down
 with Q and E. The interface follows the system's light or dark setting; **View › Display › Dark
 Mode** switches it by hand.
+
+**View › Display › GPU Rendering** (beta) draws the flat map on the GPU instead of the CPU:
+vector layers are tessellated once and re-projected per frame, so panning and zooming stay
+smooth on large datasets. It is off by default, and the setting is remembered across sessions
+(`ui.map.gpu` is the command; `RUSTGIS_GPU=1` forces it on for development). The globe,
+view effects and the colour-vision simulator always render on the CPU, and exports are
+unaffected — the choice only changes the on-screen flat map.

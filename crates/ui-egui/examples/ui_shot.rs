@@ -5,7 +5,8 @@
 //! The script is JSON lines: `{"cmd": id, "params": {...}}` runs a command (ui.* included),
 //! `{"shot": "/abs/out.png"}` saves the window, `{"steps": n}` runs frames, `{"sleep": ms}` runs frames
 //! for that long, `{"click": label}` clicks the first widget whose label contains the text (with
-//! `"exact": true`, whose whole label is the text), `{"dark": true}` switches theme,
+//! `"exact": true`, whose whole label is the text), `{"type": text}` types into the focused box,
+//! `{"key": "Enter"}` presses a key (egui's key names), `{"dark": true}` switches theme,
 //! `{"drag": [x, y, dx, dy]}` presses the pointer at (x, y) and moves it by (dx, dy), holding
 //! it (shots then catch the map mid-drag; `{"release": true}` lets go),
 //! `{"titlebar": {"left_inset": 80, "height": 34}}`
@@ -23,12 +24,26 @@ fn main() {
         script.lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).expect("json line")).collect();
     let w = lines.iter().find_map(|l| l.get("width").and_then(|v| v.as_f64())).unwrap_or(1480.0) as f32;
     let h = lines.iter().find_map(|l| l.get("height").and_then(|v| v.as_f64())).unwrap_or(900.0) as f32;
-    let app = RustGisApp::with_sample();
+    let mut app = RustGisApp::with_sample();
+    // One shared wgpu render state: the app's GPU map backend and the harness's renderer must
+    // live on the same device for the map's paint callback to be valid.
+    let rs = {
+        let setup = egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew::without_display_handle());
+        let instance = pollster::block_on(setup.new_instance());
+        pollster::block_on(egui_wgpu::RenderState::create(
+            &egui_wgpu::WgpuConfiguration { wgpu_setup: setup, ..Default::default() },
+            &instance,
+            None,
+            egui_wgpu::RendererOptions::PREDICTABLE,
+        ))
+        .expect("render state")
+    };
+    app.set_render_state(Some(rs.clone()));
     let mut harness = egui_kittest::Harness::builder()
         .with_size(egui::vec2(w, h))
         .with_pixels_per_point(2.0)
         .with_max_steps(10_000)
-        .wgpu()
+        .renderer(egui_kittest::wgpu::WgpuTestRenderer::from_render_state(rs))
         .build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
@@ -128,6 +143,19 @@ fn main() {
                     pressed: false,
                     modifiers: egui::Modifiers::NONE,
                 });
+            }
+            for _ in 0..3 {
+                harness.step();
+            }
+        } else if let Some(text) = l.get("type").and_then(|v| v.as_str()) {
+            harness.event(egui::Event::Text(text.to_string()));
+            for _ in 0..3 {
+                harness.step();
+            }
+        } else if let Some(k) = l.get("key").and_then(|v| v.as_str()) {
+            match egui::Key::from_name(k) {
+                Some(key) => harness.key_press(key),
+                None => eprintln!("no key named '{k}'"),
             }
             for _ in 0..3 {
                 harness.step();
