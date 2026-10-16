@@ -355,24 +355,28 @@ fn bearing(a: Coord, b: Coord) -> f64 {
 /// metres rounded to 50 or 10 (miles and feet when `imperial`).
 pub fn format_distance(m: f64, imperial: bool) -> String {
     let m = if m.is_finite() { m.max(0.0) } else { 0.0 };
+    // Each unit is picked by the value rounded as it would show, so 975 m reads 1.0 km, not 1000 m.
+    let round = |x: f64, step: f64| (x / step).round() * step;
     if imperial {
         let mi = m / 1609.344;
-        if mi >= 10.0 {
+        let ft = m / 0.3048;
+        let ft_step = if round(ft, 10.0) >= 100.0 { 50.0 } else { 10.0 };
+        if round(mi, 0.1) >= 10.0 {
             format!("{mi:.0} mi")
-        } else if mi >= 0.1 {
+        } else if round(ft, ft_step) >= 528.0 {
             format!("{mi:.1} mi")
         } else {
-            let ft = m / 0.3048;
-            let step = if ft >= 100.0 { 50.0 } else { 10.0 };
-            format!("{:.0} ft", (ft / step).round() * step)
+            format!("{:.0} ft", round(ft, ft_step))
         }
-    } else if m >= 10_000.0 {
-        format!("{:.0} km", m / 1000.0)
-    } else if m >= 1000.0 {
-        format!("{:.1} km", m / 1000.0)
     } else {
-        let step = if m >= 100.0 { 50.0 } else { 10.0 };
-        format!("{:.0} m", (m / step).round() * step)
+        let step = if round(m, 10.0) >= 100.0 { 50.0 } else { 10.0 };
+        if round(m, 100.0) >= 10_000.0 {
+            format!("{:.0} km", m / 1000.0)
+        } else if round(m, step) >= 1000.0 {
+            format!("{:.1} km", m / 1000.0)
+        } else {
+            format!("{:.0} m", round(m, step))
+        }
     }
 }
 
@@ -537,6 +541,12 @@ mod tests {
         assert_eq!(format_distance(237.0, false), "250 m");
         assert_eq!(format_distance(37.0, false), "40 m");
         assert_eq!(format_distance(f64::NAN, false), "0 m");
+        // Rounding never shows a unit past its own range.
+        assert_eq!(format_distance(975.0, false), "1.0 km");
+        assert_eq!(format_distance(9_999.0, false), "10 km");
+        assert_eq!(format_distance(96.0, false), "100 m");
+        assert_eq!(format_distance(160.0, true), "500 ft");
+        assert_eq!(format_distance(165.0, true), "0.1 mi");
         assert_eq!(format_distance(20_000.0, true), "12 mi");
         assert_eq!(format_distance(100.0, true), "350 ft");
         assert_eq!(format_duration(30.0), "1 min");

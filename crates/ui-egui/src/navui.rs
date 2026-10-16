@@ -128,13 +128,14 @@ impl State {
         self.routes.get(self.chosen)
     }
 
-    /// What a request for the places and options now would ask (empty while a place is missing).
-    fn key(&self) -> String {
+    /// What a request for the places and options now would ask, in `language` (empty while a
+    /// place is missing).
+    fn key(&self, language: &str) -> String {
         if self.points.iter().any(|p| p.at.is_none()) {
             return String::new();
         }
         let pts: Vec<String> = self.points.iter().filter_map(|p| p.at).map(|c| format!("{:.6},{:.6}", c.x, c.y)).collect();
-        format!("{}|{}|{:?}|{}", pts.join(";"), self.mode.id(), self.avoid, self.imperial)
+        format!("{}|{}|{:?}|{}|{language}", pts.join(";"), self.mode.id(), self.avoid, self.imperial)
     }
 
     /// Forgets the routes (a place or an option changed).
@@ -264,13 +265,17 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         // Just opened: the first place missing waits for a click.
         app.ui.nav.picking = app.ui.nav.points.iter().position(|p| p.at.is_none());
     }
-    if !open && app.ui.nav.pending.is_none() && app.ui.nav.lookup.is_none() {
+    if !open {
         // Closed: the drive stops, and the map no longer waits for clicks.
         app.ui.nav.sim = None;
         app.ui.nav.picking = None;
-        return;
+        if app.ui.nav.pending.is_none() && app.ui.nav.lookup.is_none() {
+            return;
+        }
     }
     load(app);
+    // The interface's language for the instructions (the preference may be "auto").
+    let language = app.chosen_lang().code().to_string();
     let time = ctx.input(|i| i.time);
     let st = &mut app.ui.nav;
     // A place looked up by name.
@@ -306,7 +311,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 let key = key.clone();
                 st.pending = None;
                 // Only the answer to what's asked now (the places may have changed meanwhile).
-                if key == st.key() {
+                if key == st.key(&language) {
                     let router = Router { base: routing::VALHALLA.into() };
                     match r.map_err(|e| routing::explain(&e)).and_then(|b| {
                         let routes = router.parse(&b)?;
@@ -317,7 +322,8 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                             st.answer = text;
                             st.chosen = 0;
                             st.error = None;
-                            if let Some(r) = st.routes.first() {
+                            // Shown, unless the pane was closed meanwhile.
+                            if let Some(r) = st.routes.first().filter(|_| open) {
                                 let e = r.extent();
                                 fit(app, e);
                             }
@@ -332,11 +338,9 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             None => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
         }
     }
-    // The interface's language for the instructions (the preference may be "auto").
-    let language = app.chosen_lang().code().to_string();
     let st = &mut app.ui.nav;
     // Ask again when the places or options changed.
-    let key = st.key();
+    let key = st.key(&language);
     if st.consent && st.pending.is_none() && key != st.asked {
         st.clear_routes();
         st.asked = key.clone();

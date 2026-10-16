@@ -4289,6 +4289,9 @@ fn directions_between_places() {
         json!({"from": [0, 0], "to": [1, 1], "url": "file:///etc/passwd"}),
         json!({"answer": "<html>"}),
         json!({"answer": ANSWER, "route": 3}),
+        json!({"answer": ANSWER, "route": u64::MAX}),
+        // More names than one call looks up (refused before any is).
+        json!({"from": "a", "to": "b", "via": ["c", "d", "e", "f"]}),
     ] {
         assert!(s.run("map.route", &bad).is_err(), "{bad}");
     }

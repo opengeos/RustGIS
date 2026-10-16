@@ -1248,8 +1248,11 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         p.circle_stroke(centre, r, Stroke::new(2.5, t.accent));
         p.circle_stroke(ptr, 6.0, Stroke::new(1.5, t.accent));
     }
-    // Directions: the routes, places and a simulated drive.
-    crate::navui::paint(&app.ui.nav, p, rect, t, |c| lonlat_to_screen(app, rect, c));
+    // Directions: the routes, places and a simulated drive, while its pane is open (Save as
+    // Layer keeps a route).
+    if app.ui.right == Some(crate::RightPane::Directions) {
+        crate::navui::paint(&app.ui.nav, p, rect, t, |c| lonlat_to_screen(app, rect, c));
+    }
     // Points picked for a workflow.
     if let Some(pick) = &app.workflow.pick {
         let pts = pick.points.clone();

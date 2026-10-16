@@ -16,6 +16,9 @@ pub fn commands() -> Vec<C> {
     )]
 }
 
+/// The most places one call looks up by name.
+const MAX_NAMES: usize = 5;
+
 /// A place a command names: `[lon, lat]`, `{lon, lat}`, `"lat, lon"`, or a name to look up;
 /// `looked` counts the names looked up so far, spaced as the public geocoder asks.
 fn place(s: &Session, v: Option<&Value>, what: &str, looked: &mut usize) -> Result<Coord, String> {
@@ -85,6 +88,16 @@ fn route(s: &mut Session, p: &Value) -> CmdResult {
     let routes = match ps(p, "answer") {
         Some(answer) => router.parse(answer.as_bytes())?,
         None => {
+            // Each name waits its turn at the public geocoder, so a call looks up a few.
+            let named = ["from", "to"]
+                .iter()
+                .filter_map(|k| p.get(*k))
+                .chain(p.get("via").and_then(Value::as_array).into_iter().flatten())
+                .filter(|v| v.as_str().is_some_and(|t| !t.trim().is_empty() && routing::parse_latlon(t).is_none()))
+                .count();
+            if named > MAX_NAMES {
+                return Err(format!("give at most {MAX_NAMES} places by name; give the others as [lon, lat]"));
+            }
             let mut looked = 0;
             let mut points = vec![place(s, p.get("from"), "from", &mut looked)?];
             if let Some(via) = p.get("via").filter(|v| !v.is_null()) {
