@@ -258,6 +258,18 @@ impl eframe::App for App {
     }
 }
 
+/// Opens the files named on the command line: a project or a project package as the project, any
+/// other file as data. Returns what didn't open, one message per file.
+fn open_files(app: &mut RustGisApp, files: &[&String]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for f in files {
+        if let Err(e) = app.run(rustgis_engine::project::open_command(f), json!({"path": f})) {
+            errors.push(format!("{f}: {e}"));
+        }
+    }
+    errors
+}
+
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
@@ -297,10 +309,8 @@ fn main() -> eframe::Result {
         log::warn!("{e}");
         app.session.notify(e, true);
     }
-    for f in files {
-        if let Err(e) = app.run(rustgis_engine::project::open_command(f), json!({"path": f})) {
-            eprintln!("rustgis: {f}: {e}");
-        }
+    for e in open_files(&mut app, &files) {
+        eprintln!("rustgis: {e}");
     }
     app.session.dirty = false;
     let mut viewport = egui::ViewportBuilder::default()
@@ -358,6 +368,23 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn a_project_package_on_the_command_line_opens_as_the_project() {
+        let dir = std::env::temp_dir().join(format!("rustgis-args-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cleanup = TempDir(dir.clone());
+        let pkg = dir.join("lesson.RGISPKG").display().to_string();
+        let mut s = rustgis_engine::Session::new(rustgis_engine::sample::world_project());
+        s.run("project.package", &serde_json::json!({"path": pkg})).unwrap();
+        let maps = s.project.maps.len();
+        let mut app = super::RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
+        let errors = super::open_files(&mut app, &[&pkg]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(app.session.project.maps.len(), maps);
+        assert!(app.session.path.is_none(), "a package opens unsaved, so Save asks where to write a project");
     }
 
     #[test]
