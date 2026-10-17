@@ -151,8 +151,8 @@ pub struct Config {
     pub client_id: String,
     /// The sign-in session of a signed-in account.
     pub session: String,
-    /// Whether the catalog offers reasoning for the selected model; `Some(false)` too once a
-    /// Chat Completions model refused reasoning alongside tools ([`refuses_reasoning_with_tools`]).
+    /// Whether the catalog offers reasoning for the selected model (`Some(false)` also turns it off
+    /// for a Chat Completions model that refused it alongside tools: see [`refuses_reasoning_with_tools`]).
     pub reasoning: Option<bool>,
     /// Requested tool output token estimate (default 10,000); the 24,000-token hard limit still applies.
     pub tool_output_token_limit: usize,
@@ -651,6 +651,7 @@ fn parse_reply_inner(api: Api, resp: &HttpResponse) -> Result<Reply, Error> {
         // The provider's code (context_length_exceeded, overloaded_error…) and request id stay.
         e.code =
             ["/error/code", "/error/type", "/error/status"].iter().find_map(|p| v.pointer(p).and_then(Value::as_str)).map(str::to_string);
+        e.param = v.pointer("/error/param").and_then(Value::as_str).map(str::to_string);
         e.status = Some(resp.status);
         e.request_id = resp.request_id().map(str::to_string);
         return Err(e);
@@ -1006,10 +1007,10 @@ fn openai_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDef])
 }
 
 /// Whether OpenAI refused a Chat Completions request for reasoning alongside function tools (some
-/// models take tools there only with `reasoning_effort` set to `none`).
+/// models take tools there only with `reasoning_effort` set to `none`). Requests leave
+/// `reasoning_effort` unset, so a 400 about it can only be about the model's default.
 pub fn refuses_reasoning_with_tools(e: &Error) -> bool {
-    let text = e.detail.to_lowercase();
-    e.status == Some(400) && (e.param.as_deref() == Some("reasoning_effort") || text.contains("reasoning_effort")) && text.contains("tools")
+    e.status == Some(400) && (e.param.as_deref() == Some("reasoning_effort") || e.detail.to_lowercase().contains("reasoning_effort"))
 }
 
 fn openai_reply(v: &Value) -> Result<Reply, String> {

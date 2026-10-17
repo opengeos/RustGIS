@@ -3645,8 +3645,42 @@ fn agent_retries_without_reasoning_when_a_model_refuses_it_with_tools() {
     assert_eq!(body(&next)["reasoning_effort"], "none");
     assert_eq!(a.receive_result(a.generation(), reasoning_with_tools_refused(), &mut s), Step::Done);
     assert!(matches!(a.transcript.last(), Some(Entry::Error(_))));
+    // Another model chosen in the settings reasons as before; back to this one, it doesn't. The
+    // settings, which copy the agent's configuration, never see it.
+    assert_eq!(a.config.reasoning, None);
+    a.config.model = "gpt-5.5".into();
+    let Step::Send(other) = a.ask("hello again", &s) else { panic!("expected a request") };
+    assert!(body(&other).get("reasoning_effort").is_none());
+    assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    a.config.model = "gpt-6-sol".into();
+    let Step::Send(back) = a.ask("and back", &s) else { panic!("expected a request") };
+    assert_eq!(body(&back)["reasoning_effort"], "none");
     // Other providers' 400s are errors as before.
     let mut b = Agent::new(cfg("anthropic"), &s);
     assert!(matches!(b.ask("hi", &s), Step::Send(_)));
     assert_eq!(b.receive_result(b.generation(), reasoning_with_tools_refused(), &mut s), Step::Done);
+}
+
+#[test]
+fn agent_recognises_the_reasoning_refusal_by_its_param_whatever_the_wording() {
+    let reply = |param: &str| {
+        Ok(HttpResponse {
+            status: 400,
+            body: json!({"error": {"message": "This combination is not supported.", "type": "invalid_request_error", "param": param}})
+                .to_string()
+                .into_bytes(),
+            headers: vec![],
+        })
+    };
+    let mut s = sample();
+    let mut a = Agent::new(cfg("openai"), &s);
+    assert!(matches!(a.ask("hi", &s), Step::Send(_)));
+    let Step::Send(again) = a.receive_result(a.generation(), reply("reasoning_effort"), &mut s) else {
+        panic!("expected the request again, without reasoning")
+    };
+    assert_eq!(body(&again)["reasoning_effort"], "none");
+    // Another parameter's 400 is an error as before.
+    let mut b = Agent::new(cfg("openai"), &s);
+    assert!(matches!(b.ask("hi", &s), Step::Send(_)));
+    assert_eq!(b.receive_result(b.generation(), reply("model"), &mut s), Step::Done);
 }

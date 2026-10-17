@@ -95,6 +95,9 @@ pub struct Agent {
     preview: Option<provider::StreamPreview>,
     /// The conversation was compacted after the provider said it was too long (once per message).
     overflow_compacted: bool,
+    /// The OpenAI Chat Completions model that refused reasoning alongside tools: its requests turn
+    /// reasoning off ([`provider::refuses_reasoning_with_tools`]), other models' don't.
+    no_reasoning: Option<String>,
     /// A summary request waiting to be retried ([`State::Compacting`]'s `upto` and `resume`).
     retrying_summary: Option<(usize, bool)>,
     /// The skills the model may load ([`skills`]), listed in the system prompt.
@@ -166,6 +169,7 @@ impl Agent {
             retries: 0,
             preview: None,
             overflow_compacted: false,
+            no_reasoning: None,
             retrying_summary: None,
             summary_limit: compact::BUDGET,
             agents_auto: false,
@@ -439,7 +443,13 @@ impl Agent {
         }
         self.state = State::Waiting;
         self.preview = Some(provider::StreamPreview::new(self.config.api()));
-        Step::Send(provider::chat_request(&self.config, &self.system, &self.turns, &self.tool_defs()))
+        let off = self.refused_reasoning().then(|| Config { reasoning: Some(false), ..self.config.clone() });
+        Step::Send(provider::chat_request(off.as_ref().unwrap_or(&self.config), &self.system, &self.turns, &self.tool_defs()))
+    }
+
+    /// Whether the selected model refused reasoning alongside tools ([`Agent::no_reasoning`]).
+    fn refused_reasoning(&self) -> bool {
+        self.config.api() == provider::Api::OpenAi && self.no_reasoning.as_deref() == Some(self.config.model.as_str())
     }
 
     /// The skills the model may load: the built-in ones and the user's ([`skills::installed`]).
@@ -655,10 +665,10 @@ impl Agent {
             // The model takes tools only without reasoning: ask again so, once, and keep it so.
             Err(e)
                 if self.config.api() == provider::Api::OpenAi
-                    && self.config.reasoning != Some(false)
+                    && !self.refused_reasoning()
                     && provider::refuses_reasoning_with_tools(&e) =>
             {
-                self.config.reasoning = Some(false);
+                self.no_reasoning = Some(self.config.model.clone());
                 return self.send();
             }
             Err(e) => {
