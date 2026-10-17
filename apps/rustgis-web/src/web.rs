@@ -389,7 +389,8 @@ async fn read_together(files: Vec<web_sys::File>, mark: &str, inbox: &Inbox, not
             read.push((name, bytes));
         }
     }
-    let read = rustgis_ui_egui::rustgis_engine::data::io::gather_shapefiles(read);
+    let (read, problems) = rustgis_ui_egui::rustgis_engine::data::io::gather_shapefiles(read);
+    notes.lock().unwrap_or_else(|e| e.into_inner()).extend(problems.into_iter().map(|p| (p, true)));
     inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(read.into_iter().map(|(name, bytes)| (format!("{mark}{name}"), bytes)));
 }
 
