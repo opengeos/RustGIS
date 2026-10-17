@@ -45,6 +45,9 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves the cache (see test-rust.yml).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}

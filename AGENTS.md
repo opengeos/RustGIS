@@ -55,7 +55,8 @@ is a command, a thin egui front end, headless screenshots for UI work.
 `cargo xtask ci` (fmt, clippy -D warnings, tests, layers) before every commit.
 Pull requests run CI on Linux and Windows; pushes to `main` add macOS. Label a pull request
 `ci:macos` or `ci:full` to test there before merging (platform-specific code, paths, file
-dialogs).
+dialogs). The release build of the apps runs nightly (`.github/workflows/nightly.yml`), with every
+platform's tests; a failure opens a `Nightly build failed` issue.
 
 ## Looking at the app
 - `cargo run --release -p rustgis` (opens the World Atlas sample).

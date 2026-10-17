@@ -28,6 +28,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves the cache (see test-rust.yml).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -42,6 +45,9 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves the cache (see test-rust.yml).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build for the browser
         run: cargo build --locked --target wasm32-unknown-unknown -p rustgis-web
 

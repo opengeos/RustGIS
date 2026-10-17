@@ -101,6 +101,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves the cache (see test-rust.yml).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The Python package ships a copy of the license (pyproject.toml's license-files can't
       # reach the repository root).
       - name: The license copy matches LICENSE
