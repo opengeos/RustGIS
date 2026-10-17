@@ -37,6 +37,7 @@ jobs:
     uses: ./.github/workflows/test-rust.yml
     with:
       os: ${{ needs.plan.outputs.os }}
+      release-build: ${{ github.event.label.name == 'ci:full' }}
 
   python:
     needs: plan

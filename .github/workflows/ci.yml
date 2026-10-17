@@ -72,3 +72,5 @@ jobs:
     uses: ./.github/workflows/test-rust.yml
     with:
       os: ${{ needs.plan.outputs.os }}
+      # The release build runs nightly; `ci:full` asks for it before merging.
+      release-build: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}

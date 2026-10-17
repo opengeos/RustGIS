@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       release-build:
-        description: Also build the apps in release mode (slow, so nightly only)
+        description: Also build the apps in release mode (slow, so nightly and `ci:full` only)
         required: false
         type: boolean
         default: false
