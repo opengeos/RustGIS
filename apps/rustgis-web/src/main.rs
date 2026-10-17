@@ -4,9 +4,9 @@
 //! (WebGPU where available, WebGL2 otherwise). Build with `trunk build --release` from this
 //! directory (output in `dist/web`).
 //!
-//! Differences from the desktop app: Open and Add Data use the browser's file picker (GeoJSON,
-//! CSV and `.rgis`; Shapefiles need the desktop app), files can be dropped on the page, and
-//! Save and Export download. URL flags: `?webgl` forces WebGL2; `?blank` starts an empty project;
+//! Differences from the desktop app: Open and Add Data use the browser's file picker (a
+//! Shapefile's files are picked or dropped together, or zipped), files can be dropped on the page,
+//! and Save and Export download. URL flags: `?webgl` forces WebGL2; `?blank` starts an empty project;
 //! `?lang=de` sets the interface language; `?project=<url>` opens a project by its web address;
 //! `?embed` runs it inside another page (see `embed.rs`).
 //! The GeoLibre tools run in the browser through geolibre-rust's WASI runner, loaded on demand

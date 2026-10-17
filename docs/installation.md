@@ -105,8 +105,9 @@ RustGIS also runs in the browser, compiled to WebAssembly: open
 **[web.rustgis.app](https://web.rustgis.app)**. It is the same app with three differences:
 
 - **Open** and **Add Data** use the browser's file picker, and you can drop files on the page.
-  GeoJSON, CSV, GeoTIFF, ASCII grids and `.rgis` projects work; Shapefiles need the desktop
-  app.
+  GeoJSON, CSV, GeoTIFF, ASCII grids, `.rgis` projects and the other formats in
+  [Data formats](user-guide/data-formats.md) work; pick or drop a Shapefile's `.shp`, `.dbf`,
+  `.shx` and `.prj` together, or its zip.
 - **Save** and **Export** download the file. **Save As**, and the first **Save** of a project,
   ask for the file name first; the browser decides which folder downloads go to (Firefox, for
   one, saves to its Downloads folder unless told to ask). A project opened from a file is named

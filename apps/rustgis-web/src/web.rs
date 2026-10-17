@@ -30,6 +30,12 @@ const DATA_EXTS: &[&str] = &[
     "xml",
     "landxml",
     "zip",
+    // A Shapefile's loose files, picked together.
+    "shp",
+    "dbf",
+    "shx",
+    "prj",
+    "cpg",
     "kml",
     "kmz",
     "gpx",
@@ -340,18 +346,20 @@ impl eframe::App for WebShell {
         // The GPU map backend draws inside egui's wgpu pass; hand over the render state.
         self.app.set_render_state(frame.wgpu_render_state().cloned());
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
-        for f in dropped {
-            let (inbox, notes) = (self.inbox.clone(), self.notes.clone());
-            let ctx = ctx.clone();
-            let Some(file) = f.web_file().cloned() else {
-                log::error!("a dropped file without its browser file");
-                continue;
-            };
-            wasm_bindgen_futures::spawn_local(async move {
-                let name = file.name();
-                if let Some(bytes) = crate::parts::read_file(file, notes).await {
-                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+        let files: Vec<web_sys::File> = dropped
+            .iter()
+            .filter_map(|f| {
+                let file = f.web_file().cloned();
+                if file.is_none() {
+                    log::error!("a dropped file without its browser file");
                 }
+                file
+            })
+            .collect();
+        if !files.is_empty() {
+            let (inbox, notes, ctx) = (self.inbox.clone(), self.notes.clone(), ctx.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                read_together(files, "", &inbox, notes).await;
                 ctx.request_repaint();
             });
         }
@@ -369,6 +377,20 @@ impl eframe::App for WebShell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
     }
+}
+
+/// Reads files picked or dropped together into the inbox, all at once, each Shapefile's loose
+/// parts zipped into one (`gather_shapefiles`) so it opens as a layer; `mark` starts each name.
+async fn read_together(files: Vec<web_sys::File>, mark: &str, inbox: &Inbox, notes: Notes) {
+    let mut read = Vec::new();
+    for file in files {
+        let name = file.name();
+        if let Some(bytes) = crate::parts::read_file(file, notes.clone()).await {
+            read.push((name, bytes));
+        }
+    }
+    let read = rustgis_ui_egui::rustgis_engine::data::io::gather_shapefiles(read);
+    inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(read.into_iter().map(|(name, bytes)| (format!("{mark}{name}"), bytes)));
 }
 
 fn storage() -> Option<web_sys::Storage> {
@@ -651,12 +673,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             wasm_bindgen_futures::spawn_local(async move {
                 let files: Vec<rfd::FileHandle> =
                     if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
-                for file in files {
-                    let name = file.file_name();
-                    if let Some(bytes) = crate::parts::read_file(file.inner().clone(), notes.clone()).await {
-                        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((format!("{mark}{name}"), bytes));
-                    }
-                }
+                read_together(files.iter().map(|f| f.inner().clone()).collect(), mark, &inbox, notes).await;
                 ctx.request_repaint();
             });
         })),

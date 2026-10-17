@@ -200,7 +200,15 @@ pub fn read_bytes(file_name: &str, bytes: &[u8]) -> Result<(Dataset, ReadReport)
         "csv" | "tsv" | "txt" => read_csv(text()?, &name)?,
         // A MIF without its .mid (an upload of the one file): no attributes.
         "mif" => crate::mapinfo::read_bytes(bytes, None, &name)?,
-        "shp" => return Err(DataError::Unsupported("shp on its own: zip it with its .dbf, .shx and .prj and add the zip".into())),
+        // Picked or dropped with its .dbf, a Shapefile comes zipped (`gather_shapefiles`).
+        "shp" => {
+            return Err(DataError::Unsupported(
+                "shp on its own: add it together with its .dbf, .shx and .prj (pick or drop them at once), or add them zipped".into(),
+            ));
+        }
+        "dbf" | "shx" | "prj" | "cpg" => {
+            return Err(DataError::Unsupported(format!("{ext} on its own: it is part of a Shapefile; add it together with its .shp")));
+        }
         // The first layer (`read_layers` reads them all), saying what else the file holds.
         "zip" | "kml" | "kmz" | "gpx" | "gml" | "dxf" | "pbf" | "topojson" => return first_layer(file_name, bytes),
         // A copy, since only borrowed bytes are given; `read_owned` takes them without one.
@@ -1221,6 +1229,58 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
     read_shapefile_parts(parts, name)
 }
 
+/// The files of a Shapefile besides its `.shp` that [`gather_shapefiles`] zips with it.
+const SHAPEFILE_SIDECARS: [&str; 4] = ["dbf", "shx", "prj", "cpg"];
+
+/// Gathers each Shapefile among files given together (several picked at once in the browser, or
+/// dropped at once) into a zip that reads as a zipped Shapefile: a `.shp` with the `.dbf` of the
+/// same base name, ignoring case, and its `.shx`, `.prj` and `.cpg` when they are there. The zip,
+/// named after the `.shp`, takes its place; its parts go. Other files, and a `.shp` without its
+/// `.dbf`, pass through as they came.
+pub fn gather_shapefiles(files: Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)> {
+    let ext_of = |n: &str| Path::new(n).extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
+    let stem = |n: &str| Path::new(n).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+    let sidecar = |files: &[Option<(String, Vec<u8>)>], base: &str, ext: &str| {
+        files.iter().position(|f| f.as_ref().is_some_and(|(n, _)| ext_of(n) == ext && stem(n) == base))
+    };
+    // Files are taken out as they're zipped, so none is copied twice; each zip goes where its
+    // `.shp` was.
+    let mut files: Vec<Option<(String, Vec<u8>)>> = files.into_iter().map(Some).collect();
+    let mut zips: Vec<Option<Vec<(String, Vec<u8>)>>> = files.iter().map(|_| None).collect();
+    for i in 0..files.len() {
+        let Some(base) = files.get(i).and_then(Option::as_ref).filter(|(n, _)| ext_of(n) == "shp").map(|(n, _)| stem(n)) else {
+            continue;
+        };
+        if sidecar(&files, &base, "dbf").is_none() {
+            continue;
+        }
+        let mut parts: Vec<(String, Vec<u8>)> = files.get_mut(i).and_then(Option::take).into_iter().collect();
+        for ext in SHAPEFILE_SIDECARS {
+            if let Some(part) = sidecar(&files, &base, ext).and_then(|j| files.get_mut(j)).and_then(Option::take) {
+                parts.push(part);
+            }
+        }
+        if let Some(slot) = zips.get_mut(i) {
+            *slot = Some(parts);
+        }
+    }
+    let mut out = Vec::new();
+    for (file, parts) in files.into_iter().zip(zips) {
+        out.extend(file);
+        let Some(parts) = parts else {
+            continue;
+        };
+        let shp = parts.first().map(|(n, _)| n.as_str()).unwrap_or("layer.shp");
+        let zip_name = format!("{}.zip", Path::new(shp).file_stem().and_then(|s| s.to_str()).unwrap_or("layer"));
+        match crate::zip::write(&parts) {
+            Ok(zip) => out.push((zip_name, zip)),
+            // Too large to zip: the parts as they came, each refused as it would have been.
+            Err(_) => out.extend(parts),
+        }
+    }
+    out
+}
+
 /// Most layers read from one zip archive.
 pub const MAX_ZIP_LAYERS: usize = 32;
 
@@ -2056,5 +2116,60 @@ mod tests {
         }
         // A .shp alone is refused with a hint to zip it.
         assert!(read_bytes("x.shp", &entries[0].1).is_err());
+    }
+    /// A Shapefile's loose files picked or dropped together are zipped into one, which reads as a
+    /// layer; parts of different Shapefiles stay apart, and other files pass through.
+    #[test]
+    fn loose_shapefiles_gather_into_zips() {
+        let (ds, _) = read_geojson(
+            r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"n":"a"},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#,
+            "rivers",
+        )
+        .unwrap();
+        let loose = |stem: &str, upper: bool| -> Vec<(String, Vec<u8>)> {
+            let zip = write_bytes(&ds, "zip").unwrap().0;
+            crate::zip::read(&zip)
+                .unwrap()
+                .into_iter()
+                .map(|(n, b)| {
+                    let ext = Path::new(&n).extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
+                    (if upper && ext == "shp" { format!("{}.SHP", stem.to_uppercase()) } else { format!("{stem}.{ext}") }, b)
+                })
+                .collect()
+        };
+        let names = |files: &[(String, Vec<u8>)]| files.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
+        let rivers = loose("rivers", false);
+        assert!(rivers.len() >= 4, "{:?}", names(&rivers));
+        // One Shapefile becomes one zip, which reads.
+        let out = gather_shapefiles(rivers.clone());
+        assert_eq!(names(&out), ["rivers.zip"]);
+        let (read, _) = read_bytes(&out[0].0, &out[0].1).unwrap();
+        assert_eq!((read.name.as_str(), read.features.len()), ("rivers", 1));
+        // Two in one pick, in any order, with other files passed through in place.
+        let mut two = vec![("cities.geojson".to_string(), b"{}".to_vec())];
+        two.extend(loose("roads", false).into_iter().rev());
+        two.extend(rivers.clone());
+        let out = gather_shapefiles(two);
+        assert_eq!(names(&out), ["cities.geojson", "roads.zip", "rivers.zip"]);
+        for (n, b) in &out[1..] {
+            let layers = read_zip(n, b).unwrap();
+            assert_eq!(layers.len(), 1, "{n}");
+        }
+        // The base names match without regard to case.
+        let out = gather_shapefiles(loose("rivers", true));
+        assert_eq!(names(&out), ["RIVERS.zip"]);
+        assert_eq!(read_bytes(&out[0].0, &out[0].1).unwrap().0.features.len(), 1);
+        // A .shp without its .dbf is left as it is, and explained when read.
+        let no_dbf: Vec<_> = rivers.iter().filter(|(n, _)| !n.ends_with(".dbf")).cloned().collect();
+        let out = gather_shapefiles(no_dbf.clone());
+        assert_eq!(names(&out), names(&no_dbf));
+        let shp = out.iter().find(|(n, _)| n.ends_with(".shp")).unwrap();
+        assert!(read_bytes(&shp.0, &shp.1).unwrap_err().to_string().contains("together with its .dbf"));
+        assert!(read_bytes("rivers.prj", b"").unwrap_err().to_string().contains("together with its .shp"));
+        // Parts of another Shapefile aren't taken in.
+        let mut mixed = rivers.clone();
+        mixed.push(("lakes.prj".to_string(), b"x".to_vec()));
+        assert_eq!(names(&gather_shapefiles(mixed)), ["rivers.zip", "lakes.prj"]);
+        assert!(gather_shapefiles(Vec::new()).is_empty());
     }
 }
