@@ -401,9 +401,10 @@ fn finite_or(v: f64, d: f64) -> f64 {
 
 /// The camera that shows a frame's centre at its paper scale in `map`'s projection, for a frame
 /// `w`×`h` logical points. The globe takes its camera in Web Mercator, whose ground scale at the
-/// centre it matches, so it is handled like the flat map.
+/// centre it matches, so it is handled like the flat map. Frames face north, whichever
+/// way the map in view is turned.
 pub fn frame_camera(map: &Map, center: Coord, scale: f64) -> Camera {
-    let mut cam = map.camera;
+    let mut cam = Camera { bearing: 0.0, ..map.camera };
     if let Some(c) = map.to_map(center) {
         cam.center = c;
     }

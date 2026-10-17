@@ -950,6 +950,44 @@ fn flush_acc(pm: &mut Pixmap, cmds: &mut Vec<gpu_scene::DrawCmd>, dirty: &mut bo
 /// `full_res_rasters` renders rasters at full resolution (exports); `backend` selects the CPU
 /// pixmap or a GPU scene (see [`Backend`]).
 fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend) -> Option<RenderOutput> {
+    if view.camera.bearing != 0.0 && !map.projection.is_globe() {
+        return render_turned(map, view, full_res_rasters).map(RenderOutput::Cpu);
+    }
+    render_frame(map, view, full_res_rasters, backend, None)
+}
+
+/// A view turned to a bearing, on the CPU: the map is drawn facing north over the box around
+/// the turned view, then turned into place. Labels are placed in the turned view and drawn
+/// upright, as MapLibre keeps them.
+fn render_turned(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Rendered> {
+    let (bw, bh) = view.camera.rotated_size(view.width, view.height);
+    let north = View { width: bw.ceil() + 2.0, height: bh.ceil() + 2.0, camera: Camera { bearing: 0.0, ..view.camera }, ..*view };
+    let Some(RenderOutput::Cpu(r)) = render_frame(map, &north, full_res_rasters, Backend::Cpu, Some(view)) else { return None };
+    let (w, h) = view.pixel_size();
+    let mut pm = Pixmap::new(w, h)?;
+    // Physical pixels per logical point of each frame (the north-up one may have been capped
+    // at MAX_SIDE).
+    let k_out = w as f64 / view.width.max(1e-9);
+    let k_in = r.pixmap.width() as f64 / north.width.max(1e-9);
+    let s = k_out / k_in.max(1e-9);
+    let b = view.camera.bearing.to_radians();
+    let (c, n) = (b.cos() * s, b.sin() * s);
+    let (iw, ih) = (r.pixmap.width() as f64 / 2.0, r.pixmap.height() as f64 / 2.0);
+    let (tx, ty) = (w as f64 / 2.0 - (c * iw + n * ih), h as f64 / 2.0 - (c * ih - n * iw));
+    let t = Transform::from_row(c as f32, -n as f32, n as f32, c as f32, tx as f32, ty as f32);
+    let paint = PixmapPaint { quality: tiny_skia::FilterQuality::Bilinear, ..PixmapPaint::default() };
+    pm.draw_pixmap(0, 0, r.pixmap.as_ref(), &paint, t, None);
+    for l in &r.labels {
+        if let Some(icon) = &l.icon {
+            draw_icon(&mut pm, icon, view.pixels_per_point as f32);
+        }
+    }
+    Some(Rendered { pixmap: pm, ..r })
+}
+
+/// Draws one north-up frame. `turned` is the view it stands in for when that faces another way
+/// ([`render_turned`]): labels are placed in that view instead, and their icons left for it.
+fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend, turned: Option<&View>) -> Option<RenderOutput> {
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
     // Streamed layers read the view: in the background for the screen, in place for an export
@@ -1350,13 +1388,31 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
             label_candidates.push((l, pri - 1e10, (u32::MAX, i)));
         }
     }
-    let placed = place_labels(label_candidates, fixed_labels, view.width as f32, view.height as f32, lock.is_some());
+    let (lw, lh) = match turned {
+        Some(to) => {
+            // Into the turned view's screen, where they stay upright.
+            let at = |x: f32, y: f32| {
+                let (sx, sy) = to.to_screen(view.camera.to_map(f64::from(x), f64::from(y), view.width, view.height));
+                (sx as f32, sy as f32)
+            };
+            for l in label_candidates.iter_mut().map(|c| &mut c.0).chain(fixed_labels.iter_mut()) {
+                (l.x, l.y) = at(l.x, l.y);
+                if let Some(i) = &mut l.icon {
+                    (i.x, i.y) = at(i.x, i.y);
+                }
+            }
+            (to.width, to.height)
+        }
+        None => (view.width, view.height),
+    };
+    let placed = place_labels(label_candidates, fixed_labels, lw as f32, lh as f32, lock.is_some());
     if display.locked && map.label_lock.is_none() {
         map.label_lock = Some(placed.keys);
     }
     let unplaced = if display.show_unplaced { placed.unplaced } else { Vec::new() };
-    // The placed labels' icons go into the map itself; their text is drawn over it later.
-    for l in &placed.labels {
+    // The placed labels' icons go into the map itself; their text is drawn over it later. A
+    // turned view draws them once it is turned.
+    for l in placed.labels.iter().filter(|_| turned.is_none()) {
         if let Some(icon) = &l.icon {
             draw_icon(&mut pm, icon, view.pixels_per_point as f32);
             cpu_dirty = true;
@@ -1389,7 +1445,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
             // layer) costs more full-screen uploads than a plain CPU rasterization.
             let images = cmds.iter().filter(|c| matches!(c, gpu_scene::DrawCmd::Image { .. })).count();
             if images > 4 {
-                return render_with_backend(map, view, full_res_rasters, Backend::Cpu);
+                return render_frame(map, view, full_res_rasters, Backend::Cpu, turned);
             }
             Some(RenderOutput::Gpu(gpu_scene::GpuScene {
                 clear: mesh::premul(water),
@@ -1755,7 +1811,7 @@ pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side
         if w * ppp < 2.0 || h * ppp < 2.0 {
             continue;
         }
-        let camera = Camera { center: merc.center(), res };
+        let camera = Camera { center: merc.center(), res, bearing: 0.0 };
         let v = View { width: w, height: h, pixels_per_point: ppp, camera, sky: false };
         // The picture is given the box asked for, though rounding to whole points made it show
         // up to a point less: stretched by under a point, its edges stay exactly where asked, so
@@ -1951,7 +2007,7 @@ mod tests {
         m.add_dataset(d);
         m.projection = rustgis_map::Projection::Globe;
         let paris = lonlat_to_merc(Coord::new(2.35, 48.85));
-        let camera = Camera { center: paris, res: 2_000.0 };
+        let camera = Camera { center: paris, res: 2_000.0, bearing: 0.0 };
         let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
         let boxes = Globe::new(&camera, 400.0, 300.0).drape_extents(400.0, 300.0, 0.25);
         let patches = render_globe_drape(&mut m, &view, &boxes, 4096);
@@ -1965,7 +2021,7 @@ mod tests {
         let res = p.merc.width() / f64::from(p.pixmap.width());
         let at = px(&p.pixmap, (paris.x - p.merc.min_x) / res, (p.merc.max_y - paris.y) / res);
         m.projection = rustgis_map::Projection::WebMercator;
-        let flat = render(&mut m, &View { camera: Camera { center: paris, res }, ..view }).unwrap();
+        let flat = render(&mut m, &View { camera: Camera { center: paris, res, bearing: 0.0 }, ..view }).unwrap();
         assert_eq!(at, px(&flat.pixmap, 200.0, 150.0));
         // Too big a box is drawn coarser, within the limit; junk draws nothing.
         let big = render_globe_drape(&mut m, &view, &[Extent::new(-180.0, -80.0, 180.0, 80.0)], 512);
@@ -1974,7 +2030,7 @@ mod tests {
         // mesh still reaches the pole.
         let lim = rustgis_geom::MAX_LAT;
         // (30 km points leave a remainder: the picture is 1335 points tall, 0.8 of a point short.)
-        let coarse = View { camera: Camera { center: paris, res: 30_000.0 }, ..view };
+        let coarse = View { camera: Camera { center: paris, res: 30_000.0, bearing: 0.0 }, ..view };
         let world = render_globe_drape(&mut m, &coarse, &[Extent::new(-180.0, -lim, 180.0, lim)], 4096);
         let edge = std::f64::consts::PI * rustgis_geom::MERCATOR_R * 0.9999;
         assert!(
@@ -1982,7 +2038,10 @@ mod tests {
             "{:?}",
             world.iter().map(|p| p.merc).collect::<Vec<_>>()
         );
-        assert!(render_globe_drape(&mut m, &View { camera: Camera { center: paris, res: f64::NAN }, ..view }, &boxes, 4096).is_empty());
+        assert!(
+            render_globe_drape(&mut m, &View { camera: Camera { center: paris, res: f64::NAN, bearing: 0.0 }, ..view }, &boxes, 4096)
+                .is_empty()
+        );
         assert!(render_globe_drape(&mut m, &view, &[Extent::EMPTY], 4096).is_empty());
         // The sprites: a square around the disc, or nothing for a junk radius.
         let (under, over) = globe_sprites(rustgis_map::Basemap::Paper, 100.0).unwrap();
@@ -2014,7 +2073,7 @@ mod tests {
             l.labels.enabled = true;
             l.selection = vec![0];
         }
-        let camera = Camera { center: lonlat_to_merc(Coord::new(2.35, 48.85)), res: 5000.0 };
+        let camera = Camera { center: lonlat_to_merc(Coord::new(2.35, 48.85)), res: 5000.0, bearing: 0.0 };
         let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
         let r = render(&mut m, &view).unwrap();
         assert_eq!(r.labels.len(), 1);
@@ -2278,7 +2337,7 @@ mod tests {
         // of pixels away, and the rasteriser indexed past its buffer.
         let mut m = Map::new("Map");
         for res in [0.05, 0.008, 0.001, 1e-5] {
-            let camera = Camera { center: lonlat_to_merc(Coord::new(-122.2585, 37.8719)), res };
+            let camera = Camera { center: lonlat_to_merc(Coord::new(-122.2585, 37.8719)), res, bearing: 0.0 };
             let view = View { width: 1600.0, height: 1000.0, pixels_per_point: 1.0, camera, sky: false };
             assert!(render(&mut m, &view).is_some(), "{res}");
         }
@@ -2308,7 +2367,7 @@ mod tests {
             width: 120.0,
             height: 80.0,
             pixels_per_point: 1.0,
-            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0 },
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0 },
             sky: false,
         };
         let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
@@ -2334,12 +2393,56 @@ mod tests {
     }
 
     #[test]
+    fn a_turned_view_turns_the_map_and_keeps_labels_upright() {
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("pts", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        // 80 px east of the centre.
+        d.push(Some(Geometry::Point(Coord::new(80.0 * 1000.0 / 111_319.49, 0.0))), vec![Value::Text("East".into())]);
+        let id = m.add_dataset(d);
+        if let Some(l) = m.layer_mut(id) {
+            l.labels.enabled = true;
+        }
+        // Where the point is drawn: the middle of the pixels unlike the background.
+        let ink = |pm: &Pixmap| {
+            let bg = pm.pixel(0, 0).unwrap();
+            let (mut n, mut sx, mut sy) = (0.0, 0.0, 0.0);
+            for (k, p) in pm.pixels().iter().enumerate() {
+                if *p != bg {
+                    n += 1.0;
+                    sx += (k as u32 % pm.width()) as f64;
+                    sy += (k as u32 / pm.width()) as f64;
+                }
+            }
+            assert!(n > 0.0, "nothing drawn");
+            (sx / n, sy / n)
+        };
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 1000.0, bearing: 0.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 2.0, camera, sky: false };
+        let north = render(&mut m, &view).unwrap();
+        let (x, y) = ink(&north.pixmap);
+        assert!((x - 560.0).abs() < 4.0 && (y - 300.0).abs() < 4.0, "north up: {x},{y}");
+        // Facing east, east is up.
+        let turned = View { camera: Camera { bearing: 90.0, ..camera }, ..view };
+        let r = render(&mut m, &turned).unwrap();
+        assert_eq!((r.pixmap.width(), r.pixmap.height()), (800, 600));
+        let (x, y) = ink(&r.pixmap);
+        assert!((x - 400.0).abs() < 4.0 && (y - 140.0).abs() < 4.0, "facing east: {x},{y}");
+        // The label sits by the point in the turned view (its text is drawn upright over it).
+        let l = r.labels.iter().find(|l| l.text == "East").expect("the label is placed");
+        assert!((l.center_x() - 200.0).abs() < 40.0 && (l.y - 70.0).abs() < 20.0, "label at {},{}", l.x, l.y);
+        // Any bearing covers the whole view: no corner is left empty.
+        let r = render(&mut m, &View { camera: Camera { bearing: -33.0, ..camera }, ..view }).unwrap();
+        assert!(r.pixmap.pixels().iter().all(|p| p.alpha() == 255));
+    }
+
+    #[test]
     fn only_features_still_under_a_pixel_with_their_outline_are_splatted() {
         let view = View {
             width: 100.0,
             height: 100.0,
             pixels_per_point: 2.0,
-            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0 },
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0 },
             sky: false,
         };
         let ctx = Ctx { view: &view, ppp: 2.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
@@ -2375,7 +2478,7 @@ mod tests {
         }
         let id = m.add_dataset(d);
         let sym = m.layer(id).map(|l| l.symbol(0)).unwrap();
-        let camera = Camera { center: lonlat_to_merc(Coord::new(0.5, 0.5)), res: 2000.0 };
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.5, 0.5)), res: 2000.0, bearing: 0.0 };
         let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
         let r = render(&mut m, &view).unwrap();
         let px = |x: u32, y: u32| r.pixmap.pixel(x, y).unwrap();

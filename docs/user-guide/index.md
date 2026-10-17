@@ -37,8 +37,8 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
   The Style and Data tabs act on the layer selected here. The tabs at the top of the left pane
   switch it between **Layers**, **Browser** and **Data Sources** (also in **View › Windows**).
 - **Map view**: one tab per map and layout. The buttons at the top right zoom in, zoom out and go
-  to the full extent; the north arrow and scale bar sit in the corners; tile credits at the bottom
-  right.
+  to the full extent; the north arrow and scale bar sit in the corners (on a rotated map, click
+  the north arrow to face north); tile credits at the bottom right.
 - **Panes** (right): Catalog, Geoprocessing, Symbology, History, Details, Editing, Workflows,
   Script, the AI Assistant and more. Open them from **View › Windows** or the commands that use
   them. Each pane opened gets a tab at the top, in the order opened: click a tab to show its pane,

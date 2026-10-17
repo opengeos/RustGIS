@@ -490,7 +490,8 @@ fn globe_projection_toggles_renders_and_saves() {
     assert_eq!(s.map().projection, rustgis_map::Projection::Globe);
     // The globe draws vectors, rasters and labels, from any side.
     for (lon, lat, res) in [(-81.0, 42.0, 30_000.0), (100.0, -60.0, 60_000.0), (-81.0, 42.0, 50.0), (0.0, 89.0, 160_000.0)] {
-        s.map_mut().camera = rustgis_map::Camera { center: rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(lon, lat)), res };
+        s.map_mut().camera =
+            rustgis_map::Camera { center: rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(lon, lat)), res, bearing: 0.0 };
         let png = crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap();
         assert!(png.len() > 1000);
     }
@@ -5996,6 +5997,42 @@ fn bookmarks_export_and_import_across_projections() {
     let junk = json!({"bookmarks": [{"name": "Bad", "lon": 500, "lat": 0, "metresPerPixel": 1}, {"name": "", "lon": 0, "lat": 0, "metresPerPixel": 1}]});
     assert!(s.run("bookmark.import", &json!({"text": junk.to_string()})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The map turns to a bearing (#395): set, turned further, reset, kept by bookmarks (and their
+/// files), saved with the project, and reported by project info.
+#[test]
+fn the_map_turns_to_a_bearing() {
+    let mut s = Session::new(sample::world_project());
+    assert_eq!(s.map().camera.bearing, 0.0);
+    assert_eq!(s.run("map.setBearing", &json!({"bearing": 90})).unwrap(), json!({"bearing": 90.0}));
+    assert_eq!(s.run("map.setBearing", &json!({"by": -100})).unwrap(), json!({"bearing": -10.0}));
+    assert_eq!(s.run("map.setBearing", &json!({"bearing": 350})).unwrap(), json!({"bearing": -10.0}));
+    assert!(s.run("map.setBearing", &json!({})).is_err());
+    assert!(s.run("map.setBearing", &json!({"bearing": "north"})).is_err());
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 5_000_000, "bearing": 45})).unwrap();
+    assert_eq!(s.map().camera.bearing, 45.0);
+    assert_eq!(s.run("info.project", &json!({})).unwrap()["bearing"], json!(45.0));
+    // A bookmark keeps the bearing, in the project and in a bookmarks file.
+    s.run("bookmark.add", &json!({"name": "Turned"})).unwrap();
+    s.run("map.resetNorth", &json!({})).unwrap();
+    assert_eq!(s.map().camera.bearing, 0.0);
+    s.run("bookmark.go", &json!({"name": "Turned"})).unwrap();
+    assert_eq!(s.map().camera.bearing, 45.0);
+    let file = crate::cmd::navigate::bookmarks_file(s.map()).unwrap();
+    s.run("map.resetNorth", &json!({})).unwrap();
+    s.run("bookmark.remove", &json!({"name": "Turned"})).unwrap();
+    s.run("bookmark.import", &json!({"text": String::from_utf8(file).unwrap()})).unwrap();
+    s.run("bookmark.go", &json!({"name": "Turned"})).unwrap();
+    assert!((s.map().camera.bearing - 45.0).abs() < 1e-9);
+    // Saved with the project.
+    let saved: crate::Project = serde_json::from_str(&serde_json::to_string(&s.project).unwrap()).unwrap();
+    assert!((saved.maps[saved.active_map].camera.bearing - 45.0).abs() < 1e-9);
+    // The visible extent holds the turned view's corners: wider than the same view facing north.
+    let turned = crate::cmd::workspace::view_extent(&s);
+    s.run("map.resetNorth", &json!({})).unwrap();
+    let north = crate::cmd::workspace::view_extent(&s);
+    assert!(turned.width() > north.width() * 1.1, "{turned:?} vs {north:?}");
 }
 
 /// The bookmark manager's commands (#351): names stay unique, a bookmark is renamed, updated,

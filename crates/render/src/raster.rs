@@ -422,7 +422,7 @@ mod tests {
         let data: Vec<f32> = (0..10_000).map(|i| (i % 100) as f32).collect();
         let r = Raster::new("utm", 100, 100, vec![data], gt, Crs::from_epsg(32617).unwrap(), None, ColorHint::Gray, "Float32").unwrap();
         let style = RasterStyle::default_for(&r);
-        let camera = Camera { center: lonlat_to_merc(Coord::new(-81.0, 42.0)), res: 2000.0 };
+        let camera = Camera { center: lonlat_to_merc(Coord::new(-81.0, 42.0)), res: 2000.0, bearing: 0.0 };
         let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
         let mut pm = Pixmap::new(200, 200).unwrap();
         draw(&mut pm, &r, &style, &view, 1.0, false, Place::Flat(&Flat::Mercator, "mercator"));

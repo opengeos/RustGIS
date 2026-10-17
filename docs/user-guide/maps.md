@@ -15,6 +15,15 @@ projection; places that projection can't show are skipped. Type a scale in the s
 to it. More navigation tools are under [View
 effects](#view-effects) below.
 
+**Rotating the map.** Drag with the right mouse button to turn the map about the centre of the
+view (to the right turns it clockwise), or hold ++shift++ and press ++arrow-left++ or
+++arrow-right++. The north arrow turns with the map to point north; click it to face north
+again. The bearing (the compass direction the top of the view faces, in degrees clockwise from
+north, as in MapLibre) is saved with the project, its bookmarks and bookmark files, and exported
+maps are drawn turned. Labels stay upright. `map.setBearing` sets it (`{"bearing": 90}` puts east
+at the top; `{"by": 15}` turns it further), `map.resetNorth` faces north and **Go To XY** takes a
+`bearing` too. Page layout map frames and the globe face north.
+
 **Manage Bookmarks** (at the foot of the Bookmarks menu, or **View › Windows › Bookmarks**) opens
 the Bookmarks pane: every map's bookmarks, grouped by map (the map in view in the accent colour),
 with a box that filters them by name or description. On each bookmark, **Zoom To** shows its place

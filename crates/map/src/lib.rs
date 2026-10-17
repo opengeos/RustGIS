@@ -882,9 +882,7 @@ impl Map {
         if m.is_empty() {
             return;
         }
-        self.camera.center = m.center();
-        self.camera.res = (m.width() / w).max(m.height() / h).max(camera::MIN_RES * 2.0);
-        self.camera.clamp();
+        self.camera.fit_extent(&m, w, h);
     }
 
     /// Switches projection, keeping the centre and the ground scale.

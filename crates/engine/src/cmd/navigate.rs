@@ -42,7 +42,16 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"extent": [minLon, minLat, maxLon, maxLat]}"#),
         C::new("map.goToXY", "Go To XY", "Home › Navigate", go_to_xy)
             .view()
-            .params(r#"{"lon" | "x": number, "lat" | "y": number, "scale"?: number}"#),
+            .params(r#"{"lon" | "x": number, "lat" | "y": number, "scale"?: number, "bearing"?: degrees clockwise from north}"#),
+        C::new("map.setBearing", "Rotate Map", "Home › Navigate", set_bearing)
+            .view()
+            .params(r#"{"bearing": degrees clockwise from north (the direction the top of the view faces) | "by": degrees to turn it further}"#),
+        C::new("map.resetNorth", "Reset North", "Home › Navigate", |s, _| {
+            s.map_mut().camera.set_bearing(0.0);
+            s.record_extent();
+            Ok(Value::Null)
+        })
+        .view(),
         C::new("map.setScale", "Set Scale", "Status Bar", |s, p| {
             let sc = f(p, "scale").ok_or("scale is required")?;
             s.map_mut().set_scale(sc);
@@ -299,9 +308,29 @@ pub(crate) fn go_to_xy(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(sc) = f(p, "scale") {
         m.set_scale(sc);
     }
+    if let Some(b) = f(p, "bearing") {
+        m.camera.bearing = b;
+    }
     m.camera.clamp();
     s.record_extent();
     Ok(Value::Null)
+}
+
+/// Turns the flat map to a bearing (the globe keeps it for when the map is flat again).
+fn set_bearing(s: &mut Session, p: &Value) -> CmdResult {
+    let m = s.map_mut();
+    let bearing = match (f(p, "bearing"), f(p, "by")) {
+        (Some(b), _) => b,
+        (None, Some(by)) => m.camera.bearing + by,
+        (None, None) => return Err("bearing (degrees clockwise from north) or by (degrees to turn) is required".into()),
+    };
+    if !bearing.is_finite() {
+        return Err("bearing must be a number of degrees".into());
+    }
+    m.camera.set_bearing(bearing);
+    let out = json!({"bearing": m.camera.bearing});
+    s.record_extent();
+    Ok(out)
 }
 
 fn basemap(s: &mut Session, p: &Value) -> CmdResult {
@@ -363,7 +392,9 @@ fn go_bookmark(s: &mut Session, p: &Value) -> CmdResult {
 fn place_of(from: &Map, at: &rustgis_map::Camera, to: &Map) -> Option<rustgis_map::Camera> {
     let flat = from.flat();
     let lonlat = flat.inverse(at.center)?;
-    place_at(to, lonlat, at.res * flat.ground_per_unit(at.center))
+    let mut camera = place_at(to, lonlat, at.res * flat.ground_per_unit(at.center))?;
+    camera.set_bearing(at.bearing);
+    Some(camera)
 }
 
 /// Map `map`'s camera moved to `lonlat` at `ground` metres per pixel; None where it can't show
@@ -435,6 +466,9 @@ pub(crate) fn bookmarks_file(map: &Map) -> Result<Vec<u8>, String> {
             let c = flat.inverse(b.camera.center)?;
             let ground = b.camera.res * flat.ground_per_unit(b.camera.center);
             let mut mark = json!({"name": b.name, "lon": c.x, "lat": c.y, "metresPerPixel": ground});
+            if b.camera.bearing != 0.0 {
+                mark["bearing"] = json!(b.camera.bearing);
+            }
             if !b.description.is_empty() {
                 mark["description"] = json!(b.description);
             }
@@ -465,7 +499,9 @@ fn import_bookmarks(s: &mut Session, p: &Value) -> CmdResult {
         if !(lon.is_finite() && lat.is_finite() && (-180.0..=180.0).contains(&lon) && (-90.0..=90.0).contains(&lat)) {
             continue;
         }
-        let Some(camera) = place_at(m, Coord::new(lon, lat), ground) else { continue };
+        let Some(mut camera) = place_at(m, Coord::new(lon, lat), ground) else { continue };
+        // A file from before bearings faces north.
+        camera.set_bearing(f(b, "bearing").unwrap_or(0.0));
         // Absent (a file from before descriptions, or written by hand) isn't empty: a bookmark
         // it replaces keeps its own.
         let description: Option<String> = super::ps(b, "description").map(|d| d.trim().chars().take(MAX_DESCRIPTION).collect());

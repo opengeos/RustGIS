@@ -181,6 +181,7 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
         "projection": m.projection.code(),
         "scale": m.scale().round(),
         "center": {"lon": m.center_lonlat().x, "lat": m.center_lonlat().y},
+        "bearing": m.camera.bearing,
         "layers": m.layers.iter().map(|l| match &l.raster {
             Some(rl) => json!({
                 "id": l.id, "name": l.name, "type": "Raster", "visible": l.visible, "renderer": rl.style.renderer.label(),

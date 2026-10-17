@@ -15,7 +15,7 @@ use crate::{RustGisApp, icons};
 #[derive(Clone, Copy, PartialEq)]
 struct Key {
     rev: u64,
-    cam: (i64, i64, i64),
+    cam: (i64, i64, i64, i64),
     size: [usize; 2],
     /// Rendered at reduced resolution while the globe was moving.
     draft: bool,
@@ -108,7 +108,7 @@ pub struct MapView {
     snap: Option<([f64; 5], Option<Coord>)>,
     /// The side-by-side map's last render (texture and labels) and what it was drawn for, so it
     /// redraws only when that map, the project or the view changes.
-    split: Option<([f64; 8], egui::TextureHandle, Vec<PlacedLabel>)>,
+    split: Option<([f64; 9], egui::TextureHandle, Vec<PlacedLabel>)>,
     /// The picture an identified feature carries (a photo's thumbnail, a `data:image/…` value):
     /// a hash of the value, and its texture (or why it couldn't be read).
     picture: Option<(u64, Result<egui::TextureHandle, String>)>,
@@ -130,7 +130,7 @@ pub struct MapView {
     pub(crate) gpu_target: std::sync::Arc<std::sync::Mutex<Option<crate::mapgpu::SceneTarget>>>,
     /// The last side-by-side map's GPU scene (its key, buffers and labels), when the second
     /// map rendered on the GPU.
-    pub(crate) split_gpu: Option<([f64; 8], std::sync::Arc<crate::mapgpu::SceneBuffers>, Vec<PlacedLabel>)>,
+    pub(crate) split_gpu: Option<([f64; 9], std::sync::Arc<crate::mapgpu::SceneBuffers>, Vec<PlacedLabel>)>,
     /// The split map's offscreen MSAA target (its own slot — main and split differ in size).
     pub(crate) gpu_target_split: std::sync::Arc<std::sync::Mutex<Option<crate::mapgpu::SceneTarget>>>,
     pub(crate) render_state: Option<egui_wgpu::RenderState>,
@@ -301,9 +301,10 @@ fn split_view(app: &mut RustGisApp, ui: &mut Ui, other: usize, rect: Rect, t: &T
     let view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: m.camera, sky: true };
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, c32(m.basemap.palette().0));
-    let key = [other as f64, revision as f64, m.camera.center.x, m.camera.center.y, m.camera.res, w, h, f64::from(ppp)];
+    let key = [other as f64, revision as f64, m.camera.center.x, m.camera.center.y, m.camera.res, m.camera.bearing, w, h, f64::from(ppp)];
     let gpu_ok = app.map.gpu_enabled
         && !m.projection.is_globe()
+        && m.camera.bearing == 0.0
         && m.view.effects.is_none()
         && m.view.color_vision == rustgis_engine::map::view::ColorVision::Normal;
     // Fresh GPU scene? Keep it. Stale? Rebuild. Either way `rendered_gpu` tracks whether the
@@ -416,7 +417,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let render_ppp = if draft { (ppp * 0.6).max(0.5) } else { ppp };
     let key = Key {
         rev: app.session.revision,
-        cam: ((cam.center.x * 100.0) as i64, (cam.center.y * 100.0) as i64, (cam.res * 1000.0) as i64),
+        cam: ((cam.center.x * 100.0) as i64, (cam.center.y * 100.0) as i64, (cam.res * 1000.0) as i64, (cam.bearing * 1000.0) as i64),
         size: [(w as f32 * ppp).round() as usize, (h as f32 * ppp).round() as usize],
         draft,
         tiles: 0,
@@ -450,10 +451,11 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if globe_view && !moving && app.map.key.is_some_and(|k| k.draft) {
         ui.ctx().request_repaint();
     }
-    // The GPU backend draws flat, effect-free frames; it re-renders on every change (no
-    // texture-shift trick — meshes re-project in the vertex shader).
+    // The GPU backend draws flat, effect-free, north-up frames; it re-renders on every change
+    // (no texture-shift trick — meshes re-project in the vertex shader).
     let gpu_ok = app.map.gpu_enabled
         && !globe_view
+        && cam.bearing == 0.0
         && app.session.map().view.effects.is_none()
         && app.session.map().view.color_vision == rustgis_engine::map::view::ColorVision::Normal;
     // GPU fast path: during pan/zoom (or a camera animation) with an all-GPU scene (no CPU
@@ -482,7 +484,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // so the next steps are covered too (as MapLibre keeps showing the tiles around the view);
     // when stretched, at the view. Frames are drawn coarser while they're slow, and sharpening
     // ones spaced out by how long the last took, so the motion between them stays smooth.
-    let motion = (stale && interacting && !gpu_ok && !globe_view && app.map.texture.is_some())
+    // Turning the map isn't a shift and a scale: each step is drawn.
+    let turning = app.map.tex_camera.bearing != cam.bearing;
+    let motion = (stale && interacting && !gpu_ok && !globe_view && !turning && app.map.texture.is_some())
         .then(|| {
             let r = tex_rect(app, cam, rect, false);
             let stretch = r.width() as f64 / app.map.tex_size.0.max(1.0);
@@ -505,6 +509,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         && !fast_engaged
         && (motion.is_some()
             || gpu_ok
+            || turning
             || !interacting
             || app.map.texture.is_none()
             || app.map.key.is_some_and(|k| k.rev != key.rev || k.size != key.size))
@@ -676,12 +681,12 @@ fn tex_rect(app: &RustGisApp, cam: Camera, rect: Rect, globe_view: bool) -> Rect
         };
     }
     let (tw, th) = if app.map.tex_size.0 > 0.0 { app.map.tex_size } else { (w, h) };
-    let e0 = old.extent(tw, th);
+    // The frame's corners where they are now (at the same bearing the frame stays upright).
     let to_screen = |x: f64, y: f64| {
-        let (sx, sy) = cam.to_screen(Coord::new(x, y), w, h);
+        let (sx, sy) = cam.to_screen(old.to_map(x, y, tw, th), w, h);
         pos2(rect.min.x + sx as f32, rect.min.y + sy as f32)
     };
-    Rect::from_min_max(to_screen(e0.min_x, e0.max_y), to_screen(e0.max_x, e0.min_y))
+    Rect::from_min_max(to_screen(0.0, 0.0), to_screen(tw, th))
 }
 
 fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
@@ -750,6 +755,13 @@ fn pan(app: &mut RustGisApp, dx: f64, dy: f64, w: f64, h: f64) {
 }
 
 /// Zooms by `factor` about a screen point.
+/// Turns the flat map by `degrees` about the view's centre.
+fn turn_by(app: &mut RustGisApp, degrees: f64) {
+    let cam = &mut app.session.map_mut().camera;
+    let bearing = cam.bearing + degrees;
+    cam.set_bearing(bearing);
+}
+
 fn zoom(app: &mut RustGisApp, factor: f64, x: f64, y: f64, w: f64, h: f64) {
     let m = app.session.map_mut();
     if m.projection == Projection::Globe {
@@ -817,10 +829,22 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             ui.ctx().request_repaint();
         }
     }
-    // Arrow keys pan.
+    // Arrow keys pan; Shift+Left and Shift+Right turn the flat map (as in MapLibre).
     if !ui.ctx().egui_wants_keyboard_input() {
-        let (mut dx, mut dy) = (0.0, 0.0);
+        let (mut dx, mut dy, mut turn) = (0.0, 0.0, 0.0);
+        let flat = globe(app, rect).is_none();
         ui.input(|i| {
+            // Ninety degrees a second, whatever the frame rate.
+            let step = (f64::from(i.stable_dt) * 90.0).clamp(0.0, 15.0);
+            if i.modifiers.shift && flat {
+                if i.key_down(egui::Key::ArrowLeft) {
+                    turn -= step;
+                }
+                if i.key_down(egui::Key::ArrowRight) {
+                    turn += step;
+                }
+                return;
+            }
             if i.key_down(egui::Key::ArrowLeft) {
                 dx += 12.0;
             }
@@ -839,12 +863,30 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             app.map.last_interaction = time;
             app.map.camera_moved = true;
         }
+        if turn != 0.0 {
+            turn_by(app, turn);
+            app.map.last_interaction = time;
+            app.map.camera_moved = true;
+            ui.ctx().request_repaint();
+        }
     }
 
     let shift = ui.input(|i| i.modifiers.shift);
     let middle = ui.input(|i| i.pointer.middle_down());
+    // Dragging with the right button turns the flat map: to the right turns it clockwise, as in
+    // MapLibre.
+    if resp.dragged_by(egui::PointerButton::Secondary) {
+        let dx = resp.drag_delta().x as f64;
+        if dx != 0.0 && globe(app, rect).is_none() {
+            turn_by(app, dx * 0.8);
+            app.map.camera_moved = true;
+            app.map.last_interaction = time;
+        }
+        return;
+    }
     // Drag start.
     if resp.drag_started()
+        && !ui.input(|i| i.pointer.secondary_down())
         && let Some(p) = resp.interact_pointer_pos()
     {
         let kind = if middle {
@@ -1383,7 +1425,16 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         crate::searchbox::paint_marker(p, sp, name, t);
     }
     scale_bar(app, p, rect, t);
-    north_arrow(p, rect, t);
+    // The arrow points north; on a turned map clicking it faces north again.
+    let bearing = if app.session.map().projection.is_globe() { 0.0 } else { app.session.map().camera.bearing };
+    let hit = ui.interact(north_arrow_rect(rect), egui::Id::new("map_north_arrow"), Sense::click());
+    if bearing != 0.0 {
+        let hit = hit.on_hover_text(tl!("Reset north")).on_hover_cursor(egui::CursorIcon::PointingHand);
+        if hit.clicked() {
+            let _ = app.run("map.resetNorth", json!({}));
+        }
+    }
+    north_arrow(p, rect, t, bearing);
     // Attribution.
     let mut att = String::from("Natural Earth");
     for a in &app.map.attribution {
@@ -1432,17 +1483,20 @@ fn scale_bar(app: &RustGisApp, p: &egui::Painter, rect: Rect, t: &Tokens) {
     p.text(pos2(x0 + len, y0 - 3.0), Align2::RIGHT_BOTTOM, rustgis_engine::geom::format_distance(d), regular(10.5), t.text);
 }
 
-fn north_arrow(p: &egui::Painter, rect: Rect, t: &Tokens) {
-    let c = pos2(rect.min.x + 30.0, rect.min.y + 34.0);
+fn north_arrow_rect(rect: Rect) -> Rect {
+    Rect::from_center_size(pos2(rect.min.x + 30.0, rect.min.y + 34.0), vec2(34.0, 34.0))
+}
+
+/// The north arrow, turned to point north on a map facing `bearing`.
+fn north_arrow(p: &egui::Painter, rect: Rect, t: &Tokens, bearing: f64) {
+    let c = north_arrow_rect(rect).center();
+    let (sn, cs) = (-bearing.to_radians() as f32).sin_cos();
+    let at = |x: f32, y: f32| c + vec2(x * cs - y * sn, x * sn + y * cs);
     p.circle_filled(c, 17.0, t.ribbon.gamma_multiply(0.85));
     p.circle_stroke(c, 17.0, Stroke::new(1.0, t.border_strong));
-    p.add(egui::Shape::convex_polygon(vec![c + vec2(0.0, -12.0), c + vec2(6.0, 6.0), c + vec2(0.0, 2.5)], t.text, Stroke::NONE));
-    p.add(egui::Shape::convex_polygon(
-        vec![c + vec2(0.0, -12.0), c + vec2(0.0, 2.5), c + vec2(-6.0, 6.0)],
-        t.text.gamma_multiply(0.4),
-        Stroke::NONE,
-    ));
-    p.text(c + vec2(0.0, 11.5), Align2::CENTER_CENTER, "N", semibold(8.5), t.text);
+    p.add(egui::Shape::convex_polygon(vec![at(0.0, -12.0), at(6.0, 6.0), at(0.0, 2.5)], t.text, Stroke::NONE));
+    p.add(egui::Shape::convex_polygon(vec![at(0.0, -12.0), at(0.0, 2.5), at(-6.0, 6.0)], t.text.gamma_multiply(0.4), Stroke::NONE));
+    p.text(at(0.0, 11.5), Align2::CENTER_CENTER, "N", semibold(8.5), t.text);
 }
 
 fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
