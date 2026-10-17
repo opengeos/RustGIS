@@ -8,7 +8,8 @@
 //! `"exact": true`, whose whole label is the text), `{"type": text}` types into the focused box,
 //! `{"key": "Enter"}` presses a key (egui's key names), `{"dark": true}` switches theme,
 //! `{"drag": [x, y, dx, dy]}` presses the pointer at (x, y) and moves it by (dx, dy), holding
-//! it (shots then catch the map mid-drag; `{"release": true}` lets go),
+//! it (shots then catch the map mid-drag; `{"release": true}` lets go; `"button": "secondary"`
+//! drags with the right button),
 //! `{"rclick": [x, y]}` right-clicks at (x, y) (the map's menu),
 //! `{"scroll": [x, y, dy]}` turns the mouse wheel by `dy` points over (x, y) (negative zooms
 //! out) and runs one frame (shots then catch the map mid-zoom),
@@ -61,6 +62,8 @@ fn main() {
     for _ in 0..6 {
         harness.step();
     }
+    // The button the last drag holds down.
+    let mut held = egui::PointerButton::Primary;
     for l in lines {
         if let Some(p) = l.get("shot").and_then(|v| v.as_str()) {
             for _ in 0..4 {
@@ -127,9 +130,13 @@ fn main() {
                 eprintln!("drag takes [x, y, dx, dy]");
                 continue;
             };
+            held = match l.get("button").and_then(|v| v.as_str()) {
+                Some("secondary") => egui::PointerButton::Secondary,
+                _ => egui::PointerButton::Primary,
+            };
             let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
                 pos,
-                button: egui::PointerButton::Primary,
+                button: held,
                 pressed,
                 modifiers: egui::Modifiers::NONE,
             };
@@ -176,12 +183,7 @@ fn main() {
             harness.step();
         } else if l.get("release").is_some() {
             if let Some(pos) = harness.ctx.input(|i| i.pointer.latest_pos()) {
-                harness.event(egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: egui::Modifiers::NONE,
-                });
+                harness.event(egui::Event::PointerButton { pos, button: held, pressed: false, modifiers: egui::Modifiers::NONE });
             }
             for _ in 0..3 {
                 harness.step();
