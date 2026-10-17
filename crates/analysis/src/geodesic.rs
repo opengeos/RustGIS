@@ -18,6 +18,8 @@ const STRETCH_M: f64 = 300_000.0;
 /// Edges are split to this length before buffering in stretches, so the pieces and the polygon
 /// they join meet along the same path.
 const DENSIFY_M: f64 = 10_000.0;
+/// At most this many vertices are added to one line or ring (four times round the Earth at 10 km).
+const MAX_ADDED: f64 = 16_000.0;
 
 /// A feature's buffer at `metres` (negative shrinks a polygon), in lon/lat; `None` when nothing
 /// is left.
@@ -26,19 +28,17 @@ pub fn geodesic_buffer(g: &Geometry, metres: f64) -> Option<Geometry> {
         return None;
     }
     let mp = match g {
-        Geometry::Point(c) => point(*c, metres, c.x),
-        Geometry::MultiPoint(v) => {
-            let reference = spherical_centre(v)?.x;
-            union(v.iter().filter(|c| c.is_finite()).map(|c| point(*c, metres, reference)).collect())
-        }
+        Geometry::Point(c) => point(*c, metres),
+        Geometry::MultiPoint(v) => union(v.iter().map(|c| point(*c, metres)).collect()),
         Geometry::Line(parts) => lines(&finite(parts), metres),
         Geometry::Polygon(polys) => polygons(&polys.iter().map(|rings| finite(rings)).collect::<Vec<_>>(), metres),
     };
     to_geometry(&mp)
 }
 
-/// An azimuthal equidistant plane whose centre's longitude is within 180° of `reference`, so the
-/// pieces of one feature come back in lon/lat next to each other, even across the antimeridian.
+/// An azimuthal equidistant plane whose centre's longitude is within 180° of `reference`, a
+/// longitude of the coordinates it buffers as written, so the buffer comes back in lon/lat next to
+/// them and to the polygon it may be joined to, even at the antimeridian.
 struct Plane(Aeqd);
 
 impl Plane {
@@ -60,11 +60,11 @@ impl Plane {
     }
 }
 
-fn point(c: Coord, metres: f64, reference: f64) -> MultiPolygon<f64> {
+fn point(c: Coord, metres: f64) -> MultiPolygon<f64> {
     if !c.is_finite() {
         return MultiPolygon::new(vec![]);
     }
-    let plane = Plane::new(c, reference);
+    let plane = Plane::new(c, c.x);
     plane.back(&Point::new(0.0, 0.0).buffer(metres))
 }
 
@@ -72,10 +72,10 @@ fn lines(parts: &[Vec<Coord>], metres: f64) -> MultiPolygon<f64> {
     let all: Vec<Coord> = parts.iter().flatten().copied().collect();
     let Some(centre) = spherical_centre(&all) else { return MultiPolygon::new(vec![]) };
     if fits(&all, centre) {
-        let plane = Plane::new(centre, centre.x);
+        let plane = Plane::new(centre, all.first().map_or(centre.x, |c| c.x));
         return plane.back(&MultiLineString::new(parts.iter().map(|p| plane.line(p)).collect()).buffer(metres));
     }
-    union(stretched(parts, metres, centre.x))
+    union(stretched(parts, metres))
 }
 
 fn polygons(polys: &[Vec<Vec<Coord>>], metres: f64) -> MultiPolygon<f64> {
@@ -94,7 +94,7 @@ fn polygons(polys: &[Vec<Vec<Coord>>], metres: f64) -> MultiPolygon<f64> {
         )
     };
     if fits(&all, centre) {
-        let plane = Plane::new(centre, centre.x);
+        let plane = Plane::new(centre, all.first().map_or(centre.x, |c| c.x));
         return plane.back(&shape(&|r| plane.line(r)).buffer(metres));
     }
     // A buffer distributes over a union: the polygon's buffer is the polygon with its outline's
@@ -102,7 +102,7 @@ fn polygons(polys: &[Vec<Vec<Coord>>], metres: f64) -> MultiPolygon<f64> {
     // edges as the outline's pieces.
     let lonlat = shape(&|r| LineString::new(densify(r).iter().map(|c| GC { x: c.x, y: c.y }).collect()));
     let rings: Vec<Vec<Coord>> = polys.iter().flatten().cloned().collect();
-    let outline = union(stretched(&rings, metres.abs(), centre.x));
+    let outline = union(stretched(&rings, metres.abs()));
     if metres >= 0.0 { lonlat.union(&outline) } else { lonlat.difference(&outline) }
 }
 
@@ -116,7 +116,7 @@ fn fits(pts: &[Coord], centre: Coord) -> bool {
 }
 
 /// The buffers of lines cut into stretches, each buffered in its own plane, in lon/lat.
-fn stretched(parts: &[Vec<Coord>], metres: f64, reference: f64) -> Vec<MultiPolygon<f64>> {
+fn stretched(parts: &[Vec<Coord>], metres: f64) -> Vec<MultiPolygon<f64>> {
     let mut out = Vec::new();
     for part in parts {
         let d = densify(part);
@@ -128,8 +128,8 @@ fn stretched(parts: &[Vec<Coord>], metres: f64, reference: f64) -> Vec<MultiPoly
                 end += 1;
             }
             let Some(stretch) = d.get(start..=end.min(d.len().saturating_sub(1))) else { break };
-            if let Some(centre) = spherical_centre(stretch) {
-                let plane = Plane::new(centre, reference);
+            if let (Some(centre), Some(first)) = (spherical_centre(stretch), stretch.first()) {
+                let plane = Plane::new(centre, first.x);
                 out.push(plane.back(&plane.line(stretch).buffer(metres)));
             }
             // Consecutive stretches share a vertex, so their buffers overlap.
@@ -142,13 +142,14 @@ fn stretched(parts: &[Vec<Coord>], metres: f64, reference: f64) -> Vec<MultiPoly
     out
 }
 
-/// A line with every edge split along its great circle into pieces of at most [`DENSIFY_M`].
+/// A line with every edge split along its great circle into pieces of at most [`DENSIFY_M`], or
+/// longer ones for a line so long it would gain more than [`MAX_ADDED`] vertices.
 fn densify(pts: &[Coord]) -> Vec<Coord> {
+    let step = DENSIFY_M.max(rustgis_geom::geodesic_length_m(pts) / MAX_ADDED);
     let mut out: Vec<Coord> = pts.first().copied().into_iter().collect();
     for w in pts.windows(2) {
         let [a, b] = w else { continue };
-        // At most 4000 pieces (the length of a half great circle at 10 km).
-        let n = (haversine_m(*a, *b) / DENSIFY_M).ceil().clamp(1.0, 4000.0) as usize;
+        let n = (haversine_m(*a, *b) / step).ceil().clamp(1.0, MAX_ADDED) as usize;
         out.extend((1..n).map(|i| geodesic_interpolate(*a, *b, i as f64 / n as f64)));
         out.push(*b);
     }

@@ -1060,6 +1060,20 @@ mod tests {
         let shrunk = buffered(Geometry::Polygon(vec![vec![ring.clone()]]), -100.0);
         all_at(&shrunk, &ring, 100.0);
         assert!(shrunk.iter().flatten().flatten().all(|c| c.x > 0.0 && c.x < 20.0 && c.y > 40.0 && c.y < 60.0));
+
+        // A polygon split at the antimeridian keeps each half's buffer next to the half: buffered
+        // in a projection centred near 180°, the western half came back at 185°, not −175°, and
+        // missed the polygon it was joined to.
+        let half = |w: f64, e: f64| {
+            vec![vec![Coord::new(w, 60.0), Coord::new(e, 60.0), Coord::new(e, 70.0), Coord::new(w, 70.0), Coord::new(w, 60.0)]]
+        };
+        let split = buffered(Geometry::Polygon(vec![half(170.0, 180.0), half(-180.0, -170.0)]), 100.0);
+        assert_eq!(split.len(), 2, "{split:?}");
+        let within = |poly: &Vec<Vec<Coord>>, w: f64, e: f64| poly.iter().flatten().all(|c| (w..=e).contains(&c.x));
+        assert!(split.iter().any(|p| within(p, 165.0, 185.0)) && split.iter().any(|p| within(p, -185.0, -165.0)), "{split:?}");
+        // Two antipodes still have their circles.
+        let ends = buffered(Geometry::MultiPoint(vec![Coord::new(0.0, 0.0), Coord::new(180.0, 0.0)]), 100.0);
+        assert_eq!(ends.len(), 2);
     }
 
     #[test]
