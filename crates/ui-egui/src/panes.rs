@@ -1778,7 +1778,7 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
                 None => {
                     #[cfg(not(target_arch = "wasm32"))]
-                    if crate::widgets::primary_button(ui, tl!("Install GeoLibre tools"), true, vec2(0.0, 28.0)).clicked() {
+                    if crate::widgets::primary_button(ui, tl!("Install Whitebox and GeoLibre tools"), true, vec2(0.0, 28.0)).clicked() {
                         let st = std::sync::Arc::new(std::sync::Mutex::new(Install::default()));
                         app.gp.install = Some(st.clone());
                         app.gp.last = None;
@@ -1899,7 +1899,7 @@ fn geolibre_web_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     ui.spinner();
                     ui.label(egui::RichText::new(tl!("Loading the GeoLibre tools…")).size(11.5));
                 });
-            } else if crate::widgets::primary_button(ui, tl!("Load GeoLibre tools"), true, vec2(0.0, 28.0)).clicked() {
+            } else if crate::widgets::primary_button(ui, tl!("Load Whitebox and GeoLibre tools"), true, vec2(0.0, 28.0)).clicked() {
                 app.gp.last = None;
                 start_geolibre_load(app);
             }
