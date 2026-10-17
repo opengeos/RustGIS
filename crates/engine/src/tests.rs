@@ -906,7 +906,7 @@ fn label_range_placement_lock_and_convert() {
     let mut s = world();
     s.run("labels.enable", &json!({"layer": "Countries", "on": true})).unwrap();
     s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 20_000_000})).unwrap();
-    let view = |s: &Session| View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera };
+    let view = |s: &Session| View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
     let count = |s: &mut Session| {
         let v = view(s);
         crate::render::render(s.map_mut(), &v).unwrap().labels.len()
@@ -982,7 +982,7 @@ fn graphics_draw_shapes_text_and_pictures() {
     assert!(s.run("graphics.add", &json!({"shape": "point", "points": [[0, 0]], "layer": "Cities"})).is_err(), "not a graphics layer");
     // Dynamic text expands when drawn.
     s.run("graphics.add", &json!({"shape": "text", "points": [[10, 50]], "text": "{map} {scale}", "fontSize": 20})).unwrap();
-    let view = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera };
+    let view = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
     let r = crate::render::render(s.map_mut(), &view).unwrap();
     assert!(
         r.labels.iter().any(|l| l.text.starts_with("World 1:") && l.size == 20.0),
@@ -995,7 +995,7 @@ fn graphics_draw_shapes_text_and_pictures() {
     let b64 = base64::engine::general_purpose::STANDARD.encode(png.encode_png().unwrap());
     s.run("graphics.add", &json!({"shape": "picture", "points": [[0, 45], [10, 55]], "image": b64})).unwrap();
     assert!(s.run("graphics.add", &json!({"shape": "picture", "points": [[0, 45], [10, 55]], "image": "bm90IGFuIGltYWdl"})).is_err());
-    let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera };
+    let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
     let r = crate::render::render(s.map_mut(), &v).unwrap();
     let (x, y) = v.to_screen(rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(5.0, 50.0)));
     let px = r.pixmap.pixel(x as u32, y as u32).unwrap();
@@ -1950,7 +1950,7 @@ fn layer_effects_and_imagery_tools() {
     s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
     let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
     s.run("map.goToXY", &json!({"lon": 10.0, "lat": 48.0, "scale": 20_000_000})).unwrap();
-    let view = |s: &Session| View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: s.map().camera };
+    let view = |s: &Session| View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
     let png = |s: &mut Session| {
         let v = view(s);
         crate::render::render(s.map_mut(), &v).unwrap().pixmap
@@ -2067,7 +2067,7 @@ fn the_globe_has_stars_that_turn_off() {
     s.run("map.viewMode", &json!({"mode": "global"})).unwrap();
     // The space in the corner, away from the globe.
     let corner = |s: &mut Session| {
-        let v = View { width: 1200.0, height: 800.0, pixels_per_point: 1.0, camera: s.map().camera };
+        let v = View { width: 1200.0, height: 800.0, pixels_per_point: 1.0, camera: s.map().camera, sky: true };
         let pm = crate::render::render(s.map_mut(), &v).unwrap().pixmap;
         let mut px = Vec::new();
         for y in 0..150 {
@@ -2091,12 +2091,46 @@ fn the_globe_has_stars_that_turn_off() {
 }
 
 #[test]
+fn exports_draw_the_globe_in_light_space() {
+    // #352: the dark, starry space is the interactive view's; exports and layouts print a light
+    // one, as globe insets on a light page need.
+    let mut s = world();
+    s.run("map.viewMode", &json!({"mode": "global"})).unwrap();
+    let rgb = |pm: &tiny_skia::Pixmap, x: u32, y: u32| pm.pixel(x, y).map(|c| (c.red(), c.green(), c.blue())).unwrap();
+    let corner = |s: &mut Session| {
+        let png = crate::cmd::share::map_png(s, Some(1200.0), Some(800.0), None).unwrap();
+        let pm = crate::render::decode_png(&png).unwrap();
+        let px: Vec<_> = (0..100).flat_map(|y| (0..100).map(move |x| (x, y))).map(|(x, y)| rgb(&pm, x, y)).collect();
+        px
+    };
+    let light = corner(&mut s);
+    assert!(light.iter().all(|p| *p == (0xEC, 0xEF, 0xF3)), "light space without stars: {:?}", light[0]);
+    // The Midnight basemap keeps a dark space, still without stars.
+    s.run("map.basemap", &json!({"name": "midnight"})).unwrap();
+    let dark = corner(&mut s);
+    assert!(dark.iter().all(|p| *p == (0x08, 0x0B, 0x10)), "dark space without stars: {:?}", dark[0]);
+    s.run("map.basemap", &json!({"name": "paper"})).unwrap();
+    // A layout's map frame on the globe map: the space in its corner is light too.
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "blank"})).unwrap();
+    s.run("layout.addFrame", &json!({"x": 20, "y": 20, "w": 150, "h": 150})).unwrap();
+    let dir = std::env::temp_dir().join(format!("rustgis-globe-space-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("inset.png");
+    s.run("layout.export", &json!({"path": path.display().to_string(), "dpi": 72})).unwrap();
+    let pm = crate::render::decode_png(&std::fs::read(&path).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    // 25 mm from the page's corner: 5 mm inside the frame's.
+    let at = (25.0 * 72.0 / 25.4) as u32;
+    assert_eq!(rgb(&pm, at, at), (0xEC, 0xEF, 0xF3), "a light space around the globe in the layout");
+}
+
+#[test]
 fn view_effects_scene_and_navigation() {
     use crate::render::View;
     let mut s = world();
     s.run("map.goToXY", &json!({"lon": 10.0, "lat": 48.0, "scale": 20_000_000})).unwrap();
     let png = |s: &mut Session| {
-        let v = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera: s.map().camera };
+        let v = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
         crate::render::render(s.map_mut(), &v).unwrap().pixmap.data().to_vec()
     };
     let plain = png(&mut s);
@@ -3077,7 +3111,7 @@ fn grid_fgb(name: &str, n: usize) -> std::path::PathBuf {
 fn view_of(s: &mut Session, e: rustgis_geom::Extent) -> crate::render::View {
     s.view_size = (800.0, 600.0);
     s.zoom_to(&e);
-    crate::render::View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera }
+    crate::render::View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false }
 }
 
 #[test]
@@ -3599,7 +3633,7 @@ fn mbtiles_archives_become_tile_layers() {
 
     let draws_red = |s: &mut Session| {
         s.run("map.goToXY", &json!({"lon": 10.0, "lat": 20.0, "scale": 50_000_000})).unwrap();
-        let v = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera: s.map().camera };
+        let v = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
         let mut px = None;
         for _ in 0..50 {
             let r = crate::render::render(s.map_mut(), &v).unwrap();

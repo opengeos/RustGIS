@@ -41,7 +41,7 @@ fn main() {
         // Let streamed sources settle at the first view (they read in the background).
         let cam0 = Camera { center: Coord::new((e.min_x + e.max_x) / 2.0, (e.min_y + e.max_y) / 2.0), res: res0 };
         let t = Instant::now();
-        if !settle(&mut s, &View { width: w, height: h, pixels_per_point: ppp, camera: cam0 }) {
+        if !settle(&mut s, &View { width: w, height: h, pixels_per_point: ppp, camera: cam0, sky: false }) {
             println!("  still reading after 10 s; skipped");
             continue;
         }
@@ -50,7 +50,7 @@ fn main() {
         for z in 0..9 {
             let res = res0 / 2f64.powi(z);
             let camera = Camera { center: cam0.center, res };
-            let view = View { width: w, height: h, pixels_per_point: ppp, camera };
+            let view = View { width: w, height: h, pixels_per_point: ppp, camera, sky: false };
             // Streamed layers read what this view shows first.
             if !settle(&mut s, &view) {
                 println!("  zoom +{z}: still reading after 10 s; skipped");

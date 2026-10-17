@@ -97,7 +97,7 @@ impl GlobeDrape {
             let boxes = g.drape_extents(w, h, margin);
             let max_side = ctx.input(|i| i.max_texture_side).clamp(256, 4096) as u32;
             let camera = rustgis_engine::map::Camera { res: detail, ..map.camera };
-            let view = View { width: w, height: h, pixels_per_point: f64::from(drape_ppp), camera };
+            let view = View { width: w, height: h, pixels_per_point: f64::from(drape_ppp), camera, sky: true };
             let pictures = render::render_globe_drape(map, &view, &boxes, max_side);
             if pictures.is_empty() {
                 self.drape = None;
@@ -145,7 +145,7 @@ impl GlobeDrape {
     /// where the settled frame draws them (laid edge to edge from the top left corner), at `ppp`
     /// pixels per point.
     pub fn paint_space(&mut self, ctx: &egui::Context, painter: &Painter, rect: Rect, map: &Map, ppp: f32) {
-        painter.rect_filled(rect, 0.0, c32(render::globe_space()));
+        painter.rect_filled(rect, 0.0, c32(render::globe_space(true)));
         if !map.view.effects.stars {
             return;
         }

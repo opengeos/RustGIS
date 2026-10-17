@@ -126,6 +126,9 @@ pub struct View {
     /// Physical pixels per logical point.
     pub pixels_per_point: f64,
     pub camera: Camera,
+    /// The interactive view: the globe sits in dark, starry space. Exports and layouts leave it
+    /// off and get a light space that suits paper (a dark one only on the Midnight basemap).
+    pub sky: bool,
 }
 
 impl View {
@@ -987,7 +990,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
     // Basemap.
     let (water, land, outline, grat) = map.basemap.palette();
     match &globe {
-        Some(g) => globe_backdrop(&mut pm, g, water, map.view.effects.stars, view.pixels_per_point as f32),
+        Some(g) => globe_backdrop(&mut pm, g, water, space(view, map), view.pixels_per_point as f32),
         None if !gpu => pm.fill(tiny_skia::Color::from_rgba8(water.r(), water.g(), water.b(), 255)),
         // The Gpu scene carries the water backdrop as its clear colour instead — an
         // always-full-screen Image here would poison `has_images` and kill the camera
@@ -1339,7 +1342,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
         }
     }
     if let Some(g) = &globe {
-        globe_shading(&mut pm, g, water, map.view.effects.stars, view.pixels_per_point as f32);
+        globe_shading(&mut pm, g, water, space(view, map), view.pixels_per_point as f32);
     }
     // Tile labels, after every layer's own.
     if lock.is_none() {
@@ -1488,9 +1491,23 @@ fn layer_masks(map: &mut Map, ctx: &Ctx, w: u32, h: u32, flat: &rustgis_map::pro
     out
 }
 
-/// The colour of the space around the globe.
-pub fn globe_space() -> Rgba {
-    Rgba::rgb(0x08, 0x0B, 0x10)
+/// The colour of the space around the globe: the dark sky, or the light space of exports.
+pub fn globe_space(dark: bool) -> Rgba {
+    if dark { Rgba::rgb(0x08, 0x0B, 0x10) } else { Rgba::rgb(0xEC, 0xEF, 0xF3) }
+}
+
+/// How the space around the globe looks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Space {
+    dark: bool,
+    stars: bool,
+}
+
+/// The space around the globe for `view`: the interactive view's starry sky, or for exports a
+/// light space (dark on the Midnight basemap) without stars.
+fn space(view: &View, map: &Map) -> Space {
+    let dark = view.sky || map.basemap == rustgis_map::Basemap::Midnight;
+    Space { dark, stars: view.sky && map.view.effects.stars }
 }
 
 /// Side of the starfield tile in logical points: the stars repeat this far apart.
@@ -1561,7 +1578,7 @@ fn draw_stars(pm: &mut Pixmap, ppp: f32) {
 /// The globe's backdrop and lighting depend only on the view size, zoom, ocean and stars, not on
 /// the rotation, so they are drawn once and reused while the globe turns.
 struct GlobeLayers {
-    key: (u32, u32, u32, u32, u32, u32, [u8; 4], bool),
+    key: (u32, u32, u32, u32, u32, u32, [u8; 4], Space),
     backdrop: Pixmap,
     shading: Pixmap,
 }
@@ -1570,7 +1587,7 @@ thread_local! {
     static GLOBE_LAYERS: std::cell::RefCell<Option<GlobeLayers>> = const { std::cell::RefCell::new(None) };
 }
 
-fn with_globe_layers(pm: &mut Pixmap, g: &Globe, water: Rgba, stars: bool, ppp: f32, f: impl FnOnce(&mut Pixmap, &GlobeLayers)) {
+fn with_globe_layers(pm: &mut Pixmap, g: &Globe, water: Rgba, space: Space, ppp: f32, f: impl FnOnce(&mut Pixmap, &GlobeLayers)) {
     let (cx, cy) = g.center();
     let key = (
         pm.width(),
@@ -1580,7 +1597,7 @@ fn with_globe_layers(pm: &mut Pixmap, g: &Globe, water: Rgba, stars: bool, ppp: 
         (cy as f32).to_bits(),
         (g.disc_radius() as f32).to_bits(),
         water.0,
-        stars,
+        space,
     );
     GLOBE_LAYERS.with(|cell| {
         let mut cache = cell.borrow_mut();
@@ -1589,7 +1606,7 @@ fn with_globe_layers(pm: &mut Pixmap, g: &Globe, water: Rgba, stars: bool, ppp: 
             else {
                 return;
             };
-            draw_globe_backdrop(&mut backdrop, g, water, stars, ppp);
+            draw_globe_backdrop(&mut backdrop, g, water, space, ppp);
             draw_globe_shading(&mut shading, g, ppp);
             *cache = Some(GlobeLayers { key, backdrop, shading });
         }
@@ -1599,36 +1616,37 @@ fn with_globe_layers(pm: &mut Pixmap, g: &Globe, water: Rgba, stars: bool, ppp: 
     });
 }
 
-fn globe_backdrop(pm: &mut Pixmap, g: &Globe, water: Rgba, stars: bool, ppp: f32) {
-    with_globe_layers(pm, g, water, stars, ppp, |pm, c| pm.data_mut().copy_from_slice(c.backdrop.data()));
+fn globe_backdrop(pm: &mut Pixmap, g: &Globe, water: Rgba, space: Space, ppp: f32) {
+    with_globe_layers(pm, g, water, space, ppp, |pm, c| pm.data_mut().copy_from_slice(c.backdrop.data()));
 }
 
-fn globe_shading(pm: &mut Pixmap, g: &Globe, water: Rgba, stars: bool, ppp: f32) {
-    with_globe_layers(pm, g, water, stars, ppp, |pm, c| {
+fn globe_shading(pm: &mut Pixmap, g: &Globe, water: Rgba, space: Space, ppp: f32) {
+    with_globe_layers(pm, g, water, space, ppp, |pm, c| {
         pm.draw_pixmap(0, 0, c.shading.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
     });
 }
 
-/// The globe's surroundings and ocean: space (starry, when `stars`), an atmosphere glow, and the
-/// ocean disc.
-fn draw_globe_backdrop(pm: &mut Pixmap, g: &Globe, water: Rgba, stars: bool, ppp: f32) {
-    let bg = globe_space();
+/// The globe's surroundings and ocean: space (dark or light, starry when it says so), an
+/// atmosphere glow, and the ocean disc.
+fn draw_globe_backdrop(pm: &mut Pixmap, g: &Globe, water: Rgba, space: Space, ppp: f32) {
+    let bg = globe_space(space.dark);
     pm.fill(tiny_skia::Color::from_rgba8(bg.r(), bg.g(), bg.b(), 255));
-    if stars {
+    if space.stars {
         draw_stars(pm, ppp);
     }
     let (cx, cy) = g.center();
-    draw_globe_disc(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp, water);
+    draw_globe_disc(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp, water, space.dark);
 }
 
 /// The atmosphere glow and the ocean disc, for a disc of radius `r` pixels at (`cx`, `cy`).
-fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, water: Rgba) {
+fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, water: Rgba, dark: bool) {
     if !(r.is_finite() && r > 0.5 && cx.is_finite() && cy.is_finite()) {
         return;
     }
     // Atmosphere: a glow fading out just beyond the limb.
     let glow_r = r * 1.07;
-    let glow = (0x5A, 0x9B, 0xF0, 150);
+    // A softer, paler glow on light space.
+    let glow = if dark { (0x5A, 0x9B, 0xF0, 150) } else { (0x7F, 0xB4, 0xE8, 120) };
     if let Some(shader) = RadialGradient::new(
         Point::from_xy(cx, cy),
         0.0,
@@ -1698,7 +1716,7 @@ pub fn globe_sprites(basemap: rustgis_map::Basemap, r: f32) -> Option<(Pixmap, P
     let side = (2.0 * GLOBE_GLOW * r.min(2048.0)).round().max(2.0);
     let (r, c) = (side / (2.0 * GLOBE_GLOW), side / 2.0);
     let (mut under, mut over) = (Pixmap::new(side as u32, side as u32)?, Pixmap::new(side as u32, side as u32)?);
-    draw_globe_disc(&mut under, c, c, r, basemap.palette().0);
+    draw_globe_disc(&mut under, c, c, r, basemap.palette().0, true);
     draw_globe_light(&mut over, c, c, r);
     Some((under, over))
 }
@@ -1738,7 +1756,7 @@ pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side
             continue;
         }
         let camera = Camera { center: merc.center(), res };
-        let v = View { width: w, height: h, pixels_per_point: ppp, camera };
+        let v = View { width: w, height: h, pixels_per_point: ppp, camera, sky: false };
         // The picture is given the box asked for, though rounding to whole points made it show
         // up to a point less: stretched by under a point, its edges stay exactly where asked, so
         // one at the Web Mercator limit is still stretched on to the pole (drape_mesh).
@@ -1934,7 +1952,7 @@ mod tests {
         m.projection = rustgis_map::Projection::Globe;
         let paris = lonlat_to_merc(Coord::new(2.35, 48.85));
         let camera = Camera { center: paris, res: 2_000.0 };
-        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
         let boxes = Globe::new(&camera, 400.0, 300.0).drape_extents(400.0, 300.0, 0.25);
         let patches = render_globe_drape(&mut m, &view, &boxes, 4096);
         assert_eq!(patches.len(), 1);
@@ -1997,7 +2015,7 @@ mod tests {
             l.selection = vec![0];
         }
         let camera = Camera { center: lonlat_to_merc(Coord::new(2.35, 48.85)), res: 5000.0 };
-        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
         let r = render(&mut m, &view).unwrap();
         assert_eq!(r.labels.len(), 1);
         assert_eq!(r.labels[0].text, "Paris");
@@ -2010,7 +2028,7 @@ mod tests {
     fn degenerate_views_do_not_panic() {
         let mut m = Map::new("Map");
         for (w, h) in [(0.0, 0.0), (1e9, 1e9), (f64::NAN, 3.0)] {
-            let view = View { width: w, height: h, pixels_per_point: 1.0, camera: Camera::world() };
+            let view = View { width: w, height: h, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
             let _ = render(&mut m, &view);
         }
     }
@@ -2047,7 +2065,7 @@ mod tests {
     #[test]
     fn world_atlas_pixmap_is_byte_stable() {
         let mut m = sample_world();
-        let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
         let r = render(&mut m, &view).expect("render");
         assert_eq!(r.pixmap.data().len(), 800 * 500 * 4);
         let h = fnv1a(r.pixmap.data());
@@ -2088,7 +2106,7 @@ mod tests {
         if let Some(l) = m.layers.iter_mut().find(|l| l.name == "Cities") {
             l.labels.enabled = true;
         }
-        let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
         let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
         let kinds = cmd_kinds(&scene);
         assert!(kinds.iter().filter(|k| **k == "mesh").count() >= 2, "countries/lakes/rivers as meshes: {kinds:?}");
@@ -2113,7 +2131,7 @@ mod tests {
         if let Some(l) = m.layer_mut(b) {
             l.blend = rustgis_map::effects::Blend::Multiply;
         }
-        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
         let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
         let kinds = cmd_kinds(&scene);
         let last_image = kinds.iter().rposition(|k| *k == "image").expect("the blended layer's cpu image");
@@ -2128,7 +2146,7 @@ mod tests {
         for t in &mut m.tiles {
             t.visible = false;
         }
-        let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
         let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
         assert!(!scene.cmds.iter().any(|c| matches!(c, gpu_scene::DrawCmd::Image { .. })), "hidden tiles must not emit an empty image");
     }
@@ -2149,7 +2167,7 @@ mod tests {
             }
             m
         };
-        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
         let mut three = build(3);
         let Some(RenderOutput::Gpu(scene)) = render_backend(&mut three, &view, Backend::Gpu) else { panic!("3 blends stays gpu") };
         assert_eq!(scene.cmds.iter().filter(|c| matches!(c, gpu_scene::DrawCmd::Image { .. })).count(), 3);
@@ -2167,7 +2185,7 @@ mod tests {
         if let Some(l) = m.layer_mut(id) {
             l.selection = vec![0];
         }
-        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
         let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
         let kinds = cmd_kinds(&scene);
         assert_eq!(kinds.last(), Some(&"mesh"), "the highlight mesh follows the layer: {kinds:?}");
@@ -2177,7 +2195,7 @@ mod tests {
     #[test]
     fn gpu_scene_carries_backdrop_as_clear_color_and_no_image_for_pure_vectors() {
         let mut m = sample_world();
-        let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
         let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
         assert!(
             !scene.cmds.iter().any(|c| matches!(c, gpu_scene::DrawCmd::Image { .. })),
@@ -2205,7 +2223,7 @@ mod tests {
                 marker: rustgis_map::Marker::Circle,
             });
         }
-        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
         let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
         for c in &scene.cmds {
             if let gpu_scene::DrawCmd::Mesh { vertices, .. } = c {
@@ -2235,7 +2253,7 @@ mod tests {
             square_layer(&mut m, "good", 30.0, 0.0, 10.0);
             m
         };
-        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
         let mut gm = build();
         let Some(RenderOutput::Gpu(scene)) = render_backend(&mut gm, &view, Backend::Gpu) else { panic!("gpu scene") };
         assert!(cmd_kinds(&scene).contains(&"mesh"), "the healthy layer tessellated");
@@ -2246,7 +2264,7 @@ mod tests {
     #[test]
     fn gpu_backend_falls_back_for_globe_and_effects() {
         let mut m = sample_world();
-        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world() };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
         m.projection = rustgis_map::Projection::Globe;
         assert!(matches!(render_backend(&mut m, &view, Backend::Gpu), Some(RenderOutput::Cpu(_))), "globe stays on the CPU renderer");
         m.projection = rustgis_map::Projection::WebMercator;
@@ -2261,7 +2279,7 @@ mod tests {
         let mut m = Map::new("Map");
         for res in [0.05, 0.008, 0.001, 1e-5] {
             let camera = Camera { center: lonlat_to_merc(Coord::new(-122.2585, 37.8719)), res };
-            let view = View { width: 1600.0, height: 1000.0, pixels_per_point: 1.0, camera };
+            let view = View { width: 1600.0, height: 1000.0, pixels_per_point: 1.0, camera, sky: false };
             assert!(render(&mut m, &view).is_some(), "{res}");
         }
     }
@@ -2286,7 +2304,13 @@ mod tests {
 
     #[test]
     fn stamped_markers_match_drawn_ones() {
-        let view = View { width: 120.0, height: 80.0, pixels_per_point: 1.0, camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0 } };
+        let view = View {
+            width: 120.0,
+            height: 80.0,
+            pixels_per_point: 1.0,
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0 },
+            sky: false,
+        };
         let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
         for marker in Marker::ALL {
             let s = Symbol { fill: Rgba::new(200, 60, 30, 200), stroke: Rgba::rgb(20, 20, 20), stroke_width: 1.2, size: 9.0, marker };
@@ -2311,7 +2335,13 @@ mod tests {
 
     #[test]
     fn only_features_still_under_a_pixel_with_their_outline_are_splatted() {
-        let view = View { width: 100.0, height: 100.0, pixels_per_point: 2.0, camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0 } };
+        let view = View {
+            width: 100.0,
+            height: 100.0,
+            pixels_per_point: 2.0,
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0 },
+            sky: false,
+        };
         let ctx = Ctx { view: &view, ppp: 2.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
         let ring = vec![Coord::new(0.0, 0.0), Coord::new(0.25, 0.0), Coord::new(0.25, 0.25), Coord::new(0.0, 0.25), Coord::new(0.0, 0.0)];
         let g = Geometry::Polygon(vec![vec![ring]]);
@@ -2346,7 +2376,7 @@ mod tests {
         let id = m.add_dataset(d);
         let sym = m.layer(id).map(|l| l.symbol(0)).unwrap();
         let camera = Camera { center: lonlat_to_merc(Coord::new(0.5, 0.5)), res: 2000.0 };
-        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
         let r = render(&mut m, &view).unwrap();
         let px = |x: u32, y: u32| r.pixmap.pixel(x, y).unwrap();
         let (centre, corner) = (px(100, 100), px(2, 2));

@@ -749,7 +749,7 @@ mod tests {
     use rustgis_engine::render::{self, Backend, RenderOutput, View};
 
     fn world_view() -> View {
-        View { width: 640.0, height: 400.0, pixels_per_point: 1.0, camera: Camera::world() }
+        View { width: 640.0, height: 400.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false }
     }
 
     /// Renders the GpuScene into an offscreen texture and reads it back (premultiplied RGBA,
@@ -929,7 +929,13 @@ mod tests {
                 m.projection = rustgis_engine::map::Projection::Custom("northPolar".into());
                 m
             },
-            &View { width: 640.0, height: 400.0, pixels_per_point: 1.0, camera: Camera { center: Coord::new(0.0, 0.0), res: 15_000.0 } },
+            &View {
+                width: 640.0,
+                height: 400.0,
+                pixels_per_point: 1.0,
+                camera: Camera { center: Coord::new(0.0, 0.0), res: 15_000.0 },
+                sky: false,
+            },
         );
     }
 

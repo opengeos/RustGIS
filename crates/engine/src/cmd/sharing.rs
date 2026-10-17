@@ -483,7 +483,7 @@ fn web_map_html(m: &Map, title: &str) -> Result<String, String> {
             let px = 1600.0f64;
             let (vw, vh) = if w >= h { (px, (px * h / w.max(1e-9)).max(1.0)) } else { ((px * w / h.max(1e-9)).max(1.0), px) };
             let camera = rustgis_map::Camera { center: Coord::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0), res: w / vw };
-            let view = rustgis_render::View { width: vw, height: vh, pixels_per_point: 1.0, camera };
+            let view = rustgis_render::View { width: vw, height: vh, pixels_per_point: 1.0, camera, sky: false };
             let png = rustgis_render::render_png(&mut only, &view)?;
             pictures += png.len();
             if pictures > MAX_PAGE_PICTURES {

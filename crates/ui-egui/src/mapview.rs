@@ -298,7 +298,7 @@ fn split_view(app: &mut RustGisApp, ui: &mut Ui, other: usize, rect: Rect, t: &T
     let ppp = ui.ctx().pixels_per_point();
     let revision = app.session.revision;
     let Some(m) = app.session.project.maps.get_mut(other) else { return };
-    let view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: m.camera };
+    let view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: m.camera, sky: true };
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, c32(m.basemap.palette().0));
     let key = [other as f64, revision as f64, m.camera.center.x, m.camera.center.y, m.camera.res, w, h, f64::from(ppp)];
@@ -510,7 +510,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             || app.map.key.is_some_and(|k| k.rev != key.rev || k.size != key.size))
     {
         let t0 = web_time::Instant::now();
-        let view = View { width: w, height: h, pixels_per_point: render_ppp as f64, camera: cam };
+        let view = View { width: w, height: h, pixels_per_point: render_ppp as f64, camera: cam, sky: true };
         let mut rendered_gpu = false;
         if gpu_ok {
             if app.map.gpu_renderer.is_none()
@@ -548,7 +548,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         // no render state arrived yet.
         if !rendered_gpu {
             app.map.gpu_frame = None;
-            let view = View { width: vw, height: vh, pixels_per_point: vppp as f64, camera: cam };
+            let view = View { width: vw, height: vh, pixels_per_point: vppp as f64, camera: cam, sky: true };
             if let Some(r) = rustgis_engine::render::render(app.session.map_mut(), &view) {
                 let size = [r.pixmap.width() as usize, r.pixmap.height() as usize];
                 let img = egui::ColorImage::from_rgba_premultiplied(size, r.pixmap.data());

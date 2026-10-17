@@ -184,8 +184,9 @@ graphics card, so it moves smoothly whatever the basemap; labels come back, and 
 drawn exactly, as soon as it stops.
 
 The globe hangs in dark space, in the light theme too, with stars around it and now and then a
-shooting star passing behind it. **View › Visual Effect › Stars** turns them off (exports show
-the stars but never the shooting stars).
+shooting star passing behind it. **View › Visual Effect › Stars** turns them off. Exported maps
+and layout map frames print the globe in a light space instead, without stars, so a globe inset
+suits a light page (on the Midnight basemap the space stays dark).
 
 ## View effects
 
