@@ -1084,14 +1084,17 @@ fn map_context_menu_copies_the_clicked_coordinates() {
     for _ in 0..4 {
         h.step();
     }
+    // The menu's first row is the place, as "lat, lon".
+    let c = h.state().map.menu_lonlat.expect("a place under the pointer");
+    let label = format!("{:.6}, {:.6}", c.y, c.x);
     // Moving onto the menu leaves the map: the item must stay.
-    h.get_by_label("Copy Coordinates").hover();
+    h.get_by_label(&label).hover();
     for _ in 0..4 {
         h.step();
     }
-    h.get_by_label("Copy Coordinates").click();
+    h.get_by_label(&label).click();
     h.step();
-    let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t.contains(", ")));
+    let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if *t == label));
     assert!(copied, "nothing copied");
 }
 
