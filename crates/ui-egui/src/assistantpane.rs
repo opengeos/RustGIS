@@ -36,6 +36,8 @@ pub struct AssistantState {
     show_key: bool,
     /// Keys are saved with the preferences only when the user says so.
     remember_key: bool,
+    /// The AI provider section of the settings is folded away (kept in the preferences).
+    provider_closed: bool,
     models: Vec<String>,
     catalog: Vec<provider::Model>,
     /// The catalog is fetched once per provider/account selection.
@@ -145,6 +147,8 @@ fn ensure_loaded(app: &mut RustGisApp) {
         cfg.model = m.trim().to_string();
     }
     app.assistant.settings = cfg.missing().is_some();
+    // A provider still to be set up shows its fields.
+    app.assistant.provider_closed = cfg.missing().is_none() && pref(app, "assistant_provider_closed").as_deref() == Some("on");
     if cfg.login() && !cfg.key.is_empty() {
         app.assistant.account = signed_in_account();
     }
@@ -626,7 +630,37 @@ fn composer_panel(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, busy: bool, ctx
 fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let Some(mut cfg) = app.assistant.agent.as_ref().map(|a| a.config.clone()) else { return };
     let before = (cfg.clone(), app.assistant.remember_key);
-    ui.label(RichText::new(tl!("AI provider")).font(semibold(12.5)));
+    let open = !app.assistant.provider_closed;
+    let section = egui::CollapsingHeader::new(RichText::new(tl!("AI provider")).font(semibold(12.5)))
+        .id_salt("assistant_provider_section")
+        .open(Some(open))
+        .show(ui, |ui| provider_settings(app, ui, t, &mut cfg));
+    if section.header_response.clicked() {
+        app.assistant.provider_closed = open;
+        save_pref(app, "assistant_provider_closed", if open { "on" } else { "" });
+    }
+    if let Some(why) = cfg.missing() {
+        ui.label(RichText::new(tl!(why)).small().color(t.amber));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    local_agents_setting(app, ui, t);
+    #[cfg(not(target_arch = "wasm32"))]
+    skills_setting(app, ui, t);
+    // Agents on this computer working on this map through the MCP relay (desktop).
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::connectui::section(app, ui, t);
+    if cfg.login() {
+        provider::use_catalog(&mut cfg, &app.assistant.catalog, true);
+    }
+    if (cfg.clone(), app.assistant.remember_key) != before {
+        app.assistant.unsaved = true;
+        apply_config(app, cfg);
+    }
+}
+
+/// The settings' AI provider section: the provider, account, model, address and key, with
+/// notes on where they're kept and what is sent.
+fn provider_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Config) {
     egui::Grid::new("assistant_settings").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Provider"));
         let current = provider::preset(&cfg.provider).map_or("", |p| p.label);
@@ -641,7 +675,7 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     {
                         app.assistant.login = None;
                     }
-                    cfg = load_config(app, p.id);
+                    *cfg = load_config(app, p.id);
                     app.assistant.models_slot = None;
                     app.assistant.models.clear();
                     app.assistant.catalog.clear();
@@ -650,7 +684,7 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     if cfg.login() && !cfg.key.is_empty() {
                         app.assistant.account = signed_in_account();
                         let ctx = ui.ctx().clone();
-                        list_models(app, &cfg, &ctx);
+                        list_models(app, cfg, &ctx);
                     }
                 }
             }
@@ -658,7 +692,7 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.end_row();
         if cfg.login() {
             ui.label(tl!("Account"));
-            ui.vertical(|ui| account_row(app, ui, t, &mut cfg));
+            ui.vertical(|ui| account_row(app, ui, t, cfg));
             ui.end_row();
         }
         ui.label(tl!("Model"));
@@ -694,7 +728,7 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     .clicked()
                 {
                     let ctx = ui.ctx().clone();
-                    list_models(app, &cfg, &ctx);
+                    list_models(app, cfg, &ctx);
                 }
             });
         });
@@ -749,10 +783,6 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     for n in notes {
         ui.label(RichText::new(n).small().color(t.text_dim));
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    local_agents_setting(app, ui, t);
-    #[cfg(not(target_arch = "wasm32"))]
-    skills_setting(app, ui, t);
     if let Some(p) = preset.filter(|p| !p.key_url.is_empty() && !p.login) {
         ui.hyperlink_to(RichText::new(if p.keyless { tl!("Get it") } else { tl!("Get a key") }).small(), p.key_url);
     }
@@ -764,19 +794,6 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     if let Some(e) = &app.assistant.login_error {
         show_error(ui, e, t);
-    }
-    if let Some(why) = cfg.missing() {
-        ui.label(RichText::new(tl!(why)).small().color(t.amber));
-    }
-    // Agents on this computer working on this map through the MCP relay (desktop).
-    #[cfg(not(target_arch = "wasm32"))]
-    crate::connectui::section(app, ui, t);
-    if cfg.login() {
-        provider::use_catalog(&mut cfg, &app.assistant.catalog, true);
-    }
-    if (cfg.clone(), app.assistant.remember_key) != before {
-        app.assistant.unsaved = true;
-        apply_config(app, cfg);
     }
 }
 
@@ -1488,6 +1505,36 @@ mod tests {
         h.run();
         assert!(h.query_by_label("Address").is_some());
         assert!(h.query_by_label("API key").is_some());
+    }
+
+    /// The AI provider section folds away once set up, and the choice is saved.
+    #[test]
+    fn provider_section_collapses_and_is_remembered() {
+        use egui_kittest::kittest::Queryable;
+        use std::sync::{Arc, Mutex};
+        let mut app = plan_app();
+        let saved = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        let log = saved.clone();
+        app.services.save_pref = Some(Box::new(move |k, v| log.lock().unwrap().push((k.to_string(), v.to_string()))));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run();
+        assert!(h.query_by_label("Provider").is_some());
+        h.get_by_label("AI provider").click();
+        h.run();
+        assert!(h.query_by_label("Provider").is_none());
+        assert!(h.state().assistant.provider_closed);
+        assert!(saved.lock().unwrap().contains(&("assistant_provider_closed".into(), "on".into())));
+        h.get_by_label("AI provider").click();
+        h.run();
+        assert!(h.query_by_label("Provider").is_some());
+        assert!(saved.lock().unwrap().contains(&("assistant_provider_closed".into(), String::new())));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
