@@ -1422,7 +1422,7 @@ fn map_ground_res(view: &View, flat: &rustgis_map::projection::Flat) -> f64 {
     (view.camera.res * flat.ground_per_unit(view.camera.center)).max(1e-9)
 }
 
-fn blend_mode(b: rustgis_map::effects::Blend) -> tiny_skia::BlendMode {
+pub(crate) fn blend_mode(b: rustgis_map::effects::Blend) -> tiny_skia::BlendMode {
     use rustgis_map::effects::Blend;
     match b {
         Blend::Normal => tiny_skia::BlendMode::SourceOver,

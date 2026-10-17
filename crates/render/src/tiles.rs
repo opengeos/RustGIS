@@ -5,10 +5,11 @@
 //! into place pixel by pixel.
 
 use rustgis_geom::{Coord, Extent, MAX_LAT, lonlat_to_merc};
+use rustgis_map::effects::Blend;
 use rustgis_map::projection::Flat;
 use rustgis_map::{Map, Rgba, TileKind, TileLayer};
 use rustgis_tiles::{Frame, Kind, Spec};
-use tiny_skia::Pixmap;
+use tiny_skia::{Pixmap, PixmapPaint, Transform};
 
 use crate::raster::Place;
 use crate::{PlacedIcon, PlacedLabel, View};
@@ -107,7 +108,7 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
             ppp,
         };
         for t in layers {
-            let d = rustgis_tiles::draw(pm, &spec(t), t.opacity, &frame, labels);
+            let d = draw_layer(pm, t, &frame, labels);
             collect(d, &t.name, &mut out);
         }
         return out;
@@ -150,11 +151,26 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
     let mosaic_ppp = if detail > 0.0 { (detail * k / m_per_px) as f32 } else { ppp };
     let frame = Frame { left: e.min_x, top: e.max_y, m_per_px, ppp: mosaic_ppp.clamp(0.05, 8.0) };
     for t in layers {
-        let d = rustgis_tiles::draw(&mut mosaic, &spec(t), t.opacity, &frame, false);
+        let d = draw_layer(&mut mosaic, t, &frame, false);
         collect(d, &t.name, &mut out);
     }
     warp(pm, &mosaic, &frame, &to_lonlat, &to_merc);
     out
+}
+
+/// Draws one tile layer into `pm`: straight in, or (blended) on a layer of its own composited
+/// with its blend mode over what's beneath.
+fn draw_layer(pm: &mut Pixmap, t: &TileLayer, frame: &Frame, labels: bool) -> rustgis_tiles::Drawn {
+    if t.blend == Blend::Normal {
+        return rustgis_tiles::draw(pm, &spec(t), t.opacity, frame, labels);
+    }
+    let Some(mut own) = Pixmap::new(pm.width(), pm.height()) else {
+        return rustgis_tiles::draw(pm, &spec(t), t.opacity, frame, labels);
+    };
+    let d = rustgis_tiles::draw(&mut own, &spec(t), t.opacity, frame, labels);
+    let paint = PixmapPaint { blend_mode: crate::blend_mode(t.blend), ..PixmapPaint::default() };
+    pm.draw_pixmap(0, 0, own.as_ref(), &paint, Transform::identity(), None);
+    d
 }
 
 /// Draws the mosaic over `pm`: each pixel takes the mosaic pixel under its longitude/latitude.
@@ -250,5 +266,28 @@ mod tests {
         let r = crate::render_complete(&mut m, &view).unwrap();
         assert!(!r.tiles_pending);
         assert_eq!(r.tile_errors.len(), 1, "{:?}", r.tile_errors);
+    }
+
+    #[test]
+    fn blends_tile_layers_with_those_beneath() {
+        serve();
+        let mut m = Map::new("Map");
+        m.graticule = false;
+        m.tiles.push(TileLayer::new("Red", TileKind::Raster, "https://tiles.test/red/{z}/{x}/{y}.png"));
+        let mut blue = TileLayer::new("Blue", TileKind::Style, "https://tiles.test/style.json");
+        blue.blend = rustgis_map::effects::Blend::Multiply;
+        m.tiles.insert(0, blue);
+        // Multiplied: red × blue, not the blue on top.
+        let p = pixel(&mut m);
+        assert!(p[0] < 40 && p[1] < 15 && p[2] < 30 && p[3] == 255, "{p:?}");
+        // Screened: lighter than either.
+        m.tiles[0].blend = rustgis_map::effects::Blend::Screen;
+        let p = pixel(&mut m);
+        assert!(p[0] > 220 && p[1] > 80 && p[2] > 0xE0, "{p:?}");
+        // And in the mosaic warped onto another projection (the globe shades it a little).
+        m.tiles[0].blend = rustgis_map::effects::Blend::Multiply;
+        m.projection = Projection::Globe;
+        let p = pixel(&mut m);
+        assert!(p[0] < 60 && p[1] < 40 && p[2] < 60, "{p:?}");
     }
 }

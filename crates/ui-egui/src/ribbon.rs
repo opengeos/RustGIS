@@ -591,20 +591,29 @@ const WEB_BASEMAPS: [(&str, &str, &str, &str, &str, u8); 6] = [
 /// The id of the registry plugin with many more web basemaps.
 const BASEMAPS_PLUGIN: &str = "basemaps";
 
-/// Web basemaps (OpenFreeMap, USGS) that replace the other tile basemaps, and where to get more.
+/// Web basemaps (OpenFreeMap, USGS) that replace the other tile basemaps or stack on them, and
+/// where to get more.
 fn web_basemaps(ui: &mut Ui, app: &mut RustGisApp, t: &Tokens) {
     ui.add_space(6.0);
     ui.separator();
     ui.label(egui::RichText::new(tl!("Web Basemaps")).font(semibold(12.5)));
     ui.add_space(2.0);
-    // The web basemap on top (the one showing), if any.
-    let top = app.session.map().tiles.iter().find(|l| !l.overlay && l.visible).map(|l| l.id.clone());
+    // Stacked: a web basemap goes over the others (to blend with them in the Layers pane)
+    // rather than replacing them.
+    let stack_id = egui::Id::new("web-basemaps-stack");
+    let mut stack = ui.data_mut(|d| *d.get_persisted_mut_or_default::<bool>(stack_id));
+    let resp = ui.checkbox(&mut stack, tl!("Stack on the current basemaps"));
+    if resp.on_hover_text(tl!("Add a web basemap over the others instead of replacing them, to blend it with them.")).changed() {
+        ui.data_mut(|d| d.insert_persisted(stack_id, stack));
+    }
+    // The web basemaps showing: the one on top, or every one when stacking.
+    let shown: Vec<String> = app.session.map().tiles.iter().filter(|l| !l.overlay && l.visible).map(|l| l.id.clone()).collect();
     egui::Grid::new("web-basemaps").spacing(vec2(6.0, 4.0)).show(ui, |ui| {
         for (i, (id, name, kind, url, attribution, max_zoom)) in WEB_BASEMAPS.into_iter().enumerate() {
-            let sel = top.as_deref() == Some(id);
+            let sel = if stack { shown.iter().any(|s| s == id) } else { shown.first().map(String::as_str) == Some(id) };
             let resp = ui.add_sized(vec2(140.0, 22.0), egui::Button::selectable(sel, name)).on_hover_text(url);
             if resp.clicked() {
-                let p = json!({"url": url, "kind": kind, "name": name, "attribution": attribution, "maxZoom": max_zoom, "id": id, "replace": true});
+                let p = json!({"url": url, "kind": kind, "name": name, "attribution": attribution, "maxZoom": max_zoom, "id": id, "replace": !stack});
                 let _ = app.run("map.addTiles", p);
                 ui.close();
             }

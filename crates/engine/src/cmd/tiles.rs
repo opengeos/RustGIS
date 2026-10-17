@@ -1,6 +1,7 @@
 //! Home › Add › Basemap: web tile layers (XYZ/TMS/WMS raster tiles, vector tiles and
 //! MapLibre styles) over the basemap.
 
+use rustgis_map::effects::Blend;
 use rustgis_map::tiles::{MAX_TILE_LAYERS, TileKind, TileLayer};
 use serde_json::{Value, json};
 
@@ -39,12 +40,12 @@ pub const NETWORK: &[&str] = &[
 pub fn commands() -> Vec<C> {
     vec![
         C::new("map.addTiles", "Add Tile Layer", "Home › Add", add).params(
-            r#"{"url": "https://…/{z}/{x}/{y}.png" | vector tiles ".pbf" or TileJSON | MapLibre style.json | a PMTiles archive (web address or file path) | an MBTiles file path, "kind"?: "raster"|"vector"|"style"|"pmtiles"|"mbtiles" (guessed from the url), "name"?: text, "attribution"?: text, "minZoom"?: number, "maxZoom"?: number, "tileSize"?: 256|512, "tms"?: bool, "subdomains"?: [text], "layers"?: [vector tile layer names, drawn in colours of their own], "opacity"?: 0–1, "overlay"?: bool (a transparent layer kept on top), "replace"?: bool (removes the other tile basemaps, not overlays), "id"?: catalog id}"#,
+            r#"{"url": "https://…/{z}/{x}/{y}.png" | vector tiles ".pbf" or TileJSON | MapLibre style.json | a PMTiles archive (web address or file path) | an MBTiles file path, "kind"?: "raster"|"vector"|"style"|"pmtiles"|"mbtiles" (guessed from the url), "name"?: text, "attribution"?: text, "minZoom"?: number, "maxZoom"?: number, "tileSize"?: 256|512, "tms"?: bool, "subdomains"?: [text], "layers"?: [vector tile layer names, drawn in colours of their own], "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference" (how it combines with what is beneath), "overlay"?: bool (a transparent layer kept on top), "replace"?: bool (removes the other tile basemaps, not overlays), "id"?: catalog id}"#,
         ),
         C::new("map.removeTiles", "Remove Tile Layer", "Home › Add", remove)
             .params(r#"{"name"?: text, "index"?: number, "id"?: catalog id} (removes every tile layer when none is given)"#),
         C::new("map.setTiles", "Tile Layer Properties", "Home › Add", set).params(
-            r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "visible"?: bool, "opacity"?: 0–1, "move"?: "up"|"down"|"top"|"bottom", "rename"?: text}"#,
+            r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "visible"?: bool, "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference", "move"?: "up"|"down"|"top"|"bottom", "rename"?: text}"#,
         ),
         C::new("map.tiles", "Tile Layers", "Home › Add", |s, _| Ok(list(s, false))).view(),
     ]
@@ -61,7 +62,7 @@ pub(crate) fn list(s: &Session, redact: bool) -> Value {
             .map(|(i, t)| {
                 let url = if redact { crate::sources::redact(&t.url) } else { t.url.clone() };
                 json!({"index": i, "name": t.name, "id": t.id, "kind": t.kind.code(), "url": url, "visible": t.visible,
-                    "opacity": t.opacity, "overlay": t.overlay, "attribution": t.attribution, "minZoom": t.min_zoom, "maxZoom": t.max_zoom})
+                    "opacity": t.opacity, "blend": t.blend.code(), "overlay": t.overlay, "attribution": t.attribution, "minZoom": t.min_zoom, "maxZoom": t.max_zoom})
             })
             .collect(),
     )
@@ -92,6 +93,9 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     t.overlay = b(p, "overlay").unwrap_or(false);
     if let Some(o) = f(p, "opacity") {
         t.opacity = o as f32;
+    }
+    if let Some(m) = blend(p)? {
+        t.blend = m;
     }
     // Vector tiles' layer names (an OGC API collection's), each drawn in a colour of its own.
     if let Some(names) = p.get("layers").and_then(Value::as_array) {
@@ -154,8 +158,14 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
     }
 }
 
+/// The `blend` mode a command gives, if any.
+fn blend(p: &Value) -> Result<Option<Blend>, String> {
+    ps(p, "blend").map(|m| Blend::from_code(m).ok_or_else(|| format!("unknown blend mode '{m}'"))).transpose()
+}
+
 fn set(s: &mut Session, p: &Value) -> CmdResult {
     let i = find(s, p)?.ok_or("name or index is required")?;
+    let mode = blend(p)?;
     let m = s.map_mut();
     let n = m.tiles.len();
     let Some(t) = m.tiles.get_mut(i) else { return Err("no tile layer at that index".into()) };
@@ -164,6 +174,9 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
     }
     if let Some(o) = f(p, "opacity") {
         t.opacity = if o.is_finite() { o.clamp(0.0, 1.0) as f32 } else { 1.0 };
+    }
+    if let Some(m) = mode {
+        t.blend = m;
     }
     if let Some(r) = ps(p, "rename").map(str::trim).filter(|r| !r.is_empty()) {
         t.name = r.chars().take(120).collect();
@@ -218,5 +231,34 @@ mod tests {
         let p = Project::from_json(&text).unwrap();
         assert_eq!(p.map().tiles.len(), 1);
         assert_eq!(p.map().tiles[0].attribution, "© OpenStreetMap");
+    }
+
+    #[test]
+    fn stacks_basemaps_and_blends_them() {
+        use rustgis_map::effects::Blend;
+        let mut s = Session::new(Project::default());
+        let relief = json!({"url": "https://relief.example.com/{z}/{x}/{y}.png", "name": "Relief", "replace": true});
+        assert!(s.run("map.addTiles", &relief).is_ok());
+        // Without `replace`, a second basemap goes over the first, here multiplied with it.
+        let imagery = json!({"url": "https://imagery.example.com/{z}/{x}/{y}.jpg", "name": "Imagery", "blend": "multiply"});
+        assert!(s.run("map.addTiles", &imagery).is_ok());
+        let names: Vec<&str> = s.map().tiles.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["Imagery", "Relief"]);
+        assert_eq!(s.map().tiles[0].blend, Blend::Multiply);
+        assert_eq!(s.map().tiles[1].blend, Blend::Normal);
+        let listed = s.run("map.tiles", &json!({})).unwrap();
+        assert_eq!(listed[0]["blend"], "multiply");
+        assert!(s.run("map.setTiles", &json!({"name": "Relief", "blend": "Screen"})).is_ok());
+        assert_eq!(s.map().tiles[1].blend, Blend::Screen);
+        assert!(s.run("edit.undo", &json!({})).is_ok());
+        assert_eq!(s.map().tiles[1].blend, Blend::Normal);
+        assert!(s.run("map.setTiles", &json!({"index": 0, "blend": "nope"})).is_err());
+        assert!(s.run("map.addTiles", &json!({"url": "https://z.example.com/{z}/{x}/{y}.png", "blend": "nope"})).is_err());
+        assert_eq!(s.map().tiles.len(), 2);
+        // Saved with the project; a normal layer saves no blend.
+        let text = serde_json::to_string(&s.project).unwrap();
+        let p = Project::from_json(&text).unwrap();
+        assert_eq!(p.map().tiles[0].blend, Blend::Multiply);
+        assert_eq!(text.matches("\"blend\"").count(), 1, "{text}");
     }
 }

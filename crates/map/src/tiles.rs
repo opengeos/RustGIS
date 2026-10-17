@@ -120,6 +120,10 @@ pub struct TileLayer {
     /// A transparent layer meant to sit over a basemap (labels, roads, traffic).
     #[serde(default, skip_serializing_if = "is_false")]
     pub overlay: bool,
+    /// How it blends with the tile layers and basemap beneath (Multiply drapes imagery over a
+    /// hillshade).
+    #[serde(default, skip_serializing_if = "is_normal")]
+    pub blend: crate::effects::Blend,
     /// The catalog entry it came from (`osm`, `esri-imagery`), when it came from one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
@@ -143,6 +147,9 @@ fn one() -> f32 {
 fn is_false(b: &bool) -> bool {
     !*b
 }
+fn is_normal(b: &crate::effects::Blend) -> bool {
+    *b == crate::effects::Blend::Normal
+}
 
 /// The deepest zoom level tiles are requested at.
 pub const MAX_ZOOM: u8 = 24;
@@ -162,6 +169,7 @@ impl TileLayer {
             visible: true,
             opacity: 1.0,
             overlay: false,
+            blend: crate::effects::Blend::Normal,
             id: String::new(),
             layers: Vec::new(),
         }

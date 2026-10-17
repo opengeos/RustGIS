@@ -1019,6 +1019,16 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: 
                 action = Some(("map.setTiles", json!({"index": i, "opacity": o / 100.0})));
             }
         });
+        ui.menu_button(crate::i18n::fmt("Blend: {mode}", &[("mode", tl!(tile.blend.label()))]), |ui| {
+            for b in rustgis_engine::map::effects::Blend::ALL {
+                if ui.radio(tile.blend == b, tl!(b.label())).clicked() {
+                    action = Some(("map.setTiles", json!({"index": i, "blend": b.code()})));
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text(tl!("How the layer's colours combine with the tile layers and basemap beneath."));
         ui.separator();
         if ui.add_enabled(reorder && i > 0, egui::Button::new(tl!("Move up"))).clicked() {
             action = Some(("map.setTiles", json!({"index": i, "move": "up"})));

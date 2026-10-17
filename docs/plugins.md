@@ -245,7 +245,7 @@ Inside a request, `host::call(op, params)` sends one of these to RustGIS:
 | `host.view` | `{center: [lon, lat], scale, projection}` |
 | `host.notify` `{text, error?}` | shows a message in the status bar |
 | `host.addLayer` `{name, geojson}` | adds a layer (`edit`) |
-| `map.addTiles` `{url, kind?, name?, attribution?, maxZoom?, overlay?, replace?}` | adds a web tile layer (`edit` and `network`) |
+| `map.addTiles` `{url, kind?, name?, attribution?, maxZoom?, overlay?, replace?, blend?}` | adds a web tile layer (`edit` and `network`) |
 | any command id (`layer.zoomTo`, `select.byAttributes`, `layer.symbology`…) | what the command returns, within the plugin's permissions |
 
 In the web app a command can't wait for a download, so where `layer.addUrl` has to download a
