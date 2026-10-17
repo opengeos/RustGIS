@@ -151,6 +151,105 @@ pub fn geodesic_length_m(pts: &[Coord]) -> f64 {
         .sum()
 }
 
+/// A lon/lat point as a unit vector from the Earth's centre.
+fn unit_vector(c: Coord) -> [f64; 3] {
+    let (lon, lat) = (c.x.to_radians(), c.y.to_radians());
+    [lat.cos() * lon.cos(), lat.cos() * lon.sin(), lat.sin()]
+}
+
+/// A vector from the Earth's centre as lon/lat (degrees); `None` for the zero vector.
+fn from_vector(v: [f64; 3]) -> Option<Coord> {
+    let [x, y, z] = v;
+    let h = x.hypot(y);
+    (h.hypot(z) > 1e-12).then(|| Coord::new(y.atan2(x).to_degrees(), z.atan2(h).to_degrees()))
+}
+
+/// The point a fraction `t` of the way from `a` to `b` along the great circle between them.
+pub fn geodesic_interpolate(a: Coord, b: Coord, t: f64) -> Coord {
+    let (va, vb) = (unit_vector(a), unit_vector(b));
+    let dot = (va[0] * vb[0] + va[1] * vb[1] + va[2] * vb[2]).clamp(-1.0, 1.0);
+    let w = dot.acos();
+    if w < 1e-12 || w.sin().abs() < 1e-12 {
+        // The same point, or antipodes (no single great circle): straight in lon/lat.
+        return Coord::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+    }
+    let (ka, kb) = (((1.0 - t) * w).sin() / w.sin(), (t * w).sin() / w.sin());
+    let v = [ka * va[0] + kb * vb[0], ka * va[1] + kb * vb[1], ka * va[2] + kb * vb[2]];
+    match from_vector(v) {
+        // Keep the longitude next to `a`'s, so a path across the antimeridian stays continuous.
+        Some(c) => Coord::new(a.x + wrap_lon(c.x - a.x), c.y),
+        None => a,
+    }
+}
+
+/// A longitude difference (degrees) folded into −180..180.
+fn wrap_lon(d: f64) -> f64 {
+    let w = (d + 180.0).rem_euclid(360.0) - 180.0;
+    if w.is_finite() { w } else { 0.0 }
+}
+
+/// The centre of lon/lat points on the sphere (their mean direction from the Earth's centre),
+/// or `None` when there are none or they balance out (such as two antipodes).
+pub fn spherical_centre(pts: &[Coord]) -> Option<Coord> {
+    let mut s = [0.0; 3];
+    for v in pts.iter().filter(|c| c.is_finite()).map(|c| unit_vector(*c)) {
+        s = [s[0] + v[0], s[1] + v[1], s[2] + v[2]];
+    }
+    from_vector(s)
+}
+
+/// The point `dist_m` metres from `c` along the great circle leaving it at `azimuth_deg`
+/// (clockwise from north): the direct geodesic problem on the sphere.
+pub fn geodesic_destination(c: Coord, azimuth_deg: f64, dist_m: f64) -> Coord {
+    let (s, co) = azimuth_deg.to_radians().sin_cos();
+    Aeqd::new(c).inverse(Coord::new(dist_m * s, dist_m * co))
+}
+
+/// The azimuthal equidistant projection on the sphere, centred on a lon/lat point: distances
+/// and directions from the centre are true, so a buffer drawn in it is geodesic near the centre.
+/// Coordinates are metres east and north of the centre.
+#[derive(Clone, Copy, Debug)]
+pub struct Aeqd {
+    lon0: f64,
+    sin0: f64,
+    cos0: f64,
+}
+
+impl Aeqd {
+    pub fn new(centre: Coord) -> Self {
+        let lat0 = centre.y.clamp(-90.0, 90.0).to_radians();
+        Aeqd { lon0: centre.x, sin0: lat0.sin(), cos0: lat0.cos() }
+    }
+
+    /// Lon/lat (degrees) → metres from the centre.
+    pub fn forward(&self, c: Coord) -> Coord {
+        let lat = c.y.clamp(-90.0, 90.0).to_radians();
+        let dlon = (c.x - self.lon0).to_radians();
+        let (sl, cl) = lat.sin_cos();
+        let east = cl * dlon.sin();
+        let north = self.cos0 * sl - self.sin0 * cl * dlon.cos();
+        let cos_c = self.sin0 * sl + self.cos0 * cl * dlon.cos();
+        let sin_c = east.hypot(north);
+        if sin_c < 1e-15 {
+            return Coord::new(0.0, 0.0);
+        }
+        let k = EARTH_RADIUS_M * sin_c.atan2(cos_c) / sin_c;
+        Coord::new(k * east, k * north)
+    }
+
+    /// Metres from the centre → lon/lat (degrees). The longitude is within 180° of the centre's,
+    /// not folded into −180..180, so a shape across the antimeridian stays in one piece.
+    pub fn inverse(&self, p: Coord) -> Coord {
+        let rho = p.x.hypot(p.y);
+        let c = rho / EARTH_RADIUS_M;
+        let (sc, cc) = c.sin_cos();
+        let (sa, ca) = if rho > 0.0 { (p.x / rho, p.y / rho) } else { (0.0, 1.0) };
+        let lat = (self.sin0 * cc + self.cos0 * sc * ca).clamp(-1.0, 1.0).asin();
+        let dlon = (sa * sc * self.cos0).atan2(cc - self.sin0 * lat.sin());
+        Coord::new(self.lon0 + dlon.to_degrees(), lat.to_degrees())
+    }
+}
+
 /// Area of a lon/lat ring on the sphere (square metres, always positive).
 ///
 /// Uses the spherical-excess approximation from Chamberlain & Duquette (JPL, 2007).
@@ -236,6 +335,39 @@ mod tests {
             let back = merc_to_lonlat(m);
             assert!((back.x - x).abs() < 1e-9 && (back.y - y).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn azimuthal_equidistant_keeps_distances_from_its_centre() {
+        let centre = Coord::new(10.0, 60.0);
+        let p = Aeqd::new(centre);
+        for (x, y) in [(10.0, 70.0), (-170.0, 80.0), (40.0, 20.0), (10.0, 60.0), (179.5, -30.0)] {
+            let c = Coord::new(x, y);
+            let m = p.forward(c);
+            assert!((m.x.hypot(m.y) - haversine_m(centre, c)).abs() < 1e-3, "{c:?}");
+            let back = p.inverse(m);
+            assert!((back.x - x).abs() < 1e-9 && (back.y - y).abs() < 1e-9, "{c:?} → {back:?}");
+        }
+        // The inverse stays next to the centre's longitude rather than folding into −180..180.
+        assert!((Aeqd::new(Coord::new(179.0, 0.0)).inverse(Coord::new(300_000.0, 0.0)).x - 181.698).abs() < 1e-3);
+    }
+
+    #[test]
+    fn geodesic_destination_and_interpolation() {
+        let start = Coord::new(10.0, 60.0);
+        for az in [0.0, 45.0, 90.0, 180.0, 300.0] {
+            let d = geodesic_destination(start, az, 1_000_000.0);
+            assert!((haversine_m(start, d) - 1_000_000.0).abs() < 1e-3, "{az}: {d:?}");
+        }
+        let north = geodesic_destination(start, 0.0, 1_000_000.0);
+        assert!((north.x - 10.0).abs() < 1e-9 && north.y > 68.9, "{north:?}");
+        let (a, b) = (Coord::new(2.3522, 48.8566), Coord::new(-0.1276, 51.5072));
+        let mid = geodesic_interpolate(a, b, 0.5);
+        assert!((haversine_m(a, mid) - haversine_m(mid, b)).abs() < 1e-3);
+        // Across the antimeridian, the path stays continuous.
+        assert!((geodesic_interpolate(Coord::new(179.0, 0.0), Coord::new(-179.0, 0.0), 0.5).x - 180.0).abs() < 1e-9);
+        assert_eq!(spherical_centre(&[Coord::new(179.0, 0.0), Coord::new(-179.0, 0.0)]).map(|c| c.x.abs().round()), Some(180.0));
+        assert!(spherical_centre(&[]).is_none());
     }
 
     #[test]

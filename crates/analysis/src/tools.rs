@@ -1,12 +1,13 @@
 //! The tools.
 
-use geo::{BooleanOps, Buffer, ConvexHull, InteriorPoint, Intersects, MultiPolygon, Orient, Simplify, orient::Direction};
+use geo::{BooleanOps, ConvexHull, InteriorPoint, Intersects, MultiPolygon, Orient, Simplify, orient::Direction};
 use rustgis_data::raster::Crs;
 use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
 use rustgis_geom::{Extent, geodesic_length_m, geodesic_ring_area_m2};
 use serde_json::Value as Json;
 
 use crate::convert::{from_line, from_multipolygon, from_point, to_geo, to_multiline, to_multipolygon};
+use crate::geodesic::geodesic_buffer;
 use crate::{Inputs, Output, OutputLayer, ParamKind as K, ParamSpec as P, ToolResult, ToolSpec};
 
 const UNITS: &[&str] = &["Kilometers", "Meters", "Miles"];
@@ -328,17 +329,10 @@ fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
         let Some(g) = &f.geometry else { continue };
-        let dist = metres * merc_scale(feature_lat(g));
-        let mp = match to_geo(g) {
-            geo::Geometry::MultiPolygon(m) => m.buffer(dist),
-            geo::Geometry::MultiLineString(m) => m.buffer(dist),
-            geo::Geometry::MultiPoint(m) => m.buffer(dist),
-            geo::Geometry::Point(pt) => pt.buffer(dist),
-            _ => continue,
-        };
+        let Some(geom) = geodesic_buffer(g, metres) else { continue };
         if s(p, "dissolve") == "All" {
-            all.push(mp);
-        } else if let Some(geom) = from_multipolygon(&mp) {
+            all.extend(to_multipolygon(&geom));
+        } else {
             out.push(Some(geom), f.attrs.clone());
         }
     }
@@ -614,19 +608,8 @@ fn select_by_location(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
         .iter()
         .filter_map(|r| sel_ds.features.get(*r)?.geometry.as_ref())
         .map(|g| {
-            if dist > 0.0 {
-                let d = dist * merc_scale(feature_lat(g));
-                let b = match to_geo(g) {
-                    geo::Geometry::MultiPolygon(m) => m.buffer(d),
-                    geo::Geometry::MultiLineString(m) => m.buffer(d),
-                    geo::Geometry::MultiPoint(m) => m.buffer(d),
-                    geo::Geometry::Point(pt) => pt.buffer(d),
-                    other => return other,
-                };
-                geo::Geometry::MultiPolygon(b)
-            } else {
-                to_geo(g)
-            }
+            let b = if dist > 0.0 { geodesic_buffer(g, dist) } else { None };
+            to_geo(b.as_ref().unwrap_or(g))
         })
         .collect();
     let invert = s(p, "invert") == "Yes";
@@ -1017,6 +1000,66 @@ mod tests {
             Geometry::Polygon(polys) => assert_eq!(polys.len(), 1, "overlapping buffers merge into one polygon"),
             _ => panic!(),
         }
+    }
+
+    /// The buffer of one feature, run through the tool.
+    fn buffered(g: Geometry, km: f64) -> Vec<Vec<Vec<Coord>>> {
+        let mut ds = Dataset::new("f", GeometryType::Polygon, vec![]);
+        ds.push(Some(g), vec![]);
+        let m = Map(HashMap::from([("f".to_string(), ds)]));
+        let b = layer(crate::run("buffer", &m, &serde_json::json!({"input": "f", "distance": km})).unwrap_or_else(|e| panic!("{e}")));
+        match b.features.first().and_then(|f| f.geometry.clone()) {
+            Some(Geometry::Polygon(polys)) => polys,
+            other => panic!("expected a polygon: {other:?}"),
+        }
+    }
+
+    /// The great-circle distance (km) from `c` to a line, sampled every 500 m along it.
+    fn km_to(c: Coord, line: &[Coord]) -> f64 {
+        line.windows(2)
+            .flat_map(|w| {
+                let n = (rustgis_geom::haversine_m(w[0], w[1]) / 500.0).ceil().max(1.0) as usize;
+                (0..=n).map(move |i| rustgis_geom::geodesic_interpolate(w[0], w[1], i as f64 / n as f64))
+            })
+            .map(|p| rustgis_geom::haversine_m(c, p) / 1000.0)
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    /// Every vertex of every ring is `km` from `line`, within 0.2%. Where the arcs of two pieces
+    /// cross, the vertex sits inside both circles by up to their chord's sag (0.5% with `geo`'s
+    /// 0.2 rad steps), as anywhere between a planar buffer's vertices.
+    fn all_at(polys: &[Vec<Vec<Coord>>], line: &[Coord], km: f64) {
+        for c in polys.iter().flatten().flatten() {
+            let d = km_to(*c, line);
+            assert!(d < km * 1.002 && d > km * 0.994, "{c:?} is {d:.2} km away, not {km} km");
+        }
+    }
+
+    /// Buffers are geodesic (#394): Web Mercator's scale changes with latitude, so one scale for
+    /// the whole feature made a 1000 km circle at 60°N reach 872 km north and 1142 km south, and a
+    /// 50 km buffer of a line from 5°S to 33°S 59 km wide at one end and 50 km at the other.
+    #[test]
+    fn buffers_keep_their_distance_on_the_earth() {
+        let centre = Coord::new(10.0, 60.0);
+        let circle = buffered(Geometry::Point(centre), 1000.0);
+        all_at(&circle, &[centre, centre], 1000.0);
+        let north = circle.iter().flatten().flatten().map(|c| c.y).fold(f64::MIN, f64::max);
+        let south = circle.iter().flatten().flatten().map(|c| c.y).fold(f64::MAX, f64::min);
+        assert!((north - 60.0 - (60.0 - south)).abs() < 0.01, "as far north as south: {north} {south}");
+
+        let line = [Coord::new(-45.0, -5.0), Coord::new(-45.0, -33.0)];
+        all_at(&buffered(Geometry::Line(vec![line.to_vec()]), 50.0), &line, 50.0);
+
+        // A polygon too large for one projection, outward and inward, keeps the distance from
+        // its outline; inward, the ring sits inside.
+        let ring =
+            vec![Coord::new(0.0, 40.0), Coord::new(20.0, 40.0), Coord::new(20.0, 60.0), Coord::new(0.0, 60.0), Coord::new(0.0, 40.0)];
+        let grown = buffered(Geometry::Polygon(vec![vec![ring.clone()]]), 100.0);
+        assert_eq!(grown.len(), 1, "one polygon, not the pieces it was drawn in");
+        all_at(&grown, &ring, 100.0);
+        let shrunk = buffered(Geometry::Polygon(vec![vec![ring.clone()]]), -100.0);
+        all_at(&shrunk, &ring, 100.0);
+        assert!(shrunk.iter().flatten().flatten().all(|c| c.x > 0.0 && c.x < 20.0 && c.y > 40.0 && c.y < 60.0));
     }
 
     #[test]

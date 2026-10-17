@@ -2,8 +2,8 @@
 //!
 //! Each tool is a [`ToolSpec`]: an id, a toolbox, parameters for the Tools pane, and a
 //! pure `run` function over datasets. Inputs refer to layers by name through [`Inputs`]. Work is
-//! done in Web Mercator metres; distances are corrected for scale distortion at each feature's
-//! latitude so a 100 km buffer is about 100 km on the ground.
+//! done in Web Mercator metres, except buffers, which are geodesic: drawn in a projection centred
+//! on each feature (see [`geodesic`]) so a 100 km buffer is 100 km on the ground.
 //!
 //! Tools from external suites (the GeoLibre/Whitebox tools in `rustgis-geolibre`, and plugins
 //! in `rustgis-plugins`) join the built-in ones through [`register_external`]: they're listed by [`tools`], found by
@@ -11,6 +11,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod convert;
+pub mod geodesic;
 pub mod network;
 pub mod neural;
 pub mod rasterops;

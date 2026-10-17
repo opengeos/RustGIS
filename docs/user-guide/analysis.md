@@ -47,6 +47,12 @@ The built-in tools:
 
 Tools honour the current selection: with features selected, only those are processed.
 
+**Buffer** distances, and the distance of **Select Layer By Location**, are geodesic: every point
+of a buffer's edge is the given distance from the feature, measured on the Earth (a sphere of
+radius 6,371 km), wherever the feature is and however far it spans. Each feature is buffered in a
+projection centred on it, and a long line or a large polygon in stretches of a few hundred
+kilometres, so a 1000 km circle at 60°N reaches as far north as south.
+
 **IDW Interpolation** works like the QGIS tool of the same name: every point weighs on every
 cell by 1/distanceᴾ, where P is the distance coefficient (2 by default). Lines and polygons
 contribute their vertices. Leave the extent empty to use the input's, or give it as
