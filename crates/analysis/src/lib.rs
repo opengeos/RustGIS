@@ -295,11 +295,12 @@ pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> 
 
 /// A built-in tool's choice parameter as one of its choices, spelled as declared (`"meters"` is
 /// `"Meters"`). Any other value is an error naming the choices: a tool never guesses what an
-/// unknown one meant (#406). An empty value is left as it is (the tool's default).
+/// unknown one meant (#406). A blank value is the declared default.
 fn choice(spec: &ToolSpec, ps: &ParamSpec, choices: &[&str], v: &Value) -> Result<Value, String> {
     let given = match v {
         Value::Null => return Ok(Value::Null),
-        Value::String(s) if s.trim().is_empty() => return Ok(v.clone()),
+        // Blank: the declared default, as when it's left out.
+        Value::String(s) if s.trim().is_empty() => return Ok(serde_json::from_str(ps.default).unwrap_or_else(|_| v.clone())),
         Value::String(s) => s.trim().to_string(),
         Value::Number(_) | Value::Bool(_) => v.to_string(),
         _ => String::new(),

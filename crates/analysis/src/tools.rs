@@ -853,6 +853,25 @@ mod tests {
         let e = layer(r).extent();
         assert!((e.max_y - e.min_y - 1000.0 / 111_000.0).abs() < 0.0005, "{e:?}");
         assert!(buffer(serde_json::Value::Null).is_ok(), "no units: the default");
+        assert_eq!(layer(buffer(serde_json::json!("  ")).unwrap()).name, "p_Buffer", "blank units: the default");
+        // An external tool's choices (GeoLibre's, a plugin's) aren't checked here: its runner does.
+        static EXTERNAL: ToolSpec = ToolSpec {
+            id: "external:test",
+            name: "External Test",
+            toolbox: "Test",
+            summary: "",
+            params: &[P {
+                name: "features",
+                label: "Features",
+                kind: K::Choice(&["contrast", "energy"]),
+                required: false,
+                default: "",
+                help: "",
+            }],
+            run: |_, _| Err("not run".into()),
+        };
+        let list = crate::resolve_params(&EXTERNAL, &serde_json::json!({"features": "contrast,energy"})).unwrap();
+        assert_eq!(list["features"], "contrast,energy");
         assert!(crate::run("buffer", &m, &serde_json::json!({"input": "p", "distance": 1, "dissolve": "everything"})).is_err());
         // Every built-in choice defaults to one of its own choices.
         for t in TOOLS {
