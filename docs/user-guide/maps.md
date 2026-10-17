@@ -115,7 +115,8 @@ Ocean, Atlas, Blank), which need no network, and web tile layers over them:
 
 The gallery's **Web Basemaps** need no API key: the OpenFreeMap vector maps (Liberty, Bright,
 Positron, Dark, Fiord) and USGS Imagery. Choosing one replaces the other web basemaps; tick
-**Stack on the current basemaps** above them to add it over the others instead. For many
+**Stack on the current basemaps** above them to add it over the others instead (clicking one
+that already shows then takes it off). For many
 more (OpenStreetMap, Esri, NASA and others), follow **Install the Basemaps plugin** under them,
 which opens the Plugin Manager at the
 [Basemaps plugin](https://plugins.rustgis.app/catalog/basemaps/); it adds a tab of public

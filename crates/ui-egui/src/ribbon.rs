@@ -603,7 +603,9 @@ fn web_basemaps(ui: &mut Ui, app: &mut RustGisApp, t: &Tokens) {
     let stack_id = egui::Id::new("web-basemaps-stack");
     let mut stack = ui.data_mut(|d| *d.get_persisted_mut_or_default::<bool>(stack_id));
     let resp = ui.checkbox(&mut stack, tl!("Stack on the current basemaps"));
-    if resp.on_hover_text(tl!("Add a web basemap over the others instead of replacing them, to blend it with them.")).changed() {
+    let tip =
+        tl!("Add a web basemap over the others instead of replacing them, to blend it with them. Click one that shows to take it off.");
+    if resp.on_hover_text(tip).changed() {
         ui.data_mut(|d| d.insert_persisted(stack_id, stack));
     }
     // The web basemaps showing: the one on top, or every one when stacking.
