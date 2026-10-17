@@ -4061,7 +4061,7 @@ dependencies = [
 name = "rustgis-assistant"
 version = "0.3.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "getrandom 0.3.4",
  "log",
  "ring",
@@ -4088,7 +4088,7 @@ version = "0.3.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "calamine",
  "crs-definitions",
@@ -4121,7 +4121,7 @@ dependencies = [
 name = "rustgis-engine"
 version = "0.3.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "iana-time-zone",
  "log",
  "rusqlite",
@@ -4166,7 +4166,7 @@ dependencies = [
 name = "rustgis-map"
 version = "0.3.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "proj4rs",
  "roxmltree",
  "rustgis-data",
@@ -4180,7 +4180,7 @@ dependencies = [
 name = "rustgis-plugins"
 version = "0.3.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "log",
  "rustgis-analysis",
  "rustgis-data",
@@ -4209,7 +4209,7 @@ name = "rustgis-render"
 version = "0.3.0"
 dependencies = [
  "ab_glyph",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytemuck",
  "epaint_default_fonts",
  "image",
@@ -4245,7 +4245,7 @@ dependencies = [
 name = "rustgis-ui-egui"
 version = "0.3.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytemuck",
  "egui",
  "egui-wgpu",
