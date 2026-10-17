@@ -29,7 +29,7 @@ pub fn defs() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "list_layers",
-            description: "The project's map: its layers (id, name, type, feature count, fields, visibility, selection), basemap, centre and scale.",
+            description: "The project's map: its layers (id, name, type, feature count, fields, visibility, selection), web tile layers under tiles (including WMS), basemap, centre and scale. For tiles, use map.setTiles with the returned index to change visibility, opacity or order.",
             schema: json!({"type": "object", "properties": {}}),
         },
         ToolDef {

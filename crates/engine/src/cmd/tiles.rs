@@ -50,7 +50,7 @@ pub fn commands() -> Vec<C> {
     ]
 }
 
-fn list(s: &Session) -> Value {
+pub(super) fn list(s: &Session) -> Value {
     Value::Array(
         s.map()
             .tiles
