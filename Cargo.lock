@@ -4023,6 +4023,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "ureq",
+ "zip 2.4.2",
 ]
 
 [[package]]

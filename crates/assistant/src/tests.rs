@@ -2341,6 +2341,325 @@ fn review_fixes_for_hostile_streams_retry_dates_and_overflow() {
     }
 }
 
+#[test]
+fn skills_load_on_demand() {
+    use crate::skills;
+    let built = skills::built_in();
+    let names: Vec<&str> = built.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["thematic-map", "explore-data", "print-layout", "geoprocessing", "add-data", "share-web-map"]);
+    assert!(built.iter().all(|s| !s.description.is_empty() && s.body.starts_with('#')));
+    // Front matter: name and description, then the body.
+    let s = skills::parse("---\nname: flood-map\ndescription: \"Map a flood: depth, extent.\"\n---\n\n# Flood map\nDo this.").unwrap();
+    assert_eq!(
+        (s.name.as_str(), s.description.as_str(), s.body.as_str()),
+        ("flood-map", "Map a flood: depth, extent.", "# Flood map\nDo this.")
+    );
+    for bad in ["no front matter", "---\nname: x\n", "---\ndescription: d\n---\nbody", "---\nname: Bad Name\ndescription: d\n---\nbody"] {
+        assert!(skills::parse(bad).is_err(), "{bad}");
+    }
+    // A user's skill of the same name replaces a built-in one.
+    let mine =
+        skills::Skill { name: "thematic-map".into(), description: "Mine.".into(), body: "My way.".into(), source: skills::Source::BuiltIn };
+    let all = skills::with(built.clone(), vec![mine]);
+    assert_eq!(all.len(), built.len());
+    assert_eq!(skills::load(&all, "thematic-map").unwrap(), "My way.");
+    assert!(skills::load(&all, "nope").unwrap_err().contains("explore-data"));
+    // The agent lists them in its system prompt, offers load_skill and reads one when asked.
+    let mut s = sample();
+    let mut a = Agent::new(cfg("openai"), &s);
+    let Step::Send(req) = a.ask("make a choropleth of population", &s) else { panic!("expected a request") };
+    let b = body(&req);
+    assert!(b["messages"][0]["content"].as_str().is_some_and(|p| p.contains("- thematic-map: ")));
+    assert!(b["tools"].as_array().unwrap().iter().any(|t| t["function"]["name"] == "load_skill"));
+    let load = json!({"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": null,
+        "tool_calls": [{"id": "k", "type": "function", "function": {"name": "load_skill", "arguments": "{\"name\":\"thematic-map\"}"}}]}}]});
+    let Step::Send(next) = a.receive(a.generation(), ok(load), &mut s) else { panic!("expected the next request") };
+    let messages = body(&next)["messages"].as_array().cloned().unwrap_or_default();
+    assert!(messages.iter().any(|m| m["role"] == "tool" && m["content"].as_str().is_some_and(|c| c.contains("# Thematic map"))));
+    // Without skills, no tool and no list.
+    a.set_skills(vec![]);
+    a.clear();
+    let Step::Send(req) = a.ask("hello", &s) else { panic!("expected a request") };
+    assert!(!body(&req)["tools"].as_array().unwrap().iter().any(|t| t["function"]["name"] == "load_skill"));
+    // MCP: skills as prompts.
+    let server = mcp::Server::default();
+    let list = rpc(&server, &mut s, "prompts/list", json!({}));
+    assert_eq!(list["prompts"][0]["name"], "thematic-map");
+    let got = rpc(&server, &mut s, "prompts/get", json!({"name": "print-layout"}));
+    assert!(got["messages"][0]["content"]["text"].as_str().is_some_and(|t| t.contains("layout.export")));
+    assert!(rpc(&server, &mut s, "prompts/get", json!({"name": "nope"}))["error"].is_object());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn user_skills_load_from_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let ok = dir.path().join("flood-map");
+    std::fs::create_dir(&ok).unwrap();
+    std::fs::write(ok.join("SKILL.md"), "---\nname: flood-map\ndescription: Map a flood.\n---\n# Flood\n").unwrap();
+    let bad = dir.path().join("broken");
+    std::fs::create_dir(&bad).unwrap();
+    std::fs::write(bad.join("SKILL.md"), "no front matter").unwrap();
+    std::fs::create_dir(dir.path().join("empty")).unwrap();
+    let (skills, problems) = crate::skills::load_dir(dir.path());
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].name, "flood-map");
+    assert_eq!(problems.len(), 1);
+    assert!(crate::skills::load_dir(&dir.path().join("missing")).0.is_empty());
+}
+
+/// A zip archive of `files` (name, text).
+#[cfg(not(target_arch = "wasm32"))]
+fn zip_of(files: &[(&str, &str)]) -> Vec<u8> {
+    use std::io::Write;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, text) in files {
+        w.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(text.as_bytes()).unwrap();
+    }
+    w.finish().unwrap().into_inner()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn skills_are_added_switched_removed_shared_and_shipped_in_plugins() {
+    use crate::skills::{self, Places, Source};
+    let skill = |name: &str| format!("---\nname: {name}\ndescription: >\n  The {name}\n  skill.\n---\n# {name}\nDo {name}.\n");
+    let root = tempfile::tempdir().unwrap();
+    let places = Places {
+        user: Some(root.path().join("skills")),
+        shared: Some(root.path().join("agents")),
+        state: Some(root.path().join("skills.json")),
+    };
+    let on = |name: &str| skills::list(&places).0.iter().find(|l| l.skill.name == name).map(|l| l.on);
+    // Built-in skills are on.
+    assert_eq!(on("thematic-map"), Some(true));
+    // Adding: a SKILL.md, a folder of skills and a zip; a folded description is read whole.
+    let file = root.path().join("one.md");
+    std::fs::write(&file, skill("flood-map")).unwrap();
+    assert_eq!(skills::add(&places, &file).unwrap(), ["flood-map"]);
+    let (listed, _) = skills::list(&places);
+    let flood = listed.iter().find(|l| l.skill.name == "flood-map").unwrap();
+    assert!(flood.on && matches!(flood.skill.source, Source::User(_)));
+    assert_eq!(flood.skill.description, "The flood-map skill.");
+    let folder = root.path().join("many");
+    for n in ["gauges", "levees"] {
+        std::fs::create_dir_all(folder.join(n)).unwrap();
+        std::fs::write(folder.join(n).join("SKILL.md"), skill(n)).unwrap();
+    }
+    assert_eq!(skills::add(&places, &folder).unwrap(), ["gauges", "levees"]);
+    let zip = root.path().join("pack.zip");
+    std::fs::write(&zip, zip_of(&[("pack/a/SKILL.md", &skill("culverts")), ("pack/README.md", "hi")])).unwrap();
+    assert_eq!(skills::add(&places, &zip).unwrap(), ["culverts"]);
+    // A malformed one adds nothing.
+    let mixed = root.path().join("mixed.zip");
+    std::fs::write(&mixed, zip_of(&[("x/SKILL.md", &skill("fine")), ("y/SKILL.md", "no front matter")])).unwrap();
+    assert!(skills::add(&places, &mixed).is_err());
+    assert_eq!(on("fine"), None);
+    // A user's skill replaces a built-in one of the same name.
+    std::fs::write(&file, skill("thematic-map")).unwrap();
+    skills::add(&places, &file).unwrap();
+    assert!(skills::list(&places).0.iter().any(|l| l.skill.name == "thematic-map" && matches!(l.skill.source, Source::User(_))));
+    // Switching off is remembered; installed() is what's on.
+    skills::set_enabled(&places, "explore-data", false).unwrap();
+    assert_eq!(on("explore-data"), Some(false));
+    skills::set_enabled(&places, "explore-data", true).unwrap();
+    assert_eq!(on("explore-data"), Some(true));
+    // Shared skills are off until switched on.
+    std::fs::create_dir_all(root.path().join("agents/pdf-tools")).unwrap();
+    std::fs::write(root.path().join("agents/pdf-tools/SKILL.md"), skill("pdf-tools")).unwrap();
+    assert_eq!(on("pdf-tools"), Some(false));
+    skills::set_enabled(&places, "pdf-tools", true).unwrap();
+    assert_eq!(on("pdf-tools"), Some(true));
+    assert!(skills::set_enabled(&places, "nope", true).is_err());
+    // Only the user's skills can be removed.
+    skills::remove(&places, "gauges").unwrap();
+    assert_eq!(on("gauges"), None);
+    assert!(skills::remove(&places, "print-layout").is_err());
+    assert!(skills::remove(&places, "pdf-tools").is_err());
+    // A plugin's skills are `<plugin>:<name>` while it's enabled.
+    let manifest = json!({"id": "unit-assist", "name": "Assist", "version": "1.0.0", "runtime": "skills", "skills": ["flood"]}).to_string();
+    let pkg =
+        rustgis_engine::plugins::Package::from_zip(&zip_of(&[("plugin.json", &manifest), ("skills/flood/SKILL.md", &skill("flood"))]))
+            .unwrap();
+    rustgis_engine::plugins::load(pkg, "test").unwrap();
+    let (listed, _) = skills::list(&places);
+    let p = listed.iter().find(|l| l.skill.name == "unit-assist:flood").unwrap();
+    assert!(p.on && p.skill.source == Source::Plugin("unit-assist".into()));
+    assert!(skills::load(&listed.into_iter().map(|l| l.skill).collect::<Vec<_>>(), "unit-assist:flood").unwrap().contains("Do flood."));
+    rustgis_engine::plugins::set_enabled("unit-assist", false).unwrap();
+    assert_eq!(on("unit-assist:flood"), None);
+    rustgis_engine::plugins::unload("unit-assist");
+}
+
+/// What a skill names that RustGIS doesn't have: commands, the parameters of its JSON examples,
+/// documentation pages and sections, tools and parameter values.
+fn skill_problems(s: &Session, skill: &crate::skills::Skill) -> Vec<String> {
+    let mut known: Vec<String> = tools::defs().iter().map(|d| d.name.to_string()).collect();
+    for d in tools::defs() {
+        known.extend(d.schema["properties"].as_object().into_iter().flatten().map(|(k, _)| k.clone()));
+    }
+    known.extend(["load_skill", "delegate", "run_tool", "run_command"].map(String::from));
+    for t in rustgis_engine::analysis::tools() {
+        known.push(t.id.to_string());
+        known.extend(t.params.iter().map(|p| p.name.to_string()));
+    }
+    // Every word of every command's parameters (values like naturalBreaks), whole words only.
+    for c in &s.registry.commands {
+        known.extend(c.params.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')).filter(|w| !w.is_empty()).map(String::from));
+    }
+    let file =
+        |t: &str| [".png", ".pdf", ".html", ".zip", ".json", ".gpkg", ".md", ".parquet", ".csv", ".tif"].iter().any(|e| t.ends_with(e));
+    let mut problems = Vec::new();
+    for line in skill.body.lines() {
+        let mut last_command: Option<String> = None;
+        for t in line.split('`').skip(1).step_by(2).map(str::trim) {
+            if t.starts_with('{') {
+                let keys: Vec<&str> = t.split('"').skip(1).step_by(2).filter(|k| t.contains(&format!("\"{k}\":"))).collect();
+                if let Some(id) = &last_command {
+                    let spec = s.registry.get(id).map(|c| c.params.to_string()).unwrap_or_default();
+                    problems.extend(
+                        keys.iter().filter(|k| !spec.contains(&format!("\"{k}\""))).map(|k| format!("{id} has no parameter {k:?}")),
+                    );
+                } else if line.contains("read_doc") {
+                    let page = t.split("\"page\": \"").nth(1).and_then(|r| r.split('"').next()).unwrap_or("");
+                    let section = t.split("\"section\": \"").nth(1).and_then(|r| r.split('"').next());
+                    if crate::docs::read(page, section).is_err() {
+                        problems.push(format!("no doc {page} {section:?}"));
+                    }
+                }
+            } else if t.contains('.') && !t.contains([' ', '/']) && !file(t) && t.chars().next().is_some_and(|c| c.is_ascii_lowercase()) {
+                if s.registry.get(t).is_none() {
+                    problems.push(format!("no command {t:?}"));
+                }
+                last_command = Some(t.to_string());
+            } else if t.starts_with("user-guide/") {
+                if crate::docs::page(t).is_none() {
+                    problems.push(format!("no doc page {t}"));
+                }
+            } else if t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && t.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+                && !known.iter().any(|k| k == t)
+            {
+                problems.push(format!("unknown tool or parameter {t:?}"));
+            }
+        }
+    }
+    problems
+}
+
+#[test]
+fn built_in_skills_name_only_real_commands_tools_and_parameters() {
+    let s = sample();
+    for skill in crate::skills::built_in() {
+        assert_eq!(skill_problems(&s, &skill), Vec::<String>::new(), "{}", skill.name);
+    }
+    // The check catches each kind of mistake.
+    let bad = crate::skills::parse(
+        "---\nname: bad\ndescription: d\n---\n`map.zoomEverywhere`\n`layer.symbology` `{\"layer\": L, \"colour\": \"red\"}`\n`read_doc` `{\"page\": \"user-guide/analysis.md\", \"section\": \"No such section\"}`\nmethod `rainbowBreaks`\n",
+    )
+    .unwrap();
+    let problems = skill_problems(&s, &bad);
+    for expected in
+        ["no command \"map.zoomEverywhere\"", "has no parameter \"colour\"", "no doc", "unknown tool or parameter \"rainbowBreaks\""]
+    {
+        assert!(problems.iter().any(|p| p.contains(expected)), "{expected} not caught: {problems:?}");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn skills_review_fixes_parse_add_remove_zip_and_catalog() {
+    use crate::skills::{self, Places};
+    // Front matter: only top-level keys; the closing line is `---` alone.
+    let nested =
+        skills::parse("---\nname: real-name\nmetadata:\n  name: nested-name\ndescription: >\n  A folded\n  name: not-a-key\n---\nBody")
+            .unwrap();
+    assert_eq!((nested.name.as_str(), nested.body.as_str()), ("real-name", "Body"));
+    assert!(skills::parse("---\nname: x\ndescription: d\n----\nnot closed").is_err(), "---- isn't the closing line");
+    assert!(skills::parse("---\r\nname: crlf\r\ndescription: d\r\n---\r\nBody\r\n").is_ok_and(|s| s.name == "crlf" && s.body == "Body"));
+    // The catalog is capped, and says how many it left out: whole lines only, and the note counts
+    // every skill left out (description lengths where the note doesn't fit beside the last line).
+    for len in 990..1050 {
+        let many: Vec<skills::Skill> = (0..200)
+            .map(|i| skills::Skill {
+                name: format!("s{i}"),
+                description: "d".repeat(len),
+                body: String::new(),
+                source: skills::Source::BuiltIn,
+            })
+            .collect();
+        let c = skills::catalog(&many);
+        assert!(c.len() <= skills::MAX_CATALOG, "{len}: {}", c.len());
+        let listed: Vec<&str> = c.lines().filter(|l| l.starts_with("- s")).collect();
+        assert!(listed.iter().all(|l| l.ends_with(&"d".repeat(len))), "{len}: a listed skill's line was cut");
+        let more = c.lines().find_map(|l| l.strip_prefix("- … and ")?.split(' ').next()?.parse::<usize>().ok()).unwrap();
+        assert_eq!(listed.len() + more, many.len(), "{len}");
+    }
+    // Adding: two skills of one name are refused, and nothing is written.
+    let skill = |name: &str| format!("---\nname: {name}\ndescription: The {name} skill.\n---\n# {name}\n");
+    let root = tempfile::tempdir().unwrap();
+    let places = Places { user: Some(root.path().join("skills")), shared: None, state: Some(root.path().join("skills.json")) };
+    let dup = root.path().join("dup.zip");
+    std::fs::write(&dup, zip_of(&[("a/SKILL.md", &skill("same")), ("b/SKILL.md", &skill("same"))])).unwrap();
+    assert!(skills::add(&places, &dup).unwrap_err().contains("named 'same'"));
+    assert!(!root.path().join("skills").join("same").exists());
+    // A SKILL.md inside another skill's folder is part of it, not a skill of its own.
+    let nested_zip = root.path().join("nested.zip");
+    std::fs::write(&nested_zip, zip_of(&[("pack/flood/SKILL.md", &skill("flood")), ("pack/flood/examples/SKILL.md", &skill("example"))]))
+        .unwrap();
+    assert_eq!(skills::add(&places, &nested_zip).unwrap(), ["flood"]);
+    // An archive with too many SKILL.md entries is refused before they're compared.
+    let crowded = root.path().join("crowded.zip");
+    let texts: Vec<(String, String)> = (0..900).map(|i| (format!("s{i}/SKILL.md"), skill(&format!("s{i}")))).collect();
+    let files: Vec<(&str, &str)> = texts.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
+    std::fs::write(&crowded, zip_of(&files)).unwrap();
+    assert!(skills::add(&places, &crowded).unwrap_err().contains("more than 800 SKILL.md files"));
+    let too_many = root.path().join("too-many-skills.zip");
+    std::fs::write(&too_many, zip_of(&files[..201])).unwrap();
+    assert!(skills::add(&places, &too_many).unwrap_err().contains("more than 200 skills"));
+    // Remove keeps files the user put beside the skill (the folder stays), and an emptied folder goes.
+    let folder = root.path().join("skills").join("flood");
+    std::fs::write(folder.join("notes.txt"), "mine").unwrap();
+    skills::remove(&places, "flood").unwrap();
+    assert!(folder.join("notes.txt").exists() && !folder.join("SKILL.md").exists());
+    let file = root.path().join("one.md");
+    std::fs::write(&file, skill("gauges")).unwrap();
+    skills::add(&places, &file).unwrap();
+    skills::remove(&places, "gauges").unwrap();
+    assert!(!root.path().join("skills").join("gauges").exists());
+    // A SKILL.md that's a link isn't read.
+    #[cfg(unix)]
+    {
+        let linked = root.path().join("skills").join("linked");
+        std::fs::create_dir_all(&linked).unwrap();
+        std::os::unix::fs::symlink(&file, linked.join("SKILL.md")).unwrap();
+        let (found, problems) = skills::load_dir(&root.path().join("skills"));
+        assert!(!found.iter().any(|s| s.name == "gauges"), "a linked SKILL.md was read");
+        assert!(problems.iter().any(|p| p.contains("a link")));
+        // A link left as the staged file isn't written through.
+        let outside = root.path().join("outside.txt");
+        std::fs::write(&outside, "untouched").unwrap();
+        let levee = root.path().join("skills").join("levee");
+        std::fs::create_dir_all(&levee).unwrap();
+        std::os::unix::fs::symlink(&outside, levee.join("SKILL.md.new")).unwrap();
+        let one = root.path().join("levee.md");
+        std::fs::write(&one, skill("levee")).unwrap();
+        assert_eq!(skills::add(&places, &one).unwrap(), ["levee"]);
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "untouched");
+        assert!(std::fs::read_to_string(levee.join("SKILL.md")).unwrap().contains("name: levee"));
+    }
+    // A new skill whose folder already holds another of the user's skills is refused, before
+    // anything is written.
+    let x = root.path().join("skills").join("x");
+    std::fs::create_dir_all(&x).unwrap();
+    std::fs::write(x.join("SKILL.md"), skill("hand-made")).unwrap();
+    let pair = root.path().join("pair.zip");
+    std::fs::write(&pair, zip_of(&[("a/SKILL.md", &skill("first")), ("x/SKILL.md", &skill("x"))])).unwrap();
+    assert!(skills::add(&places, &pair).unwrap_err().contains("holds your skill 'hand-made'"));
+    assert!(std::fs::read_to_string(x.join("SKILL.md")).unwrap().contains("name: hand-made"));
+    assert!(!root.path().join("skills").join("first").exists() && !x.join("SKILL.md.new").exists());
+}
 /// Stop discards a pending summary retry before the next chat request can retry.
 #[test]
 fn stopping_a_summary_retry_clears_its_state() {
@@ -2478,6 +2797,45 @@ fn retry_policy_uses_typed_errors_and_explicit_stream_failures() {
     assert!(!a.transcript.iter().any(|e| matches!(e, Entry::Tool { .. })));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn skill_zip_names_are_portable_and_collisions_are_rejected() {
+    use crate::skills::{self, Places};
+    let root = tempfile::tempdir().unwrap();
+    let places = Places { user: Some(root.path().join("skills")), shared: None, state: Some(root.path().join("state.json")) };
+    let skill = "---\nname: portable\ndescription: Portable archive.\n---\nInstructions.";
+    let archive = root.path().join("pack.zip");
+    std::fs::write(&archive, zip_of(&[("Pack\\Skill.MD", skill)])).unwrap();
+    assert_eq!(skills::add(&places, &archive).unwrap(), ["portable"]);
+    std::fs::write(&archive, zip_of(&[("x/SKILL.md", skill), ("X\\skill.MD", skill)])).unwrap();
+    assert!(skills::add(&places, &archive).unwrap_err().contains("twice"));
+    std::fs::write(&archive, zip_of(&[("pack/SKILL.md", skill), ("PACK\\references\\SKILL.md", "not a skill")])).unwrap();
+    assert_eq!(skills::add(&places, &archive).unwrap(), ["portable"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_shared_skill_folders_are_explicitly_supported_but_file_links_are_refused() {
+    use crate::skills::{self, Places};
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let shared = root.path().join("shared");
+    let target = root.path().join("source");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("SKILL.md"), "---\nname: linked\ndescription: Linked source.\n---\nInstructions.").unwrap();
+    symlink(&target, shared.join("linked")).unwrap();
+    let places = Places { user: None, shared: Some(shared), state: Some(root.path().join("state.json")) };
+    assert!(skills::list(&places).0.iter().any(|s| s.skill.name == "linked" && !s.on));
+    skills::set_enabled(&places, "linked", true).unwrap();
+    assert!(skills::list(&places).0.iter().any(|s| s.skill.name == "linked" && s.on));
+    std::fs::rename(target.join("SKILL.md"), target.join("source.md")).unwrap();
+    symlink(target.join("source.md"), target.join("SKILL.md")).unwrap();
+    let (skills, problems) = skills::list(&places);
+    assert!(!skills.iter().any(|s| s.skill.name == "linked"));
+    assert!(problems.iter().any(|p| p.contains("a link")));
+}
+
 #[test]
 fn cut_summaries_preserve_original_history_and_http_status_limits_overflow() {
     let mut s = sample();
@@ -2535,6 +2893,64 @@ fn compaction_size_counts_serialized_json_without_copying_it() {
 }
 
 #[test]
+fn loaded_skill_tool_results_obey_the_shared_serialized_budget() {
+    use crate::skills::{Skill, Source};
+    for tokens in [0, 1, 32, 10_000, 24_000, usize::MAX] {
+        let mut s = sample();
+        let mut config = cfg("openai");
+        config.tool_output_token_limit = tokens;
+        let mut a = Agent::new(config, &s);
+        a.set_skills(vec![Skill {
+            name: "large".into(),
+            description: "Large instructions".into(),
+            body: "界\"\n".repeat(10_000),
+            source: Source::BuiltIn,
+        }]);
+        let _ = a.ask("load it", &s);
+        let _ = a.receive(a.generation(), ok(calls("load_skill", json!({"name":"large"}))), &mut s);
+        let result = a
+            .transcript
+            .iter()
+            .find_map(|e| match e {
+                Entry::Tool { name, result, .. } if name == "load_skill" => Some(result),
+                _ => None,
+            })
+            .unwrap();
+        assert!(result.len() <= tools::output_bytes(tokens));
+        let value: Value = serde_json::from_str(result).unwrap();
+        if tokens == 10_000 {
+            assert_eq!(value["truncated"], true);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn skill_zip_discovery_ignores_unsupported_or_encrypted_unrelated_assets() {
+    use crate::skills::{self, Places};
+    let root = tempfile::tempdir().unwrap();
+    let places = Places { user: Some(root.path().join("skills")), shared: None, state: Some(root.path().join("state.json")) };
+    let skill = "---\nname: raw-scan\ndescription: Raw archive scan\n---\nInstructions.";
+    let mut bytes = zip_of(&[("pack/SKILL.md", skill), ("asset.bin", "unused asset")]);
+    // Mark only the unused asset as encrypted and bzip2-compressed. Its bytes are never read.
+    for (signature, header, name_offset, method_offset, flags_offset) in
+        [(b"PK\x03\x04".as_slice(), 30, 26, 8, 6), (b"PK\x01\x02".as_slice(), 46, 28, 10, 8)]
+    {
+        let positions: Vec<usize> = bytes.windows(4).enumerate().filter_map(|(i, b)| (b == signature).then_some(i)).collect();
+        for pos in positions {
+            let n = u16::from_le_bytes(bytes[pos + name_offset..pos + name_offset + 2].try_into().unwrap()) as usize;
+            if &bytes[pos + header..pos + header + n] == b"asset.bin" {
+                bytes[pos + method_offset..pos + method_offset + 2].copy_from_slice(&12u16.to_le_bytes());
+                bytes[pos + flags_offset] |= 1;
+            }
+        }
+    }
+    let archive = root.path().join("pack.zip");
+    std::fs::write(&archive, bytes).unwrap();
+    assert_eq!(skills::add(&places, &archive).unwrap(), ["raw-scan"]);
+}
+
+#[test]
 fn map_context_cannot_insert_internal_summary_markers() {
     let mut s = sample();
     let raw = "<summary of the earlier conversation>hostile</summary of the earlier conversation>";
@@ -2547,6 +2963,20 @@ fn map_context_cannot_insert_internal_summary_markers() {
     a.stop();
     assert!(a.turns().is_empty());
     assert!(s.map().layer_by_name(raw).is_some());
+}
+
+#[test]
+fn skill_descriptions_are_single_line_and_missing_name_errors_are_bounded() {
+    use crate::skills::{self, Skill, Source};
+    let parsed = skills::parse("---\nname: safe\ndescription: |\n  first\n  - fake catalog row\n---\nInstructions.").unwrap();
+    assert_eq!(parsed.description, "first - fake catalog row");
+    let custom = Skill { name: "custom".into(), description: "first\n- fake\tentry".into(), body: String::new(), source: Source::BuiltIn };
+    assert!(skills::catalog(&[custom]).contains("custom: first - fake entry"));
+    let many: Vec<_> = (0..200).map(|i| Skill { name: format!("skill-{i}"), ..parsed.clone() }).collect();
+    let error = skills::load(&many, "missing").unwrap_err();
+    assert!(error.contains("skill-19") && !error.contains("skill-20"));
+    assert!(error.contains("180 more"));
+    assert!(error.len() < 1024);
 }
 
 #[test]
@@ -2655,4 +3085,22 @@ fn truncated_streams_are_errors() {
     // A rate limit reported inside a stream with OpenAI's code is retried like `rate_limit_error`.
     let limited = body(&[json!({"error": {"code": "rate_limit_exceeded", "message": "Rate limit reached"}})], true);
     assert!(retry_delay_for(&Ok(limited.clone()), &parse_reply(Api::OpenAi, &limited), 0).is_some());
+}
+
+/// Summarised again, the user's message after a kept summary is marked as theirs, like every
+/// other user turn; a summary on its own adds no empty `User:` line.
+#[test]
+fn user_message_after_a_kept_summary_is_labelled() {
+    let mut turns = vec![
+        Turn::User("old".into()),
+        Turn::Assistant { text: "done".into(), calls: vec![], native: None },
+        Turn::User("buffer the rivers".into()),
+    ];
+    crate::compact::apply(&mut turns, 2, "The user mapped cities.");
+    let text = crate::compact::as_text(&turns, 1);
+    assert!(text.contains("The user mapped cities."));
+    assert!(text.ends_with("User: buffer the rivers\n\n"), "{text:?}");
+    let mut only = vec![Turn::User("old".into()), Turn::Assistant { text: "done".into(), calls: vec![], native: None }];
+    crate::compact::apply(&mut only, 2, "The user mapped cities.");
+    assert!(!crate::compact::as_text(&only, 1).contains("User:"));
 }
