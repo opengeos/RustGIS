@@ -1237,6 +1237,7 @@ const GALLERY: &[(&str, &str, &str)] = &[
     ("calculateGeometry", "calc_geom", "Calculate\nGeometry"),
     ("summaryStatistics", "stats", "Summary\nStatistics"),
     ("exportFeatures", "export_layer", "Export\nFeatures"),
+    ("idwInterpolation", "relief", "IDW\nInterpolation"),
 ];
 
 fn analysis_groups(app: &mut RustGisApp, ui: &mut Ui) {

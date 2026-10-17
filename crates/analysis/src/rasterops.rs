@@ -272,7 +272,7 @@ pub fn line_of_sight(
 /// Most ray steps a viewshed takes, and cell-point pairs an interpolation weighs (each about a
 /// second or two).
 const MAX_VIEWSHED_WORK: i64 = 400_000_000;
-const MAX_IDW_WORK: usize = 400_000_000;
+pub(crate) const MAX_IDW_WORK: usize = 400_000_000;
 
 /// Cells visible from an observer (1) or not (0) within `radius_m`; outside the radius no-data.
 pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f64) -> Result<Vec<f32>, String> {
@@ -333,7 +333,8 @@ pub fn viewshed(r: &Raster, b: usize, observer: Coord, height: f64, radius_m: f6
     Ok(out)
 }
 
-/// Inverse distance weighted interpolation of point values onto a longitude/latitude grid.
+/// Inverse distance weighted interpolation of point values onto a longitude/latitude grid, from
+/// each cell's `neighbours` nearest points, or from every point (as QGIS does) when it is 0.
 pub fn idw(points: &[(Coord, f64)], extent: &Extent, cell_deg: f64, power: f64, neighbours: usize, name: &str) -> Result<Raster, String> {
     if points.len() < 2 {
         return Err("interpolation needs at least two points with values".into());
@@ -352,7 +353,10 @@ pub fn idw(points: &[(Coord, f64)], extent: &Extent, cell_deg: f64, power: f64, 
     if w.saturating_mul(h).saturating_mul(points.len()) > MAX_IDW_WORK {
         return Err(format!("{w} × {h} cells from {} points is too much work; use a larger cell size", points.len()));
     }
-    let k = neighbours.clamp(1, points.len());
+    if !(power.is_finite() && power >= 0.0) {
+        return Err("the distance coefficient must be zero or more".into());
+    }
+    let k = if neighbours == 0 { points.len() } else { neighbours.clamp(1, points.len()) };
     let mut data = Vec::with_capacity(w * h);
     let mut near: Vec<(f64, f64)> = Vec::with_capacity(points.len());
     for row in 0..h {
@@ -372,8 +376,11 @@ pub fn idw(points: &[(Coord, f64)], extent: &Extent, cell_deg: f64, power: f64, 
             let v = if let Some(exact) = near.iter().find(|(d, _)| *d < 1e-12) {
                 exact.1
             } else {
+                // Weights relative to the nearest point's: the same ratios as 1/dᵖ, without
+                // overflowing for a high power.
+                let nearest = near.iter().map(|(d, _)| *d).fold(f64::INFINITY, f64::min);
                 let (num, den) = near.iter().fold((0.0, 0.0), |(n, d), (dist, v)| {
-                    let wgt = 1.0 / dist.powf(power);
+                    let wgt = (nearest / dist).powf(power);
                     (n + wgt * v, d + wgt)
                 });
                 num / den
@@ -661,6 +668,15 @@ mod tests {
         assert_eq!((g.width, g.height), (10, 10));
         let row = &g.bands[0].data[50..60];
         assert!(row[0] < row[9] && row[0] > 0.0 && row[9] < 10.0, "{row:?}");
+        // Every point (0), and a power high enough to overflow 1/dᵖ, still give finite values.
+        let all = idw(&[(Coord::new(0.0, 0.0), 0.0), (Coord::new(1.0, 0.0), 10.0)], &Extent::new(0.0, -0.5, 1.0, 0.5), 0.1, 99.0, 0, "idw")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let row = &all.bands[0].data[50..60];
+        assert!(row.iter().all(|v| (0.0..=10.0).contains(v)) && row[0] < 1e-3 && row[9] > 10.0 - 1e-3, "{row:?}");
+        // With every point, a far one still pulls each cell off the two near ones' value.
+        let pts = [(Coord::new(0.0, 0.0), 0.0), (Coord::new(1.0, 0.0), 0.0), (Coord::new(5.0, 0.0), 100.0)];
+        let all = idw(&pts, &Extent::new(0.0, -0.5, 1.0, 0.5), 0.1, 1.0, 0, "idw").unwrap_or_else(|e| panic!("{e}"));
+        assert!(all.bands[0].data.iter().all(|v| *v > 0.0 && *v < 100.0), "{:?}", all.bands[0].data);
         let p = profile(&r, 0, &[Coord::new(0.0005, 0.01), Coord::new(0.0195, 0.01)], 20);
         assert_eq!(p.len(), 20);
         assert!(p.last().and_then(|x| x.2).unwrap_or(0.0) > p[0].2.unwrap_or(0.0) + 150.0);
