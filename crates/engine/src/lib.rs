@@ -780,7 +780,9 @@ impl Session {
         self.check_history_projection();
         let cam = self.map().camera;
         if let Some(last) = self.last_camera {
-            let moved = (last.center.x - cam.center.x).abs() > last.res * 2.0 || (last.res / cam.res - 1.0).abs() > 0.01;
+            let moved = (last.center.x - cam.center.x).abs() > last.res * 2.0
+                || (last.res / cam.res - 1.0).abs() > 0.01
+                || (last.bearing - cam.bearing).abs() > 0.5;
             if !moved {
                 return;
             }

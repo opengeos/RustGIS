@@ -6012,6 +6012,12 @@ fn the_map_turns_to_a_bearing() {
     assert!(s.run("map.setBearing", &json!({"bearing": "north"})).is_err());
     s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 5_000_000, "bearing": 45})).unwrap();
     assert_eq!(s.map().camera.bearing, 45.0);
+    assert!(s.run("map.goToXY", &json!({"lon": 0.0, "lat": 0.0, "bearing": "east"})).is_err());
+    assert!((s.map().center_lonlat().x - 10.0).abs() < 1e-6, "a refused bearing doesn't move the map");
+    // Previous Extent turns the map back.
+    s.run("map.setBearing", &json!({"bearing": 0})).unwrap();
+    s.run("map.prevExtent", &json!({})).unwrap();
+    assert_eq!(s.map().camera.bearing, 45.0);
     assert_eq!(s.run("info.project", &json!({})).unwrap()["bearing"], json!(45.0));
     // A bookmark keeps the bearing, in the project and in a bookmarks file.
     s.run("bookmark.add", &json!({"name": "Turned"})).unwrap();

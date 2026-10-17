@@ -754,7 +754,6 @@ fn pan(app: &mut RustGisApp, dx: f64, dy: f64, w: f64, h: f64) {
     }
 }
 
-/// Zooms by `factor` about a screen point.
 /// Turns the flat map by `degrees` about the view's centre.
 fn turn_by(app: &mut RustGisApp, degrees: f64) {
     let cam = &mut app.session.map_mut().camera;
@@ -762,6 +761,7 @@ fn turn_by(app: &mut RustGisApp, degrees: f64) {
     cam.set_bearing(bearing);
 }
 
+/// Zooms by `factor` about a screen point.
 fn zoom(app: &mut RustGisApp, factor: f64, x: f64, y: f64, w: f64, h: f64) {
     let m = app.session.map_mut();
     if m.projection == Projection::Globe {
@@ -1427,9 +1427,12 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     scale_bar(app, p, rect, t);
     // The arrow points north; on a turned map clicking it faces north again.
     let bearing = if app.session.map().projection.is_globe() { 0.0 } else { app.session.map().camera.bearing };
-    let hit = ui.interact(north_arrow_rect(rect), egui::Id::new("map_north_arrow"), Sense::click());
+    // Facing north the corner stays the map's (identify, select and sketch clicks land there).
     if bearing != 0.0 {
-        let hit = hit.on_hover_text(tl!("Reset north")).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let hit = ui
+            .interact(north_arrow_rect(rect), egui::Id::new("map_north_arrow"), Sense::click())
+            .on_hover_text(tl!("Reset north"))
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
         if hit.clicked() {
             let _ = app.run("map.resetNorth", json!({}));
         }

@@ -950,8 +950,11 @@ fn flush_acc(pm: &mut Pixmap, cmds: &mut Vec<gpu_scene::DrawCmd>, dirty: &mut bo
 /// `full_res_rasters` renders rasters at full resolution (exports); `backend` selects the CPU
 /// pixmap or a GPU scene (see [`Backend`]).
 fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend) -> Option<RenderOutput> {
-    if view.camera.bearing != 0.0 && !map.projection.is_globe() {
-        return render_turned(map, view, full_res_rasters).map(RenderOutput::Cpu);
+    // A bearing set directly on the camera may be unnormalised (or no number, which faces north).
+    let bearing = rustgis_map::camera::normalize_bearing(view.camera.bearing);
+    if bearing != 0.0 && !map.projection.is_globe() {
+        let view = View { camera: Camera { bearing, ..view.camera }, ..*view };
+        return render_turned(map, &view, full_res_rasters).map(RenderOutput::Cpu);
     }
     render_frame(map, view, full_res_rasters, backend, None)
 }
@@ -2434,6 +2437,11 @@ mod tests {
         // Any bearing covers the whole view: no corner is left empty.
         let r = render(&mut m, &View { camera: Camera { bearing: -33.0, ..camera }, ..view }).unwrap();
         assert!(r.pixmap.pixels().iter().all(|p| p.alpha() == 255));
+        // A bearing set straight on the camera is normalised: no number faces north, 450 is 90.
+        let nan = render(&mut m, &View { camera: Camera { bearing: f64::NAN, ..camera }, ..view }).unwrap();
+        assert_eq!(nan.pixmap.data(), north.pixmap.data());
+        let (x, y) = ink(&render(&mut m, &View { camera: Camera { bearing: 450.0, ..camera }, ..view }).unwrap().pixmap);
+        assert!((x - 400.0).abs() < 4.0 && (y - 140.0).abs() < 4.0, "450°: {x},{y}");
     }
 
     #[test]

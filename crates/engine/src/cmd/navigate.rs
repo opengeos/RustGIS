@@ -303,12 +303,16 @@ pub(crate) fn go_to_xy(s: &mut Session, p: &Value) -> CmdResult {
     if !(-180.0..=180.0).contains(&lon) || !(-90.0..=90.0).contains(&lat) {
         return Err("longitude must be within ±180 and latitude within ±90".into());
     }
+    let bearing = match p.get("bearing") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(f(p, "bearing").ok_or("bearing must be a number of degrees")?),
+    };
     let m = s.map_mut();
     m.camera.center = m.to_map(Coord::new(lon, lat)).ok_or("that point is outside the map's projection")?;
     if let Some(sc) = f(p, "scale") {
         m.set_scale(sc);
     }
-    if let Some(b) = f(p, "bearing") {
+    if let Some(b) = bearing {
         m.camera.bearing = b;
     }
     m.camera.clamp();
