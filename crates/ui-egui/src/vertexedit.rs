@@ -15,7 +15,7 @@ use crate::mapview::{lonlat_to_screen, screen_to_lonlat};
 const VERTEX_PX: f32 = 7.0;
 const MID_PX: f32 = 6.0;
 const EDGE_PX: f32 = 5.0;
-/// Most features and handles drawn at once (a large selection still draws quickly).
+/// Most features edited and handles drawn at once (a large selection still draws quickly).
 const MAX_FEATURES: usize = 50;
 const MAX_HANDLES: usize = 4000;
 /// Edges shorter than this (points) get no midpoint handle.
@@ -40,20 +40,20 @@ enum Handle {
     Edge(u32, usize, VertexId, Coord),
 }
 
-/// The features whose vertices the tool edits: the selected features of visible, editable
-/// feature layers, when editing is on.
-fn targets(app: &RustGisApp) -> Vec<(u32, usize, Geometry)> {
+/// The features whose vertices the tool edits: the selected features of visible feature layers
+/// held in memory (a layer read in place from its file can't be edited), when editing is on.
+fn targets(app: &RustGisApp) -> Vec<(u32, usize, &Geometry)> {
     let m = app.session.map();
     if !m.editing.settings.enabled {
         return Vec::new();
     }
     let mut out = Vec::new();
-    for l in m.layers.iter().filter(|l| l.visible && !l.selection.is_empty() && !l.is_raster() && !l.graphics) {
+    for l in m.layers.iter().filter(|l| l.visible && !l.selection.is_empty() && !l.is_raster() && !l.graphics && !l.is_streamed()) {
         for r in &l.selection {
             if out.len() >= MAX_FEATURES {
                 return out;
             }
-            if let Some(g) = l.dataset.features.get(*r).and_then(|f| f.geometry.clone()) {
+            if let Some(g) = l.dataset.features.get(*r).and_then(|f| f.geometry.as_ref()) {
                 out.push((l.id, *r, g));
             }
         }
@@ -78,21 +78,21 @@ fn nearest_on(a: Pos2, b: Pos2, p: Pos2) -> Pos2 {
 fn handle_at(app: &RustGisApp, rect: Rect, p: Pos2) -> Option<Handle> {
     let ts = targets(app);
     let mut best: Option<(f32, Handle)> = None;
-    for (layer, row, g) in &ts {
-        for (v, c) in g.vertices().into_iter().take(MAX_HANDLES) {
-            let Some(s) = lonlat_to_screen(app, rect, c) else { continue };
+    for &(layer, row, g) in &ts {
+        g.for_each_vertex(|v, c| {
+            let Some(s) = lonlat_to_screen(app, rect, c) else { return };
             let d = (s - p).length();
             if d <= VERTEX_PX && best.is_none_or(|b| d < b.0) {
-                best = Some((d, Handle::Vertex(*layer, *row, v, c)));
+                best = Some((d, Handle::Vertex(layer, row, v, c)));
             }
-        }
+        });
     }
     if let Some((_, h)) = best {
         return Some(h);
     }
-    for (layer, row, g) in &ts {
-        for (v, a, b) in g.edges().into_iter().take(MAX_HANDLES) {
-            let Some((sa, sb)) = edge_on_screen(app, rect, a, b) else { continue };
+    for &(layer, row, g) in &ts {
+        g.for_each_edge(|v, a, b| {
+            let Some((sa, sb)) = edge_on_screen(app, rect, a, b) else { return };
             let mid = sa + (sb - sa) / 2.0;
             let (d, at) = if (sb - sa).length() >= MID_MIN_PX && (mid - p).length() <= MID_PX {
                 ((mid - p).length() - MID_PX, mid)
@@ -104,9 +104,9 @@ fn handle_at(app: &RustGisApp, rect: Rect, p: Pos2) -> Option<Handle> {
                 && best.is_none_or(|b| d < b.0)
                 && let Some(c) = screen_to_lonlat(app, rect, at)
             {
-                best = Some((d, Handle::Edge(*layer, *row, v, c)));
+                best = Some((d, Handle::Edge(layer, row, v, c)));
             }
-        }
+        });
     }
     best.map(|(_, h)| h)
 }
@@ -171,6 +171,12 @@ pub fn click(app: &mut RustGisApp, rect: Rect, p: Pos2, c: Coord, shift: bool) {
 /// Delete removes the chosen vertex; `false` when none is chosen.
 pub fn delete_chosen(app: &mut RustGisApp) -> bool {
     let Some((layer, row, v)) = app.map.vertex else { return false };
+    // A vertex chosen before an undo, or on a feature no longer selected, is gone: Delete then
+    // deletes the selected features as usual.
+    if !targets(app).iter().any(|(l, r, g)| *l == layer && *r == row && g.vertex(v).is_some()) {
+        app.map.vertex = None;
+        return false;
+    }
     let p = json!({"layer": layer, "row": row, "action": "delete", "part": v.part, "ring": v.ring, "index": v.index});
     if app.run("edit.vertex", p).is_ok() {
         // The vertex before it is chosen next, so Delete can go on removing.
@@ -208,6 +214,8 @@ pub fn cursor(app: &RustGisApp, rect: Rect, p: Pos2) -> Option<egui::CursorIcon>
 pub fn draw(app: &RustGisApp, p: &Painter, rect: Rect, accent: Color32) {
     let green = Color32::from_rgb(0x16, 0x9A, 0x5A);
     let drag = app.map.vertex_drag;
+    // Handles off the map aren't drawn and don't count towards the cap.
+    let shown = rect.expand(8.0);
     let mut handles = 0;
     for (layer, row, g) in targets(app) {
         // The edges a dragged vertex pulls: its neighbours' (or the split edge's ends) to it.
@@ -215,7 +223,7 @@ pub fn draw(app: &RustGisApp, p: &Painter, rect: Rect, accent: Color32) {
             let ends = if d.insert {
                 g.edges().into_iter().find(|e| e.0 == d.vertex).map(|e| vec![e.1, e.2]).unwrap_or_default()
             } else {
-                neighbours(&g, d.vertex)
+                neighbours(g, d.vertex)
             };
             if let Some(to) = lonlat_to_screen(app, rect, d.at) {
                 for e in ends.into_iter().filter_map(|c| lonlat_to_screen(app, rect, c)) {
@@ -225,33 +233,36 @@ pub fn draw(app: &RustGisApp, p: &Painter, rect: Rect, accent: Color32) {
                 p.circle_stroke(to, 5.0, Stroke::new(1.5, Color32::WHITE));
             }
         }
-        for (v, a, b) in g.edges() {
+        g.for_each_edge(|v, a, b| {
             if handles >= MAX_HANDLES {
-                break;
+                return;
             }
-            let Some((sa, sb)) = edge_on_screen(app, rect, a, b) else { continue };
-            if (sb - sa).length() >= MID_MIN_PX && !drag.is_some_and(|d| d.insert && d.layer == layer && d.row == row && d.vertex == v) {
-                let mid = sa + (sb - sa) / 2.0;
+            let Some((sa, sb)) = edge_on_screen(app, rect, a, b) else { return };
+            let mid = sa + (sb - sa) / 2.0;
+            if shown.contains(mid)
+                && (sb - sa).length() >= MID_MIN_PX
+                && !drag.is_some_and(|d| d.insert && d.layer == layer && d.row == row && d.vertex == v)
+            {
                 p.circle_filled(mid, 3.5, Color32::WHITE.gamma_multiply(0.85));
                 p.circle_stroke(mid, 3.5, Stroke::new(1.2, green));
                 handles += 1;
             }
-        }
-        for (v, c) in g.vertices() {
+        });
+        g.for_each_vertex(|v, c| {
             if handles >= MAX_HANDLES {
-                break;
+                return;
             }
             // The dragged vertex is drawn where the pointer has it.
             if drag.is_some_and(|d| !d.insert && d.layer == layer && d.row == row && d.vertex == v) {
-                continue;
+                return;
             }
-            let Some(s) = lonlat_to_screen(app, rect, c) else { continue };
+            let Some(s) = lonlat_to_screen(app, rect, c).filter(|s| shown.contains(*s)) else { return };
             let chosen = app.map.vertex == Some((layer, row, v));
             let size = if chosen { 9.0 } else { 7.0 };
             let r = Rect::from_center_size(s, vec2(size, size));
             p.rect_filled(r, 0.0, if chosen { accent } else { Color32::WHITE });
             p.rect_stroke(r, 0.0, Stroke::new(1.3, if chosen { Color32::WHITE } else { green }), egui::StrokeKind::Middle);
             handles += 1;
-        }
+        });
     }
 }

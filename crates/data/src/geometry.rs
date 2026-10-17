@@ -218,33 +218,44 @@ impl Geometry {
         }
     }
 
+    /// Calls `f` with every vertex, a closed ring's repeated last point left out.
+    pub fn for_each_vertex(&self, mut f: impl FnMut(VertexId, Coord)) {
+        for (part, ring, path, closed) in self.paths() {
+            for (index, c) in path.iter().take(open_len(path, closed)).enumerate() {
+                f(VertexId { part, ring, index }, *c);
+            }
+        }
+    }
+
     /// Every vertex, a closed ring's repeated last point left out.
     pub fn vertices(&self) -> Vec<(VertexId, Coord)> {
         let mut out = Vec::new();
-        for (part, ring, path, closed) in self.paths() {
-            for (index, c) in path.iter().take(open_len(path, closed)).enumerate() {
-                out.push((VertexId { part, ring, index }, *c));
-            }
-        }
+        self.for_each_vertex(|v, c| out.push((v, c)));
         out
     }
 
-    /// Every edge of a line or polygon: the vertex it starts at and its two ends (a ring's last
-    /// edge comes back to its first vertex). A vertex inserted on an edge goes after its start.
-    pub fn edges(&self) -> Vec<(VertexId, Coord, Coord)> {
+    /// Calls `f` with every edge of a line or polygon: the vertex it starts at and its two ends
+    /// (a ring's last edge comes back to its first vertex). A vertex inserted on an edge goes
+    /// after its start.
+    pub fn for_each_edge(&self, mut f: impl FnMut(VertexId, Coord, Coord)) {
         if matches!(self, Geometry::Point(_) | Geometry::MultiPoint(_)) {
-            return Vec::new();
+            return;
         }
-        let mut out = Vec::new();
         for (part, ring, path, closed) in self.paths() {
             let n = open_len(path, closed);
             let count = if closed && n > 2 { n } else { n.saturating_sub(1) };
             for index in 0..count {
                 if let (Some(a), Some(b)) = (path.get(index), path.get((index + 1) % n.max(1))) {
-                    out.push((VertexId { part, ring, index }, *a, *b));
+                    f(VertexId { part, ring, index }, *a, *b);
                 }
             }
         }
+    }
+
+    /// Every edge of a line or polygon (see [`Geometry::for_each_edge`]).
+    pub fn edges(&self) -> Vec<(VertexId, Coord, Coord)> {
+        let mut out = Vec::new();
+        self.for_each_edge(|v, a, b| out.push((v, a, b)));
         out
     }
 
