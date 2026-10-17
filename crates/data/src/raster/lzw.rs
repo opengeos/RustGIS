@@ -81,7 +81,8 @@ pub(crate) fn chunk<R: Read + Seek>(dec: &mut Decoder<R>, index: u32) -> Result<
     }
 
     let little = matches!(dec.byte_order(), ByteOrder::LittleEndian);
-    let mut words: Vec<u64> = Vec::with_capacity(dw * dh * samples);
+    // Converted a row at a time: only a row is ever held as words.
+    let mut out = empty(format, bps, dw * dh * samples)?;
     for row in decoded.chunks(row_bytes).take(dh) {
         let mut v = match predictor {
             3 if format == 3 => unshuffle(row, samples, size),
@@ -100,9 +101,9 @@ pub(crate) fn chunk<R: Read + Seek>(dec: &mut Decoder<R>, index: u32) -> Result<
             }
         }
         v.truncate(dw * samples);
-        words.extend(v);
+        append(&mut out, v);
     }
-    typed(words, format, bps)
+    Ok(out)
 }
 
 /// LZW-decodes `input` into `out`: how many bytes came out. A stream may stop short of its end
@@ -152,20 +153,38 @@ fn unshuffle(row: &[u8], samples: usize, size: usize) -> Vec<u64> {
     (0..n).map(|i| (0..size).fold(0u64, |acc, k| (acc << 8) | u64::from(b.get(k * n + i).copied().unwrap_or(0)))).collect()
 }
 
-/// The words as samples of their type.
-fn typed(words: Vec<u64>, format: u16, bps: u16) -> Result<DecodingResult> {
-    let w = words.into_iter();
+/// No samples yet, of the type `format` and `bps` name, with room for `n`.
+fn empty(format: u16, bps: u16, n: usize) -> Result<DecodingResult> {
     Ok(match (format, bps) {
-        (3, 32) => DecodingResult::F32(w.map(|x| f32::from_bits(x as u32)).collect()),
-        (3, 64) => DecodingResult::F64(w.map(f64::from_bits).collect()),
-        (2, 8) => DecodingResult::I8(w.map(|x| x as u8 as i8).collect()),
-        (2, 16) => DecodingResult::I16(w.map(|x| x as u16 as i16).collect()),
-        (2, 32) => DecodingResult::I32(w.map(|x| x as u32 as i32).collect()),
-        (2, 64) => DecodingResult::I64(w.map(|x| x as i64).collect()),
-        (1 | 4, 8) => DecodingResult::U8(w.map(|x| x as u8).collect()),
-        (1 | 4, 16) => DecodingResult::U16(w.map(|x| x as u16).collect()),
-        (1 | 4, 32) => DecodingResult::U32(w.map(|x| x as u32).collect()),
-        (1 | 4, 64) => DecodingResult::U64(w.collect()),
+        (3, 32) => DecodingResult::F32(Vec::with_capacity(n)),
+        (3, 64) => DecodingResult::F64(Vec::with_capacity(n)),
+        (2, 8) => DecodingResult::I8(Vec::with_capacity(n)),
+        (2, 16) => DecodingResult::I16(Vec::with_capacity(n)),
+        (2, 32) => DecodingResult::I32(Vec::with_capacity(n)),
+        (2, 64) => DecodingResult::I64(Vec::with_capacity(n)),
+        (1 | 4, 8) => DecodingResult::U8(Vec::with_capacity(n)),
+        (1 | 4, 16) => DecodingResult::U16(Vec::with_capacity(n)),
+        (1 | 4, 32) => DecodingResult::U32(Vec::with_capacity(n)),
+        (1 | 4, 64) => DecodingResult::U64(Vec::with_capacity(n)),
         (f, b) => return Err(err(format!("{b}-bit samples of format {f} aren't supported"))),
     })
+}
+
+/// Adds a row's words to `out` as samples of its type.
+fn append(out: &mut DecodingResult, words: Vec<u64>) {
+    let w = words.into_iter();
+    match out {
+        DecodingResult::F32(o) => o.extend(w.map(|x| f32::from_bits(x as u32))),
+        DecodingResult::F64(o) => o.extend(w.map(f64::from_bits)),
+        DecodingResult::I8(o) => o.extend(w.map(|x| x as u8 as i8)),
+        DecodingResult::I16(o) => o.extend(w.map(|x| x as u16 as i16)),
+        DecodingResult::I32(o) => o.extend(w.map(|x| x as u32 as i32)),
+        DecodingResult::I64(o) => o.extend(w.map(|x| x as i64)),
+        DecodingResult::U8(o) => o.extend(w.map(|x| x as u8)),
+        DecodingResult::U16(o) => o.extend(w.map(|x| x as u16)),
+        DecodingResult::U32(o) => o.extend(w.map(|x| x as u32)),
+        DecodingResult::U64(o) => o.extend(w),
+        // Never made by `empty`.
+        DecodingResult::F16(_) => {}
+    }
 }
