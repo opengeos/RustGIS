@@ -48,6 +48,7 @@ mod stacui;
 mod table;
 pub mod theme;
 mod update;
+mod vertexedit;
 mod widgets;
 mod workspacepanes;
 mod zarrui;

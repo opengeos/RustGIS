@@ -409,6 +409,14 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
                 continue;
             }
         }
+        // With Edit Vertices, Delete removes the chosen vertex rather than the feature.
+        if id == "edit.delete"
+            && app.session.active_layout.is_none()
+            && app.session.tool == rustgis_engine::Tool::EditVertices
+            && crate::vertexedit::delete_chosen(app)
+        {
+            continue;
+        }
         // In a layout, Delete removes the selected element (and never the map's hidden features).
         if id == "edit.delete"
             && let Some(li) = app.session.active_layout

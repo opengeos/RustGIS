@@ -31,6 +31,8 @@ enum DragKind {
     Box,
     /// Drawing a graphic by dragging (rectangle, circle, ellipse, freehand, lasso, picture).
     Sketch,
+    /// Moving or inserting a vertex with the Edit Vertices tool.
+    Vertex,
 }
 
 /// Graphic shapes drawn by dragging rather than clicking.
@@ -88,6 +90,10 @@ pub struct MapView {
     sketch_done: bool,
     /// The next click splits the selected lines there (Editing pane › Split).
     pub split_mode: bool,
+    /// The vertex chosen with the Edit Vertices tool (layer, row, vertex): Delete removes it.
+    pub vertex: Option<(u32, usize, rustgis_engine::data::VertexId)>,
+    /// The vertex being dragged with the Edit Vertices tool.
+    pub vertex_drag: Option<crate::vertexedit::VertexDrag>,
     /// The magnifying lens follows the pointer.
     pub magnifier: bool,
     pub popup: Option<Popup>,
@@ -157,6 +163,8 @@ impl Default for MapView {
             sketch: Vec::new(),
             sketch_done: false,
             split_mode: false,
+            vertex: None,
+            vertex_drag: None,
             magnifier: false,
             popup: None,
             deleting: None,
@@ -231,6 +239,8 @@ impl MapView {
     pub fn cancel_sketch(&mut self) {
         self.sketch.clear();
         self.sketch_done = false;
+        self.vertex = None;
+        self.vertex_drag = None;
     }
     pub fn sketch_len(&self) -> usize {
         self.sketch.len()
@@ -710,7 +720,7 @@ fn globe(app: &RustGisApp, rect: Rect) -> Option<Globe> {
 }
 
 /// The longitude/latitude under a screen point (`None` off the globe).
-fn screen_to_lonlat(app: &RustGisApp, rect: Rect, p: Pos2) -> Option<Coord> {
+pub(crate) fn screen_to_lonlat(app: &RustGisApp, rect: Rect, p: Pos2) -> Option<Coord> {
     let (w, h) = (rect.width() as f64, rect.height() as f64);
     let (x, y) = ((p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64);
     match globe(app, rect) {
@@ -720,7 +730,7 @@ fn screen_to_lonlat(app: &RustGisApp, rect: Rect, p: Pos2) -> Option<Coord> {
 }
 
 /// The screen point of a longitude/latitude (`None` behind the globe).
-fn lonlat_to_screen(app: &RustGisApp, rect: Rect, c: Coord) -> Option<Pos2> {
+pub(crate) fn lonlat_to_screen(app: &RustGisApp, rect: Rect, c: Coord) -> Option<Pos2> {
     let (w, h) = (rect.width() as f64, rect.height() as f64);
     let (x, y) = match globe(app, rect) {
         Some(g) => g.forward(c)?,
@@ -847,8 +857,11 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     if resp.drag_started()
         && let Some(p) = resp.interact_pointer_pos()
     {
+        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
         let kind = if middle {
             DragKind::Pan
+        } else if tool == Tool::EditVertices && crate::vertexedit::drag_start(app, rect, origin) {
+            DragKind::Vertex
         } else {
             match tool {
                 Tool::Explore if shift => DragKind::Box,
@@ -883,6 +896,17 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             app.map.sketch.truncate(1);
             app.map.sketch.push(c);
         }
+    }
+    if let (Some((_, DragKind::Vertex)), Some(p)) = (app.map.drag, resp.interact_pointer_pos()) {
+        crate::vertexedit::drag_to(app, rect, p);
+        ui.ctx().request_repaint();
+    }
+    if resp.drag_stopped()
+        && let Some((_, DragKind::Vertex)) = app.map.drag
+    {
+        app.map.drag = None;
+        crate::vertexedit::drag_stop(app);
+        return;
     }
     if let Some((_, DragKind::Pan)) = app.map.drag {
         let d = resp.drag_delta();
@@ -960,6 +984,8 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     if resp.double_clicked() {
         if matches!(tool, Tool::CreateLine | Tool::CreatePolygon | Tool::Measure | Tool::MeasureArea) || vertex_shape(tool) {
             finish_sketch(app);
+        } else if tool == Tool::EditVertices {
+            // Its two clicks chose a vertex or a feature; zooming would lose the place.
         } else if let Some(p) = resp.interact_pointer_pos() {
             zoom(app, 2.0, (p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64, w, h);
             app.map.last_interaction = time;
@@ -1035,6 +1061,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                 app.map.last_interaction = time;
                 app.map.camera_moved = true;
             }
+            Tool::EditVertices => crate::vertexedit::click(app, rect, p, c, shift),
             Tool::CreatePoint => {
                 let _ = app.run("edit.addFeature", with_template(app, json!({"geometry": {"type": "Point", "coordinates": [c.x, c.y]}})));
             }
@@ -1055,6 +1082,11 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                 }
             }
         }
+    }
+    if tool == Tool::EditVertices
+        && let Some(icon) = hover.and_then(|p| crate::vertexedit::cursor(app, rect, p))
+    {
+        ui.ctx().set_cursor_icon(icon);
     }
     if resp.secondary_clicked() {
         app.map.menu_lonlat = app.map.pointer_lonlat;
@@ -1147,6 +1179,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     let editing = &app.session.map().editing;
     if editing.settings.enabled
         && editing.settings.show_vertices
+        && app.session.tool != Tool::EditVertices
         && (app.session.tool.creates() || app.ui.right == Some(crate::RightPane::Editing))
     {
         let mut verts: Vec<Coord> = Vec::new();
@@ -1168,6 +1201,10 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
                 p.rect_stroke(r, 0.0, Stroke::new(1.2, Color32::from_rgb(0x16, 0x9A, 0x5A)), egui::StrokeKind::Middle);
             }
         }
+    }
+    // The Edit Vertices tool's handles.
+    if app.session.tool == Tool::EditVertices {
+        crate::vertexedit::draw(app, p, rect, accent);
     }
     // The navigator: a compass, zoom buttons and a pan pad in the top-left corner.
     if app.session.map().view.navigator {
@@ -1234,7 +1271,9 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     }
     // Where a click would snap to.
     if app.session.map().editing.snapping.enabled
-        && (app.session.tool.creates() || matches!(app.session.tool, Tool::Graphic(_) | Tool::Measure | Tool::MeasureArea))
+        && (app.session.tool.creates()
+            || matches!(app.session.tool, Tool::Graphic(_) | Tool::Measure | Tool::MeasureArea)
+            || app.map.vertex_drag.is_some())
         && let Some(c) = app.map.pointer_lonlat
         && let Some(at) = {
             let cam = app.session.map().camera;
@@ -1357,6 +1396,10 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         Tool::CreateLine => Some("Click to add vertices · double-click to finish the line"),
         Tool::CreatePolygon => Some("Click to add vertices · double-click to close the polygon"),
         Tool::Select => Some("Click or drag a box · Shift adds · Ctrl removes"),
+        Tool::EditVertices if app.map.vertex.is_some() => {
+            Some("Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex")
+        }
+        Tool::EditVertices => Some("Click a feature, then drag its vertices · click an edge to add one"),
         Tool::ZoomIn => Some("Drag a box or click to zoom in"),
         Tool::Graphic("point") => Some("Click the map to place a point"),
         Tool::Graphic("text") => Some("Click the map to place text"),

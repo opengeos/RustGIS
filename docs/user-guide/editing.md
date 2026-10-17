@@ -17,9 +17,17 @@ read-only. The Editing pane (Settings, Templates, Status, Modify) holds the rest
 - **Modify**: move the selected features by metres east and north, rotate them, scale them,
   merge them (polygons are unioned), explode multipart features, split a line where you click,
   and flip line direction. Edit › Tools lists every editing tool.
+- **Edit Vertices** (Edit › Features): reshape the selected features on the map. Their vertices
+  show as square handles and each edge has a round midpoint handle. Drag a vertex to move it;
+  drag a midpoint, or click an edge, to insert a vertex; click a vertex and press ++delete++ to
+  remove it (a line keeps at least two vertices, a polygon ring three). Clicking elsewhere
+  selects the feature there (++shift++ adds it). Multipart features and polygon holes work the
+  same way, dragged vertices snap when snapping is on, and each move, insertion or deletion is
+  one undo step. ++esc++ finishes. From scripts and the command line, `edit.vertex` does the
+  same to one vertex and `edit.setGeometry` (Set Geometry) replaces a feature's whole shape.
 - **Feature templates**: named default values for new features, made from a selected feature;
   the Create tool uses the chosen template.
-- **Snapping**: new vertices snap to nearby vertices, edges and line ends (magenta marker).
+- **Snapping**: new and dragged vertices snap to nearby vertices, edges and line ends (magenta marker).
 - **Elevation**: new features get a `z` value, constant or sampled from a raster surface.
 - **Ground to grid**: a scale factor and rotation applied to entered distances and directions
   (Move, and `edit.traverse`, which draws a line or polygon from distances and bearings).

@@ -341,9 +341,12 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_editable_selection),
-        C::new("edit.setGeometry", "Edit Vertices", "Edit › Features › Modify", set_geometry)
+        C::new("edit.setGeometry", "Set Geometry", "Edit › Features › Modify", set_geometry)
             .when(need_editable)
             .params(r#"{"layer"?, "row": number, "geometry": GeoJSON geometry}"#),
+        C::new("edit.vertex", "Edit Vertex", "Edit › Features › Modify", edit_vertex).when(need_editable).params(
+            r#"{"layer"?, "row": number, "action": "move"|"insert"|"delete", "part"?: number, "ring"?: number, "index": number (insert: the vertex the new one follows), "lon"?, "lat"?}"#,
+        ),
         C::new("edit.merge", "Merge", "Edit › Features › Modify", merge).when(need_editable_selection),
         C::new("edit.explode", "Explode", "Edit › Features › Modify", explode).when(need_editable_selection),
         C::new("edit.split", "Split", "Edit › Features › Modify", split).when(need_editable_selection).params(r#"{"lon", "lat"}"#),
@@ -433,6 +436,47 @@ fn set_geometry(s: &mut Session, p: &Json) -> CmdResult {
     let id = s.layer_id(p)?;
     let row = p.get("row").and_then(Json::as_u64).ok_or("row is required")? as usize;
     let g = p.get("geometry").and_then(rustgis_data::io::geometry_from_geojson).ok_or("geometry must be a GeoJSON geometry")?;
+    replace_geometry(s, id, row, g)?;
+    Ok(Json::Null)
+}
+
+/// Moves, inserts or deletes one vertex of a feature: one edit, through the same checks and undo
+/// as `edit.setGeometry`.
+fn edit_vertex(s: &mut Session, p: &Json) -> CmdResult {
+    let id = s.layer_id(p)?;
+    let row = p.get("row").and_then(Json::as_u64).ok_or("row is required")? as usize;
+    let num = |k: &str| p.get(k).and_then(Json::as_u64).map(|n| n as usize);
+    let v = rustgis_data::VertexId::new(num("part").unwrap_or(0), num("ring").unwrap_or(0), num("index").ok_or("index is required")?);
+    let at = || -> Result<Coord, String> {
+        let (lon, lat) = (f(p, "lon").ok_or("lon is required")?, f(p, "lat").ok_or("lat is required")?);
+        if !(lon.is_finite() && lat.is_finite()) || lon.abs() > 360.0 || lat.abs() > 90.0 {
+            return Err("lon and lat are degrees".into());
+        }
+        Ok(Coord::new(lon, lat))
+    };
+    let g = s
+        .map()
+        .layer(id)
+        .and_then(|l| l.dataset.features.get(row))
+        .ok_or("no such row")?
+        .geometry
+        .clone()
+        .ok_or("the feature has no shape")?;
+    let (g, v) = match ps(p, "action").ok_or("action is required")? {
+        "move" => (g.move_vertex(v, at()?).ok_or("no such vertex")?, v),
+        "insert" => {
+            let g = g.insert_vertex(v, at()?).ok_or("vertices can only be inserted in lines and polygons")?;
+            (g, rustgis_data::VertexId::new(v.part, v.ring, v.index + 1))
+        }
+        "delete" => (g.delete_vertex(v)?, v),
+        a => return Err(format!("unknown action '{a}'")),
+    };
+    replace_geometry(s, id, row, g)?;
+    Ok(json!({"part": v.part, "ring": v.ring, "index": v.index}))
+}
+
+/// Replaces a feature's shape with one of the layer's kind, as one edit.
+fn replace_geometry(s: &mut Session, id: u32, row: usize, g: Geometry) -> Result<(), String> {
     super::edit::validate(&g)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     if l.geometry_type() != GeometryType::None && l.geometry_type() != g.kind() {
@@ -442,8 +486,7 @@ fn set_geometry(s: &mut Session, p: &Json) -> CmdResult {
     let before = f.clone();
     f.geometry = Some(g);
     l.touch_geometry();
-    apply(s, id, vec![Change { before: Some(before), row: Some(row) }])?;
-    Ok(Json::Null)
+    apply(s, id, vec![Change { before: Some(before), row: Some(row) }])
 }
 
 /// The one layer holding the selection.

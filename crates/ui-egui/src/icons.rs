@@ -672,6 +672,16 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
                 p.rect(x - 1.6, y - 1.6, 3.2, 3.2, Some(Color32::WHITE), Some((1.0, ink)), 0.0);
             }
         }
+        "vertices" => {
+            // A shape with one vertex dragged out of place.
+            p.line(&[(3.0, 19.0), (6.0, 6.0), (12.0, 11.0)], 1.4, ink);
+            p.line(&[(12.0, 11.0), (21.0, 19.0), (3.0, 19.0)], 1.4, ink);
+            p.line(&[(12.0, 11.0), (17.0, 3.0)], 1.0, accent);
+            for (x, y) in [(3.0, 19.0), (6.0, 6.0), (21.0, 19.0), (12.0, 11.0)] {
+                p.rect(x - 1.6, y - 1.6, 3.2, 3.2, Some(Color32::WHITE), Some((1.0, ink)), 0.0);
+            }
+            p.rect(15.0, 1.0, 4.0, 4.0, Some(accent), Some((1.0, Color32::WHITE)), 0.0);
+        }
         "dark" => {
             p.circle(12.0, 12.0, 8.0, Some(Color32::from_rgb(0x3B, 0x44, 0x60)), None);
             p.circle(15.5, 9.0, 6.5, Some(if ink.r() > 128 { Color32::from_rgb(0x24, 0x29, 0x31) } else { Color32::WHITE }), None);
@@ -1141,6 +1151,7 @@ pub const ALL: &[&str] = &[
     "point_tool",
     "line_tool",
     "polygon_tool",
+    "vertices",
     "dark",
     "graticule",
     "search",

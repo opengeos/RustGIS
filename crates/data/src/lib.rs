@@ -30,7 +30,7 @@ pub mod wkb;
 pub mod xml;
 pub mod zip;
 
-pub use geometry::{Geometry, GeometryType};
+pub use geometry::{Geometry, GeometryType, VertexId};
 pub use rustgis_geom::{Coord, Extent};
 pub use value::{Field, FieldType, Value};
 

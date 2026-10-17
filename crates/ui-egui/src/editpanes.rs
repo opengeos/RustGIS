@@ -154,6 +154,12 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         if ui.selectable_label(split, tl!("Split (click the line)")).clicked() {
             app.map.split_mode = !split;
         }
+        let on = app.session.tool == rustgis_engine::Tool::EditVertices;
+        if ui.selectable_label(on, tl!("Edit Vertices")).on_hover_text(tl!("Drag vertices on the map; click an edge to add one")).clicked()
+        {
+            app.map.cancel_sketch();
+            run(app, "tool.set", json!({"tool": if on { "explore" } else { "editVertices" }}));
+        }
     });
 
     heading(ui, "Feature Templates");
