@@ -6,7 +6,9 @@
 //! So a small feature is buffered in one piece, and a long line or a large polygon's outline in
 //! stretches of a few hundred kilometres, each in its own projection, and the pieces are joined.
 
-use geo::{BooleanOps, Buffer, Coord as GC, LineString, MultiLineString, MultiPolygon, Orient, Point, Polygon, orient::Direction};
+use geo::{
+    BooleanOps, Buffer, Contains, Coord as GC, LineString, MultiLineString, MultiPolygon, Orient, Point, Polygon, orient::Direction,
+};
 use rustgis_data::{Coord, Geometry};
 use rustgis_geom::{Aeqd, geodesic_interpolate, haversine_m, spherical_centre};
 
@@ -43,7 +45,7 @@ struct Plane(Aeqd);
 
 impl Plane {
     fn new(centre: Coord, reference: f64) -> Self {
-        let lon = reference + (centre.x - reference + 180.0).rem_euclid(360.0) - 180.0;
+        let lon = reference + wrap(centre.x - reference);
         Plane(Aeqd::new(Coord::new(if lon.is_finite() { lon } else { centre.x }, centre.y)))
     }
 
@@ -53,11 +55,72 @@ impl Plane {
 
     /// A buffer drawn in the plane, in lon/lat degrees.
     fn back(&self, mp: &MultiPolygon<f64>) -> MultiPolygon<f64> {
-        let ring = |r: &LineString<f64>| {
-            LineString::new(r.0.iter().map(|p| self.0.inverse(Coord::new(p.x, p.y))).map(|c| GC { x: c.x, y: c.y }).collect())
-        };
-        MultiPolygon::new(mp.0.iter().map(|p| Polygon::new(ring(p.exterior()), p.interiors().iter().map(ring).collect())).collect())
+        MultiPolygon::new(
+            mp.0.iter().map(|p| Polygon::new(self.ring(p.exterior()), p.interiors().iter().map(|r| self.ring(r)).collect())).collect(),
+        )
     }
+
+    /// A ring drawn in the plane, in lon/lat degrees.
+    fn ring(&self, r: &LineString<f64>) -> LineString<f64> {
+        let lonlat: Vec<Coord> = r.0.iter().map(|p| self.0.inverse(Coord::new(p.x, p.y))).collect();
+        let around = |lat: f64| {
+            let pole = self.0.forward(Coord::new(0.0, lat));
+            Polygon::new(r.clone(), vec![]).contains(&Point::new(pole.x, pole.y))
+        };
+        if around(90.0) {
+            return LineString::new(self.capped(r, &lonlat, 90.0));
+        }
+        if around(-90.0) {
+            return LineString::new(self.capped(r, &lonlat, -90.0));
+        }
+        let mut out: Vec<GC<f64>> = Vec::with_capacity(lonlat.len());
+        for c in lonlat {
+            // Each longitude within 180° of the one before, so the ring doesn't jump at ±180°.
+            let x = out.last().map_or(c.x, |prev| prev.x + wrap(c.x - prev.x));
+            out.push(GC { x: if x.is_finite() { x } else { c.x }, y: c.y });
+        }
+        LineString::new(out)
+    }
+
+    /// A ring round a pole, which goes once round the globe in longitude, as a lon/lat ring: cut at
+    /// the antimeridian and closed along the pole, so in lon/lat it holds the cap between the ring and
+    /// the top (or bottom) of the map.
+    fn capped(&self, planar: &LineString<f64>, ring: &[Coord], pole: f64) -> Vec<GC<f64>> {
+        let mut v: Vec<Coord> = ring.iter().map(|c| Coord::new(wrap(c.x), c.y)).collect();
+        if v.len() > 1 && v.first() == v.last() {
+            v.pop();
+        }
+        let n = v.len();
+        // The edge that crosses the antimeridian: its ends are more than 180° apart.
+        let seam = (0..n).find(|k| match (v.get((k + n - 1) % n), v.get(*k)) {
+            (Some(a), Some(b)) => (b.x - a.x).abs() > 180.0,
+            _ => false,
+        });
+        let found = seam.and_then(|k| Some((k, v.get((k + n - 1) % n)?, planar.0.get((k + n - 1) % n)?, planar.0.get(k)?)));
+        let Some((k, a, pa, pb)) = found else {
+            return ring.iter().map(|c| GC { x: c.x, y: c.y }).collect();
+        };
+        // Where the edge from `a` meets ±180° (`edge`, on `a`'s side), found along the edge in the
+        // plane, where it's straight.
+        let edge = if a.x > 0.0 { 180.0 } else { -180.0 };
+        let at = |t: f64| self.0.inverse(Coord::new(pa.x + t * (pb.x - pa.x), pa.y + t * (pb.y - pa.y)));
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..50 {
+            let mid = (lo + hi) / 2.0;
+            // Before the crossing a longitude is short of `edge`, after it past (wrapped round).
+            if wrap(at(mid).x - edge) * edge < 0.0 { lo = mid } else { hi = mid }
+        }
+        let y = at((lo + hi) / 2.0).y;
+        let mut out = vec![GC { x: -edge, y }];
+        out.extend((0..n).filter_map(|i| v.get((k + i) % n)).map(|c| GC { x: c.x, y: c.y }));
+        out.extend([GC { x: edge, y }, GC { x: edge, y: pole }, GC { x: -edge, y: pole }, GC { x: -edge, y }]);
+        out
+    }
+}
+
+/// A longitude difference folded into −180..180.
+fn wrap(d: f64) -> f64 {
+    (d + 180.0).rem_euclid(360.0) - 180.0
 }
 
 fn point(c: Coord, metres: f64) -> MultiPolygon<f64> {

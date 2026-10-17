@@ -245,7 +245,12 @@ impl Aeqd {
         let (sc, cc) = c.sin_cos();
         let (sa, ca) = if rho > 0.0 { (p.x / rho, p.y / rho) } else { (0.0, 1.0) };
         let lat = (self.sin0 * cc + self.cos0 * sc * ca).clamp(-1.0, 1.0).asin();
-        let dlon = (sa * sc * self.cos0).atan2(cc - self.sin0 * lat.sin());
+        // At a pole every direction is south (or north): the azimuth is the meridian.
+        let dlon = if self.cos0 < 1e-9 {
+            if self.sin0 > 0.0 { p.x.atan2(-p.y) } else { p.x.atan2(p.y) }
+        } else {
+            (sa * sc * self.cos0).atan2(cc - self.sin0 * lat.sin())
+        };
         Coord::new(self.lon0 + dlon.to_degrees(), lat.to_degrees())
     }
 }

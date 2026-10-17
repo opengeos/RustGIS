@@ -604,6 +604,9 @@ fn select_by_location(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     let ds = input(inp, p, "input")?;
     let sel_ds = input(inp, p, "select")?;
     let dist = num(p, "distance").unwrap_or(0.0).max(0.0) * 1000.0;
+    if dist > 5_000_000.0 {
+        return Err("Distance is too large (limit 5000 km)".into());
+    }
     let selectors: Vec<geo::Geometry<f64>> = rows(inp, p, "select", sel_ds)
         .iter()
         .filter_map(|r| sel_ds.features.get(*r)?.geometry.as_ref())
@@ -1029,7 +1032,8 @@ mod tests {
     /// cross, the vertex sits inside both circles by up to their chord's sag (0.5% with `geo`'s
     /// 0.2 rad steps), as anywhere between a planar buffer's vertices.
     fn all_at(polys: &[Vec<Vec<Coord>>], line: &[Coord], km: f64) {
-        for c in polys.iter().flatten().flatten() {
+        // A cap closed along a pole has corners on the pole, which aren't on the buffer's edge.
+        for c in polys.iter().flatten().flatten().filter(|c| c.y.abs() < 90.0) {
             let d = km_to(*c, line);
             assert!(d < km * 1.002 && d > km * 0.994, "{c:?} is {d:.2} km away, not {km} km");
         }
@@ -1079,6 +1083,23 @@ mod tests {
         // A line round the world at the largest distance is a few hundred pieces, joined.
         let round = (0..=8).map(|i| Coord::new(-180.0 + 45.0 * i as f64, 10.0)).collect::<Vec<_>>();
         assert!(!buffered(Geometry::Line(vec![round]), 5000.0).is_empty());
+        // A long line keeps a long distance: a stretch's vertices are up to 300 km from the
+        // centre of its projection.
+        all_at(&buffered(Geometry::Line(vec![line.to_vec()]), 1000.0), &line, 1000.0);
+        // A circle round a pole is closed along it, so in lon/lat it holds the pole's
+        // neighbourhood at every longitude; a circle centred on a pole is one too.
+        for (centre, km) in [(Coord::new(10.0, 85.0), 1000.0), (Coord::new(0.0, 90.0), 500.0), (Coord::new(-60.0, -80.0), 1500.0)] {
+            let cap = buffered(Geometry::Point(centre), km);
+            all_at(&cap, &[centre, centre], km);
+            let pole = centre.y.signum() * 89.0;
+            let poly = cap.first().map(|rings| geo::Polygon::new(rings[0].iter().map(|c| geo::Coord { x: c.x, y: c.y }).collect(), vec![]));
+            for lon in [-179.0, -90.0, 0.0, 45.0, 179.0] {
+                assert!(
+                    poly.as_ref().is_some_and(|p| geo::Contains::contains(p, &geo::Point::new(lon, pole))),
+                    "{centre:?}: ({lon}, {pole})"
+                );
+            }
+        }
         // Two antipodes still have their circles.
         let ends = buffered(Geometry::MultiPoint(vec![Coord::new(0.0, 0.0), Coord::new(180.0, 0.0)]), 100.0);
         assert_eq!(ends.len(), 2);
