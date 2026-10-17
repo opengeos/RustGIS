@@ -455,7 +455,8 @@ impl Renderer {
                 s.stroke = c;
             }
         };
-        // The class's row in `legend()`, which lists the classes in order and then `other`.
+        // The class's row in `legend()`, which lists the classes and then `other`. Unique Values
+        // rows are sorted by label, so that class's row is built here rather than looked up.
         let row = match (&mut *self, class) {
             (Renderer::Unique { classes, class_labels, .. }, ClassRef::Value(v)) => {
                 let i = classes.iter().position(|(k, _)| k == v).ok_or_else(|| format!("no class with the value '{v}'"))?;
@@ -472,7 +473,10 @@ impl Renderer {
                         None => {}
                     }
                 }
-                i
+                return classes
+                    .get(i)
+                    .map(|(k, s)| LegendEntry { label: unique_label(class_labels, k), symbol: *s, fallback: false })
+                    .ok_or_else(|| "the class has no legend row".into());
             }
             (Renderer::Unique { classes, other, other_label, .. }, ClassRef::Other) => {
                 restyle(other);
