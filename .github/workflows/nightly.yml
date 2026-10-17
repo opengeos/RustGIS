@@ -36,9 +36,10 @@ jobs:
         run: |
           set -euo pipefail
           last=""
+          # An API error runs the build rather than failing here, which would skip the report.
           if [ "$EVENT" = schedule ]; then
             last="$(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly.yml --event schedule --status success \
-              --limit 1 --json headSha --jq '.[0].headSha // ""')"
+              --limit 1 --json headSha --jq '.[0].headSha // ""' || true)"
           fi
           if [ "$last" = "$GITHUB_SHA" ]; then
             echo "No commits since the last successful nightly run ($last)."
