@@ -107,8 +107,9 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
             m_per_px: res / view.pixels_per_point.max(0.01),
             ppp,
         };
+        let mut scratch = None;
         for t in layers {
-            let d = draw_layer(pm, t, &frame, labels);
+            let d = draw_layer(pm, t, &frame, labels, &mut scratch);
             collect(d, &t.name, &mut out);
         }
         return out;
@@ -150,8 +151,9 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
     // centre once the mosaic is warped there.
     let mosaic_ppp = if detail > 0.0 { (detail * k / m_per_px) as f32 } else { ppp };
     let frame = Frame { left: e.min_x, top: e.max_y, m_per_px, ppp: mosaic_ppp.clamp(0.05, 8.0) };
+    let mut scratch = None;
     for t in layers {
-        let d = draw_layer(&mut mosaic, t, &frame, false);
+        let d = draw_layer(&mut mosaic, t, &frame, false, &mut scratch);
         collect(d, &t.name, &mut out);
     }
     warp(pm, &mosaic, &frame, &to_lonlat, &to_merc);
@@ -159,15 +161,25 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
 }
 
 /// Draws one tile layer into `pm`: straight in, or (blended) on a layer of its own composited
-/// with its blend mode over what's beneath.
-fn draw_layer(pm: &mut Pixmap, t: &TileLayer, frame: &Frame, labels: bool) -> rustgis_tiles::Drawn {
+/// with its blend mode over what's beneath. `scratch` holds that layer between calls, so the
+/// blended layers of one draw share one allocation.
+fn draw_layer(pm: &mut Pixmap, t: &TileLayer, frame: &Frame, labels: bool, scratch: &mut Option<Pixmap>) -> rustgis_tiles::Drawn {
     if t.blend == Blend::Normal {
         return rustgis_tiles::draw(pm, &spec(t), t.opacity, frame, labels);
     }
-    let Some(mut own) = Pixmap::new(pm.width(), pm.height()) else {
+    let fits = scratch.as_ref().is_some_and(|s| s.width() == pm.width() && s.height() == pm.height());
+    if fits {
+        if let Some(s) = scratch.as_mut() {
+            s.fill(tiny_skia::Color::TRANSPARENT);
+        }
+    } else {
+        *scratch = Pixmap::new(pm.width(), pm.height());
+    }
+    let Some(own) = scratch.as_mut() else {
+        log::debug!("no room to blend tile layer '{}' ({}x{}): drawing it unblended", t.name, pm.width(), pm.height());
         return rustgis_tiles::draw(pm, &spec(t), t.opacity, frame, labels);
     };
-    let d = rustgis_tiles::draw(&mut own, &spec(t), t.opacity, frame, labels);
+    let d = rustgis_tiles::draw(own, &spec(t), t.opacity, frame, labels);
     let paint = PixmapPaint { blend_mode: crate::blend_mode(t.blend), ..PixmapPaint::default() };
     pm.draw_pixmap(0, 0, own.as_ref(), &paint, Transform::identity(), None);
     d

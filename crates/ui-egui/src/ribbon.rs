@@ -613,8 +613,14 @@ fn web_basemaps(ui: &mut Ui, app: &mut RustGisApp, t: &Tokens) {
             let sel = if stack { shown.iter().any(|s| s == id) } else { shown.first().map(String::as_str) == Some(id) };
             let resp = ui.add_sized(vec2(140.0, 22.0), egui::Button::selectable(sel, name)).on_hover_text(url);
             if resp.clicked() {
-                let p = json!({"url": url, "kind": kind, "name": name, "attribution": attribution, "maxZoom": max_zoom, "id": id, "replace": !stack});
-                let _ = app.run("map.addTiles", p);
+                // Stacking, a shown basemap's button takes it off, keeping the others' blending;
+                // adding it again would replace it with a fresh layer on top.
+                let _ = if stack && sel {
+                    app.run("map.removeTiles", json!({"id": id}))
+                } else {
+                    let p = json!({"url": url, "kind": kind, "name": name, "attribution": attribution, "maxZoom": max_zoom, "id": id, "replace": !stack});
+                    app.run("map.addTiles", p)
+                };
                 ui.close();
             }
             if i % 2 == 1 {
