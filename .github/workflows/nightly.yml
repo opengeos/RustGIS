@@ -58,7 +58,8 @@ jobs:
   report:
     name: Report
     needs: [changed, rust]
-    if: always() && github.event_name == 'schedule' && needs.changed.outputs.run == 'true'
+    # A cancelled run is neither a failure nor a fix.
+    if: always() && github.event_name == 'schedule' && needs.changed.outputs.run == 'true' && needs.rust.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
       issues: write

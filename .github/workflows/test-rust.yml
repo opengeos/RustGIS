@@ -48,6 +48,9 @@ jobs:
           # Pull requests restore main's cache but don't save their own: saving takes minutes on
           # Windows, and pull request caches crowd main's out of the repository's cache space.
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # The nightly's cache holds the release build too: keep it apart from the one pull
+          # requests restore.
+          key: ${{ inputs.release-build && 'release' || '' }}
       - name: Tests
         run: cargo test --workspace --locked
       - name: Layering check
