@@ -1162,7 +1162,6 @@ fn letting_agents_control_rustgis_starts_the_relay_and_shows_how_to_connect() {
         }
     }));
     app.run("ui.pane.assistant", json!({})).expect("opens the assistant");
-    app.assistant.settings = true;
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
         |ui, app: &mut RustGisApp| {
             let ctx = ui.ctx().clone();
@@ -1171,6 +1170,10 @@ fn letting_agents_control_rustgis_starts_the_relay_and_shows_how_to_connect() {
         },
         app,
     );
+    // The first frame loads the assistant's settings and closes the form when they're complete (a
+    // key in the environment): open it after that.
+    h.step();
+    h.state_mut().assistant.settings = true;
     h.step();
     assert!(h.state().relay.is_none(), "off until the user turns it on");
     assert!(h.query_by_label("Add this MCP server to your agent:").is_none(), "nothing to connect to while it's off");
