@@ -1071,6 +1071,14 @@ mod tests {
         assert_eq!(split.len(), 2, "{split:?}");
         let within = |poly: &Vec<Vec<Coord>>, w: f64, e: f64| poly.iter().flatten().all(|c| (w..=e).contains(&c.x));
         assert!(split.iter().any(|p| within(p, 165.0, 185.0)) && split.iter().any(|p| within(p, -185.0, -165.0)), "{split:?}");
+        // The error of a projection centred on the feature grows with a vertex's distance from
+        // the centre, not with the buffer's distance: a small square keeps 3000 km.
+        let small =
+            vec![Coord::new(30.0, 50.0), Coord::new(31.0, 50.0), Coord::new(31.0, 51.0), Coord::new(30.0, 51.0), Coord::new(30.0, 50.0)];
+        all_at(&buffered(Geometry::Polygon(vec![vec![small.clone()]]), 3000.0), &small, 3000.0);
+        // A line round the world at the largest distance is a few hundred pieces, joined.
+        let round = (0..=8).map(|i| Coord::new(-180.0 + 45.0 * i as f64, 10.0)).collect::<Vec<_>>();
+        assert!(!buffered(Geometry::Line(vec![round]), 5000.0).is_empty());
         // Two antipodes still have their circles.
         let ends = buffered(Geometry::MultiPoint(vec![Coord::new(0.0, 0.0), Coord::new(180.0, 0.0)]), 100.0);
         assert_eq!(ends.len(), 2);
