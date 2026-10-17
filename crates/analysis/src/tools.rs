@@ -243,11 +243,14 @@ fn feature_lat(g: &Geometry) -> f64 {
     g.label_point().map(|c| c.y).unwrap_or(0.0)
 }
 
-fn to_metres(d: f64, units: &str) -> f64 {
-    match units.to_ascii_lowercase().as_str() {
-        "meters" | "metres" | "m" => d,
-        "miles" | "mi" => d * 1609.344,
-        _ => d * 1000.0,
+/// A distance in `units` (one of [`UNITS`], as `resolve_params` spells it; empty for the default,
+/// kilometres) in metres. Any other unit is an error, never kilometres (#406).
+fn to_metres(d: f64, units: &str) -> Result<f64, String> {
+    match units {
+        "Meters" => Ok(d),
+        "Miles" => Ok(d * 1609.344),
+        "Kilometers" | "" => Ok(d * 1000.0),
+        other => Err(format!("Units must be one of {} (not '{other}')", UNITS.join(", "))),
     }
 }
 
@@ -273,7 +276,7 @@ fn union_all<'a>(polys: impl IntoIterator<Item = &'a geo::Polygon<f64>>) -> Mult
 fn buffer(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let d = num(p, "distance").ok_or("Distance must be a number")?;
-    let metres = to_metres(d, s(p, "units"));
+    let metres = to_metres(d, s(p, "units"))?;
     if metres.abs() > 5_000_000.0 {
         return Err("Distance is too large (limit 5000 km)".into());
     }
@@ -827,6 +830,69 @@ mod tests {
         for id in ["convexHull", "featureToPoint", "simplify", "calculateGeometry", "exportFeatures", "erase"] {
             let r = crate::run(id, &m, &j(serde_json::json!({"input": "polys", "erase": "polys"})));
             assert!(r.is_ok(), "{id}: {r:?}");
+        }
+    }
+
+    /// A choice outside the declared ones is an error naming them, never a guess (#406): "meter"
+    /// was a buffer in kilometres. A choice in another case is the declared one.
+    #[test]
+    fn choices_outside_the_list_are_errors() {
+        let mut pts = Dataset::new("p", GeometryType::Point, vec![]);
+        pts.push(Some(Geometry::Point(Coord::new(-105.9378, 35.687))), vec![]);
+        let m = Map(HashMap::from([("p".to_string(), pts)]));
+        let buffer =
+            |units: serde_json::Value| crate::run("buffer", &m, &serde_json::json!({"input": "p", "distance": 500, "units": units}));
+        for bad in ["meter", "Meter", "feet", "m", "km"] {
+            let e = buffer(serde_json::json!(bad)).err().unwrap_or_default();
+            assert!(e.contains("Kilometers, Meters, Miles") && e.contains(bad), "{bad}: {e}");
+        }
+        assert!(buffer(serde_json::json!(5)).is_err());
+        // "meters" is "Meters": a 500 m radius (about 0.0045° of latitude), named as declared.
+        let r = buffer(serde_json::json!("meters")).unwrap();
+        assert_eq!(r.messages, vec!["Buffer: 1 features at 500 Meters".to_string()]);
+        let e = layer(r).extent();
+        assert!((e.max_y - e.min_y - 1000.0 / 111_000.0).abs() < 0.0005, "{e:?}");
+        assert!(buffer(serde_json::Value::Null).is_ok(), "no units: the default");
+        assert_eq!(layer(buffer(serde_json::json!("  ")).unwrap()).name, "p_Buffer", "blank units: the default");
+        // An external tool's choices (GeoLibre's, a plugin's) aren't checked here: its runner does.
+        crate::register_external(
+            "choicetest",
+            || {
+                vec![ToolSpec {
+                    id: "choicetest:list",
+                    name: "Choice Test",
+                    toolbox: "Test",
+                    summary: "",
+                    params: &[P {
+                        name: "features",
+                        label: "Features",
+                        kind: K::Choice(&["contrast", "energy"]),
+                        required: false,
+                        default: "",
+                        help: "",
+                    }],
+                    run: crate::external_placeholder,
+                }]
+            },
+            |_, _, _| Err("not run".into()),
+        );
+        let external = crate::external_tools_of("choicetest").first().unwrap();
+        let list = crate::resolve_params(external, &serde_json::json!({"features": "contrast,energy"})).unwrap();
+        assert_eq!(list["features"], "contrast,energy");
+        // A copy of a built-in spec is still checked.
+        let b = crate::tool("buffer").unwrap();
+        let copy = ToolSpec { id: b.id, name: b.name, toolbox: b.toolbox, summary: b.summary, params: b.params, run: b.run };
+        assert!(crate::resolve_params(&copy, &serde_json::json!({"input": "p", "distance": 1, "units": "meter"})).is_err());
+        assert!(crate::run("buffer", &m, &serde_json::json!({"input": "p", "distance": 1, "dissolve": "everything"})).is_err());
+        // Every built-in choice defaults to one of its own choices.
+        for t in TOOLS {
+            for p in t.params {
+                if let K::Choice(c) = p.kind
+                    && let Ok(serde_json::Value::String(d)) = serde_json::from_str::<serde_json::Value>(p.default)
+                {
+                    assert!(c.contains(&d.as_str()), "{}: {} defaults to {d:?}", t.id, p.name);
+                }
+            }
         }
     }
 

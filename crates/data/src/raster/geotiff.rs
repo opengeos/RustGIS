@@ -244,6 +244,21 @@ fn to_f32(buf: DecodingResult) -> (Vec<f32>, &'static str) {
     }
 }
 
+/// Whether the current image is LZW-compressed.
+fn lzw<R: Read + Seek>(dec: &mut Decoder<R>) -> bool {
+    dec.find_tag_unsigned::<u16>(Tag::Compression).ok().flatten() == Some(5)
+}
+
+/// Decodes chunk `index` (a strip or tile) of the current image. The `tiff` crate fails on some
+/// LZW chunks it should read (issue #350): those are decoded by [`super::lzw`] instead.
+pub(crate) fn read_chunk<R: Read + Seek>(dec: &mut Decoder<R>, index: u32) -> Result<DecodingResult> {
+    match dec.read_chunk(index) {
+        Ok(v) => Ok(v),
+        Err(e) if lzw(dec) => super::lzw::chunk(dec, index).map_err(|_| err(e)),
+        Err(e) => Err(err(e)),
+    }
+}
+
 /// Bits per sample of the current image (the most of any sample).
 fn bits<R: Read + Seek>(dec: &mut Decoder<R>) -> u16 {
     dec.find_tag_unsigned_vec::<u16>(Tag::BitsPerSample).ok().flatten().and_then(|v| v.into_iter().max()).unwrap_or(8)
@@ -515,7 +530,7 @@ fn decimate<R: Read + Seek>(
     let mut data_type = "Float32";
     for i in 0..chunks.count() {
         let Some((plane, index)) = chunks.wanted(i, k) else { continue };
-        let (values, dt) = to_f32(dec.read_chunk(index).map_err(err)?);
+        let (values, dt) = to_f32(read_chunk(dec, index)?);
         data_type = dt;
         chunks.place(&mut bands, &values, plane, index, k, ow);
     }
@@ -559,7 +574,7 @@ fn decimate_parallel(
                 break;
             }
             let Some((plane, index)) = chunks.wanted(i, k) else { continue };
-            match dec.read_chunk(index) {
+            match read_chunk(&mut dec, index) {
                 Ok(buf) => {
                     let (values, dt) = to_f32(buf);
                     if let Ok(mut o) = out.lock() {
@@ -567,7 +582,7 @@ fn decimate_parallel(
                         chunks.place(&mut o.0, &values, plane, index, k, ow);
                     }
                 }
-                Err(e) => return fail(err(e)),
+                Err(e) => return fail(e),
             }
         }
     };
@@ -740,14 +755,19 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>)
     // A large image, from a file, is read a chunk at a time on several threads (not one of
     // fewer than 8 bits a sample, whose chunks pack several pixels to a byte).
     let chunked = open.is_some() && n >= 1 << 20 && bits(&mut dec) >= 8;
-    let (bands, data_type) = if decimate_by > 1 || extra_samples || chunked {
-        let (iw, ih) = if decimate_by > 1 { (full_w, full_h) } else { (w, h) };
-        let open = open.map(|o| (o, image, limits));
-        // Already one vector per band.
-        decimate(&mut dec, iw, ih, nbands, planar, decimate_by, open)?
+    let whole = if decimate_by > 1 || extra_samples || chunked {
+        None
     } else {
         let mut buf = DecodingResult::U8(Vec::new());
-        dec.read_image_to_buffer(&mut buf).map_err(err)?;
+        match dec.read_image_to_buffer(&mut buf) {
+            Ok(_) => Some(buf),
+            // An LZW image the decoder fails on is read a chunk at a time, the chunks it fails on
+            // decoded by [`read_chunk`] (issue #350).
+            Err(_) if lzw(&mut dec) && bits(&mut dec) >= 8 => None,
+            Err(e) => return Err(err(e)),
+        }
+    };
+    let (bands, data_type) = if let Some(buf) = whole {
         let (values, dt) = to_f32(buf);
         if values.len() < n.saturating_mul(nbands) {
             return Err(err("couldn't read every band"));
@@ -770,6 +790,11 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>)
             bands
         };
         (bands, dt)
+    } else {
+        let (iw, ih) = if decimate_by > 1 { (full_w, full_h) } else { (w, h) };
+        let open = open.map(|o| (o, image, limits));
+        // Already one vector per band.
+        decimate(&mut dec, iw, ih, nbands, planar, decimate_by, open)?
     };
 
     let mut transform = geo.transform;
@@ -1392,5 +1417,186 @@ mod tests {
         let mut odd = keys;
         odd[27] = 99; // ProjCoordTransGeoKey
         assert!(custom_crs(&odd, &doubles, "").is_err());
+    }
+
+    /// A tiled, LZW-compressed Float32 GeoTIFF, `w × h` in `tile`-pixel tiles, written as GDAL
+    /// writes one: each tile whole (padding zeros) through `predictor` (1, 2 or 3) and LZW.
+    fn lzw_tiled(w: u32, h: u32, tile: u32, predictor: u16, pixel: impl Fn(u32, u32) -> f32) -> Vec<u8> {
+        let (across, down) = (w.div_ceil(tile), h.div_ceil(tile));
+        let mut out = vec![b'I', b'I', 42, 0, 0, 0, 0, 0];
+        let (mut offsets, mut counts) = (Vec::new(), Vec::new());
+        for t in 0..across * down {
+            let (x0, y0) = ((t % across) * tile, (t / across) * tile);
+            let mut raw = Vec::new();
+            for y in y0..y0 + tile {
+                let row: Vec<f32> = (x0..x0 + tile).map(|x| if x < w && y < h { pixel(x, y) } else { 0.0 }).collect();
+                match predictor {
+                    1 => raw.extend(row.iter().flat_map(|v| v.to_le_bytes())),
+                    2 => raw.extend(
+                        row.iter()
+                            .enumerate()
+                            .flat_map(|(i, v)| v.to_bits().wrapping_sub(if i == 0 { 0 } else { row[i - 1].to_bits() }).to_le_bytes()),
+                    ),
+                    _ => {
+                        let n = row.len();
+                        let mut b = vec![0u8; n * 4];
+                        for (i, v) in row.iter().enumerate() {
+                            for (k, byte) in v.to_bits().to_be_bytes().into_iter().enumerate() {
+                                b[k * n + i] = byte;
+                            }
+                        }
+                        for i in (1..b.len()).rev() {
+                            b[i] = b[i].wrapping_sub(b[i - 1]);
+                        }
+                        raw.extend(b);
+                    }
+                }
+            }
+            let lzw = weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8).encode(&raw).unwrap();
+            offsets.push(out.len() as u32);
+            counts.push(lzw.len() as u32);
+            out.extend(lzw);
+        }
+        let shorts = |v: &[u16]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let longs = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let doubles = |v: &[f64]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let mut e: Vec<(u16, u16, u32, Vec<u8>)> = vec![
+            (256, 4, 1, longs(&[w])),
+            (257, 4, 1, longs(&[h])),
+            (258, 3, 1, shorts(&[32])),
+            (259, 3, 1, shorts(&[5])),
+            (262, 3, 1, shorts(&[1])),
+            (277, 3, 1, shorts(&[1])),
+            (317, 3, 1, shorts(&[predictor])),
+            (322, 4, 1, longs(&[tile])),
+            (323, 4, 1, longs(&[tile])),
+            (324, 4, offsets.len() as u32, longs(&offsets)),
+            (325, 4, counts.len() as u32, longs(&counts)),
+            (339, 3, 1, shorts(&[3])),
+            (33550, 12, 3, doubles(&[10.0, 10.0, 0.0])),
+            (33922, 12, 6, doubles(&[0.0, 0.0, 0.0, 660_000.0, 5_115_000.0, 0.0])),
+            (34735, 3, 8, shorts(&[1, 1, 0, 1, 3072, 0, 1, 25832])),
+        ];
+        let ifd_at = out.len() + out.len() % 2;
+        out.resize(ifd_at, 0);
+        out[4..8].copy_from_slice(&(ifd_at as u32).to_le_bytes());
+        let values_at = ifd_at + 2 + 12 * e.len() + 4;
+        let (mut dir, mut values) = ((e.len() as u16).to_le_bytes().to_vec(), Vec::<u8>::new());
+        for (tag, ty, count, bytes) in &mut e {
+            dir.extend(tag.to_le_bytes());
+            dir.extend(ty.to_le_bytes());
+            dir.extend(count.to_le_bytes());
+            if bytes.len() <= 4 {
+                bytes.resize(4, 0);
+                dir.extend(bytes.iter());
+            } else {
+                dir.extend(((values_at + values.len()) as u32).to_le_bytes());
+                values.extend(bytes.iter());
+            }
+        }
+        out.extend(dir);
+        out.extend([0; 4]);
+        out.extend(values);
+        out
+    }
+
+    /// An elevation model's tile: mostly no data, the rest small whole numbers, from `seed`.
+    fn dtm_tile(seed: u64, tile: u32) -> Vec<f32> {
+        let next = |s: u64| s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let mut s = next(seed);
+        (0..tile * tile)
+            .map(|_| {
+                s = next(s);
+                if (s >> 60) < 12 { -3.4028235e38 } else { ((s >> 40) % 8) as f32 }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn lzw_tiles_the_tiff_crate_drops_bytes_of_are_read() {
+        // Issue #350: a 104-pixel-wide Float32 DTM in 128-pixel LZW tiles failed with "no lzw end
+        // code found". The tiff crate drops a padded tile's last bytes when the LZW decoder gives
+        // them back with the input used up, which depends on the data: this tile does that.
+        let values = dtm_tile(40, 128);
+        let pixel = |x: u32, y: u32| values[(y * 128 + x) as usize];
+        let bytes = lzw_tiled(104, 128, 128, 1, pixel);
+        let mut dec = Decoder::new(std::io::Cursor::new(&bytes)).unwrap();
+        assert!(dec.read_chunk(0).is_err(), "the tiff crate reads this tile now: the test no longer shows issue #350");
+        let check = |r: &Raster| {
+            assert_eq!((r.width, r.height, r.data_type.as_str()), (104, 128, "Float32"));
+            for (x, y) in [(0, 0), (103, 0), (50, 64), (0, 127), (103, 127)] {
+                assert_eq!(r.bands[0].data[(y * 104 + x) as usize].to_bits(), pixel(x, y).to_bits(), "pixel ({x}, {y})");
+            }
+            assert!((0..104 * 128).all(|i| r.bands[0].data[i as usize].to_bits() == pixel(i % 104, i / 104).to_bits()));
+        };
+        check(&read(std::io::Cursor::new(&bytes), "dtm").unwrap());
+        // From a file, a chunk at a time; and in the browser, in parts.
+        check(&read_threaded(&bytes, MAX_SAMPLES).unwrap());
+        check(&read_in_parts(&bytes, 512, MAX_SAMPLES).0);
+        // The same tile of a larger image, as one of the tiles a COG is shown with.
+        let wide = lzw_tiled(232, 200, 128, 1, |x, y| if x < 128 && y < 128 { pixel(x, y) } else { (x + y) as f32 });
+        let r = read(std::io::Cursor::new(&wide), "wide").unwrap();
+        assert_eq!(r.bands[0].data[231 + 199 * 232], 430.0);
+        assert_eq!(r.bands[0].data[5 * 232 + 7].to_bits(), pixel(7, 5).to_bits());
+        // A damaged tile fails the open, never the app: cut short, garbled.
+        let ifd = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        let mut cut = bytes.clone();
+        // Its TileByteCounts (one value, in its IFD entry) halved.
+        let entries = ifd + 2;
+        let at = (0..15).map(|i| entries + 12 * i).find(|&e| cut[e..e + 2] == 325u16.to_le_bytes()).unwrap() + 8;
+        let count = u32::from_le_bytes(cut[at..at + 4].try_into().unwrap());
+        cut[at..at + 4].copy_from_slice(&(count / 2).to_le_bytes());
+        assert!(read(std::io::Cursor::new(&cut), "cut").is_err());
+        for seed in 0..64u64 {
+            let mut junk = bytes.clone();
+            for (i, b) in junk[8..ifd].iter_mut().enumerate() {
+                *b ^= ((seed.wrapping_mul(2654435761) >> (i % 23)) as u8) & 0x5a;
+            }
+            let _ = read(std::io::Cursor::new(&junk), "junk");
+        }
+    }
+
+    #[test]
+    fn lzw_chunks_decoded_here_match_the_tiff_crate() {
+        // Every predictor, padded edge tiles on the right and at the bottom.
+        let pixel = |x: u32, y: u32| (x as f32 * 0.37 - y as f32 * 1.5).sin() * 900.0 + 1200.0;
+        for predictor in [1, 2, 3] {
+            let bytes = lzw_tiled(300, 170, 128, predictor, pixel);
+            let mut dec = Decoder::new(std::io::Cursor::new(&bytes)).unwrap();
+            for i in 0..6 {
+                let (Ok(DecodingResult::F32(theirs)), Ok(DecodingResult::F32(ours))) =
+                    (dec.read_chunk(i), super::super::lzw::chunk(&mut dec, i))
+                else {
+                    panic!("predictor {predictor}, tile {i}: not Float32");
+                };
+                assert_eq!(ours, theirs, "predictor {predictor}, tile {i}");
+            }
+            let r = read(std::io::Cursor::new(&bytes), "p").unwrap();
+            assert_eq!(r.bands[0].data[169 * 300 + 299], pixel(299, 169));
+        }
+        // Integer samples in strips, several to a pixel, with the horizontal predictor.
+        use tiff::encoder::{Compression, Predictor, TiffEncoder, colortype};
+        let (w, h) = (37u32, 23u32);
+        let rgb: Vec<u16> = (0..w * h * 3).map(|i| ((i * 7919) % 65521) as u16).collect();
+        let grey: Vec<i32> = (0..w * h).map(|i| (i as i32 - 400) * 104_729).collect();
+        let mut out = std::io::Cursor::new(Vec::new());
+        {
+            let mut enc = TiffEncoder::new(&mut out).unwrap().with_compression(Compression::Lzw).with_predictor(Predictor::Horizontal);
+            let mut img = enc.new_image::<colortype::RGB16>(w, h).unwrap();
+            img.rows_per_strip(5).unwrap();
+            img.write_data(&rgb).unwrap();
+            let mut img = enc.new_image::<colortype::GrayI32>(w, h).unwrap();
+            img.rows_per_strip(6).unwrap();
+            img.write_data(&grey).unwrap();
+        }
+        let bytes = out.into_inner();
+        let mut dec = Decoder::new(std::io::Cursor::new(&bytes)).unwrap();
+        for image in 0..2 {
+            dec.seek_to_image(image).unwrap();
+            for i in 0..dec.strip_count().unwrap() {
+                let (theirs, ours) = (dec.read_chunk(i).unwrap(), super::super::lzw::chunk(&mut dec, i).unwrap());
+                assert_eq!(to_f32(ours), to_f32(theirs), "image {image}, strip {i}");
+            }
+        }
     }
 }

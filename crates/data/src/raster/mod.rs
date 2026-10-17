@@ -11,6 +11,7 @@ mod epsg_gap;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gdal;
 pub mod geotiff;
+mod lzw;
 pub mod wkt;
 pub mod zarr;
 

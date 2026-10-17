@@ -1,0 +1,86 @@
+name: Nightly
+
+# The slow checks pull requests don't wait for: every platform's tests and the release build of
+# the apps, once a night on main. A night with no new commits since the last successful run is
+# skipped. A failure opens an issue (or comments on the open one); the next success closes it.
+#
+#   gh workflow run nightly.yml -R opengeos/RustGIS --ref main
+
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  changed:
+    name: New commits
+    # Forks don't run the schedule.
+    if: github.repository == 'opengeos/RustGIS' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          last=""
+          # An API error runs the build rather than failing here, which would skip the report.
+          if [ "$EVENT" = schedule ]; then
+            last="$(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly.yml --event schedule --status success \
+              --limit 1 --json headSha --jq '.[0].headSha // ""' || true)"
+          fi
+          if [ "$last" = "$GITHUB_SHA" ]; then
+            echo "No commits since the last successful nightly run ($last)."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  rust:
+    needs: changed
+    if: needs.changed.outputs.run == 'true'
+    uses: ./.github/workflows/test-rust.yml
+    with:
+      os: '["ubuntu-latest", "macos-latest", "windows-latest"]'
+      release-build: true
+
+  report:
+    name: Report
+    needs: [changed, rust]
+    # A cancelled run is neither a failure nor a fix.
+    if: always() && github.event_name == 'schedule' && needs.changed.outputs.run == 'true' && needs.rust.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.rust.result }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Nightly build failed"
+          open="$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" \
+            --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // \"\"")"
+          if [ "$RESULT" = success ]; then
+            if [ -n "$open" ]; then
+              gh issue close "$open" -R "$GITHUB_REPOSITORY" --comment "Fixed: the nightly run on $GITHUB_SHA passed ($RUN)."
+            fi
+          elif [ -n "$open" ]; then
+            gh issue comment "$open" -R "$GITHUB_REPOSITORY" --body "Still failing on $GITHUB_SHA: $RUN"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" \
+              --body "The nightly run on $GITHUB_SHA failed ($RESULT): $RUN. This issue closes itself when a nightly run passes."
+          fi
