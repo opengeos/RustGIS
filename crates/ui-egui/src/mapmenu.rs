@@ -90,8 +90,22 @@ fn elevation_layer(app: &RustGisApp) -> Option<String> {
     active.or_else(|| map.layers.iter().find(one_band)).map(|l| l.name.clone())
 }
 
+/// The clicked place as the commands take it: on a world copy past the antimeridian, the same
+/// place within ±180.
+fn place(c: Coord) -> Coord {
+    Coord::new(wrap_lon(c.x), c.y)
+}
+
+/// Runs a menu action; a failure shows in the status bar (the menu closes either way).
+fn run(app: &mut RustGisApp, id: &str, params: serde_json::Value) {
+    if let Err(e) = app.run(id, params) {
+        app.session.notify(e, true);
+    }
+}
+
 /// The menu for the place `c` that was right-clicked.
 pub fn show(app: &mut RustGisApp, ui: &mut Ui, c: Coord) {
+    let c = place(c);
     ui.set_min_width(240.0);
     let coords = lat_lon(c);
     if menu_row(ui, "locate", &coords, "", true).on_hover_text(tl!("Copy coordinates to the clipboard")).clicked() {
@@ -105,12 +119,12 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, c: Coord) {
         ui.close();
     }
     if menu_row(ui, "goto_xy", tl!("Center Map Here"), "", true).clicked() {
-        let _ = app.run("map.goToXY", json!({"lon": c.x, "lat": c.y}));
+        run(app, "map.goToXY", json!({"lon": c.x, "lat": c.y}));
         ui.close();
     }
     if menu_row(ui, "zoom_in", tl!("Zoom In Here"), "", true).clicked() {
         let scale = app.session.map().scale() / 2.0;
-        let _ = app.run("map.goToXY", json!({"lon": c.x, "lat": c.y, "scale": scale}));
+        run(app, "map.goToXY", json!({"lon": c.x, "lat": c.y, "scale": scale}));
         ui.close();
     }
     if menu_row(ui, "directions", tl!("Directions To Here"), "", true).clicked() {
@@ -145,7 +159,7 @@ fn quick_analysis(app: &mut RustGisApp, ui: &mut Ui, c: Coord) {
         let dist = distance_label(d, units);
         if menu_row(ui, "buffer", &i18n::fmt("Buffer {distance} Here", &[("distance", &dist)]), "", true).clicked() {
             let name = i18n::fmt("Buffer {distance}", &[("distance", &dist)]);
-            let _ = app.run("gp.bufferPoint", json!({"lon": c.x, "lat": c.y, "distance": d, "units": units, "name": name}));
+            run(app, "gp.bufferPoint", json!({"lon": c.x, "lat": c.y, "distance": d, "units": units, "name": name}));
             ui.close();
         }
     }
@@ -159,7 +173,7 @@ fn quick_analysis(app: &mut RustGisApp, ui: &mut Ui, c: Coord) {
             && let Some(dem) = &dem
         {
             let name = i18n::fmt("Viewshed {radius}", &[("radius", &radius)]);
-            let _ = app.run("analysis.viewshed", json!({"layer": dem, "lon": c.x, "lat": c.y, "radius": r, "name": name}));
+            run(app, "analysis.viewshed", json!({"layer": dem, "lon": c.x, "lat": c.y, "radius": r, "name": name}));
             ui.close();
         }
         resp.on_disabled_hover_text(why);
@@ -169,7 +183,7 @@ fn quick_analysis(app: &mut RustGisApp, ui: &mut Ui, c: Coord) {
         && let Some(dem) = dem
     {
         // The Line Of Sight workflow with this observer; the next map click is the target.
-        let _ = app.run("ui.pane.workflows", json!({"section": "lineOfSight"}));
+        run(app, "ui.pane.workflows", json!({"section": "lineOfSight"}));
         app.workflow.layer = dem;
         app.workflow.pick = Some(crate::analysispane::Pick { purpose: "los", needed: 2, points: vec![c] });
         ui.close();
@@ -177,7 +191,7 @@ fn quick_analysis(app: &mut RustGisApp, ui: &mut Ui, c: Coord) {
     resp.on_disabled_hover_text(why);
     ui.separator();
     if menu_row(ui, "geoprocessing", tl!("Open In Geoprocessing…"), "", true).clicked() {
-        let _ = app.run("ui.gp.open", json!({"tool": "buffer"}));
+        run(app, "ui.gp.open", json!({"tool": "buffer"}));
         ui.close();
     }
 }
@@ -185,6 +199,19 @@ fn quick_analysis(app: &mut RustGisApp, ui: &mut Ui, c: Coord) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A place on a world copy reaches the commands within ±180 (they refuse it otherwise), and
+    /// a failed action shows in the status bar instead of doing nothing.
+    #[test]
+    fn world_copies_wrap_and_failures_show() {
+        let c = place(Coord::new(-83.9207 + 360.0, 35.9606));
+        assert!((c.x - -83.9207).abs() < 1e-9 && (c.y - 35.9606).abs() < 1e-9);
+        let mut app = RustGisApp::with_sample();
+        assert!(app.run("gp.bufferPoint", json!({"lon": c.x, "lat": c.y, "distance": 500.0, "units": "Meters"})).is_ok());
+        let before = app.session.notices.len();
+        run(&mut app, "map.goToXY", json!({"lon": 500.0, "lat": 0.0}));
+        assert!(app.session.notices.get(before..).is_some_and(|n| n.iter().any(|n| n.error)), "the error is shown");
+    }
 
     #[test]
     fn labels_and_links() {
