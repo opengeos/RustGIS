@@ -194,7 +194,8 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
             }),
         }).collect::<Vec<_>>(),
         // Web tile layers (XYZ, WMS, vector tiles, styles, archives) draw under the layers above.
-        "tileLayers": super::tiles::list(s),
+        // Their addresses lose keys and tokens: the AI Assistant sends this to its provider.
+        "tileLayers": super::tiles::list(s, true),
         "tables": s.project.tables.iter().map(|t| json!({
             "id": t.id, "name": t.name, "rows": t.features.len(),
             "fields": t.fields.iter().map(|f| format!("{} ({})", f.name, f.ty.label())).collect::<Vec<_>>(),

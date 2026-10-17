@@ -46,19 +46,21 @@ pub fn commands() -> Vec<C> {
         C::new("map.setTiles", "Tile Layer Properties", "Home › Add", set).params(
             r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "visible"?: bool, "opacity"?: 0–1, "move"?: "up"|"down"|"top"|"bottom", "rename"?: text}"#,
         ),
-        C::new("map.tiles", "Tile Layers", "Home › Add", |s, _| Ok(list(s))).view(),
+        C::new("map.tiles", "Tile Layers", "Home › Add", |s, _| Ok(list(s, false))).view(),
     ]
 }
 
-/// The map's tile layers (index 0 on top), as `map.tiles` and `info.project` list them.
-pub(crate) fn list(s: &Session) -> Value {
+/// The map's tile layers (index 0 on top), as `map.tiles` and `info.project` list them; `redact`
+/// drops the credentials from their addresses.
+pub(crate) fn list(s: &Session, redact: bool) -> Value {
     Value::Array(
         s.map()
             .tiles
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                json!({"index": i, "name": t.name, "id": t.id, "kind": t.kind.code(), "url": t.url, "visible": t.visible,
+                let url = if redact { crate::sources::redact(&t.url) } else { t.url.clone() };
+                json!({"index": i, "name": t.name, "id": t.id, "kind": t.kind.code(), "url": url, "visible": t.visible,
                     "opacity": t.opacity, "overlay": t.overlay, "attribution": t.attribution, "minZoom": t.min_zoom, "maxZoom": t.max_zoom})
             })
             .collect(),
@@ -177,7 +179,7 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
         let t = m.tiles.remove(i);
         m.tiles.insert(to, t);
     }
-    Ok(list(s))
+    Ok(list(s, false))
 }
 
 #[cfg(test)]

@@ -649,7 +649,8 @@ pub fn context(s: &Session) -> String {
         out.push_str("\nWeb tile layers under them (top first, index for map.setTiles):");
     }
     for (i, t) in m.tiles.iter().enumerate() {
-        let mut line = format!("\n- \"{}\" (index {i}, {}", t.name, t.kind.code());
+        // The name is clipped, not the line: the index and flags after it are what the model needs.
+        let mut line = format!("\n- \"{}\" (index {i}, {}", clip(&t.name, 200), t.kind.code());
         if t.overlay {
             line.push_str(", overlay");
         }
@@ -660,7 +661,7 @@ pub fn context(s: &Session) -> String {
             line.push_str(&format!(", opacity {:.2}", t.opacity));
         }
         line.push(')');
-        out.push_str(&clip(&line, 300));
+        out.push_str(&line);
     }
     out
 }
