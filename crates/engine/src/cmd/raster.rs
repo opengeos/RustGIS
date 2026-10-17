@@ -50,8 +50,16 @@ pub fn commands() -> Vec<C> {
                 if code.trim().eq_ignore_ascii_case("custom") && stats.is_none() {
                     return Err("the raster has no bands".into());
                 }
-                let st = Stretch::from_code(code, f(p, "low"), f(p, "high"), f(p, "n"), min, max, stats)
+                let mut st = Stretch::from_code(code, f(p, "low"), f(p, "high"), f(p, "n"), min, max, stats)
                     .ok_or_else(|| format!("unknown stretch '{code}'"))?;
+                // A band with a single value has no range of its own: open one around it to edit from.
+                if let Stretch::Custom { min: lo, max: hi } = st
+                    && min.is_none()
+                    && max.is_none()
+                    && lo >= hi
+                {
+                    st = Stretch::Custom { min: lo - 0.5, max: hi + 0.5 };
+                }
                 if let Stretch::Custom { min, max } = st
                     && min >= max
                 {

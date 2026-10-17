@@ -3476,8 +3476,10 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             }
             Stretch::Custom { min, max } => {
                 // Edits are kept here until both bounds are valid, so the layer's values don't snap back.
+                // They remember the layer's bounds they started from, and go stale when those change.
                 let key = ui.id().with(("custom_stretch", l.id));
-                let (mut lo, mut hi) = ui.data(|d| d.get_temp::<(f64, f64)>(key)).unwrap_or((min, max));
+                let pending = ui.data(|d| d.get_temp::<([f64; 2], [f64; 2])>(key)).filter(|(base, _)| *base == [min, max]);
+                let [mut lo, mut hi] = pending.map_or([min, max], |(_, edit)| edit);
                 let speed = ((max - min).abs() / 200.0).clamp(1e-6, 1e6);
                 ui.horizontal(|ui| {
                     ui.label(tl!("Min"));
@@ -3485,14 +3487,14 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     ui.label(tl!("Max"));
                     let b = ui.add(egui::DragValue::new(&mut hi).speed(speed));
                     let done = a.drag_stopped() || b.drag_stopped() || ((a.changed() || b.changed()) && !a.dragged() && !b.dragged());
-                    if lo < hi && done {
-                        ui.data_mut(|d| d.remove::<(f64, f64)>(key));
+                    if lo.is_finite() && hi.is_finite() && lo < hi && done {
+                        ui.data_mut(|d| d.remove::<([f64; 2], [f64; 2])>(key));
                         let _ = app.run("raster.stretch", json!({"type": "custom", "min": lo, "max": hi}));
                     } else if a.changed() || b.changed() {
-                        ui.data_mut(|d| d.insert_temp(key, (lo, hi)));
+                        ui.data_mut(|d| d.insert_temp(key, ([min, max], [lo, hi])));
                     }
                 });
-                if lo >= hi {
+                if !(lo.is_finite() && hi.is_finite() && lo < hi) {
                     ui.label(egui::RichText::new(tl!("Min must be less than Max")).size(11.5).color(t.red));
                 }
             }

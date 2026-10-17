@@ -6764,6 +6764,17 @@ fn raster_stretch_custom_bounds() {
     assert!(s.run("raster.stretch", &json!({"type": "custom", "min": "NaN", "max": 100})).is_err());
     assert!(s.run("raster.stretch", &json!({"type": "custom", "min": "abc"})).is_err());
     assert_eq!(stretch(&s), before);
+    // A band with one value still gets a range to edit from.
+    let mut flat = with_raster();
+    {
+        let rl = flat.map_mut().layers.last_mut().and_then(|l| l.raster.as_mut()).unwrap();
+        let mut d = (**rl.data.as_ref().unwrap()).clone();
+        d.bands[0].stats.min = 7.0;
+        d.bands[0].stats.max = 7.0;
+        rl.data = Some(std::sync::Arc::new(d));
+    }
+    flat.run("raster.stretch", &json!({"type": "custom"})).unwrap();
+    assert_eq!(stretch(&flat), Stretch::Custom { min: 6.5, max: 7.5 });
     // Projects saved before the custom stretch still load.
     assert_eq!(serde_json::from_str::<Stretch>("\"MinMax\"").unwrap(), Stretch::MinMax);
 }
