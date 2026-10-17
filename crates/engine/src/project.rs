@@ -17,6 +17,22 @@ pub fn is_project_file(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     [EXTENSION, LEGACY_EXTENSION].iter().any(|x| n.strip_suffix(x).is_some_and(|s| s.ends_with('.')))
 }
+
+/// The extension of a project package (`project.package`): a project with its data, which opens
+/// as a new, unsaved project.
+pub const PACKAGE_EXTENSION: &str = "rgispkg";
+
+/// Whether a file name or path opens as a project: a project file or a project package, ignoring
+/// case. Unlike [`is_project_file`], this includes packages, which a project never saves to.
+pub fn opens_as_project(name: &str) -> bool {
+    is_project_file(name) || name.to_ascii_lowercase().strip_suffix(PACKAGE_EXTENSION).is_some_and(|s| s.ends_with('.'))
+}
+
+/// The command that opens a file given by its path, as the desktop app's command line and a file
+/// dropped on its window do: `project.open` for a project or a package, `layer.addData` otherwise.
+pub fn open_command(path: &str) -> &'static str {
+    if opens_as_project(path) { "project.open" } else { "layer.addData" }
+}
 /// Format version written to files.
 pub const FORMAT: u32 = 1;
 /// Largest project file read (512 MiB).

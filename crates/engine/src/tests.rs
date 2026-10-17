@@ -328,6 +328,10 @@ fn project_extension_is_rgis_and_legacy_rgisx_opens() {
     for (name, is) in [("a.rgis", true), ("A.RGISX", true), ("a.rgismap", false), ("a.rgispkg", false), ("rgis", false)] {
         assert_eq!(crate::project::is_project_file(name), is, "{name}");
     }
+    for (name, opens) in [("a.rgis", true), ("A.RGISPKG", true), ("rgispkg", false), ("a.geojson", false), ("a.rgismap", false)] {
+        assert_eq!(crate::project::opens_as_project(name), opens, "{name}");
+    }
+    assert_eq!(crate::project::open_command("dir/a.geojson"), "layer.addData");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -1528,6 +1532,13 @@ fn project_items_files_styles_packages_tasks_and_3d() {
     o.run("project.open", &json!({"path": path("atlas.rgispkg")})).unwrap();
     assert_eq!(o.project.maps.len(), 2);
     assert!(o.path.is_none(), "a package opens unsaved");
+    // The desktop app's command line and a dropped file open it as a project too (#411).
+    let pkg = path("atlas.rgispkg");
+    assert_eq!(crate::project::open_command(&pkg), "project.open");
+    let mut d = Session::new(Project::default());
+    d.run(crate::project::open_command(&pkg), &json!({"path": pkg})).unwrap();
+    assert_eq!(d.project.maps.len(), 2);
+    assert!(d.path.is_none(), "a package opens unsaved, so Save asks where to write a project");
     s.run("map.package", &json!({"path": path("world.rgismpk"), "mobile": true, "tolerance": 0.05})).unwrap();
     s.run("map.import", &json!({"path": path("world.rgismpk")})).unwrap();
     let full: usize = s.project.maps[0]

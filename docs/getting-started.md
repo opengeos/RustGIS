@@ -11,6 +11,7 @@
 cargo run --release -p rustgis                  # opens the World Atlas sample
 cargo run --release -p rustgis -- places.geojson
 cargo run --release -p rustgis -- atlas.rgis   # a saved project
+cargo run --release -p rustgis -- lesson.rgispkg   # a project package, opened unsaved
 ```
 
 ## Five minutes with the World Atlas

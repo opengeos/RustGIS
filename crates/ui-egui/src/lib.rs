@@ -1700,7 +1700,7 @@ impl RustGisApp {
                     self.ui.pending_open = None;
                     open("project");
                     self.ui.backstage = false;
-                } else if let Some(path) = dialogs::pick_open(&["rgis", "rgisx"], tl!("RustGIS project")) {
+                } else if let Some(path) = dialogs::pick_open(&["rgis", "rgisx", "rgispkg"], tl!("RustGIS project")) {
                     let r = self.run("project.open", json!({"path": path}));
                     self.ui.backstage = false;
                     self.map.invalidate();
@@ -2599,8 +2599,7 @@ impl RustGisApp {
                     }
                     continue;
                 }
-                let cmd = if rustgis_engine::project::is_project_file(&p) { "project.open" } else { "layer.addData" };
-                let _ = self.run(cmd, json!({"path": p}));
+                let _ = self.run(rustgis_engine::project::open_command(&p), json!({"path": p}));
                 self.map.invalidate();
             }
         }
@@ -2688,7 +2687,7 @@ impl RustGisApp {
 fn project_file_name(url: &str) -> Option<&str> {
     let path = url.split(['?', '#']).next().unwrap_or("");
     let last = path.rsplit('/').next().unwrap_or("");
-    (rustgis_engine::project::is_project_file(last) || last.to_ascii_lowercase().ends_with(".rgispkg")).then_some(last)
+    rustgis_engine::project::opens_as_project(last).then_some(last)
 }
 
 #[cfg(test)]

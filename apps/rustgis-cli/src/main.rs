@@ -72,7 +72,7 @@ fn prepare_env(id: &str) -> Result<String, String> {
 }
 
 fn is_project(path: &str) -> bool {
-    rustgis_engine::project::is_project_file(path) || path.to_ascii_lowercase().ends_with(".rgispkg")
+    rustgis_engine::project::opens_as_project(path)
 }
 
 fn num(args: &[String], name: &str) -> Option<f64> {

@@ -614,7 +614,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
                 let exts: Vec<&str> = exts.split(',').filter(|e| !e.is_empty()).collect();
                 if exts.is_empty() { rfd::AsyncFileDialog::new() } else { rfd::AsyncFileDialog::new().add_filter(exts.join(", "), &exts) }
             } else if purpose == "project" {
-                rfd::AsyncFileDialog::new().add_filter("RustGIS project", &["rgis", "rgisx"])
+                rfd::AsyncFileDialog::new().add_filter("RustGIS project", &["rgis", "rgisx", "rgispkg"])
             } else if purpose == "item" {
                 rfd::AsyncFileDialog::new().add_filter(
                     "RustGIS items",

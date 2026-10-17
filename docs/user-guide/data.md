@@ -485,7 +485,7 @@ RustGIS saves pieces of a project as files you can share and reuse:
 | Styles (saved symbology) | `.rgisstyle` | Style › Styles › New Style, then Publish › Save As › Style Items | Style › Styles › Add Style File |
 | [Color ramps](cartography.md#custom-color-ramps) | `.rgisramp` (also reads QGIS `.xml`/`.qml`, GDAL color `.txt` and GMT `.cpt`) | Publish › Save As › Color Ramps, or by hand | Style › Styles › Add Color Ramp File |
 | Project template (the setup without features) | `.rgistemplate` | Home › Templates, or Publish › Save As | Home › Templates › Open Custom Template |
-| Project package (everything, rasters included) | `.rgispkg` | Publish › Package › Project | Project › Open |
+| Project package (everything, rasters included) | `.rgispkg` | Publish › Package › Project | Project › Open, or drop it on the window |
 | Map package / mobile map package | `.rgismpk` | Publish › Package › Map or Mobile Map | Home › Import |
 | Results package (geoprocessing history and outputs) | `.rgisgpk` | Publish › Package › Results | any zip tool |
 | Task (guided command steps) | `.rgistask` | Home › Task, Publish › Save As › Task Item | Home › Task › Import Task |

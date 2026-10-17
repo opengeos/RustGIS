@@ -298,8 +298,7 @@ fn main() -> eframe::Result {
         app.session.notify(e, true);
     }
     for f in files {
-        let cmd = if rustgis_engine::project::is_project_file(f) { "project.open" } else { "layer.addData" };
-        if let Err(e) = app.run(cmd, json!({"path": f})) {
+        if let Err(e) = app.run(rustgis_engine::project::open_command(f), json!({"path": f})) {
             eprintln!("rustgis: {f}: {e}");
         }
     }

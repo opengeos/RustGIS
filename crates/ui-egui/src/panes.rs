@@ -1615,7 +1615,7 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             if resp.double_clicked() || (is_dir && resp.clicked()) {
                 if is_dir {
                     app.table.folder = Some(path.clone());
-                } else if rustgis_engine::project::is_project_file(&name) || name.ends_with(".rgispkg") {
+                } else if rustgis_engine::project::opens_as_project(&name) {
                     let _ = app.run("project.open", json!({"path": path.display().to_string()}));
                     app.map.invalidate();
                 } else if name.ends_with(".rgismap") || name.ends_with(".rgismpk") {
