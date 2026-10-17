@@ -5,7 +5,7 @@ use std::path::Path;
 
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::Rgba;
-use rustgis_map::layout::{ElementKind, FrameShape, Grid, Layout, MIN_ELEMENT_MM, MapSeries, PAGES, fit_scale};
+use rustgis_map::layout::{ElementKind, FrameShape, Grid, Guides, Layout, MAX_GUIDES, MIN_ELEMENT_MM, MapSeries, PAGES, fit_scale};
 use serde_json::{Value, json};
 
 use super::{b, f, numbered, ps};
@@ -82,6 +82,9 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("layout.update", "Element Properties", "Publish › Element", update).params(
             r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "text"?, "size"?, "color"?, "bold"?, "title"?, "allClasses"?: bool (legend), "hideOther"?: bool (legend), "map"?, "scale"?, "center"?: [lon, lat], "layer"?, "field"?, "rows"?}"##,
+        ),
+        C::new("layout.guides", "Guides", "Publish › Page Setup", guides).params(
+            r#"{"layout"?, "x"?: [mm] (vertical guides, from the page's left edge), "y"?: [mm] (horizontal guides, from its top edge), "clear"?: bool (remove every guide first)}"#,
         ),
         C::new("layout.removeElement", "Delete Element", "Publish › Element", |s, p| {
             let id = element_id(p)?;
@@ -267,6 +270,36 @@ fn page(s: &mut Session, p: &Value) -> CmdResult {
     l.width = w;
     l.height = h;
     Ok(json!({"width": w, "height": h}))
+}
+
+/// Sets a layout's ruler guides: the lists given replace those there.
+fn guides(s: &mut Session, p: &Value) -> CmdResult {
+    let read = |k: &str| -> Result<Option<Vec<f64>>, String> {
+        let bad = || format!("{k} is a list of positions in mm");
+        match p.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Array(a)) if a.len() <= MAX_GUIDES => a
+                .iter()
+                .map(|v| v.as_f64().filter(|v| v.is_finite() && v.abs() <= 5000.0).ok_or_else(bad))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Some),
+            Some(Value::Array(_)) => Err(format!("a layout has at most {MAX_GUIDES} guides each way")),
+            Some(_) => Err(bad()),
+        }
+    };
+    // Checked before anything changes.
+    let (x, y) = (read("x")?, read("y")?);
+    let l = active(s, p)?;
+    if b(p, "clear") == Some(true) {
+        l.guides = Guides::default();
+    }
+    if let Some(x) = x {
+        l.guides.x = x;
+    }
+    if let Some(y) = y {
+        l.guides.y = y;
+    }
+    Ok(json!({"x": l.guides.x, "y": l.guides.y}))
 }
 
 /// The element's box: given values, else a default inside the page.

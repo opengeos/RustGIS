@@ -6117,6 +6117,32 @@ fn map_rename_names_any_map_and_what_shows_it_follows() {
 }
 
 #[test]
+fn layout_guides_are_set_kept_and_undone() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "G"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let r = s.run("layout.guides", &json!({"x": [20, 148.5], "y": [30]})).unwrap();
+    assert_eq!(r, json!({"x": [20.0, 148.5], "y": [30.0]}));
+    // A list given replaces that direction only.
+    s.run("layout.guides", &json!({"y": [10, 40]})).unwrap();
+    let g = s.project.layouts[li].guides.clone();
+    assert_eq!((g.x, g.y), (vec![20.0, 148.5], vec![10.0, 40.0]));
+    // Bad positions change nothing.
+    for bad in [json!({"x": [1, "a"]}), json!({"x": [1e9]}), json!({"y": 5}), json!({"x": vec![1.0; 65]})] {
+        assert!(s.run("layout.guides", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.project.layouts[li].guides.y, vec![10.0, 40.0]);
+    // Saved with the layout, and only when there are some.
+    let saved = serde_json::to_value(&s.project.layouts[li]).unwrap();
+    assert_eq!(saved["guides"]["x"], json!([20.0, 148.5]));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.project.layouts[li].guides.y, vec![30.0], "undo restores the guides before");
+    s.run("layout.guides", &json!({"clear": true})).unwrap();
+    assert!(s.project.layouts[li].guides.is_empty());
+    assert!(serde_json::to_value(&s.project.layouts[li]).unwrap().get("guides").is_none());
+}
+
+#[test]
 fn layout_names_keep_to_200_characters_with_their_number() {
     let mut s = world();
     let long = "é".repeat(300);

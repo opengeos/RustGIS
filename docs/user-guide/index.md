@@ -41,7 +41,11 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
   right.
 - **Panes** (right): Catalog, Geoprocessing, Symbology, History, Details, Editing, Workflows,
   Script, the AI Assistant and more. Open them from **View › Windows** or the commands that use
-  them.
+  them. Each pane opened gets a tab at the top, in the order opened: click a tab to show its pane,
+  and its **✕** to close it (the next tab shows; closing the last hides the side). Right-click a
+  tab to close it, the others or all; the **✕** at the header's end closes every pane. Tabs that
+  don't fit are listed under **»**. A ribbon button for a pane shows it when it is open but not in view,
+  and closes it when it is. **Pane Sets** keep the tabs open.
 - **Status bar**: the scale (type one, or pick from the list), the coordinate system (click it to
   change the projection), the pointer's coordinates (click them to switch between decimal
   degrees and DMS), the selection count and the draw time.

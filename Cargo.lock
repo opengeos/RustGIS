@@ -4068,6 +4068,7 @@ dependencies = [
  "tokio-postgres-rustls",
  "url",
  "webpki-roots",
+ "weezl",
  "zstd 0.14.2",
 ]
 

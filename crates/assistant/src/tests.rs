@@ -3698,3 +3698,30 @@ fn agent_recognises_the_reasoning_refusal_by_its_param_whatever_the_wording() {
     assert!(matches!(b.ask("hi", &s), Step::Send(_)));
     assert_eq!(b.receive_result(b.generation(), reply("model"), &mut s), Step::Done);
 }
+
+#[test]
+fn list_layers_includes_web_tile_layers() {
+    // #401: WMS overlays added from a service are tile layers, not map layers, and list_layers
+    // and the map context left them out, so the model couldn't see or change them.
+    let mut s = sample();
+    let wms = "https://example.com/wms?SERVICE=WMS&REQUEST=GetMap&LAYERS=a&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&apikey=s3cret";
+    s.run("map.addTiles", &json!({"url": wms, "kind": "raster", "name": "Rain radar", "overlay": true})).unwrap();
+    s.run("map.setTiles", &json!({"name": "Rain radar", "visible": false})).unwrap();
+    let call = ToolCall { id: "x".into(), name: "list_layers".into(), args: json!({}) };
+    let out: Value = serde_json::from_str(&tools::run(&mut s, &call).unwrap()).unwrap();
+    let tiles = out["tileLayers"].as_array().cloned().unwrap_or_default();
+    let radar = tiles.iter().find(|t| t["name"] == "Rain radar");
+    assert!(radar.is_some_and(|t| t["visible"] == false && t["overlay"] == true && t["kind"] == "raster" && t["index"].is_u64()), "{out}");
+    // The model gets the address without its key; map.tiles still has all of it.
+    assert!(radar.is_some_and(|t| t["url"].as_str().is_some_and(|u| u.contains("LAYERS=a") && !u.contains("s3cret"))), "{out}");
+    assert!(s.run("map.tiles", &Value::Null).unwrap().to_string().contains("apikey=s3cret"));
+    let ctx = tools::context(&s);
+    assert!(ctx.contains("\"Rain radar\" (index ") && ctx.contains("raster, overlay, hidden)"), "{ctx}");
+    // A long name (commands and project files cap them, but not everything that builds a map) is
+    // cut, not the index and flags after it.
+    if let Some(t) = s.map_mut().tiles.iter_mut().find(|t| t.name == "Rain radar") {
+        t.name = "r".repeat(5000);
+    }
+    let ctx = tools::context(&s);
+    assert!(ctx.contains("characters in all)\" (index ") && ctx.contains("raster, overlay, hidden)"), "{ctx}");
+}

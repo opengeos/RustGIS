@@ -18,6 +18,7 @@ shapefile = { workspace = true }
 # Zstandard, the usual compression of COGs, is C code that compiles to WebAssembly with clang
 # (on the CI runners), so the browser decodes it too.
 tiff = { workspace = true, features = ["zstd"] }
+weezl.workspace = true
 proj4rs = { workspace = true }
 crs-definitions = { workspace = true }
 miniz_oxide = { workspace = true }

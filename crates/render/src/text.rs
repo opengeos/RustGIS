@@ -2,9 +2,10 @@
 
 use std::sync::OnceLock;
 
-use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
+use ab_glyph::{Font, FontRef, GlyphId, PxScale, ScaleFont};
 use tiny_skia::{Paint, Pixmap, Rect, Transform};
 
+use crate::fonts::CjkRegion;
 use crate::{PlacedLabel, View};
 use rustgis_map::Rgba;
 
@@ -19,33 +20,87 @@ fn font(bold: bool) -> Option<&'static FontRef<'static>> {
     }
 }
 
-/// Whether the label font (`bold` or regular) has a glyph for every character of `text`, spaces
-/// and invisible characters (zero-width joiners, variation selectors, soft hyphens) aside.
-pub fn covers(text: &str, bold: bool) -> bool {
-    let Some(f) = font(bold) else { return true };
-    let invisible = |c: char| {
-        c.is_whitespace()
-            || c.is_control()
-            || matches!(c, '\u{AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}')
+/// Characters that never need a glyph: spaces, controls, zero-width joiners, variation selectors,
+/// soft hyphens.
+fn invisible(c: char) -> bool {
+    c.is_whitespace()
+        || c.is_control()
+        || matches!(c, '\u{AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}' | '\u{E0100}'..='\u{E01EF}')
+}
+
+/// An installed CJK face for `region`, parsed once; `None` when there is none (or on the web).
+fn cjk(region: CjkRegion) -> Option<&'static FontRef<'static>> {
+    static FACES: [OnceLock<Option<FontRef<'static>>>; 3] = [OnceLock::new(), OnceLock::new(), OnceLock::new()];
+    let slot = match region {
+        CjkRegion::SimplifiedChinese => &FACES[0],
+        CjkRegion::Japanese => &FACES[1],
+        CjkRegion::Korean => &FACES[2],
     };
-    text.chars().all(|c| invisible(c) || f.glyph_id(c).0 != 0)
+    slot.get_or_init(|| crate::fonts::cjk_font(region).and_then(|(b, i)| FontRef::try_from_slice_and_index(b, *i).ok())).as_ref()
+}
+
+/// The CJK faces to try for `c`, the region whose glyph style suits it first: Hangul looks for a
+/// Korean face, kana for a Japanese one, everything else (Han ideographs) for Simplified Chinese.
+fn cjk_order(c: char) -> [CjkRegion; 3] {
+    use CjkRegion::{Japanese as Jp, Korean as Kr, SimplifiedChinese as Sc};
+    match c {
+        '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{A960}'..='\u{A97F}' | '\u{AC00}'..='\u{D7FF}' => [Kr, Sc, Jp],
+        '\u{3040}'..='\u{30FF}' | '\u{31F0}'..='\u{31FF}' | '\u{FF66}'..='\u{FF9F}' => [Jp, Sc, Kr],
+        _ => [Sc, Jp, Kr],
+    }
+}
+
+/// The face and glyph that draw `c`: the label font when it has the glyph, else the first
+/// installed CJK font that does. `None` when nothing covers it, so no missing-glyph box is drawn.
+fn glyph(c: char, bold: bool) -> Option<(&'static FontRef<'static>, GlyphId)> {
+    let f = font(bold)?;
+    let id = f.glyph_id(c);
+    if id.0 != 0 || invisible(c) {
+        return (id.0 != 0).then_some((f, id));
+    }
+    cjk_order(c).into_iter().filter_map(cjk).find_map(|f| {
+        let id = f.glyph_id(c);
+        (id.0 != 0).then_some((f, id))
+    })
+}
+
+/// Whether the label fonts (`bold` or regular, with the installed CJK fallbacks) have a glyph for
+/// every character of `text`, invisible characters aside.
+pub fn covers(text: &str, bold: bool) -> bool {
+    if font(bold).is_none() {
+        return true;
+    }
+    text.chars().all(|c| invisible(c) || glyph(c, bold).is_some())
+}
+
+/// Lays out `text` at `px` pixels: each drawable glyph with its face and pen position (from 0),
+/// and the total advance. Characters no font covers are left out.
+fn shape(text: &str, px: f32, bold: bool) -> (Vec<(&'static FontRef<'static>, GlyphId, f32)>, f32) {
+    let scale = PxScale::from(px);
+    let mut out = Vec::new();
+    let mut x = 0.0;
+    let mut prev: Option<(&'static FontRef<'static>, GlyphId)> = None;
+    for ch in text.chars().take(500) {
+        let Some((f, id)) = glyph(ch, bold) else { continue };
+        let sf = f.as_scaled(scale);
+        if let Some((pf, pid)) = prev
+            && std::ptr::eq(pf, f)
+        {
+            x += sf.kern(pid, id);
+        }
+        out.push((f, id, x));
+        x += sf.h_advance(id);
+        prev = Some((f, id));
+    }
+    (out, x)
 }
 
 /// Text width in points at `size` (font px ≈ size × 1.33 for point sizes).
 pub fn measure(text: &str, size: f32, bold: bool) -> f32 {
-    let Some(f) = font(bold) else { return text.chars().count() as f32 * size * 0.6 };
-    let sf = f.as_scaled(PxScale::from(size * 1.33));
-    let mut w = 0.0;
-    let mut prev = None;
-    for ch in text.chars().take(500) {
-        let id = f.glyph_id(ch);
-        if let Some(p) = prev {
-            w += sf.kern(p, id);
-        }
-        w += sf.h_advance(id);
-        prev = Some(id);
+    if font(bold).is_none() {
+        return text.chars().count() as f32 * size * 0.6;
     }
-    w
+    shape(text, size * 1.33, bold).1
 }
 
 fn blend(pm: &mut Pixmap, x: i32, y: i32, c: Rgba, cov: f32) {
@@ -70,19 +125,11 @@ fn blend(pm: &mut Pixmap, x: i32, y: i32, c: Rgba, cov: f32) {
 fn draw_text(pm: &mut Pixmap, text: &str, cx: f32, cy: f32, px_size: f32, color: Rgba, bold: bool, offset: (f32, f32)) {
     let Some(f) = font(bold) else { return };
     let sf = f.as_scaled(PxScale::from(px_size));
-    let width = {
-        let mut w = 0.0;
-        for ch in text.chars().take(500) {
-            w += sf.h_advance(f.glyph_id(ch));
-        }
-        w
-    };
-    let mut x = cx - width / 2.0 + offset.0;
+    let (glyphs, width) = shape(text, px_size, bold);
+    let x0 = cx - width / 2.0 + offset.0;
     let base = cy + (sf.ascent() + sf.descent()) / 2.0 + offset.1;
-    for ch in text.chars().take(500) {
-        let id = f.glyph_id(ch);
-        let g = id.with_scale_and_position(sf.scale(), ab_glyph::point(x, base));
-        x += sf.h_advance(id);
+    for (f, id, x) in glyphs {
+        let g = id.with_scale_and_position(sf.scale(), ab_glyph::point(x0 + x, base));
         if let Some(og) = f.outline_glyph(g) {
             let bb = og.px_bounds();
             og.draw(|gx, gy, cov| blend(pm, bb.min.x as i32 + gx as i32, bb.min.y as i32 + gy as i32, color, cov));
@@ -182,7 +229,52 @@ mod coverage_tests {
             assert!(super::covers("Türkiye Ελλάδα Беларусь", bold));
             assert!(!super::covers("Syria \u{10FFFD}", bold));
             // Invisible characters don't need a glyph.
-            assert!(super::covers("Syria\u{200B}\u{FE0F}", bold));
+            assert!(super::covers("Syria\u{200B}\u{FE0F}\u{E0100}", bold));
         }
+    }
+
+    #[test]
+    fn draws_nothing_for_characters_no_font_has() {
+        // A private-use character has no glyph anywhere: it used to come out as a .notdef box.
+        let mut pm = tiny_skia::Pixmap::new(80, 40).unwrap();
+        super::text_at(
+            &mut pm,
+            "\u{10FFFD}\u{10FFFD}",
+            40.0,
+            20.0,
+            24.0,
+            rustgis_map::Rgba::rgb(0, 0, 0),
+            false,
+            super::Align::Center,
+            true,
+        );
+        assert!(pm.pixels().iter().all(|p| p.alpha() == 0), "a missing-glyph box was drawn");
+        assert_eq!(super::measure("\u{10FFFD}", 10.0, false), 0.0);
+    }
+
+    #[test]
+    fn falls_back_to_an_installed_cjk_font() {
+        use crate::fonts::{CjkRegion, cjk_font};
+        use ab_glyph::Font;
+        // Only meaningful on a computer with a CJK font (Windows has Microsoft YaHei).
+        if cjk_font(CjkRegion::SimplifiedChinese).is_none() {
+            return;
+        }
+        for bold in [false, true] {
+            assert!(super::covers("碑林区", bold));
+            assert!(super::covers("Mixed 中英 label", bold));
+        }
+        // The fallback glyphs take up room, so CJK labels are measured and centred correctly.
+        assert!(super::measure("Mixed 中英 label", 10.0, false) > super::measure("Mixed  label", 10.0, false) + 10.0);
+        // And the fallback glyphs are drawn, not just measured.
+        let Some(ch) = "碑林区".chars().find(|&c| {
+            let (Some(label), Some(cjk)) = (super::font(false), super::cjk(CjkRegion::SimplifiedChinese)) else { return false };
+            label.glyph_id(c).0 == 0 && cjk.glyph_id(c).0 != 0
+        }) else {
+            return;
+        };
+        let mut pm = tiny_skia::Pixmap::new(80, 40).unwrap();
+        super::text_at(&mut pm, &ch.to_string(), 40.0, 20.0, 24.0, rustgis_map::Rgba::rgb(0, 0, 0), false, super::Align::Center, false);
+        assert!(pm.pixels().iter().any(|p| p.alpha() > 0), "the fallback glyph was not drawn");
     }
 }

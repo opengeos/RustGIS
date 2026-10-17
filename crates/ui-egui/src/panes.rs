@@ -36,6 +36,12 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             ui.advance_cursor_after_rect(rect);
         });
     }
+    // The pane in view always has its tab, however it was set.
+    if let Some(right) = app.ui.right
+        && !app.ui.right_open.contains(&right)
+    {
+        app.ui.right_open.push(right);
+    }
     if let Some(right) = app.ui.right {
         egui::Panel::right("right_pane").resizable(true).default_size(320.0).size_range(260.0..=560.0).frame(frame).show(ui, |ui| {
             // The pane is as wide as the user made it. Content wider than that is clipped, never
@@ -53,8 +59,27 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     finish_class_color_drag(app, ui);
 }
 
-fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
-    let (title, close) = match right {
+/// Closes the pane that command `id` (a `ui.pane.*`) opens, on its side; false when `id` isn't a
+/// pane command. `{"close": true}` means this for every pane command, whatever else it is given.
+/// Only the open panes are looked through (closing one that isn't open does nothing), so a new
+/// right pane needs nothing here.
+pub(crate) fn close_pane_of(app: &mut RustGisApp, id: &str) -> bool {
+    if !id.starts_with("ui.pane.") {
+        return false;
+    }
+    if let Some((pane, ..)) = LEFT_PANES.iter().find(|p| p.3 == id) {
+        if app.ui.left == Some(*pane) {
+            app.ui.left = None;
+        }
+    } else if let Some(pane) = app.ui.right_open.iter().copied().find(|p| right_title(*p).1 == id) {
+        app.ui.close_right(pane);
+    }
+    true
+}
+
+/// A right pane's title (its tab) and the command that opens, shows or closes it.
+fn right_title(pane: RightPane) -> (&'static str, &'static str) {
+    match pane {
         RightPane::Geoprocessing => ("Tools", "ui.pane.geoprocessing"),
         RightPane::Symbology => ("Symbology", "ui.pane.symbology"),
         RightPane::History => ("History", "ui.pane.history"),
@@ -76,8 +101,11 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
         RightPane::Sql => ("SQL", "ui.pane.sql"),
         RightPane::Directions => ("Directions", "ui.pane.directions"),
         RightPane::Bookmarks => ("Bookmarks", "ui.pane.bookmarks"),
-    };
-    pane_header(app, ui, tl!(title), close, t);
+    }
+}
+
+fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
+    right_header(app, ui, right, t);
     // The chat lays out its own scrolling, with the message box kept at the bottom.
     if right == RightPane::Assistant {
         crate::assistantpane::show(app, ui, t);
@@ -114,10 +142,128 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
     });
 }
 
-fn pane_header(app: &mut RustGisApp, ui: &mut Ui, title: &str, close: &str, t: &Tokens) {
+/// The right side's header (#303): a tab for each pane open, in the order opened, the one in view
+/// underlined. A tab's ✕ closes its pane, a click on another tab shows it, and a right-click
+/// closes it, the others or all. Tabs that don't fit are listed in a » menu, and the pane in view
+/// always keeps its tab on the strip. The ✕ at the end closes every pane.
+fn right_header(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
     let r = header_strip(ui, t);
-    ui.painter().text(pos2(r.min.x + 12.0, r.center().y), Align2::LEFT_CENTER, title, semibold(13.5), t.text);
-    close_button(app, ui, r, close, title, t);
+    let (pad, cross, gap, more_w) = (9.0, 16.0, 2.0, 28.0);
+    let open = app.ui.right_open.clone();
+    let names: Vec<&str> = open.iter().map(|p| tl!(right_title(*p).0)).collect();
+    let font = |on: bool| if on { semibold(12.5) } else { regular(12.5) };
+    let widths: Vec<f32> =
+        open.iter().zip(&names).map(|(p, n)| pad + crate::widgets::text_w(ui, n, font(*p == right)) + 4.0 + cross + 5.0).collect();
+    // Which tabs fit (by index): all, or the first that leave room for the » and the one in view.
+    // Room left of the ✕ that closes them all.
+    let all_w = 30.0;
+    let room = r.width() - 6.0 - 4.0 - all_w;
+    let mut shown: Vec<usize> = (0..open.len()).collect();
+    if widths.iter().map(|w| w + gap).sum::<f32>() > room {
+        let room = room - more_w;
+        let mut used = 0.0;
+        shown = (0..open.len())
+            .take_while(|i| {
+                used += widths.get(*i).copied().unwrap_or(0.0) + gap;
+                used <= room
+            })
+            .collect();
+        if let Some(on) = open.iter().position(|p| *p == right).filter(|on| !shown.contains(on)) {
+            let need = widths.get(on).copied().unwrap_or(0.0) + gap;
+            while !shown.is_empty() && shown.iter().map(|i| widths.get(*i).copied().unwrap_or(0.0) + gap).sum::<f32>() + need > room {
+                shown.pop();
+            }
+            shown.push(on);
+        }
+    }
+    let mut x = r.min.x + 6.0;
+    for &i in &shown {
+        let (Some(pane), Some(name), Some(w)) = (open.get(i).copied(), names.get(i).copied(), widths.get(i).copied()) else { continue };
+        let (_, cmd) = right_title(pane);
+        let on = pane == right;
+        let tr = Rect::from_min_size(pos2(x, r.min.y), vec2(w, r.height()));
+        let resp = ui.interact(tr, egui::Id::new(("right_pane_tab", pane as u8)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, name));
+        let p = ui.painter();
+        if resp.hovered() && !on {
+            p.rect_filled(tr.shrink2(vec2(1.0, 5.0)), CornerRadius::same(4), t.hover);
+        }
+        let ink = if on { t.text } else { t.text_dim };
+        p.with_clip_rect(tr).text(pos2(tr.min.x + pad, tr.center().y), Align2::LEFT_CENTER, name, font(on), ink);
+        if on {
+            p.line_segment([pos2(tr.min.x + 4.0, r.max.y - 1.5), pos2(tr.max.x - 4.0, r.max.y - 1.5)], Stroke::new(2.0, t.accent));
+        }
+        // The tab's ✕ closes its pane, in view or not.
+        let cr = Rect::from_center_size(pos2(tr.max.x - 5.0 - cross / 2.0, tr.center().y), vec2(cross, cross));
+        let x_resp = ui.interact(cr, egui::Id::new(("right_pane_close", pane as u8)), Sense::click());
+        let tip = crate::i18n::fmt("Close {name}", &[("name", name)]);
+        x_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &tip));
+        if x_resp.hovered() {
+            ui.painter().rect_filled(cr, CornerRadius::same(3), t.hover);
+        }
+        icons::paint(ui.painter(), cr.shrink(4.0), "close", t.text_dim, t.accent);
+        if x_resp.on_hover_text(tip).clicked() {
+            let _ = app.run(cmd, json!({"close": true}));
+        } else if resp.clicked() && !on {
+            let _ = app.run(cmd, Value::Null);
+        }
+        resp.context_menu(|ui| {
+            let close: Option<Vec<RightPane>> = if ui.button(tl!("Close")).clicked() {
+                Some(vec![pane])
+            } else if ui.add_enabled(open.len() > 1, egui::Button::new(tl!("Close Others"))).clicked() {
+                Some(open.iter().copied().filter(|p| *p != pane).collect())
+            } else if ui.button(tl!("Close All")).clicked() {
+                Some(open.clone())
+            } else {
+                None
+            };
+            if let Some(panes) = close {
+                close_right_panes(app, &panes);
+                ui.close();
+            }
+        });
+        x += w + gap;
+    }
+    // The ✕ at the end closes them all.
+    let all = Rect::from_center_size(pos2(r.max.x - 18.0, r.center().y), vec2(22.0, 22.0));
+    let all_resp = ui.interact(all, egui::Id::new("right_pane_close_all"), Sense::click());
+    all_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Close all panes")));
+    if all_resp.hovered() {
+        ui.painter().rect_filled(all, CornerRadius::same(4), t.hover);
+    }
+    icons::paint(ui.painter(), all.shrink(5.0), "close", t.text_dim, t.accent);
+    if all_resp.on_hover_text(tl!("Close all panes")).clicked() {
+        close_right_panes(app, &open);
+    }
+    // The rest, in a » menu.
+    let hidden: Vec<RightPane> = (0..open.len()).filter(|i| !shown.contains(i)).filter_map(|i| open.get(i).copied()).collect();
+    if !hidden.is_empty() {
+        let mr = Rect::from_center_size(pos2(r.max.x - all_w - more_w / 2.0, r.center().y), vec2(more_w - 4.0, 22.0));
+        let more = ui.interact(mr, egui::Id::new("right_pane_more"), Sense::click());
+        let tip = crate::i18n::fmt("{n} more panes", &[("n", &hidden.len().to_string())]);
+        more.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &tip));
+        if more.hovered() {
+            ui.painter().rect_filled(mr, CornerRadius::same(4), t.hover);
+        }
+        ui.painter().text(mr.center(), Align2::CENTER_CENTER, "»", semibold(14.0), t.text_dim);
+        let more = more.on_hover_text(tip);
+        egui::Popup::menu(&more).show(|ui| {
+            for pane in hidden {
+                let (title, cmd) = right_title(pane);
+                if ui.button(tl!(title)).clicked() {
+                    let _ = app.run(cmd, Value::Null);
+                    ui.close();
+                }
+            }
+        });
+    }
+}
+
+/// Closes right panes `panes`, each through its command (`{"close": true}`).
+fn close_right_panes(app: &mut RustGisApp, panes: &[RightPane]) {
+    for pane in panes {
+        let _ = app.run(right_title(*pane).1, json!({"close": true}));
+    }
 }
 
 /// The 34 px band a pane header sits on.
@@ -1035,7 +1181,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
     }
     if resp.double_clicked() {
         let _ = app.run("layer.select", json!({"layer": l.id}));
-        app.ui.right = Some(RightPane::Symbology);
+        app.ui.open_right(RightPane::Symbology);
     }
     let tip = match &l.raster {
         Some(rl) => match &rl.data {
@@ -1134,7 +1280,7 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
         if ui.button(tl!(label)).clicked() {
             let p = if id.starts_with("ui.") { Value::Null } else { json!({"layer": l.id}) };
             if id == "ui.pane.symbology" {
-                app.ui.right = Some(RightPane::Symbology);
+                app.ui.open_right(RightPane::Symbology);
             } else {
                 let _ = app.run(id, p);
             }

@@ -512,6 +512,7 @@ mod tests {
                 c.execute_batch(&format!("CREATE TABLE metadata (name text, value text); {schema}")).unwrap();
                 c.execute_batch("INSERT INTO metadata VALUES ('name', 'Test'), ('bounds', '-10,-5,10,5'), ('attribution', '© me');")
                     .unwrap();
+                let tx = c.unchecked_transaction().unwrap();
                 // Zoom 0 to 3, every tile; the picture is shared by tiles with the same (x + y) % 3.
                 for z in 0..4u32 {
                     for x in 0..(1u32 << z) {
@@ -519,12 +520,11 @@ mod tests {
                             let shared = ((x + row) % 3) as u8;
                             match name {
                                 "plain" => {
-                                    c.execute("INSERT INTO tiles VALUES (?1, ?2, ?3, ?4)", rusqlite::params![z, x, row, png(shared)])
+                                    tx.execute("INSERT INTO tiles VALUES (?1, ?2, ?3, ?4)", rusqlite::params![z, x, row, png(shared)])
                                 }
-                                "dedup" => {
-                                    c.execute("INSERT INTO map VALUES (?1, ?2, ?3, ?4)", rusqlite::params![z, x, row, format!("h{shared}")])
-                                }
-                                _ => c.execute("INSERT INTO tiles_shallow VALUES (?1, ?2, ?3, ?4)", rusqlite::params![z, x, row, shared]),
+                                "dedup" => tx
+                                    .execute("INSERT INTO map VALUES (?1, ?2, ?3, ?4)", rusqlite::params![z, x, row, format!("h{shared}")]),
+                                _ => tx.execute("INSERT INTO tiles_shallow VALUES (?1, ?2, ?3, ?4)", rusqlite::params![z, x, row, shared]),
                             }
                             .unwrap();
                         }
@@ -532,12 +532,13 @@ mod tests {
                 }
                 for k in 0..3u8 {
                     match name {
-                        "dedup" => c.execute("INSERT INTO images VALUES (?1, ?2)", rusqlite::params![png(k), format!("h{k}")]).map(|_| ()),
-                        "shallow" => c.execute("INSERT INTO tiles_data VALUES (?1, ?2)", rusqlite::params![k, png(k)]).map(|_| ()),
+                        "dedup" => tx.execute("INSERT INTO images VALUES (?1, ?2)", rusqlite::params![png(k), format!("h{k}")]).map(|_| ()),
+                        "shallow" => tx.execute("INSERT INTO tiles_data VALUES (?1, ?2)", rusqlite::params![k, png(k)]).map(|_| ()),
                         _ => Ok(()),
                     }
                     .unwrap();
                 }
+                tx.commit().unwrap();
             }
             let info = open_path(&path).unwrap();
             assert_eq!((info.format, info.min_zoom, info.max_zoom, info.name.as_str()), (Format::Png, 0, 3, "Test"), "{name}");

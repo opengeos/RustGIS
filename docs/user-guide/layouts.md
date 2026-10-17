@@ -32,6 +32,13 @@ the maps; while one is open, its groups lead the Publish tab:
   step through pages, refresh, and export every page into one PDF.
 - Click an element to select it, drag to move, drag its handles to resize, and edit it in the
   properties panel. The wheel zooms the page.
+- **Rulers and guides**: rulers along the top and left show millimetres from the page's corner.
+  Drag out of a ruler to add a guide, drag a guide to move it, and drag it back onto a ruler to
+  remove it. Guides are saved with the layout but never printed or exported. **Clear Guides**
+  removes them all, and **Rulers** in the Page group hides the rulers.
+- **Snap**: a dragged or resized element snaps to the guides, the page's edges and centre, and
+  the other elements' edges and centres, and the line it snapped to is highlighted. Hold Alt to
+  place an element freely, or turn **Snap** off in the Page group.
 - **Export** writes PDF (every map series page) or PNG; **Print** opens the PDF in the system
   viewer; **Save Layout File** and **Import Layout** move layouts between projects
   (`.rgislayout`).

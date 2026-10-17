@@ -270,6 +270,8 @@ pub fn external_placeholder(_: &dyn Inputs, _: &Value) -> Result<ToolResult, Str
 /// asynchronous runner) does it too, so both check parameters the same way.
 pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> {
     let mut p = params.as_object().cloned().unwrap_or_default();
+    // Not an external suite's tool (a copy of a built-in spec counts as built-in).
+    let built_in = source_of(spec).is_none();
     for ps in spec.params {
         if !p.contains_key(ps.name)
             && !ps.default.is_empty()
@@ -280,8 +282,35 @@ pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> 
         if ps.required && p.get(ps.name).is_none_or(|v| v.is_null() || v.as_str() == Some("")) {
             return Err(format!("{}: '{}' is required", spec.name, ps.label));
         }
+        // The built-in tools' choices are the whole list. An external tool's (GeoLibre's, a
+        // plugin's) can be looser, such as GeoLibre's comma-separated lists of options: its own
+        // runner checks them.
+        if let ParamKind::Choice(choices) = ps.kind
+            && built_in
+            && let Some(v) = p.get_mut(ps.name)
+        {
+            *v = choice(spec, ps, choices, v)?;
+        }
     }
     Ok(Value::Object(p))
+}
+
+/// A built-in tool's choice parameter as one of its choices, spelled as declared (`"meters"` is
+/// `"Meters"`). Any other value is an error naming the choices: a tool never guesses what an
+/// unknown one meant (#406). A blank value is the declared default.
+fn choice(spec: &ToolSpec, ps: &ParamSpec, choices: &[&str], v: &Value) -> Result<Value, String> {
+    let given = match v {
+        Value::Null => return Ok(Value::Null),
+        // Blank: the declared default, as when it's left out.
+        Value::String(s) if s.trim().is_empty() => return Ok(serde_json::from_str(ps.default).unwrap_or_else(|_| v.clone())),
+        Value::String(s) => s.trim().to_string(),
+        Value::Number(_) | Value::Bool(_) => v.to_string(),
+        _ => String::new(),
+    };
+    match choices.iter().find(|c| c.eq_ignore_ascii_case(&given)) {
+        Some(c) => Ok(Value::String((*c).to_string())),
+        None => Err(format!("{}: '{}' must be one of {} (not {v})", spec.name, ps.label, choices.join(", "))),
+    }
 }
 
 /// Runs a tool with JSON parameters, filling defaults and checking required ones.

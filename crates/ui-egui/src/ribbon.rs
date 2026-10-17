@@ -1997,7 +1997,7 @@ fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 menu_item(ui, app, "settings", "Topology Options…", "ui.pane.editing", Value::Null);
                 if ui.button(tl!("Error Inspector (validate)")).clicked() {
                     let _ = app.run("topology.validate", Value::Null);
-                    app.ui.right = Some(RightPane::Editing);
+                    app.ui.open_right(RightPane::Editing);
                     ui.close();
                 }
             });
@@ -2446,6 +2446,30 @@ fn layout_groups(app: &mut RustGisApp, ui: &mut Ui) {
                     let _ = app.run("layout.page", json!({"layout": li, "orientation": o.to_lowercase()}));
                     ui.close();
                 }
+            }
+        });
+        col(ui, |ui| {
+            let snap = !app.layout.no_snap;
+            let desc = "Snap elements to guides, the page and each other as you move or resize them. Hold Alt to place one freely.";
+            if small(ui, app, "keep_tool", "Snap", desc, "ui.menu", Value::Null, snap).clicked() {
+                app.layout.no_snap = snap;
+            }
+            let shown = !app.layout.no_rulers;
+            let desc = "Show rulers. Drag from a ruler to add a guide; drag a guide back onto it to remove it.";
+            if small(ui, app, "measure", "Rulers", desc, "ui.menu", Value::Null, shown).clicked() {
+                app.layout.no_rulers = shown;
+            }
+            if !layout.guides.is_empty() {
+                small(
+                    ui,
+                    app,
+                    "delete",
+                    "Clear Guides",
+                    "Remove every guide from this layout.",
+                    "layout.guides",
+                    json!({"layout": li, "clear": true}),
+                    false,
+                );
             }
         });
     });
@@ -3531,7 +3555,7 @@ fn raster_style_groups(app: &mut RustGisApp, ui: &mut Ui) {
             }
             ui.separator();
             if ui.button(tl!("Symbology Pane…")).clicked() {
-                app.ui.right = Some(RightPane::Symbology);
+                app.ui.open_right(RightPane::Symbology);
                 ui.close();
             }
         });

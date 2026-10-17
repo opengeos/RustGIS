@@ -1422,3 +1422,59 @@ fn ogc_group_background_import_does_not_land_in_a_new_project() {
     assert!(h.state().session.map().service_groups.is_empty());
     assert_eq!(server.requests().len(), 1);
 }
+
+/// The right side keeps a tab for each pane opened (#303): opening shows a pane and adds its tab,
+/// a ribbon toggle closes only the pane in view (and shows one open but not in view), a tab's ✕
+/// closes its pane in view or not, the neighbouring tab takes over, pane sets keep the tabs, and
+/// the header's last ✕ closes them all.
+#[test]
+fn right_panes_open_as_tabs() {
+    use rustgis_ui_egui::RightPane::{Bookmarks, Geoprocessing, History};
+    let mut h = harness();
+    let tabs = |h: &egui_kittest::Harness<'_, RustGisApp>| (h.state().ui.right, h.state().ui.right_open.clone());
+    for pane in ["ui.pane.history", "ui.pane.geoprocessing", "ui.pane.bookmarks"] {
+        h.state_mut().run(pane, json!({})).unwrap();
+        h.step();
+    }
+    assert_eq!(tabs(&h), (Some(Bookmarks), vec![History, Geoprocessing, Bookmarks]));
+    // A toggle on a pane open but not in view shows it; on the one in view closes it alone.
+    h.state_mut().run("ui.pane.history", json!({})).unwrap();
+    assert_eq!(tabs(&h), (Some(History), vec![History, Geoprocessing, Bookmarks]));
+    h.state_mut().run("ui.pane.history", json!({})).unwrap();
+    assert_eq!(tabs(&h), (Some(Geoprocessing), vec![Geoprocessing, Bookmarks]), "the next tab takes over");
+    // A tab's ✕ on a pane not in view leaves the one in view.
+    h.state_mut().run("ui.pane.bookmarks", json!({"close": true})).unwrap();
+    assert_eq!(tabs(&h), (Some(Geoprocessing), vec![Geoprocessing]));
+    h.step();
+    // Pane sets keep the tabs and the one in view.
+    h.state_mut().run("ui.pane.history", json!({})).unwrap();
+    h.state_mut().run("ui.paneSet", json!({"save": "work"})).unwrap();
+    h.state_mut().run("ui.pane.history", json!({"close": true})).unwrap();
+    h.state_mut().run("ui.pane.geoprocessing", json!({"close": true})).unwrap();
+    assert_eq!(tabs(&h), (None, vec![]), "closing the last tab hides the right side");
+    h.state_mut().run("ui.paneSet", json!({"load": "work"})).unwrap();
+    assert_eq!(tabs(&h), (Some(History), vec![Geoprocessing, History]));
+    // The header draws a tab for each, and the ✕ of one closes it.
+    h.step();
+    h.get_by_label("Close Tools").click();
+    h.step();
+    assert_eq!(tabs(&h), (Some(History), vec![History]));
+    // The ✕ at the header's end closes them all.
+    h.state_mut().run("ui.pane.bookmarks", json!({})).unwrap();
+    h.step();
+    h.get_by_label("Close all panes").click();
+    h.step();
+    assert_eq!(tabs(&h), (None, vec![]));
+    // `close` means close for every pane command, whatever else it is given; on the left too.
+    h.state_mut().run("ui.pane.sql", json!({"sql": "SELECT 1"})).unwrap();
+    h.state_mut().run("ui.pane.sql", json!({"sql": "SELECT 2", "close": true})).unwrap();
+    assert_eq!(tabs(&h), (None, vec![]));
+    h.state_mut().run("ui.pane.assistant", json!({"ask": "hello", "close": true})).unwrap();
+    assert_eq!(tabs(&h), (None, vec![]), "closing a pane that isn't open opens nothing");
+    for _ in 0..2 {
+        h.state_mut().run("ui.pane.contents", json!({"close": true})).unwrap();
+        h.state_mut().run("ui.pane.catalog", json!({"close": true})).unwrap();
+        h.state_mut().run("ui.pane.sources", json!({"close": true})).unwrap();
+        assert_eq!(h.state().ui.left, None, "a left pane's close never opens one");
+    }
+}

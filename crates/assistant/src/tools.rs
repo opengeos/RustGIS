@@ -29,7 +29,7 @@ pub fn defs() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "list_layers",
-            description: "The project's map: its layers (id, name, type, feature count, fields, visibility, selection), basemap, centre and scale.",
+            description: "The project's map: its layers (id, name, type, feature count, fields, visibility, selection), its web tile layers (XYZ, WMS, vector tiles; index 0 on top, changed with map.setTiles), basemap, centre and scale.",
             schema: json!({"type": "object", "properties": {}}),
         },
         ToolDef {
@@ -644,6 +644,24 @@ pub fn context(s: &Session) -> String {
     }
     if m.layers.len() > 60 {
         out.push_str(&format!("\n… and {} more (list_layers lists them all).", m.layers.len() - 60));
+    }
+    if !m.tiles.is_empty() {
+        out.push_str("\nWeb tile layers under them (top first, index for map.setTiles):");
+    }
+    for (i, t) in m.tiles.iter().enumerate() {
+        // The name is clipped, not the line: the index and flags after it are what the model needs.
+        let mut line = format!("\n- \"{}\" (index {i}, {}", clip(&t.name, 200), t.kind.code());
+        if t.overlay {
+            line.push_str(", overlay");
+        }
+        if !t.visible {
+            line.push_str(", hidden");
+        }
+        if t.opacity < 1.0 {
+            line.push_str(&format!(", opacity {:.2}", t.opacity));
+        }
+        line.push(')');
+        out.push_str(&line);
     }
     out
 }

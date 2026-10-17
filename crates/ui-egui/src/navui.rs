@@ -193,7 +193,7 @@ pub fn seed(app: &mut RustGisApp, i: Option<usize>, c: Coord) {
     }
     st.picking = st.points.iter().position(|p| p.at.is_none());
     st.matches = None;
-    app.ui.right = Some(crate::RightPane::Directions);
+    app.ui.open_right(crate::RightPane::Directions);
 }
 
 /// Opens the pane on a route (`ui.pane.directions` with `from`, `to`, `via` as `[lon, lat]` or
@@ -231,7 +231,7 @@ pub fn open_with(app: &mut RustGisApp, p: &serde_json::Value) {
     st.points = points;
     st.matches = None;
     st.picking = st.points.iter().position(|p| p.at.is_none() && p.text.is_empty());
-    app.ui.right = Some(crate::RightPane::Directions);
+    app.ui.open_right(crate::RightPane::Directions);
 }
 
 /// A map click while a place waits for one: sets it, and moves on to the next place missing.
@@ -531,7 +531,7 @@ fn consent(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             save(app, "directions_consent", "1");
         }
         if ui.button(tl!("Cancel")).clicked() {
-            app.ui.right = None;
+            app.ui.close_right(crate::RightPane::Directions);
         }
     });
 }

@@ -363,7 +363,11 @@ pub struct UiState {
     pub backstage: bool,
     pub backstage_page: &'static str,
     pub left: Option<LeftPane>,
+    /// The right pane in view: one of `right_open`, or none. Changed through `open_right`,
+    /// `close_right` and `toggle_right`, which keep the two in step.
     pub right: Option<RightPane>,
+    /// The right panes open as tabs, in the order they were opened (#303).
+    pub right_open: Vec<RightPane>,
     pub dark: bool,
     /// The theme follows the system's light or dark setting until the user picks one.
     pub dark_follows_system: bool,
@@ -402,8 +406,8 @@ pub struct UiState {
     pub quick_access: Vec<String>,
     /// The native title bar the header is drawn into; set by the desktop app on macOS.
     pub titlebar: Option<TitlebarMetrics>,
-    /// Saved pane arrangements: (name, left pane, right pane, tab).
-    pub pane_sets: Vec<(String, Option<LeftPane>, Option<RightPane>, String)>,
+    /// Saved pane arrangements: (name, left pane, right pane in view, ribbon tab, right panes open).
+    pub pane_sets: Vec<(String, Option<LeftPane>, Option<RightPane>, String, Vec<RightPane>)>,
     /// The Layers pane's name filter (#300) and the map it was typed for: another map in view
     /// starts unfiltered. Not saved.
     pub layer_filter: String,
@@ -477,6 +481,37 @@ pub struct UiState {
     pub copy_image: Option<egui::ColorImage>,
 }
 
+impl UiState {
+    /// Opens right pane `pane` as a tab (after the others, if it isn't one yet) and shows it.
+    pub fn open_right(&mut self, pane: RightPane) {
+        if !self.right_open.contains(&pane) {
+            self.right_open.push(pane);
+        }
+        self.right = Some(pane);
+    }
+
+    /// Closes right pane `pane`'s tab. Closing the one in view shows its neighbour (the next tab,
+    /// else the one before); closing the last hides the right side.
+    pub fn close_right(&mut self, pane: RightPane) {
+        let Some(i) = self.right_open.iter().position(|p| *p == pane) else {
+            if self.right == Some(pane) {
+                self.right = None;
+            }
+            return;
+        };
+        self.right_open.remove(i);
+        if self.right == Some(pane) {
+            self.right = self.right_open.get(i).or_else(|| self.right_open.last()).copied();
+        }
+    }
+
+    /// A ribbon toggle: closes `pane` when it is in view, and otherwise opens or shows it (a toggle
+    /// never hides the other panes open).
+    pub fn toggle_right(&mut self, pane: RightPane) {
+        if self.right == Some(pane) { self.close_right(pane) } else { self.open_right(pane) }
+    }
+}
+
 impl Default for UiState {
     fn default() -> Self {
         UiState {
@@ -485,6 +520,7 @@ impl Default for UiState {
             backstage_page: "open",
             left: Some(LeftPane::Contents),
             right: None,
+            right_open: Vec::new(),
             dark: false,
             dark_follows_system: true,
             language: i18n::AUTO.into(),
@@ -1160,14 +1196,20 @@ impl RustGisApp {
     }
 
     fn run_ui(&mut self, id: &str, p: &Value) -> Result<Value, String> {
-        let toggle_right = |ui: &mut UiState, pane: RightPane| ui.right = if ui.right == Some(pane) { None } else { Some(pane) };
+        // A pane's command toggles it; `{"close": true}` closes it, in view or not (a tab's ✕),
+        // whatever else the command is given (SQL to run, a question to ask).
+        if p.get("close").and_then(Value::as_bool) == Some(true) && panes::close_pane_of(self, id) {
+            return Ok(Value::Null);
+        }
+        let toggle_right = |ui: &mut UiState, pane: RightPane| ui.toggle_right(pane);
         match id {
             "ui.pane.contents" => self.ui.left = if self.ui.left == Some(LeftPane::Contents) { None } else { Some(LeftPane::Contents) },
             "ui.pane.catalog" => self.ui.left = if self.ui.left == Some(LeftPane::Catalog) { None } else { Some(LeftPane::Catalog) },
             "ui.pane.sources" => self.ui.left = if self.ui.left == Some(LeftPane::Sources) { None } else { Some(LeftPane::Sources) },
             "ui.pane.geoprocessing" => toggle_right(&mut self.ui, RightPane::Geoprocessing),
             "ui.pane.symbology" => {
-                if self.session.active_layer.is_none() {
+                // Showing its tab already open needs no layer.
+                if self.session.active_layer.is_none() && !self.ui.right_open.contains(&RightPane::Symbology) {
                     return Err("select a layer in the Layers pane first".into());
                 }
                 toggle_right(&mut self.ui, RightPane::Symbology)
@@ -1184,7 +1226,7 @@ impl RustGisApp {
             // The SQL pane; with "sql" (and "database"), opened on that query, run with "run".
             "ui.pane.sql" => match p.get("sql").and_then(Value::as_str) {
                 Some(sql) => {
-                    self.ui.right = Some(RightPane::Sql);
+                    self.ui.open_right(RightPane::Sql);
                     self.ui.sql.text = sql.chars().take(12_000).collect();
                     if let Some(d) = p.get("database").and_then(Value::as_str) {
                         self.ui.sql.database = d.to_string();
@@ -1205,7 +1247,7 @@ impl RustGisApp {
                         self.workflow.section = id;
                         self.workflow.result = None;
                         self.workflow.error = None;
-                        self.ui.right = Some(RightPane::Workflows);
+                        self.ui.open_right(RightPane::Workflows);
                     }
                     None => toggle_right(&mut self.ui, RightPane::Workflows),
                 }
@@ -1217,7 +1259,7 @@ impl RustGisApp {
                 if let Some(id) = p.get("table").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()) {
                     self.gp.pick_table(id, &self.session);
                 }
-                self.ui.right = Some(RightPane::Geoprocessing);
+                self.ui.open_right(RightPane::Geoprocessing);
             }
             "ui.language" => {
                 let code = p.get("code").and_then(Value::as_str).unwrap_or(i18n::AUTO);
@@ -1715,7 +1757,7 @@ impl RustGisApp {
             "ui.newReport" => {
                 let r = self.run("report.new", Value::Null);
                 if r.is_ok() {
-                    self.ui.right = Some(RightPane::Report);
+                    self.ui.open_right(RightPane::Report);
                 }
                 return r;
             }
@@ -1874,7 +1916,7 @@ impl RustGisApp {
             // `{"ask": text}` opens the pane and sends the text.
             "ui.pane.assistant" => match p.get("ask").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()) {
                 Some(text) => {
-                    self.ui.right = Some(RightPane::Assistant);
+                    self.ui.open_right(RightPane::Assistant);
                     self.assistant.queued = Some(text.to_string());
                 }
                 None => toggle_right(&mut self.ui, RightPane::Assistant),
@@ -1917,7 +1959,7 @@ impl RustGisApp {
                 };
                 let r = self.run(cmd, Value::Null);
                 if r.is_ok() {
-                    self.ui.right = Some(pane);
+                    self.ui.open_right(pane);
                 }
                 return r;
             }
@@ -1934,7 +1976,7 @@ impl RustGisApp {
             "ui.presentationVideo" => {
                 // In the browser a video is a web address, typed in the pane.
                 if self.services.open_async.is_some() {
-                    self.ui.right = Some(RightPane::Presentation);
+                    self.ui.open_right(RightPane::Presentation);
                 } else if let Some(path) = dialogs::pick_open(&["mp4", "webm", "ogv", "mov"], tl!("Videos")) {
                     return self.run("presentation.videoPage", json!({"source": path}));
                 }
@@ -1982,10 +2024,16 @@ impl RustGisApp {
             "ui.paneSet" => {
                 if let Some(n) = p.get("save").and_then(Value::as_str) {
                     self.ui.pane_sets.retain(|x| x.0 != n);
-                    self.ui.pane_sets.push((n.to_string(), self.ui.left, self.ui.right, self.ui.tab.clone()));
+                    let open = self.ui.right_open.clone();
+                    self.ui.pane_sets.push((n.to_string(), self.ui.left, self.ui.right, self.ui.tab.clone(), open));
                 } else if let Some(n) = p.get("load").and_then(Value::as_str) {
                     let set = self.ui.pane_sets.iter().find(|x| x.0 == n).cloned().ok_or_else(|| format!("no pane set '{n}'"))?;
                     (self.ui.left, self.ui.right, self.ui.tab) = (set.1, set.2, ribbon::current_tab(&set.3).to_string());
+                    self.ui.right_open = set.4;
+                    // The pane in view is one of the tabs.
+                    if let Some(pane) = set.2 {
+                        self.ui.open_right(pane);
+                    }
                 } else {
                     return Err("save or load a pane set by name".into());
                 }

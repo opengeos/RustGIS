@@ -365,7 +365,7 @@ pub fn decode_tile(header: &Sparse, layout: &Layout, level: usize, index: u32, b
     let r = header.clone().with(at, bytes).reader();
     let mut dec = Decoder::new(super::geotiff::reader(r).map_err(err)?).map_err(err)?.with_limits(limits());
     dec.seek_to_image(l.ifd).map_err(err)?;
-    let values = match dec.read_chunk(index).map_err(err)? {
+    let values = match super::geotiff::read_chunk(&mut dec, index)? {
         DecodingResult::U8(v) => v.into_iter().map(f32::from).collect::<Vec<f32>>(),
         DecodingResult::I8(v) => v.into_iter().map(f32::from).collect(),
         DecodingResult::U16(v) => v.into_iter().map(f32::from).collect(),

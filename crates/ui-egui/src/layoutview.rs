@@ -1,8 +1,10 @@
 //! The layout view: the page with its elements, shown instead of the map when a layout is open.
 //! Click an element to select it, drag it to move, drag its handles to resize, Shift-drag a map
 //! frame to pan its map; the wheel zooms the page. The properties panel edits the selection.
+//! Rulers run along the top and left: drag out of one to add a guide, drag a guide back onto one
+//! to remove it. Dragged elements snap to guides, the page and each other (Alt places freely).
 
-use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, CursorIcon, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::map::layout::{ElementKind, Layout, PT_PER_MM, frame_camera};
 use serde_json::{Value, json};
 
@@ -21,7 +23,23 @@ enum Drag {
     Pan,
     /// Drawing a lasso frame.
     Lasso,
+    /// Dragging a new guide out of a ruler: vertical (from the left ruler) or horizontal.
+    NewGuide(bool),
+    /// Moving a guide: vertical or horizontal, and its index.
+    Guide(bool, usize),
 }
+
+/// Width of the rulers along the view's top and left edges (points).
+const RULER: f32 = 18.0;
+/// How near (points) a dragged edge snaps to a line.
+const SNAP_PT: f32 = 6.0;
+/// How near (points) the pointer picks up a guide.
+const GUIDE_PICK: f32 = 4.0;
+const GUIDE_COLOR: Color32 = Color32::from_rgb(0x00, 0x9E, 0xD8);
+const SNAP_COLOR: Color32 = Color32::from_rgb(0xE0, 0x3E, 0x8C);
+
+/// An element's box: x, y, width, height (mm).
+type Box4 = (f64, f64, f64, f64);
 
 #[derive(Default)]
 pub struct LayoutView {
@@ -45,6 +63,10 @@ pub struct LayoutView {
     shown: Option<(usize, u64, std::rc::Rc<Layout>)>,
     /// The map series page count and the current page's name, by the same key.
     series: Option<(usize, u64, usize, String)>,
+    /// Dragged elements don't snap (they do by default; Alt places freely for one drag).
+    pub no_snap: bool,
+    /// The rulers are hidden.
+    pub no_rulers: bool,
 }
 
 impl LayoutView {
@@ -106,6 +128,215 @@ fn resized((x, y, w, h): (f64, f64, f64, f64), handle: usize, dx: f64, dy: f64) 
     let w = if sizes_x { (x1 - x0).abs().max(2.0) } else { w };
     let h = if sizes_y { (y1 - y0).abs().max(2.0) } else { h };
     (x0.min(x1), y0.min(y1), w, h)
+}
+
+/// The lines a dragged element snaps to (mm): the page's edges and centre, the guides, and the
+/// other visible elements' edges and centres; vertical lines (x), then horizontal (y).
+fn snap_lines(l: &Layout, moving: u32) -> (Vec<f64>, Vec<f64>) {
+    let mut xs = vec![0.0, l.width / 2.0, l.width];
+    let mut ys = vec![0.0, l.height / 2.0, l.height];
+    xs.extend(&l.guides.x);
+    ys.extend(&l.guides.y);
+    for e in l.elements.iter().filter(|e| e.id != moving && e.visible) {
+        xs.extend([e.x, e.x + e.w / 2.0, e.x + e.w]);
+        ys.extend([e.y, e.y + e.h / 2.0, e.y + e.h]);
+    }
+    (xs, ys)
+}
+
+/// The smallest shift that puts one of `edges` on one of `lines`, if one is within `tol`, and
+/// the line.
+fn snap_to(edges: &[f64], lines: &[f64], tol: f64) -> Option<(f64, f64)> {
+    edges
+        .iter()
+        .flat_map(|e| lines.iter().map(move |l| (l - e, *l)))
+        .filter(|(d, _)| d.abs() <= tol)
+        .min_by(|a, b| a.0.abs().total_cmp(&b.0.abs()))
+}
+
+/// Where an element lands when moved (no handle) or resized from a handle by the pointer's
+/// offset (mm): snapped to `lines` within `tol` mm when given, with the lines it snapped to.
+fn landing(
+    r: Box4,
+    handle: Option<usize>,
+    (mut dx, mut dy): (f64, f64),
+    snap: Option<(&(Vec<f64>, Vec<f64>), f64)>,
+) -> (Box4, Option<f64>, Option<f64>) {
+    let (x, y, w, h) = r;
+    let (mut sx, mut sy) = (None, None);
+    if let Some(((xs, ys), tol)) = snap {
+        // The edges that move: every edge and the centre for a move, the handle's for a resize.
+        let (ex, ey) = match handle {
+            None => (vec![x, x + w / 2.0, x + w], vec![y, y + h / 2.0, y + h]),
+            Some(hd) => (
+                match hd {
+                    0 | 6 | 7 => vec![x],
+                    2..=4 => vec![x + w],
+                    _ => vec![],
+                },
+                match hd {
+                    0..=2 => vec![y],
+                    4..=6 => vec![y + h],
+                    _ => vec![],
+                },
+            ),
+        };
+        let ex: Vec<f64> = ex.iter().map(|e| e + dx).collect();
+        let ey: Vec<f64> = ey.iter().map(|e| e + dy).collect();
+        if let Some((d, line)) = snap_to(&ex, xs, tol) {
+            dx += d;
+            sx = Some(line);
+        }
+        if let Some((d, line)) = snap_to(&ey, ys, tol) {
+            dy += d;
+            sy = Some(line);
+        }
+    }
+    let out = match handle {
+        Some(hd) => resized(r, hd, dx, dy),
+        None => (x + dx, y + dy, w, h),
+    };
+    (out, sx, sy)
+}
+
+/// The element being moved or resized, where it lands with the pointer at `at` (mm), and the
+/// lines it snapped to.
+fn drag_landing(lv: &LayoutView, ui: &Ui, layout: &Layout, s: f32, at: (f64, f64)) -> Option<(u32, Box4, Option<f64>, Option<f64>)> {
+    let (id, handle, start) = match lv.drag? {
+        Drag::Move(id, start) => (id, None, start),
+        Drag::Resize(id, h, start) => (id, Some(h), start),
+        _ => return None,
+    };
+    let e = layout.element(id)?;
+    let free = lv.no_snap || ui.input(|i| i.modifiers.alt);
+    let lines = (!free).then(|| snap_lines(layout, id));
+    let tol = f64::from(SNAP_PT / s.max(1e-3));
+    let (r, sx, sy) = landing((e.x, e.y, e.w, e.h), handle, (at.0 - start.0, at.1 - start.1), lines.as_ref().map(|l| (l, tol)));
+    Some((id, r, sx, sy))
+}
+
+/// The guide under a screen point: vertical or not, and its index.
+fn guide_at(l: &Layout, page: Rect, s: f32, pos: Pos2) -> Option<(bool, usize)> {
+    let near = |d: f32| d.abs() < GUIDE_PICK;
+    l.guides
+        .x
+        .iter()
+        .position(|x| near(to_screen(page, s, (*x, 0.0)).x - pos.x))
+        .map(|i| (true, i))
+        .or_else(|| l.guides.y.iter().position(|y| near(to_screen(page, s, (0.0, *y)).y - pos.y)).map(|i| (false, i)))
+}
+
+/// Which ruler a screen point is on: Some(true) the left one (vertical guides), Some(false) the top.
+fn ruler_at(lv: &LayoutView, area: Rect, p: Pos2) -> Option<bool> {
+    if lv.no_rulers || !area.contains(p) {
+        return None;
+    }
+    let (left, top) = (p.x < area.left() + RULER, p.y < area.top() + RULER);
+    match (left, top) {
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        _ => None,
+    }
+}
+
+/// Puts down a guide dragged out of a ruler or moved: dropped on a ruler or off the view, it's
+/// removed.
+#[allow(clippy::too_many_arguments)]
+fn drop_guide(
+    app: &mut RustGisApp,
+    layout: &Layout,
+    li: usize,
+    page: Rect,
+    s: f32,
+    area: Rect,
+    vertical: bool,
+    moving: Option<usize>,
+    at: Option<Pos2>,
+) {
+    let mut list = if vertical { layout.guides.x.clone() } else { layout.guides.y.clone() };
+    if let Some(i) = moving.filter(|i| *i < list.len()) {
+        list.remove(i);
+    }
+    if let Some(p) = at.filter(|p| area.contains(*p) && (app.layout.no_rulers || (p.x >= area.left() + RULER && p.y >= area.top() + RULER)))
+    {
+        let (mx, my) = to_mm(page, s, p);
+        // To a tenth of a millimetre.
+        list.push(((if vertical { mx } else { my }) * 10.0).round() / 10.0);
+    }
+    let key = if vertical { "x" } else { "y" };
+    let _ = app.run("layout.guides", json!({"layout": li, key: list}));
+}
+
+/// Rulers along the view's top and left edges, in millimetres from the page's top-left corner,
+/// with the guides and the pointer marked.
+fn rulers(painter: &egui::Painter, area: Rect, page: Rect, s: f32, l: &Layout, pointer: Option<Pos2>, t: &Tokens) {
+    const STEPS: [f64; 10] = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0];
+    let sf = f64::from(s);
+    let minor = STEPS.iter().copied().find(|st| st * sf >= 5.0).unwrap_or(1000.0);
+    let major = STEPS.iter().copied().find(|st| st * sf >= 45.0 && (st / minor).fract() == 0.0).unwrap_or(1000.0);
+    let top = Rect::from_min_max(area.min, pos2(area.max.x, area.min.y + RULER));
+    let left = Rect::from_min_max(area.min, pos2(area.min.x + RULER, area.max.y));
+    painter.rect_filled(top, 0.0, t.ribbon);
+    painter.rect_filled(left, 0.0, t.ribbon);
+    // The page's span, lighter.
+    let span_x = Rect::from_min_max(pos2(page.min.x.max(left.max.x), top.min.y), pos2(page.max.x.min(top.max.x), top.max.y));
+    let span_y = Rect::from_min_max(pos2(left.min.x, page.min.y.max(top.max.y)), pos2(left.max.x, page.max.y.min(left.max.y)));
+    for r in [span_x, span_y] {
+        if r.is_positive() {
+            painter.rect_filled(r, 0.0, t.input);
+        }
+    }
+    let tick = Stroke::new(1.0, t.text_dim);
+    let is_major = |v: f64| ((v / major) - (v / major).round()).abs() < 1e-6;
+    // Along the top, then down the side; at most a few thousand ticks either way.
+    let (x0, y0) = to_mm(page, s, pos2(left.max.x, top.max.y));
+    let (x1, y1) = to_mm(page, s, area.max);
+    for k in ((x0 / minor).ceil() as i64..=(x1 / minor).floor() as i64).take(4000) {
+        let v = k as f64 * minor;
+        let x = to_screen(page, s, (v, 0.0)).x;
+        let len = if is_major(v) { RULER * 0.6 } else { RULER * 0.25 };
+        painter.line_segment([pos2(x, top.max.y - len), pos2(x, top.max.y)], tick);
+        if is_major(v) {
+            painter.text(pos2(x + 2.0, top.min.y + 1.0), Align2::LEFT_TOP, format!("{v:.0}"), regular(9.0), t.text_dim);
+        }
+    }
+    for k in ((y0 / minor).ceil() as i64..=(y1 / minor).floor() as i64).take(4000) {
+        let v = k as f64 * minor;
+        let y = to_screen(page, s, (0.0, v)).y;
+        let len = if is_major(v) { RULER * 0.6 } else { RULER * 0.25 };
+        painter.line_segment([pos2(left.max.x - len, y), pos2(left.max.x, y)], tick);
+        if is_major(v) {
+            painter.text(pos2(left.min.x + 1.0, y + 1.0), Align2::LEFT_TOP, format!("{v:.0}"), regular(9.0), t.text_dim);
+        }
+    }
+    // The guides, as small triangles pointing into the page.
+    for x in &l.guides.x {
+        let x = to_screen(page, s, (*x, 0.0)).x;
+        if x > left.max.x {
+            let pts = vec![pos2(x - 4.0, top.max.y - 6.0), pos2(x + 4.0, top.max.y - 6.0), pos2(x, top.max.y)];
+            painter.add(egui::Shape::convex_polygon(pts, GUIDE_COLOR, Stroke::NONE));
+        }
+    }
+    for y in &l.guides.y {
+        let y = to_screen(page, s, (0.0, *y)).y;
+        if y > top.max.y {
+            let pts = vec![pos2(left.max.x - 6.0, y - 4.0), pos2(left.max.x - 6.0, y + 4.0), pos2(left.max.x, y)];
+            painter.add(egui::Shape::convex_polygon(pts, GUIDE_COLOR, Stroke::NONE));
+        }
+    }
+    // Where the pointer is.
+    if let Some(p) = pointer.filter(|p| area.contains(*p)) {
+        let mark = Stroke::new(1.0, t.accent);
+        if p.x > left.max.x {
+            painter.line_segment([pos2(p.x, top.min.y), pos2(p.x, top.max.y)], mark);
+        }
+        if p.y > top.max.y {
+            painter.line_segment([pos2(left.min.x, p.y), pos2(left.max.x, p.y)], mark);
+        }
+    }
+    painter.rect_filled(Rect::from_min_size(area.min, vec2(RULER, RULER)), 0.0, t.ribbon);
+    painter.line_segment([pos2(left.max.x, top.max.y), pos2(top.max.x, top.max.y)], Stroke::new(1.0, t.border));
+    painter.line_segment([pos2(left.max.x, top.max.y), pos2(left.max.x, left.max.y)], Stroke::new(1.0, t.border));
 }
 
 /// The layout to show, copied from the project only when it has changed since the last copy.
@@ -177,16 +408,40 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     }
     let accent = t.accent;
     let pointer = ui.input(|i| i.pointer.latest_pos());
-    // The dragged element's outline where it will land.
-    if let (Some(Drag::Move(id, start) | Drag::Resize(id, _, start)), Some(p)) = (app.layout.drag, pointer)
-        && let Some(e) = layout.element(id)
-    {
+    // Guides across the view; one being moved is drawn at the pointer instead.
+    let moving = match app.layout.drag {
+        Some(Drag::Guide(v, i)) => Some((v, i)),
+        _ => None,
+    };
+    let vline = |x: f32, c: Color32| painter.line_segment([pos2(x, area.top()), pos2(x, area.bottom())], Stroke::new(1.0, c));
+    let hline = |y: f32, c: Color32| painter.line_segment([pos2(area.left(), y), pos2(area.right(), y)], Stroke::new(1.0, c));
+    for (_, x) in layout.guides.x.iter().enumerate().filter(|(i, _)| moving != Some((true, *i))) {
+        vline(to_screen(page, s, (*x, 0.0)).x, GUIDE_COLOR);
+    }
+    for (_, y) in layout.guides.y.iter().enumerate().filter(|(i, _)| moving != Some((false, *i))) {
+        hline(to_screen(page, s, (0.0, *y)).y, GUIDE_COLOR);
+    }
+    if let (Some(Drag::NewGuide(v) | Drag::Guide(v, _)), Some(p)) = (app.layout.drag, pointer) {
         let (mx, my) = to_mm(page, s, p);
-        let (dx, dy) = (mx - start.0, my - start.1);
-        let r = match app.layout.drag {
-            Some(Drag::Resize(_, h, _)) => resized((e.x, e.y, e.w, e.h), h, dx, dy),
-            _ => (e.x + dx, e.y + dy, e.w, e.h),
+        let label = if v {
+            vline(p.x, GUIDE_COLOR);
+            format!("{mx:.1} mm")
+        } else {
+            hline(p.y, GUIDE_COLOR);
+            format!("{my:.1} mm")
         };
+        painter.text(p + vec2(8.0, 8.0), Align2::LEFT_TOP, label, regular(11.0), GUIDE_COLOR);
+    }
+    // The dragged element's outline where it will land, and the lines it snapped to.
+    if let Some(p) = pointer
+        && let Some((_, r, sx, sy)) = drag_landing(&app.layout, ui, &layout, s, to_mm(page, s, p))
+    {
+        if let Some(x) = sx {
+            vline(to_screen(page, s, (x, 0.0)).x, SNAP_COLOR);
+        }
+        if let Some(y) = sy {
+            hline(to_screen(page, s, (0.0, y)).y, SNAP_COLOR);
+        }
         let rr = Rect::from_min_max(to_screen(page, s, (r.0, r.1)), to_screen(page, s, (r.0 + r.2, r.1 + r.3)));
         painter.rect_stroke(rr, 0.0, Stroke::new(1.5, accent), egui::StrokeKind::Middle);
     }
@@ -212,12 +467,19 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         }
         painter.add(egui::Shape::closed_line(pts, Stroke::new(2.0, Color32::from_rgb(0x16, 0x9A, 0x5A))));
     }
+    // The rulers, and room for them beside the notes drawn over the view.
+    let inset = if app.layout.no_rulers {
+        0.0
+    } else {
+        rulers(&painter, area, page, s, &layout, pointer, &t);
+        RULER
+    };
     // Status: page size, zoom and hint.
     let hint = match app.layout.tool {
         Some("polygon") => tl!("Click the frame's corners · double-click to finish · Esc to stop").to_string(),
         Some(_) => tl!("Drag the frame's outline · Esc to stop").to_string(),
         None => crate::i18n::fmt(
-            "{w} × {h} mm · {zoom}% · drag to move, Shift-drag a map frame to pan it, wheel to zoom",
+            "{w} × {h} mm · {zoom}% · drag to move (Alt: no snapping), Shift-drag a map frame to pan it, wheel to zoom",
             &[
                 ("w", &format!("{:.0}", layout.width)),
                 ("h", &format!("{:.0}", layout.height)),
@@ -226,7 +488,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         ),
     };
     let g = painter.layout_no_wrap(hint, regular(11.5), t.text_dim);
-    let bg = Rect::from_min_size(pos2(area.min.x + 10.0, area.max.y - g.size().y - 14.0), g.size() + vec2(14.0, 8.0));
+    let bg = Rect::from_min_size(pos2(area.min.x + inset + 10.0, area.max.y - g.size().y - 14.0), g.size() + vec2(14.0, 8.0));
     painter.rect_filled(bg, CornerRadius::same(10), t.ribbon.gamma_multiply(0.9));
     painter.galley(bg.min + vec2(7.0, 4.0), g, t.text_dim);
     if layout.series.is_some()
@@ -238,7 +500,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             &[("n", &(page_no + 1).to_string()), ("total", &total.to_string()), ("name", &name)],
         );
         let g = painter.layout_no_wrap(label, semibold(12.0), t.text);
-        let bg = Rect::from_min_size(pos2(area.min.x + 10.0, area.min.y + 10.0), g.size() + vec2(16.0, 10.0));
+        let bg = Rect::from_min_size(pos2(area.min.x + inset + 10.0, area.min.y + inset + 10.0), g.size() + vec2(16.0, 10.0));
         painter.rect_filled(bg, CornerRadius::same(10), t.ribbon);
         painter.galley(bg.min + vec2(8.0, 5.0), g, t.text);
     }
@@ -323,8 +585,22 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
         }
         return;
     }
+    // Rulers and guides show they can be dragged.
+    if let Some(p) = resp.hover_pos() {
+        let vertical = match app.layout.drag {
+            Some(Drag::NewGuide(v) | Drag::Guide(v, _)) => Some(v),
+            Some(_) => None,
+            None => ruler_at(&app.layout, resp.rect, p).or_else(|| guide_at(layout, page, s, p).map(|g| g.0)),
+        };
+        match vertical {
+            Some(true) => ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal),
+            Some(false) => ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical),
+            None => {}
+        }
+    }
     if resp.clicked()
         && let Some(p) = pointer_mm
+        && resp.interact_pointer_pos().is_none_or(|pos| ruler_at(&app.layout, resp.rect, pos).is_none())
     {
         app.layout.selected = layout.hit(p.0, p.1);
     }
@@ -344,17 +620,23 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
             let r = Rect::from_min_max(to_screen(page, s, (e.x, e.y)), to_screen(page, s, (e.x + e.w, e.y + e.h)));
             handles(r).iter().position(|h| (*h - pos).length() < 7.0).map(|h| (e.id, h))
         });
-        app.layout.drag = Some(match (handle, layout.hit(p.0, p.1)) {
-            (Some((id, h)), _) => Drag::Resize(id, h, p),
-            (None, Some(id)) if shift && matches!(layout.element(id).map(|e| &e.kind), Some(ElementKind::MapFrame { .. })) => {
+        // Where the press was: a drag starts only once the pointer has moved off it.
+        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+        let ruler = ruler_at(&app.layout, resp.rect, origin);
+        let guide = guide_at(layout, page, s, origin);
+        app.layout.drag = Some(match (ruler, handle, guide, layout.hit(p.0, p.1)) {
+            (Some(vertical), ..) => Drag::NewGuide(vertical),
+            (None, Some((id, h)), ..) => Drag::Resize(id, h, p),
+            (None, None, Some((vertical, i)), _) => Drag::Guide(vertical, i),
+            (None, None, None, Some(id)) if shift && matches!(layout.element(id).map(|e| &e.kind), Some(ElementKind::MapFrame { .. })) => {
                 app.layout.selected = Some(id);
                 Drag::PanFrame(id, p)
             }
-            (None, Some(id)) => {
+            (None, None, None, Some(id)) => {
                 app.layout.selected = Some(id);
                 Drag::Move(id, p)
             }
-            (None, None) => Drag::Pan,
+            (None, None, None, None) => Drag::Pan,
         });
     }
     if app.layout.drag == Some(Drag::Pan) {
@@ -363,19 +645,26 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
     if resp.drag_stopped() {
         let end = pointer_mm.or_else(|| ui.input(|i| i.pointer.latest_pos()).map(|p| to_mm(page, s, p)));
         match (app.layout.drag, end) {
-            (Some(Drag::Move(id, start)), Some(end)) => {
-                if let Some(e) = layout.element(id) {
-                    let (dx, dy) = (end.0 - start.0, end.1 - start.1);
-                    if dx.abs() > 0.2 || dy.abs() > 0.2 {
-                        let _ = app.run("layout.update", json!({"layout": li, "element": id, "x": e.x + dx, "y": e.y + dy}));
-                    }
+            (Some(Drag::Move(_, start)), Some(end)) => {
+                // A press that hardly moved is a click, not a move.
+                if ((end.0 - start.0).abs() > 0.2 || (end.1 - start.1).abs() > 0.2)
+                    && let Some((id, (x, y, _, _), _, _)) = drag_landing(&app.layout, ui, layout, s, end)
+                {
+                    let _ = app.run("layout.update", json!({"layout": li, "element": id, "x": x, "y": y}));
                 }
             }
-            (Some(Drag::Resize(id, h, start)), Some(end)) => {
-                if let Some(e) = layout.element(id) {
-                    let (x, y, w, hh) = resized((e.x, e.y, e.w, e.h), h, end.0 - start.0, end.1 - start.1);
+            (Some(Drag::Resize(..)), Some(end)) => {
+                if let Some((id, (x, y, w, hh), _, _)) = drag_landing(&app.layout, ui, layout, s, end) {
                     let _ = app.run("layout.update", json!({"layout": li, "element": id, "x": x, "y": y, "w": w, "h": hh}));
                 }
+            }
+            (Some(Drag::NewGuide(v)), _) => {
+                let at = ui.input(|i| i.pointer.latest_pos());
+                drop_guide(app, layout, li, page, s, resp.rect, v, None, at);
+            }
+            (Some(Drag::Guide(v, i)), _) => {
+                let at = ui.input(|i| i.pointer.latest_pos());
+                drop_guide(app, layout, li, page, s, resp.rect, v, Some(i), at);
             }
             (Some(Drag::PanFrame(id, start)), Some(end)) => pan_frame(app, layout, li, id, end.0 - start.0, end.1 - start.1),
             _ => {}
@@ -590,7 +879,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{page_rect, resized, to_screen};
+    use super::{RULER, landing, page_rect, resized, snap_to, to_screen};
     use crate::RustGisApp;
     use egui::{Event, Modifiers, PointerButton, Pos2, Rect, vec2};
     use serde_json::json;
@@ -601,6 +890,8 @@ mod tests {
     fn dropped_element_is_drawn_where_it_lands() {
         let mut app = RustGisApp::with_sample();
         app.run("layout.new", json!({"name": "Drag"})).unwrap();
+        // The drop itself, not snapping (tested below).
+        app.layout.no_snap = true;
         let area = Rc::new(Cell::new(Rect::NOTHING));
         let shown = area.clone();
         // Fonts take effect on the frame after they are installed.
@@ -651,6 +942,72 @@ mod tests {
         assert_eq!((*i, *rev), (li, app.session.revision));
         assert_eq!(drawn.element(title.id).map(|e| e.y), Some(moved.y));
         assert_eq!(app.layout.key.map(|k| k.0), Some(app.session.revision));
+    }
+
+    #[test]
+    fn dragged_elements_snap_to_the_nearest_line() {
+        let lines = (vec![0.0, 100.0, 150.0], vec![0.0, 50.0]);
+        assert_eq!(snap_to(&[98.5, 120.0], &lines.0, 2.0), Some((1.5, 100.0)));
+        assert_eq!(snap_to(&[90.0], &lines.0, 2.0), None);
+        let r = (10.0, 10.0, 40.0, 20.0);
+        // Moved: the right edge (50 + 49) is nearest a line, so the box lands with it on 100.
+        let (moved, sx, sy) = landing(r, None, (49.0, 0.5), Some((&lines, 2.0)));
+        assert_eq!((moved, sx, sy), ((60.0, 10.5, 40.0, 20.0), Some(100.0), None));
+        // Without snapping it lands where the pointer put it.
+        assert_eq!(landing(r, None, (49.0, 0.5), None).0, (59.0, 10.5, 40.0, 20.0));
+        // Resized from the bottom-right handle: only those edges snap (148.5 → 150, 49 → 50);
+        // the top-left stays.
+        let (sized, sx, sy) = landing(r, Some(4), (98.5, 19.0), Some((&lines, 2.0)));
+        assert_eq!((sized, sx, sy), ((10.0, 10.0, 140.0, 40.0), Some(150.0), Some(50.0)));
+    }
+
+    /// Dragging out of the top ruler adds a horizontal guide; dragging it back onto the ruler
+    /// removes it.
+    #[test]
+    fn guides_come_out_of_the_rulers_and_go_back() {
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Guides", "template": "blank"})).unwrap();
+        let area = Rc::new(Cell::new(Rect::NOTHING));
+        let shown = area.clone();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                shown.set(ui.available_rect_before_wrap());
+                super::show(app, ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let li = h.state().session.active_layout.unwrap();
+        let layout = h.state().session.project.layouts[li].clone();
+        let (page, s) = page_rect(&h.state().layout, area.get(), &layout);
+        let drag = |h: &mut egui_kittest::Harness<'_, RustGisApp>, from: Pos2, to: Pos2| {
+            let button =
+                |pos: Pos2, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            h.event(Event::PointerMoved(from));
+            h.step();
+            h.event(button(from, true));
+            h.step();
+            for i in 1..=6 {
+                h.event(Event::PointerMoved(from + (to - from) * i as f32 / 6.0));
+                h.step();
+            }
+            h.event(button(to, false));
+            h.step();
+        };
+        let ruler = Pos2::new(page.center().x, area.get().top() + RULER / 2.0);
+        let at = to_screen(page, s, (0.0, 40.0));
+        drag(&mut h, ruler, Pos2::new(ruler.x, at.y));
+        let y = h.state().session.project.layouts[li].guides.y.clone();
+        assert_eq!(y.len(), 1, "a guide was added: {y:?}");
+        assert!((y[0] - 40.0).abs() < 0.5, "at about 40 mm: {y:?}");
+        drag(&mut h, Pos2::new(page.center().x, to_screen(page, s, (0.0, y[0])).y), ruler);
+        assert!(h.state().session.project.layouts[li].guides.y.is_empty(), "dropped on the ruler, it's gone");
     }
 
     #[test]
