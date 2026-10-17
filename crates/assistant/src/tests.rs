@@ -3727,6 +3727,41 @@ fn agent_recognises_the_reasoning_refusal_by_its_param_whatever_the_wording() {
     let mut b = Agent::new(cfg("openai"), &s);
     assert!(matches!(b.ask("hi", &s), Step::Send(_)));
     assert_eq!(b.receive_result(b.generation(), reply("model"), &mut s), Step::Done);
+    // Without the param, the message naming it is enough.
+    let unnamed = Ok(HttpResponse {
+        status: 400,
+        body: json!({"error": {"message": "Function tools with reasoning_effort are not supported for this model.", "type": "invalid_request_error", "param": null}})
+            .to_string()
+            .into_bytes(),
+        headers: vec![],
+    });
+    let mut c = Agent::new(cfg("openai"), &s);
+    assert!(matches!(c.ask("hi", &s), Step::Send(_)));
+    let Step::Send(again) = c.receive_result(c.generation(), unnamed, &mut s) else {
+        panic!("expected the request again, without reasoning")
+    };
+    assert_eq!(body(&again)["reasoning_effort"], "none");
+}
+
+#[test]
+fn a_reasoning_refusal_is_the_model_it_was_sent_to() {
+    // The model chosen while the request was waiting didn't refuse: the one asked did.
+    let mut s = sample();
+    let mut a = Agent::new(Config { model: "gpt-6-sol".into(), ..cfg("openai") }, &s);
+    assert!(matches!(a.ask("hi", &s), Step::Send(_)));
+    a.config.model = "gpt-5.5".into();
+    let Step::Send(again) = a.receive_result(a.generation(), reasoning_with_tools_refused(), &mut s) else {
+        panic!("expected the request again")
+    };
+    assert_eq!(body(&again)["model"], "gpt-5.5");
+    assert!(body(&again).get("reasoning_effort").is_none());
+    assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    let Step::Send(next) = a.ask("and now?", &s) else { panic!("expected a request") };
+    assert!(body(&next).get("reasoning_effort").is_none());
+    assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    a.config.model = "gpt-6-sol".into();
+    let Step::Send(back) = a.ask("and back", &s) else { panic!("expected a request") };
+    assert_eq!(body(&back)["reasoning_effort"], "none");
 }
 
 #[test]
