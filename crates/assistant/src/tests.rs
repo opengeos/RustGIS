@@ -3611,10 +3611,7 @@ fn list_layers_includes_web_tile_layers() {
     let out: Value = serde_json::from_str(&tools::run(&mut s, &call).unwrap()).unwrap();
     let tiles = out["tileLayers"].as_array().cloned().unwrap_or_default();
     let radar = tiles.iter().find(|t| t["name"] == "Rain radar");
-    assert!(
-        radar.is_some_and(|t| t["visible"] == false && t["overlay"] == true && t["kind"] == "raster" && t["index"].is_u64()),
-        "{out}"
-    );
+    assert!(radar.is_some_and(|t| t["visible"] == false && t["overlay"] == true && t["kind"] == "raster" && t["index"].is_u64()), "{out}");
     let ctx = tools::context(&s);
     assert!(ctx.contains("\"Rain radar\" (index ") && ctx.contains("raster, overlay, hidden)"), "{ctx}");
 }
