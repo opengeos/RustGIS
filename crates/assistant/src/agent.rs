@@ -95,9 +95,9 @@ pub struct Agent {
     preview: Option<provider::StreamPreview>,
     /// The conversation was compacted after the provider said it was too long (once per message).
     overflow_compacted: bool,
-    /// The OpenAI Chat Completions model that refused reasoning alongside tools: its requests turn
-    /// reasoning off ([`provider::refuses_reasoning_with_tools`]), other models' don't.
-    no_reasoning: Option<String>,
+    /// The Chat Completions provider, address and model that refused reasoning alongside tools: its
+    /// requests turn reasoning off ([`provider::refuses_reasoning_with_tools`]), others' don't.
+    no_reasoning: Option<(String, String, String)>,
     /// A summary request waiting to be retried ([`State::Compacting`]'s `upto` and `resume`).
     retrying_summary: Option<(usize, bool)>,
     /// The skills the model may load ([`skills`]), listed in the system prompt.
@@ -447,9 +447,12 @@ impl Agent {
         Step::Send(provider::chat_request(off.as_ref().unwrap_or(&self.config), &self.system, &self.turns, &self.tool_defs()))
     }
 
-    /// Whether the selected model refused reasoning alongside tools ([`Agent::no_reasoning`]).
+    /// Whether the selected provider, address and model refused reasoning alongside tools
+    /// ([`Agent::no_reasoning`]).
     fn refused_reasoning(&self) -> bool {
-        self.config.api() == provider::Api::OpenAi && self.no_reasoning.as_deref() == Some(self.config.model.as_str())
+        let c = &self.config;
+        c.api() == provider::Api::OpenAi
+            && self.no_reasoning.as_ref().is_some_and(|(p, url, m)| *p == c.provider && *url == c.base_url && *m == c.model)
     }
 
     /// The skills the model may load: the built-in ones and the user's ([`skills::installed`]).
@@ -668,7 +671,8 @@ impl Agent {
                     && !self.refused_reasoning()
                     && provider::refuses_reasoning_with_tools(&e) =>
             {
-                self.no_reasoning = Some(self.config.model.clone());
+                let c = &self.config;
+                self.no_reasoning = Some((c.provider.clone(), c.base_url.clone(), c.model.clone()));
                 return self.send();
             }
             Err(e) => {

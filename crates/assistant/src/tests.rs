@@ -3655,6 +3655,20 @@ fn agent_retries_without_reasoning_when_a_model_refuses_it_with_tools() {
     a.config.model = "gpt-6-sol".into();
     let Step::Send(back) = a.ask("and back", &s) else { panic!("expected a request") };
     assert_eq!(body(&back)["reasoning_effort"], "none");
+    assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    // The same model name elsewhere (another provider, another address) didn't refuse.
+    let refused = a.config.clone();
+    a.config = Config { model: "gpt-6-sol".into(), ..cfg("custom") };
+    let Step::Send(other) = a.ask("on my server", &s) else { panic!("expected a request") };
+    assert!(body(&other).get("reasoning_effort").is_none());
+    assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    a.config = Config { base_url: "https://proxy.example/v1".into(), ..refused.clone() };
+    let Step::Send(other) = a.ask("through a proxy", &s) else { panic!("expected a request") };
+    assert!(body(&other).get("reasoning_effort").is_none());
+    assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    a.config = refused;
+    let Step::Send(back) = a.ask("and back again", &s) else { panic!("expected a request") };
+    assert_eq!(body(&back)["reasoning_effort"], "none");
     // Other providers' 400s are errors as before.
     let mut b = Agent::new(cfg("anthropic"), &s);
     assert!(matches!(b.ask("hi", &s), Step::Send(_)));
