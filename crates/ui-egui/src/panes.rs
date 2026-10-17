@@ -1757,7 +1757,7 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui,
         |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(tl!("GeoLibre tools")).font(semibold(13.0)));
+            ui.label(egui::RichText::new(tl!("Whitebox and GeoLibre tools")).font(semibold(13.0)));
             ui.label(
                 egui::RichText::new(tl!(
                     "Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB."
@@ -1885,7 +1885,7 @@ fn geolibre_web_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         .inner_margin(egui::Margin::same(10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(tl!("GeoLibre tools")).font(semibold(13.0)));
+            ui.label(egui::RichText::new(tl!("Whitebox and GeoLibre tools")).font(semibold(13.0)));
             ui.label(
                 egui::RichText::new(tl!(
                     "Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB."
