@@ -9,8 +9,10 @@ title, legend, north arrow, scale bar and a dynamic credits line. Layouts open a
 the maps; while one is open, its groups lead the Publish tab:
 
 - **Map frames**: rectangle, circle and ellipse frames, or polygon and lasso frames drawn on the
-  page. Each frame shows a map of the project at its own centre and scale; Shift-drag a frame to
-  pan its map, double-click it to match the map view, or set the scale in its properties.
+  page. Each frame shows a map of the project at its own centre and scale. Turn on **Pan/Zoom
+  Map** (Map Frames group, or a frame's properties) to drag inside frames to pan their maps and
+  turn the wheel to zoom them about the pointer; Esc turns it off. Without it, Shift-drag a frame
+  to pan its map. Double-click a frame to match the map view, or set the scale in its properties.
   **Grid** draws a labelled graticule over a frame; **Extent Indicator** outlines another frame's
   extent (an overview map).
 - **Map surrounds**: north arrow, scale bar, legend, table frame (a layer's attribute table) and

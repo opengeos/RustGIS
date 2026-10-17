@@ -2490,6 +2490,11 @@ fn layout_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 }
             }
         });
+        let navigate = app.layout.navigate;
+        let desc = "Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.";
+        if big(ui, app, "explore", "Pan/Zoom\nMap", desc, "ui.menu", Value::Null, navigate, false).clicked() {
+            app.layout.navigate = !navigate;
+        }
         col(ui, |ui| {
             let has_grid =
                 frame.and_then(|f| layout.element(f)).is_some_and(|e| matches!(&e.kind, ElementKind::MapFrame { grid: Some(_), .. }));

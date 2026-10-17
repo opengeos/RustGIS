@@ -67,11 +67,22 @@ pub struct LayoutView {
     pub no_snap: bool,
     /// The rulers are hidden.
     pub no_rulers: bool,
+    /// Map frames are navigated rather than moved: dragging one pans its map, the wheel zooms it.
+    pub navigate: bool,
+    /// A wheel zoom of a map frame shown but not yet applied (one undo step per gesture, not per
+    /// wheel step): its layout's name (unique, unlike an index, which shifts when layouts are
+    /// removed), the frame, the factor on its scale, the page point (mm) kept under the pointer,
+    /// and when the wheel last turned (seconds).
+    frame_zoom: Option<(String, u32, f64, (f64, f64), f64)>,
 }
 
+/// Seconds after the wheel stops before a map frame's zoom is applied.
+const FRAME_ZOOM_SETTLE: f64 = 0.35;
+
 impl LayoutView {
-    /// Stops drawing a polygon or lasso frame (Esc).
+    /// Stops drawing a polygon or lasso frame, or navigating map frames (Esc).
     pub fn cancel_tool(&mut self) {
+        self.navigate = false;
         self.tool = None;
         self.sketch.clear();
         if self.drag == Some(Drag::Lasso) {
@@ -403,11 +414,34 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     // Shadow, page, elements.
     painter.rect_filled(page.translate(vec2(3.0, 4.0)), 2.0, Color32::from_black_alpha(50));
     painter.rect_filled(page, 0.0, Color32::WHITE);
+    let pointer = ui.input(|i| i.pointer.latest_pos());
     if let Some(tex) = &app.layout.texture {
         painter.image(tex.id(), page, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        // A map frame being panned or zoomed: its part of the page drawn shifted or scaled at
+        // once, until the change is applied and the page redrawn.
+        let preview = match (app.layout.drag, pointer) {
+            (Some(Drag::PanFrame(id, start)), Some(p)) => {
+                let (mx, my) = to_mm(page, s, p);
+                Some((id, 1.0, (mx - start.0, my - start.1), (0.0, 0.0)))
+            }
+            _ => app.layout.frame_zoom.as_ref().filter(|z| z.0 == layout.name).map(|z| (z.1, z.2, (0.0, 0.0), z.3)),
+        };
+        if let Some((id, k, (dx, dy), (ax, ay))) = preview
+            && let Some(e) = layout.element(id)
+        {
+            let frame = Rect::from_min_max(to_screen(page, s, (e.x, e.y)), to_screen(page, s, (e.x + e.w, e.y + e.h)));
+            // The page region the frame now shows: moved back by the pan, scaled about the anchor.
+            let src = |(x, y): (f64, f64)| {
+                let (u, v) = (ax + (x - ax) * k - dx, ay + (y - ay) * k - dy);
+                pos2((u / layout.width) as f32, (v / layout.height) as f32)
+            };
+            let uv = Rect::from_min_max(src((e.x, e.y)), src((e.x + e.w, e.y + e.h)));
+            let clip = painter.with_clip_rect(frame);
+            clip.rect_filled(frame, 0.0, Color32::WHITE);
+            clip.image(tex.id(), frame, uv, Color32::WHITE);
+        }
     }
     let accent = t.accent;
-    let pointer = ui.input(|i| i.pointer.latest_pos());
     // Guides across the view; one being moved is drawn at the pointer instead.
     let moving = match app.layout.drag {
         Some(Drag::Guide(v, i)) => Some((v, i)),
@@ -478,6 +512,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let hint = match app.layout.tool {
         Some("polygon") => tl!("Click the frame's corners · double-click to finish · Esc to stop").to_string(),
         Some(_) => tl!("Drag the frame's outline · Esc to stop").to_string(),
+        None if app.layout.navigate => tl!("Drag a map frame to pan its map, wheel to zoom it · Esc to stop").to_string(),
         None => crate::i18n::fmt(
             "{w} × {h} mm · {zoom}% · drag to move (Alt: no snapping), Shift-drag a map frame to pan it, wheel to zoom",
             &[
@@ -528,11 +563,52 @@ pub fn page_info(app: &mut RustGisApp, li: usize) -> rustgis_engine::render::lay
     rustgis_engine::render::layout::PageInfo { page: page + 1, pages, page_name }
 }
 
+/// The map frame under a screen point, when map frames are being navigated.
+fn nav_frame(app: &RustGisApp, layout: &Layout, page: Rect, s: f32, p: Pos2) -> Option<u32> {
+    let (x, y) = to_mm(page, s, p);
+    layout.hit(x, y).filter(|id| app.layout.navigate && matches!(layout.element(*id).map(|e| &e.kind), Some(ElementKind::MapFrame { .. })))
+}
+
 fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &Layout, li: usize, page: Rect, s: f32) {
-    // Wheel zooms the page about the pointer.
+    // A map frame's wheel zoom is applied once the wheel has stopped.
+    let now = ui.input(|i| i.time);
+    // A pan ending this frame is worked out from `layout` as it was: applying the zoom first
+    // would have the pan overwrite its centre. It waits a frame, for the layout after the pan.
+    let pan_ends = resp.drag_stopped() && matches!(app.layout.drag, Some(Drag::PanFrame(..)));
+    if let Some((name, id, k, anchor, last)) = app.layout.frame_zoom.clone() {
+        if name != layout.name {
+            // Another layout is open now: the zoom was for a frame of that one.
+            app.layout.frame_zoom = None;
+        } else if now - last >= FRAME_ZOOM_SETTLE && !pan_ends {
+            app.layout.frame_zoom = None;
+            zoom_frame(app, layout, li, id, k, anchor);
+        } else {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(FRAME_ZOOM_SETTLE));
+        }
+    }
+    // Wheel zooms the page about the pointer, or a map frame's map when navigating.
     if let Some(p) = resp.hover_pos() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y + i.zoom_delta().ln() * 300.0);
-        if scroll.abs() > 0.1 {
+        if scroll.abs() > 0.1
+            && let Some(id) = nav_frame(app, layout, page, s, p)
+        {
+            // Wheel up zooms in: a smaller scale denominator.
+            let step = f64::from(-scroll * 0.0028).exp();
+            let same = app.layout.frame_zoom.as_ref().filter(|z| z.1 == id && z.0 == layout.name).map(|z| z.2);
+            let k = match same {
+                Some(k) => k * step,
+                None => {
+                    // Another frame's zoom still waiting is applied, not lost, before this one's.
+                    if let Some((name, zid, zk, anchor, _)) = app.layout.frame_zoom.take()
+                        && name == layout.name
+                    {
+                        zoom_frame(app, layout, li, zid, zk, anchor);
+                    }
+                    step
+                }
+            };
+            app.layout.frame_zoom = Some((layout.name.clone(), id, k.clamp(1e-3, 1e3), to_mm(page, s, p), now));
+        } else if scroll.abs() > 0.1 {
             let old = if app.layout.zoom > 0.0 { app.layout.zoom } else { 1.0 };
             let new = (old * (scroll * 0.0028).exp()).clamp(0.2, 12.0);
             // Keep the page point under the pointer fixed.
@@ -595,6 +671,8 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
         match vertical {
             Some(true) => ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal),
             Some(false) => ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical),
+            None if matches!(app.layout.drag, Some(Drag::PanFrame(..))) => ui.ctx().set_cursor_icon(CursorIcon::Grabbing),
+            None if app.layout.drag.is_none() && nav_frame(app, layout, page, s, p).is_some() => ui.ctx().set_cursor_icon(CursorIcon::Grab),
             None => {}
         }
     }
@@ -614,8 +692,9 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
     if resp.drag_started()
         && let (Some(p), Some(pos)) = (pointer_mm, resp.interact_pointer_pos())
     {
-        let shift = ui.input(|i| i.modifiers.shift);
-        let sel = app.layout.selected.and_then(|id| layout.element(id));
+        // Navigating, a map frame pans as Shift-dragging one does; its handles stay put.
+        let shift = ui.input(|i| i.modifiers.shift) || app.layout.navigate;
+        let sel = app.layout.selected.and_then(|id| layout.element(id)).filter(|_| nav_frame(app, layout, page, s, pos).is_none());
         let handle = sel.and_then(|e| {
             let r = Rect::from_min_max(to_screen(page, s, (e.x, e.y)), to_screen(page, s, (e.x + e.w, e.y + e.h)));
             handles(r).iter().position(|h| (*h - pos).length() < 7.0).map(|h| (e.id, h))
@@ -682,6 +761,44 @@ fn pan_frame(app: &mut RustGisApp, layout: &Layout, li: usize, id: u32, dx: f64,
     if let Some(ll) = m.to_lonlat(c) {
         let _ = app.run("layout.update", json!({"layout": li, "element": id, "center": [ll.x, ll.y]}));
     }
+}
+
+/// Zooms a map frame's map by `k` on its scale (below 1 zooms in), keeping the map under the
+/// page point `anchor` (mm) where it is.
+fn zoom_frame(app: &mut RustGisApp, layout: &Layout, li: usize, id: u32, k: f64, (ax, ay): (f64, f64)) {
+    let Some(e) = layout.element(id) else { return };
+    let ElementKind::MapFrame { map, center, scale, .. } = &e.kind else { return };
+    let Some(m) = app.session.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map)) else { return };
+    let cam = frame_camera(m, *center, *scale);
+    let new_scale = (scale * k).clamp(100.0, 1e10);
+    // The anchor's offset from the frame's centre, in points; times the resolution, map units.
+    let (px, py) = ((ax - (e.x + e.w / 2.0)) * PT_PER_MM, -(ay - (e.y + e.h / 2.0)) * PT_PER_MM);
+    let target = rustgis_engine::geom::Coord::new(cam.center.x + px * cam.res, cam.center.y + py * cam.res);
+    // Centre the frame so the anchor's map point stays put. The resolution for a scale depends on
+    // the centre's latitude (Web Mercator stretches away from the equator), so solve for the
+    // centre's y by Newton's method, then place x with the resolution there.
+    let res_at = |x: f64, y: f64| m.to_lonlat(rustgis_engine::geom::Coord::new(x, y)).map(|ll| frame_camera(m, ll, new_scale).res);
+    let mut cx = cam.center.x;
+    let mut cy = target.y - py * cam.res * new_scale / scale;
+    for _ in 0..3 {
+        for _ in 0..20 {
+            let h = cy.abs().max(1.0) * 1e-7;
+            let (Some(r0), Some(r1)) = (res_at(cx, cy), res_at(cx, cy + h)) else { return };
+            let (f0, f1) = (cy + py * r0 - target.y, cy + h + py * r1 - target.y);
+            let slope = (f1 - f0) / h;
+            if !slope.is_finite() || slope.abs() < 1e-12 {
+                break;
+            }
+            cy -= f0 / slope;
+            if f0.abs() < r0 * 1e-3 {
+                break;
+            }
+        }
+        let Some(r) = res_at(cx, cy) else { return };
+        cx = target.x - px * r;
+    }
+    let Some(ll) = m.to_lonlat(rustgis_engine::geom::Coord::new(cx, cy)) else { return };
+    let _ = app.run("layout.update", json!({"layout": li, "element": id, "scale": new_scale, "center": [ll.x, ll.y]}));
 }
 
 /// Adds a polygon or lasso frame from the sketch.
@@ -862,6 +979,8 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
     });
     ui.add_space(8.0);
     if let ElementKind::MapFrame { .. } = e.kind {
+        ui.toggle_value(&mut app.layout.navigate, tl!("Pan and Zoom Map"))
+            .on_hover_text(tl!("Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them."));
         ui.horizontal_wrapped(|ui| {
             for (label, to) in [("Zoom To Map View", "view"), ("Full Extent", "full"), ("Selection", "selection")] {
                 if ui.button(tl!(label)).clicked() {
@@ -942,6 +1061,93 @@ mod tests {
         assert_eq!((*i, *rev), (li, app.session.revision));
         assert_eq!(drawn.element(title.id).map(|e| e.y), Some(moved.y));
         assert_eq!(app.layout.key.map(|k| k.0), Some(app.session.revision));
+    }
+
+    /// Zooming a map frame about a point keeps the map under that point where it was.
+    #[test]
+    fn zooming_a_frame_keeps_the_map_under_the_pointer() {
+        use rustgis_engine::map::layout::{ElementKind, PT_PER_MM, frame_camera};
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Zoom"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let layout = app.session.project.layouts[li].clone();
+        let frame = layout.elements.iter().find(|e| matches!(e.kind, ElementKind::MapFrame { .. })).unwrap().clone();
+        // A point a quarter of the way into the frame.
+        let anchor = (frame.x + frame.w / 4.0, frame.y + frame.h / 4.0);
+        // The map point (map units) at the anchor, the frame's scale, and map units per point.
+        let map_at = |app: &RustGisApp| {
+            let e = app.session.project.layouts[li].element(frame.id).unwrap().clone();
+            let ElementKind::MapFrame { map, center, scale, .. } = &e.kind else { panic!("not a map frame") };
+            let m = app.session.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map)).unwrap();
+            let cam = frame_camera(m, *center, *scale);
+            let x = cam.center.x + (anchor.0 - (e.x + e.w / 2.0)) * PT_PER_MM * cam.res;
+            let y = cam.center.y - (anchor.1 - (e.y + e.h / 2.0)) * PT_PER_MM * cam.res;
+            (x, y, *scale, cam.res)
+        };
+        let before = map_at(&app);
+        let undo = app.session.undo_depth();
+        super::zoom_frame(&mut app, &layout, li, frame.id, 0.5, anchor);
+        let after = map_at(&app);
+        assert!((after.2 - before.2 * 0.5).abs() < 1e-6 * before.2, "the scale halves: {} → {}", before.2, after.2);
+        assert!((after.0 - before.0).hypot(after.1 - before.1) < after.3, "the anchor's map point moved: {before:?} → {after:?}");
+        assert_eq!(app.session.undo_depth(), undo + 1, "one undo step");
+    }
+
+    /// A wheel zoom still waiting is applied, not lost, when another frame is zoomed; one waiting
+    /// for a frame of another layout is dropped, never applied to the open layout.
+    #[test]
+    fn waiting_frame_zooms_are_applied_or_dropped_never_misapplied() {
+        use rustgis_engine::map::layout::ElementKind;
+        let scale_of = |app: &RustGisApp, li: usize, id: u32| match app.session.project.layouts[li].element(id).map(|e| &e.kind) {
+            Some(ElementKind::MapFrame { scale, .. }) => *scale,
+            k => panic!("not a map frame: {k:?}"),
+        };
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Two"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let name = app.session.project.layouts[li].name.clone();
+        let a = app.session.project.layouts[li].first_frame().unwrap();
+        let b = app.run("layout.addFrame", json!({"layout": li, "x": 20, "y": 20, "w": 60, "h": 40})).unwrap()["element"].as_u64().unwrap()
+            as u32;
+        app.layout.navigate = true;
+        let (sa, sb) = (scale_of(&app, li, a), scale_of(&app, li, b));
+        // Frame A's zoom waits: its wheel turned "later than ever", so it can't settle by itself.
+        app.layout.frame_zoom = Some((name.clone(), a, 0.5, (100.0, 100.0), f64::MAX));
+        let area = Rc::new(Cell::new(Rect::NOTHING));
+        let shown = area.clone();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                shown.set(ui.available_rect_before_wrap());
+                super::show(app, ui);
+            },
+            app,
+        );
+        h.run_steps(2);
+        let layout = h.state().session.project.layouts[li].clone();
+        let (page, s) = page_rect(&h.state().layout, area.get(), &layout);
+        // Zoom in over frame B.
+        h.event(Event::PointerMoved(to_screen(page, s, (50.0, 40.0))));
+        h.step();
+        h.event(Event::Zoom(1.25));
+        h.step();
+        assert!((scale_of(h.state(), li, a) - sa * 0.5).abs() < 1e-6 * sa, "A's waiting zoom was applied");
+        assert_eq!(h.state().layout.frame_zoom.as_ref().map(|z| z.1), Some(b), "B's zoom waits for the wheel to stop");
+        h.run_steps(3);
+        assert!(h.state().layout.frame_zoom.is_none());
+        assert!(scale_of(h.state(), li, b) < sb, "B zoomed in once the wheel stopped");
+
+        // A zoom left waiting by another layout is dropped without touching this one.
+        h.state_mut().layout.frame_zoom = Some(("Another layout".into(), a, 0.5, (100.0, 100.0), 0.0));
+        let rev = h.state().session.revision;
+        h.run_steps(2);
+        assert!(h.state().layout.frame_zoom.is_none());
+        assert_eq!(h.state().session.revision, rev, "nothing was applied");
     }
 
     #[test]
