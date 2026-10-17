@@ -885,8 +885,9 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         return;
     }
     // Drag start.
+    // On the globe, which doesn't turn, the right button still drags it like the left.
     if resp.drag_started()
-        && !ui.input(|i| i.pointer.secondary_down())
+        && (globe(app, rect).is_some() || !ui.input(|i| i.pointer.secondary_down()))
         && let Some(p) = resp.interact_pointer_pos()
     {
         let kind = if middle {
