@@ -68,15 +68,18 @@ pub(crate) fn chunk<R: Read + Seek>(dec: &mut Decoder<R>, index: u32) -> Result<
         return Err(err("no such chunk"));
     };
     let count = usize::try_from(count).ok().filter(|n| *n <= MAX_CHUNK_BYTES).ok_or_else(|| err("a chunk is too large"))?;
-    let mut encoded = vec![0u8; count];
+    // Read as far as the file goes, not allocated from the claim.
     let r = dec.inner();
     r.seek(SeekFrom::Start(offset)).map_err(err)?;
-    r.read_exact(&mut encoded).map_err(err)?;
+    let mut encoded = Vec::new();
+    r.take(count as u64).read_to_end(&mut encoded).map_err(err)?;
+    if encoded.len() < count {
+        return Err(err("an LZW chunk is cut short"));
+    }
 
-    let mut decoded = vec![0u8; need];
-    let got = decode(&encoded, &mut decoded)?;
+    let decoded = decode(&encoded, need);
     // Every image row must be there; a tile's padding rows may be left out.
-    if got < row_bytes.saturating_mul(dh) {
+    if decoded.len() < row_bytes.saturating_mul(dh) {
         return Err(err("an LZW chunk is shorter than its strip or tile"));
     }
 
@@ -106,15 +109,18 @@ pub(crate) fn chunk<R: Read + Seek>(dec: &mut Decoder<R>, index: u32) -> Result<
     Ok(out)
 }
 
-/// LZW-decodes `input` into `out`: how many bytes came out. A stream may stop short of its end
-/// code, as libtiff allows; it ends where its bytes do.
-fn decode(input: &[u8], out: &mut [u8]) -> Result<usize> {
+/// LZW-decodes `input`, at most `max` bytes of it. A stream may stop short of its end code, as
+/// libtiff allows; it ends where its bytes do. The output grows as bytes come out, not from what
+/// the file's header claims.
+fn decode(input: &[u8], max: usize) -> Vec<u8> {
     let mut lzw = weezl::decode::Configuration::with_tiff_size_switch(weezl::BitOrder::Msb, 8).build();
-    let (mut inp, mut got) = (input, 0);
-    while got < out.len() {
-        let r = lzw.decode_bytes(inp, out.get_mut(got..).unwrap_or_default());
+    let (mut inp, mut out) = (input, Vec::new());
+    let mut buf = vec![0u8; max.min(64 << 10)];
+    while out.len() < max {
+        let room = (max - out.len()).min(buf.len());
+        let r = lzw.decode_bytes(inp, buf.get_mut(..room).unwrap_or_default());
         inp = inp.get(r.consumed_in..).unwrap_or_default();
-        got += r.consumed_out;
+        out.extend_from_slice(buf.get(..r.consumed_out).unwrap_or_default());
         match r.status {
             Ok(weezl::LzwStatus::Done) => break,
             Ok(_) if r.consumed_in == 0 && r.consumed_out == 0 => break,
@@ -123,20 +129,13 @@ fn decode(input: &[u8], out: &mut [u8]) -> Result<usize> {
             Err(_) => break,
         }
     }
-    Ok(got)
+    out
 }
 
 /// One sample's bytes as an unsigned word, in the file's byte order.
 fn word(b: &[u8], little: bool) -> u64 {
-    let mut a = [0u8; 8];
-    let n = b.len().min(8);
-    if little {
-        a[..n].copy_from_slice(&b[..n]);
-        u64::from_le_bytes(a)
-    } else {
-        a[8 - n..].copy_from_slice(&b[..n]);
-        u64::from_be_bytes(a)
-    }
+    let add = |acc: u64, x: &u8| (acc << 8) | u64::from(*x);
+    if little { b.iter().rev().fold(0, add) } else { b.iter().fold(0, add) }
 }
 
 /// Undoes the floating-point predictor on one row: bytes differenced along the row, stored most
