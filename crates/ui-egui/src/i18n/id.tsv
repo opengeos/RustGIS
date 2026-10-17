@@ -2366,3 +2366,4 @@ Service Import Requests	Permintaan impor layanan
 Service Group	Grup layanan
 A service import or refresh is already running.	Impor atau penyegaran layanan sedang berjalan.
 Service group data exceeds 64 MB.	Data grup layanan melebihi 64 MB.
+Fetch map tiles, data and web services from addresses it chooses	Mengambil ubin peta, data, dan layanan web dari alamat yang dipilihnya

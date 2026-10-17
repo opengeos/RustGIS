@@ -57,7 +57,8 @@ pub enum Permission {
     Edit,
     /// Run commands that read or write files the user names.
     Files,
-    /// Make the map fetch from addresses the plugin gives it (web tile layers).
+    /// Have RustGIS fetch from addresses the plugin gives it: web tile layers, data files
+    /// (`layer.addUrl`) and web services.
     Network,
 }
 
@@ -74,7 +75,7 @@ impl Permission {
         match self {
             Permission::Edit => "Change the project (add layers, edit features, change symbology)",
             Permission::Files => "Read and write files on this computer",
-            Permission::Network => "Load map tiles from addresses it chooses",
+            Permission::Network => "Fetch map tiles, data and web services from addresses it chooses",
         }
     }
 }

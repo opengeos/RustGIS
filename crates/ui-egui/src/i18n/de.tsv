@@ -2366,3 +2366,4 @@ Service Import Requests	Dienstimportanfragen
 Service Group	Dienstgruppe
 A service import or refresh is already running.	Ein Dienstimport oder eine Aktualisierung läuft bereits.
 Service group data exceeds 64 MB.	Die Daten der Dienstgruppe überschreiten 64 MB.
+Fetch map tiles, data and web services from addresses it chooses	Kartenkacheln, Daten und Webdienste von Adressen abrufen, die es wählt

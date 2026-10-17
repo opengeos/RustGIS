@@ -2366,3 +2366,4 @@ Service Import Requests	Yêu cầu nhập dịch vụ
 Service Group	Nhóm dịch vụ
 A service import or refresh is already running.	Đang nhập hoặc làm mới một dịch vụ.
 Service group data exceeds 64 MB.	Dữ liệu nhóm dịch vụ vượt quá 64 MB.
+Fetch map tiles, data and web services from addresses it chooses	Lấy ô bản đồ, dữ liệu và dịch vụ web từ các địa chỉ nó chọn

@@ -2366,3 +2366,4 @@ Service Import Requests	Servis içe aktarma istekleri
 Service Group	Servis grubu
 A service import or refresh is already running.	Bir servis içe aktarma veya yenileme işlemi zaten sürüyor.
 Service group data exceeds 64 MB.	Servis grubu verileri 64 MB sınırını aşıyor.
+Fetch map tiles, data and web services from addresses it chooses	Seçtiği adreslerden harita karoları, veriler ve web hizmetleri alma

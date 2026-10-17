@@ -2366,3 +2366,4 @@ Service Import Requests	სერვისის იმპორტის მო
 Service Group	სერვისის ჯგუფი
 A service import or refresh is already running.	სერვისის იმპორტი ან განახლება უკვე მიმდინარეობს.
 Service group data exceeds 64 MB.	სერვისის ჯგუფის მონაცემები 64 მბ-ს აღემატება.
+Fetch map tiles, data and web services from addresses it chooses	რუკის ფილების, მონაცემებისა და ვებსერვისების მიღება მის მიერ არჩეული მისამართებიდან

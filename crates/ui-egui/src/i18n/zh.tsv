@@ -2366,3 +2366,4 @@ Service Import Requests	服务导入请求
 Service Group	服务组
 A service import or refresh is already running.	服务导入或刷新已在进行中。
 Service group data exceeds 64 MB.	服务组数据超过 64 MB。
+Fetch map tiles, data and web services from addresses it chooses	从其选择的地址获取地图瓦片、数据和网络服务

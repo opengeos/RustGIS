@@ -197,3 +197,16 @@ fn agents_on_this_computer_are_in_every_catalog() {
         }
     }
 }
+
+#[test]
+fn plugin_permissions_are_in_every_catalog() {
+    use rustgis_plugins::manifest::Permission;
+    for l in &LANGUAGES[1..] {
+        let (m, _) = parse(l.source);
+        for p in [Permission::Edit, Permission::Files, Permission::Network] {
+            let key = p.describe();
+            let tr = m.get(key).unwrap_or_else(|| panic!("{}: missing {key:?}", l.code));
+            assert_ne!(tr, key, "{}: {key:?} isn't translated", l.code);
+        }
+    }
+}

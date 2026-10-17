@@ -2366,3 +2366,4 @@ Service Import Requests	サービスのインポート要求
 Service Group	サービスグループ
 A service import or refresh is already running.	サービスのインポートまたは更新が既に進行中です。
 Service group data exceeds 64 MB.	サービスグループのデータが 64 MB を超えています。
+Fetch map tiles, data and web services from addresses it chooses	選んだアドレスからのマップ タイル、データ、Web サービスの取得

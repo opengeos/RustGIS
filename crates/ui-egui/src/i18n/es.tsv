@@ -2366,3 +2366,4 @@ Service Import Requests	Solicitudes de importación del servicio
 Service Group	Grupo de servicio
 A service import or refresh is already running.	Ya hay una importación o actualización de servicio en curso.
 Service group data exceeds 64 MB.	Los datos del grupo de servicio superan los 64 MB.
+Fetch map tiles, data and web services from addresses it chooses	Obtener teselas de mapa, datos y servicios web de las direcciones que elija
