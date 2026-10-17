@@ -262,6 +262,11 @@ pub struct HttpRequest {
     pub body: Option<String>,
 }
 
+/// The response headers the assistant reads and keeps: retry hints and request ids. No others
+/// are stored (cookies and the like never are).
+pub const KEPT_HEADERS: [&str; 6] =
+    ["retry-after", "retry-after-ms", "x-request-id", "openai-request-id", "x-oai-request-id", "request-id"];
+
 /// What came back.
 #[derive(Clone, PartialEq)]
 pub struct HttpResponse {
@@ -269,8 +274,20 @@ pub struct HttpResponse {
     pub status: u16,
     /// The response payload; may contain credentials.
     pub body: Vec<u8>,
-    /// The server request id, when supplied.
-    pub request_id: Option<String>,
+    /// The response headers in [`KEPT_HEADERS`] (names in lower case).
+    pub headers: Vec<(String, String)>,
+}
+
+impl HttpResponse {
+    /// A header's value (`name` in lower case).
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
+
+    /// The provider's id for this request, for support requests.
+    pub fn request_id(&self) -> Option<&str> {
+        ["x-request-id", "openai-request-id", "x-oai-request-id", "request-id"].into_iter().find_map(|h| self.header(h))
+    }
 }
 
 impl std::fmt::Debug for HttpRequest {
@@ -281,7 +298,136 @@ impl std::fmt::Debug for HttpRequest {
 
 impl std::fmt::Debug for HttpResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HttpResponse").field("status", &self.status).field("request_id", &self.request_id).finish_non_exhaustive()
+        f.debug_struct("HttpResponse").field("status", &self.status).field("request_id", &self.request_id()).finish_non_exhaustive()
+    }
+}
+
+/// How long to wait before sending a failed request again, if it is worth retrying: rate limits
+/// and overloaded or failing servers (429, 408, 5xx, 529) and connections that failed, never a
+/// usage limit or an exhausted quota (those wait for the user). The server's `retry-after` is
+/// honoured up to two minutes; otherwise 2, 4, 8… seconds after `attempt` earlier retries.
+pub fn retry_delay(resp: &Result<HttpResponse, crate::Error>, attempt: u32) -> Option<core::time::Duration> {
+    use core::time::Duration;
+    let backoff = Duration::from_secs(2u64.saturating_pow(attempt.saturating_add(1)).min(30));
+    let r = match resp {
+        Ok(r) => r,
+        // The diagnostic text is independent of transport classification.
+        Err(e) => return (e.transport == Some(crate::error::TransportFailure::Connection)).then_some(backoff),
+    };
+    if !matches!(r.status, 408 | 429 | 500 | 502 | 503 | 504 | 529) {
+        return None;
+    }
+    let body: Value = serde_json::from_slice(&r.body).unwrap_or(Value::Null);
+    let code = body.pointer("/error/code").or_else(|| body.pointer("/error/type")).and_then(Value::as_str).unwrap_or("");
+    if matches!(
+        code,
+        "insufficient_quota"
+            | "billing_hard_limit_reached"
+            | "subscription_sharing_usage_limit_exceeded"
+            | "subscription_sharing_user_not_eligible"
+            | "usage_limit_reached"
+    ) {
+        return None;
+    }
+    // Seconds past the cap mean "not soon": no retry. Converted only once known to fit, so a
+    // hostile value (1e30) can't overflow a Duration.
+    let cap = Duration::from_secs(120);
+    let seconds = |s: f64| if s > cap.as_secs_f64() { cap + Duration::from_secs(1) } else { Duration::from_secs_f64(s) };
+    let told = r.header("retry-after-ms").and_then(|v| v.trim().parse::<u64>().ok()).map(Duration::from_millis).or_else(|| {
+        let v = r.header("retry-after")?.trim();
+        match v.parse::<f64>() {
+            Ok(s) if s.is_finite() && s >= 0.0 => Some(seconds(s)),
+            Ok(_) => None,
+            // An HTTP date (`Wed, 21 Oct 2015 07:28:00 GMT`): the wait until then.
+            Err(_) => http_date_wait(v).map(seconds),
+        }
+    });
+    match told {
+        Some(d) if d > cap => None,
+        Some(d) => Some(d),
+        None => Some(backoff),
+    }
+}
+
+/// HTTP-200 streams can report overload too. No tools from this failed response have run;
+/// discard the response and its preview before replaying the same request. Unknown interruptions
+/// and quota/authentication errors are deliberately not replayed.
+pub fn retry_delay_for(
+    resp: &Result<HttpResponse, crate::Error>,
+    parsed: &Result<Reply, crate::Error>,
+    attempt: u32,
+) -> Option<core::time::Duration> {
+    if let Some(delay) = retry_delay(resp, attempt) {
+        return Some(delay);
+    }
+    let r = resp.as_ref().ok().filter(|r| (200..300).contains(&r.status))?;
+    let error = match parsed {
+        Err(e) => e,
+        Ok(reply) => reply.failure.as_ref()?,
+    };
+    if !matches!(error.code.as_deref(), Some("overloaded_error" | "rate_limit_error" | "rate_limit_exceeded" | "server_error")) {
+        return None;
+    }
+    retry_delay(&Ok(HttpResponse { status: 503, body: Vec::new(), headers: r.headers.clone() }), attempt)
+}
+
+/// Seconds from now until an HTTP date (IMF-fixdate, `Wed, 21 Oct 2015 07:28:00 GMT`), 0 when it
+/// has passed. In the browser, which has no clock here, a date counts as "not soon".
+fn http_date_wait(v: &str) -> Option<f64> {
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    // `<weekday>, <day> <month> <year> <hh:mm:ss> GMT`
+    let mut p = v.split_whitespace().skip(1);
+    let day: i64 = p.next()?.parse().ok()?;
+    let name = p.next()?;
+    let month = MONTHS.iter().position(|m| *m == name)? as i64 + 1;
+    let year: i64 = p.next()?.parse().ok()?;
+    let mut hms = p.next()?.split(':').map(|x| x.parse::<i64>().ok());
+    let (h, mi, s) = (hms.next()??, hms.next()??, hms.next()??);
+    // Bounded, so the arithmetic below can't overflow on a hostile header.
+    if p.next()? != "GMT"
+        || !(1..=31).contains(&day)
+        || !(1970..=9999).contains(&year)
+        || !(0..=23).contains(&h)
+        || !(0..=59).contains(&mi)
+        || !(0..=60).contains(&s)
+    {
+        return None;
+    }
+    // Days since 1970-01-01 (Howard Hinnant's days_from_civil).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let at = era.checked_mul(146_097)?.checked_add(doe - 719_468)?.checked_mul(86_400)?.checked_add(h * 3600 + mi * 60 + s)?;
+    Some(date_delay(at, now_unix()))
+}
+
+fn date_delay(at: i64, now: Option<i64>) -> f64 {
+    // A valid server date cannot safely become a short retry when no clock is available.
+    now.map_or(f64::INFINITY, |now| at.saturating_sub(now).max(0) as f64)
+}
+
+#[cfg(test)]
+mod retry_clock_tests {
+    #[test]
+    fn missing_clock_never_shortens_a_valid_http_date_wait() {
+        assert!(super::date_delay(1000, None).is_infinite());
+        assert_eq!(super::date_delay(1000, Some(998)), 2.0);
+        assert_eq!(super::date_delay(1000, Some(1002)), 0.0);
+        assert!(super::date_delay(1000, Some(1)) > 120.0);
+    }
+}
+
+/// Seconds since 1970 now, where there is a clock to read (not in the browser).
+fn now_unix() -> Option<i64> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().and_then(|d| i64::try_from(d.as_secs()).ok())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
     }
 }
 
@@ -382,6 +528,78 @@ pub enum Turn {
     Results(Vec<ToolResult>),
 }
 
+/// A message from RustGIS in the transcript (a stop, a retry, a compaction): an English template
+/// naming its values in braces, which the interface translates before filling them in
+/// (`i18n::fmt`); its `Display` is the English text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Note {
+    pub template: &'static str,
+    pub args: Vec<(&'static str, String)>,
+}
+
+impl Note {
+    pub fn new(template: &'static str) -> Self {
+        Note { template, args: Vec::new() }
+    }
+
+    /// A template with values, e.g. `Note::with("The reply stopped early ({reason}).", [("reason", why)])`.
+    pub fn with<const N: usize>(template: &'static str, args: [(&'static str, String); N]) -> Self {
+        Note { template, args: args.into() }
+    }
+
+    /// Text RustGIS doesn't write itself (a diagnostic), shown as it is.
+    pub fn text(text: String) -> Self {
+        Note::with("{text}", [("text", text)])
+    }
+}
+
+/// Every [`Note`] template RustGIS writes (the interface's catalogs translate each).
+pub const NOTE_TEMPLATES: &[&str] = &[
+    "The reply reached its length limit.",
+    "The provider's content filter stopped the reply.",
+    "The reply stopped early ({reason}).",
+    "The model declined this request.",
+    "The model declined this request: {why}",
+    "The reply stopped before completion; no actions were run.",
+    "Gemini stopped the reply ({reason}).",
+    "Summarising the earlier conversation to keep it within the model's context…",
+    "Compacted the earlier conversation.",
+    "The provider returned HTTP {status}; trying again in {seconds} s.",
+    "The connection failed; trying again in {seconds} s.",
+    "The model sent an empty reply; ask again, or try another model.",
+    "Stopped after {steps} steps; say \"continue\" to go on.",
+    "Stopped.",
+];
+
+/// The note of a refused reply, with the model's explanation if it gave one.
+fn declined(why: String) -> Note {
+    if why.trim().is_empty() {
+        Note::new("The model declined this request.")
+    } else {
+        Note::with("The model declined this request: {why}", [("why", why)])
+    }
+}
+
+impl std::fmt::Display for Note {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut rest = self.template;
+        while let Some((before, tail)) = rest.split_once('{') {
+            f.write_str(before)?;
+            let Some((key, after)) = tail.split_once('}') else {
+                f.write_str("{")?;
+                return f.write_str(tail);
+            };
+            if let Some((_, value)) = self.args.iter().find(|(name, _)| *name == key) {
+                f.write_str(value)?;
+            } else {
+                write!(f, "{{{key}}}")?;
+            }
+            rest = after;
+        }
+        f.write_str(rest)
+    }
+}
+
 /// A reply read from the provider.
 #[derive(Clone, Debug)]
 pub struct Reply {
@@ -389,7 +607,7 @@ pub struct Reply {
     pub calls: Vec<ToolCall>,
     pub native: Value,
     /// Why the reply stopped early (length limit, a refusal), if it did.
-    pub cut: Option<String>,
+    pub cut: Option<Note>,
     /// A failed terminal response accompanying partial text.
     pub failure: Option<Error>,
 }
@@ -409,17 +627,308 @@ pub fn chat_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDef
 
 /// Reads a chat reply (any status).
 pub fn parse_reply(api: Api, resp: &HttpResponse) -> Result<Reply, Error> {
+    parse_reply_inner(api, resp).map_err(|mut e| {
+        e.status = Some(resp.status);
+        e.request_id = e.request_id.or_else(|| resp.request_id().map(str::to_string));
+        if let Some(detail) = e.detail.strip_prefix(&format!("HTTP {}: ", resp.status)) {
+            e.detail = detail.to_string();
+        }
+        e
+    })
+}
+
+fn parse_reply_inner(api: Api, resp: &HttpResponse) -> Result<Reply, Error> {
     let parse = match api {
         Api::Responses => return responses_reply(resp),
         Api::OpenAi => openai_reply,
         Api::Anthropic => anthropic_reply,
         Api::Gemini => gemini_reply,
     };
-    let v: Value = serde_json::from_slice(&resp.body).map_err(|_| http_error(resp))?;
-    if !(200..300).contains(&resp.status) {
-        return Err(error_message(&v).unwrap_or_else(|| http_error(resp)).into());
+    let v = assembled(api, &resp.body).ok_or_else(|| http_error(resp))?;
+    if !(200..300).contains(&resp.status) || v.get("error").is_some_and(|e| !e.is_null()) {
+        let mut e = Error::from(error_message(&v).unwrap_or_else(|| http_error(resp)));
+        // The provider's code (context_length_exceeded, overloaded_error…) and request id stay.
+        e.code =
+            ["/error/code", "/error/type", "/error/status"].iter().find_map(|p| v.pointer(p).and_then(Value::as_str)).map(str::to_string);
+        e.status = Some(resp.status);
+        e.request_id = resp.request_id().map(str::to_string);
+        return Err(e);
     }
     parse(&v).map_err(Error::from)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Streaming: replies come as server-sent events. The whole stream is read before its calls run
+// (approval needs complete calls); meanwhile [`StreamPreview`] shows the text as it arrives.
+
+/// A streamed reply reassembled into the JSON the API sends without streaming, so one parser
+/// reads both; a plain JSON body (a server that didn't stream) is read as it is.
+fn assembled(api: Api, body: &[u8]) -> Option<Value> {
+    let text = String::from_utf8_lossy(body);
+    let trimmed = text.trim_start();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return serde_json::from_str(trimmed).ok();
+    }
+    let events = sse_events(&text);
+    if events.is_empty() {
+        return None;
+    }
+    // `"error": null` (some compatible servers send it in every chunk) is no error.
+    if let Some(e) = events.iter().find_map(|e| e.get("error").filter(|e| !e.is_null())) {
+        return Some(json!({"error": e}));
+    }
+    // A connection closed mid-reply still reads cleanly: without its end the reply is partial, and
+    // its calls may be missing or cut short. Not replayed (the code isn't a retryable one).
+    if !stream_ended(api, &text, &events) {
+        return Some(
+            json!({"error": {"code": "incomplete_stream", "message": "The reply stopped before it finished, so nothing in it was run."}}),
+        );
+    }
+    Some(match api {
+        Api::OpenAi => openai_assembled(&events),
+        Api::Anthropic => anthropic_assembled(&events),
+        Api::Gemini => gemini_assembled(&events),
+        // Read event by event by its own parser.
+        Api::Responses => return None,
+    })
+}
+
+/// Whether a stream reached its end: `[DONE]` or a finish reason (Chat Completions), the
+/// message's stop (Anthropic), a finish reason (Gemini). Responses streams are checked by their
+/// own parser.
+fn stream_ended(api: Api, text: &str, events: &[Value]) -> bool {
+    let set = |v: Option<&Value>| v.is_some_and(|v| !v.is_null());
+    match api {
+        Api::OpenAi => {
+            text.lines().any(|l| l.strip_prefix("data:").map(str::trim) == Some("[DONE]"))
+                || events
+                    .iter()
+                    .any(|e| e.get("choices").and_then(Value::as_array).into_iter().flatten().any(|c| set(c.get("finish_reason"))))
+        }
+        Api::Anthropic => {
+            events.iter().any(|e| e.get("type").and_then(Value::as_str) == Some("message_stop") || set(e.pointer("/delta/stop_reason")))
+        }
+        Api::Gemini => {
+            events.iter().any(|e| e.get("candidates").and_then(Value::as_array).into_iter().flatten().any(|c| set(c.get("finishReason"))))
+        }
+        Api::Responses => true,
+    }
+}
+
+/// Chat Completions chunks: content and reasoning deltas, and calls whose arguments come in
+/// pieces, by index.
+fn openai_assembled(events: &[Value]) -> Value {
+    let (mut content, mut reasoning, mut finish) = (String::new(), String::new(), Value::Null);
+    let mut calls: Vec<(String, String, String)> = Vec::new();
+    for e in events {
+        for choice in e.get("choices").and_then(Value::as_array).into_iter().flatten() {
+            let delta = choice.get("delta").unwrap_or(&Value::Null);
+            content.push_str(delta.get("content").and_then(Value::as_str).unwrap_or(""));
+            reasoning.push_str(delta.get("reasoning_content").and_then(Value::as_str).unwrap_or(""));
+            for tc in delta.get("tool_calls").and_then(Value::as_array).into_iter().flatten() {
+                let id = tc.get("id").and_then(Value::as_str).filter(|id| !id.is_empty());
+                // By its index; without one (some local servers), a new id starts a new call.
+                let i = match tc.get("index").and_then(Value::as_u64) {
+                    Some(i) => usize::try_from(i).unwrap_or(0).min(255),
+                    None => match (id, calls.last()) {
+                        // A call whose id comes after its first piece is still that call.
+                        (Some(id), Some(last)) if !last.0.is_empty() && last.0 != id => calls.len(),
+                        (_, Some(_)) => calls.len() - 1,
+                        (_, None) => 0,
+                    },
+                };
+                while calls.len() <= i {
+                    calls.push(Default::default());
+                }
+                if let Some(c) = calls.get_mut(i) {
+                    if let Some(id) = id {
+                        c.0 = id.to_string();
+                    }
+                    // The name comes once (some servers repeat it in every piece).
+                    if let Some(name) = tc.pointer("/function/name").and_then(Value::as_str).filter(|_| c.1.is_empty()) {
+                        c.1.push_str(name);
+                    }
+                    c.2.push_str(tc.pointer("/function/arguments").and_then(Value::as_str).unwrap_or(""));
+                }
+            }
+            if let Some(f) = choice.get("finish_reason").filter(|f| !f.is_null()) {
+                finish = f.clone();
+            }
+        }
+    }
+    let mut message = json!({"role": "assistant", "content": if content.is_empty() { Value::Null } else { json!(content) }});
+    // Slots no piece named (a stray index) are no call.
+    calls.retain(|c| !c.1.is_empty());
+    if !calls.is_empty() {
+        message["tool_calls"] = calls
+            .into_iter()
+            .map(|(id, name, args)| json!({"id": id, "type": "function", "function": {"name": name, "arguments": args}}))
+            .collect();
+    }
+    if !reasoning.is_empty() {
+        message["reasoning_content"] = json!(reasoning);
+    }
+    json!({"choices": [{"finish_reason": finish, "message": message}]})
+}
+
+/// Anthropic events: content blocks started, extended by deltas (text, tool input JSON,
+/// thinking and its signature) and stopped; the stop reason comes last.
+fn anthropic_assembled(events: &[Value]) -> Value {
+    let mut blocks: Vec<Value> = Vec::new();
+    let mut inputs: Vec<String> = Vec::new();
+    let mut message = json!({});
+    let index = |e: &Value| e.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).filter(|i| *i < 256);
+    for e in events {
+        match e.get("type").and_then(Value::as_str) {
+            // Hostile input: a message or block that isn't an object is ignored (indexing a
+            // non-object would panic).
+            Some("message_start") => message = e.get("message").filter(|m| m.is_object()).cloned().unwrap_or_else(|| json!({})),
+            Some("content_block_start") => {
+                if let (Some(i), Some(b)) = (index(e), e.get("content_block").filter(|b| b.is_object())) {
+                    while blocks.len() <= i {
+                        blocks.push(Value::Null);
+                        inputs.push(String::new());
+                    }
+                    if let Some(slot) = blocks.get_mut(i) {
+                        *slot = b.clone();
+                    }
+                }
+            }
+            Some("content_block_delta") => {
+                let (Some(i), Some(d)) = (index(e), e.get("delta")) else { continue };
+                let Some(b) = blocks.get_mut(i).and_then(Value::as_object_mut) else { continue };
+                let s = |k: &str| d.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                match d.get("type").and_then(Value::as_str) {
+                    Some("text_delta") => append(b, "text", &s("text")),
+                    Some("thinking_delta") => append(b, "thinking", &s("thinking")),
+                    Some("signature_delta") => {
+                        b.insert("signature".into(), json!(s("signature")));
+                    }
+                    Some("input_json_delta") => {
+                        if let Some(input) = inputs.get_mut(i) {
+                            input.push_str(&s("partial_json"));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Some("message_delta") => {
+                for (k, v) in e.get("delta").and_then(Value::as_object).into_iter().flatten() {
+                    message[k] = v.clone();
+                }
+            }
+            _ => {}
+        }
+    }
+    for (b, input) in blocks.iter_mut().zip(&inputs) {
+        if let Some(b) = b.as_object_mut().filter(|_| !input.is_empty()) {
+            b.insert("input".into(), serde_json::from_str(input).unwrap_or_else(|_| json!({"_unparsed": input})));
+        }
+    }
+    blocks.retain(|b| !b.is_null());
+    message["content"] = Value::Array(blocks);
+    message
+}
+
+fn append(o: &mut Map<String, Value>, key: &str, more: &str) {
+    match o.get_mut(key) {
+        Some(Value::String(text)) => text.push_str(more),
+        _ => {
+            o.insert(key.into(), json!(more));
+        }
+    }
+}
+
+/// Gemini chunks: each a response with the next parts; the finish reason comes last.
+fn gemini_assembled(events: &[Value]) -> Value {
+    let mut parts: Vec<Value> = Vec::new();
+    let mut finish = Value::Null;
+    let mut feedback = Value::Null;
+    for e in events {
+        if let Some(f) = e.get("promptFeedback") {
+            feedback = f.clone();
+        }
+        let Some(c) = e.get("candidates").and_then(|c| c.get(0)) else { continue };
+        parts.extend(c.pointer("/content/parts").and_then(Value::as_array).cloned().unwrap_or_default());
+        if let Some(f) = c.get("finishReason") {
+            finish = f.clone();
+        }
+    }
+    if parts.is_empty() && finish.is_null() {
+        return json!({"promptFeedback": feedback});
+    }
+    json!({"candidates": [{"content": {"role": "model", "parts": parts}, "finishReason": finish}]})
+}
+
+/// A streamed reply's text so far, for showing while it arrives (what runs is read from the
+/// whole reply). Fed the body as it comes, in pieces of any size.
+#[derive(Debug, Clone)]
+pub struct StreamPreview {
+    api: Api,
+    pending: Vec<u8>,
+    scanned: usize,
+    text: String,
+}
+
+impl StreamPreview {
+    pub fn new(api: Api) -> Self {
+        StreamPreview { api, pending: Vec::new(), scanned: 0, text: String::new() }
+    }
+
+    /// The text so far.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Takes the next piece of the body; says whether the text grew.
+    pub fn feed(&mut self, chunk: &[u8]) -> bool {
+        let before = self.text.len();
+        self.pending.extend_from_slice(chunk);
+        let mut consumed = 0;
+        let mut scan = self.scanned.min(self.pending.len());
+        while let Some(offset) = self.pending.get(scan..).and_then(|p| p.iter().position(|b| *b == b'\n')) {
+            let end = scan + offset;
+            let line = String::from_utf8_lossy(self.pending.get(consumed..end).unwrap_or_default());
+            consumed = end + 1;
+            scan = consumed;
+            let Some(data) = line.trim_end().strip_prefix("data:") else { continue };
+            let Ok(v) = serde_json::from_str::<Value>(data.trim_start()) else { continue };
+            self.text.push_str(&self.delta(&v));
+            // Previews stay small: the whole reply is read separately.
+            if self.text.len() > MAX_RESPONSE {
+                let cut = (0..=MAX_RESPONSE).rev().find(|i| self.text.is_char_boundary(*i)).unwrap_or(0);
+                self.text.truncate(cut);
+            }
+        }
+        if consumed > 0 {
+            self.pending.drain(..consumed);
+        }
+        self.scanned = self.pending.len();
+        // A line without its end yet waits; a body that isn't events doesn't grow without bound.
+        if self.pending.len() > MAX_RESPONSE {
+            self.pending.clear();
+            self.scanned = 0;
+        }
+        self.text.len() > before
+    }
+
+    fn delta(&self, v: &Value) -> String {
+        let s = |p: &str| v.pointer(p).and_then(Value::as_str).unwrap_or("").to_string();
+        match self.api {
+            Api::Responses if v.get("type").and_then(Value::as_str) == Some("response.output_text.delta") => s("/delta"),
+            Api::OpenAi => s("/choices/0/delta/content"),
+            Api::Anthropic if s("/delta/type") == "text_delta" => s("/delta/text"),
+            Api::Gemini => v
+                .pointer("/candidates/0/content/parts")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|p| p.get("thought").and_then(Value::as_bool) != Some(true))
+                .filter_map(|p| p.get("text").and_then(Value::as_str))
+                .collect(),
+            _ => String::new(),
+        }
+    }
 }
 
 fn http_error(resp: &HttpResponse) -> String {
@@ -479,8 +988,12 @@ fn openai_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDef])
         .iter()
         .map(|t| json!({"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.schema}}))
         .collect();
-    let body = json!({"model": cfg.model.trim(), "messages": messages, "tools": tools});
-    let mut headers = vec![header("Content-Type", "application/json")];
+    let mut body = json!({"model": cfg.model.trim(), "messages": messages, "stream": true});
+    // Some servers refuse an empty tool list.
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+    }
+    let mut headers = vec![header("Content-Type", "application/json"), header("Accept", "text/event-stream")];
     if !cfg.key.trim().is_empty() {
         headers.push(header("Authorization", &format!("Bearer {}", cfg.key.trim())));
     }
@@ -515,8 +1028,8 @@ fn openai_reply(v: &Value) -> Result<Reply, String> {
         })
         .unwrap_or_default();
     let cut = match choice.get("finish_reason").and_then(Value::as_str) {
-        Some("length") => Some("the reply reached its length limit".to_string()),
-        Some("content_filter") => Some("the provider's content filter stopped the reply".to_string()),
+        Some("length") => Some(Note::new("The reply reached its length limit.")),
+        Some("content_filter") => Some(Note::new("The provider's content filter stopped the reply.")),
         _ => None,
     };
     // Replayed as sent, minus fields some servers refuse in requests.
@@ -708,17 +1221,13 @@ fn responses_reply(resp: &HttpResponse) -> Result<Reply, Error> {
         }
     }
     let mut cut = match last.pointer("/incomplete_details/reason").and_then(Value::as_str) {
-        Some("max_output_tokens") => Some("the reply reached its length limit".to_string()),
-        Some("content_filter") => Some("the provider's content filter stopped the reply".to_string()),
-        Some(r) => Some(format!("the reply stopped early ({r})")),
+        Some("max_output_tokens") => Some(Note::new("The reply reached its length limit.")),
+        Some("content_filter") => Some(Note::new("The provider's content filter stopped the reply.")),
+        Some(r) => Some(Note::with("The reply stopped early ({reason}).", [("reason", r.to_string())])),
         None => None,
     };
     if let Some(r) = refused {
-        cut = Some(if r.is_empty() {
-            "the model declined this request".to_string()
-        } else {
-            format!("the model declined this request: {r}")
-        });
+        cut = Some(declined(r));
         calls.clear();
         items.retain(replayable_without_calls);
     }
@@ -726,7 +1235,7 @@ fn responses_reply(resp: &HttpResponse) -> Result<Reply, Error> {
         calls.clear();
         items.retain(replayable_without_calls);
         if cut.is_none() {
-            cut = Some("The reply stopped before completion; no actions were run.".into());
+            cut = Some(Note::new("The reply stopped before completion; no actions were run."));
         }
     }
     // Replayed as sent, minus the server's item ids (the conversation isn't stored there).
@@ -796,17 +1305,21 @@ fn anthropic_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDe
         "max_tokens": MAX_TOKENS,
         "system": system,
         "messages": messages,
-        "tools": tools,
         // Caches the system prompt, tools and history between turns.
         "cache_control": {"type": "ephemeral"},
+        "stream": true,
     });
     let mut headers = vec![
         header("Content-Type", "application/json"),
+        header("Accept", "text/event-stream"),
         header("x-api-key", cfg.key.trim()),
         header("anthropic-version", "2023-06-01"),
         // Lets the browser app call the API directly (with the user's own key).
         header("anthropic-dangerous-direct-browser-access", "true"),
     ];
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+    }
     // A request a model declines is retried on another (Claude API only).
     if cfg.base() == "https://api.anthropic.com" && takes_fallback(model) {
         body["fallbacks"] = json!("default");
@@ -831,11 +1344,11 @@ fn anthropic_reply(v: &Value) -> Result<Reply, String> {
         }
     }
     let cut = match v.get("stop_reason").and_then(Value::as_str) {
-        Some("max_tokens") => Some("the reply reached its length limit".to_string()),
+        Some("max_tokens") => Some(Note::new("The reply reached its length limit.")),
         Some("refusal") => Some(
             v.pointer("/stop_details/explanation")
                 .and_then(Value::as_str)
-                .map_or_else(|| "the model declined this request".to_string(), |e| format!("the model declined this request: {e}")),
+                .map_or_else(|| declined(String::new()), |e| declined(e.to_string())),
         ),
         _ => None,
     };
@@ -920,16 +1433,22 @@ fn gemini_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDef])
     }
     let decls: Vec<Value> =
         tools.iter().map(|t| json!({"name": t.name, "description": t.description, "parameters": gemini_schema(&t.schema)})).collect();
-    let body = json!({
+    let mut body = json!({
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": contents,
-        "tools": [{"functionDeclarations": decls}],
     });
+    if !decls.is_empty() {
+        body["tools"] = json!([{"functionDeclarations": decls}]);
+    }
     let model = cfg.model.trim().trim_start_matches("models/");
     HttpRequest {
         method: "POST",
-        url: format!("{}/models/{}:generateContent", cfg.base(), model),
-        headers: vec![header("Content-Type", "application/json"), header("x-goog-api-key", cfg.key.trim())],
+        url: format!("{}/models/{}:streamGenerateContent?alt=sse", cfg.base(), model),
+        headers: vec![
+            header("Content-Type", "application/json"),
+            header("Accept", "text/event-stream"),
+            header("x-goog-api-key", cfg.key.trim()),
+        ],
         body: json_body(&body),
     }
 }
@@ -958,9 +1477,9 @@ fn gemini_reply(v: &Value) -> Result<Reply, String> {
         }
     }
     let cut = match cand.get("finishReason").and_then(Value::as_str) {
-        Some("MAX_TOKENS") => Some("the reply reached its length limit".to_string()),
+        Some("MAX_TOKENS") => Some(Note::new("The reply reached its length limit.")),
         Some(r @ ("SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "SPII")) => {
-            Some(format!("Gemini stopped the reply ({r})"))
+            Some(Note::with("Gemini stopped the reply ({reason}).", [("reason", r.to_string())]))
         }
         _ => None,
     };

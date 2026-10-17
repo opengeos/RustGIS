@@ -15,6 +15,7 @@
 
 pub mod agent;
 pub mod chatgpt;
+pub mod compact;
 pub mod docs;
 pub mod error;
 pub use error::{Error, Recovery};
@@ -30,4 +31,4 @@ mod tests;
 pub mod tools;
 
 pub use agent::{Agent, Entry, Step};
-pub use provider::{Api, Config, HttpRequest, HttpResponse, PRESETS, Preset};
+pub use provider::{Api, Config, HttpRequest, HttpResponse, Note, PRESETS, Preset};

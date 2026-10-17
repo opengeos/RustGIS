@@ -338,6 +338,7 @@ Choose File…	ფაილის არჩევა…
 Choose how the flat map lays out the Earth.	აირჩიეთ, როგორ გაშალოს ბრტყელმა რუკამ დედამიწა.
 Choose how the layer is drawn.	აირჩიეთ, როგორ დაიხატოს ფენა.
 Choose how the raster is drawn.	აირჩიეთ, როგორ დაიხატოს რასტრი.
+Choose Project…	პროექტის არჩევა…
 Choose the interface language.	ინტერფეისის ენის არჩევა.
 Choose which layers a click identifies.	აირჩიეთ, რომელ ფენებს გამოარჩევს დაწკაპუნება.
 Choose which tabs the ribbon shows.	აირჩიეთ, რომელი ჩანართები აჩვენოს ლენტმა.
@@ -1034,6 +1035,7 @@ Language	ენა
 Lasso	ლასო
 Lasso (draw)	ლასო (ხატვა)
 Last map render time	რუკის ბოლო დახატვის დრო
+Last Project	ბოლო პროექტი
 Latitude	განედი
 Latitude (Y)	განედი (Y)
 Layer	ფენა
@@ -1272,6 +1274,7 @@ No plugins match.	დანამატები ვერ მოიძებნ
 No Pop-ups	ამომხტარი ფანჯრების გარეშე
 No presentations yet. Publish › New Presentation starts one.	პრეზენტაციები ჯერ არ არის. გამოქვეყნება › ახალი პრეზენტაცია ქმნის ახალს.
 No products	პროდუქტები არ არის
+No project opened or saved yet	ჯერ არცერთი პროექტი არ გახსნილა ან შენახულა
 No relationships (Data Design › Relationships)	კავშირები არ არის (მონაცემთა დიზაინი › კავშირები)
 No relationships yet	კავშირები ჯერ არ არის
 No reports yet. Publish › New Report lists the selected layer's records.	ანგარიშები ჯერ არ არის. გამოქვეყნება › ახალი ანგარიში არჩეული ფენის ჩანაწერებს ჩამოთვლის.
@@ -1654,6 +1657,7 @@ Running…	მიმდინარეობს გაშვება…
 RustGIS	RustGIS
 RustGIS bookmarks	RustGIS-ის სანიშნეები
 RustGIS deep learning package	RustGIS-ის ღრმა სწავლების პაკეტი
+RustGIS didn't close properly last time, so it started with the World Atlas instead of your start-up project. Open the project from the Project menu when you're ready.	წინა ჯერზე RustGIS სწორად არ დაიხურა, ამიტომ ის თქვენი საწყისი პროექტის ნაცვლად World Atlas-ით გაეშვა. როცა მზად იქნებით, გახსენით პროექტი მენიუდან „პროექტი“.
 RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, and every action is a command you can also run from the command line.	RustGIS არის უფასო, ღია კოდის GIS, სუფთა Rust-ზე დაწერილი. ის მუშაობს დესკტოპზე და ბრაუზერში. ყოველი მოქმედება ბრძანებაა, რომლის გაშვებაც ბრძანებათა ხაზიდანაც შეიძლება.
 RustGIS layer file	RustGIS-ის ფენის ფაილი
 RustGIS layers, maps and projects	RustGIS-ის ფენები, რუკები და პროექტები
@@ -2036,7 +2040,6 @@ The map is drawn in this coordinate system; layers are projected on the fly.	რ
 The map view as it is now	რუკის ხედი ახლა როგორიც არის
 The map's view takes {n} of Overture's {ty} files (up to {max}): zoom in, or add the theme as map tiles	რუკის ხედი მოიცავს Overture-ის {n} {ty} ფაილს (მაქს. {max}): გაადიდეთ ან დაამატეთ თემა რუკის ფილებად
 The model answering; click to change it	მოდელი, რომელიც პასუხობს; დააწკაპუნეთ შესაცვლელად
-the model declined this request	მოდელმა ეს მოთხოვნა უარყო
 The model sent an empty reply; ask again, or try another model.	მოდელმა ცარიელი პასუხი გამოგზავნა; კიდევ ერთხელ ჰკითხეთ ან სცადეთ სხვა მოდელი.
 the page is too large to draw	გვერდი დასახატად ძალიან დიდია
 the picture is too large to show	სურათი საჩვენებლად ძალიან დიდია
@@ -2058,6 +2061,8 @@ The saved sign-in changed. Select your account again.	შენახული �
 The Shapefile's files download as one zip.	Shapefile-ის ფაილები ერთ zip-ად ჩამოიტვირთება.
 The sign-in expired or was revoked. Sign in again.	შესვლის ვადა ამოიწურა ან წვდომა გაუქმდა. ხელახლა შედით.
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	შესვლის მონაცემები ინახება აპის პარამეტრების საქაღალდეში, მხოლოდ თქვენი მომხმარებლის ანგარიშისთვის, და არასოდეს პროექტის ფაილში.
+The start-up project {path} didn't open: {error}	საწყისი პროექტი {path} ვერ გაიხსნა: {error}
+The start-up project {path} isn't a RustGIS project file.	საწყისი პროექტი {path} არ არის RustGIS-ის პროექტის ფაილი.
 The store has no variables with two or more dimensions.	საცავში არ არის ორი ან მეტი განზომილების ცვლადები.
 the store is gone	საცავი აღარ არსებობს
 the view has no extent	ხედს ფარგლები არ აქვს
@@ -2204,6 +2209,7 @@ WFS	WFS
 WGS 84 / Globe	WGS 84 / გლობუსი
 WGS 84 / Web Mercator	WGS 84 / ვებ მერკატორი
 What RustGIS opens with: the World Atlas sample or a blank map.	რას გახსნის RustGIS გაშვებისას: World Atlas-ის ნიმუშს ან ცარიელ რუკას.
+What RustGIS opens with: the World Atlas sample, a blank map, a project you choose, or the last project opened or saved.	რას გახსნის RustGIS გაშვებისას: World Atlas-ის ნიმუშს, ცარიელ რუკას, თქვენ მიერ არჩეულ პროექტს ან ბოლოს გახსნილ ან შენახულ პროექტს.
 What's near a point	რა არის წერტილის ახლოს
 WHERE	WHERE
 Where	სად
@@ -2304,6 +2310,22 @@ Zoom To World	გადიდება მსოფლიოზე
 © OpenStreetMap contributors	© OpenStreetMap contributors
 — fps	— კადრი/წმ
 ⌘K	⌘K
+Let your Agents Control RustGIS	მიეცით თქვენს აგენტებს RustGIS-ის მართვის საშუალება
+Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. Scripts and plugin management stay off.	ამ კომპიუტერის დაკავშირებული აგენტები (Claude Code, Codex, Cursor და სხვები) აქ გახსნილ რუკაზე RustGIS-ის ხელსაწყოებით მუშაობენ: შეუძლიათ ფაილების გახსნა და შენახვა და ვების გამოყენება. სკრიპტები და მოდულების მართვა გამორთული რჩება.
+Add this MCP server to your agent:	დაამატეთ ეს MCP სერვერი თქვენს აგენტს:
+Or run, for Claude Code or Codex:	ან Claude Code-ისთვის ან Codex-ისთვის გაუშვით:
+Compact	შეკუმშვა
+Summarise the conversation so far, so a long chat stays within the model's context	შეაჯამეთ საუბარი აქამდე, რომ გრძელი ჩატი მოდელის კონტექსტში დაეტიოს
+The reply reached its length limit.	პასუხმა სიგრძის ლიმიტს მიაღწია.
+The provider's content filter stopped the reply.	პროვაიდერის შინაარსის ფილტრმა პასუხი შეაჩერა.
+The reply stopped early ({reason}).	პასუხი ნაადრევად შეწყდა ({reason}).
+The model declined this request.	მოდელმა ეს მოთხოვნა უარყო.
+The model declined this request: {why}	მოდელმა ეს მოთხოვნა უარყო: {why}
+Gemini stopped the reply ({reason}).	Gemini-მ პასუხი შეაჩერა ({reason}).
+Summarising the earlier conversation to keep it within the model's context…	წინა საუბარი ჯამდება, რომ მოდელის კონტექსტში დაეტიოს…
+Compacted the earlier conversation.	წინა საუბარი შეიკუმშა.
+The connection failed; trying again in {seconds} s.	კავშირი ვერ დამყარდა; ხელახალი ცდა {seconds} წმ-ში.
+Stopped after {steps} steps; say "continue" to go on.	შეჩერდა {steps} ნაბიჯის შემდეგ; გასაგრძელებლად თქვით „გააგრძელე".
 The service's answer isn't UTF-8 text	სერვისის პასუხი UTF-8 ტექსტი არ არის
 Import All	ყველას იმპორტი
 Import Service	სერვისის იმპორტი

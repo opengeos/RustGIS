@@ -821,7 +821,7 @@ mod native {
         if !(200..300).contains(&r.status) {
             return Err(Error {
                 status: Some(r.status),
-                request_id: r.request_id.clone(),
+                request_id: r.request_id().map(str::to_string),
                 ..Error::auth(format!("{url}: HTTP {}", r.status))
             });
         }
@@ -895,19 +895,26 @@ mod native {
     /// signed out; the tokens are renewed first when about to expire, and once more if the API
     /// still refuses them.
     pub fn send(req: &HttpRequest, account: &Binding) -> Result<HttpResponse, Error> {
-        send_inner(req, account).map_err(Error::auth_context)
+        send_inner(req, account, None).map_err(Error::auth_context)
     }
 
-    fn send_inner(req: &HttpRequest, account: &Binding) -> Result<HttpResponse, Error> {
+    /// [`send`], handing the API's response body to `on_chunk` as it streams in.
+    pub fn send_streaming(req: &HttpRequest, account: &Binding, on_chunk: &mut dyn FnMut(&[u8])) -> Result<HttpResponse, Error> {
+        send_inner(req, account, Some(on_chunk)).map_err(Error::auth_context)
+    }
+
+    fn send_inner(req: &HttpRequest, account: &Binding, mut on_chunk: Option<&mut dyn FnMut(&[u8])>) -> Result<HttpResponse, Error> {
         // Reject an edited address before loading credentials or rotating any tokens.
         if !super::api_url(&req.url) {
             return Err(Error::new(Recovery::Configuration, "a ChatGPT sign-in can only be used with the OpenAI API"));
         }
         send_at(req, account, &auth_path().ok_or("no settings folder")?, &mut |req| {
             if req.url == super::TOKEN_URL {
-                http::send_timeout(req, Duration::from_secs(30)).map_err(Error::auth)
+                http::send_timeout(req, Duration::from_secs(30)).map_err(Error::auth_context)
+            } else if let Some(f) = on_chunk.as_mut() {
+                http::send_streaming(req, &mut **f).map_err(Error::auth_context)
             } else {
-                http::send(req).map_err(Error::auth)
+                http::send(req).map_err(Error::auth_context)
             }
         })
     }
@@ -1020,7 +1027,9 @@ mod native {
     /// errors). An error means OpenAI didn't confirm it: the user can disconnect RustGIS in their
     /// ChatGPT settings.
     pub fn revoke(r: &Revocation) -> Result<(), Error> {
-        revoke_with(r, &mut |req| http::send_timeout(req, Duration::from_secs(30)).map_err(Error::auth), &mut |d| std::thread::sleep(d))
+        revoke_with(r, &mut |req| http::send_timeout(req, Duration::from_secs(30)).map_err(Error::auth_context), &mut |d| {
+            std::thread::sleep(d)
+        })
     }
 
     fn revoke_with(r: &Revocation, send: Send, wait: &mut dyn FnMut(Duration)) -> Result<(), Error> {
@@ -1213,7 +1222,7 @@ mod native {
             // for an attempt that is then cancelled, unverified or not kept can be revoked.
             let exchanged = callback_client_id(&params, &p.client_id).map_err(Error::auth).and_then(|client_id| {
                 let resp = http::send_timeout(&exchange_request(&client_id, code, &p.redirect_uri, &p.verifier), Duration::from_secs(30))
-                    .map_err(Error::auth)?;
+                    .map_err(Error::auth_context)?;
                 let grant = parse_grant(&resp).map_err(|e| Error::token(&resp, e))?;
                 Ok((client_id, grant))
             });
@@ -1260,7 +1269,7 @@ mod native {
     fn auth_send(req: &HttpRequest, cancel: &Mutex<bool>, deadline: Instant) -> Result<HttpResponse, Error> {
         let req = req.clone();
         let timeout = deadline.saturating_duration_since(Instant::now()).min(Duration::from_secs(30));
-        cancellable(cancel, deadline, move || http::send_timeout(&req, timeout).map_err(Error::auth))
+        cancellable(cancel, deadline, move || http::send_timeout(&req, timeout).map_err(Error::auth_context))
     }
 
     // The listener can exit immediately; a transport already in progress has a short timeout
@@ -1418,7 +1427,7 @@ mod native {
 
         fn grant(expires_at: i64, refresh: &str) -> HttpResponse {
             let body = serde_json::json!({"access_token": access(expires_at), "refresh_token": refresh, "expires_in": expires_at - now()});
-            HttpResponse { status: 200, body: body.to_string().into_bytes(), request_id: None }
+            HttpResponse { status: 200, body: body.to_string().into_bytes(), headers: vec![] }
         }
 
         fn test_request() -> HttpRequest {
@@ -1491,7 +1500,7 @@ mod native {
                         return Ok(r);
                     }
                     inference += 1;
-                    Ok(HttpResponse { status: 401, body: vec![], request_id: None })
+                    Ok(HttpResponse { status: 401, body: vec![], headers: vec![] })
                 })
                 .unwrap_err();
                 assert!(e.to_string().contains("plan"));
@@ -1639,11 +1648,11 @@ mod native {
                                 inference += 1;
                                 if inference == 1 {
                                     barrier.wait();
-                                    Ok(HttpResponse { status: 401, body: vec![], request_id: None })
+                                    Ok(HttpResponse { status: 401, body: vec![], headers: vec![] })
                                 } else {
                                     let bearer = format!("Bearer {}", access(far + 1));
                                     assert!(req.headers.iter().any(|(k, v)| k == "Authorization" && *v == bearer));
-                                    Ok(HttpResponse { status: 200, body: vec![], request_id: None })
+                                    Ok(HttpResponse { status: 200, body: vec![], headers: vec![] })
                                 }
                             })
                             .unwrap()
@@ -1675,7 +1684,7 @@ mod native {
                     } else {
                         write_credentials(&path, &synthetic(0).registration()).unwrap();
                     }
-                    Ok(HttpResponse { status: 401, body: vec![], request_id: None })
+                    Ok(HttpResponse { status: 401, body: vec![], headers: vec![] })
                 });
                 assert!(result.is_err());
                 assert_eq!(requests, 1, "a late response must not renew or resend");
@@ -1704,7 +1713,7 @@ mod native {
             let path = dir.path().join("test-auth.json");
             write_credentials(&path, &synthetic(0)).unwrap();
             let e = send_at(&test_request(), &synthetic(0).binding(), &path, &mut |_| {
-                Ok(HttpResponse { status: 400, body: br#"{"error":"refresh_token_reused"}"#.to_vec(), request_id: None })
+                Ok(HttpResponse { status: 400, body: br#"{"error":"refresh_token_reused"}"#.to_vec(), headers: vec![] })
             })
             .unwrap_err();
             assert!(e.to_string().contains("sign in again"), "{e}");
@@ -1717,7 +1726,7 @@ mod native {
                 send_at(&test_request(), &synthetic(0).binding(), &path, &mut |_| Ok(HttpResponse {
                     status: 503,
                     body: vec![],
-                    request_id: None
+                    headers: vec![]
                 }))
                 .is_err()
             );
@@ -1764,7 +1773,7 @@ mod native {
                     &r,
                     &mut |req| {
                         if req.url == super::super::DISCOVERY_URL {
-                            return Ok(HttpResponse { status: 200, body: config.clone().into_bytes(), request_id: None });
+                            return Ok(HttpResponse { status: 200, body: config.clone().into_bytes(), headers: vec![] });
                         }
                         assert_eq!(req.url, "https://auth.openai.com/api/accounts/oauth/revoke");
                         assert!(
@@ -1773,7 +1782,7 @@ mod native {
                                 .is_some_and(|b| b.contains("token=synthetic-refresh") && b.contains("client_id=oaiapp_synthetic"))
                         );
                         sent += 1;
-                        Ok(HttpResponse { status: replies.next().unwrap_or(500), body: vec![], request_id: None })
+                        Ok(HttpResponse { status: replies.next().unwrap_or(500), body: vec![], headers: vec![] })
                     },
                     &mut |_| waits += 1,
                 );
@@ -1789,10 +1798,10 @@ mod native {
                         return if discoveries == 1 {
                             Err("offline".into())
                         } else {
-                            Ok(HttpResponse { status: 200, body: config.clone().into_bytes(), request_id: None })
+                            Ok(HttpResponse { status: 200, body: config.clone().into_bytes(), headers: vec![] })
                         };
                     }
-                    Ok(HttpResponse { status: 200, body: vec![], request_id: None })
+                    Ok(HttpResponse { status: 200, body: vec![], headers: vec![] })
                 },
                 &mut |_| {},
             );

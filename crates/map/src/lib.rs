@@ -538,6 +538,15 @@ impl Layer {
 pub struct Bookmark {
     pub name: String,
     pub camera: Camera,
+    /// What the place is, in the user's words (#351).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+}
+
+impl Bookmark {
+    pub fn new(name: impl Into<String>, camera: Camera) -> Self {
+        Bookmark { name: name.into(), camera, description: String::new() }
+    }
 }
 
 /// What [`Map::layer_mark`] records.

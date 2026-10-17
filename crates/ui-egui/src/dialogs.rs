@@ -98,7 +98,7 @@ impl Dialogs {
                 self.a = format!("{:.4}", c.x);
                 self.b = format!("{:.4}", c.y);
             }
-            "bookmark" => self.text = format!("Bookmark {}", s.map().bookmarks.len() + 1),
+            "bookmark" => self.text = rustgis_engine::cmd::navigate::new_bookmark_name(s.map()),
             "camera" => {
                 let c = s.map().center_lonlat();
                 self.a = format!("{:.5}", c.x);

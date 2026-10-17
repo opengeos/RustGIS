@@ -333,9 +333,9 @@ impl Renderer {
 
     /// The legend for the features `rows` keeps (a row past its end counts, so `&[]` keeps them
     /// all): a Unique Values class only when some kept feature has it, and `<all other values>`
-    /// only when some kept feature matches no class (#207). The classes may come from a style file
-    /// or from before a definition query changed, so they can name values no kept feature has. The
-    /// other renderers list their classes as they are.
+    /// only when some kept feature matches no class and its symbol is not fully transparent (#207).
+    /// The classes may come from a style file or from before a definition query changed, so they
+    /// can name values no kept feature has. The other renderers list their classes as they are.
     pub fn legend_for(&self, ds: &Dataset, rows: &[bool]) -> Vec<LegendEntry> {
         let Renderer::Unique { field, classes, other, class_labels, other_label, .. } = self else { return self.legend() };
         // A value matches its first class, as in `symbol_for`.
@@ -375,7 +375,10 @@ impl Renderer {
             .map(|((k, s), _)| LegendEntry { label: unique_label(class_labels, k), symbol: *s, fallback: false })
             .collect();
         v.sort_by_cached_key(|e| e.label.to_lowercase());
-        if other_used {
+        // A fully transparent fallback draws nothing, so it has nothing to stand for in a legend.
+        // Lines draw with their stroke only.
+        let visible = other.stroke.a() > 0 || (ds.geometry_type != GeometryType::Polyline && other.fill.a() > 0);
+        if other_used && visible {
             v.push(LegendEntry { label: other_label.clone().unwrap_or_else(|| OTHER_VALUES.into()), symbol: *other, fallback: true });
         }
         v
@@ -466,8 +469,8 @@ impl Renderer {
                 s.stroke = c;
             }
         };
-        // The class's index, then its row in `legend()`, which lists the Unique Values classes
-        // sorted by label (`class_order`) and then `other`.
+        // The class's row in `legend()`, which lists the classes and then `other`. Unique Values
+        // rows are sorted by label, so that class's row is built here rather than looked up.
         let row = match (&mut *self, class) {
             (Renderer::Unique { classes, class_labels, .. }, ClassRef::Value(v)) => {
                 let i = classes.iter().position(|(k, _)| k == v).ok_or_else(|| format!("no class with the value '{v}'"))?;
@@ -484,7 +487,10 @@ impl Renderer {
                         None => {}
                     }
                 }
-                i
+                return classes
+                    .get(i)
+                    .map(|(k, s)| LegendEntry { label: unique_label(class_labels, k), symbol: *s, fallback: false })
+                    .ok_or_else(|| "the class has no legend row".into());
             }
             (Renderer::Unique { classes, other, other_label, .. }, ClassRef::Other) => {
                 restyle(other);
@@ -516,10 +522,6 @@ impl Renderer {
             }
             (Renderer::Graduated { .. }, _) => return Err("Graduated Colors classes are numbered from 0, the lowest".into()),
             _ => return Err("only Unique Values and Graduated Colors have classes to style".into()),
-        };
-        let row = match class {
-            ClassRef::Value(_) => self.class_order().iter().position(|i| *i == row).unwrap_or(row),
-            _ => row,
         };
         self.legend().into_iter().nth(row).ok_or_else(|| "the class has no legend row".into())
     }
@@ -935,6 +937,58 @@ mod tests {
         );
         // Other renderers list their classes as they are.
         assert_eq!(Renderer::Single(s(0)).legend_for(&d, &[false; 4]), Vec::new());
+    }
+
+    #[test]
+    fn a_transparent_fallback_is_left_out_of_the_legend() {
+        let mut d = Dataset::new("t", GeometryType::Polygon, vec![Field::new("g", FieldType::Text)]);
+        for g in ["a", "z"] {
+            d.push(None, vec![Value::Text(g.into())]);
+        }
+        let s = |c| Symbol::default_for(GeometryType::Polygon, c);
+        let mut other = s(3);
+        other.fill = other.fill.with_alpha(0);
+        other.stroke = other.stroke.with_alpha(0);
+        let r = Renderer::Unique {
+            field: "g".into(),
+            classes: vec![("a".into(), s(0))],
+            other,
+            ramp: Ramp::Ember,
+            class_labels: Default::default(),
+            other_label: None,
+        };
+        let labels = |r: &Renderer, rows: &[bool]| r.legend_for(&d, rows).into_iter().map(|e| e.label).collect::<Vec<_>>();
+        assert_eq!(labels(&r, &[]), ["a"], "z falls in the invisible fallback");
+        assert!(labels(&r, &[false, true]).is_empty(), "only the invisible fallback is used");
+        // A visible stroke alone still stands for the features.
+        let mut stroked = other;
+        stroked.stroke = stroked.stroke.with_alpha(255);
+        let r2 = Renderer::Unique {
+            field: "g".into(),
+            classes: vec![("a".into(), s(0))],
+            other: stroked,
+            ramp: Ramp::Ember,
+            class_labels: Default::default(),
+            other_label: None,
+        };
+        assert_eq!(labels(&r2, &[]), ["a", OTHER_VALUES]);
+        // A line's fill draws nothing: a fallback with only a fill is invisible on lines.
+        let mut lines = Dataset::new("l", GeometryType::Polyline, vec![Field::new("g", FieldType::Text)]);
+        lines.push(None, vec![Value::Text("z".into())]);
+        let mut filled = other;
+        filled.fill = filled.fill.with_alpha(255);
+        let r3 = Renderer::Unique {
+            field: "g".into(),
+            classes: vec![("a".into(), s(0))],
+            other: filled,
+            ramp: Ramp::Ember,
+            class_labels: Default::default(),
+            other_label: None,
+        };
+        assert!(r3.legend_for(&lines, &[]).is_empty());
+        assert_eq!(labels(&r3, &[]), ["a", OTHER_VALUES], "a polygon fill still shows");
+        // The full legend (the symbology editor's list) keeps it.
+        assert_eq!(r.legend().len(), 2);
     }
 
     #[test]

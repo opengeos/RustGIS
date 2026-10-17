@@ -338,6 +338,7 @@ Choose File…	Выбрать файл…
 Choose how the flat map lays out the Earth.	Выбрать, как плоская карта отображает Землю.
 Choose how the layer is drawn.	Выбрать способ отображения слоя.
 Choose how the raster is drawn.	Выберите способ отрисовки растра.
+Choose Project…	Выбрать проект…
 Choose the interface language.	Выбрать язык интерфейса.
 Choose which layers a click identifies.	Выбрать, какие слои идентифицируются по щелчку.
 Choose which tabs the ribbon shows.	Выбрать, какие вкладки показывает лента.
@@ -1034,6 +1035,7 @@ Language	Язык
 Lasso	Лассо
 Lasso (draw)	Лассо (рисование)
 Last map render time	Время последней отрисовки карты
+Last Project	Последний проект
 Latitude	Широта
 Latitude (Y)	Широта (Y)
 Layer	Слой
@@ -1272,6 +1274,7 @@ No plugins match.	Подходящих модулей нет.
 No Pop-ups	Без всплывающих окон
 No presentations yet. Publish › New Presentation starts one.	Презентаций пока нет. Публикация › Новая презентация создаёт презентацию.
 No products	Нет продуктов
+No project opened or saved yet	Проекты ещё не открывались и не сохранялись
 No relationships (Data Design › Relationships)	Нет отношений (Структура данных › Отношения)
 No relationships yet	Отношений пока нет
 No reports yet. Publish › New Report lists the selected layer's records.	Отчётов пока нет. Публикация › Новый отчёт выводит записи выбранного слоя.
@@ -1654,6 +1657,7 @@ Running…	Выполняется…
 RustGIS	RustGIS
 RustGIS bookmarks	Закладки RustGIS
 RustGIS deep learning package	Пакет глубокого обучения RustGIS
+RustGIS didn't close properly last time, so it started with the World Atlas instead of your start-up project. Open the project from the Project menu when you're ready.	В прошлый раз RustGIS завершил работу некорректно, поэтому он открылся с World Atlas вместо вашего стартового проекта. Откройте проект из меню «Проект», когда будете готовы.
 RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, and every action is a command you can also run from the command line.	RustGIS — свободная ГИС с открытым исходным кодом на чистом Rust. Она работает на компьютере и в браузере, а каждое действие — это команда, которую можно выполнить и из командной строки.
 RustGIS layer file	Файл слоя RustGIS
 RustGIS layers, maps and projects	Слои, карты и проекты RustGIS
@@ -2036,7 +2040,6 @@ The map is drawn in this coordinate system; layers are projected on the fly.	К�
 The map view as it is now	Вид карты в текущем состоянии
 The map's view takes {n} of Overture's {ty} files (up to {max}): zoom in, or add the theme as map tiles	Вид карты охватывает {n} файлов Overture «{ty}» (не более {max}): приблизьте карту или добавьте тему как тайлы карты
 The model answering; click to change it	Модель, которая отвечает; щёлкните, чтобы сменить
-the model declined this request	модель отклонила этот запрос
 The model sent an empty reply; ask again, or try another model.	Модель прислала пустой ответ; спросите ещё раз или попробуйте другую модель.
 the page is too large to draw	страница слишком велика для отрисовки
 the picture is too large to show	изображение слишком большое для показа
@@ -2058,6 +2061,8 @@ The saved sign-in changed. Select your account again.	Сохранённые д�
 The Shapefile's files download as one zip.	Файлы Shapefile скачиваются одним zip-архивом.
 The sign-in expired or was revoked. Sign in again.	Срок действия входа истёк или доступ отозван. Войдите снова.
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Данные входа хранятся в папке настроек приложения, только для вашей учётной записи, и никогда в файле проекта.
+The start-up project {path} didn't open: {error}	Не удалось открыть стартовый проект {path}: {error}
+The start-up project {path} isn't a RustGIS project file.	Стартовый проект {path} не является файлом проекта RustGIS.
 The store has no variables with two or more dimensions.	В хранилище нет переменных с двумя и более измерениями.
 the store is gone	хранилище больше недоступно
 the view has no extent	у вида нет экстента
@@ -2204,6 +2209,7 @@ WFS	WFS
 WGS 84 / Globe	WGS 84 / Глобус
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 What RustGIS opens with: the World Atlas sample or a blank map.	С чем открывается RustGIS: с примером World Atlas или с пустой картой.
+What RustGIS opens with: the World Atlas sample, a blank map, a project you choose, or the last project opened or saved.	С чем открывается RustGIS: с примером World Atlas, с пустой картой, с выбранным вами проектом или с последним открытым или сохранённым проектом.
 What's near a point	Что находится рядом с точкой
 WHERE	WHERE
 Where	Где
@@ -2304,6 +2310,22 @@ Zoom To World	Приблизить к миру
 © OpenStreetMap contributors	© участники OpenStreetMap
 — fps	— к/с
 ⌘K	⌘K
+Let your Agents Control RustGIS	Разрешить вашим агентам управлять RustGIS
+Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. Scripts and plugin management stay off.	Подключившиеся агенты на этом компьютере (Claude Code, Codex, Cursor и другие) работают с открытой здесь картой через инструменты RustGIS: они могут открывать и сохранять файлы и пользоваться вебом. Скрипты и управление плагинами остаются выключенными.
+Add this MCP server to your agent:	Добавьте этот MCP-сервер в своего агента:
+Or run, for Claude Code or Codex:	Или выполните для Claude Code или Codex:
+Compact	Сжать
+Summarise the conversation so far, so a long chat stays within the model's context	Кратко изложить разговор до этого момента, чтобы длинный чат помещался в контекст модели
+The reply reached its length limit.	Ответ достиг предельной длины.
+The provider's content filter stopped the reply.	Фильтр содержимого провайдера остановил ответ.
+The reply stopped early ({reason}).	Ответ прервался раньше времени ({reason}).
+The model declined this request.	Модель отклонила этот запрос.
+The model declined this request: {why}	Модель отклонила этот запрос: {why}
+Gemini stopped the reply ({reason}).	Gemini остановил ответ ({reason}).
+Summarising the earlier conversation to keep it within the model's context…	Краткое изложение предыдущей части разговора, чтобы он помещался в контекст модели…
+Compacted the earlier conversation.	Предыдущая часть разговора сжата.
+The connection failed; trying again in {seconds} s.	Не удалось подключиться; повтор через {seconds} с.
+Stopped after {steps} steps; say "continue" to go on.	Остановлено после {steps} шагов; скажите «продолжай», чтобы продолжить.
 The service's answer isn't UTF-8 text	Ответ сервиса не является текстом UTF-8
 Import All	Импортировать всё
 Import Service	Импортировать сервис

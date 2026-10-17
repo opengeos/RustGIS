@@ -99,6 +99,7 @@ pub fn start() {
                         blank: (embedded || project.is_some() || flag(&q, "blank")).then_some(true),
                         projection: param(&q, "projection").filter(|c| !c.is_empty()),
                         extent: param(&q, "extent").filter(|c| !c.is_empty()),
+                        ..Default::default()
                     };
                     if let Err(e) = app.start(&start) {
                         log::warn!("start-up: {e}");
@@ -490,12 +491,15 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 
 /// Makes an HTTP request (the AI assistant's calls to its model), returning the response of any
 /// status.
-async fn http(req: rustgis_ui_egui::rustgis_assistant::HttpRequest) -> Result<rustgis_ui_egui::rustgis_assistant::HttpResponse, String> {
+async fn http(
+    req: rustgis_ui_egui::rustgis_assistant::HttpRequest,
+) -> Result<rustgis_ui_egui::rustgis_assistant::HttpResponse, rustgis_ui_egui::rustgis_assistant::Error> {
     use rustgis_ui_egui::rustgis_assistant::provider::{allowed_url, reply_limit};
+    use rustgis_ui_egui::rustgis_assistant::{Error, error::TransportFailure};
     let limit = reply_limit(&req);
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
     if !allowed_url(&req.url) {
-        return Err(format!("{}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed", req.url));
+        return Err(format!("{}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed", req.url).into());
     }
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
@@ -513,23 +517,32 @@ async fn http(req: rustgis_ui_egui::rustgis_assistant::HttpRequest) -> Result<ru
     // A failed fetch here is usually the provider refusing browser requests (CORS) or no network.
     let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str_and_init(&req.url, &init))
         .await
-        .map_err(|_| "couldn't reach the provider (offline, or it doesn't accept requests from web pages)".to_string())?
+        .map_err(|_| {
+            Error::transport(
+                TransportFailure::Unavailable,
+                "couldn't reach the provider (offline, or it doesn't accept requests from web pages)",
+            )
+        })?
         .dyn_into()
         .map_err(err)?;
     let status = resp.status();
-    let request_id = resp.headers().get("x-request-id").ok().flatten();
+    // The headers the assistant reads (a browser shows only those the provider exposes).
+    let headers: Vec<(String, String)> = rustgis_ui_egui::rustgis_assistant::provider::KEPT_HEADERS
+        .into_iter()
+        .filter_map(|h| Some((h.to_string(), resp.headers().get(h).ok().flatten()?)))
+        .collect();
     // Too large by its header: refused before it is read.
     if let Ok(Some(len)) = resp.headers().get("content-length").map(|v| v.and_then(|s| s.parse::<u64>().ok()))
         && len > limit as u64
     {
-        return Err(format!("{len} bytes is too large"));
+        return Err(format!("{len} bytes is too large").into());
     }
     let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(err)?).await.map_err(err)?;
     let bytes = js_sys::Uint8Array::new(&buf);
     if bytes.length() as usize > limit {
-        return Err(format!("{} bytes is too large", bytes.length()));
+        return Err(format!("{} bytes is too large", bytes.length()).into());
     }
-    Ok(rustgis_ui_egui::rustgis_assistant::HttpResponse { status, body: bytes.to_vec(), request_id })
+    Ok(rustgis_ui_egui::rustgis_assistant::HttpResponse { status, body: bytes.to_vec(), headers })
 }
 
 /// The browser's services. Embedded, settings live in memory for the visit: the page that embeds
@@ -658,7 +671,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
         http: Some(Box::new(move |req, slot| {
             let ctx = http_ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let r = http(req).await.map_err(Into::into);
+                let r = http(req).await;
                 *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
                 ctx.request_repaint();
             });

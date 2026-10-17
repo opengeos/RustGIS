@@ -4,12 +4,16 @@
 
 use std::collections::VecDeque;
 
-use crate::provider::{self, Config, HttpRequest, HttpResponse, ToolCall, ToolResult, Turn};
-use crate::tools;
+use crate::provider::{self, Config, HttpRequest, HttpResponse, Note, ToolCall, ToolResult, Turn};
+use crate::{compact, tools};
 use rustgis_engine::Session;
 
 /// Model requests per user message before the agent stops and reports back.
 pub const MAX_STEPS: u32 = 16;
+
+/// Retries per provider request (see [`provider::retry_delay`]), reset after an accepted response.
+/// This is not a whole-conversation/run allowance; [`MAX_STEPS`] separately bounds a user run.
+pub const MAX_RETRIES: u32 = 3;
 
 /// What the caller does next.
 #[derive(Debug, PartialEq)]
@@ -18,6 +22,8 @@ pub enum Step {
     Send(HttpRequest),
     /// Ask the user about [`Agent::pending`], then call [`Agent::decide`].
     Confirm,
+    /// Wait this long, then call [`Agent::retry`]: the request failed in a way worth trying again.
+    Retry(core::time::Duration),
     /// Nothing until the user writes again.
     Done,
 }
@@ -36,14 +42,22 @@ pub enum Entry {
     },
     /// A problem talking to the model.
     Error(crate::Error),
-    /// A note from the app (a stop, a declined call).
-    Note(String),
+    /// A note from the app (a stop, a retry, a compaction), translated by the interface.
+    Note(Note),
 }
 
 enum State {
     Idle,
     /// A request is out.
     Waiting,
+    /// A request failed and waits to be sent again ([`Step::Retry`]).
+    Retrying,
+    /// A summary of the turns before `upto` is being asked for ([`compact`]); the run goes on
+    /// afterwards if `resume`.
+    Compacting {
+        upto: usize,
+        resume: bool,
+    },
     /// Running a reply's calls: those left, and the results so far.
     Calls(VecDeque<ToolCall>, Vec<ToolResult>),
 }
@@ -64,6 +78,18 @@ pub struct Agent {
     /// Commands approved for the rest of the conversation (see [`tools::approval_key`]).
     always: Vec<String>,
     system: String,
+    /// Retries of the request out ([`MAX_RETRIES`]).
+    retries: u32,
+    /// The text of the reply arriving, while it streams.
+    preview: Option<provider::StreamPreview>,
+    /// The conversation was compacted after the provider said it was too long (once per message).
+    overflow_compacted: bool,
+    /// A summary request waiting to be retried ([`State::Compacting`]'s `upto` and `resume`).
+    retrying_summary: Option<(usize, bool)>,
+    /// Learned upper bound for summary input; reduced on a summary overflow.
+    summary_limit: usize,
+    /// Bytes of summary input actually sent, used to shrink an overflow without re-rendering.
+    summary_input_len: usize,
 }
 
 impl Agent {
@@ -78,6 +104,12 @@ impl Agent {
             generation: 0,
             always: Vec::new(),
             system: system_prompt(s),
+            retries: 0,
+            preview: None,
+            overflow_compacted: false,
+            retrying_summary: None,
+            summary_limit: compact::BUDGET,
+            summary_input_len: 0,
         }
     }
 
@@ -87,7 +119,7 @@ impl Agent {
     }
 
     pub fn waiting(&self) -> bool {
-        matches!(self.state, State::Waiting)
+        matches!(self.state, State::Waiting | State::Compacting { .. })
     }
 
     /// The call waiting for the user's approval: (summary, reason, whether it may be allowed for
@@ -111,12 +143,17 @@ impl Agent {
 
     /// Forgets the conversation.
     pub fn clear(&mut self) {
+        self.summary_limit = compact::BUDGET;
+        self.summary_input_len = 0;
         self.turns.clear();
         self.transcript.clear();
         self.state = State::Idle;
         self.steps = 0;
         self.last_context.clear();
         self.always.clear();
+        self.retries = 0;
+        self.retrying_summary = None;
+        self.preview = None;
         self.generation += 1;
     }
 
@@ -131,11 +168,25 @@ impl Agent {
             return Step::Done;
         }
         self.transcript.push(Entry::User(text.to_string()));
-        let ctx = tools::context(s);
+        let text = compact::escape_user(text);
+        let ctx = compact::escape_user(&tools::context(s));
         let message = if ctx == self.last_context { text.to_string() } else { format!("<map>\n{ctx}\n</map>\n\n{text}") };
         self.last_context = ctx;
-        self.turns.push(Turn::User(message));
+        // After a compaction the summary waits in a user turn of its own, and after a failed
+        // request the unanswered message does: this one joins it (two user turns in a row are
+        // refused by some providers), after a blank line.
+        match self.turns.last_mut() {
+            Some(Turn::User(last)) => {
+                if compact::summary_len(last) != Some(last.len()) {
+                    last.push_str("\n\n");
+                }
+                last.push_str(&message);
+            }
+            _ => self.turns.push(Turn::User(message)),
+        }
         self.steps = 0;
+        self.retries = 0;
+        self.overflow_compacted = false;
         self.send()
     }
 
@@ -145,8 +196,113 @@ impl Agent {
             self.state = State::Idle;
             return Step::Done;
         }
+        // Past the budget: trim the finished part of the conversation, then summarise it.
+        if compact::size(&self.turns) > compact::BUDGET {
+            let upto = compact::boundary(&self.turns);
+            compact::trim(&mut self.turns, upto);
+            if compact::size(&self.turns) > compact::BUDGET {
+                if upto > 0 {
+                    return self.summarise(upto, true);
+                }
+                // Nothing finished to summarise (one long run): cut its long results instead.
+                compact::trim_results(&mut self.turns);
+            }
+        }
         self.state = State::Waiting;
+        self.preview = Some(provider::StreamPreview::new(self.config.api()));
         Step::Send(provider::chat_request(&self.config, &self.system, &self.turns, &tools::defs()))
+    }
+
+    /// Compacts the conversation now (the user's "Compact"): everything so far is summarised.
+    pub fn compact(&mut self) -> Step {
+        self.guard(|a| {
+            if a.busy() || a.turns.is_empty() {
+                return Step::Done;
+            }
+            a.retries = 0;
+            a.summarise(a.turns.len(), false)
+        })
+    }
+
+    /// Asks the model to summarise the turns before `upto` ([`compact`]).
+    fn summarise(&mut self, upto: usize, resume: bool) -> Step {
+        self.transcript.push(Entry::Note(Note::new("Summarising the earlier conversation to keep it within the model's context…")));
+        self.summarise_quietly(upto, resume)
+    }
+
+    /// [`Agent::summarise`] without the note (a retry already said it).
+    fn summarise_quietly(&mut self, upto: usize, resume: bool) -> Step {
+        self.state = State::Compacting { upto, resume };
+        self.preview = None;
+        let text = compact::as_text_with_limit(&self.turns, upto, self.summary_limit);
+        self.summary_input_len = text.len();
+        let text = Turn::User(text);
+        Step::Send(provider::chat_request(&self.config, compact::SUMMARY_PROMPT, &[text], &[]))
+    }
+
+    /// The summary came back (or didn't).
+    fn summarised(&mut self, upto: usize, resume: bool, parsed: Result<provider::Reply, crate::Error>) -> Step {
+        match parsed {
+            Ok(reply) if reply.cut.is_some() || reply.failure.is_some() => {
+                self.transcript.push(Entry::Error(
+                    reply.failure.unwrap_or_else(|| "The summary was cut short; the conversation wasn't compacted.".into()),
+                ));
+            }
+            Ok(reply) if !reply.text.trim().is_empty() => {
+                compact::apply(&mut self.turns, upto, &reply.text);
+                let context = std::mem::take(&mut self.last_context);
+                if resume
+                    && !context.is_empty()
+                    && let Some(Turn::User(text)) = self.turns.first_mut()
+                    && let Some(end) = compact::summary_len(text)
+                    && !text.get(end..).is_some_and(|t| t.starts_with("<map>\n"))
+                {
+                    text.insert_str(end, &format!("<map>\n{context}\n</map>\n\n"));
+                }
+                self.transcript.push(Entry::Note(Note::new("Compacted the earlier conversation.")));
+                if resume {
+                    return self.send();
+                }
+            }
+            Ok(_) => {
+                self.transcript.push(Entry::Error("The model sent an empty summary; the conversation wasn't compacted.".to_string().into()))
+            }
+            Err(e) if compact::overflowed(&e) => {
+                let sent = self.summary_input_len;
+                if sent > 1_024 {
+                    self.summary_limit = (sent / 2).max(1_024);
+                    return self.summarise_quietly(upto, resume);
+                }
+                self.transcript.push(Entry::Error(e));
+            }
+            Err(e) => self.transcript.push(Entry::Error(e)),
+        }
+        self.state = State::Idle;
+        Step::Done
+    }
+
+    /// The next piece of the reply to generation `generation`'s request, as it streams in; says
+    /// whether [`Agent::preview`] grew. The whole reply still goes to [`Agent::receive`].
+    pub fn stream(&mut self, generation: u64, chunk: &[u8]) -> bool {
+        generation == self.generation && self.waiting() && self.preview.as_mut().is_some_and(|p| p.feed(chunk))
+    }
+
+    /// The text of the reply arriving, while it streams.
+    pub fn preview(&self) -> Option<&str> {
+        self.preview.as_ref().map(provider::StreamPreview::text).filter(|t| !t.is_empty() && self.waiting())
+    }
+
+    /// Sends the request of generation `generation` again, once its [`Step::Retry`] wait is over.
+    pub fn retry(&mut self, generation: u64) -> Step {
+        self.guard(|a| {
+            if generation != a.generation || !matches!(a.state, State::Retrying) {
+                return Step::Done;
+            }
+            match a.retrying_summary.take() {
+                Some((upto, resume)) => a.summarise_quietly(upto, resume),
+                None => a.send(),
+            }
+        })
     }
 
     /// The response to the last [`Step::Send`] of generation `generation`.
@@ -163,8 +319,50 @@ impl Agent {
         if generation != self.generation || !self.waiting() {
             return Step::Done;
         }
-        let reply = match resp.and_then(|r| provider::parse_reply(self.config.api(), &r)) {
+        self.preview = None;
+        let parsed = resp.as_ref().map_err(Clone::clone).and_then(|r| provider::parse_reply(self.config.api(), r));
+        if self.retries < MAX_RETRIES
+            && let Some(after) = provider::retry_delay_for(&resp, &parsed, self.retries)
+        {
+            self.retries += 1;
+            // Rounded up, never more than the real wait's next whole second (0 for no wait).
+            let seconds = after.as_millis().div_ceil(1000).to_string();
+            self.transcript.push(Entry::Note(match &resp {
+                Ok(r) => Note::with(
+                    "The provider returned HTTP {status}; trying again in {seconds} s.",
+                    [("status", r.status.to_string()), ("seconds", seconds)],
+                ),
+                Err(_) => Note::with("The connection failed; trying again in {seconds} s.", [("seconds", seconds)]),
+            }));
+            if let State::Compacting { upto, resume } = self.state {
+                self.retrying_summary = Some((upto, resume));
+            }
+            self.state = State::Retrying;
+            return Step::Retry(after);
+        }
+        self.retries = 0;
+        if let State::Compacting { upto, resume } = self.state {
+            return self.summarised(upto, resume, parsed);
+        }
+        let reply = match parsed {
             Ok(r) => r,
+            // Too long for the model: compact the finished part of the conversation and go on, once.
+            Err(e) if compact::overflowed(&e) && !self.overflow_compacted => {
+                self.overflow_compacted = true;
+                let upto = compact::boundary(&self.turns);
+                // The run under way's results may be what's too long: cut them too.
+                let trimmed = compact::trim_results(&mut self.turns);
+                if upto > 0 {
+                    compact::trim(&mut self.turns, upto);
+                    return self.summarise(upto, true);
+                }
+                if trimmed {
+                    return self.send();
+                }
+                self.transcript.push(Entry::Error(e));
+                self.state = State::Idle;
+                return Step::Done;
+            }
             Err(e) => {
                 self.transcript.push(Entry::Error(e));
                 self.state = State::Idle;
@@ -178,7 +376,7 @@ impl Agent {
             self.transcript.push(Entry::Note(why.clone()));
         } else if reply.text.trim().is_empty() && reply.calls.is_empty() {
             // Small local models sometimes think and then say nothing.
-            self.transcript.push(Entry::Note("The model sent an empty reply; ask again, or try another model.".into()));
+            self.transcript.push(Entry::Note(Note::new("The model sent an empty reply; ask again, or try another model.")));
         }
         if let Some(error) = reply.failure {
             self.transcript.push(Entry::Error(error));
@@ -220,7 +418,10 @@ impl Agent {
         self.turns.push(Turn::Results(results));
         self.steps += 1;
         if self.steps >= MAX_STEPS {
-            self.transcript.push(Entry::Note(format!("Stopped after {MAX_STEPS} steps; say \"continue\" to go on.")));
+            self.transcript.push(Entry::Note(Note::with(
+                "Stopped after {steps} steps; say \"continue\" to go on.",
+                [("steps", MAX_STEPS.to_string())],
+            )));
             return Step::Done;
         }
         self.send()
@@ -275,7 +476,7 @@ impl Agent {
         if !self.busy() {
             return;
         }
-        self.halt(Entry::Note("Stopped.".into()), "Stopped by the user.", "Stopped by the user.");
+        self.halt(Entry::Note(Note::new("Stopped.")), "Stopped by the user.", "Stopped by the user.");
     }
 
     /// Runs one step of the conversation. A bug in RustGIS that panics while reading a reply or
@@ -298,7 +499,7 @@ impl Agent {
                     "RustGIS failed while running this call, so it may have partly taken effect. Check before running it again.",
                 );
                 if !detail.is_empty() {
-                    self.transcript.push(Entry::Note(tools::clip(&detail, 300)));
+                    self.transcript.push(Entry::Note(Note::text(tools::clip(&detail, 300))));
                 }
                 Step::Done
             }
@@ -309,13 +510,22 @@ impl Agent {
     /// queued get the result `queued`; a call that was running when the run ended (it has left the
     /// queue but has no result) gets `interrupted`.
     fn halt(&mut self, why: Entry, queued: &str, interrupted: &str) {
+        self.retrying_summary = None;
+        self.retries = 0;
+        self.preview = None;
         match std::mem::replace(&mut self.state, State::Idle) {
             // The unanswered message is dropped: two user turns in a row are refused by some
             // providers. The map context goes again with the next one. (Idle: `ask` failed
             // before the request went out.)
-            State::Idle | State::Waiting => {
-                if matches!(self.turns.last(), Some(Turn::User(_))) {
-                    self.turns.pop();
+            State::Idle | State::Waiting | State::Retrying | State::Compacting { .. } => {
+                // A summary at its start stays: only the message after it goes.
+                if let Some(Turn::User(last)) = self.turns.last_mut() {
+                    match compact::summary_len(last) {
+                        Some(n) => last.truncate(n),
+                        None => {
+                            self.turns.pop();
+                        }
+                    }
                     self.last_context.clear();
                 }
             }
@@ -427,14 +637,15 @@ impl std::fmt::Debug for Agent {
     }
 }
 
-/// Runs a conversation to its end with a blocking transport (the command line, tests).
-/// `confirm` answers approval prompts: (what, why, whether it is file or network access rather than
-/// an action reserved to the user).
-pub fn run_blocking(
+/// Runs a conversation to its end with a blocking transport (the command line, tests): native
+/// only, since it sleeps between retries. `confirm` answers approval prompts: (what, why, whether
+/// it is file or network access rather than an action reserved to the user).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_blocking<E: Into<crate::Error>>(
     agent: &mut Agent,
     text: &str,
     s: &mut Session,
-    mut send: impl FnMut(&HttpRequest) -> Result<HttpResponse, String>,
+    mut send: impl FnMut(&HttpRequest) -> Result<HttpResponse, E>,
     mut confirm: impl FnMut(&str, &str, bool) -> bool,
 ) {
     let mut step = agent.ask(text, s);
@@ -443,11 +654,15 @@ pub fn run_blocking(
             Step::Send(req) => {
                 let g = agent.generation();
                 let r = send(&req);
-                agent.receive(g, r, s)
+                agent.receive_result(g, r.map_err(Into::into), s)
             }
             Step::Confirm => {
                 let allow = agent.pending(s).is_some_and(|(what, why, access)| confirm(&what, &why, access));
                 agent.decide(allow, false, s)
+            }
+            Step::Retry(after) => {
+                std::thread::sleep(after);
+                agent.retry(agent.generation())
             }
             Step::Done => return,
         };

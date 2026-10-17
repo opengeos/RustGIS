@@ -56,6 +56,26 @@ fn plugin_strings_use_the_plugins_translations() {
 }
 
 #[test]
+fn start_up_project_strings_have_real_translations() {
+    let keys = [
+        "Last Project",
+        "Choose Project…",
+        "No project opened or saved yet",
+        "What RustGIS opens with: the World Atlas sample, a blank map, a project you choose, or the last project opened or saved.",
+        "RustGIS didn't close properly last time, so it started with the World Atlas instead of your start-up project. Open the project from the Project menu when you're ready.",
+        "The start-up project {path} isn't a RustGIS project file.",
+        "The start-up project {path} didn't open: {error}",
+    ];
+    for l in &LANGUAGES[1..] {
+        let (catalog, _) = parse(l.source);
+        for key in keys {
+            let translated = catalog.get(key).unwrap_or_else(|| panic!("{}: missing {key}", l.code));
+            assert_ne!(translated, key, "{}: untranslated {key}", l.code);
+        }
+    }
+}
+
+#[test]
 fn chatgpt_recovery_and_controls_have_real_translations() {
     use rustgis_assistant::{Error, Recovery};
     let mut keys = vec![
@@ -90,6 +110,36 @@ fn chatgpt_recovery_and_controls_have_real_translations() {
         for key in &keys {
             let translated = catalog.get(*key).unwrap_or_else(|| panic!("{}: missing {key}", l.code));
             assert_ne!(translated, key, "{}: untranslated {key}", l.code);
+        }
+    }
+}
+
+#[test]
+fn assistant_note_translations_are_real_when_available() {
+    for l in &LANGUAGES[1..] {
+        let (m, _) = parse(l.source);
+        for template in rustgis_assistant::provider::NOTE_TEMPLATES {
+            // AGENTS.md permits English fallback for new keys until the maintainer translates.
+            if let Some(tr) = m.get(*template) {
+                assert_ne!(tr, template, "{}: {template:?} isn't translated", l.code);
+            }
+        }
+    }
+}
+
+#[test]
+fn letting_agents_control_rustgis_is_in_every_catalog() {
+    let keys = [
+        "Let your Agents Control RustGIS",
+        "Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. Scripts and plugin management stay off.",
+        "Add this MCP server to your agent:",
+        "Or run, for Claude Code or Codex:",
+    ];
+    for l in &LANGUAGES[1..] {
+        let (m, _) = parse(l.source);
+        for key in keys {
+            let tr = m.get(key).unwrap_or_else(|| panic!("{}: missing {key:?}", l.code));
+            assert_ne!(tr, key, "{}: {key:?} isn't translated", l.code);
         }
     }
 }

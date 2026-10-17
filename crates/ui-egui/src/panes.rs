@@ -75,6 +75,7 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
         RightPane::Shares => ("Shared Items", "ui.pane.shares"),
         RightPane::Sql => ("SQL", "ui.pane.sql"),
         RightPane::Directions => ("Directions", "ui.pane.directions"),
+        RightPane::Bookmarks => ("Bookmarks", "ui.pane.bookmarks"),
     };
     pane_header(app, ui, tl!(title), close, t);
     // The chat lays out its own scrolling, with the message box kept at the bottom.
@@ -108,6 +109,7 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
             RightPane::Assistant | RightPane::Sql => {}
             RightPane::Shares => crate::docpanes::shares(app, ui, t),
             RightPane::Directions => crate::navui::show(app, ui, t),
+            RightPane::Bookmarks => crate::bookmarkpane::show(app, ui, t),
         });
     });
 }
@@ -898,9 +900,18 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
     let mut x = r.min.x + 10.0;
     // Expand arrow.
     let raster_legend = l.raster.as_ref().map(|r| r.legend());
+    // What the layer draws at this scale, as the layout legend lists it (#207); out of its scale
+    // range, what its definition query keeps, so the pane still shows its symbology.
+    let vector_legend = match &raster_legend {
+        Some(_) => Vec::new(),
+        None => l
+            .shown_legend(scale)
+            .or_else(|| (!l.in_scale_range(scale)).then(|| l.renderer.legend_for(&l.dataset, &l.visible_rows())))
+            .unwrap_or_default(),
+    };
     let has_legend = match &raster_legend {
         Some(rl) => !rl.is_empty(),
-        None => !l.renderer.legend().is_empty(),
+        None => !vector_legend.is_empty(),
     };
     let ar = Rect::from_center_size(pos2(x + 6.0, r.center().y), vec2(14.0, 14.0));
     if has_legend {
@@ -917,7 +928,8 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
     let pr = Rect::from_center_size(pos2(x + 9.0, r.center().y), vec2(18.0, 16.0));
     if l.is_raster() {
         icons::paint(ui.painter(), pr, "raster_layer", t.icon, t.accent);
-    } else if has_legend {
+    } else if has_legend || matches!(l.renderer, Renderer::Unique { .. }) {
+        // A Unique Values layer listing nothing shows its type, not a class it doesn't draw.
         let icon = match l.geometry_type() {
             GeometryType::Point => "point_layer",
             GeometryType::Polyline => "line_layer",
@@ -1023,7 +1035,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
             ui.add_space(74.0);
             ui.label(egui::RichText::new(field).size(11.0).color(t.text_dim));
         });
-        for e in l.renderer.legend().iter().take(40) {
+        for e in vector_legend.iter().take(40) {
             let (r, response) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
             response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &e.label));
             let pr = Rect::from_center_size(pos2(r.min.x + 84.0, r.center().y), vec2(18.0, 14.0));
@@ -1755,7 +1767,7 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui,
         |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(tl!("GeoLibre tools")).font(semibold(13.0)));
+            ui.label(egui::RichText::new(tl!("Whitebox and GeoLibre tools")).font(semibold(13.0)));
             ui.label(
                 egui::RichText::new(tl!(
                     "Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB."
@@ -1776,7 +1788,7 @@ fn geolibre_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
                 None => {
                     #[cfg(not(target_arch = "wasm32"))]
-                    if crate::widgets::primary_button(ui, tl!("Install GeoLibre tools"), true, vec2(0.0, 28.0)).clicked() {
+                    if crate::widgets::primary_button(ui, tl!("Install Whitebox and GeoLibre tools"), true, vec2(0.0, 28.0)).clicked() {
                         let st = std::sync::Arc::new(std::sync::Mutex::new(Install::default()));
                         app.gp.install = Some(st.clone());
                         app.gp.last = None;
@@ -1883,7 +1895,7 @@ fn geolibre_web_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         .inner_margin(egui::Margin::same(10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(tl!("GeoLibre tools")).font(semibold(13.0)));
+            ui.label(egui::RichText::new(tl!("Whitebox and GeoLibre tools")).font(semibold(13.0)));
             ui.label(
                 egui::RichText::new(tl!(
                     "Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB."
@@ -1897,7 +1909,7 @@ fn geolibre_web_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     ui.spinner();
                     ui.label(egui::RichText::new(tl!("Loading the GeoLibre tools…")).size(11.5));
                 });
-            } else if crate::widgets::primary_button(ui, tl!("Load GeoLibre tools"), true, vec2(0.0, 28.0)).clicked() {
+            } else if crate::widgets::primary_button(ui, tl!("Load Whitebox and GeoLibre tools"), true, vec2(0.0, 28.0)).clicked() {
                 app.gp.last = None;
                 start_geolibre_load(app);
             }
@@ -2730,11 +2742,19 @@ fn legend_list(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 };
                 ui.horizontal(|ui| {
                     // A polygon class keeps its own transparency when recoloured (`with_fill`), so
-                    // its button shows the colour solid rather than over a checkerboard.
-                    let shown = if l.geometry_type() == GeometryType::Polygon { e.symbol.fill.with_alpha(255) } else { e.symbol.fill };
-                    let mut c = c32(shown);
-                    if ui.color_edit_button_srgba(&mut c).on_hover_text(tl!("Class color")).changed() {
-                        let params = with("color", json!(rgba(c).hex()));
+                    // its picker is colour only: no alpha, no blending, and a solid button. Points
+                    // and lines take the colour's alpha, so theirs has it.
+                    let picked = if l.geometry_type() == GeometryType::Polygon {
+                        let f = e.symbol.fill;
+                        let mut rgb = [f.r(), f.g(), f.b()];
+                        let r = ui.color_edit_button_srgb(&mut rgb).on_hover_text(tl!("Class color"));
+                        r.changed().then(|| rustgis_engine::map::Rgba::rgb(rgb[0], rgb[1], rgb[2]))
+                    } else {
+                        let mut c = c32(e.symbol.fill);
+                        crate::widgets::color_button(ui, &mut c).on_hover_text(tl!("Class color")).changed().then(|| rgba(c))
+                    };
+                    if let Some(color) = picked {
+                        let params = with("color", json!(color.hex()));
                         let key = egui::Id::new(CLASS_COLOR_DRAG);
                         let mut dragging = ui.data(|d| d.get_temp::<ClassColorDrag>(key));
                         // One left pending on another layer (the pane switched layers mid-drag) is
@@ -2749,11 +2769,8 @@ fn legend_list(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                             let before = dragging.map_or_else(|| l.renderer.clone(), |d| d.before);
                             if let Some(layer) = app.session.map_mut().layer_mut(l.id) {
                                 let g = layer.geometry_type();
-                                let _ = layer.renderer.set_class_style(
-                                    class_ref,
-                                    &ClassStyle { color: Some(rgba(c)), ..Default::default() },
-                                    g,
-                                );
+                                let _ =
+                                    layer.renderer.set_class_style(class_ref, &ClassStyle { color: Some(color), ..Default::default() }, g);
                             }
                             app.session.revision = app.session.revision.wrapping_add(1);
                             ui.data_mut(|d| d.insert_temp(key, ClassColorDrag { layer: l.id, params, before }));
@@ -2816,14 +2833,14 @@ fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, g: GeometryType, 
             if g != GeometryType::Polyline {
                 ui.label(tl!("Color"));
                 let mut c = c32(s.fill);
-                if ui.color_edit_button_srgba(&mut c).changed() {
-                    let _ = app.run("layer.color", json!({"color": rgba(c).hex()}));
+                if crate::widgets::color_button(ui, &mut c).changed() {
+                    let _ = app.run("layer.color", json!({"color": rgba(c).hex8()}));
                 }
                 ui.end_row();
             }
             ui.label(tl!(if g == GeometryType::Polyline { "Line color" } else { "Outline color" }));
             let mut c = c32(s.stroke);
-            if ui.color_edit_button_srgba(&mut c).changed() {
+            if crate::widgets::color_button(ui, &mut c).changed() {
                 let key = if g == GeometryType::Polyline { "layer.color" } else { "layer.outline" };
                 let _ = app.run(key, json!({"color": rgba(c).hex()}));
             }

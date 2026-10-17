@@ -338,6 +338,7 @@ Choose File…	Scegli file…
 Choose how the flat map lays out the Earth.	Scegli come la mappa piana rappresenta la Terra.
 Choose how the layer is drawn.	Scegli come viene disegnato il layer.
 Choose how the raster is drawn.	Scegli come viene disegnato il raster.
+Choose Project…	Scegli progetto…
 Choose the interface language.	Scegli la lingua dell'interfaccia.
 Choose which layers a click identifies.	Scegli quali layer identifica un clic.
 Choose which tabs the ribbon shows.	Scegli quali schede mostra la barra multifunzione.
@@ -1034,6 +1035,7 @@ Language	Lingua
 Lasso	Lazo
 Lasso (draw)	Lazo (disegno)
 Last map render time	Ultimo tempo di rendering della mappa
+Last Project	Ultimo progetto
 Latitude	Latitudine
 Latitude (Y)	Latitudine (Y)
 Layer	Layer
@@ -1272,6 +1274,7 @@ No plugins match.	Nessun plugin corrispondente.
 No Pop-ups	Nessun popup
 No presentations yet. Publish › New Presentation starts one.	Ancora nessuna presentazione. Pubblica › Nuova presentazione ne avvia una.
 No products	Nessun prodotto
+No project opened or saved yet	Nessun progetto ancora aperto o salvato
 No relationships (Data Design › Relationships)	Nessuna relazione (Progettazione dati › Relazioni)
 No relationships yet	Ancora nessuna relazione
 No reports yet. Publish › New Report lists the selected layer's records.	Ancora nessun report. Pubblica › Nuovo report elenca i record del layer selezionato.
@@ -1654,6 +1657,7 @@ Running…	In esecuzione…
 RustGIS	RustGIS
 RustGIS bookmarks	Segnalibri RustGIS
 RustGIS deep learning package	Pacchetto di deep learning RustGIS
+RustGIS didn't close properly last time, so it started with the World Atlas instead of your start-up project. Open the project from the Project menu when you're ready.	L'ultima volta RustGIS non si è chiuso correttamente, quindi si è avviato con World Atlas invece del tuo progetto di avvio. Apri il progetto dal menu Progetto quando vuoi.
 RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, and every action is a command you can also run from the command line.	RustGIS è un GIS libero e open source scritto in Rust puro. Funziona sul desktop e nel browser, e ogni azione è un comando che puoi eseguire anche dalla riga di comando.
 RustGIS layer file	File di layer RustGIS
 RustGIS layers, maps and projects	Layer, mappe e progetti RustGIS
@@ -2036,7 +2040,6 @@ The map is drawn in this coordinate system; layers are projected on the fly.	La 
 The map view as it is now	La vista della mappa così com'è ora
 The map's view takes {n} of Overture's {ty} files (up to {max}): zoom in, or add the theme as map tiles	La vista della mappa comprende {n} file {ty} di Overture (fino a {max}): ingrandisci o aggiungi il tema come tile di mappa
 The model answering; click to change it	Il modello che risponde; fai clic per cambiarlo
-the model declined this request	il modello ha rifiutato questa richiesta
 The model sent an empty reply; ask again, or try another model.	Il modello ha inviato una risposta vuota; chiedi di nuovo o prova un altro modello.
 the page is too large to draw	la pagina è troppo grande per essere disegnata
 the picture is too large to show	l'immagine è troppo grande da mostrare
@@ -2058,6 +2061,8 @@ The saved sign-in changed. Select your account again.	L’accesso salvato è cam
 The Shapefile's files download as one zip.	I file dello Shapefile vengono scaricati in un unico zip.
 The sign-in expired or was revoked. Sign in again.	L’accesso è scaduto o è stato revocato. Accedi di nuovo.
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	L'accesso è conservato nella cartella delle impostazioni dell'app, solo per il tuo account utente, e mai in un file di progetto.
+The start-up project {path} didn't open: {error}	Il progetto di avvio {path} non si è aperto: {error}
+The start-up project {path} isn't a RustGIS project file.	Il progetto di avvio {path} non è un file di progetto RustGIS.
 The store has no variables with two or more dimensions.	L'archivio non ha variabili con due o più dimensioni.
 the store is gone	l'archivio non esiste più
 the view has no extent	la vista non ha un'estensione
@@ -2204,6 +2209,7 @@ WFS	WFS
 WGS 84 / Globe	WGS 84 / Globo
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 What RustGIS opens with: the World Atlas sample or a blank map.	Con cosa si apre RustGIS: l'esempio World Atlas o una mappa vuota.
+What RustGIS opens with: the World Atlas sample, a blank map, a project you choose, or the last project opened or saved.	Con cosa si apre RustGIS: l'esempio World Atlas, una mappa vuota, un progetto che scegli tu o l'ultimo progetto aperto o salvato.
 What's near a point	Cosa c'è vicino a un punto
 WHERE	WHERE
 Where	Dove
@@ -2304,6 +2310,22 @@ Zoom To World	Zoom al mondo
 © OpenStreetMap contributors	© contributori di OpenStreetMap
 — fps	— fps
 ⌘K	⌘K
+Let your Agents Control RustGIS	Lascia che i tuoi agenti controllino RustGIS
+Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. Scripts and plugin management stay off.	Gli agenti di questo computer che si collegano (Claude Code, Codex, Cursor e altri) lavorano sulla mappa aperta qui con gli strumenti di RustGIS: possono aprire e salvare file e usare il web. Gli script e la gestione dei plugin restano disattivati.
+Add this MCP server to your agent:	Aggiungi questo server MCP al tuo agente:
+Or run, for Claude Code or Codex:	Oppure esegui, per Claude Code o Codex:
+Compact	Compatta
+Summarise the conversation so far, so a long chat stays within the model's context	Riassumi la conversazione fin qui, così una chat lunga resta nel contesto del modello
+The reply reached its length limit.	La risposta ha raggiunto il limite di lunghezza.
+The provider's content filter stopped the reply.	Il filtro dei contenuti del provider ha interrotto la risposta.
+The reply stopped early ({reason}).	La risposta si è interrotta in anticipo ({reason}).
+The model declined this request.	Il modello ha rifiutato questa richiesta.
+The model declined this request: {why}	Il modello ha rifiutato questa richiesta: {why}
+Gemini stopped the reply ({reason}).	Gemini ha interrotto la risposta ({reason}).
+Summarising the earlier conversation to keep it within the model's context…	Riassunto della conversazione precedente per restare nel contesto del modello…
+Compacted the earlier conversation.	La conversazione precedente è stata compattata.
+The connection failed; trying again in {seconds} s.	La connessione non è riuscita; nuovo tentativo tra {seconds} s.
+Stopped after {steps} steps; say "continue" to go on.	Fermato dopo {steps} passaggi; scrivi "continua" per proseguire.
 The service's answer isn't UTF-8 text	La risposta del servizio non è testo UTF-8
 Import All	Importa tutto
 Import Service	Importa servizio
