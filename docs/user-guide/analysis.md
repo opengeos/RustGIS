@@ -27,7 +27,10 @@ gdp_md IS NULL
 
 Open a tool from the **Analyze** tab's gallery, **Analyze › Tools** (the Tools pane,
 which searches every tool) or Command Search. Fill in its parameters and click **Run**: the
-result is added to the map, and the run is listed under **Analyze › History**. The built-in tools:
+result is added to the map, and the run is listed under **Analyze › History**. From the command
+line or a script (`gp.run`), a parameter with a list of choices, such as Buffer's units, takes one
+of them in any letter case (`"meters"` for `Meters`); any other value is an error that names the
+choices. The built-in tools:
 
 | Tool | Toolbox |
 | --- | --- |

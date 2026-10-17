@@ -280,8 +280,30 @@ pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> 
         if ps.required && p.get(ps.name).is_none_or(|v| v.is_null() || v.as_str() == Some("")) {
             return Err(format!("{}: '{}' is required", spec.name, ps.label));
         }
+        if let ParamKind::Choice(choices) = ps.kind
+            && let Some(v) = p.get_mut(ps.name)
+        {
+            *v = choice(spec, ps, choices, v)?;
+        }
     }
     Ok(Value::Object(p))
+}
+
+/// A choice parameter's value as one of its choices, spelled as declared (`"meters"` is
+/// `"Meters"`). Any other value is an error naming the choices: a tool never guesses what an
+/// unknown one meant (#406). An empty value is left as it is (the tool's default).
+fn choice(spec: &ToolSpec, ps: &ParamSpec, choices: &[&str], v: &Value) -> Result<Value, String> {
+    let given = match v {
+        Value::Null => return Ok(Value::Null),
+        Value::String(s) if s.trim().is_empty() => return Ok(v.clone()),
+        Value::String(s) => s.trim().to_string(),
+        Value::Number(_) | Value::Bool(_) => v.to_string(),
+        _ => String::new(),
+    };
+    match choices.iter().find(|c| c.eq_ignore_ascii_case(&given)) {
+        Some(c) => Ok(Value::String((*c).to_string())),
+        None => Err(format!("{}: '{}' must be one of {} (not {v})", spec.name, ps.label, choices.join(", "))),
+    }
 }
 
 /// Runs a tool with JSON parameters, filling defaults and checking required ones.
