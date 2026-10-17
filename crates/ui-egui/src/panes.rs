@@ -3475,18 +3475,26 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 });
             }
             Stretch::Custom { min, max } => {
+                // Edits are kept here until both bounds are valid, so the layer's values don't snap back.
+                let key = ui.id().with(("custom_stretch", l.id));
+                let (mut lo, mut hi) = ui.data(|d| d.get_temp::<(f64, f64)>(key)).unwrap_or((min, max));
+                let speed = ((max - min).abs() / 200.0).clamp(1e-6, 1e6);
                 ui.horizontal(|ui| {
-                    let (mut lo, mut hi) = (min, max);
                     ui.label(tl!("Min"));
-                    let a = ui.add(egui::DragValue::new(&mut lo).speed(0.1).max_decimals(4));
+                    let a = ui.add(egui::DragValue::new(&mut lo).speed(speed));
                     ui.label(tl!("Max"));
-                    let b = ui.add(egui::DragValue::new(&mut hi).speed(0.1).max_decimals(4));
-                    if lo >= hi {
-                        ui.label(egui::RichText::new(tl!("Min must be less than Max")).size(11.5).color(t.red));
-                    } else if a.drag_stopped() || b.drag_stopped() || ((a.changed() || b.changed()) && !a.dragged() && !b.dragged()) {
+                    let b = ui.add(egui::DragValue::new(&mut hi).speed(speed));
+                    let done = a.drag_stopped() || b.drag_stopped() || ((a.changed() || b.changed()) && !a.dragged() && !b.dragged());
+                    if lo < hi && done {
+                        ui.data_mut(|d| d.remove::<(f64, f64)>(key));
                         let _ = app.run("raster.stretch", json!({"type": "custom", "min": lo, "max": hi}));
+                    } else if a.changed() || b.changed() {
+                        ui.data_mut(|d| d.insert_temp(key, (lo, hi)));
                     }
                 });
+                if lo >= hi {
+                    ui.label(egui::RichText::new(tl!("Min must be less than Max")).size(11.5).color(t.red));
+                }
             }
             Stretch::StandardDeviation { n } => {
                 ui.horizontal(|ui| {

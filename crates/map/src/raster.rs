@@ -184,15 +184,13 @@ impl Stretch {
         n: Option<f64>,
         min: Option<f64>,
         max: Option<f64>,
-        stats: &BandStats,
+        stats: Option<&BandStats>,
     ) -> Option<Stretch> {
         let pct = |v: Option<f64>| v.unwrap_or(0.5).clamp(0.0, 49.0);
         Some(match code.trim().to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
             "none" => Stretch::None,
             "minmax" | "minimummaximum" => Stretch::MinMax,
-            "custom" | "custommin/max" | "custommax" | "customminmax" => {
-                Stretch::Custom { min: min.unwrap_or(stats.min), max: max.unwrap_or(stats.max) }
-            }
+            "custom" | "custommin/max" => Stretch::Custom { min: min.or(stats.map(|s| s.min))?, max: max.or(stats.map(|s| s.max))? },
             "percentclip" => Stretch::PercentClip { low: pct(low), high: pct(high) },
             "standarddeviation" | "stddev" => Stretch::StandardDeviation { n: n.unwrap_or(2.0).clamp(0.1, 10.0) },
             "histogramequalize" | "histogramequalization" => Stretch::HistogramEqualize,
@@ -690,11 +688,17 @@ mod tests {
         let r = dem();
         let st = &r.bands[0].stats;
         for code in ["none", "minMax", "percentClip", "standardDeviation", "histogramEqualize"] {
-            let n = Normalizer::new(Stretch::from_code(code, None, None, None, None, None, st).unwrap(), st, "Float32");
+            let n = Normalizer::new(Stretch::from_code(code, None, None, None, None, None, Some(st)).unwrap(), st, "Float32");
             assert!(n.t(-1e9) <= n.t(3.0) && n.t(3.0) <= n.t(1e9), "{code}");
             assert!((0.0..=1.0).contains(&n.t(f64::NAN).max(0.0)));
         }
-        assert_eq!(Stretch::from_code("bogus", None, None, None, None, None, st), None);
+        // Bounds read from a hand-edited project can be reversed, equal or not numbers.
+        for (min, max) in [(5.0, 1.0), (2.0, 2.0), (f64::NAN, 1.0), (0.0, f64::INFINITY)] {
+            let n = Normalizer::new(Stretch::Custom { min, max }, st, "Float32");
+            assert!((0.0..=1.0).contains(&n.t(3.0)) && (0.0..=1.0).contains(&n.t(f64::NAN).max(0.0)), "{min} {max}");
+        }
+        assert_eq!(Stretch::from_code("custom", None, None, None, None, None, None), None);
+        assert_eq!(Stretch::from_code("bogus", None, None, None, None, None, Some(st)), None);
         let flat = enhancement_lut(0.0, 0.0, 1.0);
         assert!(flat.iter().enumerate().all(|(i, v)| (*v as i32 - i as i32).abs() <= 1));
         let bright = enhancement_lut(50.0, 0.0, 1.0);

@@ -6760,6 +6760,9 @@ fn raster_stretch_custom_bounds() {
     assert!(s.run("raster.stretch", &json!({"type": "custom", "min": 5, "max": 5})).is_err());
     assert!(s.run("raster.stretch", &json!({"type": "custom", "min": 9, "max": 1})).is_err());
     assert!(s.run("raster.stretch", &json!({"type": "custom", "min": 1e308})).is_err());
+    // A bound that was given but isn't a number is refused, not replaced by the layer's own.
+    assert!(s.run("raster.stretch", &json!({"type": "custom", "min": "NaN", "max": 100})).is_err());
+    assert!(s.run("raster.stretch", &json!({"type": "custom", "min": "abc"})).is_err());
     assert_eq!(stretch(&s), before);
     // Projects saved before the custom stretch still load.
     assert_eq!(serde_json::from_str::<Stretch>("\"MinMax\"").unwrap(), Stretch::MinMax);

@@ -35,18 +35,27 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("raster.stretch", "Stretch Type", "Style › Rendering", |s, p| {
             let code = ps(p, "type").ok_or("type is required")?;
+            // A bound that was given but isn't a finite number is refused, not replaced by the layer's own.
+            let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+            for k in ["min", "max"] {
+                if given(k) && f(p, k).is_none() {
+                    return Err(format!("{k} must be a finite number"));
+                }
+            }
             let (min, max) = (f(p, "min"), f(p, "max"));
             with(s, p, |rl, r| {
-                let stats = r.bands.first().map(|b| &b.stats).ok_or("the raster has no bands")?;
+                // Only a custom stretch reads the statistics: those of the band being drawn.
+                let band = rl.style.renderer.bands().first().copied().unwrap_or(0);
+                let stats = r.bands.get(band).map(|b| &b.stats);
+                if code.trim().eq_ignore_ascii_case("custom") && stats.is_none() {
+                    return Err("the raster has no bands".into());
+                }
                 let st = Stretch::from_code(code, f(p, "low"), f(p, "high"), f(p, "n"), min, max, stats)
                     .ok_or_else(|| format!("unknown stretch '{code}'"))?;
-                if let Stretch::Custom { min, max } = st {
-                    if !min.is_finite() || !max.is_finite() {
-                        return Err("min and max must be finite numbers".into());
-                    }
-                    if min >= max {
-                        return Err(format!("min {min} must be less than max {max}"));
-                    }
+                if let Stretch::Custom { min, max } = st
+                    && min >= max
+                {
+                    return Err(format!("min {min} must be less than max {max}"));
                 }
                 rl.style.stretch = st;
                 Ok(())
