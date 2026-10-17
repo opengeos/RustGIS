@@ -270,6 +270,8 @@ pub fn external_placeholder(_: &dyn Inputs, _: &Value) -> Result<ToolResult, Str
 /// asynchronous runner) does it too, so both check parameters the same way.
 pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> {
     let mut p = params.as_object().cloned().unwrap_or_default();
+    // Not an external suite's tool (a copy of a built-in spec counts as built-in).
+    let built_in = source_of(spec).is_none();
     for ps in spec.params {
         if !p.contains_key(ps.name)
             && !ps.default.is_empty()
@@ -284,7 +286,7 @@ pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> 
         // plugin's) can be looser, such as GeoLibre's comma-separated lists of options: its own
         // runner checks them.
         if let ParamKind::Choice(choices) = ps.kind
-            && TOOLS.iter().any(|t| std::ptr::eq(t, spec))
+            && built_in
             && let Some(v) = p.get_mut(ps.name)
         {
             *v = choice(spec, ps, choices, v)?;

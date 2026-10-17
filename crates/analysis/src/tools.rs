@@ -855,23 +855,34 @@ mod tests {
         assert!(buffer(serde_json::Value::Null).is_ok(), "no units: the default");
         assert_eq!(layer(buffer(serde_json::json!("  ")).unwrap()).name, "p_Buffer", "blank units: the default");
         // An external tool's choices (GeoLibre's, a plugin's) aren't checked here: its runner does.
-        static EXTERNAL: ToolSpec = ToolSpec {
-            id: "external:test",
-            name: "External Test",
-            toolbox: "Test",
-            summary: "",
-            params: &[P {
-                name: "features",
-                label: "Features",
-                kind: K::Choice(&["contrast", "energy"]),
-                required: false,
-                default: "",
-                help: "",
-            }],
-            run: |_, _| Err("not run".into()),
-        };
-        let list = crate::resolve_params(&EXTERNAL, &serde_json::json!({"features": "contrast,energy"})).unwrap();
+        crate::register_external(
+            "choicetest",
+            || {
+                vec![ToolSpec {
+                    id: "choicetest:list",
+                    name: "Choice Test",
+                    toolbox: "Test",
+                    summary: "",
+                    params: &[P {
+                        name: "features",
+                        label: "Features",
+                        kind: K::Choice(&["contrast", "energy"]),
+                        required: false,
+                        default: "",
+                        help: "",
+                    }],
+                    run: crate::external_placeholder,
+                }]
+            },
+            |_, _, _| Err("not run".into()),
+        );
+        let external = crate::external_tools_of("choicetest").first().unwrap();
+        let list = crate::resolve_params(external, &serde_json::json!({"features": "contrast,energy"})).unwrap();
         assert_eq!(list["features"], "contrast,energy");
+        // A copy of a built-in spec is still checked.
+        let b = crate::tool("buffer").unwrap();
+        let copy = ToolSpec { id: b.id, name: b.name, toolbox: b.toolbox, summary: b.summary, params: b.params, run: b.run };
+        assert!(crate::resolve_params(&copy, &serde_json::json!({"input": "p", "distance": 1, "units": "meter"})).is_err());
         assert!(crate::run("buffer", &m, &serde_json::json!({"input": "p", "distance": 1, "dissolve": "everything"})).is_err());
         // Every built-in choice defaults to one of its own choices.
         for t in TOOLS {

@@ -30,7 +30,8 @@ which searches every tool) or Command Search. Fill in its parameters and click *
 result is added to the map, and the run is listed under **Analyze › History**. From the command
 line or a script (`gp.run`), a built-in tool's parameter with a list of choices, such as Buffer's
 units, takes one of them in any letter case (`"meters"` for `Meters`); any other value is an error
-that names the choices. The built-in tools:
+that names the choices (Buffer's units no longer take the abbreviations `m`, `mi` or `metres`).
+The built-in tools:
 
 | Tool | Toolbox |
 | --- | --- |
