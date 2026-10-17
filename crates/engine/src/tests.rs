@@ -6775,6 +6775,23 @@ fn raster_stretch_custom_bounds() {
     }
     flat.run("raster.stretch", &json!({"type": "custom"})).unwrap();
     assert_eq!(stretch(&flat), Stretch::Custom { min: 6.5, max: 7.5 });
+    // The padding follows the value's size, and statistics that aren't numbers are refused.
+    let set_stats = |s: &mut Session, v: f64| {
+        let rl = s.map_mut().layers.last_mut().and_then(|l| l.raster.as_mut()).unwrap();
+        let mut d = (**rl.data.as_ref().unwrap()).clone();
+        d.bands[0].stats.min = v;
+        d.bands[0].stats.max = v;
+        rl.data = Some(std::sync::Arc::new(d));
+    };
+    set_stats(&mut flat, 9007199254740992.0);
+    flat.run("raster.stretch", &json!({"type": "custom"})).unwrap();
+    assert!(matches!(stretch(&flat), Stretch::Custom { min, max } if min < 9007199254740992.0 && max > 9007199254740992.0));
+    let before = stretch(&flat);
+    for v in [f64::NAN, f64::INFINITY] {
+        set_stats(&mut flat, v);
+        assert!(flat.run("raster.stretch", &json!({"type": "custom"})).is_err(), "{v}");
+    }
+    assert_eq!(stretch(&flat), before);
     // Projects saved before the custom stretch still load.
     assert_eq!(serde_json::from_str::<Stretch>("\"MinMax\"").unwrap(), Stretch::MinMax);
 }

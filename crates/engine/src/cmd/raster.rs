@@ -58,12 +58,15 @@ pub fn commands() -> Vec<C> {
                     && max.is_none()
                     && lo >= hi
                 {
-                    st = Stretch::Custom { min: lo - 0.5, max: hi + 0.5 };
+                    // Padded by the value's magnitude too, or a large value would absorb ±0.5.
+                    let pad = (lo.abs() * 1e-6).max(0.5);
+                    st = Stretch::Custom { min: lo - pad, max: hi + pad };
                 }
+                // Statistics can be NaN or infinite (a band of nodata), which `min >= max` alone misses.
                 if let Stretch::Custom { min, max } = st
-                    && min >= max
+                    && !(min.is_finite() && max.is_finite() && min < max)
                 {
-                    return Err(format!("min {min} must be less than max {max}"));
+                    return Err(format!("min {min} must be a finite number less than max {max}"));
                 }
                 rl.style.stretch = st;
                 Ok(())
