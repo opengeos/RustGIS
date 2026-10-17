@@ -162,7 +162,7 @@ fn take(slot: &Answer) -> Option<Result<Vec<u8>, String>> {
 }
 
 /// Reads the pane's preferences once.
-fn load(app: &mut RustGisApp) {
+pub fn load(app: &mut RustGisApp) {
     if app.ui.nav.loaded {
         return;
     }

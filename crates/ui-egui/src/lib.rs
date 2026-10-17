@@ -26,6 +26,7 @@ mod globe_drape;
 pub mod icons;
 mod layoutview;
 mod mapgpu;
+mod mapmenu;
 mod mapview;
 mod navui;
 mod opendataui;

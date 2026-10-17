@@ -10,6 +10,9 @@ use crate::{CmdResult, CommandSpec as C, GpRecord, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("gp.run", "Run Tool", "Analyze › Geoprocessing", run).when(need_layers).params(r#"{"tool": tool id, "params": {...} (a layer by name; a standalone table by name or id)}"#),
+        C::new("gp.bufferPoint", "Buffer A Point", "Analyze › Geoprocessing", buffer_point).params(
+            r#"{"lon": number, "lat": number, "distance": number, "units"?: "Kilometers" (default) | "Meters" | "Miles", "name"?: output}"#,
+        ),
         C::new("gp.tools", "Tools", "Analyze › Geoprocessing", |_, _| {
             Ok(Value::Array(
                 rustgis_analysis::tools()
@@ -575,6 +578,42 @@ fn run(s: &mut Session, p: &Value) -> CmdResult {
 /// The id of a tool named by its id or its display name (history records keep the name).
 pub fn tool_id(name: &str) -> Option<&'static str> {
     rustgis_analysis::tool(name).or_else(|| rustgis_analysis::tools().find(|t| t.name.eq_ignore_ascii_case(name))).map(|t| t.id)
+}
+
+/// One point, for a tool run on a place clicked on the map.
+struct PointInput(Dataset);
+
+impl Inputs for PointInput {
+    fn dataset(&self, layer: &str) -> Option<&Dataset> {
+        (layer == self.0.name).then_some(&self.0)
+    }
+    fn selection(&self, _layer: &str) -> &[usize] {
+        &[]
+    }
+}
+
+/// Buffers a point (the map's right-click Quick Analysis): the Buffer tool on a one-point input
+/// that isn't added to the map; the buffer is.
+fn buffer_point(s: &mut Session, p: &Value) -> CmdResult {
+    use rustgis_data::{Geometry, GeometryType};
+    let lon = super::f(p, "lon").ok_or("lon is required")?;
+    let lat = super::f(p, "lat").ok_or("lat is required")?;
+    if !(-180.0..=180.0).contains(&lon) || !(-90.0..=90.0).contains(&lat) {
+        return Err("longitude must be within ±180 and latitude within ±90".into());
+    }
+    let mut ds = Dataset::new("Clicked point", GeometryType::Point, Vec::new());
+    ds.push_next(Some(Geometry::Point(rustgis_geom::Coord::new(lon, lat))), Vec::new());
+    let mut params = json!({"input": ds.name, "distance": p.get("distance").cloned().unwrap_or(Value::Null)});
+    if let Some(u) = p.get("units") {
+        params["units"] = u.clone();
+    }
+    if let Some(n) = p.get("name") {
+        params["output"] = n.clone();
+    }
+    let t0 = now_ms();
+    let res = rustgis_analysis::run("buffer", &PointInput(ds), &params);
+    let millis = now_ms().saturating_sub(t0);
+    apply(s, "Buffer".into(), params, res, millis)
 }
 
 /// Runs a (built-in) tool and applies its result, as `gp.run` does.

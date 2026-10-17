@@ -1059,42 +1059,10 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     if resp.secondary_clicked() {
         app.map.menu_lonlat = app.map.pointer_lonlat;
     }
-    resp.context_menu(|ui| {
-        let c = app.map.menu_lonlat;
-        if ui.button(tl!("Zoom In")).clicked() {
-            let _ = app.run("map.zoomIn", Value::Null);
-            ui.close();
-        }
-        if ui.button(tl!("Zoom Out")).clicked() {
-            let _ = app.run("map.zoomOut", Value::Null);
-            ui.close();
-        }
-        if ui.button(tl!("Full Extent")).clicked() {
-            let _ = app.run("map.zoomFull", Value::Null);
-            ui.close();
-        }
-        ui.separator();
-        if let Some(c) = c {
-            if ui.button(tl!("Directions From Here")).clicked() {
-                crate::navui::seed(app, Some(0), c);
-                ui.close();
-            }
-            if ui.button(tl!("Directions To Here")).clicked() {
-                crate::navui::seed(app, None, c);
-                ui.close();
-            }
-        }
-        if let Some(c) = c
-            && ui.button(tl!("Copy Coordinates")).clicked()
-        {
-            ui.ctx().copy_text(format!("{:.6}, {:.6}", c.x, c.y));
-            ui.close();
-        }
-        if ui.add_enabled(app.session.map().selection_count() > 0, egui::Button::new(tl!("Clear Selection"))).clicked() {
-            let _ = app.run("select.clear", Value::Null);
-            ui.close();
-        }
-    });
+    // No menu off the Earth (a globe's corners): there is no place for it to act on.
+    if let Some(c) = app.map.menu_lonlat {
+        resp.context_menu(|ui| crate::mapmenu::show(app, ui, c));
+    }
     if hover.is_some()
         && matches!(tool, Tool::Measure | Tool::MeasureArea | Tool::CreateLine | Tool::CreatePolygon)
         && !app.map.sketch.is_empty()

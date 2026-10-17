@@ -6691,3 +6691,18 @@ fn layer_color_honours_an_explicit_fill_alpha() {
     s.run("layer.color", &json!({"layer": "Countries", "color": "#996633"})).unwrap();
     assert_eq!(alpha(&s), 150);
 }
+
+#[test]
+fn buffer_point_adds_only_the_buffer() {
+    let mut s = world();
+    let before = s.map().layers.len();
+    let v =
+        s.run("gp.bufferPoint", &json!({"lon": 2.35, "lat": 48.85, "distance": 1, "units": "Kilometers", "name": "Buffer 1 km"})).unwrap();
+    assert_eq!(s.map().layers.len(), before + 1, "the clicked point isn't added");
+    let l = s.map().layer(v["layer"].as_u64().unwrap() as u32).unwrap();
+    assert_eq!(l.name, "Buffer 1 km");
+    let e = l.dataset.extent();
+    assert!((e.max_y - e.min_y - 2.0 / 111.2).abs() < 0.002, "a 1 km radius: {e:?}");
+    assert!(s.run("gp.bufferPoint", &json!({"lon": 200, "lat": 0, "distance": 1})).is_err());
+    assert!(s.run("gp.bufferPoint", &json!({"lon": 0, "lat": 0})).is_err());
+}

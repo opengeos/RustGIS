@@ -196,41 +196,63 @@ const MENU_ICON_W: f32 = 22.0;
 
 /// A menu row that runs a command (disabled when the command is).
 pub fn menu_item(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, id: &str, params: Value) {
-    let label = tl!(label);
     let on = enabled(app, id);
-    // With an icon, the label starts after it, so the icon is drawn inside the row (and the menu).
-    let text: egui::WidgetText = if icon.is_empty() {
-        label.into()
-    } else {
-        let mut job = egui::text::LayoutJob::default();
-        let font = egui::TextStyle::Button.resolve(ui.style());
-        job.append(label, MENU_ICON_W, egui::TextFormat::simple(font, egui::Color32::PLACEHOLDER));
-        job.into()
-    };
-    let mut button = egui::Button::new(text).frame(false).min_size(vec2(0.0, 24.0));
-    // Only with a shortcut: an empty right text would end the button's accessible label in a space.
     let shortcut = shortcut_text(app, id);
+    if menu_row(ui, icon, tl!(label), &shortcut, on).clicked() {
+        let _ = app.run(id, params);
+        ui.close();
+    }
+}
+
+/// A menu row with an icon (empty for none) before an already translated label, and a shortcut
+/// (empty for none) after it. The caller acts on a click and closes the menu.
+pub fn menu_row(ui: &mut Ui, icon: &str, label: &str, shortcut: &str, on: bool) -> Response {
+    let mut button = egui::Button::new(menu_text(ui, icon, label)).frame(false).min_size(vec2(0.0, 24.0));
+    // Only with a shortcut: an empty right text would end the button's accessible label in a space.
     if !shortcut.is_empty() {
         button = button.right_text(shortcut);
     }
     let resp = row_button(ui, on, button, 4.0);
-    if !icon.is_empty() {
-        let t = Tokens::get(ui.ctx());
-        icons::paint(
-            ui.painter(),
-            Rect::from_center_size(
-                resp.rect.left_center() + vec2(ui.spacing().button_padding.x + MENU_ICON_W / 2.0 - 2.0, 0.0),
-                vec2(16.0, 16.0),
-            ),
-            icon,
-            t.icon,
-            t.accent,
-        );
+    menu_icon(ui, &resp, icon);
+    resp
+}
+
+/// A menu row with an icon that opens a submenu of `add`'s rows.
+pub fn submenu_row(ui: &mut Ui, icon: &str, label: &str, add: impl FnOnce(&mut Ui)) {
+    let button = egui::Button::new(menu_text(ui, icon, label))
+        .min_size(vec2(0.0, 24.0))
+        .right_text(egui::containers::menu::SubMenuButton::RIGHT_ARROW);
+    let (resp, _) = egui::containers::menu::SubMenuButton::from_button(button).ui(ui, add);
+    menu_icon(ui, &resp, icon);
+}
+
+/// A menu row's label: with an icon, it starts after it, so the icon is drawn inside the row (and the menu).
+fn menu_text(ui: &Ui, icon: &str, label: &str) -> egui::WidgetText {
+    if icon.is_empty() {
+        return label.into();
     }
-    if resp.clicked() {
-        let _ = app.run(id, params);
-        ui.close();
+    let mut job = egui::text::LayoutJob::default();
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    job.append(label, MENU_ICON_W, egui::TextFormat::simple(font, egui::Color32::PLACEHOLDER));
+    job.into()
+}
+
+/// Draws a menu row's icon in the room [`menu_text`] left for it.
+fn menu_icon(ui: &Ui, resp: &Response, icon: &str) {
+    if icon.is_empty() {
+        return;
     }
+    let t = Tokens::get(ui.ctx());
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(
+            resp.rect.left_center() + vec2(ui.spacing().button_padding.x + MENU_ICON_W / 2.0 - 2.0, 0.0),
+            vec2(16.0, 16.0),
+        ),
+        icon,
+        t.icon,
+        t.accent,
+    );
 }
 
 /// A ribbon group: controls laid out left to right over a centred label, with a separator.

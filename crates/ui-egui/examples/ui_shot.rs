@@ -9,6 +9,7 @@
 //! `{"key": "Enter"}` presses a key (egui's key names), `{"dark": true}` switches theme,
 //! `{"drag": [x, y, dx, dy]}` presses the pointer at (x, y) and moves it by (dx, dy), holding
 //! it (shots then catch the map mid-drag; `{"release": true}` lets go),
+//! `{"rclick": [x, y]}` right-clicks at (x, y) (the map's menu),
 //! `{"scroll": [x, y, dy]}` turns the mouse wheel by `dy` points over (x, y) (negative zooms
 //! out) and runs one frame (shots then catch the map mid-zoom),
 //! `{"titlebar": {"left_inset": 80, "height": 34}}`
@@ -138,6 +139,25 @@ fn main() {
             for i in 1..=8 {
                 let t = i as f32 / 8.0;
                 harness.event(egui::Event::PointerMoved(egui::pos2(x + dx * t, y + dy * t)));
+                harness.step();
+            }
+        } else if let Some(d) = l.get("rclick").and_then(|v| v.as_array()) {
+            let n: Vec<f32> = d.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect();
+            let [x, y] = n[..] else {
+                eprintln!("rclick takes [x, y]");
+                continue;
+            };
+            let pos = egui::pos2(x, y);
+            harness.event(egui::Event::PointerMoved(pos));
+            for pressed in [true, false] {
+                harness.event(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            for _ in 0..3 {
                 harness.step();
             }
         } else if let Some(d) = l.get("scroll").and_then(|v| v.as_array()) {
