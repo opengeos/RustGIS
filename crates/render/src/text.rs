@@ -25,7 +25,7 @@ fn font(bold: bool) -> Option<&'static FontRef<'static>> {
 fn invisible(c: char) -> bool {
     c.is_whitespace()
         || c.is_control()
-        || matches!(c, '\u{AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}')
+        || matches!(c, '\u{AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}' | '\u{E0100}'..='\u{E01EF}')
 }
 
 /// An installed CJK face for `region`, parsed once; `None` when there is none (or on the web).
@@ -229,7 +229,7 @@ mod coverage_tests {
             assert!(super::covers("Türkiye Ελλάδα Беларусь", bold));
             assert!(!super::covers("Syria \u{10FFFD}", bold));
             // Invisible characters don't need a glyph.
-            assert!(super::covers("Syria\u{200B}\u{FE0F}", bold));
+            assert!(super::covers("Syria\u{200B}\u{FE0F}\u{E0100}", bold));
         }
     }
 
