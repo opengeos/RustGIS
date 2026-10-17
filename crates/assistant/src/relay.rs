@@ -1434,11 +1434,14 @@ mod tests {
     /// and once allowed it runs and answers on the same connection.
     #[test]
     fn approval_held_requests_wait_for_the_user() {
-        let relay = Relay::bind_with(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::from_millis(100)).unwrap();
+        // Once allowed, the export runs on this thread while the client waits at most two reply
+        // waits: render once first (fonts load on the first render), and give the run a second.
+        let relay = Relay::bind_with(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::from_secs(1)).unwrap();
         let grant = relay.grant_reviewed(false).unwrap();
         let root = tempfile::tempdir().unwrap();
         let out = root.path().join("held.png");
         let mut s = sample();
+        s.run("share.exportMap", &json!({"path": root.path().join("warm.png"), "width": 64, "height": 64})).unwrap();
         let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
         attach_with(&mut client, &read_token_file(grant.token_file()).unwrap(), true);
         let call = json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"share.exportMap","params":{"path":out,"width":64,"height":64}}}});
@@ -1450,7 +1453,7 @@ mod tests {
             relay.poll(&mut s);
             std::thread::sleep(Duration::from_millis(10));
         }
-        std::thread::sleep(Duration::from_millis(400));
+        std::thread::sleep(Duration::from_millis(1500));
         relay.poll(&mut s);
         let pending = grant.pending();
         assert_eq!(pending.len(), 1, "the approval expired with the app's reply wait");
