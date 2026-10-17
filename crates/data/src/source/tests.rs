@@ -98,6 +98,8 @@ fn write_gpkg(path: &Path, rtree: bool) {
     if rtree {
         c.execute_batch("CREATE VIRTUAL TABLE \"rtree_grid \"\"q\"\"_geom\" USING rtree(id, minx, maxx, miny, maxy);").unwrap();
     }
+    // One transaction: a commit per row is slow on Windows (minutes for the fixture).
+    let tx = c.unchecked_transaction().unwrap();
     for (i, (p, name, v)) in points().into_iter().enumerate() {
         let m = lonlat_to_merc(p);
         // A header with an xy envelope, then WKB.
@@ -108,12 +110,13 @@ fn write_gpkg(path: &Path, rtree: bool) {
         }
         blob.extend(wkb::encode(&Geometry::Point(m)));
         let fid = i as i64 + 1;
-        c.execute("INSERT INTO \"grid \"\"q\"\"\" VALUES (?1, ?2, ?3, ?4, ?5)", rusqlite::params![fid, blob, name, v, v % 2]).unwrap();
+        tx.execute("INSERT INTO \"grid \"\"q\"\"\" VALUES (?1, ?2, ?3, ?4, ?5)", rusqlite::params![fid, blob, name, v, v % 2]).unwrap();
         if rtree {
-            c.execute("INSERT INTO \"rtree_grid \"\"q\"\"_geom\" VALUES (?1, ?2, ?3, ?4, ?5)", rusqlite::params![fid, m.x, m.x, m.y, m.y])
+            tx.execute("INSERT INTO \"rtree_grid \"\"q\"\"_geom\" VALUES (?1, ?2, ?3, ?4, ?5)", rusqlite::params![fid, m.x, m.x, m.y, m.y])
                 .unwrap();
         }
     }
+    tx.commit().unwrap();
 }
 
 /// The same checks for every provider.
