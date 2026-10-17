@@ -652,6 +652,15 @@ impl Agent {
                 self.state = State::Idle;
                 return Step::Done;
             }
+            // The model takes tools only without reasoning: ask again so, once, and keep it so.
+            Err(e)
+                if self.config.api() == provider::Api::OpenAi
+                    && self.config.reasoning != Some(false)
+                    && provider::refuses_reasoning_with_tools(&e) =>
+            {
+                self.config.reasoning = Some(false);
+                return self.send();
+            }
             Err(e) => {
                 self.transcript.push(Entry::Error(e));
                 self.state = State::Idle;

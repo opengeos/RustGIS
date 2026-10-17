@@ -151,7 +151,8 @@ pub struct Config {
     pub client_id: String,
     /// The sign-in session of a signed-in account.
     pub session: String,
-    /// Whether the catalog offers reasoning for the selected model.
+    /// Whether the catalog offers reasoning for the selected model; `Some(false)` too once a
+    /// Chat Completions model refused reasoning alongside tools ([`refuses_reasoning_with_tools`]).
     pub reasoning: Option<bool>,
     /// Requested tool output token estimate (default 10,000); the 24,000-token hard limit still applies.
     pub tool_output_token_limit: usize,
@@ -992,12 +993,23 @@ fn openai_request(cfg: &Config, system: &str, turns: &[Turn], tools: &[ToolDef])
     // Some servers refuse an empty tool list.
     if !tools.is_empty() {
         body["tools"] = json!(tools);
+        // Left unset, the model's default effort; some models take tools only without reasoning.
+        if cfg.reasoning == Some(false) {
+            body["reasoning_effort"] = json!("none");
+        }
     }
     let mut headers = vec![header("Content-Type", "application/json"), header("Accept", "text/event-stream")];
     if !cfg.key.trim().is_empty() {
         headers.push(header("Authorization", &format!("Bearer {}", cfg.key.trim())));
     }
     HttpRequest { method: "POST", url: format!("{}/chat/completions", cfg.base()), headers, body: json_body(&body) }
+}
+
+/// Whether OpenAI refused a Chat Completions request for reasoning alongside function tools (some
+/// models take tools there only with `reasoning_effort` set to `none`).
+pub fn refuses_reasoning_with_tools(e: &Error) -> bool {
+    let text = e.detail.to_lowercase();
+    e.status == Some(400) && (e.param.as_deref() == Some("reasoning_effort") || text.contains("reasoning_effort")) && text.contains("tools")
 }
 
 fn openai_reply(v: &Value) -> Result<Reply, String> {

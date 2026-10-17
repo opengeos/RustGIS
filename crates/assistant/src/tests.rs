@@ -3598,3 +3598,55 @@ fn user_message_after_a_kept_summary_is_labelled() {
     crate::compact::apply(&mut only, 2, "The user mapped cities.");
     assert!(!crate::compact::as_text(&only, 1).contains("User:"));
 }
+
+/// OpenAI's refusal of reasoning alongside function tools in Chat Completions (#402).
+fn reasoning_with_tools_refused() -> Result<HttpResponse, crate::Error> {
+    Ok(HttpResponse {
+        status: 400,
+        body: json!({"error": {
+            "message": "Function tools with reasoning_effort are not supported for gpt-6-sol in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.",
+            "type": "invalid_request_error",
+            "param": "reasoning_effort",
+            "code": null,
+        }})
+        .to_string()
+        .into_bytes(),
+        headers: vec![],
+    })
+}
+
+#[test]
+fn chat_completions_turn_reasoning_off_only_with_tools_for_a_model_without_it() {
+    let tool = ToolDef { name: "t", description: "d", schema: json!({"type": "object"}) };
+    let turns = [Turn::User("hi".into())];
+    let mut c = cfg("openai");
+    assert!(body(&chat_request(&c, "s", &turns, std::slice::from_ref(&tool))).get("reasoning_effort").is_none());
+    c.reasoning = Some(false);
+    assert_eq!(body(&chat_request(&c, "s", &turns, std::slice::from_ref(&tool)))["reasoning_effort"], "none");
+    // Without tools (a summary request) the model may reason as it likes.
+    assert!(body(&chat_request(&c, "s", &turns, &[])).get("reasoning_effort").is_none());
+}
+
+#[test]
+fn agent_retries_without_reasoning_when_a_model_refuses_it_with_tools() {
+    let mut s = sample();
+    let mut a = Agent::new(Config { model: "gpt-6-sol".into(), ..cfg("openai") }, &s);
+    let Step::Send(first) = a.ask("hi", &s) else { panic!("expected a request") };
+    assert!(body(&first).get("reasoning_effort").is_none());
+    let Step::Send(again) = a.receive_result(a.generation(), reasoning_with_tools_refused(), &mut s) else {
+        panic!("expected the request again, without reasoning")
+    };
+    assert_eq!(body(&again)["reasoning_effort"], "none");
+    assert!(body(&again).get("tools").is_some());
+    assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    assert!(!a.transcript.iter().any(|e| matches!(e, Entry::Error(_))), "{:?}", a.transcript);
+    // Remembered for the next message; refused even so, the error stands (no loop).
+    let Step::Send(next) = a.ask("and now?", &s) else { panic!("expected a request") };
+    assert_eq!(body(&next)["reasoning_effort"], "none");
+    assert_eq!(a.receive_result(a.generation(), reasoning_with_tools_refused(), &mut s), Step::Done);
+    assert!(matches!(a.transcript.last(), Some(Entry::Error(_))));
+    // Other providers' 400s are errors as before.
+    let mut b = Agent::new(cfg("anthropic"), &s);
+    assert!(matches!(b.ask("hi", &s), Step::Send(_)));
+    assert_eq!(b.receive_result(b.generation(), reasoning_with_tools_refused(), &mut s), Step::Done);
+}
