@@ -32,6 +32,8 @@ pub struct LayoutView {
     pan: egui::Vec2,
     pub selected: Option<u32>,
     drag: Option<Drag>,
+    /// The page rectangle and points per millimetre the drag last saw.
+    drag_page: Option<(Rect, f32)>,
     /// A frame being drawn: "polygon" (clicked) or "lasso" (dragged), and its points (mm).
     pub tool: Option<&'static str>,
     sketch: Vec<(f64, f64)>,
@@ -277,6 +279,21 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
             app.layout.zoom = new;
         }
     }
+    // The page moves under a drag when the properties open beside it (the drag selects the
+    // element): keep the drag's start under the same screen point, so the element follows the
+    // pointer rather than the page.
+    if let Some((old, old_s)) = app.layout.drag_page
+        && (old, old_s) != (page, s)
+    {
+        let rebase = |p| to_mm(page, s, to_screen(old, old_s, p));
+        app.layout.drag = match app.layout.drag {
+            Some(Drag::Move(id, p)) => Some(Drag::Move(id, rebase(p))),
+            Some(Drag::Resize(id, h, p)) => Some(Drag::Resize(id, h, rebase(p))),
+            Some(Drag::PanFrame(id, p)) => Some(Drag::PanFrame(id, rebase(p))),
+            d => d,
+        };
+    }
+    app.layout.drag_page = Some((page, s));
     let pointer_mm = resp.interact_pointer_pos().map(|p| to_mm(page, s, p));
     // Drawing a polygon or lasso frame.
     if let Some(tool) = app.layout.tool {
@@ -622,7 +639,13 @@ mod tests {
         let app = h.state();
         assert!(app.session.revision > before, "the drop should update the layout");
         let moved = app.session.project.layouts[li].element(title.id).unwrap();
-        assert!(moved.y > title.y + 10.0);
+        // A vertical drag moves it straight down by the pointer's motion, although the
+        // properties opened beside the page and re-fitted it mid-drag.
+        let (_, s) = app.layout.drag_page.unwrap();
+        assert!((moved.x - title.x).abs() < 0.01, "x moved from {} to {}", title.x, moved.x);
+        // The drag starts once the pointer has moved, a step into the 120 points.
+        let dy = (moved.y - title.y) * s as f64;
+        assert!((90.0..=120.5).contains(&dy), "y moved {dy} points");
         // The page was drawn, and keyed, from the layout as it is after the drop.
         let (i, rev, drawn) = app.layout.shown.as_ref().unwrap();
         assert_eq!((*i, *rev), (li, app.session.revision));
