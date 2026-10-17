@@ -3599,6 +3599,136 @@ fn user_message_after_a_kept_summary_is_labelled() {
     assert!(!crate::compact::as_text(&only, 1).contains("User:"));
 }
 
+/// OpenAI's refusal of reasoning alongside function tools in Chat Completions (#402).
+fn reasoning_with_tools_refused() -> Result<HttpResponse, crate::Error> {
+    Ok(HttpResponse {
+        status: 400,
+        body: json!({"error": {
+            "message": "Function tools with reasoning_effort are not supported for gpt-6-sol in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.",
+            "type": "invalid_request_error",
+            "param": "reasoning_effort",
+            "code": null,
+        }})
+        .to_string()
+        .into_bytes(),
+        headers: vec![],
+    })
+}
+
+#[test]
+fn chat_completions_turn_reasoning_off_only_with_tools_for_a_model_without_it() {
+    let tool = ToolDef { name: "t", description: "d", schema: json!({"type": "object"}) };
+    let turns = [Turn::User("hi".into())];
+    let mut c = cfg("openai");
+    assert!(body(&chat_request(&c, "s", &turns, std::slice::from_ref(&tool))).get("reasoning_effort").is_none());
+    c.reasoning = Some(false);
+    assert_eq!(body(&chat_request(&c, "s", &turns, std::slice::from_ref(&tool)))["reasoning_effort"], "none");
+    // Without tools (a summary request) the model may reason as it likes.
+    assert!(body(&chat_request(&c, "s", &turns, &[])).get("reasoning_effort").is_none());
+}
+
+#[test]
+fn agent_retries_without_reasoning_when_a_model_refuses_it_with_tools() {
+    let mut s = sample();
+    let mut a = Agent::new(Config { model: "gpt-6-sol".into(), ..cfg("openai") }, &s);
+    let Step::Send(first) = a.ask("hi", &s) else { panic!("expected a request") };
+    assert!(body(&first).get("reasoning_effort").is_none());
+    let Step::Send(again) = a.receive_result(a.generation(), reasoning_with_tools_refused(), &mut s) else {
+        panic!("expected the request again, without reasoning")
+    };
+    assert_eq!(body(&again)["reasoning_effort"], "none");
+    assert!(body(&again).get("tools").is_some());
+    assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    assert!(!a.transcript.iter().any(|e| matches!(e, Entry::Error(_))), "{:?}", a.transcript);
+    // Remembered for the next message; refused even so, the error stands (no loop).
+    let Step::Send(next) = a.ask("and now?", &s) else { panic!("expected a request") };
+    assert_eq!(body(&next)["reasoning_effort"], "none");
+    assert_eq!(a.receive_result(a.generation(), reasoning_with_tools_refused(), &mut s), Step::Done);
+    assert!(matches!(a.transcript.last(), Some(Entry::Error(_))));
+    // Another model chosen in the settings reasons as before; back to this one, it doesn't. The
+    // settings, which copy the agent's configuration, never see it.
+    assert_eq!(a.config.reasoning, None);
+    a.config.model = "gpt-5.5".into();
+    let Step::Send(other) = a.ask("hello again", &s) else { panic!("expected a request") };
+    assert!(body(&other).get("reasoning_effort").is_none());
+    assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    a.config.model = "gpt-6-sol".into();
+    let Step::Send(back) = a.ask("and back", &s) else { panic!("expected a request") };
+    assert_eq!(body(&back)["reasoning_effort"], "none");
+    assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    // The same model name elsewhere (another provider, another address) didn't refuse.
+    let refused = a.config.clone();
+    a.config = Config { model: "gpt-6-sol".into(), ..cfg("custom") };
+    let Step::Send(other) = a.ask("on my server", &s) else { panic!("expected a request") };
+    assert!(body(&other).get("reasoning_effort").is_none());
+    assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    a.config = Config { base_url: "https://proxy.example/v1".into(), ..refused.clone() };
+    let Step::Send(other) = a.ask("through a proxy", &s) else { panic!("expected a request") };
+    assert!(body(&other).get("reasoning_effort").is_none());
+    assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    a.config = refused;
+    let Step::Send(back) = a.ask("and back again", &s) else { panic!("expected a request") };
+    assert_eq!(body(&back)["reasoning_effort"], "none");
+    // Other providers' 400s are errors as before.
+    let mut b = Agent::new(cfg("anthropic"), &s);
+    assert!(matches!(b.ask("hi", &s), Step::Send(_)));
+    assert_eq!(b.receive_result(b.generation(), reasoning_with_tools_refused(), &mut s), Step::Done);
+}
+
+#[test]
+fn agent_remembers_every_reasoning_refusal_and_its_subagents_know_them() {
+    let mut s = sample();
+    let first = Config { model: "gpt-6-sol".into(), ..cfg("openai") };
+    let second = Config { base_url: "https://proxy.example/v1".into(), ..first.clone() };
+    let mut a = Agent::new(first.clone(), &s);
+    for (config, text) in [(&first, "hi"), (&second, "through a proxy")] {
+        a.config = config.clone();
+        let Step::Send(req) = a.ask(text, &s) else { panic!("expected a request") };
+        assert!(body(&req).get("reasoning_effort").is_none());
+        let Step::Send(again) = a.receive_result(a.generation(), reasoning_with_tools_refused(), &mut s) else {
+            panic!("expected the request again, without reasoning")
+        };
+        assert_eq!(body(&again)["reasoning_effort"], "none");
+        assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    }
+    // The second refusal didn't replace the first: both turn reasoning off.
+    for config in [&first, &second] {
+        a.config = config.clone();
+        let Step::Send(req) = a.ask("again", &s) else { panic!("expected a request") };
+        assert_eq!(body(&req)["reasoning_effort"], "none");
+        assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    }
+    // A subagent starts with what its parent learned, without another refusal first.
+    let Step::Send(_) = a.ask("Count the cities", &s) else { panic!("expected a request") };
+    let delegate = calls("delegate", json!({"task": "Count the cities"}));
+    let Step::Send(sub) = a.receive(a.generation(), ok(delegate), &mut s) else { panic!("expected the subagent's request") };
+    assert_eq!(body(&sub)["reasoning_effort"], "none");
+}
+
+#[test]
+fn agent_recognises_the_reasoning_refusal_by_its_param_whatever_the_wording() {
+    let reply = |param: &str| {
+        Ok(HttpResponse {
+            status: 400,
+            body: json!({"error": {"message": "This combination is not supported.", "type": "invalid_request_error", "param": param}})
+                .to_string()
+                .into_bytes(),
+            headers: vec![],
+        })
+    };
+    let mut s = sample();
+    let mut a = Agent::new(cfg("openai"), &s);
+    assert!(matches!(a.ask("hi", &s), Step::Send(_)));
+    let Step::Send(again) = a.receive_result(a.generation(), reply("reasoning_effort"), &mut s) else {
+        panic!("expected the request again, without reasoning")
+    };
+    assert_eq!(body(&again)["reasoning_effort"], "none");
+    // Another parameter's 400 is an error as before.
+    let mut b = Agent::new(cfg("openai"), &s);
+    assert!(matches!(b.ask("hi", &s), Step::Send(_)));
+    assert_eq!(b.receive_result(b.generation(), reply("model"), &mut s), Step::Done);
+}
+
 #[test]
 fn list_layers_includes_web_tile_layers() {
     // #401: WMS overlays added from a service are tile layers, not map layers, and list_layers
