@@ -35,14 +35,25 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("raster.stretch", "Stretch Type", "Style › Rendering", |s, p| {
             let code = ps(p, "type").ok_or("type is required")?;
-            let st = Stretch::from_code(code, f(p, "low"), f(p, "high"), f(p, "n")).ok_or_else(|| format!("unknown stretch '{code}'"))?;
-            with(s, p, |rl, _| {
+            let (min, max) = (f(p, "min"), f(p, "max"));
+            with(s, p, |rl, r| {
+                let stats = r.bands.first().map(|b| &b.stats).ok_or("the raster has no bands")?;
+                let st = Stretch::from_code(code, f(p, "low"), f(p, "high"), f(p, "n"), min, max, stats)
+                    .ok_or_else(|| format!("unknown stretch '{code}'"))?;
+                if let Stretch::Custom { min, max } = st {
+                    if !min.is_finite() || !max.is_finite() {
+                        return Err("min and max must be finite numbers".into());
+                    }
+                    if min >= max {
+                        return Err(format!("min {min} must be less than max {max}"));
+                    }
+                }
                 rl.style.stretch = st;
                 Ok(())
             })
         })
         .when(need_raster)
-        .params(r#"{"layer"?, "type": "none"|"minMax"|"percentClip"|"standardDeviation"|"histogramEqualize", "low"?: %, "high"?: %, "n"?: deviations}"#),
+        .params(r#"{"layer"?, "type": "none"|"minMax"|"custom"|"percentClip"|"standardDeviation"|"histogramEqualize", "low"?: %, "high"?: %, "n"?: deviations, "min"?, "max"?: custom bounds in the data's units (a missing one is the layer's own)}"#),
         C::new("raster.dra", "DRA", "Style › Rendering", |s, p| {
             let on = b(p, "on");
             with(s, p, |rl, _| {

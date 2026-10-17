@@ -126,6 +126,11 @@ pub enum Stretch {
     /// Values as they are (0–255 for 8-bit data, otherwise minimum to maximum).
     None,
     MinMax,
+    /// Fixed bounds in the data's own units, whatever the layer's statistics.
+    Custom {
+        min: f64,
+        max: f64,
+    },
     /// Clip the lowest and highest percent of pixels.
     PercentClip {
         low: f64,
@@ -146,9 +151,10 @@ impl Default for Stretch {
 }
 
 impl Stretch {
-    pub const KINDS: [(&'static str, &'static str); 5] = [
+    pub const KINDS: [(&'static str, &'static str); 6] = [
         ("none", "None"),
         ("minMax", "Minimum Maximum"),
+        ("custom", "Custom Min/Max"),
         ("percentClip", "Percent Clip"),
         ("standardDeviation", "Standard Deviation"),
         ("histogramEqualize", "Histogram Equalize"),
@@ -158,6 +164,7 @@ impl Stretch {
         match self {
             Stretch::None => "none",
             Stretch::MinMax => "minMax",
+            Stretch::Custom { .. } => "custom",
             Stretch::PercentClip { .. } => "percentClip",
             Stretch::StandardDeviation { .. } => "standardDeviation",
             Stretch::HistogramEqualize => "histogramEqualize",
@@ -168,12 +175,24 @@ impl Stretch {
         Stretch::KINDS.iter().find(|(c, _)| *c == self.code()).map(|(_, l)| *l).unwrap_or("Percent Clip")
     }
 
-    /// A stretch by code, with optional parameters (`low`/`high` percent, `n` deviations).
-    pub fn from_code(code: &str, low: Option<f64>, high: Option<f64>, n: Option<f64>) -> Option<Stretch> {
+    /// A stretch by code, with optional parameters (`low`/`high` percent, `n` deviations,
+    /// `min`/`max` bounds; a custom stretch missing a bound takes it from `stats`).
+    pub fn from_code(
+        code: &str,
+        low: Option<f64>,
+        high: Option<f64>,
+        n: Option<f64>,
+        min: Option<f64>,
+        max: Option<f64>,
+        stats: &BandStats,
+    ) -> Option<Stretch> {
         let pct = |v: Option<f64>| v.unwrap_or(0.5).clamp(0.0, 49.0);
         Some(match code.trim().to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
             "none" => Stretch::None,
             "minmax" | "minimummaximum" => Stretch::MinMax,
+            "custom" | "custommin/max" | "custommax" | "customminmax" => {
+                Stretch::Custom { min: min.unwrap_or(stats.min), max: max.unwrap_or(stats.max) }
+            }
             "percentclip" => Stretch::PercentClip { low: pct(low), high: pct(high) },
             "standarddeviation" | "stddev" => Stretch::StandardDeviation { n: n.unwrap_or(2.0).clamp(0.1, 10.0) },
             "histogramequalize" | "histogramequalization" => Stretch::HistogramEqualize,
@@ -409,6 +428,8 @@ impl Normalizer {
         let (lo, hi) = match stretch {
             Stretch::None if data_type == "UInt8" => (0.0, 255.0),
             Stretch::None | Stretch::MinMax | Stretch::HistogramEqualize => (s.min, s.max),
+            // Fixed bounds ignore the statistics, so DRA's view statistics don't move them.
+            Stretch::Custom { min, max } => (min, max),
             Stretch::PercentClip { low, high } => (s.percentile(low), s.percentile(100.0 - high)),
             Stretch::StandardDeviation { n } => ((s.mean - n * s.std_dev).max(s.min), (s.mean + n * s.std_dev).min(s.max)),
         };
@@ -669,11 +690,11 @@ mod tests {
         let r = dem();
         let st = &r.bands[0].stats;
         for code in ["none", "minMax", "percentClip", "standardDeviation", "histogramEqualize"] {
-            let n = Normalizer::new(Stretch::from_code(code, None, None, None).unwrap(), st, "Float32");
+            let n = Normalizer::new(Stretch::from_code(code, None, None, None, None, None, st).unwrap(), st, "Float32");
             assert!(n.t(-1e9) <= n.t(3.0) && n.t(3.0) <= n.t(1e9), "{code}");
             assert!((0.0..=1.0).contains(&n.t(f64::NAN).max(0.0)));
         }
-        assert_eq!(Stretch::from_code("bogus", None, None, None), None);
+        assert_eq!(Stretch::from_code("bogus", None, None, None, None, None, st), None);
         let flat = enhancement_lut(0.0, 0.0, 1.0);
         assert!(flat.iter().enumerate().all(|(i, v)| (*v as i32 - i as i32).abs() <= 1));
         let bright = enhancement_lut(50.0, 0.0, 1.0);

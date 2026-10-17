@@ -3474,6 +3474,20 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     }
                 });
             }
+            Stretch::Custom { min, max } => {
+                ui.horizontal(|ui| {
+                    let (mut lo, mut hi) = (min, max);
+                    ui.label(tl!("Min"));
+                    let a = ui.add(egui::DragValue::new(&mut lo).speed(0.1).max_decimals(4));
+                    ui.label(tl!("Max"));
+                    let b = ui.add(egui::DragValue::new(&mut hi).speed(0.1).max_decimals(4));
+                    if lo >= hi {
+                        ui.label(egui::RichText::new(tl!("Min must be less than Max")).size(11.5).color(t.red));
+                    } else if a.drag_stopped() || b.drag_stopped() || ((a.changed() || b.changed()) && !a.dragged() && !b.dragged()) {
+                        let _ = app.run("raster.stretch", json!({"type": "custom", "min": lo, "max": hi}));
+                    }
+                });
+            }
             Stretch::StandardDeviation { n } => {
                 ui.horizontal(|ui| {
                     let mut nn = n;
