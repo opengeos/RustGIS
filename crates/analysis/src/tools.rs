@@ -854,6 +854,16 @@ mod tests {
         assert!((e.max_y - e.min_y - 1000.0 / 111_000.0).abs() < 0.0005, "{e:?}");
         assert!(buffer(serde_json::Value::Null).is_ok(), "no units: the default");
         assert!(crate::run("buffer", &m, &serde_json::json!({"input": "p", "distance": 1, "dissolve": "everything"})).is_err());
+        // Every built-in choice defaults to one of its own choices.
+        for t in TOOLS {
+            for p in t.params {
+                if let K::Choice(c) = p.kind
+                    && let Ok(serde_json::Value::String(d)) = serde_json::from_str::<serde_json::Value>(p.default)
+                {
+                    assert!(c.contains(&d.as_str()), "{}: {} defaults to {d:?}", t.id, p.name);
+                }
+            }
+        }
     }
 
     #[test]

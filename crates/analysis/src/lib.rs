@@ -280,7 +280,11 @@ pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> 
         if ps.required && p.get(ps.name).is_none_or(|v| v.is_null() || v.as_str() == Some("")) {
             return Err(format!("{}: '{}' is required", spec.name, ps.label));
         }
+        // The built-in tools' choices are the whole list. An external tool's (GeoLibre's, a
+        // plugin's) can be looser, such as GeoLibre's comma-separated lists of options: its own
+        // runner checks them.
         if let ParamKind::Choice(choices) = ps.kind
+            && TOOLS.iter().any(|t| std::ptr::eq(t, spec))
             && let Some(v) = p.get_mut(ps.name)
         {
             *v = choice(spec, ps, choices, v)?;
@@ -289,7 +293,7 @@ pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> 
     Ok(Value::Object(p))
 }
 
-/// A choice parameter's value as one of its choices, spelled as declared (`"meters"` is
+/// A built-in tool's choice parameter as one of its choices, spelled as declared (`"meters"` is
 /// `"Meters"`). Any other value is an error naming the choices: a tool never guesses what an
 /// unknown one meant (#406). An empty value is left as it is (the tool's default).
 fn choice(spec: &ToolSpec, ps: &ParamSpec, choices: &[&str], v: &Value) -> Result<Value, String> {
