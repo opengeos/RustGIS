@@ -1229,12 +1229,13 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
     read_shapefile_parts(parts, name)
 }
 
-/// The files of a Shapefile besides its `.shp` that [`gather_shapefiles`] zips with it.
+/// The files of a Shapefile besides its `.shp` that [`gather_shapefiles`] zips with it. The `.cpg`
+/// isn't read (the `.dbf`'s text is decoded without it); it's taken along so it isn't refused on its own.
 const SHAPEFILE_SIDECARS: [&str; 4] = ["dbf", "shx", "prj", "cpg"];
 
 /// Gathers each Shapefile among files given together (several picked at once in the browser, or
 /// dropped at once) into a zip that reads as a zipped Shapefile: a `.shp` with the `.dbf` of the
-/// same base name, ignoring case, and its `.shx`, `.prj` and `.cpg` when they are there. The zip,
+/// same base name, ignoring case, and its `.shx`, `.prj` and `.cpg` when they are there (the `.cpg` only so it goes with the rest). The zip,
 /// named after the `.shp`, takes its place; its parts go. Other files, and a `.shp` without its
 /// `.dbf`, pass through as they came. A Shapefile whose parts are too large to read together (more
 /// than [`MAX_BYTES`], or the zip reader's limit) is left out, and said why in the messages
