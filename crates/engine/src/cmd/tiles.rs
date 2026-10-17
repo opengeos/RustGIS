@@ -50,7 +50,8 @@ pub fn commands() -> Vec<C> {
     ]
 }
 
-fn list(s: &Session) -> Value {
+/// The map's tile layers (index 0 on top), as `map.tiles` and `info.project` list them.
+pub(crate) fn list(s: &Session) -> Value {
     Value::Array(
         s.map()
             .tiles

@@ -193,6 +193,8 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
                 "fields": l.dataset.fields.iter().map(|f| format!("{} ({})", f.name, f.ty.label())).collect::<Vec<_>>(),
             }),
         }).collect::<Vec<_>>(),
+        // Web tile layers (XYZ, WMS, vector tiles, styles, archives) draw under the layers above.
+        "tileLayers": super::tiles::list(s),
         "tables": s.project.tables.iter().map(|t| json!({
             "id": t.id, "name": t.name, "rows": t.features.len(),
             "fields": t.fields.iter().map(|f| format!("{} ({})", f.name, f.ty.label())).collect::<Vec<_>>(),
