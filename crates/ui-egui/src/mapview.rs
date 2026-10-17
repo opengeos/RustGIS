@@ -875,9 +875,9 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     let middle = ui.input(|i| i.pointer.middle_down());
     // Dragging with the right button turns the flat map: to the right turns it clockwise, as in
     // MapLibre.
-    if resp.dragged_by(egui::PointerButton::Secondary) {
+    if resp.dragged_by(egui::PointerButton::Secondary) && globe(app, rect).is_none() {
         let dx = resp.drag_delta().x as f64;
-        if dx != 0.0 && globe(app, rect).is_none() {
+        if dx != 0.0 {
             turn_by(app, dx * 0.8);
             app.map.camera_moved = true;
             app.map.last_interaction = time;

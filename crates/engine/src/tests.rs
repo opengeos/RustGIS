@@ -6010,6 +6010,7 @@ fn the_map_turns_to_a_bearing() {
     assert_eq!(s.run("map.setBearing", &json!({"bearing": 350})).unwrap(), json!({"bearing": -10.0}));
     assert!(s.run("map.setBearing", &json!({})).is_err());
     assert!(s.run("map.setBearing", &json!({"bearing": "north"})).is_err());
+    assert!(s.run("map.setBearing", &json!({"bearing": "north", "by": 10})).is_err());
     s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 5_000_000, "bearing": 45})).unwrap();
     assert_eq!(s.map().camera.bearing, 45.0);
     assert!(s.run("map.goToXY", &json!({"lon": 0.0, "lat": 0.0, "bearing": "east"})).is_err());

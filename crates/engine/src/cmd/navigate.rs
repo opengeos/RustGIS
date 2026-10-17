@@ -313,7 +313,7 @@ pub(crate) fn go_to_xy(s: &mut Session, p: &Value) -> CmdResult {
         m.set_scale(sc);
     }
     if let Some(b) = bearing {
-        m.camera.bearing = b;
+        m.camera.set_bearing(b);
     }
     m.camera.clamp();
     s.record_extent();
@@ -322,6 +322,9 @@ pub(crate) fn go_to_xy(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Turns the flat map to a bearing (the globe keeps it for when the map is flat again).
 fn set_bearing(s: &mut Session, p: &Value) -> CmdResult {
+    if p.get("bearing").is_some_and(|v| !v.is_null()) && f(p, "bearing").is_none() {
+        return Err("bearing must be a number of degrees".into());
+    }
     let m = s.map_mut();
     let bearing = match (f(p, "bearing"), f(p, "by")) {
         (Some(b), _) => b,

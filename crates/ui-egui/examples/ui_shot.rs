@@ -130,10 +130,17 @@ fn main() {
                 eprintln!("drag takes [x, y, dx, dy]");
                 continue;
             };
-            held = match l.get("button").and_then(|v| v.as_str()) {
+            let next = match l.get("button").and_then(|v| v.as_str()) {
                 Some("secondary") => egui::PointerButton::Secondary,
                 _ => egui::PointerButton::Primary,
             };
+            // A drag with another button lets go of the one still held.
+            if next != held
+                && let Some(pos) = harness.ctx.input(|i| i.pointer.latest_pos())
+            {
+                harness.event(egui::Event::PointerButton { pos, button: held, pressed: false, modifiers: egui::Modifiers::NONE });
+            }
+            held = next;
             let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
                 pos,
                 button: held,
