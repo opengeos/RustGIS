@@ -3676,6 +3676,36 @@ fn agent_retries_without_reasoning_when_a_model_refuses_it_with_tools() {
 }
 
 #[test]
+fn agent_remembers_every_reasoning_refusal_and_its_subagents_know_them() {
+    let mut s = sample();
+    let first = Config { model: "gpt-6-sol".into(), ..cfg("openai") };
+    let second = Config { base_url: "https://proxy.example/v1".into(), ..first.clone() };
+    let mut a = Agent::new(first.clone(), &s);
+    for (config, text) in [(&first, "hi"), (&second, "through a proxy")] {
+        a.config = config.clone();
+        let Step::Send(req) = a.ask(text, &s) else { panic!("expected a request") };
+        assert!(body(&req).get("reasoning_effort").is_none());
+        let Step::Send(again) = a.receive_result(a.generation(), reasoning_with_tools_refused(), &mut s) else {
+            panic!("expected the request again, without reasoning")
+        };
+        assert_eq!(body(&again)["reasoning_effort"], "none");
+        assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    }
+    // The second refusal didn't replace the first: both turn reasoning off.
+    for config in [&first, &second] {
+        a.config = config.clone();
+        let Step::Send(req) = a.ask("again", &s) else { panic!("expected a request") };
+        assert_eq!(body(&req)["reasoning_effort"], "none");
+        assert_eq!(a.receive(a.generation(), ok(say("Hi.")), &mut s), Step::Done);
+    }
+    // A subagent starts with what its parent learned, without another refusal first.
+    let Step::Send(_) = a.ask("Count the cities", &s) else { panic!("expected a request") };
+    let delegate = calls("delegate", json!({"task": "Count the cities"}));
+    let Step::Send(sub) = a.receive(a.generation(), ok(delegate), &mut s) else { panic!("expected the subagent's request") };
+    assert_eq!(body(&sub)["reasoning_effort"], "none");
+}
+
+#[test]
 fn agent_recognises_the_reasoning_refusal_by_its_param_whatever_the_wording() {
     let reply = |param: &str| {
         Ok(HttpResponse {

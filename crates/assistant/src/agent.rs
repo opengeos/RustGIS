@@ -95,9 +95,9 @@ pub struct Agent {
     preview: Option<provider::StreamPreview>,
     /// The conversation was compacted after the provider said it was too long (once per message).
     overflow_compacted: bool,
-    /// The Chat Completions provider, address and model that refused reasoning alongside tools: its
-    /// requests turn reasoning off ([`provider::refuses_reasoning_with_tools`]), others' don't.
-    no_reasoning: Option<(String, String, String)>,
+    /// The Chat Completions providers, addresses and models that refused reasoning alongside tools:
+    /// their requests turn reasoning off ([`provider::refuses_reasoning_with_tools`]), others' don't.
+    no_reasoning: Vec<(String, String, String)>,
     /// A summary request waiting to be retried ([`State::Compacting`]'s `upto` and `resume`).
     retrying_summary: Option<(usize, bool)>,
     /// The skills the model may load ([`skills`]), listed in the system prompt.
@@ -169,7 +169,7 @@ impl Agent {
             retries: 0,
             preview: None,
             overflow_compacted: false,
-            no_reasoning: None,
+            no_reasoning: Vec::new(),
             retrying_summary: None,
             summary_limit: compact::BUDGET,
             agents_auto: false,
@@ -282,6 +282,7 @@ impl Agent {
         child.depth = self.depth + 1;
         child.allowed = allowed;
         child.always = self.always.clone();
+        child.no_reasoning = self.no_reasoning.clone();
         // The budget is the main assistant's: what's left of it for this message.
         child.max_steps = self.max_steps.saturating_sub(self.steps).max(1);
         child.base_system = system_prompt(s) + SUBAGENT_PROMPT;
@@ -452,7 +453,7 @@ impl Agent {
     fn refused_reasoning(&self) -> bool {
         let c = &self.config;
         c.api() == provider::Api::OpenAi
-            && self.no_reasoning.as_ref().is_some_and(|(p, url, m)| *p == c.provider && *url == c.base_url && *m == c.model)
+            && self.no_reasoning.iter().any(|(p, url, m)| *p == c.provider && *url == c.base_url && *m == c.model)
     }
 
     /// The skills the model may load: the built-in ones and the user's ([`skills::installed`]).
@@ -672,7 +673,7 @@ impl Agent {
                     && provider::refuses_reasoning_with_tools(&e) =>
             {
                 let c = &self.config;
-                self.no_reasoning = Some((c.provider.clone(), c.base_url.clone(), c.model.clone()));
+                self.no_reasoning.push((c.provider.clone(), c.base_url.clone(), c.model.clone()));
                 return self.send();
             }
             Err(e) => {
