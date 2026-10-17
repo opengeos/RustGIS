@@ -6683,6 +6683,11 @@ fn layer_color_honours_an_explicit_fill_alpha() {
         assert_eq!(alpha(&s), u8::from_str_radix(a, 16).unwrap(), "alpha {a} from the colour picker is kept");
     }
     // A plain #RRGGBB keeps the layer's translucent fill.
-    s.run("layer.color", &json!({"layer": "Countries", "color": "#336699"})).unwrap();
-    assert!(alpha(&s) >= 150);
+    s.run("layer.color", &json!({"layer": "Countries", "color": "#336699C8"})).unwrap();
+    s.run("layer.color", &json!({"layer": "Countries", "color": "#996633"})).unwrap();
+    assert_eq!(alpha(&s), 0xC8);
+    // It never makes the fill fainter than the floor `with_fill` gives a polygon.
+    s.run("layer.color", &json!({"layer": "Countries", "color": "#33669940"})).unwrap();
+    s.run("layer.color", &json!({"layer": "Countries", "color": "#996633"})).unwrap();
+    assert_eq!(alpha(&s), 150);
 }
