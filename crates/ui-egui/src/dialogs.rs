@@ -246,7 +246,8 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             }
             "graphicText" => {
                 ui.label(tl!("Text"));
-                ui.add(egui::TextEdit::multiline(&mut app.dialogs.text).desired_rows(2).desired_width(f32::INFINITY));
+                let hint = tl!("Shift+Enter starts a new line.");
+                ui.add(text_box(&mut app.dialogs.text).hint_text(hint).desired_rows(2).desired_width(f32::INFINITY));
                 ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new(tl!("Dynamic text:")).small().weak());
                     for (token, what) in rustgis_engine::map::graphics::TOKENS {
@@ -275,11 +276,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 // What the place is (#351); Enter creates the bookmark, Shift+Enter starts a line.
                 ui.label(tl!("Description"));
                 let hint = tl!("Optional. Shift+Enter starts a new line.");
-                // Only Shift+Enter breaks the line: a plain Enter would add one where the cursor
-                // is in the same frame the dialog takes it to create the bookmark.
-                let new_line = egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, egui::Key::Enter);
-                let edit = egui::TextEdit::multiline(&mut app.dialogs.a).hint_text(hint).desired_rows(3).return_key(new_line);
-                ui.add(edit.desired_width(f32::INFINITY));
+                ui.add(text_box(&mut app.dialogs.a).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY));
                 close = buttons(app, ui, "Create", |app| {
                     app.run("bookmark.add", json!({"name": app.dialogs.text, "description": app.dialogs.a})).map(|_| ())
                 });
@@ -316,7 +313,9 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             }
             "definitionQuery" => {
                 ui.label(egui::RichText::new(crate::i18n::fmt("Only features matching this expression draw in {layer}.", &[("layer", &app.dialogs.layer)])).weak());
-                ui.add(egui::TextEdit::multiline(&mut app.dialogs.text).hint_text(tl!("e.g. continent = 'Europe'")).desired_rows(3).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+                let hint = tl!("e.g. continent = 'Europe'");
+                let edit = text_box(&mut app.dialogs.text).hint_text(hint).desired_rows(3).font(egui::TextStyle::Monospace);
+                ui.add(edit.desired_width(f32::INFINITY));
                 field_chips(app, ui);
                 close = buttons(app, ui, "Apply", |app| app.run("layer.definitionQuery", json!({"where": app.dialogs.text})).map(|_| ()));
             }
@@ -935,6 +934,14 @@ fn add_tiles(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     })
 }
 
+/// A dialog's multi-line text box. [`buttons`] takes Enter to confirm the dialog, so only
+/// Shift+Enter breaks a line here: a plain Enter would also add one where the cursor is, in the
+/// same frame (egui's default, which also takes Shift+Enter).
+pub(crate) fn text_box(text: &mut String) -> egui::TextEdit<'_> {
+    let new_line = egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, egui::Key::Enter);
+    egui::TextEdit::multiline(text).return_key(new_line)
+}
+
 /// OK/Cancel row; returns true when the dialog should close.
 pub(crate) fn buttons(app: &mut RustGisApp, ui: &mut egui::Ui, ok: &str, f: impl FnOnce(&mut RustGisApp) -> Result<(), String>) -> bool {
     let mut close = false;
@@ -1016,7 +1023,7 @@ fn select_by_attributes(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> 
     });
     ui.label(egui::RichText::new(tl!("Where")).font(semibold(12.5)));
     ui.add(
-        egui::TextEdit::multiline(&mut app.dialogs.text)
+        text_box(&mut app.dialogs.text)
             .hint_text(tl!("e.g. pop_est > 100000000 AND continent = 'Asia'"))
             .desired_rows(3)
             .desired_width(f32::INFINITY)
