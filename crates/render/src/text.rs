@@ -255,6 +255,7 @@ mod coverage_tests {
     #[test]
     fn falls_back_to_an_installed_cjk_font() {
         use crate::fonts::{CjkRegion, cjk_font};
+        use ab_glyph::Font;
         // Only meaningful on a computer with a CJK font (Windows has Microsoft YaHei).
         if cjk_font(CjkRegion::SimplifiedChinese).is_none() {
             return;
@@ -265,5 +266,15 @@ mod coverage_tests {
         }
         // The fallback glyphs take up room, so CJK labels are measured and centred correctly.
         assert!(super::measure("Mixed 中英 label", 10.0, false) > super::measure("Mixed  label", 10.0, false) + 10.0);
+        // And the fallback glyphs are drawn, not just measured.
+        let Some(ch) = "碑林区".chars().find(|&c| {
+            let (Some(label), Some(cjk)) = (super::font(false), super::cjk(CjkRegion::SimplifiedChinese)) else { return false };
+            label.glyph_id(c).0 == 0 && cjk.glyph_id(c).0 != 0
+        }) else {
+            return;
+        };
+        let mut pm = tiny_skia::Pixmap::new(80, 40).unwrap();
+        super::text_at(&mut pm, &ch.to_string(), 40.0, 20.0, 24.0, rustgis_map::Rgba::rgb(0, 0, 0), false, super::Align::Center, false);
+        assert!(pm.pixels().iter().any(|p| p.alpha() > 0), "the fallback glyph was not drawn");
     }
 }
