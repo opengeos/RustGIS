@@ -1256,8 +1256,9 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
         return None;
     }
     let origin = [view.camera.center.x, view.camera.center.y];
-    // Extruded features stand up over the ground, their shadows under them.
-    for cmd in extrusion_cmds(&extruded_shapes(map, view), origin) {
+    // Extruded features stand up over the ground, their shadows under them; more than the GPU
+    // budget takes, and the view is drawn on the CPU.
+    for cmd in extrusion_cmds(&extruded_shapes(map, view), origin)? {
         cmds.push(cmd);
         clips.push(CmdClip::ALL);
     }
@@ -1385,6 +1386,10 @@ pub struct ExtrudedShape {
 /// geometry thinned for the view's scale, bottom layer first.
 pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    // Layers a hidden or out-of-scale group holds aren't drawn, as in `render_frame`.
+    let held = map.held_by_group(scale);
+    // Only the features on the ground the view shows (grown by a moving drape's margin).
+    let cull = view.camera.extent(view.width, view.height).padded(0.3, 0.0);
     let (flat, key) = (map.flat(), map.projection.code());
     let tol = view.camera.res * rustgis_map::lod::THIN_PX;
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
@@ -1395,6 +1400,7 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
         if map.projection.is_globe()
             || !layer.visible
             || !layer.in_scale_range(scale)
+            || held.contains(&layer.id)
             || layer.raster.is_some()
             || layer.geometry_type() != GeometryType::Polygon
         {
@@ -1404,9 +1410,10 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
         let rows = layer.drawn_rows(scale);
         layer.thinned_in(&flat, &key, tol);
         let layer: &rustgis_map::Layer = layer;
+        let extents = layer.projected_extents();
         for (row, g) in layer.thinned_cache(tol).iter().enumerate() {
             let Some(Geometry::Polygon(polys)) = g else { continue };
-            if rows.get(row) != Some(&true) {
+            if rows.get(row) != Some(&true) || extents.get(row).is_some_and(|e| !e.intersects(&cull)) {
                 continue;
             }
             let Some(origin) = polys.iter().flatten().flatten().find(|c| c.is_finite()).copied() else { continue };
@@ -1442,10 +1449,10 @@ pub use effects::{TiltedWall, clip_near, shadow_shift, tilted_shadow_quads, tilt
 /// Extruded features as GPU commands, relative to `origin`: the shadows they cast (when any
 /// do), then their roofs and walls, which the depth buffer sorts out. Walls carry their outward
 /// normals, lit in the shader so they stay lit right as the map turns.
-fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Vec<gpu_scene::DrawCmd> {
-    // The most vertices the roofs, walls and shadows take together (about 220 MB): past it the
-    // remaining features are left out (hostile or huge data), well before a device's buffer
-    // limit or u32 indices could be reached.
+fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Option<Vec<gpu_scene::DrawCmd>> {
+    // The most vertices the roofs, walls and shadows take together (about 220 MB), well before
+    // a device's buffer limit or u32 indices could be reached: past it, `None` (the view is
+    // drawn on the CPU rather than with features missing).
     const MAX_VERTICES: usize = 4_000_000;
     use gpu_scene::{EXTRUDE_ROOF, EXTRUDE_SHADOW, EXTRUDE_WALL, ExtrudeVertex};
     let rel = |c: Coord, z: f64| [(c.x - origin[0]) as f32, (c.y - origin[1]) as f32, z as f32];
@@ -1458,7 +1465,7 @@ fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Vec<gpu_scene::
         let more =
             s.roof.len().saturating_mul(2).saturating_add(s.rings.iter().chain(&s.holes).map(Vec::len).sum::<usize>().saturating_mul(8));
         if solid.len().saturating_add(shade.len()).saturating_add(more) > MAX_VERTICES {
-            break;
+            return None;
         }
         // A height that is no number (hostile attributes) stands no higher than the ground.
         let h = if s.height.is_finite() { s.height.clamp(0.0, 1e9) } else { 0.0 };
@@ -1513,7 +1520,7 @@ fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Vec<gpu_scene::
     if !solid_i.is_empty() {
         out.push(gpu_scene::DrawCmd::Extrusion { origin, vertices: solid, indices: solid_i, shadows: false });
     }
-    out
+    Some(out)
 }
 
 /// Point layers with at most this many features stand their markers up in a tilted view; a
@@ -1683,13 +1690,20 @@ fn markers_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
 /// first (a drape of the moving view shows them flat).
 fn extrusions_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    // Layers a hidden or out-of-scale group holds aren't drawn, as in `render_frame`.
+    let held = map.held_by_group(scale);
     let (flat, key) = (map.flat(), map.projection.code());
     let (_, fog) = tilt_sky(map);
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
     for li in order {
         let Some(layer) = map.layers.get_mut(li) else { continue };
-        if !layer.visible || !layer.in_scale_range(scale) || layer.raster.is_some() || layer.geometry_type() != GeometryType::Polygon {
+        if !layer.visible
+            || !layer.in_scale_range(scale)
+            || held.contains(&layer.id)
+            || layer.raster.is_some()
+            || layer.geometry_type() != GeometryType::Polygon
+        {
             continue;
         }
         let Some(x) = layer.extrusion.clone() else { continue };
@@ -3653,8 +3667,9 @@ mod tests {
             l.dataset.push(Some(Geometry::Polygon(vec![vec![north]])), vec![Value::Text("North".into())]);
             l.touch_geometry();
         }
-        let far_south = View { camera: Camera { center: lonlat_to_merc(Coord::new(0.0, -80.0)), ..camera }, ..view };
-        let shapes = extruded_shapes(&mut m, &far_south);
+        // Seen from a camera at another latitude, the block's height is still its own latitude's.
+        let south = View { camera: Camera { center: lonlat_to_merc(Coord::new(0.0, 57.0)), ..camera }, ..view };
+        let shapes = extruded_shapes(&mut m, &south);
         assert_eq!(shapes.len(), 1);
         assert!((shapes[0].height / 200_000.0 - 1.0).abs() < 0.05, "{}", shapes[0].height);
     }
@@ -3680,7 +3695,7 @@ mod tests {
             shadows: true,
         };
         let shapes = [shape(f64::NAN, vec![0, 1, 2, 0, 2, 3]), shape(f64::INFINITY, vec![0, 1, 2]), shape(5.0, vec![0, 1, 99])];
-        for cmd in extrusion_cmds(&shapes, [0.0, 0.0]) {
+        for cmd in extrusion_cmds(&shapes, [0.0, 0.0]).expect("within the budget") {
             let gpu_scene::DrawCmd::Extrusion { vertices, indices, .. } = cmd else { panic!("an extrusion") };
             assert!(vertices.iter().all(|v| v.position.iter().chain(&v.info).all(|x| x.is_finite())));
             assert!(indices.iter().all(|i| (*i as usize) < vertices.len()));
@@ -3726,6 +3741,17 @@ mod tests {
         // Its walls stand inside the roof's outline.
         let shapes = extruded_shapes(&mut m, &view);
         assert_eq!((shapes[0].rings.len(), shapes[0].holes.len()), (1, 1));
+        // Off the ground the view shows, a feature isn't tessellated at all.
+        let far = View { camera: Camera { center: Coord::new(5e6, 5e6), ..camera }, ..view };
+        assert!(extruded_shapes(&mut m, &far).is_empty());
+        // In a hidden group, the layer stands up nowhere.
+        let mut g = rustgis_map::LayerGroup::new("hidden");
+        g.visible = false;
+        g.children = vec![id];
+        m.groups.push(g);
+        assert!(extruded_shapes(&mut m, &view).is_empty());
+        let hidden = render(&mut m, &view).unwrap();
+        assert_eq!(hidden.pixmap.pixel(200, 150), hidden.pixmap.pixel(5, 295));
     }
 
     #[test]
