@@ -202,7 +202,10 @@ impl Server {
         if self.users_project { format!("{INSTRUCTIONS}{LIVE}") } else { INSTRUCTIONS.to_string() }
     }
 
-    /// Why this server won't run a call, if it won't.
+    /// Why this server won't run a call, if it won't. With [`Server::full_access`] there is no
+    /// refusal at all, by design: the user opted in to agents doing anything they could, project
+    /// commands, files and the network included. A refusal added below is lifted by it too, so a
+    /// rule that must hold even then belongs before this check.
     pub fn refusal(&self, s: &Session, call: &ToolCall) -> Option<String> {
         if self.full_access {
             return None;
