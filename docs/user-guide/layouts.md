@@ -34,7 +34,9 @@ the maps; while one is open, its groups lead the Publish tab:
   **Title** (the units, such as `Elevation (m)`; the layer's name to start with), the
   **Orientation**, which side the **Labels** go on, how many **Ticks** a gradient labels (2 to
   21, the ends included) and **Reverse** (high values first). An RGB raster or a hillshade
-  without a tint has no colour scale and shows a placeholder. From a command:
+  without a tint has no colour scale and shows a placeholder, as does a picked layer that was
+  renamed or removed (it is kept by name, like a table or chart frame's layer) until another is
+  picked. From a command:
   `layout.addElement={"kind":"colorbar","layer":"DEM","title":"Elevation (m)","orientation":"vertical","ticks":3}`.
 - **Text** and **Dynamic Text**: `{date}`, `{time}`, `{scale}`, `{map}`, `{crs}`, `{page}`,
   `{pages}`, `{pageName}` and `{layout}` fill in when the page is drawn. **Picture** places a PNG
