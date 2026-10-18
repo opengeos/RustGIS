@@ -570,8 +570,13 @@ mod tests {
         assert_eq!(lookup(" esri:102033 ").map(|(_, label)| label), Ok("ESRI:102033".into()));
         assert_eq!(crate::Projection::from_code("esri:102033"), Ok(crate::Projection::Custom("ESRI:102033".into())));
         assert_eq!(crate::Projection::from_code("ESRI:102033").map(|p| p.label()), Ok("ESRI:102033".into()));
+        // One system, one saved code, however it was typed.
+        for typed in ["ESRI 102033", "esri:0102033", " Esri:102033 "] {
+            assert_eq!(crate::Projection::from_code(typed), Ok(crate::Projection::Custom("ESRI:102033".into())), "{typed}");
+        }
+        assert_eq!(crate::Projection::from_code("epsg:03035"), Ok(crate::Projection::Custom("EPSG:3035".into())));
         // ESRI's Web Mercator codes are the default map.
-        for web in ["ESRI:102100", "esri:102113"] {
+        for web in ["ESRI:102100", "esri:102113", "ESRI 102100", "esri:0102100"] {
             assert_eq!(crate::Projection::from_code(web), Ok(crate::Projection::WebMercator), "{web}");
         }
         // Not in the table (World Miller is kilometres off in proj4rs), not a number, too big.

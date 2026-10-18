@@ -55,7 +55,7 @@ impl Projection {
     /// (which must name a projected coordinate system the map can draw).
     pub fn from_code(s: &str) -> Result<Projection, String> {
         match s.trim().to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
-            "mercator" | "webmercator" | "2d" | "map" | "epsg:3857" | "3857" | "epsg:900913" | "esri:102100" | "esri:102113" => {
+            "mercator" | "webmercator" | "2d" | "map" | "epsg:3857" | "3857" | "epsg:900913" => {
                 return Ok(Projection::WebMercator);
             }
             "globe" | "3d" | "scene" | "globalscene" => return Ok(Projection::Globe),
@@ -69,15 +69,17 @@ impl Projection {
         if s.starts_with("local:") {
             return Ok(Projection::Custom(s.to_string()));
         }
-        // Canonical form: the preset id, EPSG:<n> or ESRI:<n>.
-        let canonical = crate::projection::PRESETS
-            .iter()
-            .find(|(id, label, _)| id.eq_ignore_ascii_case(s) || label.eq_ignore_ascii_case(s))
-            .map(|(id, _, _)| id.to_string())
-            .unwrap_or_else(|| {
-                let authority = if s.to_ascii_lowercase().starts_with("esri") { "ESRI" } else { "EPSG" };
-                format!("{authority}:{}", s.trim_start_matches(|c: char| !c.is_ascii_digit()))
-            });
+        // Canonical form: the preset id, or the code as `lookup` names it (`EPSG:<n>`, `ESRI:<n>`,
+        // whatever the spacing and leading zeros typed).
+        let preset = crate::projection::PRESETS.iter().find(|(id, label, _)| id.eq_ignore_ascii_case(s) || label.eq_ignore_ascii_case(s));
+        let canonical = match preset {
+            Some((id, _, _)) => id.to_string(),
+            None => crate::projection::lookup(s)?.1,
+        };
+        // ESRI's Web Mercator codes are the default map.
+        if canonical == "ESRI:102100" || canonical == "ESRI:102113" {
+            return Ok(Projection::WebMercator);
+        }
         Ok(Projection::Custom(canonical))
     }
 }

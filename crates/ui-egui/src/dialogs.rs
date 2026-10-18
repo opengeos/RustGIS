@@ -1243,7 +1243,11 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
         let esri = lower.starts_with("esri:") || (n.len() == 5 && n.starts_with('5'));
         let prefix = if esri { "ESRI" } else { "EPSG" };
         let text = crate::i18n::fmt("Open {code} on epsg.io", &[("code", &format!("{prefix}:{n}"))]);
+        // epsg.io's pages carry no authority: an ESRI number that is also an EPSG code (ESRI:31491,
+        // a Germany zone) goes to its search instead, which tells the two apart.
+        let shared = lower.starts_with("esri:") && lookup(&format!("EPSG:{n}")).is_ok();
+        let url = if shared { format!("https://epsg.io/?q=ESRI:{n}") } else { format!("https://epsg.io/{n}") };
         // In the browser build the link must not replace the app (and the map) in its tab.
-        ui.add(egui::Hyperlink::from_label_and_url(text, format!("https://epsg.io/{n}")).open_in_new_tab(true));
+        ui.add(egui::Hyperlink::from_label_and_url(text, url).open_in_new_tab(true));
     }
 }
