@@ -1371,9 +1371,12 @@ mod tests {
         assert!(count(&flipped, top, ink) > 0 && count(&flipped, right, ink) > 0, "top and right when picked");
         assert_eq!(count(&flipped, bottom, ink) + count(&flipped, left, ink), 0);
         // Vertical side labels run along the edge: narrower across it than horizontal ones.
+        // Columns with any text in them, inside the frame's left edge; antialiased text counts
+        // too, as a thin system font (Windows) may leave no pixel of a stem fully dark.
         let across = |pm: &Pixmap| {
-            let cols: Vec<u32> = (0..pm.width()).filter(|&x| (0..pm.height()).any(|y| pm.pixel(x, y).is_some_and(ink))).collect();
-            cols.iter().filter(|&&x| (x as f64) < 30.0 * PT_PER_MM).count()
+            let px = |mm: f64| (mm * PT_PER_MM) as u32;
+            let shaded = |p: tiny_skia::PremultipliedColorU8| p.red() < 200 && p.green() < 200 && p.blue() < 200;
+            (px(11.0)..px(30.0)).filter(|&x| (px(20.0)..px(80.0)).any(|y| pm.pixel(x, y).is_some_and(shaded))).count()
         };
         let horizontal = grid_page(g(GridEdges { top: false, bottom: false, left: true, right: false }, Orientation::Horizontal));
         let vertical = grid_page(g(GridEdges { top: false, bottom: false, left: true, right: false }, Orientation::Vertical));

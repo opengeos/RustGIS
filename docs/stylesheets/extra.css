@@ -1,0 +1,19 @@
+/* The home page's call-to-action row: buttons and the Microsoft Store badge on one line,
+   spaced apart and wrapping onto further lines on narrow screens. */
+.hero-actions p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.hero-actions .md-button {
+  margin: 0;
+  padding-inline: 1.4em;
+}
+
+.hero-actions img {
+  display: block;
+  height: 2rem;
+  width: auto;
+}

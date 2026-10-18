@@ -6,6 +6,7 @@ site_url = "https://rustgis.app"
 repo_url = "https://github.com/opengeos/RustGIS"
 repo_name = "opengeos/RustGIS"
 copyright = "Copyright &copy; 2026 Qiusheng Wu"
+extra_css = ["stylesheets/extra.css"]
 
 nav = [
   { "Home" = "index.md" },
