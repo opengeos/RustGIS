@@ -679,13 +679,19 @@ impl<'a> Colorizer<'a> {
     /// The colour of a pixel from its renderer band values (`NaN` = no data), or `None` for
     /// transparent. `hillshade` (0–255) is used by Shaded Relief.
     pub fn color(&self, vals: &[f32], hillshade: Option<u8>) -> Option<[u8; 4]> {
+        // The renderer masks values as it samples them (they arrive as NaN); this is for other callers.
         let mask = &self.style.mask;
         if mask.is_empty() || !vals.iter().any(|v| mask.hides(*v)) {
             return self.paint(vals, hillshade);
         }
-        // Masked values are no data.
-        let kept: Vec<f32> = vals.iter().map(|v| if mask.hides(*v) { f32::NAN } else { *v }).collect();
-        self.paint(&kept, hillshade)
+        // Masked values are no data. The renderer bands are at most three.
+        let mut kept = [f32::NAN; 3];
+        for (k, v) in kept.iter_mut().zip(vals) {
+            if !mask.hides(*v) {
+                *k = *v;
+            }
+        }
+        self.paint(kept.get(..vals.len().min(3)).unwrap_or(&kept), hillshade)
     }
 
     fn paint(&self, vals: &[f32], hillshade: Option<u8>) -> Option<[u8; 4]> {
