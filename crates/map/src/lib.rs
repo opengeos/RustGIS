@@ -792,8 +792,23 @@ impl Map {
         for g in &mut self.groups {
             g.children.retain(|c| !group.children.contains(c));
         }
+        for c in &group.children {
+            self.lift_out(*c);
+        }
         self.groups.push(group);
         id
+    }
+
+    /// Moves a layer that sits between two layers of a group it isn't in (it just left it) to
+    /// just above that group, so the group's layers stay together.
+    fn lift_out(&mut self, layer: u32) {
+        let Some(i) = self.layer_index(layer) else { return };
+        let l = self.layers.remove(i);
+        let mut at = i;
+        while at > 0 && self.splits_group(at) {
+            at -= 1;
+        }
+        self.layers.insert(at.min(self.layers.len()), l);
     }
 
     pub fn group(&self, id: u32) -> Option<&LayerGroup> {
@@ -857,11 +872,13 @@ impl Map {
     }
 
     /// Puts a layer in a group (out of any other), next to the group's other children in the
-    /// drawing order; `None` takes it out of its group.
+    /// drawing order; `None` takes it out of its group (above the group when it was between two
+    /// of its layers).
     pub fn set_group(&mut self, layer: u32, group: Option<u32>) {
         for g in &mut self.groups {
             g.children.retain(|c| *c != layer);
         }
+        self.lift_out(layer);
         let Some(gid) = group else { return };
         let Some(g) = self.groups.iter_mut().find(|g| g.id == gid) else { return };
         g.children.push(layer);

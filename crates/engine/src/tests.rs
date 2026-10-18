@@ -7159,3 +7159,23 @@ fn a_moved_group_never_lands_inside_another() {
     s.run("group.move", &json!({"group": "A", "to": 2})).unwrap();
     assert_eq!(names(&s), ["Rivers", "Cities", "Lakes", "Countries"]);
 }
+
+#[test]
+fn a_layer_leaving_a_group_never_splits_it() {
+    let mut s = world();
+    let names = |s: &Session| s.map().layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    s.run("group.add", &json!({"name": "A", "layers": ["Rivers", "Lakes", "Countries"]})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Rivers", "Lakes", "Countries"]);
+    // Out of the middle: above the group.
+    s.run("layer.group", &json!({"layer": "Lakes", "group": null})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Lakes", "Rivers", "Countries"]);
+    s.run("layer.group", &json!({"layer": "Lakes", "group": "A", "before": "Countries"})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Rivers", "Lakes", "Countries"]);
+    // Into an empty group, and into a new group: the same.
+    s.run("group.add", &json!({"name": "Empty"})).unwrap();
+    s.run("layer.group", &json!({"layer": "Lakes", "group": "Empty"})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Lakes", "Rivers", "Countries"]);
+    s.run("layer.group", &json!({"layer": "Lakes", "group": "A", "before": "Countries"})).unwrap();
+    s.run("group.add", &json!({"name": "B", "layers": ["Lakes"]})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Lakes", "Rivers", "Countries"]);
+}
