@@ -328,8 +328,8 @@ pub fn read_token_file(path: &std::path::Path) -> Result<String, String> {
 
 /// Makes sure [`token_dir`] exists as a private folder owned by the user running this process,
 /// and returns it. A folder that is a symlink, is not a folder, belongs to another user or is
-/// readable by anyone else is refused, not repaired.
-fn private_dir() -> Result<PathBuf, String> {
+/// readable by anyone else is refused, not repaired. The file bridge keeps its files here too.
+pub(crate) fn private_dir() -> Result<PathBuf, String> {
     let dir = token_dir();
     // Only Unix sets a mode on the builder; elsewhere it stays as created.
     #[cfg_attr(not(unix), allow(unused_mut))]

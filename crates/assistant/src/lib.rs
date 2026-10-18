@@ -19,6 +19,8 @@ pub mod chatgpt;
 pub mod compact;
 pub mod docs;
 pub mod error;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod filebridge;
 pub use error::{Error, Recovery};
 pub mod framing;
 #[cfg(not(target_arch = "wasm32"))]

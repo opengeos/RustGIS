@@ -636,6 +636,10 @@ pub struct RustGisApp {
     /// already has open, started by the `ui.mcpRelay` command and off until then.
     #[cfg(not(target_arch = "wasm32"))]
     pub relay: Option<rustgis_assistant::relay::Relay>,
+    /// The file bridge for agents that can't use MCP: on while agents are turned on, with or
+    /// without the relay ([`connectui`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub file_bridge: Option<rustgis_assistant::filebridge::FileBridge>,
     /// The frame's `egui::Context`, kept so `ui.mcpRelay` can hand the relay its wake callback:
     /// a queued message asks for a repaint, or it waits for the user to move the mouse.
     #[cfg(not(target_arch = "wasm32"))]
@@ -699,6 +703,8 @@ impl RustGisApp {
             services: Services::default(),
             #[cfg(not(target_arch = "wasm32"))]
             relay: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            file_bridge: None,
             #[cfg(not(target_arch = "wasm32"))]
             connect: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -2836,6 +2842,21 @@ impl RustGisApp {
                     self.relay_wake_pending = false;
                 }
                 relay.poll(&mut self.session);
+            }
+            // A script an agent wrote to the file bridge.
+            if let Some(bridge) = self.file_bridge.clone() {
+                if !bridge.has_wake() {
+                    let ctx = ctx.clone();
+                    bridge.set_wake(Box::new(move || ctx.request_repaint()));
+                }
+                match bridge.poll(&mut self.session) {
+                    Some(o) if o.success => self.session.notify(tl!("File bridge: the script ran").to_string(), false),
+                    Some(o) => {
+                        let text = i18n::fmt("File bridge: {error}", &[("error", o.error.as_deref().unwrap_or(""))]);
+                        self.session.notify(text, true);
+                    }
+                    None => {}
+                }
             }
         }
         // Fonts installed last frame are active now.

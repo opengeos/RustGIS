@@ -39,17 +39,44 @@ fn resume_on(app: &mut RustGisApp, port: u16) {
     }
     let on = enabled(app);
     app.connect.on = Some(on);
-    if !on || app.relay.is_some() {
+    if !on {
+        return;
+    }
+    let bridge = start_bridge(app);
+    if app.relay.is_some() {
         return;
     }
     if let Err(e) = app.run("ui.mcpRelay", json!({"port": port})) {
+        relay_failed(app, e, bridge.is_ok());
+    }
+}
+
+/// The relay couldn't start (its port is taken, say). With the file bridge running, agents stay
+/// on and can use it; without, the choice goes back off.
+fn relay_failed(app: &mut RustGisApp, error: String, bridge: bool) {
+    let said = if bridge {
+        crate::i18n::fmt("MCP relay couldn't start ({error}); agents can still use the file bridge", &[("error", &error)])
+    } else {
         app.connect.on = Some(false);
         if let Some(save) = &app.services.save_pref {
             save(PREF, "off");
         }
-        app.session.notify(e.clone(), true);
-        app.connect.error = Some(e);
+        error
+    };
+    app.session.notify(said.clone(), true);
+    app.connect.error = Some(said);
+}
+
+/// Starts the file bridge ([`rustgis_assistant::filebridge`]) unless it runs already: agents
+/// turned on may use files and the network through it, as through the relay.
+fn start_bridge(app: &mut RustGisApp) -> Result<(), String> {
+    if app.file_bridge.is_some() {
+        return Ok(());
     }
+    let bridge = rustgis_assistant::filebridge::FileBridge::start().inspect_err(|e| app.session.notify(e.clone(), true))?;
+    bridge.set_allow_access(true);
+    app.file_bridge = Some(bridge);
+    Ok(())
 }
 
 /// Every explicit stop, including the status bar/command, also withdraws remembered consent.
@@ -57,6 +84,9 @@ pub(crate) fn stopped(app: &mut RustGisApp) {
     let changed = app.connect.on != Some(false);
     app.connect.on = Some(false);
     app.connect.error = None;
+    if let Some(bridge) = app.file_bridge.take() {
+        bridge.stop();
+    }
     if changed && let Some(save) = &app.services.save_pref {
         save(PREF, "off");
     }
@@ -103,17 +133,16 @@ pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
         if let Some(save) = &app.services.save_pref {
             save(PREF, if on { "on" } else { "off" });
         }
-        let started = if on { app.run("ui.mcpRelay", json!({})) } else { app.run("ui.mcpRelay", json!({"stop": true})) };
-        if let Err(e) = started {
-            // Not started (the port is taken, say): the box and the remembered choice go back off.
-            app.connect.error = Some(e);
-            if on {
-                on = false;
-                app.connect.on = Some(false);
-                if let Some(save) = &app.services.save_pref {
-                    save(PREF, "off");
-                }
+        if on {
+            let bridge = start_bridge(app).is_ok();
+            if let Err(e) = app.run("ui.mcpRelay", json!({})) {
+                // Not started (the port is taken, say): with the file bridge agents stay on;
+                // without, the box and the remembered choice go back off.
+                relay_failed(app, e, bridge);
+                on = enabled(app);
             }
+        } else if let Err(e) = app.run("ui.mcpRelay", json!({"stop": true})) {
+            app.connect.error = Some(e);
         }
         if let Some(relay) = &app.relay {
             relay.set_allow_access(on);
@@ -121,6 +150,14 @@ pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     if let Some(e) = &app.connect.error {
         ui.label(RichText::new(e).small().color(t.red));
+    }
+    // Agents that can't use MCP: a script written to a file.
+    if let (true, Some(bridge)) = (on, &app.file_bridge) {
+        let (command, result) = (bridge.command_path().display().to_string(), bridge.result_path().display().to_string());
+        ui.label(RichText::new(tl!("Agents without MCP can write a script (one command per line) to:")).small());
+        copyable(ui, &command);
+        ui.label(RichText::new(tl!("RustGIS runs it and writes the outcome to:")).small());
+        copyable(ui, &result);
     }
     let (true, Some(port)) = (on, app.relay.as_ref().map(|r| r.port())) else { return };
     // What an agent needs: RustGIS's MCP server, attached to this app.
@@ -148,9 +185,9 @@ pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
 mod tests {
     use super::*;
 
-    /// A remembered relay that cannot start becomes off in memory and preferences, with a notice.
+    /// A remembered relay that cannot start leaves agents on with the file bridge, and says so.
     #[test]
-    fn failed_relay_resume_clears_the_saved_choice() {
+    fn failed_relay_resume_keeps_the_file_bridge() {
         use std::sync::{Arc, Mutex};
         let occupied = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = occupied.local_addr().unwrap().port();
@@ -164,11 +201,45 @@ mod tests {
         let mark = app.session.notice_mark();
         resume_on(&mut app, port);
         assert!(app.relay.is_none());
-        assert!(!enabled(&app));
-        assert!(saved.lock().unwrap().iter().any(|(k, v)| k == PREF && v == "off"));
+        assert!(enabled(&app) && app.file_bridge.is_some(), "agents stay on with the file bridge");
+        assert!(!saved.lock().unwrap().iter().any(|(k, v)| k == PREF && v == "off"));
         let error = app.connect.error.as_ref().unwrap();
+        assert!(error.contains("file bridge"), "{error}");
         assert!(app.session.notices_since(mark).iter().any(|n| &n.text == error));
+        // An explicit stop ends the bridge with the choice.
+        app.run("ui.mcpRelay", json!({"stop": true})).unwrap();
+        assert!(app.file_bridge.is_none() && !enabled(&app));
+        assert!(saved.lock().unwrap().iter().any(|(k, v)| k == PREF && v == "off"));
     }
+    /// The app runs what an agent writes to the file bridge on its frame, and says how it went.
+    #[test]
+    fn the_app_runs_file_bridge_scripts() {
+        let dir = std::env::temp_dir().join(format!("rustgis-bridge-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = RustGisApp::with_sample();
+        let bridge = rustgis_assistant::filebridge::FileBridge::start_in(dir.clone()).unwrap();
+        app.file_bridge = Some(bridge.clone());
+        let layers = app.session.map().layers.len();
+        let ctx = egui::Context::default();
+        app.logic(&ctx);
+        assert!(bridge.has_wake(), "the frame gives the bridge its wake");
+        let mark = app.session.notice_mark();
+        std::fs::write(bridge.command_path(), "layer.addSample {\"name\": \"countries\"}\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app.session.notices_since(mark).iter().any(|n| n.text.starts_with("File bridge")) {
+            assert!(std::time::Instant::now() < deadline, "the frame never ran the script");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            app.logic(&ctx);
+        }
+        assert_eq!(app.session.map().layers.len(), layers + 1);
+        assert!(app.session.notices_since(mark).iter().any(|n| n.text == "File bridge: the script ran" && !n.error));
+        let result: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(bridge.result_path()).unwrap()).unwrap();
+        assert_eq!(result["success"], true, "{result}");
+        drop(app);
+        drop(bridge);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn explicit_stop_updates_cached_and_remembered_choice() {
         use std::sync::{Arc, Mutex};
