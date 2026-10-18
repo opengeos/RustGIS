@@ -82,6 +82,13 @@ hovering shows `Stop MCP relay` and the last call with its parameters, and click
 relay. Agents attached through the relay are told, when they connect, that this is the project you
 have open and that you watch the map change as they work.
 
+Under it, **Full access** (off unless you tick it, for this session only) lifts every refusal for
+agents attached with the relay's own token. They may then also run scripts, tasks and models, and
+install, remove and run plugins: what you could do yourself in RustGIS. It isn't remembered: it's
+off again at the next launch, and when agents are turned off. While it's on, the status bar reads
+`MCP relay · full access · n attached` in red. Agents the app starts itself keep their own grants'
+rules.
+
 ```sh
 rustgis-cli mcp --attach                 # the open app on 127.0.0.1:8767
 rustgis-cli mcp --attach 9000 --yes      # another port, with file and network access
@@ -121,6 +128,30 @@ An agent the app starts itself gets a run-scoped token instead of the relay's ow
 `rustgis-cli mcp --attach PORT --token-file FILE`. Each such grant carries its own file and network
 permission, and the app revokes it when it's done with the agent; that closes its connections and
 removes its file.
+
+### The file bridge
+
+For an agent that can't use MCP, or when the relay's port is taken, the app also runs scripts
+written to a file. It's on while **Let your Agents Control RustGIS** is ticked, even if the relay
+couldn't start: agents then stay on, and the status bar says only the file bridge is running.
+
+1. Write a script to `bridge-command.txt` in the relay's private folder
+   (`$XDG_RUNTIME_DIR/rustgis` on Linux, a `rustgis-mcp-<user>` folder in the temporary folder
+   elsewhere). The settings section shows the full path. The script is in the `script.run` format:
+   one `command-id {json}` per line, `#` for comments.
+2. Once the file has stopped changing for half a second, RustGIS runs it on the open project. (To be
+   sure a half-written script never runs, write it to another file in the folder and rename it to
+   `bridge-command.txt`.) It runs as one undo step, with
+   the same rules as the `run` tool: a refused or failing line stops it, and nothing it did to the
+   project is kept.
+3. The outcome is written to `bridge-result.json` in the same folder: `{success, result, lines,
+   layersAdded, notices, error, duration_s, timestamp}`. The status bar says whether it worked.
+
+Only one RustGIS at a time runs the bridge: a second copy's is refused while the first's runs
+(it holds `bridge.lock`). The bridge runs a script each time the file changes. Whatever the file held when the bridge started
+isn't run. While the bridge is on, `bridge-ready.json` there holds its `pid`, the two files' paths,
+`started_at`, the app `version` and a `schema` number. The folder is readable by this user only,
+like the relay's token.
 
 ### Relay requirements
 
@@ -186,6 +217,7 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - Token required: `relay_drops_connections_without_the_token`
 - Parse error after attach: `relay_returns_parse_error_after_attach_and_stays_usable`
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
+- Full access, for the relay's own token only: `relay_full_access_lifts_the_refusals_for_its_own_token_only`
 - Screen snapshots go to the app: `relay_hands_screen_snapshots_to_the_app`
 - Snapshots without the screen: `relay_draws_snapshots_offscreen_without_the_screen`
 - Saved snapshots need access: `relay_refuses_a_saved_snapshot_without_access`
@@ -236,7 +268,9 @@ Your agent asks you before each tool call, and the server adds its own limits:
   text (it could bring in web layers). Without it, the agent can still work with the data you
   gave the server and with the built-in sample, basemaps and geoprocessing. `view_map` draws
   the web tile layers the project you opened already has, fetching their tiles.
-- Plugin management, scripts, tasks, models and the GeoLibre runner are never run from here.
+- Plugin management, scripts, tasks, models and the GeoLibre runner are never run from here,
+  unless you turned on **Full access** for agents in the desktop app. That applies only to agents
+  attached to it with the relay's own token.
 - In private-server mode, opening, replacing and undoing in the project are allowed: the project
   is the agent's own. With `--attach`, these operations affect the project open in the desktop app.
 

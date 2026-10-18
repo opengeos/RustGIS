@@ -15,6 +15,7 @@ pub mod imagery;
 pub mod items;
 pub mod labels;
 pub mod layer;
+pub mod layer_copy;
 pub mod layout;
 pub mod navigate;
 pub mod notebook;
@@ -56,6 +57,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(sources::commands());
     v.extend(layer::commands());
     v.extend(group::commands());
+    v.extend(layer_copy::commands());
     v.extend(raster::commands());
     v.extend(zarr::commands());
     v.extend(select::commands());
