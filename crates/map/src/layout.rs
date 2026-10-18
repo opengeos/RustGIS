@@ -844,7 +844,7 @@ pub fn frame_camera(map: &Map, center: Coord, scale: f64, bearing: f64, pitch: f
     if let Some(c) = map.to_map(center) {
         cam.center = c;
     }
-    let per = map.flat().ground_per_unit(cam.center).max(1e-9);
+    let per = map.ground_per_unit(cam.center).max(1e-9);
     cam.res = scale * PAPER_M_PER_PT / per;
     cam.clamp();
     cam
@@ -868,7 +868,7 @@ pub fn fit_scale(map: &Map, e: &rustgis_geom::Extent, w_mm: f64, h_mm: f64) -> O
         return None;
     }
     let center = flat.inverse(ext.center())?;
-    let per = flat.ground_per_unit(ext.center()).max(1e-9);
+    let per = (flat.ground_per_unit(ext.center()) * map.body().ratio()).max(1e-9);
     let (gw, gh) = (ext.width().max(1.0) * per * 1.1, ext.height().max(1.0) * per * 1.1);
     let scale = (gw / (w_mm / 1000.0)).max(gh / (h_mm / 1000.0));
     Some((center, scale.clamp(100.0, 1e10)))

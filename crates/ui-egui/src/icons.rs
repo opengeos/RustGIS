@@ -809,6 +809,22 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
                 .collect();
             p.line(&orbit, 1.3, amber);
         }
+        // A ringed planet: the celestial body switcher.
+        "planet" => {
+            let ring = |a0: f32, a1: f32| -> Vec<(f32, f32)> {
+                (0..=16)
+                    .map(|i| {
+                        let a = (a0 + (a1 - a0) * i as f32 / 16.0).to_radians();
+                        (12.0 + 10.5 * a.cos(), 12.5 + 3.4 * a.sin() - 2.6 * a.cos())
+                    })
+                    .collect()
+            };
+            // The ring's far half behind the planet, its near half in front.
+            p.line(&ring(180.0, 360.0), 1.3, ink);
+            p.circle(12.0, 12.0, 6.5, Some(amber.gamma_multiply(0.9)), Some((1.3, ink)));
+            p.circle(10.0, 9.8, 2.2, Some(Color32::from_white_alpha(80)), None);
+            p.line(&ring(0.0, 180.0), 1.3, ink);
+        }
         // A grid of cells shaded low to high.
         "raster_layer" => {
             for (i, a) in [40u8, 90, 150, 70, 130, 200, 110, 180, 240].into_iter().enumerate() {
@@ -1191,6 +1207,7 @@ pub const ALL: &[&str] = &[
     "line_layer",
     "polygon_layer",
     "globe_view",
+    "planet",
     "raster_layer",
     "stretch",
     "rgb",

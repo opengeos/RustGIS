@@ -2,6 +2,7 @@
 //! MapLibre styles) over the basemap.
 
 use rustgis_map::effects::Blend;
+use rustgis_map::planets;
 use rustgis_map::tiles::{MAX_TILE_LAYERS, TileKind, TileLayer};
 use serde_json::{Value, json};
 
@@ -13,6 +14,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub const NETWORK: &[&str] = &[
     "map.route",
     "map.addTiles",
+    "map.body",
     "layer.addUrl",
     "service.layers",
     "service.add",
@@ -48,7 +50,56 @@ pub fn commands() -> Vec<C> {
             r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "visible"?: bool, "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference", "move"?: "up"|"down"|"top"|"bottom", "rename"?: text}"#,
         ),
         C::new("map.tiles", "Tile Layers", "Home › Add", |s, _| Ok(list(s, false))).view(),
+        C::new("map.body", "Celestial Body", "Home › Add", body).params(
+            r#"{"name"?: "earth"|"moon"|"mars"|"mercury"|"venus"|"io"|"europa"|"ganymede"|"callisto"|"titan"|"pluto"|"charon" (map.bodies lists them; default: the basemap's body), "basemap"?: a planetary basemap's id (default: the body's first; the Earth's removes the planetary ones) | false (keeps the web basemaps)}"#,
+        ),
+        C::new("map.bodies", "Celestial Bodies", "Home › Add", |s, _| Ok(bodies(s))).view(),
     ]
+}
+
+/// The bodies a map can be on, with their sizes and basemaps, and the one it is on.
+fn bodies(s: &Session) -> Value {
+    let list: Vec<Value> = rustgis_geom::BODIES
+        .iter()
+        .map(|b| {
+            let maps: Vec<Value> = planets::basemaps_of(b.id).map(|m| json!({"id": m.id, "name": m.name})).collect();
+            json!({"id": b.id, "name": b.name, "equatorialRadius": b.a, "meanRadius": b.mean_radius_m(), "basemaps": maps})
+        })
+        .collect();
+    json!({"body": s.map().body().id, "bodies": list})
+}
+
+/// Moves the map to a celestial body: its size sets the map's distances, areas and scale, and
+/// (unless `basemap` is false) one of its basemaps replaces the web basemaps.
+fn body(s: &mut Session, p: &Value) -> CmdResult {
+    let keep = p.get("basemap").and_then(Value::as_bool) == Some(false);
+    let basemap = match ps(p, "basemap") {
+        Some(id) => Some(planets::basemap(id).ok_or_else(|| format!("no planetary basemap '{id}' (map.bodies lists them)"))?),
+        None => None,
+    };
+    let body = match ps(p, "name") {
+        Some(n) => rustgis_geom::Body::find(n).ok_or_else(|| {
+            let ids: Vec<&str> = rustgis_geom::BODIES.iter().map(|b| b.id).collect();
+            format!("unknown body '{n}' ({})", ids.join(", "))
+        })?,
+        None => rustgis_geom::Body::get(basemap.ok_or("name or basemap is required")?.body),
+    };
+    if let Some(m) = basemap.filter(|m| m.body != body.id) {
+        return Err(format!("'{}' is a basemap of {}, not {}", m.id, rustgis_geom::Body::get(m.body).name, body.name));
+    }
+    let basemap = if keep { None } else { basemap.or_else(|| planets::basemaps_of(body.id).next()) };
+    let m = s.map_mut();
+    m.body = body.id.to_string();
+    if !keep {
+        // Another body's basemaps go; on the Earth, the web basemaps the map had stay.
+        m.tiles.retain(|t| t.overlay || !planets::is_planet_basemap(&t.id));
+    }
+    if let Some(b) = basemap {
+        let tile = json!({"url": b.url, "kind": "raster", "name": format!("{} · {}", body.name, b.name), "attribution": b.attribution,
+            "maxZoom": b.max_zoom, "tms": b.tms, "id": b.id, "replace": true});
+        add(s, &tile)?;
+    }
+    Ok(json!({"body": body.id, "name": body.name, "meanRadius": body.mean_radius_m(), "basemap": basemap.map(|b| b.id)}))
 }
 
 /// The map's tile layers (index 0 on top), as `map.tiles` and `info.project` list them; `redact`

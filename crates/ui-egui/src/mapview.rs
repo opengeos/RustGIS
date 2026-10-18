@@ -1629,6 +1629,10 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
             p.circle_stroke(*s, 3.5, Stroke::new(1.5, color));
         }
         if matches!(tool, Tool::Measure | Tool::MeasureArea) && pts.len() >= 2 {
+            // On the map's body.
+            let body = app.session.map().body();
+            let geodesic_length_m = |pts: &[Coord]| body.length(geodesic_length_m(pts));
+            let geodesic_ring_area_m2 = |ring: &[Coord]| body.area(geodesic_ring_area_m2(ring));
             let text = if tool == Tool::Measure {
                 let seg = pts.len().checked_sub(2).and_then(|i| pts.get(i..)).map(geodesic_length_m).unwrap_or(0.0);
                 crate::i18n::fmt(

@@ -493,6 +493,15 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     app.ui.layers_view = v;
                 }
             }
+            // The celestial body switcher, lit off the Earth (#223).
+            ui.add_space(6.0);
+            let body = app.session.map().body();
+            let tip = crate::i18n::fmt("Celestial body: {body}", &[("body", tl!(body.name))]);
+            let resp = view_button(ui, "planet", &tip, !body.is_earth(), t);
+            egui::Popup::menu(&resp).show(|ui| {
+                ui.set_min_width(150.0);
+                crate::ribbon::body_menu(ui, app);
+            });
         });
     });
     if filtering && view == LayersView::DrawingOrder {

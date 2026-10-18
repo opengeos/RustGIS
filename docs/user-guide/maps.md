@@ -165,6 +165,26 @@ meanwhile; exports and `rustgis-cli` wait for them. On the globe and in other pr
 tiles are reprojected. From scripts: `map.addTiles`, `map.removeTiles`, `map.setTiles` and
 `map.tiles`.
 
+### Other worlds
+
+A map can be on the Moon, Mars or another body instead of the Earth. Pick the body from the
+planet button at the top of the Layers pane, or under **Celestial Bodies** in the Basemap
+gallery: Earth, Moon, Mars, Callisto, Charon, Europa, Ganymede, Io, Mercury, Pluto, Titan and
+Venus. Choosing one puts one of its basemaps under the map (the gallery lists the others: Viking,
+MOLA elevation and hillshade mosaics for Mars, LOLA albedo for the Moon, and the USGS
+Astrogeology mosaics of the rest) and measures on that body: the Measure tools, the scale bar,
+the map scale and layout scale bars use its radius. Coordinates stay longitude and latitude, and
+the map stays a Web Mercator sphere, the size of the body. Choosing the Earth again takes the
+planetary basemaps off; the body is saved with the map.
+
+The basemaps come from [OpenPlanetaryMap](https://www.openplanetary.org/opm) and
+[USGS Astrogeology](https://astrogeology.usgs.gov/). OpenPlanetaryMap's mosaics sit in storage
+that browsers can't read from another site, and USGS serves its mosaics in lon/lat only, so both
+are read through the opengeos tile service (`tiles.geolibre.app`, shared with GeoLibre), which
+adds what browsers need, reprojects the USGS mosaics and caches the tiles. From scripts:
+`map.body={"name": "mars"}` (`"basemap"` picks another of its basemaps, or `false` keeps the
+current ones) and `map.bodies`.
+
 ### Worldview
 
 The world outline and the World Atlas sample's countries come in two worldviews: Natural

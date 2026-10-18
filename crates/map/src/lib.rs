@@ -11,6 +11,7 @@ pub mod graphics;
 pub mod layout;
 pub mod lod;
 pub mod palette;
+pub mod planets;
 pub mod presentation;
 pub mod projection;
 pub mod raster;
@@ -703,8 +704,20 @@ pub struct Map {
     /// Animation keyframes: views the animation moves through.
     #[serde(default)]
     pub animation: Vec<view::Keyframe>,
+    /// The celestial body the map is on (a [`rustgis_geom::Body`] id): its size sets the ground
+    /// distances, areas and scale (#223).
+    #[serde(default = "earth", skip_serializing_if = "is_earth")]
+    pub body: String,
     #[serde(default)]
     next_layer_id: u32,
+}
+
+fn earth() -> String {
+    rustgis_geom::body::EARTH.id.to_string()
+}
+
+fn is_earth(id: &str) -> bool {
+    rustgis_geom::Body::get(id).is_earth()
 }
 
 /// Which layers a click in the map identifies.
@@ -784,6 +797,7 @@ impl Map {
             view: view::ViewSettings::default(),
             thumbnail: None,
             animation: Vec::new(),
+            body: earth(),
             next_layer_id: 1,
         }
     }
@@ -1168,7 +1182,17 @@ impl Map {
 
     /// Ground metres per logical pixel for another camera on this map (an export's view).
     pub fn ground_res_at(&self, camera: &Camera) -> f64 {
-        camera.res * self.flat().ground_per_unit(camera.center)
+        camera.res * self.ground_per_unit(camera.center)
+    }
+
+    /// The celestial body the map is on (the Earth for an unknown id).
+    pub fn body(&self) -> &'static rustgis_geom::Body {
+        rustgis_geom::Body::get(&self.body)
+    }
+
+    /// Ground metres on the map's body per map unit at a point in map coordinates.
+    pub fn ground_per_unit(&self, at: Coord) -> f64 {
+        self.flat().ground_per_unit(at) * self.body().ratio()
     }
 
     /// Map scale denominator at the centre of view.
@@ -1181,7 +1205,7 @@ impl Map {
         if !scale.is_finite() || scale <= 0.0 {
             return;
         }
-        let per = self.flat().ground_per_unit(self.camera.center).max(1e-9);
+        let per = self.ground_per_unit(self.camera.center).max(1e-9);
         self.camera.res = scale * rustgis_geom::PIXEL_M / per;
         self.camera.clamp();
     }

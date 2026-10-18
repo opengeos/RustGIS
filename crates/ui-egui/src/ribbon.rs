@@ -565,7 +565,58 @@ fn basemap_gallery(ui: &mut Ui, app: &mut RustGisApp) {
         }
     });
     web_basemaps(ui, app, &t);
+    planet_basemaps(ui, app);
     tile_layers(ui, app, &t);
+}
+
+/// The celestial body switcher's menu (the Layers pane's planet button): picking a body moves the
+/// map there, with one of its basemaps; the Earth takes the planetary basemaps off.
+pub fn body_menu(ui: &mut Ui, app: &mut RustGisApp) {
+    ui.label(egui::RichText::new(tl!("Celestial Body")).font(semibold(12.0)));
+    let current = app.session.map().body().id;
+    for b in rustgis_engine::geom::BODIES {
+        if ui.add(egui::Button::selectable(b.id == current, tl!(b.name))).clicked() {
+            let _ = app.run("map.body", json!({"name": b.id}));
+            ui.close();
+        }
+    }
+}
+
+/// The celestial bodies, and the basemaps of the one the map is on (#223).
+fn planet_basemaps(ui: &mut Ui, app: &mut RustGisApp) {
+    ui.add_space(6.0);
+    ui.separator();
+    ui.label(egui::RichText::new(tl!("Celestial Bodies")).font(semibold(12.5)));
+    ui.add_space(2.0);
+    let body = app.session.map().body();
+    ui.horizontal_wrapped(|ui| {
+        ui.set_max_width(300.0);
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        for b in rustgis_engine::geom::BODIES {
+            let tip = tl!("Measure on this body, with one of its basemaps.");
+            if ui.add(egui::Button::selectable(b.id == body.id, tl!(b.name))).on_hover_text(tip).clicked() {
+                let _ = app.run("map.body", json!({"name": b.id}));
+            }
+        }
+    });
+    if body.is_earth() {
+        return;
+    }
+    ui.add_space(4.0);
+    let shown: Vec<String> = app.session.map().tiles.iter().filter(|l| !l.overlay && l.visible).map(|l| l.id.clone()).collect();
+    egui::Grid::new("planet-basemaps").spacing(vec2(6.0, 4.0)).show(ui, |ui| {
+        for (i, m) in rustgis_engine::map::planets::basemaps_of(body.id).enumerate() {
+            let sel = shown.first().map(String::as_str) == Some(m.id);
+            let resp = ui.add_sized(vec2(140.0, 22.0), egui::Button::selectable(sel, m.name).truncate()).on_hover_text(m.attribution);
+            if resp.clicked() {
+                let _ = app.run("map.body", json!({"name": body.id, "basemap": m.id}));
+                ui.close();
+            }
+            if i % 2 == 1 {
+                ui.end_row();
+            }
+        }
+    });
 }
 
 const OPENFREEMAP: &str = "OpenFreeMap © OpenMapTiles Data from OpenStreetMap";

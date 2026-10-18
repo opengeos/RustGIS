@@ -4,7 +4,10 @@
 //! coordinates are Web Mercator metres (EPSG:3857).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod body;
 pub mod triangulate;
+
+pub use body::{BODIES, Body};
 
 use serde::{Deserialize, Serialize};
 

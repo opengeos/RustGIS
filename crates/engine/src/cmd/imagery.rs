@@ -718,12 +718,14 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
     let kind = ps(p, "kind").ok_or("kind is required")?;
     let dem = ps(p, "layer").map(|n| raster_named(s, n)).transpose()?;
     let z = |c: Coord| dem.as_ref().and_then(|d| rasterops::elevation_at(d, 0, c));
+    // Ground lengths and areas on the map's body.
+    let body = s.map().body();
     let out = match kind {
         "distance" => {
             if pts.len() < 2 {
                 return Err("a distance needs two or more points".into());
             }
-            let flat = rustgis_geom::geodesic_length_m(&pts);
+            let flat = body.length(rustgis_geom::geodesic_length_m(&pts));
             // Along the surface when there's an elevation raster.
             let surface = dem.as_ref().map(|d| {
                 let prof = rasterops::profile(d, 0, &pts, 500);
@@ -734,7 +736,7 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
                                 (Some(x), Some(y)) => y - x,
                                 _ => 0.0,
                             };
-                            ((c.0 - a.0).powi(2) + dh * dh).sqrt()
+                            (body.length(c.0 - a.0).powi(2) + dh * dh).sqrt()
                         }
                         _ => 0.0,
                     })
@@ -750,7 +752,7 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
             if let Some(first) = pts.first() {
                 ring.push(*first);
             }
-            json!({"kind": "area", "squareMetres": rustgis_geom::geodesic_ring_area_m2(&ring), "perimeterMetres": rustgis_geom::geodesic_length_m(&ring)})
+            json!({"kind": "area", "squareMetres": body.area(rustgis_geom::geodesic_ring_area_m2(&ring)), "perimeterMetres": body.length(rustgis_geom::geodesic_length_m(&ring))})
         }
         "height" => {
             let (Some(a), Some(c)) = (pts.first(), pts.get(1)) else { return Err("a height needs two points (base, top)".into()) };
