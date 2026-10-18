@@ -61,12 +61,17 @@ pub fn lookup(code: &str) -> Result<(String, String), String> {
     // `3035`, `EPSG:3035` or `epsg 3035`: an optional prefix, then only digits.
     let lower = code.to_ascii_lowercase();
     // `ESRI:102033`: one of Esri's projected coordinate systems, from a table checked against PROJ.
-    if let Some(rest) = lower.strip_prefix("esri") {
+    // Only `esri`, then a colon, a space or the number: any other name goes on to the end.
+    if let Some(rest) = lower.strip_prefix("esri").filter(|r| r.starts_with([':', ' ']) || r.starts_with(|c: char| c.is_ascii_digit())) {
         let digits = rest.trim_start_matches([':', ' ']);
-        let unknown = || format!("unknown coordinate system ESRI:{}", digits.trim_start_matches('0'));
         if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(unknown());
+            return Err(format!("unknown coordinate system '{code}'"));
         }
+        let shown = match digits.trim_start_matches('0') {
+            "" => "0",
+            d => d,
+        };
+        let unknown = || format!("unknown coordinate system ESRI:{shown}");
         let n = digits.parse::<u32>().map_err(|_| unknown())?;
         let def = rustgis_data::raster::crs::esri_proj4(n).ok_or_else(unknown)?;
         return Ok((def.to_string(), format!("ESRI:{n}")));
@@ -582,8 +587,14 @@ mod tests {
         // Not in the table (World Miller is kilometres off in proj4rs), not a number, too big.
         for bad in ["ESRI:54003", "ESRI:", "ESRI:abc", "ESRI:-1", "ESRI:99999999999", "ESRI:1e5"] {
             let e = lookup(bad).unwrap_err();
-            assert!(e.contains("unknown coordinate system ESRI"), "{bad}: {e}");
+            assert!(e.contains("unknown coordinate system") && e.contains("ESRI:"), "{bad}: {e}");
         }
+        // The message names the code as typed, or as the number it read.
+        assert_eq!(lookup("ESRI:abc").unwrap_err(), "unknown coordinate system 'ESRI:abc'");
+        assert_eq!(lookup("esri:0").unwrap_err(), "unknown coordinate system ESRI:0");
+        assert_eq!(lookup("esri:00054003").unwrap_err(), "unknown coordinate system ESRI:54003");
+        // Any other name starting with "esri" isn't read as a code.
+        assert_eq!(lookup("esrifoo").unwrap_err(), "unknown projection 'esrifoo'");
         // Every code in the table draws (local azimuthal ones only where aeqd is built in).
         for n in rustgis_data::raster::crs::esri_codes() {
             let code = format!("ESRI:{n}");
