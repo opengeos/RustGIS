@@ -1220,6 +1220,19 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
             break;
         }
         clear = scene.clear;
+        // A long band is drawn at a lower pixel density (`band_view`): its strokes and markers,
+        // sized in its pixels, are brought to the view's.
+        let k = (view.pixels_per_point / v.pixels_per_point.max(1e-9)) as f32;
+        let mut scene = scene;
+        if (k - 1.0).abs() > 1e-6 {
+            for c in &mut scene.cmds {
+                match c {
+                    DrawCmd::Mesh { vertices, .. } => vertices.iter_mut().for_each(|v| v.stroke_px *= k),
+                    DrawCmd::Points { instances, .. } => instances.iter_mut().for_each(|p| p.radius_px *= k),
+                    DrawCmd::Image { .. } => {}
+                }
+            }
+        }
         for a in scene.attribution {
             if !attribution.contains(&a) {
                 attribution.push(a);
