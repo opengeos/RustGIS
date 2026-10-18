@@ -247,28 +247,37 @@ fn between<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
 
 /// Markup removed, with the text of scripts and styles.
 fn without_tags(html: &str) -> String {
+    // Lowercased once: ASCII lowercasing leaves every byte where it was, so offsets match `html`.
+    let lower = html.to_ascii_lowercase();
     let mut out = String::new();
-    let mut rest = html;
-    while let Some(i) = rest.find('<') {
-        out.push_str(rest.get(..i).unwrap_or(""));
+    let mut at = 0;
+    while let Some(i) = lower.get(at..).and_then(|r| r.find('<')).map(|i| at + i) {
+        out.push_str(html.get(at..i).unwrap_or(""));
         out.push(' ');
-        let tag = rest.get(i..).unwrap_or("");
-        let lower = tag.get(..7.min(tag.len())).unwrap_or("").to_ascii_lowercase();
         // A script's or style's contents aren't text to read.
-        let close = if lower.starts_with("<script") {
+        let close = if opens(&lower, i, "script") {
             "</script>"
-        } else if lower.starts_with("<style") {
+        } else if opens(&lower, i, "style") {
             "</style>"
         } else {
             ">"
         };
-        match tag.to_ascii_lowercase().find(close) {
-            Some(j) => rest = tag.get(j + close.len()..).unwrap_or(""),
-            None => rest = "",
+        match lower.get(i..).and_then(|r| r.find(close)) {
+            Some(j) => at = i + j + close.len(),
+            // Never closed: the rest is the tag's.
+            None => return out,
         }
     }
-    out.push_str(rest);
+    out.push_str(html.get(at..).unwrap_or(""));
     out
+}
+
+/// Whether the tag at `i` of lowercased `html` is `<name`, the name ending there: `<style>` or
+/// `<style media=…>`, not `<styles>`.
+fn opens(html: &str, i: usize, name: &str) -> bool {
+    let end = i + 1 + name.len();
+    html.get(i + 1..end) == Some(name)
+        && html.get(end..).and_then(|r| r.chars().next()).is_none_or(|c| c == '>' || c == '/' || c.is_whitespace())
 }
 
 /// The few character references a page title uses.
@@ -358,6 +367,10 @@ mod tests {
         // Nothing to say: no excerpt. Not UTF-8: read as far as it is.
         assert_eq!(Failure::answered("u", 404, &[], b"  ").excerpt(), None);
         assert_eq!(Failure::answered("u", 404, &[], b"ok \xff").excerpt(), Some("ok \u{fffd}"));
+        // Only `<script>` and `<style>` hide their text, whatever their case, not tags whose names
+        // start the same.
+        assert_eq!(Failure::answered("u", 404, &[], b"<STYLE media=x>a{}</Style><styles>Kept</styles>").excerpt(), Some("Kept"));
+        assert_eq!(Failure::answered("u", 404, &[], b"<scripting>Too</scripting><script src=x></script>").excerpt(), Some("Too"));
         // A title or tag never closed doesn't hang or panic.
         assert_eq!(Failure::answered("u", 404, &[], b"<html><title>Half").excerpt(), Some("Half"));
         assert_eq!(Failure::answered("u", 404, &[], b"<html><title").excerpt(), None);
