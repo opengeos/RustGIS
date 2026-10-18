@@ -491,7 +491,7 @@ fn globe_projection_toggles_renders_and_saves() {
     // The globe draws vectors, rasters and labels, from any side.
     for (lon, lat, res) in [(-81.0, 42.0, 30_000.0), (100.0, -60.0, 60_000.0), (-81.0, 42.0, 50.0), (0.0, 89.0, 160_000.0)] {
         s.map_mut().camera =
-            rustgis_map::Camera { center: rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(lon, lat)), res, bearing: 0.0 };
+            rustgis_map::Camera { center: rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(lon, lat)), res, bearing: 0.0, pitch: 0.0 };
         let png = crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap();
         assert!(png.len() > 1000);
     }
@@ -6041,6 +6041,43 @@ fn the_map_turns_to_a_bearing() {
     s.run("map.resetNorth", &json!({})).unwrap();
     let north = crate::cmd::workspace::view_extent(&s);
     assert!(turned.width() > north.width() * 1.1, "{turned:?} vs {north:?}");
+}
+
+/// The map tilts (#395 phase 2): set, tilted further, kept within 0 to 85, reset with the
+/// bearing, kept by bookmarks and their files, in Previous Extent and in project info; a tilted
+/// map exports.
+#[test]
+fn the_map_tilts() {
+    let mut s = Session::new(sample::world_project());
+    assert_eq!(s.run("map.setPitch", &json!({"pitch": 50})).unwrap(), json!({"pitch": 50.0}));
+    assert_eq!(s.run("map.setPitch", &json!({"by": 50})).unwrap(), json!({"pitch": 85.0}));
+    assert_eq!(s.run("map.setPitch", &json!({"by": -100})).unwrap(), json!({"pitch": 0.0}));
+    assert!(s.run("map.setPitch", &json!({})).is_err());
+    assert!(s.run("map.setPitch", &json!({"pitch": "steep", "by": 5})).is_err());
+    assert!(s.run("map.goToXY", &json!({"lon": 0, "lat": 0, "pitch": "steep"})).is_err());
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 48.0, "scale": 10_000_000, "pitch": 45, "bearing": 20})).unwrap();
+    assert_eq!((s.map().camera.pitch, s.map().camera.bearing), (45.0, 20.0));
+    assert_eq!(s.run("info.project", &json!({})).unwrap()["pitch"], json!(45.0));
+    // A bookmark and its file keep the pitch.
+    s.run("bookmark.add", &json!({"name": "Tilted"})).unwrap();
+    let file = crate::cmd::navigate::bookmarks_file(s.map()).unwrap();
+    s.run("map.resetNorth", &json!({})).unwrap();
+    assert_eq!((s.map().camera.pitch, s.map().camera.bearing), (0.0, 0.0));
+    // Previous Extent tilts it back.
+    s.run("map.prevExtent", &json!({})).unwrap();
+    assert_eq!(s.map().camera.pitch, 45.0);
+    s.run("map.resetNorth", &json!({})).unwrap();
+    s.run("bookmark.remove", &json!({"name": "Tilted"})).unwrap();
+    s.run("bookmark.import", &json!({"text": String::from_utf8(file).unwrap()})).unwrap();
+    s.run("bookmark.go", &json!({"name": "Tilted"})).unwrap();
+    assert!((s.map().camera.pitch - 45.0).abs() < 1e-9);
+    // A tilted map exports.
+    let dir = std::env::temp_dir().join(format!("rustgis-tilt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("tilted.png");
+    s.run("share.exportMap", &json!({"path": png.display().to_string(), "width": 320, "height": 200})).unwrap();
+    assert!(std::fs::metadata(&png).unwrap().len() > 1000);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The bookmark manager's commands (#351): names stay unique, a bookmark is renamed, updated,

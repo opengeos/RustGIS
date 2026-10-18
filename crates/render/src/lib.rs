@@ -950,13 +950,159 @@ fn flush_acc(pm: &mut Pixmap, cmds: &mut Vec<gpu_scene::DrawCmd>, dirty: &mut bo
 /// `full_res_rasters` renders rasters at full resolution (exports); `backend` selects the CPU
 /// pixmap or a GPU scene (see [`Backend`]).
 fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend) -> Option<RenderOutput> {
-    // A bearing set directly on the camera may be unnormalised (or no number, which faces north).
-    let bearing = rustgis_map::camera::normalize_bearing(view.camera.bearing);
-    if bearing != 0.0 && !map.projection.is_globe() {
-        let view = View { camera: Camera { bearing, ..view.camera }, ..*view };
-        return render_turned(map, &view, full_res_rasters).map(RenderOutput::Cpu);
+    // A bearing or pitch set directly on the camera may be unnormalised (or no number, which
+    // faces north and looks straight down).
+    let mut camera = view.camera;
+    camera.bearing = rustgis_map::camera::normalize_bearing(camera.bearing);
+    camera.pitch = if camera.pitch.is_finite() { camera.pitch.clamp(0.0, rustgis_map::camera::MAX_PITCH) } else { 0.0 };
+    if !map.projection.is_globe() {
+        let view = View { camera, ..*view };
+        if camera.pitch != 0.0 {
+            return render_tilted(map, &view, full_res_rasters).map(RenderOutput::Cpu);
+        }
+        if camera.bearing != 0.0 {
+            return render_turned(map, &view, full_res_rasters).map(RenderOutput::Cpu);
+        }
     }
-    render_frame(map, view, full_res_rasters, backend, None)
+    render_frame(map, view, full_res_rasters, backend, Labels::Own)
+}
+
+/// A label waiting to be placed: the label, its priority and its (layer id, row).
+type Candidate = (PlacedLabel, f32, (u32, usize));
+
+/// Where a frame's labels go.
+enum Labels<'a> {
+    /// Placed in the frame.
+    Own,
+    /// Placed in the turned view the north-up frame stands in for ([`render_turned`]).
+    Turned(&'a View),
+    /// Handed back unplaced, at their places in a tilted view ([`render_tilted`]), whose
+    /// bands share one read of the streamed layers.
+    Tilted(&'a View, &'a mut Vec<Candidate>),
+}
+
+/// Labels farther than this (as a fraction of the centre's scale) are left out of a tilted view.
+const LABEL_MIN_DEPTH_SCALE: f64 = 0.3;
+
+/// A tilted view, on the CPU: the ground it shows is drawn flat in bands
+/// ([`Camera::tilt_bands`]), sharp near and coarser toward the horizon (so far tiles come at
+/// lower zoom), then each screen pixel takes its colour from the band under it, fading into fog
+/// and the sky past the view's reach. Labels are placed in the tilted view, upright.
+fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Rendered> {
+    let data_pending = map.sync_sources(&view_lonlat(map, view), full_res_rasters);
+    // Labels are placed in the tilted view: a lock on a flat view's labels doesn't apply.
+    let lock = map.label_lock.take();
+    let mut candidates = Vec::new();
+    let mut bands = Vec::new();
+    let (mut attribution, mut tiles_pending, mut tile_errors) = (Vec::<String>::new(), false, Vec::<String>::new());
+    for b in view.camera.tilt_bands(view.width, view.height) {
+        let v = View { width: b.width, height: b.height, camera: b.camera, ..*view };
+        if let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, full_res_rasters, Backend::Cpu, Labels::Tilted(view, &mut candidates)) {
+            for a in r.attribution {
+                if !attribution.contains(&a) {
+                    attribution.push(a);
+                }
+            }
+            for e in r.tile_errors {
+                if !tile_errors.contains(&e) {
+                    tile_errors.push(e);
+                }
+            }
+            tiles_pending |= r.tiles_pending;
+            bands.push((v, r.pixmap));
+        }
+    }
+    map.label_lock = lock;
+    let (w, h) = view.pixel_size();
+    let mut pm = Pixmap::new(w, h)?;
+    let (sky, fog) = sky_colors(map);
+    warp_tilted(&mut pm, view, &bands, sky, fog);
+    // A feature drawn in two bands offers its label twice: the nearer band's (offered first) is
+    // kept.
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|c| c.2.0 == u32::MAX || seen.insert(c.2));
+    let placed = place_labels(candidates, Vec::new(), view.width as f32, view.height as f32, false);
+    for l in &placed.labels {
+        if let Some(icon) = &l.icon {
+            draw_icon(&mut pm, icon, view.pixels_per_point as f32);
+        }
+    }
+    let unplaced = if map.label_display.show_unplaced { placed.unplaced } else { Vec::new() };
+    Some(Rendered { pixmap: pm, labels: placed.labels, unplaced, attribution, tiles_pending, data_pending, tile_errors })
+}
+
+/// The colours of a tilted view's sky (at the top) and of the fog it fades into at the
+/// horizon, from the basemap.
+fn sky_colors(map: &Map) -> (Rgba, Rgba) {
+    let (water, land, _, _) = map.basemap.palette();
+    let white = Rgba::rgb(0xFF, 0xFF, 0xFF);
+    let sky = water.lerp(white, 0.35);
+    (sky, sky.lerp(land, 0.5).lerp(white, 0.3))
+}
+
+/// Fills `pm` with the tilted `view`: each pixel samples the band under it (nearest first),
+/// fading into `fog` toward the view's reach, and the sky above it shades from `fog` at the
+/// horizon to `sky` at the top.
+fn warp_tilted(pm: &mut Pixmap, view: &View, bands: &[(View, Pixmap)], sky: Rgba, fog: Rgba) {
+    let (pw, ph) = (pm.width() as usize, pm.height() as usize);
+    let (w, h) = (view.width, view.height);
+    let (kx, ky) = (pw as f64 / w.max(1e-9), ph as f64 / h.max(1e-9));
+    let cam = view.camera;
+    let sky_y = cam.sky_y(h).unwrap_or(0.0).max(1e-9);
+    let far = rustgis_map::camera::FAR;
+    let rgba = |c: Rgba| [f32::from(c.r()), f32::from(c.g()), f32::from(c.b()), 255.0];
+    let (sky, fog) = (rgba(sky), rgba(fog));
+    let mix = |a: [f32; 4], b: [f32; 4], t: f32| std::array::from_fn::<f32, 4, _>(|i| a[i] + (b[i] - a[i]) * t);
+    let out = pm.pixels_mut();
+    for py in 0..ph {
+        let y = (py as f64 + 0.5) / ky;
+        for px in 0..pw {
+            let x = (px as f64 + 0.5) / kx;
+            let c = match cam.try_to_map(x, y, w, h) {
+                Some(m) => {
+                    let ground = bands.iter().find_map(|(v, b)| sample_band(v, b, m)).unwrap_or(fog);
+                    // Fog from halfway to the reach.
+                    let z = 1.0 / cam.depth_scale(m, h).unwrap_or(1.0).max(1e-9);
+                    let t = ((z - far * 0.5) / (far * 0.5)).clamp(0.0, 1.0) as f32;
+                    mix(ground, fog, t * t * (3.0 - 2.0 * t))
+                }
+                None => mix(sky, fog, (y / sky_y).clamp(0.0, 1.0) as f32),
+            };
+            if let Some(dst) = out.get_mut(py * pw + px)
+                && let Some(p) = tiny_skia::PremultipliedColorU8::from_rgba(
+                    c[0].min(c[3]).round() as u8,
+                    c[1].min(c[3]).round() as u8,
+                    c[2].min(c[3]).round() as u8,
+                    c[3].round() as u8,
+                )
+            {
+                *dst = p;
+            }
+        }
+    }
+}
+
+/// The colour (premultiplied, 0–255) of band picture `pm`, drawn for `v`, at Mercator point
+/// `m`, sampled bilinearly; `None` outside it.
+fn sample_band(v: &View, pm: &Pixmap, m: Coord) -> Option<[f32; 4]> {
+    let (bw, bh) = (pm.width() as f64, pm.height() as f64);
+    let (sx, sy) = v.camera.to_screen(m, v.width, v.height);
+    let (fx, fy) = (sx * bw / v.width.max(1e-9) - 0.5, sy * bh / v.height.max(1e-9) - 0.5);
+    if !(fx >= -0.5 && fy >= -0.5 && fx <= bw - 0.5 && fy <= bh - 0.5) {
+        return None;
+    }
+    let (x0, y0) = (fx.floor().max(0.0), fy.floor().max(0.0));
+    let (tx, ty) = ((fx - x0).clamp(0.0, 1.0) as f32, (fy - y0).clamp(0.0, 1.0) as f32);
+    let (x0, y0) = (x0 as usize, y0 as usize);
+    let (x1, y1) = ((x0 + 1).min(pm.width() as usize - 1), (y0 + 1).min(pm.height() as usize - 1));
+    let px = pm.pixels();
+    let at = |x: usize, y: usize| px.get(y * pm.width() as usize + x).map(|p| [p.red(), p.green(), p.blue(), p.alpha()]);
+    let (a, b, c, d) = (at(x0, y0)?, at(x1, y0)?, at(x0, y1)?, at(x1, y1)?);
+    Some(std::array::from_fn(|i| {
+        let top = f32::from(a[i]) + (f32::from(b[i]) - f32::from(a[i])) * tx;
+        let bottom = f32::from(c[i]) + (f32::from(d[i]) - f32::from(c[i])) * tx;
+        top + (bottom - top) * ty
+    }))
 }
 
 /// A view turned to a bearing, on the CPU: the map is drawn facing north over the box around
@@ -965,7 +1111,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
 fn render_turned(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Rendered> {
     let (bw, bh) = view.camera.rotated_size(view.width, view.height);
     let north = View { width: bw.ceil() + 2.0, height: bh.ceil() + 2.0, camera: Camera { bearing: 0.0, ..view.camera }, ..*view };
-    let Some(RenderOutput::Cpu(r)) = render_frame(map, &north, full_res_rasters, Backend::Cpu, Some(view)) else { return None };
+    let Some(RenderOutput::Cpu(r)) = render_frame(map, &north, full_res_rasters, Backend::Cpu, Labels::Turned(view)) else { return None };
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
     // Physical pixels per logical point of each frame (the north-up one may have been capped
@@ -988,14 +1134,17 @@ fn render_turned(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
     Some(Rendered { pixmap: pm, ..r })
 }
 
-/// Draws one north-up frame. `turned` is the view it stands in for when that faces another way
-/// ([`render_turned`]): labels are placed in that view instead, and their icons left for it.
-fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend, turned: Option<&View>) -> Option<RenderOutput> {
+/// Draws one north-up frame. `labels_to` says where its labels go: a turned or tilted view the
+/// frame stands in for places them itself (and draws their icons).
+fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend, mut labels_to: Labels<'_>) -> Option<RenderOutput> {
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
     // Streamed layers read the view: in the background for the screen, in place for an export
-    // (the full-resolution render), which waits for them.
-    let data_pending = map.sync_sources(&view_lonlat(map, view), full_res_rasters);
+    // (the full-resolution render), which waits for them. A tilted view's bands share its read.
+    let data_pending = match labels_to {
+        Labels::Tilted(..) => false,
+        _ => map.sync_sources(&view_lonlat(map, view), full_res_rasters),
+    };
     let globe = map.projection.is_globe().then(|| Globe::new(&view.camera, view.width, view.height));
     let (flat, key) = (map.flat(), map.projection.code());
     let custom = matches!(flat, rustgis_map::projection::Flat::Custom(_)) && globe.is_none();
@@ -1391,6 +1540,34 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             label_candidates.push((l, pri - 1e10, (u32::MAX, i)));
         }
     }
+    if let Labels::Tilted(to, out) = &mut labels_to {
+        // At their places in the tilted view; those behind the camera, under the sky or too far
+        // to read are left out.
+        let (tw, th) = (to.width, to.height);
+        let sky_y = to.camera.sky_y(th).unwrap_or(0.0) as f32;
+        let at = |x: f32, y: f32| -> Option<(f32, f32)> {
+            let m = view.camera.to_map(f64::from(x), f64::from(y), view.width, view.height);
+            let near = to.camera.depth_scale(m, th).is_some_and(|k| k >= LABEL_MIN_DEPTH_SCALE);
+            let (sx, sy) = to.camera.try_to_screen(m, tw, th).filter(|_| near)?;
+            (sy as f32 > sky_y).then_some((sx as f32, sy as f32))
+        };
+        let fixed = fixed_labels.into_iter().map(|l| (l, f32::MAX, (u32::MAX, usize::MAX)));
+        for (mut l, pri, key) in fixed.chain(label_candidates) {
+            let Some((x, y)) = at(l.x, l.y) else { continue };
+            (l.x, l.y) = (x, y);
+            if let Some(i) = &mut l.icon {
+                let Some((ix, iy)) = at(i.x, i.y) else { continue };
+                (i.x, i.y) = (ix, iy);
+            }
+            out.push((l, pri, key));
+        }
+        label_candidates = Vec::new();
+        fixed_labels = Vec::new();
+    }
+    let turned = match &labels_to {
+        Labels::Own => None,
+        Labels::Turned(to) | Labels::Tilted(to, _) => Some(*to),
+    };
     let (lw, lh) = match turned {
         Some(to) => {
             // Into the turned view's screen, where they stay upright.
@@ -1409,7 +1586,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         None => (view.width, view.height),
     };
     let placed = place_labels(label_candidates, fixed_labels, lw as f32, lh as f32, lock.is_some());
-    if display.locked && map.label_lock.is_none() {
+    if display.locked && map.label_lock.is_none() && !matches!(labels_to, Labels::Tilted(..)) {
         map.label_lock = Some(placed.keys);
     }
     let unplaced = if display.show_unplaced { placed.unplaced } else { Vec::new() };
@@ -1448,7 +1625,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             // layer) costs more full-screen uploads than a plain CPU rasterization.
             let images = cmds.iter().filter(|c| matches!(c, gpu_scene::DrawCmd::Image { .. })).count();
             if images > 4 {
-                return render_frame(map, view, full_res_rasters, Backend::Cpu, turned);
+                return render_frame(map, view, full_res_rasters, Backend::Cpu, labels_to);
             }
             Some(RenderOutput::Gpu(gpu_scene::GpuScene {
                 clear: mesh::premul(water),
@@ -1814,7 +1991,7 @@ pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side
         if w * ppp < 2.0 || h * ppp < 2.0 {
             continue;
         }
-        let camera = Camera { center: merc.center(), res, bearing: 0.0 };
+        let camera = Camera { center: merc.center(), res, bearing: 0.0, pitch: 0.0 };
         let v = View { width: w, height: h, pixels_per_point: ppp, camera, sky: false };
         // The picture is given the box asked for, though rounding to whole points made it show
         // up to a point less: stretched by under a point, its edges stay exactly where asked, so
@@ -1827,6 +2004,48 @@ pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side
     map.label_display = display;
     map.label_lock = lock;
     out
+}
+
+/// A band of a tilted view drawn flat, to lay over the tilted ground while the view moves.
+pub struct TiltPatch {
+    pub pixmap: Pixmap,
+    /// The flat, north-up camera and size (logical points) it was drawn for.
+    pub band: rustgis_map::camera::Band,
+}
+
+/// Draws the bands of a tilted view ([`Camera::tilt_bands`]) flat, each grown by `margin` (a
+/// fraction of its size) on every side so the view can move a little before they no longer
+/// cover it, and at most `max_side` pixels a side (coarser beyond that). The map view lays them
+/// over the tilted ground as meshes while it moves, with no drawing per frame. Labels are left
+/// out (the view keeps the last frame's while it moves).
+pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32) -> Vec<TiltPatch> {
+    let ppp = if view.pixels_per_point.is_finite() { view.pixels_per_point.clamp(0.25, 4.0) } else { 1.0 };
+    let margin = if margin.is_finite() { margin.clamp(0.0, 2.0) } else { 0.0 };
+    let max_side = f64::from(max_side.clamp(64, 8192));
+    let (display, lock) = (map.label_display, map.label_lock.take());
+    map.label_display.paused = true;
+    let mut out = Vec::new();
+    for b in view.camera.tilt_bands(view.width, view.height) {
+        let (mut w, mut h) = (b.width * (1.0 + 2.0 * margin), b.height * (1.0 + 2.0 * margin));
+        let mut camera = b.camera;
+        // Coarser to fit the size limit.
+        let k = (w.max(h) * ppp / max_side).max(1.0);
+        camera.res *= k;
+        (w, h) = ((w / k).floor().max(1.0), (h / k).floor().max(1.0));
+        let v = View { width: w, height: h, pixels_per_point: ppp, camera, sky: false };
+        if let Some(r) = render(map, &v) {
+            out.push(TiltPatch { pixmap: r.pixmap, band: rustgis_map::camera::Band { camera, width: w, height: h } });
+        }
+    }
+    map.label_display = display;
+    map.label_lock = lock;
+    out
+}
+
+/// The colours of a tilted view's sky (at the top) and of the fog at its horizon, for the map's
+/// basemap.
+pub fn tilt_sky(map: &Map) -> (Rgba, Rgba) {
+    sky_colors(map)
 }
 
 /// A halo that contrasts with the text colour.
@@ -2010,7 +2229,7 @@ mod tests {
         m.add_dataset(d);
         m.projection = rustgis_map::Projection::Globe;
         let paris = lonlat_to_merc(Coord::new(2.35, 48.85));
-        let camera = Camera { center: paris, res: 2_000.0, bearing: 0.0 };
+        let camera = Camera { center: paris, res: 2_000.0, bearing: 0.0, pitch: 0.0 };
         let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
         let boxes = Globe::new(&camera, 400.0, 300.0).drape_extents(400.0, 300.0, 0.25);
         let patches = render_globe_drape(&mut m, &view, &boxes, 4096);
@@ -2024,7 +2243,7 @@ mod tests {
         let res = p.merc.width() / f64::from(p.pixmap.width());
         let at = px(&p.pixmap, (paris.x - p.merc.min_x) / res, (p.merc.max_y - paris.y) / res);
         m.projection = rustgis_map::Projection::WebMercator;
-        let flat = render(&mut m, &View { camera: Camera { center: paris, res, bearing: 0.0 }, ..view }).unwrap();
+        let flat = render(&mut m, &View { camera: Camera { center: paris, res, bearing: 0.0, pitch: 0.0 }, ..view }).unwrap();
         assert_eq!(at, px(&flat.pixmap, 200.0, 150.0));
         // Too big a box is drawn coarser, within the limit; junk draws nothing.
         let big = render_globe_drape(&mut m, &view, &[Extent::new(-180.0, -80.0, 180.0, 80.0)], 512);
@@ -2033,7 +2252,7 @@ mod tests {
         // mesh still reaches the pole.
         let lim = rustgis_geom::MAX_LAT;
         // (30 km points leave a remainder: the picture is 1335 points tall, 0.8 of a point short.)
-        let coarse = View { camera: Camera { center: paris, res: 30_000.0, bearing: 0.0 }, ..view };
+        let coarse = View { camera: Camera { center: paris, res: 30_000.0, bearing: 0.0, pitch: 0.0 }, ..view };
         let world = render_globe_drape(&mut m, &coarse, &[Extent::new(-180.0, -lim, 180.0, lim)], 4096);
         let edge = std::f64::consts::PI * rustgis_geom::MERCATOR_R * 0.9999;
         assert!(
@@ -2042,8 +2261,13 @@ mod tests {
             world.iter().map(|p| p.merc).collect::<Vec<_>>()
         );
         assert!(
-            render_globe_drape(&mut m, &View { camera: Camera { center: paris, res: f64::NAN, bearing: 0.0 }, ..view }, &boxes, 4096)
-                .is_empty()
+            render_globe_drape(
+                &mut m,
+                &View { camera: Camera { center: paris, res: f64::NAN, bearing: 0.0, pitch: 0.0 }, ..view },
+                &boxes,
+                4096
+            )
+            .is_empty()
         );
         assert!(render_globe_drape(&mut m, &view, &[Extent::EMPTY], 4096).is_empty());
         // The sprites: a square around the disc, or nothing for a junk radius.
@@ -2076,7 +2300,7 @@ mod tests {
             l.labels.enabled = true;
             l.selection = vec![0];
         }
-        let camera = Camera { center: lonlat_to_merc(Coord::new(2.35, 48.85)), res: 5000.0, bearing: 0.0 };
+        let camera = Camera { center: lonlat_to_merc(Coord::new(2.35, 48.85)), res: 5000.0, bearing: 0.0, pitch: 0.0 };
         let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
         let r = render(&mut m, &view).unwrap();
         assert_eq!(r.labels.len(), 1);
@@ -2340,7 +2564,7 @@ mod tests {
         // of pixels away, and the rasteriser indexed past its buffer.
         let mut m = Map::new("Map");
         for res in [0.05, 0.008, 0.001, 1e-5] {
-            let camera = Camera { center: lonlat_to_merc(Coord::new(-122.2585, 37.8719)), res, bearing: 0.0 };
+            let camera = Camera { center: lonlat_to_merc(Coord::new(-122.2585, 37.8719)), res, bearing: 0.0, pitch: 0.0 };
             let view = View { width: 1600.0, height: 1000.0, pixels_per_point: 1.0, camera, sky: false };
             assert!(render(&mut m, &view).is_some(), "{res}");
         }
@@ -2370,7 +2594,7 @@ mod tests {
             width: 120.0,
             height: 80.0,
             pixels_per_point: 1.0,
-            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0 },
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
             sky: false,
         };
         let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
@@ -2420,7 +2644,7 @@ mod tests {
             assert!(n > 0.0, "nothing drawn");
             (sx / n, sy / n)
         };
-        let camera = Camera { center: Coord::new(0.0, 0.0), res: 1000.0, bearing: 0.0 };
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 1000.0, bearing: 0.0, pitch: 0.0 };
         let view = View { width: 400.0, height: 300.0, pixels_per_point: 2.0, camera, sky: false };
         let north = render(&mut m, &view).unwrap();
         let (x, y) = ink(&north.pixmap);
@@ -2445,12 +2669,57 @@ mod tests {
     }
 
     #[test]
+    fn a_tilted_view_draws_the_ground_in_perspective_under_a_sky() {
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("pts", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        // 100 px north of the centre at its scale.
+        d.push(Some(Geometry::Point(Coord::new(0.0, 100.0 * 1000.0 / 111_319.49))), vec![Value::Text("Ahead".into())]);
+        let id = m.add_dataset(d);
+        if let Some(l) = m.layer_mut(id) {
+            l.labels.enabled = true;
+        }
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 1000.0, bearing: 0.0, pitch: 60.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 2.0, camera, sky: false };
+        let r = render(&mut m, &view).unwrap();
+        assert_eq!((r.pixmap.width(), r.pixmap.height()), (800, 600));
+        // The point is drawn where the camera puts it: ahead, foreshortened toward the centre.
+        let (_, want_y) = camera.to_screen(lonlat_to_merc(Coord::new(0.0, 100.0 * 1000.0 / 111_319.49)), 400.0, 300.0);
+        assert!(want_y < 150.0 - 20.0 && want_y > 150.0 - 100.0, "{want_y}");
+        let bg = r.pixmap.pixel(400, 590).unwrap();
+        let (mut n, mut sy) = (0.0, 0.0);
+        for (k, p) in r.pixmap.pixels().iter().enumerate() {
+            let (x, y) = (k as u32 % 800, k as u32 / 800);
+            if (390..410).contains(&x) && y > 150 && *p != bg {
+                n += 1.0;
+                sy += f64::from(y);
+            }
+        }
+        assert!(n > 0.0 && (sy / n / 2.0 - want_y).abs() < 4.0, "drawn at {}, want {want_y}", sy / n / 2.0);
+        // Its label is placed there, upright.
+        let l = r.labels.iter().find(|l| l.text == "Ahead").expect("placed");
+        assert!((f64::from(l.y) - want_y).abs() < 20.0, "{}", l.y);
+        // Steeper, the sky shows at the top in the sky colour, and the ground at the bottom.
+        let steep = View { camera: Camera { pitch: 80.0, ..camera }, ..view };
+        let r = render(&mut m, &steep).unwrap();
+        let (sky, _) = sky_colors(&m);
+        let top = r.pixmap.pixel(400, 0).unwrap();
+        assert!((i32::from(top.red()) - i32::from(sky.r())).abs() <= 2 && (i32::from(top.blue()) - i32::from(sky.b())).abs() <= 2);
+        assert!(r.pixmap.pixels().iter().all(|p| p.alpha() == 255));
+        // A pitch past the limit or no number is kept to the limit or looks straight down.
+        assert!(render(&mut m, &View { camera: Camera { pitch: 400.0, ..camera }, ..view }).is_some());
+        let flat = render(&mut m, &View { camera: Camera { pitch: 0.0, ..camera }, ..view }).unwrap();
+        let nan = render(&mut m, &View { camera: Camera { pitch: f64::NAN, ..camera }, ..view }).unwrap();
+        assert_eq!(nan.pixmap.data(), flat.pixmap.data());
+    }
+
+    #[test]
     fn only_features_still_under_a_pixel_with_their_outline_are_splatted() {
         let view = View {
             width: 100.0,
             height: 100.0,
             pixels_per_point: 2.0,
-            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0 },
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
             sky: false,
         };
         let ctx = Ctx { view: &view, ppp: 2.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
@@ -2486,7 +2755,7 @@ mod tests {
         }
         let id = m.add_dataset(d);
         let sym = m.layer(id).map(|l| l.symbol(0)).unwrap();
-        let camera = Camera { center: lonlat_to_merc(Coord::new(0.5, 0.5)), res: 2000.0, bearing: 0.0 };
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.5, 0.5)), res: 2000.0, bearing: 0.0, pitch: 0.0 };
         let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
         let r = render(&mut m, &view).unwrap();
         let px = |x: u32, y: u32| r.pixmap.pixel(x, y).unwrap();
