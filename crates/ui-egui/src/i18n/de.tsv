@@ -1377,7 +1377,7 @@ My Buckets	Meine Buckets
 My OGC Layer	Mein OGC-Layer
 N/S/E/W	N/S/E/W
 Name	Name
-name the plugin whose panel to open: {"id": plugin id}	das Plugin angeben, dessen Panel geöffnet werden soll: {"id": Plugin-ID}
+name the plugin whose panel to open: {"id": plugin id}	das Plugin angeben, dessen Panel geöffnet werden soll: {"id": plugin id}
 Natural Breaks (Jenks)	Natürliche Unterbrechungen (Jenks)
 Natural Color (1, 2, 3)	Echtfarben (1, 2, 3)
 Natural Earth	Natural Earth
@@ -1714,7 +1714,7 @@ PROJ definition	PROJ-Definition
 Project	Projekt
 Project\nPackage	Projekt-\npaket
 Project Info	Projektinfo
-project is "sample", "blank", "last" or {"path": a project file}	project ist "sample", "blank", "last" oder {"path": eine Projektdatei}
+project is "sample", "blank", "last" or {"path": a project file}	project ist "sample", "blank", "last" oder {"path": a project file}
 Project Template	Projektvorlage
 Project templates: start projects from a saved setup.	Projektvorlagen: Projekte aus einer gespeicherten Einrichtung beginnen.
 project's path is required	der Pfad des Projekts ist erforderlich

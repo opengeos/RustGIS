@@ -1377,7 +1377,7 @@ My Buckets	ჩემი ბაკეტები
 My OGC Layer	ჩემი OGC ფენა
 N/S/E/W	N/S/E/W
 Name	სახელი
-name the plugin whose panel to open: {"id": plugin id}	მიუთითეთ მოდული, რომლის პანელიც უნდა გაიხსნას: {"id": მოდულის id}
+name the plugin whose panel to open: {"id": plugin id}	მიუთითეთ მოდული, რომლის პანელიც უნდა გაიხსნას: {"id": plugin id}
 Natural Breaks (Jenks)	ბუნებრივი შესვენებები (ჯენკსი)
 Natural Color (1, 2, 3)	ბუნებრივი ფერები (1, 2, 3)
 Natural Earth	Natural Earth
@@ -1714,7 +1714,7 @@ PROJ definition	PROJ განსაზღვრება
 Project	პროექტი
 Project\nPackage	პროექტის\nპაკეტი
 Project Info	პროექტის ინფორმაცია
-project is "sample", "blank", "last" or {"path": a project file}	project არის "sample", "blank", "last" ან {"path": პროექტის ფაილი}
+project is "sample", "blank", "last" or {"path": a project file}	project არის "sample", "blank", "last" ან {"path": a project file}
 Project Template	პროექტის შაბლონი
 Project templates: start projects from a saved setup.	პროექტის შაბლონები: პროექტების დაწყება შენახული გამართვიდან.
 project's path is required	საჭიროა project-ის path

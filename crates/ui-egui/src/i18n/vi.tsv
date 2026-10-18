@@ -1377,7 +1377,7 @@ My Buckets	Bucket của tôi
 My OGC Layer	Lớp OGC của tôi
 N/S/E/W	N/S/E/W
 Name	Tên
-name the plugin whose panel to open: {"id": plugin id}	nêu plugin cần mở bảng điều khiển: {"id": id plugin}
+name the plugin whose panel to open: {"id": plugin id}	nêu plugin cần mở bảng điều khiển: {"id": plugin id}
 Natural Breaks (Jenks)	Ngắt tự nhiên (Jenks)
 Natural Color (1, 2, 3)	Màu tự nhiên (1, 2, 3)
 Natural Earth	Natural Earth
@@ -1714,7 +1714,7 @@ PROJ definition	Định nghĩa PROJ
 Project	Dự án
 Project\nPackage	Gói\ndự án
 Project Info	Thông tin dự án
-project is "sample", "blank", "last" or {"path": a project file}	project là "sample", "blank", "last" hoặc {"path": một tệp dự án}
+project is "sample", "blank", "last" or {"path": a project file}	project là "sample", "blank", "last" hoặc {"path": a project file}
 Project Template	Mẫu dự án
 Project templates: start projects from a saved setup.	Mẫu dự án: bắt đầu dự án từ một thiết lập đã lưu.
 project's path is required	cần có path của project

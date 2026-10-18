@@ -1377,7 +1377,7 @@ My Buckets	Bucket Saya
 My OGC Layer	Layer OGC Saya
 N/S/E/W	N/S/E/W
 Name	Nama
-name the plugin whose panel to open: {"id": plugin id}	sebutkan plugin yang panelnya akan dibuka: {"id": id plugin}
+name the plugin whose panel to open: {"id": plugin id}	sebutkan plugin yang panelnya akan dibuka: {"id": plugin id}
 Natural Breaks (Jenks)	Natural Breaks (Jenks)
 Natural Color (1, 2, 3)	Warna Alami (1, 2, 3)
 Natural Earth	Natural Earth
@@ -1714,7 +1714,7 @@ PROJ definition	Definisi PROJ
 Project	Proyek
 Project\nPackage	Paket\nProyek
 Project Info	Info Proyek
-project is "sample", "blank", "last" or {"path": a project file}	project berupa "sample", "blank", "last" atau {"path": file proyek}
+project is "sample", "blank", "last" or {"path": a project file}	project berupa "sample", "blank", "last" atau {"path": a project file}
 Project Template	Templat Proyek
 Project templates: start projects from a saved setup.	Templat proyek: mulai proyek dari pengaturan yang disimpan.
 project's path is required	path project wajib diisi
