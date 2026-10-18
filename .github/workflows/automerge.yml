@@ -27,10 +27,14 @@ jobs:
       - env:
           GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
           PR: ${{ github.event.pull_request.html_url }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # Fails on the token owner's own pull requests, which they can merge anyway.
-          gh pr review "$PR" --approve || echo "Not approved."
-          gh pr merge "$PR" --auto --squash
+          # Both pinned to the commit that was labelled: a push in between isn't approved or merged.
+          # Approving fails on the token owner's own pull requests, which they can merge anyway.
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/reviews" -f commit_id="$SHA" -f event=APPROVE \
+            --silent || echo "Not approved."
+          gh pr merge "$PR" --auto --squash --match-head-commit "$SHA"
 
   revoke:
     name: Revoke auto-merge
