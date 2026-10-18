@@ -86,9 +86,11 @@ impl Cache {
         }
     }
 
-    /// Whether `url`'s answer (or error) is in, so a command waiting for it can run again.
+    /// Whether `url` is no longer being fetched, so a command waiting for it can run again. Its
+    /// answer is usually kept by then; one already dropped (evicted, or an error expired while
+    /// frames were throttled) is fetched again by the run, so a waiting command never sticks.
     fn landed(&self, url: &str) -> bool {
-        !self.in_flight.iter().any(|u| u == url) && self.entries.iter().any(|e| e.url == url)
+        !self.in_flight.iter().any(|u| u == url)
     }
 }
 
@@ -268,7 +270,8 @@ impl Session {
         // One waiting run per command: the latest call's.
         self.plugin_retries.retain(|r| r.id != id);
         if self.plugin_retries.len() >= MAX_WAITING {
-            self.plugin_retries.remove(0);
+            let dropped = self.plugin_retries.remove(0);
+            self.notify(format!("{}: dropped while waiting for the web (too many plugin commands waiting)", dropped.id), true);
         }
         self.plugin_retries.push(Retry { id: id.to_string(), params: params.clone(), urls: urls.clone(), tries: tries + 1 });
         Ok(json!({"pending": true, "fetching": urls}))
@@ -349,6 +352,9 @@ mod tests {
         assert!(!c.landed("https://cache.test/err"));
         c.keep("https://cache.test/err", Err("HTTP 500".into()));
         assert!(c.landed("https://cache.test/err"));
+        // An address no longer fetched counts as landed even once its answer is gone: the
+        // command waiting for it runs again (and fetches it again) instead of waiting forever.
+        assert!(c.landed("https://cache.test/never-kept"));
         // Every command waiting for it sees the error, until it expires.
         assert_eq!(c.get("https://cache.test/err"), Some(Err("HTTP 500".into())));
         assert_eq!(c.get("https://cache.test/err"), Some(Err("HTTP 500".into())));
