@@ -280,10 +280,12 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 /// `vulkan`, `gl` and `metal`), else `WGPU_BACKEND`, else every backend but Vulkan on Windows and
 /// everything wgpu offers elsewhere. Windows starts on Direct3D 12 because some Vulkan drivers
 /// (Intel's for UHD 630 graphics, #470) crash while wgpu looks for an adapter, which closes the app
-/// before it can show or log anything; Direct3D 12 is the native API there. A list naming no
-/// known backend counts as not given.
+/// before it can show or log anything; Direct3D 12 is the native API there. A list naming none of
+/// those four counts as not given (wgpu also knows `webgpu` and `noop`, which draw no window).
 fn backends(flag: Option<&str>, env: Option<&str>, windows: bool) -> wgpu::Backends {
-    let chosen = flag.or(env).map(wgpu::Backends::from_comma_list).filter(|b| !b.is_empty());
+    let desktop = wgpu::Backends::DX12 | wgpu::Backends::VULKAN | wgpu::Backends::GL | wgpu::Backends::METAL;
+    let parse = |list: &str| Some(wgpu::Backends::from_comma_list(list) & desktop).filter(|b| !b.is_empty());
+    let chosen = flag.and_then(parse).or_else(|| env.and_then(parse));
     chosen.unwrap_or(if windows { wgpu::Backends::DX12 | wgpu::Backends::GL } else { wgpu::Backends::PRIMARY | wgpu::Backends::GL })
 }
 
@@ -381,6 +383,9 @@ mod tests {
         assert_eq!(backends(None, Some("gl"), true), Backends::GL);
         assert_eq!(backends(Some("GL, dx12"), None, true), Backends::GL | Backends::DX12);
         assert_eq!(backends(Some("nonsense"), None, true), default);
+        assert_eq!(backends(Some("nonsense"), Some("gl"), true), Backends::GL);
+        assert_eq!(backends(Some("webgpu,noop"), None, false), backends(None, None, false));
+        assert_eq!(backends(Some("noop,dx12"), None, true), Backends::DX12);
         let args: Vec<String> = ["a.rgis", "--backend", "gl"].map(String::from).into();
         assert_eq!(flag(&args, "--backend"), Some("gl"));
         assert_eq!(flag(&["--backend=dx12".to_string()], "--backend"), Some("dx12"));
