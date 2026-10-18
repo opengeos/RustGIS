@@ -175,7 +175,9 @@ Venus. Choosing one puts one of its basemaps under the map (the gallery lists th
 MOLA elevation and hillshade mosaics for Mars, LOLA albedo for the Moon, and the USGS
 Astrogeology mosaics of the rest) and measures on that body: the Measure tools, the scale bar,
 the map scale and layout scale bars use its radius. Coordinates stay longitude and latitude, and
-the map stays a Web Mercator sphere, the size of the body. Choosing the Earth again takes the
+the map stays a Web Mercator sphere, the size of the body. Off the Earth there is no atmosphere:
+the globe has no glow around it, and a tilted view's sky is the black of space, with no haze
+toward the horizon. Choosing the Earth again takes the
 planetary basemaps off; the body is saved with the map.
 
 The basemaps come from [OpenPlanetaryMap](https://www.openplanetary.org/opm) and

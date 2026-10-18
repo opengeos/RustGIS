@@ -1339,8 +1339,13 @@ pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
 }
 
 /// The colours of a tilted view's sky (at the top) and of the fog it fades into at the
-/// horizon, from the basemap.
+/// horizon, from the basemap. A body without the Earth's atmosphere has neither: the ground
+/// fades into the black of space (#223).
 pub fn tilt_sky(map: &Map) -> (Rgba, Rgba) {
+    if !map.body().is_earth() {
+        let space = globe_space(true);
+        return (space, space);
+    }
     let (water, land, _, _) = map.palette();
     let white = Rgba::rgb(0xFF, 0xFF, 0xFF);
     let sky = water.lerp(white, 0.35);
@@ -2568,13 +2573,15 @@ pub fn globe_space(dark: bool) -> Rgba {
 struct Space {
     dark: bool,
     stars: bool,
+    /// The glow of an atmosphere around the disc: the Earth's (#223).
+    atmosphere: bool,
 }
 
 /// The space around the globe for `view`: the interactive view's starry sky, or for exports a
 /// light space (dark on the Midnight basemap) without stars.
 fn space(view: &View, map: &Map) -> Space {
     let dark = view.sky || map.basemap == rustgis_map::Basemap::Midnight;
-    Space { dark, stars: view.sky && map.view.effects.stars }
+    Space { dark, stars: view.sky && map.view.effects.stars, atmosphere: map.body().is_earth() }
 }
 
 /// Side of the starfield tile in logical points: the stars repeat this far apart.
@@ -2703,7 +2710,8 @@ fn draw_globe_backdrop(pm: &mut Pixmap, g: &Globe, water: Rgba, space: Space, pp
         draw_stars(pm, ppp);
     }
     let (cx, cy) = g.center();
-    draw_globe_disc(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp, disc_stretch(g), water, space.dark);
+    let disc = (cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp);
+    draw_globe_disc(pm, disc, disc_stretch(g), water, space.dark, space.atmosphere);
 }
 
 /// How much taller than wide a globe's disc is (1 unless it is tilted).
@@ -2717,9 +2725,9 @@ fn stretch_about(cy: f32, k: f32) -> Transform {
     Transform::from_row(1.0, 0.0, 0.0, k, 0.0, cy * (1.0 - k))
 }
 
-/// The atmosphere glow and the ocean disc, for a disc of radius `r` pixels at (`cx`, `cy`),
-/// stretched `k` times up and down (a tilted globe's ellipse).
-fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, k: f32, water: Rgba, dark: bool) {
+/// The atmosphere glow (with `atmosphere`) and the ocean disc, for a disc of radius `r` pixels
+/// at (`cx`, `cy`), stretched `k` times up and down (a tilted globe's ellipse).
+fn draw_globe_disc(pm: &mut Pixmap, (cx, cy, r): (f32, f32, f32), k: f32, water: Rgba, dark: bool, atmosphere: bool) {
     if !(r.is_finite() && r > 0.5 && cx.is_finite() && cy.is_finite()) {
         return;
     }
@@ -2728,19 +2736,21 @@ fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, k: f32, water: Rgb
     let glow_r = r * 1.07;
     // A softer, paler glow on light space.
     let glow = if dark { (0x5A, 0x9B, 0xF0, 150) } else { (0x7F, 0xB4, 0xE8, 120) };
-    if let Some(shader) = RadialGradient::new(
-        Point::from_xy(cx, cy),
-        0.0,
-        Point::from_xy(cx, cy),
-        glow_r,
-        vec![
-            GradientStop::new(0.0, tiny_skia::Color::from_rgba8(glow.0, glow.1, glow.2, glow.3)),
-            GradientStop::new(r / glow_r, tiny_skia::Color::from_rgba8(glow.0, glow.1, glow.2, glow.3)),
-            GradientStop::new(1.0, tiny_skia::Color::from_rgba8(glow.0, glow.1, glow.2, 0)),
-        ],
-        SpreadMode::Pad,
-        Transform::identity(),
-    ) && let Some(path) = PathBuilder::from_circle(cx, cy, glow_r)
+    if atmosphere
+        && let Some(shader) = RadialGradient::new(
+            Point::from_xy(cx, cy),
+            0.0,
+            Point::from_xy(cx, cy),
+            glow_r,
+            vec![
+                GradientStop::new(0.0, tiny_skia::Color::from_rgba8(glow.0, glow.1, glow.2, glow.3)),
+                GradientStop::new(r / glow_r, tiny_skia::Color::from_rgba8(glow.0, glow.1, glow.2, glow.3)),
+                GradientStop::new(1.0, tiny_skia::Color::from_rgba8(glow.0, glow.1, glow.2, 0)),
+            ],
+            SpreadMode::Pad,
+            Transform::identity(),
+        )
+        && let Some(path) = PathBuilder::from_circle(cx, cy, glow_r)
     {
         let p = Paint { shader, anti_alias: true, ..Paint::default() };
         pm.fill_path(&path, &p, FillRule::Winding, t, None);
@@ -2787,10 +2797,10 @@ fn draw_globe_light(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, k: f32) {
 pub const GLOBE_GLOW: f32 = 1.07;
 
 /// The globe's surroundings as two square sprites for a disc of radius `r` pixels, centred in
-/// them (side `2 × GLOBE_GLOW × r`): the atmosphere and ocean drawn under the map, and the
-/// lighting drawn over it. Neither changes as the globe turns, so a view can scale them while it
-/// moves instead of drawing them again.
-pub fn globe_sprites(basemap: rustgis_map::Basemap, r: f32) -> Option<(Pixmap, Pixmap)> {
+/// them (side `2 × GLOBE_GLOW × r`): the atmosphere (with `atmosphere`) and the `water` disc drawn
+/// under the map, and the lighting drawn over it. Neither changes as the globe turns, so a view
+/// can scale them while it moves instead of drawing them again.
+pub fn globe_sprites(water: Rgba, atmosphere: bool, r: f32) -> Option<(Pixmap, Pixmap)> {
     if !(r.is_finite() && r >= 1.0) {
         return None;
     }
@@ -2798,7 +2808,7 @@ pub fn globe_sprites(basemap: rustgis_map::Basemap, r: f32) -> Option<(Pixmap, P
     let side = (2.0 * GLOBE_GLOW * r.min(2048.0)).round().max(2.0);
     let (r, c) = (side / (2.0 * GLOBE_GLOW), side / 2.0);
     let (mut under, mut over) = (Pixmap::new(side as u32, side as u32)?, Pixmap::new(side as u32, side as u32)?);
-    draw_globe_disc(&mut under, c, c, r, 1.0, basemap.palette().0, true);
+    draw_globe_disc(&mut under, (c, c, r), 1.0, water, true, atmosphere);
     draw_globe_light(&mut over, c, c, r, 1.0);
     Some((under, over))
 }
@@ -3126,10 +3136,15 @@ mod tests {
         );
         assert!(render_globe_drape(&mut m, &view, &[Extent::EMPTY], 4096).is_empty());
         // The sprites: a square around the disc, or nothing for a junk radius.
-        let (under, over) = globe_sprites(rustgis_map::Basemap::Paper, 100.0).unwrap();
+        let (under, over) = globe_sprites(rustgis_map::Basemap::Paper.palette().0, true, 100.0).unwrap();
         assert_eq!((under.width(), over.height()), (214, 214));
         assert_eq!(under.pixel(107, 107).map(|c| c.alpha()), Some(255));
-        assert!(globe_sprites(rustgis_map::Basemap::Paper, f32::NAN).is_none());
+        // Off the Earth no atmosphere glows past the limb (#223).
+        assert!(under.pixel(107 + 103, 107).is_some_and(|c| c.alpha() > 0));
+        let (airless, _) = globe_sprites(rustgis_map::Basemap::Paper.palette().0, false, 100.0).unwrap();
+        assert_eq!(airless.pixel(107 + 103, 107).map(|c| c.alpha()), Some(0));
+        assert_eq!(airless.pixel(107, 107).map(|c| c.alpha()), Some(255));
+        assert!(globe_sprites(rustgis_map::Basemap::Paper.palette().0, true, f32::NAN).is_none());
     }
 
     #[test]
@@ -3929,5 +3944,30 @@ mod tests {
         // Towards the outline's colour (darker than the blank basemap).
         let lum = |p: tiny_skia::PremultipliedColorU8| p.red() as u32 + p.green() as u32 + p.blue() as u32;
         assert!(lum(centre) < lum(corner), "{centre:?} vs {corner:?} ({sym:?})");
+    }
+
+    /// The globe and the tilted view on another body: no atmosphere glows past the limb, and the
+    /// tilted sky is the black of space (#223).
+    #[test]
+    fn other_bodies_have_no_atmosphere() {
+        let glow_at = |body: &str| {
+            let mut m = Map::new("Map");
+            m.body = body.into();
+            m.graticule = false;
+            m.projection = rustgis_map::Projection::Globe;
+            let camera = Camera { center: Coord::new(0.0, 0.0), res: 60_000.0, bearing: 0.0, pitch: 0.0 };
+            let view = View { width: 400.0, height: 400.0, pixels_per_point: 1.0, camera, sky: true };
+            let g = Globe::new(&camera, 400.0, 400.0);
+            let (cx, cy) = g.center();
+            let pm = render(&mut m, &view).unwrap().pixmap;
+            let p = pm.pixel((cx + g.disc_radius() * 1.03) as u32, cy as u32).unwrap();
+            (p.red(), p.green(), p.blue())
+        };
+        let space = globe_space(true);
+        assert_ne!(glow_at("earth"), (space.r(), space.g(), space.b()));
+        assert_eq!(glow_at("moon"), (space.r(), space.g(), space.b()));
+        let mut m = Map::new("Map");
+        m.body = "mars".into();
+        assert_eq!(tilt_sky(&m), (space, space));
     }
 }

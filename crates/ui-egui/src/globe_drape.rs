@@ -6,7 +6,7 @@
 use egui::epaint::Vertex;
 use egui::{Color32, Mesh, Painter, Rect, Shape, TextureFilter, TextureHandle, TextureOptions, TextureWrapMode, pos2, vec2};
 use rustgis_engine::geom::{Coord, Extent, merc_to_lonlat};
-use rustgis_engine::map::{Basemap, Globe, Map};
+use rustgis_engine::map::{Globe, Map, Rgba};
 use rustgis_engine::render::{self, GLOBE_GLOW, STAR_TILE, View};
 
 use crate::theme::c32;
@@ -51,7 +51,7 @@ struct Drape {
 }
 
 struct Sprites {
-    key: Basemap,
+    key: (Rgba, bool),
     under: TextureHandle,
     over: TextureHandle,
 }
@@ -127,10 +127,11 @@ impl GlobeDrape {
                 .collect();
             self.drape = Some(Drape { key, ppp: drape_ppp, res: detail, cam_res: res, tiles, built: time, patches });
         }
-        // The atmosphere and lighting, drawn once for the basemap.
-        let skey = map.basemap;
+        // The atmosphere and lighting, drawn once for the background and the body (no
+        // atmosphere off the Earth).
+        let skey = (map.palette().0, map.body().is_earth());
         if self.sprites.as_ref().is_none_or(|s| s.key != skey)
-            && let Some((under, over)) = render::globe_sprites(map.basemap, SPRITE_R)
+            && let Some((under, over)) = render::globe_sprites(skey.0, skey.1, SPRITE_R)
         {
             let tex = |name: &str, pm: &render::Pixmap| {
                 let img = egui::ColorImage::from_rgba_premultiplied([pm.width() as usize, pm.height() as usize], pm.data());
