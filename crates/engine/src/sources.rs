@@ -298,8 +298,12 @@ pub fn holds_plain_key(params: &serde_json::Value) -> bool {
 
 /// An address without what would give someone else the user's access: the user and password of
 /// a web address, query parameters that are keys, tokens or signatures (a signed blob's SAS, an
-/// S3 presigned URL), and a PostgreSQL connection string's password.
+/// S3 presigned URL), and a PostgreSQL connection string's password. A MySQL or MariaDB address
+/// keeps its user (the one to connect as), never its password.
 pub fn redact(address: &str) -> String {
+    if let Some((public, _)) = rustgis_data::source::myconn::split_password(address) {
+        return public;
+    }
     let lower = address.to_ascii_lowercase();
     // A PostgreSQL connection (`postgres:` or `postgresql:` keyword strings, GDAL's `PG:`, URIs):
     // libpq's own rules (quoted values, escapes, `key = value`), without its secrets.
@@ -677,6 +681,13 @@ MIIE
         assert_eq!(s.address, "postgres:host=h dbname=g");
         assert_eq!(s.extra, json!({"layer": "roads"}));
         assert!(!serde_json::to_string(&s).unwrap().contains("pw"));
+        // A MySQL address keeps its user, never its password (in the user part or the query).
+        let s = added_by("layer.addDatabase", &json!({"database": "mysql://ana:p%40w#x@db:3306/gis?pass=pw2", "password": "pw"})).unwrap();
+        let s = clean(s).unwrap();
+        assert_eq!(s.address, "mysql://ana@db:3306/gis");
+        assert!(!serde_json::to_string(&s).unwrap().contains("pw"));
+        assert!(holds_secret(&json!({"database": "mariadb://ana:pw@db/gis"})));
+        assert!(!holds_secret(&json!({"database": "mariadb://ana@db/gis"})));
         assert_eq!(
             added_by("service.add", &json!({"url": "https://h/wms", "layer": "a", "type": "wms"})).unwrap().extra,
             json!({"layer": "a", "type": "wms"})

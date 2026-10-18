@@ -71,6 +71,9 @@ pub struct SourceLayer {
     /// For a layer read live from a PostGIS table (desktop only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub postgis: Option<PostgisOrigin>,
+    /// For a layer read live from a MySQL or MariaDB table (desktop only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mysql: Option<MysqlOrigin>,
 }
 
 /// A PostGIS table a layer reads live.
@@ -85,6 +88,21 @@ pub struct PostgisOrigin {
     #[serde(default)]
     pub family: Option<rustgis_data::source::Family>,
     /// The coordinate system given for a geometry that doesn't say.
+    #[serde(default)]
+    pub crs: Option<String>,
+}
+
+/// A MySQL or MariaDB table a layer reads live.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MysqlOrigin {
+    /// The connection (a `mysql://` or `mariadb://` address), never with its password.
+    pub database: String,
+    /// The table, as `table`, `database.table`, with `:column` when it has several.
+    pub table: String,
+    /// The geometry family read, for a column of mixed types.
+    #[serde(default)]
+    pub family: Option<rustgis_data::source::Family>,
+    /// The coordinate system given for a geometry whose SRID is 0.
     #[serde(default)]
     pub crs: Option<String>,
 }
@@ -184,6 +202,29 @@ fn open_postgis(pg: &PostgisOrigin) -> rustgis_data::Result<Box<dyn FeatureSourc
     }
 }
 
+/// Connects to a MySQL or MariaDB layer's table again (a project opening). Only a password given
+/// this session is sent, never `MYSQL_PWD`, as for [`open_postgis`].
+fn open_mysql(my: &MysqlOrigin) -> rustgis_data::Result<Box<dyn FeatureSource>> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = my;
+        Err(rustgis_data::DataError::Format("MySQL and MariaDB databases are read in the desktop app".into()))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rustgis_data::source::{duckdb::Database, mysql};
+        let Database::Mysql(address) = Database::parse(&my.database) else {
+            return Err(rustgis_data::DataError::Format(format!("{}: not a MySQL or MariaDB connection", my.database)));
+        };
+        let again = |e: rustgis_data::DataError| {
+            rustgis_data::DataError::Format(format!("{e} (connect again with Add Data › Database…, giving its password)"))
+        };
+        let conn = mysql::connect(&address, false).map_err(again)?;
+        let table = mysql::find_table(&conn, &my.table)?;
+        Ok(Box::new(mysql::MysqlSource::open(conn, table, my.family, my.crs.as_deref())?))
+    }
+}
+
 /// What the layer's features hold.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Window {
@@ -237,6 +278,11 @@ impl SourceLayer {
         SourceLayer { postgis: Some(origin), handle: Some(Arc::from(handle)), ..SourceLayer::default() }
     }
 
+    /// A MySQL or MariaDB table read live.
+    pub fn from_mysql(origin: MysqlOrigin, handle: Box<dyn FeatureSource>) -> Self {
+        SourceLayer { mysql: Some(origin), handle: Some(Arc::from(handle)), ..SourceLayer::default() }
+    }
+
     /// A source read from a file's bytes, kept in the project.
     pub fn from_bytes(file_name: impl Into<String>, bytes: Arc<Vec<u8>>, table: Option<String>, handle: Box<dyn FeatureSource>) -> Self {
         SourceLayer {
@@ -256,6 +302,8 @@ impl SourceLayer {
         }
         let src = if let Some(pg) = &self.postgis {
             open_postgis(pg)
+        } else if let Some(my) = &self.mysql {
+            open_mysql(my)
         } else if let Some(bytes) = &self.embedded {
             let name = self.file_name.as_deref().unwrap_or("layer.parquet");
             rustgis_data::source::open_shared(name, bytes.clone(), self.table.as_deref())

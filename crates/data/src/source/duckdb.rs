@@ -49,14 +49,23 @@ pub enum Database {
     /// A libpq connection string (`host=… dbname=… user=…`) or `postgresql://` URI, without its
     /// password (see [`remember_password`]).
     Postgres(String),
+    /// A `mysql://` or `mariadb://` address, without its password: its tables are read live by
+    /// [`super::mysql`], not through DuckDB.
+    Mysql(String),
 }
 
 impl Database {
     /// A database by how projects and commands name it: `postgres:<connection string>`, a
-    /// `postgresql://` URI, or a file path. A password in it is taken out and remembered for the
-    /// session.
+    /// `postgresql://` URI, a `mysql://` or `mariadb://` address, or a file path. A password in it
+    /// is taken out and remembered for the session.
     pub fn parse(s: &str) -> Database {
         let t = s.trim();
+        if let Some((public, password)) = super::myconn::split_password(t) {
+            if let Some(p) = password {
+                remember_password(&public, &p);
+            }
+            return Database::Mysql(public);
+        }
         let lower = t.to_ascii_lowercase();
         let dsn = if let Some(rest) =
             t.get(..9).filter(|p| p.eq_ignore_ascii_case("postgres:")).and_then(|_| t.get(9..)).filter(|r| !r.starts_with("//"))
@@ -85,6 +94,7 @@ impl Database {
             Database::File(p) => p.display().to_string(),
             Database::Postgres(d) if d.contains("://") => d.clone(),
             Database::Postgres(d) => format!("postgres:{d}"),
+            Database::Mysql(a) => a.clone(),
         }
     }
 
@@ -97,6 +107,7 @@ impl Database {
                 get("dbname")
                     .unwrap_or_else(|| d.rsplit('/').next().unwrap_or("postgres").split('?').next().unwrap_or("postgres").to_string())
             }
+            Database::Mysql(a) => super::myconn::database_name(a).unwrap_or_else(|| "mysql".into()),
         }
     }
 }
@@ -130,7 +141,7 @@ pub(crate) fn remembered_password(dsn: &str) -> Option<String> {
 fn password(database: Option<&Database>) -> Option<String> {
     match database? {
         Database::Postgres(dsn) => passwords().lock().unwrap_or_else(|e| e.into_inner()).get(dsn).cloned(),
-        Database::File(_) => None,
+        Database::File(_) | Database::Mysql(_) => None,
     }
 }
 
@@ -151,6 +162,11 @@ pub fn program() -> Option<PathBuf> {
 /// Whether DuckDB is installed.
 pub fn available() -> bool {
     program().is_some()
+}
+
+/// A MySQL or MariaDB database named for a query: its tables are read live instead.
+fn mysql_not_here() -> DataError {
+    DataError::Unsupported("SQL queries don't run on MySQL or MariaDB databases: add their tables with Add Data › Database…".into())
 }
 
 fn missing() -> DataError {
@@ -254,6 +270,7 @@ fn prelude(dir: &Path, database: Option<&Database>, confined: bool) -> Result<St
         Some(Database::Postgres(dsn)) => {
             s.push_str(&format!(" INSTALL postgres; LOAD postgres; ATTACH {} AS src (TYPE postgres, READ_ONLY); USE src;", literal(dsn)));
         }
+        Some(Database::Mysql(_)) => return Err(mysql_not_here()),
         None => {}
     }
     if confined {
@@ -672,6 +689,7 @@ pub fn convert_table_of(database: &Database, table: &Table, crs: Option<&str>) -
     let dir = cache_dir().ok_or_else(|| DataError::Format("no cache folder for DuckDB results".into()))?;
     match database {
         Database::File(p) => convert_table_in(&dir, p, table, crs),
+        Database::Mysql(_) => Err(mysql_not_here()),
         Database::Postgres(_) => {
             if !available() {
                 return Err(missing());

@@ -6670,6 +6670,73 @@ fn postgis_live_end_to_end() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A MySQL or MariaDB layer in a project names its connection without the password, and opening
+/// the project never sends one it wasn't given this session (`MYSQL_PWD` included).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn mysql_layers_reopen_without_secrets() {
+    let mut s = Session::new(Project::default());
+    let mut src: rustgis_map::source::SourceLayer = serde_json::from_value(json!({
+        "mysql": {"database": "mysql://me@127.0.0.1:1/gis?ssl-mode=DISABLED", "table": "roads", "family": "Lines"}
+    }))
+    .unwrap();
+    let e = src.open().unwrap_err();
+    assert!(e.contains("connect again with Add Data › Database"), "{e}");
+    assert!(!src.is_open());
+    let saved = serde_json::to_string(&src).unwrap();
+    assert!(saved.contains("\"mysql\":{") && saved.contains("\"table\":\"roads\"") && !saved.contains("password"), "{saved}");
+    // A connection that isn't there fails as an error, never a panic, and adds nothing; the
+    // password, in the address or given beside it, is in no message.
+    let before = s.map().layers.len();
+    let e = s.run("layer.addDatabase", &json!({"database": "mysql://me:s3cret@127.0.0.1:1/gis", "password": "pw"})).unwrap_err();
+    assert!(e.starts_with("gis: ") && !e.contains("s3cret") && !e.contains("pw"), "{e}");
+    let e = s.run("info.databaseTables", &json!({"database": "mariadb://u:s3cret@127.0.0.1:1"})).unwrap_err();
+    assert!(e.starts_with("mysql: ") && !e.contains("s3cret"), "{e}");
+    // An address that can't be read is said so.
+    let e = s.run("layer.addDatabase", &json!({"database": "mysql://h:port/gis"})).unwrap_err();
+    assert!(e.contains("port 'port'"), "{e}");
+    // SQL queries don't run on one.
+    let e = s.run("layer.addSql", &json!({"sql": "SELECT 1", "database": "mysql://h/gis"})).unwrap_err();
+    assert!(e.contains("MySQL"), "{e}");
+    assert_eq!(s.map().layers.len(), before);
+}
+
+/// A live MySQL or MariaDB database through the commands: `RUSTGIS_TEST_MYSQL="mysql://user:
+/// password@host:port/database"` names one with tables of geometry (any will do); every table is
+/// added, drawn, saved and opened again.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore]
+fn mysql_live_end_to_end() {
+    let Ok(address) = std::env::var("RUSTGIS_TEST_MYSQL") else { return };
+    let mut s = Session::new(Project::default());
+    let listed = s.run("info.databaseTables", &json!({"database": address})).unwrap();
+    let names: Vec<String> = listed["layers"].as_array().unwrap().iter().filter_map(|v| v.as_str()).map(str::to_string).collect();
+    assert!(!names.is_empty());
+    // Every table: a column of mixed types becomes a layer per type.
+    let r = s.run("layer.addDatabase", &json!({"database": address})).unwrap();
+    assert!(r["layers"].as_array().unwrap().len() >= names.len(), "{r}");
+    assert!(r["features"].as_u64().unwrap() > 0, "{r}");
+    // Streamed when asked: saved without its features or the password, read again when opened.
+    let r = s.run("layer.addDatabase", &json!({"database": address, "layer": names[0], "stream": true, "name": "live"})).unwrap();
+    assert_eq!(r["streamed"], true);
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).unwrap().source.as_ref().unwrap().mysql.is_some());
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-mysql-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("map.png");
+    s.run("share.exportMap", &json!({"path": png.display().to_string()})).unwrap();
+    assert!(std::fs::metadata(&png).unwrap().len() > 1000);
+    let text = serde_json::to_string(&s.project).unwrap();
+    let password = address.split_once("://").and_then(|(_, r)| r.split_once('@')).and_then(|(u, _)| u.split_once(':')).map(|(_, p)| p);
+    assert!(password.is_none_or(|p| !text.contains(&format!(":{p}@"))), "the project keeps no password");
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let l = t.map().layer_by_name("live").unwrap();
+    assert!(l.source.as_ref().unwrap().is_open(), "{:?}", l.source.as_ref().unwrap().error);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Deleting a map or layout other than the one in view (a tab's close button) keeps that view;
 /// deleting the one in view falls back to the first map; the last map stays.
 #[test]

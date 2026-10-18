@@ -235,8 +235,12 @@ impl Layer {
         };
         let mut ds = Dataset::new(name, ty, fields);
         ds.windowed = true;
-        ds.source =
-            source.path.clone().or_else(|| source.file_name.clone()).or_else(|| source.postgis.as_ref().map(|p| p.database.clone()));
+        ds.source = source
+            .path
+            .clone()
+            .or_else(|| source.file_name.clone())
+            .or_else(|| source.postgis.as_ref().map(|p| p.database.clone()))
+            .or_else(|| source.mysql.as_ref().map(|m| m.database.clone()));
         let mut l = Layer::new(id, ds);
         l.source = Some(source);
         l

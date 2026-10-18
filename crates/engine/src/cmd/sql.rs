@@ -32,7 +32,7 @@ fn query(_s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rustgis_data::source::duckdb;
-        let database = super::layer::database_param(p);
+        let database = super::layer::sql_database_param(p)?;
         let limit = f(p, "limit").filter(|l| l.is_finite()).map(|l| l.clamp(1.0, duckdb::MAX_PREVIEW as f64) as usize).unwrap_or(100);
         let r = duckdb::preview(&duckdb::Query { sql, database: database.as_ref(), crs: None }, limit).map_err(|e| e.to_string())?;
         Ok(preview_json(&r))
@@ -59,7 +59,7 @@ fn schema(_s: &mut Session, p: &Value) -> CmdResult {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let db = super::layer::database_param(p).ok_or("database is required")?;
+        let db = super::layer::sql_database_param(p)?.ok_or("database is required")?;
         let cols = rustgis_data::source::duckdb::schema_of(&db).map_err(|e| format!("{}: {e}", db.short()))?;
         let mut tables = serde_json::Map::new();
         for (t, c) in cols {

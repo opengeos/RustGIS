@@ -21,6 +21,9 @@ pub mod gpkg;
 mod gpkg_blob;
 pub mod gpkg_mem;
 pub mod lidar;
+pub mod myconn;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod mysql;
 pub mod parquet;
 pub mod pgconn;
 #[cfg(not(target_arch = "wasm32"))]

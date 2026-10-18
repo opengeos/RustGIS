@@ -1,0 +1,1054 @@
+//! MySQL and MariaDB: the spatial columns of a database's tables, read live in place (desktop
+//! only).
+//!
+//! RustGIS talks to the server itself (the pure-Rust `mysql` client, TLS through rustls), so
+//! nothing else needs installing. Extent queries use the column's spatial index
+//! (`MBRIntersects`); geometry comes as WKB, longitude first (MySQL's geographic coordinate
+//! systems are latitude first unless asked), and RustGIS converts it to longitude/latitude
+//! itself, since MariaDB has no `ST_Transform`. A capped read returns an evenly spread sample,
+//! numbered on the server (window functions: MySQL 8 or MariaDB 10.2 and later), so only the rows
+//! kept cross the network. The session is read only, and a server asking for a local file
+//! (`LOAD DATA LOCAL INFILE`) is sent none.
+//!
+//! What a server sends is hostile input: geometry is decoded by [`wkb`], reads are bounded by
+//! `LIMIT`, and statements time out.
+
+use super::{Batch, Family, FeatureSource, Reproject, Request, SourceInfo, clamp_limit, in_request, stride};
+use crate::raster::Crs;
+use crate::{DataError, Feature, Field, FieldType, Geometry, GeometryType, Result, Value, wkb};
+use mysql::prelude::Queryable;
+use rustgis_geom::Extent;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::Duration;
+
+/// How long a statement may run on the server, in seconds.
+const STATEMENT_TIMEOUT: u64 = 120;
+
+/// How long counting a table or listing its geometry types when it opens may take, in seconds:
+/// past it the count is left unknown.
+const PROBE_TIMEOUT: u64 = 10;
+
+/// How long connecting may take, when the connection doesn't say.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Tables with an estimated row count above this aren't counted exactly when opened.
+const EXACT_COUNT_BELOW: u64 = 2_000_000;
+
+/// The rows read to measure a table's extent when it opens (an evenly spread sample of a larger
+/// table): MySQL has no extent aggregate, and its envelopes fail on geographic coordinates.
+const EXTENT_SAMPLE: usize = 20_000;
+
+/// Most geometry columns listed.
+const LIST_LIMIT: usize = 10_000;
+
+/// The column types that hold geometry.
+const GEOMETRY_TYPES: &[&str] = &[
+    "geometry",
+    "point",
+    "linestring",
+    "polygon",
+    "multipoint",
+    "multilinestring",
+    "multipolygon",
+    "geometrycollection",
+    "geomcollection",
+];
+
+/// Schemas of the server's own.
+const SYSTEM_SCHEMAS: &[&str] = &["mysql", "information_schema", "performance_schema", "sys"];
+
+// ---------------------------------------------------------------------------------------------
+// Connection addresses
+
+pub use super::myconn::{database_name, is_address, split_password};
+
+/// How the connection is protected (the MySQL client's `ssl-mode`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Tls {
+    /// No TLS (`DISABLED`).
+    Disable,
+    /// TLS when the server has it, else none (`PREFERRED`, the default), the certificate
+    /// unchecked as the MySQL client does: encrypted, but not proof against a server in the
+    /// middle.
+    Prefer,
+    /// TLS always, the certificate unchecked (`REQUIRED`).
+    Require,
+    /// TLS with the server's certificate checked against `ssl-ca` (a private authority) or the
+    /// web's roots: its host name too with `VERIFY_IDENTITY`, not with `VERIFY_CA`.
+    Verified { ca: Option<std::path::PathBuf>, identity: bool },
+}
+
+/// Where and how to connect, from an address.
+#[derive(Clone, Debug, PartialEq)]
+struct Config {
+    host: String,
+    port: u16,
+    user: String,
+    database: Option<String>,
+    tls: Tls,
+    connect_timeout: Duration,
+}
+
+/// An address's configuration (`mysql://[user@]host[:port][/database][?ssl-mode=…&ssl-ca=…]`),
+/// with the MySQL client's defaults (`localhost`, port 3306, the login name) for what it leaves
+/// out.
+fn config(address: &str) -> Result<Config> {
+    let bad = |m: &str| DataError::Format(format!("the connection: {m}"));
+    let (public, _) = split_password(address).ok_or_else(|| bad("not a mysql:// address"))?;
+    let (_, rest) = public.split_once("://").ok_or_else(|| bad("not a mysql:// address"))?;
+    let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let (user, hostport) = match super::pgconn::userinfo_end(rest) {
+        Some(at) => (rest.get(..at).map(super::pgconn::percent_decode), rest.get(at + 1..).unwrap_or("")),
+        None => (None, rest),
+    };
+    let hostport = hostport.split('/').next().unwrap_or("");
+    let (host, port) = if let Some(v6) = hostport.strip_prefix('[') {
+        let (h, after) = v6.split_once(']').ok_or_else(|| bad("an unterminated [address]"))?;
+        (h.to_string(), after.strip_prefix(':'))
+    } else {
+        match hostport.rsplit_once(':') {
+            Some((h, p)) => (h.to_string(), Some(p)),
+            None => (hostport.to_string(), None),
+        }
+    };
+    let port = match port.filter(|p| !p.is_empty()) {
+        Some(p) => p.parse().map_err(|_| bad(&format!("port '{p}'")))?,
+        None => 3306,
+    };
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let mut mode = None;
+    let mut ca = None;
+    let mut connect_timeout = CONNECT_TIMEOUT;
+    for kv in query.split('&').filter(|kv| !kv.is_empty()) {
+        let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+        let v = super::pgconn::percent_decode(v);
+        match k.to_ascii_lowercase().replace('_', "-").as_str() {
+            "ssl-mode" | "sslmode" => mode = Some(v.to_ascii_lowercase().replace('-', "_")),
+            "ssl-ca" | "sslrootcert" => ca = Some(v),
+            "connect-timeout" => {
+                // Zero or less is no limit of its own, so the default applies.
+                if let Ok(s) = v.trim().parse::<u64>()
+                    && s > 0
+                {
+                    connect_timeout = Duration::from_secs(s);
+                }
+            }
+            _ => {}
+        }
+    }
+    let tls = match mode.as_deref() {
+        Some("disabled" | "disable") => Tls::Disable,
+        Some("preferred" | "prefer") | None => Tls::Prefer,
+        Some("required" | "require") => Tls::Require,
+        Some(m @ ("verify_ca" | "verify_identity" | "verify_full")) => {
+            Tls::Verified { ca: ca.filter(|c| !c.is_empty() && c != "system").map(std::path::PathBuf::from), identity: m != "verify_ca" }
+        }
+        Some(other) => return Err(bad(&format!("ssl-mode '{other}'"))),
+    };
+    Ok(Config {
+        host: if host.is_empty() { "localhost".into() } else { host },
+        port,
+        user: user.filter(|u| !u.is_empty()).or_else(|| env("USER")).or_else(|| env("USERNAME")).unwrap_or_else(|| "root".into()),
+        database: database_name(&public),
+        tls,
+        connect_timeout,
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Connections
+
+/// Which server: their SQL differs in timeouts and axis order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Server {
+    mariadb: bool,
+    major: u32,
+}
+
+impl Server {
+    fn from_version(v: &str) -> Server {
+        let major = v.split(['.', '-']).next().and_then(|m| m.trim().parse().ok()).unwrap_or(0);
+        Server { mariadb: v.to_ascii_lowercase().contains("mariadb"), major }
+    }
+
+    /// MySQL 8 reads and writes geographic coordinates latitude first unless asked otherwise.
+    fn axis_option(self) -> &'static str {
+        if !self.mariadb && self.major >= 8 { ", 'axis-order=long-lat'" } else { "" }
+    }
+
+    /// A `SELECT` that times out after `secs` on the server.
+    fn timed(self, select: &str, secs: u64) -> String {
+        if self.mariadb {
+            format!("SET STATEMENT max_statement_time = {secs} FOR {select}")
+        } else {
+            let rest = select.strip_prefix("SELECT ").unwrap_or(select);
+            format!("SELECT /*+ MAX_EXECUTION_TIME({}) */ {rest}", secs.saturating_mul(1000))
+        }
+    }
+
+    /// Whether an error is a statement timing out.
+    fn timed_out(e: &mysql::Error) -> bool {
+        // MySQL's ER_QUERY_TIMEOUT, MariaDB's ER_STATEMENT_TIMEOUT.
+        matches!(e, mysql::Error::MySqlError(m) if m.code == 3024 || m.code == 1969)
+    }
+}
+
+/// A connection to a server, shared by every layer read from it. Its statements run one at a
+/// time: a slow read holds up the other layers of that server until it ends or times out.
+pub struct Conn {
+    config: Config,
+    password: Option<String>,
+    server: Server,
+    client: Mutex<Option<mysql::Conn>>,
+}
+
+fn err(e: mysql::Error) -> DataError {
+    // The server's own message (a missing table, a refused password) rather than its code.
+    match e {
+        mysql::Error::MySqlError(m) => DataError::Format(m.message),
+        e => DataError::Format(e.to_string()),
+    }
+}
+
+/// Whether an error means the connection is gone (a server restart, an idle timeout).
+fn dropped(e: &mysql::Error) -> bool {
+    matches!(e, mysql::Error::IoError(_) | mysql::Error::CodecError(_) | mysql::Error::DriverError(_))
+}
+
+impl Conn {
+    /// Runs `f` with the client, connecting again when the connection dropped: a drop shows only
+    /// when it is used, so `f` runs once more on a new one.
+    fn with<T>(&self, mut f: impl FnMut(&mut mysql::Conn) -> std::result::Result<T, mysql::Error>) -> Result<T> {
+        let mut guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
+        for attempt in 0..2 {
+            if guard.is_none() {
+                *guard = Some(open_client(&self.config, self.password.as_deref())?.0);
+            }
+            let client = guard.as_mut().ok_or_else(|| DataError::Format("not connected".into()))?;
+            match f(client) {
+                Ok(v) => return Ok(v),
+                Err(e) if attempt == 0 && dropped(&e) => *guard = None,
+                Err(e) => {
+                    if dropped(&e) {
+                        *guard = None;
+                    }
+                    return Err(err(e));
+                }
+            }
+        }
+        Err(DataError::Format("not connected".into()))
+    }
+
+    /// Runs `f` in a read-only transaction seeing one snapshot of the database.
+    fn snapshot<T>(&self, mut f: impl FnMut(&mut mysql::Transaction<'_>) -> std::result::Result<T, mysql::Error>) -> Result<T> {
+        self.with(|c| {
+            let opts = mysql::TxOpts::default().set_with_consistent_snapshot(true).set_access_mode(Some(mysql::AccessMode::ReadOnly));
+            let mut t = c.start_transaction(opts)?;
+            let r = f(&mut t)?;
+            t.commit()?;
+            Ok(r)
+        })
+    }
+}
+
+/// Connects, with TLS as the configuration says (`Prefer`: TLS first, then without), and sets
+/// the session read only with a statement timeout.
+fn open_client(config: &Config, password: Option<&str>) -> Result<(mysql::Conn, Server)> {
+    let base = mysql::OptsBuilder::new()
+        .ip_or_hostname(Some(config.host.clone()))
+        .tcp_port(config.port)
+        .user(Some(config.user.clone()))
+        .pass(password.map(str::to_string))
+        .db_name(config.database.clone())
+        .tcp_connect_timeout(Some(config.connect_timeout))
+        .read_timeout(Some(Duration::from_secs(STATEMENT_TIMEOUT + 30)))
+        .write_timeout(Some(Duration::from_secs(STATEMENT_TIMEOUT + 30)))
+        // A host named `localhost` would otherwise be reached through the server's socket.
+        .prefer_socket(false);
+    let unchecked = mysql::SslOpts::default().with_danger_accept_invalid_certs(true);
+    let attempts: Vec<Option<mysql::SslOpts>> = match &config.tls {
+        Tls::Disable => vec![None],
+        Tls::Prefer => vec![Some(unchecked), None],
+        Tls::Require => vec![Some(unchecked)],
+        Tls::Verified { ca, identity } => {
+            if let Some(file) = ca
+                && !file.is_file()
+            {
+                return Err(DataError::Format(format!("ssl-ca {}: no such file", file.display())));
+            }
+            let ssl = mysql::SslOpts::default().with_danger_skip_domain_validation(!identity);
+            vec![Some(match ca {
+                Some(file) => ssl.with_root_cert_path(Some(file.clone())),
+                None => ssl,
+            })]
+        }
+    };
+    let mut last = None;
+    for ssl in attempts {
+        match mysql::Conn::new(base.clone().ssl_opts(ssl)) {
+            Ok(c) => return session(c),
+            // A refused password or unknown database is the server's answer, whatever the TLS.
+            Err(e @ mysql::Error::MySqlError(_)) => return Err(err(e)),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.map(err).unwrap_or_else(|| DataError::Format("not connected".into())))
+}
+
+fn session(mut c: mysql::Conn) -> Result<(mysql::Conn, Server)> {
+    let version: Option<String> = c.query_first("SELECT VERSION()").map_err(err)?;
+    let server = Server::from_version(version.as_deref().unwrap_or(""));
+    let timeout = if server.mariadb {
+        format!("SET SESSION max_statement_time = {STATEMENT_TIMEOUT}")
+    } else {
+        format!("SET SESSION max_execution_time = {}", STATEMENT_TIMEOUT * 1000)
+    };
+    c.query_drop("SET SESSION TRANSACTION READ ONLY").map_err(err)?;
+    // MySQL 5.7 and older MariaDB have neither: their statements end with the read timeout.
+    let _ = c.query_drop(timeout);
+    Ok((c, server))
+}
+
+/// A live connection: its address and the password it was opened with.
+type Live = (String, Option<String>, Weak<Conn>);
+
+/// Live connections, so layers of one server share one.
+fn live() -> &'static Mutex<Vec<Live>> {
+    static L: OnceLock<Mutex<Vec<Live>>> = OnceLock::new();
+    L.get_or_init(Default::default)
+}
+
+/// Connects to a database (`address`: a `mysql://` or `mariadb://` address as
+/// [`super::duckdb::Database::Mysql`] holds it, without its password), or shares a connection
+/// already open to it.
+///
+/// The password is the one remembered for it this session. When `ask` (the user is adding the
+/// database), the MySQL client's `MYSQL_PWD` serves too; a project opening never hands it to the
+/// server it names.
+pub fn connect(address: &str, ask: bool) -> Result<Arc<Conn>> {
+    let config = config(address)?;
+    let password = super::duckdb::remembered_password(address)
+        .or_else(|| if ask { std::env::var("MYSQL_PWD").ok().filter(|p| !p.is_empty()) } else { None });
+    let find = |live: &mut Vec<Live>| {
+        live.retain(|(_, _, w)| w.strong_count() > 0);
+        live.iter().find(|(a, p, _)| a == address && *p == password).and_then(|(_, _, w)| w.upgrade())
+    };
+    if let Some(c) = find(&mut live().lock().unwrap_or_else(|e| e.into_inner())) {
+        return Ok(c);
+    }
+    // Connecting can take as long as the timeout: other connections don't wait for it.
+    let (client, server) = open_client(&config, password.as_deref())?;
+    let mut live = live().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(c) = find(&mut live) {
+        return Ok(c);
+    }
+    let conn = Arc::new(Conn { config, password: password.clone(), server, client: Mutex::new(Some(client)) });
+    live.push((address.to_string(), password, Arc::downgrade(&conn)));
+    Ok(conn)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tables
+
+/// A geometry column of a table or view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Table {
+    /// Its database (MySQL's schema).
+    pub schema: String,
+    pub name: String,
+    pub column: String,
+    /// The column's type (`point`, `multipolygon`, `geometry`…).
+    pub kind: String,
+    /// Whether the schema is the one the connection names (its label then leaves it out).
+    pub current: bool,
+    /// Whether the table has other geometry columns (its label then names the column).
+    pub several: bool,
+}
+
+impl Table {
+    /// Its name: with its schema unless that is the connection's, and `:column` when it has
+    /// several.
+    pub fn label(&self) -> String {
+        let base = if self.current { self.name.clone() } else { format!("{}.{}", self.schema, self.name) };
+        if self.several { format!("{base}:{}", self.column) } else { base }
+    }
+
+    /// Whether `name` (`table`, `schema.table`, either with `:column`, any case) names it.
+    pub fn is_named(&self, name: &str) -> bool {
+        let (table, column) = match name.rsplit_once(':') {
+            Some((t, c)) => (t, Some(c)),
+            None => (name, None),
+        };
+        let full = format!("{}.{}", self.schema, self.name);
+        let table_ok = table.eq_ignore_ascii_case(&self.name) || table.eq_ignore_ascii_case(&full);
+        table_ok && column.is_none_or(|c| c.eq_ignore_ascii_case(&self.column))
+    }
+
+    fn sql_from(&self) -> String {
+        format!("{}.{}", ident(&self.schema), ident(&self.name))
+    }
+
+    /// The geometry families its type holds; `None` for `geometry` and collections (any).
+    fn declared_family(&self) -> Option<Family> {
+        family_of(&self.kind)
+    }
+}
+
+/// The family of a column type (`multipolygon`, `point`…).
+fn family_of(kind: &str) -> Option<Family> {
+    let k = kind.to_ascii_lowercase();
+    match k.strip_prefix("multi").unwrap_or(&k) {
+        "point" => Some(Family::Points),
+        "linestring" => Some(Family::Lines),
+        "polygon" => Some(Family::Polygons),
+        _ => None,
+    }
+}
+
+fn geometry_type(f: Option<Family>) -> GeometryType {
+    match f {
+        Some(Family::Points) => GeometryType::Point,
+        Some(Family::Lines) => GeometryType::Polyline,
+        Some(Family::Polygons) => GeometryType::Polygon,
+        None => GeometryType::None,
+    }
+}
+
+/// An SQL identifier.
+fn ident(s: &str) -> String {
+    format!("`{}`", s.replace('`', "``"))
+}
+
+/// Text of a value as the text protocol sends it (or a number, as the binary one does).
+fn text_of(v: &mysql::Value) -> Option<String> {
+    match v {
+        mysql::Value::NULL => None,
+        mysql::Value::Bytes(b) => Some(String::from_utf8_lossy(b).into_owned()),
+        mysql::Value::Int(i) => Some(i.to_string()),
+        mysql::Value::UInt(u) => Some(u.to_string()),
+        mysql::Value::Float(f) => Some(f.to_string()),
+        mysql::Value::Double(f) => Some(f.to_string()),
+        other => Some(other.as_sql(true).trim_matches('\'').to_string()),
+    }
+}
+
+fn int_of(v: &mysql::Value) -> Option<i64> {
+    match v {
+        mysql::Value::Int(i) => Some(*i),
+        mysql::Value::UInt(u) => i64::try_from(*u).ok(),
+        mysql::Value::Double(f) if f.fract() == 0.0 && f.abs() < 9.0e18 => Some(*f as i64),
+        other => text_of(other)?.trim().parse().ok(),
+    }
+}
+
+fn float_of(v: &mysql::Value) -> Option<f64> {
+    match v {
+        mysql::Value::Float(f) => Some(f64::from(*f)),
+        mysql::Value::Double(f) => Some(*f),
+        mysql::Value::Int(i) => Some(*i as f64),
+        mysql::Value::UInt(u) => Some(*u as f64),
+        other => text_of(other)?.trim().parse().ok(),
+    }
+    .filter(|f: &f64| f.is_finite())
+}
+
+fn at(r: &mysql::Row, i: usize) -> &mysql::Value {
+    r.as_ref(i).unwrap_or(&mysql::Value::NULL)
+}
+
+/// The geometry columns of the connection's database (of every database but the server's own
+/// when it names none).
+pub fn tables(conn: &Conn) -> Result<Vec<Table>> {
+    let types: Vec<String> = GEOMETRY_TYPES.iter().map(|t| format!("'{t}'")).collect();
+    let system: Vec<String> = SYSTEM_SCHEMAS.iter().map(|t| format!("'{t}'")).collect();
+    let sql = format!(
+        "SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, TABLE_SCHEMA = DATABASE() FROM information_schema.COLUMNS \
+         WHERE LOWER(DATA_TYPE) IN ({}) AND TABLE_SCHEMA NOT IN ({}) AND (DATABASE() IS NULL OR TABLE_SCHEMA = DATABASE()) \
+         ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION LIMIT {LIST_LIMIT}",
+        types.join(", "),
+        system.join(", ")
+    );
+    let rows: Vec<mysql::Row> = conn.with(|c| c.query(sql.as_str()))?;
+    let mut out: Vec<Table> = rows
+        .iter()
+        .filter_map(|r| {
+            Some(Table {
+                schema: text_of(at(r, 0))?,
+                name: text_of(at(r, 1))?,
+                column: text_of(at(r, 2))?,
+                kind: text_of(at(r, 3))?.to_ascii_lowercase(),
+                current: int_of(at(r, 4)) == Some(1),
+                several: false,
+            })
+        })
+        .collect();
+    let mut columns: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    for t in &out {
+        *columns.entry((t.schema.clone(), t.name.clone())).or_default() += 1;
+    }
+    for t in &mut out {
+        t.several = columns.get(&(t.schema.clone(), t.name.clone())).is_some_and(|n| *n > 1);
+    }
+    Ok(out)
+}
+
+/// The table named `name` (`table`, `schema.table`, `…:column`).
+pub fn find_table(conn: &Conn, name: &str) -> Result<Table> {
+    let all = tables(conn)?;
+    all.iter()
+        .find(|t| t.label().eq_ignore_ascii_case(name))
+        .or_else(|| all.iter().find(|t| t.is_named(name)))
+        .cloned()
+        .ok_or_else(|| DataError::Format(format!("no table '{name}' with a geometry column")))
+}
+
+/// The geometry families a table holds: its column type's, or for a `geometry` column those its
+/// rows have (a layer each).
+pub fn families(conn: &Conn, table: &Table) -> Result<Vec<Family>> {
+    if let Some(f) = table.declared_family() {
+        return Ok(vec![f]);
+    }
+    let g = ident(&table.column);
+    let sql =
+        conn.server.timed(&format!("SELECT DISTINCT ST_Dimension({g}) FROM {} WHERE {g} IS NOT NULL", table.sql_from()), PROBE_TIMEOUT);
+    // A scan of the table, bounded like the other probes. Past that, the rows may hold any type:
+    // a layer each, those without rows left out when they open (by their count).
+    let rows: Option<Vec<mysql::Row>> = conn.with(|c| match c.query(sql.as_str()) {
+        Err(e) if Server::timed_out(&e) => Ok(None),
+        r => r.map(Some),
+    })?;
+    let Some(rows) = rows else {
+        return Ok(vec![Family::Points, Family::Lines, Family::Polygons]);
+    };
+    let mut out: Vec<Family> = rows
+        .iter()
+        .filter_map(|r| match int_of(at(r, 0))? {
+            0 => Some(Family::Points),
+            1 => Some(Family::Lines),
+            2 => Some(Family::Polygons),
+            _ => None,
+        })
+        .collect();
+    out.sort_by_key(|f| *f as u8);
+    out.dedup();
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The source
+
+/// One geometry column of a table (one family of it, for a column of mixed types), read live.
+pub struct MysqlSource {
+    info: SourceInfo,
+    conn: Arc<Conn>,
+    table: Table,
+    /// The family read, for a column of mixed types.
+    family: Option<Family>,
+    /// The SRID the column's values carry.
+    raw_srid: u32,
+    /// Whether the column fixes its SRID (else only rows in `raw_srid` are read).
+    constrained: bool,
+    /// The expression of each column read: the id, the geometry (as WKB), then the fields.
+    select: Vec<String>,
+    /// Whether the id is the rows' number as read (no key).
+    numbered: bool,
+    reproject: Reproject,
+}
+
+impl std::fmt::Debug for MysqlSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MysqlSource").field("table", &self.table).field("family", &self.family).finish_non_exhaustive()
+    }
+}
+
+/// How a column of a MySQL type is read: as itself or cast. `None` leaves it out (geometry,
+/// binary).
+fn field_cast(data_type: &str, column_type: &str, col: &str) -> Option<(FieldType, String)> {
+    let t = data_type.to_ascii_lowercase();
+    if GEOMETRY_TYPES.contains(&t.as_str()) || t.contains("blob") || t.contains("binary") {
+        return None;
+    }
+    Some(match t.as_str() {
+        // MySQL's `BOOLEAN` is `tinyint(1)`.
+        "tinyint" if column_type.to_ascii_lowercase().starts_with("tinyint(1)") => (FieldType::Boolean, col.to_string()),
+        "tinyint" | "smallint" | "mediumint" | "int" | "integer" | "bigint" | "year" => (FieldType::Integer, col.to_string()),
+        "bit" => (FieldType::Integer, format!("CAST({col} AS UNSIGNED)")),
+        "float" | "double" | "real" | "decimal" | "numeric" => (FieldType::Double, col.to_string()),
+        _ => (FieldType::Text, format!("CAST({col} AS CHAR)")),
+    })
+}
+
+impl MysqlSource {
+    /// Opens a table's geometry column (`family`: the one family to read of a column of mixed
+    /// types). `crs` (`EPSG:…`) is the coordinate system of a geometry whose SRID is 0.
+    pub fn open(conn: Arc<Conn>, table: Table, family: Option<Family>, crs: Option<&str>) -> Result<Self> {
+        let mut notes = Vec::new();
+        let g = ident(&table.column);
+        let from = table.sql_from();
+        let server = conn.server;
+        // The SRID: the column's (MySQL 8's per column; MariaDB's `REF_SYSTEM_ID`, its 0 for
+        // none), else its rows'.
+        let declared_sql = if server.mariadb {
+            "SELECT NULLIF(SRID, 0) FROM information_schema.GEOMETRY_COLUMNS WHERE G_TABLE_SCHEMA = ? AND G_TABLE_NAME = ? AND G_GEOMETRY_COLUMN = ?"
+        } else {
+            "SELECT SRS_ID FROM information_schema.ST_GEOMETRY_COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?"
+        };
+        // (MySQL 5.7 has neither: the rows' then.)
+        let declared: Option<u32> = conn
+            .with(|c| c.exec_first::<Option<u32>, _, _>(declared_sql, (&table.schema, &table.name, &table.column)))
+            .ok()
+            .flatten()
+            .flatten();
+        let raw_srid = match declared {
+            Some(s) => s,
+            None => conn
+                .with(|c| c.query_first::<Option<u32>, _>(format!("SELECT ST_SRID({g}) FROM {from} WHERE {g} IS NOT NULL LIMIT 1")))?
+                .flatten()
+                .unwrap_or(0),
+        };
+        let constrained = declared.is_some();
+        if !constrained && raw_srid != 0 {
+            notes.push(format!("the column doesn't fix a coordinate system: rows in one other than EPSG:{raw_srid} are left out"));
+        }
+        let mut srid = raw_srid;
+        if srid == 0 {
+            match crs.map(str::trim).filter(|c| !c.is_empty()) {
+                Some(given) => match Crs::parse(given) {
+                    Ok(c) if c.epsg() > 0 => srid = u32::from(c.epsg()),
+                    _ => return Err(DataError::Format(format!("'{given}': give the coordinate system as EPSG:<code>"))),
+                },
+                None => notes.push(
+                    "the geometry doesn't say its coordinate system; read as longitude/latitude (add it again with \"crs\", such as EPSG:2263)".into(),
+                ),
+            }
+        }
+        let reproject = Reproject::from_epsg(Some(srid), &mut notes);
+        let wkb = format!("ST_AsBinary({g}{})", server.axis_option());
+
+        // The columns: a single integer primary key gives the ids.
+        let cols: Vec<mysql::Row> = conn.with(|c| {
+            c.exec(
+                "SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, COLUMN_KEY FROM information_schema.COLUMNS \
+                 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+                (&table.schema, &table.name),
+            )
+        })?;
+        let mut fields = Vec::new();
+        let mut casts = Vec::new();
+        let mut keys = Vec::new();
+        for r in &cols {
+            let (Some(name), Some(ty), Some(column_type), key) =
+                (text_of(at(r, 0)), text_of(at(r, 1)), text_of(at(r, 2)), text_of(at(r, 3)))
+            else {
+                continue;
+            };
+            if key.as_deref() == Some("PRI") {
+                keys.push((name.clone(), ty.to_ascii_lowercase()));
+            }
+            if name == table.column {
+                continue;
+            }
+            if let Some((ft, cast)) = field_cast(&ty, &column_type, &ident(&name)) {
+                casts.push(cast);
+                fields.push(Field::new(name, ft));
+            }
+        }
+        let pk = match keys.as_slice() {
+            [(k, ty)] if matches!(ty.as_str(), "tinyint" | "smallint" | "mediumint" | "int" | "integer" | "bigint") => Some(k.clone()),
+            _ => None,
+        };
+        // Ids stable between reads: the key; without one, the rows are numbered as read.
+        let numbered = pk.is_none();
+        if numbered {
+            notes.push(
+                "no single-column integer key: features are numbered as read, so their ids can change from one read to the next".into(),
+            );
+        }
+        let id = pk.map(|k| ident(&k)).unwrap_or_else(|| "`rustgis rn`".into());
+        let mut select = vec![id, wkb];
+        select.extend(casts);
+
+        let family = family.or(table.declared_family());
+        let mut src = MysqlSource {
+            info: SourceInfo {
+                name: table.label(),
+                format: if server.mariadb { "MariaDB" } else { "MySQL" },
+                geometry_type: geometry_type(family),
+                fields,
+                extent: Extent::EMPTY,
+                count: None,
+                crs: if srid == 0 { "EPSG:4326".into() } else { format!("EPSG:{srid}") },
+                indexed: false,
+                notes,
+            },
+            conn,
+            table,
+            family,
+            raw_srid,
+            constrained,
+            select,
+            numbered,
+            reproject,
+        };
+        src.info.indexed = src.has_index();
+        src.info.count = src.count_rows();
+        if src.info.count != Some(0) {
+            src.info.extent = src.measure();
+        }
+        Ok(src)
+    }
+
+    /// The table's spatial index on the column, if it has one (a view has none of its own).
+    fn has_index(&self) -> bool {
+        let t = &self.table;
+        self.conn
+            .with(|c| {
+                c.exec_first::<u8, _, _>(
+                    "SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ? \
+                     AND INDEX_TYPE = 'SPATIAL' LIMIT 1",
+                    (&t.schema, &t.name, &t.column),
+                )
+            })
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// The rows with a geometry (of the family read), exactly unless the table is large.
+    fn count_rows(&self) -> Option<u64> {
+        let t = &self.table;
+        let estimate = self
+            .conn
+            .with(|c| {
+                c.exec_first::<Option<u64>, _, _>(
+                    "SELECT TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+                    (&t.schema, &t.name),
+                )
+            })
+            .ok()
+            .flatten()
+            .flatten();
+        match estimate {
+            Some(n) if n >= EXACT_COUNT_BELOW => Some(n),
+            // No estimate (a view) or a small one: counted, within the probe's time.
+            _ => {
+                let sql =
+                    self.conn.server.timed(&format!("SELECT COUNT(*) FROM {} WHERE {}", t.sql_from(), self.filter(false)), PROBE_TIMEOUT);
+                self.conn.with(|c| c.query_first::<Option<u64>, _>(sql.as_str())).ok().flatten().flatten()
+            }
+        }
+    }
+
+    /// The table's extent in longitude/latitude, from an evenly spread sample of its rows (all of
+    /// them for a table that isn't large).
+    fn measure(&self) -> Extent {
+        let Ok(b) = self.read(&Request { extent: None, limit: EXTENT_SAMPLE }) else { return Extent::EMPTY };
+        b.features.iter().filter_map(|f| f.geometry.as_ref()).fold(Extent::EMPTY, |e, g| e.union(&g.extent()))
+    }
+
+    /// The `WHERE` condition: a geometry, of the family read, and with `in_extent`, in the extent
+    /// given as the statement's one parameter (a polygon's text, in the column's coordinates).
+    fn filter(&self, in_extent: bool) -> String {
+        let g = ident(&self.table.column);
+        let mut w = format!("{g} IS NOT NULL");
+        // A column of no fixed SRID: only the rows in the one read (others would fail the read).
+        if !self.constrained && self.raw_srid != 0 {
+            w.push_str(&format!(" AND ST_SRID({g}) = {}", self.raw_srid));
+        }
+        if in_extent {
+            // The column itself, so its spatial index serves.
+            w.push_str(&format!(" AND MBRIntersects({g}, ST_GeomFromText(?, {}{}))", self.raw_srid, self.conn.server.axis_option()));
+        }
+        if let Some(f) = self.family.filter(|_| self.table.declared_family().is_none()) {
+            let dim = match f {
+                Family::Points => 0,
+                Family::Lines => 1,
+                Family::Polygons => 2,
+            };
+            w.push_str(&format!(" AND ST_Dimension({g}) = {dim}"));
+        }
+        w
+    }
+
+    /// A request's extent in the column's coordinates, as a polygon's text; `None` when it holds
+    /// the whole table, or can't be converted (the read then filters nothing on the server).
+    fn native_window(&self, req: &Request) -> Option<String> {
+        let e = req.extent?;
+        let all = self.info.extent;
+        if !all.is_empty() && e.min_x <= all.min_x && e.min_y <= all.min_y && e.max_x >= all.max_x && e.max_y >= all.max_y {
+            return None;
+        }
+        box_text(&self.reproject.extent_from_lonlat(&e), self.reproject.is_lonlat())
+    }
+
+    fn row_feature(&self, r: &mysql::Row) -> Option<Feature> {
+        let id = int_of(at(r, 0))?;
+        let geometry = match at(r, 1) {
+            mysql::Value::Bytes(b) => wkb::decode(b),
+            _ => None,
+        }?;
+        let geometry: Geometry = self.reproject.geometry(geometry)?;
+        let attrs = self
+            .info
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let v = at(r, i + 2);
+                match f.ty {
+                    FieldType::Integer => int_of(v).map(Value::Int),
+                    FieldType::Double => float_of(v).map(Value::Float),
+                    FieldType::Boolean => int_of(v).map(|i| Value::Bool(i != 0)),
+                    FieldType::Text => text_of(v).map(Value::Text),
+                }
+                .unwrap_or(Value::Null)
+            })
+            .collect();
+        // A negative key keeps its bits: still one id per row, and the same on every read.
+        Some(Feature { id: id.cast_unsigned(), geometry: Some(geometry), attrs })
+    }
+}
+
+/// A box in a column's coordinates as a polygon's text (`lonlat`: geographic, held in range and
+/// kept from MySQL's geodesic edges); `None` for an empty or unbounded one.
+fn box_text(n: &Extent, lonlat: bool) -> Option<String> {
+    if n.is_empty() || ![n.min_x, n.min_y, n.max_x, n.max_y].iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    // MySQL takes a geographic polygon's edges as geodesics, which leave a parallel toward
+    // its pole, into the box on one side: a point every 10 degrees keeps them within a
+    // tenth of a degree (the sagitta, at most Δλ²/16 radians), and the box is padded by
+    // that. (A point every degree is ten times slower to query.)
+    let steps = if lonlat { ((n.width() / 10.0).ceil() as usize).clamp(1, 36) } else { 1 };
+    let pad = if lonlat { (n.width() / steps as f64).to_radians().powi(2).to_degrees() / 16.0 } else { 0.0 };
+    // Geographic coordinates out of range fail on MySQL.
+    let (a, b, c, d) = if lonlat {
+        (n.min_x.max(-180.0), (n.min_y - pad).max(-90.0), n.max_x.min(180.0), (n.max_y + pad).min(90.0))
+    } else {
+        (n.min_x, n.min_y, n.max_x, n.max_y)
+    };
+    let x = |i: usize| a + (c - a) * i as f64 / steps as f64;
+    let mut ring: Vec<String> = (0..=steps).map(|i| format!("{} {b}", x(i))).collect();
+    ring.extend((0..=steps).map(|i| format!("{} {d}", x(steps - i))));
+    ring.push(format!("{a} {b}"));
+    Some(format!("POLYGON(({}))", ring.join(", ")))
+}
+
+impl FeatureSource for MysqlSource {
+    fn info(&self) -> &SourceInfo {
+        &self.info
+    }
+
+    fn read(&self, req: &Request) -> Result<Batch> {
+        let limit = clamp_limit(req.limit);
+        let mut out = Batch::default();
+        if limit == 0 {
+            return Ok(out);
+        }
+        let window = self.native_window(req);
+        let filter = self.filter(window.is_some());
+        let params: Vec<mysql::Value> = window.iter().map(|w| mysql::Value::from(w.as_str())).collect();
+        let params = if params.is_empty() { mysql::Params::Empty } else { mysql::Params::Positional(params) };
+        let from = self.table.sql_from();
+        // Counted first, so a sample keeps every `step`-th row, numbered on the server; both in
+        // one snapshot, so the count is of the rows read.
+        let (matched, step, rows) = self.conn.snapshot(|t| {
+            let n: Option<u64> = t.exec_first(format!("SELECT COUNT(*) FROM {from} WHERE {filter}"), params.clone())?;
+            let matched = n.unwrap_or(0);
+            let step = stride(matched, limit);
+            let cols: Vec<String> = self.select.iter().enumerate().map(|(i, e)| format!("{e} AS c{i}")).collect();
+            let sql = if step <= 1 && !self.numbered {
+                format!("SELECT {} FROM {from} WHERE {filter} LIMIT {limit}", cols.join(", "))
+            } else {
+                // Rows are numbered as they are, and only those kept are converted: the
+                // expressions name the table's columns, which the numbered rows carry.
+                format!(
+                    "SELECT {} FROM (SELECT t.*, ROW_NUMBER() OVER () AS `rustgis rn` FROM {from} t WHERE {filter}) s \
+                     WHERE MOD(`rustgis rn` - 1, {step}) = 0 LIMIT {limit}",
+                    cols.join(", ")
+                )
+            };
+            let rows: Vec<mysql::Row> = t.exec(sql, params.clone())?;
+            Ok((matched, step, rows))
+        })?;
+        out.matched = matched;
+        for r in &rows {
+            let Some(f) = self.row_feature(r) else {
+                out.skipped += 1;
+                continue;
+            };
+            // The index matched the request's box in the table's coordinates, which holds more
+            // than the request when they are projected.
+            let Some(g) = &f.geometry else { continue };
+            if !in_request(g, req) {
+                continue;
+            }
+            out.features.push(f);
+        }
+        out.complete = step <= 1 && (rows.len() as u64) >= out.matched;
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn addresses_take_client_defaults_and_modes() {
+        let c = config("mysql://me:pw@db.example:3307/gis?ssl-mode=VERIFY_IDENTITY").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((c.host.as_str(), c.port, c.user.as_str(), c.database.as_deref()), ("db.example", 3307, "me", Some("gis")));
+        assert_eq!(c.tls, Tls::Verified { ca: None, identity: true });
+        let c = config("mariadb://h?ssl_mode=verify_ca&ssl-ca=/x%20y.pem").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(c.tls, Tls::Verified { ca: Some("/x y.pem".into()), identity: false });
+        assert_eq!((c.port, c.database), (3306, None));
+        assert_eq!(config("mysql://h?ssl-mode=DISABLED").map(|c| c.tls).ok(), Some(Tls::Disable));
+        assert_eq!(config("mysql://h").map(|c| c.tls).ok(), Some(Tls::Prefer));
+        assert_eq!(config("mysql://").map(|c| c.host).ok().as_deref(), Some("localhost"));
+        let c = config("mysql://u@[::1]:3310/g").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((c.host.as_str(), c.port), ("::1", 3310));
+        assert!(config("mysql://h?ssl-mode=bogus").is_err());
+        assert!(config("mysql://h:port/g").is_err());
+        assert!(config("mysql://[::1/g").is_err());
+        assert!(config("postgres:host=h").is_err());
+        let c = config("mysql://h?connect-timeout=0").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(c.connect_timeout, CONNECT_TIMEOUT);
+        // A user is always set (the client's default is the login name).
+        assert!(!config("mysql://h").map(|c| c.user).unwrap_or_default().is_empty());
+    }
+
+    #[test]
+    fn servers_and_their_sql() {
+        let my = Server::from_version("8.4.11");
+        let maria = Server::from_version("11.8.9-MariaDB-ubu2404");
+        assert_eq!((my.mariadb, my.major, maria.mariadb, maria.major), (false, 8, true, 11));
+        assert_eq!(my.axis_option(), ", 'axis-order=long-lat'");
+        assert_eq!(maria.axis_option(), "");
+        assert_eq!(Server::from_version("5.7.44").axis_option(), "");
+        assert_eq!(my.timed("SELECT 1", 10), "SELECT /*+ MAX_EXECUTION_TIME(10000) */ 1");
+        assert_eq!(maria.timed("SELECT 1", 10), "SET STATEMENT max_statement_time = 10 FOR SELECT 1");
+    }
+
+    #[test]
+    fn tables_and_types() {
+        let t = |current, several| Table {
+            schema: "gis".into(),
+            name: "Roads".into(),
+            column: "geom".into(),
+            kind: "linestring".into(),
+            current,
+            several,
+        };
+        assert_eq!(t(true, false).label(), "Roads");
+        assert_eq!(t(false, false).label(), "gis.Roads");
+        assert_eq!(t(true, true).label(), "Roads:geom");
+        assert!(t(true, false).is_named("GIS.roads"));
+        assert!(t(true, true).is_named("roads:GEOM"));
+        assert!(!t(true, true).is_named("roads:other"));
+        assert_eq!(ident("a`b"), "`a``b`");
+        assert_eq!(family_of("multipolygon"), Some(Family::Polygons));
+        assert_eq!(family_of("POINT"), Some(Family::Points));
+        assert_eq!(family_of("geometry"), None);
+        assert_eq!(family_of("geomcollection"), None);
+        assert_eq!(field_cast("tinyint", "tinyint(1)", "`b`"), Some((FieldType::Boolean, "`b`".into())));
+        assert_eq!(field_cast("bigint", "bigint unsigned", "`n`"), Some((FieldType::Integer, "`n`".into())));
+        assert_eq!(field_cast("decimal", "decimal(10,2)", "`d`"), Some((FieldType::Double, "`d`".into())));
+        assert_eq!(field_cast("date", "date", "`d`"), Some((FieldType::Text, "CAST(`d` AS CHAR)".into())));
+        assert_eq!(field_cast("longblob", "longblob", "`b`"), None);
+        assert_eq!(field_cast("point", "point", "`p`"), None);
+    }
+
+    #[test]
+    fn values_convert() {
+        use mysql::Value as V;
+        assert_eq!(int_of(&V::Bytes(b"42".to_vec())), Some(42));
+        assert_eq!(int_of(&V::UInt(u64::MAX)), None);
+        assert_eq!(float_of(&V::Bytes(b"12.50".to_vec())), Some(12.5));
+        assert_eq!(float_of(&V::Bytes(b"nan".to_vec())), None);
+        assert_eq!(text_of(&V::NULL), None);
+        assert_eq!(text_of(&V::Bytes(vec![0xff, b'a'])).as_deref(), Some("\u{fffd}a"));
+    }
+
+    #[test]
+    fn boxes_keep_clear_of_geodesic_edges() {
+        let projected = box_text(&Extent::new(0.0, 0.0, 1000.0, 500.0), false);
+        assert_eq!(projected.as_deref(), Some("POLYGON((0 0, 1000 0, 1000 500, 0 500, 0 0))"));
+        // A quarter of the world: a point every 10 degrees, padded north and south, in range.
+        let quarter = box_text(&Extent::new(-180.0, -60.0, 0.0, 0.0), true).unwrap_or_default();
+        let points: Vec<(f64, f64)> = quarter
+            .trim_start_matches("POLYGON((")
+            .trim_end_matches("))")
+            .split(", ")
+            .filter_map(|p| p.split_once(' ').and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?))))
+            .collect();
+        assert_eq!(points.len(), 2 * 19 + 1, "{quarter}");
+        assert_eq!(points.first(), points.last());
+        let (min_y, max_y) = points.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        assert!(min_y < -60.0 && min_y > -60.2 && max_y > 0.0 && max_y < 0.2, "{min_y} {max_y}");
+        let polar = box_text(&Extent::new(-200.0, -95.0, 10.0, 95.0), true).unwrap_or_default();
+        assert!(polar.starts_with("POLYGON((-180 -90,") && polar.contains(" 90,"), "{polar}");
+        assert_eq!(box_text(&Extent::EMPTY, true), None);
+        assert_eq!(box_text(&Extent::new(0.0, 0.0, f64::INFINITY, 1.0), false), None);
+    }
+
+    /// Reads every table of a live database: `RUSTGIS_TEST_MYSQL="mysql://user:password@host/db"
+    /// cargo test -p rustgis-data -- --ignored mysql_live --nocapture`.
+    #[test]
+    #[ignore]
+    fn mysql_live() {
+        let Ok(address) = std::env::var("RUSTGIS_TEST_MYSQL") else { return };
+        let super::super::duckdb::Database::Mysql(address) = super::super::duckdb::Database::parse(&address) else {
+            panic!("not a connection")
+        };
+        let conn = connect(&address, true).unwrap_or_else(|e| panic!("{e}"));
+        // A connection the server drops is opened again on the next use, which still works.
+        let _ = conn.with(|c| c.query_drop("KILL CONNECTION CONNECTION_ID()"));
+        let all = tables(&conn).unwrap_or_else(|e| panic!("after a dropped connection: {e}"));
+        assert!(!all.is_empty());
+        for t in &all {
+            let fams = families(&conn, t).unwrap_or_else(|e| panic!("{}: {e}", t.label()));
+            for f in fams {
+                let start = std::time::Instant::now();
+                let src = MysqlSource::open(conn.clone(), t.clone(), Some(f), None).unwrap_or_else(|e| panic!("{}: {e}", t.label()));
+                let opened = start.elapsed();
+                let i = src.info();
+                let whole = src.read(&Request { extent: None, limit: 250_000 }).unwrap_or_else(|e| panic!("{}: {e}", t.label()));
+                let read = start.elapsed() - opened;
+                let e = i.extent;
+                let q = Extent::new(e.min_x, e.min_y, e.min_x + e.width() / 2.0, e.min_y + e.height() / 2.0);
+                let part = src.read(&Request { extent: Some(q), limit: 1000 }).unwrap_or_else(|e| panic!("{}: {e}", t.label()));
+                for ft in &part.features {
+                    let g = ft.geometry.as_ref().map(|g| g.extent()).unwrap_or(Extent::EMPTY);
+                    assert!(g.intersects(&q.padded(0.01, 0.0)), "{}: feature {} outside the request", t.label(), ft.id);
+                }
+                let mut ids: Vec<u64> = whole.features.iter().map(|f| f.id).collect();
+                ids.sort_unstable();
+                ids.dedup();
+                assert_eq!(ids.len(), whole.features.len(), "{}: ids repeat", t.label());
+                println!(
+                    "{:<12} {:<9} {:?} {:>9} rows idx={} crs={} extent=[{:.2} {:.2} {:.2} {:.2}] fields={} all: {} of {} complete={} skipped={} | quarter: {} of {} | open {:?} read {:?} notes={:?}",
+                    t.label(),
+                    f.label(),
+                    i.geometry_type,
+                    i.count.unwrap_or(0),
+                    i.indexed,
+                    i.crs,
+                    e.min_x,
+                    e.min_y,
+                    e.max_x,
+                    e.max_y,
+                    i.fields.len(),
+                    whole.features.len(),
+                    whole.matched,
+                    whole.complete,
+                    whole.skipped,
+                    part.features.len(),
+                    part.matched,
+                    opened,
+                    read,
+                    i.notes
+                );
+            }
+        }
+    }
+}
