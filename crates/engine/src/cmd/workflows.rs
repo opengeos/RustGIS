@@ -325,6 +325,33 @@ fn wire(v: &mut Value, outputs: &[String], step: usize, depth: usize) -> Result<
 pub(crate) fn run_script(s: &mut Session, p: &Value) -> CmdResult {
     let script = ps(p, "script").ok_or("script is required")?;
     let mut out = Vec::new();
+    for (n, id, params) in script_commands(script)? {
+        let spec = s.registry.get(&id).ok_or_else(|| format!("line {n}: unknown command '{id}'"))?;
+        let (run, enabled, mutates, label) = (spec.run, spec.enabled, spec.mutates, spec.label);
+        // As when typed directly, a line naming a layer is checked against that layer.
+        if params.get("layer").is_some()
+            && let Ok(lid) = s.layer_id(&params)
+        {
+            s.active_layer = Some(lid);
+        }
+        if let Some(why) = enabled(s) {
+            return Err(format!("line {n}: {id}: {why}"));
+        }
+        // As Session::run does: an edit to a layer read in place would be lost at its next read.
+        if let Some(e) = s.streamed_edit(&id, mutates, label, s.active_layer) {
+            return Err(format!("line {n}: {e}"));
+        }
+        let r = run(s, &params).map_err(|e| format!("line {n}: {id}: {e}"))?;
+        out.push(json!({"line": n, "command": id, "result": r}));
+    }
+    Ok(json!({"ran": out}))
+}
+
+/// A script's commands, as `(line, id, params)` with 1-based lines: one `id {json}` per line,
+/// blank lines and `#` comments skipped. A line that isn't JSON, or a command that can't run in
+/// a script (scripts, notebooks, `ui.*`), is an error naming its line.
+pub fn script_commands(script: &str) -> Result<Vec<(usize, String, Value)>, String> {
+    let mut out = Vec::new();
     for (n, line) in script.lines().enumerate().take(10_000) {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -340,21 +367,9 @@ pub(crate) fn run_script(s: &mut Session, p: &Value) -> CmdResult {
         if id.starts_with("script.") || id.starts_with("ui.") || id == "notebook.run" {
             return Err(format!("line {}: '{id}' can't run in a script", n + 1));
         }
-        let spec = s.registry.get(id).ok_or_else(|| format!("line {}: unknown command '{id}'", n + 1))?;
-        let (run, enabled) = (spec.run, spec.enabled);
-        // As when typed directly, a line naming a layer is checked against that layer.
-        if params.get("layer").is_some()
-            && let Ok(lid) = s.layer_id(&params)
-        {
-            s.active_layer = Some(lid);
-        }
-        if let Some(why) = enabled(s) {
-            return Err(format!("line {}: {id}: {why}", n + 1));
-        }
-        let r = run(s, &params).map_err(|e| format!("line {}: {id}: {e}", n + 1))?;
-        out.push(json!({"line": n + 1, "command": id, "result": r}));
+        out.push((n + 1, id.to_string(), params));
     }
-    Ok(json!({"ran": out}))
+    Ok(out)
 }
 
 /// One raster function's output pixels on `r`'s grid.

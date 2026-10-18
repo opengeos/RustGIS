@@ -8,7 +8,10 @@ use rustgis_engine::Session;
 use rustgis_engine::analysis::{ParamKind, tools};
 use rustgis_engine::data::GeometryType;
 use rustgis_engine::map::raster::{RasterLegend, RasterStyle};
-use rustgis_engine::map::symbology::{ClassRef, ClassStyle, MAX_LABEL, MAX_UNIQUE, normalize_label};
+use rustgis_engine::map::symbology::{
+    ClassRef, ClassStyle, LineCap, LineJoin, LineStroke, MAX_LABEL, MAX_STROKE_OFFSET, MAX_STROKE_WIDTH, MAX_STROKES, MAX_UNIQUE,
+    normalize_label,
+};
 use rustgis_engine::map::tiles::TileLayer;
 use rustgis_engine::map::{
     ClassMethod, Layer, Marker, Ramp, RampGroup, RasterDefaults, RasterRenderer, Renderer, Resampling, Stretch, Symbol,
@@ -3036,6 +3039,10 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             legend_list(app, ui, &l, t);
         }
     }
+    if g == GeometryType::Polyline && !l.graphics {
+        ui.add_space(8.0);
+        line_strokes_editor(app, ui, &l, t);
+    }
     ui.add_space(10.0);
     ui.separator();
     ui.label(egui::RichText::new(tl!("Layer")).size(11.5).color(t.text_dim));
@@ -3044,10 +3051,29 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.label(tl!("Transparency"));
         ui.spacing_mut().slider_width = 150.0;
         let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer());
-        if r.drag_stopped() || (r.changed() && !r.dragged()) {
-            let _ = app.run("layer.transparency", json!({"value": tr}));
-        }
+        transparency_drag(app, ui, &r, &l, tr);
     });
+}
+
+/// The Symbology pane's Transparency slider: the map follows it while it's dragged, and letting
+/// go runs `layer.transparency` once, so the drag is one undo step.
+fn transparency_drag(app: &mut RustGisApp, ui: &Ui, r: &egui::Response, l: &Layer, tr: f32) {
+    let id = l.id;
+    crate::ribbon::live_drag(
+        app,
+        ui,
+        r,
+        l.transparency as f64,
+        tr as f64,
+        |app, x| {
+            if let Some(l) = app.session.map_mut().layer_mut(id) {
+                l.transparency = x as f32;
+            }
+        },
+        |app, x| {
+            let _ = app.run("layer.transparency", json!({"value": x}));
+        },
+    );
 }
 
 fn field_combo(app: &mut RustGisApp, ui: &mut Ui, label: &str, cur: &str, fields: &[String], kind: &str) {
@@ -3370,6 +3396,171 @@ fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, g: GeometryType, 
                 ui.end_row();
             }
         });
+    });
+}
+
+/// A stroke as `layer.lineStrokes` takes it.
+fn stroke_json(st: &LineStroke) -> Value {
+    json!({
+        "color": st.color.map(|c| c.hex8()),
+        "width": st.width,
+        "offset": st.offset,
+        "cap": st.cap.code(),
+        "join": st.join.code(),
+    })
+}
+
+fn set_strokes(app: &mut RustGisApp, strokes: &[LineStroke]) {
+    let _ = app.run("layer.lineStrokes", json!({"strokes": strokes.iter().map(stroke_json).collect::<Vec<_>>()}));
+}
+
+/// The Strokes section of a line layer's symbology: strokes stacked in one symbol, each with
+/// its own colour, width, sideways offset, cap and join. Listed top first, as they are seen.
+fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::map::Layer, t: &Tokens) {
+    let base = l.renderer.base_symbol();
+    let strokes = l.line_strokes.clone();
+    egui::Frame::NONE.fill(t.pane_header).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(tl!("Strokes")).font(semibold(12.5)));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let add = ui.add_enabled(strokes.len() < MAX_STROKES, egui::Button::new(tl!("Add Stroke")).small());
+                if add.on_hover_text(tl!("Stack another stroke on top")).clicked() {
+                    let mut next = strokes.clone();
+                    // The first stroke stands for the symbol's own; later ones copy the top one.
+                    next.push(strokes.last().copied().unwrap_or_default());
+                    set_strokes(app, &next);
+                }
+            });
+        });
+        // The composed symbol along a line drawn left to right: a positive offset shows below it.
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
+        ui.painter().rect_filled(r, CornerRadius::same(4), t.ribbon);
+        let preview: Vec<LineStroke> = if strokes.is_empty() { vec![LineStroke::default()] } else { strokes.clone() };
+        let reach = preview.iter().map(|st| st.offset.abs() + st.resolve(&base).1 / 2.0).fold(1.0_f32, f32::max);
+        let k = (18.0 / reach).min(1.0);
+        let (x0, x1) = (r.min.x + 14.0, r.max.x - 14.0);
+        let cap_pad = |st: &LineStroke, w: f32| if st.cap == LineCap::Butt { 0.0 } else { w / 2.0 };
+        for st in &preview {
+            let (c, w) = st.resolve(&base);
+            let w = (w * k).max(0.5);
+            let y = r.center().y + st.offset * k;
+            let pad = cap_pad(st, w);
+            if st.cap == LineCap::Round {
+                ui.painter().circle_filled(pos2(x0, y), w / 2.0, c32(c));
+                ui.painter().circle_filled(pos2(x1, y), w / 2.0, c32(c));
+            }
+            let (a, b) = if st.cap == LineCap::Square { (x0 - pad, x1 + pad) } else { (x0, x1) };
+            ui.painter().line_segment([pos2(a, y), pos2(b, y)], Stroke::new(w, c32(c)));
+        }
+        // The line's direction.
+        let (ay, ax) = (r.max.y - 6.0, r.max.x - 8.0);
+        ui.painter().line_segment([pos2(ax - 10.0, ay), pos2(ax, ay)], Stroke::new(1.0, t.text_dim));
+        ui.painter().line_segment([pos2(ax - 3.0, ay - 3.0), pos2(ax, ay)], Stroke::new(1.0, t.text_dim));
+        ui.painter().line_segment([pos2(ax - 3.0, ay + 3.0), pos2(ax, ay)], Stroke::new(1.0, t.text_dim));
+        if strokes.is_empty() {
+            ui.label(
+                egui::RichText::new(tl!("One stroke, from the symbol. Add strokes for casings, parallel lines and offsets."))
+                    .size(11.5)
+                    .color(t.text_dim),
+            );
+            return;
+        }
+        let n = strokes.len();
+        for i in (0..n).rev() {
+            let Some(st) = strokes.get(i).copied() else { continue };
+            ui.add_space(4.0);
+            ui.separator();
+            ui.horizontal(|ui| {
+                let title = crate::i18n::fmt("Stroke {n}", &[("n", &(n - i).to_string())]);
+                ui.label(egui::RichText::new(title).size(11.5).color(t.text_dim));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::widgets::icon_button(ui, "close", tl!("Remove")).clicked() {
+                        let mut next = strokes.clone();
+                        next.remove(i);
+                        set_strokes(app, &next);
+                    }
+                    if ui.add_enabled(i > 0, egui::Button::new("↓").small()).on_hover_text(tl!("Move down")).clicked() {
+                        let mut next = strokes.clone();
+                        next.swap(i, i - 1);
+                        set_strokes(app, &next);
+                    }
+                    if ui.add_enabled(i + 1 < n, egui::Button::new("↑").small()).on_hover_text(tl!("Move up")).clicked() {
+                        let mut next = strokes.clone();
+                        next.swap(i, i + 1);
+                        set_strokes(app, &next);
+                    }
+                });
+            });
+            let set = |app: &mut RustGisApp, new: LineStroke| {
+                let mut next = strokes.clone();
+                if let Some(slot) = next.get_mut(i) {
+                    *slot = new;
+                }
+                set_strokes(app, &next);
+            };
+            egui::Grid::new(("stroke_grid", i)).num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                let (c, w) = st.resolve(&base);
+                ui.label(tl!("Color"));
+                ui.horizontal(|ui| {
+                    let mut cc = c32(c);
+                    if crate::widgets::color_button(ui, &mut cc).changed() {
+                        set(app, LineStroke { color: Some(rgba(cc)), ..st });
+                    }
+                    let mut from_symbol = st.color.is_none();
+                    if ui.checkbox(&mut from_symbol, tl!("From symbol")).on_hover_text(tl!("Use each feature's line color")).changed() {
+                        set(app, LineStroke { color: if from_symbol { None } else { Some(c) }, ..st });
+                    }
+                });
+                ui.end_row();
+                ui.label(tl!("Width"));
+                ui.horizontal(|ui| {
+                    let mut ww = w;
+                    let drag = egui::DragValue::new(&mut ww).range(0.0..=MAX_STROKE_WIDTH).speed(0.05).suffix(" pt");
+                    if ui.add_enabled(st.width.is_some(), drag).changed() {
+                        set(app, LineStroke { width: Some(ww), ..st });
+                    }
+                    let mut from_symbol = st.width.is_none();
+                    if ui.checkbox(&mut from_symbol, tl!("From symbol")).on_hover_text(tl!("Use each feature's line width")).changed() {
+                        set(app, LineStroke { width: if from_symbol { None } else { Some(w) }, ..st });
+                    }
+                });
+                ui.end_row();
+                ui.label(tl!("Offset"));
+                let mut off = st.offset;
+                let drag = egui::DragValue::new(&mut off).range(-MAX_STROKE_OFFSET..=MAX_STROKE_OFFSET).speed(0.05).suffix(" pt");
+                if ui
+                    .add(drag)
+                    .on_hover_text(tl!("Shifts the stroke sideways: positive to the right of the line's direction, negative to the left"))
+                    .changed()
+                {
+                    set(app, LineStroke { offset: off, ..st });
+                }
+                ui.end_row();
+                ui.label(tl!("Cap"));
+                egui::ComboBox::from_id_salt(("stroke_cap", i)).selected_text(tl!(st.cap.label())).show_ui(ui, |ui| {
+                    for c in LineCap::ALL {
+                        if ui.selectable_label(c == st.cap, tl!(c.label())).clicked() {
+                            set(app, LineStroke { cap: c, ..st });
+                        }
+                    }
+                });
+                ui.end_row();
+                ui.label(tl!("Join"));
+                egui::ComboBox::from_id_salt(("stroke_join", i)).selected_text(tl!(st.join.label())).show_ui(ui, |ui| {
+                    for j in LineJoin::ALL {
+                        if ui.selectable_label(j == st.join, tl!(j.label())).clicked() {
+                            set(app, LineStroke { join: j, ..st });
+                        }
+                    }
+                });
+                ui.end_row();
+            });
+        }
+        ui.add_space(4.0);
+        if ui.small_button(tl!("Use a Single Stroke")).on_hover_text(tl!("Remove the strokes and draw the symbol's line alone")).clicked() {
+            set_strokes(app, &[]);
+        }
     });
 }
 
@@ -3831,9 +4022,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
         ui.label(tl!("Transparency"));
         ui.spacing_mut().slider_width = 150.0;
         let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer());
-        if r.drag_stopped() || (r.changed() && !r.dragged()) {
-            let _ = app.run("layer.transparency", json!({"value": tr}));
-        }
+        transparency_drag(app, ui, &r, l, tr);
     });
 }
 
@@ -4048,5 +4237,47 @@ mod tests {
         let _ = app.run("map.new", json!({"name": "Second"}));
         follow_layer_filter(&mut app);
         assert_eq!((app.ui.layer_filter.as_str(), app.ui.layer_filter_hid), ("", None));
+    }
+
+    /// The Symbology pane's Transparency slider changes the layer while it's dragged, not only
+    /// when it's let go, and the whole drag is one undo step back to where it started.
+    #[test]
+    fn transparency_follows_the_slider_while_dragging() {
+        use egui::{Event, Modifiers, PointerButton};
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        let id = layer(&app, "Countries");
+        app.session.active_layer = Some(id);
+        app.ui.open_right(RightPane::Symbology);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1400.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        let transparency = |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer(id).map(|l| l.transparency);
+        let start = transparency(&h);
+        // The pane's slider, at its foot (the window is tall enough to show it): the rightmost one.
+        let rect = h.query_all_by_role(egui::accesskit::Role::Slider).map(|n| n.rect()).max_by(|a, b| a.min.x.total_cmp(&b.min.x)).unwrap();
+        let (from, to) = (rect.left_center(), rect.center());
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.event(Event::PointerMoved(from));
+        h.step();
+        h.event(button(from, true));
+        h.step();
+        for i in 1..=4 {
+            h.event(Event::PointerMoved(from + (to - from) * i as f32 / 4.0));
+            h.step();
+        }
+        let mid = transparency(&h);
+        assert!(mid.is_some_and(|t| (40.0..=60.0).contains(&t)), "the layer follows the drag: {start:?} → {mid:?}");
+        h.event(button(to, false));
+        h.step();
+        assert_eq!(transparency(&h), mid, "letting go keeps the value");
+        h.state_mut().run("edit.undo", Value::Null).unwrap();
+        assert_eq!(transparency(&h), start, "one undo takes the whole drag back");
     }
 }

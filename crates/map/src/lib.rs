@@ -25,7 +25,7 @@ pub use camera::Camera;
 pub use color::{Ramp, RampGroup, Rgba};
 pub use globe::{Globe, Projection};
 pub use raster::{RasterDefaults, RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
-pub use symbology::{ClassMethod, LabelPlacement, Labeling, Marker, Renderer, Symbol};
+pub use symbology::{ClassMethod, LabelPlacement, Labeling, LineCap, LineJoin, LineStroke, Marker, Renderer, Symbol};
 pub use tiles::{TileKind, TileLayer};
 
 use rustgis_data::{Dataset, Geometry, GeometryType};
@@ -132,6 +132,10 @@ pub struct Layer {
     /// Polygons drawn extruded.
     #[serde(default)]
     pub extrusion: Option<effects::Extrusion>,
+    /// A line layer's stacked strokes, drawn bottom first in place of its single stroke (none:
+    /// the renderer's stroke alone).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "symbology::de_strokes")]
+    pub line_strokes: Vec<symbology::LineStroke>,
     /// Layers with a higher priority draw above lower ones, whatever their order (the scene's
     /// depth priority).
     #[serde(default)]
@@ -195,6 +199,7 @@ impl Layer {
             display_filters: Vec::new(),
             aggregation: None,
             extrusion: None,
+            line_strokes: Vec::new(),
             priority: 0,
             design: design::Design::default(),
             raster: None,
@@ -1330,6 +1335,19 @@ mod tests {
         d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Int(1)]);
         d.push(Some(Geometry::Point(Coord::new(10.0, 10.0))), vec![Value::Int(2)]);
         d
+    }
+
+    #[test]
+    fn hostile_line_strokes_in_a_project_are_brought_into_range() {
+        // A crafted project file: too many strokes, and widths and offsets far out of range.
+        let mut l = Layer::new(1, Dataset::new("lines", GeometryType::Polyline, vec![]));
+        l.line_strokes = vec![symbology::LineStroke { width: Some(1e30), offset: -1e30, ..Default::default() }; 5000];
+        let text = serde_json::to_string(&l).unwrap();
+        let back: Layer = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.line_strokes.len(), symbology::MAX_STROKES);
+        assert!(
+            back.line_strokes.iter().all(|st| st.width == Some(symbology::MAX_STROKE_WIDTH) && st.offset == -symbology::MAX_STROKE_OFFSET)
+        );
     }
 
     /// A layer of one long line along the equator with `n` vertices.
