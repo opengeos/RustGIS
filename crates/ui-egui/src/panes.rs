@@ -1024,22 +1024,9 @@ fn layer_group_row(
             ui.horizontal(|ui| {
                 ui.label(tl!("Transparency"));
                 let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer());
-                let gid = group.id;
-                crate::ribbon::live_drag(
-                    app,
-                    ui,
-                    &r,
-                    group.transparency as f64,
-                    tr as f64,
-                    |app, x| {
-                        if let Some(g) = app.session.map_mut().groups.iter_mut().find(|g| g.id == gid) {
-                            g.transparency = x as f32;
-                        }
-                    },
-                    |app, x| {
-                        let _ = app.run("group.set", json!({"group": gid, "transparency": x}));
-                    },
-                );
+                if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                    let _ = app.run("group.set", json!({"group": group.id, "transparency": tr}));
+                }
             });
             if (group.min_scale.is_some() || group.max_scale.is_some()) && ui.button(tl!("Clear Visibility Range")).clicked() {
                 let _ = app.run("group.scaleRange", json!({"group": group.id}));
