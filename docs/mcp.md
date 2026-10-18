@@ -124,7 +124,8 @@ the settings section shows that command. Without `--client` it prints the config
 HTTP client. `--name` and `--port` change the registration's name and port. Either way the token
 leaves its file: `claude mcp add` takes it as an argument (other users of the computer can see a
 running program's arguments for the moment it runs), and the printed configuration shows it, so
-keep it out of shared logs. Delete `mcp-http.token` to make a new one if it leaks; each registered
+keep it out of shared logs. Whoever holds the token can do, while agents are on, what an attached agent can, files and the
+network included. Delete `mcp-http.token` to make a new one if it leaks; each registered
 client then needs registering again. On Windows the token file is protected by your user profile's
 permissions, not by a mode of its own.
 

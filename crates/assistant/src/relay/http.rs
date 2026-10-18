@@ -31,9 +31,6 @@ const MAX_HTTP_CONNECTIONS: usize = 8;
 /// Authenticated requests in progress at once (each holds a thread while it waits for the app).
 const MAX_HTTP_IN_FLIGHT: usize = 16;
 
-/// Authenticated requests in progress, across the listener.
-static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
-
 /// The port the HTTP listener takes: [`HTTP_PORT_ENV`] when it holds a port number, else
 /// [`HTTP_PORT`].
 pub fn default_http_port() -> u16 {
@@ -68,7 +65,9 @@ fn token_at(path: &Path) -> Result<String, String> {
         }
         let token = random_token()?;
         // Written beside it and renamed into place, so no reader ever sees half a token.
-        let tmp = path.with_file_name(format!(".mcp-http.token.{}", std::process::id()));
+        // Unique to this process and thread, so two writers in one process don't share it.
+        let thread = format!("{:?}", std::thread::current().id()).replace(|c: char| !c.is_ascii_alphanumeric(), "");
+        let tmp = path.with_file_name(format!(".mcp-http.token.{}.{thread}", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         let mut o = std::fs::OpenOptions::new();
         o.write(true).create_new(true);
@@ -83,11 +82,21 @@ fn token_at(path: &Path) -> Result<String, String> {
         // taken), so two writers never end up holding different tokens: the loser reads the
         // winner's on the next round.
         let linked = std::fs::hard_link(&tmp, path);
-        let _ = std::fs::remove_file(&tmp);
         match linked {
-            Ok(()) => return Ok(token),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(format!("{}: {e}", path.display())),
+            Ok(()) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Ok(token);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = std::fs::remove_file(&tmp);
+                continue;
+            }
+            // A folder without hard links (FAT, some network mounts): a rename, which a racing
+            // writer could replace, is the best it allows.
+            Err(_) => {
+                std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+                return Ok(token);
+            }
         }
     }
     Err(format!("{}: the token file kept changing; try again", path.display()))
@@ -147,6 +156,7 @@ impl Relay {
         listener.set_nonblocking(true).map_err(|e| format!("{addr}: {e}"))?;
         let token = Arc::new(token);
         let active = Arc::new(AtomicUsize::new(0));
+        let in_flight = Arc::new(AtomicUsize::new(0));
         std::thread::Builder::new()
             .name("rustgis-mcp-http".into())
             .spawn(move || {
@@ -166,8 +176,17 @@ impl Relay {
                             }
                             let (request_shared, request_token, request_active) =
                                 (Arc::clone(&shared), Arc::clone(&token), Arc::clone(&active));
+                            let request_in_flight = Arc::clone(&in_flight);
                             let spawned = std::thread::Builder::new().name("rustgis-mcp-http-request".into()).spawn(move || {
-                                serve(stream, &request_shared, &request_token, port, io, Slot { active: request_active, held: true });
+                                serve(
+                                    stream,
+                                    &request_shared,
+                                    &request_token,
+                                    port,
+                                    io,
+                                    Slot { active: request_active, held: true },
+                                    &request_in_flight,
+                                );
                             });
                             if let Err(e) = spawned {
                                 active.fetch_sub(1, SeqCst);
@@ -247,17 +266,17 @@ impl Drop for Slot {
 }
 
 /// An authenticated request's place among [`MAX_HTTP_IN_FLIGHT`], given back when it ends.
-struct InFlight;
+struct InFlight(Arc<AtomicUsize>);
 
 impl Drop for InFlight {
     fn drop(&mut self) {
-        IN_FLIGHT.fetch_sub(1, SeqCst);
+        self.0.fetch_sub(1, SeqCst);
     }
 }
 
 /// One HTTP request: checked, queued for the app, answered with its reply. `io` bounds the whole
 /// request's arrival and the reply's writing.
-fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16, io: Duration, mut slot: Slot) {
+fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16, io: Duration, mut slot: Slot, in_flight: &Arc<AtomicUsize>) {
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_write_timeout(Some(io));
     let Ok(mut out) = stream.try_clone() else { return };
@@ -309,11 +328,11 @@ fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16, io: Du
     // Authenticated: its place among the unauthenticated goes back, so idle connections can't
     // keep a real client out while it waits for the app; it takes one among the in-flight.
     slot.release();
-    if IN_FLIGHT.fetch_add(1, SeqCst) >= MAX_HTTP_IN_FLIGHT {
-        IN_FLIGHT.fetch_sub(1, SeqCst);
+    if in_flight.fetch_add(1, SeqCst) >= MAX_HTTP_IN_FLIGHT {
+        in_flight.fetch_sub(1, SeqCst);
         return respond(&mut out, "503 Service Unavailable", &[("Retry-After", "1")], &problem("too many requests at once"));
     }
-    let _in_flight = InFlight;
+    let _in_flight = InFlight(Arc::clone(in_flight));
     let path = target.split('?').next().unwrap_or("");
     if path != HTTP_PATH && path != "/" {
         return respond(&mut out, "404 Not Found", &[], &problem("post MCP messages to /mcp"));
@@ -325,7 +344,10 @@ fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16, io: Du
     if header("transfer-encoding").is_some() {
         return respond(&mut out, "411 Length Required", &[], &problem("send the body with a Content-Length"));
     }
-    let Some(len) = header("content-length").and_then(|v| v.parse::<usize>().ok()) else {
+    // Digits only: no sign, nothing a parser could read two ways.
+    let Some(len) =
+        header("content-length").filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit())).and_then(|v| v.parse::<usize>().ok())
+    else {
         return respond(&mut out, "411 Length Required", &[], &problem("send the body with a Content-Length"));
     };
     if len > MAX_BODY {
