@@ -682,6 +682,27 @@ fn globe_projection_toggles_renders_and_saves() {
     assert!(Project::from_json(&json).unwrap().map().projection == rustgis_map::Projection::Globe);
 }
 
+/// `map.projection` takes ESRI codes (#213): South America Albers, the issue's regional map.
+#[test]
+fn esri_projection_codes() {
+    let mut s = world();
+    s.run("map.goToXY", &json!({"lon": -60.0, "lat": -15.0, "scale": 20_000_000})).unwrap();
+    let r = s.run("map.projection", &json!({"type": "esri:102033"})).unwrap();
+    assert_eq!(r["projection"], "ESRI:102033");
+    assert_eq!(r["label"], "ESRI:102033");
+    let c = s.map().center_lonlat();
+    assert!((c.x + 60.0).abs() < 1e-6 && (c.y + 15.0).abs() < 1e-6, "{c:?}");
+    assert!(crate::cmd::share::map_png(&mut s, Some(400.0), Some(300.0), None).unwrap().len() > 1000);
+    let json = serde_json::to_string(&s.project).unwrap();
+    assert_eq!(Project::from_json(&json).unwrap().map().projection.code(), "ESRI:102033");
+    // A code the table leaves out is refused, and the map keeps its projection.
+    let e = s.run("map.projection", &json!({"type": "ESRI:54003"})).unwrap_err();
+    assert!(e.contains("ESRI:54003"), "{e}");
+    assert_eq!(s.map().projection.code(), "ESRI:102033");
+    // ESRI's Web Mercator is the default map.
+    assert_eq!(s.run("map.projection", &json!({"type": "ESRI:102100"})).unwrap()["projection"], "mercator");
+}
+
 #[test]
 fn custom_projections_switch_keep_scale_query_and_render() {
     let mut s = with_raster();
@@ -1163,6 +1184,20 @@ fn identify_reports_every_overlapping_feature() {
     // A definition query hides one.
     s.run("layer.definitionQuery", &json!({"layer": "Buoys", "where": "n = 1"})).unwrap();
     assert_eq!(rows(&s.run("identify", &at).unwrap()), [(id, 0)]);
+}
+
+#[test]
+fn label_size_stays_within_what_text_symbol_shows() {
+    // Style › Text Symbol offers the range `labels.style` accepts (#457): 72 pt is kept, and
+    // anything outside is brought back to the nearest end.
+    let mut s = world();
+    let size = |s: &Session| s.map().layers.iter().find(|l| l.name == "Countries").map(|l| f64::from(l.labels.size));
+    for (given, kept) in [(72.0, 72.0), (100.0, 72.0), (1.0, 4.0)] {
+        s.run("labels.style", &json!({"layer": "Countries", "size": given})).unwrap();
+        assert_eq!(size(&s), Some(kept), "size {given}");
+    }
+    let range = rustgis_map::symbology::LABEL_SIZE;
+    assert_eq!((*range.start(), *range.end()), (4.0, 72.0));
 }
 
 #[test]

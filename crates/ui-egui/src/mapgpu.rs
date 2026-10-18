@@ -9,18 +9,40 @@ use rustgis_engine::map::Camera;
 
 /// Clip-space transform for one draw command: vertices are f32 offsets from the command's
 /// `origin` (map units), so the f64 `(origin - center)` subtraction happens on the CPU where
-/// the precision still is. Matches `Camera::to_screen` exactly:
-/// `clip.x = (v.x + origin.x - center.x) * 2/(res*w)`, `clip.y = (v.y + origin.y - center.y) * 2/(res*h)`.
+/// the precision still is; a vertex's third coordinate is its height above the ground (map
+/// units). Matches `Camera::to_screen` for a flat, turned or tilted camera: the ground offsets
+/// `(u, v)` from the centre (logical px, turned to the bearing) and the height `up` go to
+/// `x = 2u/w`, `y = -2(v cos p - up sin p)/h` over `w' = 1 - (v sin p + up cos p)/d`, where `p`
+/// is the pitch and `d` the eye's distance from the centre (`Camera::project_raised`). `w'` is
+/// a point's depth (1 at the centre); clip z is `w' - NEAR`, so the near plane cuts what is
+/// behind the eye as `Camera::try_to_screen` leaves it out.
 pub(crate) fn view_proj(cam: &Camera, w: f64, h: f64, origin: [f64; 2]) -> [[f32; 4]; 4] {
-    let sx = 2.0 / (cam.res * w);
-    let sy = 2.0 / (cam.res * h);
-    [
-        [sx as f32, 0.0, 0.0, 0.0],
-        [0.0, sy as f32, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [((origin[0] - cam.center.x) * sx) as f32, ((origin[1] - cam.center.y) * sy) as f32, 0.0, 1.0],
-    ]
+    let a = 1.0 / cam.res;
+    let (sb, cb) = if cam.bearing.is_finite() { cam.bearing.to_radians().sin_cos() } else { (0.0, 1.0) };
+    let (dx, dy) = (origin[0] - cam.center.x, origin[1] - cam.center.y);
+    // Ground offsets and height as linear forms over (x, y, up, 1).
+    let u = [a * cb, -a * sb, 0.0, a * (cb * dx - sb * dy)];
+    let v = [-a * sb, -a * cb, 0.0, -a * (sb * dx + cb * dy)];
+    let up = [0.0, 0.0, a, 0.0];
+    let pitch = rustgis_engine::map::camera::normalize_pitch(cam.pitch);
+    let (sp, cp, inv_d) = if pitch == 0.0 {
+        (0.0, 1.0, 0.0)
+    } else {
+        let (s, c) = pitch.to_radians().sin_cos();
+        (s, c, 2.0 * rustgis_engine::map::camera::TAN_HALF_FOV / h.max(1e-9))
+    };
+    let row = |f: &dyn Fn(usize) -> f64| -> [f64; 4] { std::array::from_fn(f) };
+    let x = row(&|i| 2.0 / w * u[i]);
+    let y = row(&|i| -2.0 / h * (cp * v[i] - sp * up[i]));
+    let depth = row(&|i| if i == 3 { 1.0 } else { 0.0 } - inv_d * (sp * v[i] + cp * up[i]));
+    let z = row(&|i| depth[i] - if i == 3 { NEAR_DEPTH } else { 0.0 });
+    // Column-major, as WGSL's mat4x4f.
+    std::array::from_fn(|col| [x[col] as f32, y[col] as f32, z[col] as f32, depth[col] as f32])
 }
+
+/// The nearest depth drawn (a fraction of the eye's distance from the centre), as
+/// `Camera::try_to_screen` leaves out what is nearer.
+const NEAR_DEPTH: f64 = rustgis_engine::map::camera::NEAR;
 
 /// Host-side mirror of the marker vertex shader's displacement: a unit-space template point
 /// becomes a pixel offset, then a clip offset. Templates are defined y-down (screen), clip y
@@ -37,7 +59,7 @@ use std::sync::Arc;
 use egui_wgpu::{CallbackResources, CallbackTrait, RenderState, wgpu};
 use wgpu::util::DeviceExt;
 
-use rustgis_engine::render::gpu_scene::{DrawCmd, GpuScene};
+use rustgis_engine::render::gpu_scene::{CmdClip, DrawCmd, GpuScene, SceneTilt};
 
 /// Vertices per marker shape slot in the template bank (the circle's 24 fan triangles fill it
 /// exactly; smaller shapes pad with centre points — zero-area triangles are discarded).
@@ -81,23 +103,73 @@ fn marker_templates() -> [[f32; 4]; TEMPLATE_VERTS * SHAPES] {
     out
 }
 
-/// Per-draw-call uniforms (WGSL `CmdUniforms`: 80 bytes).
+/// Per-draw-call uniforms (WGSL `CmdUniforms`: 144 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CmdUniforms {
     view_proj: [[f32; 4]; 4],
-    map_per_px: f32,
-    _pad: f32,
-    viewport: [f32; 2],
+    /// The depth row of the camera the scene was drawn for: a tilted scene's band keeps to its
+    /// own ground ([`CmdClip::depth`]) however the camera has moved since.
+    scene_depth: [f32; 4],
+    /// The fog a tilted view's ground fades into (premultiplied).
+    fog: [f32; 4],
+    /// `x`: map units per physical pixel (scales stroke normals); `y`: 1 for upright markers,
+    /// else 0; `z`, `w`: the band's nearest and farthest depths.
+    params: [f32; 4],
+    /// `x`, `y`: physical pixel size of the map view (scales marker pixel offsets); `z`: 1 when
+    /// tilted (fog, the reach, band clipping), else 0; `w`: the reach's depth.
+    viewport: [f32; 4],
+    _pad: [f32; 4],
 }
 
 impl CmdUniforms {
-    fn new(cam: &Camera, logical_size: [f64; 2], ppp: f32, origin: [f64; 2]) -> Self {
+    fn new(cam: &Camera, logical_size: [f64; 2], ppp: f32, origin: [f64; 2], tilt: Option<&SceneTilt>, clip: CmdClip) -> Self {
+        let [w, h] = logical_size;
+        let scene = tilt.map_or(*cam, |t| t.camera);
+        let s = view_proj(&scene, w, h, origin);
         CmdUniforms {
-            view_proj: view_proj(cam, logical_size[0], logical_size[1], origin),
-            map_per_px: (cam.res / f64::from(ppp)) as f32,
-            _pad: 0.0,
-            viewport: [(logical_size[0] * f64::from(ppp)) as f32, (logical_size[1] * f64::from(ppp)) as f32],
+            view_proj: view_proj(cam, w, h, origin),
+            scene_depth: [s[0][3], s[1][3], s[2][3], s[3][3]],
+            fog: tilt.map_or([0.0; 4], |t| t.fog),
+            params: [(cam.res / f64::from(ppp)) as f32, if clip.upright { 1.0 } else { 0.0 }, clip.depth[0], clip.depth[1]],
+            viewport: [
+                (w * f64::from(ppp)) as f32,
+                (h * f64::from(ppp)) as f32,
+                if rustgis_engine::map::camera::normalize_pitch(cam.pitch) != 0.0 { 1.0 } else { 0.0 },
+                rustgis_engine::map::camera::FAR as f32,
+            ],
+            _pad: [0.0; 4],
+        }
+    }
+}
+
+/// The backdrop of a tilted view (WGSL `Backdrop`): water fading into fog toward the reach,
+/// and the sky above it.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BackdropUniforms {
+    /// The view's height (logical px), the eye's distance from the centre, the pitch's cosine
+    /// and sine.
+    tilt: [f32; 4],
+    /// Physical pixels per point, the reach's screen row (logical px), the reach's depth.
+    params: [f32; 4],
+    water: [f32; 4],
+    fog: [f32; 4],
+    sky: [f32; 4],
+}
+
+impl BackdropUniforms {
+    fn new(cam: &Camera, logical_size: [f64; 2], ppp: f32, water: [f32; 4], t: &SceneTilt) -> Self {
+        let h = logical_size[1];
+        let pitch = rustgis_engine::map::camera::normalize_pitch(cam.pitch).to_radians();
+        let d = h / 2.0 / rustgis_engine::map::camera::TAN_HALF_FOV;
+        let sky_y = cam.sky_y(h).unwrap_or(0.0).max(1e-9);
+        BackdropUniforms {
+            tilt: [h as f32, d as f32, pitch.cos() as f32, pitch.sin() as f32],
+            params: [ppp, sky_y as f32, rustgis_engine::map::camera::FAR as f32, 0.0],
+            water,
+            fog: t.fog,
+            sky: t.sky,
         }
     }
 }
@@ -124,8 +196,10 @@ pub(crate) struct GpuMapRenderer {
     mesh_pipeline: wgpu::RenderPipeline,
     point_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
+    backdrop_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
     cmd_layout: wgpu::BindGroupLayout,
+    backdrop_layout: wgpu::BindGroupLayout,
     image_layout: wgpu::BindGroupLayout,
     templates: wgpu::Buffer,
     sampler: wgpu::Sampler,
@@ -155,9 +229,13 @@ impl GpuMapRenderer {
         let cmd_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("mapgpu_cmd"),
             entries: &[
-                uniform_buf(wgpu::ShaderStages::VERTEX, 0, std::mem::size_of::<CmdUniforms>() as u64),
+                uniform_buf(wgpu::ShaderStages::VERTEX_FRAGMENT, 0, std::mem::size_of::<CmdUniforms>() as u64),
                 uniform_buf(wgpu::ShaderStages::VERTEX, 1, (TEMPLATE_VERTS * SHAPES * 16) as u64),
             ],
+        });
+        let backdrop_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("mapgpu_backdrop"),
+            entries: &[uniform_buf(wgpu::ShaderStages::FRAGMENT, 0, std::mem::size_of::<BackdropUniforms>() as u64)],
         });
         let image_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("mapgpu_image"),
@@ -253,6 +331,7 @@ impl GpuMapRenderer {
         let mesh_pipeline = pipeline("mapgpu_mesh", "vs_mesh", "fs_mesh", &mesh_buffers, &[&cmd_layout], scene_format, samples);
         let point_pipeline = pipeline("mapgpu_points", "vs_marker", "fs_marker", &point_buffers, &[&cmd_layout], scene_format, samples);
         let image_pipeline = pipeline("mapgpu_image", "vs_image", "fs_image", &[], &[&image_layout], scene_format, samples);
+        let backdrop_pipeline = pipeline("mapgpu_backdrop", "vs_backdrop", "fs_backdrop", &[], &[&backdrop_layout], scene_format, samples);
         // The blit pipeline draws the resolved scene texture into egui's pass (egui's target
         // is 1×, so a separate pipeline; the scene's own pipelines render into the 4× MSAA
         // offscreen target).
@@ -261,8 +340,10 @@ impl GpuMapRenderer {
             mesh_pipeline,
             point_pipeline,
             image_pipeline,
+            backdrop_pipeline,
             blit_pipeline,
             cmd_layout,
+            backdrop_layout,
             image_layout,
             templates,
             sampler,
@@ -348,6 +429,7 @@ pub(crate) enum SceneDraw {
         uniforms: wgpu::Buffer,
         bind: wgpu::BindGroup,
         origin: [f64; 2],
+        clip: CmdClip,
     },
     Points {
         instances: wgpu::Buffer,
@@ -355,6 +437,12 @@ pub(crate) enum SceneDraw {
         uniforms: wgpu::Buffer,
         bind: wgpu::BindGroup,
         origin: [f64; 2],
+        clip: CmdClip,
+    },
+    /// A tilted view's water, fog and sky, under everything.
+    Backdrop {
+        uniforms: wgpu::Buffer,
+        bind: wgpu::BindGroup,
     },
     Image {
         bind: wgpu::BindGroup,
@@ -373,6 +461,30 @@ pub(crate) struct SceneBuffers {
     /// Scenes containing CPU-rasterized image runs can't fast-path a camera move (images are
     /// screen-space bitmaps of the old view) — they take the full re-render instead.
     pub has_images: bool,
+    /// A turned or tilted scene: the camera it was drawn for, its sky and fog.
+    pub tilt: Option<SceneTilt>,
+}
+
+impl SceneBuffers {
+    /// Whether a camera move to `cam` may re-project the scene: a flat, north-up scene for a
+    /// flat, north-up view; a turned or tilted one for about the same bearing and pitch and a
+    /// zoom within reach (it covers the ground its own camera showed: a turned view's north-up
+    /// box, a tilted view's bands out to its reach), else it is drawn again.
+    pub(crate) fn fits(&self, cam: &Camera) -> bool {
+        let pitch = rustgis_engine::map::camera::normalize_pitch(cam.pitch);
+        match &self.tilt {
+            None => cam.bearing == 0.0 && pitch == 0.0,
+            Some(t) => {
+                let turn = rustgis_engine::map::camera::normalize_bearing(cam.bearing - t.camera.bearing).abs();
+                let zoom = cam.res / t.camera.res.max(1e-12);
+                (t.camera.bearing != 0.0) == (cam.bearing != 0.0)
+                    && (t.camera.pitch != 0.0) == (pitch != 0.0)
+                    && turn < 0.5
+                    && (pitch - t.camera.pitch).abs() < 0.5
+                    && (0.7..1.4).contains(&zoom)
+            }
+        }
+    }
 }
 
 /// Whether one draw command fits the device: each of its buffers within `max_buffer_size`,
@@ -414,15 +526,31 @@ impl SceneBuffers {
         if !scene.cmds.iter().all(|c| cmd_fits(&limits, c)) {
             return None;
         }
-        let mut draws = Vec::with_capacity(scene.cmds.len());
+        let mut draws = Vec::with_capacity(scene.cmds.len() + 1);
         let mut has_images = false;
-        for cmd in &scene.cmds {
+        let tilt = scene.tilt.as_ref();
+        if let Some(t) = tilt.filter(|t| t.camera.pitch != 0.0) {
+            let u = BackdropUniforms::new(&camera, size, ppp, scene.clear, t);
+            let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mapgpu_backdrop_uniforms"),
+                contents: bytemuck::bytes_of(&u),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("mapgpu_backdrop_bind"),
+                layout: &r.backdrop_layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() }],
+            });
+            draws.push(SceneDraw::Backdrop { uniforms, bind });
+        }
+        for (i, cmd) in scene.cmds.iter().enumerate() {
+            let clip = scene.clips.get(i).copied().unwrap_or(CmdClip::ALL);
             match cmd {
                 DrawCmd::Mesh { origin, vertices, indices } => {
                     if indices.is_empty() {
                         continue;
                     }
-                    let uniforms = CmdUniforms::new(&camera, size, ppp, *origin);
+                    let uniforms = CmdUniforms::new(&camera, size, ppp, *origin, tilt, clip);
                     let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("mapgpu_cmd_uniforms"),
                         contents: bytemuck::bytes_of(&uniforms),
@@ -451,13 +579,14 @@ impl SceneBuffers {
                         uniforms,
                         bind,
                         origin: *origin,
+                        clip,
                     });
                 }
                 DrawCmd::Points { origin, instances } => {
                     if instances.is_empty() {
                         continue;
                     }
-                    let uniforms = CmdUniforms::new(&camera, size, ppp, *origin);
+                    let uniforms = CmdUniforms::new(&camera, size, ppp, *origin, tilt, clip);
                     let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("mapgpu_cmd_uniforms"),
                         contents: bytemuck::bytes_of(&uniforms),
@@ -481,6 +610,7 @@ impl SceneBuffers {
                         uniforms,
                         bind,
                         origin: *origin,
+                        clip,
                     });
                 }
                 DrawCmd::Image { pixmap } => {
@@ -524,7 +654,7 @@ impl SceneBuffers {
                 }
             }
         }
-        Some(SceneBuffers { draws, clear: scene.clear, size, ppp, has_images })
+        Some(SceneBuffers { draws, clear: scene.clear, size, ppp, has_images, tilt: scene.tilt })
     }
 
     /// Rewrites every command's camera uniforms for a moved camera — pan/zoom without
@@ -533,11 +663,20 @@ impl SceneBuffers {
     /// re-project and need a full re-render.
     pub(crate) fn set_camera(&self, queue: &wgpu::Queue, cam: &Camera) {
         for d in &self.draws {
-            let (uniforms, origin) = match d {
-                SceneDraw::Mesh { uniforms, origin, .. } | SceneDraw::Points { uniforms, origin, .. } => (uniforms, origin),
+            let (uniforms, origin, clip) = match d {
+                SceneDraw::Mesh { uniforms, origin, clip, .. } | SceneDraw::Points { uniforms, origin, clip, .. } => {
+                    (uniforms, origin, clip)
+                }
+                SceneDraw::Backdrop { uniforms, .. } => {
+                    if let Some(t) = &self.tilt {
+                        let u = BackdropUniforms::new(cam, self.size, self.ppp, self.clear, t);
+                        queue.write_buffer(uniforms, 0, bytemuck::bytes_of(&u));
+                    }
+                    continue;
+                }
                 SceneDraw::Image { .. } => continue,
             };
-            let u = CmdUniforms::new(cam, self.size, self.ppp, *origin);
+            let u = CmdUniforms::new(cam, self.size, self.ppp, *origin, self.tilt.as_ref(), *clip);
             queue.write_buffer(uniforms, 0, bytemuck::bytes_of(&u));
         }
     }
@@ -567,6 +706,11 @@ fn paint_draws(renderer: &GpuMapRenderer, draws: &[SceneDraw], rp: &mut wgpu::Re
                 rp.set_bind_group(0, bind, &[]);
                 rp.set_vertex_buffer(0, instances.slice(..));
                 rp.draw(0..TEMPLATE_VERTS as u32, 0..*count);
+            }
+            SceneDraw::Backdrop { bind, .. } => {
+                rp.set_pipeline(&renderer.backdrop_pipeline);
+                rp.set_bind_group(0, bind, &[]);
+                rp.draw(0..6, 0..1);
             }
             SceneDraw::Image { bind, .. } => {
                 rp.set_pipeline(&renderer.image_pipeline);
@@ -736,6 +880,8 @@ mod tests {
             tiles_pending: false,
             data_pending: false,
             tile_errors: vec![],
+            tilt: None,
+            clips: vec![],
         };
         let sb =
             SceneBuffers::from_scene(&rs.device, &rs.queue, &r, &scene, Camera::world(), [400.0, 300.0], 1.0).expect("fits the device");
@@ -867,6 +1013,13 @@ mod tests {
     }
 
     fn assert_parity_on(name: &str, build: impl Fn() -> Map, view: &View, backends: wgpu::Backends) {
+        assert_parity_within(name, build, view, backends, 0);
+    }
+
+    /// [`assert_parity_on`], allowing `outliers` structural mismatches: a tilted view's CPU
+    /// frame is warped from flat bands (resampled, so a thin line's colour spreads), its GPU one
+    /// drawn in perspective directly.
+    fn assert_parity_within(name: &str, build: impl Fn() -> Map, view: &View, backends: wgpu::Backends, outliers: usize) {
         let mut gm = build();
         let Some(gpu) = gpu_render_offscreen_on(&mut gm, view, backends) else { return }; // no adapter: skip
         let mut cm = build();
@@ -893,7 +1046,7 @@ mod tests {
         let (mean_raw, _) = diff_stats(cpu.pixmap.data(), &gpu);
         let (w, h) = view.pixel_size();
         let structural = structural_outliers(cpu.pixmap.data(), &gpu, w as usize, h as usize);
-        assert!(mean_raw < 1.5 && structural == 0, "{name}: raw mean {mean_raw:.2}/255, {structural} structural outliers");
+        assert!(mean_raw < 1.5 && structural <= outliers, "{name}: raw mean {mean_raw:.2}/255, {structural} structural outliers");
     }
 
     fn world_map() -> Map {
@@ -914,6 +1067,90 @@ mod tests {
     #[test]
     fn parity_world_sample() {
         assert_parity("world sample", world_map, &world_view());
+    }
+
+    /// The full camera matrix puts a point where `Camera::try_to_screen` does, turned and
+    /// tilted, and its clip depth leaves out what is behind the eye.
+    #[test]
+    fn view_proj_matches_turned_and_tilted_cameras() {
+        let (w, h) = (800.0, 500.0);
+        let center = Coord::new(1_000_000.0, 6_000_000.0);
+        let origin = [center.x + 1234.5, center.y - 777.0];
+        for (bearing, pitch) in [(30.0, 0.0), (-120.0, 0.0), (0.0, 60.0), (45.0, 75.0), (170.0, 85.0)] {
+            let cam = Camera { center, res: 300.0, bearing, pitch };
+            let m = view_proj(&cam, w, h, origin);
+            let clip = |p: Coord| -> [f64; 4] {
+                let v = [(p.x - origin[0]) as f32, (p.y - origin[1]) as f32, 0.0, 1.0];
+                std::array::from_fn(|r| f64::from((0..4).map(|c| m[c][r] * v[c]).sum::<f32>()))
+            };
+            for (dx, dy) in [(0.0, 0.0), (40_000.0, 30_000.0), (-60_000.0, 90_000.0), (20_000.0, -50_000.0)] {
+                let p = Coord::new(center.x + dx, center.y + dy);
+                let c = clip(p);
+                match cam.try_to_screen(p, w, h) {
+                    Some((sx, sy)) => {
+                        assert!(c[2] >= 0.0 && c[2] <= c[3], "{bearing}/{pitch}: {c:?}");
+                        let (gx, gy) = ((c[0] / c[3] + 1.0) / 2.0 * w, (1.0 - c[1] / c[3]) / 2.0 * h);
+                        assert!((gx - sx).abs() < 0.05 && (gy - sy).abs() < 0.05, "{bearing}/{pitch}: ({gx}, {gy}) vs ({sx}, {sy})");
+                    }
+                    None => assert!(c[2] < 0.0, "{bearing}/{pitch}: behind the eye, clipped: {c:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parity_turned_world_sample() {
+        let view = View { camera: Camera { bearing: 35.0, ..Camera::world() }, ..world_view() };
+        assert_parity("turned world sample", world_map, &view);
+    }
+
+    /// Structural mismatches a tilted view may have: 0.1 % of the 640 × 400 view, along thin
+    /// lines and the coarse far bands near the horizon, which the CPU warps (resampling them)
+    /// and the GPU draws in perspective directly.
+    const TILTED_OUTLIERS: usize = 256;
+
+    #[test]
+    fn parity_tilted_world_sample() {
+        let camera = Camera { center: Coord::new(1_100_000.0, 5_500_000.0), res: 6_000.0, bearing: 20.0, pitch: 60.0 };
+        assert_parity_within("tilted world sample", world_map, &View { camera, ..world_view() }, wgpu::Backends::all(), TILTED_OUTLIERS);
+    }
+
+    #[test]
+    fn parity_steep_world_sample_shows_the_sky() {
+        // Past about 72° the horizon comes into view: the backdrop draws the sky above it and
+        // fogs the water toward it, as the CPU warp does.
+        let camera = Camera { center: Coord::new(1_100_000.0, 5_500_000.0), res: 6_000.0, bearing: -15.0, pitch: 80.0 };
+        assert_parity_within("steep world sample", world_map, &View { camera, ..world_view() }, wgpu::Backends::all(), TILTED_OUTLIERS);
+    }
+
+    /// A tilted view's point layer stands its markers up once, over the bands: the bands draw
+    /// none of them (as meshes or as a picture).
+    #[test]
+    fn a_tilted_view_draws_its_markers_once_upright() {
+        let mut m = world_map();
+        let camera = Camera { center: Coord::new(1_100_000.0, 5_500_000.0), res: 6_000.0, bearing: 20.0, pitch: 60.0 };
+        let Some(RenderOutput::Gpu(scene)) = render::render_backend(&mut m, &View { camera, ..world_view() }, Backend::Gpu) else {
+            panic!("a GPU scene")
+        };
+        let points: Vec<usize> =
+            scene.cmds.iter().enumerate().filter(|(_, c)| matches!(c, DrawCmd::Points { .. })).map(|(i, _)| i).collect();
+        assert_eq!(points.len(), 1, "one set of markers");
+        assert!(points.iter().all(|i| scene.clips.get(*i).is_some_and(|c| c.upright)));
+        assert!(!scene.cmds.iter().any(|c| matches!(c, DrawCmd::Image { .. })), "no pictures");
+    }
+
+    /// A turned or tilted view that needs pictures drawn on the CPU (here a see-through layer,
+    /// drawn apart and laid over) isn't a GPU scene: it comes back drawn on the CPU.
+    #[test]
+    fn a_tilted_view_needing_pictures_is_drawn_on_the_cpu() {
+        let mut m = world_map();
+        if let Some(l) = m.layers.iter_mut().find(|l| l.name == "Countries") {
+            l.transparency = 50.0;
+        }
+        let camera = Camera { center: Coord::new(1_100_000.0, 5_500_000.0), res: 6_000.0, bearing: 20.0, pitch: 60.0 };
+        assert!(matches!(render::render_backend(&mut m, &View { camera, ..world_view() }, Backend::Gpu), Some(RenderOutput::Cpu(_))));
+        let mut m = world_map();
+        assert!(matches!(render::render_backend(&mut m, &View { camera, ..world_view() }, Backend::Gpu), Some(RenderOutput::Gpu(_))));
     }
 
     #[test]

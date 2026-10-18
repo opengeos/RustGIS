@@ -12,6 +12,10 @@ Raster coordinate systems are looked up by EPSG code in the PROJ definitions of 
 app. The codes it lacks (EPSG 9020–20003, `crates/data/src/raster/epsg_gap.rs`) are from the
 [EPSG Geodetic Parameter Dataset](https://epsg.org) v12.029 (© IOGP, under its
 [terms of use](https://epsg.org/terms-of-use.html)), written as PROJ definitions by PROJ 9.8.
+The map's ESRI codes (`crates/data/src/raster/esri.rs`) are Esri's projected coordinate systems
+from Esri's [projection-engine-db-doc](https://github.com/Esri/projection-engine-db-doc)
+(Apache-2.0), as imported into the [PROJ](https://proj.org) 9.7.1 database (MIT) and written as
+PROJ definitions by PROJ 9.7.1.
 
 The GeoLibre tool suite ([geolibre-rust](https://github.com/opengeos/geolibre-rust), MIT, built
 on [whitebox-wasm](https://github.com/opengeos/whitebox-wasm), MIT) is not part of RustGIS: the

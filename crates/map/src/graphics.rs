@@ -61,9 +61,12 @@ pub fn label(ds: &Dataset, row: usize) -> Option<&str> {
     if kind(ds, row) == "text" { text(ds, row, "text").filter(|t| !t.is_empty()) } else { None }
 }
 
+/// The font sizes a text graphic is drawn at, in points (`graphics.add`, `graphics.edit`, Add Text).
+pub const FONT_SIZE: std::ops::RangeInclusive<f64> = 4.0..=200.0;
+
 /// The font size of a text graphic, in points.
 pub fn font_size(ds: &Dataset, row: usize) -> f32 {
-    num(ds, row, "font_size").unwrap_or(14.0).clamp(4.0, 200.0) as f32
+    num(ds, row, "font_size").unwrap_or(14.0).clamp(*FONT_SIZE.start(), *FONT_SIZE.end()) as f32
 }
 
 /// The text colour of a text graphic.

@@ -37,6 +37,14 @@ const INSTRUCTIONS: &str = "RustGIS is a desktop GIS. This server holds one Rust
 Open data with the layer.addData command ({\"path\": …}) and save with project.saveAs ({\"path\": \"*.rgis\"}); \
 file and network access works only when the server was started with --yes.";
 
+/// Added to [`INSTRUCTIONS`] on the desktop app's relay, where the session is the user's own.
+const LIVE: &str = "\nThis is the project the user has open in RustGIS, and they watch the map change as you work.\n\
+- Call list_layers before acting on a project you haven't seen; name layers in your commands rather than relying on the one the user has selected.\n\
+- Call view_map after any visual change and check it before you say it worked.\n\
+- Each command is a step in the user's own undo history; don't undo what you didn't do.\n\
+- Replacing the project (project.new, project.open…) is the user's to do.\n\
+- A long geoprocessing run keeps the app busy: say what you are about to run first.";
+
 /// The server: the session's access policy. The session itself is the caller's.
 #[derive(Debug, Clone)]
 pub struct Server {
@@ -128,7 +136,7 @@ impl Server {
 
     fn call(&self, s: &mut Session, method: &str, params: &Value) -> Result<Value, RpcError> {
         match method {
-            "initialize" => Ok(initialize(params)),
+            "initialize" => Ok(initialize(params, &self.instructions())),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": tool_list()})),
             "tools/call" => {
@@ -185,6 +193,11 @@ impl Server {
         }
     }
 
+    /// What the model is told about the server when it connects.
+    pub fn instructions(&self) -> String {
+        if self.users_project { format!("{INSTRUCTIONS}{LIVE}") } else { INSTRUCTIONS.to_string() }
+    }
+
     /// Why this server won't run a call, if it won't.
     pub fn refusal(&self, s: &Session, call: &ToolCall) -> Option<String> {
         // A script is refused when any of its lines would be, before any of it runs. A script
@@ -225,7 +238,7 @@ impl Server {
     }
 }
 
-fn initialize(params: &Value) -> Value {
+fn initialize(params: &Value, instructions: &str) -> Value {
     // Speak the client's version when we know it, else our newest.
     let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or("");
     let version = VERSIONS.iter().find(|v| **v == asked).copied().unwrap_or(VERSIONS[0]);
@@ -233,7 +246,7 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false}, "prompts": {"listChanged": false}},
         "serverInfo": {"name": "rustgis", "title": "RustGIS", "version": env!("CARGO_PKG_VERSION")},
-        "instructions": INSTRUCTIONS,
+        "instructions": instructions,
     })
 }
 
