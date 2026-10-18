@@ -103,7 +103,7 @@ fn marker_templates() -> [[f32; 4]; TEMPLATE_VERTS * SHAPES] {
     out
 }
 
-/// Per-draw-call uniforms (WGSL `CmdUniforms`: 160 bytes).
+/// Per-draw-call uniforms (WGSL `CmdUniforms`: 144 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CmdUniforms {
@@ -463,6 +463,14 @@ pub(crate) struct SceneBuffers {
     pub has_images: bool,
     /// A turned or tilted scene: the camera it was drawn for, its sky and fog.
     pub tilt: Option<SceneTilt>,
+}
+
+impl SceneBuffers {
+    /// Whether the scene was drawn for a tilted view (with its backdrop and bands): a camera
+    /// move may re-project it only to a view tilted (or flat) as well.
+    pub(crate) fn tilted(&self) -> bool {
+        self.tilt.is_some_and(|t| t.camera.pitch != 0.0)
+    }
 }
 
 /// Whether one draw command fits the device: each of its buffers within `max_buffer_size`,
