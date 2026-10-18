@@ -44,6 +44,15 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
   order. Scripts and the AI Assistant build groups with `group.add`, `group.set`,
   `group.scaleRange` (a visibility range on top of each layer's own), `group.move`,
   `group.expand`, `group.ungroup`, `group.remove` and `layer.group`.
+  **Copy Layer** (or **Copy Group**, with its layers) from its menu and **Paste Layer** (or
+  **Paste Group**) it on a layer (above it), a group or the map's name above the list
+  (at the top, also when the map has no layers yet), after switching to another map if you like,
+  or on a map in the Browser (at the top). The copy keeps its source, symbology, labels,
+  transparency, scale range, definition query, display filters and mask, but not its selection,
+  and a name the map already has gets " copy". Pasting into the same map duplicates the layer. A
+  mask whose layer the map lacks is cleared, and said. Groups don't nest: pasted into a group (on
+  it, or on one of its layers), a copied group's layers join it at the top. Scripts use
+  `layer.copy` and `layer.paste`.
   The Style and Data tabs act on the layer selected here. The tabs at the top of the left pane
   switch it between **Layers**, **Browser** and **Data Sources** (also in **View › Windows**).
 - **Map view**: one tab per map and layout. The buttons at the top right zoom in, zoom out and go
