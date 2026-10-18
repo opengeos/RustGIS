@@ -228,3 +228,20 @@ Attach it to a [bug report](https://github.com/opengeos/RustGIS/issues/new?templ
 It holds the version, the operating system, the error message and where in RustGIS it happened.
 An error message can quote what RustGIS was working on, such as a file path or a layer name, so
 read the log first and remove anything you don't want to share.
+
+## If the app doesn't start
+
+The desktop app draws its window with the graphics card through Direct3D 12 on Windows, Metal on
+macOS and Vulkan on Linux, with OpenGL as a fallback. A graphics driver that crashes there closes
+the app before it can open a window or write `crash.log`. Choose another graphics interface with
+`--backend`, from a terminal or in the target of a shortcut to `rustgis.exe`:
+
+```sh
+rustgis --backend gl       # OpenGL
+rustgis --backend dx12     # Direct3D 12 (Windows)
+rustgis --backend vulkan   # Vulkan
+```
+
+The `WGPU_BACKEND` environment variable takes the same names, for every launch. On Windows,
+RustGIS uses Vulkan only when asked like this: some Vulkan drivers, such as Intel's for UHD 600
+series graphics, crash as the app starts. Updating the graphics driver may also help.
