@@ -274,7 +274,8 @@ document parsed when it is a JSON object or array.
 - At most 2 MB, in UTF-8 (a byte-order mark is dropped). An answer that isn't a success (404,
   500…) is an error ending in `HTTP <status>`.
 - Answers are kept for 10 minutes (up to 256 documents and 16 MB in all) while RustGIS runs,
-  so asking for the same address again costs nothing. Errors are kept for 30 seconds,
+  so asking for the same address again costs nothing. Each plugin has answers of its own: one
+  never reads what another fetched. Errors are kept for 30 seconds,
   so every command waiting for an address sees its error; after that it is fetched again.
 - On the desktop and the command line the request waits for the answer: at most 20 seconds for
   one, and 60 seconds for all the fetches of one plugin call. A call makes at most 64 fetches.

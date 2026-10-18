@@ -484,7 +484,8 @@ impl Session {
         let plugin = cmd.plugin.clone();
         let mut pending = Vec::new();
         let res = self.guarded(label, mutates, |s| {
-            let mut bridge = Bridge { s, plugin, fetches: fetch::Calls::default() };
+            let fetches = fetch::Calls::for_plugin(&plugin.manifest.id);
+            let mut bridge = Bridge { s, plugin, fetches };
             let res = rustgis_plugins::run_command(&cmd, &mut bridge, params);
             if bridge.fetches.pending.is_empty() {
                 return res;

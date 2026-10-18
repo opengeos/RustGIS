@@ -169,21 +169,27 @@ pub fn answer(url: &str, bytes: &[u8]) -> Result<Value, String> {
     })
 }
 
-/// Starts fetching `url` off the frame, unless it is already under way.
-fn start(url: &str) {
+/// The cache's key for `plugin`'s fetch of `url`: each plugin has answers of its own, so one
+/// can't read what another fetched (an address may carry a token).
+fn key(plugin: &str, url: &str) -> String {
+    format!("{plugin} {url}")
+}
+
+/// Starts fetching `url` off the frame under `key`, unless it is already under way.
+fn start(key: &str, url: &str) {
     {
         let mut c = cache();
-        if c.in_flight.iter().any(|u| u == url) {
+        if c.in_flight.iter().any(|u| u == key) {
             return;
         }
-        c.in_flight.push(url.to_string());
+        c.in_flight.push(key.to_string());
     }
-    let key = url.to_string();
+    let (key, url) = (key.to_string(), url.to_string());
     crate::render::rustgis_tiles::cache::download_limited(
-        &s3::anonymous(url),
+        &s3::anonymous(&url),
         MAX_BYTES,
         Box::new(move |r| {
-            let answer = r.map_err(|e| format!("{key}: {e}")).and_then(|bytes| answer(&key, &bytes));
+            let answer = r.map_err(|e| format!("{url}: {e}")).and_then(|bytes| answer(&url, &bytes));
             cache().keep(&key, answer);
         }),
     );
@@ -192,13 +198,19 @@ fn start(url: &str) {
 /// What one plugin call has fetched.
 #[derive(Default)]
 pub(super) struct Calls {
+    /// The plugin fetching: the cache keeps each plugin's answers apart.
+    plugin: String,
     count: usize,
     started: Option<Instant>,
-    /// Addresses whose answers are pending (the browser).
+    /// Cache keys of the answers pending (the browser).
     pub(super) pending: Vec<String>,
 }
 
 impl Calls {
+    pub(super) fn for_plugin(plugin: &str) -> Calls {
+        Calls { plugin: plugin.to_string(), ..Calls::default() }
+    }
+
     /// Runs `host.fetch {url}` for a plugin that may.
     pub(super) fn fetch(&mut self, p: &Value) -> CmdResult {
         let url = checked(p.get("url").and_then(Value::as_str).ok_or("url is required")?)?;
@@ -206,25 +218,26 @@ impl Calls {
             return Err(format!("a plugin call may fetch at most {MAX_PER_CALL} documents"));
         }
         self.count += 1;
-        let kept = cache().get(&url);
+        let key = key(&self.plugin, &url);
+        let kept = cache().get(&key);
         if let Some(answer) = kept {
             return answer;
         }
         if !waits() {
-            if !self.pending.contains(&url) {
+            if !self.pending.contains(&key) {
                 if self.pending.len() >= MAX_PENDING {
                     return Err(format!("a plugin call may wait for at most {MAX_PENDING} documents at once"));
                 }
-                self.pending.push(url.clone());
-                start(&url);
+                self.pending.push(key.clone());
+                start(&key, &url);
             }
             return Ok(json!({"pending": true, "url": url}));
         }
-        self.blocking(&url)
+        self.blocking(&key, &url)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn blocking(&mut self, url: &str) -> CmdResult {
+    fn blocking(&mut self, key: &str, url: &str) -> CmdResult {
         let started = *self.started.get_or_insert_with(Instant::now);
         let left = CALL_BUDGET.saturating_sub(started.elapsed());
         if left.is_zero() {
@@ -240,12 +253,12 @@ impl Calls {
         }
         .map_err(|e| format!("{url}: {e}"))?;
         let answer = answer(url, &bytes)?;
-        cache().keep(url, Ok(answer.clone()));
+        cache().keep(key, Ok(answer.clone()));
         Ok(answer)
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn blocking(&mut self, url: &str) -> CmdResult {
+    fn blocking(&mut self, _key: &str, url: &str) -> CmdResult {
         let _ = self.started;
         Err(format!("{url}: the web app can't wait for a fetch"))
     }
@@ -260,21 +273,28 @@ pub(crate) struct Retry {
 }
 
 impl Session {
-    /// Keeps plugin command `id` to run again once `urls` have landed: its answer, which says
-    /// so.
+    /// Keeps plugin command `id` to run again once `urls` (cache keys) have landed: its answer,
+    /// which says so.
     pub(super) fn retry_plugin(&mut self, id: &str, params: &Value, urls: Vec<String>) -> CmdResult {
         let tries = self.retry_tries;
         if tries >= MAX_RETRIES {
             return Err(format!("{id}: gave up after fetching {MAX_RETRIES} times"));
         }
-        // One waiting run per command: the latest call's.
-        self.plugin_retries.retain(|r| r.id != id);
+        // One waiting run per command: the latest call's, which replaces an earlier one.
+        if let Some(i) = self.plugin_retries.iter().position(|r| r.id == id) {
+            self.plugin_retries.remove(i);
+            self.notify(format!("{id}: an earlier run still waiting for the web was replaced by this one"), false);
+        }
         if self.plugin_retries.len() >= MAX_WAITING {
             let dropped = self.plugin_retries.remove(0);
             self.notify(format!("{}: dropped while waiting for the web (too many plugin commands waiting)", dropped.id), true);
         }
-        self.plugin_retries.push(Retry { id: id.to_string(), params: params.clone(), urls: urls.clone(), tries: tries + 1 });
-        Ok(json!({"pending": true, "fetching": urls}))
+        // `urls` are cache keys (`<plugin> <url>`; plugin ids have no spaces): the answer names
+        // the addresses.
+        let fetching: Vec<&str> = urls.iter().map(|k| k.split_once(' ').map_or(k.as_str(), |(_, u)| u)).collect();
+        let answer = json!({"pending": true, "fetching": fetching});
+        self.plugin_retries.push(Retry { id: id.to_string(), params: params.clone(), urls, tries: tries + 1 });
+        Ok(answer)
     }
 
     /// Runs again the plugin commands whose fetches have all landed (the browser: see
@@ -337,6 +357,15 @@ mod tests {
         assert!(answer("https://x.org/t", b"{broken").unwrap().get("json").is_none());
         assert!(answer("https://x.org/t", b"\xff\xfe").unwrap_err().contains("UTF-8"));
         assert!(answer("https://x.org/t", &vec![b' '; MAX_BYTES + 1]).unwrap_err().contains("larger"));
+    }
+
+    #[test]
+    fn each_plugin_has_answers_of_its_own() {
+        let mut c = Cache::default();
+        let url = "https://cache.test/t?token=1";
+        c.keep(&key("one", url), Ok(json!({"text": "secret"})));
+        assert!(c.get(&key("one", url)).is_some());
+        assert!(c.get(&key("two", url)).is_none(), "another plugin's answer");
     }
 
     #[test]
