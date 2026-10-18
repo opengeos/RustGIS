@@ -2,15 +2,16 @@
 //! once in bands (`render::render_tilt_drape`) is laid over the tilted ground as textured meshes,
 //! so a frame only moves vertices, as the globe's drape does; the sky above the horizon is a
 //! gradient. Extruded layers stand up over it in perspective as MapLibre's fill extrusions do:
-//! tessellated once, then projected, lit and ordered far to near every frame. The exact frame is
-//! drawn again once the map settles.
+//! tessellated once, then projected, lit and ordered far to near every frame. Point markers stand
+//! upright over it, facing the viewer, as in the settled frame. The exact frame is drawn again
+//! once the map settles.
 
 use egui::epaint::Vertex;
 use egui::{Color32, Mesh, Painter, Rect, Shape, TextureFilter, TextureHandle, TextureOptions, pos2};
 use rustgis_engine::geom::{Coord, Extent};
 use rustgis_engine::map::camera::{Band, FAR};
 use rustgis_engine::map::{Camera, Map};
-use rustgis_engine::render::{self, ExtrudedShape, View};
+use rustgis_engine::render::{self, ExtrudedShape, UprightMarker, View};
 
 use crate::globe_drape::DrapeKey;
 use crate::theme::c32;
@@ -37,6 +38,8 @@ struct Drape {
     bands: Vec<(Band, TextureHandle)>,
     /// The extruded features, tessellated.
     shapes: Vec<ExtrudedShape>,
+    /// The point markers standing upright.
+    markers: Vec<UprightMarker>,
 }
 
 /// The drape of the moving tilted map, kept between frames while the map doesn't change.
@@ -95,7 +98,8 @@ impl TiltDrape {
             })
             .collect();
         let shapes = render::extruded_shapes(map, &view);
-        self.drape = Some(Drape { key, ppp: drape_ppp, res: cam.res, tiles, built: time, bands, shapes });
+        let markers = render::upright_markers(map, &view, MARGIN);
+        self.drape = Some(Drape { key, ppp: drape_ppp, res: cam.res, tiles, built: time, bands, shapes, markers });
         true
     }
 
@@ -122,6 +126,43 @@ impl TiltDrape {
         if let Some(mesh) = self.extrusions(rect, &cam, fog) {
             painter.add(Shape::mesh(mesh));
         }
+        if let Some(mesh) = self.markers(rect, &cam, fog) {
+            painter.add(Shape::mesh(mesh));
+        }
+    }
+
+    /// The point markers standing upright on the drape, as one mesh in their order: each one's
+    /// selection halo, fill and outline, sized and fogged by its distance as in the settled frame.
+    fn markers(&self, rect: Rect, cam: &Camera, fog: rustgis_engine::map::Rgba) -> Option<Mesh> {
+        let d = self.drape.as_ref()?;
+        let (w, h) = (rect.width() as f64, rect.height() as f64);
+        let mut mesh = Mesh::default();
+        for m in &d.markers {
+            let Some((x, y, k, t)) = m.place(cam, w, h) else { continue };
+            let s = m.look(k, fog, t);
+            let (x, y) = (rect.min.x + x as f32, rect.min.y + y as f32);
+            let r = s.size.max(1.0) / 2.0;
+            let reach = r * 1.2 + s.stroke_width.max(0.0) + 4.0;
+            if x < rect.min.x - reach || y < rect.min.y - reach || x > rect.max.x + reach || y > rect.max.y + reach {
+                continue;
+            }
+            let outline = render::marker_outline(s.marker, x, y, r);
+            if m.selected {
+                ring(&mut mesh, (x, y), &outline, 1.75, c32(render::SELECTION));
+            }
+            fan(
+                &mut mesh,
+                std::iter::once(pos2(x, y))
+                    .chain(outline.iter().map(|p| pos2(p.0, p.1)))
+                    .chain(outline.first().map(|p| pos2(p.0, p.1)))
+                    .map(Some),
+                c32(s.fill),
+            );
+            if s.stroke_width > 0.0 && s.stroke.a() > 0 {
+                ring(&mut mesh, (x, y), &outline, s.stroke_width / 2.0, c32(s.stroke));
+            }
+        }
+        (!mesh.indices.is_empty()).then_some(mesh)
     }
 
     /// The extruded features standing on the drape in perspective, as one mesh: features far to
@@ -257,6 +298,29 @@ fn fan(mesh: &mut Mesh, pts: impl Iterator<Item = Option<egui::Pos2>>, color: Co
     }
 }
 
+/// Adds a band `half` points either side of `outline` (a polygon seen whole from `centre`) to
+/// `mesh` in one colour, its points moved along the line from the centre: a marker's outline.
+fn ring(mesh: &mut Mesh, centre: (f32, f32), outline: &[(f32, f32)], half: f32, color: Color32) {
+    let n = outline.len() as u32;
+    if n < 3 {
+        return;
+    }
+    let k = mesh.vertices.len() as u32;
+    for &(px, py) in outline {
+        let (dx, dy) = (px - centre.0, py - centre.1);
+        let len = dx.hypot(dy).max(1e-6);
+        let (ux, uy) = (dx / len, dy / len);
+        mesh.colored_vertex(pos2(px - ux * half, py - uy * half), color);
+        mesh.colored_vertex(pos2(px + ux * half, py + uy * half), color);
+    }
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (a, b, c, e) = (k + 2 * i, k + 2 * i + 1, k + 2 * j, k + 2 * j + 1);
+        mesh.add_triangle(a, b, e);
+        mesh.add_triangle(a, e, c);
+    }
+}
+
 /// Whether the bands cover the ground a tilted `w × h` view of `cam` shows (sampled on a grid;
 /// the sky needs no cover).
 fn covers(cam: &Camera, w: f64, h: f64, bands: &[(Band, TextureHandle)]) -> bool {
@@ -338,6 +402,35 @@ mod tests {
         let foot = m.camera.to_screen(rustgis_engine::geom::lonlat_to_merc(Coord::new(10.0, 47.0)), 800.0, 600.0).1 as f32;
         let top = mesh.vertices.iter().map(|v| v.pos.y).fold(f32::MAX, f32::min);
         assert!(top < foot - 20.0, "{top} vs {foot}");
+    }
+
+    #[test]
+    fn point_markers_stand_upright_on_the_drape() {
+        use rustgis_engine::data::{Dataset, Geometry, GeometryType};
+        let ctx = egui::Context::default();
+        let mut m = tilted(70.0);
+        let mut ds = Dataset::new("pts", GeometryType::Point, vec![]);
+        ds.push(Some(Geometry::Point(Coord::new(10.0, 48.0))), vec![]);
+        let id = m.add_dataset(ds);
+        if let Some(l) = m.layer_mut(id) {
+            l.selection = vec![0];
+        }
+        let mut d = TiltDrape::default();
+        assert!(d.prepare(&ctx, &mut m, DrapeKey { rev: 0, sources: 0 }, 0, 800.0, 600.0, 1.0, 0.0));
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        let mesh = d.markers(rect, &m.camera, fog()).expect("the marker stands up");
+        assert!(mesh.is_valid());
+        // At the centre, as tall as it is wide: facing the viewer, not lying on the ground.
+        let (mut lo, mut hi) = (pos2(f32::MAX, f32::MAX), pos2(f32::MIN, f32::MIN));
+        for v in &mesh.vertices {
+            (lo.x, lo.y, hi.x, hi.y) = (lo.x.min(v.pos.x), lo.y.min(v.pos.y), hi.x.max(v.pos.x), hi.y.max(v.pos.y));
+        }
+        let (w, h) = (hi.x - lo.x, hi.y - lo.y);
+        assert!(w > 6.0 && (w - h).abs() < 0.5, "{w} × {h}");
+        assert!(((lo.x + hi.x) / 2.0 - 400.0).abs() < 1.0 && ((lo.y + hi.y) / 2.0 - 300.0).abs() < 1.0);
+        // Behind the camera, it isn't drawn.
+        m.camera.center = rustgis_engine::geom::lonlat_to_merc(Coord::new(10.0, 70.0));
+        assert!(d.markers(rect, &m.camera, fog()).is_none());
     }
 
     #[test]

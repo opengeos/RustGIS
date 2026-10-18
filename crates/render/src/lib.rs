@@ -1031,6 +1031,7 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
     map.label_lock = lock;
     warp.finish(&mut pm);
     extrusions_tilted(map, view, &mut pm);
+    markers_tilted(map, view, &mut pm);
     // A feature drawn in two bands offers its label twice: the nearer band's (offered first) is
     // kept. Tile labels (keyed by their place in a band's list) are told apart by their text and
     // where they land, to a few points.
@@ -1164,6 +1165,169 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
 }
 
 pub use effects::{TiltedWall, clip_near, shadow_shift, tilted_shadow_quads, tilted_walls};
+
+/// Point layers with at most this many features stand their markers up in a tilted view; a
+/// bigger one keeps them drawn on the ground.
+const MAX_UPRIGHT_POINTS: usize = 50_000;
+
+/// How much bigger or smaller than its symbol an upright marker is drawn, at the most, as it
+/// nears or recedes from the camera.
+const UPRIGHT_SCALE: (f64, f64) = (0.25, 2.0);
+
+/// Whether a tilted view of `map` stands `layer`'s point markers up, facing the viewer (as
+/// MapLibre's circles do), rather than drawing them flat on the ground. A masked, swiped or
+/// blended layer, an aggregation or graphics keep theirs on the ground.
+fn stands_up(map: &Map, layer: &rustgis_map::Layer) -> bool {
+    layer.raster.is_none()
+        && layer.geometry_type() == GeometryType::Point
+        && layer.aggregation.is_none()
+        && !layer.graphics
+        && layer.mask.is_none()
+        && layer.blend == rustgis_map::effects::Blend::Normal
+        && map.swipe.is_none_or(|(id, _)| id != layer.id)
+        && layer.dataset.features.len() <= MAX_UPRIGHT_POINTS
+}
+
+/// A point marker standing upright in a tilted view, facing the viewer.
+#[derive(Clone, Debug)]
+pub struct UprightMarker {
+    /// Where it stands (the camera's coordinates).
+    pub at: Coord,
+    /// Its symbol, with the layer's transparency in its colours.
+    pub symbol: Symbol,
+    pub selected: bool,
+}
+
+impl UprightMarker {
+    /// Where it stands in a tilted `w × h` view of `cam` (logical px), how much bigger or
+    /// smaller than its symbol it is drawn there (above or below 1), and how far it has faded
+    /// into the fog (0 to 1); `None` behind the camera or past the view's reach.
+    pub fn place(&self, cam: &Camera, w: f64, h: f64) -> Option<(f64, f64, f64, f64)> {
+        let k = cam.depth_scale(self.at, h).filter(|k| *k * rustgis_map::camera::FAR >= 1.0)?;
+        let (x, y) = cam.try_to_screen(self.at, w, h).filter(|(x, y)| x.is_finite() && y.is_finite())?;
+        // Fog from halfway to the reach, as on the ground.
+        let far = rustgis_map::camera::FAR;
+        let t = ((1.0 / k - far * 0.5) / (far * 0.5)).clamp(0.0, 1.0);
+        Some((x, y, k.clamp(UPRIGHT_SCALE.0, UPRIGHT_SCALE.1), t * t * (3.0 - 2.0 * t)))
+    }
+
+    /// Its symbol drawn `k` times its size, faded `t` of the way into `fog`.
+    pub fn look(&self, k: f64, fog: Rgba, t: f64) -> Symbol {
+        let s = &self.symbol;
+        let fade = |c: Rgba| c.lerp(fog.with_alpha(c.a()), t);
+        Symbol {
+            fill: fade(s.fill),
+            stroke: fade(s.stroke),
+            stroke_width: s.stroke_width * k as f32,
+            size: s.size * k as f32,
+            marker: s.marker,
+        }
+    }
+}
+
+/// The outline of a `marker` of radius `r` centred at (`x`, `y`), as [`draw_marker`] draws it
+/// (a circle as a polygon): for drawing upright markers as meshes. Every outline is seen whole
+/// from its centre, so a fan from the centre fills it.
+pub fn marker_outline(marker: Marker, x: f32, y: f32, r: f32) -> Vec<(f32, f32)> {
+    match marker {
+        Marker::Circle => (0..24)
+            .map(|i| {
+                let a = std::f32::consts::TAU * i as f32 / 24.0;
+                (x + r * a.cos(), y + r * a.sin())
+            })
+            .collect(),
+        Marker::Square => {
+            vec![(x - r * 0.9, y - r * 0.9), (x + r * 0.9, y - r * 0.9), (x + r * 0.9, y + r * 0.9), (x - r * 0.9, y + r * 0.9)]
+        }
+        Marker::Triangle => vec![(x, y - r * 1.1), (x + r, y + r * 0.75), (x - r, y + r * 0.75)],
+        Marker::Diamond => vec![(x, y - r * 1.15), (x + r * 0.9, y), (x, y + r * 1.15), (x - r * 0.9, y)],
+        Marker::Star => (0..10)
+            .map(|i| {
+                let a = std::f32::consts::PI * (i as f32) / 5.0 - std::f32::consts::FRAC_PI_2;
+                let rr = if i % 2 == 0 { r * 1.2 } else { r * 0.5 };
+                (x + rr * a.cos(), y + rr * a.sin())
+            })
+            .collect(),
+    }
+}
+
+/// The point markers a tilted `view` of `map` stands upright ([`stands_up`]), bottom layer
+/// first and each layer's far to near, so nearer markers draw over farther ones. Those on the
+/// ground it shows, grown by `margin` of its size on every side (for a view that moves).
+pub fn upright_markers(map: &mut Map, view: &View, margin: f64) -> Vec<UprightMarker> {
+    if map.projection.is_globe() {
+        return Vec::new();
+    }
+    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    let (flat, key) = (map.flat(), map.projection.code());
+    let cull = view.camera.extent(view.width, view.height).padded(margin.clamp(0.05, 4.0), 0.0);
+    let clip = map.view.clip_distance.map(|d| (view.camera.center_lonlat(), d));
+    let held = map.held_by_group(scale);
+    let group_opacity: std::collections::HashMap<u32, f32> =
+        map.groups.iter().filter(|g| g.transparency > 0.0).flat_map(|g| g.children.iter().map(|c| (*c, g.opacity()))).collect();
+    let upright: std::collections::HashSet<u32> = map.layers.iter().filter(|l| stands_up(map, l)).map(|l| l.id).collect();
+    let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
+    order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
+    let (cam, h) = (view.camera, view.height);
+    let mut out = Vec::new();
+    for li in order {
+        let Some(layer) = map.layers.get_mut(li) else { continue };
+        if !layer.visible || !layer.in_scale_range(scale) || held.contains(&layer.id) || !upright.contains(&layer.id) {
+            continue;
+        }
+        let opacity = layer.opacity() * group_opacity.get(&layer.id).copied().unwrap_or(1.0);
+        let rows = layer.drawn_rows(scale);
+        // Refreshes the projected copy for this projection.
+        layer.projected_in(&flat, &key);
+        let layer: &rustgis_map::Layer = layer;
+        let mut here: Vec<(f64, UprightMarker)> = Vec::new();
+        for (row, g) in layer.projected_cache().iter().enumerate() {
+            if rows.get(row) != Some(&true) {
+                continue;
+            }
+            let pts: &[Coord] = match g {
+                Some(Geometry::Point(c)) => std::slice::from_ref(c),
+                Some(Geometry::MultiPoint(v)) => v,
+                _ => continue,
+            };
+            let lonlat = clip.and_then(|_| layer.dataset.features.get(row).and_then(|f| f.geometry.as_ref()).map(|g| g.extent()));
+            if let (Some((centre, d)), Some(e)) = (clip, lonlat) {
+                let near = Coord::new(centre.x.clamp(e.min_x, e.max_x), centre.y.clamp(e.min_y, e.max_y));
+                if e.is_empty() || rustgis_geom::haversine_m(centre, near) > d {
+                    continue;
+                }
+            }
+            let mut symbol = layer.symbol(row);
+            let see = |c: Rgba| c.with_alpha((f32::from(c.a()) * opacity).round().clamp(0.0, 255.0) as u8);
+            (symbol.fill, symbol.stroke) = (see(symbol.fill), see(symbol.stroke));
+            let selected = layer.selection.contains(&row);
+            for c in pts.iter().filter(|c| c.is_finite() && cull.contains(**c)) {
+                let Some(k) = cam.depth_scale(*c, h) else { continue };
+                here.push((k, UprightMarker { at: *c, symbol, selected }));
+            }
+        }
+        here.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out.extend(here.into_iter().map(|(_, m)| m));
+    }
+    out
+}
+
+/// The point markers of a tilted view, stood up over its ground and extrusions.
+fn markers_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
+    let (_, fog) = tilt_sky(map);
+    let ppp = (f64::from(pm.width()) / view.width.max(1e-9)) as f32;
+    let (pw, ph) = (pm.width() as f32, pm.height() as f32);
+    for m in upright_markers(map, view, 0.0) {
+        let Some((x, y, k, t)) = m.place(&view.camera, view.width, view.height) else { continue };
+        let s = m.look(k, fog, t);
+        let (x, y) = (x as f32 * ppp, y as f32 * ppp);
+        let reach = (s.size.max(1.0) * 0.6 + s.stroke_width.max(0.0) + 4.0) * ppp;
+        if x < -reach || y < -reach || x > pw + reach || y > ph + reach {
+            continue;
+        }
+        draw_marker(pm, x, y, &s, 1.0, m.selected.then_some(SELECTION), ppp);
+    }
+}
 
 /// The extruded layers of a tilted view, stood up in perspective over its ground, bottom layer
 /// first (a drape of the moving view shows them flat).
@@ -1540,6 +1704,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     let held = map.held_by_group(scale);
     let group_opacity: std::collections::HashMap<u32, f32> =
         map.groups.iter().filter(|g| g.transparency > 0.0).flat_map(|g| g.children.iter().map(|c| (*c, g.opacity()))).collect();
+    // The point layers whose markers stand up over a tilted view (`upright_markers`) rather than
+    // lie in its bands.
+    let upright: std::collections::HashSet<u32> = match labels_to {
+        Labels::Tilted(..) | Labels::Shared => map.layers.iter().filter(|l| stands_up(map, l)).map(|l| l.id).collect(),
+        _ => Default::default(),
+    };
     for li in order {
         let Some(layer) = map.layers.get_mut(li) else { continue };
         if !layer.visible || !layer.in_scale_range(scale) || held.contains(&layer.id) {
@@ -1638,6 +1808,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             } else if extrude.is_some() && matches!(labels_to, Labels::Tilted(..)) {
                 // Stood up in perspective over the tilted view (`render_tilted`); its labels still
                 // come from here.
+            } else if upright.contains(&layer.id) {
+                // Stood up facing the viewer over the tilted view (`upright_markers`); its labels
+                // still come from here.
             } else if let Some(x) = extrude.filter(|_| !matches!(labels_to, Labels::Shared)) {
                 let px_per_m = view.pixels_per_point / map_ground_res(view, &flat);
                 effects::extrude(dest, &ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r));
@@ -1677,7 +1850,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         if !direct {
             composite(&mut pm, &target);
         }
-        for row in selection {
+        // An upright marker shows its own selection.
+        for row in selection.iter().filter(|_| !upright.contains(&layer.id)) {
             if let Some(Some(g)) = geoms.get(*row)
                 && rows.get(*row) == Some(&true)
             {
@@ -2992,6 +3166,59 @@ mod tests {
         let flat = render(&mut m, &View { camera: Camera { pitch: 0.0, ..camera }, ..view }).unwrap();
         let nan = render(&mut m, &View { camera: Camera { pitch: f64::NAN, ..camera }, ..view }).unwrap();
         assert_eq!(nan.pixmap.data(), flat.pixmap.data());
+    }
+
+    #[test]
+    fn point_markers_stand_upright_in_a_tilted_view() {
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("pts", GeometryType::Point, vec![]);
+        // At the centre, and 150 px ahead of it at its scale.
+        let ahead = 150.0 * 1000.0 / 111_319.49;
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+        d.push(Some(Geometry::Point(Coord::new(0.0, ahead))), vec![]);
+        let id = m.add_dataset(d);
+        let red = Rgba::rgb(255, 0, 0);
+        if let Some(l) = m.layer_mut(id) {
+            l.renderer =
+                rustgis_map::Renderer::Single(Symbol { fill: red, stroke: red, stroke_width: 0.0, size: 20.0, marker: Marker::Circle });
+            l.selection = vec![1];
+        }
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 1000.0, bearing: 30.0, pitch: 70.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let r = render(&mut m, &view).unwrap();
+        // The red pixels' box in the rows `ys` (logical px).
+        let bbox = |ys: std::ops::Range<u32>| {
+            let (mut x0, mut x1, mut y0, mut y1) = (u32::MAX, 0, u32::MAX, 0);
+            for (k, p) in r.pixmap.pixels().iter().enumerate() {
+                let (x, y) = (k as u32 % 400, k as u32 / 400);
+                if ys.contains(&y) && p.red() > 200 && p.green() < 60 && p.blue() < 60 {
+                    (x0, x1, y0, y1) = (x0.min(x), x1.max(x), y0.min(y), y1.max(y));
+                }
+            }
+            (x1.saturating_sub(x0) + 1, y1.saturating_sub(y0) + 1)
+        };
+        // The marker at the centre faces the viewer: as tall as it is wide, its symbol's size,
+        // where on the ground it would be squashed to a third as tall.
+        let (w, h) = bbox(135..166);
+        assert!((18..=22).contains(&w) && w.abs_diff(h) <= 1, "{w} × {h}");
+        // The one ahead is farther: smaller, still round, and selected (the selection colour
+        // rings it).
+        let (_, y) = camera.to_screen(lonlat_to_merc(Coord::new(0.0, ahead)), 400.0, 300.0);
+        let y = y.round() as u32;
+        let (fw, fh) = bbox(y.saturating_sub(12)..y + 12);
+        assert!(fw < w && fw > 4 && fw.abs_diff(fh) <= 1, "{fw} × {fh}");
+        let ring = r.pixmap.pixels().iter().any(|p| p.red() < 40 && p.green() > 200 && p.blue() > 230);
+        assert!(ring, "the selected marker is ringed");
+        // Both stand in the drape's list, far first.
+        let up = upright_markers(&mut m, &view, 0.3);
+        assert_eq!(up.len(), 2);
+        assert!(up.first().is_some_and(|u| u.selected) && up.get(1).is_some_and(|u| !u.selected));
+        // A point layer seen flat draws as before, and an aggregation stays on the ground.
+        if let Some(l) = m.layer_mut(id) {
+            l.aggregation = Some(rustgis_map::effects::Aggregation { hexagons: true, size: 20.0 });
+        }
+        assert!(upright_markers(&mut m, &view, 0.3).is_empty());
     }
 
     #[test]

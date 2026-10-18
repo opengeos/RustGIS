@@ -25,10 +25,12 @@ view faces, in degrees clockwise from north) and the pitch (the tilt from lookin
 files, and exported maps are drawn turned and tilted. A tilted map keeps the scale at the centre
 of the view: nearer ground is larger, farther ground smaller and drawn coarser, fading into fog
 and, past about 72 degrees, a sky above the horizon. Labels stay upright, and those too far away
-to read are left out. Extruded layers (Style › Extrusion) stand up in perspective on a tilted
+to read are left out. Point markers stand upright, facing you, as MapLibre's circles do, smaller
+with distance (aggregated, masked or blended point layers, and layers of more than 50,000 points,
+keep their markers on the ground). Extruded layers (Style › Extrusion) stand up in perspective on a tilted
 map, as in MapLibre: walls lit by the way they face and darker toward their foot, roofs at their
 height, with the labels of extruded features on their roofs. While a tilted map moves, the
-picture drawn last is laid over the ground and the extrusions are moved with it, and the map is
+picture drawn last is laid over the ground and the extrusions and markers are moved with it, and the map is
 drawn again once it settles. `map.setBearing` sets the bearing (`{"bearing": 90}`
 puts east at the top; `{"by": 15}` turns it further), `map.setPitch` the pitch (`{"pitch": 60}`,
 or `{"by": 10}`), `map.resetNorth` faces north and looks straight down, and **Go To XY** takes a
