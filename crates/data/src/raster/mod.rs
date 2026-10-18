@@ -483,6 +483,60 @@ fn rotate(r: &Raster, degrees: f64) -> Result<Raster> {
     Raster::new(r.name.clone(), ow, oh, bands, transform, r.crs, None, r.color.clone(), r.data_type.clone())
 }
 
+/// A `w`×`h` image placed by a rotated or skewed `affine` (GDAL's order: x, x per column, x per
+/// row, y, y per column, y per row), resampled (nearest pixel) to the north-up grid of square
+/// pixels over its bounding box: pixels of the same area, coarser if that would hold more than
+/// `max` samples. Outside the image is NaN (transparent). Returns the bands, their size and grid.
+fn north_up(bands: Vec<Vec<f32>>, w: u32, h: u32, affine: [f64; 6], max: usize) -> Result<(Vec<Vec<f32>>, u32, u32, GeoTransform)> {
+    let [x0, xc, xr, y0, yc, yr] = affine;
+    let det = xc * yr - xr * yc;
+    if !affine.iter().all(|v| v.is_finite()) || !det.is_normal() {
+        return Err(DataError::Format("the raster has no usable georeferencing".into()));
+    }
+    let (fw, fh) = (f64::from(w), f64::from(h));
+    let corners = [(0.0, 0.0), (fw, 0.0), (0.0, fh), (fw, fh)].map(|(c, r)| (x0 + c * xc + r * xr, y0 + c * yc + r * yr));
+    let (min_x, max_x) = corners.iter().fold((f64::MAX, f64::MIN), |(a, b), (x, _)| (a.min(*x), b.max(*x)));
+    let (min_y, max_y) = corners.iter().fold((f64::MAX, f64::MIN), |(a, b), (_, y)| (a.min(*y), b.max(*y)));
+    let nbands = bands.len().max(1);
+    let mut cell = det.abs().sqrt();
+    let size = |cell: f64| (((max_x - min_x) / cell).ceil().max(1.0), ((max_y - min_y) / cell).ceil().max(1.0));
+    let (mut ow, mut oh) = size(cell);
+    // A strong skew spreads the image over a much larger box: coarser pixels keep it in bounds.
+    for _ in 0..64 {
+        let n = ow * oh * nbands as f64;
+        if n <= max as f64 && ow <= f64::from(u32::MAX) && oh <= f64::from(u32::MAX) {
+            break;
+        }
+        cell *= (n / max.max(1) as f64).sqrt().max(1.01);
+        (ow, oh) = size(cell);
+    }
+    if ow * oh * nbands as f64 > max as f64 {
+        return Err(DataError::Format(format!("{w} × {h} pixels turned is too large to open")));
+    }
+    let (ow, oh) = (ow as u32, oh as u32);
+    let n = ow as usize * oh as usize;
+    let mut out: Vec<Vec<f32>> = vec![vec![f32::NAN; n]; bands.len()];
+    for row in 0..oh {
+        let y = max_y - (f64::from(row) + 0.5) * cell - y0;
+        for col in 0..ow {
+            let x = min_x + (f64::from(col) + 0.5) * cell - x0;
+            // The output pixel's centre, back in the image's columns and rows.
+            let (c, r) = (((yr * x - xr * y) / det).floor(), ((xc * y - yc * x) / det).floor());
+            if !(0.0..fw).contains(&c) || !(0.0..fh).contains(&r) {
+                continue;
+            }
+            let src = r as usize * w as usize + c as usize;
+            let dst = row as usize * ow as usize + col as usize;
+            for (o, b) in out.iter_mut().zip(&bands) {
+                if let (Some(o), Some(v)) = (o.get_mut(dst), b.get(src)) {
+                    *o = *v;
+                }
+            }
+        }
+    }
+    Ok((out, ow, oh, GeoTransform { origin_x: min_x, origin_y: max_y, pixel_width: cell, pixel_height: -cell }))
+}
+
 fn from_image_unrotated(name: &str, bytes: &[u8], bbox: [f64; 4]) -> Result<Raster> {
     let [w, s, e, n] = bbox;
     if !(w < e && s < n) {
