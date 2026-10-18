@@ -789,7 +789,8 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     let tool = app.session.tool;
 
     // A map tool aims with a crosshair, only over the map: the ribbon and panes keep their cursor.
-    if hover.is_some() && tool != Tool::Explore && app.map.sketch_len() == 0 {
+    // A finished measurement keeps its points on show but waits for a new one.
+    if hover.is_some() && tool != Tool::Explore && (app.map.sketch_len() == 0 || app.map.sketch_done) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     // A place for Directions waits for a click.
