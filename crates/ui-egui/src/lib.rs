@@ -90,7 +90,7 @@ pub type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
 pub struct Start {
     /// Begin with an empty project (`Some(true)`) or the sample (`Some(false)`).
     pub blank: Option<bool>,
-    /// A projection code: `EPSG:3010`, a preset id, `mercator` or `globe`.
+    /// A projection code: `EPSG:3010`, `ESRI:102033`, a preset id, `mercator` or `globe`.
     pub projection: Option<String>,
     /// The extent to open on, as `minLon,minLat,maxLon,maxLat`.
     pub extent: Option<String>,
@@ -395,7 +395,7 @@ pub struct UiState {
     ///
     /// [`Projection`]: rustgis_engine::map::Projection
     pub start_projection: String,
-    /// The EPSG code typed in Settings › Start-up › Projection.
+    /// The EPSG or ESRI code typed in Settings › Start-up › Projection.
     pub start_projection_input: String,
     /// Start-up preference: the extent the map opens on, `[minLon, minLat, maxLon, maxLat]`;
     /// `None` for the full extent.

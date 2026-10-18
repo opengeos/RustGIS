@@ -1,7 +1,7 @@
 //! Map projections: how the flat map lays the Earth out (the globe is in [`crate::globe`]).
 //!
 //! A map is drawn in Web Mercator by default, or in any projected coordinate system: a preset
-//! (world and polar projections, regional equal-area grids) or an EPSG code. The camera then
+//! (world and polar projections, regional equal-area grids), an EPSG code or an ESRI code. The camera then
 //! works in that system's units, so panning, zooming and hit testing are the same for all of
 //! them; only conversions between longitude/latitude and map coordinates go through here.
 
@@ -40,7 +40,8 @@ pub fn local_views_supported() -> bool {
     *SUPPORTED.get_or_init(|| Projector::new("local:0,0").is_ok())
 }
 
-/// The PROJ definition and label of a projection code: a preset id or `EPSG:<code>`.
+/// The PROJ definition and label of a projection code: a preset id, `EPSG:<code>`, `ESRI:<code>`
+/// or `local:lon,lat`.
 pub fn lookup(code: &str) -> Result<(String, String), String> {
     let code = code.trim();
     // `local:lon,lat`: an azimuthal equidistant projection centred on a point (a local scene).
@@ -59,6 +60,17 @@ pub fn lookup(code: &str) -> Result<(String, String), String> {
     }
     // `3035`, `EPSG:3035` or `epsg 3035`: an optional prefix, then only digits.
     let lower = code.to_ascii_lowercase();
+    // `ESRI:102033`: one of Esri's projected coordinate systems, from a table checked against PROJ.
+    if let Some(rest) = lower.strip_prefix("esri") {
+        let digits = rest.trim_start_matches([':', ' ']);
+        let unknown = || format!("unknown coordinate system ESRI:{}", digits.trim_start_matches('0'));
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(unknown());
+        }
+        let n = digits.parse::<u32>().map_err(|_| unknown())?;
+        let def = rustgis_data::raster::crs::esri_proj4(n).ok_or_else(unknown)?;
+        return Ok((def.to_string(), format!("ESRI:{n}")));
+    }
     let digits = lower.strip_prefix("epsg").map(|r| r.trim_start_matches([':', ' '])).unwrap_or(&lower);
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return Err(format!("unknown projection '{code}'"));
@@ -264,7 +276,13 @@ impl Projector {
             let lon0 = angle(&def, "lon_0").unwrap_or(0.0) + pm;
             let lat0 = angle(&def, "lat_0").unwrap_or(0.0);
             let domain = Domain::of(preset, &def, (lon0, lat0), pm);
-            let engine = Engine::World(crate::world::World { kind, lon0 });
+            // A sphere's radius when the definition gives one (ESRI's Sphere_* systems), else WGS 84's.
+            let radius = def
+                .split_whitespace()
+                .find_map(|t| t.strip_prefix("+R=")?.parse::<f64>().ok())
+                .filter(|r| r.is_finite() && *r > 0.0)
+                .unwrap_or(rustgis_geom::MERCATOR_R);
+            let engine = Engine::World(crate::world::World { kind, lon0, radius });
             return Ok(Projector { engine, to_meter: 1.0, domain, lon0, edge: std::sync::OnceLock::new() });
         }
         let native = proj4rs::Proj::from_proj_string(&def).map_err(|e| match e {
@@ -530,6 +548,46 @@ mod tests {
         }
     }
 
+    /// ESRI codes (opengeos/RustGIS#213), against pyproj 3.7.2 (PROJ 9.7.1) given the table's
+    /// definitions.
+    #[test]
+    fn esri_codes() {
+        let check = |code: &str, (lon, lat): (f64, f64), (x, y): (f64, f64), tolerance: f64| {
+            let p = Projector::new(code).unwrap_or_else(|e| panic!("{code}: {e}"));
+            let m = p.forward(Coord::new(lon, lat)).unwrap_or_else(|| panic!("{code}"));
+            assert!((m.x - x).abs() < tolerance && (m.y - y).abs() < tolerance, "{code}: {m:?}, want ({x}, {y})");
+            let back = p.inverse(m).unwrap_or_else(|| panic!("{code}"));
+            assert!((back.x - lon).abs() < 1e-6 && (back.y - lat).abs() < 1e-6, "{code}: {back:?}");
+        };
+        // South America Albers Equal Area Conic, with its datum shift (South American 1969: the
+        // first Helmert PROJ lists, 7 m from the regional one PROJ picks for this point).
+        check("ESRI:102033", (-60.0, -15.0), (46.993, 1_977_375.429), 0.01);
+        // World Robinson, and Sphere Robinson on its own 6371 km sphere (+R), computed here.
+        check("ESRI:54030", (20.0, 30.0), (1_813_955.515, 3_208_557.612), 1.0);
+        check("esri:53030", (20.0, 30.0), (1_811_925.737, 3_204_967.304), 1.0);
+        // A state plane in US survey feet (deprecated, but what ArcGIS writes): Manhattan.
+        check("ESRI 102718", (-73.95, 40.75), (998_103.643, 212_525.840), 0.01);
+        assert_eq!(lookup(" esri:102033 ").map(|(_, label)| label), Ok("ESRI:102033".into()));
+        assert_eq!(crate::Projection::from_code("esri:102033"), Ok(crate::Projection::Custom("ESRI:102033".into())));
+        assert_eq!(crate::Projection::from_code("ESRI:102033").map(|p| p.label()), Ok("ESRI:102033".into()));
+        // ESRI's Web Mercator codes are the default map.
+        for web in ["ESRI:102100", "esri:102113"] {
+            assert_eq!(crate::Projection::from_code(web), Ok(crate::Projection::WebMercator), "{web}");
+        }
+        // Not in the table (World Miller is kilometres off in proj4rs), not a number, too big.
+        for bad in ["ESRI:54003", "ESRI:", "ESRI:abc", "ESRI:-1", "ESRI:99999999999", "ESRI:1e5"] {
+            let e = lookup(bad).unwrap_err();
+            assert!(e.contains("unknown coordinate system ESRI"), "{bad}: {e}");
+        }
+        // Every code in the table draws (local azimuthal ones only where aeqd is built in).
+        for n in rustgis_data::raster::crs::esri_codes() {
+            let code = format!("ESRI:{n}");
+            let aeqd = lookup(&code).is_ok_and(|(def, _)| def.contains("+proj=aeqd"));
+            let p = Projector::new(&code);
+            assert!(p.is_ok() || (aeqd && !local_views_supported()), "{code}: {:?}", p.err());
+        }
+    }
+
     #[test]
     fn presets_and_epsg_codes() {
         for (id, _, _) in PRESETS {
@@ -678,17 +736,18 @@ mod tests {
         // For every EPSG code drawn as a whole-world map, the map jumps sides at `central_meridian() + 180°`:
         // just west of it draws on the east, just east of it on the west.
         let mut checked = 0;
-        for n in 1024..=32767u32 {
+        let epsg = (1024..=32767u32).map(|n| format!("EPSG:{n}"));
+        for n in epsg.chain(rustgis_data::raster::crs::esri_codes().map(|n| format!("ESRI:{n}"))) {
             // Codes with a prime meridian other than Greenwich (+pm) and a datum shift included.
-            let Ok(p) = Projector::new(&format!("EPSG:{n}")) else { continue };
+            let Ok(p) = Projector::new(&n) else { continue };
             let Some(lon0) = p.central_meridian() else { continue };
             let x = |lon: f64| p.forward(Coord::new(lon, 0.0)).map(|m| m.x);
             let (Some(west), Some(centre), Some(east)) = (x(lon0 + 179.5), x(lon0), x(lon0 + 180.5)) else { continue };
-            assert!(west > centre && centre > east, "EPSG:{n}: lon_0 {lon0}: {west} / {centre} / {east}");
+            assert!(west > centre && centre > east, "{n}: lon_0 {lon0}: {west} / {centre} / {east}");
             // With a datum shift the edge is found by search, which must not fall back to the
             // nominal edge (no margin) for any of them.
             if let Engine::Proj { .. } = p.engine {
-                assert!(p.find_edge(p.lon0 + 180.0).is_some(), "EPSG:{n}: the edge search fell back");
+                assert!(p.find_edge(p.lon0 + 180.0).is_some(), "{n}: the edge search fell back");
             }
             checked += 1;
         }

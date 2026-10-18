@@ -2998,12 +2998,12 @@ fn start_projection_menu(app: &mut RustGisApp, ui: &mut Ui) {
             }
         }
         ui.separator();
-        ui.label(tl!("EPSG code"));
+        ui.label(tl!("EPSG or ESRI code"));
         ui.horizontal(|ui| {
             let edit = ui.add(egui::TextEdit::singleline(&mut app.ui.start_projection_input).hint_text("3010").desired_width(90.0));
             let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if ui.button(tl!("Use")).clicked() || enter {
-                let code = format!("EPSG:{}", app.ui.start_projection_input.trim().trim_start_matches("EPSG:").trim_start_matches("epsg:"));
+                let code = crate::dialogs::typed_crs(&app.ui.start_projection_input);
                 match app.run("ui.startup", json!({"projection": code})) {
                     Ok(_) => {
                         app.ui.start_projection_input.clear();
@@ -3014,7 +3014,7 @@ fn start_projection_menu(app: &mut RustGisApp, ui: &mut Ui) {
             }
         });
         if let Ok(rustgis_engine::map::Projection::Custom(c)) = rustgis_engine::map::Projection::from_code(&current)
-            && c.starts_with("EPSG:")
+            && (c.starts_with("EPSG:") || c.starts_with("ESRI:"))
         {
             ui.add(egui::Button::selectable(true, c.as_str()));
         }

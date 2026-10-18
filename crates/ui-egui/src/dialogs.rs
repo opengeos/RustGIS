@@ -1126,10 +1126,10 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
             });
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label(tl!("EPSG code"));
+                ui.label(tl!("EPSG or ESRI code"));
                 let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("3035").desired_width(110.0));
                 if r.changed() && !app.dialogs.a.trim().is_empty() {
-                    app.dialogs.text = format!("epsg:{}", app.dialogs.a.trim());
+                    app.dialogs.text = typed_crs(&app.dialogs.a);
                 }
             });
         });
@@ -1163,6 +1163,16 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
     close
 }
 
+/// A typed coordinate system code: `ESRI:102033` as it is, a bare number as an EPSG code.
+pub(crate) fn typed_crs(text: &str) -> String {
+    let text = text.trim();
+    if text.to_ascii_lowercase().starts_with("esri") {
+        text.to_string()
+    } else {
+        format!("EPSG:{}", text.trim_start_matches("EPSG:").trim_start_matches("epsg:"))
+    }
+}
+
 /// What a coordinate system is: its kind, area of use, definition and epsg.io page.
 fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
     use rustgis_engine::map::projection::{Domain, Projector, lookup};
@@ -1178,7 +1188,8 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
     if code == current {
         ui.label(egui::RichText::new(tl!("In use")).size(11.0).color(t.accent_text));
     }
-    let epsg = code.to_ascii_lowercase().strip_prefix("epsg:").map(str::to_string);
+    let lower = code.to_ascii_lowercase();
+    let epsg = lower.strip_prefix("epsg:").or_else(|| lower.strip_prefix("esri:")).map(str::to_string);
     let (kind, page): (&str, Option<String>) = match code.as_str() {
         "mercator" => ("World, conformal: the usual web map; areas grow towards the poles.", Some("3857".into())),
         "globe" => ("A 3D globe seen from space.", None),
@@ -1228,8 +1239,9 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
     }
     if let Some(n) = page {
         ui.add_space(4.0);
-        // Five-digit codes from 53000 up are ESRI's world projections.
-        let prefix = if n.len() == 5 && n.starts_with('5') { "esri" } else { "epsg" }.to_ascii_uppercase();
+        // ESRI codes, and the five-digit codes from 53000 up the presets link to, are Esri's.
+        let esri = lower.starts_with("esri:") || (n.len() == 5 && n.starts_with('5'));
+        let prefix = if esri { "ESRI" } else { "EPSG" };
         let text = crate::i18n::fmt("Open {code} on epsg.io", &[("code", &format!("{prefix}:{n}"))]);
         // In the browser build the link must not replace the app (and the map) in its tab.
         ui.add(egui::Hyperlink::from_label_and_url(text, format!("https://epsg.io/{n}")).open_in_new_tab(true));

@@ -24,7 +24,8 @@ pub enum Projection {
     WebMercator,
     /// A 3D globe.
     Globe,
-    /// Another flat projection: a preset id (see [`crate::projection::PRESETS`]) or `EPSG:<code>`.
+    /// Another flat projection: a preset id (see [`crate::projection::PRESETS`]), `EPSG:<code>`,
+    /// `ESRI:<code>` or `local:lon,lat`.
     Custom(String),
 }
 
@@ -50,11 +51,13 @@ impl Projection {
         matches!(self, Projection::Globe)
     }
 
-    /// A projection by code: `mercator`, `globe`, a preset id or name, or an EPSG code (which
-    /// must name a projected coordinate system the map can draw).
+    /// A projection by code: `mercator`, `globe`, a preset id or name, or an EPSG or ESRI code
+    /// (which must name a projected coordinate system the map can draw).
     pub fn from_code(s: &str) -> Result<Projection, String> {
         match s.trim().to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
-            "mercator" | "webmercator" | "2d" | "map" | "epsg:3857" | "3857" | "epsg:900913" => return Ok(Projection::WebMercator),
+            "mercator" | "webmercator" | "2d" | "map" | "epsg:3857" | "3857" | "epsg:900913" | "esri:102100" | "esri:102113" => {
+                return Ok(Projection::WebMercator);
+            }
             "globe" | "3d" | "scene" | "globalscene" => return Ok(Projection::Globe),
             _ => {}
         }
@@ -66,12 +69,15 @@ impl Projection {
         if s.starts_with("local:") {
             return Ok(Projection::Custom(s.to_string()));
         }
-        // Canonical form: the preset id, or EPSG:<n>.
+        // Canonical form: the preset id, EPSG:<n> or ESRI:<n>.
         let canonical = crate::projection::PRESETS
             .iter()
             .find(|(id, label, _)| id.eq_ignore_ascii_case(s) || label.eq_ignore_ascii_case(s))
             .map(|(id, _, _)| id.to_string())
-            .unwrap_or_else(|| format!("EPSG:{}", s.trim_start_matches(|c: char| !c.is_ascii_digit())));
+            .unwrap_or_else(|| {
+                let authority = if s.to_ascii_lowercase().starts_with("esri") { "ESRI" } else { "EPSG" };
+                format!("{authority}:{}", s.trim_start_matches(|c: char| !c.is_ascii_digit()))
+            });
         Ok(Projection::Custom(canonical))
     }
 }
