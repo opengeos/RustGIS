@@ -954,7 +954,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
     // faces north and looks straight down).
     let mut camera = view.camera;
     camera.bearing = rustgis_map::camera::normalize_bearing(camera.bearing);
-    camera.pitch = if camera.pitch.is_finite() { camera.pitch.clamp(0.0, rustgis_map::camera::MAX_PITCH) } else { 0.0 };
+    camera.pitch = rustgis_map::camera::normalize_pitch(camera.pitch);
     if !map.projection.is_globe() {
         let view = View { camera, ..*view };
         if camera.pitch != 0.0 {

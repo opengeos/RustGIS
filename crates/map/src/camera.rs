@@ -10,6 +10,8 @@ pub const MAX_RES: f64 = 160_000.0;
 
 /// The steepest pitch (degrees from looking straight down), as MapLibre allows.
 pub const MAX_PITCH: f64 = 85.0;
+/// Pitches below this (degrees) look straight down.
+const MIN_PITCH: f64 = 1e-6;
 /// The tangent of half the vertical field of view: MapLibre's 36.87°. The horizon comes into
 /// view above about 71.6° of pitch.
 const TAN_HALF_FOV: f64 = 1.0 / 3.0;
@@ -50,7 +52,9 @@ impl Camera {
 
     /// The perspective of a view `h` px tall, `None` when it looks straight down.
     fn tilt(&self, h: f64) -> Option<Tilt> {
-        if self.pitch == 0.0 || !self.pitch.is_finite() || !(h.is_finite() && h > 0.0) {
+        // A pitch too small to see (a subnormal one would overflow the band maths) looks
+        // straight down.
+        if self.pitch < MIN_PITCH || !self.pitch.is_finite() || !(h.is_finite() && h > 0.0) {
             return None;
         }
         let p = self.pitch.clamp(0.0, MAX_PITCH).to_radians();
@@ -271,7 +275,7 @@ impl Camera {
             self.res = 30_000.0;
         }
         self.bearing = normalize_bearing(self.bearing);
-        self.pitch = if self.pitch.is_finite() { self.pitch.clamp(0.0, MAX_PITCH) } else { 0.0 };
+        self.pitch = normalize_pitch(self.pitch);
         self.res = self.res.clamp(MIN_RES, MAX_RES);
         let lim = std::f64::consts::PI * MERCATOR_R;
         if !self.center.is_finite() {
@@ -486,6 +490,12 @@ pub struct Band {
     pub depth: (f64, f64),
 }
 
+/// A pitch within 0 to [`MAX_PITCH`]; one too small to see, or no number, looks straight down
+/// (0).
+pub fn normalize_pitch(degrees: f64) -> f64 {
+    if degrees.is_finite() && degrees >= MIN_PITCH { degrees.min(MAX_PITCH) } else { 0.0 }
+}
+
 /// A bearing in (-180, 180]; a non-finite one is north (0).
 pub fn normalize_bearing(degrees: f64) -> f64 {
     if !degrees.is_finite() {
@@ -592,6 +602,12 @@ mod tests {
         assert_eq!(c.pitch, MAX_PITCH);
         c.set_pitch(f64::NAN);
         assert_eq!(c.pitch, 0.0);
+        // A pitch too small to see looks straight down, even set directly on the camera.
+        c.set_pitch(1e-320);
+        assert_eq!(c.pitch, 0.0);
+        let tiny = Camera { pitch: 1e-320, ..c };
+        assert_eq!(tiny.tilt_bands(w, h).len(), 1);
+        assert!(tiny.tilt_bands(w, h).iter().all(|b| b.camera.extent(b.width, b.height).width().is_finite()));
         let flat = Camera::new(Coord::new(0.0, 0.0), 10.0);
         assert_eq!(flat.to_screen(Coord::new(100.0, 50.0), w, h), (410.0, 295.0));
     }
