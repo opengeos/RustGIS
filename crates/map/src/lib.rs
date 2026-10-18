@@ -25,7 +25,7 @@ pub use camera::Camera;
 pub use color::{Ramp, RampGroup, Rgba};
 pub use globe::{Globe, Projection};
 pub use raster::{RasterDefaults, RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
-pub use symbology::{ClassMethod, LabelPlacement, Labeling, Marker, Renderer, Symbol};
+pub use symbology::{ClassMethod, LabelPlacement, Labeling, LineCap, LineJoin, LineStroke, Marker, Renderer, Symbol};
 pub use tiles::{TileKind, TileLayer};
 
 use rustgis_data::{Dataset, Geometry, GeometryType};
@@ -132,6 +132,10 @@ pub struct Layer {
     /// Polygons drawn extruded.
     #[serde(default)]
     pub extrusion: Option<effects::Extrusion>,
+    /// A line layer's stacked strokes, drawn bottom first in place of its single stroke (none:
+    /// the renderer's stroke alone).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub line_strokes: Vec<symbology::LineStroke>,
     /// Layers with a higher priority draw above lower ones, whatever their order (the scene's
     /// depth priority).
     #[serde(default)]
@@ -195,6 +199,7 @@ impl Layer {
             display_filters: Vec::new(),
             aggregation: None,
             extrusion: None,
+            line_strokes: Vec::new(),
             priority: 0,
             design: design::Design::default(),
             raster: None,

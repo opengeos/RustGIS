@@ -297,6 +297,61 @@ fn editing_features_and_fields() {
 }
 
 #[test]
+fn line_strokes_stack_and_survive_save_and_undo() {
+    use rustgis_map::{LineCap, LineJoin, LineStroke, Rgba};
+    let mut s = world();
+    let depth = s.undo_depth();
+    // A black casing under an orange core, both shifted 8.5 pt right (#478).
+    let strokes = json!([
+        {"color": "#000000", "width": 11.5, "offset": 8.5, "cap": "round", "join": "round"},
+        {"color": "#FF8C00", "width": 7, "offset": 8.5, "cap": "flat", "join": "miter"},
+        {"offset": -2}
+    ]);
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": strokes})).unwrap();
+    let want = vec![
+        LineStroke { color: Some(Rgba::rgb(0, 0, 0)), width: Some(11.5), offset: 8.5, cap: LineCap::Round, join: LineJoin::Round },
+        LineStroke { color: Some(Rgba::rgb(0xFF, 0x8C, 0)), width: Some(7.0), offset: 8.5, cap: LineCap::Butt, join: LineJoin::Miter },
+        LineStroke { offset: -2.0, ..LineStroke::default() },
+    ];
+    assert_eq!(s.map().layer_by_name("Rivers").unwrap().line_strokes, want);
+    assert_eq!(s.undo_depth(), depth + 1);
+    // Kept in the project file, and drawn in an export.
+    let dir = std::env::temp_dir().join(format!("rustgis-strokes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("strokes.rgis");
+    s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!(t.map().layer_by_name("Rivers").unwrap().line_strokes, want);
+    let png = dir.join("map.png");
+    t.run("share.exportMap", &json!({"path": png.display().to_string(), "width": 320, "height": 200})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    // Out-of-range numbers are brought into range; junk is refused and changes nothing.
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"width": 1e9, "offset": -1e9}]})).unwrap();
+    let st = s.map().layer_by_name("Rivers").unwrap().line_strokes.clone();
+    assert_eq!((st[0].width, st[0].offset), (Some(50.0), -100.0));
+    let depth = s.undo_depth();
+    for bad in [
+        json!({"layer": "Rivers"}),
+        json!({"layer": "Rivers", "strokes": [{"cap": "pointy"}]}),
+        json!({"layer": "Rivers", "strokes": [{"join": "zigzag"}]}),
+        json!({"layer": "Rivers", "strokes": [{"color": "orange"}]}),
+        json!({"layer": "Rivers", "strokes": [{"width": "wide"}]}),
+        json!({"layer": "Rivers", "strokes": [7]}),
+        json!({"layer": "Rivers", "strokes": vec![json!({}); 17]}),
+        json!({"layer": "Cities", "strokes": []}),
+    ] {
+        assert!(s.run("layer.lineStrokes", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.undo_depth(), depth);
+    // [] goes back to the single stroke; undo brings the stack back.
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": []})).unwrap();
+    assert!(s.map().layer_by_name("Rivers").unwrap().line_strokes.is_empty());
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.map().layer_by_name("Rivers").unwrap().line_strokes.len(), 1);
+}
+
+#[test]
 fn project_save_and_open_roundtrip() {
     let mut s = world();
     let dir = std::env::temp_dir().join(format!("rustgis-test-{}", std::process::id()));
