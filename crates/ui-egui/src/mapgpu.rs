@@ -189,8 +189,9 @@ impl BackdropUniforms {
     }
 }
 
-/// The scene's depth buffer, for the extrusions.
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// The scene's depth buffer, for the extrusions, and its stencil, so their shadows darken each
+/// pixel once however their pieces overlap.
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 
 /// Premultiplied-alpha blending, the same arithmetic tiny-skia composites with.
 const PREMULTIPLIED_BLEND: wgpu::BlendState = wgpu::BlendState {
@@ -372,6 +373,17 @@ impl GpuMapRenderer {
             })
         };
         let flat = depth(false, wgpu::CompareFunction::Always);
+        // A shadow darkens a pixel only while its stencil is still clear, and marks it.
+        let once = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::IncrementClamp,
+        };
+        let shadows = flat.clone().map(|d| wgpu::DepthStencilState {
+            stencil: wgpu::StencilState { front: once, back: once, read_mask: 0xff, write_mask: 0xff },
+            ..d
+        });
         let mesh_pipeline =
             pipeline("mapgpu_mesh", "vs_mesh", "fs_mesh", &mesh_buffers, &[&cmd_layout], scene_format, samples, flat.clone());
         let point_pipeline =
@@ -380,7 +392,7 @@ impl GpuMapRenderer {
         let backdrop_pipeline =
             pipeline("mapgpu_backdrop", "vs_backdrop", "fs_backdrop", &[], &[&backdrop_layout], scene_format, samples, flat.clone());
         let shadow_pipeline =
-            pipeline("mapgpu_shadow", "vs_extrude", "fs_extrude", &extrude_buffers, &[&cmd_layout], scene_format, samples, flat);
+            pipeline("mapgpu_shadow", "vs_extrude", "fs_extrude", &extrude_buffers, &[&cmd_layout], scene_format, samples, shadows);
         let extrude_pipeline = pipeline(
             "mapgpu_extrude",
             "vs_extrude",
@@ -497,7 +509,7 @@ fn record_scene(r: &GpuMapRenderer, draws: &[SceneDraw], clear: [f32; 4], tgt: &
         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
             view: &tgt.depth_view,
             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
-            stencil_ops: None,
+            stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Discard }),
         }),
         ..Default::default()
     });

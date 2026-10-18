@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use rustgis_data::{Dataset, Geometry};
 use rustgis_map::effects::{Aggregation, Extrusion};
 use rustgis_map::{Ramp, Rgba, Symbol};
-use tiny_skia::{FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point, SpreadMode, Stroke, Transform};
+use tiny_skia::{FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, PixmapPaint, Point, SpreadMode, Stroke, Transform};
 
 use crate::{Ctx, View, paint};
 
@@ -420,9 +420,14 @@ pub(crate) fn extrude_tilted(
         pb.finish()
     };
     let px = |p: (f64, f64)| (p.0 as f32 * ppp, p.1 as f32 * ppp);
-    if x.shadows {
-        // Cast on the ground away from the light.
-        let shade = paint(Rgba::new(0, 0, 0, 60), 1.0);
+    if x.shadows
+        && let Some(mut layer) = Pixmap::new(pm.width(), pm.height())
+    {
+        // Cast on the ground away from the light: every piece opaque on a layer of its own, laid
+        // over the map once, so where pieces (or neighbours' shadows) overlap it is no darker.
+        let shade = paint(Rgba::new(0, 0, 0, 255), 1.0);
+        let pm_main = &mut *pm;
+        let pm = &mut layer;
         for (_, rings, _, up, _, _) in &shapes {
             for q in tilted_shadow_quads(&cam, w, h, rings, *up) {
                 let q: Vec<_> = q.into_iter().map(px).collect();
@@ -439,6 +444,8 @@ pub(crate) fn extrude_tilted(
                 }
             }
         }
+        let over = PixmapPaint { opacity: 60.0 / 255.0, ..PixmapPaint::default() };
+        pm_main.draw_pixmap(0, 0, layer.as_ref(), &over, Transform::identity(), None);
     }
     for (_, rings, holes, up, fogged, row) in &shapes {
         let sym = symbol(*row);
