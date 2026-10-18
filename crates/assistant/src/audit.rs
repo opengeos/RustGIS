@@ -140,6 +140,9 @@ pub fn entries(source: &str, request: &str, reply: Option<&str>, took: Duration,
 
 /// The words that name a secret in a key's name, whole words and their plurals.
 const SECRET_WORDS: &[&str] = &[
+    "passphrase",
+    "jwt",
+    "privatekey",
     "password",
     "passwd",
     "pwd",
@@ -181,6 +184,8 @@ fn secret_key(name: &str) -> bool {
     let is = |w: &str, s: &str| w == s || w.strip_suffix('s') == Some(s);
     words.iter().enumerate().any(|(i, w)| {
         SECRET_WORDS.iter().any(|s| is(w, s))
+            // Run together without a separator (`accesstoken`, `clientsecret`, `dbpassword`).
+            || ["token", "secret", "password", "passphrase"].iter().any(|s| w.len() > s.len() && (w.ends_with(s) || w.ends_with(&format!("{s}s"))))
             || (is(w, "key") && (words.len() == 1 || i.checked_sub(1).and_then(|j| words.get(j)).is_some_and(|p| KEY_KINDS.contains(p))))
     })
 }
@@ -364,7 +369,20 @@ mod tests {
         assert!(!text.contains("hunter2") && !text.contains("s3cret") && text.contains("db.example.com"), "{text}");
         assert!(lines[0].get("batch").is_none());
         // Keys by their words: secrets, not every key.
-        for k in ["password", "api_key", "accessKey", "tokens", "authToken", "client_secret", "key", "DSN"] {
+        for k in [
+            "password",
+            "api_key",
+            "accessKey",
+            "tokens",
+            "authToken",
+            "client_secret",
+            "key",
+            "DSN",
+            "accesstoken",
+            "clientsecret",
+            "passphrase",
+            "jwt",
+        ] {
             assert!(secret_key(k), "{k}");
         }
         for k in ["primary_key", "sort_key", "keys_column", "texas", "name"] {
