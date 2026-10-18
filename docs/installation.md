@@ -206,9 +206,10 @@ The desktop app and the command line keep their files in three folders:
 | Cache | GDAL and DuckDB conversions | `%LOCALAPPDATA%\RustGIS\cache` | `~/Library/Caches/RustGIS` | `$XDG_CACHE_HOME/rustgis` (`~/.cache/rustgis`) |
 
 Set `RUSTGIS_CONFIG_DIR`, `RUSTGIS_APP_DATA_DIR` or `RUSTGIS_CACHE_DIR` to use another folder
-instead, for a portable install on a USB drive, for example. The folder is used as is.
-`RUSTGIS_PLUGINS_DIR`, `RUSTGIS_GDAL_CACHE` and `RUSTGIS_DUCKDB_CACHE` name the plugins folder and
-the GDAL and DuckDB caches on their own, ahead of these.
+instead, for a portable install on a USB drive, for example. The folder is used as is, and RustGIS
+keeps the same files in it (`plugins/` and `geolibre/` in the data folder, `gdal/` and `duckdb/`
+in the cache folder). `RUSTGIS_PLUGINS_DIR`, `RUSTGIS_GDAL_CACHE` and `RUSTGIS_DUCKDB_CACHE` name
+the plugins folder and the GDAL and DuckDB caches themselves, ahead of these.
 
 ## If RustGIS closes unexpectedly
 
