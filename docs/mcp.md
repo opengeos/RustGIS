@@ -122,7 +122,8 @@ macOS, `%LOCALAPPDATA%\RustGIS\mcp-audit` on Windows). Each line holds `ts`, `so
 Passwords, keys and tokens in the arguments, a `run` script's lines included, are replaced before
 they are written. On Linux and macOS the folder and files are readable by you only; on Windows they're protected by
 your user profile's permissions. A batch's calls share the batch's
-`duration_s` and are marked `"batch": true`. Days older than 30 are removed.
+`duration_s` and are marked `"batch": true`. An error whose text mentions a credential (a token, a
+password, a bearer…) is logged as withheld rather than risk keeping the credential. Days older than 30 are removed.
 
 An agent the app starts itself gets a run-scoped token instead of the relay's own:
 `rustgis-cli mcp --attach PORT --token-file FILE`. Each such grant carries its own file and network

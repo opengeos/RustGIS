@@ -277,6 +277,8 @@ fn redact_script(script: &str) -> String {
 /// and the same inside a script's lines.
 fn redact(v: Value, depth: usize) -> Value {
     match v {
+        // A long value (inline GeoJSON) is cut before it's searched, not after.
+        Value::String(s) if s.len() > MAX_ARGS => Value::String(redact_string(&crate::tools::clip(&s, MAX_ARGS))),
         Value::String(s) => Value::String(redact_string(&s)),
         Value::Array(a) if depth < 16 => Value::Array(a.into_iter().map(|x| redact(x, depth + 1)).collect()),
         Value::Object(o) if depth < 16 => Value::Object(
