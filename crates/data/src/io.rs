@@ -316,13 +316,24 @@ pub fn write_bytes(ds: &Dataset, ext: &str) -> Result<(Vec<u8>, usize)> {
 /// (GeoJSON, KML and GPX are longitude/latitude by definition).
 pub const PROJECTED_FORMATS: [&str; 4] = ["gpkg", "shp", "zip", "fgb"];
 
+/// The coordinate system an export to extension `ext` is written in when none is asked for: the
+/// one the dataset was read in, for a format that can say it, else WGS 84. A system without an
+/// EPSG code goes only into a Shapefile, whose `.prj` gives it in full; GeoPackage and FlatGeobuf
+/// readers (RustGIS's among them) go by the code.
+pub fn default_export_crs(ds: &Dataset, ext: &str) -> Crs {
+    let ext = ext.to_ascii_lowercase();
+    ds.crs
+        .filter(|c| PROJECTED_FORMATS.contains(&ext.as_str()) && (c.epsg() > 0 || matches!(ext.as_str(), "shp" | "zip")))
+        .unwrap_or(Crs::LonLat)
+}
+
 /// The dataset (in longitude/latitude, as every dataset is) in `crs`'s coordinates. Fails on a
 /// coordinate the system can't hold, naming its feature.
 pub fn project(ds: &Dataset, crs: Crs) -> Result<Dataset> {
-    let mut out = ds.clone();
     if crs == Crs::LonLat {
-        return Ok(out);
+        return Ok(ds.clone());
     }
+    let mut out = ds.clone();
     let t = crs.transformer().map_err(DataError::Format)?;
     for f in &mut out.features {
         if let Some(g) = f.geometry.take() {

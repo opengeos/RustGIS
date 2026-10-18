@@ -2485,8 +2485,8 @@ impl RustGisApp {
                 let whole = if l.is_streamed() { Some(l.load_all()?) } else { None };
                 // In the layer's own coordinate system, as share.exportLayer writes a file.
                 let ds = whole.as_ref().unwrap_or(&l.dataset);
-                use rustgis_engine::data::{io, raster::Crs};
-                let crs = ds.crs.filter(|_| io::PROJECTED_FORMATS.contains(&ext.as_str())).unwrap_or(Crs::LonLat);
+                use rustgis_engine::data::io;
+                let crs = io::default_export_crs(ds, &ext);
                 let written = io::write_bytes_in(ds, &ext, crs).map_err(|e| e.to_string());
                 let (bytes, left_out) = match written {
                     Ok(w) => w,

@@ -874,12 +874,13 @@ pub fn to_wkt(crs: Crs) -> Option<String> {
     };
     let geogcs = |auth: &str| {
         format!(
-            "GEOGCS[{},DATUM[{},SPHEROID[{},{},{}]{towgs84}],PRIMEM[\"Greenwich\",{}],UNIT[\"degree\",0.0174532925199433]{auth}]",
+            "GEOGCS[{},DATUM[{},SPHEROID[{},{},{}]{towgs84}],PRIMEM[{},{}],UNIT[\"degree\",0.0174532925199433]{auth}]",
             quoted(&geog_name),
             quoted(&datum_name),
             quoted(ellps_name),
             num(a),
             num(rf),
+            quoted(if pm == 0.0 { "Greenwich" } else { "unnamed" }),
             num(pm),
         )
     };

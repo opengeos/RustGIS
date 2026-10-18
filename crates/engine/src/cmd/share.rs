@@ -86,8 +86,7 @@ fn export_layer(s: &mut Session, p: &Value) -> CmdResult {
     let ext = Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let crs = match ps(p, "crs").map(str::trim).filter(|c| !c.is_empty()) {
         Some(text) => Crs::parse(text)?,
-        None if rustgis_data::io::PROJECTED_FORMATS.contains(&ext.as_str()) => ds.crs.unwrap_or(Crs::LonLat),
-        None => Crs::LonLat,
+        None => rustgis_data::io::default_export_crs(ds, &ext),
     };
     let left_out = rustgis_data::io::write_path_in(ds, Path::new(&path), crs).map_err(|e| e.to_string())?;
     let written = ds.features.len().saturating_sub(left_out);

@@ -1081,6 +1081,18 @@ fn exports_are_written_in_the_system_the_layer_was_read_in() {
         let prj = std::fs::read_to_string(shp.with_extension("prj")).unwrap();
         assert!(prj.starts_with("PROJCS[") && prj.ends_with(&format!("AUTHORITY[\"EPSG\",\"{code}\"]]")), "{prj}");
     }
+    // By default an export keeps the layer's system where the format can say it; a system without
+    // an EPSG code only where its WKT is read back (a Shapefile's .prj).
+    let mut ds = utm_squares(25832);
+    let utm = Crs::from_epsg(25832).unwrap();
+    assert_eq!(crate::io::default_export_crs(&ds, "GPKG"), utm);
+    assert_eq!(crate::io::default_export_crs(&ds, "geojson"), Crs::LonLat);
+    let wkt = crate::raster::wkt::to_wkt(utm).unwrap().replace(",AUTHORITY[\"EPSG\",\"25832\"]", "").replace("EPSG:25832", "My grid");
+    let custom = crate::raster::wkt::crs_from_wkt(&wkt).unwrap();
+    assert_eq!(custom.epsg(), 0);
+    ds.crs = Some(custom);
+    assert_eq!(crate::io::default_export_crs(&ds, "shp"), custom);
+    assert_eq!(crate::io::default_export_crs(&ds, "fgb"), Crs::LonLat);
     // GeoJSON is longitude/latitude only.
     let ds = utm_squares(25832);
     assert!(crate::io::write_path_in(&ds, &d.join("squares.geojson"), Crs::from_epsg(25832).unwrap()).is_err());
