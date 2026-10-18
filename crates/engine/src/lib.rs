@@ -406,6 +406,11 @@ fn edited_streamed(before: &Project, after: &Project) -> Option<String> {
     None
 }
 
+/// Why command `label` can't edit streamed layer `layer`, refused up front or undone after.
+fn streamed_refusal(label: &str, layer: &str) -> String {
+    format!("{label}: {layer} is read in place from its file; Load All Features (layer.loadAll) to edit it")
+}
+
 /// Commands that change a layer's features or fields, refused on streamed layers (whose features
 /// are a window read again from the file as the view moves, so edits would be lost).
 fn edits_features(id: &str) -> bool {
@@ -607,7 +612,7 @@ impl Session {
             let target = named.or(active).and_then(|l| self.map().layer(l));
             if let Some(l) = target.filter(|l| l.is_streamed()) {
                 // Said, as a failure in `guarded` is: this returns before it (#468).
-                let e = format!("{label}: {} is read in place from its file; Load All Features (layer.loadAll) to edit it", l.name);
+                let e = streamed_refusal(label, &l.name);
                 self.notify(e.clone(), true);
                 return Err(e);
             }
@@ -640,7 +645,7 @@ impl Session {
         // source) would lose the change at the next read: undone, with a way to edit it instead.
         let res = match (&res, &snapshot) {
             (Ok(_), Some(snap)) => match edited_streamed(snap, &self.project) {
-                Some(name) => Err(format!("{label}: {name} is read in place from its file; Load All Features (layer.loadAll) to edit it")),
+                Some(name) => Err(streamed_refusal(label, &name)),
                 None => res,
             },
             _ => res,
