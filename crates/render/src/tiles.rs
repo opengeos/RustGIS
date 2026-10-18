@@ -178,7 +178,6 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
     if e.is_empty() {
         return out;
     }
-    let half = HALF;
     let x0 = lonlat_to_merc(Coord::new(lon0, 0.0)).x;
     // A pole in sight brings the latitudes up to it into view, whether or not the grid reached
     // them, and every longitude when it is in sight on the far side too (on the globe a pole is
@@ -194,13 +193,13 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
     };
     let (north, south) = (in_view(lon0, 90.0), in_view(lon0, -90.0));
     let all_lons = (north && in_view(lon0 + 180.0, 90.0)) || (south && in_view(lon0 + 180.0, -90.0));
-    let min_y = if south { -half } else { (e.min_y - step_y).max(-half) };
-    let max_y = if north { half } else { (e.max_y + step_y).min(half) };
-    let e = if all_lons || e.width() > half {
-        // Over half the world across: every longitude.
-        Extent::new(x0 - half, min_y, x0 + half, max_y)
+    let min_y = if south { -HALF } else { (e.min_y - step_y).max(-HALF) };
+    let max_y = if north { HALF } else { (e.max_y + step_y).min(HALF) };
+    let e = if all_lons || e.width() > HALF {
+        // Over HALF the world across: every longitude.
+        Extent::new(x0 - HALF, min_y, x0 + HALF, max_y)
     } else {
-        Extent::new((e.min_x - step_x).max(x0 - half), min_y, (e.max_x + step_x).min(x0 + half), max_y)
+        Extent::new((e.min_x - step_x).max(x0 - HALF), min_y, (e.max_x + step_x).min(x0 + HALF), max_y)
     };
     let detail = match (to_lonlat(cx, cy), to_lonlat(cx + 4.0, cy)) {
         (Some(a), Some(b)) => (to_merc(a).x - to_merc(b).x).hypot(to_merc(a).y - to_merc(b).y) / 4.0,
