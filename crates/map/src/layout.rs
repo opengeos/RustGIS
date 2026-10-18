@@ -782,6 +782,8 @@ impl Layout {
                     }
                     if let Some(g) = grid {
                         g.step = finite_or(g.step, 0.0).clamp(0.0, 90.0);
+                        g.tick_length = finite_or(g.tick_length, tick_length()).clamp(0.0, MAX_TICK_MM);
+                        g.width = finite_or(g.width, grid_width()).clamp(0.0, MAX_GRID_WIDTH);
                     }
                 }
                 ElementKind::Text { text, size, .. } => {
@@ -789,6 +791,7 @@ impl Layout {
                     text.truncate(text.char_indices().nth(5000).map_or(text.len(), |(i, _)| i));
                 }
                 ElementKind::Table { rows, .. } => *rows = (*rows).clamp(1, 500),
+                ElementKind::ScaleBar { divisions, .. } => *divisions = (*divisions).clamp(1, MAX_SCALE_DIVISIONS),
                 ElementKind::Rectangle { width, .. } => *width = finite_or(*width, 1.0).clamp(0.0, 50.0),
                 _ => {}
             }
@@ -1133,5 +1136,18 @@ mod tests {
         assert_eq!(grid, Grid { step: 10.0, ..Grid::default() });
         assert_eq!(grid.edges, GridEdges { top: false, bottom: true, left: true, right: false });
         assert_eq!(grid.style, GridStyle::Lines);
+    }
+
+    #[test]
+    fn loaded_grids_and_scale_bars_are_limited() {
+        let text = r#"{"name":"x","width":200,"height":100,"elements":[
+            {"id":1,"name":"frame","x":0,"y":0,"w":100,"h":80,"kind":{"MapFrame":{"map":"M","center":{"x":0,"y":0},"scale":1e7,
+                "grid":{"step":10,"color":[0,0,0,255],"tick_length":1e9,"width":-5}}}},
+            {"id":2,"name":"bar","x":110,"y":0,"w":50,"h":10,"kind":{"ScaleBar":{"frame":1,"divisions":100000}}}]}"#;
+        let mut l: Layout = serde_json::from_str(text).unwrap();
+        l.clamp();
+        let Some(ElementKind::MapFrame { grid: Some(g), .. }) = l.element(1).map(|e| &e.kind) else { panic!() };
+        assert_eq!((g.tick_length, g.width), (MAX_TICK_MM, 0.0));
+        assert!(matches!(l.element(2).map(|e| &e.kind), Some(ElementKind::ScaleBar { divisions: MAX_SCALE_DIVISIONS, .. })));
     }
 }
