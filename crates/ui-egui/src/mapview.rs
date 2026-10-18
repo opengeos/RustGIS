@@ -677,7 +677,8 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // A fresh GPU frame (re-rendered whenever the key changed, so its camera is the current
     // one: tex_rect == rect and labels sit unshifted) draws inside egui's wgpu pass. The GPU
     // backend only serves flat maps, so the globe's drape never meets it.
-    if let (Some(gf), Some(gr)) = (&app.map.gpu_frame, &app.map.gpu_renderer) {
+    // Not under the tilted map's drape: a flat GPU frame from before the tilt would cover it.
+    if let (Some(gf), Some(gr)) = (app.map.gpu_frame.as_ref().filter(|_| !tilt_draped), &app.map.gpu_renderer) {
         painter.add(egui_wgpu::Callback::new_paint_callback(
             rect,
             crate::mapgpu::SceneCallback { renderer: gr.clone(), buffers: gf.clone(), target: app.map.gpu_target.clone() },

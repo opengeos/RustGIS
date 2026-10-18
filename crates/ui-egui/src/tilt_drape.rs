@@ -6,7 +6,7 @@
 use egui::epaint::Vertex;
 use egui::{Color32, Mesh, Painter, Rect, Shape, TextureFilter, TextureHandle, TextureOptions, pos2};
 use rustgis_engine::geom::{Coord, Extent};
-use rustgis_engine::map::camera::Band;
+use rustgis_engine::map::camera::{Band, FAR};
 use rustgis_engine::map::{Camera, Map};
 use rustgis_engine::render::{self, View};
 
@@ -131,7 +131,9 @@ impl TiltDrape {
                     for i in 0..n {
                         let (u, v) = (i as f64 / CELLS as f64, j as f64 / CELLS as f64);
                         let m = b.camera.to_map(u * b.width, v * b.height, b.width, b.height);
-                        let s = cam.try_to_screen(m, w, h).filter(|s| s.0.is_finite() && s.1.is_finite());
+                        // Past the view's reach is sky, as in the settled frame.
+                        let in_reach = cam.depth_scale(m, h).is_some_and(|k| k >= 1.0 / FAR);
+                        let s = cam.try_to_screen(m, w, h).filter(|s| in_reach && s.0.is_finite() && s.1.is_finite());
                         ok.push(s.is_some());
                         let (x, y) = s.unwrap_or((0.0, 0.0));
                         mesh.vertices.push(Vertex {

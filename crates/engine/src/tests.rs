@@ -6126,6 +6126,17 @@ fn the_map_tilts() {
     assert_eq!(s.run("map.setPitch", &json!({"by": -100})).unwrap(), json!({"pitch": 0.0}));
     assert!(s.run("map.setPitch", &json!({})).is_err());
     assert!(s.run("map.setPitch", &json!({"pitch": "steep", "by": 5})).is_err());
+    assert_eq!(s.run("map.setPitch", &json!({"by": "up"})).unwrap_err(), "by must be a number of degrees");
+    // Huge pitches are kept to the limit; no number (NaN, infinity) is refused.
+    assert_eq!(s.run("map.setPitch", &json!({"pitch": 1e300})).unwrap(), json!({"pitch": 85.0}));
+    assert_eq!(s.run("map.setPitch", &json!({"pitch": -1e300})).unwrap(), json!({"pitch": 0.0}));
+    for junk in [json!("NaN"), json!("inf"), json!("-infinity"), json!([1]), json!({})] {
+        assert!(s.run("map.setPitch", &json!({"pitch": junk})).is_err(), "{junk}");
+        // A refused Go To XY leaves the view where it was.
+        let before = s.map().camera;
+        assert!(s.run("map.goToXY", &json!({"lon": 30, "lat": 30, "pitch": junk})).is_err(), "{junk}");
+        assert_eq!(s.map().camera, before);
+    }
     assert!(s.run("map.goToXY", &json!({"lon": 0, "lat": 0, "pitch": "steep"})).is_err());
     s.run("map.goToXY", &json!({"lon": 10.0, "lat": 48.0, "scale": 10_000_000, "pitch": 45, "bearing": 20})).unwrap();
     assert_eq!((s.map().camera.pitch, s.map().camera.bearing), (45.0, 20.0));

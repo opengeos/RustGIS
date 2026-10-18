@@ -337,6 +337,9 @@ fn set_pitch(s: &mut Session, p: &Value) -> CmdResult {
     if p.get("pitch").is_some_and(|v| !v.is_null()) && f(p, "pitch").is_none() {
         return Err("pitch must be a number of degrees".into());
     }
+    if p.get("by").is_some_and(|v| !v.is_null()) && f(p, "by").is_none() {
+        return Err("by must be a number of degrees".into());
+    }
     let m = s.map_mut();
     let pitch = match (f(p, "pitch"), f(p, "by")) {
         (Some(t), _) => t,
@@ -353,6 +356,9 @@ fn set_pitch(s: &mut Session, p: &Value) -> CmdResult {
 fn set_bearing(s: &mut Session, p: &Value) -> CmdResult {
     if p.get("bearing").is_some_and(|v| !v.is_null()) && f(p, "bearing").is_none() {
         return Err("bearing must be a number of degrees".into());
+    }
+    if p.get("by").is_some_and(|v| !v.is_null()) && f(p, "by").is_none() {
+        return Err("by must be a number of degrees".into());
     }
     let m = s.map_mut();
     let bearing = match (f(p, "bearing"), f(p, "by")) {

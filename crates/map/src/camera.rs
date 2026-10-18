@@ -83,6 +83,13 @@ impl Camera {
         (z <= t.d * FAR).then(|| (a * z / t.d, v))
     }
 
+    /// A fast way to find the ground under many screen points of a `w`×`h` view, with the
+    /// camera's trigonometry worked out once ([`GroundLookup::at`]).
+    pub fn ground_lookup(&self, w: f64, h: f64) -> GroundLookup {
+        let (bc, bs) = self.rotation();
+        GroundLookup { cam: *self, tilt: self.tilt(h), bc, bs, w, h }
+    }
+
     /// The ground offsets at the view's reach straight up from a screen point (where a point
     /// above the horizon or past the reach is taken to be).
     fn far_point(&self, sx: f64, w: f64, h: f64) -> (f64, f64) {
@@ -251,7 +258,9 @@ impl Camera {
     }
 
     /// Moves the map by a screen offset, as dragging it at the view's centre would (in a tilted
-    /// view the ground there is foreshortened up and down).
+    /// view the ground there is foreshortened up and down, so a step up or down moves farther).
+    /// The keys and commands pan this way; dragging with the pointer uses [`Camera::drag_px`],
+    /// which follows the ground under the pointer instead.
     pub fn pan_px(&mut self, dx: f64, dy: f64) {
         let dy = match self.tilt(1.0) {
             Some(t) => dy / t.c.max(0.05),
@@ -353,6 +362,41 @@ impl Camera {
 
     pub fn center_lonlat(&self) -> Coord {
         merc_to_lonlat(self.center)
+    }
+}
+
+/// [`Camera::ground_lookup`]: the camera's constants for one view size.
+pub struct GroundLookup {
+    cam: Camera,
+    tilt: Option<Tilt>,
+    bc: f64,
+    bs: f64,
+    w: f64,
+    h: f64,
+}
+
+impl GroundLookup {
+    /// The Mercator point under a screen point, as [`Camera::try_to_map`], and how far it is as
+    /// a multiple of the camera's distance from the centre (1 in a flat view).
+    pub fn at(&self, sx: f64, sy: f64) -> Option<(Coord, f64)> {
+        let (a, b) = (sx - self.w / 2.0, sy - self.h / 2.0);
+        let (u, v, depth) = match self.tilt {
+            None => (a, b, 1.0),
+            Some(t) => {
+                let den = t.d * t.c + b * t.s;
+                if den <= 0.0 {
+                    return None;
+                }
+                let v = b * t.d / den;
+                let z = t.d - v * t.s;
+                if z > t.d * FAR {
+                    return None;
+                }
+                (a * z / t.d, v, z / t.d)
+            }
+        };
+        let (ux, uy) = (u * self.bc - v * self.bs, u * self.bs + v * self.bc);
+        Some((Coord::new(self.cam.center.x + ux * self.cam.res, self.cam.center.y - uy * self.cam.res), depth))
     }
 }
 
@@ -489,6 +533,17 @@ mod tests {
             assert!(!bands.is_empty() && bands.len() <= 8, "{pitch}: {}", bands.len());
             assert!(bands.windows(2).all(|b| b[0].camera.res < b[1].camera.res), "{pitch}: coarser away");
             assert!(bands.iter().all(|b| b.width <= MAX_BAND_SIDE && b.height <= MAX_BAND_SIDE));
+            // The fast lookup agrees with the camera.
+            let look = c.ground_lookup(w, h);
+            for (sx, sy) in [(5.0, 7.0), (400.0, 300.0), (700.0, 550.0), (400.0, 0.0)] {
+                let m = c.try_to_map(sx, sy, w, h);
+                let l = look.at(sx, sy);
+                assert_eq!(m.is_some(), l.is_some(), "{pitch}: {sx},{sy}");
+                if let (Some(m), Some((p, depth))) = (m, l) {
+                    assert!((m.x - p.x).abs() < 1e-6 && (m.y - p.y).abs() < 1e-6);
+                    assert!((1.0 / depth - c.depth_scale(m, h).unwrap()).abs() < 1e-9);
+                }
+            }
             // Every ground point the view shows is in a band.
             for j in 0..=10 {
                 for i in 0..=10 {

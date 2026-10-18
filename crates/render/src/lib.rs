@@ -979,6 +979,9 @@ enum Labels<'a> {
     /// Handed back unplaced, at their places in a tilted view ([`render_tilted`]), whose
     /// bands share one read of the streamed layers.
     Tilted(&'a View, &'a mut Vec<Candidate>),
+    /// Placed in the frame, a band of a tilted view's drape ([`render_tilt_drape`]), which
+    /// shares the view's read of the streamed layers.
+    Shared,
 }
 
 /// Labels farther than this (as a fraction of the centre's scale) are left out of a tilted view.
@@ -990,21 +993,16 @@ const LABEL_MIN_DEPTH_SCALE: f64 = 0.3;
 /// and the sky past the view's reach. Labels are placed in the tilted view, upright.
 fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Rendered> {
     let bands_of = view.camera.tilt_bands(view.width, view.height);
-    // One read of the whole view for every layer drawn in some band (each is drawn at its own
-    // scale, coarser far away); a layer drawn in two bands reads once.
-    let lonlat = view_lonlat(map, view);
-    let mut data_pending = false;
-    for b in &bands_of {
-        let scale = map.ground_res_at(&b.camera) / rustgis_geom::PIXEL_M;
-        data_pending |= map.sync_sources(&lonlat, scale, full_res_rasters);
-    }
+    let data_pending = sync_tilted(map, view, &bands_of, full_res_rasters);
     // Labels are placed in the tilted view: a lock on a flat view's labels doesn't apply.
     let lock = map.label_lock.take();
     let mut candidates = Vec::new();
-    let mut bands = Vec::new();
+    let (w, h) = view.pixel_size();
+    let mut pm = Pixmap::new(w, h)?;
+    let mut warp = Warp::new(view, map);
     let (mut attribution, mut tiles_pending, mut tile_errors) = (Vec::<String>::new(), false, Vec::<String>::new());
     for b in bands_of {
-        let v = View { width: b.width, height: b.height, camera: b.camera, ..*view };
+        let v = band_view(view, &b);
         if let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, full_res_rasters, Backend::Cpu, Labels::Tilted(view, &mut candidates)) {
             for a in r.attribution {
                 if !attribution.contains(&a) {
@@ -1017,14 +1015,12 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
                 }
             }
             tiles_pending |= r.tiles_pending;
-            bands.push((v, r.pixmap));
+            // Into the view at once, nearest band first, so only one band is held at a time.
+            warp.band(&mut pm, &v, &r.pixmap);
         }
     }
     map.label_lock = lock;
-    let (w, h) = view.pixel_size();
-    let mut pm = Pixmap::new(w, h)?;
-    let (sky, fog) = sky_colors(map);
-    warp_tilted(&mut pm, view, &bands, sky, fog);
+    warp.finish(&mut pm);
     // A feature drawn in two bands offers its label twice: the nearer band's (offered first) is
     // kept.
     let mut seen = std::collections::HashSet::new();
@@ -1048,46 +1044,111 @@ fn sky_colors(map: &Map) -> (Rgba, Rgba) {
     (sky, sky.lerp(land, 0.5).lerp(white, 0.3))
 }
 
-/// Fills `pm` with the tilted `view`: each pixel samples the band under it (nearest first),
-/// fading into `fog` toward the view's reach, and the sky above it shades from `fog` at the
-/// horizon to `sky` at the top.
-fn warp_tilted(pm: &mut Pixmap, view: &View, bands: &[(View, Pixmap)], sky: Rgba, fog: Rgba) {
-    let (pw, ph) = (pm.width() as usize, pm.height() as usize);
-    let (w, h) = (view.width, view.height);
-    let (kx, ky) = (pw as f64 / w.max(1e-9), ph as f64 / h.max(1e-9));
-    let cam = view.camera;
-    let sky_y = cam.sky_y(h).unwrap_or(0.0).max(1e-9);
-    let far = rustgis_map::camera::FAR;
-    let rgba = |c: Rgba| [f32::from(c.r()), f32::from(c.g()), f32::from(c.b()), 255.0];
-    let (sky, fog) = (rgba(sky), rgba(fog));
-    let mix = |a: [f32; 4], b: [f32; 4], t: f32| std::array::from_fn::<f32, 4, _>(|i| a[i] + (b[i] - a[i]) * t);
-    let out = pm.pixels_mut();
-    for py in 0..ph {
-        let y = (py as f64 + 0.5) / ky;
-        for px in 0..pw {
-            let x = (px as f64 + 0.5) / kx;
-            let c = match cam.try_to_map(x, y, w, h) {
-                Some(m) => {
-                    let ground = bands.iter().find_map(|(v, b)| sample_band(v, b, m)).unwrap_or(fog);
-                    // Fog from halfway to the reach.
-                    let z = 1.0 / cam.depth_scale(m, h).unwrap_or(1.0).max(1e-9);
-                    let t = ((z - far * 0.5) / (far * 0.5)).clamp(0.0, 1.0) as f32;
-                    mix(ground, fog, t * t * (3.0 - 2.0 * t))
-                }
-                None => mix(sky, fog, (y / sky_y).clamp(0.0, 1.0) as f32),
-            };
-            if let Some(dst) = out.get_mut(py * pw + px)
-                && let Some(p) = tiny_skia::PremultipliedColorU8::from_rgba(
-                    c[0].min(c[3]).round() as u8,
-                    c[1].min(c[3]).round() as u8,
-                    c[2].min(c[3]).round() as u8,
-                    c[3].round() as u8,
-                )
-            {
-                *dst = p;
-            }
+/// The most pixels a side of a tilted view's band is drawn with: past it, coarser.
+const MAX_BAND_PX: f64 = 4096.0;
+
+/// The view a band of a tilted `view` is drawn with: at the view's pixel density, or coarser
+/// for a long band.
+fn band_view(view: &View, b: &rustgis_map::camera::Band) -> View {
+    let ppp = view.pixels_per_point.min(MAX_BAND_PX / b.width.max(b.height).max(1.0));
+    View { width: b.width, height: b.height, camera: b.camera, pixels_per_point: ppp, ..*view }
+}
+
+/// Reads the streamed layers once for a tilted `view`: every layer drawn in one of its `bands`
+/// (each drawn at its own scale, coarser far away). Reads are kept per extent, so a layer drawn
+/// in two bands asks for the same extent twice and reads once. Whether a read is still running.
+fn sync_tilted(map: &mut Map, view: &View, bands: &[rustgis_map::camera::Band], block: bool) -> bool {
+    let lonlat = view_lonlat(map, view);
+    let mut pending = false;
+    for b in bands {
+        let scale = map.ground_res_at(&b.camera) / rustgis_geom::PIXEL_M;
+        pending |= map.sync_sources(&lonlat, scale, block);
+    }
+    pending
+}
+
+/// Fills a tilted view's picture band by band: each pixel takes its colour from the nearest
+/// band under it, fading into the fog toward the view's reach; then the sky above the horizon
+/// shades from the fog to the sky colour at the top.
+struct Warp {
+    look: rustgis_map::camera::GroundLookup,
+    /// Physical pixels per logical point, across and down.
+    k: (f64, f64),
+    sky_y: f64,
+    sky: [f32; 4],
+    fog: [f32; 4],
+    /// The pixels a band has given a colour.
+    filled: Vec<bool>,
+}
+
+impl Warp {
+    fn new(view: &View, map: &Map) -> Warp {
+        let (pw, ph) = view.pixel_size();
+        let (sky, fog) = sky_colors(map);
+        let rgba = |c: Rgba| [f32::from(c.r()), f32::from(c.g()), f32::from(c.b()), 255.0];
+        Warp {
+            look: view.camera.ground_lookup(view.width, view.height),
+            k: (f64::from(pw) / view.width.max(1e-9), f64::from(ph) / view.height.max(1e-9)),
+            sky_y: view.camera.sky_y(view.height).unwrap_or(0.0).max(1e-9),
+            sky: rgba(sky),
+            fog: rgba(fog),
+            filled: vec![false; pw as usize * ph as usize],
         }
     }
+
+    /// The logical point at the centre of pixel (px, py).
+    fn point(&self, px: usize, py: usize) -> (f64, f64) {
+        ((px as f64 + 0.5) / self.k.0, (py as f64 + 0.5) / self.k.1)
+    }
+
+    /// Colours the pixels still empty that band picture `pic` (drawn for `v`) has under them.
+    fn band(&mut self, pm: &mut Pixmap, v: &View, pic: &Pixmap) {
+        let pw = pm.width() as usize;
+        let far = rustgis_map::camera::FAR;
+        let out = pm.pixels_mut();
+        for (i, filled) in self.filled.iter_mut().enumerate() {
+            if *filled {
+                continue;
+            }
+            let (x, y) = ((i % pw) as f64 + 0.5, (i / pw) as f64 + 0.5);
+            let Some((m, depth)) = self.look.at(x / self.k.0, y / self.k.1) else { continue };
+            let Some(ground) = sample_band(v, pic, m) else { continue };
+            // Fog from halfway to the reach.
+            let t = ((depth - far * 0.5) / (far * 0.5)).clamp(0.0, 1.0) as f32;
+            if let Some(dst) = out.get_mut(i) {
+                *dst = premultiplied(mix(ground, self.fog, t * t * (3.0 - 2.0 * t)));
+            }
+            *filled = true;
+        }
+    }
+
+    /// Fills what no band covered: the sky, and fog on ground past every band.
+    fn finish(&self, pm: &mut Pixmap) {
+        let pw = pm.width() as usize;
+        let out = pm.pixels_mut();
+        for (i, dst) in out.iter_mut().enumerate() {
+            if self.filled.get(i).copied().unwrap_or(true) {
+                continue;
+            }
+            let (x, y) = self.point(i % pw.max(1), i / pw.max(1));
+            *dst = premultiplied(match self.look.at(x, y) {
+                Some(_) => self.fog,
+                None => mix(self.sky, self.fog, (y / self.sky_y).clamp(0.0, 1.0) as f32),
+            });
+        }
+    }
+}
+
+fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
+}
+
+/// A premultiplied pixel from 0–255 premultiplied channels.
+fn premultiplied(c: [f32; 4]) -> tiny_skia::PremultipliedColorU8 {
+    let a = c[3].clamp(0.0, 255.0);
+    let ch = |v: f32| v.clamp(0.0, a).round() as u8;
+    tiny_skia::PremultipliedColorU8::from_rgba(ch(c[0]), ch(c[1]), ch(c[2]), a.round() as u8)
+        .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT)
 }
 
 /// The colour (premultiplied, 0–255) of band picture `pm`, drawn for `v`, at Mercator point
@@ -1152,7 +1213,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     // scale read. A tilted view's bands share its read.
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     let data_pending = match labels_to {
-        Labels::Tilted(..) => false,
+        Labels::Tilted(..) | Labels::Shared => false,
         _ => map.sync_sources(&view_lonlat(map, view), scale, full_res_rasters),
     };
     let globe = map.projection.is_globe().then(|| Globe::new(&view.camera, view.width, view.height));
@@ -1574,7 +1635,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         fixed_labels = Vec::new();
     }
     let turned = match &labels_to {
-        Labels::Own => None,
+        Labels::Own | Labels::Shared => None,
         Labels::Turned(to) | Labels::Tilted(to, _) => Some(*to),
     };
     let (lw, lh) = match turned {
@@ -2031,10 +2092,12 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
     let ppp = if view.pixels_per_point.is_finite() { view.pixels_per_point.clamp(0.25, 4.0) } else { 1.0 };
     let margin = if margin.is_finite() { margin.clamp(0.0, 2.0) } else { 0.0 };
     let max_side = f64::from(max_side.clamp(64, 8192));
+    let bands = view.camera.tilt_bands(view.width, view.height);
+    sync_tilted(map, view, &bands, false);
     let (display, lock) = (map.label_display, map.label_lock.take());
     map.label_display.paused = true;
     let mut out = Vec::new();
-    for b in view.camera.tilt_bands(view.width, view.height) {
+    for b in bands {
         let (mut w, mut h) = (b.width * (1.0 + 2.0 * margin), b.height * (1.0 + 2.0 * margin));
         let mut camera = b.camera;
         // Coarser to fit the size limit.
@@ -2042,7 +2105,8 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
         camera.res *= k;
         (w, h) = ((w / k).floor().max(1.0), (h / k).floor().max(1.0));
         let v = View { width: w, height: h, pixels_per_point: ppp, camera, sky: false };
-        if let Some(r) = render(map, &v) {
+        // The bands share the read above.
+        if let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, false, Backend::Cpu, Labels::Shared) {
             out.push(TiltPatch { pixmap: r.pixmap, band: rustgis_map::camera::Band { camera, width: w, height: h } });
         }
     }
