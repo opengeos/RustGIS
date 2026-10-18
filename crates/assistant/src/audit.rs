@@ -50,9 +50,9 @@ pub fn record(dir: &Path, source: &str, request: &str, reply: Option<&str>, took
     if folder.create(dir).is_err() {
         return;
     }
-    // A folder made before (by hand, or looser) is made private too.
+    // A folder made before (by hand, or looser) is made private too, once a day.
     #[cfg(unix)]
-    {
+    if new_day {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
     }
@@ -60,9 +60,12 @@ pub fn record(dir: &Path, source: &str, request: &str, reply: Option<&str>, took
     o.create(true).append(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-    let Ok(mut file) = o.open(&path) else { return };
     let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
-    let _ = file.write_all(text.as_bytes());
+    // A log that can't be written doesn't fail the call, but it's said.
+    if let Err(e) = o.open(&path).and_then(|mut file| file.write_all(text.as_bytes())) {
+        log::warn!("MCP audit log {}: {e}", path.display());
+        return;
+    }
     if new_day {
         prune(dir, secs);
     }
@@ -188,21 +191,45 @@ fn secret_key(name: &str) -> bool {
 fn redact_string(s: &str) -> String {
     let t = s.trim();
     let lower = t.to_ascii_lowercase();
-    let schemes = ["postgres:", "postgresql:", "pg:", "mysql:", "mariadb:"];
-    let address = !t.contains(char::is_whitespace) && (t.contains("://") || schemes.iter().any(|p| lower.starts_with(p)));
-    if address {
-        return rustgis_engine::sources::redact(t);
+    // A password given as `password=…` or `password: …` (a keyword connection string, quoted or
+    // not): the whole string is withheld, since a quoted value can hold spaces.
+    let names_password = ["password", "passwd", "pwd"].iter().any(|k| {
+        lower.match_indices(k).any(|(i, _)| lower.get(i + k.len()..).is_some_and(|rest| rest.trim_start().starts_with(['=', ':'])))
+    });
+    if names_password {
+        return "[withheld: it gives a password]".to_string();
     }
-    // `host=db user=a password=hunter2`: each `password=` (or `pwd=`) value goes.
-    if ["password=", "pwd=", "passwd="].iter().any(|k| lower.contains(k)) {
-        return t
-            .split_whitespace()
-            .map(|part| match part.split_once('=') {
-                Some((k, _)) if ["password", "pwd", "passwd"].contains(&k.to_ascii_lowercase().as_str()) => format!("{k}=[redacted]"),
-                _ => part.to_string(),
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
+    let schemes = ["postgres:", "postgresql:", "pg:", "mysql:", "mariadb:"];
+    let address = |w: &str| {
+        let l = w.to_ascii_lowercase();
+        w.contains("://") || schemes.iter().any(|p| l.starts_with(p))
+    };
+    if !t.contains(char::is_whitespace) {
+        return if address(t) { rustgis_engine::sources::redact(t) } else { s.to_string() };
+    }
+    // Text with an address in it (a query, a description): each address word that carries
+    // credentials (a user and password, or a key or token in its query) loses them; the rest,
+    // and the spacing, stay as they were.
+    let carries = |w: &str| address(w) && (w.contains('@') || mentions_secret(w) || w.to_ascii_lowercase().contains("key="));
+    if t.split_whitespace().any(carries) {
+        let mut out = String::with_capacity(s.len());
+        let mut word = String::new();
+        let flush = |word: &mut String, out: &mut String| {
+            if !word.is_empty() {
+                out.push_str(&if carries(word) { rustgis_engine::sources::redact(word) } else { word.clone() });
+                word.clear();
+            }
+        };
+        for c in s.chars() {
+            if c.is_whitespace() {
+                flush(&mut word, &mut out);
+                out.push(c);
+            } else {
+                word.push(c);
+            }
+        }
+        flush(&mut word, &mut out);
+        return out;
     }
     s.to_string()
 }
@@ -345,7 +372,14 @@ mod tests {
         }
         // Free text keeps its shape; a keyword connection string loses its password.
         assert_eq!(redact_string("SELECT * FROM t WHERE url = 'http://x?a=1#b'"), "SELECT * FROM t WHERE url = 'http://x?a=1#b'");
-        assert_eq!(redact_string("host=db user=ann password=hunter2"), "host=db user=ann password=[redacted]");
+        assert!(!redact_string("host=db user=ann password=hunter2").contains("hunter2"));
+        for quoted in ["host=db password='my secret'", "password = x y", "pwd: hunter2"] {
+            let out = redact_string(quoted);
+            assert!(!out.contains("secret'") && !out.contains("hunter2") && !out.contains(" y"), "{quoted}: {out}");
+        }
+        // An address inside longer text loses its password; the rest stays.
+        let out = redact_string("COPY FROM postgresql://ann:hunter2@db.example.com/gis WITH x");
+        assert!(!out.contains("hunter2") && out.starts_with("COPY FROM ") && out.ends_with(" WITH x"), "{out}");
         // One line that isn't JSON doesn't leave the others' secrets in the log.
         let broken = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "run", "arguments": {
             "script": "sql.connect {\"password\": \"hunter2\"}\nmap.zoomIn {oops token=abc"}}});
