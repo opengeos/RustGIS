@@ -1865,6 +1865,9 @@ fn the_popup_closes_when_its_feature_is_deleted() {
     h.state_mut().run("map.duplicate", json!({})).unwrap();
     h.step();
     assert!(h.state().map.popup.is_none(), "the popup stayed on another map");
+}
+
+#[test]
 fn a_shortcut_that_cannot_run_says_why() {
     let mut h = harness();
     h.step();
@@ -1879,6 +1882,11 @@ fn a_shortcut_that_cannot_run_says_why() {
     assert_eq!(rows(&h), before, "nothing deleted");
     let said = h.state().session.notices_since(mark);
     assert!(said.iter().any(|n| n.error && n.text.contains("editing is turned off")), "{said:?}");
+    // Pressed again (or held) while it shows: no second notice.
+    let mark = h.state().session.notice_mark();
+    h.key_press(egui::Key::Delete);
+    h.step();
+    assert!(h.state().session.notices_since(mark).is_empty());
     // Nothing left to undo isn't worth a notice.
     while h.state().session.can_undo() {
         h.state_mut().run("edit.undo", json!(null)).unwrap();

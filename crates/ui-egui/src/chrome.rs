@@ -460,7 +460,10 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
         {
             let label = app.session.registry.get(id).map_or(id, |s| s.label);
             let text = crate::i18n::fmt("{command}: {reason}", &[("command", tl!(label)), ("reason", tl!(why))]);
-            app.session.notify(text, true);
+            // Once while it shows: a held key repeats, and each repeat comes here.
+            if !app.map.toasts.iter().any(|t| t.text == text) {
+                app.session.notify(text, true);
+            }
             continue;
         }
         let _ = app.run(id, p);
