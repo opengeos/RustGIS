@@ -389,8 +389,9 @@ fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16, io: Du
     if header("expect").is_some_and(|e| e.eq_ignore_ascii_case("100-continue")) {
         let _ = out.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").and_then(|()| out.flush());
     }
-    let mut body = vec![0u8; len];
-    if input.read_exact(&mut body).is_err() {
+    // Read as it arrives, not allocated whole before a byte comes.
+    let mut body = Vec::new();
+    if (&mut input).take(len as u64).read_to_end(&mut body).is_err() || body.len() != len {
         return;
     }
     let Ok(line) = String::from_utf8(body) else {

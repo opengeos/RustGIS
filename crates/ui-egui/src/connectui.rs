@@ -92,7 +92,11 @@ fn start_http(app: &mut RustGisApp) {
             // Kept in the settings section too, not only a passing notice.
             let said = crate::i18n::fmt("MCP over HTTP couldn't start: {error}", &[("error", &e)]);
             app.session.notify(said.clone(), true);
-            app.connect.error = Some(said);
+            // Beside the relay's own error, if it had one.
+            app.connect.error = Some(match app.connect.error.take() {
+                Some(before) => format!("{before}\n{said}"),
+                None => said,
+            });
         }
     }
 }
@@ -267,7 +271,9 @@ pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
     if let Some(http) = app.relay.as_ref().and_then(|r| r.http_port()) {
         let text = crate::i18n::fmt("Or, for agents that use MCP over HTTP (port {port}):", &[("port", &http.to_string())]);
         ui.label(RichText::new(text).small());
-        let mut register = format!("{quoted} mcp-register --client claude");
+        // PowerShell runs a quoted program only through its call operator.
+        let call = if cfg!(windows) { "& " } else { "" };
+        let mut register = format!("{call}{quoted} mcp-register --client claude");
         if http != rustgis_assistant::relay::HTTP_PORT {
             register.push_str(&format!(" --port {http}"));
         }

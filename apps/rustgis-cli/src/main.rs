@@ -414,8 +414,19 @@ fn attach(port: u16, allow_access: bool, token_file: Option<&str>, timeout: Opti
 /// without it the configuration is printed for any client.
 fn mcp_register(args: &[String]) -> Result<(), String> {
     use rustgis_assistant::relay::{HTTP_PATH, default_http_port, http_token, http_token_path};
+    // A flag given without its value is an error, not the default (a bare --client would print
+    // the token instead of registering it).
+    for flag in ["--client", "--name", "--port"] {
+        if args.iter().position(|a| a == flag).is_some_and(|i| args.get(i + 1).is_none_or(|v| v.starts_with("--"))) {
+            return Err(format!("mcp-register {flag}: expected a value"));
+        }
+    }
     let port = match opt(args, "--port") {
-        Some(p) => p.parse::<u16>().map_err(|_| format!("mcp-register --port {p}: expected a port number"))?,
+        Some(p) => p
+            .parse::<u16>()
+            .ok()
+            .filter(|p| *p != 0)
+            .ok_or_else(|| format!("mcp-register --port {p}: expected a port number (1 to 65535)"))?,
         None => default_http_port(),
     };
     let name = opt(args, "--name").unwrap_or("rustgis-live");
