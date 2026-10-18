@@ -561,6 +561,48 @@ Line two."
 }
 
 #[test]
+fn tissot_indicatrix_reports_the_maps_own_distortion() {
+    let mut s = Session::new(sample::world_project());
+    let field = |s: &Session, layer: &str, lat: f64, name: &str| -> Value {
+        let ds = &s.map().layer_by_name(layer).unwrap().dataset;
+        let col = |n: &str| ds.fields.iter().position(|f| f.name == n).unwrap();
+        let row = (0..ds.features.len())
+            .find(|&r| {
+                ds.value(r, col("lat")) == &rustgis_data::Value::Float(lat) && ds.value(r, col("lon")) == &rustgis_data::Value::Float(0.0)
+            })
+            .unwrap();
+        match ds.value(row, col(name)) {
+            rustgis_data::Value::Float(v) => json!(v),
+            rustgis_data::Value::Text(t) => json!(t),
+            v => panic!("{name}: {v:?}"),
+        }
+    };
+    // Web Mercator, the default: area grows to about sec² 60° = 4, shapes are kept.
+    s.run("gp.run", &json!({"tool": "tissot", "params": {"output": "merc"}})).unwrap();
+    assert_eq!(field(&s, "merc", 60.0, "projection"), json!("Web Mercator"));
+    let area = field(&s, "merc", 60.0, "area_scale").as_f64().unwrap();
+    assert!((area - 4.0).abs() < 0.05, "{area}");
+    assert!(field(&s, "merc", 60.0, "max_angle").as_f64().unwrap() < 0.5);
+    // Mollweide is equal-area: about 1 everywhere, while angles bend away from its centre.
+    s.run("map.projection", &json!({"type": "mollweide"})).unwrap();
+    s.run("gp.run", &json!({"tool": "tissot", "params": {"output": "moll"}})).unwrap();
+    for lat in [-60.0, 0.0, 30.0, 60.0] {
+        let area = field(&s, "moll", lat, "area_scale").as_f64().unwrap();
+        assert!((area - 1.0).abs() < 0.01, "{lat}: {area}");
+    }
+    assert!(field(&s, "moll", 60.0, "max_angle").as_f64().unwrap() > 10.0);
+    // On the globe there's no flat projection to measure: circles only.
+    s.run("map.projection", &json!({"type": "globe"})).unwrap();
+    s.run("gp.run", &json!({"tool": "tissot", "params": {"output": "globe"}})).unwrap();
+    let fields: Vec<String> = s.map().layer_by_name("globe").unwrap().dataset.fields.iter().map(|f| f.name.clone()).collect();
+    assert_eq!(fields, ["lat", "lon"]);
+    // Map Extent on the globe fills the whole Earth.
+    s.run("gp.run", &json!({"tool": "tissot", "params": {"area": "Map Extent", "spacing": 60, "output": "globeView"}})).unwrap();
+    // Six columns of 60° and three rows (−60°, 0°, 60°; the poles' rows are left out).
+    assert_eq!(s.map().layer_by_name("globeView").unwrap().dataset.features.len(), 18);
+}
+
+#[test]
 fn globe_projection_toggles_renders_and_saves() {
     let mut s = with_raster();
     assert_eq!(s.run("map.projection", &Value::Null).unwrap()["projection"], "globe");
@@ -1268,6 +1310,49 @@ fn zooms_to_a_layer_follow_its_definition_query() {
     s.run("layer.definitionQuery", &json!({"layer": "Countries", "where": "continent = 'Atlantis'"})).unwrap();
     assert!(s.run("layer.zoomTo", &json!({"layer": "Countries"})).is_err());
     assert!(s.run("layout.frameZoom", &json!({"to": "layer", "layer": "Countries"})).is_err());
+}
+
+#[test]
+fn layout_frames_turn_and_tilt() {
+    use rustgis_map::layout::ElementKind;
+    let mut s = world();
+    let frame_of = |s: &Session| {
+        let l = &s.project.layouts[0];
+        let id = l.first_frame().unwrap_or_default();
+        match l.element(id).map(|e| e.kind.clone()) {
+            Some(ElementKind::MapFrame { bearing, pitch, .. }) => (id, bearing, pitch),
+            _ => panic!("no frame"),
+        }
+    };
+    // A new frame shows the map view as it is, turned and tilted.
+    s.run("map.setBearing", &json!({"bearing": 30})).unwrap();
+    s.run("map.setPitch", &json!({"pitch": 50})).unwrap();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
+    let (id, bearing, pitch) = frame_of(&s);
+    assert_eq!((bearing, pitch), (30.0, 50.0));
+    // Set on the frame, kept in range; a value that isn't a number changes nothing.
+    s.run("layout.update", &json!({"element": id, "bearing": 400, "pitch": 200})).unwrap();
+    assert_eq!(frame_of(&s), (id, 40.0, 85.0));
+    assert!(s.run("layout.update", &json!({"element": id, "pitch": "steep", "bearing": 10})).is_err());
+    assert_eq!(frame_of(&s), (id, 40.0, 85.0));
+    // Zooming the frame to the view takes the view's bearing and pitch too.
+    s.run("map.resetNorth", &json!({})).unwrap();
+    s.run("layout.frameZoom", &json!({"to": "view"})).unwrap();
+    assert_eq!(frame_of(&s), (id, 0.0, 0.0));
+    // A flat frame saves as before; a tilted one draws differently, with its north arrow turned.
+    let flat_json = serde_json::to_string(&s.project.layouts[0]).unwrap_or_default();
+    assert!(!flat_json.contains("bearing") && !flat_json.contains("pitch"), "{flat_json}");
+    s.run("layout.addElement", &json!({"kind": "northArrow", "frame": id})).unwrap();
+    let info = rustgis_render::layout::PageInfo::default();
+    let draw = |s: &mut Session| {
+        rustgis_render::layout::render(&s.project.layouts[0].clone(), &mut s.project.maps, 48.0, &info).map(|p| p.data().to_vec())
+    };
+    let flat = draw(&mut s).expect("drawn");
+    s.run("layout.update", &json!({"element": id, "bearing": 90, "pitch": 60})).unwrap();
+    let tilted = draw(&mut s).expect("drawn");
+    assert_ne!(flat, tilted);
+    let saved = serde_json::to_string(&s.project.layouts[0]).unwrap_or_default();
+    assert!(saved.contains("\"bearing\":90") && saved.contains("\"pitch\":60"), "{saved}");
 }
 
 #[test]
@@ -3742,6 +3827,41 @@ fn view_of(s: &mut Session, e: rustgis_geom::Extent) -> crate::render::View {
     s.view_size = (800.0, 600.0);
     s.zoom_to(&e);
     crate::render::View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false }
+}
+
+#[test]
+fn a_refused_edit_of_a_streamed_layer_says_why() {
+    use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
+    let path = grid_fgb("refused", 20);
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
+    let streamed = r["layer"].as_u64().unwrap() as u32;
+    // Its window read, as drawing does.
+    let v = view_of(&mut s, rustgis_geom::Extent::new(-180.0, -80.0, 180.0, 80.0));
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    let count = |s: &Session| s.map().layer(streamed).unwrap().dataset.features.len();
+    let n = count(&s);
+    assert!(n > 2, "{n}");
+    let mut d = Dataset::new("other", GeometryType::Point, vec![]);
+    d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+    let other = s.map_mut().add_dataset(d);
+    // Refused up front (the streamed layer active), or undone after (another one active): either
+    // way nothing changes, and the reason is said.
+    for active in [streamed, other] {
+        for (id, p) in [("edit.delete", json!(null)), ("edit.cut", json!(null)), ("edit.move", json!({"dx": 1000, "dy": 0}))] {
+            s.active_layer = Some(active);
+            s.map_mut().layer_mut(streamed).unwrap().selection = vec![0, 1];
+            let mark = s.notice_mark();
+            let e = s.run(id, &p).unwrap_err();
+            assert!(e.contains("read in place"), "{id}: {e}");
+            assert_eq!(count(&s), n, "{id}");
+            let said = s.notices_since(mark);
+            assert!(said.iter().any(|x| x.error && x.text == e), "{id}: no notice");
+            // Nothing that says it was done ("Deleted 2 features"): it was undone.
+            assert!(said.iter().all(|x| x.error), "{id}: {said:?}");
+        }
+    }
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]
