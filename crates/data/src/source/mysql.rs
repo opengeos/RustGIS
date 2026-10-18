@@ -603,6 +603,9 @@ pub struct MysqlSource {
     /// The order rows are numbered in for a sample: the key's, so a sample keeps the same rows
     /// from one read to the next (none without one).
     order: String,
+    /// The table's columns a sample numbers and reads (`t.`-qualified): the geometry and the
+    /// fields, not every column of every matching row.
+    numbered_cols: String,
     reproject: Reproject,
 }
 
@@ -649,11 +652,14 @@ impl MysqlSource {
             "SELECT SRS_ID FROM information_schema.ST_GEOMETRY_COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?"
         };
         // (MySQL 5.7 has neither: the rows' then.)
-        let declared: Option<u32> = conn
-            .with(|c| c.exec_first::<Option<u32>, _, _>(declared_sql, (&table.schema, &table.name, &table.column)))
-            .ok()
-            .flatten()
-            .flatten();
+        let declared: Option<u32> =
+            match conn.with(|c| c.exec_first::<Option<u32>, _, _>(declared_sql, (&table.schema, &table.name, &table.column))) {
+                Ok(d) => d.flatten(),
+                Err(e) => {
+                    notes.push(format!("the column's coordinate system couldn't be read ({e}): the first row's is used"));
+                    None
+                }
+            };
         let raw_srid = match declared {
             Some(s) => s,
             None => conn
@@ -693,6 +699,8 @@ impl MysqlSource {
         })?;
         let mut fields = Vec::new();
         let mut casts = Vec::new();
+        // (The key, an integer, is among the fields.)
+        let mut raw = vec![format!("t.{}", ident(&table.column))];
         let mut keys = Vec::new();
         for r in &cols {
             let (Some(name), Some(ty), Some(column_type), key) =
@@ -708,6 +716,7 @@ impl MysqlSource {
             }
             if let Some((ft, cast)) = field_cast(&ty, &column_type, &ident(&name)) {
                 casts.push(cast);
+                raw.push(format!("t.{}", ident(&name)));
                 fields.push(Field::new(name, ft));
             }
         }
@@ -748,6 +757,7 @@ impl MysqlSource {
             select,
             numbered,
             order,
+            numbered_cols: raw.join(", "),
             reproject,
         };
         src.info.indexed = src.has_index();
@@ -845,15 +855,12 @@ impl MysqlSource {
     /// the whole table, or can't be converted (the read then filters nothing on the server).
     fn native_window(&self, req: &Request) -> Option<String> {
         let e = req.extent?;
-        // (Only an extent measured from every row: a sample's can miss some.)
+        // The extent of a large table is a sample's, which can miss rows at its edges: a view
+        // holding it but not them reads the whole table's sample and keeps those in view, fewer
+        // than it could. Filtering every whole-table view instead costs far more (MySQL's
+        // geographic test runs on every row).
         let all = self.info.extent;
-        if self.info.count.is_some_and(|n| n <= EXTENT_SAMPLE as u64)
-            && !all.is_empty()
-            && e.min_x <= all.min_x
-            && e.min_y <= all.min_y
-            && e.max_x >= all.max_x
-            && e.max_y >= all.max_y
-        {
+        if !all.is_empty() && e.min_x <= all.min_x && e.min_y <= all.min_y && e.max_x >= all.max_x && e.max_y >= all.max_y {
             return None;
         }
         box_text(&self.reproject.extent_from_lonlat(&e), self.reproject.is_lonlat())
@@ -949,9 +956,10 @@ impl MysqlSource {
         // network.
         let numbered = |every: &str| {
             format!(
-                "SELECT {}, `rustgis total` FROM (SELECT t.*, ROW_NUMBER() OVER ({}) AS `rustgis rn`, {} AS `rustgis total` \
+                "SELECT {}, `rustgis total` FROM (SELECT {}, ROW_NUMBER() OVER ({}) AS `rustgis rn`, {} AS `rustgis total` \
                  FROM {from} t WHERE {filter}) s WHERE MOD(`rustgis rn` - 1, {every}) = 0 LIMIT {limit}",
                 cols.join(", "),
+                self.numbered_cols,
                 self.order,
                 if window.is_some() { "COUNT(*) OVER ()" } else { "0" },
             )
