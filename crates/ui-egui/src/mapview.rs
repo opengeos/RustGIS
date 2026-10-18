@@ -79,6 +79,12 @@ pub struct MapView {
     tex_size: (f64, f64),
     /// Where the texture sits on screen this frame.
     tex_rect: Rect,
+    /// Where the map view was drawn on screen (points), and on which frame: what a screen
+    /// snapshot for the MCP relay crops to.
+    pub view_rect: Option<(Rect, u64)>,
+    /// The map's controls, scale bar, sketches and pop-up are left out (a screen snapshot for the
+    /// MCP relay that asked for the map alone).
+    pub hide_overlays: bool,
     /// How long the last frame drawn mid-motion took (ms), and the share of full resolution it
     /// was drawn at: the next is spaced out by it, and drawn finer or coarser to take about 40 ms.
     motion_cost: (f64, f64),
@@ -148,10 +154,11 @@ pub struct MapView {
     /// and egui's wgpu render state handed over by the host app.
     pub(crate) gpu_renderer: Option<std::sync::Arc<crate::mapgpu::GpuMapRenderer>>,
     pub(crate) gpu_frame: Option<std::sync::Arc<crate::mapgpu::SceneBuffers>>,
-    /// The map revision a turned or tilted GPU scene was declined for (it couldn't be drawn on
-    /// the GPU: labels with icons, or over the device's limits): until it changes such views stay
-    /// on the CPU, with the tilted map's drape and its settled frame drawn off the UI thread.
-    pub(crate) gpu_turn_declined: Option<u64>,
+    /// The map revision and zoom level a turned or tilted GPU scene was declined at (it couldn't
+    /// be drawn on the GPU: labels with icons, or over the device's limits): until either
+    /// changes such views stay on the CPU, with the tilted map's drape and its settled frame
+    /// drawn off the UI thread.
+    pub(crate) gpu_turn_declined: Option<(u64, i32)>,
     /// The GPU scene's offscreen MSAA target, shared with the paint callback across frames.
     pub(crate) gpu_target: std::sync::Arc<std::sync::Mutex<Option<crate::mapgpu::SceneTarget>>>,
     /// The last side-by-side map's GPU scene (its key, buffers and labels), when the second
@@ -174,6 +181,8 @@ impl Default for MapView {
             tex_camera: Camera::world(),
             tex_size: (0.0, 0.0),
             tex_rect: Rect::NOTHING,
+            view_rect: None,
+            hide_overlays: false,
             motion_cost: (0.0, 1.0),
             labels: Vec::new(),
             label_lonlat: Vec::new(),
@@ -284,7 +293,12 @@ fn now(ui: &Ui) -> f64 {
 
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    crate::modelbuilder::follow_view(app);
     view_tabs(app, ui, &t);
+    if app.mb.shown() {
+        crate::modelbuilder::show(app, ui);
+        return;
+    }
     if app.session.active_layout.is_some() {
         crate::layoutview::show(app, ui);
         return;
@@ -437,6 +451,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         return;
     }
     app.session.view_size = (w, h);
+    app.map.view_rect = Some((rect, ui.ctx().cumulative_frame_nr()));
     // The start extent, fitted to the view's real size.
     if let Some(e) = app.ui.start_view.take() {
         let _ = app.run("map.zoomToExtent", json!({"extent": e}));
@@ -462,7 +477,8 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // The GPU backend draws effect-free flat maps, turned and tilted ones too unless they need
     // pictures drawn on the CPU (tiles, rasters…): it re-renders on every change (no
     // texture-shift trick — meshes re-project in the vertex shader).
-    let rev = app.session.revision;
+    // A decline holds at its revision and zoom level (what it shows depends on both).
+    let rev = (app.session.revision, (cam.res.max(1e-9).log2().round()) as i32);
     let turned_view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: cam, sky: true };
     let gpu_ok = app.map.gpu_enabled
         && app.map.render_state.is_some()
@@ -576,7 +592,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // the per-draw uniforms instead of re-tessellating. `key` and `tex_camera` stay at the
     // last full render: the scene's contents (extent culling, the 0.35 px decimation, label
     // placement) are baked for that camera, so once the motion settles the still-stale key
-    // makes the branch below do one full re-render.
+    // makes the branch below do one full re-render. The meshes reach half a view past each
+    // side (`GPU_CULL_MARGIN`); zooming out or panning further would show gaps where features
+    // were left out, so then the branch below re-renders mid-motion instead.
     let stale = app.map.key != Some(key);
     let cam_only = app.map.key.is_some_and(|k| (Key { cam: k.cam, ..key }) == k);
     let mut fast_engaged = false;
@@ -584,6 +602,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         && gpu_ok
         && (interacting || app.ws.playing.is_some())
         && cam_only
+        && scene_covers(app.map.tex_camera, cam, w, h)
         && let (Some(gf), Some(rs)) = (&app.map.gpu_frame, &app.map.render_state)
         && !gf.has_images
         && gf.fits(&cam)
@@ -694,7 +713,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             // A turned or tilted scene the GPU couldn't take (over the device's limits) isn't
             // tried again until the map changes.
             if gpu_ok && (cam.bearing != 0.0 || cam.pitch != 0.0) {
-                app.map.gpu_turn_declined = Some(app.session.revision);
+                app.map.gpu_turn_declined = Some(rev);
             }
             app.map.gpu_frame = None;
             let view = View { width: vw, height: vh, pixels_per_point: vppp as f64, camera: cam, sky: true };
@@ -749,7 +768,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // Shooting stars, while space shows around the globe.
     let g = Globe::new(&cam, w, h);
     let (gx, gy) = g.center();
-    let space = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().any(|&(x, y)| (x - gx).hypot(y - gy) > g.disc_radius());
+    // Outside the disc (an ellipse when the globe is tilted).
+    let k = g.disc_height() / g.disc_radius().max(1e-9);
+    let space = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().any(|&(x, y)| (x - gx).hypot((y - gy) / k) > g.disc_radius());
     if globe_view && space && app.session.map().view.effects.stars {
         let wait = app.map.comets.paint(&painter, rect, &g, time);
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(wait.clamp(0.0, 60.0)));
@@ -782,6 +803,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         for l in &app.map.labels {
             draw_label(&painter, l, tex_rect.min + vec2(l.x, l.y) * s);
         }
+    }
+    if app.map.hide_overlays {
+        return;
     }
     overlays(app, ui, &painter, rect, &t);
     popup(app, ui, rect);
@@ -974,14 +998,14 @@ fn pan(app: &mut RustGisApp, dx: f64, dy: f64, w: f64, h: f64) {
     }
 }
 
-/// Turns the flat map by `degrees` about the view's centre.
+/// Turns the map or the globe by `degrees` about the view's centre.
 fn turn_by(app: &mut RustGisApp, degrees: f64) {
     let cam = &mut app.session.map_mut().camera;
     let bearing = cam.bearing + degrees;
     cam.set_bearing(bearing);
 }
 
-/// Tilts the flat map by `degrees`.
+/// Tilts the map or the globe by `degrees`.
 fn tilt_by(app: &mut RustGisApp, degrees: f64) {
     if degrees != 0.0 {
         let cam = &mut app.session.map_mut().camera;
@@ -1063,15 +1087,14 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             ui.ctx().request_repaint();
         }
     }
-    // Arrow keys pan; Shift+Left and Shift+Right turn the flat map, Shift+Up and Shift+Down tilt
-    // it (as in MapLibre).
+    // Arrow keys pan; Shift+Left and Shift+Right turn the map, Shift+Up and Shift+Down tilt it
+    // (as in MapLibre).
     if !ui.ctx().egui_wants_keyboard_input() {
         let (mut dx, mut dy, mut turn, mut tilt) = (0.0, 0.0, 0.0, 0.0);
-        let flat = globe(app, rect).is_none();
         ui.input(|i| {
             // Ninety degrees a second, whatever the frame rate.
             let step = (f64::from(i.stable_dt) * 90.0).clamp(0.0, 15.0);
-            if i.modifiers.shift && flat {
+            if i.modifiers.shift {
                 if i.key_down(egui::Key::ArrowLeft) {
                     turn -= step;
                 }
@@ -1116,9 +1139,9 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     let shift = ui.input(|i| i.modifiers.shift);
     let middle = ui.input(|i| i.pointer.middle_down());
     let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
-    // Dragging with the right button turns the flat map (to the right turns it clockwise) and
-    // tilts it (up tilts it further), as in MapLibre.
-    if resp.dragged_by(egui::PointerButton::Secondary) && globe(app, rect).is_none() {
+    // Dragging with the right button turns the map or the globe (to the right turns it
+    // clockwise) and tilts it (up tilts it further), as in MapLibre.
+    if resp.dragged_by(egui::PointerButton::Secondary) {
         let d = resp.drag_delta();
         if d != egui::Vec2::ZERO {
             turn_by(app, d.x as f64 * 0.8);
@@ -1129,9 +1152,8 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         return;
     }
     // Drag start.
-    // On the globe, which doesn't turn, the right button still drags it like the left.
     if resp.drag_started()
-        && (globe(app, rect).is_some() || !ui.input(|i| i.pointer.secondary_down()))
+        && !ui.input(|i| i.pointer.secondary_down())
         && let Some(p) = resp.interact_pointer_pos()
     {
         let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
@@ -1142,8 +1164,8 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         } else {
             match tool {
                 Tool::Explore if shift => DragKind::Box,
-                // Ctrl+drag turns and tilts the flat map, as the right button does.
-                Tool::Explore if ctrl && globe(app, rect).is_none() => DragKind::Turn,
+                // Ctrl+drag turns and tilts the map, as the right button does.
+                Tool::Explore if ctrl => DragKind::Turn,
                 Tool::Explore => DragKind::Pan,
                 Tool::Select | Tool::ZoomIn => DragKind::Box,
                 t if drag_shape(t).is_some() => DragKind::Sketch,
@@ -1737,7 +1759,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     // The arrow points north, leaning back with the map's tilt; on a turned or tilted map clicking
     // it faces north and looks straight down again.
     let cam = app.session.map().camera;
-    let (bearing, pitch) = if app.session.map().projection.is_globe() { (0.0, 0.0) } else { (cam.bearing, cam.pitch) };
+    let (bearing, pitch) = (cam.bearing, cam.pitch);
     // Facing north the corner stays the map's (identify, select and sketch clicks land there).
     if bearing != 0.0 || pitch != 0.0 {
         let hit = ui
@@ -2174,7 +2196,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.painter().line_segment([pos2(r.min.x, r.max.y - 0.5), pos2(r.max.x, r.max.y - 0.5)], Stroke::new(1.0, t.border));
     let mut x = r.min.x + 6.0;
     let names: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
-    let active = if app.session.active_layout.is_some() { usize::MAX } else { app.session.project.active_map };
+    let active = if app.session.active_layout.is_some() || app.mb.shown() { usize::MAX } else { app.session.project.active_map };
     // A tab's close button asks to delete its map or layout.
     let mut close: Option<Deletion> = None;
     for (i, n) in names.iter().enumerate() {
@@ -2208,6 +2230,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             close = Some(Deletion::Map(n.clone()));
         }
         if resp.clicked() && !is {
+            app.mb.active = false;
             let _ = app.run("layout.close", Value::Null);
             let _ = app.run("map.activate", json!({"name": n}));
             app.map.popup = None;
@@ -2220,7 +2243,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0 + TAB_CLOSE_W;
         let tr = Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(w, r.height() - 4.0));
         let resp = ui.interact(tr, egui::Id::new(("layouttab", i)), Sense::click());
-        let is = app.session.active_layout == Some(i);
+        let is = app.session.active_layout == Some(i) && !app.mb.shown();
         if is {
             ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.ribbon);
             ui.painter().rect_filled(
@@ -2250,8 +2273,48 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             close = Some(Deletion::Layout(n.clone()));
         }
         if resp.clicked() && !is {
+            app.mb.active = false;
             let _ = app.run("layout.activate", json!({"name": n}));
             app.ui.tab = "Publish".into();
+        }
+        x += w + 2.0;
+    }
+    // ModelBuilder, after the layouts.
+    if app.mb.open {
+        let n = if app.mb.name.trim().is_empty() { tl!("Untitled model").to_string() } else { app.mb.name.trim().to_string() };
+        let w = crate::widgets::text_w(ui, &n, regular(12.0)) + 46.0 + TAB_CLOSE_W;
+        let tr = Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(w, r.height() - 4.0));
+        let resp = ui.interact(tr, egui::Id::new("modeltab"), Sense::click());
+        let is = app.mb.shown();
+        if is {
+            ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.ribbon);
+            ui.painter().rect_filled(
+                Rect::from_min_max(tr.min, pos2(tr.max.x, tr.min.y + 2.0)),
+                CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
+                t.accent,
+            );
+        } else if resp.contains_pointer() {
+            ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.hover);
+        }
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(tr.min.x + 15.0, tr.center().y), vec2(15.0, 15.0)),
+            "modelbuilder",
+            t.icon,
+            t.accent,
+        );
+        ui.painter().text(
+            pos2(tr.min.x + 28.0, tr.center().y),
+            Align2::LEFT_CENTER,
+            &n,
+            if is { semibold(12.0) } else { regular(12.0) },
+            if is { t.text } else { t.text_dim },
+        );
+        if tab_close(ui, t, tr, egui::Id::new("modeltab_close"), is, true, tl!("Close ModelBuilder")) {
+            let _ = app.run("ui.modelBuilder", json!({"close": true}));
+        }
+        if resp.clicked() && !is {
+            let _ = app.run("ui.modelBuilder", Value::Null);
         }
         x += w + 2.0;
     }
@@ -2374,6 +2437,16 @@ fn tab_close(ui: &mut Ui, t: &Tokens, tab: Rect, id: egui::Id, in_view: bool, en
     enabled && resp.clicked()
 }
 
+/// Whether a flat GPU frame drawn with `scene` holds every feature `cam` shows in a `w`×`h`
+/// view: the view lies inside the extent its meshes were tessellated for, so moving them leaves
+/// no gaps. Only the view's camera and size matter to that extent.
+fn scene_covers(scene: Camera, cam: Camera, w: f64, h: f64) -> bool {
+    use rustgis_engine::render::{GPU_CULL_MARGIN, cull_extent};
+    let held = cull_extent(&View { width: w, height: h, pixels_per_point: 1.0, camera: scene, sky: true }, GPU_CULL_MARGIN);
+    let e = cam.extent(w, h);
+    !e.is_empty() && e.min_x >= held.min_x && e.min_y >= held.min_y && e.max_x <= held.max_x && e.max_y <= held.max_y
+}
+
 #[cfg(test)]
 mod picture_tests {
     #[test]
@@ -2395,6 +2468,22 @@ mod picture_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The GPU fast path moves the last frame's meshes only while they cover the view: zooming
+    /// out or panning past the cull margin re-renders, or features culled from the last frame
+    /// would vanish until the motion stopped.
+    #[test]
+    fn gpu_fast_path_needs_the_scene_to_cover_the_view() {
+        let scene = RustGisApp::with_sample().session.map().camera;
+        let (w, h) = (800.0, 600.0);
+        assert!(scene_covers(scene, scene, w, h));
+        assert!(scene_covers(scene, Camera { res: scene.res * 0.5, ..scene }, w, h), "zooming in");
+        assert!(scene_covers(scene, Camera { res: scene.res * 1.9, ..scene }, w, h), "zooming out within the margin");
+        assert!(!scene_covers(scene, Camera { res: scene.res * 2.5, ..scene }, w, h), "zooming out past it");
+        let panned = |dx: f64| Camera { center: Coord::new(scene.center.x + dx * scene.res, scene.center.y), ..scene };
+        assert!(scene_covers(scene, panned(350.0), w, h), "panning within the margin");
+        assert!(!scene_covers(scene, panned(450.0), w, h), "panning past it");
+    }
 
     #[test]
     fn fps_counts_the_last_second_and_idle_is_none() {

@@ -221,11 +221,10 @@ fn view_frame(s: &Session, w_mm: f64) -> (Coord, f64) {
     (m.center_lonlat(), (ground_w / (w_mm / 1000.0)).clamp(100.0, 1e10))
 }
 
-/// The active map's bearing and pitch, for a frame showing its view (the globe neither turns
-/// nor tilts).
+/// The active map's bearing and pitch, for a frame showing its view.
 fn view_turn(s: &Session) -> (f64, f64) {
     let m = s.map();
-    if m.projection.is_globe() { (0.0, 0.0) } else { (m.camera.bearing, m.camera.pitch) }
+    (m.camera.bearing, m.camera.pitch)
 }
 
 fn frame_kind(s: &Session, map: &str, w: f64, shape: FrameShape) -> ElementKind {

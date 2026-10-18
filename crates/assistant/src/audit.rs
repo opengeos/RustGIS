@@ -50,6 +50,12 @@ pub fn record(dir: &Path, source: &str, request: &str, reply: Option<&str>, took
     if folder.create(dir).is_err() {
         return;
     }
+    // A folder made before (by hand, or looser) is made private too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
     let mut o = std::fs::OpenOptions::new();
     o.create(true).append(true);
     #[cfg(unix)]
@@ -88,7 +94,7 @@ pub fn entries(source: &str, request: &str, reply: Option<&str>, took: Duration,
                     .and_then(|r| r.pointer("/error/message").or_else(|| r.pointer("/result/content/0/text")))
                     .and_then(Value::as_str)
                     .unwrap_or("no reply");
-                let text = rustgis_engine::sources::redact(text);
+                let text = redact_string(text);
                 // Free text can name a credential the redaction can't find (`token abc123`):
                 // such an error is withheld, not kept.
                 if mentions_secret(&text) {
@@ -129,7 +135,7 @@ pub fn entries(source: &str, request: &str, reply: Option<&str>, took: Duration,
         .collect()
 }
 
-/// The words that name a secret, in keys and in free text.
+/// The words that name a secret in a key's name, whole words and their plurals.
 const SECRET_WORDS: &[&str] = &[
     "password",
     "passwd",
@@ -137,14 +143,69 @@ const SECRET_WORDS: &[&str] = &[
     "secret",
     "token",
     "apikey",
-    "api_key",
-    "key",
+    "auth",
     "authorization",
+    "bearer",
     "credential",
     "signature",
     "cookie",
     "sas",
+    "dsn",
 ];
+/// Words before "key" that make it a secret key (`api_key`, `accessKey`), not a sort or join key.
+const KEY_KINDS: &[&str] = &["api", "access", "private", "secret", "account", "sas", "subscription", "client"];
+
+/// Whether a key's name names a secret: its words (split at `_`, `-`, `.` and camelCase), one of
+/// [`SECRET_WORDS`] or its plural, or "key" after one of [`KEY_KINDS`] (or alone).
+fn secret_key(name: &str) -> bool {
+    let mut words: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut prev_lower = false;
+    for c in name.chars() {
+        if c == '_' || c == '-' || c == '.' || c == ' ' {
+            words.push(std::mem::take(&mut cur));
+            prev_lower = false;
+            continue;
+        }
+        if c.is_ascii_uppercase() && prev_lower {
+            words.push(std::mem::take(&mut cur));
+        }
+        prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
+        cur.push(c.to_ascii_lowercase());
+    }
+    words.push(cur);
+    let words: Vec<&str> = words.iter().map(String::as_str).filter(|w| !w.is_empty()).collect();
+    let is = |w: &str, s: &str| w == s || w.strip_suffix('s') == Some(s);
+    words.iter().enumerate().any(|(i, w)| {
+        SECRET_WORDS.iter().any(|s| is(w, s))
+            || (is(w, "key") && (words.len() == 1 || i.checked_sub(1).and_then(|j| words.get(j)).is_some_and(|p| KEY_KINDS.contains(p))))
+    })
+}
+
+/// A string argument without its secrets: an address (one word with a scheme, or a database
+/// connection string) loses its password, keys and tokens; `password=…` in a keyword connection
+/// string is withheld. Other text is kept as it is, not cut at a `?` or `#`.
+fn redact_string(s: &str) -> String {
+    let t = s.trim();
+    let lower = t.to_ascii_lowercase();
+    let schemes = ["postgres:", "postgresql:", "pg:", "mysql:", "mariadb:"];
+    let address = !t.contains(char::is_whitespace) && (t.contains("://") || schemes.iter().any(|p| lower.starts_with(p)));
+    if address {
+        return rustgis_engine::sources::redact(t);
+    }
+    // `host=db user=a password=hunter2`: each `password=` (or `pwd=`) value goes.
+    if ["password=", "pwd=", "passwd="].iter().any(|k| lower.contains(k)) {
+        return t
+            .split_whitespace()
+            .map(|part| match part.split_once('=') {
+                Some((k, _)) if ["password", "pwd", "passwd"].contains(&k.to_ascii_lowercase().as_str()) => format!("{k}=[redacted]"),
+                _ => part.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+    }
+    s.to_string()
+}
 
 /// Whether free text names a secret. Narrower than [`SECRET_WORDS`]: a plain "key" in an error
 /// ("primary key") isn't one.
@@ -183,16 +244,12 @@ fn redact_script(script: &str) -> String {
 /// secret, the passwords, keys and tokens in addresses ([`rustgis_engine::sources::redact`]),
 /// and the same inside a script's lines.
 fn redact(v: Value, depth: usize) -> Value {
-    let secret = |k: &str| {
-        let k = k.to_ascii_lowercase();
-        SECRET_WORDS.iter().any(|s| k == *s || k.ends_with(s))
-    };
     match v {
-        Value::String(s) => Value::String(rustgis_engine::sources::redact(&s)),
+        Value::String(s) => Value::String(redact_string(&s)),
         Value::Array(a) if depth < 16 => Value::Array(a.into_iter().map(|x| redact(x, depth + 1)).collect()),
         Value::Object(o) if depth < 16 => Value::Object(
             o.into_iter()
-                .map(|(k, x)| match (secret(&k), k.as_str(), x) {
+                .map(|(k, x)| match (secret_key(&k), k.as_str(), x) {
                     (true, _, _) => (k, json!("[redacted]")),
                     (false, "script", Value::String(s)) => (k, json!(redact_script(&s))),
                     (false, _, x) => (k, redact(x, depth + 1)),
@@ -279,6 +336,16 @@ mod tests {
         let text = lines[0].to_string();
         assert!(!text.contains("hunter2") && !text.contains("s3cret") && text.contains("db.example.com"), "{text}");
         assert!(lines[0].get("batch").is_none());
+        // Keys by their words: secrets, not every key.
+        for k in ["password", "api_key", "accessKey", "tokens", "authToken", "client_secret", "key", "DSN"] {
+            assert!(secret_key(k), "{k}");
+        }
+        for k in ["primary_key", "sort_key", "keys_column", "texas", "name"] {
+            assert!(!secret_key(k), "{k}");
+        }
+        // Free text keeps its shape; a keyword connection string loses its password.
+        assert_eq!(redact_string("SELECT * FROM t WHERE url = 'http://x?a=1#b'"), "SELECT * FROM t WHERE url = 'http://x?a=1#b'");
+        assert_eq!(redact_string("host=db user=ann password=hunter2"), "host=db user=ann password=[redacted]");
         // One line that isn't JSON doesn't leave the others' secrets in the log.
         let broken = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "run", "arguments": {
             "script": "sql.connect {\"password\": \"hunter2\"}\nmap.zoomIn {oops token=abc"}}});

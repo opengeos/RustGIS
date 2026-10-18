@@ -836,9 +836,9 @@ fn is_zero(v: &f64) -> bool {
 
 /// The camera that shows a frame's centre at its paper scale in `map`'s projection, turned to
 /// `bearing` and tilted to `pitch` (degrees). The globe takes its camera in Web Mercator, whose
-/// ground scale at the centre it matches, so it is handled like the flat map (and neither turns
-/// nor tilts). The frame's own bearing and pitch apply, whichever way the map in view is turned
-/// or tilted.
+/// ground scale at the centre it matches, so it is handled like the flat map, and turns and
+/// tilts like it. The frame's own bearing and pitch apply, whichever way the map in view is
+/// turned or tilted.
 pub fn frame_camera(map: &Map, center: Coord, scale: f64, bearing: f64, pitch: f64) -> Camera {
     let mut cam = Camera { bearing: crate::camera::normalize_bearing(bearing), pitch: crate::camera::normalize_pitch(pitch), ..map.camera };
     if let Some(c) = map.to_map(center) {
