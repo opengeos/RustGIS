@@ -331,6 +331,8 @@ pub struct Session {
     pub keep_tool: bool,
     /// Copied features (Edit › Clipboard).
     pub clipboard: Option<cmd::clipboard::Clipboard>,
+    /// Copied layers (Layers › Copy, #491).
+    pub layer_clipboard: Option<cmd::layer_copy::LayerClip>,
     /// Each step keeps the layout that was open with its project (`active_layout` is the
     /// session's, so a step that added or moved layouts opens the right one when undone).
     undo: Vec<Step>,
@@ -457,6 +459,7 @@ impl Session {
             table_layer: None,
             table_standalone: None,
             clipboard: None,
+            layer_clipboard: None,
             keep_tool: false,
             active_layout: None,
             trusted_tasks: Default::default(),
