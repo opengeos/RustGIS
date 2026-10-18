@@ -218,6 +218,10 @@ fn terrain(s: &mut Session, p: &Value) -> CmdResult {
         }
         (None, Some(url)) => {
             let url = url.trim();
+            let lower = url.to_ascii_lowercase();
+            if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+                return Err("tiles is a web address (http or https)".into());
+            }
             if !(url.contains("{z}") && url.contains("{x}") && (url.contains("{y}") || url.contains("{-y}"))) {
                 return Err("tiles is an XYZ URL with {z}, {x} and {y}".into());
             }

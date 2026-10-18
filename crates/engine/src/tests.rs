@@ -1423,6 +1423,7 @@ fn terrain_is_set_from_a_dem_or_tiles() {
     assert!(s.run("map.terrain", &json!({"layer": "Countries"})).is_err());
     assert!(s.run("map.terrain", &json!({"layer": "Nowhere"})).is_err());
     assert!(s.run("map.terrain", &json!({"tiles": "https://example.com/dem.png"})).is_err());
+    assert!(s.run("map.terrain", &json!({"tiles": "file:///etc/{z}/{x}/{y}.png"})).is_err());
     assert!(s.run("map.terrain", &json!({"tiles": "https://e.com/{z}/{x}/{y}.png", "encoding": "jpeg"})).is_err());
     assert!(s.map().view.terrain.is_none());
     // Tiles, then only a new exaggeration (kept in range), then off.

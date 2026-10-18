@@ -13,6 +13,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub const NETWORK: &[&str] = &[
     "map.route",
     "map.addTiles",
+    "map.terrain",
     "layer.addUrl",
     "service.layers",
     "service.add",
