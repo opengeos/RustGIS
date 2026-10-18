@@ -166,6 +166,11 @@ pub fn install_fonts(
                 }
             }
         }
+        // Monospace text (the status bar's bearing and pitch, code boxes) falls back to them too,
+        // after Hack, so translated or CJK text in it doesn't draw as boxes.
+        if let Some(v) = fonts.families.get_mut(&FontFamily::Monospace) {
+            v.push(name.clone());
+        }
     }
     ctx.set_fonts(fonts);
 }
