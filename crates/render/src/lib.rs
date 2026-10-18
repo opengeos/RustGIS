@@ -1251,6 +1251,17 @@ fn drape_terrain(pm: &mut Pixmap, view: &View, map: &Map, bands: &[(View, (f64, 
                     if depth < d0 - margin || depth > d1 + margin || p.2.min(q.2).min(r.2) > far {
                         continue;
                     }
+                    // Wholly off one side of the picture: nothing to draw.
+                    let (pw, ph) = (f64::from(pm.width()), f64::from(pm.height()));
+                    let xs = [p.0.0, q.0.0, r.0.0];
+                    let ys = [p.0.1, q.0.1, r.0.1];
+                    if xs.iter().all(|x| *x < 0.0)
+                        || xs.iter().all(|x| *x > pw)
+                        || ys.iter().all(|y| *y < 0.0)
+                        || ys.iter().all(|y| *y > ph)
+                    {
+                        continue;
+                    }
                     tris.push((depth, bi, [p.0, q.0, r.0], [p.1, q.1, r.1]));
                 }
             }

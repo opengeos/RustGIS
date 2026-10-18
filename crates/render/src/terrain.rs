@@ -30,6 +30,8 @@ enum Heights {
         /// The tiles read so far, and whether one is still on its way.
         read: RefCell<HashMap<TileId, Option<Arc<Payload>>>>,
         pending: RefCell<bool>,
+        /// Tiles found on their way, not asked for again while this view is drawn.
+        waiting: RefCell<std::collections::HashSet<TileId>>,
     },
 }
 
@@ -62,6 +64,7 @@ impl Ground {
                     zoom,
                     read: RefCell::new(HashMap::new()),
                     pending: RefCell::new(false),
+                    waiting: RefCell::new(std::collections::HashSet::new()),
                 }
             }
         };
@@ -73,7 +76,9 @@ impl Ground {
     pub fn height(&self, m: Coord) -> Option<f64> {
         let h = match &self.heights {
             Heights::Raster(r) => raster_height(r, m)?,
-            Heights::Tiles { url, encoding, zoom, read, pending } => tile_height(url, *encoding, *zoom, read, pending, m)?,
+            Heights::Tiles { url, encoding, zoom, read, pending, waiting } => {
+                tile_height(url, *encoding, *zoom, read, pending, waiting, m)?
+            }
         };
         let h = h * self.exaggeration;
         h.is_finite().then_some(h)
@@ -144,6 +149,7 @@ fn tile_height(
     zoom: u8,
     read: &RefCell<HashMap<TileId, Option<Arc<Payload>>>>,
     pending: &RefCell<bool>,
+    waiting: &RefCell<std::collections::HashSet<TileId>>,
     m: Coord,
 ) -> Option<f64> {
     let (id, _, _) = tile_at(m, zoom)?;
@@ -151,13 +157,18 @@ fn tile_height(
         if let Some(t) = read.borrow().get(&id) {
             return t.clone();
         }
+        if waiting.borrow().contains(&id) {
+            return None;
+        }
         let u = template::expand(url, id, 256, false, &[]);
         let got = if fetch {
             match cache::get(&u, Want::Image) {
                 State::Ready(p) => Some(p),
                 State::Pending => {
                     *pending.borrow_mut() = true;
-                    // Not remembered: asked again once it may have come.
+                    // Not asked again while this view is drawn: the next frame, drawn when it
+                    // comes, asks again.
+                    waiting.borrow_mut().insert(id);
                     return None;
                 }
                 State::Failed(_) => None,
