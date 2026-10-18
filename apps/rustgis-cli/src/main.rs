@@ -437,6 +437,9 @@ fn mcp(s: &mut Session, args: &[String]) -> Result<(), String> {
         };
         return attach(port, allow_access, opt(args, "--token-file"), timeout);
     }
+    if args.iter().any(|a| a == "--timeout") {
+        return Err("mcp --timeout sets how long calls wait for the open app; use it with --attach".into());
+    }
     let mut server = rustgis_assistant::mcp::Server::new(allow_access);
     server.skills = rustgis_assistant::skills::installed();
     eprintln!(

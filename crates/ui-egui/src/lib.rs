@@ -641,6 +641,10 @@ pub struct RustGisApp {
     /// already has open, started by the `ui.mcpRelay` command and off until then.
     #[cfg(not(target_arch = "wasm32"))]
     pub relay: Option<rustgis_assistant::relay::Relay>,
+    /// The file bridge for agents that can't use MCP: on while agents are turned on, with or
+    /// without the relay ([`connectui`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub file_bridge: Option<rustgis_assistant::filebridge::FileBridge>,
     /// A screen snapshot an agent attached through the relay asked for, while it is captured.
     #[cfg(not(target_arch = "wasm32"))]
     relay_shot: Option<relayshot::Shot>,
@@ -708,6 +712,8 @@ impl RustGisApp {
             services: Services::default(),
             #[cfg(not(target_arch = "wasm32"))]
             relay: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            file_bridge: None,
             #[cfg(not(target_arch = "wasm32"))]
             relay_shot: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1685,6 +1691,7 @@ impl RustGisApp {
                     // With agents turned on in the assistant settings, they may use files and the
                     // network without asking (--yes); otherwise what each asks for decides.
                     relay.set_allow_access(connectui::enabled(self));
+                    relay.set_full_access(connectui::full_access(self));
                     // The relay only queues; the frame runs the messages, so a queued message
                     // asks for the frame that will run it. Before the first frame there is no
                     // context yet; `logic` gives the relay its wake once one exists.
@@ -2866,6 +2873,21 @@ impl RustGisApp {
                 relay.poll(&mut self.session);
             }
             relayshot::drive(self, ctx);
+            // A script an agent wrote to the file bridge.
+            if let Some(bridge) = self.file_bridge.clone() {
+                if !bridge.has_wake() {
+                    let ctx = ctx.clone();
+                    bridge.set_wake(Box::new(move || ctx.request_repaint()));
+                }
+                match bridge.poll(&mut self.session) {
+                    Some(o) if o.success => self.session.notify(tl!("File bridge: the script ran").to_string(), false),
+                    Some(o) => {
+                        let text = i18n::fmt("File bridge: {error}", &[("error", o.error.as_deref().unwrap_or(""))]);
+                        self.session.notify(text, true);
+                    }
+                    None => {}
+                }
+            }
         }
         // Fonts installed last frame are active now.
         self.fonts_pending = false;

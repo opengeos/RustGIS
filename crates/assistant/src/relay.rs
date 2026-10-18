@@ -166,6 +166,8 @@ struct Shared {
     /// The app lets agents attached with the relay's own token use files and the network, whether
     /// or not they asked (`--yes`): the user turned agents on in the app ([`Relay::set_allow_access`]).
     allow_access: AtomicBool,
+    /// Agents attached with the relay's own token may run any command ([`Relay::set_full_access`]).
+    full_access: AtomicBool,
     /// Run-scoped tokens and what each allows ([`Relay::grant`]), by token.
     grants: Mutex<HashMap<String, (bool, PathBuf)>>,
     /// Local-agent grants require RustGIS approval unless their explicit auto setting is on.
@@ -423,8 +425,8 @@ pub fn read_token_file(path: &std::path::Path) -> Result<String, String> {
 
 /// Makes sure [`token_dir`] exists as a private folder owned by the user running this process,
 /// and returns it. A folder that is a symlink, is not a folder, belongs to another user or is
-/// readable by anyone else is refused, not repaired.
-fn private_dir() -> Result<PathBuf, String> {
+/// readable by anyone else is refused, not repaired. The file bridge keeps its files here too.
+pub(crate) fn private_dir() -> Result<PathBuf, String> {
     let dir = token_dir();
     // Only Unix sets a mode on the builder; elsewhere it stays as created.
     #[cfg_attr(not(unix), allow(unused_mut))]
@@ -553,6 +555,7 @@ impl Relay {
             endpoint: Mutex::new(None),
             port,
             allow_access: AtomicBool::new(false),
+            full_access: AtomicBool::new(false),
             grants: Mutex::new(HashMap::new()),
             reviewed: Mutex::new(HashMap::new()),
             approvals: Mutex::new(Vec::new()),
@@ -688,6 +691,19 @@ impl Relay {
         self.owner.shared.allow_access.store(allow, SeqCst);
     }
 
+    /// Lets agents attached with the relay's own token run any command, the user's own automation
+    /// included (scripts, tasks, models, plugins), or goes back to the usual refusals. The user's
+    /// explicit opt-in in the app; agents the app starts itself keep their grants' rules. It
+    /// applies to their next call.
+    pub fn set_full_access(&self, on: bool) {
+        self.owner.shared.full_access.store(on, SeqCst);
+    }
+
+    /// Whether agents have full access ([`Relay::set_full_access`]).
+    pub fn full_access(&self) -> bool {
+        self.owner.shared.full_access.load(SeqCst)
+    }
+
     /// A run-scoped token for an agent the app starts itself: connections that attach with it may
     /// use files and the network only if `access`. Dropping the [`Grant`] revokes it.
     pub fn grant(&self, access: bool) -> Result<Grant, String> {
@@ -803,7 +819,8 @@ impl Relay {
                 continue;
             };
             // The session is the user's open project: commands that replace it stay theirs.
-            let mut server = Server { users_project: true, ..Server::new(allow_access) };
+            let full_access = self.owner.shared.full_access.load(SeqCst) && same_token(&req.token, &self.owner.shared.token);
+            let mut server = Server { users_project: true, full_access, ..Server::new(allow_access) };
             if asks_for_skills(&req.line) {
                 server.skills = skills.get_or_insert_with(crate::skills::installed).clone();
             }
@@ -1265,7 +1282,7 @@ fn request_id(msg: &Value) -> Value {
 fn approval_summary(s: &Session, line: &str) -> Option<String> {
     let msg: Value = serde_json::from_str(line).ok()?;
     let messages = msg.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&msg));
-    let server = Server { allow_access: true, skills: Vec::new(), users_project: true };
+    let server = Server { allow_access: true, skills: Vec::new(), users_project: true, full_access: false };
     let mut summaries = Vec::new();
     for msg in messages {
         if msg.get("method").and_then(Value::as_str) != Some("tools/call") || msg.get("id").is_none() {
@@ -1721,6 +1738,44 @@ mod tests {
         let taken = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let e = Relay::start(taken.local_addr().unwrap().port()).unwrap_err();
         assert!(e.contains(PORT_ENV), "{e}");
+    }
+
+    /// With full access on, an agent attached with the relay's own token may run the user's own
+    /// automation (a script here); without it, or through a grant, that stays refused.
+    #[test]
+    fn relay_full_access_lifts_the_refusals_for_its_own_token_only() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        let script = |id: u64| {
+            json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": "run_command",
+                "arguments": {"command": "script.run", "params": {"script": "layer.addSample {\"name\": \"countries\"}"}}}})
+        };
+        let ask = |client: &mut TcpStream, s: &mut Session, id: u64| {
+            writeln!(client, "{}", script(id)).unwrap();
+            client.flush().unwrap();
+            settle(&relay, s);
+            reply(client)
+        };
+        let layers = s.map().layers.len();
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, true);
+        let r = ask(&mut client, &mut s, 1);
+        assert!(r["result"]["isError"] == true && r["result"]["content"][0]["text"].as_str().unwrap().contains("reserved"), "{r}");
+        relay.set_full_access(true);
+        assert!(relay.full_access());
+        let r = ask(&mut client, &mut s, 2);
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        assert_eq!(s.map().layers.len(), layers + 1);
+        // A grant (an agent the app started) keeps its own rules.
+        let grant = relay.grant(true).unwrap();
+        let mut other = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach_with(&mut other, &read_token_file(grant.token_file()).unwrap(), true);
+        let r = ask(&mut other, &mut s, 3);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        relay.set_full_access(false);
+        let r = ask(&mut client, &mut s, 4);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        relay.stop();
     }
 
     fn snapshot_call(id: u64, args: Value) -> Value {
