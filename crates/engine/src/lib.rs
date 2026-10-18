@@ -791,7 +791,8 @@ impl Session {
         if let Some(last) = self.last_camera {
             let moved = (last.center.x - cam.center.x).abs() > last.res * 2.0
                 || (last.res / cam.res - 1.0).abs() > 0.01
-                || rustgis_map::camera::normalize_bearing(last.bearing - cam.bearing).abs() > 0.5;
+                || rustgis_map::camera::normalize_bearing(last.bearing - cam.bearing).abs() > 0.5
+                || (last.pitch - cam.pitch).abs() > 0.5;
             if !moved {
                 return;
             }

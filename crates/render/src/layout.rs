@@ -485,7 +485,7 @@ fn scale_bar(pm: &mut Pixmap, r: Rect, ground_per_pt: f64, ppp: f64) {
 fn shown_legends(map: &Map, scale: f64) -> Vec<(u32, Vec<LegendEntry>)> {
     map.layers
         .iter()
-        .filter(|l| l.visible && !l.graphics && !l.is_raster())
+        .filter(|l| map.draws_at(l, scale) && !l.graphics && !l.is_raster())
         .filter_map(|l| l.shown_legend(scale).map(|entries| (l.id, entries)))
         .collect()
 }
@@ -503,7 +503,7 @@ fn legend(pm: &mut Pixmap, r: Rect, map: &Map, title: &str, drawn: Option<&[(u32
         y += line * 1.3;
     }
     let sw = 16.0 * ppp;
-    for l in map.layers.iter().filter(|l| l.visible && !l.graphics && !l.is_raster()) {
+    for l in map.layers.iter().filter(|l| map.shows(l) && !l.graphics && !l.is_raster()) {
         if y + line > r.y() + r.height() {
             break;
         }

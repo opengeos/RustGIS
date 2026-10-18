@@ -47,6 +47,7 @@ mod sqlpane;
 mod stacui;
 mod table;
 pub mod theme;
+mod tilt_drape;
 mod update;
 mod vertexedit;
 mod widgets;
