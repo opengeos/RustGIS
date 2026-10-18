@@ -173,7 +173,9 @@ Only one RustGIS at a time runs the bridge: a second copy's is refused while the
 isn't run. While the bridge is on, `bridge-ready.json` there holds its `pid`, the two files' paths,
 `started_at`, the app `version` and a `schema` number. The folder is readable by this user only,
 like the relay's token. Scripts run through the bridge are written to the audit log (`source:
-"file"`), and **Full access** applies to them as to agents attached with the relay's own token.
+"file"`), and **Full access** applies to them as to agents attached with the relay's own token. The bridge is
+named `file bridge` in your undo history, so a script's `edit.undo` (alone on its line) takes back
+only the bridge's own steps. It also keeps its own active layer, as an agent does.
 
 ### Relay requirements
 

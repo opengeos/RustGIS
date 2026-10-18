@@ -250,12 +250,14 @@ impl Server {
             let script = call.args.get("script").and_then(Value::as_str).unwrap_or("");
             let lines = rustgis_engine::cmd::workflows::script_commands(script).ok()?;
             // An agent's undo is checked against the step on top before the script runs, so a
-            // second undo in it could reach a step beneath, the user's: undo and redo run alone.
+            // second undo in it could reach a step beneath, the user's: undo and redo run alone
+            // (a script of that one line, as the file bridge sends, is checked like a command).
             if s.actor.is_some()
+                && lines.len() > 1
                 && let Some((n, id, _)) = lines.iter().find(|(_, id, _)| matches!(id.as_str(), "edit.undo" | "edit.redo"))
             {
                 return Some(format!(
-                    "line {n}: '{id}' runs on its own (run_command), not in a script, so it takes back only your own last step"
+                    "line {n}: '{id}' runs on its own (run_command, or a script of that one line), so it takes back only your own last step"
                 ));
             }
             return lines.into_iter().find_map(|(n, id, params)| {
