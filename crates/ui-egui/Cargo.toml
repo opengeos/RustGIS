@@ -36,6 +36,7 @@ rfd = { workspace = true }
 rustix = { version = "1.1", features = ["process"] }
 
 [dev-dependencies]
+tempfile = "3"
 rustgis-plugins = { workspace = true, features = ["testing"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 image = { workspace = true }

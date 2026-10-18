@@ -1,7 +1,7 @@
 //! Layer groups (#413): related layers under one name, shown, hidden, made see-through and
 //! limited to a scale range together.
 
-use rustgis_map::{LayerGroup, MAX_GROUPS};
+use rustgis_map::{LayerGroup, MAX_GROUPS, Map};
 use serde_json::{Value, json};
 
 use super::{f, ps, uint};
@@ -32,10 +32,9 @@ pub fn commands() -> Vec<C> {
     ]
 }
 
-/// A `group` parameter as a group's id: by id, or by name (ignoring case), else a name that is
-/// an id.
-fn group_id(s: &Session, p: &Value) -> Result<u32, String> {
-    let m = s.map();
+/// A `group` parameter as the id of one of the map's groups: by id, or by name (ignoring case),
+/// else a name that is an id.
+pub(crate) fn group_id(m: &Map, p: &Value) -> Result<u32, String> {
     match p.get("group") {
         Some(Value::Number(n)) => n
             .as_u64()
@@ -101,7 +100,7 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn set(s: &mut Session, p: &Value) -> CmdResult {
-    let id = group_id(s, p)?;
+    let id = group_id(s.map(), p)?;
     let name = name_of(p)?;
     let transparency = match p.get("transparency") {
         Some(v) => {
@@ -127,7 +126,7 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn scale_range(s: &mut Session, p: &Value) -> CmdResult {
-    let id = group_id(s, p)?;
+    let id = group_id(s.map(), p)?;
     // Like layer.scaleRange: each call sets both bounds (one left out is cleared), but a bound
     // given must be a positive scale.
     let bound = |k: &str| match p.get(k) {
@@ -151,7 +150,7 @@ fn bool_of(p: &Value, k: &str) -> Result<Option<bool>, String> {
 
 /// Folds or unfolds a group in the Layers pane (a view change: no undo step).
 fn expand(s: &mut Session, p: &Value) -> CmdResult {
-    let id = group_id(s, p)?;
+    let id = group_id(s.map(), p)?;
     let on = bool_of(p, "on")?;
     let g = s.map_mut().groups.iter_mut().find(|g| g.id == id).ok_or("no such group")?;
     g.expanded = on.unwrap_or(!g.expanded);
@@ -160,20 +159,20 @@ fn expand(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Moves a group's layers, together, to a position in the drawing order of the other layers.
 fn move_group(s: &mut Session, p: &Value) -> CmdResult {
-    let id = group_id(s, p)?;
+    let id = group_id(s.map(), p)?;
     let to = uint(p, "to").ok_or("to is required: the position among the other layers, 0 at the top")?;
     s.map_mut().move_group(id, usize::try_from(to).unwrap_or(usize::MAX))?;
     Ok(Value::Null)
 }
 
 fn ungroup(s: &mut Session, p: &Value) -> CmdResult {
-    let id = group_id(s, p)?;
+    let id = group_id(s.map(), p)?;
     s.map_mut().groups.retain(|g| g.id != id);
     Ok(Value::Null)
 }
 
 fn remove(s: &mut Session, p: &Value) -> CmdResult {
-    let id = group_id(s, p)?;
+    let id = group_id(s.map(), p)?;
     let m = s.map_mut();
     let children = m.group(id).map(|g| g.children.clone()).unwrap_or_default();
     m.layers.retain(|l| !children.contains(&l.id));
@@ -189,7 +188,7 @@ fn move_to_group(s: &mut Session, p: &Value) -> CmdResult {
     let group = match p.get("group") {
         None => return Err("give the group's name or id (\"group\"), or null to take the layer out of its group".into()),
         Some(Value::Null) => None,
-        Some(_) => Some(group_id(s, p)?),
+        Some(_) => Some(group_id(s.map(), p)?),
     };
     if group.is_some() {
         groupable(s, layer)?;

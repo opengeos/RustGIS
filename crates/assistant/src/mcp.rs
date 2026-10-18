@@ -59,6 +59,10 @@ pub struct Server {
     /// Whether the session is the project the user has open (the desktop app's relay), so
     /// commands that replace it stay the user's. Off for `rustgis-cli mcp`'s own session.
     pub users_project: bool,
+    /// Full access, which the user turned on in the desktop app: no command is refused, the
+    /// user's own automation (scripts, tasks, models, plugin commands and management) included,
+    /// as from a scripting console.
+    pub full_access: bool,
 }
 
 impl Default for Server {
@@ -86,7 +90,7 @@ impl Server {
     /// A server with the built-in skills. `rustgis-cli mcp` and the desktop's relay replace them
     /// with the skills switched on (`skills::installed`): the user's, the plugins' and shared ones.
     pub fn new(allow_access: bool) -> Self {
-        Self { allow_access, skills: crate::skills::built_in(), users_project: false }
+        Self { allow_access, skills: crate::skills::built_in(), users_project: false, full_access: false }
     }
 
     /// Handles one message (a line of JSON): the reply to send, or `None` for a notification or
@@ -225,8 +229,14 @@ impl Server {
         if self.users_project { format!("{INSTRUCTIONS}{LIVE}") } else { INSTRUCTIONS.to_string() }
     }
 
-    /// Why this server won't run a call, if it won't.
+    /// Why this server won't run a call, if it won't. With [`Server::full_access`] there is no
+    /// refusal at all, by design: the user opted in to agents doing anything they could, project
+    /// commands, files and the network included. A refusal added below is lifted by it too, so a
+    /// rule that must hold even then belongs before this check.
     pub fn refusal(&self, s: &Session, call: &ToolCall) -> Option<String> {
+        if self.full_access {
+            return None;
+        }
         // A snapshot saved to a file writes it.
         if call.name == "snapshot" {
             let path = save_path(&call.args)?;
@@ -239,12 +249,31 @@ impl Server {
         if call.name == "run" {
             let script = call.args.get("script").and_then(Value::as_str).unwrap_or("");
             let lines = rustgis_engine::cmd::workflows::script_commands(script).ok()?;
+            // An agent's undo is checked against the step on top before the script runs, so a
+            // second undo in it could reach a step beneath, the user's: undo and redo run alone.
+            if s.actor.is_some()
+                && let Some((n, id, _)) = lines.iter().find(|(_, id, _)| matches!(id.as_str(), "edit.undo" | "edit.redo"))
+            {
+                return Some(format!(
+                    "line {n}: '{id}' runs on its own (run_command), not in a script, so it takes back only your own last step"
+                ));
+            }
             return lines.into_iter().find_map(|(n, id, params)| {
                 let line = ToolCall { id: String::new(), name: "run_command".into(), args: json!({"command": id, "params": params}) };
                 self.refusal(s, &line).map(|why| format!("line {n}: {why}"))
             });
         }
         let (id, params) = tools::target(call)?;
+        // An agent working on the user's project undoes and redoes only its own steps.
+        if let (Some(me), true) = (s.actor.as_deref(), matches!(id.as_str(), "edit.undo" | "edit.redo")) {
+            let top = if id == "edit.undo" { s.undo_actor() } else { s.redo_actor() };
+            if let Some(by) = top.filter(|by| *by != Some(me)) {
+                let whose = by.map_or_else(|| "the user's".to_string(), |other| format!("{other}'s"));
+                return Some(format!(
+                    "'{id}' was not run: the step it would change is {whose}, and an agent undoes and redoes only its own steps"
+                ));
+            }
+        }
         let project = PROJECT_COMMANDS.contains(&id.as_str());
         if project && self.users_project {
             return Some(format!(
