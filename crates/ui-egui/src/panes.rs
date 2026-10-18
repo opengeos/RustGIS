@@ -611,6 +611,8 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 if ui.button(tl!("Add sample countries")).clicked() {
                     let _ = app.run("layer.addSample", json!({"name": "countries"}));
                 }
+                // Hidden, not just off, until something is copied: these are ways to start the
+                // map, unlike the menus, where an item that is off says it exists.
                 if app.session.layer_clipboard.is_some() {
                     paste_layers_button(app, ui);
                 }

@@ -7515,6 +7515,14 @@ fn layers_are_copied_and_pasted_between_maps() {
     // A copy that fails, an empty one included, keeps the last copy.
     let kept: Vec<String> = s.layer_clipboard.as_ref().map(|c| c.layers.iter().map(|l| l.name.clone()).collect()).unwrap_or_default();
     assert_eq!(kept, ["Cities"]);
+    // All or nothing: a failure after the layers went in (a later step of a task) takes them back.
+    let (layers, groups) = (names(&s.project.maps[1]), s.project.maps[1].groups.len());
+    let r = s.guarded("Task", true, |s| {
+        s.run("layer.paste", &json!({"map": "Second"}))?;
+        Err("a later step failed".into())
+    });
+    assert!(r.is_err());
+    assert_eq!((names(&s.project.maps[1]), s.project.maps[1].groups.len()), (layers, groups));
 }
 
 #[test]
