@@ -464,6 +464,12 @@ pub enum ElementKind {
         /// Another frame whose extent this one outlines (an extent indicator).
         #[serde(default)]
         extent_of: Option<u32>,
+        /// The map turned to a bearing (degrees clockwise from north) and tilted to a pitch
+        /// (degrees from looking straight down, 0 to 85), as the map view is.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        bearing: f64,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        pitch: f64,
     },
     NorthArrow {
         frame: u32,
@@ -765,8 +771,10 @@ impl Layout {
             e.y = finite_or(e.y, 0.0).clamp(-5000.0, 5000.0);
             e.name = e.name.chars().take(200).collect();
             match &mut e.kind {
-                ElementKind::MapFrame { center, scale, shape, grid, .. } => {
+                ElementKind::MapFrame { center, scale, shape, grid, bearing, pitch, .. } => {
                     *scale = finite_or(*scale, 50_000_000.0).clamp(100.0, 1e10);
+                    *bearing = crate::camera::normalize_bearing(*bearing);
+                    *pitch = crate::camera::normalize_pitch(*pitch);
                     if !center.is_finite() {
                         *center = Coord::new(0.0, 0.0);
                     }
@@ -822,12 +830,17 @@ fn finite_or(v: f64, d: f64) -> f64 {
     if v.is_finite() { v } else { d }
 }
 
-/// The camera that shows a frame's centre at its paper scale in `map`'s projection, for a frame
-/// `w`×`h` logical points. The globe takes its camera in Web Mercator, whose ground scale at the
-/// centre it matches, so it is handled like the flat map. Frames face north and look
-/// straight down, whichever way the map in view is turned or tilted.
-pub fn frame_camera(map: &Map, center: Coord, scale: f64) -> Camera {
-    let mut cam = Camera { bearing: 0.0, pitch: 0.0, ..map.camera };
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+/// The camera that shows a frame's centre at its paper scale in `map`'s projection, turned to
+/// `bearing` and tilted to `pitch` (degrees). The globe takes its camera in Web Mercator, whose
+/// ground scale at the centre it matches, so it is handled like the flat map (and neither turns
+/// nor tilts). The frame's own bearing and pitch apply, whichever way the map in view is turned
+/// or tilted.
+pub fn frame_camera(map: &Map, center: Coord, scale: f64, bearing: f64, pitch: f64) -> Camera {
+    let mut cam = Camera { bearing: crate::camera::normalize_bearing(bearing), pitch: crate::camera::normalize_pitch(pitch), ..map.camera };
     if let Some(c) = map.to_map(center) {
         cam.center = c;
     }
@@ -964,6 +977,8 @@ mod tests {
                 shape: FrameShape::Rectangle,
                 grid: None,
                 extent_of: None,
+                bearing: 0.0,
+                pitch: 0.0,
             },
         );
         let n = l.add("North Arrow", (215.0, 10.0, 15.0, 20.0), ElementKind::north_arrow(f));
@@ -1036,7 +1051,7 @@ mod tests {
     #[test]
     fn frame_camera_keeps_paper_scale() {
         let map = Map::new("Map");
-        let cam = frame_camera(&map, Coord::new(0.0, 0.0), 1_000_000.0);
+        let cam = frame_camera(&map, Coord::new(0.0, 0.0), 1_000_000.0, 0.0, 0.0);
         // At the equator one logical point of paper (0.2646 mm) covers 264.6 m at 1:1,000,000.
         assert!((cam.res - 264.583).abs() < 0.5, "{}", cam.res);
         let (c, s) = fit_scale(&map, &rustgis_geom::Extent::new(-10.0, -10.0, 10.0, 10.0), 200.0, 200.0).unwrap_or_default();
@@ -1047,8 +1062,8 @@ mod tests {
     fn frame_camera_follows_the_frame_on_the_globe() {
         let mut map = Map::new("Map");
         map.projection = crate::Projection::Globe;
-        let near = frame_camera(&map, Coord::new(10.0, 20.0), 60_000_000.0);
-        let far = frame_camera(&map, Coord::new(10.0, 20.0), 300_000_000.0);
+        let near = frame_camera(&map, Coord::new(10.0, 20.0), 60_000_000.0, 0.0, 0.0);
+        let far = frame_camera(&map, Coord::new(10.0, 20.0), 300_000_000.0, 0.0, 0.0);
         assert!((far.res / near.res - 5.0).abs() < 1e-6, "{} {}", near.res, far.res);
         let c = map.to_lonlat(near.center).unwrap_or_default();
         assert!((c.x - 10.0).abs() < 1e-6 && (c.y - 20.0).abs() < 1e-6, "{c:?}");

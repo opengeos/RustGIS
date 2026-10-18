@@ -44,10 +44,10 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
         .elements
         .iter()
         .filter_map(|e| match &e.kind {
-            ElementKind::MapFrame { map, center, scale, .. } => {
+            ElementKind::MapFrame { map, center, scale, bearing, pitch, .. } => {
                 let mi = maps.iter().position(|m| m.name.eq_ignore_ascii_case(map))?;
                 let m = maps.get(mi)?;
-                Some((e.id, mi, frame_camera(m, *center, *scale), e.w * PT_PER_MM, e.h * PT_PER_MM))
+                Some((e.id, mi, frame_camera(m, *center, *scale, *bearing, *pitch), e.w * PT_PER_MM, e.h * PT_PER_MM))
             }
             _ => None,
         })
@@ -133,7 +133,12 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
                     );
                 }
             }
-            ElementKind::NorthArrow { style, fill, outline, .. } => north_arrow(&mut pm, r, *style, *fill, *outline, ppp),
+            ElementKind::NorthArrow { frame: f, style, fill, outline } => {
+                // Turned with its frame's map (the globe faces north).
+                let bearing =
+                    frame(*f).filter(|fr| maps.get(fr.1).is_some_and(|m| !m.projection.is_globe())).map_or(0.0, |fr| fr.2.bearing);
+                north_arrow(&mut pm, r, *style, *fill, *outline, ppp, bearing)
+            }
             ElementKind::ScaleBar { frame: f, units, divisions, style } => {
                 if let Some(&(_, mi, cam, _, _)) = frame(*f)
                     && let Some(map) = maps.get(mi)
@@ -300,7 +305,11 @@ fn outline_lonlat(pm: &mut Pixmap, map: &Map, view: &View, ring: &[Coord], color
     let mut first = true;
     for c in ring {
         let Some(m) = map.to_map(*c) else { continue };
-        let (x, y) = view.to_screen(m);
+        // A tilted frame's outline breaks where it passes behind the eye.
+        let Some((x, y)) = view.camera.try_to_screen(m, view.width, view.height) else {
+            first = true;
+            continue;
+        };
         let (x, y) = (x as f32 * ppp, y as f32 * ppp);
         if first {
             pb.move_to(x, y);
@@ -378,9 +387,10 @@ fn draw_grid(pm: &mut Pixmap, map: &Map, view: &View, g: &Grid) {
     let pad = span * 0.02;
     let (lat0, lat1) = ((ext.min_y - pad).max(-89.9), (ext.max_y + pad).min(89.9));
     let (lon0, lon1) = (ext.min_x - pad, ext.max_x + pad);
+    // A tilted frame's lines break where they pass behind the eye.
     let to_px = |c: Coord| {
         map.to_map(c)
-            .map(|m| view.to_screen(m))
+            .and_then(|m| view.camera.try_to_screen(m, w, h))
             .map(|(x, y)| (x as f32 * ppp, y as f32 * ppp))
             .filter(|(x, y)| x.is_finite() && y.is_finite())
     };
@@ -519,13 +529,26 @@ fn shape(pm: &mut Pixmap, pts: &[(f32, f32)], fill: Rgba, outline: Rgba, width: 
     }
 }
 
-/// A north arrow in `style`, with an `N` above it.
-fn north_arrow(pm: &mut Pixmap, r: Rect, style: ArrowStyle, fill: Rgba, outline: Rgba, ppp: f64) {
+/// A north arrow in `style`, with an `N` above it, pointing north on a map turned to `bearing`
+/// (degrees clockwise from north): turned about the middle of `r`, the `N` kept upright.
+fn north_arrow(pm: &mut Pixmap, r: Rect, style: ArrowStyle, fill: Rgba, outline: Rgba, ppp: f64, bearing: f64) {
     let white = Rgba::rgb(0xFF, 0xFF, 0xFF);
     let sw = 0.8 * ppp as f32;
     let (cx, top) = (r.x() + r.width() / 2.0, r.y());
     let label_h = (r.height() * 0.25).min(14.0 * ppp as f32);
     let (tip, base) = (top + label_h + 2.0, r.y() + r.height());
+    // North lies `bearing` anticlockwise of the page's up.
+    let (sin, cos) = if bearing.is_finite() { (-bearing.to_radians()).sin_cos() } else { (0.0, 1.0) };
+    let (sin, cos) = (sin as f32, cos as f32);
+    let (mx, my) = (cx, r.y() + r.height() / 2.0);
+    let turn = |(x, y): (f32, f32)| {
+        let (dx, dy) = (x - mx, y - my);
+        (mx + dx * cos - dy * sin, my + dx * sin + dy * cos)
+    };
+    let shape = |pm: &mut Pixmap, pts: &[(f32, f32)], fill: Rgba, outline: Rgba, sw: f32| {
+        let pts: Vec<(f32, f32)> = pts.iter().map(|p| turn(*p)).collect();
+        shape(pm, &pts, fill, outline, sw)
+    };
     match style {
         ArrowStyle::Classic => {
             let s = (r.width() * 0.5).min(r.height() * 0.32);
@@ -559,7 +582,8 @@ fn north_arrow(pm: &mut Pixmap, r: Rect, style: ArrowStyle, fill: Rgba, outline:
             }
         }
     }
-    text::text_at(pm, "N", cx, top + label_h / 2.0, label_h * 1.1, outline, true, text::Align::Center, false);
+    let (nx, ny) = turn((cx, top + label_h / 2.0));
+    text::text_at(pm, "N", nx, ny, label_h * 1.1, outline, true, text::Align::Center, false);
 }
 
 /// A scale bar label for `v`, a multiple of `step`: with the decimals the step needs (up to 6), so
@@ -1157,6 +1181,8 @@ mod tests {
                 shape: FrameShape::Rectangle,
                 grid: None,
                 extent_of: None,
+                bearing: 0.0,
+                pitch: 0.0,
             },
         );
         let rect = if orientation == Orientation::Vertical { (10.0, 10.0, 20.0, 80.0) } else { (10.0, 10.0, 80.0, 20.0) };
@@ -1236,6 +1262,8 @@ mod tests {
                 shape: FrameShape::Rectangle,
                 grid: None,
                 extent_of: None,
+                bearing: 0.0,
+                pitch: 0.0,
             },
         );
         let kind = ElementKind::Colorbar {
@@ -1310,6 +1338,8 @@ mod tests {
                 shape: FrameShape::Rectangle,
                 grid: Some(grid),
                 extent_of: None,
+                bearing: 0.0,
+                pitch: 0.0,
             },
         );
         render(&l, &mut maps, 96.0, &PageInfo::default()).unwrap()
@@ -1389,7 +1419,7 @@ mod tests {
         let draw = |style, fill| {
             let mut pm = Pixmap::new(80, 120).unwrap();
             pm.fill(tiny_skia::Color::WHITE);
-            north_arrow(&mut pm, Rect::from_xywh(0.0, 0.0, 80.0, 120.0).unwrap(), style, fill, Rgba::rgb(0x22, 0x22, 0x22), 1.0);
+            north_arrow(&mut pm, Rect::from_xywh(0.0, 0.0, 80.0, 120.0).unwrap(), style, fill, Rgba::rgb(0x22, 0x22, 0x22), 1.0, 0.0);
             pm
         };
         let red_fill = Rgba::rgb(0xFF, 0, 0);
@@ -1401,6 +1431,33 @@ mod tests {
                 assert_ne!(a.data(), b.data(), "each style draws differently");
             }
         }
+    }
+
+    #[test]
+    fn a_north_arrow_turns_with_its_frame() {
+        // The mean position of the red arrowhead (its N and outline are dark), as an offset from
+        // the middle of an 80 × 120 arrow.
+        let lean = |bearing| {
+            let mut pm = Pixmap::new(80, 120).unwrap();
+            pm.fill(tiny_skia::Color::WHITE);
+            let r = Rect::from_xywh(0.0, 0.0, 80.0, 120.0).unwrap();
+            north_arrow(&mut pm, r, ArrowStyle::Triangle, Rgba::rgb(0xFF, 0, 0), Rgba::rgb(0x22, 0x22, 0x22), 1.0, bearing);
+            let pts: Vec<(f64, f64)> = (0..120)
+                .flat_map(|y| (0..80).map(move |x| (x, y)))
+                .filter(|&(x, y)| pm.pixel(x, y).is_some_and(red))
+                .map(|(x, y)| (f64::from(x), f64::from(y)))
+                .collect();
+            let n = pts.len().max(1) as f64;
+            (pts.iter().map(|p| p.0).sum::<f64>() / n - 40.0, pts.iter().map(|p| p.1).sum::<f64>() / n - 60.0)
+        };
+        // North up: the arrowhead's bulk (its base) lies below the middle, its tip above.
+        let (x, y) = lean(0.0);
+        assert!(x.abs() < 1.0 && y > 3.0, "{x}, {y}");
+        // East up (the map turned 90°): north points left, so the base lies right of the middle.
+        let (x, y) = lean(90.0);
+        assert!(x > 3.0 && y.abs() < 1.0, "{x}, {y}");
+        let (x, _) = lean(-90.0);
+        assert!(x < -3.0, "{x}");
     }
 
     #[test]

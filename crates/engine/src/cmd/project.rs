@@ -29,7 +29,7 @@ pub fn commands() -> Vec<C> {
         C::new("tool.set", "Set Map Tool", "Home › Navigate", set_tool)
             .view()
             .params(r#"{"tool": "explore"|"select"|"zoomIn"|"measure"|"measureArea"|"createPoint"|"createLine"|"createPolygon"|"editVertices"|"graphicPoint"|"graphicText"|"graphicLine"|"graphicCurve"|"graphicFreehand"|"graphicPolygon"|"graphicLasso"|"graphicRectangle"|"graphicCircle"|"graphicEllipse"|"graphicPicture"}"#),
-        C::new("info.project", "Project Info", "Project", info).view(),
+        C::new("info.project", "Project Info", "Project", info).view().params(r#"{"nameFilter"?: string, "includeFields"?: bool}"#),
         C::new("info.commands", "List Commands", "Help", list).view(),
     ]
 }
@@ -173,31 +173,95 @@ fn parse_tool(p: &Value) -> Result<Tool, String> {
     Tool::from_code(name).ok_or_else(|| format!("unknown tool '{name}'"))
 }
 
-fn info(s: &mut Session, _: &Value) -> CmdResult {
+/// A longitude/latitude extent as `[west, south, east, north]`, or null when there is none.
+fn bbox(e: rustgis_geom::Extent) -> Value {
+    let r = |v: f64| (v * 1e6).round() / 1e6;
+    if e.is_empty() { Value::Null } else { json!([r(e.min_x), r(e.min_y), r(e.max_x), r(e.max_y)]) }
+}
+
+/// Everything about the open project in one call (the AI Assistant's and MCP's `list_layers`).
+/// Layers are in table-of-contents order, top first. `nameFilter` keeps the layers and tables
+/// whose name holds it (ignoring case); `includeFields: false` leaves out their fields.
+fn info(s: &mut Session, p: &Value) -> CmdResult {
+    let filter = ps(p, "nameFilter").map(|f| f.trim().to_lowercase()).filter(|f| !f.is_empty());
+    let named = |name: &str| filter.as_deref().is_none_or(|f| name.to_lowercase().contains(f));
+    let fields = super::b(p, "includeFields").unwrap_or(true);
+    let field_list = |fs: &[rustgis_data::Field]| json!(fs.iter().map(|f| format!("{} ({})", f.name, f.ty.label())).collect::<Vec<_>>());
+    // Addresses lose passwords, keys and tokens: the AI Assistant sends this to its provider.
+    let source = |l: &rustgis_map::Layer| -> Option<String> {
+        let from = match (&l.raster, &l.source) {
+            (Some(r), _) => r.path.clone().or_else(|| r.file_name.clone()),
+            (None, Some(src)) => src.path.clone().or_else(|| src.file_name.clone()),
+            (None, None) => l.dataset.source.clone(),
+        };
+        from.filter(|f| !f.is_empty()).map(|f| crate::sources::redact(&f))
+    };
+    let extent = super::workspace::view_extent(s);
     let m = s.map();
+    let active = s.active_layer.and_then(|id| m.layer(id)).map(|l| json!({"id": l.id, "name": l.name}));
+    let layers: Vec<Value> = m
+        .layers
+        .iter()
+        .filter(|l| named(&l.name))
+        .map(|l| {
+            let mut v = match &l.raster {
+                Some(rl) => json!({
+                    "id": l.id, "name": l.name, "type": "Raster", "visible": l.visible, "renderer": rl.style.renderer.label(),
+                    "size": rl.data.as_ref().map(|d| json!([d.width, d.height, d.band_count()])),
+                    "missing": rl.data.is_none(),
+                }),
+                None => json!({
+                    "id": l.id, "name": l.name, "type": l.geometry_type().label(), "features": l.dataset.features.len(),
+                    "visible": l.visible, "renderer": l.renderer.kind_label(), "selected": l.selection.len(),
+                    "definitionQuery": l.definition_query.as_deref().filter(|q| !q.trim().is_empty()),
+                    "labels": (l.labels.enabled && !l.labels.field.is_empty()).then_some(l.labels.field.as_str()),
+                    "fields": field_list(&l.dataset.fields),
+                }),
+            };
+            if let Some(o) = v.as_object_mut() {
+                o.insert("group".into(), json!(m.group_of(l.id).map(|g| g.name.as_str())));
+                o.insert("source".into(), json!(source(l)));
+                o.insert("extent".into(), bbox(l.extent()));
+                if !fields {
+                    o.remove("fields");
+                }
+            }
+            v
+        })
+        .collect();
+    let layouts: Vec<Value> = s
+        .project
+        .layouts
+        .iter()
+        .map(|lo| {
+            let frames: Vec<Value> = lo
+                .elements
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    rustgis_map::layout::ElementKind::MapFrame { map, scale, .. } => {
+                        Some(json!({"id": e.id, "name": e.name, "map": map, "scale": scale.round()}))
+                    }
+                    _ => None,
+                })
+                .collect();
+            json!({"name": lo.name, "mapFrames": frames})
+        })
+        .collect();
     Ok(json!({
         "name": s.project.name,
         "path": s.path.as_ref().map(|p| p.display().to_string()),
+        "unsaved": s.dirty,
         "maps": s.project.maps.iter().map(|m| m.name.clone()).collect::<Vec<_>>(),
         "activeMap": m.name,
         "basemap": m.basemap.code(),
         "projection": m.projection.code(),
         "scale": m.scale().round(),
         "center": {"lon": m.center_lonlat().x, "lat": m.center_lonlat().y},
+        "extent": bbox(extent),
         "bearing": m.camera.bearing,
         "pitch": m.camera.pitch,
-        "layers": m.layers.iter().map(|l| match &l.raster {
-            Some(rl) => json!({
-                "id": l.id, "name": l.name, "type": "Raster", "visible": l.visible, "renderer": rl.style.renderer.label(),
-                "size": rl.data.as_ref().map(|d| json!([d.width, d.height, d.band_count()])),
-                "missing": rl.data.is_none(),
-            }),
-            None => json!({
-                "id": l.id, "name": l.name, "type": l.geometry_type().label(), "features": l.dataset.features.len(),
-                "visible": l.visible, "renderer": l.renderer.kind_label(), "selected": l.selection.len(),
-                "fields": l.dataset.fields.iter().map(|f| format!("{} ({})", f.name, f.ty.label())).collect::<Vec<_>>(),
-            }),
-        }).collect::<Vec<_>>(),
+        "activeLayer": active,
+        "layers": layers,
         "groups": m.groups.iter().map(|g| json!({
             "id": g.id, "name": g.name, "visible": g.visible, "transparency": g.transparency,
             "minScale": g.min_scale, "maxScale": g.max_scale, "layers": g.children,
@@ -205,10 +269,14 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
         // Web tile layers (XYZ, WMS, vector tiles, styles, archives) draw under the layers above.
         // Their addresses lose keys and tokens: the AI Assistant sends this to its provider.
         "tileLayers": super::tiles::list(s, true),
-        "tables": s.project.tables.iter().map(|t| json!({
-            "id": t.id, "name": t.name, "rows": t.features.len(),
-            "fields": t.fields.iter().map(|f| format!("{} ({})", f.name, f.ty.label())).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
+        "tables": s.project.tables.iter().filter(|t| named(&t.name)).map(|t| {
+            let mut v = json!({"id": t.id, "name": t.name, "rows": t.features.len(), "fields": field_list(&t.fields)});
+            if let (false, Some(o)) = (fields, v.as_object_mut()) {
+                o.remove("fields");
+            }
+            v
+        }).collect::<Vec<_>>(),
+        "layouts": layouts,
     }))
 }
 

@@ -706,6 +706,25 @@ fn mcp_initializes_and_lists_tools() {
     }
 }
 
+/// list_layers is the one call that describes the project: it narrows by name and can leave the
+/// fields out of a large project.
+#[test]
+fn mcp_list_layers_filters_by_name_and_drops_fields() {
+    let (server, mut s) = (mcp::Server::default(), sample());
+    let (err, text) = call_tool(&server, &mut s, "list_layers", json!({}));
+    assert!(!err, "{text}");
+    let all: Value = serde_json::from_str(&text).unwrap();
+    assert!(all["layers"].as_array().unwrap().len() > 1, "{text}");
+    assert!(all["layers"][0]["fields"].is_array() && all.get("unsaved").is_some() && all["layouts"].is_array(), "{text}");
+    let (err, text) = call_tool(&server, &mut s, "list_layers", json!({"name_filter": "rivers", "include_fields": false}));
+    assert!(!err, "{text}");
+    let some: Value = serde_json::from_str(&text).unwrap();
+    let layers = some["layers"].as_array().unwrap();
+    assert_eq!(layers.len(), 1, "{text}");
+    assert_eq!(layers[0]["name"], "Rivers");
+    assert!(layers[0].get("fields").is_none(), "{text}");
+}
+
 #[test]
 fn mcp_protocol_errors() {
     let (server, mut s) = (mcp::Server::default(), sample());

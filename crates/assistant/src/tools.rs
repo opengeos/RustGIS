@@ -29,8 +29,14 @@ pub fn defs() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "list_layers",
-            description: "The project's map: its layers (id, name, type, feature count, fields, visibility, selection), its web tile layers (XYZ, WMS, vector tiles; index 0 on top, changed with map.setTiles), basemap, centre and scale.",
-            schema: json!({"type": "object", "properties": {}}),
+            description: "Everything about the open project in one call: its path and unsaved changes, the view (centre, lon/lat extent, scale, projection), the active layer, its layers in table-of-contents order, top first (id, name, group, type, source, lon/lat extent, feature count, selection, definition query, renderer, labels, fields, visibility), its web tile layers (XYZ, WMS, vector tiles; index 0 on top, changed with map.setTiles), basemap, tables and layouts with their map frames.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "name_filter": {"type": "string", "description": "Only the layers and tables whose name holds this (ignoring case)"},
+                    "include_fields": {"type": "boolean", "description": "List each layer's fields (default true); false keeps a large project short"}
+                }
+            }),
         },
         ToolDef {
             name: "search_commands",
@@ -226,7 +232,10 @@ pub fn run_with_budget(s: &mut Session, call: &ToolCall, tokens: usize) -> Resul
     let max_bytes = output_bytes(tokens);
     let a = &call.args;
     let v = match call.name.as_str() {
-        "list_layers" => s.run("info.project", &Value::Null)?,
+        "list_layers" => s.run(
+            "info.project",
+            &json!({"nameFilter": str_arg(a, "name_filter"), "includeFields": a.get("include_fields").and_then(Value::as_bool).unwrap_or(true)}),
+        )?,
         "search_commands" => search_commands(s, a)?,
         "search_tools" => search_tools(a)?,
         "describe_tool" => describe_tool(a)?,
