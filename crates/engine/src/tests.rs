@@ -737,6 +737,7 @@ fn hostile_params_never_panic() {
         json!({"band": -1, "red": 1e12, "green": "x", "blue": f64::MAX, "preset": "", "ramp": "nope", "classes": -5, "n": 1e308, "low": -50, "high": 900, "gamma": 0, "zFactor": -1, "fileName": "a.tif", "data": "!!!"}),
         json!({"fileName": "a.tif", "data": "AAAA", "type": "unique", "on": "maybe"}),
         json!({"type": "custom", "min": 1e308, "max": -1e308}),
+        json!({"kind": "colorbar", "ticks": -1e308, "tickSide": 7, "orientation": "x", "layer": "", "reverse": "maybe"}),
     ];
     let ids: Vec<&str> = Session::new(Project::default()).registry.commands.iter().map(|c| c.id).collect();
     let streamed = grid_fgb("hostile", 20);
@@ -1307,6 +1308,82 @@ fn layout_legends_list_what_the_frame_draws() {
     // Layouts saved before the option open with it off.
     let old: rustgis_map::layout::ElementKind = serde_json::from_str(r#"{"Legend":{"frame":1,"title":"L"}}"#).unwrap();
     assert!(matches!(old, rustgis_map::layout::ElementKind::Legend { all_classes: false, hide_other: false, .. }));
+}
+
+/// A colorbar shows a raster's colour scale on a layout (#326): added and edited through
+/// commands, checked against the frame's map, and saved with the layout.
+#[test]
+fn layout_colorbars_follow_a_raster() {
+    use rustgis_map::layout::{ElementKind, Orientation, TickSide};
+    let mut s = world();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
+    let kind = |s: &Session, id: u32| s.project.layouts[0].element(id).unwrap().kind.clone();
+    // No raster yet: it follows the top visible one once there is one.
+    let id = s.run("layout.addElement", &json!({"kind": "colorbar"})).unwrap()["element"].as_u64().unwrap() as u32;
+    assert!(matches!(kind(&s, id), ElementKind::Colorbar { layer: None, ticks: 5, reverse: false, .. }), "{:?}", kind(&s, id));
+    assert!(s.run("layout.addElement", &json!({"kind": "colorbar", "layer": "Countries"})).is_err(), "a feature layer has no colour scale");
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
+    let named = s
+        .run("layout.addElement", &json!({"kind": "colorbar", "layer": dem.to_uppercase(), "orientation": "vertical", "ticks": 1e9, "tickSide": "left", "reverse": true}))
+        .unwrap()["element"]
+        .as_u64()
+        .unwrap() as u32;
+    let e = s.project.layouts[0].element(named).unwrap().clone();
+    assert!(e.h > e.w, "a vertical bar is tall: {} × {}", e.w, e.h);
+    match &e.kind {
+        ElementKind::Colorbar { layer, title, orientation, ticks, tick_side, reverse, .. } => {
+            assert_eq!(layer.as_deref(), Some(dem.as_str()), "the layer's own name");
+            assert_eq!(title, &dem, "titled after the layer");
+            assert_eq!(
+                (*orientation, *ticks, *tick_side, *reverse),
+                (Orientation::Vertical, rustgis_map::layout::MAX_COLORBAR_TICKS, TickSide::Start, true)
+            );
+        }
+        k => panic!("{k:?}"),
+    }
+    // Edited: a bad value changes nothing.
+    for bad in [json!({"orientation": "diagonal"}), json!({"tickSide": "inside"}), json!({"layer": "Countries"}), json!({"layer": "nope"})]
+    {
+        let mut p = bad.clone();
+        p["element"] = json!(named);
+        assert!(s.run("layout.update", &p).is_err(), "{bad}");
+    }
+    assert_eq!(s.project.layouts[0].element(named).unwrap(), &e);
+    // Turned horizontal, it swaps its length and thickness; "" follows the top raster again.
+    s.run(
+        "layout.update",
+        &json!({"element": named, "orientation": "horizontal", "title": "Elevation (m)", "ticks": 3, "tickSide": "below", "layer": ""}),
+    )
+    .unwrap();
+    let turned = s.project.layouts[0].element(named).unwrap().clone();
+    assert_eq!((turned.w, turned.h), (e.h, e.w));
+    assert!(
+        matches!(
+            &turned.kind,
+            ElementKind::Colorbar { layer: None, orientation: Orientation::Horizontal, ticks: 3, tick_side: TickSide::End, reverse: true, title, .. } if title == "Elevation (m)"
+        ),
+        "{:?}",
+        turned.kind
+    );
+    // It draws the raster's ramp: the export differs from the page without it.
+    let png = |s: &mut Session| crate::cmd::layout::layout_bytes(s, 0, false, 72.0, false).unwrap();
+    let with = png(&mut s);
+    s.run("layout.update", &json!({"element": named, "visible": false})).unwrap();
+    s.run("layout.update", &json!({"element": id, "visible": false})).unwrap();
+    assert_ne!(with, png(&mut s));
+    // Saved and read back, and layouts from before colorbars had their defaults read as before.
+    let text = serde_json::to_string(&s.project.layouts[0]).unwrap();
+    let back: rustgis_map::layout::Layout = serde_json::from_str(&text).unwrap();
+    assert_eq!(back, s.project.layouts[0]);
+    let old: ElementKind = serde_json::from_str(r#"{"Colorbar":{"frame":1}}"#).unwrap();
+    assert!(matches!(
+        old,
+        ElementKind::Colorbar { layer: None, ticks: 5, orientation: Orientation::Horizontal, tick_side: TickSide::End, reverse: false, .. }
+    ));
+    // Undone with the rest of the layout's edits.
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.project.layouts[0].element(id).map(|e| e.visible), Some(true), "undo brings it back");
 }
 
 #[test]
