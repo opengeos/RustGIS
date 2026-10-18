@@ -1413,10 +1413,18 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
         let extents = layer.projected_extents();
         for (row, g) in layer.thinned_cache(tol).iter().enumerate() {
             let Some(Geometry::Polygon(polys)) = g else { continue };
-            if rows.get(row) != Some(&true) || extents.get(row).is_some_and(|e| !e.intersects(&cull)) {
+            if rows.get(row) != Some(&true) {
                 continue;
             }
             let Some(origin) = polys.iter().flatten().flatten().find(|c| c.is_finite()).copied() else { continue };
+            let metres = effects::extrusion_metres(&layer.dataset, &x, row);
+            let height = metres / flat.ground_per_unit(origin).max(1e-9);
+            // Off the ground the view shows, even by its height: a tall building just off screen
+            // still stands up into view.
+            let reach = if height.is_finite() { height.clamp(0.0, 1e9) } else { 0.0 };
+            if extents.get(row).is_some_and(|e| !e.padded(0.0, reach).intersects(&cull)) {
+                continue;
+            }
             let roof = mesh::fill_polygon(polys, [origin.x, origin.y], [0.0; 4], view.camera.res * 0.5);
             let Ok(Some((verts, indices))) = roof else { continue };
             let sym = layer.symbol(row);
@@ -1430,8 +1438,8 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
                 roof_indices: indices,
                 rings: polys.iter().filter_map(|p| p.first()).filter(|r| r.len() >= 3).cloned().collect(),
                 holes: polys.iter().flat_map(|p| p.iter().skip(1)).filter(|r| r.len() >= 3).cloned().collect(),
-                metres: effects::extrusion_metres(&layer.dataset, &x, row),
-                height: effects::extrusion_metres(&layer.dataset, &x, row) / flat.ground_per_unit(origin).max(1e-9),
+                metres,
+                height,
                 fill: sym.fill.with_alpha(255),
                 stroke: sym.stroke,
                 face_culling: x.face_culling,
@@ -3668,6 +3676,8 @@ mod tests {
             l.touch_geometry();
         }
         // Seen from a camera at another latitude, the block's height is still its own latitude's.
+        // (A camera so far that the block is off its ground leaves it out: see
+        // an_extruded_ring_with_a_hole_is_open_over_it.)
         let south = View { camera: Camera { center: lonlat_to_merc(Coord::new(0.0, 57.0)), ..camera }, ..view };
         let shapes = extruded_shapes(&mut m, &south);
         assert_eq!(shapes.len(), 1);
