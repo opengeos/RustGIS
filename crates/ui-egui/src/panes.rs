@@ -1024,9 +1024,22 @@ fn layer_group_row(
             ui.horizontal(|ui| {
                 ui.label(tl!("Transparency"));
                 let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer());
-                if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                    let _ = app.run("group.set", json!({"group": group.id, "transparency": tr}));
-                }
+                let gid = group.id;
+                crate::ribbon::live_drag(
+                    app,
+                    ui,
+                    &r,
+                    group.transparency as f64,
+                    tr as f64,
+                    |app, x| {
+                        if let Some(g) = app.session.map_mut().groups.iter_mut().find(|g| g.id == gid) {
+                            g.transparency = x as f32;
+                        }
+                    },
+                    |app, x| {
+                        let _ = app.run("group.set", json!({"group": gid, "transparency": x}));
+                    },
+                );
             });
             if (group.min_scale.is_some() || group.max_scale.is_some()) && ui.button(tl!("Clear Visibility Range")).clicked() {
                 let _ = app.run("group.scaleRange", json!({"group": group.id}));
@@ -3044,10 +3057,29 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.label(tl!("Transparency"));
         ui.spacing_mut().slider_width = 150.0;
         let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer());
-        if r.drag_stopped() || (r.changed() && !r.dragged()) {
-            let _ = app.run("layer.transparency", json!({"value": tr}));
-        }
+        transparency_drag(app, ui, &r, &l, tr);
     });
+}
+
+/// The Symbology pane's Transparency slider: the map follows it while it's dragged, and letting
+/// go runs `layer.transparency` once, so the drag is one undo step.
+fn transparency_drag(app: &mut RustGisApp, ui: &Ui, r: &egui::Response, l: &Layer, tr: f32) {
+    let id = l.id;
+    crate::ribbon::live_drag(
+        app,
+        ui,
+        r,
+        l.transparency as f64,
+        tr as f64,
+        |app, x| {
+            if let Some(l) = app.session.map_mut().layer_mut(id) {
+                l.transparency = x as f32;
+            }
+        },
+        |app, x| {
+            let _ = app.run("layer.transparency", json!({"value": x}));
+        },
+    );
 }
 
 fn field_combo(app: &mut RustGisApp, ui: &mut Ui, label: &str, cur: &str, fields: &[String], kind: &str) {
@@ -3831,9 +3863,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
         ui.label(tl!("Transparency"));
         ui.spacing_mut().slider_width = 150.0;
         let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer());
-        if r.drag_stopped() || (r.changed() && !r.dragged()) {
-            let _ = app.run("layer.transparency", json!({"value": tr}));
-        }
+        transparency_drag(app, ui, &r, l, tr);
     });
 }
 
@@ -4048,5 +4078,47 @@ mod tests {
         let _ = app.run("map.new", json!({"name": "Second"}));
         follow_layer_filter(&mut app);
         assert_eq!((app.ui.layer_filter.as_str(), app.ui.layer_filter_hid), ("", None));
+    }
+
+    /// The Symbology pane's Transparency slider changes the layer while it's dragged, not only
+    /// when it's let go, and the whole drag is one undo step back to where it started.
+    #[test]
+    fn transparency_follows_the_slider_while_dragging() {
+        use egui::{Event, Modifiers, PointerButton};
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        let id = layer(&app, "Countries");
+        app.session.active_layer = Some(id);
+        app.ui.open_right(RightPane::Symbology);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1400.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        let transparency = |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer(id).map(|l| l.transparency);
+        let start = transparency(&h);
+        // The pane's slider, at its foot (the window is tall enough to show it): the rightmost one.
+        let rect = h.query_all_by_role(egui::accesskit::Role::Slider).map(|n| n.rect()).max_by(|a, b| a.min.x.total_cmp(&b.min.x)).unwrap();
+        let (from, to) = (rect.left_center(), rect.center());
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.event(Event::PointerMoved(from));
+        h.step();
+        h.event(button(from, true));
+        h.step();
+        for i in 1..=4 {
+            h.event(Event::PointerMoved(from + (to - from) * i as f32 / 4.0));
+            h.step();
+        }
+        let mid = transparency(&h);
+        assert!(mid.is_some_and(|t| (40.0..=60.0).contains(&t)), "the layer follows the drag: {start:?} → {mid:?}");
+        h.event(button(to, false));
+        h.step();
+        assert_eq!(transparency(&h), mid, "letting go keeps the value");
+        h.state_mut().run("edit.undo", Value::Null).unwrap();
+        assert_eq!(transparency(&h), start, "one undo takes the whole drag back");
     }
 }
