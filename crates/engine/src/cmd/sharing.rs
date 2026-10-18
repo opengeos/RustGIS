@@ -1019,7 +1019,7 @@ fn gltf(m: &Map, view: (f64, f64)) -> Result<Vec<u8>, String> {
 fn viewpoint(m: &Map, at: &rustgis_map::Camera, view: (f64, f64)) -> (Value, Value) {
     let size = |v: f64| if v.is_finite() { v.clamp(1.0, 1e6) } else { 1.0 };
     let (w, h) = (size(view.0), size(view.1));
-    let ground = at.res * m.flat().ground_per_unit(at.center);
+    let ground = at.res * m.ground_per_unit(at.center);
     let distance = h / 2.0 / rustgis_map::camera::TAN_HALF_FOV * ground;
     let distance = if distance.is_finite() { distance.clamp(1.0, 1e9) } else { 1e6 };
     let (bearing, pitch) = (at.bearing.to_radians(), at.pitch.to_radians());

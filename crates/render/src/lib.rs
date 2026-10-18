@@ -1198,8 +1198,10 @@ fn raise_labels(map: &Map, view: &View, candidates: &mut [Candidate]) {
         let Some(x) = &layer.extrusion else { continue };
         let Some(m) = cam.try_to_map(f64::from(l.x), f64::from(l.y), w, h) else { continue };
         // At the label's place (Web Mercator stretches the ground toward the poles).
-        let up =
-            (effects::extrusion_metres(&layer.dataset, x, *row) / flat.ground_per_unit(m).max(1e-9) / cam.res.max(1e-9)).clamp(0.0, 1e7);
+        let up = (effects::extrusion_metres(&layer.dataset, x, *row)
+            / (flat.ground_per_unit(m) * map.body().ratio()).max(1e-9)
+            / cam.res.max(1e-9))
+        .clamp(0.0, 1e7);
         let (u, v) = cam.ground_px(m);
         let Some((sx, sy)) = cam.project_raised(u, v, up, w, h) else { continue };
         let (dx, dy) = (sx as f32 - l.x, sy as f32 - l.y);
@@ -1240,6 +1242,8 @@ pub struct ExtrudedShape {
 pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     let (flat, key) = (map.flat(), map.projection.code());
+    // Extrusion heights are metres on the map's body.
+    let body = map.body().ratio();
     let tol = view.camera.res * rustgis_map::lod::THIN_PX;
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
@@ -1278,7 +1282,7 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
                 rings: polys.iter().filter_map(|p| p.first()).filter(|r| r.len() >= 3).cloned().collect(),
                 holes: polys.iter().flat_map(|p| p.iter().skip(1)).filter(|r| r.len() >= 3).cloned().collect(),
                 metres: effects::extrusion_metres(&layer.dataset, &x, row),
-                height: effects::extrusion_metres(&layer.dataset, &x, row) / flat.ground_per_unit(origin).max(1e-9),
+                height: effects::extrusion_metres(&layer.dataset, &x, row) / (flat.ground_per_unit(origin) * body).max(1e-9),
                 fill: sym.fill.with_alpha(255),
                 stroke: sym.stroke,
                 face_culling: x.face_culling,
@@ -1460,6 +1464,8 @@ fn markers_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
 fn extrusions_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     let (flat, key) = (map.flat(), map.projection.code());
+    // Heights are metres on the map's body.
+    let body = map.body().ratio();
     let (_, fog) = tilt_sky(map);
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
@@ -1474,7 +1480,7 @@ fn extrusions_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
         layer.thinned_in(&flat, &key, view.camera.res * rustgis_map::lod::THIN_PX);
         let layer: &rustgis_map::Layer = layer;
         let geoms: Vec<Option<&Geometry>> = layer.projected_cache().iter().map(Option::as_ref).collect();
-        effects::extrude_tilted(pm, view, &layer.dataset, &geoms, &rows, &x, |c| flat.ground_per_unit(c), fog, |r| layer.symbol(r));
+        effects::extrude_tilted(pm, view, &layer.dataset, &geoms, &rows, &x, |c| flat.ground_per_unit(c) * body, fog, |r| layer.symbol(r));
     }
 }
 
@@ -1829,6 +1835,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         Labels::Tilted(..) | Labels::Shared => map.layers.iter().filter(|l| stands_up(map, l)).map(|l| l.id).collect(),
         _ => Default::default(),
     };
+    // Extrusion heights are metres on the map's body.
+    let body = map.body().ratio();
     for li in order {
         let Some(layer) = map.layers.get_mut(li) else { continue };
         if !layer.visible || !layer.in_scale_range(scale) || held.contains(&layer.id) {
@@ -1937,7 +1945,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 // Stood up facing the viewer over the tilted view (`upright_markers`); its labels
                 // still come from here.
             } else if let Some(x) = extrude.filter(|_| !matches!(labels_to, Labels::Shared)) {
-                let px_per_m = view.pixels_per_point / map_ground_res(view, &flat);
+                let px_per_m = view.pixels_per_point / (map_ground_res(view, &flat) * body);
                 effects::extrude(dest, &ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r));
             } else {
                 for (row, g) in drawn.iter().enumerate() {

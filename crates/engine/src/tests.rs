@@ -8590,6 +8590,15 @@ fn celestial_bodies_set_the_basemap_and_the_measurements() {
     let bodies = s.run("map.bodies", &Value::Null).unwrap();
     assert_eq!(bodies["body"], "mars");
     assert_eq!(bodies["bodies"].as_array().map(Vec::len), Some(rustgis_geom::BODIES.len()));
+    // A basemap the map has no room for (overlays fill it) fails, and the map stays as it was:
+    // on its body, with its tile layers.
+    let mut full = Session::new(Project::default());
+    for i in 0..rustgis_map::tiles::MAX_TILE_LAYERS {
+        full.run("map.addTiles", &json!({"url": format!("https://o{i}.example.com/{{z}}/{{x}}/{{y}}.png"), "overlay": true})).unwrap();
+    }
+    assert!(full.run("map.body", &json!({"name": "mars"})).is_err());
+    assert!(full.map().body().is_earth());
+    assert_eq!(full.map().tiles.len(), rustgis_map::tiles::MAX_TILE_LAYERS);
     // A project naming an unknown body is on the Earth.
     let odd = text.replace("\"body\":\"mars\"", "\"body\":\"vulcan\"");
     assert_ne!(odd, text);
