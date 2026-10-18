@@ -2483,7 +2483,11 @@ impl RustGisApp {
                 let ext = p.get("format").and_then(Value::as_str).unwrap_or("geojson").to_ascii_lowercase();
                 // A streamed layer exports its whole source, not the features read for the view.
                 let whole = if l.is_streamed() { Some(l.load_all()?) } else { None };
-                let written = rustgis_engine::data::io::write_bytes(whole.as_ref().unwrap_or(&l.dataset), &ext).map_err(|e| e.to_string());
+                // In the layer's own coordinate system, as share.exportLayer writes a file.
+                let ds = whole.as_ref().unwrap_or(&l.dataset);
+                use rustgis_engine::data::{io, raster::Crs};
+                let crs = ds.crs.filter(|_| io::PROJECTED_FORMATS.contains(&ext.as_str())).unwrap_or(Crs::LonLat);
+                let written = io::write_bytes_in(ds, &ext, crs).map_err(|e| e.to_string());
                 let (bytes, left_out) = match written {
                     Ok(w) => w,
                     Err(e) => {

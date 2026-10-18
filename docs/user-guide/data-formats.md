@@ -217,10 +217,10 @@ databases](data.md#sql-queries-and-duckdb-databases).
 | Format | How to write it | Notes |
 | --- | --- | --- |
 | GeoJSON, CSV | Data › Export (`share.exportLayer`) | The Export Features dialog picks the format; the file is saved in it whatever extension is typed. In the web app it downloads (any format below but GeoPackage; a Shapefile as one zip). A streamed layer writes its whole source (as every format below does). |
-| GeoPackage | Data › Export to `.gpkg` (desktop) | One feature table (an attributes table for a layer without geometry) in WGS 84, with an R-tree spatial index and the GeoPackage 1.4 triggers that keep it current when other software edits the file. Feature ids are kept. |
+| GeoPackage | Data › Export to `.gpkg` (desktop) | One feature table (an attributes table for a layer without geometry) in the layer's coordinate system (see below), with an R-tree spatial index and the GeoPackage 1.4 triggers that keep it current when other software edits the file. Feature ids are kept. |
 | GeoParquet | Data › Export to `.parquet` | GeoParquet 1.1: WKB geometry in WGS 84, Snappy compression, row groups of 65,536 features and a `bbox` covering column so readers can skip rows by extent. |
-| Shapefile | Data › Export to `.shp` (or `.zip` for the files zipped) | Writes `.shp`, `.shx`, `.dbf`, `.prj` (WGS 84) and `.cpg` (UTF-8). Field names are cut to 10 characters (made unique), text to 254 bytes, and numbers too wide for a dBase field are left empty; features without geometry, and lines of a single point, are left out (and reported). |
-| FlatGeobuf | Data › Export to `.fgb` | With a spatial index; features without geometry are left out (and reported). |
+| Shapefile | Data › Export to `.shp` (or `.zip` for the files zipped) | Writes `.shp`, `.shx`, `.dbf`, `.prj` (the coordinate system, see below) and `.cpg` (UTF-8). Field names are cut to 10 characters (made unique), text to 254 bytes, and numbers too wide for a dBase field are left empty; features without geometry, and lines of a single point, are left out (and reported). |
+| FlatGeobuf | Data › Export to `.fgb` | In the layer's coordinate system (see below), with a spatial index; features without geometry are left out (and reported). |
 | KML, KMZ, GPX | Data › Export to `.kml`, `.kmz` or `.gpx` | Placemarks named by a `name` field, if there is one; features without geometry are left out. |
 | KML, GPX, CSV with WKT | Analyze › Workflows › Data Interop | |
 | GeoTIFF | Data › Export | |
@@ -229,6 +229,13 @@ databases](data.md#sql-queries-and-duckdb-databases).
 | Wavefront OBJ, glTF | Publish › Export To 3D, Share As › Web Scene | Polygons extruded by a field. |
 | Web map, OGC API Features, MapLibre style | Publish › Share As | Open-format files that need no server: see [Sharing](sharing.md). |
 | Raster tiles | Analyze › Create Hosted Imagery | |
+
+GeoPackage, Shapefile and FlatGeobuf exports are written in the coordinate system the layer was
+read in: a Shapefile's `.prj`, a GeoPackage's or FlatGeobuf's own system, or the `crs` a CSV was
+added with (EPSG:25832 data goes back out as EPSG:25832). A layer read in longitude/latitude, or
+made in RustGIS, is written in WGS 84 (EPSG:4326). `share.exportLayer` takes `"crs"` to choose
+another, such as `{"layer": "Parcels", "path": "parcels.gpkg", "crs": "EPSG:4647"}`. GeoJSON, KML,
+GPX, GeoParquet and CSV are always written in WGS 84.
 
 ## RustGIS files
 

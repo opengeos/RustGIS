@@ -5430,6 +5430,49 @@ fn layers_export_to_geopackage_geoparquet_shapefile_and_kmz() {
 }
 
 #[test]
+fn layers_export_in_the_system_they_were_read_in() {
+    // Issue #514: squares in ETRS89 / UTM zone 32N came out of every export in EPSG:4326.
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-export-crs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let csv = dir.join("squares.csv");
+    std::fs::write(&csv, "side;wkt\n1 km;POLYGON ((500000 5700000, 501000 5700000, 501000 5701000, 500000 5701000, 500000 5700000))\n")
+        .unwrap();
+    let mut s = Session::new(Project::default());
+    let add = json!({"path": csv.display().to_string(), "name": "squares", "wkt": "wkt", "crs": "EPSG:25832", "delimiter": ";"});
+    s.run("layer.addData", &add).unwrap();
+    let path = |name: &str| dir.join(name).display().to_string();
+    for (file, crs, want) in [
+        ("out.gpkg", None, "EPSG:25832"),
+        ("out.shp", None, "EPSG:25832"),
+        ("out.fgb", None, "EPSG:25832"),
+        ("out4647.gpkg", Some("EPSG:4647"), "EPSG:4647"),
+        ("out4326.shp", Some("EPSG:4326"), "EPSG:4326"),
+        ("out.geojson", None, "EPSG:4326"),
+    ] {
+        let mut p = json!({"layer": "squares", "path": path(file)});
+        if let Some(c) = crs {
+            p["crs"] = json!(c);
+        }
+        let r = s.run("share.exportLayer", &p).unwrap();
+        assert_eq!(r["crs"], want, "{file}");
+        // Added back, it is in the same place and remembers its system.
+        let r = s.run("layer.addData", &json!({"path": path(file)})).unwrap();
+        let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+        let ds = if l.is_streamed() { l.load_all().unwrap() } else { l.dataset.clone() };
+        assert_eq!(ds.crs.map(|c| c.label()).unwrap_or_else(|| "EPSG:4326".into()), want, "{file}");
+        let e = ds.extent();
+        assert!((e.min_x - 9.0).abs() < 1e-6 && (e.min_y - 51.451_18).abs() < 1e-5 && e.width() > 0.0139, "{file}: {e:?}");
+    }
+    // The .prj says the system, by its parameters and its code.
+    let prj = std::fs::read_to_string(dir.join("out.prj")).unwrap();
+    assert!(prj.contains("PARAMETER[\"central_meridian\",9]") && prj.contains("AUTHORITY[\"EPSG\",\"25832\"]"), "{prj}");
+    // GeoJSON is longitude/latitude only; an unknown system is an error.
+    assert!(s.run("share.exportLayer", &json!({"layer": "squares", "path": path("x.geojson"), "crs": "EPSG:25832"})).is_err());
+    assert!(s.run("share.exportLayer", &json!({"layer": "squares", "path": path("x.gpkg"), "crs": "EPSG:1"})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn zipped_shapefiles_add_as_layers() {
     use base64::Engine;
     // The sample's countries and cities as Shapefiles in one zip, under a folder.
