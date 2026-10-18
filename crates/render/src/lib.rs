@@ -1199,10 +1199,6 @@ fn band_view(view: &View, b: &rustgis_map::camera::Band) -> View {
     View { width: b.width, height: b.height, camera: b.camera, pixels_per_point: ppp, ..*view }
 }
 
-/// Reads the streamed layers once for a tilted `view`: every layer drawn in one of its `bands`
-/// (each drawn at its own scale, coarser far away). Reads are kept per extent, so a layer drawn
-/// in two bands asks for the same extent twice and reads once. Returns whether a read is still
-/// running.
 /// Reads what a tilted view shows of the map's streamed layers, without waiting, as drawing it
 /// does: a copy of the map drawn off the UI thread then finds the data already in place, and the
 /// map itself holds what the view shows. True while reads are still on their way.
@@ -1211,6 +1207,10 @@ pub fn sync_tilted_view(map: &mut Map, view: &View) -> bool {
     sync_tilted(map, view, &bands, false)
 }
 
+/// Reads the streamed layers once for a tilted `view`: every layer drawn in one of its `bands`
+/// (each drawn at its own scale, coarser far away). Reads are kept per extent, so a layer drawn
+/// in two bands asks for the same extent twice and reads once. Returns whether a read is still
+/// running.
 fn sync_tilted(map: &mut Map, view: &View, bands: &[rustgis_map::camera::Band], block: bool) -> bool {
     let lonlat = view_lonlat(map, view);
     let mut pending = false;
