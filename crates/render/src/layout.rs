@@ -446,18 +446,20 @@ fn draw_grid(pm: &mut Pixmap, map: &Map, view: &View, g: &Grid) {
     if let Some(p) = pb.finish() {
         pm.stroke_path(&p, &paint_line, &stroke, Transform::identity(), None);
     }
-    // Labels sit just inside the frame, past the ticks, away from the corners.
+    // Labels sit just inside the frame, past the ticks, away from the corners: a label is
+    // skipped unless all of it, half its length either side of the crossing, fits on its edge.
     let inset = tick + 3.0 * ppp;
-    let margin = 12.0 * ppp;
     for (edge, at, s) in labels {
-        let along_limit = match edge {
-            Edge::Top | Edge::Bottom => pw,
-            Edge::Left | Edge::Right => ph,
+        let tw = text::measure(&s, label_px / 1.33, false);
+        let (along_limit, along) = match edge {
+            Edge::Top | Edge::Bottom => (pw, tw),
+            Edge::Left | Edge::Right if vertical => (ph, tw),
+            Edge::Left | Edge::Right => (ph, label_px),
         };
+        let margin = (along / 2.0 + 3.0 * ppp).max(12.0 * ppp);
         if at < margin || at > along_limit - margin {
             continue;
         }
-        let tw = text::measure(&s, label_px / 1.33, false);
         match edge {
             Edge::Top => text::text_at(pm, &s, at, inset + label_px * 0.4, label_px, label_color, false, text::Align::Center, true),
             Edge::Bottom => text::text_at(pm, &s, at, ph - inset - label_px * 0.4, label_px, label_color, false, text::Align::Center, true),
@@ -561,13 +563,19 @@ fn north_arrow(pm: &mut Pixmap, r: Rect, style: ArrowStyle, fill: Rgba, outline:
 }
 
 /// A scale bar label for `v`, a multiple of `step`: with the decimals the step needs (up to 6), so
-/// 0.0125 km stays 0.0125 rather than rounding to 0.01.
+/// 0.0125 km stays 0.0125 rather than rounding to 0.01. A step with no exact decimal (a third)
+/// keeps two significant digits of it.
 fn scale_number(v: f64, step: f64) -> String {
-    let places = (0..6usize).find(|&n| {
-        let k = step * 10f64.powi(n as i32);
-        (k - k.round()).abs() < 1e-6 * k.abs().max(1.0)
-    });
-    let s = format!("{v:.prec$}", prec = places.unwrap_or(6));
+    let places = (0..6usize)
+        .find(|&n| {
+            let k = step * 10f64.powi(n as i32);
+            (k - k.round()).abs() < 1e-9 * k.abs().max(1.0)
+        })
+        .unwrap_or_else(|| {
+            let mag = if step.is_finite() && step > 0.0 { step.log10().floor() } else { 0.0 };
+            (1.0 - mag).clamp(0.0, 6.0) as usize
+        });
+    let s = format!("{v:.prec$}", prec = places);
     if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s }
 }
 
@@ -1433,7 +1441,12 @@ mod tests {
         assert_eq!(scale_number(0.0125, 0.0125), "0.0125");
         assert_eq!(scale_number(0.0375, 0.0125), "0.0375");
         assert_eq!(scale_number(0.125, 0.125), "0.125");
-        // A step that never comes out even stops at six decimals.
-        assert_eq!(scale_number(1.0 / 3.0, 1.0 / 3.0), "0.333333");
+        // A step that never comes out even keeps two significant digits of it.
+        assert_eq!(scale_number(1.0 / 3.0, 1.0 / 3.0), "0.33");
+        assert_eq!(scale_number(2.0 / 3.0, 1.0 / 3.0), "0.67");
+        assert_eq!(scale_number(1.0, 1.0 / 3.0), "1");
+        assert_eq!(scale_number(20.0 / 3.0, 10.0 / 3.0), "6.7");
+        assert_eq!(scale_number(200.0 / 3.0, 100.0 / 3.0), "67");
+        assert_eq!(scale_number(0.01 / 3.0, 0.01 / 3.0), "0.0033");
     }
 }
