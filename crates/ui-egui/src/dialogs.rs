@@ -1163,14 +1163,11 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
     close
 }
 
-/// A typed coordinate system code: `ESRI:102033` as it is, a bare number as an EPSG code.
+/// A typed coordinate system code: `ESRI:102033` or `Epsg: 3035` as it is (`lookup` reads the
+/// prefix in any case and spacing), a bare number as an EPSG code.
 pub(crate) fn typed_crs(text: &str) -> String {
     let text = text.trim();
-    if text.to_ascii_lowercase().starts_with("esri") {
-        text.to_string()
-    } else {
-        format!("EPSG:{}", text.trim_start_matches("EPSG:").trim_start_matches("epsg:"))
-    }
+    if text.starts_with(|c: char| c.is_ascii_digit()) { format!("EPSG:{text}") } else { text.to_string() }
 }
 
 /// What a coordinate system is: its kind, area of use, definition and epsg.io page.

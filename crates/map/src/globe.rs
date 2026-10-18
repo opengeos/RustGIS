@@ -55,13 +55,17 @@ impl Projection {
     /// (which must name a projected coordinate system the map can draw).
     pub fn from_code(s: &str) -> Result<Projection, String> {
         match s.trim().to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
-            "mercator" | "webmercator" | "2d" | "map" | "epsg:3857" | "3857" | "epsg:900913" => {
-                return Ok(Projection::WebMercator);
-            }
+            // EPSG:900913, Web Mercator's unofficial code, is in no table.
+            "mercator" | "webmercator" | "2d" | "map" | "epsg:900913" => return Ok(Projection::WebMercator),
             "globe" | "3d" | "scene" | "globalscene" => return Ok(Projection::Globe),
             _ => {}
         }
         let s = s.trim();
+        // Web Mercator's codes are the default map, however they were typed (`EPSG 3857`, `esri:0102100`).
+        let named = crate::projection::lookup(s).map(|(_, label)| label);
+        if named.as_deref().is_ok_and(|l| ["EPSG:3857", "ESRI:102100", "ESRI:102113"].contains(&l)) {
+            return Ok(Projection::WebMercator);
+        }
         // Build it, not just look it up: a known code whose method has no implementation would
         // otherwise be accepted and drawn in Web Mercator under its own name (opengeos/RustGIS#208).
         crate::projection::Projector::new(s)?;
@@ -74,12 +78,8 @@ impl Projection {
         let preset = crate::projection::PRESETS.iter().find(|(id, label, _)| id.eq_ignore_ascii_case(s) || label.eq_ignore_ascii_case(s));
         let canonical = match preset {
             Some((id, _, _)) => id.to_string(),
-            None => crate::projection::lookup(s)?.1,
+            None => named?,
         };
-        // ESRI's Web Mercator codes are the default map.
-        if canonical == "ESRI:102100" || canonical == "ESRI:102113" {
-            return Ok(Projection::WebMercator);
-        }
         Ok(Projection::Custom(canonical))
     }
 }

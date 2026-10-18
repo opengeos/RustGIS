@@ -576,7 +576,7 @@ mod tests {
         }
         assert_eq!(crate::Projection::from_code("epsg:03035"), Ok(crate::Projection::Custom("EPSG:3035".into())));
         // ESRI's Web Mercator codes are the default map.
-        for web in ["ESRI:102100", "esri:102113", "ESRI 102100", "esri:0102100"] {
+        for web in ["ESRI:102100", "esri:102113", "ESRI 102100", "esri:0102100", "EPSG:3857", "3857", "epsg 3857", "EPSG:900913"] {
             assert_eq!(crate::Projection::from_code(web), Ok(crate::Projection::WebMercator), "{web}");
         }
         // Not in the table (World Miller is kilometres off in proj4rs), not a number, too big.
