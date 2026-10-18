@@ -22,7 +22,7 @@ pub fn commands() -> Vec<C> {
             r#"{"name"?: string, "graph"?: {"nodes": [{"id", "kind": "input"|"tool"|"output", "x", "y" (optional), an input's "layer", a tool's "tool" and "params", an output's "name"}], "edges": [{"from", "fromPort": "out", "to", "toPort": a tool's layer parameter | "in" (output)}]}, "steps"?: [{"tool": id, "params": {…, "%1" for step 1's output}}], "fromHistory"?: bool, "imported"?: bool (from a file: its tools may not touch files)}"#,
         ),
         C::new("model.save", "Save Model", "Analyze › Geoprocessing", save_model)
-            .params(r#"{"name": model (made if new), "graph": graph (as model.new), "rename"?: new name}"#),
+            .params(r#"{"name": model (made if new), "graph": graph (as model.new), "rename"?: new name, "imported"?: bool (from a file: its tools may not touch files; a model from a file stays one)}"#),
         C::new("model.run", "Run Model", "Analyze › Geoprocessing", run_model)
             .params(r#"{"name"?: model (default: the last), "graph"?: run this graph instead (as model.new)}"#),
         C::new("model.validate", "Validate Model", "Analyze › Geoprocessing", |s, p| {
@@ -317,13 +317,17 @@ fn save_model(s: &mut Session, p: &Value) -> CmdResult {
         return Err(format!("a model named '{new_name}' already exists"));
     }
     let model = Model { name: new_name.clone(), steps: crate::model::graph_to_steps(&g), graph: Some(g) };
+    // A model that came in a file stays one when saved over (or renamed): its tools still may not
+    // touch files. So does a graph saved as `imported`.
+    let was_untrusted = i.is_some() && !s.trusted_models.contains(&name.to_ascii_lowercase());
     match i.and_then(|i| s.project.models.get_mut(i)) {
         Some(m) => *m = model,
         None => s.project.models.push(model),
     }
-    // Saved by the user here: its tools may touch files.
     s.trusted_models.remove(&name.to_ascii_lowercase());
-    s.trusted_models.insert(new_name.to_ascii_lowercase());
+    if !was_untrusted && !b(p, "imported").unwrap_or(false) {
+        s.trusted_models.insert(new_name.to_ascii_lowercase());
+    }
     Ok(json!({"model": new_name}))
 }
 

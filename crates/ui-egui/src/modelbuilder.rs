@@ -87,6 +87,9 @@ pub struct ModelBuilder {
     pub status: HashMap<String, Status>,
     /// What to do once the user agrees to drop unsaved changes.
     confirm: Option<Pending>,
+    /// The problems of the graph, kept until it or the project changes (the project's
+    /// revision): checked every frame otherwise.
+    problems: Option<(u64, ModelGraph, Vec<model::Problem>)>,
 }
 
 /// An action waiting for "Discard unsaved changes?".
@@ -363,14 +366,10 @@ fn save(app: &mut RustGisApp) -> bool {
         p["rename"] = json!(name);
     }
     // A model that came in a file stays one: saving it doesn't let its tools touch files.
-    let trusted_before = app.session.trusted_models.clone();
+    p["imported"] = json!(app.mb.imported);
     match app.run("model.save", p) {
         Ok(v) => {
             let saved = v["model"].as_str().unwrap_or(&name).to_string();
-            if app.mb.imported {
-                app.session.trusted_models = trusted_before;
-                app.session.trusted_models.remove(&saved.to_ascii_lowercase());
-            }
             app.mb.name = saved.clone();
             app.mb.saved_as = Some(saved.clone());
             app.mb.saved = app.mb.graph.clone();
@@ -551,7 +550,11 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let log = Rect::from_min_max(pos2(middle.min.x, middle.max.y - LOG_H), middle.max);
     let canvas = Rect::from_min_max(middle.min, pos2(middle.max.x, log.min.y));
 
-    let problems = model::validate(&app.session, &app.mb.graph);
+    let problems = match app.mb.problems.take() {
+        Some((rev, g, p)) if rev == app.session.revision && g == app.mb.graph => p,
+        _ => model::validate(&app.session, &app.mb.graph),
+    };
+    app.mb.problems = Some((app.session.revision, app.mb.graph.clone(), problems.clone()));
     toolbar(app, &mut ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(10.0, 6.0)))), &t, &problems);
     let line = Stroke::new(1.0, t.border);
     ui.painter().line_segment([pos2(full.min.x, bar.max.y), pos2(full.max.x, bar.max.y)], line);

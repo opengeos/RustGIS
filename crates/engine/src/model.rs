@@ -163,7 +163,10 @@ pub fn validate(s: &Session, g: &ModelGraph) -> Vec<Problem> {
             out.push(problem("duplicate-node", Some(&n.id), "Two or more nodes share the same id."));
         }
     }
-    let node = |id: &str| g.nodes.iter().find(|n| n.id == id);
+    // Looked up by id rather than scanned: a graph may have thousands of nodes.
+    let by_id: HashMap<&str, &ModelNode> = g.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let node = |id: &str| by_id.get(id).copied();
+    let wired_ports: HashSet<(&str, &str)> = g.edges.iter().map(|e| (e.to.as_str(), e.to_port.as_str())).collect();
     let mut into: HashMap<(&str, &str), usize> = HashMap::new();
     for e in &g.edges {
         let (Some(from), Some(to)) = (node(&e.from), node(&e.to)) else {
@@ -192,7 +195,7 @@ pub fn validate(s: &Session, g: &ModelGraph) -> Vec<Problem> {
         }
     }
     for n in &g.nodes {
-        let wired = |port: &str| g.edges.iter().any(|e| e.to == n.id && e.to_port == port);
+        let wired = |port: &str| wired_ports.contains(&(n.id.as_str(), port));
         match n.kind {
             ModelNodeKind::Input => match n.layer.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
                 None => out.push(problem("missing-layer", Some(&n.id), "Choose an input layer.")),
@@ -568,6 +571,10 @@ fn run_into(s: &mut Session, g: &ModelGraph, trusted: bool, report: &mut RunRepo
                 // A tool's own layer is renamed; an input passed straight through stays as it is.
                 let from_tool = g.edges.iter().filter(|e| e.to == n.id).any(|e| made.iter().any(|(id, _)| *id == e.from));
                 let kept = if from_tool { rename(s, &layer, &wanted) } else { layer };
+                // Tools after the renamed one read it by its new name.
+                if let Some(e) = g.edges.iter().find(|e| e.to == n.id && e.to_port == IN) {
+                    value.insert(e.from.as_str(), kept.clone());
+                }
                 report.nodes.push(NodeRun { node: n.id.clone(), status: "done", message: String::new(), layer: Some(kept.clone()) });
                 report.outputs.push(kept.clone());
                 value.insert(n.id.as_str(), kept);

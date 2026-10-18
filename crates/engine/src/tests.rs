@@ -8314,6 +8314,25 @@ fn model_graphs(s: &mut Session) {
     let r = s.run("model.run", &json!({"name": "Zones"})).unwrap();
     assert_eq!(r["outputs"], json!(["City zones 2"]));
 
+    // A result kept by an output and fed on to another tool: the tool reads it by its new name,
+    // whichever runs first.
+    let both = json!({"nodes": [
+        {"id": "i1", "kind": "input", "x": 0, "y": 0, "layer": "Cities"},
+        {"id": "t1", "kind": "tool", "x": 200, "y": 0, "tool": "buffer", "params": {"distance": 20}},
+        {"id": "o1", "kind": "output", "x": 300, "y": 0, "name": "Buffers"},
+        {"id": "t2", "kind": "tool", "x": 400, "y": 0, "tool": "dissolve"}],
+        "edges": [{"from": "i1", "fromPort": "out", "to": "t1", "toPort": "input"},
+                  {"from": "t1", "fromPort": "out", "to": "o1", "toPort": "in"},
+                  {"from": "t1", "fromPort": "out", "to": "t2", "toPort": "input"}]});
+    let r = s.run("model.run", &json!({"graph": both})).unwrap();
+    assert_eq!(r["outputs"][0], "Buffers");
+    // Saving over a model from a file keeps it one.
+    s.run("model.save", &json!({"name": "From disk", "graph": both, "imported": true})).unwrap();
+    assert!(!s.trusted_models.contains("from disk"));
+    s.run("model.save", &json!({"name": "From disk", "graph": both, "rename": "Renamed"})).unwrap();
+    assert!(!s.trusted_models.contains("renamed") && !s.trusted_models.contains("from disk"));
+    s.run("model.remove", &json!({"name": "Renamed"})).unwrap();
+
     // Problems: a missing layer, an unconnected required input, a loop.
     let mut bad = graph.clone();
     bad["nodes"][0]["layer"] = json!("Nowhere");
