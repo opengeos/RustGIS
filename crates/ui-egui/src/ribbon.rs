@@ -9,7 +9,7 @@ use rustgis_engine::map::{Basemap, RasterRenderer, Renderer, Resampling, Stretch
 use serde_json::{Value, json};
 
 use crate::theme::{Tokens, regular, semibold};
-use crate::widgets::{CONTENT_H, LABEL_H, big, big_menu, col, group, menu_item, small, small_menu, text_w};
+use crate::widgets::{CONTENT_H, LABEL_H, big, big_form_menu, big_menu, col, group, menu_item, small, small_form_menu, small_menu, text_w};
 use crate::{RightPane, RustGisApp, icons};
 
 pub const TABS: [&str; 10] = ["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"];
@@ -1305,10 +1305,10 @@ fn analysis_groups(app: &mut RustGisApp, ui: &mut Ui) {
             app,
             "modelbuilder",
             "Model\nBuilder",
-            "Chain tools into a model; build one from your history.",
-            "ui.pane.workflows",
-            json!({"section": "models"}),
-            false,
+            "Draw a model: chain tools from input layers to the results to keep.",
+            "ui.modelBuilder",
+            Value::Null,
+            app.mb.shown(),
             false,
         );
         col(ui, |ui| {
@@ -2988,7 +2988,7 @@ fn start_projection_menu(app: &mut RustGisApp, ui: &mut Ui) {
     let current = if app.ui.start_projection.is_empty() { "mercator".to_string() } else { app.ui.start_projection.clone() };
     let shown = rustgis_engine::map::Projection::from_code(&current).map(|p| p.label()).unwrap_or_else(|_| current.clone());
     let label = format!("{}\n{}", tl!("Projection"), tl!(shown.as_str()));
-    big_menu(ui, app, "basemap", &label, "The projection the map opens in.", move |ui, app| {
+    big_form_menu(ui, app, "basemap", &label, "The projection the map opens in.", move |ui, app| {
         let mut items: Vec<(String, String)> = vec![("mercator".into(), "Web Mercator".into()), ("globe".into(), "Globe".into())];
         items.extend(rustgis_engine::map::projection::PRESETS.iter().map(|(id, label, _)| (id.to_string(), label.to_string())));
         for (id, label) in items {
@@ -2998,12 +2998,12 @@ fn start_projection_menu(app: &mut RustGisApp, ui: &mut Ui) {
             }
         }
         ui.separator();
-        ui.label(tl!("EPSG code"));
+        ui.label(tl!("EPSG or ESRI code"));
         ui.horizontal(|ui| {
             let edit = ui.add(egui::TextEdit::singleline(&mut app.ui.start_projection_input).hint_text("3010").desired_width(90.0));
             let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if ui.button(tl!("Use")).clicked() || enter {
-                let code = format!("EPSG:{}", app.ui.start_projection_input.trim().trim_start_matches("EPSG:").trim_start_matches("epsg:"));
+                let code = crate::dialogs::typed_crs(&app.ui.start_projection_input);
                 match app.run("ui.startup", json!({"projection": code})) {
                     Ok(_) => {
                         app.ui.start_projection_input.clear();
@@ -3014,7 +3014,7 @@ fn start_projection_menu(app: &mut RustGisApp, ui: &mut Ui) {
             }
         });
         if let Ok(rustgis_engine::map::Projection::Custom(c)) = rustgis_engine::map::Projection::from_code(&current)
-            && c.starts_with("EPSG:")
+            && (c.starts_with("EPSG:") || c.starts_with("ESRI:"))
         {
             ui.add(egui::Button::selectable(true, c.as_str()));
         }
@@ -3128,7 +3128,7 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
             } else {
                 tl!("Display Filters").to_string()
             };
-            small_menu(ui, app, "filter", &label, "Show different features at different scales.", |ui, app| {
+            small_form_menu(ui, app, "filter", &label, "Show different features at different scales.", |ui, app| {
                 ui.label(egui::RichText::new(tl!("Below 1:5,000,000 show everything; beyond it only what matches:")).small().weak());
                 ui.add(egui::TextEdit::singleline(&mut app.forms.expression).hint_text("pop_max > 1000000").desired_width(220.0));
                 if ui.button(tl!("Set Filter")).clicked() {
@@ -3901,10 +3901,12 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
     });
     group(ui, "Text Symbol", |ui| {
         col(ui, |ui| {
-            let mut size = layer.labels.size;
+            // The whole range `labels.style` accepts (#457), so a larger label isn't cut back.
+            let mut size = f64::from(layer.labels.size);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Size")).size(11.5));
-                if ui.add(egui::DragValue::new(&mut size).range(4.0..=48.0).speed(0.1).suffix(" pt")).changed() {
+                let range = rustgis_engine::map::symbology::LABEL_SIZE;
+                if ui.add(egui::DragValue::new(&mut size).range(range).speed(0.1).suffix(" pt")).changed() {
                     let _ = app.run("labels.style", json!({"size": size}));
                 }
             });

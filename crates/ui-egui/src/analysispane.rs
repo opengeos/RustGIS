@@ -667,9 +667,19 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         _ => {
             heading(ui, "Models");
             let models: Vec<(String, usize)> = app.session.project.models.iter().map(|m| (m.name.clone(), m.steps.len())).collect();
+            if ui
+                .button(tl!("Open ModelBuilder"))
+                .on_hover_text(tl!("Draw a model: chain tools from input layers to the results to keep"))
+                .clicked()
+            {
+                let _ = app.run("ui.modelBuilder", Value::Null);
+            }
             for (n, steps) in models {
                 ui.horizontal(|ui| {
                     ui.label(crate::i18n::fmt("{name} ({n} steps)", &[("name", &n), ("n", &steps.to_string())]));
+                    if ui.small_button(tl!("Open")).on_hover_text(tl!("Open in ModelBuilder")).clicked() {
+                        let _ = app.run("ui.modelBuilder", json!({"name": n}));
+                    }
                     if ui.small_button(tl!("Run")).clicked() {
                         run(app, "model.run", json!({"name": n}));
                     }
@@ -683,7 +693,13 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 .on_hover_text(tl!("Each geoprocessing run becomes a step, chained by its outputs"))
                 .clicked()
             {
-                run(app, "model.new", json!({"name": "Model", "fromHistory": true}));
+                match app.run("model.new", json!({"name": "Model", "fromHistory": true})) {
+                    Ok(v) => {
+                        let name = v["model"].as_str().unwrap_or_default().to_string();
+                        let _ = app.run("ui.modelBuilder", json!({"name": name}));
+                    }
+                    Err(e) => app.workflow.error = Some(e),
+                }
             }
         }
     }

@@ -17,6 +17,9 @@ use rustgis_tiles::template::{self, TileId};
 const MAX_TILE_ZOOM: u8 = 15;
 /// How many zooms up a missing tile is stood in for by a coarser one already read.
 const STAND_IN_LEVELS: u8 = 8;
+/// How many zooms up the one coarser tile fetched along with a missing one is: cheap, and soon
+/// there, so the relief shows while the sharper tile comes.
+const COARSE_LEVELS: u8 = 4;
 
 enum Heights {
     Raster(Arc<Raster>),
@@ -133,7 +136,8 @@ fn tile_at(m: Coord, zoom: u8) -> Option<(TileId, f64, f64)> {
 }
 
 /// An elevation tile's height at a Web Mercator point: the tile at `zoom` once read (its fetch
-/// starts here), meanwhile the nearest coarser one read already.
+/// starts here, with one [`COARSE_LEVELS`] up), meanwhile the nearest coarser one read already.
+/// A failed fetch is tried again only after the cache's back-off.
 fn tile_height(
     url: &str,
     encoding: TerrainEncoding,
@@ -164,9 +168,10 @@ fn tile_height(
         read.borrow_mut().insert(id, got.clone());
         got
     };
+    let coarse = COARSE_LEVELS.min(zoom);
     let stand_ins = (0..=STAND_IN_LEVELS.min(zoom)).filter_map(|k| id.ancestor(k));
     for (k, t) in stand_ins.enumerate() {
-        if let Some(p) = tile(t, k == 0)
+        if let Some(p) = tile(t, k == 0 || k == usize::from(coarse))
             && let Payload::Image(pm) = &*p
             && let Some((_, fx, fy)) = tile_at(m, t.z)
         {

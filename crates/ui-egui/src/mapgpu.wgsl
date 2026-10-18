@@ -5,17 +5,37 @@
 
 struct CmdUniforms {
     view_proj: mat4x4f,
-    /// Map units per physical pixel: scales stroke normals.
-    map_per_px: f32,
-    _pad: f32,
-    /// Physical pixel size of the map view: scales marker pixel offsets.
-    viewport: vec2f,
+    /// The depth row of the camera the scene was drawn for (a tilted scene's bands).
+    scene_depth: vec4f,
+    /// The fog a tilted view's ground fades into (premultiplied).
+    fog: vec4f,
+    /// x: map units per physical pixel (scales stroke normals); y: 1 for upright markers, else
+    /// 0; z, w: the band's nearest and farthest depths.
+    params: vec4f,
+    /// x, y: physical pixel size of the map view (scales marker pixel offsets); z: 1 when
+    /// tilted, else 0; w: the reach's depth.
+    viewport: vec4f,
+    _pad: vec4f,
 };
 
 struct VOut {
     @builtin(position) clip: vec4f,
     @location(0) color: vec4f,
+    /// The depth now, and for the camera the scene was drawn for.
+    @location(1) depth: vec2f,
 };
+
+/// A tilted view's ground: a band keeps to its own stretch of it, nothing shows past the
+/// reach (the sky does), and it fades into fog from halfway there, as the CPU path warps it.
+fn tilted(c: vec4f, depth: vec2f, u: CmdUniforms) -> vec4f {
+    let reach = u.viewport.w;
+    let t = smoothstep(reach * 0.5, reach, depth.x);
+    return vec4f(mix(c.rgb, u.fog.rgb * c.a, t), c.a);
+}
+
+fn kept(depth: vec2f, u: CmdUniforms) -> bool {
+    return u.viewport.z < 0.5 || (depth.y >= u.params.z && depth.y < u.params.w && depth.x <= u.viewport.w);
+}
 
 // ---- mesh (polygon fills and line/ring strokes) ----
 
@@ -30,16 +50,26 @@ struct MeshIn {
 
 @vertex
 fn vs_mesh(in: MeshIn) -> VOut {
-    // Fill vertices have normal = (0,0) and stroke_px = 0: no displacement.
-    let world = in.position + in.normal * (in.stroke_px * u_mesh.map_per_px * 0.5);
+    // Fill vertices have normal = (0,0) and stroke_px = 0: no displacement. A stroke's width is
+    // pixels, so in perspective it scales by the depth (1 in a flat view), as marker offsets do,
+    // keeping its width on screen as the CPU path's bands about do.
+    let depth = (u_mesh.view_proj * vec4f(in.position, 0.0, 1.0)).w;
+    let world = vec4f(in.position + in.normal * (in.stroke_px * u_mesh.params.x * 0.5 * max(depth, 0.0)), 0.0, 1.0);
     var out: VOut;
-    out.clip = u_mesh.view_proj * vec4f(world, 0.0, 1.0);
+    out.clip = u_mesh.view_proj * world;
     out.color = in.color;
+    out.depth = vec2f(out.clip.w, dot(u_mesh.scene_depth, world));
     return out;
 }
 
 @fragment
 fn fs_mesh(in: VOut) -> @location(0) vec4f {
+    if !kept(in.depth, u_mesh) {
+        discard;
+    }
+    if u_mesh.viewport.z > 0.5 {
+        return tilted(in.color, in.depth, u_mesh);
+    }
     return in.color;
 }
 
@@ -65,18 +95,76 @@ struct MarkIn {
 @vertex
 fn vs_marker(in: MarkIn) -> VOut {
     let tpl = u_tpl.verts[in.inst_shape * 72u + in.vi].xy;
-    let center = u_mark.view_proj * vec4f(in.inst_pos, 0.0, 1.0);
-    // Templates are y-down (screen), clip is y-up; view_proj is orthographic (w = 1).
-    let offset = vec2f(tpl.x, -tpl.y) * in.inst_radius * 2.0 / u_mark.viewport;
+    let at = vec4f(in.inst_pos, 0.0, 1.0);
+    let center = u_mark.view_proj * at;
+    // An upright marker grows nearer the eye and shrinks farther away (as
+    // `render::UprightMarker::place` sizes it); any other keeps its size on screen.
+    var k = 1.0;
+    if u_mark.params.y > 0.5 {
+        k = clamp(1.0 / max(center.w, 1e-6), 0.25, 2.0);
+    }
+    // Templates are y-down (screen), clip is y-up; pixel offsets scale by w to stay pixels.
+    let offset = vec2f(tpl.x, -tpl.y) * in.inst_radius * 2.0 / u_mark.viewport.xy * k * center.w;
     var out: VOut;
     out.clip = center + vec4f(offset, 0.0, 0.0);
     out.color = in.inst_color;
+    // The whole marker at its centre's depth, so a band keeps or leaves it whole.
+    out.depth = vec2f(center.w, dot(u_mark.scene_depth, at));
     return out;
 }
 
 @fragment
 fn fs_marker(in: VOut) -> @location(0) vec4f {
+    if !kept(in.depth, u_mark) {
+        discard;
+    }
+    if u_mark.viewport.z > 0.5 {
+        return tilted(in.color, in.depth, u_mark);
+    }
     return in.color;
+}
+
+// ---- backdrop (a tilted view: water fading into fog toward the reach, the sky above) ----
+
+struct Backdrop {
+    /// The view's height (logical px), the eye's distance from the centre, the pitch's cosine
+    /// and sine.
+    tilt: vec4f,
+    /// Physical pixels per point, the reach's screen row (logical px), the reach's depth.
+    params: vec4f,
+    water: vec4f,
+    fog: vec4f,
+    sky: vec4f,
+};
+
+@group(0) @binding(0) var<uniform> u_back: Backdrop;
+
+@vertex
+fn vs_backdrop(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+    var pos = array<vec2f, 6>(
+        vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
+        vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0),
+    );
+    return vec4f(pos[vi], 0.0, 1.0);
+}
+
+@fragment
+fn fs_backdrop(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+    // As `Camera::ground_lookup` finds the ground under a screen row.
+    let y = pos.y / u_back.params.x;
+    let h = u_back.tilt.x;
+    let d = u_back.tilt.y;
+    let reach = u_back.params.z;
+    let b = y - h * 0.5;
+    let den = d * u_back.tilt.z + b * u_back.tilt.w;
+    if den > 0.0 {
+        let v = b * d / den;
+        let depth = (d - v * u_back.tilt.w) / d;
+        if depth <= reach {
+            return mix(u_back.water, u_back.fog, smoothstep(reach * 0.5, reach, depth));
+        }
+    }
+    return mix(u_back.sky, u_back.fog, clamp(y / u_back.params.y, 0.0, 1.0));
 }
 
 // ---- image (a CPU-rasterized run, composited covering the whole map view) ----

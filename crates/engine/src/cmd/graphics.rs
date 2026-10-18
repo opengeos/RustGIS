@@ -256,7 +256,7 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
         opt(outline),
         num("width", 0.0, 50.0),
         num("size", 0.0, 200.0),
-        num("fontSize", 4.0, 200.0),
+        num("fontSize", *graphics::FONT_SIZE.start(), *graphics::FONT_SIZE.end()),
         opt(image),
     ];
     l.dataset.push(Some(g), attrs);
@@ -295,7 +295,8 @@ fn restyle(s: &mut Session, p: &Value, one: Option<(u32, usize)>) -> CmdResult {
     let (fill, outline) = (color(p, "fill")?, color(p, "outline")?);
     let text = ps(p, "text").map(|t| t.chars().take(2000).collect::<String>());
     // Font sizes are kept within the range they are drawn at (graphics::font_size).
-    let nums = [("width", "width", 0.0, 50.0), ("size", "size", 0.0, 200.0), ("font_size", "fontSize", 4.0, 200.0)];
+    let fonts = &graphics::FONT_SIZE;
+    let nums = [("width", "width", 0.0, 50.0), ("size", "size", 0.0, 200.0), ("font_size", "fontSize", *fonts.start(), *fonts.end())];
     if fill.is_none() && outline.is_none() && text.is_none() && nums.iter().all(|(_, k, _, _)| f(p, k).is_none()) {
         return Err("give a fill, outline, width, size, fontSize or text".into());
     }
