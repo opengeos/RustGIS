@@ -765,6 +765,15 @@ fn mcp_run_stops_at_a_failing_line_and_keeps_nothing() {
     assert_eq!(s.map().layers.len(), layers);
     let (err, text) = call_tool(&server, &mut s, "run", json!({"script": "  "}));
     assert!(err && text.contains("script is required"), "{text}");
+    // Leading blank lines count, so the error names the line the caller wrote; the answer
+    // keeps its shape when it fails.
+    let (err, text) = call_tool(&server, &mut s, "run", json!({"script": "\n\nmap.basemap {\"name\": \"no-such-basemap\"}"}));
+    let r: Value = serde_json::from_str(&text).unwrap();
+    assert!(err && r["error"].as_str().is_some_and(|e| e.starts_with("line 3:")), "{text}");
+    assert_eq!((r["lines"].clone(), r["layersAdded"].clone()), (json!(0), json!([])), "{text}");
+    // And when it adds no layer.
+    let (err, text) = call_tool(&server, &mut s, "run", json!({"script": "map.zoomIn"}));
+    assert!(!err && serde_json::from_str::<Value>(&text).unwrap()["layersAdded"] == json!([]), "{text}");
 }
 
 /// Each line of a script follows run_command's rules: a refused line refuses the whole script

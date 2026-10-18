@@ -327,7 +327,7 @@ pub(crate) fn run_script(s: &mut Session, p: &Value) -> CmdResult {
     let mut out = Vec::new();
     for (n, id, params) in script_commands(script)? {
         let spec = s.registry.get(&id).ok_or_else(|| format!("line {n}: unknown command '{id}'"))?;
-        let (run, enabled) = (spec.run, spec.enabled);
+        let (run, enabled, mutates, label) = (spec.run, spec.enabled, spec.mutates, spec.label);
         // As when typed directly, a line naming a layer is checked against that layer.
         if params.get("layer").is_some()
             && let Ok(lid) = s.layer_id(&params)
@@ -336,6 +336,10 @@ pub(crate) fn run_script(s: &mut Session, p: &Value) -> CmdResult {
         }
         if let Some(why) = enabled(s) {
             return Err(format!("line {n}: {id}: {why}"));
+        }
+        // As Session::run does: an edit to a layer read in place would be lost at its next read.
+        if let Some(e) = s.streamed_edit(&id, mutates, label, s.active_layer) {
+            return Err(format!("line {n}: {e}"));
         }
         let r = run(s, &params).map_err(|e| format!("line {n}: {id}: {e}"))?;
         out.push(json!({"line": n, "command": id, "result": r}));

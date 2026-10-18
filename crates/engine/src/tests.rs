@@ -8316,3 +8316,19 @@ fn project_info_describes_the_whole_project() {
     assert_eq!(layers[0]["name"], "Cities");
     assert!(layers[0].get("fields").is_none(), "{some}");
 }
+
+/// A script can't edit a layer read in place from its file, as a command run on its own can't:
+/// a later line loading the layer would otherwise lose the edit without a word.
+#[test]
+fn scripts_refuse_edits_to_streamed_layers() {
+    let path = grid_fgb("script-streamed", 20);
+    let mut s = with_streamed(&path);
+    let before = s.map().layer_by_name("Streamed").map(|l| l.dataset.features.len());
+    let script = "edit.enable {\"on\": true}\nedit.addFeature {\"layer\": \"Streamed\", \"geometry\": {\"type\": \"Point\", \"coordinates\": [1, 2]}}\nlayer.loadAll {\"layer\": \"Streamed\"}";
+    let e = s.run("script.run", &json!({"script": script})).unwrap_err();
+    assert!(e.starts_with("line 2:") && e.contains("read in place"), "{e}");
+    let l = s.map().layer_by_name("Streamed").unwrap();
+    assert!(l.is_streamed(), "the failed script kept nothing");
+    assert_eq!(Some(l.dataset.features.len()), before);
+    let _ = std::fs::remove_file(path);
+}
