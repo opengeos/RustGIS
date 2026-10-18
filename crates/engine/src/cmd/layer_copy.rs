@@ -107,6 +107,17 @@ fn unique_group_name(m: &Map, name: &str) -> String {
     if taken(name) { copy_name(None, name, taken) } else { name.to_string() }
 }
 
+/// What a paste added, as its notice says it: "2 layers", "1 group and 3 layers", "1 group" (an
+/// empty group copied).
+fn pasted_what(layers: usize, groups: usize) -> String {
+    let count = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
+    match (groups, layers) {
+        (0, n) => count(n, "layer", "layers"),
+        (g, 0) => count(g, "group", "groups"),
+        (g, n) => format!("{} and {}", count(g, "group", "groups"), count(n, "layer", "layers")),
+    }
+}
+
 fn paste(s: &mut Session, p: &Value) -> CmdResult {
     let clip = s.layer_clipboard.clone().ok_or("no layers have been copied")?;
     let mi = super::navigate::map_at(s, p)?;
@@ -184,10 +195,11 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
         s.active_layer = Some(*first);
     }
     // Said, as a paste from the Browser can go to a map out of view.
-    let n = pasted.len();
-    s.notify(if n == 1 { format!("Pasted 1 layer into {map}") } else { format!("Pasted {n} layers into {map}") }, false);
-    if !unmasked.is_empty() {
-        s.notify(format!("{} lost their mask: {map} has no layer by that name", unmasked.join(", ")), false);
+    s.notify(format!("Pasted {} into {map}", pasted_what(pasted.len(), group_ids.len())), false);
+    match unmasked.as_slice() {
+        [] => {}
+        [one] => s.notify(format!("{one} lost its mask: {map} has no polygon layer by that name"), false),
+        many => s.notify(format!("{} lost their masks: {map} has no polygon layers by those names", many.join(", ")), false),
     }
     Ok(json!({"map": map, "layers": pasted, "groups": group_ids, "unmasked": unmasked}))
 }

@@ -7529,6 +7529,12 @@ fn layers_are_copied_and_pasted_between_maps() {
     });
     assert!(r.is_err());
     assert_eq!((names(&s.project.maps[1]), s.project.maps[1].groups.len()), (layers, groups));
+    // An empty group is copied too, and its paste is said as a group (no layers came with it).
+    s.run("group.add", &json!({"name": "Empty"})).unwrap();
+    s.run("layer.copy", &json!({"group": "Empty"})).unwrap();
+    let r = s.run("layer.paste", &Value::Null).unwrap();
+    assert_eq!((r["layers"].clone(), r["groups"].as_array().map(Vec::len)), (json!([]), Some(1)));
+    assert_eq!(s.notices.last().map(|n| n.text.as_str()), Some("Pasted 1 group into Third"));
 }
 
 #[test]
