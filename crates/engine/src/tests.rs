@@ -8501,6 +8501,18 @@ fn model_graphs(s: &mut Session) {
     // A graph without positions is laid out along the flow.
     let g = rustgis_engine_graph(&fails);
     assert!(g.nodes[0].x < g.nodes[1].x && g.nodes[1].x < g.nodes[2].x);
+    // Models saved as steps still run as steps: `%n` anywhere, and a clear error for one too far.
+    s.run(
+        "model.new",
+        &json!({"name": "Steps", "steps": [
+        {"tool": "buffer", "params": {"input": "Cities", "distance": 5}},
+        {"tool": "dissolve", "params": {"input": "%3"}}]}),
+    )
+    .unwrap();
+    assert!(s.project.models.iter().any(|m| m.name == "Steps" && m.graph.is_none()));
+    let e = s.run("model.run", &json!({"name": "Steps"})).unwrap_err();
+    assert!(e.contains("uses %3"), "{e}");
+    s.run("model.remove", &json!({"name": "Steps"})).unwrap();
     // Old step models open as graphs.
     let steps = vec![
         crate::project::ModelStep { tool: "buffer".into(), params: json!({"input": "Cities", "distance": 5}) },

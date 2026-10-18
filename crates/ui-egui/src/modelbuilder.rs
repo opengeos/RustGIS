@@ -553,11 +553,12 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let log = Rect::from_min_max(pos2(middle.min.x, middle.max.y - LOG_H), middle.max);
     let canvas = Rect::from_min_max(middle.min, pos2(middle.max.x, log.min.y));
 
-    let problems = match app.mb.problems.take() {
-        Some((rev, g, p)) if rev == app.session.revision && g == app.mb.graph => p,
-        _ => model::validate(&app.session, &app.mb.graph),
-    };
-    app.mb.problems = Some((app.session.revision, app.mb.graph.clone(), problems.clone()));
+    let fresh = matches!(&app.mb.problems, Some((rev, g, _)) if *rev == app.session.revision && *g == app.mb.graph);
+    if !fresh {
+        let p = model::validate(&app.session, &app.mb.graph);
+        app.mb.problems = Some((app.session.revision, app.mb.graph.clone(), p));
+    }
+    let problems = app.mb.problems.as_ref().map(|c| c.2.clone()).unwrap_or_default();
     toolbar(app, &mut ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(10.0, 6.0)))), &t, &problems);
     let line = Stroke::new(1.0, t.border);
     ui.painter().line_segment([pos2(full.min.x, bar.max.y), pos2(full.max.x, bar.max.y)], line);

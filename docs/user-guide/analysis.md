@@ -189,7 +189,9 @@ their name.
   Script pane, the command line or Python.
 
 The Workflows pane's Models section lists the project's models, and New Model From History turns
-the geoprocessing you've run into one. The `model.*` commands build, check (`model.validate`),
+the geoprocessing you've run into one. Models made as steps (`model.new` with `steps`, where `%1`
+stands for step 1's output) run as they always have until they are saved from ModelBuilder, which
+shows them as a graph and saves them as one. The `model.*` commands build, check (`model.validate`),
 save and run models without the canvas:
 
 ```json

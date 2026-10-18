@@ -269,7 +269,7 @@ fn new_model(s: &mut Session, p: &Value) -> CmdResult {
             }
         }
     }
-    let graph = graph.unwrap_or_else(|| crate::model::steps_to_graph(&steps));
+    // Steps stay steps (ModelBuilder shows them as a graph, and saves one).
     let mut name = base.clone();
     let mut i = 1;
     while s.project.models.iter().any(|m| m.name.eq_ignore_ascii_case(&name)) {
@@ -282,7 +282,7 @@ fn new_model(s: &mut Session, p: &Value) -> CmdResult {
         s.trusted_models.insert(name.to_ascii_lowercase());
     }
     let n = steps.len();
-    s.project.models.push(Model { name: name.clone(), steps, graph: Some(graph) });
+    s.project.models.push(Model { name: name.clone(), steps, graph });
     Ok(json!({"model": name, "steps": n}))
 }
 
@@ -301,8 +301,18 @@ fn model_graph(s: &Session, p: &Value) -> Result<(String, crate::project::ModelG
     Ok((model.name.clone(), g, s.trusted_models.contains(&model.name.to_ascii_lowercase())))
 }
 
-/// Runs a model's graph (a model saved as steps runs as the graph they make).
+/// Runs a model's graph, or the graph passed.
 fn run_model(s: &mut Session, p: &Value) -> CmdResult {
+    // A model saved as steps runs as steps: `%n` may stand anywhere in them, and inputs may be files.
+    if p.get("graph").is_none_or(Value::is_null) {
+        let model = match ps(p, "name") {
+            Some(n) => s.project.models.iter().find(|m| m.name.eq_ignore_ascii_case(n)),
+            None => s.project.models.last(),
+        };
+        if let Some(m) = model.filter(|m| m.graph.is_none()).cloned() {
+            return run_steps(s, m);
+        }
+    }
     let (name, g, trusted) = model_graph(s, p)?;
     crate::model::run(s, &name, &g, trusted)
 }
@@ -343,6 +353,54 @@ fn export_model(s: &mut Session, p: &Value) -> CmdResult {
         }
         None => Ok(json!({"model": name, "fileName": format!("{file}.model.json"), "text": text})),
     }
+}
+
+/// Runs a model saved as steps (no graph) in order, putting each step's output layer name in place
+/// of `%n` anywhere in the parameters, as models always ran before ModelBuilder drew graphs.
+fn run_steps(s: &mut Session, model: Model) -> CmdResult {
+    if model.steps.is_empty() {
+        return Err(format!("{} has no steps", model.name));
+    }
+    // A model that came in a file (an opened project, or an imported tool) may not touch files.
+    if !s.trusted_models.contains(&model.name.to_ascii_lowercase())
+        && let Some((i, st)) = model.steps.iter().enumerate().find(|(_, st)| super::items::touches_files("gp.run", &st.params))
+    {
+        return Err(format!(
+            "step {} ({}) reads or writes files, which a model from a file can't do; make a new model with that step to run it",
+            i + 1,
+            st.tool
+        ));
+    }
+    let mut outputs: Vec<String> = Vec::new();
+    let mut ran = Vec::new();
+    for (i, st) in model.steps.iter().enumerate() {
+        let mut params = st.params.clone();
+        wire(&mut params, &outputs, i, 0)?;
+        let before = s.project.gp_history.len();
+        let r = super::gp::run_tool(s, &st.tool, &params).map_err(|e| format!("step {} ({}): {e}", i + 1, st.tool))?;
+        // A step that made no layer leaves nothing for a later %n to use.
+        let out =
+            (s.project.gp_history.len() > before).then(|| s.project.gp_history.last().and_then(|h| h.outputs.first().cloned())).flatten();
+        outputs.push(out.unwrap_or_default());
+        ran.push(json!({"step": i + 1, "tool": st.tool, "result": r}));
+    }
+    Ok(json!({"model": model.name, "ran": ran}))
+}
+
+/// Replaces `%n` (step n's output layer) anywhere in a step's parameters, nested values too.
+fn wire(v: &mut Value, outputs: &[String], step: usize, depth: usize) -> Result<(), String> {
+    match v {
+        Value::String(t) => {
+            if let Some(n) = t.strip_prefix('%').and_then(|n| n.parse::<usize>().ok()) {
+                let out = outputs.get(n.wrapping_sub(1)).filter(|o| !o.is_empty());
+                *v = json!(out.ok_or_else(|| format!("step {} uses %{n}, but step {n} made no output layer", step + 1))?);
+            }
+        }
+        Value::Array(a) if depth < 8 => a.iter_mut().try_for_each(|x| wire(x, outputs, step, depth + 1))?,
+        Value::Object(o) if depth < 8 => o.values_mut().try_for_each(|x| wire(x, outputs, step, depth + 1))?,
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Runs a script of commands, one per line (`id {json}`), stopping at the first error. Scripts

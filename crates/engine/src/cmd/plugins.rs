@@ -239,6 +239,10 @@ const NEVER: &[&str] = &[
     "script.run",
     "task.run",
     "model.run",
+    // A model saved by a plugin would be trusted to touch files when the user runs it.
+    "model.new",
+    "model.save",
+    "model.import",
     "project.new",
     "project.open",
     "project.openText",
