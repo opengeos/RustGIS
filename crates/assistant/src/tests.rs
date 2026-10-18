@@ -725,6 +725,40 @@ fn mcp_list_layers_filters_by_name_and_drops_fields() {
     assert!(layers[0].get("fields").is_none(), "{text}");
 }
 
+/// `snapshot` outside the desktop relay draws the map offscreen at the view's shape and says
+/// what it shows; saving it needs file access, and asks for approval.
+#[test]
+fn mcp_snapshot_draws_offscreen_and_saves_with_access() {
+    let mut s = sample();
+    s.view_size = (1000.0, 500.0);
+    let snapshot =
+        |server: &mcp::Server, s: &mut Session, args: Value| rpc(server, s, "tools/call", json!({"name": "snapshot", "arguments": args}));
+    let r = snapshot(&mcp::Server::default(), &mut s, json!({"max_width": 400}));
+    assert_eq!(r["content"][0]["type"], "image", "{r}");
+    let meta: Value = serde_json::from_str(r["content"][1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!((meta["mode"].clone(), meta["width"].clone(), meta["height"].clone()), (json!("render"), json!(400), json!(200)), "{meta}");
+    assert!(meta["extent"].is_array() && meta["projection"].is_string() && meta["note"].is_null(), "{meta}");
+    // The screen, asked of a server that has none.
+    let r = snapshot(&mcp::Server::default(), &mut s, json!({"mode": "screen"}));
+    let meta: Value = serde_json::from_str(r["content"][1]["text"].as_str().unwrap()).unwrap();
+    assert!(meta["note"].as_str().is_some_and(|n| n.contains("relay")), "{meta}");
+
+    let out = std::env::temp_dir().join(format!("rustgis-mcp-snapshot-{}.png", std::process::id()));
+    let save = json!({"mode": "render", "save_path": out.display().to_string()});
+    let r = snapshot(&mcp::Server::new(false), &mut s, save.clone());
+    assert!(r["isError"] == true && r["content"][0]["text"].as_str().unwrap().contains("--yes"), "{r}");
+    assert!(!out.exists());
+    let r = snapshot(&mcp::Server::new(true), &mut s, save.clone());
+    let meta: Value = serde_json::from_str(r["content"][1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(meta["saved"], out.display().to_string(), "{meta}");
+    assert!(std::fs::read(&out).unwrap().starts_with(b"\x89PNG"));
+    let _ = std::fs::remove_file(&out);
+    let call = ToolCall { id: String::new(), name: "snapshot".into(), args: save };
+    assert!(tools::gate(&s, &call).is_some_and(|w| w.contains("writes a file")));
+    let plain = ToolCall { id: String::new(), name: "snapshot".into(), args: json!({}) };
+    assert!(tools::gate(&s, &plain).is_none());
+}
+
 #[test]
 fn mcp_protocol_errors() {
     let (server, mut s) = (mcp::Server::default(), sample());

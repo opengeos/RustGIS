@@ -38,6 +38,8 @@ mod panes;
 mod pluginpanel;
 mod pluginsui;
 mod portalsui;
+#[cfg(not(target_arch = "wasm32"))]
+mod relayshot;
 mod reportpane;
 mod ribbon;
 mod s3ui;
@@ -636,6 +638,9 @@ pub struct RustGisApp {
     /// already has open, started by the `ui.mcpRelay` command and off until then.
     #[cfg(not(target_arch = "wasm32"))]
     pub relay: Option<rustgis_assistant::relay::Relay>,
+    /// A screen snapshot an agent attached through the relay asked for, while it is captured.
+    #[cfg(not(target_arch = "wasm32"))]
+    relay_shot: Option<relayshot::Shot>,
     /// The frame's `egui::Context`, kept so `ui.mcpRelay` can hand the relay its wake callback:
     /// a queued message asks for a repaint, or it waits for the user to move the mouse.
     #[cfg(not(target_arch = "wasm32"))]
@@ -699,6 +704,8 @@ impl RustGisApp {
             services: Services::default(),
             #[cfg(not(target_arch = "wasm32"))]
             relay: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            relay_shot: None,
             #[cfg(not(target_arch = "wasm32"))]
             connect: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -2835,8 +2842,11 @@ impl RustGisApp {
                     relay.set_wake(Box::new(move || ctx.request_repaint()));
                     self.relay_wake_pending = false;
                 }
+                // A snapshot can capture the screen while the map is on it.
+                relay.set_screen(relayshot::map_shown(self, ctx));
                 relay.poll(&mut self.session);
             }
+            relayshot::drive(self, ctx);
         }
         // Fonts installed last frame are active now.
         self.fonts_pending = false;

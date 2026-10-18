@@ -155,6 +155,15 @@ pub fn target(call: &ToolCall) -> Option<(String, Value)> {
 
 /// Whether a call needs the user's approval, and why.
 pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
+    // MCP's snapshot, saved to a file.
+    if call.name == "snapshot" {
+        return call
+            .args
+            .get("save_path")
+            .and_then(Value::as_str)
+            .filter(|p| !p.trim().is_empty())
+            .map(|_| "it writes a file on this computer".into());
+    }
     let (id, params) = target(call)?;
     if id.starts_with(rustgis_engine::plugins::PREFIX) {
         return Some("it runs a plugin's command".into());

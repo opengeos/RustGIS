@@ -79,6 +79,12 @@ pub struct MapView {
     tex_size: (f64, f64),
     /// Where the texture sits on screen this frame.
     tex_rect: Rect,
+    /// Where the map view was drawn on screen (points), and on which frame: what a screen
+    /// snapshot for the MCP relay crops to.
+    pub view_rect: Option<(Rect, u64)>,
+    /// The map's controls, scale bar, sketches and pop-up are left out (a screen snapshot for the
+    /// MCP relay that asked for the map alone).
+    pub hide_overlays: bool,
     /// How long the last frame drawn mid-motion took (ms), and the share of full resolution it
     /// was drawn at: the next is spaced out by it, and drawn finer or coarser to take about 40 ms.
     motion_cost: (f64, f64),
@@ -170,6 +176,8 @@ impl Default for MapView {
             tex_camera: Camera::world(),
             tex_size: (0.0, 0.0),
             tex_rect: Rect::NOTHING,
+            view_rect: None,
+            hide_overlays: false,
             motion_cost: (0.0, 1.0),
             labels: Vec::new(),
             label_lonlat: Vec::new(),
@@ -432,6 +440,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         return;
     }
     app.session.view_size = (w, h);
+    app.map.view_rect = Some((rect, ui.ctx().cumulative_frame_nr()));
     // The start extent, fitted to the view's real size.
     if let Some(e) = app.ui.start_view.take() {
         let _ = app.run("map.zoomToExtent", json!({"extent": e}));
@@ -745,6 +754,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         for l in &app.map.labels {
             draw_label(&painter, l, tex_rect.min + vec2(l.x, l.y) * s);
         }
+    }
+    if app.map.hide_overlays {
+        return;
     }
     overlays(app, ui, &painter, rect, &t);
     popup(app, ui, rect);

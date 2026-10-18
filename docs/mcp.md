@@ -96,7 +96,9 @@ rustgis-cli mcp --attach 9000 --yes      # another port, with file and network a
 ```
 
 Attached calls run on the open app's session through the same tools and refusal policy as the
-private server. File and network commands need `--yes`, unless **Let your Agents Control RustGIS**
+private server. One more tool works only here: `snapshot` with `mode: "screen"` captures the map as
+the window shows it. The relay holds the request until the app has taken the picture, and runs
+nothing else meanwhile. File and network commands need `--yes`, unless **Let your Agents Control RustGIS**
 is ticked. The session is the project you have open, so an attached agent can't replace it:
 `project.new`, `project.open`, `project.openText`, `project.sample` and `project.fromTemplate`
 are refused, with or without `--yes`. `edit.undo` and `edit.redo` work, in the same history as
@@ -171,6 +173,9 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - Token required: `relay_drops_connections_without_the_token`
 - Parse error after attach: `relay_returns_parse_error_after_attach_and_stays_usable`
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
+- Screen snapshots go to the app: `relay_hands_screen_snapshots_to_the_app`
+- Snapshots without the screen: `relay_draws_snapshots_offscreen_without_the_screen`
+- Saved snapshots need access: `relay_refuses_a_saved_snapshot_without_access`
 - The open project stays the user's: `relay_keeps_project_commands_for_the_user`
 - Timed-out command never runs: `relay_cancels_a_timed_out_command_so_it_never_runs`
 - Stop cleanup: `relay_stop_closes_clients_and_removes_the_token`
@@ -192,6 +197,7 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 | --- | --- |
 | `list_layers` | The whole project in one call: path and unsaved changes, the view (centre, longitude/latitude extent, scale, projection), the active layer, layers in table-of-contents order (group, type, source, extent, feature count, selection, definition query, renderer, labels, fields, visibility), web tile layers, basemap, tables and layouts with their map frames. `name_filter` keeps the layers and tables whose name holds it; `include_fields: false` leaves fields out |
 | `view_map` | The map as a PNG image, at the current view |
+| `snapshot` | The map as a PNG with JSON metadata: `mode`, `width`, `height`, `extent` (longitude/latitude), `center`, `scale`, `projection` and `render_settled`. `mode: "screen"` is exactly what you see in the RustGIS window (through the relay only), taken once the map has finished drawing or after `wait_s` seconds (default 5, at most 30); `overlays: false` leaves out the map's controls, scale bar, north arrow and sketches. `mode: "render"` draws the same layers, view and styling offscreen at `max_width` (the height follows the view's shape), which works while the window is hidden. `mode: "auto"` (the default) takes the screen when the map is on it. `save_path` also writes the PNG to a file, which needs `--yes` |
 | `search_commands` | Finds RustGIS commands by words: their ids, ribbon locations and parameters |
 | `run_command` | Runs a command by id with JSON parameters; each run is one undo step. The result names the layers it added (`layersAdded`) and what the command said beside it (`notices`), including any parameters it ignored (`layer.moveDown ignores 'steps' (it reads layer)`) |
 | `search_tools` | Finds geoprocessing tools by words |

@@ -134,6 +134,32 @@ struct Shared {
     /// This run's own id (random, not secret), naming its grants' files: a grant left over from an
     /// earlier run on the same port can't remove a file of this one.
     run_id: String,
+    /// Whether the app shows the map, so a snapshot can capture the screen ([`Relay::set_screen`]).
+    screen: AtomicBool,
+    /// The screen snapshot the app is capturing ([`Relay::screen_request`]); nothing else runs
+    /// until it is done.
+    shot: Mutex<Option<Shot>>,
+}
+
+/// What a screen snapshot asks of the app ([`Relay::screen_request`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenRequest {
+    /// The longest to wait for the map to finish drawing.
+    pub wait: Duration,
+    /// Whether the map's controls, scale bar and sketches show (`overlays`, default true).
+    pub overlays: bool,
+}
+
+/// A `snapshot` request waiting for the app to capture its window.
+struct Shot {
+    req: Request,
+    /// The request's JSON-RPC id and the tool's arguments.
+    id: Value,
+    args: Value,
+    /// Whether its connection may write files (a `save_path`).
+    allow_access: bool,
+    /// How long the app may wait for the map to finish drawing.
+    wait: Duration,
 }
 
 impl Shared {
@@ -156,6 +182,9 @@ impl Shared {
             let _ = stream.shutdown(Shutdown::Both);
         }
         lock(&self.approvals).clear();
+        if let Some(shot) = lock(&self.shot).take() {
+            shot.req.state.store(CANCELLED, SeqCst);
+        }
         // Pending requests are cancelled before they are dropped, so none can run after stop.
         for req in lock(&self.requests).drain(..) {
             let _ = req.state.compare_exchange(PENDING, CANCELLED, SeqCst, SeqCst);
@@ -455,6 +484,8 @@ impl Relay {
             granted: Mutex::new(HashMap::new()),
             grant_ids: AtomicU64::new(0),
             run_id: random_token()?.chars().take(8).collect(),
+            screen: AtomicBool::new(false),
+            shot: Mutex::new(None),
         });
         let owner = Arc::new(Owner { shared, port });
         let accepting = Arc::clone(&owner.shared);
@@ -479,6 +510,48 @@ impl Relay {
     /// not counted.
     pub fn attached_clients(&self) -> usize {
         self.owner.shared.attached.load(SeqCst)
+    }
+
+    /// Tells the relay whether the app shows the map now, so a snapshot can capture the screen.
+    /// The app calls it every frame before [`Relay::poll`].
+    pub fn set_screen(&self, shown: bool) {
+        self.owner.shared.screen.store(shown, SeqCst);
+    }
+
+    /// A screen snapshot an agent asked for: the app captures its window, then calls
+    /// [`Relay::finish_screen`].
+    pub fn screen_request(&self) -> Option<ScreenRequest> {
+        lock(&self.owner.shared.shot)
+            .as_ref()
+            .map(|shot| ScreenRequest { wait: shot.wait, overlays: shot.args.get("overlays").and_then(Value::as_bool).unwrap_or(true) })
+    }
+
+    /// Answers the screen snapshot with the map as the window showed it (a PNG), and whether the
+    /// map had finished drawing; `None` when it couldn't be captured, which draws it offscreen.
+    pub fn finish_screen(&self, s: &mut Session, png: Option<Vec<u8>>, settled: bool) {
+        let Some(shot) = lock(&self.owner.shared.shot).take() else { return };
+        if shot.req.state.load(SeqCst) != RUNNING {
+            return;
+        }
+        let server = Server { users_project: true, ..Server::new(shot.allow_access) };
+        let reply = match png {
+            Some(png) => {
+                let result = crate::mcp::snapshot_result(s, &png, "screen", settled, &shot.args, None)
+                    .unwrap_or_else(|e| serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true}));
+                serde_json::json!({"jsonrpc": "2.0", "id": shot.id, "result": result}).to_string()
+            }
+            // Drawn offscreen instead, as the server draws it when the map isn't on screen.
+            None => {
+                let mut args = shot.args.clone();
+                if let Some(o) = args.as_object_mut() {
+                    o.insert("mode".into(), Value::from("screen"));
+                }
+                let line = serde_json::json!({"jsonrpc": "2.0", "id": shot.id, "method": "tools/call", "params": {"name": "snapshot", "arguments": args}});
+                server.handle(s, &line.to_string()).unwrap_or_else(|| internal_error(&shot.req.line))
+            }
+        };
+        let _ = shot.req.reply.send(Some(reply));
+        self.owner.shared.notify();
     }
 
     /// Stops the listener: it closes, every client is disconnected, queued messages are dropped
@@ -538,13 +611,18 @@ impl Relay {
     /// calls go through [`Session::run`], so each is one undo step as everywhere else. A message
     /// whose connection already gave up is skipped, never run.
     pub fn poll(&self, s: &mut Session) -> usize {
+        // One request at a time: a screen snapshot being captured holds the rest back.
+        if lock(&self.owner.shared.shot).is_some() {
+            return 0;
+        }
         let pending: Vec<Request> = lock(&self.owner.shared.requests).drain(..).collect();
+        let mut pending = pending.into_iter();
         // The skills switched on, read once for the batch and only when a message asks for them:
         // this runs on the app's thread, and reading the skill folders is file I/O.
         let mut skills: Option<Vec<crate::skills::Skill>> = None;
         let mut ran = 0;
         lock(&self.owner.shared.approvals).retain(|a| a.state.load(SeqCst) == PENDING);
-        for mut req in pending {
+        while let Some(mut req) = pending.next() {
             if req.state.load(SeqCst) != PENDING {
                 continue;
             }
@@ -614,6 +692,21 @@ impl Relay {
             if asks_for_skills(&req.line) {
                 server.skills = skills.get_or_insert_with(crate::skills::installed).clone();
             }
+            // A snapshot of the screen: the app captures its window over the next frames
+            // ([`Relay::finish_screen`]), and the rest wait their turn.
+            if let Some((id, args)) = screen_call(&req.line, self.owner.shared.screen.load(SeqCst))
+                && server
+                    .refusal(s, &crate::provider::ToolCall { id: String::new(), name: "snapshot".into(), args: args.clone() })
+                    .is_none()
+            {
+                let wait = Duration::from_secs_f64(crate::mcp::snapshot_wait(&args));
+                *lock(&self.owner.shared.shot) = Some(Shot { req, id, args, allow_access, wait });
+                let mut queue = lock(&self.owner.shared.requests);
+                for rest in pending.rev() {
+                    queue.push_front(rest);
+                }
+                return ran;
+            }
             // A last resort: a panic answers that message with an error instead of breaking the
             // app (Session::run catches panics inside commands; this covers the tools around it).
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &req.line)))
@@ -623,6 +716,30 @@ impl Relay {
         }
         ran
     }
+}
+
+/// A message that is one `snapshot` call to capture the screen: `mode` `screen`, or `auto`
+/// (the default) while the app shows the map. Its id and arguments.
+fn screen_call(line: &str, shown: bool) -> Option<(Value, Value)> {
+    let msg: Value = serde_json::from_str(line).ok()?;
+    if msg.get("method").and_then(Value::as_str) != Some("tools/call") {
+        return None;
+    }
+    let id = msg.get("id")?.clone();
+    let params = msg.get("params")?;
+    if params.get("name").and_then(Value::as_str) != Some("snapshot") {
+        return None;
+    }
+    let args = match params.get("arguments") {
+        None | Some(Value::Null) => Value::Object(serde_json::Map::new()),
+        Some(v @ Value::Object(_)) => v.clone(),
+        Some(_) => return None,
+    };
+    let wanted = match args.get("mode").and_then(Value::as_str).unwrap_or("auto") {
+        "screen" | "auto" => shown,
+        _ => false,
+    };
+    wanted.then_some((id, args))
 }
 
 /// Whether a message (or a message in a batch) is `prompts/list` or `prompts/get`, the only ones
@@ -1332,6 +1449,113 @@ mod tests {
         let reply = reply(&client);
         assert_eq!(reply["result"]["isError"], false, "{reply}");
         assert_eq!(s.map().layers.len(), layers, "{reply}");
+        relay.stop();
+    }
+
+    fn snapshot_call(id: u64, args: Value) -> Value {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": "snapshot", "arguments": args}})
+    }
+
+    /// The metadata a snapshot reply carries beside its image.
+    fn snapshot_meta(reply: &Value) -> Value {
+        let content = reply["result"]["content"].as_array().cloned().unwrap_or_default();
+        assert_eq!(content.first().map(|c| c["type"].clone()), Some(json!("image")), "{reply}");
+        serde_json::from_str(content.get(1).and_then(|c| c["text"].as_str()).unwrap_or("null")).unwrap()
+    }
+
+    /// A screen snapshot is handed to the app, which captures its window; the relay runs nothing
+    /// else until the app answers, then the reply carries the app's image.
+    #[test]
+    fn relay_hands_screen_snapshots_to_the_app() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        let layers = s.map().layers.len();
+        relay.set_screen(true);
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        writeln!(client, "{}", snapshot_call(1, json!({"wait_s": 2}))).unwrap();
+        writeln!(client, "{}", add_sample_call(2)).unwrap();
+        client.flush().unwrap();
+        wait_until("the snapshot to reach the app", || {
+            relay.poll(&mut s);
+            relay.screen_request().is_some()
+        });
+        assert_eq!(relay.screen_request(), Some(ScreenRequest { wait: Duration::from_secs(2), overlays: true }));
+        // The next request waits its turn.
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(relay.poll(&mut s), 0);
+        assert_eq!(s.map().layers.len(), layers, "nothing runs while the screen is captured");
+        let png = rustgis_engine::cmd::share::map_png(&mut s, Some(80.0), Some(50.0), None).unwrap();
+        relay.finish_screen(&mut s, Some(png), true);
+        assert!(relay.screen_request().is_none());
+        let meta = snapshot_meta(&reply(&client));
+        assert_eq!(
+            (meta["mode"].clone(), meta["width"].clone(), meta["height"].clone()),
+            (json!("screen"), json!(80), json!(50)),
+            "{meta}"
+        );
+        assert_eq!(meta["render_settled"], true, "{meta}");
+        assert!(meta["extent"].is_array() && meta["scale"].is_number(), "{meta}");
+        settle(&relay, &mut s);
+        assert_eq!(reply(&client)["id"], 2);
+        assert_eq!(s.map().layers.len(), layers + 1);
+        relay.stop();
+    }
+
+    /// Without the map on screen, or when the app can't capture it, a snapshot is drawn
+    /// offscreen and says so; `mode: render` never waits for the app.
+    #[test]
+    fn relay_draws_snapshots_offscreen_without_the_screen() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        // No map on screen: drawn at once, with a note when the screen was asked for.
+        relay.set_screen(false);
+        writeln!(client, "{}", snapshot_call(1, json!({"mode": "screen", "max_width": 200}))).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        let meta = snapshot_meta(&reply(&client));
+        assert_eq!((meta["mode"].clone(), meta["width"].clone()), (json!("render"), json!(200)), "{meta}");
+        assert!(meta["note"].as_str().is_some_and(|n| n.contains("isn't on screen")), "{meta}");
+        // On screen but asked to render: drawn offscreen, no note.
+        relay.set_screen(true);
+        writeln!(client, "{}", snapshot_call(2, json!({"mode": "render"}))).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        let meta = snapshot_meta(&reply(&client));
+        assert!(meta["mode"] == "render" && meta["note"].is_null(), "{meta}");
+        assert!(relay.screen_request().is_none());
+        // The app couldn't capture it: drawn offscreen.
+        writeln!(client, "{}", snapshot_call(3, json!({}))).unwrap();
+        client.flush().unwrap();
+        wait_until("the snapshot to reach the app", || {
+            relay.poll(&mut s);
+            relay.screen_request().is_some()
+        });
+        relay.finish_screen(&mut s, None, false);
+        let meta = snapshot_meta(&reply(&client));
+        assert_eq!(meta["mode"], "render", "{meta}");
+        relay.stop();
+    }
+
+    /// A snapshot saved to a file is refused without file access before the app is asked to
+    /// capture anything.
+    #[test]
+    fn relay_refuses_a_saved_snapshot_without_access() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        relay.set_screen(true);
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        let out = std::env::temp_dir().join(format!("rustgis-snap-{}.png", std::process::id()));
+        writeln!(client, "{}", snapshot_call(1, json!({"save_path": out.display().to_string()}))).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        let r = reply(&client);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(r["result"]["content"][0]["text"].as_str().is_some_and(|t| t.contains("--yes")), "{r}");
+        assert!(relay.screen_request().is_none() && !out.exists());
         relay.stop();
     }
 
