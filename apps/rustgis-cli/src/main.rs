@@ -442,10 +442,14 @@ fn mcp_register(args: &[String]) -> Result<(), String> {
             eprintln!(
                 "rustgis-cli: passing the MCP token to `claude mcp add` (other users of this computer can see a running program's arguments for that moment)"
             );
-            let status = std::process::Command::new("claude")
-                .args(["mcp", "add", "--transport", "http", name, &url, "--header", &header])
-                .status()
-                .map_err(|e| format!("running claude: {e} (is Claude Code installed?)"))?;
+            let add = ["mcp", "add", "--transport", "http", name, &url, "--header", &header];
+            // An npm install on Windows provides only claude.cmd.
+            let run = |program: &str| std::process::Command::new(program).args(add).status();
+            let status = match run("claude") {
+                Err(e) if cfg!(windows) && e.kind() == std::io::ErrorKind::NotFound => run("claude.cmd"),
+                other => other,
+            }
+            .map_err(|e| format!("running claude: {e} (is Claude Code installed?)"))?;
             if !status.success() {
                 return Err(format!("claude mcp add failed ({status})"));
             }

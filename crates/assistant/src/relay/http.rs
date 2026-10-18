@@ -61,6 +61,11 @@ fn token_at(path: &Path) -> Result<String, String> {
             let _ = std::fs::remove_file(path);
         }
         if let Ok(meta) = std::fs::symlink_metadata(path) {
+            // Empty and young: another writer is filling it; wait, then read it.
+            if meta.is_file() && meta.len() == 0 {
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
             return read_token_at(path, &meta);
         }
         if let Some(dir) = path.parent() {
@@ -606,7 +611,15 @@ mod tests {
         }
         // Cut off at the deadline: the server has closed (end of stream or a reset).
         let mut buf = [0u8; 64];
-        assert!(matches!(c.read(&mut buf), Ok(0) | Err(_)), "the trickling client was kept");
+        let cut = match c.read(&mut buf) {
+            Ok(0) => true,
+            Err(e) => matches!(
+                e.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe
+            ),
+            Ok(_) => false,
+        };
+        assert!(cut, "the trickling client was kept");
         relay.stop();
     }
 
