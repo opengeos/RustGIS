@@ -50,6 +50,7 @@ mod stacui;
 mod table;
 pub mod theme;
 mod tilt_drape;
+mod tilt_settle;
 mod update;
 mod vertexedit;
 mod widgets;

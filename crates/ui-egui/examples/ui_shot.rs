@@ -73,6 +73,13 @@ fn main() {
             for _ in 0..4 {
                 harness.step();
             }
+            // A tilted map's exact frame is drawn off the UI thread: wait for it.
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while harness.state().map.drawing() && std::time::Instant::now() < end {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                harness.step();
+            }
+            harness.step();
             match harness.render() {
                 Ok(img) => {
                     img.save(p).expect("save png");

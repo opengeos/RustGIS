@@ -439,6 +439,24 @@ impl Layer {
         self.projected_for.clear();
     }
 
+    /// Takes the projected geometry cache `other` (a copy of this layer, such as one drawn off
+    /// the UI thread) filled, when it was filled for the same rows and geometry: sharing it costs
+    /// a pointer. False when the cache doesn't fit.
+    pub fn adopt_cache(&mut self, other: &Layer) -> bool {
+        let fits = other.dataset.features.shares(&self.dataset.features)
+            && other.geometry_rev == self.geometry_rev
+            && other.is_cached(&other.projected_for);
+        if fits {
+            self.projected = other.projected.clone();
+            self.projected_extents = other.projected_extents.clone();
+            self.projected_vertices = other.projected_vertices;
+            self.thinned = other.thinned.clone();
+            self.projected_rev = other.projected_rev;
+            self.projected_for.clone_from(&other.projected_for);
+        }
+        fits
+    }
+
     /// Whether the projected geometry cache is filled for a projection.
     pub fn is_cached(&self, key: &str) -> bool {
         self.projected_for == key && self.projected_rev == self.geometry_rev && self.projected.len() == self.dataset.features.len()
@@ -1099,6 +1117,16 @@ impl Map {
     pub fn layer_index(&self, id: u32) -> Option<usize> {
         self.layers.iter().position(|l| l.id == id)
     }
+
+    /// Takes the projected geometry caches a copy of this map filled (see
+    /// [`Layer::adopt_cache`]), layer by layer.
+    pub fn adopt_caches(&mut self, other: &Map) {
+        for l in &mut self.layers {
+            if let Some(o) = other.layer(l.id) {
+                l.adopt_cache(o);
+            }
+        }
+    }
     pub fn layer_by_name(&self, name: &str) -> Option<&Layer> {
         self.layers.iter().find(|l| l.name.eq_ignore_ascii_case(name))
     }
@@ -1319,6 +1347,24 @@ mod tests {
         let ids = [u32::MAX, a, b, c];
         assert!(ids.iter().all(|&id| id != 0));
         assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), ids.len(), "{ids:?}");
+    }
+
+    #[test]
+    fn a_map_takes_the_caches_a_copy_of_it_filled() {
+        let mut m = Map::new("m");
+        let id = m.add_dataset(points());
+        let mut copy = m.clone();
+        copy.layer_mut(id).unwrap().projected();
+        m.adopt_caches(&copy);
+        assert!(m.layer(id).unwrap().is_cached("mercator"));
+        // Not once the geometry changed since.
+        let mut m = Map::new("m");
+        let id = m.add_dataset(points());
+        let mut copy = m.clone();
+        copy.layer_mut(id).unwrap().projected();
+        m.layer_mut(id).unwrap().touch_geometry();
+        m.adopt_caches(&copy);
+        assert!(!m.layer(id).unwrap().is_cached("mercator"));
     }
 
     #[test]

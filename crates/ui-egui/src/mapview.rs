@@ -6,7 +6,7 @@ use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Ui, pos2, v
 use rustgis_engine::Tool;
 use rustgis_engine::geom::{Coord, Extent, geodesic_length_m, geodesic_ring_area_m2};
 use rustgis_engine::map::{Camera, Globe, Projection};
-use rustgis_engine::render::{PlacedLabel, View};
+use rustgis_engine::render::{PlacedLabel, Rendered, View};
 use serde_json::{Value, json};
 
 use crate::theme::{Tokens, c32, regular, semibold};
@@ -133,6 +133,8 @@ pub struct MapView {
     drape: crate::globe_drape::GlobeDrape,
     /// The moving tilted map's drape.
     tilt_drape: crate::tilt_drape::TiltDrape,
+    /// The settled tilted map's exact frame, drawn off the UI thread.
+    tilt_settle: crate::tilt_settle::TiltSettle<Key>,
     /// Shooting stars around the globe.
     comets: crate::comets::Comets,
     /// GPU map backend: pipelines (built lazily from the render state), the uploaded scene,
@@ -191,6 +193,7 @@ impl Default for MapView {
             last_render: -10.0,
             drape: Default::default(),
             tilt_drape: Default::default(),
+            tilt_settle: Default::default(),
             label_map: Vec::new(),
             comets: Default::default(),
             gpu_renderer: None,
@@ -206,6 +209,11 @@ impl Default for MapView {
 }
 
 impl MapView {
+    /// Whether a settled tilted map's exact frame is still being drawn (off the UI thread).
+    pub fn drawing(&self) -> bool {
+        self.tilt_settle.busy()
+    }
+
     /// egui's wgpu render state from the host (`frame.wgpu_render_state()`), for the GPU map
     /// backend. Cheap to call every frame: the state is Arc-backed and pipelines build lazily.
     pub fn set_render_state(&mut self, rs: Option<egui_wgpu::RenderState>) {
@@ -496,6 +504,39 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
+    // A settled tilted map's exact frame is drawn off the UI thread (see `tilt_settle`). Until
+    // it comes the drape stands in, or the last frame when only tiles or streamed data arrived
+    // since (it shows the same view).
+    let settling = tilted && !moving;
+    let mut tilt_draped = tilt_draped;
+    if settling {
+        let same_view = |a: Key, b: Key| Key { tiles: b.tiles, sources: b.sources, ..a } == b;
+        if let Some((k, done)) = app.map.tilt_settle.take() {
+            app.session.map_mut().adopt_caches(&done.map);
+            // One drawn before tiles or data arrived still shows; the next follows.
+            if same_view(k, key)
+                && let Some(r) = done.rendered
+            {
+                app.map.render_ms = done.ms;
+                show_frame(app, ui.ctx(), r, &done.view, (w, h), k, time, false);
+                if app.map.camera_moved {
+                    app.session.record_extent();
+                    app.map.camera_moved = false;
+                }
+            }
+        }
+        if app.map.key != Some(key) && !app.map.tilt_settle.busy() {
+            let view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: cam, sky: true };
+            rustgis_engine::render::sync_tilted_view(app.session.map_mut(), &view);
+            app.map.tilt_settle.start(ui.ctx(), key, app.session.map().clone(), view);
+        }
+        let shown = app.map.texture.is_some() && app.map.key.is_some_and(|k| same_view(k, key));
+        if !shown {
+            let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
+            let tiles = if app.session.map().tiles.is_empty() { 0 } else { rustgis_engine::render::rustgis_tiles::cache::generation() };
+            tilt_draped = app.map.tilt_drape.prepare(ui.ctx(), app.session.map_mut(), key, tiles, w, h, ppp, time);
+        }
+    }
     let interacting = moving && (!globe_view || draped) && (!tilted || tilt_draped);
     if (globe_view || tilted) && moving {
         // Wake up once the motion has settled, for the full-resolution frame.
@@ -563,6 +604,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let (vw, vh, vppp) = motion.unwrap_or((w, h, render_ppp));
     if stale
         && !fast_engaged
+        && !settling
         && (motion.is_some()
             || gpu_ok
             || turning
@@ -612,41 +654,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.map.gpu_frame = None;
             let view = View { width: vw, height: vh, pixels_per_point: vppp as f64, camera: cam, sky: true };
             if let Some(r) = rustgis_engine::render::render(app.session.map_mut(), &view) {
-                let size = [r.pixmap.width() as usize, r.pixmap.height() as usize];
-                let img = egui::ColorImage::from_rgba_premultiplied(size, r.pixmap.data());
-                match &mut app.map.texture {
-                    Some(tex) => tex.set(img, egui::TextureOptions::LINEAR),
-                    None => app.map.texture = Some(ui.ctx().load_texture("map", img, egui::TextureOptions::LINEAR)),
-                }
-                // A globe drawn roughly mid-motion keeps the last labels, which it would re-place
-                // differently every frame.
-                if !draft {
-                    app.map.labels = r.labels;
-                    app.map.labels.splice(0..0, r.unplaced);
-                    app.map.label_lonlat = match globe_view {
-                        true => {
-                            let g = Globe::new(&cam, w, h);
-                            app.map.labels.iter().map(|l| g.inverse(l.x as f64, l.y as f64)).collect()
-                        }
-                        false => Vec::new(),
-                    };
-                    app.map.label_map = match tilted {
-                        true => app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, w, h)).collect(),
-                        false => Vec::new(),
-                    };
-                    app.map.label_camera = cam;
-                }
-                app.map.attribution = r.attribution;
-                app.map.last_render = time;
-                for e in r.tile_errors {
-                    if app.map.tile_errors.insert(e.clone()) {
-                        app.session.notify(e, true);
-                    }
-                }
-                app.map.tex_camera = cam;
-                app.map.tex_size = (vw, vh);
                 // Mid-motion the frame stands in for the real one, which follows once it settles.
-                app.map.key = Some(Key { draft: key.draft || motion.is_some(), ..key });
+                let key = Key { draft: key.draft || motion.is_some(), ..key };
+                show_frame(app, ui.ctx(), r, &view, (w, h), key, time, globe_view);
             }
         }
         app.map.render_ms = t0.elapsed().as_millis() as u64;
@@ -658,7 +668,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.session.record_extent();
             app.map.camera_moved = false;
         }
-    } else if stale {
+    } else if stale && !settling {
         ui.ctx().request_repaint();
     }
 
@@ -729,6 +739,56 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     overlays(app, ui, &painter, rect, &t);
     popup(app, ui, rect);
+}
+
+/// Shows a frame the CPU drew for `view` (of a `w × h` map view) as the map's texture, with its
+/// labels, credits and tile errors.
+#[allow(clippy::too_many_arguments)]
+fn show_frame(
+    app: &mut RustGisApp,
+    ctx: &egui::Context,
+    r: Rendered,
+    view: &View,
+    (w, h): (f64, f64),
+    key: Key,
+    time: f64,
+    globe_view: bool,
+) {
+    let cam = view.camera;
+    let size = [r.pixmap.width() as usize, r.pixmap.height() as usize];
+    let img = egui::ColorImage::from_rgba_premultiplied(size, r.pixmap.data());
+    match &mut app.map.texture {
+        Some(tex) => tex.set(img, egui::TextureOptions::LINEAR),
+        None => app.map.texture = Some(ctx.load_texture("map", img, egui::TextureOptions::LINEAR)),
+    }
+    // A globe drawn roughly mid-motion keeps the last labels, which it would re-place
+    // differently every frame.
+    if !(globe_view && key.draft) {
+        app.map.labels = r.labels;
+        app.map.labels.splice(0..0, r.unplaced);
+        app.map.label_lonlat = match globe_view {
+            true => {
+                let g = Globe::new(&cam, w, h);
+                app.map.labels.iter().map(|l| g.inverse(l.x as f64, l.y as f64)).collect()
+            }
+            false => Vec::new(),
+        };
+        app.map.label_map = match !globe_view && cam.pitch != 0.0 {
+            true => app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, w, h)).collect(),
+            false => Vec::new(),
+        };
+        app.map.label_camera = cam;
+    }
+    app.map.attribution = r.attribution;
+    app.map.last_render = time;
+    for e in r.tile_errors {
+        if app.map.tile_errors.insert(e.clone()) {
+            app.session.notify(e, true);
+        }
+    }
+    app.map.tex_camera = cam;
+    app.map.tex_size = (view.width, view.height);
+    app.map.key = Some(key);
 }
 
 /// The least time (s) between frames drawn mid-motion, for frames taking `ms` to draw: quick
