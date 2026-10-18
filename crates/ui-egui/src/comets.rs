@@ -132,7 +132,10 @@ impl Comets {
             if !(r.is_finite() && r > 0.0) {
                 return 1.0;
             }
-            ((p.distance(centre) - r) / (r * (GLOBE_GLOW - 1.0)).max(1.0)).clamp(0.0, 1.0)
+            // From the disc (an ellipse when the globe is tilted).
+            let k = (g.disc_height() as f32 / r).max(1e-3);
+            let d = (p.x - centre.x).hypot((p.y - centre.y) / k);
+            ((d - r) / (r * (GLOBE_GLOW - 1.0)).max(1.0)).clamp(0.0, 1.0)
         };
         for i in 0..PIECES {
             let (t0, t1) = (i as f32 / PIECES as f32, (i + 1) as f32 / PIECES as f32);
