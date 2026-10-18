@@ -793,7 +793,9 @@ fn selects_layer(line: &str) -> bool {
     let messages = msg.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&msg));
     messages.iter().filter_map(|m| m.get("params").and_then(|p| p.get("arguments"))).any(|a| {
         a.get("command").and_then(Value::as_str) == Some("layer.select")
-            || a.get("script").and_then(Value::as_str).is_some_and(|s| s.lines().any(|l| l.trim_start().starts_with("layer.select")))
+            || a.get("script").and_then(Value::as_str).is_some_and(|s| {
+                rustgis_engine::cmd::workflows::script_commands(s).is_ok_and(|lines| lines.iter().any(|(_, id, _)| id == "layer.select"))
+            })
     })
 }
 
