@@ -214,30 +214,37 @@ mod tests {
     /// The app runs what an agent writes to the file bridge on its frame, and says how it went.
     #[test]
     fn the_app_runs_file_bridge_scripts() {
-        let dir = std::env::temp_dir().join(format!("rustgis-bridge-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tempfile::tempdir().unwrap();
         let mut app = RustGisApp::with_sample();
-        let bridge = rustgis_assistant::filebridge::FileBridge::start_in(dir.clone()).unwrap();
+        let bridge = rustgis_assistant::filebridge::FileBridge::start_in(dir.path().to_path_buf()).unwrap();
         app.file_bridge = Some(bridge.clone());
         let layers = app.session.map().layers.len();
         let ctx = egui::Context::default();
         app.logic(&ctx);
         assert!(bridge.has_wake(), "the frame gives the bridge its wake");
-        let mark = app.session.notice_mark();
-        std::fs::write(bridge.command_path(), "layer.addSample {\"name\": \"countries\"}\n").unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !app.session.notices_since(mark).iter().any(|n| n.text.starts_with("File bridge")) {
-            assert!(std::time::Instant::now() < deadline, "the frame never ran the script");
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            app.logic(&ctx);
-        }
+        // Writes a script and runs frames until the app says how it went.
+        let mut run = |app: &mut RustGisApp, script: &str| {
+            let mark = app.session.notice_mark();
+            std::fs::write(bridge.command_path(), script).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                if let Some(n) = app.session.notices_since(mark).iter().find(|n| n.text.starts_with("File bridge")) {
+                    return n.clone();
+                }
+                assert!(std::time::Instant::now() < deadline, "the frame never ran the script");
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                app.logic(&ctx);
+            }
+        };
+        let said = run(&mut app, "layer.addSample {\"name\": \"countries\"}\n");
+        assert!(said.text == "File bridge: the script ran" && !said.error, "{}", said.text);
         assert_eq!(app.session.map().layers.len(), layers + 1);
-        assert!(app.session.notices_since(mark).iter().any(|n| n.text == "File bridge: the script ran" && !n.error));
         let result: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(bridge.result_path()).unwrap()).unwrap();
         assert_eq!(result["success"], true, "{result}");
-        drop(app);
-        drop(bridge);
-        let _ = std::fs::remove_dir_all(dir);
+        // A failing script: an error notice naming the line, and nothing kept.
+        let said = run(&mut app, "layer.addSample {\"name\": \"rivers\"}\nmap.basemap {\"name\": \"nowhere\"}\n");
+        assert!(said.error && said.text.starts_with("File bridge: line 2"), "{}", said.text);
+        assert_eq!(app.session.map().layers.len(), layers + 1);
     }
 
     #[test]

@@ -4,7 +4,8 @@
 //! file. The files live in the relay's private folder ([`crate::relay::token_dir`]), which only
 //! this user can read or write, and a marker file says the bridge is on.
 //!
-//! A thread watches the command file's modification time every [`POLL`] and wakes the app; the
+//! A thread watches the command file's modification time every [`POLL`] and, once it has stayed
+//! the same for a tick (the agent finished writing), wakes the app; the
 //! app runs the script on its own thread ([`FileBridge::poll`]), through the MCP server's `run`
 //! tool, so the same refusal policy applies as to an attached agent, and the script is one undo
 //! step. Whatever the file held when the bridge started is not run.
@@ -29,6 +30,8 @@ pub const RESULT: &str = "bridge-result.json";
 pub const READY: &str = "bridge-ready.json";
 /// The largest script read.
 const MAX_SCRIPT: u64 = 1024 * 1024;
+/// The lock one app holds while its bridge runs, so a second app doesn't run the same scripts.
+const LOCK: &str = "bridge.lock";
 
 /// What a run of the command file came to, for the app's status bar.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +50,9 @@ struct Inner {
     seen: Mutex<Option<(SystemTime, u64)>>,
     allow_access: AtomicBool,
     wake: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    /// The locked [`LOCK`] file, held until the bridge stops (the system releases it if the app
+    /// ends any other way).
+    lock: Mutex<Option<std::fs::File>>,
 }
 
 /// A running file bridge. Dropping the last clone stops it and removes the marker.
@@ -84,6 +90,9 @@ fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
 fn shutdown(inner: &Inner) {
     if !inner.stopped.swap(true, SeqCst) {
         let _ = std::fs::remove_file(inner.dir.join(READY));
+        if let Some(f) = lock(&inner.lock).take() {
+            let _ = f.unlock();
+        }
     }
 }
 
@@ -95,7 +104,19 @@ impl FileBridge {
 
     /// Starts the bridge in `dir` (a test's folder).
     pub fn start_in(dir: PathBuf) -> Result<Self, String> {
+        // One bridge per folder: a second app would run every script again on its own project.
+        let lock_path = dir.join(LOCK);
+        let lock_file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|e| format!("{}: {e}", lock_path.display()))?;
+        if lock_file.try_lock().is_err() {
+            return Err("another RustGIS is running the file bridge; close it to use the bridge here".into());
+        }
         let inner = Arc::new(Inner {
+            lock: Mutex::new(Some(lock_file)),
             seen: Mutex::new(stamp(&dir.join(COMMAND))),
             dir,
             stopped: AtomicBool::new(false),
@@ -117,17 +138,27 @@ impl FileBridge {
         std::thread::Builder::new()
             .name("rustgis-file-bridge".into())
             .spawn(move || {
+                // A change runs once the file has stayed the same for a tick: an agent still
+                // writing it (truncated, then filled) doesn't get half its script run.
+                let mut settling = None;
                 while !watch.stopped.load(SeqCst) {
                     std::thread::sleep(POLL);
                     let now = stamp(&watch.dir.join(COMMAND));
                     let mut seen = lock(&watch.seen);
-                    if now.is_some() && now != *seen {
-                        *seen = now;
-                        drop(seen);
-                        watch.changed.store(true, SeqCst);
-                        if let Some(wake) = lock(&watch.wake).as_ref() {
-                            wake();
-                        }
+                    if now.is_none() || now == *seen {
+                        settling = None;
+                        continue;
+                    }
+                    if settling != Some(now) {
+                        settling = Some(now);
+                        continue;
+                    }
+                    settling = None;
+                    *seen = now;
+                    drop(seen);
+                    watch.changed.store(true, SeqCst);
+                    if let Some(wake) = lock(&watch.wake).as_ref() {
+                        wake();
                     }
                 }
             })
@@ -347,6 +378,18 @@ mod tests {
         let o = run_next(&b, &mut s);
         assert!(o.success, "{o:?}");
         assert!(out.exists());
+    }
+
+    /// One bridge per folder: a second app's bridge is refused until the first stops.
+    #[test]
+    fn a_second_bridge_in_the_folder_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = FileBridge::start_in(dir.path().to_path_buf()).unwrap();
+        let e = FileBridge::start_in(dir.path().to_path_buf()).unwrap_err();
+        assert!(e.contains("another RustGIS"), "{e}");
+        first.stop();
+        let second = FileBridge::start_in(dir.path().to_path_buf()).unwrap();
+        second.stop();
     }
 
     /// Dropping the last handle stops the bridge too.
