@@ -445,8 +445,14 @@ fn set_geometry(s: &mut Session, p: &Json) -> CmdResult {
 fn edit_vertex(s: &mut Session, p: &Json) -> CmdResult {
     let id = s.layer_id(p)?;
     let row = p.get("row").and_then(Json::as_u64).ok_or("row is required")? as usize;
-    let num = |k: &str| p.get(k).and_then(Json::as_u64).map(|n| n as usize);
-    let v = rustgis_data::VertexId::new(num("part").unwrap_or(0), num("ring").unwrap_or(0), num("index").ok_or("index is required")?);
+    // Absent is 0 (part and ring); anything else must be a whole number, never quietly 0.
+    let num = |k: &str| -> Result<Option<usize>, String> {
+        match p.get(k) {
+            None | Some(Json::Null) => Ok(None),
+            Some(v) => v.as_u64().map(|n| Some(n as usize)).ok_or_else(|| format!("{k} must be a whole number")),
+        }
+    };
+    let v = rustgis_data::VertexId::new(num("part")?.unwrap_or(0), num("ring")?.unwrap_or(0), num("index")?.ok_or("index is required")?);
     let at = || -> Result<Coord, String> {
         let (lon, lat) = (f(p, "lon").ok_or("lon is required")?, f(p, "lat").ok_or("lat is required")?);
         if !(lon.is_finite() && lat.is_finite()) || lon.abs() > 360.0 || lat.abs() > 90.0 {

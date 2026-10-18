@@ -1772,6 +1772,13 @@ fn modify_tools_snapping_topology_relationships_and_elevation() {
     assert!(s.run("edit.vertex", &json!({"layer": "Paths", "row": 0, "action": "delete", "index": 1})).is_err(), "a line keeps two");
     assert!(s.run("edit.vertex", &json!({"layer": "Paths", "row": 0, "action": "move", "index": 7, "lon": 1, "lat": 1})).is_err());
     assert!(s.run("edit.vertex", &json!({"layer": "Paths", "row": 0, "action": "move", "index": 0, "lon": 1e9, "lat": 1})).is_err());
+    for bad in [json!(-1), json!("2"), json!(0.5)] {
+        assert!(
+            s.run("edit.vertex", &json!({"layer": "Paths", "row": 0, "action": "move", "part": bad, "index": 0, "lon": 1, "lat": 1}))
+                .is_err(),
+            "part {bad}"
+        );
+    }
     s.run("edit.undo", &Value::Null).unwrap();
     assert_eq!(line(&s), [[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], "undo brings the deleted vertex back");
     s.run("edit.undo", &Value::Null).unwrap();
