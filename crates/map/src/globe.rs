@@ -114,6 +114,9 @@ pub struct Globe {
     radius: f64,
     cx: f64,
     cy: f64,
+    /// The visible disc (the Earth's outline): its centre row, and its radii across and up and
+    /// down (an ellipse when tilted), worked out once.
+    disc: (f64, f64, f64),
 }
 
 fn cross(a: V3, b: V3) -> V3 {
@@ -169,7 +172,7 @@ impl Globe {
             let (r, forward) = (in_view(right), in_view(ahead));
             (y, z, dist, r, cross(r, forward), forward)
         };
-        Globe {
+        let mut g = Globe {
             x: right,
             y,
             z,
@@ -182,7 +185,11 @@ impl Globe {
             radius,
             cx: w / 2.0,
             cy: h / 2.0,
-        }
+            disc: (h / 2.0, 0.0, 0.0),
+        };
+        let (row, half) = g.disc_rows();
+        g.disc = (row, g.disc_across(), half);
+        g
     }
 
     /// The horizon: points with a view-frame `z` above this are visible.
@@ -193,13 +200,17 @@ impl Globe {
     /// The centre of the visible disc (the outline of the Earth) on screen: the middle of the
     /// view when the globe looks straight down, lower when it is tilted.
     pub fn center(&self) -> (f64, f64) {
-        let (cy, _) = self.disc_rows();
-        (self.cx, cy)
+        (self.cx, self.disc.0)
     }
 
     /// The visible disc's radius across the screen; up and down it is [`Globe::disc_height`]
     /// (the same unless the globe is tilted, when the disc is an ellipse).
     pub fn disc_radius(&self) -> f64 {
+        self.disc.1
+    }
+
+    /// The visible disc's radius across the screen, worked out.
+    fn disc_across(&self) -> f64 {
         if self.forward == [0.0, 0.0, -1.0] {
             return self.radius * ((self.dist - 1.0) / (self.dist + 1.0)).sqrt();
         }
@@ -220,7 +231,7 @@ impl Globe {
 
     /// The visible disc's radius up and down the screen.
     pub fn disc_height(&self) -> f64 {
-        self.disc_rows().1
+        self.disc.2
     }
 
     /// The screen row of the visible disc's centre, and its half height.
@@ -330,6 +341,9 @@ impl Globe {
         let cos0 = c.y.clamp(-89.0, 89.0).to_radians().cos();
         // The screen's motion east and south, on a globe turned to a bearing.
         let (sb, cb) = crate::camera::normalize_bearing(camera.bearing).to_radians().sin_cos();
+        // Tilted, the ground up and down the view is foreshortened at its centre (as the flat
+        // map's `Camera::pan_px` allows for).
+        let dy = dy / crate::camera::normalize_pitch(camera.pitch).to_radians().cos().max(0.05);
         let (dx, dy) = (dx * cb - dy * sb, dx * sb + dy * cb);
         let lon = c.x - (dx / g.radius).to_degrees() / cos0.max(0.2);
         let lat = (c.y + (dy / g.radius).to_degrees()).clamp(-85.0, 85.0);
@@ -656,6 +670,23 @@ mod tests {
         Globe::drag(&mut cam, 50.0, 0.0, 800.0, 600.0);
         let c = cam.center_lonlat();
         assert!(c.y > 1.0 && (c.x - 10.0).abs() < 1e-6, "{c:?}");
+    }
+
+    #[test]
+    fn a_tilted_globe_follows_the_pointer() {
+        let mut cam = Camera { center: lonlat_to_merc(Coord::new(10.0, 45.0)), res: 20_000.0, bearing: 25.0, pitch: 60.0 };
+        let (w, h) = (800.0, 600.0);
+        // The point grabbed below the centre stays under the pointer as it moves up.
+        let grabbed = Globe::new(&cam, w, h).inverse(420.0, 380.0).unwrap();
+        Globe::drag_point(&mut cam, (420.0, 380.0), (430.0, 330.0), w, h);
+        let (x, y) = Globe::new(&cam, w, h).forward(grabbed).unwrap();
+        assert!((x - 430.0).abs() < 1.0 && (y - 330.0).abs() < 1.0, "{x}, {y}");
+        // A plain drag up the view moves the ground at the centre about as far as the pointer.
+        let mut cam = Camera { center: lonlat_to_merc(Coord::new(10.0, 45.0)), res: 20_000.0, bearing: 0.0, pitch: 60.0 };
+        let at = Globe::new(&cam, w, h).inverse(400.0, 300.0).unwrap();
+        Globe::drag(&mut cam, 0.0, -20.0, w, h);
+        let (_, y) = Globe::new(&cam, w, h).forward(at).unwrap();
+        assert!((y - 280.0).abs() < 4.0, "{y}");
     }
 
     #[test]
