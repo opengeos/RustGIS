@@ -7,12 +7,15 @@ RustGIS runs natively on Windows, macOS and Linux, and in your web browser. Your
 your machine unless you send it to an AI model you choose, and every action is a command you can
 script from the command line, a notebook or the AI Assistant.
 
+<div class="hero-actions" markdown>
+
 [Try it in your browser](https://web.rustgis.app){ .md-button .md-button--primary }
 [Download](installation.md){ .md-button }
 [Get started](getting-started.md){ .md-button }
 [Compare](comparison/index.md){ .md-button }
+[![Get it from Microsoft](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9ppjw8h561lq?mode=direct)
 
-[![Get it from Microsoft](https://get.microsoft.com/images/en-us%20dark.svg){ width="160" }](https://apps.microsoft.com/detail/9ppjw8h561lq?mode=direct)
+</div>
 
 [![RustGIS with the Home tab of the ribbon open over a world map in the Equal Earth projection, countries shaded by population](https://assets.rustgis.app/images/hero.webp)](https://assets.rustgis.app/images/hero.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
