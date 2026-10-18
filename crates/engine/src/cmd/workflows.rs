@@ -19,9 +19,22 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("gp.gallery", "Tool Gallery", "Analyze › Portal", gallery).view().params(r#"{"kind": "ready"|"feature"|"raster"}"#),
         C::new("model.new", "ModelBuilder", "Analyze › Geoprocessing", new_model).params(
-            r#"{"name"?: string, "steps"?: [{"tool": id, "params": {…, "%1" for step 1's output}}], "fromHistory"?: bool, "imported"?: bool (from a file: its steps may not touch files)}"#,
+            r#"{"name"?: string, "graph"?: {"nodes": [{"id", "kind": "input"|"tool"|"output", "x", "y" (optional), an input's "layer", a tool's "tool" and "params", an output's "name"}], "edges": [{"from", "fromPort": "out", "to", "toPort": a tool's layer parameter | "in" (output)}]}, "steps"?: [{"tool": id, "params": {…, "%1" for step 1's output}}], "fromHistory"?: bool, "imported"?: bool (from a file: its tools may not touch files)}"#,
         ),
-        C::new("model.run", "Run Model", "Analyze › Geoprocessing", run_model).params(r#"{"name"?: model}"#),
+        C::new("model.save", "Save Model", "Analyze › Geoprocessing", save_model)
+            .params(r#"{"name": model (made if new), "graph": graph (as model.new), "rename"?: new name}"#),
+        C::new("model.run", "Run Model", "Analyze › Geoprocessing", run_model)
+            .params(r#"{"name"?: model (default: the last), "graph"?: run this graph instead (as model.new)}"#),
+        C::new("model.validate", "Validate Model", "Analyze › Geoprocessing", |s, p| {
+            let (_, g, _) = model_graph(s, p)?;
+            let problems = crate::model::validate(s, &g);
+            Ok(json!({"ok": problems.is_empty(), "problems": problems}))
+        })
+        .view()
+        .params(r#"{"name"?: model (default: the last), "graph"?: graph}"#),
+        C::new("model.export", "Export Model", "Analyze › Geoprocessing", export_model)
+            .view()
+            .params(r#"{"name"?: model (default: the last), "path"?: "*.model.json" (else the file's text is returned)}"#),
         C::new("model.remove", "Delete Model", "Browser", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
             let before = s.project.models.len();
@@ -204,7 +217,9 @@ pub fn gallery_list(kind: &str) -> CmdResult {
 
 fn new_model(s: &mut Session, p: &Value) -> CmdResult {
     let base = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Model").chars().take(200).collect::<String>();
+    let graph = p.get("graph").filter(|g| !g.is_null()).map(crate::model::graph_from_json).transpose()?;
     let steps: Vec<ModelStep> = match p.get("steps") {
+        _ if graph.is_some() => graph.as_ref().map(crate::model::graph_to_steps).unwrap_or_default(),
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("steps: {e}"))?,
         None if b(p, "fromHistory").unwrap_or(false) => {
             // Each successful run becomes a step; inputs naming an earlier run's output become
@@ -245,12 +260,16 @@ fn new_model(s: &mut Session, p: &Value) -> CmdResult {
         }
         None => Vec::new(),
     };
-    let steps: Vec<ModelStep> = steps.into_iter().take(200).collect();
-    for st in &steps {
-        if super::gp::tool_id(&st.tool).is_none() {
-            return Err(format!("unknown tool '{}'", st.tool));
+    // A graph may name tools not installed here (its problems say so); steps may not.
+    let steps: Vec<ModelStep> = steps.into_iter().take(crate::model::MAX_NODES).collect();
+    if graph.is_none() {
+        for st in &steps {
+            if super::gp::tool_id(&st.tool).is_none() {
+                return Err(format!("unknown tool '{}'", st.tool));
+            }
         }
     }
+    let graph = graph.unwrap_or_else(|| crate::model::steps_to_graph(&steps));
     let mut name = base.clone();
     let mut i = 1;
     while s.project.models.iter().any(|m| m.name.eq_ignore_ascii_case(&name)) {
@@ -263,59 +282,63 @@ fn new_model(s: &mut Session, p: &Value) -> CmdResult {
         s.trusted_models.insert(name.to_ascii_lowercase());
     }
     let n = steps.len();
-    s.project.models.push(Model { name: name.clone(), steps });
+    s.project.models.push(Model { name: name.clone(), steps, graph: Some(graph) });
     Ok(json!({"model": name, "steps": n}))
 }
 
-/// Runs a model's steps in order, putting each step's output layer name in place of `%n`.
-fn run_model(s: &mut Session, p: &Value) -> CmdResult {
+/// The model a command names (or the last one), or the graph it passes: its name, graph and
+/// whether it may touch files (a graph passed in is the caller's own).
+fn model_graph(s: &Session, p: &Value) -> Result<(String, crate::project::ModelGraph, bool), String> {
+    if let Some(g) = p.get("graph").filter(|g| !g.is_null()) {
+        let name = ps(p, "name").unwrap_or("Model").chars().take(200).collect();
+        return Ok((name, crate::model::graph_from_json(g)?, true));
+    }
     let model = match ps(p, "name") {
-        Some(n) => s.project.models.iter().find(|m| m.name.eq_ignore_ascii_case(n)).cloned().ok_or_else(|| format!("no model '{n}'"))?,
-        None => s.project.models.last().cloned().ok_or("the project has no models")?,
+        Some(n) => s.project.models.iter().find(|m| m.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no model '{n}'"))?,
+        None => s.project.models.last().ok_or("the project has no models")?,
     };
-    if model.steps.is_empty() {
-        return Err(format!("{} has no steps", model.name));
-    }
-    // A model that came in a file (an opened project, or an imported tool) may not touch files.
-    if !s.trusted_models.contains(&model.name.to_ascii_lowercase())
-        && let Some((i, st)) = model.steps.iter().enumerate().find(|(_, st)| super::items::touches_files("gp.run", &st.params))
-    {
-        return Err(format!(
-            "step {} ({}) reads or writes files, which a model from a file can't do; make a new model with that step to run it",
-            i + 1,
-            st.tool
-        ));
-    }
-    let mut outputs: Vec<String> = Vec::new();
-    let mut ran = Vec::new();
-    for (i, st) in model.steps.iter().enumerate() {
-        let mut params = st.params.clone();
-        wire(&mut params, &outputs, i, 0)?;
-        let before = s.project.gp_history.len();
-        let r = super::gp::run_tool(s, &st.tool, &params).map_err(|e| format!("step {} ({}): {e}", i + 1, st.tool))?;
-        // A step that made no layer leaves nothing for a later %n to use.
-        let out =
-            (s.project.gp_history.len() > before).then(|| s.project.gp_history.last().and_then(|h| h.outputs.first().cloned())).flatten();
-        outputs.push(out.unwrap_or_default());
-        ran.push(json!({"step": i + 1, "tool": st.tool, "result": r}));
-    }
-    Ok(json!({"model": model.name, "ran": ran}))
+    let g = model.graph.clone().unwrap_or_else(|| crate::model::steps_to_graph(&model.steps));
+    Ok((model.name.clone(), g, s.trusted_models.contains(&model.name.to_ascii_lowercase())))
 }
 
-/// Replaces `%n` (step n's output layer) anywhere in a step's parameters, nested values too.
-fn wire(v: &mut Value, outputs: &[String], step: usize, depth: usize) -> Result<(), String> {
-    match v {
-        Value::String(t) => {
-            if let Some(n) = t.strip_prefix('%').and_then(|n| n.parse::<usize>().ok()) {
-                let out = outputs.get(n.wrapping_sub(1)).filter(|o| !o.is_empty());
-                *v = json!(out.ok_or_else(|| format!("step {} uses %{n}, but step {n} made no output layer", step + 1))?);
-            }
-        }
-        Value::Array(a) if depth < 8 => a.iter_mut().try_for_each(|x| wire(x, outputs, step, depth + 1))?,
-        Value::Object(o) if depth < 8 => o.values_mut().try_for_each(|x| wire(x, outputs, step, depth + 1))?,
-        _ => {}
+/// Runs a model's graph (a model saved as steps runs as the graph they make).
+fn run_model(s: &mut Session, p: &Value) -> CmdResult {
+    let (name, g, trusted) = model_graph(s, p)?;
+    crate::model::run(s, &name, &g, trusted)
+}
+
+/// Saves a graph as a model, replacing the one of that name (or adding it).
+fn save_model(s: &mut Session, p: &Value) -> CmdResult {
+    let name: String = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or("name is required")?.chars().take(200).collect();
+    let g = crate::model::graph_from_json(p.get("graph").ok_or("graph is required")?)?;
+    let new_name: String = ps(p, "rename").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&name).chars().take(200).collect();
+    let i = s.project.models.iter().position(|m| m.name.eq_ignore_ascii_case(&name));
+    if !new_name.eq_ignore_ascii_case(&name) && s.project.models.iter().any(|m| m.name.eq_ignore_ascii_case(&new_name)) {
+        return Err(format!("a model named '{new_name}' already exists"));
     }
-    Ok(())
+    let model = Model { name: new_name.clone(), steps: crate::model::graph_to_steps(&g), graph: Some(g) };
+    match i.and_then(|i| s.project.models.get_mut(i)) {
+        Some(m) => *m = model,
+        None => s.project.models.push(model),
+    }
+    // Saved by the user here: its tools may touch files.
+    s.trusted_models.remove(&name.to_ascii_lowercase());
+    s.trusted_models.insert(new_name.to_ascii_lowercase());
+    Ok(json!({"model": new_name}))
+}
+
+/// A model as a `*.model.json` file: written to `path`, or its text returned.
+fn export_model(s: &mut Session, p: &Value) -> CmdResult {
+    let (name, g, _) = model_graph(s, &json!({"name": p.get("name")}))?;
+    let text = serde_json::to_string_pretty(&crate::model::to_file(&name, &g)).map_err(|e| e.to_string())?;
+    let file: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    match ps(p, "path") {
+        Some(path) => {
+            rustgis_data::io::write_atomic(std::path::Path::new(path), text.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
+            Ok(json!({"model": name, "path": path}))
+        }
+        None => Ok(json!({"model": name, "fileName": format!("{file}.model.json"), "text": text})),
+    }
 }
 
 /// Runs a script of commands, one per line (`id {json}`), stopping at the first error. Scripts

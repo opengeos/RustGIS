@@ -1305,10 +1305,10 @@ fn analysis_groups(app: &mut RustGisApp, ui: &mut Ui) {
             app,
             "modelbuilder",
             "Model\nBuilder",
-            "Chain tools into a model; build one from your history.",
-            "ui.pane.workflows",
-            json!({"section": "models"}),
-            false,
+            "Draw a model: chain tools from input layers to the results to keep.",
+            "ui.modelBuilder",
+            Value::Null,
+            app.mb.shown(),
             false,
         );
         col(ui, |ui| {

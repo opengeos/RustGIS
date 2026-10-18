@@ -431,6 +431,7 @@ fn parse_scale(text: &str) -> Option<f64> {
 
 /// Global keyboard shortcuts.
 pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
+    crate::modelbuilder::shortcuts(app, ctx);
     // The search box was typed in until egui took its focus away on Escape: that Escape clears
     // the box, not the tool.
     let typing = ctx.egui_wants_keyboard_input() || crate::searchbox::had_focus(&app.ui.search, ctx.cumulative_pass_nr());

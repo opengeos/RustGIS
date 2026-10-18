@@ -279,7 +279,12 @@ fn now(ui: &Ui) -> f64 {
 
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    crate::modelbuilder::follow_view(app);
     view_tabs(app, ui, &t);
+    if app.mb.shown() {
+        crate::modelbuilder::show(app, ui);
+        return;
+    }
     if app.session.active_layout.is_some() {
         crate::layoutview::show(app, ui);
         return;
@@ -2137,7 +2142,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.painter().line_segment([pos2(r.min.x, r.max.y - 0.5), pos2(r.max.x, r.max.y - 0.5)], Stroke::new(1.0, t.border));
     let mut x = r.min.x + 6.0;
     let names: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
-    let active = if app.session.active_layout.is_some() { usize::MAX } else { app.session.project.active_map };
+    let active = if app.session.active_layout.is_some() || app.mb.shown() { usize::MAX } else { app.session.project.active_map };
     // A tab's close button asks to delete its map or layout.
     let mut close: Option<Deletion> = None;
     for (i, n) in names.iter().enumerate() {
@@ -2171,6 +2176,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             close = Some(Deletion::Map(n.clone()));
         }
         if resp.clicked() && !is {
+            app.mb.active = false;
             let _ = app.run("layout.close", Value::Null);
             let _ = app.run("map.activate", json!({"name": n}));
             app.map.popup = None;
@@ -2183,7 +2189,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0 + TAB_CLOSE_W;
         let tr = Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(w, r.height() - 4.0));
         let resp = ui.interact(tr, egui::Id::new(("layouttab", i)), Sense::click());
-        let is = app.session.active_layout == Some(i);
+        let is = app.session.active_layout == Some(i) && !app.mb.shown();
         if is {
             ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.ribbon);
             ui.painter().rect_filled(
@@ -2213,8 +2219,48 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             close = Some(Deletion::Layout(n.clone()));
         }
         if resp.clicked() && !is {
+            app.mb.active = false;
             let _ = app.run("layout.activate", json!({"name": n}));
             app.ui.tab = "Publish".into();
+        }
+        x += w + 2.0;
+    }
+    // ModelBuilder, after the layouts.
+    if app.mb.open {
+        let n = if app.mb.name.trim().is_empty() { tl!("Untitled model").to_string() } else { app.mb.name.trim().to_string() };
+        let w = crate::widgets::text_w(ui, &n, regular(12.0)) + 46.0 + TAB_CLOSE_W;
+        let tr = Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(w, r.height() - 4.0));
+        let resp = ui.interact(tr, egui::Id::new("modeltab"), Sense::click());
+        let is = app.mb.shown();
+        if is {
+            ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.ribbon);
+            ui.painter().rect_filled(
+                Rect::from_min_max(tr.min, pos2(tr.max.x, tr.min.y + 2.0)),
+                CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
+                t.accent,
+            );
+        } else if resp.contains_pointer() {
+            ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.hover);
+        }
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(tr.min.x + 15.0, tr.center().y), vec2(15.0, 15.0)),
+            "modelbuilder",
+            t.icon,
+            t.accent,
+        );
+        ui.painter().text(
+            pos2(tr.min.x + 28.0, tr.center().y),
+            Align2::LEFT_CENTER,
+            &n,
+            if is { semibold(12.0) } else { regular(12.0) },
+            if is { t.text } else { t.text_dim },
+        );
+        if tab_close(ui, t, tr, egui::Id::new("modeltab_close"), is, true, tl!("Close ModelBuilder")) {
+            let _ = app.run("ui.modelBuilder", json!({"close": true}));
+        }
+        if resp.clicked() && !is {
+            let _ = app.run("ui.modelBuilder", Value::Null);
         }
         x += w + 2.0;
     }

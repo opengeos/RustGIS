@@ -2331,6 +2331,7 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
             tool: "buffer".into(),
             params: json!({"input": "Cities", "distance": 5, "output": "/tmp/x.shp"}),
         }],
+        ..Default::default()
     });
     let e = s.run("model.run", &json!({"name": "From a file"})).unwrap_err();
     assert!(e.contains("from a file"), "{e}");
@@ -2341,6 +2342,7 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     let r = s.run("script.run", &json!({"script": "# zoom then select\nmap.goToXY {\"lon\": 2, \"lat\": 48, \"scale\": 5000000}\nselect.byAttributes {\"layer\": \"Cities\", \"where\": \"pop_max > 1000000\"}"})).unwrap();
     assert_eq!(r["ran"].as_array().unwrap().len(), 2);
     assert!(s.run("script.run", &json!({"script": "no.such {}"})).is_err());
+    model_graphs(&mut s);
     let g = s.run("gp.gallery", &json!({"kind": "raster"})).unwrap();
     assert!(g.as_array().unwrap().iter().any(|t| t["id"] == "raster.function"));
 }
@@ -8278,4 +8280,93 @@ fn dem_tiles_mosaic_clip_by_polygon_share_a_stretch_and_report_overviews() {
     std::fs::remove_file(&out).ok();
     let e = s.run("raster.mosaic", &json!({"inputs": ["big", "east"]})).unwrap_err();
     assert!(e.to_string().contains("overview"), "{e}");
+}
+
+/// ModelBuilder graphs: validated, run in flow order, intermediate results dropped, outputs named.
+fn model_graphs(s: &mut Session) {
+    let graph = json!({
+        "nodes": [
+            {"id": "i1", "kind": "input", "x": 0, "y": 0, "layer": "Cities"},
+            {"id": "t1", "kind": "tool", "x": 240, "y": 0, "tool": "buffer", "params": {"distance": 20}},
+            {"id": "t2", "kind": "tool", "x": 480, "y": 0, "tool": "dissolve"},
+            {"id": "o1", "kind": "output", "x": 720, "y": 0, "name": "City zones"}
+        ],
+        "edges": [
+            {"from": "i1", "fromPort": "out", "to": "t1", "toPort": "input"},
+            {"from": "t1", "fromPort": "out", "to": "t2", "toPort": "input"},
+            {"from": "t2", "fromPort": "out", "to": "o1", "toPort": "in"}
+        ]
+    });
+    s.run("model.save", &json!({"name": "Zones", "graph": graph})).unwrap();
+    let m = s.project.models.iter().find(|m| m.name == "Zones").unwrap();
+    assert_eq!(m.steps.len(), 2, "steps follow the graph");
+    assert_eq!(m.steps[1].params["input"], "%1");
+    assert_eq!(s.run("model.validate", &json!({"name": "Zones"})).unwrap()["ok"], true);
+    let layers = s.map().layers.len();
+    let r = s.run("model.run", &json!({"name": "Zones"})).unwrap();
+    assert_eq!(r["ran"].as_array().unwrap().len(), 2);
+    assert_eq!(r["outputs"], json!(["City zones"]));
+    assert!(s.map().layer_by_name("City zones").is_some());
+    assert_eq!(s.map().layers.len(), layers + 1, "the buffer, only feeding the dissolve, is removed");
+    let report = s.model_run.clone().unwrap();
+    assert!(report.ok && report.nodes.iter().all(|n| n.status == "done"));
+    // Run again: the output name stays unique.
+    let r = s.run("model.run", &json!({"name": "Zones"})).unwrap();
+    assert_eq!(r["outputs"], json!(["City zones 2"]));
+
+    // Problems: a missing layer, an unconnected required input, a loop.
+    let mut bad = graph.clone();
+    bad["nodes"][0]["layer"] = json!("Nowhere");
+    bad["edges"].as_array_mut().unwrap().push(json!({"from": "t2", "fromPort": "out", "to": "t1", "toPort": "input"}));
+    let v = s.run("model.validate", &json!({"graph": bad})).unwrap();
+    let codes: Vec<&str> = v["problems"].as_array().unwrap().iter().map(|p| p["code"].as_str().unwrap()).collect();
+    assert!(codes.contains(&"missing-layer") && codes.contains(&"duplicate-input") && codes.contains(&"cycle"), "{codes:?}");
+    let e = s.run("model.run", &json!({"graph": bad})).unwrap_err();
+    assert!(!e.is_empty());
+    assert!(!s.model_run.as_ref().unwrap().ok);
+    // A failing tool stops the run, names its node and leaves the project as it was.
+    let layers = s.map().layers.len();
+    let fails = json!({"nodes": [
+        {"id": "i1", "kind": "input", "layer": "Cities"},
+        {"id": "t1", "kind": "tool", "tool": "buffer", "params": {"distance": 20}},
+        {"id": "t2", "kind": "tool", "tool": "dissolve", "params": {"field": "no_such_field"}}],
+        "edges": [{"from": "i1", "fromPort": "out", "to": "t1", "toPort": "input"},
+                  {"from": "t1", "fromPort": "out", "to": "t2", "toPort": "input"}]});
+    if s.run("model.run", &json!({"graph": fails})).is_err() {
+        let rep = s.model_run.clone().unwrap();
+        assert_eq!(rep.nodes.last().unwrap().status, "error");
+        assert_eq!(s.map().layers.len(), layers, "a failed run is undone");
+    }
+
+    // A graph without positions is laid out along the flow.
+    let g = rustgis_engine_graph(&fails);
+    assert!(g.nodes[0].x < g.nodes[1].x && g.nodes[1].x < g.nodes[2].x);
+    // Old step models open as graphs.
+    let steps = vec![
+        crate::project::ModelStep { tool: "buffer".into(), params: json!({"input": "Cities", "distance": 5}) },
+        crate::project::ModelStep { tool: "dissolve".into(), params: json!({"input": "%1"}) },
+    ];
+    let g = crate::model::steps_to_graph(&steps);
+    assert_eq!(g.nodes.len(), 3);
+    assert_eq!(g.edges.len(), 2);
+    assert_eq!(crate::model::graph_to_steps(&g), steps);
+    // Export and import as a model file; an imported model may not touch files.
+    let text = s.run("model.export", &json!({"name": "Zones"})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(text.contains(crate::model::SCHEMA));
+    let m = s.run("model.import", &json!({"text": text})).unwrap();
+    let imported = m["model"].as_str().unwrap().to_string();
+    assert_ne!(imported, "Zones");
+    assert!(s.project.models.iter().any(|m| m.name == imported && m.graph.as_ref().is_some_and(|g| g.nodes.len() == 4)));
+    let mut writes = graph.clone();
+    writes["nodes"][1]["params"]["output"] = json!("/tmp/zones.shp");
+    s.run("model.new", &json!({"name": "Writes", "graph": writes, "imported": true})).unwrap();
+    let e = s.run("model.run", &json!({"name": "Writes"})).unwrap_err();
+    assert!(e.contains("from a file"), "{e}");
+    for n in ["Zones", "Writes", imported.as_str()] {
+        s.run("model.remove", &json!({"name": n})).unwrap();
+    }
+}
+
+fn rustgis_engine_graph(v: &Value) -> crate::project::ModelGraph {
+    crate::model::graph_from_json(v).unwrap()
 }
