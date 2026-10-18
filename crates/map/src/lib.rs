@@ -914,6 +914,25 @@ impl Map {
         Ok(())
     }
 
+    /// Moves a group's layers, together, to position `to` among the other layers (past the end,
+    /// the bottom); a position inside another group's run moves up above that group.
+    pub fn move_group(&mut self, group: u32, to: usize) -> Result<(), String> {
+        let children = self.group(group).ok_or("no such group")?.children.clone();
+        let (members, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.layers).into_iter().partition(|l| children.contains(&l.id));
+        self.layers = rest;
+        if members.is_empty() {
+            return Err("the group has no layers to move".into());
+        }
+        let mut at = to.min(self.layers.len());
+        while at > 0 && self.splits_group(at) {
+            at -= 1;
+        }
+        let tail = self.layers.split_off(at);
+        self.layers.extend(members);
+        self.layers.extend(tail);
+        Ok(())
+    }
+
     /// Moves a group's children together in the drawing order, at its topmost child, keeping
     /// their order; children with no layer are dropped.
     pub fn gather_group(&mut self, group: u32) {

@@ -981,7 +981,7 @@ fn layer_group_row(
         if cb_resp.on_hover_text(tl!("Show or hide the group's layers")).clicked() {
             let _ = app.run("group.set", json!({"group": group.id, "visible": !group.visible}));
         } else if arrow.clicked() || resp.double_clicked() {
-            let _ = app.run("group.set", json!({"group": group.id, "expanded": !group.expanded}));
+            let _ = app.run("group.expand", json!({"group": group.id}));
         }
         let resp = if elided { resp.on_hover_text(&group.name) } else { resp };
         resp.context_menu(|ui| {

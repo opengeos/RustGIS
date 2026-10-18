@@ -1160,14 +1160,14 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     let clip = map.view.clip_distance.map(|d| (view.camera.center_lonlat(), d));
     // Each layer group's visibility, scale range and transparency apply to its children (#413).
     let held = map.held_by_group(scale);
-    let group_opacity: Vec<(u32, f32)> =
+    let group_opacity: std::collections::HashMap<u32, f32> =
         map.groups.iter().filter(|g| g.transparency > 0.0).flat_map(|g| g.children.iter().map(|c| (*c, g.opacity()))).collect();
     for li in order {
         let Some(layer) = map.layers.get_mut(li) else { continue };
         if !layer.visible || !layer.in_scale_range(scale) || held.contains(&layer.id) {
             continue;
         }
-        let opacity = layer.opacity() * group_opacity.iter().find(|(id, _)| *id == layer.id).map_or(1.0, |(_, o)| *o);
+        let opacity = layer.opacity() * group_opacity.get(&layer.id).copied().unwrap_or(1.0);
         let mask = masks.iter().find(|(id, _)| *id == layer.id).map(|(_, m)| m);
         let blend = blend_mode(layer.blend);
         // Drawn on its own and composited when it is see-through, masked or blended.

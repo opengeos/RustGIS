@@ -7004,7 +7004,14 @@ fn layer_groups_hold_related_layers_together() {
     s.run("group.set", &json!({"group": g, "transparency": 50})).unwrap();
     let half = png(&mut s);
     assert!(half != shown && half != without);
-    s.run("group.set", &json!({"group": g, "transparency": 0, "name": "Water and towns", "expanded": false})).unwrap();
+    s.run("group.set", &json!({"group": g, "transparency": 0, "name": "Water and towns"})).unwrap();
+    // Folding is a view change: no undo step. A visibility that isn't a bool is an error, not a toggle.
+    let before = s.undo_depth();
+    s.run("group.expand", &json!({"group": g})).unwrap();
+    assert_eq!(s.undo_depth(), before);
+    assert!(!s.map().group(g).unwrap().expanded);
+    assert!(s.run("group.set", &json!({"group": g, "visible": "no"})).is_err());
+    assert!(s.map().group(g).unwrap().visible);
     // Identify and the map's selection skip a hidden group's layers.
     s.run("group.set", &json!({"group": g, "visible": false})).unwrap();
     let held = s.map().held_by_group(s.map().scale());
@@ -7139,4 +7146,16 @@ fn a_layer_drops_into_and_out_of_a_group_at_a_place() {
     assert!(s.run("layer.group", &json!({"layer": "Rivers", "group": g, "before": "Cities"})).is_err());
     assert!(s.run("layer.group", &json!({"layer": "Rivers", "group": null, "before": "Rivers"})).is_err());
     assert_eq!(members(&s), ["Countries"]);
+}
+
+#[test]
+fn a_moved_group_never_lands_inside_another() {
+    let mut s = world();
+    let names = |s: &Session| s.map().layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    s.run("group.add", &json!({"name": "A", "layers": ["Cities"]})).unwrap();
+    s.run("group.add", &json!({"name": "B", "layers": ["Lakes", "Countries"]})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Rivers", "Lakes", "Countries"]);
+    // Position 2 among the others (Rivers, Lakes, Countries) is between Lakes and Countries.
+    s.run("group.move", &json!({"group": "A", "to": 2})).unwrap();
+    assert_eq!(names(&s), ["Rivers", "Cities", "Lakes", "Countries"]);
 }

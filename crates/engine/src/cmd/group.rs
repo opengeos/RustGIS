@@ -4,7 +4,7 @@
 use rustgis_map::{LayerGroup, MAX_GROUPS};
 use serde_json::{Value, json};
 
-use super::{b, f, ps, uint};
+use super::{f, ps, uint};
 use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
@@ -13,13 +13,16 @@ pub fn commands() -> Vec<C> {
             r#"{"name"?: text (default New Group), "layers"?: [name|id] (moved into it, out of any other group; together in the drawing order at the topmost)}"#,
         ),
         C::new("group.set", "Group Properties", "Layers", set).params(
-            r#"{"group": name|id, "name"?: text, "visible"?: bool (toggles when no other property is given), "expanded"?: bool, "transparency"?: 0-100 (on top of each layer's own)}"#,
+            r#"{"group": name|id, "name"?: text, "visible"?: bool (toggles when no other property is given), "transparency"?: 0-100 (on top of each layer's own)}"#,
         ),
+        C::new("group.expand", "Expand Group", "Layers", expand)
+            .params(r#"{"group": name|id, "on"?: bool (toggles when omitted)}"#)
+            .view(),
         C::new("group.scaleRange", "Group Visibility Range", "Layers", scale_range).params(
             r#"{"group": name|id, "min"?: scale (out beyond), "max"?: scale (in beyond); its layers draw only within it and their own}"#,
         ),
         C::new("group.move", "Move Group", "Layers", move_group).params(
-            r#"{"group": name|id, "to": position among the other layers (0 = top; past the end, the bottom)}"#,
+            r#"{"group": name|id, "to": position among the other layers, counted in layers (0 = top; past the end, the bottom; never inside another group: above it)}"#,
         ),
         C::new("group.ungroup", "Ungroup", "Layers", ungroup).params(r#"{"group": name|id} (its layers stay, out of any group)"#),
         C::new("group.remove", "Remove Group", "Layers", remove).params(r#"{"group": name|id} (and its layers)"#),
@@ -103,18 +106,14 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
         }
         None => None,
     };
-    let expanded = b(p, "expanded");
-    let visible = b(p, "visible");
-    let toggle = visible.is_none() && name.is_none() && transparency.is_none() && expanded.is_none();
+    let visible = bool_of(p, "visible")?;
+    let toggle = visible.is_none() && name.is_none() && transparency.is_none();
     let g = s.map_mut().groups.iter_mut().find(|g| g.id == id).ok_or("no such group")?;
     if let Some(n) = name {
         g.name = n;
     }
     if let Some(t) = transparency {
         g.transparency = t;
-    }
-    if let Some(e) = expanded {
-        g.expanded = e;
     }
     if toggle {
         g.visible = !g.visible;
@@ -134,22 +133,28 @@ fn scale_range(s: &mut Session, p: &Value) -> CmdResult {
     Ok(Value::Null)
 }
 
+/// A boolean parameter: absent, or a bool (anything else is an error rather than a toggle).
+fn bool_of(p: &Value, k: &str) -> Result<Option<bool>, String> {
+    match p.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_bool().map(Some).ok_or_else(|| format!("{k} must be true or false")),
+    }
+}
+
+/// Folds or unfolds a group in the Layers pane (a view change: no undo step).
+fn expand(s: &mut Session, p: &Value) -> CmdResult {
+    let id = group_id(s, p)?;
+    let on = bool_of(p, "on")?;
+    let g = s.map_mut().groups.iter_mut().find(|g| g.id == id).ok_or("no such group")?;
+    g.expanded = on.unwrap_or(!g.expanded);
+    Ok(json!({"group": id, "expanded": g.expanded}))
+}
+
 /// Moves a group's layers, together, to a position in the drawing order of the other layers.
 fn move_group(s: &mut Session, p: &Value) -> CmdResult {
     let id = group_id(s, p)?;
     let to = uint(p, "to").ok_or("to is required: the position among the other layers, 0 at the top")?;
-    let m = s.map_mut();
-    let children = m.group(id).map(|g| g.children.clone()).unwrap_or_default();
-    let (members, mut rest): (Vec<_>, Vec<_>) = std::mem::take(&mut m.layers).into_iter().partition(|l| children.contains(&l.id));
-    if members.is_empty() {
-        m.layers = rest;
-        return Err("the group has no layers to move".into());
-    }
-    let at = usize::try_from(to).unwrap_or(usize::MAX).min(rest.len());
-    let tail = rest.split_off(at);
-    rest.extend(members);
-    rest.extend(tail);
-    m.layers = rest;
+    s.map_mut().move_group(id, usize::try_from(to).unwrap_or(usize::MAX))?;
     Ok(Value::Null)
 }
 
