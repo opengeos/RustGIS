@@ -119,26 +119,21 @@ impl TiltDrape {
         for mesh in self.meshes(rect, &cam, w, h) {
             painter.add(Shape::mesh(mesh));
         }
-        if let Some(mesh) = self.extrusions(rect, &cam, map.ground_res_at(&cam), fog) {
+        if let Some(mesh) = self.extrusions(rect, &cam, fog) {
             painter.add(Shape::mesh(mesh));
         }
     }
 
     /// The extruded features standing on the drape in perspective, as one mesh: features far to
     /// near, each one's walls (facing the eye, lit by their facing and darker toward their foot,
-    /// far first) then its roof; fading into `fog` with distance. `m_per_px` is metres per
-    /// logical px of ground at the centre.
-    fn extrusions(&self, rect: Rect, cam: &Camera, m_per_px: f64, fog: rustgis_engine::map::Rgba) -> Option<Mesh> {
+    /// far first) then its roof; fading into `fog` with distance. Heights are each
+    /// feature's own, in the camera's units at its place.
+    fn extrusions(&self, rect: Rect, cam: &Camera, fog: rustgis_engine::map::Rgba) -> Option<Mesh> {
         let d = self.drape.as_ref()?;
         let (w, h) = (rect.width() as f64, rect.height() as f64);
-        let (eu, ev, _) = cam.eye(h);
-        let light = render::EXTRUSION_LIGHT;
-        let light_len = light.0.hypot(light.1).max(1e-9);
-        let at = |u: f64, v: f64, up: f64| {
-            cam.project_raised(u, v, up, w, h)
-                .filter(|p| p.0.is_finite() && p.1.is_finite())
-                .map(|(x, y)| pos2(rect.min.x + x as f32, rect.min.y + y as f32))
-        };
+        let pos = |p: (f64, f64)| pos2(rect.min.x + p.0 as f32, rect.min.y + p.1 as f32);
+        let ground =
+            |s: &ExtrudedShape, p: &[f32; 2]| cam.ground_px(Coord::new(s.origin.x + f64::from(p[0]), s.origin.y + f64::from(p[1])));
         // Far (up the screen) first; past the view's reach is sky.
         let mut order: Vec<(f64, f64, usize)> = d
             .shapes
@@ -150,44 +145,55 @@ impl TiltDrape {
             })
             .collect();
         order.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let shapes: Vec<(&ExtrudedShape, f64, f64, Vec<Vec<(f64, f64)>>)> = order
+            .iter()
+            .filter_map(|&(_, depth, i)| {
+                let s = d.shapes.get(i)?;
+                let rings = s.rings.iter().map(|r| r.iter().map(|c| cam.ground_px(*c)).collect()).collect();
+                Some((s, depth, (s.height / cam.res.max(1e-9)).clamp(0.0, 1e7), rings))
+            })
+            .collect();
         let mut mesh = Mesh::default();
-        for (_, depth, i) in order {
-            let Some(s) = d.shapes.get(i) else { continue };
-            let up = (s.metres / m_per_px.max(1e-9)).clamp(0.0, 1e7);
-            let t = ((depth - FAR * 0.5) / (FAR * 0.5)).clamp(0.0, 1.0);
-            let base = s.fill.lerp(fog, t * t * (3.0 - 2.0 * t));
-            let mut walls: Vec<(f64, [egui::Pos2; 4], f64)> = Vec::new();
-            for ring in &s.rings {
-                let g: Vec<(f64, f64)> = ring.iter().map(|c| cam.ground_px(*c)).collect();
-                let area2: f64 =
-                    (0..g.len()).filter_map(|k| Some((g.get(k)?, g.get((k + 1) % g.len())?))).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum();
-                for k in 0..g.len() {
-                    let (Some(&a), Some(&b)) = (g.get(k), g.get((k + 1) % g.len())) else { continue };
-                    let (du, dv) = (b.0 - a.0, b.1 - a.1);
-                    let len = du.hypot(dv);
-                    if len <= 0.0 {
-                        continue;
-                    }
-                    let n = if area2 > 0.0 { (dv / len, -du / len) } else { (-dv / len, du / len) };
-                    let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
-                    if n.0 * (eu - mid.0) + n.1 * (ev - mid.1) <= 0.0 {
-                        continue;
-                    }
-                    let (Some(fa), Some(fb), Some(tb), Some(ta)) =
-                        (at(a.0, a.1, 0.0), at(b.0, b.1, 0.0), at(b.0, b.1, up), at(a.0, a.1, up))
-                    else {
-                        continue;
-                    };
-                    walls.push((mid.1, [fa, fb, tb, ta], ((n.0 * light.0 + n.1 * light.1) / light_len).max(0.0)));
+        // Shadows on the ground first, under every feature.
+        let shade = Color32::from_black_alpha(60);
+        for (s, _, up, rings) in shapes.iter().filter(|x| x.0.shadows) {
+            for q in render::tilted_shadow_quads(cam, w, h, rings, *up) {
+                let k = mesh.vertices.len() as u32;
+                for p in q {
+                    mesh.colored_vertex(pos(p), shade);
+                }
+                mesh.add_triangle(k, k + 1, k + 2);
+                mesh.add_triangle(k, k + 2, k + 3);
+            }
+            // The footprint moved away from the light: the roof's triangles on the ground.
+            let (du, dv) = render::shadow_shift(*up);
+            let foot: Option<Vec<egui::Pos2>> = s
+                .roof
+                .iter()
+                .map(|p| {
+                    let (u, v) = ground(s, p);
+                    cam.project_raised(u + du, v + dv, 0.0, w, h).map(pos)
+                })
+                .collect();
+            if let Some(foot) = foot {
+                let k = mesh.vertices.len() as u32;
+                for p in foot {
+                    mesh.colored_vertex(p, shade);
+                }
+                for [a, b, c] in s.roof_indices.as_chunks::<3>().0 {
+                    mesh.add_triangle(k + a, k + b, k + c);
                 }
             }
-            walls.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-            for (_, [fa, fb, tb, ta], lit) in walls {
-                let top = base.shade(0.6 + 0.4 * lit);
-                let (top, foot) = (c32(top), c32(top.shade(0.72)));
+        }
+        for (s, depth, up, rings) in &shapes {
+            let t = ((depth - FAR * 0.5) / (FAR * 0.5)).clamp(0.0, 1.0);
+            let base = s.fill.lerp(fog, t * t * (3.0 - 2.0 * t));
+            for wall in render::tilted_walls(cam, w, h, rings, *up, s.face_culling, s.lighting) {
+                let (top, foot) = (c32(base.shade(wall.top)), c32(base.shade(wall.foot)));
+                let [fa, fb, tb, ta] = wall.quad;
                 let k = mesh.vertices.len() as u32;
                 for (p, c) in [(fa, foot), (fb, foot), (tb, top), (ta, top)] {
-                    mesh.colored_vertex(p, c);
+                    mesh.colored_vertex(pos(p), c);
                 }
                 mesh.add_triangle(k, k + 1, k + 2);
                 mesh.add_triangle(k, k + 2, k + 3);
@@ -196,8 +202,8 @@ impl TiltDrape {
                 .roof
                 .iter()
                 .map(|p| {
-                    let (u, v) = cam.ground_px(Coord::new(s.origin.x + f64::from(p[0]), s.origin.y + f64::from(p[1])));
-                    at(u, v, up)
+                    let (u, v) = ground(s, p);
+                    cam.project_raised(u, v, *up, w, h).filter(|q| q.0.is_finite() && q.1.is_finite()).map(pos)
                 })
                 .collect();
             if let Some(roof) = roof {
@@ -314,7 +320,7 @@ mod tests {
         let mut d = TiltDrape::default();
         assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.0));
         let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
-        let mesh = d.extrusions(rect, &m.camera, m.ground_res_at(&m.camera), fog()).expect("the block stands up");
+        let mesh = d.extrusions(rect, &m.camera, fog()).expect("the block stands up");
         assert!(mesh.is_valid() && mesh.indices.len() > 6);
         // Its roof stands above its foot on screen.
         let foot = m.camera.to_screen(rustgis_engine::geom::lonlat_to_merc(Coord::new(10.0, 47.0)), 800.0, 600.0).1 as f32;
@@ -336,7 +342,7 @@ mod tests {
         assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.1));
         assert_eq!(d.drape.as_ref().map(|d| d.built), built);
         // No extruded layer, no extrusion mesh.
-        assert!(d.extrusions(Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0)), &m.camera, 2_000.0, fog()).is_none());
+        assert!(d.extrusions(Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0)), &m.camera, fog()).is_none());
         // Every band in front of the camera gives a valid mesh.
         let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
         let meshes = d.meshes(rect, &m.camera, 800.0, 600.0);

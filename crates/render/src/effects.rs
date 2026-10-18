@@ -208,11 +208,92 @@ pub(crate) fn extrusion_metres(ds: &Dataset, x: &Extrusion, row: usize) -> f64 {
 
 /// The light of a tilted view's extrusions, as MapLibre's default: from the view's upper left,
 /// mostly overhead (toward it: right, down the screen and up, in ground px).
-pub(crate) const LIGHT: (f64, f64, f64) = (-0.25, -0.43, 0.87);
+const LIGHT: (f64, f64, f64) = (-0.25, -0.43, 0.87);
+
+/// A wall of an extruded feature in a tilted view ([`tilted_walls`]).
+pub struct TiltedWall {
+    /// How far up the view it stands (ground px; smaller is farther).
+    pub depth: f64,
+    /// Its corners on screen (logical px): foot a, foot b, top b, top a.
+    pub quad: [(f64, f64); 4],
+    /// The shades (multipliers of the fill colour) of its top and its foot.
+    pub top: f64,
+    pub foot: f64,
+}
+
+/// The walls of a feature whose outer `rings` (ground px, [`rustgis_map::Camera::ground_px`])
+/// are raised `up` px, in a tilted `w`×`h` view of `cam`, far first: with `culling`, only those
+/// facing the eye; with `lighting`, lit by the way they face MapLibre's default light and
+/// darker toward their foot. Both the settled frame and the moving view's mesh draw these.
+pub fn tilted_walls(
+    cam: &rustgis_map::Camera,
+    w: f64,
+    h: f64,
+    rings: &[Vec<(f64, f64)>],
+    up: f64,
+    culling: bool,
+    lighting: bool,
+) -> Vec<TiltedWall> {
+    let (eu, ev, _) = cam.eye(h);
+    let light_len = LIGHT.0.hypot(LIGHT.1).max(1e-9);
+    let at = |u: f64, v: f64, up: f64| cam.project_raised(u, v, up, w, h).filter(|p| p.0.is_finite() && p.1.is_finite());
+    let mut walls = Vec::new();
+    for r in rings {
+        let area2: f64 =
+            (0..r.len()).filter_map(|i| Some((r.get(i)?, r.get((i + 1) % r.len())?))).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum();
+        for i in 0..r.len() {
+            let (Some(&a), Some(&b)) = (r.get(i), r.get((i + 1) % r.len())) else { continue };
+            let (du, dv) = (b.0 - a.0, b.1 - a.1);
+            let len = du.hypot(dv);
+            if len <= 0.0 {
+                continue;
+            }
+            // The outward normal (the rings wind either way).
+            let nrm = if area2 > 0.0 { (dv / len, -du / len) } else { (-dv / len, du / len) };
+            let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+            if culling && nrm.0 * (eu - mid.0) + nrm.1 * (ev - mid.1) <= 0.0 {
+                continue;
+            }
+            let (Some(fa), Some(fb), Some(tb), Some(ta)) = (at(a.0, a.1, 0.0), at(b.0, b.1, 0.0), at(b.0, b.1, up), at(a.0, a.1, up))
+            else {
+                continue;
+            };
+            let lit = ((nrm.0 * LIGHT.0 + nrm.1 * LIGHT.1) / light_len).max(0.0);
+            // Darker toward the foot, as MapLibre's vertical gradient.
+            let (top, foot) = if lighting { (0.6 + 0.4 * lit, (0.6 + 0.4 * lit) * 0.72) } else { (0.8, 0.8) };
+            walls.push(TiltedWall { depth: mid.1, quad: [fa, fb, tb, ta], top, foot });
+        }
+    }
+    walls.sort_by(|a, b| a.depth.partial_cmp(&b.depth).unwrap_or(std::cmp::Ordering::Equal));
+    walls
+}
+
+/// How far (ground px) the shadow of a feature raised `up` px falls from it, away from the light.
+pub fn shadow_shift(up: f64) -> (f64, f64) {
+    (-LIGHT.0 / LIGHT.2 * up, -LIGHT.1 / LIGHT.2 * up)
+}
+
+/// The sides of the shadow a feature raised `up` px casts on the ground in a tilted view: a quad
+/// (screen, logical px) between each edge of its outer `rings` (ground px) and the edge moved by
+/// [`shadow_shift`]. Its footprint moved by the same shift completes it.
+pub fn tilted_shadow_quads(cam: &rustgis_map::Camera, w: f64, h: f64, rings: &[Vec<(f64, f64)>], up: f64) -> Vec<[(f64, f64); 4]> {
+    let (du, dv) = shadow_shift(up);
+    let at = |u: f64, v: f64| cam.project_raised(u, v, 0.0, w, h).filter(|p| p.0.is_finite() && p.1.is_finite());
+    let mut out = Vec::new();
+    for r in rings {
+        for i in 0..r.len() {
+            let (Some(&a), Some(&b)) = (r.get(i), r.get((i + 1) % r.len())) else { continue };
+            if let (Some(p), Some(q), Some(s), Some(t)) = (at(a.0, a.1), at(b.0, b.1), at(b.0 + du, b.1 + dv), at(a.0 + du, a.1 + dv)) {
+                out.push([p, q, s, t]);
+            }
+        }
+    }
+    out
+}
 
 /// Polygons extruded in perspective in a tilted view, as MapLibre's fill extrusions: each
-/// feature's walls stand on its outline and its roof is raised by its height (`m_per_px`
-/// metres per logical px of ground at the centre). Features and walls are drawn far to near;
+/// feature's walls stand on its outline and its roof is raised by its height (converted at
+/// the feature's place by `m_per_unit`, the ground metres per map unit there). Features and walls are drawn far to near;
 /// walls facing away from the eye are culled, walls are lit by the way they face the light and
 /// shade darker toward their base, and features fade into `fog` with distance as the ground
 /// does.
@@ -224,7 +305,7 @@ pub(crate) fn extrude_tilted(
     geoms: &[Option<&Geometry>],
     rows: &[bool],
     x: &Extrusion,
-    m_per_px: f64,
+    m_per_unit: impl Fn(rustgis_geom::Coord) -> f64,
     fog: Rgba,
     symbol: impl Fn(usize) -> Symbol,
 ) {
@@ -232,7 +313,6 @@ pub(crate) fn extrude_tilted(
     let (w, h) = (view.width, view.height);
     let ppp = view.pixels_per_point as f32;
     let far = rustgis_map::camera::FAR;
-    let (eu, ev, _) = cam.eye(h);
     // (centroid depth along the view, outer rings in ground px, height in ground px, fog, row)
     let mut shapes: Vec<(f64, Vec<Vec<(f64, f64)>>, f64, f64, usize)> = Vec::new();
     for (row, g) in geoms.iter().enumerate() {
@@ -240,7 +320,6 @@ pub(crate) fn extrude_tilted(
         if rows.get(row) != Some(&true) {
             continue;
         }
-        let up = (extrusion_metres(ds, x, row) / m_per_px.max(1e-9)).clamp(0.0, 1e7);
         // Thinned on screen: a point closer than about a pixel to the last kept adds a sliver.
         let mut rings = Vec::new();
         let (mut sum, mut n) = (rustgis_geom::Coord::new(0.0, 0.0), 0.0);
@@ -269,6 +348,8 @@ pub(crate) fn extrude_tilted(
             continue;
         }
         let centroid = rustgis_geom::Coord::new(sum.x / n, sum.y / n);
+        // At the feature's own scale (Web Mercator stretches the ground toward the poles).
+        let up = (extrusion_metres(ds, x, row) / m_per_unit(centroid).max(1e-9) / cam.res.max(1e-9)).clamp(0.0, 1e7);
         // Past the view's reach is sky; on the way there, fog.
         let Some(k) = cam.depth_scale(centroid, h) else { continue };
         let depth = 1.0 / k.max(1e-9);
@@ -289,66 +370,31 @@ pub(crate) fn extrude_tilted(
         pb.close();
         pb.finish()
     };
+    let px = |p: (f64, f64)| (p.0 as f32 * ppp, p.1 as f32 * ppp);
     if x.shadows {
         // Cast on the ground away from the light.
         let shade = paint(Rgba::new(0, 0, 0, 60), 1.0);
-        let (lu, lv) = (-LIGHT.0 / LIGHT.2, -LIGHT.1 / LIGHT.2);
         for (_, rings, up, _, _) in &shapes {
-            let (du, dv) = (lu * up, lv * up);
+            for q in tilted_shadow_quads(&cam, w, h, rings, *up) {
+                if let Some(p) = path(&q.map(px)) {
+                    pm.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
+                }
+            }
+            let (du, dv) = shadow_shift(*up);
             for r in rings {
                 let shifted: Option<Vec<_>> = r.iter().map(|&(u, v)| at(u + du, v + dv, 0.0)).collect();
-                let base: Option<Vec<_>> = r.iter().map(|&(u, v)| at(u, v, 0.0)).collect();
-                let (Some(shifted), Some(base)) = (shifted, base) else { continue };
-                for i in 0..base.len() {
-                    let j = (i + 1) % base.len();
-                    if let (Some(a), Some(b), Some(c), Some(d)) = (base.get(i), base.get(j), shifted.get(j), shifted.get(i))
-                        && let Some(p) = path(&[*a, *b, *c, *d])
-                    {
-                        pm.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
-                    }
-                }
-                if let Some(p) = path(&shifted) {
+                if let Some(p) = shifted.as_deref().and_then(path) {
                     pm.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
                 }
             }
         }
     }
-    let light_len = LIGHT.0.hypot(LIGHT.1).max(1e-9);
     for (_, rings, up, fogged, row) in &shapes {
         let sym = symbol(*row);
         let base = sym.fill.with_alpha(255).lerp(fog, *fogged);
-        // Walls: (depth, foot a, foot b, top a, top b, light), far first.
-        let mut walls: Vec<(f64, [(f32, f32); 4], f64)> = Vec::new();
-        for r in rings {
-            let area2: f64 =
-                (0..r.len()).filter_map(|i| Some((r.get(i)?, r.get((i + 1) % r.len())?))).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum();
-            for i in 0..r.len() {
-                let (Some(&a), Some(&b)) = (r.get(i), r.get((i + 1) % r.len())) else { continue };
-                let (du, dv) = (b.0 - a.0, b.1 - a.1);
-                let len = du.hypot(dv);
-                if len <= 0.0 {
-                    continue;
-                }
-                // The outward normal (the rings wind either way).
-                let nrm = if area2 > 0.0 { (dv / len, -du / len) } else { (-dv / len, du / len) };
-                let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
-                if x.face_culling && nrm.0 * (eu - mid.0) + nrm.1 * (ev - mid.1) <= 0.0 {
-                    continue;
-                }
-                let (Some(fa), Some(fb), Some(ta), Some(tb)) = (at(a.0, a.1, 0.0), at(b.0, b.1, 0.0), at(a.0, a.1, *up), at(b.0, b.1, *up))
-                else {
-                    continue;
-                };
-                let lit = ((nrm.0 * LIGHT.0 + nrm.1 * LIGHT.1) / light_len).max(0.0);
-                walls.push((mid.1, [fa, fb, tb, ta], lit));
-            }
-        }
-        walls.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        for (_, [fa, fb, tb, ta], lit) in walls {
-            let f = if x.lighting { 0.6 + 0.4 * lit } else { 0.8 };
-            let top = base.shade(f);
-            // Darker toward the foot, as MapLibre's vertical gradient.
-            let foot = top.shade(if x.lighting { 0.72 } else { 1.0 });
+        for wall in tilted_walls(&cam, w, h, rings, *up, x.face_culling, x.lighting) {
+            let [fa, fb, tb, ta] = wall.quad.map(px);
+            let (top, foot) = (base.shade(wall.top), base.shade(wall.foot));
             // A hair longer each way, so neighbouring walls leave no seam between them.
             let grow = |p: (f32, f32), q: (f32, f32)| {
                 let (dx, dy) = (p.0 - q.0, p.1 - q.1);
@@ -366,11 +412,11 @@ pub(crate) fn extrude_tilted(
                 SpreadMode::Pad,
                 Transform::identity(),
             );
-            let wall = match shader {
+            let paint_wall = match shader {
                 Some(shader) => Paint { shader, anti_alias: true, ..Paint::default() },
                 None => paint(top, 1.0),
             };
-            pm.fill_path(&p, &wall, FillRule::Winding, Transform::identity(), None);
+            pm.fill_path(&p, &paint_wall, FillRule::Winding, Transform::identity(), None);
         }
         // The roof, over its walls.
         let mut pb = PathBuilder::new();

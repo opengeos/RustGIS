@@ -1054,14 +1054,16 @@ pub fn tilt_sky(map: &Map) -> (Rgba, Rgba) {
 /// Lifts the labels of extruded features onto their roofs in a tilted view (as MapLibre
 /// does), where the extrusions drawn over the ground would otherwise hide them.
 fn raise_labels(map: &Map, view: &View, candidates: &mut [Candidate]) {
-    let m_per_px = map_ground_res(view, &map.flat());
+    let flat = map.flat();
     let cam = view.camera;
     let (w, h) = (view.width, view.height);
     for (l, _, (id, row)) in candidates.iter_mut() {
         let Some(layer) = map.layer(*id).filter(|l| l.geometry_type() == GeometryType::Polygon) else { continue };
         let Some(x) = &layer.extrusion else { continue };
-        let up = (effects::extrusion_metres(&layer.dataset, x, *row) / m_per_px.max(1e-9)).clamp(0.0, 1e7);
         let Some(m) = cam.try_to_map(f64::from(l.x), f64::from(l.y), w, h) else { continue };
+        // At the label's place (Web Mercator stretches the ground toward the poles).
+        let up =
+            (effects::extrusion_metres(&layer.dataset, x, *row) / flat.ground_per_unit(m).max(1e-9) / cam.res.max(1e-9)).clamp(0.0, 1e7);
         let (u, v) = cam.ground_px(m);
         let Some((sx, sy)) = cam.project_raised(u, v, up, w, h) else { continue };
         let (dx, dy) = (sx as f32 - l.x, sy as f32 - l.y);
@@ -1082,10 +1084,16 @@ pub struct ExtrudedShape {
     pub roof_indices: Vec<u32>,
     /// The outer rings the walls stand on (the camera's coordinates).
     pub rings: Vec<Vec<Coord>>,
-    /// Its height (metres).
+    /// Its height: in metres, and in the camera's units at its place (Web Mercator stretches the
+    /// ground toward the poles).
     pub metres: f64,
+    pub height: f64,
     pub fill: Rgba,
     pub stroke: Rgba,
+    /// The layer's extrusion settings: walls facing away culled, walls lit, shadows cast.
+    pub face_culling: bool,
+    pub lighting: bool,
+    pub shadows: bool,
 }
 
 /// The extruded features of a tilted `view` of `map`, tessellated for [`ExtrudedShape`]s, from
@@ -1126,24 +1134,25 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
                 roof_indices: indices,
                 rings: polys.iter().filter_map(|p| p.first()).filter(|r| r.len() >= 3).cloned().collect(),
                 metres: effects::extrusion_metres(&layer.dataset, &x, row),
+                height: effects::extrusion_metres(&layer.dataset, &x, row) / flat.ground_per_unit(origin).max(1e-9),
                 fill: sym.fill.with_alpha(255),
                 stroke: sym.stroke,
+                face_culling: x.face_culling,
+                lighting: x.lighting,
+                shadows: x.shadows,
             });
         }
     }
     out
 }
 
-/// The light of a tilted view's extrusions (toward it: right, down the screen and up, in ground
-/// px), as [`effects`] lights them.
-pub const EXTRUSION_LIGHT: (f64, f64, f64) = effects::LIGHT;
+pub use effects::{TiltedWall, shadow_shift, tilted_shadow_quads, tilted_walls};
 
 /// The extruded layers of a tilted view, stood up in perspective over its ground, bottom layer
 /// first (a drape of the moving view shows them flat).
 fn extrusions_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     let (flat, key) = (map.flat(), map.projection.code());
-    let m_per_px = map_ground_res(view, &flat);
     let (_, fog) = tilt_sky(map);
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
@@ -1158,7 +1167,7 @@ fn extrusions_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
         layer.thinned_in(&flat, &key, view.camera.res * rustgis_map::lod::THIN_PX);
         let layer: &rustgis_map::Layer = layer;
         let geoms: Vec<Option<&Geometry>> = layer.projected_cache().iter().map(Option::as_ref).collect();
-        effects::extrude_tilted(pm, view, &layer.dataset, &geoms, &rows, &x, m_per_px, fog, |r| layer.symbol(r));
+        effects::extrude_tilted(pm, view, &layer.dataset, &geoms, &rows, &x, |c| flat.ground_per_unit(c), fog, |r| layer.symbol(r));
     }
 }
 
@@ -2944,6 +2953,21 @@ mod tests {
         let shapes = extruded_shapes(&mut m, &view);
         assert_eq!(shapes.len(), 1);
         assert!(shapes[0].roof_indices.len() >= 6 && shapes[0].rings.len() == 1 && shapes[0].metres == 100_000.0);
+        // Heights follow each feature's own scale, not the view centre's: at the equator a metre
+        // is a Web Mercator unit, at 60°N two (#433 review; a view centred near a pole stood
+        // features elsewhere up several times too tall).
+        assert!((shapes[0].height / 100_000.0 - 1.0).abs() < 0.01, "{}", shapes[0].height);
+        if let Some(l) = m.layers.first_mut() {
+            let north =
+                vec![Coord::new(-1.0, 59.0), Coord::new(1.0, 59.0), Coord::new(1.0, 61.0), Coord::new(-1.0, 61.0), Coord::new(-1.0, 59.0)];
+            l.dataset.features.clear();
+            l.dataset.push(Some(Geometry::Polygon(vec![vec![north]])), vec![Value::Text("North".into())]);
+            l.touch_geometry();
+        }
+        let far_south = View { camera: Camera { center: lonlat_to_merc(Coord::new(0.0, -80.0)), ..camera }, ..view };
+        let shapes = extruded_shapes(&mut m, &far_south);
+        assert_eq!(shapes.len(), 1);
+        assert!((shapes[0].height / 200_000.0 - 1.0).abs() < 0.05, "{}", shapes[0].height);
     }
 
     #[test]
