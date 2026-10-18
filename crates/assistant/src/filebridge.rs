@@ -49,6 +49,10 @@ struct Inner {
     /// The command file's [`Stamp`] when last seen.
     seen: Mutex<Option<Stamp>>,
     allow_access: AtomicBool,
+    /// Scripts may run any command ([`FileBridge::set_full_access`]).
+    full_access: AtomicBool,
+    /// The audit log's folder, if scripts are logged ([`FileBridge::set_audit_dir`]).
+    audit: Mutex<Option<PathBuf>>,
     wake: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// The locked [`LOCK`] file, held until the bridge stops (the system releases it if the app
     /// ends any other way).
@@ -139,6 +143,8 @@ impl FileBridge {
             stopped: AtomicBool::new(false),
             changed: AtomicBool::new(false),
             allow_access: AtomicBool::new(false),
+            full_access: AtomicBool::new(false),
+            audit: Mutex::new(None),
             wake: Mutex::new(None),
         });
         let started = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -213,6 +219,17 @@ impl FileBridge {
         self.inner.allow_access.store(allow, SeqCst);
     }
 
+    /// Lets scripts run any command, as the relay's agents may with the user's full access.
+    pub fn set_full_access(&self, on: bool) {
+        self.inner.full_access.store(on, SeqCst);
+    }
+
+    /// Writes each script run to the audit log in `dir` ([`crate::audit`], source `file`), or to
+    /// none.
+    pub fn set_audit_dir(&self, dir: Option<PathBuf>) {
+        *lock(&self.inner.audit) = dir;
+    }
+
     /// Stops watching and removes the marker. Idempotent.
     pub fn stop(&self) {
         shutdown(&self.inner);
@@ -240,14 +257,21 @@ impl FileBridge {
         let started = Instant::now();
         let mut outcome = match script {
             Ok(script) => {
-                let server = Server { users_project: true, ..Server::new(self.inner.allow_access.load(SeqCst)) };
+                let server = Server {
+                    users_project: true,
+                    full_access: self.inner.full_access.load(SeqCst),
+                    ..Server::new(self.inner.allow_access.load(SeqCst))
+                };
                 let call =
-                    json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "run", "arguments": {"script": script}}});
-                let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &call.to_string())))
-                    .ok()
-                    .flatten()
-                    .and_then(|r| serde_json::from_str::<Value>(&r).ok())
-                    .unwrap_or(Value::Null);
+                    json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "run", "arguments": {"script": script}}})
+                        .to_string();
+                let text = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &call))).ok().flatten();
+                // Logged as an agent's call through the relay is.
+                let audit = lock(&self.inner.audit).clone();
+                if let Some(dir) = audit {
+                    crate::audit::record(&dir, "file", &call, text.as_deref(), started.elapsed());
+                }
+                let reply = text.and_then(|r| serde_json::from_str::<Value>(&r).ok()).unwrap_or(Value::Null);
                 result_of(&reply, started.elapsed())
             }
             Err(e) => json!({"success": false, "result": null, "error": e, "notices": [], "duration_s": 0.0}),
@@ -441,6 +465,30 @@ mod tests {
         first.stop();
         let second = FileBridge::start_in(dir.path().to_path_buf()).unwrap();
         second.stop();
+    }
+
+    /// With an audit folder, each script run is logged with source `file`; with full access, a
+    /// script may run the user's own automation.
+    #[test]
+    fn scripts_are_audited_and_follow_full_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = tempfile::tempdir().unwrap();
+        let b = FileBridge::start_in(dir.path().to_path_buf()).unwrap();
+        b.set_audit_dir(Some(log.path().to_path_buf()));
+        let mut s = sample();
+        let reserved = "model.new {\"name\": \"audited\"}";
+        write_command(&b, reserved);
+        let o = run_next(&b, &mut s);
+        assert!(!o.success && o.error.as_deref().is_some_and(|e| e.contains("reserved")), "{o:?}");
+        b.set_full_access(true);
+        write_command(&b, &format!("{reserved}\n"));
+        assert!(run_next(&b, &mut s).success);
+        let files: Vec<_> = std::fs::read_dir(log.path()).unwrap().flatten().collect();
+        let text = std::fs::read_to_string(files[0].path()).unwrap();
+        let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert!(lines.iter().all(|l| l["source"] == "file" && l["tool"] == "run"), "{text}");
+        assert_eq!((lines[0]["success"].clone(), lines[1]["success"].clone()), (json!(false), json!(true)));
     }
 
     /// Dropping the last handle stops the bridge too.
