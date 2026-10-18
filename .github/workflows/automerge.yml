@@ -40,12 +40,18 @@ jobs:
             admin|maintain|write) ;;
             *) echo "::error::$SENDER ($perm) can't use automerge."; exit 1 ;;
           esac
+          owner=$(gh api user --jq .login)
+          # The approval stands in for someone else's review, so it isn't for the labeller's own work.
+          if [ "$SENDER" = "$AUTHOR" ] && [ "$AUTHOR" != "$owner" ]; then
+            echo "::error::$SENDER can't use automerge on their own pull request."; exit 1
+          fi
           # Both pinned to the commit that was labelled: if the head has moved, enabling auto-merge
           # fails before anything is approved.
           gh pr merge "$PR" --auto --squash --match-head-commit "$SHA"
           # The token owner can't approve their own pull requests, and needn't: they bypass the review.
-          if [ "$AUTHOR" != "$(gh api user --jq .login)" ]; then
-            gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/reviews" -f commit_id="$SHA" -f event=APPROVE --silent
+          if [ "$AUTHOR" != "$owner" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/reviews" -f commit_id="$SHA" -f event=APPROVE \
+              --silent || { gh pr merge "$PR" --disable-auto; exit 1; }
           fi
 
   revoke:
