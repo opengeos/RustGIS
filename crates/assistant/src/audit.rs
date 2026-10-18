@@ -33,20 +33,32 @@ pub fn file_for(dir: &Path, secs: i64) -> PathBuf {
 /// `reply` went. `source` says where it came from (`mcp`, `file`). Logging never fails the call:
 /// a log that can't be written is skipped.
 pub fn record(dir: &Path, source: &str, request: &str, reply: Option<&str>, took: Duration) {
-    let lines = entries(source, request, reply, took, now());
+    // One reading of the clock, so a call at midnight lands in one day's file.
+    let secs = now();
+    let lines = entries(source, request, reply, took, secs);
     if lines.is_empty() {
         return;
     }
-    let path = file_for(dir, now());
+    let path = file_for(dir, secs);
     let new_day = !path.exists();
-    if std::fs::create_dir_all(dir).is_err() {
+    // The log says what agents did with the user's files and addresses: this user's alone.
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut folder = std::fs::DirBuilder::new();
+    folder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+    if folder.create(dir).is_err() {
         return;
     }
-    let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else { return };
+    let mut o = std::fs::OpenOptions::new();
+    o.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    let Ok(mut file) = o.open(&path) else { return };
     let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
     let _ = file.write_all(text.as_bytes());
     if new_day {
-        prune(dir, now());
+        prune(dir, secs);
     }
 }
 
@@ -61,6 +73,8 @@ pub fn entries(source: &str, request: &str, reply: Option<&str>, took: Duration,
     let replies: Value = reply.and_then(|r| serde_json::from_str(r).ok()).unwrap_or(Value::Null);
     let replies = replies.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&replies));
     let duration_s = (took.as_secs_f64() * 1000.0).round() / 1000.0;
+    // A batch is timed as a whole: each of its lines carries that time and says so.
+    let batch = msg.is_array();
     messages
         .iter()
         .filter(|m| m.get("method").and_then(Value::as_str) == Some("tools/call") && m.get("id").is_some())
@@ -85,9 +99,12 @@ pub fn entries(source: &str, request: &str, reply: Option<&str>, took: Duration,
                 "error": error,
             });
             if let Some(o) = line.as_object_mut() {
+                if batch {
+                    o.insert("batch".into(), json!(true));
+                }
                 for key in ["command", "script"] {
-                    if let Some(v) = args.get(key).filter(|v| v.is_string()) {
-                        o.insert(key.into(), v.clone());
+                    if let Some(v) = args.get(key).and_then(Value::as_str) {
+                        o.insert(key.into(), json!(crate::tools::clip(v, MAX_ARGS)));
                     }
                 }
                 let text = args.to_string();
@@ -105,8 +122,22 @@ pub fn entries(source: &str, request: &str, reply: Option<&str>, took: Duration,
         .collect()
 }
 
+/// A script (`run`'s, one `command-id {json}` per line) with each line's parameters redacted as
+/// a call's are. A script that doesn't parse is kept only as far as addresses can be redacted.
+fn redact_script(script: &str) -> String {
+    match rustgis_engine::cmd::workflows::script_commands(script) {
+        Ok(lines) => lines
+            .into_iter()
+            .map(|(_, id, params)| if params.is_null() { id } else { format!("{id} {}", redact(params, 0)) })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(_) => script.lines().map(rustgis_engine::sources::redact).collect::<Vec<_>>().join("\n"),
+    }
+}
+
 /// `v` without what would give someone else the user's access: values under keys that name a
-/// secret, and the passwords, keys and tokens in addresses ([`rustgis_engine::sources::redact`]).
+/// secret, the passwords, keys and tokens in addresses ([`rustgis_engine::sources::redact`]),
+/// and the same inside a script's lines.
 fn redact(v: Value, depth: usize) -> Value {
     let secret = |k: &str| {
         let k = k.to_ascii_lowercase();
@@ -116,7 +147,13 @@ fn redact(v: Value, depth: usize) -> Value {
         Value::String(s) => Value::String(rustgis_engine::sources::redact(&s)),
         Value::Array(a) if depth < 16 => Value::Array(a.into_iter().map(|x| redact(x, depth + 1)).collect()),
         Value::Object(o) if depth < 16 => Value::Object(
-            o.into_iter().map(|(k, x)| if secret(&k) { (k, json!("[redacted]")) } else { (k, redact(x, depth + 1)) }).collect(),
+            o.into_iter()
+                .map(|(k, x)| match (secret(&k), k.as_str(), x) {
+                    (true, _, _) => (k, json!("[redacted]")),
+                    (false, "script", Value::String(s)) => (k, json!(redact_script(&s))),
+                    (false, _, x) => (k, redact(x, depth + 1)),
+                })
+                .collect(),
         ),
         Value::Array(_) | Value::Object(_) => json!("[too deep]"),
         other => other,
@@ -175,6 +212,14 @@ mod tests {
         assert_eq!((lines[0]["success"].clone(), lines[0]["error"].clone()), (json!(false), json!("no reply")));
         // Not JSON: nothing to log.
         assert!(entries("mcp", "not json", None, Duration::ZERO, 0).is_empty());
+        // A script's lines are redacted like a call's parameters, and a batch says so.
+        assert_eq!(a["batch"], true);
+        let script = json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "run", "arguments": {
+            "script": "layer.addData {\"path\": \"postgresql://ann:hunter2@db.example.com/gis\"}\nsql.connect {\"password\": \"s3cret\"}"}}});
+        let lines = entries("mcp", &script.to_string(), None, Duration::ZERO, 0);
+        let text = lines[0].to_string();
+        assert!(!text.contains("hunter2") && !text.contains("s3cret") && text.contains("db.example.com"), "{text}");
+        assert!(lines[0].get("batch").is_none());
     }
 
     /// Lines go to the day's file; old days are removed, other files are left.
@@ -195,6 +240,12 @@ mod tests {
         assert_eq!(today.lines().count(), 2, "{today}");
         assert!(today.lines().all(|l| serde_json::from_str::<Value>(l).is_ok_and(|v| v["tool"] == "list_layers")));
         assert!(!old.exists(), "a day past the limit is removed");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(file_for(dir.path(), now())).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "the log is this user's alone: {mode:o}");
+        }
         assert!(recent.exists() && dir.path().join("notes.txt").exists());
     }
 }

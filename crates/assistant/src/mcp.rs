@@ -30,12 +30,20 @@ const MAX_VIEW: f64 = 2048.0;
 /// What the model is told about the server when it connects.
 const INSTRUCTIONS: &str = "RustGIS is a desktop GIS. This server holds one RustGIS project in memory and acts on it.\n\
 - list_layers shows the map. view_map shows it as an image: look after changing it.\n\
-- Every action is a command: search_commands finds one, run_command runs it (navigation, layers, symbology, labels, selection, editing, layouts, export…).\n\
+- Every action is a command: search_commands finds one, run_command runs it (navigation, layers, symbology, labels, selection, editing, layouts, export…). run runs several commands at once, as one undo step.\n\
 - Geoprocessing: search_tools, then describe_tool for its parameters, then run_tool; its output is a new layer.\n\
 - read_features reads attribute rows, with a where clause.\n\
 - search_docs and read_doc look things up in the RustGIS documentation.\n\
 Open data with the layer.addData command ({\"path\": …}) and save with project.saveAs ({\"path\": \"*.rgis\"}); \
 file and network access works only when the server was started with --yes.";
+
+/// Added to [`INSTRUCTIONS`] on the desktop app's relay, where the session is the user's own.
+const LIVE: &str = "\nThis is the project the user has open in RustGIS, and they watch the map change as you work.\n\
+- Call list_layers before acting on a project you haven't seen; name layers in your commands rather than relying on the one the user has selected.\n\
+- Call view_map after any visual change and check it before you say it worked.\n\
+- Each command is a step in the user's own undo history; don't undo what you didn't do.\n\
+- Replacing the project (project.new, project.open…) is the user's to do.\n\
+- A long geoprocessing run keeps the app busy: say what you are about to run first.";
 
 /// The server: the session's access policy. The session itself is the caller's.
 #[derive(Debug, Clone)]
@@ -128,7 +136,7 @@ impl Server {
 
     fn call(&self, s: &mut Session, method: &str, params: &Value) -> Result<Value, RpcError> {
         match method {
-            "initialize" => Ok(initialize(params)),
+            "initialize" => Ok(initialize(params, &self.instructions())),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": tool_list()})),
             "tools/call" => {
@@ -185,8 +193,23 @@ impl Server {
         }
     }
 
+    /// What the model is told about the server when it connects.
+    pub fn instructions(&self) -> String {
+        if self.users_project { format!("{INSTRUCTIONS}{LIVE}") } else { INSTRUCTIONS.to_string() }
+    }
+
     /// Why this server won't run a call, if it won't.
     pub fn refusal(&self, s: &Session, call: &ToolCall) -> Option<String> {
+        // A script is refused when any of its lines would be, before any of it runs. A script
+        // that doesn't parse runs to say so.
+        if call.name == "run" {
+            let script = call.args.get("script").and_then(Value::as_str).unwrap_or("");
+            let lines = rustgis_engine::cmd::workflows::script_commands(script).ok()?;
+            return lines.into_iter().find_map(|(n, id, params)| {
+                let line = ToolCall { id: String::new(), name: "run_command".into(), args: json!({"command": id, "params": params}) };
+                self.refusal(s, &line).map(|why| format!("line {n}: {why}"))
+            });
+        }
         let (id, params) = tools::target(call)?;
         let project = PROJECT_COMMANDS.contains(&id.as_str());
         if project && self.users_project {
@@ -215,7 +238,7 @@ impl Server {
     }
 }
 
-fn initialize(params: &Value) -> Value {
+fn initialize(params: &Value, instructions: &str) -> Value {
     // Speak the client's version when we know it, else our newest.
     let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or("");
     let version = VERSIONS.iter().find(|v| **v == asked).copied().unwrap_or(VERSIONS[0]);
@@ -223,16 +246,16 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false}, "prompts": {"listChanged": false}},
         "serverInfo": {"name": "rustgis", "title": "RustGIS", "version": env!("CARGO_PKG_VERSION")},
-        "instructions": INSTRUCTIONS,
+        "instructions": instructions,
     })
 }
 
 /// The tools this server adds to the assistant's.
-const TOOL_NAMES: &[&str] = &["view_map"];
+const TOOL_NAMES: &[&str] = &["view_map", "run"];
 
 /// Tools that only look: list, search, read, view.
 fn read_only(name: &str) -> bool {
-    !matches!(name, "run_command" | "run_tool")
+    !matches!(name, "run_command" | "run_tool" | "run")
 }
 
 fn tool_list() -> Vec<Value> {
@@ -250,6 +273,16 @@ fn tool_list() -> Vec<Value> {
             json!({"name": d.name, "description": description, "inputSchema": d.schema, "annotations": annotations(d.name)})
         })
         .collect();
+    out.push(json!({
+        "name": "run",
+        "description": "Run several RustGIS commands in one call, as one undo step: a script with one `command-id {json}` per line (# starts a comment), e.g. `map.basemap {\"name\": \"ocean\"}`. A failing line stops the script, nothing it did to the project is kept (a file an earlier line wrote stays written), and the error names the line. Returns {success, result (the last command's), lines, layersAdded, notices, error, duration_s}. Each line follows the same rules as run_command.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"script": {"type": "string", "description": "One command per line: id {json}"}},
+            "required": ["script"]
+        },
+        "annotations": annotations("run"),
+    }));
     out.push(json!({
         "name": "view_map",
         "description": "The map as it looks now, as a PNG image: look after changing it. The current view, at a size of your choosing (default 1024 x 640).",

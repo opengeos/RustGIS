@@ -180,9 +180,13 @@ switches its countries at once; others keep the layer they have.
 The flat map is drawn in Web Mercator by default. **View › Projection** switches it to another
 projection, and clicking the coordinate system in the status bar opens the **Coordinate
 System** dialog, which also takes a projected EPSG code (such as `3035`, `32633` for UTM zone
-33N or `2056` for Switzerland). A code whose projection method or datum grid RustGIS can't use
-(Polyconic such as `5880`, Cassini, oblique Mercator, or a NAD27 code that needs a grid) is refused
-with the reason, rather than drawn in another projection:
+33N or `2056` for Switzerland) or an ESRI code, the one `.prj` files and ArcGIS name (such as
+`ESRI:102033` for South America Albers Equal Area Conic, or `ESRI:54030` for World Robinson). A
+code whose projection method or datum grid RustGIS can't use (Polyconic such as `5880`, Cassini,
+oblique Mercator, or a NAD27 code that needs a grid) is refused with the reason, rather than drawn
+in another projection. Of Esri's projected systems, RustGIS knows the 1,983 it draws within a
+metre of PROJ; the rest, such as World Miller (`ESRI:54003`), are refused as unknown codes. The
+presets:
 
 | Preset | Kind |
 | --- | --- |
@@ -248,4 +252,8 @@ vector layers are tessellated once and re-projected per frame, so panning and zo
 smooth on large datasets. It is off by default, and the setting is remembered across sessions
 (`ui.map.gpu` is the command; `RUSTGIS_GPU=1` forces it on for development). The globe,
 view effects and the colour-vision simulator always render on the CPU, and exports are
-unaffected — the choice only changes the on-screen flat map.
+unaffected — the choice only changes the on-screen flat map. A turned or tilted map is drawn on
+the GPU too, in perspective with its fog and sky, when everything it shows is drawn there: no
+tiles, rasters, see-through, masked, swiped or blended layers, aggregations, graphics, stacked
+line strokes, extrusions, labels with icons, view effects or colour-vision simulation;
+otherwise it stays on the CPU.

@@ -76,8 +76,11 @@ write files and use the network, without `--yes`. RustGIS remembers the choice a
 relay with the app. The **MCP Relay** command (Help menu, or Command Search with Ctrl+K) starts the
 relay too, without that: attached agents then have the access their `--yes` asks for.
 The relay is off until the box is ticked or that command runs. While it runs, the status bar shows `MCP relay · n attached`,
-where n is the number of authenticated clients; hovering shows `Stop MCP relay`, and clicking
-it stops the relay.
+where n is the number of authenticated clients. For ten seconds after an attached agent runs a
+tool, the label also names it (`MCP relay · 1 attached · layer.addSample`, in red when it failed);
+hovering shows `Stop MCP relay` and the last call with its parameters, and clicking it stops the
+relay. Agents attached through the relay are told, when they connect, that this is the project you
+have open and that you watch the map change as they work.
 
 ```sh
 rustgis-cli mcp --attach                 # the open app on 127.0.0.1:8767
@@ -107,8 +110,9 @@ file per day (`2026-10-18.jsonl`) in the `mcp-audit` folder of the app-data fold
 (`~/.local/share/rustgis/mcp-audit` on Linux, `~/Library/Application Support/RustGIS/mcp-audit` on
 macOS, `%LOCALAPPDATA%\RustGIS\mcp-audit` on Windows). Each line holds `ts`, `source` (`mcp`),
 `tool`, `command` or `script` when there is one, `args`, `success`, `duration_s` and `error`.
-Passwords, keys and tokens in the arguments are replaced before they are written. Days older than
-30 are removed.
+Passwords, keys and tokens in the arguments, a `run` script's lines included, are replaced before
+they are written. The folder and files are readable by you only. A batch's calls share the batch's
+`duration_s` and are marked `"batch": true`. Days older than 30 are removed.
 
 An agent the app starts itself gets a run-scoped token instead of the relay's own:
 `rustgis-cli mcp --attach PORT --token-file FILE`. Each such grant carries its own file and network
@@ -179,6 +183,7 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - Token required: `relay_drops_connections_without_the_token`
 - Parse error after attach: `relay_returns_parse_error_after_attach_and_stays_usable`
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
+- The agent's last call, for the status bar: `relay_records_the_agents_last_call`
 - Audit log: `relay_writes_each_call_to_the_audit_log`
 - The open project stays the user's: `relay_keeps_project_commands_for_the_user`
 - Timed-out command never runs: `relay_cancels_a_timed_out_command_so_it_never_runs`
@@ -203,6 +208,7 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 | `view_map` | The map as a PNG image, at the current view |
 | `search_commands` | Finds RustGIS commands by words: their ids, ribbon locations and parameters |
 | `run_command` | Runs a command by id with JSON parameters; each run is one undo step. The result names the layers it added (`layersAdded`) and what the command said beside it (`notices`), including any parameters it ignored (`layer.moveDown ignores 'steps' (it reads layer)`) |
+| `run` | Runs several commands in one call, as one undo step: a script in the `script.run` format (one `command-id {json}` per line, `#` comments). A failing line stops it, nothing it did to the project is kept, and the error names the line; files an earlier line wrote (an export) stay written. Answers `{success, result, lines, layersAdded, notices, error, duration_s}`, where `result` is the last command's. Each line follows `run_command`'s rules, checked before any line runs |
 | `search_tools` | Finds geoprocessing tools by words |
 | `describe_tool` | A geoprocessing tool's parameters |
 | `run_tool` | Runs a geoprocessing tool; its output is added to the map as a new layer (with `layersAdded` and `notices` as for `run_command`) |

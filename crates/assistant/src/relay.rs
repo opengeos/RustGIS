@@ -244,6 +244,21 @@ struct Owner {
     port: u16,
     /// The folder of the audit log the calls are written to ([`Relay::set_audit_dir`]).
     audit: Mutex<Option<PathBuf>>,
+    /// The last tool call an attached agent ran ([`Relay::last_action`]).
+    last: Mutex<Option<Action>>,
+}
+
+/// A tool call an attached agent ran, for the app to show while the user watches.
+#[derive(Clone, Debug)]
+pub struct Action {
+    /// Short: the command id (`layer.addSample`), `gp.run <tool>` or the tool's name.
+    pub label: String,
+    /// The call with its parameters, cut to a line ([`crate::tools::summary`]).
+    pub detail: String,
+    /// Whether it succeeded.
+    pub ok: bool,
+    /// When it ran.
+    pub at: Instant,
 }
 
 impl Drop for Owner {
@@ -458,7 +473,7 @@ impl Relay {
             grant_ids: AtomicU64::new(0),
             run_id: random_token()?.chars().take(8).collect(),
         });
-        let owner = Arc::new(Owner { shared, port, audit: Mutex::new(None) });
+        let owner = Arc::new(Owner { shared, port, audit: Mutex::new(None), last: Mutex::new(None) });
         let accepting = Arc::clone(&owner.shared);
         std::thread::Builder::new()
             .name("rustgis-mcp-relay".into())
@@ -487,6 +502,11 @@ impl Relay {
     /// none. The desktop app keeps it in [`crate::audit::dir`].
     pub fn set_audit_dir(&self, dir: Option<PathBuf>) {
         *lock(&self.owner.audit) = dir;
+    }
+
+    /// The last tool call an attached agent ran, if any has run since the relay started.
+    pub fn last_action(&self) -> Option<Action> {
+        lock(&self.owner.last).clone()
     }
 
     /// Stops the listener: it closes, every client is disconnected, queued messages are dropped
@@ -627,14 +647,45 @@ impl Relay {
             let started = Instant::now();
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &req.line)))
                 .unwrap_or_else(|_| Some(internal_error(&req.line)));
-            if let Some(dir) = lock(&self.owner.audit).as_deref() {
-                crate::audit::record(dir, "mcp", &req.line, out.as_deref(), started.elapsed());
+            // Out of the lock first, so changing the folder never waits on the disk.
+            let audit = lock(&self.owner.audit).clone();
+            if let Some(dir) = audit {
+                crate::audit::record(&dir, "mcp", &req.line, out.as_deref(), started.elapsed());
+            }
+            if let Some(a) = action(&req.line, out.as_deref()) {
+                *lock(&self.owner.last) = Some(a);
             }
             let _ = req.reply.send(out); // the connection may have hung up
             ran += 1;
         }
         ran
     }
+}
+
+/// The last tool call in a message (or batch), with whether its reply says it worked.
+fn action(line: &str, reply: Option<&str>) -> Option<Action> {
+    let msg: Value = serde_json::from_str(line).ok()?;
+    let messages = msg.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&msg));
+    let call = messages.iter().rev().find(|m| m.get("method").and_then(Value::as_str) == Some("tools/call") && m.get("id").is_some())?;
+    let params = call.get("params")?;
+    let name = params.get("name").and_then(Value::as_str)?;
+    let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+    let text = |k: &str| args.get(k).and_then(Value::as_str).map(|v| crate::tools::clip(v.trim(), 80));
+    let label = match name {
+        "run_command" => text("command").unwrap_or_else(|| name.to_string()),
+        "run_tool" => format!("gp.run {}", text("tool").unwrap_or_default()),
+        _ => crate::tools::clip(name, 80),
+    };
+    let detail = crate::tools::summary(&crate::provider::ToolCall { id: String::new(), name: name.to_string(), args });
+    // The reply to that call: a protocol error or a tool result marked as an error failed.
+    let id = call.get("id");
+    let replies: Value = reply.and_then(|r| serde_json::from_str(r).ok()).unwrap_or(Value::Null);
+    let replies = replies.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&replies));
+    let ok = replies
+        .iter()
+        .find(|r| r.get("id") == id)
+        .is_some_and(|r| r.get("error").is_none() && r.pointer("/result/isError") != Some(&Value::Bool(true)));
+    Some(Action { label, detail, ok, at: Instant::now() })
 }
 
 /// Whether a message (or a message in a batch) is `prompts/list` or `prompts/get`, the only ones
@@ -1374,6 +1425,42 @@ mod tests {
             (lines[0]["command"].clone(), lines[0]["success"].clone(), lines[0]["source"].clone()),
             (json!("layer.addSample"), json!(true), json!("mcp"))
         );
+        relay.stop();
+    }
+
+    /// The relay remembers the last tool call an agent ran, and whether it worked, for the app
+    /// to show; an agent attached to it is told the user is watching.
+    #[test]
+    fn relay_records_the_agents_last_call() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        assert!(relay.last_action().is_none());
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
+        writeln!(client, "{init}").unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        let r = reply(&client);
+        assert!(r["result"]["instructions"].as_str().is_some_and(|i| i.contains("watch the map")), "{r}");
+        assert!(relay.last_action().is_none(), "initialize is not a tool call");
+        writeln!(client, "{}", add_sample_call(2)).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        reply(&client);
+        let a = relay.last_action().unwrap();
+        assert_eq!(a.label, "layer.addSample");
+        assert!(a.ok && a.detail.contains("countries"), "{a:?}");
+        let bad = json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+            "name": "run_command", "arguments": {"command": "map.basemap", "params": {"name": "no-such-basemap"}}
+        }});
+        writeln!(client, "{bad}").unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        reply(&client);
+        let a = relay.last_action().unwrap();
+        assert_eq!(a.label, "map.basemap");
+        assert!(!a.ok, "a failed call is shown as failed: {a:?}");
         relay.stop();
     }
 

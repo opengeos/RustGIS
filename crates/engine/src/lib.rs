@@ -608,14 +608,10 @@ impl Session {
             return Err(format!("{}: {why}", spec.label));
         }
         let (run, mutates, label) = (spec.run, spec.mutates, spec.label);
-        if mutates && edits_features(id) {
-            let target = named.or(active).and_then(|l| self.map().layer(l));
-            if let Some(l) = target.filter(|l| l.is_streamed()) {
-                // Said, as a failure in `guarded` is: this returns before it (#468).
-                let e = streamed_refusal(label, &l.name);
-                self.notify(e.clone(), true);
-                return Err(e);
-            }
+        if let Some(e) = self.streamed_edit(id, mutates, label, named.or(active)) {
+            // Said, as a failure in `guarded` is: this returns before it (#468).
+            self.notify(e.clone(), true);
+            return Err(e);
         }
         let res = self.guarded(label, mutates, |s| run(s, params));
         // What was added, for the Data Sources pane's Recent list.
@@ -625,6 +621,16 @@ impl Session {
             self.sources.note(src);
         }
         res
+    }
+
+    /// Why a command can't run on `layer`: it edits features, and the layer is read in place from
+    /// its file, whose next read would lose the edit.
+    pub(crate) fn streamed_edit(&self, id: &str, mutates: bool, label: &str, layer: Option<u32>) -> Option<String> {
+        if !(mutates && edits_features(id)) {
+            return None;
+        }
+        let l = layer.and_then(|l| self.map().layer(l)).filter(|l| l.is_streamed())?;
+        Some(streamed_refusal(label, &l.name))
     }
 
     /// Runs `f` as the command `label`: when it `mutates`, the project is snapshotted for undo

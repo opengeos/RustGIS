@@ -163,8 +163,43 @@ pub fn big_menu(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, desc
     });
 }
 
+/// A large button that opens a menu holding a text box: a click inside it (into the box) keeps it
+/// open, so its buttons close it themselves (`ui.close()`).
+pub fn big_form_menu(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, desc: &str, menu: impl FnOnce(&mut Ui, &mut RustGisApp)) {
+    let resp = big(ui, app, icon, label, desc, "ui.menu", Value::Null, false, true);
+    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_min_width(200.0);
+        menu(ui, app);
+    });
+}
+
 /// A small button that opens a menu.
 pub fn small_menu(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, desc: &str, menu: impl FnOnce(&mut Ui, &mut RustGisApp)) {
+    small_menu_with(ui, app, icon, label, desc, egui::PopupCloseBehavior::CloseOnClick, menu);
+}
+
+/// A small button that opens a menu holding a text box, kept open by clicks inside it (see
+/// [`big_form_menu`]).
+pub fn small_form_menu(
+    ui: &mut Ui,
+    app: &mut RustGisApp,
+    icon: &str,
+    label: &str,
+    desc: &str,
+    menu: impl FnOnce(&mut Ui, &mut RustGisApp),
+) {
+    small_menu_with(ui, app, icon, label, desc, egui::PopupCloseBehavior::CloseOnClickOutside, menu);
+}
+
+fn small_menu_with(
+    ui: &mut Ui,
+    app: &mut RustGisApp,
+    icon: &str,
+    label: &str,
+    desc: &str,
+    close: egui::PopupCloseBehavior,
+    menu: impl FnOnce(&mut Ui, &mut RustGisApp),
+) {
     let (label, desc) = (tl!(label), tl!(desc));
     let t = Tokens::get(ui.ctx());
     let tw = text_w(ui, label, regular(11.5)) + 20.0;
@@ -174,7 +209,7 @@ pub fn small_menu(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, de
     ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, label, regular(11.5), t.text);
     caret(ui.painter(), pos2(r.max.x - 9.0, r.center().y), t.text);
     let resp = tooltip(app, resp, label, desc, "ui.menu");
-    egui::Popup::menu(&resp).show(|ui| {
+    egui::Popup::menu(&resp).close_behavior(close).show(|ui| {
         ui.set_min_width(200.0);
         menu(ui, app);
     });
