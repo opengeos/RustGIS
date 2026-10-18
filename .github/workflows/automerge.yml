@@ -31,12 +31,22 @@ jobs:
           PR: ${{ github.event.pull_request.html_url }}
           NUMBER: ${{ github.event.pull_request.number }}
           SHA: ${{ github.event.pull_request.head.sha }}
+          SENDER: ${{ github.event.sender.login }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
-          # Both pinned to the commit that was labelled: a push in between isn't approved or merged.
-          # Approving fails on the token owner's own pull requests, which they can merge anyway.
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/reviews" -f commit_id="$SHA" -f event=APPROVE \
-            --silent || echo "Not approved."
+          # Triage can label too: only someone who could merge it themselves may use the label.
+          perm=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$SENDER/permission" --jq .permission)
+          case "$perm" in
+            admin|maintain|write) ;;
+            *) echo "::error::$SENDER ($perm) can't use automerge."; exit 1 ;;
+          esac
+          # Both pinned to the commit that was labelled: if the head has moved, enabling auto-merge
+          # fails before anything is approved.
           gh pr merge "$PR" --auto --squash --match-head-commit "$SHA"
+          # The token owner can't approve their own pull requests, and needn't: they bypass the review.
+          if [ "$AUTHOR" != "$(gh api user --jq .login)" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/reviews" -f commit_id="$SHA" -f event=APPROVE --silent
+          fi
 
   revoke:
     name: Revoke auto-merge
