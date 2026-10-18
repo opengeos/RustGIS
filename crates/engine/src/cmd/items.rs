@@ -470,7 +470,8 @@ fn safe(name: &str) -> String {
 fn package_map(s: &Session, mobile: bool, tol: f64) -> Result<Vec<u8>, String> {
     let mut m = embedded_map(s.map(), &mut MAX_EMBED.clone());
     if mobile {
-        m.layers.retain(|l| l.visible);
+        let hidden = m.hidden_by_group();
+        m.layers.retain(|l| l.visible && !hidden.contains(&l.id));
         for l in &mut m.layers {
             if l.is_raster() || tol <= 0.0 {
                 continue;

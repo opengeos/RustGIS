@@ -6956,3 +6956,132 @@ fn raster_stretch_custom_bounds() {
     // Projects saved before the custom stretch still load.
     assert_eq!(serde_json::from_str::<Stretch>("\"MinMax\"").unwrap(), Stretch::MinMax);
 }
+
+#[test]
+fn layer_groups_hold_related_layers_together() {
+    use crate::render::View;
+    let mut s = world();
+    let names = |s: &Session| s.map().layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&s), ["Cities", "Rivers", "Lakes", "Countries"]);
+    let depth = s.undo_depth();
+    let r = s.run("group.add", &json!({"name": "Places", "layers": ["Lakes", "Cities"]})).unwrap();
+    let g = r["group"].as_u64().unwrap() as u32;
+    assert_eq!(s.undo_depth(), depth + 1);
+    // Gathered at the topmost, in their order.
+    assert_eq!(names(&s), ["Cities", "Lakes", "Rivers", "Countries"]);
+    let id = |s: &Session, n: &str| s.map().layer_by_name(n).unwrap().id;
+    assert_eq!(s.map().group(g).unwrap().children, [id(&s, "Cities"), id(&s, "Lakes")]);
+    assert!(s.map().layer(g).is_none(), "a group's id is no layer's");
+    // Hiding the group hides its layers on the map (their own boxes stay ticked).
+    s.run("map.goToXY", &json!({"lon": 10.0, "lat": 48.0, "scale": 20_000_000})).unwrap();
+    let png = |s: &mut Session| {
+        let v = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
+        crate::render::render(s.map_mut(), &v).unwrap().pixmap.data().to_vec()
+    };
+    let shown = png(&mut s);
+    for n in ["Cities", "Lakes"] {
+        s.run("layer.visibility", &json!({"layer": n, "visible": false})).unwrap();
+    }
+    let without = png(&mut s);
+    assert_ne!(shown, without);
+    for n in ["Cities", "Lakes"] {
+        s.run("layer.visibility", &json!({"layer": n, "visible": true})).unwrap();
+    }
+    s.run("group.set", &json!({"group": "places", "visible": false})).unwrap();
+    assert!(s.map().layer_by_name("Cities").unwrap().visible);
+    assert!(!s.map().shows(s.map().layer_by_name("Cities").unwrap()));
+    assert_eq!(png(&mut s), without);
+    // Toggled back with no other property.
+    assert_eq!(s.run("group.set", &json!({"group": g})).unwrap()["visible"], true);
+    assert_eq!(png(&mut s), shown);
+    // Its scale range applies on top of the layers' own: out beyond 1:1,000,000 at 1:20,000,000.
+    s.run("group.scaleRange", &json!({"group": g, "min": 1_000_000})).unwrap();
+    assert_eq!(png(&mut s), without);
+    s.run("group.scaleRange", &json!({"group": g})).unwrap();
+    // Fully see-through draws nothing; half see-through draws something in between.
+    s.run("group.set", &json!({"group": g, "transparency": 100})).unwrap();
+    assert_eq!(png(&mut s), without);
+    s.run("group.set", &json!({"group": g, "transparency": 50})).unwrap();
+    let half = png(&mut s);
+    assert!(half != shown && half != without);
+    s.run("group.set", &json!({"group": g, "transparency": 0, "name": "Water and towns", "expanded": false})).unwrap();
+    // Identify and the map's selection skip a hidden group's layers.
+    s.run("group.set", &json!({"group": g, "visible": false})).unwrap();
+    let held = s.map().held_by_group(s.map().scale());
+    assert!(held.contains(&id(&s, "Cities")) && !held.contains(&id(&s, "Rivers")));
+    s.run("group.set", &json!({"group": g, "visible": true})).unwrap();
+    // Listed for scripts and the MCP server.
+    let info = s.run("info.project", &Value::Null).unwrap();
+    assert_eq!(info["groups"][0]["name"], "Water and towns");
+    assert_eq!(info["groups"][0]["layers"].as_array().unwrap().len(), 2);
+    // A layer moves in next to the others, and out again.
+    s.run("layer.group", &json!({"layer": "Countries", "group": g})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Lakes", "Countries", "Rivers"]);
+    s.run("layer.group", &json!({"layer": "Countries", "group": null})).unwrap();
+    assert_eq!(s.map().group(g).unwrap().children.len(), 2);
+    assert!(s.run("layer.group", &json!({"layer": "Countries", "group": "nope"})).is_err());
+    assert!(s.run("layer.group", &json!({"layer": "Countries"})).is_err());
+    // The group moves as a whole.
+    s.run("group.move", &json!({"group": g, "to": 1})).unwrap();
+    assert_eq!(names(&s), ["Countries", "Cities", "Lakes", "Rivers"]);
+    s.run("group.move", &json!({"group": g, "to": 1e9})).unwrap();
+    assert_eq!(names(&s), ["Countries", "Rivers", "Cities", "Lakes"]);
+    s.run("group.move", &json!({"group": g, "to": 0})).unwrap();
+    assert!(s.run("group.move", &json!({"group": g})).is_err());
+    // Saved and opened again, with no dataset of its own.
+    let dir = std::env::temp_dir().join(format!("rustgis-groups-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("groups.rgis");
+    s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
+    let tg = t.map().group(g).unwrap();
+    assert_eq!((tg.name.as_str(), tg.expanded, tg.children.len()), ("Water and towns", false, 2));
+    std::fs::remove_dir_all(&dir).ok();
+    // Removing a layer takes it out of its group.
+    s.run("layer.remove", &json!({"layer": "Lakes"})).unwrap();
+    assert_eq!(s.map().group(g).unwrap().children, [id(&s, "Cities")]);
+    // Ungrouping keeps the layers; removing the group removes them.
+    s.run("group.ungroup", &json!({"group": g})).unwrap();
+    assert!(s.map().groups.is_empty() && s.map().layer_by_name("Cities").is_some());
+    let g = s.run("group.add", &json!({"layers": ["Cities", "Rivers"]})).unwrap()["group"].as_u64().unwrap();
+    assert_eq!(s.map().groups[0].name, "New Group");
+    s.run("group.remove", &json!({"group": g})).unwrap();
+    assert_eq!(names(&s), ["Countries"]);
+    // Undo brings everything back.
+    while s.undo_depth() > depth {
+        s.run("edit.undo", &Value::Null).unwrap();
+    }
+    assert!(s.map().groups.is_empty());
+    assert_eq!(names(&s), ["Cities", "Rivers", "Lakes", "Countries"]);
+}
+
+#[test]
+fn hand_edited_layer_groups_open_bounded_and_unambiguous() {
+    let mut s = world();
+    s.run("group.add", &json!({"name": "A", "layers": ["Cities"]})).unwrap();
+    let mut v: Value = serde_json::from_str(&serde_json::to_string(&s.project).unwrap()).unwrap();
+    let map = &mut v["maps"][0];
+    let cities = s.map().layer_by_name("Cities").unwrap().id;
+    let lakes = s.map().layer_by_name("Lakes").unwrap().id;
+    // A group with no dataset parses; a child twice, a missing child, a layer's id, a zero id,
+    // junk numbers and a group without children.
+    map["groups"] = json!([
+        {"id": 900, "name": "Water", "children": [lakes, cities, 12345], "transparency": 1e9, "min_scale": -5.0},
+        {"id": 901, "name": "Again", "children": [lakes]},
+        {"id": cities, "name": "Clash", "children": []},
+        {"id": 0, "name": "Zero", "children": []},
+        {"id": 902, "name": "Empty"}
+    ]);
+    let p = Project::from_json(&v.to_string()).unwrap();
+    let m = p.maps.first().unwrap();
+    let names: Vec<&str> = m.groups.iter().map(|g| g.name.as_str()).collect();
+    assert_eq!(names, ["Water", "Again", "Empty"]);
+    let water = &m.groups[0];
+    assert_eq!(water.children, [lakes, cities]);
+    assert_eq!((water.transparency, water.min_scale, water.visible), (100.0, None, true));
+    assert!(m.groups[1].children.is_empty());
+    // Gathered: Lakes moved up under Cities, past Rivers.
+    let order: Vec<&str> = m.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(order, ["Cities", "Lakes", "Rivers", "Countries"]);
+}

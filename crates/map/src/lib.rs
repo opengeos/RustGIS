@@ -577,6 +577,58 @@ pub struct ServiceChild {
     pub source_url: String,
 }
 
+/// Most layer groups a map keeps (files are hostile).
+pub const MAX_GROUPS: usize = 2000;
+
+/// Related layers under one name (#413): a collapsible folder in the Layers pane whose
+/// visibility, transparency and scale range apply on top of each child's own. Children stay
+/// ordinary layers, kept together in the drawing order; a layer belongs to one group at most.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LayerGroup {
+    pub id: u32,
+    pub name: String,
+    #[serde(default = "yes")]
+    pub visible: bool,
+    #[serde(default = "yes")]
+    pub expanded: bool,
+    /// 0 = opaque, 100 = invisible: multiplies each child's own opacity.
+    #[serde(default)]
+    pub transparency: f32,
+    /// The children draw only when zoomed in beyond 1:`min_scale`, if set.
+    #[serde(default)]
+    pub min_scale: Option<f64>,
+    /// The children draw only when zoomed out beyond 1:`max_scale`, if set.
+    #[serde(default)]
+    pub max_scale: Option<f64>,
+    /// The children's layer ids.
+    #[serde(default)]
+    pub children: Vec<u32>,
+}
+
+impl LayerGroup {
+    pub fn new(name: impl Into<String>) -> Self {
+        LayerGroup {
+            id: 0,
+            name: name.into(),
+            visible: true,
+            expanded: true,
+            transparency: 0.0,
+            min_scale: None,
+            max_scale: None,
+            children: Vec::new(),
+        }
+    }
+
+    /// Whether the group's children may draw at a scale denominator.
+    pub fn in_scale_range(&self, scale: f64) -> bool {
+        self.min_scale.is_none_or(|m| scale <= m) && self.max_scale.is_none_or(|m| scale >= m)
+    }
+
+    pub fn opacity(&self) -> f32 {
+        (1.0 - self.transparency / 100.0).clamp(0.0, 1.0)
+    }
+}
+
 /// A map: an ordered list of layers (index 0 draws on top), a basemap and a camera.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Map {
@@ -584,6 +636,9 @@ pub struct Map {
     pub layers: Vec<Layer>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub service_groups: Vec<ServiceGroup>,
+    /// Layer groups (#413).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<LayerGroup>,
     pub basemap: Basemap,
     /// Web tile basemaps and overlays over the basemap and under the layers (index 0 on top).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -687,6 +742,7 @@ impl Map {
             name: name.into(),
             layers: Vec::new(),
             service_groups: Vec::new(),
+            groups: Vec::new(),
             basemap: Basemap::Paper,
             tiles: Vec::new(),
             camera: Camera::world(),
@@ -705,10 +761,11 @@ impl Map {
         }
     }
 
-    /// A nonzero id no layer or service group has: past the highest in use, or (when ids reach
+    /// A nonzero id no layer, service group or layer group has: past the highest in use, or (when ids reach
     /// `u32::MAX`, as a project file may have them) the lowest free one.
     fn next_id(&mut self) -> u32 {
-        let used = || self.layers.iter().map(|l| l.id).chain(self.service_groups.iter().map(|g| g.id));
+        let used =
+            || self.layers.iter().map(|l| l.id).chain(self.service_groups.iter().map(|g| g.id)).chain(self.groups.iter().map(|g| g.id));
         let preferred = self.next_layer_id.max(used().max().unwrap_or(0).saturating_add(1));
         let id = if preferred != 0 && !used().any(|id| id == preferred) {
             preferred
@@ -726,6 +783,109 @@ impl Map {
         let id = group.id;
         self.service_groups.push(group);
         id
+    }
+
+    /// Adds a layer group (its children are taken from any other group); returns its id.
+    pub fn add_group(&mut self, mut group: LayerGroup) -> u32 {
+        group.id = self.next_id();
+        let id = group.id;
+        for g in &mut self.groups {
+            g.children.retain(|c| !group.children.contains(c));
+        }
+        self.groups.push(group);
+        id
+    }
+
+    pub fn group(&self, id: u32) -> Option<&LayerGroup> {
+        self.groups.iter().find(|g| g.id == id)
+    }
+
+    /// The layer group a layer is in, if any.
+    pub fn group_of(&self, layer: u32) -> Option<&LayerGroup> {
+        self.groups.iter().find(|g| g.children.contains(&layer))
+    }
+
+    /// Whether a layer is shown: its own box ticked, and its group's if it has one.
+    pub fn shows(&self, l: &Layer) -> bool {
+        l.visible && self.group_of(l.id).is_none_or(|g| g.visible)
+    }
+
+    /// Whether a layer draws at a scale denominator: shown, and within its own scale range and
+    /// its group's.
+    pub fn draws_at(&self, l: &Layer, scale: f64) -> bool {
+        l.visible && l.in_scale_range(scale) && self.group_of(l.id).is_none_or(|g| g.visible && g.in_scale_range(scale))
+    }
+
+    /// Whether a layer is within its own scale range and its group's.
+    pub fn in_scale_range(&self, l: &Layer, scale: f64) -> bool {
+        l.in_scale_range(scale) && self.group_of(l.id).is_none_or(|g| g.in_scale_range(scale))
+    }
+
+    /// A layer's opacity with its group's applied.
+    pub fn layer_opacity(&self, l: &Layer) -> f32 {
+        l.opacity() * self.group_of(l.id).map_or(1.0, LayerGroup::opacity)
+    }
+
+    /// Ids of the layers whose group keeps them from drawing at a scale denominator (hidden, or
+    /// out of its scale range): for loops that change the layers as they go.
+    pub fn held_by_group(&self, scale: f64) -> std::collections::HashSet<u32> {
+        self.groups.iter().filter(|g| !g.visible || !g.in_scale_range(scale)).flat_map(|g| g.children.iter().copied()).collect()
+    }
+
+    /// Ids of the layers whose group is hidden.
+    pub fn hidden_by_group(&self) -> std::collections::HashSet<u32> {
+        self.groups.iter().filter(|g| !g.visible).flat_map(|g| g.children.iter().copied()).collect()
+    }
+
+    /// Folds each group's visibility, transparency and scale range into its children and drops
+    /// the groups: for exports that know only layers.
+    pub fn bake_groups(&mut self) {
+        for g in std::mem::take(&mut self.groups) {
+            for l in self.layers.iter_mut().filter(|l| g.children.contains(&l.id)) {
+                l.visible &= g.visible;
+                l.transparency = 100.0 * (1.0 - l.opacity() * g.opacity());
+                l.min_scale = match (l.min_scale, g.min_scale) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+                l.max_scale = match (l.max_scale, g.max_scale) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (a, b) => a.or(b),
+                };
+            }
+        }
+    }
+
+    /// Puts a layer in a group (out of any other), next to the group's other children in the
+    /// drawing order; `None` takes it out of its group.
+    pub fn set_group(&mut self, layer: u32, group: Option<u32>) {
+        for g in &mut self.groups {
+            g.children.retain(|c| *c != layer);
+        }
+        let Some(gid) = group else { return };
+        let Some(g) = self.groups.iter_mut().find(|g| g.id == gid) else { return };
+        g.children.push(layer);
+        self.gather_group(gid);
+    }
+
+    /// Moves a group's children together in the drawing order, at its topmost child, keeping
+    /// their order; children with no layer are dropped.
+    pub fn gather_group(&mut self, group: u32) {
+        let ids: std::collections::HashSet<u32> = self.layers.iter().map(|l| l.id).collect();
+        let Some(g) = self.groups.iter_mut().find(|g| g.id == group) else { return };
+        g.children.retain(|c| ids.contains(c));
+        let children = g.children.clone();
+        let Some(top) = self.layers.iter().position(|l| children.contains(&l.id)) else { return };
+        let mut members = Vec::new();
+        let mut rest = Vec::new();
+        for l in std::mem::take(&mut self.layers) {
+            if children.contains(&l.id) { members.push(l) } else { rest.push(l) }
+        }
+        // Layers above the topmost child stay above.
+        let tail = rest.split_off(top.min(rest.len()));
+        rest.extend(members);
+        rest.extend(tail);
+        self.layers = rest;
     }
 
     /// The map's layers as they stand (their ids in order, and the next id), cheap to take before
@@ -796,7 +956,8 @@ impl Map {
     /// whether a read is still running.
     pub fn sync_sources(&mut self, view: &Extent, scale: f64, block: bool) -> bool {
         let mut pending = false;
-        for l in self.layers.iter_mut().filter(|l| l.is_streamed() && l.visible && l.in_scale_range(scale)) {
+        let held = self.held_by_group(scale);
+        for l in self.layers.iter_mut().filter(|l| l.is_streamed() && l.visible && l.in_scale_range(scale) && !held.contains(&l.id)) {
             pending |= l.sync_source(view, block);
         }
         pending
@@ -955,12 +1116,13 @@ impl Map {
         // Top first, as drawn: a higher depth priority is above whatever the order.
         let mut order: Vec<usize> = (0..self.layers.len()).collect();
         order.sort_by_key(|i| std::cmp::Reverse(self.layers.get(*i).map_or(0, |l| l.priority)));
+        let held = self.held_by_group(scale);
         for i in order {
             let Some(l) = self.layers.get_mut(i) else { continue };
             if out.len() >= limit || (first_layer && !out.is_empty()) {
                 break;
             }
-            if !l.visible || !l.in_scale_range(scale) || !keep(l) {
+            if !l.visible || !l.in_scale_range(scale) || held.contains(&l.id) || !keep(l) {
                 continue;
             }
             // Only features drawn: the definition query and the display filters let them through.
@@ -982,8 +1144,9 @@ impl Map {
     pub fn hits_in(&mut self, e: &Extent, scale: f64) -> Vec<(u32, Vec<usize>)> {
         let (flat, key) = (self.flat(), self.projection.code());
         let mut out = Vec::new();
+        let held = self.held_by_group(scale);
         for l in &mut self.layers {
-            if !l.visible || !l.selectable || !l.in_scale_range(scale) {
+            if !l.visible || !l.selectable || !l.in_scale_range(scale) || held.contains(&l.id) {
                 continue;
             }
             // Only features drawn: the definition query and the display filters let them through.

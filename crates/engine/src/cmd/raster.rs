@@ -416,7 +416,7 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
 pub fn identify(s: &Session, lon: f64, lat: f64) -> Option<Value> {
     let scale = s.scale();
     let c = rustgis_geom::Coord::new(lon, lat);
-    s.map().layers.iter().filter(|l| l.visible && l.in_scale_range(scale)).find_map(|l| {
+    s.map().layers.iter().filter(|l| s.map().draws_at(l, scale)).find_map(|l| {
         let r = l.raster.as_ref()?.data.as_ref()?;
         let (col, row) = r.pixel_at(c)?;
         let vals: Vec<Option<f32>> = (0..r.band_count()).map(|b| r.value(b, col, row)).collect();

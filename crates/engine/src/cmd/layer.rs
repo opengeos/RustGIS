@@ -1908,6 +1908,7 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
     let m = s.map_mut();
     let i = m.layer_index(id).ok_or("no such layer")?;
     m.layers.remove(i);
+    m.set_group(id, None);
     let next = m.layers.get(i.min(m.layers.len().saturating_sub(1))).map(|l| l.id);
     s.active_layer = next;
     Ok(Value::Null)

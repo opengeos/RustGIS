@@ -237,11 +237,14 @@ pub fn share_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
     }
 }
 
+/// A map to share, its layer groups folded into their layers (the shared formats have none).
 fn map_of(s: &Session, p: &Value) -> Result<Map, String> {
-    match ps(p, "map") {
-        Some(n) => s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(n)).cloned().ok_or_else(|| format!("no map '{n}'")),
-        None => Ok(s.map().clone()),
-    }
+    let mut m = match ps(p, "map") {
+        Some(n) => s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(n)).cloned().ok_or_else(|| format!("no map '{n}'"))?,
+        None => s.map().clone(),
+    };
+    m.bake_groups();
+    Ok(m)
 }
 
 /// A streamed layer shares its whole source, not the features read for the current view.
