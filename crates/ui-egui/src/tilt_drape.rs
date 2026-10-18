@@ -147,18 +147,19 @@ impl TiltDrape {
             })
             .collect();
         order.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        let shapes: Vec<(&ExtrudedShape, f64, f64, Vec<Vec<(f64, f64)>>)> = order
+        type Rings = Vec<Vec<(f64, f64)>>;
+        let to_ground = |rings: &[Vec<Coord>]| -> Rings { rings.iter().map(|r| r.iter().map(|c| cam.ground_px(*c)).collect()).collect() };
+        let shapes: Vec<(&ExtrudedShape, f64, f64, Rings, Rings)> = order
             .iter()
             .filter_map(|&(_, depth, i)| {
                 let s = d.shapes.get(i)?;
-                let rings = s.rings.iter().map(|r| r.iter().map(|c| cam.ground_px(*c)).collect()).collect();
-                Some((s, depth, (s.height / cam.res.max(1e-9)).clamp(0.0, 1e7), rings))
+                Some((s, depth, (s.height / cam.res.max(1e-9)).clamp(0.0, 1e7), to_ground(&s.rings), to_ground(&s.holes)))
             })
             .collect();
         let mut mesh = Mesh::default();
         // Shadows on the ground first, under every feature.
         let shade = Color32::from_black_alpha(60);
-        for (s, _, up, rings) in shapes.iter().filter(|x| x.0.shadows) {
+        for (s, _, up, rings, _) in shapes.iter().filter(|x| x.0.shadows) {
             for q in render::tilted_shadow_quads(cam, w, h, rings, *up) {
                 fan(&mut mesh, q.into_iter().map(|p| Some(pos(p))), shade);
             }
@@ -172,10 +173,10 @@ impl TiltDrape {
                 fan(&mut mesh, cut.into_iter().map(|(u, v)| cam.project_raised(u, v, 0.0, w, h).map(pos)), shade);
             }
         }
-        for (s, depth, up, rings) in &shapes {
+        for (s, depth, up, rings, holes) in &shapes {
             let t = ((depth - FAR * 0.5) / (FAR * 0.5)).clamp(0.0, 1.0);
             let base = s.fill.lerp(fog, t * t * (3.0 - 2.0 * t));
-            for wall in render::tilted_walls(cam, w, h, rings, *up, s.face_culling, s.lighting) {
+            for wall in render::tilted_walls(cam, w, h, rings, holes, *up, s.face_culling, s.lighting) {
                 let (top, foot) = (c32(base.shade(wall.top)), c32(base.shade(wall.foot)));
                 let [fa, fb, tb, ta] = wall.quad;
                 let k = mesh.vertices.len() as u32;

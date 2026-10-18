@@ -104,8 +104,10 @@ impl Camera {
         }
     }
 
-    /// The ground offsets (see [`Camera::project`]) of a Mercator point.
-    fn ground(&self, p: Coord) -> (f64, f64) {
+    /// A Mercator point's ground offsets from the view's centre (logical px at the centre's
+    /// scale; x right and y down in the view turned to the bearing): the frame
+    /// [`Camera::project`] and [`Camera::project_raised`] work in.
+    pub fn ground_px(&self, p: Coord) -> (f64, f64) {
         let (ux, uy) = ((p.x - self.center.x) / self.res, (self.center.y - p.y) / self.res);
         let (c, s) = self.rotation();
         (ux * c + uy * s, uy * c - ux * s)
@@ -115,13 +117,6 @@ impl Camera {
     fn ground_to_map(&self, u: f64, v: f64) -> Coord {
         let (ux, uy) = self.unrotate(u, v);
         Coord::new(self.center.x + ux * self.res, self.center.y - uy * self.res)
-    }
-
-    /// A Mercator point's ground offsets from the view's centre (logical px at the centre's
-    /// scale; x right and y down in the view turned to the bearing): the frame
-    /// [`Camera::project_raised`] works in.
-    pub fn ground_px(&self, p: Coord) -> (f64, f64) {
-        self.ground(p)
     }
 
     /// Where the eye of a `h` px tall view is, in the frame of [`Camera::ground_px`] and the
@@ -183,7 +178,7 @@ impl Camera {
     /// camera.
     pub fn depth_scale(&self, p: Coord, h: f64) -> Option<f64> {
         let Some(t) = self.tilt(h) else { return Some(1.0) };
-        let (_, v) = self.ground(p);
+        let (_, v) = self.ground_px(p);
         let z = t.d - v * t.s;
         (z > t.d * NEAR).then(|| t.d / z)
     }
@@ -205,7 +200,7 @@ impl Camera {
     /// tilted view a point behind the camera is put just in front of it (far off screen); see
     /// [`Camera::try_to_screen`].
     pub fn to_screen(&self, p: Coord, w: f64, h: f64) -> (f64, f64) {
-        let (u, v) = self.ground(p);
+        let (u, v) = self.ground_px(p);
         if let Some(s) = self.project(u, v, w, h) {
             return s;
         }
@@ -220,7 +215,7 @@ impl Camera {
 
     /// Screen position of a Mercator point, `None` behind the camera of a tilted view.
     pub fn try_to_screen(&self, p: Coord, w: f64, h: f64) -> Option<(f64, f64)> {
-        let (u, v) = self.ground(p);
+        let (u, v) = self.ground_px(p);
         self.project(u, v, w, h)
     }
 

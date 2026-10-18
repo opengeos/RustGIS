@@ -955,7 +955,13 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
     let mut camera = view.camera;
     camera.bearing = rustgis_map::camera::normalize_bearing(camera.bearing);
     camera.pitch = rustgis_map::camera::normalize_pitch(camera.pitch);
-    if !map.projection.is_globe() {
+    // The globe neither turns nor tilts (a bearing or pitch kept on its camera waits for the map
+    // to be flat again).
+    if map.projection.is_globe() {
+        let view = View { camera: Camera { bearing: 0.0, pitch: 0.0, ..camera }, ..*view };
+        return render_frame(map, &view, full_res_rasters, backend, Labels::Own);
+    }
+    {
         let view = View { camera, ..*view };
         if camera.pitch != 0.0 {
             return render_tilted(map, &view, full_res_rasters).map(RenderOutput::Cpu);
@@ -1084,8 +1090,9 @@ pub struct ExtrudedShape {
     /// The roof's triangles: vertices relative to `origin` (map units) and their indices.
     pub roof: Vec<[f32; 2]>,
     pub roof_indices: Vec<u32>,
-    /// The outer rings the walls stand on (the camera's coordinates).
+    /// The outer rings the walls stand on, and the holes' (the camera's coordinates).
     pub rings: Vec<Vec<Coord>>,
+    pub holes: Vec<Vec<Coord>>,
     /// Its height: in metres, and in the camera's units at its place (Web Mercator stretches the
     /// ground toward the poles).
     pub metres: f64,
@@ -1139,6 +1146,7 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
                 roof: verts.iter().map(|v| v.position).collect(),
                 roof_indices: indices,
                 rings: polys.iter().filter_map(|p| p.first()).filter(|r| r.len() >= 3).cloned().collect(),
+                holes: polys.iter().flat_map(|p| p.iter().skip(1)).filter(|r| r.len() >= 3).cloned().collect(),
                 metres: effects::extrusion_metres(&layer.dataset, &x, row),
                 height: effects::extrusion_metres(&layer.dataset, &x, row) / flat.ground_per_unit(origin).max(1e-9),
                 fill: sym.fill.with_alpha(255),
@@ -2997,6 +3005,47 @@ mod tests {
         let shapes = extruded_shapes(&mut m, &far_south);
         assert_eq!(shapes.len(), 1);
         assert!((shapes[0].height / 200_000.0 - 1.0).abs() < 0.05, "{}", shapes[0].height);
+    }
+
+    #[test]
+    fn a_globe_ignores_a_kept_bearing_and_pitch() {
+        let mut m = Map::new("Map");
+        m.projection = rustgis_map::Projection::Globe;
+        let camera = Camera { center: lonlat_to_merc(Coord::new(10.0, 40.0)), res: 20_000.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let plain = render(&mut m, &view).unwrap();
+        let kept = render(&mut m, &View { camera: Camera { bearing: 40.0, pitch: 70.0, ..camera }, ..view }).unwrap();
+        assert_eq!(plain.pixmap.data(), kept.pixmap.data());
+    }
+
+    #[test]
+    fn an_extruded_ring_with_a_hole_is_open_over_it() {
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("yard", GeometryType::Polygon, vec![]);
+        let outer =
+            vec![Coord::new(-2.0, -2.0), Coord::new(2.0, -2.0), Coord::new(2.0, 2.0), Coord::new(-2.0, 2.0), Coord::new(-2.0, -2.0)];
+        let hole = vec![Coord::new(-1.2, -1.2), Coord::new(-1.2, 1.2), Coord::new(1.2, 1.2), Coord::new(1.2, -1.2), Coord::new(-1.2, -1.2)];
+        d.push(Some(Geometry::Polygon(vec![vec![outer, hole]])), vec![]);
+        let id = m.add_dataset(d);
+        if let Some(l) = m.layer_mut(id) {
+            l.extrusion = Some(rustgis_map::effects::Extrusion {
+                field: None,
+                height: 20_000.0,
+                factor: 1.0,
+                face_culling: true,
+                lighting: true,
+                shadows: false,
+            });
+        }
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 2_000.0, bearing: 0.0, pitch: 30.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let r = render(&mut m, &view).unwrap();
+        // The middle of the courtyard shows the ground, not a roof over it.
+        assert_eq!(r.pixmap.pixel(200, 150), r.pixmap.pixel(5, 295));
+        // Its walls stand inside the roof's outline.
+        let shapes = extruded_shapes(&mut m, &view);
+        assert_eq!((shapes[0].rings.len(), shapes[0].holes.len()), (1, 1));
     }
 
     #[test]

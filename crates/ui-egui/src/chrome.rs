@@ -258,7 +258,8 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                     let cam = app.session.map().camera;
                     let text = crate::i18n::fmt(
                         "Bearing {b}° · Pitch {p}°",
-                        &[("b", &format!("{:.0}", cam.bearing)), ("p", &format!("{:.0}", cam.pitch))],
+                        // Rounded first, then + 0.0: a bearing just below zero reads 0, not -0.
+                        &[("b", &format!("{:.0}", cam.bearing.round() + 0.0)), ("p", &format!("{:.0}", cam.pitch.round() + 0.0))],
                     );
                     let level = cam.bearing.round() == 0.0 && cam.pitch.round() == 0.0;
                     let resp = ui.add(
