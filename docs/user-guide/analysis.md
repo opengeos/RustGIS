@@ -159,10 +159,50 @@ click them on the map:
 | Data Interop | KML, GPX, CSV with WKT, GeoJSON or CSV |
 
 Rasters these make are kept in the project. **Environments** limit tools to the map view, the full
-extent or everywhere, and set the cell size of new rasters. **ModelBuilder** chains tools into
-models (a parameter `%1` is step 1's output), and New Model From History turns the
-geoprocessing you've run into a model. The **Script** pane runs commands from text, one per line
-(`id {json}`).
+extent or everywhere, and set the cell size of new rasters. The **Script** pane runs commands from
+text, one per line (`id {json}`).
+
+## ModelBuilder
+
+**Analyze › Model Builder** opens a model in a view of its own, a tab beside the maps and
+layouts. A model is a graph of three kinds of node: **inputs** (blue) name layers of the map,
+**tools** (amber) are geoprocessing tools, and **outputs** (green) keep a result as a layer of
+their name.
+
+- Drag a tool from the palette on the left onto the canvas, or click it; **+ Input** and
+  **+ Output** add the other nodes.
+- Drag from a node's right port to another node's left port to connect them. A tool's left
+  ports are its layer parameters; a parameter that isn't connected can name a layer of the map
+  instead, in the settings on the right.
+- Select a node to set its parameters there; **Keep this result** adds an output for it.
+- Drag the background to pan, Ctrl+wheel (or pinch) to zoom; **Arrange** lays the nodes out
+  along the flow and **Fit** shows the whole model. Delete removes the selected node or wire,
+  Ctrl+D copies a node, Ctrl+Z and Ctrl+Y undo and redo.
+- Problems are listed below the canvas as you build (an input without a layer, a required
+  parameter left empty, a loop) and the nodes concerned are marked; **Run** waits until there
+  are none. The tools then run in flow order, and each node shows how it fared. A result that
+  only feeds other tools is removed once the model has run; the outputs, and tools at the end
+  of the flow, stay on the map. A run that fails is undone as a whole.
+- **Save** keeps the model in the project; **Export** writes it as a `*.model.json` file, which
+  **Import** (or dropping the file on the window) opens again. A model from a file may not read
+  or write files. **Copy Command** copies a `model.run` command that runs the model from the
+  Script pane, the command line or Python.
+
+The Workflows pane's Models section lists the project's models, and New Model From History turns
+the geoprocessing you've run into one. Models made as steps (`model.new` with `steps`, where `%1`
+stands for step 1's output) run as they always have until they are saved from ModelBuilder, which
+shows them as a graph and saves them as one. The `model.*` commands build, check (`model.validate`),
+save and run models without the canvas:
+
+```json
+{"graph": {"nodes": [
+   {"id": "i1", "kind": "input", "layer": "Cities"},
+   {"id": "t1", "kind": "tool", "tool": "buffer", "params": {"distance": 50}},
+   {"id": "o1", "kind": "output", "name": "City zones"}],
+ "edges": [
+   {"from": "i1", "fromPort": "out", "to": "t1", "toPort": "input"},
+   {"from": "t1", "fromPort": "out", "to": "o1", "toPort": "in"}]}}
+```
 
 ## Imagery
 

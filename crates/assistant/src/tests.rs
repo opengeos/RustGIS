@@ -693,6 +693,7 @@ fn mcp_initializes_and_lists_tools() {
         "read_features",
         "view_map",
         "run",
+        "snapshot",
         "search_docs",
         "read_doc",
     ] {
@@ -701,7 +702,7 @@ fn mcp_initializes_and_lists_tools() {
     for t in tools["tools"].as_array().unwrap() {
         assert_eq!(t["inputSchema"]["type"], "object", "{}", t["name"]);
         assert!(t["description"].as_str().is_some_and(|d| !d.is_empty()));
-        let runs = matches!(t["name"].as_str(), Some("run_command" | "run_tool" | "run"));
+        let runs = matches!(t["name"].as_str(), Some("run_command" | "run_tool" | "run" | "snapshot"));
         assert_eq!(t["annotations"]["readOnlyHint"], !runs, "{}", t["name"]);
         assert_eq!(t["annotations"]["destructiveHint"], runs, "{}", t["name"]);
     }
@@ -724,6 +725,54 @@ fn mcp_list_layers_filters_by_name_and_drops_fields() {
     assert_eq!(layers.len(), 1, "{text}");
     assert_eq!(layers[0]["name"], "Rivers");
     assert!(layers[0].get("fields").is_none(), "{text}");
+}
+
+/// `snapshot` outside the desktop relay draws the map offscreen at the view's shape and says
+/// what it shows; saving it needs file access, and asks for approval.
+#[test]
+fn mcp_snapshot_draws_offscreen_and_saves_with_access() {
+    let mut s = sample();
+    s.view_size = (1000.0, 500.0);
+    let snapshot =
+        |server: &mcp::Server, s: &mut Session, args: Value| rpc(server, s, "tools/call", json!({"name": "snapshot", "arguments": args}));
+    let r = snapshot(&mcp::Server::default(), &mut s, json!({"max_width": 400}));
+    assert_eq!(r["content"][0]["type"], "image", "{r}");
+    let meta: Value = serde_json::from_str(r["content"][1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!((meta["mode"].clone(), meta["width"].clone(), meta["height"].clone()), (json!("render"), json!(400), json!(200)), "{meta}");
+    assert!(meta["extent"].is_array() && meta["projection"].is_string() && meta["note"].is_null(), "{meta}");
+    // The screen, asked of a server that has none.
+    let r = snapshot(&mcp::Server::default(), &mut s, json!({"mode": "screen"}));
+    let meta: Value = serde_json::from_str(r["content"][1]["text"].as_str().unwrap()).unwrap();
+    assert!(meta["note"].as_str().is_some_and(|n| n.contains("relay")), "{meta}");
+
+    let out = std::env::temp_dir().join(format!("rustgis-mcp-snapshot-{}.png", std::process::id()));
+    let save = json!({"mode": "render", "save_path": out.display().to_string()});
+    let r = snapshot(&mcp::Server::new(false), &mut s, save.clone());
+    assert!(r["isError"] == true && r["content"][0]["text"].as_str().unwrap().contains("--yes"), "{r}");
+    assert!(!out.exists());
+    let r = snapshot(&mcp::Server::new(true), &mut s, save.clone());
+    let meta: Value = serde_json::from_str(r["content"][1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(meta["saved"], out.display().to_string(), "{meta}");
+    assert!(std::fs::read(&out).unwrap().starts_with(b"\x89PNG"));
+    let _ = std::fs::remove_file(&out);
+    let call = ToolCall { id: String::new(), name: "snapshot".into(), args: save };
+    assert!(tools::gate(&s, &call).is_some_and(|w| w.contains("writes a file")));
+    let plain = ToolCall { id: String::new(), name: "snapshot".into(), args: json!({}) };
+    assert!(tools::gate(&s, &plain).is_none());
+}
+
+/// Only the desktop relay, where the session is the user's open project, tells the agent the
+/// user is watching.
+#[test]
+fn mcp_tells_relay_agents_the_user_is_watching() {
+    let mut s = sample();
+    let private = rpc(&mcp::Server::default(), &mut s, "initialize", json!({}));
+    let text = private["instructions"].as_str().unwrap();
+    assert!(text.contains("list_layers") && !text.contains("watch"), "{text}");
+    let relay = mcp::Server { users_project: true, ..mcp::Server::default() };
+    let live = rpc(&relay, &mut s, "initialize", json!({}));
+    let text = live["instructions"].as_str().unwrap();
+    assert!(text.starts_with(private["instructions"].as_str().unwrap()) && text.contains("watch the map"), "{text}");
 }
 
 /// `run` runs a script in one call and one undo step, and answers with the last command's

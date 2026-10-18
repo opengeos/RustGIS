@@ -58,6 +58,9 @@ pub struct HeaderLayout {
 /// `TitlebarMetrics::height`, which the app falls back to this for.
 pub const HEADER_HEIGHT: f32 = 34.0;
 const HEADER_PAD: f32 = 10.0;
+/// How long the status bar names the MCP relay agent's last call beside the client count.
+#[cfg(not(target_arch = "wasm32"))]
+const RELAY_ACTION_SHOWN: std::time::Duration = std::time::Duration::from_secs(10);
 /// Most a native title bar can add, and the widest strip of window buttons, in points.
 const MAX_TITLEBAR_HEIGHT: f32 = 80.0;
 const MAX_LEFT_INSET: f32 = 120.0;
@@ -273,26 +276,24 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                         }
                     }
                 });
-                // The flat map's bearing and pitch (the globe has neither); clicking them on a
-                // turned or tilted map faces north and looks straight down again.
-                if !app.session.map().projection.is_globe() {
-                    let cam = app.session.map().camera;
-                    let text = crate::i18n::fmt(
-                        "Bearing {b}° · Pitch {p}°",
-                        // Rounded first, then + 0.0: a bearing just below zero reads 0, not -0.
-                        &[("b", &format!("{:.0}", cam.bearing.round() + 0.0)), ("p", &format!("{:.0}", cam.pitch.round() + 0.0))],
-                    );
-                    let level = cam.bearing.round() == 0.0 && cam.pitch.round() == 0.0;
-                    let resp = ui.add(
-                        egui::Label::new(egui::RichText::new(text).monospace().size(11.5).color(if level { t.text_dim } else { t.accent_text }))
-                            .sense(Sense::click()),
-                    );
-                    let resp = resp.on_hover_text(tl!(
-                        "Bearing: the direction the top of the map faces, clockwise from north. Pitch: the tilt from looking straight down. Click to reset both."
-                    ));
-                    if resp.clicked() && !level {
-                        let _ = app.run("map.resetNorth", json!({}));
-                    }
+                // The map's bearing and pitch; clicking them on a turned or tilted map faces north
+                // and looks straight down again.
+                let cam = app.session.map().camera;
+                let text = crate::i18n::fmt(
+                    "Bearing {b}° · Pitch {p}°",
+                    // Rounded first, then + 0.0: a bearing just below zero reads 0, not -0.
+                    &[("b", &format!("{:.0}", cam.bearing.round() + 0.0)), ("p", &format!("{:.0}", cam.pitch.round() + 0.0))],
+                );
+                let level = cam.bearing.round() == 0.0 && cam.pitch.round() == 0.0;
+                let resp = ui.add(
+                    egui::Label::new(egui::RichText::new(text).monospace().size(11.5).color(if level { t.text_dim } else { t.accent_text }))
+                        .sense(Sense::click()),
+                );
+                let resp = resp.on_hover_text(tl!(
+                    "Bearing: the direction the top of the map faces, clockwise from north. Pitch: the tilt from looking straight down. Click to reset both."
+                ));
+                if resp.clicked() && !level {
+                    let _ = app.run("map.resetNorth", json!({}));
                 }
                 sep(ui, &t);
                 // Pointer coordinates.
@@ -359,16 +360,29 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                     // its authenticated client count is shown and a click stops it. Desktop only.
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        if let Some(n) = app.relay.as_ref().map(|r| r.attached_clients()) {
-                            let resp = ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(crate::i18n::fmt("MCP relay · {n} attached", &[("n", &n.to_string())]))
-                                        .size(11.5)
-                                        .color(if n > 0 { t.accent_text } else { t.text_dim }),
-                                )
-                                .sense(Sense::click()),
-                            );
-                            if resp.on_hover_text(tl!("Stop MCP relay")).clicked() {
+                        if let Some((n, last)) = app.relay.as_ref().map(|r| (r.attached_clients(), r.last_action())) {
+                            let mut text = crate::i18n::fmt("MCP relay · {n} attached", &[("n", &n.to_string())]);
+                            let mut hover = tl!("Stop MCP relay").to_string();
+                            let mut color = if n > 0 { t.accent_text } else { t.text_dim };
+                            // What the agent just ran, while the user watches it work: for a few
+                            // seconds beside the count, and on hover until the next call.
+                            if let Some(a) = last {
+                                let ago = a.at.elapsed();
+                                if ago < RELAY_ACTION_SHOWN {
+                                    text = format!("{text} · {}", a.label);
+                                    if !a.ok {
+                                        color = t.red;
+                                    }
+                                    ui.ctx().request_repaint_after(RELAY_ACTION_SHOWN.saturating_sub(ago));
+                                }
+                                let said = if a.ok { "Last agent call: {call} ({secs} s ago)" } else { "Last agent call failed: {call} ({secs} s ago)" };
+                                hover = format!(
+                                    "{hover}\n{}",
+                                    crate::i18n::fmt(said, &[("call", &a.detail), ("secs", &ago.as_secs().to_string())])
+                                );
+                            }
+                            let resp = ui.add(egui::Label::new(egui::RichText::new(text).size(11.5).color(color)).sense(Sense::click()));
+                            if resp.on_hover_text(hover).clicked() {
                                 let _ = app.run("ui.mcpRelay", json!({"stop": true}));
                             }
                             sep(ui, &t);
@@ -431,6 +445,7 @@ fn parse_scale(text: &str) -> Option<f64> {
 
 /// Global keyboard shortcuts.
 pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
+    crate::modelbuilder::shortcuts(app, ctx);
     // The search box was typed in until egui took its focus away on Escape: that Escape clears
     // the box, not the tool.
     let typing = ctx.egui_wants_keyboard_input() || crate::searchbox::had_focus(&app.ui.search, ctx.cumulative_pass_nr());

@@ -1187,6 +1187,20 @@ fn identify_reports_every_overlapping_feature() {
 }
 
 #[test]
+fn label_size_stays_within_what_text_symbol_shows() {
+    // Style › Text Symbol offers the range `labels.style` accepts (#457): 72 pt is kept, and
+    // anything outside is brought back to the nearest end.
+    let mut s = world();
+    let size = |s: &Session| s.map().layers.iter().find(|l| l.name == "Countries").map(|l| f64::from(l.labels.size));
+    for (given, kept) in [(72.0, 72.0), (100.0, 72.0), (1.0, 4.0)] {
+        s.run("labels.style", &json!({"layer": "Countries", "size": given})).unwrap();
+        assert_eq!(size(&s), Some(kept), "size {given}");
+    }
+    let range = rustgis_map::symbology::LABEL_SIZE;
+    assert_eq!((*range.start(), *range.end()), (4.0, 72.0));
+}
+
+#[test]
 fn label_range_placement_lock_and_convert() {
     use crate::render::View;
     let mut s = world();
@@ -1802,6 +1816,43 @@ fn layouts_compose_export_and_round_trip() {
     s.run("layout.update", &json!({"element": inset, "scale": 200_000_000})).unwrap();
     s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": frame})).unwrap();
     assert!(s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": inset})).is_err());
+    // Its colour and width (#213): red and 2 pt by default, set when added or later, and kept
+    // through a save; `false` takes it away.
+    let indicator = |s: &Session| match s.project.layouts[0].element(inset as u32).map(|e| &e.kind) {
+        Some(rustgis_map::layout::ElementKind::MapFrame { extent_of, extent_color, extent_width, .. }) => {
+            (*extent_of, extent_color.hex(), *extent_width)
+        }
+        _ => panic!("the inset is a map frame"),
+    };
+    assert_eq!(indicator(&s), (Some(frame), "#D01C1C".to_string(), 2.0));
+    let saved = serde_json::to_string(&s.project.layouts[0]).unwrap();
+    assert!(!saved.contains("extent_color") && !saved.contains("extent_width"), "defaults aren't written");
+    s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": frame, "color": "#1F4E9A", "width": 0.75}))
+        .unwrap();
+    assert_eq!(indicator(&s), (Some(frame), "#1F4E9A".to_string(), 0.75));
+    s.run("layout.update", &json!({"element": inset, "extentIndicator": {"width": 99}})).unwrap();
+    assert_eq!(indicator(&s).2, rustgis_map::layout::MAX_INDICATOR_WIDTH, "clamped, and the colour kept");
+    assert_eq!(indicator(&s).1, "#1F4E9A");
+    let saved: rustgis_map::layout::Layout = serde_json::from_str(&serde_json::to_string(&s.project.layouts[0]).unwrap()).unwrap();
+    assert!(saved.element(inset as u32).is_some_and(
+        |e| matches!(&e.kind, rustgis_map::layout::ElementKind::MapFrame { extent_color, .. } if extent_color.hex() == "#1F4E9A")
+    ));
+    assert!(s.run("layout.update", &json!({"element": inset, "extentIndicator": {"color": "blue-ish"}})).is_err());
+    assert!(s.run("layout.update", &json!({"element": inset, "extentIndicator": 3})).is_err());
+    // A value given but not a colour or a number is refused, naming it, and changes nothing.
+    for (bad, field) in [(json!({"width": "wide"}), "width"), (json!({"color": 123}), "color")] {
+        let err = s.run("layout.update", &json!({"element": inset, "extentIndicator": bad})).unwrap_err();
+        assert!(err.starts_with(field), "{err}");
+        let mut add = json!({"kind": "extentIndicator", "frame": inset, "of": frame});
+        add[field] = bad[field].clone();
+        assert!(s.run("layout.addElement", &add).is_err_and(|e| e.starts_with(field)));
+    }
+    assert_eq!((indicator(&s).1.as_str(), indicator(&s).2), ("#1F4E9A", rustgis_map::layout::MAX_INDICATOR_WIDTH));
+    s.run("layout.update", &json!({"element": inset, "extentIndicator": false})).unwrap();
+    assert_eq!(indicator(&s).0, None);
+    let err = s.run("layout.update", &json!({"element": inset, "extentIndicator": {"color": "#000000"}})).unwrap_err();
+    assert!(err.contains("no extent indicator"), "{err}");
+    s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": frame})).unwrap();
     assert!(s.run("layout.addElement", &json!({"kind": "sparkles"})).is_err());
     // A hairline rule keeps its height when added and when edited (#211).
     let rule = s.run("layout.addElement", &json!({"kind": "rectangle", "color": "#000000", "w": 136, "h": 0.15})).unwrap()["element"]
@@ -2497,6 +2548,7 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
             tool: "buffer".into(),
             params: json!({"input": "Cities", "distance": 5, "output": "/tmp/x.shp"}),
         }],
+        ..Default::default()
     });
     let e = s.run("model.run", &json!({"name": "From a file"})).unwrap_err();
     assert!(e.contains("from a file"), "{e}");
@@ -2507,6 +2559,7 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     let r = s.run("script.run", &json!({"script": "# zoom then select\nmap.goToXY {\"lon\": 2, \"lat\": 48, \"scale\": 5000000}\nselect.byAttributes {\"layer\": \"Cities\", \"where\": \"pop_max > 1000000\"}"})).unwrap();
     assert_eq!(r["ran"].as_array().unwrap().len(), 2);
     assert!(s.run("script.run", &json!({"script": "no.such {}"})).is_err());
+    model_graphs(&mut s);
     let g = s.run("gp.gallery", &json!({"kind": "raster"})).unwrap();
     assert!(g.as_array().unwrap().iter().any(|t| t["id"] == "raster.function"));
 }
@@ -8479,6 +8532,147 @@ fn dem_tiles_mosaic_clip_by_polygon_share_a_stretch_and_report_overviews() {
     std::fs::remove_file(&out).ok();
     let e = s.run("raster.mosaic", &json!({"inputs": ["big", "east"]})).unwrap_err();
     assert!(e.to_string().contains("overview"), "{e}");
+}
+
+/// ModelBuilder graphs: validated, run in flow order, intermediate results dropped, outputs named.
+fn model_graphs(s: &mut Session) {
+    let graph = json!({
+        "nodes": [
+            {"id": "i1", "kind": "input", "x": 0, "y": 0, "layer": "Cities"},
+            {"id": "t1", "kind": "tool", "x": 240, "y": 0, "tool": "buffer", "params": {"distance": 20}},
+            {"id": "t2", "kind": "tool", "x": 480, "y": 0, "tool": "dissolve"},
+            {"id": "o1", "kind": "output", "x": 720, "y": 0, "name": "City zones"}
+        ],
+        "edges": [
+            {"from": "i1", "fromPort": "out", "to": "t1", "toPort": "input"},
+            {"from": "t1", "fromPort": "out", "to": "t2", "toPort": "input"},
+            {"from": "t2", "fromPort": "out", "to": "o1", "toPort": "in"}
+        ]
+    });
+    s.run("model.save", &json!({"name": "Zones", "graph": graph})).unwrap();
+    let m = s.project.models.iter().find(|m| m.name == "Zones").unwrap();
+    assert_eq!(m.steps.len(), 2, "steps follow the graph");
+    assert_eq!(m.steps[1].params["input"], "%1");
+    assert_eq!(s.run("model.validate", &json!({"name": "Zones"})).unwrap()["ok"], true);
+    let layers = s.map().layers.len();
+    let r = s.run("model.run", &json!({"name": "Zones"})).unwrap();
+    assert_eq!(r["ran"].as_array().unwrap().len(), 2);
+    assert_eq!(r["outputs"], json!(["City zones"]));
+    assert!(s.map().layer_by_name("City zones").is_some());
+    assert_eq!(s.map().layers.len(), layers + 1, "the buffer, only feeding the dissolve, is removed");
+    let report = s.model_run.clone().unwrap();
+    assert!(report.ok && report.nodes.iter().all(|n| n.status == "done"));
+    // Run again: the output name stays unique.
+    let r = s.run("model.run", &json!({"name": "Zones"})).unwrap();
+    assert_eq!(r["outputs"], json!(["City zones 2"]));
+
+    // A result kept by an output and fed on to another tool: the tool reads it by its new name,
+    // whichever runs first.
+    let both = json!({"nodes": [
+        {"id": "i1", "kind": "input", "x": 0, "y": 0, "layer": "Cities"},
+        {"id": "t1", "kind": "tool", "x": 200, "y": 0, "tool": "buffer", "params": {"distance": 20}},
+        {"id": "o1", "kind": "output", "x": 300, "y": 0, "name": "Buffers"},
+        {"id": "t2", "kind": "tool", "x": 400, "y": 0, "tool": "dissolve"}],
+        "edges": [{"from": "i1", "fromPort": "out", "to": "t1", "toPort": "input"},
+                  {"from": "t1", "fromPort": "out", "to": "o1", "toPort": "in"},
+                  {"from": "t1", "fromPort": "out", "to": "t2", "toPort": "input"}]});
+    let r = s.run("model.run", &json!({"graph": both})).unwrap();
+    assert_eq!(r["outputs"][0], "Buffers");
+    // Saving over a model from a file keeps it one.
+    s.run("model.save", &json!({"name": "From disk", "graph": both, "imported": true})).unwrap();
+    assert!(!s.trusted_models.contains("from disk"));
+    s.run("model.save", &json!({"name": "From disk", "graph": both, "rename": "Renamed"})).unwrap();
+    assert!(!s.trusted_models.contains("renamed") && !s.trusted_models.contains("from disk"));
+    s.run("model.remove", &json!({"name": "Renamed"})).unwrap();
+
+    // Problems: a missing layer, an unconnected required input, a loop.
+    let mut bad = graph.clone();
+    bad["nodes"][0]["layer"] = json!("Nowhere");
+    bad["edges"].as_array_mut().unwrap().push(json!({"from": "t2", "fromPort": "out", "to": "t1", "toPort": "input"}));
+    let v = s.run("model.validate", &json!({"graph": bad})).unwrap();
+    let codes: Vec<&str> = v["problems"].as_array().unwrap().iter().map(|p| p["code"].as_str().unwrap()).collect();
+    assert!(codes.contains(&"missing-layer") && codes.contains(&"duplicate-input") && codes.contains(&"cycle"), "{codes:?}");
+    let e = s.run("model.run", &json!({"graph": bad})).unwrap_err();
+    assert!(!e.is_empty());
+    assert!(!s.model_run.as_ref().unwrap().ok);
+    // A failing tool stops the run, names its node and leaves the project as it was.
+    let layers = s.map().layers.len();
+    let fails = json!({"nodes": [
+        {"id": "i1", "kind": "input", "layer": "Cities"},
+        {"id": "t1", "kind": "tool", "tool": "buffer", "params": {"distance": 20}},
+        {"id": "t2", "kind": "tool", "tool": "dissolve", "params": {"field": "no_such_field"}}],
+        "edges": [{"from": "i1", "fromPort": "out", "to": "t1", "toPort": "input"},
+                  {"from": "t1", "fromPort": "out", "to": "t2", "toPort": "input"}]});
+    s.run("model.run", &json!({"graph": fails})).unwrap_err();
+    let rep = s.model_run.clone().unwrap();
+    assert_eq!(rep.nodes.last().unwrap().status, "error");
+    assert_eq!(s.map().layers.len(), layers, "a failed run is undone");
+    // Two outputs on one result are refused.
+    let mut twice = graph.clone();
+    twice["nodes"].as_array_mut().unwrap().push(json!({"id": "o2", "kind": "output", "name": "Again"}));
+    twice["edges"].as_array_mut().unwrap().push(json!({"from": "t2", "fromPort": "out", "to": "o2", "toPort": "in"}));
+    let v = s.run("model.validate", &json!({"graph": twice})).unwrap();
+    assert!(v["problems"].as_array().unwrap().iter().any(|p| p["code"] == "shared-output"));
+    // An unsaved graph exports as passed.
+    let t = s.run("model.export", &json!({"name": "Unsaved", "graph": twice})).unwrap();
+    assert!(t["text"].as_str().unwrap().contains("Again"));
+    // Hostile graphs: repeated ids, unknown kinds and ports, edges to nowhere, huge positions.
+    for junk in [
+        json!({"nodes": [{"id": "a", "kind": "tool", "tool": "buffer", "x": 1e308}, {"id": "a", "kind": "weird"}, {"id": "b", "kind": "output"}, {"id": "", "kind": "input"}, 7],
+               "edges": [{"from": "a", "fromPort": "zz", "to": "b", "toPort": "nope"}, {"from": "b", "to": "a", "toPort": "input"}, {"from": "a", "to": "a", "toPort": "input"}, {"from": "q", "to": "a", "toPort": "input"}, "x"]}),
+        json!({"nodes": "x"}),
+        json!({"nodes": [{"id": "t", "kind": "tool", "tool": "buffer", "params": [1, 2]}], "edges": {}}),
+    ] {
+        let _ = s.run("model.validate", &json!({"graph": junk}));
+        let _ = s.run("model.run", &json!({"graph": junk}));
+        let _ = s.run("model.export", &json!({"graph": junk}));
+        let _ = s.run("model.save", &json!({"name": "Junk", "graph": junk}));
+    }
+    let _ = s.run("model.remove", &json!({"name": "Junk"}));
+
+    // A graph without positions is laid out along the flow.
+    let g = rustgis_engine_graph(&fails);
+    assert!(g.nodes[0].x < g.nodes[1].x && g.nodes[1].x < g.nodes[2].x);
+    // Models saved as steps still run as steps: `%n` anywhere, and a clear error for one too far.
+    s.run(
+        "model.new",
+        &json!({"name": "Steps", "steps": [
+        {"tool": "buffer", "params": {"input": "Cities", "distance": 5}},
+        {"tool": "dissolve", "params": {"input": "%3"}}]}),
+    )
+    .unwrap();
+    assert!(s.project.models.iter().any(|m| m.name == "Steps" && m.graph.is_none()));
+    let e = s.run("model.run", &json!({"name": "Steps"})).unwrap_err();
+    assert!(e.contains("uses %3"), "{e}");
+    s.run("model.remove", &json!({"name": "Steps"})).unwrap();
+    // Old step models open as graphs.
+    let steps = vec![
+        crate::project::ModelStep { tool: "buffer".into(), params: json!({"input": "Cities", "distance": 5}) },
+        crate::project::ModelStep { tool: "dissolve".into(), params: json!({"input": "%1"}) },
+    ];
+    let g = crate::model::steps_to_graph(&steps);
+    assert_eq!(g.nodes.len(), 3);
+    assert_eq!(g.edges.len(), 2);
+    assert_eq!(crate::model::graph_to_steps(&g), steps);
+    // Export and import as a model file; an imported model may not touch files.
+    let text = s.run("model.export", &json!({"name": "Zones"})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(text.contains(crate::model::SCHEMA));
+    let m = s.run("model.import", &json!({"text": text})).unwrap();
+    let imported = m["model"].as_str().unwrap().to_string();
+    assert_ne!(imported, "Zones");
+    assert!(s.project.models.iter().any(|m| m.name == imported && m.graph.as_ref().is_some_and(|g| g.nodes.len() == 4)));
+    let mut writes = graph.clone();
+    writes["nodes"][1]["params"]["output"] = json!("/tmp/zones.shp");
+    s.run("model.new", &json!({"name": "Writes", "graph": writes, "imported": true})).unwrap();
+    let e = s.run("model.run", &json!({"name": "Writes"})).unwrap_err();
+    assert!(e.contains("from a file"), "{e}");
+    for n in ["Zones", "Writes", imported.as_str()] {
+        s.run("model.remove", &json!({"name": n})).unwrap();
+    }
+}
+
+fn rustgis_engine_graph(v: &Value) -> crate::project::ModelGraph {
+    crate::model::graph_from_json(v).unwrap()
 }
 
 /// Project info holds everything an agent needs about the open project in one call: the view's

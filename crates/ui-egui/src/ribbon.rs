@@ -1356,10 +1356,10 @@ fn analysis_groups(app: &mut RustGisApp, ui: &mut Ui) {
             app,
             "modelbuilder",
             "Model\nBuilder",
-            "Chain tools into a model; build one from your history.",
-            "ui.pane.workflows",
-            json!({"section": "models"}),
-            false,
+            "Draw a model: chain tools from input layers to the results to keep.",
+            "ui.modelBuilder",
+            Value::Null,
+            app.mb.shown(),
             false,
         );
         col(ui, |ui| {
@@ -3952,10 +3952,12 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
     });
     group(ui, "Text Symbol", |ui| {
         col(ui, |ui| {
-            let mut size = layer.labels.size;
+            // The whole range `labels.style` accepts (#457), so a larger label isn't cut back.
+            let mut size = f64::from(layer.labels.size);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Size")).size(11.5));
-                if ui.add(egui::DragValue::new(&mut size).range(4.0..=48.0).speed(0.1).suffix(" pt")).changed() {
+                let range = rustgis_engine::map::symbology::LABEL_SIZE;
+                if ui.add(egui::DragValue::new(&mut size).range(range).speed(0.1).suffix(" pt")).changed() {
                     let _ = app.run("labels.style", json!({"size": size}));
                 }
             });

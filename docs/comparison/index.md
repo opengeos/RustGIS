@@ -80,7 +80,7 @@ engine, choose RustGIS. Both keep your data on your machine. See
 | **Vector analysis** | Buffer, clip, erase, dissolve, summarize within, statistics, selection by location; GeoLibre vector tools | Buffer, overlay, dissolve, joins, topology checks | Comprehensive | Comprehensive | Common tools |
 | **Raster analysis** | Raster functions, band math, indices, change detection, classification, viewshed; GeoLibre terrain and hydrology tools | Hillshade, slope, zonal stats, raster calculator, reclassify | Comprehensive (GDAL/GRASS/SAGA) | Comprehensive; Spatial Analyst | Limited |
 | **Query language** | SQL `WHERE` clauses for selection and definition queries; DuckDB Spatial queries over files, web addresses and databases in an SQL pane (desktop) | DuckDB Spatial, PGlite/PostGIS, Sedona, all in the browser | Virtual layers, PostGIS | SQL against geodatabases | — |
-| **Model / batch chaining** | ModelBuilder (models from history), tasks, scripts | Visual Model Builder, batch runner | Graphical Model Designer | ModelBuilder | — |
+| **Model / batch chaining** | ModelBuilder (a node canvas; models from history), tasks, scripts | Visual Model Builder, batch runner | Graphical Model Designer | ModelBuilder | — |
 | **Guided workflows** | Suitability, visibility, line of sight, IDW, shortest path, neighborhood, simulation | Isochrones, routing, Emerging Hot Spot Analysis | Plugins and processing providers | Extensions (Network, Spatial, Geostatistical Analyst) | Routing services (credits) |
 | **AI / ML** | Pixel classification (k-means, minimum distance, a trainable neural network) | AI Segmentation (SAM), ONNX object detection | Via plugins | Deep-learning toolset | Pretrained models (credits) |
 

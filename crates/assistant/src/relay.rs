@@ -134,6 +134,30 @@ struct Shared {
     /// This run's own id (random, not secret), naming its grants' files: a grant left over from an
     /// earlier run on the same port can't remove a file of this one.
     run_id: String,
+    /// Whether the app shows the map, so a snapshot can capture the screen ([`Relay::set_screen`]).
+    screen: AtomicBool,
+    /// The screen snapshot the app is capturing ([`Relay::screen_request`]); nothing else runs
+    /// until it is done.
+    shot: Mutex<Option<Shot>>,
+}
+
+/// What a screen snapshot asks of the app ([`Relay::screen_request`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenRequest {
+    /// The longest to wait for the map to finish drawing.
+    pub wait: Duration,
+    /// Whether the map's controls, scale bar and sketches show (`overlays`, default true).
+    pub overlays: bool,
+}
+
+/// A `snapshot` request waiting for the app to capture its window.
+struct Shot {
+    req: Request,
+    /// The request's JSON-RPC id and the tool's arguments.
+    id: Value,
+    args: Value,
+    /// How long the app may wait for the map to finish drawing.
+    wait: Duration,
 }
 
 impl Shared {
@@ -156,6 +180,9 @@ impl Shared {
             let _ = stream.shutdown(Shutdown::Both);
         }
         lock(&self.approvals).clear();
+        if let Some(shot) = lock(&self.shot).take() {
+            shot.req.state.store(CANCELLED, SeqCst);
+        }
         // Pending requests are cancelled before they are dropped, so none can run after stop.
         for req in lock(&self.requests).drain(..) {
             let _ = req.state.compare_exchange(PENDING, CANCELLED, SeqCst, SeqCst);
@@ -242,6 +269,21 @@ impl Drop for Grant {
 struct Owner {
     shared: Arc<Shared>,
     port: u16,
+    /// The last tool call an attached agent ran ([`Relay::last_action`]).
+    last: Mutex<Option<Action>>,
+}
+
+/// A tool call an attached agent ran, for the app to show while the user watches.
+#[derive(Clone, Debug)]
+pub struct Action {
+    /// Short: the command id (`layer.addSample`), `gp.run <tool>` or the tool's name.
+    pub label: String,
+    /// The call with its parameters, cut to a line ([`crate::tools::summary`]).
+    pub detail: String,
+    /// Whether it succeeded.
+    pub ok: bool,
+    /// When it ran.
+    pub at: Instant,
 }
 
 impl Drop for Owner {
@@ -455,8 +497,10 @@ impl Relay {
             granted: Mutex::new(HashMap::new()),
             grant_ids: AtomicU64::new(0),
             run_id: random_token()?.chars().take(8).collect(),
+            screen: AtomicBool::new(false),
+            shot: Mutex::new(None),
         });
-        let owner = Arc::new(Owner { shared, port });
+        let owner = Arc::new(Owner { shared, port, last: Mutex::new(None) });
         let accepting = Arc::clone(&owner.shared);
         std::thread::Builder::new()
             .name("rustgis-mcp-relay".into())
@@ -479,6 +523,49 @@ impl Relay {
     /// not counted.
     pub fn attached_clients(&self) -> usize {
         self.owner.shared.attached.load(SeqCst)
+    }
+
+    /// Tells the relay whether the app shows the map now, so a snapshot can capture the screen.
+    /// The app calls it every frame before [`Relay::poll`].
+    pub fn set_screen(&self, shown: bool) {
+        self.owner.shared.screen.store(shown, SeqCst);
+    }
+
+    /// A screen snapshot an agent asked for: the app captures its window, then calls
+    /// [`Relay::finish_screen`].
+    pub fn screen_request(&self) -> Option<ScreenRequest> {
+        lock(&self.owner.shared.shot)
+            .as_ref()
+            .map(|shot| ScreenRequest { wait: shot.wait, overlays: shot.args.get("overlays").and_then(Value::as_bool).unwrap_or(true) })
+    }
+
+    /// Answers the screen snapshot with the map as the window showed it (a PNG), and whether the
+    /// map had finished drawing; or, when it couldn't be captured, draws it offscreen with the
+    /// reason as its note.
+    pub fn finish_screen(&self, s: &mut Session, shot_png: Result<Vec<u8>, String>, settled: bool) {
+        let Some(shot) = lock(&self.owner.shared.shot).take() else { return };
+        if shot.req.state.load(SeqCst) != RUNNING {
+            return;
+        }
+        // A last resort, as for the messages `poll` runs: a panic answers with an error instead
+        // of breaking the app.
+        let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match shot_png {
+            Ok(png) => crate::mcp::snapshot_result(s, &png, "screen", settled, &shot.args, None),
+            Err(why) => crate::mcp::render_snapshot(s, &shot.args, Some(&why)),
+        }))
+        .unwrap_or_else(|_| Err("the snapshot failed unexpectedly".into()));
+        let result = answer.unwrap_or_else(|e| serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true}));
+        let reply = serde_json::json!({"jsonrpc": "2.0", "id": shot.id, "result": result}).to_string();
+        if let Some(a) = action(&shot.req.line, Some(&reply)) {
+            *lock(&self.owner.last) = Some(a);
+        }
+        let _ = shot.req.reply.send(Some(reply));
+        self.owner.shared.notify();
+    }
+
+    /// The last tool call an attached agent ran, if any has run since the relay started.
+    pub fn last_action(&self) -> Option<Action> {
+        lock(&self.owner.last).clone()
     }
 
     /// Stops the listener: it closes, every client is disconnected, queued messages are dropped
@@ -538,13 +625,18 @@ impl Relay {
     /// calls go through [`Session::run`], so each is one undo step as everywhere else. A message
     /// whose connection already gave up is skipped, never run.
     pub fn poll(&self, s: &mut Session) -> usize {
+        // One request at a time: a screen snapshot being captured holds the rest back.
+        if lock(&self.owner.shared.shot).is_some() {
+            return 0;
+        }
         let pending: Vec<Request> = lock(&self.owner.shared.requests).drain(..).collect();
+        let mut pending = pending.into_iter();
         // The skills switched on, read once for the batch and only when a message asks for them:
         // this runs on the app's thread, and reading the skill folders is file I/O.
         let mut skills: Option<Vec<crate::skills::Skill>> = None;
         let mut ran = 0;
         lock(&self.owner.shared.approvals).retain(|a| a.state.load(SeqCst) == PENDING);
-        for mut req in pending {
+        while let Some(mut req) = pending.next() {
             if req.state.load(SeqCst) != PENDING {
                 continue;
             }
@@ -614,15 +706,83 @@ impl Relay {
             if asks_for_skills(&req.line) {
                 server.skills = skills.get_or_insert_with(crate::skills::installed).clone();
             }
+            // A snapshot of the screen: the app captures its window over the next frames
+            // ([`Relay::finish_screen`]), and the rest wait their turn.
+            if let Some((id, args)) = screen_call(&req.line, self.owner.shared.screen.load(SeqCst))
+                && server
+                    .refusal(s, &crate::provider::ToolCall { id: String::new(), name: "snapshot".into(), args: args.clone() })
+                    .is_none()
+            {
+                let wait = Duration::from_secs_f64(crate::mcp::snapshot_wait(&args));
+                *lock(&self.owner.shared.shot) = Some(Shot { req, id, args, wait });
+                let mut queue = lock(&self.owner.shared.requests);
+                for rest in pending.rev() {
+                    queue.push_front(rest);
+                }
+                return ran;
+            }
             // A last resort: a panic answers that message with an error instead of breaking the
             // app (Session::run catches panics inside commands; this covers the tools around it).
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &req.line)))
                 .unwrap_or_else(|_| Some(internal_error(&req.line)));
+            if let Some(a) = action(&req.line, out.as_deref()) {
+                *lock(&self.owner.last) = Some(a);
+            }
             let _ = req.reply.send(out); // the connection may have hung up
             ran += 1;
         }
         ran
     }
+}
+
+/// A message that is one `snapshot` call to capture the screen: `mode` `screen`, or `auto`
+/// (the default) while the app shows the map. Its id and arguments.
+fn screen_call(line: &str, shown: bool) -> Option<(Value, Value)> {
+    let msg: Value = serde_json::from_str(line).ok()?;
+    if msg.get("method").and_then(Value::as_str) != Some("tools/call") {
+        return None;
+    }
+    let id = msg.get("id")?.clone();
+    let params = msg.get("params")?;
+    if params.get("name").and_then(Value::as_str) != Some("snapshot") {
+        return None;
+    }
+    let args = match params.get("arguments") {
+        None | Some(Value::Null) => Value::Object(serde_json::Map::new()),
+        Some(v @ Value::Object(_)) => v.clone(),
+        Some(_) => return None,
+    };
+    let wanted = match args.get("mode").and_then(Value::as_str).unwrap_or("auto") {
+        "screen" | "auto" => shown,
+        _ => false,
+    };
+    wanted.then_some((id, args))
+}
+
+/// The last tool call in a message (or batch), with whether its reply says it worked.
+fn action(line: &str, reply: Option<&str>) -> Option<Action> {
+    let msg: Value = serde_json::from_str(line).ok()?;
+    let messages = msg.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&msg));
+    let call = messages.iter().rev().find(|m| m.get("method").and_then(Value::as_str) == Some("tools/call") && m.get("id").is_some())?;
+    let params = call.get("params")?;
+    let name = params.get("name").and_then(Value::as_str)?;
+    let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+    let text = |k: &str| args.get(k).and_then(Value::as_str).map(|v| crate::tools::clip(v.trim(), 80));
+    let label = match name {
+        "run_command" => text("command").unwrap_or_else(|| name.to_string()),
+        "run_tool" => format!("gp.run {}", text("tool").unwrap_or_default()),
+        _ => crate::tools::clip(name, 80),
+    };
+    let detail = crate::tools::summary(&crate::provider::ToolCall { id: String::new(), name: name.to_string(), args });
+    // The reply to that call: a protocol error or a tool result marked as an error failed.
+    let id = call.get("id");
+    let replies: Value = reply.and_then(|r| serde_json::from_str(r).ok()).unwrap_or(Value::Null);
+    let replies = replies.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&replies));
+    let ok = replies
+        .iter()
+        .find(|r| r.get("id") == id)
+        .is_some_and(|r| r.get("error").is_none() && r.pointer("/result/isError") != Some(&Value::Bool(true)));
+    Some(Action { label, detail, ok, at: Instant::now() })
 }
 
 /// Whether a message (or a message in a batch) is `prompts/list` or `prompts/get`, the only ones
@@ -1332,6 +1492,151 @@ mod tests {
         let reply = reply(&client);
         assert_eq!(reply["result"]["isError"], false, "{reply}");
         assert_eq!(s.map().layers.len(), layers, "{reply}");
+        relay.stop();
+    }
+
+    fn snapshot_call(id: u64, args: Value) -> Value {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": "snapshot", "arguments": args}})
+    }
+
+    /// The metadata a snapshot reply carries beside its image.
+    fn snapshot_meta(reply: &Value) -> Value {
+        let content = reply["result"]["content"].as_array().cloned().unwrap_or_default();
+        assert_eq!(content.first().map(|c| c["type"].clone()), Some(json!("image")), "{reply}");
+        serde_json::from_str(content.get(1).and_then(|c| c["text"].as_str()).unwrap_or("null")).unwrap()
+    }
+
+    /// A screen snapshot is handed to the app, which captures its window; the relay runs nothing
+    /// else until the app answers, then the reply carries the app's image.
+    #[test]
+    fn relay_hands_screen_snapshots_to_the_app() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        let layers = s.map().layers.len();
+        relay.set_screen(true);
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        writeln!(client, "{}", snapshot_call(1, json!({"wait_s": 2}))).unwrap();
+        writeln!(client, "{}", add_sample_call(2)).unwrap();
+        client.flush().unwrap();
+        wait_until("the snapshot to reach the app", || {
+            relay.poll(&mut s);
+            relay.screen_request().is_some()
+        });
+        assert_eq!(relay.screen_request(), Some(ScreenRequest { wait: Duration::from_secs(2), overlays: true }));
+        // The next request waits its turn.
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(relay.poll(&mut s), 0);
+        assert_eq!(s.map().layers.len(), layers, "nothing runs while the screen is captured");
+        let png = rustgis_engine::cmd::share::map_png(&mut s, Some(80.0), Some(50.0), None).unwrap();
+        relay.finish_screen(&mut s, Ok(png), true);
+        assert!(relay.screen_request().is_none());
+        let meta = snapshot_meta(&reply(&client));
+        assert_eq!(
+            (meta["mode"].clone(), meta["width"].clone(), meta["height"].clone()),
+            (json!("screen"), json!(80), json!(50)),
+            "{meta}"
+        );
+        assert_eq!(meta["render_settled"], true, "{meta}");
+        assert!(meta["extent"].is_array() && meta["scale"].is_number(), "{meta}");
+        settle(&relay, &mut s);
+        assert_eq!(reply(&client)["id"], 2);
+        assert_eq!(s.map().layers.len(), layers + 1);
+        relay.stop();
+    }
+
+    /// Without the map on screen, or when the app can't capture it, a snapshot is drawn
+    /// offscreen and says so; `mode: render` never waits for the app.
+    #[test]
+    fn relay_draws_snapshots_offscreen_without_the_screen() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        // No map on screen: drawn at once, with a note when the screen was asked for.
+        relay.set_screen(false);
+        writeln!(client, "{}", snapshot_call(1, json!({"mode": "screen", "max_width": 200}))).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        let meta = snapshot_meta(&reply(&client));
+        assert_eq!((meta["mode"].clone(), meta["width"].clone()), (json!("render"), json!(200)), "{meta}");
+        assert!(meta["note"].as_str().is_some_and(|n| n.contains("isn't on screen")), "{meta}");
+        // On screen but asked to render: drawn offscreen, no note.
+        relay.set_screen(true);
+        writeln!(client, "{}", snapshot_call(2, json!({"mode": "render"}))).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        let meta = snapshot_meta(&reply(&client));
+        assert!(meta["mode"] == "render" && meta["note"].is_null(), "{meta}");
+        assert!(relay.screen_request().is_none());
+        // The app couldn't capture it: drawn offscreen.
+        writeln!(client, "{}", snapshot_call(3, json!({}))).unwrap();
+        client.flush().unwrap();
+        wait_until("the snapshot to reach the app", || {
+            relay.poll(&mut s);
+            relay.screen_request().is_some()
+        });
+        relay.finish_screen(&mut s, Err("the window's screenshot didn't come back".into()), false);
+        let meta = snapshot_meta(&reply(&client));
+        assert_eq!(meta["mode"], "render", "{meta}");
+        assert_eq!(meta["note"], "the window's screenshot didn't come back", "the note says why: {meta}");
+        assert_eq!(relay.last_action().map(|a| a.label), Some("snapshot".to_string()), "a snapshot is the agent's last call too");
+        relay.stop();
+    }
+
+    /// A snapshot saved to a file is refused without file access before the app is asked to
+    /// capture anything.
+    #[test]
+    fn relay_refuses_a_saved_snapshot_without_access() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        relay.set_screen(true);
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        let out = std::env::temp_dir().join(format!("rustgis-snap-{}.png", std::process::id()));
+        writeln!(client, "{}", snapshot_call(1, json!({"save_path": out.display().to_string()}))).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        let r = reply(&client);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(r["result"]["content"][0]["text"].as_str().is_some_and(|t| t.contains("--yes")), "{r}");
+        assert!(relay.screen_request().is_none() && !out.exists());
+        relay.stop();
+    }
+
+    /// The relay remembers the last tool call an agent ran, and whether it worked, for the app
+    /// to show; an agent attached to it is told the user is watching.
+    #[test]
+    fn relay_records_the_agents_last_call() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        assert!(relay.last_action().is_none());
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
+        writeln!(client, "{init}").unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        let r = reply(&client);
+        assert!(r["result"]["instructions"].as_str().is_some_and(|i| i.contains("watch the map")), "{r}");
+        assert!(relay.last_action().is_none(), "initialize is not a tool call");
+        writeln!(client, "{}", add_sample_call(2)).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        reply(&client);
+        let a = relay.last_action().unwrap();
+        assert_eq!(a.label, "layer.addSample");
+        assert!(a.ok && a.detail.contains("countries"), "{a:?}");
+        let bad = json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+            "name": "run_command", "arguments": {"command": "map.basemap", "params": {"name": "no-such-basemap"}}
+        }});
+        writeln!(client, "{bad}").unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        reply(&client);
+        let a = relay.last_action().unwrap();
+        assert_eq!(a.label, "map.basemap");
+        assert!(!a.ok, "a failed call is shown as failed: {a:?}");
         relay.stop();
     }
 

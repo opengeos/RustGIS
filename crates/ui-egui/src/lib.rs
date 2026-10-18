@@ -32,12 +32,15 @@ mod localagents;
 mod mapgpu;
 mod mapmenu;
 mod mapview;
+mod modelbuilder;
 mod navui;
 mod opendataui;
 mod panes;
 mod pluginpanel;
 mod pluginsui;
 mod portalsui;
+#[cfg(not(target_arch = "wasm32"))]
+mod relayshot;
 mod reportpane;
 mod ribbon;
 mod s3ui;
@@ -614,6 +617,8 @@ pub struct RustGisApp {
     pub layout: layoutview::LayoutView,
     pub forms: editpanes::Forms,
     pub workflow: analysispane::Workflow,
+    /// ModelBuilder's view: the model on its canvas.
+    pub mb: modelbuilder::ModelBuilder,
     pub ws: workspacepanes::WorkspaceState,
     /// The Plugin Manager and plugin downloads.
     pub plugins: pluginsui::PluginsState,
@@ -636,6 +641,9 @@ pub struct RustGisApp {
     /// already has open, started by the `ui.mcpRelay` command and off until then.
     #[cfg(not(target_arch = "wasm32"))]
     pub relay: Option<rustgis_assistant::relay::Relay>,
+    /// A screen snapshot an agent attached through the relay asked for, while it is captured.
+    #[cfg(not(target_arch = "wasm32"))]
+    relay_shot: Option<relayshot::Shot>,
     /// The frame's `egui::Context`, kept so `ui.mcpRelay` can hand the relay its wake callback:
     /// a queued message asks for a repaint, or it waits for the user to move the mouse.
     #[cfg(not(target_arch = "wasm32"))]
@@ -685,6 +693,7 @@ impl RustGisApp {
             layout: layoutview::LayoutView::default(),
             forms: editpanes::Forms::default(),
             workflow: analysispane::Workflow::default(),
+            mb: modelbuilder::ModelBuilder::default(),
             ws: workspacepanes::WorkspaceState::default(),
             plugins: pluginsui::PluginsState::default(),
             update: update::UpdateState::default(),
@@ -699,6 +708,8 @@ impl RustGisApp {
             services: Services::default(),
             #[cfg(not(target_arch = "wasm32"))]
             relay: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            relay_shot: None,
             #[cfg(not(target_arch = "wasm32"))]
             connect: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -927,6 +938,8 @@ impl RustGisApp {
             (".rgisnb", "notebook.open"),
             (".ipynb", "notebook.open"),
             (".rgisdlpk", "dl.import"),
+            (".model.json", "model.import"),
+            (".rgistool", "model.import"),
         ]
         .iter()
         .find(|(e, _)| lower.ends_with(e))
@@ -945,6 +958,12 @@ impl RustGisApp {
             }
             let r = self.run(cmd, p);
             self.map.invalidate();
+            // A model file opens in ModelBuilder.
+            if cmd == "model.import"
+                && let Ok(v) = &r
+            {
+                modelbuilder::imported(self, v);
+            }
             return r;
         }
         if lower.ends_with(".rgispkg") {
@@ -2310,6 +2329,7 @@ impl RustGisApp {
                     return self.run("presentation.export", json!({"presentation": i, "path": path}));
                 }
             }
+            "ui.modelBuilder" => modelbuilder::command(self, p)?,
             "ui.catalogView" => self.ws.catalog_view = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.catalog_view),
             "ui.itemPopups" => self.ws.item_popups = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.item_popups),
             "ui.linkCursors" => self.ws.link_cursors = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.link_cursors),
@@ -2555,7 +2575,7 @@ impl RustGisApp {
                             return Err(tl!("no text graphic there").to_string());
                         };
                         (self.dialogs.mode, self.dialogs.a, self.dialogs.b) = ("edit", layer.to_string(), row.to_string());
-                        (self.dialogs.text, self.dialogs.c) = (text, size.to_string());
+                        (self.dialogs.text, self.dialogs.size) = (text, f64::from(size));
                     }
                 }
                 // Rename Map / Rename Layout remember which one (`target`, by name; default the
@@ -2835,8 +2855,11 @@ impl RustGisApp {
                     relay.set_wake(Box::new(move || ctx.request_repaint()));
                     self.relay_wake_pending = false;
                 }
+                // A snapshot can capture the screen while the map is on it.
+                relay.set_screen(relayshot::map_shown(self, ctx));
                 relay.poll(&mut self.session);
             }
+            relayshot::drive(self, ctx);
         }
         // Fonts installed last frame are active now.
         self.fonts_pending = false;

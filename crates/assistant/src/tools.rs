@@ -155,6 +155,15 @@ pub fn target(call: &ToolCall) -> Option<(String, Value)> {
 
 /// Whether a call needs the user's approval, and why.
 pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
+    // MCP's snapshot, saved to a file.
+    if call.name == "snapshot" {
+        return call
+            .args
+            .get("save_path")
+            .and_then(Value::as_str)
+            .filter(|p| !p.trim().is_empty())
+            .map(|_| "it writes a file on this computer".into());
+    }
     // A script asks once, for every line that needs it, each named.
     if call.name == "run" {
         let script = call.args.get("script").and_then(Value::as_str).unwrap_or("");

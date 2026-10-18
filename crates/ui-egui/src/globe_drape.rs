@@ -173,7 +173,8 @@ impl GlobeDrape {
         let centre = pos2(rect.min.x + cx as f32, rect.min.y + cy as f32);
         let disc = g.disc_radius() as f32;
         let sprites = self.sprites.as_ref().filter(|_| g.disc_radius() < 3.0 * w.hypot(h));
-        let sprite_rect = Rect::from_center_size(centre, vec2(2.0, 2.0) * disc * GLOBE_GLOW);
+        // Stretched up and down to a tilted globe's ellipse.
+        let sprite_rect = Rect::from_center_size(centre, vec2(2.0 * disc, 2.0 * g.disc_height() as f32) * GLOBE_GLOW);
         let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
         match sprites {
             Some(s) => {

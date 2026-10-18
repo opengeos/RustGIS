@@ -19,19 +19,19 @@ pub const TAN_HALF_FOV: f64 = 1.0 / 3.0;
 /// it (a sixteenth of the centre's scale) is sky.
 pub const FAR: f64 = 16.0;
 /// The nearest a point can be drawn, as a fraction of the camera's distance from the centre.
-const NEAR: f64 = 0.05;
+pub const NEAR: f64 = 0.05;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Camera {
     pub center: Coord,
     pub res: f64,
     /// The compass direction the top of the view faces, in degrees clockwise from north (as in
-    /// MapLibre): at 90 east is up. The globe ignores it.
+    /// MapLibre): at 90 east is up. The globe turns with it too.
     #[serde(default)]
     pub bearing: f64,
     /// How far the view tilts from looking straight down, in degrees (0 to [`MAX_PITCH`], as in
     /// MapLibre): the centre keeps its scale, nearer ground grows and farther ground shrinks
-    /// toward the horizon. The globe ignores it.
+    /// toward the horizon. The globe tilts too: its camera swings back about the centre of view.
     #[serde(default)]
     pub pitch: f64,
 }
