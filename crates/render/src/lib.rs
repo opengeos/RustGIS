@@ -1885,7 +1885,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         // GPU-eligible: a plain vector layer drawn at full opacity with no mask, blend,
         // aggregation, extrusion or per-row graphics (an inert aggregation/extrusion on the
         // "wrong" geometry type still falls back — conservative and correct).
-        let gpu_layer = gpu && !offscreen && layer.aggregation.is_none() && layer.extrusion.is_none() && !layer.graphics;
+        let gpu_layer = gpu
+            && !offscreen
+            && layer.aggregation.is_none()
+            && layer.extrusion.is_none()
+            && !layer.graphics
+            && !upright.contains(&layer.id);
         // Lyon refuses degenerate geometry tiny-skia draws fine: collect_layer reports it,
         // and the layer runs the CPU branch below like any ineligible one.
         let mut gpu_done = false;
@@ -1893,6 +1898,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
             gpu_done = mesh::collect_layer(&mut cmds, layer, &geoms, &rows, &visible, ctx.wireframe, ctx.ppp, map_per_px).is_ok();
         }
+        // False for a layer drawn elsewhere: nothing goes into the picture for it.
+        let mut drawn_here = true;
         if !gpu_done {
             let dest = if direct { &mut pm } else { &mut target };
             let aggregate = layer.aggregation.filter(|_| layer.geometry_type() == GeometryType::Point);
@@ -1902,9 +1909,11 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             } else if extrude.is_some() && matches!(labels_to, Labels::Tilted(..)) {
                 // Stood up in perspective over the tilted view (`render_tilted`); its labels still
                 // come from here.
+                drawn_here = false;
             } else if upright.contains(&layer.id) {
                 // Stood up facing the viewer over the tilted view (`upright_markers`); its labels
                 // still come from here.
+                drawn_here = false;
             } else if let Some(x) = extrude.filter(|_| !matches!(labels_to, Labels::Shared)) {
                 let px_per_m = view.pixels_per_point / map_ground_res(view, &flat);
                 effects::extrude(dest, &ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r));
@@ -1939,7 +1948,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     ctx.feature(dest, g, &sym);
                 }
             }
-            cpu_dirty = true;
+            cpu_dirty |= drawn_here;
         }
         if !direct {
             composite(&mut pm, &target);

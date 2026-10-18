@@ -1101,6 +1101,22 @@ mod tests {
         assert_parity_within("steep world sample", world_map, &View { camera, ..world_view() }, wgpu::Backends::all(), TILTED_OUTLIERS);
     }
 
+    /// A tilted view's point layer stands its markers up once, over the bands: the bands draw
+    /// none of them (as meshes or as a picture).
+    #[test]
+    fn a_tilted_view_draws_its_markers_once_upright() {
+        let mut m = world_map();
+        let camera = Camera { center: Coord::new(1_100_000.0, 5_500_000.0), res: 6_000.0, bearing: 20.0, pitch: 60.0 };
+        let Some(RenderOutput::Gpu(scene)) = render::render_backend(&mut m, &View { camera, ..world_view() }, Backend::Gpu) else {
+            panic!("a GPU scene")
+        };
+        let points: Vec<usize> =
+            scene.cmds.iter().enumerate().filter(|(_, c)| matches!(c, DrawCmd::Points { .. })).map(|(i, _)| i).collect();
+        assert_eq!(points.len(), 1, "one set of markers");
+        assert!(points.iter().all(|i| scene.clips.get(*i).is_some_and(|c| c.upright)));
+        assert!(!scene.cmds.iter().any(|c| matches!(c, DrawCmd::Image { .. })), "no pictures");
+    }
+
     /// A turned or tilted view that needs pictures drawn on the CPU (here a see-through layer,
     /// drawn apart and laid over) isn't a GPU scene: it comes back drawn on the CPU.
     #[test]
