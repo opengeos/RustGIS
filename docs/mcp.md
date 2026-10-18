@@ -122,8 +122,16 @@ the window shows it. The relay holds the request until the app has taken the pic
 nothing else meanwhile. File and network commands need `--yes`, unless **Let your Agents Control RustGIS**
 is ticked. The session is the project you have open, so an attached agent can't replace it:
 `project.new`, `project.open`, `project.openText`, `project.sample` and `project.fromTemplate`
-are refused, with or without `--yes`. `edit.undo` and `edit.redo` work, in the same history as
-your own steps.
+are refused, with or without `--yes`. Each agent command is a step in your own undo history,
+named for the agent (`agent 1`, `agent 2`…, in the order they first call, with the relay run, so a
+relay started again doesn't take an earlier run's agent for its own). An agent's `edit.undo`
+and `edit.redo` work only on its own steps: when the step on top is yours (or another agent's),
+they're refused, and they run on their own (`run_command`), not inside a `run` script. You can
+still undo anything. Each agent also has its own active layer: when an
+agent selects a layer (`layer.select`, or a command that makes a layer active), your selection in
+the Layers pane stays as it was. Once the agent has chosen a layer (selected one, or run a command
+that made one active), its commands that name no layer act on that layer, whatever you select
+meanwhile; until then they act on the one you have selected.
 
 Every tool call an attached agent makes is written to an audit log, one JSON line per call in a
 file per day (`2026-10-18.jsonl`) in the `mcp-audit` folder of the app-data folder
@@ -240,6 +248,9 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - Token required: `relay_drops_connections_without_the_token`
 - Parse error after attach: `relay_returns_parse_error_after_attach_and_stays_usable`
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
+- Separate active layers: `relay_keeps_the_agents_active_layer_apart_from_the_users`
+- Agents undo only their own steps: `relay_agents_undo_only_their_own_steps`
+- Agents of an earlier relay run aren't this run's: `relay_agents_of_another_run_cant_undo_earlier_steps`
 - Busy app: `relay_says_the_app_is_busy_early`
 - Client-chosen waits: `relay_waits_as_long_as_the_client_asks`
 - Endpoint file and port variable: `relay_publishes_its_endpoint_and_names_the_port_variable`
