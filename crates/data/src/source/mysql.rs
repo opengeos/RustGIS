@@ -199,6 +199,8 @@ pub struct Conn {
     config: Config,
     password: Option<String>,
     server: Server,
+    /// Whether `PREFERRED` connected unencrypted, the server offering no TLS.
+    plain: bool,
     client: Mutex<Option<mysql::Conn>>,
 }
 
@@ -242,7 +244,7 @@ impl Conn {
         let mut guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
         for attempt in 0..2 {
             if guard.is_none() {
-                *guard = Some(open_client(&self.config, self.password.as_deref())?.0);
+                *guard = Some(open_client(&self.config, self.password.as_deref())?.0.0);
             }
             let client = guard.as_mut().ok_or_else(|| DataError::Format("not connected".into()))?;
             match f(client) {
@@ -260,9 +262,10 @@ impl Conn {
     }
 }
 
-/// Connects, with TLS as the configuration says (`Prefer`: TLS first, then without), and sets
-/// the session read only with a statement timeout.
-fn open_client(config: &Config, password: Option<&str>) -> Result<(mysql::Conn, Server)> {
+/// Connects, with TLS as the configuration says (`Prefer`: TLS, and without only when the server
+/// offers none, said in the second value), and sets the session read only with a statement
+/// timeout.
+fn open_client(config: &Config, password: Option<&str>) -> Result<((mysql::Conn, Server), bool)> {
     let base = mysql::OptsBuilder::new()
         .ip_or_hostname(Some(config.host.clone()))
         .tcp_port(config.port)
@@ -299,11 +302,14 @@ fn open_client(config: &Config, password: Option<&str>) -> Result<(mysql::Conn, 
     };
     let mut last = None;
     for ssl in attempts {
+        let plain = ssl.is_none();
         match mysql::Conn::new(base.clone().ssl_opts(ssl)) {
-            Ok(c) => return session(c),
-            // A refused password or unknown database is the server's answer, whatever the TLS.
-            Err(e @ mysql::Error::MySqlError(_)) => return Err(err(e)),
-            Err(e) => last = Some(e),
+            Ok(c) => return Ok((session(c)?, plain)),
+            // Without TLS only when the server says it has none: any other failure (a refused or
+            // broken handshake, which someone in the middle could cause) doesn't fall back to
+            // sending the password in the clear.
+            Err(e @ mysql::Error::DriverError(mysql::DriverError::TlsNotSupported)) => last = Some(e),
+            Err(e) => return Err(err(e)),
         }
     }
     Err(last.map(err).unwrap_or_else(|| DataError::Format("not connected".into())))
@@ -351,12 +357,12 @@ pub fn connect(address: &str, ask: bool) -> Result<Arc<Conn>> {
         return Ok(c);
     }
     // Connecting can take as long as the timeout: other connections don't wait for it.
-    let (client, server) = open_client(&config, password.as_deref())?;
+    let ((client, server), plain) = open_client(&config, password.as_deref())?;
     let mut live = live().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(c) = find(&mut live) {
         return Ok(c);
     }
-    let conn = Arc::new(Conn { config, password: password.clone(), server, client: Mutex::new(Some(client)) });
+    let conn = Arc::new(Conn { config, password: password.clone(), server, plain, client: Mutex::new(Some(client)) });
     live.push((address.to_string(), password, Arc::downgrade(&conn)));
     Ok(conn)
 }
@@ -452,6 +458,19 @@ fn int_of(v: &mysql::Value) -> Option<i64> {
         mysql::Value::UInt(u) => i64::try_from(*u).ok(),
         mysql::Value::Double(f) if f.fract() == 0.0 && f.abs() < 9.0e18 => Some(*f as i64),
         other => text_of(other)?.trim().parse().ok(),
+    }
+}
+
+/// A row's id: a key's bits, unsigned (a negative key and one past `i64::MAX` alike).
+fn id_of(v: &mysql::Value) -> Option<u64> {
+    match v {
+        mysql::Value::Int(i) => Some(i.cast_unsigned()),
+        mysql::Value::UInt(u) => Some(*u),
+        other => {
+            let t = text_of(other)?;
+            let t = t.trim();
+            t.parse::<u64>().ok().or_else(|| t.parse::<i64>().ok().map(i64::cast_unsigned))
+        }
     }
 }
 
@@ -639,6 +658,9 @@ impl MysqlSource {
                 ),
             }
         }
+        if conn.plain {
+            notes.push("the connection isn't encrypted: the server offers no TLS (ssl-mode=REQUIRED refuses such a server)".into());
+        }
         let reproject = Reproject::from_epsg(Some(srid), &mut notes);
         let wkb = format!("ST_AsBinary({g}{})", server.axis_option());
 
@@ -761,7 +783,9 @@ impl MysqlSource {
     /// The table's extent in longitude/latitude, from an evenly spread sample of its rows (all of
     /// them for a table that isn't large).
     fn measure(&self) -> Extent {
-        let Ok(b) = self.read(&Request { extent: None, limit: EXTENT_SAMPLE }) else { return Extent::EMPTY };
+        let Ok(b) = self.read_within(&Request { extent: None, limit: EXTENT_SAMPLE }, Some(PROBE_TIMEOUT)) else {
+            return Extent::EMPTY;
+        };
         b.features.iter().filter_map(|f| f.geometry.as_ref()).fold(Extent::EMPTY, |e, g| e.union(&g.extent()))
     }
 
@@ -807,7 +831,7 @@ impl MysqlSource {
     }
 
     fn row_feature(&self, r: &mysql::Row) -> Option<Feature> {
-        let id = int_of(at(r, 0))?;
+        let id = id_of(at(r, 0))?;
         let geometry = match at(r, 1) {
             mysql::Value::Bytes(b) => wkb::decode(b),
             _ => None,
@@ -821,7 +845,8 @@ impl MysqlSource {
             .map(|(i, f)| {
                 let v = at(r, i + 2);
                 match f.ty {
-                    FieldType::Integer => int_of(v).map(Value::Int),
+                    // An unsigned value past `i64::MAX` as a number still, if inexact.
+                    FieldType::Integer => int_of(v).map(Value::Int).or_else(|| float_of(v).map(Value::Float)),
                     FieldType::Double => float_of(v).map(Value::Float),
                     FieldType::Boolean => int_of(v).map(|i| Value::Bool(i != 0)),
                     FieldType::Text => text_of(v).map(Value::Text),
@@ -830,7 +855,7 @@ impl MysqlSource {
             })
             .collect();
         // A negative key keeps its bits: still one id per row, and the same on every read.
-        Some(Feature { id: id.cast_unsigned(), geometry: Some(geometry), attrs })
+        Some(Feature { id, geometry: Some(geometry), attrs })
     }
 }
 
@@ -853,6 +878,12 @@ fn box_text(n: &Extent, lonlat: bool) -> Option<String> {
     } else {
         (n.min_x, n.min_y, n.max_x, n.max_y)
     };
+    // A box clamped to nothing (wholly past ±180°) has no ring; one of no width or height is
+    // given a little, so its ring is a polygon.
+    if a > c || b > d {
+        return None;
+    }
+    let (c, d) = (if c > a { c } else { a + 1e-9 }, if d > b { d } else { b + 1e-9 });
     let x = |i: usize| a + (c - a) * i as f64 / steps as f64;
     let mut ring: Vec<String> = (0..=steps).map(|i| format!("{} {b}", x(i))).collect();
     ring.extend((0..=steps).map(|i| format!("{} {d}", x(steps - i))));
@@ -860,15 +891,24 @@ fn box_text(n: &Extent, lonlat: bool) -> Option<String> {
     Some(format!("POLYGON(({}))", ring.join(", ")))
 }
 
-impl FeatureSource for MysqlSource {
-    fn info(&self) -> &SourceInfo {
-        &self.info
-    }
-
-    fn read(&self, req: &Request) -> Result<Batch> {
+impl MysqlSource {
+    /// Reads what a request asks for, each statement timing out after `timeout` seconds when
+    /// given (else the session's).
+    fn read_within(&self, req: &Request, timeout: Option<u64>) -> Result<Batch> {
+        let timed = |sql: String| match timeout {
+            Some(secs) => self.conn.server.timed(&sql, secs),
+            None => sql,
+        };
         let limit = clamp_limit(req.limit);
         let mut out = Batch::default();
         if limit == 0 {
+            return Ok(out);
+        }
+        // A geographic table has nothing past ±180°/±90° (a view panned off the world).
+        if self.reproject.is_lonlat()
+            && let Some(e) = req.extent
+            && !e.intersects(&Extent::new(-180.0, -90.0, 180.0, 90.0))
+        {
             return Ok(out);
         }
         let window = self.native_window(req);
@@ -891,6 +931,7 @@ impl FeatureSource for MysqlSource {
             // A view: counted and numbered in one pass (counting first would scan the view twice,
             // which doubles its time on MySQL's geographic columns).
             let sql = numbered(&format!("GREATEST(CEIL(`rustgis total` / {limit}), 1)"));
+            let sql = timed(sql);
             let rows: Vec<mysql::Row> = self.conn.with(|c| c.query(sql.as_str()))?;
             let total = rows.first().and_then(|r| int_of(at(r, self.select.len()))).and_then(|n| u64::try_from(n).ok());
             (total.unwrap_or(0), rows)
@@ -900,7 +941,7 @@ impl FeatureSource for MysqlSource {
             self.conn.with(|c| {
                 let opts = mysql::TxOpts::default().set_with_consistent_snapshot(true).set_access_mode(Some(mysql::AccessMode::ReadOnly));
                 let mut t = c.start_transaction(opts)?;
-                let n: Option<u64> = t.query_first(format!("SELECT COUNT(*) FROM {from} WHERE {filter}"))?;
+                let n: Option<u64> = t.query_first(timed(format!("SELECT COUNT(*) FROM {from} WHERE {filter}")))?;
                 let matched = n.unwrap_or(0);
                 let step = stride(matched, limit);
                 let sql = if step <= 1 && !self.numbered {
@@ -908,7 +949,7 @@ impl FeatureSource for MysqlSource {
                 } else {
                     numbered(&step.to_string())
                 };
-                let rows: Vec<mysql::Row> = t.query(sql)?;
+                let rows: Vec<mysql::Row> = t.query(timed(sql))?;
                 t.commit()?;
                 Ok((matched, rows))
             })?
@@ -930,6 +971,16 @@ impl FeatureSource for MysqlSource {
         }
         out.complete = step <= 1 && (rows.len() as u64) >= out.matched;
         Ok(out)
+    }
+}
+
+impl FeatureSource for MysqlSource {
+    fn info(&self) -> &SourceInfo {
+        &self.info
+    }
+
+    fn read(&self, req: &Request) -> Result<Batch> {
+        self.read_within(req, None)
     }
 }
 
@@ -1006,6 +1057,11 @@ mod tests {
         use mysql::Value as V;
         assert_eq!(int_of(&V::Bytes(b"42".to_vec())), Some(42));
         assert_eq!(int_of(&V::UInt(u64::MAX)), None);
+        // Ids keep a key's bits, unsigned past `i64::MAX` or negative.
+        assert_eq!(id_of(&V::UInt(u64::MAX)), Some(u64::MAX));
+        assert_eq!(id_of(&V::Int(-1)), Some(u64::MAX));
+        assert_eq!(id_of(&V::Bytes(b"18446744073709551615".to_vec())), Some(u64::MAX));
+        assert_eq!(id_of(&V::Bytes(b"-2".to_vec())), Some(u64::MAX - 1));
         assert_eq!(float_of(&V::Bytes(b"12.50".to_vec())), Some(12.5));
         assert_eq!(float_of(&V::Bytes(b"nan".to_vec())), None);
         assert_eq!(text_of(&V::NULL), None);
@@ -1031,6 +1087,9 @@ mod tests {
         let polar = box_text(&Extent::new(-200.0, -95.0, 10.0, 95.0), true).unwrap_or_default();
         assert!(polar.starts_with("POLYGON((-180 -90,") && polar.contains(" 90,"), "{polar}");
         assert_eq!(box_text(&Extent::EMPTY, true), None);
+        assert_eq!(box_text(&Extent::new(190.0, 0.0, 200.0, 10.0), true), None);
+        let point = box_text(&Extent::new(5.0, 5.0, 5.0, 5.0), false).unwrap_or_default();
+        assert!(point.starts_with("POLYGON((5 5, 5.000000001 5,"), "{point}");
         assert_eq!(box_text(&Extent::new(0.0, 0.0, f64::INFINITY, 1.0), false), None);
     }
 

@@ -182,11 +182,12 @@ as `database.table`. The session is read only, and a server asking for a local f
 LOCAL INFILE`) is sent none.
 
 `ssl-mode` in the address's query sets the encryption, as the `mysql` client names it:
-`PREFERRED` (the default) encrypts when the server can and `REQUIRED` always, neither checking
-the server's certificate (and `PREFERRED` connects unencrypted when encrypting fails, so on
-networks you don't trust, a server in the middle could read the password); `VERIFY_IDENTITY` checks the certificate and the host name (against
-`ssl-ca`, a private authority's PEM file, or the web's roots), `VERIFY_CA` the certificate only;
-`DISABLED` turns encryption off:
+`PREFERRED` (the default) encrypts, connecting unencrypted only when the server offers no
+encryption (the layer then says so), and `REQUIRED` always encrypts; neither checks the server's
+certificate, so neither protects the password from a server in the middle. On networks you
+don't trust, use `VERIFY_IDENTITY`, which checks the certificate and the host name (against
+`ssl-ca`, a private authority's PEM file, or the web's roots); `VERIFY_CA` checks the
+certificate only. `DISABLED` turns encryption off:
 
 ```sh
 rustgis-cli run --cmd 'layer.addDatabase={"database":"mysql://gis@db.example:3306/city?ssl-mode=VERIFY_IDENTITY","password":"…"}' \
