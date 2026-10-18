@@ -586,7 +586,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         && cam_only
         && let (Some(gf), Some(rs)) = (&app.map.gpu_frame, &app.map.render_state)
         && !gf.has_images
-        && gf.tilted() == (cam.pitch != 0.0)
+        && gf.fits(&cam)
     {
         gf.set_camera(&rs.queue, &cam);
         fast_engaged = true;

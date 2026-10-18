@@ -113,11 +113,11 @@ struct CmdUniforms {
     scene_depth: [f32; 4],
     /// The fog a tilted view's ground fades into (premultiplied).
     fog: [f32; 4],
-    /// Map units per physical pixel (scales stroke normals); 1 for upright markers; the band's
-    /// nearest and farthest depths.
+    /// `x`: map units per physical pixel (scales stroke normals); `y`: 1 for upright markers,
+    /// else 0; `z`, `w`: the band's nearest and farthest depths.
     params: [f32; 4],
-    /// Physical pixel size of the map view (scales marker pixel offsets); 1 when tilted (fog,
-    /// the reach), and the reach's depth.
+    /// `x`, `y`: physical pixel size of the map view (scales marker pixel offsets); `z`: 1 when
+    /// tilted (fog, the reach, band clipping), else 0; `w`: the reach's depth.
     viewport: [f32; 4],
     /// Extrusions: the light's direction (map units, unit length) and how far a shadow falls per
     /// map unit of height (map units), both turned with the view as MapLibre's light is.
@@ -573,10 +573,15 @@ pub(crate) struct SceneBuffers {
 }
 
 impl SceneBuffers {
-    /// Whether the scene was drawn for a tilted view (with its backdrop and bands): a camera
-    /// move may re-project it only to a view tilted (or flat) as well.
-    pub(crate) fn tilted(&self) -> bool {
-        self.tilt.is_some_and(|t| t.camera.pitch != 0.0)
+    /// Whether a camera move to `cam` may re-project the scene: it was drawn for a view turned
+    /// (or north-up) and tilted (or flat) like it, so its backdrop, bands and the ground it covers
+    /// (a turned view draws the north-up box around it) still fit.
+    pub(crate) fn fits(&self, cam: &Camera) -> bool {
+        let (turned, tilted) = match &self.tilt {
+            Some(t) => (t.camera.bearing != 0.0, t.camera.pitch != 0.0),
+            None => (false, false),
+        };
+        turned == (cam.bearing != 0.0) && tilted == (cam.pitch != 0.0)
     }
 }
 
