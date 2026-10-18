@@ -82,6 +82,13 @@ hovering shows `Stop MCP relay` and the last call with its parameters, and click
 relay. Agents attached through the relay are told, when they connect, that this is the project you
 have open and that you watch the map change as they work.
 
+Under it, **Full access** (off unless you tick it, for this session only) lifts every refusal for
+agents attached with the relay's own token. They may then also run scripts, tasks and models, and
+install, remove and run plugins: what you could do yourself in RustGIS. It isn't remembered: it's
+off again at the next launch, and when agents are turned off. While it's on, the status bar reads
+`MCP relay · full access · n attached` in red. Agents the app starts itself keep their own grants'
+rules.
+
 ```sh
 rustgis-cli mcp --attach                 # the open app on 127.0.0.1:8767
 rustgis-cli mcp --attach 9000 --yes      # another port, with file and network access
@@ -200,6 +207,7 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - Token required: `relay_drops_connections_without_the_token`
 - Parse error after attach: `relay_returns_parse_error_after_attach_and_stays_usable`
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
+- Full access, for the relay's own token only: `relay_full_access_lifts_the_refusals_for_its_own_token_only`
 - Screen snapshots go to the app: `relay_hands_screen_snapshots_to_the_app`
 - Snapshots without the screen: `relay_draws_snapshots_offscreen_without_the_screen`
 - Saved snapshots need access: `relay_refuses_a_saved_snapshot_without_access`
@@ -249,7 +257,9 @@ Your agent asks you before each tool call, and the server adds its own limits:
   text (it could bring in web layers). Without it, the agent can still work with the data you
   gave the server and with the built-in sample, basemaps and geoprocessing. `view_map` draws
   the web tile layers the project you opened already has, fetching their tiles.
-- Plugin management, scripts, tasks, models and the GeoLibre runner are never run from here.
+- Plugin management, scripts, tasks, models and the GeoLibre runner are never run from here,
+  unless you turned on **Full access** for agents in the desktop app. That applies only to agents
+  attached to it with the relay's own token.
 - In private-server mode, opening, replacing and undoing in the project are allowed: the project
   is the agent's own. With `--attach`, these operations affect the project open in the desktop app.
 

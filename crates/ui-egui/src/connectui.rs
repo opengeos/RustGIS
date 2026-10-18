@@ -24,11 +24,19 @@ pub struct ConnectState {
     /// The folder the file bridge uses instead of the relay's private one (tests).
     #[cfg(test)]
     bridge_dir: Option<std::path::PathBuf>,
+    /// Full access: ticked for this session only, never remembered, so each launch asks afresh.
+    full: bool,
 }
 
 /// Whether the user lets agents control RustGIS.
 pub fn enabled(app: &RustGisApp) -> bool {
     app.connect.on.unwrap_or_else(|| app.services.load_pref.as_ref().and_then(|l| l(PREF)).as_deref() == Some("on"))
+}
+
+/// Whether agents have full access: no command refused, scripts, tasks, models and plugins
+/// included. Only while agents are on, and only once ticked in this session.
+pub fn full_access(app: &RustGisApp) -> bool {
+    enabled(app) && app.connect.full
 }
 
 /// At launch, starts the relay when the user had agents turned on.
@@ -101,6 +109,8 @@ fn start_bridge(app: &mut RustGisApp) -> Result<(), String> {
 pub(crate) fn stopped(app: &mut RustGisApp) {
     let changed = app.connect.on != Some(false);
     app.connect.on = Some(false);
+    // Agents turned on again start without full access.
+    app.connect.full = false;
     app.connect.error = None;
     if let Some(bridge) = app.file_bridge.take() {
         bridge.stop();
@@ -163,6 +173,19 @@ pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         if let Some(relay) = &app.relay {
             relay.set_allow_access(on);
+            relay.set_full_access(full_access(app));
+        }
+    }
+    if on {
+        let mut full = full_access(app);
+        let hint = tl!(
+            "Agents may also run scripts, tasks and models, and install, remove and run plugins: anything you could do yourself. Turn it on only for an agent you trust with your computer. It lasts until RustGIS closes or agents are turned off."
+        );
+        if ui.checkbox(&mut full, tl!("Full access")).on_hover_text(hint).changed() {
+            app.connect.full = full;
+            if let Some(relay) = &app.relay {
+                relay.set_full_access(full);
+            }
         }
     }
     if let Some(e) = &app.connect.error {
@@ -264,6 +287,23 @@ mod tests {
         let said = run(&mut app, "layer.addSample {\"name\": \"rivers\"}\nmap.basemap {\"name\": \"nowhere\"}\n");
         assert!(said.error && said.text.starts_with("File bridge: line 2"), "{}", said.text);
         assert_eq!(app.session.map().layers.len(), layers + 1);
+    }
+
+    /// Full access counts only while agents are on, is never read from the preferences, and goes
+    /// when agents are turned off.
+    #[test]
+    fn full_access_needs_agents_on_and_a_fresh_opt_in() {
+        let mut app = RustGisApp::with_sample();
+        app.services.load_pref = Some(Box::new(|key: &str| (key == PREF || key == "agents_full_access").then(|| "on".to_string())));
+        assert!(enabled(&app) && !full_access(&app), "a launch never restores full access");
+        app.connect.full = true;
+        assert!(full_access(&app));
+        app.connect.on = Some(false);
+        assert!(!full_access(&app), "agents are off");
+        app.connect.on = Some(true);
+        stopped(&mut app);
+        app.connect.on = Some(true);
+        assert!(!full_access(&app), "turning agents off ends full access");
     }
 
     #[test]

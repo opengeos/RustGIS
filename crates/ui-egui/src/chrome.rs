@@ -360,10 +360,22 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                     // its authenticated client count is shown and a click stops it. Desktop only.
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        if let Some((n, last)) = app.relay.as_ref().map(|r| (r.attached_clients(), r.last_action())) {
-                            let mut text = crate::i18n::fmt("MCP relay · {n} attached", &[("n", &n.to_string())]);
-                            let mut hover = tl!("Stop MCP relay").to_string();
-                            let mut color = if n > 0 { t.accent_text } else { t.text_dim };
+                        if let Some((n, last, full)) = app.relay.as_ref().map(|r| (r.attached_clients(), r.last_action(), r.full_access())) {
+                            // Full access is shown apart: agents may run anything then.
+                            let (mut text, mut hover, mut color) = if full {
+                                (
+                                    crate::i18n::fmt("MCP relay · full access · {n} attached", &[("n", &n.to_string())]),
+                                    tl!("Agents have full access: they may run scripts, tasks, models and plugins. Click to stop the MCP relay")
+                                        .to_string(),
+                                    t.red,
+                                )
+                            } else {
+                                (
+                                    crate::i18n::fmt("MCP relay · {n} attached", &[("n", &n.to_string())]),
+                                    tl!("Stop MCP relay").to_string(),
+                                    if n > 0 { t.accent_text } else { t.text_dim },
+                                )
+                            };
                             // What the agent just ran, while the user watches it work: for a few
                             // seconds beside the count, and on hover until the next call.
                             if let Some(a) = last {
