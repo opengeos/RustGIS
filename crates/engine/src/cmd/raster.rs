@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rustgis_data::raster::{self, Raster};
-use rustgis_map::raster::{RasterLayer, RasterMask, RasterRenderer, Resampling, Stretch, classify_masked, unique_values};
-use rustgis_map::{ClassMethod, Ramp};
+use rustgis_map::raster::{RasterLayer, RasterMask, RasterRenderer, RasterStyle, Resampling, Stretch, classify_masked, unique_values};
+use rustgis_map::{ClassMethod, Ramp, RasterDefaults};
 use serde_json::{Value, json};
 
 use super::{b, f, ps};
@@ -34,6 +34,14 @@ pub fn commands() -> Vec<C> {
             r#"{"layer"?, "type": "stretch"|"rgb"|"classify"|"unique"|"colormap"|"shadedRelief", "band"?: 1.., "ramp"?, "invert"?: bool, "classes"?: 1..32, "method"?, "azimuth"?, "altitude"?, "zFactor"?, "grey"?: bool (shadedRelief without its colour ramp)}"#,
         ),
         C::new("raster.stretch", "Stretch Type", "Style › Rendering", |s, p| {
+            if let Some(like) = p.get("like").filter(|v| !v.is_null()) {
+                let like = like.as_str().ok_or("like is a raster layer's name")?;
+                let (min, max) = stretch_range(s, like)?;
+                return with(s, p, |rl, _| {
+                    rl.style.stretch = Stretch::Custom { min, max };
+                    Ok(())
+                });
+            }
             let code = ps(p, "type").ok_or("type is required")?;
             // A bound that was given but isn't a finite number is refused, not replaced by the layer's own.
             let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
@@ -73,7 +81,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_raster)
-        .params(r#"{"layer"?, "type": "none"|"minMax"|"custom"|"percentClip"|"standardDeviation"|"histogramEqualize", "low"?: %, "high"?: %, "n"?: deviations, "min"?, "max"?: custom bounds in the data's units (a missing one is the layer's own)}"#),
+        .params(r#"{"layer"?, "type": "none"|"minMax"|"custom"|"percentClip"|"standardDeviation"|"histogramEqualize", "low"?: %, "high"?: %, "n"?: deviations, "min"?, "max"?: custom bounds in the data's units (a missing one is the layer's own), "like"?: raster layer (instead of type: that layer's stretch as fixed bounds, so tiles match at their joins)}"#),
         C::new("raster.dra", "DRA", "Style › Rendering", |s, p| {
             let on = b(p, "on");
             with(s, p, |rl, _| {
@@ -116,6 +124,9 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_raster)
         .params(r#"{"layer"?, "brightness"?: -100..100, "contrast"?: -100..100, "gamma"?: 0.1..10}"#),
+        C::new("raster.setDefaultStyle", "Save as Default Raster Style", "Style › Rendering", set_default_style).view().params(
+            r#"{"fromLayer"?: bool (the active or named layer's colour ramp stretch; the settings apply to every raster added later that would be a grey stretch, opened files and analysis results alike), "layer"?, "ramp"?, "invert"?: bool, "stretch"?: "none"|"minMax"|"percentClip"|"standardDeviation"|"histogramEqualize", "low"?, "high"?: %, "n"?: deviations, "resampling"?: "nearest"|"bilinear", "reset"?: bool (back to the inverted grey stretch)}"#,
+        ),
         C::new("raster.info", "Raster Information", "Data › Information", info).view().when(need_raster).params(r#"{"layer"?}"#),
         C::new("share.exportRaster", "Export Raster", "Data › Information", export).view().when(need_raster).params(
             r#"{"layer"?, "path": "*.tif", "band"?: 1..}"#,
@@ -130,6 +141,25 @@ fn get(s: &Session, p: &Value) -> Result<(u32, Arc<Raster>), String> {
     let rl = l.raster.as_ref().ok_or_else(|| format!("{} isn't a raster layer", l.name))?;
     let data = rl.data.clone().ok_or_else(|| format!("{}: the raster's data couldn't be read", l.name))?;
     Ok((id, data))
+}
+
+/// The value range a raster layer's stretch spans on the band it draws, for another layer to share.
+fn stretch_range(s: &Session, name: &str) -> Result<(f64, f64), String> {
+    let rl = s.map().layer_by_name(name).and_then(|l| l.raster.as_ref()).ok_or_else(|| format!("no raster layer '{name}'"))?;
+    let r = rl.data.as_ref().ok_or_else(|| format!("{name}: the raster's data couldn't be read"))?;
+    let band = rl.style.renderer.bands().first().copied().unwrap_or(0);
+    // Without the values its mask hides, as its own stretch is drawn.
+    let masked = rl.masked_stats();
+    let stats = masked
+        .as_ref()
+        .and_then(|m| m.first())
+        .or_else(|| r.bands.get(band).map(|b| &b.stats))
+        .ok_or_else(|| format!("{name} has no bands"))?;
+    let n = rustgis_map::raster::Normalizer::new(rl.style.stretch, stats, &r.data_type);
+    if !(n.lo.is_finite() && n.hi.is_finite() && n.lo < n.hi) {
+        return Err(format!("{name} has no range of values to share"));
+    }
+    Ok((n.lo, n.hi))
 }
 
 /// Applies `f` to the raster layer named by `p`.
@@ -155,8 +185,68 @@ pub(crate) fn add_overlay(s: &mut Session, name: &str, r: raster::Raster) -> Cmd
     add_raster(s, name, RasterLayer::from_bytes(r, format!("{name}.tif"), tif))
 }
 
-/// Adds a raster as a new layer, selects it and returns its id.
-pub fn add_raster(s: &mut Session, name: &str, layer: RasterLayer) -> CmdResult {
+/// Sets how rasters added from now on are drawn when they hold a single band of continuous values
+/// (`Session::raster_defaults`): from a layer's colour ramp stretch, from parameters, or both (the
+/// parameters win). With none, it returns the settings as they are.
+fn set_default_style(s: &mut Session, p: &Value) -> CmdResult {
+    let mut d = if b(p, "reset") == Some(true) { RasterDefaults::default() } else { s.raster_defaults.clone() };
+    if b(p, "fromLayer") == Some(true) {
+        let (id, _) = get(s, p)?;
+        let l = s.map().layer(id).ok_or("no such layer")?;
+        let style = &l.raster.as_ref().ok_or_else(|| format!("{} isn't a raster layer", l.name))?.style;
+        let RasterRenderer::Stretch { ramp, invert, .. } = &style.renderer else {
+            return Err(format!("{}: only a Stretch symbology can be the default (it has {})", l.name, style.renderer.label()));
+        };
+        if matches!(style.stretch, Stretch::Custom { .. }) {
+            return Err(format!("{}: a custom stretch is in this raster's own units; pick another stretch type first", l.name));
+        }
+        d = RasterDefaults { ramp: ramp.clone(), invert: *invert, stretch: style.stretch, resampling: style.resampling };
+    }
+    if let Some(name) = ps(p, "ramp") {
+        d.ramp = s.ramp(name)?;
+    }
+    if let Some(v) = b(p, "invert") {
+        d.invert = v;
+    }
+    if let Some(code) = ps(p, "stretch") {
+        if code.trim().eq_ignore_ascii_case("custom") {
+            return Err("a custom stretch is in one raster's own units, so it can't be the default".into());
+        }
+        d.stretch = Stretch::from_code(code, f(p, "low"), f(p, "high"), f(p, "n"), None, None, None)
+            .ok_or_else(|| format!("unknown stretch '{code}'"))?;
+    }
+    if let Some(name) = ps(p, "resampling") {
+        d.resampling = Resampling::from_name(name).ok_or_else(|| format!("unknown resampling '{name}'"))?;
+    }
+    s.raster_defaults = d.sanitized();
+    Ok(default_style_json(&s.raster_defaults))
+}
+
+/// The default raster style as `raster.setDefaultStyle` takes it.
+pub fn default_style_json(d: &RasterDefaults) -> Value {
+    let mut v =
+        json!({"ramp": d.ramp.name(), "invert": d.invert, "stretch": d.stretch.code(), "resampling": format!("{:?}", d.resampling)});
+    match d.stretch {
+        Stretch::PercentClip { low, high } => {
+            v["low"] = json!(low);
+            v["high"] = json!(high);
+        }
+        Stretch::StandardDeviation { n } => v["n"] = json!(n),
+        _ => {}
+    }
+    v
+}
+
+/// Adds a raster as a new layer, selects it and returns its id. A raster drawn the built-in way
+/// for a single band of continuous values takes the session's default raster style instead:
+/// opened files and analysis results (a slope, an NDVI) alike, since every producer adds here.
+pub fn add_raster(s: &mut Session, name: &str, mut layer: RasterLayer) -> CmdResult {
+    if let Some(d) = layer.data.clone()
+        && s.raster_defaults != RasterDefaults::default()
+        && layer.style == RasterStyle::default_for(&d)
+    {
+        layer.style = RasterStyle::default_with(&d, &s.raster_defaults);
+    }
     let mut unique = name.to_string();
     let mut i = 1;
     while s.map().layer_by_name(&unique).is_some() {
@@ -173,7 +263,12 @@ pub fn add_raster(s: &mut Session, name: &str, layer: RasterLayer) -> CmdResult 
     if empty_before && let Some(e) = s.map().layer(id).map(|l| l.extent()) {
         s.zoom_to(&e);
     }
-    Ok(json!({"layer": id, "width": w, "height": h, "bands": n}))
+    let mut v = json!({"layer": id, "width": w, "height": h, "bands": n});
+    // Callers that only read the result (the MCP server, scripts) learn about the overview too.
+    if let (Some(o), Some((fw, fh))) = (v.as_object_mut(), overview) {
+        o.insert("overviewOf".into(), json!([fw, fh]));
+    }
+    Ok(v)
 }
 
 /// Opens a raster file by path.
@@ -488,14 +583,17 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
         None => String::new(),
     };
     s.notify(format!("Exported {path}{note}"), false);
-    Ok(json!({"path": path}))
+    Ok(match r.overview {
+        Some((fw, fh)) => json!({"path": path, "width": r.width, "height": r.height, "overviewOf": [fw, fh]}),
+        None => json!({"path": path}),
+    })
 }
 
 /// Pixel values of the topmost visible raster under a longitude/latitude point.
 pub fn identify(s: &Session, lon: f64, lat: f64) -> Option<Value> {
     let scale = s.scale();
     let c = rustgis_geom::Coord::new(lon, lat);
-    s.map().layers.iter().filter(|l| l.visible && l.in_scale_range(scale)).find_map(|l| {
+    s.map().layers.iter().filter(|l| s.map().draws_at(l, scale)).find_map(|l| {
         let r = l.raster.as_ref()?.data.as_ref()?;
         let (col, row) = r.pixel_at(c)?;
         let vals: Vec<Option<f32>> = (0..r.band_count()).map(|b| r.value(b, col, row)).collect();

@@ -48,6 +48,19 @@ pub fn spec(t: &TileLayer) -> Spec {
     }
 }
 
+/// Where a MapLibre style layer's root properties place the map; `Ok(None)` while the style is
+/// still loading (asking starts loading it). Other tile layers have no view of their own.
+pub fn style_view(t: &TileLayer) -> Result<Option<rustgis_tiles::style::StyleView>, String> {
+    if t.kind != TileKind::Style {
+        return Ok(Some(Default::default()));
+    }
+    match rustgis_tiles::source::resolve(&spec(t)) {
+        rustgis_tiles::source::Resolve::Ready(r) => Ok(Some(r.style.view)),
+        rustgis_tiles::source::Resolve::Pending => Ok(None),
+        rustgis_tiles::source::Resolve::Failed(e) => Err(e),
+    }
+}
+
 /// Draws the map's visible tile layers, bottom first.
 pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels: bool) -> TileOutput {
     let mut out = TileOutput::default();
@@ -242,7 +255,7 @@ mod tests {
     }
 
     fn pixel(map: &mut Map) -> [u8; 4] {
-        let camera = Camera { center: lonlat_to_merc(Coord::new(10.0, 50.0)), res: 2000.0, bearing: 0.0 };
+        let camera = Camera { center: lonlat_to_merc(Coord::new(10.0, 50.0)), res: 2000.0, bearing: 0.0, pitch: 0.0 };
         let view = View { width: 200.0, height: 100.0, pixels_per_point: 1.0, camera, sky: false };
         let png = crate::render_png(map, &view).unwrap();
         let pm = tiny_skia::Pixmap::decode_png(&png).unwrap();
@@ -273,7 +286,7 @@ mod tests {
         // A layer that can't load draws nothing and says why.
         m.projection = Projection::WebMercator;
         m.tiles = vec![TileLayer::new("Gone", TileKind::Style, "https://tiles.test/missing.json")];
-        let camera = Camera { center: lonlat_to_merc(Coord::new(10.0, 50.0)), res: 2000.0, bearing: 0.0 };
+        let camera = Camera { center: lonlat_to_merc(Coord::new(10.0, 50.0)), res: 2000.0, bearing: 0.0, pitch: 0.0 };
         let view = View { width: 200.0, height: 100.0, pixels_per_point: 1.0, camera, sky: false };
         let r = crate::render_complete(&mut m, &view).unwrap();
         assert!(!r.tiles_pending);

@@ -410,7 +410,9 @@ otherwise, and always in the web app, which only sees the one file, it must be i
 longitude/latitude degrees. On the desktop, a GDAL `.aux.xml` file next to a raster (`dem.tif.aux.xml`
 or `dem.aux.xml`) names its bands from their descriptions, gives the no-data value when the file
 has none, and supplies the band statistics when only an overview of the raster is read.
-Exporting a raster opened from an overview writes that overview.
+Exporting a raster opened from an overview writes that overview; the results of adding and of
+exporting it (`layer.addData`, `share.exportRaster`) give the full size as `overviewOf`, so scripts
+and the MCP server see it too.
 GeoTIFFs may be regular or cloud-optimised: grey, RGB(A), palette (coloured by the file's colour
 table, as land cover such as the NLCD is) or multiband, of any pixel type, tiled or striped, and
 compressed with Deflate, LZW, PackBits, JPEG or Zstandard. The coordinate system is an EPSG code,
@@ -445,6 +447,23 @@ changing the data: values to draw as no data (a background of 0 or −9999 the f
 flags, land cover classes such as `0, 254, 255`), and values outside, or inside, a range. The
 stretch, class breaks and legend then use only the values shown. **Clear mask** shows every value
 again; the mask is saved with the project.
+
+A single-band raster of continuous values (an elevation model, a temperature grid, an index such
+as NDVI) is first drawn as an inverted grey stretch clipping 0.5 % at each end. To draw such rasters
+your own way, style one with the Stretch symbology, then click **Save as Default** under
+**Resampling**: rasters added from then on, opened files and analysis results (a slope, an NDVI)
+alike, take its color scheme, inversion, stretch type and
+resampling (a Custom Min/Max stretch is in one raster's own units, so it can't be saved). **Reset
+Default** goes back to the grey stretch. The app keeps the setting with its preferences, for every
+project; colour images, rasters with their own color table and rasters of a few categories keep
+their own look. Scripts use `raster.setDefaultStyle`, e.g.
+`{"ramp": "Viridis", "invert": false, "stretch": "standardDeviation", "n": 2, "resampling": "bilinear"}`,
+`{"fromLayer": true}` or `{"reset": true}`; with no parameters it returns the current setting.
+
+Tiles of one dataset drawn as separate layers each stretch over their own values, which shows as
+steps where they meet. `raster.stretch` with `{"like": "<layer>"}` gives a layer the value range
+of another layer's stretch as fixed bounds, so the tiles match; `{"type": "custom", "min": …,
+"max": …}` sets the bounds yourself.
 
 Clicking a raster with the Explore tool shows its pixel values. Projects remember a raster's file
 path and reopen it; rasters added in the browser are stored inside the project.

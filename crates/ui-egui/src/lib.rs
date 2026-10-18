@@ -48,6 +48,7 @@ mod sqlpane;
 mod stacui;
 mod table;
 pub mod theme;
+mod tilt_drape;
 mod update;
 mod vertexedit;
 mod widgets;
@@ -75,6 +76,9 @@ pub const TOOL_FILE_PURPOSE: &str = "toolfile:";
 /// Starts the name of a file the web shell's tool file picker put in the inbox: it goes to the
 /// Tools pane's file parameter, not onto the map.
 pub const TOOL_FILE_PICK: &str = "\u{1}toolfile:";
+
+/// The preference the default raster style (`raster.setDefaultStyle`) is kept under.
+const RASTER_DEFAULTS_PREF: &str = "raster_default_style";
 
 /// A result an asynchronous service fills in when it's done (the app polls it each frame).
 pub type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
@@ -473,12 +477,17 @@ pub struct UiState {
     /// The Data Sources pane's boxes, and the sources' generation last kept in the preferences.
     pub sources: sourcespane::State,
     pub sources_saved: u64,
+    /// The default raster style last kept in the preferences.
+    pub raster_defaults_saved: rustgis_engine::map::RasterDefaults,
     /// Add Data › Zarr…: its store, choices and fetches.
     pub zarr: zarrui::State,
     /// A layout picture waiting for its image file (web).
     pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
     pub pending_picture: Option<Vec<rustgis_engine::geom::Coord>>,
+    /// The value picked under Edit › Dynamic Text (a token such as `{scale}`): the text tool's
+    /// dialog starts with it. Cleared when the tool changes.
+    pub dynamic_text: Option<&'static str>,
     /// Text to put on the system clipboard at the end of the frame.
     pub copy_out: Option<String>,
     /// A web page to open at the end of the frame.
@@ -572,6 +581,7 @@ impl Default for UiState {
             search: Default::default(),
             sources: Default::default(),
             sources_saved: 0,
+            raster_defaults_saved: Default::default(),
             zarr: Default::default(),
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
@@ -581,6 +591,7 @@ impl Default for UiState {
             layer_filter_map: String::new(),
             layer_filter_hid: None,
             layers_view: LayersView::DrawingOrder,
+            dynamic_text: None,
         }
     }
 }
@@ -723,6 +734,13 @@ impl RustGisApp {
             self.ui.start_projection = p.code();
         }
         self.ui.start_extent = self.services.load_pref.as_ref().and_then(|load| load("start_extent")).and_then(|v| parse_extent(&v));
+        // How new single-band rasters are drawn (Save as Default in the raster Symbology pane).
+        if let Some(d) = self.services.load_pref.as_ref().and_then(|load| load(RASTER_DEFAULTS_PREF))
+            && let Ok(d) = serde_json::from_str::<rustgis_engine::map::RasterDefaults>(&d)
+        {
+            self.session.raster_defaults = d.sanitized();
+        }
+        self.ui.raster_defaults_saved = self.session.raster_defaults.clone();
         // The GPU map backend: RUSTGIS_GPU forces it on, else the saved preference.
         self.map.gpu_enabled = std::env::var_os("RUSTGIS_GPU").is_some()
             || self.services.load_pref.as_ref().and_then(|load| load("ui.map.gpu")).as_deref() == Some("1");
@@ -1200,10 +1218,27 @@ impl RustGisApp {
         if r.is_ok() && matches!(id, "edit.undo" | "edit.redo") {
             self.map.vertex = None;
         }
+        // Choosing a tool, Text included, drops a value picked under Dynamic Text
+        // (`ui.dynamicText` picks it after choosing the tool).
+        if r.is_ok() && id == "tool.set" {
+            self.ui.dynamic_text = None;
+        }
         self.note_last_project();
         // Sources added, saved or made favourites are kept with the preferences.
         sourcespane::save(self);
+        self.save_raster_defaults();
         r
+    }
+
+    /// Keeps the default raster style with the preferences when it changed.
+    fn save_raster_defaults(&mut self) {
+        if self.session.raster_defaults == self.ui.raster_defaults_saved {
+            return;
+        }
+        self.ui.raster_defaults_saved = self.session.raster_defaults.clone();
+        if let (Some(save), Ok(text)) = (&self.services.save_pref, serde_json::to_string(&self.session.raster_defaults)) {
+            save(RASTER_DEFAULTS_PREF, &text);
+        }
     }
 
     fn run_ui(&mut self, id: &str, p: &Value) -> Result<Value, String> {
@@ -2223,6 +2258,17 @@ impl RustGisApp {
                     zarrui::connect(self);
                 }
             }
+            // Edit › Dynamic Text: the text tool, its dialog starting with one of the map's values.
+            "ui.dynamicText" => {
+                let text = p.get("text").and_then(Value::as_str).unwrap_or("");
+                let token = rustgis_engine::map::graphics::TOKENS
+                    .iter()
+                    .map(|(t, _)| *t)
+                    .find(|t| *t == text)
+                    .ok_or_else(|| format!("no dynamic text '{text}' (one of {{map}}, {{scale}}, {{date}}, …)"))?;
+                self.run("tool.set", json!({"tool": "graphicText"}))?;
+                self.ui.dynamic_text = Some(token);
+            }
             "ui.dialog" => {
                 let which = p.get("name").and_then(Value::as_str).unwrap_or("");
                 self.dialogs.open(which, &self.session)?;
@@ -2230,6 +2276,10 @@ impl RustGisApp {
                 if which == "graphicText" {
                     self.dialogs.a = p.get("lon").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default();
                     self.dialogs.b = p.get("lat").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default();
+                    // Dynamic Text starts it with the value picked.
+                    if let Some(t) = p.get("text").and_then(Value::as_str) {
+                        self.dialogs.text = t.chars().take(2000).collect();
+                    }
                 }
                 // Rename Map / Rename Layout remember which one (`target`, by name; default the
                 // one in view), so renaming another from the Browser leaves the view alone.
@@ -2518,6 +2568,11 @@ impl RustGisApp {
         panes::poll_geolibre(self, ctx);
         panes::poll_plugin_run(self, ctx);
         self.poll_downloads();
+        // A value picked under Dynamic Text lasts while the text tool does, however the tool
+        // changes (Esc, another tool, a text placed without Keep Tool, a command).
+        if self.session.tool != rustgis_engine::Tool::Graphic("text") {
+            self.ui.dynamic_text = None;
+        }
         // Addresses commands asked for where they couldn't download themselves (the browser):
         // fetched off the frame and added when they land, as Add Data › From URL does.
         for p in self.session.take_url_requests() {
@@ -2525,12 +2580,21 @@ impl RustGisApp {
                 self.session.notify(e, true);
             }
         }
+        // A style added with `"view": true` moves the map once it has loaded.
+        if self.session.style_view.is_some() {
+            if self.session.follow_style_view() {
+                self.map.invalidate();
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+        }
         sqlpane::poll(self, ctx);
         self.poll_service();
         serviceui::poll(self, ctx);
         // Sources the AI Assistant or a background add brought in (not through `run`) are kept
-        // too: a generation compared each frame.
+        // too: a generation compared each frame. So is a default raster style it set.
         sourcespane::save(self);
+        self.save_raster_defaults();
         cswui::poll(self);
         stacui::poll(self, ctx);
         s3ui::poll(self, ctx);

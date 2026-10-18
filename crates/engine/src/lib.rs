@@ -267,6 +267,9 @@ pub struct Session {
     /// Favourite, recent and saved data sources (kept with the app's preferences, not the
     /// project).
     pub sources: sources::Sources,
+    /// How rasters added from now on are drawn (`raster.setDefaultStyle`; kept with the app's
+    /// preferences, not the project).
+    pub raster_defaults: rustgis_map::RasterDefaults,
     pub registry: Registry,
     /// Bumped on every change so views can cache.
     pub revision: u64,
@@ -275,6 +278,9 @@ pub struct Session {
     pub active_layer: Option<u32>,
     /// Map view size in logical points (set by the UI each frame).
     pub view_size: (f64, f64),
+    /// A MapLibre style tile layer (by its address) whose own view the map goes to once it loads
+    /// (`map.addTiles` with `"view": true`), and the camera then: moved since, the map stays.
+    pub style_view: Option<(String, Camera)>,
     pub notices: Vec<Notice>,
     /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]).
     notices_given: u64,
@@ -413,11 +419,13 @@ impl Session {
             path: None,
             dirty: false,
             sources: sources::Sources::default(),
+            raster_defaults: rustgis_map::RasterDefaults::default(),
             registry: Registry { commands: cmd::all() },
             revision: 1,
             tool: Tool::Explore,
             active_layer: None,
             view_size: (1200.0, 720.0),
+            style_view: None,
             notices: Vec::new(),
             notices_given: 0,
             table_layer: None,
@@ -540,9 +548,19 @@ impl Session {
         self.project.map_mut()
     }
 
+    /// Moves the map to the view of a style added with `"view": true` once the style has loaded
+    /// (the UI asks each frame). True when the map moved.
+    pub fn follow_style_view(&mut self) -> bool {
+        cmd::tiles::follow_style_view(self, web_time::Duration::ZERO)
+    }
+
     /// Runs a command by id. Mutating commands snapshot the project for undo; an error or a
     /// panic restores it.
     pub fn run(&mut self, id: &str, params: &Value) -> CmdResult {
+        // A style that loaded since: its view first, so the command sees where the map is.
+        if self.style_view.is_some() {
+            self.follow_style_view();
+        }
         if id.starts_with(rustgis_plugins::PREFIX) {
             return self.run_plugin(id, params);
         }
@@ -704,6 +722,8 @@ impl Session {
         self.downloading.clear();
         self.downloaded.clear();
         self.url_requests.clear();
+        // A style of the last project still loading doesn't move this one.
+        self.style_view = None;
         #[cfg(not(target_arch = "wasm32"))]
         self.sql_results.clear();
     }
@@ -792,7 +812,8 @@ impl Session {
         if let Some(last) = self.last_camera {
             let moved = (last.center.x - cam.center.x).abs() > last.res * 2.0
                 || (last.res / cam.res - 1.0).abs() > 0.01
-                || rustgis_map::camera::normalize_bearing(last.bearing - cam.bearing).abs() > 0.5;
+                || rustgis_map::camera::normalize_bearing(last.bearing - cam.bearing).abs() > 0.5
+                || (last.pitch - cam.pitch).abs() > 0.5;
             if !moved {
                 return;
             }

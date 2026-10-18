@@ -15,14 +15,30 @@ projection; places that projection can't show are skipped. Type a scale in the s
 to it. More navigation tools are under [View
 effects](#view-effects) below.
 
-**Rotating the map.** Drag with the right mouse button to turn the map about the centre of the
-view (to the right turns it clockwise), or hold ++shift++ and press ++arrow-left++ or
-++arrow-right++. The north arrow turns with the map to point north; click it to face north
-again. The bearing (the compass direction the top of the view faces, in degrees clockwise from
-north, as in MapLibre) is saved with the project, its bookmarks and bookmark files, and exported
-maps are drawn turned. Labels stay upright. `map.setBearing` sets it (`{"bearing": 90}` puts east
-at the top; `{"by": 15}` turns it further), `map.resetNorth` faces north and **Go To XY** takes a
-`bearing` too. Page layout map frames and the globe face north.
+**Rotating and tilting the map.** Drag with the right mouse button, or hold ++ctrl++ and drag
+with the Pan tool, to turn the map about the centre of the view (to the right turns it clockwise)
+and to tilt it (up tilts it further), as in MapLibre; or hold ++shift++ and press ++arrow-left++ or ++arrow-right++ to turn it, ++arrow-up++ or ++arrow-down++
+to tilt it. The north arrow turns with the map to point north and leans back as it tilts; click
+it to face north and look straight down again. The bearing (the compass direction the top of the
+view faces, in degrees clockwise from north) and the pitch (the tilt from looking straight down,
+0 to 85 degrees) work as in MapLibre. They are saved with the project, its bookmarks and bookmark
+files, and exported maps are drawn turned and tilted. A tilted map keeps the scale at the centre
+of the view: nearer ground is larger, farther ground smaller and drawn coarser, fading into fog
+and, past about 72 degrees, a sky above the horizon. Labels stay upright, and those too far away
+to read are left out. Extruded layers (Style › Extrusion) stand up in perspective on a tilted
+map, as in MapLibre: walls lit by the way they face and darker toward their foot, roofs at their
+height, with the labels of extruded features on their roofs. While a tilted map moves, the
+picture drawn last is laid over the ground and the extrusions are moved with it, and the map is
+drawn again once it settles. `map.setBearing` sets the bearing (`{"bearing": 90}`
+puts east at the top; `{"by": 15}` turns it further), `map.setPitch` the pitch (`{"pitch": 60}`,
+or `{"by": 10}`), `map.resetNorth` faces north and looks straight down, and **Go To XY** takes a
+`bearing` and a `pitch` too. Page layout map frames and the globe are not turned or tilted.
+
+MapLibre map links carry a view in their address, as
+`#zoom/latitude/longitude/bearing/pitch` (`https://…/#15.5/40.7484/-73.9857/30/60`). **Go To Map
+Link** (`map.goToLink {"url": …}`) takes such a link, or the part after its `#`, to that place,
+zoom, bearing and pitch, and `map.link` gives the current view the same way. The web app reads
+one from its own address (see [Installation](../installation.md)).
 
 **Manage Bookmarks** (at the foot of the Bookmarks menu, or **View › Windows › Bookmarks**) opens
 the Bookmarks pane: every map's bookmarks, grouped by map (the map in view in the accent colour),
@@ -121,6 +137,8 @@ Ocean, Atlas, Blank), which need no network, and web tile layers over them:
   style's expressions and zoom functions. Line labels and shields along roads, line patterns,
   hillshade and 3D extrusion are not drawn (extrusions draw flat). A label shows the lines of
   its text that the map's font can draw: a style's "Syria / سوريا" shows as "Syria".
+  A style's root `center`, `zoom`, `bearing` and `pitch` say where it opens: `map.addTiles` with
+  `"view": true` takes the map there once the style has loaded.
 
 The gallery's **Web Basemaps** need no API key: the OpenFreeMap vector maps (Liberty, Bright,
 Positron, Dark, Fiord) and USGS Imagery. Choosing one replaces the other web basemaps; tick
