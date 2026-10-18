@@ -149,18 +149,57 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
         lonlat_to_merc(Coord::new(lon, c.y.clamp(-MAX_LAT, MAX_LAT)))
     };
     // The area in view, from a grid of points, and the detail needed at its centre.
-    let mut e = Extent::EMPTY;
     let n = 24;
-    for i in 0..=n {
-        for j in 0..=n {
-            if let Some(c) = to_lonlat(f64::from(w) * f64::from(i) / f64::from(n), f64::from(h) * f64::from(j) / f64::from(n)) {
-                e.expand(to_merc(c));
-            }
+    let grid: Vec<Vec<Option<Coord>>> = (0..=n)
+        .map(|j| {
+            (0..=n)
+                .map(|i| to_lonlat(f64::from(w) * f64::from(i) / f64::from(n), f64::from(h) * f64::from(j) / f64::from(n)).map(to_merc))
+                .collect()
+        })
+        .collect();
+    let mut e = Extent::EMPTY;
+    // The most a grid cell spans: the area in view reaches up to that past its outermost points
+    // (the limb, the Web Mercator latitude limit, the meridian behind a pole).
+    let (mut step_x, mut step_y) = (0.0f64, 0.0f64);
+    let mut step = |a: Option<&Option<Coord>>, b: &Coord| {
+        if let Some(Some(a)) = a {
+            step_x = step_x.max((a.x - b.x).abs());
+            step_y = step_y.max((a.y - b.y).abs());
+        }
+    };
+    for (j, row) in grid.iter().enumerate() {
+        for (i, c) in row.iter().enumerate() {
+            let Some(c) = c else { continue };
+            e.expand(*c);
+            step(row.get(i + 1), c);
+            step(grid.get(j + 1).and_then(|r| r.get(i)), c);
         }
     }
     if e.is_empty() {
         return out;
     }
+    let half = HALF;
+    let x0 = lonlat_to_merc(Coord::new(lon0, 0.0)).x;
+    // A pole in sight brings every longitude into view, and the latitudes up to it, whether or
+    // not the grid reached them.
+    let (vw, vh) = (f64::from(w) / k, f64::from(h) / k);
+    let in_view = |lat: f64| {
+        let pole = Coord::new(lon0, lat);
+        let at = match place {
+            Place::Globe(g) => g.forward(pole),
+            Place::Flat(flat, _) => flat.forward_checked(pole).map(|m| view.camera.to_screen(m, view.width, view.height)),
+        };
+        at.is_some_and(|(x, y)| x >= 0.0 && y >= 0.0 && x <= vw && y <= vh)
+    };
+    let (north, south) = (in_view(90.0), in_view(-90.0));
+    let min_y = if south { -half } else { (e.min_y - step_y).max(-half) };
+    let max_y = if north { half } else { (e.max_y + step_y).min(half) };
+    let e = if north || south || e.width() > half {
+        // Over half the world across: every longitude.
+        Extent::new(x0 - half, min_y, x0 + half, max_y)
+    } else {
+        Extent::new((e.min_x - step_x).max(x0 - half), min_y, (e.max_x + step_x).min(x0 + half), max_y)
+    };
     let detail = match (to_lonlat(cx, cy), to_lonlat(cx + 4.0, cy)) {
         (Some(a), Some(b)) => (to_merc(a).x - to_merc(b).x).hypot(to_merc(a).y - to_merc(b).y) / 4.0,
         _ => 0.0,
@@ -206,6 +245,9 @@ fn draw_layer(pm: &mut Pixmap, t: &TileLayer, frame: &Frame, labels: bool, scrat
     d
 }
 
+/// Half the width (and height) of the Web Mercator world, metres.
+const HALF: f64 = std::f64::consts::PI * rustgis_geom::MERCATOR_R;
+
 /// Draws the mosaic over `pm`: each pixel takes the mosaic pixel under its longitude/latitude.
 fn warp(pm: &mut Pixmap, mosaic: &Pixmap, frame: &Frame, to_lonlat: &dyn Fn(f64, f64) -> Option<Coord>, to_merc: &dyn Fn(Coord) -> Coord) {
     let (w, h) = (pm.width() as usize, pm.height() as usize);
@@ -217,13 +259,15 @@ fn warp(pm: &mut Pixmap, mosaic: &Pixmap, frame: &Frame, to_lonlat: &dyn Fn(f64,
             let Some(c) = to_lonlat(x as f64 + 0.5, y as f64 + 0.5) else { continue };
             let m = to_merc(c);
             let (mx, my) = ((m.x - frame.left) / frame.m_per_px, (frame.top - m.y) / frame.m_per_px);
-            if !(mx >= 0.0 && my >= 0.0) {
+            // Within a pixel of the mosaic's edge takes the edge: the latitudes past the Web
+            // Mercator limit, clamped to it, land a hair outside (the poles' caps). Its last row
+            // can hang past the world's south edge, where no tile draws: the row above it is
+            // the edge then.
+            let (fw, fh) = (mw as f64, (mh as f64).min(((frame.top + HALF) / frame.m_per_px).floor().max(1.0)));
+            if !(mx > -1.0 && my > -1.0 && mx < fw + 1.0 && my < fh + 1.0) {
                 continue;
             }
-            let (mx, my) = (mx as usize, my as usize);
-            if mx >= mw || my >= mh {
-                continue;
-            }
+            let (mx, my) = (mx.clamp(0.0, fw - 1.0) as usize, my.clamp(0.0, fh - 1.0) as usize);
             let si = (my * mw + mx) * 4;
             let di = (y * w + x) * 4;
             let (Some(s), Some(d)) = (src.get(si..si + 4), dst.get_mut(di..di + 4)) else { continue };
@@ -322,6 +366,39 @@ mod tests {
                     assert!(p.red() > 120 && p.green() < 80 && p.blue() < 80, "centred on {lon}: ({x}, {y}) is {p:?}");
                 }
             }
+        }
+    }
+
+    /// With a pole in sight the globe's mosaic is the whole world wide, too many tiles at the
+    /// zoom of the view's centre: the coarser zoom that fits is drawn, where the tiles farthest
+    /// from the mosaic's centre (the far meridian, the polar rows) were left out (#223).
+    #[test]
+    fn the_globe_draws_tiles_around_a_pole() {
+        serve();
+        let mut m = Map::new("Map");
+        m.graticule = false;
+        m.projection = Projection::Globe;
+        m.tiles.push(TileLayer::new("Red", TileKind::Raster, "https://tiles.test/red/{z}/{x}/{y}.png"));
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 80.0)), res: 40_000.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 600.0, height: 600.0, pixels_per_point: 2.0, camera, sky: false };
+        let pm = tiny_skia::Pixmap::decode_png(&crate::render_png(&mut m, &view).unwrap()).unwrap();
+        // The pole and the meridian beyond it, up the middle of the view.
+        for y in (20..700).step_by(20) {
+            for x in (560..640).step_by(4) {
+                let p = pm.pixel(x, y).unwrap();
+                assert!(p.red() > 120 && p.green() < 80 && p.blue() < 80, "({x}, {y}) is {p:?}");
+            }
+        }
+        // Around the south pole, and a small globe whose grid of points misses the pole near
+        // its edge.
+        for (lon, lat, res, pole) in [(-110.0, -55.0, 40_000.0, -89.9), (120.0, 20.0, 150_000.0, 89.9), (120.0, 20.0, 150_000.0, 86.0)] {
+            let camera = Camera { center: lonlat_to_merc(Coord::new(lon, lat)), res, bearing: 0.0, pitch: 0.0 };
+            let view = View { width: 600.0, height: 600.0, pixels_per_point: 2.0, camera, sky: false };
+            let pm = tiny_skia::Pixmap::decode_png(&crate::render_png(&mut m, &view).unwrap()).unwrap();
+            let g = rustgis_map::globe::Globe::new(&camera, 600.0, 600.0);
+            let (x, y) = g.forward(Coord::new(lon, pole)).unwrap();
+            let p = pm.pixel((x * 2.0) as u32, (y * 2.0) as u32).unwrap();
+            assert!(p.red() > 120 && p.green() < 80 && p.blue() < 80, "({lon}, {lat}): {pole}° is {p:?}");
         }
     }
 

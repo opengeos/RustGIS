@@ -203,6 +203,7 @@ fn tiles_for(src: &Source, view: &Extent, frame: &Frame, zoom: f32, pending: &mu
     if tiles.is_empty() || z < min_z || zoom + 0.5 < f32::from(min_z) {
         return Vec::new();
     }
+    let z = template::fitting_zoom(view, z, min_z);
     let url = |t: TileId| {
         let i = (t.x as usize).wrapping_add(t.y as usize) % tiles.len();
         tiles.get(i).map(|tpl| template::expand(tpl, t, 256, false, &[]))

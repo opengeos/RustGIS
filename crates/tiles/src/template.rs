@@ -73,19 +73,39 @@ impl Placed {
     }
 }
 
+/// The columns (unwrapped) and rows of the tiles at zoom `z` (at most 30) over a Web Mercator
+/// extent; None for an extent that isn't a number.
+fn span(e: &Extent, z: u8) -> Option<(i64, i64, i64, i64)> {
+    let n = 1i64 << z;
+    let s = TileId::span(z);
+    if !(e.min_x.is_finite() && e.max_x.is_finite() && e.min_y.is_finite() && e.max_y.is_finite()) {
+        return None;
+    }
+    let col = |x: f64| ((x + HALF_WORLD) / s).floor().clamp(-4.0 * n as f64, 5.0 * n as f64) as i64;
+    let row = |y: f64| ((HALF_WORLD - y) / s).floor().clamp(-1.0, n as f64) as i64;
+    Some((col(e.min_x), col(e.max_x), row(e.max_y).max(0), row(e.min_y).min(n - 1)))
+}
+
+/// The deepest zoom up to `z` (and down to `min_z`) whose tiles over a Web Mercator extent are
+/// at most [`MAX_TILES`]: a wide extent (the globe's whole-world mosaic) takes coarser tiles
+/// rather than [`covering`] leaving out those farthest from its centre (#223).
+pub fn fitting_zoom(e: &Extent, z: u8, min_z: u8) -> u8 {
+    let mut z = z.min(30);
+    while z > min_z {
+        match span(e, z) {
+            Some((x0, x1, y0, y1)) if (x1 - x0 + 1).max(0).saturating_mul((y1 - y0 + 1).max(0)) > MAX_TILES as i64 => z -= 1,
+            _ => break,
+        }
+    }
+    z
+}
+
 /// The tiles at zoom `z` covering a Web Mercator extent, nearest the centre first. At most
 /// [`MAX_TILES`].
 pub fn covering(e: &Extent, z: u8) -> Vec<Placed> {
     let z = z.min(30);
     let n = 1i64 << z;
-    let s = TileId::span(z);
-    if !(e.min_x.is_finite() && e.max_x.is_finite() && e.min_y.is_finite() && e.max_y.is_finite()) {
-        return Vec::new();
-    }
-    let col = |x: f64| ((x + HALF_WORLD) / s).floor().clamp(-4.0 * n as f64, 5.0 * n as f64) as i64;
-    let row = |y: f64| ((HALF_WORLD - y) / s).floor().clamp(-1.0, n as f64) as i64;
-    let (x0, x1) = (col(e.min_x), col(e.max_x));
-    let (y0, y1) = (row(e.max_y).max(0), row(e.min_y).min(n - 1));
+    let Some((x0, x1, y0, y1)) = span(e, z) else { return Vec::new() };
     let mut out = Vec::new();
     if x1 < x0 || y1 < y0 || (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > MAX_TILES as i64 * 4 {
         return out;
@@ -258,6 +278,18 @@ mod tests {
         let wms = expand("https://x/wms?BBOX={bbox-epsg-3857}&WIDTH={width}", TileId { z: 0, x: 0, y: 0 }, 256, false, &[]);
         assert_eq!(wms, "https://x/wms?BBOX=-20037508.343,-20037508.343,20037508.343,20037508.343&WIDTH=256");
         assert_eq!(expand("https://x/{z}/{x}/{y}{r}.png", t, 256, false, &[]), "https://x/3/5/2.png");
+    }
+
+    #[test]
+    fn wide_extents_take_coarser_tiles() {
+        let world = Extent::new(-HALF_WORLD, -HALF_WORLD, HALF_WORLD, HALF_WORLD);
+        // 16 × 16 tiles fit; 32 × 32 don't.
+        assert_eq!(fitting_zoom(&world, 8, 0), 4);
+        assert!(covering(&world, fitting_zoom(&world, 8, 0)).len() <= MAX_TILES);
+        // Not below the source's least zoom, and a small extent keeps its zoom.
+        assert_eq!(fitting_zoom(&world, 8, 6), 6);
+        assert_eq!(fitting_zoom(&Extent::new(0.0, 0.0, 1e5, 1e5), 12, 0), 12);
+        assert_eq!(fitting_zoom(&Extent::new(f64::NAN, 0.0, 1.0, 1.0), 12, 0), 12);
     }
 
     #[test]
