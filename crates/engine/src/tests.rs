@@ -686,6 +686,16 @@ fn raster_masks_hide_values() {
     assert!(top(&s) <= (lo + hi) / 2.0, "{}", top(&s));
     s.run("raster.mask", &json!({"max": null})).unwrap();
     assert!(top(&s) > (lo + hi) / 2.0, "worked out again without the bound");
+    // Breaks edited by hand are kept.
+    let mut edited = style(&s);
+    if let rustgis_map::RasterRenderer::Classify { breaks, .. } = &mut edited.renderer {
+        breaks[0] += 0.5;
+    }
+    let id = s.map().layer_by_name("scene").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap().style = edited.clone();
+    s.run("raster.mask", &json!({"values": [lo]})).unwrap();
+    assert_eq!(style(&s).renderer, edited.renderer);
+    s.run("edit.undo", &Value::Null).unwrap();
     // Undone, saved and drawn.
     s.run("edit.undo", &Value::Null).unwrap();
     assert_eq!(style(&s).mask.max, Some((lo + hi) / 2.0));

@@ -401,11 +401,14 @@ fn mask(s: &mut Session, p: &Value) -> CmdResult {
         {
             return Err(format!("min {lo} must not be more than max {hi}"));
         }
-        rl.style.mask = m;
-        // Class breaks are worked out from the pixels shown.
-        if let RasterRenderer::Classify { band, method, ramp, breaks } = &rl.style.renderer {
-            rl.style.renderer = classify_masked(r, *band, breaks.len().max(1), *method, ramp.clone(), &rl.style.mask);
+        // Class breaks worked out from the pixels shown are worked out again; breaks edited by
+        // hand are kept.
+        if let RasterRenderer::Classify { band, method, ramp, breaks } = &rl.style.renderer
+            && classify_masked(r, *band, breaks.len().max(1), *method, ramp.clone(), &rl.style.mask) == rl.style.renderer
+        {
+            rl.style.renderer = classify_masked(r, *band, breaks.len().max(1), *method, ramp.clone(), &m);
         }
+        rl.style.mask = m;
         Ok(())
     })
 }

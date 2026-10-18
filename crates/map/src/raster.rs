@@ -6,7 +6,7 @@
 //! elevation). Stretch types, dynamic range adjustment (statistics from the current view),
 //! resampling and brightness/contrast/gamma apply on top.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use rustgis_data::raster::{BandStats, ColorHint, Raster};
 use serde::{Deserialize, Serialize};
@@ -42,9 +42,9 @@ pub struct RasterLayer {
 }
 
 /// The renderer bands' statistics without the masked pixels, and what they were worked out for:
-/// the mask, the renderer's bands and the pixels (by address).
+/// the mask, the renderer's bands and the pixels (held weakly, so their address isn't reused).
 #[derive(Clone, Default)]
-struct MaskedStats(Arc<Mutex<Option<(RasterMask, Vec<usize>, usize, Arc<Vec<BandStats>>)>>>);
+struct MaskedStats(Arc<Mutex<Option<(RasterMask, Vec<usize>, Weak<Raster>, Arc<Vec<BandStats>>)>>>);
 
 impl std::fmt::Debug for RasterLayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -119,17 +119,18 @@ impl RasterLayer {
             return None;
         }
         let bands = self.style.renderer.bands();
-        let at = Arc::as_ptr(r) as usize;
-        let mut cache = self.masked.0.lock().ok()?;
-        if let Some((m, b, a, stats)) = cache.as_ref()
+        if let Some((m, b, w, stats)) = self.masked.0.lock().ok()?.as_ref()
             && m == mask
             && *b == bands
-            && *a == at
+            && Weak::ptr_eq(w, &Arc::downgrade(r))
         {
             return Some(stats.clone());
         }
+        // Worked out without holding the lock.
         let stats = Arc::new(bands.iter().map(|b| mask.stats(r, *b)).collect::<Vec<_>>());
-        *cache = Some((mask.clone(), bands, at, stats.clone()));
+        if let Ok(mut cache) = self.masked.0.lock() {
+            *cache = Some((mask.clone(), bands, Arc::downgrade(r), stats.clone()));
+        }
         Some(stats)
     }
 }
@@ -361,7 +362,8 @@ pub struct RasterStyle {
 /// outside (or inside) a range.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RasterMask {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Sorted, without repeats (a project's list is sorted as it is read).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "sorted_values")]
     pub values: Vec<f64>,
     /// Values below `min` or above `max` are hidden; with `inside`, those from `min` to `max`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -370,6 +372,15 @@ pub struct RasterMask {
     pub max: Option<f64>,
     #[serde(default)]
     pub inside: bool,
+}
+
+/// A mask's finite values, sorted and without repeats.
+fn sorted_values<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<f64>, D::Error> {
+    let mut v: Vec<f64> = Vec::deserialize(d)?;
+    v.retain(|x| x.is_finite());
+    v.sort_by(f64::total_cmp);
+    v.dedup();
+    Ok(v)
 }
 
 /// Most pixels a band's masked statistics are worked out from.
@@ -383,10 +394,13 @@ impl RasterMask {
 
     /// Whether the value `v` is hidden. Compared in f32, as the pixels are.
     pub fn hides(&self, v: f32) -> bool {
-        if self.is_empty() {
+        // NaN is no data already.
+        if self.is_empty() || v.is_nan() {
             return false;
         }
-        if self.values.iter().any(|m| *m as f32 == v) {
+        // The values are sorted, and stay in order in f32 (+ 0.0 makes -0 equal to 0).
+        let v = v + 0.0;
+        if self.values.binary_search_by(|m| (*m as f32 + 0.0).total_cmp(&v)).is_ok() {
             return true;
         }
         if self.min.is_none() && self.max.is_none() {
@@ -829,6 +843,12 @@ mod tests {
         assert!(!inside.hides(1.0) && inside.hides(3.0) && !inside.hides(5.0));
         assert!(RasterMask { max: Some(2.0), ..RasterMask::default() }.hides(3.0), "one bound");
         assert!(!RasterMask::default().hides(f32::NAN) && RasterMask::default().is_empty());
+        assert!(!range.hides(f32::NAN), "no data isn't masked again");
+        assert!(RasterMask { values: vec![0.0], ..RasterMask::default() }.hides(-0.0));
+        // A hand-edited project's values are put in order as they are read.
+        let read: RasterMask = serde_json::from_str(r#"{"values": [255, 0, 254, 0]}"#).unwrap();
+        assert_eq!(read.values, vec![0.0, 254.0, 255.0]);
+        assert!(read.hides(255.0) && read.hides(0.0) && !read.hides(1.0));
         let st = m.stats(&r, 0);
         assert_eq!((st.min, st.max, st.count), (1.0, 5.0, 14));
         assert_eq!(m.stats(&r, 9), BandStats::default(), "no such band");
@@ -845,6 +865,9 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &rl.masked_stats().unwrap()), "kept between draws");
         rl.style.mask.values = vec![1.0];
         assert_eq!(rl.masked_stats().unwrap()[0].min, 0.0, "worked out again for a new mask");
+        let again = rl.masked_stats().unwrap();
+        rl.data = Some(Arc::new(r.clone()));
+        assert!(!Arc::ptr_eq(&again, &rl.masked_stats().unwrap()), "and for new pixels");
         // The legend leaves out masked classes and stretches over the values shown.
         rl.style.renderer = unique_values(&r, 0, Ramp::Harbour);
         let n = rl.legend().len();
