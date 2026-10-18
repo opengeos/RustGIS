@@ -475,14 +475,21 @@ fn bound(b: Node, depth: usize) -> Result<Node, String> {
             Measure::Length => f.map_or(v, |f| v * f),
             Measure::Angle => f.map_or(v, |f| v * f / (1f64.to_radians() / 3600.0)),
             // PROJ writes a TOWGS84 scale as a factor with no unit (1.000007); EPSG gives parts
-            // per million. Datum scales are within a few hundred ppm of 1, so a unitless value
-            // within 1% of 1 is a factor. (Rounded to a millionth of one: 0.999979511 is -20.489,
-            // not -20.488999999956903.)
-            Measure::Scale => match f {
-                Some(f) => (v * f * 1e12).round() / 1e6,
-                None if (v - 1.0).abs() < 0.01 => ((v - 1.0) * 1e12).round() / 1e6,
-                None => v,
-            },
+            // per million. Datum scales are within a few hundred ppm of 1, so a value within 1% of
+            // 1 is a factor. (Rounded to a millionth of a ppm: 0.999979511 is -20.489, not
+            // -20.488999999956903.)
+            Measure::Scale => {
+                // As a pure number: with its unit (`unity` or `parts per million`), else a unitless
+                // factor near 1 as it is, and other unitless values as ppm. A number near 1 is the
+                // factor (1 + difference), anything else the difference itself.
+                let s = match f {
+                    Some(f) => v * f,
+                    None if (v - 1.0).abs() < 0.01 => v,
+                    None => v * 1e-6,
+                };
+                let d = if (s - 1.0).abs() < 0.01 { s - 1.0 } else { s };
+                (d * 1e12).round() / 1e6
+            }
         })
     };
     let shift = [
@@ -496,10 +503,12 @@ fn bound(b: Node, depth: usize) -> Result<Node, String> {
         get(8610, "Z_AXIS_ROTATION", Measure::Angle),
     ];
     let Some(mut towgs84) = shift.into_iter().collect::<Option<Vec<f64>>>() else { return Ok(crs) };
-    if let (Some(turn), Some(scale)) = (turn.into_iter().collect::<Option<Vec<f64>>>(), get(8611, "SCALE_DIFFERENCE", Measure::Scale)) {
-        // TOWGS84 rotates by the position vector convention, the opposite of coordinate frame.
-        towgs84.extend(turn.into_iter().map(|r| if frame { -r } else { r }));
-        towgs84.push(scale);
+    let scale = get(8611, "SCALE_DIFFERENCE", Measure::Scale);
+    if scale.is_some() || turn.iter().any(Option::is_some) {
+        // Seven parameters, the ones not given none. TOWGS84 rotates by the position vector
+        // convention, the opposite of coordinate frame.
+        towgs84.extend(turn.into_iter().map(|r| r.map_or(0.0, |r| if frame { -r } else { r })));
+        towgs84.push(scale.unwrap_or(0.0));
     }
     let geog = if crs.name.eq_ignore_ascii_case("GEOGCS") { Some(&mut crs) } else { crs.child_mut("GEOGCS") };
     if let Some(datum) = geog.and_then(|g| g.child_mut("DATUM")) {
@@ -881,7 +890,7 @@ mod tests {
     fn corpus() -> Vec<(&'static str, [f64; 4], &'static str)> {
         include_str!("wkt2_corpus.tsv")
             .lines()
-            .filter(|l| !l.starts_with('#'))
+            .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
             .map(|l| {
                 let f: Vec<&str> = l.split('\t').collect();
                 let n = |i: usize| f[i].parse::<f64>().unwrap();
@@ -898,7 +907,7 @@ mod tests {
         // WKT1.
         let by_code_only = ["EPSG:2056", "EPSG:5514", "EPSG:3375", "EPSG:3168", "EPSG:2066", "ESRI:54008"];
         let rows = corpus();
-        assert!(rows.len() >= 58);
+        assert_eq!(rows.len(), 60);
         for (code, [x, y, lon, lat], wkt) in rows {
             if let Some(n) = code.strip_prefix("EPSG:") {
                 let with_id = format!("{},ID[\"EPSG\",{n}]]", wkt.strip_suffix(']').unwrap());
@@ -981,11 +990,24 @@ mod tests {
         // A three-parameter shift, in a unit of its own.
         let three = r#"BOUNDCRS[SOURCECRS[GEOGCRS["NAD27",DATUM["North American Datum 1927",ELLIPSOID["Clarke 1866",6378206.4,294.978698213898]],PRIMEM["Greenwich",0],CS[ellipsoidal,2],AXIS["lat",north],AXIS["lon",east],ANGLEUNIT["degree",0.0174532925199433]]],TARGETCRS[GEOGCRS["WGS 84",DATUM["World Geodetic System 1984",ELLIPSOID["WGS 84",6378137,298.257223563]],CS[ellipsoidal,2],AXIS["lat",north],AXIS["lon",east],ANGLEUNIT["degree",0.0174532925199433]]],ABRIDGEDTRANSFORMATION["NAD27 to WGS 84",METHOD["Geocentric translations (geog2D domain)",ID["EPSG",9603]],PARAMETER["X-axis translation",-8,ID["EPSG",8605]],PARAMETER["Y-axis translation",16000,LENGTHUNIT["centimetre",0.01],ID["EPSG",8606]],PARAMETER["Z-axis translation",176,ID["EPSG",8607]]]]"#;
         // A unitless scale near 1 is PROJ's factor, otherwise parts per million.
-        for (scale, ppm) in [("1.000007", "7"), ("0.6", "0.6"), ("-3", "-3")] {
+        for (scale, ppm) in [
+            ("1.000007", "7"),
+            ("0.6", "0.6"),
+            ("-3", "-3"),
+            (r#"1.000007,SCALEUNIT["unity",1]"#, "7"),
+            (r#"7,SCALEUNIT["parts per million",1E-06]"#, "7"),
+        ] {
             let seven = wkt.replace("0.999979511", scale);
             let def = crs_from_wkt(&seven).unwrap().custom_def().unwrap();
             assert!(def.proj4.contains(&format!("0.842,{ppm} ")), "{scale}: {}", def.proj4);
         }
+        // Rotations without a scale, or the reverse: the missing ones are none.
+        let no_scale = wkt.replace(r#",PARAMETER["Scale difference",0.999979511,ID["EPSG",8611]]"#, "");
+        let def = crs_from_wkt(&no_scale).unwrap().custom_def().unwrap();
+        assert!(def.proj4.contains("+towgs84=446.448,-125.157,542.06,0.15,0.247,0.842,0 "), "{}", def.proj4);
+        let no_turn = wkt.replace(r#",PARAMETER["Y-axis rotation",0.247,ID["EPSG",8609]]"#, "");
+        let def = crs_from_wkt(&no_turn).unwrap().custom_def().unwrap();
+        assert!(def.proj4.contains("+towgs84=446.448,-125.157,542.06,0.15,0,0.842,-20.489 "), "{}", def.proj4);
         let (crs, note) = read_wkt(three).unwrap();
         assert!(note.is_none() && crs.custom_def().is_some_and(|d| d.proj4.contains("+towgs84=-8,160,176 ")), "{:?}", crs.custom_def());
     }
