@@ -82,10 +82,10 @@ pub fn commands() -> Vec<C> {
             r#"{"layout"?, "shape"?: "rectangle"|"circle"|"ellipse"|"polygon"|"lasso", "points"?: [[u, v], …] (polygon/lasso, 0..1 across the frame), "map"?: name, "x"?, "y"?, "w"?, "h"?: mm}"#,
         ),
         C::new("layout.addElement", "Add Element", "Publish › Map Surrounds", add_element).params(
-            r##"{"layout"?, "kind": "northArrow"|"scaleBar"|"legend"|"colorbar"|"text"|"dynamicText"|"picture"|"table"|"chart"|"rectangle"|"extentIndicator"|"grid", "frame"?: element id (default: the first map frame), "of"?: frame id (extentIndicator), "text"?, "size"?, "color"?: "#RRGGBB"|"#RRGGBBAA", "bold"?: bool (text), "title"?: legend title (default "Legend"), "allClasses"?: bool (legend: every class, not only those the frame draws), "hideOther"?: bool (legend: leave out <all other values>), "orientation"?: "horizontal"|"vertical" (colorbar), "ticks"?: 2..21 (colorbar: labelled values, ends included), "tickSide"?: "below"|"above"|"right"|"left" (colorbar), "reverse"?: bool (colorbar: high values first), "fill"?: "#RRGGBBAA" (rectangle, northArrow), "width"?: outline width (rectangle) or line width in points (grid), "image"?: base64, "path"?: picture file, "layer"?: (table, chart; colorbar: a raster layer, default the top visible one), "field"?, "label"?, "rows"?, "step"?: degrees (0 picks one), "labels"?: bool, "style"?: "lines"|"ticks"|"linesAndTicks" (grid) or "classic"|"compass"|"triangle"|"star" (northArrow) or "alternating"|"stepped"|"line" (scaleBar), "tickLength"?: mm, "format"?: "decimal"|"dms", "hemisphere"?: bool (N/S/E/W rather than a sign), "edges"?: ["top","bottom","left","right"] (labelled edges), "labelOrientation"?: "horizontal"|"vertical", "off"?: bool (grid; options not given keep the grid's), "outline"?: "#RRGGBB" (northArrow), "units"?: "auto"|"kilometers"|"meters"|"miles"|"feet", "divisions"?: 1..10 (scaleBar), "x"?, "y"?, "w"?, "h"?: mm}"##,
+            r##"{"layout"?, "kind": "northArrow"|"scaleBar"|"legend"|"colorbar"|"text"|"dynamicText"|"picture"|"table"|"chart"|"rectangle"|"extentIndicator"|"grid", "frame"?: element id (default: the first map frame), "of"?: frame id (extentIndicator, which also takes "color" and "width" in points, default red and 2), "text"?, "size"?, "color"?: "#RRGGBB"|"#RRGGBBAA", "bold"?: bool (text), "title"?: legend title (default "Legend"), "allClasses"?: bool (legend: every class, not only those the frame draws), "hideOther"?: bool (legend: leave out <all other values>), "orientation"?: "horizontal"|"vertical" (colorbar), "ticks"?: 2..21 (colorbar: labelled values, ends included), "tickSide"?: "below"|"above"|"right"|"left" (colorbar), "reverse"?: bool (colorbar: high values first), "fill"?: "#RRGGBBAA" (rectangle, northArrow), "width"?: outline width (rectangle) or line width in points (grid), "image"?: base64, "path"?: picture file, "layer"?: (table, chart; colorbar: a raster layer, default the top visible one), "field"?, "label"?, "rows"?, "step"?: degrees (0 picks one), "labels"?: bool, "style"?: "lines"|"ticks"|"linesAndTicks" (grid) or "classic"|"compass"|"triangle"|"star" (northArrow) or "alternating"|"stepped"|"line" (scaleBar), "tickLength"?: mm, "format"?: "decimal"|"dms", "hemisphere"?: bool (N/S/E/W rather than a sign), "edges"?: ["top","bottom","left","right"] (labelled edges), "labelOrientation"?: "horizontal"|"vertical", "off"?: bool (grid; options not given keep the grid's), "outline"?: "#RRGGBB" (northArrow), "units"?: "auto"|"kilometers"|"meters"|"miles"|"feet", "divisions"?: 1..10 (scaleBar), "x"?, "y"?, "w"?, "h"?: mm}"##,
         ),
         C::new("layout.update", "Element Properties", "Publish › Element", update).params(
-            r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "text"?, "size"?, "color"?, "bold"?, "title"?, "allClasses"?: bool (legend), "hideOther"?: bool (legend), "orientation"?, "ticks"?, "tickSide"?, "reverse"?: (colorbar), "style"?: (northArrow, scaleBar), "fill"?, "outline"? (northArrow), "units"?, "divisions"? (scaleBar), "map"?, "scale"?, "center"?: [lon, lat], "bearing"?: degrees clockwise from north, "pitch"?: degrees of tilt (0 to 85), "grid"?: {grid options as in layout.addElement} | false (map frame), "layer"?: (colorbar: "" for the top visible raster), "field"?, "rows"?}"##,
+            r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "text"?, "size"?, "color"?, "bold"?, "title"?, "allClasses"?: bool (legend), "hideOther"?: bool (legend), "orientation"?, "ticks"?, "tickSide"?, "reverse"?: (colorbar), "style"?: (northArrow, scaleBar), "fill"?, "outline"? (northArrow), "units"?, "divisions"? (scaleBar), "map"?, "scale"?, "center"?: [lon, lat], "bearing"?: degrees clockwise from north, "pitch"?: degrees of tilt (0 to 85), "grid"?: {grid options as in layout.addElement} | false (map frame), "extentIndicator"?: {"color"?, "width"?: points} | false (map frame: its extent indicator's style, or removes it), "layer"?: (colorbar: "" for the top visible raster), "field"?, "rows"?}"##,
         ),
         C::new("layout.guides", "Guides", "Publish › Page Setup", guides).params(
             r#"{"layout"?, "x"?: [mm] (vertical guides, from the page's left edge), "y"?: [mm] (horizontal guides, from its top edge), "clear"?: bool (remove every guide first)}"#,
@@ -221,17 +221,27 @@ fn view_frame(s: &Session, w_mm: f64) -> (Coord, f64) {
     (m.center_lonlat(), (ground_w / (w_mm / 1000.0)).clamp(100.0, 1e10))
 }
 
-/// The active map's bearing and pitch, for a frame showing its view (the globe neither turns
-/// nor tilts).
+/// The active map's bearing and pitch, for a frame showing its view.
 fn view_turn(s: &Session) -> (f64, f64) {
     let m = s.map();
-    if m.projection.is_globe() { (0.0, 0.0) } else { (m.camera.bearing, m.camera.pitch) }
+    (m.camera.bearing, m.camera.pitch)
 }
 
 fn frame_kind(s: &Session, map: &str, w: f64, shape: FrameShape) -> ElementKind {
     let (center, scale) = view_frame(s, w);
     let (bearing, pitch) = view_turn(s);
-    ElementKind::MapFrame { map: map.to_string(), center, scale, shape, grid: None, extent_of: None, bearing, pitch }
+    ElementKind::MapFrame {
+        map: map.to_string(),
+        center,
+        scale,
+        shape,
+        grid: None,
+        extent_of: None,
+        extent_color: rustgis_map::layout::INDICATOR_COLOR,
+        extent_width: rustgis_map::layout::INDICATOR_WIDTH,
+        bearing,
+        pitch,
+    }
 }
 
 pub(crate) fn new_layout(s: &mut Session, p: &Value) -> CmdResult {
@@ -516,9 +526,12 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
             if of == frame || !matches!(l.element(of).map(|e| &e.kind), Some(ElementKind::MapFrame { .. })) {
                 return Err("of must be another map frame".into());
             }
+            let (color, width) = indicator_style(p, l.element(frame).map(|e| &e.kind))?;
             let l = active(s, p)?;
-            if let Some(ElementKind::MapFrame { extent_of, .. }) = l.element_mut(frame).map(|e| &mut e.kind) {
+            if let Some(ElementKind::MapFrame { extent_of, extent_color, extent_width, .. }) = l.element_mut(frame).map(|e| &mut e.kind) {
                 *extent_of = Some(of);
+                *extent_color = color;
+                *extent_width = width;
             }
             return Ok(json!({"element": frame}));
         }
@@ -582,6 +595,26 @@ fn tick_side(p: &Value) -> Result<Option<TickSide>, String> {
 
 fn ticks(p: &Value) -> Option<usize> {
     f(p, "ticks").filter(|v| v.is_finite()).map(|v| v.round().clamp(2.0, MAX_COLORBAR_TICKS as f64) as usize)
+}
+
+/// An extent indicator's outline colour and width (points) from `color` and `width` in `p`, each
+/// keeping the frame's (`kind`) when not given; one given but not a colour or a number is an
+/// error, not left as it was.
+fn indicator_style(p: &Value, kind: Option<&ElementKind>) -> Result<(Rgba, f64), String> {
+    let (c, w) = match kind {
+        Some(ElementKind::MapFrame { extent_color, extent_width, .. }) => (*extent_color, *extent_width),
+        _ => (rustgis_map::layout::INDICATOR_COLOR, rustgis_map::layout::INDICATOR_WIDTH),
+    };
+    let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+    let width = match (given("width"), f(p, "width")) {
+        (_, Some(v)) => v.clamp(rustgis_map::layout::MIN_INDICATOR_WIDTH, rustgis_map::layout::MAX_INDICATOR_WIDTH),
+        (true, None) => return Err("width must be a number of points".into()),
+        (false, None) => w,
+    };
+    if given("color") && ps(p, "color").is_none() {
+        return Err("color must be #RRGGBB or #RRGGBBAA".into());
+    }
+    Ok((color(p, "color", c)?, width))
 }
 
 /// A grid with the options in `p` over `base`'s; a bad value is an error, leaving nothing changed.
@@ -766,9 +799,20 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     // A north arrow's or scale bar's new look, and a map frame's grid: `"grid": false` removes it,
     // `true` adds the default one, an object changes the options it names, and null (not set)
     // leaves it as it is.
-    let (restyled, new_grid) = {
+    let (restyled, new_grid, new_indicator) = {
         let l = s.project.layouts.get(li).ok_or("no layout")?;
         let kind = &l.element(id).ok_or_else(|| format!("no element {id}"))?.kind;
+        // `"extentIndicator": false` takes the frame's indicator away; an object restyles it.
+        let indicator = match (kind, p.get("extentIndicator").filter(|v| !v.is_null())) {
+            (ElementKind::MapFrame { .. }, Some(Value::Bool(false))) => Some(None),
+            (ElementKind::MapFrame { extent_of: Some(_), .. }, Some(v @ Value::Object(_))) => Some(Some(indicator_style(v, Some(kind))?)),
+            (ElementKind::MapFrame { .. }, Some(Value::Object(_))) => {
+                return Err("this frame has no extent indicator: add one with layout.addElement (kind extentIndicator)".into());
+            }
+            (ElementKind::MapFrame { .. }, Some(_)) => return Err("extentIndicator is an object of color and width, or false".into()),
+            (_, Some(_)) => return Err("only map frames have an extent indicator".into()),
+            _ => None,
+        };
         let grid = match (kind, p.get("grid").filter(|v| !v.is_null())) {
             (ElementKind::MapFrame { grid, .. }, Some(v)) => Some(match v {
                 Value::Bool(false) => None,
@@ -779,7 +823,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
             (_, Some(_)) => return Err("only map frames have a grid".into()),
             _ => None,
         };
-        (restyle(kind, p)?, grid)
+        (restyle(kind, p)?, grid, indicator)
     };
     let map_name = match ps(p, "map") {
         Some(n) => Some(
@@ -876,7 +920,12 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
                 *reverse = v;
             }
         }
-        ElementKind::MapFrame { map, center, scale, grid, bearing, pitch, .. } => {
+        ElementKind::MapFrame { map, center, scale, grid, bearing, pitch, extent_of, extent_color, extent_width, .. } => {
+            match new_indicator {
+                Some(None) => *extent_of = None,
+                Some(Some((c, w))) => (*extent_color, *extent_width) = (c, w),
+                None => {}
+            }
             if let Some(m) = map_name {
                 *map = m;
             }

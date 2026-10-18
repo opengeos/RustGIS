@@ -47,55 +47,62 @@ pub fn http_token() -> Result<String, String> {
     token_at(&path)
 }
 
-/// The token in `path`, made when the file doesn't exist.
+/// The token in `path`, made when the file doesn't exist. A few tries at most: another process
+/// making the file at the same moment (the app, `mcp-register`) is read back, not raced forever.
 fn token_at(path: &Path) -> Result<String, String> {
-    // A file left empty (a write that never finished) is no token: a new one is made.
-    if std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0) {
-        let _ = std::fs::remove_file(path);
-    }
-    if std::fs::symlink_metadata(path).is_ok() {
-        let meta = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        if !meta.is_file() || meta.len() > 1024 {
-            return Err(format!("{}: not a token file; refused", path.display()));
+    for _ in 0..3 {
+        // A file left empty (a write that never finished) is no token: a new one is made.
+        if std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0) {
+            let _ = std::fs::remove_file(path);
         }
+        if let Ok(meta) = std::fs::symlink_metadata(path) {
+            return read_token_at(path, &meta);
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        let token = random_token()?;
+        // Written beside it and renamed into place, so no reader ever sees half a token.
+        let tmp = path.with_file_name(format!(".mcp-http.token.{}", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let mut o = std::fs::OpenOptions::new();
+        o.write(true).create_new(true);
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            if meta.uid() != rustix::process::geteuid().as_raw() || meta.permissions().mode() & 0o077 != 0 {
-                return Err(format!("{}: readable by others or not this user's; remove it to make a new token", path.display()));
-            }
+        std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+        let written = o.open(&tmp).and_then(|mut f| f.write_all(format!("{token}\n").as_bytes()));
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("{}: {e}", tmp.display()));
         }
-        let token = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?.trim().to_string();
-        if token.len() >= 32 && token.chars().all(|c| c.is_ascii_alphanumeric()) {
-            return Ok(token);
+        // Someone else's made it meanwhile: theirs is read on the next round.
+        if std::fs::symlink_metadata(path).is_ok() {
+            let _ = std::fs::remove_file(&tmp);
+            continue;
         }
-        return Err(format!("{}: holds no token; remove it to make a new one", path.display()));
-    }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    }
-    let token = random_token()?;
-    // Written beside it and renamed into place, so no reader ever sees half a token. Another
-    // process (the app, `mcp-register`) making one at the same time wins or loses whole: the
-    // file that ends up there is read back.
-    let tmp = path.with_file_name(format!(".mcp-http.token.{}", std::process::id()));
-    let _ = std::fs::remove_file(&tmp);
-    let mut o = std::fs::OpenOptions::new();
-    o.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-    let written = o.open(&tmp).and_then(|mut f| f.write_all(format!("{token}\n").as_bytes()));
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(format!("{}: {e}", tmp.display()));
-    }
-    if std::fs::symlink_metadata(path).is_ok() {
-        let _ = std::fs::remove_file(&tmp);
-    } else {
         std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
         return Ok(token);
     }
-    token_at(path)
+    Err(format!("{}: the token file kept changing; try again", path.display()))
+}
+
+/// The token in an existing file: a small regular file of this user's, private to them (on Unix;
+/// on Windows the user profile's permissions protect it).
+fn read_token_at(path: &Path, meta: &std::fs::Metadata) -> Result<String, String> {
+    if !meta.is_file() || meta.len() > 1024 {
+        return Err(format!("{}: not a token file; refused", path.display()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if meta.uid() != rustix::process::geteuid().as_raw() || meta.permissions().mode() & 0o077 != 0 {
+            return Err(format!("{}: readable by others or not this user's; remove it to make a new token", path.display()));
+        }
+    }
+    let token = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?.trim().to_string();
+    if token.len() >= 32 && token.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Ok(token);
+    }
+    Err(format!("{}: holds no token; remove it to make a new one", path.display()))
 }
 
 impl Relay {
@@ -111,6 +118,11 @@ impl Relay {
     }
 
     pub(super) fn serve_http_with(&self, port: u16, token: String) -> Result<u16, String> {
+        self.serve_http_timed(port, token, IO_TIMEOUT)
+    }
+
+    /// [`Relay::serve_http_with`] with the time a request may take to arrive (tests).
+    fn serve_http_timed(&self, port: u16, token: String, io: Duration) -> Result<u16, String> {
         let shared = Arc::clone(&self.owner.shared);
         if let Some(port) = *lock(&shared.http_port) {
             return Ok(port);
@@ -147,8 +159,7 @@ impl Relay {
                             let (request_shared, request_token, request_active) =
                                 (Arc::clone(&shared), Arc::clone(&token), Arc::clone(&active));
                             let spawned = std::thread::Builder::new().name("rustgis-mcp-http-request".into()).spawn(move || {
-                                serve(stream, &request_shared, &request_token, port);
-                                request_active.fetch_sub(1, SeqCst);
+                                serve(stream, &request_shared, &request_token, port, io, Slot { active: request_active, held: true });
                             });
                             if let Err(e) = spawned {
                                 active.fetch_sub(1, SeqCst);
@@ -205,12 +216,35 @@ fn problem(message: &str) -> String {
     serde_json::json!({"error": message}).to_string()
 }
 
-/// One HTTP request: checked, queued for the app, answered with its reply.
-fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16) {
+/// A request's place among the [`MAX_HTTP_CONNECTIONS`] not yet authenticated: given back once
+/// the token checks out (an authenticated request waits in the relay's bounded queue instead), or
+/// when the request ends.
+struct Slot {
+    active: Arc<AtomicUsize>,
+    held: bool,
+}
+
+impl Slot {
+    fn release(&mut self) {
+        if std::mem::replace(&mut self.held, false) {
+            self.active.fetch_sub(1, SeqCst);
+        }
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+/// One HTTP request: checked, queued for the app, answered with its reply. `io` bounds the whole
+/// request's arrival and the reply's writing.
+fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16, io: Duration, mut slot: Slot) {
     let _ = stream.set_nonblocking(false);
-    let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(io));
     let Ok(mut out) = stream.try_clone() else { return };
-    let mut input = BufReader::new(Deadline { stream, until: Instant::now() + IO_TIMEOUT });
+    let mut input = BufReader::new(Deadline { stream, until: Instant::now() + io });
     // The head: the request line and headers, bounded.
     let mut lines = Vec::new();
     let mut read = 0;
@@ -235,6 +269,12 @@ fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16) {
     let headers: HashMap<String, String> =
         header_lines.iter().filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string())).collect();
     let header = |k: &str| headers.get(k).map(String::as_str);
+    // A header that decides the request given twice is ambiguous (which length? which host?).
+    let twice =
+        |k: &str| header_lines.iter().filter(|l| l.split_once(':').is_some_and(|(n, _)| n.trim().eq_ignore_ascii_case(k))).count() > 1;
+    if ["content-length", "host", "authorization", "transfer-encoding"].iter().any(|k| twice(k)) {
+        return respond(&mut out, "400 Bad Request", &[], &problem("a header that decides the request is given twice"));
+    }
     // Another host name (DNS rebinding) or a web page's request: refused before anything else.
     let host_ok = header("host").is_some_and(|h| {
         [format!("127.0.0.1:{port}"), format!("localhost:{port}"), format!("[::1]:{port}")].iter().any(|ok| h.eq_ignore_ascii_case(ok))
@@ -249,6 +289,9 @@ fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16) {
     if !same_token(given, token) {
         return respond(&mut out, "401 Unauthorized", &[("WWW-Authenticate", "Bearer")], &problem("a valid bearer token is required"));
     }
+    // Authenticated: its place among the unauthenticated goes back, so idle connections can't
+    // keep a real client out while it waits for the app.
+    slot.release();
     let path = target.split('?').next().unwrap_or("");
     if path != HTTP_PATH && path != "/" {
         return respond(&mut out, "404 Not Found", &[], &problem("post MCP messages to /mcp"));
@@ -265,6 +308,10 @@ fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16) {
     };
     if len > MAX_BODY {
         return respond(&mut out, "413 Content Too Large", &[], &problem("the body is too large"));
+    }
+    // A client waiting for leave to send its body (curl does for large ones) gets it now.
+    if header("expect").is_some_and(|e| e.eq_ignore_ascii_case("100-continue")) {
+        let _ = out.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").and_then(|()| out.flush());
     }
     let mut body = vec![0u8; len];
     if input.read_exact(&mut body).is_err() {
@@ -426,6 +473,10 @@ mod tests {
         assert_eq!(http(port, &get).0, 405);
         let elsewhere = format!("POST /other HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nContent-Length: 2\r\n\r\n{{}}");
         assert_eq!(http(port, &elsewhere).0, 404);
+        let twice = format!(
+            "POST /mcp HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nContent-Length: 2\r\nContent-Length: 40\r\n\r\n{{}}"
+        );
+        assert_eq!(http(port, &twice).0, 400, "two lengths");
         let huge =
             format!("POST /mcp HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1);
         assert_eq!(http(port, &huge).0, 413);
@@ -450,20 +501,20 @@ mod tests {
     #[test]
     fn http_cuts_off_a_trickling_request() {
         let relay = Relay::start(0).unwrap();
-        let port = relay.serve_http_with(0, "d".repeat(32)).unwrap();
+        let io = Duration::from_millis(800);
+        let port = relay.serve_http_timed(0, "d".repeat(32), io).unwrap();
         let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        let started = Instant::now();
-        let mut closed = false;
-        for b in "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n".bytes().cycle().take(40) {
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        // A byte every 200 ms: each read alone would never time out.
+        for b in "POST /mcp HTTP/1.1\r\nHost".bytes() {
             if c.write_all(&[b]).is_err() {
-                closed = true;
                 break;
             }
-            std::thread::sleep(Duration::from_millis(400));
+            std::thread::sleep(Duration::from_millis(200));
         }
-        let mut rest = String::new();
-        let _ = c.read_to_string(&mut rest);
-        assert!(closed || started.elapsed() < IO_TIMEOUT + Duration::from_secs(8), "the trickling client was kept");
+        // Cut off at the deadline: the server has closed (end of stream or a reset).
+        let mut buf = [0u8; 64];
+        assert!(matches!(c.read(&mut buf), Ok(0) | Err(_)), "the trickling client was kept");
         relay.stop();
     }
 

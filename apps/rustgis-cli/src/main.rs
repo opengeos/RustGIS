@@ -403,7 +403,8 @@ fn attach(port: u16, allow_access: bool, token_file: Option<&str>) -> Result<(),
     Ok(())
 }
 
-/// `mcp-register`: registers the desktop app's MCP over HTTP with an agent. The address is the
+/// `mcp-register`: registers the desktop app's MCP over HTTP with an agent (and makes the token
+/// file when there is none yet, as the app would; the app needn't be running). The address is the
 /// app's HTTP port (`--port`, else `RUSTGIS_MCP_HTTP_PORT` or 8768), the token the stable one in
 /// the settings folder, the same file the app reads. `--client claude` runs `claude mcp add`;
 /// without it the configuration is printed for any client.
@@ -419,6 +420,9 @@ fn mcp_register(args: &[String]) -> Result<(), String> {
     let header = format!("Authorization: Bearer {token}");
     match opt(args, "--client") {
         Some("claude") => {
+            eprintln!(
+                "rustgis-cli: passing the MCP token to `claude mcp add` (other users of this computer can see a running program's arguments for that moment)"
+            );
             let status = std::process::Command::new("claude")
                 .args(["mcp", "add", "--transport", "http", name, &url, "--header", &header])
                 .status()

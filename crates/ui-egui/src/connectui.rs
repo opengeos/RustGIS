@@ -67,7 +67,12 @@ fn start_http(app: &mut RustGisApp) {
             let text = crate::i18n::fmt("MCP over HTTP on 127.0.0.1:{port}", &[("port", &port.to_string())]);
             app.session.notify(text, false);
         }
-        Err(e) => app.session.notify(crate::i18n::fmt("MCP over HTTP couldn't start: {error}", &[("error", &e)]), true),
+        Err(e) => {
+            // Kept in the settings section too, not only a passing notice.
+            let said = crate::i18n::fmt("MCP over HTTP couldn't start: {error}", &[("error", &e)]);
+            app.session.notify(said.clone(), true);
+            app.connect.error = Some(said);
+        }
     }
 }
 
