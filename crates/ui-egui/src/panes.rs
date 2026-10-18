@@ -2833,8 +2833,9 @@ fn field_combo(app: &mut RustGisApp, ui: &mut Ui, label: &str, cur: &str, fields
 fn ramp_picker(app: &mut RustGisApp, ui: &mut Ui, cur: &Ramp, t: &Tokens) {
     ui.add_space(4.0);
     ui.label(egui::RichText::new(tl!("Color scheme")).size(11.5).color(t.text_dim));
-    let w = (ui.available_width() - 8.0) / 2.0;
     let grid = |app: &mut RustGisApp, ui: &mut Ui, id: &str, ramps: Vec<Ramp>| {
+        // Two to a row, in the width left inside the group's indent.
+        let w = (ui.available_width() - 8.0) / 2.0;
         egui::Grid::new(id).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
             for (i, r) in ramps.iter().enumerate() {
                 // Built-in names are translated; a custom ramp's is the user's own.
