@@ -9,7 +9,7 @@ use rustgis_engine::map::{Basemap, RasterRenderer, Renderer, Resampling, Stretch
 use serde_json::{Value, json};
 
 use crate::theme::{Tokens, regular, semibold};
-use crate::widgets::{CONTENT_H, LABEL_H, big, big_menu, col, group, menu_item, small, small_menu, text_w};
+use crate::widgets::{CONTENT_H, LABEL_H, big, big_form_menu, big_menu, col, group, menu_item, small, small_form_menu, small_menu, text_w};
 use crate::{RightPane, RustGisApp, icons};
 
 pub const TABS: [&str; 10] = ["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"];
@@ -2988,7 +2988,7 @@ fn start_projection_menu(app: &mut RustGisApp, ui: &mut Ui) {
     let current = if app.ui.start_projection.is_empty() { "mercator".to_string() } else { app.ui.start_projection.clone() };
     let shown = rustgis_engine::map::Projection::from_code(&current).map(|p| p.label()).unwrap_or_else(|_| current.clone());
     let label = format!("{}\n{}", tl!("Projection"), tl!(shown.as_str()));
-    big_menu(ui, app, "basemap", &label, "The projection the map opens in.", move |ui, app| {
+    big_form_menu(ui, app, "basemap", &label, "The projection the map opens in.", move |ui, app| {
         let mut items: Vec<(String, String)> = vec![("mercator".into(), "Web Mercator".into()), ("globe".into(), "Globe".into())];
         items.extend(rustgis_engine::map::projection::PRESETS.iter().map(|(id, label, _)| (id.to_string(), label.to_string())));
         for (id, label) in items {
@@ -3128,7 +3128,7 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
             } else {
                 tl!("Display Filters").to_string()
             };
-            small_menu(ui, app, "filter", &label, "Show different features at different scales.", |ui, app| {
+            small_form_menu(ui, app, "filter", &label, "Show different features at different scales.", |ui, app| {
                 ui.label(egui::RichText::new(tl!("Below 1:5,000,000 show everything; beyond it only what matches:")).small().weak());
                 ui.add(egui::TextEdit::singleline(&mut app.forms.expression).hint_text("pop_max > 1000000").desired_width(220.0));
                 if ui.button(tl!("Set Filter")).clicked() {
