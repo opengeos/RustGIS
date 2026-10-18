@@ -421,18 +421,16 @@ pub(crate) fn extrude_tilted(
     };
     let px = |p: (f64, f64)| (p.0 as f32 * ppp, p.1 as f32 * ppp);
     if x.shadows
-        && let Some(mut layer) = Pixmap::new(pm.width(), pm.height())
+        && let Some(mut shade_layer) = Pixmap::new(pm.width(), pm.height())
     {
         // Cast on the ground away from the light: every piece opaque on a layer of its own, laid
         // over the map once, so where pieces (or neighbours' shadows) overlap it is no darker.
         let shade = paint(Rgba::new(0, 0, 0, 255), 1.0);
-        let pm_main = &mut *pm;
-        let pm = &mut layer;
         for (_, rings, _, up, _, _) in &shapes {
             for q in tilted_shadow_quads(&cam, w, h, rings, *up) {
                 let q: Vec<_> = q.into_iter().map(px).collect();
                 if let Some(p) = path(&q) {
-                    pm.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
+                    shade_layer.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
                 }
             }
             let (du, dv) = shadow_shift(*up);
@@ -440,12 +438,12 @@ pub(crate) fn extrude_tilted(
                 let moved: Vec<_> = r.iter().map(|&(u, v)| (u + du, v + dv)).collect();
                 let shifted: Option<Vec<_>> = clip_near(&moved, cam.near_v(0.0, h)).into_iter().map(|(u, v)| at(u, v, 0.0)).collect();
                 if let Some(p) = shifted.as_deref().and_then(path) {
-                    pm.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
+                    shade_layer.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
                 }
             }
         }
         let over = PixmapPaint { opacity: 60.0 / 255.0, ..PixmapPaint::default() };
-        pm_main.draw_pixmap(0, 0, layer.as_ref(), &over, Transform::identity(), None);
+        pm.draw_pixmap(0, 0, shade_layer.as_ref(), &over, Transform::identity(), None);
     }
     for (_, rings, holes, up, fogged, row) in &shapes {
         let sym = symbol(*row);

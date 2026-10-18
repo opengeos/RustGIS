@@ -1215,6 +1215,19 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
             break;
         }
         clear = scene.clear;
+        // A long band is drawn at a lower pixel density (`band_view`): its strokes and markers,
+        // sized in its pixels, are brought to the view's.
+        let k = (view.pixels_per_point / v.pixels_per_point.max(1e-9)) as f32;
+        let mut scene = scene;
+        if (k - 1.0).abs() > 1e-6 {
+            for c in &mut scene.cmds {
+                match c {
+                    DrawCmd::Mesh { vertices, .. } => vertices.iter_mut().for_each(|v| v.stroke_px *= k),
+                    DrawCmd::Points { instances, .. } => instances.iter_mut().for_each(|p| p.radius_px *= k),
+                    DrawCmd::Image { .. } | DrawCmd::Extrusion { .. } => {}
+                }
+            }
+        }
         for a in scene.attribution {
             if !attribution.contains(&a) {
                 attribution.push(a);
@@ -1426,6 +1439,9 @@ pub use effects::{TiltedWall, clip_near, shadow_shift, tilted_shadow_quads, tilt
 /// do), then their roofs and walls, which the depth buffer sorts out. Walls carry their outward
 /// normals, lit in the shader so they stay lit right as the map turns.
 fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Vec<gpu_scene::DrawCmd> {
+    // Past this many vertices a command's u32 indices would wrap: the remaining features are
+    // left out (hostile data), as the device couldn't take such a buffer anyway.
+    const MAX_VERTICES: usize = u32::MAX as usize / 2;
     use gpu_scene::{EXTRUDE_ROOF, EXTRUDE_SHADOW, EXTRUDE_WALL, ExtrudeVertex};
     let rel = |c: Coord, z: f64| [(c.x - origin[0]) as f32, (c.y - origin[1]) as f32, z as f32];
     let vertex =
@@ -1434,7 +1450,15 @@ fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Vec<gpu_scene::
     let (mut shade, mut shade_i) = (Vec::new(), Vec::<u32>::new());
     let shadow = mesh::premul(Rgba::new(0, 0, 0, 60));
     for s in shapes {
-        let h = s.height.clamp(0.0, 1e9);
+        if solid.len() + s.roof.len() * 2 + s.rings.iter().chain(&s.holes).map(Vec::len).sum::<usize>() * 8 > MAX_VERTICES {
+            break;
+        }
+        // A height that is no number (hostile attributes) stands no higher than the ground.
+        let h = if s.height.is_finite() { s.height.clamp(0.0, 1e9) } else { 0.0 };
+        // Roof indices beyond its vertices (never from the tessellator) would draw garbage.
+        if s.roof_indices.iter().any(|i| *i as usize >= s.roof.len()) {
+            continue;
+        }
         let color = mesh::premul(s.fill);
         let lit = if s.lighting { 1.0 } else { 0.0 };
         let roof_at = |p: &[f32; 2]| Coord::new(s.origin.x + f64::from(p[0]), s.origin.y + f64::from(p[1]));
@@ -3626,6 +3650,34 @@ mod tests {
         let shapes = extruded_shapes(&mut m, &far_south);
         assert_eq!(shapes.len(), 1);
         assert!((shapes[0].height / 200_000.0 - 1.0).abs() < 0.05, "{}", shapes[0].height);
+    }
+
+    /// Extruded features with junk heights or roof indices (hostile data) give finite geometry
+    /// or are left out, never garbage.
+    #[test]
+    fn gpu_extrusions_survive_junk_heights() {
+        let ring = vec![Coord::new(0.0, 0.0), Coord::new(10.0, 0.0), Coord::new(10.0, 10.0), Coord::new(0.0, 10.0)];
+        let shape = |height: f64, roof_indices: Vec<u32>| ExtrudedShape {
+            origin: Coord::new(0.0, 0.0),
+            center: Coord::new(5.0, 5.0),
+            roof: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
+            roof_indices,
+            rings: vec![ring.clone()],
+            holes: vec![],
+            metres: height,
+            height,
+            fill: Rgba::rgb(200, 100, 50),
+            stroke: Rgba::rgb(0, 0, 0),
+            face_culling: true,
+            lighting: true,
+            shadows: true,
+        };
+        let shapes = [shape(f64::NAN, vec![0, 1, 2, 0, 2, 3]), shape(f64::INFINITY, vec![0, 1, 2]), shape(5.0, vec![0, 1, 99])];
+        for cmd in extrusion_cmds(&shapes, [0.0, 0.0]) {
+            let gpu_scene::DrawCmd::Extrusion { vertices, indices, .. } = cmd else { panic!("an extrusion") };
+            assert!(vertices.iter().all(|v| v.position.iter().chain(&v.info).all(|x| x.is_finite())));
+            assert!(indices.iter().all(|i| (*i as usize) < vertices.len()));
+        }
     }
 
     #[test]

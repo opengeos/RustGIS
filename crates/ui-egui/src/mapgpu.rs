@@ -42,7 +42,7 @@ pub(crate) fn view_proj(cam: &Camera, w: f64, h: f64, origin: [f64; 2]) -> [[f32
 
 /// The nearest depth drawn (a fraction of the eye's distance from the centre), as
 /// `Camera::try_to_screen` leaves out what is nearer.
-const NEAR_DEPTH: f64 = 0.05;
+const NEAR_DEPTH: f64 = rustgis_engine::map::camera::NEAR;
 
 /// Host-side mirror of the marker vertex shader's displacement: a unit-space template point
 /// becomes a pixel offset, then a clip offset. Templates are defined y-down (screen), clip y
@@ -137,7 +137,7 @@ impl CmdUniforms {
             viewport: [
                 (w * f64::from(ppp)) as f32,
                 (h * f64::from(ppp)) as f32,
-                if cam.pitch != 0.0 { 1.0 } else { 0.0 },
+                if rustgis_engine::map::camera::normalize_pitch(cam.pitch) != 0.0 { 1.0 } else { 0.0 },
                 rustgis_engine::map::camera::FAR as f32,
             ],
             light: extrusion_light(cam),
@@ -573,15 +573,24 @@ pub(crate) struct SceneBuffers {
 }
 
 impl SceneBuffers {
-    /// Whether a camera move to `cam` may re-project the scene: it was drawn for a view turned
-    /// (or north-up) and tilted (or flat) like it, so its backdrop, bands and the ground it covers
-    /// (a turned view draws the north-up box around it) still fit.
+    /// Whether a camera move to `cam` may re-project the scene: a flat, north-up scene for a
+    /// flat, north-up view; a turned or tilted one for about the same bearing and pitch and a
+    /// zoom within reach (it covers the ground its own camera showed: a turned view's north-up
+    /// box, a tilted view's bands out to its reach), else it is drawn again.
     pub(crate) fn fits(&self, cam: &Camera) -> bool {
-        let (turned, tilted) = match &self.tilt {
-            Some(t) => (t.camera.bearing != 0.0, t.camera.pitch != 0.0),
-            None => (false, false),
-        };
-        turned == (cam.bearing != 0.0) && tilted == (cam.pitch != 0.0)
+        let pitch = rustgis_engine::map::camera::normalize_pitch(cam.pitch);
+        match &self.tilt {
+            None => cam.bearing == 0.0 && pitch == 0.0,
+            Some(t) => {
+                let turn = rustgis_engine::map::camera::normalize_bearing(cam.bearing - t.camera.bearing).abs();
+                let zoom = cam.res / t.camera.res.max(1e-12);
+                (t.camera.bearing != 0.0) == (cam.bearing != 0.0)
+                    && (t.camera.pitch != 0.0) == (pitch != 0.0)
+                    && turn < 0.5
+                    && (pitch - t.camera.pitch).abs() < 0.5
+                    && (0.7..1.4).contains(&zoom)
+            }
+        }
     }
 }
 
