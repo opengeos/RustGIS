@@ -83,10 +83,11 @@ fn start_bridge(app: &mut RustGisApp) -> Result<(), String> {
     if app.file_bridge.is_some() {
         return Ok(());
     }
+    // Tests never touch the real folder (a running RustGIS holds its lock): one of their own, or none.
     #[cfg(test)]
     let started = match app.connect.bridge_dir.clone() {
         Some(dir) => rustgis_assistant::filebridge::FileBridge::start_in(dir),
-        None => rustgis_assistant::filebridge::FileBridge::start(),
+        None => Err("no file bridge folder in this test".to_string()),
     };
     #[cfg(not(test))]
     let started = rustgis_assistant::filebridge::FileBridge::start();

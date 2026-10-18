@@ -224,10 +224,21 @@ impl FileBridge {
         if self.inner.stopped.load(SeqCst) || !self.inner.changed.swap(false, SeqCst) {
             return None;
         }
+        // The file the watcher saw settle, and no other: one replaced meanwhile (or while it's
+        // read) is left for the watcher to settle and run once whole.
+        let command = self.command_path();
+        let settled = *lock(&self.inner.seen);
+        if stamp(&command) != settled {
+            return None;
+        }
+        let script = read_script(&command);
+        if stamp(&command) != settled {
+            return None;
+        }
         // The last run's outcome goes first, so an agent waiting for this run's never reads it.
         let _ = std::fs::remove_file(self.result_path());
         let started = Instant::now();
-        let mut outcome = match read_script(&self.command_path()) {
+        let mut outcome = match script {
             Ok(script) => {
                 let server = Server { users_project: true, ..Server::new(self.inner.allow_access.load(SeqCst)) };
                 let call =
@@ -245,7 +256,10 @@ impl FileBridge {
         if let Some(o) = outcome.as_object_mut() {
             o.insert("timestamp".into(), json!(crate::chatgpt::rfc3339(i64::try_from(secs).unwrap_or(0))));
         }
-        let _ = write_atomic(&self.inner.dir, RESULT, &outcome.to_string());
+        // A result that can't be written is said: an agent waiting for it would wait forever.
+        if let Err(e) = write_atomic(&self.inner.dir, RESULT, &outcome.to_string()) {
+            return Some(Outcome { success: false, error: Some(format!("the result couldn't be written: {e}")) });
+        }
         Some(Outcome {
             success: outcome.get("success") == Some(&Value::Bool(true)),
             error: outcome.get("error").and_then(Value::as_str).map(str::to_string),
