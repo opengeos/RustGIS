@@ -141,7 +141,8 @@ struct Shared {
 
 /// What the relay keeps for one agent between its calls.
 struct AgentState {
-    /// `agent 1`, `agent 2`…, in the order they first called: the [`Session::actor`] of its steps.
+    /// `agent 1 (relay run …)`, `agent 2 (…)`…, in the order they first called: the
+    /// [`Session::actor`] of its steps.
     name: String,
     /// The layer its commands act on when they name none.
     active: Option<u32>,
@@ -253,6 +254,21 @@ impl Drop for Grant {
 struct Owner {
     shared: Arc<Shared>,
     port: u16,
+    /// The last tool call an attached agent ran ([`Relay::last_action`]).
+    last: Mutex<Option<Action>>,
+}
+
+/// A tool call an attached agent ran, for the app to show while the user watches.
+#[derive(Clone, Debug)]
+pub struct Action {
+    /// Short: the command id (`layer.addSample`), `gp.run <tool>` or the tool's name.
+    pub label: String,
+    /// The call with its parameters, cut to a line ([`crate::tools::summary`]).
+    pub detail: String,
+    /// Whether it succeeded.
+    pub ok: bool,
+    /// When it ran.
+    pub at: Instant,
 }
 
 impl Drop for Owner {
@@ -468,7 +484,7 @@ impl Relay {
             run_id: random_token()?.chars().take(8).collect(),
             agents: Mutex::new(HashMap::new()),
         });
-        let owner = Arc::new(Owner { shared, port });
+        let owner = Arc::new(Owner { shared, port, last: Mutex::new(None) });
         let accepting = Arc::clone(&owner.shared);
         std::thread::Builder::new()
             .name("rustgis-mcp-relay".into())
@@ -491,6 +507,11 @@ impl Relay {
     /// not counted.
     pub fn attached_clients(&self) -> usize {
         self.owner.shared.attached.load(SeqCst)
+    }
+
+    /// The last tool call an attached agent ran, if any has run since the relay started.
+    pub fn last_action(&self) -> Option<Action> {
+        lock(&self.owner.last).clone()
     }
 
     /// Stops the listener: it closes, every client is disconnected, queued messages are dropped
@@ -630,10 +651,13 @@ impl Relay {
             // app (Session::run catches panics inside commands; this covers the tools around it).
             // The agent works with its own active layer and is named in the undo history; the
             // user's selection is theirs again afterwards.
-            let (users_layer, agents_layer) = self.enter_agent(s, &req.token);
+            let users_layer = self.enter_agent(s, &req.token);
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &req.line)))
                 .unwrap_or_else(|_| Some(internal_error(&req.line)));
-            self.leave_agent(s, &req.token, users_layer, agents_layer);
+            self.leave_agent(s, &req.token, users_layer);
+            if let Some(a) = action(&req.line, out.as_deref()) {
+                *lock(&self.owner.last) = Some(a);
+            }
             let _ = req.reply.send(out); // the connection may have hung up
             ran += 1;
         }
@@ -643,32 +667,60 @@ impl Relay {
 
 impl Relay {
     /// Before an agent's call: names it as the session's actor and makes its own active layer
-    /// (if it still exists) the session's. Returns the user's active layer and the agent's.
-    fn enter_agent(&self, s: &mut Session, token: &str) -> (Option<u32>, Option<u32>) {
+    /// (if it still exists) the session's. Returns the user's active layer.
+    fn enter_agent(&self, s: &mut Session, token: &str) -> Option<u32> {
         let mut agents = lock(&self.owner.shared.agents);
         let n = agents.len() + 1;
-        let agent = agents.entry(token.to_string()).or_insert_with(|| AgentState { name: format!("agent {n}"), active: None });
+        // Named for this relay run too: a relay started again on the same session numbers its
+        // agents from 1 again, and its `agent 1` mustn't pass for an earlier run's.
+        let run = &self.owner.shared.run_id;
+        let agent =
+            agents.entry(token.to_string()).or_insert_with(|| AgentState { name: format!("agent {n} (relay run {run})"), active: None });
         let users = s.active_layer;
         let mine = agent.active.filter(|id| s.map().layer(*id).is_some());
         if mine.is_some() {
             s.active_layer = mine;
         }
         s.actor = Some(agent.name.clone());
-        (users, mine)
+        users
     }
 
-    /// After an agent's call: remembers the layer it left active (when it changed it) and gives
-    /// the user back their own, if that layer is still there.
-    fn leave_agent(&self, s: &mut Session, token: &str, users: Option<u32>, mine: Option<u32>) {
+    /// After an agent's call: remembers the layer it left active as its own (from its first call
+    /// on, its commands no longer follow the user's selection) and gives the user back theirs, if
+    /// that layer is still there.
+    fn leave_agent(&self, s: &mut Session, token: &str, users: Option<u32>) {
         s.actor = None;
-        let now = s.active_layer;
-        if let Some(agent) = lock(&self.owner.shared.agents).get_mut(token)
-            && now != mine.or(users)
-        {
-            agent.active = now;
+        if let Some(agent) = lock(&self.owner.shared.agents).get_mut(token) {
+            agent.active = s.active_layer;
         }
         s.active_layer = users.filter(|id| s.map().layer(*id).is_some());
     }
+}
+
+/// The last tool call in a message (or batch), with whether its reply says it worked.
+fn action(line: &str, reply: Option<&str>) -> Option<Action> {
+    let msg: Value = serde_json::from_str(line).ok()?;
+    let messages = msg.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&msg));
+    let call = messages.iter().rev().find(|m| m.get("method").and_then(Value::as_str) == Some("tools/call") && m.get("id").is_some())?;
+    let params = call.get("params")?;
+    let name = params.get("name").and_then(Value::as_str)?;
+    let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+    let text = |k: &str| args.get(k).and_then(Value::as_str).map(|v| crate::tools::clip(v.trim(), 80));
+    let label = match name {
+        "run_command" => text("command").unwrap_or_else(|| name.to_string()),
+        "run_tool" => format!("gp.run {}", text("tool").unwrap_or_default()),
+        _ => crate::tools::clip(name, 80),
+    };
+    let detail = crate::tools::summary(&crate::provider::ToolCall { id: String::new(), name: name.to_string(), args });
+    // The reply to that call: a protocol error or a tool result marked as an error failed.
+    let id = call.get("id");
+    let replies: Value = reply.and_then(|r| serde_json::from_str(r).ok()).unwrap_or(Value::Null);
+    let replies = replies.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&replies));
+    let ok = replies
+        .iter()
+        .find(|r| r.get("id") == id)
+        .is_some_and(|r| r.get("error").is_none() && r.pointer("/result/isError") != Some(&Value::Bool(true)));
+    Some(Action { label, detail, ok, at: Instant::now() })
 }
 
 /// Whether a message (or a message in a batch) is `prompts/list` or `prompts/get`, the only ones
@@ -1414,6 +1466,35 @@ mod tests {
         assert!(s.map().layer_by_name("Towns").is_some() && s.map().layer_by_name("Lakes").is_some(), "the agent renamed its own layer");
         assert_eq!(s.active_layer, id(&s, "Lakes"));
         relay.stop();
+
+        // An agent that picks the layer the user has active keeps it when the user moves on.
+        let relay = Relay::start(0).unwrap();
+        s.active_layer = id(&s, "Countries");
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        call(&mut client, &relay, &mut s, command(3, "layer.select", json!({"layer": "Countries"})));
+        s.active_layer = id(&s, "Lakes");
+        call(&mut client, &relay, &mut s, command(4, "layer.rename", json!({"name": "Nations"})));
+        assert!(s.map().layer_by_name("Nations").is_some() && s.map().layer_by_name("Lakes").is_some());
+        relay.stop();
+    }
+
+    /// A relay started again on the same session doesn't take an earlier run's agent steps for
+    /// its own agents'.
+    #[test]
+    fn relay_agents_of_another_run_cant_undo_earlier_steps() {
+        let mut s = sample();
+        let first = Relay::start(0).unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", first.port())).unwrap();
+        attach(&mut client, &first, false);
+        call(&mut client, &first, &mut s, add_sample_call(1));
+        first.stop();
+        let second = Relay::start(0).unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", second.port())).unwrap();
+        attach(&mut client, &second, false);
+        let r = call(&mut client, &second, &mut s, command(2, "edit.undo", json!({})));
+        assert_eq!(r["result"]["isError"], true, "another run's agent 1 is not this one: {r}");
+        second.stop();
     }
 
     /// An agent undoes and redoes only its own steps, never the user's; the user's history keeps
@@ -1434,7 +1515,7 @@ mod tests {
         // The agent's own step: undone, then redone.
         let layers = s.map().layers.len();
         call(&mut client, &relay, &mut s, add_sample_call(2));
-        assert_eq!(s.undo_actor(), Some(Some("agent 1")));
+        assert!(s.undo_actor().flatten().is_some_and(|a| a.starts_with("agent 1 (relay run ")), "{:?}", s.undo_actor());
         let r = call(&mut client, &relay, &mut s, undo(3));
         assert_eq!(r["result"]["isError"], false, "{r}");
         assert_eq!(s.map().layers.len(), layers);
@@ -1452,6 +1533,42 @@ mod tests {
         assert!(s.run("edit.undo", &json!({})).is_ok());
         assert!(s.map().layer_by_name("Rivers").is_some());
         assert_eq!(s.actor, None);
+        relay.stop();
+    }
+
+    /// The relay remembers the last tool call an agent ran, and whether it worked, for the app
+    /// to show; an agent attached to it is told the user is watching.
+    #[test]
+    fn relay_records_the_agents_last_call() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        assert!(relay.last_action().is_none());
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
+        writeln!(client, "{init}").unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        let r = reply(&client);
+        assert!(r["result"]["instructions"].as_str().is_some_and(|i| i.contains("watch the map")), "{r}");
+        assert!(relay.last_action().is_none(), "initialize is not a tool call");
+        writeln!(client, "{}", add_sample_call(2)).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        reply(&client);
+        let a = relay.last_action().unwrap();
+        assert_eq!(a.label, "layer.addSample");
+        assert!(a.ok && a.detail.contains("countries"), "{a:?}");
+        let bad = json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+            "name": "run_command", "arguments": {"command": "map.basemap", "params": {"name": "no-such-basemap"}}
+        }});
+        writeln!(client, "{bad}").unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        reply(&client);
+        let a = relay.last_action().unwrap();
+        assert_eq!(a.label, "map.basemap");
+        assert!(!a.ok, "a failed call is shown as failed: {a:?}");
         relay.stop();
     }
 

@@ -16,6 +16,8 @@ pub struct Dialogs {
     pub a: String,
     pub b: String,
     pub c: String,
+    /// Add/Edit Text's font size, in points: a number, so it can't be mistyped (#457).
+    pub size: f64,
     pub mode: &'static str,
     pub flag: bool,
     pub error: Option<String>,
@@ -108,7 +110,7 @@ impl Dialogs {
             }
             "graphicText" => {
                 self.text = "Text".into();
-                self.c = "14".into();
+                self.size = 14.0;
             }
             "addField" => self.b = "Double".into(),
             "calculateField" => self.a = active.and_then(|l| l.dataset.fields.last()).map(|f| f.name.clone()).unwrap_or_default(),
@@ -259,23 +261,21 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                         }
                     }
                 });
+                // The size in points, within what text graphics draw (#457).
+                let fonts = rustgis_engine::map::graphics::FONT_SIZE;
                 ui.horizontal(|ui| {
                     ui.label(tl!("Size"));
-                    ui.add(egui::TextEdit::singleline(&mut app.dialogs.c).desired_width(50.0));
+                    ui.add(egui::DragValue::new(&mut app.dialogs.size).range(fonts).speed(0.1).suffix(" pt"));
                 });
                 // Editing a placed text: `a` and `b` hold its layer id and row.
                 let editing = app.dialogs.mode == "edit";
                 close = buttons(app, ui, if editing { "Save" } else { "Add" }, |app| {
-                    let size = app.dialogs.c.trim().parse::<f64>().ok().filter(|v| v.is_finite());
                     if editing {
-                        // A mistyped size is said, not replaced: the text keeps the size it has.
-                        let size = size.ok_or_else(|| crate::i18n::fmt("{what} must be a number", &[("what", tl!("Size"))]))?;
                         let (layer, row) = (app.dialogs.a.parse::<u64>().unwrap_or(u64::MAX), app.dialogs.b.parse::<u64>().unwrap_or(u64::MAX));
-                        return app.run("graphics.edit", json!({"layer": layer, "row": row, "text": app.dialogs.text, "fontSize": size})).map(|_| ());
+                        return app.run("graphics.edit", json!({"layer": layer, "row": row, "text": app.dialogs.text, "fontSize": app.dialogs.size})).map(|_| ());
                     }
-                    let size = size.unwrap_or(14.0);
                     let (lon, lat) = (app.dialogs.a.parse::<f64>().unwrap_or(f64::NAN), app.dialogs.b.parse::<f64>().unwrap_or(f64::NAN));
-                    let r = app.run("graphics.add", json!({"shape": "text", "points": [[lon, lat]], "text": app.dialogs.text, "fontSize": size}));
+                    let r = app.run("graphics.add", json!({"shape": "text", "points": [[lon, lat]], "text": app.dialogs.text, "fontSize": app.dialogs.size}));
                     if r.is_ok() && !app.session.keep_tool {
                         app.session.tool = rustgis_engine::Tool::Explore;
                     }
@@ -1126,10 +1126,10 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
             });
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label(tl!("EPSG code"));
+                ui.label(tl!("EPSG or ESRI code"));
                 let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("3035").desired_width(110.0));
                 if r.changed() && !app.dialogs.a.trim().is_empty() {
-                    app.dialogs.text = format!("epsg:{}", app.dialogs.a.trim());
+                    app.dialogs.text = typed_crs(&app.dialogs.a);
                 }
             });
         });
@@ -1163,6 +1163,13 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
     close
 }
 
+/// A typed coordinate system code: `ESRI:102033` or `Epsg: 3035` as it is (`lookup` reads the
+/// prefix in any case and spacing), a bare number as an EPSG code.
+pub(crate) fn typed_crs(text: &str) -> String {
+    let text = text.trim();
+    if text.starts_with(|c: char| c.is_ascii_digit()) { format!("EPSG:{text}") } else { text.to_string() }
+}
+
 /// What a coordinate system is: its kind, area of use, definition and epsg.io page.
 fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
     use rustgis_engine::map::projection::{Domain, Projector, lookup};
@@ -1178,7 +1185,8 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
     if code == current {
         ui.label(egui::RichText::new(tl!("In use")).size(11.0).color(t.accent_text));
     }
-    let epsg = code.to_ascii_lowercase().strip_prefix("epsg:").map(str::to_string);
+    let lower = code.to_ascii_lowercase();
+    let epsg = lower.strip_prefix("epsg:").or_else(|| lower.strip_prefix("esri:")).map(str::to_string);
     let (kind, page): (&str, Option<String>) = match code.as_str() {
         "mercator" => ("World, conformal: the usual web map; areas grow towards the poles.", Some("3857".into())),
         "globe" => ("A 3D globe seen from space.", None),
@@ -1228,10 +1236,15 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
     }
     if let Some(n) = page {
         ui.add_space(4.0);
-        // Five-digit codes from 53000 up are ESRI's world projections.
-        let prefix = if n.len() == 5 && n.starts_with('5') { "esri" } else { "epsg" }.to_ascii_uppercase();
+        // ESRI codes, and the five-digit codes from 53000 up the presets link to, are Esri's.
+        let esri = lower.starts_with("esri:") || (n.len() == 5 && n.starts_with('5'));
+        let prefix = if esri { "ESRI" } else { "EPSG" };
         let text = crate::i18n::fmt("Open {code} on epsg.io", &[("code", &format!("{prefix}:{n}"))]);
+        // epsg.io's pages carry no authority: an ESRI number that is also an EPSG code (ESRI:31491,
+        // a Germany zone) goes to its search instead, which tells the two apart.
+        let shared = lower.starts_with("esri:") && lookup(&format!("EPSG:{n}")).is_ok();
+        let url = if shared { format!("https://epsg.io/?q=ESRI:{n}") } else { format!("https://epsg.io/{n}") };
         // In the browser build the link must not replace the app (and the map) in its tab.
-        ui.add(egui::Hyperlink::from_label_and_url(text, format!("https://epsg.io/{n}")).open_in_new_tab(true));
+        ui.add(egui::Hyperlink::from_label_and_url(text, url).open_in_new_tab(true));
     }
 }

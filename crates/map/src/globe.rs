@@ -24,7 +24,8 @@ pub enum Projection {
     WebMercator,
     /// A 3D globe.
     Globe,
-    /// Another flat projection: a preset id (see [`crate::projection::PRESETS`]) or `EPSG:<code>`.
+    /// Another flat projection: a preset id (see [`crate::projection::PRESETS`]), `EPSG:<code>`,
+    /// `ESRI:<code>` or `local:lon,lat`.
     Custom(String),
 }
 
@@ -50,15 +51,21 @@ impl Projection {
         matches!(self, Projection::Globe)
     }
 
-    /// A projection by code: `mercator`, `globe`, a preset id or name, or an EPSG code (which
-    /// must name a projected coordinate system the map can draw).
+    /// A projection by code: `mercator`, `globe`, a preset id or name, or an EPSG or ESRI code
+    /// (which must name a projected coordinate system the map can draw).
     pub fn from_code(s: &str) -> Result<Projection, String> {
         match s.trim().to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
-            "mercator" | "webmercator" | "2d" | "map" | "epsg:3857" | "3857" | "epsg:900913" => return Ok(Projection::WebMercator),
+            // EPSG:900913, Web Mercator's unofficial code, is in no table.
+            "mercator" | "webmercator" | "2d" | "map" | "epsg:900913" => return Ok(Projection::WebMercator),
             "globe" | "3d" | "scene" | "globalscene" => return Ok(Projection::Globe),
             _ => {}
         }
         let s = s.trim();
+        // Web Mercator's codes are the default map, however they were typed (`EPSG 3857`, `esri:0102100`).
+        let named = crate::projection::lookup(s).map(|(_, label)| label);
+        if named.as_deref().is_ok_and(|l| ["EPSG:3857", "ESRI:102100", "ESRI:102113"].contains(&l)) {
+            return Ok(Projection::WebMercator);
+        }
         // Build it, not just look it up: a known code whose method has no implementation would
         // otherwise be accepted and drawn in Web Mercator under its own name (opengeos/RustGIS#208).
         crate::projection::Projector::new(s)?;
@@ -66,12 +73,13 @@ impl Projection {
         if s.starts_with("local:") {
             return Ok(Projection::Custom(s.to_string()));
         }
-        // Canonical form: the preset id, or EPSG:<n>.
-        let canonical = crate::projection::PRESETS
-            .iter()
-            .find(|(id, label, _)| id.eq_ignore_ascii_case(s) || label.eq_ignore_ascii_case(s))
-            .map(|(id, _, _)| id.to_string())
-            .unwrap_or_else(|| format!("EPSG:{}", s.trim_start_matches(|c: char| !c.is_ascii_digit())));
+        // Canonical form: the preset id, or the code as `lookup` names it (`EPSG:<n>`, `ESRI:<n>`,
+        // whatever the spacing and leading zeros typed).
+        let preset = crate::projection::PRESETS.iter().find(|(id, label, _)| id.eq_ignore_ascii_case(s) || label.eq_ignore_ascii_case(s));
+        let canonical = match preset {
+            Some((id, _, _)) => id.to_string(),
+            None => named?,
+        };
         Ok(Projection::Custom(canonical))
     }
 }

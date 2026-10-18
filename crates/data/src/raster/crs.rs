@@ -16,6 +16,17 @@ pub fn epsg_proj4(code: u16) -> Option<&'static str> {
     crs_definitions::from_code(code).map(|d| d.proj4).or_else(|| super::epsg_gap::proj4(code))
 }
 
+/// The PROJ definition of one of Esri's projected coordinate systems (`ESRI:102033`, South
+/// America Albers), from the built-in table ([`super::esri`]). `None` for a code it lacks.
+pub fn esri_proj4(code: u32) -> Option<&'static str> {
+    super::esri::proj4(code)
+}
+
+/// Every ESRI code [`esri_proj4`] knows, in order.
+pub fn esri_codes() -> impl Iterator<Item = u32> {
+    super::esri::DEFS.iter().map(|&(c, _)| c)
+}
+
 /// A raster's coordinate system. Saved as its EPSG code, or a custom one as its definition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(into = "SavedCrs", try_from = "SavedCrs")]
@@ -336,6 +347,28 @@ mod tests {
         // EPSG:10622 (an orthographic) has no implementation, so it is left out rather than
         // listed and refused.
         assert_eq!(Crs::from_epsg(10622), None);
+    }
+
+    /// The ESRI table (opengeos/RustGIS#213) is in order and holds only projected systems on Earth.
+    #[test]
+    fn esri_table_is_sound() {
+        let defs = super::super::esri::DEFS;
+        assert!(defs.len() > 1900, "{}", defs.len());
+        for pair in defs.windows(2) {
+            assert!(pair[0].0 < pair[1].0, "out of order at ESRI:{}", pair[1].0);
+        }
+        for &(code, def) in defs {
+            assert_eq!(esri_proj4(code), Some(def));
+            assert!(def.starts_with("+proj=") && !def.contains("+proj=longlat") && !def.contains("+proj=geocent"), "ESRI:{code}");
+        }
+        assert_eq!(esri_codes().count(), defs.len());
+        // South America Albers Equal Area Conic, which opened the issue.
+        assert!(esri_proj4(102033).is_some_and(|d| d.contains("+proj=aea") && d.contains("+lon_0=-60")));
+        // Left out: World Miller (RustGIS's sphere is kilometres from PROJ's), a lunar system, a
+        // Hammer–Aitoff PROJ can't write as a string, and codes that don't exist.
+        for code in [54003, 103877, 54044, 0, 4326, u32::MAX] {
+            assert_eq!(esri_proj4(code), None, "ESRI:{code}");
+        }
     }
 
     /// Every entry in the gap table is wanted (upstream still lacks it), in order, and usable.

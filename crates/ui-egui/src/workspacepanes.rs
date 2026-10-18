@@ -551,7 +551,7 @@ pub fn catalog_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         items.push(("run", tk.name.clone(), "Task", None));
     }
     for m in &p.models {
-        items.push(("modelbuilder", m.name.clone(), "Model", None));
+        items.push(("modelbuilder", m.name.clone(), "Model", Some(json!({"cmd": "ui.modelBuilder", "name": m.name}))));
     }
     for f in &p.folders {
         items.push(("add_folder", f.clone(), "Folder", None));

@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod cmd;
+pub mod model;
 pub mod project;
 pub mod sample;
 pub mod sources;
@@ -308,6 +309,12 @@ pub struct Session {
     pub trusted_tasks: std::collections::HashSet<String>,
     /// Models made in this session (lower-cased names); the steps of others may not touch files.
     pub trusted_models: std::collections::HashSet<String>,
+    /// What the last model run did, node by node (`model::RunReport`), kept even when the run
+    /// failed and the project was restored, so ModelBuilder can show which node stopped it.
+    pub model_run: Option<model::RunReport>,
+    /// Counts the projects started in this session (new, open): front ends holding state about
+    /// the project (ModelBuilder's canvas) drop it when this changes.
+    pub project_starts: u64,
     /// Notebooks made in this session (lower-cased names); the cells of others may not touch files.
     pub trusted_notebooks: std::collections::HashSet<String>,
     /// A notebook is running: it may not start another, even through a task or model (no
@@ -454,6 +461,8 @@ impl Session {
             active_layout: None,
             trusted_tasks: Default::default(),
             trusted_models: Default::default(),
+            model_run: None,
+            project_starts: 0,
             trusted_notebooks: Default::default(),
             notebook_running: false,
             history_from_file: 0,
@@ -763,6 +772,8 @@ impl Session {
         self.dirty = false;
         self.trusted_tasks.clear();
         self.trusted_models.clear();
+        self.model_run = None;
+        self.project_starts = self.project_starts.wrapping_add(1);
         self.trusted_notebooks.clear();
         self.edit_counts.clear();
         self.topology_errors.clear();
