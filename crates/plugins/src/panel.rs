@@ -25,6 +25,8 @@ pub const MAX_SLIDER_LABEL: usize = 80;
 /// The longest text or label a plugin may set, in characters.
 pub const MAX_STATE_TEXT: usize = 4_000;
 pub const MAX_STATE_LABEL: usize = 200;
+/// The longest declared label, text or help, in characters.
+pub const MAX_DECLARED: usize = 2_000;
 /// The widget kinds.
 pub const KINDS: &[&str] = &["text", "checkbox", "slider", "button"];
 
@@ -163,7 +165,7 @@ impl PanelDecl {
 }
 
 fn check(what: &str, s: &str) -> Result<(), String> {
-    if s.len() > 2_000 { Err(format!("plugin.json: {what} is too long")) } else { Ok(()) }
+    if s.chars().count() > MAX_DECLARED { Err(format!("plugin.json: {what} is too long")) } else { Ok(()) }
 }
 
 /// At most `n` characters of `s`.

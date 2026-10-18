@@ -438,6 +438,18 @@ fn plugin_panel_state_round_trips() {
 }
 
 #[test]
+fn panel_texts_are_limited_in_characters() {
+    // Two bytes a character: within the limit in characters though past it in bytes.
+    let with_help = |n: usize| {
+        let mut m: Value = serde_json::from_str(&testing::panel_manifest("chars-panel")).unwrap();
+        m["panel"]["help"] = json!("é".repeat(n));
+        Manifest::parse(&m.to_string())
+    };
+    assert!(with_help(crate::panel::MAX_DECLARED).is_ok());
+    assert!(with_help(crate::panel::MAX_DECLARED + 1).unwrap_err().contains("too long"));
+}
+
+#[test]
 fn a_panel_state_matches_only_its_declaration() {
     use crate::PanelState;
     let m = Manifest::parse(&testing::panel_manifest("match-panel")).unwrap();

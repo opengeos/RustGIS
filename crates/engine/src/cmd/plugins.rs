@@ -552,7 +552,11 @@ impl Session {
 
     /// A plugin's panel state, made from its manifest the first time.
     pub fn plugin_panel(&mut self, plugin: &str) -> Option<&rustgis_plugins::PanelState> {
-        let p = rustgis_plugins::get(plugin).filter(|p| p.enabled)?;
+        // A plugin uninstalled, disabled or updated without a panel leaves no state behind.
+        let Some(p) = rustgis_plugins::get(plugin).filter(|p| p.enabled && p.manifest.panel.is_some()) else {
+            self.plugin_panels.remove(plugin);
+            return None;
+        };
         let decl = p.manifest.panel.as_ref()?;
         Some(self.panel_state(plugin, decl))
     }
