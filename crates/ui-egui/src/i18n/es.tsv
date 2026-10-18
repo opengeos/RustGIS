@@ -3,6 +3,10 @@
 '{b}' isn't a bucket name	«{b}» no es un nombre de bucket
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
 (filtered)	(filtrada)
++ Add Stop	+ Añadir parada
+/F	/F
+/PID	/PID
+/T	/T
 00:00 UTC	00:00 UTC
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
@@ -15,6 +19,7 @@ A catalogue's (CSW 2.0.2) address: search its records by words and, if you like,
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Se alcanzó un límite de uso del plan de ChatGPT o de la aplicación. Revisa el uso semanal antes de intentarlo de nuevo.
 A ChatGPT sign-in can only be used with the OpenAI API.	Un inicio de sesión de ChatGPT solo puede usarse con la API de OpenAI.
 A country's administrative boundaries from geoBoundaries (CC BY 4.0): the country itself (ADM0), its first-level divisions (ADM1, such as states) and finer ones.	Los límites administrativos de un país desde geoBoundaries (CC BY 4.0): el propio país (ADM0), sus divisiones de primer nivel (ADM1, como estados) y otras más detalladas.
+A custom stretch is in this raster's own units: pick another stretch type to save it as the default.	Un estiramiento personalizado está en las unidades propias de este ráster: elija otro tipo de estiramiento para guardarlo como predeterminado.
 A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	Un SIG rápido, libre y de código abierto escrito en Rust puro, para cartografiar, analizar y compartir datos geoespaciales en el escritorio y en el navegador.
 A flat scene centred on the view (azimuthal equidistant).	Una escena plana centrada en la vista (acimutal equidistante).
 A globe scene.	Una escena de globo.
@@ -26,6 +31,8 @@ A place or an address	Un lugar o una dirección
 A project keeps at least one map	Un proyecto conserva al menos un mapa
 A projected coordinate system.	Un sistema de coordenadas proyectadas.
 A report listing the selected layer's records, page after page.	Un informe que enumera los registros de la capa seleccionada, página tras página.
+A service import or refresh is already running.	Ya hay una importación o actualización de servicio en curso.
+A task holds at most 200 steps: stop recording to make it, then record the rest as another task.	Una tarea admite como máximo 200 pasos: detenga la grabación para crearla y luego grabe el resto como otra tarea.
 A template with the first selected feature's values	Una plantilla con los valores de la primera entidad seleccionada
 A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, a PMTiles archive (a web address, or a file on this computer), or an MBTiles file on this computer.	La dirección de un servicio de teselas: teselas ráster con {z}/{x}/{y} (o {-y}, {q}, {bbox-epsg-3857} para WMS), teselas vectoriales (.pbf) o TileJSON, un estilo de MapLibre, un archivo PMTiles (una dirección web o un archivo de este equipo) o un archivo MBTiles de este equipo.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Un valor, un campo o dos de ellos unidos por + − × ÷. Se aplica a las filas seleccionadas, o a todas las filas si no hay ninguna seleccionada.
@@ -45,6 +52,8 @@ Add	Añadir
 Add\nData	Añadir\ndatos
 Add ({n})	Añadir ({n})
 Add a bar chart of a layer's numeric field.	Añadir un gráfico de barras de un campo numérico de una capa.
+Add a colorbar of a raster layer's colour scale in the map frame.	Añadir una barra de colores con la escala de colores de una capa ráster en el marco de mapa.
+Add a description.	Añadir una descripción.
 Add a field.	Añadir un campo.
 Add a file path	Añadir una ruta de archivo
 Add a legend of the map frame's layers.	Añadir una leyenda de las capas del marco de mapa.
@@ -61,8 +70,10 @@ Add a scale bar for the map frame.	Añadir una barra de escala para el marco de 
 add a second map first (Data › New Map)	añada primero un segundo mapa (Datos › Nuevo mapa)
 Add a second map frame first	Añada primero un segundo marco de mapa
 Add a text element.	Añadir un elemento de texto.
+Add a web basemap over the others instead of replacing them, to blend it with them. Click one that shows to take it off.	Añadir un mapa base web sobre los demás en lugar de reemplazarlos, para fusionarlo con ellos. Haga clic en uno visible para quitarlo.
 Add Administrative Boundaries	Añadir límites administrativos
 Add an elevation raster first.	Añada primero un ráster de elevación.
+Add an elevation raster to the map first	Añada primero un ráster de elevación al mapa
 Add an empty layer with a ready-made schema, to draw into.	Añadir una capa vacía con un esquema predefinido, para dibujar en ella.
 Add and Open	Añadir y abrir
 Add and Open Notebook	Añadir y abrir cuaderno
@@ -91,6 +102,7 @@ Add Field	Añadir campo
 Add field	Añadir campo
 Add Folder	Añadir carpeta
 Add Folder…	Añadir carpeta…
+Add folder…	Añadir carpeta…
 Add From Database	Añadir desde base de datos
 Add From Service	Añadir desde servicio
 Add From Service…	Añadir desde servicio…
@@ -112,6 +124,7 @@ Add Rule	Añadir regla
 Add sample countries	Añadir países de ejemplo
 Add Sample Data	Añadir datos de ejemplo
 Add Service Layer	Añadir capa de servicio
+Add skill…	Añadir habilidad…
 Add STAC Asset	Añadir recurso STAC
 Add STAC Footprints	Añadir huellas STAC
 Add Step	Añadir paso
@@ -123,6 +136,7 @@ Add text that updates: page, date, scale, map and more.	Añadir texto que se act
 Add the attribute table of a layer in the map frame.	Añadir la tabla de atributos de una capa del marco de mapa.
 Add the current view as a keyframe.	Añadir la vista actual como fotograma clave.
 Add the maps of a map file, map package, project or project package.	Añadir los mapas de un archivo de mapa, paquete de mapa, proyecto o paquete de proyecto.
+Add this MCP server to your agent:	Añade este servidor MCP a tu agente:
 Add Tile Layer	Añadir capa de teselas
 Add Tile Layer…	Añadir capa de teselas…
 Add To Current Selection	Añadir a la selección actual
@@ -135,6 +149,7 @@ Add {format}	Añadir {format}
 Added	Añadido
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	Se ha añadido {theme} de Overture como teselas de mapa ({release}; algunos temas solo se muestran acercando): {attribution}
 Added {p} points, {l} lines and {g} polygons	Se han añadido {p} puntos, {l} líneas y {g} polígonos
+Added: {names}	Añadidas: {names}
 Additional surrounds.	Elementos de contorno adicionales.
 Address	Dirección
 Address fields	Campos de dirección
@@ -149,6 +164,14 @@ ADM3	ADM3
 ADM4	ADM4
 ADM5	ADM5
 Administrative Boundaries	Límites administrativos
+Agent input exceeds the protocol line limit.	La entrada del agente supera el límite de línea del protocolo.
+Agent input pipe closed.	La tubería de entrada del agente se cerró.
+Agent input queue is full or disconnected; stop the agent and try again.	La cola de entrada del agente está llena o desconectada; detenga el agente e inténtelo de nuevo.
+Agent threads	Hilos de agentes
+Agent work	Agent work
+Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. Scripts and plugin management stay off.	Los agentes de este equipo que se conecten (Claude Code, Codex, Cursor y otros) trabajan en el mapa abierto aquí con las herramientas de RustGIS: pueden abrir y guardar archivos y usar la web. Los scripts y la gestión de complementos siguen desactivados.
+Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. Scripts and plugin management stay off. The choice is remembered across launches.	Los agentes de este equipo que se conectan (Claude Code, Codex, Cursor y otros) trabajan en el mapa abierto aquí, con las herramientas de RustGIS: pueden abrir y guardar archivos y usar la web. Los scripts y la gestión de complementos siguen desactivados. La elección se recuerda entre inicios.
+Agents then run commands, change files and use the web on this computer without asking you.	Los agentes ejecutarán comandos, cambiarán archivos y usarán la web en este equipo sin preguntarte.
 Aggregation	Agregación
 AI	IA
 AI\nAssistant	Asistente\nde IA
@@ -167,10 +190,14 @@ Allow ChatGPT plan use when signing in. If your workspace doesn't permit it, ask
 Allow only certain combinations of values across fields.	Permitir solo ciertas combinaciones de valores entre campos.
 Allow such actions for this conversation	Permitir este tipo de acciones en esta conversación
 Allow this action?	¿Permitir esta acción?
+Allow this agent's RustGIS action?	¿Permitir esta acción de RustGIS del agente?
 Along Selected Line	A lo largo de la línea seleccionada
+Alternating bar	Barra alterna
 Altitude	Altitud
+Always allow	Permitir siempre
 Amazon S3, or an S3-compatible service (MinIO, Cloudflare R2, Wasabi…) by its endpoint. Keys are kept until RustGIS closes; a remembered connection keeps its name, endpoint and region, never its secret.	Amazon S3, o un servicio compatible con S3 (MinIO, Cloudflare R2, Wasabi…) por su punto de conexión. Las claves se conservan hasta que se cierra RustGIS; una conexión recordada conserva su nombre, punto de conexión y región, nunca su secreto.
 amenity=cafe, shop	amenity=cafe, shop
+An agent on this computer asks to:	Un agente de este equipo pide:
 An AWS profile	Un perfil de AWS
 Analysis	Análisis
 Analyze	Análisis
@@ -187,6 +214,7 @@ Apply a function to a raster	Aplicar una función a un ráster
 Apply Control Points	Aplicar puntos de control
 Apply Style	Aplicar estilo
 Apply to the selected layer	Aplicar a la capa seleccionada
+Approve agents' actions without asking	Aprobar las acciones de los agentes sin preguntar
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS REST	ArcGIS REST
@@ -214,14 +242,17 @@ Attribute table	Tabla de atributos
 Attributes	Atributos
 Attribution	Atribución
 Aurora	Aurora
+Auto	Auto
 Auto Cache	Caché automática
 Auto-complete (2 clicks)	Autocompletar (2 clics)
 Auto-complete Profile	Perfil de autocompletado
 Autofill Fields	Autorrellenar campos
 Automatic	Automático
+Automatic (m or km)	Automático (m o km)
 Automatic (system language)	Automático (idioma del sistema)
 Automatic (system time zone and region)	Automático (zona horaria y región del sistema)
 Automatic ({kind})	Automático ({kind})
+Avoid	Evitar
 AWS	AWS
 AWS, anonymous	AWS, anónimo
 Azimuth	Acimut
@@ -238,24 +269,33 @@ Bands	Bandas
 Bands: blue green red NIR SWIR	Bandas: azul verde rojo NIR SWIR
 Basemap	Mapa base
 Basemaps	Mapas base
+Bearing {b}° · Pitch {p}°	Rumbo {b}° · Inclinación {p}°
+Bearing: the direction the top of the map faces, clockwise from north. Pitch: the tilt from looking straight down. Click to reset both.	Rumbo: la dirección hacia la que apunta la parte superior del mapa, en sentido horario desde el norte. Inclinación: la desviación respecto a mirar en vertical hacia abajo. Haga clic para restablecer ambos.
 Below	Abajo
 Below 1:5,000,000 show everything; beyond it only what matches:	Por debajo de 1:5.000.000 se muestra todo; por encima, solo lo que cumpla:
 Below Left	Abajo a la izquierda
 Below Right	Abajo a la derecha
+Best	Mejor
+Bike	Bicicleta
 Bilinear	Bilineal
 Blank	En blanco
 Blank Letter page	Página Carta en blanco
 Blank Map	Mapa en blanco
 Blank Page	Página en blanco
+Blend: {mode}	Fusión: {mode}
 Blue	Azul
 Bold	Negrita
 Bold label text.	Texto de etiqueta en negrita.
+Bookmark Description	Descripción del marcador
 Bookmarks	Marcadores
+Bookmarks Pane	Panel Marcadores
 Boolean	Booleano
+Bottom	Abajo
 Boundaries…	Límites…
 Bounding\nGeometry	Geometría\nenvolvente
 Brightness	Brillo
 Brightness, contrast, saturation and sepia for the whole map.	Brillo, contraste, saturación y sepia para todo el mapa.
+Bring this bookmark's map into view to update it	Muestre el mapa de este marcador para actualizarlo
 Browse	Explorar
 Browse it in the Browser	Explorarlo en el Navegador
 Browse Plugins	Explorar complementos
@@ -269,10 +309,14 @@ Browser\nPane	Panel\nNavegador
 Browser View	Vista del navegador
 Bucket	Bucket
 Buffer	Área de influencia
+Buffer A Point	Área de influencia de un punto
 Buffer the cities by 200 km	Crear un área de influencia de 200 km alrededor de las ciudades
+Buffer {distance}	Área de influencia {distance}
+Buffer {distance} Here	Área de influencia {distance} aquí
 Build	Construir
 Build a surface model and mesh from elevation rasters	Construir un modelo de superficie y una malla a partir de rásteres de elevación
 Build Mosaic	Construir mosaico
+Built in	Integrada
 Bundle the active map and its data.	Empaquetar el mapa activo y sus datos.
 Bundle the geoprocessing history with the layers it made.	Empaquetar el historial de geoprocesamiento con las capas que generó.
 Bundle the project and its data into one file to share.	Empaquetar el proyecto y sus datos en un solo archivo para compartir.
@@ -302,6 +346,7 @@ Cast Shadow	Proyectar sombra
 Catalogue search (CSW)	Búsqueda en catálogo (CSW)
 Cell size	Tamaño de celda
 cell size °	tamaño de celda °
+Center Map Here	Centrar el mapa aquí
 Centered	Centrado
 Chain functions	Encadenar funciones
 Chain raster functions.	Encadenar funciones ráster.
@@ -325,13 +370,17 @@ Check for Updates…	Buscar actualizaciones…
 Check the integration's client, permissions, workspace policy and route configuration.	Comprueba el cliente, los permisos, la política del espacio de trabajo y la configuración de rutas de la integración.
 Checking for updates…	Buscando actualizaciones…
 China	China
+Choice Test	Choice Test
 Choose a band combination to display the raster layer.	Elegir una combinación de bandas para mostrar la capa ráster.
 Choose a contrast stretch for the raster layer.	Elegir un estiramiento de contraste para la capa ráster.
 Choose a country	Elija un país
 Choose a delimited text file or a spreadsheet, then pick its columns.	Elija un archivo de texto delimitado o una hoja de cálculo y luego sus columnas.
+Choose a destination	Elija un destino
 choose a file first	elija primero un archivo
 Choose a model.	Elija un modelo.
 Choose a resampling type for the raster layer.	Elegir un tipo de remuestreo para la capa ráster.
+Choose a start	Elija un origen
+Choose a stop	Elija una parada
 Choose an account	Elegir una cuenta
 Choose extra buttons for the Quick Access Toolbar.	Elegir botones adicionales para la barra de herramientas de acceso rápido.
 Choose File…	Elegir archivo…
@@ -343,24 +392,33 @@ Choose the interface language.	Elegir el idioma de la interfaz.
 Choose which layers a click identifies.	Elegir qué capas identifica un clic.
 Choose which tabs the ribbon shows.	Elegir qué pestañas muestra la cinta.
 Circle	Círculo
+Class color	Color de la clase
+Class Style	Estilo de clase
 Classes	Clases
 Classes from training polygons.	Clases a partir de polígonos de entrenamiento.
+Classic arrow	Flecha clásica
 Classification\nTools	Herramientas de\nclasificación
 Classification\nWizard	Asistente de\nclasificación
 Classification Tools	Herramientas de clasificación
 Classification Wizard	Asistente de clasificación
 Classify	Clasificar
 Classify from training polygons	Clasificar a partir de polígonos de entrenamiento
+Claude Code and Codex connect through an ACP adapter. On first use, npx downloads and runs its pinned version from npm.	Claude Code y Codex se conectan mediante un adaptador ACP. En el primer uso, npx descarga de npm su versión fijada y la ejecuta.
 Clear	Borrar
 Clear\nLimits	Borrar\nlímites
 Clear Filters	Borrar filtros
+Clear Guides	Borrar guías
 Clear History	Borrar historial
 Clear Limits	Borrar límites
+Clear mask	Borrar máscara
 Clear search	Borrar búsqueda
 Clear Selection	Borrar selección
 Clear selection	Borrar selección
+Clear the filter to reorder	Borre el filtro para reordenar
 Clear the selection in every layer.	Borrar la selección en todas las capas.
 Clear the selection.	Borrar la selección.
+Clear Visibility Range	Borrar rango de visibilidad
+Click a feature, then drag its vertices · click an edge to add one	Haga clic en una entidad y arrastre sus vértices · haga clic en un borde para añadir uno
 Click a pixel on the map	Haga clic en un píxel del mapa
 Click a point on the map	Haga clic en un punto del mapa
 Click a source to add it, or to open its browser connected. Right-click for favourites.	Haga clic en un origen para añadirlo o para abrir su explorador conectado. Clic derecho para favoritos.
@@ -373,7 +431,6 @@ Click the frame's corners · double-click to finish · Esc to stop	Haga clic en 
 Click the map to add a point	Haga clic en el mapa para añadir un punto
 Click the map to place a point	Haga clic en el mapa para colocar un punto
 Click the map to place text	Haga clic en el mapa para colocar texto
-Click the map to place text with live values, such as the scale or date.	Haga clic en el mapa para colocar texto con valores dinámicos, como la escala o la fecha.
 Click the map to place text.	Haga clic en el mapa para colocar texto.
 Click the map: {n} of {total}	Haga clic en el mapa: {n} de {total}
 Click the observer on the map	Haga clic en el observador en el mapa
@@ -386,6 +443,7 @@ Click to add vertices · double-click to close	Haga clic para añadir vértices 
 Click to add vertices · double-click to close the polygon	Haga clic para añadir vértices · doble clic para cerrar el polígono
 Click to add vertices · double-click to finish	Haga clic para añadir vértices · doble clic para terminar
 Click to add vertices · double-click to finish the line	Haga clic para añadir vértices · doble clic para terminar la línea
+Click to edit the description	Haga clic para editar la descripción
 Click to place a point graphic.	Haga clic para colocar un gráfico de punto.
 Click to switch between decimal degrees and DMS	Haga clic para alternar entre grados decimales y GMS
 Clip	Recortar
@@ -396,9 +454,14 @@ Clip To Map View	Recortar a la vista del mapa
 Clipboard	Portapapeles
 Close	Cerrar
 Close (Esc)	Cerrar (Esc)
+Close All	Cerrar todo
+Close all panes	Cerrar todos los paneles
+Close Others	Cerrar los demás
 Close Table	Cerrar tabla
 Close table	Cerrar tabla
 Close the layout and show the map.	Cerrar el diseño y mostrar el mapa.
+Close thread	Cerrar hilo
+Close {name}	Cerrar {name}
 Closest	Más cercana
 Coded values, one per line: code=description	Valores codificados, uno por línea: código=descripción
 Collapse or expand the ribbon	Contraer o expandir la cinta
@@ -413,6 +476,7 @@ Color Scheme	Esquema de color
 Color scheme	Esquema de color
 Color Vision	Visión del color
 Color Vision Simulator	Simulador de visión del color
+Colorbar	Barra de colores
 Colormap	Mapa de colores
 Colors from the raster's own color table.	Colores de la propia tabla de colores del ráster.
 Colour ramps (RustGIS, QGIS, GDAL, GMT)	Rampas de color (RustGIS, QGIS, GDAL, GMT)
@@ -425,8 +489,11 @@ Command Search	Búsqueda de comandos
 Commands	Comandos
 Commands on the Plugins tab: {commands} · Tools in the Tools pane: {tools}	Comandos en la pestaña Complementos: {commands} · Herramientas en el panel Herramientas: {tools}
 Commands…	Comandos…
+Compact	Compactar
+Compacted the earlier conversation.	Se compactó la conversación anterior.
 Compare	Comparar
 Compare two rasters	Comparar dos rásteres
+Compass rose	Rosa de los vientos
 Completed	Completado
 Confirm uninstall	Confirmar desinstalación
 Connect	Conectar
@@ -440,6 +507,7 @@ Constant	Constante
 Constant height	Altura constante
 Constant…	Constante…
 Contingent Values	Valores contingentes
+Continue	Continuar
 Continue with ChatGPT	Continuar con ChatGPT
 Contrast	Contraste
 Conversion	Conversión
@@ -459,7 +527,8 @@ Copies the (selected) features of a layer to a new layer.	Copia las entidades (s
 Copy	Copiar
 Copy Address	Copiar dirección
 Copy an image of the map to the clipboard.	Copiar una imagen del mapa al portapapeles.
-Copy Coordinates	Copiar coordenadas
+Copy As GeoJSON	Copiar como GeoJSON
+Copy coordinates to the clipboard	Copiar las coordenadas al portapapeles
 Copy Path	Copiar ruta
 Copy sign-in link	Copiar enlace de inicio de sesión
 Copy the selected features (also as GeoJSON text).	Copiar las entidades seleccionadas (también como texto GeoJSON).
@@ -507,6 +576,7 @@ Current Project	Proyecto actual
 Current time	Hora actual
 Curve	Curva
 Custom	Personalizado
+Custom Min/Max	Mín/Máx personalizados
 Customize	Personalizar
 Cut	Cortar
 Cut a raster into web map tiles	Cortar un ráster en teselas de mapa web
@@ -518,6 +588,8 @@ Data Design	Diseño de datos
 Data Engineering	Ingeniería de datos
 Data Interop	Interoperabilidad de datos
 Data Management	Administración de datos
+Data privacy	Privacidad de datos
+Data Source	Origen de datos
 Data Sources	Orígenes de datos
 Data Sources Pane	Panel Orígenes de datos
 Data Stores	Almacenes de datos
@@ -530,6 +602,7 @@ Database…	Base de datos…
 Data…	Datos…
 Dates	Fechas
 Day and night shading for a time.	Sombreado de día y noche en un momento dado.
+Decimal	Decimal
 Decline	Rechazar
 Deep Learning	Aprendizaje profundo
 Deep Learning\nTools	Herramientas de\naprendizaje profundo
@@ -557,16 +630,19 @@ Delete selected features	Eliminar las entidades seleccionadas
 Delete selected rows	Eliminar las filas seleccionadas
 Delete Style	Eliminar estilo
 Delete Task	Eliminar tarea
+Delete Task Step	Eliminar paso de tarea
 Delete the GeoLibre runner that RustGIS installed. Install it again at any time.	Eliminar el ejecutor de GeoLibre que instaló RustGIS. Puede volver a instalarlo en cualquier momento.
 Delete the layout {name}?	¿Eliminar el diseño {name}?
 Delete the map {name}?	¿Eliminar el mapa {name}?
 Delete the selected features.	Eliminar las entidades seleccionadas.
+Delete the step	Eliminar el paso
 Delimited Text	Texto delimitado
 Delimited text and spreadsheets	Texto delimitado y hojas de cálculo
 Delimited Text…	Texto delimitado…
 Depth Priority	Prioridad de profundidad
 Descending	Descendente
 Describing	Describiendo
+Description	Descripción
 Details	Detalles
 Details of the selected layer.	Detalles de la capa seleccionada.
 Deviations	Desviaciones
@@ -575,6 +651,10 @@ Diagnostic Monitor	Monitor de diagnóstico
 Diagnostics	Diagnóstico
 Diamond	Rombo
 Difference, ratio or percent change between two rasters.	Diferencia, razón o cambio porcentual entre dos rásteres.
+Directions	Indicaciones
+Directions From Here	Indicaciones desde aquí
+Directions To Here	Indicaciones hasta aquí
+Directions use an external routing server	Las indicaciones usan un servidor de rutas externo
 Disconnect From S3	Desconectar de S3
 Display	Visualización
 Display Filters	Filtros de visualización
@@ -583,9 +663,16 @@ Display Type	Tipo de visualización
 Dissolve	Disolver
 Dissolve Field	Campo de disolución
 Distance	Distancia
+Distance Coefficient P	Coeficiente de distancia P
 Distances along the surface, heights, areas and volumes.	Distancias sobre la superficie, alturas, áreas y volúmenes.
 DISTINCT	DISTINCT
 Distinct	Distintos
+Diverging	Divergente
+Divisions	Divisiones
+DMS	GMS
+Do the exercise once: each command that changes the project becomes a step	Haga el ejercicio una vez: cada comando que cambia el proyecto se convierte en un paso
+Do the step for me	Hacer el paso por mí
+Documents	Documentos
 Domains	Dominios
 Done	Hecho
 Double	Doble
@@ -606,21 +693,29 @@ Drag a box	Arrastre un rectángulo
 Drag a box or click to zoom in	Arrastre un rectángulo o haga clic para acercar
 Drag a box to draw an ellipse.	Arrastre un rectángulo para dibujar una elipse.
 Drag a box to zoom into.	Arrastre un rectángulo para acercar.
+Drag a map frame to pan its map, wheel to zoom it · Esc to stop	Arrastre un marco de mapa para desplazar su mapa, rueda para hacer zoom · Esc para terminar
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	Arrastre un rectángulo y luego elija una imagen PNG o JPEG para colocarla en él.
+Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	Arrastre un vértice para moverlo · haga clic en un borde para añadir uno · Supr quita el vértice elegido
 Drag from the centre out	Arrastre desde el centro hacia fuera
 Drag from the centre to draw a circle.	Arrastre desde el centro para dibujar un círculo.
+Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	Arrastrar dentro de los marcos de mapa para desplazar sus mapas y girar la rueda para hacer zoom, en lugar de mover los marcos.
+Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	Arrastrar dentro de los marcos de mapa para desplazar sus mapas y girar la rueda para hacer zoom, en lugar de mover los marcos. Esc termina.
 Drag the frame's outline · Esc to stop	Arrastre el contorno del marco · Esc para detener
 drag the picture's rectangle on the map first	arrastre primero el rectángulo de la imagen en el mapa
+Drag the selected features' vertices to move them, click an edge to add one, Delete to remove one.	Arrastrar los vértices de las entidades seleccionadas para moverlos, hacer clic en un borde para añadir uno, Supr para quitar uno.
 Drag to draw	Arrastre para dibujar
 Drag to draw a freehand line.	Arrastre para dibujar una línea a mano alzada.
 Drag to draw a freehand polygon.	Arrastre para dibujar un polígono a mano alzada.
 Drag to draw a rectangle.	Arrastre para dibujar un rectángulo.
+Drag vertices on the map; click an edge to add one	Arrastre vértices en el mapa; haga clic en un borde para añadir uno
 Draw a halo around label text.	Dibujar un halo alrededor del texto de la etiqueta.
 Draw a labelled latitude/longitude grid over the map frame.	Dibujar una cuadrícula de latitud/longitud etiquetada sobre el marco de mapa.
 Draw labels at every scale and distance.	Dibujar etiquetas a cualquier escala y distancia.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	Dibujar entidades nuevas en la capa seleccionada. Doble clic para terminar líneas y polígonos.
+Draw new single-band rasters with the inverted grey stretch again.	Volver a dibujar los nuevos rásteres de una banda con el estiramiento en grises invertido.
 Draw points as bins coloured by how many fall in each.	Dibujar los puntos como celdas coloreadas según cuántos caen en cada una.
 Draw polygons as outlines only.	Dibujar los polígonos solo como contornos.
+Draw single-band rasters added from now on with this color scheme, stretch and resampling.	Dibujar los rásteres de una banda que se añadan a partir de ahora con este esquema de color, estiramiento y remuestreo.
 Draw the layer at every scale.	Dibujar la capa en todas las escalas.
 Draw the map on the GPU (beta; the globe, view effects and colour-vision simulation stay on the CPU renderer).	Dibujar el mapa en la GPU (beta; el globo, los efectos de vista y la simulación de visión del color siguen en el renderizador de CPU).
 Draw the selected layer above others.	Dibujar la capa seleccionada por encima de las demás.
@@ -629,6 +724,7 @@ Drawing	Dibujo
 Drawing Effects	Efectos de dibujo
 Drawing Mode	Modo de dibujo
 Drawing Order	Orden de dibujo
+Drive	Coche
 Duplicate	Duplicar
 Duplicate Layout	Duplicar diseño
 Duplicate Map	Duplicar mapa
@@ -640,6 +736,7 @@ Dynamic range adjustment (stretch the pixels in view)	Ajuste de rango dinámico 
 Dynamic range adjustment: stretch using the pixels in view.	Ajuste de rango dinámico: estirar usando los píxeles visibles.
 Dynamic text:	Texto dinámico:
 e.g.  pop_est / 1000000   or   'Africa'   or   name	p. ej.  pop_est / 1000000   o   'Africa'   o   name
+e.g. 0, 255, -9999	p. ej. 0, 255, -9999
 e.g. continent = 'Europe'	p. ej. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	p. ej. pop_est > 100000000 AND continent = 'Asia'
 Each geoprocessing run becomes a step, chained by its outputs	Cada ejecución de geoprocesamiento se convierte en un paso, encadenado por sus salidas
@@ -649,10 +746,16 @@ Eckert IV (equal-area world)	Eckert IV (mundo de áreas iguales)
 Edge	Borde
 Edges	Bordes
 Edit	Editar
+Edit\nVertices	Editar\nvértices
 Edit and run the notebook.	Editar y ejecutar el cuaderno.
 Edit Attribute	Editar atributo
 Edit Cell	Editar celda
+Edit Description	Editar descripción
 Edit Status	Estado de edición
+Edit Steps	Editar pasos
+Edit Task Step	Editar paso de tarea
+Edit the title and instructions	Editar el título y las instrucciones
+Edit Vertex	Editar vértice
 Edit Vertices	Editar vértices
 Editing	Edición
 Editing on	Edición activada
@@ -700,9 +803,11 @@ Europe Equal Area (ETRS89 LAEA)	Europa de áreas iguales (ETRS89 LAEA)
 Every band's value at a pixel.	El valor de cada banda en un píxel.
 Every editing tool.	Todas las herramientas de edición.
 every Socrata site, or one such as data.cityofnewyork.us	todos los sitios de Socrata, o uno como data.cityofnewyork.us
-Everyday tools.	Herramientas de uso diario.
 Everywhere	En todas partes
 Existing Template	Plantilla existente
+exit rotary	salga de la rotonda
+exit roundabout	salga de la rotonda
+Expand Group	Expandir grupo
 Expand Legend	Expandir leyenda
 Expand the ribbon (Ctrl+F1)	Expandir la cinta (Ctrl+F1)
 Explode	Descomponer
@@ -775,6 +880,10 @@ Feature To Point	Entidad a punto
 featured products	productos destacados
 Features	Entidades
 Features most like the selected one	Entidades más parecidas a la seleccionada
+Feet	Pies
+Ferries	Ferris
+Fetch map tiles, data and web services from addresses it chooses	Obtener teselas de mapa, datos y servicios web de las direcciones que elija
+Fetch the tiles and styles of the web layers again.	Volver a obtener las teselas y los estilos de las capas web.
 Field	Campo
 field * 2, 'text', a + b	field * 2, 'text', a + b
 Field name	Nombre del campo
@@ -789,6 +898,8 @@ Fill	Relleno
 Fill Cache	Llenar caché
 Fill the cache whenever the projection changes.	Llenar la caché cada vez que cambie la proyección.
 Film grain	Grano de película
+Filter bookmarks	Filtrar marcadores
+Filter layers	Filtrar capas
 Filter rows…	Filtrar filas…
 Find a place by coordinates.	Buscar un lugar por coordenadas.
 Find a place or an address by name (OpenStreetMap).	Buscar un lugar o una dirección por su nombre (OpenStreetMap).
@@ -800,6 +911,7 @@ Find Place	Buscar lugar
 Find plugins in the RustGIS plugin registry.	Buscar complementos en el registro de complementos de RustGIS.
 Find Similar	Buscar similares
 Find Tools	Buscar herramientas
+Finding routes…	Buscando rutas…
 Finish Polygon	Terminar polígono
 Finish Profile	Terminar perfil
 Finish Tool Run	Finalizar ejecución de herramienta
@@ -820,6 +932,7 @@ Folder…	Carpeta…
 for a store that doesn't say	para un almacén que no lo indica
 Forest	Bosque
 Format	Formato
+Found: {names}. An agent works on this map through RustGIS's tools and with its own (web, scripts, files) in a folder of its own, kept in Documents › RustGIS › Agent work. It asks you before each action.	Encontrados: {names}. Un agente trabaja en este mapa con las herramientas de RustGIS y con las suyas (web, scripts, archivos), en una carpeta propia que se conserva en Documentos › RustGIS › Agent work. Te pregunta antes de cada acción.
 Frame rate	Velocidad de fotogramas
 Frame rate, draw time, data size and memory.	Velocidad de fotogramas, tiempo de dibujo, tamaño de los datos y memoria.
 Free the prepared geometry.	Liberar la geometría preparada.
@@ -832,9 +945,11 @@ from the service	del servicio
 From URL…	Desde URL…
 Full Extent	Extensión completa
 Full extent	Extensión completa
+Full lines	Líneas completas
 Full size	Tamaño completo
 Function Editor	Editor de funciones
 Gamma	Gamma
+Gemini stopped the reply ({reason}).	Gemini detuvo la respuesta ({reason}).
 Generalization	Generalización
 geoBoundaries listed no countries: type a country's code	geoBoundaries no ha listado ningún país: escriba el código de un país
 Geocode	Geocodificar
@@ -848,7 +963,6 @@ GeoJSON, CSV, GeoParquet, FlatGeobuf, GeoPackage, zipped Shapefiles, KML, GPX or
 GeoJSON, CSV, GeoParquet, FlatGeobuf, GeoPackage, zipped Shapefiles, KML, GPX or GeoTIFF, up to 512 MB.	GeoJSON, CSV, GeoParquet, FlatGeobuf, GeoPackage, Shapefiles comprimidos en zip, KML, GPX o GeoTIFF, hasta 512 MB.
 GeoLibre	GeoLibre
 GeoLibre Tools	Herramientas de GeoLibre
-GeoLibre tools	Herramientas de GeoLibre
 Geometry	Geometría
 GeoPackage	GeoPackage
 GeoParquet	GeoParquet
@@ -874,6 +988,7 @@ Go back to the previous extent.	Volver a la extensión anterior.
 Go forward to the next extent.	Avanzar a la extensión siguiente.
 Go to a saved extent or save the current one.	Ir a una extensión guardada o guardar la actual.
 Go To Bookmark	Ir al marcador
+Go To Map Link	Ir al enlace de mapa
 Go To XY	Ir a XY
 Go to {coordinate}	Ir a {coordinate}
 Google Gemini	Google Gemini
@@ -896,8 +1011,11 @@ Group	Grupo
 GROUP BY	GROUP BY
 Group features by an integer code, each with default values.	Agrupar entidades por un código entero, cada uno con valores predeterminados.
 Group Option	Opción de agrupación
+Group Properties	Propiedades del grupo
+Group Visibility Range	Rango de visibilidad del grupo
 Groups	Grupos
 Guided analysis: suitability, visibility, networks, interpolation and more.	Análisis guiado: idoneidad, visibilidad, redes, interpolación y más.
+Guides	Guías
 Halo	Halo
 Harbour (qualitative)	Puerto (cualitativa)
 Haze	Bruma
@@ -909,24 +1027,39 @@ Help › Help	Ayuda › Ayuda
 Hexagons	Hexágonos
 Hide	Ocultar
 Hide features far from the view's centre.	Ocultar las entidades alejadas del centro de la vista.
+Hide Group	Ocultar grupo
 Hide labels when the viewer is closer than this.	Ocultar las etiquetas cuando el observador esté más cerca que este valor.
 Hide labels when the viewer is farther than this.	Ocultar las etiquetas cuando el observador esté más lejos que este valor.
 Hide other values	Ocultar otros valores
+Hide Steps	Ocultar pasos
+Hide the description	Ocultar la descripción
+Hide values (no data)	Ocultar valores (NoData)
+Hide values inside a range	Ocultar los valores dentro de un rango
+Hide values outside a range	Ocultar los valores fuera de un rango
 Hide walls facing away from you.	Ocultar las paredes orientadas en sentido contrario.
 High values of the first raster and low values of the second score best.	Los valores altos del primer ráster y bajos del segundo puntúan mejor.
+Highways	Autopistas
 Histogram Equalize	Ecualizar histograma
 Histograms and correlations	Histogramas y correlaciones
 History	Historial
 Hold	Retener
+HOME	HOME
 Home	Inicio
 Home › Add	Inicio › Añadir
+Home › Navigate	Inicio › Navegar
+Home › Navigate › Bookmarks	Inicio › Navegar › Marcadores
 Homepage	Página principal
+Horizontal	Horizontal
 host=localhost dbname=gis user=postgres	host=localhost dbname=gis user=postgres
 host=… dbname=… user=…, or a .duckdb file	host=… dbname=… user=…, o un archivo .duckdb
 Hosted Imagery	Imágenes alojadas
+How the layer's colours combine with the tile layers and basemap beneath.	Cómo se combinan los colores de la capa con las capas de teselas y el mapa base de debajo.
 How the layer's colours combine with what's beneath.	Cómo se combinan los colores de la capa con lo que hay debajo.
 hub.arcgis.com, or an organisation's Hub site	hub.arcgis.com, o el sitio Hub de una organización
 Identify	Identificar
+Idle	Inactivo
+IDW\nInterpolation	Interpolación\nIDW
+IDW Interpolation	Interpolación IDW
 Illumination	Iluminación
 Image Analysis	Análisis de imágenes
 Image Classification	Clasificación de imágenes
@@ -937,6 +1070,7 @@ Imagery Tools	Herramientas de imágenes
 Image…	Imagen…
 Import	Importar
 Import\nProject	Importar\nproyecto
+Import All	Importar todo
 Import Bookmarks	Importar marcadores
 Import Bookmarks…	Importar marcadores…
 Import Deep Learning Package	Importar paquete de aprendizaje profundo
@@ -945,6 +1079,7 @@ Import Layout…	Importar diseño…
 Import Package…	Importar paquete…
 Import Presentation	Importar presentación
 Import Report	Importar informe
+Import Service	Importar servicio
 Import Styles	Importar estilos
 Import Styles From…	Importar estilos desde…
 Import Task	Importar tarea
@@ -952,6 +1087,7 @@ Import Task…	Importar tarea…
 Import Thumbnail	Importar miniatura
 Import Web Tool	Importar herramienta web
 In Beyond	Límite al acercar
+In memory	En memoria
 In Progress	En curso
 in progress	en curso
 In project	En el proyecto
@@ -974,10 +1110,10 @@ Install from a file	Instalar desde un archivo
 Install From File	Instalar desde archivo
 Install From File…	Instalar desde archivo…
 Install GeoLibre Tools	Instalar herramientas de GeoLibre
-Install GeoLibre tools	Instalar herramientas de GeoLibre
 Install Plugin	Instalar complemento
 Install Plugin From Registry	Instalar complemento desde el registro
 Install the Basemaps plugin	Instalar el complemento Mapas base
+Install Whitebox and GeoLibre tools	Instalar las herramientas Whitebox y GeoLibre
 Install {name} {version}?	¿Instalar {name} {version}?
 Installed	Instalado
 Installed plugins are kept in {folder}	Los complementos instalados se guardan en {folder}
@@ -986,18 +1122,25 @@ Installed {name} {version}. Find it on the Plugins tab; its tools are also in th
 Installing it downloads Python {version} and the packages it needs from the internet.	Al instalarlo se descargan de internet Python {version} y los paquetes que necesita.
 Interface font: {font}	Fuente de la interfaz: {font}
 Interpolate a surface from points (IDW)	Interpolar una superficie a partir de puntos (IDW)
+Interpolates a raster surface from feature values by inverse distance weighting, as QGIS does.	Interpola una superficie ráster a partir de valores de entidades por ponderación de distancia inversa, como QGIS.
+Interpolation	Interpolación
+Interpolation Attribute	Atributo de interpolación
+Interval	Intervalo
+invalid child id	id de hijo no válido
 Invalid: {error}	No válida: {error}
 Invert	Invertir
 Invert color scheme	Invertir esquema de color
 Invert the selection.	Invertir la selección.
 IS NULL	IS NULL
 it connects to an address on the internet	se conecta a una dirección de internet
+It has no code: nothing in it runs.	No tiene código: nada en él se ejecuta.
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	está reservado para usted (complementos, scripts, tareas, modelos y el ejecutor de GeoLibre)
 it reads or writes files on this computer	lee o escribe archivos en este equipo
 it replaces the open project	reemplaza el proyecto abierto
 it runs a plugin's command	ejecuta un comando de un complemento
 It runs in a sandbox with no other access to your computer or the network.	Se ejecuta en un entorno aislado, sin ningún otro acceso a su equipo ni a la red.
 It runs: {program}	Ejecuta: {program}
+It's in the Symbology pane, open on the step's layer.	Está en el panel Simbología, abierto en la capa del paso.
 It's installed but turned off: turn it on in the Plugin Manager.	Está instalado pero desactivado: actívelo en el Administrador de complementos.
 It's too large to keep in the browser: install it again on your next visit.	Es demasiado grande para guardarlo en el navegador: vuelva a instalarlo en su próxima visita.
 Item Pop-ups	Ventanas emergentes de elementos
@@ -1059,7 +1202,10 @@ Learn	Aprender
 Learning\nResources	Recursos de\naprendizaje
 Left	Izquierda
 Legend	Leyenda
+Legend label. Clear it to show the value again.	Etiqueta de la leyenda. Bórrela para volver a mostrar el valor.
 Length {length} · gain {gain} m · loss {loss} m	Longitud {length} · ascenso {gain} m · descenso {loss} m
+Let the assistant hand tasks to agents on this computer	Permitir que el asistente encargue tareas a agentes de este equipo
+Let your Agents Control RustGIS	Deja que tus agentes controlen RustGIS
 Level	Nivel
 Library	Biblioteca
 Light and Shadow	Luz y sombra
@@ -1070,18 +1216,24 @@ LIMIT	LIMIT
 Limit a field to coded values or a range.	Limitar un campo a valores codificados o a un rango.
 Limit where tools work, and the cell size of new rasters.	Limitar dónde trabajan las herramientas y el tamaño de celda de los rásteres nuevos.
 Limit which features draw with a SQL expression.	Limitar qué entidades se dibujan con una expresión SQL.
+Limits	Límites
 Line	Línea
 Line color	Color de línea
 Line Of Sight	Línea de visión
 Line of sight between two points	Línea de visión entre dos puntos
+Line Of Sight From Here	Línea de visión desde aquí
 Line width	Ancho de línea
 Line {n} isn't four numbers (column row lon lat)	La línea {n} no tiene cuatro números (columna fila lon lat)
 Lines	Líneas
+Lines and ticks	Líneas y marcas
 LineString	LineString
 Link	Vincular
 Link Cursors	Vincular cursores
 Link Views	Vincular vistas
 List	Listar
+List by data source	Listar por origen de datos
+List by drawing order	Listar por orden de dibujo
+List by selection	Listar por selección
 List Columns in File	Listar columnas del archivo
 List Commands	Listar comandos
 List Data Sources	Listar orígenes de datos
@@ -1101,7 +1253,7 @@ Lit	Iluminado
 Live summary of the features in view.	Resumen en vivo de las entidades a la vista.
 Load All Features	Cargar todas las entidades
 Load an unpacked plugin from its folder while you develop it.	Cargar un complemento sin empaquetar desde su carpeta mientras lo desarrolla.
-Load GeoLibre tools	Cargar herramientas de GeoLibre
+Load Whitebox and GeoLibre tools	Cargar las herramientas Whitebox y GeoLibre
 Loaded {name} from its folder.	Se ha cargado {name} desde su carpeta.
 Loading the GeoLibre tools…	Cargando las herramientas de GeoLibre…
 Loads map tiles from the web	Carga teselas de mapa desde la web
@@ -1116,13 +1268,18 @@ Lock	Bloquear
 Long	Entero largo
 Longitude	Longitud
 Longitude (X)	Longitud (X)
+Look for {name}, outlined on the ribbon.	Busque {name}, resaltado en la cinta.
+Looking up the place…	Buscando el lugar…
 Lower Priority	Bajar prioridad
+Made in RustGIS: samples, drawings and tool outputs	Creadas en RustGIS: ejemplos, dibujos y resultados de herramientas
 Magnifier	Lupa
 Major Lakes	Lagos principales
 Major Rivers	Ríos principales
 Make a new layer of the selected features.	Crear una capa nueva con las entidades seleccionadas.
+Make a task of the steps recorded	Crear una tarea con los pasos grabados
 Make Layer From Selected Features	Crear capa a partir de las entidades seleccionadas
 Manage	Administrar
+Manage Bookmarks	Administrar marcadores
 Manage Edits	Administrar ediciones
 Manage Templates	Administrar plantillas
 Map	Mapa
@@ -1133,6 +1290,7 @@ Map File	Archivo de mapa
 Map Frame	Marco de mapa
 Map Frames	Marcos de mapa
 Map frames per second (live while the map moves)	Fotogramas por segundo del mapa (en directo mientras el mapa se mueve)
+Map Link	Enlace de mapa
 Map name	Nombre del mapa
 Map Page	Página de mapa
 Map scale	Escala del mapa
@@ -1149,7 +1307,9 @@ Mapping	Cartografía
 Maps	Mapas
 Maps move together.	Los mapas se mueven juntos.
 Marker	Marcador
+Mask Values	Enmascarar valores
 Masking	Enmascaramiento
+Matching places	Lugares coincidentes
 Max	Máx
 Max %	Máx %
 Maximum zoom	Zoom máximo
@@ -1177,6 +1337,8 @@ Miles	Millas
 Miller Cylindrical	Cilíndrica de Miller
 Min	Mín
 Min %	Mín %
+Min must be less than Max	Mín debe ser menor que Máx
+Min must not be more than Max	Mín no debe ser mayor que Máx
 Minimum Bounding Geometry	Geometría envolvente mínima
 Minimum Maximum	Mínimo Máximo
 Minutes	Minutos
@@ -1194,19 +1356,28 @@ Mollweide (equal-area world)	Mollweide (mundo de áreas iguales)
 More	Más
 More basemaps:	Más mapas base:
 Mosaic images into an orthomosaic	Unir imágenes en un ortomosaico
+Mosaic Rasters	Mosaico de rásteres
 Mosaic the visible rasters into an orthomosaic.	Unir los rásteres visibles en un ortomosaico.
 Most cloud cover (%)	Cobertura de nubes máxima (%)
 Mouse wheel	Rueda del ratón
 Move	Mover
 Move (m)	Mover (m)
+Move Bookmark	Mover marcador
 Move Down	Bajar
 Move down	Bajar
+Move Group	Mover grupo
+Move Task Step	Mover paso de tarea
+Move To Group	Mover a un grupo
+Move To {group}	Mover a {group}
 Move Up	Subir
 Move up	Subir
 Move, rotate, scale, merge, explode, split or flip the selected features.	Mover, rotar, escalar, fusionar, descomponer, dividir o invertir las entidades seleccionadas.
 Move, Rotate, Scale…	Mover, rotar, escalar…
 My Buckets	Mis buckets
+My OGC Layer	Mi capa OGC
+N/S/E/W	N/S/E/W
 Name	Nombre
+name the plugin whose panel to open: {"id": plugin id}	indique el complemento cuyo panel abrir: {"id": id del complemento}
 Natural Breaks (Jenks)	Cortes naturales (Jenks)
 Natural Color (1, 2, 3)	Color natural (1, 2, 3)
 Natural Earth	Natural Earth
@@ -1222,7 +1393,6 @@ Needs three or more bands.	Requiere tres o más bandas.
 Neighborhood Explorer	Explorador de vecindad
 Network Analysis	Análisis de redes
 New	Nuevo
-New\nBookmark	Nuevo\nmarcador
 New\nLayout	Nuevo\ndiseño
 New\nMap	Nuevo\nmapa
 New\nNotebook	Nuevo\ncuaderno
@@ -1236,6 +1406,7 @@ New conversation	Nueva conversación
 New Custom Template	Nueva plantilla personalizada
 New Custom Template…	Nueva plantilla personalizada…
 New features use this template's values	Las entidades nuevas usan los valores de esta plantilla
+New Group	Nuevo grupo
 New job name	Nombre del nuevo trabajo
 New Layout	Nuevo diseño
 New Map	Nuevo mapa
@@ -1259,16 +1430,24 @@ Next	Siguiente
 Next Extent	Extensión siguiente
 Next Page	Página siguiente
 No	No
+No agents that speak ACP (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, Cursor, OpenCode, goose) were found on this computer.	No se encontraron en este equipo agentes que hablen ACP (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, Cursor, OpenCode, goose).
+No bookmark matches the filter.	Ningún marcador coincide con el filtro.
 No bookmarks yet	Aún no hay marcadores
+No bookmarks yet. New Bookmark saves the current view of the map.	Aún no hay marcadores. Nuevo marcador guarda la vista actual del mapa.
+no command	ningún comando
 No connections this session	No hay conexiones en esta sesión
 No datasets with data RustGIS can add	No hay conjuntos de datos con datos que RustGIS pueda añadir
 No edits since the project was saved	No hay ediciones desde que se guardó el proyecto
+no home folder	no hay carpeta personal
+No layers match	Ninguna capa coincide
 No mask	Sin máscara
 No models are available for this account.	No hay modelos disponibles para esta cuenta.
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Aún no hay cuadernos. Análisis › Nuevo cuaderno crea uno, o Añadir y abrir cuaderno abre uno.
 No offline areas	No hay áreas sin conexión
 No other reports	No hay otros informes
 No place found	No se ha encontrado ningún lugar
+No place matches that address.	Ningún lugar coincide con esa dirección.
+No plugin panel is open.	No hay ningún panel de complemento abierto.
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	No hay complementos instalados. Explore el registro de complementos o instale un archivo .rgplugin.
 No plugins match.	Ningún complemento coincide.
 No Pop-ups	Sin ventanas emergentes
@@ -1281,13 +1460,13 @@ No reports yet. Publish › New Report lists the selected layer's records.	Aún 
 no service or file links	ningún enlace a servicios o archivos
 No standalone tables	No hay tablas independientes
 No styles yet	Aún no hay estilos
-No tasks yet. Data › Task makes one, for example from your geoprocessing history.	Aún no hay tareas. Datos › Tarea crea una, por ejemplo a partir del historial de geoprocesamiento.
+No tasks yet. Record one, or make one from your geoprocessing history with Analyze › Task.	Aún no hay tareas. Grabe una o cree una a partir de su historial de geoprocesamiento con Análisis › Tarea.
 NoData	NoData
 Nominatim	Nominatim
 None	Ninguno
 None (public buckets)	Ninguna (buckets públicos)
 none, a .duckdb file, or host=… dbname=… user=…	ninguno, un archivo .duckdb o host=… dbname=… user=…
-none, or from PGPASSWORD	ninguna, o desde PGPASSWORD
+none, or from PGPASSWORD or MYSQL_PWD	ninguna, o desde PGPASSWORD o MYSQL_PWD
 None. Add one by address, or from a basemap plugin.	Ninguna. Añada una por dirección o desde un complemento de mapas base.
 North	Norte
 North\nArrow	Flecha\nde norte
@@ -1298,12 +1477,14 @@ not a RustGIS project	no es un proyecto de RustGIS
 not needed	no es necesaria
 Not sandboxed	Sin aislamiento
 Not saved yet	Aún no guardado
+Not Selectable	No seleccionable
 Notebook	Cuaderno
 Notebook Pane	Panel Cuaderno
 Nothing found	No se ha encontrado nada
 Nothing here	No hay nada aquí
 Nothing named {name} to rename	No hay nada llamado {name} para cambiar de nombre
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Aún no se ha compartido nada. Publicar › Compartir como crea mapas web, capas, estilos, escenas y más.
+Nothing was recorded, so no task was made.	No se grabó nada, así que no se creó ninguna tarea.
 Now	Ahora
 NULL	NULL
 Nulls	Nulos
@@ -1312,6 +1493,7 @@ observer height m	altura del observador m
 Ocean	Océano
 of a geometry that doesn't say	de una geometría que no lo indica
 Off	Desactivado
+Off, west and south are negative: -112.5°.	Desactivado, el oeste y el sur son negativos: -112.5°.
 Offline	Sin conexión
 Offline area	Área sin conexión
 OGC API	OGC API
@@ -1342,6 +1524,7 @@ Open Custom Template…	Abrir plantilla personalizada…
 Open data catalogues searched by text. Files are added by their address (read in place when they can be); a service opens Add From Service to pick its layer.	Catálogos de datos abiertos en los que se busca por texto. Los archivos se añaden por su dirección (se leen en su ubicación cuando es posible); un servicio abre Añadir desde servicio para elegir su capa.
 Open data products on Source Cooperative. GeoParquet, FlatGeobuf, cloud-optimised GeoTIFFs and PMTiles are read in place; other files are downloaded.	Productos de datos abiertos en Source Cooperative. GeoParquet, FlatGeobuf, GeoTIFF optimizados para la nube y PMTiles se leen en su ubicación; los demás archivos se descargan.
 Open folder	Abrir carpeta
+Open In Geoprocessing…	Abrir en Geoprocesamiento…
 Open Layout	Abrir diseño
 Open Notebook	Abrir cuaderno
 Open Offline Map	Abrir mapa sin conexión
@@ -1354,10 +1537,12 @@ Open the attribute table of the selected layer.	Abrir la tabla de atributos de l
 Open the Basemaps tab	Abrir la pestaña Mapas base
 Open the layer's attribute table.	Abrir la tabla de atributos de la capa.
 Open the layer's table.	Abrir la tabla de la capa.
+Open the plugin's panel.	Abrir el panel del complemento.
 Open the Release Page	Abrir la página de la versión
 Open the RustGIS user guide.	Abrir la guía del usuario de RustGIS.
 Open the selected layer's table.	Abrir la tabla de la capa seleccionada.
 Open the Symbology pane.	Abrir el panel Simbología.
+Open the task's steps	Abrir los pasos de la tarea
 Open {code} on epsg.io	Abrir {code} en epsg.io
 Open, save and create projects	Abrir, guardar y crear proyectos
 OpenAI-compatible	Compatible con OpenAI
@@ -1375,10 +1560,15 @@ OpenStreetMap's public server	Servidor público de OpenStreetMap
 OpenStreetMap, Esri, USGS, NASA and more, from the plugin registry.	OpenStreetMap, Esri, USGS, NASA y más, desde el registro de complementos.
 OpenStreetMap…	OpenStreetMap…
 Open…	Abrir…
+Optional. Shift+Enter starts a new line.	Opcional. Mayús+Intro inicia una nueva línea.
 Options	Opciones
 OR	OR
 Or	O
+Or run in a POSIX shell, for Claude Code or Codex:	O ejecute en un shell POSIX, para Claude Code o Codex:
+Or run in PowerShell, for Claude Code or Codex:	O ejecute en PowerShell, para Claude Code o Codex:
+Or run, for Claude Code or Codex:	O ejecuta, para Claude Code o Codex:
 ORDER BY	ORDER BY
+Orientation	Orientación
 Ortho Mapping	Ortocartografía
 Out Beyond	Límite al alejar
 Outline	Contorno
@@ -1416,8 +1606,11 @@ Page {n} of {total}: {name}	Página {n} de {total}: {name}
 Pages of maps, text, images and videos, shown one after another.	Páginas de mapas, texto, imágenes y vídeos, mostradas una tras otra.
 Pan	Desplazar
 Pan (Explore) · any tool	Desplazar (Explorar) · cualquier herramienta
+Pan and Zoom Map	Desplazar y hacer zoom en el mapa
+Pan To	Desplazarse a
 Pan to a longitude/latitude.	Desplazarse a una longitud/latitud.
 Pan with the mouse, zoom with the wheel and click features to see their attributes.	Desplace el mapa con el ratón, haga zoom con la rueda y haga clic en las entidades para ver sus atributos.
+Pan/Zoom\nMap	Desplazar/zoom\nen el mapa
 Pane Sets	Conjuntos de paneles
 Paper	Papel
 Parent folder	Carpeta superior
@@ -1431,29 +1624,38 @@ paste your key	pegue su clave
 Pause	Pausar
 PDF or PNG	PDF o PNG
 Percent Clip	Recorte porcentual
+Perceptually Uniform	Perceptualmente uniformes
 Performance	Rendimiento
 Photon	Photon
+Pick a live value, such as the scale or date, then click the map to place it.	Elija un valor dinámico, como la escala o la fecha, y haga clic en el mapa para colocarlo.
+Pick a route in the list, or click a grey route on the map.	Elija una ruta de la lista o haga clic en una ruta gris del mapa.
+Pick it on the map	Elegirlo en el mapa
 Picture	Imagen
 Pictures	Imágenes
 Pictures, attachments and chart	Imágenes, adjuntos y gráfico
 Pipe	Barra vertical
 Pixel	Píxel
 Pixel Editor	Editor de píxeles
+Pixel Size (°)	Tamaño de píxel (°)
 Pixel type	Tipo de píxel
 Place a raster on the map	Colocar un ráster en el mapa
 Place a raster on the map from control points or the view.	Colocar un ráster en el mapa a partir de puntos de control o de la vista.
 Placement	Ubicación
 Places	Lugares
 Places (name, category, address, rating)	Lugares (nombre, categoría, dirección, valoración)
+Plan a route between places and follow it turn by turn (Valhalla, on OpenStreetMap data).	Planificar una ruta entre lugares y seguirla paso a paso (Valhalla, con datos de OpenStreetMap).
 Planar	Planar
 Planar Navigation	Navegación planar
 Planetary Computer	Planetary Computer
+Planning a route sends its start, stops and destination to a routing server, and looking up a place by name sends the name to OpenStreetMap's Nominatim.	Planificar una ruta envía su origen, paradas y destino a un servidor de rutas, y buscar un lugar por nombre envía el nombre a Nominatim de OpenStreetMap.
 Play	Reproducir
 Play the animation.	Reproducir la animación.
+Plugin	Complemento
 Plugin\nManager	Administrador de\ncomplementos
 Plugin folder	Carpeta del complemento
 Plugin Manager	Administrador de complementos
 Plugin Manager…	Administrador de complementos…
+Plugin Panel State	Estado del panel del complemento
 Plugin registry	Registro de complementos
 Plugins	Complementos
 Plugins are .rgplugin files. Install only plugins from people you trust.	Los complementos son archivos .rgplugin. Instale solo complementos de personas de confianza.
@@ -1512,8 +1714,10 @@ PROJ definition	Definición PROJ
 Project	Proyecto
 Project\nPackage	Paquete\nde proyecto
 Project Info	Información del proyecto
+project is "sample", "blank", "last" or {"path": a project file}	project es "sample", "blank", "last" o {"path": un archivo de proyecto}
 Project Template	Plantilla de proyecto
 Project templates: start projects from a saved setup.	Plantillas de proyecto: iniciar proyectos a partir de una configuración guardada.
+project's path is required	se requiere la ruta del proyecto
 Projection	Proyección
 Projections	Proyecciones
 Proportional Symbols	Símbolos proporcionales
@@ -1525,16 +1729,20 @@ Put the layer back as it was then	Devolver la capa al estado que tenía entonces
 Python environment failed: {error}	Error en el entorno de Python: {error}
 Python environment not prepared	Entorno de Python sin preparar
 Python environment ready	Entorno de Python listo
+Qualitative	Cualitativa
 Quantile	Cuantil
 Query files, web addresses and databases with DuckDB Spatial; add results to the map.	Consultar archivos, direcciones web y bases de datos con DuckDB Spatial; añadir los resultados al mapa.
 Quick\nAccess	Acceso\nrápido
 Quick Access Toolbar	Barra de herramientas de acceso rápido
+Quick actions	Acciones rápidas
+Quick Analysis	Análisis rápido
 radius km	radio km
 radius m	radio m
 Rain	Lluvia
 Raise polygons by a height or a field.	Elevar polígonos según una altura o un campo.
 Raise Priority	Subir prioridad
 Random points in polygons	Puntos aleatorios en polígonos
+Range	Rango
 Raster	Ráster
 Raster\nAnalysis	Análisis\nráster
 Raster\nInformation	Información\nráster
@@ -1553,9 +1761,12 @@ Reading {n} of Overture's {ty} files where the map is: {attribution}	Leyendo {n}
 Reading {url}…	Leyendo {url}…
 Reads and writes files	Lee y escribe archivos
 Reads the map	Lee el mapa
-Ready To Use	Listas para usar
 Reality Mapping	Cartografía de la realidad
 Recent	Recientes
+Record Task	Grabar tarea
+Recorded Task	Tarea grabada
+Recording stopped: another project opened, and its {n} steps were for the previous one.	Grabación detenida: se abrió otro proyecto, y los {n} pasos eran del anterior.
+Recording: {n} steps	Grabando: {n} pasos
 Rectangle	Rectángulo
 Red	Rojo
 Redo	Rehacer
@@ -1578,6 +1789,8 @@ Relationship	Relación
 Relationship name	Nombre de la relación
 Relationships	Relaciones
 Release	Versión
+Reload	Recargar
+Reload Web Layers	Recargar capas web
 Remember (without the secret)	Recordar (sin el secreto)
 Remember the key on this computer	Recordar la clave en este equipo
 Remembered:	Recordadas:
@@ -1586,19 +1799,25 @@ Remove All	Quitar todas
 Remove an offline area.	Quitar un área sin conexión.
 Remove Bookmark	Quitar marcador
 Remove Data Source	Quitar origen de datos
+Remove every guide from this layout.	Quitar todas las guías de este diseño.
 Remove Folder	Quitar carpeta
 Remove From Current Selection	Quitar de la selección actual
 Remove from Favourites	Quitar de favoritos
+Remove From Group	Quitar del grupo
+Remove Group	Quitar grupo
 Remove Keyframe	Quitar fotograma clave
 Remove Section	Quitar sección
 Remove Table	Quitar tabla
 Remove the last keyframe.	Quitar el último fotograma clave.
 Remove the layer from the map.	Quitar la capa del mapa.
+Remove this stop	Quitar esta parada
 Remove Tile Layer	Quitar capa de teselas
 Remove {name}	Quitar {name}
 Removes the parts of polygon features that overlap erase polygons.	Elimina las partes de las entidades poligonales que se superponen a los polígonos de borrado.
 Removes vertices that deviate less than a tolerance (Douglas–Peucker).	Elimina los vértices que se desvían menos que una tolerancia (Douglas–Peucker).
 Rename	Cambiar nombre
+Rename Bookmark	Cambiar nombre del marcador
+Rename Group	Cambiar nombre del grupo
 Rename Layer	Cambiar nombre de capa
 Rename Layout	Cambiar nombre del diseño
 Rename Map	Cambiar nombre de mapa
@@ -1607,6 +1826,7 @@ Rename Service Group	Cambiar nombre del grupo de servicio
 Rename…	Cambiar nombre…
 Rendering	Representación
 Replace Web Layer	Reemplazar capa web
+Replay the route as a drive the map follows	Reproducir la ruta como un trayecto que sigue el mapa
 Report	Informe
 Report File	Archivo de informe
 Report Pane	Panel Informe
@@ -1620,11 +1840,15 @@ Resampling	Remuestreo
 Resampling Type	Tipo de remuestreo
 Reset	Restablecer
 Reset brightness, contrast and gamma.	Restablecer brillo, contraste y gamma.
+Reset Default	Restablecer predeterminado
 Reset Effects	Restablecer efectos
+Reset North	Orientar al norte
+Reset north	Orientar al norte
 Restore	Restaurar
 Restore From Archive	Restaurar desde el archivo histórico
 Results	Resultados
 Resume	Reanudar
+Reverse	Invertir
 RGB	RGB
 Ribbon	Cinta
 Right	Derecha
@@ -1633,15 +1857,20 @@ Robinson	Robinson
 Rotate	Rotar
 Rotate (°)	Rotar (°)
 Rotate 90°	Rotar 90°
+Rotate Map	Rotar mapa
 Rotation	Rotación
 Rotation Type	Tipo de rotación
 rotation °	rotación °
+roundabout turn	en la rotonda, gire
 Routes (name, surface, length)	Rutas (nombre, superficie, longitud)
+Routes by Valhalla (FOSSGIS) on OpenStreetMap data. Travel times don't include live traffic.	Rutas de Valhalla (FOSSGIS) con datos de OpenStreetMap. Los tiempos de viaje no incluyen el tráfico en tiempo real.
 Rows	Filas
 Rule name	Nombre de la regla
+Rulers	Reglas
 Run	Ejecutar
 Run a query whose result has a geometry column	Ejecute una consulta cuyo resultado tenga una columna de geometría
 Run All	Ejecutar todo
+Run All Steps	Ejecutar todos los pasos
 Run Cells	Ejecutar celdas
 Run Chain	Ejecutar cadena
 Run commands from text, one per line.	Ejecutar comandos a partir de texto, uno por línea.
@@ -1649,7 +1878,6 @@ Run Model	Ejecutar modelo
 Run Script	Ejecutar script
 Run SQL Query	Ejecutar consulta SQL
 Run Task	Ejecutar tarea
-Run the task	Ejecutar la tarea
 Run Tool	Ejecutar herramienta
 Run {name}	Ejecutar {name}
 Running the query for the map…	Ejecutando la consulta para el mapa…
@@ -1669,7 +1897,6 @@ RustGIS presentation	Presentación de RustGIS
 RustGIS project	Proyecto de RustGIS
 RustGIS project template	Plantilla de proyecto de RustGIS
 RustGIS ran into an internal error last time. The details are in {path}; please attach them to a bug report.	RustGIS encontró un error interno la última vez. Los detalles están en {path}; adjúntelos a un informe de error.
-RustGIS ran into an internal error while handling the model's reply, so the request was stopped. Please report it at https://github.com/opengeos/RustGIS/issues.	RustGIS encontró un error interno al procesar la respuesta del modelo, así que la solicitud se detuvo. Repórtelo en https://github.com/opengeos/RustGIS/issues.
 RustGIS report or report template	Informe o plantilla de informe de RustGIS
 RustGIS styles	Estilos de RustGIS
 RustGIS task	Tarea de RustGIS
@@ -1688,6 +1915,9 @@ Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	Datos de 
 Saturation	Saturación
 Save	Guardar
 Save As	Guardar como
+Save as Default	Guardar como predeterminado
+Save as Default Raster Style	Guardar como estilo ráster predeterminado
+Save as Layer	Guardar como capa
 Save As Presentation File…	Guardar como archivo de presentación…
 Save As Report File…	Guardar como archivo de informe…
 Save As Report Template…	Guardar como plantilla de informe…
@@ -1707,7 +1937,6 @@ Save Project Template	Guardar plantilla de proyecto
 Save Style Items	Guardar elementos de estilo
 Save Task Item	Guardar elemento de tarea
 Save the active map (with its data) as a map file.	Guardar el mapa activo (con sus datos) como archivo de mapa.
-Save the current extent as a bookmark.	Guardar la extensión actual como marcador.
 Save the last task as a task file.	Guardar la última tarea como archivo de tarea.
 Save the layout as a layout file.	Guardar el diseño como archivo de diseño.
 Save the open layout as a layout file.	Guardar el diseño abierto como archivo de diseño.
@@ -1722,6 +1951,8 @@ Save the selected layer with its symbology as a layer file.	Guardar la capa sele
 Save Web Link Chart	Guardar gráfico de vínculos web
 Save Web Map	Guardar mapa web
 Save Web Scene	Guardar escena web
+Saved	Guardado
+Saved as the default style for new single-band rasters.	Guardado como estilo predeterminado para los nuevos rásteres de una banda.
 Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Las claves guardadas se almacenan sin cifrar en las preferencias de la aplicación (en el almacenamiento del navegador en la web).
 Saved symbology: apply it to the selected layer, or save the layer's.	Simbología guardada: aplicarla a la capa seleccionada, o guardar la de la capa.
 Saved View	Vista guardada
@@ -1756,6 +1987,7 @@ Search results © OpenStreetMap contributors	Resultados de búsqueda © colabora
 Search the map	Buscar en el mapa
 Searching places…	Buscando lugares…
 Searching…	Buscando…
+Searching… try again in a moment.	Buscando… inténtelo de nuevo en un momento.
 Seconds	Segundos
 Secret access key	Clave de acceso secreta
 Sections	Secciones
@@ -1790,6 +2022,7 @@ Select Subset From Current Selection	Seleccionar subconjunto de la selección ac
 Select the rows related to the selection.	Seleccionar las filas relacionadas con la selección.
 Selectable	Seleccionable
 Selectable Layers	Capas seleccionables
+Selectable on the map: the Select tool picks its features	Seleccionable en el mapa: la herramienta Seleccionar elige sus entidades
 Selected	Seleccionado
 Selected Features: {n}	Entidades seleccionadas: {n}
 Selected in Layers	Seleccionadas en Capas
@@ -1805,13 +2038,18 @@ Send	Enviar
 Send offline edits back and refresh.	Enviar las ediciones sin conexión y actualizar.
 Separator	Separador
 Sepia	Sepia
+Sequential	Secuencial
 Server	Servidor
+Service Group	Grupo de servicio
+Service group data exceeds 64 MB.	Los datos del grupo de servicio superan los 64 MB.
+Service Import Requests	Solicitudes de importación del servicio
 Service Layers	Capas de servicio
 Services	Servicios
 Set	Establecer
 Set Cell Size	Establecer tamaño de celda
 Set Domain	Establecer dominio
 Set Filter	Establecer filtro
+Set Geometry	Establecer geometría
 Set Map Tool	Establecer herramienta de mapa
 Set Scale	Establecer escala
 Set Subtypes	Establecer subtipos
@@ -1833,25 +2071,37 @@ Share the map's relationships as a link chart page.	Compartir las relaciones del
 Share the selected layer as an OGC API Features collection with its style.	Compartir la capa seleccionada como una colección OGC API Features con su estilo.
 Share the selected layer's names as a place-search locator.	Compartir los nombres de la capa seleccionada como un localizador de búsqueda de lugares.
 Share the selected layer's symbology as a MapLibre style.	Compartir la simbología de la capa seleccionada como un estilo de MapLibre.
+Shared	Compartida
 Shared Items	Elementos compartidos
 Shares made, with Manage tools to update them.	Elementos compartidos, con herramientas de Administrar para actualizarlos.
+sharp left	gire bruscamente a la izquierda
+sharp right	gire bruscamente a la derecha
 Shift+	Shift+
 Shift+drag	Shift+arrastrar
+Shift+Enter starts a new line.	Mayús+Intro inicia una nueva línea.
 Shortcuts	Atajos
 Shortest route over a line network	Ruta más corta sobre una red de líneas
 Show	Mostrar
 Show a second map beside this one.	Mostrar un segundo mapa junto a este.
+Show all values	Mostrar todos los valores
 Show details when hovering items in the Browser view.	Mostrar detalles al pasar el puntero sobre los elementos en la vista del navegador.
 Show different features at different scales.	Mostrar distintas entidades a distintas escalas.
+Show grid	Mostrar cuadrícula
+Show Group	Mostrar grupo
 Show latitude/longitude lines on the basemap.	Mostrar líneas de latitud/longitud en el mapa base.
 Show Map	Mostrar mapa
+Show Me	Muéstremelo
 Show or hide	Mostrar u ocultar
 Show or hide the AI Assistant.	Mostrar u ocultar el asistente de IA.
+Show or hide the Bookmarks pane: every map's bookmarks.	Mostrar u ocultar el panel Marcadores: los marcadores de todos los mapas.
 Show or hide the Browser pane.	Mostrar u ocultar el panel Navegador.
 Show or hide the Data Sources pane: favourites, recent data, saved services, databases and STAC APIs, and a library of public sources.	Mostrar u ocultar el panel Orígenes de datos: favoritos, datos recientes, servicios guardados, bases de datos y STAC API, y una biblioteca de orígenes públicos.
+Show or hide the group's layers	Mostrar u ocultar las capas del grupo
 Show or hide the layer.	Mostrar u ocultar la capa.
 Show or hide the Layers pane.	Mostrar u ocultar el panel Capas.
 Show or hide the Tools pane.	Mostrar u ocultar el panel Herramientas.
+Show rulers. Drag from a ruler to add a guide; drag a guide back onto it to remove it.	Mostrar reglas. Arrastre desde una regla para añadir una guía; arrastre una guía de vuelta a la regla para quitarla.
+Show the description	Mostrar la descripción
 Show the labels that don't fit, in red.	Mostrar en rojo las etiquetas que no caben.
 Show the layer only inside another layer's polygons.	Mostrar la capa solo dentro de los polígonos de otra capa.
 Show the layer only left of a divider, to compare it with what's beneath.	Mostrar la capa solo a la izquierda de un divisor, para compararla con lo que hay debajo.
@@ -1861,7 +2111,10 @@ Show the pointer's place on the other map.	Mostrar la posición del puntero en e
 Show the previous map series page.	Mostrar la página anterior de la serie de mapas.
 Show the Symbology pane for the selected layer.	Mostrar el panel Simbología de la capa seleccionada.
 Show vertices	Mostrar vértices
+Show where this step's command is, to do it yourself	Mostrar dónde está el comando de este paso, para hacerlo usted mismo
+Show {n} Steps	Mostrar {n} pasos
 Side by Side	En paralelo
+Side labels	Etiquetas laterales
 Sign in to choose a model.	Inicia sesión para elegir un modelo.
 Sign in with your ChatGPT account.	Inicie sesión con su cuenta de ChatGPT.
 Sign out	Cerrar sesión
@@ -1872,14 +2125,23 @@ Signed out on this computer, but OpenAI didn't confirm it. You can disconnect Ru
 Signing in with ChatGPT works in the desktop app.	El inicio de sesión con ChatGPT funciona en la aplicación de escritorio.
 Signing the asset (Planetary Computer)…	Firmando el recurso (Planetary Computer)…
 Simplify	Simplificar
+Simulate the drive, or save the route as a layer.	Simular el trayecto o guardar la ruta como capa.
 Simulation	Simulación
+Single line	Línea simple
 Single Symbol	Símbolo único
 Size	Tamaño
 Size, bands, statistics and coordinate system.	Tamaño, bandas, estadísticas y sistema de coordenadas.
+Skill (SKILL.md or .zip)	Habilidad (SKILL.md o .zip)
+Skills	Habilidades
+Skills for the AI Assistant: {names}	Habilidades para el Asistente de IA: {names}
 Slideshow, PDF or PNG	Diapositivas, PDF o PNG
+slight left	gire ligeramente a la izquierda
+slight right	gire ligeramente a la derecha
 Slope, aspect, hillshade, NDVI, band math, thresholds.	Pendiente, orientación, sombreado, NDVI, álgebra de bandas, umbrales.
 Slope, hillshade, NDVI and more.	Pendiente, sombreado, NDVI y más.
 Small scales	Escalas pequeñas
+Snap	Ajustar
+Snap elements to guides, the page and each other as you move or resize them. Hold Alt to place one freely.	Ajustar los elementos a las guías, a la página y entre sí al moverlos o cambiar su tamaño. Mantenga Alt pulsada para colocar uno libremente.
 Snap new vertices to nearby vertices, edges and line ends.	Ajustar los vértices nuevos a vértices, bordes y extremos de línea cercanos.
 Snap Point	Punto de ajuste
 Snapping	Ajuste
@@ -1942,6 +2204,7 @@ STAC API	STAC API
 STAC APIs	STAC API
 STAC Search	Búsqueda STAC
 STAC Search…	Búsqueda STAC…
+Stack on the current basemaps	Apilar sobre los mapas base actuales
 Standalone Tables	Tablas independientes
 Standard Deviation	Desviación estándar
 Star	Estrella
@@ -1950,17 +2213,23 @@ Start	Inicio
 Start Over	Empezar de nuevo
 Start With	Empezar con
 Start-up	Inicio
+starting with a project file needs the desktop app	iniciar con un archivo de proyecto requiere la aplicación de escritorio
 Statistics	Estadísticas
 Statistics Field	Campo de estadísticas
 Status	Estado
 Status Bar	Barra de estado
 Std. Dev.	Desv. est.
+Step back	Paso atrás
+Step forward	Paso adelante
 Step through a task.	Recorrer una tarea paso a paso.
 Step {n} done	Paso {n} completado
+Stepped line	Línea escalonada
 Stop	Detener
 Stop drawing labels, for faster navigation.	Dejar de dibujar etiquetas para navegar más rápido.
 Stop filling the cache.	Dejar de llenar la caché.
 Stop MCP relay	Detener el relé MCP
+Stop Recording	Detener grabación
+Stopped after {steps} steps; say "continue" to go on.	Detenido tras {steps} pasos; di "continuar" para seguir.
 Stopped.	Detenido.
 street, city, country	calle, ciudad, país
 Stretch	Estiramiento
@@ -1977,6 +2246,8 @@ Subreport: {name}	Subinforme: {name}
 Subtypes	Subtipos
 Subtypes, one per line: code=name	Subtipos, uno por línea: código=nombre
 Suitability Modeler	Modelador de idoneidad
+Summarise the conversation so far, so a long chat stays within the model's context	Resumir la conversación hasta ahora, para que un chat largo quepa en el contexto del modelo
+Summarising the earlier conversation to keep it within the model's context…	Resumiendo la conversación anterior para que quepa en el contexto del modelo…
 Summarize	Resumir
 Summarize\nWithin	Resumir\ndentro
 Summarize Within	Resumir dentro
@@ -1986,6 +2257,8 @@ Supplemental Page	Página complementaria
 Supplemental Page After	Página complementaria después
 Surface	Superficie
 Surface: {layer}	Superficie: {layer}
+Swap	Intercambiar
+Swap the start and the destination	Intercambiar el origen y el destino
 Swipe	Barrido
 Switch	Invertir
 Switch between GPU and CPU map rendering	Cambiar entre la representación del mapa en GPU y en CPU
@@ -2009,19 +2282,23 @@ Tags	Etiquetas
 Take the data in view offline, to edit and sync back later.	Llevar sin conexión los datos a la vista, para editarlos y sincronizarlos después.
 Task	Tarea
 Task Item	Elemento de tarea
+Task name	Nombre de la tarea
 Tasks	Tareas
 Tasks: guided steps that each run a command.	Tareas: pasos guiados que ejecutan cada uno un comando.
 Template name	Nombre de la plantilla
 Templates	Plantillas
 Terrain	Terreno
+Test	Test
 Text	Texto
 Text Symbol	Símbolo de texto
 The address fields are empty in every row.	Los campos de dirección están vacíos en todas las filas.
 the answer isn't UTF-8 text	la respuesta no es texto UTF-8
+The assistant follows a skill's instructions when it uses it. Whatever they say, its commands that need your approval still ask.	El asistente sigue las instrucciones de una habilidad cuando la usa. Digan lo que digan, sus comandos que necesitan tu aprobación siguen preguntando.
 The assistant is busy; stop it or wait for it to finish.	El asistente está ocupado; deténgalo o espere a que termine.
 The assistant wants to run this, and {why}:	El asistente quiere ejecutar lo siguiente, y {why}:
 The Basemaps plugin's tab of public basemaps.	La pestaña de mapas base públicos del complemento Mapas base.
 the capture failed unexpectedly	la captura falló inesperadamente
+The connection failed; trying again in {seconds} s.	La conexión falló; se reintentará en {seconds} s.
 The country list couldn't be read ({e}): type a country's code	No se pudo leer la lista de países ({e}): escriba el código de un país
 The environment (AWS_ACCESS_KEY_ID…)	El entorno (AWS_ACCESS_KEY_ID…)
 The features where the map is	Las entidades donde está el mapa
@@ -2039,11 +2316,15 @@ the map has no layers	el mapa no tiene capas
 The map is drawn in this coordinate system; layers are projected on the fly.	El mapa se dibuja en este sistema de coordenadas; las capas se proyectan al vuelo.
 The map view as it is now	La vista del mapa tal como está ahora
 The map's view takes {n} of Overture's {ty} files (up to {max}): zoom in, or add the theme as map tiles	La vista del mapa abarca {n} archivos de {ty} de Overture (hasta {max}): acerque o añada el tema como teselas de mapa
+the MCP relay couldn't start	el relé MCP no pudo iniciarse
 The model answering; click to change it	El modelo que responde; haga clic para cambiarlo
+The model declined this request.	El modelo rechazó esta solicitud.
+The model declined this request: {why}	El modelo rechazó esta solicitud: {why}
 The model sent an empty reply; ask again, or try another model.	El modelo envió una respuesta vacía; vuelva a preguntar o pruebe otro modelo.
 the page is too large to draw	la página es demasiado grande para dibujarla
 the picture is too large to show	la imagen es demasiado grande para mostrarla
 the picture is too large to show, or isn't one	la imagen es demasiado grande para mostrarla, o no es una imagen
+The places leave this device for the public Valhalla server at {server}, run by FOSSGIS. Don't continue if your project is bound by data privacy or data sovereignty rules.	Los lugares salen de este dispositivo hacia el servidor público de Valhalla en {server}, gestionado por FOSSGIS. No continúe si su proyecto está sujeto a normas de privacidad o soberanía de datos.
 the presentation export failed unexpectedly	la exportación de la presentación falló inesperadamente
 the preview failed unexpectedly	la vista previa falló inesperadamente
 The project downloads as this file, to the folder your browser saves downloads in.	El proyecto se descarga como este archivo, en la carpeta donde su navegador guarda las descargas.
@@ -2051,20 +2332,26 @@ The project's items in place of the map.	Los elementos del proyecto en lugar del
 The project's thumbnail, from an image.	La miniatura del proyecto, a partir de una imagen.
 The project's thumbnail, from the map view.	La miniatura del proyecto, a partir de la vista del mapa.
 The projection the map opens in.	La proyección con la que se abre el mapa.
+The provider's content filter stopped the reply.	El filtro de contenido del proveedor detuvo la respuesta.
+The public server is free and shared by many: it answers light use, and may ask you to wait.	El servidor público es gratuito y lo comparten muchos: atiende un uso ligero y puede pedirle que espere.
 The raster's data couldn't be read.	No se pudieron leer los datos del ráster.
 The raster's data couldn't be read: {path}	No se pudieron leer los datos del ráster: {path}
 the release isn't known	la versión no es conocida
-the reply reached its length limit	la respuesta alcanzó su límite de longitud
+The reply reached its length limit.	La respuesta alcanzó su límite de longitud.
 The reply stopped before completion; no actions were run.	La respuesta se interrumpió antes de completarse; no se ejecutó ninguna acción.
+The reply stopped early ({reason}).	La respuesta se detuvo antes de tiempo ({reason}).
 the report export failed unexpectedly	la exportación del informe falló inesperadamente
 The saved sign-in changed. Select your account again.	La sesión guardada cambió. Selecciona tu cuenta de nuevo.
+The service's answer isn't UTF-8 text	La respuesta del servicio no es texto UTF-8
 The Shapefile's files download as one zip.	Los archivos del Shapefile se descargan en un único zip.
 The sign-in expired or was revoked. Sign in again.	La sesión caducó o fue revocada. Inicia sesión de nuevo.
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	La sesión se guarda en la carpeta de configuración de la aplicación, solo para su cuenta de usuario, y nunca en un archivo de proyecto.
 The start-up project {path} didn't open: {error}	El proyecto de inicio {path} no se abrió: {error}
 The start-up project {path} isn't a RustGIS project file.	El proyecto de inicio {path} no es un archivo de proyecto de RustGIS.
+The step's layer {name} isn't in the map.	La capa {name} del paso no está en el mapa.
 The store has no variables with two or more dimensions.	El almacén no tiene variables con dos o más dimensiones.
 the store is gone	el almacén ya no existe
+The task's steps changed, so the step being edited was closed: edit it again.	Los pasos de la tarea cambiaron, así que se cerró el paso que se estaba editando: edítelo de nuevo.
 the view has no extent	la vista no tiene extensión
 The web app always runs the latest release: reload the page to get it.	La aplicación web siempre ejecuta la última versión: recargue la página para obtenerla.
 Theme	Tema
@@ -2079,12 +2366,18 @@ This map's thumbnail, from an image.	La miniatura de este mapa, a partir de una 
 This map's thumbnail, from the view.	La miniatura de este mapa, a partir de la vista.
 This plugin can:	Este complemento puede:
 This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Este complemento se ejecuta como un programa en su equipo, fuera del entorno aislado de RustGIS. Puede hacer todo lo que usted puede: leer y modificar sus archivos, usar la red y ejecutar otros programas. Instálelo solo si confía en su autor.
+This request has no one-time allow option.	Esta solicitud no tiene opción de permitir una sola vez.
 This request uses an unsupported capability. Check the parameter and change the request.	Esta solicitud usa una función no compatible. Comprueba el parámetro y modifica la solicitud.
+This step names no tool to show.	Este paso no indica ninguna herramienta que mostrar.
 Thumbnail	Miniatura
+Tick length	Longitud de las marcas
+Ticks	Marcas
+Ticks only	Solo marcas
 Tile archive	Archivo de teselas
 Tile Archive File…	Archivo de teselas…
 Tile Layer Properties	Propiedades de la capa de teselas
 Tile Layers	Capas de teselas
+Tilt Map	Inclinar mapa
 Tilt-shift	Tilt-shift
 Tilt-shift blur and film grain.	Desenfoque tilt-shift y grano de película.
 Tint by elevation	Teñir según la elevación
@@ -2092,6 +2385,7 @@ Title	Título
 Toggle Dark Mode	Alternar modo oscuro
 Toggle GPU Rendering	Alternar representación en GPU
 Tolerance (km)	Tolerancia (km)
+Tolls	Peajes
 Tool Gallery	Galería de herramientas
 Toolbox	Caja de herramientas
 Toolboxes	Cajas de herramientas
@@ -2101,7 +2395,10 @@ Tools Pane	Panel Herramientas
 Tools that analyse features.	Herramientas que analizan entidades.
 Tools that analyse rasters.	Herramientas que analizan rásteres.
 Tools you run appear here.	Las herramientas que ejecute aparecen aquí.
+Top	Arriba
+Top visible raster	Ráster visible superior
 Topmost Layer	Capa superior
+Topographic and Bathymetric	Topográficas y batimétricas
 Topology	Topología
 Topology Options	Opciones de topología
 Topology Options…	Opciones de topología…
@@ -2123,14 +2420,19 @@ Turn labels on or off.	Activar o desactivar las etiquetas.
 Turn Off	Desactivar
 Turn on the Basemaps plugin	Activar el complemento Mapas base
 Turns a table's addresses into points: each row's address fields are joined with commas (such as street, city, country) and looked up. The public servers take up to 100 addresses a run, one a second; a server of your own takes more.	Convierte las direcciones de una tabla en puntos: los campos de dirección de cada fila se unen con comas (como calle, ciudad, país) y se buscan. Los servidores públicos admiten hasta 100 direcciones por ejecución, una por segundo; un servidor propio admite más.
+Two layers are named {name}: the step names it, so it replays on the first of them. Rename one to tell them apart.	Dos capas se llaman {name}: el paso indica ese nombre, así que se reproduce en la primera. Cambie el nombre de una para distinguirlas.
 Type	Tipo
 type a file name	escriba un nombre de archivo
+Type an address or coordinates and press Enter, or click the map.	Escriba una dirección o unas coordenadas y pulse Intro, o haga clic en el mapa.
+Type numbers separated by commas	Escriba números separados por comas
 Typed below	Escritas abajo
 Unavailable: {reason}	No disponible: {reason}
 Undo	Deshacer
 Undo / Redo	Deshacer / Rehacer
+Undo doesn't remove the recorded step: delete it in Edit Steps once you stop recording.	Deshacer no quita el paso grabado: elimínelo en Editar pasos cuando detenga la grabación.
 Undo the last change.	Deshacer el último cambio.
 Undo {action}	Deshacer {action}
+Ungroup	Desagrupar
 Uninstall	Desinstalar
 Uninstall GeoLibre Tools	Desinstalar herramientas de GeoLibre
 Uninstall Plugin	Desinstalar complemento
@@ -2143,6 +2445,7 @@ Unsupervised classes (k-means).	Clases no supervisadas (k-means).
 Up	Subir
 Up a level	Subir un nivel
 Update	Actualizar
+Update Bookmark	Actualizar marcador
 Update Job	Actualizar trabajo
 Update to {version}	Actualizar a {version}
 Upload File	Cargar archivo
@@ -2152,6 +2455,7 @@ USA Contiguous Albers Equal Area	Albers de áreas iguales de EE. UU. contiguo
 Use	Usar
 Use another account	Usar otra cuenta
 Use Current View	Usar la vista actual
+USERPROFILE	USERPROFILE
 USGS Imagery	Imágenes de USGS
 USGS The National Map	USGS The National Map
 Using ChatGPT plan	Usando el plan de ChatGPT
@@ -2161,9 +2465,12 @@ Validate	Validar
 value (empty: no-data)	valor (vacío: sin datos)
 Variable	Variable
 Vector and raster data	Datos vectoriales y ráster
+Vector Layer	Capa vectorial
 Vector tiles (MVT)	Teselas vectoriales (MVT)
 Version {version}	Versión {version}
 Vertex	Vértice
+Vertical	Vertical
+Via {roads}	Por {roads}
 Video	Vídeo
 Video file or URL	Archivo o URL de vídeo
 Video Page	Página de vídeo
@@ -2173,9 +2480,13 @@ View	Vista
 View Clipping	Recorte de la vista
 View Effects	Efectos de vista
 View Extent	Extensión de la vista
+View In Google Earth	Ver en Google Earth
+View In Google Maps	Ver en Google Maps
 View Unplaced	Ver no ubicadas
 View › Windows	Vista › Ventanas
 Viewshed from a point	Cuenca visual desde un punto
+Viewshed {radius}	Cuenca visual {radius}
+Viewshed {radius} Here	Cuenca visual {radius} aquí
 Vignette	Viñeta
 Vignette, edge outlines and the stars around the globe.	Viñeta, contornos de bordes y las estrellas alrededor del globo.
 Visibility	Visibilidad
@@ -2186,6 +2497,7 @@ Visible Layers	Capas visibles
 Visual Effect	Efecto visual
 Volume	Volumen
 Waiting for the browser…	Esperando al navegador…
+Waiting for your answer	Esperando tu respuesta
 Walk	Caminar
 Want more basemaps?	¿Quiere más mapas base?
 WCS	WCS
@@ -2210,6 +2522,7 @@ WGS 84 / Globe	WGS 84 / Globo
 WGS 84 / Web Mercator	WGS 84 / Web Mercator
 What RustGIS opens with: the World Atlas sample or a blank map.	Con qué se abre RustGIS: el ejemplo World Atlas o un mapa en blanco.
 What RustGIS opens with: the World Atlas sample, a blank map, a project you choose, or the last project opened or saved.	Con qué se abre RustGIS: el ejemplo World Atlas, un mapa en blanco, un proyecto que usted elija o el último proyecto abierto o guardado.
+What to do, where to find it and why	Qué hacer, dónde encontrarlo y por qué
 What's near a point	Qué hay cerca de un punto
 WHERE	WHERE
 Where	Donde
@@ -2219,6 +2532,7 @@ Where new features get their elevation (the z field).	De dónde obtienen su elev
 Where the map opens: the full extent or a view you saved.	Dónde se abre el mapa: la extensión completa o una vista guardada.
 Where tools work	Dónde trabajan las herramientas
 Which 5 countries have the largest GDP?	¿Qué 5 países tienen el mayor PIB?
+Whitebox and GeoLibre tools	Herramientas Whitebox y GeoLibre
 Whose borders the sample countries and the basemap outline show.	Qué fronteras muestran los países de ejemplo y el contorno del mapa base.
 Width (mm)	Ancho (mm)
 Windows	Ventanas
@@ -2231,6 +2545,7 @@ WMTS	WMTS
 Words	Palabras
 Workflow Manager	Administrador de flujos de trabajo
 Workflows	Flujos de trabajo
+Working	Trabajando
 Workspace	Espacio de trabajo
 Workspace cell size and blending.	Tamaño de celda y fusión del espacio de trabajo.
 Workspace Options	Opciones del espacio de trabajo
@@ -2262,6 +2577,8 @@ Yes	Sí
 You can undo this with {shortcut}.	Puede deshacerlo con {shortcut}.
 You have version {version}.	Tiene la versión {version}.
 You're using your ChatGPT plan	Estás usando tu plan de ChatGPT
+Your skills are kept in the skills folder of the app's settings folder. Shared skills (~/.agents/skills) are off until you turn them on.	Tus habilidades se guardan en la carpeta skills de la carpeta de configuración de la aplicación. Las habilidades compartidas (~/.agents/skills) están desactivadas hasta que las actives.
+Yours	Tuyas
 z (m)	z (m)
 Z factor	Factor Z
 Zarr	Zarr
@@ -2274,6 +2591,7 @@ Zoom Frame	Zoom en el marco
 Zoom In	Acercar
 Zoom in	Acercar
 Zoom in / out	Acercar / alejar
+Zoom In Here	Acercar aquí
 Zoom in on the centre of the map.	Acercar al centro del mapa.
 Zoom in · finish a sketch	Acercar · terminar un boceto
 Zoom Out	Alejar
@@ -2292,9 +2610,12 @@ Zoom to the extent of all layers.	Zoom a la extensión de todas las capas.
 Zoom to the layer's extent.	Zoom a la extensión de la capa.
 Zoom to the selected features.	Zoom a las entidades seleccionadas.
 Zoom to the whole world.	Zoom a todo el mundo.
+Zoom to this bookmark	Hacer zoom a este marcador
 Zoom to Tokyo	Hacer zoom a Tokio
 Zoom To World	Zoom al mundo
+{agent} was stopped by you.	Detuviste {agent}.
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} ha cambiado desde que se instaló; vuelva a instalarlo desde el Administrador de complementos.
+{names}: needs Node.js (npx) for its ACP adapter.	{names}: necesita Node.js (npx) para su adaptador ACP.
 {name} is larger than {mb} MB	{name} ocupa más de {mb} MB
 {name} runs as a program on your computer: it needs the desktop app or rustgis-cli.	{name} se ejecuta como un programa en su equipo: requiere la aplicación de escritorio o rustgis-cli.
 {name} was withdrawn from the plugin registry and has been turned off.	{name} se ha retirado del registro de complementos y se ha desactivado.
@@ -2310,60 +2631,4 @@ Zoom To World	Zoom al mundo
 © OpenStreetMap contributors	© colaboradores de OpenStreetMap
 — fps	— fps
 ⌘K	⌘K
-Let your Agents Control RustGIS	Deja que tus agentes controlen RustGIS
-Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. Scripts and plugin management stay off.	Los agentes de este equipo que se conecten (Claude Code, Codex, Cursor y otros) trabajan en el mapa abierto aquí con las herramientas de RustGIS: pueden abrir y guardar archivos y usar la web. Los scripts y la gestión de complementos siguen desactivados.
-Add this MCP server to your agent:	Añade este servidor MCP a tu agente:
-Or run, for Claude Code or Codex:	O ejecuta, para Claude Code o Codex:
-Compact	Compactar
-Summarise the conversation so far, so a long chat stays within the model's context	Resumir la conversación hasta ahora, para que un chat largo quepa en el contexto del modelo
-The reply reached its length limit.	La respuesta alcanzó su límite de longitud.
-The provider's content filter stopped the reply.	El filtro de contenido del proveedor detuvo la respuesta.
-The reply stopped early ({reason}).	La respuesta se detuvo antes de tiempo ({reason}).
-The model declined this request.	El modelo rechazó esta solicitud.
-The model declined this request: {why}	El modelo rechazó esta solicitud: {why}
-Gemini stopped the reply ({reason}).	Gemini detuvo la respuesta ({reason}).
-Summarising the earlier conversation to keep it within the model's context…	Resumiendo la conversación anterior para que quepa en el contexto del modelo…
-Compacted the earlier conversation.	Se compactó la conversación anterior.
-The connection failed; trying again in {seconds} s.	La conexión falló; se reintentará en {seconds} s.
-Stopped after {steps} steps; say "continue" to go on.	Detenido tras {steps} pasos; di "continuar" para seguir.
-Skills	Habilidades
-Built in	Integrada
-Plugin	Complemento
-Yours	Tuyas
-Shared	Compartida
-Add skill…	Añadir habilidad…
-Skill (SKILL.md or .zip)	Habilidad (SKILL.md o .zip)
-Add folder…	Añadir carpeta…
-Added: {names}	Añadidas: {names}
-Your skills are kept in the skills folder of the app's settings folder. Shared skills (~/.agents/skills) are off until you turn them on.	Tus habilidades se guardan en la carpeta skills de la carpeta de configuración de la aplicación. Las habilidades compartidas (~/.agents/skills) están desactivadas hasta que las actives.
-Skills for the AI Assistant: {names}	Habilidades para el Asistente de IA: {names}
-The assistant follows a skill's instructions when it uses it. Whatever they say, its commands that need your approval still ask.	El asistente sigue las instrucciones de una habilidad cuando la usa. Digan lo que digan, sus comandos que necesitan tu aprobación siguen preguntando.
-It has no code: nothing in it runs.	No tiene código: nada en él se ejecuta.
-Let your Agents Control RustGIS	Deja que tus agentes controlen RustGIS
-Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. Scripts and plugin management stay off.	Los agentes de este equipo que se conecten (Claude Code, Codex, Cursor y otros) trabajan en el mapa abierto aquí con las herramientas de RustGIS: pueden abrir y guardar archivos y usar la web. Los scripts y la gestión de complementos siguen desactivados.
-Add this MCP server to your agent:	Añade este servidor MCP a tu agente:
-Or run, for Claude Code or Codex:	O ejecuta, para Claude Code o Codex:
-An agent on this computer asks to:	Un agente de este equipo pide:
-Always allow	Permitir siempre
-Let the assistant hand tasks to agents on this computer	Permitir que el asistente encargue tareas a agentes de este equipo
-No agents that speak ACP (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, Cursor, OpenCode, goose) were found on this computer.	No se encontraron en este equipo agentes que hablen ACP (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, Cursor, OpenCode, goose).
-Found: {names}. An agent works on this map through RustGIS's tools and with its own (web, scripts, files) in a folder of its own, kept in Documents › RustGIS › Agent work. It asks you before each action.	Encontrados: {names}. Un agente trabaja en este mapa con las herramientas de RustGIS y con las suyas (web, scripts, archivos), en una carpeta propia que se conserva en Documentos › RustGIS › Agent work. Te pregunta antes de cada acción.
-Claude Code and Codex connect through an ACP adapter, which npx downloads from npm the first time.	Claude Code y Codex se conectan mediante un adaptador ACP que npx descarga de npm la primera vez.
-{names}: needs Node.js (npx) for its ACP adapter.	{names}: necesita Node.js (npx) para su adaptador ACP.
-Approve agents' actions without asking	Aprobar las acciones de los agentes sin preguntar
-Agents then run commands, change files and use the web on this computer without asking you.	Los agentes ejecutarán comandos, cambiarán archivos y usarán la web en este equipo sin preguntarte.
-Starting…	Iniciando…
-{agent} was stopped by you.	Detuviste {agent}.
-Working	Trabajando
-Agent threads	Hilos de agentes
-Close thread	Cerrar hilo
-Waiting for your answer	Esperando tu respuesta
-Idle	Inactivo
-The service's answer isn't UTF-8 text	La respuesta del servicio no es texto UTF-8
-Import All	Importar todo
-Import Service	Importar servicio
-Service Import Requests	Solicitudes de importación del servicio
-Service Group	Grupo de servicio
-A service import or refresh is already running.	Ya hay una importación o actualización de servicio en curso.
-Service group data exceeds 64 MB.	Los datos del grupo de servicio superan los 64 MB.
-Fetch map tiles, data and web services from addresses it chooses	Obtener teselas de mapa, datos y servicios web de las direcciones que elija
+▶ Simulate	▶ Simular
