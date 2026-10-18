@@ -1071,15 +1071,16 @@ fn layer_drop(app: &mut RustGisApp, ui: &Ui, rows: &[DropRow], t: &Tokens) {
     let current = m.group_of(dragged.0).map(|g| g.id);
     // The topmost layer of a group, in drawing order.
     let top_of = |g: u32| m.group(g).and_then(|g| m.layers.iter().find(|l| g.children.contains(&l.id)).map(|l| l.id));
-    // Onto the middle of another group's row: into that group, at its end nearest the layer.
+    // Onto the middle of another group's row: into that group, at its end nearest the layer; onto
+    // its own group's row, nothing.
     if !moving_group
-        && let Some(h) = rows.iter().find(|r| {
-            r.header
-                && Some(r.id) != current
-                && pointer.y > r.rect.min.y + r.rect.height() / 4.0
-                && pointer.y < r.rect.max.y - r.rect.height() / 4.0
-        })
+        && let Some(h) = rows
+            .iter()
+            .find(|r| r.header && pointer.y > r.rect.min.y + r.rect.height() / 4.0 && pointer.y < r.rect.max.y - r.rect.height() / 4.0)
     {
+        if Some(h.id) == current {
+            return;
+        }
         ui.painter().rect_stroke(
             h.rect.shrink2(vec2(4.0, 1.0)),
             CornerRadius::same(5),
