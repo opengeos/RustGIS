@@ -2555,7 +2555,7 @@ impl RustGisApp {
                             return Err(tl!("no text graphic there").to_string());
                         };
                         (self.dialogs.mode, self.dialogs.a, self.dialogs.b) = ("edit", layer.to_string(), row.to_string());
-                        (self.dialogs.text, self.dialogs.c) = (text, size.to_string());
+                        (self.dialogs.text, self.dialogs.size) = (text, f64::from(size));
                     }
                 }
                 // Rename Map / Rename Layout remember which one (`target`, by name; default the

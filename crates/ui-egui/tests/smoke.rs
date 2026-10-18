@@ -1046,9 +1046,9 @@ fn a_placed_text_is_edited_in_its_dialog() {
     h.state_mut().run("select.rows", json!({"layer": layer, "rows": [first["row"]]})).unwrap();
     h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row})).unwrap();
     let d = &h.state().dialogs;
-    assert_eq!((d.open, d.mode, d.text.as_str(), d.c.as_str()), (Some("graphicText"), "edit", "Second", "14"));
+    assert_eq!((d.open, d.mode, d.text.as_str(), d.size), (Some("graphicText"), "edit", "Second", 14.0));
     h.step();
-    (h.state_mut().dialogs.text, h.state_mut().dialogs.c) = ("Second, edited".into(), "24".into());
+    (h.state_mut().dialogs.text, h.state_mut().dialogs.size) = ("Second, edited".into(), 24.0);
     h.step();
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").click();
     h.step();
@@ -1066,7 +1066,7 @@ fn a_placed_text_is_edited_in_its_dialog() {
     // The size is kept within what text graphics draw (#457).
     h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row})).unwrap();
     h.step();
-    h.state_mut().dialogs.c = "500".into();
+    h.state_mut().dialogs.size = 500.0;
     h.step();
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").click();
     h.step();
