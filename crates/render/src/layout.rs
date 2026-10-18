@@ -686,7 +686,7 @@ fn colorbar(pm: &mut Pixmap, r: Rect, scale: &ColorScale, bar: &Bar, ppp: f64) {
     // stand past the bar's ends.
     let (bx, by, bw, bh) = if vertical {
         let label_w = labels.iter().map(|(_, s)| width(s)).fold(0.0f32, f32::max);
-        let bw = (r.width() - label_w - tick - gap).clamp(2.0 * ppp, (r.width() * 0.6).max(2.0 * ppp)).min(r.width());
+        let bw = (r.width() - label_w - tick - gap).clamp(2.0 * ppp, (r.width() * 0.45).max(2.0 * ppp)).min(r.width());
         let inset = (px / 2.0).min((bottom - top) * 0.25);
         let bx = if bar.side == TickSide::Start { r.x() + r.width() - bw } else { r.x() };
         (bx, top + inset, bw, (bottom - top - 2.0 * inset).max(1.0))
