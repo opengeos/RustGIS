@@ -1142,7 +1142,10 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
     let mut warp = Warp::new(view, map);
-    // On terrain the bands are kept, to lay over the ground's relief once all are drawn.
+    // On terrain the bands are kept, to lay over the ground's relief once all are drawn: every
+    // triangle of every band is then ordered far to near together. That holds all the bands at
+    // once (at most eight, `Camera::tilt_bands`, each capped at `MAX_BAND_PX` a side) where the flat warp holds
+    // one at a time: the cost of hiding what slopes stand in front of.
     let ground = terrain::Ground::of(map, &view.camera);
     let mut kept: Vec<(View, (f64, f64), Pixmap)> = Vec::new();
     let last = bands_of.len().saturating_sub(1);
@@ -1192,9 +1195,6 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
     Some(Rendered { pixmap: pm, labels: placed.labels, unplaced, attribution, tiles_pending, data_pending, tile_errors })
 }
 
-/// Cells along each side of a band laid over a terrain's relief.
-const TERRAIN_CELLS: usize = 40;
-
 /// Lays a tilted view's bands, drawn flat, over the ground's relief: each band as a grid of
 /// triangles raised to the ground's height and mapped from its picture, every band keeping to
 /// its own stretch of ground, all drawn far to near so nearer slopes hide what lies behind
@@ -1225,7 +1225,7 @@ fn drape_terrain(pm: &mut Pixmap, view: &View, map: &Map, bands: &[(View, (f64, 
     // Every band's triangles: (depth, band, screen and picture corners).
     type Tri = (f64, usize, [(f64, f64); 3], [(f64, f64); 3]);
     let mut tris: Vec<Tri> = Vec::new();
-    let n = TERRAIN_CELLS;
+    let n = terrain::CELLS;
     for (bi, (v, (d0, d1), pic)) in bands.iter().enumerate() {
         let kb = f64::from(pic.width()) / v.width.max(1e-9);
         // A band's grid: screen point, picture point and depth of each vertex.

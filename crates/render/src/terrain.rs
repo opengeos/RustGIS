@@ -13,6 +13,10 @@ use rustgis_map::{Camera, Map};
 use rustgis_tiles::cache::{self, Payload, State, Want};
 use rustgis_tiles::template::{self, TileId};
 
+/// Cells along each side of a tilted view's band laid over the relief, in the settled frame and
+/// the moving drape alike: fine enough to follow it, few enough to draw quickly.
+pub const CELLS: usize = 40;
+
 /// The deepest zoom of elevation tiles read.
 const MAX_TILE_ZOOM: u8 = 15;
 /// How many zooms up a missing tile is stood in for by a coarser one already read.
