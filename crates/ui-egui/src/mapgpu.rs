@@ -32,7 +32,7 @@ pub(crate) fn view_proj(cam: &Camera, w: f64, h: f64, origin: [f64; 2]) -> [[f32
         (s, c, 2.0 * rustgis_engine::map::camera::TAN_HALF_FOV / h.max(1e-9))
     };
     let row = |f: &dyn Fn(usize) -> f64| -> [f64; 4] { std::array::from_fn(f) };
-    let x = row(&|i| 2.0 / w * u[i]);
+    let x = row(&|i| 2.0 / w.max(1e-9) * u[i]);
     let y = row(&|i| -2.0 / h * (cp * v[i] - sp * up[i]));
     let depth = row(&|i| if i == 3 { 1.0 } else { 0.0 } - inv_d * (sp * v[i] + cp * up[i]));
     let z = row(&|i| depth[i] - if i == 3 { NEAR_DEPTH } else { 0.0 });
@@ -574,8 +574,8 @@ pub(crate) struct SceneBuffers {
 
 impl SceneBuffers {
     /// Whether a camera move to `cam` may re-project the scene: a flat, north-up scene for a
-    /// flat, north-up view; a turned or tilted one for about the same bearing and pitch and a
-    /// zoom within reach (it covers the ground its own camera showed: a turned view's north-up
+    /// flat, north-up view; a turned or tilted one for about the same bearing and pitch, a zoom
+    /// and a pan within reach (it covers the ground its own camera showed: a turned view's north-up
     /// box, a tilted view's bands out to its reach), else it is drawn again.
     pub(crate) fn fits(&self, cam: &Camera) -> bool {
         let pitch = rustgis_engine::map::camera::normalize_pitch(cam.pitch);
@@ -589,6 +589,9 @@ impl SceneBuffers {
                     && turn < 0.5
                     && (pitch - t.camera.pitch).abs() < 0.5
                     && (0.7..1.4).contains(&zoom)
+                    // Panned less than a quarter of the view: the ground it drew still covers it.
+                    && (cam.center.x - t.camera.center.x).hypot(cam.center.y - t.camera.center.y)
+                        < 0.25 * self.size[0].min(self.size[1]) * t.camera.res
             }
         }
     }

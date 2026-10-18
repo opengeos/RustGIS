@@ -1304,8 +1304,12 @@ pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
     }
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     let held = map.held_by_group(scale);
-    let faded: std::collections::HashSet<u32> =
-        map.groups.iter().filter(|g| g.transparency > 0.0).flat_map(|g| g.children.iter().copied()).collect();
+    // Layers in a see-through group (none, mostly: then nothing is collected).
+    let faded: std::collections::HashSet<u32> = if map.groups.iter().any(|g| g.transparency > 0.0) {
+        map.groups.iter().filter(|g| g.transparency > 0.0).flat_map(|g| g.children.iter().copied()).collect()
+    } else {
+        Default::default()
+    };
     map.layers.iter().filter(|l| l.visible && l.in_scale_range(scale) && !held.contains(&l.id)).all(|l| {
         l.raster.is_none()
             && l.opacity() >= 0.999
