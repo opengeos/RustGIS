@@ -247,4 +247,7 @@ vector layers are tessellated once and re-projected per frame, so panning and zo
 smooth on large datasets. It is off by default, and the setting is remembered across sessions
 (`ui.map.gpu` is the command; `RUSTGIS_GPU=1` forces it on for development). The globe,
 view effects and the colour-vision simulator always render on the CPU, and exports are
-unaffected — the choice only changes the on-screen flat map.
+unaffected — the choice only changes the on-screen flat map. A turned or tilted map is drawn on
+the GPU too, in perspective with its fog and sky, when it needs no pictures drawn on the CPU
+(tiles, rasters, see-through, masked or blended layers, icons, or extrusions on a tilted map);
+otherwise it stays on the CPU.

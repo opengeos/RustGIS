@@ -966,6 +966,12 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
     }
     {
         let view = View { camera, ..*view };
+        if matches!(backend, Backend::Gpu)
+            && (camera.pitch != 0.0 || camera.bearing != 0.0)
+            && let Some(scene) = gpu_turned(map, &view)
+        {
+            return Some(RenderOutput::Gpu(scene));
+        }
         if camera.pitch != 0.0 {
             return render_tilted(map, &view, full_res_rasters).map(RenderOutput::Cpu);
         }
@@ -1050,6 +1056,101 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
     }
     let unplaced = if map.label_display.show_unplaced { placed.unplaced } else { Vec::new() };
     Some(Rendered { pixmap: pm, labels: placed.labels, unplaced, attribution, tiles_pending, data_pending, tile_errors })
+}
+
+/// A turned or tilted view as a GPU scene, drawn by the vertex shader's full perspective: a
+/// turned view's north-up frame, or a tilted view's bands, each clipped to its own ground (as
+/// [`render_tilted`] warps them), with point markers upright over them and labels placed in
+/// the view. `None` when the view needs pictures drawn on the CPU (tiles, rasters, layers drawn
+/// as pictures, icons or extrusions), or the scene isn't plain: the caller draws it on the CPU.
+fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
+    use gpu_scene::{CmdClip, DrawCmd, GpuScene, SceneTilt};
+    if map.projection.is_globe() || !map.view.effects.is_none() || map.view.color_vision != rustgis_map::view::ColorVision::Normal {
+        return None;
+    }
+    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    // Extrusions stand up over a tilted view on the CPU.
+    if view.camera.pitch != 0.0 && map.layers.iter().any(|l| l.visible && l.extrusion.is_some() && l.in_scale_range(scale)) {
+        return None;
+    }
+    let pictures = |cmds: &[DrawCmd]| cmds.iter().any(|c| matches!(c, DrawCmd::Image { .. }));
+    let (sky, fog) = tilt_sky(map);
+    let tilt = Some(SceneTilt { camera: view.camera, sky: mesh::premul(sky), fog: mesh::premul(fog) });
+    if view.camera.pitch == 0.0 {
+        let (bw, bh) = view.camera.rotated_size(view.width, view.height);
+        let north = View { width: bw.ceil() + 2.0, height: bh.ceil() + 2.0, camera: Camera { bearing: 0.0, ..view.camera }, ..*view };
+        let Some(RenderOutput::Gpu(scene)) = render_frame(map, &north, false, Backend::Gpu, Labels::Turned(view)) else { return None };
+        if pictures(&scene.cmds) || scene.labels.iter().any(|l| l.icon.is_some()) {
+            return None;
+        }
+        return Some(GpuScene { tilt, ..scene });
+    }
+    let bands = view.camera.tilt_bands(view.width, view.height);
+    let data_pending = sync_tilted(map, view, &bands, false);
+    let lock = map.label_lock.take();
+    let mut candidates = Vec::new();
+    let (mut cmds, mut clips) = (Vec::new(), Vec::new());
+    let (mut attribution, mut tiles_pending, mut tile_errors, mut clear) = (Vec::<String>::new(), false, Vec::<String>::new(), [0.0; 4]);
+    let mut plain = true;
+    let last = bands.len().saturating_sub(1);
+    for (i, b) in bands.iter().enumerate() {
+        let v = band_view(view, b);
+        let Some(RenderOutput::Gpu(scene)) = render_frame(map, &v, false, Backend::Gpu, Labels::Tilted(view, &mut candidates)) else {
+            plain = false;
+            break;
+        };
+        if pictures(&scene.cmds) {
+            plain = false;
+            break;
+        }
+        clear = scene.clear;
+        for a in scene.attribution {
+            if !attribution.contains(&a) {
+                attribution.push(a);
+            }
+        }
+        for e in scene.tile_errors {
+            if !tile_errors.contains(&e) {
+                tile_errors.push(e);
+            }
+        }
+        tiles_pending |= scene.tiles_pending;
+        // The nearest band reaches the bottom of the view and the farthest the sky, so no ground
+        // falls between them.
+        let near = if i == 0 { 0.0 } else { b.depth.0 as f32 };
+        let far = if i == last { f32::MAX } else { b.depth.1 as f32 };
+        let clip = CmdClip { depth: [near, far], upright: false };
+        clips.extend(std::iter::repeat_n(clip, scene.cmds.len()));
+        cmds.extend(scene.cmds);
+    }
+    map.label_lock = lock;
+    if !plain {
+        return None;
+    }
+    // As `render_tilted` places them.
+    let mut seen = std::collections::HashSet::new();
+    let mut seen_tile = std::collections::HashSet::new();
+    candidates.retain(|c| match c.2.0 {
+        u32::MAX => seen_tile.insert((c.0.text.clone(), (c.0.x / 4.0).round() as i64, (c.0.y / 4.0).round() as i64)),
+        _ => seen.insert(c.2),
+    });
+    raise_labels(map, view, &mut candidates);
+    let placed = place_labels(candidates, Vec::new(), view.width as f32, view.height as f32, false);
+    if placed.labels.iter().any(|l| l.icon.is_some()) {
+        return None;
+    }
+    let origin = [view.camera.center.x, view.camera.center.y];
+    let ppp = view.pixels_per_point as f32;
+    let instances: Vec<gpu_scene::PointInstance> = upright_markers(map, view, 0.0)
+        .iter()
+        .flat_map(|m| mesh::marker_instances(m.at, origin, &m.symbol, ppp, m.selected.then_some(SELECTION)))
+        .collect();
+    if !instances.is_empty() {
+        cmds.push(DrawCmd::Points { origin, instances });
+        clips.push(CmdClip { upright: true, ..CmdClip::ALL });
+    }
+    let unplaced = if map.label_display.show_unplaced { placed.unplaced } else { Vec::new() };
+    Some(GpuScene { clear, cmds, labels: placed.labels, unplaced, attribution, tiles_pending, data_pending, tile_errors, tilt, clips })
 }
 
 /// The colours of a tilted view's sky (at the top) and of the fog it fades into at the
@@ -2048,6 +2149,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 tiles_pending,
                 data_pending,
                 tile_errors,
+                tilt: None,
+                clips: Vec::new(),
             }))
         }
     }
