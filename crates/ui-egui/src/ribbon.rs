@@ -1323,14 +1323,6 @@ fn analysis_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 json!({"section": "environments"}),
                 false,
             );
-            small_menu(ui, app, "toolbox", "Ready To Use", "Everyday tools.", |ui, app| {
-                if let Ok(Value::Array(tools)) = rustgis_engine::cmd::workflows::gallery_list("ready") {
-                    for t in tools {
-                        let (id, name) = (t["id"].as_str().unwrap_or("").to_string(), t["name"].as_str().unwrap_or("").to_string());
-                        menu_item(ui, app, "tools", &name, "ui.gp.open", json!({"tool": id}));
-                    }
-                }
-            });
         });
     });
     group(ui, "AI", |ui| {
