@@ -134,9 +134,8 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
                 }
             }
             ElementKind::NorthArrow { frame: f, style, fill, outline } => {
-                // Turned with its frame's map (the globe faces north).
-                let bearing =
-                    frame(*f).filter(|fr| maps.get(fr.1).is_some_and(|m| !m.projection.is_globe())).map_or(0.0, |fr| fr.2.bearing);
+                // Turned with its frame's map.
+                let bearing = frame(*f).map_or(0.0, |fr| fr.2.bearing);
                 north_arrow(&mut pm, r, *style, *fill, *outline, ppp, bearing)
             }
             ElementKind::ScaleBar { frame: f, units, divisions, style } => {
