@@ -110,6 +110,17 @@ JSON collections link, so you don't need to append `/collections`. If the landin
 offers map tiles, they remain listed alongside the collections. A failed collections request
 leaves any available map layers usable and shows the error.
 
+When a service can't be reached or refuses the request, the dialog says what happened in plain
+words and what to try next: a sign-in or token it needs (401), access refused (403), nothing at
+that address (404), too many requests (429), a problem on the server (5xx), or a server that
+couldn't be reached or took too long. When a firewall in front of the server blocked RustGIS
+(Cloudflare, Akamai, Imperva, Sucuri or AWS WAF, told by the headers they answer with), it says
+so: only the service's administrator can let RustGIS through. **Details**, folded below, lists
+what the server said for an expert or the administrator: the address (without keys or tokens),
+the status, the server, the firewall and the request's id, the `User-Agent` RustGIS sent, and
+the title or first words of the server's answer (as text). **Copy details** copies them to send.
+In the web app the browser hides most of a refused answer, so it tells the status only.
+
 Right-click the group and choose **Refresh** to rediscover its collections and update them all,
 including newly added or removed collections. Right-click a child and choose **Refresh** to
 update only that collection. Existing children keep their names, styles and visibility (a changed
