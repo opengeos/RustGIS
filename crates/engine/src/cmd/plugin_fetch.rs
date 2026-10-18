@@ -257,11 +257,12 @@ impl Calls {
             crate::render::rustgis_tiles::cache::download_blocking_within(fetched, MAX_BYTES, within)
         } else {
             crate::render::rustgis_tiles::cache::download_public_within(fetched, MAX_BYTES, within)
-        }
-        .map_err(|e| format!("{url}: {e}"))?;
-        let answer = answer(url, &bytes)?;
-        cache().keep(key, Ok(answer.clone()));
-        Ok(answer)
+        };
+        // Errors are kept too (for `ERROR_TTL`), so a plugin run again and again on an address
+        // that doesn't answer doesn't wait for it each time.
+        let answer = bytes.map_err(|e| format!("{url}: {e}")).and_then(|bytes| answer(url, &bytes));
+        cache().keep(key, answer.clone());
+        answer
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -302,6 +303,11 @@ impl Session {
         let answer = json!({"pending": true, "fetching": fetching});
         self.plugin_retries.push(Retry { id: id.to_string(), params: params.clone(), urls, tries: tries + 1 });
         Ok(answer)
+    }
+
+    /// Whether plugin commands are waiting for their fetches, so the front end keeps polling.
+    pub fn plugin_retries_waiting(&self) -> bool {
+        !self.plugin_retries.is_empty()
     }
 
     /// Runs again the plugin commands whose fetches have all landed (the browser: see
