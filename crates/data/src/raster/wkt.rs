@@ -50,6 +50,14 @@ impl Node {
         })
     }
 
+    /// The child nodes, taken.
+    fn into_nodes(self) -> impl Iterator<Item = Node> {
+        self.items.into_iter().filter_map(|i| match i {
+            Item::Node(n) => Some(n),
+            _ => None,
+        })
+    }
+
     /// The first child node of this name, to change.
     fn child_mut(&mut self, name: &str) -> Option<&mut Node> {
         self.items.iter_mut().find_map(|i| match i {
@@ -227,7 +235,7 @@ pub fn crs_from_wkt(text: &str) -> Result<Crs, String> {
 /// The coordinate system a WKT text describes, with a note when its datum has no conversion to
 /// WGS 84 given (NAD 27, OSGB 36…), so positions may be off by up to a few hundred metres.
 pub fn read_wkt(text: &str) -> Result<(Crs, Option<String>), String> {
-    let root = wkt1(&parse(text)?, 0)?;
+    let root = wkt1(parse(text)?, 0)?;
     if let Some(a) = root.child("AUTHORITY")
         && a.title().eq_ignore_ascii_case("EPSG")
         && let Some(crs) = authority_code(a).and_then(Crs::from_epsg)
@@ -247,22 +255,25 @@ pub fn read_wkt(text: &str) -> Result<(Crs, Option<String>), String> {
 
 /// The WKT1 form of a coordinate system: WKT1 as it is, WKT2 rewritten. A compound system (a
 /// horizontal one with heights) gives its horizontal part.
-fn wkt1(n: &Node, depth: usize) -> Result<Node, String> {
+fn wkt1(n: Node, depth: usize) -> Result<Node, String> {
     if depth > 4 {
         return Err("the coordinate system is nested too deeply".into());
     }
-    let crs_kinds = ["PROJCRS", "PROJECTEDCRS", "GEOGCRS", "GEOGRAPHICCRS", "GEODCRS", "GEODETICCRS", "PROJCS", "GEOGCS", "BOUNDCRS"];
     match n.name.to_ascii_uppercase().as_str() {
-        "PROJCRS" | "PROJECTEDCRS" => projected2(n),
-        "GEOGCRS" | "GEOGRAPHICCRS" | "GEODCRS" | "GEODETICCRS" => geographic2(n, true),
-        "COMPOUNDCRS" | "COMPD_CS" => match n.child_of(&crs_kinds) {
+        "PROJCRS" | "PROJECTEDCRS" => projected2(&n),
+        "GEOGCRS" | "GEOGRAPHICCRS" | "GEODCRS" | "GEODETICCRS" => geographic2(&n, true),
+        "COMPOUNDCRS" | "COMPD_CS" => match n.into_nodes().find(|c| HORIZONTAL.iter().any(|k| c.name.eq_ignore_ascii_case(k))) {
             Some(h) => wkt1(h, depth + 1),
             None => Err("the compound coordinate system has no horizontal part".into()),
         },
         "BOUNDCRS" => bound(n, depth),
-        _ => Ok(n.clone()),
+        _ => Ok(n),
     }
 }
+
+/// The parts of a compound system that can be its horizontal one.
+const HORIZONTAL: [&str; 9] =
+    ["PROJCRS", "PROJECTEDCRS", "GEOGCRS", "GEOGRAPHICCRS", "GEODCRS", "GEODETICCRS", "PROJCS", "GEOGCS", "BOUNDCRS"];
 
 /// `ID["EPSG",32631]` as `AUTHORITY["EPSG",32631]`.
 fn authority(n: &Node) -> Option<Item> {
@@ -393,6 +404,16 @@ fn lookup<'a, T>(n: &Node, table: &'a [T], key: impl Fn(&T) -> (u32, &str)) -> O
 
 /// A WKT2 projected system as a `PROJCS`, its parameters in degrees and the system's linear unit.
 fn projected2(p: &Node) -> Result<Node, String> {
+    // Axes pointing west or south (South Africa's Lo grids) would be read with the wrong sign, as
+    // WKT1 has no way to say so; unless the system is read by its EPSG code. (Polar systems tie
+    // their axes to a meridian, which is how WKT1 reads them.)
+    let flipped = p
+        .nodes()
+        .filter(|a| a.name.eq_ignore_ascii_case("AXIS") && a.child("MERIDIAN").is_none())
+        .any(|a| a.items.iter().any(|i| matches!(i, Item::Word(w) if w.eq_ignore_ascii_case("west") || w.eq_ignore_ascii_case("south"))));
+    if flipped && epsg_id(p).and_then(Crs::from_epsg).is_none() {
+        return Err("axes pointing west or south aren't supported".into());
+    }
     let base = p.child_of(&["BASEGEOGCRS", "BASEGEODCRS"]).ok_or("the projected system has no base geographic system")?;
     let mut items = vec![Item::Node(geographic2(base, false)?)];
     let unit = cs_unit(p, &LENGTH_UNIT);
@@ -430,10 +451,17 @@ fn projected2(p: &Node) -> Result<Node, String> {
 
 /// A `BOUNDCRS` (PROJ's form of a WKT1 `TOWGS84`) as its source system with the shift to WGS 84
 /// of its transformation, in metres, arc-seconds and parts per million.
-fn bound(b: &Node, depth: usize) -> Result<Node, String> {
-    let source = b.child("SOURCECRS").and_then(|s| s.nodes().next()).ok_or("the bound coordinate system has no source")?;
-    let mut crs = wkt1(source, depth + 1)?;
-    let Some(t) = b.child("ABRIDGEDTRANSFORMATION") else { return Ok(crs) };
+fn bound(b: Node, depth: usize) -> Result<Node, String> {
+    let (mut source, mut transformation) = (None, None);
+    for n in b.into_nodes() {
+        if n.name.eq_ignore_ascii_case("SOURCECRS") {
+            source = n.into_nodes().next();
+        } else if n.name.eq_ignore_ascii_case("ABRIDGEDTRANSFORMATION") {
+            transformation = Some(n);
+        }
+    }
+    let mut crs = wkt1(source.ok_or("the bound coordinate system has no source")?, depth + 1)?;
+    let Some(t) = transformation.as_ref() else { return Ok(crs) };
     let method = t.child("METHOD");
     let frame = method
         .is_some_and(|m| epsg_id(m).is_some_and(|c| matches!(c, 9607 | 1032 | 9608)) || norm(m.title()).starts_with("COORDINATE_FRAME"));
@@ -910,6 +938,23 @@ mod tests {
             row("EPSG:32631")
         );
         assert_eq!(read_wkt(&compound), Ok((Crs::Epsg(32631), None)));
+    }
+
+    #[test]
+    fn wkt2_axes_west_and_south() {
+        // Hartebeesthoek94 / Lo19, as PROJ writes it, but as a plain Transverse Mercator: its
+        // westing and southing would come out mirrored.
+        let lo19 = r#"PROJCRS["Hartebeesthoek94 / Lo19",BASEGEOGCRS["Hartebeesthoek94",DATUM["Hartebeesthoek94",ELLIPSOID["WGS 84",6378137,298.257223563,LENGTHUNIT["metre",1]]],PRIMEM["Greenwich",0,ANGLEUNIT["degree",0.0174532925199433]],ID["EPSG",4148]],CONVERSION["South African Survey Grid zone 19",METHOD["Transverse Mercator",ID["EPSG",9807]],PARAMETER["Latitude of natural origin",0,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8801]],PARAMETER["Longitude of natural origin",19,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8802]],PARAMETER["Scale factor at natural origin",1,SCALEUNIT["unity",1],ID["EPSG",8805]],PARAMETER["False easting",0,LENGTHUNIT["metre",1],ID["EPSG",8806]],PARAMETER["False northing",0,LENGTHUNIT["metre",1],ID["EPSG",8807]]],CS[Cartesian,2],AXIS["westing (Y)",west,ORDER[1],LENGTHUNIT["metre",1]],AXIS["southing (X)",south,ORDER[2],LENGTHUNIT["metre",1]]]"#;
+        assert_eq!(crs_from_wkt(lo19), Err("axes pointing west or south aren't supported".into()));
+        // By an EPSG code that's known, it's read as that code; by an unknown one, refused.
+        if let Some(crs) = Crs::from_epsg(2048) {
+            assert_eq!(crs_from_wkt(&format!(r#"{},ID["EPSG",2048]]"#, lo19.strip_suffix(']').unwrap())), Ok(crs));
+        }
+        assert!(crs_from_wkt(&format!(r#"{},ID["EPSG",1]]"#, lo19.strip_suffix(']').unwrap())).is_err());
+        // Polar axes along meridians are read (EPSG:3413's point south).
+        let rows = corpus();
+        let polar = rows.iter().find(|r| r.0 == "EPSG:3413").unwrap().2;
+        assert!(polar.contains("south,MERIDIAN") && crs_from_wkt(polar).is_ok());
     }
 
     /// PROJ's `+towgs84` as WKT2: a `BOUNDCRS` with the shift to WGS 84 as its transformation.
