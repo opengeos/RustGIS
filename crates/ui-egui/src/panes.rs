@@ -985,7 +985,7 @@ fn layer_group_row(
         }
         let resp = if elided { resp.on_hover_text(&group.name) } else { resp };
         resp.context_menu(|ui| {
-            if ui.button(tl!(if group.visible { "Hide Group" } else { "Show Group" })).clicked() {
+            if ui.button(if group.visible { tl!("Hide Group") } else { tl!("Show Group") }).clicked() {
                 let _ = app.run("group.set", json!({"group": group.id, "visible": !group.visible}));
                 ui.close();
             }
