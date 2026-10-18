@@ -6,14 +6,16 @@
 //! stripped of markup and control characters, and only ever shown as text.
 
 /// Headers kept from a failed answer: who answered, what it wants, and the request's id.
-pub const KEPT_HEADERS: [&str; 11] = [
+pub const KEPT_HEADERS: [&str; 13] = [
     "server",
     "content-type",
     "www-authenticate",
     "retry-after",
     "cf-ray",
+    "cf-mitigated",
     "x-iinfo",
     "x-sucuri-id",
+    "x-sucuri-block",
     "x-amzn-waf-action",
     "x-amzn-requestid",
     "x-amz-cf-id",
@@ -124,7 +126,9 @@ impl Failure {
         self.answer.as_ref()?.user_agent.as_deref()
     }
 
-    /// The firewall that answered, when its headers say so beyond doubt.
+    /// The firewall in front of the server, when its headers say so beyond doubt. It adds them to
+    /// every answer, the server's own refusals included: whether it refused the request itself is
+    /// [`Failure::firewall_blocked`].
     pub fn firewall(&self) -> Option<&'static str> {
         let server = self.header("server").unwrap_or("").to_ascii_lowercase();
         if server.contains("cloudflare") || self.header("cf-ray").is_some() {
@@ -139,6 +143,25 @@ impl Failure {
             Some("AWS WAF")
         } else {
             None
+        }
+    }
+
+    /// Whether the firewall in front blocked or challenged the request itself, rather than passing
+    /// on the service's own refusal (a private service wanting a token, say): told by a header it
+    /// sends only then, or by its own page.
+    pub fn firewall_blocked(&self) -> bool {
+        let page = self.excerpt().unwrap_or("").to_ascii_lowercase();
+        let says = |words: &[&str]| words.iter().any(|w| page.contains(w));
+        match self.firewall() {
+            Some("Cloudflare") => {
+                self.header("cf-mitigated").is_some() || says(&["attention required", "just a moment", "you have been blocked"])
+            }
+            Some("Akamai") => says(&["access denied"]),
+            Some("Imperva") => says(&["incapsula incident", "request unsuccessful"]),
+            Some("Sucuri") => self.header("x-sucuri-block").is_some() || says(&["sucuri website firewall"]),
+            // Sent only when one of its rules acted on the request.
+            Some("AWS WAF") => true,
+            _ => false,
         }
     }
 
@@ -299,6 +322,28 @@ mod tests {
         assert_eq!(named(&[("x-amzn-waf-action", "block")]), Some("AWS WAF"));
         assert_eq!(named(&[("server", "nginx")]), None);
         assert_eq!(named(&[]), None);
+    }
+
+    /// A firewall in front passes the service's own refusals on with its headers: only its own
+    /// block or challenge says it refused the request.
+    #[test]
+    fn a_firewall_in_front_is_not_taken_for_one_that_blocked() {
+        let blocked = |pairs: &[(&str, &str)], body: &[u8]| {
+            let f = Failure::answered("u", 403, &h(pairs), body);
+            (f.firewall(), f.firewall_blocked())
+        };
+        let cloudflare = [("server", "cloudflare"), ("cf-ray", "1-BOG")];
+        // The service's own 403 (a token it wants), passed on through Cloudflare.
+        assert_eq!(blocked(&cloudflare, br#"{"error":{"code":403,"message":"Token Required"}}"#), (Some("Cloudflare"), false));
+        // Cloudflare's own: a challenge header, its challenge page or its block page.
+        assert_eq!(blocked(&[("cf-ray", "1"), ("cf-mitigated", "challenge")], b""), (Some("Cloudflare"), true));
+        assert_eq!(blocked(&cloudflare, b"<title>Just a moment...</title>"), (Some("Cloudflare"), true));
+        assert_eq!(blocked(&cloudflare, b"<title>Attention Required! | Cloudflare</title>"), (Some("Cloudflare"), true));
+        assert_eq!(blocked(&[("server", "AkamaiGHost")], b"<title>Access Denied</title>"), (Some("Akamai"), true));
+        assert_eq!(blocked(&[("server", "AkamaiGHost")], b"Not here"), (Some("Akamai"), false));
+        assert_eq!(blocked(&[("x-sucuri-id", "1"), ("x-sucuri-block", "1")], b""), (Some("Sucuri"), true));
+        assert_eq!(blocked(&[("x-amzn-waf-action", "captcha")], b""), (Some("AWS WAF"), true));
+        assert_eq!(blocked(&[("server", "nginx")], b"<title>Attention Required</title>"), (None, false));
     }
 
     #[test]

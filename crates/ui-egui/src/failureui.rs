@@ -13,14 +13,15 @@ pub fn plain(f: &Failure) -> (String, String) {
     let refused = tl!("The server refused the request.");
     match (f.reason, f.firewall()) {
         (Reason::Status(401), _) => (refused.into(), tl!("The service needs a sign-in or a token.").into()),
-        (Reason::Status(403), Some(firewall)) => (
+        // Only the firewall's own block: in front of a private service, it passes on that refusal.
+        (Reason::Status(403), Some(firewall)) if f.firewall_blocked() => (
             refused.into(),
             crate::i18n::fmt(
                 "Its firewall ({firewall}) blocked RustGIS. The service may only allow some applications: contact its administrator and send them the details below.",
                 &[("firewall", firewall)],
             ),
         ),
-        (Reason::Status(403), None) => (refused.into(), tl!("The service may be private or need a token.").into()),
+        (Reason::Status(403), _) => (refused.into(), tl!("The service may be private or need a token.").into()),
         (Reason::Status(404), _) => (tl!("Nothing was found at this address.").into(), tl!("Check the address.").into()),
         (Reason::Status(429), _) => (tl!("The server is limiting requests.").into(), tl!("Try again in a moment.").into()),
         (Reason::Status(s), _) if s >= 500 => (tl!("The server had a problem answering.").into(), tl!("Try again later.").into()),
@@ -44,7 +45,12 @@ pub fn details(f: &Failure) -> Vec<(&'static str, String)> {
     let header = |k: &str| f.header(k).map(str::to_string);
     for (label, value) in [
         ("Server", header("server")),
-        ("Firewall", f.firewall().map(str::to_string)),
+        (
+            "Firewall",
+            f.firewall().map(|w| {
+                if f.firewall_blocked() { format!("{w}, which blocked the request") } else { format!("{w}, in front of the server") }
+            }),
+        ),
         ("Request ID", f.request_id()),
         ("Sign-in", header("www-authenticate")),
         ("Retry after", header("retry-after")),
@@ -110,8 +116,8 @@ mod tests {
     #[test]
     fn a_firewall_block_is_told_plainly_with_its_details() {
         let headers = [("server".to_string(), "cloudflare".to_string()), ("cf-ray".to_string(), "a4c9-BOG".to_string())];
-        let f = Failure::answered("https://example.org/MapServer?f=json&token=secret", 403, &headers, b"<title>Blocked</title>")
-            .sent_as("RustGIS/1.0");
+        let page = b"<title>Attention Required! | Cloudflare</title>";
+        let f = Failure::answered("https://example.org/MapServer?f=json&token=secret", 403, &headers, page).sent_as("RustGIS/1.0");
         let (what, next) = plain(&f);
         assert_eq!(what, "The server refused the request.");
         assert!(next.contains("Cloudflare") && next.contains("administrator"), "{next}");
@@ -120,13 +126,23 @@ mod tests {
         for line in [
             "Status: 403 Forbidden",
             "Server: cloudflare",
-            "Firewall: Cloudflare",
+            "Firewall: Cloudflare, which blocked the request",
             "Request ID: cf-ray a4c9-BOG",
             "Sent as: User-Agent: RustGIS/1.0",
-            "Response: \"Blocked\"",
+            "Response: \"Attention Required! | Cloudflare\"",
         ] {
             assert!(report.contains(line), "{line} in {report}");
         }
+    }
+
+    /// A private service behind a firewall: its own refusal isn't blamed on the firewall.
+    #[test]
+    fn a_refusal_passed_on_by_a_firewall_is_the_service_s() {
+        let headers = [("server".to_string(), "cloudflare".to_string()), ("cf-ray".to_string(), "a4c9-BOG".to_string())];
+        let f = Failure::answered("u", 403, &headers, br#"{"error":{"code":403,"message":"Token Required"}}"#);
+        let next = plain(&f).1;
+        assert!(next.contains("token") && !next.contains("administrator"), "{next}");
+        assert!(report(&f).contains("Firewall: Cloudflare, in front of the server"), "{}", report(&f));
     }
 
     #[test]

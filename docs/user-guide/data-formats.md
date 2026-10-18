@@ -113,9 +113,11 @@ leaves any available map layers usable and shows the error.
 When a service can't be reached or refuses the request, the dialog says what happened in plain
 words and what to try next: a sign-in or token it needs (401), access refused (403), nothing at
 that address (404), too many requests (429), a problem on the server (5xx), or a server that
-couldn't be reached or took too long. When a firewall in front of the server blocked RustGIS
-(Cloudflare, Akamai, Imperva, Sucuri or AWS WAF, told by the headers they answer with), it says
-so: only the service's administrator can let RustGIS through. **Details**, folded below, lists
+couldn't be reached or took too long. When a firewall in front of the server (Cloudflare,
+Akamai, Imperva, Sucuri or AWS WAF) blocked or challenged RustGIS itself, told by its own block
+page or a header it sends only then, it says so: only the service's administrator can let
+RustGIS through. A firewall that only passed on the service's own refusal (a private service
+wanting a token) isn't blamed for it. **Details**, folded below, lists
 what the server said for an expert or the administrator: the address (without keys or tokens),
 the status, the server, the firewall and the request's id, the `User-Agent` RustGIS sent, and
 the title or first words of the server's answer (as text). **Copy details** copies them to send.
