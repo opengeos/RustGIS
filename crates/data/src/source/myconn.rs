@@ -20,11 +20,20 @@ pub fn split_password(s: &str) -> Option<(String, Option<String>)> {
     // the address: a password may hold an unencoded `/`, `?`, `#` or `@`.
     // A password of digits before an unencoded `/`, `?` or `#` reads like a port (`u:123/w@h`):
     // a database name has no `@`, so one before the query ends the user and password then.
-    let at = super::pgconn::userinfo_end(rest).or_else(|| {
-        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-        let query = rest.find('?').unwrap_or(rest.len());
-        rest.get(..query)?.rfind('@').filter(|&i| i >= end)
-    });
+    let at = super::pgconn::userinfo_end(rest)
+        .or_else(|| {
+            let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+            let query = rest.find('?').unwrap_or(rest.len());
+            rest.get(..query)?.rfind('@').filter(|&i| i >= end)
+        })
+        // … or before an unencoded `?` (`u:12?x@h`): an `@` in the query before any `=`, `&` or `/`
+        // isn't a parameter's.
+        .or_else(|| {
+            let q = rest.find('?')?;
+            let tail = rest.get(q + 1..)?;
+            let i = tail.find(['@', '=', '&', '/'])?;
+            (tail.get(i..i + 1) == Some("@")).then_some(q + 1 + i)
+        });
     let (user, password, after) = match at {
         Some(at) => {
             let (userinfo, after) = (rest.get(..at).unwrap_or(""), rest.get(at + 1..).unwrap_or(""));
@@ -88,6 +97,8 @@ mod tests {
         assert_eq!(s("mysql://u:123/w@db.example/gis"), ("mysql://u@db.example/gis".into(), Some("123/w".into())));
         assert_eq!(s("mysql://u:12#x@h:3306/gis"), ("mysql://u@h:3306/gis".into(), Some("12#x".into())));
         assert_eq!(s("mysql://h:3306/gis"), ("mysql://h:3306/gis".into(), None));
+        assert_eq!(s("mysql://u:12?x@h/gis"), ("mysql://u@h/gis".into(), Some("12?x".into())));
+        assert_eq!(s("mysql://h/gis?ssl-ca=/a@b.pem"), ("mysql://h/gis?ssl-ca=/a@b.pem".into(), None));
         assert_eq!(s("mysql://me:p#w?x@h:3306/gis#f"), ("mysql://me@h:3306/gis".into(), Some("p#w?x".into())));
         assert_eq!(s("mysql://me@h/gis?pass=a%26b&ssl-mode=DISABLED"), ("mysql://me@h/gis?ssl-mode=DISABLED".into(), Some("a&b".into())));
         assert!(split_password("postgres:host=h").is_none());

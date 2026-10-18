@@ -163,12 +163,20 @@ fn config(address: &str) -> Result<Config> {
 struct Server {
     mariadb: bool,
     major: u32,
+    minor: u32,
 }
 
 impl Server {
     fn from_version(v: &str) -> Server {
-        let major = v.split(['.', '-']).next().and_then(|m| m.trim().parse().ok()).unwrap_or(0);
-        Server { mariadb: v.to_ascii_lowercase().contains("mariadb"), major }
+        let mut parts = v.split(['.', '-']).map(|p| p.trim().parse().unwrap_or(0));
+        let (major, minor) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+        Server { mariadb: v.to_ascii_lowercase().contains("mariadb"), major, minor }
+    }
+
+    /// Whether it has window functions (MySQL 8, MariaDB 10.2), which number samples and keyless
+    /// tables.
+    fn windows(self) -> bool {
+        if self.mariadb { (self.major, self.minor) >= (10, 2) } else { self.major >= 8 }
     }
 
     /// MySQL 8 reads and writes geographic coordinates latitude first unless asked otherwise.
@@ -622,6 +630,10 @@ impl MysqlSource {
         let g = ident(&table.column);
         let from = table.sql_from();
         let server = conn.server;
+        // Samples and keyless tables are numbered with window functions.
+        if !server.windows() {
+            return Err(DataError::Unsupported("MySQL tables are read from MySQL 8 or MariaDB 10.2 and later".into()));
+        }
         // The SRID: the column's (MySQL 8's per column; MariaDB's `REF_SYSTEM_ID`, its 0 for
         // none), else its rows'.
         let declared_sql = if server.mariadb {
@@ -735,6 +747,9 @@ impl MysqlSource {
         src.info.count = src.count_rows();
         if src.info.count != Some(0) {
             src.info.extent = src.measure();
+            if src.info.extent.is_empty() {
+                src.info.notes.push("the table's extent couldn't be measured in time: zooming to the layer does nothing".into());
+            }
         }
         Ok(src)
     }
@@ -1019,6 +1034,8 @@ mod tests {
         assert_eq!(my.axis_option(), ", 'axis-order=long-lat'");
         assert_eq!(maria.axis_option(), "");
         assert_eq!(Server::from_version("5.7.44").axis_option(), "");
+        assert!(my.windows() && maria.windows() && Server::from_version("10.2.44-MariaDB").windows());
+        assert!(!Server::from_version("5.7.44").windows() && !Server::from_version("10.1.48-MariaDB").windows());
         assert_eq!(my.timed("SELECT 1", 10), "SELECT /*+ MAX_EXECUTION_TIME(10000) */ 1");
         assert_eq!(maria.timed("SELECT 1", 10), "SET STATEMENT max_statement_time = 10 FOR SELECT 1");
     }
