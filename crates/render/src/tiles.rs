@@ -107,6 +107,7 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
                     bold: l.bold,
                     icon,
                     align: -l.anchor[0],
+                    framed: false,
                 },
                 l.priority,
             ));
