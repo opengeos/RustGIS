@@ -3155,12 +3155,13 @@ fn large_sources_stream_a_view_at_a_time() {
     let small = rustgis_geom::Extent::new(10.0, 10.0, 14.0, 13.0);
     let v = view_of(&mut s, small);
     let lonlat = crate::render::view_lonlat(s.map(), &v);
+    let scale = s.map().scale();
     // Read in the background, as the screen does, then wait for it.
-    let mut pending = s.map_mut().sync_sources(&lonlat, false);
+    let mut pending = s.map_mut().sync_sources(&lonlat, scale, false);
     let start = std::time::Instant::now();
     while pending && start.elapsed() < std::time::Duration::from_secs(30) {
         std::thread::sleep(std::time::Duration::from_millis(5));
-        pending = s.map_mut().sync_sources(&lonlat, false);
+        pending = s.map_mut().sync_sources(&lonlat, scale, false);
     }
     assert!(!pending);
     let l = layer(&s);
@@ -5062,6 +5063,43 @@ fn s3_connections_listings_and_objects() {
     assert!(crate::cmd::plugins::user_only("s3.connect"));
 }
 
+/// A streamed layer outside its zoom range reads nothing for the view, as if hidden: it is not
+/// drawn there, so its features are not fetched (#412). Back in range, it reads again.
+#[test]
+fn streamed_layer_outside_its_zoom_range_reads_nothing() {
+    use rustgis_data::{Dataset, Feature, Field, FieldType, Geometry, GeometryType, Value};
+    let mut ds = Dataset::new("grid", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
+    for i in 0..200u32 {
+        for j in 0..200u32 {
+            let c = rustgis_geom::Coord::new(-179.0 + 1.79 * f64::from(i), -80.0 + 0.8 * f64::from(j));
+            let n = u64::from(i * 200 + j);
+            ds.features.push(Feature { id: n + 1, geometry: Some(Geometry::Point(c)), attrs: vec![Value::Int(n as i64)] });
+        }
+    }
+    let (base, sent) = serve_ranges(rustgis_data::source::fgb::write(&ds).unwrap());
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/grid.fgb")})).unwrap();
+    assert_eq!(r["streamed"], true, "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    // Drawn only when zoomed in beyond 1:10,000,000.
+    s.run("layer.scaleRange", &json!({"layer": id, "min": 1e7})).unwrap();
+    let before = sent.load(std::sync::atomic::Ordering::Relaxed);
+    // Zoomed out (an export, which waits for its reads): not drawn, so not read.
+    let v = view_of(&mut s, rustgis_geom::Extent::new(-60.0, -40.0, 60.0, 40.0));
+    assert!(s.map().scale() > 1e7);
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    let l = s.map().layer(id).unwrap();
+    assert!(l.dataset.features.is_empty() && l.source.as_ref().unwrap().window().is_none());
+    assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), before);
+    // Zoomed in, inside the range: read and drawn.
+    let v = view_of(&mut s, rustgis_geom::Extent::new(10.0, 10.0, 12.0, 11.0));
+    assert!(s.map().scale() < 1e7);
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    let l = s.map().layer(id).unwrap();
+    assert!(!l.dataset.features.is_empty(), "{:?}", l.source.as_ref().unwrap().error);
+    assert!(sent.load(std::sync::atomic::Ordering::Relaxed) > before);
+}
+
 /// A FlatGeobuf and a GeoParquet by their address are read in place, by range: a view fetches a
 /// small part of the file; the project keeps the address and reads it again; asked to, a file is
 /// downloaded whole instead.
@@ -5086,11 +5124,12 @@ fn flatgeobuf_and_geoparquet_by_address_are_read_in_place() {
     // A view: read as the screen reads, in the background.
     let view = rustgis_geom::Extent::new(10.0, 10.0, 14.0, 13.0);
     let sync = |s: &mut Session| {
-        let mut pending = s.map_mut().sync_sources(&view, false);
+        let scale = s.map().scale();
+        let mut pending = s.map_mut().sync_sources(&view, scale, false);
         let start = std::time::Instant::now();
         while pending && start.elapsed() < std::time::Duration::from_secs(30) {
             std::thread::sleep(std::time::Duration::from_millis(5));
-            pending = s.map_mut().sync_sources(&view, false);
+            pending = s.map_mut().sync_sources(&view, scale, false);
         }
         assert!(!pending);
     };

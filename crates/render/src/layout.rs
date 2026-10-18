@@ -62,8 +62,9 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
         {
             let view = View { width: fw, height: fh, pixels_per_point: 1.0, camera: cam, sky: false };
             let lonlat = crate::view_lonlat(map, &view);
-            map.sync_sources(&lonlat, true);
-            shown.push((*f, shown_legends(map, map.ground_res_at(&cam) / rustgis_geom::PIXEL_M)));
+            let scale = map.ground_res_at(&cam) / rustgis_geom::PIXEL_M;
+            map.sync_sources(&lonlat, scale, true);
+            shown.push((*f, shown_legends(map, scale)));
         }
     }
     for e in layout.elements.iter().filter(|e| e.visible) {

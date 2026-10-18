@@ -16,14 +16,15 @@ Select a layer in Layers and open **Style › Symbology** (or the Symbology pane
   interval or quantile.
 - **Proportional Symbols**: point size grows with a numeric field.
 
-Pick a colour scheme from the pane's swatches. The Style tab sets the fill **Color**,
-the **Outline** width, **Transparency** and a **Visibility Range** (the scales between which the
-layer draws); points can be circles, squares, triangles, diamonds or stars. **Data › Definition
-Query** draws only the features matching a SQL clause; Unique Values, Graduated Colors and
-Proportional Symbols take their values, classes and sizes from those features when you apply them
-(apply the symbology again after changing the query), and **Full Extent** zooms to them. A layer with
-[subtypes](editing.md#data-design) can be symbolized by them. **Style › Styles** saves symbology
-as styles to reuse on other layers and in other projects.
+Pick a colour scheme from the pane's swatches. The Style tab sets the fill **Color**, the
+**Outline** width, **Transparency** and a **Visibility Range** (the scales between which the layer
+draws; a large file read in place is not read at all outside them); points can be circles, squares,
+triangles, diamonds or stars. **Data › Definition Query** draws only the features matching a SQL
+clause; Unique Values, Graduated Colors and Proportional Symbols take their values, classes and
+sizes from those features when you apply them (apply the symbology again after changing the query),
+and **Full Extent** zooms to them. A layer with [subtypes](editing.md#data-design) can be symbolized
+by them. **Style › Styles** saves symbology as styles to reuse on other layers and in other
+projects.
 
 ### Edit a class
 

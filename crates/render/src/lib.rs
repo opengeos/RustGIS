@@ -995,7 +995,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     let mut pm = Pixmap::new(w, h)?;
     // Streamed layers read the view: in the background for the screen, in place for an export
     // (the full-resolution render), which waits for them.
-    let data_pending = map.sync_sources(&view_lonlat(map, view), full_res_rasters);
+    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    let data_pending = map.sync_sources(&view_lonlat(map, view), scale, full_res_rasters);
     let globe = map.projection.is_globe().then(|| Globe::new(&view.camera, view.width, view.height));
     let (flat, key) = (map.flat(), map.projection.code());
     let custom = matches!(flat, rustgis_map::projection::Flat::Custom(_)) && globe.is_none();
@@ -1008,7 +1009,6 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         globe,
         sprites: Default::default(),
     };
-    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     // The Gpu backend draws flat, effect-free frames; anything else stays on the CPU pixmap.
     let gpu = matches!(backend, Backend::Gpu)
         && globe.is_none()
