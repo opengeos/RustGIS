@@ -27,9 +27,13 @@ pub const MAX_BATCH: usize = 16;
 /// The largest map image `view_map` draws (pixels a side).
 const MAX_VIEW: f64 = 2048.0;
 
+/// The longest a screen snapshot waits for the map to finish drawing (seconds), and the default.
+pub const MAX_SNAPSHOT_WAIT: f64 = 30.0;
+const SNAPSHOT_WAIT: f64 = 5.0;
+
 /// What the model is told about the server when it connects.
 const INSTRUCTIONS: &str = "RustGIS is a desktop GIS. This server holds one RustGIS project in memory and acts on it.\n\
-- list_layers shows the map. view_map shows it as an image: look after changing it.\n\
+- list_layers shows the map. view_map shows it as an image: look after changing it. snapshot adds the view's extent and scale, and can save the image.\n\
 - Every action is a command: search_commands finds one, run_command runs it (navigation, layers, symbology, labels, selection, editing, layouts, export…). run runs several commands at once, as one undo step.\n\
 - Geoprocessing: search_tools, then describe_tool for its parameters, then run_tool; its output is a new layer.\n\
 - read_features reads attribute rows, with a where clause.\n\
@@ -179,6 +183,13 @@ impl Server {
         let text = |t: String, is_error: bool| json!({"content": [{"type": "text", "text": t}], "isError": is_error});
         let result = match name {
             "view_map" => return view_map(s, &args).unwrap_or_else(|e| text(e, true)),
+            "snapshot" => {
+                let call = ToolCall { id: String::new(), name: name.to_string(), args: args.clone() };
+                return match self.refusal(s, &call) {
+                    Some(why) => text(why, true),
+                    None => self.snapshot(s, &args).unwrap_or_else(|e| text(e, true)),
+                };
+            }
             _ => {
                 let call = ToolCall { id: String::new(), name: name.to_string(), args };
                 match self.refusal(s, &call) {
@@ -193,6 +204,22 @@ impl Server {
         }
     }
 
+    /// `snapshot` drawn offscreen: the server can't see the app's window, so a `screen` snapshot
+    /// is drawn too, with a note. The desktop relay captures the window itself
+    /// ([`crate::relay`]) and comes here only when the map isn't on screen.
+    fn snapshot(&self, s: &mut Session, a: &Value) -> Result<Value, String> {
+        let note = match a.get("mode").and_then(Value::as_str) {
+            Some("screen") if self.users_project => Some(
+                "the map isn't on screen in RustGIS (a layout or the catalog is shown, or the window is hidden), so it was drawn offscreen",
+            ),
+            Some("screen") => {
+                Some("screen capture works only through the desktop app's MCP relay (rustgis-cli mcp --attach); drawn offscreen")
+            }
+            _ => None,
+        };
+        render_snapshot(s, a, note)
+    }
+
     /// What the model is told about the server when it connects.
     pub fn instructions(&self) -> String {
         if self.users_project { format!("{INSTRUCTIONS}{LIVE}") } else { INSTRUCTIONS.to_string() }
@@ -200,6 +227,13 @@ impl Server {
 
     /// Why this server won't run a call, if it won't.
     pub fn refusal(&self, s: &Session, call: &ToolCall) -> Option<String> {
+        // A snapshot saved to a file writes it.
+        if call.name == "snapshot" {
+            let path = save_path(&call.args)?;
+            return (!self.allow_access).then(|| {
+                format!("snapshot was not saved to '{path}': it writes a file on this computer. The server allows that only when started with --yes (rustgis-cli mcp --yes).")
+            });
+        }
         // A script is refused when any of its lines would be, before any of it runs. A script
         // that doesn't parse runs to say so.
         if call.name == "run" {
@@ -270,11 +304,11 @@ fn initialize(params: &Value, instructions: &str) -> Value {
 }
 
 /// The tools this server adds to the assistant's.
-const TOOL_NAMES: &[&str] = &["view_map", "run"];
+const TOOL_NAMES: &[&str] = &["view_map", "run", "snapshot"];
 
-/// Tools that only look: list, search, read, view.
+/// Tools that only look: list, search, read, view. A snapshot can be saved over a file.
 fn read_only(name: &str) -> bool {
-    !matches!(name, "run_command" | "run_tool" | "run")
+    !matches!(name, "run_command" | "run_tool" | "run" | "snapshot")
 }
 
 fn tool_list() -> Vec<Value> {
@@ -301,6 +335,21 @@ fn tool_list() -> Vec<Value> {
             "required": ["script"]
         },
         "annotations": annotations("run"),
+    }));
+    out.push(json!({
+        "name": "snapshot",
+        "description": "The map as a PNG image with JSON metadata (mode, size, lon/lat extent, centre, scale, projection, render_settled). mode \"screen\" is exactly what the user sees in the RustGIS window, after waiting up to wait_s for drawing and tiles to finish (desktop app relay only); \"render\" draws the same layers, view and styling offscreen at max_width, which works while the window is hidden; \"auto\" (default) captures the screen when the map is on it. save_path also writes the PNG to a file (needs --yes).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["auto", "screen", "render"]},
+                "max_width": {"type": "integer", "description": "render: pixels wide (64 to 2048, default 1024); the height follows the view's shape"},
+                "wait_s": {"type": "number", "description": "screen: the longest to wait for the map to finish drawing (0 to 30, default 5)"},
+                "overlays": {"type": "boolean", "description": "screen: show the map's controls, scale bar, north arrow and sketches (default true); render never draws them"},
+                "save_path": {"type": "string", "description": "Also write the PNG here"}
+            }
+        },
+        "annotations": annotations("snapshot"),
     }));
     out.push(json!({
         "name": "view_map",
@@ -357,6 +406,68 @@ fn view_map(s: &mut Session, a: &Value) -> Result<Value, String> {
         "content": [
             {"type": "image", "data": base64::engine::general_purpose::STANDARD.encode(png), "mimeType": "image/png"},
             {"type": "text", "text": caption},
+        ],
+        "isError": false,
+    }))
+}
+
+/// Where a snapshot is to be saved, if anywhere.
+fn save_path(a: &Value) -> Option<&str> {
+    a.get("save_path").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty())
+}
+
+/// How long a screen snapshot may wait for drawing to finish (`wait_s`, clamped).
+pub fn snapshot_wait(a: &Value) -> f64 {
+    a.get("wait_s").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(SNAPSHOT_WAIT).clamp(0.0, MAX_SNAPSHOT_WAIT)
+}
+
+/// A `snapshot` drawn offscreen at `max_width` in the view's shape, with `note` saying why when it
+/// was asked of the screen.
+pub fn render_snapshot(s: &mut Session, a: &Value, note: Option<&str>) -> Result<Value, String> {
+    let asked = a.get("max_width").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(1024.0).clamp(64.0, MAX_VIEW);
+    // The view's shape, so the image shows what the window does: a very tall view is narrowed
+    // to fit rather than squashed.
+    let (vw, vh) = s.view_size;
+    let shape = if vw >= 1.0 && vh >= 1.0 { vh / vw } else { 0.625 };
+    let width = asked.min(MAX_VIEW / shape.max(f64::MIN_POSITIVE)).max(64.0);
+    let height = (width * shape).clamp(64.0, MAX_VIEW);
+    let png = rustgis_engine::cmd::share::map_png(s, Some(width), Some(height), None)?;
+    // Tiles still on their way are missing from it.
+    let settled = rustgis_engine::render::rustgis_tiles::cache::in_flight() == 0;
+    snapshot_result(s, &png, "render", settled, a, note)
+}
+
+/// A `snapshot` result: the image, and the view it shows as JSON. `mode` is how it was made
+/// (`screen` or `render`) and `settled` whether drawing had finished. Saves the PNG to
+/// `save_path` when the arguments name one (the caller checked the server allows it).
+pub fn snapshot_result(s: &mut Session, png: &[u8], mode: &str, settled: bool, a: &Value, note: Option<&str>) -> Result<Value, String> {
+    use base64::Engine;
+    let saved = match save_path(a) {
+        Some(path) => {
+            std::fs::write(path, png).map_err(|e| format!("could not save the snapshot to '{path}': {e}"))?;
+            Some(path)
+        }
+        None => None,
+    };
+    // The PNG's own size, from its header.
+    let dim = |at: usize| png.get(at..at + 4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes);
+    let info = s.run("info.project", &json!({"includeFields": false}))?;
+    let meta = json!({
+        "mode": mode,
+        "width": dim(16),
+        "height": dim(20),
+        "extent": info.get("extent"),
+        "center": info.get("center"),
+        "scale": info.get("scale"),
+        "projection": info.get("projection"),
+        "render_settled": settled,
+        "saved": saved,
+        "note": note,
+    });
+    Ok(json!({
+        "content": [
+            {"type": "image", "data": base64::engine::general_purpose::STANDARD.encode(png), "mimeType": "image/png"},
+            {"type": "text", "text": meta.to_string()},
         ],
         "isError": false,
     }))

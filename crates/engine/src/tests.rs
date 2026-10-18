@@ -1816,6 +1816,43 @@ fn layouts_compose_export_and_round_trip() {
     s.run("layout.update", &json!({"element": inset, "scale": 200_000_000})).unwrap();
     s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": frame})).unwrap();
     assert!(s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": inset})).is_err());
+    // Its colour and width (#213): red and 2 pt by default, set when added or later, and kept
+    // through a save; `false` takes it away.
+    let indicator = |s: &Session| match s.project.layouts[0].element(inset as u32).map(|e| &e.kind) {
+        Some(rustgis_map::layout::ElementKind::MapFrame { extent_of, extent_color, extent_width, .. }) => {
+            (*extent_of, extent_color.hex(), *extent_width)
+        }
+        _ => panic!("the inset is a map frame"),
+    };
+    assert_eq!(indicator(&s), (Some(frame), "#D01C1C".to_string(), 2.0));
+    let saved = serde_json::to_string(&s.project.layouts[0]).unwrap();
+    assert!(!saved.contains("extent_color") && !saved.contains("extent_width"), "defaults aren't written");
+    s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": frame, "color": "#1F4E9A", "width": 0.75}))
+        .unwrap();
+    assert_eq!(indicator(&s), (Some(frame), "#1F4E9A".to_string(), 0.75));
+    s.run("layout.update", &json!({"element": inset, "extentIndicator": {"width": 99}})).unwrap();
+    assert_eq!(indicator(&s).2, rustgis_map::layout::MAX_INDICATOR_WIDTH, "clamped, and the colour kept");
+    assert_eq!(indicator(&s).1, "#1F4E9A");
+    let saved: rustgis_map::layout::Layout = serde_json::from_str(&serde_json::to_string(&s.project.layouts[0]).unwrap()).unwrap();
+    assert!(saved.element(inset as u32).is_some_and(
+        |e| matches!(&e.kind, rustgis_map::layout::ElementKind::MapFrame { extent_color, .. } if extent_color.hex() == "#1F4E9A")
+    ));
+    assert!(s.run("layout.update", &json!({"element": inset, "extentIndicator": {"color": "blue-ish"}})).is_err());
+    assert!(s.run("layout.update", &json!({"element": inset, "extentIndicator": 3})).is_err());
+    // A value given but not a colour or a number is refused, naming it, and changes nothing.
+    for (bad, field) in [(json!({"width": "wide"}), "width"), (json!({"color": 123}), "color")] {
+        let err = s.run("layout.update", &json!({"element": inset, "extentIndicator": bad})).unwrap_err();
+        assert!(err.starts_with(field), "{err}");
+        let mut add = json!({"kind": "extentIndicator", "frame": inset, "of": frame});
+        add[field] = bad[field].clone();
+        assert!(s.run("layout.addElement", &add).is_err_and(|e| e.starts_with(field)));
+    }
+    assert_eq!((indicator(&s).1.as_str(), indicator(&s).2), ("#1F4E9A", rustgis_map::layout::MAX_INDICATOR_WIDTH));
+    s.run("layout.update", &json!({"element": inset, "extentIndicator": false})).unwrap();
+    assert_eq!(indicator(&s).0, None);
+    let err = s.run("layout.update", &json!({"element": inset, "extentIndicator": {"color": "#000000"}})).unwrap_err();
+    assert!(err.contains("no extent indicator"), "{err}");
+    s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": inset, "of": frame})).unwrap();
     assert!(s.run("layout.addElement", &json!({"kind": "sparkles"})).is_err());
     // A hairline rule keeps its height when added and when edited (#211).
     let rule = s.run("layout.addElement", &json!({"kind": "rectangle", "color": "#000000", "w": 136, "h": 0.15})).unwrap()["element"]

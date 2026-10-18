@@ -26,12 +26,12 @@ pub struct Camera {
     pub center: Coord,
     pub res: f64,
     /// The compass direction the top of the view faces, in degrees clockwise from north (as in
-    /// MapLibre): at 90 east is up. The globe ignores it.
+    /// MapLibre): at 90 east is up. The globe turns with it too.
     #[serde(default)]
     pub bearing: f64,
     /// How far the view tilts from looking straight down, in degrees (0 to [`MAX_PITCH`], as in
     /// MapLibre): the centre keeps its scale, nearer ground grows and farther ground shrinks
-    /// toward the horizon. The globe ignores it.
+    /// toward the horizon. The globe tilts too: its camera swings back about the centre of view.
     #[serde(default)]
     pub pitch: f64,
 }

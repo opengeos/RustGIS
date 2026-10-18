@@ -129,8 +129,8 @@ fn draw_with(
             // A raster under the centre of view may reach past every sample point: take the disc.
             if e.contains(view.camera.center_lonlat()) {
                 let (cx, cy) = g.center();
-                let r = g.disc_radius();
-                ((cx - r, cy - r), (cx + r, cy + r))
+                let (rx, ry) = (g.disc_radius(), g.disc_height());
+                ((cx - rx, cy - ry), (cx + rx, cy + ry))
             } else if b.is_empty() {
                 return;
             } else {

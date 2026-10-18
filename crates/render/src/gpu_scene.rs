@@ -72,6 +72,32 @@ pub enum DrawCmd {
     Mesh { origin: [f64; 2], vertices: Vec<MeshVertex>, indices: Vec<u32> },
     /// Point markers: instances of a small set of unit-space shape templates.
     Points { origin: [f64; 2], instances: Vec<PointInstance> },
+    /// Extruded features standing up in a tilted view: roofs and walls, lit and drawn with a
+    /// depth buffer (as MapLibre's fill extrusions), or, with `shadows`, the shadows they cast
+    /// on the ground, drawn under every feature.
+    Extrusion { origin: [f64; 2], vertices: Vec<ExtrudeVertex>, indices: Vec<u32>, shadows: bool },
+}
+
+/// What part of an extruded feature an [`ExtrudeVertex`] belongs to.
+pub const EXTRUDE_ROOF: f32 = 0.0;
+pub const EXTRUDE_WALL: f32 = 1.0;
+pub const EXTRUDE_SHADOW: f32 = 2.0;
+
+/// Vertex of an extruded feature. Position is origin-relative map units, with its height above
+/// the ground (map units) third.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ExtrudeVertex {
+    pub position: [f32; 3],
+    /// A wall's outward normal (map units, unit length); zero elsewhere.
+    pub normal: [f32; 2],
+    /// Premultiplied RGBA, 0..1.
+    pub color: [f32; 4],
+    /// Up a wall (0 at its foot, 1 at its top), the part ([`EXTRUDE_ROOF`], [`EXTRUDE_WALL`],
+    /// [`EXTRUDE_SHADOW`]), 1 when the wall is lit, and how far a shadow's corner falls from its
+    /// feature (the feature's height, map units; 0 for a corner at the feature's foot).
+    pub info: [f32; 4],
+    pub _pad: f32,
 }
 
 /// Vertex for polygon fills and line strokes. Position is origin-relative map units.
