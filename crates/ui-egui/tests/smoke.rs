@@ -1479,6 +1479,23 @@ fn right_panes_open_as_tabs() {
     }
 }
 
+/// A primary click in the middle of the map.
+fn click_map(h: &mut egui_kittest::Harness<'_, RustGisApp>) {
+    let at = egui::pos2(700.0, 500.0);
+    h.input_mut().events.push(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        });
+    }
+    for _ in 0..4 {
+        h.step();
+    }
+}
+
 #[test]
 fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
     // Clicked through accesskit: the group may be scrolled out of the window.
@@ -1491,17 +1508,21 @@ fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
     h.step();
     assert_eq!(h.state().session.tool.code(), "graphicText");
     assert_eq!(h.state().ui.dynamic_text, Some("{scale}"));
-    // The dialog the map's click opens starts with the value.
-    h.state_mut().run("ui.dialog", json!({"name": "graphicText", "lon": 0.0, "lat": 0.0, "text": "{scale}"})).unwrap();
+    // The dialog a click on the map opens starts with the value.
+    click_map(&mut h);
+    assert_eq!(h.state().dialogs.open, Some("graphicText"));
     assert_eq!(h.state().dialogs.text, "{scale}");
     h.state_mut().dialogs.open = None;
-    // Text starts with "Text" again.
-    h.get_by_label("Text").click_accesskit();
+    h.step();
+    // Text starts with "Text" again (the button: the dialog's box is labelled Text too).
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Text").click_accesskit();
     h.step();
     assert_eq!(h.state().ui.dynamic_text, None);
-    h.state_mut().run("ui.dialog", json!({"name": "graphicText", "lon": 0.0, "lat": 0.0})).unwrap();
+    click_map(&mut h);
+    assert_eq!(h.state().dialogs.open, Some("graphicText"));
     assert_eq!(h.state().dialogs.text, "Text");
     h.state_mut().dialogs.open = None;
+    h.step();
     // Another tool forgets the value.
     h.get_by_label("Dynamic Text").click_accesskit();
     h.step();
