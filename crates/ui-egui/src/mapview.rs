@@ -28,6 +28,8 @@ struct Key {
 #[derive(Clone, Copy, PartialEq)]
 enum DragKind {
     Pan,
+    /// Turning and tilting the flat map (Ctrl+drag with the Pan tool, as in MapLibre).
+    Turn,
     Box,
     /// Drawing a graphic by dragging (rectangle, circle, ellipse, freehand, lasso, picture).
     Sketch,
@@ -430,7 +432,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // reduced resolution; it is drawn exactly once it settles.
     let cam = app.session.map().camera;
     let globe_view = app.session.map().projection == Projection::Globe;
-    let dragging = app.map.drag.is_some_and(|(_, k)| k == DragKind::Pan);
+    let dragging = app.map.drag.is_some_and(|(_, k)| k == DragKind::Pan || k == DragKind::Turn);
     // A tilted map waits longer before its exact (slower) frame: its drape already shows it in
     // perspective, so a short pause in a gesture doesn't stop to draw it.
     let settle = if !globe_view && cam.pitch != 0.0 { 0.4 } else { 0.18 };
@@ -971,6 +973,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
 
     let shift = ui.input(|i| i.modifiers.shift);
     let middle = ui.input(|i| i.pointer.middle_down());
+    let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
     // Dragging with the right button turns the flat map (to the right turns it clockwise) and
     // tilts it (up tilts it further), as in MapLibre.
     if resp.dragged_by(egui::PointerButton::Secondary) && globe(app, rect).is_none() {
@@ -997,6 +1000,8 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         } else {
             match tool {
                 Tool::Explore if shift => DragKind::Box,
+                // Ctrl+drag turns and tilts the flat map, as the right button does.
+                Tool::Explore if ctrl && globe(app, rect).is_none() => DragKind::Turn,
                 Tool::Explore => DragKind::Pan,
                 Tool::Select | Tool::ZoomIn => DragKind::Box,
                 t if drag_shape(t).is_some() => DragKind::Sketch,
@@ -1039,6 +1044,15 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         app.map.drag = None;
         crate::vertexedit::drag_stop(app);
         return;
+    }
+    if let Some((_, DragKind::Turn)) = app.map.drag {
+        let d = resp.drag_delta();
+        if d != egui::Vec2::ZERO {
+            turn_by(app, d.x as f64 * 0.8);
+            tilt_by(app, -d.y as f64 * 0.5);
+            app.map.camera_moved = true;
+            app.map.last_interaction = time;
+        }
     }
     if let Some((_, DragKind::Pan)) = app.map.drag {
         let d = resp.drag_delta();
