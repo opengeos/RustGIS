@@ -1443,9 +1443,10 @@ pub use effects::{TiltedWall, clip_near, shadow_shift, tilted_shadow_quads, tilt
 /// do), then their roofs and walls, which the depth buffer sorts out. Walls carry their outward
 /// normals, lit in the shader so they stay lit right as the map turns.
 fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Vec<gpu_scene::DrawCmd> {
-    // Past this many vertices a command's u32 indices would wrap: the remaining features are
-    // left out (hostile data), as the device couldn't take such a buffer anyway.
-    const MAX_VERTICES: usize = u32::MAX as usize / 2;
+    // The most vertices the roofs, walls and shadows take together (about 220 MB): past it the
+    // remaining features are left out (hostile or huge data), well before a device's buffer
+    // limit or u32 indices could be reached.
+    const MAX_VERTICES: usize = 4_000_000;
     use gpu_scene::{EXTRUDE_ROOF, EXTRUDE_SHADOW, EXTRUDE_WALL, ExtrudeVertex};
     let rel = |c: Coord, z: f64| [(c.x - origin[0]) as f32, (c.y - origin[1]) as f32, z as f32];
     let vertex =
@@ -1454,7 +1455,9 @@ fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Vec<gpu_scene::
     let (mut shade, mut shade_i) = (Vec::new(), Vec::<u32>::new());
     let shadow = mesh::premul(Rgba::new(0, 0, 0, 60));
     for s in shapes {
-        if solid.len() + s.roof.len() * 2 + s.rings.iter().chain(&s.holes).map(Vec::len).sum::<usize>() * 8 > MAX_VERTICES {
+        let more =
+            s.roof.len().saturating_mul(2).saturating_add(s.rings.iter().chain(&s.holes).map(Vec::len).sum::<usize>().saturating_mul(8));
+        if solid.len().saturating_add(shade.len()).saturating_add(more) > MAX_VERTICES {
             break;
         }
         // A height that is no number (hostile attributes) stands no higher than the ground.
