@@ -730,14 +730,15 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
             _ => None,
         }
     };
-    // A north arrow's or scale bar's new look, and a map frame's grid: `"grid": false` (or null)
-    // removes it, `true` adds the default one, and an object changes the options it names.
+    // A north arrow's or scale bar's new look, and a map frame's grid: `"grid": false` removes it,
+    // `true` adds the default one, an object changes the options it names, and null (not set)
+    // leaves it as it is.
     let (restyled, new_grid) = {
         let l = s.project.layouts.get(li).ok_or("no layout")?;
         let kind = &l.element(id).ok_or_else(|| format!("no element {id}"))?.kind;
-        let grid = match (kind, p.get("grid")) {
+        let grid = match (kind, p.get("grid").filter(|v| !v.is_null())) {
             (ElementKind::MapFrame { grid, .. }, Some(v)) => Some(match v {
-                Value::Null | Value::Bool(false) => None,
+                Value::Bool(false) => None,
                 Value::Bool(true) => Some(grid.clone().unwrap_or_default()),
                 Value::Object(_) => Some(grid_params(v, grid.clone().unwrap_or_default())?),
                 _ => return Err("grid is an object of grid options, or false to remove it".into()),

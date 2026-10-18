@@ -560,10 +560,15 @@ fn north_arrow(pm: &mut Pixmap, r: Rect, style: ArrowStyle, fill: Rgba, outline:
     text::text_at(pm, "N", cx, top + label_h / 2.0, label_h * 1.1, outline, true, text::Align::Center, false);
 }
 
-/// A number for a scale bar label: whole when it is, else up to two decimals.
-fn scale_number(v: f64) -> String {
-    let s = format!("{v:.2}");
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
+/// A scale bar label for `v`, a multiple of `step`: with the decimals the step needs (up to 6), so
+/// 0.0125 km stays 0.0125 rather than rounding to 0.01.
+fn scale_number(v: f64, step: f64) -> String {
+    let places = (0..6usize).find(|&n| {
+        let k = step * 10f64.powi(n as i32);
+        (k - k.round()).abs() < 1e-6 * k.abs().max(1.0)
+    });
+    let s = format!("{v:.prec$}", prec = places.unwrap_or(6));
+    if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s }
 }
 
 /// A scale bar filling most of the element's width, in `units`, with `divisions` labelled steps.
@@ -634,7 +639,7 @@ fn scale_bar(pm: &mut Pixmap, r: Rect, ground_per_pt: f64, bar: (ScaleUnits, usi
     let gap = 3.0 * ppp as f32;
     let labels: Vec<(f32, String)> = (0..=divisions)
         .map(|i| {
-            let v = scale_number(total * i as f64 / divisions as f64);
+            let v = scale_number(total * i as f64 / divisions as f64, total / divisions as f64);
             (x0 + seg * i as f32, if i == divisions { format!("{v} {abbr}") } else { v })
         })
         .collect();
@@ -1419,9 +1424,16 @@ mod tests {
 
     #[test]
     fn scale_numbers_are_short() {
-        assert_eq!(scale_number(5.0), "5");
-        assert_eq!(scale_number(2.5), "2.5");
-        assert_eq!(scale_number(1.0 / 3.0), "0.33");
-        assert_eq!(scale_number(0.0), "0");
+        assert_eq!(scale_number(5.0, 1.25), "5");
+        assert_eq!(scale_number(2.5, 1.25), "2.5");
+        assert_eq!(scale_number(1.25, 1.25), "1.25");
+        assert_eq!(scale_number(0.0, 1.25), "0");
+        assert_eq!(scale_number(100.0, 50.0), "100");
+        // Small totals keep their precision: 0.05 km in four divisions.
+        assert_eq!(scale_number(0.0125, 0.0125), "0.0125");
+        assert_eq!(scale_number(0.0375, 0.0125), "0.0375");
+        assert_eq!(scale_number(0.125, 0.125), "0.125");
+        // A step that never comes out even stops at six decimals.
+        assert_eq!(scale_number(1.0 / 3.0, 1.0 / 3.0), "0.333333");
     }
 }

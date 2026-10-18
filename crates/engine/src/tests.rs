@@ -1350,6 +1350,8 @@ fn layout_surrounds_take_cartographic_options() {
         .unwrap();
     let g3 = grid(&s).unwrap();
     assert_eq!((g3.style, g3.tick_length, g3.edges), (GridStyle::LinesAndTicks, rustgis_map::layout::MAX_TICK_MM, GridEdges::default()));
+    s.run("layout.update", &json!({"element": frame, "grid": null})).unwrap();
+    assert_eq!(grid(&s), Some(g3), "null is not set: the grid stays");
     s.run("layout.update", &json!({"element": frame, "grid": false})).unwrap();
     assert!(grid(&s).is_none());
     s.run("layout.update", &json!({"element": frame, "grid": true})).unwrap();
