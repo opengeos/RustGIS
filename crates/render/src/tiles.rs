@@ -180,21 +180,23 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
     }
     let half = HALF;
     let x0 = lonlat_to_merc(Coord::new(lon0, 0.0)).x;
-    // A pole in sight brings every longitude into view, and the latitudes up to it, whether or
-    // not the grid reached them.
+    // A pole in sight brings the latitudes up to it into view, whether or not the grid reached
+    // them, and every longitude when it is in sight on the far side too (on the globe a pole is
+    // a point; a world projection draws it as a line, which can run out of the view).
     let (vw, vh) = (f64::from(w) / k, f64::from(h) / k);
-    let in_view = |lat: f64| {
-        let pole = Coord::new(lon0, lat);
+    let in_view = |lon: f64, lat: f64| {
+        let pole = Coord::new(lon, lat);
         let at = match place {
             Place::Globe(g) => g.forward(pole),
             Place::Flat(flat, _) => flat.forward_checked(pole).map(|m| view.camera.to_screen(m, view.width, view.height)),
         };
         at.is_some_and(|(x, y)| x >= 0.0 && y >= 0.0 && x <= vw && y <= vh)
     };
-    let (north, south) = (in_view(90.0), in_view(-90.0));
+    let (north, south) = (in_view(lon0, 90.0), in_view(lon0, -90.0));
+    let all_lons = (north && in_view(lon0 + 180.0, 90.0)) || (south && in_view(lon0 + 180.0, -90.0));
     let min_y = if south { -half } else { (e.min_y - step_y).max(-half) };
     let max_y = if north { half } else { (e.max_y + step_y).min(half) };
-    let e = if north || south || e.width() > half {
+    let e = if all_lons || e.width() > half {
         // Over half the world across: every longitude.
         Extent::new(x0 - half, min_y, x0 + half, max_y)
     } else {
@@ -267,7 +269,7 @@ fn warp(pm: &mut Pixmap, mosaic: &Pixmap, frame: &Frame, to_lonlat: &dyn Fn(f64,
             if !(mx > -1.0 && my > -1.0 && mx < fw + 1.0 && my < fh + 1.0) {
                 continue;
             }
-            let (mx, my) = (mx.clamp(0.0, fw - 1.0) as usize, my.clamp(0.0, fh - 1.0) as usize);
+            let (mx, my) = (mx.max(0.0).min(fw - 1.0) as usize, my.max(0.0).min(fh - 1.0) as usize);
             let si = (my * mw + mx) * 4;
             let di = (y * w + x) * 4;
             let (Some(s), Some(d)) = (src.get(si..si + 4), dst.get_mut(di..di + 4)) else { continue };

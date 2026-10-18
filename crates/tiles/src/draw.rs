@@ -203,7 +203,9 @@ fn tiles_for(src: &Source, view: &Extent, frame: &Frame, zoom: f32, pending: &mu
     if tiles.is_empty() || z < min_z || zoom + 0.5 < f32::from(min_z) {
         return Vec::new();
     }
-    let z = template::fitting_zoom(view, z, min_z);
+    // A mosaic over half the world wide (the globe's, a world projection's) takes the zoom whose
+    // tiles all fit, as its far edges are in view; a flat view keeps those nearest its centre.
+    let z = if view.width() > template::HALF_WORLD { template::fitting_zoom(view, z, min_z) } else { z };
     let url = |t: TileId| {
         let i = (t.x as usize).wrapping_add(t.y as usize) % tiles.len();
         tiles.get(i).map(|tpl| template::expand(tpl, t, 256, false, &[]))

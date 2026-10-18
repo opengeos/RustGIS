@@ -2648,13 +2648,18 @@ fn layer_effects_and_imagery_tools() {
     // Mensuration.
     let m = s.run("raster.measure", &json!({"layer": dem, "kind": "height", "points": [[10.0015, 45.0385], [10.0205, 45.0195]]})).unwrap();
     assert!(m["metres"].as_f64().unwrap() > 50.0, "{m}");
-    s.run(
-        "raster.measure",
-        &json!({"layer": dem, "kind": "volume", "points": [[10.015, 45.015], [10.025, 45.015], [10.025, 45.025], [10.015, 45.025]]}),
-    )
-    .unwrap();
+    let volume =
+        json!({"layer": dem, "kind": "volume", "points": [[10.015, 45.015], [10.025, 45.015], [10.025, 45.025], [10.015, 45.025]]});
+    let on_earth = s.run("raster.measure", &volume).unwrap()["cubicMetresAbove"].as_f64().unwrap();
     s.run("raster.measure", &json!({"kind": "area", "points": [[0, 0], [1, 0], [1, 1]]})).unwrap();
     assert_eq!(s.run("raster.measurements", &Value::Null).unwrap().as_array().unwrap().len(), 3);
+    // On Mars the degree cells of this raster are Mars' size: the same heights over a smaller
+    // ground (#223).
+    s.run("map.body", &json!({"name": "mars", "basemap": false})).unwrap();
+    let on_mars = s.run("raster.measure", &volume).unwrap()["cubicMetresAbove"].as_f64().unwrap();
+    let k = rustgis_geom::Body::get("mars").ratio();
+    assert!(on_earth > 0.0 && (on_mars / on_earth - k * k).abs() < 1e-9, "{on_earth} {on_mars}");
+    s.run("map.body", &json!({"name": "earth"})).unwrap();
     // Workspaces: an orthomosaic of two rasters, a DSM mosaic and its mesh.
     s.run("imagery.workspace", &json!({"kind": "ortho", "name": "Valley", "images": [dem, "dem_later"]})).unwrap();
     s.run("imagery.workspaceOptions", &json!({"name": "Valley", "cellSize": 0.002})).unwrap();

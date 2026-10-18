@@ -767,6 +767,8 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
             let base = f(p, "base");
             let rings = vec![pts.clone()];
             let (cx, cy) = d.cell_size_m();
+            // A geographic raster's cells are degrees, measured on the Earth: on the map's body.
+            let (cx, cy) = if d.crs.is_geographic() { (body.length(cx), body.length(cy)) } else { (cx, cy) };
             let (mut above, mut below, mut n, mut lowest) = (0.0, 0.0, 0usize, f64::INFINITY);
             let mut cells = Vec::new();
             let mut e = Extent::EMPTY;
