@@ -47,6 +47,10 @@ pub struct Server {
     /// Whether the session is the project the user has open (the desktop app's relay), so
     /// commands that replace it stay the user's. Off for `rustgis-cli mcp`'s own session.
     pub users_project: bool,
+    /// Full access, which the user turned on in the desktop app: no command is refused, the
+    /// user's own automation (scripts, tasks, models, plugin commands and management) included,
+    /// as from a scripting console.
+    pub full_access: bool,
 }
 
 impl Default for Server {
@@ -74,7 +78,7 @@ impl Server {
     /// A server with the built-in skills. `rustgis-cli mcp` and the desktop's relay replace them
     /// with the skills switched on (`skills::installed`): the user's, the plugins' and shared ones.
     pub fn new(allow_access: bool) -> Self {
-        Self { allow_access, skills: crate::skills::built_in(), users_project: false }
+        Self { allow_access, skills: crate::skills::built_in(), users_project: false, full_access: false }
     }
 
     /// Handles one message (a line of JSON): the reply to send, or `None` for a notification or
@@ -187,6 +191,9 @@ impl Server {
 
     /// Why this server won't run a call, if it won't.
     pub fn refusal(&self, s: &Session, call: &ToolCall) -> Option<String> {
+        if self.full_access {
+            return None;
+        }
         // A script is refused when any of its lines would be, before any of it runs. A script
         // that doesn't parse runs to say so.
         if call.name == "run" {

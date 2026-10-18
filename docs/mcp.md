@@ -75,7 +75,11 @@ starts the relay and shows what an agent needs to connect: the MCP server config
 write files and use the network, without `--yes`. RustGIS remembers the choice and starts the
 relay with the app. The **MCP Relay** command (Help menu, or Command Search with Ctrl+K) starts the
 relay too, without that: attached agents then have the access their `--yes` asks for.
-The relay is off until the box is ticked or that command runs. While it runs, the status bar shows `MCP relay · n attached`,
+Under it, **Full access** (off unless you tick it, and remembered) lifts every refusal for
+agents attached with the relay's own token. They may then also run scripts, tasks and models, and
+install, remove and run plugins: what you could do yourself in RustGIS. While it's on, the status
+bar reads `MCP relay · full access · n attached` in red. Agents the app starts itself keep their
+own grants' rules. The relay is off until the box is ticked or that command runs. While it runs, the status bar shows `MCP relay · n attached`,
 where n is the number of authenticated clients; hovering shows `Stop MCP relay`, and clicking
 it stops the relay.
 
@@ -171,6 +175,7 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - Token required: `relay_drops_connections_without_the_token`
 - Parse error after attach: `relay_returns_parse_error_after_attach_and_stays_usable`
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
+- Full access, for the relay's own token only: `relay_full_access_lifts_the_refusals_for_its_own_token_only`
 - The open project stays the user's: `relay_keeps_project_commands_for_the_user`
 - Timed-out command never runs: `relay_cancels_a_timed_out_command_so_it_never_runs`
 - Stop cleanup: `relay_stop_closes_clients_and_removes_the_token`
@@ -215,7 +220,9 @@ Your agent asks you before each tool call, and the server adds its own limits:
   text (it could bring in web layers). Without it, the agent can still work with the data you
   gave the server and with the built-in sample, basemaps and geoprocessing. `view_map` draws
   the web tile layers the project you opened already has, fetching their tiles.
-- Plugin management, scripts, tasks, models and the GeoLibre runner are never run from here.
+- Plugin management, scripts, tasks, models and the GeoLibre runner are never run from here,
+  unless you turned on **Full access** for agents in the desktop app. That applies only to agents
+  attached to it with the relay's own token.
 - In private-server mode, opening, replacing and undoing in the project are allowed: the project
   is the agent's own. With `--attach`, these operations affect the project open in the desktop app.
 

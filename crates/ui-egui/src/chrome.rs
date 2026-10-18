@@ -359,16 +359,23 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                     // its authenticated client count is shown and a click stops it. Desktop only.
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        if let Some(n) = app.relay.as_ref().map(|r| r.attached_clients()) {
-                            let resp = ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(crate::i18n::fmt("MCP relay · {n} attached", &[("n", &n.to_string())]))
-                                        .size(11.5)
-                                        .color(if n > 0 { t.accent_text } else { t.text_dim }),
+                        if let Some((n, full)) = app.relay.as_ref().map(|r| (r.attached_clients(), r.full_access())) {
+                            // Full access is shown apart: agents may run anything then.
+                            let (text, color) = if full {
+                                (crate::i18n::fmt("MCP relay · full access · {n} attached", &[("n", &n.to_string())]), t.red)
+                            } else {
+                                (
+                                    crate::i18n::fmt("MCP relay · {n} attached", &[("n", &n.to_string())]),
+                                    if n > 0 { t.accent_text } else { t.text_dim },
                                 )
-                                .sense(Sense::click()),
-                            );
-                            if resp.on_hover_text(tl!("Stop MCP relay")).clicked() {
+                            };
+                            let resp = ui.add(egui::Label::new(egui::RichText::new(text).size(11.5).color(color)).sense(Sense::click()));
+                            let hover = if full {
+                                tl!("Agents have full access: they may run scripts, tasks, models and plugins. Click to stop the MCP relay")
+                            } else {
+                                tl!("Stop MCP relay")
+                            };
+                            if resp.on_hover_text(hover).clicked() {
                                 let _ = app.run("ui.mcpRelay", json!({"stop": true}));
                             }
                             sep(ui, &t);

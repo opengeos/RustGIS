@@ -12,6 +12,8 @@ use crate::theme::Tokens;
 
 /// The preference that remembers the choice.
 pub const PREF: &str = "agents_control";
+/// The preference that remembers whether agents have full access.
+pub const FULL_PREF: &str = "agents_full_access";
 
 #[derive(Default)]
 pub struct ConnectState {
@@ -21,11 +23,19 @@ pub struct ConnectState {
     resumed: bool,
     /// Why the relay couldn't start, when it couldn't.
     error: Option<String>,
+    /// Full access, once read from the preferences.
+    full: Option<bool>,
 }
 
 /// Whether the user lets agents control RustGIS.
 pub fn enabled(app: &RustGisApp) -> bool {
     app.connect.on.unwrap_or_else(|| app.services.load_pref.as_ref().and_then(|l| l(PREF)).as_deref() == Some("on"))
+}
+
+/// Whether agents have full access: no command refused, scripts, tasks, models and plugins
+/// included. Only while agents are on.
+pub fn full_access(app: &RustGisApp) -> bool {
+    enabled(app) && app.connect.full.unwrap_or_else(|| app.services.load_pref.as_ref().and_then(|l| l(FULL_PREF)).as_deref() == Some("on"))
 }
 
 /// At launch, starts the relay when the user had agents turned on.
@@ -117,6 +127,22 @@ pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         if let Some(relay) = &app.relay {
             relay.set_allow_access(on);
+            relay.set_full_access(full_access(app));
+        }
+    }
+    if on {
+        let mut full = full_access(app);
+        let hint = tl!(
+            "Agents may also run scripts, tasks and models, and install, remove and run plugins: anything you could do yourself. Turn it on only for an agent you trust with your computer."
+        );
+        if ui.checkbox(&mut full, tl!("Full access")).on_hover_text(hint).changed() {
+            app.connect.full = Some(full);
+            if let Some(save) = &app.services.save_pref {
+                save(FULL_PREF, if full { "on" } else { "off" });
+            }
+            if let Some(relay) = &app.relay {
+                relay.set_full_access(full);
+            }
         }
     }
     if let Some(e) = &app.connect.error {
@@ -169,6 +195,18 @@ mod tests {
         let error = app.connect.error.as_ref().unwrap();
         assert!(app.session.notices_since(mark).iter().any(|n| &n.text == error));
     }
+    /// Full access counts only while agents are on, and is read from its own preference.
+    #[test]
+    fn full_access_needs_agents_on() {
+        let mut app = RustGisApp::with_sample();
+        app.services.load_pref = Some(Box::new(|key: &str| (key == FULL_PREF).then(|| "on".to_string())));
+        assert!(!full_access(&app), "agents are off");
+        app.connect.on = Some(true);
+        assert!(full_access(&app));
+        app.connect.full = Some(false);
+        assert!(!full_access(&app));
+    }
+
     #[test]
     fn explicit_stop_updates_cached_and_remembered_choice() {
         use std::sync::{Arc, Mutex};
