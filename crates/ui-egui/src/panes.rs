@@ -3095,10 +3095,9 @@ fn raster_default_buttons(app: &mut RustGisApp, ui: &mut Ui, style: &RasterStyle
             .add_enabled(changed, egui::Button::new(tl!("Reset Default")).small())
             .on_hover_text(tl!("Draw new single-band rasters with the inverted grey stretch again."))
             .clicked()
+            && let Err(e) = app.run("raster.setDefaultStyle", json!({"reset": true}))
         {
-            if let Err(e) = app.run("raster.setDefaultStyle", json!({"reset": true})) {
-                app.session.notify(e, true);
-            }
+            app.session.notify(e, true);
         }
     });
 }
