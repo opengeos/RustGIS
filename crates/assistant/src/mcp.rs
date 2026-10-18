@@ -44,6 +44,9 @@ pub struct Server {
     pub allow_access: bool,
     /// The skills offered as prompts ([`crate::skills`]).
     pub skills: Vec<crate::skills::Skill>,
+    /// Whether the session is the project the user has open (the desktop app's relay), so
+    /// commands that replace it stay the user's. Off for `rustgis-cli mcp`'s own session.
+    pub users_project: bool,
 }
 
 impl Default for Server {
@@ -62,15 +65,16 @@ const INVALID_PARAMS: i64 = -32602;
 /// MCP's code for a resource that doesn't exist.
 const RESOURCE_NOT_FOUND: i64 = -32002;
 
-/// Commands that replace the project or step through its history. They are reserved to the user
-/// in the desktop app, to keep their work; here the session is the client's own.
+/// Commands that replace the project. They are reserved to the user in the desktop app, to keep
+/// their work, and refused on its relay ([`Server::users_project`]); in `rustgis-cli mcp` the
+/// session is the client's own.
 const PROJECT_COMMANDS: &[&str] = &["project.new", "project.open", "project.openText", "project.sample", "project.fromTemplate"];
 
 impl Server {
     /// A server with the built-in skills. `rustgis-cli mcp` and the desktop's relay replace them
     /// with the skills switched on (`skills::installed`): the user's, the plugins' and shared ones.
     pub fn new(allow_access: bool) -> Self {
-        Self { allow_access, skills: crate::skills::built_in() }
+        Self { allow_access, skills: crate::skills::built_in(), users_project: false }
     }
 
     /// Handles one message (a line of JSON): the reply to send, or `None` for a notification or
@@ -184,7 +188,13 @@ impl Server {
     /// Why this server won't run a call, if it won't.
     pub fn refusal(&self, s: &Session, call: &ToolCall) -> Option<String> {
         let (id, params) = tools::target(call)?;
-        if user_only(&id) && !PROJECT_COMMANDS.contains(&id.as_str()) && !matches!(id.as_str(), "edit.undo" | "edit.redo") {
+        let project = PROJECT_COMMANDS.contains(&id.as_str());
+        if project && self.users_project {
+            return Some(format!(
+                "'{id}' is reserved to the user: it would replace the project they have open in RustGIS. Work on the open project instead, or ask the user to open another"
+            ));
+        }
+        if user_only(&id) && !project && !matches!(id.as_str(), "edit.undo" | "edit.redo") {
             return Some(format!(
                 "'{id}' is reserved to the user (plugin management, scripts, tasks, models and the GeoLibre runner); run it in RustGIS itself"
             ));

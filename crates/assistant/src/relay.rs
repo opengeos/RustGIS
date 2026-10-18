@@ -609,7 +609,8 @@ impl Relay {
                 req.state.store(CANCELLED, SeqCst);
                 continue;
             };
-            let mut server = Server::new(allow_access);
+            // The session is the user's open project: commands that replace it stay theirs.
+            let mut server = Server { users_project: true, ..Server::new(allow_access) };
             if asks_for_skills(&req.line) {
                 server.skills = skills.get_or_insert_with(crate::skills::installed).clone();
             }
@@ -953,7 +954,7 @@ fn request_id(msg: &Value) -> Value {
 fn approval_summary(s: &Session, line: &str) -> Option<String> {
     let msg: Value = serde_json::from_str(line).ok()?;
     let messages = msg.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&msg));
-    let server = Server { allow_access: true, skills: Vec::new() };
+    let server = Server { allow_access: true, skills: Vec::new(), users_project: true };
     let mut summaries = Vec::new();
     for msg in messages {
         if msg.get("method").and_then(Value::as_str) != Some("tools/call") || msg.get("id").is_none() {
@@ -1282,6 +1283,55 @@ mod tests {
         assert!(reply["result"]["content"][0]["text"].as_str().unwrap().contains("--yes"), "{reply}");
         assert!(!out.exists(), "the file command did not run");
         let _ = std::fs::remove_file(out);
+        relay.stop();
+    }
+
+    /// The session behind the relay is the user's open project: an attached agent may not
+    /// replace it, even with file and network access, and the project stays as it was.
+    #[test]
+    fn relay_keeps_project_commands_for_the_user() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        let layers = s.map().layers.len();
+        let undo = s.undo_depth();
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, true);
+        let project = json!({"version": 1}).to_string();
+        let calls = [
+            ("project.new", json!({})),
+            ("project.sample", json!({})),
+            ("project.fromTemplate", json!({"template": "blank"})),
+            ("project.openText", json!({"text": project})),
+            ("project.open", json!({"path": "elsewhere.rgis"})),
+        ];
+        for (id, (command, params)) in (10..).zip(calls) {
+            let call = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+                "name": "run_command",
+                "arguments": {"command": command, "params": params}
+            }});
+            writeln!(client, "{call}").unwrap();
+            client.flush().unwrap();
+            settle(&relay, &mut s);
+            let reply = reply(&client);
+            assert_eq!(reply["result"]["isError"], true, "{command}: {reply}");
+            assert!(reply["result"]["content"][0]["text"].as_str().unwrap().contains("reserved to the user"), "{command}: {reply}");
+        }
+        assert_eq!(s.map().layers.len(), layers, "the user's project was replaced");
+        assert_eq!(s.undo_depth(), undo, "a refused command left an undo step");
+        // Undo and redo stay: the agent's own steps are the user's to watch and the agent's to take back.
+        writeln!(client, "{}", add_sample_call(20)).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        assert_eq!(reply(&client)["result"]["isError"], false);
+        let undo_call = json!({"jsonrpc": "2.0", "id": 21, "method": "tools/call", "params": {
+            "name": "run_command", "arguments": {"command": "edit.undo", "params": {}}
+        }});
+        writeln!(client, "{undo_call}").unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        let reply = reply(&client);
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        assert_eq!(s.map().layers.len(), layers, "{reply}");
         relay.stop();
     }
 

@@ -97,7 +97,10 @@ rustgis-cli mcp --attach 9000 --yes      # another port, with file and network a
 
 Attached calls run on the open app's session through the same tools and refusal policy as the
 private server. File and network commands need `--yes`, unless **Let your Agents Control RustGIS**
-is ticked.
+is ticked. The session is the project you have open, so an attached agent can't replace it:
+`project.new`, `project.open`, `project.openText`, `project.sample` and `project.fromTemplate`
+are refused, with or without `--yes`. `edit.undo` and `edit.redo` work, in the same history as
+your own steps.
 
 An agent the app starts itself gets a run-scoped token instead of the relay's own:
 `rustgis-cli mcp --attach PORT --token-file FILE`. Each such grant carries its own file and network
@@ -168,6 +171,7 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - Token required: `relay_drops_connections_without_the_token`
 - Parse error after attach: `relay_returns_parse_error_after_attach_and_stays_usable`
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
+- The open project stays the user's: `relay_keeps_project_commands_for_the_user`
 - Timed-out command never runs: `relay_cancels_a_timed_out_command_so_it_never_runs`
 - Stop cleanup: `relay_stop_closes_clients_and_removes_the_token`
 - Last owner drop: `relay_last_owner_drop_closes_the_listener`
