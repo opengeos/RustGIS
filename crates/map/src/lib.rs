@@ -22,9 +22,9 @@ pub mod view;
 pub mod world;
 
 pub use camera::Camera;
-pub use color::{Ramp, Rgba};
+pub use color::{Ramp, RampGroup, Rgba};
 pub use globe::{Globe, Projection};
-pub use raster::{RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
+pub use raster::{RasterDefaults, RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
 pub use symbology::{ClassMethod, LabelPlacement, Labeling, Marker, Renderer, Symbol};
 pub use tiles::{TileKind, TileLayer};
 

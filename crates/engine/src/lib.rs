@@ -267,6 +267,9 @@ pub struct Session {
     /// Favourite, recent and saved data sources (kept with the app's preferences, not the
     /// project).
     pub sources: sources::Sources,
+    /// How rasters added from now on are drawn (`raster.setDefaultStyle`; kept with the app's
+    /// preferences, not the project).
+    pub raster_defaults: rustgis_map::RasterDefaults,
     pub registry: Registry,
     /// Bumped on every change so views can cache.
     pub revision: u64,
@@ -409,6 +412,7 @@ impl Session {
             path: None,
             dirty: false,
             sources: sources::Sources::default(),
+            raster_defaults: rustgis_map::RasterDefaults::default(),
             registry: Registry { commands: cmd::all() },
             revision: 1,
             tool: Tool::Explore,

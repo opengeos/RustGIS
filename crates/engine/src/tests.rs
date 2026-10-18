@@ -7032,3 +7032,58 @@ fn raster_stretch_custom_bounds() {
     // Projects saved before the custom stretch still load.
     assert_eq!(serde_json::from_str::<Stretch>("\"MinMax\"").unwrap(), Stretch::MinMax);
 }
+
+#[test]
+fn default_raster_style_applies_to_new_rasters() {
+    use rustgis_map::{RasterRenderer, Resampling, Stretch};
+    let mut s = world();
+    s.dirty = false;
+    let undo = s.undo_label();
+    // The layer just added (rasters go in under the vectors, the newest on top of them).
+    let style = |s: &Session| s.map().layer(s.active_layer.unwrap()).unwrap().raster.as_ref().unwrap().style.clone();
+    // Without settings: the inverted grey stretch.
+    let shown = s.run("raster.setDefaultStyle", &json!({})).unwrap();
+    assert_eq!(shown["ramp"], "Greys");
+    assert_eq!(shown["invert"], true);
+
+    let shown = s
+        .run(
+            "raster.setDefaultStyle",
+            &json!({"ramp": "viridis", "invert": false, "stretch": "standardDeviation", "n": 2.5, "resampling": "bilinear"}),
+        )
+        .unwrap();
+    assert_eq!(shown, json!({"ramp": "Viridis", "invert": false, "stretch": "standardDeviation", "n": 2.5, "resampling": "Bilinear"}));
+    assert!(!s.dirty && s.undo_label() == undo, "an app setting, not a project change");
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let st = style(&s);
+    assert_eq!(st.renderer, RasterRenderer::Stretch { band: 0, ramp: rustgis_map::Ramp::Viridis, invert: false });
+    assert_eq!(st.stretch, Stretch::StandardDeviation { n: 2.5 });
+    assert_eq!(st.resampling, Resampling::Bilinear);
+    // Colour images keep their colours.
+    s.run("layer.addDataBytes", &json!({"fileName": "scene.tif", "data": two_class_b64()})).unwrap();
+    assert!(matches!(style(&s).renderer, RasterRenderer::Rgb { .. }), "{:?}", style(&s).renderer);
+    assert_eq!(style(&s).resampling, Resampling::Nearest);
+
+    // From a layer: its ramp, inversion, stretch and resampling.
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64(), "name": "dem2"})).unwrap();
+    s.run("raster.symbology", &json!({"type": "stretch", "ramp": "Batlow", "invert": true})).unwrap();
+    s.run("raster.stretch", &json!({"type": "minMax"})).unwrap();
+    s.run("raster.resampling", &json!({"type": "nearest"})).unwrap();
+    let shown = s.run("raster.setDefaultStyle", &json!({"fromLayer": true})).unwrap();
+    assert_eq!(shown, json!({"ramp": "Batlow", "invert": true, "stretch": "minMax", "resampling": "Nearest"}));
+    // A custom stretch is in one raster's units: refused either way, the settings unchanged.
+    s.run("raster.stretch", &json!({"type": "custom", "min": 1, "max": 2})).unwrap();
+    assert!(s.run("raster.setDefaultStyle", &json!({"fromLayer": true})).is_err());
+    assert!(s.run("raster.setDefaultStyle", &json!({"stretch": "custom"})).is_err());
+    assert!(s.run("raster.setDefaultStyle", &json!({"ramp": "no such ramp"})).is_err());
+    assert!(s.run("raster.setDefaultStyle", &json!({"resampling": "cubic-ish"})).is_err());
+    s.run("raster.symbology", &json!({"type": "classify"})).unwrap();
+    assert!(s.run("raster.setDefaultStyle", &json!({"fromLayer": true})).is_err(), "only a stretch");
+    assert_eq!(s.raster_defaults.ramp, rustgis_map::Ramp::Batlow);
+
+    // Reset: back to the grey stretch, and new rasters are drawn as before.
+    s.run("raster.setDefaultStyle", &json!({"reset": true})).unwrap();
+    assert_eq!(s.raster_defaults, rustgis_map::RasterDefaults::default());
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64(), "name": "dem3"})).unwrap();
+    assert_eq!(style(&s).renderer, RasterRenderer::Stretch { band: 0, ramp: rustgis_map::Ramp::Greys, invert: true });
+}
