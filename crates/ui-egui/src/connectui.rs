@@ -223,7 +223,7 @@ mod tests {
         app.logic(&ctx);
         assert!(bridge.has_wake(), "the frame gives the bridge its wake");
         // Writes a script and runs frames until the app says how it went.
-        let mut run = |app: &mut RustGisApp, script: &str| {
+        let run = |app: &mut RustGisApp, script: &str| {
             let mark = app.session.notice_mark();
             std::fs::write(bridge.command_path(), script).unwrap();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
