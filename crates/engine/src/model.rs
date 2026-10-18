@@ -194,6 +194,13 @@ pub fn validate(s: &Session, g: &ModelGraph) -> Vec<Problem> {
             out.push(problem("type-mismatch", Some(&e.to), format!("\"{}\" takes a {} layer.", tp.label, kind_name(tp.kind))));
         }
     }
+    // One output per result: a second would rename the layer the first named.
+    let mut kept: HashSet<&str> = HashSet::new();
+    for e in g.edges.iter().filter(|e| node(&e.to).is_some_and(|n| n.kind == ModelNodeKind::Output)) {
+        if !kept.insert(e.from.as_str()) {
+            out.push(problem("shared-output", Some(&e.to), "That result already has an output; a result keeps one name."));
+        }
+    }
     for n in &g.nodes {
         let wired = |port: &str| wired_ports.contains(&(n.id.as_str(), port));
         match n.kind {
@@ -504,6 +511,8 @@ fn run_into(s: &mut Session, g: &ModelGraph, trusted: bool, report: &mut RunRepo
     // The layer each node hands on, and the layers each tool node added (by id).
     let mut value: HashMap<&str, String> = HashMap::new();
     let mut made: Vec<(&str, Vec<u32>)> = Vec::new();
+    // The layer (by id) each tool node handed on, for its output to rename.
+    let mut handed: HashMap<&str, u32> = HashMap::new();
     let mut ran = Vec::new();
     for i in order {
         let Some(n) = g.nodes.get(i) else { continue };
@@ -541,7 +550,11 @@ fn run_into(s: &mut Session, g: &ModelGraph, trusted: bool, report: &mut RunRepo
                     Ok(r) => {
                         let ids: Vec<u32> = s.map().layers.iter().filter(|l| !before.contains(&l.id)).map(|l| l.id).collect();
                         // The first layer it added (else the first output it recorded: a table).
-                        let first = ids.iter().rev().find_map(|id| s.map().layer(*id).map(|l| l.name.clone())).or_else(|| {
+                        let first_id = ids.iter().rev().copied().find(|id| s.map().layer(*id).is_some());
+                        if let Some(id) = first_id {
+                            handed.insert(n.id.as_str(), id);
+                        }
+                        let first = first_id.and_then(|id| s.map().layer(id).map(|l| l.name.clone())).or_else(|| {
                             (s.project.gp_history.len() > history)
                                 .then(|| s.project.gp_history.last().and_then(|h| h.outputs.first().cloned()))
                                 .flatten()
@@ -568,9 +581,13 @@ fn run_into(s: &mut Session, g: &ModelGraph, trusted: bool, report: &mut RunRepo
                 };
                 let wanted = n.name.as_deref().map(str::trim).filter(|x| !x.is_empty()).unwrap_or("Model output");
                 let wanted: String = wanted.chars().take(200).collect();
-                // A tool's own layer is renamed; an input passed straight through stays as it is.
-                let from_tool = g.edges.iter().filter(|e| e.to == n.id).any(|e| made.iter().any(|(id, _)| *id == e.from));
-                let kept = if from_tool { rename(s, &layer, &wanted) } else { layer };
+                // A tool's own layer is renamed; an input passed straight through (or a tool's
+                // table) stays as it is.
+                let source = g.edges.iter().find(|e| e.to == n.id && e.to_port == IN).and_then(|e| handed.get(e.from.as_str()).copied());
+                let kept = match source {
+                    Some(id) => rename(s, id, &wanted).unwrap_or(layer),
+                    None => layer,
+                };
                 // Tools after the renamed one read it by its new name.
                 if let Some(e) = g.edges.iter().find(|e| e.to == n.id && e.to_port == IN) {
                     value.insert(e.from.as_str(), kept.clone());
@@ -607,11 +624,11 @@ fn run_into(s: &mut Session, g: &ModelGraph, trusted: bool, report: &mut RunRepo
     Ok(ran)
 }
 
-/// Renames the newest layer called `old` to `wanted` (made unique among the map's other layers)
-/// and returns the name it got.
-fn rename(s: &mut Session, old: &str, wanted: &str) -> String {
+/// Renames layer `id` to `wanted` (made unique among the map's other layers) and returns the
+/// name it got; `None` when the map no longer has it.
+fn rename(s: &mut Session, id: u32, wanted: &str) -> Option<String> {
     let m = s.map_mut();
-    let Some(id) = m.layer_by_name(old).map(|l| l.id) else { return old.to_string() };
+    m.layer(id)?;
     let taken = |n: &str| m.layers.iter().any(|l| l.id != id && l.name.eq_ignore_ascii_case(n));
     let mut name = wanted.to_string();
     let mut k = 1;
@@ -625,7 +642,7 @@ fn rename(s: &mut Session, old: &str, wanted: &str) -> String {
         l.name = name.clone();
         l.dataset.name = name.clone();
     }
-    name
+    Some(name)
 }
 
 /// The JSON a model file holds (`*.model.json`).

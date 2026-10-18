@@ -90,6 +90,8 @@ pub struct ModelBuilder {
     /// The problems of the graph, kept until it or the project changes (the project's
     /// revision): checked every frame otherwise.
     problems: Option<(u64, ModelGraph, Vec<model::Problem>)>,
+    /// `Session::project_starts` when the canvas was set up: another project drops it.
+    project: u64,
 }
 
 /// An action waiting for "Discard unsaved changes?".
@@ -312,6 +314,7 @@ pub fn command(app: &mut RustGisApp, p: &Value) -> Result<(), String> {
 /// Opens ModelBuilder: on the model named (asking first if the canvas has unsaved changes), or
 /// as it was left.
 pub fn open(app: &mut RustGisApp, name: Option<&str>) -> Result<(), String> {
+    forget_old_project(app);
     if let Some(n) = name {
         if !app.session.project.models.iter().any(|m| m.name.eq_ignore_ascii_case(n)) {
             return Err(format!("no model '{n}'"));
@@ -646,9 +649,13 @@ fn toolbar(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, problems: &[model::Pro
                 .on_hover_text(tl!("Copy a model.run command that runs this model, for the Script pane or Python"))
                 .clicked()
             {
-                let g = serde_json::to_string(&app.mb.graph).unwrap_or_default();
                 let name = serde_json::to_string(app.mb.name.trim()).unwrap_or_default();
-                ui.ctx().copy_text(format!("model.run {{\"name\": {name}, \"graph\": {g}}}"));
+                // A model from a file runs by name, as saved, so the engine holds it to its rules.
+                let text = match (&app.mb.saved_as, app.mb.imported) {
+                    (Some(saved), true) => format!("model.run {}", json!({"name": saved})),
+                    _ => format!("model.run {{\"name\": {name}, \"graph\": {}}}", serde_json::to_string(&app.mb.graph).unwrap_or_default()),
+                };
+                ui.ctx().copy_text(text);
                 app.mb.log(tl!("Copied the command."), LogKind::Ok);
             }
         });
@@ -1652,8 +1659,17 @@ fn confirm(app: &mut RustGisApp, ctx: &egui::Context) {
     }
 }
 
-/// Hides ModelBuilder when another map or layout came into view.
+/// Drops the canvas of a project no longer open (its model would be saved into this one).
+fn forget_old_project(app: &mut RustGisApp) {
+    if app.mb.project != app.session.project_starts {
+        app.mb = ModelBuilder { project: app.session.project_starts, search: std::mem::take(&mut app.mb.search), ..Default::default() };
+    }
+}
+
+/// Hides ModelBuilder when another map or layout came into view, and closes it when another
+/// project was opened.
 pub fn follow_view(app: &mut RustGisApp) {
+    forget_old_project(app);
     if app.mb.active && app.mb.view_key != (app.session.project.active_map, app.session.active_layout) {
         app.mb.active = false;
     }
@@ -1770,6 +1786,18 @@ mod tests {
         app.mb.confirm = None;
         proceed(&mut app, Pending::Close);
         assert!(!app.mb.open && !app.mb.shown());
+    }
+
+    /// Opening another project closes ModelBuilder and drops its canvas.
+    #[test]
+    fn another_project_drops_the_canvas() {
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.modelBuilder", Value::Null).unwrap();
+        app.mb.add(&Add::Tool("buffer"), pos2(0.0, 0.0));
+        app.mb.saved_as = Some("Old".into());
+        app.run("project.new", Value::Null).unwrap();
+        follow_view(&mut app);
+        assert!(!app.mb.open && app.mb.graph.nodes.is_empty() && app.mb.saved_as.is_none());
     }
 
     /// Old models (steps with `%n`) open on the canvas as graphs.

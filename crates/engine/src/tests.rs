@@ -8471,11 +8471,32 @@ fn model_graphs(s: &mut Session) {
         {"id": "t2", "kind": "tool", "tool": "dissolve", "params": {"field": "no_such_field"}}],
         "edges": [{"from": "i1", "fromPort": "out", "to": "t1", "toPort": "input"},
                   {"from": "t1", "fromPort": "out", "to": "t2", "toPort": "input"}]});
-    if s.run("model.run", &json!({"graph": fails})).is_err() {
-        let rep = s.model_run.clone().unwrap();
-        assert_eq!(rep.nodes.last().unwrap().status, "error");
-        assert_eq!(s.map().layers.len(), layers, "a failed run is undone");
+    s.run("model.run", &json!({"graph": fails})).unwrap_err();
+    let rep = s.model_run.clone().unwrap();
+    assert_eq!(rep.nodes.last().unwrap().status, "error");
+    assert_eq!(s.map().layers.len(), layers, "a failed run is undone");
+    // Two outputs on one result are refused.
+    let mut twice = graph.clone();
+    twice["nodes"].as_array_mut().unwrap().push(json!({"id": "o2", "kind": "output", "name": "Again"}));
+    twice["edges"].as_array_mut().unwrap().push(json!({"from": "t2", "fromPort": "out", "to": "o2", "toPort": "in"}));
+    let v = s.run("model.validate", &json!({"graph": twice})).unwrap();
+    assert!(v["problems"].as_array().unwrap().iter().any(|p| p["code"] == "shared-output"));
+    // An unsaved graph exports as passed.
+    let t = s.run("model.export", &json!({"name": "Unsaved", "graph": twice})).unwrap();
+    assert!(t["text"].as_str().unwrap().contains("Again"));
+    // Hostile graphs: repeated ids, unknown kinds and ports, edges to nowhere, huge positions.
+    for junk in [
+        json!({"nodes": [{"id": "a", "kind": "tool", "tool": "buffer", "x": 1e308}, {"id": "a", "kind": "weird"}, {"id": "b", "kind": "output"}, {"id": "", "kind": "input"}, 7],
+               "edges": [{"from": "a", "fromPort": "zz", "to": "b", "toPort": "nope"}, {"from": "b", "to": "a", "toPort": "input"}, {"from": "a", "to": "a", "toPort": "input"}, {"from": "q", "to": "a", "toPort": "input"}, "x"]}),
+        json!({"nodes": "x"}),
+        json!({"nodes": [{"id": "t", "kind": "tool", "tool": "buffer", "params": [1, 2]}], "edges": {}}),
+    ] {
+        let _ = s.run("model.validate", &json!({"graph": junk}));
+        let _ = s.run("model.run", &json!({"graph": junk}));
+        let _ = s.run("model.export", &json!({"graph": junk}));
+        let _ = s.run("model.save", &json!({"name": "Junk", "graph": junk}));
     }
+    let _ = s.run("model.remove", &json!({"name": "Junk"}));
 
     // A graph without positions is laid out along the flow.
     let g = rustgis_engine_graph(&fails);

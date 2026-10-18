@@ -34,7 +34,7 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"name"?: model (default: the last), "graph"?: graph}"#),
         C::new("model.export", "Export Model", "Analyze › Geoprocessing", export_model)
             .view()
-            .params(r#"{"name"?: model (default: the last), "path"?: "*.model.json" (else the file's text is returned)}"#),
+            .params(r#"{"name"?: model (default: the last), "graph"?: export this graph instead, "path"?: "*.model.json" (else the file's text is returned)}"#),
         C::new("model.remove", "Delete Model", "Browser", |s, p| {
             let n = ps(p, "name").ok_or("name is required")?;
             let before = s.project.models.len();
@@ -333,7 +333,7 @@ fn save_model(s: &mut Session, p: &Value) -> CmdResult {
 
 /// A model as a `*.model.json` file: written to `path`, or its text returned.
 fn export_model(s: &mut Session, p: &Value) -> CmdResult {
-    let (name, g, _) = model_graph(s, &json!({"name": p.get("name")}))?;
+    let (name, g, _) = model_graph(s, p)?;
     let text = serde_json::to_string_pretty(&crate::model::to_file(&name, &g)).map_err(|e| e.to_string())?;
     let file: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
     match ps(p, "path") {
