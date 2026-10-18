@@ -118,6 +118,9 @@ fn start_bridge(app: &mut RustGisApp) -> Result<(), String> {
     let started = rustgis_assistant::filebridge::FileBridge::start();
     let bridge = started?;
     bridge.set_allow_access(true);
+    bridge.set_full_access(full_access(app));
+    // What scripts do to the user's project is kept, as agents' calls are.
+    bridge.set_audit_dir(rustgis_assistant::audit::dir());
     app.file_bridge = Some(bridge);
     Ok(())
 }
@@ -202,6 +205,9 @@ pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
             app.connect.full = full;
             if let Some(relay) = &app.relay {
                 relay.set_full_access(full);
+            }
+            if let Some(bridge) = &app.file_bridge {
+                bridge.set_full_access(full);
             }
         }
     }

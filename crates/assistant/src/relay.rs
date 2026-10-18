@@ -931,7 +931,7 @@ impl Relay {
 }
 
 /// Whether a reply (or every reply in a batch) says its call worked.
-fn reply_ok(reply: Option<&str>) -> bool {
+pub(crate) fn reply_ok(reply: Option<&str>) -> bool {
     let Some(v) = reply.and_then(|r| serde_json::from_str::<Value>(r).ok()) else { return false };
     let replies = v.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&v));
     replies.iter().all(|r| r.get("error").is_none() && r.pointer("/result/isError") != Some(&Value::Bool(true)))
@@ -939,7 +939,7 @@ fn reply_ok(reply: Option<&str>) -> bool {
 
 /// Whether a message (or a batch) selects a layer: a `layer.select` command, on its own or as a
 /// line of a `run` script.
-fn selects_layer(line: &str) -> bool {
+pub(crate) fn selects_layer(line: &str) -> bool {
     let Ok(msg) = serde_json::from_str::<Value>(line) else { return false };
     let messages = msg.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&msg));
     messages.iter().filter_map(|m| m.get("params").and_then(|p| p.get("arguments"))).any(|a| {

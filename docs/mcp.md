@@ -136,7 +136,8 @@ meanwhile; until then they act on the one you have selected.
 Every tool call an attached agent makes is written to an audit log, one JSON line per call in a
 file per day (`2026-10-18.jsonl`) in the `mcp-audit` folder of the app-data folder
 (`~/.local/share/rustgis/mcp-audit` on Linux, `~/Library/Application Support/RustGIS/mcp-audit` on
-macOS, `%LOCALAPPDATA%\RustGIS\mcp-audit` on Windows). Each line holds `ts`, `source` (`mcp`),
+macOS, `%LOCALAPPDATA%\RustGIS\mcp-audit` on Windows). Each line holds `ts`, `source` (`mcp` for the relay and MCP over HTTP, `file` for the file
+bridge),
 `tool`, `command` or `script` when there is one, `args`, `success`, `duration_s` and `error`.
 Passwords, keys and tokens in the arguments, a `run` script's lines included, are replaced before
 they are written. On Linux and macOS the folder and files are readable by you only; on Windows they're protected by
@@ -171,7 +172,10 @@ Only one RustGIS at a time runs the bridge: a second copy's is refused while the
 (it holds `bridge.lock`). The bridge runs a script each time the file changes. Whatever the file held when the bridge started
 isn't run. While the bridge is on, `bridge-ready.json` there holds its `pid`, the two files' paths,
 `started_at`, the app `version` and a `schema` number. The folder is readable by this user only,
-like the relay's token.
+like the relay's token. Scripts run through the bridge are written to the audit log (`source:
+"file"`), and **Full access** applies to them as to agents attached with the relay's own token. The bridge is
+named `file bridge` in your undo history, so a script's `edit.undo` (alone on its line) takes back
+only the bridge's own steps. It also keeps its own active layer, as an agent does.
 
 ### Relay requirements
 
