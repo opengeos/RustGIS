@@ -233,10 +233,12 @@ fn slider(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, st
         if resp.dragged() {
             app.ui.plugin_panel.dragging = Some((pid.to_string(), id.to_string(), v));
         } else if dragging.is_some() || v != stored {
-            // Let go, clicked or moved with the keys: now it runs.
+            // Let go, clicked or moved with the keys: now it runs. A step button clicked on the
+            // same frame wins (its value was taken from the slider's before this frame's move).
+            // A range the plugin changed during a drag clamps the value each frame, and on release.
             app.ui.plugin_panel.dragging = None;
             if v != stored {
-                stepped = Some(v);
+                stepped.get_or_insert(v);
             }
         }
     });

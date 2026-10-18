@@ -453,6 +453,13 @@ fn a_panel_state_matches_only_its_declaration() {
         i.kind = "slider".into();
     }
     assert!(!state.matches(&retyped));
+    // A slider's declared range changed: matched again only by a state made from it.
+    let mut ranged = decl.clone();
+    if let Some(i) = ranged.items.iter_mut().find(|i| i.kind == "slider") {
+        i.max += 10;
+    }
+    assert!(!state.matches(&ranged));
+    assert!(PanelState::new(&ranged).matches(&ranged));
 }
 
 #[test]

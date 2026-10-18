@@ -200,16 +200,17 @@ pub struct PanelState {
     pub values: BTreeMap<String, Value>,
     /// Every widget's state, by id.
     pub items: BTreeMap<String, ItemState>,
+    /// The declaration this state was made from, to tell when the plugin was updated.
+    #[serde(skip)]
+    origin: PanelDecl,
 }
 
 impl PanelState {
-    /// Whether this state was made from `decl`'s widgets: the same ids, and the same checkboxes
-    /// and sliders holding values. A plugin updated with another panel doesn't match.
+    /// Whether this state was made from `decl`. A plugin updated with another panel (other
+    /// widgets, a slider's range or a default) doesn't match. A plain comparison: it runs on every
+    /// command of a panel plugin and every frame the panel shows.
     pub fn matches(&self, decl: &PanelDecl) -> bool {
-        let fresh = PanelState::new(decl);
-        self.items.keys().eq(fresh.items.keys())
-            && self.values.len() == fresh.values.len()
-            && self.values.iter().zip(&fresh.values).all(|((k, v), (fk, fv))| k == fk && v.is_boolean() == fv.is_boolean())
+        self.origin == *decl
     }
 
     /// The state a panel starts in: what `plugin.json` declares.
@@ -241,7 +242,7 @@ impl PanelState {
                 },
             );
         }
-        PanelState { values, items }
+        PanelState { values, items, origin: decl.clone() }
     }
 
     /// A checkbox's value.
