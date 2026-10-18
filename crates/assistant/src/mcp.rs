@@ -405,12 +405,17 @@ pub fn snapshot_wait(a: &Value) -> f64 {
 /// A `snapshot` drawn offscreen at `max_width` in the view's shape, with `note` saying why when it
 /// was asked of the screen.
 pub fn render_snapshot(s: &mut Session, a: &Value, note: Option<&str>) -> Result<Value, String> {
-    let width = a.get("max_width").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(1024.0).clamp(64.0, MAX_VIEW);
-    // The view's shape, so the image shows what the window does.
+    let asked = a.get("max_width").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(1024.0).clamp(64.0, MAX_VIEW);
+    // The view's shape, so the image shows what the window does: a very tall view is narrowed
+    // to fit rather than squashed.
     let (vw, vh) = s.view_size;
-    let height = if vw >= 1.0 && vh >= 1.0 { width * vh / vw } else { width * 0.625 }.clamp(64.0, MAX_VIEW);
+    let shape = if vw >= 1.0 && vh >= 1.0 { vh / vw } else { 0.625 };
+    let width = asked.min(MAX_VIEW / shape.max(f64::MIN_POSITIVE)).max(64.0);
+    let height = (width * shape).clamp(64.0, MAX_VIEW);
     let png = rustgis_engine::cmd::share::map_png(s, Some(width), Some(height), None)?;
-    snapshot_result(s, &png, "render", true, a, note)
+    // Tiles still on their way are missing from it.
+    let settled = rustgis_engine::render::rustgis_tiles::cache::in_flight() == 0;
+    snapshot_result(s, &png, "render", settled, a, note)
 }
 
 /// A `snapshot` result: the image, and the view it shows as JSON. `mode` is how it was made

@@ -10,9 +10,13 @@ use crate::RustGisApp;
 /// A screenshot not back this long after the wait is given up, and the map drawn offscreen.
 const SCREENSHOT_GRACE: f64 = 10.0;
 
-/// The tag on the screenshot this asks egui for, so only that one is taken as the snapshot.
-#[derive(Debug)]
-struct RelayShotTag;
+/// The tag on the screenshot this asks egui for, numbered, so only that snapshot's screenshot is
+/// taken for it (not a late one of an earlier snapshot that timed out).
+#[derive(Debug, PartialEq)]
+struct RelayShotTag(u64);
+
+/// The next screenshot's number.
+static NEXT_TAG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// A screen snapshot under way.
 #[derive(Debug, Clone, Copy)]
@@ -24,6 +28,8 @@ pub struct Shot {
     /// When the screenshot was asked for: whether the map had finished drawing, and where the
     /// map was on screen at what scale, which the crop uses whatever moves meanwhile.
     asked: Option<(bool, Rect, f32)>,
+    /// The number its screenshot is tagged with, once asked for.
+    tag: u64,
 }
 
 /// Whether the map view was drawn on the last frame, so a snapshot can capture it.
@@ -47,6 +53,7 @@ fn settled(app: &RustGisApp) -> bool {
 pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(relay) = app.relay.clone() else {
         app.relay_shot = None;
+        app.map.hide_overlays = false;
         return;
     };
     let Some(request) = relay.screen_request() else {
@@ -55,7 +62,7 @@ pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
         return;
     };
     let now = ctx.input(|i| i.time);
-    let shot = *app.relay_shot.get_or_insert(Shot { started: now, wait: request.wait.as_secs_f64(), asked: None });
+    let shot = *app.relay_shot.get_or_insert(Shot { started: now, wait: request.wait.as_secs_f64(), asked: None, tag: 0 });
     let rect = view_rect(app, ctx);
     let finish = |app: &mut RustGisApp, png: Result<Vec<u8>, String>, settled: bool| {
         app.relay_shot = None;
@@ -67,7 +74,7 @@ pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
             let image = ctx.input(|i| {
                 i.events.iter().find_map(|e| match e {
                     egui::Event::Screenshot { image, user_data, .. }
-                        if user_data.data.as_ref().is_some_and(|d| d.downcast_ref::<RelayShotTag>().is_some()) =>
+                        if user_data.data.as_ref().and_then(|d| d.downcast_ref::<RelayShotTag>()) == Some(&RelayShotTag(shot.tag)) =>
                     {
                         Some(image.clone())
                     }
@@ -96,11 +103,12 @@ pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
             let done = settled(app);
             // At least a frame after the request, so the map shows what the agent last did.
             if now > shot.started && (done || now - shot.started >= shot.wait) {
-                app.relay_shot = Some(Shot { asked: Some((done, at, ctx.pixels_per_point())), ..shot });
+                let tag = NEXT_TAG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                app.relay_shot = Some(Shot { asked: Some((done, at, ctx.pixels_per_point())), tag, ..shot });
                 // Overlays leave only the frame being captured (this one draws after this), and
                 // come back with the screenshot.
                 app.map.hide_overlays = !request.overlays;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(RelayShotTag)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(RelayShotTag(tag))));
             }
         }
     }

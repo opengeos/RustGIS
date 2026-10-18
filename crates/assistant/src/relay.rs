@@ -547,11 +547,14 @@ impl Relay {
         if shot.req.state.load(SeqCst) != RUNNING {
             return;
         }
-        let result = match shot_png {
+        // A last resort, as for the messages `poll` runs: a panic answers with an error instead
+        // of breaking the app.
+        let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match shot_png {
             Ok(png) => crate::mcp::snapshot_result(s, &png, "screen", settled, &shot.args, None),
             Err(why) => crate::mcp::render_snapshot(s, &shot.args, Some(&why)),
-        }
-        .unwrap_or_else(|e| serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true}));
+        }))
+        .unwrap_or_else(|_| Err("the snapshot failed unexpectedly".into()));
+        let result = answer.unwrap_or_else(|e| serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true}));
         let reply = serde_json::json!({"jsonrpc": "2.0", "id": shot.id, "result": result}).to_string();
         if let Some(a) = action(&shot.req.line, Some(&reply)) {
             *lock(&self.owner.last) = Some(a);
