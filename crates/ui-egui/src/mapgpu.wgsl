@@ -9,11 +9,11 @@ struct CmdUniforms {
     scene_depth: vec4f,
     /// The fog a tilted view's ground fades into (premultiplied).
     fog: vec4f,
-    /// Map units per physical pixel (scales stroke normals), 1 for upright markers, the band's
-    /// nearest and farthest depths.
+    /// x: map units per physical pixel (scales stroke normals); y: 1 for upright markers, else
+    /// 0; z, w: the band's nearest and farthest depths.
     params: vec4f,
-    /// Physical pixel size of the map view (scales marker pixel offsets), 1 when tilted, and
-    /// the reach's depth.
+    /// x, y: physical pixel size of the map view (scales marker pixel offsets); z: 1 when
+    /// tilted, else 0; w: the reach's depth.
     viewport: vec4f,
     _pad: vec4f,
 };
