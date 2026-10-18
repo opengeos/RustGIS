@@ -58,6 +58,9 @@ pub struct HeaderLayout {
 /// `TitlebarMetrics::height`, which the app falls back to this for.
 pub const HEADER_HEIGHT: f32 = 34.0;
 const HEADER_PAD: f32 = 10.0;
+/// How long the status bar names the MCP relay agent's last call beside the client count.
+#[cfg(not(target_arch = "wasm32"))]
+const RELAY_ACTION_SHOWN: std::time::Duration = std::time::Duration::from_secs(10);
 /// Most a native title bar can add, and the widest strip of window buttons, in points.
 const MAX_TITLEBAR_HEIGHT: f32 = 80.0;
 const MAX_LEFT_INSET: f32 = 120.0;
@@ -359,16 +362,29 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                     // its authenticated client count is shown and a click stops it. Desktop only.
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        if let Some(n) = app.relay.as_ref().map(|r| r.attached_clients()) {
-                            let resp = ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(crate::i18n::fmt("MCP relay · {n} attached", &[("n", &n.to_string())]))
-                                        .size(11.5)
-                                        .color(if n > 0 { t.accent_text } else { t.text_dim }),
-                                )
-                                .sense(Sense::click()),
-                            );
-                            if resp.on_hover_text(tl!("Stop MCP relay")).clicked() {
+                        if let Some((n, last)) = app.relay.as_ref().map(|r| (r.attached_clients(), r.last_action())) {
+                            let mut text = crate::i18n::fmt("MCP relay · {n} attached", &[("n", &n.to_string())]);
+                            let mut hover = tl!("Stop MCP relay").to_string();
+                            let mut color = if n > 0 { t.accent_text } else { t.text_dim };
+                            // What the agent just ran, while the user watches it work: for a few
+                            // seconds beside the count, and on hover until the next call.
+                            if let Some(a) = last {
+                                let ago = a.at.elapsed();
+                                if ago < RELAY_ACTION_SHOWN {
+                                    text = format!("{text} · {}", a.label);
+                                    if !a.ok {
+                                        color = t.red;
+                                    }
+                                    ui.ctx().request_repaint_after(RELAY_ACTION_SHOWN.saturating_sub(ago));
+                                }
+                                let said = if a.ok { "Last agent call: {call} ({secs} s ago)" } else { "Last agent call failed: {call} ({secs} s ago)" };
+                                hover = format!(
+                                    "{hover}\n{}",
+                                    crate::i18n::fmt(said, &[("call", &a.detail), ("secs", &ago.as_secs().to_string())])
+                                );
+                            }
+                            let resp = ui.add(egui::Label::new(egui::RichText::new(text).size(11.5).color(color)).sense(Sense::click()));
+                            if resp.on_hover_text(hover).clicked() {
                                 let _ = app.run("ui.mcpRelay", json!({"stop": true}));
                             }
                             sep(ui, &t);
