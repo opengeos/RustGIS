@@ -184,11 +184,23 @@ struct Shared {
     run_id: String,
     /// The port of MCP over HTTP beside the relay, while it runs ([`Relay::serve_http`]).
     http_port: Mutex<Option<u16>>,
+    /// Each agent (by the token it attached with): its name in the undo history and the layer
+    /// it last made active, kept apart from the user's selection.
+    agents: Mutex<HashMap<String, AgentState>>,
     /// Whether the app shows the map, so a snapshot can capture the screen ([`Relay::set_screen`]).
     screen: AtomicBool,
     /// The screen snapshot the app is capturing ([`Relay::screen_request`]); nothing else runs
     /// until it is done.
     shot: Mutex<Option<Shot>>,
+}
+
+/// What the relay keeps for one agent between its calls.
+struct AgentState {
+    /// `agent 1 (relay run …)`, `agent 2 (…)`…, in the order they first called: the
+    /// [`Session::actor`] of its steps.
+    name: String,
+    /// The layer its commands act on when they name none.
+    active: Option<u32>,
 }
 
 /// What a screen snapshot asks of the app ([`Relay::screen_request`]).
@@ -571,6 +583,7 @@ impl Relay {
             grant_ids: AtomicU64::new(0),
             run_id: random_token()?.chars().take(8).collect(),
             http_port: Mutex::new(None),
+            agents: Mutex::new(HashMap::new()),
             screen: AtomicBool::new(false),
             shot: Mutex::new(None),
         });
@@ -873,9 +886,15 @@ impl Relay {
             }
             // A last resort: a panic answers that message with an error instead of breaking the
             // app (Session::run catches panics inside commands; this covers the tools around it).
+            // The agent works with its own active layer and is named in the undo history; the
+            // user's selection is theirs again afterwards.
+            let layers = self.enter_agent(s, &req.token);
             let started = Instant::now();
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &req.line)))
                 .unwrap_or_else(|_| Some(internal_error(&req.line)));
+            // A layer.select that failed (an unknown layer, a refusal) chose nothing.
+            let picked = selects_layer(&req.line) && reply_ok(out.as_deref());
+            self.leave_agent(s, &req.token, layers, picked);
             self.audit(&req.line, out.as_deref(), started.elapsed());
             if let Some(a) = action(&req.line, out.as_deref()) {
                 *lock(&self.owner.last) = Some(a);
@@ -885,6 +904,60 @@ impl Relay {
         }
         ran
     }
+}
+
+impl Relay {
+    /// Before an agent's call: names it as the session's actor and makes its own active layer
+    /// (if it still exists) the session's. Returns the user's active layer.
+    fn enter_agent(&self, s: &mut Session, token: &str) -> (Option<u32>, Option<u32>) {
+        let mut agents = lock(&self.owner.shared.agents);
+        let n = agents.len() + 1;
+        // Named for this relay run too: a relay started again on the same session numbers its
+        // agents from 1 again, and its `agent 1` mustn't pass for an earlier run's.
+        let run = &self.owner.shared.run_id;
+        let agent =
+            agents.entry(token.to_string()).or_insert_with(|| AgentState { name: format!("agent {n} (relay run {run})"), active: None });
+        let users = s.active_layer;
+        let mine = agent.active.filter(|id| s.map().layer(*id).is_some());
+        if mine.is_some() {
+            s.active_layer = mine;
+        }
+        s.actor = Some(agent.name.clone());
+        (users, s.active_layer)
+    }
+
+    /// After an agent's call: when the call chose a layer (changed the active one, or selected one
+    /// with `layer.select`, even the user's), it becomes the agent's own; until then the agent's
+    /// commands follow the user's selection. The user gets theirs back, if it's still there.
+    fn leave_agent(&self, s: &mut Session, token: &str, (users, entered): (Option<u32>, Option<u32>), picked: bool) {
+        s.actor = None;
+        if let Some(agent) = lock(&self.owner.shared.agents).get_mut(token)
+            && (picked || s.active_layer != entered)
+        {
+            agent.active = s.active_layer;
+        }
+        s.active_layer = users.filter(|id| s.map().layer(*id).is_some());
+    }
+}
+
+/// Whether a reply (or every reply in a batch) says its call worked.
+fn reply_ok(reply: Option<&str>) -> bool {
+    let Some(v) = reply.and_then(|r| serde_json::from_str::<Value>(r).ok()) else { return false };
+    let replies = v.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&v));
+    replies.iter().all(|r| r.get("error").is_none() && r.pointer("/result/isError") != Some(&Value::Bool(true)))
+}
+
+/// Whether a message (or a batch) selects a layer: a `layer.select` command, on its own or as a
+/// line of a `run` script.
+fn selects_layer(line: &str) -> bool {
+    let Ok(msg) = serde_json::from_str::<Value>(line) else { return false };
+    let messages = msg.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&msg));
+    messages.iter().filter_map(|m| m.get("params").and_then(|p| p.get("arguments"))).any(|a| {
+        a.get("command").and_then(Value::as_str) == Some("layer.select")
+            || a.get("script").and_then(Value::as_str).is_some_and(|s| {
+                rustgis_engine::cmd::workflows::script_commands(s).is_ok_and(|lines| lines.iter().any(|(_, id, _)| id == "layer.select"))
+            })
+    })
 }
 
 /// A message that is one `snapshot` call to capture the screen: `mode` `screen`, or `auto`
@@ -1694,6 +1767,145 @@ mod tests {
         let reply = reply(&client);
         assert_eq!(reply["result"]["isError"], false, "{reply}");
         assert_eq!(s.map().layers.len(), layers, "{reply}");
+        relay.stop();
+    }
+
+    fn command(id: u64, command: &str, params: Value) -> Value {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": "run_command", "arguments": {"command": command, "params": params}}})
+    }
+
+    /// Sends one call and gives back its reply, letting the app run it.
+    fn call(client: &mut TcpStream, relay: &Relay, s: &mut Session, msg: Value) -> Value {
+        writeln!(client, "{msg}").unwrap();
+        client.flush().unwrap();
+        settle(relay, s);
+        reply(client)
+    }
+
+    /// The agent and the user each have their own active layer: what the agent selects doesn't
+    /// move the user's selection, and what the user selects doesn't redirect the agent's
+    /// commands that name no layer.
+    #[test]
+    fn relay_keeps_the_agents_active_layer_apart_from_the_users() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        let id = |s: &Session, name: &str| s.map().layer_by_name(name).map(|l| l.id);
+        s.active_layer = id(&s, "Countries");
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        let r = call(&mut client, &relay, &mut s, command(1, "layer.select", json!({"layer": "Cities"})));
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        assert_eq!(s.active_layer, id(&s, "Countries"), "the user's selection stays");
+        // The user picks another layer; the agent's next un-targeted command still acts on its own.
+        s.active_layer = id(&s, "Lakes");
+        let r = call(&mut client, &relay, &mut s, command(2, "layer.rename", json!({"name": "Towns"})));
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        assert!(s.map().layer_by_name("Towns").is_some() && s.map().layer_by_name("Lakes").is_some(), "the agent renamed its own layer");
+        assert_eq!(s.active_layer, id(&s, "Lakes"));
+        relay.stop();
+
+        // An agent that hasn't chosen a layer follows the user's selection.
+        let relay2 = Relay::start(0).unwrap();
+        let mut fresh = TcpStream::connect(("127.0.0.1", relay2.port())).unwrap();
+        attach(&mut fresh, &relay2, false);
+        s.active_layer = id(&s, "Towns");
+        call(
+            &mut fresh,
+            &relay2,
+            &mut s,
+            json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "list_layers", "arguments": {}}}),
+        );
+        s.active_layer = id(&s, "Rivers");
+        call(&mut fresh, &relay2, &mut s, command(10, "layer.rename", json!({"name": "Streams"})));
+        assert!(s.map().layer_by_name("Streams").is_some() && s.map().layer_by_name("Towns").is_some(), "it followed the user to Rivers");
+        relay2.stop();
+
+        // A layer.select that fails chooses nothing: the agent still follows the user.
+        let relay3 = Relay::start(0).unwrap();
+        let mut failing = TcpStream::connect(("127.0.0.1", relay3.port())).unwrap();
+        attach(&mut failing, &relay3, false);
+        s.active_layer = id(&s, "Countries");
+        call(&mut failing, &relay3, &mut s, command(11, "layer.select", json!({"layer": "No such layer"})));
+        s.active_layer = id(&s, "Lakes");
+        call(&mut failing, &relay3, &mut s, command(12, "layer.rename", json!({"name": "Ponds"})));
+        assert!(s.map().layer_by_name("Ponds").is_some() && s.map().layer_by_name("Countries").is_some(), "it followed the user");
+        relay3.stop();
+        s.run("layer.rename", &json!({"layer": "Ponds", "name": "Lakes"})).unwrap();
+
+        // An agent that picks the layer the user has active keeps it when the user moves on.
+        let relay = Relay::start(0).unwrap();
+        s.active_layer = id(&s, "Countries");
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        call(&mut client, &relay, &mut s, command(3, "layer.select", json!({"layer": "Countries"})));
+        s.active_layer = id(&s, "Lakes");
+        call(&mut client, &relay, &mut s, command(4, "layer.rename", json!({"name": "Nations"})));
+        assert!(s.map().layer_by_name("Nations").is_some() && s.map().layer_by_name("Lakes").is_some());
+        relay.stop();
+    }
+
+    /// A relay started again on the same session doesn't take an earlier run's agent steps for
+    /// its own agents'.
+    #[test]
+    fn relay_agents_of_another_run_cant_undo_earlier_steps() {
+        let mut s = sample();
+        let first = Relay::start(0).unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", first.port())).unwrap();
+        attach(&mut client, &first, false);
+        call(&mut client, &first, &mut s, add_sample_call(1));
+        first.stop();
+        let second = Relay::start(0).unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", second.port())).unwrap();
+        attach(&mut client, &second, false);
+        let r = call(&mut client, &second, &mut s, command(2, "edit.undo", json!({})));
+        assert_eq!(r["result"]["isError"], true, "another run's agent 1 is not this one: {r}");
+        second.stop();
+    }
+
+    /// An agent undoes and redoes only its own steps, never the user's; the user's history keeps
+    /// working as before.
+    #[test]
+    fn relay_agents_undo_only_their_own_steps() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        let undo = |id| command(id, "edit.undo", json!({}));
+        // The user's step: refused to the agent.
+        s.run("layer.rename", &json!({"layer": "Rivers", "name": "Streams"})).unwrap();
+        let r = call(&mut client, &relay, &mut s, undo(1));
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(r["result"]["content"][0]["text"].as_str().is_some_and(|t| t.contains("the user's")), "{r}");
+        assert!(s.map().layer_by_name("Streams").is_some(), "the user's step stays");
+        // The agent's own step: undone, then redone.
+        let layers = s.map().layers.len();
+        call(&mut client, &relay, &mut s, add_sample_call(2));
+        assert!(s.undo_actor().flatten().is_some_and(|a| a.starts_with("agent 1 (relay run ")), "{:?}", s.undo_actor());
+        let r = call(&mut client, &relay, &mut s, undo(3));
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        assert_eq!(s.map().layers.len(), layers);
+        let r = call(&mut client, &relay, &mut s, command(4, "edit.redo", json!({})));
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        assert_eq!(s.map().layers.len(), layers + 1);
+        // A script can't undo twice past the agent's own step: undo runs alone.
+        call(&mut client, &relay, &mut s, add_sample_call(7));
+        let twice = json!({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": "run", "arguments": {"script": "edit.undo\nedit.undo"}}});
+        let r = call(&mut client, &relay, &mut s, twice);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(s.map().layer_by_name("Streams").is_some(), "the user's step stays");
+        let r = call(&mut client, &relay, &mut s, command(9, "edit.undo", json!({})));
+        assert_eq!(r["result"]["isError"], false, "its own step, alone: {r}");
+        // A script can't slip an undo of the user's step through either.
+        call(&mut client, &relay, &mut s, undo(5));
+        let script =
+            json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "run", "arguments": {"script": "edit.undo"}}});
+        let r = call(&mut client, &relay, &mut s, script);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(s.map().layer_by_name("Streams").is_some());
+        // The user still undoes anything.
+        assert!(s.run("edit.undo", &json!({})).is_ok());
+        assert!(s.map().layer_by_name("Rivers").is_some());
+        assert_eq!(s.actor, None);
         relay.stop();
     }
 
