@@ -1865,4 +1865,26 @@ fn the_popup_closes_when_its_feature_is_deleted() {
     h.state_mut().run("map.duplicate", json!({})).unwrap();
     h.step();
     assert!(h.state().map.popup.is_none(), "the popup stayed on another map");
+fn a_shortcut_that_cannot_run_says_why() {
+    let mut h = harness();
+    h.step();
+    h.state_mut().run("edit.enable", json!({"on": false})).unwrap();
+    h.state_mut().run("select.rows", json!({"layer": "Countries", "rows": [0]})).unwrap();
+    let rows =
+        |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer_by_name("Countries").map(|l| l.dataset.features.len());
+    let before = rows(&h);
+    let mark = h.state().session.notice_mark();
+    h.key_press(egui::Key::Delete);
+    h.step();
+    assert_eq!(rows(&h), before, "nothing deleted");
+    let said = h.state().session.notices_since(mark);
+    assert!(said.iter().any(|n| n.error && n.text.contains("editing is turned off")), "{said:?}");
+    // Nothing left to undo isn't worth a notice.
+    while h.state().session.can_undo() {
+        h.state_mut().run("edit.undo", json!(null)).unwrap();
+    }
+    let mark = h.state().session.notice_mark();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.step();
+    assert!(h.state().session.notices_since(mark).is_empty());
 }
