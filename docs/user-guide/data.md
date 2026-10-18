@@ -437,6 +437,12 @@ With a raster layer selected in Layers, the **Style** and **Data** tabs show its
 | Style › Enhancement | Brightness, contrast, gamma |
 | Data | Raster information (size, bands, statistics, coordinate system) and Export Raster (GeoTIFF) |
 
+**Masking**, at the foot of the Symbology pane (`raster.mask`), hides pixel values from view without
+changing the data: values to draw as no data (a background of 0 or −9999 the file doesn't flag, QA
+flags, land cover classes such as `0, 254, 255`), and values outside, or inside, a range. The
+stretch, class breaks and legend then use only the values shown. **Clear mask** shows every value
+again; the mask is saved with the project.
+
 Clicking a raster with the Explore tool shows its pixel values. Projects remember a raster's file
 path and reopen it; rasters added in the browser are stored inside the project.
 
