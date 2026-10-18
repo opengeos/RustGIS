@@ -1670,11 +1670,13 @@ impl RustGisApp {
                     let text = i18n::fmt("MCP relay listening on 127.0.0.1:{port}", &[("port", &relay.port().to_string())]);
                     self.session.notify(text, false);
                 } else {
-                    let port = p
-                        .get("port")
-                        .and_then(Value::as_u64)
-                        .and_then(|n| u16::try_from(n).ok())
-                        .map_or_else(rustgis_assistant::relay::default_port, Ok)?;
+                    // A port asked for that isn't one is an error, as RUSTGIS_MCP_PORT's is.
+                    let port = match p.get("port") {
+                        None | Some(Value::Null) => rustgis_assistant::relay::default_port()?,
+                        Some(v) => v.as_u64().and_then(|n| u16::try_from(n).ok()).ok_or_else(|| {
+                            i18n::fmt("ui.mcpRelay: port {port} is not a port number (0 to 65535)", &[("port", &v.to_string())])
+                        })?,
+                    };
                     let relay = rustgis_assistant::relay::Relay::start(port)?;
                     // Where it is, for clients and setup scripts; the relay works without it.
                     if let Err(e) = relay.publish_endpoint() {
