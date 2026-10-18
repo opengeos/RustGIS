@@ -38,6 +38,18 @@ or `{"by": 10}`), `map.resetNorth` faces north and looks straight down, and **Go
 [Layouts](layouts.md)), and the globe turns and tilts the same way: tilted, its camera swings
 back about the centre of view, so the horizon comes into sight past the curve of the Earth.
 
+**Terrain** gives a tilted map relief, as MapLibre's terrain does: the map is draped over the
+ground's heights, labels and point markers stand on it, and nearer slopes hide what lies behind
+them. The heights come from a DEM raster layer of the project (heights in metres; the layer can
+stay hidden) or from elevation tiles: Terrarium (`terrarium`, as the free
+`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`) or Mapbox
+Terrain-RGB (`mapbox`, also MapTiler's). `map.terrain` sets it: `{"layer": "DEM"}` or
+`{"tiles": "https://…/{z}/{x}/{y}.png", "encoding": "terrarium"}`, with `"exaggeration"`
+(0 to 20, default 1) to stretch the heights; `{"exaggeration": 2}` alone changes only that, and
+`{"off": true}` flattens the map again. Terrain is saved with the project and shows in exported
+maps; a flat (untilted) view, the globe and other projections stay flat, extruded layers are
+not lifted onto the relief yet, and identify and selection still pick on the flat ground.
+
 MapLibre map links carry a view in their address, as
 `#zoom/latitude/longitude/bearing/pitch` (`https://…/#15.5/40.7484/-73.9857/30/60`). **Go To Map
 Link** (`map.goToLink {"url": …}`) takes such a link, or the part after its `#`, to that place,

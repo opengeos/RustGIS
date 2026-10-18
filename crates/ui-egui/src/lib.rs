@@ -3208,6 +3208,8 @@ mod record_tests {
         // Needs a layer read in place from its file, which the sample has none of; it acts on it.
         const NEEDS_A_STREAMED_LAYER: &[&str] = &["layer.loadAll"];
         const SOMETHING_ELSE: &[&str] = &[
+            // The DEM a terrain takes its heights from.
+            "map.terrain",
             "service.refresh",
             "service.group",
             "layer.addData",

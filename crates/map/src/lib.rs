@@ -716,8 +716,10 @@ fn earth() -> String {
     rustgis_geom::body::EARTH.id.to_string()
 }
 
+/// Only the Earth's own id is left out of a saved map: an id this build doesn't know (a newer
+/// version's body) is kept, though the map is drawn on the Earth meanwhile.
 fn is_earth(id: &str) -> bool {
-    rustgis_geom::Body::get(id).is_earth()
+    id == rustgis_geom::body::EARTH.id
 }
 
 /// Which layers a click in the map identifies.

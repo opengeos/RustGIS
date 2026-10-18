@@ -16,6 +16,8 @@ The map's ESRI codes (`crates/data/src/raster/esri.rs`) are Esri's projected coo
 from Esri's [projection-engine-db-doc](https://github.com/Esri/projection-engine-db-doc)
 (Apache-2.0), as imported into the [PROJ](https://proj.org) 9.7.1 database (MIT) and written as
 PROJ definitions by PROJ 9.7.1.
+The WKT2 test corpus (`crates/data/src/raster/wkt2_corpus.tsv`) is 60 of those EPSG and Esri
+coordinate systems written as WKT2 by PROJ 9.7.1, through pyproj 3.7.2.
 
 The GeoLibre tool suite ([geolibre-rust](https://github.com/opengeos/geolibre-rust), MIT, built
 on [whitebox-wasm](https://github.com/opengeos/whitebox-wasm), MIT) is not part of RustGIS: the

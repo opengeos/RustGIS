@@ -1,4 +1,8 @@
-//! Coordinate systems from WKT1, the text of a `.prj` file next to a Shapefile or a grid.
+//! Coordinate systems from WKT, the text of a `.prj` file next to a Shapefile or a grid.
+//!
+//! WKT1 (OGC and Esri) is read directly. WKT2 (`PROJCRS`, `GEOGCRS`, as PROJ 6 and later write
+//! it) is first rewritten as the WKT1 it corresponds to, its units folded into degrees and the
+//! system's own linear unit.
 //!
 //! An EPSG authority is used when the text names one. The `.prj` files ArcGIS and GDAL write have
 //! none (`PROJCS["WGS_1984_UTM_Zone_31N",…]`), so Web Mercator and UTM are also known by name, and
@@ -10,17 +14,17 @@ use super::crs::{Crs, CustomCrs};
 const MAX_DEPTH: usize = 32;
 
 /// One value inside a WKT node's brackets.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Item {
     Node(Node),
     Text(String),
     Num(f64),
     /// A bare word, such as `EAST` in `AXIS["X",EAST]`.
-    Word,
+    Word(String),
 }
 
 /// `NAME[item, item, …]`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Node {
     name: String,
     items: Vec<Item>,
@@ -29,10 +33,42 @@ struct Node {
 impl Node {
     /// The first child node of this name (case-insensitive).
     fn child(&self, name: &str) -> Option<&Node> {
-        self.items.iter().find_map(|i| match i {
+        self.child_of(&[name])
+    }
+
+    /// The first child node with one of these names (case-insensitive): WKT2 has several
+    /// spellings of most keywords (`ELLIPSOID`/`SPHEROID`, `PRIMEM`/`PRIMEMERIDIAN`).
+    fn child_of(&self, names: &[&str]) -> Option<&Node> {
+        self.nodes().find(|n| names.iter().any(|name| n.name.eq_ignore_ascii_case(name)))
+    }
+
+    /// The child nodes.
+    fn nodes(&self) -> impl Iterator<Item = &Node> {
+        self.items.iter().filter_map(|i| match i {
+            Item::Node(n) => Some(n),
+            _ => None,
+        })
+    }
+
+    /// The child nodes, taken.
+    fn into_nodes(self) -> impl Iterator<Item = Node> {
+        self.items.into_iter().filter_map(|i| match i {
+            Item::Node(n) => Some(n),
+            _ => None,
+        })
+    }
+
+    /// The first child node of this name, to change.
+    fn child_mut(&mut self, name: &str) -> Option<&mut Node> {
+        self.items.iter_mut().find_map(|i| match i {
             Item::Node(n) if n.name.eq_ignore_ascii_case(name) => Some(n),
             _ => None,
         })
+    }
+
+    /// `NAME["title", items…]`.
+    fn new(name: &str, title: &str, items: impl IntoIterator<Item = Item>) -> Node {
+        Node { name: name.into(), items: std::iter::once(Item::Text(title.into())).chain(items).collect() }
     }
 
     /// The node's quoted name: `"WGS_1984"` in `DATUM["WGS_1984",…]`.
@@ -109,12 +145,12 @@ impl Parser<'_> {
                 Some(b) if b == b'-' || b == b'+' || b == b'.' || b.is_ascii_digit() => Item::Num(self.number()?),
                 Some(b) if b.is_ascii_alphabetic() => {
                     let save = self.at;
-                    self.word();
+                    let word = self.word();
                     if matches!(self.peek(), Some(b'[' | b'(')) {
                         self.at = save;
                         Item::Node(self.node(depth + 1)?)
                     } else {
-                        Item::Word
+                        Item::Word(word)
                     }
                 }
                 Some(b) if b == close && items.is_empty() => {
@@ -191,15 +227,15 @@ fn norm(s: &str) -> String {
     out.trim_end_matches('_').to_string()
 }
 
-/// The coordinate system a WKT1 text (OGC or Esri) describes.
+/// The coordinate system a WKT text (WKT1, OGC or Esri, or WKT2) describes.
 pub fn crs_from_wkt(text: &str) -> Result<Crs, String> {
     read_wkt(text).map(|(crs, _)| crs)
 }
 
-/// The coordinate system a WKT1 text describes, with a note when its datum has no conversion to
+/// The coordinate system a WKT text describes, with a note when its datum has no conversion to
 /// WGS 84 given (NAD 27, OSGB 36…), so positions may be off by up to a few hundred metres.
 pub fn read_wkt(text: &str) -> Result<(Crs, Option<String>), String> {
-    let root = parse(text)?;
+    let root = wkt1(parse(text)?, 0)?;
     if let Some(a) = root.child("AUTHORITY")
         && a.title().eq_ignore_ascii_case("EPSG")
         && let Some(crs) = authority_code(a).and_then(Crs::from_epsg)
@@ -215,6 +251,275 @@ pub fn read_wkt(text: &str) -> Result<(Crs, Option<String>), String> {
         }
         other => Err(format!("{other} coordinate systems aren't supported")),
     }
+}
+
+/// The WKT1 form of a coordinate system: WKT1 as it is, WKT2 rewritten. A compound system (a
+/// horizontal one with heights) gives its horizontal part.
+fn wkt1(n: Node, depth: usize) -> Result<Node, String> {
+    if depth > 4 {
+        return Err("the coordinate system is nested too deeply".into());
+    }
+    match n.name.to_ascii_uppercase().as_str() {
+        "PROJCRS" | "PROJECTEDCRS" => projected2(&n),
+        "GEOGCRS" | "GEOGRAPHICCRS" | "GEODCRS" | "GEODETICCRS" => geographic2(&n, true),
+        "COMPOUNDCRS" | "COMPD_CS" => match n.into_nodes().find(|c| HORIZONTAL.iter().any(|k| c.name.eq_ignore_ascii_case(k))) {
+            Some(h) => wkt1(h, depth + 1),
+            None => Err("the compound coordinate system has no horizontal part".into()),
+        },
+        "BOUNDCRS" => bound(n, depth),
+        _ => Ok(n),
+    }
+}
+
+/// The parts of a compound system that can be its horizontal one.
+const HORIZONTAL: [&str; 9] =
+    ["PROJCRS", "PROJECTEDCRS", "GEOGCRS", "GEOGRAPHICCRS", "GEODCRS", "GEODETICCRS", "PROJCS", "GEOGCS", "BOUNDCRS"];
+
+/// `ID["EPSG",32631]` as `AUTHORITY["EPSG",32631]`.
+fn authority(n: &Node) -> Option<Item> {
+    let id = n.child_of(&["ID", "AUTHORITY"])?;
+    Some(Item::Node(Node { name: "AUTHORITY".into(), items: id.items.iter().take(2).cloned().collect() }))
+}
+
+/// The conversion factor of a unit node (`ANGLEUNIT["degree",0.0174532925199433]`).
+fn factor(u: Option<&Node>) -> Option<f64> {
+    u.and_then(|u| u.num(0)).filter(|f| *f > 0.0)
+}
+
+/// `v` in a unit of `f` (radians or metres per unit) as a value in a unit of `to`: unchanged when
+/// the units agree, so that 49° doesn't come back as 49.000000000000014°.
+fn convert(v: f64, f: Option<f64>, to: f64) -> f64 {
+    match f {
+        Some(f) if ((f - to) / to).abs() > 1e-12 => v * f / to,
+        _ => v,
+    }
+}
+
+/// The unit of a system's axes: given once after its `CS`, or on each `AXIS` (WKT2 2019).
+fn cs_unit<'a>(n: &'a Node, kinds: &[&str]) -> Option<&'a Node> {
+    n.child_of(kinds).or_else(|| n.nodes().filter(|a| a.name.eq_ignore_ascii_case("AXIS")).find_map(|a| a.child_of(kinds)))
+}
+
+const ANGLE_UNIT: [&str; 2] = ["ANGLEUNIT", "UNIT"];
+const LENGTH_UNIT: [&str; 2] = ["LENGTHUNIT", "UNIT"];
+
+/// A WKT2 geographic system as a `GEOGCS`: its datum (or datum ensemble) with the ellipsoid in
+/// metres, the prime meridian in degrees and the angle unit. `top` adds its `ID` as the authority:
+/// a projected system's base has its own code, which isn't the projected one's.
+fn geographic2(g: &Node, top: bool) -> Result<Node, String> {
+    if let Some(cs) = g.child("CS")
+        && let Some(Item::Word(kind)) = cs.items.first()
+        && !kind.eq_ignore_ascii_case("ellipsoidal")
+    {
+        return Err(format!("{kind} coordinate systems aren't supported"));
+    }
+    let unit = cs_unit(g, &ANGLE_UNIT);
+    let mut items = Vec::new();
+    if let Some(d) = g.child_of(&["DATUM", "GEODETICDATUM", "TRF", "ENSEMBLE"]) {
+        let mut datum = Vec::new();
+        if let Some(e) = d.child_of(&["ELLIPSOID", "SPHEROID"]) {
+            let to_m = factor(e.child_of(&LENGTH_UNIT)).unwrap_or(1.0);
+            let a = e.num(0).ok_or_else(|| format!("the ellipsoid {} has no semi-major axis", e.title()))?;
+            let axes = std::iter::once(a * to_m).chain(e.num(1)).map(Item::Num);
+            datum.push(Item::Node(Node::new("SPHEROID", e.title(), axes)));
+        }
+        items.push(Item::Node(Node::new("DATUM", d.title(), datum)));
+    }
+    if let Some(pm) = g
+        .child_of(&["PRIMEM", "PRIMEMERIDIAN"])
+        .or_else(|| g.child_of(&["DATUM", "GEODETICDATUM", "TRF"])?.child_of(&["PRIMEM", "PRIMEMERIDIAN"]))
+    {
+        // In the prime meridian's own unit, else the system's.
+        let f = factor(pm.child_of(&ANGLE_UNIT)).or(factor(unit));
+        items.push(Item::Node(Node::new("PRIMEM", pm.title(), pm.num(0).map(|v| Item::Num(convert(v, f, 1f64.to_radians()))))));
+    }
+    if let Some(f) = factor(unit) {
+        items.push(Item::Node(Node::new("UNIT", unit.map_or("", Node::title), [Item::Num(f)])));
+    }
+    items.extend(authority(g).filter(|_| top));
+    Ok(Node::new("GEOGCS", g.title(), items))
+}
+
+/// How a parameter's value is measured, for its unit conversion.
+#[derive(Clone, Copy, PartialEq)]
+enum Measure {
+    Angle,
+    Length,
+    Scale,
+}
+
+/// WKT2's projection methods by EPSG code and EPSG name, with the WKT1 name they're read by.
+const METHODS: &[(u32, &str, &str)] = &[
+    (9807, "TRANSVERSE_MERCATOR", "Transverse_Mercator"),
+    (9804, "MERCATOR_VARIANT_A", "Mercator_1SP"),
+    (9805, "MERCATOR_VARIANT_B", "Mercator_2SP"),
+    (1024, "POPULAR_VISUALISATION_PSEUDO_MERCATOR", "Popular_Visualisation_Pseudo_Mercator"),
+    (9801, "LAMBERT_CONIC_CONFORMAL_1SP", "Lambert_Conformal_Conic_1SP"),
+    (9802, "LAMBERT_CONIC_CONFORMAL_2SP", "Lambert_Conformal_Conic_2SP"),
+    (9822, "ALBERS_EQUAL_AREA", "Albers_Conic_Equal_Area"),
+    (9820, "LAMBERT_AZIMUTHAL_EQUAL_AREA", "Lambert_Azimuthal_Equal_Area"),
+    (1027, "LAMBERT_AZIMUTHAL_EQUAL_AREA_SPHERICAL", "Lambert_Azimuthal_Equal_Area"),
+    (9810, "POLAR_STEREOGRAPHIC_VARIANT_A", "Polar_Stereographic"),
+    (9829, "POLAR_STEREOGRAPHIC_VARIANT_B", "Polar_Stereographic"),
+    (9809, "OBLIQUE_STEREOGRAPHIC", "Oblique_Stereographic"),
+    (1028, "EQUIDISTANT_CYLINDRICAL", "Equirectangular"),
+    (1029, "EQUIDISTANT_CYLINDRICAL_SPHERICAL", "Equirectangular"),
+    (9823, "EQUIDISTANT_CYLINDRICAL_SPHERICAL", "Equirectangular"),
+    (9835, "LAMBERT_CYLINDRICAL_EQUAL_AREA", "Cylindrical_Equal_Area"),
+    (9834, "LAMBERT_CYLINDRICAL_EQUAL_AREA_SPHERICAL", "Cylindrical_Equal_Area"),
+];
+
+/// WKT2's projection parameters by EPSG code and EPSG name, with their WKT1 name.
+const PARAMETERS: &[(u32, &str, &str, Measure)] = &[
+    (8801, "LATITUDE_OF_NATURAL_ORIGIN", "Latitude_Of_Origin", Measure::Angle),
+    (8802, "LONGITUDE_OF_NATURAL_ORIGIN", "Central_Meridian", Measure::Angle),
+    (8805, "SCALE_FACTOR_AT_NATURAL_ORIGIN", "Scale_Factor", Measure::Scale),
+    (8806, "FALSE_EASTING", "False_Easting", Measure::Length),
+    (8807, "FALSE_NORTHING", "False_Northing", Measure::Length),
+    (8821, "LATITUDE_OF_FALSE_ORIGIN", "Latitude_Of_Origin", Measure::Angle),
+    (8822, "LONGITUDE_OF_FALSE_ORIGIN", "Central_Meridian", Measure::Angle),
+    (8823, "LATITUDE_OF_1ST_STANDARD_PARALLEL", "Standard_Parallel_1", Measure::Angle),
+    (8824, "LATITUDE_OF_2ND_STANDARD_PARALLEL", "Standard_Parallel_2", Measure::Angle),
+    (8826, "EASTING_AT_FALSE_ORIGIN", "False_Easting", Measure::Length),
+    (8827, "NORTHING_AT_FALSE_ORIGIN", "False_Northing", Measure::Length),
+    (8832, "LATITUDE_OF_STANDARD_PARALLEL", "Standard_Parallel_1", Measure::Angle),
+    (8833, "LONGITUDE_OF_ORIGIN", "Central_Meridian", Measure::Angle),
+    (8811, "LATITUDE_OF_PROJECTION_CENTRE", "Latitude_Of_Center", Measure::Angle),
+    (8812, "LONGITUDE_OF_PROJECTION_CENTRE", "Longitude_Of_Center", Measure::Angle),
+    (8815, "SCALE_FACTOR_ON_INITIAL_LINE", "Scale_Factor", Measure::Scale),
+    (8816, "EASTING_AT_PROJECTION_CENTRE", "False_Easting", Measure::Length),
+    (8817, "NORTHING_AT_PROJECTION_CENTRE", "False_Northing", Measure::Length),
+];
+
+/// The EPSG code in a node's `ID["EPSG",n]`.
+fn epsg_id(n: &Node) -> Option<u32> {
+    n.child("ID").filter(|id| id.title().eq_ignore_ascii_case("EPSG")).and_then(authority_code)
+}
+
+/// A table row for a node, by its EPSG code, else its name.
+fn lookup<'a, T>(n: &Node, table: &'a [T], key: impl Fn(&T) -> (u32, &str)) -> Option<&'a T> {
+    let code = epsg_id(n);
+    let name = norm(n.title());
+    code.and_then(|c| table.iter().find(|r| key(r).0 == c)).or_else(|| table.iter().find(|r| key(r).1 == name))
+}
+
+/// A WKT2 projected system as a `PROJCS`, its parameters in degrees and the system's linear unit.
+fn projected2(p: &Node) -> Result<Node, String> {
+    // Axes pointing west or south (South Africa's Lo grids) would be read with the wrong sign, as
+    // WKT1 has no way to say so; unless the system is read by its EPSG code. (Polar systems tie
+    // their axes to a meridian, which is how WKT1 reads them.)
+    // Axis order isn't read: as with WKT1, coordinates are easting then northing (GIS order),
+    // whatever order the system declares.
+    let flipped = p
+        .nodes()
+        .filter(|a| a.name.eq_ignore_ascii_case("AXIS") && a.child("MERIDIAN").is_none())
+        .any(|a| a.items.iter().any(|i| matches!(i, Item::Word(w) if w.eq_ignore_ascii_case("west") || w.eq_ignore_ascii_case("south"))));
+    if flipped && epsg_id(p).and_then(Crs::from_epsg).is_none() {
+        return Err("axes pointing west or south aren't supported".into());
+    }
+    let base = p.child_of(&["BASEGEOGCRS", "BASEGEODCRS"]).ok_or("the projected system has no base geographic system")?;
+    let mut items = vec![Item::Node(geographic2(base, false)?)];
+    let unit = cs_unit(p, &LENGTH_UNIT);
+    let to_m = factor(unit).unwrap_or(1.0);
+    if let Some(conv) = p.child("CONVERSION") {
+        let method = conv.child_of(&["METHOD", "PROJECTION"]);
+        let name = match method.and_then(|m| lookup(m, METHODS, |r| (r.0, r.1))) {
+            Some(&(_, _, wkt1)) => wkt1,
+            None => method.map_or("", Node::title),
+        };
+        items.push(Item::Node(Node::new("PROJECTION", name, [])));
+        for param in conv.nodes().filter(|n| n.name.eq_ignore_ascii_case("PARAMETER")) {
+            let Some(v) = param.num(0) else { continue };
+            let (name, measure) = match lookup(param, PARAMETERS, |r| (r.0, r.1)) {
+                Some(&(_, _, wkt1, m)) => (wkt1, Some(m)),
+                None => (param.title(), None),
+            };
+            let angle = param.child("ANGLEUNIT");
+            let length = param.child("LENGTHUNIT");
+            let any = param.child_of(&["ANGLEUNIT", "LENGTHUNIT", "SCALEUNIT", "UNIT"]);
+            let v = match measure {
+                Some(Measure::Angle) => convert(v, factor(angle.or(any)), 1f64.to_radians()),
+                Some(Measure::Length) => convert(v, factor(length.or(any)), to_m),
+                Some(Measure::Scale) => convert(v, factor(any), 1.0),
+                None if angle.is_some() => convert(v, factor(angle), 1f64.to_radians()),
+                None => convert(v, factor(length), to_m),
+            };
+            items.push(Item::Node(Node::new("PARAMETER", name, [Item::Num(v)])));
+        }
+    }
+    items.push(Item::Node(Node::new("UNIT", unit.map_or("metre", Node::title), [Item::Num(to_m)])));
+    items.extend(authority(p));
+    Ok(Node::new("PROJCS", p.title(), items))
+}
+
+/// The EPSG methods that rotate by the coordinate frame convention: geog2D, geocentric,
+/// time-dependent and time-specific, full matrix, geog3D and geog3D to compound.
+const FRAME_METHODS: [u32; 8] = [9607, 1032, 1056, 1057, 1066, 1133, 1140, 1149];
+
+/// A `BOUNDCRS` (PROJ's form of a WKT1 `TOWGS84`) as its source system with the shift to WGS 84
+/// of its transformation, in metres, arc-seconds and parts per million.
+fn bound(b: Node, depth: usize) -> Result<Node, String> {
+    let (mut source, mut transformation) = (None, None);
+    for n in b.into_nodes() {
+        if n.name.eq_ignore_ascii_case("SOURCECRS") {
+            source = n.into_nodes().next();
+        } else if n.name.eq_ignore_ascii_case("ABRIDGEDTRANSFORMATION") {
+            transformation = Some(n);
+        }
+    }
+    let mut crs = wkt1(source.ok_or("the bound coordinate system has no source")?, depth + 1)?;
+    let Some(t) = transformation.as_ref() else { return Ok(crs) };
+    let method = t.child("METHOD");
+    let frame =
+        method.is_some_and(|m| epsg_id(m).is_some_and(|c| FRAME_METHODS.contains(&c)) || norm(m.title()).contains("COORDINATE_FRAME"));
+    // EPSG codes of the translations, rotations and scale difference.
+    let get = |code: u32, name: &str, measure: Measure| {
+        let p = t.nodes().find(|p| p.name.eq_ignore_ascii_case("PARAMETER") && (epsg_id(p) == Some(code) || norm(p.title()) == name))?;
+        let v = p.num(0)?;
+        let f = factor(p.child_of(&["LENGTHUNIT", "ANGLEUNIT", "SCALEUNIT", "UNIT"]));
+        Some(match measure {
+            Measure::Length => f.map_or(v, |f| v * f),
+            Measure::Angle => f.map_or(v, |f| v * f / (1f64.to_radians() / 3600.0)),
+            // The scale as a pure number, from its unit (`unity`, `parts per million`). Without
+            // one, PROJ's BOUNDCRS writes the factor (1.000007) and EPSG would mean ppm; datum
+            // scales are a few hundred ppm at most, so a value within 1% of 1 is the factor (1 +
+            // the difference) and anything else the difference. A unitless ppm value within 1% of 1
+            // (1.0 ppm) is misread as the factor (0 ppm): no writer is known to produce one.
+            // (Rounded to a millionth of a ppm: 0.999979511 is -20.489, not -20.488999999956903.)
+            Measure::Scale => {
+                let s = match f {
+                    Some(f) => v * f,
+                    None if (v - 1.0).abs() < 0.01 => v,
+                    None => v * 1e-6,
+                };
+                let d = if (s - 1.0).abs() < 0.01 { s - 1.0 } else { s };
+                (d * 1e12).round() / 1e6
+            }
+        })
+    };
+    let shift = [
+        get(8605, "X_AXIS_TRANSLATION", Measure::Length),
+        get(8606, "Y_AXIS_TRANSLATION", Measure::Length),
+        get(8607, "Z_AXIS_TRANSLATION", Measure::Length),
+    ];
+    let turn = [
+        get(8608, "X_AXIS_ROTATION", Measure::Angle),
+        get(8609, "Y_AXIS_ROTATION", Measure::Angle),
+        get(8610, "Z_AXIS_ROTATION", Measure::Angle),
+    ];
+    let Some(mut towgs84) = shift.into_iter().collect::<Option<Vec<f64>>>() else { return Ok(crs) };
+    let scale = get(8611, "SCALE_DIFFERENCE", Measure::Scale);
+    if scale.is_some() || turn.iter().any(Option::is_some) {
+        // Seven parameters, the ones not given none. TOWGS84 rotates by the position vector
+        // convention, the opposite of coordinate frame.
+        towgs84.extend(turn.into_iter().map(|r| r.map_or(0.0, |r| if frame { -r } else { r })));
+        towgs84.push(scale.unwrap_or(0.0));
+    }
+    let geog = if crs.name.eq_ignore_ascii_case("GEOGCS") { Some(&mut crs) } else { crs.child_mut("GEOGCS") };
+    if let Some(datum) = geog.and_then(|g| g.child_mut("DATUM")) {
+        datum.items.push(Item::Node(Node { name: "TOWGS84".into(), items: towgs84.into_iter().map(Item::Num).collect() }));
+    }
+    Ok(crs)
 }
 
 /// The code in `AUTHORITY["EPSG","32631"]` (quoted or not).
@@ -380,7 +685,8 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
 
 /// The PROJ datum for WGS 84 and the datums that differ from it by a metre or so.
 fn wgs84_like(datum: Option<&Node>) -> Option<&'static str> {
-    match norm(datum.map_or("", Node::title)).trim_start_matches("D_") {
+    // (WKT2 names a datum ensemble: `World Geodetic System 1984 ensemble`.)
+    match norm(datum.map_or("", Node::title)).trim_start_matches("D_").trim_end_matches("_ENSEMBLE") {
         "WGS_1984" | "WGS84" | "WORLD_GEODETIC_SYSTEM_1984" => Some("+datum=WGS84"),
         "NORTH_AMERICAN_1983"
         | "NORTH_AMERICAN_DATUM_1983"
@@ -391,6 +697,7 @@ fn wgs84_like(datum: Option<&Node>) -> Option<&'static str> {
         | "EUROPEAN_TERRESTRIAL_REFERENCE_SYSTEM_1989"
         | "GDA_1994"
         | "GDA94"
+        | "GEOCENTRIC_DATUM_OF_AUSTRALIA_1994"
         // SIRGAS 2000, the datum of Brazil and most of Latin America (EPSG:4674): its
         // transformation to WGS 84 is null, like the others here.
         | "SIRGAS_2000"
@@ -584,12 +891,177 @@ mod tests {
         }
     }
 
+    /// The rows of the WKT2 corpus: code, x, y, longitude, latitude, WKT2 without its ID.
+    fn corpus() -> Vec<(&'static str, [f64; 4], &'static str)> {
+        include_str!("wkt2_corpus.tsv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+            .map(|l| {
+                let f: Vec<&str> = l.split('\t').collect();
+                let n = |i: usize| f[i].parse::<f64>().unwrap();
+                (f[0], [n(1), n(2), n(3), n(4)], f[5])
+            })
+            .collect()
+    }
+
+    /// Every system in the corpus is read from its WKT2: by its EPSG code when the text gives
+    /// it, and from its parameters to within a metre of PROJ when it doesn't.
+    #[test]
+    fn wkt2_corpus() {
+        // Projections RustGIS builds no PROJ definition for: read by their EPSG code only, as in
+        // WKT1.
+        let by_code_only = ["EPSG:2056", "EPSG:5514", "EPSG:3375", "EPSG:3168", "EPSG:2066", "ESRI:54008"];
+        let rows = corpus();
+        assert_eq!(rows.len(), 60);
+        for (code, [x, y, lon, lat], wkt) in rows {
+            if let Some(n) = code.strip_prefix("EPSG:") {
+                let with_id = format!("{},ID[\"EPSG\",{n}]]", wkt.strip_suffix(']').unwrap());
+                let expected = Crs::from_epsg(n.parse().unwrap()).unwrap();
+                assert_eq!(crs_from_wkt(&with_id), Ok(expected), "{code}");
+                assert_eq!(Crs::parse(&with_id), Ok(expected), "{code}");
+            }
+            if by_code_only.contains(&code) {
+                assert!(crs_from_wkt(wkt).is_err_and(|e| e.contains("isn't supported")), "{code}");
+                continue;
+            }
+            let crs = crs_from_wkt(wkt).unwrap_or_else(|e| panic!("{code}: {e}"));
+            let ll = crs.transformer().unwrap().to_lonlat(Coord::new(x, y)).unwrap();
+            let dlon = (ll.x - lon + 540.0).rem_euclid(360.0) - 180.0;
+            let metres = (dlon * lat.to_radians().cos()).hypot(ll.y - lat) * 111_195.0;
+            assert!(metres < 1.0, "{code}: {metres} m off, {:?}", crs.custom_def().map(|d| d.proj4.clone()));
+            // Degrees come through as written, not as 49.000000000000014.
+            assert!(crs.custom_def().is_none_or(|d| !d.proj4.contains("00000000")), "{code}: {:?}", crs.custom_def());
+        }
+    }
+
+    #[test]
+    fn wkt2_datums() {
+        let rows = corpus();
+        let row = |code: &str| rows.iter().find(|r| r.0 == code).map(|r| r.2).unwrap();
+        // The WGS 84 ensemble, NAD 83 and GDA 94 are WGS 84 itself, with no note.
+        assert_eq!(read_wkt(row("EPSG:4326")), Ok((Crs::LonLat, None)));
+        assert_eq!(read_wkt(row("EPSG:32631")), Ok((Crs::Epsg(32631), None)));
+        assert_eq!(read_wkt(row("EPSG:3857")), Ok((Crs::WebMercator, None)));
+        assert_eq!(read_wkt(row("EPSG:4283")), Ok((Crs::LonLat, None)));
+        // OSGB 36 without a shift gets the note, as in WKT1.
+        assert!(read_wkt(row("EPSG:27700")).unwrap().1.is_some_and(|n| n.contains("Ordnance Survey of Great Britain 1936")));
+        // A geocentric system isn't a map's.
+        let geocentric = r#"GEODCRS["WGS 84",DATUM["World Geodetic System 1984",ELLIPSOID["WGS 84",6378137,298.257223563]],CS[Cartesian,3],AXIS["(X)",geocentricX],AXIS["(Y)",geocentricY],AXIS["(Z)",geocentricZ],LENGTHUNIT["metre",1]]"#;
+        assert_eq!(crs_from_wkt(geocentric), Err("Cartesian coordinate systems aren't supported".into()));
+        // A compound system is read by its horizontal part.
+        let compound = format!(
+            r#"COMPOUNDCRS["UTM 31N + height",{},VERTCRS["EGM2008 height",VDATUM["EGM2008 geoid"],CS[vertical,1],AXIS["gravity-related height (H)",up,LENGTHUNIT["metre",1]]],ID["EPSG",9999]]"#,
+            row("EPSG:32631")
+        );
+        assert_eq!(read_wkt(&compound), Ok((Crs::Epsg(32631), None)));
+    }
+
+    #[test]
+    fn wkt2_axes_west_and_south() {
+        // Hartebeesthoek94 / Lo19, as PROJ writes it, but as a plain Transverse Mercator: its
+        // westing and southing would come out mirrored.
+        let lo19 = r#"PROJCRS["Hartebeesthoek94 / Lo19",BASEGEOGCRS["Hartebeesthoek94",DATUM["Hartebeesthoek94",ELLIPSOID["WGS 84",6378137,298.257223563,LENGTHUNIT["metre",1]]],PRIMEM["Greenwich",0,ANGLEUNIT["degree",0.0174532925199433]],ID["EPSG",4148]],CONVERSION["South African Survey Grid zone 19",METHOD["Transverse Mercator",ID["EPSG",9807]],PARAMETER["Latitude of natural origin",0,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8801]],PARAMETER["Longitude of natural origin",19,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8802]],PARAMETER["Scale factor at natural origin",1,SCALEUNIT["unity",1],ID["EPSG",8805]],PARAMETER["False easting",0,LENGTHUNIT["metre",1],ID["EPSG",8806]],PARAMETER["False northing",0,LENGTHUNIT["metre",1],ID["EPSG",8807]]],CS[Cartesian,2],AXIS["westing (Y)",west,ORDER[1],LENGTHUNIT["metre",1]],AXIS["southing (X)",south,ORDER[2],LENGTHUNIT["metre",1]]]"#;
+        assert_eq!(crs_from_wkt(lo19), Err("axes pointing west or south aren't supported".into()));
+        // By an EPSG code that's known, it's read as that code; by an unknown one, refused.
+        let lo19_code = Crs::from_epsg(2048).unwrap();
+        assert_eq!(crs_from_wkt(&format!(r#"{},ID["EPSG",2048]]"#, lo19.strip_suffix(']').unwrap())), Ok(lo19_code));
+        assert!(crs_from_wkt(&format!(r#"{},ID["EPSG",1]]"#, lo19.strip_suffix(']').unwrap())).is_err());
+        // Polar axes along meridians are read (EPSG:3413's point south).
+        let rows = corpus();
+        let polar = rows.iter().find(|r| r.0 == "EPSG:3413").unwrap().2;
+        assert!(polar.contains("south,MERIDIAN") && crs_from_wkt(polar).is_ok());
+    }
+
+    /// PROJ's `+towgs84` as WKT2: a `BOUNDCRS` with the shift to WGS 84 as its transformation.
+    #[test]
+    fn wkt2_bound_crs() {
+        let wkt = include_str!("wkt2_corpus.tsv").lines().find_map(|l| l.strip_prefix("#bound\t")).unwrap();
+        let (crs, note) = read_wkt(wkt).unwrap();
+        assert!(note.is_none());
+        let def = crs.custom_def().unwrap();
+        assert!(def.proj4.contains("+towgs84=446.448,-125.157,542.06,0.15,0.247,0.842,-20.489"), "{}", def.proj4);
+        // Big Ben, from PROJ through the same shift.
+        let ll = crs.transformer().unwrap().to_lonlat(Coord::new(530_000.0, 180_000.0)).unwrap();
+        let metres = ((ll.x + 0.128_353_940_479_469_35) * 51.5f64.to_radians().cos()).hypot(ll.y - 51.503_990_827_633_78) * 111_195.0;
+        assert!(metres < 1.0, "{metres} m off");
+        // The coordinate frame convention turns the other way.
+        let frame = wkt.replace(
+            r#""Position Vector transformation (geog2D domain)",ID["EPSG",9606]"#,
+            r#""Coordinate Frame rotation (geog2D domain)",ID["EPSG",9607]"#,
+        );
+        let def = crs_from_wkt(&frame).unwrap().custom_def().unwrap();
+        assert!(def.proj4.contains("+towgs84=446.448,-125.157,542.06,-0.15,-0.247,-0.842,-20.489"), "{}", def.proj4);
+        // Every coordinate frame method, by its EPSG code, turns the other way; position vector
+        // methods don't.
+        for (code, sign) in FRAME_METHODS.iter().map(|c| (*c, "-")).chain([(9606, ""), (1033, ""), (1037, "")]) {
+            let m =
+                wkt.replace(r#""Position Vector transformation (geog2D domain)",ID["EPSG",9606]"#, &format!(r#""m",ID["EPSG",{code}]"#));
+            let def = crs_from_wkt(&m).unwrap().custom_def().unwrap();
+            assert!(def.proj4.contains(&format!(",{sign}0.15,{sign}0.247,{sign}0.842,")), "{code}: {}", def.proj4);
+        }
+        // A three-parameter shift, in a unit of its own.
+        let three = r#"BOUNDCRS[SOURCECRS[GEOGCRS["NAD27",DATUM["North American Datum 1927",ELLIPSOID["Clarke 1866",6378206.4,294.978698213898]],PRIMEM["Greenwich",0],CS[ellipsoidal,2],AXIS["lat",north],AXIS["lon",east],ANGLEUNIT["degree",0.0174532925199433]]],TARGETCRS[GEOGCRS["WGS 84",DATUM["World Geodetic System 1984",ELLIPSOID["WGS 84",6378137,298.257223563]],CS[ellipsoidal,2],AXIS["lat",north],AXIS["lon",east],ANGLEUNIT["degree",0.0174532925199433]]],ABRIDGEDTRANSFORMATION["NAD27 to WGS 84",METHOD["Geocentric translations (geog2D domain)",ID["EPSG",9603]],PARAMETER["X-axis translation",-8,ID["EPSG",8605]],PARAMETER["Y-axis translation",16000,LENGTHUNIT["centimetre",0.01],ID["EPSG",8606]],PARAMETER["Z-axis translation",176,ID["EPSG",8607]]]]"#;
+        // A unitless scale near 1 is PROJ's factor, otherwise parts per million.
+        for (scale, ppm) in [
+            ("1.000007", "7"),
+            ("0.6", "0.6"),
+            ("-3", "-3"),
+            (r#"1.000007,SCALEUNIT["unity",1]"#, "7"),
+            (r#"7,SCALEUNIT["parts per million",1E-06]"#, "7"),
+            // The edges of the factor form: within 1% of 1, a factor; past it, ppm.
+            ("0.995", "-5000"),
+            ("1.0", "0"),
+            ("1.02", "1.02"),
+        ] {
+            let seven = wkt.replace("0.999979511", scale);
+            let def = crs_from_wkt(&seven).unwrap().custom_def().unwrap();
+            assert!(def.proj4.contains(&format!("0.842,{ppm} ")), "{scale}: {}", def.proj4);
+        }
+        // Rotations without a scale, or the reverse: the missing ones are none.
+        let no_scale = wkt.replace(r#",PARAMETER["Scale difference",0.999979511,ID["EPSG",8611]]"#, "");
+        let def = crs_from_wkt(&no_scale).unwrap().custom_def().unwrap();
+        assert!(def.proj4.contains("+towgs84=446.448,-125.157,542.06,0.15,0.247,0.842,0 "), "{}", def.proj4);
+        let no_turn = wkt.replace(r#",PARAMETER["Y-axis rotation",0.247,ID["EPSG",8609]]"#, "");
+        let def = crs_from_wkt(&no_turn).unwrap().custom_def().unwrap();
+        assert!(def.proj4.contains("+towgs84=446.448,-125.157,542.06,0.15,0,0.842,-20.489 "), "{}", def.proj4);
+        let (crs, note) = read_wkt(three).unwrap();
+        assert!(note.is_none() && crs.custom_def().is_some_and(|d| d.proj4.contains("+towgs84=-8,160,176 ")), "{:?}", crs.custom_def());
+    }
+
     #[test]
     fn hostile_text() {
         for bad in
             ["", "garbage", "PROJCS[", "PROJCS[\"x\"", "PROJCS[\"x\",PROJECTION[\"Hotine\"]]", "GEOGCS[\"x\"] trailing", "VERT_CS[\"x\"]"]
         {
             assert!(crs_from_wkt(bad).is_err(), "{bad}");
+        }
+        // WKT2 with parts missing, or nested past what's read.
+        for bad in [
+            "PROJCRS[\"x\"]",
+            "PROJCRS[\"x\",BASEGEOGCRS[\"y\"]]",
+            "PROJCRS[\"x\",BASEGEOGCRS[\"y\"],CONVERSION[\"c\",METHOD[\"Krovak\"]]]",
+            "BOUNDCRS[]",
+            "BOUNDCRS[SOURCECRS[]]",
+            "COMPOUNDCRS[\"x\",VERTCRS[\"h\"]]",
+            "GEOGCRS[\"x\",CS[Cartesian,3]]",
+            "GEOGCRS[\"x\",ANGLEUNIT[\"grad\",0.015707963267949]]",
+            "VERTCRS[\"h\"]",
+            "GEOGCRS[\"x\",DATUM[\"d\",ELLIPSOID[\"e\",\"298.25\"]]]",
+        ] {
+            assert!(crs_from_wkt(bad).is_err(), "{bad}");
+        }
+        let nested = format!("{}GEOGCRS[\"x\"]{}", "COMPOUNDCRS[\"c\",".repeat(8), "]".repeat(8));
+        assert!(crs_from_wkt(&nested).is_err());
+        let nested = format!("{}GEOGCRS[\"x\"]{}", "BOUNDCRS[SOURCECRS[".repeat(8), "]]".repeat(8));
+        assert!(crs_from_wkt(&nested).is_err());
+        // Values out of range are read or refused, never a crash.
+        for odd in [
+            r#"PROJCRS["x",BASEGEOGCRS["y",DATUM["d",ELLIPSOID["e",-1,0,LENGTHUNIT["m",-5]]],PRIMEM["p",1e308,ANGLEUNIT["a",1e308]]],CONVERSION["c",METHOD["Transverse Mercator"],PARAMETER["False easting",1e308,LENGTHUNIT["x",1e308]],PARAMETER["Latitude of natural origin",1e300,ANGLEUNIT["x",1e300]]],LENGTHUNIT["u",0]]"#,
+            r#"BOUNDCRS[SOURCECRS[GEOGCRS["x"]],ABRIDGEDTRANSFORMATION["t",PARAMETER["X-axis translation",1e308,LENGTHUNIT["m",1e308]],PARAMETER["Y-axis translation",0],PARAMETER["Z-axis translation",0]]]"#,
+            r#"GEOGCRS["x",ID["EPSG",-4326]]"#,
+            r#"GEOGCRS["x",ID["EPSG",99999999999]]"#,
+        ] {
+            let _ = read_wkt(odd);
         }
         let deep = format!("{}{}", "A[".repeat(10_000), "]".repeat(10_000));
         assert!(crs_from_wkt(&deep).is_err());

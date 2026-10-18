@@ -15,6 +15,7 @@ pub const NETWORK: &[&str] = &[
     "map.route",
     "map.addTiles",
     "map.body",
+    "map.terrain",
     "layer.addUrl",
     "service.layers",
     "service.add",
