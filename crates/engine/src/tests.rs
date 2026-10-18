@@ -7500,6 +7500,12 @@ fn layers_are_copied_and_pasted_between_maps() {
     s.run("map.new", &json!({"name": "Third"})).unwrap();
     let r = s.run("layer.paste", &Value::Null).unwrap();
     assert_eq!((r["unmasked"].clone(), s.map().layers[0].mask.clone()), (json!(["Cities"]), None));
+    // Only a polygon layer masks (as the renderer finds it): a point layer of that name doesn't.
+    s.run("layer.rename", &json!({"layer": "Cities", "name": "Countries"})).unwrap();
+    let r = s.run("layer.paste", &Value::Null).unwrap();
+    assert_eq!((r["unmasked"].clone(), s.map().layers[0].mask.clone()), (json!(["Cities"]), None));
+    s.run("edit.undo", &Value::Null).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
     // Into a group, at its top.
     s.run("layer.paste", &json!({"map": "Second", "group": "Places"})).unwrap();
     let second = &s.project.maps[1];

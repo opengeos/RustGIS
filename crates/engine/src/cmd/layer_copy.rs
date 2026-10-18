@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use rustgis_data::GeometryType;
 use rustgis_map::{Layer, LayerGroup, MAX_GROUPS, Map};
 use serde_json::{Value, json};
 
@@ -136,24 +137,31 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
     };
     let m = s.project.maps.get_mut(mi).ok_or("no such map")?;
     let mut new_ids: HashMap<u32, u32> = HashMap::new();
-    let mut renamed: HashMap<String, String> = HashMap::new();
+    // Each pasted layer's name as copied, in drawing order, to find masks by.
+    let mut copied: Vec<(String, u32)> = Vec::new();
     let mut pasted: Vec<u32> = Vec::new();
     for mut l in clip.layers {
         let old = l.id;
         let name = unique_layer_name(m, &l.name);
-        renamed.insert(l.name.to_lowercase(), name.clone());
+        let was = std::mem::replace(&mut l.name, name.clone());
         l.dataset.name = name.clone();
-        l.name = name;
         let id = m.add_layer(l);
         m.place_layer(id, into, before)?;
         new_ids.insert(old, id);
+        copied.push((was, id));
         pasted.push(id);
     }
-    // A mask follows its layer when that was pasted too; one the map lacks is cleared.
+    // A mask follows its layer when that was pasted too; one the map lacks is cleared. Masks are
+    // found as the renderer finds them: the first polygon layer of that name, case aside (ASCII).
+    let polygon = |m: &Map, id: u32| m.layer(id).is_some_and(|l| l.geometry_type() == GeometryType::Polygon);
     let mut unmasked: Vec<String> = Vec::new();
     for id in &pasted {
         let Some(mask) = m.layer(*id).and_then(|l| l.mask.clone()) else { continue };
-        let target = renamed.get(&mask.to_lowercase()).cloned().or_else(|| m.layer_by_name(&mask).map(|l| l.name.clone()));
+        let own = copied.iter().find(|(was, c)| was.eq_ignore_ascii_case(&mask) && polygon(m, *c)).map(|(_, c)| *c);
+        let found = own.or_else(|| {
+            m.layers.iter().find(|l| l.name.eq_ignore_ascii_case(&mask) && l.geometry_type() == GeometryType::Polygon).map(|l| l.id)
+        });
+        let target = found.and_then(|c| m.layer(c)).map(|l| l.name.clone());
         if let Some(l) = m.layer_mut(*id) {
             if target.is_none() {
                 unmasked.push(l.name.clone());
