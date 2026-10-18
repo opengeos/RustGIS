@@ -693,7 +693,11 @@ fn colorbar(pm: &mut Pixmap, r: Rect, scale: &ColorScale, bar: &Bar, ppp: f64) {
     } else {
         let ends = labels.first().map(|(_, s)| width(s)).unwrap_or(0.0).max(labels.last().map(|(_, s)| width(s)).unwrap_or(0.0));
         let inset = (ends / 2.0).min(r.width() * 0.25);
-        let bh = (bottom - top - px * 1.2 - tick - gap).max(2.0 * ppp).min(bottom - top);
+        // Too short for its labels (left out below), the bar fills the element.
+        let bh = match bottom - top - px * 1.2 - tick - gap {
+            h if h >= 3.0 * ppp => h,
+            _ => bottom - top,
+        };
         let by = if bar.side == TickSide::Start { bottom - bh } else { top };
         (r.x() + inset, by, (r.width() - 2.0 * inset).max(1.0), bh)
     };
@@ -715,6 +719,9 @@ fn colorbar(pm: &mut Pixmap, r: Rect, scale: &ColorScale, bar: &Bar, ppp: f64) {
     if let Some(b) = Rect::from_xywh(bx, by, bw, bh) {
         pm.stroke_path(&PathBuilder::from_rect(b), &paint(dark, 1.0), &line, Transform::identity(), None);
     }
+    // A label (and its tick) is left out where it would spill out of a short or narrow element.
+    let inside =
+        |x: f32, y: f32, w: f32, h: f32| x >= r.x() - 1.0 && y >= r.y() - 1.0 && x + w <= r.right() + 1.0 && y + h <= r.bottom() + 1.0;
     // Labels in order along the bar, each drawn only if it clears the one before.
     let mut last_end = f32::NEG_INFINITY;
     let mut ordered: Vec<(f32, &String)> = labels.iter().map(|(t, s)| (along(t.clamp(0.0, 1.0)), s)).collect();
@@ -732,6 +739,9 @@ fn colorbar(pm: &mut Pixmap, r: Rect, scale: &ColorScale, bar: &Bar, ppp: f64) {
             pb.move_to(x0, y);
             pb.line_to(x1, y);
             let lx = if bar.side == TickSide::Start { x1 - gap - width(label) } else { x1 + gap };
+            if !inside(lx, y - px / 2.0, width(label), px) {
+                continue;
+            }
             text::text_at(pm, label, lx, y, px, dark, false, text::Align::Left, false);
         } else {
             let (x, y0) = (bx + d, if bar.side == TickSide::Start { by } else { by + bh });
@@ -739,6 +749,9 @@ fn colorbar(pm: &mut Pixmap, r: Rect, scale: &ColorScale, bar: &Bar, ppp: f64) {
             pb.move_to(x, y0);
             pb.line_to(x, y1);
             let ly = if bar.side == TickSide::Start { y1 - gap - px * 0.5 } else { y1 + gap + px * 0.5 };
+            if !inside(x - width(label) / 2.0, ly - px / 2.0, width(label), px) {
+                continue;
+            }
             text::text_at(pm, label, x, ly, px, dark, false, text::Align::Center, false);
         }
         if let Some(p) = pb.finish() {
@@ -1035,11 +1048,40 @@ mod tests {
 
         // Classes draw as steps, one colour each.
         let breaks = vec![24.0, 49.0, 74.0, 99.0];
-        let classify = RasterRenderer::Classify { band: 0, method: rustgis_map::ClassMethod::EqualInterval, ramp, breaks, classes: 4 };
+        let classify =
+            RasterRenderer::Classify { band: 0, method: rustgis_map::ClassMethod::EqualInterval, ramp: ramp.clone(), breaks, classes: 4 };
         let pm = colorbar_page(&ramp_map(classify, Stretch::MinMax), Orientation::Horizontal, false, "");
         let mut colours: Vec<(u8, u8, u8)> = ((16.0 * k) as u32..(84.0 * k) as u32).map(|x| rgb(&pm, x, y)).collect();
         colours.dedup();
         assert!((4..=7).contains(&colours.len()), "four steps (and their seams): {colours:?}");
+
+        // In an element too short for its labels, they are left out rather than drawn under it.
+        let mut l = Layout::new("Layout", 100.0, 100.0);
+        let frame = l.add(
+            "Map",
+            (95.0, 95.0, 4.0, 4.0),
+            ElementKind::MapFrame {
+                map: "m".into(),
+                center: Coord::new(0.0, 0.0),
+                scale: 1e8,
+                shape: FrameShape::Rectangle,
+                grid: None,
+                extent_of: None,
+            },
+        );
+        let kind = ElementKind::Colorbar {
+            frame,
+            layer: None,
+            title: String::new(),
+            orientation: Orientation::Horizontal,
+            ticks: 5,
+            tick_side: TickSide::End,
+            reverse: false,
+        };
+        l.add("Colorbar", (10.0, 10.0, 80.0, 3.0), kind);
+        let short = render(&l, &mut [map.clone()], 96.0, &PageInfo::default()).unwrap();
+        assert!(!inked(&short, 13.5, 20.0), "nothing spills below the element");
+        assert!(close(rgb(&short, (16.0 * k) as u32, (11.0 * k) as u32), ramp.at(0.0)), "the bar is still drawn");
 
         // RGB has no colour scale: a placeholder, not a bar.
         let pm = colorbar_page(
