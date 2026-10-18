@@ -332,7 +332,7 @@ Any command can answer the panel's new state, beside the rest of its answer:
 - RustGIS versions before panels ignore `panel` (and refuse a tab that names it): keep the
   commands usable from the ribbon too, or set `minRustgisVersion`.
 
-### What a plugin can ask for### What a plugin can ask for
+### What a plugin can ask for
 
 Inside a request, `host::call(op, params)` sends one of these to RustGIS:
 

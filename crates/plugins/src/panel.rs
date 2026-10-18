@@ -203,6 +203,15 @@ pub struct PanelState {
 }
 
 impl PanelState {
+    /// Whether this state was made from `decl`'s widgets: the same ids, and the same checkboxes
+    /// and sliders holding values. A plugin updated with another panel doesn't match.
+    pub fn matches(&self, decl: &PanelDecl) -> bool {
+        let fresh = PanelState::new(decl);
+        self.items.keys().eq(fresh.items.keys())
+            && self.values.len() == fresh.values.len()
+            && self.values.iter().zip(&fresh.values).all(|((k, v), (fk, fv))| k == fk && v.is_boolean() == fv.is_boolean())
+    }
+
     /// The state a panel starts in: what `plugin.json` declares.
     pub fn new(decl: &PanelDecl) -> PanelState {
         let mut values = BTreeMap::new();

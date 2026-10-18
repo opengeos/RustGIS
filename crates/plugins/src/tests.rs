@@ -438,13 +438,33 @@ fn plugin_panel_state_round_trips() {
 }
 
 #[test]
+fn a_panel_state_matches_only_its_declaration() {
+    use crate::PanelState;
+    let m = Manifest::parse(&testing::panel_manifest("match-panel")).unwrap();
+    let decl = m.panel.unwrap();
+    let state = PanelState::new(&decl);
+    assert!(state.matches(&decl));
+    // The plugin updated: a widget fewer, or a checkbox become a slider of the same id.
+    let mut fewer = decl.clone();
+    fewer.items.pop();
+    assert!(!state.matches(&fewer));
+    let mut retyped = decl.clone();
+    if let Some(i) = retyped.items.iter_mut().find(|i| i.kind == "checkbox") {
+        i.kind = "slider".into();
+    }
+    assert!(!state.matches(&retyped));
+}
+
+#[test]
 fn hostile_panel_states_are_tamed() {
     use crate::PanelState;
     let m = Manifest::parse(&testing::panel_manifest("hostile-panel")).unwrap();
     let decl = m.panel.unwrap();
     let fresh = PanelState::new(&decl);
     let huge = "y".repeat(100_000);
-    let many: Vec<Value> = (0..10_000).map(|i| json!(format!("{i}{huge}"))).collect();
+    // Past both slider label limits (count and length), without holding a gigabyte of text.
+    let long_label = "y".repeat(crate::panel::MAX_SLIDER_LABEL * 2);
+    let many: Vec<Value> = (0..crate::panel::MAX_SLIDER_LABELS * 2).map(|i| json!(format!("{i}{long_label}"))).collect();
     for junk in [
         Value::Null,
         json!(7),

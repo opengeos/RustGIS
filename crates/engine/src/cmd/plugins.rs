@@ -47,7 +47,7 @@ fn panel(s: &mut Session, p: &Value) -> CmdResult {
     }
     let decl = plugin.manifest.panel.clone().ok_or_else(|| format!("{} has no panel", plugin.manifest.name))?;
     if let Some(values) = p.get("values") {
-        s.plugin_panels.entry(id.to_string()).or_insert_with(|| rustgis_plugins::PanelState::new(&decl)).set_values(&decl, values);
+        s.panel_state(id, &decl).set_values(&decl, values);
     }
     if b(p, "refresh").unwrap_or(false) && !decl.state.is_empty() {
         s.run_plugin(&rustgis_plugins::command_id(id, &decl.state), &json!({}))?;
@@ -507,7 +507,7 @@ impl Session {
         let mut stripped;
         let (before, request) = match &panel {
             Some(decl) => {
-                let state = self.plugin_panels.entry(pid.clone()).or_insert_with(|| rustgis_plugins::PanelState::new(decl));
+                let state = self.panel_state(&pid, decl);
                 let before = state.clone();
                 let mut changed = Vec::new();
                 if let Some(given) = params.get("panel") {
@@ -554,6 +554,16 @@ impl Session {
     pub fn plugin_panel(&mut self, plugin: &str) -> Option<&rustgis_plugins::PanelState> {
         let p = rustgis_plugins::get(plugin).filter(|p| p.enabled)?;
         let decl = p.manifest.panel.as_ref()?;
-        Some(self.plugin_panels.entry(plugin.to_string()).or_insert_with(|| rustgis_plugins::PanelState::new(decl)))
+        Some(self.panel_state(plugin, decl))
+    }
+
+    /// The kept state of `plugin`'s panel `decl`: made from the declaration the first time, and
+    /// made again when the plugin was updated with other widgets since.
+    fn panel_state(&mut self, plugin: &str, decl: &rustgis_plugins::PanelDecl) -> &mut rustgis_plugins::PanelState {
+        let state = self.plugin_panels.entry(plugin.to_string()).or_insert_with(|| rustgis_plugins::PanelState::new(decl));
+        if !state.matches(decl) {
+            *state = rustgis_plugins::PanelState::new(decl);
+        }
+        state
     }
 }
