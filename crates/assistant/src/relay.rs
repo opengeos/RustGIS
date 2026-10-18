@@ -741,7 +741,9 @@ impl Relay {
             let layers = self.enter_agent(s, &req.token);
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &req.line)))
                 .unwrap_or_else(|_| Some(internal_error(&req.line)));
-            self.leave_agent(s, &req.token, layers, selects_layer(&req.line));
+            // A layer.select that failed (an unknown layer, a refusal) chose nothing.
+            let picked = selects_layer(&req.line) && reply_ok(out.as_deref());
+            self.leave_agent(s, &req.token, layers, picked);
             if let Some(a) = action(&req.line, out.as_deref()) {
                 *lock(&self.owner.last) = Some(a);
             }
@@ -784,6 +786,13 @@ impl Relay {
         }
         s.active_layer = users.filter(|id| s.map().layer(*id).is_some());
     }
+}
+
+/// Whether a reply (or every reply in a batch) says its call worked.
+fn reply_ok(reply: Option<&str>) -> bool {
+    let Some(v) = reply.and_then(|r| serde_json::from_str::<Value>(r).ok()) else { return false };
+    let replies = v.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&v));
+    replies.iter().all(|r| r.get("error").is_none() && r.pointer("/result/isError") != Some(&Value::Bool(true)))
 }
 
 /// Whether a message (or a batch) selects a layer: a `layer.select` command, on its own or as a
@@ -1608,6 +1617,18 @@ mod tests {
         call(&mut fresh, &relay2, &mut s, command(10, "layer.rename", json!({"name": "Streams"})));
         assert!(s.map().layer_by_name("Streams").is_some() && s.map().layer_by_name("Towns").is_some(), "it followed the user to Rivers");
         relay2.stop();
+
+        // A layer.select that fails chooses nothing: the agent still follows the user.
+        let relay3 = Relay::start(0).unwrap();
+        let mut failing = TcpStream::connect(("127.0.0.1", relay3.port())).unwrap();
+        attach(&mut failing, &relay3, false);
+        s.active_layer = id(&s, "Countries");
+        call(&mut failing, &relay3, &mut s, command(11, "layer.select", json!({"layer": "No such layer"})));
+        s.active_layer = id(&s, "Lakes");
+        call(&mut failing, &relay3, &mut s, command(12, "layer.rename", json!({"name": "Ponds"})));
+        assert!(s.map().layer_by_name("Ponds").is_some() && s.map().layer_by_name("Countries").is_some(), "it followed the user");
+        relay3.stop();
+        s.run("layer.rename", &json!({"layer": "Ponds", "name": "Lakes"})).unwrap();
 
         // An agent that picks the layer the user has active keeps it when the user moves on.
         let relay = Relay::start(0).unwrap();
