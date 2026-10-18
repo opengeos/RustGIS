@@ -1271,6 +1271,49 @@ fn zooms_to_a_layer_follow_its_definition_query() {
 }
 
 #[test]
+fn layout_frames_turn_and_tilt() {
+    use rustgis_map::layout::ElementKind;
+    let mut s = world();
+    let frame_of = |s: &Session| {
+        let l = &s.project.layouts[0];
+        let id = l.first_frame().unwrap_or_default();
+        match l.element(id).map(|e| e.kind.clone()) {
+            Some(ElementKind::MapFrame { bearing, pitch, .. }) => (id, bearing, pitch),
+            _ => panic!("no frame"),
+        }
+    };
+    // A new frame shows the map view as it is, turned and tilted.
+    s.run("map.setBearing", &json!({"bearing": 30})).unwrap();
+    s.run("map.setPitch", &json!({"pitch": 50})).unwrap();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
+    let (id, bearing, pitch) = frame_of(&s);
+    assert_eq!((bearing, pitch), (30.0, 50.0));
+    // Set on the frame, kept in range; a value that isn't a number changes nothing.
+    s.run("layout.update", &json!({"element": id, "bearing": 400, "pitch": 200})).unwrap();
+    assert_eq!(frame_of(&s), (id, 40.0, 85.0));
+    assert!(s.run("layout.update", &json!({"element": id, "pitch": "steep", "bearing": 10})).is_err());
+    assert_eq!(frame_of(&s), (id, 40.0, 85.0));
+    // Zooming the frame to the view takes the view's bearing and pitch too.
+    s.run("map.resetNorth", &json!({})).unwrap();
+    s.run("layout.frameZoom", &json!({"to": "view"})).unwrap();
+    assert_eq!(frame_of(&s), (id, 0.0, 0.0));
+    // A flat frame saves as before; a tilted one draws differently, with its north arrow turned.
+    let flat_json = serde_json::to_string(&s.project.layouts[0]).unwrap_or_default();
+    assert!(!flat_json.contains("bearing") && !flat_json.contains("pitch"), "{flat_json}");
+    s.run("layout.addElement", &json!({"kind": "northArrow", "frame": id})).unwrap();
+    let info = rustgis_render::layout::PageInfo::default();
+    let draw = |s: &mut Session| {
+        rustgis_render::layout::render(&s.project.layouts[0].clone(), &mut s.project.maps, 48.0, &info).map(|p| p.data().to_vec())
+    };
+    let flat = draw(&mut s).expect("drawn");
+    s.run("layout.update", &json!({"element": id, "bearing": 90, "pitch": 60})).unwrap();
+    let tilted = draw(&mut s).expect("drawn");
+    assert_ne!(flat, tilted);
+    let saved = serde_json::to_string(&s.project.layouts[0]).unwrap_or_default();
+    assert!(saved.contains("\"bearing\":90") && saved.contains("\"pitch\":60"), "{saved}");
+}
+
+#[test]
 fn symbology_classes_follow_the_definition_query() {
     let mut s = world();
     s.run("layer.definitionQuery", &json!({"layer": "Countries", "where": "continent = 'Europe'"})).unwrap();

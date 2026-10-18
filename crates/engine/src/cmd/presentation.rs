@@ -309,7 +309,16 @@ pub fn page_layout(s: &Session, pres: &Presentation, page: &Page) -> Layout {
             l.add(
                 "Map",
                 (m, top, fw, fh),
-                ElementKind::MapFrame { map, center: *center, scale, shape: FrameShape::Rectangle, grid: None, extent_of: None },
+                ElementKind::MapFrame {
+                    map,
+                    center: *center,
+                    scale,
+                    shape: FrameShape::Rectangle,
+                    grid: None,
+                    extent_of: None,
+                    bearing: 0.0,
+                    pitch: 0.0,
+                },
             );
         }
         PageKind::Image { image, caption } | PageKind::Video { poster: Some(image), caption, .. } => {

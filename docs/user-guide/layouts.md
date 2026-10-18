@@ -13,7 +13,9 @@ the maps; while one is open, its groups lead the Publish tab:
   Map** (Map Frames group, or a frame's properties) to drag inside frames to pan their maps and
   turn the wheel to zoom them about the pointer; Esc turns it off. Without it, Shift-drag a frame
   to pan its map. Double-click a frame to match the map view, or set the scale in its properties.
-  **Grid** draws a labelled graticule over a frame; **Extent Indicator** outlines another frame's
+  A frame can be turned and tilted like the map view: a new frame, or one matched to the view,
+  takes the view's bearing and pitch, and **Bearing** and **Pitch** in its properties (or
+  `layout.update` with `bearing` and `pitch`) set them. Its north arrows turn with it. **Grid** draws a labelled graticule over a frame; **Extent Indicator** outlines another frame's
   extent (an overview map).
 - **Grids**: the **Grid** section of a frame's properties turns the grid on and sets its
   **Interval** in degrees (**Auto** picks one from the frame's extent), its **Style** (full lines
