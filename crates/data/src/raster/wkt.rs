@@ -474,14 +474,12 @@ fn bound(b: Node, depth: usize) -> Result<Node, String> {
         Some(match measure {
             Measure::Length => f.map_or(v, |f| v * f),
             Measure::Angle => f.map_or(v, |f| v * f / (1f64.to_radians() / 3600.0)),
-            // PROJ writes a TOWGS84 scale as a factor with no unit (1.000007); EPSG gives parts
-            // per million. Datum scales are within a few hundred ppm of 1, so a value within 1% of
-            // 1 is a factor. (Rounded to a millionth of a ppm: 0.999979511 is -20.489, not
-            // -20.488999999956903.)
+            // The scale as a pure number, from its unit (`unity`, `parts per million`). Without
+            // one, PROJ's BOUNDCRS writes the factor (1.000007) and EPSG would mean ppm; datum
+            // scales are a few hundred ppm at most, so a value within 1% of 1 is the factor (1 +
+            // the difference) and anything else the difference. (Rounded to a millionth of a ppm:
+            // 0.999979511 is -20.489, not -20.488999999956903.)
             Measure::Scale => {
-                // As a pure number: with its unit (`unity` or `parts per million`), else a unitless
-                // factor near 1 as it is, and other unitless values as ppm. A number near 1 is the
-                // factor (1 + difference), anything else the difference itself.
                 let s = match f {
                     Some(f) => v * f,
                     None if (v - 1.0).abs() < 0.01 => v,
