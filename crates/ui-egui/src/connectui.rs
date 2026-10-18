@@ -38,6 +38,8 @@ pub fn resume(app: &mut RustGisApp) {
     resume_with(app, port);
 }
 
+/// [`resume`] on a given port (tests, with a port of their own).
+#[cfg(test)]
 fn resume_on(app: &mut RustGisApp, port: u16) {
     resume_with(app, Ok(port));
 }
