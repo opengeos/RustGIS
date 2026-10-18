@@ -738,10 +738,10 @@ impl Relay {
             // app (Session::run catches panics inside commands; this covers the tools around it).
             // The agent works with its own active layer and is named in the undo history; the
             // user's selection is theirs again afterwards.
-            let users_layer = self.enter_agent(s, &req.token);
+            let layers = self.enter_agent(s, &req.token);
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &req.line)))
                 .unwrap_or_else(|_| Some(internal_error(&req.line)));
-            self.leave_agent(s, &req.token, users_layer);
+            self.leave_agent(s, &req.token, layers, selects_layer(&req.line));
             if let Some(a) = action(&req.line, out.as_deref()) {
                 *lock(&self.owner.last) = Some(a);
             }
@@ -755,7 +755,7 @@ impl Relay {
 impl Relay {
     /// Before an agent's call: names it as the session's actor and makes its own active layer
     /// (if it still exists) the session's. Returns the user's active layer.
-    fn enter_agent(&self, s: &mut Session, token: &str) -> Option<u32> {
+    fn enter_agent(&self, s: &mut Session, token: &str) -> (Option<u32>, Option<u32>) {
         let mut agents = lock(&self.owner.shared.agents);
         let n = agents.len() + 1;
         // Named for this relay run too: a relay started again on the same session numbers its
@@ -769,19 +769,32 @@ impl Relay {
             s.active_layer = mine;
         }
         s.actor = Some(agent.name.clone());
-        users
+        (users, s.active_layer)
     }
 
-    /// After an agent's call: remembers the layer it left active as its own (from its first call
-    /// on, its commands no longer follow the user's selection) and gives the user back theirs, if
-    /// that layer is still there.
-    fn leave_agent(&self, s: &mut Session, token: &str, users: Option<u32>) {
+    /// After an agent's call: when the call chose a layer (changed the active one, or selected one
+    /// with `layer.select`, even the user's), it becomes the agent's own; until then the agent's
+    /// commands follow the user's selection. The user gets theirs back, if it's still there.
+    fn leave_agent(&self, s: &mut Session, token: &str, (users, entered): (Option<u32>, Option<u32>), picked: bool) {
         s.actor = None;
-        if let Some(agent) = lock(&self.owner.shared.agents).get_mut(token) {
+        if let Some(agent) = lock(&self.owner.shared.agents).get_mut(token)
+            && (picked || s.active_layer != entered)
+        {
             agent.active = s.active_layer;
         }
         s.active_layer = users.filter(|id| s.map().layer(*id).is_some());
     }
+}
+
+/// Whether a message (or a batch) selects a layer: a `layer.select` command, on its own or as a
+/// line of a `run` script.
+fn selects_layer(line: &str) -> bool {
+    let Ok(msg) = serde_json::from_str::<Value>(line) else { return false };
+    let messages = msg.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&msg));
+    messages.iter().filter_map(|m| m.get("params").and_then(|p| p.get("arguments"))).any(|a| {
+        a.get("command").and_then(Value::as_str) == Some("layer.select")
+            || a.get("script").and_then(Value::as_str).is_some_and(|s| s.lines().any(|l| l.trim_start().starts_with("layer.select")))
+    })
 }
 
 /// A message that is one `snapshot` call to capture the screen: `mode` `screen`, or `auto`
@@ -1577,6 +1590,22 @@ mod tests {
         assert!(s.map().layer_by_name("Towns").is_some() && s.map().layer_by_name("Lakes").is_some(), "the agent renamed its own layer");
         assert_eq!(s.active_layer, id(&s, "Lakes"));
         relay.stop();
+
+        // An agent that hasn't chosen a layer follows the user's selection.
+        let relay2 = Relay::start(0).unwrap();
+        let mut fresh = TcpStream::connect(("127.0.0.1", relay2.port())).unwrap();
+        attach(&mut fresh, &relay2, false);
+        s.active_layer = id(&s, "Towns");
+        call(
+            &mut fresh,
+            &relay2,
+            &mut s,
+            json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "list_layers", "arguments": {}}}),
+        );
+        s.active_layer = id(&s, "Rivers");
+        call(&mut fresh, &relay2, &mut s, command(10, "layer.rename", json!({"name": "Streams"})));
+        assert!(s.map().layer_by_name("Streams").is_some() && s.map().layer_by_name("Towns").is_some(), "it followed the user to Rivers");
+        relay2.stop();
 
         // An agent that picks the layer the user has active keeps it when the user moves on.
         let relay = Relay::start(0).unwrap();

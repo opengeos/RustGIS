@@ -111,8 +111,9 @@ and `edit.redo` work only on its own steps: when the step on top is yours (or an
 they're refused, and they run on their own (`run_command`), not inside a `run` script. You can
 still undo anything. Each agent also has its own active layer: when an
 agent selects a layer (`layer.select`, or a command that makes a layer active), your selection in
-the Layers pane stays as it was. From its first call on, the agent's commands that name no layer
-act on its own layer (the one it last left active), whatever you select meanwhile.
+the Layers pane stays as it was. Once the agent has chosen a layer (selected one, or run a command
+that made one active), its commands that name no layer act on that layer, whatever you select
+meanwhile; until then they act on the one you have selected.
 
 An agent the app starts itself gets a run-scoped token instead of the relay's own:
 `rustgis-cli mcp --attach PORT --token-file FILE`. Each such grant carries its own file and network
@@ -185,6 +186,7 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
 - Separate active layers: `relay_keeps_the_agents_active_layer_apart_from_the_users`
 - Agents undo only their own steps: `relay_agents_undo_only_their_own_steps`
+- Agents of an earlier relay run aren't this run's: `relay_agents_of_another_run_cant_undo_earlier_steps`
 - Screen snapshots go to the app: `relay_hands_screen_snapshots_to_the_app`
 - Snapshots without the screen: `relay_draws_snapshots_offscreen_without_the_screen`
 - Saved snapshots need access: `relay_refuses_a_saved_snapshot_without_access`
