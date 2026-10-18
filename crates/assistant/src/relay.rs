@@ -242,6 +242,8 @@ impl Drop for Grant {
 struct Owner {
     shared: Arc<Shared>,
     port: u16,
+    /// The folder of the audit log the calls are written to ([`Relay::set_audit_dir`]).
+    audit: Mutex<Option<PathBuf>>,
 }
 
 impl Drop for Owner {
@@ -456,7 +458,7 @@ impl Relay {
             grant_ids: AtomicU64::new(0),
             run_id: random_token()?.chars().take(8).collect(),
         });
-        let owner = Arc::new(Owner { shared, port });
+        let owner = Arc::new(Owner { shared, port, audit: Mutex::new(None) });
         let accepting = Arc::clone(&owner.shared);
         std::thread::Builder::new()
             .name("rustgis-mcp-relay".into())
@@ -479,6 +481,12 @@ impl Relay {
     /// not counted.
     pub fn attached_clients(&self) -> usize {
         self.owner.shared.attached.load(SeqCst)
+    }
+
+    /// Writes every tool call agents make to the audit log in `dir` ([`crate::audit`]), or to
+    /// none. The desktop app keeps it in [`crate::audit::dir`].
+    pub fn set_audit_dir(&self, dir: Option<PathBuf>) {
+        *lock(&self.owner.audit) = dir;
     }
 
     /// Stops the listener: it closes, every client is disconnected, queued messages are dropped
@@ -616,8 +624,12 @@ impl Relay {
             }
             // A last resort: a panic answers that message with an error instead of breaking the
             // app (Session::run catches panics inside commands; this covers the tools around it).
+            let started = Instant::now();
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &req.line)))
                 .unwrap_or_else(|_| Some(internal_error(&req.line)));
+            if let Some(dir) = lock(&self.owner.audit).as_deref() {
+                crate::audit::record(dir, "mcp", &req.line, out.as_deref(), started.elapsed());
+            }
             let _ = req.reply.send(out); // the connection may have hung up
             ran += 1;
         }
@@ -1332,6 +1344,36 @@ mod tests {
         let reply = reply(&client);
         assert_eq!(reply["result"]["isError"], false, "{reply}");
         assert_eq!(s.map().layers.len(), layers, "{reply}");
+        relay.stop();
+    }
+
+    /// Every tool call through the relay goes to the audit log, with how it went.
+    #[test]
+    fn relay_writes_each_call_to_the_audit_log() {
+        let relay = Relay::start(0).unwrap();
+        let log = tempfile::tempdir().unwrap();
+        relay.set_audit_dir(Some(log.path().to_path_buf()));
+        let mut s = sample();
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        writeln!(client, "{}", add_sample_call(1)).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        reply(&client);
+        let ping = json!({"jsonrpc": "2.0", "id": 2, "method": "ping"});
+        writeln!(client, "{ping}").unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        reply(&client);
+        let files: Vec<_> = std::fs::read_dir(log.path()).unwrap().flatten().collect();
+        assert_eq!(files.len(), 1);
+        let text = std::fs::read_to_string(files[0].path()).unwrap();
+        let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(lines.len(), 1, "only tool calls are logged: {text}");
+        assert_eq!(
+            (lines[0]["command"].clone(), lines[0]["success"].clone(), lines[0]["source"].clone()),
+            (json!("layer.addSample"), json!(true), json!("mcp"))
+        );
         relay.stop();
     }
 
