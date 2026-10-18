@@ -958,10 +958,9 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
     let mut camera = view.camera;
     camera.bearing = rustgis_map::camera::normalize_bearing(camera.bearing);
     camera.pitch = rustgis_map::camera::normalize_pitch(camera.pitch);
-    // The globe neither turns nor tilts (a bearing or pitch kept on its camera waits for the map
-    // to be flat again).
+    // The globe turns and tilts itself (`Globe`): one frame.
     if map.projection.is_globe() {
-        let view = View { camera: Camera { bearing: 0.0, pitch: 0.0, ..camera }, ..*view };
+        let view = View { camera, ..*view };
         return render_frame(map, &view, full_res_rasters, backend, Labels::Own);
     }
     {
@@ -2226,7 +2225,7 @@ fn draw_stars(pm: &mut Pixmap, ppp: f32) {
 /// The globe's backdrop and lighting depend only on the view size, zoom, ocean and stars, not on
 /// the rotation, so they are drawn once and reused while the globe turns.
 struct GlobeLayers {
-    key: (u32, u32, u32, u32, u32, u32, [u8; 4], Space),
+    key: (u32, u32, u32, u32, u32, u32, u32, [u8; 4], Space),
     backdrop: Pixmap,
     shading: Pixmap,
 }
@@ -2244,6 +2243,7 @@ fn with_globe_layers(pm: &mut Pixmap, g: &Globe, water: Rgba, space: Space, ppp:
         (cx as f32).to_bits(),
         (cy as f32).to_bits(),
         (g.disc_radius() as f32).to_bits(),
+        (g.disc_height() as f32).to_bits(),
         water.0,
         space,
     );
@@ -2283,14 +2283,27 @@ fn draw_globe_backdrop(pm: &mut Pixmap, g: &Globe, water: Rgba, space: Space, pp
         draw_stars(pm, ppp);
     }
     let (cx, cy) = g.center();
-    draw_globe_disc(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp, water, space.dark);
+    draw_globe_disc(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp, disc_stretch(g), water, space.dark);
 }
 
-/// The atmosphere glow and the ocean disc, for a disc of radius `r` pixels at (`cx`, `cy`).
-fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, water: Rgba, dark: bool) {
+/// How much taller than wide a globe's disc is (1 unless it is tilted).
+fn disc_stretch(g: &Globe) -> f32 {
+    let k = (g.disc_height() / g.disc_radius().max(1e-9)) as f32;
+    if k.is_finite() && k > 0.0 { k } else { 1.0 }
+}
+
+/// Stretches drawing up and down by `k` about the row `cy`: a disc into a tilted globe's ellipse.
+fn stretch_about(cy: f32, k: f32) -> Transform {
+    Transform::from_row(1.0, 0.0, 0.0, k, 0.0, cy * (1.0 - k))
+}
+
+/// The atmosphere glow and the ocean disc, for a disc of radius `r` pixels at (`cx`, `cy`),
+/// stretched `k` times up and down (a tilted globe's ellipse).
+fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, k: f32, water: Rgba, dark: bool) {
     if !(r.is_finite() && r > 0.5 && cx.is_finite() && cy.is_finite()) {
         return;
     }
+    let t = stretch_about(cy, k);
     // Atmosphere: a glow fading out just beyond the limb.
     let glow_r = r * 1.07;
     // A softer, paler glow on light space.
@@ -2310,24 +2323,25 @@ fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, water: Rgba, dark:
     ) && let Some(path) = PathBuilder::from_circle(cx, cy, glow_r)
     {
         let p = Paint { shader, anti_alias: true, ..Paint::default() };
-        pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(&path, &p, FillRule::Winding, t, None);
     }
     if let Some(path) = PathBuilder::from_circle(cx, cy, r) {
-        pm.fill_path(&path, &paint(water, 1.0), FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(&path, &paint(water, 1.0), FillRule::Winding, t, None);
     }
 }
 
 /// Light from the upper left: a soft highlight and a darker limb, so the globe reads as a sphere.
 fn draw_globe_shading(pm: &mut Pixmap, g: &Globe, ppp: f32) {
     let (cx, cy) = g.center();
-    draw_globe_light(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp);
+    draw_globe_light(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp, disc_stretch(g));
 }
 
-/// The lighting of a disc of radius `r` pixels at (`cx`, `cy`).
-fn draw_globe_light(pm: &mut Pixmap, cx: f32, cy: f32, r: f32) {
+/// The lighting of a disc of radius `r` pixels at (`cx`, `cy`), stretched `k` times up and down.
+fn draw_globe_light(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, k: f32) {
     if !(r.is_finite() && r > 0.5 && cx.is_finite() && cy.is_finite()) {
         return;
     }
+    let t = stretch_about(cy, k);
     let light = Point::from_xy(cx - r * 0.35, cy - r * 0.4);
     if let Some(shader) = RadialGradient::new(
         light,
@@ -2345,7 +2359,7 @@ fn draw_globe_light(pm: &mut Pixmap, cx: f32, cy: f32, r: f32) {
     ) && let Some(path) = PathBuilder::from_circle(cx, cy, r)
     {
         let p = Paint { shader, anti_alias: true, ..Paint::default() };
-        pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(&path, &p, FillRule::Winding, t, None);
     }
 }
 
@@ -2364,8 +2378,8 @@ pub fn globe_sprites(basemap: rustgis_map::Basemap, r: f32) -> Option<(Pixmap, P
     let side = (2.0 * GLOBE_GLOW * r.min(2048.0)).round().max(2.0);
     let (r, c) = (side / (2.0 * GLOBE_GLOW), side / 2.0);
     let (mut under, mut over) = (Pixmap::new(side as u32, side as u32)?, Pixmap::new(side as u32, side as u32)?);
-    draw_globe_disc(&mut under, c, c, r, basemap.palette().0, true);
-    draw_globe_light(&mut over, c, c, r);
+    draw_globe_disc(&mut under, c, c, r, 1.0, basemap.palette().0, true);
+    draw_globe_light(&mut over, c, c, r, 1.0);
     Some((under, over))
 }
 
@@ -3289,14 +3303,16 @@ mod tests {
     }
 
     #[test]
-    fn a_globe_ignores_a_kept_bearing_and_pitch() {
+    fn a_globe_turns_and_tilts() {
         let mut m = Map::new("Map");
         m.projection = rustgis_map::Projection::Globe;
         let camera = Camera { center: lonlat_to_merc(Coord::new(10.0, 40.0)), res: 20_000.0, bearing: 0.0, pitch: 0.0 };
         let view = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
         let plain = render(&mut m, &view).unwrap();
-        let kept = render(&mut m, &View { camera: Camera { bearing: 40.0, pitch: 70.0, ..camera }, ..view }).unwrap();
-        assert_eq!(plain.pixmap.data(), kept.pixmap.data());
+        let turned = render(&mut m, &View { camera: Camera { bearing: 40.0, ..camera }, ..view }).unwrap();
+        let tilted = render(&mut m, &View { camera: Camera { pitch: 60.0, ..camera }, ..view }).unwrap();
+        assert_ne!(plain.pixmap.data(), turned.pixmap.data());
+        assert_ne!(plain.pixmap.data(), tilted.pixmap.data());
     }
 
     #[test]

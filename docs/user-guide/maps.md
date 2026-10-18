@@ -35,7 +35,8 @@ drawn again once it settles. `map.setBearing` sets the bearing (`{"bearing": 90}
 puts east at the top; `{"by": 15}` turns it further), `map.setPitch` the pitch (`{"pitch": 60}`,
 or `{"by": 10}`), `map.resetNorth` faces north and looks straight down, and **Go To XY** takes a
 `bearing` and a `pitch` too. Page layout map frames take their own bearing and pitch (see
-[Layouts](layouts.md)); the globe is not turned or tilted.
+[Layouts](layouts.md)), and the globe turns and tilts the same way: tilted, its camera swings
+back about the centre of view, so the horizon comes into sight past the curve of the Earth.
 
 MapLibre map links carry a view in their address, as
 `#zoom/latitude/longitude/bearing/pitch` (`https://…/#15.5/40.7484/-73.9857/30/60`). **Go To Map
@@ -208,7 +209,8 @@ so EPSG:8857 (Equal Earth) works too.
 ![The World Atlas on the 3D globe, with the View tab open](https://assets.rustgis.app/images/globe.webp)
 
 **View › Globe** shows the map as a 3D globe seen from space instead of the flat Web Mercator
-map, and back again. Drag to turn the globe, scroll to zoom, and use **Full Extent** to see the
+map, and back again. Drag to spin the globe, right-drag or Ctrl+drag to turn and tilt it (as
+on the flat map), scroll to zoom, and use **Full Extent** to see the
 whole Earth. Every layer draws on the globe: vectors are clipped at the horizon and follow great
 circles, rasters are draped onto the sphere, and labels, selection, identify, measuring and
 editing work as on the flat map. The scale stays the same when you switch, and the choice is

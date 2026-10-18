@@ -463,7 +463,7 @@ fn go_to_link(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"lon": l.lon, "lat": l.lat, "zoom": l.zoom, "bearing": s.map().camera.bearing, "pitch": s.map().camera.pitch}))
 }
 
-/// Tilts the flat map (the globe keeps the pitch for when the map is flat again).
+/// Tilts the map or the globe.
 fn set_pitch(s: &mut Session, p: &Value) -> CmdResult {
     if p.get("pitch").is_some_and(|v| !v.is_null()) && f(p, "pitch").is_none() {
         return Err("pitch must be a number of degrees".into());
@@ -483,7 +483,7 @@ fn set_pitch(s: &mut Session, p: &Value) -> CmdResult {
     Ok(out)
 }
 
-/// Turns the flat map to a bearing (the globe keeps it for when the map is flat again).
+/// Turns the map or the globe to a bearing.
 fn set_bearing(s: &mut Session, p: &Value) -> CmdResult {
     if p.get("bearing").is_some_and(|v| !v.is_null()) && f(p, "bearing").is_none() {
         return Err("bearing must be a number of degrees".into());

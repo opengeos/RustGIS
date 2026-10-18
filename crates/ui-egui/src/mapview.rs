@@ -713,7 +713,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // Shooting stars, while space shows around the globe.
     let g = Globe::new(&cam, w, h);
     let (gx, gy) = g.center();
-    let space = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().any(|&(x, y)| (x - gx).hypot(y - gy) > g.disc_radius());
+    // Outside the disc (an ellipse when the globe is tilted).
+    let k = g.disc_height() / g.disc_radius().max(1e-9);
+    let space = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().any(|&(x, y)| (x - gx).hypot((y - gy) / k) > g.disc_radius());
     if globe_view && space && app.session.map().view.effects.stars {
         let wait = app.map.comets.paint(&painter, rect, &g, time);
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(wait.clamp(0.0, 60.0)));
@@ -937,14 +939,14 @@ fn pan(app: &mut RustGisApp, dx: f64, dy: f64, w: f64, h: f64) {
     }
 }
 
-/// Turns the flat map by `degrees` about the view's centre.
+/// Turns the map or the globe by `degrees` about the view's centre.
 fn turn_by(app: &mut RustGisApp, degrees: f64) {
     let cam = &mut app.session.map_mut().camera;
     let bearing = cam.bearing + degrees;
     cam.set_bearing(bearing);
 }
 
-/// Tilts the flat map by `degrees`.
+/// Tilts the map or the globe by `degrees`.
 fn tilt_by(app: &mut RustGisApp, degrees: f64) {
     if degrees != 0.0 {
         let cam = &mut app.session.map_mut().camera;
@@ -1026,15 +1028,14 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             ui.ctx().request_repaint();
         }
     }
-    // Arrow keys pan; Shift+Left and Shift+Right turn the flat map, Shift+Up and Shift+Down tilt
-    // it (as in MapLibre).
+    // Arrow keys pan; Shift+Left and Shift+Right turn the map, Shift+Up and Shift+Down tilt it
+    // (as in MapLibre).
     if !ui.ctx().egui_wants_keyboard_input() {
         let (mut dx, mut dy, mut turn, mut tilt) = (0.0, 0.0, 0.0, 0.0);
-        let flat = globe(app, rect).is_none();
         ui.input(|i| {
             // Ninety degrees a second, whatever the frame rate.
             let step = (f64::from(i.stable_dt) * 90.0).clamp(0.0, 15.0);
-            if i.modifiers.shift && flat {
+            if i.modifiers.shift {
                 if i.key_down(egui::Key::ArrowLeft) {
                     turn -= step;
                 }
@@ -1079,9 +1080,9 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     let shift = ui.input(|i| i.modifiers.shift);
     let middle = ui.input(|i| i.pointer.middle_down());
     let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
-    // Dragging with the right button turns the flat map (to the right turns it clockwise) and
-    // tilts it (up tilts it further), as in MapLibre.
-    if resp.dragged_by(egui::PointerButton::Secondary) && globe(app, rect).is_none() {
+    // Dragging with the right button turns the map or the globe (to the right turns it
+    // clockwise) and tilts it (up tilts it further), as in MapLibre.
+    if resp.dragged_by(egui::PointerButton::Secondary) {
         let d = resp.drag_delta();
         if d != egui::Vec2::ZERO {
             turn_by(app, d.x as f64 * 0.8);
@@ -1092,9 +1093,8 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         return;
     }
     // Drag start.
-    // On the globe, which doesn't turn, the right button still drags it like the left.
     if resp.drag_started()
-        && (globe(app, rect).is_some() || !ui.input(|i| i.pointer.secondary_down()))
+        && !ui.input(|i| i.pointer.secondary_down())
         && let Some(p) = resp.interact_pointer_pos()
     {
         let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
@@ -1105,8 +1105,8 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         } else {
             match tool {
                 Tool::Explore if shift => DragKind::Box,
-                // Ctrl+drag turns and tilts the flat map, as the right button does.
-                Tool::Explore if ctrl && globe(app, rect).is_none() => DragKind::Turn,
+                // Ctrl+drag turns and tilts the map, as the right button does.
+                Tool::Explore if ctrl => DragKind::Turn,
                 Tool::Explore => DragKind::Pan,
                 Tool::Select | Tool::ZoomIn => DragKind::Box,
                 t if drag_shape(t).is_some() => DragKind::Sketch,
@@ -1700,7 +1700,7 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     // The arrow points north, leaning back with the map's tilt; on a turned or tilted map clicking
     // it faces north and looks straight down again.
     let cam = app.session.map().camera;
-    let (bearing, pitch) = if app.session.map().projection.is_globe() { (0.0, 0.0) } else { (cam.bearing, cam.pitch) };
+    let (bearing, pitch) = (cam.bearing, cam.pitch);
     // Facing north the corner stays the map's (identify, select and sketch clicks land there).
     if bearing != 0.0 || pitch != 0.0 {
         let hit = ui

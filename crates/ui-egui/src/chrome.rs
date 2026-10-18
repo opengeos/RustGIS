@@ -273,9 +273,9 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                         }
                     }
                 });
-                // The flat map's bearing and pitch (the globe has neither); clicking them on a
-                // turned or tilted map faces north and looks straight down again.
-                if !app.session.map().projection.is_globe() {
+                // The map's bearing and pitch; clicking them on a turned or tilted map faces north
+                // and looks straight down again.
+                {
                     let cam = app.session.map().camera;
                     let text = crate::i18n::fmt(
                         "Bearing {b}° · Pitch {p}°",
