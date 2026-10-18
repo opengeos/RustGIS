@@ -117,7 +117,7 @@ pub fn commands() -> Vec<C> {
         .when(need_raster)
         .params(r#"{"layer"?, "brightness"?: -100..100, "contrast"?: -100..100, "gamma"?: 0.1..10}"#),
         C::new("raster.setDefaultStyle", "Save as Default Raster Style", "Style › Rendering", set_default_style).view().params(
-            r#"{"fromLayer"?: bool (the active or named layer's colour ramp stretch), "layer"?, "ramp"?, "invert"?: bool, "stretch"?: "none"|"minMax"|"percentClip"|"standardDeviation"|"histogramEqualize", "low"?, "high"?: %, "n"?: deviations, "resampling"?: "nearest"|"bilinear", "reset"?: bool (back to the inverted grey stretch)}"#,
+            r#"{"fromLayer"?: bool (the active or named layer's colour ramp stretch; the settings apply to every raster added later that would be a grey stretch, opened files and analysis results alike), "layer"?, "ramp"?, "invert"?: bool, "stretch"?: "none"|"minMax"|"percentClip"|"standardDeviation"|"histogramEqualize", "low"?, "high"?: %, "n"?: deviations, "resampling"?: "nearest"|"bilinear", "reset"?: bool (back to the inverted grey stretch)}"#,
         ),
         C::new("raster.info", "Raster Information", "Data › Information", info).view().when(need_raster).params(r#"{"layer"?}"#),
         C::new("share.exportRaster", "Export Raster", "Data › Information", export).view().when(need_raster).params(
@@ -211,7 +211,8 @@ pub fn default_style_json(d: &RasterDefaults) -> Value {
 }
 
 /// Adds a raster as a new layer, selects it and returns its id. A raster drawn the built-in way
-/// for a single band of continuous values takes the session's default raster style instead.
+/// for a single band of continuous values takes the session's default raster style instead:
+/// opened files and analysis results (a slope, an NDVI) alike, since every producer adds here.
 pub fn add_raster(s: &mut Session, name: &str, mut layer: RasterLayer) -> CmdResult {
     if let Some(d) = layer.data.clone()
         && s.raster_defaults != RasterDefaults::default()

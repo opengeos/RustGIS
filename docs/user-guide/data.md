@@ -449,7 +449,8 @@ again; the mask is saved with the project.
 A single-band raster of continuous values (an elevation model, a temperature grid, an index such
 as NDVI) is first drawn as an inverted grey stretch clipping 0.5 % at each end. To draw such rasters
 your own way, style one with the Stretch symbology, then click **Save as Default** under
-**Resampling**: rasters added from then on take its color scheme, inversion, stretch type and
+**Resampling**: rasters added from then on, opened files and analysis results (a slope, an NDVI)
+alike, take its color scheme, inversion, stretch type and
 resampling (a Custom Min/Max stretch is in one raster's own units, so it can't be saved). **Reset
 Default** goes back to the grey stretch. The app keeps the setting with its preferences, for every
 project; colour images, rasters with their own color table and rasters of a few categories keep
