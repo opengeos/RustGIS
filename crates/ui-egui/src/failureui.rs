@@ -29,7 +29,7 @@ pub fn plain(f: &Failure) -> (String, String) {
             (tl!("RustGIS couldn't reach the server.").into(), tl!("Check the address and your connection.").into())
         }
         (Reason::Timeout, _) => (tl!("The server took too long to answer.").into(), tl!("Try again later.").into()),
-        (Reason::Other, _) => (tl!("The request failed.").into(), f.message.clone()),
+        (Reason::Other, _) => (tl!("The request failed.").into(), redact_text(&f.message)),
     }
 }
 
@@ -39,7 +39,7 @@ pub fn details(f: &Failure) -> Vec<(&'static str, String)> {
     let mut rows = vec![("Address", rustgis_engine::sources::redact(&f.url))];
     match f.status() {
         Some(s) => rows.push(("Status", status_name(s).map_or_else(|| s.to_string(), |n| format!("{s} {n}")))),
-        None => rows.push(("Error", f.message.clone())),
+        None => rows.push(("Error", redact_text(&f.message))),
     }
     let header = |k: &str| f.header(k).map(str::to_string);
     for (label, value) in [
@@ -56,6 +56,25 @@ pub fn details(f: &Failure) -> Vec<(&'static str, String)> {
         }
     }
     rows
+}
+
+/// Text with every web address in it redacted (`sources::redact`): an error's text may quote the
+/// address asked for, or one a redirect led to, keys and all. Each address is redacted alone, so
+/// the words around it stay; punctuation that ends a sentence isn't taken as part of it.
+fn redact_text(text: &str) -> String {
+    text.split_inclusive(char::is_whitespace)
+        .map(|piece| {
+            let word = piece.trim_end();
+            let Some(at) = word.find("://") else { return piece.to_string() };
+            // The address starts at its scheme, after any quote or bracket before it.
+            let scheme = |c: &char| c.is_ascii_alphanumeric() || "+.-".contains(*c);
+            let start = word.get(..at).and_then(|b| b.char_indices().rev().find(|(_, c)| !scheme(c))).map_or(0, |(i, c)| i + c.len_utf8());
+            let end = word.trim_end_matches([':', ',', ';', '.', ')', ']', '>', '"', '\'', '»', '›', '”', '’']).len().max(at + 3);
+            let (before, address, after) =
+                (word.get(..start).unwrap_or(""), word.get(start..end).unwrap_or(""), word.get(end..).unwrap_or(""));
+            format!("{before}{}{after}{}", rustgis_engine::sources::redact(address), piece.get(word.len()..).unwrap_or(""))
+        })
+        .collect()
 }
 
 /// The details as text to send to the service's administrator (in English, like the server's
@@ -126,5 +145,22 @@ mod tests {
         let other = Failure::new("u", "too many redirects");
         assert_eq!(plain(&other).1, "too many redirects");
         assert!(report(&other).contains("Error: too many redirects"));
+    }
+
+    /// An error's text quoting an address shows it without its keys, the words around it kept.
+    #[test]
+    fn addresses_in_an_error_lose_their_keys() {
+        let said = "https://h.example/a?f=json&token=s3cr3t: the server doesn't answer byte-range requests";
+        let f = Failure::new("https://h.example/a?f=json&token=s3cr3t", said);
+        let shown = plain(&f).1;
+        assert_eq!(shown, "https://h.example/a?f=json: the server doesn't answer byte-range requests");
+        let report = report(&f);
+        assert!(!report.contains("s3cr3t"), "{report}");
+        assert!(report.contains("Error: https://h.example/a?f=json: the server"), "{report}");
+        // Quoted, bracketed or ending a sentence; text with no address is left as it is.
+        assert_eq!(redact_text("(\"http://x.example/?key=k\"), then."), "(\"http://x.example/\"), then.");
+        assert_eq!(redact_text("«https://x.example/?token=t» gone"), "«https://x.example/» gone");
+        assert_eq!(redact_text("io: connection refused"), "io: connection refused");
+        assert_eq!(redact_text("://"), "://");
     }
 }
