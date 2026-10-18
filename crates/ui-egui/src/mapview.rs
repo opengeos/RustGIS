@@ -567,9 +567,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // the per-draw uniforms instead of re-tessellating. `key` and `tex_camera` stay at the
     // last full render: the scene's contents (extent culling, the 0.35 px decimation, label
     // placement) are baked for that camera, so once the motion settles the still-stale key
-    // makes the branch below do one full re-render. Zooming out or panning past the culled
-    // extent would show the gaps where off-view features were left out, so then the branch
-    // below re-renders mid-motion instead.
+    // makes the branch below do one full re-render. The meshes reach half a view past each
+    // side (`GPU_CULL_MARGIN`); zooming out or panning further would show gaps where features
+    // were left out, so then the branch below re-renders mid-motion instead.
     let stale = app.map.key != Some(key);
     let cam_only = app.map.key.is_some_and(|k| (Key { cam: k.cam, ..key }) == k);
     let mut fast_engaged = false;
@@ -2340,10 +2340,12 @@ fn tab_close(ui: &mut Ui, t: &Tokens, tab: Rect, id: egui::Id, in_view: bool, en
     enabled && resp.clicked()
 }
 
-/// Whether a flat frame drawn with `scene` holds every feature `cam` shows in a `w`×`h` view:
-/// the view lies inside the frame's cull extent, so moving its meshes leaves no gaps.
+/// Whether a flat GPU frame drawn with `scene` holds every feature `cam` shows in a `w`×`h`
+/// view: the view lies inside the extent its meshes were tessellated for, so moving them leaves
+/// no gaps. Only the view's camera and size matter to that extent.
 fn scene_covers(scene: Camera, cam: Camera, w: f64, h: f64) -> bool {
-    let held = rustgis_engine::render::cull_extent(&View { width: w, height: h, pixels_per_point: 1.0, camera: scene, sky: true });
+    use rustgis_engine::render::{GPU_CULL_MARGIN, cull_extent};
+    let held = cull_extent(&View { width: w, height: h, pixels_per_point: 1.0, camera: scene, sky: true }, GPU_CULL_MARGIN);
     let e = cam.extent(w, h);
     !e.is_empty() && e.min_x >= held.min_x && e.min_y >= held.min_y && e.max_x <= held.max_x && e.max_y <= held.max_y
 }
@@ -2379,11 +2381,11 @@ mod tests {
         let (w, h) = (800.0, 600.0);
         assert!(scene_covers(scene, scene, w, h));
         assert!(scene_covers(scene, Camera { res: scene.res * 0.5, ..scene }, w, h), "zooming in");
-        assert!(scene_covers(scene, Camera { res: scene.res * 1.05, ..scene }, w, h), "within the margin");
-        assert!(!scene_covers(scene, Camera { res: scene.res * 1.5, ..scene }, w, h), "zooming out");
+        assert!(scene_covers(scene, Camera { res: scene.res * 1.9, ..scene }, w, h), "zooming out within the margin");
+        assert!(!scene_covers(scene, Camera { res: scene.res * 2.5, ..scene }, w, h), "zooming out past it");
         let panned = |dx: f64| Camera { center: Coord::new(scene.center.x + dx * scene.res, scene.center.y), ..scene };
-        assert!(scene_covers(scene, panned(30.0), w, h));
-        assert!(!scene_covers(scene, panned(200.0), w, h), "panning past the margin");
+        assert!(scene_covers(scene, panned(350.0), w, h), "panning within the margin");
+        assert!(!scene_covers(scene, panned(450.0), w, h), "panning past it");
     }
 
     #[test]

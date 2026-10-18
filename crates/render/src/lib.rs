@@ -117,14 +117,18 @@ pub const SELECTION: Rgba = Rgba::rgb(0x00, 0xE5, 0xFF);
 /// Largest raster rendered (pixels per side).
 pub const MAX_SIDE: u32 = 8192;
 
-/// How far past each side of the view (a fraction of its size) features are still drawn:
-/// what a scene holds beyond the view, so a camera moved only that far is still covered.
+/// How far past each side of the view (a fraction of its size) features are still drawn.
 pub const CULL_MARGIN: f64 = 0.05;
 
-/// The map extent a frame drawn for `view` holds features for: the view grown by
-/// [`CULL_MARGIN`]. Features wholly outside it are culled from the frame.
-pub fn cull_extent(view: &View) -> Extent {
-    view.camera.extent(view.width, view.height).padded(CULL_MARGIN, 0.0)
+/// The wider margin the GPU backend tessellates vector layers out to: while the map moves,
+/// its meshes are moved rather than rebuilt, so they hold the ground a pan of half the view
+/// or zooming out to twice the extent reveals (as MapLibre keeps the tiles around the view).
+pub const GPU_CULL_MARGIN: f64 = 0.5;
+
+/// The map extent a frame drawn for `view` holds features for: the view grown by `margin`
+/// ([`CULL_MARGIN`], or [`GPU_CULL_MARGIN`] for GPU meshes) on every side.
+pub fn cull_extent(view: &View, margin: f64) -> Extent {
+    view.camera.extent(view.width, view.height).padded(margin, 0.0)
 }
 
 /// What to draw and at which size.
@@ -1683,7 +1687,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         view,
         ppp: view.pixels_per_point as f32,
         wireframe: map.view.wireframe,
-        cull: cull_extent(view),
+        cull: cull_extent(view, CULL_MARGIN),
         globe,
         sprites: Default::default(),
     };
@@ -1704,6 +1708,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     let visible = |e: &Extent| match &globe {
         Some(g) => g.may_see(e),
         None => e.intersects(&ctx.cull),
+    };
+    // GPU meshes reach further (`GPU_CULL_MARGIN`), so the camera fast path can move them.
+    let mesh_cull = cull_extent(view, GPU_CULL_MARGIN);
+    let mesh_visible = |e: &Extent| match &globe {
+        Some(g) => g.may_see(e),
+        None => e.intersects(&mesh_cull),
     };
 
     // Basemap.
@@ -1932,7 +1942,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         let mut gpu_done = false;
         if gpu_layer {
             flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
-            gpu_done = mesh::collect_layer(&mut cmds, layer, &geoms, &rows, &visible, ctx.wireframe, ctx.ppp, map_per_px).is_ok();
+            gpu_done = mesh::collect_layer(&mut cmds, layer, &geoms, &rows, &mesh_visible, ctx.wireframe, ctx.ppp, map_per_px).is_ok();
         }
         if !gpu_done {
             let dest = if direct { &mut pm } else { &mut target };
