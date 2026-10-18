@@ -84,6 +84,10 @@ fn copy(s: &mut Session, p: &Value) -> CmdResult {
             l
         })
         .collect();
+    // Nothing named (an empty list) leaves the clipboard as it was.
+    if layers.is_empty() && groups.is_empty() {
+        return Err("nothing to copy".into());
+    }
     let names: Vec<String> = layers.iter().map(|l| l.name.clone()).collect();
     s.layer_clipboard = Some(LayerClip { layers, groups });
     let n = names.len();

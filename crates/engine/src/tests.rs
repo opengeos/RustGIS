@@ -7509,9 +7509,12 @@ fn layers_are_copied_and_pasted_between_maps() {
     for bad in [json!({"group": "Places", "to": 0}), json!({"map": "Nowhere"}), json!({"group": "Nowhere"}), json!({"to": -1})] {
         assert!(s.run("layer.paste", &json!(bad)).is_err(), "{bad}");
     }
-    for bad in [json!({"layer": "Nowhere"}), json!({"group": "Nowhere"}), json!({"layer": [1, "Nowhere"]})] {
+    for bad in [json!({"layer": "Nowhere"}), json!({"group": "Nowhere"}), json!({"layer": [1, "Nowhere"]}), json!({"layer": []})] {
         assert!(s.run("layer.copy", &bad).is_err(), "{bad}");
     }
+    // A copy that fails, an empty one included, keeps the last copy.
+    let kept: Vec<String> = s.layer_clipboard.as_ref().map(|c| c.layers.iter().map(|l| l.name.clone()).collect()).unwrap_or_default();
+    assert_eq!(kept, ["Cities"]);
 }
 
 #[test]

@@ -655,24 +655,24 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     });
 }
 
-/// What pasting the copy adds (#491): the copied group(s), or else the layer(s). Into a group
-/// (`into_group`) only layers go, as groups don't nest.
+/// What pasting the copy adds (#491), translated: the copied group(s), or else the layer(s).
+/// Into a group (`into_group`) only layers go, as groups don't nest.
 fn paste_label(app: &RustGisApp, into_group: bool) -> &'static str {
-    let Some(c) = &app.session.layer_clipboard else { return "Paste Layer" };
+    let Some(c) = &app.session.layer_clipboard else { return tl!("Paste Layer") };
     // Layers copied apart from any copied group.
     let loose = c.layers.iter().any(|l| !c.groups.iter().any(|g| g.children.contains(&l.id)));
     match (into_group, c.groups.len(), loose) {
-        (false, 1, false) => "Paste Group",
-        (false, n, false) if n > 1 => "Paste Groups",
-        _ if c.layers.len() > 1 => "Paste Layers",
-        _ => "Paste Layer",
+        (false, 1, false) => tl!("Paste Group"),
+        (false, n, false) if n > 1 => tl!("Paste Groups"),
+        _ if c.layers.len() > 1 => tl!("Paste Layers"),
+        _ => tl!("Paste Layer"),
     }
 }
 
 /// A button pasting the copied layers (#491) on top of the map in view, off while none are;
 /// returns whether it was clicked.
 fn paste_layers_button(app: &mut RustGisApp, ui: &mut Ui) -> bool {
-    let clicked = ui.add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(tl!(paste_label(app, false)))).clicked();
+    let clicked = ui.add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(paste_label(app, false))).clicked();
     if clicked {
         let _ = app.run("layer.paste", Value::Null);
     }
@@ -1076,7 +1076,7 @@ fn layer_group_row(
                 let _ = app.run("layer.copy", json!({"group": group.id}));
                 ui.close();
             }
-            if ui.add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(tl!(paste_label(app, true)))).clicked() {
+            if ui.add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(paste_label(app, true))).clicked() {
                 let _ = app.run("layer.paste", json!({"group": group.id}));
                 ui.close();
             }
@@ -1569,7 +1569,7 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
         ui.close();
     }
     let in_group = app.session.map().group_of(l.id).is_some();
-    if ui.add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(tl!(paste_label(app, in_group)))).clicked() {
+    if ui.add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(paste_label(app, in_group))).clicked() {
         let m = app.session.map();
         let at = match m.group_of(l.id) {
             Some(g) => json!({"group": g.id}),
@@ -1661,10 +1661,7 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                                 ui.close();
                             }
                             // Copied layers go on top of this map's, whichever map is in view (#491).
-                            if ui
-                                .add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(tl!(paste_label(app, false))))
-                                .clicked()
-                            {
+                            if ui.add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(paste_label(app, false))).clicked() {
                                 let _ = app.run("layer.paste", json!({"map": m}));
                                 ui.close();
                             }
