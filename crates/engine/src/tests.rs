@@ -7188,3 +7188,32 @@ fn a_layer_leaving_a_group_never_splits_it() {
     s.run("group.add", &json!({"name": "B", "layers": ["Lakes"]})).unwrap();
     assert_eq!(names(&s), ["Cities", "Lakes", "Rivers", "Countries"]);
 }
+
+#[test]
+fn hostile_group_params_never_panic() {
+    let junk = [
+        json!({"group": 1, "to": 1e30, "before": 99999, "min": "x", "max": -1, "transparency": 1e300}),
+        json!({"group": "A", "to": -1, "before": "A", "layers": [1, 2, 2, "nope"], "visible": 3, "on": "yes"}),
+        json!({"group": "A", "layer": "Cities", "before": "Cities", "transparency": "half", "min": 1e308, "max": 1e-308}),
+        json!({"group": null, "layer": "Rivers", "before": "Lakes", "name": "", "to": 0}),
+        json!({"group": [1], "layer": {"x": 1}, "layers": "Cities", "to": 2.5}),
+        json!({"group": "A", "to": 1e9, "name": "x".repeat(10_000)}),
+    ];
+    let ids = ["group.add", "group.set", "group.expand", "group.scaleRange", "group.move", "group.ungroup", "group.remove", "layer.group"];
+    for id in ids {
+        for p in &junk {
+            let mut s = world();
+            s.run("group.add", &json!({"name": "A", "layers": ["Rivers", "Lakes"]})).unwrap();
+            s.run("group.add", &json!({"name": "B"})).unwrap();
+            let _ = s.run(id, p);
+            // The groups stay whole: each group's layers sit together in the drawing order.
+            let m = s.map();
+            for g in &m.groups {
+                let at: Vec<usize> = m.layers.iter().enumerate().filter(|(_, l)| g.children.contains(&l.id)).map(|(i, _)| i).collect();
+                assert!(at.windows(2).all(|w| w[1] == w[0] + 1), "{id} {p}: {at:?}");
+                assert!(g.children.iter().all(|c| m.layer(*c).is_some()), "{id} {p}");
+                assert!(g.name.chars().count() <= 200 && (0.0..=100.0).contains(&g.transparency));
+            }
+        }
+    }
+}

@@ -1195,13 +1195,13 @@ impl Map {
 
     /// Union of all layers' extents (lon/lat).
     pub fn full_extent(&self) -> Extent {
-        self.layers.iter().filter(|l| l.visible).fold(Extent::EMPTY, |e, l| e.union(&l.extent()))
+        self.layers.iter().filter(|l| self.shows(l)).fold(Extent::EMPTY, |e, l| e.union(&l.extent()))
     }
 
     /// Union of the visible layers' shown extents (lon/lat): what Full Extent zooms to, narrowed by
     /// each layer's definition query.
     pub fn shown_extent(&self) -> Extent {
-        self.layers.iter().filter(|l| l.visible).fold(Extent::EMPTY, |e, l| e.union(&l.shown_extent()))
+        self.layers.iter().filter(|l| self.shows(l)).fold(Extent::EMPTY, |e, l| e.union(&l.shown_extent()))
     }
 
     pub fn selection_count(&self) -> usize {
