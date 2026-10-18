@@ -993,9 +993,11 @@ fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u
     });
 }
 
-/// The Format pane (#516): the selected layout element's properties.
+/// The Format pane (#516): the selected layout element's properties, while its layout is on
+/// screen. On the map (no layout open) or under the Model Builder, it waits for a selection.
 pub fn format(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
-    let layout = app.session.active_layout.and_then(|li| Some((li, shown_layout(app, li)?)));
+    let on_screen = app.session.active_layout.filter(|_| !app.mb.shown());
+    let layout = on_screen.and_then(|li| Some((li, shown_layout(app, li)?)));
     match layout {
         Some((li, layout)) if app.layout.selected.and_then(|id| layout.element(id)).is_some() => properties(app, ui, &layout, li),
         _ => {
@@ -1764,6 +1766,18 @@ mod tests {
         h.state_mut().layout.selected = ids.get(1).copied();
         h.run_steps(2);
         assert_eq!(h.state().ui.right, Some(Format));
+        // The layout out of sight, under the Model Builder or for the map: nothing to edit.
+        let hint = |h: &egui_kittest::Harness<'_, RustGisApp>| h.query_by_label("Select an element to format it.").is_some();
+        (h.state_mut().mb.open, h.state_mut().mb.active) = (true, true);
+        h.run_steps(2);
+        assert!(hint(&h), "under the Model Builder");
+        (h.state_mut().mb.open, h.state_mut().mb.active) = (false, false);
+        h.run_steps(2);
+        assert!(!hint(&h));
+        h.state_mut().run("layout.close", json!({})).unwrap();
+        h.run_steps(2);
+        assert!(hint(&h), "on the map");
+        assert_eq!(h.state().ui.right, Some(Format), "the pane stays, as other panes do");
     }
 
     /// Element ids are per layout: opening another layout ends the selection, so Delete or
