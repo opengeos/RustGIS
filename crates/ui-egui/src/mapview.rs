@@ -567,7 +567,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // the per-draw uniforms instead of re-tessellating. `key` and `tex_camera` stay at the
     // last full render: the scene's contents (extent culling, the 0.35 px decimation, label
     // placement) are baked for that camera, so once the motion settles the still-stale key
-    // makes the branch below do one full re-render.
+    // makes the branch below do one full re-render. Zooming out or panning past the culled
+    // extent would show the gaps where off-view features were left out, so then the branch
+    // below re-renders mid-motion instead.
     let stale = app.map.key != Some(key);
     let cam_only = app.map.key.is_some_and(|k| (Key { cam: k.cam, ..key }) == k);
     let mut fast_engaged = false;
@@ -575,6 +577,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         && gpu_ok
         && (interacting || app.ws.playing.is_some())
         && cam_only
+        && scene_covers(app.map.tex_camera, cam, w, h)
         && let (Some(gf), Some(rs)) = (&app.map.gpu_frame, &app.map.render_state)
         && !gf.has_images
     {
@@ -2337,6 +2340,14 @@ fn tab_close(ui: &mut Ui, t: &Tokens, tab: Rect, id: egui::Id, in_view: bool, en
     enabled && resp.clicked()
 }
 
+/// Whether a flat frame drawn with `scene` holds every feature `cam` shows in a `w`×`h` view:
+/// the view lies inside the frame's cull extent, so moving its meshes leaves no gaps.
+fn scene_covers(scene: Camera, cam: Camera, w: f64, h: f64) -> bool {
+    let held = rustgis_engine::render::cull_extent(&View { width: w, height: h, pixels_per_point: 1.0, camera: scene, sky: true });
+    let e = cam.extent(w, h);
+    !e.is_empty() && e.min_x >= held.min_x && e.min_y >= held.min_y && e.max_x <= held.max_x && e.max_y <= held.max_y
+}
+
 #[cfg(test)]
 mod picture_tests {
     #[test]
@@ -2358,6 +2369,22 @@ mod picture_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The GPU fast path moves the last frame's meshes only while they cover the view: zooming
+    /// out or panning past the cull margin re-renders, or features culled from the last frame
+    /// would vanish until the motion stopped.
+    #[test]
+    fn gpu_fast_path_needs_the_scene_to_cover_the_view() {
+        let scene = RustGisApp::with_sample().session.map().camera;
+        let (w, h) = (800.0, 600.0);
+        assert!(scene_covers(scene, scene, w, h));
+        assert!(scene_covers(scene, Camera { res: scene.res * 0.5, ..scene }, w, h), "zooming in");
+        assert!(scene_covers(scene, Camera { res: scene.res * 1.05, ..scene }, w, h), "within the margin");
+        assert!(!scene_covers(scene, Camera { res: scene.res * 1.5, ..scene }, w, h), "zooming out");
+        let panned = |dx: f64| Camera { center: Coord::new(scene.center.x + dx * scene.res, scene.center.y), ..scene };
+        assert!(scene_covers(scene, panned(30.0), w, h));
+        assert!(!scene_covers(scene, panned(200.0), w, h), "panning past the margin");
+    }
 
     #[test]
     fn fps_counts_the_last_second_and_idle_is_none() {

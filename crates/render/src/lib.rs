@@ -117,6 +117,16 @@ pub const SELECTION: Rgba = Rgba::rgb(0x00, 0xE5, 0xFF);
 /// Largest raster rendered (pixels per side).
 pub const MAX_SIDE: u32 = 8192;
 
+/// How far past each side of the view (a fraction of its size) features are still drawn:
+/// what a scene holds beyond the view, so a camera moved only that far is still covered.
+pub const CULL_MARGIN: f64 = 0.05;
+
+/// The map extent a frame drawn for `view` holds features for: the view grown by
+/// [`CULL_MARGIN`]. Features wholly outside it are culled from the frame.
+pub fn cull_extent(view: &View) -> Extent {
+    view.camera.extent(view.width, view.height).padded(CULL_MARGIN, 0.0)
+}
+
 /// What to draw and at which size.
 #[derive(Clone, Copy, Debug)]
 pub struct View {
@@ -1386,7 +1396,7 @@ pub fn upright_markers(map: &mut Map, view: &View, margin: f64) -> Vec<UprightMa
     }
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     let (flat, key) = (map.flat(), map.projection.code());
-    let cull = view.camera.extent(view.width, view.height).padded(margin.clamp(0.05, 4.0), 0.0);
+    let cull = view.camera.extent(view.width, view.height).padded(margin.clamp(CULL_MARGIN, 4.0), 0.0);
     let clip = map.view.clip_distance.map(|d| (view.camera.center_lonlat(), d));
     let held = map.held_by_group(scale);
     let group_opacity: std::collections::HashMap<u32, f32> =
@@ -1673,7 +1683,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         view,
         ppp: view.pixels_per_point as f32,
         wireframe: map.view.wireframe,
-        cull: view.camera.extent(view.width, view.height).padded(0.05, 0.0),
+        cull: cull_extent(view),
         globe,
         sprites: Default::default(),
     };
