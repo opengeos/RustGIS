@@ -30,7 +30,7 @@ const MAX_VIEW: f64 = 2048.0;
 /// What the model is told about the server when it connects.
 const INSTRUCTIONS: &str = "RustGIS is a desktop GIS. This server holds one RustGIS project in memory and acts on it.\n\
 - list_layers shows the map. view_map shows it as an image: look after changing it.\n\
-- Every action is a command: search_commands finds one, run_command runs it (navigation, layers, symbology, labels, selection, editing, layouts, export…).\n\
+- Every action is a command: search_commands finds one, run_command runs it (navigation, layers, symbology, labels, selection, editing, layouts, export…). run runs several commands at once, as one undo step.\n\
 - Geoprocessing: search_tools, then describe_tool for its parameters, then run_tool; its output is a new layer.\n\
 - read_features reads attribute rows, with a where clause.\n\
 - search_docs and read_doc look things up in the RustGIS documentation.\n\
@@ -187,6 +187,16 @@ impl Server {
 
     /// Why this server won't run a call, if it won't.
     pub fn refusal(&self, s: &Session, call: &ToolCall) -> Option<String> {
+        // A script is refused when any of its lines would be, before any of it runs. A script
+        // that doesn't parse runs to say so.
+        if call.name == "run" {
+            let script = call.args.get("script").and_then(Value::as_str).unwrap_or("");
+            let lines = rustgis_engine::cmd::workflows::script_commands(script).ok()?;
+            return lines.into_iter().find_map(|(n, id, params)| {
+                let line = ToolCall { id: String::new(), name: "run_command".into(), args: json!({"command": id, "params": params}) };
+                self.refusal(s, &line).map(|why| format!("line {n}: {why}"))
+            });
+        }
         let (id, params) = tools::target(call)?;
         let project = PROJECT_COMMANDS.contains(&id.as_str());
         if project && self.users_project {
@@ -228,11 +238,11 @@ fn initialize(params: &Value) -> Value {
 }
 
 /// The tools this server adds to the assistant's.
-const TOOL_NAMES: &[&str] = &["view_map"];
+const TOOL_NAMES: &[&str] = &["view_map", "run"];
 
 /// Tools that only look: list, search, read, view.
 fn read_only(name: &str) -> bool {
-    !matches!(name, "run_command" | "run_tool")
+    !matches!(name, "run_command" | "run_tool" | "run")
 }
 
 fn tool_list() -> Vec<Value> {
@@ -250,6 +260,16 @@ fn tool_list() -> Vec<Value> {
             json!({"name": d.name, "description": description, "inputSchema": d.schema, "annotations": annotations(d.name)})
         })
         .collect();
+    out.push(json!({
+        "name": "run",
+        "description": "Run several RustGIS commands in one call, as one undo step: a script with one `command-id {json}` per line (# starts a comment), e.g. `map.basemap {\"name\": \"ocean\"}`. A failing line stops the script, nothing it did to the project is kept (a file an earlier line wrote stays written), and the error names the line. Returns {success, result (the last command's), lines, layersAdded, notices, error, duration_s}. Each line follows the same rules as run_command.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"script": {"type": "string", "description": "One command per line: id {json}"}},
+            "required": ["script"]
+        },
+        "annotations": annotations("run"),
+    }));
     out.push(json!({
         "name": "view_map",
         "description": "The map as it looks now, as a PNG image: look after changing it. The current view, at a size of your choosing (default 1024 x 640).",

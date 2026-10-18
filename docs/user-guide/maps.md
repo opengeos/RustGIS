@@ -34,7 +34,8 @@ picture drawn last is laid over the ground and the extrusions and markers are mo
 drawn again once it settles. `map.setBearing` sets the bearing (`{"bearing": 90}`
 puts east at the top; `{"by": 15}` turns it further), `map.setPitch` the pitch (`{"pitch": 60}`,
 or `{"by": 10}`), `map.resetNorth` faces north and looks straight down, and **Go To XY** takes a
-`bearing` and a `pitch` too. Page layout map frames and the globe are not turned or tilted.
+`bearing` and a `pitch` too. Page layout map frames take their own bearing and pitch (see
+[Layouts](layouts.md)); the globe is not turned or tilted.
 
 MapLibre map links carry a view in their address, as
 `#zoom/latitude/longitude/bearing/pitch` (`https://…/#15.5/40.7484/-73.9857/30/60`). **Go To Map

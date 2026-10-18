@@ -3459,7 +3459,7 @@ fn visibility_and_effects(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_eng
 /// A dragged control with a live preview: `set` writes the value straight into the project while
 /// dragging, and on release the pre-drag value is put back before `commit` runs the command, so
 /// the command's undo snapshot holds the old value.
-fn live_drag(
+pub(crate) fn live_drag(
     app: &mut RustGisApp,
     ui: &Ui,
     resp: &egui::Response,

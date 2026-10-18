@@ -757,11 +757,14 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
 
 /// Moves a map frame's map by a page offset (mm).
 fn pan_frame(app: &mut RustGisApp, layout: &Layout, li: usize, id: u32, dx: f64, dy: f64) {
-    let Some(ElementKind::MapFrame { map, center, scale, .. }) = layout.element(id).map(|e| &e.kind) else { return };
+    let Some(e) = layout.element(id) else { return };
+    let ElementKind::MapFrame { map, center, scale, bearing, pitch, .. } = &e.kind else { return };
     let Some(m) = app.session.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map)) else { return };
-    let cam = frame_camera(m, *center, *scale);
-    let c = rustgis_engine::geom::Coord::new(cam.center.x - dx * PT_PER_MM * cam.res, cam.center.y + dy * PT_PER_MM * cam.res);
-    if let Some(ll) = m.to_lonlat(c) {
+    let mut cam = frame_camera(m, *center, *scale, *bearing, *pitch);
+    // Dragged at the frame's centre, so a turned or tilted frame's map follows the pointer.
+    let (w, h) = (e.w * PT_PER_MM, e.h * PT_PER_MM);
+    cam.drag_px((w / 2.0, h / 2.0), (w / 2.0 + dx * PT_PER_MM, h / 2.0 + dy * PT_PER_MM), w, h);
+    if let Some(ll) = m.to_lonlat(cam.center) {
         let _ = app.run("layout.update", json!({"layout": li, "element": id, "center": [ll.x, ll.y]}));
     }
 }
@@ -770,17 +773,28 @@ fn pan_frame(app: &mut RustGisApp, layout: &Layout, li: usize, id: u32, dx: f64,
 /// page point `anchor` (mm) where it is.
 fn zoom_frame(app: &mut RustGisApp, layout: &Layout, li: usize, id: u32, k: f64, (ax, ay): (f64, f64)) {
     let Some(e) = layout.element(id) else { return };
-    let ElementKind::MapFrame { map, center, scale, .. } = &e.kind else { return };
+    let ElementKind::MapFrame { map, center, scale, bearing, pitch, .. } = &e.kind else { return };
     let Some(m) = app.session.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map)) else { return };
-    let cam = frame_camera(m, *center, *scale);
+    let cam = frame_camera(m, *center, *scale, *bearing, *pitch);
     let new_scale = (scale * k).clamp(100.0, 1e10);
+    // A turned or tilted frame zooms as the map view does, about the anchor.
+    if cam.bearing != 0.0 || cam.pitch != 0.0 {
+        let (w, h) = (e.w * PT_PER_MM, e.h * PT_PER_MM);
+        let mut c = cam;
+        c.zoom_at(*scale / new_scale, (ax - e.x) * PT_PER_MM, (ay - e.y) * PT_PER_MM, w, h);
+        if let Some(ll) = m.to_lonlat(c.center) {
+            let _ = app.run("layout.update", json!({"layout": li, "element": id, "scale": new_scale, "center": [ll.x, ll.y]}));
+        }
+        return;
+    }
     // The anchor's offset from the frame's centre, in points; times the resolution, map units.
     let (px, py) = ((ax - (e.x + e.w / 2.0)) * PT_PER_MM, -(ay - (e.y + e.h / 2.0)) * PT_PER_MM);
     let target = rustgis_engine::geom::Coord::new(cam.center.x + px * cam.res, cam.center.y + py * cam.res);
     // Centre the frame so the anchor's map point stays put. The resolution for a scale depends on
     // the centre's latitude (Web Mercator stretches away from the equator), so solve for the
     // centre's y by Newton's method, then place x with the resolution there.
-    let res_at = |x: f64, y: f64| m.to_lonlat(rustgis_engine::geom::Coord::new(x, y)).map(|ll| frame_camera(m, ll, new_scale).res);
+    let res_at =
+        |x: f64, y: f64| m.to_lonlat(rustgis_engine::geom::Coord::new(x, y)).map(|ll| frame_camera(m, ll, new_scale, 0.0, 0.0).res);
     let mut cx = cam.center.x;
     let mut cy = target.y - py * cam.res * new_scale / scale;
     for _ in 0..3 {
@@ -1123,7 +1137,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                 }
                 ui.end_row();
             }
-            ElementKind::MapFrame { map, scale, .. } => {
+            ElementKind::MapFrame { map, scale, bearing, pitch, .. } => {
                 ui.label(tl!("Map"));
                 let maps: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
                 egui::ComboBox::from_id_salt(("frame_map", id)).selected_text(map.as_str()).show_ui(ui, |ui| {
@@ -1142,6 +1156,18 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                     update(app, json!({"scale": sc}));
                 }
                 ui.end_row();
+                // Turned and tilted as the map view is (Ctrl+drag there; Shift+arrows).
+                for (label, key, current, range) in
+                    [("Bearing", "bearing", *bearing, -180.0..=180.0), ("Pitch", "pitch", *pitch, 0.0..=85.0)]
+                {
+                    ui.label(tl!(label));
+                    let mut v = current;
+                    let r = ui.add(egui::DragValue::new(&mut v).range(range).speed(0.5).max_decimals(1).suffix("°"));
+                    if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (v - current).abs() > 1e-6 {
+                        update(app, json!({key: v}));
+                    }
+                    ui.end_row();
+                }
             }
             ElementKind::NorthArrow { style, fill, outline, .. } => {
                 ui.label(tl!("Style"));
@@ -1300,6 +1326,25 @@ mod tests {
         assert_eq!(app.layout.key.map(|k| k.0), Some(app.session.revision));
     }
 
+    /// Dragging the map in a turned frame moves it the way the pointer goes, as in the map view.
+    #[test]
+    fn panning_a_turned_frame_follows_the_pointer() {
+        use rustgis_engine::map::layout::ElementKind;
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Turned"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let id = app.session.project.layouts[li].first_frame().unwrap();
+        // East at the top: the page's right is south, its left north.
+        app.run("layout.update", json!({"layout": li, "element": id, "bearing": 90, "center": [10.0, 20.0]})).unwrap();
+        let layout = app.session.project.layouts[li].clone();
+        super::pan_frame(&mut app, &layout, li, id, 10.0, 0.0);
+        let Some(ElementKind::MapFrame { center, .. }) = app.session.project.layouts[li].element(id).map(|e| e.kind.clone()) else {
+            panic!("not a map frame")
+        };
+        // Dragged right, the map brings in what lay to the left: the centre moves north.
+        assert!(center.y > 20.5 && (center.x - 10.0).abs() < 0.01, "{center:?}");
+    }
+
     /// Zooming a map frame about a point keeps the map under that point where it was.
     #[test]
     fn zooming_a_frame_keeps_the_map_under_the_pointer() {
@@ -1316,7 +1361,7 @@ mod tests {
             let e = app.session.project.layouts[li].element(frame.id).unwrap().clone();
             let ElementKind::MapFrame { map, center, scale, .. } = &e.kind else { panic!("not a map frame") };
             let m = app.session.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map)).unwrap();
-            let cam = frame_camera(m, *center, *scale);
+            let cam = frame_camera(m, *center, *scale, 0.0, 0.0);
             let x = cam.center.x + (anchor.0 - (e.x + e.w / 2.0)) * PT_PER_MM * cam.res;
             let y = cam.center.y - (anchor.1 - (e.y + e.h / 2.0)) * PT_PER_MM * cam.res;
             (x, y, *scale, cam.res)

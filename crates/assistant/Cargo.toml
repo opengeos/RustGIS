@@ -15,6 +15,7 @@ base64 = { workspace = true }
 # The PKCE challenge of the ChatGPT sign-in.
 sha2 = { workspace = true }
 log = { workspace = true }
+web-time = { workspace = true }
 
 # Calling the model on the desktop and the command line. The browser calls it with its own fetch
 # (the web app's `Services::http`).

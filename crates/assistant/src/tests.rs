@@ -692,6 +692,7 @@ fn mcp_initializes_and_lists_tools() {
         "run_tool",
         "read_features",
         "view_map",
+        "run",
         "search_docs",
         "read_doc",
     ] {
@@ -700,7 +701,7 @@ fn mcp_initializes_and_lists_tools() {
     for t in tools["tools"].as_array().unwrap() {
         assert_eq!(t["inputSchema"]["type"], "object", "{}", t["name"]);
         assert!(t["description"].as_str().is_some_and(|d| !d.is_empty()));
-        let runs = matches!(t["name"].as_str(), Some("run_command" | "run_tool"));
+        let runs = matches!(t["name"].as_str(), Some("run_command" | "run_tool" | "run"));
         assert_eq!(t["annotations"]["readOnlyHint"], !runs, "{}", t["name"]);
         assert_eq!(t["annotations"]["destructiveHint"], runs, "{}", t["name"]);
     }
@@ -723,6 +724,79 @@ fn mcp_list_layers_filters_by_name_and_drops_fields() {
     assert_eq!(layers.len(), 1, "{text}");
     assert_eq!(layers[0]["name"], "Rivers");
     assert!(layers[0].get("fields").is_none(), "{text}");
+}
+
+/// `run` runs a script in one call and one undo step, and answers with the last command's
+/// result and the layers the script added.
+#[test]
+fn mcp_run_runs_a_script_as_one_undo_step() {
+    let (server, mut s) = (mcp::Server::default(), sample());
+    let (layers, undo) = (s.map().layers.len(), s.undo_depth());
+    let script = "# two layers and a basemap\nlayer.addSample {\"name\": \"countries\"}\n\nmap.basemap {\"name\": \"paper\"}\nlayer.addSample {\"name\": \"cities\"}";
+    let (err, text) = call_tool(&server, &mut s, "run", json!({"script": script}));
+    assert!(!err, "{text}");
+    let r: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(r["success"], true, "{text}");
+    assert_eq!(r["lines"], 3, "{text}");
+    assert!(r["duration_s"].is_number() && r["error"].is_null(), "{text}");
+    assert_eq!(r["layersAdded"].as_array().map(Vec::len), Some(2), "{text}");
+    assert_eq!(s.map().layers.len(), layers + 2);
+    assert_eq!(s.undo_depth(), undo + 1, "the script is one undo step");
+    assert!(s.run("edit.undo", &json!({})).is_ok());
+    assert_eq!(s.map().layers.len(), layers, "one undo takes the whole script back");
+}
+
+/// A failing line stops the script, names its line, and leaves the project as it was.
+#[test]
+fn mcp_run_stops_at_a_failing_line_and_keeps_nothing() {
+    let (server, mut s) = (mcp::Server::default(), sample());
+    let (layers, undo) = (s.map().layers.len(), s.undo_depth());
+    let script =
+        "layer.addSample {\"name\": \"countries\"}\nmap.basemap {\"name\": \"no-such-basemap\"}\nlayer.addSample {\"name\": \"cities\"}";
+    let (err, text) = call_tool(&server, &mut s, "run", json!({"script": script}));
+    assert!(err, "{text}");
+    let r: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(r["success"], false, "{text}");
+    assert!(r["error"].as_str().is_some_and(|e| e.starts_with("line 2:")), "{text}");
+    assert_eq!((s.map().layers.len(), s.undo_depth()), (layers, undo), "a failed script keeps nothing");
+    // A line that isn't JSON is named too, and nothing runs.
+    let (err, text) = call_tool(&server, &mut s, "run", json!({"script": "layer.addSample {\"name\": \"countries\"}\nmap.basemap {oops"}));
+    assert!(err && text.contains("line 2"), "{text}");
+    assert_eq!(s.map().layers.len(), layers);
+    let (err, text) = call_tool(&server, &mut s, "run", json!({"script": "  "}));
+    assert!(err && text.contains("script is required"), "{text}");
+    // Leading blank lines count, so the error names the line the caller wrote; the answer
+    // keeps its shape when it fails.
+    let (err, text) = call_tool(&server, &mut s, "run", json!({"script": "\n\nmap.basemap {\"name\": \"no-such-basemap\"}"}));
+    let r: Value = serde_json::from_str(&text).unwrap();
+    assert!(err && r["error"].as_str().is_some_and(|e| e.starts_with("line 3:")), "{text}");
+    assert_eq!((r["lines"].clone(), r["layersAdded"].clone()), (json!(0), json!([])), "{text}");
+    // And when it adds no layer.
+    let (err, text) = call_tool(&server, &mut s, "run", json!({"script": "map.zoomIn"}));
+    assert!(!err && serde_json::from_str::<Value>(&text).unwrap()["layersAdded"] == json!([]), "{text}");
+}
+
+/// Each line of a script follows run_command's rules: a refused line refuses the whole script
+/// before any of it runs, and the in-app approval gate names the lines that need approval.
+#[test]
+fn mcp_run_checks_every_line_before_running() {
+    let (server, mut s) = (mcp::Server::new(false), sample());
+    let layers = s.map().layers.len();
+    let out = std::env::temp_dir().join(format!("rustgis-run-{}.png", std::process::id()));
+    let script = format!("layer.addSample {{\"name\": \"countries\"}}\nshare.exportMap {}", json!({"path": out.display().to_string()}));
+    let (err, text) = call_tool(&server, &mut s, "run", json!({"script": script}));
+    assert!(err && text.contains("line 2") && text.contains("--yes"), "{text}");
+    assert_eq!(s.map().layers.len(), layers, "a refused script runs no line");
+    assert!(!out.exists());
+    for reserved in ["task.run {\"name\": \"x\"}", "plugin.install {}"] {
+        let (err, text) = call_tool(&server, &mut s, "run", json!({"script": format!("map.zoomIn\n{reserved}")}));
+        assert!(err && text.contains("line 2") && text.contains("reserved"), "{reserved}: {text}");
+    }
+    let call = ToolCall { id: String::new(), name: "run".into(), args: json!({"script": script}) };
+    let why = tools::gate(&s, &call).unwrap_or_default();
+    assert!(why.contains("line 2 (share.exportMap)") && !why.contains("line 1"), "{why}");
+    let quiet = ToolCall { id: String::new(), name: "run".into(), args: json!({"script": "map.zoomIn"}) };
+    assert!(tools::gate(&s, &quiet).is_none());
 }
 
 #[test]
