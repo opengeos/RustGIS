@@ -53,6 +53,9 @@ pub struct LayoutView {
     zoom: f32,
     pan: egui::Vec2,
     pub selected: Option<u32>,
+    /// The selection the Format pane last opened for: a new one opens it again, so closing the
+    /// pane keeps the selection without the pane coming back by itself.
+    formatted: Option<u32>,
     drag: Option<Drag>,
     /// The page rectangle and points per millimetre the drag last saw.
     drag_page: Option<(Rect, f32)>,
@@ -375,16 +378,18 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         app.layout.selected = None;
     }
     save_drafts(app, li);
-    if app.layout.selected.is_some() {
-        egui::Panel::right("layout_props")
-            .resizable(false)
-            .exact_size(270.0)
-            .show_separator_line(true)
-            .show(ui, |ui| egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| properties(app, ui, &layout, li)));
+    // Selecting an element shows its properties in the Format pane (#516). The pane is drawn
+    // before the page, so it shows them from the next frame.
+    if app.layout.selected != app.layout.formatted {
+        app.layout.formatted = app.layout.selected;
+        if app.layout.selected.is_some() {
+            app.ui.open_right(crate::RightPane::Format);
+            ui.ctx().request_repaint();
+        }
     }
     let area = ui.available_rect_before_wrap();
-    // A stable id: dragging an element selects it and opens the properties beside the page,
-    // and an automatic id would change with them, losing the drag before it is dropped (#325).
+    // A stable id: dragging an element selects it and opens the Format pane beside the page,
+    // and an automatic id would change with it, losing the drag before it is dropped (#325).
     ui.advance_cursor_after_rect(area);
     let resp = ui.interact(area, ui.id().with("layout_page"), Sense::click_and_drag());
     let painter = ui.painter_at(area);
@@ -685,6 +690,10 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
         && resp.interact_pointer_pos().is_none_or(|pos| ruler_at(&app.layout, resp.rect, pos).is_none())
     {
         app.layout.selected = layout.hit(p.0, p.1);
+        // A click on the element already selected brings back the pane closed over it.
+        if app.layout.selected.is_some() && app.layout.selected == app.layout.formatted {
+            app.ui.open_right(crate::RightPane::Format);
+        }
     }
     if resp.double_clicked()
         && let Some(id) = app.layout.selected
@@ -984,19 +993,22 @@ fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u
     });
 }
 
+/// The Format pane (#516): the selected layout element's properties.
+pub fn format(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+    let layout = app.session.active_layout.and_then(|li| Some((li, shown_layout(app, li)?)));
+    match layout {
+        Some((li, layout)) if app.layout.selected.and_then(|id| layout.element(id)).is_some() => properties(app, ui, &layout, li),
+        _ => {
+            ui.label(egui::RichText::new(tl!("Select an element to format it.")).color(t.text_dim));
+        }
+    }
+}
+
 /// The selected element's properties.
 fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
     let Some(e) = app.layout.selected.and_then(|id| layout.element(id)).cloned() else { return };
     let id = e.id;
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!(e.kind.label())).font(semibold(14.0)));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::icon_button(ui, "close", tl!("Close")).clicked() {
-                app.layout.selected = None;
-            }
-        });
-    });
+    ui.label(egui::RichText::new(tl!(e.kind.label())).font(semibold(14.0)));
     ui.separator();
     let update = |app: &mut RustGisApp, p: Value| {
         let mut p = p;
@@ -1599,7 +1611,7 @@ mod tests {
                     fonts = true;
                     return;
                 }
-                super::show(app, ui);
+                with_format(app, ui);
             },
             app,
         );
@@ -1645,7 +1657,7 @@ mod tests {
                     fonts = true;
                     return;
                 }
-                super::show(app, ui);
+                with_format(app, ui);
             },
             app,
         );
@@ -1683,7 +1695,7 @@ mod tests {
                     fonts = true;
                     return;
                 }
-                super::show(app, ui);
+                with_format(app, ui);
             },
             app,
         );
@@ -1701,6 +1713,57 @@ mod tests {
         h.get_by_role_and_label(Role::CheckBox, "Rivers").click();
         h.run_steps(2);
         assert_eq!(left_out(&h), ["Cities"]);
+    }
+
+    /// The layout view with the Format pane beside it, as the app draws them.
+    fn with_format(app: &mut RustGisApp, ui: &mut egui::Ui) {
+        let t = crate::theme::Tokens::get(ui.ctx());
+        egui::Panel::right("format_pane").exact_size(320.0).show(ui, |ui| super::format(app, ui, &t));
+        super::show(app, ui);
+    }
+
+    /// Selecting an element opens the Format pane, a tab like the others (#516). Closing it keeps
+    /// the selection, and selecting another element brings it back.
+    #[test]
+    fn a_selected_element_is_formatted_in_its_pane() {
+        use crate::RightPane::{Bookmarks, Format};
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Format"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let ids: Vec<u32> = app.session.project.layouts[li].elements.iter().map(|e| e.id).collect();
+        app.run("ui.pane.bookmarks", json!({})).unwrap();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                with_format(app, ui);
+            },
+            app,
+        );
+        h.run_steps(2);
+        assert!(h.query_by_label("Select an element to format it.").is_some(), "nothing selected");
+        assert_eq!(h.state().ui.right, Some(Bookmarks), "nor opened");
+        h.state_mut().layout.selected = ids.first().copied();
+        h.run_steps(2);
+        assert_eq!(
+            (h.state().ui.right, h.state().ui.right_open.clone()),
+            (Some(Format), vec![Bookmarks, Format]),
+            "a tab beside the others"
+        );
+        assert!(h.query_all_by_label("Name").next().is_some(), "the element's properties");
+        // Closed: the selection stays, and the pane doesn't come back by itself.
+        h.state_mut().run("ui.pane.format", json!({})).unwrap();
+        h.run_steps(2);
+        assert_eq!((h.state().ui.right, h.state().layout.selected), (Some(Bookmarks), ids.first().copied()));
+        // Another element selected: it is back.
+        h.state_mut().layout.selected = ids.get(1).copied();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.right, Some(Format));
     }
 
     /// Element ids are per layout: opening another layout ends the selection, so Delete or

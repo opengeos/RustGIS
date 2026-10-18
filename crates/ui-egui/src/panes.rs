@@ -106,6 +106,7 @@ fn right_title(pane: RightPane) -> (&'static str, &'static str) {
         RightPane::Sql => ("SQL", "ui.pane.sql"),
         RightPane::Directions => ("Directions", "ui.pane.directions"),
         RightPane::Bookmarks => ("Bookmarks", "ui.pane.bookmarks"),
+        RightPane::Format => ("Format", "ui.pane.format"),
         // Its tab says whose panel it is (see `right_name`).
         RightPane::Plugin => ("Plugin", "ui.pane.plugin"),
     }
@@ -153,6 +154,7 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
             RightPane::Shares => crate::docpanes::shares(app, ui, t),
             RightPane::Directions => crate::navui::show(app, ui, t),
             RightPane::Bookmarks => crate::bookmarkpane::show(app, ui, t),
+            RightPane::Format => crate::layoutview::format(app, ui, t),
             RightPane::Plugin => crate::pluginpanel::show(app, ui, t),
         });
     });

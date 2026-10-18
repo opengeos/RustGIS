@@ -383,6 +383,8 @@ pub enum RightPane {
     Sql,
     Directions,
     Bookmarks,
+    /// The selected layout element's properties (#516).
+    Format,
     /// A plugin's panel: the one `UiState::plugin_panel` names.
     Plugin,
 }
@@ -1525,6 +1527,7 @@ impl RustGisApp {
             "ui.pane.directions" if p.get("from").is_some() || p.get("to").is_some() => navui::open_with(self, p),
             "ui.pane.directions" => toggle_right(&mut self.ui, RightPane::Directions),
             "ui.pane.bookmarks" => toggle_right(&mut self.ui, RightPane::Bookmarks),
+            "ui.pane.format" => toggle_right(&mut self.ui, RightPane::Format),
             // A plugin's panel: `{"id": plugin}`.
             "ui.pane.plugin" => return pluginpanel::open(self, p),
             // The SQL pane; with "sql" (and "database"), opened on that query, run with "run".
