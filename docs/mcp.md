@@ -99,8 +99,13 @@ Attached calls run on the open app's session through the same tools and refusal 
 private server. File and network commands need `--yes`, unless **Let your Agents Control RustGIS**
 is ticked. The session is the project you have open, so an attached agent can't replace it:
 `project.new`, `project.open`, `project.openText`, `project.sample` and `project.fromTemplate`
-are refused, with or without `--yes`. `edit.undo` and `edit.redo` work, in the same history as
-your own steps.
+are refused, with or without `--yes`. Each agent command is a step in your own undo history,
+named for the agent (`agent 1`, `agent 2`…, in the order they first call). An agent's `edit.undo`
+and `edit.redo` work only on its own steps: when the step on top is yours (or another agent's),
+they're refused. You can still undo anything. Each agent also has its own active layer: when an
+agent selects a layer (`layer.select`, or a command that makes a layer active), your selection in
+the Layers pane stays as it was. The agent's later commands that name no layer act on its own
+layer, whatever you select meanwhile.
 
 An agent the app starts itself gets a run-scoped token instead of the relay's own:
 `rustgis-cli mcp --attach PORT --token-file FILE`. Each such grant carries its own file and network
@@ -171,6 +176,8 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - Token required: `relay_drops_connections_without_the_token`
 - Parse error after attach: `relay_returns_parse_error_after_attach_and_stays_usable`
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
+- Separate active layers: `relay_keeps_the_agents_active_layer_apart_from_the_users`
+- Agents undo only their own steps: `relay_agents_undo_only_their_own_steps`
 - The open project stays the user's: `relay_keeps_project_commands_for_the_user`
 - Timed-out command never runs: `relay_cancels_a_timed_out_command_so_it_never_runs`
 - Stop cleanup: `relay_stop_closes_clients_and_removes_the_token`

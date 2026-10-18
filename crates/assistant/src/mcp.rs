@@ -198,6 +198,16 @@ impl Server {
             });
         }
         let (id, params) = tools::target(call)?;
+        // An agent working on the user's project undoes and redoes only its own steps.
+        if let (Some(me), true) = (s.actor.as_deref(), matches!(id.as_str(), "edit.undo" | "edit.redo")) {
+            let top = if id == "edit.undo" { s.undo_actor() } else { s.redo_actor() };
+            if let Some(by) = top.filter(|by| *by != Some(me)) {
+                let whose = by.map_or_else(|| "the user's".to_string(), |other| format!("{other}'s"));
+                return Some(format!(
+                    "'{id}' was not run: the step it would change is {whose}, and an agent undoes and redoes only its own steps"
+                ));
+            }
+        }
         let project = PROJECT_COMMANDS.contains(&id.as_str());
         if project && self.users_project {
             return Some(format!(
