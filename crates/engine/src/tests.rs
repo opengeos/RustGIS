@@ -8924,13 +8924,26 @@ fn celestial_bodies_set_the_basemap_and_the_measurements() {
     let text = serde_json::to_string(&s.project).unwrap();
     let p = Project::from_json(&text).unwrap();
     assert_eq!(p.maps.first().map(|m| m.body().id), Some("mars"));
-    // Back on the Earth the planetary basemap goes; an Earth map saves no body.
-    s.run("map.body", &json!({"name": "earth"})).unwrap();
-    assert!(s.map().tiles.is_empty() && s.map().body().is_earth());
+    s.run("map.addTiles", &json!({"url": "https://overlay.example.com/{z}/{x}/{y}.png", "id": "overlay", "overlay": true})).unwrap();
+    // Back on the Earth the planetary basemap becomes USGS Imagery, keeping overlays;
+    // an Earth map saves no body.
+    let earth_view = s.run("map.body", &json!({"name": "earth"})).unwrap();
+    assert_eq!(earth_view["basemap"], "usgs-imagery");
+    assert!(s.map().body().is_earth());
+    let tiles = &s.map().tiles;
+    assert_eq!(tiles.len(), 2);
+    assert!(tiles.iter().any(|t| t.id == "overlay" && t.overlay));
+    let imagery = tiles.iter().find(|t| !t.overlay).unwrap();
+    assert_eq!(imagery.id, rustgis_map::planets::EARTH_BASEMAP.id);
+    assert_eq!(imagery.url, rustgis_map::planets::EARTH_BASEMAP.url);
+    assert!(imagery.visible && !imagery.overlay && !imagery.tms);
+    assert_eq!(imagery.max_zoom, 16);
     assert!(!serde_json::to_string(&s.project).unwrap().contains("\"body\""));
     // Undo goes back to Mars.
     assert!(s.undo());
     assert_eq!(s.map().body().id, "mars");
+    assert!(s.map().tiles.iter().any(|t| t.id == "planet-mars-hillshade"));
+    assert!(s.map().tiles.iter().all(|t| t.id != "usgs-imagery"));
     // Bad names and mismatches are refused, and nothing changes.
     assert!(s.run("map.body", &json!({"name": "vulcan"})).is_err());
     assert!(s.run("map.body", &json!({"name": "moon", "basemap": "mars-hillshade"})).is_err());
@@ -8947,6 +8960,11 @@ fn celestial_bodies_set_the_basemap_and_the_measurements() {
     }
     assert!(full.run("map.body", &json!({"name": "mars"})).is_err());
     assert!(full.map().body().is_earth());
+    assert_eq!(full.map().tiles.len(), rustgis_map::tiles::MAX_TILE_LAYERS);
+    // The Earth's new default is also atomic when there is no room for its imagery.
+    full.run("map.body", &json!({"name": "moon", "basemap": false})).unwrap();
+    assert!(full.run("map.body", &json!({"name": "earth"})).is_err());
+    assert_eq!(full.map().body().id, "moon");
     assert_eq!(full.map().tiles.len(), rustgis_map::tiles::MAX_TILE_LAYERS);
     // A project naming an unknown body is on the Earth.
     let odd = text.replace("\"body\":\"mars\"", "\"body\":\"vulcan\"");

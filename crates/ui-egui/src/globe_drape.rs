@@ -5,7 +5,7 @@
 
 use egui::epaint::Vertex;
 use egui::{Color32, Mesh, Painter, Rect, Shape, TextureFilter, TextureHandle, TextureOptions, TextureWrapMode, pos2, vec2};
-use rustgis_engine::geom::{Coord, Extent, merc_to_lonlat};
+use rustgis_engine::geom::{Coord, Extent, extent_to_merc, merc_to_lonlat};
 use rustgis_engine::map::{Globe, Map, Rgba};
 use rustgis_engine::render::{self, GLOBE_GLOW, STAR_TILE, View};
 
@@ -96,7 +96,14 @@ impl GlobeDrape {
             let (detail, margin) = if zooming_out { (res * ZOOM_OUT_COARSER, ZOOM_OUT_MARGIN) } else { (res, MARGIN) };
             let boxes = g.drape_extents(w, h, margin);
             let max_side = ctx.input(|i| i.max_texture_side).clamp(256, 4096) as u32;
-            let camera = rustgis_engine::map::Camera { res: detail, ..map.camera };
+            // A whole-world drape can otherwise grow to tens of millions of pixels as the
+            // camera zooms in, despite showing only a screen's worth of detail. Bound the
+            // combined area, including both antimeridian patches, as well as each side.
+            let area: f64 = boxes.iter().map(extent_to_merc).map(|b| b.width() * b.height()).sum();
+            let p = f64::from(drape_ppp);
+            let pixels = (w * h * p * p).clamp(65_536.0, 1_048_576.0);
+            let render_res = detail.max((area / pixels).sqrt() * p);
+            let camera = rustgis_engine::map::Camera { res: render_res, ..map.camera };
             let view = View { width: w, height: h, pixels_per_point: f64::from(drape_ppp), camera, sky: true };
             let pictures = render::render_globe_drape(map, &view, &boxes, max_side);
             if pictures.is_empty() {
@@ -271,5 +278,33 @@ mod tests {
         assert_eq!(d.drape.as_ref().map(|d| d.built), built);
         // The sprites are drawn once and kept while zooming.
         assert!(d.sprites.is_some());
+    }
+
+    #[test]
+    fn navigating_a_planet_reuses_the_drape() {
+        for lat in [0.0, 25.0, 70.0] {
+            let ctx = egui::Context::default();
+            let mut m = globe(15.0, 20_000.0);
+            m.body = "moon".into();
+            m.camera.center = lonlat_to_merc(Coord::new(15.0, lat));
+            let key = DrapeKey { rev: 0, sources: 0 };
+            let mut d = GlobeDrape::default();
+            assert!(d.prepare(&ctx, &mut m, key, 0, 1100.0, 800.0, 2.0, 0.0));
+            let mut rebuilt = 0;
+            for i in 1..=60 {
+                m.camera.center = lonlat_to_merc(Coord::new(15.0 + i as f64 * 0.1, lat));
+                m.camera.res = 20_000.0 * (1.0 - i as f64 * 0.001);
+                let built = d.drape.as_ref().map(|d| d.built);
+                assert!(d.prepare(&ctx, &mut m, key, 0, 1100.0, 800.0, 2.0, i as f64 / 60.0));
+                let pixels: usize =
+                    d.drape.as_ref().into_iter().flat_map(|d| &d.patches).map(|p| p.2.size().iter().product::<usize>()).sum();
+                assert!(pixels <= 1_048_576, "navigation textures grew to {pixels} pixels");
+                rebuilt += usize::from(d.drape.as_ref().map(|d| d.built) != built);
+                let g = Globe::new(&m.camera, 1100.0, 800.0);
+                let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1100.0, 800.0));
+                assert!(!d.meshes(rect, &g).is_empty());
+            }
+            assert!(rebuilt <= 2, "a small pan/zoom rebuilt the drape {rebuilt} times at {lat}°");
+        }
     }
 }

@@ -52,7 +52,7 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("map.tiles", "Tile Layers", "Home › Add", |s, _| Ok(list(s, false))).view(),
         C::new("map.body", "Celestial Body", "Home › Add", body).params(
-            r#"{"name"?: "earth"|"moon"|"mars"|"mercury"|"venus"|"io"|"europa"|"ganymede"|"callisto"|"titan"|"pluto"|"charon" (map.bodies lists them; default: the basemap's body), "basemap"?: a planetary basemap's id (default: the body's first; the Earth's removes the planetary ones) | false (adds none, keeping the web basemaps but other bodies')}"#,
+            r#"{"name"?: "earth"|"moon"|"mars"|"mercury"|"venus"|"io"|"europa"|"ganymede"|"callisto"|"titan"|"pluto"|"charon" (map.bodies lists them; default: the basemap's body), "basemap"?: a planetary basemap's id (default: the body's first; USGS Imagery on the Earth) | false (adds none, keeping the web basemaps but other bodies')}"#,
         ),
         C::new("map.bodies", "Celestial Bodies", "Home › Add", |s, _| Ok(bodies(s))).view(),
     ]
@@ -88,11 +88,15 @@ fn body(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(m) = basemap.filter(|m| m.body != body.id) {
         return Err(format!("'{}' is a basemap of {}, not {}", m.id, rustgis_geom::Body::get(m.body).name, body.name));
     }
-    let basemap = if keep { None } else { basemap.or_else(|| planets::basemaps_of(body.id).next()) };
+    let basemap = if keep {
+        None
+    } else {
+        basemap.or_else(|| if body.is_earth() { Some(&planets::EARTH_BASEMAP) } else { planets::basemaps_of(body.id).next() })
+    };
     let m = s.map_mut();
     m.body = body.id.to_string();
     // Other bodies' basemaps always go (with `keep`, this body's and the Earth's web basemaps
-    // stay); on the Earth, the web basemaps the map had stay.
+    // stay). The default basemap below replaces the remaining web basemaps, keeping overlays.
     m.tiles.retain(|t| t.overlay || planets::basemap(&t.id).is_none_or(|b| keep && b.body == body.id));
     if let Some(b) = basemap {
         let tile = json!({"url": b.url, "kind": "raster", "name": format!("{} · {}", body.name, b.name), "attribution": b.attribution,

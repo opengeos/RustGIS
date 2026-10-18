@@ -225,8 +225,7 @@ struct ImgOut {
     @location(0) uv: vec2f,
 };
 
-@vertex
-fn vs_image(@builtin(vertex_index) vi: u32) -> ImgOut {
+fn image_vertex(vi: u32) -> ImgOut {
     var pos = array<vec2f, 6>(
         vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
         vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0),
@@ -239,10 +238,35 @@ fn vs_image(@builtin(vertex_index) vi: u32) -> ImgOut {
     return out;
 }
 
+@vertex
+fn vs_image(@builtin(vertex_index) vi: u32) -> ImgOut {
+    return image_vertex(vi);
+}
+
 @group(0) @binding(0) var t_img: texture_2d<f32>;
 @group(0) @binding(1) var s_img: sampler;
 
 @fragment
 fn fs_image(in: ImgOut) -> @location(0) vec4f {
     return textureSample(t_img, s_img, in.uv);
+}
+
+// A cached image scene's pan/zoom changes only the sampled rectangle. The viewport stays
+// inside the map even when the picture extends beyond the window.
+@group(1) @binding(0) var<uniform> blit_uv: vec4f;
+
+@vertex
+fn vs_blit(@builtin(vertex_index) vi: u32) -> ImgOut {
+    var out = image_vertex(vi);
+    out.uv = blit_uv.xy + out.uv * blit_uv.zw;
+    return out;
+}
+
+@fragment
+fn fs_blit(in: ImgOut) -> @location(0) vec4f {
+    let color = textureSample(t_img, s_img, in.uv);
+    if any(in.uv < vec2f(0.0)) || any(in.uv > vec2f(1.0)) {
+        return vec4f(0.0);
+    }
+    return color;
 }

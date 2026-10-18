@@ -26,6 +26,18 @@ pub struct PlanetBasemap {
     pub attribution: &'static str,
 }
 
+/// Imagery selected when the celestial body switcher returns to the Earth. Kept separate
+/// from the planetary catalog so `basemap: false` continues to preserve Earth web basemaps.
+pub const EARTH_BASEMAP: PlanetBasemap = PlanetBasemap {
+    id: "usgs-imagery",
+    body: "earth",
+    name: "USGS Imagery",
+    url: "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
+    tms: false,
+    max_zoom: 16,
+    attribution: "USGS The National Map",
+};
+
 /// A basemap the opengeos tile service serves, `$id` its dataset: `$service` `"opm"` passes an
 /// OpenPlanetaryMap mosaic through with CORS headers, `"wms"` warps a USGS Astrogeology WMS layer
 /// to Web Mercator.

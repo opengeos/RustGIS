@@ -4,6 +4,7 @@
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::Tool;
 use rustgis_engine::data::GeometryType;
+use rustgis_engine::map::planets::EARTH_BASEMAP;
 use rustgis_engine::map::view::Weather;
 use rustgis_engine::map::{Basemap, RasterRenderer, Renderer, Resampling, Stretch};
 use serde_json::{Value, json};
@@ -570,7 +571,7 @@ fn basemap_gallery(ui: &mut Ui, app: &mut RustGisApp) {
 }
 
 /// The celestial body switcher's menu (the Layers pane's planet button): picking a body moves the
-/// map there, with one of its basemaps; the Earth takes the planetary basemaps off.
+/// map there, with one of its basemaps; the Earth selects USGS Imagery.
 pub fn body_menu(ui: &mut Ui, app: &mut RustGisApp) {
     ui.label(egui::RichText::new(tl!("Celestial Body")).font(semibold(12.0)));
     let current = app.session.map().body().id;
@@ -629,14 +630,7 @@ const WEB_BASEMAPS: [(&str, &str, &str, &str, &str, u8); 6] = [
     ("openfreemap-positron", "OpenFreeMap Positron", "style", "https://tiles.openfreemap.org/styles/positron", OPENFREEMAP, 14),
     ("openfreemap-dark", "OpenFreeMap Dark", "style", "https://tiles.openfreemap.org/styles/dark", OPENFREEMAP, 14),
     ("openfreemap-fiord", "OpenFreeMap Fiord", "style", "https://tiles.openfreemap.org/styles/fiord", OPENFREEMAP, 14),
-    (
-        "usgs-imagery",
-        "USGS Imagery",
-        "raster",
-        "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
-        "USGS The National Map",
-        16,
-    ),
+    (EARTH_BASEMAP.id, EARTH_BASEMAP.name, "raster", EARTH_BASEMAP.url, EARTH_BASEMAP.attribution, EARTH_BASEMAP.max_zoom),
 ];
 
 /// The id of the registry plugin with many more web basemaps.

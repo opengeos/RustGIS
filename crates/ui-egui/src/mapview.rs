@@ -17,7 +17,7 @@ struct Key {
     rev: u64,
     cam: (i64, i64, i64, i64, i64),
     size: [usize; 2],
-    /// Rendered at reduced resolution while the globe was moving.
+    /// A temporary preview: an exact frame follows once motion settles.
     draft: bool,
     /// The tile cache's generation (0 for a map without tile layers).
     tiles: u64,
@@ -86,7 +86,7 @@ pub struct MapView {
     /// MCP relay that asked for the map alone).
     pub hide_overlays: bool,
     /// How long the last frame drawn mid-motion took (ms), and the share of full resolution it
-    /// was drawn at: the next is spaced out by it, and drawn finer or coarser to take about 40 ms.
+    /// was drawn at: the next is spaced out by it, and drawn finer or coarser to take about 16 ms.
     motion_cost: (f64, f64),
     labels: Vec<PlacedLabel>,
     /// On the globe, where each label stands on the Earth, so it follows the globe as it turns
@@ -146,7 +146,7 @@ pub struct MapView {
     drape: crate::globe_drape::GlobeDrape,
     /// The moving tilted map's drape.
     tilt_drape: crate::tilt_drape::TiltDrape,
-    /// The settled tilted map's exact frame, drawn off the UI thread.
+    /// Exact globe, tilted and tiled flat frames, composed off the UI thread.
     tilt_settle: crate::tilt_settle::TiltSettle<Key>,
     /// Shooting stars around the globe.
     comets: crate::comets::Comets,
@@ -232,7 +232,7 @@ impl Default for MapView {
 }
 
 impl MapView {
-    /// Whether a settled tilted map's exact frame is still being drawn (off the UI thread).
+    /// Whether an exact frame is being composed off the UI thread.
     pub fn drawing(&self) -> bool {
         self.tilt_settle.busy()
     }
@@ -265,6 +265,7 @@ impl MapView {
     pub fn invalidate(&mut self) {
         self.key = None;
         self.gpu_frame = None;
+        self.tilt_settle = Default::default();
     }
     /// The camera the last full render was drawn with (diagnostics and tests).
     pub fn full_frame_camera(&self) -> Camera {
@@ -412,7 +413,12 @@ fn split_view(app: &mut RustGisApp, ui: &mut Ui, other: usize, rect: Rect, t: &T
     if let (Some((_, bufs, labels)), Some(gr)) = (&app.map.split_gpu, &app.map.gpu_renderer) {
         painter.add(egui_wgpu::Callback::new_paint_callback(
             rect,
-            crate::mapgpu::SceneCallback { renderer: gr.clone(), buffers: bufs.clone(), target: app.map.gpu_target_split.clone() },
+            crate::mapgpu::SceneCallback {
+                renderer: gr.clone(),
+                buffers: bufs.clone(),
+                target: app.map.gpu_target_split.clone(),
+                uv: Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            },
         ));
         for l in labels {
             draw_label(&painter, l, pos2(rect.min.x + l.x, rect.min.y + l.y));
@@ -475,8 +481,8 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let settle = if !globe_view && cam.pitch != 0.0 { 0.4 } else { 0.18 };
     let moving = dragging || time - app.map.last_interaction < settle;
     // The GPU backend draws effect-free flat maps, turned and tilted ones too unless they need
-    // pictures drawn on the CPU (tiles, rasters…): it re-renders on every change (no
-    // texture-shift trick — meshes re-project in the vertex shader).
+    // pictures drawn on the CPU (tiles, rasters…). Vector scenes re-project in the vertex
+    // shader; image scenes shift and scale as cached pictures while navigating.
     // A decline holds at its revision and zoom level (what it shows depends on both).
     let rev = (app.session.revision, (cam.res.max(1e-9).log2().round()) as i32);
     let turned_view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: cam, sky: true };
@@ -487,7 +493,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             || (app.map.gpu_turn_declined != Some(rev) && rustgis_engine::render::gpu_may_turn(app.session.map(), &turned_view)))
         && app.session.map().view.effects.is_none()
         && app.session.map().view.color_vision == rustgis_engine::map::view::ColorVision::Normal;
-    let draped = if globe_view && moving {
+    let mut draped = if globe_view && moving {
         let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
         let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
         app.map.drape.prepare(ui.ctx(), app.session.map_mut(), key, tiles, w, h, ppp, time)
@@ -546,11 +552,23 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
-    // A settled tilted map's exact frame is drawn off the UI thread (see `tilt_settle`). Until
-    // it comes the drape stands in, or the last frame when only tiles or streamed data arrived
-    // since (it shows the same view).
-    let settling = tilted && !moving;
+    // Labels belong to the rendered contents. When visibility or data change, old labels
+    // must disappear with their layers while a preview stands in for the exact frame.
+    if app.map.key.is_none_or(|k| k.rev != key.rev) {
+        app.map.labels.clear();
+        app.map.label_lonlat.clear();
+        app.map.label_map.clear();
+    }
+    // Exact globe, tilted and tiled flat frames are composed off the UI thread. A drape or
+    // cached flat picture keeps navigation and layer changes responsive while they finish.
+    let tiled_flat = !globe_view && cam.bearing == 0.0 && cam.pitch == 0.0 && !app.session.map().tiles.is_empty();
+    let settling = (tilted || globe_view || tiled_flat) && !moving;
     let mut tilt_draped = tilt_draped;
+    // A frame finishing during a new gesture is obsolete. Drain it now so it neither holds
+    // the worker slot nor keeps screenshot/idle waiters waiting for a frame we will not show.
+    if !settling && let Some((_, done)) = app.map.tilt_settle.take() {
+        app.session.map_mut().adopt_caches(&done.map);
+    }
     if settling {
         let same_view = |a: Key, b: Key| Key { tiles: b.tiles, sources: b.sources, ..a } == b;
         if let Some((k, done)) = app.map.tilt_settle.take() {
@@ -560,7 +578,19 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 && let Some(r) = done.rendered
             {
                 app.map.render_ms = done.ms;
-                show_frame(app, ui.ctx(), r, &done.view, (w, h), k, time, false);
+                match r {
+                    rustgis_engine::render::RenderOutput::Cpu(r) => {
+                        app.map.gpu_frame = None;
+                        show_frame(app, ui.ctx(), r, &done.view, (w, h), k, time, globe_view);
+                    }
+                    rustgis_engine::render::RenderOutput::Gpu(scene) => {
+                        if !show_gpu_frame(app, scene, &done.view, k, time) {
+                            // Device limits can decline a scene: compose the CPU fallback on
+                            // the worker too, keeping oversized images off the UI thread.
+                            app.map.tilt_settle.start(ui.ctx(), k, done.map, done.view);
+                        }
+                    }
+                }
                 if app.map.camera_moved {
                     app.session.record_extent();
                     app.map.camera_moved = false;
@@ -569,14 +599,32 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         if app.map.key != Some(key) && !app.map.tilt_settle.busy() {
             let view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: cam, sky: true };
-            rustgis_engine::render::sync_tilted_view(app.session.map_mut(), &view);
-            app.map.tilt_settle.start(ui.ctx(), key, app.session.map().clone(), view);
+            if tilted {
+                rustgis_engine::render::sync_tilted_view(app.session.map_mut(), &view);
+            }
+            let backend = if gpu_ok { rustgis_engine::render::Backend::Gpu } else { rustgis_engine::render::Backend::Cpu };
+            app.map.tilt_settle.start_backend(ui.ctx(), key, app.session.map().clone(), view, backend);
         }
-        let shown = app.map.texture.is_some() && app.map.key.is_some_and(|k| same_view(k, key));
+        let shown = (app.map.texture.is_some() || app.map.gpu_frame.is_some())
+            && app.map.key.is_some_and(|k| same_view(Key { draft: false, ..k }, key));
         if !shown {
-            let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
+            let drape_key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
             let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
-            tilt_draped = app.map.tilt_drape.prepare(ui.ctx(), app.session.map_mut(), key, tiles, w, h, ppp, time);
+            if globe_view {
+                app.map.gpu_frame = None;
+                draped = app.map.drape.prepare(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
+            } else if tilted {
+                tilt_draped = app.map.tilt_drape.prepare(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
+            } else {
+                // A small preview shows a visibility change immediately. The exact frame is
+                // already on its way; do not rebuild this preview on subsequent UI frames.
+                let preview_ppp = f64::from(ppp.min(0.75)).min((524_288.0 / (w * h)).sqrt());
+                let view = View { width: w, height: h, pixels_per_point: preview_ppp, camera: cam, sky: true };
+                if let Some(r) = rustgis_engine::render::render(app.session.map_mut(), &view) {
+                    app.map.gpu_frame = None;
+                    show_frame(app, ui.ctx(), r, &view, (w, h), Key { draft: true, ..key }, time, false);
+                }
+            }
         }
     }
     let interacting = moving && (!globe_view || draped) && (!tilted || tilt_draped);
@@ -596,6 +644,13 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // side (`GPU_CULL_MARGIN`); zooming out or panning further would show gaps where features
     // were left out, so then the branch below re-renders mid-motion instead.
     let stale = app.map.key != Some(key);
+    // Image runs (tiles, rasters, CPU effects) move as one cached picture on a north-up
+    // flat map. Re-uploading them every frame is much slower than shifting the GPU callback,
+    // just as the CPU texture is shifted below. Turned/tilted scenes still re-project.
+    let gpu_picture = gpu_ok && cam.bearing == 0.0 && cam.pitch == 0.0 && app.map.gpu_frame.as_ref().is_some_and(|f| f.has_images);
+    // An asynchronous tiled preview is a CPU texture until its GPU scene arrives.
+    let texture_motion = !gpu_ok || gpu_picture || (tiled_flat && app.map.gpu_frame.is_none());
+    let has_picture = app.map.texture.is_some() || gpu_picture;
     let cam_only = app.map.key.is_some_and(|k| (Key { cam: k.cam, ..key }) == k);
     let mut fast_engaged = false;
     if stale
@@ -620,8 +675,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // Turning the map isn't a shift and a scale: each step is drawn.
     // Nor is moving a tilted map (its perspective changes).
     // The tilted map's drape stands in for both.
-    let turning = !tilt_draped && (app.map.tex_camera.bearing != cam.bearing || app.map.tex_camera.pitch != cam.pitch || tilted);
-    let motion = (stale && interacting && !gpu_ok && !globe_view && !tilted && !turning && app.map.texture.is_some())
+    let turning =
+        !globe_view && !tilt_draped && (app.map.tex_camera.bearing != cam.bearing || app.map.tex_camera.pitch != cam.pitch || tilted);
+    let motion = (stale && interacting && texture_motion && !globe_view && !tilted && !turning && has_picture)
         .then(|| {
             let r = tex_rect(app, cam, rect, false);
             let stretch = r.width() as f64 / app.map.tex_size.0.max(1.0);
@@ -635,7 +691,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             } else {
                 return None;
             };
-            let k = if ms > 0.0 { k * (40.0 / ms).sqrt().clamp(0.7, 1.4) } else { 1.0 };
+            let k = if ms > 0.0 { k * (16.0 / ms).sqrt().clamp(0.5, 1.4) } else { 0.65 };
             Some((vw, vh, ppp * (k * most).clamp(least, most) as f32))
         })
         .flatten();
@@ -643,15 +699,17 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if stale
         && !fast_engaged
         && !settling
+        && !draped
+        && !tilt_draped
         && (motion.is_some()
-            || gpu_ok
+            || (gpu_ok && !texture_motion)
             || turning
             || !interacting
-            || app.map.texture.is_none()
+            || !has_picture
             || app.map.key.is_some_and(|k| k.rev != key.rev || k.size != key.size))
     {
         let t0 = web_time::Instant::now();
-        let view = View { width: w, height: h, pixels_per_point: render_ppp as f64, camera: cam, sky: true };
+        let view = View { width: vw, height: vh, pixels_per_point: vppp as f64, camera: cam, sky: true };
         let mut rendered_gpu = false;
         if gpu_ok {
             if app.map.gpu_renderer.is_none()
@@ -679,31 +737,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
                 other => other,
             };
-            if let (Some(r), Some(rs)) = (&app.map.gpu_renderer, &app.map.render_state)
-                && let Some(rustgis_engine::render::RenderOutput::Gpu(scene)) = out
-                && let Some(bufs) = crate::mapgpu::SceneBuffers::from_scene(&rs.device, &rs.queue, r, &scene, cam, [w, h], render_ppp)
-            {
-                app.map.gpu_frame = Some(std::sync::Arc::new(bufs));
-                app.map.labels = scene.labels;
-                app.map.labels.splice(0..0, scene.unplaced);
-                app.map.label_lonlat = Vec::new();
-                // A turned or tilted map's labels follow their places while it moves.
-                app.map.label_map = match cam.bearing != 0.0 || cam.pitch != 0.0 {
-                    true => app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, w, h)).collect(),
-                    false => Vec::new(),
-                };
-                app.map.label_camera = cam;
-                app.map.attribution = scene.attribution;
-                app.map.last_render = time;
-                for e in scene.tile_errors {
-                    if app.map.tile_errors.insert(e.clone()) {
-                        app.session.notify(e, true);
-                    }
-                }
-                app.map.tex_camera = cam;
-                app.map.tex_size = (w, h);
-                app.map.key = Some(key);
-                rendered_gpu = true;
+            if let Some(rustgis_engine::render::RenderOutput::Gpu(scene)) = out {
+                let key = Key { draft: key.draft || motion.is_some(), ..key };
+                rendered_gpu = show_gpu_frame(app, scene, &view, key, time);
             }
         }
         // The CPU path, unchanged — also the fallback when the GPU backend declines a frame
@@ -753,14 +789,26 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let old = app.map.tex_camera;
     let tex_rect = tex_rect(app, cam, rect, globe_view);
     app.map.tex_rect = tex_rect;
-    // A fresh GPU frame (re-rendered whenever the key changed, so its camera is the current
-    // one: tex_rect == rect and labels sit unshifted) draws inside egui's wgpu pass. The GPU
+    // A GPU scene with image runs shifts/scales as a picture during north-up navigation;
+    // vector-only scenes re-project in their shaders. Both draw inside egui's wgpu pass. The GPU
     // backend only serves flat maps, so the globe's drape never meets it.
     // Not under the tilted map's drape: a flat GPU frame from before the tilt would cover it.
     if let (Some(gf), Some(gr)) = (app.map.gpu_frame.as_ref().filter(|_| !tilt_draped), &app.map.gpu_renderer) {
         painter.add(egui_wgpu::Callback::new_paint_callback(
             rect,
-            crate::mapgpu::SceneCallback { renderer: gr.clone(), buffers: gf.clone(), target: app.map.gpu_target.clone() },
+            crate::mapgpu::SceneCallback {
+                renderer: gr.clone(),
+                buffers: gf.clone(),
+                target: app.map.gpu_target.clone(),
+                uv: if gpu_picture {
+                    Rect::from_min_max(
+                        ((rect.min - tex_rect.min) / tex_rect.size()).to_pos2(),
+                        ((rect.max - tex_rect.min) / tex_rect.size()).to_pos2(),
+                    )
+                } else {
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))
+                },
+            },
         ));
     } else if let Some(tex) = app.map.texture.as_ref().filter(|_| !draped && !tilt_draped) {
         painter.image(tex.id(), tex_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -816,6 +864,44 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 fn fetches_tiles(m: &rustgis_engine::map::Map) -> bool {
     !m.tiles.is_empty()
         || m.view.terrain.as_ref().is_some_and(|t| matches!(t.source, rustgis_engine::map::view::TerrainSource::Tiles { .. }))
+}
+
+/// Uploads a composed GPU scene, whether built in place or by the frame worker.
+fn show_gpu_frame(app: &mut RustGisApp, scene: rustgis_engine::render::gpu_scene::GpuScene, view: &View, key: Key, time: f64) -> bool {
+    let Some(rs) = &app.map.render_state else { return false };
+    let r = app.map.gpu_renderer.get_or_insert_with(|| std::sync::Arc::new(crate::mapgpu::GpuMapRenderer::new(rs)));
+    let cam = view.camera;
+    let Some(bufs) = crate::mapgpu::SceneBuffers::from_scene(
+        &rs.device,
+        &rs.queue,
+        r,
+        &scene,
+        cam,
+        [view.width, view.height],
+        view.pixels_per_point as f32,
+    ) else {
+        return false;
+    };
+    app.map.gpu_frame = Some(std::sync::Arc::new(bufs));
+    app.map.labels = scene.labels;
+    app.map.labels.splice(0..0, scene.unplaced);
+    app.map.label_lonlat.clear();
+    app.map.label_map = match cam.bearing != 0.0 || cam.pitch != 0.0 {
+        true => app.map.labels.iter().map(|l| cam.try_to_map(l.x as f64, l.y as f64, view.width, view.height)).collect(),
+        false => Vec::new(),
+    };
+    app.map.label_camera = cam;
+    app.map.attribution = scene.attribution;
+    app.map.last_render = time;
+    for e in scene.tile_errors {
+        if app.map.tile_errors.insert(e.clone()) {
+            app.session.notify(e, true);
+        }
+    }
+    app.map.tex_camera = cam;
+    app.map.tex_size = (view.width, view.height);
+    app.map.key = Some(key);
+    true
 }
 
 /// Shows a frame the CPU drew for `view` (of a `w × h` map view) as the map's texture, with its
@@ -2478,6 +2564,31 @@ mod picture_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_globe_visibility_preview_drops_the_old_labels() {
+        let mut app = RustGisApp::with_sample();
+        app.run("map.body", json!({"name": "moon", "basemap": false})).expect("Moon");
+        app.run("map.projection", json!({"type": "globe"})).expect("globe");
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 550.0)).with_max_steps(10_000).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while h.state().map.key.is_none() || h.state().map.drawing() {
+            assert!(std::time::Instant::now() < end, "exact globe frame did not arrive");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            h.step();
+        }
+        assert!(!h.state().map.labels.is_empty(), "the sample has labels");
+        h.state_mut().run("layer.visibility", json!({"layer": "Countries", "visible": false})).expect("hide countries");
+        h.step();
+        assert!(h.state().map.labels.is_empty(), "the preview kept labels from the old visibility state");
+    }
 
     /// The GPU fast path moves the last frame's meshes only while they cover the view: zooming
     /// out or panning past the cull margin re-renders, or features culled from the last frame

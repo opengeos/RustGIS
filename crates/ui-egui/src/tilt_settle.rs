@@ -1,16 +1,17 @@
-//! The settled tilted map's exact frame, drawn off the UI thread. A tilted frame takes a few
-//! hundred milliseconds for a large view; drawn on the UI thread it froze the map just as it came
+//! Exact globe, tilted and tiled flat frames, composed off the UI thread. Such a frame takes a few
+//! hundred milliseconds for a large view; composed on the UI thread it froze the map just as it came
 //! to rest. A copy of the map is drawn on a worker instead (the copy shares its features and
 //! caches, so it costs pointers), while the drape (see `tilt_drape`) stays on screen until the
-//! frame is ready. In the browser there are no threads: the frame is drawn at once, as before.
+//! frame is ready. GPU scenes are composed here too, then uploaded on the UI thread. In the
+//! browser there are no threads: the frame is drawn at once, as before.
 
 use rustgis_engine::map::Map;
-use rustgis_engine::render::{self, Rendered, View};
+use rustgis_engine::render::{self, Backend, RenderOutput, View};
 
 /// A finished frame.
 pub(crate) struct Done {
     /// None when it couldn't be drawn.
-    pub rendered: Option<Rendered>,
+    pub rendered: Option<RenderOutput>,
     /// The view it was drawn for.
     pub view: View,
     /// The copy it was drawn from, holding the caches the drawing filled.
@@ -41,9 +42,9 @@ impl<K> Default for TiltSettle<K> {
     }
 }
 
-fn draw(mut map: Map, view: View) -> Done {
+fn draw(mut map: Map, view: View, backend: Backend) -> Done {
     let t0 = web_time::Instant::now();
-    let rendered = render::render(&mut map, &view);
+    let rendered = render::render_backend(&mut map, &view, backend);
     Done { rendered, view, map, ms: t0.elapsed().as_millis() as u64 }
 }
 
@@ -60,7 +61,12 @@ impl<K: Copy + PartialEq> TiltSettle<K> {
     /// Does nothing while a frame is being drawn (the next starts once that one is taken), or
     /// for a key that couldn't be drawn.
     pub fn start(&mut self, ctx: &egui::Context, key: K, map: Map, view: View) {
-        self.start_with(ctx, key, move || draw(map, view));
+        self.start_backend(ctx, key, map, view, Backend::Cpu);
+    }
+
+    /// Builds a CPU frame or GPU scene on the worker; GPU resources are uploaded by the UI.
+    pub fn start_backend(&mut self, ctx: &egui::Context, key: K, map: Map, view: View, backend: Backend) {
+        self.start_with(ctx, key, move || draw(map, view, backend));
     }
 
     /// Starts `work` drawing the frame keyed `key` (see [`TiltSettle::start`]). A panic in it
@@ -74,7 +80,7 @@ impl<K: Copy + PartialEq> TiltSettle<K> {
         {
             let (tx, rx) = std::sync::mpsc::channel();
             let ctx = ctx.clone();
-            let spawned = std::thread::Builder::new().name("rustgis-tilt-frame".into()).spawn(move || {
+            let spawned = std::thread::Builder::new().name("rustgis-map-frame".into()).spawn(move || {
                 // Without an answer (a panic) `take` finds the channel closed.
                 if let Ok(done) = std::panic::catch_unwind(work) {
                     let _ = tx.send(done);
@@ -147,7 +153,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         };
         assert_eq!(done.0, 7);
-        let r = done.1.rendered.expect("a frame");
+        let Some(RenderOutput::Cpu(r)) = done.1.rendered else { panic!("a CPU frame") };
         assert_eq!((r.pixmap.width(), r.pixmap.height()), (64, 48));
         assert!(!s.busy());
         assert!(s.take().is_none());

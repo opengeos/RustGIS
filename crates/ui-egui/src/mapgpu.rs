@@ -223,6 +223,7 @@ pub(crate) struct GpuMapRenderer {
     cmd_layout: wgpu::BindGroupLayout,
     backdrop_layout: wgpu::BindGroupLayout,
     image_layout: wgpu::BindGroupLayout,
+    blit_layout: wgpu::BindGroupLayout,
     templates: wgpu::Buffer,
     sampler: wgpu::Sampler,
     /// MSAA sample count of the offscreen scene target.
@@ -279,6 +280,10 @@ impl GpuMapRenderer {
                     count: None,
                 },
             ],
+        });
+        let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("mapgpu_blit_uv"),
+            entries: &[uniform_buf(wgpu::ShaderStages::VERTEX, 0, 16)],
         });
         let templates = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("mapgpu_templates"),
@@ -406,7 +411,7 @@ impl GpuMapRenderer {
         // The blit pipeline draws the resolved scene texture into egui's pass (egui's target
         // is 1×, so a separate pipeline; the scene's own pipelines render into the 4× MSAA
         // offscreen target).
-        let blit_pipeline = pipeline("mapgpu_blit", "vs_image", "fs_image", &[], &[&image_layout], rs.target_format, 1, None);
+        let blit_pipeline = pipeline("mapgpu_blit", "vs_blit", "fs_blit", &[], &[&image_layout, &blit_layout], rs.target_format, 1, None);
         GpuMapRenderer {
             mesh_pipeline,
             point_pipeline,
@@ -418,6 +423,7 @@ impl GpuMapRenderer {
             cmd_layout,
             backdrop_layout,
             image_layout,
+            blit_layout,
             templates,
             sampler,
             samples,
@@ -433,6 +439,8 @@ pub(crate) struct SceneTarget {
     depth_view: wgpu::TextureView,
     resolve_tex: wgpu::Texture,
     pub resolve_bind: wgpu::BindGroup,
+    blit_uniforms: wgpu::Buffer,
+    blit_bind: wgpu::BindGroup,
     pub size: [u32; 2],
 }
 
@@ -483,11 +491,23 @@ impl SceneTarget {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&r.sampler) },
             ],
         });
+        let blit_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("mapgpu_blit_uv"),
+            contents: bytemuck::cast_slice(&[0.0f32, 0.0, 1.0, 1.0]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let blit_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mapgpu_blit_uv_bind"),
+            layout: &r.blit_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: blit_uniforms.as_entire_binding() }],
+        });
         Some(SceneTarget {
             msaa_view: msaa_tex.create_view(&wgpu::TextureViewDescriptor::default()),
             depth_view: depth_tex.create_view(&wgpu::TextureViewDescriptor::default()),
             resolve_tex,
             resolve_bind,
+            blit_uniforms,
+            blit_bind,
             size,
         })
     }
@@ -565,8 +585,8 @@ pub(crate) struct SceneBuffers {
     pub clear: [f32; 4],
     pub size: [f64; 2],
     pub ppp: f32,
-    /// Scenes containing CPU-rasterized image runs can't fast-path a camera move (images are
-    /// screen-space bitmaps of the old view) — they take the full re-render instead.
+    /// Scenes containing CPU image runs move as a cached picture on north-up flat maps;
+    /// other scenes can re-project their vertices for a camera move.
     pub has_images: bool,
     /// A turned or tilted scene: the camera it was drawn for, its sky and fog.
     pub tilt: Option<SceneTilt>,
@@ -840,6 +860,9 @@ pub(crate) struct SceneCallback {
     pub buffers: Arc<SceneBuffers>,
     /// The offscreen MSAA target, persistent across frames (recreated on size changes).
     pub target: Arc<std::sync::Mutex<Option<SceneTarget>>>,
+    /// The part of the cached picture in the current view. Keeping the callback's viewport
+    /// fixed avoids egui clamping oversized/shifted viewports to the window and stretching it.
+    pub uv: egui::Rect,
 }
 
 /// The draw loop, shared by the egui paint callback and the offscreen parity harness.
@@ -884,7 +907,7 @@ impl CallbackTrait for SceneCallback {
     fn prepare(
         &self,
         device: &wgpu::Device,
-        _queue: &wgpu::Queue,
+        queue: &wgpu::Queue,
         _screen_descriptor: &egui_wgpu::ScreenDescriptor,
         egui_encoder: &mut wgpu::CommandEncoder,
         _callback_resources: &mut CallbackResources,
@@ -896,6 +919,11 @@ impl CallbackTrait for SceneCallback {
             *guard = SceneTarget::new(device, &self.renderer, [w, h]);
         }
         if let Some(tgt) = guard.as_ref() {
+            queue.write_buffer(
+                &tgt.blit_uniforms,
+                0,
+                bytemuck::cast_slice(&[self.uv.min.x, self.uv.min.y, self.uv.width(), self.uv.height()]),
+            );
             record_scene(&self.renderer, &self.buffers.draws, self.buffers.clear, tgt, egui_encoder);
         }
         Vec::new()
@@ -906,6 +934,7 @@ impl CallbackTrait for SceneCallback {
         if let Some(tgt) = guard.as_ref() {
             rp.set_pipeline(&self.renderer.blit_pipeline);
             rp.set_bind_group(0, &tgt.resolve_bind, &[]);
+            rp.set_bind_group(1, &tgt.blit_bind, &[]);
             rp.draw(0..6, 0..1);
         }
     }
