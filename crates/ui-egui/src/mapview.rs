@@ -1687,23 +1687,39 @@ fn follow_popup(app: &mut RustGisApp) {
     app.map.popup_rev = app.session.revision;
     let map = app.session.map();
     let Some(pp) = &mut app.map.popup else { return };
-    let here = |r: &Value| {
-        let Some(id) = r.get("layerId").and_then(Value::as_u64) else { return true };
-        let Some(l) = u32::try_from(id).ok().and_then(|id| map.layer(id)) else { return false };
-        // A streamed layer holds a window of its features: one outside it isn't gone.
-        r["fid"].as_u64().is_none_or(|fid| l.dataset.windowed || l.dataset.features.iter().any(|f| f.id == fid))
-    };
     let results = pp.info["results"].as_array().cloned().unwrap_or_else(|| vec![pp.info.clone()]);
+    let layer_of = |r: &Value| r.get("layerId").and_then(Value::as_u64).map(|id| u32::try_from(id).ok().and_then(|id| map.layer(id)));
+    // The feature ids sought in each layer, found in one pass over it.
+    let mut sought: std::collections::HashMap<u32, std::collections::HashSet<u64>> = Default::default();
+    for r in &results {
+        if let (Some(Some(l)), Some(fid)) = (layer_of(r), r["fid"].as_u64()) {
+            sought.entry(l.id).or_default().insert(fid);
+        }
+    }
+    let mut found = std::collections::HashSet::new();
+    for (id, fids) in &sought {
+        let features = map.layer(*id).map_or(&[][..], |l| l.dataset.features.as_slice());
+        found.extend(features.iter().filter(|f| fids.contains(&f.id)).map(|f| (*id, f.id)));
+    }
+    let here: Vec<bool> = results
+        .iter()
+        .map(|r| match layer_of(r) {
+            None => true,
+            Some(None) => false,
+            // A streamed layer holds a window of its features: one outside it isn't gone.
+            Some(Some(l)) => r["fid"].as_u64().is_none_or(|fid| l.dataset.windowed || found.contains(&(l.id, fid))),
+        })
+        .collect();
     let index = pp.index.min(results.len().saturating_sub(1));
-    if results.get(index).is_none_or(|r| !here(r)) {
+    if here.get(index) != Some(&true) {
         app.map.popup = None;
         return;
     }
-    if results.iter().all(here) {
+    if here.iter().all(|h| *h) {
         return;
     }
     let shown = results.get(index).cloned();
-    let kept: Vec<Value> = results.into_iter().filter(|r| here(r)).collect();
+    let kept: Vec<Value> = results.into_iter().zip(here).filter(|(_, h)| *h).map(|(r, _)| r).collect();
     let Some(mut info) = kept.first().cloned() else { return };
     pp.index = shown.and_then(|s| kept.iter().position(|k| *k == s)).unwrap_or(0);
     if let Value::Object(o) = &mut info {
