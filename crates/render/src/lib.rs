@@ -117,6 +117,20 @@ pub const SELECTION: Rgba = Rgba::rgb(0x00, 0xE5, 0xFF);
 /// Largest raster rendered (pixels per side).
 pub const MAX_SIDE: u32 = 8192;
 
+/// How far past each side of the view (a fraction of its size) features are still drawn.
+pub const CULL_MARGIN: f64 = 0.05;
+
+/// The wider margin the GPU backend tessellates vector layers out to: while the map moves,
+/// its meshes are moved rather than rebuilt, so they hold the ground a pan of half the view
+/// or zooming out to twice the extent reveals (as MapLibre keeps the tiles around the view).
+pub const GPU_CULL_MARGIN: f64 = 0.5;
+
+/// The map extent a frame drawn for `view` holds features for: the view grown by `margin`
+/// ([`CULL_MARGIN`], or [`GPU_CULL_MARGIN`] for GPU meshes) on every side.
+pub fn cull_extent(view: &View, margin: f64) -> Extent {
+    view.camera.extent(view.width, view.height).padded(margin, 0.0)
+}
+
 /// What to draw and at which size.
 #[derive(Clone, Copy, Debug)]
 pub struct View {
@@ -1084,10 +1098,9 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
     let mut camera = view.camera;
     camera.bearing = rustgis_map::camera::normalize_bearing(camera.bearing);
     camera.pitch = rustgis_map::camera::normalize_pitch(camera.pitch);
-    // The globe neither turns nor tilts (a bearing or pitch kept on its camera waits for the map
-    // to be flat again).
+    // The globe turns and tilts itself (`Globe`): one frame.
     if map.projection.is_globe() {
-        let view = View { camera: Camera { bearing: 0.0, pitch: 0.0, ..camera }, ..*view };
+        let view = View { camera, ..*view };
         return render_frame(map, &view, full_res_rasters, backend, Labels::Own);
     }
     {
@@ -1184,11 +1197,6 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
     if !gpu_may_turn(map, view) {
         return None;
     }
-    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
-    // Extrusions stand up over a tilted view on the CPU.
-    if view.camera.pitch != 0.0 && map.layers.iter().any(|l| l.visible && l.extrusion.is_some() && l.in_scale_range(scale)) {
-        return None;
-    }
     let pictures = |cmds: &[DrawCmd]| cmds.iter().any(|c| matches!(c, DrawCmd::Image { .. }));
     let (sky, fog) = tilt_sky(map);
     let tilt = Some(SceneTilt { camera: view.camera, sky: mesh::premul(sky), fog: mesh::premul(fog) });
@@ -1229,7 +1237,7 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
                 match c {
                     DrawCmd::Mesh { vertices, .. } => vertices.iter_mut().for_each(|v| v.stroke_px *= k),
                     DrawCmd::Points { instances, .. } => instances.iter_mut().for_each(|p| p.radius_px *= k),
-                    DrawCmd::Image { .. } => {}
+                    DrawCmd::Image { .. } | DrawCmd::Extrusion { .. } => {}
                 }
             }
         }
@@ -1261,6 +1269,12 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
         return None;
     }
     let origin = [view.camera.center.x, view.camera.center.y];
+    // Extruded features stand up over the ground, their shadows under them; more than the GPU
+    // budget takes, and the view is drawn on the CPU.
+    for cmd in extrusion_cmds(&extruded_shapes(map, view), origin)? {
+        cmds.push(cmd);
+        clips.push(CmdClip::ALL);
+    }
     let ppp = view.pixels_per_point as f32;
     let instances: Vec<gpu_scene::PointInstance> = upright_markers(map, view, 0.0)
         .iter()
@@ -1291,8 +1305,9 @@ fn place_tilted_labels(map: &Map, view: &View, mut candidates: Vec<Candidate>) -
 
 /// Whether a turned or tilted `view` of `map` may be drawn on the GPU ([`gpu_turned`]): only
 /// what the GPU draws itself shows (no tiles, rasters, see-through, masked, swiped or blended
-/// layers, aggregations, graphics, stacked line strokes or extrusions; no view effects). A cheap check made before
-/// any drawing; labels with icons can still decline the scene once it is drawn.
+/// layers, aggregations, graphics or stacked line strokes; no view effects; extrusions only
+/// stand up in a tilted one). A cheap check made before any drawing; labels with icons can still
+/// decline the scene once it is drawn.
 pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
     if map.projection.is_globe()
         || !map.view.effects.is_none()
@@ -1303,8 +1318,12 @@ pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
     }
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     let held = map.held_by_group(scale);
-    let faded: std::collections::HashSet<u32> =
-        map.groups.iter().filter(|g| g.transparency > 0.0).flat_map(|g| g.children.iter().copied()).collect();
+    // Layers in a see-through group (none, mostly: then nothing is collected).
+    let faded: std::collections::HashSet<u32> = if map.groups.iter().any(|g| g.transparency > 0.0) {
+        map.groups.iter().filter(|g| g.transparency > 0.0).flat_map(|g| g.children.iter().copied()).collect()
+    } else {
+        Default::default()
+    };
     map.layers.iter().filter(|l| l.visible && l.in_scale_range(scale) && !held.contains(&l.id)).all(|l| {
         l.raster.is_none()
             && l.opacity() >= 0.999
@@ -1315,7 +1334,7 @@ pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
             && l.aggregation.is_none()
             && !l.graphics
             && l.line_strokes.is_empty()
-            && l.extrusion.is_none()
+            && (l.extrusion.is_none() || view.camera.pitch != 0.0)
     })
 }
 
@@ -1380,6 +1399,10 @@ pub struct ExtrudedShape {
 /// geometry thinned for the view's scale, bottom layer first.
 pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    // Layers a hidden or out-of-scale group holds aren't drawn, as in `render_frame`.
+    let held = map.held_by_group(scale);
+    // Only the features on the ground the view shows (grown by a moving drape's margin).
+    let cull = view.camera.extent(view.width, view.height).padded(0.3, 0.0);
     let (flat, key) = (map.flat(), map.projection.code());
     let tol = view.camera.res * rustgis_map::lod::THIN_PX;
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
@@ -1390,6 +1413,7 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
         if map.projection.is_globe()
             || !layer.visible
             || !layer.in_scale_range(scale)
+            || held.contains(&layer.id)
             || layer.raster.is_some()
             || layer.geometry_type() != GeometryType::Polygon
         {
@@ -1399,12 +1423,21 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
         let rows = layer.drawn_rows(scale);
         layer.thinned_in(&flat, &key, tol);
         let layer: &rustgis_map::Layer = layer;
+        let extents = layer.projected_extents();
         for (row, g) in layer.thinned_cache(tol).iter().enumerate() {
             let Some(Geometry::Polygon(polys)) = g else { continue };
             if rows.get(row) != Some(&true) {
                 continue;
             }
             let Some(origin) = polys.iter().flatten().flatten().find(|c| c.is_finite()).copied() else { continue };
+            let metres = effects::extrusion_metres(&layer.dataset, &x, row);
+            let height = metres / flat.ground_per_unit(origin).max(1e-9);
+            // Off the ground the view shows, even by its height: a tall building just off screen
+            // still stands up into view.
+            let reach = if height.is_finite() { height.clamp(0.0, 1e9) } else { 0.0 };
+            if extents.get(row).is_some_and(|e| !e.padded(0.0, reach).intersects(&cull)) {
+                continue;
+            }
             let roof = mesh::fill_polygon(polys, [origin.x, origin.y], [0.0; 4], view.camera.res * 0.5);
             let Ok(Some((verts, indices))) = roof else { continue };
             let sym = layer.symbol(row);
@@ -1418,8 +1451,8 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
                 roof_indices: indices,
                 rings: polys.iter().filter_map(|p| p.first()).filter(|r| r.len() >= 3).cloned().collect(),
                 holes: polys.iter().flat_map(|p| p.iter().skip(1)).filter(|r| r.len() >= 3).cloned().collect(),
-                metres: effects::extrusion_metres(&layer.dataset, &x, row),
-                height: effects::extrusion_metres(&layer.dataset, &x, row) / flat.ground_per_unit(origin).max(1e-9),
+                metres,
+                height,
                 fill: sym.fill.with_alpha(255),
                 stroke: sym.stroke,
                 face_culling: x.face_culling,
@@ -1431,7 +1464,85 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
     out
 }
 
+pub use effects::LIGHT as EXTRUSION_LIGHT;
 pub use effects::{TiltedWall, clip_near, shadow_shift, tilted_shadow_quads, tilted_walls};
+
+/// Extruded features as GPU commands, relative to `origin`: the shadows they cast (when any
+/// do), then their roofs and walls, which the depth buffer sorts out. Walls carry their outward
+/// normals, lit in the shader so they stay lit right as the map turns.
+fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Option<Vec<gpu_scene::DrawCmd>> {
+    // The most vertices the roofs, walls and shadows take together (about 220 MB), well before
+    // a device's buffer limit or u32 indices could be reached: past it, `None` (the view is
+    // drawn on the CPU rather than with features missing).
+    const MAX_VERTICES: usize = 4_000_000;
+    use gpu_scene::{EXTRUDE_ROOF, EXTRUDE_SHADOW, EXTRUDE_WALL, ExtrudeVertex};
+    let rel = |c: Coord, z: f64| [(c.x - origin[0]) as f32, (c.y - origin[1]) as f32, z as f32];
+    let vertex =
+        |position: [f32; 3], normal: [f32; 2], color: [f32; 4], info: [f32; 4]| ExtrudeVertex { position, normal, color, info, _pad: 0.0 };
+    let (mut solid, mut solid_i) = (Vec::new(), Vec::<u32>::new());
+    let (mut shade, mut shade_i) = (Vec::new(), Vec::<u32>::new());
+    let shadow = mesh::premul(Rgba::new(0, 0, 0, 60));
+    for s in shapes {
+        let more =
+            s.roof.len().saturating_mul(2).saturating_add(s.rings.iter().chain(&s.holes).map(Vec::len).sum::<usize>().saturating_mul(8));
+        if solid.len().saturating_add(shade.len()).saturating_add(more) > MAX_VERTICES {
+            return None;
+        }
+        // A height that is no number (hostile attributes) stands no higher than the ground.
+        let h = if s.height.is_finite() { s.height.clamp(0.0, 1e9) } else { 0.0 };
+        // Roof indices beyond its vertices (never from the tessellator) would draw garbage.
+        if s.roof_indices.iter().any(|i| *i as usize >= s.roof.len()) {
+            continue;
+        }
+        let color = mesh::premul(s.fill);
+        let lit = if s.lighting { 1.0 } else { 0.0 };
+        let roof_at = |p: &[f32; 2]| Coord::new(s.origin.x + f64::from(p[0]), s.origin.y + f64::from(p[1]));
+        // The roof.
+        let base = solid.len() as u32;
+        solid.extend(s.roof.iter().map(|p| vertex(rel(roof_at(p), h), [0.0; 2], color, [1.0, EXTRUDE_ROOF, lit, 0.0])));
+        solid_i.extend(s.roof_indices.iter().map(|i| base + i));
+        if s.shadows {
+            // The footprint moved away from the light (in the shader).
+            let base = shade.len() as u32;
+            shade.extend(s.roof.iter().map(|p| vertex(rel(roof_at(p), 0.0), [0.0; 2], shadow, [0.0, EXTRUDE_SHADOW, 0.0, h as f32])));
+            shade_i.extend(s.roof_indices.iter().map(|i| base + i));
+        }
+        // The walls; a hole's face into it (a courtyard).
+        for (r, hole) in s.rings.iter().map(|r| (r, false)).chain(s.holes.iter().map(|r| (r, true))) {
+            let edges = || (0..r.len()).filter_map(|i| Some((*r.get(i)?, *r.get((i + 1) % r.len())?)));
+            let area2: f64 = edges().map(|(a, b)| a.x * b.y - b.x * a.y).sum();
+            for (a, b) in edges() {
+                let (dx, dy) = (b.x - a.x, b.y - a.y);
+                let len = dx.hypot(dy);
+                if !(len > 0.0 && len.is_finite()) {
+                    continue;
+                }
+                let n =
+                    if (area2 > 0.0) != hole { [(dy / len) as f32, (-dx / len) as f32] } else { [(-dy / len) as f32, (dx / len) as f32] };
+                let k = solid.len() as u32;
+                for (c, z, t) in [(a, 0.0, 0.0), (b, 0.0, 0.0), (b, h, 1.0), (a, h, 1.0)] {
+                    solid.push(vertex(rel(c, z), n, color, [t, EXTRUDE_WALL, lit, 0.0]));
+                }
+                solid_i.extend([k, k + 1, k + 2, k, k + 2, k + 3]);
+                if s.shadows && !hole {
+                    let k = shade.len() as u32;
+                    for (c, fall) in [(a, 0.0), (b, 0.0), (b, h), (a, h)] {
+                        shade.push(vertex(rel(c, 0.0), [0.0; 2], shadow, [0.0, EXTRUDE_SHADOW, 0.0, fall as f32]));
+                    }
+                    shade_i.extend([k, k + 1, k + 2, k, k + 2, k + 3]);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if !shade_i.is_empty() {
+        out.push(gpu_scene::DrawCmd::Extrusion { origin, vertices: shade, indices: shade_i, shadows: true });
+    }
+    if !solid_i.is_empty() {
+        out.push(gpu_scene::DrawCmd::Extrusion { origin, vertices: solid, indices: solid_i, shadows: false });
+    }
+    Some(out)
+}
 
 /// Point layers with at most this many features stand their markers up in a tilted view; a
 /// bigger one keeps them drawn on the ground.
@@ -1527,7 +1638,7 @@ pub fn upright_markers(map: &mut Map, view: &View, margin: f64) -> Vec<UprightMa
     }
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     let (flat, key) = (map.flat(), map.projection.code());
-    let cull = view.camera.extent(view.width, view.height).padded(margin.clamp(0.05, 4.0), 0.0);
+    let cull = view.camera.extent(view.width, view.height).padded(margin.clamp(CULL_MARGIN, 4.0), 0.0);
     let clip = map.view.clip_distance.map(|d| (view.camera.center_lonlat(), d));
     let held = map.held_by_group(scale);
     let group_opacity: std::collections::HashMap<u32, f32> =
@@ -1600,13 +1711,20 @@ fn markers_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
 /// first (a drape of the moving view shows them flat).
 fn extrusions_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    // Layers a hidden or out-of-scale group holds aren't drawn, as in `render_frame`.
+    let held = map.held_by_group(scale);
     let (flat, key) = (map.flat(), map.projection.code());
     let (_, fog) = tilt_sky(map);
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
     for li in order {
         let Some(layer) = map.layers.get_mut(li) else { continue };
-        if !layer.visible || !layer.in_scale_range(scale) || layer.raster.is_some() || layer.geometry_type() != GeometryType::Polygon {
+        if !layer.visible
+            || !layer.in_scale_range(scale)
+            || held.contains(&layer.id)
+            || layer.raster.is_some()
+            || layer.geometry_type() != GeometryType::Polygon
+        {
             continue;
         }
         let Some(x) = layer.extrusion.clone() else { continue };
@@ -1814,7 +1932,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         view,
         ppp: view.pixels_per_point as f32,
         wireframe: map.view.wireframe,
-        cull: view.camera.extent(view.width, view.height).padded(0.05, 0.0),
+        cull: cull_extent(view, CULL_MARGIN),
         globe,
         sprites: Default::default(),
     };
@@ -1835,6 +1953,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     let visible = |e: &Extent| match &globe {
         Some(g) => g.may_see(e),
         None => e.intersects(&ctx.cull),
+    };
+    // GPU meshes reach further (`GPU_CULL_MARGIN`), so the camera fast path can move them.
+    let mesh_cull = cull_extent(view, GPU_CULL_MARGIN);
+    let mesh_visible = |e: &Extent| match &globe {
+        Some(g) => g.may_see(e),
+        None => e.intersects(&mesh_cull),
     };
 
     // Basemap.
@@ -2064,7 +2188,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         let mut gpu_done = false;
         if gpu_layer {
             flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
-            gpu_done = mesh::collect_layer(&mut cmds, layer, &geoms, &rows, &visible, ctx.wireframe, ctx.ppp, map_per_px).is_ok();
+            gpu_done = mesh::collect_layer(&mut cmds, layer, &geoms, &rows, &mesh_visible, ctx.wireframe, ctx.ppp, map_per_px).is_ok();
         }
         // False for a layer drawn elsewhere: nothing goes into the picture for it.
         let mut drawn_here = true;
@@ -2513,7 +2637,7 @@ fn draw_stars(pm: &mut Pixmap, ppp: f32) {
 /// The globe's backdrop and lighting depend only on the view size, zoom, ocean and stars, not on
 /// the rotation, so they are drawn once and reused while the globe turns.
 struct GlobeLayers {
-    key: (u32, u32, u32, u32, u32, u32, [u8; 4], Space),
+    key: (u32, u32, u32, u32, u32, u32, u32, [u8; 4], Space),
     backdrop: Pixmap,
     shading: Pixmap,
 }
@@ -2531,6 +2655,7 @@ fn with_globe_layers(pm: &mut Pixmap, g: &Globe, water: Rgba, space: Space, ppp:
         (cx as f32).to_bits(),
         (cy as f32).to_bits(),
         (g.disc_radius() as f32).to_bits(),
+        (g.disc_height() as f32).to_bits(),
         water.0,
         space,
     );
@@ -2570,14 +2695,27 @@ fn draw_globe_backdrop(pm: &mut Pixmap, g: &Globe, water: Rgba, space: Space, pp
         draw_stars(pm, ppp);
     }
     let (cx, cy) = g.center();
-    draw_globe_disc(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp, water, space.dark);
+    draw_globe_disc(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp, disc_stretch(g), water, space.dark);
 }
 
-/// The atmosphere glow and the ocean disc, for a disc of radius `r` pixels at (`cx`, `cy`).
-fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, water: Rgba, dark: bool) {
+/// How much taller than wide a globe's disc is (1 unless it is tilted).
+fn disc_stretch(g: &Globe) -> f32 {
+    let k = (g.disc_height() / g.disc_radius().max(1e-9)) as f32;
+    if k.is_finite() && k > 0.0 { k } else { 1.0 }
+}
+
+/// Stretches drawing up and down by `k` about the row `cy`: a disc into a tilted globe's ellipse.
+fn stretch_about(cy: f32, k: f32) -> Transform {
+    Transform::from_row(1.0, 0.0, 0.0, k, 0.0, cy * (1.0 - k))
+}
+
+/// The atmosphere glow and the ocean disc, for a disc of radius `r` pixels at (`cx`, `cy`),
+/// stretched `k` times up and down (a tilted globe's ellipse).
+fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, k: f32, water: Rgba, dark: bool) {
     if !(r.is_finite() && r > 0.5 && cx.is_finite() && cy.is_finite()) {
         return;
     }
+    let t = stretch_about(cy, k);
     // Atmosphere: a glow fading out just beyond the limb.
     let glow_r = r * 1.07;
     // A softer, paler glow on light space.
@@ -2597,24 +2735,25 @@ fn draw_globe_disc(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, water: Rgba, dark:
     ) && let Some(path) = PathBuilder::from_circle(cx, cy, glow_r)
     {
         let p = Paint { shader, anti_alias: true, ..Paint::default() };
-        pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(&path, &p, FillRule::Winding, t, None);
     }
     if let Some(path) = PathBuilder::from_circle(cx, cy, r) {
-        pm.fill_path(&path, &paint(water, 1.0), FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(&path, &paint(water, 1.0), FillRule::Winding, t, None);
     }
 }
 
 /// Light from the upper left: a soft highlight and a darker limb, so the globe reads as a sphere.
 fn draw_globe_shading(pm: &mut Pixmap, g: &Globe, ppp: f32) {
     let (cx, cy) = g.center();
-    draw_globe_light(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp);
+    draw_globe_light(pm, cx as f32 * ppp, cy as f32 * ppp, g.disc_radius() as f32 * ppp, disc_stretch(g));
 }
 
-/// The lighting of a disc of radius `r` pixels at (`cx`, `cy`).
-fn draw_globe_light(pm: &mut Pixmap, cx: f32, cy: f32, r: f32) {
+/// The lighting of a disc of radius `r` pixels at (`cx`, `cy`), stretched `k` times up and down.
+fn draw_globe_light(pm: &mut Pixmap, cx: f32, cy: f32, r: f32, k: f32) {
     if !(r.is_finite() && r > 0.5 && cx.is_finite() && cy.is_finite()) {
         return;
     }
+    let t = stretch_about(cy, k);
     let light = Point::from_xy(cx - r * 0.35, cy - r * 0.4);
     if let Some(shader) = RadialGradient::new(
         light,
@@ -2632,7 +2771,7 @@ fn draw_globe_light(pm: &mut Pixmap, cx: f32, cy: f32, r: f32) {
     ) && let Some(path) = PathBuilder::from_circle(cx, cy, r)
     {
         let p = Paint { shader, anti_alias: true, ..Paint::default() };
-        pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(&path, &p, FillRule::Winding, t, None);
     }
 }
 
@@ -2651,8 +2790,8 @@ pub fn globe_sprites(basemap: rustgis_map::Basemap, r: f32) -> Option<(Pixmap, P
     let side = (2.0 * GLOBE_GLOW * r.min(2048.0)).round().max(2.0);
     let (r, c) = (side / (2.0 * GLOBE_GLOW), side / 2.0);
     let (mut under, mut over) = (Pixmap::new(side as u32, side as u32)?, Pixmap::new(side as u32, side as u32)?);
-    draw_globe_disc(&mut under, c, c, r, basemap.palette().0, true);
-    draw_globe_light(&mut over, c, c, r);
+    draw_globe_disc(&mut under, c, c, r, 1.0, basemap.palette().0, true);
+    draw_globe_light(&mut over, c, c, r, 1.0);
     Some((under, over))
 }
 
@@ -3116,6 +3255,7 @@ mod tests {
             .map(|c| match c {
                 gpu_scene::DrawCmd::Mesh { .. } => "mesh",
                 gpu_scene::DrawCmd::Points { .. } => "points",
+                gpu_scene::DrawCmd::Extrusion { .. } => "extrusion",
                 gpu_scene::DrawCmd::Image { .. } => "image",
             })
             .collect()
@@ -3569,21 +3709,54 @@ mod tests {
             l.dataset.push(Some(Geometry::Polygon(vec![vec![north]])), vec![Value::Text("North".into())]);
             l.touch_geometry();
         }
-        let far_south = View { camera: Camera { center: lonlat_to_merc(Coord::new(0.0, -80.0)), ..camera }, ..view };
-        let shapes = extruded_shapes(&mut m, &far_south);
+        // Seen from a camera at another latitude, the block's height is still its own latitude's.
+        // (A camera so far that the block is off its ground leaves it out: see
+        // an_extruded_ring_with_a_hole_is_open_over_it.)
+        let south = View { camera: Camera { center: lonlat_to_merc(Coord::new(0.0, 57.0)), ..camera }, ..view };
+        let shapes = extruded_shapes(&mut m, &south);
         assert_eq!(shapes.len(), 1);
         assert!((shapes[0].height / 200_000.0 - 1.0).abs() < 0.05, "{}", shapes[0].height);
     }
 
+    /// Extruded features with junk heights or roof indices (hostile data) give finite geometry
+    /// or are left out, never garbage.
     #[test]
-    fn a_globe_ignores_a_kept_bearing_and_pitch() {
+    fn gpu_extrusions_survive_junk_heights() {
+        let ring = vec![Coord::new(0.0, 0.0), Coord::new(10.0, 0.0), Coord::new(10.0, 10.0), Coord::new(0.0, 10.0)];
+        let shape = |height: f64, roof_indices: Vec<u32>| ExtrudedShape {
+            origin: Coord::new(0.0, 0.0),
+            center: Coord::new(5.0, 5.0),
+            roof: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
+            roof_indices,
+            rings: vec![ring.clone()],
+            holes: vec![],
+            metres: height,
+            height,
+            fill: Rgba::rgb(200, 100, 50),
+            stroke: Rgba::rgb(0, 0, 0),
+            face_culling: true,
+            lighting: true,
+            shadows: true,
+        };
+        let shapes = [shape(f64::NAN, vec![0, 1, 2, 0, 2, 3]), shape(f64::INFINITY, vec![0, 1, 2]), shape(5.0, vec![0, 1, 99])];
+        for cmd in extrusion_cmds(&shapes, [0.0, 0.0]).expect("within the budget") {
+            let gpu_scene::DrawCmd::Extrusion { vertices, indices, .. } = cmd else { panic!("an extrusion") };
+            assert!(vertices.iter().all(|v| v.position.iter().chain(&v.info).all(|x| x.is_finite())));
+            assert!(indices.iter().all(|i| (*i as usize) < vertices.len()));
+        }
+    }
+
+    #[test]
+    fn a_globe_turns_and_tilts() {
         let mut m = Map::new("Map");
         m.projection = rustgis_map::Projection::Globe;
         let camera = Camera { center: lonlat_to_merc(Coord::new(10.0, 40.0)), res: 20_000.0, bearing: 0.0, pitch: 0.0 };
         let view = View { width: 300.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
         let plain = render(&mut m, &view).unwrap();
-        let kept = render(&mut m, &View { camera: Camera { bearing: 40.0, pitch: 70.0, ..camera }, ..view }).unwrap();
-        assert_eq!(plain.pixmap.data(), kept.pixmap.data());
+        let turned = render(&mut m, &View { camera: Camera { bearing: 40.0, ..camera }, ..view }).unwrap();
+        let tilted = render(&mut m, &View { camera: Camera { pitch: 60.0, ..camera }, ..view }).unwrap();
+        assert_ne!(plain.pixmap.data(), turned.pixmap.data());
+        assert_ne!(plain.pixmap.data(), tilted.pixmap.data());
     }
 
     #[test]
@@ -3614,6 +3787,17 @@ mod tests {
         // Its walls stand inside the roof's outline.
         let shapes = extruded_shapes(&mut m, &view);
         assert_eq!((shapes[0].rings.len(), shapes[0].holes.len()), (1, 1));
+        // Off the ground the view shows, a feature isn't tessellated at all.
+        let far = View { camera: Camera { center: Coord::new(5e6, 5e6), ..camera }, ..view };
+        assert!(extruded_shapes(&mut m, &far).is_empty());
+        // In a hidden group, the layer stands up nowhere.
+        let mut g = rustgis_map::LayerGroup::new("hidden");
+        g.visible = false;
+        g.children = vec![id];
+        m.groups.push(g);
+        assert!(extruded_shapes(&mut m, &view).is_empty());
+        let hidden = render(&mut m, &view).unwrap();
+        assert_eq!(hidden.pixmap.pixel(200, 150), hidden.pixmap.pixel(5, 295));
     }
 
     #[test]

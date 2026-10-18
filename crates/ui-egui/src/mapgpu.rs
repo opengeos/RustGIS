@@ -32,7 +32,7 @@ pub(crate) fn view_proj(cam: &Camera, w: f64, h: f64, origin: [f64; 2]) -> [[f32
         (s, c, 2.0 * rustgis_engine::map::camera::TAN_HALF_FOV / h.max(1e-9))
     };
     let row = |f: &dyn Fn(usize) -> f64| -> [f64; 4] { std::array::from_fn(f) };
-    let x = row(&|i| 2.0 / w * u[i]);
+    let x = row(&|i| 2.0 / w.max(1e-9) * u[i]);
     let y = row(&|i| -2.0 / h * (cp * v[i] - sp * up[i]));
     let depth = row(&|i| if i == 3 { 1.0 } else { 0.0 } - inv_d * (sp * v[i] + cp * up[i]));
     let z = row(&|i| depth[i] - if i == 3 { NEAR_DEPTH } else { 0.0 });
@@ -119,7 +119,9 @@ struct CmdUniforms {
     /// `x`, `y`: physical pixel size of the map view (scales marker pixel offsets); `z`: 1 when
     /// tilted (fog, the reach, band clipping), else 0; `w`: the reach's depth.
     viewport: [f32; 4],
-    _pad: [f32; 4],
+    /// Extrusions: the light's direction (map units, unit length) and how far a shadow falls per
+    /// map unit of height (map units), both turned with the view as MapLibre's light is.
+    light: [f32; 4],
 }
 
 impl CmdUniforms {
@@ -138,9 +140,22 @@ impl CmdUniforms {
                 if rustgis_engine::map::camera::normalize_pitch(cam.pitch) != 0.0 { 1.0 } else { 0.0 },
                 rustgis_engine::map::camera::FAR as f32,
             ],
-            _pad: [0.0; 4],
+            light: extrusion_light(cam),
         }
     }
+}
+
+/// The extrusions' light for a camera turned to its bearing (see [`CmdUniforms::light`]):
+/// `render::EXTRUSION_LIGHT` is given in the view's ground frame, x right and y down.
+fn extrusion_light(cam: &Camera) -> [f32; 4] {
+    let (l0, l1, l2) = rustgis_engine::render::EXTRUSION_LIGHT;
+    let (s, c) = if cam.bearing.is_finite() { cam.bearing.to_radians().sin_cos() } else { (0.0, 1.0) };
+    // The view's frame to the map's (as `Camera::unrotate`, then y up).
+    let to_map = |u: f64, v: f64| (u * c - v * s, -(u * s + v * c));
+    let (lx, ly) = to_map(l0, l1);
+    let len = lx.hypot(ly).max(1e-9);
+    let (fx, fy) = to_map(-l0 / l2, -l1 / l2);
+    [(lx / len) as f32, (ly / len) as f32, fx as f32, fy as f32]
 }
 
 /// The backdrop of a tilted view (WGSL `Backdrop`): water fading into fog toward the reach,
@@ -174,6 +189,10 @@ impl BackdropUniforms {
     }
 }
 
+/// The scene's depth buffer, for the extrusions, and its stencil, so their shadows darken each
+/// pixel once however their pieces overlap.
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
+
 /// Premultiplied-alpha blending, the same arithmetic tiny-skia composites with.
 const PREMULTIPLIED_BLEND: wgpu::BlendState = wgpu::BlendState {
     color: wgpu::BlendComponent {
@@ -197,6 +216,9 @@ pub(crate) struct GpuMapRenderer {
     point_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
     backdrop_pipeline: wgpu::RenderPipeline,
+    /// Extruded features' roofs and walls (depth-tested and written), and their shadows.
+    extrude_pipeline: wgpu::RenderPipeline,
+    shadow_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
     cmd_layout: wgpu::BindGroupLayout,
     backdrop_layout: wgpu::BindGroupLayout,
@@ -275,7 +297,8 @@ impl GpuMapRenderer {
                         buffers: &[wgpu::VertexBufferLayout<'_>],
                         layouts: &[&wgpu::BindGroupLayout],
                         format: wgpu::TextureFormat,
-                        samples: u32| {
+                        samples: u32,
+                        depth: Option<wgpu::DepthStencilState>| {
             let layouts: Vec<Option<&wgpu::BindGroupLayout>> = layouts.iter().map(|l| Some(*l)).collect();
             let buffers: Vec<Option<wgpu::VertexBufferLayout<'_>>> = buffers.iter().map(|b| Some(b.clone())).collect();
             let target = [Some(wgpu::ColorTargetState { format, blend: Some(PREMULTIPLIED_BLEND), write_mask: wgpu::ColorWrites::ALL })];
@@ -300,7 +323,7 @@ impl GpuMapRenderer {
                     targets: &target,
                 }),
                 primitive: wgpu::PrimitiveState::default(), // triangle list, no culling
-                depth_stencil: None,
+                depth_stencil: depth,
                 multisample: wgpu::MultisampleState { count: samples, mask: !0, alpha_to_coverage_enabled: false },
                 multiview_mask: None,
                 cache: None,
@@ -326,21 +349,71 @@ impl GpuMapRenderer {
                 wgpu::VertexAttribute { format: wgpu::VertexFormat::Uint32, offset: 28, shader_location: 3 },
             ],
         }];
+        let extrude_buffers = [wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<rustgis_engine::render::gpu_scene::ExtrudeVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 12, shader_location: 1 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 20, shader_location: 2 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 36, shader_location: 3 },
+            ],
+        }];
         let samples = 4;
         let scene_format = wgpu::TextureFormat::Rgba8Unorm;
-        let mesh_pipeline = pipeline("mapgpu_mesh", "vs_mesh", "fs_mesh", &mesh_buffers, &[&cmd_layout], scene_format, samples);
-        let point_pipeline = pipeline("mapgpu_points", "vs_marker", "fs_marker", &point_buffers, &[&cmd_layout], scene_format, samples);
-        let image_pipeline = pipeline("mapgpu_image", "vs_image", "fs_image", &[], &[&image_layout], scene_format, samples);
-        let backdrop_pipeline = pipeline("mapgpu_backdrop", "vs_backdrop", "fs_backdrop", &[], &[&backdrop_layout], scene_format, samples);
+        // Everything but the extrusions draws in order, ignoring the depth buffer; extrusions test
+        // and write it, so the nearest roof or wall shows whatever order they come in.
+        let depth = |write: bool, compare: wgpu::CompareFunction| {
+            Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(write),
+                depth_compare: Some(compare),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            })
+        };
+        let flat = depth(false, wgpu::CompareFunction::Always);
+        // A shadow darkens a pixel only while its stencil is still clear, and marks it.
+        let once = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::IncrementClamp,
+        };
+        let shadows = flat.clone().map(|d| wgpu::DepthStencilState {
+            stencil: wgpu::StencilState { front: once, back: once, read_mask: 0xff, write_mask: 0xff },
+            ..d
+        });
+        let mesh_pipeline =
+            pipeline("mapgpu_mesh", "vs_mesh", "fs_mesh", &mesh_buffers, &[&cmd_layout], scene_format, samples, flat.clone());
+        let point_pipeline =
+            pipeline("mapgpu_points", "vs_marker", "fs_marker", &point_buffers, &[&cmd_layout], scene_format, samples, flat.clone());
+        let image_pipeline = pipeline("mapgpu_image", "vs_image", "fs_image", &[], &[&image_layout], scene_format, samples, flat.clone());
+        let backdrop_pipeline =
+            pipeline("mapgpu_backdrop", "vs_backdrop", "fs_backdrop", &[], &[&backdrop_layout], scene_format, samples, flat.clone());
+        let shadow_pipeline =
+            pipeline("mapgpu_shadow", "vs_extrude", "fs_extrude", &extrude_buffers, &[&cmd_layout], scene_format, samples, shadows);
+        let extrude_pipeline = pipeline(
+            "mapgpu_extrude",
+            "vs_extrude",
+            "fs_extrude",
+            &extrude_buffers,
+            &[&cmd_layout],
+            scene_format,
+            samples,
+            depth(true, wgpu::CompareFunction::Less),
+        );
         // The blit pipeline draws the resolved scene texture into egui's pass (egui's target
         // is 1×, so a separate pipeline; the scene's own pipelines render into the 4× MSAA
         // offscreen target).
-        let blit_pipeline = pipeline("mapgpu_blit", "vs_image", "fs_image", &[], &[&image_layout], rs.target_format, 1);
+        let blit_pipeline = pipeline("mapgpu_blit", "vs_image", "fs_image", &[], &[&image_layout], rs.target_format, 1, None);
         GpuMapRenderer {
             mesh_pipeline,
             point_pipeline,
             image_pipeline,
             backdrop_pipeline,
+            extrude_pipeline,
+            shadow_pipeline,
             blit_pipeline,
             cmd_layout,
             backdrop_layout,
@@ -356,6 +429,8 @@ impl GpuMapRenderer {
 /// to (the blit source in egui's pass). Recreated when the map view's physical size changes.
 pub(crate) struct SceneTarget {
     msaa_view: wgpu::TextureView,
+    /// The extrusions' depth buffer, multisampled like the colour.
+    depth_view: wgpu::TextureView,
     resolve_tex: wgpu::Texture,
     pub resolve_bind: wgpu::BindGroup,
     pub size: [u32; 2],
@@ -374,6 +449,16 @@ impl SceneTarget {
             sample_count: r.samples,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let depth_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("mapgpu_depth"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: r.samples,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
@@ -398,7 +483,13 @@ impl SceneTarget {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&r.sampler) },
             ],
         });
-        Some(SceneTarget { msaa_view: msaa_tex.create_view(&wgpu::TextureViewDescriptor::default()), resolve_tex, resolve_bind, size })
+        Some(SceneTarget {
+            msaa_view: msaa_tex.create_view(&wgpu::TextureViewDescriptor::default()),
+            depth_view: depth_tex.create_view(&wgpu::TextureViewDescriptor::default()),
+            resolve_tex,
+            resolve_bind,
+            size,
+        })
     }
 }
 
@@ -415,6 +506,11 @@ fn record_scene(r: &GpuMapRenderer, draws: &[SceneDraw], clear: [f32; 4], tgt: &
                 store: wgpu::StoreOp::Discard,
             },
         })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: &tgt.depth_view,
+            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+            stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Discard }),
+        }),
         ..Default::default()
     });
     paint_draws(r, draws, &mut rp);
@@ -438,6 +534,17 @@ pub(crate) enum SceneDraw {
         bind: wgpu::BindGroup,
         origin: [f64; 2],
         clip: CmdClip,
+    },
+    /// Extruded features (depth-tested), or their shadows.
+    Extrusion {
+        vertices: wgpu::Buffer,
+        indices: wgpu::Buffer,
+        index_count: u32,
+        uniforms: wgpu::Buffer,
+        bind: wgpu::BindGroup,
+        origin: [f64; 2],
+        clip: CmdClip,
+        shadows: bool,
     },
     /// A tilted view's water, fog and sky, under everything.
     Backdrop {
@@ -467,8 +574,8 @@ pub(crate) struct SceneBuffers {
 
 impl SceneBuffers {
     /// Whether a camera move to `cam` may re-project the scene: a flat, north-up scene for a
-    /// flat, north-up view; a turned or tilted one for about the same bearing and pitch and a
-    /// zoom within reach (it covers the ground its own camera showed: a turned view's north-up
+    /// flat, north-up view; a turned or tilted one for about the same bearing and pitch, a zoom
+    /// and a pan within reach (it covers the ground its own camera showed: a turned view's north-up
     /// box, a tilted view's bands out to its reach), else it is drawn again.
     pub(crate) fn fits(&self, cam: &Camera) -> bool {
         let pitch = rustgis_engine::map::camera::normalize_pitch(cam.pitch);
@@ -482,6 +589,9 @@ impl SceneBuffers {
                     && turn < 0.5
                     && (pitch - t.camera.pitch).abs() < 0.5
                     && (0.7..1.4).contains(&zoom)
+                    // Panned less than a quarter of the view: the ground it drew still covers it.
+                    && (cam.center.x - t.camera.center.x).hypot(cam.center.y - t.camera.center.y)
+                        < 0.25 * self.size[0].min(self.size[1]) * t.camera.res
             }
         }
     }
@@ -502,6 +612,11 @@ fn cmd_fits(limits: &wgpu::Limits, cmd: &DrawCmd) -> bool {
                 && u32::try_from(indices.len()).is_ok()
         }
         DrawCmd::Points { instances, .. } => fits(std::mem::size_of_val(instances.as_slice())) && u32::try_from(instances.len()).is_ok(),
+        DrawCmd::Extrusion { vertices, indices, .. } => {
+            fits(std::mem::size_of_val(vertices.as_slice()))
+                && fits(std::mem::size_of_val(indices.as_slice()))
+                && u32::try_from(indices.len()).is_ok()
+        }
         DrawCmd::Image { pixmap } => {
             let (w, h) = (pixmap.width(), pixmap.height());
             (1..=max_dim).contains(&w) && (1..=max_dim).contains(&h) && pixmap.data().len() as u64 == w as u64 * h as u64 * 4
@@ -613,6 +728,43 @@ impl SceneBuffers {
                         clip,
                     });
                 }
+                DrawCmd::Extrusion { origin, vertices, indices, shadows } => {
+                    if indices.is_empty() {
+                        continue;
+                    }
+                    let uniforms = CmdUniforms::new(&camera, size, ppp, *origin, tilt, clip);
+                    let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("mapgpu_cmd_uniforms"),
+                        contents: bytemuck::bytes_of(&uniforms),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    });
+                    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("mapgpu_extrude_bind"),
+                        layout: &r.cmd_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: r.templates.as_entire_binding() },
+                        ],
+                    });
+                    draws.push(SceneDraw::Extrusion {
+                        vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("mapgpu_extrude_vertices"),
+                            contents: bytemuck::cast_slice(vertices),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        }),
+                        indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("mapgpu_extrude_indices"),
+                            contents: bytemuck::cast_slice(indices),
+                            usage: wgpu::BufferUsages::INDEX,
+                        }),
+                        index_count: indices.len() as u32,
+                        uniforms,
+                        bind,
+                        origin: *origin,
+                        clip,
+                        shadows: *shadows,
+                    });
+                }
                 DrawCmd::Image { pixmap } => {
                     let texture = device.create_texture(&wgpu::TextureDescriptor {
                         label: Some("mapgpu_image"),
@@ -664,9 +816,9 @@ impl SceneBuffers {
     pub(crate) fn set_camera(&self, queue: &wgpu::Queue, cam: &Camera) {
         for d in &self.draws {
             let (uniforms, origin, clip) = match d {
-                SceneDraw::Mesh { uniforms, origin, clip, .. } | SceneDraw::Points { uniforms, origin, clip, .. } => {
-                    (uniforms, origin, clip)
-                }
+                SceneDraw::Mesh { uniforms, origin, clip, .. }
+                | SceneDraw::Points { uniforms, origin, clip, .. }
+                | SceneDraw::Extrusion { uniforms, origin, clip, .. } => (uniforms, origin, clip),
                 SceneDraw::Backdrop { uniforms, .. } => {
                     if let Some(t) = &self.tilt {
                         let u = BackdropUniforms::new(cam, self.size, self.ppp, self.clear, t);
@@ -706,6 +858,13 @@ fn paint_draws(renderer: &GpuMapRenderer, draws: &[SceneDraw], rp: &mut wgpu::Re
                 rp.set_bind_group(0, bind, &[]);
                 rp.set_vertex_buffer(0, instances.slice(..));
                 rp.draw(0..TEMPLATE_VERTS as u32, 0..*count);
+            }
+            SceneDraw::Extrusion { vertices, indices, index_count, bind, shadows, .. } => {
+                rp.set_pipeline(if *shadows { &renderer.shadow_pipeline } else { &renderer.extrude_pipeline });
+                rp.set_bind_group(0, bind, &[]);
+                rp.set_vertex_buffer(0, vertices.slice(..));
+                rp.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(0..*index_count, 0, 0..1);
             }
             SceneDraw::Backdrop { bind, .. } => {
                 rp.set_pipeline(&renderer.backdrop_pipeline);
@@ -1137,6 +1296,44 @@ mod tests {
         assert_eq!(points.len(), 1, "one set of markers");
         assert!(points.iter().all(|i| scene.clips.get(*i).is_some_and(|c| c.upright)));
         assert!(!scene.cmds.iter().any(|c| matches!(c, DrawCmd::Image { .. })), "no pictures");
+    }
+
+    /// Blocks standing apart, lit, casting shadows, in a tilted view: the GPU's depth-tested
+    /// roofs and walls match the CPU's far-to-near ones.
+    fn blocks_map() -> Map {
+        use rustgis_engine::data::{Dataset, Geometry, GeometryType};
+        let mut m = Map::new("Map");
+        let mut ds = Dataset::new("blocks", GeometryType::Polygon, vec![]);
+        for (x, y) in [(9.0, 47.0), (11.5, 47.5), (10.0, 49.5), (12.5, 50.0), (8.0, 50.5)] {
+            let ring =
+                vec![Coord::new(x, y), Coord::new(x + 1.0, y), Coord::new(x + 1.0, y + 0.8), Coord::new(x, y + 0.8), Coord::new(x, y)];
+            ds.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        }
+        let id = m.add_dataset(ds);
+        if let Some(l) = m.layer_mut(id) {
+            l.extrusion = Some(rustgis_engine::map::effects::Extrusion {
+                field: None,
+                height: 60_000.0,
+                factor: 1.0,
+                face_culling: true,
+                lighting: true,
+                shadows: true,
+            });
+        }
+        m
+    }
+
+    #[test]
+    fn parity_tilted_extrusions() {
+        let camera =
+            Camera { center: rustgis_engine::geom::lonlat_to_merc(Coord::new(10.5, 47.0)), res: 2_500.0, bearing: 25.0, pitch: 60.0 };
+        let view = View { camera, ..world_view() };
+        let mut m = blocks_map();
+        let Some(RenderOutput::Gpu(scene)) = render::render_backend(&mut m, &view, Backend::Gpu) else { panic!("a GPU scene") };
+        let solid =
+            |shadows: bool| scene.cmds.iter().filter(|c| matches!(c, DrawCmd::Extrusion { shadows: s, .. } if *s == shadows)).count();
+        assert_eq!((solid(false), solid(true)), (1, 1), "the blocks and their shadows");
+        assert_parity_within("tilted extrusions", blocks_map, &view, wgpu::Backends::all(), TILTED_OUTLIERS);
     }
 
     /// A turned or tilted view that needs pictures drawn on the CPU (here a see-through layer,

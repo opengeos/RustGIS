@@ -46,25 +46,32 @@ fn resume_on(app: &mut RustGisApp, port: u16) {
         return;
     }
     let bridge = start_bridge(app);
-    if app.relay.is_some() {
-        return;
-    }
-    if let Err(e) = app.run("ui.mcpRelay", json!({"port": port})) {
-        relay_failed(app, e, bridge.is_ok());
+    let relay = if app.relay.is_some() { Ok(()) } else { app.run("ui.mcpRelay", json!({"port": port})).map(|_| ()) };
+    started(app, relay, bridge);
+}
+
+/// Says how starting agents went, once: the relay's failure (with the bridge's, when both
+/// failed), or the bridge's alone when only it failed.
+fn started(app: &mut RustGisApp, relay: Result<(), String>, bridge: Result<(), String>) {
+    match (relay, bridge) {
+        (Ok(()), Ok(())) => {}
+        (Ok(()), Err(e)) => app.session.notify(crate::i18n::fmt("The file bridge couldn't start: {error}", &[("error", &e)]), true),
+        (Err(e), bridge) => relay_failed(app, e, bridge),
     }
 }
 
 /// The relay couldn't start (its port is taken, say). With the file bridge running, agents stay
 /// on and can use it; without, the choice goes back off.
-fn relay_failed(app: &mut RustGisApp, error: String, bridge: bool) {
-    let said = if bridge {
-        crate::i18n::fmt("MCP relay couldn't start ({error}); agents can still use the file bridge", &[("error", &error)])
-    } else {
-        app.connect.on = Some(false);
-        if let Some(save) = &app.services.save_pref {
-            save(PREF, "off");
+fn relay_failed(app: &mut RustGisApp, error: String, bridge: Result<(), String>) {
+    let said = match bridge {
+        Ok(()) => crate::i18n::fmt("MCP relay couldn't start ({error}); agents can still use the file bridge", &[("error", &error)]),
+        Err(why) => {
+            app.connect.on = Some(false);
+            if let Some(save) = &app.services.save_pref {
+                save(PREF, "off");
+            }
+            crate::i18n::fmt("{error}; the file bridge couldn't start either: {why}", &[("error", &error), ("why", &why)])
         }
-        error
     };
     app.session.notify(said.clone(), true);
     app.connect.error = Some(said);
@@ -83,7 +90,7 @@ fn start_bridge(app: &mut RustGisApp) -> Result<(), String> {
     };
     #[cfg(not(test))]
     let started = rustgis_assistant::filebridge::FileBridge::start();
-    let bridge = started.inspect_err(|e| app.session.notify(e.clone(), true))?;
+    let bridge = started?;
     bridge.set_allow_access(true);
     app.file_bridge = Some(bridge);
     Ok(())
@@ -135,7 +142,7 @@ fn copyable(ui: &mut egui::Ui, text: &str) {
 pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
     let mut on = enabled(app);
     let hint = tl!(
-        "Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. Scripts and plugin management stay off. The choice is remembered across launches."
+        "Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. So can a script any program of yours writes to the file bridge shown below. Scripts and plugin management stay off. The choice is remembered across launches."
     );
     if ui.checkbox(&mut on, tl!("Let your Agents Control RustGIS")).on_hover_text(hint).changed() {
         app.connect.on = Some(on);
@@ -144,13 +151,12 @@ pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
             save(PREF, if on { "on" } else { "off" });
         }
         if on {
-            let bridge = start_bridge(app).is_ok();
-            if let Err(e) = app.run("ui.mcpRelay", json!({})) {
-                // Not started (the port is taken, say): with the file bridge agents stay on;
-                // without, the box and the remembered choice go back off.
-                relay_failed(app, e, bridge);
-                on = enabled(app);
-            }
+            // The relay not started (the port is taken, say): with the file bridge agents stay
+            // on; without, the box and the remembered choice go back off.
+            let bridge = start_bridge(app);
+            let relay = app.run("ui.mcpRelay", json!({})).map(|_| ());
+            started(app, relay, bridge);
+            on = enabled(app);
         } else if let Err(e) = app.run("ui.mcpRelay", json!({"stop": true})) {
             app.connect.error = Some(e);
         }
