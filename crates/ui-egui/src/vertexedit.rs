@@ -30,6 +30,8 @@ pub struct VertexDrag {
     pub vertex: VertexId,
     pub insert: bool,
     pub at: Coord,
+    /// Whether `at` snapped to a feature (the overlay marks it).
+    pub snapped: bool,
 }
 
 /// What is under the pointer.
@@ -125,8 +127,8 @@ fn handle_at(app: &RustGisApp, rect: Rect, p: Pos2) -> Option<Handle> {
 /// A press at `origin` starts dragging the vertex or midpoint there, if there is one.
 pub fn drag_start(app: &mut RustGisApp, rect: Rect, origin: Pos2) -> bool {
     let drag = match handle_at(app, rect, origin) {
-        Some(Handle::Vertex(layer, row, vertex, at)) => VertexDrag { layer, row, vertex, insert: false, at },
-        Some(Handle::Edge(layer, row, vertex, at)) => VertexDrag { layer, row, vertex, insert: true, at },
+        Some(Handle::Vertex(layer, row, vertex, at)) => VertexDrag { layer, row, vertex, insert: false, at, snapped: false },
+        Some(Handle::Edge(layer, row, vertex, at)) => VertexDrag { layer, row, vertex, insert: true, at, snapped: false },
         None => return false,
     };
     app.map.vertex = (!drag.insert).then_some((drag.layer, drag.row, drag.vertex));
@@ -141,9 +143,10 @@ pub fn drag_to(app: &mut RustGisApp, rect: Rect, p: Pos2) {
     // Asked directly, not as a command: commands mark the map changed, redrawing it every frame.
     // The feature being changed isn't a snap target: its old vertex and edges would hold the
     // vertex in place.
-    let c = rustgis_engine::cmd::design::snap_except(&mut app.session, c, Some((d.layer, d.row))).map_or(c, |(at, _)| at);
+    let snap = rustgis_engine::cmd::design::snap_except(&mut app.session, c, Some((d.layer, d.row)));
     if let Some(d) = &mut app.map.vertex_drag {
-        d.at = c;
+        d.at = snap.map_or(c, |(at, _)| at);
+        d.snapped = snap.is_some();
     }
 }
 
@@ -178,7 +181,7 @@ fn commit(app: &mut RustGisApp, d: VertexDrag) {
 pub fn click(app: &mut RustGisApp, rect: Rect, p: Pos2, c: Coord, shift: bool) {
     match handle_at(app, rect, p) {
         Some(Handle::Vertex(layer, row, v, _)) => app.map.vertex = Some((layer, row, v)),
-        Some(Handle::Edge(layer, row, vertex, at)) => commit(app, VertexDrag { layer, row, vertex, insert: true, at }),
+        Some(Handle::Edge(layer, row, vertex, at)) => commit(app, VertexDrag { layer, row, vertex, insert: true, at, snapped: false }),
         None => {
             app.map.vertex = None;
             let mode = if shift { "add" } else { "new" };

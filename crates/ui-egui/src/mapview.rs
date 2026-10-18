@@ -111,7 +111,7 @@ pub struct MapView {
     camera_moved: bool,
     /// The last snap: its inputs (pointer, camera, undo depth) and where it snapped, if anywhere,
     /// so snapping runs only when one of them changes rather than every frame.
-    snap: Option<([f64; 7], Option<Coord>)>,
+    snap: Option<([f64; 5], Option<Coord>)>,
     /// The side-by-side map's last render (texture and labels) and what it was drawn for, so it
     /// redraws only when that map, the project or the view changes.
     split: Option<([f64; 8], egui::TextureHandle, Vec<PlacedLabel>)>,
@@ -1277,15 +1277,14 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
         && let Some(c) = app.map.pointer_lonlat
         && let Some(at) = {
             let cam = app.session.map().camera;
-            // A dragged vertex doesn't snap to its own feature: the marker shows where it goes.
-            let skip = app.map.vertex_drag.map(|d| (d.layer, d.row));
-            let (sl, sr) = skip.map_or((-1.0, -1.0), |(l, r)| (f64::from(l), r as f64));
-            let key = [c.x, c.y, cam.center.x + cam.center.y * 1e-3, cam.res, app.session.revision as f64, sl, sr];
-            match &app.map.snap {
-                Some((k, at)) if *k == key => *at,
+            let key = [c.x, c.y, cam.center.x + cam.center.y * 1e-3, cam.res, app.session.revision as f64];
+            match (&app.map.vertex_drag, &app.map.snap) {
+                // A dragged vertex has snapped already (leaving its own feature out).
+                (Some(d), _) => d.snapped.then_some(d.at),
+                (None, Some((k, at))) if *k == key => *at,
                 _ => {
                     // Asked directly, not as a command: commands mark the map changed.
-                    let at = rustgis_engine::cmd::design::snap_except(&mut app.session, c, skip).map(|(at, _)| at);
+                    let at = rustgis_engine::cmd::design::snap_at(&mut app.session, c).map(|(at, _)| at);
                     app.map.snap = Some((key, at));
                     at
                 }
