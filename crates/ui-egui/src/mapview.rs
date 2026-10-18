@@ -456,7 +456,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let moving = dragging || time - app.map.last_interaction < settle;
     let draped = if globe_view && moving {
         let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
-        let tiles = if app.session.map().tiles.is_empty() { 0 } else { rustgis_engine::render::rustgis_tiles::cache::generation() };
+        let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
         app.map.drape.prepare(ui.ctx(), app.session.map_mut(), key, tiles, w, h, ppp, time)
     } else {
         if !globe_view {
@@ -469,7 +469,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let tilted = !globe_view && cam.pitch != 0.0;
     let tilt_draped = if tilted && moving {
         let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
-        let tiles = if app.session.map().tiles.is_empty() { 0 } else { rustgis_engine::render::rustgis_tiles::cache::generation() };
+        let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
         app.map.tilt_drape.prepare(ui.ctx(), app.session.map_mut(), key, tiles, w, h, ppp, time)
     } else {
         if !tilted {
@@ -502,7 +502,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         rustgis_engine::map::source::set_waker(move || ctx.request_repaint());
     });
     let mut key = key;
-    if !app.session.map().tiles.is_empty() {
+    if fetches_tiles(app.session.map()) {
         key.tiles = rustgis_engine::render::rustgis_tiles::cache::generation();
         if let Some(old) = app.map.key
             && old.tiles != key.tiles
@@ -542,7 +542,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let shown = app.map.texture.is_some() && app.map.key.is_some_and(|k| same_view(k, key));
         if !shown {
             let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
-            let tiles = if app.session.map().tiles.is_empty() { 0 } else { rustgis_engine::render::rustgis_tiles::cache::generation() };
+            let tiles = if fetches_tiles(app.session.map()) { rustgis_engine::render::rustgis_tiles::cache::generation() } else { 0 };
             tilt_draped = app.map.tilt_drape.prepare(ui.ctx(), app.session.map_mut(), key, tiles, w, h, ppp, time);
         }
     }
@@ -748,6 +748,13 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     overlays(app, ui, &painter, rect, &t);
     popup(app, ui, rect);
+}
+
+/// Whether the map draws from web tiles (its tile layers, or elevation tiles for its terrain):
+/// tiles arriving draw it again.
+fn fetches_tiles(m: &rustgis_engine::map::Map) -> bool {
+    !m.tiles.is_empty()
+        || m.view.terrain.as_ref().is_some_and(|t| matches!(t.source, rustgis_engine::map::view::TerrainSource::Tiles { .. }))
 }
 
 /// Shows a frame the CPU drew for `view` (of a `w × h` map view) as the map's texture, with its

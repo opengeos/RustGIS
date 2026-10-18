@@ -10,6 +10,7 @@ use egui::epaint::Vertex;
 use egui::{Color32, Mesh, Painter, Rect, Shape, TextureFilter, TextureHandle, TextureOptions, pos2};
 use rustgis_engine::geom::{Coord, Extent};
 use rustgis_engine::map::camera::{Band, FAR};
+use rustgis_engine::map::projection::Flat;
 use rustgis_engine::map::{Camera, Map};
 use rustgis_engine::render::{self, ExtrudedShape, UprightMarker, View};
 
@@ -26,6 +27,8 @@ const TILE_REFRESH: f64 = 0.5;
 /// Mesh cells along each side of a band: fine enough that the texture's straight-line
 /// interpolation across a cell doesn't show the perspective.
 const CELLS: usize = 16;
+/// Mesh cells along each side of a band over terrain: the relief needs finer ones.
+const TERRAIN_CELLS: usize = 40;
 
 struct Drape {
     key: DrapeKey,
@@ -36,6 +39,8 @@ struct Drape {
     built: f64,
     /// Each band and its picture.
     bands: Vec<(Band, TextureHandle)>,
+    /// Over terrain: each band's grid of ground heights (map units), its cells a side.
+    relief: Option<(usize, Vec<Vec<f64>>)>,
     /// The extruded features, tessellated.
     shapes: Vec<ExtrudedShape>,
     /// The point markers standing upright.
@@ -81,7 +86,7 @@ impl TiltDrape {
         }
         let options = TextureOptions { mipmap_mode: Some(TextureFilter::Linear), ..TextureOptions::LINEAR };
         let mut old = self.drape.take().map(|d| d.bands).unwrap_or_default().into_iter().map(|b| b.1);
-        let bands = patches
+        let bands: Vec<(Band, TextureHandle)> = patches
             .into_iter()
             .enumerate()
             .map(|(i, p)| {
@@ -99,7 +104,24 @@ impl TiltDrape {
             .collect();
         let shapes = render::extruded_shapes(map, &view);
         let markers = render::upright_markers(map, &view, MARGIN);
-        self.drape = Some(Drape { key, ppp: drape_ppp, res: cam.res, tiles, built: time, bands, shapes, markers });
+        // The ground's height under each vertex, read once.
+        let relief = render::terrain::Ground::of(map, &cam).map(|g| {
+            let n = TERRAIN_CELLS;
+            let heights = bands
+                .iter()
+                .map(|(b, _)| {
+                    (0..=n)
+                        .flat_map(|j| (0..=n).map(move |i| (i, j)))
+                        .map(|(i, j)| {
+                            let m = b.camera.to_map(b.width * i as f64 / n as f64, b.height * j as f64 / n as f64, b.width, b.height);
+                            g.height(m).map_or(0.0, |h| h / Flat::Mercator.ground_per_unit(m).max(1e-9))
+                        })
+                        .collect()
+                })
+                .collect();
+            (n, heights)
+        });
+        self.drape = Some(Drape { key, ppp: drape_ppp, res: cam.res, tiles, built: time, bands, relief, shapes, markers });
         true
     }
 
@@ -241,24 +263,32 @@ impl TiltDrape {
     }
 
     /// The drape's meshes for `cam` in `rect`, farthest band first. A band with nothing in front
-    /// of the camera has no mesh: egui-wgpu can't draw an empty one.
+    /// of the camera has no mesh: egui-wgpu can't draw an empty one. Over terrain each vertex is
+    /// raised to the ground's height, each band keeps to its own stretch of ground, and its
+    /// cells are ordered far to near, so nearer slopes hide what lies behind them.
     fn meshes(&self, rect: Rect, cam: &Camera, w: f64, h: f64) -> Vec<Mesh> {
         let Some(d) = &self.drape else { return Vec::new() };
+        let last = d.bands.len().saturating_sub(1);
         d.bands
             .iter()
+            .enumerate()
             .rev()
-            .filter_map(|(b, tex)| {
-                let n = CELLS + 1;
+            .filter_map(|(bi, (b, tex))| {
+                let relief = d.relief.as_ref().and_then(|(n, hs)| Some((*n, hs.get(bi)?)));
+                let cells = relief.map_or(CELLS, |(n, _)| n);
+                let n = cells + 1;
                 let mut mesh = Mesh::with_texture(tex.id());
-                let mut ok = Vec::with_capacity(n * n);
+                let mut depth = Vec::with_capacity(n * n);
                 for j in 0..n {
                     for i in 0..n {
-                        let (u, v) = (i as f64 / CELLS as f64, j as f64 / CELLS as f64);
+                        let (u, v) = (i as f64 / cells as f64, j as f64 / cells as f64);
                         let m = b.camera.to_map(u * b.width, v * b.height, b.width, b.height);
                         // Past the view's reach is sky, as in the settled frame.
-                        let in_reach = cam.depth_scale(m, h).is_some_and(|k| k >= 1.0 / FAR);
-                        let s = cam.try_to_screen(m, w, h).filter(|s| in_reach && s.0.is_finite() && s.1.is_finite());
-                        ok.push(s.is_some());
+                        let k = cam.depth_scale(m, h).filter(|k| *k >= 1.0 / FAR);
+                        let up = relief.and_then(|(_, hs)| hs.get(j * n + i)).map_or(0.0, |hm| hm / cam.res.max(1e-9));
+                        let (gu, gv) = cam.ground_px(m);
+                        let s = cam.project_raised(gu, gv, up, w, h).filter(|s| k.is_some() && s.0.is_finite() && s.1.is_finite());
+                        depth.push(s.and(k).map(|k| 1.0 / k));
                         let (x, y) = s.unwrap_or((0.0, 0.0));
                         mesh.vertices.push(Vertex {
                             pos: pos2(rect.min.x + x as f32, rect.min.y + y as f32),
@@ -267,16 +297,34 @@ impl TiltDrape {
                         });
                     }
                 }
-                for j in 0..CELLS {
-                    for i in 0..CELLS {
+                // Over terrain, its own ground: the nearest band reaches the bottom of the view,
+                // the farthest the sky; a little over at the seams.
+                let (d0, d1) = if relief.is_some() {
+                    let (d0, d1) = (if bi == 0 { 0.0 } else { b.depth.0 }, if bi == last { f64::INFINITY } else { b.depth.1 });
+                    let margin = ((d1.min(FAR) - d0) * 0.02).max(0.0);
+                    (d0 - margin, d1 + margin)
+                } else {
+                    (f64::NEG_INFINITY, f64::INFINITY)
+                };
+                let mut quads: Vec<(f64, [u32; 4])> = Vec::new();
+                for j in 0..cells {
+                    for i in 0..cells {
                         let k = j * n + i;
                         let quad = [k, k + 1, k + n, k + n + 1];
-                        if quad.iter().all(|&q| ok.get(q).copied().unwrap_or(false)) {
-                            let [a, b, c, e] = quad.map(|q| q as u32);
-                            mesh.add_triangle(a, b, e);
-                            mesh.add_triangle(a, e, c);
+                        let ds: Option<Vec<f64>> = quad.iter().map(|&q| depth.get(q).copied().flatten()).collect();
+                        let Some(ds) = ds else { continue };
+                        let mean = ds.iter().sum::<f64>() / 4.0;
+                        if mean >= d0 && mean <= d1 {
+                            quads.push((mean, quad.map(|q| q as u32)));
                         }
                     }
+                }
+                if relief.is_some() {
+                    quads.sort_by(|a, b| b.0.total_cmp(&a.0));
+                }
+                for (_, [a, b, c, e]) in quads {
+                    mesh.add_triangle(a, b, e);
+                    mesh.add_triangle(a, e, c);
                 }
                 (!mesh.indices.is_empty()).then_some(mesh)
             })
@@ -431,6 +479,49 @@ mod tests {
         // Behind the camera, it isn't drawn.
         m.camera.center = rustgis_engine::geom::lonlat_to_merc(Coord::new(10.0, 70.0));
         assert!(d.markers(rect, &m.camera, fog()).is_none());
+    }
+
+    #[test]
+    fn the_drape_stands_on_its_terrain() {
+        use rustgis_engine::data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let ctx = egui::Context::default();
+        // A 4000 m hill around (10°, 48°), where the view looks.
+        let n = 32usize;
+        let heights: Vec<f32> = (0..n * n)
+            .map(|i| {
+                let (x, y) = ((i % n) as f32 / n as f32 - 0.5, (i / n) as f32 / n as f32 - 0.5);
+                4000.0 * (-(x * x + y * y) * 20.0).exp()
+            })
+            .collect();
+        let gt = GeoTransform { origin_x: 9.0, origin_y: 49.0, pixel_width: 2.0 / n as f64, pixel_height: -2.0 / n as f64 };
+        let dem = Raster::new("dem", n as u32, n as u32, vec![heights], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        let drape = |terrain: bool| {
+            let mut m = tilted(60.0);
+            m.camera.res = 300.0;
+            let id = m.add_raster("dem", rustgis_engine::map::RasterLayer::from_path(dem.clone(), "dem.tif"));
+            if let Some(l) = m.layer_mut(id) {
+                l.visible = false;
+            }
+            if terrain {
+                m.view.terrain = Some(rustgis_engine::map::view::Terrain {
+                    source: rustgis_engine::map::view::TerrainSource::Layer("dem".into()),
+                    exaggeration: 3.0,
+                });
+            }
+            let mut d = TiltDrape::default();
+            assert!(d.prepare(&ctx, &mut m, DrapeKey { rev: 0, sources: 0 }, 0, 800.0, 600.0, 1.0, 0.0));
+            let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+            let meshes = d.meshes(rect, &m.camera, 800.0, 600.0);
+            assert!(!meshes.is_empty() && meshes.iter().all(|mesh| mesh.is_valid()));
+            d
+        };
+        // Flat, no relief; on the hill's terrain, the ground's heights under the grid, up to the
+        // hill's: 12 km exaggerated, about 17,900 map units where a unit spans 0.67 m (48°).
+        assert!(drape(false).drape.as_ref().is_some_and(|d| d.relief.is_none()));
+        let d = drape(true);
+        let (_, heights) = d.drape.as_ref().and_then(|d| d.relief.as_ref()).expect("relief");
+        let most = heights.iter().flatten().copied().fold(0.0, f64::max);
+        assert!(most > 12_000.0 && most < 18_000.0, "{most}");
     }
 
     #[test]

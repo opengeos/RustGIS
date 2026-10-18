@@ -17,6 +17,7 @@ mod picture;
 pub mod post;
 mod raster;
 pub mod report;
+pub mod terrain;
 mod text;
 mod tiles;
 
@@ -1135,8 +1136,12 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
     let mut warp = Warp::new(view, map);
+    // On terrain the bands are kept, to lay over the ground's relief once all are drawn.
+    let ground = terrain::Ground::of(map, &view.camera);
+    let mut kept: Vec<(View, (f64, f64), Pixmap)> = Vec::new();
+    let last = bands_of.len().saturating_sub(1);
     let (mut attribution, mut tiles_pending, mut tile_errors) = (Vec::<String>::new(), false, Vec::<String>::new());
-    for b in bands_of {
+    for (i, b) in bands_of.into_iter().enumerate() {
         let v = band_view(view, &b);
         if let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, full_res_rasters, Backend::Cpu, Labels::Tilted(view, &mut candidates)) {
             for a in r.attribution {
@@ -1150,12 +1155,25 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
                 }
             }
             tiles_pending |= r.tiles_pending;
-            // Into the view at once, nearest band first, so only one band is held at a time.
-            warp.band(&mut pm, &v, &r.pixmap, view.camera.depth_y(b.depth.1, view.height), view.camera.depth_y(b.depth.0, view.height));
+            if ground.is_some() {
+                // The nearest band reaches the bottom of the view, the farthest the sky.
+                let depth = (if i == 0 { 0.0 } else { b.depth.0 }, if i == last { f64::INFINITY } else { b.depth.1 });
+                kept.push((v, depth, r.pixmap));
+            } else {
+                // Into the view at once, nearest band first, so only one band is held at a time.
+                warp.band(&mut pm, &v, &r.pixmap, view.camera.depth_y(b.depth.1, view.height), view.camera.depth_y(b.depth.0, view.height));
+            }
         }
     }
     map.label_lock = lock;
-    warp.finish(&mut pm);
+    match &ground {
+        Some(g) => {
+            drape_terrain(&mut pm, view, map, &kept, g);
+            tiles_pending |= g.pending();
+        }
+        None => warp.finish(&mut pm),
+    }
+    drop(kept);
     extrusions_tilted(map, view, &mut pm);
     markers_tilted(map, view, &mut pm);
     // A feature drawn in two bands offers its label twice: the nearer band's (offered first) is
@@ -1168,6 +1186,9 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
         _ => seen.insert(c.2),
     });
     raise_labels(map, view, &mut candidates);
+    if let Some(g) = &ground {
+        lift_labels(view, g, &mut candidates);
+    }
     let placed = place_labels(candidates, Vec::new(), view.width as f32, view.height as f32, false);
     for l in &placed.labels {
         if let Some(icon) = &l.icon {
@@ -1176,6 +1197,138 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
     }
     let unplaced = if map.label_display.show_unplaced { placed.unplaced } else { Vec::new() };
     Some(Rendered { pixmap: pm, labels: placed.labels, unplaced, attribution, tiles_pending, data_pending, tile_errors })
+}
+
+/// Cells along each side of a band laid over a terrain's relief.
+const TERRAIN_CELLS: usize = 40;
+
+/// Lays a tilted view's bands, drawn flat, over the ground's relief: each band as a grid of
+/// triangles raised to the ground's height and mapped from its picture, every band keeping to
+/// its own stretch of ground, all drawn far to near so nearer slopes hide what lies behind
+/// them; fog with distance, and the sky behind. (Without terrain, [`Warp`] does it per pixel.)
+fn drape_terrain(pm: &mut Pixmap, view: &View, map: &Map, bands: &[(View, (f64, f64), Pixmap)], ground: &terrain::Ground) {
+    let (sky, fog) = tilt_sky(map);
+    let cam = view.camera;
+    let (w, h) = (view.width, view.height);
+    let k = f64::from(pm.width()) / w.max(1e-9);
+    let far = rustgis_map::camera::FAR;
+    // The sky shading into the fog at the reach's row; fog below it, where no slope stands.
+    let sky_y = (cam.sky_y(h).unwrap_or(0.0).max(1.0) * k) as f32;
+    let c = |c: Rgba| tiny_skia::Color::from_rgba8(c.r(), c.g(), c.b(), 255);
+    match tiny_skia::LinearGradient::new(
+        Point::from_xy(0.0, 0.0),
+        Point::from_xy(0.0, sky_y),
+        vec![GradientStop::new(0.0, c(sky)), GradientStop::new(1.0, c(fog))],
+        SpreadMode::Pad,
+        Transform::identity(),
+    ) {
+        Some(shader) => {
+            if let Some(r) = tiny_skia::Rect::from_xywh(0.0, 0.0, pm.width() as f32, pm.height() as f32) {
+                pm.fill_rect(r, &Paint { shader, ..Paint::default() }, Transform::identity(), None);
+            }
+        }
+        None => pm.fill(c(fog)),
+    }
+    // Every band's triangles: (depth, band, screen and picture corners).
+    type Tri = (f64, usize, [(f64, f64); 3], [(f64, f64); 3]);
+    let mut tris: Vec<Tri> = Vec::new();
+    let n = TERRAIN_CELLS;
+    for (bi, (v, (d0, d1), pic)) in bands.iter().enumerate() {
+        let kb = f64::from(pic.width()) / v.width.max(1e-9);
+        // A band's grid: screen point, picture point and depth of each vertex.
+        let grid: Vec<Option<((f64, f64), (f64, f64), f64)>> = (0..=n)
+            .flat_map(|j| (0..=n).map(move |i| (i, j)))
+            .map(|(i, j)| {
+                let (lx, ly) = (v.width * i as f64 / n as f64, v.height * j as f64 / n as f64);
+                let m = v.camera.to_map(lx, ly, v.width, v.height);
+                let depth = 1.0 / cam.depth_scale(m, h)?;
+                let (u, gv) = cam.ground_px(m);
+                let (sx, sy) = cam.project_raised(u, gv, ground.up_px(m, &cam), w, h)?;
+                (sx.is_finite() && sy.is_finite()).then_some(((sx * k, sy * k), (lx * kb, ly * kb), depth))
+            })
+            .collect();
+        // Its own stretch of ground, a little over at the seams.
+        let margin = ((d1.min(far) - d0) * 0.02).max(0.0);
+        for j in 0..n {
+            for i in 0..n {
+                let at = |i: usize, j: usize| grid.get(j * (n + 1) + i).copied().flatten();
+                let (Some(a), Some(b), Some(c), Some(d)) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1)) else { continue };
+                for [p, q, r] in [[a, b, d], [a, d, c]] {
+                    let depth = (p.2 + q.2 + r.2) / 3.0;
+                    if depth < d0 - margin || depth > d1 + margin || p.2.min(q.2).min(r.2) > far {
+                        continue;
+                    }
+                    tris.push((depth, bi, [p.0, q.0, r.0], [p.1, q.1, r.1]));
+                }
+            }
+        }
+    }
+    tris.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let fog_paint = |t: f64| paint(fog, t as f32);
+    for (depth, bi, dst, src) in tris {
+        let Some((_, _, pic)) = bands.get(bi) else { continue };
+        let Some(t) = affine(src, dst) else { continue };
+        // A hair larger all round, so neighbours leave no seam.
+        let (cx, cy) = ((dst[0].0 + dst[1].0 + dst[2].0) / 3.0, (dst[0].1 + dst[1].1 + dst[2].1) / 3.0);
+        let mut pb = PathBuilder::new();
+        for (i, (x, y)) in dst.iter().enumerate() {
+            let (dx, dy) = (x - cx, y - cy);
+            let len = dx.hypot(dy).max(1e-9);
+            let (x, y) = ((x + dx / len * 0.6) as f32, (y + dy / len * 0.6) as f32);
+            if i == 0 { pb.move_to(x, y) } else { pb.line_to(x, y) }
+        }
+        pb.close();
+        let Some(path) = pb.finish() else { continue };
+        let shader = tiny_skia::Pattern::new(pic.as_ref(), SpreadMode::Pad, tiny_skia::FilterQuality::Bilinear, 1.0, t);
+        pm.fill_path(&path, &Paint { shader, anti_alias: true, ..Paint::default() }, FillRule::Winding, Transform::identity(), None);
+        // Fog from halfway to the reach.
+        let f = ((depth - far * 0.5) / (far * 0.5)).clamp(0.0, 1.0);
+        let f = f * f * (3.0 - 2.0 * f);
+        if f > 0.004 {
+            pm.fill_path(&path, &fog_paint(f), FillRule::Winding, Transform::identity(), None);
+        }
+    }
+}
+
+/// The affine map taking the triangle `src` onto `dst` (physical pixels); `None` for a
+/// triangle with no area.
+fn affine(src: [(f64, f64); 3], dst: [(f64, f64); 3]) -> Option<Transform> {
+    let (s1, s2) = ((src[1].0 - src[0].0, src[1].1 - src[0].1), (src[2].0 - src[0].0, src[2].1 - src[0].1));
+    let (d1, d2) = ((dst[1].0 - dst[0].0, dst[1].1 - dst[0].1), (dst[2].0 - dst[0].0, dst[2].1 - dst[0].1));
+    let det = s1.0 * s2.1 - s2.0 * s1.1;
+    if det.abs() < 1e-12 || !det.is_finite() {
+        return None;
+    }
+    let a = (d1.0 * s2.1 - d2.0 * s1.1) / det;
+    let b = (d2.0 * s1.0 - d1.0 * s2.0) / det;
+    let c = (d1.1 * s2.1 - d2.1 * s1.1) / det;
+    let d = (d2.1 * s1.0 - d1.1 * s2.0) / det;
+    let tx = dst[0].0 - a * src[0].0 - b * src[0].1;
+    let ty = dst[0].1 - c * src[0].0 - d * src[0].1;
+    [a, b, c, d, tx, ty]
+        .iter()
+        .all(|v| v.is_finite())
+        .then(|| Transform::from_row(a as f32, c as f32, b as f32, d as f32, tx as f32, ty as f32))
+}
+
+/// Lifts a tilted view's labels onto the ground's relief: each to the height of the ground
+/// under it.
+fn lift_labels(view: &View, ground: &terrain::Ground, candidates: &mut [Candidate]) {
+    let cam = view.camera;
+    let (w, h) = (view.width, view.height);
+    for (l, _, _) in candidates.iter_mut() {
+        let Some(m) = cam.try_to_map(f64::from(l.x), f64::from(l.y), w, h) else { continue };
+        let (u, v) = cam.ground_px(m);
+        let Some((sx, sy)) = cam.project_raised(u, v, ground.up_px(m, &cam), w, h) else { continue };
+        let (dx, dy) = (sx as f32 - l.x, sy as f32 - l.y);
+        if !(dx.is_finite() && dy.is_finite()) {
+            continue;
+        }
+        (l.x, l.y) = (sx as f32, sy as f32);
+        if let Some(i) = &mut l.icon {
+            (i.x, i.y) = (i.x + dx, i.y + dy);
+        }
+    }
 }
 
 /// The colours of a tilted view's sky (at the top) and of the fog it fades into at the
@@ -1319,6 +1472,8 @@ fn stands_up(map: &Map, layer: &rustgis_map::Layer) -> bool {
 pub struct UprightMarker {
     /// Where it stands (the camera's coordinates).
     pub at: Coord,
+    /// The ground's height under it (map units), on terrain; 0 without.
+    pub height: f64,
     /// Its symbol, with the layer's transparency in its colours.
     pub symbol: Symbol,
     pub selected: bool,
@@ -1330,7 +1485,9 @@ impl UprightMarker {
     /// into the fog (0 to 1); `None` behind the camera or past the view's reach.
     pub fn place(&self, cam: &Camera, w: f64, h: f64) -> Option<(f64, f64, f64, f64)> {
         let k = cam.depth_scale(self.at, h).filter(|k| *k * rustgis_map::camera::FAR >= 1.0)?;
-        let (x, y) = cam.try_to_screen(self.at, w, h).filter(|(x, y)| x.is_finite() && y.is_finite())?;
+        let (u, v) = cam.ground_px(self.at);
+        let up = (self.height / cam.res.max(1e-9)).clamp(-1e7, 1e7);
+        let (x, y) = cam.project_raised(u, v, up, w, h).filter(|(x, y)| x.is_finite() && y.is_finite())?;
         // Fog from halfway to the reach, as on the ground.
         let far = rustgis_map::camera::FAR;
         let t = ((1.0 / k - far * 0.5) / (far * 0.5)).clamp(0.0, 1.0);
@@ -1395,6 +1552,7 @@ pub fn upright_markers(map: &mut Map, view: &View, margin: f64) -> Vec<UprightMa
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
     let (cam, h) = (view.camera, view.height);
+    let ground = terrain::Ground::of(map, &view.camera);
     let mut out = Vec::new();
     for li in order {
         let Some(layer) = map.layers.get_mut(li) else { continue };
@@ -1429,7 +1587,12 @@ pub fn upright_markers(map: &mut Map, view: &View, margin: f64) -> Vec<UprightMa
             let selected = layer.selection.contains(&row);
             for c in pts.iter().filter(|c| c.is_finite() && cull.contains(**c)) {
                 let Some(k) = cam.depth_scale(*c, h) else { continue };
-                here.push((k, UprightMarker { at: *c, symbol, selected }));
+                // On terrain, standing on the ground (its height in map units there).
+                let height = ground.as_ref().and_then(|g| g.height(*c)).map_or(0.0, |m| {
+                    let per_unit = rustgis_map::projection::Flat::Mercator.ground_per_unit(*c).max(1e-9);
+                    (m / per_unit).clamp(-1e9, 1e9)
+                });
+                here.push((k, UprightMarker { at: *c, height, symbol, selected }));
             }
         }
         here.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -3253,6 +3416,64 @@ mod tests {
         assert_eq!(nan.pixmap.data(), north.pixmap.data());
         let (x, y) = ink(&render(&mut m, &View { camera: Camera { bearing: 450.0, ..camera }, ..view }).unwrap().pixmap);
         assert!((x - 400.0).abs() < 4.0 && (y - 140.0).abs() < 4.0, "450°: {x},{y}");
+    }
+
+    /// A hill of a DEM 3000 m high in the middle of a 2° square around (0, 0).
+    fn hill_map() -> Map {
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let n = 64usize;
+        let heights: Vec<f32> = (0..n * n)
+            .map(|i| {
+                let (x, y) = ((i % n) as f32 / n as f32 - 0.5, (i / n) as f32 / n as f32 - 0.5);
+                3000.0 * (-(x * x + y * y) * 30.0).exp()
+            })
+            .collect();
+        let gt = GeoTransform { origin_x: -1.0, origin_y: 1.0, pixel_width: 2.0 / n as f64, pixel_height: -2.0 / n as f64 };
+        let dem = Raster::new("dem", n as u32, n as u32, vec![heights], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        let id = m.add_raster("dem", rustgis_map::RasterLayer::from_path(dem, "dem.tif"));
+        if let Some(l) = m.layer_mut(id) {
+            l.visible = false;
+        }
+        let mut d = Dataset::new("peak", GeometryType::Point, vec![]);
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+        m.add_dataset(d);
+        m
+    }
+
+    #[test]
+    fn a_tilted_view_drapes_the_map_over_its_terrain() {
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, -0.6)), res: 600.0, bearing: 0.0, pitch: 65.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let mut flat = hill_map();
+        let mut hilly = hill_map();
+        hilly.view.terrain =
+            Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer("dem".into()), exaggeration: 2.0 });
+        // The ground's height is read from the DEM (exaggerated), and nothing off it.
+        let g = terrain::Ground::of(&hilly, &camera).expect("terrain");
+        let top = g.height(lonlat_to_merc(Coord::new(0.0, 0.0))).unwrap();
+        assert!((top - 6000.0).abs() < 400.0, "{top}");
+        assert!(g.height(lonlat_to_merc(Coord::new(5.0, 5.0))).is_none());
+        assert!(terrain::Ground::of(&flat, &camera).is_none());
+        // The marker on the peak stands on it: higher up the view than on flat ground.
+        let place = |m: &mut Map| {
+            let up = upright_markers(m, &view, 0.0);
+            let k = up.first().expect("the peak's marker");
+            k.place(&camera, view.width, view.height).expect("in view").1
+        };
+        let (y_flat, y_hill) = (place(&mut flat), place(&mut hilly));
+        assert!(y_hill < y_flat - 5.0, "{y_hill} vs {y_flat}");
+        // The frame shows the relief: it differs from the flat one, and the sky still shows.
+        let a = render(&mut flat, &view).unwrap();
+        let b = render(&mut hilly, &view).unwrap();
+        assert_ne!(a.pixmap.data(), b.pixmap.data());
+        assert!(b.pixmap.pixels().iter().all(|p| p.alpha() == 255));
+        // A DEM layer gone (renamed or removed) leaves the ground flat.
+        hilly.view.terrain =
+            Some(rustgis_map::view::Terrain { source: rustgis_map::view::TerrainSource::Layer("none".into()), exaggeration: 1.0 });
+        assert!(terrain::Ground::of(&hilly, &camera).is_none());
+        assert!(render(&mut hilly, &view).is_some());
     }
 
     #[test]

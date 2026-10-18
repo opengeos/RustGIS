@@ -1416,6 +1416,32 @@ fn layout_frames_turn_and_tilt() {
 }
 
 #[test]
+fn terrain_is_set_from_a_dem_or_tiles() {
+    let mut s = world();
+    // A source is required, and must be a raster layer or an XYZ URL.
+    assert!(s.run("map.terrain", &json!({})).is_err());
+    assert!(s.run("map.terrain", &json!({"layer": "Countries"})).is_err());
+    assert!(s.run("map.terrain", &json!({"layer": "Nowhere"})).is_err());
+    assert!(s.run("map.terrain", &json!({"tiles": "https://example.com/dem.png"})).is_err());
+    assert!(s.run("map.terrain", &json!({"tiles": "https://e.com/{z}/{x}/{y}.png", "encoding": "jpeg"})).is_err());
+    assert!(s.map().view.terrain.is_none());
+    // Tiles, then only a new exaggeration (kept in range), then off.
+    let v = s.run("map.terrain", &json!({"tiles": "https://e.com/{z}/{x}/{y}.png", "encoding": "mapbox", "exaggeration": 2})).unwrap();
+    assert_eq!(v["source"]["encoding"], "mapbox");
+    assert_eq!(v["exaggeration"], 2.0);
+    let v = s.run("map.terrain", &json!({"exaggeration": 400})).unwrap();
+    assert_eq!(v["exaggeration"], rustgis_map::view::MAX_EXAGGERATION);
+    assert_eq!(v["source"]["tiles"], "https://e.com/{z}/{x}/{y}.png");
+    assert!(s.run("map.terrain", &json!({"exaggeration": "steep"})).is_err());
+    // Saved with the project.
+    let saved = serde_json::to_string(&s.map().view).unwrap_or_default();
+    let back: rustgis_map::view::ViewSettings = serde_json::from_str(&saved).unwrap_or_default();
+    assert_eq!(back.terrain, s.map().view.terrain);
+    s.run("map.terrain", &json!({"off": true})).unwrap();
+    assert!(s.map().view.terrain.is_none());
+}
+
+#[test]
 fn symbology_classes_follow_the_definition_query() {
     let mut s = world();
     s.run("layer.definitionQuery", &json!({"layer": "Countries", "where": "continent = 'Europe'"})).unwrap();

@@ -133,6 +133,67 @@ impl ViewEffects {
     }
 }
 
+/// Where a map's terrain comes from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum TerrainSource {
+    /// A raster layer of the map holding heights in metres (a DEM), by name.
+    Layer(String),
+    /// Elevation tiles: an XYZ URL template whose PNG or WebP tiles encode heights in their
+    /// colours.
+    Tiles { url: String, encoding: TerrainEncoding },
+}
+
+/// How elevation tiles encode heights in a pixel's red, green and blue.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TerrainEncoding {
+    /// Mapzen/AWS Terrarium: `R × 256 + G + B / 256 − 32768`.
+    #[default]
+    Terrarium,
+    /// Mapbox Terrain-RGB (also MapTiler's): `−10000 + (R × 65536 + G × 256 + B) × 0.1`.
+    Mapbox,
+}
+
+impl TerrainEncoding {
+    pub fn code(self) -> &'static str {
+        match self {
+            TerrainEncoding::Terrarium => "terrarium",
+            TerrainEncoding::Mapbox => "mapbox",
+        }
+    }
+
+    pub fn from_code(s: &str) -> Option<TerrainEncoding> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "terrarium" => Some(TerrainEncoding::Terrarium),
+            "mapbox" | "terrain-rgb" | "terrainrgb" | "maptiler" => Some(TerrainEncoding::Mapbox),
+            _ => None,
+        }
+    }
+
+    /// The height (metres) a pixel's red, green and blue encode.
+    pub fn height(self, r: u8, g: u8, b: u8) -> f64 {
+        let (r, g, b) = (f64::from(r), f64::from(g), f64::from(b));
+        match self {
+            TerrainEncoding::Terrarium => r * 256.0 + g + b / 256.0 - 32768.0,
+            TerrainEncoding::Mapbox => -10000.0 + (r * 65536.0 + g * 256.0 + b) * 0.1,
+        }
+    }
+}
+
+/// A map's terrain: where its heights come from and how much they are exaggerated.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Terrain {
+    pub source: TerrainSource,
+    #[serde(default = "one")]
+    pub exaggeration: f64,
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+/// The most a terrain's heights are exaggerated.
+pub const MAX_EXAGGERATION: f64 = 20.0;
+
 /// How the map draws.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ViewSettings {
@@ -147,6 +208,10 @@ pub struct ViewSettings {
     /// Features farther than this many metres from the view's centre aren't drawn, when set.
     #[serde(default)]
     pub clip_distance: Option<f64>,
+    /// The ground's relief in a tilted view, when set: heights from a DEM, which the map is
+    /// draped over (as MapLibre's terrain).
+    #[serde(default)]
+    pub terrain: Option<Terrain>,
     /// Speed over quality: no antialiasing.
     #[serde(skip)]
     pub fast: bool,

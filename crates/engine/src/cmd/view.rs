@@ -48,6 +48,9 @@ pub fn commands() -> Vec<C> {
             Ok(json!({"distance": d}))
         })
         .params(r#"{"mode": "none"|"distance", "distance"?: metres from the view's centre}"#),
+        C::new("map.terrain", "Terrain", "View › Scene", terrain).params(
+            r#"{"layer"?: a DEM raster layer (heights in metres) | "tiles"?: elevation tile URL with {z}/{x}/{y}, "encoding"?: "terrarium"|"mapbox" (tiles; default terrarium), "exaggeration"?: 0 to 20 (default 1, or the terrain's), "off"?: true}"#,
+        ),
         C::new("map.displayType", "Display Type", "View › Options", |s, p| {
             let fast = match ps(p, "mode").ok_or("mode is required")? {
                 "quality" => false,
@@ -188,4 +191,58 @@ fn walk(s: &mut Session, p: &Value) -> CmdResult {
     }
     let c = m.center_lonlat();
     Ok(json!({"lon": c.x, "lat": c.y}))
+}
+
+/// Sets the map's terrain: the relief a tilted view drapes the map over, from a DEM raster layer
+/// or elevation tiles, or turns it off. Parameters are checked before anything changes.
+fn terrain(s: &mut Session, p: &Value) -> CmdResult {
+    use rustgis_map::view::{MAX_EXAGGERATION, Terrain, TerrainEncoding, TerrainSource};
+    if p.get("off").and_then(Value::as_bool) == Some(true) {
+        s.map_mut().view.terrain = None;
+        return Ok(json!({"terrain": null}));
+    }
+    let exaggeration = match p.get("exaggeration").filter(|v| !v.is_null()) {
+        Some(_) => {
+            Some(f(p, "exaggeration").filter(|v| v.is_finite()).ok_or("exaggeration must be a number")?.clamp(0.0, MAX_EXAGGERATION))
+        }
+        None => None,
+    };
+    let source = match (ps(p, "layer"), ps(p, "tiles")) {
+        (Some(_), Some(_)) => return Err("give a layer or tiles, not both".into()),
+        (Some(name), None) => {
+            let l = s.map().layer_by_name(name).ok_or_else(|| format!("no layer '{name}'"))?;
+            if l.raster.is_none() {
+                return Err(format!("'{name}' isn't a raster layer (a DEM of heights in metres)"));
+            }
+            Some(TerrainSource::Layer(l.name.clone()))
+        }
+        (None, Some(url)) => {
+            let url = url.trim();
+            if !(url.contains("{z}") && url.contains("{x}") && (url.contains("{y}") || url.contains("{-y}"))) {
+                return Err("tiles is an XYZ URL with {z}, {x} and {y}".into());
+            }
+            let encoding = match ps(p, "encoding") {
+                Some(e) => TerrainEncoding::from_code(e).ok_or_else(|| format!("unknown encoding '{e}' (terrarium or mapbox)"))?,
+                None => TerrainEncoding::Terrarium,
+            };
+            Some(TerrainSource::Tiles { url: url.to_string(), encoding })
+        }
+        (None, None) => None,
+    };
+    let m = s.map_mut();
+    let t = match (source, m.view.terrain.take()) {
+        (Some(source), old) => Terrain { source, exaggeration: exaggeration.or(old.map(|t| t.exaggeration)).unwrap_or(1.0) },
+        // Only a new exaggeration: the terrain keeps its source.
+        (None, Some(old)) => Terrain { exaggeration: exaggeration.unwrap_or(old.exaggeration), ..old },
+        (None, None) => return Err("layer (a DEM raster layer) or tiles (an elevation tile URL) is required".into()),
+    };
+    let out = json!({
+        "source": match &t.source {
+            TerrainSource::Layer(n) => json!({"layer": n}),
+            TerrainSource::Tiles { url, encoding } => json!({"tiles": url, "encoding": encoding.code()}),
+        },
+        "exaggeration": t.exaggeration,
+    });
+    m.view.terrain = Some(t);
+    Ok(out)
 }
