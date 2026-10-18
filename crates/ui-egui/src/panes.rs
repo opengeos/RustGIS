@@ -490,7 +490,7 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let listed = match view {
             LayersView::DrawingOrder => {
                 let mut shown = std::collections::HashSet::new();
-                let mut blocks = Vec::new();
+                let mut rows: Vec<DropRow> = Vec::new();
                 // A layer group lists at its topmost layer (its layers are kept together); while
                 // filtering, when one of its layers or its own name matches.
                 for layer in
@@ -502,10 +502,11 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         }
                     } else if let Some(group) = layer_groups.iter().find(|g| g.children.contains(&layer.id)) {
                         if shown.insert(group.id) {
-                            blocks.push((group.id, layer_group_row(app, ui, group, &layers, scale, reorder, t)));
+                            layer_group_row(app, ui, group, &layers, scale, reorder, &mut rows, t);
                         }
                     } else {
-                        blocks.push((layer.id, layer_row(app, ui, layer, scale, reorder, t)));
+                        let rect = layer_row(app, ui, layer, scale, reorder, t);
+                        rows.push(DropRow { id: layer.id, rect, group: None, header: false });
                     }
                 }
                 for group in &groups {
@@ -516,14 +517,14 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 // Groups with no layers yet, at the bottom.
                 for group in &layer_groups {
                     if shows(&group.name) && shown.insert(group.id) {
-                        layer_group_row(app, ui, group, &layers, scale, false, t);
+                        layer_group_row(app, ui, group, &layers, scale, reorder, &mut rows, t);
                     }
                 }
                 if reorder {
-                    layer_drop(app, ui, &blocks, t);
+                    layer_drop(app, ui, &rows, t);
                 }
                 // Web tile layers (services, tile addresses) draw over the basemap and under the layers.
-                let mut n = blocks.len() + shown.len();
+                let mut n = rows.iter().filter(|r| r.group.is_none() && !r.header).count() + shown.len();
                 for (i, tile) in tiles.iter().enumerate().filter(|(_, x)| shows(&x.name)) {
                     tile_row(app, ui, i, tiles.len(), reorder, tile, t);
                     n += 1;
@@ -936,8 +937,8 @@ fn service_group_row(
 
 /// A layer group's row (#413): its arrow folds it, its box shows or hides its layers together,
 /// and right-click renames it, sets its transparency, ungroups or removes it. With `reorder` the
-/// row drags the whole group, and its layers drag among themselves. Returns the rect of the row
-/// and its layers.
+/// row drags the whole group, and it and its layers' rows join `rows`, where layers drop (see
+/// [`layer_drop`]).
 fn layer_group_row(
     app: &mut RustGisApp,
     ui: &mut Ui,
@@ -945,14 +946,14 @@ fn layer_group_row(
     layers: &[Layer],
     scale: f64,
     reorder: bool,
+    rows: &mut Vec<DropRow>,
     t: &Tokens,
-) -> Rect {
+) {
     let q = filter_query(&app.ui.layer_filter);
     let filtering = !q.is_empty();
     // In drawing order, as they draw.
     let children: Vec<&Layer> = layers.iter().filter(|l| group.children.contains(&l.id)).collect();
     ui.push_id(("layer_group", group.id), |ui| {
-        let top = ui.cursor().min;
         let name = row_name(ui, group.name.clone(), semibold(12.5), ui.available_width() - NAME_X - 8.0);
         let sense = if reorder { Sense::click_and_drag() } else { Sense::click() };
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), name.row_h), sense);
@@ -961,6 +962,7 @@ fn layer_group_row(
             egui::DragAndDrop::set_payload(ui.ctx(), DraggedLayer(group.id));
         }
         let dragging = egui::DragAndDrop::payload::<DraggedLayer>(ui.ctx()).is_some_and(|d| d.0 == group.id);
+        rows.push(DropRow { id: group.id, rect: r, group: None, header: true });
         if resp.hovered() || dragging {
             ui.painter().rect_filled(r.shrink2(vec2(4.0, 1.0)), CornerRadius::same(5), t.hover);
         }
@@ -1017,30 +1019,37 @@ fn layer_group_row(
         });
         if group.expanded || filtering {
             ui.indent("children", |ui| {
-                let mut blocks = Vec::new();
                 for layer in children.iter().filter(|l| filter_shows(&q, &l.name) || filter_shows(&q, &group.name)) {
-                    blocks.push((layer.id, layer_row(app, ui, layer, scale, reorder, t)));
-                }
-                if reorder {
-                    layer_drop(app, ui, &blocks, t);
+                    let rect = layer_row(app, ui, layer, scale, reorder, t);
+                    rows.push(DropRow { id: layer.id, rect, group: Some(group.id), header: false });
                 }
             });
         }
-        Rect::from_min_max(top, pos2(r.max.x, ui.min_rect().max.y.max(r.max.y)))
-    })
-    .inner
+    });
 }
 
 /// The layer a row drag carries (egui's drag-and-drop payload).
 #[derive(Clone, Copy)]
 struct DraggedLayer(u32);
 
-/// Dragging a layer row over the list: marks the gap it would drop into and, on release, moves
-/// it there (`layer.move`, one undo step). Released anywhere but over the layer rows, the drag
-/// does nothing.
-fn layer_drop(app: &mut RustGisApp, ui: &Ui, blocks: &[(u32, Rect)], t: &Tokens) {
+/// A row of the drawing order view a dragged layer can drop on: a layer's (in a layer `group` or
+/// not) or a layer group's `header`.
+#[derive(Clone, Copy)]
+struct DropRow {
+    id: u32,
+    rect: Rect,
+    group: Option<u32>,
+    header: bool,
+}
+
+/// Dragging a layer or layer group row over the list: marks where it would drop and, on release,
+/// puts it there in one undo step. A layer dropped above one of a group's layers joins the group
+/// there, dropped elsewhere leaves its group, and dropped onto a group's row joins it at its end
+/// nearest the layer (`layer.group`); a group moves whole and only between groups (`group.move`). Released
+/// anywhere but over the rows, the drag does nothing.
+fn layer_drop(app: &mut RustGisApp, ui: &Ui, rows: &[DropRow], t: &Tokens) {
     let Some(dragged) = egui::DragAndDrop::payload::<DraggedLayer>(ui.ctx()) else { return };
-    let Some(from) = blocks.iter().position(|(id, _)| *id == dragged.0) else { return };
+    let Some(from) = rows.iter().position(|r| r.id == dragged.0) else { return };
     let view = ui.clip_rect();
     let Some(pointer) = ui.ctx().pointer_interact_pos().filter(|p| view.contains(*p)) else { return };
     // Near the top or bottom edge the list scrolls, faster the closer the pointer is.
@@ -1052,53 +1061,81 @@ fn layer_drop(app: &mut RustGisApp, ui: &Ui, blocks: &[(u32, Rect)], t: &Tokens)
         ui.ctx().request_repaint();
     }
     // Only the layer rows take a drop: not the map's name above them, the basemap or a table below.
-    let (Some((_, first)), Some((_, last))) = (blocks.first(), blocks.last()) else { return };
-    if pointer.y < first.min.y || pointer.y > last.max.y {
+    let (Some(first), Some(last)) = (rows.first(), rows.last()) else { return };
+    if pointer.y < first.rect.min.y || pointer.y > last.rect.max.y {
+        return;
+    }
+    let released = ui.input(|i| i.pointer.any_released());
+    let m = app.session.map();
+    let moving_group = m.group(dragged.0).is_some();
+    let current = m.group_of(dragged.0).map(|g| g.id);
+    // The topmost layer of a group, in drawing order.
+    let top_of = |g: u32| m.group(g).and_then(|g| m.layers.iter().find(|l| g.children.contains(&l.id)).map(|l| l.id));
+    // Onto the middle of another group's row: into that group, at its end nearest the layer.
+    if !moving_group
+        && let Some(h) = rows.iter().find(|r| {
+            r.header
+                && Some(r.id) != current
+                && pointer.y > r.rect.min.y + r.rect.height() / 4.0
+                && pointer.y < r.rect.max.y - r.rect.height() / 4.0
+        })
+    {
+        ui.painter().rect_stroke(
+            h.rect.shrink2(vec2(4.0, 1.0)),
+            CornerRadius::same(5),
+            Stroke::new(2.0, t.accent),
+            egui::StrokeKind::Inside,
+        );
+        if released {
+            let _ = app.run("layer.group", json!({"layer": dragged.0, "group": h.id}));
+        }
         return;
     }
     // The gap above the first row whose middle is below the pointer, or the one after the last.
-    let gap = blocks.iter().position(|(_, r)| pointer.y < r.center().y).unwrap_or(blocks.len());
-    // The gaps on either side of the dragged row leave it where it is.
-    let to = if gap > from { gap - 1 } else { gap };
-    if to == from {
-        return;
-    }
-    let line = match blocks.get(gap) {
-        Some((_, r)) => Some((r.min.y, r)),
-        None => blocks.last().map(|(_, r)| (r.max.y, r)),
-    };
-    if let Some((y, r)) = line {
-        ui.painter().line_segment([pos2(r.min.x + 8.0, y), pos2(r.max.x - 8.0, y)], Stroke::new(2.0, t.accent));
-    }
-    if ui.input(|i| i.pointer.any_released()) {
-        let m = app.session.map();
-        if let Some(g) = m.group(dragged.0) {
-            // A layer group moves whole, to the place of the row below the gap among the other
-            // layers (a group's place is its topmost layer's).
-            let others: Vec<u32> = m.layers.iter().map(|l| l.id).filter(|id| !g.children.contains(id)).collect();
-            let first = |id: u32| m.group(id).map_or(Some(id), |g| others.iter().copied().find(|l| g.children.contains(l)));
-            let pos = match blocks.get(gap) {
-                Some((id, _)) => first(*id).and_then(|id| others.iter().position(|l| *l == id)),
-                None => Some(others.len()),
-            };
-            if let Some(pos) = pos {
-                let _ = app.run("group.move", json!({"group": dragged.0, "to": pos}));
-            }
+    let gap = rows.iter().position(|r| pointer.y < r.rect.center().y).unwrap_or(rows.len());
+    let below = rows.get(gap);
+    // Above one of a group's layers is in that group; anywhere else, in none.
+    let into = below.filter(|r| !r.header).and_then(|r| r.group);
+    // The layer the drop goes above (a group's row stands for its topmost layer); none at the end.
+    let before = below.and_then(|r| if r.header { top_of(r.id) } else { Some(r.id) });
+    if moving_group {
+        // A group's own rows run from its header to its last layer; next to them it stays put,
+        // and it never goes into another group.
+        let end = rows.iter().rposition(|r| r.group == Some(dragged.0)).unwrap_or(from);
+        if (gap >= from && gap <= end + 1) || into.is_some() {
             return;
         }
-        // Onto a layer group's row: past the whole group, above it moving up and below it moving
-        // down. Nested/collapsed rows aren't positions in the map's flat rendering list.
-        let index = blocks.get(to).and_then(|(id, _)| match m.group(*id) {
-            Some(g) => {
-                let at = m.layers.iter().enumerate().filter(|(_, l)| g.children.contains(&l.id)).map(|(i, _)| i);
-                if to > from { at.max() } else { at.min() }
-            }
-            None => m.layer_index(*id),
-        });
-        if let Some(index) = index {
-            let _ = app.run("layer.move", json!({"layer": dragged.0, "to": index}));
-        }
+    } else if into == current && (gap == from || gap == from + 1) {
+        return;
     }
+    let line = match below {
+        Some(r) => Some((r.rect.min.y, r.rect)),
+        None => rows.last().map(|r| (r.rect.max.y, r.rect)),
+    };
+    if let Some((y, r)) = line {
+        // Indented when the drop goes into a group.
+        let x = match (into, below) {
+            (Some(_), Some(b)) => b.rect.min.x,
+            _ => first.rect.min.x,
+        };
+        ui.painter().line_segment([pos2(x + 8.0, y), pos2(r.max.x - 8.0, y)], Stroke::new(2.0, t.accent));
+    }
+    if !released {
+        return;
+    }
+    if let Some(g) = m.group(dragged.0) {
+        // Among the other layers, the place of the one it goes above.
+        let others: Vec<u32> = m.layers.iter().map(|l| l.id).filter(|id| !g.children.contains(id)).collect();
+        let pos = match before {
+            Some(id) => others.iter().position(|l| *l == id),
+            None => Some(others.len()),
+        };
+        if let Some(pos) = pos {
+            let _ = app.run("group.move", json!({"group": dragged.0, "to": pos}));
+        }
+        return;
+    }
+    let _ = app.run("layer.group", json!({"layer": dragged.0, "group": into, "before": before}));
 }
 
 /// A layer row's visibility checkbox, ticked when the layer is shown.

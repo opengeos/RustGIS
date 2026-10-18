@@ -868,6 +868,52 @@ impl Map {
         self.gather_group(gid);
     }
 
+    /// Puts a layer in a group, or out of any (`None`), and in the drawing order just above the
+    /// layer `before` (`None`: below the group's other layers, or at the bottom out of a group).
+    /// In a group, `before` must be one of its layers; out of one, a place between two layers of a
+    /// group moves up past that group.
+    pub fn place_layer(&mut self, layer: u32, group: Option<u32>, before: Option<u32>) -> Result<(), String> {
+        if self.layer_index(layer).is_none() {
+            return Err("no such layer".into());
+        }
+        if before == Some(layer) {
+            return Err("the layer can't go before itself".into());
+        }
+        let others: Vec<u32> = match group {
+            Some(g) => self.group(g).ok_or("no such group")?.children.iter().copied().filter(|c| *c != layer).collect(),
+            None => Vec::new(),
+        };
+        if let Some(b) = before {
+            if self.layer_index(b).is_none() {
+                return Err("no layer to go before".into());
+            }
+            if group.is_some() && !others.contains(&b) {
+                return Err("the layer to go before isn't in the group".into());
+            }
+        }
+        for g in &mut self.groups {
+            g.children.retain(|c| *c != layer);
+        }
+        let Some(from) = self.layer_index(layer) else { return Err("no such layer".into()) };
+        let l = self.layers.remove(from);
+        let mut at = match (before, group) {
+            (Some(b), _) => self.layer_index(b).unwrap_or(self.layers.len()),
+            // Below the group's lowest layer; alone in it, where it was.
+            (None, Some(_)) => self.layers.iter().rposition(|x| others.contains(&x.id)).map_or(from.min(self.layers.len()), |i| i + 1),
+            (None, None) => self.layers.len(),
+        };
+        if group.is_none() {
+            while at > 0 && self.splits_group(at) {
+                at -= 1;
+            }
+        }
+        self.layers.insert(at.min(self.layers.len()), l);
+        if let Some(g) = group.and_then(|g| self.groups.iter_mut().find(|x| x.id == g)) {
+            g.children.push(layer);
+        }
+        Ok(())
+    }
+
     /// Moves a group's children together in the drawing order, at its topmost child, keeping
     /// their order; children with no layer are dropped.
     pub fn gather_group(&mut self, group: u32) {
@@ -913,8 +959,48 @@ impl Map {
             (_, GeometryType::None) => 3,
         };
         let r = rank(&layer);
-        let pos = self.layers.iter().position(|l| rank(l) >= r).unwrap_or(self.layers.len());
+        let mut pos = self.layers.iter().position(|l| rank(l) >= r).unwrap_or(self.layers.len());
+        // Never between two layers of one group: above the group instead.
+        while pos > 0 && self.splits_group(pos) {
+            pos -= 1;
+        }
         self.layers.insert(pos, layer);
+    }
+
+    /// Whether a layer put at `pos` in the drawing order would sit between two layers of one group.
+    fn splits_group(&self, pos: usize) -> bool {
+        let (Some(above), Some(below)) = (pos.checked_sub(1).and_then(|i| self.layers.get(i)), self.layers.get(pos)) else {
+            return false;
+        };
+        self.group_of(above.id).is_some_and(|g| g.children.contains(&below.id))
+    }
+
+    /// Moves the layer at index `from` to index `to` in the drawing order, keeping groups
+    /// together: a group's layer moves only among its group's, and another layer moving into a
+    /// group's run goes past it (above moving up, below moving down).
+    pub fn move_layer(&mut self, from: usize, to: usize) -> Result<(), String> {
+        let id = self.layers.get(from).map(|l| l.id).ok_or("no such layer")?;
+        let to = to.min(self.layers.len().saturating_sub(1));
+        if let Some(g) = self.group_of(id) {
+            let run: Vec<usize> = self.layers.iter().enumerate().filter(|(_, l)| g.children.contains(&l.id)).map(|(i, _)| i).collect();
+            let (lo, hi) = (run.first().copied().unwrap_or(from), run.last().copied().unwrap_or(from));
+            if to < lo || to > hi {
+                return Err("the layer can't move out of its group (take it out of the group first)".into());
+            }
+        }
+        if to == from {
+            return Err("the layer can't move further".into());
+        }
+        let l = self.layers.remove(from);
+        let mut to = to;
+        if self.group_of(id).is_none() {
+            // `to` is now the index the layer goes in at, among the others.
+            while to > 0 && to < self.layers.len() && self.splits_group(to) {
+                if to < from { to -= 1 } else { to += 1 }
+            }
+        }
+        self.layers.insert(to.min(self.layers.len()), l);
+        Ok(())
     }
 
     /// Adds a dataset as a new layer; returns its id.

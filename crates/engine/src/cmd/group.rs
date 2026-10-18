@@ -25,7 +25,7 @@ pub fn commands() -> Vec<C> {
         C::new("group.remove", "Remove Group", "Layers", remove).params(r#"{"group": name|id} (and its layers)"#),
         C::new("layer.group", "Move To Group", "Layers", move_to_group)
             .when(super::need_layer)
-            .params(r#"{"layer"?: name|id (default: the active layer), "group": name|id|null (null takes it out of its group)}"#),
+            .params(r#"{"layer"?: name|id (default: the active layer), "group": name|id|null (null takes it out of its group), "before"?: name|id (the layer it goes just above: one of the group's, or out of a group any other; without it, next to the group's layers, or where it is when taken out)}"#),
     ]
 }
 
@@ -181,6 +181,12 @@ fn move_to_group(s: &mut Session, p: &Value) -> CmdResult {
     if group.is_some() {
         groupable(s, layer)?;
     }
-    s.map_mut().set_group(layer, group);
+    match p.get("before") {
+        Some(v) if !v.is_null() => {
+            let before = s.layer_id(&json!({"layer": v}))?;
+            s.map_mut().place_layer(layer, group, Some(before))?;
+        }
+        _ => s.map_mut().set_group(layer, group),
+    }
     Ok(json!({"layer": layer, "group": group}))
 }

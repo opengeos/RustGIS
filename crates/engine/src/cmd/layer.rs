@@ -1922,7 +1922,7 @@ fn move_layer(s: &mut Session, p: &Value, d: i32) -> CmdResult {
     if j < 0 || j as usize >= m.layers.len() {
         return Err("the layer can't move further".into());
     }
-    m.layers.swap(i, j as usize);
+    m.move_layer(i, j as usize)?;
     Ok(Value::Null)
 }
 
@@ -1937,8 +1937,7 @@ fn move_to(s: &mut Session, p: &Value) -> CmdResult {
     if to == i {
         return Err("the layer is already there".into());
     }
-    let l = m.layers.remove(i);
-    m.layers.insert(to, l);
+    m.move_layer(i, to)?;
     Ok(Value::Null)
 }
 

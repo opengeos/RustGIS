@@ -7021,11 +7021,20 @@ fn layer_groups_hold_related_layers_together() {
     assert_eq!(s.map().group(g).unwrap().children.len(), 2);
     assert!(s.run("layer.group", &json!({"layer": "Countries", "group": "nope"})).is_err());
     assert!(s.run("layer.group", &json!({"layer": "Countries"})).is_err());
+    // A group's layer moves only within it; another layer moves past the group.
+    assert!(s.run("layer.moveDown", &json!({"layer": "Lakes"})).is_err());
+    s.run("layer.moveUp", &json!({"layer": "Lakes"})).unwrap();
+    assert_eq!(names(&s), ["Lakes", "Cities", "Countries", "Rivers"]);
+    assert!(s.run("layer.move", &json!({"layer": "Cities", "to": 3})).is_err());
+    s.run("layer.moveUp", &json!({"layer": "Countries"})).unwrap();
+    assert_eq!(names(&s), ["Countries", "Lakes", "Cities", "Rivers"]);
+    s.run("layer.move", &json!({"layer": "Countries", "to": 1})).unwrap();
+    assert_eq!(names(&s), ["Lakes", "Cities", "Countries", "Rivers"]);
     // The group moves as a whole.
     s.run("group.move", &json!({"group": g, "to": 1})).unwrap();
-    assert_eq!(names(&s), ["Countries", "Cities", "Lakes", "Rivers"]);
+    assert_eq!(names(&s), ["Countries", "Lakes", "Cities", "Rivers"]);
     s.run("group.move", &json!({"group": g, "to": 1e9})).unwrap();
-    assert_eq!(names(&s), ["Countries", "Rivers", "Cities", "Lakes"]);
+    assert_eq!(names(&s), ["Countries", "Rivers", "Lakes", "Cities"]);
     s.run("group.move", &json!({"group": g, "to": 0})).unwrap();
     assert!(s.run("group.move", &json!({"group": g})).is_err());
     // Saved and opened again, with no dataset of its own.
@@ -7084,4 +7093,50 @@ fn hand_edited_layer_groups_open_bounded_and_unambiguous() {
     // Gathered: Lakes moved up under Cities, past Rivers.
     let order: Vec<&str> = m.layers.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(order, ["Cities", "Lakes", "Rivers", "Countries"]);
+}
+
+#[test]
+fn a_new_layer_goes_above_a_group_rather_than_into_it() {
+    let mut s = world();
+    let names = |s: &Session| s.map().layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    // Rivers (lines) over Countries (polygons) in one group: a new polygon layer ranks just above
+    // Countries, which would split the group.
+    s.run("group.add", &json!({"name": "Base", "layers": ["Rivers", "Countries"]})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Rivers", "Countries", "Lakes"]);
+    let square = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}]}"#;
+    s.run("layer.addDataText", &json!({"fileName": "p.geojson", "text": square, "name": "Square"})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Square", "Rivers", "Countries", "Lakes"]);
+}
+
+#[test]
+fn a_layer_drops_into_and_out_of_a_group_at_a_place() {
+    let mut s = world();
+    let names = |s: &Session| s.map().layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    let g = s.run("group.add", &json!({"name": "Water", "layers": ["Rivers", "Lakes"]})).unwrap()["group"].clone();
+    assert_eq!(names(&s), ["Cities", "Rivers", "Lakes", "Countries"]);
+    let members = |s: &Session| {
+        let g = &s.map().groups[0];
+        s.map().layers.iter().filter(|l| g.children.contains(&l.id)).map(|l| l.name.clone()).collect::<Vec<_>>()
+    };
+    let depth = s.undo_depth();
+    // Into the group, between its layers: one step.
+    s.run("layer.group", &json!({"layer": "Countries", "group": g, "before": "Lakes"})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Rivers", "Countries", "Lakes"]);
+    assert_eq!(members(&s), ["Rivers", "Countries", "Lakes"]);
+    assert_eq!(s.undo_depth(), depth + 1);
+    // Out of it, to the top.
+    s.run("layer.group", &json!({"layer": "Rivers", "group": null, "before": "Cities"})).unwrap();
+    assert_eq!(names(&s), ["Rivers", "Cities", "Countries", "Lakes"]);
+    assert_eq!(members(&s), ["Countries", "Lakes"]);
+    // Out of a group to a place inside another group's run: above that group.
+    s.run("layer.group", &json!({"layer": "Cities", "group": g, "before": "Countries"})).unwrap();
+    s.run("layer.group", &json!({"layer": "Cities", "group": null, "before": "Lakes"})).unwrap();
+    assert_eq!(names(&s), ["Rivers", "Cities", "Countries", "Lakes"]);
+    // Out of a group, staying where it is, when no place is given.
+    s.run("layer.group", &json!({"layer": "Lakes", "group": null})).unwrap();
+    assert_eq!(names(&s), ["Rivers", "Cities", "Countries", "Lakes"]);
+    // A place in the group must be one of its layers, and not the layer itself.
+    assert!(s.run("layer.group", &json!({"layer": "Rivers", "group": g, "before": "Cities"})).is_err());
+    assert!(s.run("layer.group", &json!({"layer": "Rivers", "group": null, "before": "Rivers"})).is_err());
+    assert_eq!(members(&s), ["Countries"]);
 }
