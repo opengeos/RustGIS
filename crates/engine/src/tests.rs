@@ -8279,3 +8279,40 @@ fn dem_tiles_mosaic_clip_by_polygon_share_a_stretch_and_report_overviews() {
     let e = s.run("raster.mosaic", &json!({"inputs": ["big", "east"]})).unwrap_err();
     assert!(e.to_string().contains("overview"), "{e}");
 }
+
+/// Project info holds everything an agent needs about the open project in one call: the view's
+/// extent, the active layer, each layer's group, source, extent, definition query and labels,
+/// and the layouts with their map frames; sources lose their passwords, and the options filter
+/// layers by name and leave fields out.
+#[test]
+fn project_info_describes_the_whole_project() {
+    let mut s = world();
+    s.view_size = (1000.0, 600.0);
+    s.run("layer.definitionQuery", &json!({"layer": "Cities", "where": "pop_max > 1000000"})).unwrap();
+    s.run("layout.new", &json!({"name": "Wall map"})).unwrap();
+    if let Some(l) = s.map_mut().layers.iter_mut().find(|l| l.name == "Rivers") {
+        l.dataset.source = Some("postgresql://mapper:hunter2@db.example.com/gis".into());
+    }
+    let info = s.run("info.project", &json!({})).unwrap();
+    assert_eq!(info["unsaved"], true, "{info}");
+    let e = info["extent"].as_array().unwrap();
+    assert!(e.len() == 4 && e[0].as_f64() < e[2].as_f64() && e[1].as_f64() < e[3].as_f64(), "{info}");
+    assert_eq!(info["activeLayer"]["name"], "Countries", "{info}");
+    let layer = |name: &str| info["layers"].as_array().unwrap().iter().find(|l| l["name"] == name).cloned().unwrap();
+    assert_eq!(layer("Cities")["definitionQuery"], "pop_max > 1000000");
+    assert_eq!(layer("Countries")["labels"], "name");
+    assert_eq!(layer("Countries")["extent"][0], -180.0);
+    assert!(layer("Countries")["fields"].as_array().is_some_and(|f| !f.is_empty()));
+    let source = layer("Rivers")["source"].as_str().unwrap().to_string();
+    assert!(source.contains("db.example.com") && !source.contains("hunter2"), "{source}");
+    let layouts = info["layouts"].as_array().unwrap();
+    assert_eq!(layouts.len(), 1, "{info}");
+    assert_eq!(layouts[0]["name"], "Wall map");
+    assert_eq!(layouts[0]["mapFrames"][0]["map"], "World", "{info}");
+
+    let some = s.run("info.project", &json!({"nameFilter": "CIT", "includeFields": false})).unwrap();
+    let layers = some["layers"].as_array().unwrap();
+    assert_eq!(layers.len(), 1, "{some}");
+    assert_eq!(layers[0]["name"], "Cities");
+    assert!(layers[0].get("fields").is_none(), "{some}");
+}

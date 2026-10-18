@@ -190,7 +190,7 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 
 | Tool | What it does |
 | --- | --- |
-| `list_layers` | The map: its layers (name, type, feature count, fields, visibility, selection), its web tile layers (XYZ, WMS, vector tiles), basemap, centre and scale |
+| `list_layers` | The whole project in one call: path and unsaved changes, the view (centre, longitude/latitude extent, scale, projection), the active layer, layers in table-of-contents order (group, type, source, extent, feature count, selection, definition query, renderer, labels, fields, visibility), web tile layers, basemap, tables and layouts with their map frames. `name_filter` keeps the layers and tables whose name holds it; `include_fields: false` leaves fields out |
 | `view_map` | The map as a PNG image, at the current view |
 | `search_commands` | Finds RustGIS commands by words: their ids, ribbon locations and parameters |
 | `run_command` | Runs a command by id with JSON parameters; each run is one undo step. The result names the layers it added (`layersAdded`) and what the command said beside it (`notices`), including any parameters it ignored (`layer.moveDown ignores 'steps' (it reads layer)`) |
