@@ -421,8 +421,8 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
             };
             let k = ElementKind::Colorbar {
                 frame,
-                // Kept only when named: otherwise it follows the map's top visible raster.
-                layer: ps(p, "layer").and(layer),
+                // Kept only when named: otherwise (none, or "") it follows the map's top visible raster.
+                layer: ps(p, "layer").filter(|n| !n.trim().is_empty()).and(layer),
                 title,
                 orientation,
                 ticks: ticks(p).unwrap_or(5),

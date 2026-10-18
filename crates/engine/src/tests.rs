@@ -1329,6 +1329,9 @@ fn layout_colorbars_follow_a_raster() {
         .unwrap()["element"]
         .as_u64()
         .unwrap() as u32;
+    // "" follows the top raster, as in layout.update.
+    let blank = s.run("layout.addElement", &json!({"kind": "colorbar", "layer": " "})).unwrap()["element"].as_u64().unwrap() as u32;
+    assert!(matches!(kind(&s, blank), ElementKind::Colorbar { layer: None, .. }), "{:?}", kind(&s, blank));
     let e = s.project.layouts[0].element(named).unwrap().clone();
     assert!(e.h > e.w, "a vertical bar is tall: {} × {}", e.w, e.h);
     match &e.kind {
