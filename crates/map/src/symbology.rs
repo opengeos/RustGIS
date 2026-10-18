@@ -197,6 +197,15 @@ impl LineStroke {
     }
 }
 
+/// Reads a layer's strokes as the command would leave them: at most [`MAX_STROKES`], each
+/// [`LineStroke::clamped`]. A project file is hostile input, and every stroke is drawn per
+/// feature per frame.
+pub fn de_strokes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<LineStroke>, D::Error> {
+    let mut v: Vec<LineStroke> = Vec::deserialize(d)?;
+    v.truncate(MAX_STROKES);
+    Ok(v.into_iter().map(LineStroke::clamped).collect())
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClassMethod {
     #[default]

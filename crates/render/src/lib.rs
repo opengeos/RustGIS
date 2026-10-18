@@ -687,9 +687,15 @@ impl Ctx<'_> {
         let cyan = paint(SELECTION, 1.0);
         match g {
             Geometry::Line(parts) if !strokes.is_empty() => {
-                // A halo around each stroke, under them all.
-                let halo: Vec<LineStroke> =
-                    strokes.iter().map(|st| LineStroke { color: Some(SELECTION), width: Some(st.resolve(s).1 + 3.0), ..*st }).collect();
+                // A halo around each stroke that shows, under them all.
+                let halo: Vec<LineStroke> = strokes
+                    .iter()
+                    .filter(|st| {
+                        let (c, w) = st.resolve(s);
+                        w > 0.0 && c.a() > 0
+                    })
+                    .map(|st| LineStroke { color: Some(SELECTION), width: Some(st.resolve(s).1 + 3.0), ..*st })
+                    .collect();
                 self.stacked_line(pm, parts, s, &halo);
                 self.stacked_line(pm, parts, s, strokes);
             }
@@ -1954,8 +1960,10 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     let sym = layer.symbol(row);
                     // A feature under a pixel across: blend its coverage into the pixels it touches
                     // (a dense layer seen whole is mostly these, and a path each is slow).
+                    // Not stacked strokes: a splat would draw them unshifted, in one colour.
                     if globe.is_none()
                         && !layer.graphics
+                        && layer.line_strokes.is_empty()
                         && let Some(e) = extents.get(row)
                         && ctx.splat(dest, e, g, &sym)
                     {
@@ -3531,11 +3539,23 @@ mod tests {
         // The casing shows around the core.
         let casing = r.pixmap.pixel(100, 111).unwrap();
         assert_eq!((casing.red(), casing.green(), casing.blue()), (0, 0, 0));
-        // Selected, it still draws offset, with its halo.
+        // Selected, it still draws offset, with its halo; a hidden stroke gets no halo.
+        m.layer_mut(id).unwrap().line_strokes.push(rustgis_map::LineStroke { width: Some(0.0), offset: -20.0, ..Default::default() });
         m.layer_mut(id).unwrap().selection = vec![0];
         let r = render(&mut m, &view).unwrap();
         assert!(is_red(&r, 110));
         assert_eq!(r.pixmap.pixel(100, 100).unwrap(), blank);
+        assert_eq!(r.pixmap.pixel(100, 80).unwrap(), blank, "no halo for the hidden stroke");
+        // A line under a pixel across still draws shifted, not splatted on its centreline.
+        let mut d = Dataset::new("short", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.0005, 0.0)]])), vec![]);
+        let short = m.add_dataset(d);
+        m.layer_mut(id).unwrap().visible = false;
+        m.layer_mut(short).unwrap().line_strokes =
+            vec![rustgis_map::LineStroke { color: Some(red), width: Some(3.0), offset: 10.0, ..Default::default() }];
+        let r = render(&mut m, &view).unwrap();
+        assert_ne!(r.pixmap.pixel(100, 110).unwrap(), blank, "drawn 10 pt to the right");
+        assert_eq!(r.pixmap.pixel(100, 100).unwrap(), blank, "nothing on the centreline");
     }
 
     #[test]
