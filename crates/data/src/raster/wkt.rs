@@ -319,7 +319,8 @@ fn geographic2(g: &Node, top: bool) -> Result<Node, String> {
         let mut datum = Vec::new();
         if let Some(e) = d.child_of(&["ELLIPSOID", "SPHEROID"]) {
             let to_m = factor(e.child_of(&LENGTH_UNIT)).unwrap_or(1.0);
-            let axes = [e.num(0).map(|a| a * to_m), e.num(1)].into_iter().flatten().map(Item::Num);
+            let a = e.num(0).ok_or_else(|| format!("the ellipsoid {} has no semi-major axis", e.title()))?;
+            let axes = std::iter::once(a * to_m).chain(e.num(1)).map(Item::Num);
             datum.push(Item::Node(Node::new("SPHEROID", e.title(), axes)));
         }
         items.push(Item::Node(Node::new("DATUM", d.title(), datum)));
@@ -474,11 +475,12 @@ fn bound(b: Node, depth: usize) -> Result<Node, String> {
             Measure::Length => f.map_or(v, |f| v * f),
             Measure::Angle => f.map_or(v, |f| v * f / (1f64.to_radians() / 3600.0)),
             // PROJ writes a TOWGS84 scale as a factor with no unit (1.000007); EPSG gives parts
-            // per million. (Rounded to a millionth of one: 0.999979511 is -20.489, not
-            // -20.488999999956903.)
+            // per million. Datum scales are within a few hundred ppm of 1, so a unitless value
+            // within 1% of 1 is a factor. (Rounded to a millionth of one: 0.999979511 is -20.489,
+            // not -20.488999999956903.)
             Measure::Scale => match f {
                 Some(f) => (v * f * 1e12).round() / 1e6,
-                None if v.abs() > 0.5 => ((v - 1.0) * 1e12).round() / 1e6,
+                None if (v - 1.0).abs() < 0.01 => ((v - 1.0) * 1e12).round() / 1e6,
                 None => v,
             },
         })
@@ -978,6 +980,12 @@ mod tests {
         assert!(def.proj4.contains("+towgs84=446.448,-125.157,542.06,-0.15,-0.247,-0.842,-20.489"), "{}", def.proj4);
         // A three-parameter shift, in a unit of its own.
         let three = r#"BOUNDCRS[SOURCECRS[GEOGCRS["NAD27",DATUM["North American Datum 1927",ELLIPSOID["Clarke 1866",6378206.4,294.978698213898]],PRIMEM["Greenwich",0],CS[ellipsoidal,2],AXIS["lat",north],AXIS["lon",east],ANGLEUNIT["degree",0.0174532925199433]]],TARGETCRS[GEOGCRS["WGS 84",DATUM["World Geodetic System 1984",ELLIPSOID["WGS 84",6378137,298.257223563]],CS[ellipsoidal,2],AXIS["lat",north],AXIS["lon",east],ANGLEUNIT["degree",0.0174532925199433]]],ABRIDGEDTRANSFORMATION["NAD27 to WGS 84",METHOD["Geocentric translations (geog2D domain)",ID["EPSG",9603]],PARAMETER["X-axis translation",-8,ID["EPSG",8605]],PARAMETER["Y-axis translation",16000,LENGTHUNIT["centimetre",0.01],ID["EPSG",8606]],PARAMETER["Z-axis translation",176,ID["EPSG",8607]]]]"#;
+        // A unitless scale near 1 is PROJ's factor, otherwise parts per million.
+        for (scale, ppm) in [("1.000007", "7"), ("0.6", "0.6"), ("-3", "-3")] {
+            let seven = wkt.replace("0.999979511", scale);
+            let def = crs_from_wkt(&seven).unwrap().custom_def().unwrap();
+            assert!(def.proj4.contains(&format!("0.842,{ppm} ")), "{scale}: {}", def.proj4);
+        }
         let (crs, note) = read_wkt(three).unwrap();
         assert!(note.is_none() && crs.custom_def().is_some_and(|d| d.proj4.contains("+towgs84=-8,160,176 ")), "{:?}", crs.custom_def());
     }
@@ -1000,6 +1008,7 @@ mod tests {
             "GEOGCRS[\"x\",CS[Cartesian,3]]",
             "GEOGCRS[\"x\",ANGLEUNIT[\"grad\",0.015707963267949]]",
             "VERTCRS[\"h\"]",
+            "GEOGCRS[\"x\",DATUM[\"d\",ELLIPSOID[\"e\",\"298.25\"]]]",
         ] {
             assert!(crs_from_wkt(bad).is_err(), "{bad}");
         }
