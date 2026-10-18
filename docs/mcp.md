@@ -75,13 +75,19 @@ starts the relay and shows what an agent needs to connect: the MCP server config
 write files and use the network, without `--yes`. RustGIS remembers the choice and starts the
 relay with the app. The **MCP Relay** command (Help menu, or Command Search with Ctrl+K) starts the
 relay too, without that: attached agents then have the access their `--yes` asks for.
-Under it, **Full access** (off unless you tick it, and remembered) lifts every refusal for
+The relay is off until the box is ticked or that command runs. While it runs, the status bar shows `MCP relay · n attached`,
+where n is the number of authenticated clients. For ten seconds after an attached agent runs a
+tool, the label also names it (`MCP relay · 1 attached · layer.addSample`, in red when it failed);
+hovering shows `Stop MCP relay` and the last call with its parameters, and clicking it stops the
+relay. Agents attached through the relay are told, when they connect, that this is the project you
+have open and that you watch the map change as they work.
+
+Under it, **Full access** (off unless you tick it, for this session only) lifts every refusal for
 agents attached with the relay's own token. They may then also run scripts, tasks and models, and
-install, remove and run plugins: what you could do yourself in RustGIS. While it's on, the status
-bar reads `MCP relay · full access · n attached` in red. Agents the app starts itself keep their
-own grants' rules. The relay is off until the box is ticked or that command runs. While it runs, the status bar shows `MCP relay · n attached`,
-where n is the number of authenticated clients; hovering shows `Stop MCP relay`, and clicking
-it stops the relay.
+install, remove and run plugins: what you could do yourself in RustGIS. It isn't remembered: it's
+off again at the next launch, and when agents are turned off. While it's on, the status bar reads
+`MCP relay · full access · n attached` in red. Agents the app starts itself keep their own grants'
+rules.
 
 ```sh
 rustgis-cli mcp --attach                 # the open app on 127.0.0.1:8767
@@ -176,6 +182,7 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - Parse error after attach: `relay_returns_parse_error_after_attach_and_stays_usable`
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
 - Full access, for the relay's own token only: `relay_full_access_lifts_the_refusals_for_its_own_token_only`
+- The agent's last call, for the status bar: `relay_records_the_agents_last_call`
 - The open project stays the user's: `relay_keeps_project_commands_for_the_user`
 - Timed-out command never runs: `relay_cancels_a_timed_out_command_so_it_never_runs`
 - Stop cleanup: `relay_stop_closes_clients_and_removes_the_token`

@@ -12,8 +12,6 @@ use crate::theme::Tokens;
 
 /// The preference that remembers the choice.
 pub const PREF: &str = "agents_control";
-/// The preference that remembers whether agents have full access.
-pub const FULL_PREF: &str = "agents_full_access";
 
 #[derive(Default)]
 pub struct ConnectState {
@@ -23,8 +21,8 @@ pub struct ConnectState {
     resumed: bool,
     /// Why the relay couldn't start, when it couldn't.
     error: Option<String>,
-    /// Full access, once read from the preferences.
-    full: Option<bool>,
+    /// Full access: ticked for this session only, never remembered, so each launch asks afresh.
+    full: bool,
 }
 
 /// Whether the user lets agents control RustGIS.
@@ -33,9 +31,9 @@ pub fn enabled(app: &RustGisApp) -> bool {
 }
 
 /// Whether agents have full access: no command refused, scripts, tasks, models and plugins
-/// included. Only while agents are on.
+/// included. Only while agents are on, and only once ticked in this session.
 pub fn full_access(app: &RustGisApp) -> bool {
-    enabled(app) && app.connect.full.unwrap_or_else(|| app.services.load_pref.as_ref().and_then(|l| l(FULL_PREF)).as_deref() == Some("on"))
+    enabled(app) && app.connect.full
 }
 
 /// At launch, starts the relay when the user had agents turned on.
@@ -66,6 +64,8 @@ fn resume_on(app: &mut RustGisApp, port: u16) {
 pub(crate) fn stopped(app: &mut RustGisApp) {
     let changed = app.connect.on != Some(false);
     app.connect.on = Some(false);
+    // Agents turned on again start without full access.
+    app.connect.full = false;
     app.connect.error = None;
     if changed && let Some(save) = &app.services.save_pref {
         save(PREF, "off");
@@ -133,13 +133,10 @@ pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
     if on {
         let mut full = full_access(app);
         let hint = tl!(
-            "Agents may also run scripts, tasks and models, and install, remove and run plugins: anything you could do yourself. Turn it on only for an agent you trust with your computer."
+            "Agents may also run scripts, tasks and models, and install, remove and run plugins: anything you could do yourself. Turn it on only for an agent you trust with your computer. It lasts until RustGIS closes or agents are turned off."
         );
         if ui.checkbox(&mut full, tl!("Full access")).on_hover_text(hint).changed() {
-            app.connect.full = Some(full);
-            if let Some(save) = &app.services.save_pref {
-                save(FULL_PREF, if full { "on" } else { "off" });
-            }
+            app.connect.full = full;
             if let Some(relay) = &app.relay {
                 relay.set_full_access(full);
             }
@@ -195,16 +192,21 @@ mod tests {
         let error = app.connect.error.as_ref().unwrap();
         assert!(app.session.notices_since(mark).iter().any(|n| &n.text == error));
     }
-    /// Full access counts only while agents are on, and is read from its own preference.
+    /// Full access counts only while agents are on, is never read from the preferences, and goes
+    /// when agents are turned off.
     #[test]
-    fn full_access_needs_agents_on() {
+    fn full_access_needs_agents_on_and_a_fresh_opt_in() {
         let mut app = RustGisApp::with_sample();
-        app.services.load_pref = Some(Box::new(|key: &str| (key == FULL_PREF).then(|| "on".to_string())));
+        app.services.load_pref = Some(Box::new(|key: &str| (key == PREF || key == "agents_full_access").then(|| "on".to_string())));
+        assert!(enabled(&app) && !full_access(&app), "a launch never restores full access");
+        app.connect.full = true;
+        assert!(full_access(&app));
+        app.connect.on = Some(false);
         assert!(!full_access(&app), "agents are off");
         app.connect.on = Some(true);
-        assert!(full_access(&app));
-        app.connect.full = Some(false);
-        assert!(!full_access(&app));
+        stopped(&mut app);
+        app.connect.on = Some(true);
+        assert!(!full_access(&app), "turning agents off ends full access");
     }
 
     #[test]

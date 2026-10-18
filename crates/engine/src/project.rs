@@ -210,11 +210,71 @@ pub struct GpEnvironment {
 }
 
 /// A model: geoprocessing steps run in order. A parameter value `%n` stands for the output layer
-/// of step n (1-based).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// of step n (1-based). A model drawn in ModelBuilder keeps its `graph` too, which is what runs;
+/// `steps` then holds the same tools in run order, for older versions and web tools.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Model {
     pub name: String,
+    #[serde(default)]
     pub steps: Vec<ModelStep>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<ModelGraph>,
+}
+
+/// A model as ModelBuilder draws it: input, tool and output nodes joined by edges from an output
+/// port to an input port (see `crate::model`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelGraph {
+    #[serde(default)]
+    pub nodes: Vec<ModelNode>,
+    #[serde(default)]
+    pub edges: Vec<ModelEdge>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelNodeKind {
+    /// A layer of the map the model reads.
+    Input,
+    /// A geoprocessing tool.
+    #[default]
+    Tool,
+    /// A result the model keeps, under a name.
+    Output,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelNode {
+    pub id: String,
+    pub kind: ModelNodeKind,
+    /// Where the node sits on the canvas (its top-left corner).
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    /// Input nodes: the layer (or standalone table) by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
+    /// Tool nodes: the tool id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// Tool nodes: parameter values not supplied by an edge.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub params: serde_json::Value,
+    /// Output nodes: the name of the layer the result becomes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// An edge from node `from`'s output port to node `to`'s input port (a tool parameter's name).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelEdge {
+    pub from: String,
+    #[serde(rename = "fromPort", default)]
+    pub from_port: String,
+    pub to: String,
+    #[serde(rename = "toPort", default)]
+    pub to_port: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

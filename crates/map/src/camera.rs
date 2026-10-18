@@ -19,7 +19,7 @@ pub const TAN_HALF_FOV: f64 = 1.0 / 3.0;
 /// it (a sixteenth of the centre's scale) is sky.
 pub const FAR: f64 = 16.0;
 /// The nearest a point can be drawn, as a fraction of the camera's distance from the centre.
-const NEAR: f64 = 0.05;
+pub const NEAR: f64 = 0.05;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Camera {
