@@ -501,7 +501,7 @@ fn web_map_html(m: &Map, title: &str) -> Result<String, String> {
         }
     }
     let c = m.center_lonlat();
-    let bg = css(m.basemap.palette().0);
+    let bg = css(m.palette().0);
     Ok(format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title>
 <style>html,body{{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif}}canvas{{display:block}}

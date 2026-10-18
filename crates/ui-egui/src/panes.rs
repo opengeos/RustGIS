@@ -587,8 +587,9 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             });
         }
         // The basemap row at the bottom of the drawing order, like a desktop GIS (not a layer, so
-        // not while filtering).
-        if view == LayersView::DrawingOrder && !filtering {
+        // not while filtering). The built-in basemaps are the Earth's: on another body, its
+        // basemap is a tile layer, listed above.
+        if view == LayersView::DrawingOrder && !filtering && app.session.map().body().is_earth() {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.add_space(30.0);

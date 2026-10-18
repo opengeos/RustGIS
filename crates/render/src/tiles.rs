@@ -139,7 +139,15 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
         };
         (c.is_finite() && c.y.abs() <= 90.0).then_some(c)
     };
-    let to_merc = |c: Coord| lonlat_to_merc(Coord::new(c.x, c.y.clamp(-MAX_LAT, MAX_LAT)));
+    // Longitudes are unwrapped around the centre's, so a view across the antimeridian is one
+    // stretch of an unwrapped world (the tiles past 180° are world copies) rather than two ends
+    // of it with the strip between the last points sampled on either side left out.
+    let (cx, cy) = (f64::from(w) / 2.0, f64::from(h) / 2.0);
+    let lon0 = to_lonlat(cx, cy).map_or(0.0, |c| c.x);
+    let to_merc = |c: Coord| {
+        let lon = c.x + 360.0 * ((lon0 - c.x) / 360.0).round();
+        lonlat_to_merc(Coord::new(lon, c.y.clamp(-MAX_LAT, MAX_LAT)))
+    };
     // The area in view, from a grid of points, and the detail needed at its centre.
     let mut e = Extent::EMPTY;
     let n = 24;
@@ -153,7 +161,6 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
     if e.is_empty() {
         return out;
     }
-    let (cx, cy) = (f64::from(w) / 2.0, f64::from(h) / 2.0);
     let detail = match (to_lonlat(cx, cy), to_lonlat(cx + 4.0, cy)) {
         (Some(a), Some(b)) => (to_merc(a).x - to_merc(b).x).hypot(to_merc(a).y - to_merc(b).y) / 4.0,
         _ => 0.0,
@@ -292,6 +299,30 @@ mod tests {
         let r = crate::render_complete(&mut m, &view).unwrap();
         assert!(!r.tiles_pending);
         assert_eq!(r.tile_errors.len(), 1, "{:?}", r.tile_errors);
+    }
+
+    /// A view across the antimeridian on the globe draws the tiles on both sides of it: the
+    /// mosaic once ran from the westernmost point sampled east of 180° to the easternmost west
+    /// of it, and left out the strip between 180° and the nearest sample (#223).
+    #[test]
+    fn the_globe_draws_tiles_across_the_antimeridian() {
+        serve();
+        let mut m = Map::new("Map");
+        m.graticule = false;
+        m.projection = Projection::Globe;
+        m.tiles.push(TileLayer::new("Red", TileKind::Raster, "https://tiles.test/red/{z}/{x}/{y}.png"));
+        for lon in [175.0, 179.5, -178.0] {
+            let camera = Camera { center: lonlat_to_merc(Coord::new(lon, 0.0)), res: 20_000.0, bearing: 0.0, pitch: 0.0 };
+            let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+            let pm = tiny_skia::Pixmap::decode_png(&crate::render_png(&mut m, &view).unwrap()).unwrap();
+            // The middle of the view, well inside the globe's edge (5° is 28 pixels here).
+            for y in (60..140).step_by(10) {
+                for x in 40..160 {
+                    let p = pm.pixel(x, y).unwrap();
+                    assert!(p.red() > 120 && p.green() < 80 && p.blue() < 80, "centred on {lon}: ({x}, {y}) is {p:?}");
+                }
+            }
+        }
     }
 
     #[test]

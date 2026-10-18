@@ -97,11 +97,6 @@ pub fn basemap(id: &str) -> Option<&'static PlanetBasemap> {
     BASEMAPS.iter().find(|b| b.id == id || b.id.strip_prefix("planet-") == Some(id))
 }
 
-/// Whether a tile layer's catalog id is a planetary basemap's.
-pub fn is_planet_basemap(id: &str) -> bool {
-    BASEMAPS.iter().any(|b| b.id == id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +117,6 @@ mod tests {
         }
         assert_eq!(basemap("mars-hillshade").map(|b| b.body), Some("mars"));
         assert_eq!(basemaps_of("moon").next().map(|b| b.id), Some("planet-moon-hillshaded-albedo"));
-        assert!(is_planet_basemap("planet-titan-cassini") && !is_planet_basemap("usgs-imagery"));
+        assert!(basemap("planet-titan-cassini").is_some() && basemap("usgs-imagery").is_none());
     }
 }

@@ -180,7 +180,7 @@ impl GlobeDrape {
                 painter.image(s.under.id(), sprite_rect, full, Color32::WHITE);
             }
             None => {
-                painter.rect_filled(rect, 0.0, c32(map.basemap.palette().0));
+                painter.rect_filled(rect, 0.0, c32(map.palette().0));
             }
         }
         for mesh in self.meshes(rect, &g) {

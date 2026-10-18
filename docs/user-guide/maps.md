@@ -182,8 +182,8 @@ The basemaps come from [OpenPlanetaryMap](https://www.openplanetary.org/opm) and
 that browsers can't read from another site, and USGS serves its mosaics in lon/lat only, so both
 are read through the opengeos tile service (`tiles.geolibre.app`, shared with GeoLibre), which
 adds what browsers need, reprojects the USGS mosaics and caches the tiles. From scripts:
-`map.body={"name": "mars"}` (`"basemap"` picks another of its basemaps, or `false` keeps the
-current ones) and `map.bodies`.
+`map.body={"name": "mars"}` (`"basemap"` picks another of its basemaps, or `false` adds none, still
+taking other bodies' basemaps off) and `map.bodies`.
 
 ### Worldview
 

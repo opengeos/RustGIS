@@ -1190,6 +1190,19 @@ impl Map {
         rustgis_geom::Body::get(&self.body)
     }
 
+    /// The built-in basemap's (background, land, land outline, graticule) colours. The world
+    /// outline is the Earth's, so on another body the background is plain: the land's grey, with
+    /// no land drawn on it (#223).
+    pub fn palette(&self) -> (Rgba, Rgba, Rgba, Rgba) {
+        let (water, land, outline, grat) = self.basemap.palette();
+        if self.body().is_earth() {
+            return (water, land, outline, grat);
+        }
+        let l = ((u16::from(land.r()) * 3 + u16::from(land.g()) * 6 + u16::from(land.b())) / 10) as u8;
+        let grey = Rgba::rgb(l, l, l);
+        (grey, grey, Rgba::new(0, 0, 0, 0), grat)
+    }
+
     /// Ground metres on the map's body per map unit at a point in map coordinates.
     pub fn ground_per_unit(&self, at: Coord) -> f64 {
         self.flat().ground_per_unit(at) * self.body().ratio()

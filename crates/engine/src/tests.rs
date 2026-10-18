@@ -8553,13 +8553,18 @@ fn celestial_bodies_set_the_basemap_and_the_measurements() {
     let ids: Vec<&str> = tiles.as_array().unwrap().iter().filter_map(|t| t["id"].as_str()).collect();
     assert_eq!(ids, ["planet-mars-viking-mdim21"]);
     assert!(s.map().tiles.first().is_some_and(|t| t.tms));
+    // The built-in basemap's Earth land isn't drawn on Mars: a plain background under its tiles.
+    let (background, land, ..) = s.map().palette();
+    assert_eq!(background, land);
     // A quarter of Mars' equator, and the scale of a smaller world.
     let on_mars = earth(&mut s);
     let k = rustgis_geom::Body::get("mars").ratio();
     assert!((on_mars / on_earth - k).abs() < 1e-9 && (on_mars - std::f64::consts::FRAC_PI_2 * 3_389_526.7).abs() < 1.0, "{on_mars}");
     assert!((s.map().scale() / earth_scale - k).abs() < 1e-9);
     let area = s.run("raster.measure", &json!({"kind": "area", "points": [[0, 0], [1, 0], [1, 1]]})).unwrap();
+    // Leaving Mars without a new basemap still takes Mars' off.
     s.run("map.body", &json!({"name": "earth", "basemap": false})).unwrap();
+    assert!(s.map().tiles.is_empty());
     let earth_area = s.run("raster.measure", &json!({"kind": "area", "points": [[0, 0], [1, 0], [1, 1]]})).unwrap();
     let ratio = area["squareMetres"].as_f64().unwrap() / earth_area["squareMetres"].as_f64().unwrap();
     assert!((ratio - k * k).abs() < 1e-9, "{ratio}");

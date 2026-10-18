@@ -1181,7 +1181,7 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
 /// The colours of a tilted view's sky (at the top) and of the fog it fades into at the
 /// horizon, from the basemap.
 pub fn tilt_sky(map: &Map) -> (Rgba, Rgba) {
-    let (water, land, _, _) = map.basemap.palette();
+    let (water, land, _, _) = map.palette();
     let white = Rgba::rgb(0xFF, 0xFF, 0xFF);
     let sky = water.lerp(white, 0.35);
     (sky, sky.lerp(land, 0.5).lerp(white, 0.3))
@@ -1697,7 +1697,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     };
 
     // Basemap.
-    let (water, land, outline, grat) = map.basemap.palette();
+    let (water, land, outline, grat) = map.palette();
     match &globe {
         Some(g) => globe_backdrop(&mut pm, g, water, space(view, map), view.pixels_per_point as f32),
         None if !gpu => pm.fill(tiny_skia::Color::from_rgba8(water.r(), water.g(), water.b(), 255)),
