@@ -726,6 +726,20 @@ fn mcp_list_layers_filters_by_name_and_drops_fields() {
     assert!(layers[0].get("fields").is_none(), "{text}");
 }
 
+/// Only the desktop relay, where the session is the user's open project, tells the agent the
+/// user is watching.
+#[test]
+fn mcp_tells_relay_agents_the_user_is_watching() {
+    let mut s = sample();
+    let private = rpc(&mcp::Server::default(), &mut s, "initialize", json!({}));
+    let text = private["instructions"].as_str().unwrap();
+    assert!(text.contains("list_layers") && !text.contains("watch"), "{text}");
+    let relay = mcp::Server { users_project: true, ..mcp::Server::default() };
+    let live = rpc(&relay, &mut s, "initialize", json!({}));
+    let text = live["instructions"].as_str().unwrap();
+    assert!(text.starts_with(private["instructions"].as_str().unwrap()) && text.contains("watch the map"), "{text}");
+}
+
 /// `run` runs a script in one call and one undo step, and answers with the last command's
 /// result and the layers the script added.
 #[test]

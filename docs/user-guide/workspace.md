@@ -56,7 +56,7 @@ Tools for working across maps and views, and for setting up the app the way you 
 - **Start-up**: **Settings › Start-up** sets what RustGIS opens with: **Start With** the World Atlas
   sample or a blank map, or, in the desktop app, **Last Project** (the `.rgis` project last opened
   or saved) or **Choose Project…** (one you pick once), the **Projection** the map opens in (a
-  preset or a supported projected EPSG code, such as `3010`), and the **Extent** it opens on (the
+  preset or a supported projected EPSG or ESRI code, such as `3010` or `ESRI:102033`), and the **Extent** it opens on (the
   full extent, or **Use Current View** to keep the view you are looking at). A project opened at
   start keeps its own projection and view; the Projection and Extent settings apply to the sample
   and a blank map. If the project no longer opens (moved or deleted), RustGIS starts with the sample

@@ -1,11 +1,11 @@
-//! World map projections computed here, on a sphere of the WGS 84 equatorial radius: Robinson,
-//! Equal Earth, Natural Earth, Winkel Tripel and Eckert IV.
+//! World map projections computed here, on a sphere (of the WGS 84 equatorial radius unless the
+//! definition gives `+R`): Robinson, Equal Earth, Natural Earth, Winkel Tripel and Eckert IV.
 //!
 //! The forward formulas follow the projections' published definitions. Inverses use Newton's
 //! method on the forward formula, which also rejects points outside the map's outline (no
 //! longitude/latitude maps to them).
 
-use rustgis_geom::{Coord, MERCATOR_R};
+use rustgis_geom::Coord;
 
 /// A world projection (PROJ names: `robin`, `eqearth`, `natearth`, `wintri`, `eck4`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,6 +148,8 @@ pub struct World {
     pub kind: Kind,
     /// Central meridian, degrees.
     pub lon0: f64,
+    /// The sphere's radius, metres.
+    pub radius: f64,
 }
 
 impl World {
@@ -162,7 +164,7 @@ impl World {
         let lam = d.to_radians();
         let phi = c.y.clamp(-90.0, 90.0).to_radians();
         let (x, y) = unit_forward(self.kind, lam, phi);
-        let out = Coord::new(x * MERCATOR_R, y * MERCATOR_R);
+        let out = Coord::new(x * self.radius, y * self.radius);
         out.is_finite().then_some(out)
     }
 
@@ -171,7 +173,7 @@ impl World {
         if !m.is_finite() {
             return None;
         }
-        let (tx, ty) = (m.x / MERCATOR_R, m.y / MERCATOR_R);
+        let (tx, ty) = (m.x / self.radius, m.y / self.radius);
         let (pi, half) = (std::f64::consts::PI, std::f64::consts::FRAC_PI_2);
         let (mut lam, mut phi) = ((tx / 0.85).clamp(-pi, pi), (ty / 1.2).clamp(-half, half));
         let h = 1e-7;
@@ -208,11 +210,12 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustgis_geom::MERCATOR_R;
 
     #[test]
     fn round_trips_and_outlines() {
         for kind in [Kind::Robinson, Kind::EqualEarth, Kind::NaturalEarth, Kind::WinkelTripel, Kind::EckertIV] {
-            let w = World { kind, lon0: 0.0 };
+            let w = World { kind, lon0: 0.0, radius: MERCATOR_R };
             for (lon, lat) in [(0.0, 0.0), (10.0, 50.0), (-120.0, -35.0), (179.0, 80.0), (-60.0, 10.0)] {
                 let m = w.forward(Coord::new(lon, lat)).unwrap();
                 let back = w.inverse(m).unwrap_or_else(|| panic!("{kind:?} {lon},{lat}"));
@@ -225,11 +228,11 @@ mod tests {
             assert!(w.inverse(Coord::new(f64::NAN, 0.0)).is_none());
         }
         // Robinson's published scale: the equator is 0.8487·2πR long.
-        let r = World { kind: Kind::Robinson, lon0: 0.0 };
+        let r = World { kind: Kind::Robinson, lon0: 0.0, radius: MERCATOR_R };
         let x = r.forward(Coord::new(180.0, 0.0)).unwrap().x;
         assert!((x / (0.8487 * std::f64::consts::PI * MERCATOR_R) - 1.0).abs() < 1e-9);
         // A central meridian shifts the map.
-        let shifted = World { kind: Kind::EqualEarth, lon0: 150.0 };
+        let shifted = World { kind: Kind::EqualEarth, lon0: 150.0, radius: MERCATOR_R };
         assert!(shifted.forward(Coord::new(150.0, 0.0)).unwrap().x.abs() < 1e-6);
     }
 }

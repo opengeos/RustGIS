@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use rustgis_data::{GeometryType, photo};
-use rustgis_map::symbology::{ClassRef, ClassStyle, MAX_STROKES};
+use rustgis_map::symbology::{ClassRef, ClassStyle, LABEL_SIZE, MAX_STROKES};
 use rustgis_map::{ClassMethod, LineCap, LineJoin, LineStroke, Marker, Ramp, Renderer, Rgba};
 use serde_json::{Value, json};
 
@@ -211,7 +211,7 @@ pub fn commands() -> Vec<C> {
         }).params(r#"{"layer"?, "field": name}"#)
         .when(need_feature_layer),
         C::new("labels.style", "Text Symbol", "Style › Text Symbol", |s, p| {
-            let size = f(p, "size").map(|v| v.clamp(4.0, 72.0) as f32);
+            let size = f(p, "size").map(|v| v.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32);
             let color = s.get_color(p, "color")?;
             let (halo, bold) = (b(p, "halo"), b(p, "bold"));
             with(s, p, |l| {

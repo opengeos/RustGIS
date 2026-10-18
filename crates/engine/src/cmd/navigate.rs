@@ -101,7 +101,7 @@ pub fn commands() -> Vec<C> {
             }
             Ok(out)
         })
-        .params(r#"{"type"?: "mercator"|"globe"|preset id|"EPSG:<code>" (toggles the globe when omitted)}"#),
+        .params(r#"{"type"?: "mercator"|"globe"|preset id|"EPSG:<code>"|"ESRI:<code>" (toggles the globe when omitted)}"#),
         C::new("map.projections", "Projections", "View › View", |_, _| {
             let mut v = vec![json!({"id": "mercator", "label": "Web Mercator"}), json!({"id": "globe", "label": "Globe"})];
             v.extend(rustgis_map::projection::PRESETS.iter().map(|(id, label, _)| json!({"id": id, "label": label})));

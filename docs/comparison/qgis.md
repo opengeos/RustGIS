@@ -152,7 +152,7 @@ Most QGIS ideas have a counterpart under a different name:
 | Layers panel | Layers pane (left) |
 | Browser panel, Data Source Manager | Catalog pane, **Home › Add Data**, the Data Sources pane |
 | Processing Toolbox | Geoprocessing pane (**Analyze › Tools**), or Command Search (++ctrl+k++) |
-| Graphical Modeler | ModelBuilder, which can also build a model from your history |
+| Graphical Modeler | ModelBuilder: a node canvas of inputs, tools and outputs, which can also build a model from your history |
 | `qgis_process` | `rustgis-cli run --cmd 'gp.run={…}'` |
 | Python console, PyQGIS | The Script pane and notebooks inside the app; the `rustgis` Python package outside it |
 | Layer Styling panel | **Style** tab and the Symbology pane |
