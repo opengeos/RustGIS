@@ -338,6 +338,10 @@ pub struct Session {
     pub(crate) started: Vec<(u64, rustgis_geolibre::Job, serde_json::Value, u64)>,
     /// Plugin tool runs started and not yet complete (`gp::plugin_start`).
     pub(crate) plugin_runs: Vec<cmd::gp::StartedRun>,
+    /// Plugins' panels, by plugin id: the widgets' values and what the plugin last said about
+    /// them (it keeps nothing between calls). Not saved with the project: a plugin's state
+    /// command reads what it needs from the map when the panel opens.
+    pub plugin_panels: std::collections::BTreeMap<String, rustgis_plugins::PanelState>,
     /// Data downloads of this project under way (Add Data › From URL), by id.
     downloading: Vec<u64>,
     /// Downloads that landed, waiting for `layer.addDownload`.
@@ -459,6 +463,7 @@ impl Session {
             #[cfg(feature = "geolibre")]
             started: Vec::new(),
             plugin_runs: Vec::new(),
+            plugin_panels: std::collections::BTreeMap::new(),
             downloading: Vec::new(),
             downloaded: Vec::new(),
             url_requests: Vec::new(),
