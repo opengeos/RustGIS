@@ -757,7 +757,7 @@ mod native {
     /// it was made (the layer's address, or one its style or TileJSON chose, checked in
     /// `source::resolve`); each redirect is checked here.
     pub(super) fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
-        get_detailed(agent, url).map_err(|f| f.message)
+        fetch_answer(agent, url, false).map_err(|f| f.message)
     }
 
     /// The User-Agent every request goes with.
@@ -795,10 +795,12 @@ mod native {
 
     /// [`get`], telling what is known of a failure.
     pub(super) fn get_detailed(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, Failure> {
-        fetch_answer(agent, url).map_err(|f| Failure { url: url.to_string(), ..f })
+        fetch_answer(agent, url, true).map_err(|f| Failure { url: url.to_string(), ..f })
     }
 
-    fn fetch_answer(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, Failure> {
+    /// The answer to `url`; a refusal keeps the server's answer only when `detail` asks for it,
+    /// as tiles a server doesn't have are routine and only their status is read.
+    fn fetch_answer(agent: &ureq::Agent, url: &str, detail: bool) -> Result<Vec<u8>, Failure> {
         use std::io::Read;
         if crate::mbtiles::is_tile(url) {
             return crate::mbtiles::read_local(url).map_err(Failure::from);
@@ -836,8 +838,13 @@ mod native {
             }
             // An error status is answered, not failed: its headers and body say who refused.
             let mut resp = req.config().http_status_as_error(false).build().call().map_err(unanswered)?;
-            if resp.status().as_u16() >= 400 {
-                return Err(refused(&mut resp));
+            let status = resp.status().as_u16();
+            if status >= 400 {
+                return Err(if detail {
+                    refused(&mut resp)
+                } else {
+                    Failure::without_answer("", format!("http status: {status}"), Reason::Status(status))
+                });
             }
             if !resp.status().is_redirection() {
                 break resp;
