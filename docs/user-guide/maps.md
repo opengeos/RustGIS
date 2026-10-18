@@ -267,5 +267,7 @@ view effects and the colour-vision simulator always render on the CPU, and expor
 unaffected — the choice only changes the on-screen flat map. A turned or tilted map is drawn on
 the GPU too, in perspective with its fog and sky, when everything it shows is drawn there: no
 tiles, rasters, see-through, masked, swiped or blended layers, aggregations, graphics, stacked
-line strokes, extrusions, labels with icons, view effects or colour-vision simulation;
-otherwise it stays on the CPU.
+line strokes, labels with icons, view effects or colour-vision simulation, and extrusions only on
+a tilted map; otherwise it stays on the CPU. Extruded layers stand up on a tilted GPU map with a
+depth buffer, as MapLibre's fill extrusions do, so features that interlock or overlap are drawn
+right.

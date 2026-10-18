@@ -148,10 +148,11 @@ pub struct MapView {
     /// and egui's wgpu render state handed over by the host app.
     pub(crate) gpu_renderer: Option<std::sync::Arc<crate::mapgpu::GpuMapRenderer>>,
     pub(crate) gpu_frame: Option<std::sync::Arc<crate::mapgpu::SceneBuffers>>,
-    /// The map revision a turned or tilted GPU scene was declined for (it couldn't be drawn on
-    /// the GPU: labels with icons, or over the device's limits): until it changes such views stay
-    /// on the CPU, with the tilted map's drape and its settled frame drawn off the UI thread.
-    pub(crate) gpu_turn_declined: Option<u64>,
+    /// The map revision and zoom level a turned or tilted GPU scene was declined at (it couldn't
+    /// be drawn on the GPU: labels with icons, or over the device's limits): until either
+    /// changes such views stay on the CPU, with the tilted map's drape and its settled frame
+    /// drawn off the UI thread.
+    pub(crate) gpu_turn_declined: Option<(u64, i32)>,
     /// The GPU scene's offscreen MSAA target, shared with the paint callback across frames.
     pub(crate) gpu_target: std::sync::Arc<std::sync::Mutex<Option<crate::mapgpu::SceneTarget>>>,
     /// The last side-by-side map's GPU scene (its key, buffers and labels), when the second
@@ -467,7 +468,8 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // The GPU backend draws effect-free flat maps, turned and tilted ones too unless they need
     // pictures drawn on the CPU (tiles, rasters…): it re-renders on every change (no
     // texture-shift trick — meshes re-project in the vertex shader).
-    let rev = app.session.revision;
+    // A decline holds at its revision and zoom level (what it shows depends on both).
+    let rev = (app.session.revision, (cam.res.max(1e-9).log2().round()) as i32);
     let turned_view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: cam, sky: true };
     let gpu_ok = app.map.gpu_enabled
         && app.map.render_state.is_some()
@@ -699,7 +701,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             // A turned or tilted scene the GPU couldn't take (over the device's limits) isn't
             // tried again until the map changes.
             if gpu_ok && (cam.bearing != 0.0 || cam.pitch != 0.0) {
-                app.map.gpu_turn_declined = Some(app.session.revision);
+                app.map.gpu_turn_declined = Some(rev);
             }
             app.map.gpu_frame = None;
             let view = View { width: vw, height: vh, pixels_per_point: vppp as f64, camera: cam, sky: true };

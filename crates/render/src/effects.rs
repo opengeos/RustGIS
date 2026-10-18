@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use rustgis_data::{Dataset, Geometry};
 use rustgis_map::effects::{Aggregation, Extrusion};
 use rustgis_map::{Ramp, Rgba, Symbol};
-use tiny_skia::{FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point, SpreadMode, Stroke, Transform};
+use tiny_skia::{FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, PixmapPaint, Point, SpreadMode, Stroke, Transform};
 
 use crate::{Ctx, View, paint};
 
@@ -208,7 +208,7 @@ pub(crate) fn extrusion_metres(ds: &Dataset, x: &Extrusion, row: usize) -> f64 {
 
 /// The light of a tilted view's extrusions, as MapLibre's default: from the view's upper left,
 /// mostly overhead (toward it: right, down the screen and up, in ground px).
-const LIGHT: (f64, f64, f64) = (-0.25, -0.43, 0.87);
+pub const LIGHT: (f64, f64, f64) = (-0.25, -0.43, 0.87);
 
 /// The part of the polygon `pts` (ground px) down the view no farther than `v_max`: what stands
 /// in front of the eye ([`rustgis_map::Camera::near_v`]). Sutherland–Hodgman against one edge.
@@ -420,14 +420,17 @@ pub(crate) fn extrude_tilted(
         pb.finish()
     };
     let px = |p: (f64, f64)| (p.0 as f32 * ppp, p.1 as f32 * ppp);
-    if x.shadows {
-        // Cast on the ground away from the light.
-        let shade = paint(Rgba::new(0, 0, 0, 60), 1.0);
+    if x.shadows
+        && let Some(mut shade_layer) = Pixmap::new(pm.width(), pm.height())
+    {
+        // Cast on the ground away from the light: every piece opaque on a layer of its own, laid
+        // over the map once, so where pieces (or neighbours' shadows) overlap it is no darker.
+        let shade = paint(Rgba::new(0, 0, 0, 255), 1.0);
         for (_, rings, _, up, _, _) in &shapes {
             for q in tilted_shadow_quads(&cam, w, h, rings, *up) {
                 let q: Vec<_> = q.into_iter().map(px).collect();
                 if let Some(p) = path(&q) {
-                    pm.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
+                    shade_layer.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
                 }
             }
             let (du, dv) = shadow_shift(*up);
@@ -435,10 +438,12 @@ pub(crate) fn extrude_tilted(
                 let moved: Vec<_> = r.iter().map(|&(u, v)| (u + du, v + dv)).collect();
                 let shifted: Option<Vec<_>> = clip_near(&moved, cam.near_v(0.0, h)).into_iter().map(|(u, v)| at(u, v, 0.0)).collect();
                 if let Some(p) = shifted.as_deref().and_then(path) {
-                    pm.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
+                    shade_layer.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
                 }
             }
         }
+        let over = PixmapPaint { opacity: 60.0 / 255.0, ..PixmapPaint::default() };
+        pm.draw_pixmap(0, 0, shade_layer.as_ref(), &over, Transform::identity(), None);
     }
     for (_, rings, holes, up, fogged, row) in &shapes {
         let sym = symbol(*row);
