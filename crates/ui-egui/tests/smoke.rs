@@ -1856,4 +1856,13 @@ fn the_popup_closes_when_its_feature_is_deleted() {
     h.state_mut().run("edit.delete", json!(null)).unwrap();
     h.step();
     assert!(h.state().map.popup.is_none(), "the popup outlived its feature");
+    // Another map in view: a duplicate has the same layer and feature ids, but it's not the
+    // map the popup was opened on.
+    h.state_mut().run("graphics.add", graphics()).unwrap();
+    h.state_mut().run("ui.identify", json!({"lon": -30.0, "lat": -40.0})).unwrap();
+    h.step();
+    assert!(h.state().map.popup.is_some());
+    h.state_mut().run("map.duplicate", json!({})).unwrap();
+    h.step();
+    assert!(h.state().map.popup.is_none(), "the popup stayed on another map");
 }
