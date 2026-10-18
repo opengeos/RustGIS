@@ -408,6 +408,8 @@ fn projected2(p: &Node) -> Result<Node, String> {
     // Axes pointing west or south (South Africa's Lo grids) would be read with the wrong sign, as
     // WKT1 has no way to say so; unless the system is read by its EPSG code. (Polar systems tie
     // their axes to a meridian, which is how WKT1 reads them.)
+    // Axis order isn't read: as with WKT1, coordinates are easting then northing (GIS order),
+    // whatever order the system declares.
     let flipped = p
         .nodes()
         .filter(|a| a.name.eq_ignore_ascii_case("AXIS") && a.child("MERIDIAN").is_none())
@@ -450,6 +452,10 @@ fn projected2(p: &Node) -> Result<Node, String> {
     Ok(Node::new("PROJCS", p.title(), items))
 }
 
+/// The EPSG methods that rotate by the coordinate frame convention: geog2D, geocentric,
+/// time-dependent and time-specific, full matrix, geog3D and geog3D to compound.
+const FRAME_METHODS: [u32; 8] = [9607, 1032, 1056, 1057, 1066, 1133, 1140, 1149];
+
 /// A `BOUNDCRS` (PROJ's form of a WKT1 `TOWGS84`) as its source system with the shift to WGS 84
 /// of its transformation, in metres, arc-seconds and parts per million.
 fn bound(b: Node, depth: usize) -> Result<Node, String> {
@@ -464,8 +470,8 @@ fn bound(b: Node, depth: usize) -> Result<Node, String> {
     let mut crs = wkt1(source.ok_or("the bound coordinate system has no source")?, depth + 1)?;
     let Some(t) = transformation.as_ref() else { return Ok(crs) };
     let method = t.child("METHOD");
-    let frame = method
-        .is_some_and(|m| epsg_id(m).is_some_and(|c| matches!(c, 9607 | 1032 | 9608)) || norm(m.title()).starts_with("COORDINATE_FRAME"));
+    let frame =
+        method.is_some_and(|m| epsg_id(m).is_some_and(|c| FRAME_METHODS.contains(&c)) || norm(m.title()).contains("COORDINATE_FRAME"));
     // EPSG codes of the translations, rotations and scale difference.
     let get = |code: u32, name: &str, measure: Measure| {
         let p = t.nodes().find(|p| p.name.eq_ignore_ascii_case("PARAMETER") && (epsg_id(p) == Some(code) || norm(p.title()) == name))?;
@@ -477,8 +483,9 @@ fn bound(b: Node, depth: usize) -> Result<Node, String> {
             // The scale as a pure number, from its unit (`unity`, `parts per million`). Without
             // one, PROJ's BOUNDCRS writes the factor (1.000007) and EPSG would mean ppm; datum
             // scales are a few hundred ppm at most, so a value within 1% of 1 is the factor (1 +
-            // the difference) and anything else the difference. (Rounded to a millionth of a ppm:
-            // 0.999979511 is -20.489, not -20.488999999956903.)
+            // the difference) and anything else the difference. A unitless ppm value within 1% of 1
+            // (1.0 ppm) is misread as the factor (0 ppm): no writer is known to produce one.
+            // (Rounded to a millionth of a ppm: 0.999979511 is -20.489, not -20.488999999956903.)
             Measure::Scale => {
                 let s = match f {
                     Some(f) => v * f,
@@ -956,9 +963,8 @@ mod tests {
         let lo19 = r#"PROJCRS["Hartebeesthoek94 / Lo19",BASEGEOGCRS["Hartebeesthoek94",DATUM["Hartebeesthoek94",ELLIPSOID["WGS 84",6378137,298.257223563,LENGTHUNIT["metre",1]]],PRIMEM["Greenwich",0,ANGLEUNIT["degree",0.0174532925199433]],ID["EPSG",4148]],CONVERSION["South African Survey Grid zone 19",METHOD["Transverse Mercator",ID["EPSG",9807]],PARAMETER["Latitude of natural origin",0,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8801]],PARAMETER["Longitude of natural origin",19,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8802]],PARAMETER["Scale factor at natural origin",1,SCALEUNIT["unity",1],ID["EPSG",8805]],PARAMETER["False easting",0,LENGTHUNIT["metre",1],ID["EPSG",8806]],PARAMETER["False northing",0,LENGTHUNIT["metre",1],ID["EPSG",8807]]],CS[Cartesian,2],AXIS["westing (Y)",west,ORDER[1],LENGTHUNIT["metre",1]],AXIS["southing (X)",south,ORDER[2],LENGTHUNIT["metre",1]]]"#;
         assert_eq!(crs_from_wkt(lo19), Err("axes pointing west or south aren't supported".into()));
         // By an EPSG code that's known, it's read as that code; by an unknown one, refused.
-        if let Some(crs) = Crs::from_epsg(2048) {
-            assert_eq!(crs_from_wkt(&format!(r#"{},ID["EPSG",2048]]"#, lo19.strip_suffix(']').unwrap())), Ok(crs));
-        }
+        let lo19_code = Crs::from_epsg(2048).unwrap();
+        assert_eq!(crs_from_wkt(&format!(r#"{},ID["EPSG",2048]]"#, lo19.strip_suffix(']').unwrap())), Ok(lo19_code));
         assert!(crs_from_wkt(&format!(r#"{},ID["EPSG",1]]"#, lo19.strip_suffix(']').unwrap())).is_err());
         // Polar axes along meridians are read (EPSG:3413's point south).
         let rows = corpus();
@@ -985,6 +991,14 @@ mod tests {
         );
         let def = crs_from_wkt(&frame).unwrap().custom_def().unwrap();
         assert!(def.proj4.contains("+towgs84=446.448,-125.157,542.06,-0.15,-0.247,-0.842,-20.489"), "{}", def.proj4);
+        // Every coordinate frame method, by its EPSG code, turns the other way; position vector
+        // methods don't.
+        for (code, sign) in FRAME_METHODS.iter().map(|c| (*c, "-")).chain([(9606, ""), (1033, ""), (1037, "")]) {
+            let m =
+                wkt.replace(r#""Position Vector transformation (geog2D domain)",ID["EPSG",9606]"#, &format!(r#""m",ID["EPSG",{code}]"#));
+            let def = crs_from_wkt(&m).unwrap().custom_def().unwrap();
+            assert!(def.proj4.contains(&format!(",{sign}0.15,{sign}0.247,{sign}0.842,")), "{code}: {}", def.proj4);
+        }
         // A three-parameter shift, in a unit of its own.
         let three = r#"BOUNDCRS[SOURCECRS[GEOGCRS["NAD27",DATUM["North American Datum 1927",ELLIPSOID["Clarke 1866",6378206.4,294.978698213898]],PRIMEM["Greenwich",0],CS[ellipsoidal,2],AXIS["lat",north],AXIS["lon",east],ANGLEUNIT["degree",0.0174532925199433]]],TARGETCRS[GEOGCRS["WGS 84",DATUM["World Geodetic System 1984",ELLIPSOID["WGS 84",6378137,298.257223563]],CS[ellipsoidal,2],AXIS["lat",north],AXIS["lon",east],ANGLEUNIT["degree",0.0174532925199433]]],ABRIDGEDTRANSFORMATION["NAD27 to WGS 84",METHOD["Geocentric translations (geog2D domain)",ID["EPSG",9603]],PARAMETER["X-axis translation",-8,ID["EPSG",8605]],PARAMETER["Y-axis translation",16000,LENGTHUNIT["centimetre",0.01],ID["EPSG",8606]],PARAMETER["Z-axis translation",176,ID["EPSG",8607]]]]"#;
         // A unitless scale near 1 is PROJ's factor, otherwise parts per million.
@@ -994,6 +1008,10 @@ mod tests {
             ("-3", "-3"),
             (r#"1.000007,SCALEUNIT["unity",1]"#, "7"),
             (r#"7,SCALEUNIT["parts per million",1E-06]"#, "7"),
+            // The edges of the factor form: within 1% of 1, a factor; past it, ppm.
+            ("0.995", "-5000"),
+            ("1.0", "0"),
+            ("1.02", "1.02"),
         ] {
             let seven = wkt.replace("0.999979511", scale);
             let def = crs_from_wkt(&seven).unwrap().custom_def().unwrap();
