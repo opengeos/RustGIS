@@ -3745,6 +3745,41 @@ fn view_of(s: &mut Session, e: rustgis_geom::Extent) -> crate::render::View {
 }
 
 #[test]
+fn a_refused_edit_of_a_streamed_layer_says_why() {
+    use rustgis_data::{Coord, Dataset, Geometry, GeometryType};
+    let path = grid_fgb("refused", 20);
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": path.display().to_string(), "stream": true})).unwrap();
+    let streamed = r["layer"].as_u64().unwrap() as u32;
+    // Its window read, as drawing does.
+    let v = view_of(&mut s, rustgis_geom::Extent::new(-180.0, -80.0, 180.0, 80.0));
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    let count = |s: &Session| s.map().layer(streamed).unwrap().dataset.features.len();
+    let n = count(&s);
+    assert!(n > 2, "{n}");
+    let mut d = Dataset::new("other", GeometryType::Point, vec![]);
+    d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+    let other = s.map_mut().add_dataset(d);
+    // Refused up front (the streamed layer active), or undone after (another one active): either
+    // way nothing changes, and the reason is said.
+    for active in [streamed, other] {
+        for (id, p) in [("edit.delete", json!(null)), ("edit.cut", json!(null)), ("edit.move", json!({"dx": 1000, "dy": 0}))] {
+            s.active_layer = Some(active);
+            s.map_mut().layer_mut(streamed).unwrap().selection = vec![0, 1];
+            let mark = s.notice_mark();
+            let e = s.run(id, &p).unwrap_err();
+            assert!(e.contains("read in place"), "{id}: {e}");
+            assert_eq!(count(&s), n, "{id}");
+            let said = s.notices_since(mark);
+            assert!(said.iter().any(|x| x.error && x.text == e), "{id}: no notice");
+            // Nothing that says it was done ("Deleted 2 features"): it was undone.
+            assert!(said.iter().all(|x| x.error), "{id}: {said:?}");
+        }
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn large_sources_stream_a_view_at_a_time() {
     let path = grid_fgb("big", 150);
     let mut s = Session::new(Project::default());

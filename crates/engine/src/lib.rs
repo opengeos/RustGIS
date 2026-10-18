@@ -282,7 +282,8 @@ pub struct Session {
     /// (`map.addTiles` with `"view": true`), and the camera then: moved since, the map stays.
     pub style_view: Option<(String, Camera)>,
     pub notices: Vec<Notice>,
-    /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]).
+    /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]),
+    /// less those a failed command withdrew.
     notices_given: u64,
     /// Layer whose attribute table is open.
     pub table_layer: Option<u32>,
@@ -605,7 +606,10 @@ impl Session {
         if mutates && edits_features(id) {
             let target = named.or(active).and_then(|l| self.map().layer(l));
             if let Some(l) = target.filter(|l| l.is_streamed()) {
-                return Err(format!("{label}: {} is read in place from its file; Load All Features (layer.loadAll) to edit it", l.name));
+                // Said, as a failure in `guarded` is: this returns before it (#468).
+                let e = format!("{label}: {} is read in place from its file; Load All Features (layer.loadAll) to edit it", l.name);
+                self.notify(e.clone(), true);
+                return Err(e);
             }
         }
         let res = self.guarded(label, mutates, |s| run(s, params));
@@ -629,6 +633,7 @@ impl Session {
         self.quiet_failure = false;
         // Requests a failed command left for the front end go with its other changes.
         let requests = self.url_requests.len();
+        let said = self.notices_given;
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)))
             .unwrap_or_else(|_| Err(format!("{label} failed unexpectedly; the project was restored")));
         // A command that changed a streamed layer's features or fields (not by reading its
@@ -663,6 +668,13 @@ impl Session {
                 if let Some(c) = counts {
                     self.edit_counts = c;
                 }
+                // What it said it had done ("Deleted 3 features") didn't happen: those notices
+                // go; its errors stay.
+                let new = usize::try_from(self.notices_given.saturating_sub(said)).unwrap_or(usize::MAX).min(self.notices.len());
+                let start = self.notices.len() - new;
+                let errors: Vec<Notice> = self.notices.drain(start..).filter(|n| n.error).collect();
+                self.notices_given -= (new - errors.len()) as u64;
+                self.notices.extend(errors);
             }
             _ => {}
         }
