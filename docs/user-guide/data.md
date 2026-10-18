@@ -20,6 +20,7 @@ Formats](data-formats.md).
 | Geotagged photos (JPEG with EXIF GPS): points with their thumbnails | Yes | No |
 | Through GDAL: File Geodatabase (`.gdb` folder), AutoCAD DWG, MapInfo TAB, OpenStreetMap XML… | Yes (desktop, when GDAL is installed) | No |
 | PostgreSQL/PostGIS databases, read live (large tables a view at a time) | Yes (desktop) | No |
+| MySQL and MariaDB databases, read live (large tables a view at a time) | Yes (desktop) | No |
 | DuckDB databases (`.duckdb`, `.ddb`) and SQL queries | Yes (desktop, when DuckDB is installed) | No |
 | KML, GPX, CSV with WKT geometry | No | Yes (Analyze › Workflows › Data Interop) |
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
@@ -166,6 +167,44 @@ addresses, so a view in it that reaches elsewhere fails rather than reading them
 A query can read any file the app can and fetch any web address, and a database is a file or a
 server, so the [AI Assistant](assistant.md) asks before it runs a query or reads a database, and
 plugins need both the files and network permissions.
+
+## MySQL and MariaDB
+
+**Home › Add Data › Database…** (`layer.addDatabase`) also connects to a MySQL (8 or later) or
+MariaDB (10.2 or later) database and reads its spatial columns live, as it does PostGIS tables:
+RustGIS talks to the server itself, with nothing else to install. The connection is an address,
+`mysql://user@host:3306/database` (or `mariadb://…`); what it leaves out is, as with the
+`mysql` client, `localhost`, port 3306 and your login name. **List Tables**
+(`info.databaseTables`) shows the database's tables and views with a geometry column, and every
+one becomes a layer unless one is chosen (`table`, or `table:column` for one of several geometry
+columns). An address without a database lists the tables of every database but the server's own,
+as `database.table`. The session is read only, and a server asking for a local file (`LOAD DATA
+LOCAL INFILE`) is sent none.
+
+`ssl-mode` in the address's query sets the encryption, as the `mysql` client names it:
+`PREFERRED` (the default) encrypts when the server can and `REQUIRED` always, neither checking
+the server's certificate (and `PREFERRED` connects unencrypted when encrypting fails, so on
+networks you don't trust, a server in the middle could read the password); `VERIFY_IDENTITY` checks the certificate and the host name (against
+`ssl-ca`, a private authority's PEM file, or the web's roots), `VERIFY_CA` the certificate only;
+`DISABLED` turns encryption off:
+
+```sh
+rustgis-cli run --cmd 'layer.addDatabase={"database":"mysql://gis@db.example:3306/city?ssl-mode=VERIFY_IDENTITY","password":"…"}' \
+  --cmd 'share.exportMap={"path":"city.png"}'
+```
+
+Large tables are read a view at a time through the column's spatial index (`MBRIntersects`), and
+a capped view is an evenly spread sample numbered on the server; smaller ones are loaded whole.
+RustGIS converts the geometry to longitude/latitude itself (MariaDB has no `ST_Transform`), from
+the column's SRID (MySQL's per-column SRID, MariaDB's `REF_SYSTEM_ID`) or else its rows'; give
+`"crs"` (such as `EPSG:2263`) for a column whose SRID is 0. A `GEOMETRY` column of mixed types
+becomes a layer per type. Features keep their ids between views from the table's integer primary
+key; a table without one has its rows numbered as read, so theirs can change between views.
+
+The password is kept until RustGIS closes and never written to the project; `MYSQL_PWD` serves
+when you add a table without one, and a project opening sends only a password given in this
+session, as for PostGIS. SQL queries (`layer.addSql`, the SQL pane) don't run on MySQL or MariaDB
+databases.
 
 ## STAC catalogs
 

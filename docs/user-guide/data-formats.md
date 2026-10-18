@@ -172,6 +172,15 @@ server itself: see [PostgreSQL and PostGIS](data.md#postgresql-and-postgis).
 | --- | --- | --- |
 | PostGIS table or view | Add Data › Database… (`layer.addDatabase`) with a libpq connection string or `postgresql://` address | Large tables read a view at a time by their spatial index, others loaded whole. Converted to longitude/latitude by the server; `"crs"` for geometry that doesn't say. A column of mixed types becomes a layer per type. The password is kept for the session only. |
 
+## MySQL and MariaDB
+
+The desktop app reads the spatial columns of a MySQL (8 or later) or MariaDB (10.2 or later)
+database live, talking to the server itself: see [MySQL and MariaDB](data.md#mysql-and-mariadb).
+
+| Source | How to add it | Notes |
+| --- | --- | --- |
+| MySQL or MariaDB table or view | Add Data › Database… (`layer.addDatabase`) with a `mysql://user@host:3306/database` or `mariadb://…` address | Large tables read a view at a time by their spatial index, others loaded whole. Converted to longitude/latitude by RustGIS from the column's SRID; `"crs"` for an SRID of 0. A column of mixed types becomes a layer per type. `ssl-mode` sets the encryption. The password is kept for the session only. |
+
 ## SQL queries and DuckDB databases
 
 With [DuckDB](https://duckdb.org) installed (the `duckdb` program on the `PATH`, DuckDB 1.5 or

@@ -19,6 +19,10 @@ and its limits are listed in `user-guide/data-formats.md`.
 - **SQL:** `layer.addSql` `{"sql": "SELECT … FROM read_parquet('…')"}` runs one DuckDB query
   (DuckDB Spatial's `ST_` functions; PostgreSQL through `"database"`). It needs DuckDB installed on
   the desktop.
+- **Databases:** `layer.addDatabase` `{"database": D, "password"?: P}` adds the tables with
+  geometry of a PostgreSQL/PostGIS connection (`postgres:host=… dbname=…`), a MySQL or MariaDB
+  address (`mysql://user@host:3306/database`) or a `.duckdb` file; `info.databaseTables` lists
+  them first. Desktop only.
 - **Catalogs:** STAC, Overture Maps, Source Cooperative, OpenStreetMap and open-data portals are
   described in `user-guide/data.md`; find their commands with `search_commands` ("stac", "overture",
   "openstreetmap").

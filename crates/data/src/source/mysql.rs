@@ -8,7 +8,7 @@
 //! itself, since MariaDB has no `ST_Transform`. A capped read returns an evenly spread sample,
 //! numbered on the server (window functions: MySQL 8 or MariaDB 10.2 and later), so only the rows
 //! kept cross the network. The session is read only, and a server asking for a local file
-//! (`LOAD DATA LOCAL INFILE`) is sent none.
+//! (`LOAD DATA LOCAL INFILE`) is refused.
 //!
 //! What a server sends is hostile input: geometry is decoded by [`wkb`], reads are bounded by
 //! `LIMIT`, and statements time out.
@@ -210,9 +210,29 @@ fn err(e: mysql::Error) -> DataError {
     }
 }
 
-/// Whether an error means the connection is gone (a server restart, an idle timeout).
+/// Whether an error means the connection went away while it was idle (a server restart, its idle
+/// timeout, a killed session), so the statement is worth running once more on a new one. A
+/// timeout isn't: the statement would only be slow again.
 fn dropped(e: &mysql::Error) -> bool {
-    matches!(e, mysql::Error::IoError(_) | mysql::Error::CodecError(_) | mysql::Error::DriverError(_))
+    use std::io::ErrorKind as K;
+    let gone = |io: &std::io::Error| {
+        matches!(io.kind(), K::BrokenPipe | K::ConnectionReset | K::ConnectionAborted | K::UnexpectedEof | K::NotConnected)
+    };
+    match e {
+        mysql::Error::IoError(io) => gone(io),
+        // The packet codec's own wraps the I/O error.
+        mysql::Error::CodecError(c) => std::error::Error::source(c).and_then(|s| s.downcast_ref::<std::io::Error>()).is_some_and(gone),
+        // MySQL's idle disconnect (ER_CLIENT_INTERACTION_TIMEOUT), MariaDB's killed connection
+        // and a server shutting down.
+        mysql::Error::MySqlError(m) => matches!(m.code, 4031 | 1927 | 1053),
+        _ => false,
+    }
+}
+
+/// Whether a connection can't be used after an error: anything but the server's own answer
+/// leaves the protocol in an unknown state.
+fn broken(e: &mysql::Error) -> bool {
+    dropped(e) || !matches!(e, mysql::Error::MySqlError(_) | mysql::Error::FromValueError(_) | mysql::Error::FromRowError(_))
 }
 
 impl Conn {
@@ -229,7 +249,7 @@ impl Conn {
                 Ok(v) => return Ok(v),
                 Err(e) if attempt == 0 && dropped(&e) => *guard = None,
                 Err(e) => {
-                    if dropped(&e) {
+                    if broken(&e) {
                         *guard = None;
                     }
                     return Err(err(e));
@@ -237,17 +257,6 @@ impl Conn {
             }
         }
         Err(DataError::Format("not connected".into()))
-    }
-
-    /// Runs `f` in a read-only transaction seeing one snapshot of the database.
-    fn snapshot<T>(&self, mut f: impl FnMut(&mut mysql::Transaction<'_>) -> std::result::Result<T, mysql::Error>) -> Result<T> {
-        self.with(|c| {
-            let opts = mysql::TxOpts::default().set_with_consistent_snapshot(true).set_access_mode(Some(mysql::AccessMode::ReadOnly));
-            let mut t = c.start_transaction(opts)?;
-            let r = f(&mut t)?;
-            t.commit()?;
-            Ok(r)
-        })
     }
 }
 
@@ -264,7 +273,12 @@ fn open_client(config: &Config, password: Option<&str>) -> Result<(mysql::Conn, 
         .read_timeout(Some(Duration::from_secs(STATEMENT_TIMEOUT + 30)))
         .write_timeout(Some(Duration::from_secs(STATEMENT_TIMEOUT + 30)))
         // A host named `localhost` would otherwise be reached through the server's socket.
-        .prefer_socket(false);
+        .prefer_socket(false)
+        // A server asking for a local file (`LOAD DATA LOCAL INFILE`) is refused, whatever the
+        // client's default.
+        .local_infile_handler(Some(mysql::LocalInfileHandler::new(|_, _| {
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "RustGIS sends the server no local file"))
+        })));
     let unchecked = mysql::SslOpts::default().with_danger_accept_invalid_certs(true);
     let attempts: Vec<Option<mysql::SslOpts>> = match &config.tls {
         Tls::Disable => vec![None],
@@ -552,6 +566,9 @@ pub struct MysqlSource {
     select: Vec<String>,
     /// Whether the id is the rows' number as read (no key).
     numbered: bool,
+    /// The order rows are numbered in for a sample: the key's, so a sample keeps the same rows
+    /// from one read to the next (none without one).
+    order: String,
     reproject: Reproject,
 }
 
@@ -664,6 +681,7 @@ impl MysqlSource {
                 "no single-column integer key: features are numbered as read, so their ids can change from one read to the next".into(),
             );
         }
+        let order = pk.as_deref().map(|k| format!("ORDER BY t.{}", ident(k))).unwrap_or_default();
         let id = pk.map(|k| ident(&k)).unwrap_or_else(|| "`rustgis rn`".into());
         let mut select = vec![id, wkb];
         select.extend(casts);
@@ -688,6 +706,7 @@ impl MysqlSource {
             constrained,
             select,
             numbered,
+            order,
             reproject,
         };
         src.info.indexed = src.has_index();
@@ -733,7 +752,7 @@ impl MysqlSource {
             // No estimate (a view) or a small one: counted, within the probe's time.
             _ => {
                 let sql =
-                    self.conn.server.timed(&format!("SELECT COUNT(*) FROM {} WHERE {}", t.sql_from(), self.filter(false)), PROBE_TIMEOUT);
+                    self.conn.server.timed(&format!("SELECT COUNT(*) FROM {} WHERE {}", t.sql_from(), self.filter(None)), PROBE_TIMEOUT);
                 self.conn.with(|c| c.query_first::<Option<u64>, _>(sql.as_str())).ok().flatten().flatten()
             }
         }
@@ -746,18 +765,24 @@ impl MysqlSource {
         b.features.iter().filter_map(|f| f.geometry.as_ref()).fold(Extent::EMPTY, |e, g| e.union(&g.extent()))
     }
 
-    /// The `WHERE` condition: a geometry, of the family read, and with `in_extent`, in the extent
-    /// given as the statement's one parameter (a polygon's text, in the column's coordinates).
-    fn filter(&self, in_extent: bool) -> String {
+    /// The `WHERE` condition: a geometry, of the family read, and in `window` (a polygon's text
+    /// from [`box_text`], in the column's coordinates) when given.
+    fn filter(&self, window: Option<&str>) -> String {
         let g = ident(&self.table.column);
         let mut w = format!("{g} IS NOT NULL");
         // A column of no fixed SRID: only the rows in the one read (others would fail the read).
         if !self.constrained && self.raw_srid != 0 {
             w.push_str(&format!(" AND ST_SRID({g}) = {}", self.raw_srid));
         }
-        if in_extent {
-            // The column itself, so its spatial index serves.
-            w.push_str(&format!(" AND MBRIntersects({g}, ST_GeomFromText(?, {}{}))", self.raw_srid, self.conn.server.axis_option()));
+        if let Some(window) = window {
+            // The column itself, so its spatial index serves. The polygon is a literal (numbers
+            // RustGIS wrote): as a statement parameter, MySQL parses it again for every row,
+            // several times slower.
+            w.push_str(&format!(
+                " AND MBRIntersects({g}, ST_GeomFromText('{window}', {}{}))",
+                self.raw_srid,
+                self.conn.server.axis_option()
+            ));
         }
         if let Some(f) = self.family.filter(|_| self.table.declared_family().is_none()) {
             let dim = match f {
@@ -809,8 +834,9 @@ impl MysqlSource {
     }
 }
 
-/// A box in a column's coordinates as a polygon's text (`lonlat`: geographic, held in range and
-/// kept from MySQL's geodesic edges); `None` for an empty or unbounded one.
+/// A box in a column's coordinates as a polygon's text, only finite numbers (it goes into the SQL
+/// as a literal; `lonlat`: geographic, held in range and kept from MySQL's geodesic edges);
+/// `None` for an empty or unbounded one.
 fn box_text(n: &Extent, lonlat: bool) -> Option<String> {
     if n.is_empty() || ![n.min_x, n.min_y, n.max_x, n.max_y].iter().all(|v| v.is_finite()) {
         return None;
@@ -846,31 +872,48 @@ impl FeatureSource for MysqlSource {
             return Ok(out);
         }
         let window = self.native_window(req);
-        let filter = self.filter(window.is_some());
-        let params: Vec<mysql::Value> = window.iter().map(|w| mysql::Value::from(w.as_str())).collect();
-        let params = if params.is_empty() { mysql::Params::Empty } else { mysql::Params::Positional(params) };
+        let filter = self.filter(window.as_deref());
         let from = self.table.sql_from();
-        // Counted first, so a sample keeps every `step`-th row, numbered on the server; both in
-        // one snapshot, so the count is of the rows read.
-        let (matched, step, rows) = self.conn.snapshot(|t| {
-            let n: Option<u64> = t.exec_first(format!("SELECT COUNT(*) FROM {from} WHERE {filter}"), params.clone())?;
-            let matched = n.unwrap_or(0);
-            let step = stride(matched, limit);
-            let cols: Vec<String> = self.select.iter().enumerate().map(|(i, e)| format!("{e} AS c{i}")).collect();
-            let sql = if step <= 1 && !self.numbered {
-                format!("SELECT {} FROM {from} WHERE {filter} LIMIT {limit}", cols.join(", "))
-            } else {
-                // Rows are numbered as they are, and only those kept are converted: the
-                // expressions name the table's columns, which the numbered rows carry.
-                format!(
-                    "SELECT {} FROM (SELECT t.*, ROW_NUMBER() OVER () AS `rustgis rn` FROM {from} t WHERE {filter}) s \
-                     WHERE MOD(`rustgis rn` - 1, {step}) = 0 LIMIT {limit}",
-                    cols.join(", ")
-                )
-            };
-            let rows: Vec<mysql::Row> = t.exec(sql, params.clone())?;
-            Ok((matched, step, rows))
-        })?;
+        let cols: Vec<String> = self.select.iter().enumerate().map(|(i, e)| format!("{e} AS c{i}")).collect();
+        // A sample keeps every `step`-th row, numbered on the server, so only those are converted
+        // (the expressions name the table's columns, which the numbered rows carry) and cross the
+        // network.
+        let numbered = |every: &str| {
+            format!(
+                "SELECT {}, `rustgis total` FROM (SELECT t.*, ROW_NUMBER() OVER ({}) AS `rustgis rn`, {} AS `rustgis total` \
+                 FROM {from} t WHERE {filter}) s WHERE MOD(`rustgis rn` - 1, {every}) = 0 LIMIT {limit}",
+                cols.join(", "),
+                self.order,
+                if window.is_some() { "COUNT(*) OVER ()" } else { "0" },
+            )
+        };
+        let (matched, rows) = if window.is_some() {
+            // A view: counted and numbered in one pass (counting first would scan the view twice,
+            // which doubles its time on MySQL's geographic columns).
+            let sql = numbered(&format!("GREATEST(CEIL(`rustgis total` / {limit}), 1)"));
+            let rows: Vec<mysql::Row> = self.conn.with(|c| c.query(sql.as_str()))?;
+            let total = rows.first().and_then(|r| int_of(at(r, self.select.len()))).and_then(|n| u64::try_from(n).ok());
+            (total.unwrap_or(0), rows)
+        } else {
+            // The whole table: its count is cheap, and a read that keeps every row needs no
+            // numbering. Both in one snapshot, so the count is of the rows read.
+            self.conn.with(|c| {
+                let opts = mysql::TxOpts::default().set_with_consistent_snapshot(true).set_access_mode(Some(mysql::AccessMode::ReadOnly));
+                let mut t = c.start_transaction(opts)?;
+                let n: Option<u64> = t.query_first(format!("SELECT COUNT(*) FROM {from} WHERE {filter}"))?;
+                let matched = n.unwrap_or(0);
+                let step = stride(matched, limit);
+                let sql = if step <= 1 && !self.numbered {
+                    format!("SELECT {} FROM {from} WHERE {filter} LIMIT {limit}", cols.join(", "))
+                } else {
+                    numbered(&step.to_string())
+                };
+                let rows: Vec<mysql::Row> = t.query(sql)?;
+                t.commit()?;
+                Ok((matched, rows))
+            })?
+        };
+        let step = stride(matched, limit);
         out.matched = matched;
         for r in &rows {
             let Some(f) = self.row_feature(r) else {
@@ -1016,7 +1059,9 @@ mod tests {
                 let read = start.elapsed() - opened;
                 let e = i.extent;
                 let q = Extent::new(e.min_x, e.min_y, e.min_x + e.width() / 2.0, e.min_y + e.height() / 2.0);
+                let started = std::time::Instant::now();
                 let part = src.read(&Request { extent: Some(q), limit: 1000 }).unwrap_or_else(|e| panic!("{}: {e}", t.label()));
+                let quarter = started.elapsed();
                 for ft in &part.features {
                     let g = ft.geometry.as_ref().map(|g| g.extent()).unwrap_or(Extent::EMPTY);
                     assert!(g.intersects(&q.padded(0.01, 0.0)), "{}: feature {} outside the request", t.label(), ft.id);
@@ -1026,7 +1071,7 @@ mod tests {
                 ids.dedup();
                 assert_eq!(ids.len(), whole.features.len(), "{}: ids repeat", t.label());
                 println!(
-                    "{:<12} {:<9} {:?} {:>9} rows idx={} crs={} extent=[{:.2} {:.2} {:.2} {:.2}] fields={} all: {} of {} complete={} skipped={} | quarter: {} of {} | open {:?} read {:?} notes={:?}",
+                    "{:<12} {:<9} {:?} {:>9} rows idx={} crs={} extent=[{:.2} {:.2} {:.2} {:.2}] fields={} all: {} of {} complete={} skipped={} | quarter: {} of {} in {:?} | open {:?} read {:?} notes={:?}",
                     t.label(),
                     f.label(),
                     i.geometry_type,
@@ -1044,6 +1089,7 @@ mod tests {
                     whole.skipped,
                     part.features.len(),
                     part.matched,
+                    quarter,
                     opened,
                     read,
                     i.notes

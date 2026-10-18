@@ -28,8 +28,8 @@ script from the command line, a notebook or the AI Assistant.
     GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet, FlatGeobuf, KML, GPX, GeoTIFF and
     cloud-optimised GeoTIFF, web tiles, vector tiles, PMTiles, MBTiles and MapLibre styles, drawn on a 3D
     globe or in any projection, on the desktop and in the browser; STAC catalogs, Overture
-    Maps, OpenStreetMap, open-data portals and S3 buckets; SQL, DuckDB and live PostGIS
-    databases on the desktop.
+    Maps, OpenStreetMap, open-data portals and S3 buckets; SQL, DuckDB and live PostGIS,
+    MySQL and MariaDB databases on the desktop.
     [Data](user-guide/data.md) · [Formats](user-guide/data-formats.md) · [Maps](user-guide/maps.md)
 
 -   **Cartography**
