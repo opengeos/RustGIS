@@ -87,6 +87,17 @@ pub struct LayoutView {
     frame_zoom: Option<(String, u32, f64, (f64, f64), f64)>,
 }
 
+impl LayoutView {
+    /// Forgets the selection and the text typed into its fields: another project replaced the
+    /// one they were for, and its elements may have the same ids.
+    pub(crate) fn forget_project(&mut self) {
+        self.selected = None;
+        self.formatted = None;
+        self.drawn = None;
+        self.typing.clear();
+    }
+}
+
 /// Seconds after the wheel stops before a map frame's zoom is applied.
 const FRAME_ZOOM_SETTLE: f64 = 0.35;
 
@@ -1817,6 +1828,43 @@ mod tests {
         h.state_mut().layout.selected = ids.get(1).copied();
         h.run_steps(2);
         assert_eq!(h.state().ui.right, Some(Format));
+    }
+
+    /// Text being typed when another project opens is for the old one: it never reaches the
+    /// element of the same id in the new one.
+    #[test]
+    fn a_draft_is_dropped_with_its_project() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Drafts"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let title = app.session.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().id;
+        let text = serde_json::to_string(&app.session.project).unwrap();
+        app.layout.selected = Some(title);
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                with_format(app, ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.query_all_by_role(Role::TextInput).find(|n| n.value().as_deref() == Some("Title")).unwrap().focus();
+        h.run_steps(2);
+        h.query_all_by_role(Role::TextInput).find(|n| n.is_focused()).unwrap().type_text("Draft");
+        h.run_steps(2);
+        assert!(!h.state().layout.typing.is_empty(), "being typed");
+        h.state_mut().run("project.openText", json!({"text": text})).unwrap();
+        h.run_steps(2);
+        let app = h.state();
+        assert_eq!(app.session.project.layouts[li].element(title).map(|e| e.name.as_str()), Some("Title"), "the new project's own");
+        assert!(app.layout.typing.is_empty() && app.layout.selected.is_none());
     }
 
     /// Element ids are per layout: opening another layout ends the selection, so Delete or
