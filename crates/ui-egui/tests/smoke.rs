@@ -1830,3 +1830,25 @@ fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
     h.state_mut().run("tool.set", json!({"tool": "graphicText"})).unwrap();
     assert_eq!(h.state().ui.dynamic_text, None);
 }
+
+#[test]
+fn the_popup_closes_when_its_feature_is_deleted() {
+    let mut h = harness();
+    h.step();
+    let graphics = || json!({"shape": "point", "points": [[-30.0, -40.0]]});
+    h.state_mut().run("graphics.add", graphics()).unwrap();
+    h.state_mut().run("ui.identify", json!({"lon": -30.0, "lat": -40.0})).unwrap();
+    h.step();
+    assert!(h.state().map.popup.is_some());
+    // Another feature deleted: the popup stays.
+    h.state_mut().run("graphics.add", json!({"shape": "point", "points": [[30.0, -40.0]]})).unwrap();
+    h.state_mut().run("select.rows", json!({"layer": "Graphics", "rows": [1]})).unwrap();
+    h.state_mut().run("edit.delete", json!(null)).unwrap();
+    h.step();
+    assert!(h.state().map.popup.is_some(), "another feature's deletion leaves it");
+    // Its own feature deleted: it closes.
+    h.state_mut().run("select.rows", json!({"layer": "Graphics", "rows": [0]})).unwrap();
+    h.state_mut().run("edit.delete", json!(null)).unwrap();
+    h.step();
+    assert!(h.state().map.popup.is_none(), "the popup outlived its feature");
+}

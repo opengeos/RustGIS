@@ -102,6 +102,8 @@ pub struct MapView {
     /// The magnifying lens follows the pointer.
     pub magnifier: bool,
     pub popup: Option<Popup>,
+    /// The session revision the popup was last checked against the map at ([`follow_popup`]).
+    popup_rev: u64,
     /// A map or layout waiting for the user to confirm its deletion.
     pub deleting: Option<Deletion>,
     pub pointer_lonlat: Option<Coord>,
@@ -174,6 +176,7 @@ impl Default for MapView {
             vertex_drag: None,
             magnifier: false,
             popup: None,
+            popup_rev: 0,
             deleting: None,
             pointer_lonlat: None,
             menu_lonlat: None,
@@ -1674,7 +1677,43 @@ fn north_arrow(p: &egui::Painter, rect: Rect, t: &Tokens, bearing: f64, pitch: f
     p.text(at(0.0, 11.5), Align2::CENTER_CENTER, "N", semibold(8.5), t.text);
 }
 
+/// Keeps the popup to features still on the map (#465): the ones deleted, undone away or in a
+/// removed layer leave its list, and it closes when the one it shows is gone. Checked once per
+/// change of the session.
+fn follow_popup(app: &mut RustGisApp) {
+    if app.map.popup_rev == app.session.revision {
+        return;
+    }
+    app.map.popup_rev = app.session.revision;
+    let map = app.session.map();
+    let Some(pp) = &mut app.map.popup else { return };
+    let here = |r: &Value| {
+        let Some(id) = r.get("layerId").and_then(Value::as_u64) else { return true };
+        let Some(l) = u32::try_from(id).ok().and_then(|id| map.layer(id)) else { return false };
+        // A streamed layer holds a window of its features: one outside it isn't gone.
+        r["fid"].as_u64().is_none_or(|fid| l.dataset.windowed || l.dataset.features.iter().any(|f| f.id == fid))
+    };
+    let results = pp.info["results"].as_array().cloned().unwrap_or_else(|| vec![pp.info.clone()]);
+    let index = pp.index.min(results.len().saturating_sub(1));
+    if results.get(index).is_none_or(|r| !here(r)) {
+        app.map.popup = None;
+        return;
+    }
+    if results.iter().all(here) {
+        return;
+    }
+    let shown = results.get(index).cloned();
+    let kept: Vec<Value> = results.into_iter().filter(|r| here(r)).collect();
+    let Some(mut info) = kept.first().cloned() else { return };
+    pp.index = shown.and_then(|s| kept.iter().position(|k| *k == s)).unwrap_or(0);
+    if let Value::Object(o) = &mut info {
+        o.insert("results".into(), Value::Array(kept));
+    }
+    pp.info = info;
+}
+
 fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
+    follow_popup(app);
     let Some(pp) = &app.map.popup else { return };
     let t = Tokens::get(ui.ctx());
     let Some(anchor) = lonlat_to_screen(app, rect, pp.at) else { return };
