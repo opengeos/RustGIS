@@ -801,12 +801,12 @@ mod native {
     fn fetch_answer(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, Failure> {
         use std::io::Read;
         if crate::mbtiles::is_tile(url) {
-            return crate::mbtiles::read_local(url);
+            return crate::mbtiles::read_local(url).map_err(Failure::from);
         }
         if let Some(local) = url.strip_prefix(LOCAL) {
             let (path, range) = super::split_range(local);
             let (a, b) = range.ok_or("a local read without a range")?;
-            return crate::pmtiles::read_file(path, a, b - a + 1);
+            return crate::pmtiles::read_file(path, a, b - a + 1).map_err(Failure::from);
         }
         let (url, limit) = super::split_download_limit(url);
         let max = limit.unwrap_or(MAX_BYTES);
@@ -1069,7 +1069,7 @@ mod tests {
             (f.status(), f.firewall(), f.excerpt.as_deref()),
             (Some(403), Some("Cloudflare"), Some("Attention Required! | Cloudflare"))
         );
-        assert_eq!((f.url, f.request_id()), (format!("{base}/MapServer?f=json"), Some("cf-ray a4c9-BOG".to_string())));
+        assert_eq!((f.url.as_str(), f.request_id()), (format!("{base}/MapServer?f=json").as_str(), Some("cf-ray a4c9-BOG".to_string())));
         assert!(f.user_agent.is_some_and(|u| u.starts_with("RustGIS/")));
         assert_eq!(native::get(&agent, &format!("{base}/x")).unwrap_err(), "http status: 403");
         // No server there: unreachable, not an answer.
