@@ -1522,6 +1522,14 @@ mod tests {
         let r = call(&mut client, &relay, &mut s, command(4, "edit.redo", json!({})));
         assert_eq!(r["result"]["isError"], false, "{r}");
         assert_eq!(s.map().layers.len(), layers + 1);
+        // A script can't undo twice past the agent's own step: undo runs alone.
+        call(&mut client, &relay, &mut s, add_sample_call(7));
+        let twice = json!({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": "run", "arguments": {"script": "edit.undo\nedit.undo"}}});
+        let r = call(&mut client, &relay, &mut s, twice);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(s.map().layer_by_name("Streams").is_some(), "the user's step stays");
+        let r = call(&mut client, &relay, &mut s, command(9, "edit.undo", json!({})));
+        assert_eq!(r["result"]["isError"], false, "its own step, alone: {r}");
         // A script can't slip an undo of the user's step through either.
         call(&mut client, &relay, &mut s, undo(5));
         let script =

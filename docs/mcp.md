@@ -106,7 +106,8 @@ are refused, with or without `--yes`. Each agent command is a step in your own u
 named for the agent (`agent 1`, `agent 2`…, in the order they first call, with the relay run, so a
 relay started again doesn't take an earlier run's agent for its own). An agent's `edit.undo`
 and `edit.redo` work only on its own steps: when the step on top is yours (or another agent's),
-they're refused. You can still undo anything. Each agent also has its own active layer: when an
+they're refused, and they run on their own (`run_command`), not inside a `run` script. You can
+still undo anything. Each agent also has its own active layer: when an
 agent selects a layer (`layer.select`, or a command that makes a layer active), your selection in
 the Layers pane stays as it was. From its first call on, the agent's commands that name no layer
 act on its own layer (the one it last left active), whatever you select meanwhile.
