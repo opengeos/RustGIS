@@ -777,10 +777,10 @@ fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
                     }
                 }
                 if let Some(v) = f.attrs.get_mut(fa) {
-                    *v = Value::Float((a / 1e4).round() / 100.0);
+                    *v = Value::Float(a / 1e6);
                 }
                 if let Some(v) = f.attrs.get_mut(fp) {
-                    *v = Value::Float((per / 10.0).round() / 100.0);
+                    *v = Value::Float(per / 1e3);
                 }
             }
         }
@@ -792,7 +792,7 @@ fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
                     _ => 0.0,
                 };
                 if let Some(v) = f.attrs.get_mut(fl) {
-                    *v = Value::Float((len / 10.0).round() / 100.0);
+                    *v = Value::Float(len / 1e3);
                 }
             }
         }
@@ -952,6 +952,27 @@ mod tests {
             let r = crate::run(id, &m, &j(serde_json::json!({"input": "polys", "erase": "polys"})));
             assert!(r.is_ok(), "{id}: {r:?}");
         }
+    }
+
+    /// Calculate Geometry stores full-precision values (#513): rounding to 0.01 km² gave every
+    /// polygon under half a hectare an area of 0, and lines under 5 m a length of 0.
+    #[test]
+    fn calculate_geometry_keeps_small_values() {
+        // A square of about 50 m (0.00045°) at the equator, and one of its sides as a line.
+        let s = 0.00045;
+        let mut polys = Dataset::new("p", GeometryType::Polygon, vec![]);
+        polys.push(Some(sq(0.0, 0.0, s)), vec![]);
+        let mut lines = Dataset::new("l", GeometryType::Polyline, vec![]);
+        lines.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.00002, 0.0)]])), vec![]);
+        let m = Map(HashMap::from([("p".to_string(), polys), ("l".to_string(), lines)]));
+        let p = layer(crate::run("calculateGeometry", &m, &serde_json::json!({"input": "p"})).unwrap());
+        let area = p.value(0, p.field_index("area_km2").unwrap()).as_f64().unwrap();
+        let per = p.value(0, p.field_index("perimeter_km").unwrap()).as_f64().unwrap();
+        assert!((area - 0.0025).abs() < 0.0001, "≈ 50 m × 50 m: {area}");
+        assert!((per - 0.2).abs() < 0.001 && per != 0.2, "≈ 200 m, unrounded: {per}");
+        let l = layer(crate::run("calculateGeometry", &m, &serde_json::json!({"input": "l"})).unwrap());
+        let len = l.value(0, l.field_index("length_km").unwrap()).as_f64().unwrap();
+        assert!((len - 0.00222).abs() < 0.00001, "≈ 2.2 m: {len}");
     }
 
     /// A choice outside the declared ones is an error naming them, never a guess (#406): "meter"

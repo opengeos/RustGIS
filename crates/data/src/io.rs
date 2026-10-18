@@ -1177,6 +1177,8 @@ fn csv_cell(v: &Value) -> String {
     match v {
         Value::Null => String::new(),
         Value::Text(t) if t.starts_with(FORMULA_START) => format!("'{t}"),
+        // The shortest text that reads back as the same number: `Display` rounds to 6 decimals.
+        Value::Float(f) => f.to_string(),
         other => other.to_string(),
     }
 }
@@ -1993,6 +1995,14 @@ mod tests {
         assert_eq!(back.value(0, 2), &Value::Text("-abc".into()));
         assert_eq!(back.value(1, 2), &Value::Text("=x".into()));
         assert_eq!(to_csv(&back).unwrap(), once, "export/import is stable");
+    }
+
+    /// CSV export writes numbers as stored (#513): through `Display` a 0.4 m² area in km² was 0.
+    #[test]
+    fn csv_floats_keep_full_precision() {
+        let (ds, _) = read_csv("v\n0.0000004\n0.002492708\n1\n", "t").unwrap();
+        let out = to_csv(&ds).unwrap();
+        assert_eq!(out, "v\n0.0000004\n0.002492708\n1\n");
     }
 
     #[test]
