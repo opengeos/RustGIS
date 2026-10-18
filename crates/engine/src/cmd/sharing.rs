@@ -155,14 +155,18 @@ pub fn commands() -> Vec<C> {
             .when(need_items)
             .params(r#"{"item"?: id|name (default: the last link chart), "relationship"?: re-share another relationship}"#),
         C::new("locator.find", "Find Place", "Home › Inspect", find).params(r#"{"locator"?: shared item name or *.rgisloc path (default: the last locator), "text": search text, "limit"?: 1..100, "zoom"?: bool (go to the best match)}"#),
-        C::new("model.import", "Import Web Tool", "Analyze › Geoprocessing", |s, p| {
+        C::new("model.import", "Import Model", "Analyze › Geoprocessing", |s, p| {
             let text = super::items::read_text(p)?;
             let v: Value = serde_json::from_str(&text).map_err(|e| format!("not a RustGIS web tool: {e}"))?;
             let name = v["name"].as_str().unwrap_or("Tool").chars().take(200).collect::<String>();
-            let steps = v.get("steps").cloned().ok_or("not a RustGIS web tool (no steps)")?;
+            // A model file (`*.model.json`) holds a graph; a web tool its steps.
+            if let Some(graph) = v.get("graph") {
+                return s.run("model.new", &json!({"name": name, "graph": graph, "imported": true}));
+            }
+            let steps = v.get("steps").cloned().ok_or("not a RustGIS model or web tool (no graph or steps)")?;
             s.run("model.new", &json!({"name": name, "steps": steps, "imported": true}))
         })
-        .params(r#"{"path"?: "*.rgistool", "text"?: tool JSON, "data"?: base64 file}"#),
+        .params(r#"{"path"?: "*.model.json" | "*.rgistool", "text"?: file JSON, "data"?: base64 file}"#),
     ]
 }
 

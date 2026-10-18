@@ -16,6 +16,8 @@ pub struct Dialogs {
     pub a: String,
     pub b: String,
     pub c: String,
+    /// Add/Edit Text's font size, in points: a number, so it can't be mistyped (#457).
+    pub size: f64,
     pub mode: &'static str,
     pub flag: bool,
     pub error: Option<String>,
@@ -108,7 +110,7 @@ impl Dialogs {
             }
             "graphicText" => {
                 self.text = "Text".into();
-                self.c = "14".into();
+                self.size = 14.0;
             }
             "addField" => self.b = "Double".into(),
             "calculateField" => self.a = active.and_then(|l| l.dataset.fields.last()).map(|f| f.name.clone()).unwrap_or_default(),
@@ -259,23 +261,21 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                         }
                     }
                 });
+                // The size in points, within what text graphics draw (#457).
+                let fonts = rustgis_engine::map::graphics::FONT_SIZE;
                 ui.horizontal(|ui| {
                     ui.label(tl!("Size"));
-                    ui.add(egui::TextEdit::singleline(&mut app.dialogs.c).desired_width(50.0));
+                    ui.add(egui::DragValue::new(&mut app.dialogs.size).range(fonts).speed(0.1).suffix(" pt"));
                 });
                 // Editing a placed text: `a` and `b` hold its layer id and row.
                 let editing = app.dialogs.mode == "edit";
                 close = buttons(app, ui, if editing { "Save" } else { "Add" }, |app| {
-                    let size = app.dialogs.c.trim().parse::<f64>().ok().filter(|v| v.is_finite());
                     if editing {
-                        // A mistyped size is said, not replaced: the text keeps the size it has.
-                        let size = size.ok_or_else(|| crate::i18n::fmt("{what} must be a number", &[("what", tl!("Size"))]))?;
                         let (layer, row) = (app.dialogs.a.parse::<u64>().unwrap_or(u64::MAX), app.dialogs.b.parse::<u64>().unwrap_or(u64::MAX));
-                        return app.run("graphics.edit", json!({"layer": layer, "row": row, "text": app.dialogs.text, "fontSize": size})).map(|_| ());
+                        return app.run("graphics.edit", json!({"layer": layer, "row": row, "text": app.dialogs.text, "fontSize": app.dialogs.size})).map(|_| ());
                     }
-                    let size = size.unwrap_or(14.0);
                     let (lon, lat) = (app.dialogs.a.parse::<f64>().unwrap_or(f64::NAN), app.dialogs.b.parse::<f64>().unwrap_or(f64::NAN));
-                    let r = app.run("graphics.add", json!({"shape": "text", "points": [[lon, lat]], "text": app.dialogs.text, "fontSize": size}));
+                    let r = app.run("graphics.add", json!({"shape": "text", "points": [[lon, lat]], "text": app.dialogs.text, "fontSize": app.dialogs.size}));
                     if r.is_ok() && !app.session.keep_tool {
                         app.session.tool = rustgis_engine::Tool::Explore;
                     }

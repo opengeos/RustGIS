@@ -1046,17 +1046,9 @@ fn a_placed_text_is_edited_in_its_dialog() {
     h.state_mut().run("select.rows", json!({"layer": layer, "rows": [first["row"]]})).unwrap();
     h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row})).unwrap();
     let d = &h.state().dialogs;
-    assert_eq!((d.open, d.mode, d.text.as_str(), d.c.as_str()), (Some("graphicText"), "edit", "Second", "14"));
+    assert_eq!((d.open, d.mode, d.text.as_str(), d.size), (Some("graphicText"), "edit", "Second", 14.0));
     h.step();
-    // A mistyped size is said and changes nothing.
-    h.state_mut().dialogs.c = "big".into();
-    h.step();
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").click();
-    h.step();
-    assert_eq!(h.state().dialogs.open, Some("graphicText"));
-    assert!(h.state().dialogs.error.as_deref().is_some_and(|e| e.contains("Size")), "{:?}", h.state().dialogs.error);
-    assert!(!h.state().session.can_undo() || h.state().session.undo_label() != Some("Edit Graphic"));
-    (h.state_mut().dialogs.text, h.state_mut().dialogs.c) = ("Second, edited".into(), "24".into());
+    (h.state_mut().dialogs.text, h.state_mut().dialogs.size) = ("Second, edited".into(), 24.0);
     h.step();
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").click();
     h.step();
@@ -1071,6 +1063,17 @@ fn a_placed_text_is_edited_in_its_dialog() {
     assert_eq!(text(&row), ("Second, edited".into(), 24.0));
     assert_eq!(text(&first["row"]), ("First".into(), 20.0), "the selected text is left alone");
     assert_eq!(s.undo_label(), Some("Edit Graphic"));
+    // The size is kept within what text graphics draw (#457).
+    h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row})).unwrap();
+    h.step();
+    h.state_mut().dialogs.size = 500.0;
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").click();
+    h.step();
+    h.step();
+    assert_eq!(h.state().dialogs.open, None);
+    let ds = &h.state().session.map().layer(layer.as_u64().unwrap() as u32).unwrap().dataset;
+    assert_eq!(graphics::font_size(ds, row.as_u64().unwrap() as usize), 200.0);
     // A row that isn't a text graphic opens nothing.
     assert!(h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": 99})).is_err());
     assert_eq!(h.state().dialogs.open, None);
