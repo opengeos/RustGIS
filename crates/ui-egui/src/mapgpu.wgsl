@@ -52,8 +52,11 @@ struct MeshIn {
 
 @vertex
 fn vs_mesh(in: MeshIn) -> VOut {
-    // Fill vertices have normal = (0,0) and stroke_px = 0: no displacement.
-    let world = vec4f(in.position + in.normal * (in.stroke_px * u_mesh.params.x * 0.5), 0.0, 1.0);
+    // Fill vertices have normal = (0,0) and stroke_px = 0: no displacement. A stroke's width is
+    // pixels, so in perspective it scales by the depth (1 in a flat view), as marker offsets do,
+    // keeping its width on screen as the CPU path's bands about do.
+    let depth = (u_mesh.view_proj * vec4f(in.position, 0.0, 1.0)).w;
+    let world = vec4f(in.position + in.normal * (in.stroke_px * u_mesh.params.x * 0.5 * max(depth, 0.0)), 0.0, 1.0);
     var out: VOut;
     out.clip = u_mesh.view_proj * world;
     out.color = in.color;

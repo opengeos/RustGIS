@@ -1038,17 +1038,7 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
     warp.finish(&mut pm);
     extrusions_tilted(map, view, &mut pm);
     markers_tilted(map, view, &mut pm);
-    // A feature drawn in two bands offers its label twice: the nearer band's (offered first) is
-    // kept. Tile labels (keyed by their place in a band's list) are told apart by their text and
-    // where they land, to a few points.
-    let mut seen = std::collections::HashSet::new();
-    let mut seen_tile = std::collections::HashSet::new();
-    candidates.retain(|c| match c.2.0 {
-        u32::MAX => seen_tile.insert((c.0.text.clone(), (c.0.x / 4.0).round() as i64, (c.0.y / 4.0).round() as i64)),
-        _ => seen.insert(c.2),
-    });
-    raise_labels(map, view, &mut candidates);
-    let placed = place_labels(candidates, Vec::new(), view.width as f32, view.height as f32, false);
+    let placed = place_tilted_labels(map, view, candidates);
     for l in &placed.labels {
         if let Some(icon) = &l.icon {
             draw_icon(&mut pm, icon, view.pixels_per_point as f32);
@@ -1065,7 +1055,7 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
 /// as pictures, icons or extrusions), or the scene isn't plain: the caller draws it on the CPU.
 fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
     use gpu_scene::{CmdClip, DrawCmd, GpuScene, SceneTilt};
-    if map.projection.is_globe() || !map.view.effects.is_none() || map.view.color_vision != rustgis_map::view::ColorVision::Normal {
+    if !gpu_may_turn(map, view) {
         return None;
     }
     let pictures = |cmds: &[DrawCmd]| cmds.iter().any(|c| matches!(c, DrawCmd::Image { .. }));
@@ -1122,15 +1112,7 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
     if !plain {
         return None;
     }
-    // As `render_tilted` places them.
-    let mut seen = std::collections::HashSet::new();
-    let mut seen_tile = std::collections::HashSet::new();
-    candidates.retain(|c| match c.2.0 {
-        u32::MAX => seen_tile.insert((c.0.text.clone(), (c.0.x / 4.0).round() as i64, (c.0.y / 4.0).round() as i64)),
-        _ => seen.insert(c.2),
-    });
-    raise_labels(map, view, &mut candidates);
-    let placed = place_labels(candidates, Vec::new(), view.width as f32, view.height as f32, false);
+    let placed = place_tilted_labels(map, view, candidates);
     if placed.labels.iter().any(|l| l.icon.is_some()) {
         return None;
     }
@@ -1151,6 +1133,50 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
     }
     let unplaced = if map.label_display.show_unplaced { placed.unplaced } else { Vec::new() };
     Some(GpuScene { clear, cmds, labels: placed.labels, unplaced, attribution, tiles_pending, data_pending, tile_errors, tilt, clips })
+}
+
+/// Places the labels a tilted view's bands offered. A feature drawn in two bands offers its
+/// label twice: the nearer band's (offered first) is kept. Tile labels (keyed by their place in a
+/// band's list) are told apart by their text and where they land, to a few points. Extruded
+/// features' labels go up onto their roofs.
+fn place_tilted_labels(map: &Map, view: &View, mut candidates: Vec<Candidate>) -> Placement {
+    let mut seen = std::collections::HashSet::new();
+    let mut seen_tile = std::collections::HashSet::new();
+    candidates.retain(|c| match c.2.0 {
+        u32::MAX => seen_tile.insert((c.0.text.clone(), (c.0.x / 4.0).round() as i64, (c.0.y / 4.0).round() as i64)),
+        _ => seen.insert(c.2),
+    });
+    raise_labels(map, view, &mut candidates);
+    place_labels(candidates, Vec::new(), view.width as f32, view.height as f32, false)
+}
+
+/// Whether a turned or tilted `view` of `map` may be drawn on the GPU ([`gpu_turned`]): only
+/// what the GPU draws itself shows (no tiles, rasters, see-through, masked, swiped or blended
+/// layers, aggregations, graphics or extrusions; no view effects). A cheap check made before
+/// any drawing; labels with icons can still decline the scene once it is drawn.
+pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
+    if map.projection.is_globe()
+        || !map.view.effects.is_none()
+        || map.view.color_vision != rustgis_map::view::ColorVision::Normal
+        || map.tiles.iter().any(|t| t.visible)
+    {
+        return false;
+    }
+    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    let held = map.held_by_group(scale);
+    let faded: std::collections::HashSet<u32> =
+        map.groups.iter().filter(|g| g.transparency > 0.0).flat_map(|g| g.children.iter().copied()).collect();
+    map.layers.iter().filter(|l| l.visible && l.in_scale_range(scale) && !held.contains(&l.id)).all(|l| {
+        l.raster.is_none()
+            && l.opacity() >= 0.999
+            && !faded.contains(&l.id)
+            && l.mask.is_none()
+            && l.blend == rustgis_map::effects::Blend::Normal
+            && map.swipe.is_none_or(|(id, _)| id != l.id)
+            && l.aggregation.is_none()
+            && !l.graphics
+            && l.extrusion.is_none()
+    })
 }
 
 /// The colours of a tilted view's sky (at the top) and of the fog it fades into at the

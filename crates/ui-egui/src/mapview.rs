@@ -148,10 +148,10 @@ pub struct MapView {
     /// and egui's wgpu render state handed over by the host app.
     pub(crate) gpu_renderer: Option<std::sync::Arc<crate::mapgpu::GpuMapRenderer>>,
     pub(crate) gpu_frame: Option<std::sync::Arc<crate::mapgpu::SceneBuffers>>,
-    /// The map revision and streamed-data generation a turned or tilted GPU scene was declined
-    /// for (it needed pictures drawn on the CPU): until either changes such views stay on the
-    /// CPU, with the tilted map's drape and its settled frame drawn off the UI thread.
-    pub(crate) gpu_turn_declined: Option<(u64, u64)>,
+    /// The map revision a turned or tilted GPU scene was declined for (it couldn't be drawn on
+    /// the GPU: labels with icons, or over the device's limits): until it changes such views stay
+    /// on the CPU, with the tilted map's drape and its settled frame drawn off the UI thread.
+    pub(crate) gpu_turn_declined: Option<u64>,
     /// The GPU scene's offscreen MSAA target, shared with the paint callback across frames.
     pub(crate) gpu_target: std::sync::Arc<std::sync::Mutex<Option<crate::mapgpu::SceneTarget>>>,
     /// The last side-by-side map's GPU scene (its key, buffers and labels), when the second
@@ -462,10 +462,13 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // The GPU backend draws effect-free flat maps, turned and tilted ones too unless they need
     // pictures drawn on the CPU (tiles, rasters…): it re-renders on every change (no
     // texture-shift trick — meshes re-project in the vertex shader).
-    let data = (app.session.revision, rustgis_engine::map::source::generation());
+    let rev = app.session.revision;
+    let turned_view = View { width: w, height: h, pixels_per_point: ppp as f64, camera: cam, sky: true };
     let gpu_ok = app.map.gpu_enabled
+        && app.map.render_state.is_some()
         && !globe_view
-        && ((cam.bearing == 0.0 && cam.pitch == 0.0) || app.map.gpu_turn_declined != Some(data))
+        && ((cam.bearing == 0.0 && cam.pitch == 0.0)
+            || (app.map.gpu_turn_declined != Some(rev) && rustgis_engine::render::gpu_may_turn(app.session.map(), &turned_view)))
         && app.session.map().view.effects.is_none()
         && app.session.map().view.color_vision == rustgis_engine::map::view::ColorVision::Normal;
     let draped = if globe_view && moving {
@@ -583,6 +586,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         && cam_only
         && let (Some(gf), Some(rs)) = (&app.map.gpu_frame, &app.map.render_state)
         && !gf.has_images
+        && gf.tilted() == (cam.pitch != 0.0)
     {
         gf.set_camera(&rs.queue, &cam);
         fast_engaged = true;
@@ -648,7 +652,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             // such views stay there until the map or its data change.
             let out = match out {
                 Some(rustgis_engine::render::RenderOutput::Cpu(r)) if cam.bearing != 0.0 || cam.pitch != 0.0 => {
-                    app.map.gpu_turn_declined = Some(data);
+                    app.map.gpu_turn_declined = Some(rev);
                     app.map.gpu_frame = None;
                     show_frame(app, ui.ctx(), r, &view, (w, h), key, time, false);
                     rendered_gpu = true;
@@ -687,6 +691,11 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         // (render_backend's own compatibility guard, or a scene over the device's limits), or
         // no render state arrived yet.
         if !rendered_gpu {
+            // A turned or tilted scene the GPU couldn't take (over the device's limits) isn't
+            // tried again until the map changes.
+            if gpu_ok && (cam.bearing != 0.0 || cam.pitch != 0.0) {
+                app.map.gpu_turn_declined = Some(app.session.revision);
+            }
             app.map.gpu_frame = None;
             let view = View { width: vw, height: vh, pixels_per_point: vppp as f64, camera: cam, sky: true };
             if let Some(r) = rustgis_engine::render::render(app.session.map_mut(), &view) {
