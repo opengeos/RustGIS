@@ -1187,6 +1187,20 @@ fn identify_reports_every_overlapping_feature() {
 }
 
 #[test]
+fn label_size_stays_within_what_text_symbol_shows() {
+    // Style › Text Symbol offers the range `labels.style` accepts (#457): 72 pt is kept, and
+    // anything outside is brought back to the nearest end.
+    let mut s = world();
+    let size = |s: &Session| s.map().layers.iter().find(|l| l.name == "Countries").map(|l| f64::from(l.labels.size));
+    for (given, kept) in [(72.0, 72.0), (100.0, 72.0), (1.0, 4.0)] {
+        s.run("labels.style", &json!({"layer": "Countries", "size": given})).unwrap();
+        assert_eq!(size(&s), Some(kept), "size {given}");
+    }
+    let range = rustgis_map::symbology::LABEL_SIZE;
+    assert_eq!((*range.start(), *range.end()), (4.0, 72.0));
+}
+
+#[test]
 fn label_range_placement_lock_and_convert() {
     use crate::render::View;
     let mut s = world();

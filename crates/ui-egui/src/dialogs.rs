@@ -259,21 +259,22 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                         }
                     }
                 });
+                // The size in points, within what text graphics draw (#457); `c` holds it.
+                let fonts = rustgis_engine::map::graphics::FONT_SIZE;
+                let mut size = app.dialogs.c.trim().parse::<f64>().ok().filter(|v| v.is_finite()).unwrap_or(14.0);
                 ui.horizontal(|ui| {
                     ui.label(tl!("Size"));
-                    ui.add(egui::TextEdit::singleline(&mut app.dialogs.c).desired_width(50.0));
+                    if ui.add(egui::DragValue::new(&mut size).range(fonts).speed(0.1).suffix(" pt")).changed() {
+                        app.dialogs.c = size.to_string();
+                    }
                 });
                 // Editing a placed text: `a` and `b` hold its layer id and row.
                 let editing = app.dialogs.mode == "edit";
                 close = buttons(app, ui, if editing { "Save" } else { "Add" }, |app| {
-                    let size = app.dialogs.c.trim().parse::<f64>().ok().filter(|v| v.is_finite());
                     if editing {
-                        // A mistyped size is said, not replaced: the text keeps the size it has.
-                        let size = size.ok_or_else(|| crate::i18n::fmt("{what} must be a number", &[("what", tl!("Size"))]))?;
                         let (layer, row) = (app.dialogs.a.parse::<u64>().unwrap_or(u64::MAX), app.dialogs.b.parse::<u64>().unwrap_or(u64::MAX));
                         return app.run("graphics.edit", json!({"layer": layer, "row": row, "text": app.dialogs.text, "fontSize": size})).map(|_| ());
                     }
-                    let size = size.unwrap_or(14.0);
                     let (lon, lat) = (app.dialogs.a.parse::<f64>().unwrap_or(f64::NAN), app.dialogs.b.parse::<f64>().unwrap_or(f64::NAN));
                     let r = app.run("graphics.add", json!({"shape": "text", "points": [[lon, lat]], "text": app.dialogs.text, "fontSize": size}));
                     if r.is_ok() && !app.session.keep_tool {
