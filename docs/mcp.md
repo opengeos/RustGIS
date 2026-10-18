@@ -154,7 +154,9 @@ without `rustgis-cli`. Every request needs `Authorization: Bearer <token>`. The 
 and kept in `mcp-http.token` in the settings folder (readable by you only), so a client registered
 with it keeps working across launches; delete the file to make a new one. Requests that name
 another host, or that come from a web page (an `Origin` header), are refused before the token is
-read. Calls go through the same queue, refusals and one-at-a-time rule as the relay's.
+read. Calls go through the same queue, refusals and one-at-a-time rule as the relay's. HTTP clients count
+as agents attached with the relay's own token: they share that agent's access, active layer and
+name in the undo history, and the token lasts across launches where the relay's lasts one run.
 
 `rustgis-cli mcp-register --client claude` registers it with Claude Code (`claude mcp add
 --transport http rustgis-live http://127.0.0.1:8768/mcp --header "Authorization: Bearer …"`), and

@@ -53,8 +53,11 @@ pub fn http_token() -> Result<String, String> {
 /// making the file at the same moment (the app, `mcp-register`) is read back, not raced forever.
 fn token_at(path: &Path) -> Result<String, String> {
     for _ in 0..3 {
-        // A file left empty (a write that never finished) is no token: a new one is made.
-        if std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0) {
+        // A file left empty (a write that never finished, a few seconds ago at least, so not one
+        // another writer is filling now) is no token: a new one is made.
+        let abandoned =
+            |m: &std::fs::Metadata| m.modified().ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > Duration::from_secs(5));
+        if std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0 && abandoned(&m)) {
             let _ = std::fs::remove_file(path);
         }
         if let Ok(meta) = std::fs::symlink_metadata(path) {
@@ -91,11 +94,27 @@ fn token_at(path: &Path) -> Result<String, String> {
                 let _ = std::fs::remove_file(&tmp);
                 continue;
             }
-            // A folder without hard links (FAT, some network mounts): a rename, which a racing
-            // writer could replace, is the best it allows.
+            // A folder without hard links (FAT, some network mounts): the file is made in place
+            // with create-new, also create-if-absent in one step, and what ends up there is read
+            // back, so two writers still agree.
             Err(_) => {
-                std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
-                return Ok(token);
+                let _ = std::fs::remove_file(&tmp);
+                let mut o = std::fs::OpenOptions::new();
+                o.write(true).create_new(true);
+                #[cfg(unix)]
+                std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+                match o.open(path) {
+                    Ok(mut f) => {
+                        f.write_all(format!("{token}\n").as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+                        return Ok(token);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        // Another writer's: let it finish, then read it.
+                        std::thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                    Err(e) => return Err(format!("{}: {e}", path.display())),
+                }
             }
         }
     }
@@ -124,7 +143,8 @@ fn read_token_at(path: &Path, meta: &std::fs::Metadata) -> Result<String, String
 
 impl Relay {
     /// Starts MCP over HTTP on 127.0.0.1:`port` (0 picks one) beside the relay, with the stable
-    /// token ([`http_token`]). It stops with the relay. Returns the port.
+    /// token ([`http_token`]). It stops with the relay. Returns the port: a listener already
+    /// running keeps its own, whatever port is asked. Called from the app's thread only.
     pub fn serve_http(&self, port: u16) -> Result<u16, String> {
         self.serve_http_with(port, http_token()?)
     }
@@ -165,7 +185,9 @@ impl Relay {
                         Ok((mut stream, _)) => {
                             if active.fetch_add(1, SeqCst) >= MAX_HTTP_CONNECTIONS {
                                 active.fetch_sub(1, SeqCst);
-                                // Said, not dropped silently.
+                                // Said, not dropped silently, without letting a stalled peer hold
+                                // up the listener.
+                                let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
                                 respond(
                                     &mut stream,
                                     "503 Service Unavailable",
@@ -326,7 +348,12 @@ fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16, io: Du
     if header("origin").is_some() {
         return respond(&mut out, "403 Forbidden", &[], &problem("requests from web pages are refused"));
     }
-    let given = header("authorization").and_then(|a| a.strip_prefix("Bearer ")).map(str::trim).unwrap_or("");
+    // The scheme's name in any case (RFC 7235), then the token.
+    let given = header("authorization")
+        .and_then(|a| a.split_once(' '))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+        .map(|(_, t)| t.trim())
+        .unwrap_or("");
     if !same_token(given, token) {
         return respond(&mut out, "401 Unauthorized", &[("WWW-Authenticate", "Bearer")], &problem("a valid bearer token is required"));
     }
@@ -602,6 +629,12 @@ mod tests {
         assert_ne!(token_at(&path).unwrap(), first, "deleting the file rotates the token");
         // A file left empty by a write that never finished is replaced, not refused.
         std::fs::write(&path, "").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
         assert_eq!(token_at(&path).unwrap().len(), 32);
     }
 }

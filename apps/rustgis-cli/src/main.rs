@@ -419,6 +419,10 @@ fn mcp_register(args: &[String]) -> Result<(), String> {
         None => default_http_port(),
     };
     let name = opt(args, "--name").unwrap_or("rustgis-live");
+    // Passed to claude as an argument: a name that looks like an option is refused.
+    if name.starts_with('-') || name.trim().is_empty() {
+        return Err(format!("mcp-register --name {name}: expected a name, not an option"));
+    }
     let url = format!("http://127.0.0.1:{port}{HTTP_PATH}");
     let token = http_token()?;
     let header = format!("Authorization: Bearer {token}");
