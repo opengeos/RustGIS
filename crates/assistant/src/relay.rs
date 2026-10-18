@@ -40,14 +40,22 @@ pub const DEFAULT_PORT: u16 = 8767;
 pub const PORT_ENV: &str = "RUSTGIS_MCP_PORT";
 
 /// The port the relay listens on, and `--attach` connects to, unless one is named:
-/// [`PORT_ENV`] when it holds a port number, else [`DEFAULT_PORT`].
-pub fn default_port() -> u16 {
+/// [`PORT_ENV`] when it's set, else [`DEFAULT_PORT`]. A value that isn't a port is an error
+/// naming the variable, not a quiet fall back to the default (which may be another app's).
+pub fn default_port() -> Result<u16, String> {
     port_from(std::env::var(PORT_ENV).ok().as_deref())
 }
 
-/// The port [`PORT_ENV`]'s value names, or [`DEFAULT_PORT`].
-fn port_from(value: Option<&str>) -> u16 {
-    value.and_then(|v| v.trim().parse::<u16>().ok()).filter(|p| *p != 0).unwrap_or(DEFAULT_PORT)
+/// The port [`PORT_ENV`]'s value names, or [`DEFAULT_PORT`] when it's unset or empty.
+fn port_from(value: Option<&str>) -> Result<u16, String> {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        None => Ok(DEFAULT_PORT),
+        Some(v) => v
+            .parse::<u16>()
+            .ok()
+            .filter(|p| *p != 0)
+            .ok_or_else(|| format!("{PORT_ENV}={v} is not a port number (1 to 65535); fix or unset it")),
+    }
 }
 
 /// The shortest and longest a client may ask a request to wait for the app (`timeout_s` in its
@@ -57,6 +65,9 @@ const MAX_WAIT: Duration = Duration::from_secs(600);
 /// A request waiting while the app has run no frame this long gets an early "busy" reply instead
 /// of waiting out its timeout: a modal dialog (a file picker) or a long tool holds the app.
 const BUSY_AFTER: Duration = Duration::from_secs(10);
+/// The error code of that early reply: apart from -32001 (the queue is full, try again soon), so
+/// a client can tell a stalled app from a busy queue.
+const BUSY_CODE: i64 = -32004;
 /// The endpoint file the app publishes for clients and setup scripts ([`Relay::publish_endpoint`]).
 pub const ENDPOINT: &str = "endpoint.json";
 
@@ -1020,7 +1031,7 @@ fn connection(stream: TcpStream, slot: &mut Slot) {
             && state.compare_exchange(PENDING, CANCELLED, SeqCst, SeqCst).is_ok()
         {
             let busy = "RustGIS is busy (a dialog is open, or a long task is running); the request was not run, try again when it is done";
-            if !send_line(&mut output, &error_reply(&id, -32001, busy)) {
+            if !send_line(&mut output, &error_reply(&id, BUSY_CODE, busy)) {
                 return;
             }
             continue;
@@ -1528,11 +1539,11 @@ mod tests {
     /// well before its timeout, and never runs; an app that was merely idle before is not busy.
     #[test]
     fn relay_says_the_app_is_busy_early() {
-        let relay = Relay::bind_with(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::from_secs(30), Duration::from_millis(300)).unwrap();
+        let relay = Relay::bind_with(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::from_secs(30), Duration::from_millis(1500)).unwrap();
         let mut s = sample();
         let layers = s.map().layers.len();
         // Idle before the request: the request wakes the app, which runs it.
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(2000));
         let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
         attach(&mut client, &relay, false);
         writeln!(client, "{}", add_sample_call(1)).unwrap();
@@ -1545,7 +1556,7 @@ mod tests {
         client.flush().unwrap();
         let r = reply(&client);
         assert!(asked.elapsed() < Duration::from_secs(10), "the busy reply took {:?}", asked.elapsed());
-        assert_eq!(r["error"]["code"], -32001, "{r}");
+        assert_eq!(r["error"]["code"], BUSY_CODE, "{r}");
         assert!(r["error"]["message"].as_str().is_some_and(|m| m.contains("busy")), "{r}");
         assert_eq!(relay.poll(&mut s), 0, "a request told the app was busy never runs");
         assert_eq!(s.map().layers.len(), layers + 1);
@@ -1590,10 +1601,12 @@ mod tests {
         relay.stop();
         assert!(!path.exists(), "the endpoint file goes with the relay");
 
-        assert_eq!(port_from(None), DEFAULT_PORT);
-        assert_eq!(port_from(Some(" 9123 ")), 9123);
-        assert_eq!(port_from(Some("0")), DEFAULT_PORT);
-        assert_eq!(port_from(Some("not a port")), DEFAULT_PORT);
+        assert_eq!(port_from(None), Ok(DEFAULT_PORT));
+        assert_eq!(port_from(Some("  ")), Ok(DEFAULT_PORT));
+        assert_eq!(port_from(Some(" 9123 ")), Ok(9123));
+        for bad in ["0", "70000", "not a port"] {
+            assert!(port_from(Some(bad)).is_err_and(|e| e.contains(PORT_ENV)), "{bad}");
+        }
         let taken = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let e = Relay::start(taken.local_addr().unwrap().port()).unwrap_err();
         assert!(e.contains(PORT_ENV), "{e}");

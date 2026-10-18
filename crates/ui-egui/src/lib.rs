@@ -1667,7 +1667,7 @@ impl RustGisApp {
                         .get("port")
                         .and_then(Value::as_u64)
                         .and_then(|n| u16::try_from(n).ok())
-                        .unwrap_or_else(rustgis_assistant::relay::default_port);
+                        .map_or_else(rustgis_assistant::relay::default_port, Ok)?;
                     let relay = rustgis_assistant::relay::Relay::start(port)?;
                     // Where it is, for clients and setup scripts; the relay works without it.
                     if let Err(e) = relay.publish_endpoint() {

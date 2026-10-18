@@ -90,7 +90,8 @@ rustgis-cli mcp --attach --timeout 300   # wait up to 5 minutes for each call (l
 
 The port is 8767 unless the `RUSTGIS_MCP_PORT` environment variable names another, for the app
 and for `--attach` alike (a second copy of RustGIS, or a port another program holds). When the
-port is taken, the relay's error says so and names that variable. While the relay runs, the app
+port is taken, the relay's error says so and names that variable; a value that isn't a port number
+is an error too, not a quiet fall back to 8767. While the relay runs, the app
 publishes `endpoint.json` in the relay's private folder: `schema`, `host`, `port`, `url`, `pid`,
 `started_at`, the app `version`, the `token_file` path (not the token) and the `attach` command.
 Setup scripts can read it instead of hard-coding the port. It's removed when the relay stops.
@@ -164,7 +165,7 @@ removes its file.
   may still complete later.
 - **Busy app.** When the app has drawn no frame for 10 seconds since a request was queued (a file
   dialog is open, or a long tool is running), the request is cancelled at once and the client gets
-  error `-32001` saying RustGIS is busy. It never runs, and the connection stays open. An app that
+  error `-32004` saying RustGIS is busy (apart from the full queue's `-32001`). It never runs, and the connection stays open. An app that
   was only idle before the request isn't busy: the request wakes it.
 - **Stop.** Stopping the relay, or dropping its last owner, closes the listener and every
   client, drops queued messages unrun, and removes the token file. A waiting request ends at

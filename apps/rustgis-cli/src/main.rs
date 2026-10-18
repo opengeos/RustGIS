@@ -348,7 +348,7 @@ fn attach_port(args: &[String]) -> Result<Option<u16>, String> {
     let Some(i) = args.iter().position(|a| a == "--attach") else { return Ok(None) };
     match args.get(i + 1).filter(|a| !a.starts_with("--")) {
         Some(p) => p.parse::<u16>().map(Some).map_err(|_| format!("mcp --attach {p}: expected a port number")),
-        None => Ok(Some(rustgis_assistant::relay::default_port())),
+        None => rustgis_assistant::relay::default_port().map(Some),
     }
 }
 
