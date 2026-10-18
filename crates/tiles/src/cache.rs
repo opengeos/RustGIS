@@ -790,7 +790,7 @@ mod native {
             .collect();
         let mut body = Vec::new();
         let _ = resp.body_mut().as_reader().take(crate::failure::MAX_BODY).read_to_end(&mut body);
-        Failure { user_agent: Some(USER_AGENT.into()), ..Failure::answered("", resp.status().as_u16(), &headers, &body) }
+        Failure::answered("", resp.status().as_u16(), &headers, &body).sent_as(USER_AGENT)
     }
 
     /// [`get`], telling what is known of a failure.
@@ -1065,12 +1065,9 @@ mod tests {
         let agent = native::agent();
         let base = serve(vec![blocked.clone(), blocked]);
         let f = native::get_detailed(&agent, &format!("{base}/MapServer?f=json")).unwrap_err();
-        assert_eq!(
-            (f.status(), f.firewall(), f.excerpt.as_deref()),
-            (Some(403), Some("Cloudflare"), Some("Attention Required! | Cloudflare"))
-        );
+        assert_eq!((f.status(), f.firewall(), f.excerpt()), (Some(403), Some("Cloudflare"), Some("Attention Required! | Cloudflare")));
         assert_eq!((f.url.as_str(), f.request_id()), (format!("{base}/MapServer?f=json").as_str(), Some("cf-ray a4c9-BOG".to_string())));
-        assert!(f.user_agent.is_some_and(|u| u.starts_with("RustGIS/")));
+        assert!(f.user_agent().is_some_and(|u| u.starts_with("RustGIS/")));
         assert_eq!(native::get(&agent, &format!("{base}/x")).unwrap_err(), "http status: 403");
         // No server there: unreachable, not an answer.
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();

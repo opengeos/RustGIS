@@ -48,8 +48,8 @@ pub fn details(f: &Failure) -> Vec<(&'static str, String)> {
         ("Request ID", f.request_id()),
         ("Sign-in", header("www-authenticate")),
         ("Retry after", header("retry-after")),
-        ("Sent as", f.user_agent.as_ref().map(|u| format!("User-Agent: {u}"))),
-        ("Response", f.excerpt.as_ref().map(|e| format!("\"{e}\""))),
+        ("Sent as", f.user_agent().map(|u| format!("User-Agent: {u}"))),
+        ("Response", f.excerpt().map(|e| format!("\"{e}\""))),
     ] {
         if let Some(v) = value {
             rows.push((label, v));
@@ -91,8 +91,8 @@ mod tests {
     #[test]
     fn a_firewall_block_is_told_plainly_with_its_details() {
         let headers = [("server".to_string(), "cloudflare".to_string()), ("cf-ray".to_string(), "a4c9-BOG".to_string())];
-        let mut f = Failure::answered("https://example.org/MapServer?f=json&token=secret", 403, &headers, b"<title>Blocked</title>");
-        f.user_agent = Some("RustGIS/1.0".into());
+        let f = Failure::answered("https://example.org/MapServer?f=json&token=secret", 403, &headers, b"<title>Blocked</title>")
+            .sent_as("RustGIS/1.0");
         let (what, next) = plain(&f);
         assert_eq!(what, "The server refused the request.");
         assert!(next.contains("Cloudflare") && next.contains("administrator"), "{next}");

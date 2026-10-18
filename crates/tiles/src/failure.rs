@@ -45,11 +45,19 @@ pub struct Failure {
     /// The error as text, as fetches have always given it (`http status: 403`, …).
     pub message: String,
     pub reason: Reason,
+    /// What the server said, when it answered and it is known (not from the browser). Boxed: most
+    /// failures have none, and the failure travels in a `Result`.
+    pub answer: Option<Box<Answer>>,
+}
+
+/// What a server said when it refused a request.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Answer {
     /// The kept headers, lowercase names in [`KEPT_HEADERS`] order.
     pub headers: Vec<(String, String)>,
     /// The answer's page title, or the start of its text.
     pub excerpt: Option<String>,
-    /// The `User-Agent` the request went with, when it was this app's (not the browser's).
+    /// The `User-Agent` the request went with (this app's).
     pub user_agent: Option<String>,
 }
 
@@ -59,7 +67,7 @@ impl Failure {
     pub fn new(url: &str, message: impl Into<String>) -> Self {
         let message = message.into();
         let reason = crate::cache::http_status(&message).filter(|s| *s >= 400).map_or(Reason::Other, Reason::Status);
-        Failure { url: url.to_string(), message, reason, headers: Vec::new(), excerpt: None, user_agent: None }
+        Failure { url: url.to_string(), message, reason, answer: None }
     }
 
     /// A failure that never reached an answer.
@@ -81,10 +89,16 @@ impl Failure {
             // As ureq has always said it, so text that reads the status back still finds it.
             message: format!("http status: {status}"),
             reason: Reason::Status(status),
-            headers: kept,
-            excerpt: excerpt(body, html),
-            user_agent: None,
+            answer: Some(Box::new(Answer { headers: kept, excerpt: excerpt(body, html), user_agent: None })),
         }
+    }
+
+    /// The failure, its request having gone as `user_agent`.
+    pub fn sent_as(mut self, user_agent: &str) -> Self {
+        if let Some(a) = self.answer.as_mut() {
+            a.user_agent = Some(user_agent.to_string());
+        }
+        self
     }
 
     /// The HTTP status, if the server answered with one.
@@ -97,7 +111,17 @@ impl Failure {
 
     /// A kept header's value (`name` in lowercase).
     pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+        self.answer.as_ref()?.headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
+
+    /// The answer's page title, or the start of its text.
+    pub fn excerpt(&self) -> Option<&str> {
+        self.answer.as_ref()?.excerpt.as_deref()
+    }
+
+    /// The `User-Agent` the request went with, when it was this app's (not the browser's).
+    pub fn user_agent(&self) -> Option<&str> {
+        self.answer.as_ref()?.user_agent.as_deref()
     }
 
     /// The firewall that answered, when its headers say so beyond doubt.
@@ -260,7 +284,7 @@ mod tests {
             body,
         );
         assert_eq!((f.status(), f.firewall(), f.message.as_str()), (Some(403), Some("Cloudflare"), "http status: 403"));
-        assert_eq!(f.excerpt.as_deref(), Some("Attention Required! | Cloudflare"));
+        assert_eq!(f.excerpt(), Some("Attention Required! | Cloudflare"));
         assert_eq!(f.request_id().as_deref(), Some("cf-ray a4c929d3fa78a259-BOG"));
         assert!(f.header("set-cookie").is_none(), "only the kept headers");
         assert_eq!(crate::cache::http_status(&f.message), Some(403), "the status reads back as before");
@@ -281,17 +305,17 @@ mod tests {
     fn answers_are_plain_bounded_text() {
         // A page without a title: its text, without scripts or tags.
         let f = Failure::answered("u", 500, &[], b"<html><script>alert(1)</script><p>Internal   error\n</p></html>");
-        assert_eq!(f.excerpt.as_deref(), Some("Internal error"));
+        assert_eq!(f.excerpt(), Some("Internal error"));
         // Plain text, cut to its first 200 characters; control characters become spaces.
         let f = Failure::answered("u", 503, &h(&[("server", "a\u{7}b")]), "x".repeat(5000).as_bytes());
-        assert_eq!(f.excerpt.as_ref().map(|e| e.chars().count()), Some(200));
+        assert_eq!(f.excerpt().map(|e| e.chars().count()), Some(200));
         assert_eq!(f.header("server"), Some("a b"));
         // Nothing to say: no excerpt. Not UTF-8: read as far as it is.
-        assert_eq!(Failure::answered("u", 404, &[], b"  ").excerpt, None);
-        assert_eq!(Failure::answered("u", 404, &[], b"ok \xff").excerpt.as_deref(), Some("ok \u{fffd}"));
+        assert_eq!(Failure::answered("u", 404, &[], b"  ").excerpt(), None);
+        assert_eq!(Failure::answered("u", 404, &[], b"ok \xff").excerpt(), Some("ok \u{fffd}"));
         // A title or tag never closed doesn't hang or panic.
-        assert_eq!(Failure::answered("u", 404, &[], b"<html><title>Half").excerpt.as_deref(), Some("Half"));
-        assert_eq!(Failure::answered("u", 404, &[], b"<html><title").excerpt, None);
+        assert_eq!(Failure::answered("u", 404, &[], b"<html><title>Half").excerpt(), Some("Half"));
+        assert_eq!(Failure::answered("u", 404, &[], b"<html><title").excerpt(), None);
     }
 
     #[test]
