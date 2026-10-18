@@ -32,6 +32,7 @@ mod localagents;
 mod mapgpu;
 mod mapmenu;
 mod mapview;
+mod modelbuilder;
 mod navui;
 mod opendataui;
 mod panes;
@@ -92,7 +93,7 @@ pub type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
 pub struct Start {
     /// Begin with an empty project (`Some(true)`) or the sample (`Some(false)`).
     pub blank: Option<bool>,
-    /// A projection code: `EPSG:3010`, a preset id, `mercator` or `globe`.
+    /// A projection code: `EPSG:3010`, `ESRI:102033`, a preset id, `mercator` or `globe`.
     pub projection: Option<String>,
     /// The extent to open on, as `minLon,minLat,maxLon,maxLat`.
     pub extent: Option<String>,
@@ -397,7 +398,7 @@ pub struct UiState {
     ///
     /// [`Projection`]: rustgis_engine::map::Projection
     pub start_projection: String,
-    /// The EPSG code typed in Settings › Start-up › Projection.
+    /// The EPSG or ESRI code typed in Settings › Start-up › Projection.
     pub start_projection_input: String,
     /// Start-up preference: the extent the map opens on, `[minLon, minLat, maxLon, maxLat]`;
     /// `None` for the full extent.
@@ -616,6 +617,8 @@ pub struct RustGisApp {
     pub layout: layoutview::LayoutView,
     pub forms: editpanes::Forms,
     pub workflow: analysispane::Workflow,
+    /// ModelBuilder's view: the model on its canvas.
+    pub mb: modelbuilder::ModelBuilder,
     pub ws: workspacepanes::WorkspaceState,
     /// The Plugin Manager and plugin downloads.
     pub plugins: pluginsui::PluginsState,
@@ -690,6 +693,7 @@ impl RustGisApp {
             layout: layoutview::LayoutView::default(),
             forms: editpanes::Forms::default(),
             workflow: analysispane::Workflow::default(),
+            mb: modelbuilder::ModelBuilder::default(),
             ws: workspacepanes::WorkspaceState::default(),
             plugins: pluginsui::PluginsState::default(),
             update: update::UpdateState::default(),
@@ -934,6 +938,8 @@ impl RustGisApp {
             (".rgisnb", "notebook.open"),
             (".ipynb", "notebook.open"),
             (".rgisdlpk", "dl.import"),
+            (".model.json", "model.import"),
+            (".rgistool", "model.import"),
         ]
         .iter()
         .find(|(e, _)| lower.ends_with(e))
@@ -952,6 +958,12 @@ impl RustGisApp {
             }
             let r = self.run(cmd, p);
             self.map.invalidate();
+            // A model file opens in ModelBuilder.
+            if cmd == "model.import"
+                && let Ok(v) = &r
+            {
+                modelbuilder::imported(self, v);
+            }
             return r;
         }
         if lower.ends_with(".rgispkg") {
@@ -2317,6 +2329,7 @@ impl RustGisApp {
                     return self.run("presentation.export", json!({"presentation": i, "path": path}));
                 }
             }
+            "ui.modelBuilder" => modelbuilder::command(self, p)?,
             "ui.catalogView" => self.ws.catalog_view = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.catalog_view),
             "ui.itemPopups" => self.ws.item_popups = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.item_popups),
             "ui.linkCursors" => self.ws.link_cursors = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.link_cursors),
@@ -2562,7 +2575,7 @@ impl RustGisApp {
                             return Err(tl!("no text graphic there").to_string());
                         };
                         (self.dialogs.mode, self.dialogs.a, self.dialogs.b) = ("edit", layer.to_string(), row.to_string());
-                        (self.dialogs.text, self.dialogs.c) = (text, size.to_string());
+                        (self.dialogs.text, self.dialogs.size) = (text, f64::from(size));
                     }
                 }
                 // Rename Map / Rename Layout remember which one (`target`, by name; default the

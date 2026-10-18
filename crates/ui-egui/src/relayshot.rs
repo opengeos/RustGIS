@@ -21,8 +21,9 @@ pub struct Shot {
     started: f64,
     /// The longest to wait for the map to finish drawing (seconds).
     wait: f64,
-    /// Whether the screenshot was asked for, and whether the map had finished drawing then.
-    asked: Option<bool>,
+    /// When the screenshot was asked for: whether the map had finished drawing, and where the
+    /// map was on screen at what scale, which the crop uses whatever moves meanwhile.
+    asked: Option<(bool, Rect, f32)>,
 }
 
 /// Whether the map view was drawn on the last frame, so a snapshot can capture it.
@@ -55,11 +56,14 @@ pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
     };
     let now = ctx.input(|i| i.time);
     let shot = *app.relay_shot.get_or_insert(Shot { started: now, wait: request.wait.as_secs_f64(), asked: None });
-    // Hidden from the frame the screenshot is taken of until it is back.
-    app.map.hide_overlays = !request.overlays;
     let rect = view_rect(app, ctx);
+    let finish = |app: &mut RustGisApp, png: Result<Vec<u8>, String>, settled: bool| {
+        app.relay_shot = None;
+        app.map.hide_overlays = false;
+        relay.finish_screen(&mut app.session, png, settled);
+    };
     match shot.asked {
-        Some(was_settled) => {
+        Some((was_settled, at, ppp)) => {
             let image = ctx.input(|i| {
                 i.events.iter().find_map(|e| match e {
                     egui::Event::Screenshot { image, user_data, .. }
@@ -71,33 +75,31 @@ pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
                 })
             });
             if let Some(image) = image {
-                let png = rect.and_then(|r| crop_png(&image, r, ctx.pixels_per_point()));
-                app.relay_shot = None;
-                app.map.hide_overlays = false;
-                relay.finish_screen(&mut app.session, png, was_settled);
-                return;
+                let png = crop_png(&image, at, ppp)
+                    .ok_or_else(|| "the window's screenshot didn't hold the map, so it was drawn offscreen".to_string());
+                return finish(app, png, was_settled);
             }
-            // A backend that never answers (or a window that stopped drawing): drawn offscreen.
+            // A backend that never answers: drawn offscreen.
             if now - shot.started > shot.wait + SCREENSHOT_GRACE {
-                app.relay_shot = None;
-                app.map.hide_overlays = false;
-                relay.finish_screen(&mut app.session, None, false);
-                return;
+                return finish(app, Err("the window's screenshot didn't come back in time, so the map was drawn offscreen".into()), false);
             }
         }
         None => {
             // The map went away (a layout opened): drawn offscreen instead.
-            if rect.is_none() {
-                app.relay_shot = None;
-                app.map.hide_overlays = false;
-                relay.finish_screen(&mut app.session, None, false);
-                return;
-            }
+            let Some(at) = rect else {
+                return finish(
+                    app,
+                    Err("the map isn't on screen in RustGIS (a layout or the catalog is shown), so it was drawn offscreen".into()),
+                    false,
+                );
+            };
             let done = settled(app);
-            // At least a frame after the request, so the map shows what the agent last did (and
-            // overlays are already hidden when asked).
+            // At least a frame after the request, so the map shows what the agent last did.
             if now > shot.started && (done || now - shot.started >= shot.wait) {
-                app.relay_shot = Some(Shot { asked: Some(done), ..shot });
+                app.relay_shot = Some(Shot { asked: Some((done, at, ctx.pixels_per_point())), ..shot });
+                // Overlays leave only the frame being captured (this one draws after this), and
+                // come back with the screenshot.
+                app.map.hide_overlays = !request.overlays;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(RelayShotTag)));
             }
         }

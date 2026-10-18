@@ -1,0 +1,653 @@
+//! ModelBuilder's models as graphs: the ports each node offers, the problems that keep a model
+//! from running, the order its nodes run in, an automatic layout, and the run itself.
+//!
+//! A graph has three kinds of node. An **input** names a layer of the map; a **tool** is a
+//! geoprocessing tool, whose layer parameters are its input ports; an **output** keeps the
+//! result wired into it as a layer of its name. Every input and tool node has one output port,
+//! [`OUT`] (its layer); every output node one input port, [`IN`]. A tool's results that only feed
+//! other tools are intermediate: they are removed from the map once the model has run.
+
+use std::collections::{HashMap, HashSet};
+
+use rustgis_analysis::{ParamKind, ToolSpec};
+use serde::Serialize;
+use serde_json::{Value, json};
+
+use crate::Session;
+use crate::project::{ModelEdge, ModelGraph, ModelNode, ModelNodeKind, ModelStep};
+
+/// The most nodes and edges a graph may have (files and parameters are hostile).
+pub const MAX_NODES: usize = 2000;
+pub const MAX_EDGES: usize = 4000;
+/// The output port of input and tool nodes.
+pub const OUT: &str = "out";
+/// The input port of output nodes.
+pub const IN: &str = "in";
+/// The layout grid: the distance between columns and rows, and the margin.
+pub const COLUMN: f32 = 216.0;
+pub const ROW: f32 = 100.0;
+pub const MARGIN: f32 = 40.0;
+
+/// What a port carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PortKind {
+    Vector,
+    Raster,
+    Any,
+}
+
+impl PortKind {
+    /// Whether a port of this kind can feed one of `other`.
+    pub fn fits(self, other: PortKind) -> bool {
+        self == PortKind::Any || other == PortKind::Any || self == other
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Port {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub kind: PortKind,
+    pub required: bool,
+    /// Takes several edges (a list of layers).
+    pub many: bool,
+}
+
+/// The port a tool parameter of this kind makes, if it takes layers: its kind and whether it
+/// takes several.
+pub fn port_kind(k: ParamKind) -> Option<(PortKind, bool)> {
+    match k {
+        ParamKind::Layer => Some((PortKind::Any, false)),
+        ParamKind::PolygonLayer | ParamKind::PointLayer | ParamKind::VectorLayer => Some((PortKind::Vector, false)),
+        ParamKind::RasterLayer => Some((PortKind::Raster, false)),
+        ParamKind::RasterLayers => Some((PortKind::Raster, true)),
+        ParamKind::VectorLayers => Some((PortKind::Vector, true)),
+        _ => None,
+    }
+}
+
+/// A tool node's tool, if RustGIS has it.
+pub fn tool_of(node: &ModelNode) -> Option<&'static ToolSpec> {
+    node.tool.as_deref().and_then(crate::cmd::gp::tool_id).and_then(rustgis_analysis::tool)
+}
+
+/// The ports edges can come into.
+pub fn input_ports(node: &ModelNode) -> Vec<Port> {
+    match node.kind {
+        ModelNodeKind::Input => Vec::new(),
+        ModelNodeKind::Output => vec![Port { id: IN, label: "Result", kind: PortKind::Any, required: true, many: false }],
+        ModelNodeKind::Tool => tool_of(node)
+            .map(|t| {
+                t.params
+                    .iter()
+                    .filter_map(|p| {
+                        port_kind(p.kind).map(|(kind, many)| Port { id: p.name, label: p.label, kind, required: p.required, many })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// The ports edges can leave from.
+pub fn output_ports(node: &ModelNode) -> Vec<Port> {
+    match node.kind {
+        ModelNodeKind::Output => Vec::new(),
+        _ => vec![Port { id: OUT, label: "Output", kind: PortKind::Any, required: false, many: false }],
+    }
+}
+
+/// What an input node's layer carries (any, when it isn't in the map).
+fn layer_kind(s: &Session, node: &ModelNode) -> PortKind {
+    match node.layer.as_deref().and_then(|n| s.map().layer_by_name(n)) {
+        Some(l) if l.is_raster() => PortKind::Raster,
+        Some(_) => PortKind::Vector,
+        None => PortKind::Any,
+    }
+}
+
+/// What a node's output port carries: an input's layer kind; a tool's isn't known until it runs.
+pub fn output_kind(s: &Session, node: &ModelNode) -> PortKind {
+    match node.kind {
+        ModelNodeKind::Input => layer_kind(s, node),
+        _ => PortKind::Any,
+    }
+}
+
+/// A node's title: its layer, its result's name or its tool's name.
+pub fn title(node: &ModelNode) -> String {
+    match node.kind {
+        ModelNodeKind::Input => node.layer.clone().filter(|l| !l.is_empty()).unwrap_or_else(|| "Input".into()),
+        ModelNodeKind::Output => node.name.clone().filter(|l| !l.is_empty()).unwrap_or_else(|| "Model output".into()),
+        ModelNodeKind::Tool => tool_of(node).map(|t| t.name.to_string()).or_else(|| node.tool.clone()).unwrap_or_else(|| "Tool".into()),
+    }
+}
+
+/// Something that keeps a model from running.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Problem {
+    pub code: &'static str,
+    /// The node it concerns, if one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    pub message: String,
+}
+
+fn problem(code: &'static str, node: Option<&str>, message: impl Into<String>) -> Problem {
+    Problem { code, node: node.map(str::to_string), message: message.into() }
+}
+
+/// Whether a parameter value is set: not null, nor an empty string.
+fn is_set(v: Option<&Value>) -> bool {
+    match v {
+        None | Some(Value::Null) => false,
+        Some(Value::String(s)) => !s.trim().is_empty(),
+        _ => true,
+    }
+}
+
+/// The problems that keep a graph from running; empty when it can run.
+pub fn validate(s: &Session, g: &ModelGraph) -> Vec<Problem> {
+    let mut out = Vec::new();
+    if g.nodes.len() > MAX_NODES || g.edges.len() > MAX_EDGES {
+        out.push(problem("too-big", None, format!("A model can have at most {MAX_NODES} nodes and {MAX_EDGES} connections.")));
+        return out;
+    }
+    if g.nodes.iter().all(|n| n.kind != ModelNodeKind::Tool) {
+        out.push(problem("no-tool", None, "Add a tool to the model."));
+    }
+    let mut seen = HashSet::new();
+    for n in &g.nodes {
+        if !seen.insert(n.id.as_str()) {
+            out.push(problem("duplicate-node", Some(&n.id), "Two or more nodes share the same id."));
+        }
+    }
+    // Looked up by id rather than scanned: a graph may have thousands of nodes.
+    let by_id: HashMap<&str, &ModelNode> = g.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let node = |id: &str| by_id.get(id).copied();
+    let wired_ports: HashSet<(&str, &str)> = g.edges.iter().map(|e| (e.to.as_str(), e.to_port.as_str())).collect();
+    let mut into: HashMap<(&str, &str), usize> = HashMap::new();
+    for e in &g.edges {
+        let (Some(from), Some(to)) = (node(&e.from), node(&e.to)) else {
+            out.push(problem("dangling-edge", None, "A connection points at a node that no longer exists."));
+            continue;
+        };
+        if e.from == e.to {
+            out.push(problem("self-edge", Some(&e.to), "A node cannot connect to itself."));
+            continue;
+        }
+        let Some(fp) = output_ports(from).into_iter().find(|p| p.id == e.from_port) else {
+            out.push(problem("unknown-port", Some(&e.from), "A connection refers to a port that no longer exists."));
+            continue;
+        };
+        let Some(tp) = input_ports(to).into_iter().find(|p| p.id == e.to_port) else {
+            out.push(problem("unknown-port", Some(&e.to), "A connection refers to a port that no longer exists."));
+            continue;
+        };
+        let n = into.entry((e.to.as_str(), tp.id)).or_insert(0);
+        *n += 1;
+        if *n == 2 && !tp.many {
+            out.push(problem("duplicate-input", Some(&e.to), format!("\"{}\" already has an incoming connection.", tp.label)));
+        }
+        if !output_kind(s, from).max_kind(fp.kind).fits(tp.kind) {
+            out.push(problem("type-mismatch", Some(&e.to), format!("\"{}\" takes a {} layer.", tp.label, kind_name(tp.kind))));
+        }
+    }
+    // One output per result: a second would rename the layer the first named.
+    let mut kept: HashSet<&str> = HashSet::new();
+    for e in g.edges.iter().filter(|e| node(&e.to).is_some_and(|n| n.kind == ModelNodeKind::Output)) {
+        if !kept.insert(e.from.as_str()) {
+            out.push(problem("shared-output", Some(&e.to), "That result already has an output; a result keeps one name."));
+        }
+    }
+    for n in &g.nodes {
+        let wired = |port: &str| wired_ports.contains(&(n.id.as_str(), port));
+        match n.kind {
+            ModelNodeKind::Input => match n.layer.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+                None => out.push(problem("missing-layer", Some(&n.id), "Choose an input layer.")),
+                Some(l) if s.map().layer_by_name(l).is_none() && crate::project::find_table(&s.project.tables, l).is_none() => {
+                    out.push(problem("missing-layer", Some(&n.id), format!("The map has no layer named \"{l}\".")))
+                }
+                Some(_) => {}
+            },
+            ModelNodeKind::Output => {
+                if !wired(IN) {
+                    out.push(problem("missing-input", Some(&n.id), "Connect a result to this output."));
+                }
+            }
+            ModelNodeKind::Tool => {
+                let Some(t) = tool_of(n) else {
+                    out.push(problem("unknown-tool", Some(&n.id), format!("Unknown tool \"{}\".", n.tool.as_deref().unwrap_or(""))));
+                    continue;
+                };
+                for p in t.params.iter().filter(|p| p.required) {
+                    let port = port_kind(p.kind).is_some();
+                    if !(port && wired(p.name)) && !is_set(n.params.get(p.name)) && p.default.is_empty() {
+                        let msg = if port { "\"{p}\" needs a connection or a layer." } else { "\"{p}\" needs a value." };
+                        out.push(problem("missing-input", Some(&n.id), msg.replace("{p}", p.label)));
+                    }
+                }
+            }
+        }
+    }
+    if topological_order(g).is_none() {
+        out.push(problem("cycle", None, "The model contains a loop."));
+    }
+    out
+}
+
+impl PortKind {
+    /// The more specific of a node's known kind and its port's.
+    fn max_kind(self, port: PortKind) -> PortKind {
+        if self == PortKind::Any { port } else { self }
+    }
+}
+
+fn kind_name(k: PortKind) -> &'static str {
+    match k {
+        PortKind::Vector => "vector",
+        PortKind::Raster => "raster",
+        PortKind::Any => "",
+    }
+}
+
+/// The nodes (by index) in an order where every node comes after the ones feeding it; `None`
+/// when the graph has a loop. Ties keep the left-to-right, top-to-bottom order of the canvas.
+pub fn topological_order(g: &ModelGraph) -> Option<Vec<usize>> {
+    let index: HashMap<&str, usize> = g.nodes.iter().enumerate().map(|(i, n)| (n.id.as_str(), i)).collect();
+    let mut indegree = vec![0usize; g.nodes.len()];
+    let mut next: Vec<Vec<usize>> = vec![Vec::new(); g.nodes.len()];
+    for e in &g.edges {
+        if let (Some(&a), Some(&b)) = (index.get(e.from.as_str()), index.get(e.to.as_str()))
+            && let (Some(d), Some(nx)) = (indegree.get_mut(b), next.get_mut(a))
+        {
+            *d += 1;
+            nx.push(b);
+        }
+    }
+    let place = |i: &usize| g.nodes.get(*i).map(|n| (n.x, n.y)).unwrap_or_default();
+    let mut ready: Vec<usize> = (0..g.nodes.len()).filter(|i| indegree.get(*i) == Some(&0)).collect();
+    let mut order = Vec::with_capacity(g.nodes.len());
+    while !ready.is_empty() {
+        // The left-most (then top-most) ready node next.
+        ready.sort_by(|a, b| {
+            let (pa, pb) = (place(a), place(b));
+            pb.0.total_cmp(&pa.0).then(pb.1.total_cmp(&pa.1))
+        });
+        let Some(i) = ready.pop() else { break };
+        order.push(i);
+        for &j in next.get(i).map(Vec::as_slice).unwrap_or(&[]) {
+            if let Some(d) = indegree.get_mut(j) {
+                *d -= 1;
+                if *d == 0 {
+                    ready.push(j);
+                }
+            }
+        }
+    }
+    (order.len() == g.nodes.len()).then_some(order)
+}
+
+/// Lays the nodes out along the flow: each node in the column of its longest path from an
+/// input, the nodes of a column in their current top-to-bottom order.
+pub fn layout(g: &mut ModelGraph) {
+    let order = topological_order(g).unwrap_or_else(|| (0..g.nodes.len()).collect());
+    let index: HashMap<String, usize> = g.nodes.iter().enumerate().map(|(i, n)| (n.id.clone(), i)).collect();
+    let mut depth = vec![0usize; g.nodes.len()];
+    for &i in &order {
+        let Some(id) = g.nodes.get(i).map(|n| n.id.clone()) else { continue };
+        let d = depth.get(i).copied().unwrap_or(0);
+        for e in g.edges.iter().filter(|e| e.from == id) {
+            if let Some(dj) = index.get(&e.to).and_then(|&j| depth.get_mut(j)) {
+                *dj = (*dj).max(d + 1).min(MAX_NODES);
+            }
+        }
+    }
+    // Outputs line up in the column after their result.
+    let mut columns: Vec<Vec<usize>> = Vec::new();
+    for (i, d) in depth.iter().enumerate() {
+        if columns.len() <= *d {
+            columns.resize(*d + 1, Vec::new());
+        }
+        if let Some(c) = columns.get_mut(*d) {
+            c.push(i);
+        }
+    }
+    for (c, nodes) in columns.iter_mut().enumerate() {
+        nodes.sort_by(|a, b| {
+            let y = |i: &usize| g.nodes.get(*i).map(|n| n.y).unwrap_or_default();
+            y(a).total_cmp(&y(b))
+        });
+        for (r, &i) in nodes.iter().enumerate() {
+            if let Some(n) = g.nodes.get_mut(i) {
+                n.x = MARGIN + c as f32 * COLUMN;
+                n.y = MARGIN + r as f32 * ROW;
+            }
+        }
+    }
+}
+
+/// An id not used by any node: `prefix` and the first free number.
+pub fn new_id(g: &ModelGraph, prefix: &str) -> String {
+    (1..).map(|i| format!("{prefix}{i}")).find(|id| !g.nodes.iter().any(|n| &n.id == id)).unwrap_or_else(|| prefix.to_string())
+}
+
+/// A graph from steps run in order (`%n` for step n's output): an input node for each layer
+/// the steps read, a tool node per step, laid out.
+pub fn steps_to_graph(steps: &[ModelStep]) -> ModelGraph {
+    let mut g = ModelGraph::default();
+    let mut inputs: HashMap<String, String> = HashMap::new();
+    for (i, st) in steps.iter().take(MAX_NODES / 2).enumerate() {
+        let id = format!("t{}", i + 1);
+        let mut params = match &st.params {
+            Value::Object(o) => o.clone(),
+            _ => serde_json::Map::new(),
+        };
+        let node = ModelNode { id: id.clone(), kind: ModelNodeKind::Tool, tool: Some(st.tool.clone()), ..Default::default() };
+        for port in input_ports(&node) {
+            let Some(v) = params.get(port.id).and_then(Value::as_str).map(str::to_string) else { continue };
+            let parts: Vec<&str> = if port.many { v.split(';').map(str::trim).filter(|x| !x.is_empty()).collect() } else { vec![v.trim()] };
+            for part in parts {
+                let from = match part.strip_prefix('%').and_then(|n| n.parse::<usize>().ok()) {
+                    Some(n) if (1..=i).contains(&n) => format!("t{n}"),
+                    Some(_) => continue,
+                    None => {
+                        let next = format!("i{}", inputs.len() + 1);
+                        let iid = inputs.entry(part.to_ascii_lowercase()).or_insert_with(|| next.clone()).clone();
+                        if iid == next {
+                            g.nodes.push(ModelNode {
+                                id: iid.clone(),
+                                kind: ModelNodeKind::Input,
+                                layer: Some(part.to_string()),
+                                ..Default::default()
+                            });
+                        }
+                        iid
+                    }
+                };
+                g.edges.push(ModelEdge { from, from_port: OUT.into(), to: id.clone(), to_port: port.id.into() });
+            }
+            params.remove(port.id);
+        }
+        g.nodes.push(ModelNode { params: Value::Object(params), ..node });
+    }
+    layout(&mut g);
+    g
+}
+
+/// The graph's tools as steps in run order, edges as layer names (from inputs) and `%n` (from
+/// step n); empty when the graph has a loop.
+pub fn graph_to_steps(g: &ModelGraph) -> Vec<ModelStep> {
+    let Some(order) = topological_order(g) else { return Vec::new() };
+    let mut step_of: HashMap<&str, usize> = HashMap::new();
+    let mut steps = Vec::new();
+    for i in order {
+        let Some(n) = g.nodes.get(i).filter(|n| n.kind == ModelNodeKind::Tool) else { continue };
+        let mut params = match &n.params {
+            Value::Object(o) => o.clone(),
+            _ => serde_json::Map::new(),
+        };
+        for port in input_ports(n) {
+            let from: Vec<String> = g
+                .edges
+                .iter()
+                .filter(|e| e.to == n.id && e.to_port == port.id)
+                .filter_map(|e| {
+                    let up = g.nodes.iter().find(|u| u.id == e.from)?;
+                    match up.kind {
+                        ModelNodeKind::Input => up.layer.clone(),
+                        _ => step_of.get(up.id.as_str()).map(|k| format!("%{k}")),
+                    }
+                })
+                .collect();
+            if !from.is_empty() {
+                params.insert(port.id.into(), json!(from.join(";")));
+            }
+        }
+        steps.push(ModelStep { tool: n.tool.clone().unwrap_or_default(), params: Value::Object(params) });
+        step_of.insert(n.id.as_str(), steps.len());
+    }
+    steps
+}
+
+/// Reads a graph from JSON, dropping what can't be used: nodes without an id, repeated ids,
+/// edges to missing nodes or to themselves. Bounded in size.
+pub fn graph_from_json(v: &Value) -> Result<ModelGraph, String> {
+    let nodes = v.get("nodes").and_then(Value::as_array).ok_or("a model graph needs \"nodes\"")?;
+    if nodes.len() > MAX_NODES {
+        return Err(format!("a model can have at most {MAX_NODES} nodes"));
+    }
+    let edges = v.get("edges").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+    if edges.len() > MAX_EDGES {
+        return Err(format!("a model can have at most {MAX_EDGES} connections"));
+    }
+    let mut g = ModelGraph::default();
+    for n in nodes {
+        let Ok(mut node) = serde_json::from_value::<ModelNode>(n.clone()) else { continue };
+        node.id = node.id.trim().chars().take(100).collect();
+        if node.id.is_empty() || g.nodes.iter().any(|m| m.id == node.id) {
+            continue;
+        }
+        if !node.x.is_finite() || !node.y.is_finite() {
+            node.x = 0.0;
+            node.y = 0.0;
+        }
+        node.x = node.x.clamp(-1e6, 1e6);
+        node.y = node.y.clamp(-1e6, 1e6);
+        if !node.params.is_object() {
+            node.params = Value::Null;
+        }
+        g.nodes.push(node);
+    }
+    for e in edges {
+        let Ok(e) = serde_json::from_value::<ModelEdge>(e.clone()) else { continue };
+        let has = |id: &str| g.nodes.iter().any(|n| n.id == id);
+        if e.from != e.to && has(&e.from) && has(&e.to) && !e.to_port.is_empty() && !g.edges.contains(&e) {
+            g.edges.push(e);
+        }
+    }
+    // A graph with no positions (written by hand or by an agent) is laid out.
+    if g.nodes.iter().all(|n| n.x == 0.0 && n.y == 0.0) {
+        layout(&mut g);
+    }
+    Ok(g)
+}
+
+/// How one node fared in a run.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct NodeRun {
+    pub node: String,
+    /// `done` or `error`.
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub message: String,
+    /// The layer the node handed on, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
+}
+
+/// What the last run of a model did.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct RunReport {
+    pub model: String,
+    pub ok: bool,
+    pub nodes: Vec<NodeRun>,
+    /// The layers the model kept.
+    pub outputs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Runs a graph: its nodes in order, each tool on the layers wired into it, each output renaming
+/// its result; then removes the intermediate results. `trusted` is false for a model that came
+/// in a file, whose tools may not read or write files. The report is kept in
+/// `Session::model_run`, whatever happens.
+pub fn run(s: &mut Session, name: &str, g: &ModelGraph, trusted: bool) -> Result<Value, String> {
+    let mut report = RunReport { model: name.to_string(), ..Default::default() };
+    let res = run_into(s, g, trusted, &mut report);
+    report.ok = res.is_ok();
+    report.error = res.as_ref().err().cloned();
+    let out = res.map(|ran| json!({"model": name, "ran": ran, "outputs": report.outputs}));
+    s.model_run = Some(report);
+    out
+}
+
+fn run_into(s: &mut Session, g: &ModelGraph, trusted: bool, report: &mut RunReport) -> Result<Vec<Value>, String> {
+    if let Some(p) = validate(s, g).first() {
+        return Err(p.message.clone());
+    }
+    if !trusted
+        && let Some(n) = g.nodes.iter().find(|n| {
+            n.kind == ModelNodeKind::Tool && crate::cmd::items::touches_files("gp.run", &json!({"tool": n.tool, "params": n.params}))
+        })
+    {
+        return Err(format!(
+            "{} reads or writes files, which a model from a file can't do; add that tool again in ModelBuilder to run it",
+            title(n)
+        ));
+    }
+    let order = topological_order(g).ok_or("The model contains a loop.")?;
+    // The layer each node hands on, and the layers each tool node added (by id).
+    let mut value: HashMap<&str, String> = HashMap::new();
+    let mut made: Vec<(&str, Vec<u32>)> = Vec::new();
+    // The layer (by id) each tool node handed on, for its output to rename.
+    let mut handed: HashMap<&str, u32> = HashMap::new();
+    let mut ran = Vec::new();
+    for i in order {
+        let Some(n) = g.nodes.get(i) else { continue };
+        let upstream = |port: &str| -> Vec<String> {
+            g.edges.iter().filter(|e| e.to == n.id && e.to_port == port).filter_map(|e| value.get(e.from.as_str()).cloned()).collect()
+        };
+        match n.kind {
+            ModelNodeKind::Input => {
+                let l = n.layer.clone().unwrap_or_default();
+                report.nodes.push(NodeRun { node: n.id.clone(), status: "done", message: String::new(), layer: Some(l.clone()) });
+                value.insert(n.id.as_str(), l);
+            }
+            ModelNodeKind::Tool => {
+                let tool = tool_of(n).map(|t| t.id).unwrap_or_default();
+                let mut params = match &n.params {
+                    Value::Object(o) => o.clone(),
+                    _ => serde_json::Map::new(),
+                };
+                for port in input_ports(n) {
+                    let from = upstream(port.id);
+                    let wired = g.edges.iter().any(|e| e.to == n.id && e.to_port == port.id);
+                    if wired && from.is_empty() {
+                        let e = format!("{}: the tool before it made no layer for \"{}\"", title(n), port.label);
+                        report.nodes.push(NodeRun { node: n.id.clone(), status: "error", message: e.clone(), layer: None });
+                        return Err(e);
+                    }
+                    if !from.is_empty() {
+                        params.insert(port.id.into(), json!(from.join(";")));
+                    }
+                }
+                let params = Value::Object(params);
+                let before: HashSet<u32> = s.map().layers.iter().map(|l| l.id).collect();
+                let history = s.project.gp_history.len();
+                match crate::cmd::gp::run_tool(s, tool, &params) {
+                    Ok(r) => {
+                        let ids: Vec<u32> = s.map().layers.iter().filter(|l| !before.contains(&l.id)).map(|l| l.id).collect();
+                        // The first layer it added (else the first output it recorded: a table).
+                        let first_id = ids.iter().rev().copied().find(|id| s.map().layer(*id).is_some());
+                        if let Some(id) = first_id {
+                            handed.insert(n.id.as_str(), id);
+                        }
+                        let first = first_id.and_then(|id| s.map().layer(id).map(|l| l.name.clone())).or_else(|| {
+                            (s.project.gp_history.len() > history)
+                                .then(|| s.project.gp_history.last().and_then(|h| h.outputs.first().cloned()))
+                                .flatten()
+                        });
+                        report.nodes.push(NodeRun { node: n.id.clone(), status: "done", message: String::new(), layer: first.clone() });
+                        if let Some(f) = first {
+                            value.insert(n.id.as_str(), f);
+                        }
+                        made.push((n.id.as_str(), ids));
+                        ran.push(json!({"step": ran.len() + 1, "node": n.id, "tool": tool, "result": r}));
+                    }
+                    Err(e) => {
+                        let e = format!("{}: {e}", title(n));
+                        report.nodes.push(NodeRun { node: n.id.clone(), status: "error", message: e.clone(), layer: None });
+                        return Err(e);
+                    }
+                }
+            }
+            ModelNodeKind::Output => {
+                let Some(layer) = upstream(IN).into_iter().next() else {
+                    let e = format!("{}: the tool before it made no layer", title(n));
+                    report.nodes.push(NodeRun { node: n.id.clone(), status: "error", message: e.clone(), layer: None });
+                    return Err(e);
+                };
+                let wanted = n.name.as_deref().map(str::trim).filter(|x| !x.is_empty()).unwrap_or("Model output");
+                let wanted: String = wanted.chars().take(200).collect();
+                // A tool's own layer is renamed; an input passed straight through (or a tool's
+                // table) stays as it is.
+                let source = g.edges.iter().find(|e| e.to == n.id && e.to_port == IN).and_then(|e| handed.get(e.from.as_str()).copied());
+                let kept = match source {
+                    Some(id) => rename(s, id, &wanted).unwrap_or(layer),
+                    None => layer,
+                };
+                // Tools after the renamed one read it by its new name.
+                if let Some(e) = g.edges.iter().find(|e| e.to == n.id && e.to_port == IN) {
+                    value.insert(e.from.as_str(), kept.clone());
+                }
+                report.nodes.push(NodeRun { node: n.id.clone(), status: "done", message: String::new(), layer: Some(kept.clone()) });
+                report.outputs.push(kept.clone());
+                value.insert(n.id.as_str(), kept);
+            }
+        }
+    }
+    // Intermediate results: the layers of tools whose output feeds only other tools.
+    for (id, layers) in &made {
+        let mut to = g.edges.iter().filter(|e| e.from == *id).filter_map(|e| g.nodes.iter().find(|n| n.id == e.to));
+        let feeds_tools_only = to.clone().next().is_some() && to.all(|n| n.kind == ModelNodeKind::Tool);
+        if feeds_tools_only {
+            let m = s.map_mut();
+            for l in layers {
+                if let Some(i) = m.layer_index(*l) {
+                    m.layers.remove(i);
+                    m.set_group(*l, None);
+                }
+            }
+        }
+    }
+    // Tools at the end of the flow with no output node keep their results too.
+    for (id, layers) in &made {
+        if !g.edges.iter().any(|e| e.from == *id) {
+            report.outputs.extend(layers.iter().filter_map(|l| s.map().layer(*l).map(|l| l.name.clone())));
+        }
+    }
+    if s.active_layer.is_some_and(|a| s.map().layer(a).is_none()) {
+        s.active_layer = s.map().layers.first().map(|l| l.id);
+    }
+    Ok(ran)
+}
+
+/// Renames layer `id` to `wanted` (made unique among the map's other layers) and returns the
+/// name it got; `None` when the map no longer has it.
+fn rename(s: &mut Session, id: u32, wanted: &str) -> Option<String> {
+    let m = s.map_mut();
+    m.layer(id)?;
+    let taken = |n: &str| m.layers.iter().any(|l| l.id != id && l.name.eq_ignore_ascii_case(n));
+    let mut name = wanted.to_string();
+    let mut k = 1;
+    while taken(&name) && k < 10_000 {
+        k += 1;
+        name = format!("{wanted} {k}");
+    }
+    if let Some(i) = m.layer_index(id)
+        && let Some(l) = m.layers.get_mut(i)
+    {
+        l.name = name.clone();
+        l.dataset.name = name.clone();
+    }
+    Some(name)
+}
+
+/// The JSON a model file holds (`*.model.json`).
+pub const SCHEMA: &str = "https://rustgis.app/schemas/model-graph-v1.json";
+
+pub fn to_file(name: &str, g: &ModelGraph) -> Value {
+    json!({"$schema": SCHEMA, "version": "1.0.0", "name": name, "graph": g})
+}

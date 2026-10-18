@@ -1092,6 +1092,12 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
     }
     {
         let view = View { camera, ..*view };
+        if matches!(backend, Backend::Gpu)
+            && (camera.pitch != 0.0 || camera.bearing != 0.0)
+            && let Some(scene) = gpu_turned(map, &view)
+        {
+            return Some(RenderOutput::Gpu(scene));
+        }
         if camera.pitch != 0.0 {
             return render_tilted(map, &view, full_res_rasters).map(RenderOutput::Cpu);
         }
@@ -1158,17 +1164,7 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
     warp.finish(&mut pm);
     extrusions_tilted(map, view, &mut pm);
     markers_tilted(map, view, &mut pm);
-    // A feature drawn in two bands offers its label twice: the nearer band's (offered first) is
-    // kept. Tile labels (keyed by their place in a band's list) are told apart by their text and
-    // where they land, to a few points.
-    let mut seen = std::collections::HashSet::new();
-    let mut seen_tile = std::collections::HashSet::new();
-    candidates.retain(|c| match c.2.0 {
-        u32::MAX => seen_tile.insert((c.0.text.clone(), (c.0.x / 4.0).round() as i64, (c.0.y / 4.0).round() as i64)),
-        _ => seen.insert(c.2),
-    });
-    raise_labels(map, view, &mut candidates);
-    let placed = place_labels(candidates, Vec::new(), view.width as f32, view.height as f32, false);
+    let placed = place_tilted_labels(map, view, candidates);
     for l in &placed.labels {
         if let Some(icon) = &l.icon {
             draw_icon(&mut pm, icon, view.pixels_per_point as f32);
@@ -1176,6 +1172,151 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
     }
     let unplaced = if map.label_display.show_unplaced { placed.unplaced } else { Vec::new() };
     Some(Rendered { pixmap: pm, labels: placed.labels, unplaced, attribution, tiles_pending, data_pending, tile_errors })
+}
+
+/// A turned or tilted view as a GPU scene, drawn by the vertex shader's full perspective: a
+/// turned view's north-up frame, or a tilted view's bands, each clipped to its own ground (as
+/// [`render_tilted`] warps them), with point markers upright over them and labels placed in
+/// the view. `None` when the view needs pictures drawn on the CPU (tiles, rasters, layers drawn
+/// as pictures, icons or extrusions), or the scene isn't plain: the caller draws it on the CPU.
+fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
+    use gpu_scene::{CmdClip, DrawCmd, GpuScene, SceneTilt};
+    if !gpu_may_turn(map, view) {
+        return None;
+    }
+    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    // Extrusions stand up over a tilted view on the CPU.
+    if view.camera.pitch != 0.0 && map.layers.iter().any(|l| l.visible && l.extrusion.is_some() && l.in_scale_range(scale)) {
+        return None;
+    }
+    let pictures = |cmds: &[DrawCmd]| cmds.iter().any(|c| matches!(c, DrawCmd::Image { .. }));
+    let (sky, fog) = tilt_sky(map);
+    let tilt = Some(SceneTilt { camera: view.camera, sky: mesh::premul(sky), fog: mesh::premul(fog) });
+    if view.camera.pitch == 0.0 {
+        let (bw, bh) = view.camera.rotated_size(view.width, view.height);
+        let north = View { width: bw.ceil() + 2.0, height: bh.ceil() + 2.0, camera: Camera { bearing: 0.0, ..view.camera }, ..*view };
+        let Some(RenderOutput::Gpu(scene)) = render_frame(map, &north, false, Backend::Gpu, Labels::Turned(view)) else { return None };
+        if pictures(&scene.cmds) || scene.labels.iter().any(|l| l.icon.is_some()) {
+            return None;
+        }
+        return Some(GpuScene { tilt, ..scene });
+    }
+    let bands = view.camera.tilt_bands(view.width, view.height);
+    let data_pending = sync_tilted(map, view, &bands, false);
+    let lock = map.label_lock.take();
+    let mut candidates = Vec::new();
+    let (mut cmds, mut clips) = (Vec::new(), Vec::new());
+    let (mut attribution, mut tiles_pending, mut tile_errors, mut clear) = (Vec::<String>::new(), false, Vec::<String>::new(), [0.0; 4]);
+    let mut plain = true;
+    let last = bands.len().saturating_sub(1);
+    for (i, b) in bands.iter().enumerate() {
+        let v = band_view(view, b);
+        let Some(RenderOutput::Gpu(scene)) = render_frame(map, &v, false, Backend::Gpu, Labels::Tilted(view, &mut candidates)) else {
+            plain = false;
+            break;
+        };
+        if pictures(&scene.cmds) {
+            plain = false;
+            break;
+        }
+        clear = scene.clear;
+        // A long band is drawn at a lower pixel density (`band_view`): its strokes and markers,
+        // sized in its pixels, are brought to the view's.
+        let k = (view.pixels_per_point / v.pixels_per_point.max(1e-9)) as f32;
+        let mut scene = scene;
+        if (k - 1.0).abs() > 1e-6 {
+            for c in &mut scene.cmds {
+                match c {
+                    DrawCmd::Mesh { vertices, .. } => vertices.iter_mut().for_each(|v| v.stroke_px *= k),
+                    DrawCmd::Points { instances, .. } => instances.iter_mut().for_each(|p| p.radius_px *= k),
+                    DrawCmd::Image { .. } => {}
+                }
+            }
+        }
+        for a in scene.attribution {
+            if !attribution.contains(&a) {
+                attribution.push(a);
+            }
+        }
+        for e in scene.tile_errors {
+            if !tile_errors.contains(&e) {
+                tile_errors.push(e);
+            }
+        }
+        tiles_pending |= scene.tiles_pending;
+        // The nearest band reaches the bottom of the view and the farthest the sky, so no ground
+        // falls between them.
+        let near = if i == 0 { 0.0 } else { b.depth.0 as f32 };
+        let far = if i == last { f32::MAX } else { b.depth.1 as f32 };
+        let clip = CmdClip { depth: [near, far], upright: false };
+        clips.extend(std::iter::repeat_n(clip, scene.cmds.len()));
+        cmds.extend(scene.cmds);
+    }
+    map.label_lock = lock;
+    if !plain {
+        return None;
+    }
+    let placed = place_tilted_labels(map, view, candidates);
+    if placed.labels.iter().any(|l| l.icon.is_some()) {
+        return None;
+    }
+    let origin = [view.camera.center.x, view.camera.center.y];
+    let ppp = view.pixels_per_point as f32;
+    let instances: Vec<gpu_scene::PointInstance> = upright_markers(map, view, 0.0)
+        .iter()
+        .flat_map(|m| mesh::marker_instances(m.at, origin, &m.symbol, ppp, m.selected.then_some(SELECTION)))
+        .collect();
+    if !instances.is_empty() {
+        cmds.push(DrawCmd::Points { origin, instances });
+        clips.push(CmdClip { upright: true, ..CmdClip::ALL });
+    }
+    let unplaced = if map.label_display.show_unplaced { placed.unplaced } else { Vec::new() };
+    Some(GpuScene { clear, cmds, labels: placed.labels, unplaced, attribution, tiles_pending, data_pending, tile_errors, tilt, clips })
+}
+
+/// Places the labels a tilted view's bands offered. A feature drawn in two bands offers its
+/// label twice: the nearer band's (offered first) is kept. Tile labels (keyed by their place in a
+/// band's list) are told apart by their text and where they land, to a few points. Extruded
+/// features' labels go up onto their roofs.
+fn place_tilted_labels(map: &Map, view: &View, mut candidates: Vec<Candidate>) -> Placement {
+    let mut seen = std::collections::HashSet::new();
+    let mut seen_tile = std::collections::HashSet::new();
+    candidates.retain(|c| match c.2.0 {
+        u32::MAX => seen_tile.insert((c.0.text.clone(), (c.0.x / 4.0).round() as i64, (c.0.y / 4.0).round() as i64)),
+        _ => seen.insert(c.2),
+    });
+    raise_labels(map, view, &mut candidates);
+    place_labels(candidates, Vec::new(), view.width as f32, view.height as f32, false)
+}
+
+/// Whether a turned or tilted `view` of `map` may be drawn on the GPU ([`gpu_turned`]): only
+/// what the GPU draws itself shows (no tiles, rasters, see-through, masked, swiped or blended
+/// layers, aggregations, graphics, stacked line strokes or extrusions; no view effects). A cheap check made before
+/// any drawing; labels with icons can still decline the scene once it is drawn.
+pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
+    if map.projection.is_globe()
+        || !map.view.effects.is_none()
+        || map.view.color_vision != rustgis_map::view::ColorVision::Normal
+        || map.tiles.iter().any(|t| t.visible)
+    {
+        return false;
+    }
+    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    let held = map.held_by_group(scale);
+    let faded: std::collections::HashSet<u32> =
+        map.groups.iter().filter(|g| g.transparency > 0.0).flat_map(|g| g.children.iter().copied()).collect();
+    map.layers.iter().filter(|l| l.visible && l.in_scale_range(scale) && !held.contains(&l.id)).all(|l| {
+        l.raster.is_none()
+            && l.opacity() >= 0.999
+            && !faded.contains(&l.id)
+            && l.mask.is_none()
+            && l.blend == rustgis_map::effects::Blend::Normal
+            && map.swipe.is_none_or(|(id, _)| id != l.id)
+            && l.aggregation.is_none()
+            && !l.graphics
+            && l.line_strokes.is_empty()
+            && l.extrusion.is_none()
+    })
 }
 
 /// The colours of a tilted view's sky (at the top) and of the fog it fades into at the
@@ -1916,7 +2057,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             && layer.aggregation.is_none()
             && layer.extrusion.is_none()
             && !layer.graphics
-            && layer.line_strokes.is_empty();
+            && layer.line_strokes.is_empty()
+            && !upright.contains(&layer.id);
         // Lyon refuses degenerate geometry tiny-skia draws fine: collect_layer reports it,
         // and the layer runs the CPU branch below like any ineligible one.
         let mut gpu_done = false;
@@ -1924,6 +2066,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
             gpu_done = mesh::collect_layer(&mut cmds, layer, &geoms, &rows, &visible, ctx.wireframe, ctx.ppp, map_per_px).is_ok();
         }
+        // False for a layer drawn elsewhere: nothing goes into the picture for it.
+        let mut drawn_here = true;
         if !gpu_done {
             let dest = if direct { &mut pm } else { &mut target };
             let aggregate = layer.aggregation.filter(|_| layer.geometry_type() == GeometryType::Point);
@@ -1933,9 +2077,11 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             } else if extrude.is_some() && matches!(labels_to, Labels::Tilted(..)) {
                 // Stood up in perspective over the tilted view (`render_tilted`); its labels still
                 // come from here.
+                drawn_here = false;
             } else if upright.contains(&layer.id) {
                 // Stood up facing the viewer over the tilted view (`upright_markers`); its labels
                 // still come from here.
+                drawn_here = false;
             } else if let Some(x) = extrude.filter(|_| !matches!(labels_to, Labels::Shared)) {
                 let px_per_m = view.pixels_per_point / map_ground_res(view, &flat);
                 effects::extrude(dest, &ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r));
@@ -1977,7 +2123,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     }
                 }
             }
-            cpu_dirty = true;
+            cpu_dirty |= drawn_here;
         }
         if !direct {
             composite(&mut pm, &target);
@@ -2187,6 +2333,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 tiles_pending,
                 data_pending,
                 tile_errors,
+                tilt: None,
+                clips: Vec::new(),
             }))
         }
     }

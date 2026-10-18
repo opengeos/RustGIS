@@ -41,6 +41,14 @@ const INSTRUCTIONS: &str = "RustGIS is a desktop GIS. This server holds one Rust
 Open data with the layer.addData command ({\"path\": …}) and save with project.saveAs ({\"path\": \"*.rgis\"}); \
 file and network access works only when the server was started with --yes.";
 
+/// Added to [`INSTRUCTIONS`] on the desktop app's relay, where the session is the user's own.
+const LIVE: &str = "\nThis is the project the user has open in RustGIS, and they watch the map change as you work.\n\
+- Call list_layers before acting on a project you haven't seen; name layers in your commands rather than relying on the one the user has selected.\n\
+- Call view_map after any visual change and check it before you say it worked.\n\
+- Each command is a step in the user's own undo history; don't undo what you didn't do.\n\
+- Replacing the project (project.new, project.open…) is the user's to do.\n\
+- A long geoprocessing run keeps the app busy: say what you are about to run first.";
+
 /// The server: the session's access policy. The session itself is the caller's.
 #[derive(Debug, Clone)]
 pub struct Server {
@@ -132,7 +140,7 @@ impl Server {
 
     fn call(&self, s: &mut Session, method: &str, params: &Value) -> Result<Value, RpcError> {
         match method {
-            "initialize" => Ok(initialize(params)),
+            "initialize" => Ok(initialize(params, &self.instructions())),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": tool_list()})),
             "tools/call" => {
@@ -200,11 +208,6 @@ impl Server {
     /// is drawn too, with a note. The desktop relay captures the window itself
     /// ([`crate::relay`]) and comes here only when the map isn't on screen.
     fn snapshot(&self, s: &mut Session, a: &Value) -> Result<Value, String> {
-        let width = a.get("max_width").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(1024.0).clamp(64.0, MAX_VIEW);
-        // The view's shape, so the image shows what the window does.
-        let (vw, vh) = s.view_size;
-        let height = if vw >= 1.0 && vh >= 1.0 { width * vh / vw } else { width * 0.625 }.clamp(64.0, MAX_VIEW);
-        let png = rustgis_engine::cmd::share::map_png(s, Some(width), Some(height), None)?;
         let note = match a.get("mode").and_then(Value::as_str) {
             Some("screen") if self.users_project => Some(
                 "the map isn't on screen in RustGIS (a layout or the catalog is shown, or the window is hidden), so it was drawn offscreen",
@@ -214,7 +217,12 @@ impl Server {
             }
             _ => None,
         };
-        snapshot_result(s, &png, "render", true, a, note)
+        render_snapshot(s, a, note)
+    }
+
+    /// What the model is told about the server when it connects.
+    pub fn instructions(&self) -> String {
+        if self.users_project { format!("{INSTRUCTIONS}{LIVE}") } else { INSTRUCTIONS.to_string() }
     }
 
     /// Why this server won't run a call, if it won't.
@@ -264,7 +272,7 @@ impl Server {
     }
 }
 
-fn initialize(params: &Value) -> Value {
+fn initialize(params: &Value, instructions: &str) -> Value {
     // Speak the client's version when we know it, else our newest.
     let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or("");
     let version = VERSIONS.iter().find(|v| **v == asked).copied().unwrap_or(VERSIONS[0]);
@@ -272,7 +280,7 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false}, "prompts": {"listChanged": false}},
         "serverInfo": {"name": "rustgis", "title": "RustGIS", "version": env!("CARGO_PKG_VERSION")},
-        "instructions": INSTRUCTIONS,
+        "instructions": instructions,
     })
 }
 
@@ -392,6 +400,17 @@ fn save_path(a: &Value) -> Option<&str> {
 /// How long a screen snapshot may wait for drawing to finish (`wait_s`, clamped).
 pub fn snapshot_wait(a: &Value) -> f64 {
     a.get("wait_s").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(SNAPSHOT_WAIT).clamp(0.0, MAX_SNAPSHOT_WAIT)
+}
+
+/// A `snapshot` drawn offscreen at `max_width` in the view's shape, with `note` saying why when it
+/// was asked of the screen.
+pub fn render_snapshot(s: &mut Session, a: &Value, note: Option<&str>) -> Result<Value, String> {
+    let width = a.get("max_width").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(1024.0).clamp(64.0, MAX_VIEW);
+    // The view's shape, so the image shows what the window does.
+    let (vw, vh) = s.view_size;
+    let height = if vw >= 1.0 && vh >= 1.0 { width * vh / vw } else { width * 0.625 }.clamp(64.0, MAX_VIEW);
+    let png = rustgis_engine::cmd::share::map_png(s, Some(width), Some(height), None)?;
+    snapshot_result(s, &png, "render", true, a, note)
 }
 
 /// A `snapshot` result: the image, and the view it shows as JSON. `mode` is how it was made
