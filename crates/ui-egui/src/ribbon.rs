@@ -1176,7 +1176,6 @@ fn graphics_and_text_group(app: &mut RustGisApp, ui: &mut Ui) {
         let text = json!({"tool": "graphicText"});
         if big(ui, app, "g_text", "Text", "Click the map to place text.", "tool.set", text, text_tool && !dynamic, false).clicked() {
             app.map.cancel_sketch();
-            app.ui.dynamic_text = None;
         }
         // A menu of the values, as in Publish › Text: the one picked starts the text placed.
         let resp = big(
@@ -1195,9 +1194,7 @@ fn graphics_and_text_group(app: &mut RustGisApp, ui: &mut Ui) {
             for &(token, what) in rustgis_engine::map::graphics::TOKENS {
                 if ui.button(format!("{}  {token}", tl!(what))).clicked() {
                     app.map.cancel_sketch();
-                    if app.run("tool.set", json!({"tool": "graphicText"})).is_ok() {
-                        app.ui.dynamic_text = Some(token);
-                    }
+                    let _ = app.run("ui.dynamicText", json!({"text": token}));
                     ui.close();
                 }
             }

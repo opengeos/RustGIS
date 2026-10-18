@@ -1532,4 +1532,13 @@ fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
     h.state_mut().run("tool.set", json!({"tool": "explore"})).unwrap();
     h.step();
     assert_eq!(h.state().ui.dynamic_text, None);
+    // A command, for the Assistant and scripts too: only the map's values.
+    h.state_mut().run("ui.dynamicText", json!({"text": "{crs}"})).unwrap();
+    assert_eq!((h.state().session.tool.code(), h.state().ui.dynamic_text), ("graphicText", Some("{crs}")));
+    assert!(h.state_mut().run("ui.dynamicText", json!({"text": "{page}"})).is_err());
+    assert!(h.state_mut().run("ui.dynamicText", json!({})).is_err());
+    assert_eq!(h.state().ui.dynamic_text, Some("{crs}"), "a refused value leaves the one picked");
+    // Choosing Text again by command (Command Search, a script) starts plain text.
+    h.state_mut().run("tool.set", json!({"tool": "graphicText"})).unwrap();
+    assert_eq!(h.state().ui.dynamic_text, None);
 }

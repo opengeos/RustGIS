@@ -1198,6 +1198,11 @@ impl RustGisApp {
         if r.is_ok() && matches!(id, "edit.undo" | "edit.redo") {
             self.map.vertex = None;
         }
+        // Choosing a tool, Text included, drops a value picked under Dynamic Text
+        // (`ui.dynamicText` picks it after choosing the tool).
+        if r.is_ok() && id == "tool.set" {
+            self.ui.dynamic_text = None;
+        }
         self.note_last_project();
         // Sources added, saved or made favourites are kept with the preferences.
         sourcespane::save(self);
@@ -2219,6 +2224,17 @@ impl RustGisApp {
                     zarrui::connect(self);
                 }
             }
+            // Edit › Dynamic Text: the text tool, its dialog starting with one of the map's values.
+            "ui.dynamicText" => {
+                let text = p.get("text").and_then(Value::as_str).unwrap_or("");
+                let token = rustgis_engine::map::graphics::TOKENS
+                    .iter()
+                    .map(|(t, _)| *t)
+                    .find(|t| *t == text)
+                    .ok_or_else(|| format!("no dynamic text '{text}' (one of {{map}}, {{scale}}, {{date}}, …)"))?;
+                self.run("tool.set", json!({"tool": "graphicText"}))?;
+                self.ui.dynamic_text = Some(token);
+            }
             "ui.dialog" => {
                 let which = p.get("name").and_then(Value::as_str).unwrap_or("");
                 self.dialogs.open(which, &self.session)?;
@@ -2518,6 +2534,11 @@ impl RustGisApp {
         panes::poll_geolibre(self, ctx);
         panes::poll_plugin_run(self, ctx);
         self.poll_downloads();
+        // A value picked under Dynamic Text lasts while the text tool does, however the tool
+        // changes (Esc, another tool, a text placed without Keep Tool, a command).
+        if self.session.tool != rustgis_engine::Tool::Graphic("text") {
+            self.ui.dynamic_text = None;
+        }
         // Addresses commands asked for where they couldn't download themselves (the browser):
         // fetched off the frame and added when they land, as Add Data › From URL does.
         for p in self.session.take_url_requests() {

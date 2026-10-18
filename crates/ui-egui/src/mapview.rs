@@ -787,9 +787,6 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     let hover = resp.hover_pos();
     app.map.pointer_lonlat = hover.and_then(|p| screen_to_lonlat(app, rect, p));
     let tool = app.session.tool;
-    if tool != Tool::Graphic("text") {
-        app.ui.dynamic_text = None;
-    }
 
     // A map tool aims with a crosshair, only over the map: the ribbon and panes keep their cursor.
     // A finished measurement keeps its points on show but waits for a new one.
